@@ -35,10 +35,15 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
     let fill: Double?
     let blink: Bool
     let sideLength: Double
+    /// The expression channel. `nil` keeps the legacy face — no lids, no brows,
+    /// no engine — exactly like a `<slicc-agent-avatar>` with no `activity`
+    /// attribute, so every existing surface is untouched until it opts in.
+    let activity: AvatarExpression.Activity?
 
     init(
         type: AvatarType, color: String, eyes: EyeState = .open, fill: Double? = nil,
-        blink: Bool = false, sideLength: Double = 26
+        blink: Bool = false, sideLength: Double = 26,
+        activity: AvatarExpression.Activity? = nil
     ) {
         self.type = type
         self.color = color
@@ -46,6 +51,7 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
         self.fill = fill.map { min(100, max(0, $0)) }
         self.blink = blink
         self.sideLength = max(0, sideLength)
+        self.activity = activity
     }
 
     var tileCornerRadius: Double { 0.269 * sideLength }
@@ -80,11 +86,44 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
     }
 
     static func fillScale(for fill: Double?) -> Double {
-        guard let fill else { return 1 }
-        let clampedFill = min(100, max(0, fill))
-        if clampedFill <= 50 { return 1 }
-        if clampedFill >= 85 { return 2.2 }
-        return 1 + ((clampedFill - 50) / 35) * 1.2
+        AvatarExpression.fillToPupilScale(fill)
+    }
+
+    /// Band units → points. The expression grammar works in the web's 200x100
+    /// eye-band units (eye radius 38) so its constants stay literally identical
+    /// across the two implementations; the tile's own ratios above are
+    /// hand-rounded for the crop, so this factor — and not those ratios — is
+    /// the bridge. One multiply keeps every expression scalar in step.
+    var expressionScale: Double { eyeRadius / AvatarExpression.eyeRadius }
+
+    /// Socket corner radius for a shape scalar: the circle→rounded-square morph.
+    func socketCornerRadius(shape: Double) -> Double {
+        AvatarExpression.socketRx(shape: shape) * expressionScale
+    }
+
+    /// Pupil corner radius for a shape scalar. `pupilRx` is linear in the
+    /// radius, so a point-space radius comes back in point space.
+    func pupilCornerRadius(shape: Double, radius: Double) -> Double {
+        AvatarExpression.pupilRx(radius: radius, shape: shape)
+    }
+
+    /// How far a lid cut has descended into the eye, in points.
+    func lidInset(fraction: Double) -> Double {
+        max(0, min(1, fraction)) * eyeDiameter
+    }
+
+    /// Half-width of the chord line that closes the outline at a lid cut.
+    func chordHalfWidth(fraction: Double, shape: Double, edge: LidEdge) -> Double {
+        let y =
+            edge == .top
+            ? AvatarExpression.topLidY(fraction: fraction)
+            : AvatarExpression.bottomLidY(fraction: fraction)
+        return AvatarExpression.chordHalfWidth(y: y, shape: shape) * expressionScale
+    }
+
+    enum LidEdge: Equatable, Sendable {
+        case top
+        case bottom
     }
 
     var deadCrossHalfSpan: Double { eyeRadius * (15.0 / 38.0) }
@@ -108,7 +147,8 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
 extension ScoopSummary {
     func avatarGeometry(
         sideLength: Double = 26,
-        eyesOverride: SliccAgentAvatarGeometry.EyeState? = nil
+        eyesOverride: SliccAgentAvatarGeometry.EyeState? = nil,
+        activity: AvatarExpression.Activity? = nil
     ) -> SliccAgentAvatarGeometry {
         let type: SliccAgentAvatarGeometry.AvatarType = isCone ? .cone : .scoop
         let scoopStatus = status
@@ -122,7 +162,28 @@ extension ScoopSummary {
             type: type, color: avatarColor, eyes: eyesOverride ?? lifecycleEyes,
             fill: scoopStatus.fullness,
             blink: scoopStatus.lifecycle == .working,
-            sideLength: sideLength)
+            sideLength: sideLength,
+            activity: activity)
+    }
+
+    /// The expression channel for this scoop, derived from the lifecycle the
+    /// wire already carries plus two locally-observed signals. The tray
+    /// protocol is deliberately untouched: `state` stays
+    /// `working | broken | initializing | idle`.
+    ///
+    /// - `toolRunning`: a mirrored tool call is in flight (`tool_ui` open), so
+    ///   a working agent is squaring up rather than thinking.
+    /// - `awaitingUser`: the turn settled and the composer is ready for you.
+    func avatarActivity(
+        toolRunning: Bool = false, awaitingUser: Bool = false
+    ) -> AvatarExpression.Activity? {
+        switch status.lifecycle {
+        case .working: toolRunning ? .working : .thinking
+        case .idle, .unknown: awaitingUser ? .awaiting : .idle
+        // Broken and initializing keep their own eye treatments (dead / none),
+        // so they carry no activity at all.
+        case .broken, .initializing: nil
+        }
     }
 
     /// Mirrors `scoopColor`: JS iterates scalars, while `charCodeAt(0)` deliberately
