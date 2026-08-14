@@ -17,6 +17,6 @@
   "devDependencies": {
     "@types/express": "^5.0.0",
     "@types/ws": "^8.5.14",
-    "electron": "43.2.0"
+    "electron": "43.3.0"
   }
 }
