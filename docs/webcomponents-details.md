@@ -218,6 +218,15 @@ Non-obvious rules:
   (`tests/switcher/manual-clock.ts`) instead of racing real timers. Timestamps
   use `null`, never `0`, for "not started": a clock may legitimately read 0.
 
+## Animation loops and forced reflow
+
+A `requestAnimationFrame` loop must never call `getComputedStyle` or read
+computed style/layout per frame — the regression that motivated this rule was
+`slicc-shader` doing ~360 style recalcs/sec at 120 Hz. Resolve CSS-derived
+values once and cache them; invalidate on attribute and theme changes via a
+`MutationObserver` on `<html>`/`<body>` `class`/`data-theme` plus a
+`prefers-color-scheme` listener, both torn down in `disconnectedCallback`.
+
 ## Storybook PR screenshots
 
 Extended reference for the workflow summary in the package guide.
