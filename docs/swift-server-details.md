@@ -50,6 +50,22 @@ two routes, decided by whether the app allows renderer egress:
 
 `ElectronOverlayInjector.onEgressBlocked` fires once on first detection; `ServerCommand` starts the follower on that signal and stops it on shutdown. Mirrors node-server's `electron-tray-follower.ts` / `electron-federated-cdp.ts` (which use `werift`); the Swift path uses in-process `stasel/WebRTC`.
 
+## Chrome launch flags
+
+Both launchers (`ChromeLauncher.buildLaunchArgs` here, node-server's
+`chrome-launch.ts` — kept byte-identical) append
+`--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable`
+plus `--disable-background-timer-throttling`,
+`--disable-backgrounding-occluded-windows`, and
+`--disable-renderer-backgrounding`.
+
+The LNA pair: Chromium 142+ gates the local hop behind an "Apps on device"
+prompt, and Deny silently breaks CDP + `/api/*`. The rest keep the leader tab
+alive in the background — Memory Saver freezing a backgrounded leader suspends
+its event loop, leaving the tray unreachable and turns stuck on a working turn
+— so the launched Chrome deliberately opts out of background power savings, at
+a real battery cost on portables. See [`docs/pitfalls.md`](pitfalls.md).
+
 ## Keychain trust model — why the prompt recurs
 
 `SecretStore.swift` reads the single `ai.sliccy.slicc / __envfile__` Keychain blob synchronously at startup via one `SecItemCopyMatching` in `readBlob()`. That item was created with the default trusted-application ACL, which trusts ONLY the creating binary identified by its code-signing cdhash. An ad-hoc signature gets a NEW cdhash on every `swift build`, so each rebuilt `slicc-server` is a different, untrusted binary and macOS re-raises the "allow access" ACL dialog.

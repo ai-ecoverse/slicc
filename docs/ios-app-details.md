@@ -6,6 +6,14 @@ Long-form detail moved out of [`packages/ios-app/CLAUDE.md`](../packages/ios-app
 
 `--x-callback` replaces any supplied callback keys with app-owned nonce URLs. A correlated success/error/cancel emits one ordered `{status, parameters:[{name,value}]}` JSON line on stdout, then exits 0/1/130. Results are capped at 16 parameters and 16 KiB serialized JSON; overflow fails without truncation. Callback state is process-local, so a callback after app restoration is consumed silently and the leader owns its timeout.
 
+## Protocol variant checklist
+
+`// MARK: -` boundaries are the anchors. Every variant needs a fixture + iOS expectation in `tray-sync-protocol-corpus.ts`, decoded by vitest + Swift. Order: (1) TS union, (2) Swift enum + `init(from:)` arm, (3) leader broadcast, (4) browser + iOS dispatch (`AppState.handleDataChannelMessage` is the only iOS switch), (5) corpus + tests, (6) architecture matrix. Skipping iOS fails `SyncProtocolCorpusTests` instead of `.unknown`.
+
+## Follower state invariants
+
+Chat-surface treatments read `settledConnection`, not the raw state: `Sync/ConnectionSettle.swift` holds transitions INTO trouble and publishes recovery at once, so multi-property transitions MUST go through `updateConnection` or a healthy-looking intermediate reads as a recovery. Leader VFS uses `FsClient` with `targetRuntimeId: "leader"` (leader-origin gets `ENOTSUP`); `hello` sends `exec: true` + device `motd`. `sprinkle.lick` is its own message (`sprinkle` is not `FORWARDABLE_TO_LEADER`); `LickEvent` mirrors only `navigate` + `discovery` from `WKNavigationResponse` Link headers; attachment chips are user-only with no web CTAs; `tool_ui` is cleared by `tool_ui_done` / snapshot.
+
 ## Transcript swipe arbitration
 
 Nested horizontal content keeps a drag while it can scroll that way; scoop navigation or frozen dismissal takes over only at the departing edge. Freeze edge state at drag start, tolerate either callback order, fail closed for unknown guarded contexts. Edge math includes both 8pt negative-padding expansions. On iOS 18+, each guarded scroller uses `UIGestureRecognizerRepresentable` and snapshots its `UIScrollView` at touch-down; the parent handles ordinary content. Keep the iOS 17 fallback and preserve vertical scrolling.
@@ -17,6 +25,10 @@ iCloud keeps advertising the **old** tray after a leader reconnects. `SessionRea
 ## Local Kokoro models
 
 Settings downloads the anonymous, revision-pinned ~83 MB Hugging Face pack after Wi-Fi consent with progress, cancel, retry, and removal; replies never provision. Pack: nine CoreML stages, two vocabularies, `af_heart`. Marker/cache delete together; weights are not committed. Live-simulator QA: [`docs/ios-simulator-qa.md`](ios-simulator-qa.md).
+
+## Agent avatar chrome
+
+Chat header is a 36pt row (scoop pill, avatar, session-controls cluster); the cluster is a shell overlay that must overlap the dock rail. Fullness = pupil size only, never ring/gauge/badge/text. Connection trouble replaces pupils + eye whites with 1pt TV static; the a11y phrase carries label, lifecycle, fill and connection. Recoverable state stays in avatar/composer (no banner row); `.gaveUp` opens Settings. `-uiTestAvatarFixture light-static|dark-static` freezes noise; `light-expression|dark-expression` freezes the expression matrix.
 
 ## Agent avatar treatment
 
@@ -61,6 +73,22 @@ The second one is why `ComposerConnectionUITests` stages a blip that **heals** (
 
 Push-to-talk therefore arms on `text.isEmpty` alone. Dictating with no usable leader is allowed and lands somewhere useful: `submit` refuses it and the transcript stays in the composer as a draft, which beats taking the microphone away because a ping was late.
 
+## Reading column
+
+The regular-width cap (`MessageListLayout.maximumReadableWidth`) is applied **per row** via `readableTranscriptColumn()`, never as a frame around the transcript's `LazyVStack`. That stack carries `scrollTargetLayout()`, so the scroll view anchors on it and cancels any centering offset wrapped around it with an equal content offset — which is how the capped column ended up flush against the leading edge. Rows are centered by the stack's own `.center` alignment, which needs the stack to stay full-width (the invisible bottom anchor's greedy width is what guarantees that). Covered by `SliccFollowerUITests/TranscriptColumnUITests` on the iPad CI leg.
+
+## UI-test hooks
+
+`UITestHooks` is `#if DEBUG` only. **No test needs a leader**: `-uiTestFixtureRoute YES` opens the leaderless UI Fixture; `-uiTestSessionsFixture/Empty YES` seeds iCloud sessions; `-uiTestScoopStatusFixture` covers lifecycle/fill; `-uiTestReduceMotion` freezes pupil motion + noise; `-uiTestCompletedTurn YES` feeds a completed turn; `-uiTestConnectionState` pins a start state (published immediately — a pinned state is a premise, not a transition); `-uiTestConnectionBlip "<dropAfter>[,<healsAfter>]"` stages the mid-session drop the settle window exists for. Failure-state dials `http://127.0.0.1:1/…` so the avatar reaches `Connection Failed` without DNS.
+
+## Coverage gate details
+
+Outputs land in `.build/coverage/`. The gate runs only `SliccFollowerTests`, disables parallel clones, and keeps random order. Coverage combines app dylib + linked frameworks so `SliccTrayKit` stays measured. Exclude `SliccFileProvider/` (appex not launched in unit tests); **never add the thin adapter binary as a coverage object**. File Provider reads are memory-bound (`readBinaryFile` holds full base64 + decoded `Data`); large VFS files are unsupported until reads stream to disk.
+
+## Linting details
+
+`.swiftlint.yml` inherits repo-root via `parent_config` and excludes `.build`/`SliccFollower.xcodeproj`; only `error` severity fails CI. `swiftlint --fix` rewrites every scanned file (clean tree only). CI ends with an informational Periphery scan (`|| true`) naming project/scheme/target. `swift format` uses repo-root `.swift-format`; run `npm run lint:swift:format` / `format:swift` from repo root (covers `SliccTrayKit`).
+
 ## UI-test details
 
 - Put accessibility identifiers on leaves (`message-<id>`). Container ids propagate; `.accessibilityElement(children: .contain)` does not fix it.
@@ -68,6 +96,10 @@ Push-to-talk therefore arms on `text.isEmpty` alone. Dictating with no usable le
 - The transcript pins to the newest message; variant walks scroll bottom-to-top and must be bounded.
 - A red CI job names the test, not the reason. Read XCTAssert text from the uploaded `test-timings-ios-app-<ios>-<device>` xcresult via `xcrun xcresulttool get test-results tests`. Host death before XCTest connects is usually a runtime mismatch or `CODE_SIGNING_ALLOWED=NO`, not flake.
 - Regular-width browser tabs claim the whole iPad window; returning to the overview restores the split. CI runs this enter/exit regression in the `ios-app-tests` matrix (iPad cells).
+
+## Exec capability
+
+`capabilities.exec: true`; `handleExecMessage` accepts only `open [--universal|--x-callback] <url>`, scoped-approval gated, launched via `UIApplication.open` (`universalLinksOnly` for `--universal`). Raw paths reject traversal + encoded delimiters; hierarchical URLs must standardize unchanged. 1,024 IDs are tombstoned; 128 failed retries are held FIFO.
 
 ## TestFlight distribute
 
