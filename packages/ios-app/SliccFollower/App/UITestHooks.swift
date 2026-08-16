@@ -120,6 +120,23 @@ import UIKit
             return (dropAfter, parts.count > 1 ? parts[1] : nil)
         }
 
+        /// Fill the REAL chat surface with a transcript taller than any
+        /// viewport (`-uiTestTranscriptFixture YES`), reusing the same fixture
+        /// conversation the leaderless fixture route renders.
+        ///
+        /// `-uiTestFixtureRoute` cannot stand in for this: that route has no
+        /// composer, and anything about how the transcript and the composer
+        /// share the screen needs both of them.
+        @MainActor
+        static func seedTranscriptFixture(into appState: AppState) {
+            guard UserDefaults.standard.bool(forKey: "uiTestTranscriptFixture") else { return }
+            let scoopJid = "ui-test-cone"
+            appState.selectedScoopJid = scoopJid
+            let messages = ChatFixture.makeMessages()
+            appState.messagesByScoop[scoopJid] = messages
+            appState.messages = messages
+        }
+
         /// Stage a completed visible turn without a leader
         /// (`-uiTestCompletedTurn YES`). All messages enter through the real
         /// data-channel decoder; status: ready settles the turn because the

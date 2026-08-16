@@ -61,6 +61,36 @@ The second one is why `ComposerConnectionUITests` stages a blip that **heals** (
 
 Push-to-talk therefore arms on `text.isEmpty` alone. Dictating with no usable leader is allowed and lands somewhere useful: `submit` refuses it and the transcript stays in the composer as a draft, which beats taking the microphone away because a ping was late.
 
+## Transcript jumps when the keyboard opens (iOS 26, unfixed)
+
+A reader who has scrolled back through the history is thrown hundreds of points further back the moment the keyboard's inset lands — the conversation they were reading is replaced by older messages, and any small scroll resolves it again. **This is a platform bug, not ours**: `ScrollView` + `LazyVStack` + dynamic-height rows mis-restores its position when the container resizes, on iOS 26 but not iOS 18. Apple DTS acknowledged it on [the forums](https://developer.apple.com/forums/thread/805306) (FB20979569, open as of 2026-08). Fixed-height rows do not trigger it, which chat bubbles cannot be.
+
+The mechanism is in [WWDC26 "Dive into lazy stacks and scrolling"](https://developer.apple.com/videos/play/wwdc2026/321/): a lazy stack _estimates_ off-screen row heights and coordinates the correction with the scroll view's content offset, so absolute offsets under a lazy stack are "estimated and unstable". Everything below acts above that layer, which is why none of it works.
+
+**Reproduce it** — the scroll is load-bearing, since until the reader drags, `scrollPosition` still holds the programmatic `edge: .bottom` that SwiftUI re-pins for free:
+
+```bash
+xcodebuild test -only-testing:SliccFollowerUITests/TranscriptComposerGrowthUITests …
+```
+
+`-uiTestTranscriptFixture YES` seeds the fixture conversation into the **real** chat surface (`-uiTestFixtureRoute` has no composer, so it cannot show this). The test scrolls back, focuses the composer, types, and reports each row's geometry.
+
+**Measured, so nobody repeats them** (anchor row displacement, ~301pt keyboard inset):
+
+| attempt                                                                | result                                                                 |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| baseline                                                               | +453pt                                                                 |
+| `.defaultScrollAnchor(.bottom, for: .sizeChanges)`                     | +323pt                                                                 |
+| `.defaultScrollAnchor(.bottom)`                                        | +265pt                                                                 |
+| `GeometryReader` → `onGeometryChange`                                  | +514pt                                                                 |
+| composer moved into `safeAreaInset`                                    | +522pt, then +365pt — worse                                            |
+| explicit re-pin via `onScrollTargetVisibilityChange` + `scrollTo(id:)` | breaks the initial scroll-to-bottom                                    |
+| `LazyVStack` → `VStack`                                                | fixes the estimation, but eager `WKWebView` sprinkle rows never settle |
+
+Note also that the keyboard's inset is **not** applied when the keyboard appears — the composer stays put until the next render pass, so the first keystroke is what lands it. Sampling before that reads as "focus changes nothing".
+
+Tracking issue: [#2072](https://github.com/ai-ecoverse/slicc/issues/2072).
+
 ## UI-test details
 
 - Put accessibility identifiers on leaves (`message-<id>`). Container ids propagate; `.accessibilityElement(children: .contain)` does not fix it.
