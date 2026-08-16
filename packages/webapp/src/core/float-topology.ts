@@ -13,6 +13,10 @@ import { isExtensionRealm } from './runtime-env.js';
 
 export type FloatTopology = 'extension-direct' | 'extension-delegate' | 'connect' | 'node-rest';
 
+type ConnectModeGlobal = {
+  __slicc_connect_mode?: unknown;
+};
+
 /**
  * Resolve the current realm's float topology. First match wins:
  * 1. **extension-direct** — real `chrome-extension://` page (`chrome.runtime.id`).
@@ -32,7 +36,7 @@ export function resolveFloatTopology(): FloatTopology {
   if (getExtensionDelegateId()) {
     return 'extension-delegate';
   }
-  if ((globalThis as Record<string, unknown>).__slicc_connect_mode) {
+  if ((globalThis as ConnectModeGlobal).__slicc_connect_mode) {
     return 'connect';
   }
   return 'node-rest';

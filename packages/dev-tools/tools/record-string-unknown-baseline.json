@@ -51,7 +51,6 @@
   "packages/webapp/src/core/feature-flags-cache.ts": 1,
   "packages/webapp/src/core/feature-flags-remote.ts": 1,
   "packages/webapp/src/core/feature-flags.ts": 2,
-  "packages/webapp/src/core/float-topology.ts": 1,
   "packages/webapp/src/core/secrets-bridge-client.ts": 2,
   "packages/webapp/src/core/tool-adapter.ts": 2,
   "packages/webapp/src/core/tool-registry.ts": 1,
