@@ -249,17 +249,29 @@ describe('registerFetchProxyRoute', () => {
     expect(await res.text()).toContain('not allowed for domain');
   });
 
-  it('scrubs real secret values out of the streamed response body', async () => {
-    await setup((_req, res) => {
-      res.setHeader('content-type', 'text/plain');
-      res.end(`leaked: ${REAL_TOKEN} end`);
-    });
+  it.each(['application/xml', 'image/svg+xml', 'application/javascript'])(
+    'scrubs real secret values from %s responses without charset parameters',
+    async (contentType) => {
+      await setup((_req, res) => {
+        res.setHeader('content-type', contentType);
+        res.end(`leaked: ${REAL_TOKEN} end`);
+      });
+      const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+        headers: { 'x-target-url': upstreamUrl },
+      });
+      const text = await res.text();
+      expect(text).not.toContain(REAL_TOKEN);
+      expect(text).toContain(masked);
+    }
+  );
+
+  it('preserves headerless binary response bytes when secrets are configured', async () => {
+    const binary = Buffer.from([0xff, 0xfe, 0x00, 0x80, 0x41]);
+    await setup((_req, res) => res.end(binary));
     const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
       headers: { 'x-target-url': upstreamUrl },
     });
-    const text = await res.text();
-    expect(text).not.toContain(REAL_TOKEN);
-    expect(text).toContain(masked);
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(binary);
   });
 
   it('returns 403 when a masked header secret is used against an out-of-scope domain', async () => {

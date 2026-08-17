@@ -73,7 +73,7 @@ SLICC runs as standalone CLI (Express + Chrome), Chrome extension, Electron floa
 
 - **Tests**: `packages/*/tests/` mirrors `src/`. Vitest, `globals: true`, `environment: node`. `fake-indexeddb/auto` for VFS tests.
 - **Dual-mode compatibility**: features MUST work in CLI and extension. The thin extension runs no dynamic code — UI, sprinkles/dips, JS realms, WASM all run in the hosted leader tab / kernel worker; extension assets load via `chrome.runtime.getURL()`.
-- **Extension detection**: `isExtensionRealm()` from `core/runtime-env.ts` (lint-gated).
+- **Extension detection**: `isChromeExtensionRealm()` from `@slicc/shared-ts` (lint-gated).
 - **Model ID aliases**: use pi-ai aliases (e.g., `claude-opus-4-6`), not dated snapshot IDs.
 - **Developer vs agent CLAUDE.md**: developer-facing `CLAUDE.md` lives at repo root and each package. Agent-facing runtime `CLAUDE.md` is `packages/vfs-root/shared/CLAUDE.md` (bundled as `/shared/CLAUDE.md`). Tier table: [`docs/CLAUDE.md`](docs/CLAUDE.md).
 

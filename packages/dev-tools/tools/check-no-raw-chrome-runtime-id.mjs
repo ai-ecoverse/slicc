@@ -2,7 +2,7 @@
 // Enforce the "no raw chrome.runtime.id sniffs" rule as a hard lint gate.
 //
 // All extension-environment detection in packages/webapp/src/ MUST go
-// through the helpers in packages/webapp/src/core/runtime-env.ts. Raw
+// through isChromeExtensionRealm() from @slicc/shared-ts. Raw
 // chrome.runtime.id / chrome?.runtime?.id boolean checks elsewhere
 // indicate a sniff that bypassed the canonical helpers.
 //
@@ -86,7 +86,7 @@ function main() {
           ": raw '",
           match,
           "' sniff — ",
-          'use isExtensionRealm() from core/runtime-env.ts instead.',
+          'use isChromeExtensionRealm() from @slicc/shared-ts instead.',
         ].join('')
       );
     }
@@ -100,7 +100,7 @@ function main() {
       '\n' +
         failures.length +
         ' raw chrome.runtime.id sniff(s) found. ' +
-        'Import { isExtensionRealm } from core/runtime-env.ts.\n'
+        'Import { isChromeExtensionRealm } from @slicc/shared-ts.\n'
     );
     process.exit(1);
   }

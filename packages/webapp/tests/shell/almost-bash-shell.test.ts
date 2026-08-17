@@ -74,8 +74,8 @@ describe('isTextContentType', () => {
     expect(isTextContentType('video/mp4')).toBe(false);
   });
 
-  it('treats empty content-type as text (safe default)', () => {
-    expect(isTextContentType('')).toBe(true);
+  it('treats empty content-type as binary (byte-safe default)', () => {
+    expect(isTextContentType('')).toBe(false);
   });
 
   it('is case-insensitive', () => {

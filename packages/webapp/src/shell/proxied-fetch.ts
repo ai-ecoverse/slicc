@@ -18,13 +18,17 @@
  * the original bytes without UTF-8 corruption.
  */
 
-import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
+import {
+  base64ToUint8,
+  type FetchProxyResponseMsg,
+  isChromeExtensionRealm,
+  isTextContentType,
+  uint8ToBase64,
+} from '@slicc/shared-ts';
 import type { SecureFetch } from 'just-bash';
-import type { ResponseMsg } from '../../../chrome-extension/src/fetch-proxy-shared.js';
-import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
-import { isExtensionRealm } from '../core/runtime-env.js';
 import { cacheBinaryBody, cacheBinaryByUrl } from './binary-cache.js';
 import { getFetchBodyBytes } from './fetch-body.js';
+import { isProxyError, readProxyErrorMessage } from './proxy-error.js';
 import {
   decodeForbiddenResponseHeaders as _decodeForbiddenResponseHeaders,
   encodeForbiddenRequestHeaders as _encodeForbiddenRequestHeaders,
@@ -163,21 +167,8 @@ function resolveFetchProxyUrl(): string {
   return resolveApiUrl('/api/fetch-proxy');
 }
 
-/** Check if a content-type header indicates text (safe for UTF-8 decoding). */
-export function isTextContentType(contentType: string): boolean {
-  if (!contentType) return true; // Default to text for unknown types
-  const ct = contentType.toLowerCase();
-  return (
-    ct.startsWith('text/') ||
-    ct.includes('json') ||
-    ct.includes('xml') ||
-    ct.includes('javascript') ||
-    ct.includes('ecmascript') ||
-    ct.includes('html') ||
-    ct.includes('css') ||
-    ct.includes('svg')
-  );
-}
+/** Shared content-type predicate, re-exported for backwards compatibility. */
+export { isTextContentType };
 
 /**
  * Read a fetch Response body as raw bytes.
@@ -228,7 +219,7 @@ export function prepareRequestBody(
   if (!body) return undefined;
   const ct =
     Object.entries(headers ?? {}).find(([key]) => key.toLowerCase() === 'content-type')?.[1] ?? '';
-  if (!isTextContentType(ct)) {
+  if (ct && !isTextContentType(ct)) {
     const bytes = getFetchBodyBytes(body) as Uint8Array<ArrayBuffer>;
     return new Blob([bytes]);
   }
@@ -372,7 +363,7 @@ async function collectViaPort(
     const chunks: Uint8Array<ArrayBuffer>[] = [];
 
     port.onMessage.addListener((raw: unknown) => {
-      const msg = raw as ResponseMsg;
+      const msg = raw as FetchProxyResponseMsg;
       if (msg.type === 'response-head') {
         headInfo = { status: msg.status, statusText: msg.statusText, headers: msg.headers };
       } else if (msg.type === 'response-chunk') {
@@ -470,7 +461,7 @@ export async function collectViaExtensionDelegate(
 export function createProxiedFetch(): SecureFetch {
   // 1. Real extension page (offscreen / options): `chrome.runtime.id` is
   //    truthy. Use the id-less Port connect — UNCHANGED.
-  if (isExtensionRealm()) {
+  if (isChromeExtensionRealm()) {
     return extensionPortFetch;
   }
 
