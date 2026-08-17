@@ -1562,7 +1562,12 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
     });
     port.onMessage.addListener(async (raw) => {
       const id = (raw as { id?: unknown } | null)?.id;
-      const reply = (response: unknown): void => port.postMessage({ id, response });
+      let replied = false;
+      const reply = (response: unknown): void => {
+        if (replied) return;
+        replied = true;
+        port.postMessage({ id, response });
+      };
       let pin: { ok: boolean; reason?: string };
       try {
         pin = await pinPromise;
@@ -1582,7 +1587,9 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
         reply({ error: `unknown secrets type: ${type ?? 'undefined'}` });
         return;
       }
-      handler(raw, reply);
+      if (!handler(raw, reply)) {
+        reply({ error: `malformed secrets request: ${type}` });
+      }
     });
     return;
   }
