@@ -304,15 +304,16 @@ describe('service-worker secrets handlers — branch coverage', () => {
     ]);
   });
 
-  it('secrets.set-domains reports { ok: false, error } when no such secret exists (line 1390 branch)', async () => {
+  it('secrets.set-domains reports a generic error without echoing an unknown name', async () => {
+    const requestedName = 'PRIVATE_SECRET_NAME';
     const { kept, response } = await dispatch({
       type: 'secrets.set-domains',
-      name: 'NEVER_EXISTED',
+      name: requestedName,
       domains: ['x.com'],
     });
     expect(kept).toBe(true);
-    expect(response.ok).toBe(false);
-    expect(response.error).toBe('no secret named "NEVER_EXISTED"');
+    expect(response).toEqual({ ok: false, error: 'secret not found' });
+    expect(JSON.stringify(response)).not.toContain(requestedName);
   });
 
   it('secrets.mask-oauth-token returns false when providerId is missing', async () => {
@@ -378,38 +379,77 @@ describe('service-worker secrets handlers — branch coverage', () => {
     expect(response.error).toBe('peek-fail');
   });
 
-  it('secrets.set-domains surfaces { ok: false, error } when chrome.storage.local.get rejects', async () => {
+  it('secrets.set-domains does not echo or log the requested name when lookup rejects', async () => {
+    const requestedName = 'PRIVATE_SECRET_NAME';
     buildChromeMock({
       localGet: vi.fn(async () => {
-        throw new Error('lookup-fail');
+        throw new Error(requestedName);
       }),
     });
     const { kept, response } = await dispatch({
       type: 'secrets.set-domains',
-      name: 'GITHUB_TOKEN',
+      name: requestedName,
       domains: ['api.x.com'],
     });
     expect(kept).toBe(true);
-    expect(response.ok).toBe(false);
-    expect(response.error).toBe('lookup-fail');
+    expect(response).toEqual({ ok: false, error: 'secret scope update failed' });
+    expect(JSON.stringify(response)).not.toContain(requestedName);
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(requestedName);
   });
 
-  it('secrets.scrub-tool-result degrades to { text, error } when the pipeline build throws (catch branch)', async () => {
+  it('secrets.scrub-tool-result fails closed without echoing or logging request text', async () => {
     // Force the pipeline to fail on this call by making the SW-session-id
-    // read reject. The handler MUST return the input text plus the error
-    // — agents must never lose tool output to a transient SW issue.
+    // read reject. The handler must not return unsanitized tool output.
+    const requestText = 'private tool result';
     buildChromeMock({
       localGet: vi.fn(async () => {
-        throw new Error('pipeline-fail');
+        throw new Error(requestText);
       }),
     });
     const { kept, response } = await dispatch({
       type: 'secrets.scrub-tool-result',
-      text: 'some tool output',
+      text: requestText,
     });
     expect(kept).toBe(true);
-    expect(response.text).toBe('some tool output');
-    expect(typeof response.error).toBe('string');
+    expect(response).toEqual({ error: 'secret scrub failed' });
+    expect(JSON.stringify(response)).not.toContain(requestText);
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(requestText);
+  });
+
+  it('secrets.mask-oauth-token does not log an OAuth-derived name after a missing write', async () => {
+    const providerId = 'private-provider';
+    buildChromeMock({ localSet: vi.fn(async () => {}) });
+
+    const { kept, response } = await dispatch({
+      type: 'secrets.mask-oauth-token',
+      providerId,
+      accessToken: 'placeholder',
+      domains: 'example.com',
+    });
+
+    expect(kept).toBe(true);
+    expect(response).toEqual({ maskedValue: undefined, error: 'entry missing after write' });
+    expect(JSON.stringify(vi.mocked(console.warn).mock.calls)).not.toContain(providerId);
+  });
+
+  it('secrets.mask-oauth-token returns and logs only generic details when its write fails', async () => {
+    const providerId = 'private-provider';
+    buildChromeMock({
+      localSet: vi.fn(async () => {
+        throw new Error(`oauth.${providerId}.token`);
+      }),
+    });
+
+    const { kept, response } = await dispatch({
+      type: 'secrets.mask-oauth-token',
+      providerId,
+      accessToken: 'placeholder',
+      domains: 'example.com',
+    });
+
+    expect(kept).toBe(true);
+    expect(response).toEqual({ maskedValue: undefined, error: 'OAuth token masking failed' });
+    expect(JSON.stringify(vi.mocked(console.error).mock.calls)).not.toContain(providerId);
   });
 
   it('secrets.list-with-values-for-pipeline surfaces { entries: [], error } on a chrome.storage failure', async () => {

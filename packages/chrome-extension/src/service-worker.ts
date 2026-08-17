@@ -1746,8 +1746,8 @@ function runSecretsListMaskedEntries(_msg: unknown, sendResponse: SendResponse):
 // only masked entries (no real values), so the scrub runs here
 // against the SW-owned `SecretsPipeline`. Direction is real→masked
 // ONLY; idempotent for already-masked tokens and secret-free
-// output. Errors degrade to the input text so a transient SW issue
-// never blocks a tool result from reaching the agent loop.
+// output. Errors fail closed so unsanitized tool output never crosses
+// the extension boundary when the scrub pipeline is unavailable.
 function runSecretsScrubToolResult(msg: unknown, sendResponse: SendResponse): boolean {
   const text = getStringField(msg, 'text');
   if (text === undefined) return false;
@@ -1756,9 +1756,9 @@ function runSecretsScrubToolResult(msg: unknown, sendResponse: SendResponse): bo
       const pipeline = await buildSecretsPipeline();
       await pipeline.reload();
       sendResponse({ text: pipeline.scrubResponse(text) });
-    } catch (err) {
-      console.error('[sw] secrets.scrub-tool-result failed', err);
-      sendResponse({ text, error: errMsg(err) });
+    } catch {
+      console.error('[sw] secrets.scrub-tool-result failed');
+      sendResponse({ error: 'secret scrub failed' });
     }
   })();
   return true;
@@ -1913,14 +1913,14 @@ function runSecretsSetDomains(msg: unknown, sendResponse: SendResponse): boolean
       const all = await listSecretsWithValues(storageLocal);
       const found = all.find((e) => e.name === name);
       if (!found) {
-        sendResponse({ ok: false, error: `no secret named "${name}"` });
+        sendResponse({ ok: false, error: 'secret not found' });
         return;
       }
       await setSecret(storageLocal, name, found.value, domains);
       sendResponse({ ok: true });
-    } catch (err) {
-      console.error('[sw] secrets.set-domains failed', err);
-      sendResponse({ ok: false, error: errMsg(err) });
+    } catch {
+      console.error('[sw] secrets.set-domains failed');
+      sendResponse({ ok: false, error: 'secret scope update failed' });
     }
   })();
   return true;
@@ -1961,17 +1961,16 @@ function runSecretsMaskOauthToken(msg: unknown, sendResponse: SendResponse): boo
       // pipeline stopped emitting it). Surface it so the page side can
       // distinguish "not warm yet" from "wrote it and still missing".
       if (accessToken && domains && maskedValue === undefined) {
-        const name = `oauth.${providerId}.token`;
         // Real fault (not a cold miss): surface a reason so the page can
         // distinguish it and the give-up log isn't reason-less (#847).
-        console.warn('[sw] secrets.mask-oauth-token: entry missing after write', { name });
+        console.warn('[sw] secrets.mask-oauth-token: entry missing after write');
         sendResponse({ maskedValue: undefined, error: 'entry missing after write' });
         return;
       }
       sendResponse({ maskedValue });
-    } catch (err) {
-      console.error('[sw] secrets.mask-oauth-token failed', err);
-      sendResponse({ maskedValue: undefined, error: errMsg(err) });
+    } catch {
+      console.error('[sw] secrets.mask-oauth-token failed');
+      sendResponse({ maskedValue: undefined, error: 'OAuth token masking failed' });
     }
   })();
   return true;

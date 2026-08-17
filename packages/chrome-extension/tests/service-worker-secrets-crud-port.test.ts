@@ -145,6 +145,63 @@ describe('service-worker secrets.crud external Port', () => {
     }
   });
 
+  it('fails scrub closed with one correlated reply and no request text in the response or log', async () => {
+    await import('../src/service-worker.js');
+    const conn = connectPort(PINNED_SENDER);
+    const requestText = 'private tool result';
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    (globalThis as any).chrome.storage.local.get = vi.fn(async () => {
+      throw new Error(requestText);
+    });
+
+    await dispatch(conn, { id: 4, type: 'secrets.scrub-tool-result', text: requestText });
+
+    expect(conn.posted).toEqual([{ id: 4, response: { error: 'secret scrub failed' } }]);
+    expect(JSON.stringify(errorSpy.mock.calls)).not.toContain(requestText);
+    errorSpy.mockRestore();
+  });
+
+  it('does not echo a missing secret name and replies exactly once', async () => {
+    await import('../src/service-worker.js');
+    const conn = connectPort(PINNED_SENDER);
+    const requestedName = 'PRIVATE_SECRET_NAME';
+
+    await dispatch(conn, {
+      id: 5,
+      type: 'secrets.set-domains',
+      name: requestedName,
+      domains: ['example.com'],
+    });
+
+    expect(conn.posted).toEqual([{ id: 5, response: { ok: false, error: 'secret not found' } }]);
+    expect(JSON.stringify(conn.posted)).not.toContain(requestedName);
+  });
+
+  it('does not log an OAuth-derived name when a just-written entry is missing', async () => {
+    await import('../src/service-worker.js');
+    const conn = connectPort(PINNED_SENDER);
+    const providerId = 'private-provider';
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    (globalThis as any).chrome.storage.local.set = vi.fn(async () => {});
+
+    await dispatch(conn, {
+      id: 6,
+      type: 'secrets.mask-oauth-token',
+      providerId,
+      accessToken: 'placeholder',
+      domains: 'example.com',
+    });
+
+    expect(conn.posted).toEqual([
+      {
+        id: 6,
+        response: { maskedValue: undefined, error: 'entry missing after write' },
+      },
+    ]);
+    expect(JSON.stringify(warnSpy.mock.calls)).not.toContain(providerId);
+    warnSpy.mockRestore();
+  });
+
   it.each([
     { id: 10, type: 'secrets.scrub-tool-result' },
     { id: 11, type: 'secrets.set' },
