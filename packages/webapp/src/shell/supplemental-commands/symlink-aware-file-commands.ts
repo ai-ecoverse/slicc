@@ -137,9 +137,13 @@ async function removeDirectory(
   parents: boolean,
   verbose: boolean
 ): Promise<{ stdout: string; stderr: string }> {
+  // Count normalized OPERAND components (not resolved cwd components): `a/b`
+  // removes `b`, then `a`, and stops without climbing into cwd.
+  const normalizedOperand = ctx.fs.resolvePath('/', operand);
+  const operandParts = normalizedOperand.split('/').filter(Boolean);
   let path = ctx.fs.resolvePath(ctx.cwd, operand);
   let stdout = '';
-  for (;;) {
+  for (let i = 0; i < operandParts.length; i++) {
     try {
       const stat = await lstat(ctx, path);
       if (!stat.isDirectory || stat.isSymbolicLink) throw new Error('Not a directory');
@@ -148,9 +152,11 @@ async function removeDirectory(
     } catch (error) {
       return { stdout, stderr: `rmdir: failed to remove '${operand}': ${errorDetail(error)}\n` };
     }
-    if (!parents || path === '/') return { stdout, stderr: '' };
+    // Stop after removing all operand components (or if parents flag is absent).
+    if (!parents || i === operandParts.length - 1) return { stdout, stderr: '' };
     path = parentPath(path);
   }
+  return { stdout, stderr: '' };
 }
 
 export function createRmdirCommand(): Command {

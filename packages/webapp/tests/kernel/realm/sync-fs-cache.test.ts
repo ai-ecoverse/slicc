@@ -419,4 +419,100 @@ describe('SyncFsCache: exec-coherence support (wasUsed / applySnapshot / resetBa
     expect(cache.exists('/workspace/gone.txt')).toBe(false);
     expect(cache.getMutations().deleted).toEqual(['/workspace/gone.txt']);
   });
+
+  it('applySnapshotPreservingMutations: pending created symlinks retain isSymbolicLink/symlinkTarget', () => {
+    const symlinkEntry = {
+      path: '/workspace/old-link',
+      content: new Uint8Array(0),
+      isDirectory: false,
+      isSymbolicLink: true,
+      symlinkTarget: '/target',
+    };
+    const cache = new SyncFsCache({ entries: [textEntry('/workspace', '', true), symlinkEntry] });
+    cache.rename('/workspace/old-link', '/workspace/new-link');
+
+    // The host re-snapshot doesn't contain new-link (exec touched other paths).
+    cache.applySnapshotPreservingMutations({
+      entries: [textEntry('/workspace', '', true)],
+    });
+
+    // The symlink properties survive the preservation.
+    const m = cache.getMutations();
+    expect(m.created).toHaveLength(1);
+    expect(m.created[0].path).toBe('/workspace/new-link');
+    expect(m.created[0].isSymbolicLink).toBe(true);
+    expect(m.created[0].symlinkTarget).toBe('/target');
+  });
+
+  it('lstat follows intermediate symlinks but not the final component', () => {
+    const cache = new SyncFsCache({
+      entries: [
+        textEntry('/workspace', '', true),
+        { path: '/workspace/target', content: new Uint8Array(0), isDirectory: true },
+        textEntry('/workspace/target/file.txt', 'content'),
+        {
+          path: '/workspace/alias',
+          content: new Uint8Array(0),
+          isDirectory: false,
+          isSymbolicLink: true,
+          symlinkTarget: 'target',
+        },
+      ],
+    });
+    // lstat on /workspace/alias/file.txt should follow 'alias' (intermediate)
+    // but report file.txt itself (final component).
+    const stat = cache.lstat('/workspace/alias/file.txt');
+    expect(stat.isFile).toBe(true);
+    expect(stat.isSymbolicLink).toBe(false);
+
+    // lstat on the symlink itself should report it as a symlink.
+    const linkStat = cache.lstat('/workspace/alias');
+    expect(linkStat.isSymbolicLink).toBe(true);
+    expect(linkStat.isDirectory).toBe(false);
+  });
+
+  it('lstat handles relative symlink targets in intermediate paths', () => {
+    const cache = new SyncFsCache({
+      entries: [
+        textEntry('/workspace', '', true),
+        { path: '/workspace/real', content: new Uint8Array(0), isDirectory: true },
+        textEntry('/workspace/real/data.txt', 'hello'),
+        {
+          path: '/workspace/link',
+          content: new Uint8Array(0),
+          isDirectory: false,
+          isSymbolicLink: true,
+          symlinkTarget: './real',
+        },
+      ],
+    });
+    // /workspace/link/data.txt: 'link' is a relative symlink to './real'.
+    const stat = cache.lstat('/workspace/link/data.txt');
+    expect(stat.isFile).toBe(true);
+    expect(textOf(cache.readFile('/workspace/link/data.txt'))).toBe('hello');
+  });
+
+  it('lstat detects ELOOP in intermediate path symlinks', () => {
+    const cache = new SyncFsCache({
+      entries: [
+        textEntry('/workspace', '', true),
+        {
+          path: '/workspace/loop1',
+          content: new Uint8Array(0),
+          isDirectory: false,
+          isSymbolicLink: true,
+          symlinkTarget: '/workspace/loop2',
+        },
+        {
+          path: '/workspace/loop2',
+          content: new Uint8Array(0),
+          isDirectory: false,
+          isSymbolicLink: true,
+          symlinkTarget: '/workspace/loop1',
+        },
+      ],
+    });
+    // Accessing /workspace/loop1/file should detect the loop in intermediates.
+    expect(() => cache.lstat('/workspace/loop1/file')).toThrow(/ELOOP/);
+  });
 });

@@ -25,6 +25,7 @@ const DEFAULT_TIMEOUT_MS = 30000;
 export interface SyncFsBridgeStat {
   isFile: boolean;
   isDirectory: boolean;
+  isSymbolicLink?: boolean;
   size: number;
 }
 
@@ -33,6 +34,7 @@ export interface SyncFsXhrBridge {
   readFile(path: string): Uint8Array;
   writeFile(path: string, bytes: Uint8Array): void;
   stat(path: string): SyncFsBridgeStat;
+  lstat(path: string): SyncFsBridgeStat;
   readdir(path: string): string[];
   exists(path: string): boolean;
 }
@@ -51,7 +53,7 @@ export interface SyncFsXhrMutatingBridge extends SyncFsXhrBridge {
 }
 
 /** Ops the route carries as an `?op=` query param (bare read/write carry none). */
-type SyncFsRouteOp = 'stat' | 'readdir' | 'exists' | 'mkdir' | 'rm';
+type SyncFsRouteOp = 'stat' | 'lstat' | 'readdir' | 'exists' | 'mkdir' | 'rm';
 
 /** An `Error` carrying a POSIX `.code`, matching sync-fs-cache's errors. */
 function errnoError(code: string, path: string): Error & { code: string } {
@@ -118,7 +120,31 @@ export function createSyncFsXhrBridge(
       ) {
         throw errnoError('EIO', path);
       }
-      return { isFile: json.isFile, isDirectory: json.isDirectory, size: json.size };
+      return {
+        isFile: json.isFile,
+        isDirectory: json.isDirectory,
+        isSymbolicLink: json.isSymbolicLink,
+        size: json.size,
+      };
+    },
+    lstat(path: string): SyncFsBridgeStat {
+      const json = synchronifyJson(
+        request('GET', path, undefined, 'lstat')
+      ) as Partial<SyncFsBridgeStat> | null;
+      if (
+        !json ||
+        typeof json.isFile !== 'boolean' ||
+        typeof json.isDirectory !== 'boolean' ||
+        typeof json.size !== 'number'
+      ) {
+        throw errnoError('EIO', path);
+      }
+      return {
+        isFile: json.isFile,
+        isDirectory: json.isDirectory,
+        isSymbolicLink: json.isSymbolicLink,
+        size: json.size,
+      };
     },
     readdir(path: string): string[] {
       const json = synchronifyJson(request('GET', path, undefined, 'readdir'));

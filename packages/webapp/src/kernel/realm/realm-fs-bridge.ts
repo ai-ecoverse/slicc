@@ -446,7 +446,7 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
     } catch (err) {
       const code = (err as { code?: string })?.code;
       if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
-      return bridge.stat(resolved);
+      return bridge.lstat(resolved);
     }
   }
   const wrapStat = (s: {

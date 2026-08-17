@@ -73,6 +73,7 @@ function recordingFsBridge(log: string[]): SyncFsXhrMutatingBridge {
     readFile: () => new Uint8Array(0),
     writeFile: (p) => log.push(`write ${p}`),
     stat: () => ({ isFile: true, isDirectory: false, size: 0 }),
+    lstat: () => ({ isFile: true, isDirectory: false, size: 0 }),
     readdir: () => [],
     exists: () => true,
     mkdir: (p) => log.push(`mkdir ${p}`),

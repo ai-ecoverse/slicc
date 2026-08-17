@@ -255,7 +255,14 @@ export class SyncFsCache {
     // Then re-layer creates + modifies so sync writes win for their paths.
     for (const c of pending.created) {
       this.ensureParentDirs(c.path);
-      this.tree.set(c.path, { content: c.content, isDirectory: c.isDirectory });
+      // Preserve isSymbolicLink/symlinkTarget for pending created symlinks — a
+      // renamed symlink must not degrade into an empty file.
+      this.tree.set(c.path, {
+        content: c.content,
+        isDirectory: c.isDirectory,
+        isSymbolicLink: c.isSymbolicLink,
+        symlinkTarget: c.symlinkTarget,
+      });
     }
     for (const m of pending.modified) {
       this.ensureParentDirs(m.path);
@@ -307,22 +314,44 @@ export class SyncFsCache {
     return entry.isDirectory ? 'directory' : 'file';
   }
 
-  /** Resolve a cached symlink, following both absolute and relative targets. */
-  private resolveEntry(path: string): { path: string; entry: SyncFsEntry } | undefined {
-    let current = normalizePath(path);
+  /** Resolve cached symlinks in every path component, with lstat final-link semantics. */
+  private resolveEntry(
+    path: string,
+    preserveFinalSymlink = false
+  ): { path: string; entry: SyncFsEntry } | undefined {
+    const original = normalizePath(path);
+    let remaining = original.split('/').filter(Boolean);
+    let resolved: string[] = [];
     const seen = new Set<string>();
-    for (let hops = 0; hops <= 40; hops++) {
-      const entry = this.tree.get(current);
+    let hops = 0;
+
+    if (remaining.length === 0) {
+      const entry = this.tree.get('/');
+      return entry ? { path: '/', entry } : undefined;
+    }
+
+    while (remaining.length > 0) {
+      const segment = remaining.shift()!;
+      const candidate = `/${[...resolved, segment].join('/')}`;
+      const entry = this.tree.get(candidate);
       if (!entry) return undefined;
-      if (!entry.isSymbolicLink) return { path: current, entry };
-      if (seen.has(current) || hops === 40) {
-        throw Object.assign(new Error(`ELOOP: too many symbolic links, '${path}'`), {
-          code: 'ELOOP',
-        });
+      const final = remaining.length === 0;
+      if (entry.isSymbolicLink && !(preserveFinalSymlink && final)) {
+        if (seen.has(candidate) || hops++ === 40) {
+          throw Object.assign(new Error(`ELOOP: too many symbolic links, '${original}'`), {
+            code: 'ELOOP',
+          });
+        }
+        seen.add(candidate);
+        const target = entry.symlinkTarget ?? '';
+        const targetPath = target.startsWith('/') ? target : `${dirname(candidate)}/${target}`;
+        remaining = [...normalizePath(targetPath).split('/').filter(Boolean), ...remaining];
+        resolved = [];
+        continue;
       }
-      seen.add(current);
-      const target = entry.symlinkTarget ?? '';
-      current = normalizePath(target.startsWith('/') ? target : `${dirname(current)}/${target}`);
+      if (!final && !entry.isDirectory) return undefined;
+      resolved.push(segment);
+      if (final) return { path: candidate, entry };
     }
     return undefined;
   }
@@ -411,9 +440,13 @@ export class SyncFsCache {
   } {
     this.touched = true;
     const normalized = normalizePath(path);
-    const entry = this.tree.get(normalized);
-    if (!entry) throw enoent(normalized);
-    return this.toStat(entry);
+    // Follow symlinks in intermediate path components only (e.g.,
+    // `/workspace/alias/file` where `alias -> target` resolves intermediate
+    // components), but do NOT follow the final component — lstat reports the
+    // link itself, not its target.
+    const resolved = this.resolveEntry(normalized, true);
+    if (!resolved) throw enoent(normalized);
+    return this.toStat(resolved.entry);
   }
 
   private toStat(entry: SyncFsEntry) {

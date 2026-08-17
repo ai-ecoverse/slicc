@@ -99,7 +99,7 @@ export interface SyncFsSwChannelLike {
 
 export interface SyncFsHandlerFsRequest {
   token: string;
-  op: 'read' | 'write' | 'stat' | 'readdir' | 'exists' | 'mkdir' | 'rm';
+  op: 'read' | 'write' | 'stat' | 'lstat' | 'readdir' | 'exists' | 'mkdir' | 'rm';
   path: string;
   body?: Uint8Array;
 }
@@ -114,7 +114,7 @@ export type SyncFsHandlerRequest =
   | (SyncExecRequest & { op?: undefined; path?: undefined; body?: undefined });
 
 /** Read-only metadata ops the SW parses off a GET `?op=` query param. */
-const METADATA_OPS = new Set(['stat', 'readdir', 'exists']);
+const METADATA_OPS = new Set(['stat', 'lstat', 'readdir', 'exists']);
 /**
  * Mutating metadata ops, parsed off a POST `?op=`. Only the sync-exec
  * flush-before path issues these — the `fs` shim keeps mkdir/rm cache-backed —
@@ -260,7 +260,7 @@ export async function parseSyncFsRequest(request: {
   // so a typo can't traverse the discriminated union with an untyped op
   // string (the responder / route would fail closed EINVAL anyway).
   if (opParam && METADATA_OPS.has(opParam)) {
-    return { token, op: opParam as 'stat' | 'readdir' | 'exists', path };
+    return { token, op: opParam as 'stat' | 'lstat' | 'readdir' | 'exists', path };
   }
   return { token, op: 'read', path };
 }
