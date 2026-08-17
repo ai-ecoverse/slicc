@@ -219,7 +219,7 @@ export function prepareRequestBody(
   if (!body) return undefined;
   const ct =
     Object.entries(headers ?? {}).find(([key]) => key.toLowerCase() === 'content-type')?.[1] ?? '';
-  if (!isTextContentType(ct)) {
+  if (ct && !isTextContentType(ct)) {
     const bytes = getFetchBodyBytes(body) as Uint8Array<ArrayBuffer>;
     return new Blob([bytes]);
   }
