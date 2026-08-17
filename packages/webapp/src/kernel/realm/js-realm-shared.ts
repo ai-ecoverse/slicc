@@ -37,6 +37,7 @@ import {
   buildSliccyModules,
   createModuleSystem,
   loadModuleGraph,
+  type ModuleExports,
   runUserCode,
 } from './realm-module-system.js';
 import {
@@ -131,6 +132,11 @@ function installSyncBridges(
     ...(syncFsXhr ? { fsBridge: syncFsXhr } : {}),
   });
 }
+
+/** `globalThis` narrowed to the realm-internal WASM compile bridge hook. */
+type GlobalWithWasmCompile = typeof globalThis & {
+  __slicc_compileWasm?: (path: string) => Promise<WebAssembly.Module>;
+};
 
 /**
  * Build the realm's `c` / `cli` pair. Constructed together so cli.die/warn
@@ -311,7 +317,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   });
   const requireShim = moduleSystem.require;
 
-  const moduleShim = { exports: {} as Record<string, unknown>, filename: init.filename };
+  const moduleShim = { exports: {} as ModuleExports, filename: init.filename };
 
   // The host transpiles an ESM / dynamic-import / top-level-await entry to a
   // CJS body the AsyncFunction wrapper can run (and sets `entrySource`); a
@@ -329,7 +335,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   // floats without the bridge (e.g. the in-process test realm) cleanly fall
   // back to in-realm compile. The returned `WebAssembly.Module` is
   // structured-cloneable, so it round-trips over the realm port.
-  const g = globalThis as Record<string, unknown>;
+  const g = globalThis as GlobalWithWasmCompile;
   g.__slicc_compileWasm = (path: string): Promise<WebAssembly.Module> =>
     rpc.call('wasm', 'compile', [path]);
 

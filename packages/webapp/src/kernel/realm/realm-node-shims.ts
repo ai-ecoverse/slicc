@@ -51,12 +51,34 @@ export function createNodeConsole(
   };
 }
 
+/** The `process.stdout` / `process.stderr` write sinks handed to user code. */
+interface RealmWritableShim {
+  write: (value: unknown) => void;
+  end: () => undefined;
+  isTTY: boolean;
+}
+
+/**
+ * The realm's `process` shim surface (handed to user code and served for
+ * `require('process')`). `argv` carries the non-enumerable `.parseFlags()`
+ * helper (see `attachArgvParseFlags`).
+ */
+export interface RealmProcessShim {
+  argv: string[];
+  env: Record<string, string>;
+  cwd: () => string;
+  exit: (codeValue?: number) => never;
+  stdin: StdinShim;
+  stdout: RealmWritableShim;
+  stderr: RealmWritableShim;
+}
+
 export function createProcessShim(
   init: RealmInitMsg,
   writeStdout: (value: unknown) => void,
   writeStderr: (value: unknown) => void
 ): {
-  processShim: Record<string, unknown>;
+  processShim: RealmProcessShim;
   getDidCallProcessExit: () => boolean;
   getExitCode: () => number;
   recordExit: (code: number) => void;
@@ -77,7 +99,7 @@ export function createProcessShim(
   const argvWithParseFlags = attachArgvParseFlags(init.argv);
   const stdout = { write: writeStdout, end: () => undefined, isTTY: !noColor };
   const stderr = { write: writeStderr, end: () => undefined, isTTY: !noColor };
-  const processShim = {
+  const processShim: RealmProcessShim = {
     argv: argvWithParseFlags,
     env: init.env,
     cwd: () => init.cwd,
