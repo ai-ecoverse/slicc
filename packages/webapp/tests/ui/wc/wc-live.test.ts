@@ -12,20 +12,24 @@ installWcDomStubs();
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import type { BootStageLogger } from '../../../src/ui/boot/types.js';
 import {
-  applyLeaderLocalThinkingChange,
-  createWcLiveCallbacks,
   DEFAULT_DOCK_TREE_ON_BOOT,
   DOCK_TREE_STORAGE_KEY,
-  metaThinkingForScoop,
-  parseProcStatLine,
   prepareWcShell,
-  scoopColor,
-  thinkingLevelForAgent,
-  toSwitcherScoops,
-  type WcLiveWiring,
   wireDockTreePersistence,
   wireWcChipTips,
 } from '../../../src/ui/wc/wc-live.js';
+import {
+  createWcLiveCallbacks,
+  toSwitcherScoops,
+  type WcLiveWiring,
+} from '../../../src/ui/wc/wc-live-callbacks.js';
+import { parseProcStatLine } from '../../../src/ui/wc/wc-live-monitor-deps.js';
+import {
+  applyLeaderLocalThinkingChange,
+  metaThinkingForScoop,
+  thinkingLevelForAgent,
+} from '../../../src/ui/wc/wc-live-thinking-hydration.js';
+import { scoopColor } from '../../../src/ui/wc/wc-scoop-color.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
 
 function fakeLog(): BootStageLogger {
@@ -47,6 +51,16 @@ function scoop(overrides: Partial<RegisteredScoop>): RegisteredScoop {
 }
 
 const cone = scoop({ jid: 'cone-1', name: 'sliccy', isCone: true, type: 'cone' });
+
+describe('wc-live compatibility re-exports', () => {
+  it('keeps moved helpers available to existing importers', async () => {
+    const live = await import('../../../src/ui/wc/wc-live.js');
+    expect(live.createWcLiveCallbacks).toBe(createWcLiveCallbacks);
+    expect(live.toSwitcherScoops).toBe(toSwitcherScoops);
+    expect(live.applyLeaderLocalThinkingChange).toBe(applyLeaderLocalThinkingChange);
+    expect(live.parseProcStatLine).toBe(parseProcStatLine);
+  });
+});
 
 describe('leader-local thinking bridge', () => {
   it('notifies only after a successful persistence ack', async () => {

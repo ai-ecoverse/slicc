@@ -9,7 +9,8 @@
 import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
 import { wireWcDetached } from './wc-detached.js';
-import { attachWcClient, createWcLiveCallbacks, prepareWcShell } from './wc-live.js';
+import { attachWcClient, prepareWcShell } from './wc-live.js';
+import { createWcLiveCallbacks } from './wc-live-callbacks.js';
 
 export async function mountWcUiExtension(
   app: HTMLElement,
