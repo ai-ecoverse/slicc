@@ -53,6 +53,40 @@ function packageName(specifier: string): string {
   return specifier.startsWith('@') ? parts.slice(0, 2).join('/') : (parts[0] as string);
 }
 
+describe('e2b template node version', () => {
+  // The e2bdev/code-interpreter base image ships EOL Node 20; template.ts
+  // installs a pinned Node 22 over it. Keep that pin inside the range the
+  // repo declares (root package.json engines.node), so bumping engines
+  // without rebumping the template fails here instead of in a booted sandbox.
+  it('pins a node version that satisfies root engines.node', () => {
+    const templateSource = readFileSync(
+      join(repoRoot, 'packages/dev-tools/e2b-template/template.ts'),
+      'utf8'
+    );
+    const pinMatch = /const nodeVersion = '(\d+)\.(\d+)\.(\d+)'/.exec(templateSource);
+    expect(pinMatch, "template.ts must pin `const nodeVersion = 'x.y.z'`").not.toBeNull();
+
+    const rootPkg = JSON.parse(readFileSync(join(repoRoot, 'package.json'), 'utf8')) as {
+      engines: { node: string };
+    };
+    const engineMatch = /^>=(\d+)\.(\d+)\.(\d+)$/.exec(rootPkg.engines.node);
+    expect(engineMatch, 'expected root engines.node of the form >=x.y.z').not.toBeNull();
+
+    const toTuple = (m: RegExpExecArray): [number, number, number] => [
+      Number(m[1]),
+      Number(m[2]),
+      Number(m[3]),
+    ];
+    const pinned = toTuple(pinMatch as RegExpExecArray);
+    const minimum = toTuple(engineMatch as RegExpExecArray);
+    const cmp = pinned[0] - minimum[0] || pinned[1] - minimum[1] || pinned[2] - minimum[2];
+    expect(
+      cmp >= 0,
+      `template.ts pins node ${pinned.join('.')} but root engines.node requires ${rootPkg.engines.node}`
+    ).toBe(true);
+  });
+});
+
 describe('e2b hosted-leader runtime dependencies', () => {
   it('lists every third-party runtime import in runtime-package.json', () => {
     const manifest = JSON.parse(
