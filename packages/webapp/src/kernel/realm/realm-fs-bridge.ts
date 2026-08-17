@@ -8,6 +8,14 @@ import type { RealmRpcClient } from './realm-rpc.js';
 import { normalizePath, type SyncFsCache } from './sync-fs-cache.js';
 import type { SyncFsXhrBridge, SyncFsXhrMutatingBridge } from './sync-fs-xhr-bridge.js';
 
+interface RealmGlobalWithBuffer {
+  Buffer?: { from: (data: Uint8Array) => unknown };
+}
+
+function realmBuffer(): RealmGlobalWithBuffer['Buffer'] {
+  return (globalThis as typeof globalThis & RealmGlobalWithBuffer).Buffer;
+}
+
 /** RPC-backed `fs` bridge (the realm's `require('fs')` / `fs` global). */
 export function createFsBridge(
   rpc: RealmRpcClient,
@@ -33,9 +41,7 @@ export function createFsBridge(
     // existing .jsh scripts while matching Node's readFile(path, null) → Buffer.
     if (encoding === null || encoding === 'buffer') {
       const bytes = await rpc.call<Uint8Array>('vfs', 'readFileBinary', [path]);
-      const B = (globalThis as Record<string, unknown>).Buffer as
-        | { from: (data: Uint8Array) => unknown }
-        | undefined;
+      const B = realmBuffer();
       return B ? B.from(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)) : bytes;
     }
     return rpc.call('vfs', 'readFile', [path]);
@@ -232,7 +238,12 @@ interface RemovalDeps {
   bridge: SyncFsXhrBridge | undefined;
   resolve: (p: string) => string;
   existsResolved: (resolved: string) => boolean;
-  statResolved: (resolved: string) => { isFile: boolean; isDirectory: boolean; size: number };
+  statResolved: (resolved: string) => {
+    isFile: boolean;
+    isDirectory: boolean;
+    isSymbolicLink?: boolean;
+    size: number;
+  };
   readBytes: (resolved: string) => Uint8Array;
   writeThrough: (resolved: string, bytes: Uint8Array) => void;
 }
@@ -258,9 +269,10 @@ function createRemovalOps(deps: RemovalDeps) {
     },
     rmdirSync(path: string, opts?: { recursive?: boolean }): void {
       const resolved = resolve(path);
-      // Node's rmdirSync throws ENOTDIR on a non-directory (rmSync does not, and
-      // SyncFsCache.rm has no isDirectory guard — it would silently unlink a file).
-      if (existsResolved(resolved) && !statResolved(resolved).isDirectory) {
+      // rmdir never follows the final component. A symlink is not a directory,
+      // even when its target is one, so target contents cannot trigger ENOTEMPTY.
+      const stat = existsResolved(resolved) ? statResolved(resolved) : null;
+      if (stat && (!stat.isDirectory || stat.isSymbolicLink)) {
         throw syncFsErr('ENOTDIR', resolved, 'rmdir');
       }
       if (!remove(resolved, { recursive: opts?.recursive === true })) {
@@ -294,6 +306,20 @@ function createRemovalOps(deps: RemovalDeps) {
 }
 
 /** Coerce a `writeFileSync`/`appendFileSync` data arg to bytes (string | typed array). */
+function createStats(stat: {
+  isFile: boolean;
+  isDirectory: boolean;
+  isSymbolicLink?: boolean;
+  size: number;
+}) {
+  return {
+    isFile: () => stat.isFile,
+    isDirectory: () => stat.isDirectory,
+    isSymbolicLink: () => stat.isSymbolicLink === true,
+    size: stat.size,
+  };
+}
+
 function toBytes(data: unknown): Uint8Array {
   if (typeof data === 'string') return new TextEncoder().encode(data);
   if (data instanceof Uint8Array) return data;
@@ -409,11 +435,6 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       return bridge.readdir(resolved);
     }
   }
-  const wrapStat = (s: { isFile: boolean; isDirectory: boolean; size: number }) => ({
-    isFile: () => s.isFile,
-    isDirectory: () => s.isDirectory,
-    size: s.size,
-  });
   const join = (dir: string, name: string) => (dir === '/' ? `/${name}` : `${dir}/${name}`);
   /** Recursive copy over the resolved paths (file → copy; dir → mkdir + walk). */
   function copyTree(srcR: string, destR: string): void {
@@ -444,9 +465,7 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       const bytes = readBytes(resolve(path));
       if (encoding === 'utf8' || encoding === 'utf-8') return new TextDecoder().decode(bytes);
       // Return Buffer if available (realm polyfill), else Uint8Array.
-      const B = (globalThis as Record<string, unknown>).Buffer as
-        | { from: (data: Uint8Array) => unknown }
-        | undefined;
+      const B = realmBuffer();
       return B ? B.from(bytes) : bytes;
     },
     writeFileSync(path: string, data: unknown): void {
@@ -487,12 +506,21 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
     mkdirSync(path: string, opts?: { recursive?: boolean }): void {
       syncFs.mkdir(resolve(path), opts?.recursive);
     },
-    statSync(path: string): { isFile: () => boolean; isDirectory: () => boolean; size: number } {
-      return wrapStat(statResolved(resolve(path)));
+    statSync(path: string): {
+      isFile: () => boolean;
+      isDirectory: () => boolean;
+      isSymbolicLink: () => boolean;
+      size: number;
+    } {
+      return createStats(statResolved(resolve(path)));
     },
-    lstatSync(path: string): { isFile: () => boolean; isDirectory: () => boolean; size: number } {
-      // No symlinks in the sync model → identical to statSync.
-      return wrapStat(statResolved(resolve(path)));
+    lstatSync(path: string): {
+      isFile: () => boolean;
+      isDirectory: () => boolean;
+      isSymbolicLink: () => boolean;
+      size: number;
+    } {
+      return createStats(statResolved(resolve(path)));
     },
     realpathSync(path: string): string {
       // No symlinks → the canonical path is the lexical resolution; verify it exists.

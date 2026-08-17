@@ -48,27 +48,27 @@ also resolves to it.
 
 Sync methods (backed by `SyncFsCache` — in-memory snapshot, standalone only):
 
-| Method                               | Notes                                                 |
-| ------------------------------------ | ----------------------------------------------------- |
-| `readFileSync(path, opts?)`          |                                                       |
-| `writeFileSync(path, data)`          |                                                       |
-| `appendFileSync(path, data)`         |                                                       |
-| `truncateSync(path, len?)`           |                                                       |
-| `existsSync(path)`                   |                                                       |
-| `accessSync(path)`                   | Throws ENOENT if missing                              |
-| `mkdirSync(path, {recursive?})`      |                                                       |
-| `statSync(path)`                     | Returns `{isFile(), isDirectory(), size}`             |
-| `lstatSync(path)`                    | Identical to `statSync` — the VFS has no symlinks     |
-| `realpathSync(path)`                 | Lexical resolution + existence check (no symlinks)    |
-| `readdirSync(path)`                  |                                                       |
-| `rmSync(path, {recursive?, force?})` |                                                       |
-| `rmdirSync(path, {recursive?})`      | ENOTDIR on a non-directory                            |
-| `copyFileSync(src, dest)`            |                                                       |
-| `cpSync(src, dest)`                  | Recursive tree copy                                   |
-| `chmodSync(path)`                    | No-op (VFS has no mode bits); keeps ENOENT-on-missing |
-| `mkdtempSync(prefix)`                |                                                       |
-| `unlinkSync(path)`                   |                                                       |
-| `renameSync(oldPath, newPath)`       |                                                       |
+| Method                               | Notes                                                          |
+| ------------------------------------ | -------------------------------------------------------------- |
+| `readFileSync(path, opts?)`          |                                                                |
+| `writeFileSync(path, data)`          |                                                                |
+| `appendFileSync(path, data)`         |                                                                |
+| `truncateSync(path, len?)`           |                                                                |
+| `existsSync(path)`                   |                                                                |
+| `accessSync(path)`                   | Throws ENOENT if missing                                       |
+| `mkdirSync(path, {recursive?})`      |                                                                |
+| `statSync(path)`                     | Returns target metadata                                        |
+| `lstatSync(path)`                    | Does not follow the final symlink; supports `isSymbolicLink()` |
+| `realpathSync(path)`                 | Lexical resolution + existence check                           |
+| `readdirSync(path)`                  |                                                                |
+| `rmSync(path, {recursive?, force?})` |                                                                |
+| `rmdirSync(path, {recursive?})`      | ENOTDIR on a non-directory                                     |
+| `copyFileSync(src, dest)`            |                                                                |
+| `cpSync(src, dest)`                  | Recursive tree copy                                            |
+| `chmodSync(path)`                    | No-op (VFS has no mode bits); keeps ENOENT-on-missing          |
+| `mkdtempSync(prefix)`                |                                                                |
+| `unlinkSync(path)`                   |                                                                |
+| `renameSync(oldPath, newPath)`       |                                                                |
 
 The sync cache is populated from a VFS snapshot before user code runs and
 flushed back on completion. Files exceeding 1 MB are marked `truncated` and

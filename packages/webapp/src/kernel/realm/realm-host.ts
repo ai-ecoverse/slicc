@@ -462,6 +462,17 @@ async function visitSnapshotDir(
   }
 }
 
+/** Record a symlink itself. Snapshot traversal never follows the final component. */
+function visitSnapshotSymlink(current: string, size: number, budget: SnapshotBudget): void {
+  budget.entries.push({
+    path: current,
+    content: new Uint8Array(0),
+    isDirectory: false,
+    isSymbolicLink: true,
+    size,
+  });
+}
+
 /** Visit one file node during the walk: record its content if within budget. */
 async function visitSnapshotFile(
   ctx: CommandContext,
@@ -582,13 +593,22 @@ async function walkSnapshotRoot(
   while (stack.length > 0) {
     if (entryBudgetExhausted(budget)) return;
     const current = stack.pop()!;
-    let st: { isDirectory: boolean; isFile: boolean; size: number };
+    let st: {
+      isDirectory: boolean;
+      isFile: boolean;
+      isSymbolicLink: boolean;
+      size: number;
+    };
     try {
-      st = await ctx.fs.stat(current);
+      // stat handles the synthetic VFS root while lstat is required for child
+      // entries so directory links are recorded without traversing targets.
+      st = current === rootPath ? await ctx.fs.stat(current) : await ctx.fs.lstat(current);
     } catch {
       continue;
     }
-    if (st.isDirectory) {
+    if (st.isSymbolicLink) {
+      visitSnapshotSymlink(current, st.size, budget);
+    } else if (st.isDirectory) {
       await visitSnapshotDir(ctx, current, stack, budget);
     } else if (st.isFile) {
       await visitSnapshotFile(ctx, current, st.size, budget, stack);

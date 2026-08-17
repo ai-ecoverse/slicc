@@ -108,6 +108,44 @@ describe('SyncFsCache', () => {
     expect(() => cache.unlink('/workspace/dir')).toThrow();
   });
 
+  it('unlink removes a symlink entry without touching its directory target', () => {
+    const cache = new SyncFsCache({
+      entries: [
+        textEntry('/workspace/target', '', true),
+        textEntry('/workspace/target/keep.txt', 'important'),
+        {
+          path: '/workspace/alias',
+          content: new Uint8Array(0),
+          isDirectory: false,
+          isSymbolicLink: true,
+        },
+      ],
+    });
+
+    cache.unlink('/workspace/alias');
+
+    expect(cache.exists('/workspace/alias')).toBe(false);
+    expect(textOf(cache.readFile('/workspace/target/keep.txt'))).toBe('important');
+  });
+
+  it('stat exposes symlink metadata from the no-follow snapshot', () => {
+    const cache = new SyncFsCache({
+      entries: [
+        {
+          path: '/workspace/alias',
+          content: new Uint8Array(0),
+          isDirectory: false,
+          isSymbolicLink: true,
+        },
+      ],
+    });
+    expect(cache.stat('/workspace/alias')).toMatchObject({
+      isFile: false,
+      isDirectory: false,
+      isSymbolicLink: true,
+    });
+  });
+
   it('mkdtemp creates unique dirs', () => {
     const cache = new SyncFsCache(emptySnapshot());
     const dir1 = cache.mkdtemp('/workspace/test-');

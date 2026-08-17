@@ -361,11 +361,57 @@ test('accessSync resolves for an existing path, throws ENOENT otherwise', () => 
   expect(() => shim.accessSync('/workspace/missing.txt')).toThrow(/ENOENT/);
 });
 
-test('lstatSync mirrors statSync (no symlinks in the sync model)', () => {
-  const shim = createSyncFsBridge(cache([textEntry('/workspace/f.txt', 'hello')]), '/workspace');
-  const s = shim.lstatSync('/workspace/f.txt');
-  expect(s.isFile()).toBe(true);
-  expect(s.size).toBe(5);
+test('lstatSync returns Stats with isSymbolicLink()', () => {
+  const shim = createSyncFsBridge(
+    cache([
+      { ...textEntry('/workspace/target', ''), isDirectory: true },
+      textEntry('/workspace/target/keep.txt', 'important'),
+      {
+        path: '/workspace/alias',
+        content: new Uint8Array(0),
+        isDirectory: false,
+        isSymbolicLink: true,
+      },
+    ]),
+    '/workspace'
+  );
+  const s = shim.lstatSync('/workspace/alias');
+  expect(s.isFile()).toBe(false);
+  expect(s.isDirectory()).toBe(false);
+  expect(s.isSymbolicLink()).toBe(true);
+});
+
+test('unlinkSync removes a directory symlink and leaves target contents intact', () => {
+  const syncFs = cache([
+    { ...textEntry('/workspace/target', ''), isDirectory: true },
+    textEntry('/workspace/target/keep.txt', 'important'),
+    {
+      path: '/workspace/alias',
+      content: new Uint8Array(0),
+      isDirectory: false,
+      isSymbolicLink: true,
+    },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace');
+  shim.unlinkSync('/workspace/alias');
+  expect(shim.existsSync('/workspace/alias')).toBe(false);
+  expect(shim.readFileSync('/workspace/target/keep.txt', 'utf8')).toBe('important');
+});
+
+test('rmdirSync rejects a directory symlink as ENOTDIR, not target-derived ENOTEMPTY', () => {
+  const syncFs = cache([
+    { ...textEntry('/workspace/target', ''), isDirectory: true },
+    textEntry('/workspace/target/keep.txt', 'important'),
+    {
+      path: '/workspace/alias',
+      content: new Uint8Array(0),
+      isDirectory: false,
+      isSymbolicLink: true,
+    },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace');
+  expect(() => shim.rmdirSync('/workspace/alias')).toThrow(/ENOTDIR/);
+  expect(shim.readFileSync('/workspace/target/keep.txt', 'utf8')).toBe('important');
 });
 
 test('realpathSync returns the normalized absolute path when it exists', () => {

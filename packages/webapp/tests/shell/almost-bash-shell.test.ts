@@ -308,6 +308,69 @@ describe('AlmostBashShell playwright command discoverability', () => {
   });
 });
 
+describe('AlmostBashShell symlink removal commands', () => {
+  let fs: VirtualFS;
+  let shell: AlmostBashShell;
+  let dbCounter = 0;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({ dbName: `test-shell-symlink-remove-${dbCounter++}`, wipe: true });
+    shell = new AlmostBashShell({ fs });
+    await fs.mkdir('/tmp/target', { recursive: true });
+    await fs.writeFile('/tmp/target/keep.txt', 'important');
+  });
+
+  async function link(): Promise<void> {
+    await fs.symlink('/tmp/target', '/tmp/alias');
+  }
+
+  async function expectTargetIntact(): Promise<void> {
+    expect(await fs.exists('/tmp/alias')).toBe(false);
+    expect(await fs.readTextFile('/tmp/target/keep.txt')).toBe('important');
+  }
+
+  it.each([
+    'rm /tmp/alias',
+    'rm -f /tmp/alias',
+    'rm -r /tmp/alias',
+    'rm -rf /tmp/alias',
+    'unlink /tmp/alias',
+  ])('%s removes only the directory symlink', async (command) => {
+    await link();
+    const result = await shell.executeCommand(command);
+    expect(result).toMatchObject({ exitCode: 0, stderr: '' });
+    await expectTargetIntact();
+  });
+
+  it('rm -f succeeds when the path does not exist', async () => {
+    expect(await shell.executeCommand('rm -f /tmp/missing')).toMatchObject({
+      exitCode: 0,
+      stderr: '',
+    });
+  });
+
+  it('stat reports the link by default and follows it with -L', async () => {
+    await link();
+    expect(await shell.executeCommand('stat -c %F /tmp/alias')).toMatchObject({
+      exitCode: 0,
+      stdout: 'symbolic link\n',
+    });
+    expect(await shell.executeCommand('stat -L -c %F /tmp/alias')).toMatchObject({
+      exitCode: 0,
+      stdout: 'directory\n',
+    });
+  });
+
+  it('rmdir rejects the link as non-directory without inspecting target contents', async () => {
+    await link();
+    const result = await shell.executeCommand('rmdir /tmp/alias');
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Not a directory');
+    expect(result.stderr).not.toContain('Directory not empty');
+    expect(await fs.readTextFile('/tmp/target/keep.txt')).toBe('important');
+  });
+});
+
 describe('AlmostBashShell GitHub token renewal wiring', () => {
   it('uses the registered expiry-gated hook only for git network operations', async () => {
     const fs = await VirtualFS.create({ dbName: 'test-shell-github-renewal', wipe: true });

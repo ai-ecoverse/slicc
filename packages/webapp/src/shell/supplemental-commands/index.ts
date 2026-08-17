@@ -24,6 +24,12 @@ import { createDiscoverCommand } from './discover-command.js';
 import { createEsbuildCommand } from './esbuild-command.js';
 import { createEsptoolCommand } from './esptool-command.js';
 import { createFfmpegCommand } from './ffmpeg-command.js';
+import {
+  createRmCommand,
+  createRmdirCommand,
+  createStatCommand,
+  createUnlinkCommand,
+} from './filesystem-commands.js';
 import { createFsWatchCommand } from './fswatch-command.js';
 import { createHearCommand } from './hear-command.js';
 import { createCommandsCommand } from './help-command.js';
@@ -165,6 +171,10 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
       getJshCommands: options.getJshCommands,
       getWorkflowCommands: options.getWorkflowCommands,
     }),
+    createRmCommand(),
+    createRmdirCommand(),
+    createStatCommand(),
+    createUnlinkCommand(),
     createHostCommand(),
     createSshCommand(),
     createServeCommand(options.browserAPI, options.fs),

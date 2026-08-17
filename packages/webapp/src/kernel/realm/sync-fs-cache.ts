@@ -12,6 +12,7 @@
 export interface SyncFsEntry {
   content: Uint8Array;
   isDirectory: boolean;
+  isSymbolicLink?: boolean;
   truncated?: boolean;
   /**
    * Real byte size, recorded even when `content` is empty because the file was
@@ -27,6 +28,8 @@ export interface SyncFsSnapshot {
     path: string;
     content: Uint8Array;
     isDirectory: boolean;
+    /** True when this entry is the link itself; the snapshot never follows it. */
+    isSymbolicLink?: boolean;
     /**
      * True when the host skipped reading this file's real content because it
      * exceeded the sync-snapshot size budget (see `realm-host.ts`'s
@@ -162,6 +165,7 @@ export class SyncFsCache {
       this.tree.set(normalized, {
         content: entry.content,
         isDirectory: entry.isDirectory,
+        isSymbolicLink: entry.isSymbolicLink,
         truncated: entry.truncated,
         size: entry.size,
       });
@@ -345,7 +349,12 @@ export class SyncFsCache {
     return this.tree.has(normalized);
   }
 
-  stat(path: string): { isFile: boolean; isDirectory: boolean; size: number } {
+  stat(path: string): {
+    isFile: boolean;
+    isDirectory: boolean;
+    isSymbolicLink: boolean;
+    size: number;
+  } {
     this.touched = true;
     const normalized = normalizePath(path);
     const entry = this.tree.get(normalized);
@@ -353,8 +362,9 @@ export class SyncFsCache {
       throw enoent(normalized);
     }
     return {
-      isFile: !entry.isDirectory,
+      isFile: !entry.isDirectory && !entry.isSymbolicLink,
       isDirectory: entry.isDirectory,
+      isSymbolicLink: entry.isSymbolicLink === true,
       // Truncated entries carry `size` (real bytes) with an empty `content`;
       // in-realm writes carry no `size`, so `content.byteLength` is authoritative.
       size: entry.isDirectory ? 0 : (entry.size ?? entry.content.byteLength),
@@ -501,7 +511,7 @@ export class SyncFsCache {
     if (!entry) {
       throw enoent(normalized);
     }
-    if (entry.isDirectory) {
+    if (entry.isDirectory && !entry.isSymbolicLink) {
       throw Object.assign(
         new Error(`EISDIR: illegal operation on a directory, unlink '${normalized}'`),
         {

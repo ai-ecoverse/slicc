@@ -771,6 +771,9 @@ function makeTreeFs(files: Record<string, string>): IFileSystem {
         mtime: new Date(),
       };
     },
+    async lstat(path: string) {
+      return this.stat(path);
+    },
     async readdir(path: string) {
       return childrenOf(path);
     },
