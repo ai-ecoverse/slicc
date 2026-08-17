@@ -112,7 +112,7 @@ final class ChromeLauncherTests: XCTestCase {
 
         XCTAssertTrue(
             args.contains(
-                "--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable"
+                "--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard"
             )
         )
         // The leader must never be frozen or backgrounded by Chrome: a
@@ -121,6 +121,67 @@ final class ChromeLauncherTests: XCTestCase {
         XCTAssertTrue(args.contains("--disable-background-timer-throttling"))
         XCTAssertTrue(args.contains("--disable-backgrounding-occluded-windows"))
         XCTAssertTrue(args.contains("--disable-renderer-backgrounding"))
+    }
+
+    func testSeedProfilePreferencesCreatesSeededFileOnFreshProfile() throws {
+        // Pre-first-run seeding: the freeze/discard opt-outs must exist before
+        // Chrome ever reads the profile — an unprotected leader freezes in the
+        // background (Chrome 151's InfiniteTabsFreezing pipeline suspends even
+        // CDP dispatch, and the tab is force-reloaded on activation).
+        let launcher = makeLauncher()
+        let dir = NSTemporaryDirectory() + "slicc-seed-prefs-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+
+        launcher.seedProfilePreferences(userDataDir: dir)
+
+        let prefsPath = dir + "/Default/Preferences"
+        let data = try Data(contentsOf: URL(fileURLWithPath: prefsPath))
+        let prefs = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        XCTAssertEqual(prefs["tab_freezing_enabled"] as? Bool, false)
+        let tuning = try XCTUnwrap(prefs["performance_tuning"] as? [String: Any])
+        let memorySaver = try XCTUnwrap(tuning["high_efficiency_mode"] as? [String: Any])
+        XCTAssertEqual(memorySaver["state"] as? Int, 0)
+        let discarding = try XCTUnwrap(tuning["tab_discarding"] as? [String: Any])
+        XCTAssertEqual(
+            discarding["exceptions"] as? [String],
+            ChromeLauncher.tabLifecycleExemptSites
+        )
+    }
+
+    func testSeedProfilePreferencesMergesAndDeduplicatesExistingPrefs() throws {
+        let launcher = makeLauncher()
+        let dir = NSTemporaryDirectory() + "slicc-seed-prefs-" + UUID().uuidString
+        defer { try? FileManager.default.removeItem(atPath: dir) }
+        let defaultDir = dir + "/Default"
+        try FileManager.default.createDirectory(
+            atPath: defaultDir, withIntermediateDirectories: true)
+        let existing: [String: Any] = [
+            "profile": ["name": "keep-me"],
+            "performance_tuning": [
+                "high_efficiency_mode": ["state": 2, "aggressiveness": 1],
+                "tab_discarding": ["exceptions": ["example.com", "www.sliccy.ai"]],
+            ],
+        ]
+        let seedData = try JSONSerialization.data(withJSONObject: existing)
+        try seedData.write(to: URL(fileURLWithPath: defaultDir + "/Preferences"))
+
+        launcher.seedProfilePreferences(userDataDir: dir)
+        // Idempotence: a second run must not duplicate exception entries.
+        launcher.seedProfilePreferences(userDataDir: dir)
+
+        let data = try Data(contentsOf: URL(fileURLWithPath: defaultDir + "/Preferences"))
+        let prefs = try XCTUnwrap(try JSONSerialization.jsonObject(with: data) as? [String: Any])
+        let profile = try XCTUnwrap(prefs["profile"] as? [String: Any])
+        XCTAssertEqual(profile["name"] as? String, "keep-me")
+        let tuning = try XCTUnwrap(prefs["performance_tuning"] as? [String: Any])
+        let memorySaver = try XCTUnwrap(tuning["high_efficiency_mode"] as? [String: Any])
+        XCTAssertEqual(memorySaver["state"] as? Int, 0)
+        XCTAssertEqual(memorySaver["aggressiveness"] as? Int, 1)
+        let discarding = try XCTUnwrap(tuning["tab_discarding"] as? [String: Any])
+        XCTAssertEqual(
+            discarding["exceptions"] as? [String],
+            ["example.com", "www.sliccy.ai", "sliccy.ai", "localhost"]
+        )
     }
 
     func testResolveAppBundleWalksUpFromCanonicalChromeExecutable() {

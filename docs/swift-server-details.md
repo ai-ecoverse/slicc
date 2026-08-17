@@ -54,10 +54,14 @@ two routes, decided by whether the app allows renderer egress:
 
 Both launchers (`ChromeLauncher.buildLaunchArgs` here, node-server's
 `chrome-launch.ts` — kept byte-identical) append
-`--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable`
+`--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard`
 plus `--disable-background-timer-throttling`,
 `--disable-backgrounding-occluded-windows`, and
-`--disable-renderer-backgrounding`.
+`--disable-renderer-backgrounding`. Both also seed the profile's
+`Default/Preferences` with the version-stable freeze/discard opt-outs before
+every spawn (`seedProfilePreferences` here, `seedChromeProfilePreferences` in
+node) — Chrome 151 renamed the freezing features once already
+(see [`docs/pitfalls.md`](pitfalls.md)).
 
 The LNA pair: Chromium 142+ gates the local hop behind an "Apps on device"
 prompt, and Deny silently breaks CDP + `/api/*`. The rest keep the leader tab

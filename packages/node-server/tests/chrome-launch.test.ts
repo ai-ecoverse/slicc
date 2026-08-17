@@ -21,6 +21,8 @@ import {
   resolveChromeAppBundle,
   resolveChromeLaunchProfile,
   resolveProfilesDir,
+  seedChromeProfilePreferences,
+  TAB_LIFECYCLE_EXEMPT_SITES,
   terminateExistingProfileChrome,
   waitForCdpPort,
   waitForCdpPortFromActivePortFile,
@@ -162,7 +164,7 @@ describe('chrome-launch', () => {
       '--disable-crash-reporter',
       '--disable-background-tracing',
       '--disable-blink-features=AutomationControlled',
-      '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable',
+      '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard',
       '--disable-background-timer-throttling',
       '--disable-backgrounding-occluded-windows',
       '--disable-renderer-backgrounding',
@@ -200,13 +202,13 @@ describe('chrome-launch', () => {
       // without hosted: true.
       const args = buildChromeLaunchArgs(baseOpts);
       expect(args).toContain(
-        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable'
+        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard'
       );
     });
 
     it('does not duplicate the Local Network Access flag in hosted mode', () => {
       const lnaFlag =
-        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable';
+        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard';
       const args = buildChromeLaunchArgs({ ...baseOpts, hosted: true });
       expect(args.filter((a) => a === lnaFlag)).toHaveLength(1);
     });
@@ -219,7 +221,7 @@ describe('chrome-launch', () => {
       expect(args).toContain('--headless=new');
       expect(args).toContain('--font-render-hinting=none');
       expect(args).toContain(
-        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable'
+        '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard'
       );
     });
 
@@ -908,6 +910,96 @@ describe('clearChromeRestoreState', () => {
   it('does not throw when the directory itself is missing', async () => {
     const missing = join(tmpdir(), `slicc-clear-restore-missing-${Date.now()}-${Math.random()}`);
     await expect(clearChromeRestoreState(missing)).resolves.toBeUndefined();
+  });
+});
+
+describe('seedChromeProfilePreferences', () => {
+  it('creates a seeded Preferences file on a fresh profile (pre-first-run)', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
+    tempDirs.push(dir);
+
+    await seedChromeProfilePreferences(dir);
+
+    const after = JSON.parse(await readFile(join(dir, 'Default', 'Preferences'), 'utf8')) as {
+      tab_freezing_enabled: boolean;
+      performance_tuning: {
+        high_efficiency_mode: { state: number };
+        tab_discarding: { exceptions: string[] };
+      };
+    };
+    expect(after.tab_freezing_enabled).toBe(false);
+    expect(after.performance_tuning.high_efficiency_mode.state).toBe(0);
+    expect(after.performance_tuning.tab_discarding.exceptions).toEqual(TAB_LIFECYCLE_EXEMPT_SITES);
+  });
+
+  it('merges into existing prefs, preserving unrelated keys and user exceptions', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
+    tempDirs.push(dir);
+    const prefsPath = join(dir, 'Default', 'Preferences');
+    await mkdir(join(dir, 'Default'), { recursive: true });
+    await writeFile(
+      prefsPath,
+      JSON.stringify({
+        profile: { name: 'keep-me' },
+        performance_tuning: {
+          high_efficiency_mode: { state: 2, aggressiveness: 1 },
+          tab_discarding: { exceptions: ['example.com', 'www.sliccy.ai'] },
+        },
+      })
+    );
+
+    await seedChromeProfilePreferences(dir);
+
+    const after = JSON.parse(await readFile(prefsPath, 'utf8')) as {
+      profile: { name: string };
+      performance_tuning: {
+        high_efficiency_mode: { state: number; aggressiveness: number };
+        tab_discarding: { exceptions: string[] };
+      };
+    };
+    expect(after.profile.name).toBe('keep-me');
+    expect(after.performance_tuning.high_efficiency_mode.state).toBe(0);
+    // Sibling keys inside the objects we touch survive the merge.
+    expect(after.performance_tuning.high_efficiency_mode.aggressiveness).toBe(1);
+    // Union without duplicates: the user's own entry stays first, ours follow.
+    expect(after.performance_tuning.tab_discarding.exceptions).toEqual([
+      'example.com',
+      'www.sliccy.ai',
+      'sliccy.ai',
+      'localhost',
+    ]);
+  });
+
+  it('is idempotent — a second run does not duplicate exceptions', async () => {
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
+    tempDirs.push(dir);
+
+    await seedChromeProfilePreferences(dir);
+    await seedChromeProfilePreferences(dir);
+
+    const after = JSON.parse(await readFile(join(dir, 'Default', 'Preferences'), 'utf8')) as {
+      performance_tuning: { tab_discarding: { exceptions: string[] } };
+    };
+    expect(after.performance_tuning.tab_discarding.exceptions).toEqual(TAB_LIFECYCLE_EXEMPT_SITES);
+  });
+
+  it('replaces a corrupt Preferences file with a valid seeded one', async () => {
+    // Unlike clearChromeRestoreState (whose crash-flag rewrite is cosmetic and
+    // can defer to Chrome's regeneration), the freeze opt-out must exist at
+    // launch — an unprotected leader freezes in the background. Chrome fills
+    // the rest of a minimal-but-valid file back in itself.
+    const dir = await mkdtemp(join(tmpdir(), 'slicc-seed-prefs-'));
+    tempDirs.push(dir);
+    const prefsPath = join(dir, 'Default', 'Preferences');
+    await mkdir(join(dir, 'Default'), { recursive: true });
+    await writeFile(prefsPath, 'not valid json {');
+
+    await seedChromeProfilePreferences(dir);
+
+    const after = JSON.parse(await readFile(prefsPath, 'utf8')) as {
+      tab_freezing_enabled: boolean;
+    };
+    expect(after.tab_freezing_enabled).toBe(false);
   });
 });
 

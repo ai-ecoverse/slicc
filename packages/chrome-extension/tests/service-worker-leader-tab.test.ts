@@ -349,6 +349,22 @@ describe('leader tab — ensure on demand (icon click), never on startup', () =>
     const storedId = sessionStorage.get(LEADER_KEY) as number;
     expect(typeof storedId).toBe('number');
     expect(tabsStore.has(storedId)).toBe(true);
+    // The extension float cannot pass launch flags, so the per-tab discard
+    // opt-out (which Chrome's freeze policy follows) is its parity equivalent
+    // of the CLI launchers' anti-freeze --disable-features.
+    expect(mockChrome.tabs.update).toHaveBeenCalledWith(storedId, { autoDiscardable: false });
+  });
+
+  it('exempts an adopted leader tab from discard/freeze', async () => {
+    // A frozen leader runs no JS (tray, bridge, and kernel all stall), and
+    // Chrome 151 force-reloads it on activation — the "dead tab". Every path
+    // that learns a leader tabId funnels through writeStoredLeaderTabId, which
+    // re-applies the opt-out (Chrome resets autoDiscardable on restart).
+    tabsStore.set(7, { id: 7, windowId: 100, url: LEADER_URL_WITH_EXT, pinned: true });
+    await loadSw();
+    await fireIconClick();
+
+    expect(mockChrome.tabs.update).toHaveBeenCalledWith(7, { autoDiscardable: false });
   });
 
   it('adopts an existing leader tab on icon click instead of creating a duplicate', async () => {
@@ -406,7 +422,7 @@ describe('leader tab — ensure on demand (icon click), never on startup', () =>
     expect(sessionStorage.get(LEADER_KEY)).toBe(12);
   });
 
-  it('does NOT touch an adopted leader tab that already carries ext= and is pinned', async () => {
+  it('does NOT rewrite an adopted leader tab that already carries ext= and is pinned', async () => {
     tabsStore.set(9, { id: 9, windowId: 100, url: LEADER_URL_WITH_EXT, pinned: true });
     await loadSw();
     mockChrome.tabs.create.mockClear();
@@ -414,7 +430,9 @@ describe('leader tab — ensure on demand (icon click), never on startup', () =>
     await fireIconClick();
 
     expect(mockChrome.tabs.create).not.toHaveBeenCalled();
-    expect(mockChrome.tabs.update).not.toHaveBeenCalled();
+    // The only update is the discard/freeze exemption — no pin/url rewrite.
+    expect(mockChrome.tabs.update).toHaveBeenCalledTimes(1);
+    expect(mockChrome.tabs.update).toHaveBeenCalledWith(9, { autoDiscardable: false });
     expect(mockChrome.tabs.reload).not.toHaveBeenCalled();
     expect(sessionStorage.get(LEADER_KEY)).toBe(9);
   });

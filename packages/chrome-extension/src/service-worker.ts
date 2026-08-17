@@ -177,6 +177,28 @@ async function readStoredLeaderTabId(): Promise<number | undefined> {
 
 async function writeStoredLeaderTabId(tabId: number): Promise<void> {
   await chrome.storage.session.set({ [LEADER_TAB_ID_KEY]: tabId });
+  await markLeaderTabNotDiscardable(tabId);
+}
+
+/**
+ * Exempt the leader tab from Chrome's tab discarding AND — via Chrome's
+ * FreezingFollowsDiscardOptOut — from background-tab freezing. A frozen
+ * leader runs no JS, so the tray, bridge, and kernel all stall until the
+ * user foregrounds the tab (Chrome 151 then force-reloads it: the "dead
+ * tab"). The extension float cannot control launch flags the way the CLI
+ * launchers do (chrome-launch.ts / ChromeLauncher.swift disable the
+ * freezing features at spawn), so this per-tab opt-out is its parity
+ * equivalent. autoDiscardable is per-tab browser state that resets on
+ * browser restart; every path that learns a leader tabId (create, adopt,
+ * self-adopt via bridge-sw) funnels through writeStoredLeaderTabId, which
+ * re-applies it.
+ */
+async function markLeaderTabNotDiscardable(tabId: number): Promise<void> {
+  try {
+    await chrome.tabs.update(tabId, { autoDiscardable: false });
+  } catch (err) {
+    console.warn('[slicc-sw] failed to exempt leader tab from discard/freeze', err);
+  }
 }
 
 async function clearStoredLeaderTabId(): Promise<void> {
@@ -780,7 +802,7 @@ let discoveryEnabled = false;
 
 void chrome.storage.local
   .get(DISCOVERY_ENABLED_KEY)
-  .then((r: Record<string, unknown>) => {
+  .then((r: CdpPayload) => {
     discoveryEnabled = r[DISCOVERY_ENABLED_KEY] !== false;
     discoveryLoaded = true;
   })
@@ -1158,7 +1180,7 @@ async function handleCdpCommand(cmd: CdpCommandMsg): Promise<CdpResponseMsg> {
   const { id, method, params, sessionId } = cmd;
 
   try {
-    let result: Record<string, unknown>;
+    let result: CdpPayload;
 
     switch (method) {
       case 'Target.getTargets':
@@ -1191,7 +1213,7 @@ async function handleCdpCommand(cmd: CdpCommandMsg): Promise<CdpResponseMsg> {
   }
 }
 
-async function cdpGetTargets(): Promise<Record<string, unknown>> {
+async function cdpGetTargets(): Promise<CdpPayload> {
   const [tabs, activeTabs] = await Promise.all([
     chrome.tabs.query({}),
     chrome.tabs.query({ active: true, currentWindow: true }),
@@ -1213,9 +1235,7 @@ async function cdpGetTargets(): Promise<Record<string, unknown>> {
   return { targetInfos };
 }
 
-async function cdpAttachToTarget(
-  params: Record<string, unknown>
-): Promise<Record<string, unknown>> {
+async function cdpAttachToTarget(params: CdpPayload): Promise<CdpPayload> {
   const targetId = params['targetId'] as string;
   const tabId = parseInt(targetId, 10);
   if (!Number.isFinite(tabId) || tabId <= 0) {
@@ -1229,9 +1249,7 @@ async function cdpAttachToTarget(
   return { sessionId };
 }
 
-async function cdpDetachFromTarget(
-  params: Record<string, unknown>
-): Promise<Record<string, unknown>> {
+async function cdpDetachFromTarget(params: CdpPayload): Promise<CdpPayload> {
   const sessionId = params['sessionId'] as string;
   const tabId = sessionToTab.get(sessionId);
 
@@ -1246,14 +1264,14 @@ async function cdpDetachFromTarget(
   return {};
 }
 
-async function cdpCreateTarget(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function cdpCreateTarget(params: CdpPayload): Promise<CdpPayload> {
   const url = (params['url'] as string) ?? 'about:blank';
   const tab = await chrome.tabs.create({ url, active: false });
   await addToSliccGroup(tab.id);
   return { targetId: String(tab.id) };
 }
 
-async function cdpCloseTarget(params: Record<string, unknown>): Promise<Record<string, unknown>> {
+async function cdpCloseTarget(params: CdpPayload): Promise<CdpPayload> {
   const targetId = params['targetId'] as string;
   const tabId = parseInt(targetId, 10);
   if (!Number.isFinite(tabId) || tabId <= 0) {
@@ -1289,8 +1307,8 @@ const CDP_UNMASK_METHODS = new Set<string>([
 async function maybeUnmaskCdpFrame(
   tabId: number,
   method: string,
-  params: Record<string, unknown> | undefined
-): Promise<Record<string, unknown> | undefined> {
+  params: CdpPayload | undefined
+): Promise<CdpPayload | undefined> {
   if (!CDP_UNMASK_METHODS.has(method)) return params;
   if (!params || typeof params !== 'object') return params;
 
@@ -1316,15 +1334,15 @@ async function maybeUnmaskCdpFrame(
 
   const { frame, changed } = unmaskCdpFrame({ method, params }, hostname, pipeline);
   if (!changed) return params;
-  const nextParams = (frame as { params?: Record<string, unknown> }).params;
+  const nextParams = (frame as { params?: CdpPayload }).params;
   return nextParams ?? params;
 }
 
 async function cdpSendCommand(
   method: string,
-  params?: Record<string, unknown>,
+  params?: CdpPayload,
   sessionId?: string
-): Promise<Record<string, unknown>> {
+): Promise<CdpPayload> {
   const tabId = sessionId ? sessionToTab.get(sessionId) : undefined;
   if (tabId === undefined) {
     throw new Error(
@@ -1342,7 +1360,7 @@ async function cdpSendCommand(
 // ---------------------------------------------------------------------------
 
 chrome.debugger.onEvent.addListener(
-  (source: { tabId: number }, method: string, params?: Record<string, unknown>) => {
+  (source: { tabId: number }, method: string, params?: CdpPayload) => {
     if (!debuggerAttachmentOwners.has(source.tabId)) return;
 
     // Find sessionId for this tabId
@@ -1460,6 +1478,17 @@ async function buildSecretsPipeline(): Promise<SecretsPipeline> {
 // ---------------------------------------------------------------------------
 
 const bridgeSwDeps = buildDefaultBridgeSwDeps({
+  // The default dep writes only the session key; route self-adopt through the
+  // SW's writeStoredLeaderTabId so a Chrome-restored leader also regains its
+  // discard/freeze exemption (autoDiscardable resets on browser restart).
+  // Best-effort like the default: a storage failure must not fail the pin.
+  writeStoredLeaderTabId: async (tabId) => {
+    try {
+      await writeStoredLeaderTabId(tabId);
+    } catch {
+      /* storage unavailable; self-adopt is best-effort */
+    }
+  },
   attachDebugger: (tabId) => acquireDebuggerAttachment(tabId, 'bridge'),
   detachDebugger: (tabId) => releaseDebuggerAttachment(tabId, 'bridge'),
   sendDebuggerCommand: async (tabId, method, params) => {
@@ -1649,13 +1678,13 @@ function getMsgType(msg: unknown): string | undefined {
 
 function getStringField(msg: unknown, field: string): string | undefined {
   if (typeof msg !== 'object' || msg === null || !(field in msg)) return undefined;
-  const v = (msg as Record<string, unknown>)[field];
+  const v = (msg as CdpPayload)[field];
   return typeof v === 'string' ? v : undefined;
 }
 
 function getStringArrayField(msg: unknown, field: string): string[] | undefined {
   if (typeof msg !== 'object' || msg === null || !(field in msg)) return undefined;
-  const v = (msg as Record<string, unknown>)[field];
+  const v = (msg as CdpPayload)[field];
   if (!Array.isArray(v)) return undefined;
   return v.filter((d): d is string => typeof d === 'string');
 }

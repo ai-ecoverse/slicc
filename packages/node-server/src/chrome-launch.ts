@@ -1,3 +1,4 @@
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import type { ChildProcess } from 'child_process';
 import { existsSync, readdirSync } from 'fs';
 import { cp, mkdir, readFile, readlink, rm, unlink, writeFile } from 'fs/promises';
@@ -284,7 +285,19 @@ export function buildChromeLaunchArgs(options: {
     // disable freezing/discard eligibility and renderer backgrounding
     // outright. (Unknown --disable-features names are ignored by Chrome, so
     // the list is safe across versions.)
-    '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable',
+    //
+    // Chrome 151 renamed/split the freezing pipeline, so the original
+    // HighEfficiencyModeAvailable flag no longer covers it (live incident
+    // 2026-08-17: hidden leader frozen so hard even CDP dispatch was
+    // suspended, then force-reloaded as a same-entry back_forward navigation
+    // on activation — the "dead tab"). The names below were extracted from
+    // the Chrome 151 binary: InfiniteTabsFreezing* is the new freezing
+    // feature, CPU/MemoryMeasurementInFreezingPolicy feed the intervention
+    // that picks high-footprint background tabs (which is why a busy kernel
+    // trips it on a ~30 min cadence), and AllowDevtoolsConnectedDiscard
+    // removed the DevTools-attached exemption the leader used to enjoy.
+    // Belt: seedChromeProfilePreferences() writes the matching prefs.
+    '--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard',
     '--disable-background-timer-throttling',
     '--disable-backgrounding-occluded-windows',
     '--disable-renderer-backgrounding',
@@ -774,6 +787,58 @@ export async function clearChromeRestoreState(userDataDir: string): Promise<void
     await writeJsonFile(prefsPath, prefs);
   } catch {
     // Best-effort — a write failure just leaves the prior restore behavior.
+  }
+}
+
+const hostedLeaderHost = new URL(SLICC_HOSTED_ORIGIN).hostname;
+
+/**
+ * Sites whose tabs Chrome must never discard or freeze: the hosted leader
+ * UI (www + apex) and local bridge/dev origins. Entries are Chrome
+ * "tab discarding exception" site patterns (the same strings
+ * chrome://settings/performance stores).
+ */
+export const TAB_LIFECYCLE_EXEMPT_SITES = [
+  hostedLeaderHost,
+  hostedLeaderHost.replace(/^www\./, ''),
+  'localhost',
+];
+
+/**
+ * Seed the profile's `Default/Preferences` with tab-lifecycle opt-outs before
+ * every launch. The `--disable-features` list in {@link buildChromeLaunchArgs}
+ * is the primary defense against Chrome freezing/discarding the backgrounded
+ * leader tab, but feature names churn between Chrome versions (Chrome 151
+ * renamed the whole pipeline, silently reviving the freeze); these prefs are
+ * the version-stable belt:
+ *
+ * - `tab_freezing_enabled: false` — master pref gating tab freezing;
+ * - `performance_tuning.high_efficiency_mode.state: 0` — Memory Saver off;
+ * - `performance_tuning.tab_discarding.exceptions` — per-site exemption list
+ *   covering the leader origins, honored by both discard and (via Chrome's
+ *   FreezingFollowsDiscardOptOut) freeze policy.
+ *
+ * Merges into existing prefs (the profile persists logins across runs) and
+ * never throws — a failure here must not block a launch.
+ */
+export async function seedChromeProfilePreferences(userDataDir: string): Promise<void> {
+  const prefsPath = join(userDataDir, 'Default', 'Preferences');
+  try {
+    const prefs = await readJsonFile(prefsPath);
+    prefs['tab_freezing_enabled'] = false;
+    const performanceTuning = ensureObject(prefs, 'performance_tuning');
+    const highEfficiencyMode = ensureObject(performanceTuning, 'high_efficiency_mode');
+    highEfficiencyMode['state'] = 0;
+    const tabDiscarding = ensureObject(performanceTuning, 'tab_discarding');
+    const existing = tabDiscarding['exceptions'];
+    const exceptions = Array.isArray(existing) ? existing.filter((e) => typeof e === 'string') : [];
+    for (const site of TAB_LIFECYCLE_EXEMPT_SITES) {
+      if (!exceptions.includes(site)) exceptions.push(site);
+    }
+    tabDiscarding['exceptions'] = exceptions;
+    await writeJsonFile(prefsPath, prefs);
+  } catch {
+    // Best-effort — without the seed the --disable-features flags still apply.
   }
 }
 

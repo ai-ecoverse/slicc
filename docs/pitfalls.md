@@ -556,7 +556,7 @@ gate it. That is why this only reproduces with a **production** float
 **The Fix**
 
 Every Slicc-launched Chrome passes
-`--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable`
+`--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard`
 **unconditionally** (not just in hosted mode), plus
 `--disable-background-timer-throttling`,
 `--disable-backgrounding-occluded-windows` and
@@ -569,6 +569,32 @@ Chrome therefore opts out of background power savings — a deliberate battery
 trade on portables, acceptable because this is a dedicated agent-host profile. This is our dedicated, launched
 browser profile talking to its own local server, so disabling the check is safe
 — it is not the user's daily browsing profile.
+
+**Chrome 151 regression (2026-08-17).** Chrome 151 renamed/split the freezing
+pipeline, so `HighEfficiencyModeAvailable` silently became a no-op: the hidden
+leader froze again — this time so deeply that even **CDP dispatch was
+suspended** (every session-routed command timed out while the renderer sat
+idle at 0% CPU; the earlier rule of thumb that "frozen pages still answer
+evals" only holds for `Page.setWebLifecycleState`, not for policy freezes).
+On next activation Chrome force-reloads the tab as a same-entry
+`back_forward` navigation (`document.wasDiscarded` stays `false`) — the "dead
+tab every ~30 min" symptom; the cadence tracks the intervention's CPU/memory
+measurement crossing its threshold, not a fixed timer. Names extracted from
+the 151 binary: `InfiniteTabsFreezing(OnMemoryPressure)` is the new freezing
+feature, the two `*MeasurementInFreezingPolicy` features feed the
+intervention, and `AllowDevtoolsConnectedDiscard` removed the old exemption
+for DevTools-attached tabs (which had been shielding the leader). Because
+feature names churn, both launchers also seed version-stable prefs into
+`<user-data-dir>/Default/Preferences` before every spawn
+(`seedChromeProfilePreferences` in node, `seedProfilePreferences` in swift):
+`tab_freezing_enabled: false`,
+`performance_tuning.high_efficiency_mode.state: 0`, and
+`performance_tuning.tab_discarding.exceptions` for the leader origins. The
+extension float cannot control launch flags; its parity equivalent is
+`chrome.tabs.update(leaderTab, {autoDiscardable: false})` (applied wherever a
+leader tabId is learned — Chrome's `FreezingFollowsDiscardOptOut` makes the
+freeze policy honor the discard opt-out, and the flag resets on browser
+restart).
 
 Both launchers must stay in sync (cross-runtime parity):
 
