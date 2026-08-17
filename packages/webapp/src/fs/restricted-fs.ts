@@ -21,7 +21,7 @@
 import type { FsWatchCallback, FsWatchFilter } from './fs-watcher.js';
 import type { MountBackend, RefreshReport } from './mount/backend.js';
 import type { MountIndexEnv } from './mount-index.js';
-import { normalizePath } from './path-utils.js';
+import { normalizePath, pathGlobToRegExp } from './path-utils.js';
 import type {
   DirEntry,
   FileContent,
@@ -63,6 +63,8 @@ export class RestrictedFS {
   private vfs: VirtualFS;
   private allowedPrefixes: string[];
   private readOnlyPrefixes: string[];
+  private readGrantPatterns: Array<{ pattern: string; regex: RegExp; ancestorRegexes: RegExp[] }> =
+    [];
   private writeEnforcement: RestrictedFsWriteEnforcement;
 
   constructor(
@@ -87,16 +89,49 @@ export class RestrictedFS {
     return [...this.allowedPrefixes, ...this.readOnlyPrefixes, ...mountPrefixes];
   }
 
+  /**
+   * Widen this live sandbox with an approved read glob. Ancestor matchers let
+   * directory traversal and filtered `readDir` calls reach matching files
+   * without exposing non-matching siblings.
+   */
+  addReadGrant(pattern: string): void {
+    if (this.readGrantPatterns.some((grant) => grant.pattern === pattern)) return;
+    const segments = pattern.split('/');
+    const ancestorRegexes: RegExp[] = [];
+    for (let i = 1; i < segments.length; i++) {
+      ancestorRegexes.push(pathGlobToRegExp(segments.slice(0, i).join('/') || '/'));
+    }
+    this.readGrantPatterns.push({
+      pattern,
+      regex: pathGlobToRegExp(pattern),
+      ancestorRegexes,
+    });
+  }
+
+  private matchesReadGrant(path: string): boolean {
+    return this.readGrantPatterns.some((grant) => grant.regex.test(path));
+  }
+
+  private leadsToReadGrant(path: string): boolean {
+    return this.readGrantPatterns.some((grant) =>
+      grant.ancestorRegexes.some((regex) => regex.test(path))
+    );
+  }
+
   /** Check if a path is within or is a parent of allowed or read-only prefixes. */
   private isAllowed(path: string): boolean {
     const normalized = normalizePath(path);
     const allPrefixes = this.getAllPrefixes();
-    return allPrefixes.some(
-      (prefix) =>
-        normalized === prefix.slice(0, -1) ||
-        normalized.startsWith(prefix) ||
-        normalized === '/' ||
-        prefix.startsWith(normalized + '/')
+    return (
+      this.matchesReadGrant(normalized) ||
+      this.leadsToReadGrant(normalized) ||
+      allPrefixes.some(
+        (prefix) =>
+          normalized === prefix.slice(0, -1) ||
+          normalized.startsWith(prefix) ||
+          normalized === '/' ||
+          prefix.startsWith(normalized + '/')
+      )
     );
   }
 
@@ -104,8 +139,11 @@ export class RestrictedFS {
   private isAllowedStrict(path: string): boolean {
     const normalized = normalizePath(path);
     const allPrefixes = this.getAllPrefixes();
-    return allPrefixes.some(
-      (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)
+    return (
+      this.matchesReadGrant(normalized) ||
+      allPrefixes.some(
+        (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)
+      )
     );
   }
 

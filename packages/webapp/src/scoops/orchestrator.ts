@@ -220,6 +220,7 @@ export class Orchestrator implements ConeApprovalRouter {
   private approvalRouter: ScoopApprovalRouter = new ScoopApprovalRouter({
     getScoops: () => this.scoops,
     getSudoManager: () => this.sudoManager,
+    applyReadGrant: (jid, pattern) => this.lifecycle.applyReadGrant(jid, pattern),
     getLickManager: () => this.lickManager,
     handleMessage: (msg) => this.handleMessage(msg),
     onMessageUpdate: (jid, update) => this.callbacks.onMessageUpdate?.(jid, update),

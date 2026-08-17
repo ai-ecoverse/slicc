@@ -27,6 +27,43 @@ export function normalizePath(path: string): string {
   return '/' + resolved.join('/');
 }
 
+/** Escape a single literal character for use inside a RegExp. */
+function escapeRegExpChar(ch: string): string {
+  return '.+^$()[]|\\{}'.includes(ch) ? `\\${ch}` : ch;
+}
+
+/**
+ * Glob → RegExp for normalized VFS paths. `*` matches within a single path
+ * segment (no `/`); `**` matches across segments. A trailing `/**` also
+ * matches the directory itself (so `/a/b/**` matches `/a/b`).
+ */
+export function pathGlobToRegExp(pattern: string): RegExp {
+  let re = '';
+  let i = 0;
+  while (i < pattern.length) {
+    const ch = pattern[i];
+    if (ch === '*' && pattern[i + 1] === '*') {
+      if (re.endsWith('/')) {
+        re = `${re.slice(0, -1)}(?:/.*)?`;
+      } else {
+        re += '.*';
+      }
+      i += 2;
+      if (pattern[i] === '/') i += 1;
+    } else if (ch === '*') {
+      re += '[^/]*';
+      i += 1;
+    } else if (ch === '?') {
+      re += '[^/]';
+      i += 1;
+    } else {
+      re += escapeRegExpChar(ch);
+      i += 1;
+    }
+  }
+  return new RegExp(`^${re}$`);
+}
+
 /** Split a path into its directory and base name. */
 export function splitPath(path: string): { dir: string; base: string } {
   const normalized = normalizePath(path);

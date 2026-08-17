@@ -188,6 +188,14 @@ export class ScoopLifecycleManager {
     return this.contexts.get(jid);
   }
 
+  /** Apply a newly approved Read glob to a scoop's live RestrictedFS. */
+  applyReadGrant(jid: string, pattern: string): void {
+    const fs = this.contexts.get(jid)?.getFS();
+    if (fs instanceof RestrictedFS) {
+      fs.addReadGrant(pattern);
+    }
+  }
+
   /** Live tab state for a single jid (or `undefined`). */
   getTab(jid: string): ScoopTabState | undefined {
     return this.tabs.get(jid);
@@ -261,6 +269,16 @@ export class ScoopLifecycleManager {
     }
   }
 
+  /** Reapply durable NOPASSWD Read rules when constructing a RestrictedFS. */
+  private applyPersistedReadGrants(scoop: RegisteredScoop, fs: VirtualFS | RestrictedFS): void {
+    if (!(fs instanceof RestrictedFS)) return;
+    const policy = this.deps.getSudoManager()?.getPolicyForScoop(scoop.folder);
+    if (!policy) return;
+    for (const rule of policy.read) {
+      if (rule.nopasswd) fs.addReadGrant(rule.pattern);
+    }
+  }
+
   /** Create and initialize a scoop context. */
   async createTab(jid: string): Promise<void> {
     const scoop = this.deps.getScoops().get(jid);
@@ -304,6 +322,7 @@ export class ScoopLifecycleManager {
 
     if (!scoop.isCone) {
       await this.ensureSudoersLoaded(scoop);
+      this.applyPersistedReadGrants(scoop, fs);
     }
 
     const contextCallbacks = this.buildContextCallbacks(jid, scoop);

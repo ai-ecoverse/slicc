@@ -77,6 +77,21 @@ describe('RestrictedFS', () => {
     expect(entries).toEqual([]);
   });
 
+  it('widens reads for an approved glob without exposing non-matching siblings', async () => {
+    await vfs.mkdir('/recordings', { recursive: true });
+    await vfs.writeFile('/recordings/first.har', 'approved');
+    await vfs.writeFile('/recordings/notes.txt', 'private');
+
+    await expect(restricted.readFile('/recordings/first.har')).rejects.toThrow('ENOENT');
+    restricted.addReadGrant('/recordings/*.har');
+
+    expect(await restricted.readTextFile('/recordings/first.har')).toBe('approved');
+    await expect(restricted.readFile('/recordings/notes.txt')).rejects.toThrow('ENOENT');
+    expect((await restricted.readDir('/recordings')).map((entry) => entry.name)).toEqual([
+      'first.har',
+    ]);
+  });
+
   it('writes within allowed dirs', async () => {
     await restricted.writeFile('/scoops/andy-scoop/new.txt', 'new content');
     const content = await vfs.readFile('/scoops/andy-scoop/new.txt', { encoding: 'utf-8' });

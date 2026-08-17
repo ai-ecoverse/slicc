@@ -350,7 +350,6 @@
         "packages/webapp/tests/fs/internal-mount.test.ts",
         "packages/webapp/tests/fs/sudo-fs.test.ts",
         "packages/webapp/tests/kernel/realm/realm-runner.test.ts",
-        "packages/webapp/tests/scoops/orchestrator.test.ts",
         "packages/webapp/tests/shell/di/di.test.ts",
         "packages/webapp/tests/shell/supplemental-commands/esbuild-command.test.ts",
         "packages/webapp/tests/shell/supplemental-commands/v86-command.test.ts",

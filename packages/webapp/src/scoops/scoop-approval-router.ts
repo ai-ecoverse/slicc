@@ -37,6 +37,8 @@ export interface ScoopApprovalRouterDeps {
   getScoops(): Map<string, RegisteredScoop>;
   /** Live SudoManager (or null before init / after shutdown). The `'always'` path writes a NOPASSWD rule via this sink. */
   getSudoManager(): SudoManager | null;
+  /** Widen the requesting scoop's live RestrictedFS after a Read rule is persisted. */
+  applyReadGrant(scoopJid: string, pattern: string): void;
   /** Live LickManager (or null before wiring). Used to emit the `'sudo-request'` UI chip. */
   getLickManager(): LickManager | null;
   /** Route the cone-facing actionable message through the orchestrator's normal queue. */
@@ -226,13 +228,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     let persistError: string | undefined;
 
     if (decision.decision === 'always' && sudoManager && scoop && !scoop.isCone) {
-      if (kind === 'read') {
-        // A persisted `NOPASSWD Read <pattern>` would silently no-op: the
-        // scoop's `RestrictedFS.visiblePaths` is fixed at construction, so
-        // subsequent reads of paths outside the original sandbox keep
-        // throwing ENOENT. Reporting `persisted: true` would be a lie.
-        persistError = 'read grants need ACL widening, not yet supported';
-      } else if (kind === 'command' || kind === 'write') {
+      if (kind === 'command' || kind === 'read' || kind === 'write') {
         const raw =
           decision.pattern?.trim() ||
           pending.request.suggestedPattern?.trim() ||
@@ -242,6 +238,9 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
           if (saved) {
             persisted = true;
             persistedPattern = saved;
+            if (kind === 'read') {
+              this.deps.applyReadGrant(pending.scoopJid, saved);
+            }
           } else {
             persistError = 'pattern collapsed to empty after sanitization';
           }

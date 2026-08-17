@@ -1819,7 +1819,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     // Give the micro-tasks a chance to register the waiters.
     await new Promise((resolve) => setTimeout(resolve, 5));
     priv.completionService.scoopResponseBuffer.set(scoop.jid, 'dedup output');
-    priv.completionService.notifyCompletion(scoop.jid);
+    await priv.completionService.notifyCompletion(scoop.jid);
     const results = await waitPromise;
 
     expect(results).toHaveLength(2);
@@ -2796,9 +2796,14 @@ describe('Orchestrator.resolveSudoRequestAndPersist', () => {
         list: () => Array<{ id: string }>;
       };
     };
+    lifecycle: {
+      getContext: (jid: string) => {
+        getFS: () => import('../../src/fs/restricted-fs.js').RestrictedFS;
+      };
+    };
   }
 
-  it('rejects read+always persistence with the ACL-widening error', async () => {
+  it('persists read+always and widens the live and restored scoop ACL to the approved glob', async () => {
     const container =
       typeof document !== 'undefined'
         ? document.createElement('div')
@@ -2807,25 +2812,46 @@ describe('Orchestrator.resolveSudoRequestAndPersist', () => {
     await orch.init();
 
     const priv = orch as unknown as OrchestratorPrivateSudo;
+    const sharedFs = orch.getSharedFS();
+    if (!sharedFs) throw new Error('Expected initialized shared filesystem');
+    await sharedFs.mkdir('/recordings', { recursive: true });
+    await sharedFs.writeFile('/recordings/first.har', 'approved capture');
+    await sharedFs.writeFile('/recordings/notes.txt', 'not approved');
+    const scoopFs = priv.lifecycle.getContext(testScoop.jid).getFS();
+    await expect(scoopFs.readFile('/recordings/first.har')).rejects.toThrow('ENOENT');
+
     const { id } = priv.approvalRouter.registry.register(testScoop.jid, {
       kind: 'read',
-      detail: '/shared/secrets/api.key',
+      detail: '/recordings/first.har',
     });
 
     const result = await orch.resolveSudoRequestAndPersist(id, {
       decision: 'always',
-      pattern: '/shared/secrets/**',
+      pattern: '/recordings/*.har',
     });
 
     expect(result.settled).toBe(true);
-    expect(result.persisted).toBe(false);
-    expect(result.persistedPattern).toBeUndefined();
-    expect(result.persistError).toBe('read grants need ACL widening, not yet supported');
+    expect(result.persisted).toBe(true);
+    expect(result.persistedPattern).toBe('/recordings/*.har');
+    expect(result.persistError).toBeUndefined();
     expect(result.kind).toBe('read');
     expect(result.scoopFolder).toBe(testScoop.folder);
+    expect(await scoopFs.readTextFile('/recordings/first.har')).toBe('approved capture');
+    await expect(scoopFs.readFile('/recordings/notes.txt')).rejects.toThrow('ENOENT');
+
+    const sudoers = (await sharedFs.readFile('/scoops/test-scoop/etc/sudoers', {
+      encoding: 'utf-8',
+    })) as string;
+    expect(sudoers).toContain('NOPASSWD Read /recordings/*.har');
+
+    await orch.destroyScoopTab(testScoop.jid);
+    await orch.createScoopTab(testScoop.jid);
+    const restoredFs = priv.lifecycle.getContext(testScoop.jid).getFS();
+    expect(await restoredFs.readTextFile('/recordings/first.har')).toBe('approved capture');
+    await expect(restoredFs.readFile('/recordings/notes.txt')).rejects.toThrow('ENOENT');
   });
 
-  it('still persists write+always (positive control — read rejection is read-only)', async () => {
+  it('still persists write+always', async () => {
     const container =
       typeof document !== 'undefined'
         ? document.createElement('div')

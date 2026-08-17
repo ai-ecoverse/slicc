@@ -54,6 +54,7 @@ function makeHarness() {
   const deps: ScoopApprovalRouterDeps = {
     getScoops: () => scoops,
     getSudoManager: () => null,
+    applyReadGrant: vi.fn(),
     getLickManager: () => null,
     handleMessage,
     onMessageUpdate,

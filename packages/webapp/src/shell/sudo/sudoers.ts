@@ -12,8 +12,10 @@
  */
 
 import { createLogger } from '../../base/logger.js';
-import { normalizePath } from '../../fs/path-utils.js';
+import { normalizePath, pathGlobToRegExp } from '../../fs/path-utils.js';
 import { isNoOpWriteDevicePath } from '../../fs/virtual-device-paths.js';
+
+export { pathGlobToRegExp } from '../../fs/path-utils.js';
 
 const log = createLogger('sudo:sudoers');
 
@@ -124,38 +126,6 @@ export function commandGlobToRegExp(pattern: string): RegExp {
   }
   // dotAll ('s') so `*` and `?` match across newlines in multiline commands
   return new RegExp(`^${re}$`, 's');
-}
-
-/**
- * Glob → RegExp for normalized VFS paths. `*` matches within a single path
- * segment (no `/`); `**` matches across segments. A trailing `/**` also
- * matches the directory itself (so `/a/b/**` matches `/a/b`).
- */
-export function pathGlobToRegExp(pattern: string): RegExp {
-  let re = '';
-  let i = 0;
-  while (i < pattern.length) {
-    const ch = pattern[i];
-    if (ch === '*' && pattern[i + 1] === '*') {
-      if (re.endsWith('/')) {
-        re = `${re.slice(0, -1)}(?:/.*)?`;
-      } else {
-        re += '.*';
-      }
-      i += 2;
-      if (pattern[i] === '/') i += 1;
-    } else if (ch === '*') {
-      re += '[^/]*';
-      i += 1;
-    } else if (ch === '?') {
-      re += '[^/]';
-      i += 1;
-    } else {
-      re += escapeRegExpChar(ch);
-      i += 1;
-    }
-  }
-  return new RegExp(`^${re}$`);
 }
 
 /**
