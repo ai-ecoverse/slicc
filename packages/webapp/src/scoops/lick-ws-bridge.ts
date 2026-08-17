@@ -25,8 +25,8 @@
  * the cone after sustained failure so the user sees that lick delivery
  * is down rather than wondering why their webhook never fires.
  */
+import { getLickWebSocketUrl, getTrayWebhookUrl, getWebhookUrl } from '../base/lick-urls.js';
 import { createLogger } from '../core/logger.js';
-import { getLickWebSocketUrl, getTrayWebhookUrl, getWebhookUrl } from '../ui/runtime-mode.js';
 import type { LickEvent, LickManager } from './lick-manager.js';
 import { getLeaderStatusWithFallback, getLeaderTrayRuntimeStatus } from './tray-leader.js';
 
@@ -101,7 +101,51 @@ export interface LickWsBridgeHandle {
 interface RequestMessage {
   type: string;
   requestId?: string;
-  [key: string]: unknown;
+  webhookId?: unknown;
+  headers?: unknown;
+  body?: unknown;
+  verb?: unknown;
+  target?: unknown;
+  url?: unknown;
+  instruction?: unknown;
+  branch?: unknown;
+  path?: unknown;
+  title?: unknown;
+  timestamp?: unknown;
+  name?: unknown;
+  scoop?: unknown;
+  filter?: unknown;
+  id?: unknown;
+  cron?: unknown;
+}
+
+interface NavigateLickBody {
+  url: string;
+  verb: 'handoff' | 'upskill';
+  target: string;
+  instruction?: string;
+  branch?: string;
+  path?: string;
+  title?: string;
+}
+
+interface NavigationPayload {
+  verb?: unknown;
+  target?: unknown;
+  url?: unknown;
+  instruction?: unknown;
+  branch?: unknown;
+  path?: unknown;
+  title?: unknown;
+  timestamp?: unknown;
+}
+
+interface DiscoveryPayload {
+  discoveryOrigin?: unknown;
+  discoveryKind?: unknown;
+  discoveryUrl?: unknown;
+  url?: unknown;
+  timestamp?: unknown;
 }
 
 interface ResponseEnvelope {
@@ -328,14 +372,14 @@ function dispatchWebhookEvent(lickManager: LickManager, data: RequestMessage): v
  * build the event body identically (the older `sliccHeader` envelope is no
  * longer emitted).
  */
-export function mapNavigatePayloadToLickEvent(data: Record<string, unknown>): LickEvent | null {
+export function mapNavigatePayloadToLickEvent(data: NavigationPayload): LickEvent | null {
   const verb = typeof data.verb === 'string' ? data.verb : null;
   const target = typeof data.target === 'string' ? data.target : null;
   const navUrl = typeof data.url === 'string' && data.url.length > 0 ? data.url : null;
   if ((verb !== 'handoff' && verb !== 'upskill') || !target || !navUrl) {
     return null;
   }
-  const body: Record<string, unknown> = { url: navUrl, verb, target };
+  const body: NavigateLickBody = { url: navUrl, verb, target };
   if (typeof data.instruction === 'string') body.instruction = data.instruction;
   if (typeof data.branch === 'string') body.branch = data.branch;
   if (typeof data.path === 'string') body.path = data.path;
@@ -357,7 +401,7 @@ export function mapNavigatePayloadToLickEvent(data: Record<string, unknown>): Li
  * extension-bridge leader path so the discovery source validates + builds the
  * event body the same way the navigate path does.
  */
-export function mapDiscoveryPayloadToLickEvent(data: Record<string, unknown>): LickEvent | null {
+export function mapDiscoveryPayloadToLickEvent(data: DiscoveryPayload): LickEvent | null {
   const origin = typeof data.discoveryOrigin === 'string' ? data.discoveryOrigin : null;
   const kind =
     data.discoveryKind === 'ai-catalog' || data.discoveryKind === 'llms-txt'

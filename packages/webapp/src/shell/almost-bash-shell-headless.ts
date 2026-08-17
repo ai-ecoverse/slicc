@@ -77,6 +77,8 @@ export interface HeadlessShellOptions {
   env?: Record<string, string>;
   /** BrowserAPI for the `playwright-cli` / `serve` / `open` commands. */
   browserAPI?: BrowserAPI;
+  /** Runtime topology and tray-status readers for the webhook command. */
+  webhook?: SupplementalCommandsConfig['webhook'];
   /**
    * FS to use for `.jsh` discovery. Defaults to `fs`. Useful for
    * scoops where skill loading needs the unrestricted VFS but the
@@ -372,6 +374,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       fetch: fetchFn,
       scriptCatalog: this.scriptCatalog,
       browserAPI: options.browserAPI,
+      webhook: options.webhook,
       getParentJid: options.getParentJid,
       buildProcessConfig: this.resolveJshProcessConfig,
       // Thread the manager into `ps` / `kill`. When the

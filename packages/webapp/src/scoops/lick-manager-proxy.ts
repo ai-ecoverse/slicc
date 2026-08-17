@@ -15,26 +15,10 @@ import type { CronTaskEntry, LickManager, WebhookEntry } from './lick-manager-pr
 const CHANNEL_NAME = 'slicc-lick-manager';
 const TIMEOUT = 5000;
 
-/**
- * Resolver for "the current leader tray session's webhook capability
- * URL", or `null` if the host is not a leader / has no active session.
- * The offscreen side reads `getLeaderTrayRuntimeStatus().session?.
- * webhookUrl`; tests supply a stub.
- */
-export type TrayWebhookUrlResolver = () => string | null;
-
 // ─── Host (offscreen document) ─────────────────────────────────────────────
 
-export interface LickManagerHostOptions {
-  /** Resolve the active leader tray's webhook capability URL. */
-  getTrayWebhookUrl?: TrayWebhookUrlResolver;
-}
-
 /** Start listening for LickManager proxy requests. Call once in offscreen.ts. */
-export function startLickManagerHost(
-  lickManager: LickManager,
-  options: LickManagerHostOptions = {}
-): void {
+export function startLickManagerHost(lickManager: LickManager): void {
   const ch = new BroadcastChannel(CHANNEL_NAME);
   ch.onmessage = async (event: MessageEvent) => {
     const msg = event.data;
@@ -61,9 +45,6 @@ export function startLickManagerHost(
           break;
         case 'deleteWebhook':
           result = await lickManager.deleteWebhook(args[0]);
-          break;
-        case 'getTrayWebhookUrl':
-          result = options.getTrayWebhookUrl?.() ?? null;
           break;
         default:
           throw new Error(`Unknown lick-manager op: ${op}`);
@@ -163,14 +144,4 @@ export function listCronTasksAsync(): Promise<CronTaskEntry[]> {
 /** Async version of listWebhooks for proxy use. */
 export function listWebhooksAsync(): Promise<WebhookEntry[]> {
   return request('listWebhooks') as Promise<WebhookEntry[]>;
-}
-
-/**
- * Fetch the active leader tray's webhook capability URL (without the
- * webhookId suffix), or `null` if the offscreen host is not a leader.
- * The side-panel webhook command appends `/<webhookId>` to construct
- * the per-webhook URL using `getTrayWebhookUrl` from runtime-mode.
- */
-export function getTrayWebhookUrlAsync(): Promise<string | null> {
-  return request('getTrayWebhookUrl') as Promise<string | null>;
 }

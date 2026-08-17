@@ -24,6 +24,7 @@ import {
   stripOrphanedToolResults,
 } from '../core/context-compaction.js';
 import { isFeatureEnabled } from '../core/feature-flags.js';
+import { hasLocalNodeServer } from '../core/float-topology.js';
 import type {
   AgentMessage,
   AssistantMessage,
@@ -59,6 +60,7 @@ import {
   type ScoopManagementToolsConfig,
 } from './scoop-management-tools.js';
 import { createDefaultSkills, formatSkillsForPrompt, loadSkills } from './skills.js';
+import { getLeaderStatusWithFallback } from './tray-leader.js';
 import { type RegisteredScoop, THINKING_LEVELS } from './types.js';
 
 const log = createLogger('scoop-context');
@@ -484,6 +486,10 @@ export class ScoopContext {
       cwd,
       env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
       browserAPI: browser,
+      webhook: {
+        hasLocalNodeServer,
+        getLeaderStatus: getLeaderStatusWithFallback,
+      },
       jshDiscoveryFs: this.skillsFs ? effectiveSkillsFs : undefined,
       allowedCommands: this.scoop.config?.allowedCommands,
       getParentJid: () => this.scoop.jid,

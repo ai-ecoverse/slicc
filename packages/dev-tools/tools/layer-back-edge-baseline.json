@@ -10,7 +10,6 @@
   "packages/webapp/src/kernel/remote-terminal-view.ts": 2,
   "packages/webapp/src/providers/adobe-oauth-state.ts": 1,
   "packages/webapp/src/scoops/agent-message-to-chat.ts": 1,
-  "packages/webapp/src/scoops/lick-ws-bridge.ts": 1,
   "packages/webapp/src/scoops/sprinkle-bridge-channel.ts": 2,
   "packages/webapp/src/scoops/sprinkle-manager-proxy.ts": 1,
   "packages/webapp/src/shell/bsh-watchdog.ts": 3,
@@ -55,6 +54,5 @@
   "packages/webapp/src/shell/supplemental-commands/upskill/tabs.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/upskill/upskill-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/usb-command.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/webhook-command.ts": 6,
   "packages/webapp/src/shell/supplemental-commands/workflow-command.ts": 3
 }
