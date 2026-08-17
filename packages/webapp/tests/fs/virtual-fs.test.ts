@@ -61,6 +61,20 @@ describe('VirtualFS', () => {
       expect(names).toEqual(['index.ts', 'readme.md']);
     });
 
+    it('mkdir -p over a FILE component fails ENOTDIR naming the component (#2146)', async () => {
+      await vfs.writeFile('/plainfile', 'i am a file');
+      // Pre-fix the kind-blind EEXIST swallow resolved this silently,
+      // leaving a poisoned prefix that failed deep inside ZenFS later.
+      await expect(vfs.mkdir('/plainfile', { recursive: true })).rejects.toMatchObject({
+        code: 'ENOTDIR',
+        path: '/plainfile',
+      });
+      await expect(vfs.mkdir('/plainfile/sub/dir', { recursive: true })).rejects.toMatchObject({
+        code: 'ENOTDIR',
+        path: '/plainfile',
+      });
+    });
+
     it('creates nested directories recursively', async () => {
       await vfs.mkdir('/a/b/c/d', { recursive: true });
       expect(await vfs.exists('/a/b/c/d')).toBe(true);
@@ -690,6 +704,140 @@ describe('in-session kind-mismatch reconcile (#2006)', () => {
       { code: 'EISDIR' }
     );
     expect(calls).toBe(1);
+    await vfs.dispose();
+  });
+
+  // #2146: rm and rename must ROUTE through the heal — pin the delegation
+  // (the memory backend never triggers kind errors, so an op-level fake
+  // cannot exercise it; the spy proves the wiring).
+  it('rm and rename route through the kind-mismatch retry (#2146)', async () => {
+    const vfs = await VirtualFS.create({ dbName: `test-2146-wire-${Date.now()}`, wipe: true });
+    const spy = vi.spyOn(
+      vfs as unknown as {
+        withKindMismatchRetryPaths<T>(paths: readonly string[], op: () => Promise<T>): Promise<T>;
+      },
+      'withKindMismatchRetryPaths'
+    );
+    await vfs.writeFile('/wire/a.txt', 'x');
+    spy.mockClear();
+    await vfs.rm('/wire/a.txt');
+    expect(spy).toHaveBeenCalledWith(['/wire/a.txt'], expect.any(Function));
+
+    await vfs.writeFile('/wire/b.txt', 'y');
+    spy.mockClear();
+    await vfs.rename('/wire/b.txt', '/wire/c.txt');
+    expect(spy).toHaveBeenCalledWith(['/wire/b.txt', '/wire/c.txt'], expect.any(Function));
+    await vfs.dispose();
+  });
+
+  // #2146: the delete family fails ENOTDIR on a poisoned entry (rm dispatches
+  // on the lying lstat type), and reads/writes surface EINVAL — both must
+  // route through the same heal-and-retry.
+  it('a poisoned ENOTDIR delete heals the index and the retry succeeds (#2146)', async () => {
+    const { vfs, fakeIndex } = await corruptedVfs();
+    let calls = 0;
+    const op = async (): Promise<string> => {
+      calls += 1;
+      if (fakeIndex.has('/workspace/CLAUDE.md')) {
+        throw new FsError('ENOTDIR', 'not a directory', '/workspace/CLAUDE.md');
+      }
+      return 'deleted';
+    };
+    const result = await (vfs as unknown as Wrapped).withKindMismatchRetry(
+      '/workspace/CLAUDE.md',
+      op
+    );
+    expect(result).toBe('deleted');
+    expect(calls).toBe(2);
+    expect(fakeIndex.has('/workspace/CLAUDE.md')).toBe(false);
+    detachFakes(vfs);
+    await vfs.dispose();
+  });
+
+  it('a poisoned EINVAL read heals and retries; a genuine EINVAL does not (#2146)', async () => {
+    const { vfs, fakeIndex } = await corruptedVfs();
+    let calls = 0;
+    const op = async (): Promise<string> => {
+      calls += 1;
+      if (fakeIndex.has('/workspace/CLAUDE.md')) {
+        throw new FsError('EINVAL', 'invalid operation', '/workspace/CLAUDE.md');
+      }
+      return 'read after heal';
+    };
+    const result = await (vfs as unknown as Wrapped).withKindMismatchRetry(
+      '/workspace/CLAUDE.md',
+      op
+    );
+    expect(result).toBe('read after heal');
+    expect(calls).toBe(2);
+    detachFakes(vfs);
+    await vfs.dispose();
+
+    // Genuine EINVAL (reality agrees with memory): one probe, no retry.
+    // Reality must CONTAIN keep.txt as a file for agreement — a missing
+    // path would legitimately heal.
+    const vfs2 = await VirtualFS.create({ dbName: `test-2146-${Date.now()}`, wipe: true });
+    const idx2 = new Map<string, { mode?: number }>([
+      ['/workspace/keep.txt', { mode: S_IFREG | 0o644 }],
+    ]);
+    const h2 = new Map<string, { kind?: string }>([['/workspace/keep.txt', { kind: 'file' }]]);
+    const internal2 = vfs2 as unknown as {
+      backend: string;
+      opfsBackendFs: unknown;
+      opfsHandle: unknown;
+    };
+    internal2.backend = 'opfs';
+    internal2.opfsBackendFs = { index: idx2, _handles: h2 };
+    internal2.opfsHandle = fakeDirHandle({
+      workspace: fakeDirHandle({ 'keep.txt': fakeFileHandle(10) }),
+    });
+    let calls2 = 0;
+    const op2 = async (): Promise<string> => {
+      calls2 += 1;
+      throw new FsError('EINVAL', 'bad argument', '/workspace/keep.txt');
+    };
+    await expect(
+      (vfs2 as unknown as Wrapped).withKindMismatchRetry('/workspace/keep.txt', op2)
+    ).rejects.toMatchObject({ code: 'EINVAL' });
+    expect(calls2).toBe(1);
+    expect(h2.has('/workspace/keep.txt')).toBe(true);
+    detachFakes(vfs2);
+    await vfs2.dispose();
+  });
+
+  it('rename heals whichever end is poisoned (multi-path retry, #2146)', async () => {
+    const { vfs, fakeIndex } = await corruptedVfs();
+    // Give reality a keep.txt so the healthy source AGREES with memory and
+    // reconciles nothing — only the poisoned destination heals.
+    const internalR = vfs as unknown as { opfsHandle: unknown };
+    internalR.opfsHandle = fakeDirHandle({
+      workspace: fakeDirHandle({
+        'CLAUDE.md': fakeFileHandle(16249),
+        'keep.txt': fakeFileHandle(10),
+      }),
+    });
+    type WrappedPaths = {
+      withKindMismatchRetryPaths<T>(paths: readonly string[], op: () => Promise<T>): Promise<T>;
+    };
+    let calls = 0;
+    const op = async (): Promise<string> => {
+      calls += 1;
+      // The poisoned entry is the DESTINATION; the source is healthy.
+      if (fakeIndex.has('/workspace/CLAUDE.md')) {
+        throw new FsError('ENOTDIR', 'not a directory', '/workspace/CLAUDE.md');
+      }
+      return 'renamed';
+    };
+    const result = await (vfs as unknown as WrappedPaths).withKindMismatchRetryPaths(
+      ['/workspace/keep.txt', '/workspace/CLAUDE.md'],
+      op
+    );
+    expect(result).toBe('renamed');
+    // keep.txt reconciles nothing (healthy), CLAUDE.md heals — exactly one retry.
+    expect(calls).toBe(2);
+    expect(fakeIndex.has('/workspace/CLAUDE.md')).toBe(false);
+    expect(fakeIndex.has('/workspace/keep.txt')).toBe(true);
+    detachFakes(vfs);
     await vfs.dispose();
   });
 });

@@ -47,6 +47,14 @@ export interface SidecarRepairSummary {
    * entry is dropped outright.
    */
   selfEntryDropped: boolean;
+  /**
+   * Entries whose `ino` was zero/absent or duplicated another entry's and
+   * got a fresh unique id (#2146). ZenFS keys its vnode cache by `ino`, so
+   * colliding ids collapse unrelated paths onto one shared inode — which
+   * then cross-stamps size/mode between them on sync (phantom directories,
+   * sibling-size truncation).
+   */
+  inosReassigned: number;
   /** Whether anything changed (callers skip the rewrite when false). */
   changed: boolean;
 }
@@ -54,6 +62,8 @@ export interface SidecarRepairSummary {
 interface MutableEntry {
   mode?: number;
   size?: number;
+  ino?: number;
+  data?: number;
 }
 
 /**
@@ -78,6 +88,7 @@ export async function repairSidecarDocument(
     sizesFixed: 0,
     dropped: 0,
     selfEntryDropped: false,
+    inosReassigned: 0,
     changed: false,
   };
   const entries = doc.entries ?? {};
@@ -106,7 +117,51 @@ export async function repairSidecarDocument(
     }
     repairEntryAgainstReality(path, entry, fmt, real, summary);
   }
+  reassignDuplicateInos(entries, summary);
   return summary;
+}
+
+/**
+ * Give every entry a UNIQUE `ino` (#2146). The root keeps whatever it has
+ * (ZenFS forces `/` to ino 0 on load); any other entry whose ino is
+ * zero/absent, or already claimed by an earlier entry, gets a fresh id above
+ * the current max of every ino AND data field — mirroring `Index._alloc`'s
+ * contract — with `data = ino + 1`. Pure: no I/O, unit-testable.
+ *
+ * Field data point (2026-08-17, production leader): 2,858 of 14,763 sidecar
+ * entries shared ino 0, including both files of the sibling-size incident.
+ */
+function reassignDuplicateInos(
+  entries: { [path: string]: unknown },
+  summary: SidecarRepairSummary
+): void {
+  let ceiling = 0;
+  for (const raw of Object.values(entries)) {
+    const e = raw as MutableEntry | null;
+    if (typeof e?.ino === 'number') ceiling = Math.max(ceiling, e.ino);
+    if (typeof e?.data === 'number') ceiling = Math.max(ceiling, e.data);
+  }
+  let next = ceiling + 1;
+  const claimed = new Set<number>();
+  for (const [path, raw] of Object.entries(entries)) {
+    if (typeof raw !== 'object' || raw === null) continue;
+    const entry = raw as MutableEntry;
+    if (path === '/') {
+      if (typeof entry.ino === 'number') claimed.add(entry.ino);
+      continue;
+    }
+    const ino = entry.ino;
+    if (typeof ino === 'number' && ino !== 0 && !claimed.has(ino)) {
+      claimed.add(ino);
+      continue;
+    }
+    entry.ino = next;
+    entry.data = next + 1;
+    claimed.add(next);
+    next += 2;
+    summary.inosReassigned += 1;
+    summary.changed = true;
+  }
 }
 
 /** Correct one present-on-disk entry's format bits or size in place. */

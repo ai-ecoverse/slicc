@@ -80,7 +80,16 @@ export function createExecBridge(
     if (!syncFs?.wasUsed()) return;
     const mutations = syncFs.getMutations();
     if (mutations.created.length || mutations.modified.length || mutations.deleted.length) {
-      await rpc.call('vfs', 'flushWrites', [mutations]);
+      try {
+        await rpc.call('vfs', 'flushWrites', [mutations]);
+      } catch (err: unknown) {
+        // One poisoned path must not reject the exec (and with it every
+        // `.jsh`-implemented command in the session — #2146 finding 2).
+        // Mirror the guarded end-of-script flush in js-realm-shared.ts:
+        // warn loudly, run the exec anyway; the end-of-script flush retries.
+        const msg = err instanceof Error ? err.message : String(err);
+        console.error(`[realm-exec] pre-exec sync-fs flush failed (writes may be missing): ${msg}`);
+      }
     }
     syncFs.resetBaseline();
   };

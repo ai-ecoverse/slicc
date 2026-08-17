@@ -660,20 +660,35 @@ async function applySyncFsMutations(
   // by a directory of the same name) must tear down the old node BEFORE the
   // new one is written, or the create step can throw/merge against stale
   // state. `deleted` first, then `created`, then `modified`.
+  // Per-entry fault tolerance (#2146): one poisoned path used to abort the
+  // whole flush and reject the RPC — every OTHER pending write was lost and
+  // the caller (each `.jsh` execSync) died with it. Apply what can be
+  // applied; report the casualties in one error so the caller still learns.
+  const failures: string[] = [];
+  const attempt = async (path: string, op: () => Promise<void>): Promise<void> => {
+    try {
+      await op();
+    } catch (err) {
+      failures.push(`${path}: ${err instanceof Error ? err.message : String(err)}`);
+    }
+  };
   for (const path of mutations.deleted) {
-    await ctx.fs.rm(path, { recursive: true });
+    await attempt(path, () => ctx.fs.rm(path, { recursive: true }));
   }
   for (const entry of mutations.created) {
     if (entry.isSymbolicLink) {
-      await ctx.fs.symlink(entry.symlinkTarget ?? '', entry.path);
+      await attempt(entry.path, () => ctx.fs.symlink(entry.symlinkTarget ?? '', entry.path));
     } else if (entry.isDirectory) {
-      await ctx.fs.mkdir(entry.path, { recursive: true });
+      await attempt(entry.path, () => ctx.fs.mkdir(entry.path, { recursive: true }));
     } else {
-      await ctx.fs.writeFile(entry.path, entry.content);
+      await attempt(entry.path, () => ctx.fs.writeFile(entry.path, entry.content));
     }
   }
   for (const entry of mutations.modified) {
-    await ctx.fs.writeFile(entry.path, entry.content);
+    await attempt(entry.path, () => ctx.fs.writeFile(entry.path, entry.content));
+  }
+  if (failures.length > 0) {
+    throw new Error(`sync-fs flush failed for ${failures.length} path(s): ${failures.join('; ')}`);
   }
 }
 

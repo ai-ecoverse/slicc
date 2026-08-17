@@ -363,6 +363,27 @@ export class VirtualFS {
       const { resolveWithSidecarRepair, repairOpfsMetadataSidecar } = await import(
         './sidecar-repair.js'
       );
+      // Unconditional pre-boot repair (#2146): an UNDER-sized or ino-colliding
+      // sidecar entry never throws during mount — reads silently clamp to the
+      // recorded size and colliding inos share one vnode — so the on-throw
+      // retry below can never see this corruption class. Truing the document
+      // up BEFORE ZenFS parses it costs one metadata-only probe per entry per
+      // cold boot and heals sidecars already poisoned in the field.
+      try {
+        const preboot = await vfs.withWriteLock(() => repairOpfsMetadataSidecar(handle));
+        if (preboot?.changed) {
+          console.warn('[virtual-fs] repaired metadata sidecar before mount (#2146)', {
+            dbName: vfs.dbName,
+            kindFixed: preboot.kindFixed,
+            sizesFixed: preboot.sizesFixed,
+            dropped: preboot.dropped,
+            inosReassigned: preboot.inosReassigned,
+            selfEntryDropped: preboot.selfEntryDropped,
+          });
+        }
+      } catch {
+        /* best-effort — the on-throw retry below still covers hard failures */
+      }
       const backendFs = (await resolveWithSidecarRepair(
         resolveBackend,
         // The repair's read-mutate-write shares the sidecar with every
@@ -906,14 +927,32 @@ export class VirtualFS {
    * this can never loop.
    */
   private async withKindMismatchRetry<T>(path: string, op: () => Promise<T>): Promise<T> {
+    return this.withKindMismatchRetryPaths([path], op);
+  }
+
+  /**
+   * Multi-path variant: `rename` can trip a kind mismatch on either end, so
+   * each candidate path gets a reconcile attempt; the first heal wins the
+   * single retry. `EINVAL` is retryable alongside `EISDIR`/`ENOTDIR` — a
+   * poisoned index entry surfaces as EINVAL on the read/write path and as
+   * ENOTDIR on the unlink/rmdir path (#2146); a GENUINE EINVAL (bad
+   * argument, mount-point rm) reconciles nothing and rethrows after one
+   * cheap probe.
+   */
+  private async withKindMismatchRetryPaths<T>(
+    paths: readonly string[],
+    op: () => Promise<T>
+  ): Promise<T> {
     try {
       return await op();
     } catch (err) {
       const code = (err as { code?: string } | null)?.code;
-      if (code !== 'EISDIR' && code !== 'ENOTDIR') throw err;
-      const healed = await this.reconcileKindMismatch(path).catch(() => false);
-      if (!healed) throw err;
-      return await op();
+      if (code !== 'EISDIR' && code !== 'ENOTDIR' && code !== 'EINVAL') throw err;
+      for (const path of paths) {
+        const healed = await this.reconcileKindMismatch(path).catch(() => false);
+        if (healed) return await op();
+      }
+      throw err;
     }
   }
 
@@ -1830,9 +1869,23 @@ export class VirtualFS {
       try {
         await this.lfs.mkdir(current);
       } catch (err: unknown) {
-        // Ignore EEXIST errors in recursive mode
         if (err instanceof Error && !err.message.includes('EEXIST')) {
           throw convertError(err, current);
+        }
+        // EEXIST in recursive mode is fine — but ONLY when the existing node
+        // is a directory. A FILE parked on a path component (e.g. a stray
+        // `mv x /tmp` when /tmp did not exist) used to be swallowed here,
+        // silently poisoning every later write under the prefix with an
+        // unattributed ENOTDIR from deep inside ZenFS (#2146 finding 2).
+        // Name the offending component instead.
+        try {
+          const existing = await this.lfs.lstat(current);
+          if (!existing.isDirectory() && !existing.isSymbolicLink()) {
+            throw new FsError('ENOTDIR', 'not a directory', current);
+          }
+        } catch (checkErr) {
+          if (checkErr instanceof FsError && checkErr.code === 'ENOTDIR') throw checkErr;
+          /* lstat raced a concurrent delete — let the caller's op surface it */
         }
       }
     }
@@ -1889,6 +1942,13 @@ export class VirtualFS {
    *                 ENOTEMPTY if directory is not empty (non-recursive)
    */
   async rm(path: string, options?: RmOptions): Promise<void> {
+    // The delete family dispatches on the (possibly lying) lstat type, so a
+    // poisoned entry fails ENOTDIR on every unlink/rmdir route (#2146) —
+    // route through the same heal-and-retry as the read path.
+    return this.withKindMismatchRetry(normalizePath(path), () => this.rmInner(path, options));
+  }
+
+  private async rmInner(path: string, options?: RmOptions): Promise<void> {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
     if (mount) {
@@ -2038,6 +2098,15 @@ export class VirtualFS {
    * @throws FsError ENOENT if source doesn't exist
    */
   async rename(oldPath: string, newPath: string): Promise<void> {
+    // Rename mostly ESCAPES poisoned entries (#2146 finding 1) — but a kind
+    // mismatch on either end (e.g. renaming ONTO a poisoned path) heals the
+    // offending side and retries once.
+    return this.withKindMismatchRetryPaths([normalizePath(oldPath), normalizePath(newPath)], () =>
+      this.renameInner(oldPath, newPath)
+    );
+  }
+
+  private async renameInner(oldPath: string, newPath: string): Promise<void> {
     const normalizedOld = normalizePath(oldPath);
     const normalizedNew = normalizePath(newPath);
     let entryType: EntryType | undefined;

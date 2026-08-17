@@ -157,6 +157,29 @@ describe('sync FS bridge (integration)', () => {
     expect(out.stderr).toContain('simulated flush failure');
   });
 
+  it('one poisoned path does not sink the other pending writes (#2146)', async () => {
+    const ctx = makeCtx();
+    const originalWriteFile = ctx.fs.writeFile.bind(ctx.fs);
+    ctx.fs.writeFile = async (path: string, content: string | Uint8Array) => {
+      if (path === '/workspace/poisoned.txt') {
+        throw new Error("ENOTDIR: not a directory '/workspace/poisoned.txt'");
+      }
+      return originalWriteFile(path, content);
+    };
+    const out = await runCode(
+      `const fs = require('fs');
+       fs.writeFileSync('/workspace/healthy.txt', 'survives');
+       fs.writeFileSync('/workspace/poisoned.txt', 'dies');
+       console.log('done');`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    // The healthy write reached the real VFS even though its batch-mate failed…
+    expect(await ctx.fs.readFile('/workspace/healthy.txt')).toBe('survives');
+    // …and the failure is still reported, naming the poisoned path.
+    expect(out.stderr).toContain('poisoned.txt');
+  });
+
   it('sync and async coexist on same require("fs")', async () => {
     const ctx = makeCtx({ files: { '/workspace/both.txt': 'original' } });
     const out = await runCode(

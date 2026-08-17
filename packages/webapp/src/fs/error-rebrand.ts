@@ -52,7 +52,16 @@ export function convertError(err: unknown, path: string): FsError {
   if (typeof structured === 'string') {
     const code = structured as FsErrorCode;
     if ((KNOWN_CODES as string[]).includes(code)) {
-      const msg = err instanceof Error ? err.message : String(err);
+      let msg = err instanceof Error ? err.message : String(err);
+      // ZenFS messages arrive pre-formatted (`ENOTDIR: not a directory,
+      // undefined '/__opfs__/…'`). FsError re-prefixes the code and
+      // re-appends its own quoted path, so wrapping the formatted string
+      // verbatim produced `ENOTDIR: ENOTDIR: …, undefined '…' '…'` — the
+      // degraded double-wrapped shape from #2146. Strip the code prefix,
+      // the dangling `undefined` syscall slot, and any trailing quoted
+      // path, mirroring rebrandFsError above.
+      if (msg.startsWith(`${code}: `)) msg = msg.slice(code.length + 2);
+      msg = msg.replace(/, undefined( '[^']*')?$/, '').replace(/ '[^']*'$/, '');
       return new FsError(code, msg || code, path);
     }
   }

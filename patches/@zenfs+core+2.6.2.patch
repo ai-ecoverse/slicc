@@ -8,3 +8,28 @@ index 555af55..e88a5b9 100644
  export * as vfs from './vfs/index.js';
 -globalThis.__zenfs__ = Object.create(fs);
 +globalThis.__zenfs__ = Object.assign(Object.create(null), fs);
+diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
+index e978bba..c34939b 100644
+--- a/node_modules/@zenfs/core/dist/vfs/vcache.js
++++ b/node_modules/@zenfs/core/dist/vfs/vcache.js
+@@ -76,6 +76,20 @@ export class VCache {
+      */
+     ref(path, inode) {
+         let node = this.byIno.get(inode.ino);
++        // PATCH(#2146): never coalesce DIFFERENT paths onto one vnode via a
++        // zero/unset ino, or across differing format bits. Hardlinks share a
++        // real ino AND a mode; a poisoned index (thousands of ino-0 entries
++        // observed in the field) must not make unrelated files share an
++        // inode object — the shared vnode stamps one file's size/mode onto
++        // the other path on sync.
++        if (node && !node.paths.has(path)
++            && (inode.ino === 0 || ((node.inode.mode ^ inode.mode) & 0o170000) !== 0)) {
++            // The byIno slot may have been claimed by ANOTHER ino-0 path; a
++            // re-ref of an already-known path must still find its own vnode.
++            node = this.byPath.get(path);
++            if (node && ((node.inode.mode ^ inode.mode) & 0o170000) !== 0)
++                node = undefined;
++        }
+         if (!node) {
+             node = new VNode(this.fs, path, inode);
+             this.byIno.set(inode.ino, node);

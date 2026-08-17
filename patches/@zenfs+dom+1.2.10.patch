@@ -1,8 +1,47 @@
 diff --git a/node_modules/@zenfs/dom/dist/access.js b/node_modules/@zenfs/dom/dist/access.js
-index ec02258..5bc2f23 100644
+index ec02258..cccf324 100644
 --- a/node_modules/@zenfs/dom/dist/access.js
 +++ b/node_modules/@zenfs/dom/dist/access.js
-@@ -165,7 +165,17 @@ export class WebAccessFS extends Async(IndexFS) {
+@@ -52,15 +52,21 @@ export class WebAccessFS extends Async(IndexFS) {
+             this.index.fromJSON(data);
+             return;
+         }
++        // PATCH(#2146): allocate unique ino/data pairs — the upstream code
++        // left every inode at ino 0, collapsing the whole tree onto one
++        // vnode-cache slot. Local counter: _alloc() is O(index) per call.
++        let nextRealityId = 1;
+         for (const [path, handle] of this._handles) {
+             if (isKind(handle, 'file')) {
+                 const { lastModified, size } = await handle.getFile();
+-                this.index.set(path, new Inode({ mode: 0o644 | constants.S_IFREG, size, mtimeMs: lastModified }));
++                this.index.set(path, new Inode({ ino: nextRealityId, data: nextRealityId + 1, mode: 0o644 | constants.S_IFREG, size, mtimeMs: lastModified }));
++                nextRealityId += 2;
+                 continue;
+             }
+             if (!isKind(handle, 'directory'))
+                 throw withErrno('EIO', 'Invalid handle');
+-            this.index.set(path, new Inode({ mode: 0o777 | constants.S_IFDIR, size: 0 }));
++            this.index.set(path, new Inode({ ino: nextRealityId, data: nextRealityId + 1, mode: 0o777 | constants.S_IFDIR, size: 0 }));
++            nextRealityId += 2;
+         }
+     }
+     constructor(root, disableHandleCache = false) {
+@@ -91,7 +97,13 @@ export class WebAccessFS extends Async(IndexFS) {
+             // This handle must have been created after initialization
+             // Try to add a new inode for the handle to the index
+             const handle = await this.get(null, path);
+-            const inode = new Inode();
++            // PATCH(#2146): a zeroed Inode carries ino 0 (and data 0). Every
++            // path recovered through this branch then collides in the VFS
++            // vnode cache (keyed by ino), and a shared vnode stamps one
++            // file's size/mode onto another path on sync — the phantom-
++            // directory / sibling-size corruption class. Allocate real ids.
++            const recoveredId = this.index._alloc();
++            const inode = new Inode({ ino: recoveredId, data: recoveredId + 1 });
+             if (isKind(handle, 'file')) {
+                 const file = await handle.getFile();
+                 inode.update({
+@@ -165,7 +177,17 @@ export class WebAccessFS extends Async(IndexFS) {
              log.crit(withErrno('EIO', 'Mismatch in entry kind on write'));
              return;
          }

@@ -59,3 +59,24 @@ describe('rebrandFsError', () => {
     expect(() => rebrandFsError(raw, '/x')).toThrow(raw);
   });
 });
+
+describe('convertError on pre-formatted ZenFS messages (#2146)', () => {
+  it('strips the code prefix, dangling undefined syscall, and quoted path', () => {
+    const zenfsErr = Object.assign(
+      new Error("ENOTDIR: not a directory, undefined '/__opfs__/slicc-fs/tmp/foo'"),
+      { code: 'ENOTDIR' }
+    );
+    const out = convertError(zenfsErr, '/tmp/foo');
+    // Pre-fix this produced the degraded double-wrapped shape:
+    // "ENOTDIR: ENOTDIR: not a directory, undefined '/__opfs__/…' '/tmp/foo'"
+    expect(out.message).toBe("ENOTDIR: not a directory '/tmp/foo'");
+    expect(out.code).toBe('ENOTDIR');
+    expect(out.path).toBe('/tmp/foo');
+  });
+
+  it('keeps a plain structured message intact', () => {
+    const err = Object.assign(new Error('some backend detail'), { code: 'EIO' });
+    const out = convertError(err, '/x');
+    expect(out.message).toBe("EIO: some backend detail '/x'");
+  });
+});
