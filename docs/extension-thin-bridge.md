@@ -244,7 +244,8 @@ The SW also exposes message handlers:
   secrets held in a module-level `SessionSecretStore` (never written to
   `chrome.storage`; vanish when the SW is evicted). Layered into every
   `buildSecretsPipeline()` so the fetch proxy unmasks them like persisted ones.
-  The agent sets these with `secret set <name> <value>` (no sudo prompt).
+  The agent sets these with
+  `secret set <name> <value> --domain "*.example.com"` (no sudo prompt).
 - `secrets.peek` — returns a redacted preview (first/last chars, middle elided)
   of a session or persisted value; the full value never leaves the SW.
 - `secrets.set-domains` — scope edit (the sudo-gated `secret scope` op);

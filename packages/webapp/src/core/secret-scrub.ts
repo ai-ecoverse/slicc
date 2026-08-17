@@ -9,11 +9,9 @@
  * completed result buffer.
  *
  * Direction is real→masked ONLY. The scrub never unmasks, so it is
- * always safe regardless of which domain the data originated from. Any
- * RPC failure degrades to "return the input unchanged" — secrets that
- * leaked are the operator's failure (env-var masking should be the
- * load-bearing invariant); the scrub is defense-in-depth, not the
- * primary defense.
+ * always safe regardless of which domain the data originated from.
+ * Extension RPC failures return a fixed safe placeholder so unsanitized
+ * tool output cannot cross the extension boundary.
  */
 
 import { createLogger } from '../base/logger.js';
@@ -22,8 +20,9 @@ import { resolveSecretTopology } from './secret-topology.js';
 import { callSecretsBridge } from './secrets-bridge-client.js';
 
 const log = createLogger('secret-scrub');
+const SCRUB_FAILURE_OUTPUT = '[tool output withheld: secret scrub unavailable]';
 
-/** Async tool-result scrubber. Always returns the input on any failure. */
+/** Async tool-result scrubber. Extension failures return a safe placeholder. */
 export type ToolResultScrubber = (text: string) => Promise<string>;
 
 const identityScrubber: ToolResultScrubber = async (text) => text;
@@ -58,15 +57,13 @@ export function getToolResultScrubber(): ToolResultScrubber {
           );
         });
         if (resp.error) {
-          log.debug('SW scrub-tool-result returned error', { error: resp.error });
-          return text;
+          log.debug('SW scrub-tool-result returned error');
+          return SCRUB_FAILURE_OUTPUT;
         }
-        return typeof resp.text === 'string' ? resp.text : text;
-      } catch (err) {
-        log.debug('SW scrub-tool-result failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        return text;
+        return typeof resp.text === 'string' ? resp.text : SCRUB_FAILURE_OUTPUT;
+      } catch {
+        log.debug('SW scrub-tool-result failed');
+        return SCRUB_FAILURE_OUTPUT;
       }
     };
   }
@@ -82,15 +79,13 @@ export function getToolResultScrubber(): ToolResultScrubber {
           { text }
         );
         if (resp?.error) {
-          log.debug('Bridge scrub-tool-result returned error', { error: resp.error });
-          return text;
+          log.debug('Bridge scrub-tool-result returned error');
+          return SCRUB_FAILURE_OUTPUT;
         }
-        return typeof resp?.text === 'string' ? resp.text : text;
-      } catch (err) {
-        log.debug('Bridge scrub-tool-result failed', {
-          error: err instanceof Error ? err.message : String(err),
-        });
-        return text;
+        return typeof resp?.text === 'string' ? resp.text : SCRUB_FAILURE_OUTPUT;
+      } catch {
+        log.debug('Bridge scrub-tool-result failed');
+        return SCRUB_FAILURE_OUTPUT;
       }
     };
   }

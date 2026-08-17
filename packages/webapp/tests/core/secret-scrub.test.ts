@@ -18,6 +18,9 @@ vi.mock('../../src/core/secrets-bridge-client.js', () => ({
   callSecretsBridge: vi.fn(),
 }));
 
+const SYNTHETIC_SENSITIVE_TEXT = 'synthetic-sensitive-tool-output';
+const SCRUB_FAILURE_OUTPUT = '[tool output withheld: secret scrub unavailable]';
+
 describe('secret-scrub.getToolResultScrubber', () => {
   const originalFetch = globalThis.fetch;
   const originalChrome = (globalThis as any).chrome;
@@ -113,18 +116,20 @@ describe('secret-scrub.getToolResultScrubber', () => {
       );
     });
 
-    it('returns input unchanged when SW responds with error', async () => {
+    it('fails closed when SW responds with error', async () => {
       const sendMessage = vi.fn((_msg: any, cb: (resp: unknown) => void) => {
-        cb({ text: 'input', error: 'boom' });
+        cb({ error: 'synthetic scrub failure' });
       });
       (globalThis as any).chrome = {
         runtime: { id: 'abc', sendMessage },
       };
       const scrub = getToolResultScrubber();
-      expect(await scrub('input')).toBe('input');
+      const output = await scrub(SYNTHETIC_SENSITIVE_TEXT);
+      expect(output).toBe(SCRUB_FAILURE_OUTPUT);
+      expect(output).not.toContain(SYNTHETIC_SENSITIVE_TEXT);
     });
 
-    it('returns input unchanged when sendMessage throws', async () => {
+    it('fails closed when sendMessage throws', async () => {
       const sendMessage = vi.fn(() => {
         throw new Error('disconnected');
       });
@@ -132,10 +137,10 @@ describe('secret-scrub.getToolResultScrubber', () => {
         runtime: { id: 'abc', sendMessage },
       };
       const scrub = getToolResultScrubber();
-      expect(await scrub('input')).toBe('input');
+      expect(await scrub(SYNTHETIC_SENSITIVE_TEXT)).toBe(SCRUB_FAILURE_OUTPUT);
     });
 
-    it('returns input unchanged when SW response is malformed', async () => {
+    it('fails closed when SW response is malformed', async () => {
       const sendMessage = vi.fn((_msg: any, cb: (resp: unknown) => void) => {
         cb({});
       });
@@ -143,7 +148,7 @@ describe('secret-scrub.getToolResultScrubber', () => {
         runtime: { id: 'abc', sendMessage },
       };
       const scrub = getToolResultScrubber();
-      expect(await scrub('input')).toBe('input');
+      expect(await scrub(SYNTHETIC_SENSITIVE_TEXT)).toBe(SCRUB_FAILURE_OUTPUT);
     });
   });
 
@@ -172,16 +177,24 @@ describe('secret-scrub.getToolResultScrubber', () => {
       expect(fetchMock).not.toHaveBeenCalled();
     });
 
-    it('returns input unchanged when the bridge returns an error', async () => {
-      vi.mocked(callSecretsBridge).mockResolvedValueOnce({ text: 'input', error: 'boom' });
+    it('fails closed when the bridge returns an error', async () => {
+      vi.mocked(callSecretsBridge).mockResolvedValueOnce({ error: 'synthetic scrub failure' });
       const scrub = getToolResultScrubber();
-      expect(await scrub('input')).toBe('input');
+      const output = await scrub(SYNTHETIC_SENSITIVE_TEXT);
+      expect(output).toBe(SCRUB_FAILURE_OUTPUT);
+      expect(output).not.toContain(SYNTHETIC_SENSITIVE_TEXT);
     });
 
-    it('returns input unchanged when the bridge is unavailable (undefined)', async () => {
+    it('fails closed when the bridge is unavailable (undefined)', async () => {
       vi.mocked(callSecretsBridge).mockResolvedValueOnce(undefined);
       const scrub = getToolResultScrubber();
-      expect(await scrub('input')).toBe('input');
+      expect(await scrub(SYNTHETIC_SENSITIVE_TEXT)).toBe(SCRUB_FAILURE_OUTPUT);
+    });
+
+    it('fails closed when the bridge rejects', async () => {
+      vi.mocked(callSecretsBridge).mockRejectedValueOnce(new Error('disconnected'));
+      const scrub = getToolResultScrubber();
+      expect(await scrub(SYNTHETIC_SENSITIVE_TEXT)).toBe(SCRUB_FAILURE_OUTPUT);
     });
   });
 
