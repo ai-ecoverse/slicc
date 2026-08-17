@@ -90,12 +90,18 @@ export class RestrictedFS {
   }
 
   /**
-   * Widen this live sandbox with an approved read glob. Ancestor matchers let
-   * directory traversal and filtered `readDir` calls reach matching files
-   * without exposing non-matching siblings.
+   * Replace dynamic read grants from the current sudoers policy. Ancestor
+   * matchers let directory traversal and filtered `readDir` calls reach
+   * matching files without exposing non-matching siblings.
    */
-  addReadGrant(pattern: string): void {
-    if (this.readGrantPatterns.some((grant) => grant.pattern === pattern)) return;
+  setReadGrants(patterns: readonly string[]): void {
+    this.readGrantPatterns = [];
+    for (const pattern of new Set(patterns)) {
+      this.addReadGrant(pattern);
+    }
+  }
+
+  private addReadGrant(pattern: string): void {
     const segments = pattern.split('/');
     const ancestorRegexes: RegExp[] = [];
     for (let i = 1; i < segments.length; i++) {

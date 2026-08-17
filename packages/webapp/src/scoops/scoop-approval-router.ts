@@ -37,8 +37,6 @@ export interface ScoopApprovalRouterDeps {
   getScoops(): Map<string, RegisteredScoop>;
   /** Live SudoManager (or null before init / after shutdown). The `'always'` path writes a NOPASSWD rule via this sink. */
   getSudoManager(): SudoManager | null;
-  /** Widen the requesting scoop's live RestrictedFS after a Read rule is persisted. */
-  applyReadGrant(scoopJid: string, pattern: string): void;
   /** Live LickManager (or null before wiring). Used to emit the `'sudo-request'` UI chip. */
   getLickManager(): LickManager | null;
   /** Route the cone-facing actionable message through the orchestrator's normal queue. */
@@ -218,6 +216,14 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       return { settled: false, persisted: false };
     }
 
+    // Claim the request synchronously before any persistence await. This
+    // cancels its fail-closed timer, so an expired request can never gain a
+    // durable rule after the registry has already denied it.
+    const settled = this.resolveSudoRequest(id, decision);
+    if (!settled) {
+      return { settled: false, persisted: false };
+    }
+
     const scoop = this.deps.getScoops().get(pending.scoopJid);
     const kind = pending.request.kind;
     const scoopFolder = scoop?.folder;
@@ -238,9 +244,6 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
           if (saved) {
             persisted = true;
             persistedPattern = saved;
-            if (kind === 'read') {
-              this.deps.applyReadGrant(pending.scoopJid, saved);
-            }
           } else {
             persistError = 'pattern collapsed to empty after sanitization';
           }
@@ -258,10 +261,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       }
     }
 
-    const settled = this.resolveSudoRequest(id, decision);
-    if (settled) {
-      await this.persistLickDecision(id, decision.decision);
-    }
+    await this.persistLickDecision(id, decision.decision);
     return { settled, persisted, persistedPattern, persistError, scoopFolder, kind };
   }
 

@@ -2849,6 +2849,12 @@ describe('Orchestrator.resolveSudoRequestAndPersist', () => {
     const restoredFs = priv.lifecycle.getContext(testScoop.jid).getFS();
     expect(await restoredFs.readTextFile('/recordings/first.har')).toBe('approved capture');
     await expect(restoredFs.readFile('/recordings/notes.txt')).rejects.toThrow('ENOENT');
+
+    await sharedFs.writeFile('/scoops/test-scoop/etc/sudoers', '# grant revoked\n');
+    await vi.waitFor(async () => {
+      expect(await restoredFs.exists('/recordings/first.har')).toBe(false);
+    });
+    await expect(restoredFs.readFile('/recordings/first.har')).rejects.toThrow('ENOENT');
   });
 
   it('still persists write+always', async () => {

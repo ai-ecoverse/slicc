@@ -15,6 +15,7 @@ import {
 } from '../../src/scoops/scoop-approval-router.js';
 import type { ChannelMessage, RegisteredScoop } from '../../src/scoops/types.js';
 import { CONE_SUDO_TIMEOUT_MS } from '../../src/sudo/index.js';
+import type { SudoManager } from '../../src/sudo/sudo-manager.js';
 import type { SudoRequest } from '../../src/sudo/types.js';
 
 const REQ: SudoRequest = { kind: 'command', detail: 'git push origin main' };
@@ -34,7 +35,7 @@ function scoop(jid: string, isCone: boolean): RegisteredScoop {
   };
 }
 
-function makeHarness() {
+function makeHarness(sudoManager: SudoManager | null = null) {
   const cone = scoop('cone_jid', true);
   const requester = scoop('scoop_a', false);
   const scoops = new Map<string, RegisteredScoop>([
@@ -53,8 +54,7 @@ function makeHarness() {
   const onMessageUpdate = vi.fn();
   const deps: ScoopApprovalRouterDeps = {
     getScoops: () => scoops,
-    getSudoManager: () => null,
-    applyReadGrant: vi.fn(),
+    getSudoManager: () => sudoManager,
     getLickManager: () => null,
     handleMessage,
     onMessageUpdate,
@@ -63,6 +63,43 @@ function makeHarness() {
   };
   return { router: new ScoopApprovalRouter(deps), store, handleMessage, onMessageUpdate };
 }
+
+describe('ScoopApprovalRouter persistence settlement', () => {
+  it('claims the request before awaiting a durable rule write', async () => {
+    let finishAppend: (pattern: string) => void = () => {};
+    const appendScoopRule = vi.fn(
+      () =>
+        new Promise<string>((resolve) => {
+          finishAppend = resolve;
+        })
+    );
+    const sudoManager = { appendScoopRule } as unknown as SudoManager;
+    const h = makeHarness(sudoManager);
+    const pendingDecision = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'read',
+      detail: '/recordings/first.har',
+    });
+    await flush();
+    const [{ id }] = h.router.listPendingSudoRequests();
+
+    const resultPromise = h.router.resolveSudoRequestAndPersist(id, {
+      decision: 'always',
+      pattern: '/recordings/**',
+    });
+
+    expect(appendScoopRule).toHaveBeenCalledOnce();
+    expect(h.router.failAll()).toBe(0);
+    await expect(pendingDecision).resolves.toEqual({
+      decision: 'always',
+      pattern: '/recordings/**',
+    });
+
+    finishAppend('/recordings/**');
+    await expect(resultPromise).resolves.toEqual(
+      expect.objectContaining({ settled: true, persisted: true })
+    );
+  });
+});
 
 describe('ScoopApprovalRouter settle paths flip the lick card off pending', () => {
   it('scoop-dropped: failScoop flips the stored card to dismissed', async () => {

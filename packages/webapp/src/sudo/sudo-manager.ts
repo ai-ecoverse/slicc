@@ -48,6 +48,8 @@ export interface SudoManagerDeps {
   watcher?: FsWatcher | null;
   /** Override the broker (tests). Defaults to the float-appropriate broker. */
   broker?: SudoBroker;
+  /** Notify consumers after global or per-scoop policy reloads. */
+  onPolicyReload?: (folder?: string) => void;
 }
 
 /** Whether `path` is one of the (live-reload-triggering) sudoers files. */
@@ -146,6 +148,7 @@ export class SudoManager {
   private readonly fs: VirtualFS;
   private readonly watcher: FsWatcher | null;
   private readonly broker: SudoBroker;
+  private readonly onPolicyReload: (folder?: string) => void;
   private policy: SudoersPolicy = emptyPolicy();
   private unwatch: (() => void) | null = null;
   private scoopUnwatch: (() => void) | null = null;
@@ -159,6 +162,7 @@ export class SudoManager {
     this.fs = deps.fs;
     this.watcher = deps.watcher ?? null;
     this.broker = deps.broker ?? createSudoBroker();
+    this.onPolicyReload = deps.onPolicyReload ?? (() => {});
   }
 
   /** Seed defaults, load the policy, and start watching for live reload. */
@@ -313,13 +317,16 @@ export class SudoManager {
     try {
       if (!(await this.fs.exists(path))) {
         this.scoopPolicies.delete(folder);
+        this.onPolicyReload(folder);
         return;
       }
     } catch {
       this.scoopPolicies.delete(folder);
+      this.onPolicyReload(folder);
       return;
     }
     this.scoopPolicies.set(folder, await this.readPolicyFile(path));
+    this.onPolicyReload(folder);
   }
 
   private async doReload(): Promise<void> {
@@ -337,6 +344,7 @@ export class SudoManager {
       /* no drop-in directory yet */
     }
     this.policy = mergePolicies(...policies);
+    this.onPolicyReload();
   }
 
   private async readPolicyFile(path: string): Promise<SudoersPolicy> {

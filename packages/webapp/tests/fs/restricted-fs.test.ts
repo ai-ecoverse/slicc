@@ -83,13 +83,16 @@ describe('RestrictedFS', () => {
     await vfs.writeFile('/recordings/notes.txt', 'private');
 
     await expect(restricted.readFile('/recordings/first.har')).rejects.toThrow('ENOENT');
-    restricted.addReadGrant('/recordings/*.har');
+    restricted.setReadGrants(['/recordings/*.har']);
 
     expect(await restricted.readTextFile('/recordings/first.har')).toBe('approved');
     await expect(restricted.readFile('/recordings/notes.txt')).rejects.toThrow('ENOENT');
     expect((await restricted.readDir('/recordings')).map((entry) => entry.name)).toEqual([
       'first.har',
     ]);
+
+    restricted.setReadGrants([]);
+    await expect(restricted.readFile('/recordings/first.har')).rejects.toThrow('ENOENT');
   });
 
   it('writes within allowed dirs', async () => {

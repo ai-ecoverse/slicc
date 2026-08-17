@@ -220,7 +220,6 @@ export class Orchestrator implements ConeApprovalRouter {
   private approvalRouter: ScoopApprovalRouter = new ScoopApprovalRouter({
     getScoops: () => this.scoops,
     getSudoManager: () => this.sudoManager,
-    applyReadGrant: (jid, pattern) => this.lifecycle.applyReadGrant(jid, pattern),
     getLickManager: () => this.lickManager,
     handleMessage: (msg) => this.handleMessage(msg),
     onMessageUpdate: (jid, update) => this.callbacks.onMessageUpdate?.(jid, update),
@@ -368,7 +367,11 @@ export class Orchestrator implements ConeApprovalRouter {
     // template, loads + merges the live policy, and watches for changes so
     // edits (and "Always" grants) take effect with no restart. The same
     // manager is threaded into every ScoopContext below.
-    this.sudoManager = new SudoManager({ fs: this.sharedFs, watcher: this.fsWatcher });
+    this.sudoManager = new SudoManager({
+      fs: this.sharedFs,
+      watcher: this.fsWatcher,
+      onPolicyReload: (folder) => this.lifecycle.syncReadGrants(folder),
+    });
     await this.sudoManager.init();
 
     const savedScoops = await db.getAllScoops();
@@ -896,7 +899,11 @@ export class Orchestrator implements ConeApprovalRouter {
     // Rebuild the sudo manager against the fresh VFS: re-seeds the default
     // /etc/sudoers template and re-attaches the live-reload watcher.
     this.sudoManager?.dispose();
-    this.sudoManager = new SudoManager({ fs: this.sharedFs, watcher: this.fsWatcher });
+    this.sudoManager = new SudoManager({
+      fs: this.sharedFs,
+      watcher: this.fsWatcher,
+      onPolicyReload: (folder) => this.lifecycle.syncReadGrants(folder),
+    });
     await this.sudoManager.init();
     this.costTracker.reset();
     log.info('Filesystem reset and defaults re-seeded');

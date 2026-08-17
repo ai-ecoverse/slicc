@@ -188,11 +188,12 @@ export class ScoopLifecycleManager {
     return this.contexts.get(jid);
   }
 
-  /** Apply a newly approved Read glob to a scoop's live RestrictedFS. */
-  applyReadGrant(jid: string, pattern: string): void {
-    const fs = this.contexts.get(jid)?.getFS();
-    if (fs instanceof RestrictedFS) {
-      fs.addReadGrant(pattern);
+  /** Synchronize live read ACLs after a global or per-scoop policy reload. */
+  syncReadGrants(folder?: string): void {
+    for (const scoop of this.deps.getScoops().values()) {
+      if (scoop.isCone || (folder !== undefined && scoop.folder !== folder)) continue;
+      const fs = this.contexts.get(scoop.jid)?.getFS();
+      this.applyPolicyReadGrants(scoop, fs);
     }
   }
 
@@ -269,14 +270,15 @@ export class ScoopLifecycleManager {
     }
   }
 
-  /** Reapply durable NOPASSWD Read rules when constructing a RestrictedFS. */
-  private applyPersistedReadGrants(scoop: RegisteredScoop, fs: VirtualFS | RestrictedFS): void {
+  /** Replace dynamic read ACLs from the scoop's current effective policy. */
+  private applyPolicyReadGrants(
+    scoop: RegisteredScoop,
+    fs: VirtualFS | RestrictedFS | null | undefined
+  ): void {
     if (!(fs instanceof RestrictedFS)) return;
     const policy = this.deps.getSudoManager()?.getPolicyForScoop(scoop.folder);
     if (!policy) return;
-    for (const rule of policy.read) {
-      if (rule.nopasswd) fs.addReadGrant(rule.pattern);
-    }
+    fs.setReadGrants(policy.read.filter((rule) => rule.nopasswd).map((rule) => rule.pattern));
   }
 
   /** Create and initialize a scoop context. */
@@ -322,7 +324,7 @@ export class ScoopLifecycleManager {
 
     if (!scoop.isCone) {
       await this.ensureSudoersLoaded(scoop);
-      this.applyPersistedReadGrants(scoop, fs);
+      this.applyPolicyReadGrants(scoop, fs);
     }
 
     const contextCallbacks = this.buildContextCallbacks(jid, scoop);
