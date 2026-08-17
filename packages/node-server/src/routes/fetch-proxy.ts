@@ -1,6 +1,6 @@
 import { Readable, Transform } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
-import { HMAC_SIGN_HEADER } from '@slicc/shared-ts';
+import { HMAC_SIGN_HEADER, isTextContentType } from '@slicc/shared-ts';
 import type { Express, Request, Response } from 'express';
 import {
   FETCH_PROXY_SKIP_HEADERS,
@@ -183,18 +183,8 @@ function unmaskRequestBody(
   rawBody: Buffer,
   targetHostname: string
 ): Buffer {
-  const reqCt = (headers['content-type'] ?? headers['Content-Type'] ?? '').toLowerCase();
-  const reqIsText =
-    !reqCt ||
-    reqCt.startsWith('text/') ||
-    reqCt.includes('json') ||
-    reqCt.includes('xml') ||
-    reqCt.includes('javascript') ||
-    reqCt.includes('ecmascript') ||
-    reqCt.includes('html') ||
-    reqCt.includes('css') ||
-    reqCt.includes('svg');
-  if (reqIsText && secretProxy.hasSecrets()) {
+  const contentType = headers['content-type'] ?? headers['Content-Type'] ?? '';
+  if (isTextContentType(contentType) && secretProxy.hasSecrets()) {
     const bodyResult = secretProxy.unmaskBody(rawBody.toString('utf-8'), targetHostname);
     return Buffer.from(bodyResult.text, 'utf-8');
   }
@@ -283,12 +273,7 @@ function streamUpstreamBody(
   secretProxy: SecretProxyManager,
   detachClientClose: () => void
 ): void {
-  const ct = (upstream.headers.get('content-type') ?? '').toLowerCase();
-  const isText =
-    ct.startsWith('text/') ||
-    ct.startsWith('application/json') ||
-    ct.includes('charset=') ||
-    ct.includes('event-stream');
+  const isText = isTextContentType(upstream.headers.get('content-type') ?? '');
   const upstreamStream = Readable.fromWeb(
     upstream.body as unknown as import('stream/web').ReadableStream<Uint8Array>
   );
