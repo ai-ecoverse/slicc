@@ -265,6 +265,15 @@ describe('registerFetchProxyRoute', () => {
     }
   );
 
+  it('preserves headerless binary response bytes when secrets are configured', async () => {
+    const binary = Buffer.from([0xff, 0xfe, 0x00, 0x80, 0x41]);
+    await setup((_req, res) => res.end(binary));
+    const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
+      headers: { 'x-target-url': upstreamUrl },
+    });
+    expect(Buffer.from(await res.arrayBuffer())).toEqual(binary);
+  });
+
   it('returns 403 when a masked header secret is used against an out-of-scope domain', async () => {
     // Secret is scoped to api.github.com only; the request targets 127.0.0.1.
     await setup((_req, res) => res.end('should-not-reach'), 'api.github.com');

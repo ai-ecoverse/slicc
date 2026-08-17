@@ -1,6 +1,6 @@
 /** Check whether a content type is safe to decode as UTF-8 text. */
 export function isTextContentType(contentType: string): boolean {
-  if (!contentType) return true;
+  if (!contentType) return false;
   const normalized = contentType.toLowerCase();
   return (
     normalized.startsWith('text/') ||

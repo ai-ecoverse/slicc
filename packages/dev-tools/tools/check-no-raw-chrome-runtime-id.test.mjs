@@ -63,8 +63,8 @@ describe('check-no-raw-chrome-runtime-id: findRawSniffs', () => {
     expect(findRawSniffs('return typeof c?.runtime?.id === "string";')).toHaveLength(1);
   });
 
-  it('returns nothing for clean runtime-env usage', () => {
-    expect(findRawSniffs('import { isExtensionRealm } from "./runtime-env.js";')).toEqual([]);
+  it('returns nothing for shared extension-realm detection', () => {
+    expect(findRawSniffs('import { isChromeExtensionRealm } from "@slicc/shared-ts";')).toEqual([]);
   });
 });
 

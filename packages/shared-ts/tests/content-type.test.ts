@@ -3,7 +3,6 @@ import { isTextContentType } from '../src/content-type.js';
 
 describe('isTextContentType', () => {
   it.each([
-    '',
     'text/plain',
     'application/json',
     'application/xml',
@@ -16,7 +15,7 @@ describe('isTextContentType', () => {
     expect(isTextContentType(contentType)).toBe(true);
   });
 
-  it.each(['application/octet-stream', 'application/pdf', 'image/png', 'video/mp4'])(
+  it.each(['', 'application/octet-stream', 'application/pdf', 'image/png', 'video/mp4'])(
     'classifies %s as binary',
     (contentType) => {
       expect(isTextContentType(contentType)).toBe(false);
