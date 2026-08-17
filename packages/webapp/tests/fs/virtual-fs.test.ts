@@ -369,6 +369,15 @@ describe('VirtualFS', () => {
       expect(await vfs.readTextFile('/keep.txt')).toBe('important');
     });
 
+    it('rm removes a symlink to a non-empty directory without touching the target', async () => {
+      await vfs.mkdir('/keep-dir');
+      await vfs.writeFile('/keep-dir/important.txt', 'important');
+      await vfs.symlink('/keep-dir', '/remove-dir-link');
+      await vfs.rm('/remove-dir-link');
+      expect(await vfs.exists('/remove-dir-link')).toBe(false);
+      expect(await vfs.readTextFile('/keep-dir/important.txt')).toBe('important');
+    });
+
     it('circular symlink detection (ELOOP)', async () => {
       await vfs.symlink('/b', '/a');
       await vfs.symlink('/a', '/b');

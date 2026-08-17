@@ -194,9 +194,19 @@ test('stat: parses JSON reply and sends GET with ?op=stat', () => {
   reply = jsonReply({ isFile: true, isDirectory: false, size: 5 });
   const bridge = createSyncFsXhrBridge('tok');
   const s = bridge.stat('/workspace/a.txt');
-  expect(s).toEqual({ isFile: true, isDirectory: false, size: 5 });
+  expect(s).toEqual({ isFile: true, isDirectory: false, isSymbolicLink: undefined, size: 5 });
   expect(lastSent?.method).toBe('GET');
   expect(lastSent?.url).toBe('/__slicc/fs-sync/workspace/a.txt?op=stat');
+});
+
+test('lstat: parses JSON reply with isSymbolicLink and sends GET with ?op=lstat', () => {
+  installFakeXhr();
+  reply = jsonReply({ isFile: false, isDirectory: false, isSymbolicLink: true, size: 0 });
+  const bridge = createSyncFsXhrBridge('tok');
+  const s = bridge.lstat('/workspace/link');
+  expect(s).toEqual({ isFile: false, isDirectory: false, isSymbolicLink: true, size: 0 });
+  expect(lastSent?.method).toBe('GET');
+  expect(lastSent?.url).toBe('/__slicc/fs-sync/workspace/link?op=lstat');
   expect(lastSent?.token).toBe('tok');
 });
 

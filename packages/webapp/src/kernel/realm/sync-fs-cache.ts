@@ -12,6 +12,10 @@
 export interface SyncFsEntry {
   content: Uint8Array;
   isDirectory: boolean;
+  /** True when this entry is a symbolic link rather than its resolved target. */
+  isSymbolicLink?: boolean;
+  /** Raw link target, used by stat/read operations that follow the link. */
+  symlinkTarget?: string;
   truncated?: boolean;
   /**
    * Real byte size, recorded even when `content` is empty because the file was
@@ -27,6 +31,10 @@ export interface SyncFsSnapshot {
     path: string;
     content: Uint8Array;
     isDirectory: boolean;
+    /** True when the snapshot entry is a symbolic link (lstat semantics). */
+    isSymbolicLink?: boolean;
+    /** Raw target returned by readlink for symbolic-link entries. */
+    symlinkTarget?: string;
     /**
      * True when the host skipped reading this file's real content because it
      * exceeded the sync-snapshot size budget (see `realm-host.ts`'s
@@ -41,7 +49,13 @@ export interface SyncFsSnapshot {
 }
 
 export interface SyncFsMutations {
-  created: Array<{ path: string; content: Uint8Array; isDirectory: boolean }>;
+  created: Array<{
+    path: string;
+    content: Uint8Array;
+    isDirectory: boolean;
+    isSymbolicLink?: boolean;
+    symlinkTarget?: string;
+  }>;
   modified: Array<{ path: string; content: Uint8Array }>;
   deleted: string[];
 }
@@ -101,7 +115,7 @@ export class SyncFsCache {
   private tree: Map<string, SyncFsEntry> = new Map();
   private initialPaths: Set<string> = new Set();
   private initialContent: Map<string, Uint8Array> = new Map();
-  private initialIsDirectory: Map<string, boolean> = new Map();
+  private initialKind: Map<string, 'file' | 'directory' | 'symlink'> = new Map();
   private mkdtempCounter = 0;
 
   /**
@@ -151,23 +165,25 @@ export class SyncFsCache {
     this.removedDirs = new Set();
     this.initialPaths = new Set();
     this.initialContent = new Map();
-    this.initialIsDirectory = new Map();
+    this.initialKind = new Map();
 
     this.tree.set('/', { content: new Uint8Array(0), isDirectory: true });
     this.initialPaths.add('/');
-    this.initialIsDirectory.set('/', true);
+    this.initialKind.set('/', 'directory');
 
     for (const entry of snapshot.entries) {
       const normalized = normalizePath(entry.path);
       this.tree.set(normalized, {
         content: entry.content,
         isDirectory: entry.isDirectory,
+        isSymbolicLink: entry.isSymbolicLink,
+        symlinkTarget: entry.symlinkTarget,
         truncated: entry.truncated,
         size: entry.size,
       });
       this.initialPaths.add(normalized);
-      this.initialIsDirectory.set(normalized, entry.isDirectory);
-      if (!entry.isDirectory) {
+      this.initialKind.set(normalized, this.entryKind(entry));
+      if (!entry.isDirectory && !entry.isSymbolicLink) {
         this.initialContent.set(normalized, entry.content);
       }
     }
@@ -182,7 +198,7 @@ export class SyncFsCache {
       while (dir !== '/' && !this.tree.has(dir)) {
         this.tree.set(dir, { content: new Uint8Array(0), isDirectory: true });
         this.initialPaths.add(dir);
-        this.initialIsDirectory.set(dir, true);
+        this.initialKind.set(dir, 'directory');
         dir = dirname(dir);
       }
     }
@@ -239,7 +255,14 @@ export class SyncFsCache {
     // Then re-layer creates + modifies so sync writes win for their paths.
     for (const c of pending.created) {
       this.ensureParentDirs(c.path);
-      this.tree.set(c.path, { content: c.content, isDirectory: c.isDirectory });
+      // Preserve isSymbolicLink/symlinkTarget for pending created symlinks — a
+      // renamed symlink must not degrade into an empty file.
+      this.tree.set(c.path, {
+        content: c.content,
+        isDirectory: c.isDirectory,
+        isSymbolicLink: c.isSymbolicLink,
+        symlinkTarget: c.symlinkTarget,
+      });
     }
     for (const m of pending.modified) {
       this.ensureParentDirs(m.path);
@@ -273,14 +296,64 @@ export class SyncFsCache {
   resetBaseline(): void {
     this.initialPaths = new Set();
     this.initialContent = new Map();
-    this.initialIsDirectory = new Map();
+    this.initialKind = new Map();
     for (const [path, entry] of this.tree.entries()) {
       this.initialPaths.add(path);
-      this.initialIsDirectory.set(path, entry.isDirectory);
-      if (!entry.isDirectory) {
+      this.initialKind.set(path, this.entryKind(entry));
+      if (!entry.isDirectory && !entry.isSymbolicLink) {
         this.initialContent.set(path, entry.content);
       }
     }
+  }
+
+  private entryKind(entry: {
+    isDirectory: boolean;
+    isSymbolicLink?: boolean;
+  }): 'file' | 'directory' | 'symlink' {
+    if (entry.isSymbolicLink) return 'symlink';
+    return entry.isDirectory ? 'directory' : 'file';
+  }
+
+  /** Resolve cached symlinks in every path component, with lstat final-link semantics. */
+  private resolveEntry(
+    path: string,
+    preserveFinalSymlink = false
+  ): { path: string; entry: SyncFsEntry } | undefined {
+    const original = normalizePath(path);
+    let remaining = original.split('/').filter(Boolean);
+    let resolved: string[] = [];
+    const seen = new Set<string>();
+    let hops = 0;
+
+    if (remaining.length === 0) {
+      const entry = this.tree.get('/');
+      return entry ? { path: '/', entry } : undefined;
+    }
+
+    while (remaining.length > 0) {
+      const segment = remaining.shift()!;
+      const candidate = `/${[...resolved, segment].join('/')}`;
+      const entry = this.tree.get(candidate);
+      if (!entry) return undefined;
+      const final = remaining.length === 0;
+      if (entry.isSymbolicLink && !(preserveFinalSymlink && final)) {
+        if (seen.has(candidate) || hops++ === 40) {
+          throw Object.assign(new Error(`ELOOP: too many symbolic links, '${original}'`), {
+            code: 'ELOOP',
+          });
+        }
+        seen.add(candidate);
+        const target = entry.symlinkTarget ?? '';
+        const targetPath = target.startsWith('/') ? target : `${dirname(candidate)}/${target}`;
+        remaining = [...normalizePath(targetPath).split('/').filter(Boolean), ...remaining];
+        resolved = [];
+        continue;
+      }
+      if (!final && !entry.isDirectory) return undefined;
+      resolved.push(segment);
+      if (final) return { path: candidate, entry };
+    }
+    return undefined;
   }
 
   private ensureParentDirs(path: string): void {
@@ -311,7 +384,7 @@ export class SyncFsCache {
       const entry = this.tree.get(cursor);
       if (entry) {
         this.initialPaths.add(cursor);
-        this.initialIsDirectory.set(cursor, entry.isDirectory);
+        this.initialKind.set(cursor, this.entryKind(entry));
       }
       cursor = dirname(cursor);
     }
@@ -320,7 +393,8 @@ export class SyncFsCache {
   readFile(path: string): Uint8Array {
     this.touched = true;
     const normalized = normalizePath(path);
-    const entry = this.tree.get(normalized);
+    const resolved = this.resolveEntry(normalized);
+    const entry = resolved?.entry;
     if (!entry || entry.isDirectory) {
       throw enoent(normalized);
     }
@@ -345,16 +419,41 @@ export class SyncFsCache {
     return this.tree.has(normalized);
   }
 
-  stat(path: string): { isFile: boolean; isDirectory: boolean; size: number } {
+  stat(path: string): {
+    isFile: boolean;
+    isDirectory: boolean;
+    isSymbolicLink: boolean;
+    size: number;
+  } {
     this.touched = true;
     const normalized = normalizePath(path);
-    const entry = this.tree.get(normalized);
-    if (!entry) {
-      throw enoent(normalized);
-    }
+    const resolved = this.resolveEntry(normalized);
+    if (!resolved) throw enoent(normalized);
+    return this.toStat(resolved.entry);
+  }
+
+  lstat(path: string): {
+    isFile: boolean;
+    isDirectory: boolean;
+    isSymbolicLink: boolean;
+    size: number;
+  } {
+    this.touched = true;
+    const normalized = normalizePath(path);
+    // Follow symlinks in intermediate path components only (e.g.,
+    // `/workspace/alias/file` where `alias -> target` resolves intermediate
+    // components), but do NOT follow the final component — lstat reports the
+    // link itself, not its target.
+    const resolved = this.resolveEntry(normalized, true);
+    if (!resolved) throw enoent(normalized);
+    return this.toStat(resolved.entry);
+  }
+
+  private toStat(entry: SyncFsEntry) {
     return {
-      isFile: !entry.isDirectory,
+      isFile: !entry.isDirectory && !entry.isSymbolicLink,
       isDirectory: entry.isDirectory,
+      isSymbolicLink: entry.isSymbolicLink === true,
       // Truncated entries carry `size` (real bytes) with an empty `content`;
       // in-realm writes carry no `size`, so `content.byteLength` is authoritative.
       size: entry.isDirectory ? 0 : (entry.size ?? entry.content.byteLength),
@@ -364,11 +463,11 @@ export class SyncFsCache {
   readdir(path: string): string[] {
     this.touched = true;
     const normalized = normalizePath(path);
-    const entry = this.tree.get(normalized);
-    if (!entry?.isDirectory) {
+    const resolved = this.resolveEntry(normalized);
+    if (!resolved?.entry.isDirectory) {
       throw enoent(normalized);
     }
-    const prefix = normalized === '/' ? '/' : normalized + '/';
+    const prefix = resolved.path === '/' ? '/' : resolved.path + '/';
     const names = new Set<string>();
     for (const p of this.tree.keys()) {
       if (p === normalized || p === '/') continue;
@@ -412,7 +511,7 @@ export class SyncFsCache {
       throw enoent(normalized);
     }
 
-    if (entry.isDirectory) {
+    if (entry.isDirectory && !entry.isSymbolicLink) {
       const prefix = normalized === '/' ? '/' : normalized + '/';
       const children = Array.from(this.tree.keys()).filter(
         (p) => p !== normalized && p.startsWith(prefix)
@@ -501,7 +600,7 @@ export class SyncFsCache {
     if (!entry) {
       throw enoent(normalized);
     }
-    if (entry.isDirectory) {
+    if (entry.isDirectory && !entry.isSymbolicLink) {
       throw Object.assign(
         new Error(`EISDIR: illegal operation on a directory, unlink '${normalized}'`),
         {
@@ -566,18 +665,29 @@ export class SyncFsCache {
     for (const [path, entry] of this.tree.entries()) {
       if (path === '/') continue;
       if (!this.initialPaths.has(path)) {
-        created.push({ path, content: entry.content, isDirectory: entry.isDirectory });
+        created.push({
+          path,
+          content: entry.content,
+          isDirectory: entry.isDirectory,
+          isSymbolicLink: entry.isSymbolicLink,
+          symlinkTarget: entry.symlinkTarget,
+        });
         continue;
       }
-      const wasDir = this.initialIsDirectory.get(path);
-      if (wasDir !== undefined && wasDir !== entry.isDirectory) {
-        // Type changed (dir -> file or file -> dir): emit as delete + create
-        // so the host tears down the old node before writing the new one.
+      const wasKind = this.initialKind.get(path);
+      if (wasKind !== undefined && wasKind !== this.entryKind(entry)) {
+        // Type changed: emit as delete + create so the host tears down the old node first.
         deleted.push(path);
-        created.push({ path, content: entry.content, isDirectory: entry.isDirectory });
+        created.push({
+          path,
+          content: entry.content,
+          isDirectory: entry.isDirectory,
+          isSymbolicLink: entry.isSymbolicLink,
+          symlinkTarget: entry.symlinkTarget,
+        });
         continue;
       }
-      if (!entry.isDirectory) {
+      if (!entry.isDirectory && !entry.isSymbolicLink) {
         const initial = this.initialContent.get(path);
         if (initial && !bytesEqual(initial, entry.content)) {
           modified.push({ path, content: entry.content });

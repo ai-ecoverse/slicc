@@ -192,6 +192,16 @@ test('parseSyncFsRequest: GET ?op=stat → stat op (phase-2 metadata wire)', asy
   expect(parsed).toEqual({ token: 'tok', op: 'stat', path: '/workspace/a.txt' });
 });
 
+test('parseSyncFsRequest: GET ?op=lstat → lstat op', async () => {
+  const parsed = await parseSyncFsRequest({
+    url: 'https://www.sliccy.ai/__slicc/fs-sync/workspace/link?op=lstat',
+    method: 'GET',
+    headers: { get: () => 'tok' },
+    arrayBuffer: async () => new ArrayBuffer(0),
+  });
+  expect(parsed).toEqual({ token: 'tok', op: 'lstat', path: '/workspace/link' });
+});
+
 test('parseSyncFsRequest: GET ?op=readdir → readdir op', async () => {
   const parsed = await parseSyncFsRequest({
     url: 'https://www.sliccy.ai/__slicc/fs-sync/workspace?op=readdir',

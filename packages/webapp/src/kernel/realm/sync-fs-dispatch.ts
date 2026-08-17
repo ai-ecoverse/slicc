@@ -23,7 +23,16 @@
 
 import { resolveSyncFsToken } from './sync-fs-token-registry.js';
 
-export type SyncFsOp = 'read' | 'write' | 'exists' | 'stat' | 'readdir' | 'mkdir' | 'rm' | 'rename';
+export type SyncFsOp =
+  | 'read'
+  | 'write'
+  | 'exists'
+  | 'stat'
+  | 'lstat'
+  | 'readdir'
+  | 'mkdir'
+  | 'rm'
+  | 'rename';
 
 export interface SyncFsRequest {
   token: string;
@@ -97,7 +106,25 @@ export async function dispatchSyncFs(req: SyncFsRequest): Promise<SyncFsResult> 
         return {
           ok: true,
           kind: 'json',
-          json: { isDirectory: s.isDirectory, isFile: s.isFile, size: s.size },
+          json: {
+            isDirectory: s.isDirectory,
+            isFile: s.isFile,
+            isSymbolicLink: s.isSymbolicLink,
+            size: s.size,
+          },
+        };
+      }
+      case 'lstat': {
+        const s = await fs.lstat(resolved);
+        return {
+          ok: true,
+          kind: 'json',
+          json: {
+            isDirectory: s.isDirectory,
+            isFile: s.isFile,
+            isSymbolicLink: s.isSymbolicLink ?? false,
+            size: s.size,
+          },
         };
       }
       case 'readdir':

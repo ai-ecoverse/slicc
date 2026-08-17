@@ -14,11 +14,12 @@ let counter = 0;
  * (provides resolvePath/readFileBuffer/readdir) over a `RestrictedFS` scoped
  * to `scope` — so out-of-sandbox access is denied exactly as production.
  */
-async function scopedToken(scope: string): Promise<string> {
+async function scopedToken(scope: string, symlink = false): Promise<string> {
   const vfs = await VirtualFS.create({ dbName: `sfd-${counter++}`, wipe: true });
   await vfs.mkdir('/scoops/x', { recursive: true });
   await vfs.writeFile('/scoops/x/in.txt', 'hi');
   await vfs.writeFile('/secret.txt', 'nope');
+  if (symlink) await vfs.symlink('/scoops/x/in.txt', '/scoops/x/link.txt');
   const restricted = new RestrictedFS(vfs, [scope]);
   const fs = new VfsAdapter(restricted as unknown as VirtualFS) as unknown as CommandContext['fs'];
   return mintSyncFsToken({ fs, cwd: scope });
@@ -94,6 +95,19 @@ test('exists / stat / readdir reflect the sandbox contents', async () => {
   const d = await dispatchSyncFs({ token, op: 'readdir', path: '.' });
   expect(d.ok).toBe(true);
   if (d.ok && d.kind === 'json') expect(d.json).toContain('in.txt');
+});
+
+test('lstat reports a symlink without following it', async () => {
+  const token = await scopedToken('/scoops/x/', true);
+  const result = await dispatchSyncFs({ token, op: 'lstat', path: 'link.txt' });
+  expect(result.ok).toBe(true);
+  if (result.ok && result.kind === 'json') {
+    expect(result.json).toMatchObject({
+      isFile: false,
+      isDirectory: false,
+      isSymbolicLink: true,
+    });
+  }
 });
 
 test('a thrown error with a MALFORMED .code (lowercase) collapses to EIO', async () => {

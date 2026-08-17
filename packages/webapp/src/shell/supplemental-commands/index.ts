@@ -64,11 +64,17 @@ import { createSprinkleCommand } from './sprinkle-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
 import { createSshCommand } from './ssh-command.js';
 import { createSudoCommand, type SudoCommandOptions } from './sudo-command.js';
+import {
+  createRmCommand,
+  createRmdirCommand,
+  createStatCommand,
+} from './symlink-aware-file-commands.js';
 import { createTarCommand } from './tar-command.js';
 import { createTestCommand } from './test-command.js';
 import { createThemeCommand } from './theme-command.js';
 import { createTscCommand } from './tsc-command.js';
 import { createUnameCommand } from './uname-command.js';
+import { createUnlinkCommand } from './unlink-command.js';
 import { createUnzipCommand } from './unzip-command.js';
 import { createUpgradeCommand } from './upgrade-command.js';
 import { createUsbCommand } from './usb-command.js';
@@ -173,6 +179,9 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createZipCommand(),
     createUnzipCommand(),
     createTarCommand(),
+    createRmCommand(),
+    createRmdirCommand(),
+    createStatCommand(),
     createCmpCommand(),
     createXxdCommand(),
     createSqliteCommand('sqlite3'),
@@ -216,6 +225,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     }),
     createThemeCommand(),
     createUnameCommand(),
+    createUnlinkCommand(),
     createManCommand(),
     createDigCommand(),
     createOAuthTokenCommand(),

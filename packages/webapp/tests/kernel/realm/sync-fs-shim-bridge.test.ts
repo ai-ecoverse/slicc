@@ -25,6 +25,9 @@ function fakeBridge(
       if (!b) throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
       return { isFile: true, isDirectory: false, size: b.byteLength };
     },
+    lstat(p: string): { isFile: boolean; isDirectory: boolean; size: number } {
+      return this.stat(p);
+    },
     readdir(p: string): string[] {
       if (!dirs.has(p)) throw Object.assign(new Error(`ENOENT: ${p}`), { code: 'ENOENT' });
       const prefix = p === '/' ? '/' : `${p}/`;
@@ -100,6 +103,9 @@ test('writeFileSync propagates a bridge write failure and does NOT commit to cac
       throw Object.assign(new Error('EIO'), { code: 'EIO' });
     },
     stat() {
+      throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
+    },
+    lstat() {
       throw Object.assign(new Error('ENOENT'), { code: 'ENOENT' });
     },
     readdir() {
@@ -195,6 +201,9 @@ test('a cache hit is served from the snapshot without touching the bridge (fast 
     stat() {
       throw new Error('bridge must not be called on a cache hit');
     },
+    lstat() {
+      throw new Error('bridge must not be called on a cache hit');
+    },
     readdir() {
       throw new Error('bridge must not be called on a cache hit');
     },
@@ -243,6 +252,9 @@ test('a metadata cache hit is served without touching the bridge (fast path)', (
       throw new Error('unused');
     },
     stat() {
+      throw new Error('bridge must not be called on a metadata cache hit');
+    },
+    lstat() {
       throw new Error('bridge must not be called on a metadata cache hit');
     },
     readdir() {
@@ -303,6 +315,9 @@ test('existsSync swallows bridge EIO/EACCES and returns false (Node fs.existsSyn
     stat() {
       throw Object.assign(new Error('EIO'), { code: 'EIO' });
     },
+    lstat() {
+      throw Object.assign(new Error('EIO'), { code: 'EIO' });
+    },
     readdir() {
       throw Object.assign(new Error('EIO'), { code: 'EIO' });
     },
@@ -361,11 +376,57 @@ test('accessSync resolves for an existing path, throws ENOENT otherwise', () => 
   expect(() => shim.accessSync('/workspace/missing.txt')).toThrow(/ENOENT/);
 });
 
-test('lstatSync mirrors statSync (no symlinks in the sync model)', () => {
-  const shim = createSyncFsBridge(cache([textEntry('/workspace/f.txt', 'hello')]), '/workspace');
-  const s = shim.lstatSync('/workspace/f.txt');
-  expect(s.isFile()).toBe(true);
-  expect(s.size).toBe(5);
+test('lstatSync falls back to live lstat for a bridge-only symbolic link', () => {
+  const bridge = fakeBridge(new Map());
+  bridge.lstat = () => ({
+    isFile: false,
+    isDirectory: false,
+    isSymbolicLink: true,
+    size: 7,
+  });
+  const shim = createSyncFsBridge(cache(), '/workspace', bridge);
+  const link = shim.lstatSync('/workspace/live-link');
+  expect(link.isSymbolicLink()).toBe(true);
+  expect(link.isDirectory()).toBe(false);
+  expect(link.size).toBe(7);
+});
+
+test('lstatSync reports cached symbolic links without following them', () => {
+  const shim = createSyncFsBridge(
+    cache([
+      textEntry('/workspace/target.txt', 'hello'),
+      {
+        path: '/workspace/link.txt',
+        content: new Uint8Array(),
+        isDirectory: false,
+        isSymbolicLink: true,
+        symlinkTarget: '/workspace/target.txt',
+      },
+    ]),
+    '/workspace'
+  );
+  const link = shim.lstatSync('/workspace/link.txt');
+  expect(link.isSymbolicLink()).toBe(true);
+  expect(link.isFile()).toBe(false);
+  expect(shim.statSync('/workspace/link.txt').isFile()).toBe(true);
+});
+
+test('unlinkSync removes a cached directory symlink but preserves its target', () => {
+  const syncFs = cache([
+    { path: '/workspace/target', content: new Uint8Array(), isDirectory: true },
+    textEntry('/workspace/target/keep.txt', 'hello'),
+    {
+      path: '/workspace/link',
+      content: new Uint8Array(),
+      isDirectory: false,
+      isSymbolicLink: true,
+      symlinkTarget: '/workspace/target',
+    },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace');
+  shim.unlinkSync('/workspace/link');
+  expect(shim.existsSync('/workspace/link')).toBe(false);
+  expect(shim.readFileSync('/workspace/target/keep.txt', 'utf8')).toBe('hello');
 });
 
 test('realpathSync returns the normalized absolute path when it exists', () => {
