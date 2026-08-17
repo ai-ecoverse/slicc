@@ -10,7 +10,7 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
-import { shouldSkipSessionHydration } from '../../../src/ui/wc/wc-live.js';
+import { shouldSkipSessionHydration } from '../../../src/ui/wc/wc-live-thinking-hydration.js';
 
 function fakeWindow(
   href: string,
