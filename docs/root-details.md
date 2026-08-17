@@ -45,11 +45,11 @@ Numbering matches the root checklist. Full catalog:
    handler + UI action; check all boot paths.
 9. **Origin/bridge routing** — `fetch('/api/...')` must work in thin-bridge
    mode; normalize trailing slashes.
-10. **Agent skill freshness** — shell command changes → update matching
-    `vfs-root/workspace/skills/*/SKILL.md`.
-11. **Transcript export** — fail-closed redaction; approval gate; unknown
-    errors → `transfer-corrupt`; SHA-256.
-12. **Layer import direction** — no new `ui/` imports below ui; move helpers
-    down.
-13. **Untyped string-keyed bags** — no new `Record<string, unknown>` in source;
+10. **Layer import direction** — no imports up the documented layer stack;
+    move pure helpers down.
+11. **Untyped string-keyed bags** — no new `Record<string, unknown>` in source;
     name the shape, or `// biome-ignore lint/plugin:` with a reason.
+12. **Agent skill freshness** — capability changes → update matching runtime
+    and developer `SKILL.md` files.
+13. **Transcript export** — fail-closed redaction; approval gate; unknown
+    errors → `transfer-corrupt`; SHA-256.

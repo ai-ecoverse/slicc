@@ -1,35 +1,21 @@
 # SLICC — Copilot Code Review Instructions
 
-SLICC is a browser-centric AI coding agent shipped across five runtimes — `webapp`
-(browser), `chrome-extension`, `node-server`, `swift-server`, and `ios-app` — sharing
-behavior but not code. Review changed code against these recurring blind spots, highest
-value first. Only flag a category when the surrounding code does not already handle it.
-Full catalog: `docs/review-patterns.md`.
+Review SLICC's five runtimes (`webapp`, extension, Node, Swift, iOS) against these blind
+spots. Flag only genuine risks. Full catalog: `docs/review-patterns.md`.
 
 ## 1. Error-path coverage (often Critical)
 
-External calls need bounded failure. Flag `fetch()` to external hosts without
-`AbortSignal.timeout(ms)`; e2b `Sandbox.create()` / `Sandbox.connect()` without
-`requestTimeoutMs`; API calls with no retry/backoff; and `await`/promise chains with no
-`.catch()` / `try`-`catch`. (A missing e2b timeout once caused production sandbox-start
-failures.)
+External calls need bounded failure: timeouts, retry/backoff where appropriate, and surfaced
+errors. Flag unbounded `fetch()`, E2B calls, and async work.
 
 ## 2. Cross-runtime parity (often Critical)
 
-A change to a shared feature in one runtime usually needs its peers updated — or an explicit
-note that a peer is intentionally excluded. Watch especially:
-
-- `packages/node-server/` ↔ `packages/swift-server/` — HTTP endpoints, server-side signing,
-  mount handling.
-- browser ↔ extension — VFS, mount backends, secrets, agent integration.
-
-The cloud / hosted-leader float reuses `node-server`; Cherry inherits browser behavior.
+Shared behavior needs peer updates or an explicit exclusion. Check Node ↔ Swift servers and
+browser ↔ extension, especially endpoints, signing, mounts, VFS, and secrets.
 
 ## 3. UI state preservation
 
-Flag `innerHTML = …`, `replaceChildren()`, or reflow/navigation that rebuilds DOM holding
-live UI state without first capturing and then restoring it (or persisting it to
-`localStorage` / IndexedDB).
+DOM rebuilds (`innerHTML`, `replaceChildren`, reflow) must capture and restore live state.
 
 ## 4. CDP / Chrome edge cases
 
@@ -38,46 +24,50 @@ capture. Validate the CDP target and port before trusting them; handle disconnec
 
 ## 5. Native / macOS permissions
 
-In `swift-server` / `swift-launcher` / `ios-app`, keychain, camera, microphone, and
-screen-recording access needs the matching entitlement or usage description plus a TCC check,
-and must degrade gracefully when consent is denied.
+Native protected-resource access needs entitlements/usage descriptions, TCC checks, and
+graceful denial.
 
-## 6. Test coverage
+## 6. Model metadata / provider pipeline
 
-New `src/` files need mirrored `tests/` files; changed logic needs updated tests; bug fixes
-need a regression test. CI enforces per-package coverage floors — a drop below the floor fails
-the build.
+When model IDs or provider metadata change, verify forwarding of reasoning, input, cost, and
+thinking levels through discovery, enrichment, account storage, and API effort mapping.
 
-## 7. Follower surface wiring parity (often Critical)
+## 7. Test coverage
 
-Every leader broadcast (`LeaderToFollowerMessage` / `broadcast*` in `tray-leader-sync.ts`)
-needs a matching follower handler in `tray-follower-sync.ts` AND a UI action wired in
-`wc-follower.ts`. New interactive elements on leader surfaces need follower counterparts.
-Check all three boot paths (`mountWcUiLive` / `mountWcUiFollower` / `mountWcUiExtension`).
-Also flag: a fallback removed from a shared helper for a leader-only replacement, or a
-gate keyed on a float name (`isCherry`) where a capability check belongs (#1706).
-The largest empirical failure class.
+New `src/` files need mirrored tests; changed logic needs updated tests; bug fixes need a
+regression test. Do not lower coverage floors.
 
-## 8. Origin / bridge routing contract (often Major)
+## 8. Follower surface wiring parity (often Critical)
 
-In thin-bridge mode the UI runs on the hosted origin while `/api/` lives on the local
-bridge. Flag `fetch('/api/...')` that assumes same-origin, hard-coded origin strings, and
-origin comparisons without trailing-slash normalization. 15 call-site fixes across ~9 PRs.
+Leader broadcasts need follower handlers and UI actions. Check live, follower, and extension
+boot paths; preserve shared fallbacks and prefer capability checks over float names.
 
-## Severity
+## 9. Origin / bridge routing contract (often Major)
 
-🔴 Critical = likely production issue · 🟡 Major = bites in a specific scenario ·
-🔵 Minor = quality / consistency. Stay high-signal; prefer no comment over a speculative one.
-
-## 9. Transcript export — redaction boundary (Critical)
-
-- Fail-closed: redactor failure → abort with `redaction-unavailable`, never emit raw.
-- `privacy.reasoningExcluded` must always be `true`.
-- Follower/Cherry paths must call `openTranscriptExportApproval()`; approval is one-time.
-- Unknown follower error codes and SHA-256 mismatches → `transfer-corrupt`.
+Thin-bridge UI and API origins differ. Flag same-origin `/api/` assumptions, hard-coded
+origins, and comparisons without slash normalization.
 
 ## 10. Layer import direction (Major)
 
-Stack: `fs → shell/git → cdp → tools → core → scoops → ui`. Flag new imports up
-the stack (`cdp/` → `scoops/`, any layer → `ui/`) — even types or pure helpers;
-move the helper down. Flag growth of `layer-back-edge-baseline.json`.
+Stack: `fs → shell/git → cdp → tools → core → scoops → ui`. Flag imports up the stack,
+even types or pure helpers; move helpers down. Never grow the back-edge baseline.
+
+## 11. Untyped string-keyed bags
+
+Flag new `Record<string, unknown>` in source when the shape is known. Require a named type,
+boundary validation, or a justified Biome suppression; never grow the frozen baseline.
+
+## 12. Agent skill freshness
+
+Capability, command, argument, or workflow changes must update the matching runtime and
+developer `SKILL.md` files. Run the skill-router and any specialized sync check.
+
+## 13. Transcript export — redaction boundary (Critical)
+
+Require fail-closed redaction, `reasoningExcluded: true`, one-time reachable approval, binary
+integrity, and `transfer-corrupt` for unknown errors or SHA-256 mismatches.
+
+## Severity
+
+🔴 Critical = likely production issue · 🟡 Major = scenario-specific · 🔵 Minor = quality.
+Stay high-signal; prefer no comment over a speculative one.

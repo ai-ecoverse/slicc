@@ -338,7 +338,28 @@ occurrence not in the frozen baseline; the baseline is a one-way ratchet — shr
 grow it. Touching a baselined file obliges you to clear that file
 (`check-touched-exemptions.mjs`).
 
-## Transcript export — redaction boundary and protocol parity
+### 12. Agent skill freshness
+
+**Trigger patterns**
+
+- A shell command, tool, provider, approval flow, or runtime capability changes without the
+  matching agent-facing `packages/vfs-root/workspace/skills/*/SKILL.md` update.
+- New command arguments, flags, aliases, or output semantics are absent from the skill that
+  teaches agents how to invoke the command.
+- A developer workflow changes without updating the matching `.agents/skills/*/SKILL.md`
+  procedure and its `.claude/skills/` discovery alias.
+
+**Historical precedent** — **PR #1130** aligned SLICC's `playwright-cli` with the official
+CLI, closing 39 command gaps and refreshing the runtime skill with the newly supported
+commands. Its sync script detects command-surface drift; the skill update keeps that surface
+usable by agents after it lands.
+
+**Remediation** — follow the cross-reference checklist in
+[adding-slicc-features](../.agents/skills/adding-slicc-features/SKILL.md): update the matching
+runtime and developer skills in the same PR, run `npm run lint:skill-router`, and run the
+specialized sync check (such as `playwright-cli-sync.mjs`) when one exists.
+
+### 13. Transcript export — redaction boundary and protocol parity
 
 Changes to export-service, redaction logic, or the Cherry/follower export protocol.
 
