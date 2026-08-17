@@ -4,25 +4,10 @@
 
 import { describe, expect, it } from 'vitest';
 import {
-  escapeHtml,
   renderAssistantMessageContent,
   renderMessageContent,
   renderToolInput,
 } from '../../src/ui/message-renderer.js';
-
-describe('escapeHtml', () => {
-  it('escapes HTML special characters', () => {
-    expect(escapeHtml('<div class="foo">&')).toBe('&lt;div class=&quot;foo&quot;&gt;&amp;');
-  });
-
-  it('escapes single quotes', () => {
-    expect(escapeHtml("it's")).toBe('it&#x27;s');
-  });
-
-  it('returns empty string for empty input', () => {
-    expect(escapeHtml('')).toBe('');
-  });
-});
 
 describe('renderMessageContent', () => {
   it('renders plain text', () => {

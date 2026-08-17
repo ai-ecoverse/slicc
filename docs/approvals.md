@@ -422,7 +422,7 @@ Two gesture paths:
   microtask that resolution schedules, which is still the same task as the
   keydown, so the activation carries through.
 - **Agent-driven** — the `mount` shell command (run via `bash`) renders a Tool
-  UI approval card in chat (`packages/webapp/src/tools/tool-ui.ts`). The
+  UI approval card in chat (`packages/webapp/src/shell/tool-ui.ts`). The
   user's click is the gesture; the click handler then calls the picker.
 
 In the **extension**, the picker additionally routes through the shared
@@ -465,9 +465,10 @@ hosted-leader float.
 
 ### Authoring agent-driven approval UI
 
-`packages/webapp/src/tools/tool-ui.ts` exposes the shared "show HTML, await
+`packages/webapp/src/shell/tool-ui.ts` exposes the shared "show HTML, await
 user click" primitive that agent-driven commands use to acquire a gesture in
-chat. See the [`adding-slicc-features` skill §14](../.agents/skills/adding-slicc-features/SKILL.md#14-add-interactive-tool-ui-approval-dialogs-forms)
+chat; `packages/webapp/src/tools/tool-ui.ts` is its compatibility re-export.
+See the [`adding-slicc-features` skill §14](../.agents/skills/adding-slicc-features/SKILL.md#14-add-interactive-tool-ui-approval-dialogs-forms)
 for the API and HTML conventions.
 
 ### Files

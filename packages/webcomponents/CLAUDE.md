@@ -24,7 +24,7 @@ tests/**/<name>.test.ts    co-located browser tests, mirroring src/ subsystem
 Non-obvious invariants:
 
 - **`SliccPanel` is light-DOM**; shared stylesheet keys on a `data-slicc-panel` marker (must cover runtime-registered subclasses). **Panels default VISIBLE** (opposite of `<slicc-surface>`).
-- **DOM-free metadata subpath** `@slicc/webcomponents/panel/meta` is safe for webapp + kernel worker; barrel is not (needs `CSSStyleSheet`).
+- **DOM-free subpaths** `@slicc/webcomponents/panel/meta` and `@slicc/webcomponents/internal/html` are safe for webapp + kernel worker; barrel is not (needs `CSSStyleSheet`).
 - **Layout schema** — `docks[]` (fixed chrome pinned to an edge at exact size; fr-only zones can't say `"44px"`) + `zones` (five BorderLayout regions, `ZoneName`: top/left/center/right/bottom); variants REPLACE a section, `panels` overrides merge per id.
 - **Slot pitfall — overlays + pointer capture live on the HOST, not a slot**: slots rebuild every render; a captured element removed from the DOM loses capture per spec.
 - **`<slicc-layout>` parks unplaced panels offstage** (not destroyed), preserving scroll / live terminal session across variant switches. Re-resolves on HOST resize (not window), rAF-debounced. Rebuilds target a stable inner root (replacing the host's own children re-enters its `MutationObserver`).

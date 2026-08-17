@@ -128,7 +128,6 @@
   "packages/webapp/src/shell/supplemental-commands/lick-surface.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/mcp-command.ts": 10,
   "packages/webapp/src/shell/supplemental-commands/open-command.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/picker-approval.ts": 3,
   "packages/webapp/src/shell/supplemental-commands/picker-popup.ts": 3,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/console.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/cookies.ts": 4,

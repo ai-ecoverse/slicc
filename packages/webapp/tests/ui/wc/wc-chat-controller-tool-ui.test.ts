@@ -119,6 +119,23 @@ describe('WcChatController tool_ui handling', () => {
     });
   });
 
+  it('escapes apostrophes in read-only tool UI titles', () => {
+    controller.dispose();
+    controller = new WcChatController({ thread, agent, readOnlyToolUi: true });
+
+    agent.emit({
+      type: 'tool_ui',
+      messageId: 'm1',
+      toolName: 'mount',
+      requestId: 'tool-ui-read-only',
+      html: `<div class="sprinkle-action-card__header">Owner's approval<span class="sprinkle-badge">approval</span></div>`,
+    });
+
+    const [, html] = dipMocks.mount.mock.calls[0];
+    expect(html).toContain('Owner&#39;s approval');
+    expect(html).not.toContain("Owner's approval");
+  });
+
   it('forwards dip licks to onToolUiAction with the originating requestId', () => {
     agent.emit({
       type: 'tool_ui',
