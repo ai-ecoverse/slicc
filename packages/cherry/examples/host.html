@@ -141,6 +141,20 @@
         <span class="hint">Paste a SliccTheme object (id, name, base, tokens, css?, components?).</span>
       </div>
       <div class="row">
+        <label for="flagsJson">flags JSON</label>
+        <textarea
+          id="flagsJson"
+          rows="2"
+          style="flex:1;min-width:280px;font-family:ui-monospace,monospace;font-size:12px;"
+          placeholder='{"panel-layouts":"on"}'
+        ></textarea>
+        <span class="hint"
+          >Session-only feature-flag overrides for this embed — e.g. turn on
+          <code>panel-layouts</code> so a pasted panel-shaped layout JSON below (a
+          <code>LayoutDocument</code> with `base`, not a DockTreeSpec) actually applies.</span
+        >
+      </div>
+      <div class="row">
         <label for="layoutJson">layout JSON</label>
         <textarea
           id="layoutJson"
@@ -149,9 +163,12 @@
           placeholder='{"zones":{"top":null,"left":{"type":"leaf","surfaceId":"chat"},"middle":null,"right":null,"bottom":null},"rowFr":{"top":1,"center":1,"bottom":1},"colFr":{"left":1,"middle":1,"right":1},"locked":true}'
         ></textarea>
         <span class="hint"
-          >Paste a DockTreeSpec (see `@slicc/webcomponents`' `slicc-dock-tree.ts`). Set
-          <code>locked: true</code> so the follower can't drag/resize/close it. Applied once at
-          mount, in place of the follower's own persisted/default layout.</span
+          >Paste EITHER shape: a DockTreeSpec (`zones`, above) or, with
+          <code>panel-layouts</code> on via the flags field, a panel-system
+          <code>LayoutDocument</code> (`{"version":1,"id":"...","base":{"docks":[...],"zones":{...}}}`
+          — see `docs/layouts.md`). Set <code>locked: true</code> so the follower can't
+          drag/resize/close it. Applied once at mount, in place of the follower's own
+          persisted/default layout.</span
         >
       </div>
       <div class="row">
@@ -348,8 +365,18 @@
             log('layout JSON is invalid — ignoring:', err.message);
           }
         }
+        let flags;
+        const flagsRaw = document.getElementById('flagsJson').value.trim();
+        if (flagsRaw) {
+          try {
+            flags = JSON.parse(flagsRaw);
+          } catch (err) {
+            log('flags JSON is invalid — ignoring:', err.message);
+          }
+        }
         log('features', features);
         if (theme) log('theme', theme.name || theme.id || '(custom)');
+        if (flags) log('flags', flags);
         if (layout) log('layout', layout);
         handle = mountSlicc({
           container: document.getElementById('mount'),
@@ -357,6 +384,7 @@
           capabilities: { navigate: true, screenshot, openUrl: true },
           features,
           theme,
+          flags,
           layout,
           joinToken,
           hooks: {

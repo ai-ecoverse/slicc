@@ -431,10 +431,17 @@ A saved document of the same name SHADOWS the shipped one, so saving your own
 `show`/`hide` edit the **document**, not the element's `hidden` attribute, so the
 change survives the next re-render and is saveable.
 
-Dock-tree verbs (`set`/`chat`/`open`/`close`/`move`/`size`/`reset`/`edit`) target
-the older engine and are documented in
-[`shell-reference.md`](shell-reference.md); against a panel layout they report
-which verbs to use instead rather than silently doing nothing.
+Of the dock-tree verbs (`set`/`chat`/`open`/`close`/`move`/`size`/`reset`/`edit`,
+documented in [`shell-reference.md`](shell-reference.md)), `chat`/`open`/`close`/
+`move` bridge transparently onto the panel system: `open`/`chat` reuse the same
+`setPanelVisible` the add-panel menu uses (defaulting an unplaced panel to the
+`right` zone), then move it to whichever zone was requested; `close` hides rather
+than destroys. This is what lets an experiment type's existing `layout open
+sprinkle:<name> <zone>` calls — the established way every runner opens a
+dynamically-created sprinkle — keep working once panel-layouts is on. Only
+`set`/`size`/`reset` have no panel-system equivalent (a different dock-tree
+TEMPLATE, and a dock-tree-specific pixel/percent surface size respectively) and
+report which verbs to use instead rather than silently doing nothing.
 
 ## The dock-tree (current default)
 

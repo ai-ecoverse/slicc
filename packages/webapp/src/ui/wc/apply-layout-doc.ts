@@ -1,6 +1,8 @@
 /**
  * `apply-layout-doc.ts` — the page-side handler for the layout-DOCUMENT verbs
- * (`load`/`save`/`delete`/`docs`/`panels`/`show`/`hide`).
+ * (`load`/`save`/`delete`/`docs`/`panels`/`show`/`hide`), plus a bridge for the
+ * four dock-tree verbs (`open`/`close`/`move`/`chat`) that still express the same
+ * intent against a panel layout.
  *
  * Split from `apply-layout.ts`, which handles the dock-tree verbs against the
  * older `WcSprinkleZone`: these operate on a `<slicc-layout>` plus the VFS and the
@@ -12,9 +14,17 @@
  * registry, or the arrangement currently on screen.
  */
 
-import { type LayoutDocument, listPanels, type SliccLayout } from '@slicc/webcomponents';
+import {
+  type LayoutDocument,
+  listPanels,
+  type SliccLayout,
+  type ZoneName,
+} from '@slicc/webcomponents';
 import { createLogger } from '../../base/logger.js';
+import type { DockZoneName } from '../../core/dock-tree-spec.js';
 import type { VirtualFS } from '../../fs/index.js';
+import type { LayoutApplyMsg } from '../../shell/supplemental-commands/layout-command.js';
+import { PANEL_IDS } from './builtin-panels.js';
 import { getLayoutDoc, layoutDocNames } from './default-layouts.js';
 import { deleteLayout, listLayouts, loadLayoutByName, writeLayout } from './layout-store.js';
 import { setPanelVisible } from './panel-visibility.js';
@@ -57,6 +67,50 @@ function noFs(verb: string): LayoutDocResult {
 /** Whether a message is one of the document verbs (vs. a dock-tree verb). */
 export function isLayoutDocMsg(msg: { kind: string }): msg is LayoutDocMsg {
   return ['load', 'save', 'delete', 'docs', 'panels', 'show', 'hide'].includes(msg.kind);
+}
+
+/** The four dock-tree verbs {@link applyLegacyLayoutMsg} can bridge onto a panel layout. */
+type LegacyBridgeMsg = Extract<LayoutApplyMsg, { kind: 'open' | 'close' | 'move' | 'chat' }>;
+
+/** Whether a message is one of the dock-tree verbs {@link applyLegacyLayoutMsg} bridges. */
+export function isBridgeableLegacyMsg(msg: { kind: string }): msg is LegacyBridgeMsg {
+  return ['open', 'close', 'move', 'chat'].includes(msg.kind);
+}
+
+/** Dock-tree zone name → panel-system zone name. Every word matches except `middle`/`center`. */
+function toPanelZone(zone: DockZoneName): ZoneName {
+  return zone === 'middle' ? 'center' : zone;
+}
+
+/**
+ * Bridge the four dock-tree verbs an agent's `layout` shell command already
+ * speaks onto the panel-system's equivalent primitives, so a sprinkle created
+ * and opened mid-session (the established pattern across every experiment
+ * type — see e.g. `vfs-root/workspace/skills/sprinkles/SKILL.md`) lands the
+ * same way whether the follower is on the dock-tree or panel layouts.
+ *
+ * `open`/`chat` reuse `setPanelVisible` (the same primitive the add-panel menu
+ * uses), which places a not-yet-placed panel into the `right` zone by default,
+ * then `applyMove` corrects it to whichever zone the caller actually asked for.
+ * `close` hides rather than destroys, matching "unplaced panels are parked,
+ * not destroyed" elsewhere in the panel system.
+ */
+export function applyLegacyLayoutMsg(deps: LayoutDocDeps, msg: LegacyBridgeMsg): LayoutDocResult {
+  switch (msg.kind) {
+    case 'open':
+      setPanelVisible(deps.layout, msg.surfaceId, true);
+      deps.layout.applyMove(msg.surfaceId, toPanelZone(msg.zone));
+      return { applied: true };
+    case 'close':
+      setPanelVisible(deps.layout, msg.surfaceId, false);
+      return { applied: true };
+    case 'move':
+      deps.layout.applyMove(msg.surfaceId, toPanelZone(msg.zone));
+      return { applied: true };
+    case 'chat':
+      deps.layout.applyMove(PANEL_IDS.chat, toPanelZone(msg.zone));
+      return { applied: true };
+  }
 }
 
 /**

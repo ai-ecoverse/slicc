@@ -23,6 +23,7 @@ import {
   getLayoutDoc,
   layoutDocNames,
 } from '../../../src/ui/wc/default-layouts.js';
+import { getLayoutApplier } from '../../../src/ui/wc/layout-apply-registry.js';
 import { PANEL_LAYOUT_STORAGE_KEY, panelizeShell } from '../../../src/ui/wc/panelize-shell.js';
 import { buildTrustedLayers } from '../../../src/ui/wc/trusted-layer.js';
 import type { WcShellRefs } from '../../../src/ui/wc/wc-shell.js';
@@ -400,6 +401,57 @@ describe('panelizeShell', () => {
       const { getPanel } = await import('@slicc/webcomponents/panel/registry');
       expect(getPanel('sprinkle:weather')).toBeUndefined();
       expect(result?.panels.has('sprinkle:weather')).toBe(false);
+    });
+  });
+
+  describe('layout-apply bridge (open/close/move/chat under panel-layouts)', () => {
+    // These four verbs are how every experiment type already opens and moves a
+    // dynamically-created sprinkle over the `layout` shell command — this bridge
+    // is what makes that keep working once a float panelizes.
+    it('open re-places a hidden panel into the requested zone, not the default', () => {
+      const refs = makeShellRefs();
+      const result = panelizeShell(refs);
+      result?.hostSprinkleSurface('sprinkle:weather', document.createElement('slicc-surface'));
+      // Hosting places it in the default `right` zone; hide it so `open` has to
+      // both re-show AND move it, exercising both halves of the bridge.
+      getLayoutApplier()?.({ kind: 'close', surfaceId: 'sprinkle:weather' });
+      expect(result?.layout.getLayout().panels?.['sprinkle:weather']?.visible).toBe(false);
+
+      const applied = getLayoutApplier()?.({
+        kind: 'open',
+        surfaceId: 'sprinkle:weather',
+        zone: 'left',
+      });
+
+      expect(applied).toEqual({ applied: true });
+      expect(result?.layout.getLayout().panels?.['sprinkle:weather']?.visible).toBe(true);
+      const resolved = result?.layout.getResolved();
+      expect(resolved?.zones?.left).toContain('sprinkle:weather');
+      expect(resolved?.zones?.right).not.toContain('sprinkle:weather');
+    });
+
+    it('move relocates an already-placed panel to a new zone', () => {
+      const refs = makeShellRefs();
+      const result = panelizeShell(refs);
+      result?.hostSprinkleSurface('sprinkle:weather', document.createElement('slicc-surface'));
+
+      getLayoutApplier()?.({ kind: 'move', surfaceId: 'sprinkle:weather', zone: 'bottom' });
+
+      expect(result?.layout.getResolved()?.zones?.bottom).toContain('sprinkle:weather');
+    });
+
+    it('chat maps the dock-tree\'s "middle" zone name onto the panel system\'s "center"', () => {
+      const refs = panelizeShell(makeShellRefs());
+
+      getLayoutApplier()?.({ kind: 'chat', zone: 'middle' });
+
+      expect(refs?.layout.getResolved()?.zones?.center).toContain(PANEL_IDS.chat);
+    });
+
+    it('reports no panel-system equivalent for set/size/reset instead of silently no-op-ing', () => {
+      panelizeShell(makeShellRefs());
+
+      expect(getLayoutApplier()?.({ kind: 'reset' })).toMatchObject({ applied: false });
     });
   });
 

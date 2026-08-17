@@ -44,7 +44,12 @@ import { registerPanel, unregisterPanel } from '@slicc/webcomponents/panel/regis
 import { createLogger } from '../../base/logger.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { createAddPanelMenu } from './add-panel-menu.js';
-import { applyLayoutDoc, isLayoutDocMsg } from './apply-layout-doc.js';
+import {
+  applyLayoutDoc,
+  applyLegacyLayoutMsg,
+  isBridgeableLegacyMsg,
+  isLayoutDocMsg,
+} from './apply-layout-doc.js';
 import {
   PANEL_IDS,
   registerBuiltinPanels,
@@ -506,12 +511,19 @@ export function panelizeShell(
   // immediately finds a rendered layout rather than an empty one.
   setLayoutApplier((msg) => {
     if (isLayoutDocMsg(msg)) return applyLayoutDoc({ layout, fs }, msg);
-    // The dock-tree verbs (`set`/`open`/`size`/…) have no meaning against a
-    // panel layout — they address zones and surfaces this engine doesn't have.
+    // `open`/`close`/`move`/`chat` are how every experiment type already opens
+    // and moves a dynamically-created sprinkle — bridge them onto the panel
+    // system's equivalent zone operations instead of making every agent learn
+    // a second vocabulary. Only `set`/`size`/`reset` have no panel-system
+    // equivalent: `set`/`reset` swap in a different dock-tree TEMPLATE (there's
+    // no analogous concept once an embedder's locked document owns the
+    // arrangement), and `size` addresses a dock-tree-specific pixel/percent
+    // surface size the panel system expresses differently (per-zone weights).
     // Report that plainly instead of silently doing nothing.
+    if (isBridgeableLegacyMsg(msg)) return applyLegacyLayoutMsg({ layout, fs }, msg);
     return {
       applied: false,
-      error: `"${msg.kind}" targets the old dock-tree; with panels use: load, save, show, hide, docs, panels`,
+      error: `"${msg.kind}" has no panel-system equivalent; with panels use: load, save, show, hide, docs, panels`,
     };
   });
 
