@@ -40,6 +40,7 @@ import type { SupplementalCommandsConfig } from './supplemental-commands/index.j
 
 type BrowserAPI = NonNullable<SupplementalCommandsConfig['browserAPI']>;
 
+import { createLogger } from '../base/logger.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { MountCommands } from '../fs/mount-commands.js';
 import { FsError } from '../fs/types.js';
@@ -48,6 +49,7 @@ import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js'
 import { getRegisteredProviderConfig } from '../providers/index.js';
 import type { SudoBroker } from '../sudo/types.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
+import { DEFAULT_HOME_DIR, resolveHomeDir, userFromHome } from './home-dir.js';
 import type { JshDiscoveryFS } from './jsh-discovery.js';
 import type { JshProcessConfig } from './jsh-executor.js';
 import { executeJsCode, executeJshFile } from './jsh-executor.js';
@@ -222,6 +224,8 @@ type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
 // Class
 // ---------------------------------------------------------------------------
 
+const log = createLogger('almost-bash-shell');
+
 export class AlmostBashShellHeadless implements HeadlessShellLike {
   protected bash: Bash;
   protected vfsAdapter: VfsAdapter;
@@ -318,18 +322,32 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     return new Set(options.allowedCommands);
   }
 
-  constructor(protected options: HeadlessShellOptions) {
-    this.vfsAdapter = new VfsAdapter(options.fs);
-    this.allowedCommands = AlmostBashShellHeadless.buildAllowedCommandSet(options);
-    const initialCwd = options.cwd ?? '/';
-    const initialEnv: Record<string, string> = {
-      HOME: '/',
+  /**
+   * The pre-init environment. HOME here is a synchronous placeholder: the
+   * real value is resolved from `/home` (or taken from `options.env.HOME`)
+   * in `initHomeAndProfile`, which the first command awaits via the same
+   * gate as the `.jsh` scan (#2084) — so no user-visible command ever sees
+   * the placeholder.
+   */
+  private static buildInitialEnv(
+    options: HeadlessShellOptions,
+    initialCwd: string
+  ): Record<string, string> {
+    return {
+      HOME: DEFAULT_HOME_DIR,
       PATH: '/usr/bin',
       USER: 'user',
       SHELL: '/bin/bash',
       PWD: initialCwd,
       ...options.env,
     };
+  }
+
+  constructor(protected options: HeadlessShellOptions) {
+    this.vfsAdapter = new VfsAdapter(options.fs);
+    this.allowedCommands = AlmostBashShellHeadless.buildAllowedCommandSet(options);
+    const initialCwd = options.cwd ?? '/';
+    const initialEnv = AlmostBashShellHeadless.buildInitialEnv(options, initialCwd);
 
     this.gitCommands = new GitCommands({
       fs: options.fs,
@@ -629,11 +647,60 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * not leave the next one racing the scan again.
    */
   private startInitialJshSync(): void {
-    this.initialJshSync = this.syncJshCommands()
+    this.initialJshSync = this.initHomeAndProfile()
+      .then(() => this.syncJshCommands())
       .catch(() => undefined)
       .finally(() => {
         this.initialJshSync = null;
       });
+  }
+
+  /**
+   * Make `$HOME` real before the first command runs (#2085):
+   *
+   * 1. Resolve HOME from `/home` (onboarding's `/home/<slug>`), unless the
+   *    caller pinned it via `options.env.HOME` (scoops pin their per-scoop
+   *    home). `$USER` follows as `basename($HOME)` unless also pinned.
+   * 2. `mkdir -p $HOME` so `cd ~` always lands somewhere — this also
+   *    re-seeds the directory after a filesystem nuke.
+   * 3. Source `$HOME/.profile` when present. This is THE persistence
+   *    mechanism for env vars: the file lives in the OPFS-backed VFS, so
+   *    `echo 'export FOO=bar' >> ~/.profile` survives reloads and reaches
+   *    every future shell — including the per-connection tray exec shells.
+   *
+   * Runs inside the same init gate the `.jsh` scan uses, so ordering is
+   * free: the profile can `export PATH=…` and the scan that follows sees it.
+   * The cwd contract is the caller's (a scoop starts in its workspace): a
+   * `cd` inside `.profile` changes env like bash would, but the shell's
+   * working directory is restored after sourcing.
+   */
+  private async initHomeAndProfile(): Promise<void> {
+    const fs = this.options.fs;
+    try {
+      const pinnedHome = this.options.env?.HOME;
+      const home = pinnedHome ?? (await resolveHomeDir(fs));
+      this.lastEnv.HOME = home;
+      if (!this.options.env?.USER) {
+        this.lastEnv.USER = userFromHome(home);
+      }
+      await fs.mkdir(home, { recursive: true }).catch(() => undefined);
+
+      const profilePath = `${home.replace(/\/+$/, '')}/.profile`;
+      if (!(await fs.exists(profilePath).catch(() => false))) return;
+      // `.` is just-bash's `source` builtin; quoting handles slugs with
+      // shell-special characters. Errors inside the profile must not brick
+      // the shell — adopt whatever env survived and move on.
+      const result = await this.bash.exec(`. "$HOME/.profile"`, {
+        env: this.lastEnv,
+        cwd: this.cwd,
+      });
+      if (result.env) {
+        const { PWD: _ignoredPwd, ...profileEnv } = result.env;
+        this.lastEnv = { ...this.lastEnv, ...profileEnv, PWD: this.lastEnv.PWD ?? this.cwd };
+      }
+    } catch (err) {
+      log.warn('HOME/profile init failed; continuing with defaults', err);
+    }
   }
 
   private async waitForInitialJshSync(signal?: AbortSignal): Promise<void> {

@@ -481,10 +481,19 @@ export class ScoopContext {
         : this.fs!
     ) as VirtualFS;
 
+    // Non-cone scoops pin HOME to their per-scoop home (created by
+    // ensureDirectoryStructure) — it is inside their writable ACL, unlike
+    // `/home`, which their RestrictedFS cannot even see. The cone leaves
+    // HOME unset so the shell resolves onboarding's `/home/<slug>` (#2085).
+    const scoopHome = this.scoop.isCone ? undefined : `/scoops/${this.scoop.folder}/home`;
+    const shellEnv: Record<string, string> = {
+      ...(scoopHome ? { HOME: scoopHome, USER: this.scoop.folder } : {}),
+      ...secretEnv,
+    };
     this.shell = new AlmostBashShell({
       fs: gatedFs,
       cwd,
-      env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
+      env: Object.keys(shellEnv).length > 0 ? shellEnv : undefined,
       browserAPI: browser,
       webhook: {
         hasLocalNodeServer,

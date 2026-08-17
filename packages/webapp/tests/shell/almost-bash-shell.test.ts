@@ -335,6 +335,101 @@ describe('AlmostBashShell GitHub token renewal wiring', () => {
   });
 });
 
+let homeDbCounter = 0;
+
+describe('AlmostBashShell HOME and ~/.profile (#2085)', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-home-${homeDbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  it('resolves $HOME and $USER from the onboarded /home/<slug> on a cold shell', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+
+    const shell = new AlmostBashShell({ fs });
+    const result = await shell.executeCommand('echo "$HOME:$USER"');
+    expect(result.stdout.trim()).toBe('/home/lars:lars');
+
+    const cdHome = await shell.executeCommand('cd ~ && pwd');
+    expect(cdHome.stdout.trim()).toBe('/home/lars');
+  });
+
+  it('falls back to /home/user and creates it when onboarding never ran', async () => {
+    const shell = new AlmostBashShell({ fs });
+    const result = await shell.executeCommand('echo "$HOME"');
+    expect(result.stdout.trim()).toBe('/home/user');
+    // mkdir -p at init self-heals a wiped /home — `cd ~` must always land.
+    expect(await fs.exists('/home/user')).toBe(true);
+  });
+
+  it('sources ~/.profile before the first command, so exports persist', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile('/home/lars/.profile', 'export GREETING="hello from profile"');
+
+    const shell = new AlmostBashShell({ fs });
+    const first = await shell.executeCommand('echo "$GREETING"');
+    expect(first.stdout.trim()).toBe('hello from profile');
+    // ...and it survives into later commands like any exported var.
+    const second = await shell.executeCommand('echo "again: $GREETING"');
+    expect(second.stdout.trim()).toBe('again: hello from profile');
+  });
+
+  it('a broken ~/.profile must not brick the shell', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile(
+      '/home/lars/.profile',
+      'export GOOD=yes\nthis-command-does-not-exist-anywhere'
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const result = await shell.executeCommand('echo "ok $GOOD"');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('ok yes');
+  });
+
+  it('a cd inside ~/.profile does not change the contracted working directory', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.mkdir('/workspace', { recursive: true });
+    await fs.writeFile('/home/lars/.profile', 'cd /home/lars\nexport MARKER=set');
+
+    const shell = new AlmostBashShell({ fs, cwd: '/workspace' });
+    const result = await shell.executeCommand('pwd; echo "$MARKER"');
+    expect(result.stdout.trim().split('\n')).toEqual(['/workspace', 'set']);
+  });
+
+  it('an explicit env.HOME pin wins and its own ~/.profile is sourced (scoop contract)', async () => {
+    // The cone's onboarded home exists, but a pinned shell (a scoop) must
+    // stay in its own home.
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile('/scoops/research/home/.profile', 'export SCOPE=scoop');
+
+    const shell = new AlmostBashShell({
+      fs,
+      env: { HOME: '/scoops/research/home', USER: 'research' },
+    });
+    const result = await shell.executeCommand('echo "$HOME:$USER:$SCOPE"');
+    expect(result.stdout.trim()).toBe('/scoops/research/home:research:scoop');
+  });
+
+  it('picks the most recently onboarded slug when several homes exist', async () => {
+    await fs.writeFile('/home/first/.welcome.json', '{"name":"First"}');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await fs.writeFile('/home/second/.welcome.json', '{"name":"Second"}');
+
+    const shell = new AlmostBashShell({ fs });
+    const result = await shell.executeCommand('echo "$HOME"');
+    expect(result.stdout.trim()).toBe('/home/second');
+  });
+});
+
 let jshRegistrationDbCounter = 0;
 
 describe('AlmostBashShell .jsh command registration', () => {
