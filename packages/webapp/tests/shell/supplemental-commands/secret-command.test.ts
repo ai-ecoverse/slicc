@@ -35,6 +35,43 @@ function run(args: string[], deps: SecretCommandDeps, stdin = '') {
   );
 }
 
+describe('secret command — domain validation', () => {
+  it.each([
+    ['session argument without --domain', ['set', 'TOKEN', 'value'], ''],
+    ['session argument with an empty --domain', ['set', 'TOKEN', 'value', '--domain', ''], ''],
+    ['session stdin without --domain', ['set', 'TOKEN'], 'value\n'],
+    [
+      'persisted argument with no --domain value',
+      ['set', 'TOKEN', 'value', '--domain', '--persist'],
+      '',
+    ],
+    [
+      'persisted argument with a comma-only --domain',
+      ['set', 'TOKEN', 'value', '--domain', ' , ', '--persist'],
+      '',
+    ],
+  ])('rejects %s before lookup, approval, or mutation', async (_label, args, stdin) => {
+    const backend = makeBackend();
+    const broker = makeBroker({ decision: 'allow' });
+    const res = await run(args, { backend, broker: broker.broker }, stdin);
+
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('set requires --domain <patterns>');
+    expect(backend.getInfo).not.toHaveBeenCalled();
+    expect(backend.setSession).not.toHaveBeenCalled();
+    expect(backend.setPersisted).not.toHaveBeenCalled();
+    expect(backend.getMasked).not.toHaveBeenCalled();
+    expect(broker.calls()).toBe(0);
+  });
+
+  it('documents --domain as required in command help', async () => {
+    const res = await run(['--help'], { backend: makeBackend() });
+    expect(res.exitCode).toBe(0);
+    expect(res.stdout).toContain('secret set <name> <value> --domain <pat>');
+    expect(res.stdout).toContain('required --domain flag');
+  });
+});
+
 describe('secret command — session ops (no approval)', () => {
   let broker: ReturnType<typeof makeBroker>;
   beforeEach(() => {
@@ -52,6 +89,16 @@ describe('secret command — session ops (no approval)', () => {
     expect(backend.setSession).toHaveBeenCalledWith('OPENAI_KEY', 'sk-1234', ['api.openai.com']);
     expect(backend.setPersisted).not.toHaveBeenCalled();
     expect(res.stdout).toContain('not persisted');
+  });
+
+  it('accepts exact and wildcard domains', async () => {
+    const backend = makeBackend();
+    const res = await run(['set', 'TOKEN', 'value', '--domain', 'api.x.com,*.x.com'], {
+      backend,
+      broker: broker.broker,
+    });
+    expect(res.exitCode).toBe(0);
+    expect(backend.setSession).toHaveBeenCalledWith('TOKEN', 'value', ['api.x.com', '*.x.com']);
   });
 
   it('get returns the masked value + scope without prompting', async () => {
@@ -123,7 +170,10 @@ describe('secret command — gated ops', () => {
       getInfo: vi.fn(async () => ({ name: 'TOKEN', domains: ['x'], persisted: false })),
     });
     const broker = makeBroker({ decision: 'deny' });
-    const res = await run(['set', 'TOKEN', 'newval'], { backend, broker: broker.broker });
+    const res = await run(['set', 'TOKEN', 'newval', '--domain', 'api.x.com'], {
+      backend,
+      broker: broker.broker,
+    });
     expect(broker.calls()).toBe(1);
     expect(res.exitCode).toBe(1);
     expect(backend.setSession).not.toHaveBeenCalled();
@@ -185,32 +235,40 @@ describe('secret command — stdin value', () => {
 
   it('trims a single trailing \\n from stdin (echo pattern)', async () => {
     const backend = makeBackend();
-    await run(['set', 'K'], { backend, broker: broker.broker }, 'value\n');
-    expect(backend.setSession).toHaveBeenCalledWith('K', 'value', []);
+    await run(['set', 'K', '--domain', 'api.x.com'], { backend, broker: broker.broker }, 'value\n');
+    expect(backend.setSession).toHaveBeenCalledWith('K', 'value', ['api.x.com']);
   });
 
   it('trims a single trailing \\r\\n from stdin', async () => {
     const backend = makeBackend();
-    await run(['set', 'K'], { backend, broker: broker.broker }, 'value\r\n');
-    expect(backend.setSession).toHaveBeenCalledWith('K', 'value', []);
+    await run(
+      ['set', 'K', '--domain', 'api.x.com'],
+      { backend, broker: broker.broker },
+      'value\r\n'
+    );
+    expect(backend.setSession).toHaveBeenCalledWith('K', 'value', ['api.x.com']);
   });
 
   it('does not trim when stdin has no trailing newline (printf %s pattern)', async () => {
     const backend = makeBackend();
-    await run(['set', 'K'], { backend, broker: broker.broker }, 'value');
-    expect(backend.setSession).toHaveBeenCalledWith('K', 'value', []);
+    await run(['set', 'K', '--domain', 'api.x.com'], { backend, broker: broker.broker }, 'value');
+    expect(backend.setSession).toHaveBeenCalledWith('K', 'value', ['api.x.com']);
   });
 
   it('preserves embedded newlines, only trimming the final one', async () => {
     const backend = makeBackend();
-    await run(['set', 'K'], { backend, broker: broker.broker }, 'line1\nline2\n');
-    expect(backend.setSession).toHaveBeenCalledWith('K', 'line1\nline2', []);
+    await run(
+      ['set', 'K', '--domain', 'api.x.com'],
+      { backend, broker: broker.broker },
+      'line1\nline2\n'
+    );
+    expect(backend.setSession).toHaveBeenCalledWith('K', 'line1\nline2', ['api.x.com']);
   });
 
   it('errors when both arg and stdin are provided', async () => {
     const backend = makeBackend();
     const res = await run(
-      ['set', 'K', 'arg-value'],
+      ['set', 'K', 'arg-value', '--domain', 'api.x.com'],
       { backend, broker: broker.broker },
       'stdin-value\n'
     );
@@ -222,7 +280,11 @@ describe('secret command — stdin value', () => {
 
   it('errors when no value is provided (no arg, empty stdin)', async () => {
     const backend = makeBackend();
-    const res = await run(['set', 'K'], { backend, broker: broker.broker }, '');
+    const res = await run(
+      ['set', 'K', '--domain', 'api.x.com'],
+      { backend, broker: broker.broker },
+      ''
+    );
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain('requires a <value>');
     expect(backend.setSession).not.toHaveBeenCalled();

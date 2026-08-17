@@ -14,6 +14,28 @@ struct Secret: Sendable, Equatable {
     let domains: [String]
 }
 
+/// Injectable persisted-secret access. Production uses Keychain; tests can
+/// supply an isolated in-memory fixture without touching real credentials.
+struct SecretStoreAccess: Sendable {
+    let loadAll: @Sendable () -> [Secret]
+    let save: @Sendable (_ name: String, _ value: String, _ domains: [String]) throws -> Void
+    let remove: @Sendable (_ name: String) throws -> Void
+
+    func get(name: String) -> Secret? {
+        loadAll().first(where: { $0.name == name })
+    }
+
+    func list() -> [SecretEntry] {
+        loadAll().map { SecretEntry(name: $0.name, domains: $0.domains) }
+    }
+
+    static let keychain = SecretStoreAccess(
+        loadAll: { SecretStore.all() },
+        save: { name, value, domains in try SecretStore.set(name: name, value: value, domains: domains) },
+        remove: { name in try SecretStore.delete(name: name) }
+    )
+}
+
 enum SecretStoreError: Error, Sendable, Equatable {
     case emptyDomains
     case keychainError(status: Int32)

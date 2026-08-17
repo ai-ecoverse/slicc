@@ -258,9 +258,9 @@ func registerAPIRoutes(
         )
     }
 
-    // Secret management API — direct Keychain access (no browser needed)
+    // Secret management API — injected persisted access (Keychain in production)
     router.get("/api/secrets") { _, _ in
-        let entries = SecretStore.list()
+        let entries = secretInjector.persistedStore.list()
         let items: [LickSystem.JSONValue] = entries.map { entry in
             .object([
                 "name": .string(entry.name),
@@ -270,31 +270,7 @@ func registerAPIRoutes(
         return try jsonResponse(.array(items))
     }
 
-    // Persisted delete — remove a named secret (and its _DOMAINS companion)
-    // from the Keychain blob and reload the masking pipeline so the change
-    // takes effect without a restart. 404 when no secret with that name
-    // exists. Mirrors `DELETE /api/secrets/:name` in node-server.
-    router.delete("/api/secrets/:name") { _, context in
-        let name = context.parameters.get("name") ?? ""
-        guard !name.isEmpty else {
-            return try jsonErrorResponse(status: .badRequest, message: "Missing required field: name")
-        }
-        guard SecretStore.get(name: name) != nil else {
-            return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
-        }
-        do {
-            try SecretStore.delete(name: name)
-        } catch {
-            return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
-        }
-        await secretInjector.reload()
-        return try jsonResponse(
-            .object([
-                "ok": .bool(true),
-                "name": .string(name),
-                "fromSession": .bool(false),
-            ]))
-    }
+    SessionSecretAPIRoutes.register(router: router, injector: secretInjector)
 
     // Masked secrets endpoint — returns name + maskedValue + domains for shell env population.
     // The browser fetches this at shell init to populate env vars with masked values.
@@ -597,6 +573,139 @@ private struct ScrubPayload: Decodable {
     let text: String?
 }
 
+private struct SessionSecretPayload: Decodable {
+    let name: String?
+    let value: String?
+    let domains: [String]?
+
+    private enum CodingKeys: String, CodingKey {
+        case name, value, domains
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.name = try container.decodeIfPresent(String.self, forKey: .name)
+        self.value = try container.decodeIfPresent(String.self, forKey: .value)
+        self.domains = container.contains(.domains) ? try container.decode([String].self, forKey: .domains) : nil
+    }
+}
+
+private struct SecretScopePayload: Decodable {
+    let name: String?
+    let domains: [String]?
+}
+
+private enum SessionSecretAPIRoutes {
+    static func register(router: Router<some RequestContext>, injector: SecretInjector) {
+        registerDelete(router: router, injector: injector)
+        registerSession(router: router, injector: injector)
+        registerPeek(router: router, injector: injector)
+        registerScope(router: router, injector: injector)
+    }
+
+    private static func registerDelete(router: Router<some RequestContext>, injector: SecretInjector) {
+        router.delete("/api/secrets/:name") { _, context in
+            let name = context.parameters.get("name") ?? ""
+            guard !name.isEmpty else {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            if await injector.sessionStore.delete(name: name) {
+                await injector.reload()
+                return try deleteResponse(name: name, fromSession: true)
+            }
+            guard injector.persistedStore.get(name: name) != nil else {
+                return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
+            }
+            do {
+                try injector.persistedStore.remove(name)
+            } catch {
+                return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
+            }
+            await injector.reload()
+            return try deleteResponse(name: name, fromSession: false)
+        }
+    }
+
+    private static func registerSession(router: Router<some RequestContext>, injector: SecretInjector) {
+        router.get("/api/secrets/session") { _, _ in
+            let entries = await injector.sessionStore.list()
+            return try jsonResponse(
+                .array(
+                    entries.map { entry in
+                        .object([
+                            "name": .string(entry.name),
+                            "domains": .array(entry.domains.map { .string($0) }),
+                        ])
+                    }))
+        }
+        router.post("/api/secrets/session") { request, _ in
+            let payload: SessionSecretPayload
+            do {
+                payload = try decodeJSON(from: try await collectBody(from: request), as: SessionSecretPayload.self)
+            } catch {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            guard let name = payload.name, let value = payload.value else {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            await injector.sessionStore.set(name: name, value: value, domains: payload.domains ?? [])
+            await injector.reload()
+            return try jsonResponse(.object(["ok": .bool(true)]))
+        }
+    }
+
+    private static func registerPeek(router: Router<some RequestContext>, injector: SecretInjector) {
+        router.get("/api/secrets/peek") { request, _ in
+            let name = String(request.uri.queryParameters["name"] ?? "")
+            guard !name.isEmpty else {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            if let record = await injector.sessionStore.getRecord(name: name) {
+                return try secretPreviewResponse(name: name, value: record.value, domains: record.domains)
+            }
+            if let secret = injector.persistedStore.get(name: name) {
+                return try secretPreviewResponse(name: name, value: secret.value, domains: secret.domains)
+            }
+            return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
+        }
+    }
+
+    private static func registerScope(router: Router<some RequestContext>, injector: SecretInjector) {
+        router.post("/api/secrets/scope") { request, _ in
+            let payload: SecretScopePayload
+            do {
+                payload = try decodeJSON(from: try await collectBody(from: request), as: SecretScopePayload.self)
+            } catch {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            guard let name = payload.name, let domains = payload.domains else {
+                return try jsonErrorResponse(status: .badRequest, message: "bad-request")
+            }
+            if !((await injector.sessionStore.setDomains(name: name, domains: domains))) {
+                guard let existing = injector.persistedStore.get(name: name) else {
+                    return try jsonErrorResponse(status: .notFound, message: "no secret named \"\(name)\"")
+                }
+                do {
+                    try injector.persistedStore.save(name, existing.value, domains)
+                } catch {
+                    return try jsonErrorResponse(status: .internalServerError, message: errorMessage(error))
+                }
+            }
+            await injector.reload()
+            return try jsonResponse(.object(["ok": .bool(true)]))
+        }
+    }
+
+    private static func deleteResponse(name: String, fromSession: Bool) throws -> Response {
+        try jsonResponse(
+            .object([
+                "ok": .bool(true),
+                "name": .string(name),
+                "fromSession": .bool(fromSession),
+            ]))
+    }
+}
+
 /// Body of POST /api/secrets/redact-export. `texts` is optional so a missing
 /// key or a non-array value both surface as a 400.
 private struct RedactExportPayload: Decodable {
@@ -695,6 +804,15 @@ private func trackedTargetURL(_ request: Request, tracker: AgentActivityTracker)
 
 private func jsonStringOrNull(_ value: String?) -> LickSystem.JSONValue {
     value.map(LickSystem.JSONValue.string) ?? .null
+}
+
+private func secretPreviewResponse(name: String, value: String, domains: [String]) throws -> Response {
+    try jsonResponse(
+        .object([
+            "name": .string(name),
+            "preview": .string(previewSecret(value)),
+            "domains": .array(domains.map { .string($0) }),
+        ]))
 }
 
 private func jsonResponse(

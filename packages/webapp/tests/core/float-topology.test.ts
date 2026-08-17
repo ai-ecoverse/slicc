@@ -69,6 +69,10 @@ describe('resolveFloatTopology + hasLocalNodeServer', () => {
     setExtensionDelegateId(null);
     const { resolveSecretTopology } = await import('../../src/core/secret-topology.js');
     const { resolveFloatTopology } = await import('../../src/core/float-topology.js');
-    expect(resolveSecretTopology()).toBe(resolveFloatTopology());
+    const { resolveFloatTopology: resolveShellTopology } = await import(
+      '../../src/shell/float-topology.js'
+    );
+    expect(resolveSecretTopology()).toBe(resolveShellTopology());
+    expect(resolveFloatTopology()).toBe(resolveShellTopology());
   });
 });

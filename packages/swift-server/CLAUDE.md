@@ -69,7 +69,8 @@ When blocked AND a `--join` tray URL is given, swift-server exposes the app's CD
 - `GET /api/agent-activity` — non-OPTIONS `/api/fetch-proxy` within the 60-second window.
 - `GET /api/runtime-config`, `/api/tray-status`, `/auth/callback`, `GET|POST /api/oauth-result`, `GET|POST|DELETE /api/webhooks...`, `/api/crontasks...`.
 - `POST /api/handoff` (`Sources/Server/Handoff.swift`) — validates payload, broadcasts `navigate_event` on lick WebSocket.
-- `GET /api/secrets`, `/api/secrets/masked`, `POST /api/secrets/scrub` (via `SecretInjector.scrub(text:)`).
+- `GET /api/secrets`, `GET|POST /api/secrets/session`, `/api/secrets/masked`, `/api/secrets/peek`, `POST /api/secrets/scope`, and session-first `DELETE /api/secrets/:name`. Session records are process-memory only; persisted/OAuth records keep masking precedence on name collisions.
+- `POST /api/secrets/scrub` (via `SecretInjector.scrub(text:)`). There is intentionally no persisted `POST /api/secrets` route.
 - `POST /api/s3-sign-and-forward`, `/api/da-sign-and-forward` (`Sources/Server/SignAndForward.swift`) — S3 creds from Keychain, transient IMS bearer for DA.
 - `POST /api/sudo-approve` (`Sources/Server/SudoApprove.swift`) — native `osascript` via `Process`; loopback-only; fail-closed to `{ decision: "deny" }`.
 - `ALL /api/fetch-proxy` — HTTP verbs plus WebDAV/CalDAV `PROPFIND`, `PROPPATCH`, `MKCOL`, `MKCALENDAR`, `REPORT`, `COPY`, `MOVE`, `LOCK`, `UNLOCK`. Unknown → AsyncHTTPClient via `HTTPMethod.RAW(value:)`.
@@ -90,7 +91,7 @@ Chrome reopens previous session tabs minus the SLICC tab (dead token; `clearChro
 
 ## Secrets Architecture
 
-`OAuthSecretStore.swift` handles OAuth replicas via `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId`. Pipeline: `Sources/Keychain/SecretInjector.swift`. Masks match `@slicc/shared-ts` byte-for-byte via `Tests/CrossImplementationTests.swift`. `SecretStore.swift` reads `ai.sliccy.slicc / __envfile__` at startup via `SecItemCopyMatching`.
+`OAuthSecretStore.swift` handles OAuth replicas via `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId`. `SessionSecretStore.swift` owns process-memory session records used by the session/list/peek/scope/delete APIs. Pipeline: `Sources/Keychain/SecretInjector.swift`, which layers sessions after persisted/env/OAuth data without allowing a session collision to shadow those sources. Masks match `@slicc/shared-ts` byte-for-byte via `Tests/CrossImplementationTests.swift`. `SecretStore.swift` reads `ai.sliccy.slicc / __envfile__` at startup via `SecItemCopyMatching`.
 
 **Trust model (why the prompt recurs).** The default ACL trusts only the creating binary's cdhash; ad-hoc signatures get a new cdhash every `swift build`, re-raising the "allow access" dialog. Durable fix: `packages/dev-tools/tools/setup-dev-cert.sh` installs a stable code-signing identity so one **"Always Allow"** survives rebuilds. Identity must be **trusted** via `security add-trusted-cert -p codeSign`, not just imported. Deep-dive: [`docs/swift-server-details.md`](../../docs/swift-server-details.md).
 

@@ -383,9 +383,13 @@ describe('createBridgeSecretBackend — worker realm over panel-RPC', () => {
     await expect(createBridgeSecretBackend().peek('X')).rejects.toThrow('no such secret');
   });
 
-  it('setSession throws using the bridged error when ok is false', async () => {
-    const { calls } = stubWorkerBridge(() => ({ ok: false, error: 'denied' }));
-    await expect(createBridgeSecretBackend().setSession('X', 'v', [])).rejects.toThrow('denied');
+  it('setSession throws using a bridged structured error when ok is absent', async () => {
+    const { calls } = stubWorkerBridge(() => ({
+      error: 'malformed secrets request: secrets.session.set',
+    }));
+    await expect(createBridgeSecretBackend().setSession('X', 'v', [])).rejects.toThrow(
+      'malformed secrets request: secrets.session.set'
+    );
     expect(calls[0]).toEqual({
       type: 'secrets.session.set',
       payload: { name: 'X', value: 'v', domains: [] },

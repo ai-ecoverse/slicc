@@ -8,9 +8,12 @@
  */
 
 import { createLogger } from '../base/logger.js';
+import { isValidShellEnvName } from '../base/shell-env-name.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { resolveSecretTopology } from './secret-topology.js';
 import { callSecretsBridge } from './secrets-bridge-client.js';
+
+export { isValidShellEnvName } from '../base/shell-env-name.js';
 
 const log = createLogger('secret-env');
 
@@ -41,10 +44,6 @@ export interface MaskedSecretEntry {
  * agent runs. Without this filter every dotted credential — including
  * AWS-shaped access keys — would be shell-visible.
  */
-export function isValidShellEnvName(name: string): boolean {
-  return /^[A-Za-z_][A-Za-z0-9_]*$/.test(name);
-}
-
 /**
  * Build the shell env map from a list of masked secret entries.
  *

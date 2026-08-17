@@ -785,6 +785,9 @@ chrome.webRequest.onHeadersReceived.addListener(
 // because the observer runs here, not on the page. The flag is cached in-memory
 // and refreshed from storage at boot + on every change so the gate is live.
 const DISCOVERY_ENABLED_KEY = 'slicc_discovery_enabled';
+interface DiscoveryStorageValues {
+  [DISCOVERY_ENABLED_KEY]?: unknown;
+}
 const DISCOVERY_ALLOWED_ORIGINS = __SLICC_EXT_DEV__
   ? [...BRIDGE_ALLOWED_ORIGINS, ...BRIDGE_DEV_ORIGINS]
   : BRIDGE_ALLOWED_ORIGINS;
@@ -802,7 +805,8 @@ let discoveryEnabled = false;
 
 void chrome.storage.local
   .get(DISCOVERY_ENABLED_KEY)
-  .then((r: CdpPayload) => {
+  .then((result) => {
+    const r = result as DiscoveryStorageValues;
     discoveryEnabled = r[DISCOVERY_ENABLED_KEY] !== false;
     discoveryLoaded = true;
   })
@@ -815,7 +819,7 @@ void chrome.storage.local
 
 chrome.storage.onChanged?.addListener?.((changes, area) => {
   if (area !== 'local') return;
-  const change = (changes as Record<string, { newValue?: unknown }>)[DISCOVERY_ENABLED_KEY];
+  const change = changes[DISCOVERY_ENABLED_KEY];
   if (change) {
     discoveryEnabled = change.newValue !== false;
     discoveryLoaded = true;
@@ -875,6 +879,11 @@ type DebuggerAttachmentOwner = 'bridge' | 'legacy';
 const debuggerAttachmentOwners = new Map<number, DebuggerAttachmentOwner>();
 /** Tracks leader tray WebSockets opened on behalf of the offscreen document. */
 const traySockets = new Map<number, WebSocket>();
+
+/** Chrome debugger protocol payloads are method-defined JSON objects on the wire. */
+interface CdpPayload {
+  [key: string]: unknown;
+}
 
 async function acquireDebuggerAttachment(
   tabId: number,
@@ -1562,7 +1571,12 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
     });
     port.onMessage.addListener(async (raw) => {
       const id = (raw as { id?: unknown } | null)?.id;
-      const reply = (response: unknown): void => port.postMessage({ id, response });
+      let replied = false;
+      const reply = (response: unknown): void => {
+        if (replied) return;
+        replied = true;
+        port.postMessage({ id, response });
+      };
       let pin: { ok: boolean; reason?: string };
       try {
         pin = await pinPromise;
@@ -1577,12 +1591,15 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
         return;
       }
       const type = getMsgType(raw);
-      const handler = type === undefined ? undefined : SECRETS_HANDLERS[type];
+      const handler =
+        type !== undefined && isSecretsMessageType(type) ? SECRETS_HANDLERS[type] : undefined;
       if (!handler) {
         reply({ error: `unknown secrets type: ${type ?? 'undefined'}` });
         return;
       }
-      handler(raw, reply);
+      if (!handler(raw, reply)) {
+        reply({ error: `malformed secrets request: ${type}` });
+      }
     });
     return;
   }
@@ -1669,6 +1686,21 @@ chrome.runtime.onConnect.addListener((port) => {
 
 type SendResponse = (response?: unknown) => void;
 type SecretsHandler = (msg: unknown, sendResponse: SendResponse) => boolean;
+type SecretStringField = 'accessToken' | 'domains' | 'name' | 'providerId' | 'text' | 'value';
+type SecretStringArrayField = 'domains' | 'texts';
+type SecretsMessageType =
+  | 'secrets.delete'
+  | 'secrets.list'
+  | 'secrets.list-masked-entries'
+  | 'secrets.list-with-values-for-pipeline'
+  | 'secrets.mask-oauth-token'
+  | 'secrets.peek'
+  | 'secrets.redact-export'
+  | 'secrets.scrub-tool-result'
+  | 'secrets.session.list'
+  | 'secrets.session.set'
+  | 'secrets.set'
+  | 'secrets.set-domains';
 
 function getMsgType(msg: unknown): string | undefined {
   if (typeof msg !== 'object' || msg === null || !('type' in msg)) return undefined;
@@ -1676,15 +1708,15 @@ function getMsgType(msg: unknown): string | undefined {
   return typeof t === 'string' ? t : undefined;
 }
 
-function getStringField(msg: unknown, field: string): string | undefined {
+function getStringField(msg: unknown, field: SecretStringField): string | undefined {
   if (typeof msg !== 'object' || msg === null || !(field in msg)) return undefined;
-  const v = (msg as CdpPayload)[field];
+  const v = Reflect.get(msg, field);
   return typeof v === 'string' ? v : undefined;
 }
 
-function getStringArrayField(msg: unknown, field: string): string[] | undefined {
+function getStringArrayField(msg: unknown, field: SecretStringArrayField): string[] | undefined {
   if (typeof msg !== 'object' || msg === null || !(field in msg)) return undefined;
-  const v = (msg as CdpPayload)[field];
+  const v = Reflect.get(msg, field);
   if (!Array.isArray(v)) return undefined;
   return v.filter((d): d is string => typeof d === 'string');
 }
@@ -1714,8 +1746,8 @@ function runSecretsListMaskedEntries(_msg: unknown, sendResponse: SendResponse):
 // only masked entries (no real values), so the scrub runs here
 // against the SW-owned `SecretsPipeline`. Direction is real→masked
 // ONLY; idempotent for already-masked tokens and secret-free
-// output. Errors degrade to the input text so a transient SW issue
-// never blocks a tool result from reaching the agent loop.
+// output. Errors fail closed so unsanitized tool output never crosses
+// the extension boundary when the scrub pipeline is unavailable.
 function runSecretsScrubToolResult(msg: unknown, sendResponse: SendResponse): boolean {
   const text = getStringField(msg, 'text');
   if (text === undefined) return false;
@@ -1724,9 +1756,9 @@ function runSecretsScrubToolResult(msg: unknown, sendResponse: SendResponse): bo
       const pipeline = await buildSecretsPipeline();
       await pipeline.reload();
       sendResponse({ text: pipeline.scrubResponse(text) });
-    } catch (err) {
-      console.error('[sw] secrets.scrub-tool-result failed', err);
-      sendResponse({ text, error: errMsg(err) });
+    } catch {
+      console.error('[sw] secrets.scrub-tool-result failed');
+      sendResponse({ error: 'secret scrub failed' });
     }
   })();
   return true;
@@ -1881,14 +1913,14 @@ function runSecretsSetDomains(msg: unknown, sendResponse: SendResponse): boolean
       const all = await listSecretsWithValues(storageLocal);
       const found = all.find((e) => e.name === name);
       if (!found) {
-        sendResponse({ ok: false, error: `no secret named "${name}"` });
+        sendResponse({ ok: false, error: 'secret not found' });
         return;
       }
       await setSecret(storageLocal, name, found.value, domains);
       sendResponse({ ok: true });
-    } catch (err) {
-      console.error('[sw] secrets.set-domains failed', err);
-      sendResponse({ ok: false, error: errMsg(err) });
+    } catch {
+      console.error('[sw] secrets.set-domains failed');
+      sendResponse({ ok: false, error: 'secret scope update failed' });
     }
   })();
   return true;
@@ -1929,17 +1961,16 @@ function runSecretsMaskOauthToken(msg: unknown, sendResponse: SendResponse): boo
       // pipeline stopped emitting it). Surface it so the page side can
       // distinguish "not warm yet" from "wrote it and still missing".
       if (accessToken && domains && maskedValue === undefined) {
-        const name = `oauth.${providerId}.token`;
         // Real fault (not a cold miss): surface a reason so the page can
         // distinguish it and the give-up log isn't reason-less (#847).
-        console.warn('[sw] secrets.mask-oauth-token: entry missing after write', { name });
+        console.warn('[sw] secrets.mask-oauth-token: entry missing after write');
         sendResponse({ maskedValue: undefined, error: 'entry missing after write' });
         return;
       }
       sendResponse({ maskedValue });
-    } catch (err) {
-      console.error('[sw] secrets.mask-oauth-token failed', err);
-      sendResponse({ maskedValue: undefined, error: errMsg(err) });
+    } catch {
+      console.error('[sw] secrets.mask-oauth-token failed');
+      sendResponse({ maskedValue: undefined, error: 'OAuth token masking failed' });
     }
   })();
   return true;
@@ -1967,7 +1998,7 @@ function runSecretsRedactExport(msg: unknown, sendResponse: SendResponse): boole
   return true;
 }
 
-const SECRETS_HANDLERS: Record<string, SecretsHandler> = {
+const SECRETS_HANDLERS = {
   'secrets.list-masked-entries': runSecretsListMaskedEntries,
   'secrets.scrub-tool-result': runSecretsScrubToolResult,
   'secrets.list-with-values-for-pipeline': runSecretsListWithValuesForPipeline,
@@ -1980,13 +2011,17 @@ const SECRETS_HANDLERS: Record<string, SecretsHandler> = {
   'secrets.set-domains': runSecretsSetDomains,
   'secrets.mask-oauth-token': runSecretsMaskOauthToken,
   'secrets.redact-export': runSecretsRedactExport,
-};
+} satisfies { [Type in SecretsMessageType]: SecretsHandler };
+
+function isSecretsMessageType(type: string): type is SecretsMessageType {
+  return Object.hasOwn(SECRETS_HANDLERS, type);
+}
 
 chrome.runtime.onMessage.addListener(
   (msg: unknown, _sender: ChromeMessageSender, sendResponse: (response?: unknown) => void) => {
     const type = getMsgType(msg);
-    if (type === undefined) return false;
+    if (type === undefined || !isSecretsMessageType(type)) return false;
     const handler = SECRETS_HANDLERS[type];
-    return handler ? handler(msg, sendResponse) : false;
+    return handler(msg, sendResponse);
   }
 );

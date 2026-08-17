@@ -89,6 +89,10 @@ public final class SecretInjector: @unchecked Sendable {
     /// Secrets loaded from an env file that override/supplement Keychain secrets.
     private let _envFileSecrets: [Secret]
 
+    /// Persisted source and process-memory session source shared with the REST routes.
+    let persistedStore: SecretStoreAccess
+    let sessionStore: SessionSecretStore
+
     private let lock = NSLock()
     private nonisolated(unsafe) var _secrets: [LoadedSecret]
     private nonisolated(unsafe) var _responseScrubber: @Sendable (String) -> String
@@ -120,9 +124,15 @@ public final class SecretInjector: @unchecked Sendable {
     }
 
     /// Initialize with an explicit list of loaded secrets (for testing).
-    init(secrets: [LoadedSecret]) {
+    init(
+        secrets: [LoadedSecret],
+        persistedStore: SecretStoreAccess = .keychain,
+        sessionStore: SessionSecretStore = SessionSecretStore()
+    ) {
         self.sessionId = nil
         self._envFileSecrets = []
+        self.persistedStore = persistedStore
+        self.sessionStore = sessionStore
         self._secrets = secrets
         let pairs = secrets.map { SecretPair(realValue: $0.realValue, maskedValue: $0.maskedValue) }
         self._responseScrubber = buildScrubber(secrets: pairs)
@@ -139,9 +149,17 @@ public final class SecretInjector: @unchecked Sendable {
     /// is held weakly through the actor — the initial load completes the
     /// Keychain + env-file portion synchronously; call `reload()` (async)
     /// once the runtime is in an async context to fold in OAuth entries.
-    init(sessionId: String, envFileSecrets: [Secret] = [], oauthStore: OAuthSecretStore? = nil) {
+    init(
+        sessionId: String,
+        envFileSecrets: [Secret] = [],
+        persistedStore: SecretStoreAccess = .keychain,
+        sessionStore: SessionSecretStore = SessionSecretStore(),
+        oauthStore: OAuthSecretStore? = nil
+    ) {
         self.sessionId = sessionId
         self._envFileSecrets = envFileSecrets
+        self.persistedStore = persistedStore
+        self.sessionStore = sessionStore
         self._secrets = []
         self._responseScrubber = { $0 }
         self._oauthStore = oauthStore
@@ -213,6 +231,34 @@ public final class SecretInjector: @unchecked Sendable {
             }
         }
 
+        // Session entries are layered last but cannot shadow any persisted,
+        // env-file, or OAuth record with the same name.
+        let persistedNames = Set(loaded.map(\.name))
+        for entry in await sessionStore.listAll() where !persistedNames.contains(entry.name) {
+            if entry.value.utf16.count < minMaskableSecretLength {
+                FileHandle.standardError.write(
+                    Data(
+                        "[slicc:secrets] secret \"\(entry.name)\" not masked: value shorter than \(minMaskableSecretLength) chars\n".utf8
+                    ))
+                loaded.append(
+                    LoadedSecret(
+                        name: entry.name,
+                        realValue: entry.value,
+                        maskedValue: entry.value,
+                        domains: entry.domains,
+                        isMaskable: false
+                    ))
+                continue
+            }
+            loaded.append(
+                LoadedSecret(
+                    name: entry.name,
+                    realValue: entry.value,
+                    maskedValue: mask(sessionId: sessionId, secretName: entry.name, realValue: entry.value),
+                    domains: entry.domains
+                ))
+        }
+
         // Scrubber `pairs` are built from MASKABLE entries only — short
         // consumables have identity masking, so adding them would scrub
         // their literal real value out of arbitrary responses.
@@ -243,7 +289,7 @@ public final class SecretInjector: @unchecked Sendable {
         // SecretStore.list() followed by per-name SecretStore.get(...), which
         // re-parsed the same blob N+1 times.
         var loaded: [LoadedSecret] = []
-        for secret in SecretStore.all() {
+        for secret in persistedStore.loadAll() {
             // Mirror the TS minimum-length guard: too-short values must not
             // be registered as masking patterns (they would collide with
             // arbitrary outbound bytes and spuriously trigger the cross-

@@ -5,7 +5,11 @@ import XCTest
 final class SecretInjectorTests: XCTestCase {
 
     private func makeInjector(secrets: [SecretInjector.LoadedSecret]) -> SecretInjector {
-        SecretInjector(secrets: secrets)
+        SecretInjector(secrets: secrets, persistedStore: emptyPersistedStore())
+    }
+
+    private func emptyPersistedStore() -> SecretStoreAccess {
+        .init(loadAll: { [] }, save: { _, _, _ in }, remove: { _ in })
     }
 
     private func makeSecret(
@@ -414,6 +418,7 @@ final class SecretInjectorTests: XCTestCase {
         let injector = SecretInjector(
             sessionId: "test-session-oauth-1",
             envFileSecrets: [],
+            persistedStore: emptyPersistedStore(),
             oauthStore: oauth
         )
         await injector.reload()
@@ -436,6 +441,7 @@ final class SecretInjectorTests: XCTestCase {
         let injector = SecretInjector(
             sessionId: "test-session-oauth-2",
             envFileSecrets: [envSecret],
+            persistedStore: emptyPersistedStore(),
             oauthStore: oauth
         )
         await injector.reload()
@@ -451,6 +457,53 @@ final class SecretInjectorTests: XCTestCase {
         XCTAssertNotEqual(text, "env-file-real")
     }
 
+    func testSessionSecretReloadsFromInjectedMemoryStore() async throws {
+        let sessionStore = SessionSecretStore()
+        await sessionStore.set(
+            name: "SESSION_TOKEN",
+            value: "session-fixture-value",
+            domains: ["api.example.com"]
+        )
+        let injector = SecretInjector(
+            sessionId: "session-injector-fixture",
+            persistedStore: .init(loadAll: { [] }, save: { _, _, _ in }, remove: { _ in }),
+            sessionStore: sessionStore
+        )
+
+        await injector.reload()
+
+        let masked = try XCTUnwrap(injector.maskedValue(for: "SESSION_TOKEN"))
+        guard case .success(let unmasked) = injector.inject(text: masked, hostname: "api.example.com") else {
+            return XCTFail("Expected success")
+        }
+        XCTAssertEqual(unmasked, "session-fixture-value")
+    }
+
+    func testPersistedAndOAuthEntriesWinSessionNameCollisions() async throws {
+        let sessionStore = SessionSecretStore()
+        await sessionStore.set(name: "PERSISTED", value: "session-one-fixture", domains: ["api.example.com"])
+        await sessionStore.set(name: "OAUTH", value: "session-two-fixture", domains: ["api.example.com"])
+        let oauth = OAuthSecretStore()
+        try await oauth.set(name: "OAUTH", value: "oauth-fixture-value", domains: ["api.example.com"])
+        let persisted = Secret(name: "PERSISTED", value: "persisted-fixture-value", domains: ["api.example.com"])
+        let injector = SecretInjector(
+            sessionId: "session-precedence-fixture",
+            persistedStore: .init(loadAll: { [persisted] }, save: { _, _, _ in }, remove: { _ in }),
+            sessionStore: sessionStore,
+            oauthStore: oauth
+        )
+
+        await injector.reload()
+
+        for (name, expected) in [("PERSISTED", "persisted-fixture-value"), ("OAUTH", "oauth-fixture-value")] {
+            let masked = try XCTUnwrap(injector.maskedValue(for: name))
+            guard case .success(let unmasked) = injector.inject(text: masked, hostname: "api.example.com") else {
+                return XCTFail("Expected success for \(name)")
+            }
+            XCTAssertEqual(unmasked, expected)
+        }
+    }
+
     // MARK: - Minimum-length guard (mirrors TS MIN_MASKABLE_SECRET_LENGTH)
 
     func testEnvFileShortValueIsConsumableButNotMasked() async throws {
@@ -463,6 +516,7 @@ final class SecretInjectorTests: XCTestCase {
         let injector = SecretInjector(
             sessionId: "test-session-short-env",
             envFileSecrets: [envSecret],
+            persistedStore: emptyPersistedStore(),
             oauthStore: nil
         )
         await injector.reload()
@@ -503,6 +557,7 @@ final class SecretInjectorTests: XCTestCase {
         let injector = SecretInjector(
             sessionId: "test-session-short-oauth",
             envFileSecrets: [envSecret],
+            persistedStore: emptyPersistedStore(),
             oauthStore: oauth
         )
         await injector.reload()
