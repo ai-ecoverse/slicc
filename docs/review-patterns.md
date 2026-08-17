@@ -355,9 +355,10 @@ commands. Its sync script detects command-surface drift; the skill update keeps 
 usable by agents after it lands.
 
 **Remediation** — follow the cross-reference checklist in
-[adding-slicc-features](../.agents/skills/adding-slicc-features/SKILL.md): update the matching
-runtime and developer skills in the same PR, run `npm run lint:skill-router`, and run the
-specialized sync check (such as `playwright-cli-sync.mjs`) when one exists.
+[adding-slicc-features](../.agents/skills/adding-slicc-features/SKILL.md): update each affected
+audience's skill in the same PR—runtime skills for agent-facing capabilities, developer skills
+for developer workflows. Run `npm run lint:skill-router` and any specialized sync check (such
+as `playwright-cli-sync.mjs`) that covers the changed surface.
 
 ### 13. Transcript export — redaction boundary and protocol parity
 
