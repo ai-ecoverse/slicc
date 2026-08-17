@@ -90,6 +90,27 @@ Custom commands implemented in TypeScript and registered in just-bash.
 | **afplay / chime**                          | `afplay-command.ts`        | Play a sound file. `chime` is a convenience alias for the bundled notification sounds in `/shared/sounds/`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | `afplay <path>`, `chime [done\|alert\|...]`                                                                                                                                                                                                                                                                                  |
 | **pbcopy / pbpaste / xclip / xsel**         | `clipboard-commands.ts`    | Copy stdin to the clipboard / paste clipboard to stdout via the browser Clipboard API. All four aliases share the same implementation.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | `echo hi \| pbcopy`, `pbpaste`                                                                                                                                                                                                                                                                                               |
 
+### Git clone depth and branch refs
+
+SLICC's browser-native `git clone` deliberately defaults to depth 1 and a single branch: without
+flags, it fetches only the tip of the remote's default branch. This differs from the native Git
+CLI's full-history, all-branch default and keeps browser-backed clones fast and compact.
+
+```bash
+# Clone a non-default branch (still depth 1 and single-branch)
+git clone --branch feature https://github.com/example/project.git project
+
+# Keep depth 1, but fetch all remote branch refs during clone
+git clone --no-single-branch https://github.com/example/project.git project
+
+# Add a branch to an existing optimized clone, then create its local branch
+cd project
+git fetch origin feature
+git checkout -b feature origin/feature
+```
+
+Use `--depth <n>` to request a different history depth.
+
 ### `ipx` / `npx` built-in redirects
 
 `ipx` runs JavaScript package bins from the nearest installed `node_modules`; `npx` is an

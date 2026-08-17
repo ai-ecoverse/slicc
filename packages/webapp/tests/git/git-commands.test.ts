@@ -8,9 +8,13 @@ vi.mock('isomorphic-git', async (importOriginal) => ({ ...(await importOriginal(
 
 import * as isoGit from 'isomorphic-git';
 import { GLOBAL_FS_DB_NAME } from '../../src/fs/global-db.js';
+import { RestrictedFS } from '../../src/fs/restricted-fs.js';
+import { createSudoFs } from '../../src/fs/sudo-fs.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { GitCommands } from '../../src/git/git-commands.js';
 import { createIsomorphicGitFs } from '../../src/git/vfs-fs-adapter.js';
+import { AlmostBashShell } from '../../src/shell/index.js';
+import { parseSudoers } from '../../src/shell/sudo/sudoers.js';
 
 describe('GitCommands', () => {
   let vfs: VirtualFS;
@@ -3925,7 +3929,6 @@ describe('GitCommands with RestrictedFS (scoop sandbox, issue #507)', () => {
   let dbCounter = 0;
 
   it('runs init/status/add/commit through a RestrictedFS without "isPathUnderMount is not a function"', async () => {
-    const { RestrictedFS } = await import('../../src/fs/restricted-fs.js');
     const testId = dbCounter++;
     const vfs = await VirtualFS.create({ dbName: `git-restricted-fs-507-${testId}`, wipe: true });
     await vfs.mkdir('/scoops/regression-507', { recursive: true });
@@ -3958,5 +3961,66 @@ describe('GitCommands with RestrictedFS (scoop sandbox, issue #507)', () => {
     const commitResult = await git.execute(['commit', '-m', 'initial'], '/scoops/regression-507');
     expect(commitResult.exitCode).toBe(0);
     expect(commitResult.stdout).toContain('initial');
+  });
+});
+
+describe('GitCommands flush through production scoop filesystem wrappers', () => {
+  let dbCounter = 0;
+
+  it('flushes after clone and checkout without requesting sudo approval', async () => {
+    const testId = dbCounter++;
+    const scoopDir = '/scoops/git-flush-regression';
+    const vfs = await VirtualFS.create({
+      dbName: `git-restricted-fs-flush-${testId}`,
+      wipe: true,
+    });
+    const flushSpy = vi.spyOn(vfs, 'flush');
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+
+    try {
+      await vfs.mkdir(scoopDir, { recursive: true });
+      const restricted = new RestrictedFS(vfs, [`${scoopDir}/`, '/shared/'], [], 'sudo-delegated');
+      const approvalRequests: unknown[] = [];
+      const sudoFs = createSudoFs(restricted, {
+        broker: {
+          requestApproval: async (request) => {
+            approvalRequests.push(request);
+            return { decision: 'deny' };
+          },
+        },
+        getPolicy: () => parseSudoers(`NOPASSWD Write ${scoopDir}/**`),
+        defaultDisposition: 'require-approval',
+      });
+      const shell = new AlmostBashShell({
+        fs: sudoFs as unknown as VirtualFS,
+        cwd: scoopDir,
+      });
+
+      const cloneResult = await shell.executeCommand(
+        'git clone https://github.com/example/repo.git cloned'
+      );
+      expect(cloneResult.exitCode).toBe(0);
+      expect(cloneSpy).toHaveBeenCalledWith(
+        expect.objectContaining({ depth: 1, singleBranch: true })
+      );
+      expect(flushSpy).toHaveBeenCalledTimes(1);
+
+      expect((await shell.executeCommand('git init')).exitCode).toBe(0);
+      await sudoFs.writeFile(`${scoopDir}/readme.txt`, 'hello scoop');
+      expect((await shell.executeCommand('git add readme.txt')).exitCode).toBe(0);
+      expect((await shell.executeCommand('git commit -m initial')).exitCode).toBe(0);
+      expect((await shell.executeCommand('git branch feature')).exitCode).toBe(0);
+
+      const checkoutResult = await shell.executeCommand('git checkout feature');
+      expect(checkoutResult.exitCode).toBe(0);
+      expect(checkoutResult.stdout).toContain("Switched to branch 'feature'");
+      expect(flushSpy).toHaveBeenCalledTimes(2);
+      expect(approvalRequests).toHaveLength(0);
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+      await vfs.dispose();
+    }
   });
 });
