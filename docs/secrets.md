@@ -85,7 +85,7 @@ Inside the SLICC shell, the `secret` command manages secrets:
 
 | Command                                              | Approval   | Description                                                                                                                |
 | ---------------------------------------------------- | ---------- | -------------------------------------------------------------------------------------------------------------------------- |
-| `secret set <name> <value> [--domain <pat>]`         | None       | Create an in-memory **session-only** secret (never persisted). Changing the value of an existing secret requires approval. |
+| `secret set <name> <value> --domain <pat>`           | None       | Create an in-memory **session-only** secret (never persisted). Changing the value of an existing secret requires approval. |
 | `secret get <name>` / `secret read <name>`           | None       | Show the masked value and scope.                                                                                           |
 | `secret peek <name>`                                 | None       | Show the first/last characters of the unmasked value (middle elided).                                                      |
 | `secret list`                                        | None       | Show secrets (names, domains, and `SESSION`/`SAVED` type — never values).                                                  |
@@ -96,11 +96,13 @@ Inside the SLICC shell, the `secret` command manages secrets:
 
 ### Session secrets and the sudo model
 
-`secret set <name> <value>` creates a **session-only** secret: it lives in an
-in-memory `SessionSecretStore` (in node-server for CLI, in the service worker
-for the extension), is layered into the masking pipeline so the fetch proxy can
-use it, and is **never** written to disk/Keychain/`chrome.storage`. It vanishes
-when the session ends. Creating a new session secret needs no approval.
+`secret set <name> <value> --domain <patterns>` creates a **session-only**
+secret: it lives in an in-memory `SessionSecretStore` (in node-server for CLI,
+in the service worker for the extension), is layered into the masking pipeline
+so the fetch proxy can use it, and is **never** written to
+disk/Keychain/`chrome.storage`. It vanishes when the session ends. Every set
+requires a non-empty domain allowlist; creating a new scoped session secret
+needs no approval.
 
 Three operations are gated behind a native sudo prompt (intrinsic gates,
 independent of `/etc/sudoers`): **persisting** a secret (`--persist`), **editing

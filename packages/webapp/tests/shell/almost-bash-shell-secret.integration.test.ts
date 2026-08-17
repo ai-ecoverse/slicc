@@ -115,6 +115,26 @@ describe('AlmostBashShell + secret set — masked-env injection (LLM-context par
     expect(echoRes.stdout.trim()).toBe(maskFor('piped-value'));
   });
 
+  it('rejects a domainless argument value before calling the backend', async () => {
+    const shell = new AlmostBashShell({ fs });
+    const res = await shell.executeCommand('secret set K value');
+
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('set requires --domain <patterns>');
+    expect(session.has('K')).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
+  it('rejects a domainless stdin value before calling the backend', async () => {
+    const shell = new AlmostBashShell({ fs });
+    const res = await shell.executeCommand('echo piped-value | secret set K');
+
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('set requires --domain <patterns>');
+    expect(session.has('K')).toBe(false);
+    expect(fetch).not.toHaveBeenCalled();
+  });
+
   it('errors when both arg and stdin are provided', async () => {
     const shell = new AlmostBashShell({ fs });
     const res = await shell.executeCommand('echo stdin-v | secret set K arg-v --domain api.x.com');

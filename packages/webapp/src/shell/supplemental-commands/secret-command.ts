@@ -13,7 +13,7 @@ function helpText(): string {
   return `secret — manage secrets for the fetch proxy and mount backends
 
 No approval (session-only, in-memory, never persisted):
-  secret set <name> <value> [--domain <pat>]   Set a session secret. Free for a
+  secret set <name> <value> --domain <pat>     Set a session secret. Free for a
                                                new name; changing the value of an
                                                existing secret requires approval.
   secret get <name>                            Show the masked value + scope.
@@ -37,9 +37,9 @@ Other:
   secret edit                                  Open the Mount Secrets options page
                                                (extension) or print the env path.
 
-The --domain flag accepts a comma-separated list of patterns (exact or wildcard,
-e.g. *.github.com). Choosing "Always" on a prompt skips future prompts for the
-same operation this session.
+The required --domain flag accepts a non-empty comma-separated list of patterns
+(exact or wildcard, e.g. *.github.com). Choosing "Always" on a prompt skips future
+prompts for the same operation this session.
 
 Examples:
   secret set OPENAI_KEY sk-proj-… --domain "api.openai.com"      # session, no prompt
@@ -52,7 +52,7 @@ Examples:
 
 function parseDomainFlag(args: string[]): string[] | null {
   const idx = args.indexOf('--domain');
-  if (idx === -1 || !args[idx + 1]) return null;
+  if (idx === -1 || !args[idx + 1] || args[idx + 1].startsWith('-')) return null;
   return args[idx + 1]
     .split(',')
     .map((d) => d.trim())
@@ -201,13 +201,6 @@ async function handleSetPersisted(
 ): Promise<ExecResult> {
   // Persisted set writes to secrets.env / Keychain / chrome.storage —
   // a sensitive, durable mutation, so it's gated.
-  if (domains.length === 0) {
-    return {
-      stdout: '',
-      stderr: 'secret: --domain is required to persist a secret\n',
-      exitCode: 1,
-    };
-  }
   if (!(await env.gate('persist', name))) return denied();
   await env.backend.setPersisted(name, value, domains);
   await env.injectMaskedEnv(name);
@@ -230,9 +223,8 @@ async function handleSetSession(
   if (info && !(await env.gate('value', name))) return denied();
   await env.backend.setSession(name, value, domains);
   await env.injectMaskedEnv(name);
-  const scope = domains.length > 0 ? ` (domains: ${domains.join(', ')})` : '';
   return {
-    stdout: `Set session secret "${name}"${scope} — in-memory only, not persisted.\n`,
+    stdout: `Set session secret "${name}" (domains: ${domains.join(', ')}) — in-memory only, not persisted.\n`,
     stderr: '',
     exitCode: 0,
   };
@@ -264,12 +256,19 @@ async function handleSet(
       stdout: '',
       stderr:
         'secret: set requires a <value>: ' +
-        'secret set <name> <value> [--domain <patterns>] [--persist]\n  ' +
-        'or pipe the value on stdin: echo "$TOKEN" | secret set <name> [--domain ...]\n',
+        'secret set <name> <value> --domain <patterns> [--persist]\n  ' +
+        'or pipe the value on stdin: echo "$TOKEN" | secret set <name> --domain <patterns>\n',
       exitCode: 1,
     };
   }
   const domains = parseDomainFlag(args) ?? [];
+  if (domains.length === 0) {
+    return {
+      stdout: '',
+      stderr: 'secret: set requires --domain <patterns>\n',
+      exitCode: 1,
+    };
+  }
   return args.includes('--persist')
     ? handleSetPersisted(name, value, domains, env)
     : handleSetSession(name, value, domains, env);
