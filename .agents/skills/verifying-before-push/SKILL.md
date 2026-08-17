@@ -72,7 +72,8 @@ fix the layering, never grow `layer-back-edge-baseline.json`),
 `lint:record-string-unknown` (no new `Record<string, unknown>` in non-test source —
 baseline-ratcheted; name the shape, or suppress a genuinely untyped payload with
 `// biome-ignore lint/plugin: <reason>`, never grow
-`record-string-unknown-baseline.json`), `lint:patches`, and `lint:duplication`.
+`record-string-unknown-baseline.json`), `lint:patches`, `lint:swift-deps` (SPM
+unused-dependency gate — see below), and `lint:duplication`.
 
 CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject
 any unformatted code. **This is the most common CI failure — do not skip it.**
@@ -107,6 +108,32 @@ entry cannot silently drop an app from the signal.
 
 jscpd's config parser prints a harmless `unknown field '$comment'` warning for the rationale
 key in `jscpd.json`. That is expected — do not silence it by deleting the key.
+
+## Unused-dependency gates (all three toolchains)
+
+Every shipped app has a hard gate that fails when a declared dependency is not
+actually used. Run the one for the tree you touched:
+
+```bash
+npm run deadcode                       # knip: TS/JS workspaces (unused + unlisted deps)
+npm run lint:swift-deps                # SPM: packages/*/Package.swift vs the import graph
+cd packages/go-optel  && make tidy-check   # go mod tidy -diff
+cd packages/slicc-cli && make tidy-check   # go mod tidy -diff
+```
+
+`lint:swift-deps`
+([`check-swift-unused-deps.mjs`](../../../packages/dev-tools/tools/check-swift-unused-deps.mjs))
+is chained into `lint` / `lint:ci`, so the CI `lint` job enforces it with no Swift
+toolchain needed — the manifests are parsed as text. It reports
+`unused-package-dependency`, `unused-target-dependency`, and `unlisted-dependency`
+(a module imported but reached only transitively — declare it on the target that
+imports it). Fix the manifest rather than the gate; a product that is genuinely
+linked without being imported gets a `// unused-dep-ok: <reason>` annotation on
+its declaration line. Full semantics:
+[dev-tools-details.md#swift-unused-dependency-gate](../../../docs/dev-tools-details.md#swift-unused-dependency-gate).
+
+The Go `tidy-check` targets also run inside each module's `make check`, which is
+what the `go-optel` and `slicc-cli` CI jobs invoke.
 
 ## Bundle-size budgets (`bundle-size`)
 
@@ -192,6 +219,7 @@ npm run lint:swift                     # SwiftLint across all four Swift/iOS pac
 npm run lint:swift:format              # swift format lint --strict (config: root .swift-format)
 npm run format:swift                   # swift format --in-place (fixes the above)
 npm run deadcode:swift                 # Periphery on the 3 SPM packages (informational)
+npm run lint:swift-deps                # SPM unused-dependency gate (hard gate, in lint:ci)
 cd packages/slicc-cli && make check    # gofmt + tidy-check + vet + golangci-lint + race + coverage
 ```
 

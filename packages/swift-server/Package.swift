@@ -36,7 +36,9 @@ let package = Package(
                 "slicc-server",
                 .product(name: "Hummingbird", package: "hummingbird"),
                 .product(name: "HummingbirdTesting", package: "hummingbird"),
+                .product(name: "HummingbirdWebSocket", package: "hummingbird-websocket"),
                 .product(name: "AsyncHTTPClient", package: "async-http-client"),
+                .product(name: "Logging", package: "swift-log"),
                 .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
             ],
             path: "Tests"

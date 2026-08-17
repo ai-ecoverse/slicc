@@ -98,6 +98,64 @@ are excluded via negated `project` patterns in `knip.json`, **not**
 § "Knip fixture exclusion" for why `ignoreFiles` is wrong and the
 correct approach.
 
+## swift-unused-dependency-gate
+
+`npm run lint:swift-deps`
+(`packages/dev-tools/tools/check-swift-unused-deps.mjs` + `-lib.mjs`)
+gives the Swift/SPM packages the unused-dependency signal knip provides
+for the TS workspaces (`npm run deadcode`) and `go mod tidy -diff` for
+the Go modules (`make tidy-check` in `packages/{go-optel,slicc-cli}`).
+SPM has no built-in equivalent: `swift build` links a declared
+dependency whether or not any source imports it, so a dropped `import`
+leaves a dead package pinned in `Package.resolved` and paid for on every
+resolve.
+
+The gate parses every `packages/*/Package.swift`, resolves each target's
+sources (explicit `path:`/`sources:`/`exclude:`, else the **first**
+matching conventional root — `Sources/<name>` before the enclosing
+`Sources`, so a target never scans a sibling target's files), collects
+the modules those sources import, and reports three findings:
+
+| Code                        | Meaning                                                    |
+| --------------------------- | ---------------------------------------------------------- |
+| `unused-package-dependency` | a `.package(...)` clause no target consumes a product from |
+| `unused-target-dependency`  | a target dependency no source of that target imports       |
+| `unlisted-dependency`       | a module a target imports but only reaches transitively    |
+
+Matching mirrors SPM's own rules: package identities compare
+case-insensitively and come from the last URL/path component, target
+names are normalised to module names (`slicc-server` → `slicc_server`),
+local `path:` dependencies are resolved through their own manifests so a
+product vending a differently-named module still matches — scoped to the
+product the target actually declared, so a sibling product of the same
+local package never satisfies it — and modules named in
+`#if canImport(...)` count as used. Comments **and string literals** are
+blanked before the import scan, so a generated-source fixture such as
+`let src = """\nimport Logging\n"""` cannot make a dead dependency look
+alive. `.product(…, condition:)`
+entries are skipped — the importing sources sit behind `#if os(...)`,
+which the gate does not evaluate. The `unlisted-dependency` check only
+fires for modules whose origin is knowable from the manifest (a sibling
+target, a local package, or a product another target in the same
+manifest declares), so a transitive module of an external package is
+never guessed at.
+
+Parsing is string-level on purpose: the gate is chained into `lint` /
+`lint:ci` and therefore runs in the Linux `lint` CI job, which has no
+Swift toolchain and cannot evaluate `Package.swift` as code.
+
+A legitimate exception (a product linked for its resources or plugin
+rather than imported) is annotated at the declaration site:
+
+```swift
+.product(name: "SomeThing", package: "some-package"),  // unused-dep-ok: linked for its resource bundle
+```
+
+The marker applies to the entry's own line, any line a multi-line entry
+spans, and the line directly above it. Behaviour is covered by
+`check-swift-unused-deps.test.mjs`, including an end-to-end run against
+the checked-in manifests.
+
 ## swift-coverage-retry
 
 `swift-coverage-check.sh` sources `swift-coverage-runner-retry.sh` in
