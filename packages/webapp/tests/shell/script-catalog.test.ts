@@ -84,17 +84,18 @@ describe('ScriptCatalog', () => {
     });
     const catalog = new ScriptCatalog({ jshFs: fs, watcher });
 
+    // Only roots that exist are walked — no full-VFS '/' scan (#2085).
     expect(await catalog.getJshCommandNames()).toEqual(['run']);
-    expect(fs.walkRoots).toEqual(['/workspace/skills', '/']);
+    expect(fs.walkRoots).toEqual(['/workspace/skills']);
 
     expect(await catalog.getJshCommandNames()).toEqual(['run']);
-    expect(fs.walkRoots).toEqual(['/workspace/skills', '/']);
+    expect(fs.walkRoots).toEqual(['/workspace/skills']);
 
-    fs.setFile('/tools/extra.jsh', 'console.log("extra");');
-    watcher.notify([{ type: 'create', path: '/tools/extra.jsh', entryType: 'file' }]);
+    fs.setFile('/shared/bin/extra.jsh', 'console.log("extra");');
+    watcher.notify([{ type: 'create', path: '/shared/bin/extra.jsh', entryType: 'file' }]);
 
-    expect((await catalog.getJshCommands()).get('extra')).toBe('/tools/extra.jsh');
-    expect(fs.walkRoots).toEqual(['/workspace/skills', '/', '/workspace/skills', '/']);
+    expect((await catalog.getJshCommands()).get('extra')).toBe('/shared/bin/extra.jsh');
+    expect(fs.walkRoots).toEqual(['/workspace/skills', '/workspace/skills', '/shared/bin']);
   });
 
   it('falls back to fresh JSH scans when no FsWatcher is available', async () => {
@@ -106,7 +107,7 @@ describe('ScriptCatalog', () => {
     expect(await catalog.getJshCommandNames()).toEqual(['run']);
     expect(await catalog.getJshCommandNames()).toEqual(['run']);
 
-    expect(fs.walkRoots).toEqual(['/workspace/skills', '/', '/workspace/skills', '/']);
+    expect(fs.walkRoots).toEqual(['/workspace/skills', '/workspace/skills']);
   });
 
   it('deduplicates concurrent uncached JSH scans', async () => {
@@ -149,7 +150,7 @@ describe('ScriptCatalog', () => {
 
     expect((await first).get('run')).toBe('/workspace/skills/test/run.jsh');
     expect((await second).get('run')).toBe('/workspace/skills/test/run.jsh');
-    expect(fs.walkRoots).toEqual(['/workspace/skills', '/']);
+    expect(fs.walkRoots).toEqual(['/workspace/skills']);
   });
 
   it('does not let an invalidated in-flight JSH scan repopulate stale cache state', async () => {
@@ -198,14 +199,21 @@ describe('ScriptCatalog', () => {
 
     const firstScan = catalog.getJshCommands();
 
-    fs.setFile('/tools/extra.jsh', 'console.log("extra");');
-    watcher.notify([{ type: 'create', path: '/tools/extra.jsh', entryType: 'file' }]);
+    fs.setFile('/shared/bin/extra.jsh', 'console.log("extra");');
+    watcher.notify([{ type: 'create', path: '/shared/bin/extra.jsh', entryType: 'file' }]);
 
     fs.release();
     await firstScan;
 
-    expect((await catalog.getJshCommands()).get('extra')).toBe('/tools/extra.jsh');
-    expect(fs.walkRoots).toEqual(['/workspace/skills', '/', '/workspace/skills', '/']);
+    expect((await catalog.getJshCommands()).get('extra')).toBe('/shared/bin/extra.jsh');
+    // The gated first scan resumes AFTER extra.jsh landed, so its root-exists
+    // probe already sees /shared/bin — both scans walk both roots.
+    expect(fs.walkRoots).toEqual([
+      '/workspace/skills',
+      '/shared/bin',
+      '/workspace/skills',
+      '/shared/bin',
+    ]);
   });
 
   it('caches BSH discovery until FsWatcher invalidates it', async () => {
@@ -234,7 +242,7 @@ describe('ScriptCatalog', () => {
     expect(fs.walkRoots).toEqual(['/workspace', '/workspace', '/shared']);
   });
 
-  it('bypasses the JSH cache when mounts are present so external mounted changes stay visible', async () => {
+  it('a mounted PATH root stays uncached so external mounted changes remain visible', async () => {
     const vfs = await VirtualFS.create({
       dbName: `test-script-catalog-jsh-mount-${dbCounter++}`,
       wipe: true,
@@ -246,13 +254,43 @@ describe('ScriptCatalog', () => {
     });
     await vfs.mount('/mnt/repo', backendOf(mounted.handle));
 
+    // A mount is only on the command path when its dir is a PATH root
+    // (export PATH="$PATH:/mnt/repo") — and then its overlap disables the
+    // cache so refreshes are seen without a watcher event.
+    const roots = ['/workspace/skills', '/mnt/repo'];
     const catalog = new ScriptCatalog({ jshFs: vfs, watcher });
-    expect((await catalog.getJshCommands()).get('one')).toBe('/mnt/repo/one.jsh');
+    expect((await catalog.getJshCommands(roots)).get('one')).toBe('/mnt/repo/one.jsh');
 
     mounted.setFile('two.jsh', 'console.log("two");');
     // External changes require mount refresh to update the index
     await vfs.refreshMount('/mnt/repo');
-    expect((await catalog.getJshCommands()).get('two')).toBe('/mnt/repo/two.jsh');
+    expect((await catalog.getJshCommands(roots)).get('two')).toBe('/mnt/repo/two.jsh');
+  });
+
+  it('a mount OUTSIDE the scan roots no longer disables the cache (#2085)', async () => {
+    const fs = new MockScriptFs({
+      '/workspace/skills/test/run.jsh': 'console.log("run");',
+    });
+    fs.setMounts(['/mnt/unrelated']);
+    const catalog = new ScriptCatalog({ jshFs: fs, watcher });
+
+    expect(await catalog.getJshCommandNames()).toEqual(['run']);
+    expect(await catalog.getJshCommandNames()).toEqual(['run']);
+    // Pre-#2085 ANY mount forced a fresh full-VFS scan per call; now the
+    // default roots stay cached because the mount cannot affect them.
+    expect(fs.walkRoots).toEqual(['/workspace/skills']);
+  });
+
+  it('a mount overlapping a scan root disables the cache for that root set', async () => {
+    const fs = new MockScriptFs({
+      '/workspace/skills/test/run.jsh': 'console.log("run");',
+    });
+    fs.setMounts(['/workspace/skills/vendored']);
+    const catalog = new ScriptCatalog({ jshFs: fs, watcher });
+
+    expect(await catalog.getJshCommandNames()).toEqual(['run']);
+    expect(await catalog.getJshCommandNames()).toEqual(['run']);
+    expect(fs.walkRoots).toEqual(['/workspace/skills', '/workspace/skills']);
   });
 
   it('detects underlying mounts when discovery runs through RestrictedFS', async () => {
@@ -269,12 +307,13 @@ describe('ScriptCatalog', () => {
 
     const restricted = new RestrictedFS(vfs, ['/workspace']);
     const catalog = new ScriptCatalog({ jshFs: restricted, watcher });
-    expect((await catalog.getJshCommands()).get('one')).toBe('/workspace/repo/one.jsh');
+    const roots = ['/workspace/repo'];
+    expect((await catalog.getJshCommands(roots)).get('one')).toBe('/workspace/repo/one.jsh');
 
     mounted.setFile('two.jsh', 'console.log("two");');
     // External changes require mount refresh to update the index
     await vfs.refreshMount('/workspace/repo');
-    expect((await catalog.getJshCommands()).get('two')).toBe('/workspace/repo/two.jsh');
+    expect((await catalog.getJshCommands(roots)).get('two')).toBe('/workspace/repo/two.jsh');
   });
 
   it('bypasses the BSH cache for mounts under /workspace or /shared', async () => {
@@ -355,14 +394,14 @@ describe('ScriptCatalog', () => {
     });
     vfs.setWatcher(watcher);
 
-    await vfs.writeFile('/workspace/tool.txt', 'console.log("tool");');
+    await vfs.writeFile('/workspace/bin/tool.txt', 'console.log("tool");');
     await vfs.writeFile('/workspace/page.txt', 'console.log("page");');
 
     const catalog = new ScriptCatalog({ jshFs: vfs, bshFs: vfs, watcher });
     expect(await catalog.getJshCommandNames()).toEqual([]);
     expect(await catalog.getBshEntries()).toEqual([]);
 
-    await vfs.rename('/workspace/tool.txt', '/workspace/tool.jsh');
+    await vfs.rename('/workspace/bin/tool.txt', '/workspace/bin/tool.jsh');
     await vfs.rename('/workspace/page.txt', '/workspace/login.example.com.bsh');
 
     expect(await catalog.getJshCommandNames()).toEqual(['tool']);

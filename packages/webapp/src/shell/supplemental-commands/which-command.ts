@@ -1,7 +1,7 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
-import { discoverJshCommands } from '../jsh-discovery.js';
+import { discoverJshCommands, pathToScanRoots } from '../jsh-discovery.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import { discoverWorkflowCommands, type WorkflowCommandEntry } from '../workflow-discovery.js';
 
@@ -11,10 +11,18 @@ export interface WhichCommandOptions {
   getStaticBuiltins?: () => string[];
 }
 
-/** Discovers .jsh commands from catalog or direct FS scan. */
-async function getJshMap(opts: WhichCommandOptions): Promise<Map<string, string>> {
-  if (opts.scriptCatalog) return opts.scriptCatalog.getJshCommands();
-  if (opts.fs) return discoverJshCommands(opts.fs);
+/**
+ * Discovers .jsh commands from catalog or direct FS scan. Lookup follows
+ * the caller's `$PATH` (#2085) so `which` and dispatch answer from the
+ * same root set; without an env, the default roots apply.
+ */
+async function getJshMap(
+  opts: WhichCommandOptions,
+  pathValue: string | undefined
+): Promise<Map<string, string>> {
+  const roots = pathValue === undefined ? undefined : pathToScanRoots(pathValue);
+  if (opts.scriptCatalog) return opts.scriptCatalog.getJshCommands(roots);
+  if (opts.fs) return discoverJshCommands(opts.fs, roots);
   return new Map();
 }
 
@@ -93,7 +101,7 @@ Exit code 0 if all commands found, 1 if any not found.
     const registeredCommands = ctx.getRegisteredCommands?.() ?? [];
     const builtinSet = new Set(registeredCommands);
 
-    const jshCommands = await getJshMap(resolvedOptions);
+    const jshCommands = await getJshMap(resolvedOptions, ctx.env.get('PATH'));
     const workflowCommands = await getWorkflowMap(resolvedOptions);
 
     // Static built-ins (echo, ls, …) win over any same-named script. Falls back to the

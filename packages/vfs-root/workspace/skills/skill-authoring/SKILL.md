@@ -88,9 +88,9 @@ Rules of thumb:
 
 ### `.jsh` — JavaScript shell scripts
 
-`.jsh` files are auto-discovered as shell commands anywhere on the VFS. **Full reference: `./jsh-runtime-extensions.md`.**
+`.jsh` files on the shell's `$PATH` search roots are auto-discovered as shell commands. **Full reference: `./jsh-runtime-extensions.md`.**
 
-- **Auto-discovery**: registered as callable commands by filename (without the extension). A skill can ship its own commands by including a `.jsh` next to `SKILL.md`. Priority root `/workspace/skills/` wins on basename collisions.
+- **Auto-discovery**: registered as callable commands by filename (without the extension), from the `$PATH` roots — `/workspace/skills`, `/workspace/.mcp/aliases`, `/workspace/bin`, `/shared/bin` by default. A skill can ship its own commands by including a `.jsh` next to `SKILL.md`. Earlier roots win basename collisions, so `/workspace/skills/` wins. For commands elsewhere, add their dir to the PATH: `echo 'export PATH="$PATH:/my/tools"' >> ~/.profile`.
 - **Dual-mode**: works in both the CLI server and the Chrome extension (sandbox iframe). Don't rely on CLI-only Node modules.
 - **Top-level `await`**: scripts are wrapped in `AsyncFunction`. Always `await` fs/exec/fetch. Don't use `.then()`.
 

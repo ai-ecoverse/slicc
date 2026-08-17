@@ -19,6 +19,9 @@ const log = createLogger('workflow-discovery');
 
 const SAVED_ROOT = '/workspace/.workflows';
 const SKILLS_ROOT = '/workspace/skills';
+
+/** The only roots workflow discovery reads — exported for cache-eligibility checks. */
+export const WORKFLOW_DISCOVERY_ROOTS = [SAVED_ROOT, SKILLS_ROOT] as const;
 const SUFFIX = '.workflow.js';
 // Valid command-name segment (same charset install-from-drop.ts enforces for skill dirs).
 // Applied to BOTH the skill segment AND the workflow stem so the discovery layer is the

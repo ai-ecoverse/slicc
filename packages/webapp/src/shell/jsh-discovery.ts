@@ -1,10 +1,14 @@
 /**
- * JSH Discovery — scan VirtualFS for `.jsh` shell script files and
- * build a map of command names (basename without extension) to VFS paths.
+ * JSH Discovery — scan an ordered list of search roots for `.jsh` shell
+ * script files and build a map of command names (basename without
+ * extension) to VFS paths.
  *
- * The first `.jsh` file found for a given basename wins (deterministic
- * via walk() order). Skills directories (`/workspace/skills/`) are scanned
- * first to give them priority.
+ * The roots come from the shell's `$PATH` (#2085): command lookup is
+ * "read these directories", not "walk the entire VFS". Earlier roots win
+ * a basename conflict; within a root, `walk()` order decides. Each root
+ * is scanned recursively — a skill's commands live wherever the skill
+ * keeps them (`/workspace/skills/<skill>/scripts/…`) — but vendored
+ * `node_modules` and dot-directories never register commands.
  */
 
 import type { FileContent, ReadFileOptions } from '../fs/types.js';
@@ -16,27 +20,69 @@ export interface JshDiscoveryFS {
   readFile(path: string, options?: ReadFileOptions): Promise<FileContent>;
 }
 
-/** Priority roots to scan first (in order). */
-const PRIORITY_ROOTS = ['/workspace/skills'];
+/**
+ * Search roots baked into the default `$PATH`, in priority order. These
+ * cover every location the platform itself puts `.jsh` commands in:
+ * skills (`createDefaultSkills`, installed skills) and the MCP alias
+ * shims. `/workspace/bin` and `/shared/bin` are the blessed homes for
+ * ad-hoc user commands — anything elsewhere needs a `PATH` entry
+ * (`export PATH="$PATH:/my/tools"` in `~/.profile`).
+ */
+export const DEFAULT_JSH_SEARCH_ROOTS = [
+  '/workspace/skills',
+  '/workspace/.mcp/aliases',
+  '/workspace/bin',
+  '/shared/bin',
+];
 
 /**
- * Discover all `.jsh` files in the VFS and return a map of
- * command name → VFS path. First occurrence of a basename wins.
- * Priority roots are scanned before the general `/` walk.
+ * The default `$PATH` a shell starts with. `/usr/bin` is the synthetic
+ * registry directory (`vfs-adapter.ts`); the rest are `.jsh` search roots.
  */
-export async function discoverJshCommands(fs: JshDiscoveryFS): Promise<Map<string, string>> {
-  const commands = new Map<string, string>();
+export const DEFAULT_SHELL_PATH = `/usr/bin:${DEFAULT_JSH_SEARCH_ROOTS.join(':')}`;
 
-  // Scan priority roots first
-  for (const root of PRIORITY_ROOTS) {
-    if (await fs.exists(root)) {
+/**
+ * Directories whose contents never register as commands even when they sit
+ * under a search root: vendored packages and hidden state. `/workspace/.mcp/
+ * aliases` is itself a dot-path root, so the dot rule applies only BELOW a
+ * root, never to the root itself.
+ */
+const PRUNED_SEGMENT = /\/(node_modules|\.[^/]+)\//;
+
+/**
+ * Derive `.jsh` search roots from a `$PATH` value. `/usr/bin` and `/bin`
+ * are the interpreter's synthetic registry dirs, not scan roots. Order is
+ * preserved (PATH precedence), duplicates and empties dropped.
+ */
+export function pathToScanRoots(pathValue: string | undefined): string[] {
+  const roots: string[] = [];
+  for (const entry of (pathValue ?? '').split(':')) {
+    const trimmed = entry.trim().replace(/\/+$/, '');
+    if (!trimmed || trimmed === '/usr/bin' || trimmed === '/bin') continue;
+    if (!trimmed.startsWith('/')) continue;
+    if (!roots.includes(trimmed)) roots.push(trimmed);
+  }
+  return roots;
+}
+
+/**
+ * Discover `.jsh` files under the given search roots and return a map of
+ * command name → VFS path. Earlier roots win a basename conflict.
+ *
+ * Defaults to {@link DEFAULT_JSH_SEARCH_ROOTS}; callers with a live shell
+ * env derive the list via {@link pathToScanRoots} so `export PATH=…`
+ * (interactive or from `~/.profile`) extends command lookup.
+ */
+export async function discoverJshCommands(
+  fs: JshDiscoveryFS,
+  roots: readonly string[] = DEFAULT_JSH_SEARCH_ROOTS
+): Promise<Map<string, string>> {
+  const commands = new Map<string, string>();
+  for (const root of roots) {
+    if (await fs.exists(root).catch(() => false)) {
       await scanDir(fs, root, commands);
     }
   }
-
-  // Scan everything from root, skipping already-found basenames
-  await scanDir(fs, '/', commands);
-
   return commands;
 }
 
@@ -46,8 +92,10 @@ async function scanDir(
   root: string,
   commands: Map<string, string>
 ): Promise<void> {
+  const rootPrefix = root.replace(/\/+$/, '');
   for await (const filePath of fs.walk(root)) {
     if (!filePath.endsWith('.jsh')) continue;
+    if (PRUNED_SEGMENT.test(filePath.slice(rootPrefix.length))) continue;
     const name = commandName(filePath);
     if (!commands.has(name)) {
       commands.set(name, filePath);

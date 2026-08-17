@@ -52,6 +52,7 @@ import {
   resolveModelIdForScoop,
 } from '../providers/account-store.js';
 import { AlmostBashShell } from '../shell/index.js';
+import { DEFAULT_JSH_SEARCH_ROOTS } from '../shell/jsh-discovery.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import { createBashTool, createFileTools } from '../tools/index.js';
 import { getAdobeSessionId } from './llm-session-id.js';
@@ -486,8 +487,20 @@ export class ScoopContext {
     // `/home`, which their RestrictedFS cannot even see. The cone leaves
     // HOME unset so the shell resolves onboarding's `/home/<slug>` (#2085).
     const scoopHome = this.scoop.isCone ? undefined : `/scoops/${this.scoop.folder}/home`;
+    // Scoops also get their own workspace ahead of the shared roots in $PATH
+    // so scoop-local commands win a basename conflict — mirroring the old
+    // scan order, but bounded to declared roots (#2085).
+    const scoopPath = this.scoop.isCone
+      ? undefined
+      : [
+          '/usr/bin',
+          `/scoops/${this.scoop.folder}/workspace/skills`,
+          `/scoops/${this.scoop.folder}/workspace/bin`,
+          ...DEFAULT_JSH_SEARCH_ROOTS,
+        ].join(':');
     const shellEnv: Record<string, string> = {
       ...(scoopHome ? { HOME: scoopHome, USER: this.scoop.folder } : {}),
+      ...(scoopPath ? { PATH: scoopPath } : {}),
       ...secretEnv,
     };
     this.shell = new AlmostBashShell({
@@ -1832,7 +1845,7 @@ export class ScoopContext {
     if (!this.fs) return;
 
     const dirs = this.scoop.isCone
-      ? ['/workspace', '/shared', '/scoops', '/home', '/tmp', '/mnt']
+      ? ['/workspace', '/shared', '/scoops', '/home', '/home/user', '/tmp', '/mnt']
       : [
           `/scoops/${this.scoop.folder}`,
           `/scoops/${this.scoop.folder}/workspace`,

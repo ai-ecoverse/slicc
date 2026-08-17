@@ -121,7 +121,7 @@ describe('which command', () => {
     });
     await fs.mkdir('/workspace/.workflows', { recursive: true });
     await fs.writeFile('/workspace/.workflows/foo.workflow.js', 'return 1');
-    await fs.writeFile('/workspace/foo.jsh', 'x');
+    await fs.writeFile('/workspace/bin/foo.jsh', 'x');
     const catalog = new ScriptCatalog({ jshFs: fs });
     const ctx: any = {
       cwd: '/workspace',
@@ -133,7 +133,7 @@ describe('which command', () => {
       scriptCatalog: catalog,
       getStaticBuiltins: () => ['ls', 'cat'], // foo is NOT a static builtin
     }).execute(['foo'], ctx);
-    expect(res.stdout).toContain('/workspace/foo.jsh');
+    expect(res.stdout).toContain('/workspace/bin/foo.jsh');
     expect(res.stdout).toMatch(/shadow/i);
   });
 

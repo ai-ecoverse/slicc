@@ -5,8 +5,16 @@ import {
   discoverBshScripts,
   findMatchingScripts,
 } from './bsh-discovery.js';
-import { discoverJshCommands, type JshDiscoveryFS } from './jsh-discovery.js';
-import { discoverWorkflowCommands, type WorkflowCommandEntry } from './workflow-discovery.js';
+import {
+  DEFAULT_JSH_SEARCH_ROOTS,
+  discoverJshCommands,
+  type JshDiscoveryFS,
+} from './jsh-discovery.js';
+import {
+  discoverWorkflowCommands,
+  WORKFLOW_DISCOVERY_ROOTS,
+  type WorkflowCommandEntry,
+} from './workflow-discovery.js';
 
 const BSH_ROOTS = ['/workspace', '/shared'] as const;
 
@@ -56,8 +64,14 @@ function getMountAwareFs(fs: unknown): MountAwareFs | null {
   return null;
 }
 
-function hasAnyMounts(fs: JshDiscoveryFS): boolean {
-  return (getMountAwareFs(fs)?.listMounts?.().length ?? 0) > 0;
+function hasMountsUnderRoots(fs: JshDiscoveryFS, roots: readonly string[]): boolean {
+  const mounts = getMountAwareFs(fs)?.listMounts?.() ?? [];
+  return mounts.some((mountPath) =>
+    roots.some(
+      (root) =>
+        mountPath === root || mountPath.startsWith(`${root}/`) || root.startsWith(`${mountPath}/`)
+    )
+  );
 }
 
 function hasRelevantBshMounts(fs?: BshDiscoveryFS): boolean {
@@ -90,7 +104,10 @@ export class ScriptCatalog {
   private readonly watcher: FsWatcher | null;
   private readonly watcherUnsubs: Array<() => void> = [];
 
-  private readonly jsh: CachedSource<Map<string, string>> = createCachedSource();
+  // One cache per distinct root set: shells share this catalog but can have
+  // different $PATH values (cone vs scoops vs a user-extended PATH). The map
+  // stays tiny in practice — a handful of PATH shapes per instance.
+  private readonly jshByRoots = new Map<string, CachedSource<Map<string, string>>>();
   private readonly bsh: CachedSource<BshEntry[]> = createCachedSource();
   private readonly workflow: CachedSource<Map<string, WorkflowCommandEntry>> = createCachedSource();
 
@@ -138,7 +155,9 @@ export class ScriptCatalog {
   }
 
   invalidateJsh(): void {
-    bumpGeneration(this.jsh);
+    for (const src of this.jshByRoots.values()) {
+      bumpGeneration(src);
+    }
   }
 
   invalidateBsh(): void {
@@ -149,13 +168,15 @@ export class ScriptCatalog {
     bumpGeneration(this.workflow);
   }
 
-  async getJshCommands(): Promise<Map<string, string>> {
-    const commands = await this.loadJshCommands();
+  async getJshCommands(
+    roots: readonly string[] = DEFAULT_JSH_SEARCH_ROOTS
+  ): Promise<Map<string, string>> {
+    const commands = await this.loadJshCommands(roots);
     return cloneJshCommands(commands);
   }
 
-  async getJshCommandNames(): Promise<string[]> {
-    return [...(await this.getJshCommands()).keys()];
+  async getJshCommandNames(roots?: readonly string[]): Promise<string[]> {
+    return [...(await this.getJshCommands(roots)).keys()];
   }
 
   async getBshEntries(): Promise<BshEntry[]> {
@@ -175,8 +196,11 @@ export class ScriptCatalog {
     return cloneWorkflowCommands(commands);
   }
 
-  private shouldCacheJsh(): boolean {
-    return !!this.watcher && !hasAnyMounts(this.jshFs);
+  // A mount overlapping a search root makes external changes invisible to
+  // the FsWatcher, so those root sets stay uncached. Before #2085 ANY mount
+  // disabled the cache — because the scan itself covered the whole VFS.
+  private shouldCacheJsh(roots: readonly string[]): boolean {
+    return !!this.watcher && !hasMountsUnderRoots(this.jshFs, roots);
   }
 
   private shouldCacheBsh(): boolean {
@@ -188,7 +212,7 @@ export class ScriptCatalog {
   // (rather than reusing `shouldCacheJsh` at the call site) to make the
   // intent explicit and to give the predicate room to diverge later.
   private shouldCacheWorkflows(): boolean {
-    return this.shouldCacheJsh();
+    return !!this.watcher && !hasMountsUnderRoots(this.jshFs, WORKFLOW_DISCOVERY_ROOTS);
   }
 
   private loadCached<T>(
@@ -220,11 +244,18 @@ export class ScriptCatalog {
     return src.inflight;
   }
 
-  private loadJshCommands(): Promise<Map<string, string>> {
+  private loadJshCommands(roots: readonly string[]): Promise<Map<string, string>> {
+    const key = roots.join(':');
+    let src = this.jshByRoots.get(key);
+    if (!src) {
+      src = createCachedSource();
+      this.jshByRoots.set(key, src);
+    }
+    const frozenRoots = [...roots];
     return this.loadCached(
-      this.jsh,
-      this.shouldCacheJsh(),
-      () => discoverJshCommands(this.jshFs),
+      src,
+      this.shouldCacheJsh(frozenRoots),
+      () => discoverJshCommands(this.jshFs, frozenRoots),
       cloneJshCommands
     );
   }

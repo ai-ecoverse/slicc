@@ -50,7 +50,7 @@ import { getRegisteredProviderConfig } from '../providers/index.js';
 import type { SudoBroker } from '../sudo/types.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
 import { DEFAULT_HOME_DIR, resolveHomeDir, userFromHome } from './home-dir.js';
-import type { JshDiscoveryFS } from './jsh-discovery.js';
+import { DEFAULT_SHELL_PATH, type JshDiscoveryFS, pathToScanRoots } from './jsh-discovery.js';
 import type { JshProcessConfig } from './jsh-executor.js';
 import { executeJsCode, executeJshFile } from './jsh-executor.js';
 import { EMPTY_BYTES } from './just-bash-compat.js';
@@ -335,7 +335,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   ): Record<string, string> {
     return {
       HOME: DEFAULT_HOME_DIR,
-      PATH: '/usr/bin',
+      PATH: DEFAULT_SHELL_PATH,
       USER: 'user',
       SHELL: '/bin/bash',
       PWD: initialCwd,
@@ -646,6 +646,15 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * rather than at the await site: a first command that ABORTS mid-wait must
    * not leave the next one racing the scan again.
    */
+  /**
+   * The `.jsh` search roots derived from the shell's LIVE `$PATH` (#2085).
+   * `~/.profile` runs before the first scan, so a PATH exported there is
+   * already in `lastEnv` when the initial registration reads it.
+   */
+  private currentScanRoots(): string[] {
+    return pathToScanRoots(this.lastEnv.PATH);
+  }
+
   private startInitialJshSync(): void {
     this.initialJshSync = this.initHomeAndProfile()
       .then(() => this.syncJshCommands())
@@ -683,7 +692,13 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       if (!this.options.env?.USER) {
         this.lastEnv.USER = userFromHome(home);
       }
-      await fs.mkdir(home, { recursive: true }).catch(() => undefined);
+      // Deliberately NO mkdir here: `options.fs` can be sudo-gated
+      // (require-approval scoop shells), and a write at construction time
+      // fires an approval escalation before the shell ever ran a command.
+      // Directory creation belongs to the structure owners —
+      // `ensureRootStructure` / `ensureDirectoryStructure` create `/home/user`
+      // and the scoop homes on the raw VFS (including after a filesystem
+      // nuke); onboarding creates `/home/<slug>`.
 
       const profilePath = `${home.replace(/\/+$/, '')}/.profile`;
       if (!(await fs.exists(profilePath).catch(() => false))) return;
@@ -761,12 +776,21 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       cwd: this.cwd,
       signal,
     };
+    const pathBeforeExec = this.lastEnv.PATH;
     const result = await this.bash.exec(command, execOptions);
     // Persist any "Always" command grants confirmed during dispatch now that we
     // are outside just-bash's execution box (where VFS async timers are blocked).
     await this.flushPendingCommandGrants();
     if (result.env) {
       this.lastEnv = { ...result.env };
+    }
+    // `export PATH=…` changes where commands live (#2085): re-register before
+    // the next command so `mytool` works immediately after `export PATH=…;`.
+    // Awaited — the scan is bounded by the PATH roots, and returning before it
+    // finishes would reintroduce the #2084 race for the very command sequences
+    // that just extended the PATH.
+    if (result.env && this.lastEnv.PATH !== pathBeforeExec) {
+      await this.syncJshCommands().catch(() => undefined);
     }
     // Reapply env writes performed by supplemental commands during this exec
     // (e.g. `secret set` injecting a masked value). `bash.exec`'s `result.env`
@@ -953,7 +977,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
   private async doSyncJshCommands(): Promise<void> {
     try {
-      const jshMap = await this.scriptCatalog.getJshCommands();
+      const jshMap = await this.scriptCatalog.getJshCommands(this.currentScanRoots());
       const wfMap = await this.getFilteredWorkflowCommands();
 
       // .jsh names: keep the existing path-keyed registry + guard.
@@ -1022,7 +1046,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
             }));
 
         // 1) .jsh wins the bare name.
-        const jshMap = await catalog.getJshCommands();
+        const jshMap = await catalog.getJshCommands(shell.currentScanRoots());
         const jshPath = jshMap.get(cmdName);
         if (jshPath) {
           let code: string;
@@ -1082,7 +1106,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   }
 
   private async getFilteredJshCommands(): Promise<Map<string, string>> {
-    const all = await this.scriptCatalog.getJshCommands();
+    const all = await this.scriptCatalog.getJshCommands(this.currentScanRoots());
     const filtered = new Map<string, string>();
     for (const [name, path] of all) {
       if (this.builtinCommandNames.has(name)) continue;

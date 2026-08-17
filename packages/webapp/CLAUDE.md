@@ -64,8 +64,10 @@ never-rules below flag what a reviewer must recognise.
   `--read-only` replaces them.
 - **Mount signing is browser-naive**: CLI → `/api/s3-sign-and-forward`,
   extension → SW. Never sign in the browser. See `docs/mounts.md`.
-- **Shell/mount cache**: `script-catalog.ts`'s `FsWatcher` cache is bypassed for
-  mounted trees; external changes are invisible.
+- **Shell/mount cache**: `script-catalog.ts` caches per `$PATH` root set;
+  the `FsWatcher` cache is bypassed only for root sets a mount overlaps
+  (external changes there are invisible). `.jsh` lookup follows `$PATH` —
+  never reintroduce a full-VFS scan (#2085).
 - **`typescript` v7 has no browser/WASM API** — use `typescript-js` (v6) for browser
   `tsc`/`test`/`esm-transpile`. `builtin-shadow-map.ts` is authoritative for
   `ipx`/`npx` → built-in redirects.
