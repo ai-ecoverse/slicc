@@ -256,6 +256,42 @@ describe("require('readline')", () => {
   });
 });
 
+describe('UTF-8 stdin decoding (shell pipes carry UTF-8 bytes as latin1 chars)', () => {
+  /** What a shell pipe hands the realm: the UTF-8 bytes, one latin1 char per byte. */
+  const utf8AsLatin1 = (s: string) => String.fromCharCode(...new TextEncoder().encode(s));
+
+  it('readline emits decoded text lines, not per-byte mojibake', async () => {
+    // printf 'café\néclair\n' | node script — 'é' is 0xc3 0xa9 on the wire;
+    // Node's readline decodes the stream as UTF-8, so lines must be
+    // ['café', 'éclair'], never ['cafÃ©', 'Ã©clair'].
+    const ctx = makeCtx({ stdin: utf8AsLatin1('café\néclair\n') });
+    const out = await runCode(
+      `const readline = require('readline');
+       const rl = readline.createInterface({ input: process.stdin });
+       const lines = [];
+       rl.on('line', (l) => lines.push(l));
+       rl.on('close', () => console.log(JSON.stringify(lines)));`,
+      ctx
+    );
+    expect(out.stderr).toBe('');
+    expect(out.exitCode).toBe(0);
+    expect(JSON.parse(out.stdout.trim())).toEqual(['café', 'éclair']);
+  });
+
+  it('readFileSync(0, "utf8") decodes the UTF-8 bytes', async () => {
+    const ctx = makeCtx({ stdin: utf8AsLatin1('café\néclair\n') });
+    const out = await runCode(
+      `const fs = require('fs');
+       const text = fs.readFileSync(0, 'utf8');
+       console.log(JSON.stringify(text === 'caf\\u00e9\\n\\u00e9clair\\n'));`,
+      ctx
+    );
+    expect(out.stderr).toBe('');
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('true');
+  });
+});
+
 describe('process.stdin.read() Node parity', () => {
   it('returns null (not "") when no input is piped', async () => {
     const ctx = makeCtx();

@@ -6,7 +6,9 @@
  * The input is drained ONCE at `createInterface` time via the stream's
  * `read()` (the realm's `StdinShim.read()` — this consumes `process.stdin`'s
  * one-shot flag, matching Node where readline puts the stream into flowing
- * mode). Lines are the `\n`-separated segments; a trailing `\r` is stripped
+ * mode) and decoded as UTF-8 (see {@link decodeDrainedUtf8} — the buffer
+ * arrives latin1 byte-preserving). Lines are the `\n`-separated segments; a
+ * trailing `\r` is stripped
  * (CRLF input) and, matching Node, a final unterminated segment is still
  * emitted as a line. Three consumption surfaces share ONE line cursor so no
  * path double-delivers:
@@ -26,6 +28,7 @@
  * outside `runUserCode`'s try/catch; it is caught here and reported via
  * `onExit` so the realm exits with code N (same contract as `StdinShim`).
  */
+import { latin1ToBytes } from '../realm-fs-bridge.js';
 import { NodeExitError } from '../realm-node-shims.js';
 import { EventEmitter } from './node-events.js';
 
@@ -70,6 +73,19 @@ function drainInputBuffer(input: unknown): string {
   return '';
 }
 
+/**
+ * Decode the drained buffer to text. The realm's stdin buffer is a latin1
+ * byte-preserving string (one JS char per raw byte); Node's readline decodes
+ * the input stream as UTF-8, so re-decode the bytes here — otherwise
+ * non-ASCII input (`é` = 0xc3 0xa9 on the wire) splits into per-byte mojibake
+ * (`Ã©`). Invalid sequences degrade to U+FFFD, matching Node's utf8
+ * StringDecoder on binary input. This is the ONE decode point: line events,
+ * async iteration, and `question()` all consume `this.lines` built from it.
+ */
+function decodeDrainedUtf8(raw: string): string {
+  return new TextDecoder('utf-8').decode(latin1ToBytes(raw));
+}
+
 function asOutput(candidate: unknown): ReadlineOutputLike | undefined {
   if (candidate && typeof (candidate as { write?: unknown }).write === 'function') {
     return candidate as ReadlineOutputLike;
@@ -88,7 +104,7 @@ class RealmReadlineInterface extends EventEmitter {
 
   constructor(input: unknown, output: ReadlineOutputLike | undefined, deps: NodeReadlineDeps) {
     super();
-    this.lines = splitLines(drainInputBuffer(input));
+    this.lines = splitLines(decodeDrainedUtf8(drainInputBuffer(input)));
     this.output = output ?? deps.output;
     this.onExit = deps.onExit;
   }
