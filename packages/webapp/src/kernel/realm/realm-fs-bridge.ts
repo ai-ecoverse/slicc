@@ -298,7 +298,7 @@ function createRemovalOps(deps: RemovalDeps) {
       // rename would lose the file. Directories are out of scope: a recursive
       // live walk on a blocking XHR is prohibitively expensive.
       if (!bridge || syncFs.isTombstoned(src)) throw syncFsErr('ENOENT', src, 'rename');
-      if (statResolved(src).isDirectory) throw syncFsErr('EISDIR', src, 'rename');
+      if (bridge.stat(src).isDirectory) throw syncFsErr('EISDIR', src, 'rename');
       writeThrough(dest, readBytes(src));
       if (!remove(src, { requireFile: true })) throw syncFsErr('ENOENT', src, 'rename');
     },
@@ -417,9 +417,21 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       return false;
     }
   }
+  function lstatResolved(resolved: string): {
+    isFile: boolean;
+    isDirectory: boolean;
+    isSymbolicLink: boolean;
+    size: number;
+  } {
+    return syncFs.stat(resolved);
+  }
   function statResolved(resolved: string): { isFile: boolean; isDirectory: boolean; size: number } {
     try {
-      return syncFs.stat(resolved);
+      const cached = lstatResolved(resolved);
+      // Snapshot links need the live bridge: stat follows; lstat below does not.
+      if (!cached.isSymbolicLink) return cached;
+      if (!bridge || syncFs.isTombstoned(resolved)) throw syncFsErr('ENOSYNC', resolved, 'stat');
+      return bridge.stat(resolved);
     } catch (err) {
       const code = (err as { code?: string })?.code;
       if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
@@ -456,7 +468,7 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       bridge,
       resolve,
       existsResolved,
-      statResolved,
+      statResolved: lstatResolved,
       readBytes,
       writeThrough,
     }),
@@ -520,7 +532,7 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       isSymbolicLink: () => boolean;
       size: number;
     } {
-      return createStats(statResolved(resolve(path)));
+      return createStats(lstatResolved(resolve(path)));
     },
     realpathSync(path: string): string {
       // No symlinks → the canonical path is the lexical resolution; verify it exists.

@@ -128,6 +128,20 @@ describe('SyncFsCache', () => {
     expect(textOf(cache.readFile('/workspace/target/keep.txt'))).toBe('important');
   });
 
+  it('readFile requires live target resolution for a metadata-only symlink', () => {
+    const cache = new SyncFsCache({
+      entries: [
+        {
+          path: '/workspace/alias',
+          content: new Uint8Array(0),
+          isDirectory: false,
+          isSymbolicLink: true,
+        },
+      ],
+    });
+    expect(() => cache.readFile('/workspace/alias')).toThrow(/ENOSYNC/);
+  });
+
   it('stat exposes symlink metadata from the no-follow snapshot', () => {
     const cache = new SyncFsCache({
       entries: [

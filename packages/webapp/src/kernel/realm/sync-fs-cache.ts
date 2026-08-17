@@ -328,7 +328,10 @@ export class SyncFsCache {
     if (!entry || entry.isDirectory) {
       throw enoent(normalized);
     }
-    if (entry.truncated) {
+    // Snapshot symlink entries intentionally contain metadata only. Content
+    // operations must dereference through the live bridge rather than treating
+    // the placeholder as an empty file (which would also corrupt append/copy).
+    if (entry.truncated || entry.isSymbolicLink) {
       throw enosync(normalized);
     }
     return entry.content;

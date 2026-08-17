@@ -381,6 +381,44 @@ test('lstatSync returns Stats with isSymbolicLink()', () => {
   expect(s.isSymbolicLink()).toBe(true);
 });
 
+test('file symlink content operations dereference through the live bridge', () => {
+  const target = new TextEncoder().encode('target');
+  const store = new Map([['/workspace/alias', target]]);
+  const syncFs = cache([
+    {
+      path: '/workspace/alias',
+      content: new Uint8Array(0),
+      isDirectory: false,
+      isSymbolicLink: true,
+    },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store));
+
+  expect(shim.readFileSync('/workspace/alias', 'utf8')).toBe('target');
+  shim.copyFileSync('/workspace/alias', '/workspace/copy');
+  expect(new TextDecoder().decode(store.get('/workspace/copy'))).toBe('target');
+  shim.appendFileSync('/workspace/alias', '!');
+  expect(new TextDecoder().decode(store.get('/workspace/alias'))).toBe('target!');
+});
+
+test('statSync follows a snapshot symlink while lstatSync reports the link', () => {
+  const store = new Map([['/workspace/alias', new TextEncoder().encode('target')]]);
+  const syncFs = cache([
+    {
+      path: '/workspace/alias',
+      content: new Uint8Array(0),
+      isDirectory: false,
+      isSymbolicLink: true,
+    },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace', fakeBridge(store));
+
+  expect(shim.statSync('/workspace/alias')).toMatchObject({ size: 6 });
+  expect(shim.statSync('/workspace/alias').isFile()).toBe(true);
+  expect(shim.statSync('/workspace/alias').isSymbolicLink()).toBe(false);
+  expect(shim.lstatSync('/workspace/alias').isSymbolicLink()).toBe(true);
+});
+
 test('unlinkSync removes a directory symlink and leaves target contents intact', () => {
   const syncFs = cache([
     { ...textEntry('/workspace/target', ''), isDirectory: true },
