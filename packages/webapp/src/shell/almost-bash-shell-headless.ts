@@ -1047,9 +1047,52 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    */
   private makeScriptCommand(name: string): Command {
     const catalog = this.scriptCatalog;
-    const shell = this;
     const discoveryFs = this.options.jshDiscoveryFs ?? this.options.fs;
     const cmdName = name;
+    const executeInner = async (args: string[], ctx: CommandContext): Promise<ExecResult> => {
+      const execFn: typeof ctx.exec =
+        ctx.exec ??
+        ((cmd, opts) =>
+          // Forward `args` — the workflow branch passes the `workflow run …` argv via
+          // opts.args; dropping it would run a bare `workflow` (just-bash's Bash.exec
+          // appends opts.args to the command).
+          this.bash.exec(cmd, {
+            env: Object.fromEntries(ctx.env),
+            cwd: opts?.cwd ?? ctx.cwd,
+            args: opts?.args,
+          }));
+
+      // 1) .jsh wins the bare name.
+      const jshMap = await catalog.getJshCommands(this.currentScanRoots());
+      const jshPath = jshMap.get(cmdName);
+      if (jshPath) {
+        let code: string;
+        try {
+          const raw = await discoveryFs.readFile(jshPath, { encoding: 'utf-8' });
+          code = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+        } catch {
+          return { stdout: '', stderr: `jsh: cannot read script '${jshPath}'\n`, exitCode: 127 };
+        }
+        return executeJsCode(
+          code,
+          ['node', jshPath, ...args],
+          { fs: ctx.fs, cwd: ctx.cwd, env: ctx.env, stdin: ctx.stdin, exec: execFn },
+          this.buildJshProcessConfig()
+        );
+      }
+
+      // 2) Else a workflow (saved bare or skill <skill>:<name>) — route through the
+      //    `workflow run` command path (NOT executeJsCode on the raw file).
+      const wfMap = await catalog.getWorkflowCommands();
+      const wf = wfMap.get(cmdName);
+      if (wf) {
+        const argv = buildWorkflowRunArgv(wf.path, args);
+        return execFn(argv[0], { args: argv.slice(1), cwd: ctx.cwd });
+      }
+
+      // 3) Gone.
+      return { stdout: '', stderr: `${cmdName}: command no longer exists\n`, exitCode: 127 };
+    };
     return {
       name,
       // just-bash v3 monkey-patches async primitives in the defense-in-depth sandbox for
@@ -1059,48 +1102,17 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       // how `git`, `mount`, and other host-extension commands are registered.
       trusted: true,
       async execute(args: string[], ctx) {
-        const execFn: typeof ctx.exec =
-          ctx.exec ??
-          ((cmd, opts) =>
-            // Forward `args` — the workflow branch passes the `workflow run …` argv via
-            // opts.args; dropping it would run a bare `workflow` (just-bash's Bash.exec
-            // appends opts.args to the command).
-            shell.bash.exec(cmd, {
-              env: Object.fromEntries(ctx.env),
-              cwd: opts?.cwd ?? ctx.cwd,
-              args: opts?.args,
-            }));
-
-        // 1) .jsh wins the bare name.
-        const jshMap = await catalog.getJshCommands(shell.currentScanRoots());
-        const jshPath = jshMap.get(cmdName);
-        if (jshPath) {
-          let code: string;
-          try {
-            const raw = await discoveryFs.readFile(jshPath, { encoding: 'utf-8' });
-            code = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-          } catch {
-            return { stdout: '', stderr: `jsh: cannot read script '${jshPath}'\n`, exitCode: 127 };
-          }
-          return executeJsCode(
-            code,
-            ['node', jshPath, ...args],
-            { fs: ctx.fs, cwd: ctx.cwd, env: ctx.env, stdin: ctx.stdin, exec: execFn },
-            shell.buildJshProcessConfig()
-          );
+        // A THROW from a .jsh escapes into just-bash's error sanitizer,
+        // which rewrites path-like substrings to the literal `<path>` —
+        // destroying the only diagnostic the user gets (#2146 finding 2,
+        // and the mis-diagnosed #1033-1 scrub in git/clone.ts). Convert
+        // failures into ordinary results so the message survives verbatim.
+        try {
+          return await executeInner(args, ctx);
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err);
+          return { stdout: '', stderr: `${cmdName}: ${message}\n`, exitCode: 1 };
         }
-
-        // 2) Else a workflow (saved bare or skill <skill>:<name>) — route through the
-        //    `workflow run` command path (NOT executeJsCode on the raw file).
-        const wfMap = await catalog.getWorkflowCommands();
-        const wf = wfMap.get(cmdName);
-        if (wf) {
-          const argv = buildWorkflowRunArgv(wf.path, args);
-          return execFn(argv[0], { args: argv.slice(1), cwd: ctx.cwd });
-        }
-
-        // 3) Gone.
-        return { stdout: '', stderr: `${cmdName}: command no longer exists\n`, exitCode: 127 };
       },
     };
   }

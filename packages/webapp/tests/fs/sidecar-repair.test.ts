@@ -62,7 +62,10 @@ describe('repairSidecarDocument', () => {
 
   it('drops entries whose paths are gone and leaves symlinks alone', async () => {
     const doc: SidecarIndexJson = {
-      entries: { '/gone.txt': file(5), '/link': symlink() },
+      entries: {
+        '/gone.txt': { ...file(5), ino: 3, data: 4 },
+        '/link': { ...symlink(), ino: 5, data: 6 },
+      } as SidecarIndexJson['entries'],
     };
     const summary = await repairSidecarDocument(
       doc,
@@ -71,11 +74,18 @@ describe('repairSidecarDocument', () => {
     expect(summary.dropped).toBe(1);
     expect(doc.entries).not.toHaveProperty('/gone.txt');
     // Symlink entry untouched even though the probe reports a plain file.
-    expect(doc.entries?.['/link']).toEqual(symlink());
+    expect(doc.entries?.['/link']).toEqual({ ...symlink(), ino: 5, data: 6 });
   });
 
   it('reports changed=false for a healthy sidecar', async () => {
-    const doc: SidecarIndexJson = { entries: { '/': dir(), '/ok.txt': file(4) } };
+    // Healthy now includes unique inos (#2146) — ino-less entries are
+    // legitimately reassigned, so the no-op fixture must carry them.
+    const doc: SidecarIndexJson = {
+      entries: {
+        '/': { ...dir(), ino: 0, data: 0 },
+        '/ok.txt': { ...file(4), ino: 1, data: 2 },
+      } as SidecarIndexJson['entries'],
+    };
     const summary = await repairSidecarDocument(
       doc,
       probeFrom({ '/ok.txt': { kind: 'file', size: 4 } })
@@ -85,6 +95,7 @@ describe('repairSidecarDocument', () => {
       sizesFixed: 0,
       dropped: 0,
       selfEntryDropped: false,
+      inosReassigned: 0,
       changed: false,
     });
   });
@@ -125,12 +136,69 @@ describe('repairSidecarDocument', () => {
   });
 });
 
+describe('repairSidecarDocument — ino uniqueness (#2146)', () => {
+  it('reassigns zero and duplicate inos to fresh unique ids above the max', async () => {
+    const doc: SidecarIndexJson = {
+      entries: {
+        '/': { ...dir(), ino: 0, data: 0 },
+        '/a.txt': { ...file(10), ino: 0, data: 0 },
+        '/b.txt': { ...file(20), ino: 0, data: 0 },
+        '/c.txt': { ...file(30), ino: 7, data: 8 },
+        '/dup.txt': { ...file(40), ino: 7, data: 9 },
+      } as SidecarIndexJson['entries'],
+    };
+    const summary = await repairSidecarDocument(
+      doc,
+      probeFrom({
+        '/a.txt': { kind: 'file', size: 10 },
+        '/b.txt': { kind: 'file', size: 20 },
+        '/c.txt': { kind: 'file', size: 30 },
+        '/dup.txt': { kind: 'file', size: 40 },
+      })
+    );
+    expect(summary.inosReassigned).toBe(3); // a, b, dup — c keeps 7, / exempt
+    expect(summary.changed).toBe(true);
+    const entries = doc.entries as Record<string, { ino?: number; data?: number }>;
+    expect(entries['/'].ino).toBe(0); // ZenFS forces / to ino 0 — leave it
+    expect(entries['/c.txt'].ino).toBe(7); // first claimant keeps its id
+    const reassigned = ['/a.txt', '/b.txt', '/dup.txt'].map((p) => entries[p].ino);
+    // Fresh ids are unique, nonzero, and above the pre-existing max (9).
+    expect(new Set(reassigned).size).toBe(3);
+    for (const ino of reassigned) {
+      expect(ino).toBeGreaterThan(9);
+    }
+    for (const p of ['/a.txt', '/b.txt', '/dup.txt']) {
+      expect(entries[p].data).toBe((entries[p].ino as number) + 1);
+    }
+  });
+
+  it('a document with already-unique inos is untouched', async () => {
+    const doc: SidecarIndexJson = {
+      entries: {
+        '/': { ...dir(), ino: 0 },
+        '/x.txt': { ...file(1), ino: 3, data: 4 },
+        '/y.txt': { ...file(2), ino: 5, data: 6 },
+      } as SidecarIndexJson['entries'],
+    };
+    const summary = await repairSidecarDocument(
+      doc,
+      probeFrom({
+        '/x.txt': { kind: 'file', size: 1 },
+        '/y.txt': { kind: 'file', size: 2 },
+      })
+    );
+    expect(summary.inosReassigned).toBe(0);
+    expect(summary.changed).toBe(false);
+  });
+});
+
 describe('resolveWithSidecarRepair', () => {
   const repaired: SidecarRepairSummary = {
     kindFixed: ['/x'],
     sizesFixed: 0,
     dropped: 0,
     selfEntryDropped: false,
+    inosReassigned: 0,
     changed: true,
   };
 

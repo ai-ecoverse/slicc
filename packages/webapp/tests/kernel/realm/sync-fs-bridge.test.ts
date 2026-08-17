@@ -6,6 +6,7 @@
  * flush back to the real VFS.
  */
 
+import type { CommandContext } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { makeCtx, runCode } from './cjs-realm-harness.js';
 
@@ -155,6 +156,58 @@ describe('sync FS bridge (integration)', () => {
     expect(out.stderr).toContain('[sync-fs] ERROR: flush failed');
     expect(out.stderr).toContain('were NOT persisted');
     expect(out.stderr).toContain('simulated flush failure');
+  });
+
+  it('one poisoned path does not sink the other pending writes (#2146)', async () => {
+    const ctx = makeCtx();
+    const originalWriteFile = ctx.fs.writeFile.bind(ctx.fs);
+    ctx.fs.writeFile = async (path: string, content: string | Uint8Array) => {
+      if (path === '/workspace/poisoned.txt') {
+        throw new Error("ENOTDIR: not a directory '/workspace/poisoned.txt'");
+      }
+      return originalWriteFile(path, content);
+    };
+    const out = await runCode(
+      `const fs = require('fs');
+       fs.writeFileSync('/workspace/healthy.txt', 'survives');
+       fs.writeFileSync('/workspace/poisoned.txt', 'dies');
+       console.log('done');`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    // The healthy write reached the real VFS even though its batch-mate failed…
+    expect(await ctx.fs.readFile('/workspace/healthy.txt')).toBe('survives');
+    // …and the failure is still reported, naming the poisoned path.
+    expect(out.stderr).toContain('poisoned.txt');
+  });
+
+  it('a failed pre-exec flush keeps its mutations pending for the exit flush (#2148 P1)', async () => {
+    const ctx = makeCtx();
+    let attempts = 0;
+    const originalWriteFile = ctx.fs.writeFile.bind(ctx.fs);
+    ctx.fs.writeFile = async (path: string, content: string | Uint8Array) => {
+      if (path === '/workspace/transient.txt') {
+        attempts += 1;
+        // First flush attempt (pre-exec) fails; the exit-flush retry succeeds.
+        if (attempts === 1) throw new Error('transient backend failure');
+      }
+      return originalWriteFile(path, content);
+    };
+    ctx.exec = (async () => ({ stdout: '', stderr: '', exitCode: 0 })) as CommandContext['exec'];
+    const out = await runCode(
+      `const fs = require('fs');
+       const exec = require('sliccy:exec');
+       fs.writeFileSync('/workspace/transient.txt', 'survives');
+       exec('true');
+       console.log('done');`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    // Pre-fix, the failed pre-exec flush still reset the mutation baseline,
+    // so the exit flush saw nothing pending and the write was silently lost.
+    expect(attempts).toBe(2);
+    expect(await ctx.fs.readFile('/workspace/transient.txt')).toBe('survives');
+    // (The failure breadcrumb goes to the worker console, not script stderr.)
   });
 
   it('sync and async coexist on same require("fs")', async () => {

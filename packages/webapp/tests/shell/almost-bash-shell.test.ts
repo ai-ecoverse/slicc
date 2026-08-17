@@ -593,6 +593,28 @@ describe('AlmostBashShell .jsh command registration', () => {
     expect(piped.stdout).toContain('cold ok');
   });
 
+  // #2146 finding 2: a THROW escaping a .jsh command runs through just-bash's
+  // error sanitizer, which rewrites path-like substrings to the literal
+  // `<path>` — the degraded `'/…<path>' '<path>'` messages from the issue.
+  // The handler must convert failures into results so diagnostics survive.
+  it('a .jsh dispatch failure surfaces its real message, not a sanitized <path> (#2146)', async () => {
+    await fs.writeFile('/workspace/skills/test-cmd/scripts/failer.jsh', 'console.log("hi");');
+    const shell = new AlmostBashShell({ fs });
+    await shell.syncJshCommands();
+
+    const catalog = shell.getScriptCatalog();
+    vi.spyOn(catalog, 'getJshCommands').mockRejectedValue(
+      new Error("ENOTDIR: not a directory '/tmp/poisoned'")
+    );
+    const result = await shell.executeCommand('failer');
+    vi.restoreAllMocks();
+
+    expect(result.exitCode).toBe(1);
+    // The real path survives verbatim; the sanitizer's placeholder does not appear.
+    expect(result.stderr).toContain("'/tmp/poisoned'");
+    expect(result.stderr).not.toContain('<path>');
+  });
+
   // The bare case must keep working too — it went through `tryJshFallback`
   // before and now resolves as a registered command; either way, exit 0.
   it('still resolves a bare .jsh command on a cold shell', async () => {
