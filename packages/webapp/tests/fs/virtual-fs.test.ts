@@ -787,6 +787,109 @@ describe('sidecar flush guard against in-memory kind flips (#2006)', () => {
       await vfs.dispose();
     }
   });
+
+  // Review catches on #2135, both against the flush guard:
+  //  - a poisoned entry reached only via a dirty PREFIX must not bypass the
+  //    probe (rename subtree marks overlay entries dirty.paths never names);
+  //  - a flip whose probe reports missing/unreadable must be excluded from
+  //    the overlay rather than accepted (fail closed).
+  it('prefix-covered and unverifiable flips cannot overwrite the sidecar record', async () => {
+    const dbName = `test-2006-flush2-${Date.now()}`;
+    const vfs = await VirtualFS.create({ dbName, wipe: true });
+
+    const onDisk = {
+      version: 1,
+      entries: {
+        '/renamed/poisoned.md': { mode: S_IFREG | 0o644, size: 10 },
+        '/gone/unverifiable.md': { mode: S_IFREG | 0o644, size: 20 },
+      },
+    };
+    let written: string | null = null;
+    const metadataFile = {
+      kind: 'file',
+      getFile: async () => ({ text: async () => JSON.stringify(onDisk), size: 100 }),
+      createWritable: async () => ({
+        write: async (data: string) => {
+          written = data;
+        },
+        close: async () => {},
+      }),
+    };
+    // OPFS reality: /renamed/poisoned.md is a real FILE (memory lies);
+    // /gone is absent entirely (probe reports missing).
+    const opfsRoot = {
+      kind: 'directory',
+      getFileHandle: async (name: string) => {
+        if (name === '.metadata.json') return metadataFile;
+        throw new Error('TypeMismatch');
+      },
+      getDirectoryHandle: async (name: string) => {
+        if (name === 'renamed') {
+          return {
+            kind: 'directory',
+            getFileHandle: async (n: string) => {
+              if (n === 'poisoned.md') return { kind: 'file', getFile: async () => ({ size: 10 }) };
+              throw new Error('TypeMismatch');
+            },
+            getDirectoryHandle: async () => {
+              throw new Error('TypeMismatch');
+            },
+          };
+        }
+        throw new Error('TypeMismatch'); // '/gone' does not exist
+      },
+    };
+
+    const fakeIndex = new Map<string, { mode?: number }>([
+      ['/renamed/poisoned.md', { mode: S_IFDIR | 0o755 }],
+      ['/gone/unverifiable.md', { mode: S_IFDIR | 0o755 }],
+    ]);
+    const backendFs = {
+      index: Object.assign(fakeIndex, {
+        toJSON: () => ({ version: 1, entries: Object.fromEntries(fakeIndex) }),
+      }),
+      _handles: new Map<string, unknown>(),
+    };
+    const internal = vfs as unknown as {
+      backend: string;
+      opfsBackendFs: unknown;
+      opfsHandle: unknown;
+      writeOpfsMetadataSidecarUnlocked(): Promise<void>;
+    };
+    internal.backend = 'opfs';
+    internal.opfsBackendFs = backendFs;
+    internal.opfsHandle = opfsRoot;
+    const statics = VirtualFS as unknown as {
+      opfsBackends: Map<string, { backendFs: unknown; refs: number; sidecarDirty: unknown }>;
+    };
+    // Neither path is in dirty.paths — they are covered only by prefixes,
+    // exactly the overlay route the first review comment named.
+    statics.opfsBackends.set(dbName, {
+      backendFs,
+      refs: 1,
+      sidecarDirty: { paths: new Set(), prefixes: new Set(['/renamed', '/gone']) },
+    });
+
+    try {
+      await internal.writeOpfsMetadataSidecarUnlocked();
+      const flushed = JSON.parse(written as unknown as string) as {
+        entries: Record<string, { mode: number }>;
+      };
+      // Prefix-covered poison: reality sided with the disk — record survives,
+      // liar evicted.
+      expect(flushed.entries['/renamed/poisoned.md'].mode & 0o170000).toBe(S_IFREG);
+      expect(fakeIndex.has('/renamed/poisoned.md')).toBe(false);
+      // Unverifiable flip: on-disk record survives, but the live index is
+      // NOT evicted on an unverified probe.
+      expect(flushed.entries['/gone/unverifiable.md'].mode & 0o170000).toBe(S_IFREG);
+      expect(fakeIndex.has('/gone/unverifiable.md')).toBe(true);
+    } finally {
+      statics.opfsBackends.delete(dbName);
+      internal.backend = 'memory';
+      internal.opfsBackendFs = null;
+      await vfs.dispose();
+    }
+  });
 });
 
 describe('writeFile truncation (shrinking rewrites)', () => {

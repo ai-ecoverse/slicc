@@ -773,8 +773,8 @@ export class VirtualFS {
         /* absent or unreadable → full own snapshot below (seed/recovery) */
       }
       if (onDisk) {
-        const effectiveDirty = await this.auditDirtyKindFlips(own, onDisk, dirty, handle);
-        merged = mergeSidecarEntries(onDisk, own, effectiveDirty);
+        await this.auditDirtyKindFlips(own, onDisk, dirty, handle);
+        merged = mergeSidecarEntries(onDisk, own, dirty);
       }
     }
     // `merged` is the raw ZenFS index (`own`) whenever the merge is skipped —
@@ -796,46 +796,58 @@ export class VirtualFS {
   }
 
   /**
-   * Fail-closed guard for the sidecar flush (#2006 direction 2): a dirty path
-   * whose kind in this realm's index DISAGREES with the on-disk record may be
-   * in-memory corruption about to clobber a correct sidecar. Probe OPFS for
-   * just those paths; when reality sides with the disk, keep the on-disk
-   * record for this flush and evict the lying in-memory entry so the next
-   * access re-reads truth. A flip reality agrees with (a genuine
-   * replace-file-with-directory) merges as before.
+   * Fail-closed guard for the sidecar flush (#2006 direction 2): any entry
+   * the merge would overlay from this realm's own index — an explicit dirty
+   * path OR an entry under a dirty prefix — whose kind DISAGREES with the
+   * on-disk record may be in-memory corruption about to clobber a correct
+   * sidecar. Probe OPFS for just those paths and RESTORE the on-disk record
+   * into the own snapshot when:
+   *
+   * - reality sides with the disk (memory is the liar) — also evict the
+   *   lying in-memory entry so the next access re-reads truth; or
+   * - reality cannot be verified (probe error, or the path is gone) — a
+   *   flip that cannot be confirmed must not overwrite the sidecar record;
+   *   the live index is left alone, and a genuinely deleted path heals via
+   *   ZenFS's own ENOENT fallback on the next access.
+   *
+   * A flip reality agrees with (a genuine replace-file-with-directory)
+   * merges as before. Restoring into `own` (rather than shrinking the dirty
+   * set) covers the prefix overlay too, which a paths-only exclusion cannot
+   * express.
    */
   private async auditDirtyKindFlips(
     own: SidecarIndexJson,
     onDisk: SidecarIndexJson,
     dirty: SidecarDirtyState,
     handle: FileSystemDirectoryHandle
-  ): Promise<SidecarDirtyState> {
-    const flips = findDirtyKindFlips(own, onDisk, dirty.paths);
-    if (flips.length === 0) return dirty;
+  ): Promise<void> {
+    const flips = findDirtyKindFlips(own, onDisk, dirty.paths, dirty.prefixes);
+    if (flips.length === 0) return;
     const probe = makeOpfsProbe(handle);
-    const poisoned = new Set<string>();
     const backendFs = this.opfsBackendFs as unknown as {
       index?: Map<string, unknown>;
       _handles?: Map<string, unknown>;
     } | null;
     for (const flip of flips) {
       const truth = await probe(flip.path).catch(() => null);
-      if (!truth || truth.kind === 'missing') continue;
-      if ((truth.kind === 'directory') !== flip.ownIsDirectory) {
-        poisoned.add(flip.path);
+      const verifiedOwnCorrect =
+        truth !== null &&
+        truth.kind !== 'missing' &&
+        (truth.kind === 'directory') === flip.ownIsDirectory;
+      if (verifiedOwnCorrect) continue;
+      // Keep the on-disk record for this flush.
+      const diskEntry = onDisk.entries?.[flip.path];
+      if (own.entries && diskEntry !== undefined) own.entries[flip.path] = diskEntry;
+      const contradicted = truth !== null && truth.kind !== 'missing';
+      if (contradicted) {
         backendFs?.index?.delete(flip.path);
         backendFs?._handles?.delete(flip.path);
-        console.warn(
-          '[virtual-fs] refused to flush in-memory kind flip over correct sidecar (#2006)',
-          { path: flip.path, reality: truth.kind }
-        );
       }
+      console.warn(
+        '[virtual-fs] refused to flush in-memory kind flip over sidecar record (#2006)',
+        { path: flip.path, reality: truth?.kind ?? 'unverifiable', evicted: contradicted }
+      );
     }
-    if (poisoned.size === 0) return dirty;
-    return {
-      paths: new Set([...dirty.paths].filter((p) => !poisoned.has(p))),
-      prefixes: dirty.prefixes,
-    };
   }
 
   /**

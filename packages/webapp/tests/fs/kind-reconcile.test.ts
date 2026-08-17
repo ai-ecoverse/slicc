@@ -66,6 +66,29 @@ describe('findDirtyKindFlips', () => {
     expect(flips).toEqual([]);
   });
 
+  // Review catch on #2135: a rename marks subtrees in dirty.prefixes, and the
+  // merge overlays every own entry beneath them — entries dirty.paths never
+  // names. The audit must see those too.
+  it('finds flips under dirty prefixes, not just explicit dirty paths', () => {
+    const flips = findDirtyKindFlips(
+      { entries: { '/renamed/child.md': dir, '/renamed/ok.md': file } },
+      { entries: { '/renamed/child.md': file, '/renamed/ok.md': file } },
+      new Set(),
+      new Set(['/renamed'])
+    );
+    expect(flips).toEqual([{ path: '/renamed/child.md', ownIsDirectory: true }]);
+  });
+
+  it('a prefix matches its own path and children, not lookalike siblings', () => {
+    const flips = findDirtyKindFlips(
+      { entries: { '/pre': dir, '/prefix-lookalike': dir } },
+      { entries: { '/pre': file, '/prefix-lookalike': file } },
+      new Set(),
+      new Set(['/pre'])
+    );
+    expect(flips.map((f) => f.path)).toEqual(['/pre']);
+  });
+
   it('only considers dirty paths, never the whole index', () => {
     const flips = findDirtyKindFlips(
       { entries: { '/clean-flip': dir, '/dirty-flip': dir } },

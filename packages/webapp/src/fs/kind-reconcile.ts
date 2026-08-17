@@ -65,10 +65,16 @@ function modeOf(entry: unknown): number | undefined {
 }
 
 /**
- * Find dirty paths whose kind in the realm's own index DISAGREES with the
- * on-disk sidecar record — the candidates for propagating in-memory
- * corruption onto a correct sidecar (#2006 direction 2). Pure; the caller
- * probes OPFS for each candidate and drops the ones where memory is the liar.
+ * Find paths the sidecar merge would overlay from the realm's own index whose
+ * kind DISAGREES with the on-disk record — the candidates for propagating
+ * in-memory corruption onto a correct sidecar (#2006 direction 2). Pure; the
+ * caller probes OPFS for each candidate and restores the on-disk record for
+ * the ones where memory is the liar (or where reality cannot be verified).
+ *
+ * Covers BOTH overlay sources of `mergeSidecarEntries`: explicit dirty paths
+ * AND every own-index entry under a dirty prefix — a rename's subtree marks
+ * overlay entries the paths set never names, so auditing `dirty.paths` alone
+ * lets a poisoned descendant bypass the probe entirely.
  *
  * Only paths present on BOTH sides can flip; adds and deletes are not kind
  * conflicts.
@@ -76,10 +82,22 @@ function modeOf(entry: unknown): number | undefined {
 export function findDirtyKindFlips(
   own: { entries?: { [path: string]: unknown } },
   onDisk: { entries?: { [path: string]: unknown } },
-  dirtyPaths: ReadonlySet<string>
+  dirtyPaths: ReadonlySet<string>,
+  dirtyPrefixes: ReadonlySet<string> = new Set()
 ): DirtyKindFlip[] {
+  const candidates = new Set<string>(dirtyPaths);
+  if (dirtyPrefixes.size > 0) {
+    for (const path of Object.keys(own.entries ?? {})) {
+      for (const prefix of dirtyPrefixes) {
+        if (path === prefix || path.startsWith(`${prefix}/`)) {
+          candidates.add(path);
+          break;
+        }
+      }
+    }
+  }
   const flips: DirtyKindFlip[] = [];
-  for (const path of dirtyPaths) {
+  for (const path of candidates) {
     const ownEntry = own.entries?.[path];
     const diskEntry = onDisk.entries?.[path];
     if (!ownEntry || !diskEntry) continue;
