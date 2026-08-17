@@ -234,6 +234,11 @@ export class RestrictedFS {
     this.vfs.invalidatePaths(paths);
   }
 
+  /** Persist backend-owned metadata; this operation is not path-selected. */
+  async flush(): Promise<void> {
+    await this.vfs.flush();
+  }
+
   /**
    * Mount-membership query — needed by the isomorphic-git fs adapter,
    * which routes mount-backed paths through the async VFS API instead of
