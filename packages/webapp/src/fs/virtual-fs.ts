@@ -17,6 +17,7 @@
 
 import { convertError, rebrandFsError } from './error-rebrand.js';
 import type { FsWatcher } from './fs-watcher.js';
+import { findDirtyKindFlips, memoryKindOfMode, shouldReconcileKind } from './kind-reconcile.js';
 import type { MountBackend, RefreshReport } from './mount/backend.js';
 import { LocalMountBackend } from './mount/backend-local.js';
 import { MountIndex, type MountIndexEnv, resolveMountIndexLimits } from './mount-index.js';
@@ -34,6 +35,7 @@ import {
   type SidecarIndexJson,
   stripSidecarSelfEntry,
 } from './sidecar-merge.js';
+import { makeOpfsProbe } from './sidecar-repair.js';
 import { MAX_SYMLINK_DEPTH, realpath, resolveSymlinks } from './symlink-resolver.js';
 import type {
   DirEntry,
@@ -770,7 +772,10 @@ export class VirtualFS {
       } catch {
         /* absent or unreadable → full own snapshot below (seed/recovery) */
       }
-      if (onDisk) merged = mergeSidecarEntries(onDisk, own, dirty);
+      if (onDisk) {
+        await this.auditDirtyKindFlips(own, onDisk, dirty, handle);
+        merged = mergeSidecarEntries(onDisk, own, dirty);
+      }
     }
     // `merged` is the raw ZenFS index (`own`) whenever the merge is skipped —
     // no dirty state, or an absent/unreadable on-disk sidecar (seed/recovery).
@@ -787,6 +792,61 @@ export class VirtualFS {
     if (dirty) {
       dirty.paths.clear();
       dirty.prefixes.clear();
+    }
+  }
+
+  /**
+   * Fail-closed guard for the sidecar flush (#2006 direction 2): any entry
+   * the merge would overlay from this realm's own index — an explicit dirty
+   * path OR an entry under a dirty prefix — whose kind DISAGREES with the
+   * on-disk record may be in-memory corruption about to clobber a correct
+   * sidecar. Probe OPFS for just those paths and RESTORE the on-disk record
+   * into the own snapshot when:
+   *
+   * - reality sides with the disk (memory is the liar) — also evict the
+   *   lying in-memory entry so the next access re-reads truth; or
+   * - reality cannot be verified (probe error, or the path is gone) — a
+   *   flip that cannot be confirmed must not overwrite the sidecar record;
+   *   the live index is left alone, and a genuinely deleted path heals via
+   *   ZenFS's own ENOENT fallback on the next access.
+   *
+   * A flip reality agrees with (a genuine replace-file-with-directory)
+   * merges as before. Restoring into `own` (rather than shrinking the dirty
+   * set) covers the prefix overlay too, which a paths-only exclusion cannot
+   * express.
+   */
+  private async auditDirtyKindFlips(
+    own: SidecarIndexJson,
+    onDisk: SidecarIndexJson,
+    dirty: SidecarDirtyState,
+    handle: FileSystemDirectoryHandle
+  ): Promise<void> {
+    const flips = findDirtyKindFlips(own, onDisk, dirty.paths, dirty.prefixes);
+    if (flips.length === 0) return;
+    const probe = makeOpfsProbe(handle);
+    const backendFs = this.opfsBackendFs as unknown as {
+      index?: Map<string, unknown>;
+      _handles?: Map<string, unknown>;
+    } | null;
+    for (const flip of flips) {
+      const truth = await probe(flip.path).catch(() => null);
+      const verifiedOwnCorrect =
+        truth !== null &&
+        truth.kind !== 'missing' &&
+        (truth.kind === 'directory') === flip.ownIsDirectory;
+      if (verifiedOwnCorrect) continue;
+      // Keep the on-disk record for this flush.
+      const diskEntry = onDisk.entries?.[flip.path];
+      if (own.entries && diskEntry !== undefined) own.entries[flip.path] = diskEntry;
+      const contradicted = truth !== null && truth.kind !== 'missing';
+      if (contradicted) {
+        backendFs?.index?.delete(flip.path);
+        backendFs?._handles?.delete(flip.path);
+      }
+      console.warn(
+        '[virtual-fs] refused to flush in-memory kind flip over sidecar record (#2006)',
+        { path: flip.path, reality: truth?.kind ?? 'unverifiable', evicted: contradicted }
+      );
     }
   }
 
@@ -836,6 +896,102 @@ export class VirtualFS {
       // whatever the sidecar recorded before the external writer ran.
       this.markSidecarDirty(path);
     }
+  }
+
+  /**
+   * Retry `op` ONCE when it fails with a kind mismatch (`EISDIR`/`ENOTDIR`)
+   * that {@link reconcileKindMismatch} confirms is in-memory corruption
+   * rather than a genuine error (#2006). A genuine mismatch — really reading
+   * a directory as a file — reconciles nothing and rethrows immediately, so
+   * this can never loop.
+   */
+  private async withKindMismatchRetry<T>(path: string, op: () => Promise<T>): Promise<T> {
+    try {
+      return await op();
+    } catch (err) {
+      const code = (err as { code?: string } | null)?.code;
+      if (code !== 'EISDIR' && code !== 'ENOTDIR') throw err;
+      const healed = await this.reconcileKindMismatch(path).catch(() => false);
+      if (!healed) throw err;
+      return await op();
+    }
+  }
+
+  /**
+   * In-session heal for an in-memory index entry whose kind disagrees with
+   * OPFS reality (#2006).
+   *
+   * The in-memory ZenFS index is authoritative at runtime and never re-reads
+   * the on-disk sidecar — so once an entry's kind flips (a real file held as
+   * a directory), every read fails `EISDIR` for the rest of the session and
+   * on-disk repairs are invisible until reload. Production incident
+   * 2026-08-08: the cone looped for hours on `/workspace/CLAUDE.md`, a
+   * genuine file, clean on disk and in the sidecar.
+   *
+   * Probes OPFS reality for the single path (same probe the boot-time
+   * `sidecar-repair.ts` uses) and, when memory disagrees, evicts the index
+   * entry and cached handle — the identical mechanism `invalidatePaths`
+   * already uses for external writers — so the next access re-reads truth.
+   * When memory wrongly held a DIRECTORY, its phantom children are evicted
+   * too. Returns whether anything was healed; `false` means the error was
+   * genuine and must propagate.
+   */
+  private async reconcileKindMismatch(rawPath: string): Promise<boolean> {
+    if (this.backend !== 'opfs') return false;
+    const backendFs = this.opfsBackendFs as unknown as {
+      index?: Map<string, { mode?: number }>;
+      // Private field on @zenfs/dom WebAccessFS — pinned at v1.2.9 (same
+      // caveat as `invalidatePaths`).
+      _handles?: Map<string, { kind?: string }>;
+    } | null;
+    const handle = this.opfsHandle;
+    if (!backendFs?.index || !handle) return false;
+    const normalized = normalizePath(rawPath);
+    // Heal the resolved node (the index key) when resolution works; the
+    // corrupt entry itself may make resolution throw — fall back to the
+    // normalized path.
+    let target = normalized;
+    try {
+      target = await this.resolveSymlinks(normalized);
+    } catch {
+      /* keep normalized */
+    }
+    const truth = await makeOpfsProbe(handle)(target);
+    const indexKind = memoryKindOfMode(backendFs.index.get(target)?.mode);
+    const cachedHandle = backendFs._handles?.get(target);
+    const cachedKind: ReturnType<typeof memoryKindOfMode> =
+      cachedHandle?.kind === 'directory'
+        ? 'directory'
+        : cachedHandle?.kind === 'file'
+          ? 'file'
+          : 'absent';
+    const indexLies = shouldReconcileKind(truth, indexKind);
+    const handleLies = shouldReconcileKind(truth, cachedKind);
+    if (!indexLies && !handleLies) return false;
+
+    backendFs.index.delete(target);
+    backendFs._handles?.delete(target);
+    // A phantom directory may have accumulated phantom children.
+    if (indexKind === 'directory' || cachedKind === 'directory') {
+      const prefix = `${target}/`;
+      for (const key of [...backendFs.index.keys()]) {
+        if (key.startsWith(prefix)) backendFs.index.delete(key);
+      }
+      if (backendFs._handles) {
+        for (const key of [...backendFs._handles.keys()]) {
+          if (key.startsWith(prefix)) backendFs._handles.delete(key);
+        }
+      }
+    }
+    // Let the next sidecar flush persist the freshly re-read (correct) entry.
+    this.markSidecarDirty(target);
+    console.warn('[virtual-fs] reconciled in-memory kind mismatch (#2006)', {
+      path: target,
+      reality: truth.kind,
+      indexHeld: indexKind,
+      handleHeld: cachedKind,
+    });
+    return true;
   }
 
   /**
@@ -1351,6 +1507,10 @@ export class VirtualFS {
    * @throws FsError ENOENT if file doesn't exist, EISDIR if path is a directory
    */
   async readFile(path: string, options?: ReadFileOptions): Promise<FileContent> {
+    return this.withKindMismatchRetry(path, () => this.readFileInner(path, options));
+  }
+
+  private async readFileInner(path: string, options?: ReadFileOptions): Promise<FileContent> {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
     if (mount) {
@@ -1384,6 +1544,14 @@ export class VirtualFS {
    * @throws FsError EISDIR if path is an existing directory
    */
   async writeFile(
+    path: string,
+    content: FileContent,
+    _options?: { recursive?: boolean }
+  ): Promise<void> {
+    return this.withKindMismatchRetry(path, () => this.writeFileInner(path, content, _options));
+  }
+
+  private async writeFileInner(
     path: string,
     content: FileContent,
     _options?: { recursive?: boolean }
@@ -1548,6 +1716,10 @@ export class VirtualFS {
 
   /** readDir implementation for local (non-mounted) paths. */
   private async readDirLocal(normalized: string): Promise<DirEntry[]> {
+    return this.withKindMismatchRetry(normalized, () => this.readDirLocalInner(normalized));
+  }
+
+  private async readDirLocalInner(normalized: string): Promise<DirEntry[]> {
     const resolved = await this.resolveSymlinks(normalized);
     try {
       const names = await this.lfs.readdir(resolved);
@@ -1789,6 +1961,10 @@ export class VirtualFS {
    * @throws FsError ENOENT if path doesn't exist
    */
   async stat(path: string): Promise<Stats> {
+    return this.withKindMismatchRetry(path, () => this.statInner(path));
+  }
+
+  private async statInner(path: string): Promise<Stats> {
     const normalized = normalizePath(path);
     const mount = this.findMount(normalized);
     if (mount) {

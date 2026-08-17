@@ -533,6 +533,365 @@ describe('VirtualFS', () => {
   });
 });
 
+describe('in-session kind-mismatch reconcile (#2006)', () => {
+  const S_IFDIR = 0o40000;
+  const S_IFREG = 0o100000;
+
+  /** A fake OPFS directory handle tree the probe can walk. */
+  function fakeDirHandle(children: Record<string, unknown>): unknown {
+    return {
+      kind: 'directory',
+      getDirectoryHandle: async (name: string) => {
+        const child = children[name] as { kind?: string } | undefined;
+        if (child?.kind !== 'directory') throw new Error('TypeMismatch');
+        return child;
+      },
+      getFileHandle: async (name: string) => {
+        const child = children[name] as { kind?: string } | undefined;
+        if (child?.kind !== 'file') throw new Error('TypeMismatch');
+        return child;
+      },
+    };
+  }
+  const fakeFileHandle = (size = 5): unknown => ({ kind: 'file', getFile: async () => ({ size }) });
+
+  /** Detach the injected fakes so dispose()'s sidecar flush stays a no-op. */
+  function detachFakes(vfs: VirtualFS): void {
+    const internal = vfs as unknown as { backend: string; opfsBackendFs: unknown };
+    internal.backend = 'memory';
+    internal.opfsBackendFs = null;
+  }
+
+  type Wrapped = {
+    withKindMismatchRetry<T>(path: string, op: () => Promise<T>): Promise<T>;
+  };
+
+  async function corruptedVfs() {
+    const vfs = await VirtualFS.create({ dbName: `test-2006-${Date.now()}`, wipe: true });
+    // OPFS reality: a genuine file — what the probe sees. Memory: a directory.
+    const opfsRoot = fakeDirHandle({
+      workspace: fakeDirHandle({ 'CLAUDE.md': fakeFileHandle(16249) }),
+    });
+    const fakeIndex = new Map<string, { mode?: number }>([
+      ['/workspace/CLAUDE.md', { mode: S_IFDIR | 0o755 }],
+      ['/workspace/CLAUDE.md/phantom-child.txt', { mode: S_IFREG | 0o644 }],
+      ['/workspace/keep.txt', { mode: S_IFREG | 0o644 }],
+    ]);
+    const fakeHandles = new Map<string, { kind?: string }>([
+      ['/workspace/CLAUDE.md', { kind: 'directory' }],
+      ['/workspace/keep.txt', { kind: 'file' }],
+    ]);
+    const internal = vfs as unknown as {
+      backend: string;
+      opfsBackendFs: unknown;
+      opfsHandle: unknown;
+    };
+    internal.backend = 'opfs';
+    internal.opfsBackendFs = { index: fakeIndex, _handles: fakeHandles };
+    internal.opfsHandle = opfsRoot;
+    return { vfs, fakeIndex, fakeHandles };
+  }
+
+  // The acceptance case: an in-memory kind that disagrees with the backing
+  // store reconciles in-session — the retried read succeeds, no reload.
+  it('a poisoned EISDIR read heals the index and the single retry succeeds', async () => {
+    const { vfs, fakeIndex, fakeHandles } = await corruptedVfs();
+    let calls = 0;
+    const op = async (): Promise<string> => {
+      calls += 1;
+      // First attempt: ZenFS serves the poisoned index -> EISDIR. After the
+      // eviction the retry re-reads OPFS truth and succeeds.
+      if (fakeIndex.has('/workspace/CLAUDE.md')) {
+        throw new FsError('EISDIR', 'is a directory', '/workspace/CLAUDE.md');
+      }
+      return 'real content';
+    };
+
+    const result = await (vfs as unknown as Wrapped).withKindMismatchRetry(
+      '/workspace/CLAUDE.md',
+      op
+    );
+    expect(result).toBe('real content');
+    expect(calls).toBe(2); // one failure, one retry — never a loop
+    expect(fakeIndex.has('/workspace/CLAUDE.md')).toBe(false);
+    expect(fakeHandles.has('/workspace/CLAUDE.md')).toBe(false);
+    // Phantom children of the phantom directory are evicted with it.
+    expect(fakeIndex.has('/workspace/CLAUDE.md/phantom-child.txt')).toBe(false);
+    // Innocent bystanders are untouched.
+    expect(fakeIndex.has('/workspace/keep.txt')).toBe(true);
+    expect(fakeHandles.has('/workspace/keep.txt')).toBe(true);
+    detachFakes(vfs);
+    await vfs.dispose();
+  });
+
+  it('a genuine EISDIR (reality agrees) reconciles nothing and does not retry', async () => {
+    const vfs = await VirtualFS.create({ dbName: `test-2006b-${Date.now()}`, wipe: true });
+    const fakeIndex = new Map<string, { mode?: number }>([
+      ['/workspace/real-dir', { mode: S_IFDIR | 0o755 }],
+    ]);
+    const internal = vfs as unknown as {
+      backend: string;
+      opfsBackendFs: unknown;
+      opfsHandle: unknown;
+    };
+    internal.backend = 'opfs';
+    internal.opfsBackendFs = { index: fakeIndex, _handles: new Map() };
+    internal.opfsHandle = fakeDirHandle({
+      workspace: fakeDirHandle({ 'real-dir': fakeDirHandle({}) }),
+    });
+
+    let calls = 0;
+    const op = async (): Promise<string> => {
+      calls += 1;
+      throw new FsError('EISDIR', 'is a directory', '/workspace/real-dir');
+    };
+    await expect(
+      (vfs as unknown as Wrapped).withKindMismatchRetry('/workspace/real-dir', op)
+    ).rejects.toMatchObject({ code: 'EISDIR' });
+    expect(calls).toBe(1); // no retry: memory agreed with reality
+    expect(fakeIndex.has('/workspace/real-dir')).toBe(true);
+    detachFakes(vfs);
+    await vfs.dispose();
+  });
+
+  it('non-kind errors pass through untouched, without probing', async () => {
+    const { vfs, fakeIndex } = await corruptedVfs();
+    let calls = 0;
+    const op = async (): Promise<string> => {
+      calls += 1;
+      throw new FsError('ENOENT', 'no such file', '/workspace/CLAUDE.md');
+    };
+    await expect(
+      (vfs as unknown as Wrapped).withKindMismatchRetry('/workspace/CLAUDE.md', op)
+    ).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(calls).toBe(1);
+    expect(fakeIndex.has('/workspace/CLAUDE.md')).toBe(true); // untouched
+    detachFakes(vfs);
+    await vfs.dispose();
+  });
+
+  it('the memory backend never reconciles (no OPFS to probe)', async () => {
+    const vfs = await VirtualFS.create({ dbName: `test-2006c-${Date.now()}`, wipe: true });
+    let calls = 0;
+    const op = async (): Promise<string> => {
+      calls += 1;
+      throw new FsError('EISDIR', 'is a directory', '/d');
+    };
+    await expect((vfs as unknown as Wrapped).withKindMismatchRetry('/d', op)).rejects.toMatchObject(
+      { code: 'EISDIR' }
+    );
+    expect(calls).toBe(1);
+    await vfs.dispose();
+  });
+});
+
+describe('sidecar flush guard against in-memory kind flips (#2006)', () => {
+  const S_IFDIR = 0o40000;
+  const S_IFREG = 0o100000;
+
+  it('a write cannot propagate a lying in-memory kind onto a correct sidecar', async () => {
+    const dbName = `test-2006-flush-${Date.now()}`;
+    const vfs = await VirtualFS.create({ dbName, wipe: true });
+
+    // On disk: the CORRECT sidecar — CLAUDE.md is a file.
+    const onDisk = {
+      version: 1,
+      entries: {
+        '/workspace/CLAUDE.md': { mode: S_IFREG | 0o644, size: 16249 },
+      },
+    };
+    let written: string | null = null;
+    const metadataFile = {
+      kind: 'file',
+      getFile: async () => ({ text: async () => JSON.stringify(onDisk), size: 100 }),
+      createWritable: async () => ({
+        write: async (data: string) => {
+          written = data;
+        },
+        close: async () => {},
+      }),
+    };
+    // OPFS reality: CLAUDE.md is a real file (sides with the disk record).
+    const opfsRoot = {
+      kind: 'directory',
+      getFileHandle: async (name: string) => {
+        if (name === '.metadata.json') return metadataFile;
+        throw new Error('TypeMismatch');
+      },
+      getDirectoryHandle: async (name: string) => {
+        if (name === 'workspace') {
+          return {
+            kind: 'directory',
+            getFileHandle: async (n: string) => {
+              if (n === 'CLAUDE.md')
+                return { kind: 'file', getFile: async () => ({ size: 16249 }) };
+              throw new Error('TypeMismatch');
+            },
+            getDirectoryHandle: async () => {
+              throw new Error('TypeMismatch');
+            },
+          };
+        }
+        throw new Error('TypeMismatch');
+      },
+    };
+
+    // In memory: the POISONED index wants to persist CLAUDE.md as a directory.
+    const fakeIndex = new Map<string, { mode?: number }>([
+      ['/workspace/CLAUDE.md', { mode: S_IFDIR | 0o755 }],
+    ]);
+    const backendFs = {
+      index: Object.assign(fakeIndex, {
+        toJSON: () => ({
+          version: 1,
+          entries: Object.fromEntries(fakeIndex),
+        }),
+      }),
+      _handles: new Map<string, unknown>([['/workspace/CLAUDE.md', { kind: 'directory' }]]),
+    };
+    const internal = vfs as unknown as {
+      backend: string;
+      opfsBackendFs: unknown;
+      opfsHandle: unknown;
+      writeOpfsMetadataSidecarUnlocked(): Promise<void>;
+    };
+    internal.backend = 'opfs';
+    internal.opfsBackendFs = backendFs;
+    internal.opfsHandle = opfsRoot;
+    // The realm marked the flipped path dirty (the re-corruption window).
+    const statics = VirtualFS as unknown as {
+      opfsBackends: Map<string, { backendFs: unknown; refs: number; sidecarDirty: unknown }>;
+    };
+    statics.opfsBackends.set(dbName, {
+      backendFs,
+      refs: 1,
+      sidecarDirty: { paths: new Set(['/workspace/CLAUDE.md']), prefixes: new Set() },
+    });
+
+    try {
+      await internal.writeOpfsMetadataSidecarUnlocked();
+
+      expect(written).not.toBeNull();
+      const flushed = JSON.parse(written as unknown as string) as {
+        entries: Record<string, { mode: number }>;
+      };
+      // The on-disk (correct) kind survived the flush…
+      expect(flushed.entries['/workspace/CLAUDE.md'].mode & 0o170000).toBe(S_IFREG);
+      // …and the lying in-memory entry was evicted so the next access re-reads truth.
+      expect(fakeIndex.has('/workspace/CLAUDE.md')).toBe(false);
+      expect(backendFs._handles.has('/workspace/CLAUDE.md')).toBe(false);
+    } finally {
+      statics.opfsBackends.delete(dbName);
+      internal.backend = 'memory';
+      internal.opfsBackendFs = null;
+      await vfs.dispose();
+    }
+  });
+
+  // Review catches on #2135, both against the flush guard:
+  //  - a poisoned entry reached only via a dirty PREFIX must not bypass the
+  //    probe (rename subtree marks overlay entries dirty.paths never names);
+  //  - a flip whose probe reports missing/unreadable must be excluded from
+  //    the overlay rather than accepted (fail closed).
+  it('prefix-covered and unverifiable flips cannot overwrite the sidecar record', async () => {
+    const dbName = `test-2006-flush2-${Date.now()}`;
+    const vfs = await VirtualFS.create({ dbName, wipe: true });
+
+    const onDisk = {
+      version: 1,
+      entries: {
+        '/renamed/poisoned.md': { mode: S_IFREG | 0o644, size: 10 },
+        '/gone/unverifiable.md': { mode: S_IFREG | 0o644, size: 20 },
+      },
+    };
+    let written: string | null = null;
+    const metadataFile = {
+      kind: 'file',
+      getFile: async () => ({ text: async () => JSON.stringify(onDisk), size: 100 }),
+      createWritable: async () => ({
+        write: async (data: string) => {
+          written = data;
+        },
+        close: async () => {},
+      }),
+    };
+    // OPFS reality: /renamed/poisoned.md is a real FILE (memory lies);
+    // /gone is absent entirely (probe reports missing).
+    const opfsRoot = {
+      kind: 'directory',
+      getFileHandle: async (name: string) => {
+        if (name === '.metadata.json') return metadataFile;
+        throw new Error('TypeMismatch');
+      },
+      getDirectoryHandle: async (name: string) => {
+        if (name === 'renamed') {
+          return {
+            kind: 'directory',
+            getFileHandle: async (n: string) => {
+              if (n === 'poisoned.md') return { kind: 'file', getFile: async () => ({ size: 10 }) };
+              throw new Error('TypeMismatch');
+            },
+            getDirectoryHandle: async () => {
+              throw new Error('TypeMismatch');
+            },
+          };
+        }
+        throw new Error('TypeMismatch'); // '/gone' does not exist
+      },
+    };
+
+    const fakeIndex = new Map<string, { mode?: number }>([
+      ['/renamed/poisoned.md', { mode: S_IFDIR | 0o755 }],
+      ['/gone/unverifiable.md', { mode: S_IFDIR | 0o755 }],
+    ]);
+    const backendFs = {
+      index: Object.assign(fakeIndex, {
+        toJSON: () => ({ version: 1, entries: Object.fromEntries(fakeIndex) }),
+      }),
+      _handles: new Map<string, unknown>(),
+    };
+    const internal = vfs as unknown as {
+      backend: string;
+      opfsBackendFs: unknown;
+      opfsHandle: unknown;
+      writeOpfsMetadataSidecarUnlocked(): Promise<void>;
+    };
+    internal.backend = 'opfs';
+    internal.opfsBackendFs = backendFs;
+    internal.opfsHandle = opfsRoot;
+    const statics = VirtualFS as unknown as {
+      opfsBackends: Map<string, { backendFs: unknown; refs: number; sidecarDirty: unknown }>;
+    };
+    // Neither path is in dirty.paths — they are covered only by prefixes,
+    // exactly the overlay route the first review comment named.
+    statics.opfsBackends.set(dbName, {
+      backendFs,
+      refs: 1,
+      sidecarDirty: { paths: new Set(), prefixes: new Set(['/renamed', '/gone']) },
+    });
+
+    try {
+      await internal.writeOpfsMetadataSidecarUnlocked();
+      const flushed = JSON.parse(written as unknown as string) as {
+        entries: Record<string, { mode: number }>;
+      };
+      // Prefix-covered poison: reality sided with the disk — record survives,
+      // liar evicted.
+      expect(flushed.entries['/renamed/poisoned.md'].mode & 0o170000).toBe(S_IFREG);
+      expect(fakeIndex.has('/renamed/poisoned.md')).toBe(false);
+      // Unverifiable flip: on-disk record survives, but the live index is
+      // NOT evicted on an unverified probe.
+      expect(flushed.entries['/gone/unverifiable.md'].mode & 0o170000).toBe(S_IFREG);
+      expect(fakeIndex.has('/gone/unverifiable.md')).toBe(true);
+    } finally {
+      statics.opfsBackends.delete(dbName);
+      internal.backend = 'memory';
+      internal.opfsBackendFs = null;
+      await vfs.dispose();
+    }
+  });
+});
+
 describe('writeFile truncation (shrinking rewrites)', () => {
   it('a shorter rewrite must not leave the previous tail behind', async () => {
     // ZenFS' OPFS backend writes at offset 0 without truncating; the
