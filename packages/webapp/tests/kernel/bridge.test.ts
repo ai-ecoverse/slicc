@@ -707,6 +707,20 @@ describe('Bridge onScoopUnregistered eviction', () => {
     expect(mockStore.delete).toHaveBeenCalledWith('session-agent-probe');
   });
 
+  it('resets agent-event message gating after eviction', () => {
+    const events: string[] = [];
+    bridge.onAgentEvent((scoopJid, event) => {
+      if (scoopJid === unregisteredScoop.jid) events.push(event.type);
+    });
+    callbacks.onResponse(unregisteredScoop.jid, 'before', true);
+    events.length = 0;
+
+    callbacks.onScoopUnregistered?.(unregisteredScoop);
+    callbacks.onResponse(unregisteredScoop.jid, 'after', true);
+
+    expect(events).toEqual(['message_start', 'content_delta']);
+  });
+
   it('refreshes the panel scoop list after eviction', () => {
     const emitSpy = vi.spyOn(bridge as any, 'emitScoopList');
 
