@@ -1,6 +1,5 @@
 {
   "packages/cherry/src/cdp-host-handlers.ts": 3,
-  "packages/cherry/src/mount.ts": 1,
   "packages/cherry/src/preview-bootstrap.ts": 2,
   "packages/cherry/src/protocol.ts": 5,
   "packages/chrome-extension/src/bridge-sw.ts": 17,

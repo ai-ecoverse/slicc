@@ -21,8 +21,10 @@ import {
  */
 const MISMATCH_HOOK_GRACE_MS = 250;
 
+type CdpResult = Awaited<ReturnType<ReturnType<typeof createCdpHostHandler>>>;
+
 interface CdpResponseShape {
-  result?: Record<string, unknown>;
+  result?: CdpResult;
   error?: { code: number; message: string };
 }
 
