@@ -17,6 +17,7 @@
  * so renames/removals on the server take effect.
  */
 
+import { escapeHtml } from '@slicc/webcomponents/internal/html';
 import { createLogger } from '../../base/logger.js';
 import { GLOBAL_FS_DB_NAME } from '../../fs/global-db.js';
 import { FsError } from '../../fs/types.js';
@@ -49,16 +50,6 @@ export function slugifyAppName(name: string): string {
     .replace(/^-+|-+$/g, '')
     .slice(0, 64);
   return slug || 'app';
-}
-
-/** HTML-escape `&`, `<`, `>`, `"`, `'`. */
-export function escapeHtml(s: string): string {
-  return s
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#39;');
 }
 
 /**

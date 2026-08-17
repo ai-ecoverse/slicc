@@ -15,7 +15,8 @@
  * comes from {@link PICKER_KIND_TEXT}.
  */
 
-import { showToolUI, type ToolExecutionContext, toolUIRegistry } from '../../tools/tool-ui.js';
+import { escapeHtml } from '@slicc/webcomponents/internal/html';
+import { showToolUI, type ToolExecutionContext, toolUIRegistry } from '../tool-ui.js';
 import type { PickerKind } from './picker-popup.js';
 
 /** Two minutes — enough for a slow user, short enough to fail loud. */
@@ -34,16 +35,6 @@ const PICKER_KIND_TEXT: Record<PickerKind, PickerKindText> = {
   'serial-port': { title: 'Connect serial port', approve: 'Select serial port' },
   'hid-device': { title: 'Connect HID device', approve: 'Select HID device' },
 };
-
-/** Escapes HTML special characters for safe interpolation into card markup. */
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;');
-}
 
 /** Build the standard approval-card HTML for a picker kind + filters. */
 export function buildApprovalCardHtml(
@@ -73,12 +64,34 @@ export function buildApprovalCardHtml(
   `;
 }
 
+/** Serializable device descriptor returned by browser picker APIs. */
+export interface DevicePickerInfo {
+  [key: string]: unknown;
+}
+
+interface PickerActionData {
+  cancelled?: boolean;
+  error?: unknown;
+  granted?: boolean;
+  handle?: unknown;
+  info?: DevicePickerInfo;
+}
+
+interface PickerApprovalResponse {
+  approved?: boolean;
+  denied?: boolean;
+  cancelled?: boolean;
+  error?: string;
+  handle?: string;
+  info?: DevicePickerInfo;
+}
+
 /** Device-picker approval outcome handed back to the calling command. */
 export interface DeviceApprovalResult {
   /** Page-realm registry handle (`usb1`, `serial2`, `hid1`, …). */
   handle: string;
   /** Serializable descriptor (vid/pid/serial number/…). */
-  info: Record<string, unknown>;
+  info: DevicePickerInfo;
 }
 
 /**
@@ -104,7 +117,7 @@ export async function runDevicePickerApproval(
       html: buildApprovalCardHtml(kind, filters),
       onAction: async (action, data) => {
         if (action !== 'approve') return { denied: true };
-        const d = data as Record<string, unknown> | undefined;
+        const d = data as PickerActionData | undefined;
         if (d?.cancelled) return { cancelled: true };
         if (d?.error) return { error: String(d.error) };
         if (d?.granted && typeof d.handle === 'string') {
@@ -146,14 +159,7 @@ export async function runDevicePickerApproval(
     );
   }
 
-  const res = result as {
-    approved?: boolean;
-    denied?: boolean;
-    cancelled?: boolean;
-    error?: string;
-    handle?: string;
-    info?: Record<string, unknown>;
-  };
+  const res = result as PickerApprovalResponse;
   if (res.denied) throw new Error(`${kind}: denied by user`);
   if (res.cancelled) throw new Error(`${kind}: cancelled`);
   if (res.error) throw new Error(`${kind}: ${res.error}`);

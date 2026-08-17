@@ -18,6 +18,10 @@
       "types": "./src/internal/icons.ts",
       "default": "./src/internal/icons.ts"
     },
+    "./internal/html": {
+      "types": "./src/internal/html.ts",
+      "default": "./src/internal/html.ts"
+    },
     "./panel/center-ops": {
       "types": "./src/panel/center-ops.ts",
       "default": "./src/panel/center-ops.ts"

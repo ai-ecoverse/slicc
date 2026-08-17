@@ -3,7 +3,6 @@ import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { GLOBAL_FS_DB_NAME } from '../../../src/fs/global-db.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import {
-  escapeHtml,
   MCP_SPRINKLES_DIR,
   materializeAppSprinkles,
   removeAppSprinkles,
@@ -31,14 +30,6 @@ describe('slugifyAppName', () => {
   it('caps length at 64', () => {
     const long = 'x'.repeat(200);
     expect(slugifyAppName(long).length).toBe(64);
-  });
-});
-
-describe('escapeHtml', () => {
-  it('escapes the five HTML metacharacters', () => {
-    expect(escapeHtml('<a href="x">&\'</a>')).toBe(
-      '&lt;a href=&quot;x&quot;&gt;&amp;&#39;&lt;/a&gt;'
-    );
   });
 });
 
@@ -75,12 +66,12 @@ describe('renderAppSprinkle', () => {
   it('HTML-escapes title, description, server, and template URI', () => {
     const html = renderAppSprinkle('srv&"<>', {
       name: 'a',
-      title: '<script>x</script>',
+      title: `<script>x</script>'s`,
       description: 'A & B',
       templateUri: 'https://example.com/?q=1&r=2',
     });
     expect(html).not.toContain('<script>x</script>');
-    expect(html).toContain('&lt;script&gt;');
+    expect(html).toContain('&lt;script&gt;x&lt;/script&gt;&#39;s');
     expect(html).toContain('A &amp; B');
     expect(html).toContain('q=1&amp;r=2');
     // Server name is JSON-encoded in the script, so quotes remain JSON-quoted,

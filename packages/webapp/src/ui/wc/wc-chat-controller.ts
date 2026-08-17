@@ -6,6 +6,7 @@
  * `wc-message-view.ts` mapper instead of hand-built DOM.
  */
 
+import { escapeHtml } from '@slicc/webcomponents/internal/html';
 import { trackChatSend, trackError, trackLickBackpressure } from '../../kernel/telemetry.js';
 import {
   applyDictationMarkers,
@@ -163,15 +164,6 @@ function extractToolUiTitle(html: string): string {
     /* malformed html — fall through to the generic label */
   }
   return 'Approval requested';
-}
-
-/** Escape text for safe interpolation into an HTML string. */
-function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;');
 }
 
 /**

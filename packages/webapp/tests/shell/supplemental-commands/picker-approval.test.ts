@@ -81,8 +81,8 @@ describe('buildApprovalCardHtml', () => {
   });
 
   it('escapes HTML-special characters in targetPath', () => {
-    const html = buildApprovalCardHtml('directory', [], '/workspace/<mnt>&"docs"');
-    expect(html).toContain('Target: /workspace/&lt;mnt&gt;&amp;&quot;docs&quot;');
+    const html = buildApprovalCardHtml('directory', [], '/workspace/<mnt>&"docs"\'s');
+    expect(html).toContain('Target: /workspace/&lt;mnt&gt;&amp;&quot;docs&quot;&#39;s');
     expect(html).not.toContain('<mnt>');
   });
 

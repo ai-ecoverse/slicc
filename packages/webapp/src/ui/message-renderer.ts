@@ -6,19 +6,10 @@
  * call + DOMPurify sanitization for faster streaming rendering (~60fps).
  */
 
+import { escapeHtml } from '@slicc/webcomponents/internal/html';
 import { sanitize as purify } from 'isomorphic-dompurify';
 import { Marked, type Tokens } from 'marked';
 import { stripReplyLangMarker } from '../speech/dictation-priming.js';
-
-/** Escape HTML special characters. */
-export function escapeHtml(text: string): string {
-  return text
-    .replace(/&/g, '&amp;')
-    .replace(/</g, '&lt;')
-    .replace(/>/g, '&gt;')
-    .replace(/"/g, '&quot;')
-    .replace(/'/g, '&#x27;');
-}
 
 /**
  * Simple syntax highlighter for code blocks.
@@ -68,7 +59,7 @@ function highlightJS(html: string): string {
   html = html.replace(/(\/\/[^\n]*)/g, '<span class="tok-comment">$1</span>');
   html = html.replace(/(\/\*[\s\S]*?\*\/)/g, '<span class="tok-comment">$1</span>');
   html = html.replace(
-    /(&quot;[^&]*?&quot;|&#x27;[^&]*?&#x27;|`[^`]*?`)/g,
+    /(&quot;[^&]*?&quot;|&#39;[^&]*?&#39;|`[^`]*?`)/g,
     '<span class="tok-string">$1</span>'
   );
   const protectedSpans = protectHighlightedSpans(html);
@@ -134,7 +125,7 @@ function highlightJSON(html: string): string {
 function highlightBash(html: string): string {
   html = html.replace(/(#[^\n]*)/g, '<span class="tok-comment">$1</span>');
   html = html.replace(
-    /(&quot;[^&]*?&quot;|&#x27;[^&]*?&#x27;)/g,
+    /(&quot;[^&]*?&quot;|&#39;[^&]*?&#39;)/g,
     '<span class="tok-string">$1</span>'
   );
   const kw = [

@@ -29,7 +29,6 @@
   "packages/webapp/src/shell/supplemental-commands/models-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/oauth-domain-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/open-command.ts": 2,
-  "packages/webapp/src/shell/supplemental-commands/picker-approval.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/picker-popup.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/console.ts": 1,
@@ -57,6 +56,5 @@
   "packages/webapp/src/shell/supplemental-commands/upskill/upskill-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/usb-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/webhook-command.ts": 6,
-  "packages/webapp/src/shell/supplemental-commands/workflow-command.ts": 3,
-  "packages/webapp/src/tools/tool-ui.ts": 2
+  "packages/webapp/src/shell/supplemental-commands/workflow-command.ts": 3
 }
