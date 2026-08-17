@@ -39,10 +39,16 @@ function stubSelfLocation(href: string): void {
  * different singleton than the command observes.
  */
 async function loadCommandAndTrayLeader() {
-  const trayMod = await import('../../../src/scoops/tray-leader.js');
-  const cmdMod = await import('../../../src/shell/supplemental-commands/webhook-command.js');
+  const [topologyMod, trayMod, cmdMod] = await Promise.all([
+    import('../../../src/core/float-topology.js'),
+    import('../../../src/scoops/tray-leader.js'),
+    import('../../../src/shell/supplemental-commands/webhook-command.js'),
+  ]);
   return {
-    command: cmdMod.createWebhookCommand(),
+    command: cmdMod.createWebhookCommand({
+      hasLocalNodeServer: topologyMod.hasLocalNodeServer,
+      getLeaderStatus: () => trayMod.getLeaderStatusWithFallback(),
+    }),
     setStatus: trayMod.setLeaderTrayRuntimeStatus,
   };
 }
@@ -98,6 +104,31 @@ describe('webhook command — standalone mode (direct LickManager)', () => {
     vi.unstubAllGlobals();
     delete (globalThis as Record<string, unknown>).__slicc_lickManager;
   });
+
+  it.each([undefined, {}])(
+    'defaults omitted runtime readers to the node-server topology',
+    async (options) => {
+      const entry: WebhookEntry = {
+        id: 'wh-default',
+        name: 'default',
+        scoop: 'cone',
+        createdAt: new Date().toISOString(),
+      };
+      const lm = buildLickManagerMock({
+        createWebhook: vi.fn().mockResolvedValue(entry),
+      });
+      (globalThis as Record<string, unknown>).__slicc_lickManager = lm;
+
+      const cmdMod = await import('../../../src/shell/supplemental-commands/webhook-command.js');
+      const command = options
+        ? cmdMod.createWebhookCommand(options)
+        : cmdMod.createWebhookCommand();
+      const result = await command.execute(['create', '--scoop', 'cone'], {} as never);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('URL: http://localhost:5710/webhooks/wh-default');
+    }
+  );
 
   it('create routes to direct LickManager and renders the local node-server URL', async () => {
     const entry: WebhookEntry = {
@@ -414,13 +445,11 @@ describe('webhook command — extension side panel → offscreen via BroadcastCh
       deleteCronTask: vi.fn(),
     };
 
-    // Start the offscreen host with a tray URL resolver.
     const { startLickManagerHost } = await import('../../../src/scoops/lick-manager-proxy.js');
-    startLickManagerHost(mockLickManager as never, {
-      getTrayWebhookUrl: () => SESSION.webhookUrl,
-    });
+    startLickManagerHost(mockLickManager as never);
 
-    const { command } = await loadCommandAndTrayLeader();
+    const { command, setStatus } = await loadCommandAndTrayLeader();
+    setStatus({ state: 'leader', session: SESSION, error: null });
     // NOTE: __slicc_lickManager is intentionally NOT set, forcing
     // the command into the BroadcastChannel proxy branch.
 
@@ -448,11 +477,10 @@ describe('webhook command — extension side panel → offscreen via BroadcastCh
     };
 
     const { startLickManagerHost } = await import('../../../src/scoops/lick-manager-proxy.js');
-    startLickManagerHost(mockLickManager as never, {
-      getTrayWebhookUrl: () => SESSION.webhookUrl,
-    });
+    startLickManagerHost(mockLickManager as never);
 
-    const { command } = await loadCommandAndTrayLeader();
+    const { command, setStatus } = await loadCommandAndTrayLeader();
+    setStatus({ state: 'leader', session: SESSION, error: null });
 
     const result = await command.execute(['list'], {} as never);
     expect(result.exitCode).toBe(0);

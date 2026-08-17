@@ -88,21 +88,3 @@ function isElectronOverlayUrl(url: URL): boolean {
     url.searchParams.get('runtime') === ELECTRON_OVERLAY_RUNTIME_QUERY_VALUE
   );
 }
-
-export function getLickWebSocketUrl(locationHref: string): string {
-  const url = new URL(locationHref);
-  const protocol = url.protocol === 'https:' ? 'wss:' : 'ws:';
-  return `${protocol}//${url.host}/licks-ws`;
-}
-
-export function getWebhookUrl(locationHref: string, webhookId: string): string {
-  const url = new URL(locationHref);
-  return `${url.origin}/webhooks/${webhookId}`;
-}
-
-/** Construct a per-webhook URL under a tray webhook capability URL. */
-export function getTrayWebhookUrl(trayWebhookUrl: string, webhookId: string): string {
-  const normalizedBase = trayWebhookUrl.replace(/\/+$/, '');
-  const normalizedWebhookId = webhookId.replace(/^\/+/, '');
-  return `${normalizedBase}/${normalizedWebhookId}`;
-}

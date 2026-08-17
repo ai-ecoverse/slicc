@@ -257,12 +257,10 @@ async function createExtensionLeaderBrowser(
     new ExtensionBridgeTransport({
       extensionId,
       onLick: (lick) => {
-        pushMappedLick(mapNavigatePayloadToLickEvent(lick as unknown as Record<string, unknown>));
+        pushMappedLick(mapNavigatePayloadToLickEvent(lick));
       },
       onDiscovery: (discovery) => {
-        pushMappedLick(
-          mapDiscoveryPayloadToLickEvent(discovery as unknown as Record<string, unknown>)
-        );
+        pushMappedLick(mapDiscoveryPayloadToLickEvent(discovery));
       },
       onOpenSettings: () => {
         // The side-panel follower handed a provider sign-in to this leader tab
@@ -427,7 +425,7 @@ export async function setupStandalonePrelude(
   // thread — the kernel-worker publishes its own __slicc_browser in
   // host.ts, but the settings dialog and OAuth click handlers run on
   // the page realm where that global isn't visible.
-  (globalThis as Record<string, unknown>).__slicc_browser = browser;
+  (globalThis as unknown as { __slicc_browser: BrowserAPI }).__slicc_browser = browser;
 
   return {
     browser,

@@ -73,7 +73,7 @@ import { createUnzipCommand } from './unzip-command.js';
 import { createUpgradeCommand } from './upgrade-command.js';
 import { createUsbCommand } from './usb-command.js';
 import { createV86Command } from './v86-command.js';
-import { createWebhookCommand } from './webhook-command.js';
+import { createWebhookCommand, type WebhookCommandOptions } from './webhook-command.js';
 import { createWebsocatCommand } from './websocat-command.js';
 import { createWfProgressCommand } from './wf-progress-command.js';
 import { createWhichCommand } from './which-command.js';
@@ -146,6 +146,8 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    * shell session (LLM-context parity with container-loaded secrets).
    */
   setEnv?: (name: string, value: string) => void;
+  /** Runtime topology and tray-status readers for the webhook command. */
+  webhook?: WebhookCommandOptions;
   /**
    * Builds the process-tracking config (PM, owner, parent pid) for the
    * realm-backed `node` / `python` commands so their `kind:'jsh'`/`'py'`
@@ -196,7 +198,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
       : []),
     ...(options.fetch ? [createHfCommand({ fetch: options.fetch })] : []),
     createFfmpegCommand(),
-    createWebhookCommand(),
+    createWebhookCommand(options.webhook),
     createWebsocatCommand(),
     createCrontaskCommand(),
     createMcpCommand({ fs: options.fs, scriptCatalog: options.scriptCatalog }),

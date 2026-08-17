@@ -1,9 +1,19 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { hasLocalNodeServer } from '../../core/float-topology.js';
-import { getLeaderStatusWithFallback } from '../../scoops/tray-leader.js';
-import { getTrayWebhookUrl, getWebhookUrl } from '../../ui/runtime-mode.js';
+import { getTrayWebhookUrl, getWebhookUrl } from '../../base/lick-urls.js';
 import { getLickManagerSurface } from './lick-surface.js';
+
+interface WebhookLeaderStatus {
+  state: string;
+  session: { webhookUrl: string } | null;
+}
+
+export interface WebhookCommandOptions {
+  hasLocalNodeServer?: () => boolean;
+  getLeaderStatus?: () => WebhookLeaderStatus;
+}
+
+const DEFAULT_LEADER_STATUS: WebhookLeaderStatus = { state: 'inactive', session: null };
 
 function webhookHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
@@ -48,35 +58,9 @@ interface WebhookInfo {
  */
 const URL_UNAVAILABLE = '(URL unavailable — connect a leader tray)';
 
-/** Get the LickManager from globalThis (published by `createKernelHost`). */
-function getDirectLickManager(): import('../../scoops/lick-manager.js').LickManager | null {
-  return (
-    ((globalThis as unknown as Record<string, unknown>).__slicc_lickManager as
-      | import('../../scoops/lick-manager.js').LickManager
-      | null) ?? null
-  );
-}
-
-/**
- * Resolve the leader-tray webhook capability URL base (without the per-webhook
- * id suffix), or `null` when no leader tray is connected. When the direct
- * worker `LickManager` is present (the normal kernel-worker path — standalone,
- * hosted, or extension-delegate leader), read the tray session via the
- * shim-aware `getLeaderStatusWithFallback()` (the tray may run on the PAGE
- * while this runs in the WORKER). Otherwise fall back to the legacy proxy.
- */
-async function resolveWebhookUrlBase(): Promise<string | null> {
-  // Direct/worker path (standalone, hosted, extension-delegate leader). The
-  // leader tray may run on the PAGE while this runs in the WORKER (whose tray
-  // module global stays `inactive`), so use the shim-aware fallback — same
-  // precedent as the `/licks-ws` `tray_status` handler.
-  if (getDirectLickManager()) {
-    return getLeaderStatusWithFallback().session?.webhookUrl ?? null;
-  }
-  // No direct manager → legacy proxy path (unused in the current
-  // single-kernel-worker leader tab; kept until confirmed removable).
-  const { getTrayWebhookUrlAsync } = await import('../../scoops/lick-manager-proxy.js');
-  return await getTrayWebhookUrlAsync();
+/** Resolve the leader-tray webhook capability URL without the webhook ID suffix. */
+function resolveWebhookUrlBase(getLeaderStatus: () => WebhookLeaderStatus): string | null {
+  return getLeaderStatus().session?.webhookUrl ?? null;
 }
 
 /**
@@ -85,7 +69,11 @@ async function resolveWebhookUrlBase(): Promise<string | null> {
  * because `self.location.origin` is `chrome-extension://<id>` which no
  * external POST can reach.
  */
-function buildWebhookUrl(webhookId: string, trayUrlBase: string | null): string {
+function buildWebhookUrl(
+  webhookId: string,
+  trayUrlBase: string | null,
+  hasLocalNodeServer: () => boolean
+): string {
   // Tray-first in EVERY topology.
   if (trayUrlBase) return getTrayWebhookUrl(trayUrlBase, webhookId);
   // No tray: node-rest can still fall back to its local node-server origin; a
@@ -105,7 +93,10 @@ function notInitializedError(subcommand: string) {
 
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
 
-async function handleCreate(args: string[]): Promise<CommandResult> {
+async function handleCreate(
+  args: string[],
+  options: Required<WebhookCommandOptions>
+): Promise<CommandResult> {
   let name = 'default';
   let filter: string | undefined;
   let scoop: string | undefined;
@@ -136,7 +127,7 @@ async function handleCreate(args: string[]): Promise<CommandResult> {
   // Filter compilation requires dynamic JS evaluation; Chrome
   // extension CSP forbids it. crontask has the same gate. Users
   // who need filters should run standalone mode.
-  if (!hasLocalNodeServer() && filter) {
+  if (!options.hasLocalNodeServer() && filter) {
     return {
       stdout: '',
       stderr:
@@ -148,7 +139,7 @@ async function handleCreate(args: string[]): Promise<CommandResult> {
   // Extension non-leader / no-tray: refuse — there's no public
   // webhook URL we can hand the user. Standalone falls through
   // and renders the local node-server URL.
-  const preflightResult = await validateExtensionWebhookPreconditions();
+  const preflightResult = validateExtensionWebhookPreconditions(options);
   if (preflightResult) return preflightResult;
 
   const lm = await getLickManagerSurface();
@@ -158,7 +149,7 @@ async function handleCreate(args: string[]): Promise<CommandResult> {
   // Resolve URL after creation; if URL resolution fails, still
   // report the created webhook ID so the user can clean it up
   // rather than leaking a phantom entry.
-  const url = await resolveWebhookUrlSafe(entry.id);
+  const url = resolveWebhookUrlSafe(entry.id, options);
 
   let output = `Created webhook "${entry.name}"\nID:  ${entry.id}\nURL: ${url}\n`;
   if (entry.scoop) output += `Scoop: ${entry.scoop}\n`;
@@ -166,7 +157,7 @@ async function handleCreate(args: string[]): Promise<CommandResult> {
   return { stdout: output, stderr: '', exitCode: 0 };
 }
 
-async function handleList(): Promise<CommandResult> {
+async function handleList(options: Required<WebhookCommandOptions>): Promise<CommandResult> {
   const lm = await getLickManagerSurface();
   if (!lm) return notInitializedError('list');
   const entries = await lm.listWebhooks();
@@ -179,18 +170,23 @@ async function handleList(): Promise<CommandResult> {
   // import failure) — fall back to `null` so the entries still
   // render with the `URL_UNAVAILABLE` sentinel rather than the
   // user seeing a list error and assuming webhooks are broken.
-  const { trayUrlBase, urlResolutionError } = await resolveUrlBaseWithFallback();
+  const { trayUrlBase, urlResolutionError } = resolveUrlBaseWithFallback(options);
   const webhooks: WebhookInfo[] = entries.map((wh) => ({
     id: wh.id,
     name: wh.name,
-    url: buildWebhookUrl(wh.id, trayUrlBase),
+    url: buildWebhookUrl(wh.id, trayUrlBase, options.hasLocalNodeServer),
     createdAt: wh.createdAt,
     filter: wh.filter,
     scoop: wh.scoop,
   }));
 
   return {
-    stdout: formatWebhookList(webhooks, trayUrlBase, urlResolutionError),
+    stdout: formatWebhookList(
+      webhooks,
+      trayUrlBase,
+      urlResolutionError,
+      options.hasLocalNodeServer
+    ),
     stderr: '',
     exitCode: 0,
   };
@@ -221,12 +217,14 @@ async function handleDelete(args: string[]): Promise<CommandResult> {
   return { stdout: `Deleted webhook "${id}"\n`, stderr: '', exitCode: 0 };
 }
 
-async function validateExtensionWebhookPreconditions(): Promise<CommandResult | null> {
-  if (hasLocalNodeServer()) return null;
+function validateExtensionWebhookPreconditions(
+  options: Required<WebhookCommandOptions>
+): CommandResult | null {
+  if (options.hasLocalNodeServer()) return null;
 
-  const urlBase = await resolveWebhookUrlBase();
+  const urlBase = resolveWebhookUrlBase(options.getLeaderStatus);
   if (!urlBase) {
-    const leaderState = getLeaderStatusWithFallback().state;
+    const leaderState = options.getLeaderStatus().state;
     const msg =
       leaderState === 'leader'
         ? 'webhook create: tray session is not connected yet — wait for the leader to attach'
@@ -236,21 +234,24 @@ async function validateExtensionWebhookPreconditions(): Promise<CommandResult | 
   return null;
 }
 
-async function resolveWebhookUrlSafe(webhookId: string): Promise<string> {
+function resolveWebhookUrlSafe(
+  webhookId: string,
+  options: Required<WebhookCommandOptions>
+): string {
   try {
-    const trayUrlBase = await resolveWebhookUrlBase();
-    return buildWebhookUrl(webhookId, trayUrlBase);
+    const trayUrlBase = resolveWebhookUrlBase(options.getLeaderStatus);
+    return buildWebhookUrl(webhookId, trayUrlBase, options.hasLocalNodeServer);
   } catch (err) {
     return `(URL resolution failed: ${err instanceof Error ? err.message : String(err)})`;
   }
 }
 
-async function resolveUrlBaseWithFallback(): Promise<{
+function resolveUrlBaseWithFallback(options: Required<WebhookCommandOptions>): {
   trayUrlBase: string | null;
   urlResolutionError: string | null;
-}> {
+} {
   try {
-    const trayUrlBase = await resolveWebhookUrlBase();
+    const trayUrlBase = resolveWebhookUrlBase(options.getLeaderStatus);
     return { trayUrlBase, urlResolutionError: null };
   } catch (err) {
     return {
@@ -263,7 +264,8 @@ async function resolveUrlBaseWithFallback(): Promise<{
 function formatWebhookList(
   webhooks: WebhookInfo[],
   trayUrlBase: string | null,
-  urlResolutionError: string | null
+  urlResolutionError: string | null,
+  hasLocalNodeServer: () => boolean
 ): string {
   let output = 'Active webhooks:\n';
   for (const wh of webhooks) {
@@ -282,7 +284,11 @@ function formatWebhookList(
   return output;
 }
 
-export function createWebhookCommand(): Command {
+export function createWebhookCommand(commandOptions: WebhookCommandOptions = {}): Command {
+  const options: Required<WebhookCommandOptions> = {
+    hasLocalNodeServer: commandOptions.hasLocalNodeServer ?? (() => true),
+    getLeaderStatus: commandOptions.getLeaderStatus ?? (() => DEFAULT_LEADER_STATUS),
+  };
   return defineCommand('webhook', async (args) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
       return webhookHelp();
@@ -293,9 +299,9 @@ export function createWebhookCommand(): Command {
     try {
       switch (subcommand) {
         case 'create':
-          return await handleCreate(args);
+          return await handleCreate(args, options);
         case 'list':
-          return await handleList();
+          return await handleList(options);
         case 'delete':
           return await handleDelete(args);
         default:
