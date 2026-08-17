@@ -23,7 +23,16 @@ let package = Package(
         ),
         .testTarget(
             name: "SliccstartTests",
-            dependencies: ["Sliccstart"],
+            // The suite imports these three directly (AppUpdater release
+            // decoding, SwiftOptel error reports, the tray-session CLI), so
+            // they are declared here instead of being reached transitively
+            // through Sliccstart.
+            dependencies: [
+                "Sliccstart",
+                "AppUpdater",
+                .product(name: "SwiftOptel", package: "swift-optel"),
+                .product(name: "SliccTraySession", package: "swift-traysession"),
+            ],
             path: "SliccstartTests"
         ),
     ]
