@@ -29,6 +29,8 @@ import { SudoManager } from '../../src/sudo/sudo-manager.js';
 import type { SudoBroker, SudoDecision } from '../../src/sudo/types.js';
 import { OffscreenClient } from '../../src/ui/offscreen-client.js';
 
+const globals = globalThis as Record<string, unknown>;
+
 function tick(ms = 5): Promise<void> {
   return new Promise((r) => setTimeout(r, ms));
 }
@@ -295,6 +297,67 @@ describe('createPanelTerminalHost — imgcat media preview', () => {
       (mediaEvents[1] as import('../../src/shell/terminal-protocol.js').TerminalMediaPreviewMsg)
         .path
     ).toBe('/b.png');
+
+    client.close();
+    handle.stop();
+    channel.port1.close();
+    channel.port2.close();
+  });
+});
+
+describe('createPanelTerminalHost — webhook runtime wiring', () => {
+  afterEach(() => {
+    delete globals.__slicc_lickManager;
+  });
+
+  it('uses injected hosted topology and tray status for panel webhook URLs', async () => {
+    globals.__slicc_lickManager = {
+      listWebhooks: vi.fn().mockReturnValue([
+        {
+          id: 'wh-panel',
+          name: 'panel',
+          scoop: 'cone',
+          createdAt: new Date().toISOString(),
+        },
+      ]),
+    };
+    const fs = await VirtualFS.create({
+      dbName: `pthost-webhook-${Math.random().toString(36).slice(2)}`,
+      wipe: true,
+    });
+    const pm = new ProcessManager();
+    const channel = new MessageChannel();
+    const handle = createPanelTerminalHost({
+      transport: createBridgeMessageChannelTransport(channel.port2),
+      fs,
+      browser: makeStubBrowser(),
+      processManager: pm,
+      webhook: {
+        hasLocalNodeServer: () => false,
+        getLeaderStatus: () => ({
+          state: 'leader',
+          session: { webhookUrl: 'https://hub.slicc.dev/webhook/tray-panel' },
+        }),
+      },
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const panelClient = new OffscreenClient(
+      {
+        onStatusChange: vi.fn(),
+        onScoopCreated: vi.fn(),
+        onScoopListUpdate: vi.fn(),
+        onIncomingMessage: vi.fn(),
+      },
+      createPanelMessageChannelTransport(channel.port1)
+    );
+    const client = new TerminalSessionClient({ client: panelClient, sid: 'webhook1' });
+
+    await client.open();
+    const result = await client.exec('webhook list');
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('https://hub.slicc.dev/webhook/tray-panel/wh-panel');
+    expect(result.stdout).not.toContain('localhost');
 
     client.close();
     handle.stop();

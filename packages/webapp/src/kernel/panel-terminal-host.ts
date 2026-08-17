@@ -17,8 +17,13 @@
  */
 
 import type { BrowserAPI } from '../cdp/browser-api.js';
+import { hasLocalNodeServer } from '../core/float-topology.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
-import { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
+import { getLeaderStatusWithFallback } from '../scoops/tray-leader.js';
+import {
+  AlmostBashShellHeadless,
+  type HeadlessShellOptions,
+} from '../shell/almost-bash-shell-headless.js';
 import type { MediaPreviewItem } from '../shell/supplemental-commands/imgcat-command.js';
 import type { TerminalMediaPreviewMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
@@ -45,6 +50,8 @@ export interface PanelTerminalHostOptions {
    * still run ungated. Omit to leave the panel shell completely sudo-free.
    */
   sudoManager?: SudoManager | null;
+  /** Runtime readers for webhook URL routing. Defaults to the live topology and tray status. */
+  webhook?: HeadlessShellOptions['webhook'];
   /** Optional logger override. Defaults to `console`. */
   logger?: TerminalSessionHostOptions['logger'];
 }
@@ -104,6 +111,10 @@ export function createPanelTerminalHost(
         cwd: opts.cwd,
         env: opts.env,
         browserAPI: browser,
+        webhook: {
+          hasLocalNodeServer: options.webhook?.hasLocalNodeServer ?? hasLocalNodeServer,
+          getLeaderStatus: options.webhook?.getLeaderStatus ?? getLeaderStatusWithFallback,
+        },
         processManager,
         processOwner: { kind: 'system' },
         sudo: shellSudo,
