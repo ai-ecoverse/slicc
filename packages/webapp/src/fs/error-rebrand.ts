@@ -60,8 +60,15 @@ export function convertError(err: unknown, path: string): FsError {
       // degraded double-wrapped shape from #2146. Strip the code prefix,
       // the dangling `undefined` syscall slot, and any trailing quoted
       // path, mirroring rebrandFsError above.
-      if (msg.startsWith(`${code}: `)) msg = msg.slice(code.length + 2);
-      msg = msg.replace(/, undefined( '[^']*')?$/, '').replace(/ '[^']*'$/, '');
+      // Only a message that arrived PRE-FORMATTED (leading `CODE: `) is a
+      // ZenFS errno string whose trailing `syscall 'path'` decoration should
+      // be stripped. A plain structured message keeps its quoted details —
+      // `EIO: cannot open key 'config.json'` is a diagnostic, not a path
+      // (Codex P2 on #2148).
+      if (msg.startsWith(`${code}: `)) {
+        msg = msg.slice(code.length + 2);
+        msg = msg.replace(/, undefined( '[^']*')?$/, '').replace(/ '[^']*'$/, '');
+      }
       return new FsError(code, msg || code, path);
     }
   }

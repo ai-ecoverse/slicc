@@ -79,4 +79,12 @@ describe('convertError on pre-formatted ZenFS messages (#2146)', () => {
     const out = convertError(err, '/x');
     expect(out.message).toBe("EIO: some backend detail '/x'");
   });
+
+  it('preserves quoted details in unformatted backend errors (#2148 P2)', () => {
+    // Only the pre-formatted ZenFS shape gets its trailing quote stripped —
+    // a quoted value in an ordinary diagnostic is not a path decoration.
+    const err = Object.assign(new Error("cannot open key 'config.json'"), { code: 'EIO' });
+    const out = convertError(err, '/settings');
+    expect(out.message).toBe("EIO: cannot open key 'config.json' '/settings'");
+  });
 });
