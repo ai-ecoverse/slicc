@@ -1,10 +1,10 @@
 import { isAllowedDomain } from '@slicc/shared-ts';
 import type { Command, CommandContext, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { isValidShellEnvName } from '../../core/secret-env.js';
-import { resolveSecretTopology } from '../../core/secret-topology.js';
+import { isValidShellEnvName } from '../../base/shell-env-name.js';
 import { createSudoBroker } from '../../sudo/index.js';
 import type { SudoBroker } from '../../sudo/types.js';
+import { resolveFloatTopology } from '../float-topology.js';
 import { type ByteString, stdinAsText } from '../just-bash-compat.js';
 import { commandGlobToRegExp } from '../sudo/sudoers.js';
 import { createDefaultSecretBackend, type SecretBackend } from './secret-backends.js';
@@ -128,7 +128,7 @@ function denied(): ExecResult {
 }
 
 function buildEnv(deps: SecretCommandDeps): SecretCmdEnv {
-  const topology = resolveSecretTopology();
+  const topology = resolveFloatTopology();
   const inExtension =
     deps.isExtension ?? (topology === 'extension-direct' || topology === 'extension-delegate');
   const backend = deps.backend ?? createDefaultSecretBackend(topology);

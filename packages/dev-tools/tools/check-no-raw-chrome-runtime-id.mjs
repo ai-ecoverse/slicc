@@ -6,9 +6,8 @@
 // chrome.runtime.id / chrome?.runtime?.id boolean checks elsewhere
 // indicate a sniff that bypassed the canonical helpers.
 //
-// This scans packages/webapp/src/**/*.ts (excluding core/runtime-env.ts
-// itself and test files) and fails on any runtime.id / runtime?.id
-// reference outside comments.
+// This scans packages/webapp/src/**/*.ts (excluding test files) and fails on
+// any runtime.id / runtime?.id reference outside comments.
 //
 // VALUE READS: legitimate chrome.runtime.id value access (e.g. building
 // a .chromiumapp.org URL) must go through a locally aliased variable like
@@ -30,8 +29,6 @@ const Filename = fileURLToPath(import.meta.url);
 const repoRoot = resolve(dirname(Filename), '..', '..', '..');
 
 const SCAN_ROOT = resolve(repoRoot, 'packages/webapp/src');
-const ALLOWED_FILE = resolve(SCAN_ROOT, 'core/runtime-env.ts');
-
 // A .ts source file (not a test).
 function isSource(name) {
   return name.endsWith('.ts') && !name.endsWith('.test.ts');
@@ -74,7 +71,6 @@ function main() {
   let scanned = 0;
 
   for (const abs of collect(SCAN_ROOT)) {
-    if (abs === ALLOWED_FILE) continue;
     scanned++;
     const rel = relative(repoRoot, abs);
     for (const { line, match } of findRawSniffs(readFileSync(abs, 'utf8'))) {

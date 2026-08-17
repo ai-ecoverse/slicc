@@ -119,7 +119,7 @@ never-rules below flag what a reviewer must recognise.
 - **Two type systems**: legacy `tools/` + pi-compatible `core/`; bridge via
   `tool-adapter.ts`.
 - **Logging**: `createLogger('namespace')` (`base/logger.ts`).
-- **Extension detection**: `typeof chrome !== 'undefined' && !!chrome?.runtime?.id`.
+- **Extension detection**: `isExtensionRealm()` from `base/runtime-env.ts`.
 - **Dual-mode compatibility**: features must work in both standalone/CLI and
   extension. The thin extension runs no dynamic code itself — realms, WASM, and
   sprinkles/dips run in the hosted leader tab / kernel worker.
