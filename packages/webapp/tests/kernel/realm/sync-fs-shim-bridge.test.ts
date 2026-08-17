@@ -361,11 +361,42 @@ test('accessSync resolves for an existing path, throws ENOENT otherwise', () => 
   expect(() => shim.accessSync('/workspace/missing.txt')).toThrow(/ENOENT/);
 });
 
-test('lstatSync mirrors statSync (no symlinks in the sync model)', () => {
-  const shim = createSyncFsBridge(cache([textEntry('/workspace/f.txt', 'hello')]), '/workspace');
-  const s = shim.lstatSync('/workspace/f.txt');
-  expect(s.isFile()).toBe(true);
-  expect(s.size).toBe(5);
+test('lstatSync reports cached symbolic links without following them', () => {
+  const shim = createSyncFsBridge(
+    cache([
+      textEntry('/workspace/target.txt', 'hello'),
+      {
+        path: '/workspace/link.txt',
+        content: new Uint8Array(),
+        isDirectory: false,
+        isSymbolicLink: true,
+        symlinkTarget: '/workspace/target.txt',
+      },
+    ]),
+    '/workspace'
+  );
+  const link = shim.lstatSync('/workspace/link.txt');
+  expect(link.isSymbolicLink()).toBe(true);
+  expect(link.isFile()).toBe(false);
+  expect(shim.statSync('/workspace/link.txt').isFile()).toBe(true);
+});
+
+test('unlinkSync removes a cached directory symlink but preserves its target', () => {
+  const syncFs = cache([
+    { path: '/workspace/target', content: new Uint8Array(), isDirectory: true },
+    textEntry('/workspace/target/keep.txt', 'hello'),
+    {
+      path: '/workspace/link',
+      content: new Uint8Array(),
+      isDirectory: false,
+      isSymbolicLink: true,
+      symlinkTarget: '/workspace/target',
+    },
+  ]);
+  const shim = createSyncFsBridge(syncFs, '/workspace');
+  shim.unlinkSync('/workspace/link');
+  expect(shim.existsSync('/workspace/link')).toBe(false);
+  expect(shim.readFileSync('/workspace/target/keep.txt', 'utf8')).toBe('hello');
 });
 
 test('realpathSync returns the normalized absolute path when it exists', () => {

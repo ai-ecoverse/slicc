@@ -462,6 +462,29 @@ async function visitSnapshotDir(
   }
 }
 
+/** Record a symbolic link without following it into the target tree. */
+async function visitSnapshotSymlink(
+  ctx: CommandContext,
+  current: string,
+  size: number,
+  budget: SnapshotBudget
+): Promise<void> {
+  let target = '';
+  try {
+    target = await ctx.fs.readlink(current);
+  } catch {
+    return;
+  }
+  budget.entries.push({
+    path: current,
+    content: new Uint8Array(0),
+    isDirectory: false,
+    isSymbolicLink: true,
+    symlinkTarget: target,
+    size,
+  });
+}
+
 /** Visit one file node during the walk: record its content if within budget. */
 async function visitSnapshotFile(
   ctx: CommandContext,
@@ -577,11 +600,21 @@ async function walkSnapshotRoot(
   // `existsSync`/`statSync` stay correct past the content cap (see the budget
   // helpers + `visitSnapshotFile`).
   if (entryBudgetExhausted(budget)) return;
-  if (!(await ctx.fs.exists(rootPath))) return;
   const stack: string[] = [rootPath];
   while (stack.length > 0) {
     if (entryBudgetExhausted(budget)) return;
     const current = stack.pop()!;
+    let lst: { isSymbolicLink?: boolean; size: number } | undefined;
+    try {
+      lst = await ctx.fs.lstat(current);
+    } catch {
+      // Older injected adapters can expose an incomplete lstat shim. Their
+      // regular nodes still remain snapshot-compatible through stat below.
+    }
+    if (lst?.isSymbolicLink) {
+      await visitSnapshotSymlink(ctx, current, lst.size, budget);
+      continue;
+    }
     let st: { isDirectory: boolean; isFile: boolean; size: number };
     try {
       st = await ctx.fs.stat(current);
@@ -631,7 +664,9 @@ async function applySyncFsMutations(
     await ctx.fs.rm(path, { recursive: true });
   }
   for (const entry of mutations.created) {
-    if (entry.isDirectory) {
+    if (entry.isSymbolicLink) {
+      await ctx.fs.symlink(entry.symlinkTarget ?? '', entry.path);
+    } else if (entry.isDirectory) {
       await ctx.fs.mkdir(entry.path, { recursive: true });
     } else {
       await ctx.fs.writeFile(entry.path, entry.content);

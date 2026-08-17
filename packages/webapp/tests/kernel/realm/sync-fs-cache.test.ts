@@ -108,6 +108,23 @@ describe('SyncFsCache', () => {
     expect(() => cache.unlink('/workspace/dir')).toThrow();
   });
 
+  it('lstat identifies a symlink while stat follows it', () => {
+    const cache = new SyncFsCache({
+      entries: [
+        textEntry('/workspace/target.txt', 'hello'),
+        {
+          path: '/workspace/link.txt',
+          content: new Uint8Array(),
+          isDirectory: false,
+          isSymbolicLink: true,
+          symlinkTarget: '/workspace/target.txt',
+        },
+      ],
+    });
+    expect(cache.lstat('/workspace/link.txt')).toMatchObject({ isSymbolicLink: true });
+    expect(cache.stat('/workspace/link.txt')).toMatchObject({ isFile: true, size: 5 });
+  });
+
   it('mkdtemp creates unique dirs', () => {
     const cache = new SyncFsCache(emptySnapshot());
     const dir1 = cache.mkdtemp('/workspace/test-');

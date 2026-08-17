@@ -8,6 +8,14 @@ import type { RealmRpcClient } from './realm-rpc.js';
 import { normalizePath, type SyncFsCache } from './sync-fs-cache.js';
 import type { SyncFsXhrBridge, SyncFsXhrMutatingBridge } from './sync-fs-xhr-bridge.js';
 
+type GlobalWithBuffer = typeof globalThis & {
+  Buffer?: { from: (data: Uint8Array) => unknown };
+};
+
+function realmBuffer(): GlobalWithBuffer['Buffer'] {
+  return (globalThis as GlobalWithBuffer).Buffer;
+}
+
 /** RPC-backed `fs` bridge (the realm's `require('fs')` / `fs` global). */
 export function createFsBridge(
   rpc: RealmRpcClient,
@@ -33,9 +41,7 @@ export function createFsBridge(
     // existing .jsh scripts while matching Node's readFile(path, null) → Buffer.
     if (encoding === null || encoding === 'buffer') {
       const bytes = await rpc.call<Uint8Array>('vfs', 'readFileBinary', [path]);
-      const B = (globalThis as Record<string, unknown>).Buffer as
-        | { from: (data: Uint8Array) => unknown }
-        | undefined;
+      const B = realmBuffer();
       return B ? B.from(bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes)) : bytes;
     }
     return rpc.call('vfs', 'readFile', [path]);
@@ -232,7 +238,18 @@ interface RemovalDeps {
   bridge: SyncFsXhrBridge | undefined;
   resolve: (p: string) => string;
   existsResolved: (resolved: string) => boolean;
-  statResolved: (resolved: string) => { isFile: boolean; isDirectory: boolean; size: number };
+  statResolved: (resolved: string) => {
+    isFile: boolean;
+    isDirectory: boolean;
+    isSymbolicLink?: boolean;
+    size: number;
+  };
+  lstatResolved: (resolved: string) => {
+    isFile: boolean;
+    isDirectory: boolean;
+    isSymbolicLink?: boolean;
+    size: number;
+  };
   readBytes: (resolved: string) => Uint8Array;
   writeThrough: (resolved: string, bytes: Uint8Array) => void;
 }
@@ -243,7 +260,16 @@ interface RemovalDeps {
  * {@link removeWithBridgeFallback} so a live-only path is really deleted.
  */
 function createRemovalOps(deps: RemovalDeps) {
-  const { syncFs, bridge, resolve, existsResolved, statResolved, readBytes, writeThrough } = deps;
+  const {
+    syncFs,
+    bridge,
+    resolve,
+    existsResolved,
+    lstatResolved,
+    statResolved,
+    readBytes,
+    writeThrough,
+  } = deps;
   const remove = (resolved: string, opts?: { recursive?: boolean; requireFile?: boolean }) =>
     removeWithBridgeFallback(syncFs, bridge, resolved, opts);
   return {
@@ -260,7 +286,7 @@ function createRemovalOps(deps: RemovalDeps) {
       const resolved = resolve(path);
       // Node's rmdirSync throws ENOTDIR on a non-directory (rmSync does not, and
       // SyncFsCache.rm has no isDirectory guard — it would silently unlink a file).
-      if (existsResolved(resolved) && !statResolved(resolved).isDirectory) {
+      if (existsResolved(resolved) && !lstatResolved(resolved).isDirectory) {
         throw syncFsErr('ENOTDIR', resolved, 'rmdir');
       }
       if (!remove(resolved, { recursive: opts?.recursive === true })) {
@@ -391,7 +417,12 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       return false;
     }
   }
-  function statResolved(resolved: string): { isFile: boolean; isDirectory: boolean; size: number } {
+  function statResolved(resolved: string): {
+    isFile: boolean;
+    isDirectory: boolean;
+    isSymbolicLink?: boolean;
+    size: number;
+  } {
     try {
       return syncFs.stat(resolved);
     } catch (err) {
@@ -409,9 +440,24 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       return bridge.readdir(resolved);
     }
   }
-  const wrapStat = (s: { isFile: boolean; isDirectory: boolean; size: number }) => ({
+  function lstatResolved(resolved: string) {
+    try {
+      return syncFs.lstat(resolved);
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      if (!bridge || syncFs.isTombstoned(resolved) || code !== 'ENOENT') throw err;
+      return bridge.stat(resolved);
+    }
+  }
+  const wrapStat = (s: {
+    isFile: boolean;
+    isDirectory: boolean;
+    isSymbolicLink?: boolean;
+    size: number;
+  }) => ({
     isFile: () => s.isFile,
     isDirectory: () => s.isDirectory,
+    isSymbolicLink: () => s.isSymbolicLink === true,
     size: s.size,
   });
   const join = (dir: string, name: string) => (dir === '/' ? `/${name}` : `${dir}/${name}`);
@@ -436,6 +482,7 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       resolve,
       existsResolved,
       statResolved,
+      lstatResolved,
       readBytes,
       writeThrough,
     }),
@@ -444,9 +491,7 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       const bytes = readBytes(resolve(path));
       if (encoding === 'utf8' || encoding === 'utf-8') return new TextDecoder().decode(bytes);
       // Return Buffer if available (realm polyfill), else Uint8Array.
-      const B = (globalThis as Record<string, unknown>).Buffer as
-        | { from: (data: Uint8Array) => unknown }
-        | undefined;
+      const B = realmBuffer();
       return B ? B.from(bytes) : bytes;
     },
     writeFileSync(path: string, data: unknown): void {
@@ -487,13 +532,8 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
     mkdirSync(path: string, opts?: { recursive?: boolean }): void {
       syncFs.mkdir(resolve(path), opts?.recursive);
     },
-    statSync(path: string): { isFile: () => boolean; isDirectory: () => boolean; size: number } {
-      return wrapStat(statResolved(resolve(path)));
-    },
-    lstatSync(path: string): { isFile: () => boolean; isDirectory: () => boolean; size: number } {
-      // No symlinks in the sync model → identical to statSync.
-      return wrapStat(statResolved(resolve(path)));
-    },
+    statSync: (path: string) => wrapStat(statResolved(resolve(path))),
+    lstatSync: (path: string) => wrapStat(lstatResolved(resolve(path))),
     realpathSync(path: string): string {
       // No symlinks → the canonical path is the lexical resolution; verify it exists.
       const resolved = resolve(path);
