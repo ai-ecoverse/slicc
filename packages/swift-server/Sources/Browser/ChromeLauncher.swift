@@ -222,7 +222,16 @@ struct ChromeLauncher: Sendable {
             // throttling but NOT from Memory Saver freezing; disable freezing and
             // renderer backgrounding outright. Unknown feature names are ignored,
             // so the list is version-safe. Mirrors node-server's chrome-launch.ts.
-            "--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable",
+            //
+            // Chrome 151 renamed/split the freezing pipeline, so
+            // HighEfficiencyModeAvailable stopped covering it (live incident
+            // 2026-08-17: hidden leader frozen so hard even CDP dispatch was
+            // suspended, then force-reloaded on activation — the "dead tab").
+            // InfiniteTabsFreezing* is the new feature, the *MeasurementInFreezingPolicy
+            // pair feeds the intervention that targets high-footprint background
+            // tabs, and AllowDevtoolsConnectedDiscard removed the DevTools-attached
+            // exemption. seedProfilePreferences() writes the matching prefs belt.
+            "--disable-features=LocalNetworkAccessChecks,LocalNetworkAccessChecksWebSockets,IntensiveWakeUpThrottling,HighEfficiencyModeAvailable,InfiniteTabsFreezing,InfiniteTabsFreezingOnMemoryPressure,CPUMeasurementInFreezingPolicy,MemoryMeasurementInFreezingPolicy,AllowDevtoolsConnectedDiscard",
             "--disable-background-timer-throttling",
             "--disable-backgrounding-occluded-windows",
             "--disable-renderer-backgrounding",
@@ -375,6 +384,50 @@ struct ChromeLauncher: Sendable {
         try? out.write(to: prefsPath)
     }
 
+    /// Origins whose tabs Chrome must never discard or freeze — the hosted
+    /// leader UI and local bridge/dev origins. Mirrors node-server's
+    /// `TAB_LIFECYCLE_EXEMPT_SITES`.
+    static let tabLifecycleExemptSites = ["www.sliccy.ai", "sliccy.ai", "localhost"]
+
+    /// Seed `Default/Preferences` with tab-lifecycle opt-outs before every
+    /// launch. The `--disable-features` list in `buildLaunchArgs` is the
+    /// primary defense against Chrome freezing/discarding the backgrounded
+    /// leader tab, but feature names churn between Chrome versions (Chrome 151
+    /// renamed the whole pipeline, silently reviving the freeze); these prefs
+    /// are the version-stable belt: `tab_freezing_enabled: false`,
+    /// Memory Saver off, and per-site discard exceptions for the leader
+    /// origins (honored by freeze policy via FreezingFollowsDiscardOptOut).
+    /// Mirrors node-server's `seedChromeProfilePreferences`. Merges into
+    /// existing prefs and never throws.
+    func seedProfilePreferences(userDataDir: String) {
+        let defaultDir = URL(fileURLWithPath: userDataDir, isDirectory: true)
+            .appendingPathComponent("Default", isDirectory: true)
+        let prefsPath = defaultDir.appendingPathComponent("Preferences")
+        try? FileManager.default.createDirectory(at: defaultDir, withIntermediateDirectories: true)
+        var prefs: [String: Any] = [:]
+        if let data = try? Data(contentsOf: prefsPath),
+            let parsed = try? JSONSerialization.jsonObject(with: data),
+            let existing = parsed as? [String: Any]
+        {
+            prefs = existing
+        }
+        prefs["tab_freezing_enabled"] = false
+        var performanceTuning = prefs["performance_tuning"] as? [String: Any] ?? [:]
+        var highEfficiencyMode = performanceTuning["high_efficiency_mode"] as? [String: Any] ?? [:]
+        highEfficiencyMode["state"] = 0
+        performanceTuning["high_efficiency_mode"] = highEfficiencyMode
+        var tabDiscarding = performanceTuning["tab_discarding"] as? [String: Any] ?? [:]
+        var exceptions = (tabDiscarding["exceptions"] as? [Any])?.compactMap { $0 as? String } ?? []
+        for site in Self.tabLifecycleExemptSites where !exceptions.contains(site) {
+            exceptions.append(site)
+        }
+        tabDiscarding["exceptions"] = exceptions
+        performanceTuning["tab_discarding"] = tabDiscarding
+        prefs["performance_tuning"] = performanceTuning
+        guard let out = try? JSONSerialization.data(withJSONObject: prefs) else { return }
+        try? out.write(to: prefsPath)
+    }
+
     /// Builds the ordered list of legacy candidate paths for a given profile dir name.
     /// Checks the previous `~/.slicc/profiles` location first because that was the
     /// most recent stable default and therefore holds the freshest profile — so it
@@ -440,6 +493,11 @@ struct ChromeLauncher: Sendable {
         // pop Chrome's crash-restore bubble on the next launch (parity with
         // node-server, PR #1096).
         clearChromeRestoreState(userDataDir: config.userDataDir)
+        // Prefs-level opt-out from tab freezing/discarding for the leader
+        // origins — the version-stable belt behind the --disable-features
+        // flags, which Chrome 151 demonstrated can rot when names churn
+        // (parity with node-server's seedChromeProfilePreferences).
+        seedProfilePreferences(userDataDir: config.userDataDir)
 
         let process = processFactory()
         let chromeArgs = buildLaunchArgs(

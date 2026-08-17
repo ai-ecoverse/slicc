@@ -36,6 +36,7 @@ import {
   migrateLegacyDefaultChromeProfile,
   planChromeSpawn,
   resolveChromeLaunchProfile,
+  seedChromeProfilePreferences,
   terminateExistingProfileChrome,
   waitForCdpPort,
 } from './chrome-launch.js';
@@ -587,6 +588,11 @@ async function launchChromeTarget(state: ServerState): Promise<void> {
   // flag so Chrome doesn't show the crash-restore bubble. (The tab-restore
   // itself is handled by clearChromeSessionRestore above, not this.)
   await clearChromeRestoreState(chromeProfile.userDataDir);
+
+  // Prefs-level opt-out from tab freezing/discarding for the leader origins —
+  // the version-stable belt behind the --disable-features flags, which Chrome
+  // 151 demonstrated can rot when the feature names churn.
+  await seedChromeProfilePreferences(chromeProfile.userDataDir);
 
   // On macOS, route through `/usr/bin/open` so LaunchServices owns the new Chrome
   // process — otherwise the launching terminal stays in Chrome's TCC responsibility

@@ -5,6 +5,24 @@
  * declaration because 'debugger' is a reserved word (can't be a namespace name).
  */
 
+/**
+ * A CDP message payload — command params, command result, or event params.
+ * Genuinely open-shaped: the protocol defines the keys per method, so an
+ * index signature is the honest type.
+ */
+type CdpPayload = { [key: string]: unknown };
+
+/** Items read/written via chrome.storage — extension-chosen keys. */
+type ChromeStorageItems = { [key: string]: unknown };
+
+/** chrome.tabs.query() filter — the subset slicc actually uses. */
+interface ChromeTabQueryInfo {
+  url?: string | string[];
+  active?: boolean;
+  currentWindow?: boolean;
+  lastFocusedWindow?: boolean;
+}
+
 interface ChromeDebuggerTarget {
   tabId: number;
 }
@@ -15,22 +33,14 @@ interface ChromeDebuggerAPI {
   sendCommand(
     target: ChromeDebuggerTarget,
     method: string,
-    params?: Record<string, unknown>
-  ): Promise<Record<string, unknown>>;
+    params?: CdpPayload
+  ): Promise<CdpPayload>;
   onEvent: {
     addListener(
-      callback: (
-        source: ChromeDebuggerTarget,
-        method: string,
-        params?: Record<string, unknown>
-      ) => void
+      callback: (source: ChromeDebuggerTarget, method: string, params?: CdpPayload) => void
     ): void;
     removeListener(
-      callback: (
-        source: ChromeDebuggerTarget,
-        method: string,
-        params?: Record<string, unknown>
-      ) => void
+      callback: (source: ChromeDebuggerTarget, method: string, params?: CdpPayload) => void
     ): void;
   };
   onDetach: {
@@ -104,8 +114,8 @@ interface ChromeSidePanelAPI {
 }
 
 interface ChromeStorageArea {
-  get(keys?: string | string[] | Record<string, unknown> | null): Promise<Record<string, unknown>>;
-  set(items: Record<string, unknown>): Promise<void>;
+  get(keys?: string | string[] | ChromeStorageItems | null): Promise<ChromeStorageItems>;
+  set(items: ChromeStorageItems): Promise<void>;
   remove(keys: string | string[]): Promise<void>;
 }
 
@@ -238,7 +248,7 @@ interface ChromeAPI {
   };
   debugger: ChromeDebuggerAPI;
   tabs: {
-    query(queryInfo: Record<string, unknown>): Promise<ChromeTab[]>;
+    query(queryInfo: ChromeTabQueryInfo): Promise<ChromeTab[]>;
     get(tabId: number): Promise<ChromeTab>;
     create(properties: {
       url?: string;
@@ -247,7 +257,7 @@ interface ChromeAPI {
     }): Promise<{ id: number; windowId?: number }>;
     update(
       tabId: number,
-      properties: { active?: boolean; pinned?: boolean; url?: string }
+      properties: { active?: boolean; pinned?: boolean; url?: string; autoDiscardable?: boolean }
     ): Promise<ChromeTab>;
     reload(tabId: number): Promise<void>;
     remove(tabId: number): Promise<void>;
