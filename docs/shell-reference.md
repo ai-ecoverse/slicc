@@ -984,18 +984,26 @@ Full gesture-bridge mechanics, extension popup routing, and the shared trust mod
 
 ## .jsh Script Commands
 
-JavaScript shell scripts auto-discovered anywhere on the VirtualFS. Executable like any shell command.
+JavaScript shell scripts discovered from the shell's `$PATH` (#2085). Executable like any shell command.
 
-**Discovery**: `jsh-discovery.ts` scans VFS with priority roots:
+**Discovery**: `jsh-discovery.ts` scans the `$PATH` search roots recursively, in order:
 
 ```
-Priority: /workspace/skills/
-Then: / (full filesystem scan)
+Default PATH: /usr/bin:/workspace/skills:/workspace/.mcp/aliases:/workspace/bin:/shared/bin
+  /usr/bin              — synthetic registry dir (built-ins + registered commands)
+  the remaining entries — .jsh search roots, scanned recursively
 
-Rule: First basename wins (no conflicts)
+Rules: earlier root wins a basename conflict; first basename wins inside a root;
+       node_modules/ and dot-dirs below a root never register commands.
 ```
 
-`script-catalog.ts` is the shared lookup layer used by `AlmostBashShell`, `which`, and browser-script matching. When an `FsWatcher` is present it caches discovery results and clears them on filesystem changes; mounted directories bypass the cache because external edits inside File System Access mounts are not observable through the watcher.
+There is no full-filesystem scan: a `.jsh` outside the roots is not a command
+until its directory is added to `PATH` — `export PATH="$PATH:/my/tools"`
+interactively (registration completes between submissions) or persistently in
+`~/.profile` (live for the shell's very first command). Scoops get their own
+workspace roots prepended (`/scoops/<folder>/workspace/{skills,bin}`).
+
+`script-catalog.ts` is the shared lookup layer used by `AlmostBashShell`, `which`, and browser-script matching, with one cache per distinct root set. When an `FsWatcher` is present it caches discovery results and clears them on filesystem changes; a mount only disables caching for root sets it overlaps, because external edits inside File System Access mounts are not observable through the watcher.
 
 **Execution**: Via `jsh-executor.ts` (dual-mode):
 
@@ -1769,6 +1777,22 @@ Cloud session state lives in `~/.slicc/cloud-sessions.json`. Each entry maps a s
 ### Known Limitations
 
 See `README.md` § Cloud for prerequisites and limitations (OAuth providers, local mounts, pause TTL, credential rotation, SIGINT handling).
+
+## HOME and ~/.profile
+
+`$HOME` is resolved at shell construction (`home-dir.ts`): the most recently
+onboarded `/home/<slug>` wins (fallback `/home/user`, created on demand), and
+`$USER` is its basename. Scoop shells pin `HOME=/scoops/<folder>/home`. When
+`$HOME/.profile` exists it is sourced through the interpreter before the first
+command — the persistence mechanism for env vars and `PATH` extensions:
+
+```bash
+echo 'export MY_VAR=value' >> ~/.profile          # survives reloads
+echo 'export PATH="$PATH:/my/tools"' >> ~/.profile # adds a command dir
+```
+
+A broken profile logs a warning and the shell continues; a `cd` inside the
+profile cannot move the shell's contracted working directory.
 
 ## References
 

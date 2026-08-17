@@ -104,8 +104,11 @@ describe('VirtualFS mount interactions with script discovery', () => {
       )
     );
 
-    const commands = await discoverJshCommands(vfs);
+    // Mounted trees are only on the command path via an explicit root (#2085);
+    // what this pins is that the walk descends through NESTED mounts.
+    const commands = await discoverJshCommands(vfs, ['/workspace/repo']);
     expect(commands.get('inner')).toBe('/workspace/repo/nested/inner.jsh');
+    expect(commands.get('outer')).toBe('/workspace/repo/outer.jsh');
 
     const bshEntries = await discoverBshScripts(vfs);
     expect(bshEntries).toEqual(

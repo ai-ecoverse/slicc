@@ -2,7 +2,34 @@ import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { RestrictedFS } from '../../src/fs/restricted-fs.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import { discoverJshCommands } from '../../src/shell/jsh-discovery.js';
+import {
+  DEFAULT_JSH_SEARCH_ROOTS,
+  DEFAULT_SHELL_PATH,
+  discoverJshCommands,
+  pathToScanRoots,
+} from '../../src/shell/jsh-discovery.js';
+
+describe('pathToScanRoots', () => {
+  it('derives scan roots from a PATH value, preserving order', () => {
+    expect(pathToScanRoots('/usr/bin:/workspace/skills:/shared/bin')).toEqual([
+      '/workspace/skills',
+      '/shared/bin',
+    ]);
+  });
+
+  it('drops the synthetic registry dirs, empties, duplicates, and relative entries', () => {
+    expect(pathToScanRoots('/usr/bin:/bin::/a:/a:relative/dir:/b/')).toEqual(['/a', '/b']);
+  });
+
+  it('the default PATH round-trips to the default search roots', () => {
+    expect(pathToScanRoots(DEFAULT_SHELL_PATH)).toEqual(DEFAULT_JSH_SEARCH_ROOTS);
+  });
+
+  it('returns no roots for undefined or empty PATH', () => {
+    expect(pathToScanRoots(undefined)).toEqual([]);
+    expect(pathToScanRoots('')).toEqual([]);
+  });
+});
 
 describe('discoverJshCommands', () => {
   let vfs: VirtualFS;
@@ -20,44 +47,70 @@ describe('discoverJshCommands', () => {
     expect(result.size).toBe(0);
   });
 
-  it('discovers a single .jsh file', async () => {
+  it('discovers a single .jsh file under a default root', async () => {
     await vfs.writeFile('/workspace/skills/greet/greet.jsh', '#!/bin/bash\necho hello');
     const result = await discoverJshCommands(vfs);
     expect(result.get('greet')).toBe('/workspace/skills/greet/greet.jsh');
   });
 
-  it('discovers multiple .jsh files', async () => {
+  it('discovers across all default roots (skills, mcp aliases, bin dirs)', async () => {
     await vfs.writeFile('/workspace/skills/a/foo.jsh', 'echo foo');
-    await vfs.writeFile('/workspace/skills/b/bar.jsh', 'echo bar');
+    await vfs.writeFile('/workspace/.mcp/aliases/mcp-tool.jsh', 'echo mcp');
+    await vfs.writeFile('/workspace/bin/adhoc.jsh', 'echo adhoc');
+    await vfs.writeFile('/shared/bin/team.jsh', 'echo team');
     const result = await discoverJshCommands(vfs);
-    expect(result.has('foo')).toBe(true);
-    expect(result.has('bar')).toBe(true);
-    expect(result.size).toBe(2);
+    expect(result.get('foo')).toBe('/workspace/skills/a/foo.jsh');
+    expect(result.get('mcp-tool')).toBe('/workspace/.mcp/aliases/mcp-tool.jsh');
+    expect(result.get('adhoc')).toBe('/workspace/bin/adhoc.jsh');
+    expect(result.get('team')).toBe('/shared/bin/team.jsh');
+    expect(result.size).toBe(4);
   });
 
-  it('first occurrence wins for duplicate basenames', async () => {
-    // Both in skills — walk order determines winner
+  it('first occurrence wins for duplicate basenames within a root', async () => {
     await vfs.writeFile('/workspace/skills/a/deploy.jsh', 'echo a');
     await vfs.writeFile('/workspace/skills/b/deploy.jsh', 'echo b');
     const result = await discoverJshCommands(vfs);
     expect(result.has('deploy')).toBe(true);
-    // Should have exactly one entry
-    expect(result.size >= 1).toBe(true);
     const path = result.get('deploy')!;
     expect(path).toMatch(/\/deploy\.jsh$/);
   });
 
-  it('skills directory takes priority over other locations', async () => {
+  it('an earlier root wins a basename conflict (PATH precedence)', async () => {
     await vfs.writeFile('/workspace/skills/deploy/deploy.jsh', 'echo skills');
-    await vfs.writeFile('/other/deploy.jsh', 'echo other');
+    await vfs.writeFile('/shared/bin/deploy.jsh', 'echo shared');
     const result = await discoverJshCommands(vfs);
     expect(result.get('deploy')).toBe('/workspace/skills/deploy/deploy.jsh');
   });
 
-  it('discovers .jsh files outside of skills directory', async () => {
+  // The #2085 behavior change: lookup is bounded to the PATH roots — a .jsh
+  // parked anywhere else no longer auto-registers. `export PATH="$PATH:/tools"`
+  // (interactively or in ~/.profile) is the explicit opt-in.
+  it('does NOT discover .jsh files outside the search roots', async () => {
     await vfs.writeFile('/tools/lint.jsh', 'echo lint');
     const result = await discoverJshCommands(vfs);
+    expect(result.has('lint')).toBe(false);
+  });
+
+  it('discovers outside-root .jsh files when their dir is passed as a root', async () => {
+    await vfs.writeFile('/tools/lint.jsh', 'echo lint');
+    const result = await discoverJshCommands(vfs, [...DEFAULT_JSH_SEARCH_ROOTS, '/tools']);
     expect(result.get('lint')).toBe('/tools/lint.jsh');
+  });
+
+  it('never registers commands from node_modules or dot-dirs below a root', async () => {
+    await vfs.writeFile('/workspace/skills/x/node_modules/dep/evil.jsh', 'echo no');
+    await vfs.writeFile('/workspace/skills/x/.cache/hidden.jsh', 'echo no');
+    await vfs.writeFile('/workspace/skills/x/ok.jsh', 'echo yes');
+    const result = await discoverJshCommands(vfs);
+    expect(result.has('evil')).toBe(false);
+    expect(result.has('hidden')).toBe(false);
+    expect(result.get('ok')).toBe('/workspace/skills/x/ok.jsh');
+  });
+
+  it('a dot-path ROOT still registers its own commands (/.mcp/aliases)', async () => {
+    await vfs.writeFile('/workspace/.mcp/aliases/tool.jsh', 'echo tool');
+    const result = await discoverJshCommands(vfs, ['/workspace/.mcp/aliases']);
+    expect(result.get('tool')).toBe('/workspace/.mcp/aliases/tool.jsh');
   });
 
   it('ignores non-.jsh files', async () => {
@@ -69,7 +122,7 @@ describe('discoverJshCommands', () => {
     expect(result.has('test')).toBe(true);
   });
 
-  it('handles deeply nested .jsh files', async () => {
+  it('handles deeply nested .jsh files under a root', async () => {
     await vfs.writeFile('/workspace/skills/deep/nested/path/cmd.jsh', 'echo deep');
     const result = await discoverJshCommands(vfs);
     expect(result.get('cmd')).toBe('/workspace/skills/deep/nested/path/cmd.jsh');
@@ -80,7 +133,6 @@ describe('discoverJshCommands', () => {
     const first = await discoverJshCommands(vfs);
     expect(first.size).toBe(1);
 
-    // Add another file and re-discover
     await vfs.writeFile('/workspace/skills/b/bar.jsh', 'echo bar');
     const second = await discoverJshCommands(vfs);
     expect(second.size).toBe(2);
@@ -99,17 +151,11 @@ describe('discoverJshCommands with RestrictedFS', () => {
     });
   });
 
-  it('discovers .jsh files in /shared/ via plain VFS', async () => {
-    await vfs.writeFile('/shared/scripts/myscript.jsh', '#!/bin/bash\necho hello');
-    const result = await discoverJshCommands(vfs);
-    expect(result.get('myscript')).toBe('/shared/scripts/myscript.jsh');
-  });
-
-  it('discovers .jsh in /shared/ through RestrictedFS', async () => {
-    await vfs.writeFile('/shared/scripts/myscript.jsh', '#!/bin/bash\necho hello');
+  it('discovers .jsh in an explicitly-rooted /shared dir through RestrictedFS', async () => {
+    await vfs.writeFile('/shared/bin/myscript.jsh', '#!/bin/bash\necho hello');
     const restricted = new RestrictedFS(vfs, ['/scoops/test-scoop/', '/shared/'], ['/workspace/']);
     const result = await discoverJshCommands(restricted);
-    expect(result.get('myscript')).toBe('/shared/scripts/myscript.jsh');
+    expect(result.get('myscript')).toBe('/shared/bin/myscript.jsh');
   });
 
   it('discovers .jsh in /workspace/skills/ through RestrictedFS (read-only access)', async () => {
@@ -119,41 +165,44 @@ describe('discoverJshCommands with RestrictedFS', () => {
     expect(result.get('test')).toBe('/workspace/skills/test-skill/test.jsh');
   });
 
-  it('discovers .jsh in /scoops/test-scoop/ through RestrictedFS', async () => {
-    await vfs.writeFile('/scoops/test-scoop/local.jsh', 'echo local');
+  it('discovers scoop-local commands via the scoop roots the shell pins in $PATH', async () => {
+    await vfs.writeFile('/scoops/test-scoop/workspace/bin/local.jsh', 'echo local');
     const restricted = new RestrictedFS(vfs, ['/scoops/test-scoop/', '/shared/'], ['/workspace/']);
-    const result = await discoverJshCommands(restricted);
-    expect(result.get('local')).toBe('/scoops/test-scoop/local.jsh');
+    const result = await discoverJshCommands(restricted, [
+      '/scoops/test-scoop/workspace/skills',
+      '/scoops/test-scoop/workspace/bin',
+      ...DEFAULT_JSH_SEARCH_ROOTS,
+    ]);
+    expect(result.get('local')).toBe('/scoops/test-scoop/workspace/bin/local.jsh');
   });
 
-  it('does NOT discover .jsh in inaccessible paths', async () => {
-    await vfs.writeFile('/scoops/other-scoop/secret.jsh', 'echo secret');
+  it('an ACL-inaccessible root is skipped silently, not an error', async () => {
+    await vfs.writeFile('/scoops/other-scoop/workspace/bin/secret.jsh', 'echo secret');
     const restricted = new RestrictedFS(vfs, ['/scoops/test-scoop/', '/shared/'], ['/workspace/']);
-    const result = await discoverJshCommands(restricted);
+    const result = await discoverJshCommands(restricted, [
+      '/scoops/other-scoop/workspace/bin',
+      ...DEFAULT_JSH_SEARCH_ROOTS,
+    ]);
     expect(result.has('secret')).toBe(false);
   });
 
-  it('/workspace/skills/ wins over /shared/ for same basename', async () => {
+  it('/workspace/skills/ wins over /shared/bin for same basename', async () => {
     await vfs.writeFile('/workspace/skills/deploy/deploy.jsh', 'echo skills-version');
-    await vfs.writeFile('/shared/deploy.jsh', 'echo shared-version');
+    await vfs.writeFile('/shared/bin/deploy.jsh', 'echo shared-version');
     const restricted = new RestrictedFS(vfs, ['/scoops/test-scoop/', '/shared/'], ['/workspace/']);
     const result = await discoverJshCommands(restricted);
     expect(result.get('deploy')).toBe('/workspace/skills/deploy/deploy.jsh');
   });
 
-  it('discovers .jsh files in compatibility skill paths via unrestricted FS', async () => {
-    // File in a compatibility skill directory (not accessible via RestrictedFS)
+  it('compatibility skill scripts register only via an explicit root', async () => {
+    // Pre-#2085 the full-VFS walk picked these up implicitly; now their dir
+    // must be on the PATH (the skill-declared-roots future of the issue).
     await vfs.writeFile('/.agents/skills/secret-sauce/scripts/generate.jsh', 'echo generate');
 
-    // RestrictedFS would NOT find this
-    const restricted = new RestrictedFS(vfs, ['/scoops/test-scoop/', '/shared/'], ['/workspace/']);
-    const restrictedResult = await discoverJshCommands(restricted);
-    expect(restrictedResult.has('generate')).toBe(false);
+    const implicit = await discoverJshCommands(vfs);
+    expect(implicit.has('generate')).toBe(false);
 
-    // But unrestricted VFS finds it
-    const unrestrictedResult = await discoverJshCommands(vfs);
-    expect(unrestrictedResult.get('generate')).toBe(
-      '/.agents/skills/secret-sauce/scripts/generate.jsh'
-    );
+    const explicit = await discoverJshCommands(vfs, ['/.agents/skills/secret-sauce/scripts']);
+    expect(explicit.get('generate')).toBe('/.agents/skills/secret-sauce/scripts/generate.jsh');
   });
 });

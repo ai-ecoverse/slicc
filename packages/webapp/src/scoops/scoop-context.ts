@@ -52,6 +52,7 @@ import {
   resolveModelIdForScoop,
 } from '../providers/account-store.js';
 import { AlmostBashShell } from '../shell/index.js';
+import { DEFAULT_JSH_SEARCH_ROOTS } from '../shell/jsh-discovery.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import { createBashTool, createFileTools } from '../tools/index.js';
 import { getAdobeSessionId } from './llm-session-id.js';
@@ -185,6 +186,41 @@ export function abortableSleep(ms: number, signal?: AbortSignal): Promise<boolea
     }, ms);
     signal?.addEventListener('abort', onAbort, { once: true });
   });
+}
+
+/**
+ * The env a scoop's shell starts with (#2085). Non-cone scoops pin:
+ *
+ * - HOME to their per-scoop home (created by ensureDirectoryStructure) — it
+ *   is inside their writable ACL, unlike `/home`, which their RestrictedFS
+ *   cannot even see;
+ * - USER to the scoop folder;
+ * - PATH with their own workspace roots ahead of the shared defaults, so
+ *   scoop-local commands win a basename conflict (mirroring the old scan
+ *   order, bounded to declared roots).
+ *
+ * The cone pins nothing — its shell resolves onboarding's `/home/<slug>`.
+ * Secrets spread FIRST: a user-created secret can carry any POSIX name —
+ * including PATH/HOME/USER — and must not override the isolation pins
+ * (Codex P2 on #2143). Exported for tests.
+ */
+export function buildScoopShellEnv(
+  isCone: boolean,
+  folder: string,
+  secretEnv: Record<string, string>
+): Record<string, string> {
+  if (isCone) return { ...secretEnv };
+  return {
+    ...secretEnv,
+    HOME: `/scoops/${folder}/home`,
+    USER: folder,
+    PATH: [
+      '/usr/bin',
+      `/scoops/${folder}/workspace/skills`,
+      `/scoops/${folder}/workspace/bin`,
+      ...DEFAULT_JSH_SEARCH_ROOTS,
+    ].join(':'),
+  };
 }
 
 export interface ScoopContextCallbacks {
@@ -481,10 +517,11 @@ export class ScoopContext {
         : this.fs!
     ) as VirtualFS;
 
+    const shellEnv = buildScoopShellEnv(this.scoop.isCone, this.scoop.folder, secretEnv);
     this.shell = new AlmostBashShell({
       fs: gatedFs,
       cwd,
-      env: Object.keys(secretEnv).length > 0 ? secretEnv : undefined,
+      env: Object.keys(shellEnv).length > 0 ? shellEnv : undefined,
       browserAPI: browser,
       webhook: {
         hasLocalNodeServer,
@@ -1823,7 +1860,7 @@ export class ScoopContext {
     if (!this.fs) return;
 
     const dirs = this.scoop.isCone
-      ? ['/workspace', '/shared', '/scoops', '/home', '/tmp', '/mnt']
+      ? ['/workspace', '/shared', '/scoops', '/home', '/home/user', '/tmp', '/mnt']
       : [
           `/scoops/${this.scoop.folder}`,
           `/scoops/${this.scoop.folder}/workspace`,

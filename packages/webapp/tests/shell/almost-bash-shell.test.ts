@@ -335,6 +335,200 @@ describe('AlmostBashShell GitHub token renewal wiring', () => {
   });
 });
 
+let homeDbCounter = 0;
+
+describe('AlmostBashShell HOME and ~/.profile (#2085)', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-home-${homeDbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  it('resolves $HOME and $USER from the onboarded /home/<slug> on a cold shell', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+
+    const shell = new AlmostBashShell({ fs });
+    const result = await shell.executeCommand('echo "$HOME:$USER"');
+    expect(result.stdout.trim()).toBe('/home/lars:lars');
+
+    const cdHome = await shell.executeCommand('cd ~ && pwd');
+    expect(cdHome.stdout.trim()).toBe('/home/lars');
+  });
+
+  it('falls back to /home/user when onboarding never ran, without writing', async () => {
+    const shell = new AlmostBashShell({ fs });
+    const result = await shell.executeCommand('echo "$HOME"');
+    expect(result.stdout.trim()).toBe('/home/user');
+    // The shell must NOT create the dir itself — its fs can be sudo-gated,
+    // and a write at init would fire an approval escalation. The structure
+    // owners (ensureRootStructure / ensureDirectoryStructure) create
+    // /home/user on the raw VFS.
+    expect(await fs.exists('/home/user')).toBe(false);
+  });
+
+  it('sources ~/.profile before the first command, so exports persist', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile('/home/lars/.profile', 'export GREETING="hello from profile"');
+
+    const shell = new AlmostBashShell({ fs });
+    const first = await shell.executeCommand('echo "$GREETING"');
+    expect(first.stdout.trim()).toBe('hello from profile');
+    // ...and it survives into later commands like any exported var.
+    const second = await shell.executeCommand('echo "again: $GREETING"');
+    expect(second.stdout.trim()).toBe('again: hello from profile');
+  });
+
+  it('a broken ~/.profile must not brick the shell', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile(
+      '/home/lars/.profile',
+      'export GOOD=yes\nthis-command-does-not-exist-anywhere'
+    );
+
+    const shell = new AlmostBashShell({ fs });
+    const result = await shell.executeCommand('echo "ok $GOOD"');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('ok yes');
+  });
+
+  it('a cd inside ~/.profile does not change the contracted working directory', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.mkdir('/workspace', { recursive: true });
+    await fs.writeFile('/home/lars/.profile', 'cd /home/lars\nexport MARKER=set');
+
+    const shell = new AlmostBashShell({ fs, cwd: '/workspace' });
+    const result = await shell.executeCommand('pwd; echo "$MARKER"');
+    expect(result.stdout.trim().split('\n')).toEqual(['/workspace', 'set']);
+  });
+
+  it('an explicit env.HOME pin wins and its own ~/.profile is sourced (scoop contract)', async () => {
+    // The cone's onboarded home exists, but a pinned shell (a scoop) must
+    // stay in its own home.
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile('/scoops/research/home/.profile', 'export SCOPE=scoop');
+
+    const shell = new AlmostBashShell({
+      fs,
+      env: { HOME: '/scoops/research/home', USER: 'research' },
+    });
+    const result = await shell.executeCommand('echo "$HOME:$USER:$SCOPE"');
+    expect(result.stdout.trim()).toBe('/scoops/research/home:research:scoop');
+  });
+
+  it('picks the most recently onboarded slug when several homes exist', async () => {
+    await fs.writeFile('/home/first/.welcome.json', '{"name":"First"}');
+    await new Promise((resolve) => setTimeout(resolve, 10));
+    await fs.writeFile('/home/second/.welcome.json', '{"name":"Second"}');
+
+    const shell = new AlmostBashShell({ fs });
+    const result = await shell.executeCommand('echo "$HOME"');
+    expect(result.stdout.trim()).toBe('/home/second');
+  });
+});
+
+let pathDbCounter = 0;
+
+describe('AlmostBashShell $PATH-driven command lookup (#2085)', () => {
+  let fs: VirtualFS;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({
+      dbName: `test-path-${pathDbCounter++}`,
+      wipe: true,
+    });
+  });
+
+  afterEach(async () => {
+    await fs.dispose();
+  });
+
+  it('a .jsh outside the PATH roots is not a command until PATH is extended', async () => {
+    await fs.writeFile('/opt/tools/mytool.jsh', 'console.log("tool ran");');
+
+    const shell = new AlmostBashShell({ fs });
+    const miss = await shell.executeCommand('mytool');
+    expect(miss.exitCode).toBe(127);
+
+    // The PATH change re-registers commands between submissions (awaited in
+    // runCommand's epilogue), so the very next command sees the tool.
+    // Same-compound availability (`export PATH=…; mytool` in ONE submission)
+    // is not supported — registration is per-submission, and retrying a
+    // compound after a late registration could replay non-idempotent parts.
+    const exported = await shell.executeCommand('export PATH="$PATH:/opt/tools"');
+    expect(exported.exitCode).toBe(0);
+    const hit = await shell.executeCommand('mytool');
+    expect(hit.exitCode).toBe(0);
+    expect(hit.stdout).toContain('tool ran');
+  });
+
+  it('a PATH exported from ~/.profile is live for the very first command', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile('/home/lars/.profile', 'export PATH="$PATH:/opt/tools"');
+    await fs.writeFile('/opt/tools/mytool.jsh', 'console.log("profile path");');
+    // A sibling OFF the PATH pins that the profile PATH — not an
+    // anywhere-walk — is what made mytool resolvable.
+    await fs.writeFile('/opt/elsewhere/hidden.jsh', 'console.log("never");');
+
+    const shell = new AlmostBashShell({ fs });
+    // Cold shell, no explicit sync — the profile-sourced PATH must feed the
+    // initial registration (the #2084-gated scan runs after the profile).
+    const result = await shell.executeCommand('mytool | cat');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('profile path');
+
+    const hidden = await shell.executeCommand('hidden');
+    expect(hidden.exitCode).toBe(127);
+  });
+
+  it('unset in ~/.profile actually removes a pre-seeded env var (Codex P2)', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile('/home/lars/.profile', 'unset PRESEEDED');
+
+    const shell = new AlmostBashShell({ fs, env: { PRESEEDED: 'leak' } });
+    const result = await shell.executeCommand('echo "${PRESEEDED:-gone}"');
+    expect(result.stdout.trim()).toBe('gone');
+  });
+
+  it('which stops reporting a script after its PATH root is removed (Codex P2)', async () => {
+    await fs.writeFile('/opt/tools/mytool.jsh', 'console.log("x");');
+
+    const shell = new AlmostBashShell({ fs, env: { PATH: '/usr/bin:/opt/tools' } });
+    const before = await shell.executeCommand('which mytool');
+    expect(before.exitCode).toBe(0);
+    expect(before.stdout).toContain('/opt/tools/mytool.jsh');
+
+    // Shrink PATH back; the registry cannot unregister, so without the
+    // script-registered guard `which` would still print /usr/bin/mytool
+    // while dispatch answers 127.
+    await shell.executeCommand('export PATH=/usr/bin');
+    const after = await shell.executeCommand('which mytool');
+    expect(after.exitCode).toBe(1);
+    expect(after.stdout).not.toContain('mytool');
+
+    const dispatch = await shell.executeCommand('mytool');
+    expect(dispatch.exitCode).toBe(127);
+  });
+
+  it('which resolves from the same PATH roots as dispatch', async () => {
+    await fs.writeFile('/opt/tools/mytool.jsh', 'console.log("x");');
+
+    const shell = new AlmostBashShell({ fs });
+    const miss = await shell.executeCommand('which mytool');
+    expect(miss.exitCode).toBe(1);
+
+    const hit = await shell.executeCommand('export PATH="$PATH:/opt/tools"; which mytool');
+    expect(hit.exitCode).toBe(0);
+    expect(hit.stdout).toContain('/opt/tools/mytool.jsh');
+  });
+});
+
 let jshRegistrationDbCounter = 0;
 
 describe('AlmostBashShell .jsh command registration', () => {
@@ -722,7 +916,7 @@ describe('AlmostBashShell workflow command registration', () => {
       '/workspace/.workflows/foo.workflow.js',
       "export const meta={name:'foo'};\nreturn 1"
     );
-    await fs.writeFile('/workspace/foo.jsh', "console.log('JSH-WON');");
+    await fs.writeFile('/workspace/bin/foo.jsh', "console.log('JSH-WON');");
     const shell = new AlmostBashShell({ fs });
     await shell.syncJshCommands();
     const res = await shell.executeCommand('foo');
@@ -736,10 +930,10 @@ describe('AlmostBashShell workflow command registration', () => {
       '/workspace/.workflows/foo.workflow.js',
       "export const meta={name:'foo'};\nreturn 1"
     );
-    await fs.writeFile('/workspace/foo.jsh', "console.log('JSH-WON');");
+    await fs.writeFile('/workspace/bin/foo.jsh', "console.log('JSH-WON');");
     const shell = new AlmostBashShell({ fs });
     await shell.syncJshCommands();
-    await fs.rm('/workspace/foo.jsh');
+    await fs.rm('/workspace/bin/foo.jsh');
     const res = await shell.executeCommand('foo');
     expect(res.stdout).toMatch(/started/i);
   });
@@ -758,7 +952,7 @@ describe('AlmostBashShell workflow command registration', () => {
     // A .jsh of the same name appears later. The jsh sync skips re-registering (the name is
     // already a registered script command), but the single late-binding handler resolves
     // .jsh-first at dispatch — so the next invocation must run the .jsh.
-    await fs.writeFile('/workspace/foo.jsh', "console.log('JSH-LATER');");
+    await fs.writeFile('/workspace/bin/foo.jsh', "console.log('JSH-LATER');");
     await shell.syncJshCommands();
     const after = await shell.executeCommand('foo');
     expect(after.stdout).toContain('JSH-LATER');

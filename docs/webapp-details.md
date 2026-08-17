@@ -24,7 +24,7 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 
 ## Shell
 
-- Path: `packages/webapp/src/shell/`. `almost-bash-shell.ts` is the just-bash runtime; `supplemental-commands/` built-ins live under `docs/shell-reference.md`. `script-catalog.ts` is the shared `.jsh`/`.bsh` discovery for the shell and `which`; its `FsWatcher` cache is bypassed for mounted trees (external changes invisible). `vfs-adapter.ts` bridges shell → VFS and forwards `canWrite` (duck-typed for `VirtualFS`/`RestrictedFS`).
+- Path: `packages/webapp/src/shell/`. `almost-bash-shell.ts` is the just-bash runtime; `supplemental-commands/` built-ins live under `docs/shell-reference.md`. `script-catalog.ts` is the shared `.jsh`/`.bsh` discovery for the shell and `which`, cached per `$PATH` root set; the `FsWatcher` cache is bypassed only for root sets a mount overlaps (external changes there are invisible). `vfs-adapter.ts` bridges shell → VFS and forwards `canWrite` (duck-typed for `VirtualFS`/`RestrictedFS`).
 - `typescript` v7 (native) runs checks/builds; `typescript-js` (JS v6) powers browser `tsc`/`test`/`esm-transpile` because v7 has no browser/WASM API. `builtin-shadow-map.ts` is authoritative for `ipx`/`npx` → built-in redirects. Raw scans: `jsh-discovery.ts` / `bsh-discovery.ts`.
 
 ## Speech
@@ -97,7 +97,7 @@ Modules in `scoops/`: `tray-leader-sync.ts` (façade + lifecycle), `context.ts`,
 
 ### `.jsh` commands
 
-- `.jsh` files are JavaScript shell scripts discovered anywhere on the VFS; command name is the basename without `.jsh`. `script-catalog.ts` shares discovery across `AlmostBashShell`, `which`, and other lookup paths. Scripts run in an async wrapper: prefer top-level `await`.
+- `.jsh` files are JavaScript shell scripts discovered from the shell's `$PATH` roots (default: `/workspace/skills`, `/workspace/.mcp/aliases`, `/workspace/bin`, `/shared/bin`; extend via `export PATH` or `~/.profile`); command name is the basename without `.jsh`. `script-catalog.ts` shares discovery across `AlmostBashShell`, `which`, and other lookup paths. Scripts run in an async wrapper: prefer top-level `await`.
 - Stdin (`process.stdin`) is fully buffered read-ahead (no streaming; latin1 strings, not `Buffer`s; `'error'` never fires) and one-shot: `read()`, events (`on('data')`→`'end'`→`'close'`, single chunk), and the async iterator share one `consumed` flag, so whichever drains first wins and the others see EOF. On the events surface, `pause()` suppresses the deferred emission until `resume()` (the buffer stays drainable) and `process.exit(N)` from a handler exits with code `N`. `process.stdin.isTTY` is always `false`. Do not expose `stdin` as a top-level identifier (collides with user declarations).
 
 ### `.bsh` browser scripts

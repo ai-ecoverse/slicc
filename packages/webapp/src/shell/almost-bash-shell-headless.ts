@@ -40,6 +40,7 @@ import type { SupplementalCommandsConfig } from './supplemental-commands/index.j
 
 type BrowserAPI = NonNullable<SupplementalCommandsConfig['browserAPI']>;
 
+import { createLogger } from '../base/logger.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { MountCommands } from '../fs/mount-commands.js';
 import { FsError } from '../fs/types.js';
@@ -48,7 +49,8 @@ import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js'
 import { getRegisteredProviderConfig } from '../providers/index.js';
 import type { SudoBroker } from '../sudo/types.js';
 import type { BshDiscoveryFS } from './bsh-discovery.js';
-import type { JshDiscoveryFS } from './jsh-discovery.js';
+import { DEFAULT_HOME_DIR, resolveHomeDir, userFromHome } from './home-dir.js';
+import { DEFAULT_SHELL_PATH, type JshDiscoveryFS, pathToScanRoots } from './jsh-discovery.js';
 import type { JshProcessConfig } from './jsh-executor.js';
 import { executeJsCode, executeJshFile } from './jsh-executor.js';
 import { EMPTY_BYTES } from './just-bash-compat.js';
@@ -222,6 +224,8 @@ type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
 // Class
 // ---------------------------------------------------------------------------
 
+const log = createLogger('almost-bash-shell');
+
 export class AlmostBashShellHeadless implements HeadlessShellLike {
   protected bash: Bash;
   protected vfsAdapter: VfsAdapter;
@@ -318,58 +322,46 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     return new Set(options.allowedCommands);
   }
 
-  constructor(protected options: HeadlessShellOptions) {
-    this.vfsAdapter = new VfsAdapter(options.fs);
-    this.allowedCommands = AlmostBashShellHeadless.buildAllowedCommandSet(options);
-    const initialCwd = options.cwd ?? '/';
-    const initialEnv: Record<string, string> = {
-      HOME: '/',
-      PATH: '/usr/bin',
+  /**
+   * The pre-init environment. HOME here is a synchronous placeholder: the
+   * real value is resolved from `/home` (or taken from `options.env.HOME`)
+   * in `initHomeAndProfile`, which the first command awaits via the same
+   * gate as the `.jsh` scan (#2084) — so no user-visible command ever sees
+   * the placeholder.
+   */
+  private static buildInitialEnv(
+    options: HeadlessShellOptions,
+    initialCwd: string
+  ): Record<string, string> {
+    return {
+      HOME: DEFAULT_HOME_DIR,
+      PATH: DEFAULT_SHELL_PATH,
       USER: 'user',
       SHELL: '/bin/bash',
       PWD: initialCwd,
       ...options.env,
     };
+  }
 
-    this.gitCommands = new GitCommands({
-      fs: options.fs,
-      authorName: initialEnv.GIT_AUTHOR_NAME ?? 'User',
-      authorEmail: initialEnv.GIT_AUTHOR_EMAIL ?? 'user@example.com',
-      ensureFreshGithubToken,
-    });
-
-    this.mountCommands = new MountCommands({ fs: options.fs, isScoop: options.isScoop });
-
-    const scriptDiscoveryFs = options.jshDiscoveryFs ?? options.fs;
-    const bshDiscoveryFs = options.bshDiscoveryFs ?? options.fs;
-    const scriptWatcher = getFsWatcher(scriptDiscoveryFs) ?? getFsWatcher(bshDiscoveryFs);
-    this.scriptCatalog =
-      options.scriptCatalog ??
-      new ScriptCatalog({
-        jshFs: scriptDiscoveryFs,
-        bshFs: bshDiscoveryFs,
-        watcher: scriptWatcher,
-      });
-    this.ownsScriptCatalog = !options.scriptCatalog;
-
-    if (scriptWatcher) {
-      scriptWatcher.watch(
-        '/',
-        (path) => path.endsWith('.jsh') || path.endsWith('.workflow.js'),
-        () => {
-          void this.syncJshCommands().catch(() => undefined);
-        }
-      );
-    }
-
-    const gitCommand = this.createGitCustomCommand();
-    const fetchFn = createProxiedFetch();
-    const supplementalCommands = createSupplementalCommands({
+  /** Build the supplemental command set (extracted to keep the constructor under the line cap). */
+  private buildSupplementalCommands(
+    options: HeadlessShellOptions,
+    fetchFn: ReturnType<typeof createProxiedFetch>
+  ) {
+    return createSupplementalCommands({
       onMediaPreview: async (items) => this.renderMediaPreview(items),
       getJshCommands: () => this.getJshCommandNames(),
       getWorkflowCommands: () => this.getWorkflowCommandNames(),
       syncScriptCommands: () => this.syncJshCommands(),
       getStaticBuiltins: () => [...this.staticBuiltinNames],
+      // Names that entered the registry via script registration (.jsh /
+      // workflow). just-bash has no unregister, so after a PATH root is
+      // removed these stay registered but dispatch 127s — `which` uses this
+      // set to skip its registered-name fallback for them (Codex P2, #2143).
+      getScriptRegisteredNames: () => [
+        ...this.registeredJshCommands.keys(),
+        ...this.registeredWorkflowCommands,
+      ],
       fs: options.fs,
       fetch: fetchFn,
       scriptCatalog: this.scriptCatalog,
@@ -406,6 +398,48 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         this.lastEnv[name] = value;
       },
     });
+  }
+
+  constructor(protected options: HeadlessShellOptions) {
+    this.vfsAdapter = new VfsAdapter(options.fs);
+    this.allowedCommands = AlmostBashShellHeadless.buildAllowedCommandSet(options);
+    const initialCwd = options.cwd ?? '/';
+    const initialEnv = AlmostBashShellHeadless.buildInitialEnv(options, initialCwd);
+
+    this.gitCommands = new GitCommands({
+      fs: options.fs,
+      authorName: initialEnv.GIT_AUTHOR_NAME ?? 'User',
+      authorEmail: initialEnv.GIT_AUTHOR_EMAIL ?? 'user@example.com',
+      ensureFreshGithubToken,
+    });
+
+    this.mountCommands = new MountCommands({ fs: options.fs, isScoop: options.isScoop });
+
+    const scriptDiscoveryFs = options.jshDiscoveryFs ?? options.fs;
+    const bshDiscoveryFs = options.bshDiscoveryFs ?? options.fs;
+    const scriptWatcher = getFsWatcher(scriptDiscoveryFs) ?? getFsWatcher(bshDiscoveryFs);
+    this.scriptCatalog =
+      options.scriptCatalog ??
+      new ScriptCatalog({
+        jshFs: scriptDiscoveryFs,
+        bshFs: bshDiscoveryFs,
+        watcher: scriptWatcher,
+      });
+    this.ownsScriptCatalog = !options.scriptCatalog;
+
+    if (scriptWatcher) {
+      scriptWatcher.watch(
+        '/',
+        (path) => path.endsWith('.jsh') || path.endsWith('.workflow.js'),
+        () => {
+          void this.syncJshCommands().catch(() => undefined);
+        }
+      );
+    }
+
+    const gitCommand = this.createGitCustomCommand();
+    const fetchFn = createProxiedFetch();
+    const supplementalCommands = this.buildSupplementalCommands(options, fetchFn);
     const mountCommand = this.createMountCustomCommand();
 
     const allCustomCommands = [
@@ -428,7 +462,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     this.bash = new Bash({
       fs: this.vfsAdapter,
       cwd: initialCwd,
-      env: initialEnv,
+      // Deliberately EMPTY: just-bash merges per-exec `options.env` OVER the
+      // instance env, so anything seeded here becomes an unremovable floor —
+      // `unset` in ~/.profile (or anywhere) could never delete it (Codex P2,
+      // #2143). Every `bash.exec` call site threads `this.lastEnv` (seeded
+      // from `initialEnv` below), which is the single source of truth.
+      env: {},
       fetch: fetchFn,
       commands: allowedBuiltinNames,
       customCommands,
@@ -628,12 +667,81 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * rather than at the await site: a first command that ABORTS mid-wait must
    * not leave the next one racing the scan again.
    */
+  /**
+   * The `.jsh` search roots derived from the shell's LIVE `$PATH` (#2085).
+   * `~/.profile` runs before the first scan, so a PATH exported there is
+   * already in `lastEnv` when the initial registration reads it.
+   */
+  private currentScanRoots(): string[] {
+    return pathToScanRoots(this.lastEnv.PATH);
+  }
+
   private startInitialJshSync(): void {
-    this.initialJshSync = this.syncJshCommands()
+    this.initialJshSync = this.initHomeAndProfile()
+      .then(() => this.syncJshCommands())
       .catch(() => undefined)
       .finally(() => {
         this.initialJshSync = null;
       });
+  }
+
+  /**
+   * Make `$HOME` real before the first command runs (#2085):
+   *
+   * 1. Resolve HOME from `/home` (onboarding's `/home/<slug>`), unless the
+   *    caller pinned it via `options.env.HOME` (scoops pin their per-scoop
+   *    home). `$USER` follows as `basename($HOME)` unless also pinned.
+   * 2. `mkdir -p $HOME` so `cd ~` always lands somewhere — this also
+   *    re-seeds the directory after a filesystem nuke.
+   * 3. Source `$HOME/.profile` when present. This is THE persistence
+   *    mechanism for env vars: the file lives in the OPFS-backed VFS, so
+   *    `echo 'export FOO=bar' >> ~/.profile` survives reloads and reaches
+   *    every future shell — including the per-connection tray exec shells.
+   *
+   * Runs inside the same init gate the `.jsh` scan uses, so ordering is
+   * free: the profile can `export PATH=…` and the scan that follows sees it.
+   * The cwd contract is the caller's (a scoop starts in its workspace): a
+   * `cd` inside `.profile` changes env like bash would, but the shell's
+   * working directory is restored after sourcing.
+   */
+  private async initHomeAndProfile(): Promise<void> {
+    const fs = this.options.fs;
+    try {
+      const pinnedHome = this.options.env?.HOME;
+      const home = pinnedHome ?? (await resolveHomeDir(fs));
+      this.lastEnv.HOME = home;
+      if (!this.options.env?.USER) {
+        this.lastEnv.USER = userFromHome(home);
+      }
+      // Deliberately NO mkdir here: `options.fs` can be sudo-gated
+      // (require-approval scoop shells), and a write at construction time
+      // fires an approval escalation before the shell ever ran a command.
+      // Directory creation belongs to the structure owners —
+      // `ensureRootStructure` / `ensureDirectoryStructure` create `/home/user`
+      // and the scoop homes on the raw VFS (including after a filesystem
+      // nuke); onboarding creates `/home/<slug>`.
+
+      const profilePath = `${home.replace(/\/+$/, '')}/.profile`;
+      if (!(await fs.exists(profilePath).catch(() => false))) return;
+      // `.` is just-bash's `source` builtin; quoting handles slugs with
+      // shell-special characters. Errors inside the profile must not brick
+      // the shell — adopt whatever env survived and move on.
+      const result = await this.bash.exec(`. "$HOME/.profile"`, {
+        env: this.lastEnv,
+        cwd: this.cwd,
+      });
+      if (result.env) {
+        // Adopt the sourced env WHOLESALE (not merged over the old one): the
+        // profile received the full env as input, so its result already
+        // contains every surviving var — and a merge would resurrect keys the
+        // profile `unset` (Codex P2 on #2143). Only PWD keeps the caller's
+        // contract.
+        const { PWD: _ignoredPwd, ...profileEnv } = result.env;
+        this.lastEnv = { ...profileEnv, PWD: this.lastEnv.PWD ?? this.cwd };
+      }
+    } catch (err) {
+      log.warn('HOME/profile init failed; continuing with defaults', err);
+    }
   }
 
   private async waitForInitialJshSync(signal?: AbortSignal): Promise<void> {
@@ -694,12 +802,21 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       cwd: this.cwd,
       signal,
     };
+    const pathBeforeExec = this.lastEnv.PATH;
     const result = await this.bash.exec(command, execOptions);
     // Persist any "Always" command grants confirmed during dispatch now that we
     // are outside just-bash's execution box (where VFS async timers are blocked).
     await this.flushPendingCommandGrants();
     if (result.env) {
       this.lastEnv = { ...result.env };
+    }
+    // `export PATH=…` changes where commands live (#2085): re-register before
+    // the next command so `mytool` works immediately after `export PATH=…;`.
+    // Awaited — the scan is bounded by the PATH roots, and returning before it
+    // finishes would reintroduce the #2084 race for the very command sequences
+    // that just extended the PATH.
+    if (result.env && this.lastEnv.PATH !== pathBeforeExec) {
+      await this.syncJshCommands().catch(() => undefined);
     }
     // Reapply env writes performed by supplemental commands during this exec
     // (e.g. `secret set` injecting a masked value). `bash.exec`'s `result.env`
@@ -886,7 +1003,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
   private async doSyncJshCommands(): Promise<void> {
     try {
-      const jshMap = await this.scriptCatalog.getJshCommands();
+      const jshMap = await this.scriptCatalog.getJshCommands(this.currentScanRoots());
       const wfMap = await this.getFilteredWorkflowCommands();
 
       // .jsh names: keep the existing path-keyed registry + guard.
@@ -955,7 +1072,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
             }));
 
         // 1) .jsh wins the bare name.
-        const jshMap = await catalog.getJshCommands();
+        const jshMap = await catalog.getJshCommands(shell.currentScanRoots());
         const jshPath = jshMap.get(cmdName);
         if (jshPath) {
           let code: string;
@@ -1015,7 +1132,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   }
 
   private async getFilteredJshCommands(): Promise<Map<string, string>> {
-    const all = await this.scriptCatalog.getJshCommands();
+    const all = await this.scriptCatalog.getJshCommands(this.currentScanRoots());
     const filtered = new Map<string, string>();
     for (const [name, path] of all) {
       if (this.builtinCommandNames.has(name)) continue;

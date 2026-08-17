@@ -511,7 +511,11 @@ export class Orchestrator implements ConeApprovalRouter {
   /** Ensure root directory structure exists on the shared FS */
   private async ensureRootStructure(): Promise<void> {
     if (!this.sharedFs) return;
-    const dirs = ['/workspace', '/shared', '/scoops', '/home', '/tmp', '/mnt'];
+    // '/home/user' is the shell's fallback $HOME when onboarding never ran
+    // (or a nuke wiped '/home') — created here on the RAW fs because shells
+    // must never write through their own (possibly sudo-gated) handle at
+    // init. Onboarded '/home/<slug>' homes outrank it in resolveHomeDir.
+    const dirs = ['/workspace', '/shared', '/scoops', '/home', '/home/user', '/tmp', '/mnt'];
     for (const dir of dirs) {
       try {
         await this.sharedFs.mkdir(dir, { recursive: true });
