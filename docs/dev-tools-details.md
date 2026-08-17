@@ -111,9 +111,10 @@ leaves a dead package pinned in `Package.resolved` and paid for on every
 resolve.
 
 The gate parses every `packages/*/Package.swift`, resolves each target's
-sources (explicit `path:`/`sources:`/`exclude:`, else the conventional
-`Sources/<name>` / `Tests/<name>` layout), collects the modules those
-sources import, and reports three findings:
+sources (explicit `path:`/`sources:`/`exclude:`, else the **first**
+matching conventional root — `Sources/<name>` before the enclosing
+`Sources`, so a target never scans a sibling target's files), collects
+the modules those sources import, and reports three findings:
 
 | Code                        | Meaning                                                    |
 | --------------------------- | ---------------------------------------------------------- |
@@ -125,8 +126,13 @@ Matching mirrors SPM's own rules: package identities compare
 case-insensitively and come from the last URL/path component, target
 names are normalised to module names (`slicc-server` → `slicc_server`),
 local `path:` dependencies are resolved through their own manifests so a
-product vending a differently-named module still matches, and modules
-named in `#if canImport(...)` count as used. `.product(…, condition:)`
+product vending a differently-named module still matches — scoped to the
+product the target actually declared, so a sibling product of the same
+local package never satisfies it — and modules named in
+`#if canImport(...)` count as used. Comments **and string literals** are
+blanked before the import scan, so a generated-source fixture such as
+`let src = """\nimport Logging\n"""` cannot make a dead dependency look
+alive. `.product(…, condition:)`
 entries are skipped — the importing sources sit behind `#if os(...)`,
 which the gate does not evaluate. The `unlisted-dependency` check only
 fires for modules whose origin is knowable from the manifest (a sibling

@@ -435,15 +435,41 @@ function parseTargetDependencies(source, targetArgs, targetOffset, waivers) {
 }
 
 /**
+ * Blank the interior of every string literal, keeping length and newlines.
+ *
+ * `stripComments` deliberately preserves strings (the manifest parser reads
+ * URLs and paths out of them), but a Swift source that embeds generated code
+ * in a literal — `let fixture = """\nimport Logging\n"""` — must not count as
+ * importing that module, or a genuinely unused dependency looks used.
+ */
+export function blankStringLiterals(text) {
+  let out = '';
+  let i = 0;
+  while (i < text.length) {
+    if (text[i] === '"') {
+      const end = skipString(text, i);
+      out += blank(text.slice(i, end));
+      i = end;
+      continue;
+    }
+    out += text[i];
+    i++;
+  }
+  return out;
+}
+
+/**
  * Modules a Swift source imports. Covers plain, attributed
  * (`@_exported`/`@preconcurrency`), submodule (`import A.B` → `A`), and
  * declaration-scoped (`import struct A.B` → `A`) imports, plus
  * `canImport(A)` — a module named in a `#if canImport` check is genuinely
  * consumed by the target even when the import itself is conditional.
+ * Comments and string literals are blanked first, so neither can fabricate
+ * an import.
  */
 export function collectImports(swiftSource) {
   const modules = new Set();
-  const text = stripComments(swiftSource);
+  const text = blankStringLiterals(stripComments(swiftSource));
   const importRe =
     /^[ \t]*(?:@[\w]+(?:\([^)]*\))?[ \t]+)*(?:@testable[ \t]+)?import[ \t]+(?:(?:struct|class|enum|protocol|typealias|func|var|let|actor|macro)[ \t]+)?([A-Za-z_][A-Za-z0-9_]*)/gm;
   for (const m of text.matchAll(importRe)) modules.add(m[1]);
@@ -457,21 +483,23 @@ export function collectImports(swiftSource) {
  * @param {object} input
  * @param {ReturnType<typeof parseManifest>} input.manifest
  * @param {Map<string, Set<string>>} input.importsByTarget imports per target name
- * @param {Map<string, Set<string>>} input.localModulesByPackage modules vended by
- *   each local (`path:`) package dependency, keyed by identity. Used for the
- *   unlisted-dependency check, which stays limited to dependencies whose module
- *   set is knowable from the repo (external packages are not resolved).
+ * @param {Map<string, ReturnType<typeof packageModuleIndex>>} input.localPackages
+ *   module index of each local (`path:`) package dependency, keyed by
+ *   lower-cased identity — `products` maps a product name to the modules that
+ *   product alone vends, `modules` is the union across the package. Resolution
+ *   stays limited to dependencies whose modules are knowable from the repo;
+ *   external packages are never resolved.
  * @returns {{severity: 'error', code: string, message: string, line: number}[]}
  */
-export function analyzeManifest({ manifest, importsByTarget, localModulesByPackage = new Map() }) {
-  const graph = resolveGraph(manifest, localModulesByPackage);
+export function analyzeManifest({ manifest, importsByTarget, localPackages = new Map() }) {
+  const graph = resolveGraph(manifest, localPackages);
   const findings = [...unusedPackageDependencies(manifest, graph)];
   for (const target of manifest.targets) {
     if (!target.hasSources) continue;
     const imports = importsByTarget.get(target.name);
     if (!imports) continue;
-    findings.push(...unusedTargetDependencies(target, imports, localModulesByPackage));
-    findings.push(...unlistedDependencies(target, imports, graph, localModulesByPackage));
+    findings.push(...unusedTargetDependencies(target, imports, localPackages));
+    findings.push(...unlistedDependencies(target, imports, graph, localPackages));
   }
   return findings.sort((a, b) => a.line - b.line || a.code.localeCompare(b.code));
 }
@@ -482,7 +510,7 @@ export function analyzeManifest({ manifest, importsByTarget, localModulesByPacka
  * `"Name"` entry resolves to a same-package target when one matches, else to
  * the like-named product of a declared package dependency.
  */
-function resolveGraph(manifest, localModulesByPackage) {
+function resolveGraph(manifest, localPackages) {
   const ownTargets = new Set(manifest.targets.map((t) => t.name));
   const moduleOrigin = new Map();
   const referencedPackages = new Set();
@@ -497,7 +525,7 @@ function resolveGraph(manifest, localModulesByPackage) {
     const owner = manifest.dependencies.find(
       (p) =>
         identityKey(p.identity) === identityKey(dep.module) ||
-        localModulesByPackage.get(identityKey(p.identity))?.has(dep.module)
+        localPackages.get(identityKey(p.identity))?.modules.has(dep.module)
     );
     if (!owner) continue;
     referencedPackages.add(identityKey(owner.identity));
@@ -505,7 +533,7 @@ function resolveGraph(manifest, localModulesByPackage) {
   }
 
   for (const dep of manifest.dependencies) {
-    for (const m of localModulesByPackage.get(identityKey(dep.identity)) ?? []) {
+    for (const m of localPackages.get(identityKey(dep.identity))?.modules ?? []) {
       if (!moduleOrigin.has(moduleName(m))) {
         moduleOrigin.set(moduleName(m), `package '${dep.identity}'`);
       }
@@ -530,12 +558,13 @@ function* unusedPackageDependencies(manifest, { referencedPackages }) {
   }
 }
 
-function* unusedTargetDependencies(target, imports, localModulesByPackage) {
+function* unusedTargetDependencies(target, imports, localPackages) {
   for (const dep of target.dependencies) {
     if (dep.waiver || dep.conditional) continue;
     // A product may vend several modules; for local packages the manifest
-    // tells us which, so importing any of them counts.
-    const candidates = [dep.module, ...vendedByDependency(dep, localModulesByPackage)];
+    // tells us which modules THIS product carries, so importing any of them
+    // counts — but a sibling product of the same package does not.
+    const candidates = [dep.module, ...vendedByDependency(dep, localPackages)];
     if (candidates.some((m) => imports.has(moduleName(m)))) continue;
     yield {
       severity: 'error',
@@ -550,10 +579,10 @@ function* unusedTargetDependencies(target, imports, localModulesByPackage) {
   }
 }
 
-function* unlistedDependencies(target, imports, { moduleOrigin }, localModulesByPackage) {
+function* unlistedDependencies(target, imports, { moduleOrigin }, localPackages) {
   const declared = new Set(
     target.dependencies
-      .flatMap((d) => [d.module, ...vendedByDependency(d, localModulesByPackage)])
+      .flatMap((d) => [d.module, ...vendedByDependency(d, localPackages)])
       .map(moduleName)
   );
   for (const module of imports) {
@@ -572,18 +601,35 @@ function* unlistedDependencies(target, imports, { moduleOrigin }, localModulesBy
   }
 }
 
-/** Modules the local package behind a target dependency vends, if known. */
-function vendedByDependency(dep, localModulesByPackage) {
+/**
+ * Modules the *declared product* of a local package dependency vends.
+ *
+ * Scoped to `dep.module` (the product name) on purpose: a package with several
+ * products only hands the consumer the modules of the product it asked for, so
+ * declaring `Foo` while importing `Bar` from a sibling product of the same
+ * package must still read as unused `Foo` plus unlisted `Bar`.
+ */
+function vendedByDependency(dep, localPackages) {
   if (!dep.package) return [];
-  return [...(localModulesByPackage.get(identityKey(dep.package)) ?? [])];
+  const product = localPackages.get(identityKey(dep.package))?.products.get(dep.module);
+  return product ? [...product] : [];
 }
 
-/** Modules a package vends through its library/executable products. */
-export function vendedModules(manifest) {
+/**
+ * Modules a package vends, per product and in total.
+ *
+ * A library/executable product exposes its `targets:` as importable modules;
+ * when a product lists none (or the manifest omits `products:` entirely), the
+ * product name is the best available stand-in.
+ */
+export function packageModuleIndex(manifest) {
+  const products = new Map();
   const modules = new Set();
   for (const product of manifest.products) {
+    const vended = new Set(product.targets.length > 0 ? product.targets : [product.name]);
+    products.set(product.name, vended);
+    for (const m of vended) modules.add(m);
     modules.add(product.name);
-    for (const t of product.targets) modules.add(t);
   }
-  return modules;
+  return { products, modules };
 }

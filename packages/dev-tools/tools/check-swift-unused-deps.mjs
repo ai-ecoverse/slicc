@@ -26,8 +26,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import {
   analyzeManifest,
   collectImports,
+  packageModuleIndex,
   parseManifest,
-  vendedModules,
 } from './check-swift-unused-deps-lib.mjs';
 
 const filename = fileURLToPath(import.meta.url);
@@ -71,14 +71,22 @@ function listSwiftFiles(dir, excluded) {
 
 /**
  * Resolve a target's source directory the way SPM does: the explicit `path:`
- * when given, else the conventional `Sources/<name>` / `Tests/<name>` layout.
+ * when given, else the FIRST matching conventional root
+ * (`Sources/<name>` → `Sources` → …, `Tests/<name>` → `Tests`).
+ *
+ * Only the first hit counts: unioning the fallbacks would let a target scan a
+ * sibling target's files, so in a two-target conventional package an import
+ * belonging to target B would also mark B's dependency used on target A.
+ * Returns an empty array when nothing matches — the caller then reports
+ * `unresolved-target-sources` rather than passing the target silently.
  */
 export function targetSourceRoots(pkgDir, target) {
   if (target.path) return [resolve(pkgDir, target.path)];
   const conventional = target.isTest
     ? [`Tests/${target.name}`, 'Tests']
     : [`Sources/${target.name}`, 'Sources', 'Source', 'src', target.name];
-  return conventional.map((p) => resolve(pkgDir, p)).filter((p) => existsSync(p));
+  const first = conventional.map((p) => resolve(pkgDir, p)).find((p) => existsSync(p));
+  return first ? [first] : [];
 }
 
 /** Union of the modules imported by every source file of `target`. */
@@ -124,21 +132,21 @@ export function checkRepo(root = repoRoot) {
     parsed.set(abs, parseManifest(readFileSync(abs, 'utf8')));
   }
 
-  // Module sets for local (`path:`) dependencies, so a product that vends a
-  // differently-named module — and the unlisted-import check — resolve.
-  const modulesByDir = new Map();
-  for (const [abs, manifest] of parsed) modulesByDir.set(dirname(abs), vendedModules(manifest));
+  // Per-product module index for local (`path:`) dependencies, so a product
+  // vending a differently-named module — and the unlisted-import check —
+  // resolve without crediting a sibling product's modules.
+  const indexByDir = new Map();
+  for (const [abs, manifest] of parsed) indexByDir.set(dirname(abs), packageModuleIndex(manifest));
 
   const findings = [];
   const packages = [];
   for (const [abs, manifest] of parsed) {
     const pkgDir = dirname(abs);
-    const localModulesByPackage = new Map();
+    const localPackages = new Map();
     for (const dep of manifest.dependencies) {
       if (dep.kind !== 'path' || !dep.path) continue;
-      const depDir = resolve(pkgDir, dep.path);
-      const modules = modulesByDir.get(depDir);
-      if (modules) localModulesByPackage.set(dep.identity.toLowerCase(), modules);
+      const index = indexByDir.get(resolve(pkgDir, dep.path));
+      if (index) localPackages.set(dep.identity.toLowerCase(), index);
     }
 
     const importsByTarget = new Map();
@@ -162,7 +170,7 @@ export function checkRepo(root = repoRoot) {
       importsByTarget.set(target.name, modules);
     }
 
-    for (const finding of analyzeManifest({ manifest, importsByTarget, localModulesByPackage })) {
+    for (const finding of analyzeManifest({ manifest, importsByTarget, localPackages })) {
       findings.push({ file: relative(root, abs), ...finding });
     }
     packages.push({

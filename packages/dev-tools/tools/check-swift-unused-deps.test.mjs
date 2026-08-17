@@ -7,13 +7,14 @@ import { afterAll, describe, expect, it } from 'vitest';
 import { checkRepo, findManifests, targetSourceRoots } from './check-swift-unused-deps.mjs';
 import {
   analyzeManifest,
+  blankStringLiterals,
   collectImports,
   matchBracket,
   moduleName,
   packageIdentity,
+  packageModuleIndex,
   parseManifest,
   stripComments,
-  vendedModules,
 } from './check-swift-unused-deps-lib.mjs';
 
 const filename = fileURLToPath(import.meta.url);
@@ -57,12 +58,23 @@ function parsed() {
   return parseManifest(MANIFEST);
 }
 
+/** `swift-optel` as a local dependency: one product, one module. */
+const LOCAL_PACKAGES = new Map([
+  [
+    'swift-optel',
+    {
+      products: new Map([['SwiftOptel', new Set(['SwiftOptel'])]]),
+      modules: new Set(['SwiftOptel']),
+    },
+  ],
+]);
+
 /** Analyse MANIFEST with a caller-supplied import map. */
-function analyze(importsByTarget, manifest = parsed()) {
+function analyze(importsByTarget, manifest = parsed(), localPackages = LOCAL_PACKAGES) {
   return analyzeManifest({
     manifest,
     importsByTarget: new Map(Object.entries(importsByTarget).map(([k, v]) => [k, new Set(v)])),
-    localModulesByPackage: new Map([['swift-optel', new Set(['SwiftOptel'])]]),
+    localPackages,
   });
 }
 
@@ -130,7 +142,6 @@ describe('parseManifest', () => {
       'swift-optel',
     ]);
     expect(manifest.dependencies[2]).toMatchObject({ kind: 'path', path: '../swift-optel' });
-    expect(vendedModules(manifest)).toEqual(new Set(['DemoKit', 'DemoSupport']));
   });
 
   it('reads targets with their kind, path and dependency forms', () => {
@@ -197,6 +208,69 @@ describe('collectImports', () => {
 
   it('ignores commented-out imports and unrelated text', () => {
     expect(collectImports('// import Logging\nlet importer = 1\n')).toEqual(new Set());
+  });
+
+  it('ignores an import inside a multiline string fixture', () => {
+    const source = [
+      'import Foundation',
+      'let generated = """',
+      'import Logging',
+      'let x = 1',
+      '"""',
+    ].join('\n');
+    expect(collectImports(source)).toEqual(new Set(['Foundation']));
+  });
+
+  it('ignores an import inside a single-line string literal', () => {
+    expect(collectImports('let snippet = "import Logging"\n')).toEqual(new Set());
+  });
+});
+
+describe('blankStringLiterals', () => {
+  it('blanks the literal but keeps length and line boundaries', () => {
+    const source = 'let a = """\nimport Logging\n"""\nimport Foundation\n';
+    const blanked = blankStringLiterals(source);
+    expect(blanked).toHaveLength(source.length);
+    expect(blanked.split('\n')).toHaveLength(source.split('\n').length);
+    expect(blanked).not.toContain('import Logging');
+    expect(blanked).toContain('import Foundation');
+  });
+
+  it('leaves code outside literals untouched', () => {
+    expect(blankStringLiterals('let n = 1 + 2').trim()).toBe('let n = 1 + 2');
+  });
+});
+
+describe('packageModuleIndex', () => {
+  it('maps each product to the modules it alone vends', () => {
+    const manifest = parseManifest(`
+let package = Package(
+    name: "Multi",
+    products: [
+        .library(name: "Foo", targets: ["FooCore"]),
+        .library(name: "Bar", targets: ["BarCore"]),
+    ],
+    targets: [
+        .target(name: "FooCore", path: "Sources/FooCore"),
+        .target(name: "BarCore", path: "Sources/BarCore"),
+    ]
+)
+`);
+    const index = packageModuleIndex(manifest);
+    expect(index.products.get('Foo')).toEqual(new Set(['FooCore']));
+    expect(index.products.get('Bar')).toEqual(new Set(['BarCore']));
+    expect(index.modules).toEqual(new Set(['Foo', 'FooCore', 'Bar', 'BarCore']));
+  });
+
+  it('falls back to the product name when a product lists no targets', () => {
+    const manifest = parseManifest(`
+let package = Package(
+    name: "Solo",
+    products: [.library(name: "Solo", targets: [])],
+    targets: [.target(name: "Solo", path: "Sources/Solo")]
+)
+`);
+    expect(packageModuleIndex(manifest).products.get('Solo')).toEqual(new Set(['Solo']));
   });
 });
 
@@ -312,16 +386,87 @@ let package = Package(
   });
 });
 
+describe('analyzeManifest: multi-product local dependencies', () => {
+  const MULTI = `
+let package = Package(
+    name: "Consumer",
+    dependencies: [
+        .package(path: "../multi")
+    ],
+    targets: [
+        .target(
+            name: "Consumer",
+            dependencies: [.product(name: "Foo", package: "multi")],
+            path: "Sources/Consumer"
+        )
+    ]
+)
+`;
+  // One local package, two products, each vending its own module.
+  const MULTI_LOCAL = new Map([
+    [
+      'multi',
+      {
+        products: new Map([
+          ['Foo', new Set(['FooCore'])],
+          ['Bar', new Set(['BarCore'])],
+        ]),
+        modules: new Set(['Foo', 'FooCore', 'Bar', 'BarCore']),
+      },
+    ],
+  ]);
+
+  /** Analyse MULTI with `Consumer` importing `modules`. */
+  function analyzeMulti(modules) {
+    return analyzeManifest({
+      manifest: parseManifest(MULTI),
+      importsByTarget: new Map([['Consumer', new Set(modules)]]),
+      localPackages: MULTI_LOCAL,
+    });
+  }
+
+  it('accepts the module vended by the declared product', () => {
+    expect(analyzeMulti(['Foundation', 'FooCore'])).toEqual([]);
+  });
+
+  it('does not credit a sibling product of the same package', () => {
+    const findings = analyzeMulti(['Foundation', 'BarCore']);
+    expect(findings.map((f) => f.code).sort()).toEqual([
+      'unlisted-dependency',
+      'unused-target-dependency',
+    ]);
+    expect(findings.find((f) => f.code === 'unused-target-dependency').message).toContain("'Foo'");
+    expect(findings.find((f) => f.code === 'unlisted-dependency').message).toContain("'BarCore'");
+  });
+});
+
 describe('source-root resolution', () => {
   it('uses the explicit path when the manifest sets one', () => {
     expect(targetSourceRoots('/pkg', { name: 'T', path: 'Sources/T' })).toEqual(['/pkg/Sources/T']);
   });
 
-  it('falls back to the conventional layout, keeping only existing dirs', () => {
+  it('resolves the conventional per-target directory', () => {
     const pkgDir = resolve(repoRoot, 'packages/swift-optel');
-    expect(targetSourceRoots(pkgDir, { name: 'SwiftOptel', path: null, isTest: false })).toContain(
-      resolve(pkgDir, 'Sources/SwiftOptel')
-    );
+    expect(targetSourceRoots(pkgDir, { name: 'SwiftOptel', path: null, isTest: false })).toEqual([
+      resolve(pkgDir, 'Sources/SwiftOptel'),
+    ]);
+  });
+
+  it('returns a single root, never a union with the enclosing Sources dir', () => {
+    const pkgDir = resolve(repoRoot, 'packages/swift-optel');
+    const roots = targetSourceRoots(pkgDir, { name: 'SwiftOptel', path: null, isTest: false });
+    expect(roots).toHaveLength(1);
+    expect(roots).not.toContain(resolve(pkgDir, 'Sources'));
+  });
+
+  it('returns nothing when no conventional root exists', () => {
+    expect(
+      targetSourceRoots('/nonexistent/slicc-swift-deps-pkg', {
+        name: 'Absent',
+        path: null,
+        isTest: false,
+      })
+    ).toEqual([]);
   });
 });
 
@@ -434,6 +579,40 @@ let package = Package(
     expect(status).toBe(1);
     expect(stderr).toContain('::error file=packages/demo/Package.swift,line=');
     expect(stderr).toContain('unused-target-dependency');
+  });
+
+  // Conventional layout (no `path:`), two targets: a sibling's import must not
+  // satisfy this target's dependency.
+  const CONVENTIONAL_MANIFEST = `// swift-tools-version: 5.10
+let package = Package(
+    name: "Demo",
+    dependencies: [
+        .package(url: "https://github.com/apple/swift-log", from: "1.15.0")
+    ],
+    targets: [
+        .target(name: "Quiet", dependencies: [.product(name: "Logging", package: "swift-log")]),
+        .target(name: "Loud", dependencies: [.product(name: "Logging", package: "swift-log")]),
+    ]
+)
+`;
+
+  it('does not credit a sibling target’s import under the conventional layout', () => {
+    const root = scratchRepo(CONVENTIONAL_MANIFEST, {
+      'Sources/Quiet/Quiet.swift': 'import Foundation\n',
+      'Sources/Loud/Loud.swift': 'import Logging\n',
+    });
+    const { findings } = checkRepo(root);
+    expect(findings).toHaveLength(1);
+    expect(findings[0].code).toBe('unused-target-dependency');
+    expect(findings[0].message).toContain("target 'Quiet'");
+  });
+
+  it('does not let a string-literal import mask an unused dependency', () => {
+    const root = scratchRepo(SCRATCH_MANIFEST, {
+      'Sources/DemoKit/Kit.swift': 'import Foundation\nlet fixture = """\nimport Logging\n"""\n',
+    });
+    const { findings } = checkRepo(root);
+    expect(findings.map((f) => f.code)).toEqual(['unused-target-dependency']);
   });
 });
 
