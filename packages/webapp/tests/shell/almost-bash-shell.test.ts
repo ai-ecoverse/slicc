@@ -487,6 +487,35 @@ describe('AlmostBashShell $PATH-driven command lookup (#2085)', () => {
     expect(hidden.exitCode).toBe(127);
   });
 
+  it('unset in ~/.profile actually removes a pre-seeded env var (Codex P2)', async () => {
+    await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
+    await fs.writeFile('/home/lars/.profile', 'unset PRESEEDED');
+
+    const shell = new AlmostBashShell({ fs, env: { PRESEEDED: 'leak' } });
+    const result = await shell.executeCommand('echo "${PRESEEDED:-gone}"');
+    expect(result.stdout.trim()).toBe('gone');
+  });
+
+  it('which stops reporting a script after its PATH root is removed (Codex P2)', async () => {
+    await fs.writeFile('/opt/tools/mytool.jsh', 'console.log("x");');
+
+    const shell = new AlmostBashShell({ fs, env: { PATH: '/usr/bin:/opt/tools' } });
+    const before = await shell.executeCommand('which mytool');
+    expect(before.exitCode).toBe(0);
+    expect(before.stdout).toContain('/opt/tools/mytool.jsh');
+
+    // Shrink PATH back; the registry cannot unregister, so without the
+    // script-registered guard `which` would still print /usr/bin/mytool
+    // while dispatch answers 127.
+    await shell.executeCommand('export PATH=/usr/bin');
+    const after = await shell.executeCommand('which mytool');
+    expect(after.exitCode).toBe(1);
+    expect(after.stdout).not.toContain('mytool');
+
+    const dispatch = await shell.executeCommand('mytool');
+    expect(dispatch.exitCode).toBe(127);
+  });
+
   it('which resolves from the same PATH roots as dispatch', async () => {
     await fs.writeFile('/opt/tools/mytool.jsh', 'console.log("x");');
 

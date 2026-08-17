@@ -188,6 +188,41 @@ export function abortableSleep(ms: number, signal?: AbortSignal): Promise<boolea
   });
 }
 
+/**
+ * The env a scoop's shell starts with (#2085). Non-cone scoops pin:
+ *
+ * - HOME to their per-scoop home (created by ensureDirectoryStructure) — it
+ *   is inside their writable ACL, unlike `/home`, which their RestrictedFS
+ *   cannot even see;
+ * - USER to the scoop folder;
+ * - PATH with their own workspace roots ahead of the shared defaults, so
+ *   scoop-local commands win a basename conflict (mirroring the old scan
+ *   order, bounded to declared roots).
+ *
+ * The cone pins nothing — its shell resolves onboarding's `/home/<slug>`.
+ * Secrets spread FIRST: a user-created secret can carry any POSIX name —
+ * including PATH/HOME/USER — and must not override the isolation pins
+ * (Codex P2 on #2143). Exported for tests.
+ */
+export function buildScoopShellEnv(
+  isCone: boolean,
+  folder: string,
+  secretEnv: Record<string, string>
+): Record<string, string> {
+  if (isCone) return { ...secretEnv };
+  return {
+    ...secretEnv,
+    HOME: `/scoops/${folder}/home`,
+    USER: folder,
+    PATH: [
+      '/usr/bin',
+      `/scoops/${folder}/workspace/skills`,
+      `/scoops/${folder}/workspace/bin`,
+      ...DEFAULT_JSH_SEARCH_ROOTS,
+    ].join(':'),
+  };
+}
+
 export interface ScoopContextCallbacks {
   onResponse: (text: string, isPartial: boolean) => void;
   onResponseDone: () => void;
@@ -482,27 +517,7 @@ export class ScoopContext {
         : this.fs!
     ) as VirtualFS;
 
-    // Non-cone scoops pin HOME to their per-scoop home (created by
-    // ensureDirectoryStructure) — it is inside their writable ACL, unlike
-    // `/home`, which their RestrictedFS cannot even see. The cone leaves
-    // HOME unset so the shell resolves onboarding's `/home/<slug>` (#2085).
-    const scoopHome = this.scoop.isCone ? undefined : `/scoops/${this.scoop.folder}/home`;
-    // Scoops also get their own workspace ahead of the shared roots in $PATH
-    // so scoop-local commands win a basename conflict — mirroring the old
-    // scan order, but bounded to declared roots (#2085).
-    const scoopPath = this.scoop.isCone
-      ? undefined
-      : [
-          '/usr/bin',
-          `/scoops/${this.scoop.folder}/workspace/skills`,
-          `/scoops/${this.scoop.folder}/workspace/bin`,
-          ...DEFAULT_JSH_SEARCH_ROOTS,
-        ].join(':');
-    const shellEnv: Record<string, string> = {
-      ...(scoopHome ? { HOME: scoopHome, USER: this.scoop.folder } : {}),
-      ...(scoopPath ? { PATH: scoopPath } : {}),
-      ...secretEnv,
-    };
+    const shellEnv = buildScoopShellEnv(this.scoop.isCone, this.scoop.folder, secretEnv);
     this.shell = new AlmostBashShell({
       fs: gatedFs,
       cwd,

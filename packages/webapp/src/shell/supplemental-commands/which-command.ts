@@ -9,6 +9,13 @@ export interface WhichCommandOptions {
   fs?: VirtualFS;
   scriptCatalog?: ScriptCatalog;
   getStaticBuiltins?: () => string[];
+  /**
+   * Names registered via script registration (.jsh / workflow). The registry
+   * cannot unregister, so a script whose PATH root was removed stays
+   * registered while dispatch answers 127 — `which` must not report
+   * `/usr/bin/<name>` for it from the registered-name fallback.
+   */
+  getScriptRegisteredNames?: () => string[];
 }
 
 /**
@@ -41,7 +48,8 @@ function resolveCommandPath(
   jshPath: string | undefined,
   wf: WorkflowCommandEntry | undefined,
   staticBuiltins: Set<string>,
-  builtinSet: Set<string>
+  builtinSet: Set<string>,
+  scriptRegistered: Set<string>
 ): { lines: string[]; found: boolean } {
   if (staticBuiltins.has(name)) {
     const lines = [`/usr/bin/${name}`];
@@ -56,9 +64,11 @@ function resolveCommandPath(
   if (wf) {
     return { lines: [`${wf.path} (workflow)`], found: true };
   }
-  if (builtinSet.has(name)) {
+  if (builtinSet.has(name) && !scriptRegistered.has(name)) {
     return { lines: [`/usr/bin/${name}`], found: true };
   }
+  // A script-registered name that no catalog map answered for is STALE (its
+  // PATH root was removed); dispatch would 127, so `which` reports not found.
   return { lines: [], found: false };
 }
 
@@ -111,13 +121,22 @@ Exit code 0 if all commands found, 1 if any not found.
         ? new Set(resolvedOptions.getStaticBuiltins())
         : builtinSet;
 
+    const scriptRegistered = new Set(resolvedOptions.getScriptRegisteredNames?.() ?? []);
+
     const stdoutLines: string[] = [];
     let allFound = true;
 
     for (const name of args) {
       const jshPath = jshCommands.get(name);
       const wf = workflowCommands.get(name);
-      const result = resolveCommandPath(name, jshPath, wf, staticBuiltins, builtinSet);
+      const result = resolveCommandPath(
+        name,
+        jshPath,
+        wf,
+        staticBuiltins,
+        builtinSet,
+        scriptRegistered
+      );
       stdoutLines.push(...result.lines);
       if (!result.found) allFound = false;
     }

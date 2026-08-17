@@ -343,6 +343,63 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     };
   }
 
+  /** Build the supplemental command set (extracted to keep the constructor under the line cap). */
+  private buildSupplementalCommands(
+    options: HeadlessShellOptions,
+    fetchFn: ReturnType<typeof createProxiedFetch>
+  ) {
+    return createSupplementalCommands({
+      onMediaPreview: async (items) => this.renderMediaPreview(items),
+      getJshCommands: () => this.getJshCommandNames(),
+      getWorkflowCommands: () => this.getWorkflowCommandNames(),
+      syncScriptCommands: () => this.syncJshCommands(),
+      getStaticBuiltins: () => [...this.staticBuiltinNames],
+      // Names that entered the registry via script registration (.jsh /
+      // workflow). just-bash has no unregister, so after a PATH root is
+      // removed these stay registered but dispatch 127s — `which` uses this
+      // set to skip its registered-name fallback for them (Codex P2, #2143).
+      getScriptRegisteredNames: () => [
+        ...this.registeredJshCommands.keys(),
+        ...this.registeredWorkflowCommands,
+      ],
+      fs: options.fs,
+      fetch: fetchFn,
+      scriptCatalog: this.scriptCatalog,
+      browserAPI: options.browserAPI,
+      webhook: options.webhook,
+      getParentJid: options.getParentJid,
+      buildProcessConfig: this.resolveJshProcessConfig,
+      // Thread the manager into `ps` / `kill`. When the
+      // shell is constructed without one (extension offscreen,
+      // inline standalone), the commands fall back to
+      // `globalThis.__slicc_pm` (published by `createKernelHost`).
+      processManager: options.processManager,
+      // Explicit `sudo <cmd...>` plumbing. Only wired when a sudo config is
+      // present so ungated shells still register `sudo` (which prints a clean
+      // "not configured" message) without leaking the broker or bypass hook.
+      sudoCommand: options.sudo
+        ? {
+            broker: options.sudo.broker,
+            // Queue "Always" grants for the post-exec flush; the actual VFS
+            // write must run outside just-bash's defense-in-depth box where
+            // async timers are blocked. Matches the transparent gate.
+            persistGrant: async (pattern) => {
+              this.pendingCommandGrants.push(pattern);
+            },
+            suppressNextGate: (subject) => this.registerSudoBypass(subject),
+          }
+        : undefined,
+      // Lets `secret set` write the masked value into the owning shell's
+      // env after a successful set (parity with container-loaded secrets).
+      // The write is queued and reapplied after `bash.exec` returns its
+      // snapshot of `result.env`, so the var survives into the next exec.
+      setEnv: (name, value) => {
+        this.pendingEnvWrites.set(name, value);
+        this.lastEnv[name] = value;
+      },
+    });
+  }
+
   constructor(protected options: HeadlessShellOptions) {
     this.vfsAdapter = new VfsAdapter(options.fs);
     this.allowedCommands = AlmostBashShellHeadless.buildAllowedCommandSet(options);
@@ -382,48 +439,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
     const gitCommand = this.createGitCustomCommand();
     const fetchFn = createProxiedFetch();
-    const supplementalCommands = createSupplementalCommands({
-      onMediaPreview: async (items) => this.renderMediaPreview(items),
-      getJshCommands: () => this.getJshCommandNames(),
-      getWorkflowCommands: () => this.getWorkflowCommandNames(),
-      syncScriptCommands: () => this.syncJshCommands(),
-      getStaticBuiltins: () => [...this.staticBuiltinNames],
-      fs: options.fs,
-      fetch: fetchFn,
-      scriptCatalog: this.scriptCatalog,
-      browserAPI: options.browserAPI,
-      webhook: options.webhook,
-      getParentJid: options.getParentJid,
-      buildProcessConfig: this.resolveJshProcessConfig,
-      // Thread the manager into `ps` / `kill`. When the
-      // shell is constructed without one (extension offscreen,
-      // inline standalone), the commands fall back to
-      // `globalThis.__slicc_pm` (published by `createKernelHost`).
-      processManager: options.processManager,
-      // Explicit `sudo <cmd...>` plumbing. Only wired when a sudo config is
-      // present so ungated shells still register `sudo` (which prints a clean
-      // "not configured" message) without leaking the broker or bypass hook.
-      sudoCommand: options.sudo
-        ? {
-            broker: options.sudo.broker,
-            // Queue "Always" grants for the post-exec flush; the actual VFS
-            // write must run outside just-bash's defense-in-depth box where
-            // async timers are blocked. Matches the transparent gate.
-            persistGrant: async (pattern) => {
-              this.pendingCommandGrants.push(pattern);
-            },
-            suppressNextGate: (subject) => this.registerSudoBypass(subject),
-          }
-        : undefined,
-      // Lets `secret set` write the masked value into the owning shell's
-      // env after a successful set (parity with container-loaded secrets).
-      // The write is queued and reapplied after `bash.exec` returns its
-      // snapshot of `result.env`, so the var survives into the next exec.
-      setEnv: (name, value) => {
-        this.pendingEnvWrites.set(name, value);
-        this.lastEnv[name] = value;
-      },
-    });
+    const supplementalCommands = this.buildSupplementalCommands(options, fetchFn);
     const mountCommand = this.createMountCustomCommand();
 
     const allCustomCommands = [
@@ -446,7 +462,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     this.bash = new Bash({
       fs: this.vfsAdapter,
       cwd: initialCwd,
-      env: initialEnv,
+      // Deliberately EMPTY: just-bash merges per-exec `options.env` OVER the
+      // instance env, so anything seeded here becomes an unremovable floor —
+      // `unset` in ~/.profile (or anywhere) could never delete it (Codex P2,
+      // #2143). Every `bash.exec` call site threads `this.lastEnv` (seeded
+      // from `initialEnv` below), which is the single source of truth.
+      env: {},
       fetch: fetchFn,
       commands: allowedBuiltinNames,
       customCommands,
@@ -710,8 +731,13 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         cwd: this.cwd,
       });
       if (result.env) {
+        // Adopt the sourced env WHOLESALE (not merged over the old one): the
+        // profile received the full env as input, so its result already
+        // contains every surviving var — and a merge would resurrect keys the
+        // profile `unset` (Codex P2 on #2143). Only PWD keeps the caller's
+        // contract.
         const { PWD: _ignoredPwd, ...profileEnv } = result.env;
-        this.lastEnv = { ...this.lastEnv, ...profileEnv, PWD: this.lastEnv.PWD ?? this.cwd };
+        this.lastEnv = { ...profileEnv, PWD: this.lastEnv.PWD ?? this.cwd };
       }
     } catch (err) {
       log.warn('HOME/profile init failed; continuing with defaults', err);

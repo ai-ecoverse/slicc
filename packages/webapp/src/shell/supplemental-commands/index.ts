@@ -102,6 +102,8 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   syncScriptCommands?: () => void | Promise<void>;
   /** Built-in command names (excludes dynamically-registered .jsh/workflow names). */
   getStaticBuiltins?: () => string[];
+  /** Script-registered names (jsh/workflow) — see which-command.ts. */
+  getScriptRegisteredNames?: () => string[];
   /** VirtualFS instance for .jsh discovery, `which`, and playwright-cli session files. */
   fs?: VirtualFS;
   /**
@@ -213,6 +215,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
       fs: options.fs,
       scriptCatalog: options.scriptCatalog,
       getStaticBuiltins: options.getStaticBuiltins,
+      getScriptRegisteredNames: options.getScriptRegisteredNames,
     }),
     createThemeCommand(),
     createUnameCommand(),
