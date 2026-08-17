@@ -4,6 +4,7 @@ import { BUNDLED_FFMPEG_CORE_VERSION } from './ffmpeg-wasm.js';
 import { BUNDLED_MAGICK_VERSION } from './magick-wasm.js';
 import { TYPESCRIPT_VFS_INSTALL_COMMAND } from './shared.js';
 import { V86_PINNED_VERSION } from './v86-wasm.js';
+import { VPOD_PACKAGE, VPOD_PINNED_VERSION } from './vpod-loader.js';
 
 export interface BuiltinShadow {
   command: string;
@@ -73,6 +74,11 @@ export const BUILTIN_SHADOW_MAP: Readonly<Record<string, BuiltinShadow>> = {
     command: 'v86',
     example: 'v86 start -cdrom alpine.iso',
     bootstrap: `ipk add v86@${V86_PINNED_VERSION}`,
+  },
+  [VPOD_PACKAGE]: {
+    command: 'vpod',
+    example: 'vpod run uname -a',
+    bootstrap: `ipk add ${VPOD_PACKAGE}@${VPOD_PINNED_VERSION}`,
   },
 };
 
