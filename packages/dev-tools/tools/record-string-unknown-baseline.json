@@ -63,7 +63,6 @@
   "packages/webapp/src/git/commands/symbolic-ref.ts": 2,
   "packages/webapp/src/kernel/cdp-bridge.ts": 7,
   "packages/webapp/src/kernel/cdp-worker-proxy.ts": 3,
-  "packages/webapp/src/kernel/facade.ts": 3,
   "packages/webapp/src/kernel/host.ts": 6,
   "packages/webapp/src/kernel/kernel-worker.ts": 2,
   "packages/webapp/src/kernel/messages.ts": 5,

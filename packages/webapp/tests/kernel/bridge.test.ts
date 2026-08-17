@@ -282,8 +282,6 @@ describe('Bridge createCallbacks', () => {
     const scoopJid = 'cone_1';
     callbacks.onStatusChange(scoopJid, 'processing');
 
-    expect((bridge as any).scoopStatuses.get(scoopJid)).toBe('processing');
-
     const emitted = sentMessages[0] as any;
     expect(emitted.payload.type).toBe('scoop-status');
     expect(emitted.payload.scoopJid).toBe(scoopJid);
@@ -448,9 +446,10 @@ describe('Bridge buildStateSnapshot', () => {
     expect(snapshot.activeScoopJid).toBeNull();
   });
 
-  it('includes status from scoopStatuses map', () => {
-    (bridge as any).scoopStatuses.set('cone_1', 'processing');
-    (bridge as any).scoopStatuses.set('scoop_test', 'ready');
+  it('includes statuses received through callbacks', () => {
+    const callbacks = Bridge.createCallbacks(bridge);
+    callbacks.onStatusChange('cone_1', 'processing');
+    callbacks.onStatusChange('scoop_test', 'ready');
 
     const snapshot = bridge.buildStateSnapshot();
     expect(snapshot.scoops[0].status).toBe('processing');
@@ -693,14 +692,11 @@ describe('Bridge onScoopUnregistered eviction', () => {
 
     expect((bridge as any).messageBuffers.has('agent_probe_1')).toBe(true);
     expect((bridge as any).currentMessageId.has('agent_probe_1')).toBe(true);
-    expect((bridge as any).scoopStatuses.has('agent_probe_1')).toBe(true);
 
     callbacks.onScoopUnregistered?.(unregisteredScoop);
 
     expect((bridge as any).messageBuffers.has('agent_probe_1')).toBe(false);
     expect((bridge as any).currentMessageId.has('agent_probe_1')).toBe(false);
-    expect((bridge as any).fanOutMessageId.has('agent_probe_1')).toBe(false);
-    expect((bridge as any).scoopStatuses.has('agent_probe_1')).toBe(false);
   });
 
   it('deletes the persisted UI session for the unregistered scoop', () => {
@@ -1608,7 +1604,20 @@ describe('Bridge.onAgentEvent tap', () => {
     vi.clearAllMocks();
   });
 
-  it('text_delta with no current messageId emits message_start + content_delta', () => {
+  it('sends over transport before publishing to fan-out listeners', () => {
+    const order: string[] = [];
+    const bridge = new Bridge({
+      onMessage: () => () => {},
+      send: () => order.push('transport'),
+    });
+    bridge.onAgentEvent(() => order.push('listener'));
+
+    Bridge.createCallbacks(bridge).onResponse?.('scoop-1', 'hello', true);
+
+    expect(order).toEqual(['transport', 'listener', 'listener']);
+  });
+
+  it('text_delta uses a fan-out message id separate from the buffered message id', () => {
     const bridge = new Bridge();
     const callbacks = Bridge.createCallbacks(bridge);
     const { events } = captureEvents(bridge);
@@ -1616,6 +1625,7 @@ describe('Bridge.onAgentEvent tap', () => {
     expect(events.map((e) => e.event.type)).toEqual(['message_start', 'content_delta']);
     expect(events[1].event.text).toBe('hello');
     expect(events.every((e) => e.scoopJid === 'scoop-1')).toBe(true);
+    expect(events[0].event.messageId).not.toBe(bridge.getMessagesForJid('scoop-1')[0].id);
   });
 
   it('subsequent text_delta with same messageId emits only content_delta', () => {
