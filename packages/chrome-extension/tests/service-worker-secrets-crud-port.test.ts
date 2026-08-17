@@ -139,13 +139,39 @@ describe('service-worker secrets.crud external Port', () => {
     const scrub = conn.posted.find((m) => m.id === 3);
     expect(typeof scrub.response.text).toBe('string');
     expect(scrub.response.text).not.toContain('ghp_realtoken');
+    expect(conn.posted).toHaveLength(3);
+    for (const id of [1, 2, 3]) {
+      expect(conn.posted.filter((m) => m.id === id)).toHaveLength(1);
+    }
+  });
+
+  it.each([
+    { id: 10, type: 'secrets.scrub-tool-result' },
+    { id: 11, type: 'secrets.set' },
+    { id: 12, type: 'secrets.delete' },
+    { id: 13, type: 'secrets.session.set' },
+    { id: 14, type: 'secrets.peek' },
+    { id: 15, type: 'secrets.set-domains' },
+    { id: 16, type: 'secrets.mask-oauth-token' },
+    { id: 17, type: 'secrets.redact-export' },
+  ])('immediately replies once for malformed known request $type', async ({ id, type }) => {
+    await import('../src/service-worker.js');
+    const conn = connectPort(PINNED_SENDER);
+
+    await dispatch(conn, { id, type, privateField: 'input-must-not-be-echoed' });
+
+    expect(conn.posted).toEqual([
+      { id, response: { error: `malformed secrets request: ${type}` } },
+    ]);
   });
 
   it('rejects an unknown secrets type for a pinned sender without invoking a handler', async () => {
     await import('../src/service-worker.js');
     const conn = connectPort(PINNED_SENDER);
     await dispatch(conn, { id: 7, type: 'secrets.does-not-exist' });
-    const reply = conn.posted.find((m) => m.id === 7);
+    const replies = conn.posted.filter((m) => m.id === 7);
+    expect(replies).toHaveLength(1);
+    const [reply] = replies;
     expect(reply.response.error).toBe('unknown secrets type: secrets.does-not-exist');
   });
 
@@ -173,7 +199,9 @@ describe('service-worker secrets.crud external Port', () => {
 
     await dispatch(conn, { id: 9, type: 'secrets.list-masked-entries' });
 
-    const reply = conn.posted.find((m) => m.id === 9);
+    const replies = conn.posted.filter((m) => m.id === 9);
+    expect(replies).toHaveLength(1);
+    const [reply] = replies;
     expect(reply.response.error).toMatch(/secrets\.crud pin failed/);
     expect(reply.response.entries).toBeUndefined();
     // The handler (which builds the pipeline from chrome.storage.local) never ran.

@@ -785,6 +785,9 @@ chrome.webRequest.onHeadersReceived.addListener(
 // because the observer runs here, not on the page. The flag is cached in-memory
 // and refreshed from storage at boot + on every change so the gate is live.
 const DISCOVERY_ENABLED_KEY = 'slicc_discovery_enabled';
+interface DiscoveryStorageValues {
+  [DISCOVERY_ENABLED_KEY]?: unknown;
+}
 const DISCOVERY_ALLOWED_ORIGINS = __SLICC_EXT_DEV__
   ? [...BRIDGE_ALLOWED_ORIGINS, ...BRIDGE_DEV_ORIGINS]
   : BRIDGE_ALLOWED_ORIGINS;
@@ -802,7 +805,8 @@ let discoveryEnabled = false;
 
 void chrome.storage.local
   .get(DISCOVERY_ENABLED_KEY)
-  .then((r: CdpPayload) => {
+  .then((result) => {
+    const r = result as DiscoveryStorageValues;
     discoveryEnabled = r[DISCOVERY_ENABLED_KEY] !== false;
     discoveryLoaded = true;
   })
@@ -815,7 +819,7 @@ void chrome.storage.local
 
 chrome.storage.onChanged?.addListener?.((changes, area) => {
   if (area !== 'local') return;
-  const change = (changes as Record<string, { newValue?: unknown }>)[DISCOVERY_ENABLED_KEY];
+  const change = changes[DISCOVERY_ENABLED_KEY];
   if (change) {
     discoveryEnabled = change.newValue !== false;
     discoveryLoaded = true;
@@ -875,6 +879,11 @@ type DebuggerAttachmentOwner = 'bridge' | 'legacy';
 const debuggerAttachmentOwners = new Map<number, DebuggerAttachmentOwner>();
 /** Tracks leader tray WebSockets opened on behalf of the offscreen document. */
 const traySockets = new Map<number, WebSocket>();
+
+/** Chrome debugger protocol payloads are method-defined JSON objects on the wire. */
+interface CdpPayload {
+  [key: string]: unknown;
+}
 
 async function acquireDebuggerAttachment(
   tabId: number,
@@ -1582,7 +1591,8 @@ chrome.runtime.onConnectExternal.addListener((port: ChromeRuntimePort) => {
         return;
       }
       const type = getMsgType(raw);
-      const handler = type === undefined ? undefined : SECRETS_HANDLERS[type];
+      const handler =
+        type !== undefined && isSecretsMessageType(type) ? SECRETS_HANDLERS[type] : undefined;
       if (!handler) {
         reply({ error: `unknown secrets type: ${type ?? 'undefined'}` });
         return;
@@ -1676,6 +1686,21 @@ chrome.runtime.onConnect.addListener((port) => {
 
 type SendResponse = (response?: unknown) => void;
 type SecretsHandler = (msg: unknown, sendResponse: SendResponse) => boolean;
+type SecretStringField = 'accessToken' | 'domains' | 'name' | 'providerId' | 'text' | 'value';
+type SecretStringArrayField = 'domains' | 'texts';
+type SecretsMessageType =
+  | 'secrets.delete'
+  | 'secrets.list'
+  | 'secrets.list-masked-entries'
+  | 'secrets.list-with-values-for-pipeline'
+  | 'secrets.mask-oauth-token'
+  | 'secrets.peek'
+  | 'secrets.redact-export'
+  | 'secrets.scrub-tool-result'
+  | 'secrets.session.list'
+  | 'secrets.session.set'
+  | 'secrets.set'
+  | 'secrets.set-domains';
 
 function getMsgType(msg: unknown): string | undefined {
   if (typeof msg !== 'object' || msg === null || !('type' in msg)) return undefined;
@@ -1683,15 +1708,15 @@ function getMsgType(msg: unknown): string | undefined {
   return typeof t === 'string' ? t : undefined;
 }
 
-function getStringField(msg: unknown, field: string): string | undefined {
+function getStringField(msg: unknown, field: SecretStringField): string | undefined {
   if (typeof msg !== 'object' || msg === null || !(field in msg)) return undefined;
-  const v = (msg as CdpPayload)[field];
+  const v = Reflect.get(msg, field);
   return typeof v === 'string' ? v : undefined;
 }
 
-function getStringArrayField(msg: unknown, field: string): string[] | undefined {
+function getStringArrayField(msg: unknown, field: SecretStringArrayField): string[] | undefined {
   if (typeof msg !== 'object' || msg === null || !(field in msg)) return undefined;
-  const v = (msg as CdpPayload)[field];
+  const v = Reflect.get(msg, field);
   if (!Array.isArray(v)) return undefined;
   return v.filter((d): d is string => typeof d === 'string');
 }
@@ -1974,7 +1999,7 @@ function runSecretsRedactExport(msg: unknown, sendResponse: SendResponse): boole
   return true;
 }
 
-const SECRETS_HANDLERS: Record<string, SecretsHandler> = {
+const SECRETS_HANDLERS = {
   'secrets.list-masked-entries': runSecretsListMaskedEntries,
   'secrets.scrub-tool-result': runSecretsScrubToolResult,
   'secrets.list-with-values-for-pipeline': runSecretsListWithValuesForPipeline,
@@ -1987,13 +2012,17 @@ const SECRETS_HANDLERS: Record<string, SecretsHandler> = {
   'secrets.set-domains': runSecretsSetDomains,
   'secrets.mask-oauth-token': runSecretsMaskOauthToken,
   'secrets.redact-export': runSecretsRedactExport,
-};
+} satisfies { [Type in SecretsMessageType]: SecretsHandler };
+
+function isSecretsMessageType(type: string): type is SecretsMessageType {
+  return Object.hasOwn(SECRETS_HANDLERS, type);
+}
 
 chrome.runtime.onMessage.addListener(
   (msg: unknown, _sender: ChromeMessageSender, sendResponse: (response?: unknown) => void) => {
     const type = getMsgType(msg);
-    if (type === undefined) return false;
+    if (type === undefined || !isSecretsMessageType(type)) return false;
     const handler = SECRETS_HANDLERS[type];
-    return handler ? handler(msg, sendResponse) : false;
+    return handler(msg, sendResponse);
   }
 );
