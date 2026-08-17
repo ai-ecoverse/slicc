@@ -4,6 +4,8 @@
  * resolution, and the `AsyncFunction` user-code runner. Extracted from
  * `js-realm-shared.ts`; no behavior change.
  */
+
+import type { NodeReadlineModule } from './helpers/node-readline.js';
 import {
   fmt,
   type NodeChildProcess,
@@ -136,6 +138,8 @@ export function createModuleSystem(opts: {
   nodeConsole: unknown;
   sliccyModules: Record<string, unknown>;
   shimmedPackages?: Record<string, unknown>;
+  /** Per-realm `readline` module (question() echoes to THIS realm's stdout). */
+  nodeReadline?: NodeReadlineModule;
 }): { require: (id: string) => unknown } {
   const {
     graph,
@@ -145,6 +149,7 @@ export function createModuleSystem(opts: {
     nodeConsole,
     sliccyModules,
     shimmedPackages = {},
+    nodeReadline,
   } = opts;
   const sourceByPath = new Map(graph.files.map((f) => [f.path, f.cjsSource]));
   const kindByPath = new Map(graph.files.map((f) => [f.path, f.kind]));
@@ -155,7 +160,7 @@ export function createModuleSystem(opts: {
       return { hit: true, value: resolveSliccyModule(id, sliccyModules) };
     }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
-    const served = resolveServedBuiltin(bareId, fsBridge, processShim, childProcess);
+    const served = resolveServedBuiltin(bareId, fsBridge, processShim, childProcess, nodeReadline);
     if (served.hit) return served;
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
@@ -230,7 +235,8 @@ function resolveServedBuiltin(
   bareId: string,
   fsBridge: unknown,
   processShim: unknown,
-  childProcess: NodeChildProcess
+  childProcess: NodeChildProcess,
+  nodeReadline?: NodeReadlineModule
 ): { hit: boolean; value?: unknown } {
   if (bareId === 'fs') return { hit: true, value: fsBridge };
   // Same object — fsBridge is already Promise-based; callback/sync APIs are not shimmed here.
@@ -251,6 +257,12 @@ function resolveServedBuiltin(
   if (bareId === 'stream') return { hit: true, value: nodeStream };
   if (bareId === 'url') return { hit: true, value: nodeUrl };
   if (bareId === 'zlib') return { hit: true, value: nodeZlib };
+  // Per-realm (question() echoes to the realm's stdout), so a realm booted
+  // without one (none today) falls through to the unavailable-builtin error.
+  if (bareId === 'readline' && nodeReadline) return { hit: true, value: nodeReadline };
+  if (bareId === 'readline/promises' && nodeReadline) {
+    return { hit: true, value: nodeReadline.promises };
+  }
   return { hit: false };
 }
 

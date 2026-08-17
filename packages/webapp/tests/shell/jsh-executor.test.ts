@@ -696,17 +696,18 @@ describe('stdin in .jsh scripts', () => {
     expect(JSON.parse(result.stdout.trim())).toEqual({ view: 'data', read: 'data' });
   });
 
-  it('exposes null + empty defaults when no stdin is piped', async () => {
+  it('read() returns null when no stdin is piped (Node parity)', async () => {
     const ctx = createMockCtx({
       '/workspace/empty.jsh':
         'console.log(JSON.stringify({ first: process.stdin.read(), second: process.stdin.read(), tty: process.stdin.isTTY }));',
     });
     const result = await executeJshFile('/workspace/empty.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
-    // Even with no piped input, the first read drains the (empty) buffer
-    // and subsequent reads return null — same behavior as a real EOF stream.
+    // Node parity: with no piped input `read()` returns null immediately —
+    // Node's Readable.read() never yields '' for an empty stream. (This
+    // previously pinned first === ''; updated with the fd/readline stdin work.)
     expect(JSON.parse(result.stdout.trim())).toEqual({
-      first: '',
+      first: null,
       second: null,
       tty: false,
     });

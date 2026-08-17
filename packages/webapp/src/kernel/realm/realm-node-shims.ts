@@ -59,6 +59,7 @@ export function createProcessShim(
   processShim: Record<string, unknown>;
   getDidCallProcessExit: () => boolean;
   getExitCode: () => number;
+  recordExit: (code: number) => void;
 } {
   const noColor = !!init.env?.NO_COLOR;
   let didCallProcessExit = false;
@@ -93,6 +94,10 @@ export function createProcessShim(
     processShim,
     getDidCallProcessExit: () => didCallProcessExit,
     getExitCode: () => exitCode,
+    // Exposed so sibling shims that run user handlers in microtasks (the
+    // readline shim's deferred 'line' flush) can report a caught
+    // `process.exit(N)` the same way the stdin shim does.
+    recordExit,
   };
 }
 
@@ -102,7 +107,8 @@ export function createProcessShim(
  * commands, `node`/`node -e`), so there's no streaming Readable.
  *
  * EOF semantics match Node's `Readable.read()`: the first `read()` returns
- * the full buffer, subsequent calls return `null`. A single `consumed` flag
+ * the full buffer (`null` when nothing was piped), subsequent calls return
+ * `null`. A single `consumed` flag
  * is shared across `read()`, the async iterator, and the EventEmitter surface
  * so no path double-delivers: `for await (const c of process.stdin)` after a
  * `read()` (or a second iteration) yields nothing. `toString()` always returns
@@ -142,7 +148,9 @@ class StdinShim extends nodeStream.Stream {
   read(): string | null {
     if (this.consumed) return null;
     this.consumed = true;
-    return this.buffer;
+    // Node parity: `read()` on an empty stream yields `null`, never `''`
+    // (a script run without piped input sees `null` on the first call).
+    return this.buffer.length > 0 ? this.buffer : null;
   }
 
   toString(): string {
