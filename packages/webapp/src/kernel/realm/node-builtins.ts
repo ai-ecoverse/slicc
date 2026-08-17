@@ -30,6 +30,8 @@ export const NODE_BUILTIN_AVAILABLE: ReadonlySet<string> = new Set([
   'assert',
   'assert/strict',
   'util',
+  'readline',
+  'readline/promises',
 ]);
 
 /**

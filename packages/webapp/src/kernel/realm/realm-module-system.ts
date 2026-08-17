@@ -4,6 +4,8 @@
  * resolution, and the `AsyncFunction` user-code runner. Extracted from
  * `js-realm-shared.ts`; no behavior change.
  */
+
+import type { NodeReadlineModule } from './helpers/node-readline.js';
 import {
   fmt,
   type NodeChildProcess,
@@ -30,7 +32,22 @@ import { NODE_NATIVE_PACKAGES, nativePackageError } from './require-guards.js';
 
 const SLICCY_SCHEME = 'sliccy:';
 
-export function buildSliccyModules(bridges: Record<string, unknown>): Record<string, unknown> {
+/**
+ * Realm-served modules keyed by bare specifier name (`sliccy:` bridges,
+ * shimmed npm packages). Values are whatever each module exposes.
+ */
+export type RealmModuleRegistry = { [moduleName: string]: unknown };
+
+/** A CJS `module.exports` bag — user-module-defined, arbitrary keys. */
+export type ModuleExports = { [exportName: string]: unknown };
+
+/** The named globals injected as the user-code AsyncFunction's parameters. */
+export type RealmUserCodeBridges = { [globalName: string]: unknown };
+
+/** `globalThis` narrowed to the realm's optional `Buffer` polyfill. */
+type GlobalWithBuffer = typeof globalThis & { Buffer?: unknown };
+
+export function buildSliccyModules(bridges: RealmModuleRegistry): RealmModuleRegistry {
   return { ...bridges, time, fmt, pool };
 }
 
@@ -95,7 +112,7 @@ export async function loadModuleGraph(
  */
 function synthesizeEsModuleDefault(exp: unknown): void {
   if (exp === null || typeof exp !== 'object') return;
-  const obj = exp as Record<string, unknown>;
+  const obj = exp as ModuleExports;
   if (!obj.__esModule) return;
   if (Object.prototype.hasOwnProperty.call(obj, 'default')) return;
   if (!Object.isExtensible(obj)) return;
@@ -114,7 +131,7 @@ function synthesizeEsModuleDefault(exp: unknown): void {
  * native-package guards, so `require('playwright')` resolves here instead of
  * throwing "Cannot find module".
  */
-export function buildShimmedPackages(rpc: RealmRpcClient): Record<string, unknown> {
+export function buildShimmedPackages(rpc: RealmRpcClient): RealmModuleRegistry {
   return {
     playwright: createPlaywrightShim(rpc),
   };
@@ -134,8 +151,10 @@ export function createModuleSystem(opts: {
   processShim: unknown;
   childProcess: NodeChildProcess;
   nodeConsole: unknown;
-  sliccyModules: Record<string, unknown>;
-  shimmedPackages?: Record<string, unknown>;
+  sliccyModules: RealmModuleRegistry;
+  shimmedPackages?: RealmModuleRegistry;
+  /** Per-realm `readline` module (question() echoes to THIS realm's stdout). */
+  nodeReadline?: NodeReadlineModule;
 }): { require: (id: string) => unknown } {
   const {
     graph,
@@ -145,17 +164,18 @@ export function createModuleSystem(opts: {
     nodeConsole,
     sliccyModules,
     shimmedPackages = {},
+    nodeReadline,
   } = opts;
   const sourceByPath = new Map(graph.files.map((f) => [f.path, f.cjsSource]));
   const kindByPath = new Map(graph.files.map((f) => [f.path, f.kind]));
-  const cache = new Map<string, { exports: Record<string, unknown> }>();
+  const cache = new Map<string, { exports: ModuleExports }>();
 
   const resolveBuiltin = (id: string): { hit: boolean; value?: unknown } => {
     if (typeof id === 'string' && id.startsWith(SLICCY_SCHEME)) {
       return { hit: true, value: resolveSliccyModule(id, sliccyModules) };
     }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
-    const served = resolveServedBuiltin(bareId, fsBridge, processShim, childProcess);
+    const served = resolveServedBuiltin(bareId, fsBridge, processShim, childProcess, nodeReadline);
     if (served.hit) return served;
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
@@ -172,12 +192,12 @@ export function createModuleSystem(opts: {
     throw cannotFindModuleError(id);
   };
 
-  function requireFile(path: string): Record<string, unknown> {
+  function requireFile(path: string): ModuleExports {
     const cached = cache.get(path);
     if (cached) return cached.exports;
     const source = sourceByPath.get(path);
     if (source === undefined) throw new Error(`Cannot find module '${path}'`);
-    const moduleObj = { exports: {} as Record<string, unknown> };
+    const moduleObj = { exports: {} as ModuleExports };
     // Register before evaluation so a require cycle sees the partial exports.
     cache.set(path, moduleObj);
     const childRequire = (id: string): unknown => requireFromEdges(graph.edges[path], id);
@@ -202,7 +222,7 @@ export function createModuleSystem(opts: {
       path,
       processShim,
       nodeConsole,
-      (globalThis as Record<string, unknown>).Buffer,
+      (globalThis as GlobalWithBuffer).Buffer,
       globalThis
     );
     if (kindByPath.get(path) === 'cjs') synthesizeEsModuleDefault(moduleObj.exports);
@@ -230,7 +250,8 @@ function resolveServedBuiltin(
   bareId: string,
   fsBridge: unknown,
   processShim: unknown,
-  childProcess: NodeChildProcess
+  childProcess: NodeChildProcess,
+  nodeReadline?: NodeReadlineModule
 ): { hit: boolean; value?: unknown } {
   if (bareId === 'fs') return { hit: true, value: fsBridge };
   // Same object — fsBridge is already Promise-based; callback/sync APIs are not shimmed here.
@@ -240,7 +261,7 @@ function resolveServedBuiltin(
   if (bareId === 'child_process') return { hit: true, value: childProcess };
   if (bareId === 'process') return { hit: true, value: processShim };
   if (bareId === 'buffer') {
-    return { hit: true, value: { Buffer: (globalThis as Record<string, unknown>).Buffer } };
+    return { hit: true, value: { Buffer: (globalThis as GlobalWithBuffer).Buffer } };
   }
   if (bareId === 'assert') return { hit: true, value: nodeAssert };
   if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
@@ -251,6 +272,12 @@ function resolveServedBuiltin(
   if (bareId === 'stream') return { hit: true, value: nodeStream };
   if (bareId === 'url') return { hit: true, value: nodeUrl };
   if (bareId === 'zlib') return { hit: true, value: nodeZlib };
+  // Per-realm (question() echoes to the realm's stdout), so a realm booted
+  // without one (none today) falls through to the unavailable-builtin error.
+  if (bareId === 'readline' && nodeReadline) return { hit: true, value: nodeReadline };
+  if (bareId === 'readline/promises' && nodeReadline) {
+    return { hit: true, value: nodeReadline.promises };
+  }
   return { hit: false };
 }
 
@@ -267,7 +294,7 @@ function cannotFindModuleError(id: string): Error {
  * names and the empty form throw a scheme-specific error; sliccy: requires
  * NEVER consult the require cache or fall through to node-builtin handling.
  */
-function resolveSliccyModule(id: string, sliccyModules: Record<string, unknown>): unknown {
+function resolveSliccyModule(id: string, sliccyModules: RealmModuleRegistry): unknown {
   const name = id.slice(SLICCY_SCHEME.length);
   if (name === '') {
     throw new Error("require('sliccy:'): empty sliccy: module name");
@@ -308,7 +335,7 @@ function unavailableBuiltinError(id: string, bareId: string): Error {
  */
 export async function runUserCode(
   code: string,
-  bridges: Record<string, unknown>,
+  bridges: RealmUserCodeBridges,
   writeStderr: (value: unknown) => void,
   isEsmEntry: boolean
 ): Promise<number> {

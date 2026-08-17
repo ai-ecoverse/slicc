@@ -19,18 +19,25 @@
  */
 
 import '../../shims/buffer-polyfill.js';
+import { createNodeReadline } from './helpers/node-readline.js';
 import { createHttpGlobal } from './http-global.js';
 import { createCli, createColor, createNodeChildProcess } from './js-realm-helpers.js';
 import { createSliccyAgentModule } from './realm-agent-module.js';
 import { createBrowserBridge, serializeRequestInit } from './realm-browser-bridge.js';
 import { createExecBridge } from './realm-exec-bridge.js';
-import { createFsBridge, createSyncFsBridge } from './realm-fs-bridge.js';
+import {
+  createFsBridge,
+  createSyncFsBridge,
+  latin1ToBytes,
+  type RealmStdioBridge,
+} from './realm-fs-bridge.js';
 import { createHidBridge, type RealmHidApi } from './realm-hid-bridge.js';
 import {
   buildShimmedPackages,
   buildSliccyModules,
   createModuleSystem,
   loadModuleGraph,
+  type ModuleExports,
   runUserCode,
 } from './realm-module-system.js';
 import {
@@ -114,15 +121,61 @@ function resolveSyncFsBridge(init: RealmInitMsg): SyncFsXhrMutatingBridge | unde
 function installSyncBridges(
   init: RealmInitMsg,
   syncFs: SyncFsCache,
-  fsBridge: object
+  fsBridge: object,
+  stdio: RealmStdioBridge
 ): SyncExecXhrBridge | undefined {
   const syncFsXhr = resolveSyncFsBridge(init);
-  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, syncFsXhr));
+  Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, syncFsXhr, stdio));
   if (!init.syncFsToken) return undefined;
   return createSyncExecXhrBridge(init.syncFsToken, {
     syncFs,
     ...(syncFsXhr ? { fsBridge: syncFsXhr } : {}),
   });
+}
+
+/** `globalThis` narrowed to the realm-internal WASM compile bridge hook. */
+type GlobalWithWasmCompile = typeof globalThis & {
+  __slicc_compileWasm?: (path: string) => Promise<WebAssembly.Module>;
+};
+
+/**
+ * Build the realm's `c` / `cli` pair. Constructed together so cli.die/warn
+ * can call into the colorizer without skills having to wire their own.
+ * Extracted from `runJsRealm` purely for the function-length lint gate.
+ */
+function createColorAndCli(
+  noColor: boolean,
+  writeStdout: (value: unknown) => void,
+  writeStderr: (value: unknown) => void
+): { colorApi: ReturnType<typeof createColor>; cliApi: ReturnType<typeof createCli> } {
+  const colorApi = createColor({ isTTY: !noColor, noColor });
+  const cliApi = createCli({
+    writeStdout,
+    writeStderr,
+    exit: (code: number): never => {
+      throw new NodeExitError(code);
+    },
+    color: colorApi,
+  });
+  return { colorApi, cliApi };
+}
+
+/**
+ * Stdio access for the fs bridges' fd / `/dev/std*` support. Reads the stdin
+ * BUFFER directly (latin1 → bytes), so `readFileSync(0)` does not consume
+ * `process.stdin`'s one-shot flag; writes share the realm's stdout/stderr
+ * chunk sinks with `process.stdout`/`process.stderr`.
+ */
+function createRealmStdio(
+  init: RealmInitMsg,
+  writeStdout: (value: unknown) => void,
+  writeStderr: (value: unknown) => void
+): RealmStdioBridge {
+  return {
+    readStdinBytes: () => latin1ToBytes(init.stdin ?? ''),
+    writeStdout,
+    writeStderr,
+  };
 }
 
 /**
@@ -172,24 +225,15 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const proc = createProcessShim(init, writeStdout, writeStderr);
   const noColor = !!init.env?.NO_COLOR;
 
-  // `c` / `cli` are constructed together so cli.die/warn can call into c
-  // without skills having to wire their own colorizer.
-  const colorApi = createColor({ isTTY: !noColor, noColor });
-  const cliApi = createCli({
-    writeStdout,
-    writeStderr,
-    exit: (code: number): never => {
-      throw new NodeExitError(code);
-    },
-    color: colorApi,
-  });
+  const { colorApi, cliApi } = createColorAndCli(noColor, writeStdout, writeStderr);
 
   const rpc = new RealmRpcClient(port);
 
-  const fsBridge = createFsBridge(rpc, realmFetch);
+  const stdio = createRealmStdio(init, writeStdout, writeStderr);
+  const fsBridge = createFsBridge(rpc, realmFetch, stdio);
 
   const syncFs = await initSyncFsCache(rpc, init.cwd, syncFsSnapshotErrorSink(init, writeStderr));
-  const syncExecBridge = installSyncBridges(init, syncFs, fsBridge);
+  const syncExecBridge = installSyncBridges(init, syncFs, fsBridge, stdio);
 
   const execBridge = createExecBridge(rpc, syncFs, init.cwd, writeStderr);
   const agentModule = createSliccyAgentModule(execBridge, { cwd: init.cwd });
@@ -267,10 +311,13 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     nodeConsole,
     sliccyModules,
     shimmedPackages: buildShimmedPackages(rpc),
+    // Per-realm: question() echoes to THIS realm's stdout; onExit records a
+    // process.exit(N) from a deferred 'line' handler (see createProcessShim).
+    nodeReadline: createNodeReadline({ output: { write: writeStdout }, onExit: proc.recordExit }),
   });
   const requireShim = moduleSystem.require;
 
-  const moduleShim = { exports: {} as Record<string, unknown>, filename: init.filename };
+  const moduleShim = { exports: {} as ModuleExports, filename: init.filename };
 
   // The host transpiles an ESM / dynamic-import / top-level-await entry to a
   // CJS body the AsyncFunction wrapper can run (and sets `entrySource`); a
@@ -288,7 +335,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   // floats without the bridge (e.g. the in-process test realm) cleanly fall
   // back to in-realm compile. The returned `WebAssembly.Module` is
   // structured-cloneable, so it round-trips over the realm port.
-  const g = globalThis as Record<string, unknown>;
+  const g = globalThis as GlobalWithWasmCompile;
   g.__slicc_compileWasm = (path: string): Promise<WebAssembly.Module> =>
     rpc.call('wasm', 'compile', [path]);
 

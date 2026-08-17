@@ -16,10 +16,202 @@ function realmBuffer(): GlobalWithBuffer['Buffer'] {
   return (globalThis as GlobalWithBuffer).Buffer;
 }
 
+/**
+ * Stdio access threaded into the fs bridges so the Node idioms
+ * `fs.readFileSync(0)` / `fs.writeFileSync(1, …)` / `'/dev/stdin'` work.
+ * Built by `runJsRealm` from the realm's buffered stdin + stdout/stderr sinks.
+ *
+ * `readStdinBytes()` returns the FULL buffered stdin as raw bytes and does
+ * NOT consume `process.stdin`'s one-shot flag — the underlying buffer is
+ * separable from the shim's `consumed` state, so `readFileSync(0)` and a later
+ * `process.stdin.read()` both see the data. (Node drains one shared stream;
+ * this is deliberately more forgiving.)
+ */
+export interface RealmStdioBridge {
+  readStdinBytes(): Uint8Array;
+  writeStdout(text: string): void;
+  writeStderr(text: string): void;
+}
+
+/** Decode a latin1-preserved string (one JS char per byte) back to raw bytes. */
+export function latin1ToBytes(text: string): Uint8Array {
+  const out = new Uint8Array(text.length);
+  for (let i = 0; i < text.length; i++) out[i] = text.charCodeAt(i) & 0xff;
+  return out;
+}
+
+/** Encode raw bytes as a latin1-preserved string (the realm's stdout/stderr pipe format). */
+function bytesToLatin1(bytes: Uint8Array): string {
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 0x8000) {
+    out += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+  }
+  return out;
+}
+
+/** An `EBADF` error matching the shape of the other sync-fs errors. */
+function ebadfErr(verb: string, target: unknown): Error & { code: string } {
+  return Object.assign(new Error(`EBADF: bad file descriptor, ${verb} ${String(target)}`), {
+    code: 'EBADF',
+  });
+}
+
+/** The three standard-stream device paths (aliases for fds 0/1/2). */
+function isDevStdioPath(path: unknown): path is '/dev/stdin' | '/dev/stdout' | '/dev/stderr' {
+  return path === '/dev/stdin' || path === '/dev/stdout' || path === '/dev/stderr';
+}
+
+/** Map a path-or-fd arg onto a standard-stream fd, or `undefined` for plain paths. */
+function stdioFdFor(pathOrFd: unknown): 0 | 1 | 2 | undefined {
+  if (pathOrFd === 0 || pathOrFd === '/dev/stdin') return 0;
+  if (pathOrFd === 1 || pathOrFd === '/dev/stdout') return 1;
+  if (pathOrFd === 2 || pathOrFd === '/dev/stderr') return 2;
+  return undefined;
+}
+
+/**
+ * Read-direction classifier: fd 0 / `'/dev/stdin'` → `true`; any other
+ * numeric fd or a write-side stream device → `EBADF`; plain paths → `false`.
+ */
+function isStdioReadTarget(pathOrFd: unknown, verb: string): boolean {
+  const fd = stdioFdFor(pathOrFd);
+  if (fd === 0) return true;
+  if (fd !== undefined || typeof pathOrFd === 'number') throw ebadfErr(verb, pathOrFd);
+  return false;
+}
+
+/**
+ * Write-direction classifier: fd 1/2 and their device paths → the matching
+ * sink; fd 0 / `'/dev/stdin'` or any other numeric fd → `EBADF`; plain
+ * paths → `undefined`.
+ */
+function stdioWriteSink(
+  stdio: RealmStdioBridge,
+  pathOrFd: unknown,
+  verb: string
+): ((text: string) => void) | undefined {
+  const fd = stdioFdFor(pathOrFd);
+  if (fd === 1) return stdio.writeStdout;
+  if (fd === 2) return stdio.writeStderr;
+  if (fd !== undefined || typeof pathOrFd === 'number') throw ebadfErr(verb, pathOrFd);
+  return undefined;
+}
+
+/** Coerce write data to the latin1 string the stdout/stderr pipes carry. */
+function stdioText(data: unknown): string {
+  return typeof data === 'string' ? data : bytesToLatin1(toBytes(data));
+}
+
+/** `readFileSync`-shape decode: utf8 → string, anything else → Buffer/Uint8Array. */
+function decodeFileBytes(bytes: Uint8Array, encoding: string | null | undefined): unknown {
+  if (encoding === 'utf8' || encoding === 'utf-8') return new TextDecoder().decode(bytes);
+  const B = realmBuffer();
+  return B ? B.from(bytes) : bytes;
+}
+
+/** The encoding carried by a `readFile*` opts arg (string form or `{ encoding }`). */
+function encodingOf(
+  opts: string | { encoding?: string | null } | null | undefined
+): string | null | undefined {
+  return typeof opts === 'string' ? opts : opts?.encoding;
+}
+
+/**
+ * Minimal stat for the standard-stream device paths. `isFile()` is
+ * deliberately `true` (scripts commonly gate on it before reading) even
+ * though a real `/dev/std*` is a character device — `isCharacterDevice()`
+ * reports the honest classification. Size is 0: reporting the buffered
+ * stdin length would leak consumption-order effects for no caller benefit.
+ */
+function devStdioStat() {
+  return {
+    isFile: () => true,
+    isDirectory: () => false,
+    isSymbolicLink: () => false,
+    isCharacterDevice: () => true,
+    size: 0,
+  };
+}
+
+/**
+ * The async-bridge methods {@link overlayAsyncStdio} wraps with fd /
+ * `/dev/std*` handling. Structural subset of the `createFsBridge` return.
+ */
+interface AsyncStdioTargets {
+  readFile(path: string, opts?: string | { encoding?: string | null } | null): Promise<unknown>;
+  readFileBinary(path: string): Promise<Uint8Array>;
+  writeFile(path: string, data: unknown): Promise<true>;
+  writeFileBinary(path: string, bytes: Uint8Array): Promise<true>;
+  appendFile(path: string, data: unknown): Promise<void>;
+  access(path: string): Promise<void>;
+  exists(path: string): Promise<boolean>;
+  stat(path: string): Promise<{ isDirectory: boolean; isFile: boolean; size: number }>;
+}
+
+/**
+ * Mutate the async `fs` bridge so reads of fd 0 / `'/dev/stdin'` serve the
+ * buffered stdin, writes to fds 1/2 (and their device paths) land on
+ * stdout/stderr, and the metadata ops report the three stream devices as
+ * present. Unknown numeric fds and wrong-direction stream ops throw `EBADF`.
+ * Encoding convention mirrors the async surface's own back-compat default
+ * (no encoding → decoded text; `null`/`'buffer'` → Buffer), NOT the sync
+ * surface's Buffer-by-default. A separate mutating overlay (not inline
+ * branches) keeps `createFsBridge` under the function-length lint gate.
+ */
+function overlayAsyncStdio(bridge: AsyncStdioTargets, stdio: RealmStdioBridge | undefined): void {
+  if (!stdio) return;
+  const base = {
+    readFile: bridge.readFile,
+    readFileBinary: bridge.readFileBinary,
+    writeFile: bridge.writeFile,
+    writeFileBinary: bridge.writeFileBinary,
+    appendFile: bridge.appendFile,
+    access: bridge.access,
+    exists: bridge.exists,
+    stat: bridge.stat,
+  };
+  bridge.readFile = async (path, opts) => {
+    if (!isStdioReadTarget(path, 'read')) return base.readFile(path, opts);
+    const encoding = encodingOf(opts);
+    if (encoding === null || encoding === 'buffer') {
+      const B = realmBuffer();
+      const bytes = stdio.readStdinBytes();
+      return B ? B.from(bytes) : bytes;
+    }
+    return new TextDecoder().decode(stdio.readStdinBytes());
+  };
+  bridge.readFileBinary = async (path) =>
+    isStdioReadTarget(path, 'read') ? stdio.readStdinBytes() : base.readFileBinary(path);
+  bridge.writeFile = async (path, data) => {
+    const sink = stdioWriteSink(stdio, path, 'write');
+    if (!sink) return base.writeFile(path, data);
+    sink(stdioText(data));
+    return true;
+  };
+  bridge.writeFileBinary = async (path, bytes) => {
+    const sink = stdioWriteSink(stdio, path, 'write');
+    if (!sink) return base.writeFileBinary(path, bytes);
+    sink(bytesToLatin1(bytes));
+    return true;
+  };
+  bridge.appendFile = async (path, data) => {
+    const sink = stdioWriteSink(stdio, path, 'append');
+    if (!sink) return base.appendFile(path, data);
+    sink(stdioText(data));
+  };
+  bridge.access = async (path) => {
+    if (!isDevStdioPath(path)) return base.access(path);
+  };
+  bridge.exists = async (path) => isDevStdioPath(path) || base.exists(path);
+  bridge.stat = async (path) =>
+    isDevStdioPath(path) ? { isFile: true, isDirectory: false, size: 0 } : base.stat(path);
+}
+
 /** RPC-backed `fs` bridge (the realm's `require('fs')` / `fs` global). */
 export function createFsBridge(
   rpc: RealmRpcClient,
-  realmFetch: (input: string | URL | Request, opts?: RequestInit) => Promise<Response>
+  realmFetch: (input: string | URL | Request, opts?: RequestInit) => Promise<Response>,
+  stdio?: RealmStdioBridge
 ) {
   function toBytes(data: unknown): Uint8Array {
     if (data instanceof Uint8Array) return data;
@@ -180,6 +372,7 @@ export function createFsBridge(
     },
     promises: null as unknown,
   };
+  overlayAsyncStdio(bridge, stdio);
   bridge.promises = bridge;
   return bridge;
 }
@@ -319,6 +512,74 @@ function createRemovalOps(deps: RemovalDeps) {
   };
 }
 
+/** The stat shape `wrapStat` (and `devStdioStat`) return on the sync surface. */
+interface SyncStatLike {
+  isFile: () => boolean;
+  isDirectory: () => boolean;
+  isSymbolicLink: () => boolean;
+  size: number;
+}
+
+/**
+ * The sync-shim methods {@link overlaySyncStdio} wraps with fd /
+ * `/dev/std*` handling. Structural subset of the `createSyncFsBridge` return.
+ */
+interface SyncStdioTargets {
+  readFileSync(path: string, opts?: string | { encoding?: string | null } | null): unknown;
+  writeFileSync(path: string, data: unknown): void;
+  appendFileSync(path: string, data: unknown): void;
+  existsSync(path: string): boolean;
+  accessSync(path: string): void;
+  statSync(path: string): SyncStatLike;
+  lstatSync(path: string): SyncStatLike;
+}
+
+/**
+ * Mutate the sync `fs` shim so `readFileSync(0)` / `readFileSync('/dev/stdin')`
+ * serve the FULL buffered stdin (encoding-aware, same convention as
+ * `readFileSync`: utf8 → string, default → Buffer), `writeFileSync` /
+ * `appendFileSync` to fd 1/2 (or `/dev/stdout|stderr`) land on the realm's
+ * stdout/stderr, and `existsSync` / `accessSync` / `statSync` / `lstatSync`
+ * report the three stream devices as present. Wrong-direction stream ops and
+ * unknown numeric fds throw `EBADF`. All intercepts run BEFORE `resolve()` —
+ * the stream devices never touch the path cache or the live VFS
+ * (`/dev/null` has its own VFS-layer handling; not this code's concern).
+ * A separate mutating overlay (not inline branches) keeps `createSyncFsBridge`
+ * under the function-length lint gate.
+ */
+function overlaySyncStdio(ops: SyncStdioTargets, stdio: RealmStdioBridge | undefined): void {
+  if (!stdio) return;
+  const base = {
+    readFileSync: ops.readFileSync,
+    writeFileSync: ops.writeFileSync,
+    appendFileSync: ops.appendFileSync,
+    existsSync: ops.existsSync,
+    accessSync: ops.accessSync,
+    statSync: ops.statSync,
+    lstatSync: ops.lstatSync,
+  };
+  ops.readFileSync = (path, opts) =>
+    isStdioReadTarget(path, 'read')
+      ? decodeFileBytes(stdio.readStdinBytes(), encodingOf(opts))
+      : base.readFileSync(path, opts);
+  ops.writeFileSync = (path, data) => {
+    const sink = stdioWriteSink(stdio, path, 'write');
+    if (sink) sink(stdioText(data));
+    else base.writeFileSync(path, data);
+  };
+  ops.appendFileSync = (path, data) => {
+    const sink = stdioWriteSink(stdio, path, 'append');
+    if (sink) sink(stdioText(data));
+    else base.appendFileSync(path, data);
+  };
+  ops.existsSync = (path) => isDevStdioPath(path) || base.existsSync(path);
+  ops.accessSync = (path) => {
+    if (!isDevStdioPath(path)) base.accessSync(path);
+  };
+  ops.statSync = (path) => (isDevStdioPath(path) ? devStdioStat() : base.statSync(path));
+  ops.lstatSync = (path) => (isDevStdioPath(path) ? devStdioStat() : base.lstatSync(path));
+}
+
 /** Coerce a `writeFileSync`/`appendFileSync` data arg to bytes (string | typed array). */
 function toBytes(data: unknown): Uint8Array {
   if (typeof data === 'string') return new TextEncoder().encode(data);
@@ -367,8 +628,17 @@ function toBytes(data: unknown): Uint8Array {
  * writer mid-run (between exec boundaries) can read stale — the same guarantee
  * today's boot-snapshot already gives, not a regression. This is the committed
  * policy (spec §4 / §12): no FsWatcher eviction.
+ *
+ * **Stdio targets** (`stdio` threaded by `runJsRealm`): fds 0/1/2 and
+ * `/dev/std{in,out,err}` are intercepted BEFORE `resolve()` and never touch
+ * the cache or the live VFS — see {@link overlaySyncStdio}.
  */
-export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: SyncFsXhrBridge) {
+export function createSyncFsBridge(
+  syncFs: SyncFsCache,
+  cwd: string,
+  bridge?: SyncFsXhrBridge,
+  stdio?: RealmStdioBridge
+) {
   function resolve(p: string): string {
     // Lexically normalize ('.'/'..') so the bridge URL carries a clean absolute
     // path — the URL layer would otherwise collapse dot-segments before the SW
@@ -458,6 +728,7 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
     isFile: () => s.isFile,
     isDirectory: () => s.isDirectory,
     isSymbolicLink: () => s.isSymbolicLink === true,
+    isCharacterDevice: () => false,
     size: s.size,
   });
   const join = (dir: string, name: string) => (dir === '/' ? `/${name}` : `${dir}/${name}`);
@@ -475,7 +746,7 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
     for (const name of readdirResolved(srcR)) copyTree(join(srcR, name), join(destR, name));
   }
 
-  return {
+  const ops = {
     ...createRemovalOps({
       syncFs,
       bridge,
@@ -487,12 +758,8 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       writeThrough,
     }),
     readFileSync(path: string, opts?: string | { encoding?: string | null } | null): unknown {
-      const encoding = typeof opts === 'string' ? opts : opts?.encoding;
-      const bytes = readBytes(resolve(path));
-      if (encoding === 'utf8' || encoding === 'utf-8') return new TextDecoder().decode(bytes);
-      // Return Buffer if available (realm polyfill), else Uint8Array.
-      const B = realmBuffer();
-      return B ? B.from(bytes) : bytes;
+      // utf8 → string; default/other → Buffer (realm polyfill) or Uint8Array.
+      return decodeFileBytes(readBytes(resolve(path)), encodingOf(opts));
     },
     writeFileSync(path: string, data: unknown): void {
       writeThrough(resolve(path), toBytes(data));
@@ -561,4 +828,6 @@ export function createSyncFsBridge(syncFs: SyncFsCache, cwd: string, bridge?: Sy
       return syncFs.mkdtemp(resolve(prefix));
     },
   };
+  overlaySyncStdio(ops, stdio);
+  return ops;
 }

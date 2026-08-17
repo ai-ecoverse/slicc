@@ -1021,7 +1021,7 @@ process.cwd(): string                        // Current working directory
 process.exit(code?: number)                  // Exit with code (0 default)
 process.stdout.write(s)                      // Write to stdout
 process.stderr.write(s)                      // Write to stderr
-process.stdin.read(): string | null          // Buffered piped stdin; null after EOF
+process.stdin.read(): string | null          // Buffered piped stdin; null after EOF or when nothing was piped
 process.stdin.isTTY: false                   // Always false in this environment
 process.stdin.on(event, cb)                  // EventEmitter surface: 'data' → 'end' → 'close'
 process.stdin[Symbol.asyncIterator]()        // Yields the buffered string once
@@ -1059,11 +1059,16 @@ Stdin from upstream pipelines is buffered **fully and read-ahead** before the sc
    for await (const chunk of process.stdin) total += chunk;
    ```
 
-Because the `consumed` flag is shared, once any surface has drained the buffer the others see EOF: `read()` returns `null` and the events surface emits `'end'` only (no `'data'`). If no input is piped, the first `read()` returns `''` and subsequent calls return `null`, and the events surface emits `'end'` with no `'data'`.
+Because the `consumed` flag is shared, once any surface has drained the buffer the others see EOF: `read()` returns `null` and the events surface emits `'end'` only (no `'data'`). If no input is piped, `read()` returns `null` immediately (Node parity — never `''`), and the events surface emits `'end'` with no `'data'`.
 
 For a non-consuming view, use `String(process.stdin)` or `process.stdin.toString()`.
 
 Stdin is intentionally NOT exposed as a top-level identifier — user scripts are free to declare their own `const stdin = …` without colliding with the runtime.
+
+Two more Node stdin idioms are served on top of the same buffer:
+
+- **`fs` stdio fds and device paths** — `fs.readFileSync(0)` / `fs.readFile(0)` / `'/dev/stdin'` return the full buffered stdin (encoding-aware; does NOT consume `process.stdin`'s one-shot flag). Writes to fd `1`/`2` or `/dev/stdout`/`/dev/stderr` (`writeFileSync`, `appendFileSync`, async `writeFile`/`appendFile`) land on stdout/stderr, and `existsSync`/`accessSync`/`statSync` report the three stream devices as present (`isFile()` true, `isCharacterDevice()` true, size 0). Wrong-direction stream ops and unknown numeric fds throw `EBADF`.
+- **`require('readline')` / `require('readline/promises')`** — `createInterface({ input: process.stdin })` (optionally with `output`, `terminal`) reads the buffered input line-by-line: `'line'`/`'close'` events, `for await (const line of rl)`, and `question(query[, cb])` (Promise form without a callback) answering with the next unconsumed line (`''` at EOF). Creating the interface drains `process.stdin` (Node flowing-mode parity); a final unterminated line is still emitted and CRLF is stripped.
 
 #### console
 

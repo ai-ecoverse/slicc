@@ -51,14 +51,37 @@ export function createNodeConsole(
   };
 }
 
+/** The `process.stdout` / `process.stderr` write sinks handed to user code. */
+interface RealmWritableShim {
+  write: (value: unknown) => void;
+  end: () => undefined;
+  isTTY: boolean;
+}
+
+/**
+ * The realm's `process` shim surface (handed to user code and served for
+ * `require('process')`). `argv` carries the non-enumerable `.parseFlags()`
+ * helper (see `attachArgvParseFlags`).
+ */
+export interface RealmProcessShim {
+  argv: string[];
+  env: Record<string, string>;
+  cwd: () => string;
+  exit: (codeValue?: number) => never;
+  stdin: StdinShim;
+  stdout: RealmWritableShim;
+  stderr: RealmWritableShim;
+}
+
 export function createProcessShim(
   init: RealmInitMsg,
   writeStdout: (value: unknown) => void,
   writeStderr: (value: unknown) => void
 ): {
-  processShim: Record<string, unknown>;
+  processShim: RealmProcessShim;
   getDidCallProcessExit: () => boolean;
   getExitCode: () => number;
+  recordExit: (code: number) => void;
 } {
   const noColor = !!init.env?.NO_COLOR;
   let didCallProcessExit = false;
@@ -76,7 +99,7 @@ export function createProcessShim(
   const argvWithParseFlags = attachArgvParseFlags(init.argv);
   const stdout = { write: writeStdout, end: () => undefined, isTTY: !noColor };
   const stderr = { write: writeStderr, end: () => undefined, isTTY: !noColor };
-  const processShim = {
+  const processShim: RealmProcessShim = {
     argv: argvWithParseFlags,
     env: init.env,
     cwd: () => init.cwd,
@@ -93,6 +116,10 @@ export function createProcessShim(
     processShim,
     getDidCallProcessExit: () => didCallProcessExit,
     getExitCode: () => exitCode,
+    // Exposed so sibling shims that run user handlers in microtasks (the
+    // readline shim's deferred 'line' flush) can report a caught
+    // `process.exit(N)` the same way the stdin shim does.
+    recordExit,
   };
 }
 
@@ -102,7 +129,8 @@ export function createProcessShim(
  * commands, `node`/`node -e`), so there's no streaming Readable.
  *
  * EOF semantics match Node's `Readable.read()`: the first `read()` returns
- * the full buffer, subsequent calls return `null`. A single `consumed` flag
+ * the full buffer (`null` when nothing was piped), subsequent calls return
+ * `null`. A single `consumed` flag
  * is shared across `read()`, the async iterator, and the EventEmitter surface
  * so no path double-delivers: `for await (const c of process.stdin)` after a
  * `read()` (or a second iteration) yields nothing. `toString()` always returns
@@ -142,7 +170,9 @@ class StdinShim extends nodeStream.Stream {
   read(): string | null {
     if (this.consumed) return null;
     this.consumed = true;
-    return this.buffer;
+    // Node parity: `read()` on an empty stream yields `null`, never `''`
+    // (a script run without piped input sees `null` on the first call).
+    return this.buffer.length > 0 ? this.buffer : null;
   }
 
   toString(): string {
