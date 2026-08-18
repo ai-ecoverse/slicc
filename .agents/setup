@@ -1,0 +1,138 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+node_version="24.19.0"
+go_version="1.26.6"
+golangci_lint_version="2.12.2"
+local_bin="$HOME/.local/bin"
+local_share="$HOME/.local/share"
+mkdir -p "$local_bin" "$local_share"
+
+timed() {
+  local label="$1"
+  shift
+  echo "==> $label"
+  time "$@"
+}
+
+install_node() {
+  local arch archive install_dir tmp_dir
+  case "$(uname -m)" in
+    x86_64) arch="x64" ;;
+    aarch64 | arm64) arch="arm64" ;;
+    *) echo "Unsupported Node architecture: $(uname -m)" >&2; return 1 ;;
+  esac
+  archive="node-v${node_version}-linux-${arch}.tar.xz"
+  install_dir="$local_share/node-v${node_version}"
+  if [[ ! -x "$install_dir/bin/node" ]]; then
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' RETURN
+    curl -fsSLo "$tmp_dir/$archive" "https://nodejs.org/dist/v${node_version}/$archive"
+    curl -fsSLo "$tmp_dir/SHASUMS256.txt" "https://nodejs.org/dist/v${node_version}/SHASUMS256.txt"
+    (cd "$tmp_dir" && grep "  $archive\$" SHASUMS256.txt | sha256sum --check --strict -)
+    mkdir -p "$install_dir"
+    tar -xJf "$tmp_dir/$archive" --strip-components=1 -C "$install_dir"
+    rm -rf "$tmp_dir"
+    trap - RETURN
+  fi
+  for command in node npm npx corepack; do
+    ln -sfn "$install_dir/bin/$command" "$local_bin/$command"
+  done
+}
+
+install_go() {
+  local arch archive install_dir tmp_dir
+  case "$(uname -m)" in
+    x86_64) arch="amd64" ;;
+    aarch64 | arm64) arch="arm64" ;;
+    *) echo "Unsupported Go architecture: $(uname -m)" >&2; return 1 ;;
+  esac
+  archive="go${go_version}.linux-${arch}.tar.gz"
+  install_dir="$local_share/go${go_version}"
+  if [[ ! -x "$install_dir/bin/go" ]]; then
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' RETURN
+    curl -fsSLo "$tmp_dir/$archive" "https://go.dev/dl/$archive"
+    tar -xzf "$tmp_dir/$archive" -C "$tmp_dir"
+    rm -rf "$install_dir"
+    mv "$tmp_dir/go" "$install_dir"
+    rm -rf "$tmp_dir"
+    trap - RETURN
+  fi
+  ln -sfn "$install_dir/bin/go" "$local_bin/go"
+  ln -sfn "$install_dir/bin/gofmt" "$local_bin/gofmt"
+}
+
+install_golangci_lint() {
+  local arch archive tmp_dir
+  if [[ "$(golangci-lint version 2>/dev/null || true)" != *"version ${golangci_lint_version}"* ]]; then
+    case "$(uname -m)" in
+      x86_64) arch="amd64" ;;
+      aarch64 | arm64) arch="arm64" ;;
+      *) echo "Unsupported golangci-lint architecture: $(uname -m)" >&2; return 1 ;;
+    esac
+    archive="golangci-lint-${golangci_lint_version}-linux-${arch}.tar.gz"
+    tmp_dir="$(mktemp -d)"
+    trap 'rm -rf "$tmp_dir"' RETURN
+    curl -fsSLo "$tmp_dir/$archive" \
+      "https://github.com/golangci/golangci-lint/releases/download/v${golangci_lint_version}/$archive"
+    curl -fsSLo "$tmp_dir/checksums.txt" \
+      "https://github.com/golangci/golangci-lint/releases/download/v${golangci_lint_version}/golangci-lint-${golangci_lint_version}-checksums.txt"
+    (cd "$tmp_dir" && grep "  $archive\$" checksums.txt | sha256sum --check --strict -)
+    tar -xzf "$tmp_dir/$archive" -C "$tmp_dir"
+    install -m 0755 "$tmp_dir/golangci-lint-${golangci_lint_version}-linux-${arch}/golangci-lint" \
+      "$local_bin/golangci-lint"
+    rm -rf "$tmp_dir"
+    trap - RETURN
+  fi
+}
+
+install_browser() {
+  local browser
+  if ! find "$HOME/.cache/ms-playwright" -type f -path '*/chrome-linux*/chrome' -perm -u+x \
+    -print -quit 2>/dev/null | grep -q .; then
+    npx playwright install --with-deps chromium
+  else
+    npx playwright install chromium
+  fi
+  browser="$(find "$HOME/.cache/ms-playwright" -type f -path '*/chrome-linux*/chrome' -perm -u+x \
+    -print 2>/dev/null | sort -V | tail -1)"
+  if [[ -n "$browser" ]]; then
+    ln -sfn "$browser" "$local_bin/chromium"
+  fi
+}
+
+persist_browser_path() {
+  local profile_marker="# SLICC orb browser"
+  if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+    cat >> "$HOME/.bash_profile" <<'EOF'
+
+# SLICC orb browser
+if [[ -x "$HOME/.local/bin/chromium" ]]; then
+  export CHROME_PATH="$HOME/.local/bin/chromium"
+fi
+EOF
+  fi
+}
+
+timed "Install Node.js ${node_version}" install_node
+export PATH="$local_bin:$PATH"
+node --version
+
+timed "Install Go ${go_version}" install_go
+timed "Install golangci-lint ${golangci_lint_version}" install_golangci_lint
+
+# Splitting lifecycle scripts keeps npm's peak memory below the orb limit.
+timed "Install npm dependencies" env NODE_OPTIONS=--max-old-space-size=1024 \
+  npm ci --ignore-scripts --no-audit --no-fund
+timed "Apply patches and build dependency workspaces" env NODE_OPTIONS=--max-old-space-size=1024 \
+  npm run postinstall
+timed "Install Git hooks" npm run prepare
+sha256sum package-lock.json > node_modules/.slicc-package-lock.sha256
+timed "Install Chromium and Linux browser dependencies" install_browser
+persist_browser_path
+
+echo "Orb setup complete."
