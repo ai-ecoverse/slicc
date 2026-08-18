@@ -188,6 +188,15 @@ export class ScoopLifecycleManager {
     return this.contexts.get(jid);
   }
 
+  /** Synchronize live read ACLs after a global or per-scoop policy reload. */
+  syncReadGrants(folder?: string): void {
+    for (const scoop of this.deps.getScoops().values()) {
+      if (scoop.isCone || (folder !== undefined && scoop.folder !== folder)) continue;
+      const fs = this.contexts.get(scoop.jid)?.getFS();
+      this.applyPolicyReadGrants(scoop, fs);
+    }
+  }
+
   /** Live tab state for a single jid (or `undefined`). */
   getTab(jid: string): ScoopTabState | undefined {
     return this.tabs.get(jid);
@@ -261,6 +270,17 @@ export class ScoopLifecycleManager {
     }
   }
 
+  /** Replace dynamic read ACLs from the scoop's current effective policy. */
+  private applyPolicyReadGrants(
+    scoop: RegisteredScoop,
+    fs: VirtualFS | RestrictedFS | null | undefined
+  ): void {
+    if (!(fs instanceof RestrictedFS)) return;
+    const policy = this.deps.getSudoManager()?.getPolicyForScoop(scoop.folder);
+    if (!policy) return;
+    fs.setReadGrants(policy.read.filter((rule) => rule.nopasswd).map((rule) => rule.pattern));
+  }
+
   /** Create and initialize a scoop context. */
   async createTab(jid: string): Promise<void> {
     const scoop = this.deps.getScoops().get(jid);
@@ -304,6 +324,7 @@ export class ScoopLifecycleManager {
 
     if (!scoop.isCone) {
       await this.ensureSudoersLoaded(scoop);
+      this.applyPolicyReadGrants(scoop, fs);
     }
 
     const contextCallbacks = this.buildContextCallbacks(jid, scoop);

@@ -216,6 +216,14 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       return { settled: false, persisted: false };
     }
 
+    // Claim the request synchronously before any persistence await. This
+    // cancels its fail-closed timer, so an expired request can never gain a
+    // durable rule after the registry has already denied it.
+    const settled = this.resolveSudoRequest(id, decision);
+    if (!settled) {
+      return { settled: false, persisted: false };
+    }
+
     const scoop = this.deps.getScoops().get(pending.scoopJid);
     const kind = pending.request.kind;
     const scoopFolder = scoop?.folder;
@@ -226,13 +234,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     let persistError: string | undefined;
 
     if (decision.decision === 'always' && sudoManager && scoop && !scoop.isCone) {
-      if (kind === 'read') {
-        // A persisted `NOPASSWD Read <pattern>` would silently no-op: the
-        // scoop's `RestrictedFS.visiblePaths` is fixed at construction, so
-        // subsequent reads of paths outside the original sandbox keep
-        // throwing ENOENT. Reporting `persisted: true` would be a lie.
-        persistError = 'read grants need ACL widening, not yet supported';
-      } else if (kind === 'command' || kind === 'write') {
+      if (kind === 'command' || kind === 'read' || kind === 'write') {
         const raw =
           decision.pattern?.trim() ||
           pending.request.suggestedPattern?.trim() ||
@@ -259,10 +261,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       }
     }
 
-    const settled = this.resolveSudoRequest(id, decision);
-    if (settled) {
-      await this.persistLickDecision(id, decision.decision);
-    }
+    await this.persistLickDecision(id, decision.decision);
     return { settled, persisted, persistedPattern, persistError, scoopFolder, kind };
   }
 

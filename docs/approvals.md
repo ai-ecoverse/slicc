@@ -210,9 +210,13 @@ shutdown, or the per-request timeout (`CONE_SUDO_TIMEOUT_MS`).
 "Always" grants for `kind: 'command' | 'read' | 'write'` are persisted via
 `SudoManager.appendScoopRule(folder, kind, pattern)` (raw-VFS write, same trusted
 sink that powers `seedScoopSudoers`, so it bypasses the per-scoop self-protection
-on `/scoops/<folder>/etc/sudoers`). `kind: 'secret'` cannot be persisted because
-there is no matching sudoers directive — the cone tool surfaces this as
-"approved but not persisted" so the agent retries the request next time.
+on `/scoops/<folder>/etc/sudoers`). Persisted `Read` globs also widen the live
+`RestrictedFS` ACL, and are reapplied from the scoop policy whenever its context
+is recreated. Live sudoers reloads replace those dynamic grants, so manually
+adding or revoking a rule updates the running scoop too; non-matching sibling
+paths remain hidden. `kind: 'secret'` cannot be persisted because there is no
+matching sudoers directive — the cone tool surfaces this as "approved but not
+persisted" so the agent retries the request next time.
 
 An "always" grant is only as durable as the folder it lands in. One-shot agents
 spawned through `AgentBridge` get a random `agent-<adjective>-<flavor>` folder
