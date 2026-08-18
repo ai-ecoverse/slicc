@@ -11,9 +11,9 @@ const S_IFDIR = 0o40000;
 const S_IFREG = 0o100000;
 const S_IFLNK = 0o120000;
 
-const file = (size: number, perms = 0o644) => ({ mode: S_IFREG | perms, size });
-const dir = (perms = 0o755) => ({ mode: S_IFDIR | perms });
-const symlink = () => ({ mode: S_IFLNK | 0o777, size: 10 });
+const file = (size: number, perms = 0o644) => ({ mode: S_IFREG | perms, size, nlink: 1 });
+const dir = (perms = 0o755) => ({ mode: S_IFDIR | perms, nlink: 1 });
+const symlink = () => ({ mode: S_IFLNK | 0o777, size: 10, nlink: 1 });
 
 const probeFrom =
   (real: Record<string, { kind: 'file'; size: number } | { kind: 'directory' }>): SidecarProbe =>
@@ -96,6 +96,7 @@ describe('repairSidecarDocument', () => {
       dropped: 0,
       selfEntryDropped: false,
       inosReassigned: 0,
+      nlinksFixed: 0,
       changed: false,
     });
   });
@@ -192,6 +193,66 @@ describe('repairSidecarDocument — ino uniqueness (#2146)', () => {
   });
 });
 
+describe('repairSidecarDocument — nlink healing (2026-08-18 log-flood outage)', () => {
+  it('trues up nlink 0 and absent nlink to 1 on files, dirs, and symlinks', async () => {
+    // Every persisted `nlink: 0` re-arms ZenFS's per-inode "nlink of 0"
+    // warning on each materialization; with kerium retaining every entry the
+    // flood hit V8's 2^24 Set cap and every FS op threw. The heal must cover
+    // symlinks too — they skip the reality probe but still materialize.
+    const doc: SidecarIndexJson = {
+      entries: {
+        '/': { ...dir(), ino: 0, data: 0 },
+        '/f.txt': { mode: S_IFREG | 0o644, size: 3, ino: 1, data: 2, nlink: 0 },
+        '/d': { mode: S_IFDIR | 0o755, ino: 3, data: 4 },
+        '/link': { mode: S_IFLNK | 0o777, size: 10, ino: 5, data: 6, nlink: 0 },
+      } as SidecarIndexJson['entries'],
+    };
+    const summary = await repairSidecarDocument(
+      doc,
+      probeFrom({
+        '/f.txt': { kind: 'file', size: 3 },
+        '/d': { kind: 'directory' },
+        '/link': { kind: 'file', size: 10 },
+      })
+    );
+    expect(summary.nlinksFixed).toBe(3);
+    expect(summary.changed).toBe(true);
+    const entries = doc.entries as Record<string, { nlink?: number }>;
+    for (const path of ['/f.txt', '/d', '/link']) {
+      expect(entries[path].nlink).toBe(1);
+    }
+  });
+
+  it('leaves healthy entries and the root alone', async () => {
+    // ZenFS forces `/` to ino 0 on load, so a root nlink of 0 never warns —
+    // the heal skips it, keeping the no-op guarantee for healthy sidecars.
+    const doc: SidecarIndexJson = {
+      entries: {
+        '/': { ...dir(), ino: 0, data: 0, nlink: 0 },
+        '/ok.txt': { ...file(4), ino: 1, data: 2 },
+      } as SidecarIndexJson['entries'],
+    };
+    const summary = await repairSidecarDocument(
+      doc,
+      probeFrom({ '/ok.txt': { kind: 'file', size: 4 } })
+    );
+    expect(summary.nlinksFixed).toBe(0);
+    expect(summary.changed).toBe(false);
+    expect((doc.entries as Record<string, { nlink?: number }>)['/'].nlink).toBe(0);
+  });
+
+  it('does not count dropped entries as healed', async () => {
+    const doc: SidecarIndexJson = {
+      entries: {
+        '/gone.txt': { mode: S_IFREG | 0o644, size: 5, ino: 3, data: 4, nlink: 0 },
+      } as SidecarIndexJson['entries'],
+    };
+    const summary = await repairSidecarDocument(doc, probeFrom({}));
+    expect(summary.dropped).toBe(1);
+    expect(summary.nlinksFixed).toBe(0);
+  });
+});
+
 describe('resolveWithSidecarRepair', () => {
   const repaired: SidecarRepairSummary = {
     kindFixed: ['/x'],
@@ -199,6 +260,7 @@ describe('resolveWithSidecarRepair', () => {
     dropped: 0,
     selfEntryDropped: false,
     inosReassigned: 0,
+    nlinksFixed: 0,
     changed: true,
   };
 

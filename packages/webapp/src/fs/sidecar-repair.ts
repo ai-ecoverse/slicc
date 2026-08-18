@@ -55,6 +55,15 @@ export interface SidecarRepairSummary {
    * sibling-size truncation).
    */
   inosReassigned: number;
+  /**
+   * Entries whose persisted `nlink` was zero/absent and got trued up to 1.
+   * ZenFS's `Inode` constructor warns on every `ino != 0 && nlink == 0`
+   * inode it materializes, and kerium retains every log entry — a sidecar
+   * full of `nlink: 0` entries (the pre-fix #2146 allocations wrote them)
+   * flooded the kernel worker's log until its backing Set hit V8's 2^24
+   * element cap and every FS op threw (2026-08-18 VFS-offline incident).
+   */
+  nlinksFixed: number;
   /** Whether anything changed (callers skip the rewrite when false). */
   changed: boolean;
 }
@@ -64,6 +73,7 @@ interface MutableEntry {
   size?: number;
   ino?: number;
   data?: number;
+  nlink?: number;
 }
 
 /**
@@ -74,8 +84,11 @@ interface MutableEntry {
  * - a `file` entry whose `size` disagrees with the real file is trued up
  *   (stale sizes surface as ZenFS "file data size mismatch" read errors);
  * - an entry whose path is missing on disk is dropped;
- * - symlink entries are left alone: their payload lives in a small real
- *   file, and `probe` reporting `file` for them is expected.
+ * - an entry persisted with `nlink: 0` is trued up to 1 (every such entry
+ *   makes ZenFS warn on every inode materialization, and kerium's log
+ *   retention turned that into the 2026-08-18 Set-overflow VFS outage);
+ * - symlink entries otherwise are left alone: their payload lives in a small
+ *   real file, and `probe` reporting `file` for them is expected.
  *
  * Mutates and returns `doc`; the summary says what happened.
  */
@@ -89,6 +102,7 @@ export async function repairSidecarDocument(
     dropped: 0,
     selfEntryDropped: false,
     inosReassigned: 0,
+    nlinksFixed: 0,
     changed: false,
   };
   const entries = doc.entries ?? {};
@@ -107,7 +121,10 @@ export async function repairSidecarDocument(
     }
     const entry = raw as MutableEntry;
     const fmt = (entry.mode ?? 0) & S_IFMT;
-    if (fmt === S_IFLNK) continue;
+    if (fmt === S_IFLNK) {
+      healNlink(entry, summary);
+      continue;
+    }
     const real = await probe(path);
     if (real.kind === 'missing') {
       delete entries[path];
@@ -115,6 +132,7 @@ export async function repairSidecarDocument(
       summary.changed = true;
       continue;
     }
+    healNlink(entry, summary);
     repairEntryAgainstReality(path, entry, fmt, real, summary);
   }
   reassignDuplicateInos(entries, summary);
@@ -162,6 +180,21 @@ function reassignDuplicateInos(
     summary.inosReassigned += 1;
     summary.changed = true;
   }
+}
+
+/**
+ * True up a persisted `nlink: 0` (or absent) to 1. ZenFS's `Inode`
+ * constructor logs a warning for every materialized inode with a real ino
+ * and no links, so a poisoned sidecar re-arms the warning on every stat of
+ * every path — see {@link SidecarRepairSummary.nlinksFixed}. Hardlinks are
+ * unsupported on this backend (`IndexFS.link` is ENOSYS), so 1 is always
+ * the correct count for a live entry.
+ */
+function healNlink(entry: MutableEntry, summary: SidecarRepairSummary): void {
+  if (entry.nlink) return;
+  entry.nlink = 1;
+  summary.nlinksFixed += 1;
+  summary.changed = true;
 }
 
 /** Correct one present-on-disk entry's format bits or size in place. */

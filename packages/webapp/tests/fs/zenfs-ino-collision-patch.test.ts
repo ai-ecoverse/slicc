@@ -34,6 +34,18 @@ describe('@zenfs/dom ino allocation patch (#2146)', () => {
     expect(src).toContain('const recoveredId = this.index._alloc();');
     expect(src).toContain('nextRealityId');
   });
+
+  it('the #2146 allocations set nlink: 1 (nlink-0 warn flood, 2026-08-18 outage)', () => {
+    // Every minted inode must carry a link count: ZenFS's Inode constructor
+    // warns on `ino != 0 && nlink == 0`, kerium retains every log entry, and
+    // a tree indexed through these sites re-warned on every inode
+    // materialization until the log Set hit V8's 2^24 cap and every FS op
+    // threw "Set maximum size exceeded" — the VFS-offline outage.
+    const src = readFileSync(resolve(repoRoot, 'node_modules/@zenfs/dom/dist/access.js'), 'utf8');
+    expect(src).toContain('nlink: 1, mode: 0o644 | constants.S_IFREG');
+    expect(src).toContain('nlink: 1, mode: 0o777 | constants.S_IFDIR');
+    expect(src).toContain('data: recoveredId + 1, nlink: 1');
+  });
 });
 
 describe('@zenfs/core vnode-cache coalescing guard (#2146)', () => {
