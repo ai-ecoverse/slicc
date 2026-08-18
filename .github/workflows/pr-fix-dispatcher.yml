@@ -1,0 +1,219 @@
+name: PR Fix Dispatcher
+
+# Scheduled triage for routine, automation-authored pull requests whose CI is
+# failing. Every two hours the `scan` job lists open PRs, keeps the ones that
+# are machine-authored (bot author OR an `automation/` / `renovate/` / `rum-fix/`
+# head branch) and failing, and picks one of three paths per PR:
+#
+#   • re-run   the failure is CI plumbing (artifact/network/registry/runner) and
+#              this head SHA has not been re-run yet → POST rerun-failed-jobs.
+#              No label, no comment: a re-run is already visible in the checks UI.
+#   • dispatch the failure is in the code and is a small, mechanical fix (lint,
+#              types, a snapshot, a lockfile, a conflict) → label the PR and
+#              queue it for the `fix` job below, which gives each PR its own
+#              checkout and its own Claude turn budget.
+#   • skip     everything else, plus the hard overrides (auth/secrets/billing,
+#              schema migrations, release/publish jobs, an infra failure that
+#              recurred after a re-run, anything needing a dependency, version,
+#              or CI-config change) → label + ONE short comment.
+#
+# The dispatcher never edits code, never pushes, and never merges. Its only
+# non-label, non-comment write is `rerun-failed-jobs`.
+#
+# STATE — all GitHub-native; there is no state file, state branch, or Actions
+# cache:
+#   "already re-ran this SHA"  → any workflow run for the head SHA has
+#                                `run_attempt > 1` (re-running bumps it).
+#   "already skipped this SHA" → a `<!-- pr-fix-skip:<sha> -->` marker comment,
+#                                the same durable-dedup technique as
+#                                `<!-- rum-fp:… -->` in rum-error-triage.yml.
+#   "attempts so far"          → count of `<!-- pr-fix-dispatch:<sha> -->` marker
+#                                comments (cap 2 per PR).
+#   "fixes in flight"          → open PRs carrying `ci-fix-dispatched` whose head
+#                                SHA is still failing (cap 5).
+# The `ci-fix-*` labels are human-visible markers only and are deliberately NOT
+# the dedup key — an operator relabelling a PR must not change behaviour.
+#
+# Required repository secrets (both already present, shared with
+# renovate-patch-reconcile.yml):
+#   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
+#                             bearer token) for claude-code-action.
+#   BOT_PAT                   Fine-grained PAT (contents + pull-requests write).
+#                             The fix commit MUST be pushed with BOT_PAT, not
+#                             GITHUB_TOKEN: GitHub's anti-recursion guard
+#                             suppresses workflow runs for GITHUB_TOKEN-authored
+#                             pushes, so the PR's `synchronize` event would never
+#                             fire and CI would never re-run on the fix.
+# Optional repo variables: PR_FIX_BEDROCK_MODEL / RUM_BEDROCK_MODEL,
+# RUM_AWS_REGION.
+#
+# Third-party actions are pinned to immutable commit SHAs (the same SHAs used by
+# .github/workflows/renovate-patch-reconcile.yml).
+
+on:
+  schedule:
+    - cron: '7 */2 * * *' # every 2 hours at :07 (clear of the 03:00 / 04:15 / 05:33 nightlies)
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'Scan only this PR (waives the 20m settling + 60m human-activity waits so it is testable on demand)'
+        required: false
+      dry_run:
+        description: 'Scan and report only; no re-runs, labels, comments, or fixers'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: pr-fix-dispatcher
+  cancel-in-progress: false
+
+jobs:
+  scan:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      pull-requests: write # ci-fix-* labels + the skip/dispatch marker comments
+      actions: write # POST /actions/runs/{id}/rerun-failed-jobs
+      checks: read # read the head SHA's check-runs
+    outputs:
+      queue: ${{ steps.scan.outputs.queue }}
+      has_dispatch: ${{ steps.scan.outputs.has_dispatch }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Ensure dispatcher labels exist
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create ci-fix-dispatched --color 1d76db --description "PR Fix Dispatcher handed this failing automation PR to a fixer" --force
+          gh label create ci-fix-skipped --color cccccc --description "PR Fix Dispatcher looked at this failing automation PR and left it alone" --force
+          gh label create ci-fix-failed --color b60205 --description "PR Fix Dispatcher's fixer could not get CI green" --force
+
+      # Deterministic triage: scan, classify, execute the re-run and skip paths,
+      # and emit the dispatch queue. `queue` is a compact single-line JSON array
+      # so the matrix below can fromJSON it; `has_dispatch` guards the job so an
+      # empty queue never reaches the matrix.
+      - name: Scan failing automation PRs
+        id: scan
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          PR_NUMBER: ${{ github.event.inputs.pr_number }}
+        run: node packages/dev-tools/pr-fix-dispatcher/scan-failing-prs.mjs
+
+  fix:
+    needs: scan
+    if: needs.scan.outputs.has_dispatch == 'true'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the fix commit to the PR's head branch
+      pull-requests: write # comment + relabel the PR
+      id-token: write # claude-code-action fetches an OIDC token during setup
+    strategy:
+      fail-fast: false
+      # One PR at a time: each fixer runs `npm ci` and pushes, and serialising
+      # keeps the review noise (and the Bedrock spend) predictable.
+      max-parallel: 1
+      matrix:
+        include: ${{ fromJSON(needs.scan.outputs.queue) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ matrix.headRef }}
+          fetch-depth: 0 # full history so the fixer can rebase/merge main
+          # BOT_PAT (persisted as the push credential) so the fix commit fires
+          # the PR's `synchronize` event and CI re-runs on it. See header.
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Fix the failing checks with Claude
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
+        env:
+          # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
+          # CAMP `ABSK...` bearer token). RUM_AWS_REGION / PR_FIX_BEDROCK_MODEL
+          # tune region + inference profile.
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          # claude-code-action does NOT expose a token to the Bash tool's `gh`,
+          # so set it explicitly or `gh pr comment` fails.
+          GH_TOKEN: ${{ github.token }}
+        with:
+          use_bedrock: 'true'
+          # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
+          # directly instead of attempting an OIDC -> GitHub App token exchange
+          # (which fails with "User does not have write access" when the Claude
+          # GitHub App is not installed on this repo).
+          github_token: ${{ github.token }}
+          # On `schedule` events GitHub sets the actor to the last actor on the
+          # default branch, which in this merge-queue repo is `github-merge-queue`
+          # (a bot). claude-code-action's human-actor gate otherwise rejects the
+          # scheduled run with "Workflow initiated by non-human actor".
+          allowed_bots: '*'
+          # Full turn-by-turn output on manual dispatch only; the cron keeps it
+          # off so routine runs don't log tool output that may be sensitive.
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.PR_FIX_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --max-turns 150
+          prompt: |
+            Existing PR: https://github.com/${{ github.repository }}/pull/${{ matrix.number }}
+            Title: ${{ matrix.title }}
+            Head branch: ${{ matrix.headRef }}
+            Head SHA: ${{ matrix.headSha }}
+
+            This is a routine automation-authored PR whose CI is failing. Take
+            ownership of the existing PR — do NOT open a new one. You are already
+            checked out on its head branch with dependencies installed.
+
+            Failing checks: ${{ matrix.failures }}
+
+            Your job: get CI green on this branch. Fix the failures and, if the
+            branch is behind or conflicted, rebase/merge `main` and resolve the
+            conflicts. Keep the change minimal and scoped to what CI is
+            complaining about — do not refactor, do not add dependencies, do not
+            change CI configuration, and do not touch the PR title or body beyond
+            noting what you fixed.
+
+            Reproduce locally before and after your change (e.g. `npm run lint`,
+            `npm run typecheck`, `npm test` — run only what is relevant to the
+            failing checks), then commit and `git push` to the head branch.
+
+            If the fix turns out to need a dependency change, a schema change, a
+            CI/deploy config change, or a redesign, stop and report back instead
+            of pushing.
+
+            Do not merge the PR. Do not assign reviewers. Report back with the PR
+            URL and whether CI went green, and post that as one short
+            `gh pr comment` on the PR.
+
+      # Step 7: a fixer that died owes the PR one plain-language comment and a
+      # label swap, so the next tick (and any human reading the PR) can see it.
+      - name: Report a failed fixer
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_NUMBER: ${{ matrix.number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          gh pr edit "$PR_NUMBER" --add-label ci-fix-failed --remove-label ci-fix-dispatched || true
+          gh pr comment "$PR_NUMBER" --body "🚑 **PR Fix Dispatcher — the fixer did not finish.** Its run stopped before CI went green (it may have run out of turns, hit a failure it was told not to work around, or crashed). Nothing was pushed by a successful fixer; this PR now needs a human. Run log: $RUN_URL"
