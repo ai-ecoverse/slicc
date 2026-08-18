@@ -486,6 +486,48 @@ export function buildMarker(kind, number) {
   return `<!-- backlog-${kind}:${Number.isFinite(parsed) ? parsed : String(number)} -->`;
 }
 
+/**
+ * Render "why did nothing get picked?" as log lines, grouped by verdict code.
+ *
+ * `0 candidates` is this workflow's most common *healthy* outcome — a quiet
+ * backlog is normal — so without per-issue reasons a correct quiet tick and a
+ * completely disabled selector produce identical logs. That is exactly how the
+ * `skill issue` denylist entry survived a review round and 76 unit tests.
+ *
+ * One code can cover several distinct reasons: `denylisted` names the offending
+ * label, `too-young` names the age. Printing only the group's first reason would
+ * pin one issue's explanation onto every number beside it and hide the very
+ * detail this exists to surface, so identical reasons collapse to a single line
+ * while differing ones are attributed to their own issues.
+ *
+ * @param {Array<{number: number|null, code: string, reason: string}>} rejected
+ * @returns {string[]} indented lines, without a script-name prefix
+ */
+export function formatRejections(rejected = []) {
+  const list = Array.isArray(rejected) ? rejected : [];
+  if (list.length === 0) return [];
+  const lines = [`screened out ${list.length} issue(s):`];
+  for (const [code, group] of groupBy(list, (r) => r.code)) {
+    lines.push(`  - ${code} (${group.length}): ${group.map((r) => `#${r.number}`).join(' ')}`);
+    for (const [reason, members] of groupBy(group, (r) => r.reason)) {
+      const attributed =
+        members.length === group.length ? '' : `${members.map((r) => `#${r.number}`).join(' ')} — `;
+      lines.push(`      ${attributed}${reason}`);
+    }
+  }
+  return lines;
+}
+
+/** Group by a derived key, largest group first; insertion order breaks ties. */
+function groupBy(items, keyOf) {
+  const map = new Map();
+  for (const item of items) {
+    const key = keyOf(item);
+    map.set(key, [...(map.get(key) ?? []), item]);
+  }
+  return [...map.entries()].sort((a, b) => b[1].length - a[1].length);
+}
+
 /** The `<sup>` attribution line every comment opens with (Cosmos header convention). */
 function attribution(runUrl) {
   const link = runUrl ? `[Backlog Dispatcher](${runUrl})` : 'Backlog Dispatcher';

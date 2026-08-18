@@ -269,7 +269,11 @@ jobs:
           show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
           claude_args: |
             --model ${{ vars.BACKLOG_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
-            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(git:*),Bash(gh pr:*),Bash(gh issue:*),Bash(npm:*),Bash(npx:*),Bash(node:*)"
+            # `gh pr list`/`view` only: the PR is opened by the deterministic
+            # step below, so `gh pr create` here would produce exactly the
+            # `action_required` PR that step exists to avoid. Narrowing the
+            # allowlist enforces the brief instead of trusting it.
+            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(git:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh issue:*),Bash(npm:*),Bash(npx:*),Bash(node:*)"
             --max-turns 200
           prompt: ${{ steps.ready.outputs.prompt }}
 

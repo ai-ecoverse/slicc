@@ -119,9 +119,16 @@ instead of closing something to make room.
 Silent screen-outs (no label, no comment) happen before Claude ever sees an
 issue: it is a pull request, not open, assigned, younger than the settling
 window, already decided (new or legacy label), on the denylist (`question`,
-`wontfix`, `invalid`, `duplicate`, `skill issue`, `help wanted`), or already has
-an open PR referencing it (`Closes #n` / `Fixes #n` / `#n` in a PR body or the
-dispatcher's own `automation/backlog/issue-<n>` branch — the #2155 case).
+`wontfix`, `invalid`, `duplicate`, `help wanted` — the authoritative list is
+`DENYLIST_LABELS` in `lib.mjs`), or already has an open PR referencing it
+(`Closes #n` / `Fixes #n` / `#n` in a PR body or the dispatcher's own
+`automation/backlog/issue-<n>` branch — the #2155 case).
+
+`skill issue` is deliberately **not** on the denylist, however much the name
+suggests it: [`issue-skill.yml`](../../../.github/workflows/issue-skill.yml)
+applies that label to every issue on `opened`, as a joke, so here it means "an
+issue exists" rather than "user error". Denying it disabled this dispatcher
+completely until the first live run caught it (14 of 17 open items carried it).
 
 ## The stale sweep never closes
 

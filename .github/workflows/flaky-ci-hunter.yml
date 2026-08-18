@@ -172,6 +172,7 @@ jobs:
           claude_args: |
             --model ${{ vars.FLAKY_HUNTER_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
             --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --disallowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh label create:*)"
             --max-turns 200
           prompt: ${{ steps.scan.outputs.prompt }}
 

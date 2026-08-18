@@ -11,6 +11,7 @@ import {
   DENYLIST_LABELS,
   detectSmells,
   dispatchBudget,
+  formatRejections,
   formatSkipComment,
   formatStaleComment,
   hasLinkedOpenPr,
@@ -143,6 +144,30 @@ describe('screenIssue', () => {
     expect(screenIssue(issue({ labels: [{ name: 'skill issue' }] }), { now: NOW })).toMatchObject({
       eligible: true,
     });
+  });
+
+  it('attributes differing reasons to their own issues, and collapses identical ones', () => {
+    // Two labels, one `denylisted` code: printing only the first reason would
+    // claim #2 carries "question" when it actually carries "invalid".
+    const lines = formatRejections([
+      { number: 1, code: 'denylisted', reason: 'Carries "question".' },
+      { number: 2, code: 'denylisted', reason: 'Carries "invalid".' },
+      { number: 3, code: 'pull-request', reason: 'This is a pull request.' },
+      { number: 4, code: 'pull-request', reason: 'This is a pull request.' },
+    ]).join('\n');
+
+    expect(lines).toContain('screened out 4 issue(s):');
+    // Differing reasons within one code are attributed per issue…
+    expect(lines).toContain('#1 — Carries "question".');
+    expect(lines).toContain('#2 — Carries "invalid".');
+    // …while a reason shared by the whole group stays a single unattributed line.
+    expect(lines).toContain('  - pull-request (2): #3 #4');
+    expect(lines).toMatch(/^ {6}This is a pull request\.$/m);
+  });
+
+  it('reports nothing when nothing was screened out', () => {
+    expect(formatRejections([])).toEqual([]);
+    expect(formatRejections()).toEqual([]);
   });
 
   it('rejects an issue this dispatcher already decided', () => {

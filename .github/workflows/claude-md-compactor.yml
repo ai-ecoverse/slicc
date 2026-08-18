@@ -141,6 +141,7 @@ jobs:
           claude_args: |
             --model ${{ vars.COMPACTOR_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
             --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --disallowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr merge:*)"
             --max-turns 150
           prompt: ${{ steps.measure.outputs.prompt }}
 
