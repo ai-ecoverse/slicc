@@ -2491,6 +2491,7 @@ describe('LeaderSyncManager', () => {
           discoveryOrigin: 'https://shop.example',
           discoveryKind: 'ai-catalog',
           discoveryUrl: 'https://shop.example/.well-known/ai-catalog.json',
+          discoverySource: 'live-navigation',
           body: {
             origin: 'https://shop.example',
             kind: 'ai-catalog',
@@ -2508,6 +2509,7 @@ describe('LeaderSyncManager', () => {
         discoveryOrigin: 'https://shop.example',
         discoveryKind: 'ai-catalog',
         discoveryUrl: 'https://shop.example/.well-known/ai-catalog.json',
+        discoverySource: 'live-navigation',
         originFollowerId: 'b1',
         originLabel: 'extension follower',
       });

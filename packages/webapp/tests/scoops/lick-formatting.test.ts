@@ -389,7 +389,7 @@ describe("'discovery' lick formatting", () => {
     expect(formatted!.content).toContain('https://example.com/.well-known/ai-catalog.json');
     expect(formatted!.content).toContain('https://example.com');
     expect(formatted!.content).toContain('ai-catalog');
-    // Informational only — no confirm/dismiss card action.
+    // ai-catalog remains informational with no confirm/dismiss action.
     expect(formatted!.content).not.toContain('lick_confirm');
     expect(formatted!.content).toContain('informational');
   });
@@ -400,11 +400,15 @@ describe("'discovery' lick formatting", () => {
       discoveryOrigin: 'https://example.com',
       discoveryKind: 'llms-txt',
       discoveryUrl: 'https://example.com/llms.txt',
+      lickId: 'lick-discovery-1',
       timestamp: '2026-07-09T00:00:00.000Z',
       body: {},
     } as never);
     expect(formatted!.content).toContain('llms.txt digest');
     expect(formatted!.content).toContain('https://example.com/llms.txt');
+    expect(formatted!.content).toContain('lick_dismiss');
+    expect(formatted!.content).toContain('/etc/llmstxtignore');
+    expect(formatted!.content).toContain('There is NO confirm action');
   });
 });
 

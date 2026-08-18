@@ -99,14 +99,20 @@ playwright-cli goto https://www.sliccy.ai/handoff?handoff=demo --tab=tab-1 --dis
 
 ## Discovery lick (`ai-catalog.json` + `llms.txt`)
 
-When the user browses to a site that advertises agentic resources, SLICC emits an **informational `discovery` lick** telling the cone the origin is agent-discoverable. The cone **MAY** (never must) fetch the manifest and act — e.g. `mcp add` a listed server or read `llms.txt`. There is no approval card at discovery time; any consequential follow-up is a separate, already-gated cone action.
+When the user browses to a site that advertises agentic resources, SLICC emits a `discovery` lick telling a browsing-capable agent the origin is agent-discoverable. The agent **MAY** (never must) fetch the manifest and act — e.g. `mcp add` a listed server or read `llms.txt`. `ai-catalog` stays informational; an `llms-txt` lick can be dismissed to suppress that host.
 
 Two vectors run on every top-level document navigation (never subresources):
 
 - **Header** — a `Link: …; rel="ai-catalog"` (ARD / Agentic Resource Discovery) response header. Reuses the same parser/observer plumbing as `handoff`/`upskill`.
 - **Well-known probe** — a background `GET` of `/.well-known/ai-catalog.json` and `/llms.txt`, at most once per origin per session (deduped + timed out + `.catch`ed). Routed through `createProxiedFetch()` (CLI) / the SW's `host_permissions` fetch (extension) so it inherits CORS bypass.
 
-Wiring: CLI/Electron/hosted-leader via `NavigationWatcher` (`packages/webapp/src/cdp/navigation-watcher.ts`); the extension via `createDiscoveryObserver` in `service-worker.ts`; followers forward `discovery` licks to the leader. The lick renders to the cone as `[Discovery Event: <url>]`.
+Wiring: CLI/Electron/hosted-leader via `NavigationWatcher` (`packages/webapp/src/cdp/navigation-watcher.ts`); the extension via `createDiscoveryObserver` in `service-worker.ts`; followers forward `discovery` licks to the leader. Only live top-level navigation carries valid discovery provenance, and restricted sub-agents without browsing commands do not receive these licks.
+
+### `/etc/llmstxtignore`
+
+The stock file suppresses noisy `llms.txt` advertisements from `github.com` and `app.slack.com`. Add one advertising hostname or glob per line; matching is case-insensitive, `*`/`?` are supported, `#` starts a comment, and blank lines are ignored. For example, `*.slack.com` matches Slack subdomains but not the bare `slack.com` host.
+
+The discovery engine reads this file before lick creation and live-reloads hand edits. Dismissing an `llms-txt` card appends its hostname through the same human approval gate that protects `/etc/sudoers`; denied approval leaves both the file and card unchanged. Reads are unrestricted, while every write to `/etc/llmstxtignore` requires approval even when a `NOPASSWD` write rule exists.
 
 ### Setting: "Autodiscover agentic resources" (default ON)
 

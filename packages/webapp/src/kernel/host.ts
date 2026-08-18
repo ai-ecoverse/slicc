@@ -56,6 +56,7 @@ import type { ProbeFetch } from '../net/well-known-probe.js';
 import { publishAgentBridge } from '../scoops/agent-bridge.js';
 import { formatLickEventForCone } from '../scoops/lick-formatting.js';
 import type { LickEvent, LickManager } from '../scoops/lick-manager.js';
+import { scoopCanBrowse } from '../scoops/llms-txt-ignore.js';
 import type {
   OrchestratorCallbacks,
   Orchestrator as OrchestratorType,
@@ -75,6 +76,7 @@ import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
 import { installSyncFsResponder } from './realm/sync-fs-responder.js';
 import type { SyncFsNonce } from './realm/sync-fs-wire.js';
+import type { WsSubscriberRegistry } from './realm/ws-subscribers.js';
 import type { KernelFacade } from './types.js';
 
 // ---------------------------------------------------------------------------
@@ -174,6 +176,28 @@ export interface LickRoutingContext {
   orchestrator: OrchestratorType;
   lickManager: LickManager;
   log: KernelHostLogger;
+}
+
+interface KernelHostGlobals {
+  __slicc_pm?: ProcessManager;
+  __slicc_browser?: BrowserAPI;
+  __slicc_lickManager?: LickManager;
+  __slicc_wsSubscribers?: WsSubscriberRegistry;
+  [WORKFLOW_MANAGER_GLOBAL_KEY]?: unknown;
+}
+
+function kernelHostGlobals(): typeof globalThis & KernelHostGlobals {
+  return globalThis as typeof globalThis & KernelHostGlobals;
+}
+
+interface NavigateLickBody {
+  url: string;
+  verb: string;
+  target: string;
+  instruction?: string;
+  branch?: string;
+  path?: string;
+  title?: string;
 }
 
 export interface KernelHost {
@@ -288,34 +312,6 @@ function routeFormattedLickToCone(
   event: LickEvent,
   { orchestrator, log }: LickRoutingContext
 ): void {
-  // Actionable licks are minted + registered BEFORE formatting so the
-  // formatter can surface the stable lickId and the built ChannelMessage
-  // carries it onto the persisted message + UI chip. Navigate (handoff /
-  // upskill), session-reload (mount-recovery / plain), and upgrade all apply.
-  // Only runs on the leader/standalone (followers forward navigate licks
-  // upstream instead of reaching this handler).
-  if (event.type === 'navigate') {
-    event.lickId = orchestrator.registerNavigateLick(event);
-  } else if (event.type === 'session-reload') {
-    // Session-reload·mount-recovery licks are agent-actionable (lick_confirm
-    // re-runs the mount commands); plain reload notices are dismiss-only.
-    event.lickId = orchestrator.registerSessionReloadLick(event);
-  } else if (event.type === 'upgrade') {
-    // Upgrade licks are agent-actionable with a binary mapping: lick_confirm
-    // → "Update workspace files" (three-way merge); lick_dismiss → clear.
-    event.lickId = orchestrator.registerUpgradeLick(event);
-  }
-
-  const formatted = formatLickEventForCone(event);
-  if (formatted === null) {
-    log.debug?.('dropping lick event with no renderable content', { type: event.type });
-    return;
-  }
-
-  const eventName = resolveLickEventName(event);
-  const eventId = resolveLickEventId(event);
-  const channel = event.type;
-
   const scoops = orchestrator.getScoops();
   let resolvedTarget: RegisteredScoop | undefined;
   if (!event.targetScoop) {
@@ -333,6 +329,43 @@ function routeFormattedLickToCone(
     log.warn('Lick target scoop not found', event.targetScoop);
     return;
   }
+  // Reject non-actionable targets before minting an id, so a restricted scoop
+  // never leaves a dangling discovery entry in the registry.
+  if (event.type === 'discovery' && !scoopCanBrowse(resolvedTarget)) {
+    log.debug?.('dropping discovery lick for non-browsing scoop', {
+      scoop: resolvedTarget.folder,
+    });
+    return;
+  }
+
+  // Actionable licks are minted + registered BEFORE formatting so the
+  // formatter can surface the stable lickId and the built ChannelMessage
+  // carries it onto the persisted message + UI chip.
+  if (event.type === 'navigate') {
+    event.lickId = orchestrator.registerNavigateLick(event);
+  } else if (event.type === 'session-reload') {
+    // Session-reload·mount-recovery licks are agent-actionable (lick_confirm
+    // re-runs the mount commands); plain reload notices are dismiss-only.
+    event.lickId = orchestrator.registerSessionReloadLick(event);
+  } else if (event.type === 'upgrade') {
+    // Upgrade licks are agent-actionable with a binary mapping: lick_confirm
+    // → "Update workspace files" (three-way merge); lick_dismiss → clear.
+    event.lickId = orchestrator.registerUpgradeLick(event);
+  } else if (event.type === 'discovery') {
+    // llms.txt discovery is dismiss-only: dismissal persists its advertising
+    // host to /etc/llmstxtignore. ai-catalog discovery stays informational.
+    event.lickId = orchestrator.registerDiscoveryLick(event) ?? undefined;
+  }
+
+  const formatted = formatLickEventForCone(event);
+  if (formatted === null) {
+    log.debug?.('dropping lick event with no renderable content', { type: event.type });
+    return;
+  }
+
+  const eventName = resolveLickEventName(event);
+  const eventId = resolveLickEventId(event);
+  const channel = event.type;
 
   const msgId = `${channel}-${eventId}-${Date.now()}`;
   const channelMsg: ChannelMessage = {
@@ -399,11 +432,11 @@ async function bootOrchestrator(
   // accept constructor injection. `ps` prefers the DI path when the
   // supplemental command is constructed via
   // `createSupplementalCommands`.
-  (globalThis as Record<string, unknown>).__slicc_pm = processManager;
+  kernelHostGlobals().__slicc_pm = processManager;
   // Expose the BrowserAPI so the OAuth intercept launcher
   // (`providers/intercepted-oauth.ts`) can reach the active CDP
   // transport without dragging in BrowserAPI as a constructor dep.
-  (globalThis as Record<string, unknown>).__slicc_browser = browser;
+  kernelHostGlobals().__slicc_browser = browser;
 
   // 2. Bind bridge — sets up the wire listener and persistence store.
   await bridge.bind(orchestrator, browser);
@@ -533,7 +566,7 @@ async function buildWsSubscriberRegistry(deps: {
   orchestrator: OrchestratorType;
   sharedFs: VirtualFS | null | undefined;
   log: KernelHostLogger;
-}): Promise<{ wsBridge: { dispose(): void }; wsRegistry: { dispose(): void } }> {
+}): Promise<{ wsBridge: { dispose(): void }; wsRegistry: WsSubscriberRegistry }> {
   const { browser, lickManager, orchestrator, sharedFs, log } = deps;
   const { CdpWsPageBridge } = await import('../cdp/cdp-ws-page-bridge.js');
   const { WsSubscriberRegistry } = await import('./realm/ws-subscribers.js');
@@ -643,7 +676,7 @@ function startNavigationWatcherForHost(
     const navWatcher = new NavigationWatcher(
       transport,
       (event) => {
-        const body: Record<string, unknown> = {
+        const body: NavigateLickBody = {
           url: event.url,
           verb: event.verb,
           target: event.target,
@@ -725,6 +758,7 @@ function buildDiscoveryWatcherOptions(lickManager: LickManager): {
         discoveryOrigin: event.origin,
         discoveryKind: event.kind,
         discoveryUrl: event.url,
+        discoverySource: 'live-navigation',
         body: {
           origin: event.origin,
           kind: event.kind,
@@ -896,7 +930,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
 
   // 8. Expose lickManager on globalThis for the `crontask` / `webhook`
   //    shell commands. globalThis is identical in worker + page.
-  (globalThis as Record<string, unknown>).__slicc_lickManager = lickManager;
+  kernelHostGlobals().__slicc_lickManager = lickManager;
 
   // 8a-pre. browser.websocket subscriber registry. The registry owns
   //    the resolved sink dispatchers + the page-side CDP bridge so
@@ -912,7 +946,7 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
     sharedFs,
     log,
   });
-  (globalThis as Record<string, unknown>).__slicc_wsSubscribers = wsRegistry;
+  kernelHostGlobals().__slicc_wsSubscribers = wsRegistry;
 
   // 8a. /licks-ws bridge to the node-server. Only `node-rest` floats have a
   //     local node-server peer; extension-delegate / extension-direct route
@@ -1088,7 +1122,7 @@ export function releaseHostGlobals(refs: {
   browser?: BrowserAPI;
   wsRegistry?: unknown;
 }): void {
-  const g = globalThis as Record<string, unknown>;
+  const g = kernelHostGlobals();
   if (g.__slicc_pm === refs.processManager) delete g.__slicc_pm;
   if (g.__slicc_lickManager === refs.lickManager) delete g.__slicc_lickManager;
   if (refs.browser && g.__slicc_browser === refs.browser) delete g.__slicc_browser;

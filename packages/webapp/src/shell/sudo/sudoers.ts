@@ -46,6 +46,8 @@ export interface SudoersPolicy {
 export const SUDOERS_FILE = '/etc/sudoers';
 /** Directory of sudoers drop-ins (self-protected for writes). */
 export const SUDOERS_D_DIR = '/etc/sudoers.d';
+/** Discovery suppression policy (self-protected for writes). */
+export const LLMS_TXT_IGNORE_FILE = '/etc/llmstxtignore';
 
 /** Matches the canonical per-scoop sudoers path `/scoops/<folder>/etc/sudoers`. */
 const SCOOP_SUDOERS_RE = /^\/scoops\/[^/]+\/etc\/sudoers$/;
@@ -246,6 +248,7 @@ export function matchCommand(policy: SudoersPolicy, segment: string): MatchResul
 function isSelfProtectedWrite(normalized: string): boolean {
   return (
     normalized === SUDOERS_FILE ||
+    normalized === LLMS_TXT_IGNORE_FILE ||
     normalized === SUDOERS_D_DIR ||
     normalized.startsWith(`${SUDOERS_D_DIR}/`) ||
     SCOOP_SUDOERS_RE.test(normalized) ||
@@ -256,7 +259,7 @@ function isSelfProtectedWrite(normalized: string): boolean {
 
 /**
  * Match a read/write to `path` against the policy. Writes to `/etc/sudoers`,
- * anything under `/etc/sudoers.d/`, any per-scoop sudoers file
+ * `/etc/llmstxtignore`, anything under `/etc/sudoers.d/`, any per-scoop sudoers file
  * (`/scoops/<folder>/etc/sudoers`), or anything under `/etc/slicc/layouts/`
  * ALWAYS require approval, regardless of
  * configuration — `NOPASSWD` cannot override the invariant, even though a

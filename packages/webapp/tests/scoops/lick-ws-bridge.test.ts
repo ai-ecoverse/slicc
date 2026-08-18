@@ -947,6 +947,7 @@ describe('mapDiscoveryPayloadToLickEvent', () => {
       discoveryOrigin: 'https://example.com',
       discoveryKind: 'ai-catalog',
       discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      discoverySource: 'live-navigation',
       body: {
         origin: 'https://example.com',
         kind: 'ai-catalog',

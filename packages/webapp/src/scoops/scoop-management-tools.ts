@@ -923,14 +923,14 @@ function lickDismissTool(config: ScoopManagementToolsConfig): ToolDefinition {
   return {
     name: 'lick_dismiss',
     description:
-      'Dismiss (refuse) a pending actionable lick by its lick_id — currently a scoop sudo escalation raised via sudo_request. The scoop receives a deny decision and the sensitive action does NOT run.',
+      'Dismiss a pending actionable lick by its lick_id. For scoop sudo escalation this denies the sensitive action. For llms.txt discovery this requests human approval to append the advertising host to /etc/llmstxtignore; denial leaves the card pending.',
     inputSchema: {
       type: 'object',
       properties: {
         lick_id: {
           type: 'string',
           description:
-            'The id of the pending actionable lick (as delivered in the [sudo-request] notification). Use list_sudo_requests to see outstanding ids.',
+            'The id of the pending actionable lick (as delivered in a sudo-request or llms.txt discovery notification).',
         },
       },
       required: ['lick_id'],

@@ -76,6 +76,7 @@ function buildFollowerDiscoveryOptions(getSync: () => ForwardSync | null): {
         discoveryOrigin: event.origin,
         discoveryKind: event.kind,
         discoveryUrl: event.url,
+        discoverySource: 'live-navigation',
         body: {
           origin: event.origin,
           kind: event.kind,
@@ -100,6 +101,16 @@ function buildFollowerDiscoveryOptions(getSync: () => ForwardSync | null): {
  * `discovery` licks (ARD artifacts) to the leader via
  * `FollowerSyncManager.forwardLick`. Returns a stop function.
  */
+interface NavigateLickBody {
+  url: string;
+  verb: string;
+  target: string;
+  instruction?: string;
+  branch?: string;
+  path?: string;
+  title?: string;
+}
+
 export function startFollowerNavigateWatcher(
   transport: CDPTransport,
   getSync: () => ForwardSync | null
@@ -107,7 +118,7 @@ export function startFollowerNavigateWatcher(
   const watcher = new NavigationWatcher(
     transport,
     (event) => {
-      const body: Record<string, unknown> = {
+      const body: NavigateLickBody = {
         url: event.url,
         verb: event.verb,
         target: event.target,

@@ -418,6 +418,7 @@ export function mapDiscoveryPayloadToLickEvent(data: DiscoveryPayload): LickEven
     discoveryOrigin: origin,
     discoveryKind: kind,
     discoveryUrl: url,
+    discoverySource: 'live-navigation',
     targetScoop: undefined,
     timestamp: typeof data.timestamp === 'string' ? data.timestamp : new Date().toISOString(),
     body: { origin, kind, url, ...(pageUrl ? { pageUrl } : {}) },

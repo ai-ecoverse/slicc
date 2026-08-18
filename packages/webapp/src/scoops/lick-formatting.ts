@@ -239,12 +239,7 @@ function formatSudoRequestLick(event: LickEvent, label: string): FormattedLick {
   return { label, content: lines.join('\n') };
 }
 
-/**
- * Discovery lick. Informational only — no confirm/dismiss card. Tells the cone
- * which agentic-discovery artifact an origin advertised (an ARD
- * `ai-catalog.json` manifest or an `llms.txt` digest) and its absolute URL,
- * and notes that the cone MAY fetch and act on it if relevant to the task.
- */
+/** Discovery lick. llms.txt cards are dismiss-only; ai-catalog stays informational. */
 function formatDiscoveryLick(event: LickEvent, label: string): FormattedLick {
   const origin = event.discoveryOrigin ?? 'an origin';
   const url = event.discoveryUrl ?? '(unknown URL)';
@@ -252,13 +247,19 @@ function formatDiscoveryLick(event: LickEvent, label: string): FormattedLick {
     event.discoveryKind === 'llms-txt' ? 'an llms.txt digest' : 'an ai-catalog manifest';
   const kind = event.discoveryKind ?? 'unknown';
   const origPrefix = event.originLabel ? `_Forwarded from ${event.originLabel}._\n\n` : '';
+  const guidance =
+    event.discoveryKind === 'llms-txt' && event.lickId
+      ? `\n\nLick ID: ${event.lickId}\n` +
+        `This card is dismiss-only: call \`lick_dismiss\` to add the advertising host to ` +
+        `\`/etc/llmstxtignore\` (after user approval) and silence future discoveries. ` +
+        `There is NO confirm action.`
+      : `\nThis is informational — there is no card action.`;
   return {
     label,
     content:
       `${origPrefix}[${label}: ${url}]\n` +
-      `${origin} advertises ${artifact} (kind: ${kind}) at ${url}.\n` +
-      `This is informational — there is no card action. You MAY fetch it ` +
-      `(e.g. \`curl ${url}\`) and act on it if it's relevant to the current task; otherwise ignore it.`,
+      `${origin} advertises ${artifact} (kind: ${kind}) at ${url}.` +
+      `${guidance}\nYou MAY fetch it (e.g. \`curl ${url}\`) when relevant.`,
   };
 }
 

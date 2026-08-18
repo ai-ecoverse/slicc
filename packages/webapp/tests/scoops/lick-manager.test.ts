@@ -80,12 +80,53 @@ describe('LickManager forwarder dispatch', () => {
       discoveryOrigin: 'https://example.com',
       discoveryKind: 'ai-catalog',
       discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      discoverySource: 'live-navigation',
       timestamp: 't',
       body: {},
     });
     manager.emitEvent(discovery());
     manager.emitEvent(discovery());
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('suppresses ignored and archive-replayed discovery before dispatch', () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    manager.setDiscoveryIgnore((event) => event.discoveryOrigin === 'https://ignored.example');
+    manager.emitEvent({
+      type: 'discovery',
+      discoveryOrigin: 'https://ignored.example',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://ignored.example/llms.txt',
+      discoverySource: 'live-navigation',
+      timestamp: 't',
+      body: {},
+    });
+    manager.emitEvent({
+      type: 'discovery',
+      discoveryOrigin: 'https://archive.example',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://archive.example/llms.txt',
+      timestamp: 't',
+      body: { source: 'archived transcript' },
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('suppresses ignored discovery received through follower forwarding', () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    manager.setDiscoveryIgnore((event) => event.discoveryOrigin === 'https://ignored.example');
+    manager.handleForwardedEvent({
+      type: 'discovery',
+      discoveryOrigin: 'https://ignored.example',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://ignored.example/llms.txt',
+      discoverySource: 'live-navigation',
+      timestamp: 't',
+      body: {},
+    });
+    expect(handler).not.toHaveBeenCalled();
   });
 
   it('emitEvent forwards a discovery lick to the leader (forwardable) and skips the local handler', () => {
@@ -98,6 +139,7 @@ describe('LickManager forwarder dispatch', () => {
       discoveryOrigin: 'https://example.com',
       discoveryKind: 'llms-txt',
       discoveryUrl: 'https://example.com/llms.txt',
+      discoverySource: 'live-navigation',
       timestamp: 't',
       body: {},
     });

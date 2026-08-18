@@ -69,9 +69,18 @@ export const FORWARDABLE_TO_LEADER: ReadonlySet<LickEvent['type']> = new Set<Lic
  * instruction?, title? }`; we key on the payload identity, never the page
  * `url`. See {@link handoffFingerprint}.
  */
+interface NavigateFingerprintBody {
+  verb?: unknown;
+  target?: unknown;
+  branch?: unknown;
+  path?: unknown;
+  instruction?: unknown;
+  title?: unknown;
+}
+
 function navigateFingerprint(body: unknown): string | null {
   if (typeof body !== 'object' || body === null) return null;
-  const b = body as Record<string, unknown>;
+  const b = body as NavigateFingerprintBody;
   if (typeof b.verb !== 'string' || typeof b.target !== 'string') return null;
   return handoffFingerprint({
     verb: b.verb,
@@ -134,6 +143,8 @@ export class LickManager {
    * no-op while unset, preserving pre-injection behavior (tests / early boot).
    */
   private scoopResolver: ((scoopField: string) => boolean) | null = null;
+  /** Upstream policy gate for persistent llms.txt hostname suppression. */
+  private discoveryIgnore: ((event: LickEvent) => boolean) | null = null;
 
   /** Initialize - load from IndexedDB and start cron scheduler */
   async init(): Promise<void> {
@@ -172,6 +183,11 @@ export class LickManager {
    */
   setScoopExistenceResolver(resolver: ((scoopField: string) => boolean) | null): void {
     this.scoopResolver = resolver;
+  }
+
+  /** Install or clear the live discovery-ignore policy. */
+  setDiscoveryIgnore(resolver: ((event: LickEvent) => boolean) | null): void {
+    this.discoveryIgnore = resolver;
   }
 
   /** True when `scoopField` is set but resolves to no registered scoop. */
@@ -251,10 +267,17 @@ export class LickManager {
    * cron) routes through here so the forwarder gate is consistent.
    */
   private dispatch(event: LickEvent): void {
+    if (event.type === 'discovery' && this.shouldSuppressDiscovery(event)) return;
     if (this.forwarder && FORWARDABLE_TO_LEADER.has(event.type)) {
       this.forwarder(event);
       return;
     }
+    this.eventHandler?.(event);
+  }
+
+  /** Accept an already-forwarded event on the leader without forwarding it again. */
+  handleForwardedEvent(event: LickEvent): void {
+    if (event.type === 'discovery' && this.shouldSuppressDiscovery(event)) return;
     this.eventHandler?.(event);
   }
 
@@ -270,6 +293,7 @@ export class LickManager {
         this.seenNavigateFingerprints.add(fingerprint);
       }
     } else if (event.type === 'discovery') {
+      if (this.shouldSuppressDiscovery(event)) return;
       const fingerprint = discoveryEventFingerprint(event);
       if (fingerprint !== null) {
         if (this.seenDiscoveryFingerprints.has(fingerprint)) {
@@ -281,6 +305,18 @@ export class LickManager {
     }
     log.info('External lick event', { type: event.type, target: event.targetScoop });
     this.dispatch(event);
+  }
+
+  private shouldSuppressDiscovery(event: LickEvent): boolean {
+    if (event.discoverySource !== 'live-navigation') {
+      log.debug('Suppressing discovery without live-navigation provenance');
+      return true;
+    }
+    if (this.discoveryIgnore?.(event)) {
+      log.debug('Suppressing ignored llms.txt discovery', { origin: event.discoveryOrigin });
+      return true;
+    }
+    return false;
   }
 
   // ─── Webhooks ─────────────────────────────────────────────────────────────

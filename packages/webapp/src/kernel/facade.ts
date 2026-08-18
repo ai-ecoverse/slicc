@@ -58,6 +58,7 @@ const log = createLogger('kernel-bridge');
 interface FacadeLickManager {
   setForwarder(forwarder: ((event: ForwardedLickEvent) => void) | null): void;
   emitEvent(event: ForwardedLickEvent): void;
+  handleForwardedEvent(event: ForwardedLickEvent): void;
 }
 
 interface KernelFacadeGlobals {
@@ -1697,9 +1698,8 @@ export class Bridge implements KernelFacade {
   /**
    * Standalone leader: route a follower-forwarded lick into the
    * worker's LickManager (→ defaultLickEventHandler → cone).
-   * Re-emitting through emitEvent is TERMINAL here only because a
-   * leader never has a forwarder installed (see
-   * `handleSetFollowerForwarding`).
+   * Routed through the leader-side terminal handler so policy is checked
+   * again without risking a forwarding loop.
    */
   private handleInjectForwardedLick(event: ForwardedLickEvent): void {
     const lm = getKernelFacadeGlobals().__slicc_lickManager;
@@ -1710,7 +1710,7 @@ export class Bridge implements KernelFacade {
       );
       return;
     }
-    lm.emitEvent(event);
+    lm.handleForwardedEvent(event);
   }
 
   /** Proxy a panel terminal CDP command through the offscreen BrowserAPI. */
