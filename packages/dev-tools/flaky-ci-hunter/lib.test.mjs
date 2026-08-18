@@ -668,6 +668,34 @@ describe('extractFailureLines / localizeFlake', () => {
     expect(out.reason).toContain('nothing in common');
   });
 
+  it('refuses to localize a gate job whose only shared lines are Actions plumbing', () => {
+    // Verbatim from the first live run's digest: `CI / ci` is `if: always()` over
+    // `needs: [everything]`, so it flips whenever ANY child job flips and its
+    // shared "signature" names no failure mode. It scored 3 and was dispatched.
+    const plumbing = [
+      'echo "::error::One or more jobs failed or were cancelled"',
+      '##[error]One or more jobs failed or were cancelled',
+      '##[error]Process completed with exit code 1.',
+    ];
+    const out = localizeFlake([{ lines: plumbing }, { lines: plumbing }, { lines: plumbing }]);
+    expect(out.localized).toBe(false);
+    expect(out.reason).toMatch(/plumbing/i);
+    expect(out.reason).toMatch(/gate\/aggregator/i);
+    // The signature is still reported so the digest can show what was seen.
+    expect(out.signature).toContain('One or more jobs failed');
+  });
+
+  it('still localizes when a real failure line rides along with plumbing', () => {
+    const lines = [
+      '##[error]Process completed with exit code 1.',
+      'FAIL packages/webapp/tests/kernel/host.test.ts > boots',
+      'AssertionError: expected 3 to be 4',
+    ];
+    const out = localizeFlake([{ lines }, { lines }]);
+    expect(out.localized).toBe(true);
+    expect(out.signature).toContain('AssertionError');
+  });
+
   it('refuses to localize from fewer than two readable logs', () => {
     const out = localizeFlake([{ lines: ['FAIL tests/a.test.ts > alpha'] }]);
     expect(out.localized).toBe(false);

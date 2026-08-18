@@ -636,6 +636,14 @@ const INTERESTING_LINE =
   /(FAIL|✕|×|AssertionError|Error:|Timeout|expected|##\[error\]|EADDRINUSE|ECONNREFUSED)/i;
 
 /**
+ * Lines that are GitHub Actions telling you *that* something failed, never
+ * *what* failed. Kept in an excerpt as context, but a signature made of nothing
+ * else has localized nothing — see {@link localizeFlake}.
+ */
+const PLUMBING_LINE =
+  /^(##\[error\])?\s*(one or more jobs failed|process completed with exit code|the (job|operation) was canceled|the run was canceled|echo "::error|::error::one or more jobs)/i;
+
+/**
  * Pull the interesting lines out of a job log: strip ANSI and the per-line
  * timestamp Actions prefixes, keep failure-ish lines, drop duplicates.
  * @param {string} logText
@@ -700,6 +708,19 @@ export function localizeFlake(excerpts = []) {
       localized: false,
       signature: '',
       reason: `Read ${usable.length} flip logs and found no shared failure line — the flips have nothing in common, so this is not one fixable flake.`,
+    };
+  }
+  // A signature made only of Actions plumbing names no failure mode. This is
+  // what an aggregator/gate job looks like: `CI / ci` in this repo is
+  // `if: always()` over `needs: [everything]`, so it "flakes" whenever any
+  // child job does and its shared lines are just "One or more jobs failed".
+  // Dispatching a fixer at that sends the model after a phantom. A mirror of
+  // other jobs' flakiness belongs in the digest, not in a pull request.
+  if (common.every((line) => PLUMBING_LINE.test(line))) {
+    return {
+      localized: false,
+      signature: common.slice(0, 5).join('\n'),
+      reason: `The only lines shared by ${usable.length} flips are GitHub Actions plumbing ("job failed", "exit code"), naming no failure mode. This is what a gate/aggregator job looks like — it mirrors other jobs' flakiness rather than having its own.`,
     };
   }
   return {

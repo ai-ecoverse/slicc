@@ -85,8 +85,27 @@ release/publish/deploy job, is below `FLAKE_THRESHOLD`, has hit
 `MAX_ATTEMPTS_PER_JOB`, is inside `COOLDOWN_DAYS`, already has an open fix PR, is
 fully explained by known-mitigated infrastructure (npm-registry IPv6 — already
 mitigated by `NODE_OPTIONS: --dns-result-order=ipv4first` in `ci.yml`, which
-removed ~79% of observed flakes — artifact transport, runner outage), or has no
-failure signature common to two of its flips.
+removed ~79% of observed flakes — artifact transport, runner outage), has no
+failure signature common to two of its flips, or has a signature made of
+**nothing but Actions plumbing**.
+
+That last filter is what excludes gate jobs, and it was added because the first
+live run tripped over one. `CI / ci` is `if: always()` over `needs:
+[everything]`: it fails whenever any child job fails, so it flips whenever any
+child flips, and it scored 3 on a "common signature" of
+
+```
+##[error]One or more jobs failed or were cancelled
+##[error]Process completed with exit code 1.
+```
+
+which names no failure mode at all. An aggregator has no nondeterminism of its
+own — it mirrors everyone else's — so a fixer sent at it chases a phantom.
+Rather than pattern-match job names (plenty of repos have a real job called
+`ci`), `localizeFlake` requires the shared signature to contain at least one
+line that is not Actions plumbing. That generalizes: whenever we cannot see a
+real error line, we do not dispatch, and the job lands in the digest as "not
+localized" instead.
 
 The dispatch brief bans the fixes this repo has already ruled out in
 [`.agents/skills/writing-slicc-tests/SKILL.md`](../../../.agents/skills/writing-slicc-tests/SKILL.md)
