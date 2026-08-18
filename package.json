@@ -104,7 +104,7 @@
     "e2b": "^2.35.0",
     "express": "^5.0.0",
     "pyodide": "314.0.4",
-    "werift": "0.24.3",
+    "werift": "0.24.4",
     "ws": "^8.18.0"
   },
   "devDependencies": {
