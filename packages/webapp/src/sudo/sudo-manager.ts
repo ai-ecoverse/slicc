@@ -245,8 +245,8 @@ export class SudoManager {
         const raw = await this.fs.readFile(path, { encoding: 'utf-8' });
         existing = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
       }
-    } catch {
-      existing = '';
+    } catch (err) {
+      if (!(err instanceof FsError && err.code === 'ENOENT')) throw err;
     }
     try {
       await this.fs.mkdir(`/scoops/${folder}/etc`, { recursive: true });

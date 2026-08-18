@@ -10,6 +10,7 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { FsWatcher } from '../../src/fs/fs-watcher.js';
 import { VirtualFS } from '../../src/fs/index.js';
+import { FsError } from '../../src/fs/types.js';
 import {
   matchCommand,
   matchPath,
@@ -415,6 +416,26 @@ describe('SudoManager per-scoop policy view', () => {
     expect(matchCommand(mgr.getPolicyForScoop('andy'), 'git push origin main')).toBe(
       'nopasswd-allow'
     );
+    mgr.dispose();
+  });
+
+  it('appendScoopRule preserves existing grants when reading the policy fails', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    await mgr.seedScoopSudoers('andy', { allowedCommands: ['git'] });
+    const path = scoopSudoersPath('andy');
+    const before = (await vfs.readFile(path, { encoding: 'utf-8' })) as string;
+    const readFile = vi
+      .spyOn(vfs, 'readFile')
+      .mockRejectedValueOnce(new FsError('EIO', 'transient read failure', path));
+
+    await expect(mgr.appendScoopRule('andy', 'read', '/recordings/**')).rejects.toThrow(
+      'transient read failure'
+    );
+
+    readFile.mockRestore();
+    expect(await vfs.readFile(path, { encoding: 'utf-8' })).toBe(before);
+    expect(matchCommand(mgr.getPolicyForScoop('andy'), 'git status')).toBe('nopasswd-allow');
     mgr.dispose();
   });
 
