@@ -92,15 +92,14 @@ export const DECIDED_LABELS = [
  * Labels whose presence says a human has already routed the issue somewhere
  * other than "implement this": a question, a rejected ask, or work explicitly
  * reserved for an outside contributor.
+ *
+ * `skill issue` is deliberately NOT here, however much it sounds like one.
+ * `.github/workflows/issue-skill.yml` applies it to EVERY issue on `opened`, as
+ * a joke — so in this repository it means "an issue exists", not "user error".
+ * Denying it silently disabled this whole dispatcher: 14 of 17 open items
+ * carried it, and every future issue is born with it.
  */
-export const DENYLIST_LABELS = [
-  'question',
-  'wontfix',
-  'invalid',
-  'duplicate',
-  'skill issue',
-  'help wanted',
-];
+export const DENYLIST_LABELS = ['question', 'wontfix', 'invalid', 'duplicate', 'help wanted'];
 
 /** Colour + description used when bootstrapping labels (`gh label create --force`). */
 export const LABEL_META = {

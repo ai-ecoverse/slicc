@@ -135,6 +135,16 @@ describe('screenIssue', () => {
     }
   });
 
+  it('does NOT deny "skill issue", which this repo applies to every new issue', () => {
+    // `.github/workflows/issue-skill.yml` labels EVERY issue on `opened` as a
+    // joke, so denying it disables the dispatcher outright — 14 of 17 open items
+    // carried it when this was caught on the first live run.
+    expect(DENYLIST_LABELS).not.toContain('skill issue');
+    expect(screenIssue(issue({ labels: [{ name: 'skill issue' }] }), { now: NOW })).toMatchObject({
+      eligible: true,
+    });
+  });
+
   it('rejects an issue this dispatcher already decided', () => {
     for (const label of [LABELS.ready, LABELS.dispatched, LABELS.skipped, LABELS.failed]) {
       expect(screenIssue(issue({ labels: [{ name: label }] }), { now: NOW }).code).toBe(

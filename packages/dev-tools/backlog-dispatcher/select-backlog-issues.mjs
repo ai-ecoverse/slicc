@@ -164,6 +164,26 @@ function reportCandidates(selection) {
       `  … ${selection.truncated} more over the cap of ${CONFIG.MAX_CANDIDATES_PER_SOURCE}`
     );
   }
+  reportRejections(selection.rejected);
+}
+
+/**
+ * Say why every screened-out issue was screened out. "0 candidates" is this
+ * workflow's most common healthy outcome, so without the reasons a correct
+ * quiet tick and a broken selector look identical in the log — which is exactly
+ * how the `skill issue` denylist entry hid for a whole review cycle. The
+ * siblings (pr-fix-dispatcher, boy-scout-debt) both log per-item verdicts.
+ */
+function reportRejections(rejected = []) {
+  if (rejected.length === 0) return;
+  const byCode = new Map();
+  for (const r of rejected) byCode.set(r.code, [...(byCode.get(r.code) ?? []), r]);
+  console.log(`${SCRIPT}: screened out ${rejected.length} issue(s):`);
+  for (const [code, group] of [...byCode.entries()].sort((a, b) => b[1].length - a[1].length)) {
+    const numbers = group.map((r) => `#${r.number}`).join(' ');
+    console.log(`  - ${code} (${group.length}): ${numbers}`);
+    console.log(`      ${group[0].reason}`);
+  }
 }
 
 /** The candidate payload phase 1 reads. Bodies are kept — Claude needs the brief. */
