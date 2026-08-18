@@ -82,6 +82,16 @@ describe('orchestrator boot-progress heartbeat (#2007)', () => {
     expect(stages).toContain('scoop-restored:scoop_bp_1');
   });
 
+  it('emits the shared-fs mount start beat (2026-08-18 cold-boot brick)', async () => {
+    const container = { appendChild: () => {} } as unknown as HTMLElement;
+    orch = new Orchestrator(container, noopCallbacks());
+    const stages: string[] = [];
+    await orch.init((stage) => stages.push(stage));
+    // The mount phase is the boot's silent O(tree) stretch — the heartbeat
+    // must announce it so the kernel-ready watchdog re-arms (#2007).
+    expect(stages).toContain('shared-fs-mount:start');
+  });
+
   it('is optional — init() with no callback still boots', async () => {
     await saveScoop(scoop('cone_bp_2', true));
     const container = { appendChild: () => {} } as unknown as HTMLElement;
