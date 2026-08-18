@@ -129,6 +129,45 @@ describe('LickManager forwarder dispatch', () => {
     expect(handler).not.toHaveBeenCalled();
   });
 
+  it('handleForwardedEvent suppresses a repeated discovery forward with the same artifact identity', () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    const discovery = (): LickEvent => ({
+      type: 'discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://example.com/llms.txt',
+      discoverySource: 'live-navigation',
+      timestamp: 't',
+      body: {},
+    });
+    manager.handleForwardedEvent(discovery());
+    manager.handleForwardedEvent(discovery());
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('handleForwardedEvent suppresses a repeated navigate forward with the same payload', () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    const handoff = (): LickEvent => ({
+      type: 'navigate',
+      navigateUrl: 'https://www.sliccy.ai/handoff',
+      timestamp: 't',
+      body: { verb: 'handoff', target: 'do the thing' },
+    });
+    manager.handleForwardedEvent(handoff());
+    manager.handleForwardedEvent(handoff());
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('handleForwardedEvent lets an unfingerprintable navigate forward through every time', () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    manager.handleForwardedEvent(navEvent());
+    manager.handleForwardedEvent(navEvent());
+    expect(handler).toHaveBeenCalledTimes(2);
+  });
+
   it('emitEvent forwards a discovery lick to the leader (forwardable) and skips the local handler', () => {
     const handler = vi.fn();
     const forwarder = vi.fn();

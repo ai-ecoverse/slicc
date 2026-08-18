@@ -106,7 +106,7 @@ Two vectors run on every top-level document navigation (never subresources):
 - **Header** — a `Link: …; rel="ai-catalog"` (ARD / Agentic Resource Discovery) response header. Reuses the same parser/observer plumbing as `handoff`/`upskill`.
 - **Well-known probe** — a background `GET` of `/.well-known/ai-catalog.json` and `/llms.txt`, at most once per origin per session (deduped + timed out + `.catch`ed). Routed through `createProxiedFetch()` (CLI) / the SW's `host_permissions` fetch (extension) so it inherits CORS bypass.
 
-Wiring: CLI/Electron/hosted-leader via `NavigationWatcher` (`packages/webapp/src/cdp/navigation-watcher.ts`); the extension via `createDiscoveryObserver` in `service-worker.ts`; followers forward `discovery` licks to the leader. Only live top-level navigation carries valid discovery provenance, and restricted sub-agents without browsing commands do not receive these licks.
+Wiring: CLI/Electron/hosted-leader via `NavigationWatcher` (`packages/webapp/src/cdp/navigation-watcher.ts`); the extension via `createDiscoveryObserver` in `service-worker.ts`; followers forward `discovery` licks to the leader. Only live top-level navigation carries valid discovery provenance, and restricted sub-agents without browsing commands do not receive these licks. Forwarders re-send an advertisement on every navigation, so the leader fingerprints `discovery` (and `navigate`) licks on the receiving side too — `LickManager.handleForwardedEvent` dedupes on artifact identity exactly like `emitEvent`.
 
 ### `/etc/llmstxtignore`
 

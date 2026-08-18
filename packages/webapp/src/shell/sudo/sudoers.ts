@@ -46,6 +46,7 @@ export interface SudoersPolicy {
 export const SUDOERS_FILE = '/etc/sudoers';
 /** Directory of sudoers drop-ins (self-protected for writes). */
 export const SUDOERS_D_DIR = '/etc/sudoers.d';
+
 /** Matches the canonical per-scoop sudoers path `/scoops/<folder>/etc/sudoers`. */
 const SCOOP_SUDOERS_RE = /^\/scoops\/[^/]+\/etc\/sudoers$/;
 

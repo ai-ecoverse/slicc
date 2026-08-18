@@ -275,36 +275,55 @@ export class LickManager {
     this.eventHandler?.(event);
   }
 
-  /** Accept an already-forwarded event on the leader without forwarding it again. */
+  /**
+   * Accept an already-forwarded event on the leader without forwarding it
+   * again. Deduplication runs here too: the extension service worker and tray
+   * followers forward every handoff / discovery they observe and rely on
+   * receiver-side fingerprinting, so without this a repeated main-frame
+   * response would mint another card and wake the cone again.
+   */
   handleForwardedEvent(event: LickEvent): void {
     if (event.type === 'discovery' && this.shouldSuppressDiscovery(event)) return;
+    if (this.isDuplicateFingerprint(event)) return;
     this.eventHandler?.(event);
   }
 
   /** Emit an externally-generated lick event (e.g., from fswatch). */
   emitEvent(event: LickEvent): void {
-    if (event.type === 'navigate') {
-      const fingerprint = navigateFingerprint(event.body);
-      if (fingerprint !== null) {
-        if (this.seenNavigateFingerprints.has(fingerprint)) {
-          log.debug('Suppressing duplicate navigate lick', { fingerprint });
-          return;
-        }
-        this.seenNavigateFingerprints.add(fingerprint);
-      }
-    } else if (event.type === 'discovery') {
-      if (this.shouldSuppressDiscovery(event)) return;
-      const fingerprint = discoveryEventFingerprint(event);
-      if (fingerprint !== null) {
-        if (this.seenDiscoveryFingerprints.has(fingerprint)) {
-          log.debug('Suppressing duplicate discovery lick', { fingerprint });
-          return;
-        }
-        this.seenDiscoveryFingerprints.add(fingerprint);
-      }
-    }
+    if (event.type === 'discovery' && this.shouldSuppressDiscovery(event)) return;
+    if (this.isDuplicateFingerprint(event)) return;
     log.info('External lick event', { type: event.type, target: event.targetScoop });
     this.dispatch(event);
+  }
+
+  /**
+   * Record `event`'s payload fingerprint, returning `true` when an identical
+   * payload was already seen this session (caller must drop it). Types without
+   * a fingerprint, and payloads missing the structured fields, are always let
+   * through. Shared by {@link emitEvent} and {@link handleForwardedEvent}.
+   */
+  private isDuplicateFingerprint(event: LickEvent): boolean {
+    let fingerprint: string | null = null;
+    let seen: Set<string>;
+    let label: string;
+    if (event.type === 'navigate') {
+      fingerprint = navigateFingerprint(event.body);
+      seen = this.seenNavigateFingerprints;
+      label = 'navigate';
+    } else if (event.type === 'discovery') {
+      fingerprint = discoveryEventFingerprint(event);
+      seen = this.seenDiscoveryFingerprints;
+      label = 'discovery';
+    } else {
+      return false;
+    }
+    if (fingerprint === null) return false;
+    if (seen.has(fingerprint)) {
+      log.debug(`Suppressing duplicate ${label} lick`, { fingerprint });
+      return true;
+    }
+    seen.add(fingerprint);
+    return false;
   }
 
   private shouldSuppressDiscovery(event: LickEvent): boolean {
