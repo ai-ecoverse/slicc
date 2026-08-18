@@ -74,6 +74,13 @@ jobs:
     permissions:
       contents: read
       pull-requests: write # ci-fix-* labels + the skip/dispatch marker comments
+      # Repo-level label CREATION (`gh label create`) goes through
+      # POST /repos/{repo}/labels, which is gated on `issues`, not
+      # `pull-requests` — applying an existing label to a PR is the part
+      # pull-requests covers. Without this the bootstrap step below fails before
+      # the scanner runs. Same reason rum-error-triage.yml /
+      # agentic-debt-triage.yml both carry issues: write.
+      issues: write
       actions: write # POST /actions/runs/{id}/rerun-failed-jobs
       checks: read # read the head SHA's check-runs
     outputs:

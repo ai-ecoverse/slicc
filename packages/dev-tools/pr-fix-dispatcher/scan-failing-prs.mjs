@@ -72,8 +72,8 @@ function requireEnv(name) {
 const REPO = requireEnv('REPO');
 const TOKEN = requireEnv('GH_TOKEN');
 
-/** GitHub REST request. Throws a one-line error on a non-OK response. */
-async function gh(method, path, { body, raw = false, tolerate = [] } = {}) {
+/** Low-level GitHub REST call. Throws a one-line error on an untolerated non-OK response. */
+async function request(method, path, { body, tolerate = [] } = {}) {
   const res = await fetch(`${API}${path}`, {
     method,
     headers: {
@@ -85,8 +85,7 @@ async function gh(method, path, { body, raw = false, tolerate = [] } = {}) {
     },
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
-  if (!res.ok) {
-    if (tolerate.includes(res.status)) return null;
+  if (!res.ok && !tolerate.includes(res.status)) {
     const text = await res.text().catch(() => '');
     // Collapse the body onto one line: the top-level handler prints only the
     // first line of the message and GitHub's error JSON is multi-line, so a raw
@@ -94,9 +93,32 @@ async function gh(method, path, { body, raw = false, tolerate = [] } = {}) {
     const detail = text.replace(/\s+/g, ' ').trim().slice(0, 200);
     throw new Error(`${method} ${path} → ${res.status} ${res.statusText} ${detail}`);
   }
-  if (raw) return res.text();
-  if (res.status === 204) return null;
-  return res.json();
+  return res;
+}
+
+/**
+ * Read request returning parsed JSON, or `null` for a tolerated failure. An
+ * empty body also yields `null`: `res.json()` throws "Unexpected end of JSON
+ * input" on one, and GitHub legitimately answers some calls with no body at all.
+ */
+async function gh(method, path, opts = {}) {
+  const res = await request(method, path, opts);
+  if (!res.ok) return null;
+  if (opts.raw) return res.text();
+  const text = await res.text();
+  return text.trim() === '' ? null : JSON.parse(text);
+}
+
+/**
+ * Write request that reports only whether GitHub accepted it, and never parses a
+ * body. `rerun-failed-jobs` answers **201 with an empty body**, so parsing it
+ * would throw *after* the re-run had already been triggered — killing the scan
+ * before it emitted its queue. Returns false for a tolerated status (403 = run
+ * too old, 409 = already re-running, 404 = label not present).
+ */
+async function ghWrite(method, path, opts = {}) {
+  const res = await request(method, path, opts);
+  return res.ok;
 }
 
 const ghGet = (path, opts) => gh('GET', path, opts);
@@ -224,7 +246,7 @@ async function countOpenFixes() {
 
 async function addLabel(number, label) {
   if (DRY_RUN) return;
-  await gh('POST', `/repos/${REPO}/issues/${number}/labels`, { body: { labels: [label] } });
+  await ghWrite('POST', `/repos/${REPO}/issues/${number}/labels`, { body: { labels: [label] } });
 }
 
 /**
@@ -236,14 +258,14 @@ async function addLabel(number, label) {
  */
 async function removeLabel(number, label) {
   if (DRY_RUN) return;
-  await gh('DELETE', `/repos/${REPO}/issues/${number}/labels/${encodeURIComponent(label)}`, {
+  await ghWrite('DELETE', `/repos/${REPO}/issues/${number}/labels/${encodeURIComponent(label)}`, {
     tolerate: [404],
   });
 }
 
 async function postComment(number, body) {
   if (DRY_RUN) return;
-  await gh('POST', `/repos/${REPO}/issues/${number}/comments`, { body: { body } });
+  await ghWrite('POST', `/repos/${REPO}/issues/${number}/comments`, { body: { body } });
 }
 
 /** Re-run only the failed jobs of every failed run for this SHA. */
@@ -258,10 +280,12 @@ async function rerunFailedJobs(sha, runs) {
       continue;
     }
     // 403 = run too old to re-run, 409 = already re-running. Both are fine.
-    const res = await gh('POST', `/repos/${REPO}/actions/runs/${run.id}/rerun-failed-jobs`, {
-      tolerate: [403, 409, 404],
-    });
-    if (res !== null) rerun += 1;
+    const accepted = await ghWrite(
+      'POST',
+      `/repos/${REPO}/actions/runs/${run.id}/rerun-failed-jobs`,
+      { tolerate: [403, 409, 404] }
+    );
+    if (accepted) rerun += 1;
   }
   return { attempted: failed.length, rerun };
 }

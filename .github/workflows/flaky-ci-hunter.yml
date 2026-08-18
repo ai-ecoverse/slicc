@@ -65,6 +65,11 @@ concurrency:
 permissions:
   contents: write # the fixer pushes its automation/flaky-fix/<slug> branch
   pull-requests: write # the fixer opens exactly one PR
+  # `gh label create flaky-fix` is POST /repos/{repo}/labels, which is gated on
+  # `issues` rather than `pull-requests` (that one covers applying an existing
+  # label to a PR). Without this the label step fails before Claude runs. Same
+  # reason rum-error-triage.yml / agentic-debt-triage.yml carry issues: write.
+  issues: write
   actions: read # workflow runs, attempts, jobs, and job logs
   id-token: write # claude-code-action fetches an OIDC token during GitHub token setup
 
