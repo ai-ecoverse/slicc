@@ -132,9 +132,9 @@
   },
   "swift": {
     "swift-server": {
-      "lines": 62,
-      "functions": 61,
-      "regions": 60
+      "lines": 63,
+      "functions": 62,
+      "regions": 61
     },
     "swift-launcher": {
       "lines": 41,
