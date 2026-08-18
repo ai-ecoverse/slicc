@@ -1,18 +1,15 @@
 // packages/webapp/src/scoops/structured-output-tool.ts
 import type { ToolDefinition, ToolInputSchema } from '../tools/types.js';
 
-/**
- * A JSON Schema object describing the structured-output tool's accepted
- * arguments. It is arbitrary user-supplied JSON Schema (e.g. decoded from the
- * `agent --schema-b64` flag), so its members are open; the tool forwards it
- * verbatim as the `inputSchema` the agent must satisfy.
- */
-export interface StructuredOutputSchema {
-  [key: string]: unknown;
-}
-
 export function createStructuredOutputTool(
-  schema: StructuredOutputSchema,
+  // Arbitrary user-supplied JSON Schema, decoded from `agent --schema-b64` and
+  // never validated on the way in — the caller,
+  // `ScoopConfig.structuredOutputSchema`, is equally open. Naming a shape here
+  // would assert one this value has never been checked against; it is forwarded
+  // verbatim as the agent's `inputSchema`. The real fix is to validate it where
+  // it is decoded, which changes behaviour and belongs in its own change.
+  // biome-ignore lint/plugin: unvalidated external JSON Schema — see above.
+  schema: Record<string, unknown>,
   onCapture: (v: unknown) => void
 ): ToolDefinition {
   return {
