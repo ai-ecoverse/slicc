@@ -5,7 +5,6 @@
   "packages/chrome-extension/src/bridge-sw.ts": 17,
   "packages/chrome-extension/src/secrets-storage.ts": 3,
   "packages/cloud-core/src/cone-config/index.ts": 6,
-  "packages/cloud-core/src/errors.ts": 1,
   "packages/cloudflare-worker/src/cloud/handlers.ts": 1,
   "packages/cloudflare-worker/src/flags.ts": 2,
   "packages/cloudflare-worker/src/index.ts": 3,

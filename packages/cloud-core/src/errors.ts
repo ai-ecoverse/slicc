@@ -18,11 +18,29 @@ export type CloudErrorCode =
   | 'UPSTREAM_UNAVAILABLE'
   | 'INTERNAL';
 
+/**
+ * Optional machine-readable diagnostics attached to a {@link CloudError}.
+ * Each field is populated only for the codes it makes sense for: `running`/`cap`
+ * and `paused`/`cap` accompany `CAP_EXCEEDED`, and `sandboxId` accompanies
+ * `SANDBOX_NOT_READY`. Consumers read these to surface actionable detail (the
+ * worker forwards them into its HTTP error envelope).
+ */
+export interface CloudErrorDetails {
+  /** Number of running cones at the time a running-cap `CAP_EXCEEDED` was thrown. */
+  running?: number;
+  /** Number of paused cones at the time a paused-cap `CAP_EXCEEDED` was thrown. */
+  paused?: number;
+  /** The cap that was hit, for a `CAP_EXCEEDED` error. */
+  cap?: number;
+  /** The sandbox whose boot failed, for a `SANDBOX_NOT_READY` error. */
+  sandboxId?: string;
+}
+
 export class CloudError extends Error {
   constructor(
     public readonly code: CloudErrorCode,
     message: string,
-    public readonly details?: Record<string, unknown>
+    public readonly details?: CloudErrorDetails
   ) {
     super(message);
     this.name = 'CloudError';
