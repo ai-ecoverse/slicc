@@ -86,7 +86,6 @@
   "packages/webapp/src/scoops/agent-bridge.ts": 3,
   "packages/webapp/src/scoops/onboarding-orchestrator.ts": 1,
   "packages/webapp/src/scoops/sprinkle-manager-proxy.ts": 1,
-  "packages/webapp/src/scoops/structured-output-tool.ts": 1,
   "packages/webapp/src/scoops/transcript-limits.ts": 2,
   "packages/webapp/src/scoops/tray-follower-sync.ts": 2,
   "packages/webapp/src/scoops/tray-follower.ts": 5,
