@@ -90,7 +90,8 @@ async function main(): Promise<void> {
     // No UI is bundled: node-server is a thin /cdp bridge + /api surface in
     // every mode, so the hosted leader's Chromium loads the webapp from the
     // hosted origin (sliccy.ai) rather than from a locally-served bundle.
-    // Tiny package.json listing the runtime deps (express, ws, e2b, electron).
+    // Tiny package.json listing the runtime deps (kept in sync with
+    // node-server's third-party value-imports by the e2b-runtime-deps test).
     // `npm install` populates /opt/slicc/node_modules; Node walks up from
     // /opt/slicc/node-server/ and resolves them.
     .copy('packages/dev-tools/e2b-template/runtime-package.json', '/opt/slicc/package.json')
