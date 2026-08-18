@@ -48,6 +48,13 @@ attempt cap is spent, this SHA was already dispatched or already skipped, or the
 PR carries `patched-dependency` / `formatter-bump` (the
 `renovate-*-reconcile.yml` workflows self-heal those and acting would race them).
 
+A PR whose head branch lives in a **fork** (or whose fork has since been
+deleted) is refused here too. The fix job checks out the bare `head.ref` in this
+repository, so a fork PR either fails on a missing branch or — if a branch of
+the same name happens to exist here — edits and pushes the wrong one. The refusal
+has to happen at this gate, before the dispatch label and SHA marker are written,
+since those would block any later attempt.
+
 ## Backpressure
 
 | Knob                     | Value | Meaning                                                  |

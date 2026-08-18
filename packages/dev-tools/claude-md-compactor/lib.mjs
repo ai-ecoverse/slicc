@@ -117,6 +117,39 @@ export function selectOversized(measurements) {
   return measurements.filter((m) => m.oversized).sort((a, b) => b.chars - a.chars);
 }
 
+/**
+ * The guides that were handed to Claude but came back above the compaction
+ * TARGET. Checking survivors against the max only proves they left the
+ * oversized band; the brief promises a rewrite to at most `targetChars`, and a
+ * guide parked just under the max would be re-selected next week for nothing.
+ * The worklist has to be carried from the measuring run, because after a
+ * successful rewrite the paths no longer look oversized.
+ * @param {Array<{path: string, chars: number}>} measurements
+ * @param {{worklist?: Array<string>, targetChars: number}} opts
+ * @returns {Array<{path: string, chars: number}>} above target, biggest first
+ */
+export function selectAboveTarget(measurements = [], opts = {}) {
+  const { worklist = [], targetChars } = opts;
+  const wanted = new Set(worklist.filter(Boolean));
+  if (wanted.size === 0) return [];
+  return measurements
+    .filter((m) => wanted.has(m.path) && m.chars > targetChars)
+    .sort((a, b) => b.chars - a.chars);
+}
+
+/**
+ * Parse the worklist an earlier step emitted. Tolerates commas, newlines, and
+ * stray whitespace so the workflow can pass it through a step output.
+ * @param {string|undefined} raw
+ * @returns {Array<string>}
+ */
+export function parseWorklist(raw) {
+  return String(raw ?? '')
+    .split(/[,\n]/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+}
+
 /** Group-separator formatting for readability in the table (10012 → 10,012). */
 function withSeparators(n) {
   return n.toLocaleString('en-US');

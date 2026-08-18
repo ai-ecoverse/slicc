@@ -445,6 +445,30 @@ function minutesSince(then, now) {
 }
 
 /**
+ * Why this PR's head branch is unreachable, or `null` when it is a branch in
+ * this repository.
+ *
+ * The fix job checks out the bare `head.ref` in THIS repository, so a fork PR
+ * either fails on a missing branch or — worse, if a same-named branch exists
+ * here — edits and pushes the wrong one. It has to be refused before the
+ * dispatch label and SHA marker are written, because those block any retry.
+ *
+ * `head.repo` is null when the fork has been deleted. A fixture that never
+ * mentions a head repo is "not stated", which is not evidence of a fork.
+ * @param {object} pr nested (`head.repo.full_name`) or flattened (`headRepo`)
+ * @param {string} [repo] the base repository, `owner/name`
+ * @returns {string|null}
+ */
+function describeForeignHead(pr, repo) {
+  const stated = (pr.head != null && 'repo' in pr.head) || 'headRepo' in pr;
+  if (!stated) return null;
+  const headRepo = pr.head?.repo?.full_name ?? pr.headRepo ?? null;
+  const baseRepo = repo ?? pr.base?.repo?.full_name ?? null;
+  if (headRepo !== null && (!baseRepo || headRepo === baseRepo)) return null;
+  return `Head branch lives in ${headRepo ?? 'a deleted fork'}, not ${baseRepo ?? 'this repository'} — the fixer can only push to branches in this repository.`;
+}
+
+/**
  * The Step-4 gate: everything that drops a PR silently (no label, no comment)
  * before the rubric is consulted. Returns `null` when the PR reaches the rubric.
  * Exported so the scanner can avoid fetching job logs for PRs that are already
@@ -470,6 +494,9 @@ export function screenPr(input = {}) {
       'Not a routine automation PR (author is human and head branch has no automation prefix).'
     );
   }
+
+  const foreignHead = describeForeignHead(pr, input.repo);
+  if (foreignHead) return drop(foreignHead);
   const failing = Array.isArray(checks.failing) ? checks.failing : [];
   if (failing.length === 0) {
     return drop(checks.pending ? 'Checks are still running.' : 'CI is green.');

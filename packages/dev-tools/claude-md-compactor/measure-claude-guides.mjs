@@ -16,7 +16,8 @@ import { execFileSync } from 'node:child_process';
  *              table to $GITHUB_STEP_SUMMARY. Always exits 0 when measurement
  *              succeeds, including the clean no-op.
  *   --check    Measure only and FAIL (exit 1) if any tracked guide is still at
- *              or above MAX_CHARS. This is the post-compaction invariant, run
+ *              or above MAX_CHARS, or if any guide named in WORKLIST is above
+ *              TARGET_CHARS. This is the post-compaction invariant, run
  *              deterministically by the workflow instead of trusted to the
  *              model. No GitHub API access, no outputs beyond the summary.
  *
@@ -29,6 +30,10 @@ import { execFileSync } from 'node:child_process';
  *   GH_TOKEN       token for the GitHub API — same condition as REPO
  *   MAX_CHARS      override the 10,000-char oversized threshold  (optional)
  *   TARGET_CHARS   override the 9,500-char compaction target     (optional)
+ *   WORKLIST       --check only: comma/newline-separated guide paths that were
+ *                  handed to Claude, held to TARGET_CHARS instead of MAX_CHARS.
+ *                  Emitted as the `worklist` output by the measuring run, since
+ *                  a rewritten guide no longer looks oversized.
  *   SKIP_PR_CHECK  '1' to skip the open-PR dedup query (offline runs)
  *   GITHUB_OUTPUT / GITHUB_STEP_SUMMARY  Actions files, written when present
  *
@@ -47,6 +52,8 @@ import {
   findExistingCompactionPr,
   formatReport,
   measureGuides,
+  parseWorklist,
+  selectAboveTarget,
   selectOversized,
 } from './lib.mjs';
 
@@ -146,16 +153,33 @@ async function main() {
 
   if (check) {
     writeSummary(`## CLAUDE.md size check\n\n${report}`);
-    if (oversized.length > 0) {
-      for (const m of oversized) {
-        console.error(
-          `::error file=${m.path}::${m.path} is ${m.chars} chars, policy limit ${maxChars}.`
-        );
-      }
-      console.error(`❌ ${oversized.length} guide(s) still at or above ${maxChars} chars.`);
+    // Two invariants: every guide must be under the max, and the ones Claude was
+    // actually asked to rewrite must have reached the target it was given.
+    const worklist = parseWorklist(process.env.WORKLIST);
+    const missedTarget = selectAboveTarget(measurements, { worklist, targetChars });
+    for (const m of oversized) {
+      console.error(
+        `::error file=${m.path}::${m.path} is ${m.chars} chars, policy limit ${maxChars}.`
+      );
+    }
+    for (const m of missedTarget) {
+      console.error(
+        `::error file=${m.path}::${m.path} is ${m.chars} chars; it was selected for compaction to at most ${targetChars}.`
+      );
+    }
+    if (oversized.length > 0 || missedTarget.length > 0) {
+      console.error(
+        `❌ ${oversized.length} guide(s) at or above ${maxChars} chars; ${missedTarget.length} selected guide(s) above the ${targetChars}-char target.`
+      );
       process.exit(1);
     }
-    console.log(`✅ All ${measurements.length} tracked guides are below ${maxChars} chars.`);
+    const scope =
+      worklist.length > 0
+        ? ` and ${worklist.length} rewritten guide(s) at or below ${targetChars}`
+        : '';
+    console.log(
+      `✅ All ${measurements.length} tracked guides are below ${maxChars} chars${scope}.`
+    );
     return;
   }
 
@@ -169,6 +193,9 @@ async function main() {
 
   setOutput('has_oversized', oversized.length > 0 ? 'true' : 'false');
   setOutput('oversized_count', String(oversized.length));
+  // Carried into the post-Claude --check step: after a successful rewrite these
+  // paths no longer look oversized, so the check cannot rediscover them.
+  setOutput('worklist', oversized.map((m) => m.path).join(','));
   setOutput('branch', branch);
   setOutput('existing_pr', existing?.url ?? '');
   setOutput('report', report);

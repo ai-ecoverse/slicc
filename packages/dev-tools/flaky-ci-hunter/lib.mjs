@@ -68,6 +68,22 @@ const PR_EVENTS = new Set(['pull_request', 'pull_request_target']);
 /** Events that identify a post-merge run on the default branch. */
 const MAIN_EVENTS = new Set(['push', 'merge_group']);
 
+/**
+ * Does this run's `head_branch` represent the default branch? A `merge_group`
+ * run does not carry the branch name: the merge queue puts its temporary ref
+ * there instead (`gh-readonly-queue/main/pr-123-<sha>`). A literal equality
+ * check therefore drops every merge-queue run, which in this repo is most
+ * post-merge CI — `ci.yml` fires on `merge_group`.
+ * @param {string|null|undefined} ref a run's `head_branch`
+ * @param {string} [defaultBranch]
+ * @returns {boolean}
+ */
+export function isDefaultBranchRef(ref, defaultBranch = 'main') {
+  if (ref == null) return true; // not stated — the event check already narrowed it
+  const branch = String(ref);
+  return branch === defaultBranch || branch.startsWith(`gh-readonly-queue/${defaultBranch}/`);
+}
+
 /** Source strength, used when the same `(workflow, job, sha)` flip is seen twice. */
 const SOURCE_RANK = { attempt: 2, 'main-regression': 1 };
 
@@ -107,17 +123,56 @@ export function utcDay(value) {
  * can exceed 1000 runs in a week on its own, which reintroduces the same blind
  * spot.
  *
+ * Counting calendar dates alone does NOT cover a trailing `windowDays`
+ * interval: at the Monday 06:50 UTC cron, seven dates run Tuesday 00:00 →
+ * Monday 06:50, about 6d 7h, silently dropping the previous Monday morning
+ * through Tuesday midnight — enough to put a job under the flake threshold. So
+ * every UTC day the interval TOUCHES is queried, which means `windowDays + 1`
+ * dates whenever `now` is not exactly midnight, and the extra boundary day's
+ * runs are then trimmed to {@link windowStart} by {@link withinWindow}.
+ *
  * @param {Date|string|number} now end of the window (inclusive)
- * @param {number} [windowDays] number of days, including `now`'s day
- * @returns {string[]} exactly `windowDays` `YYYY-MM-DD` strings, ascending
+ * @param {number} [windowDays] length of the trailing interval in days
+ * @returns {string[]} every `YYYY-MM-DD` the interval touches, ascending
  */
 export function dayWindows(now, windowDays = CONFIG.WINDOW_DAYS) {
+  const end = now instanceof Date ? now : new Date(now);
+  const start = windowStart(end, windowDays);
+  const endMidnight = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
+  const startMidnight = Date.UTC(start.getUTCFullYear(), start.getUTCMonth(), start.getUTCDate());
+  const days = [];
+  for (let t = startMidnight; t <= endMidnight; t += MS_PER_DAY) days.push(utcDay(new Date(t)));
+  return days;
+}
+
+/**
+ * The exact instant the trailing window opens: `now - windowDays`. The boundary
+ * day returned by {@link dayWindows} is queried whole and trimmed to this.
+ * @param {Date|string|number} now
+ * @param {number} [windowDays]
+ * @returns {Date}
+ */
+export function windowStart(now, windowDays = CONFIG.WINDOW_DAYS) {
   const count = Math.max(1, Math.floor(Number(windowDays) || CONFIG.WINDOW_DAYS));
   const end = now instanceof Date ? now : new Date(now);
-  const endMidnight = Date.UTC(end.getUTCFullYear(), end.getUTCMonth(), end.getUTCDate());
-  const days = [];
-  for (let i = count - 1; i >= 0; i -= 1) days.push(utcDay(new Date(endMidnight - i * MS_PER_DAY)));
-  return days;
+  return new Date(end.getTime() - count * MS_PER_DAY);
+}
+
+/**
+ * Drop the boundary day's runs that fall before the window actually opens.
+ * A run with an unparseable `created_at` is KEPT: losing evidence to a bad
+ * timestamp would be a worse failure than scanning slightly too much.
+ * @param {Array<{created_at?: string}>} runs
+ * @param {Date} cutoff from {@link windowStart}
+ * @returns {Array<object>}
+ */
+export function withinWindow(runs = [], cutoff) {
+  const floor = cutoff instanceof Date ? cutoff.getTime() : new Date(cutoff).getTime();
+  if (!Number.isFinite(floor)) return [...runs];
+  return runs.filter((run) => {
+    const at = Date.parse(run?.created_at ?? '');
+    return Number.isFinite(at) ? at >= floor : true;
+  });
 }
 
 /**
@@ -214,7 +269,7 @@ export function findMainRegressionFlips({
     const key = `${o.headSha}${KEY_SEP}${jobKey(o.workflow, o.job)}`;
     const group = groups.get(key) ?? { obs: o, prPass: null, mainFail: null };
     if (PR_EVENTS.has(o.event) && o.conclusion === 'success') group.prPass ??= o;
-    const onMain = MAIN_EVENTS.has(o.event) && (o.branch ?? defaultBranch) === defaultBranch;
+    const onMain = MAIN_EVENTS.has(o.event) && isDefaultBranchRef(o.branch, defaultBranch);
     if (onMain && FAILING_CONCLUSIONS.has(o.conclusion)) group.mainFail ??= o;
     groups.set(key, group);
   }

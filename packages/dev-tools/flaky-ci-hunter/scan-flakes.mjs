@@ -48,10 +48,13 @@ import {
   filterCandidates,
   findAttemptFlips,
   findMainRegressionFlips,
+  isDefaultBranchRef,
   jobKey,
   localizeFlake,
   matchMitigatedInfra,
   scoreCandidates,
+  windowStart,
+  withinWindow,
 } from './lib.mjs';
 
 const API = 'https://api.github.com';
@@ -253,7 +256,8 @@ async function collectMainRegressionFlips(api, runs, corroboratedJobs, maxRuns) 
     .filter(
       (r) =>
         (r?.event === 'push' || r?.event === 'merge_group') &&
-        r?.head_branch === 'main' &&
+        // NOT `=== 'main'`: merge_group runs carry the queue's temporary ref.
+        isDefaultBranchRef(r?.head_branch) &&
         (r?.conclusion === 'failure' || r?.conclusion === 'timed_out') &&
         successfulPrShas.has(`${r.name}${r.head_sha}`)
     )
@@ -336,8 +340,16 @@ export async function scan({
   jobOverride = '',
 }) {
   const days = dayWindows(now, windowDays);
-  console.log(`🔎 Scanning ${days.length} day(s), one query per day: ${days.join(', ')}`);
-  const { runs, coverageDays } = await listRunsForWindow(api, days);
+  const cutoff = windowStart(now, windowDays);
+  console.log(
+    `🔎 Scanning ${days.length} day(s) covering ${cutoff.toISOString()} → now, one query per day: ${days.join(', ')}`
+  );
+  const { runs: queriedRuns, coverageDays } = await listRunsForWindow(api, days);
+  // The boundary day is queried whole (the API's `created=` filter is per-day),
+  // so trim it back to the exact trailing window.
+  const runs = withinWindow(queriedRuns, cutoff);
+  const trimmed = queriedRuns.length - runs.length;
+  if (trimmed > 0) console.log(`   trimmed ${trimmed} run(s) older than the window start`);
 
   const attemptFlips = await collectAttemptFlips(api, runs, CONFIG.MAX_ATTEMPT_RUN_READS);
   const corroboratedJobs = new Set(attemptFlips.map((f) => jobKey(f.workflow, f.job)));

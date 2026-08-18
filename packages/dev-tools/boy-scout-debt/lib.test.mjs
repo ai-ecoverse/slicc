@@ -378,10 +378,20 @@ describe('buildPrompt', () => {
   });
 
   it('requires a focused, labelled PR and the PR URL', () => {
-    expect(prompt).toContain(`gh label create ${PR_LABEL}`);
     expect(prompt).toContain(`--label ${PR_LABEL}`);
     expect(prompt).toContain('gh pr create');
     expect(prompt).toContain('Print the PR URL');
+  });
+
+  it('never tells Claude to create the label itself', () => {
+    // Claude's `gh` runs under BOT_PAT (contents + pull-requests only), and
+    // `gh label create` — even with `--force` — needs Issues write. The
+    // workflow bootstraps the label with GITHUB_TOKEN beforehand instead, so a
+    // create instruction here would kill the run after the refactor was done.
+    // The only mention left is the prohibition itself, never an invocation.
+    expect(prompt).not.toMatch(/^\s*gh label create/m);
+    expect(prompt).toContain('Do NOT run `gh label create`');
+    expect(prompt).toContain('already exists');
   });
 
   it('requires focused tests', () => {

@@ -435,9 +435,10 @@ OK with \`${file}\` in the diff. If time allows, also run \`npm run verify\`.
 1. \`git switch -c ${branch}\`
 2. Commit with a focused conventional-commit message, e.g.
    \`refactor(<scope>): pay down boy-scout debt in ${file}\`
-3. Make sure the label exists, then create the PR:
+3. Push and create the PR. The \`${PR_LABEL}\` label already exists — an earlier
+   workflow step created it with a token that carries Issues write, which your
+   \`GH_TOKEN\` does not. Do NOT run \`gh label create\`; it would fail:
    \`\`\`bash
-   gh label create ${PR_LABEL} --color 5319e7 --description "Boy-scout debt paid down by the nightly dispatcher" --force
    git push -u origin ${branch}
    gh pr create --base main --label ${PR_LABEL} \\
      --title "refactor: pay down boy-scout debt in ${file}" \\

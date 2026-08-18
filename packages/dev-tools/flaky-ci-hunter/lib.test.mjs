@@ -12,22 +12,30 @@ import {
   findAttemptFlips,
   findMainRegressionFlips,
   fixBranch,
+  isDefaultBranchRef,
   isExcludedJob,
   jobSlug,
   localizeFlake,
   matchMitigatedInfra,
   scoreCandidates,
   slugFromBranch,
+  windowStart,
+  withinWindow,
 } from './lib.mjs';
 import { scan } from './scan-flakes.mjs';
 
 /* ───────────────────── the 1000-item-cap workaround ───────────────────── */
 
 describe('dayWindows', () => {
-  it('produces exactly WINDOW_DAYS UTC day strings, oldest first, ending today', () => {
+  // Every UTC day the trailing window TOUCHES is queried — `windowDays + 1`
+  // dates for any `now` that is not exactly midnight. Counting calendar dates
+  // alone used to under-cover: at the Monday 06:50 cron, seven dates spanned
+  // Tuesday 00:00 → Monday 06:50 (~6d 7h), silently dropping the previous
+  // Monday morning and with it enough flips to fall under the threshold.
+  it('covers every day the trailing window touches, oldest first', () => {
     const days = dayWindows(new Date('2025-03-20T11:30:00Z'), CONFIG.WINDOW_DAYS);
-    expect(days).toHaveLength(CONFIG.WINDOW_DAYS);
     expect(days).toEqual([
+      '2025-03-13',
       '2025-03-14',
       '2025-03-15',
       '2025-03-16',
@@ -38,8 +46,19 @@ describe('dayWindows', () => {
     ]);
   });
 
+  it('reaches back a full 7 days at the Monday 06:50 cron slot', () => {
+    // The regression this guards: the previous Monday must be in the listing.
+    const days = dayWindows(new Date('2025-03-17T06:50:00Z'), 7);
+    expect(days[0]).toBe('2025-03-10');
+    expect(days.at(-1)).toBe('2025-03-17');
+    expect(windowStart(new Date('2025-03-17T06:50:00Z'), 7).toISOString()).toBe(
+      '2025-03-10T06:50:00.000Z'
+    );
+  });
+
   it('walks back across a month boundary (and a short month)', () => {
     expect(dayWindows(new Date('2025-03-02T00:00:01Z'), 4)).toEqual([
+      '2025-02-26',
       '2025-02-27',
       '2025-02-28',
       '2025-03-01',
@@ -49,6 +68,7 @@ describe('dayWindows', () => {
 
   it('walks back across a year boundary', () => {
     expect(dayWindows(new Date('2025-01-02T23:59:59Z'), 4)).toEqual([
+      '2024-12-29',
       '2024-12-30',
       '2024-12-31',
       '2025-01-01',
@@ -58,6 +78,7 @@ describe('dayWindows', () => {
 
   it('walks back across a leap day', () => {
     expect(dayWindows(new Date('2024-03-01T00:00:00Z'), 3)).toEqual([
+      '2024-02-27',
       '2024-02-28',
       '2024-02-29',
       '2024-03-01',
@@ -65,9 +86,26 @@ describe('dayWindows', () => {
   });
 
   it('never returns zero days and falls back to the default on junk window sizes', () => {
-    expect(dayWindows(new Date('2025-05-05T00:00:00Z'), 1)).toEqual(['2025-05-05']);
-    expect(dayWindows(new Date('2025-05-05T00:00:00Z'), 0)).toHaveLength(CONFIG.WINDOW_DAYS);
-    expect(dayWindows('2025-05-05T00:00:00Z', Number.NaN)).toHaveLength(CONFIG.WINDOW_DAYS);
+    expect(dayWindows(new Date('2025-05-05T00:00:00Z'), 1)).toEqual(['2025-05-04', '2025-05-05']);
+    expect(dayWindows(new Date('2025-05-05T00:00:00Z'), 0)).toHaveLength(CONFIG.WINDOW_DAYS + 1);
+    expect(dayWindows('2025-05-05T00:00:00Z', Number.NaN)).toHaveLength(CONFIG.WINDOW_DAYS + 1);
+  });
+
+  it('trims the boundary day back to the exact window start', () => {
+    const now = new Date('2025-03-17T06:50:00Z');
+    const cutoff = windowStart(now, 7);
+    const runs = [
+      { id: 1, created_at: '2025-03-10T05:00:00Z' }, // before the window opens
+      { id: 2, created_at: '2025-03-10T06:50:00Z' }, // exactly at the boundary
+      { id: 3, created_at: '2025-03-14T00:00:00Z' },
+    ];
+    expect(withinWindow(runs, cutoff).map((r) => r.id)).toEqual([2, 3]);
+  });
+
+  it('keeps a run whose timestamp cannot be parsed', () => {
+    // Losing evidence to a bad timestamp is worse than scanning a little extra.
+    const kept = withinWindow([{ id: 9, created_at: 'not-a-date' }, { id: 10 }], new Date());
+    expect(kept.map((r) => r.id)).toEqual([9, 10]);
   });
 
   it('pins each query to a single closed day range', () => {
@@ -200,6 +238,35 @@ describe('findMainRegressionFlips', () => {
     expect(flips).toHaveLength(1);
     expect(flips[0]).toMatchObject({ job: 'webapp', source: 'main-regression' });
     expect(flips[0].detail).toContain('post-merge on main');
+  });
+
+  it('counts a merge-queue failure, whose head_branch is the queue ref', () => {
+    // `merge_group` runs never carry the branch name — the merge queue puts
+    // `gh-readonly-queue/main/pr-123-<sha>` in head_branch. A literal
+    // `=== 'main'` comparison dropped every merge-queue run, which in this repo
+    // is most post-merge CI, so source 3 was quietly dead.
+    const observations = [
+      mainObservations[0],
+      {
+        ...mainObservations[1],
+        event: 'merge_group',
+        branch: 'gh-readonly-queue/main/pr-2163-abc1234',
+      },
+    ];
+    const flips = findMainRegressionFlips({
+      observations,
+      corroboratedJobs: new Set(['CI\u0000webapp']),
+    });
+    expect(flips).toHaveLength(1);
+    expect(flips[0]).toMatchObject({ job: 'webapp', source: 'main-regression' });
+  });
+
+  it('recognises the default branch by name or by its merge-queue ref', () => {
+    expect(isDefaultBranchRef('main')).toBe(true);
+    expect(isDefaultBranchRef('gh-readonly-queue/main/pr-1-abc')).toBe(true);
+    expect(isDefaultBranchRef('release/1.x')).toBe(false);
+    expect(isDefaultBranchRef('gh-readonly-queue/release/pr-1-abc')).toBe(false);
+    expect(isDefaultBranchRef(null)).toBe(true); // not stated; the event gate already narrowed it
   });
 
   it('needs both halves of the pair (green on the PR head AND red post-merge)', () => {
@@ -789,7 +856,9 @@ describe('scan (offline, fixture-driven)', () => {
     const result = await scan({ api, now: NOW });
 
     // One runs query per day of the window — the 1000-item-cap workaround.
-    expect(result.coverageDays).toHaveLength(CONFIG.WINDOW_DAYS);
+    // WINDOW_DAYS + 1: the trailing window touches one extra UTC day, which is
+    // queried whole and then trimmed to the exact cutoff.
+    expect(result.coverageDays).toHaveLength(CONFIG.WINDOW_DAYS + 1);
     expect(result.coverageDays.every((d) => d.retrieved === d.totalCount)).toBe(true);
 
     // node-server scores 2, not 3: run 3 failed on BOTH attempts, which is a

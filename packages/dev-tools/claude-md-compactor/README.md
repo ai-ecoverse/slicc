@@ -61,8 +61,10 @@ No state file, no state branch, no Actions cache.
 REPO=ai-ecoverse/slicc SKIP_PR_CHECK=1 GH_TOKEN=x \
   node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs
 
-# The post-compaction invariant: exit 1 if any tracked guide is still >= the limit
-node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check
+# The post-compaction invariant: exit 1 if any tracked guide is still >= the
+# limit, or if a guide that was handed to Claude came back above the target
+WORKLIST=packages/foo/CLAUDE.md,packages/bar/CLAUDE.md \
+  node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check
 
 # Unit tests
 npx vitest run --project dev-tools packages/dev-tools/claude-md-compactor/lib.test.mjs
@@ -77,15 +79,26 @@ npx vitest run --project dev-tools packages/dev-tools/claude-md-compactor/lib.te
 | `MAX_CHARS`           | `10000`      | Oversized threshold override                                       |
 | `TARGET_CHARS`        | `9500`       | Compaction target override                                         |
 | `SKIP_PR_CHECK`       | _(unset)_    | `1` skips the dedup query (offline runs; `REPO`/`GH_TOKEN` unused) |
+| `WORKLIST`            | _(unset)_    | `--check` only: the guides held to `TARGET_CHARS` (see below)      |
 | `GITHUB_OUTPUT`       | _(unset)_    | Actions output file; results appended when set                     |
 | `GITHUB_STEP_SUMMARY` | _(unset)_    | Actions summary file; the table appended when set                  |
 
-`--check` needs none of them.
+`--check` needs only `WORKLIST`, and works without even that.
+
+### Why `--check` needs the worklist
+
+Two different invariants: every tracked guide must be under `MAX_CHARS`, and the
+guides Claude was actually asked to rewrite must have reached `TARGET_CHARS` —
+which is what the brief promised. Checking survivors against the max alone only
+proves they left the oversized band, so a guide parked just under `MAX_CHARS`
+would pass and then be re-selected the following week for nothing. The worklist
+has to be carried in from the measuring run (its `worklist` output), because a
+successfully rewritten guide no longer looks oversized to a fresh measurement.
 
 ### Outputs
 
-`has_oversized`, `oversized_count`, `branch`, `existing_pr`, and the multi-line
-`report` and `prompt`.
+`has_oversized`, `oversized_count`, `branch`, `existing_pr`, `worklist`, and the
+multi-line `report` and `prompt`.
 
 ## Exit codes
 

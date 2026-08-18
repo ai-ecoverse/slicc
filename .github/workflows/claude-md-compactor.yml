@@ -143,4 +143,11 @@ jobs:
         if: success() && steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
         env:
           MAX_CHARS: ${{ github.event.inputs.max_chars }}
+          # The brief promises a rewrite to at most TARGET_CHARS, so the check
+          # holds the selected guides to the target and everything else to the
+          # max. Without the worklist it could only prove they left the oversized
+          # band — a guide parked just under MAX_CHARS would pass here and be
+          # re-selected next week for nothing.
+          TARGET_CHARS: ${{ github.event.inputs.target_chars }}
+          WORKLIST: ${{ steps.measure.outputs.worklist }}
         run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check

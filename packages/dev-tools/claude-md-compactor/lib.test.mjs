@@ -12,6 +12,8 @@ import {
   formatReport,
   isExcludedGuide,
   measureGuides,
+  parseWorklist,
+  selectAboveTarget,
   selectOversized,
 } from './lib.mjs';
 
@@ -110,6 +112,75 @@ describe('selectOversized', () => {
     expect(selectOversized(measureGuides([{ path: 'a/CLAUDE.md', content: guide(100) }]))).toEqual(
       []
     );
+  });
+});
+
+describe('selectAboveTarget', () => {
+  // Regression: the post-Claude check used to receive only MAX_CHARS, so a guide
+  // rewritten to just under the oversized threshold passed verification even
+  // though the brief promised the target — and it would be re-selected the
+  // following week for nothing.
+  const measurements = () =>
+    measureGuides(
+      [
+        { path: 'a/CLAUDE.md', content: guide(8900) },
+        { path: 'b/CLAUDE.md', content: guide(8400) },
+        { path: 'c/CLAUDE.md', content: guide(8900) },
+      ],
+      { maxChars: 9000 }
+    );
+
+  it('flags a selected guide left above the target', () => {
+    const out = selectAboveTarget(measurements(), {
+      worklist: ['a/CLAUDE.md', 'b/CLAUDE.md'],
+      targetChars: 8500,
+    });
+    expect(out.map((m) => m.path)).toEqual(['a/CLAUDE.md']);
+  });
+
+  it('ignores guides that were never on the worklist', () => {
+    // c is also 8,900 but nobody asked Claude to touch it.
+    const out = selectAboveTarget(measurements(), { worklist: ['b/CLAUDE.md'], targetChars: 8500 });
+    expect(out).toEqual([]);
+  });
+
+  it('accepts a guide exactly at the target', () => {
+    const out = selectAboveTarget([{ path: 'a/CLAUDE.md', chars: 8500 }], {
+      worklist: ['a/CLAUDE.md'],
+      targetChars: 8500,
+    });
+    expect(out).toEqual([]);
+  });
+
+  it('is empty with no worklist, so a plain --check keeps its old meaning', () => {
+    expect(selectAboveTarget(measurements(), { worklist: [], targetChars: 1 })).toEqual([]);
+  });
+
+  it('orders the biggest miss first', () => {
+    const out = selectAboveTarget(
+      [
+        { path: 'a/CLAUDE.md', chars: 8600 },
+        { path: 'b/CLAUDE.md', chars: 8900 },
+      ],
+      { worklist: ['a/CLAUDE.md', 'b/CLAUDE.md'], targetChars: 8500 }
+    );
+    expect(out.map((m) => m.path)).toEqual(['b/CLAUDE.md', 'a/CLAUDE.md']);
+  });
+});
+
+describe('parseWorklist', () => {
+  it('splits on commas and newlines and trims', () => {
+    expect(parseWorklist('a/CLAUDE.md, b/CLAUDE.md\n c/CLAUDE.md ')).toEqual([
+      'a/CLAUDE.md',
+      'b/CLAUDE.md',
+      'c/CLAUDE.md',
+    ]);
+  });
+
+  it('is empty for absent or blank input', () => {
+    expect(parseWorklist(undefined)).toEqual([]);
+    expect(parseWorklist('')).toEqual([]);
+    expect(parseWorklist(' , \n ')).toEqual([]);
   });
 });
 

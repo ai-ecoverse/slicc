@@ -82,6 +82,56 @@ describe('isAutomationPr', () => {
   });
 });
 
+describe('screenPr fork guard', () => {
+  // The fix job checks out the bare `head.ref` in THIS repository. A fork PR
+  // therefore either fails on a missing branch or, if a branch of the same name
+  // exists here, edits and pushes the WRONG one — and the dispatch label plus
+  // SHA marker are written before the checkout, so nothing retries.
+  const forked = (headRepo) =>
+    decidePrAction(candidate({ pr: { ...candidate().pr, headRepo }, repo: 'ai-ecoverse/slicc' }));
+
+  it('refuses a PR whose head branch lives in a fork', () => {
+    const out = forked('someone-else/slicc');
+    expect(out.action).toBe('skip');
+    expect(out.reason).toContain('someone-else/slicc');
+    expect(out.announce).toBe(false);
+  });
+
+  it('refuses a PR whose fork was deleted (head.repo is null)', () => {
+    const out = forked(null);
+    expect(out.action).toBe('skip');
+    expect(out.reason).toContain('deleted fork');
+  });
+
+  it('lets a same-repo branch through to the rubric', () => {
+    // The baseline fixture is itself a skip ("no plausible cause"), so what
+    // matters is that the fork guard is not what decided it.
+    expect(forked('ai-ecoverse/slicc').reason).not.toMatch(/Head branch lives in/);
+  });
+
+  it('reads the nested head.repo shape too', () => {
+    const out = decidePrAction(
+      candidate({
+        pr: {
+          ...candidate().pr,
+          head: { sha: SHA, ref: 'renovate/x', repo: { full_name: 'f/x' } },
+        },
+        repo: 'ai-ecoverse/slicc',
+      })
+    );
+    expect(out.action).toBe('skip');
+    expect(out.reason).toContain('f/x');
+  });
+
+  it('does not guess when the head repo is simply not stated', () => {
+    // Fixtures that never mention a head repo must keep their old meaning:
+    // absence is not evidence of a fork.
+    expect(decidePrAction(candidate({ repo: 'ai-ecoverse/slicc' })).reason).not.toMatch(
+      /Head branch lives in/
+    );
+  });
+});
+
 describe('summarizeChecks', () => {
   it('folds check-runs and statuses into one verdict', () => {
     const out = summarizeChecks({

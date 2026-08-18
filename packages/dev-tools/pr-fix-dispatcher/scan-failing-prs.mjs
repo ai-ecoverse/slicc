@@ -311,12 +311,16 @@ async function evaluatePr(pr, now, targeted = false) {
     title: pr.title,
     headRef: pr.head?.ref ?? '',
     headSha: pr.head?.sha ?? '',
+    // null when the head is a deleted fork; screenPr refuses anything that is
+    // not a branch in this repository, since the fix job checks out `headRef`
+    // here and could otherwise push to a same-named local branch.
+    headRepo: pr.head?.repo?.full_name ?? null,
     labels: (pr.labels ?? []).map((l) => l.name),
   };
   if (!isAutomationPr(pr)) {
     return {
       pr: base,
-      decision: screenPr({ pr, checks: { failing: [] } }),
+      decision: screenPr({ pr, checks: { failing: [] }, repo: REPO }),
       failures: [],
       runs: [],
     };
@@ -326,7 +330,14 @@ async function evaluatePr(pr, now, targeted = false) {
   // First screen without the expensive reads. Everything it can decide (green,
   // still running, self-healing label, settling window) is independent of the
   // marker comments and human-activity data, so a hit here is final.
-  const cheap = screenPr({ pr: { ...base, user: pr.user }, checks, markers: {}, now, targeted });
+  const cheap = screenPr({
+    pr: { ...base, user: pr.user },
+    checks,
+    markers: {},
+    now,
+    targeted,
+    repo: REPO,
+  });
   if (cheap) return { pr: base, decision: cheap, failures: checks.failing, runs: [] };
 
   const { latestHumanActivityAt, comments } = await readLatestHumanActivity(pr);
@@ -338,6 +349,7 @@ async function evaluatePr(pr, now, targeted = false) {
     latestHumanActivityAt,
     now,
     targeted,
+    repo: REPO,
   });
   if (screened) return { pr: base, decision: screened, failures: checks.failing, runs: [] };
 

@@ -50,6 +50,14 @@ each day to exhaustion, and reconciles the runs it retrieved against that day's
 Slicing per workflow instead is not equivalent: a single high-volume workflow can
 exceed 1000 runs on its own, reintroducing the same blind spot.
 
+Note that the day list covers every UTC day the trailing window **touches**,
+which is `WINDOW_DAYS + 1` dates unless the run starts exactly at midnight.
+Counting calendar dates alone under-covers: at the Monday 06:50 UTC cron, seven
+dates would span Tuesday 00:00 → Monday 06:50 (about 6d 7h) and silently drop
+the previous Monday morning, which is enough to push a job under the flake
+threshold. The extra boundary day is queried whole, then trimmed to the exact
+`now - WINDOW_DAYS` cutoff (`windowStart` + `withinWindow`).
+
 ## Evidence sources
 
 1. **Attempt flips (definitive).** For every run with `run_attempt > 1`, read
