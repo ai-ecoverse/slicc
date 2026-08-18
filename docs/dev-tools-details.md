@@ -21,7 +21,7 @@ its `README.md` for label semantics and workflow behavior.
 
 ## scheduled-agentic-workflows
 
-Four scheduled agents that read repository or CI state, pick at most one piece
+Five scheduled agents that read repository or CI state, pick at most one piece
 of work, and hand it to `claude-code-action`. Each is the same two-part shape,
 which is the house pattern for every agentic workflow here (see also
 `rum-error-triage.yml` and `agentic-debt-triage.yml`): a **deterministic Node
@@ -37,8 +37,9 @@ genuinely needs a model is left to Claude.
 | `pr-fix-dispatcher/`   | `pr-fix-dispatcher.yml`         | every 2h    | failing automation PRs → re-run, fix, or skip              |
 | `claude-md-compactor/` | `claude-md-compactor.yml`       | Sat 22:40   | oversized `CLAUDE.md` guides → one compaction PR           |
 | `flaky-ci-hunter/`     | `flaky-ci-hunter.yml`           | Mon 06:50   | one job with proven same-commit flips → determinism fix PR |
+| `backlog-dispatcher/`  | `backlog-dispatcher.yml`        | daily 09:35 | open issues that look ready → authored PRs                 |
 
-**State is GitHub-native.** None of the four keeps a state file, a state
+**State is GitHub-native.** None of the five keeps a state file, a state
 branch, or an Actions cache entry. Cross-run memory is derived from GitHub
 itself, which cannot drift from reality the way a committed ledger can:
 
@@ -55,6 +56,9 @@ itself, which cannot drift from reality the way a committed ledger can:
   carries the compaction prefix.
 - _"this flaky job is in cooldown"_ → the `automation/flaky-fix/<slug>` PRs;
   the branch name is the registry key and the PR dates are the clock.
+- _"this issue was already decided"_ → a `backlog-*` (or legacy `cosmos-*`)
+  label on the issue. The backlog dispatcher is the one member of the family
+  whose labels **are** the dedup key; see its subsection below for why.
 
 Two details that are easy to get wrong and are therefore pinned by tests:
 
@@ -80,10 +84,53 @@ a retry count, adding a bare sleep, loosening an assertion, or skipping a test
 are rejected fixes, and "this nondeterminism is irreducible" is an acceptable
 answer.
 
-Both the boy-scout and flake-fix PRs are pushed with `BOT_PAT`, not
+The boy-scout, flake-fix, and backlog PRs are pushed with `BOT_PAT`, not
 `GITHUB_TOKEN` — GitHub's anti-recursion guard suppresses workflow runs for
 `GITHUB_TOKEN`-authored pushes, so CI would never run on them. Same constraint
 as `coverage-ratchet.yml` and `renovate-patch-reconcile.yml`.
+
+### The backlog dispatcher's recovered rubric
+
+`backlog-dispatcher/` migrates an Augment Code ("Cosmos") expert whose prompt
+body was a `kb://` include that did not survive that platform's retirement. What
+survived is roughly fifty of its **decisions**, left on this repo as
+`cosmos-dispatched` / `cosmos-skipped` labels plus its own verbatim skip
+comments. The hard-override catalog (security/authorization surfaces; upstream or
+platform bugs and design calls; cross-cutting redesigns, which includes the
+god-class "Bloat" splits; unconfirmed root causes; concurrency and
+data-integrity bugs spanning layers; native work CI cannot verify; unspecified
+UX) and the ready classes (a named agentic-debt sin in a named file, a small
+localised bug with a concrete symptom, a missing shell command with a clear spec,
+one named flaky test, doc drift naming the stale file, a narrow test addition)
+were reconstructed from that record and live in `lib.mjs`, unit-tested. The
+selector only orders and caps the pool; the go/no-go call is Claude's in phase 1,
+with each candidate's detected smells named for it.
+
+Three things set it apart from its four siblings:
+
+- **The labels ARE the dedup key**, not just human-visible markers. An issue
+  carrying `backlog-ready` / `backlog-dispatched` / `backlog-skipped` — or the
+  legacy `cosmos-dispatched` / `cosmos-skipped` / `cosmos-dispatch-failed`,
+  which are treated as equivalent so the first run cannot re-propose work Cosmos
+  already rejected — is not a candidate at all. The original re-posted its skip
+  comment on the same issue on every tick (#2072 got one on 2026-08-12 and
+  another on 2026-08-17); deciding **once** is the fix, and a human removing the
+  label is the documented way to re-queue an issue.
+- **The stale sweep never closes a pull request.** `sweep-stale-prs.mjs` labels
+  `backlog-stale` and comments once on a dispatcher PR idle for a week, then
+  leaves it alone. The Cosmos original closed those, which threw away work whose
+  only sin was waiting for review.
+- **Branch naming is load-bearing.** PRs land on
+  `automation/backlog/issue-<n>`; the `automation/` prefix is what makes
+  `isAutomationPr()` in `pr-fix-dispatcher/lib.mjs` return true, so a backlog PR
+  with failing CI gets a fixer. `lib.test.mjs` imports both libs and asserts the
+  agreement rather than trusting the convention.
+
+Scope is `ai-ecoverse/slicc` only, because `BOT_PAT` is a fine-grained PAT scoped
+to this repo. The repository is read from `GITHUB_REPOSITORY` / `REPO` and never
+hardcoded, so promoting this to `ai-ecoverse/.github` for the org is a packaging
+change (`workflow_call` plus a repo input), not a rewrite. Linear support is
+deliberately absent — Cosmos's `LINEAR_TEAM_KEYS` was empty.
 
 ### Running one on demand
 
@@ -93,17 +140,19 @@ occur. `dry_run: true` stops after the selector, which is the read-only way to
 see what a run _would_ do:
 
 ```bash
-# Selector only, no Claude, no PR — safe on any of the four.
+# Selector only, no Claude, no PR — safe on any of the five.
 gh workflow run boy-scout-debt-dispatcher.yml -f dry_run=true
 gh workflow run pr-fix-dispatcher.yml         -f dry_run=true
 gh workflow run claude-md-compactor.yml       -f dry_run=true
 gh workflow run flaky-ci-hunter.yml           -f dry_run=true
+gh workflow run backlog-dispatcher.yml        -f dry_run=true
 
 # Force real work without waiting for the natural trigger:
 gh workflow run boy-scout-debt-dispatcher.yml -f file=packages/webapp/src/fs/sudo-fs.ts
 gh workflow run pr-fix-dispatcher.yml         -f pr_number=1234
 gh workflow run claude-md-compactor.yml       -f max_chars=9000 -f target_chars=8500
 gh workflow run flaky-ci-hunter.yml           -f window_days=14 -f job=node-server
+gh workflow run backlog-dispatcher.yml        -f issue=2101 -f max_dispatches=1
 
 gh run list --workflow=pr-fix-dispatcher.yml --limit 3   # then `gh run view <id> --log`
 ```
@@ -115,6 +164,10 @@ waits — there is nobody to yield to when an operator points at a specific PR �
 and nothing else. Automation authorship, the self-healing labels, the marker
 dedup, the hard-override categories, and the dispatch budget all still apply, so
 a targeted run cannot be used to aim a fixer at a human's PR.
+
+`backlog-dispatcher.yml`'s `issue` input works the same way: it waives only the
+one-hour settling wait, leaving the decided-label dedup, the denylist, the
+in-flight-PR check, and the dispatch budget in force.
 
 ## doc-dead-reference-gate
 

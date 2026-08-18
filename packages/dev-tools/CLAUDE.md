@@ -9,7 +9,7 @@ Developer-tooling surface for `packages/dev-tools/`. Long-form notes: [`docs/dev
 - **Build configs**: `packages/webapp/vite.config.ts`, `packages/chrome-extension/vite.config.ts`, `biome.json`.
 - **QA setup**: `packages/node-server/src/qa-setup.ts` plus root `npm run qa:*` scripts. Visual/integration helper: `packages/webapp/tests/test-dips.mjs`.
 - **RUM error triage**: `packages/dev-tools/rum-error-triage/triage-rum-errors.mjs`, nightly via `.github/workflows/rum-error-triage.yml`.
-- **Scheduled agentic workflows** (selector `.mjs` + `claude-code-action`): `boy-scout-debt/`, `pr-fix-dispatcher/`, `claude-md-compactor/`, `flaky-ci-hunter/`. Deep ref: [dev-tools-details.md#scheduled-agentic-workflows](../../docs/dev-tools-details.md#scheduled-agentic-workflows).
+- **Scheduled agentic workflows** (selector `.mjs` + `claude-code-action`): `boy-scout-debt/`, `pr-fix-dispatcher/`, `claude-md-compactor/`, `flaky-ci-hunter/`, `backlog-dispatcher/`. Deep ref: [dev-tools-details.md#scheduled-agentic-workflows](../../docs/dev-tools-details.md#scheduled-agentic-workflows).
 - **AI comment detection**: `packages/dev-tools/ai-comment-detection/` — labels `ai-generated`/`human-in-the-loop` via `.github/workflows/ai-comment-detection.yml`. Deep ref: [dev-tools-details.md#ai-comment-detection](../../docs/dev-tools-details.md#ai-comment-detection).
 - **Doc gates** (`npm run lint:docs`, `.husky/pre-commit`): `packages/dev-tools/tools/check-doc-sizes.mjs` (+ `check-doc-sizes-lib.mjs`) and `check-doc-refs.mjs` (+ `check-doc-refs-lib.mjs`). Deep ref: [dev-tools-details.md#doc-dead-reference-gate](../../docs/dev-tools-details.md#doc-dead-reference-gate).
 - **Linear-history check**: `bash packages/dev-tools/tools/check-linear-history.sh [base-ref] [head-ref]`. `linear-history` CI job.
@@ -41,7 +41,7 @@ Developer-tooling surface for `packages/dev-tools/`. Long-form notes: [`docs/dev
 
 ### Fresh Dev Harnesses
 
-Five isolated harnesses on distinct ports. Standalone fails on an occupied bridge unless `SLICC_FRESH_REAP=1` reaps a stale harness; reaping production bridge `:5710` is refused, Chrome CDP is never reaped, and cleanup is port-scoped.
+Five isolated harnesses on distinct ports; reaping is opt-in (`SLICC_FRESH_REAP=1`) and port-scoped.
 
 | Harness        | Script                        | Bridge                 | CDP     | Notes                                       |
 | -------------- | ----------------------------- | ---------------------- | ------- | ------------------------------------------- |
