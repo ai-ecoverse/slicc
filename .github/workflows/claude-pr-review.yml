@@ -28,8 +28,13 @@ name: Claude PR Review
 # revision; the PR head is only checked out (conditionally) for the review step.
 # The REVIEW step then intentionally runs PR-authored code (Bash) to verify
 # behaviour — bounded by the job `if`: same-repo head only (fork PRs excluded, so
-# no secret exposure to forks) and non-bot authors, and the job holds
-# contents: read (a review can never push) with pull-requests: write for comments.
+# no secret exposure to forks), and the job holds contents: read (a review can
+# never push) with pull-requests: write for comments.
+#
+# Note the trust boundary is the HEAD REPO, not the author: bot-authored
+# `automation/*` PRs are reviewed (see the job `if`), and that is safe for the
+# same reason a human's PR is — pushing an `automation/*` branch to this repo
+# already requires write access, so the code was authored by someone trusted.
 #
 # Required repository secret (already present — shared with rum-error-triage):
 #   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
