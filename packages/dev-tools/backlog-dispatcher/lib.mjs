@@ -674,19 +674,31 @@ ${Number(ctx.budget ?? CONFIG.MAX_DISPATCHES_PER_RUN)} of them.
    npx vitest run <the focused test files>
    node packages/dev-tools/tools/check-touched-exemptions.mjs origin/main
    \`\`\`
-5. Push and open the PR:
+5. Push the branch and write the PR body to
+   \`$RUNNER_TEMP/backlog-pr-<number>.md\` (the pattern is also in
+   \`$PR_BODY_FILE_TEMPLATE\`), plus the one-line conventional-commit PR title to
+   \`$RUNNER_TEMP/backlog-pr-<number>.title\`:
    \`\`\`bash
    git push -u origin ${BRANCH_PREFIX}/issue-<number>
-   gh pr create --base main --label ${LABELS.dispatched} \\
-     --title "<conventional-commit title>" \\
-     --body "Closes #<number>
+   printf '%s\\n' "<conventional-commit title>" > "$RUNNER_TEMP/backlog-pr-<number>.title"
+   cat > "$RUNNER_TEMP/backlog-pr-<number>.md" <<'EOF'
+   Closes #<number>
 
-   <what changed, why, how you verified>"
-   gh issue edit <number> --remove-label ${LABELS.ready} --add-label ${LABELS.dispatched}
+   <what changed, why, how you verified>
+   EOF
    \`\`\`
    The \`Closes #<number>\` line is required — it is how merging the PR closes the
-   issue. The \`${LABELS.dispatched}\` label on the PR is how the PR Fix
-   Dispatcher and the stale sweep recognise it as ours.
+   issue.
+6. **Do NOT run \`gh pr create\`, and do not label the issue \`${LABELS.dispatched}\`.**
+   A later, deterministic workflow step opens one PR per pushed branch from those
+   files, applies the \`${LABELS.dispatched}\` label to the PR (that label is how the
+   PR Fix Dispatcher and the stale sweep recognise it as ours), and swaps the
+   issue's \`${LABELS.ready}\` label for \`${LABELS.dispatched}\`. The PR must be
+   authored by a token whose events trigger CI: a PR opened by your \`gh\` is
+   authored by \`github-actions[bot]\`, and GitHub then queues every check on it as
+   \`action_required\` until a human clicks "Approve and run". If you push nothing
+   for an issue, that step is a clean no-op for it and the issue keeps its
+   \`${LABELS.ready}\` label for the next run.
 
 ## If it turns out not to be ready
 

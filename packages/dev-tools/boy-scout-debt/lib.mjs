@@ -430,27 +430,35 @@ node packages/dev-tools/tools/check-touched-exemptions.mjs origin/main
 \`check-touched-exemptions.mjs origin/main\` is the decisive gate: it must report
 OK with \`${file}\` in the diff. If time allows, also run \`npm run verify\`.
 
-## Open the PR
+## Push the branch and hand off the PR
 
 1. \`git switch -c ${branch}\`
 2. Commit with a focused conventional-commit message, e.g.
    \`refactor(<scope>): pay down boy-scout debt in ${file}\`
-3. Push and create the PR. The \`${PR_LABEL}\` label already exists — an earlier
-   workflow step created it with a token that carries Issues write, which your
-   \`GH_TOKEN\` does not. Do NOT run \`gh label create\`; it would fail:
+3. Push the branch, then write the pull-request body to the file named by the
+   \`PR_BODY_FILE\` environment variable:
    \`\`\`bash
    git push -u origin ${branch}
-   gh pr create --base main --label ${PR_LABEL} \\
-     --title "refactor: pay down boy-scout debt in ${file}" \\
-     --body "<what changed, which debt lists were cleared, how you verified>"
+   cat > "$PR_BODY_FILE" <<'EOF'
+   <what changed, which debt lists were cleared, how you verified>
+   EOF
    \`\`\`
-4. The PR body must state, per debt list, what was fixed and which entry was
+4. **Do NOT run \`gh pr create\`, \`gh pr edit\`, or \`gh label create\`.** A later,
+   deterministic workflow step opens the PR from your pushed branch and that body
+   file and applies the \`${PR_LABEL}\` label. The PR must be authored by a token
+   whose events trigger CI: a PR opened by your \`gh\` is authored by
+   \`github-actions[bot]\`, and GitHub then queues every check on it as
+   \`action_required\` until a human clicks "Approve and run" — which would defeat
+   the whole point, since the debt gate is the check that matters here. The title
+   is fixed by that step; only the body is yours to write.
+5. The PR body must state, per debt list, what was fixed and which entry was
    removed, and must confirm that no exemption, suppression, baseline entry, or
    threshold relaxation was added.
-5. Print the PR URL as the last line of your final message.
+6. Print the branch name as the last line of your final message.
 
 If — and only if — the file cannot be cleaned without a behaviour change or a
-prohibited escape hatch, open NO pull request, leave the repository untouched
-(\`git checkout -- .\`), and report the specific blocker instead.
+prohibited escape hatch, push NOTHING, write no body file, leave the repository
+untouched (\`git checkout -- .\`), and report the specific blocker instead. The
+step that opens the PR treats an unpushed branch as a clean no-op.
 `;
 }

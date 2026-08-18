@@ -17,8 +17,10 @@ schedule (daily 09:35 UTC)
        ├─ backlog-candidates.json          (phase 1 reads this)
        └─ $GITHUB_OUTPUT: has_candidates, candidate_count, dispatch_budget, prompt
   └─ phase 1 TRIAGE   claude-code-action → labels `backlog-ready` / `backlog-skipped` (+1 comment)
-  └─ phase 2 AUTHOR   claude-code-action → branch, minimal change, PR with `Closes #<n>`,
-                                            label swapped to `backlog-dispatched`
+  └─ phase 2 AUTHOR   claude-code-action → one branch per issue, minimal change,
+                                            $RUNNER_TEMP/backlog-pr-<n>.{title,md}
+  └─ phase 2b OPEN    shell (BOT_PAT)    → ONE PR per pushed branch, `Closes #<n>` in the body,
+                                            then (GITHUB_TOKEN) PR label + issue label swap
   └─ sweep-stale-prs.mjs                  (deterministic; label + one comment, NEVER closes)
 ```
 
@@ -71,7 +73,7 @@ No state file, no state branch, no Actions cache.
 | Label                    | Meaning                                                        | Set by          |
 | ------------------------ | -------------------------------------------------------------- | --------------- |
 | `backlog-ready`          | Triage said yes; phase 2's queue                               | phase 1         |
-| `backlog-dispatched`     | A PR exists (also on the PR itself)                            | phase 2         |
+| `backlog-dispatched`     | A PR exists (also on the PR itself)                            | phase 2b        |
 | `backlog-skipped`        | Decided against, once                                          | phase 1         |
 | `backlog-stale`          | A dispatcher-owned PR has gone idle                            | the stale sweep |
 | `cosmos-dispatch-failed` | The author phase died (legacy name reused — it already exists) | `if: failure()` |
@@ -128,6 +130,43 @@ dispatcher's own `automation/backlog/issue-<n>` branch — the #2155 case).
 close. The Cosmos original **closed** those PRs, which threw away work whose only
 sin was waiting for review; the replacement policy is "make it visible, let a
 human decide". Idempotent via the label, so the comment lands exactly once.
+
+## Why Claude does not open the PRs
+
+Phase 2 is split in two, deliberately: **Claude pushes one branch per issue and
+writes each PR's title and body to `$RUNNER_TEMP/backlog-pr-<n>.title` and
+`$RUNNER_TEMP/backlog-pr-<n>.md`; a deterministic shell step then opens one PR per
+pushed branch.** The author brief forbids `gh pr create` and forbids touching the
+`backlog-dispatched` label.
+
+The reason is token identity. `claude-code-action` overrides `GH_TOKEN` for its
+Bash tool with its own `github_token:` input, which this workflow sets to
+`${{ github.token }}` (an OIDC → GitHub App exchange fails on this repo), so
+Claude's `gh` is always `GITHUB_TOKEN`. A PR created with `GITHUB_TOKEN` is
+authored by `github-actions[bot]`, and GitHub queues every workflow run for such a
+PR as `action_required`: the PR sits at **zero checks** until a human clicks
+"Approve and run". The deterministic step is the same shape
+[`coverage-ratchet.yml`](../../../.github/workflows/coverage-ratchet.yml) uses.
+
+The loop is over the same `backlog-ready-issues.json` the author phase was given,
+and each iteration is a clean no-op (never a failure) when no branch was pushed,
+when the branch is not ahead of `origin/main`, or when no body file was written —
+which is what the brief's "if it turns out not to be ready, open NO pull request"
+path produces. The issue simply keeps `backlog-ready` and comes back next run. An
+already-open PR for the head is not recreated, only relabelled.
+
+Two tokens, because `BOT_PAT` is scoped to **contents + pull-requests only**:
+
+| Call                                                         | Token          | Why                                                        |
+| ------------------------------------------------------------ | -------------- | ---------------------------------------------------------- |
+| `gh pr create`                                               | `BOT_PAT`      | The author's events must trigger CI.                       |
+| `gh label create`, `gh pr edit --add-label`, `gh issue edit` | `GITHUB_TOKEN` | Labels are an Issues API write; `BOT_PAT` has no `issues`. |
+
+Passing `--label` to `gh pr create` under `BOT_PAT` would 403 and lose the PR, so
+the PR label and the issue's `backlog-ready` → `backlog-dispatched` swap are a
+separate `GITHUB_TOKEN` step — which also means the swap happens only after the PR
+provably exists, instead of on the model's word. That step's failures are warnings,
+not job failures: the PRs already exist, and the next run reconciles the labels.
 
 ## Branch naming is load-bearing
 
@@ -200,13 +239,15 @@ deliberately absent — Cosmos's `LINEAR_TEAM_KEYS` was empty.
 
 No new secrets — both are shared with `boy-scout-debt-dispatcher.yml`.
 
-| Name                       | Kind     | Purpose                                                                                                          |
-| -------------------------- | -------- | ---------------------------------------------------------------------------------------------------------------- |
-| `AWS_BEARER_TOKEN_BEDROCK` | secret   | Amazon Bedrock API key (Adobe CAMP `ABSK...` bearer token) used by `claude-code-action` (`use_bedrock`).         |
-| `BOT_PAT`                  | secret   | Fine-grained PAT (contents + issues + pull-requests write); the branch push must not be `GITHUB_TOKEN`-authored. |
-| `RUM_AWS_REGION`           | variable | Optional. Bedrock region for the CAMP key (default `us-east-1`).                                                 |
-| `BACKLOG_BEDROCK_MODEL`    | variable | Optional. Bedrock model; falls back to `RUM_BEDROCK_MODEL`, then `global.anthropic.claude-sonnet-4-6`.           |
+| Name                       | Kind     | Purpose                                                                                                                                   |
+| -------------------------- | -------- | ----------------------------------------------------------------------------------------------------------------------------------------- |
+| `AWS_BEARER_TOKEN_BEDROCK` | secret   | Amazon Bedrock API key (Adobe CAMP `ABSK...` bearer token) used by `claude-code-action` (`use_bedrock`).                                  |
+| `BOT_PAT`                  | secret   | Fine-grained PAT (contents + pull-requests write, **no** issues); the branch push and `gh pr create` must not be `GITHUB_TOKEN`-authored. |
+| `RUM_AWS_REGION`           | variable | Optional. Bedrock region for the CAMP key (default `us-east-1`).                                                                          |
+| `BACKLOG_BEDROCK_MODEL`    | variable | Optional. Bedrock model; falls back to `RUM_BEDROCK_MODEL`, then `global.anthropic.claude-sonnet-4-6`.                                    |
 
 The workflow needs `issues: write` **as well as** `pull-requests: write`:
 repo-level label creation (`gh label create`) goes through
-`POST /repos/{repo}/labels`, which is gated on `issues`.
+`POST /repos/{repo}/labels`, which is gated on `issues` — and so is applying a
+label to a PR, which is why every label call runs under `GITHUB_TOKEN` rather than
+`BOT_PAT`.

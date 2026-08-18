@@ -2,7 +2,9 @@
 
 A daily job that selects **exactly one** tractable file currently on the
 repository's boy-scout debt lists and hands a focused refactor brief to
-claude-code-action, which cleans the file and opens the pull request itself.
+claude-code-action, which cleans the file and pushes a branch — a deterministic
+workflow step then opens the pull request (see
+[Why Claude does not open the PR](#why-claude-does-not-open-the-pr)).
 Where [`codebase-sins/`](../codebase-sins/README.md) _files issues_ about
 qualitative debt, this pays down debt the repo already tracks mechanically.
 
@@ -63,9 +65,41 @@ policy, not boy-scout debt, and is therefore never a candidate.
 
 Driven by
 [`.github/workflows/boy-scout-debt-dispatcher.yml`](../../../.github/workflows/boy-scout-debt-dispatcher.yml)
-(daily at 02:17 UTC). That workflow checks out with `secrets.BOT_PAT` and gives
-Claude `GH_TOKEN: secrets.BOT_PAT`, because GitHub suppresses workflow runs for
-`GITHUB_TOKEN`-authored pushes and the cleanup PR must get the full check suite.
+(daily at 02:17 UTC). That workflow checks out with `secrets.BOT_PAT`, because
+GitHub suppresses workflow runs for `GITHUB_TOKEN`-authored pushes and the
+cleanup PR must get the full check suite.
+
+## Why Claude does not open the PR
+
+Two phases, deliberately: **Claude pushes the branch and writes the PR body to
+`$PR_BODY_FILE`; a deterministic shell step opens the PR.** The brief forbids
+`gh pr create` outright.
+
+The reason is token identity. `claude-code-action` overrides `GH_TOKEN` for its
+Bash tool with its own `github_token:` input, which this workflow deliberately
+sets to `${{ github.token }}` (an OIDC → GitHub App exchange fails on this repo),
+so Claude's `gh` is always `GITHUB_TOKEN`. A PR created with `GITHUB_TOKEN` is
+authored by `github-actions[bot]`, and GitHub queues every workflow run for such
+a PR as `action_required` — the PR sits at **zero checks** until a human clicks
+"Approve and run". For a change whose entire purpose is to satisfy
+`check-touched-exemptions.mjs`, that is worthless. The deterministic step is the
+same shape [`coverage-ratchet.yml`](../../../.github/workflows/coverage-ratchet.yml)
+uses, and those PRs pick up the full suite unattended.
+
+The step is a clean no-op (never a failure) when Claude pushed nothing, when the
+branch is not ahead of `origin/main`, or when no body file was written — which is
+what the brief's "if the honest fix is prohibited, report instead" escape hatch
+produces. It also skips creation when an open PR for the head already exists.
+
+Two tokens, because `BOT_PAT` is scoped to **contents + pull-requests only**:
+
+| Call                                         | Token          | Why                                                        |
+| -------------------------------------------- | -------------- | ---------------------------------------------------------- |
+| `gh pr create`                               | `BOT_PAT`      | The author's events must trigger CI.                       |
+| `gh label create` / `gh pr edit --add-label` | `GITHUB_TOKEN` | Labels are an Issues API write; `BOT_PAT` has no `issues`. |
+
+Passing `--label` to `gh pr create` under `BOT_PAT` would 403 and lose the PR, so
+the label is always a separate `gh pr edit` call.
 
 ## Run it locally
 

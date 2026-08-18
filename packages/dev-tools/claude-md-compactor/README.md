@@ -3,8 +3,10 @@
 A weekly job that keeps the repo's machine-read instruction guides small. Every
 Saturday night a deterministic Node step measures every **tracked** file named
 `CLAUDE.md` and hands the oversized ones to `claude-code-action`, which rewrites
-them and opens exactly **one** pull request. Nothing oversized → no branch, no
-PR; silence is a valid outcome. Driven by
+them and pushes **one** branch; a deterministic workflow step then opens exactly
+**one** pull request from it (see
+[Why Claude does not open the PR](#why-claude-does-not-open-the-pr)). Nothing
+oversized → no branch, no PR; silence is a valid outcome. Driven by
 `.github/workflows/claude-md-compactor.yml`. Mirrors the
 `packages/dev-tools/codebase-sins/` layout (pure logic + CLI + co-located tests
 run by the `dev-tools` vitest project).
@@ -43,6 +45,31 @@ GitHub-native: the CLI queries open PRs and reports the first whose head branch
 starts with `automation/weekend-claude-compaction-` or whose title starts with
 `chore(docs): compact CLAUDE.md guides`. The workflow then skips the Claude step.
 No state file, no state branch, no Actions cache.
+
+## Why Claude does not open the PR
+
+Two phases, deliberately: **Claude pushes the branch and writes the PR body to
+`$PR_BODY_FILE`; a deterministic shell step opens the PR** with
+`GH_TOKEN: secrets.BOT_PAT`, using the `pr_title` output so the title stays on the
+`COMPACTION_PR_TITLE` constant. The brief forbids `gh pr create`.
+
+The reason is token identity. `claude-code-action` overrides `GH_TOKEN` for its
+Bash tool with its own `github_token:` input, which this workflow sets to
+`${{ github.token }}` (an OIDC → GitHub App exchange fails on this repo), so
+Claude's `gh` is always `GITHUB_TOKEN`. A PR created with `GITHUB_TOKEN` is
+authored by `github-actions[bot]`, and GitHub queues every workflow run for such a
+PR as `action_required`: the PR sits at **zero checks** until a human clicks
+"Approve and run". The deterministic step is the same shape
+[`coverage-ratchet.yml`](../../../.github/workflows/coverage-ratchet.yml) uses.
+
+It runs **after** the `--check` invariant, so a compaction that failed the policy
+never becomes a PR, and it is a clean no-op (never a failure) when Claude pushed
+nothing, when the branch is not ahead of `origin/main`, or when no body file was
+written. This workflow applies no label, so it needs no second token — the
+`BOT_PAT`/`GITHUB_TOKEN` split for create-vs-label only matters in the sibling
+dispatchers ([boy-scout](../boy-scout-debt/README.md#why-claude-does-not-open-the-pr)),
+where `BOT_PAT`'s missing `issues` permission forces the label into its own
+`gh pr edit` call under `GITHUB_TOKEN`.
 
 ## Files
 
@@ -97,8 +124,9 @@ successfully rewritten guide no longer looks oversized to a fresh measurement.
 
 ### Outputs
 
-`has_oversized`, `oversized_count`, `branch`, `existing_pr`, `worklist`, and the
-multi-line `report` and `prompt`.
+`has_oversized`, `oversized_count`, `branch`, `pr_title` (the fixed
+`COMPACTION_PR_TITLE`, consumed by the `gh pr create` step), `existing_pr`,
+`worklist`, and the multi-line `report` and `prompt`.
 
 ## Exit codes
 

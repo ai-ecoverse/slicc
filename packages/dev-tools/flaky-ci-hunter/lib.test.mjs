@@ -794,6 +794,20 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('Do not merge');
   });
 
+  it('pushes the branch and leaves PR creation to the deterministic step', () => {
+    // A PR opened by Claude's `gh` is authored by github-actions[bot], whose
+    // checks GitHub queues as `action_required` until a human approves them —
+    // useless for a determinism fix. The workflow opens it with BOT_PAT from the
+    // title/body files instead, so the brief must name both env vars and never
+    // invoke `gh pr create`.
+    expect(prompt).toContain('git push -u origin automation/flaky-fix/ci--node-server');
+    expect(prompt).toContain('$PR_TITLE_FILE');
+    expect(prompt).toContain('$PR_BODY_FILE');
+    expect(prompt).not.toMatch(/^\s*gh pr create/m);
+    expect(prompt.match(/gh pr create/g)).toHaveLength(1);
+    expect(prompt).toContain('action_required');
+  });
+
   it('tolerates a candidate with no captured evidence', () => {
     const bare = buildPrompt({ workflow: 'CI', job: 'x', slug: 'ci--x', flakeScore: 2 });
     expect(bare).toContain('(no evidence links captured)');

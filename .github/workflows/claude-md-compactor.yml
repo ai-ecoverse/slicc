@@ -2,9 +2,10 @@ name: Weekend CLAUDE.md Compactor
 
 # Weekly instruction-file compaction. Saturday night a deterministic Node step
 # measures every TRACKED file named CLAUDE.md (root, docs/, every package) and
-# hands the oversized ones to claude-code-action, which rewrites them and opens
-# exactly ONE pull request. Silence is a valid outcome: nothing oversized → no
-# branch, no PR.
+# hands the oversized ones to claude-code-action, which rewrites them and pushes
+# ONE branch; a deterministic step then opens exactly ONE pull request from it
+# (Claude never runs `gh pr create` — see that step's note). Silence is a valid
+# outcome: nothing oversized → no branch, no PR.
 #
 # TWO BUDGETS, do not confuse them:
 #   * The repo's committed GATE is 20,000 chars for packages/*/CLAUDE.md
@@ -23,10 +24,12 @@ name: Weekend CLAUDE.md Compactor
 # Required repository secrets:
 #   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key for claude-code-action
 #                             (same secret as agentic-debt-triage.yml).
-#   BOT_PAT                   Used for checkout so the branch push and the PR
-#                             trigger CI — a PR pushed with GITHUB_TOKEN does
-#                             not (GitHub's anti-recursion guard), same
-#                             constraint as coverage-ratchet.yml.
+#   BOT_PAT                   Used for checkout, and for `gh pr create`, so the
+#                             branch push and the PR trigger CI — a PR pushed or
+#                             opened with GITHUB_TOKEN does not (GitHub's
+#                             anti-recursion guard; its checks sit at
+#                             `action_required`), same constraint as
+#                             coverage-ratchet.yml.
 #
 # Third-party actions are pinned to immutable commit SHAs.
 
@@ -53,7 +56,7 @@ concurrency:
 
 permissions:
   contents: write # Claude creates the compaction branch and pushes it
-  pull-requests: write # ... and opens one PR
+  pull-requests: write # ... and a later deterministic step opens one PR from it
   id-token: write # claude-code-action fetches an OIDC token during GitHub token setup
 
 jobs:
@@ -100,7 +103,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Compact the oversized guides and open the PR
+      - name: Compact the oversized guides and push the branch
         id: claude
         if: steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
@@ -109,10 +112,15 @@ jobs:
           # CAMP `ABSK...` bearer token), same as agentic-debt-triage.yml.
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
-          # claude-code-action does NOT expose a token to the Bash tool's `gh`,
-          # so set it explicitly or `gh pr create` fails. BOT_PAT (not
-          # GITHUB_TOKEN) so the created PR triggers CI.
-          GH_TOKEN: ${{ secrets.BOT_PAT }}
+          # Claude's Bash `gh` always ends up with the action's own
+          # `github_token:` input, NOT whatever GH_TOKEN is set here — the action
+          # overrides it. That is why Claude no longer opens the PR (see the
+          # step below); read-only `gh` use is fine on this token, and the branch
+          # push uses the BOT_PAT credential persisted by actions/checkout.
+          GH_TOKEN: ${{ github.token }}
+          # The brief writes the PR body here; the step below opens the PR from
+          # it. Passed as env so the prompt and that step cannot drift apart.
+          PR_BODY_FILE: ${{ runner.temp }}/claude-md-compaction-pr-body.md
         with:
           use_bedrock: 'true'
           # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
@@ -151,3 +159,52 @@ jobs:
           TARGET_CHARS: ${{ github.event.inputs.target_chars }}
           WORKLIST: ${{ steps.measure.outputs.worklist }}
         run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check
+
+      # PR creation is deliberately NOT Claude's job. claude-code-action forces
+      # its Bash `gh` onto the action's `github_token:` (GITHUB_TOKEN here), so a
+      # PR Claude opens is authored by `github-actions[bot]` — and GitHub then
+      # queues EVERY workflow run for that PR as `action_required`, awaiting a
+      # human click, so the PR lands with zero checks (observed on #2168/#2169).
+      # Opening it here with BOT_PAT is the shape coverage-ratchet.yml uses.
+      # Ordered after the policy check on purpose: a compaction that failed the
+      # invariant must not become a PR. Claude pushing nothing is a clean no-op.
+      - name: Open the compaction PR
+        if: success() && steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
+        env:
+          # BOT_PAT (contents + pull-requests write, no issues) — enough to open
+          # the PR; this workflow applies no label, so no second token is needed.
+          GH_TOKEN: ${{ secrets.BOT_PAT }}
+          REPO: ${{ github.repository }}
+          BRANCH: ${{ steps.measure.outputs.branch }}
+          PR_TITLE: ${{ steps.measure.outputs.pr_title }}
+          PR_BODY_FILE: ${{ runner.temp }}/claude-md-compaction-pr-body.md
+        run: |
+          set -euo pipefail
+          # Explicit refspec: the checkout's fetch config is not guaranteed to map
+          # an arbitrary new branch into refs/remotes/origin/.
+          git fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" || true
+          git fetch --quiet origin main
+          if ! git rev-parse --quiet --verify "refs/remotes/origin/$BRANCH" >/dev/null; then
+            echo "Claude pushed nothing — nothing to open."
+            exit 0
+          fi
+          if [ "$(git rev-list --count "origin/main..refs/remotes/origin/$BRANCH")" -eq 0 ]; then
+            echo "$BRANCH has no commits ahead of origin/main — nothing to open."
+            exit 0
+          fi
+          PR_URL=$(gh pr list --repo "$REPO" --base main --head "$BRANCH" --state open --json url --jq '.[0].url // ""')
+          if [ -n "$PR_URL" ]; then
+            echo "A PR for $BRANCH is already open: $PR_URL"
+          elif [ ! -s "$PR_BODY_FILE" ]; then
+            echo "::warning::$BRANCH was pushed but no PR body exists at $PR_BODY_FILE — leaving the branch for a human."
+            exit 0
+          else
+            PR_URL=$(gh pr create \
+              --repo "$REPO" \
+              --base main \
+              --head "$BRANCH" \
+              --title "$PR_TITLE" \
+              --body-file "$PR_BODY_FILE")
+            echo "Opened $PR_URL"
+          fi
+          echo "🧹 CLAUDE.md compaction PR: $PR_URL" >> "$GITHUB_STEP_SUMMARY"

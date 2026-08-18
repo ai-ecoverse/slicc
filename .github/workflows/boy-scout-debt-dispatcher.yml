@@ -4,7 +4,8 @@ name: Boy Scout Debt Dispatcher
 # codebase debt, this workflow PAYS DOWN one item of the repo's mechanically
 # tracked debt: it selects exactly one tractable file currently on a debt list
 # and hands a focused refactor brief to claude-code-action, which cleans the
-# file and opens the pull request itself.
+# file and pushes a branch. A deterministic shell step then opens the pull
+# request — Claude never runs `gh pr create` (see that step's note).
 #
 # The six debt lists (authoritative procedure:
 # .agents/skills/verifying-before-push/SKILL.md; gate:
@@ -38,14 +39,20 @@ name: Boy Scout Debt Dispatcher
 #                             BOY_SCOUT_BEDROCK_MODEL / RUM_BEDROCK_MODEL tune
 #                             region + inference profile.
 #   BOT_PAT                   Fine-grained PAT scoped to this repo (contents +
-#                             pull-requests write). The cleanup branch is pushed
-#                             and the PR opened with BOT_PAT — NOT GITHUB_TOKEN
-#                             — because GitHub's anti-recursion guard suppresses
-#                             workflow runs for GITHUB_TOKEN-authored pushes, and
-#                             this PR MUST get the full check suite (the
+#                             pull-requests write; NO issues). The cleanup branch
+#                             is pushed and the PR opened with BOT_PAT — NOT
+#                             GITHUB_TOKEN — because GitHub's anti-recursion
+#                             guard suppresses workflow runs for
+#                             GITHUB_TOKEN-authored pushes and queues the checks
+#                             of a GITHUB_TOKEN-authored PR as
+#                             `action_required`, while this PR MUST get the full
+#                             check suite unattended (the
 #                             check-touched-exemptions gate is the whole point).
 #                             Same identity requirement documented in
 #                             coverage-ratchet.yml / renovate-patch-reconcile.yml.
+#                             Labelling the PR needs the Issues API, which
+#                             BOT_PAT cannot reach — that one call uses
+#                             GITHUB_TOKEN.
 #
 # Third-party actions are pinned to immutable commit SHAs (identical to
 # .github/workflows/agentic-debt-triage.yml) — this job can push branches.
@@ -113,10 +120,10 @@ jobs:
           FILE_OVERRIDE: ${{ github.event.inputs.file }}
         run: node packages/dev-tools/boy-scout-debt/select-debt-file.mjs
 
-      # Created here, with GITHUB_TOKEN, because Claude's `gh` runs under BOT_PAT
-      # (contents + pull-requests only) and label creation needs Issues write —
-      # see the note on `permissions:` above. The brief tells Claude the label
-      # already exists and not to try creating it.
+      # Created here, with GITHUB_TOKEN, because label creation needs Issues
+      # write — see the note on `permissions:` above. The label is applied to the
+      # PR by the last step in this job; the brief tells Claude to touch no
+      # labels at all.
       - name: Ensure the boy-scout label exists
         if: steps.select.outputs.has_candidate == 'true' && github.event.inputs.dry_run != 'true'
         env:
@@ -131,7 +138,7 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Pay down the debt and open the PR
+      - name: Pay down the debt and push the cleanup branch
         if: steps.select.outputs.has_candidate == 'true' && github.event.inputs.dry_run != 'true'
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
         env:
@@ -143,11 +150,17 @@ jobs:
           # run fails on auth, fall back to `anthropic_api_key`.)
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
-          # claude-code-action does NOT expose a token to the Bash tool's `gh`,
-          # so set it explicitly or `gh pr create` / `gh label create` fail.
-          # BOT_PAT (not github.token) so the opened PR gets the full check
-          # suite — see the header note.
-          GH_TOKEN: ${{ secrets.BOT_PAT }}
+          # Claude's Bash `gh` always ends up with the action's own
+          # `github_token:` input, NOT whatever GH_TOKEN is set here — the action
+          # overrides it. That is precisely why Claude no longer opens the PR:
+          # a GITHUB_TOKEN-authored PR gets its checks queued as
+          # `action_required`. Read-only `gh` use by Claude is fine on this
+          # token; branch pushes use the BOT_PAT credential persisted by
+          # actions/checkout.
+          GH_TOKEN: ${{ github.token }}
+          # The brief writes the PR body here; the step below opens the PR from
+          # it. Passed as env so the prompt and that step cannot drift apart.
+          PR_BODY_FILE: ${{ runner.temp }}/boy-scout-pr-body.md
         with:
           use_bedrock: 'true'
           # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
@@ -172,3 +185,69 @@ jobs:
             --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
             --max-turns 200
           prompt: ${{ steps.select.outputs.prompt }}
+
+      # PR creation is deliberately NOT Claude's job. claude-code-action forces
+      # its Bash `gh` onto the action's `github_token:` (GITHUB_TOKEN here), so a
+      # PR Claude opens is authored by `github-actions[bot]` — and GitHub then
+      # queues EVERY workflow run for that PR as `action_required`, awaiting a
+      # human click, so the PR lands with zero checks. Observed twice, on #2168
+      # and #2169. Opening it here with BOT_PAT is the same shape
+      # coverage-ratchet.yml uses, and its PRs pick up the whole suite unattended.
+      #
+      # A run where Claude pushed nothing (the "prohibited fix" escape hatch) is
+      # a clean no-op, not a failure.
+      - name: Open the cleanup PR
+        id: pr
+        if: success() && steps.select.outputs.has_candidate == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          # BOT_PAT: contents + pull-requests write, no issues — enough to create
+          # the PR, NOT to label it (labels go through the Issues API, hence the
+          # separate GITHUB_TOKEN step below).
+          GH_TOKEN: ${{ secrets.BOT_PAT }}
+          REPO: ${{ github.repository }}
+          BRANCH: automation/boy-scout/${{ steps.select.outputs.slug }}
+          DEBT_FILE: ${{ steps.select.outputs.file }}
+          PR_BODY_FILE: ${{ runner.temp }}/boy-scout-pr-body.md
+        run: |
+          set -euo pipefail
+          # Explicit refspec: the checkout's fetch config is not guaranteed to map
+          # an arbitrary new branch into refs/remotes/origin/.
+          git fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" || true
+          git fetch --quiet origin main
+          if ! git rev-parse --quiet --verify "refs/remotes/origin/$BRANCH" >/dev/null; then
+            echo "Claude pushed nothing — nothing to open."
+            exit 0
+          fi
+          if [ "$(git rev-list --count "origin/main..refs/remotes/origin/$BRANCH")" -eq 0 ]; then
+            echo "$BRANCH has no commits ahead of origin/main — nothing to open."
+            exit 0
+          fi
+          PR_URL=$(gh pr list --repo "$REPO" --base main --head "$BRANCH" --state open --json url --jq '.[0].url // ""')
+          if [ -n "$PR_URL" ]; then
+            echo "A PR for $BRANCH is already open: $PR_URL"
+          elif [ ! -s "$PR_BODY_FILE" ]; then
+            echo "::warning::$BRANCH was pushed but no PR body exists at $PR_BODY_FILE — leaving the branch for a human."
+            exit 0
+          else
+            PR_URL=$(gh pr create \
+              --repo "$REPO" \
+              --base main \
+              --head "$BRANCH" \
+              --title "refactor: pay down boy-scout debt in $DEBT_FILE" \
+              --body-file "$PR_BODY_FILE")
+            echo "Opened $PR_URL"
+          fi
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          echo "🧹 Boy-scout cleanup PR: $PR_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      # Separate step, separate token: applying a label is an Issues API write,
+      # which BOT_PAT (contents + pull-requests only) cannot do — `gh pr create
+      # --label` under BOT_PAT would 403 and lose the PR.
+      - name: Label the cleanup PR
+        if: success() && steps.pr.outputs.pr_url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR_URL" --add-label boy-scout-debt

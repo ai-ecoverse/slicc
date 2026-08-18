@@ -591,11 +591,27 @@ describe('buildAuthorPrompt', () => {
     expect(prompt).toContain('stop after\n2 of them');
   });
 
-  it('requires the Closes line and the label swap', () => {
+  it('requires the Closes line and leaves the dispatched label swap to the workflow', () => {
     expect(prompt).toContain('Closes #<number>');
-    expect(prompt).toContain(
+    expect(prompt).not.toContain(
       `gh issue edit <number> --remove-label ${LABELS.ready} --add-label ${LABELS.dispatched}`
     );
+    expect(prompt).toMatch(
+      new RegExp(`swaps the\\s+issue's \`${LABELS.ready}\` label for \`${LABELS.dispatched}\``)
+    );
+  });
+
+  it('pushes the branch and leaves PR creation to the deterministic step', () => {
+    // A PR opened by Claude's `gh` is authored by github-actions[bot], and
+    // GitHub queues every check on such a PR as `action_required` until a human
+    // approves it — so the workflow opens one PR per pushed branch with BOT_PAT,
+    // from the per-issue title/body files the brief names here.
+    expect(prompt).toContain('git push -u origin automation/backlog/issue-<number>');
+    expect(prompt).toContain('$RUNNER_TEMP/backlog-pr-<number>.md');
+    expect(prompt).toContain('$PR_BODY_FILE_TEMPLATE');
+    expect(prompt).not.toMatch(/^\s*gh pr create/m);
+    expect(prompt.match(/gh pr create/g)).toHaveLength(1);
+    expect(prompt).toContain('action_required');
   });
 
   it('forbids closing anything, merging, and gate-dodging', () => {

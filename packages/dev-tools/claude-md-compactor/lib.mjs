@@ -317,17 +317,27 @@ not characters. It is excluded from the worklist by construction; do not touch i
    documentation-only changes.
 4. Review \`git diff\` and confirm there is nothing behavioural, generated, or
    unrelated in it.
-5. Commit with a conventional-commit message, push the branch, and open ONE PR
-   against \`main\` titled exactly:
+5. Commit with a conventional-commit message and push the branch:
+   \`\`\`bash
+   git push -u origin ${branch || `${COMPACTION_BRANCH_PREFIX}<YYYY-MM-DD UTC>`}
+   \`\`\`
+6. Write the pull-request body to the file named by the \`PR_BODY_FILE\`
+   environment variable — e.g.
+   \`cat > "$PR_BODY_FILE" <<'EOF' … EOF\`. **Do NOT run \`gh pr create\`.** A
+   later, deterministic workflow step opens the PR from your pushed branch and
+   that body file, because the PR must be authored by a token whose events
+   trigger CI: a PR opened by your \`gh\` is authored by \`github-actions[bot]\`,
+   and GitHub then queues every check on it as \`action_required\` until a human
+   clicks "Approve and run". The title is fixed by that step and is exactly:
    \`${COMPACTION_PR_TITLE}\`
    The body must contain: a before/after character-count table, a link for every
    document you moved detail into, and these exact validation commands:
 ${VALIDATION_COMMANDS.map((c) => `   - \`${c}\``).join('\n')}
-6. **Never merge the PR.** Do not enable auto-merge. Do not poll CI afterwards —
+7. **Never merge the PR.** Do not enable auto-merge. Do not poll CI afterwards —
    existing automation handles follow-up failures.
-7. Report the PR URL and a one-paragraph summary. If you are blocked, report the
-   exact blocker and leave no misleading success state — an empty PR is worse
-   than no PR.
+8. Report a one-paragraph summary. If you are blocked, push NOTHING and write no
+   body file, then report the exact blocker — the deterministic step treats an
+   unpushed branch as a clean no-op, and an empty PR is worse than no PR.
 
 ${report ? `## Pre-run measurement\n\n${report}\n` : ''}`;
 }

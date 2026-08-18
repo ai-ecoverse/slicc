@@ -327,6 +327,15 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('npx vitest run --project dev-tools');
   });
 
+  it('pushes the branch but leaves PR creation to the deterministic workflow step', () => {
+    expect(prompt).toContain('git push -u origin automation/weekend-claude-compaction-2026-02-07');
+    // `gh pr create` may appear in the prohibition, never as an invocation.
+    expect(prompt).not.toMatch(/^\s*gh pr create/m);
+    expect(prompt.match(/gh pr create/g)).toHaveLength(1);
+    expect(prompt).toContain('PR_BODY_FILE');
+    expect(prompt).toContain('action_required');
+  });
+
   it('forbids merging and CI polling', () => {
     expect(prompt).toContain('Never merge the PR');
     expect(prompt).toContain('Do not poll CI');

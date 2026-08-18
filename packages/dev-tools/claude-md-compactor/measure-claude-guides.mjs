@@ -47,6 +47,7 @@ import { fileURLToPath } from 'node:url';
 import {
   buildBranchName,
   buildPrompt,
+  COMPACTION_PR_TITLE,
   COMPACTOR_MAX_CHARS,
   COMPACTOR_TARGET_CHARS,
   findExistingCompactionPr,
@@ -197,6 +198,9 @@ async function main() {
   // paths no longer look oversized, so the check cannot rediscover them.
   setOutput('worklist', oversized.map((m) => m.path).join(','));
   setOutput('branch', branch);
+  // The workflow, not Claude, opens the PR; exporting the title keeps the
+  // `gh pr create` step and the brief on one constant.
+  setOutput('pr_title', COMPACTION_PR_TITLE);
   setOutput('existing_pr', existing?.url ?? '');
   setOutput('report', report);
   setOutput(
