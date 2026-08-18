@@ -64,14 +64,26 @@ jobs:
     # Skip fork PRs: secrets are unavailable on `pull_request` from forks, and
     # reviewing them safely would require `pull_request_target` + a security
     # review (out of scope). Only run when the PR head lives in this repo.
-    # Also skip bot-authored PRs (e.g. Renovate dependency bumps): they don't
-    # need an AI review, and claude-code-action rejects bot-initiated runs by
-    # default ("Workflow initiated by non-human actor"), which only produced
-    # noisy failed runs. Manual dispatch always runs (operator intent).
+    #
+    # Bot-authored PRs are skipped — EXCEPT the `automation/*` heads our own
+    # scheduled agents push. That exclusion was written for Renovate dependency
+    # bumps, which genuinely do not need an AI review. Applied to an agent's PR
+    # it removes review from the code that needs it most: a model wrote it
+    # unattended, and nobody assigned themselves as its author. Observed on
+    # #2168/#2169/#2170, which arrived with no automated review of any kind
+    # (Codex and Copilot ignore bot-authored PRs too, so this workflow is the
+    # only reviewer they can get).
+    #
+    # Those PRs are normally authored by the BOT_PAT owner — a User, not a Bot —
+    # so the type check alone usually lets them through. The head-ref carve-out
+    # is what makes that independent of which token happened to open the PR.
+    # Manual dispatch always runs (operator intent).
     if: >-
       github.event_name == 'workflow_dispatch' || (
-        github.event.pull_request.head.repo.full_name == github.repository &&
-        github.event.pull_request.user.type != 'Bot'
+        github.event.pull_request.head.repo.full_name == github.repository && (
+          github.event.pull_request.user.type != 'Bot' ||
+          startsWith(github.event.pull_request.head.ref, 'automation/')
+        )
       )
     steps:
       - name: Wait 5 minutes for personal/human reviewers
@@ -147,6 +159,14 @@ jobs:
           track_progress: ${{ github.event_name != 'workflow_dispatch' }}
           # Needed by the action for the inline-comment MCP tool.
           github_token: ${{ github.token }}
+          # An `automation/*` PR opened by `github-actions[bot]` makes the bot the
+          # triggering actor, and the action's human-actor gate would reject the
+          # run outright ("Workflow initiated by non-human actor") — which is the
+          # failure the old blanket bot exclusion was avoiding. Allowing bots here
+          # is what makes reviewing our own agents' PRs possible at all; the
+          # job-level `if` still keeps every other bot's PRs (Renovate) out, and
+          # the fork guard is unchanged.
+          allowed_bots: '*'
           # allowedTools: the inline-comment MCP tool PLUS unrestricted Bash, so
           # the reviewer can use `gh pr comment` / `gh api` for PR context AND
           # actually run the code (npm ci, targeted tests, build) to verify

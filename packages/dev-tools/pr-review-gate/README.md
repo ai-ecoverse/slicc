@@ -40,6 +40,14 @@ The workflow lives in `.github/workflows/claude-pr-review.yml`.
   `$GITHUB_OUTPUT`.
 - **Skip rules.** The gate skips when the PR is not `open`, is a draft, or
   already has any inline review comment. Otherwise it reviews.
+- **Who is eligible at all** is decided before the gate, by the job-level `if:`
+  in [`claude-pr-review.yml`](../../../.github/workflows/claude-pr-review.yml):
+  in-repo heads only (fork PRs cannot see secrets), and bot-authored PRs are
+  skipped **except** `automation/*` heads. That carve-out exists because the
+  blanket bot exclusion was written for Renovate bumps, and applied to our own
+  scheduled agents it removed review from the code that needs it most — a model
+  wrote it unattended. Codex and Copilot both ignore bot-authored PRs, so this
+  workflow is the only review such a PR can get.
 
 ## Required secrets / variables (GitHub Actions)
 
