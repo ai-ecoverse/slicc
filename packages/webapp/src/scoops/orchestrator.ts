@@ -597,7 +597,7 @@ export class Orchestrator implements ConeApprovalRouter {
   /** Set the LickManager for guarding scoop removal against active licks */
   setLickManager(lickManager: LickManager): void {
     this.lickManager = lickManager;
-    lickManager.setDiscoveryIgnore((event) => this.llmsTxtIgnorePolicy?.ignores(event) ?? false);
+    lickManager.setDiscoveryIgnore?.((event) => this.llmsTxtIgnorePolicy?.ignores(event) ?? false);
     // Inject scoop-existence resolver so the LickManager can detect and
     // self-heal orphaned licks (crontasks/webhooks whose target scoop is
     // gone). Uses the shared alias matching so it agrees with the guard.
@@ -928,7 +928,7 @@ export class Orchestrator implements ConeApprovalRouter {
     this.llmsTxtIgnorePolicy?.dispose();
     this.llmsTxtIgnorePolicy = new LlmsTxtIgnorePolicy(this.sharedFs, this.fsWatcher);
     await this.llmsTxtIgnorePolicy.init();
-    this.lickManager?.setDiscoveryIgnore(
+    this.lickManager?.setDiscoveryIgnore?.(
       (event) => this.llmsTxtIgnorePolicy?.ignores(event) ?? false
     );
     this.costTracker.reset();
@@ -1107,7 +1107,7 @@ export class Orchestrator implements ConeApprovalRouter {
     await this.lifecycle.destroyAllTabs();
 
     // Drop the discovery-ignore and sudoers live-reload watcher subscriptions.
-    this.lickManager?.setDiscoveryIgnore(null);
+    this.lickManager?.setDiscoveryIgnore?.(null);
     this.llmsTxtIgnorePolicy?.dispose();
     this.llmsTxtIgnorePolicy = null;
     this.sudoManager?.dispose();
