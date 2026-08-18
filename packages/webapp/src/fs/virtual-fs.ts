@@ -378,6 +378,7 @@ export class VirtualFS {
             sizesFixed: preboot.sizesFixed,
             dropped: preboot.dropped,
             inosReassigned: preboot.inosReassigned,
+            nlinksFixed: preboot.nlinksFixed,
             selfEntryDropped: preboot.selfEntryDropped,
           });
         }
@@ -397,6 +398,7 @@ export class VirtualFS {
             kindFixed: summary.kindFixed,
             sizesFixed: summary.sizesFixed,
             dropped: summary.dropped,
+            nlinksFixed: summary.nlinksFixed,
             selfEntryDropped: summary.selfEntryDropped,
           })
       )) as { index?: { toJSON: () => unknown } };

@@ -47,6 +47,23 @@ const KNOWN_CODES: FsErrorCode[] = [
  */
 export function convertError(err: unknown, path: string): FsError {
   if (err instanceof FsError) return err;
+  // V8 caps Set/Map at 2^24 elements; an overflowing structure inside the FS
+  // stack (kerium's log backlog, 2026-08-18 incident) throws
+  // `RangeError: Set maximum size exceeded` into every operation. ZenFS wraps
+  // it as EINVAL, which made a data-structure overflow read as a storage
+  // problem ("file system too full"). Detect the marker before the code
+  // mapping — whether it arrives raw or already errno-wrapped — and surface
+  // it as EIO with an explicit label instead.
+  {
+    const overflowMsg = err instanceof Error ? err.message : String(err);
+    if (overflowMsg.includes('maximum size exceeded')) {
+      return new FsError(
+        'EIO',
+        `internal overflow, not storage: ${overflowMsg} — reload the session`,
+        path
+      );
+    }
+  }
   // ZenFS ErrnoError carries `.code` directly (POSIX string).
   const structured = (err as { code?: unknown })?.code;
   if (typeof structured === 'string') {

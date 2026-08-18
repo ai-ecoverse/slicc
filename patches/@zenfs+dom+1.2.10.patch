@@ -1,32 +1,36 @@
 diff --git a/node_modules/@zenfs/dom/dist/access.js b/node_modules/@zenfs/dom/dist/access.js
-index ec02258..cccf324 100644
+index ec02258..74d4c83 100644
 --- a/node_modules/@zenfs/dom/dist/access.js
 +++ b/node_modules/@zenfs/dom/dist/access.js
-@@ -52,15 +52,21 @@ export class WebAccessFS extends Async(IndexFS) {
+@@ -52,15 +52,25 @@ export class WebAccessFS extends Async(IndexFS) {
              this.index.fromJSON(data);
              return;
          }
 +        // PATCH(#2146): allocate unique ino/data pairs — the upstream code
 +        // left every inode at ino 0, collapsing the whole tree onto one
 +        // vnode-cache slot. Local counter: _alloc() is O(index) per call.
++        // nlink MUST be 1: the Inode constructor warns on every inode with a
++        // real ino and nlink 0, and kerium retains every log entry — leaving
++        // nlink unset here flooded a long-lived kernel worker until the log
++        // Set hit V8's 2^24 cap and every FS op threw (2026-08-18 incident).
 +        let nextRealityId = 1;
          for (const [path, handle] of this._handles) {
              if (isKind(handle, 'file')) {
                  const { lastModified, size } = await handle.getFile();
 -                this.index.set(path, new Inode({ mode: 0o644 | constants.S_IFREG, size, mtimeMs: lastModified }));
-+                this.index.set(path, new Inode({ ino: nextRealityId, data: nextRealityId + 1, mode: 0o644 | constants.S_IFREG, size, mtimeMs: lastModified }));
++                this.index.set(path, new Inode({ ino: nextRealityId, data: nextRealityId + 1, nlink: 1, mode: 0o644 | constants.S_IFREG, size, mtimeMs: lastModified }));
 +                nextRealityId += 2;
                  continue;
              }
              if (!isKind(handle, 'directory'))
                  throw withErrno('EIO', 'Invalid handle');
 -            this.index.set(path, new Inode({ mode: 0o777 | constants.S_IFDIR, size: 0 }));
-+            this.index.set(path, new Inode({ ino: nextRealityId, data: nextRealityId + 1, mode: 0o777 | constants.S_IFDIR, size: 0 }));
++            this.index.set(path, new Inode({ ino: nextRealityId, data: nextRealityId + 1, nlink: 1, mode: 0o777 | constants.S_IFDIR, size: 0 }));
 +            nextRealityId += 2;
          }
      }
      constructor(root, disableHandleCache = false) {
-@@ -91,7 +97,13 @@ export class WebAccessFS extends Async(IndexFS) {
+@@ -91,7 +101,13 @@ export class WebAccessFS extends Async(IndexFS) {
              // This handle must have been created after initialization
              // Try to add a new inode for the handle to the index
              const handle = await this.get(null, path);
@@ -37,11 +41,11 @@ index ec02258..cccf324 100644
 +            // file's size/mode onto another path on sync — the phantom-
 +            // directory / sibling-size corruption class. Allocate real ids.
 +            const recoveredId = this.index._alloc();
-+            const inode = new Inode({ ino: recoveredId, data: recoveredId + 1 });
++            const inode = new Inode({ ino: recoveredId, data: recoveredId + 1, nlink: 1 });
              if (isKind(handle, 'file')) {
                  const file = await handle.getFile();
                  inode.update({
-@@ -165,7 +177,17 @@ export class WebAccessFS extends Async(IndexFS) {
+@@ -165,7 +181,17 @@ export class WebAccessFS extends Async(IndexFS) {
              log.crit(withErrno('EIO', 'Mismatch in entry kind on write'));
              return;
          }

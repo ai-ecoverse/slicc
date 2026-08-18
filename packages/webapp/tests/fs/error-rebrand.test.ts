@@ -39,6 +39,40 @@ describe('convertError', () => {
   });
 });
 
+describe('convertError on internal Set/Map overflow (2026-08-18 outage)', () => {
+  it('maps a raw RangeError to EIO with an explicit internal-overflow label', () => {
+    const out = convertError(new RangeError('Set maximum size exceeded'), '/shared/x');
+    expect(out.code).toBe('EIO');
+    expect(out.message).toContain('internal overflow, not storage');
+    expect(out.message).toContain('Set maximum size exceeded');
+    expect(out.path).toBe('/shared/x');
+  });
+
+  it('catches the marker even after ZenFS already errno-wrapped it as EINVAL', () => {
+    // The live incident shape: the RangeError from kerium's log Set was
+    // errno-wrapped before reaching convertError, so the code-first mapping
+    // kept EINVAL and a data-structure overflow read as a storage problem.
+    const err = Object.assign(
+      new Error(
+        "EINVAL: undefined: undefined, mkdir '/__opfs__/slicc-fs/shared/change-work' (Set maximum size exceeded)"
+      ),
+      { code: 'EINVAL' }
+    );
+    const out = convertError(err, '/shared/change-work');
+    expect(out.code).toBe('EIO');
+    expect(out.message).toContain('internal overflow, not storage');
+  });
+
+  it('catches a Map overflow too', () => {
+    expect(convertError(new RangeError('Map maximum size exceeded'), '/p').code).toBe('EIO');
+  });
+
+  it('does not reroute ordinary EINVAL errors', () => {
+    const err = Object.assign(new Error('EINVAL: invalid argument, chmod'), { code: 'EINVAL' });
+    expect(convertError(err, '/p').code).toBe('EINVAL');
+  });
+});
+
 describe('rebrandFsError', () => {
   it('rethrows an FsError with the caller-facing path', () => {
     const backendErr = new FsError('ENOENT', 'no such file or directory', 'pack');
