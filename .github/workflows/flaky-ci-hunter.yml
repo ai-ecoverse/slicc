@@ -1,0 +1,165 @@
+name: Flaky CI Hunter
+
+# Weekly hunt for CI jobs that fail NONDETERMINISTICALLY on unchanged code, and
+# a single fixer dispatched at the worst offender.
+#
+# The definition everything here is built around: a flake is not "a job that
+# failed often" — it is the SAME COMMIT producing two different outcomes. If we
+# cannot point at two runs of identical code that disagreed, nothing is
+# dispatched. Silence is a good week.
+#
+# Shape (a deterministic Node selector, then Claude):
+#   1. `packages/dev-tools/flaky-ci-hunter/scan-flakes.mjs` reads recent CI
+#      history READ-ONLY (runs → attempts → jobs → logs) and picks at most ONE
+#      candidate. It lists runs ONE DAY AT A TIME: the runs endpoint returns at
+#      most 1000 items no matter how you page, and this repo produces ~2400 runs
+#      a week, so a window-wide query silently truncates and fakes a quiet week.
+#   2. claude-code-action fixes that one flake on a branded branch and opens ONE
+#      pull request.
+#
+# Cross-run state is GitHub-native — there is no state file, state branch, or
+# Actions cache:
+#   - dispatch attempts + cooldown ← the `automation/flaky-fix/*` pull requests
+#     (their `head.ref` IS the registry key, their dates are the clock);
+#   - the digest ← this run's step summary plus the uploaded `flaky-ci-digest`
+#     artifact. The digest is uploaded on EVERY run (`if: always()`), because the
+#     weeks where nothing is dispatched are exactly when it matters.
+#
+# Checkout uses BOT_PAT, not GITHUB_TOKEN: a PR pushed with GITHUB_TOKEN does
+# not trigger CI (same anti-recursion constraint documented in
+# .github/workflows/coverage-ratchet.yml), and a flaky-test fix that CI never
+# runs is worthless.
+#
+# Required repository secrets (already present — same as rum-error-triage.yml):
+#   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
+#                             bearer token) for claude-code-action.
+#   BOT_PAT                   PAT used for checkout/push so the fix PR triggers CI.
+# Optional repo vars: RUM_AWS_REGION, FLAKY_HUNTER_BEDROCK_MODEL,
+# RUM_BEDROCK_MODEL. No new secrets are required.
+#
+# Third-party actions are pinned to immutable commit SHAs (identical to
+# .github/workflows/ci.yml) — this job has contents/pull-requests write access.
+
+on:
+  schedule:
+    - cron: '50 6 * * 1' # Mondays at 06:50 UTC (off the nightly 03:00/04:15/05:33 slots)
+  workflow_dispatch:
+    inputs:
+      window_days:
+        description: 'Trailing evidence window in days (default 7)'
+        required: false
+        default: '7'
+      job:
+        description: 'Only consider jobs matching this substring (blank = all)'
+        required: false
+      dry_run:
+        description: 'Scan + digest only; do not dispatch a fixer'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: flaky-ci-hunter
+  cancel-in-progress: false
+
+permissions:
+  contents: write # the fixer pushes its automation/flaky-fix/<slug> branch
+  pull-requests: write # the fixer opens exactly one PR
+  # `gh label create flaky-fix` is POST /repos/{repo}/labels, which is gated on
+  # `issues` rather than `pull-requests` (that one covers applying an existing
+  # label to a PR). Without this the label step fails before Claude runs. Same
+  # reason rum-error-triage.yml / agentic-debt-triage.yml carry issues: write.
+  issues: write
+  actions: read # workflow runs, attempts, jobs, and job logs
+  id-token: write # claude-code-action fetches an OIDC token during GitHub token setup
+
+jobs:
+  hunt:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # full history so the fixer can use git log / blame
+          # BOT_PAT (not GITHUB_TOKEN) so the fix PR's pull_request /
+          # merge_group events trigger CI — see the header note.
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Scan CI history for proven flips
+        id: scan
+        env:
+          REPO: ${{ github.repository }}
+          # Read-only scan: actions runs/attempts/jobs/logs and pulls. The
+          # scanner issues no write verb at all — no comments, no labels, no
+          # re-runs. Only the Claude step below writes anything.
+          GH_TOKEN: ${{ github.token }}
+          WINDOW_DAYS: ${{ github.event.inputs.window_days || '7' }}
+          JOB_OVERRIDE: ${{ github.event.inputs.job }}
+          DRY_RUN: ${{ github.event.inputs.dry_run }}
+          DIGEST_PATH: ${{ runner.temp }}/flaky-ci-digest.md
+        run: node packages/dev-tools/flaky-ci-hunter/scan-flakes.mjs
+
+      # Always upload: a quiet week's digest (with its scan-coverage table) is
+      # the whole human-facing output of this expert.
+      - name: Upload the digest
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: flaky-ci-digest
+          path: ${{ runner.temp }}/flaky-ci-digest.md
+          if-no-files-found: warn
+          retention-days: 90
+
+      - name: Ensure the flaky-fix label exists
+        if: steps.scan.outputs.has_candidate == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create flaky-fix --color FBCA04 --description "Determinism fix for a proven CI flake" --force
+
+      - name: Fix the flake and open one PR
+        if: steps.scan.outputs.has_candidate == 'true' && github.event.inputs.dry_run != 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
+        env:
+          # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
+          # CAMP `ABSK...` bearer token). Set the AWS_BEARER_TOKEN_BEDROCK secret
+          # and, if needed, the RUM_AWS_REGION / FLAKY_HUNTER_BEDROCK_MODEL repo
+          # variables to match the region + inference profile your CAMP key can
+          # reach. (Bearer-token auth for Bedrock is newer in Claude Code — if a
+          # run fails on auth, fall back to `anthropic_api_key`.)
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          # claude-code-action does NOT expose a token to the Bash tool's `gh`,
+          # so set it explicitly or `gh pr create` / `git push` fail. BOT_PAT
+          # (not github.token) so the resulting PR triggers CI.
+          GH_TOKEN: ${{ secrets.BOT_PAT }}
+          FLAKY_SLUG: ${{ steps.scan.outputs.slug }}
+        with:
+          use_bedrock: 'true'
+          # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
+          # directly instead of attempting an OIDC -> GitHub App token exchange
+          # (which fails with "User does not have write access" when the Claude
+          # GitHub App is not installed on this repo). Job permissions above
+          # (contents/pull-requests: write) scope this token appropriately.
+          github_token: ${{ github.token }}
+          # On `schedule` events GitHub sets the actor to the last actor on the
+          # default branch, which in this merge-queue repo is `github-merge-queue`
+          # (a bot). claude-code-action's human-actor gate otherwise rejects the
+          # weekly run with "Workflow initiated by non-human actor". Allow all
+          # bots so the cron can run unattended.
+          allowed_bots: '*'
+          # Print Claude's full turn-by-turn output to the Actions log on manual
+          # dispatch (to inspect its reasoning); kept off for the weekly cron so
+          # routine runs don't log tool output that may contain sensitive data.
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.FLAKY_HUNTER_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --max-turns 200
+          prompt: ${{ steps.scan.outputs.prompt }}

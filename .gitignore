@@ -38,3 +38,11 @@ packages/cloudflare-worker/src/preview-bridge-assets.ts
 
 # RUM error-triage runtime artifact
 rum-error-candidates.json
+
+# Scratch hand-off files the scheduled agentic workflows write to the repo root
+# for their Claude phases to read. The authoring phases run `git` with write
+# access to a branch, so an un-ignored scratch file is one `git add -A` away
+# from landing in a pull request.
+rum-fix-ready-issues.json
+backlog-candidates.json
+backlog-ready-issues.json

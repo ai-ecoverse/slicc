@@ -1,0 +1,153 @@
+name: Weekend CLAUDE.md Compactor
+
+# Weekly instruction-file compaction. Saturday night a deterministic Node step
+# measures every TRACKED file named CLAUDE.md (root, docs/, every package) and
+# hands the oversized ones to claude-code-action, which rewrites them and opens
+# exactly ONE pull request. Silence is a valid outcome: nothing oversized → no
+# branch, no PR.
+#
+# TWO BUDGETS, do not confuse them:
+#   * The repo's committed GATE is 20,000 chars for packages/*/CLAUDE.md
+#     (PACKAGE_CLAUDE_MAX_CHARS in packages/dev-tools/tools/check-doc-sizes-lib.mjs,
+#     enforced by `npm run lint:docs`). This workflow never touches it.
+#   * The COMPACTOR POLICY below is stricter and wider: oversized at 10,000
+#     chars, rewritten to <= 9,500, across every tracked CLAUDE.md. Overridable
+#     per-dispatch via max_chars / target_chars.
+# packages/vfs-root/shared/CLAUDE.md (the agent-facing runtime guide, budgeted
+# at 3,000 BYTES) is excluded by construction and never compacted.
+#
+# Cross-run deduplication is GitHub-native: the measure step queries open PRs
+# and skips the run when a compaction PR is already open (no state file, no
+# state branch, no cache).
+#
+# Required repository secrets:
+#   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key for claude-code-action
+#                             (same secret as agentic-debt-triage.yml).
+#   BOT_PAT                   Used for checkout so the branch push and the PR
+#                             trigger CI — a PR pushed with GITHUB_TOKEN does
+#                             not (GitHub's anti-recursion guard), same
+#                             constraint as coverage-ratchet.yml.
+#
+# Third-party actions are pinned to immutable commit SHAs.
+
+on:
+  schedule:
+    - cron: '40 22 * * 6' # Saturday 22:40 UTC (weekly; clear of the nightly 03:00/04:15/05:33 slots)
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Measure and report only; no branch, commit, or PR'
+        type: boolean
+        required: false
+        default: false
+      max_chars:
+        description: 'Oversized threshold in characters (default 10000)'
+        required: false
+      target_chars:
+        description: 'Compaction target in characters (default 9500)'
+        required: false
+
+concurrency:
+  group: claude-md-compactor
+  cancel-in-progress: false
+
+permissions:
+  contents: write # Claude creates the compaction branch and pushes it
+  pull-requests: write # ... and opens one PR
+  id-token: write # claude-code-action fetches an OIDC token during GitHub token setup
+
+jobs:
+  compact:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # full history so the branch can be pushed and rebased
+          # BOT_PAT (not GITHUB_TOKEN) so the branch push and resulting
+          # pull_request / merge_group events trigger CI — same anti-recursion
+          # constraint documented in coverage-ratchet.yml.
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      - run: npm ci
+
+      # Read-only: enumerates tracked guides, measures characters (never bytes),
+      # queries open PRs for the dedup rule, and composes the prompt. This is
+      # the last step a dry run reaches.
+      - name: Measure tracked CLAUDE.md guides
+        id: measure
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          MAX_CHARS: ${{ github.event.inputs.max_chars }}
+          TARGET_CHARS: ${{ github.event.inputs.target_chars }}
+        run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs
+
+      - name: Report an already-open compaction PR
+        if: steps.measure.outputs.existing_pr != ''
+        run: |
+          echo "::notice::Compaction PR already open: ${{ steps.measure.outputs.existing_pr }} — skipping."
+
+      # Claude commits and pushes as this identity (matching coverage-ratchet.yml).
+      - name: Configure git identity
+        if: steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Compact the oversized guides and open the PR
+        id: claude
+        if: steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
+        env:
+          # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
+          # CAMP `ABSK...` bearer token), same as agentic-debt-triage.yml.
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          # claude-code-action does NOT expose a token to the Bash tool's `gh`,
+          # so set it explicitly or `gh pr create` fails. BOT_PAT (not
+          # GITHUB_TOKEN) so the created PR triggers CI.
+          GH_TOKEN: ${{ secrets.BOT_PAT }}
+        with:
+          use_bedrock: 'true'
+          # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
+          # directly instead of attempting an OIDC -> GitHub App token exchange
+          # (which fails with "User does not have write access" when the Claude
+          # GitHub App is not installed on this repo).
+          github_token: ${{ github.token }}
+          # On `schedule` events GitHub sets the actor to the last actor on the
+          # default branch, which in this merge-queue repo is `github-merge-queue`
+          # (a bot). claude-code-action's human-actor gate otherwise rejects the
+          # run with "Workflow initiated by non-human actor". Allow all bots so
+          # the cron can run unattended.
+          allowed_bots: '*'
+          # Print Claude's full turn-by-turn output on manual dispatch (to
+          # inspect its reasoning); kept off for the weekly cron so routine runs
+          # don't log tool output that may contain sensitive data.
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.COMPACTOR_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --max-turns 150
+          prompt: ${{ steps.measure.outputs.prompt }}
+
+      # The Cosmos "do not proceed unless every guide is under the limit"
+      # invariant, enforced deterministically here rather than trusted to the
+      # model. Runs on Claude's own working tree, after its commit.
+      - name: Verify every guide is under the policy limit
+        if: success() && steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
+        env:
+          MAX_CHARS: ${{ github.event.inputs.max_chars }}
+          # The brief promises a rewrite to at most TARGET_CHARS, so the check
+          # holds the selected guides to the target and everything else to the
+          # max. Without the worklist it could only prove they left the oversized
+          # band — a guide parked just under MAX_CHARS would pass here and be
+          # re-selected next week for nothing.
+          TARGET_CHARS: ${{ github.event.inputs.target_chars }}
+          WORKLIST: ${{ steps.measure.outputs.worklist }}
+        run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check

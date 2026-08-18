@@ -1,0 +1,174 @@
+name: Boy Scout Debt Dispatcher
+
+# Daily boy-scout debt payer. Where agentic-debt-triage.yml FILES issues about
+# codebase debt, this workflow PAYS DOWN one item of the repo's mechanically
+# tracked debt: it selects exactly one tractable file currently on a debt list
+# and hands a focused refactor brief to claude-code-action, which cleans the
+# file and opens the pull request itself.
+#
+# The six debt lists (authoritative procedure:
+# .agents/skills/verifying-before-push/SKILL.md; gate:
+# packages/dev-tools/tools/check-touched-exemptions.mjs):
+#   1. complexity.noExcessiveLinesPerFunction     biome.json single-rule override
+#   2. complexity.noExcessiveCognitiveComplexity  biome.json single-rule override
+#   3. nursery.noFloatingPromises                 biome.json single-rule override
+#   4. nursery.noMisusedPromises                  biome.json single-rule override
+#   5. layer-stack back-edges                     layer-back-edge-baseline.json
+#   6. Record<string, unknown>                    record-string-unknown-baseline.json
+# The multi-rule test-file-wide biome override is blanket policy, NOT debt, and
+# is excluded by construction (see size-exemption-lib.mjs).
+#
+# Selection is deterministic and lives in packages/dev-tools/boy-scout-debt/:
+# select-debt-file.mjs resolves every debt entry to a single concrete tracked
+# file, drops generated/vendored paths and multi-match globs (blanket policy),
+# drops files already touched by an OPEN pull request, then picks the smallest
+# lowest-risk survivor and emits the composed brief. Exactly one file and one
+# Claude run per day; a no-op day is a valid, successful result.
+#
+# Cross-run dedup is GitHub-native only — the claimed-file set from open PRs.
+# There is deliberately no state file and no Actions cache, so a still-open PR
+# from a previous run simply takes its file out of the pool instead of blocking
+# the routine.
+#
+# Required repository secrets (both already present):
+#   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
+#                             bearer token) for claude-code-action, shared with
+#                             rum-error-triage.yml / agentic-debt-triage.yml.
+#                             Optional repo vars RUM_AWS_REGION /
+#                             BOY_SCOUT_BEDROCK_MODEL / RUM_BEDROCK_MODEL tune
+#                             region + inference profile.
+#   BOT_PAT                   Fine-grained PAT scoped to this repo (contents +
+#                             pull-requests write). The cleanup branch is pushed
+#                             and the PR opened with BOT_PAT — NOT GITHUB_TOKEN
+#                             — because GitHub's anti-recursion guard suppresses
+#                             workflow runs for GITHUB_TOKEN-authored pushes, and
+#                             this PR MUST get the full check suite (the
+#                             check-touched-exemptions gate is the whole point).
+#                             Same identity requirement documented in
+#                             coverage-ratchet.yml / renovate-patch-reconcile.yml.
+#
+# Third-party actions are pinned to immutable commit SHAs (identical to
+# .github/workflows/agentic-debt-triage.yml) — this job can push branches.
+
+on:
+  schedule:
+    - cron: '17 2 * * *' # daily at 02:17 UTC (clear of the 03:00 / 04:15 / 05:33 nightly jobs)
+  workflow_dispatch:
+    inputs:
+      file:
+        description: 'Override: exact repo-relative path of the debt file to clean; blank = auto-select'
+        required: false
+      dry_run:
+        description: 'Select the file only; do not run Claude / open a PR'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: boy-scout-debt-dispatcher
+  cancel-in-progress: false
+
+permissions:
+  contents: write # push the cleanup branch
+  pull-requests: write # open the cleanup PR and label it
+  # Repo-level label CREATION (`gh label create`, even with `--force`, which only
+  # updates an existing one) goes through POST /repos/{repo}/labels and is gated
+  # on `issues` — NOT `pull-requests`, which merely covers applying an existing
+  # label to a PR. BOT_PAT carries contents + pull-requests only, so the label is
+  # bootstrapped below with GITHUB_TOKEN instead; without this the fixer would
+  # finish its refactor and then die before opening the PR.
+  issues: write # bootstrap the boy-scout-debt label
+  id-token: write # claude-code-action fetches an OIDC token during GitHub token setup
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      # Third-party actions are pinned to immutable commit SHAs (matching
+      # .github/workflows/agentic-debt-triage.yml).
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # full history: the debt gate resolves a merge-base against origin/main
+          # BOT_PAT (persisted as the push credential) so Claude's branch push
+          # fires the pull_request events that run CI on the cleanup PR. See the
+          # header note on GitHub's anti-recursion guard.
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      # The fixer runs biome, typecheck, focused vitest and the debt gate, so it
+      # needs a full install — not just the selector's Node builtins.
+      - run: npm ci
+
+      - name: Select today's debt file
+        id: select
+        env:
+          REPO: ${{ github.repository }}
+          # Read-only use: list open PRs and their changed files for dedup.
+          GH_TOKEN: ${{ github.token }}
+          FILE_OVERRIDE: ${{ github.event.inputs.file }}
+        run: node packages/dev-tools/boy-scout-debt/select-debt-file.mjs
+
+      # Created here, with GITHUB_TOKEN, because Claude's `gh` runs under BOT_PAT
+      # (contents + pull-requests only) and label creation needs Issues write —
+      # see the note on `permissions:` above. The brief tells Claude the label
+      # already exists and not to try creating it.
+      - name: Ensure the boy-scout label exists
+        if: steps.select.outputs.has_candidate == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create boy-scout-debt --color 5319e7 \
+            --description "Boy-scout debt paid down by the nightly dispatcher" --force
+
+      - name: Configure git identity
+        if: steps.select.outputs.has_candidate == 'true' && github.event.inputs.dry_run != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Pay down the debt and open the PR
+        if: steps.select.outputs.has_candidate == 'true' && github.event.inputs.dry_run != 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
+        env:
+          # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
+          # CAMP `ABSK...` bearer token). Set the AWS_BEARER_TOKEN_BEDROCK secret
+          # and, if needed, the RUM_AWS_REGION / BOY_SCOUT_BEDROCK_MODEL repo
+          # variables to match the region + inference profile your CAMP key can
+          # reach. (Bearer-token auth for Bedrock is newer in Claude Code — if a
+          # run fails on auth, fall back to `anthropic_api_key`.)
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          # claude-code-action does NOT expose a token to the Bash tool's `gh`,
+          # so set it explicitly or `gh pr create` / `gh label create` fail.
+          # BOT_PAT (not github.token) so the opened PR gets the full check
+          # suite — see the header note.
+          GH_TOKEN: ${{ secrets.BOT_PAT }}
+        with:
+          use_bedrock: 'true'
+          # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
+          # directly instead of attempting an OIDC -> GitHub App token exchange
+          # (which fails with "User does not have write access" when the Claude
+          # GitHub App is not installed on this repo). Job permissions above
+          # scope this token appropriately; Claude's own `gh`/`git` work runs
+          # under BOT_PAT via the env block.
+          github_token: ${{ github.token }}
+          # On `schedule` events GitHub sets the actor to the last actor on the
+          # default branch, which in this merge-queue repo is `github-merge-queue`
+          # (a bot). claude-code-action's human-actor gate otherwise rejects the
+          # nightly run with "Workflow initiated by non-human actor". Allow all
+          # bots so the cron can run unattended.
+          allowed_bots: '*'
+          # Print Claude's full turn-by-turn output to the Actions log on manual
+          # dispatch (to inspect its reasoning); kept off for the nightly cron so
+          # routine runs don't log tool output that may contain sensitive data.
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.BOY_SCOUT_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --max-turns 200
+          prompt: ${{ steps.select.outputs.prompt }}
