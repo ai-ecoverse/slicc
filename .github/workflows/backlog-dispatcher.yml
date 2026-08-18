@@ -1,0 +1,287 @@
+name: Backlog Dispatcher
+
+# 🎫 Daily backlog picker. Scans this repository's open issues, decides which of
+# them a competent engineer could implement today without asking anybody a
+# question, and opens a pull request for a handful of them. Two phases, the same
+# shape as .github/workflows/rum-error-triage.yml:
+#
+#   0. a deterministic Node selector
+#      (packages/dev-tools/backlog-dispatcher/select-backlog-issues.mjs) screens
+#      and ranks the open issues, writes the survivors to
+#      `backlog-candidates.json`, and emits the triage prompt + the dispatch
+#      budget. It performs NO writes against GitHub.
+#   1. TRIAGE — claude-code-action reads the candidates, investigates each
+#      against the codebase, labels the ready ones `backlog-ready` and the
+#      rejected ones `backlog-skipped` (with ONE comment saying why). It writes
+#      no code and opens no PR.
+#   2. AUTHOR — a second claude-code-action run takes the open `backlog-ready`
+#      issues, implements the minimal change, opens the PR with `Closes #<n>`,
+#      and swaps the label to `backlog-dispatched`.
+#   3. a deterministic stale sweep (sweep-stale-prs.mjs) labels + comments once
+#      on dispatcher-owned PRs idle for a week. It NEVER closes a PR.
+#
+# READINESS RUBRIC PROVENANCE — this migrates an Augment Code ("Cosmos") expert
+# whose prompt body was a `kb://` include that did not survive the platform's
+# retirement. What survived is ~50 of its decisions, left on this repo as
+# `cosmos-dispatched` / `cosmos-skipped` labels plus its own verbatim skip
+# comments. The hard-override catalog (security/authorization surfaces; upstream
+# or platform bugs and design calls; cross-cutting redesigns including
+# god-class "Bloat" splits; unconfirmed root causes; concurrency/data-integrity
+# bugs spanning layers; native work CI cannot verify; unspecified UX) and the
+# ready classes (a named agentic-debt sin in a named file, a small localised bug
+# with a concrete symptom, a missing shell command with a clear spec, one named
+# flaky test, doc drift naming the stale file, a narrow test addition) were
+# reconstructed from that record and live in
+# packages/dev-tools/backlog-dispatcher/lib.mjs, where they are unit-tested.
+#
+# STATE — GitHub-native; no state file, state branch, or Actions cache. The
+# labels ARE the work queue AND the dedup key:
+#   `backlog-ready`      phase 1 said yes → phase 2's queue
+#   `backlog-dispatched` a PR exists (also how the PR Fix Dispatcher and the
+#                        stale sweep recognise the PR as ours)
+#   `backlog-skipped`    decided against, ONCE
+#   `backlog-stale`      a dispatcher PR has gone idle
+#   `cosmos-dispatch-failed`  the author phase died (legacy name reused: the
+#                        label already exists in this repo and means this)
+# The legacy `cosmos-dispatched` / `cosmos-skipped` / `cosmos-dispatch-failed`
+# labels are treated as EQUIVALENT to the new ones when excluding candidates, or
+# the first run would re-propose work Cosmos already rejected. Deciding once is
+# deliberate: the original re-posted its skip comment on the same issue on every
+# tick (#2072 got one on 2026-08-12 and another on 2026-08-17). A human removing
+# a label is the intended, documented way to re-queue an issue.
+#
+# SCOPE — `ai-ecoverse/slicc` only, because BOT_PAT is a fine-grained PAT scoped
+# to this repository. The repository is never hardcoded in the selector or the
+# lib (it comes from `GITHUB_REPOSITORY` / `REPO`), so promoting this to
+# `ai-ecoverse/.github` for the whole org is a packaging change — adding
+# `workflow_call` and a repo input — and not a rewrite.
+#
+# Required repository secrets (both already present):
+#   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
+#                             bearer token) for claude-code-action, shared with
+#                             boy-scout-debt-dispatcher.yml / rum-error-triage.yml.
+#   BOT_PAT                   Fine-grained PAT scoped to this repo (contents +
+#                             issues + pull-requests write). The branch is pushed
+#                             and the PR opened with BOT_PAT — NOT GITHUB_TOKEN —
+#                             because GitHub's anti-recursion guard suppresses
+#                             workflow runs for GITHUB_TOKEN-authored pushes, and
+#                             these PRs MUST get the full check suite.
+# Optional repo variables: BACKLOG_BEDROCK_MODEL / RUM_BEDROCK_MODEL,
+# RUM_AWS_REGION.
+#
+# Third-party actions are pinned to immutable commit SHAs (the same SHAs used by
+# .github/workflows/boy-scout-debt-dispatcher.yml) — this job can push branches.
+
+on:
+  schedule:
+    # Daily at 09:35 UTC. Cosmos ran this expert at ~09:05; this slot is clear of
+    # the repo's occupied crons (02:17 / 03:00 / 04:15 / 05:33 daily, `7 */2 * * *`,
+    # Sat 22:40, Mon 06:50).
+    - cron: '35 9 * * *'
+  workflow_dispatch:
+    inputs:
+      issue:
+        description: 'Override: consider only this issue number (waives the settling-age wait only)'
+        required: false
+      dry_run:
+        description: 'Selector only; no labels, no comments, no Claude, no PR'
+        type: boolean
+        required: false
+        default: false
+      max_dispatches:
+        description: 'Lower the dispatch budget for this run (default 5)'
+        required: false
+
+concurrency:
+  group: backlog-dispatcher
+  cancel-in-progress: false
+
+permissions:
+  contents: write # push the implementation branch
+  # Repo-level label CREATION (`gh label create`) goes through
+  # POST /repos/{repo}/labels, which is gated on `issues`, NOT
+  # `pull-requests` — pull-requests only covers applying an existing label to a
+  # PR. Without this the bootstrap step below fails before the selector runs.
+  # Same reason rum-error-triage.yml / pr-fix-dispatcher.yml carry issues: write.
+  issues: write # label + comment on issues
+  pull-requests: write # open the PR, label it, comment on a stale one
+  id-token: write # claude-code-action fetches an OIDC token during setup
+
+jobs:
+  dispatch:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # full history: the author phase runs the debt gate against origin/main
+          # BOT_PAT (persisted as the push credential) so the author phase's
+          # branch push fires the pull_request events that run CI on the PR. See
+          # the header note on GitHub's anti-recursion guard.
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      # The author phase runs biome, typecheck, focused vitest and the debt
+      # gate, so it needs a full install — not just the selector's Node builtins.
+      - run: npm ci
+
+      - name: Ensure dispatcher labels exist
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh label create backlog-ready --color 0e8a16 --description "Backlog Dispatcher: triage judged this ready for an authored PR" --force
+          gh label create backlog-dispatched --color 1d76db --description "Backlog Dispatcher: a PR was opened for this issue" --force
+          gh label create backlog-skipped --color cccccc --description "Backlog Dispatcher: decided against dispatching; remove this label to re-queue" --force
+          gh label create backlog-stale --color fbca04 --description "Backlog Dispatcher: dispatcher-owned PR has gone idle and needs a human" --force
+          gh label create cosmos-dispatch-failed --color b60205 --description "Backlog Dispatcher: the PR author phase did not finish" --force
+
+      # Deterministic screening + ranking. Writes `backlog-candidates.json` for
+      # phase 1 to read (mirroring `rum-error-candidates.json`) and emits the
+      # triage prompt, the candidate count, and the dispatch budget.
+      - name: Select candidate issues
+        id: select
+        env:
+          REPO: ${{ github.repository }}
+          # Read-only here: list open issues and open PRs. Phase 1 does the
+          # labelling with the same token.
+          GH_TOKEN: ${{ github.token }}
+          ISSUE_NUMBER: ${{ github.event.inputs.issue }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          MAX_DISPATCHES: ${{ github.event.inputs.max_dispatches }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node packages/dev-tools/backlog-dispatcher/select-backlog-issues.mjs
+
+      # ── Phase 1: judge the candidates and label them ────────────────────────
+      # Split from phase 2 so each Claude run gets its own turn budget, and so an
+      # issue is never labelled ready by a run that then exhausts its turns
+      # before a PR exists.
+      - name: Triage the candidates
+        if: steps.select.outputs.has_candidates == 'true' && github.event.inputs.dry_run != 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
+        env:
+          # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
+          # CAMP `ABSK...` bearer token). RUM_AWS_REGION / BACKLOG_BEDROCK_MODEL
+          # tune region + inference profile. (Bearer-token auth for Bedrock is
+          # newer in Claude Code — if a run fails on auth, fall back to
+          # `anthropic_api_key`.)
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          # claude-code-action does NOT expose a token to the Bash tool's `gh`,
+          # so set it explicitly or `gh issue edit` fails. Triage only labels and
+          # comments, so the job's GITHUB_TOKEN is the right, narrower identity —
+          # only the author phase needs BOT_PAT.
+          GH_TOKEN: ${{ github.token }}
+        with:
+          use_bedrock: 'true'
+          # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
+          # directly instead of attempting an OIDC -> GitHub App token exchange
+          # (which fails with "User does not have write access" when the Claude
+          # GitHub App is not installed on this repo).
+          github_token: ${{ github.token }}
+          # On `schedule` events GitHub sets the actor to the last actor on the
+          # default branch, which in this merge-queue repo is `github-merge-queue`
+          # (a bot). claude-code-action's human-actor gate otherwise rejects the
+          # scheduled run with "Workflow initiated by non-human actor".
+          allowed_bots: '*'
+          # Full turn-by-turn output on manual dispatch only; the cron keeps it
+          # off so routine runs don't log tool output that may be sensitive.
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.BACKLOG_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Read,Grep,Glob,Bash(gh issue:*),Bash(gh label:*)"
+            --max-turns 150
+          prompt: ${{ steps.select.outputs.prompt }}
+
+      # ── Phase 2: open the PRs for whatever phase 1 marked ready ─────────────
+      # `backlog-ready` is the cross-phase work queue, so an issue marked ready
+      # by a previous run whose author phase died is picked up here.
+      - name: List backlog-ready issues for the author phase
+        id: ready
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          BUDGET: ${{ steps.select.outputs.dispatch_budget }}
+        run: |
+          gh issue list --repo "$REPO" --label backlog-ready --state open \
+            --limit 25 --json number,title,body > backlog-ready-issues.json
+          count=$(jq 'length' backlog-ready-issues.json)
+          echo "Found $count open backlog-ready issue(s) to author PRs for."
+          if [ "$count" -gt 0 ]; then
+            echo "has_ready=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "has_ready=false" >> "$GITHUB_OUTPUT"
+          fi
+          # Compose the author brief from the same unit-tested builder the triage
+          # prompt comes from, so the two phases cannot drift apart.
+          node --input-type=module -e '
+            import { appendFileSync, readFileSync } from "node:fs";
+            import { buildAuthorPrompt, CONFIG } from "./packages/dev-tools/backlog-dispatcher/lib.mjs";
+            const issues = JSON.parse(readFileSync("backlog-ready-issues.json", "utf8"));
+            const budget = Number(process.env.BUDGET) || CONFIG.MAX_DISPATCHES_PER_RUN;
+            const prompt = buildAuthorPrompt(issues, { repo: process.env.REPO, budget });
+            appendFileSync(process.env.GITHUB_OUTPUT, `prompt<<EOF_BACKLOG_PROMPT\n${prompt}\nEOF_BACKLOG_PROMPT\n`);
+          '
+
+      - name: Configure git identity
+        if: steps.ready.outputs.has_ready == 'true' && github.event.inputs.dry_run != 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Author the PRs for backlog-ready issues
+        if: steps.ready.outputs.has_ready == 'true' && github.event.inputs.dry_run != 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
+        env:
+          # Same Bedrock auth as phase 1 (see the notes on that step).
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          # BOT_PAT (not github.token) so the opened PR gets the full check
+          # suite — see the header note on the anti-recursion guard.
+          GH_TOKEN: ${{ secrets.BOT_PAT }}
+        with:
+          use_bedrock: 'true'
+          # Job permissions above scope this token; Claude's own `gh`/`git` work
+          # runs under BOT_PAT via the env block.
+          github_token: ${{ github.token }}
+          allowed_bots: '*'
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.BACKLOG_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(git:*),Bash(gh pr:*),Bash(gh issue:*),Bash(npm:*),Bash(npx:*),Bash(node:*)"
+            --max-turns 200
+          prompt: ${{ steps.ready.outputs.prompt }}
+
+      # An author phase that died owes every issue it was holding one label swap
+      # so the next tick (and any human reading the issue) can see it. Issues
+      # that made it to a PR already lost `backlog-ready`, so only the ones it
+      # never finished are still labelled.
+      - name: Report a failed author phase
+        if: failure() && steps.ready.outputs.has_ready == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          for n in $(gh issue list --repo "$REPO" --label backlog-ready --state open --json number --jq '.[].number'); do
+            gh issue edit "$n" --repo "$REPO" --add-label cosmos-dispatch-failed --remove-label backlog-ready || true
+            gh issue comment "$n" --repo "$REPO" --body "<sup>🎫 [Backlog Dispatcher]($RUN_URL)</sup>
+
+          **The PR author phase did not finish.** It stopped before a pull request existed (it may have run out of turns, hit something it was told not to work around, or crashed). Nothing was merged and nothing was closed; this issue now needs a human. Remove the \`cosmos-dispatch-failed\` label to put it back in the queue." || true
+          done
+
+      # Deterministic, no Claude: label + comment ONCE on dispatcher-owned PRs
+      # that have gone idle. It never closes a pull request — the Cosmos original
+      # did, which threw away work whose only sin was waiting for review.
+      - name: Sweep stale dispatcher PRs
+        if: ${{ !cancelled() && github.event.inputs.dry_run != 'true' }}
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: node packages/dev-tools/backlog-dispatcher/sweep-stale-prs.mjs
