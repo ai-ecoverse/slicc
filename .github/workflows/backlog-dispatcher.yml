@@ -15,8 +15,12 @@ name: Backlog Dispatcher
 #      rejected ones `backlog-skipped` (with ONE comment saying why). It writes
 #      no code and opens no PR.
 #   2. AUTHOR — a second claude-code-action run takes the open `backlog-ready`
-#      issues, implements the minimal change, opens the PR with `Closes #<n>`,
-#      and swaps the label to `backlog-dispatched`.
+#      issues, implements the minimal change, pushes one branch per issue, and
+#      writes each PR's title + body to `$RUNNER_TEMP/backlog-pr-<n>.{title,md}`.
+#      It opens no PR and touches no `backlog-dispatched` label.
+#   2b. a deterministic shell step opens ONE PR per pushed branch with BOT_PAT,
+#      labels it, and swaps the issue's `backlog-ready` label for
+#      `backlog-dispatched` (see that step's note on why Claude cannot do it).
 #   3. a deterministic stale sweep (sweep-stale-prs.mjs) labels + comments once
 #      on dispatcher-owned PRs idle for a week. It NEVER closes a PR.
 #
@@ -61,11 +65,16 @@ name: Backlog Dispatcher
 #                             bearer token) for claude-code-action, shared with
 #                             boy-scout-debt-dispatcher.yml / rum-error-triage.yml.
 #   BOT_PAT                   Fine-grained PAT scoped to this repo (contents +
-#                             issues + pull-requests write). The branch is pushed
-#                             and the PR opened with BOT_PAT — NOT GITHUB_TOKEN —
-#                             because GitHub's anti-recursion guard suppresses
-#                             workflow runs for GITHUB_TOKEN-authored pushes, and
-#                             these PRs MUST get the full check suite.
+#                             pull-requests write; NO issues). The branches are
+#                             pushed and the PRs opened with BOT_PAT — NOT
+#                             GITHUB_TOKEN — because GitHub's anti-recursion
+#                             guard suppresses workflow runs for
+#                             GITHUB_TOKEN-authored pushes and queues the checks
+#                             of a GITHUB_TOKEN-authored PR as
+#                             `action_required`, while these PRs MUST get the
+#                             full check suite unattended. Every label and issue
+#                             edit is an Issues API write BOT_PAT cannot make, so
+#                             those calls use GITHUB_TOKEN.
 # Optional repo variables: BACKLOG_BEDROCK_MODEL / RUM_BEDROCK_MODEL,
 # RUM_AWS_REGION.
 #
@@ -234,16 +243,23 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
-      - name: Author the PRs for backlog-ready issues
+      - name: Author the branches for backlog-ready issues
         if: steps.ready.outputs.has_ready == 'true' && github.event.inputs.dry_run != 'true'
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
         env:
           # Same Bedrock auth as phase 1 (see the notes on that step).
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
-          # BOT_PAT (not github.token) so the opened PR gets the full check
-          # suite — see the header note on the anti-recursion guard.
-          GH_TOKEN: ${{ secrets.BOT_PAT }}
+          # Claude's Bash `gh` always ends up with the action's own
+          # `github_token:` input, NOT whatever GH_TOKEN is set here — the action
+          # overrides it. That is why the PRs are opened by the step below
+          # instead; this phase's own `gh` work (the skip-path label swaps) needs
+          # only the job's GITHUB_TOKEN, and branch pushes use the BOT_PAT
+          # credential persisted by actions/checkout.
+          GH_TOKEN: ${{ github.token }}
+          # One body + title file per issue; the step below opens the PRs from
+          # them. Passed as env so the brief and that step cannot drift apart.
+          PR_BODY_FILE_TEMPLATE: ${{ runner.temp }}/backlog-pr-<issue-number>.md
         with:
           use_bedrock: 'true'
           # Job permissions above scope this token; Claude's own `gh`/`git` work
@@ -253,9 +269,112 @@ jobs:
           show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
           claude_args: |
             --model ${{ vars.BACKLOG_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
-            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(git:*),Bash(gh pr:*),Bash(gh issue:*),Bash(npm:*),Bash(npx:*),Bash(node:*)"
+            # `gh pr list`/`view` only: the PR is opened by the deterministic
+            # step below, so `gh pr create` here would produce exactly the
+            # `action_required` PR that step exists to avoid. Narrowing the
+            # allowlist enforces the brief instead of trusting it.
+            --allowedTools "Read,Grep,Glob,Edit,Write,Bash(git:*),Bash(gh pr list:*),Bash(gh pr view:*),Bash(gh issue:*),Bash(npm:*),Bash(npx:*),Bash(node:*)"
             --max-turns 200
           prompt: ${{ steps.ready.outputs.prompt }}
+
+      # PR creation is deliberately NOT Claude's job. claude-code-action forces
+      # its Bash `gh` onto the action's `github_token:` (GITHUB_TOKEN here), so a
+      # PR Claude opens is authored by `github-actions[bot]` — and GitHub then
+      # queues EVERY workflow run for that PR as `action_required`, awaiting a
+      # human click, so the PR lands with zero checks (observed on #2168/#2169).
+      # Opening them here with BOT_PAT is the shape coverage-ratchet.yml uses.
+      #
+      # One PR per pushed branch, so the loop is over the same backlog-ready list
+      # the author phase was given: an issue Claude left alone (or backed out of)
+      # simply has no branch, which is a clean no-op — it keeps `backlog-ready`
+      # and comes back next run.
+      - name: Open the PRs for the authored branches
+        id: prs
+        if: success() && steps.ready.outputs.has_ready == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          # BOT_PAT: contents + pull-requests write, no issues — enough to create
+          # the PRs, NOT to label them or the issues (both are Issues API writes,
+          # hence the separate GITHUB_TOKEN step below).
+          GH_TOKEN: ${{ secrets.BOT_PAT }}
+          REPO: ${{ github.repository }}
+          # Must match `$RUNNER_TEMP/backlog-pr-<number>.md` in the author brief.
+          TEMP_DIR: ${{ runner.temp }}
+          OPENED_FILE: ${{ runner.temp }}/backlog-opened-prs.txt
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin main
+          : > "$OPENED_FILE"
+          for n in $(jq -r '.[].number' backlog-ready-issues.json); do
+            branch="automation/backlog/issue-$n"
+            body="$TEMP_DIR/backlog-pr-$n.md"
+            # Explicit refspec: the checkout's fetch config is not guaranteed to
+            # map an arbitrary new branch into refs/remotes/origin/.
+            git fetch --quiet origin "+refs/heads/$branch:refs/remotes/origin/$branch" || true
+            if ! git rev-parse --quiet --verify "refs/remotes/origin/$branch" >/dev/null; then
+              echo "#$n: no branch pushed — nothing to open."
+              continue
+            fi
+            if [ "$(git rev-list --count "origin/main..refs/remotes/origin/$branch")" -eq 0 ]; then
+              echo "#$n: $branch has no commits ahead of origin/main — nothing to open."
+              continue
+            fi
+            url=$(gh pr list --repo "$REPO" --base main --head "$branch" --state open --json url --jq '.[0].url // ""')
+            if [ -n "$url" ]; then
+              # An earlier run already opened it; fall through so its labels are
+              # still reconciled.
+              echo "#$n: a PR for $branch is already open: $url"
+            elif [ ! -s "$body" ]; then
+              echo "::warning::#$n: $branch was pushed but no PR body exists at $body — leaving the branch for a human."
+              continue
+            else
+              title=""
+              if [ -s "$TEMP_DIR/backlog-pr-$n.title" ]; then
+                title=$(head -n 1 "$TEMP_DIR/backlog-pr-$n.title")
+              fi
+              # Fall back to the commit subject, which the brief also requires to
+              # be a conventional-commit line, rather than losing the PR.
+              if [ -z "$title" ]; then
+                title=$(git log -1 --format=%s "refs/remotes/origin/$branch")
+              fi
+              url=$(gh pr create \
+                --repo "$REPO" \
+                --base main \
+                --head "$branch" \
+                --title "$title" \
+                --body-file "$body")
+              echo "#$n: opened $url"
+            fi
+            printf '%s %s\n' "$n" "$url" >> "$OPENED_FILE"
+            echo "🎫 #$n → $url" >> "$GITHUB_STEP_SUMMARY"
+          done
+
+      # Separate step, separate token: labelling a PR and editing an issue's
+      # labels are Issues API writes, which BOT_PAT (contents + pull-requests
+      # only) cannot do — `gh pr create --label` under BOT_PAT would 403 and lose
+      # the PR. The `backlog-dispatched` label on the PR is how the PR Fix
+      # Dispatcher and the stale sweep recognise it as ours, and the swap on the
+      # issue is what takes it out of the author phase's queue — done here, after
+      # the PR provably exists, rather than trusted to the model.
+      - name: Label the PRs and swap the issue labels
+        if: success() && steps.ready.outputs.has_ready == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          OPENED_FILE: ${{ runner.temp }}/backlog-opened-prs.txt
+        run: |
+          set -euo pipefail
+          [ -s "$OPENED_FILE" ] || { echo "No PRs were opened — nothing to label."; exit 0; }
+          # Non-fatal on purpose: the PRs already exist, and failing here would
+          # make the "author phase did not finish" reporter below lie about them.
+          # An unswapped label is self-healing — the next run finds the open PR
+          # and reconciles it.
+          while read -r n url; do
+            [ -n "${url:-}" ] || continue
+            gh pr edit "$url" --repo "$REPO" --add-label backlog-dispatched ||
+              echo "::warning::could not label $url"
+            gh issue edit "$n" --repo "$REPO" --remove-label backlog-ready --add-label backlog-dispatched ||
+              echo "::warning::could not swap the labels on #$n"
+          done < "$OPENED_FILE"
 
       # An author phase that died owes every issue it was holding one label swap
       # so the next tick (and any human reading the issue) can see it. Issues

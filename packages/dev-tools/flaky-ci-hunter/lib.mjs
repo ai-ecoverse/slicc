@@ -636,6 +636,14 @@ const INTERESTING_LINE =
   /(FAIL|✕|×|AssertionError|Error:|Timeout|expected|##\[error\]|EADDRINUSE|ECONNREFUSED)/i;
 
 /**
+ * Lines that are GitHub Actions telling you *that* something failed, never
+ * *what* failed. Kept in an excerpt as context, but a signature made of nothing
+ * else has localized nothing — see {@link localizeFlake}.
+ */
+const PLUMBING_LINE =
+  /^(##\[error\])?\s*(one or more jobs failed|process completed with exit code|the (job|operation) was canceled|the run was canceled|echo "::error|::error::one or more jobs)/i;
+
+/**
  * Pull the interesting lines out of a job log: strip ANSI and the per-line
  * timestamp Actions prefixes, keep failure-ish lines, drop duplicates.
  * @param {string} logText
@@ -700,6 +708,19 @@ export function localizeFlake(excerpts = []) {
       localized: false,
       signature: '',
       reason: `Read ${usable.length} flip logs and found no shared failure line — the flips have nothing in common, so this is not one fixable flake.`,
+    };
+  }
+  // A signature made only of Actions plumbing names no failure mode. This is
+  // what an aggregator/gate job looks like: `CI / ci` in this repo is
+  // `if: always()` over `needs: [everything]`, so it "flakes" whenever any
+  // child job does and its shared lines are just "One or more jobs failed".
+  // Dispatching a fixer at that sends the model after a phantom. A mirror of
+  // other jobs' flakiness belongs in the digest, not in a pull request.
+  if (common.every((line) => PLUMBING_LINE.test(line))) {
+    return {
+      localized: false,
+      signature: common.slice(0, 5).join('\n'),
+      reason: `The only lines shared by ${usable.length} flips are GitHub Actions plumbing ("job failed", "exit code"), naming no failure mode. This is what a gate/aggregator job looks like — it mirrors other jobs' flakiness rather than having its own.`,
     };
   }
   return {
@@ -887,8 +908,31 @@ and confirming it passes every time. State the iteration count in the PR body.
    \`${FIX_BRANCH_PREFIX}*\` pull requests to learn how many times this job has
    already been dispatched and when. Do not rename it.
 2. Keep the change scoped to this one flake.
-3. Open **exactly ONE** pull request, labelled \`${FIX_LABEL}\`. Do not merge it and
-   do not assign reviewers.
-4. Report back with the PR URL and the iteration count you verified with.
+3. Commit, then \`git push -u origin ${branch}\`.
+4. Write two files instead of opening the pull request yourself:
+   - the one-line PR title to the path in \`$PR_TITLE_FILE\` (a conventional-commit
+     subject naming the root cause, e.g.
+     \`fix(<scope>): <the nondeterminism you removed>\`);
+   - the PR body to the path in \`$PR_BODY_FILE\`, stating the root cause, the
+     evidence links above, and the iteration count you verified with.
+
+   \`\`\`bash
+   printf '%s\\n' "fix(<scope>): <root cause>" > "$PR_TITLE_FILE"
+   cat > "$PR_BODY_FILE" <<'EOF'
+   <root cause, evidence, iteration count>
+   EOF
+   \`\`\`
+
+   **Do NOT run \`gh pr create\` and do not label anything.** A later,
+   deterministic workflow step opens **exactly ONE** pull request from your pushed
+   branch and those two files and applies the \`${FIX_LABEL}\` label. The PR must be
+   authored by a token whose events trigger CI: a PR opened by your \`gh\` is
+   authored by \`github-actions[bot]\`, and GitHub then queues every check on it as
+   \`action_required\` until a human clicks "Approve and run" — worthless for a
+   determinism fix nobody's CI ever runs. Do not merge it and do not assign
+   reviewers.
+5. Report back with the branch name and the iteration count you verified with. If
+   the honest fix is one of the banned options, push NOTHING and write neither
+   file — the step that opens the PR treats an unpushed branch as a clean no-op.
 `;
 }

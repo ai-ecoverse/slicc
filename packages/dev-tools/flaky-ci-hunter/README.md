@@ -12,7 +12,7 @@ quiet week is a valid outcome that needs no justification beyond the digest.
 ## Flow
 
 ```
-cron (Mon 06:50 UTC) ─▶ scan-flakes.mjs ─▶ has_candidate? ─▶ claude-code-action (branch + ONE PR)
+cron (Mon 06:50 UTC) ─▶ scan-flakes.mjs ─▶ has_candidate? ─▶ claude-code-action (branch + title/body files) ─▶ shell step (ONE PR)
                           │                     │
                           │                     └─ always: digest ─▶ step summary + `flaky-ci-digest` artifact
                           ├─ runs, ONE DAY AT A TIME (1000-item cap workaround)
@@ -85,8 +85,27 @@ release/publish/deploy job, is below `FLAKE_THRESHOLD`, has hit
 `MAX_ATTEMPTS_PER_JOB`, is inside `COOLDOWN_DAYS`, already has an open fix PR, is
 fully explained by known-mitigated infrastructure (npm-registry IPv6 — already
 mitigated by `NODE_OPTIONS: --dns-result-order=ipv4first` in `ci.yml`, which
-removed ~79% of observed flakes — artifact transport, runner outage), or has no
-failure signature common to two of its flips.
+removed ~79% of observed flakes — artifact transport, runner outage), has no
+failure signature common to two of its flips, or has a signature made of
+**nothing but Actions plumbing**.
+
+That last filter is what excludes gate jobs, and it was added because the first
+live run tripped over one. `CI / ci` is `if: always()` over `needs:
+[everything]`: it fails whenever any child job fails, so it flips whenever any
+child flips, and it scored 3 on a "common signature" of
+
+```
+##[error]One or more jobs failed or were cancelled
+##[error]Process completed with exit code 1.
+```
+
+which names no failure mode at all. An aggregator has no nondeterminism of its
+own — it mirrors everyone else's — so a fixer sent at it chases a phantom.
+Rather than pattern-match job names (plenty of repos have a real job called
+`ci`), `localizeFlake` requires the shared signature to contain at least one
+line that is not Actions plumbing. That generalizes: whenever we cannot see a
+real error line, we do not dispatch, and the job lands in the digest as "not
+localized" instead.
 
 The dispatch brief bans the fixes this repo has already ruled out in
 [`.agents/skills/writing-slicc-tests/SKILL.md`](../../../.agents/skills/writing-slicc-tests/SKILL.md)
@@ -109,8 +128,41 @@ If the honest fix is one of those, the fixer must report back instead of pushing
 
 `jobSlug(workflow, job)` → `automation/flaky-fix/<slug>` is therefore the durable
 registry key, which is why the dispatch brief insists on that exact branch name
-and the `flaky-fix` label. Nothing is committed to the repo, no state branch is
-created, and the Actions cache is not used.
+and the workflow applies the `flaky-fix` label. Nothing is committed to the repo,
+no state branch is created, and the Actions cache is not used.
+
+## Why Claude does not open the PR
+
+Two phases, deliberately: **Claude pushes the branch and writes the PR title to
+`$PR_TITLE_FILE` and the body to `$PR_BODY_FILE`; a deterministic shell step opens
+the PR.** The brief forbids `gh pr create`. The title is a file rather than a
+constant because it has to carry Claude's one-sentence root cause; the step falls
+back to `fix(ci): make <workflow> / <job> deterministic` if the file is missing.
+
+The reason is token identity. `claude-code-action` overrides `GH_TOKEN` for its
+Bash tool with its own `github_token:` input, which this workflow sets to
+`${{ github.token }}` (an OIDC → GitHub App exchange fails on this repo), so
+Claude's `gh` is always `GITHUB_TOKEN`. A PR created with `GITHUB_TOKEN` is
+authored by `github-actions[bot]`, and GitHub queues every workflow run for such a
+PR as `action_required`: the PR sits at **zero checks** until a human clicks
+"Approve and run" — and a determinism fix CI never runs is worthless. The
+deterministic step is the same shape
+[`coverage-ratchet.yml`](../../../.github/workflows/coverage-ratchet.yml) uses.
+
+The step is a clean no-op (never a failure) when Claude pushed nothing, when the
+branch is not ahead of `origin/main`, or when no body file was written — which is
+exactly what the "if the honest fix is banned, stop and report" escape hatch
+produces. It also skips creation when an open PR for the head already exists.
+
+Two tokens, because `BOT_PAT` is scoped to **contents + pull-requests only**:
+
+| Call                                         | Token          | Why                                                        |
+| -------------------------------------------- | -------------- | ---------------------------------------------------------- |
+| `gh pr create`                               | `BOT_PAT`      | The author's events must trigger CI.                       |
+| `gh label create` / `gh pr edit --add-label` | `GITHUB_TOKEN` | Labels are an Issues API write; `BOT_PAT` has no `issues`. |
+
+Passing `--label` to `gh pr create` under `BOT_PAT` would 403 and lose the PR, so
+the label is always a separate `gh pr edit` call.
 
 ## Run it locally
 
@@ -193,12 +245,12 @@ candidate `CI / node-server` with score 2, a common `EADDRINUSE` signature, and
 
 Shared with `rum-error-triage` and `coverage-ratchet` — no new secrets.
 
-| Name                         | Kind     | Purpose                                                                                                  |
-| ---------------------------- | -------- | -------------------------------------------------------------------------------------------------------- |
-| `AWS_BEARER_TOKEN_BEDROCK`   | secret   | Amazon Bedrock API key (Adobe CAMP `ABSK...` bearer token) used by `claude-code-action` (`use_bedrock`). |
-| `BOT_PAT`                    | secret   | Checkout/push token — a PR pushed with `GITHUB_TOKEN` does not trigger CI.                               |
-| `RUM_AWS_REGION`             | variable | Optional. Bedrock region for the CAMP key (default `us-east-1`).                                         |
-| `FLAKY_HUNTER_BEDROCK_MODEL` | variable | Optional. Bedrock model; falls back to `RUM_BEDROCK_MODEL`, then `global.anthropic.claude-sonnet-4-6`.   |
+| Name                         | Kind     | Purpose                                                                                                     |
+| ---------------------------- | -------- | ----------------------------------------------------------------------------------------------------------- |
+| `AWS_BEARER_TOKEN_BEDROCK`   | secret   | Amazon Bedrock API key (Adobe CAMP `ABSK...` bearer token) used by `claude-code-action` (`use_bedrock`).    |
+| `BOT_PAT`                    | secret   | Checkout/push **and `gh pr create`** token — a PR pushed or opened with `GITHUB_TOKEN` does not trigger CI. |
+| `RUM_AWS_REGION`             | variable | Optional. Bedrock region for the CAMP key (default `us-east-1`).                                            |
+| `FLAKY_HUNTER_BEDROCK_MODEL` | variable | Optional. Bedrock model; falls back to `RUM_BEDROCK_MODEL`, then `global.anthropic.claude-sonnet-4-6`.      |
 
 ## Design notes
 
@@ -210,7 +262,8 @@ Shared with `rum-error-triage` and `coverage-ratchet` — no new secrets.
   attempts) run first so log reads are only ever spent on the ONE candidate whose
   sole open question is "is this actually a single flake?".
 - **Read-only scanner.** No comments, no labels, no re-runs, no pushes. Only the
-  Claude step writes, and only a branch and one PR. No GitHub comment is ever
+  Claude step and the two shell steps after it write, and only a branch, one PR,
+  and that PR's label. No GitHub comment is ever
   posted: a flaky job has no natural PR or issue to comment on, and the fix PR
   speaks for itself.
 - **Not automated on purpose.** The brief asks Claude for the one-sentence root

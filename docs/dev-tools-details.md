@@ -89,6 +89,23 @@ The boy-scout, flake-fix, and backlog PRs are pushed with `BOT_PAT`, not
 `GITHUB_TOKEN`-authored pushes, so CI would never run on them. Same constraint
 as `coverage-ratchet.yml` and `renovate-patch-reconcile.yml`.
 
+**Claude never opens the pull request.** In `boy-scout-debt-dispatcher.yml`,
+`claude-md-compactor.yml`, `flaky-ci-hunter.yml`, and the backlog dispatcher's
+author phase, Claude pushes the branch and writes the PR body (and, for the flake
+hunter and the backlog author, the title) to a file named by a `PR_BODY_FILE` /
+`PR_TITLE_FILE` env var; a deterministic shell step then runs `gh pr create` with
+`GH_TOKEN: secrets.BOT_PAT`, exactly as `coverage-ratchet.yml` does. The reason is
+that `claude-code-action` overrides `GH_TOKEN` for its Bash tool with its own
+`github_token:` input (deliberately `${{ github.token }}` here, because the
+OIDC → GitHub App exchange fails on this repo), so a PR Claude opens is authored by
+`github-actions[bot]` — and GitHub queues every workflow run for such a PR as
+`action_required`, leaving it at **zero checks** until a human clicks "Approve and
+run". `BOT_PAT` carries contents + pull-requests only, so labelling is a separate
+`gh pr edit --add-label` call under `GITHUB_TOKEN` (labels are an Issues API
+write); `gh pr create --label` under `BOT_PAT` would 403. Each of these steps is a
+clean no-op when Claude pushed nothing, which is what the "report instead of
+forcing a fix" escape hatches produce.
+
 ### The backlog dispatcher's recovered rubric
 
 `backlog-dispatcher/` migrates an Augment Code ("Cosmos") expert whose prompt

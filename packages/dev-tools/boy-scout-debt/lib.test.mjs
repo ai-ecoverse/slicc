@@ -377,21 +377,24 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('behaviour-preservingly');
   });
 
-  it('requires a focused, labelled PR and the PR URL', () => {
-    expect(prompt).toContain(`--label ${PR_LABEL}`);
-    expect(prompt).toContain('gh pr create');
-    expect(prompt).toContain('Print the PR URL');
+  it('pushes the branch and hands the PR off to the workflow', () => {
+    expect(prompt).toContain(`git push -u origin ${BRANCH_PREFIX}/${candidate.slug}`);
+    expect(prompt).toContain('PR_BODY_FILE');
+    expect(prompt).toContain(PR_LABEL);
+    expect(prompt).toContain('Print the branch name');
   });
 
-  it('never tells Claude to create the label itself', () => {
-    // Claude's `gh` runs under BOT_PAT (contents + pull-requests only), and
-    // `gh label create` — even with `--force` — needs Issues write. The
-    // workflow bootstraps the label with GITHUB_TOKEN beforehand instead, so a
-    // create instruction here would kill the run after the refactor was done.
-    // The only mention left is the prohibition itself, never an invocation.
-    expect(prompt).not.toMatch(/^\s*gh label create/m);
-    expect(prompt).toContain('Do NOT run `gh label create`');
-    expect(prompt).toContain('already exists');
+  it('never tells Claude to open the PR or touch a label itself', () => {
+    // A PR opened by Claude's `gh` is authored by github-actions[bot], and
+    // GitHub queues every check on such a PR as `action_required` until a human
+    // approves it — so a deterministic workflow step opens it with BOT_PAT and
+    // applies the label with GITHUB_TOKEN (labels need Issues write, which
+    // BOT_PAT does not carry). Both verbs may appear in the prohibition, never
+    // as an invocation.
+    expect(prompt).not.toMatch(/^\s*gh (pr|label) (create|edit)/m);
+    expect(prompt.match(/gh pr create/g)).toHaveLength(1);
+    expect(prompt).toContain('Do NOT run `gh pr create`, `gh pr edit`, or `gh label create`');
+    expect(prompt).toContain('action_required');
   });
 
   it('requires focused tests', () => {

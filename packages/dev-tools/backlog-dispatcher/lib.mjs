@@ -92,15 +92,14 @@ export const DECIDED_LABELS = [
  * Labels whose presence says a human has already routed the issue somewhere
  * other than "implement this": a question, a rejected ask, or work explicitly
  * reserved for an outside contributor.
+ *
+ * `skill issue` is deliberately NOT here, however much it sounds like one.
+ * `.github/workflows/issue-skill.yml` applies it to EVERY issue on `opened`, as
+ * a joke — so in this repository it means "an issue exists", not "user error".
+ * Denying it silently disabled this whole dispatcher: 14 of 17 open items
+ * carried it, and every future issue is born with it.
  */
-export const DENYLIST_LABELS = [
-  'question',
-  'wontfix',
-  'invalid',
-  'duplicate',
-  'skill issue',
-  'help wanted',
-];
+export const DENYLIST_LABELS = ['question', 'wontfix', 'invalid', 'duplicate', 'help wanted'];
 
 /** Colour + description used when bootstrapping labels (`gh label create --force`). */
 export const LABEL_META = {
@@ -487,6 +486,48 @@ export function buildMarker(kind, number) {
   return `<!-- backlog-${kind}:${Number.isFinite(parsed) ? parsed : String(number)} -->`;
 }
 
+/**
+ * Render "why did nothing get picked?" as log lines, grouped by verdict code.
+ *
+ * `0 candidates` is this workflow's most common *healthy* outcome — a quiet
+ * backlog is normal — so without per-issue reasons a correct quiet tick and a
+ * completely disabled selector produce identical logs. That is exactly how the
+ * `skill issue` denylist entry survived a review round and 76 unit tests.
+ *
+ * One code can cover several distinct reasons: `denylisted` names the offending
+ * label, `too-young` names the age. Printing only the group's first reason would
+ * pin one issue's explanation onto every number beside it and hide the very
+ * detail this exists to surface, so identical reasons collapse to a single line
+ * while differing ones are attributed to their own issues.
+ *
+ * @param {Array<{number: number|null, code: string, reason: string}>} rejected
+ * @returns {string[]} indented lines, without a script-name prefix
+ */
+export function formatRejections(rejected = []) {
+  const list = Array.isArray(rejected) ? rejected : [];
+  if (list.length === 0) return [];
+  const lines = [`screened out ${list.length} issue(s):`];
+  for (const [code, group] of groupBy(list, (r) => r.code)) {
+    lines.push(`  - ${code} (${group.length}): ${group.map((r) => `#${r.number}`).join(' ')}`);
+    for (const [reason, members] of groupBy(group, (r) => r.reason)) {
+      const attributed =
+        members.length === group.length ? '' : `${members.map((r) => `#${r.number}`).join(' ')} — `;
+      lines.push(`      ${attributed}${reason}`);
+    }
+  }
+  return lines;
+}
+
+/** Group by a derived key, largest group first; insertion order breaks ties. */
+function groupBy(items, keyOf) {
+  const map = new Map();
+  for (const item of items) {
+    const key = keyOf(item);
+    map.set(key, [...(map.get(key) ?? []), item]);
+  }
+  return [...map.entries()].sort((a, b) => b[1].length - a[1].length);
+}
+
 /** The `<sup>` attribution line every comment opens with (Cosmos header convention). */
 function attribution(runUrl) {
   const link = runUrl ? `[Backlog Dispatcher](${runUrl})` : 'Backlog Dispatcher';
@@ -675,19 +716,31 @@ ${Number(ctx.budget ?? CONFIG.MAX_DISPATCHES_PER_RUN)} of them.
    npx vitest run <the focused test files>
    node packages/dev-tools/tools/check-touched-exemptions.mjs origin/main
    \`\`\`
-5. Push and open the PR:
+5. Push the branch and write the PR body to
+   \`$RUNNER_TEMP/backlog-pr-<number>.md\` (the pattern is also in
+   \`$PR_BODY_FILE_TEMPLATE\`), plus the one-line conventional-commit PR title to
+   \`$RUNNER_TEMP/backlog-pr-<number>.title\`:
    \`\`\`bash
    git push -u origin ${BRANCH_PREFIX}/issue-<number>
-   gh pr create --base main --label ${LABELS.dispatched} \\
-     --title "<conventional-commit title>" \\
-     --body "Closes #<number>
+   printf '%s\\n' "<conventional-commit title>" > "$RUNNER_TEMP/backlog-pr-<number>.title"
+   cat > "$RUNNER_TEMP/backlog-pr-<number>.md" <<'EOF'
+   Closes #<number>
 
-   <what changed, why, how you verified>"
-   gh issue edit <number> --remove-label ${LABELS.ready} --add-label ${LABELS.dispatched}
+   <what changed, why, how you verified>
+   EOF
    \`\`\`
    The \`Closes #<number>\` line is required — it is how merging the PR closes the
-   issue. The \`${LABELS.dispatched}\` label on the PR is how the PR Fix
-   Dispatcher and the stale sweep recognise it as ours.
+   issue.
+6. **Do NOT run \`gh pr create\`, and do not label the issue \`${LABELS.dispatched}\`.**
+   A later, deterministic workflow step opens one PR per pushed branch from those
+   files, applies the \`${LABELS.dispatched}\` label to the PR (that label is how the
+   PR Fix Dispatcher and the stale sweep recognise it as ours), and swaps the
+   issue's \`${LABELS.ready}\` label for \`${LABELS.dispatched}\`. The PR must be
+   authored by a token whose events trigger CI: a PR opened by your \`gh\` is
+   authored by \`github-actions[bot]\`, and GitHub then queues every check on it as
+   \`action_required\` until a human clicks "Approve and run". If you push nothing
+   for an issue, that step is a clean no-op for it and the issue keeps its
+   \`${LABELS.ready}\` label for the next run.
 
 ## If it turns out not to be ready
 

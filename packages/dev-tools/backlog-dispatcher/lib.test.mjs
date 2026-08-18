@@ -11,6 +11,7 @@ import {
   DENYLIST_LABELS,
   detectSmells,
   dispatchBudget,
+  formatRejections,
   formatSkipComment,
   formatStaleComment,
   hasLinkedOpenPr,
@@ -133,6 +134,40 @@ describe('screenIssue', () => {
         code: 'denylisted',
       });
     }
+  });
+
+  it('does NOT deny "skill issue", which this repo applies to every new issue', () => {
+    // `.github/workflows/issue-skill.yml` labels EVERY issue on `opened` as a
+    // joke, so denying it disables the dispatcher outright — 14 of 17 open items
+    // carried it when this was caught on the first live run.
+    expect(DENYLIST_LABELS).not.toContain('skill issue');
+    expect(screenIssue(issue({ labels: [{ name: 'skill issue' }] }), { now: NOW })).toMatchObject({
+      eligible: true,
+    });
+  });
+
+  it('attributes differing reasons to their own issues, and collapses identical ones', () => {
+    // Two labels, one `denylisted` code: printing only the first reason would
+    // claim #2 carries "question" when it actually carries "invalid".
+    const lines = formatRejections([
+      { number: 1, code: 'denylisted', reason: 'Carries "question".' },
+      { number: 2, code: 'denylisted', reason: 'Carries "invalid".' },
+      { number: 3, code: 'pull-request', reason: 'This is a pull request.' },
+      { number: 4, code: 'pull-request', reason: 'This is a pull request.' },
+    ]).join('\n');
+
+    expect(lines).toContain('screened out 4 issue(s):');
+    // Differing reasons within one code are attributed per issue…
+    expect(lines).toContain('#1 — Carries "question".');
+    expect(lines).toContain('#2 — Carries "invalid".');
+    // …while a reason shared by the whole group stays a single unattributed line.
+    expect(lines).toContain('  - pull-request (2): #3 #4');
+    expect(lines).toMatch(/^ {6}This is a pull request\.$/m);
+  });
+
+  it('reports nothing when nothing was screened out', () => {
+    expect(formatRejections([])).toEqual([]);
+    expect(formatRejections()).toEqual([]);
   });
 
   it('rejects an issue this dispatcher already decided', () => {
@@ -581,11 +616,27 @@ describe('buildAuthorPrompt', () => {
     expect(prompt).toContain('stop after\n2 of them');
   });
 
-  it('requires the Closes line and the label swap', () => {
+  it('requires the Closes line and leaves the dispatched label swap to the workflow', () => {
     expect(prompt).toContain('Closes #<number>');
-    expect(prompt).toContain(
+    expect(prompt).not.toContain(
       `gh issue edit <number> --remove-label ${LABELS.ready} --add-label ${LABELS.dispatched}`
     );
+    expect(prompt).toMatch(
+      new RegExp(`swaps the\\s+issue's \`${LABELS.ready}\` label for \`${LABELS.dispatched}\``)
+    );
+  });
+
+  it('pushes the branch and leaves PR creation to the deterministic step', () => {
+    // A PR opened by Claude's `gh` is authored by github-actions[bot], and
+    // GitHub queues every check on such a PR as `action_required` until a human
+    // approves it — so the workflow opens one PR per pushed branch with BOT_PAT,
+    // from the per-issue title/body files the brief names here.
+    expect(prompt).toContain('git push -u origin automation/backlog/issue-<number>');
+    expect(prompt).toContain('$RUNNER_TEMP/backlog-pr-<number>.md');
+    expect(prompt).toContain('$PR_BODY_FILE_TEMPLATE');
+    expect(prompt).not.toMatch(/^\s*gh pr create/m);
+    expect(prompt.match(/gh pr create/g)).toHaveLength(1);
+    expect(prompt).toContain('action_required');
   });
 
   it('forbids closing anything, merging, and gate-dodging', () => {

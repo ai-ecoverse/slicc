@@ -14,8 +14,9 @@ name: Flaky CI Hunter
 #      candidate. It lists runs ONE DAY AT A TIME: the runs endpoint returns at
 #      most 1000 items no matter how you page, and this repo produces ~2400 runs
 #      a week, so a window-wide query silently truncates and fakes a quiet week.
-#   2. claude-code-action fixes that one flake on a branded branch and opens ONE
-#      pull request.
+#   2. claude-code-action fixes that one flake on a branded branch and pushes it.
+#   3. a deterministic shell step opens ONE pull request from that branch with
+#      BOT_PAT — Claude never runs `gh pr create` (see that step's note).
 #
 # Cross-run state is GitHub-native — there is no state file, state branch, or
 # Actions cache:
@@ -25,15 +26,19 @@ name: Flaky CI Hunter
 #     artifact. The digest is uploaded on EVERY run (`if: always()`), because the
 #     weeks where nothing is dispatched are exactly when it matters.
 #
-# Checkout uses BOT_PAT, not GITHUB_TOKEN: a PR pushed with GITHUB_TOKEN does
-# not trigger CI (same anti-recursion constraint documented in
-# .github/workflows/coverage-ratchet.yml), and a flaky-test fix that CI never
-# runs is worthless.
+# Checkout and `gh pr create` use BOT_PAT, not GITHUB_TOKEN: a PR pushed or
+# opened with GITHUB_TOKEN does not trigger CI — its checks sit at
+# `action_required` until a human approves them (same anti-recursion constraint
+# documented in .github/workflows/coverage-ratchet.yml) — and a flaky-test fix
+# that CI never runs is worthless.
 #
 # Required repository secrets (already present — same as rum-error-triage.yml):
 #   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
 #                             bearer token) for claude-code-action.
-#   BOT_PAT                   PAT used for checkout/push so the fix PR triggers CI.
+#   BOT_PAT                   PAT used for checkout/push and for `gh pr create`
+#                             so the fix PR triggers CI. Contents +
+#                             pull-requests only: the label is applied with
+#                             GITHUB_TOKEN (Issues API).
 # Optional repo vars: RUM_AWS_REGION, FLAKY_HUNTER_BEDROCK_MODEL,
 # RUM_BEDROCK_MODEL. No new secrets are required.
 #
@@ -64,7 +69,7 @@ concurrency:
 
 permissions:
   contents: write # the fixer pushes its automation/flaky-fix/<slug> branch
-  pull-requests: write # the fixer opens exactly one PR
+  pull-requests: write # a later deterministic step opens exactly one PR from it
   # `gh label create flaky-fix` is POST /repos/{repo}/labels, which is gated on
   # `issues` rather than `pull-requests` (that one covers applying an existing
   # label to a PR). Without this the label step fails before Claude runs. Same
@@ -123,7 +128,7 @@ jobs:
         run: |
           gh label create flaky-fix --color FBCA04 --description "Determinism fix for a proven CI flake" --force
 
-      - name: Fix the flake and open one PR
+      - name: Fix the flake and push the branch
         if: steps.scan.outputs.has_candidate == 'true' && github.event.inputs.dry_run != 'true'
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
         env:
@@ -135,11 +140,17 @@ jobs:
           # run fails on auth, fall back to `anthropic_api_key`.)
           AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
           AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
-          # claude-code-action does NOT expose a token to the Bash tool's `gh`,
-          # so set it explicitly or `gh pr create` / `git push` fail. BOT_PAT
-          # (not github.token) so the resulting PR triggers CI.
-          GH_TOKEN: ${{ secrets.BOT_PAT }}
+          # Claude's Bash `gh` always ends up with the action's own
+          # `github_token:` input, NOT whatever GH_TOKEN is set here — the action
+          # overrides it. That is why Claude no longer opens the PR (see the step
+          # below); the branch push uses the BOT_PAT credential persisted by
+          # actions/checkout.
+          GH_TOKEN: ${{ github.token }}
           FLAKY_SLUG: ${{ steps.scan.outputs.slug }}
+          # The brief writes the PR title and body here; the step below opens the
+          # PR from them. Passed as env so the prompt and that step cannot drift.
+          PR_TITLE_FILE: ${{ runner.temp }}/flaky-fix-pr-title.txt
+          PR_BODY_FILE: ${{ runner.temp }}/flaky-fix-pr-body.md
         with:
           use_bedrock: 'true'
           # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
@@ -161,5 +172,81 @@ jobs:
           claude_args: |
             --model ${{ vars.FLAKY_HUNTER_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
             --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --disallowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(gh label create:*)"
             --max-turns 200
           prompt: ${{ steps.scan.outputs.prompt }}
+
+      # PR creation is deliberately NOT Claude's job. claude-code-action forces
+      # its Bash `gh` onto the action's `github_token:` (GITHUB_TOKEN here), so a
+      # PR Claude opens is authored by `github-actions[bot]` — and GitHub then
+      # queues EVERY workflow run for that PR as `action_required`, awaiting a
+      # human click, so the PR lands with zero checks (observed on #2168/#2169).
+      # A determinism fix whose CI never runs is exactly the failure mode this
+      # workflow exists to avoid, so the PR is opened here with BOT_PAT, the same
+      # shape coverage-ratchet.yml uses. Claude declining to push (the banned-fix
+      # escape hatch) is a clean no-op.
+      - name: Open the fix PR
+        id: pr
+        if: success() && steps.scan.outputs.has_candidate == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          # BOT_PAT: contents + pull-requests write, no issues — enough to create
+          # the PR, NOT to label it (labels go through the Issues API, hence the
+          # separate GITHUB_TOKEN step below).
+          GH_TOKEN: ${{ secrets.BOT_PAT }}
+          REPO: ${{ github.repository }}
+          BRANCH: automation/flaky-fix/${{ steps.scan.outputs.slug }}
+          FLAKY_JOB: ${{ steps.scan.outputs.job }}
+          PR_TITLE_FILE: ${{ runner.temp }}/flaky-fix-pr-title.txt
+          PR_BODY_FILE: ${{ runner.temp }}/flaky-fix-pr-body.md
+        run: |
+          set -euo pipefail
+          # Explicit refspec: the checkout's fetch config is not guaranteed to map
+          # an arbitrary new branch into refs/remotes/origin/.
+          git fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" || true
+          git fetch --quiet origin main
+          if ! git rev-parse --quiet --verify "refs/remotes/origin/$BRANCH" >/dev/null; then
+            echo "Claude pushed nothing — nothing to open."
+            exit 0
+          fi
+          if [ "$(git rev-list --count "origin/main..refs/remotes/origin/$BRANCH")" -eq 0 ]; then
+            echo "$BRANCH has no commits ahead of origin/main — nothing to open."
+            exit 0
+          fi
+          PR_URL=$(gh pr list --repo "$REPO" --base main --head "$BRANCH" --state open --json url --jq '.[0].url // ""')
+          if [ -n "$PR_URL" ]; then
+            echo "A PR for $BRANCH is already open: $PR_URL"
+          elif [ ! -s "$PR_BODY_FILE" ]; then
+            echo "::warning::$BRANCH was pushed but no PR body exists at $PR_BODY_FILE — leaving the branch for a human."
+            exit 0
+          else
+            # The title carries Claude's root-cause sentence, so it is read from
+            # the file; the fallback keeps a missing file from losing the PR.
+            PR_TITLE=""
+            if [ -s "$PR_TITLE_FILE" ]; then
+              PR_TITLE=$(head -n 1 "$PR_TITLE_FILE")
+            fi
+            if [ -z "$PR_TITLE" ]; then
+              PR_TITLE="fix(ci): make $FLAKY_JOB deterministic"
+            fi
+            PR_URL=$(gh pr create \
+              --repo "$REPO" \
+              --base main \
+              --head "$BRANCH" \
+              --title "$PR_TITLE" \
+              --body-file "$PR_BODY_FILE")
+            echo "Opened $PR_URL"
+          fi
+          echo "pr_url=$PR_URL" >> "$GITHUB_OUTPUT"
+          echo "🔧 Flaky-fix PR: $PR_URL" >> "$GITHUB_STEP_SUMMARY"
+
+      # Separate step, separate token: applying a label is an Issues API write,
+      # which BOT_PAT (contents + pull-requests only) cannot do — `gh pr create
+      # --label` under BOT_PAT would 403 and lose the PR.
+      - name: Label the fix PR
+        if: success() && steps.pr.outputs.pr_url != ''
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR_URL: ${{ steps.pr.outputs.pr_url }}
+        run: |
+          set -euo pipefail
+          gh pr edit "$PR_URL" --add-label flaky-fix

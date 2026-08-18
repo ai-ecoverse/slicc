@@ -38,6 +38,7 @@ import {
   buildTriagePrompt,
   CONFIG,
   dispatchBudget,
+  formatRejections,
   isDispatcherPr,
   selectCandidates,
   selectStalePrs,
@@ -164,6 +165,7 @@ function reportCandidates(selection) {
       `  … ${selection.truncated} more over the cap of ${CONFIG.MAX_CANDIDATES_PER_SOURCE}`
     );
   }
+  for (const line of formatRejections(selection.rejected)) console.log(`${SCRIPT}: ${line}`);
 }
 
 /** The candidate payload phase 1 reads. Bodies are kept — Claude needs the brief. */
