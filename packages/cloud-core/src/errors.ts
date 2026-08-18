@@ -18,11 +18,28 @@ export type CloudErrorCode =
   | 'UPSTREAM_UNAVAILABLE'
   | 'INTERNAL';
 
+/**
+ * Structured context attached to a {@link CloudError}. Carried through to the
+ * worker's HTTP error envelope (`errorResponse`) and surfaced to consumers.
+ * Today only the cap-exceeded errors populate it; extend this shape rather than
+ * widening it back to an untyped bag when a new code needs to carry context.
+ */
+export interface CloudErrorDetails {
+  /** Number of running cones when a running cap was exceeded. */
+  running?: number;
+  /** Number of paused cones when a paused cap was exceeded. */
+  paused?: number;
+  /** The cap limit that was exceeded. */
+  cap?: number;
+  /** The sandbox involved, e.g. when a cone fails to become ready. */
+  sandboxId?: string;
+}
+
 export class CloudError extends Error {
   constructor(
     public readonly code: CloudErrorCode,
     message: string,
-    public readonly details?: Record<string, unknown>
+    public readonly details?: CloudErrorDetails
   ) {
     super(message);
     this.name = 'CloudError';
