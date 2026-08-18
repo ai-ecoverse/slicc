@@ -48,6 +48,7 @@ import {
 } from './lick-manager.js';
 import { LickRegistry } from './lick-registry.js';
 import { LlmsTxtIgnorePolicy } from './llms-txt-ignore.js';
+import { withMountHeartbeat } from './mount-heartbeat.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopApprovalRouter } from './scoop-approval-router.js';
 import { ScoopCompletionService } from './scoop-completion-service.js';
@@ -360,8 +361,17 @@ export class Orchestrator implements ConeApprovalRouter {
   async init(onBootProgress?: (stage: string) => void): Promise<void> {
     await db.initDB();
 
-    // Create the single shared VirtualFS
-    this.sharedFs = await VirtualFS.create({ dbName: 'slicc-fs' });
+    // Create the single shared VirtualFS. The mount parses the metadata
+    // sidecar and runs the unconditional pre-boot repair (#2146) — O(tree
+    // size) with no milestones of its own, 25-30s+ on a COLD boot of a
+    // large tree (2026-08-18 restart brick: "did not signal ready" on
+    // every fresh Chrome start, warm reloads passed). The bounded
+    // heartbeat keeps the page's kernel-ready watchdog (#2007) armed
+    // while the mount provably advances.
+    this.sharedFs = await withMountHeartbeat(
+      () => VirtualFS.create({ dbName: 'slicc-fs' }),
+      onBootProgress
+    );
     this.sessionStore = new SessionStore();
 
     // Create and attach file system watcher
