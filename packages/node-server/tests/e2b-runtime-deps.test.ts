@@ -13,12 +13,22 @@ import { describe, expect, it } from 'vitest';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../..');
 
-// Source trees whose compiled output ships inside dist/node-server (node-server
-// itself plus the workspaces inlined by scripts/inline-workspaces.mjs).
+// The workspaces whose compiled output ships inside dist/node-server are
+// defined by the WORKSPACES array in scripts/inline-workspaces.mjs. That
+// script runs the packager at import time (and exits without dist/), so
+// derive the list from its source text instead of importing it — keeping the
+// inlined allowlist and the scanned source trees from drifting from the
+// packager's own list.
+const packagerSource = readFileSync(
+  join(repoRoot, 'packages/node-server/scripts/inline-workspaces.mjs'),
+  'utf8'
+);
+const INLINED_PACKAGES = new Set(
+  [...packagerSource.matchAll(/packageName: '(@slicc\/[^']+)'/g)].map((m) => m[1] as string)
+);
 const RUNTIME_SOURCE_DIRS = [
   'packages/node-server/src',
-  'packages/cloud-core/src',
-  'packages/shared-ts/src',
+  ...[...packagerSource.matchAll(/packages\/([^/']+)\/dist/g)].map((m) => `packages/${m[1]}/src`),
 ];
 
 const BUILTINS = new Set(builtinModules);
@@ -95,15 +105,27 @@ describe('e2b hosted-leader runtime dependencies', () => {
     const installed = new Set(Object.keys(manifest.dependencies));
 
     const required = new Set<string>();
+    const nonInlinedWorkspaceImports = new Set<string>();
     for (const dir of RUNTIME_SOURCE_DIRS) {
       for (const file of listTsFiles(join(repoRoot, dir))) {
         for (const spec of valueImportSpecifiers(readFileSync(file, 'utf8'))) {
           const name = packageName(spec);
-          if (BUILTINS.has(name) || name.startsWith('@slicc/')) continue;
+          if (BUILTINS.has(name) || INLINED_PACKAGES.has(name)) continue;
+          if (name.startsWith('@slicc/')) {
+            // A workspace that inline-workspaces.mjs does NOT inline cannot
+            // resolve in the sandbox (or the published tarball) at all.
+            nonInlinedWorkspaceImports.add(name);
+            continue;
+          }
           required.add(name);
         }
       }
     }
+
+    expect(
+      [...nonInlinedWorkspaceImports].sort(),
+      'workspaces value-imported by the hosted leader but not inlined by scripts/inline-workspaces.mjs (add them to its WORKSPACES array)'
+    ).toEqual([]);
 
     const missing = [...required].filter((name) => !installed.has(name)).sort();
     expect(
