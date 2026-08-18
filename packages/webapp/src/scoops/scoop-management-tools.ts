@@ -923,7 +923,7 @@ function lickDismissTool(config: ScoopManagementToolsConfig): ToolDefinition {
   return {
     name: 'lick_dismiss',
     description:
-      'Dismiss a pending actionable lick by its lick_id. For scoop sudo escalation this denies the sensitive action. For llms.txt discovery this requests human approval to append the advertising host to /etc/llmstxtignore; denial leaves the card pending.',
+      'Dismiss a pending actionable lick by its lick_id. For scoop sudo escalation this denies the sensitive action. For llms.txt discovery this silently appends the advertising host to /etc/llmstxtignore.',
     inputSchema: {
       type: 'object',
       properties: {

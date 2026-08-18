@@ -33,8 +33,8 @@ other developer docs link here instead of restating the model.
 - **Panel terminal is the human approver.** Commands typed in the panel terminal are
   not sudo-gated and the keystroke itself is the gesture for browser pickers; this
   is the only context where the human is _already_ approving.
-- **Self-protection is hardcoded.** Writes to `/etc/sudoers`, `/etc/sudoers.d/**`,
-  and `/etc/llmstxtignore` always require approval; no `NOPASSWD` rule can override this.
+- **Self-protection is hardcoded.** Writes to `/etc/sudoers` and `/etc/sudoers.d/**`
+  always require approval; no `NOPASSWD` rule can override this.
 - **Credentials never reach the agent.** S3 / DA mounts have no approval card because
   the trust boundary lives at the credential resolver (node-server / SW), not in chat.
 
@@ -87,8 +87,7 @@ A fully commented-out default template ships on a fresh VFS
 
 ### Self-protection (always on)
 
-Writes to `/etc/sudoers`, `/etc/llmstxtignore`, and anything under
-`/etc/sudoers.d/` **always** require approval — a `NOPASSWD` rule cannot override this. It is hardcoded in `matchPath`
+Writes to `/etc/sudoers` and anything under `/etc/sudoers.d/` **always** require approval — a `NOPASSWD` rule cannot override this. It is hardcoded in `matchPath`
 (`packages/webapp/src/shell/sudo/sudoers.ts`), independent of the loaded policy.
 Reads of those files are allowed (visudo-style).
 

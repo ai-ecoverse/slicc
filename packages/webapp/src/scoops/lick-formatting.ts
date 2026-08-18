@@ -251,7 +251,7 @@ function formatDiscoveryLick(event: LickEvent, label: string): FormattedLick {
     event.discoveryKind === 'llms-txt' && event.lickId
       ? `\n\nLick ID: ${event.lickId}\n` +
         `This card is dismiss-only: call \`lick_dismiss\` to add the advertising host to ` +
-        `\`/etc/llmstxtignore\` (after user approval) and silence future discoveries. ` +
+        `\`/etc/llmstxtignore\` and silence future discoveries without a prompt. ` +
         `There is NO confirm action.`
       : `\nThis is informational — there is no card action.`;
   return {

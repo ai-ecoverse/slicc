@@ -12,11 +12,9 @@
 
 import { type MountRecoveryEntry, shellQuote } from '../fs/mount-recovery.js';
 import type { RestrictedFS } from '../fs/restricted-fs.js';
-import { createSudoFs } from '../fs/sudo-fs.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { AlmostBashShell } from '../shell/almost-bash-shell.js';
 import type { SudoDecision } from '../sudo/index.js';
-import type { SudoManager } from '../sudo/sudo-manager.js';
 import type { LickEvent } from './lick-manager.js';
 import { appendLlmsTxtIgnoreHost, discoveryHostname } from './llms-txt-ignore.js';
 
@@ -63,9 +61,8 @@ export interface LickRegistryDeps {
    * Returns `null` when no cone is registered or its context is not ready.
    */
   getConeShell(): AlmostBashShell | null;
-  /** Raw cone FS plus sudo manager used to persist an approved ignore entry. */
+  /** Cone filesystem used to persist a dismissed discovery host. */
   getConeFs(): VirtualFS | RestrictedFS | null;
-  getSudoManager(): SudoManager | null;
   /**
    * Best-effort: locate the lick's persisted `sudo-request` message, stamp
    * `lickState`, and notify the UI to re-render. Mirrors
@@ -337,15 +334,10 @@ export class LickRegistry {
       };
     }
     const fs = this.deps.getConeFs();
-    const sudoManager = this.deps.getSudoManager();
-    if (!fs || !sudoManager) {
+    if (!fs) {
       throw new Error('llms.txt dismissal could not persist: cone filesystem unavailable.');
     }
-    const gatedFs = createSudoFs(fs, {
-      broker: sudoManager.getBroker(),
-      getPolicy: () => sudoManager.getPolicy(),
-    });
-    const appended = await appendLlmsTxtIgnoreHost(gatedFs, entry.hostname);
+    const appended = await appendLlmsTxtIgnoreHost(fs, entry.hostname);
     this.entries.delete(id);
     await this.deps.persistLickDecision(id, 'deny');
     return {

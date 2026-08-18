@@ -248,7 +248,6 @@ export class Orchestrator implements ConeApprovalRouter {
       const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
       return cone ? (this.lifecycle.getContext(cone.jid)?.getFS() ?? null) : null;
     },
-    getSudoManager: () => this.sudoManager,
     persistLickDecision: (id, decision) => this.approvalRouter.persistLickDecision(id, decision),
   });
   /**

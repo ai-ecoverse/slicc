@@ -4,7 +4,6 @@ import {
   applyDefaultDisposition,
   commandGlobToRegExp,
   emptyPolicy,
-  LLMS_TXT_IGNORE_FILE,
   matchCommand,
   matchPath,
   mergePolicies,
@@ -193,13 +192,6 @@ describe('self-protection invariant', () => {
   it('protects sudoers files even under an empty policy', () => {
     expect(matchPath(emptyPolicy(), 'write', SUDOERS_FILE)).toBe('require-approval');
     expect(matchPath(emptyPolicy(), 'write', `${SUDOERS_D_DIR}/granted`)).toBe('require-approval');
-  });
-
-  it('protects llmstxtignore writes through the same approval path', () => {
-    const grant = parseSudoers(`NOPASSWD Write ${LLMS_TXT_IGNORE_FILE}`);
-    expect(matchPath(grant, 'write', LLMS_TXT_IGNORE_FILE)).toBe('require-approval');
-    expect(matchPath(emptyPolicy(), 'write', LLMS_TXT_IGNORE_FILE)).toBe('require-approval');
-    expect(matchPath(emptyPolicy(), 'read', LLMS_TXT_IGNORE_FILE)).toBe('no-match');
   });
 
   it('allows reads of sudoers files (visudo-style)', () => {

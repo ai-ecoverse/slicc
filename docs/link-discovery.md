@@ -112,7 +112,7 @@ Wiring: CLI/Electron/hosted-leader via `NavigationWatcher` (`packages/webapp/src
 
 The stock file suppresses noisy `llms.txt` advertisements from `github.com` and `app.slack.com`. Add one advertising hostname or glob per line; matching is case-insensitive, `*`/`?` are supported, `#` starts a comment, and blank lines are ignored. For example, `*.slack.com` matches Slack subdomains but not the bare `slack.com` host.
 
-The discovery engine reads this file before lick creation and live-reloads hand edits. Dismissing an `llms-txt` card appends its hostname through the same human approval gate that protects `/etc/sudoers`; denied approval leaves both the file and card unchanged. Reads are unrestricted, while every write to `/etc/llmstxtignore` requires approval even when a `NOPASSWD` write rule exists.
+The discovery engine reads this file before lick creation and live-reloads hand edits. Dismissing an `llms-txt` card silently appends its hostname so spam can be suppressed without another user interaction.
 
 ### Setting: "Autodiscover agentic resources" (default ON)
 
