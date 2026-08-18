@@ -105,6 +105,19 @@ install_browser() {
   fi
 }
 
+persist_browser_path() {
+  local profile_marker="# SLICC orb browser"
+  if ! grep -Fqx "$profile_marker" "$HOME/.bash_profile" 2>/dev/null; then
+    cat >> "$HOME/.bash_profile" <<'EOF'
+
+# SLICC orb browser
+if [[ -x "$HOME/.local/bin/chromium" ]]; then
+  export CHROME_PATH="$HOME/.local/bin/chromium"
+fi
+EOF
+  fi
+}
+
 timed "Install Node.js ${node_version}" install_node
 export PATH="$local_bin:$PATH"
 node --version
@@ -118,6 +131,8 @@ timed "Install npm dependencies" env NODE_OPTIONS=--max-old-space-size=1024 \
 timed "Apply patches and build dependency workspaces" env NODE_OPTIONS=--max-old-space-size=1024 \
   npm run postinstall
 timed "Install Git hooks" npm run prepare
+sha256sum package-lock.json > node_modules/.slicc-package-lock.sha256
 timed "Install Chromium and Linux browser dependencies" install_browser
+persist_browser_path
 
 echo "Orb setup complete."

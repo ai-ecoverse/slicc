@@ -15,4 +15,9 @@ if [[ ! -d node_modules ]]; then
   exit 1
 fi
 
+if ! sha256sum --check --status node_modules/.slicc-package-lock.sha256 2>/dev/null; then
+  echo "node_modules does not match package-lock.json; rerun .agents/setup." >&2
+  exit 1
+fi
+
 echo "Orb resume checks passed."
