@@ -27,6 +27,14 @@ async function main(): Promise<void> {
   // live 'slicc' template and could change what Sandbox.create('slicc') sees.
   const templateName = process.env['SLICC_E2B_TEMPLATE_NAME'] ?? 'slicc';
 
+  // Node runtime for the sandbox. The e2bdev/code-interpreter base image ships
+  // Node 20 (EOL April 2026, no security patches), while the repo requires
+  // engines >= 22.18.0. Install a pinned Node 22 LTS over /usr/local so the
+  // `node` on PATH matches what node-server is developed and tested against.
+  // Keep this in sync with the root package.json `engines.node` range — the
+  // e2b-runtime-deps test in packages/node-server/tests enforces it.
+  const nodeVersion = '22.23.2';
+
   // vCPUs for the sandbox. e2b's default is 2, which the hosted leader has to
   // share between Chromium (browser + renderer + network/storage utilities),
   // the SLICC kernel worker (WASM shell, realms, OPFS), and node-server. Under
@@ -65,11 +73,25 @@ async function main(): Promise<void> {
       'libxss1',
       'libasound2',
     ])
+    // Pinned Node 22 LTS (checksum-verified against the official SHASUMS256,
+    // asserted on PATH so a base-image node can't silently shadow it).
+    .runCmd(
+      [
+        'cd /tmp',
+        `curl -fsSLO https://nodejs.org/dist/v${nodeVersion}/node-v${nodeVersion}-linux-x64.tar.gz`,
+        `curl -fsSLO https://nodejs.org/dist/v${nodeVersion}/SHASUMS256.txt`,
+        `grep " node-v${nodeVersion}-linux-x64.tar.gz$" SHASUMS256.txt | sha256sum -c -`,
+        `tar -xzf node-v${nodeVersion}-linux-x64.tar.gz -C /usr/local --strip-components=1`,
+        `rm node-v${nodeVersion}-linux-x64.tar.gz SHASUMS256.txt`,
+        `[ "$(node --version)" = "v${nodeVersion}" ]`,
+      ].join(' && ')
+    )
     .copy('dist/node-server', '/opt/slicc/node-server')
     // No UI is bundled: node-server is a thin /cdp bridge + /api surface in
     // every mode, so the hosted leader's Chromium loads the webapp from the
     // hosted origin (sliccy.ai) rather than from a locally-served bundle.
-    // Tiny package.json listing the runtime deps (express, ws, e2b, electron).
+    // Tiny package.json listing the runtime deps (kept in sync with
+    // node-server's third-party value-imports by the e2b-runtime-deps test).
     // `npm install` populates /opt/slicc/node_modules; Node walks up from
     // /opt/slicc/node-server/ and resolves them.
     .copy('packages/dev-tools/e2b-template/runtime-package.json', '/opt/slicc/package.json')
@@ -100,10 +122,10 @@ main().catch((err: unknown) => {
     console.error('name:', err.name);
     if (err.stack) console.error('stack:', err.stack);
     // Surface common nested fields (validation errors, axios responses, etc.)
-    const e = err as unknown as Record<string, unknown>;
-    if (e['cause']) console.error('cause:', e['cause']);
-    if (e['response']) console.error('response:', e['response']);
-    if (e['errors']) console.error('errors:', e['errors']);
+    const e = err as Error & { cause?: unknown; response?: unknown; errors?: unknown };
+    if (e.cause) console.error('cause:', e.cause);
+    if (e.response) console.error('response:', e.response);
+    if (e.errors) console.error('errors:', e.errors);
   } else {
     console.error('non-Error thrown:', err);
   }

@@ -80,6 +80,11 @@ alias a workflow builds is what its consumers see. The split:
 - Not an npm workspace. Invoke the scripts directly.
 - Chromium is pinned to the version in the base image's apt repositories at
   build time. Updating Chromium requires a template rebuild.
+- Node is pinned in `template.ts` (`nodeVersion`) and installed over the base
+  image's EOL Node 20, checksum-verified against the official SHASUMS256. The
+  pin must satisfy the root `package.json` `engines.node` range — enforced by
+  `packages/node-server/tests/e2b-runtime-deps.test.ts`. Bumping it requires a
+  template rebuild.
 - The node-server binaries are copied from `dist/` produced by the monorepo's
   root `npm run build`. Always build before publishing the template. The webapp
   is not bundled — the hosted Chromium loads it from the hosted origin.
