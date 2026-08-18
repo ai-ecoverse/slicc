@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+cd "$repo_root"
+
+if ! command -v node >/dev/null || ! node -e \
+  'const [major, minor] = process.versions.node.split(".").map(Number); process.exit(major > 22 || (major === 22 && minor >= 18) ? 0 : 1)'; then
+  echo "Node.js >=22.18.0 is unavailable; rerun .agents/setup." >&2
+  exit 1
+fi
+
+if [[ ! -d node_modules ]]; then
+  echo "node_modules is unavailable; rerun .agents/setup." >&2
+  exit 1
+fi
+
+echo "Orb resume checks passed."
