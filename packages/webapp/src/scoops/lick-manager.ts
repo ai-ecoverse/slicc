@@ -69,9 +69,18 @@ export const FORWARDABLE_TO_LEADER: ReadonlySet<LickEvent['type']> = new Set<Lic
  * instruction?, title? }`; we key on the payload identity, never the page
  * `url`. See {@link handoffFingerprint}.
  */
+interface NavigateFingerprintBody {
+  verb?: unknown;
+  target?: unknown;
+  branch?: unknown;
+  path?: unknown;
+  instruction?: unknown;
+  title?: unknown;
+}
+
 function navigateFingerprint(body: unknown): string | null {
   if (typeof body !== 'object' || body === null) return null;
-  const b = body as Record<string, unknown>;
+  const b = body as NavigateFingerprintBody;
   if (typeof b.verb !== 'string' || typeof b.target !== 'string') return null;
   return handoffFingerprint({
     verb: b.verb,
@@ -134,6 +143,8 @@ export class LickManager {
    * no-op while unset, preserving pre-injection behavior (tests / early boot).
    */
   private scoopResolver: ((scoopField: string) => boolean) | null = null;
+  /** Upstream policy gate for persistent llms.txt hostname suppression. */
+  private discoveryIgnore: ((event: LickEvent) => boolean) | null = null;
 
   /** Initialize - load from IndexedDB and start cron scheduler */
   async init(): Promise<void> {
@@ -172,6 +183,11 @@ export class LickManager {
    */
   setScoopExistenceResolver(resolver: ((scoopField: string) => boolean) | null): void {
     this.scoopResolver = resolver;
+  }
+
+  /** Install or clear the live discovery-ignore policy. */
+  setDiscoveryIgnore(resolver: ((event: LickEvent) => boolean) | null): void {
+    this.discoveryIgnore = resolver;
   }
 
   /** True when `scoopField` is set but resolves to no registered scoop. */
@@ -251,6 +267,7 @@ export class LickManager {
    * cron) routes through here so the forwarder gate is consistent.
    */
   private dispatch(event: LickEvent): void {
+    if (event.type === 'discovery' && this.shouldSuppressDiscovery(event)) return;
     if (this.forwarder && FORWARDABLE_TO_LEADER.has(event.type)) {
       this.forwarder(event);
       return;
@@ -258,29 +275,67 @@ export class LickManager {
     this.eventHandler?.(event);
   }
 
+  /**
+   * Accept an already-forwarded event on the leader without forwarding it
+   * again. Deduplication runs here too: the extension service worker and tray
+   * followers forward every handoff / discovery they observe and rely on
+   * receiver-side fingerprinting, so without this a repeated main-frame
+   * response would mint another card and wake the cone again.
+   */
+  handleForwardedEvent(event: LickEvent): void {
+    if (event.type === 'discovery' && this.shouldSuppressDiscovery(event)) return;
+    if (this.isDuplicateFingerprint(event)) return;
+    this.eventHandler?.(event);
+  }
+
   /** Emit an externally-generated lick event (e.g., from fswatch). */
   emitEvent(event: LickEvent): void {
-    if (event.type === 'navigate') {
-      const fingerprint = navigateFingerprint(event.body);
-      if (fingerprint !== null) {
-        if (this.seenNavigateFingerprints.has(fingerprint)) {
-          log.debug('Suppressing duplicate navigate lick', { fingerprint });
-          return;
-        }
-        this.seenNavigateFingerprints.add(fingerprint);
-      }
-    } else if (event.type === 'discovery') {
-      const fingerprint = discoveryEventFingerprint(event);
-      if (fingerprint !== null) {
-        if (this.seenDiscoveryFingerprints.has(fingerprint)) {
-          log.debug('Suppressing duplicate discovery lick', { fingerprint });
-          return;
-        }
-        this.seenDiscoveryFingerprints.add(fingerprint);
-      }
-    }
+    if (event.type === 'discovery' && this.shouldSuppressDiscovery(event)) return;
+    if (this.isDuplicateFingerprint(event)) return;
     log.info('External lick event', { type: event.type, target: event.targetScoop });
     this.dispatch(event);
+  }
+
+  /**
+   * Record `event`'s payload fingerprint, returning `true` when an identical
+   * payload was already seen this session (caller must drop it). Types without
+   * a fingerprint, and payloads missing the structured fields, are always let
+   * through. Shared by {@link emitEvent} and {@link handleForwardedEvent}.
+   */
+  private isDuplicateFingerprint(event: LickEvent): boolean {
+    let fingerprint: string | null = null;
+    let seen: Set<string>;
+    let label: string;
+    if (event.type === 'navigate') {
+      fingerprint = navigateFingerprint(event.body);
+      seen = this.seenNavigateFingerprints;
+      label = 'navigate';
+    } else if (event.type === 'discovery') {
+      fingerprint = discoveryEventFingerprint(event);
+      seen = this.seenDiscoveryFingerprints;
+      label = 'discovery';
+    } else {
+      return false;
+    }
+    if (fingerprint === null) return false;
+    if (seen.has(fingerprint)) {
+      log.debug(`Suppressing duplicate ${label} lick`, { fingerprint });
+      return true;
+    }
+    seen.add(fingerprint);
+    return false;
+  }
+
+  private shouldSuppressDiscovery(event: LickEvent): boolean {
+    if (event.discoverySource !== 'live-navigation') {
+      log.debug('Suppressing discovery without live-navigation provenance');
+      return true;
+    }
+    if (this.discoveryIgnore?.(event)) {
+      log.debug('Suppressing ignored llms.txt discovery', { origin: event.discoveryOrigin });
+      return true;
+    }
+    return false;
   }
 
   // ─── Webhooks ─────────────────────────────────────────────────────────────

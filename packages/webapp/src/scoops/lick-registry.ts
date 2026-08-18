@@ -11,9 +11,12 @@
  */
 
 import { type MountRecoveryEntry, shellQuote } from '../fs/mount-recovery.js';
+import type { RestrictedFS } from '../fs/restricted-fs.js';
+import type { VirtualFS } from '../fs/virtual-fs.js';
 import type { AlmostBashShell } from '../shell/almost-bash-shell.js';
 import type { SudoDecision } from '../sudo/index.js';
 import type { LickEvent } from './lick-manager.js';
+import { appendLlmsTxtIgnoreHost, discoveryHostname } from './llms-txt-ignore.js';
 
 /**
  * Reconstruct the `mount …` command for a mount-recovery entry, byte-for-byte
@@ -30,12 +33,20 @@ function buildMountRecoveryCommand(entry: MountRecoveryEntry): string {
   return `mount --source ${shellQuote(entry.source)}${profileFlag} ${shellQuote(entry.path)}`;
 }
 
-export type LickEntry =
+export interface NavigateActionBody {
+  verb?: unknown;
+  target?: unknown;
+  branch?: unknown;
+  path?: unknown;
+}
+
+type LickEntry =
   | { kind: 'navigate-upskill'; target: string; branch?: string; path?: string }
   | { kind: 'navigate-handoff' }
   | { kind: 'session-reload-mount'; mounts: MountRecoveryEntry[] }
   | { kind: 'session-reload-plain' }
-  | { kind: 'upgrade'; from: string; to: string };
+  | { kind: 'upgrade'; from: string; to: string }
+  | { kind: 'discovery-llms-txt'; hostname: string };
 
 export interface LickResolution {
   settled: boolean;
@@ -50,6 +61,8 @@ export interface LickRegistryDeps {
    * Returns `null` when no cone is registered or its context is not ready.
    */
   getConeShell(): AlmostBashShell | null;
+  /** Cone filesystem used to persist a dismissed discovery host. */
+  getConeFs(): VirtualFS | RestrictedFS | null;
   /**
    * Best-effort: locate the lick's persisted `sudo-request` message, stamp
    * `lickState`, and notify the UI to re-render. Mirrors
@@ -80,7 +93,7 @@ export class LickRegistry {
    */
   registerNavigate(event: LickEvent): string {
     const id = mintLickId();
-    const body = (event.body ?? {}) as Record<string, unknown>;
+    const body = (event.body ?? {}) as NavigateActionBody;
     const verb = typeof body.verb === 'string' ? body.verb : undefined;
     const target = typeof body.target === 'string' ? body.target : undefined;
     if (verb === 'upskill' && target) {
@@ -129,6 +142,16 @@ export class LickRegistry {
     return id;
   }
 
+  /** Mint a dismiss-only action for an llms.txt discovery host. */
+  registerDiscovery(event: LickEvent): string | null {
+    if (event.discoveryKind !== 'llms-txt') return null;
+    const hostname = discoveryHostname(event.discoveryOrigin, event.discoveryUrl);
+    if (!hostname) return null;
+    const id = mintLickId();
+    this.entries.set(id, { kind: 'discovery-llms-txt', hostname });
+    return id;
+  }
+
   /**
    * Settle an agent-actionable lick. Dispatches by stored entry kind and
    * returns `null` when `id` matches no registered lick (or matches a
@@ -147,6 +170,8 @@ export class LickRegistry {
         return this.resolveSessionReloadPlain(id, decision);
       case 'upgrade':
         return this.resolveUpgrade(id, entry, decision);
+      case 'discovery-llms-txt':
+        return this.resolveDiscovery(id, entry, decision);
       case 'navigate-handoff':
         return null;
     }
@@ -294,6 +319,34 @@ export class LickRegistry {
     }
     await this.deps.persistLickDecision(id, decision.decision);
     return { settled: true, persisted: false, message };
+  }
+
+  private async resolveDiscovery(
+    id: string,
+    entry: Extract<LickEntry, { kind: 'discovery-llms-txt' }>,
+    decision: SudoDecision
+  ): Promise<LickResolution> {
+    if (decision.decision !== 'deny') {
+      return {
+        settled: true,
+        persisted: false,
+        message: 'Nothing to confirm — use lick_dismiss to ignore this llms.txt host.',
+      };
+    }
+    const fs = this.deps.getConeFs();
+    if (!fs) {
+      throw new Error('llms.txt dismissal could not persist: cone filesystem unavailable.');
+    }
+    const appended = await appendLlmsTxtIgnoreHost(fs, entry.hostname);
+    this.entries.delete(id);
+    await this.deps.persistLickDecision(id, 'deny');
+    return {
+      settled: true,
+      persisted: appended,
+      message: appended
+        ? `Dismissed — ${entry.hostname} was added to /etc/llmstxtignore.`
+        : `Dismissed — ${entry.hostname} is already ignored.`,
+    };
   }
 
   private async runUpgrade(entry: Extract<LickEntry, { kind: 'upgrade' }>): Promise<string> {

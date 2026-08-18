@@ -198,6 +198,12 @@ export interface LickEvent {
   discoveryKind?: DiscoveryKind;
   discoveryUrl?: string;
   /**
+   * Provenance for discovery events. Only real main-frame navigation observers
+   * set this; replayed/archive-derived event text has no valid source and is
+   * rejected before lick creation.
+   */
+  discoverySource?: 'live-navigation';
+  /**
    * Stable identifier for an actionable lick — one that the cone resolves via
    * the generic `lick_confirm` / `lick_dismiss` tools. Set by the
    * orchestrator's actionable-lick registry (see `ConeRequestRegistry`) and

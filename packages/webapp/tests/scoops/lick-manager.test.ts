@@ -80,12 +80,92 @@ describe('LickManager forwarder dispatch', () => {
       discoveryOrigin: 'https://example.com',
       discoveryKind: 'ai-catalog',
       discoveryUrl: 'https://example.com/.well-known/ai-catalog.json',
+      discoverySource: 'live-navigation',
       timestamp: 't',
       body: {},
     });
     manager.emitEvent(discovery());
     manager.emitEvent(discovery());
     expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('suppresses ignored and archive-replayed discovery before dispatch', () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    manager.setDiscoveryIgnore((event) => event.discoveryOrigin === 'https://ignored.example');
+    manager.emitEvent({
+      type: 'discovery',
+      discoveryOrigin: 'https://ignored.example',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://ignored.example/llms.txt',
+      discoverySource: 'live-navigation',
+      timestamp: 't',
+      body: {},
+    });
+    manager.emitEvent({
+      type: 'discovery',
+      discoveryOrigin: 'https://archive.example',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://archive.example/llms.txt',
+      timestamp: 't',
+      body: { source: 'archived transcript' },
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('suppresses ignored discovery received through follower forwarding', () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    manager.setDiscoveryIgnore((event) => event.discoveryOrigin === 'https://ignored.example');
+    manager.handleForwardedEvent({
+      type: 'discovery',
+      discoveryOrigin: 'https://ignored.example',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://ignored.example/llms.txt',
+      discoverySource: 'live-navigation',
+      timestamp: 't',
+      body: {},
+    });
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('handleForwardedEvent suppresses a repeated discovery forward with the same artifact identity', () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    const discovery = (): LickEvent => ({
+      type: 'discovery',
+      discoveryOrigin: 'https://example.com',
+      discoveryKind: 'llms-txt',
+      discoveryUrl: 'https://example.com/llms.txt',
+      discoverySource: 'live-navigation',
+      timestamp: 't',
+      body: {},
+    });
+    manager.handleForwardedEvent(discovery());
+    manager.handleForwardedEvent(discovery());
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('handleForwardedEvent suppresses a repeated navigate forward with the same payload', () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    const handoff = (): LickEvent => ({
+      type: 'navigate',
+      navigateUrl: 'https://www.sliccy.ai/handoff',
+      timestamp: 't',
+      body: { verb: 'handoff', target: 'do the thing' },
+    });
+    manager.handleForwardedEvent(handoff());
+    manager.handleForwardedEvent(handoff());
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('handleForwardedEvent lets an unfingerprintable navigate forward through every time', () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    manager.handleForwardedEvent(navEvent());
+    manager.handleForwardedEvent(navEvent());
+    expect(handler).toHaveBeenCalledTimes(2);
   });
 
   it('emitEvent forwards a discovery lick to the leader (forwardable) and skips the local handler', () => {
@@ -98,6 +178,7 @@ describe('LickManager forwarder dispatch', () => {
       discoveryOrigin: 'https://example.com',
       discoveryKind: 'llms-txt',
       discoveryUrl: 'https://example.com/llms.txt',
+      discoverySource: 'live-navigation',
       timestamp: 't',
       body: {},
     });

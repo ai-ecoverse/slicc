@@ -1841,15 +1841,15 @@ describe('Bridge applyMessageUpdate (live lick flip)', () => {
 describe('Bridge follower-forwarding bridge', () => {
   let bridge: InstanceType<typeof Bridge>;
   let setForwarder: ReturnType<typeof vi.fn>;
-  let emitEvent: ReturnType<typeof vi.fn>;
+  let handleForwardedEvent: ReturnType<typeof vi.fn>;
 
   beforeEach(async () => {
     sentMessages.length = 0;
     messageListeners.length = 0;
     vi.clearAllMocks();
     setForwarder = vi.fn();
-    emitEvent = vi.fn();
-    (globalThis as any).__slicc_lickManager = { setForwarder, emitEvent };
+    handleForwardedEvent = vi.fn();
+    (globalThis as any).__slicc_lickManager = { setForwarder, handleForwardedEvent };
     bridge = new Bridge();
     await bridge.bind({
       getScoops: vi.fn(() => []),
@@ -1875,7 +1875,7 @@ describe('Bridge follower-forwarding bridge', () => {
   it('inject-forwarded-lick emits the event into the worker LickManager', async () => {
     const event = { type: 'navigate', navigateUrl: 'https://x', timestamp: 't', body: {} };
     await (bridge as any).handlePanelMessage({ type: 'inject-forwarded-lick', event });
-    expect(emitEvent).toHaveBeenCalledWith(event);
+    expect(handleForwardedEvent).toHaveBeenCalledWith(event);
   });
 
   it('inject-forwarded-lick is a no-op (no throw) when the worker LickManager is absent', async () => {

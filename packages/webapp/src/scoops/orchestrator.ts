@@ -47,6 +47,7 @@ import {
   lickScoopMatches,
 } from './lick-manager.js';
 import { LickRegistry } from './lick-registry.js';
+import { LlmsTxtIgnorePolicy } from './llms-txt-ignore.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopApprovalRouter } from './scoop-approval-router.js';
 import { ScoopCompletionService } from './scoop-completion-service.js';
@@ -158,6 +159,8 @@ export class Orchestrator implements ConeApprovalRouter {
   private fsWatcher: FsWatcher | null = null;
   /** Owns the live sudoers policy + shared approval broker for this float. */
   private sudoManager: SudoManager | null = null;
+  /** Live /etc/llmstxtignore policy installed into the LickManager upstream gate. */
+  private llmsTxtIgnorePolicy: LlmsTxtIgnorePolicy | null = null;
   /**
    * Owns the per-scoop `tabs` / `contexts` maps, the context-callback factory,
    * the fatal-error escalation, and the per-scoop event observers
@@ -240,6 +243,10 @@ export class Orchestrator implements ConeApprovalRouter {
     getConeShell: () => {
       const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
       return cone ? (this.lifecycle.getContext(cone.jid)?.getShell() ?? null) : null;
+    },
+    getConeFs: () => {
+      const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+      return cone ? (this.lifecycle.getContext(cone.jid)?.getFS() ?? null) : null;
     },
     persistLickDecision: (id, decision) => this.approvalRouter.persistLickDecision(id, decision),
   });
@@ -373,6 +380,8 @@ export class Orchestrator implements ConeApprovalRouter {
       onPolicyReload: (folder) => this.lifecycle.syncReadGrants(folder),
     });
     await this.sudoManager.init();
+    this.llmsTxtIgnorePolicy = new LlmsTxtIgnorePolicy(this.sharedFs, this.fsWatcher);
+    await this.llmsTxtIgnorePolicy.init();
 
     const savedScoops = await db.getAllScoops();
 
@@ -587,6 +596,7 @@ export class Orchestrator implements ConeApprovalRouter {
   /** Set the LickManager for guarding scoop removal against active licks */
   setLickManager(lickManager: LickManager): void {
     this.lickManager = lickManager;
+    lickManager.setDiscoveryIgnore?.((event) => this.llmsTxtIgnorePolicy?.ignores(event) ?? false);
     // Inject scoop-existence resolver so the LickManager can detect and
     // self-heal orphaned licks (crontasks/webhooks whose target scoop is
     // gone). Uses the shared alias matching so it agrees with the guard.
@@ -809,6 +819,11 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.lickRegistry.registerUpgrade(event);
   }
 
+  /** Register a dismiss-only llms.txt discovery lick, when it has a valid host. */
+  registerDiscoveryLick(event: LickEvent): string | null {
+    return this.lickRegistry.registerDiscovery(event);
+  }
+
   /**
    * Resolve an actionable lick for the cone's `lick_confirm` / `lick_dismiss`
    * tools. Dispatches via {@link LickRegistry} (navigate-upskill,
@@ -900,8 +915,8 @@ export class Orchestrator implements ConeApprovalRouter {
         error: err instanceof Error ? err.message : String(err),
       });
     });
-    // Rebuild the sudo manager against the fresh VFS: re-seeds the default
-    // /etc/sudoers template and re-attaches the live-reload watcher.
+    // Rebuild the config managers against the fresh VFS and reattach their
+    // live-reload watchers.
     this.sudoManager?.dispose();
     this.sudoManager = new SudoManager({
       fs: this.sharedFs,
@@ -909,6 +924,12 @@ export class Orchestrator implements ConeApprovalRouter {
       onPolicyReload: (folder) => this.lifecycle.syncReadGrants(folder),
     });
     await this.sudoManager.init();
+    this.llmsTxtIgnorePolicy?.dispose();
+    this.llmsTxtIgnorePolicy = new LlmsTxtIgnorePolicy(this.sharedFs, this.fsWatcher);
+    await this.llmsTxtIgnorePolicy.init();
+    this.lickManager?.setDiscoveryIgnore?.(
+      (event) => this.llmsTxtIgnorePolicy?.ignores(event) ?? false
+    );
     this.costTracker.reset();
     log.info('Filesystem reset and defaults re-seeded');
   }
@@ -1084,7 +1105,10 @@ export class Orchestrator implements ConeApprovalRouter {
 
     await this.lifecycle.destroyAllTabs();
 
-    // Drop the sudoers live-reload watcher subscription.
+    // Drop the discovery-ignore and sudoers live-reload watcher subscriptions.
+    this.lickManager?.setDiscoveryIgnore?.(null);
+    this.llmsTxtIgnorePolicy?.dispose();
+    this.llmsTxtIgnorePolicy = null;
     this.sudoManager?.dispose();
     this.sudoManager = null;
 
