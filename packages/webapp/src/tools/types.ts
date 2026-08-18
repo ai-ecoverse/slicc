@@ -30,16 +30,6 @@ export interface ToolInputSchema {
 }
 
 /**
- * The schema-validated argument bag a tool's `execute` receives. Its concrete
- * fields are declared per tool by that tool's `inputSchema`; at this contract
- * boundary the payload is the raw arguments the model produced (validated only
- * structurally), so each tool narrows the fields it declared.
- */
-export interface ToolInput {
-  [field: string]: unknown;
-}
-
-/**
  * Legacy tool definition for backwards compatibility with existing tools.
  * Used by src/tools/ factories. The tool adapter converts these to AgentTool.
  */
@@ -47,7 +37,14 @@ export interface ToolDefinition {
   name: string;
   description: string;
   inputSchema: ToolInputSchema;
-  execute(input: ToolInput, signal?: AbortSignal): Promise<ToolResult>;
+  // The arguments the model produced for THIS tool, whose fields are declared by
+  // that tool's own `inputSchema` and differ per tool. One shared interface here
+  // could only restate "some string keys", which is what the type already says;
+  // naming the real shape means making `ToolDefinition` generic over its schema,
+  // a signature change across every legacy tool factory and the adapter — worth
+  // doing, but not behaviour-preservingly in a debt-payoff PR.
+  // biome-ignore lint/plugin: per-tool argument bag, shape declared by inputSchema.
+  execute(input: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult>;
 }
 
 /** Legacy tool result. */
