@@ -196,6 +196,13 @@ jobs:
       # `persist-credentials: false` so no token is left in `.git/config` for the
       # steps that follow. BOT_PAT arrives later, with the head, and only after
       # the gate has approved the branch.
+      #
+      # What this does NOT fix, stated so nobody reads more into it: for
+      # `pull_request`-family events Actions takes the WORKFLOW FILE from the head
+      # branch, so a branch can still change this file and have its version run.
+      # Pinning the ref moves the gate's logic out of the branch's reach, not the
+      # workflow's. `claude-pr-review.yml` has the same shape and the same limit;
+      # what bounds both is that pushing an in-repo branch needs write access.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
           ref: ${{ github.event.repository.default_branch || 'main' }}
@@ -224,7 +231,22 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
           GH_TOKEN: ${{ github.token }}
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
-        run: node packages/dev-tools/review-responder/scan-review-feedback.mjs
+        run: |
+          set -euo pipefail
+          SCANNER=packages/dev-tools/review-responder/scan-review-feedback.mjs
+          # The scanner comes from the default branch by design (see above), so it
+          # is absent whenever the default branch does not have it yet — which is
+          # every run triggered from the PR that INTRODUCES it, since Actions takes
+          # the workflow file from the head branch for these events while the
+          # checkout above deliberately does not. A bare `node` call there dies
+          # with MODULE_NOT_FOUND, which reads like a broken workflow rather than
+          # the bootstrap it is. Warn and skip instead; it self-heals on merge.
+          if [ ! -f "$SCANNER" ]; then
+            echo "::warning::$SCANNER is not on the default branch yet — skipping. This run cannot use the PR's copy: the gate must not be run by the branch it judges."
+            echo "should_respond=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          node "$SCANNER"
 
       # Only now, once the trusted gate has approved this branch, does the PR's
       # code enter the workspace — and only now does BOT_PAT. It is persisted as
@@ -404,9 +426,14 @@ jobs:
             identifiable as ours.
 
             HARD CONSTRAINTS:
-            - Commit and `git push` to the EXISTING head branch. Never
-              `git push --force` and never `git push --force-with-lease`: this
-              branch may carry a human's commits and rewriting them destroys
+            - IF you changed code, commit and `git push` to the EXISTING head
+              branch. If you changed nothing — every finding was wrong, or out of
+              scope, so you took (b) or (c) — then push nothing. Do NOT create an
+              empty commit to have something to push: a reply-only response is a
+              complete and expected outcome, and an empty commit would spend a
+              full CI run to say nothing. Your replies are the deliverable there.
+            - Never `git push --force` and never `git push --force-with-lease`:
+              this branch may carry a human's commits and rewriting them destroys
               their work. If your push is rejected, fetch and rebase or merge,
               then push again.
             - Do not merge this PR, do not open a new PR, do not close anything,
