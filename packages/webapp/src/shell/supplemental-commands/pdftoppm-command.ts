@@ -232,28 +232,32 @@ export function createPdftoppmCommand(name: string = 'pdftoppm'): Command {
       const extension = extensionFor(parsed.format);
       const root = parsed.outputRoot ?? stripExtension(basename(parsed.inputPath));
 
-      const { pages } = await renderPdfPageRange(data, {
-        firstPage: parsed.firstPage,
-        // -singlefile renders exactly one page: the first requested one.
-        lastPage: parsed.singleFile ? (parsed.firstPage ?? 1) : parsed.lastPage,
-        format: parsed.format,
-        quality: parsed.quality,
-        ...rasterSizing(parsed),
-      });
-
-      if (pages.length === 0) {
-        return { stdout: '', stderr: `${name}: no pages to render\n`, exitCode: 1 };
-      }
-
-      const lastRendered = pages[pages.length - 1].pageNumber;
+      // Write each page as it is rendered rather than collecting them: a
+      // few hundred scanned pages at 150 DPI is gigabytes of PNG, and holding
+      // the whole range would exhaust the kernel worker before anything
+      // reached the VFS.
       const written: string[] = [];
-      for (const page of pages) {
-        const fileName = parsed.singleFile
-          ? `${root}.${extension}`
-          : formatPageFileName(root, page.pageNumber, lastRendered, extension);
-        const outputPath = ctx.fs.resolvePath(ctx.cwd, fileName);
-        await ctx.fs.writeFile(outputPath, page.bytes);
-        written.push(fileName);
+      await renderPdfPageRange(
+        data,
+        {
+          firstPage: parsed.firstPage,
+          // -singlefile renders exactly one page: the first requested one.
+          lastPage: parsed.singleFile ? (parsed.firstPage ?? 1) : parsed.lastPage,
+          format: parsed.format,
+          quality: parsed.quality,
+          ...rasterSizing(parsed),
+        },
+        async (page, range) => {
+          const fileName = parsed.singleFile
+            ? `${root}.${extension}`
+            : formatPageFileName(root, page.pageNumber, range.lastPage, extension);
+          await ctx.fs.writeFile(ctx.fs.resolvePath(ctx.cwd, fileName), page.bytes);
+          written.push(fileName);
+        }
+      );
+
+      if (written.length === 0) {
+        return { stdout: '', stderr: `${name}: no pages to render\n`, exitCode: 1 };
       }
 
       // poppler is silent on success. Naming the files anyway is the one

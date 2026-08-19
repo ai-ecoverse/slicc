@@ -164,13 +164,16 @@ describe('convert with a PDF input', () => {
     expect(raster.calls[0].options.scale).toBeCloseTo(1, 6);
   });
 
-  it('honours -density after the input', async () => {
+  it('ignores a -density that follows the input, as ImageMagick does', async () => {
+    // The classic ImageMagick gotcha: -density is a setting consulted when the
+    // input is *read*, so it has to precede it. Writing it afterwards is a
+    // no-op for rasterization rather than a retroactive override.
     await run(['doc.pdf', '-density', '288', 'out.png']);
-    expect(raster.calls[0].options.scale).toBeCloseTo(4, 6);
+    expect(raster.calls[0].options.scale).toBeCloseTo(150 / 72, 6);
   });
 
-  it('lets the last -density win', async () => {
-    await run(['-density', '72', 'doc.pdf', '-density', '144', 'out.png']);
+  it('lets the last -density before the input win', async () => {
+    await run(['-density', '72', '-density', '144', 'doc.pdf', 'out.png']);
     expect(raster.calls[0].options.scale).toBeCloseTo(2, 6);
   });
 
@@ -183,6 +186,27 @@ describe('convert with a PDF input', () => {
     const result = await run(['-density', 'high', 'doc.pdf', 'out.png']);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe('convert: Invalid density: high\n');
+  });
+
+  it('carries -density forward to a later PDF input, as a setting not an operation', async () => {
+    installMagickMock();
+    await run(['-density', '72', 'a.pdf', 'b.pdf', '+append', 'out.png']);
+    expect(raster.calls).toHaveLength(2);
+    for (const call of raster.calls) expect(call.options.scale).toBeCloseTo(1, 6);
+  });
+
+  it('carries -density into a parenthesized group', async () => {
+    installMagickMock();
+    await run(['-density', '72', '(', 'a.pdf', 'b.pdf', '+append', ')', 'out.png']);
+    expect(raster.calls).toHaveLength(2);
+    for (const call of raster.calls) expect(call.options.scale).toBeCloseTo(1, 6);
+  });
+
+  it('lets a -density between inputs apply only from that point on', async () => {
+    installMagickMock();
+    await run(['-density', '72', 'a.pdf', '-density', '144', 'b.pdf', '+append', 'out.png']);
+    expect(raster.calls[0].options.scale).toBeCloseTo(1, 6);
+    expect(raster.calls[1].options.scale).toBeCloseTo(2, 6);
   });
 
   it('rejects a zero density rather than rendering a zero-size page', async () => {

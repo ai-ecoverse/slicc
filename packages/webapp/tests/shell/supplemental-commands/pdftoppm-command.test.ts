@@ -22,19 +22,29 @@ vi.mock('../../../src/shell/supplemental-commands/pdf-raster.js', async (importO
     await importOriginal<typeof import('../../../src/shell/supplemental-commands/pdf-raster.js')>();
   return {
     ...actual,
-    renderPdfPageRange: async (_data: Uint8Array, options: Record<string, unknown> = {}) => {
+    renderPdfPageRange: async (
+      _data: Uint8Array,
+      options: Record<string, unknown> = {},
+      onPage?: (page: unknown, range: unknown) => Promise<void> | void
+    ) => {
       raster.calls.push(options);
       if (raster.error) throw raster.error;
-      const first = Math.max(1, (options.firstPage as number) ?? 1);
-      const last = Math.min(raster.totalPages, (options.lastPage as number) ?? raster.totalPages);
-      if (first > raster.totalPages) {
-        throw new Error(`page ${first} out of range (1-${raster.totalPages})`);
+      const firstPage = Math.max(1, (options.firstPage as number) ?? 1);
+      const lastPage = Math.min(
+        raster.totalPages,
+        (options.lastPage as number) ?? raster.totalPages
+      );
+      if (firstPage > raster.totalPages) {
+        throw new Error(`page ${firstPage} out of range (1-${raster.totalPages})`);
       }
-      const pages = [];
-      for (let pageNumber = first; pageNumber <= last; pageNumber++) {
-        pages.push({ pageNumber, bytes: new Uint8Array([pageNumber]), width: 10, height: 20 });
+      const range = { firstPage, lastPage, totalPages: raster.totalPages };
+      for (let pageNumber = firstPage; pageNumber <= lastPage; pageNumber++) {
+        await onPage?.(
+          { pageNumber, bytes: new Uint8Array([pageNumber]), width: 10, height: 20 },
+          range
+        );
       }
-      return { pages, totalPages: raster.totalPages };
+      return range;
     },
   };
 });
@@ -323,6 +333,27 @@ describe('createPdftoppmCommand', () => {
   it('prefixes errors with the alias the user invoked', async () => {
     const result = await run(['-tiff', 'doc.pdf'], okCtx(), 'pdftocairo');
     expect(result.stderr).toBe('pdftocairo: unsupported option -tiff\n');
+  });
+
+  it('writes each page as it is rendered rather than after the whole range', async () => {
+    // Guards the streaming contract: a long document must not accumulate
+    // every encoded page in memory before the first write lands.
+    const order: string[] = [];
+    const ctx = mockCommandContext({
+      fs: {
+        readFileBuffer: vi.fn().mockResolvedValue(PDF_BYTES),
+        writeFile: vi.fn().mockImplementation(async (path: string) => {
+          order.push(path);
+        }),
+      },
+      cwd: '/workspace',
+    });
+    await run(['doc.pdf', 'page'], ctx);
+    expect(order).toEqual([
+      '/workspace/page-1.png',
+      '/workspace/page-2.png',
+      '/workspace/page-3.png',
+    ]);
   });
 
   it('reports an out-of-range -f from the rasterizer', async () => {

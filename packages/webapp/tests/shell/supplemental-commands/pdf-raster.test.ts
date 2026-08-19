@@ -327,25 +327,35 @@ describe('renderPdfPageRange', () => {
 
   const pdf = () => new TextEncoder().encode('%PDF-1.7');
 
+  /** Collect the streamed pages, as a caller that can afford to would. */
+  const collect = async (options = {}) => {
+    const pages: number[] = [];
+    const range = await renderPdfPageRange(pdf(), options, (page) => {
+      pages.push(page.pageNumber);
+    });
+    return { pages, range };
+  };
+
   it('renders every page by default and reports the total', async () => {
-    const { pages, totalPages } = await renderPdfPageRange(pdf());
-    expect(totalPages).toBe(5);
-    expect(pages.map((page) => page.pageNumber)).toEqual([1, 2, 3, 4, 5]);
+    const { pages, range } = await collect();
+    expect(range).toEqual({ firstPage: 1, lastPage: 5, totalPages: 5 });
+    expect(pages).toEqual([1, 2, 3, 4, 5]);
   });
 
   it('parses the document once for the whole range', async () => {
-    await renderPdfPageRange(pdf());
+    await collect();
     expect(doc.destroyed).toBe(1);
   });
 
   it('honours first and last page bounds', async () => {
-    const { pages } = await renderPdfPageRange(pdf(), { firstPage: 2, lastPage: 4 });
-    expect(pages.map((page) => page.pageNumber)).toEqual([2, 3, 4]);
+    const { pages } = await collect({ firstPage: 2, lastPage: 4 });
+    expect(pages).toEqual([2, 3, 4]);
   });
 
   it('clamps a last page past the end rather than erroring', async () => {
-    const { pages } = await renderPdfPageRange(pdf(), { lastPage: 99 });
-    expect(pages.map((page) => page.pageNumber)).toEqual([1, 2, 3, 4, 5]);
+    const { pages, range } = await collect({ lastPage: 99 });
+    expect(pages).toEqual([1, 2, 3, 4, 5]);
+    expect(range.lastPage).toBe(5);
   });
 
   it('errors on a first page past the end', async () => {
@@ -355,8 +365,60 @@ describe('renderPdfPageRange', () => {
   });
 
   it('resolves the long edge per page, so mixed orientations both fit', async () => {
-    const { pages } = await renderPdfPageRange(pdf(), { firstPage: 1, lastPage: 1, longEdge: 792 });
-    expect(pages[0]).toMatchObject({ width: 612, height: 792 });
+    const sizes: Array<{ width: number; height: number }> = [];
+    await renderPdfPageRange(pdf(), { firstPage: 1, lastPage: 1, longEdge: 792 }, (page) => {
+      sizes.push({ width: page.width, height: page.height });
+    });
+    expect(sizes).toEqual([{ width: 612, height: 792 }]);
+  });
+
+  it('hands each page to the callback before rendering the next, so only one is live', async () => {
+    // The whole point of streaming: a caller can write and drop each page
+    // instead of the range accumulating in memory.
+    const interleaved: string[] = [];
+    doc.onRender = () => interleaved.push('render');
+    try {
+      await renderPdfPageRange(pdf(), { lastPage: 3 }, () => {
+        interleaved.push('page');
+      });
+    } finally {
+      doc.onRender = null;
+    }
+    expect(interleaved).toEqual(['render', 'page', 'render', 'page', 'render', 'page']);
+  });
+
+  it('passes the resolved range to every callback, so callers can pad filenames', async () => {
+    const ranges: number[] = [];
+    await renderPdfPageRange(pdf(), { lastPage: 3 }, (_page, range) => {
+      ranges.push(range.lastPage);
+    });
+    expect(ranges).toEqual([3, 3, 3]);
+  });
+
+  it('propagates a callback failure and still destroys the document', async () => {
+    await expect(
+      renderPdfPageRange(pdf(), {}, () => {
+        throw new Error('disk full');
+      })
+    ).rejects.toThrow('disk full');
+    expect(doc.destroyed).toBe(1);
+  });
+
+  it('stops rendering once the callback fails', async () => {
+    await expect(
+      renderPdfPageRange(pdf(), {}, () => {
+        throw new Error('disk full');
+      })
+    ).rejects.toThrow();
+    expect(doc.renderCalls).toHaveLength(1);
+  });
+
+  it('works without a callback, for a caller that only wants the range', async () => {
+    await expect(renderPdfPageRange(pdf(), { lastPage: 2 })).resolves.toEqual({
+      firstPage: 1,
+      lastPage: 2,
+      totalPages: 5,
+    });
   });
 });
 

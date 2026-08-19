@@ -83,6 +83,14 @@ interface ExpressionBase {
 interface InputExpression extends ExpressionBase {
   kind: 'input';
   path: string;
+  /**
+   * Rasterization DPI in force at this input's position in the argv, for PDF
+   * inputs. ImageMagick treats `-density` as a *setting*, not an operation:
+   * it applies to every input that follows until overridden. Resolving it at
+   * parse time is the only place argv order is still known — the expression
+   * tree alone cannot tell a pre-group setting from a post-group one.
+   */
+  density: number;
 }
 
 interface AppendExpression extends ExpressionBase {
@@ -186,6 +194,8 @@ interface ParsedConvertArgs {
 
 class ConvertArgParser {
   private index = 0;
+  /** Current `-density` setting; applies to every subsequent input. */
+  private density = DEFAULT_PDF_DPI;
 
   constructor(private readonly tokens: string[]) {}
 
@@ -249,6 +259,7 @@ class ConvertArgParser {
       value: values[0] ?? '',
       ...(argCount === 2 ? { text: values[1] } : {}),
     };
+    if (operation.type === 'density') this.density = parseDensity(operation.value);
     (expressions.at(-1)?.operations ?? pending).push(operation);
     this.index += argCount + 1;
   }
@@ -261,7 +272,12 @@ class ConvertArgParser {
     if (token.startsWith('-') || token.startsWith('+')) {
       throw new Error(`unsupported option ${token}`);
     }
-    expressions.push({ kind: 'input', path: token, operations: pending.splice(0) });
+    expressions.push({
+      kind: 'input',
+      path: token,
+      operations: pending.splice(0),
+      density: this.density,
+    });
     this.index++;
   }
 
@@ -304,6 +320,18 @@ export function parseConvertArgs(args: string[]): ParsedConvertArgs {
   if (isControlToken(outputPath)) throw new Error('expected an output file');
   const expression = new ConvertArgParser(args.slice(0, -1)).parse();
   return { expression, outputPath };
+}
+
+/**
+ * ImageMagick accepts `-density 150x150`; both axes are the same here because
+ * pdf.js scales uniformly, so take the first component.
+ */
+export function parseDensity(value: string): number {
+  const parsed = Number(value.split('x')[0]);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(`Invalid density: ${value}`);
+  }
+  return parsed;
 }
 
 function isControlToken(value: string): boolean {
@@ -660,22 +688,6 @@ export function splitSceneSelector(path: string): { path: string; scene?: number
   return { path: match[1], scene: Number(match[2]) };
 }
 
-/** Last `-density` wins, as it does in ImageMagick. */
-function densityFor(expression: InputExpression): number {
-  let dpi = DEFAULT_PDF_DPI;
-  for (const operation of expression.operations) {
-    if (operation.type !== 'density') continue;
-    // ImageMagick accepts `-density 150x150`; both axes are the same here
-    // because pdf.js scales uniformly, so take the first component.
-    const parsed = Number(operation.value.split('x')[0]);
-    if (!Number.isFinite(parsed) || parsed <= 0) {
-      throw new Error(`Invalid density: ${operation.value}`);
-    }
-    dpi = parsed;
-  }
-  return dpi;
-}
-
 async function loadInputData(
   expression: ImageExpression,
   ctx: CommandContext,
@@ -696,7 +708,7 @@ async function loadInputData(
     if (isPdfBytes(data)) {
       // The scene selector is 0-based; pdf.js pages are 1-based.
       const page = await renderPdfPage(data, (scene ?? 0) + 1, {
-        scale: dpiToScale(densityFor(expression)),
+        scale: dpiToScale(expression.density),
         format: 'png',
       });
       result.set(expression, page.bytes);

@@ -113,10 +113,12 @@ async function getUnpdf() {
 }
 
 function requireOffscreenCanvas(): void {
-  // Node has no OffscreenCanvas; unpdf's Node path needs the optional
-  // `@napi-rs/canvas` peer, which SLICC does not ship. Mirror the explicit
-  // guard `v86-command.ts` uses for its screenshot path rather than failing
-  // deep inside pdf.js with an opaque error.
+  // Every cone-hosting float runs the shell in a browser DedicatedWorker, so
+  // OffscreenCanvas is normally present. This guard is for bare-Node
+  // embeddings and tests, where unpdf's Node path would need the optional
+  // `@napi-rs/canvas` peer SLICC does not ship: fail with a clear message
+  // rather than deep inside pdf.js, mirroring `v86-command.ts`'s screenshot
+  // guard.
   if (typeof OffscreenCanvas === 'undefined') {
     throw new Error('PDF rasterization requires OffscreenCanvas, unavailable in this runtime');
   }
@@ -228,30 +230,46 @@ export interface RasterRangeOptions extends RasterOptions {
   lastPage?: number;
 }
 
+/** Range bounds, resolved against the real page count once the document opens. */
+export interface RasterRange {
+  firstPage: number;
+  lastPage: number;
+  totalPages: number;
+}
+
 /**
- * Rasterize a page range, parsing the document once. Pages render
- * sequentially: pdf.js serializes work per document anyway, and a wide fan-out
- * would hold every page canvas in memory at once.
+ * Rasterize a page range, parsing the document once and handing each page to
+ * `onPage` as soon as it is encoded.
+ *
+ * Streaming rather than returning an array is load-bearing: a few hundred
+ * pages of scanned A4 at 150 DPI is easily gigabytes of PNG, and accumulating
+ * them would exhaust the kernel worker before anything reached the VFS. The
+ * caller writes and drops each page, so only one is live at a time. `onPage`
+ * also receives the resolved range, since output naming generally depends on
+ * the last page number, which is not knowable until the document opens.
+ *
+ * Pages render sequentially: pdf.js serializes work per document anyway.
  *
  * `-l` past the end clamps rather than erroring (poppler's behaviour), but a
  * `-f` past the end is a real mistake and reports one.
  */
 export async function renderPdfPageRange(
   data: Uint8Array,
-  options: RasterRangeOptions = {}
-): Promise<{ pages: RasterizedPage[]; totalPages: number }> {
+  options: RasterRangeOptions = {},
+  onPage?: (page: RasterizedPage, range: RasterRange) => Promise<void> | void
+): Promise<RasterRange> {
   requireOffscreenCanvas();
   return withDocument(data, async (pdf) => {
     const totalPages = pdf.numPages;
-    const first = Math.max(1, options.firstPage ?? 1);
-    const last = Math.min(totalPages, options.lastPage ?? totalPages);
-    if (first > totalPages) {
-      throw new Error(`page ${first} out of range (1-${totalPages})`);
+    const firstPage = Math.max(1, options.firstPage ?? 1);
+    const lastPage = Math.min(totalPages, options.lastPage ?? totalPages);
+    if (firstPage > totalPages) {
+      throw new Error(`page ${firstPage} out of range (1-${totalPages})`);
     }
-    const pages: RasterizedPage[] = [];
-    for (let pageNumber = first; pageNumber <= last; pageNumber++) {
-      pages.push(await renderOne(pdf, pageNumber, options));
+    const range: RasterRange = { firstPage, lastPage, totalPages };
+    for (let pageNumber = firstPage; pageNumber <= lastPage; pageNumber++) {
+      await onPage?.(await renderOne(pdf, pageNumber, options), range);
     }
-    return { pages, totalPages };
+    return range;
   });
 }

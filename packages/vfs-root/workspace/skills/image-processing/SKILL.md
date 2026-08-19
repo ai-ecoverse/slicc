@@ -91,9 +91,8 @@ convert doc.pdf[2] -resize 800x page3.jpg  # third page, resized
 Prefer `pdftoppm` for whole documents: it parses the PDF once, while repeated
 `convert` calls re-parse it per page.
 
-Rasterization needs `OffscreenCanvas`, so it is unavailable in the Node CLI
-float. `pdftk` handles page-level PDF work (merge, split, rotate, text
-extraction) without rendering.
+`pdftk` handles page-level PDF work (merge, split, rotate, text extraction)
+without rendering, which is cheaper when you do not need an image.
 
 ## Verify and inspect
 
