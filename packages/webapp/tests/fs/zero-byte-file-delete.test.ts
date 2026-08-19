@@ -115,6 +115,33 @@ describe('zero-byte files on the OPFS backend (#2157)', () => {
     expect(await fs.exists('/workspace/zbtest/onebyte.txt')).toBe(false);
   });
 
+  it('leaves no index entry behind when the backing store refuses the create', async () => {
+    // The mirror image of the bug: `createFile` inserts the inode first, so a
+    // failing `getFileHandle` (quota, permission) must not leave the index
+    // claiming a file the store never got — that is the same divergence, just
+    // reached from the other side. Patched on the mock's prototype because
+    // ZenFS caches its own handle instances; a wrapper we hand back here would
+    // never be the object it calls.
+    const proto = Object.getPrototypeOf(await opfs.handle.getDirectoryHandle(dbName)) as {
+      getFileHandle: (name: string, opts?: { create?: boolean }) => Promise<unknown>;
+    };
+    const original = proto.getFileHandle;
+    proto.getFileHandle = async function refusing(name, opts) {
+      if (name === 'refused.txt') throw new DOMException('quota exceeded', 'QuotaExceededError');
+      return original.call(this, name, opts);
+    };
+    try {
+      await expect(fs.writeFile('/workspace/zbtest/refused.txt', '')).rejects.toThrow();
+      expect(await fs.exists('/workspace/zbtest/refused.txt')).toBe(false);
+      expect(await backingNames('/workspace/zbtest')).toEqual(['empty.txt', 'onebyte.txt']);
+    } finally {
+      proto.getFileHandle = original;
+    }
+    // The rolled-back path is still usable — the failure left no EEXIST tombstone.
+    await fs.writeFile('/workspace/zbtest/refused.txt', '');
+    expect(await backingNames('/workspace/zbtest')).toContain('refused.txt');
+  });
+
   it('a genuinely missing path still reports ENOENT', async () => {
     // The `remove` tolerance must not turn a real miss into silent success —
     // `IndexFS` is the gate, and it still rejects an unknown path.
