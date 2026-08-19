@@ -112,11 +112,12 @@ func cmdCloud(ctx context.Context, verb string, args []string) int {
 		}
 		return cmdExec(ctx, session.JoinURL, command)
 	case "watch-cloud":
+		rest, plain := takePlainFlag(rest)
 		scoopJid := ""
 		if len(rest) > 0 {
 			scoopJid = rest[0]
 		}
-		return cmdWatch(ctx, session.JoinURL, scoopJid)
+		return cmdWatch(ctx, session.JoinURL, scoopJid, plain)
 	default:
 		fmt.Fprintf(os.Stderr, "slicc: unknown cloud verb %q\n", verb)
 		return 2

@@ -2,6 +2,8 @@ package tray
 
 import (
 	"encoding/json"
+	"fmt"
+	"log/slog"
 	"strings"
 	"testing"
 	"unicode/utf8"
@@ -355,5 +357,53 @@ func TestDispatchPassesSmallMessagesThrough(t *testing.T) {
 
 	if gotType != protocol.TypeUserMessageEcho {
 		t.Errorf("got type %q, want %q", gotType, protocol.TypeUserMessageEcho)
+	}
+}
+
+func TestDispatchReportsActivity(t *testing.T) {
+	beats := 0
+	c := &Conn{
+		opts: Options{OnActivity: func() { beats++ }},
+		done: make(chan struct{}),
+	}
+	// Every inbound frame counts as proof of life, keepalives included — the
+	// leader answers pings rather than sending them, so a follower that only
+	// watched keepalives would never see one. Unparseable frames count too:
+	// something is still arriving.
+	c.dispatch([]byte(`{"type":"ping"}`))
+	c.dispatch([]byte(`{"type":"pong"}`))
+	c.dispatch([]byte(`{"type":"status","scoopStatus":"ready"}`))
+	c.dispatch([]byte(`not json`))
+	if beats != 4 {
+		t.Errorf("counted %d frames, want 4", beats)
+	}
+}
+
+func TestDispatchWithoutActivityHookIsFine(_ *testing.T) {
+	c := newConnForDispatch(nil)
+	c.dispatch([]byte(`{"type":"pong"}`)) // must not panic
+}
+
+func TestPionRecordsReachTheConnsDiagnostics(t *testing.T) {
+	// pion must never reach os.Stderr on its own: webrtc's default factory logs
+	// error records there, which is what buried the CLI's output in
+	// `turnc ERROR: Fail to refresh permissions` walls.
+	var logged []string
+	var counted []slog.Level
+	c := &Conn{
+		opts: Options{
+			Logf:       func(format string, args ...any) { logged = append(logged, fmt.Sprintf(format, args...)) },
+			OnLinkDiag: func(_ string, level slog.Level, _ string) { counted = append(counted, level) },
+		},
+		done: make(chan struct{}),
+	}
+
+	c.pionLoggerFactory().NewLogger("turnc").Errorf("Fail to refresh permissions: %s", "broken pipe")
+
+	if len(logged) != 1 || !strings.Contains(logged[0], "pion turnc: Fail to refresh permissions: broken pipe") {
+		t.Errorf("pion record did not reach the diagnostic logger: %v", logged)
+	}
+	if len(counted) != 1 || counted[0] != slog.LevelError {
+		t.Errorf("link diagnostics = %v, want one error", counted)
 	}
 }

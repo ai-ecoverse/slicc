@@ -12,8 +12,9 @@ first run.
 ```
 slicc <join-url> prompt "<text>"                Send one message, stream the assistant's reply, exit
 slicc <join-url> exec "<command>"               Run a command in the leader's shell, stream output, exit
-slicc <join-url> watch [scoop]                  Tail the agent's output live (a scoop jid filters), until Ctrl+C
-slicc <join-url> follow [--no-banner] [runner]  Stay connected; let the leader run commands on THIS machine
+slicc <join-url> watch [--plain] [scoop]        Tail the agent's output live (a scoop jid filters), until Ctrl+C
+slicc <join-url> follow [--no-banner] [--plain] [runner]
+                                                Stay connected; let the leader run commands on THIS machine
 slicc <join-url> follow --eval [repl]           Same, but into ONE persistent REPL process (state persists)
 slicc update [--check]                          Self-update to the newest released CLI binary
 ```
@@ -58,6 +59,35 @@ slicc <url> follow docker exec -i sandbox sh -c  # scope the leader to a contain
 ⚠️ **`follow <runner>` is remote code execution by design.** The leader gets to
 run commands on your machine. Only point it at leaders you trust, and prefer a
 sandboxing runner. Set `SLICC_DEBUG=1` to see connection diagnostics on stderr.
+
+## Live status bar
+
+In an interactive terminal, `follow` keeps a status bar pinned below its output
+and color-codes events as they happen (`watch` color-codes too, but leaves the
+screen to the agent transcript it is streaming):
+
+```
+12:14:15 ✔ connected
+12:14:26 ▸ exec: git status --short
+12:15:02 ✖ tray attach: unexpected role "" (body: {
+         │   "code": "TRAY_NOT_INITIALIZED"
+         │ })
+12:15:41 ✖ ↺ repeated (×6)
+● connected  up 2m14s  ♥ 4s  ▸ 3 execs  ⇅ 1 reconnects  alice@laptop · bash -c  ▁▄████
+```
+
+Left to right, the bar shows the connection state (a spinner while connecting, a
+live countdown while waiting to retry), uptime, how long ago the last message
+from the leader arrived, exec and reconnect counts, suppressed link diagnostics
+(`link ⚠ N` — the WebRTC/TURN churn that used to scroll past as
+`turnc ERROR: …`, still readable with `SLICC_DEBUG=1`), who the leader runs
+commands as, and a strip of recent connection history. A repeated error collapses
+into one counted line instead of a wall.
+
+Redirected output is plain and unchanged — no colors, no cursor tricks, every
+occurrence logged — so pipes and CI keep working. To force that in a terminal,
+use `--plain` or `SLICC_NO_TUI=1`; `NO_COLOR` keeps the bar without color, and
+`COLUMNS` overrides the detected width.
 
 On macOS, [Sliccstart](../swift-launcher/) can open `follow` mode in Terminal.app,
 iTerm2, Ghostty, WezTerm, kitty, or Alacritty after a leader session is running.

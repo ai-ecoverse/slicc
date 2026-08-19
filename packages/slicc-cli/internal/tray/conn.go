@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -17,8 +18,10 @@ import (
 	"unicode/utf8"
 
 	"github.com/pion/ice/v4"
+	pionlogging "github.com/pion/logging"
 	"github.com/pion/webrtc/v4"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/logging"
 	"github.com/ai-ecoverse/slicc-cli/internal/protocol"
 	"github.com/ai-ecoverse/slicc-cli/internal/signaling"
 )
@@ -70,8 +73,24 @@ type Options struct {
 	// OnMessage receives every inbound message except ping/pong (auto-handled).
 	// It runs on the data-channel read goroutine; keep it non-blocking.
 	OnMessage func(msgType string, raw []byte)
+	// OnActivity fires for every inbound frame, including keepalives and the
+	// transport framing OnMessage never sees. Any frame is proof the leader is
+	// alive; keepalives alone are not enough, because the leader answers pings
+	// rather than sending them. Runs on the data-channel read goroutine; keep it
+	// non-blocking.
+	OnActivity func()
+	// OnLinkDiag taps pion's own records (ICE state churn, TURN refresh
+	// failures) so a caller can summarize them — a counter in a status bar —
+	// instead of letting them scroll. Runs on pion goroutines; keep it
+	// non-blocking and concurrency-safe.
+	OnLinkDiag logging.PionEvent
 	// Logf is an optional diagnostic logger.
 	Logf func(format string, args ...any)
+	// LogWanted, when set, reports whether Logf would do anything with a record
+	// at that level. It exists for pion's records, which arrive per STUN packet
+	// at trace level: without it each one is formatted only for a disabled logger
+	// to throw it away. nil → every record is formatted.
+	LogWanted func(level slog.Level) bool
 	// HTTPClient overrides the signaling HTTP client (tests). nil → default.
 	HTTPClient *http.Client
 }
@@ -289,6 +308,7 @@ func (c *Conn) configurePeer(iceServers []signaling.TurnIceServer, sig *signalin
 	// no TURN.
 	settingEngine := webrtc.SettingEngine{}
 	settingEngine.SetICEMulticastDNSMode(ice.MulticastDNSModeQueryOnly)
+	settingEngine.LoggerFactory = c.pionLoggerFactory()
 	api := webrtc.NewAPI(webrtc.WithSettingEngine(settingEngine))
 	pc, err := api.NewPeerConnection(config)
 	if err != nil {
@@ -324,6 +344,17 @@ func (c *Conn) configurePeer(iceServers []signaling.TurnIceServer, sig *signalin
 	c.pc = pc
 	c.mu.Unlock()
 	return nil
+}
+
+// pionLoggerFactory is the logging pion gets on every peer connection.
+//
+// It must be installed explicitly: with SettingEngine.LoggerFactory left nil,
+// webrtc falls back to pion/logging.NewDefaultLoggerFactory(), which writes
+// error records straight to os.Stderr — a flaky TURN allocation then buries the
+// CLI's own output under `turnc ERROR: Fail to refresh permissions` lines that
+// no log level of ours can quiet.
+func (c *Conn) pionLoggerFactory() pionlogging.LoggerFactory {
+	return logging.PionFactory(c.opts.Logf, c.opts.OnLinkDiag, c.opts.LogWanted)
 }
 
 func (c *Conn) recreatePeer(iceServers []signaling.TurnIceServer, sig *signaling.Client, controllerID string, bootstrapIDRef *string) error {
@@ -421,6 +452,9 @@ type chunkReassembly struct {
 
 // dispatch decodes the discriminant and routes inbound messages.
 func (c *Conn) dispatch(data []byte) {
+	if c.opts.OnActivity != nil {
+		c.opts.OnActivity()
+	}
 	var env protocol.Envelope
 	if err := json.Unmarshal(data, &env); err != nil {
 		c.opts.logf("tray: dropping unparseable message: %v", err)

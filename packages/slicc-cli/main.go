@@ -114,6 +114,7 @@ func dispatchJoinVerb(ctx context.Context, joinURL, sub string, rest []string) i
 		// Optional positional: a scoop jid to filter to. Default empty = tail
 		// whatever the leader broadcasts (the selected scoop — the browser view),
 		// since the cone's jid is a generated uid, not the literal "cone".
+		rest, plain := takePlainFlag(rest)
 		scoopJid := ""
 		if len(rest) > 0 {
 			if rest[0] == "-h" || rest[0] == "--help" {
@@ -122,7 +123,7 @@ func dispatchJoinVerb(ctx context.Context, joinURL, sub string, rest []string) i
 			}
 			scoopJid = rest[0]
 		}
-		return cmdWatch(ctx, joinURL, scoopJid)
+		return cmdWatch(ctx, joinURL, scoopJid, plain)
 	case "follow":
 		// Leading slicc-owned options (`--no-banner`, `--eval`, `--eval-quiet`,
 		// `--`) are consumed; everything after is the runner argv (verbatim), so
@@ -146,8 +147,9 @@ func usage(w *os.File) {
 Usage:
   slicc <join-url> prompt "<text>"    Stream one assistant turn from the leader, then exit
   slicc <join-url> exec "<command>"   Run a command in the leader's shell, stream stdout/stderr
-  slicc <join-url> watch [scoop]      Tail the leader's live agent output (a scoop jid filters) until Ctrl+C
-  slicc <join-url> follow [--no-banner] [runner...]
+  slicc <join-url> watch [--plain] [scoop]
+                                      Tail the leader's live agent output (a scoop jid filters) until Ctrl+C
+  slicc <join-url> follow [--no-banner] [--plain] [runner...]
                                       Stay connected as a follower. If a runner is given,
                                       the leader can run commands on THIS machine — each
                                       one is executed as "<runner> <command>", as the user
@@ -192,6 +194,11 @@ The <text>/<command> argument, curl-style:
   @-  or  -      read it from stdin        (echo "hi" | slicc <url> prompt -)
 
 The <join-url> is a leader's https://…/join/<token> link.
+
+On an interactive terminal, follow/watch keep a live status bar (connection
+state, uptime, heartbeat, exec + reconnect counts) below their output. Piped
+output is plain by construction; --plain or SLICC_NO_TUI=1 forces it, and
+NO_COLOR keeps the bar without color.
 `)
 }
 
@@ -230,6 +237,9 @@ type followArgs struct {
 	runner     []string
 	showBanner bool
 	help       bool
+	// plain forces the piped output style (no status bar, no color) even on an
+	// interactive terminal.
+	plain bool
 	// eval switches follow into persistent-REPL mode: the runner is spawned
 	// once and each leader command is written as a line to its stdin.
 	eval bool
@@ -254,6 +264,10 @@ func parseFollowArgs(rest []string) followArgs {
 			fa.showBanner = false
 			rest = rest[1:]
 			continue
+		case rest[0] == "--plain":
+			fa.plain = true
+			rest = rest[1:]
+			continue
 		case rest[0] == "--eval":
 			fa.eval = true
 			rest = rest[1:]
@@ -274,6 +288,16 @@ func parseFollowArgs(rest []string) followArgs {
 	}
 	fa.runner = rest
 	return fa
+}
+
+// takePlainFlag consumes a leading `--plain` from a verb's argv, returning the
+// rest. Only `watch` needs it standalone; `follow` parses it with its other
+// options.
+func takePlainFlag(rest []string) ([]string, bool) {
+	if len(rest) > 0 && rest[0] == "--plain" {
+		return rest[1:], true
+	}
+	return rest, false
 }
 
 // parseEvalQuiet parses a `--eval-quiet` duration ("750ms", "2s"); invalid or
