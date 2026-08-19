@@ -299,6 +299,29 @@ describe('install-required guidance (browser branch)', () => {
     }
   });
 
+  it('does not blame a missing lib/typescript.js for a pre-6 major that ships one', async () => {
+    resetTypeScriptForTests();
+    const ctx = createMockCtx();
+    // 5.x does ship `lib/typescript.js` and `transpileModule`; it is refused
+    // only by the 6.x pin. Reusing the v7 wording here would be false.
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/typescript/package.json',
+      JSON.stringify({ name: 'typescript', version: '5.9.2', main: 'lib/typescript.js' })
+    );
+    vi.stubGlobal('process', undefined);
+    try {
+      const result = await createTscCommand().execute(['--version'], ctx);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('typescript@5.9.2');
+      expect(result.stderr).toContain('predates the pinned 6.x line');
+      expect(result.stderr).not.toContain('no JS compiler API');
+      expect(result.stderr).toContain('ipk add typescript@6.0.3');
+    } finally {
+      vi.unstubAllGlobals();
+      resetTypeScriptForTests();
+    }
+  });
+
   it('help text includes the pinned TypeScript 6 hint (zero network)', () => {
     // The HELP_TEXT is the canonical user-facing surface for the install
     // requirement. The command always emits it on `--help`, even when

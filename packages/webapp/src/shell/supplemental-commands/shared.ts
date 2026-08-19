@@ -284,10 +284,15 @@ async function describeTypeScriptMiss(ipk: TypeScriptIpkContext): Promise<string
   }
   const major = typeof version === 'string' ? Number.parseInt(version, 10) : Number.NaN;
   if (Number.isFinite(major) && major !== 6) {
+    // Only the native port (7+) dropped `lib/typescript.js`; older majors do
+    // ship the JS compiler API and are refused solely by the pin.
+    const why =
+      major > 6
+        ? 'which ships no JS compiler API for the browser (no `lib/typescript.js`, so no `transpileModule`)'
+        : 'which predates the pinned 6.x line this build loads';
     return (
       `TypeScript 6 is required but ${splitPath(manifestPath).dir} holds typescript@${String(version)}, ` +
-      'which ships no JS compiler API for the browser (no `lib/typescript.js`, so no `transpileModule`): ' +
-      `run \`${TYPESCRIPT_VFS_INSTALL_COMMAND}\` in a directory this command's cwd resolves from ` +
+      `${why}: run \`${TYPESCRIPT_VFS_INSTALL_COMMAND}\` in a directory this command's cwd resolves from ` +
       '(no network fallback)'
     );
   }
