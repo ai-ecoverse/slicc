@@ -20,7 +20,11 @@ const cone: RegisteredScoop = {
   addedAt: new Date().toISOString(),
 };
 
-function findScoopScoopTool(resolveModelId?: (id: string) => string | null) {
+function findScoopScoopTool(
+  resolveModelSelection?: (
+    id: string
+  ) => import('../../src/providers/account-store.js').ScoopModelResolution
+) {
   const onScoopScoop = vi.fn(
     async (scoop: Omit<RegisteredScoop, 'jid'>): Promise<RegisteredScoop> => ({
       ...scoop,
@@ -33,7 +37,7 @@ function findScoopScoopTool(resolveModelId?: (id: string) => string | null) {
     onSendMessage: vi.fn(),
     getScoops: () => [cone],
     onScoopScoop,
-    ...(resolveModelId ? { resolveModelId } : {}),
+    ...(resolveModelSelection ? { resolveModelSelection } : {}),
   });
 
   const tool = tools.find((t) => t.name === 'scoop_scoop');
@@ -113,7 +117,10 @@ describe('scoop_scoop tool — config defaults', () => {
   // into config.modelId where ScoopContext.init() silently degrades it to the
   // cone's own (typically far more expensive) model.
   it('rejects a model the resolver cannot resolve', async () => {
-    const { tool, onScoopScoop } = findScoopScoopTool(() => null);
+    const { tool, onScoopScoop } = findScoopScoopTool((id) => ({
+      ok: false,
+      error: `unknown model: ${id}`,
+    }));
     const result = await tool.execute({ name: 'hero-block', model: 'claude-haiku-4-5' });
 
     expect(result.isError).toBe(true);
@@ -122,21 +129,53 @@ describe('scoop_scoop tool — config defaults', () => {
   });
 
   it('stores the resolver-canonicalized id, not the caller-supplied alias', async () => {
-    const { tool, onScoopScoop } = findScoopScoopTool(
-      () => 'us.anthropic.claude-haiku-4-5-20251001-v1:0'
-    );
+    const { tool, onScoopScoop } = findScoopScoopTool(() => ({
+      ok: true,
+      selection: {
+        modelId: 'us.anthropic.claude-haiku-4-5-20251001-v1:0',
+        providerId: 'bedrock-camp',
+      },
+    }));
     await tool.execute({ name: 'hero-block', model: 'claude-haiku-4-5' });
 
     const created = onScoopScoop.mock.calls[0][0];
     expect(created.config?.modelId).toBe('us.anthropic.claude-haiku-4-5-20251001-v1:0');
   });
 
+  // #2195: the provider travels with the id, so ScoopContext.init() resolves
+  // the model where the caller asked for it instead of against whatever
+  // provider happens to be selected.
+  it('records the resolved provider on the new scoop config', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool(() => ({
+      ok: true,
+      selection: { modelId: 'openai/gpt-5.6-terra-pro', providerId: 'openrouter' },
+    }));
+    await tool.execute({ name: 'hero-block', model: 'openrouter:openai/gpt-5.6-terra-pro' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.modelId).toBe('openai/gpt-5.6-terra-pro');
+    expect(created.config?.modelProviderId).toBe('openrouter');
+  });
+
+  it('surfaces the resolver reason (e.g. ambiguity) in the tool error', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool(() => ({
+      ok: false,
+      error:
+        'ambiguous model: opus matches adobe:claude-opus-5, openrouter:anthropic/claude-opus-5-fast',
+    }));
+    const result = await tool.execute({ name: 'hero-block', model: 'opus' });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('openrouter:anthropic/claude-opus-5-fast');
+    expect(onScoopScoop).not.toHaveBeenCalled();
+  });
+
   it('does not consult the resolver when no model is specified', async () => {
-    const resolveModelId = vi.fn(() => null);
-    const { tool, onScoopScoop } = findScoopScoopTool(resolveModelId);
+    const resolveModelSelection = vi.fn(() => ({ ok: false as const, error: 'unknown model: x' }));
+    const { tool, onScoopScoop } = findScoopScoopTool(resolveModelSelection);
     await tool.execute({ name: 'hero-block' });
 
-    expect(resolveModelId).not.toHaveBeenCalled();
+    expect(resolveModelSelection).not.toHaveBeenCalled();
     expect(onScoopScoop.mock.calls[0][0].config?.modelId).toBeUndefined();
   });
 

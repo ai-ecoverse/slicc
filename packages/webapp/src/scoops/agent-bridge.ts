@@ -33,7 +33,10 @@ import { createLogger } from '../base/logger.js';
 import type { SessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath } from '../fs/path-utils.js';
-import { resolveModelIdForScoop } from '../providers/account-store.js';
+import {
+  resolveModelSelectionForScoop,
+  type ScoopModelResolution,
+} from '../providers/account-store.js';
 // Legal down-edge (`scoops/` → `tools/`) for the JSON Schema shape.
 import type { JsonSchemaObject } from '../tools/types.js';
 import { serializeAgentSessionArchive } from './agent-session-archive.js';
@@ -64,11 +67,20 @@ export interface AgentSpawnOptions {
   /** Prompt forwarded verbatim to the spawned scoop's agent loop. */
   prompt: string;
   /**
-   * Optional model id override. When omitted, falls back to the parent
-   * scoop's `config.modelId` (if any), then to the UI selection resolved
-   * by `ScoopContext.init()`.
+   * Optional model id override. Accepts a bare id, a shorthand alias
+   * (`opus`), or the canonical `provider:model` form printed by the `models`
+   * command (`openrouter:openai/gpt-5.6-terra-pro`). When omitted, falls back
+   * to the parent scoop's `config.modelId` (if any), then to the UI selection
+   * resolved by `ScoopContext.init()`.
    */
   modelId?: string;
+  /**
+   * Optional provider for {@link AgentSpawnOptions.modelId}, for programmatic
+   * callers that already know it. Equivalent to passing
+   * `` `${modelProviderId}:${modelId}` `` as the model id — it is validated
+   * the same way, so an id the provider doesn't offer is still rejected.
+   */
+  modelProviderId?: string;
   /**
    * JID of the scoop (or cone) whose shell invoked `agent`. When present
    * and found in `orchestrator.getScoops()`, its `config.modelId` is used
@@ -239,11 +251,11 @@ export interface AgentBridgeDeps {
    */
   generateUid?: () => string;
   /**
-   * Validate a model id. Returns the input on success, null when unknown.
-   * Default looks up via each provider's full `getProviderModels()` list
+   * Validate a model id and pin it to the provider that serves it. Default
+   * looks up via each CONFIGURED provider's full `getProviderModels()` list
    * (NOT the picker-filtered `getAllAvailableModels()`).
    */
-  resolveModel?: (modelId: string) => string | null;
+  resolveModel?: (modelId: string) => ScoopModelResolution;
 }
 
 /** Global hook name used by {@link publishAgentBridge}. */
@@ -266,7 +278,7 @@ interface BridgeContext {
   sessionStore: SessionStore | null | undefined;
   generateName: () => string;
   generateUid: () => string;
-  resolveModel: (modelId: string) => string | null;
+  resolveModel: (modelId: string) => ScoopModelResolution;
 }
 
 /**
@@ -286,17 +298,22 @@ function pickFreshNameToken(ctx: BridgeContext): string {
 }
 
 /**
- * Look up the parent scoop's modelId from the orchestrator registry.
+ * Look up the parent scoop's model AND its pinned provider from the
+ * orchestrator registry. Both travel together: inheriting the id without the
+ * provider would re-resolve a cross-provider model against the selected
+ * provider in the child (#2195).
  */
-function resolveParentModelId(
+function resolveParentModelSelection(
   orchestrator: Orchestrator,
   parentJid: string | undefined
-): string | null {
+): { modelId: string; providerId?: string } | null {
   if (parentJid === undefined) return null;
   const parent = orchestrator.getScoops().find((s) => s.jid === parentJid);
   if (!parent) return null;
   const modelId = parent.config?.modelId;
-  return modelId && modelId.length > 0 ? modelId : null;
+  if (!modelId || modelId.length === 0) return null;
+  const providerId = parent.config?.modelProviderId;
+  return providerId ? { modelId, providerId } : { modelId };
 }
 
 /**
@@ -315,26 +332,40 @@ function resolveParentThinkingLevel(
 
 /**
  * Validate and resolve model/thinking options. On success returns
- * `{ resolvedModelId }` (the canonical model id after shorthand
- * expansion); on failure returns `{ error }`.
+ * `{ resolvedModelId, resolvedProviderId }` (the canonical model id after
+ * shorthand / `provider:model` expansion, plus the provider it is pinned to);
+ * on failure returns `{ error }`.
  */
 function validateSpawnOptions(
   options: AgentSpawnOptions,
-  resolveModel: (modelId: string) => string | null
-): { error: AgentSpawnResult } | { resolvedModelId: string | undefined } {
+  resolveModel: (modelId: string) => ScoopModelResolution
+):
+  | { error: AgentSpawnResult }
+  | { resolvedModelId: string | undefined; resolvedProviderId: string | undefined } {
   const requestedModelId = options.modelId;
   let resolvedModelId: string | undefined;
+  let resolvedProviderId: string | undefined;
   if (requestedModelId !== undefined) {
-    const resolved = requestedModelId === '' ? null : resolveModel(requestedModelId);
-    if (resolved === null) {
+    // A separately-supplied provider is folded into the canonical
+    // `provider:model` form so both spellings take the identical path.
+    const qualified =
+      options.modelProviderId !== undefined && requestedModelId !== ''
+        ? `${options.modelProviderId}:${requestedModelId}`
+        : requestedModelId;
+    const resolved: ScoopModelResolution =
+      qualified === ''
+        ? { ok: false, error: `unknown model: ${requestedModelId}` }
+        : resolveModel(qualified);
+    if (!resolved.ok) {
       return {
         error: {
-          finalText: `agent: unknown model: ${requestedModelId}`,
+          finalText: `agent: ${resolved.error}`,
           exitCode: 1,
         },
       };
     }
-    resolvedModelId = resolved;
+    resolvedModelId = resolved.selection.modelId;
+    resolvedProviderId = resolved.selection.providerId;
   }
 
   const requestedLevel = options.thinkingLevel;
@@ -396,7 +427,7 @@ function validateSpawnOptions(
     }
   }
 
-  return { resolvedModelId };
+  return { resolvedModelId, resolvedProviderId };
 }
 
 /**
@@ -474,6 +505,7 @@ async function writeAgentSessionArchive(
 function buildScoopConfig(
   options: AgentSpawnOptions,
   effectiveModelId: string,
+  effectiveModelProviderId: string | undefined,
   effectiveThinkingLevel: ThinkingLevel | undefined,
   scratchFolder: string
 ): NonNullable<RegisteredScoop['config']> {
@@ -498,6 +530,9 @@ function buildScoopConfig(
   }
   if (effectiveModelId) {
     scoopConfig.modelId = effectiveModelId;
+    if (effectiveModelProviderId !== undefined) {
+      scoopConfig.modelProviderId = effectiveModelProviderId;
+    }
   }
   if (effectiveThinkingLevel !== undefined) {
     scoopConfig.thinkingLevel = effectiveThinkingLevel;
@@ -689,8 +724,12 @@ export function createAgentBridge(
     const validation = validateSpawnOptions(options, ctx.resolveModel);
     if ('error' in validation) return validation.error;
 
-    const effectiveModelId =
-      validation.resolvedModelId ?? resolveParentModelId(ctx.orchestrator, options.parentJid) ?? '';
+    const parentModel = resolveParentModelSelection(ctx.orchestrator, options.parentJid);
+    const effectiveModelId = validation.resolvedModelId ?? parentModel?.modelId ?? '';
+    const effectiveModelProviderId =
+      validation.resolvedModelId !== undefined
+        ? validation.resolvedProviderId
+        : parentModel?.providerId;
 
     const requestedLevel = options.thinkingLevel;
     const effectiveThinkingLevel =
@@ -715,6 +754,7 @@ export function createAgentBridge(
     const scoopConfig = buildScoopConfig(
       options,
       effectiveModelId,
+      effectiveModelProviderId,
       effectiveThinkingLevel,
       scratchFolder
     );
@@ -917,11 +957,11 @@ function tokenToJid(token: string): string {
 
 /**
  * Default model resolver. Returns the canonical id the spawned scoop will
- * actually run as, or null when the requested id resolves to nothing.
+ * actually run as PLUS the provider it is pinned to, or a failure reason.
  *
- * Delegates to `resolveModelIdForScoop()`, which validates every candidate
- * (the id verbatim, then its shorthand expansion) through the SAME
- * `resolveModelById()` the spawn path uses. Validating against a looser
+ * Delegates to `resolveModelSelectionForScoop()`, which validates every
+ * candidate (the id verbatim, its `provider:model` split, then its shorthand
+ * expansion) through the SAME `resolveModelById()` the spawn path uses. Validating against a looser
  * notion of "known" — e.g. any account's `getProviderModels()` list — let a
  * bare alias like `claude-haiku-4-5` pass while the scoop silently ran as the
  * cone's model. The picker filter (`PICKER_HIDDEN_MODEL_PATTERNS`, e.g.
@@ -932,9 +972,9 @@ function tokenToJid(token: string): string {
  * Tests can replace this via `deps.resolveModel` without touching
  * provider-settings state.
  */
-export function defaultResolveModel(modelId: string): string | null {
+export function defaultResolveModel(modelId: string): ScoopModelResolution {
   try {
-    return resolveModelIdForScoop(modelId);
+    return resolveModelSelectionForScoop(modelId);
   } catch (err) {
     // getAccounts/getProviderModels normally return [] (and self-log) on a provider/parse
     // failure; the only throws that reach here are residual storage/environment faults
@@ -944,7 +984,7 @@ export function defaultResolveModel(modelId: string): string | null {
       modelId,
       error: err instanceof Error ? err.message : String(err),
     });
-    return null;
+    return { ok: false, error: `unknown model: ${modelId}` };
   }
 }
 

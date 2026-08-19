@@ -87,7 +87,7 @@ agent <cwd> <allowed-commands> <prompt> [--model <id>] [--read-only <paths>] [--
 - `<cwd>` — sole writable prefix (plus `/shared/`, the scoop's scratch folder, and `/tmp/`). Relative paths resolve against the caller's cwd.
 - `<allowed-commands>` — comma-separated allow-list; `*` for unrestricted.
 - `<prompt>` — forwarded verbatim. The spawned scoop has no access to the caller's history; pack context into the prompt.
-- `--model` — defaults to the parent scoop's model (or the cone's, when invoked from the terminal). Accepts an exact id or a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), resolved against the selected provider's catalog. An id that cannot be resolved is a hard error (exit 1) — it never silently falls back to the parent's model.
+- `--model` — defaults to the parent scoop's model (or the cone's, when invoked from the terminal). Accepts an exact id, a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), or the `provider:model` form `models` prints (`openrouter:openai/gpt-5.6-terra-pro`). A bare id resolves against the selected provider first, then against any other configured provider that offers it; if several do, the error lists the qualified ids to pick from. The scoop runs on the provider the model resolved from. An id that cannot be resolved is a hard error (exit 1) — it never silently falls back to the parent's model.
 - `--read-only` — pure-replace list of read-only paths. Default: `/workspace/` plus the invoking shell's cwd.
 - `--background-after <seconds>` — how long the spawned scoop's `bash` waits for a command before detaching it and moving on (default 600). Nobody can cancel a spawned scoop's turn, so a command that never returns would otherwise burn the whole run on one call; a detached command reports its exit code back to that scoop as a `Background Command` lick. `0` detaches every command immediately.
 
@@ -249,7 +249,7 @@ Use `cost --all` only when you need the historical picture: it adds dropped scoo
 
 ## Model selection for scoops
 
-**Always run `models` to verify available models before specifying one.** Model availability depends on the configured provider and API key. `model` accepts an exact id or a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), resolved against the selected provider's catalog. An id that cannot be resolved is rejected outright — it never silently falls back to the cone's model.
+**Always run `models` to verify available models before specifying one.** Model availability depends on the configured provider and API key. `model` accepts an exact id, a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), or the `provider:model` form `models` prints (`openrouter:openai/gpt-5.6-terra-pro`). A bare id resolves against the selected provider first, then against any other configured provider that offers it; matching several is an error listing the qualified ids. The scoop runs on the provider the model resolved from. An id that cannot be resolved is rejected outright — it never silently falls back to the cone's model.
 
 Use `models --json` to compare. Intelligence, speed, and cost are independent dimensions:
 

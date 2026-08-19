@@ -6,6 +6,7 @@
  */
 
 import { createLogger } from '../base/logger.js';
+import type { ScoopModelResolution } from '../providers/account-store.js';
 import type { SudoDecision, SudoKind, SudoRequest } from '../sudo/types.js';
 import type { ToolDefinition } from '../tools/types.js';
 import {
@@ -28,13 +29,13 @@ export interface ScoopManagementToolsConfig {
   getScoopTabState?: (jid: string) => import('./types.js').ScoopTabState | undefined;
   onScoopScoop?: (scoop: Omit<RegisteredScoop, 'jid'>) => Promise<RegisteredScoop>;
   /**
-   * Canonicalize `scoop_scoop`'s `model` argument into the id the new scoop
-   * will actually run as, or null when it resolves to nothing. Wired to
-   * `resolveModelIdForScoop` by `ScoopContext`. Without it an unresolvable id
-   * lands in `config.modelId` and `ScoopContext.init()` silently degrades to
-   * the cone's own (typically far more expensive) model.
+   * Canonicalize `scoop_scoop`'s `model` argument into the model AND provider
+   * the new scoop will actually run as, or a failure reason. Wired to
+   * `resolveModelSelectionForScoop` by `ScoopContext`. Without it an
+   * unresolvable id lands in `config.modelId` and `ScoopContext.init()`
+   * silently degrades to the cone's own (typically far more expensive) model.
    */
-  resolveModelId?: (modelId: string) => string | null;
+  resolveModelSelection?: (modelId: string) => ScoopModelResolution;
   onDropScoop?: (scoopJid: string) => Promise<void>;
   onSetGlobalMemory?: (content: string) => Promise<void>;
   getGlobalMemory?: () => Promise<string>;
@@ -159,22 +160,32 @@ function parseBackgroundAfter(
  * Canonicalize `scoop_scoop`'s `model` argument, or return an error result.
  * Omitting the model is fine (the scoop inherits the cone's), but an id that
  * cannot be resolved MUST be rejected rather than silently inherited — see
- * `resolveModelId` on {@link ScoopManagementToolsConfig}.
+ * `resolveModelSelection` on {@link ScoopManagementToolsConfig}.
+ *
+ * Accepts a bare id, a shorthand alias, or the canonical `provider:model`
+ * form the `models` command prints; the resolved provider travels with the id
+ * into `config.modelProviderId` so the scoop runs where it was asked to.
  */
 function parseModelId(
   model: string | undefined,
-  resolveModelId: ScoopManagementToolsConfig['resolveModelId']
-): { ok: true; modelId?: string } | { ok: false; content: string; isError: true } {
-  if (model === undefined || !resolveModelId) return { ok: true, modelId: model };
-  const resolved = resolveModelId(model);
-  if (resolved === null) {
+  resolveModelSelection: ScoopManagementToolsConfig['resolveModelSelection']
+):
+  | { ok: true; modelId?: string; providerId?: string }
+  | { ok: false; content: string; isError: true } {
+  if (model === undefined || !resolveModelSelection) return { ok: true, modelId: model };
+  const resolved = resolveModelSelection(model);
+  if (!resolved.ok) {
     return {
       ok: false,
-      content: `Unknown model "${model}". Run the "models" shell command to list available model IDs.`,
+      content: `Unknown model "${model}": ${resolved.error}. Run the "models" shell command to list available model IDs.`,
       isError: true,
     };
   }
-  return { ok: true, modelId: resolved };
+  return {
+    ok: true,
+    modelId: resolved.selection.modelId,
+    providerId: resolved.selection.providerId,
+  };
 }
 
 /** Render a "scoop not found" error including the available list. */
@@ -314,6 +325,8 @@ interface ScoopRecordInput {
   name: string;
   folder: string;
   model: string | undefined;
+  /** Provider the model must run on, when the resolver pinned one (#2195). */
+  modelProviderId: string | undefined;
   visiblePaths: string[] | undefined;
   writablePaths: string[] | undefined;
   allowedCommands: string[] | undefined;
@@ -328,6 +341,7 @@ function buildScoopRecord({
   name,
   folder,
   model,
+  modelProviderId,
   visiblePaths,
   writablePaths,
   allowedCommands,
@@ -346,6 +360,7 @@ function buildScoopRecord({
     addedAt: new Date().toISOString(),
     config: {
       ...(model ? { modelId: model } : {}),
+      ...(model && modelProviderId ? { modelProviderId } : {}),
       visiblePaths: visiblePaths ?? ['/workspace/'],
       writablePaths: writablePaths ?? [`/scoops/${folder}/`, '/shared/'],
       ...(allowedCommands ? { allowedCommands } : {}),
@@ -416,7 +431,7 @@ async function executeScoopScoop(
     return { content: parsedBackgroundAfter.content, isError: true };
   }
 
-  const parsedModel = parseModelId(model, config.resolveModelId);
+  const parsedModel = parseModelId(model, config.resolveModelSelection);
   if (!parsedModel.ok) return { content: parsedModel.content, isError: parsedModel.isError };
 
   const folder = folderFromDisplayName(name);
@@ -425,6 +440,7 @@ async function executeScoopScoop(
       name,
       folder,
       model: parsedModel.modelId,
+      modelProviderId: parsedModel.providerId,
       visiblePaths,
       writablePaths,
       allowedCommands,

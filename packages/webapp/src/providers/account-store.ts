@@ -280,15 +280,51 @@ export function getProviderConfig(providerId: string): ProviderConfig {
   );
 }
 
+/** Flat pricing mirrors SLICC sets alongside pi-ai's `cost` object. */
+interface ModelCost {
+  input: number;
+  output: number;
+  cacheRead: number;
+  cacheWrite: number;
+}
+
+/**
+ * A model under construction: the pi-ai `Model` fields SLICC itself writes
+ * while composing a provider's catalogue, plus the flat cost mirrors
+ * `buildAdobeModel()` emits. Mutable on purpose — `applyModelMetadata` layers
+ * overrides in place — and open-ended because pi-ai's registry carries further
+ * fields SLICC passes through untouched.
+ */
+interface MutableModel {
+  id?: string;
+  name?: string;
+  provider?: string;
+  api?: Api;
+  baseUrl?: string;
+  contextWindow?: number;
+  maxTokens?: number;
+  reasoning?: boolean;
+  input?: string[];
+  cost?: ModelCost;
+  inputCost?: number;
+  outputCost?: number;
+  cacheReadCost?: number;
+  cacheWriteCost?: number;
+  compat?: CompatOverrides;
+  thinkingLevelMap?: Record<string, string | null>;
+  /** Any further pi-ai registry field, forwarded verbatim. */
+  [field: string]: unknown;
+}
+
 /** Apply ModelMetadata overrides to a model object (mutates in place). */
 function applyModelMetadata(
-  model: Record<string, unknown>,
+  model: MutableModel,
   metadata: {
     context_window?: number;
     max_tokens?: number;
     reasoning?: boolean;
     input?: string[];
-    cost?: { input: number; output: number; cacheRead: number; cacheWrite: number };
+    cost?: ModelCost;
     compat?: CompatOverrides;
     thinkingLevelMap?: Record<string, string | null>;
   }
@@ -317,9 +353,9 @@ function applyModelMetadata(
   // any of them — pi-ai reads by property name and ignores unknown fields.
   if (metadata.compat !== undefined) {
     model.compat = {
-      ...((model.compat as Record<string, unknown> | undefined) ?? {}),
-      ...(metadata.compat as Record<string, unknown>),
-    };
+      ...(model.compat ?? {}),
+      ...metadata.compat,
+    } as CompatOverrides;
   }
   // Same per-level merge for thinkingLevelMap: pi-ai's stream functions read
   // `model.thinkingLevelMap[effort]` to translate the reasoning level, so a
@@ -327,7 +363,7 @@ function applyModelMetadata(
   // rather than being silently dropped in favor of the base map.
   if (metadata.thinkingLevelMap !== undefined) {
     model.thinkingLevelMap = {
-      ...((model.thinkingLevelMap as Record<string, string | null> | undefined) ?? {}),
+      ...(model.thinkingLevelMap ?? {}),
       ...metadata.thinkingLevelMap,
     };
   }
@@ -380,16 +416,13 @@ export function getProviderModels(providerId: string): Model<Api>[] {
         const apiType = pm.api === 'openai' ? 'openai' : 'anthropic';
         const customApi = `${providerId}-${apiType}` as Api;
         const base = modelMap.get(pm.id);
-        let model: Record<string, unknown>;
+        let model: MutableModel;
         if (base) {
           model = { ...base, api: customApi, provider: providerId };
         } else {
           // Single source for the synthesized-model shape (api is known here
           // from proxy metadata, so pass it explicitly rather than inferring).
-          model = buildProviderRoutedModel(providerId, pm.id, '', customApi) as unknown as Record<
-            string,
-            unknown
-          >;
+          model = buildProviderRoutedModel(providerId, pm.id, '', customApi) as MutableModel;
           if (pm.name) model.name = pm.name; // proxy display name; else keep the id
           // Fallback strictly BELOW an explicitly reported cost (applied via
           // applyModelMetadata from modelOverrides/getModelIds just below) but
@@ -429,7 +462,7 @@ export function getProviderModels(providerId: string): Model<Api>[] {
       const anthropicModels = getModelsDynamic('anthropic');
       const customApi = `${providerId}-anthropic` as Api;
       return anthropicModels.map((m) => {
-        const model: Record<string, unknown> = { ...m, api: customApi, provider: providerId };
+        const model: MutableModel = { ...m, api: customApi, provider: providerId };
         const overrides = providerConfig.modelOverrides?.[m.id];
         if (overrides) applyModelMetadata(model, overrides);
         return model as unknown as Model<Api>;
@@ -1465,43 +1498,106 @@ function resolveEffectiveProvider(providerId: string, providerConfig: ProviderCo
 }
 
 /**
- * Resolve a specific model by ID, using the current provider's
- * baseUrl and API routing. Falls back to resolveCurrentModel() if
- * modelId is not provided.
+ * Resolve a specific model by ID, using a provider's baseUrl and API routing.
+ * Falls back to resolveCurrentModel() if modelId is not provided.
+ *
+ * `explicitProviderId` pins the model to a provider OTHER than the selected
+ * one — the cross-provider spawn path (`agent --model openrouter:…`,
+ * `scoop_scoop`'s `model`). It changes two things relative to the default
+ * (selected-provider) behavior:
+ *
+ *  - the provider's own catalogue is consulted FIRST, so the returned model
+ *    carries that provider's `api`/`provider`/compat overrides rather than
+ *    whatever pi-ai's registry happens to know for the bare id;
+ *  - an id the pinned provider cannot serve THROWS instead of degrading to
+ *    `resolveCurrentModel()`. Degrading would silently run the scoop on the
+ *    selected provider's (typically far more expensive) model — the exact
+ *    cost overrun {@link resolveModelIdForScoop} exists to prevent.
  */
-export function resolveModelById(modelId?: string): Model<Api> {
+/** A provider's own catalogue entry for `modelId`, baseUrl applied. */
+function providerCatalogueModel(
+  providerId: string,
+  modelId: string,
+  baseUrl: string | null
+): Model<Api> | null {
+  const providerModel = getProviderModels(providerId).find((m) => m.id === modelId);
+  if (!providerModel) return null;
+  return baseUrl ? { ...providerModel, baseUrl } : providerModel;
+}
+
+/** Apply a provider's custom api/provider routing to a registry model. */
+function applyProviderRouting(
+  resolved: Model<Api>,
+  providerId: string,
+  providerConfig: ProviderConfig,
+  modelId: string
+): Model<Api> {
+  if (providerConfig.isOAuth) {
+    // Prefer the provider's own entry — it's already built by
+    // getProviderModels with the correct api, provider, and any compat
+    // overrides applied via applyModelMetadata (e.g. Adobe Haiku's
+    // supportsEagerToolInputStreaming: false). The previous pattern of
+    // cherry-picking only `api` here silently dropped compat.
+    const providerModel = getProviderModels(providerId).find((m) => m.id === modelId);
+    if (providerModel) return providerModel;
+    return { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
+  }
+  if (providerId === 'bedrock-camp') {
+    return { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
+  }
+  return resolved;
+}
+
+/**
+ * Fallback for an id pi-ai's registry doesn't know (threw or returned no id).
+ *
+ * For an OAuth/custom provider, resolve the REQUESTED id through the provider —
+ * prefer its own model list, else synthesize a provider-routed model. Never
+ * fall through to `resolveCurrentModel()` (which resolves the *selected*
+ * model, not the requested one) or to a native Anthropic model (which would
+ * leak the OAuth token → 401 invalid x-api-key). See the cloud-cone regression.
+ */
+function resolveUnknownModelId(
+  providerId: string,
+  providerConfig: ProviderConfig,
+  modelId: string,
+  baseUrl: string | null,
+  pinned: boolean
+): Model<Api> {
+  if (providerConfig.isOAuth) {
+    return (
+      providerCatalogueModel(providerId, modelId, baseUrl) ??
+      buildProviderRoutedModel(providerId, modelId, baseUrl)
+    );
+  }
+  // A pinned provider must never degrade to the SELECTED provider's model.
+  if (pinned) {
+    throw new Error(`Model ${modelId} is not available from provider ${providerId}`);
+  }
+  return resolveCurrentModel();
+}
+
+export function resolveModelById(modelId?: string, explicitProviderId?: string): Model<Api> {
   if (!modelId) return resolveCurrentModel();
 
-  const providerId = getSelectedProvider();
+  const providerId = explicitProviderId ?? getSelectedProvider();
   const baseUrl = getBaseUrlForProvider(providerId);
   const providerConfig = getProviderConfig(providerId);
+
+  if (explicitProviderId !== undefined) {
+    // The provider's own list is already built with the correct api, provider
+    // and metadata overrides — prefer it over a registry lookup that would
+    // resolve the bare id against a different provider's routing.
+    const pinnedModel = providerCatalogueModel(providerId, modelId, baseUrl);
+    if (pinnedModel) return pinnedModel;
+  }
 
   try {
     const effectiveProvider = resolveEffectiveProvider(providerId, providerConfig);
     const model = getModelDynamic(effectiveProvider, modelId);
     if (!model?.id) throw new Error(`Model ${modelId} not found`);
-    let resolved: Model<Api> = model;
-
-    if (providerConfig.isOAuth) {
-      const providerModels = getProviderModels(providerId);
-      const providerModel = providerModels.find((m) => m.id === modelId);
-      if (providerModel) {
-        // Prefer providerModel — it's already built by getProviderModels
-        // with the correct api, provider, and any compat overrides applied
-        // via applyModelMetadata (e.g. Adobe Haiku's
-        // supportsEagerToolInputStreaming: false). The previous pattern of
-        // cherry-picking only `api` here silently dropped compat.
-        resolved = providerModel;
-      } else {
-        resolved = { ...resolved, api: `${providerId}-anthropic` as Api, provider: providerId };
-      }
-    } else if (providerId === 'bedrock-camp') {
-      resolved = { ...resolved, api: 'bedrock-camp-converse' as Api, provider: 'bedrock-camp' };
-    }
-    if (baseUrl) {
-      resolved = { ...resolved, baseUrl };
-    }
-    return resolved;
+    const resolved = applyProviderRouting(model, providerId, providerConfig, modelId);
+    return baseUrl ? { ...resolved, baseUrl } : resolved;
   } catch (err) {
     // Common, benign case: the id is simply unknown to pi-ai. Keep at debug so
     // an *unexpected* throw (registry/override bug) leaves a breadcrumb instead
@@ -1511,19 +1607,30 @@ export function resolveModelById(modelId?: string): Model<Api> {
       modelId,
       error: err instanceof Error ? err.message : String(err),
     });
-    // Unknown to pi-ai (threw or returned no id). For an OAuth/custom provider,
-    // resolve the REQUESTED id through the provider — prefer its own model list,
-    // else synthesize a provider-routed model. Never fall through to
-    // resolveCurrentModel() (which resolves the *selected* model, not the
-    // requested one) or to a native Anthropic model (which would leak the
-    // OAuth token → 401 invalid x-api-key). See the cloud-cone regression.
-    if (providerConfig.isOAuth) {
-      const providerModel = getProviderModels(providerId).find((m) => m.id === modelId);
-      if (providerModel) return baseUrl ? { ...providerModel, baseUrl } : providerModel;
-      return buildProviderRoutedModel(providerId, modelId, baseUrl);
-    }
-    return resolveCurrentModel();
+    return resolveUnknownModelId(
+      providerId,
+      providerConfig,
+      modelId,
+      baseUrl,
+      explicitProviderId !== undefined
+    );
   }
+}
+
+/**
+ * Whether a resolved model is actually served by `providerId`.
+ *
+ * Not plain `model.provider === providerId`: some providers deliberately
+ * serve another registry's models unchanged — `azure-ai-foundry` proxies
+ * Anthropic's catalogue, so `getProviderModels('azure-ai-foundry')` returns
+ * models whose `provider` is `anthropic`. Comparing raw ids would reject
+ * every explicit Azure spawn as a provider mismatch. The registry alias
+ * (`resolveEffectiveProvider`) is the same one the resolver looked the model
+ * up through, so accepting it adds no reach beyond that provider's catalogue.
+ */
+export function modelRunsOnProvider(model: Model<Api>, providerId: string): boolean {
+  if (model.provider === providerId) return true;
+  return model.provider === resolveEffectiveProvider(providerId, getProviderConfig(providerId));
 }
 
 export function resolveCurrentModel(): Model<Api> {
@@ -1660,39 +1767,85 @@ function bestShorthandMatch(keyword: string, providerIds: string[]): string | nu
   return bestId;
 }
 
+/** The model a spawned scoop will run as, pinned to the provider serving it. */
+export interface ScoopModelSelection {
+  /** Canonical (bare) model id, after shorthand/qualified-prefix expansion. */
+  modelId: string;
+  /** Provider the model MUST run on. Threaded into `ScoopConfig.modelProviderId`. */
+  providerId: string;
+}
+
+/** Success carries the pinned selection; failure carries a user-facing reason. */
+export type ScoopModelResolution =
+  | { ok: true; selection: ScoopModelSelection }
+  | { ok: false; error: string };
+
+/** Provider ids the user actually has configured, selected provider included. */
+function configuredProviderIds(): string[] {
+  const ids: string[] = [];
+  try {
+    for (const account of getAccounts()) {
+      if (!ids.includes(account.providerId)) ids.push(account.providerId);
+    }
+  } catch {
+    /* storage fault — fall through to the selected provider alone */
+  }
+  try {
+    const selected = getSelectedProvider();
+    if (!ids.includes(selected)) ids.push(selected);
+  } catch {
+    /* storage fault — an empty list is handled by every caller */
+  }
+  return ids;
+}
+
 /**
- * Canonicalize a caller-supplied model id (exact id or shorthand alias) into
- * the id a spawned scoop will actually run as, or null when nothing matches.
- *
- * The invariant every candidate must satisfy is `resolveModelById(id).id ===
- * id`: `ScoopContext.init()` resolves `config.modelId` through
- * `resolveModelById()`, which resolves against the SELECTED provider and
- * silently degrades to `resolveCurrentModel()` (the cone's own model) for an
- * id that provider doesn't offer. Validating with a looser notion of "known"
- * than the spawn path uses is what let `--model claude-haiku-4-5` exit 0 and
- * then run as the cone's Opus — a ~5x cost overrun with no warning.
- *
- * Callers MUST treat null as a hard error rather than spawning without a
- * model id (which inherits the parent's, reintroducing the same overrun).
- *
- * The equality check alone is not sufficient for OAuth/custom providers:
- * `resolveModelById()` synthesizes a provider-routed model that echoes ANY
- * requested id (so an unknown-but-real proxy model still routes through the
- * provider instead of leaking the token to api.anthropic.com), which would
- * accept a typo verbatim. Candidates are therefore also checked against the
- * selected provider's catalogue — skipped when that catalogue is empty (a
- * cold/failed model list), where rejecting everything would be worse than
- * deferring the error to the provider API.
+ * Split a `provider:model` id. Only a prefix that names a REAL provider
+ * qualifies — model ids legitimately contain colons (e.g. the Bedrock
+ * inference profile `us.anthropic.claude-haiku-4-5-20251001-v1:0`), and those
+ * must keep being read as bare ids.
  */
-export function resolveModelIdForScoop(input: string): string | null {
-  if (!input) return null;
+function splitQualifiedModelId(
+  input: string
+): { providerId: string; modelId: string; configured: boolean } | null {
+  const idx = input.indexOf(':');
+  if (idx <= 0 || idx === input.length - 1) return null;
+  const providerId = input.slice(0, idx);
+  const modelId = input.slice(idx + 1);
+  const configured = configuredProviderIds().includes(providerId);
+  if (configured) return { providerId, modelId, configured };
+  let known = false;
+  try {
+    known = getAvailableProviders().includes(providerId);
+  } catch {
+    /* provider registry unavailable — treat the input as a bare id */
+  }
+  return known ? { providerId, modelId, configured: false } : null;
+}
+
+/**
+ * Validate a bare id (or shorthand) against ONE provider's catalogue and the
+ * resolver the spawn path uses. Returns the pinned selection, or null.
+ *
+ * The catalogue check is skipped for an empty catalogue (a cold or failed
+ * model list), where rejecting everything would be worse than deferring the
+ * error to the provider API. The `resolveModelById(...).id === candidate`
+ * check is what keeps a typo out: for OAuth/custom providers the resolver
+ * synthesizes a provider-routed model that echoes ANY id, so the catalogue is
+ * the only thing that can reject it — and vice versa for registry models.
+ */
+function selectModelFromProvider(
+  input: string,
+  providerId: string,
+  allowShorthand = true
+): ScoopModelSelection | null {
   const candidates = [input];
-  const alias = resolveModelByShorthand(input);
+  const alias = allowShorthand ? bestShorthandMatch(input.toLowerCase(), [providerId]) : null;
   if (alias !== null && alias !== input) candidates.push(alias);
 
   let catalogue: Model<Api>[] = [];
   try {
-    catalogue = getProviderModels(getSelectedProvider());
+    catalogue = getProviderModels(providerId);
   } catch {
     /* storage fault — fall back to the resolver check alone */
   }
@@ -1700,16 +1853,136 @@ export function resolveModelIdForScoop(input: string): string | null {
   for (const candidate of candidates) {
     if (catalogue.length > 0 && !catalogue.some((m) => m.id === candidate)) continue;
     try {
-      if (resolveModelById(candidate).id === candidate) return candidate;
+      if (resolveModelById(candidate, providerId).id === candidate) {
+        return { modelId: candidate, providerId };
+      }
     } catch (err) {
-      log.debug('resolveModelIdForScoop: candidate did not resolve', {
+      log.debug('selectModelFromProvider: candidate did not resolve', {
         input,
         candidate,
+        providerId,
         error: err instanceof Error ? err.message : String(err),
       });
     }
   }
   return null;
+}
+
+/** Render selections as the canonical `provider:model` display form. */
+function qualifiedList(selections: readonly ScoopModelSelection[]): string {
+  return selections.map((s) => `${s.providerId}:${s.modelId}`).join(', ');
+}
+
+/**
+ * Canonicalize a caller-supplied model id — bare id, shorthand alias, or the
+ * canonical `provider:model` form the `models` command prints — into the
+ * model AND provider a spawned scoop will actually run as.
+ *
+ * Resolution order:
+ *   1. `provider:model` → validated against THAT provider's catalogue. The
+ *      provider must be configured; an unconfigured one is an error rather
+ *      than a silent reinterpretation as a bare id.
+ *   2. a bare id offered by the SELECTED provider → wins outright, so
+ *      pre-existing single-provider behavior is unchanged.
+ *   3. a bare id offered by exactly one OTHER configured provider → pinned to
+ *      it. Several providers offering it is an error listing the qualified
+ *      candidates, never a coin flip.
+ *
+ * The invariant every candidate must satisfy is
+ * `resolveModelById(id, providerId).id === id`: `ScoopContext.init()` resolves
+ * `config.modelId` through `resolveModelById()`, which for an unpinned id
+ * resolves against the SELECTED provider and degrades to
+ * `resolveCurrentModel()` (the cone's own model). Validating with a looser
+ * notion of "known" than the spawn path uses is what let `--model
+ * claude-haiku-4-5` exit 0 and then run as the cone's Opus — a ~5x cost
+ * overrun with no warning. That is also why the resolved PROVIDER is returned
+ * and threaded into `ScoopConfig.modelProviderId`: accepting another
+ * provider's id while still resolving against the selected provider would be
+ * the same incident in a new shape.
+ *
+ * Callers MUST treat a failure as a hard error rather than spawning without a
+ * model id (which inherits the parent's, reintroducing the same overrun).
+ */
+export function resolveModelSelectionForScoop(input: string): ScoopModelResolution {
+  if (!input) return { ok: false, error: 'unknown model: (empty)' };
+
+  const qualified = splitQualifiedModelId(input);
+  if (qualified) return resolveQualifiedSelection(input, qualified);
+
+  let selectedProvider: string | null = null;
+  try {
+    selectedProvider = getSelectedProvider();
+  } catch {
+    /* storage fault — scan every configured provider instead */
+  }
+  if (selectedProvider !== null) {
+    const selection = selectModelFromProvider(input, selectedProvider);
+    if (selection) return { ok: true, selection };
+  }
+  return resolveCrossProviderSelection(input, selectedProvider);
+}
+
+/** Validate a `provider:model` input against the named provider. */
+function resolveQualifiedSelection(
+  input: string,
+  qualified: { providerId: string; modelId: string; configured: boolean }
+): ScoopModelResolution {
+  if (!qualified.configured) {
+    const configured = configuredProviderIds();
+    return {
+      ok: false,
+      error:
+        `unknown model: ${input} (provider "${qualified.providerId}" is not configured` +
+        `${configured.length > 0 ? `; configured: ${configured.join(', ')}` : ''})`,
+    };
+  }
+  const selection = selectModelFromProvider(qualified.modelId, qualified.providerId);
+  if (selection) return { ok: true, selection };
+  return {
+    ok: false,
+    error: `unknown model: ${input} (provider "${qualified.providerId}" does not offer "${qualified.modelId}")`,
+  };
+}
+
+/**
+ * Bare id the selected provider doesn't offer: exact ids first (an id borrowed
+ * verbatim from another account), then shorthand. Each tier is judged on its
+ * own so a shorthand match elsewhere can't make an exact id ambiguous, and
+ * several matches in a tier is an error rather than a coin flip.
+ */
+function resolveCrossProviderSelection(
+  input: string,
+  selectedProvider: string | null
+): ScoopModelResolution {
+  const others = configuredProviderIds().filter((id) => id !== selectedProvider);
+  for (const tier of ['exact', 'shorthand'] as const) {
+    const matches: ScoopModelSelection[] = [];
+    for (const providerId of others) {
+      const candidate =
+        tier === 'exact' ? input : bestShorthandMatch(input.toLowerCase(), [providerId]);
+      if (candidate === null) continue;
+      const selection = selectModelFromProvider(candidate, providerId, false);
+      if (selection) matches.push(selection);
+    }
+    if (matches.length === 1) return { ok: true, selection: matches[0] };
+    if (matches.length > 1) {
+      return {
+        ok: false,
+        error: `ambiguous model: ${input} matches ${qualifiedList(matches)} — qualify it as provider:model`,
+      };
+    }
+  }
+  return { ok: false, error: `unknown model: ${input}` };
+}
+
+/**
+ * Model-id-only view of {@link resolveModelSelectionForScoop}, for callers
+ * that don't thread a provider (and therefore accept the selected provider's
+ * routing). Prefer the full resolver on any spawn path.
+ */
+export function resolveModelIdForScoop(input: string): string | null {
+  const resolution = resolveModelSelectionForScoop(input);
+  return resolution.ok ? resolution.selection.modelId : null;
 }
 
 /**

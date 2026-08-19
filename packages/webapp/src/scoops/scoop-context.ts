@@ -46,10 +46,12 @@ import { createSudoFs } from '../fs/sudo-fs.js';
 import type { Process, ProcessManager } from '../kernel/process-manager.js';
 import {
   getApiKey,
+  getApiKeyForProvider,
   getSelectedProvider,
+  modelRunsOnProvider,
   resolveCurrentModel,
   resolveModelById,
-  resolveModelIdForScoop,
+  resolveModelSelectionForScoop,
 } from '../providers/account-store.js';
 import { AlmostBashShell } from '../shell/index.js';
 import { DEFAULT_JSH_SEARCH_ROOTS } from '../shell/jsh-discovery.js';
@@ -583,7 +585,7 @@ export class ScoopContext {
       getScoopTabState: this.callbacks.getScoopTabState,
       onFeedScoop: this.callbacks.onFeedScoop,
       onScoopScoop: this.callbacks.onScoopScoop,
-      resolveModelId: resolveModelIdForScoop,
+      resolveModelSelection: resolveModelSelectionForScoop,
       onDropScoop: this.callbacks.onDropScoop,
       onMuteScoops: this.callbacks.onMuteScoops,
       onUnmuteScoops: this.callbacks.onUnmuteScoops,
@@ -723,6 +725,18 @@ export class ScoopContext {
     return [];
   }
 
+  /**
+   * API key for the provider this scoop's model actually runs on.
+   *
+   * `getApiKey()` returns the SELECTED provider's credential, which for a
+   * pinned cross-provider scoop is the wrong one — it would send (and expose)
+   * e.g. the Adobe token on the OpenRouter route and fail auth (#2195).
+   */
+  private getModelApiKey(): string | null {
+    const pinned = this.scoop.config?.modelProviderId;
+    return pinned ? getApiKeyForProvider(pinned) : getApiKey();
+  }
+
   /** Build Adobe session ID and streaming/compaction helpers. */
   private async buildSessionHelpers(model: Model<Api>) {
     const adobeSessionId = await getAdobeSessionId(this.scoop, this.coneJid);
@@ -742,14 +756,14 @@ export class ScoopContext {
 
     const compactionHeaders =
       model.provider === 'adobe' ? { 'X-Session-Id': adobeSessionId } : undefined;
-    const getCompactionApiKey = () => getApiKey() ?? undefined;
+    const getCompactionApiKey = () => this.getModelApiKey() ?? undefined;
     const onMemoryUpdates =
       this.scoop.isCone && this.callbacks.appendConeMemory
         ? (bullets: string) =>
             this.callbacks.appendConeMemory!(bullets, {
               source: 'compaction',
               model,
-              apiKey: getApiKey() ?? undefined,
+              apiKey: this.getModelApiKey() ?? undefined,
               headers: compactionHeaders,
             })
         : undefined;
@@ -799,7 +813,7 @@ export class ScoopContext {
       const tools = await this.buildTools(gatedFs);
       const { scoopMemory, globalMemory } = await this.loadMemories();
 
-      const apiKey = getApiKey();
+      const apiKey = this.getModelApiKey();
       if (!apiKey) {
         log.info('ScoopContext init deferred — no API key yet', {
           folder: this.scoop.folder,
@@ -809,16 +823,32 @@ export class ScoopContext {
       }
 
       const configuredModelId = this.scoop.config?.modelId;
-      const model = configuredModelId ? resolveModelById(configuredModelId) : resolveCurrentModel();
+      const configuredProviderId = this.scoop.config?.modelProviderId;
+      const model = configuredModelId
+        ? resolveModelById(configuredModelId, configuredProviderId)
+        : resolveCurrentModel();
       const label = this.scoop.isCone ? 'Cone' : `Scoop "${this.scoop.name}"`;
       console.log(`[model] ${label} using model: ${model.id} (provider: ${model.provider})`);
-      // `resolveModelById` degrades to the *selected* model for an id the
-      // selected provider doesn't offer (e.g. a scoop persisted before a
-      // provider switch). Spawn-time callers reject that up front via
-      // `resolveModelIdForScoop`, but a stored config can still drift — and a
-      // silent drift from a cheap model to the cone's Opus is a real cost
-      // overrun, so leave a breadcrumb rather than only the info line above.
-      if (configuredModelId && model.id !== configuredModelId) {
+      // A pinned provider is a hard contract: the scoop was spawned with a
+      // model the caller chose from a SPECIFIC provider's catalogue, and
+      // running it anywhere else is the #2195 cost overrun (a cheap
+      // cross-provider model silently billing as the selected provider's
+      // Opus). `resolveModelById` throws for an id the pinned provider can't
+      // serve; a surviving id/provider mismatch fails the init the same way.
+      if (
+        configuredProviderId &&
+        (model.id !== configuredModelId || !modelRunsOnProvider(model, configuredProviderId))
+      ) {
+        throw new Error(
+          `Configured model ${configuredProviderId}:${configuredModelId} resolved to ` +
+            `${model.provider}:${model.id}; refusing to run on a different model`
+        );
+      }
+      // Without a pinned provider (a scoop persisted before #2195, or a
+      // config written by hand) `resolveModelById` still degrades to the
+      // *selected* model for an id the selected provider doesn't offer. Leave
+      // a breadcrumb rather than only the info line above.
+      if (!configuredProviderId && configuredModelId && model.id !== configuredModelId) {
         log.warn('Configured scoop model did not resolve; using resolved model instead', {
           folder: this.scoop.folder,
           configuredModelId,
@@ -850,7 +880,7 @@ export class ScoopContext {
           messages: restoredMessages,
           thinkingLevel,
         },
-        getApiKey: () => getApiKey() ?? undefined,
+        getApiKey: () => this.getModelApiKey() ?? undefined,
         transformContext: compactFn,
         streamFn: streamWithSessionId,
         afterToolCall: async (context) => {
@@ -886,9 +916,9 @@ export class ScoopContext {
 
     await this.init();
     if (!this.agent) {
-      let provider = '';
+      let provider = this.scoop.config?.modelProviderId ?? '';
       try {
-        provider = getSelectedProvider();
+        if (!provider) provider = getSelectedProvider();
       } catch {
         /* test env may have no localStorage — fall back to a generic message */
       }
@@ -1409,7 +1439,7 @@ export class ScoopContext {
       let window = 200_000;
       try {
         const model = this.scoop.config?.modelId
-          ? resolveModelById(this.scoop.config.modelId)
+          ? resolveModelById(this.scoop.config.modelId, this.scoop.config.modelProviderId)
           : resolveCurrentModel();
         if (typeof model.contextWindow === 'number' && model.contextWindow > 0) {
           window = model.contextWindow;

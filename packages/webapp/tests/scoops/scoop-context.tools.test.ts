@@ -34,7 +34,10 @@ const mocks = vi.hoisted(() => {
     getSelectedProvider: vi.fn(() => 'anthropic'),
     resolveCurrentModel: vi.fn(() => ({ id: 'test-model' })),
     resolveModelById: vi.fn(() => ({ id: 'test-model' })),
-    resolveModelIdForScoop: vi.fn((id: string) => id),
+    resolveModelSelectionForScoop: vi.fn((id: string) => ({
+      ok: true,
+      selection: { modelId: id, providerId: 'adobe' },
+    })),
     createDefaultSkills: vi.fn(async () => {}),
     loadSkills: vi.fn(async () => []),
     formatSkillsForPrompt: vi.fn(() => ''),
@@ -61,7 +64,7 @@ vi.mock('../../src/providers/account-store.js', () => ({
   getSelectedProvider: mocks.getSelectedProvider,
   resolveCurrentModel: mocks.resolveCurrentModel,
   resolveModelById: mocks.resolveModelById,
-  resolveModelIdForScoop: mocks.resolveModelIdForScoop,
+  resolveModelSelectionForScoop: mocks.resolveModelSelectionForScoop,
 }));
 
 vi.mock('../../src/scoops/skills.js', () => ({
