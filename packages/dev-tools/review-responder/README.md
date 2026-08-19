@@ -33,14 +33,15 @@ separate deterministic workflow step, after Claude succeeds.
 Everything expressible as a rule is in `lib.mjs`, where it is unit-tested. Only
 genuine judgement reaches the model.
 
-| Question                                                     | Decided by       |
-| ------------------------------------------------------------ | ---------------- |
-| Is this PR open, non-draft, same-repo, and `automation/*`?   | `decideResponse` |
-| Is this item our own output rather than feedback?            | `isSelfOutput`   |
-| Have we already answered at this head SHA, with nothing new? | `decideResponse` |
-| Which items are unseen?                                      | `decideResponse` |
-| **Does this comment have a point?**                          | the model        |
-| **What is the right fix, and is it in scope?**               | the model        |
+| Question                                                     | Decided by        |
+| ------------------------------------------------------------ | ----------------- |
+| Is this PR open, non-draft, same-repo, and `automation/*`?   | `decideResponse`  |
+| Is this item our own output rather than feedback?            | `isSelfOutput`    |
+| May this author's text reach the model at all?               | `isTrustedAuthor` |
+| Have we already answered at this head SHA, with nothing new? | `decideResponse`  |
+| Which items are unseen?                                      | `decideResponse`  |
+| **Does this comment have a point?**                          | the model         |
+| **What is the right fix, and is it in scope?**               | the model         |
 
 The gate deliberately does **not** classify a comment as actionable-vs-noise.
 "Is this reviewer right?" is not a rule, and a regex that guessed at it would be
@@ -55,8 +56,9 @@ wrong in both directions.
 | Head repo ≠ this repo                               | Secrets are unavailable to fork PRs and the branch is unpushable here. |
 | Head ref not `automation/*`                         | v1 does not respond on human PRs.                                      |
 | No feedback from anyone but us                      | Nothing to answer.                                                     |
+| Feedback only from untrusted authors                | Their text must not reach the prompt (see below).                      |
 | Already responded at this SHA **and** nothing newer | Decide once per SHA.                                                   |
-| All feedback predates our last response             | Already answered; the branch simply moved.                             |
+| All feedback predates our recorded watermark        | Already answered; the branch simply moved.                             |
 
 Note the "already responded" skip needs **both** halves. The SHA marker alone is
 not enough: a reviewer can leave a second round of comments without the branch
@@ -79,6 +81,41 @@ feedback).
 
 A review row with an empty body is a bare `APPROVED` click and is dropped — it is
 not feedback, and treating it as such would make every LGTM start a run.
+
+## Only trusted authors reach the prompt
+
+This repo is **public**. Anyone with a GitHub account can comment on a PR, and
+every comment body that survives the scan becomes prompt text for a step holding
+unrestricted `Bash` and a checkout with `BOT_PAT` persisted as the push
+credential. Unfiltered, that is a direct route from "leave a comment" to
+"instructions to a privileged agent". So `dropReason` keeps feedback only from:
+
+| Trusted                                                                  | How                            |
+| ------------------------------------------------------------------------ | ------------------------------ |
+| `github-actions[bot]` (house reviewer)                                   | login, `TRUSTED_REVIEWER_BOTS` |
+| `chatgpt-codex-connector[bot]`                                           | login, `TRUSTED_REVIEWER_BOTS` |
+| `copilot-pull-request-reviewer[bot]`                                     | login, `TRUSTED_REVIEWER_BOTS` |
+| Anyone whose `author_association` is `OWNER` / `MEMBER` / `COLLABORATOR` | `TRUSTED_AUTHOR_ASSOCIATIONS`  |
+
+Those three associations are exactly the ones that imply write access.
+`CONTRIBUTOR` is the trap: it only means an account has had a commit merged, not
+that it can push. It, `FIRST_TIME_CONTRIBUTOR`, `FIRST_TIMER`, `NONE`,
+`MANNEQUIN`, and a **missing or unrecognised** association are all dropped with an
+`untrusted-author` reason. The filter **fails closed**: all three endpoints return
+`author_association`, so an absent one means an API change or a hand-built item,
+and neither is evidence of write access.
+
+`TRUSTED_REVIEWER_BOTS` is the same set of identities as the workflow's
+`allowed_bots`, and a test asserts they stay equal. They answer different
+questions about the same three names — `allowed_bots` gates who may **start** a
+run, this list gates whose text a run may **read** — so a name in one and not the
+other is a bug in whichever direction it points.
+
+The **trigger** is deliberately not gated: a stranger's comment may still start a
+run. That run finds no trusted feedback and skips in seconds, which is cheaper
+than expressing this rule in YAML. And because a dropped comment is reported by
+`formatDrops`, the run log says plainly that it ignored someone rather than
+looking like an empty PR.
 
 ## Loop safety
 
@@ -157,19 +194,49 @@ one filter that silently disabled a whole dispatcher.
 So `isSelfOutput` is structural, and every clause names something only the
 responder produces:
 
-| Our output               | How it is recognised                             |
-| ------------------------ | ------------------------------------------------ |
-| Summary + marker comment | carries `<!-- review-response:<sha> -->`         |
-| Crash notice             | carries `<!-- review-response-summary -->`       |
-| Thread reply             | inline, authored by us, `in_reply_to_id` present |
-| A review                 | n/a — the responder never submits a review       |
+| Our output               | How it is recognised                               |
+| ------------------------ | -------------------------------------------------- |
+| Summary + marker comment | carries `<!-- review-response:<sha>:<iso8601> -->` |
+| Crash notice             | carries `<!-- review-response-summary -->`         |
+| Thread reply             | inline, authored by us, `in_reply_to_id` present   |
+| A review                 | n/a — the responder never submits a review         |
 
 That covers all three shapes by construction, which is **why the workflow posts
 the summary itself** rather than letting Claude run `gh pr comment`: a bare
 model-authored top-level comment would have no marker, would share the house
 reviewer's login, and would be genuinely indistinguishable from feedback. The
-timestamp watermark (`lastResponseAt`, read from the marker comments only) is the
-backstop if the model posts one anyway.
+timestamp watermark (`lastResponseWatermark`, read from the marker comments only)
+is the backstop if the model posts one anyway.
+
+## The marker records what was processed, not when
+
+The marker is `<!-- review-response:<sha>:<iso8601> -->`, and the timestamp is the
+`createdAt` of the **newest feedback item in the snapshot the run answered** — not
+the time the response was posted. The difference is a whole class of lost
+feedback:
+
+```
+10:00  reviewer A comments        → in the scan's snapshot
+10:02  reviewer B comments        → after the snapshot; the model is still working
+10:05  we post the marker comment → later than B
+```
+
+Compared against the marker comment's own `created_at`, B predates our "last
+response" and the next run drops it as already answered — permanently, since
+nothing ever re-raises it. Compared against the watermark the run actually
+processed (`10:00`), B is unseen and the next run answers it. `decideResponse`
+therefore takes `respondedWatermark` (from `lastResponseWatermark`) and not
+`lastResponseAt`, which is kept for reporting only. `lib.test.mjs` pins the
+timeline above as a regression test.
+
+Legacy markers with no watermark still parse and fall back to the comment's
+`created_at` — the pre-watermark behaviour — so a PR that was mid-flight when this
+shipped does not suddenly re-answer everything.
+
+The marker is written in **two places**: `buildResponseMarker` here, and a
+`printf` in the workflow's "Record the response" step (fed by the scan's
+`feedback_watermark` output). They must be byte-equal; a test extracts the
+workflow's `printf` template and asserts the round trip.
 
 The house reviewer's _inline_ comments come from the `create_inline_comment` MCP
 tool, which opens **new** threads — no `in_reply_to_id` — so they are never
@@ -254,15 +321,16 @@ node node_modules/vitest/vitest.mjs run --project dev-tools \
 
 ### Outputs (`$GITHUB_OUTPUT`)
 
-| Key              | Meaning                                                |
-| ---------------- | ------------------------------------------------------ |
-| `should_respond` | `true` when the Claude step should run                 |
-| `reason`         | Human-readable decision (multi-line-safe)              |
-| `feedback_file`  | JSON file in `$RUNNER_TEMP` with the normalized items  |
-| `feedback_count` | Number of unanswered items                             |
-| `head_sha`       | PR head SHA — the marker's dedup key                   |
-| `head_ref`       | PR head branch to check out and push to                |
-| `pr_title`       | One-line PR title, safe to interpolate into the prompt |
+| Key                  | Meaning                                                                       |
+| -------------------- | ----------------------------------------------------------------------------- |
+| `should_respond`     | `true` when the Claude step should run                                        |
+| `reason`             | Human-readable decision (multi-line-safe)                                     |
+| `feedback_file`      | JSON file in `$RUNNER_TEMP` with the normalized items                         |
+| `feedback_count`     | Number of unanswered items                                                    |
+| `feedback_watermark` | `createdAt` of the newest item being answered, or `none` — goes in the marker |
+| `head_sha`           | PR head SHA — the marker's dedup key                                          |
+| `head_ref`           | PR head branch to check out and push to                                       |
+| `pr_title`           | One-line PR title, safe to interpolate into the prompt                        |
 
 The feedback file is written on **every** run, including skips: it is the fastest
 way to tell "there was no feedback" apart from "an endpoint stopped being wired

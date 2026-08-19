@@ -29,7 +29,7 @@
  *   DRY_RUN     "true" → print the decision, force should_respond=false
  *
  * Outputs (to $GITHUB_OUTPUT): `should_respond`, `reason`, `feedback_file`,
- * `feedback_count`, `head_sha`, `head_ref`, `pr_title`.
+ * `feedback_count`, `feedback_watermark`, `head_sha`, `head_ref`, `pr_title`.
  */
 import { appendFileSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
@@ -37,9 +37,10 @@ import { join } from 'node:path';
 import {
   DEFAULT_SELF_LOGIN,
   decideResponse,
+  feedbackWatermark,
   formatDrops,
   formatFeedbackDigest,
-  lastResponseAt,
+  lastResponseWatermark,
   parseRespondedShas,
   partitionFeedback,
 } from './lib.mjs';
@@ -144,9 +145,15 @@ async function main() {
     feedback,
     lastRespondedSha: respondedShas.has(headSha.toLowerCase()) ? headSha : null,
     headSha,
-    lastResponseAt: lastResponseAt(issueComments, SELF_LOGIN),
+    respondedWatermark: lastResponseWatermark(issueComments, SELF_LOGIN),
     selfLogin: SELF_LOGIN,
   });
+
+  // The watermark this run would record if it responds: the newest item it is
+  // about to answer, not the time it finishes. The "Record the response" step
+  // puts it in the marker so feedback that lands mid-run stays unanswered rather
+  // than being buried under a post-time timestamp.
+  const watermark = feedbackWatermark(decision.items);
 
   // Written unconditionally so a skip run still shows what it saw — the fastest
   // way to tell "no feedback" apart from "an endpoint is not wired up".
@@ -182,6 +189,7 @@ async function main() {
   console.log(`   feedback left to answer: ${feedback.length}`);
   if (feedback.length > 0) console.log(formatFeedbackDigest(feedback));
   console.log(`   decision: ${decision.shouldRespond ? 'RESPOND' : 'skip'} — ${decision.reason}`);
+  console.log(`   watermark to record: ${watermark}`);
   console.log(`   feedback file: ${feedbackFile}`);
 
   appendSummary('## Review Responder\n');
@@ -202,6 +210,7 @@ async function main() {
   setMultilineOutput('reason', decision.reason);
   setOutput('feedback_file', feedbackFile);
   setOutput('feedback_count', String(decision.items.length));
+  setOutput('feedback_watermark', watermark);
   setOutput('head_sha', headSha);
   setOutput('head_ref', pr.head?.ref ?? '');
   setOutput('pr_title', oneLine(pr.title));

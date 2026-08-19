@@ -39,7 +39,7 @@ name: Review Responder
 #      under the same `github-actions[bot]` login we do (claude-code-action runs
 #      its Bash `gh` under GITHUB_TOKEN), so dropping that login wholesale would
 #      make this workflow blind to the reviewer whose findings matter most. What
-#      is dropped is (a) any body carrying `<!-- review-response:<sha> -->` or
+#      is dropped is (a) any body carrying `<!-- review-response:<sha>:<ts> -->` or
 #      `<!-- review-response-summary -->`, and (b) our own inline comments that
 #      are REPLIES in an existing thread. Every comment this workflow writes has
 #      one of those shapes by construction — which is why the summary is posted
@@ -47,9 +47,11 @@ name: Review Responder
 #   3. the push — Claude's commit fires `synchronize`, which this workflow does
 #      NOT subscribe to. CI re-runs (that is why the push must use BOT_PAT); the
 #      responder does not.
-#   4. the SHA marker — `<!-- review-response:<sha> -->` makes the decision once
-#      per head SHA, so a burst that survives the debounce still cannot produce a
-#      second identical response.
+#   4. the SHA marker — `<!-- review-response:<sha>:<iso8601> -->` makes the
+#      decision once per head SHA, so a burst that survives the debounce still
+#      cannot produce a second identical response. The timestamp is the newest
+#      feedback the response COVERED, so feedback that arrives mid-run is answered
+#      by the next run instead of being counted as already answered.
 #
 # A REVIEW BURST IS ONE RUN, NOT THREE. Codex, Copilot and the house reviewer all
 # land within a few minutes of each other, each firing its own event. The
@@ -224,6 +226,17 @@ jobs:
       # last of those, so dropping it would make this workflow blind to the
       # reviewer that matters most), drops our own output, and decides. It
       # performs no GitHub write at all, not even a label.
+      #
+      # It also drops feedback from authors we do not trust, and that filter is a
+      # security control rather than housekeeping: this repo is PUBLIC, so anyone
+      # with a GitHub account can comment on a PR, and every comment body that
+      # survives the scan becomes prompt text for the step below — which holds
+      # unrestricted `Bash` and a checkout with BOT_PAT persisted. `allowed_bots`
+      # cannot cover this; it gates the triggering ACTOR, not the feedback a run
+      # collects. Only the three named reviewer bots and authors whose
+      # `author_association` is OWNER/MEMBER/COLLABORATOR are read; anything else
+      # is reported as dropped in the run log. A stranger's comment may still
+      # START a run — it just finds nothing trusted and skips.
       - name: Scan review feedback
         id: scan
         env:
@@ -465,6 +478,11 @@ jobs:
           PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
           HEAD_SHA: ${{ steps.scan.outputs.head_sha }}
           FEEDBACK_COUNT: ${{ steps.scan.outputs.feedback_count }}
+          # The newest feedback item this run ANSWERED, from the scan — not the
+          # time this step runs. The next run treats everything after it as
+          # unanswered, so a reviewer who commented while the model was working is
+          # still answered instead of being buried under a post-time timestamp.
+          FEEDBACK_WATERMARK: ${{ steps.scan.outputs.feedback_watermark }}
           SUMMARY_FILE: ${{ runner.temp }}/review-response-summary.md
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
         run: |
@@ -486,7 +504,10 @@ jobs:
             fi
             printf '\nReplies are in the threads above; the run log shows what it verified: %s\n\n' "$RUN_URL"
             printf 'Pushing a new commit, or leaving new feedback, makes this PR eligible for another pass.\n\n'
-            printf '<!-- review-response:%s -->\n' "$HEAD_SHA"
+            # Must stay byte-equal to buildResponseMarker() in
+            # packages/dev-tools/review-responder/lib.mjs — the marker is written
+            # here and parsed there, and lib.test.mjs asserts this exact format.
+            printf '<!-- review-response:%s:%s -->\n' "$HEAD_SHA" "${FEEDBACK_WATERMARK:-none}"
           } > "$BODY_FILE"
           gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$BODY_FILE"
 

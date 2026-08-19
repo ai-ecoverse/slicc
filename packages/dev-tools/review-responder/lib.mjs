@@ -18,8 +18,16 @@
  *
  * Cross-run state is GitHub-native, same as the other dispatchers: no state
  * file, no state branch, no Actions cache. "We already responded at this head
- * SHA" is a `<!-- review-response:<sha> -->` marker comment, the same durable
+ * SHA, covering feedback up to this timestamp" is a
+ * `<!-- review-response:<sha>:<iso8601> -->` marker comment, the same durable
  * dedup technique as `<!-- pr-fix-skip:<sha> -->` in pr-fix-dispatcher.
+ *
+ * TRUST. This module is also a security boundary, because the feedback it
+ * returns becomes the prompt of a step with unrestricted `Bash` and a checkout
+ * carrying `BOT_PAT`. On a PUBLIC repo anyone may comment on a PR, so
+ * `dropReason` keeps only feedback from a named reviewer bot or an author whose
+ * `author_association` implies write access, and fails closed on anything it
+ * cannot place. See {@link isTrustedAuthor}.
  *
  * LOOP SAFETY. This workflow's own writes (thread replies + the marker comment)
  * are exactly the events that trigger it. The pure gate is one of the two
@@ -47,15 +55,86 @@ export const IN_SCOPE_BRANCH_PREFIX = 'automation/';
 export const DEFAULT_SELF_LOGIN = 'github-actions[bot]';
 
 /**
- * Durable marker recording that we responded at this head SHA. Keyed to the SHA
- * so a decision is made once per SHA: a new push (ours or a human's) produces a
- * new SHA and makes the PR eligible again, exactly like the `pr-fix-skip`
- * marker.
+ * The reviewer bots whose feedback we are willing to put in front of the model.
+ *
+ * This is the same set of identities as `allowed_bots` in
+ * `.github/workflows/review-responder.yml`, deliberately duplicated here because
+ * the two answer different questions about the same three names: `allowed_bots`
+ * says who may START a run, this list says whose text may be READ by one. Keep
+ * them equal; a name in one and not the other is a bug in whichever direction it
+ * points.
+ */
+export const TRUSTED_REVIEWER_BOTS = [
+  'github-actions[bot]',
+  'chatgpt-codex-connector[bot]',
+  'copilot-pull-request-reviewer[bot]',
+];
+
+/**
+ * The `author_association` values that imply write access to this repository.
+ *
+ * These three are exactly the associations GitHub gives someone who can push
+ * here. Everything else — `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR`,
+ * `FIRST_TIMER`, `NONE`, `MANNEQUIN` — is any GitHub account that walked in off
+ * the street, which on a PUBLIC repo is everyone.
+ */
+export const TRUSTED_AUTHOR_ASSOCIATIONS = ['OWNER', 'MEMBER', 'COLLABORATOR'];
+
+/**
+ * May this author's text reach the model's prompt?
+ *
+ * This is a security boundary, not tidiness. The feedback this module collects
+ * becomes the prompt of a step that holds unrestricted `Bash` and a checkout
+ * with `BOT_PAT` persisted as the push credential — so any comment body that
+ * survives here is attacker-supplied instructions to a privileged agent, and
+ * this repo is public: anyone with a GitHub account can leave one. The
+ * workflow's `allowed_bots` does not help, because it gates the *actor* of the
+ * triggering event, not the feedback a run collects once it has started.
+ *
+ * FAILS CLOSED. A missing or unrecognised `author_association` is untrusted:
+ * the three endpoints all return the field, so an absent one means either an API
+ * change or a hand-built item, and neither is evidence of write access.
+ *
+ * The trigger is intentionally left alone — a stranger's comment may still start
+ * a run. That run finds no trusted feedback and skips in seconds, which is the
+ * cheap outcome; gating the trigger would mean putting this rule in YAML.
+ * @param {{author?: string, authorAssociation?: string}} item
+ * @returns {boolean}
+ */
+export function isTrustedAuthor(item) {
+  if (TRUSTED_REVIEWER_BOTS.includes(String(item?.author ?? ''))) return true;
+  const association = item?.authorAssociation == null ? '' : String(item.authorAssociation);
+  return TRUSTED_AUTHOR_ASSOCIATIONS.includes(association.toUpperCase());
+}
+
+/**
+ * Durable marker recording that we responded at this head SHA, and — the part
+ * that makes the run idempotent rather than merely deduped — WHICH feedback that
+ * response covered.
+ *
+ * Keyed to the SHA so a decision is made once per SHA: a new push (ours or a
+ * human's) produces a new SHA and makes the PR eligible again, exactly like the
+ * `pr-fix-skip` marker.
+ *
+ * The watermark is the `createdAt` of the newest item in the snapshot the run
+ * actually answered, NOT the time the response was posted. Using the marker
+ * comment's own timestamp loses feedback: a reviewer who comments after the scan
+ * but before the marker is written predates the marker, so the next run would
+ * read that comment as already answered and drop it permanently. Recording what
+ * was processed cannot have that gap.
+ *
+ * `none` when the snapshot was empty — that should not happen (a run with
+ * nothing to answer does not get this far), but it must parse rather than crash.
+ *
+ * WRITTEN IN TWO PLACES: here, and as a `printf` in the "Record the response"
+ * step of `.github/workflows/review-responder.yml`. They must produce byte-equal
+ * output; `lib.test.mjs` asserts the round trip against the shell format.
  * @param {string} sha
+ * @param {string|null} [watermark] ISO 8601 timestamp of the newest answered item
  * @returns {string}
  */
-export function buildResponseMarker(sha) {
-  return `<!-- review-response:${sha} -->`;
+export function buildResponseMarker(sha, watermark = 'none') {
+  return `<!-- review-response:${sha}:${watermark || 'none'} -->`;
 }
 
 /**
@@ -67,7 +146,14 @@ export function buildResponseMarker(sha) {
  */
 export const SUMMARY_MARKER = '<!-- review-response-summary -->';
 
-const RESPONSE_MARKER_RE = /<!--\s*review-response:([0-9a-f]{7,40})\s*-->/gi;
+/*
+ * The watermark group is OPTIONAL on purpose: markers written before the
+ * watermark existed carry only a SHA, and a PR that is mid-flight when this ships
+ * must keep parsing. Those legacy markers fall back to the comment's own
+ * `created_at` (see {@link lastResponseWatermark}) — the old behaviour, so an
+ * in-flight PR does not suddenly re-answer everything it has already answered.
+ */
+const RESPONSE_MARKER_RE = /<!--\s*review-response:([0-9a-f]{7,40})(?::([^\s>]+))?\s*-->/gi;
 const SUMMARY_MARKER_RE = /<!--\s*review-response-summary\s*-->/i;
 
 /**
@@ -157,20 +243,92 @@ export function isSelfOutput(item, selfLogin = DEFAULT_SELF_LOGIN) {
 export function parseRespondedShas(issueComments = []) {
   const shas = new Set();
   for (const comment of Array.isArray(issueComments) ? issueComments : []) {
-    for (const [, sha] of String(comment?.body ?? '').matchAll(RESPONSE_MARKER_RE)) {
-      shas.add(sha.toLowerCase());
-    }
+    for (const { sha } of parseResponseMarkers(comment?.body)) shas.add(sha);
   }
   return shas;
 }
 
 /**
- * When we last responded on this PR, as an ISO timestamp, or null if never.
+ * Every response marker in one comment body, as `{sha, watermark}` pairs.
+ * `watermark` is null for a legacy marker that carries no watermark, and for the
+ * literal `none` an empty snapshot would have written.
+ * @param {string} body
+ * @returns {Array<{sha: string, watermark: string|null}>}
+ */
+function parseResponseMarkers(body) {
+  const found = [];
+  // `matchAll` starts from the regex's `lastIndex`, and this one is shared and
+  // /g — `hasResponseMarker`'s `test()` leaves it advanced, so without the reset
+  // the first marker in a body silently disappears depending on call order.
+  RESPONSE_MARKER_RE.lastIndex = 0;
+  for (const [, sha, watermark] of String(body ?? '').matchAll(RESPONSE_MARKER_RE)) {
+    found.push({
+      sha: sha.toLowerCase(),
+      watermark: watermark && watermark.toLowerCase() !== 'none' ? watermark : null,
+    });
+  }
+  return found;
+}
+
+/**
+ * The newest feedback timestamp any of our responses has already covered, or
+ * null if we have never responded.
  *
- * Read from the marker comments rather than from "our newest comment": we post
+ * This — not "when did we last post" — is what decides freshness. The two differ
+ * by exactly the window in which the bug lived: everything a reviewer wrote
+ * between the scan snapshot and the marker comment is newer than the snapshot and
+ * older than the marker, so a post-time watermark swallowed it forever.
+ *
+ * Read from the marker comments only, never from "our newest comment": we post
  * other things too (the pr-fix dispatcher's markers are also authored by
- * `github-actions[bot]`), and using an unrelated comment as the watermark would
+ * `github-actions[bot]`), and an unrelated comment used as the watermark would
  * silently swallow feedback that arrived before it.
+ * @param {Array<{body?: string, user?: {login?: string}, created_at?: string, createdAt?: string}>} issueComments
+ * @param {string} [selfLogin]
+ * @returns {string|null}
+ */
+export function lastResponseWatermark(issueComments = [], selfLogin = DEFAULT_SELF_LOGIN) {
+  let highest = null;
+  for (const comment of Array.isArray(issueComments) ? issueComments : []) {
+    if (String(comment?.user?.login ?? comment?.author ?? '') !== selfLogin) continue;
+    const postedAt = comment?.created_at ?? comment?.createdAt ?? null;
+    for (const { watermark } of parseResponseMarkers(comment?.body)) {
+      // Legacy marker: no watermark to read, so fall back to when we posted it.
+      // That is the pre-watermark behaviour, kept deliberately — it is wrong in
+      // the narrow mid-run window and right about everything older, which is the
+      // best a marker with no watermark can support.
+      const stamp = watermark ?? postedAt;
+      if (stamp && (highest === null || String(stamp) > highest)) highest = String(stamp);
+    }
+  }
+  return highest;
+}
+
+/**
+ * The watermark to record for a snapshot: the newest `createdAt` in it, or `none`
+ * when it is empty.
+ * @param {Array<{createdAt?: string|null}>} items
+ * @returns {string}
+ */
+export function feedbackWatermark(items = []) {
+  const newest = (Array.isArray(items) ? items : [])
+    .map((item) => item?.createdAt)
+    .filter(Boolean)
+    .map(String)
+    .sort()
+    .pop();
+  return newest ?? 'none';
+}
+
+/**
+ * When we last POSTED a response on this PR, as an ISO timestamp, or null if
+ * never.
+ *
+ * Reporting only. This is deliberately NOT what decides whether a comment is
+ * unanswered — see {@link lastResponseWatermark} for that, and why the difference
+ * matters. Read from the marker comments rather than from "our newest comment":
+ * we post other things too (the pr-fix dispatcher's markers are also authored by
+ * `github-actions[bot]`).
  * @param {Array<{body?: string, user?: {login?: string}, created_at?: string, createdAt?: string}>} issueComments
  * @param {string} [selfLogin]
  * @returns {string|null}
@@ -208,6 +366,11 @@ function toItem(raw, kind) {
     createdAt: createdAt ? String(createdAt) : null,
     body,
   };
+  // All three endpoints return `author_association` on every item, and
+  // {@link isTrustedAuthor} needs it: without it every human comment fails closed
+  // and the responder goes deaf to its own maintainers.
+  const association = raw?.author_association ?? raw?.authorAssociation;
+  if (association != null) item.authorAssociation = String(association).toUpperCase();
   if (raw?.path != null) item.path = String(raw.path);
   if (line != null) item.line = Number(line);
   if (raw?.in_reply_to_id != null) item.inReplyToId = Number(raw.in_reply_to_id);
@@ -252,6 +415,13 @@ export function dropReason(item, selfLogin = DEFAULT_SELF_LOGIN) {
   for (const { label, re } of NO_OP_BODY_PATTERNS) {
     if (re.test(body)) return label;
   }
+  // Last, so the structural reasons above keep their more specific label — but
+  // this one is the security gate, not a tidiness filter: everything that gets
+  // past it is read as instructions by a step holding `Bash` and a push
+  // credential. See {@link isTrustedAuthor}.
+  if (!isTrustedAuthor(item)) {
+    return `untrusted-author (association=${item?.authorAssociation ?? 'none'})`;
+  }
   return null;
 }
 
@@ -290,7 +460,17 @@ export function partitionFeedback({
   return { feedback, dropped };
 }
 
-/** Items strictly newer than `since`; all of them when `since` is null. */
+/**
+ * Items strictly newer than `since`; all of them when `since` is null.
+ *
+ * Strictly, and deliberately. GitHub timestamps are second-granular, so a
+ * comment posted in the same second as the watermark but missing from that
+ * snapshot is lost — the one hole this comparison cannot close. `>=` would close
+ * it by re-answering every item that shares the watermark on every later run,
+ * and since each response records the same watermark again, that is a permanent
+ * duplicate-reply loop. A vanishingly rare miss beats a self-sustaining one; the
+ * fix if it ever bites is to record handled item IDs, not to loosen this.
+ */
 function newerThan(items, since) {
   if (!since) return items;
   return items.filter((item) => String(item.createdAt ?? '') > String(since));
@@ -310,7 +490,7 @@ function newerThan(items, since) {
  *   feedback?: Array<{author?: string, createdAt?: string|null}>,
  *   lastRespondedSha?: string|null,
  *   headSha?: string,
- *   lastResponseAt?: string|null,
+ *   respondedWatermark?: string|null,
  *   selfLogin?: string,
  * }} input
  * @returns {{shouldRespond: boolean, reason: string, items: Array<object>}}
@@ -325,7 +505,12 @@ export function decideResponse(input = {}) {
     feedback = [],
     lastRespondedSha = null,
     headSha = '',
-    lastResponseAt: since = null,
+    // The watermark our marker comments recorded — the newest feedback we have
+    // ALREADY read — and deliberately not the time we posted them. Anything a
+    // reviewer wrote between a run's snapshot and its marker comment is newer
+    // than the snapshot and older than the marker, so comparing against the post
+    // time dropped it as "already answered" and it was never seen again.
+    respondedWatermark: since = null,
     selfLogin = DEFAULT_SELF_LOGIN,
   } = input;
   const skip = (reason) => ({ shouldRespond: false, reason, items: [] });
@@ -369,7 +554,7 @@ export function decideResponse(input = {}) {
   if (lastRespondedSha && headSha && lastRespondedSha.toLowerCase() === headSha.toLowerCase()) {
     if (unseen.length === 0) {
       return skip(
-        `Already responded at head SHA ${headSha.slice(0, 7)} and nothing new has arrived since${since ? ` ${since}` : ''}.`
+        `Already responded at head SHA ${headSha.slice(0, 7)}, covering everything up to${since ? ` ${since}` : ' now'}, and nothing newer has arrived.`
       );
     }
     return {
@@ -381,14 +566,14 @@ export function decideResponse(input = {}) {
 
   if (unseen.length === 0) {
     return skip(
-      `All ${respondableFeedback.length} feedback item(s) predate our last response${since ? ` at ${since}` : ''}, and the branch has moved since — nothing unanswered.`
+      `All ${respondableFeedback.length} feedback item(s) predate our last response, which covered everything up to${since ? ` ${since}` : ' now'}, and the branch has moved since — nothing unanswered.`
     );
   }
 
   return {
     shouldRespond: true,
     reason: since
-      ? `${unseen.length} feedback item(s) arrived after our last response at ${since}.`
+      ? `${unseen.length} feedback item(s) are newer than the ${since} watermark our last response recorded.`
       : `${unseen.length} feedback item(s) and no response from us yet.`,
     items: unseen,
   };

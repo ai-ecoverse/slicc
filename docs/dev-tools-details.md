@@ -196,7 +196,35 @@ that feedback simply sat there; a human had to open a local session and say "tak
 over PR X and address the review comments".
 
 Same two-part shape as its siblings: `scan-review-feedback.mjs` decides, one
-Claude step does the work. Four things about it are non-obvious:
+Claude step does the work. Several things about it are non-obvious:
+
+- **Only trusted authors reach the prompt, and the filter fails closed.** This repo
+  is public, so anyone with a GitHub account can comment on a PR — and every
+  comment body that survives the scan becomes prompt text for a step with
+  unrestricted `Bash` and a checkout carrying `BOT_PAT`. `dropReason` therefore
+  keeps feedback only from the three named reviewer bots
+  (`TRUSTED_REVIEWER_BOTS` — the same identities as the workflow's `allowed_bots`,
+  pinned equal by a test) or from an author whose `author_association` is `OWNER`,
+  `MEMBER` or `COLLABORATOR`, the three that imply write access. `CONTRIBUTOR` is
+  the trap: it only means an account has had a commit merged. That, the
+  `FIRST_*`/`NONE`/`MANNEQUIN` values, and a missing or unrecognised association
+  are dropped as `untrusted-author` and reported by `formatDrops`, because a
+  swallowed comment must not look like an empty PR. `allowed_bots` cannot cover
+  this — it gates the triggering **actor**, not the feedback a run collects — and
+  the trigger is left ungated on purpose: a stranger's comment may start a run,
+  which then finds nothing trusted and skips.
+- **The marker records the feedback it processed, not when it finished.**
+  `<!-- review-response:<sha>:<iso8601> -->`, where the timestamp is the newest
+  `createdAt` in the snapshot that run answered (`feedback_watermark` from the
+  scan, `none` for an empty snapshot). Comparing against the marker comment's own
+  `created_at` loses a comment left after the snapshot but before the marker: it
+  predates the marker, so the next run counted it as already answered and nothing
+  ever re-raised it. `decideResponse` takes `respondedWatermark` from
+  `lastResponseWatermark`; `lastResponseAt` survives for reporting only. Markers
+  without a watermark still parse and fall back to the comment's `created_at`, so a
+  PR mid-flight when this shipped does not re-answer everything. The marker is
+  written in two places — `buildResponseMarker` and the workflow's `printf` — and a
+  test asserts they are byte-equal.
 
 - **It must read all THREE feedback endpoints.** `claude-pr-review.yml` posts its
   verdict as a top-level ISSUE comment, so `GET /pulls/{n}/reviews` alone sees
