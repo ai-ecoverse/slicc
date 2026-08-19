@@ -27,7 +27,16 @@ function makeReadSequenceHandle(reads: Array<string | Error>): {
   return { handle, readCount: () => i };
 }
 
-const FAST_OPTS = { timeoutMs: 40, intervalMs: 1 };
+/**
+ * Deadline for tests that expect the poll to *succeed*. It is never actually
+ * reached (the fixture serves an acceptable read on the first or second pass),
+ * so a generous value costs nothing while keeping the outcome independent of
+ * how long a contended CI worker stalls the event loop between reads.
+ */
+const SUCCESS_OPTS = { timeoutMs: 2_000, intervalMs: 1 };
+
+/** Deadline for tests that expect the poll to time out; always reached. */
+const TIMEOUT_OPTS = { timeoutMs: 40, intervalMs: 1 };
 
 describe('pollCloudStatus', () => {
   it('returns any well-formed read when no minUpdatedAt floor is set', async () => {
@@ -37,7 +46,7 @@ describe('pollCloudStatus', () => {
       updatedAt: '2026-01-01T00:00:00.000Z',
     };
     const { handle } = makeReadSequenceHandle([JSON.stringify(payload)]);
-    await expect(pollCloudStatus(handle, FAST_OPTS)).resolves.toMatchObject(payload);
+    await expect(pollCloudStatus(handle, SUCCESS_OPTS)).resolves.toMatchObject(payload);
   });
 
   it('rejects a read whose updatedAt is not strictly newer than minUpdatedAt, then accepts a fresh one', async () => {
@@ -56,7 +65,7 @@ describe('pollCloudStatus', () => {
       JSON.stringify(fresh),
     ]);
     await expect(
-      pollCloudStatus(handle, { ...FAST_OPTS, minUpdatedAt: '2026-01-01T00:00:01.000Z' })
+      pollCloudStatus(handle, { ...SUCCESS_OPTS, minUpdatedAt: '2026-01-01T00:00:01.000Z' })
     ).resolves.toMatchObject(fresh);
     expect(readCount()).toBeGreaterThan(1); // proves the stale read was rejected
   });
@@ -69,7 +78,7 @@ describe('pollCloudStatus', () => {
     };
     const { handle } = makeReadSequenceHandle([JSON.stringify(stale)]);
     await expect(
-      pollCloudStatus(handle, { ...FAST_OPTS, minUpdatedAt: '2026-01-01T00:00:01.000Z' })
+      pollCloudStatus(handle, { ...TIMEOUT_OPTS, minUpdatedAt: '2026-01-01T00:00:01.000Z' })
     ).rejects.toMatchObject({
       name: 'CloudError',
       code: 'SANDBOX_NOT_READY',
@@ -79,7 +88,7 @@ describe('pollCloudStatus', () => {
 
   it('throws SANDBOX_NOT_READY with "file never appeared" when reads keep failing', async () => {
     const { handle } = makeReadSequenceHandle([new Error('ENOENT /tmp/slicc-join.json')]);
-    await expect(pollCloudStatus(handle, FAST_OPTS)).rejects.toMatchObject({
+    await expect(pollCloudStatus(handle, TIMEOUT_OPTS)).rejects.toMatchObject({
       code: 'SANDBOX_NOT_READY',
       message: expect.stringContaining('last error: ENOENT /tmp/slicc-join.json'),
     });
@@ -94,7 +103,7 @@ describe('pollForRefreshedStatus', () => {
       updatedAt: '2026-01-01T00:00:00.000Z',
     };
     const { handle } = makeReadSequenceHandle([JSON.stringify(payload)]);
-    await expect(pollForRefreshedStatus(handle, undefined, FAST_OPTS)).resolves.toMatchObject(
+    await expect(pollForRefreshedStatus(handle, undefined, SUCCESS_OPTS)).resolves.toMatchObject(
       payload
     );
   });
@@ -112,7 +121,7 @@ describe('pollForRefreshedStatus', () => {
     };
     const { handle } = makeReadSequenceHandle([JSON.stringify(stale), JSON.stringify(fresh)]);
     await expect(
-      pollForRefreshedStatus(handle, '2026-05-01T12:00:00.000Z', FAST_OPTS)
+      pollForRefreshedStatus(handle, '2026-05-01T12:00:00.000Z', SUCCESS_OPTS)
     ).resolves.toMatchObject(fresh);
   });
 
@@ -120,7 +129,7 @@ describe('pollForRefreshedStatus', () => {
     const baseline = '2026-05-01T12:00:00.000Z';
     const stale = { joinUrl: 'https://w/join/stale', trayId: 't-stale', updatedAt: baseline };
     const { handle } = makeReadSequenceHandle([JSON.stringify(stale)]);
-    await expect(pollForRefreshedStatus(handle, baseline, FAST_OPTS)).rejects.toMatchObject({
+    await expect(pollForRefreshedStatus(handle, baseline, TIMEOUT_OPTS)).rejects.toMatchObject({
       name: 'CloudError',
       code: 'LEADER_NOT_READY',
       message: expect.stringContaining(`baseline.updatedAt=${baseline}`),
@@ -129,7 +138,7 @@ describe('pollForRefreshedStatus', () => {
 
   it('throws LEADER_NOT_READY with "did not refresh" on a never-appearing file', async () => {
     const { handle } = makeReadSequenceHandle([new Error('boom')]);
-    await expect(pollForRefreshedStatus(handle, undefined, FAST_OPTS)).rejects.toMatchObject({
+    await expect(pollForRefreshedStatus(handle, undefined, TIMEOUT_OPTS)).rejects.toMatchObject({
       code: 'LEADER_NOT_READY',
       message: expect.stringContaining('did not refresh within'),
     });
