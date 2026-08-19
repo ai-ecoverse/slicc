@@ -213,10 +213,21 @@ Claude step does the work. Four things about it are non-obvious:
   identified as defeating the spelling-based debt gate. Reviewers disagreeing is
   normal; the model is told to reason about the code rather than count votes.
 - **A three-reviewer burst must produce one run.** `concurrency:
-review-responder-<pr>` with `cancel-in-progress: true` plus a leading `sleep
-300` debounce: runs started by the earlier events are cancelled mid-sleep having
-  done nothing, and the survivor reads a feedback set that is by then complete.
-  Two responders on one branch would race each other's pushes.
+review-responder-<pr>` **queues** the runs (`cancel-in-progress: false`) behind a
+  leading `sleep 300` debounce: the first answers a complete feedback set, and the
+  rest wake to find its marker at an unmoved head SHA and skip. Two responders on
+  one branch would race each other's pushes. `cancel-in-progress: true` is the
+  trap: concurrency is evaluated _before_ the job `if:`, so a run the `if:` would
+  skip still cancels the run in progress — and every inline reply the responder
+  posts is such an event. The first reply would kill the responder that wrote it
+  before it recorded its marker, and the replacement would start over: unbounded
+  ping-pong presenting as cancelled runs rather than failures.
+- **The gate must not be run by the branch it is judging.** The scanner executes
+  from a checkout pinned to the default branch with `persist-credentials: false`.
+  On `pull_request_review*` the default ref is the PR's merge ref, so omitting
+  `ref:` would run the PR's own copy of the script that decides whether the
+  privileged step happens. `BOT_PAT` and the branch's code enter the workspace
+  only in a second checkout, after the gate has approved the head.
 - **Loop safety is doubled everywhere, and the self-filter is NOT author-based.**
   The responder posts comments and comments are its trigger, so the job `if:`
   refuses any run whose triggering comment/review author is
@@ -229,10 +240,17 @@ review-responder-<pr>` with `cancel-in-progress: true` plus a leading `sleep
   an inline comment authored by us with `in_reply_to_id` set (we only ever reply;
   the reviewer's inline comments open new threads). That is also why the workflow
   — not Claude — posts the summary, as one comment carrying the SHA marker.
-  `allowed_bots: 'github-actions[bot]'` is not in tension with that `if:` —
-  `allowed_bots` gates the _action_ for a triggering **actor**, the `if:` gates
-  which **trigger** is worth a run. Claude's push fires `synchronize`, which this
-  workflow does not subscribe to.
+  `allowed_bots` is not in tension with that `if:` — `allowed_bots` gates the
+  _action_ for a triggering **actor**, the `if:` gates which **trigger** is worth a
+  run. Claude's push fires `synchronize`, which this workflow does not subscribe
+  to.
+- **The reviewer bots are named actors** (`github-actions[bot]`,
+  `chatgpt-codex-connector[bot]`, `copilot-pull-request-reviewer[bot]`), never
+  `'*'`. Admitting third-party Apps as actors grants them no content control they
+  lack anyway — their findings are this workflow's input by design, whichever event
+  starts the run — while excluding them breaks the feature silently: Codex ignores
+  bot-authored PRs and the house reviewer stands down once inline comments exist,
+  so Copilot's review is sometimes the only event an `automation/*` PR gets.
 
 Merging, opening a PR, and closing anything are removed from the tool surface
 (`--disallowedTools "Bash(gh pr merge:*),Bash(gh pr create:*),Bash(gh pr close:*),Bash(gh issue close:*)"`)

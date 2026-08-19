@@ -96,12 +96,24 @@ on:
         default: false
 
 concurrency:
-  # Keyed per PR: a burst of reviewer events on one PR collapses to a single
-  # surviving run, while two different PRs are still answered in parallel.
-  # `cancel-in-progress` is what makes the debounce sleep below a debounce rather
-  # than just a delay.
+  # Keyed per PR: two responders must never work one branch at once, while
+  # different PRs are still answered in parallel.
   group: review-responder-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
-  cancel-in-progress: true
+  # Queue; do NOT cancel. `cancel-in-progress: true` here is a trap, and it was
+  # this workflow's first design: concurrency is evaluated BEFORE the job `if:`,
+  # so a run that the `if:` would have skipped still cancels the run in progress.
+  # Every inline reply this responder posts is a `pull_request_review_comment`
+  # event on the same PR, so the first reply would cancel the responder that
+  # wrote it, mid-run, before it could record the SHA marker. The replacement
+  # run would then see the original feedback still unanswered, respond, reply,
+  # and cancel itself again — an unbounded ping-pong whose symptom is cancelled
+  # runs rather than a failure, billed to Bedrock the whole way.
+  #
+  # Queueing costs a few idle runs instead: each waits, then the deterministic
+  # selector sees the marker the first run left at this SHA with nothing newer
+  # behind it and skips in seconds. Idempotence is the selector's job, which is
+  # exactly why it is a pure tested function rather than a YAML expression.
+  cancel-in-progress: false
 
 jobs:
   respond:
@@ -162,24 +174,33 @@ jobs:
         (github.event.pull_request.state || github.event.issue.state) == 'open'
       )
     steps:
-      # Debounce, not politeness. Combined with `cancel-in-progress` above this
-      # is what turns a three-reviewer burst into one run: runs started by the
-      # earlier events are cancelled here, mid-sleep, having done nothing. It
-      # also means the surviving run reads the feedback set AFTER all three
-      # reviewers have posted, so it answers everything in one pass instead of
-      # replying to Codex and then discovering Copilot. Waived for
-      # workflow_dispatch — an operator naming a PR has nothing to wait for.
+      # Debounce, not politeness: the surviving run reads the feedback set AFTER
+      # all three reviewers have posted, so it answers everything in one pass
+      # instead of replying to Codex and then discovering Copilot. Runs from the
+      # earlier events of a burst queue behind this one (see `concurrency` above:
+      # queueing, never cancelling) and skip in seconds once the first run has
+      # left its marker. Waived for workflow_dispatch — an operator naming a PR
+      # has nothing to wait for.
       - name: Debounce the reviewer burst
         if: github.event_name != 'workflow_dispatch'
         run: sleep 300
 
+      # TRUSTED checkout, pinned to the default branch and deliberately NOT the
+      # event's ref. On `pull_request_review` and `pull_request_review_comment`
+      # the default ref is the PR's merge ref, so omitting `ref:` here would run
+      # the PR's own copy of the scanner — the script that decides whether the
+      # privileged step runs at all. An `automation/*` PR that edited that file
+      # (our agents write these branches unattended, and issue text they read is
+      # attacker-reachable on a public repo) would then be judging itself.
+      #
+      # `persist-credentials: false` so no token is left in `.git/config` for the
+      # steps that follow. BOT_PAT arrives later, with the head, and only after
+      # the gate has approved the branch.
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: 0 # full history: the debt gate resolves a merge-base against origin/main
-          # BOT_PAT persisted as the push credential so Claude's response commit
-          # fires `synchronize` and CI re-runs on it. See the header note on
-          # GitHub's anti-recursion guard.
-          token: ${{ secrets.BOT_PAT }}
+          ref: ${{ github.event.repository.default_branch || 'main' }}
+          persist-credentials: false
+          fetch-depth: 1 # the scanner reads the API, not the history
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
@@ -205,14 +226,30 @@ jobs:
           DRY_RUN: ${{ inputs.dry_run || 'false' }}
         run: node packages/dev-tools/review-responder/scan-review-feedback.mjs
 
-      - name: Check out the PR head branch
+      # Only now, once the trusted gate has approved this branch, does the PR's
+      # code enter the workspace — and only now does BOT_PAT. It is persisted as
+      # the push credential because a push made with GITHUB_TOKEN does not trigger
+      # workflows, so CI would never re-run on the response and the PR would keep
+      # its stale green checks. See the header note on GitHub's anti-recursion
+      # guard.
+      #
+      # Residual risk, stated rather than hidden: the steps after this one (`npm
+      # ci`, the model's own verification) execute branch code with BOT_PAT in
+      # `.git/config`. That is the same exposure `renovate-patch-reconcile.yml`
+      # already accepts, and it is bounded the same way — an `automation/*` head
+      # can only exist if something with write access pushed it. What changed is
+      # that the decision to admit the branch is no longer made BY the branch.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         if: steps.scan.outputs.should_respond == 'true'
-        env:
-          HEAD_REF: ${{ steps.scan.outputs.head_ref }}
+        with:
+          ref: ${{ steps.scan.outputs.head_ref }}
+          token: ${{ secrets.BOT_PAT }}
+          fetch-depth: 0 # full history: the debt gate resolves a merge-base against origin/main
+
+      - name: Configure git identity
+        if: steps.scan.outputs.should_respond == 'true'
         run: |
           set -euo pipefail
-          git fetch --quiet origin "$HEAD_REF"
-          git checkout --quiet -B "$HEAD_REF" "origin/$HEAD_REF"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
 
@@ -257,13 +294,30 @@ jobs:
           # above separately refuses runs whose triggering COMMENT was written by
           # that same bot. See the note there.
           #
-          # Named rather than `'*'`: this repo is PUBLIC, and the action's own
-          # docs warn that `'*'` lets external Apps invoke it with prompts they
-          # control — acutely relevant here, because the prompt this step builds
-          # includes reviewer-authored text and the step can push code. Codex and
-          # Copilot are third-party Apps whose comments this workflow reads; they
-          # must never be able to be the allowed actor.
-          allowed_bots: 'github-actions[bot]'
+          # Named rather than `'*'`: this repo is PUBLIC, and the action's own docs
+          # warn that `'*'` lets external Apps invoke it with prompts they control.
+          # Three names, no wildcard — every reviewer whose feedback this workflow
+          # exists to answer, and nothing else.
+          #
+          # Codex and Copilot are third-party Apps, and admitting them as ACTORS
+          # looks like it contradicts the tightening in #2196. It does not, because
+          # of what an actor can and cannot do here. The prompt is fixed in this
+          # file; what varies is reviewer text, and that text is already this
+          # workflow's input by design — a Codex finding reaches the model whether
+          # Codex's event or a later house-review event started the run. Admitting
+          # them changes who may START a run, not what a run reads.
+          #
+          # Excluding them, meanwhile, silently breaks the feature: Codex ignores
+          # bot-authored PRs, and the house reviewer stands down once inline
+          # comments exist, so Copilot's review is sometimes the ONLY event on an
+          # `automation/*` PR. Gated on that event alone, this workflow would just
+          # never run there — the quiet non-functioning that #2177 was about.
+          #
+          # What actually bounds a run started by any of them: `automation/*` heads
+          # only, `--disallowedTools` refusing merge/create/close, a push to the
+          # PR's own branch, full CI re-running on it, and every reply visible on
+          # the PR.
+          allowed_bots: 'github-actions[bot],chatgpt-codex-connector[bot],copilot-pull-request-reviewer[bot]'
           # Full turn-by-turn output on manual dispatch only; routine runs keep
           # it off so they don't log tool output that may be sensitive.
           show_full_output: ${{ github.event_name == 'workflow_dispatch' }}

@@ -14,10 +14,10 @@ Workflow: [`.github/workflows/review-responder.yml`](../../../.github/workflows/
 ## Flow
 
 ```
-pull_request_review (submitted) ─┐
+pull_request_review (submitted) ─┐   trusted checkout    scan (default branch)     head checkout (BOT_PAT)
 pull_request_review_comment ─────┼─▶ debounce 300s ─▶ scan-review-feedback.mjs ─▶ claude-code-action ─▶ marker comment
 issue_comment (created, on a PR) ┘   (+ concurrency:      │                            └─ fixes, replies, pushes
-workflow_dispatch ───────────────┘    cancel-in-progress) ├─ GET /pulls/{n}            (state, draft, head repo/ref/sha)
+workflow_dispatch ───────────────┘    queue, no cancel)   ├─ GET /pulls/{n}            (state, draft, head repo/ref/sha)
                                                           ├─ GET /pulls/{n}/reviews    (review summaries + state)
                                                           ├─ GET /pulls/{n}/comments   (inline comments, path + line)
                                                           └─ GET /issues/{n}/comments  (top-level — the house reviewer)
@@ -107,9 +107,21 @@ guard is one careless edit from being lost:
    bounded by the head-SHA marker — if the branch has not moved and nothing newer
    than our last response exists, the run skips.
 5. **A burst of three reviewers → three runs.** `concurrency: review-responder-<pr>`
-   with `cancel-in-progress: true` plus the leading `sleep 300` debounce: the
-   earlier runs are cancelled mid-sleep, having done nothing, and only the last
-   survives — reading a feedback set that is by then complete.
+   **queues** them (`cancel-in-progress: false`) behind a leading `sleep 300`
+   debounce, so the first one answers a feedback set that is by then complete and
+   the rest wake to find its marker at an unmoved head SHA and skip in seconds.
+
+   `cancel-in-progress: true` is the trap here, and it was this workflow's first
+   design until Codex caught it on #2198. Concurrency is evaluated **before** the
+   job `if:`, so a run the `if:` would have skipped still cancels the run in
+   progress — and every inline reply the responder posts is a
+   `pull_request_review_comment` event on the same PR. The first reply would
+   cancel the responder that wrote it, mid-run, before it could record the SHA
+   marker; the replacement would see the original feedback still unanswered and
+   start over. Unbounded ping-pong, presenting as cancelled runs rather than as a
+   failure, billed the whole way. Queueing trades a few idle runs for
+   idempotence that lives in a tested pure function instead of in a YAML
+   expression.
 
 ### Neither guard can be author-based
 
