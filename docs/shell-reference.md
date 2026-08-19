@@ -982,6 +982,36 @@ Full gesture-bridge mechanics, extension popup routing, and the shared trust mod
 
 ---
 
+## `node` invocation forms
+
+The `node` shim (`shell/supplemental-commands/node-command.ts`) accepts the same argument shapes as real Node:
+
+| Form                      | Program source       | `process.argv`                    |
+| ------------------------- | -------------------- | --------------------------------- |
+| `node -e CODE [ARGS…]`    | `CODE`               | `['node', ...ARGS]`               |
+| `node SCRIPT [ARGS…]`     | VFS file at `SCRIPT` | `['node', <abs SCRIPT>, ...ARGS]` |
+| `… \| node`               | piped stdin          | `['node']`                        |
+| `node - [ARGS…]`          | stdin                | `['node', '-', ...ARGS]`          |
+| `node /dev/stdin [ARGS…]` | stdin                | `['node', '/dev/stdin', ...ARGS]` |
+
+`/dev/fd/0` and `/proc/self/fd/0` are accepted as aliases of `/dev/stdin`. These
+device tokens are **not** VFS files — the shim recognizes them before the
+script-file lookup, so the heredoc idiom works:
+
+```bash
+node /dev/stdin << 'EOF'
+const fs = require('fs');
+console.log(fs.readdirSync('/workspace').length);
+EOF
+```
+
+A leading shebang line is stripped in every form. In the stdin forms the script
+does **not** see its own source as stdin (`fs.readFileSync(0)` returns empty),
+and relative `require('./x')` resolves against the shell's cwd rather than
+`/dev`.
+
+---
+
 ## .jsh Script Commands
 
 JavaScript shell scripts discovered from the shell's `$PATH` (#2085). Executable like any shell command.

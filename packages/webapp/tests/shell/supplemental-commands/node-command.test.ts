@@ -299,3 +299,60 @@ describe('node command — shebang stripping (Wave 15 / fix B1)', () => {
     expect(result.stdout.trim()).toBe('no shebang');
   });
 });
+
+describe('node command — explicit stdin script tokens (`node /dev/stdin << EOF`)', () => {
+  function stdinCtx(code: string, files: Record<string, string> = {}): CommandContext {
+    return {
+      fs: createMockFs(files),
+      cwd: '/workspace',
+      env: new Map(),
+      stdin: unsafeBytesFromLatin1(code),
+    };
+  }
+
+  for (const token of ['/dev/stdin', '-', '/dev/fd/0', '/proc/self/fd/0']) {
+    it(`runs the heredoc body when invoked as \`node ${token}\``, async () => {
+      const ctx = stdinCtx('console.log("from heredoc");\n');
+      const result = await createNodeCommand().execute([token], ctx);
+
+      expect(result.stderr).not.toContain('cannot find module');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toBe('from heredoc');
+    });
+  }
+
+  it('keeps the token at argv[1] and forwards trailing args at argv[2…]', async () => {
+    const ctx = stdinCtx('console.log(JSON.stringify(process.argv));\n');
+    const result = await createNodeCommand().execute(['/dev/stdin', '--flag', 'value'], ctx);
+
+    expect(result.exitCode).toBe(0);
+    expect(JSON.parse(result.stdout.trim())).toEqual(['node', '/dev/stdin', '--flag', 'value']);
+  });
+
+  it('does not feed the script its own source as stdin', async () => {
+    const ctx = stdinCtx(
+      'console.log("stdin-len:" + require("fs").readFileSync(0, "utf8").length);\n'
+    );
+    const result = await createNodeCommand().execute(['/dev/stdin'], ctx);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('stdin-len:0');
+  });
+
+  it('strips a shebang from the heredoc body', async () => {
+    const ctx = stdinCtx('#!/usr/bin/env node\nconsole.log("shebang ok");\n');
+    const result = await createNodeCommand().execute(['/dev/stdin'], ctx);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe('shebang ok');
+    expect(result.stderr).not.toMatch(/SyntaxError|Unexpected/);
+  });
+
+  it('still reports "cannot find module" for a real missing path under /dev', async () => {
+    const ctx = stdinCtx('console.log("unused");\n');
+    const result = await createNodeCommand().execute(['/dev/null'], ctx);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('cannot find module');
+  });
+});

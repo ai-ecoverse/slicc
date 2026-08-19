@@ -6,6 +6,8 @@
  *   - `node -e CODE [ARGS…]` — inline script
  *   - `node SCRIPT [ARGS…]` — script file from VFS
  *   - `node` with stdin piped — reads from stdin
+ *   - `node - [ARGS…]` / `node /dev/stdin [ARGS…]` — explicit stdin script
+ *     (the `node /dev/stdin << 'EOF'` heredoc idiom)
  *
  * The realm runtime owns: AsyncFunction construction, Node-like
  * shims (`console`, `process`, `fs` via VFS RPC, `exec` via shell
@@ -33,6 +35,15 @@ export interface NodeCommandOptions {
   buildProcessConfig?: () => JshProcessConfig | undefined;
 }
 
+/**
+ * Script-path tokens that mean "the program comes from stdin, not the VFS".
+ * `-` is Node's own convention; the device paths are what `node /dev/stdin
+ * << 'EOF'` heredoc idioms use. None of them exist as VFS files, so without
+ * this set they fall into the script-file branch and die with
+ * `cannot find module '/dev/stdin'`.
+ */
+const STDIN_SCRIPT_TOKENS = new Set(['-', '/dev/stdin', '/dev/fd/0', '/proc/self/fd/0']);
+
 function nodeHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: 'usage: node -e <code> [args...]\n',
@@ -46,6 +57,100 @@ function nodeVersion(): { stdout: string; stderr: string; exitCode: number } {
     stdout: `${NODE_VERSION}\n`,
     stderr: '',
     exitCode: 0,
+  };
+}
+
+/** A resolved `node` invocation, or the early-exit result to return as-is. */
+type NodeInvocation =
+  | { kind: 'ok'; code: string; filename: string; argv: string[]; innerCtx: CommandContext }
+  | { kind: 'result'; result: { stdout: string; stderr: string; exitCode: number } };
+
+/**
+ * Map the argument vector onto a program source.
+ *
+ * `node`'s stdin branches consume `ctx.stdin` AS THE CODE. The inner script
+ * must not also see that same buffer as its own stdin (it would be reading its
+ * own source) — those branches hand it an empty stdin via a context override.
+ * The `-e` and script-file branches keep the upstream pipeline's stdin intact.
+ */
+async function resolveInvocation(args: string[], ctx: CommandContext): Promise<NodeInvocation> {
+  if (args.length > 0 && (args[0] === '-e' || args[0] === '--eval')) {
+    if (!args[1]) {
+      return {
+        kind: 'result',
+        result: { stdout: '', stderr: 'node: option requires an argument -- eval\n', exitCode: 9 },
+      };
+    }
+    return {
+      kind: 'ok',
+      code: args[1],
+      filename: '[eval]',
+      argv: ['node', ...args.slice(2)],
+      innerCtx: ctx,
+    };
+  }
+
+  if (args.length > 0 && STDIN_SCRIPT_TOKENS.has(args[0])) {
+    // Explicit stdin script: `node /dev/stdin << 'EOF'`, `node - < file`.
+    // argv keeps the token in slot 1 (Node parity — user args stay at
+    // argv[2…]), but `filename` stays the non-absolute `<stdin>` sentinel so
+    // relative `require('./x')` resolves against cwd rather than the device
+    // path's bogus `/dev` directory (see `entryFromDir` in
+    // realm-module-system.ts).
+    return {
+      kind: 'ok',
+      code: stdinAsText(ctx.stdin),
+      filename: '<stdin>',
+      argv: ['node', args[0], ...args.slice(1)],
+      innerCtx: { ...ctx, stdin: EMPTY_BYTES },
+    };
+  }
+
+  if (args.length > 0 && !args[0].startsWith('-')) {
+    const scriptArg = args[0];
+    const scriptPath = ctx.fs.resolvePath(ctx.cwd, scriptArg);
+    if (!(await ctx.fs.exists(scriptPath))) {
+      return {
+        kind: 'result',
+        result: { stdout: '', stderr: `node: cannot find module '${scriptArg}'\n`, exitCode: 1 },
+      };
+    }
+    // Use the resolved absolute path so that skill.dir (derived from
+    // dirname(argv[1]) in skill-global.ts), __dirname, and __filename
+    // are all correct and absolute for BOTH relative and absolute invocations.
+    return {
+      kind: 'ok',
+      code: await ctx.fs.readFile(scriptPath),
+      filename: scriptPath,
+      argv: ['node', scriptPath, ...args.slice(1)],
+      innerCtx: ctx,
+    };
+  }
+
+  if (stdinAsText(ctx.stdin).trim().length > 0) {
+    return {
+      kind: 'ok',
+      code: stdinAsText(ctx.stdin),
+      filename: '<stdin>',
+      argv: ['node'],
+      innerCtx: { ...ctx, stdin: EMPTY_BYTES },
+    };
+  }
+
+  if (args.length > 0) {
+    return {
+      kind: 'result',
+      result: { stdout: '', stderr: `node: unsupported option '${args[0]}'\n`, exitCode: 9 },
+    };
+  }
+
+  return {
+    kind: 'result',
+    result: {
+      stdout: '',
+      stderr: 'node: REPL mode is not supported in this environment; use node -e "code"\n',
+      exitCode: 9,
+    },
   };
 }
 
@@ -66,61 +171,9 @@ export function createNodeCommand(options: NodeCommandOptions = {}): Command {
       if (args.includes('--help') || args.includes('-h')) return nodeHelp();
       if (args.includes('--version') || args.includes('-v')) return nodeVersion();
 
-      let code = '';
-      let filename: string;
-      let argv: string[];
-      // `node`'s read-from-stdin branch consumes `ctx.stdin` AS THE CODE.
-      // The inner script must not also see that same buffer as its own
-      // stdin (it would be reading its own source) — we hand it an empty
-      // stdin via a context override. The `-e` and script-file branches
-      // keep the upstream pipeline's stdin intact.
-      let innerCtx: CommandContext = ctx;
-
-      if (args.length > 0 && (args[0] === '-e' || args[0] === '--eval')) {
-        if (!args[1]) {
-          return {
-            stdout: '',
-            stderr: 'node: option requires an argument -- eval\n',
-            exitCode: 9,
-          };
-        }
-        code = args[1];
-        filename = '[eval]';
-        argv = ['node', ...args.slice(2)];
-      } else if (args.length > 0 && !args[0].startsWith('-')) {
-        const scriptArg = args[0];
-        const scriptPath = ctx.fs.resolvePath(ctx.cwd, scriptArg);
-        if (!(await ctx.fs.exists(scriptPath))) {
-          return {
-            stdout: '',
-            stderr: `node: cannot find module '${scriptArg}'\n`,
-            exitCode: 1,
-          };
-        }
-        code = await ctx.fs.readFile(scriptPath);
-        // Use the resolved absolute path so that skill.dir (derived from
-        // dirname(argv[1]) in skill-global.ts), __dirname, and __filename
-        // are all correct and absolute for BOTH relative and absolute invocations.
-        filename = scriptPath;
-        argv = ['node', scriptPath, ...args.slice(1)];
-      } else if (stdinAsText(ctx.stdin).trim().length > 0) {
-        code = stdinAsText(ctx.stdin);
-        filename = '<stdin>';
-        argv = ['node'];
-        innerCtx = { ...ctx, stdin: EMPTY_BYTES };
-      } else if (args.length > 0) {
-        return {
-          stdout: '',
-          stderr: `node: unsupported option '${args[0]}'\n`,
-          exitCode: 9,
-        };
-      } else {
-        return {
-          stdout: '',
-          stderr: 'node: REPL mode is not supported in this environment; use node -e "code"\n',
-          exitCode: 9,
-        };
-      }
+      const resolved = await resolveInvocation(args, ctx);
+      if (resolved.kind === 'result') return resolved.result;
+      const { code, filename, argv, innerCtx } = resolved;
 
       return executeJsCode(stripShebang(code), argv, innerCtx, options.buildProcessConfig?.(), {
         filename,
