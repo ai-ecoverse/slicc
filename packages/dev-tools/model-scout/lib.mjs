@@ -429,6 +429,15 @@ export function summarizeResults(results) {
     // A run that learned nothing about any ID is a blind canary, not a clean bill
     // of health — the caller must say so loudly even though it files nothing.
     allInconclusive: list.length > 0 && inconclusive === list.length,
+    // Every single ID unusable is almost never what it claims to be. Bedrock
+    // returns the same "you don't have access to the model with the specified
+    // model ID" for a retired ID and for an account that lost its entitlement, so
+    // one revoked or misprovisioned credential fails every probe at once. Model
+    // IDs, by contrast, die one family at a time. Reporting that as N dead models
+    // would tell someone to rewrite every healthy variable in the repo, which is
+    // the same false alarm the inconclusive class exists to prevent — just
+    // arriving through the credential door instead of the throttling one.
+    allInvalid: list.length > 1 && invalid === list.length,
   };
 }
 
@@ -495,10 +504,40 @@ export function buildReport({ results, region = '', generatedAt = new Date() }) 
   const okModelIds = list.filter((r) => r.classification === OK).map((r) => r.modelId);
   const inconclusive = list.filter((result) => result.classification === INCONCLUSIVE);
   const plural = invalid.length === 1 ? 'model ID' : 'model IDs';
-  const title = `Bedrock model scout: ${invalid.length} unusable ${plural} in workflow configuration`;
+  const title = summary.allInvalid
+    ? 'Bedrock model scout: every probed model ID failed — check the credential first'
+    : `Bedrock model scout: ${invalid.length} unusable ${plural} in workflow configuration`;
 
   if (!summary.anyInvalid) {
     return { shouldFile: false, title, body: '', summary };
+  }
+
+  // Still filed — a total failure is an outage and must be loud — but diagnosed
+  // as what it probably is, so nobody starts by editing variables that are fine.
+  if (summary.allInvalid) {
+    return {
+      shouldFile: true,
+      title,
+      body: [
+        ISSUE_MARKER,
+        `## All ${invalid.length} probed Bedrock model IDs were rejected`,
+        '',
+        `Probed on ${generatedAt.toISOString()}${region ? ` in \`${region}\`` : ''}. Every ID failed, which is why this issue does **not** list ${invalid.length} model IDs to replace.`,
+        '',
+        'Bedrock answers a retired model ID and an account that cannot invoke a model with the same rejection, so a single revoked, rotated, or misprovisioned credential fails every probe at once. Model IDs do not all die in the same week. Check, in this order:',
+        '',
+        `1. **\`AWS_BEARER_TOKEN_BEDROCK\`** — still valid, and still entitled to Anthropic models${region ? ` in \`${region}\`` : ''}?`,
+        '2. **Region** — `RUM_AWS_REGION` pointing somewhere these models are offered?',
+        '3. **Model access** — Anthropic models still enabled for the account in Bedrock?',
+        '',
+        'Only if all three are healthy is this what it looks like: the model IDs themselves. Note that the agentic workflows use these same credentials, so if this is a credential fault they are all failing too.',
+        '',
+        '### All probe results',
+        '',
+        ...resultTable(list),
+      ].join('\n'),
+      summary,
+    };
   }
 
   const body = [

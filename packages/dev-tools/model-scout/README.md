@@ -63,6 +63,13 @@ be the last of these issues anybody reads. Three protections stack:
   `AccessDeniedException`.
 - `scan-models.mjs` retries only `inconclusive` results (`PROBE_ATTEMPTS`, with
   doubling backoff) before accepting them.
+- When **every** probe comes back `invalid`, the report blames the credential
+  rather than the model IDs. Bedrock rejects a retired ID and an account that
+  lost its entitlement identically, so one revoked or misprovisioned token fails
+  every probe at once, while real model IDs die one family at a time. The issue
+  is still filed — that is an outage — but it says to check
+  `AWS_BEARER_TOKEN_BEDROCK`, the region, and model access first, and it does not
+  list every variable in the repo as needing a new value.
 - `buildReport` files only on `invalid`. When every probe was inconclusive it
   files nothing **and** the run logs a `BLIND RUN` warning plus an Actions
   warning annotation — a canary that cannot tell you it is blind is worse than

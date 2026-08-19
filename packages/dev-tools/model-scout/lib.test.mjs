@@ -376,6 +376,38 @@ describe('summarizeResults / buildReport', () => {
     expect(report.summary.anyInvalid).toBe(false);
   });
 
+  it('blames the credential, not eleven variables, when every probe fails', () => {
+    // Bedrock rejects a retired model ID and an account that lost its entitlement
+    // with the same message, so one bad credential fails every probe at once. The
+    // report has to stay loud — that is an outage — while not sending someone to
+    // rewrite every healthy variable in the repo.
+    const results = [
+      result('global.anthropic.claude-sonnet-4-6', 'invalid'),
+      result('us.anthropic.claude-opus-4-8', 'invalid'),
+      result('us.anthropic.claude-haiku-4-5', 'invalid'),
+    ];
+    const report = buildReport({ results, region: 'us-east-1' });
+
+    expect(report.shouldFile).toBe(true);
+    expect(report.summary.allInvalid).toBe(true);
+    expect(report.title).toContain('check the credential first');
+    expect(report.body).toContain('AWS_BEARER_TOKEN_BEDROCK');
+    // The per-model "set this variable" instruction must NOT appear here.
+    expect(report.body).not.toContain('Secrets and variables');
+  });
+
+  it('still reports a single dead ID as a model problem, not a credential one', () => {
+    const results = [
+      result('us.anthropic.claude-opus-4-8', 'ok'),
+      result('us.anthropic.claude-opus-4-9', 'invalid'),
+    ];
+    const report = buildReport({ results });
+
+    expect(report.summary.allInvalid).toBe(false);
+    expect(report.title).toContain('1 unusable model ID');
+    expect(report.body).toContain('Secrets and variables');
+  });
+
   it('does not flag a blind run when at least one probe was definite', () => {
     expect(
       summarizeResults([result('a.anthropic.x-1', 'ok'), result('b.anthropic.x-1', 'inconclusive')])
