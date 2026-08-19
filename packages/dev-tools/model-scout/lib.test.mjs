@@ -8,6 +8,7 @@ import {
   extractModelReferences,
   ISSUE_MARKER,
   isBedrockAnthropicModelId,
+  parseExtraProbeIds,
   parseModelFamily,
   resolveErrorType,
   resolveProbeTargets,
@@ -116,6 +117,34 @@ describe('isBedrockAnthropicModelId', () => {
     expect(isBedrockAnthropicModelId('us-east-1')).toBe(false);
     expect(isBedrockAnthropicModelId('claude-opus-4-6')).toBe(false);
     expect(isBedrockAnthropicModelId(undefined)).toBe(false);
+  });
+});
+
+describe('parseExtraProbeIds', () => {
+  it('parses, trims, and de-duplicates a comma-separated list', () => {
+    const parsed = parseExtraProbeIds(
+      ' us.anthropic.claude-opus-4-9 , global.anthropic.claude-sonnet-4-6,us.anthropic.claude-opus-4-9 ,, '
+    );
+
+    expect(parsed.ids).toEqual([
+      'us.anthropic.claude-opus-4-9',
+      'global.anthropic.claude-sonnet-4-6',
+    ]);
+    expect(parsed.rejected).toEqual([]);
+  });
+
+  it('drops anything that is not a Bedrock Anthropic model ID instead of probing it', () => {
+    // A typo must become a dropped entry, not a request to an arbitrary URL path.
+    const parsed = parseExtraProbeIds('../../etc/passwd, meta.llama3-70b, us.anthropic.claude-x-1');
+
+    expect(parsed.ids).toEqual(['us.anthropic.claude-x-1']);
+    expect(parsed.rejected).toEqual(['../../etc/passwd', 'meta.llama3-70b']);
+  });
+
+  it('treats empty, undefined, and whitespace input as no self-test', () => {
+    for (const input of ['', '   ', undefined, null, ',,']) {
+      expect(parseExtraProbeIds(input)).toEqual({ ids: [], rejected: [] });
+    }
   });
 });
 

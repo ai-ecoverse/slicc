@@ -171,6 +171,34 @@ export function extractModelReferences(files) {
  * @param {{references: ReturnType<typeof extractModelReferences>, env: Record<string, string|undefined>}} input
  * @returns {{targets: Array<{modelId: string, variables: string[], workflows: string[], viaLiteral: boolean}>, missingEnv: string[], unsetVariables: string[]}}
  */
+/**
+ * Parse the manual `probe_extra_ids` self-test input.
+ *
+ * These IDs are probed and classified so the `invalid` path can be exercised
+ * against real Bedrock — while every configured ID is healthy that branch is
+ * unreachable, and it is the only branch that ever alerts anyone, so leaving it
+ * unproven means the canary's failure mode is silence. Anything that is not a
+ * Bedrock Anthropic model ID is discarded rather than probed, so a typo becomes a
+ * dropped entry instead of a request to an arbitrary URL path.
+ *
+ * @param {string} raw
+ * @returns {{ids: string[], rejected: string[]}}
+ */
+export function parseExtraProbeIds(raw) {
+  const ids = [];
+  const rejected = [];
+  for (const part of String(raw ?? '').split(',')) {
+    const value = part.trim();
+    if (!value) continue;
+    if (isBedrockAnthropicModelId(value)) {
+      if (!ids.includes(value)) ids.push(value);
+    } else {
+      rejected.push(value);
+    }
+  }
+  return { ids, rejected };
+}
+
 export function resolveProbeTargets({ references, env }) {
   /** @type {Map<string, {modelId: string, variables: string[], workflows: Set<string>, viaLiteral: boolean}>} */
   const targets = new Map();

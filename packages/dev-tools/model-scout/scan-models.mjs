@@ -23,6 +23,8 @@
  *   REPORT_FILE                default model-scout-report.md
  *   PROBE_ATTEMPTS             attempts per inconclusive ID          (default 3)
  *   PROBE_BACKOFF_MS           first backoff, doubling               (default 2000)
+ *   PROBE_EXTRA_IDS            self-test IDs, comma-separated; probed and logged
+ *                              but excluded from the report and issue decisions
  *
  * Exit 0 on a clean verdict (including "everything is fine"); non-zero on missing
  * env, an un-probed variable, or an unreadable workflow directory.
@@ -34,6 +36,7 @@ import {
   classifyProbeResult,
   extractModelReferences,
   INCONCLUSIVE,
+  parseExtraProbeIds,
   resolveProbeTargets,
   summarizeResults,
 } from './lib.mjs';
@@ -191,6 +194,27 @@ async function main() {
     results.push({ ...target, ...verdict });
     const icon = { ok: '✅', invalid: '❌', inconclusive: '⚠️' }[verdict.classification];
     console.log(`  ${icon} ${target.modelId} → ${verdict.classification} (${verdict.evidence})`);
+  }
+
+  // Self-test probes, from a manual dispatch only. They run AFTER the real
+  // targets and are kept out of `results` entirely, so they cannot move a count,
+  // a report, or an issue decision — a diagnostic must not be able to file or
+  // close anything.
+  const extra = parseExtraProbeIds(process.env.PROBE_EXTRA_IDS);
+  if (extra.rejected.length) {
+    console.log(
+      `\nIgnored ${extra.rejected.length} probe_extra_ids entr(y/ies) that are not Bedrock Anthropic model IDs: ${extra.rejected.join(', ')}`
+    );
+  }
+  if (extra.ids.length) {
+    console.log(
+      `\nSelf-test probes (logged only, excluded from the report and every issue decision):`
+    );
+    for (const modelId of extra.ids) {
+      const verdict = await probeWithRetry({ modelId, region, token, attempts, backoffMs });
+      const icon = { ok: '✅', invalid: '❌', inconclusive: '⚠️' }[verdict.classification];
+      console.log(`  ${icon} ${modelId} → ${verdict.classification} (${verdict.evidence})`);
+    }
   }
 
   const report = buildReport({ results, region });
