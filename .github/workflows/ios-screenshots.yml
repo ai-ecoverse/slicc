@@ -39,7 +39,11 @@ jobs:
   screenshots:
     # The iOS 26 deployment target requires the Xcode 26 SDK.
     runs-on: macos-26
-    timeout-minutes: 40
+    # Capture dominates the run (~70s per screen: install, launch, settle,
+    # screenshot) and the registry only grows, so this needs real headroom.
+    # At 40 the job finished in 37m27s one run and was killed mid-capture the
+    # next — the margin was runner variance, not budget.
+    timeout-minutes: 60
     env:
       CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID || '155ec15a52a18a14801e04b019da5e5a' }}
       R2_BUCKET: ${{ vars.R2_BUCKET || 'slicc-pr-screenshots' }}
