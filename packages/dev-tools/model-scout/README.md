@@ -160,3 +160,9 @@ exists to catch. The run logs what real Bedrock returns for it and how
 targets and never enter `results`, so they cannot move a count, alter the report,
 or open or close an issue. Entries that are not Bedrock Anthropic model IDs are
 dropped rather than probed.
+
+Add `-f probe_extra_expect=invalid` to make it an assertion rather than a log
+line. A verdict nobody reads leaves the regression that matters — Bedrock
+rewording its rejection until a dead ID classifies as `inconclusive` — exactly as
+quiet as the outage it causes; with an expectation set, that mismatch exits 4 and
+fails the run.

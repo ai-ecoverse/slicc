@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 import {
   buildReport,
   classifyProbeResult,
+  evaluateSelfTest,
   extractModelReferences,
   ISSUE_MARKER,
   isBedrockAnthropicModelId,
@@ -117,6 +118,42 @@ describe('isBedrockAnthropicModelId', () => {
     expect(isBedrockAnthropicModelId('us-east-1')).toBe(false);
     expect(isBedrockAnthropicModelId('claude-opus-4-6')).toBe(false);
     expect(isBedrockAnthropicModelId(undefined)).toBe(false);
+  });
+});
+
+describe('evaluateSelfTest', () => {
+  it('checks nothing without an expectation', () => {
+    const verdicts = [{ modelId: 'us.anthropic.claude-opus-4-9', classification: 'inconclusive' }];
+
+    for (const expected of ['', '  ', 'any', undefined]) {
+      expect(evaluateSelfTest({ verdicts, expected })).toEqual({ checked: false, failures: [] });
+    }
+  });
+
+  it('reports the mismatch when a known-dead ID stops classifying as invalid', () => {
+    // The regression that matters: Bedrock rewords its rejection, a dead model
+    // reads as inconclusive, and the scout silently loses its only alerting path.
+    const outcome = evaluateSelfTest({
+      verdicts: [{ modelId: 'us.anthropic.claude-opus-4-9', classification: 'inconclusive' }],
+      expected: 'invalid',
+    });
+
+    expect(outcome.checked).toBe(true);
+    expect(outcome.failures).toEqual([
+      { modelId: 'us.anthropic.claude-opus-4-9', expected: 'invalid', actual: 'inconclusive' },
+    ]);
+  });
+
+  it('passes when every probe matches, case-insensitively', () => {
+    const outcome = evaluateSelfTest({
+      verdicts: [
+        { modelId: 'us.anthropic.claude-opus-4-9', classification: 'invalid' },
+        { modelId: 'us.anthropic.claude-gone-1-0', classification: 'invalid' },
+      ],
+      expected: 'INVALID',
+    });
+
+    expect(outcome).toEqual({ checked: true, failures: [] });
   });
 });
 

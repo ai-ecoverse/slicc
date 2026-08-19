@@ -47,6 +47,16 @@ on:
         type: string
         required: false
         default: ''
+      # Turns the self-test from a log line into an assertion. Printing a verdict
+      # nobody reads would leave the regression that matters — Bedrock rewording a
+      # rejection until a dead ID reads as `inconclusive` — exactly as quiet as the
+      # outage it causes. Set this and a mismatch fails the run.
+      probe_extra_expect:
+        description: 'Fail the run unless every probe_extra_ids entry classifies as this'
+        type: choice
+        required: false
+        default: any
+        options: [any, ok, invalid, inconclusive]
 
 concurrency:
   group: model-scout
@@ -94,6 +104,7 @@ jobs:
           SINS_BEDROCK_MODEL: ${{ vars.SINS_BEDROCK_MODEL }}
           # Empty on every scheduled run; only a manual dispatch can set it.
           PROBE_EXTRA_IDS: ${{ inputs.probe_extra_ids }}
+          PROBE_EXTRA_EXPECT: ${{ inputs.probe_extra_expect }}
         run: node packages/dev-tools/model-scout/scan-models.mjs
 
       - name: Warn when the canary learned nothing

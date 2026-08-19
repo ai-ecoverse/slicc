@@ -23,6 +23,8 @@
  *   REPORT_FILE                default model-scout-report.md
  *   PROBE_ATTEMPTS             attempts per inconclusive ID          (default 3)
  *   PROBE_BACKOFF_MS           first backoff, doubling               (default 2000)
+ *   PROBE_EXTRA_EXPECT         ok|invalid|inconclusive — fail the run if a
+ *                              self-test probe classifies differently (exit 4)
  *   PROBE_EXTRA_IDS            self-test IDs, comma-separated; probed and logged
  *                              but excluded from the report and issue decisions
  *
@@ -34,6 +36,7 @@ import { join } from 'node:path';
 import {
   buildReport,
   classifyProbeResult,
+  evaluateSelfTest,
   extractModelReferences,
   INCONCLUSIVE,
   parseExtraProbeIds,
@@ -168,6 +171,40 @@ function failOnUnwatchedVariables(missingEnv) {
   process.exit(3);
 }
 
+/**
+ * Fail the run when a self-test probe did not classify the way the operator said
+ * it would. Without this the self-test only prints, and the regression it exists
+ * to catch — Bedrock rewording a rejection until a dead model reads as
+ * `inconclusive` — stays as quiet as the outage it would cause.
+ *
+ * @param {Array<{modelId: string, classification: string}>} verdicts
+ */
+function failOnSelfTestMismatch(verdicts) {
+  const { checked, failures } = evaluateSelfTest({
+    verdicts,
+    expected: process.env.PROBE_EXTRA_EXPECT ?? '',
+  });
+  if (!checked) {
+    return;
+  }
+  if (!verdicts.length) {
+    console.error('❌ PROBE_EXTRA_EXPECT was set but no self-test IDs were probed.');
+    process.exit(4);
+  }
+  if (failures.length) {
+    for (const failure of failures) {
+      console.error(
+        `❌ self-test mismatch: ${failure.modelId} expected \`${failure.expected}\`, got \`${failure.actual}\`.`
+      );
+    }
+    console.error(
+      '   If a known-dead ID no longer classifies as `invalid`, Bedrock changed its rejection and the phrase lists in lib.mjs need updating — until then the scout cannot report a dead model.'
+    );
+    process.exit(4);
+  }
+  console.log(`✅ self-test: all ${verdicts.length} probe(s) classified as expected.`);
+}
+
 async function main() {
   const token = requireEnv('AWS_BEARER_TOKEN_BEDROCK');
   const region = (process.env.AWS_REGION ?? '').trim() || DEFAULT_REGION;
@@ -200,6 +237,7 @@ async function main() {
   // targets and are kept out of `results` entirely, so they cannot move a count,
   // a report, or an issue decision — a diagnostic must not be able to file or
   // close anything.
+  const selfTestVerdicts = [];
   const extra = parseExtraProbeIds(process.env.PROBE_EXTRA_IDS);
   if (extra.rejected.length) {
     console.log(
@@ -214,8 +252,10 @@ async function main() {
       const verdict = await probeWithRetry({ modelId, region, token, attempts, backoffMs });
       const icon = { ok: '✅', invalid: '❌', inconclusive: '⚠️' }[verdict.classification];
       console.log(`  ${icon} ${modelId} → ${verdict.classification} (${verdict.evidence})`);
+      selfTestVerdicts.push({ modelId, classification: verdict.classification });
     }
   }
+  failOnSelfTestMismatch(selfTestVerdicts);
 
   const report = buildReport({ results, region });
   const summary = summarizeResults(results);
