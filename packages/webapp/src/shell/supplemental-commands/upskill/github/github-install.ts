@@ -9,11 +9,15 @@
 import type { SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../../../fs/index.js';
 import { parseFetchJson } from '../../../fetch-body.js';
+import { clearSkillDirPreservingDotfiles } from '../dotfiles.js';
 import {
+  discardFailedInstall,
+  managedFiles,
   refreshSprinklesAfterInstall,
   reloadSkillsAfterInstall,
   runPostInstallHooks,
 } from '../install-pipeline.js';
+import { resolveCommitSha, writeProvenance } from '../provenance.js';
 import type { GitHubContent, GitHubRequestContext } from '../types.js';
 import { SKILLS_DIR } from '../types.js';
 import { formatGitHubFailure } from './github-errors.js';
@@ -104,6 +108,32 @@ export async function listGitHubSkills(
 }
 
 /**
+ * Record where a GitHub install came from, so `upskill update` can refresh it
+ * without arguments. The commit sha is best-effort — see `provenance.ts`.
+ */
+async function recordGitHubProvenance(
+  fs: VirtualFS,
+  owner: string,
+  repo: string,
+  skillPath: string,
+  skillName: string,
+  branch: string | undefined,
+  github: GitHubRequestContext,
+  files: string[]
+): Promise<void> {
+  const sha = await resolveCommitSha(owner, repo, branch, github);
+  await writeProvenance(fs, skillName, {
+    kind: 'github',
+    source: `${owner}/${repo}`,
+    skill: skillName,
+    ref: branch,
+    path: skillPath.replace(/^\/|\/$/g, ''),
+    sha,
+    files,
+  });
+}
+
+/**
  * Install a skill from GitHub repository.
  * Tries ZIP-based install first (not rate-limited), falls back to the Contents API.
  */
@@ -118,6 +148,7 @@ export async function installFromGitHub(
   fetch?: SecureFetch,
   branch?: string
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  let existed = false;
   try {
     // Check if skill already exists
     const destDir = `${SKILLS_DIR}/${skillName}`;
@@ -130,7 +161,11 @@ export async function installFromGitHub(
           exitCode: 1,
         };
       }
-      await fs.rm(destDir, { recursive: true });
+      existed = true;
+      // Never `rm -r` the directory: dotfiles there hold the skill's
+      // credentials and its `.upskill` provenance record, and files no
+      // recorded install wrote belong to the user (same rule as `update`).
+      await clearSkillDirPreservingDotfiles(fs, destDir, await managedFiles(fs, skillName));
     } catch {
       // Doesn't exist, continue
     }
@@ -143,9 +178,19 @@ export async function installFromGitHub(
         const prefix = skillPath.replace(/^\/|\/$/g, '') + '/';
 
         await fs.mkdir(destDir, { recursive: true });
-        const fileCount = await writeZipFilesToDir(files, prefix, destDir, fs);
+        const written = await writeZipFilesToDir(files, prefix, destDir, fs);
 
-        if (fileCount > 0) {
+        if (written.length > 0) {
+          await recordGitHubProvenance(
+            fs,
+            owner,
+            repo,
+            skillPath,
+            skillName,
+            branch,
+            github,
+            written
+          );
           await refreshSprinklesAfterInstall();
           await reloadSkillsAfterInstall();
           return {
@@ -175,17 +220,15 @@ export async function installFromGitHub(
 
     await fs.mkdir(destDir, { recursive: true });
 
+    let written: string[];
     try {
-      await downloadGitHubDir(contents, destDir, owner, repo, branch, fs, github);
+      written = await downloadGitHubDir(contents, destDir, owner, repo, branch, fs, github);
     } catch (downloadErr) {
-      try {
-        await fs.rm(destDir, { recursive: true });
-      } catch {
-        /* best-effort */
-      }
+      await discardFailedInstall(fs, destDir, existed);
       throw downloadErr;
     }
 
+    await recordGitHubProvenance(fs, owner, repo, skillPath, skillName, branch, github, written);
     await runPostInstallHooks();
     return {
       stdout: `Installed skill "${skillName}" from ${owner}/${repo}\n`,

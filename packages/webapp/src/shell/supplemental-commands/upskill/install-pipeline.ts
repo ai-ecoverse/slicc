@@ -7,16 +7,37 @@
  */
 
 import type { VirtualFS } from '../../../fs/index.js';
+import { canWriteSkillFile, clearSkillDirPreservingDotfiles } from './dotfiles.js';
+import type { UpskillProvenance } from './provenance.js';
+import { readProvenance, writeProvenance } from './provenance.js';
+import { isSafeSkillRelativePath } from './skill-paths.js';
 import { SKILLS_DIR } from './types.js';
+
+/** Provenance fields an install path supplies; `skill`/`files` are filled in here. */
+export type InstallProvenance = Omit<
+  UpskillProvenance,
+  'version' | 'installed' | 'skill' | 'files'
+>;
+
+/**
+ * The two globals the post-install hooks look for. Both are installed by
+ * higher layers (the CLI boot path and the sprinkle manager) onto whichever
+ * realm this code runs in, so they are read off the global object rather than
+ * imported — but the shapes are known, not an untyped bag.
+ */
+interface InstallHookGlobals {
+  __slicc_reloadSkills?: () => Promise<void>;
+  __slicc_sprinkleManager?: { openNewAutoOpenSprinkles?: () => Promise<void> };
+}
 
 /** After a successful install, reload skills on all active agent contexts. */
 export async function reloadSkillsAfterInstall(): Promise<void> {
   try {
     // CLI mode: direct window hook (check both window and globalThis for testability)
-    const global = typeof window !== 'undefined' ? window : globalThis;
-    const hook = (global as unknown as Record<string, unknown>).__slicc_reloadSkills;
+    const global = (typeof window !== 'undefined' ? window : globalThis) as InstallHookGlobals;
+    const hook = global.__slicc_reloadSkills;
     if (typeof hook === 'function') {
-      await (hook as () => Promise<void>)();
+      await hook();
       return;
     }
     // Extension mode: send message to offscreen document
@@ -37,9 +58,9 @@ export async function refreshSprinklesAfterInstall(): Promise<void> {
     // Read from `globalThis` so the lookup works in both the page
     // realm (real `SprinkleManager`) and the kernel-worker realm
     // (BroadcastChannel-backed proxy).
-    const mgr = (globalThis as Record<string, unknown>).__slicc_sprinkleManager;
-    if (mgr && typeof (mgr as Record<string, unknown>).openNewAutoOpenSprinkles === 'function') {
-      await (mgr as { openNewAutoOpenSprinkles: () => Promise<void> }).openNewAutoOpenSprinkles();
+    const mgr = (globalThis as InstallHookGlobals).__slicc_sprinkleManager;
+    if (typeof mgr?.openNewAutoOpenSprinkles === 'function') {
+      await mgr.openNewAutoOpenSprinkles();
     }
   } catch {
     /* best-effort */
@@ -61,15 +82,21 @@ export async function installSkillFromZip(
   skillName: string,
   files: Record<string, Uint8Array>,
   fs: VirtualFS,
-  force: boolean = false
+  force: boolean = false,
+  provenance?: InstallProvenance
 ): Promise<{ ok: boolean; error?: string }> {
   const destDir = `${SKILLS_DIR}/${skillName}`;
+  let existed = false;
   try {
     await fs.stat(destDir);
     if (!force) {
       return { ok: false, error: `skill "${skillName}" already exists (use --force to overwrite)` };
     }
-    await fs.rm(destDir, { recursive: true });
+    existed = true;
+    // Reinstall clears the skill's own files but never its dotfiles — those
+    // hold credentials (`scripts/.config`) and the `.upskill` provenance —
+    // and never files no recorded install wrote, matching `upskill update`.
+    await clearSkillDirPreservingDotfiles(fs, destDir, await managedFiles(fs, skillName));
   } catch {
     // Doesn't exist, continue
   }
@@ -78,24 +105,20 @@ export async function installSkillFromZip(
   const prefix = normalizedSkillPath ? normalizedSkillPath + '/' : '';
   await fs.mkdir(destDir, { recursive: true });
   let fileCount = 0;
+  const written: string[] = [];
 
   try {
     for (const [path, content] of Object.entries(files)) {
       if (!path.startsWith(prefix)) continue;
       const relativePath = path.slice(prefix.length);
       if (!relativePath || path.endsWith('/')) continue;
+      // Upstream dotfiles land on first install only; an existing one is
+      // left exactly as the user (or a previous install) left it.
+      if (!(await canWriteSkillFile(fs, destDir, relativePath))) continue;
 
+      // Zip-slip protection: reject paths that escape destDir.
+      if (!isSafeSkillRelativePath(relativePath)) continue;
       const filePath = `${destDir}/${relativePath}`;
-
-      // Zip-slip protection: reject paths that escape destDir
-      const normalizedPath = filePath.replace(/\/+/g, '/');
-      if (
-        normalizedPath.includes('/../') ||
-        normalizedPath.includes('/..') ||
-        !normalizedPath.startsWith(destDir + '/')
-      ) {
-        continue; // skip malicious entry
-      }
 
       const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
       if (parentDir !== destDir) {
@@ -103,16 +126,53 @@ export async function installSkillFromZip(
       }
 
       await fs.writeFile(filePath, content);
+      written.push(relativePath);
       fileCount++;
     }
   } catch (err) {
-    await fs.rm(destDir, { recursive: true }).catch(() => {});
+    await discardFailedInstall(fs, destDir, existed);
     throw err;
   }
 
   if (fileCount === 0) {
-    await fs.rm(destDir, { recursive: true }).catch(() => {});
+    await discardFailedInstall(fs, destDir, existed);
     return { ok: false, error: `no files found for skill "${skillName}" in ZIP` };
   }
+  if (provenance) {
+    await writeProvenance(fs, skillName, {
+      ...provenance,
+      skill: skillName,
+      files: written.sort(),
+    });
+  }
   return { ok: true };
+}
+
+/**
+ * The file list a previous install recorded, or undefined when the skill has
+ * no provenance yet (nothing is attributable, so nothing is spared).
+ */
+export async function managedFiles(
+  fs: VirtualFS,
+  skillName: string
+): Promise<Set<string> | undefined> {
+  const provenance = await readProvenance(fs, skillName);
+  return provenance?.files?.length ? new Set(provenance.files) : undefined;
+}
+
+/**
+ * Roll back a failed install. A directory that existed before the install is
+ * only emptied of non-dotfiles — deleting it outright would take the user's
+ * credentials and provenance with it.
+ */
+export async function discardFailedInstall(
+  fs: VirtualFS,
+  destDir: string,
+  existed: boolean
+): Promise<void> {
+  if (existed) {
+    await clearSkillDirPreservingDotfiles(fs, destDir).catch(() => false);
+    return;
+  }
+  await fs.rm(destDir, { recursive: true }).catch(() => {});
 }
