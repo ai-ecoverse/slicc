@@ -143,6 +143,29 @@ currently maps exactly these npm package names:
 | `sqlite3`                                               | `sqlite3`        |
 | `v86`                                                   | `v86`            |
 
+### `npm run` / `ipk run` script running
+
+`npm run <script>` (aliases: `ipk run`, `npm run-script`, and the `npm test` / `start` /
+`stop` / `restart` lifecycle shortcuts) runs a `scripts` entry from the NEAREST
+`package.json` walking up from the cwd, with that package's directory as the working
+directory. `npm run` with no script name lists what is defined.
+
+- `pre<script>` and `post<script>` run around the body; a failing `pre` aborts before it.
+- Arguments after the script name (and after an optional `--`) are appended to the body,
+  shell-quoted: `npm run build -- --watch`.
+- `npm_lifecycle_event`, `npm_lifecycle_script`, `npm_package_name`, and
+  `npm_package_version` are exported, and every reachable `node_modules/.bin` is prepended
+  to `$PATH`.
+- `--silent` / `-s` drops the `> pkg@version script` banner; `--if-present` turns a missing
+  script into exit 0.
+- The failing stage's exit code is the command's exit code.
+
+`$PATH` lookup only finds `.jsh`/`.bsh` scripts, not the JS `node_modules/.bin` shims `ipk`
+writes, so a command-position word that names no registered command but does have a `.bin`
+shim is rewritten to `ipx <word>` (the runner that can execute those shims). Nothing else is
+rewritten: a registered built-in keeps priority, and an unknown word stays unknown — no
+implicit install, so a typo still fails as a typo.
+
 ### Biome wrapper behavior
 
 `biome` is inert until `@biomejs/wasm-web`, `@biomejs/js-api`, and `esbuild-wasm`

@@ -6,7 +6,10 @@
  * Supports both named installs (`ipk install <pkg>...`) and the no-arg
  * install-from-manifest path (`ipk install` with no further arguments), which
  * reads `dependencies` + `devDependencies` from the cwd `package.json` and
- * installs them via the transitive installer. `npx`/`ipx` land in M6.
+ * installs them via the transitive installer.
+ *
+ * Script running (`npm run <script>`, `npm run-script`, and the `npm test` /
+ * `start` / `stop` / `restart` lifecycle shortcuts) lives in `npm-run.ts`.
  */
 
 import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash';
@@ -18,6 +21,7 @@ import {
   installPackages,
   ManifestNotFoundError,
 } from '../ipk/installer.js';
+import { LIFECYCLE_SHORTCUTS, RUN_ALIASES, runNpmScript } from './npm-run.js';
 
 export interface IpkCommandDeps {
   fs: VirtualFS;
@@ -28,14 +32,28 @@ const INSTALL_ALIASES = new Set(['install', 'i', 'add']);
 
 function usage(name: string): string {
   return `${name} - install packages from the npm registry into node_modules
+       and run package.json scripts
 
 Usage:
   ${name} install [<pkg>[@<spec>] ...]
   ${name} i       [<pkg>[@<spec>] ...]
+  ${name} run     [<script> [-- <args>...]]
+  ${name} test | start | stop | restart
 
-No-arg form:
+No-arg forms:
   ${name} install            read cwd package.json and install every entry
                              from dependencies AND devDependencies
+  ${name} run                list the scripts the nearest package.json defines
+
+Script running:
+  ${name} run <script>       run that scripts entry in the directory holding
+                             the nearest package.json, with pre<script> and
+                             post<script> around it
+  ${name} run <script> -- -x pass extra arguments through to the script body
+  ${name} test               shortcut for '${name} run test' (also start, stop,
+                             restart)
+  --silent, -s               do not echo the script banner
+  --if-present               exit 0 instead of failing on a missing script
 
 Spec forms:
   <pkg>            install the latest published version
@@ -174,10 +192,18 @@ export function createIpkCommand(name: string, deps: IpkCommandDeps): Command {
     if (INSTALL_ALIASES.has(sub)) {
       return runInstall(name, rest, ctx, deps);
     }
+    if (RUN_ALIASES.has(sub)) {
+      return runNpmScript(name, rest, ctx, { fs: deps.fs });
+    }
+    // `npm test` is `npm run test`; the shortcut takes no script argument, so
+    // its own name is the script name and the rest passes through as args.
+    if (LIFECYCLE_SHORTCUTS.has(sub)) {
+      return runNpmScript(name, args, ctx, { fs: deps.fs });
+    }
 
     return {
       stdout: '',
-      stderr: `${name}: unknown subcommand '${sub}' (supported: install, i)\n`,
+      stderr: `${name}: unknown subcommand '${sub}' (supported: install, i, run)\n`,
       exitCode: 1,
     };
   });
