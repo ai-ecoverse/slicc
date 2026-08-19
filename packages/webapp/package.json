@@ -19,7 +19,7 @@
       "name": "webapp: kernel worker",
       "path": "../../dist/ui/assets/kernel-worker-*.js",
       "brotli": false,
-      "limit": "1850 kB"
+      "limit": "1865 kB"
     },
     {
       "name": "webapp: total JS payload",

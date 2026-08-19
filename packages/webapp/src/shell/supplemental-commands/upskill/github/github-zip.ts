@@ -11,7 +11,7 @@ import type { SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../../../fs/index.js';
 import { consumeCachedBinaryByUrl } from '../../../binary-cache.js';
 import { getFetchBodyBytes, parseFetchJson } from '../../../fetch-body.js';
-import { canWriteSkillFile } from '../dotfiles.js';
+import { canWriteSkillFile, hasDotSegment } from '../dotfiles.js';
 import { describeFetchError } from '../fetch-error.js';
 import type { GitHubContent, GitHubRequestContext } from '../types.js';
 import { formatGitHubFailure } from './github-errors.js';
@@ -109,6 +109,48 @@ export async function writeZipFilesToDir(
  * (for the provenance record) and `relPrefix` tracks the sub-directory the
  * recursion is currently in.
  */
+/**
+ * Read a repo directory's files through the Contents API without writing
+ * anything, keyed by path relative to `path`. This is the update path's
+ * fallback for sources codeload cannot serve — private repos, and repos whose
+ * default branch is neither `main` nor `master` — mirroring the install
+ * path's own API fallback so those installs stay updatable.
+ */
+export async function fetchGitHubDirFiles(
+  owner: string,
+  repo: string,
+  path: string,
+  branch: string | undefined,
+  github: GitHubRequestContext,
+  into: Map<string, Uint8Array> = new Map(),
+  relPrefix = ''
+): Promise<Map<string, Uint8Array>> {
+  const base = `https://api.github.com/repos/${owner}/${repo}/contents/${path}`;
+  const url = branch ? `${base}?ref=${encodeURIComponent(branch)}` : base;
+  const response = await github.request(url);
+  if (response.status !== 200) {
+    throw new Error(
+      formatGitHubFailure(response, `${owner}/${repo}${path ? `/${path}` : ''}`, github.hasToken)
+    );
+  }
+  for (const item of parseFetchJson<GitHubContent[]>(response.body)) {
+    const relative = relPrefix ? `${relPrefix}/${item.name}` : item.name;
+    if (item.type === 'file' && item.download_url) {
+      const fileResponse = await github.request(item.download_url, '*/*');
+      if (fileResponse.status !== 200) {
+        throw new Error(
+          formatGitHubFailure(fileResponse, `${owner}/${repo}/${item.path}`, github.hasToken)
+        );
+      }
+      const cached = consumeCachedBinaryByUrl(item.download_url);
+      into.set(relative, cached ?? getFetchBodyBytes(fileResponse.body));
+    } else if (item.type === 'dir') {
+      await fetchGitHubDirFiles(owner, repo, item.path, branch, github, into, relative);
+    }
+  }
+  return into;
+}
+
 export async function downloadGitHubDir(
   items: GitHubContent[],
   destBase: string,
@@ -123,7 +165,10 @@ export async function downloadGitHubDir(
   for (const item of items) {
     const relativePath = relPrefix ? `${relPrefix}/${item.name}` : item.name;
     if (item.type === 'file' && item.download_url) {
-      if (!(await canWriteSkillFile(fs, destBase, item.name))) continue;
+      // The dot check must see the whole skill-relative path: recursion moves
+      // `destBase` into the subdirectory, so `scripts/.config/token` would look
+      // like a plain `token` if only the leaf name were tested.
+      if (hasDotSegment(relativePath) && (await fs.exists(`${destBase}/${item.name}`))) continue;
       const fileResponse = await github.request(item.download_url, '*/*');
       if (fileResponse.status !== 200) {
         throw new Error(

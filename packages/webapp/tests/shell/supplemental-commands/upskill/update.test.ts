@@ -137,6 +137,60 @@ describe('upskill install — dotfile protection and provenance', () => {
     );
   });
 
+  it('keeps a credential inside a dot-directory when installing via the Contents API', async () => {
+    // codeload is unavailable here, so install falls back to the Contents API —
+    // the path where the dot check used to see only the leaf name.
+    const tree: Record<string, unknown[]> = {
+      '': [{ name: 'alpha', path: 'alpha', type: 'dir' }],
+      alpha: [
+        {
+          name: 'SKILL.md',
+          path: 'alpha/SKILL.md',
+          type: 'file',
+          download_url: 'https://raw.githubusercontent.com/octo/skills/main/alpha/SKILL.md',
+        },
+        { name: 'scripts', path: 'alpha/scripts', type: 'dir' },
+      ],
+      'alpha/scripts': [{ name: '.config', path: 'alpha/scripts/.config', type: 'dir' }],
+      'alpha/scripts/.config': [
+        {
+          name: 'token',
+          path: 'alpha/scripts/.config/token',
+          type: 'file',
+          download_url:
+            'https://raw.githubusercontent.com/octo/skills/main/alpha/scripts/.config/token',
+        },
+      ],
+    };
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(500, 'no zip here');
+      if (url.includes('/commits/')) return response(200, JSON.stringify({ sha: 'c'.repeat(40) }));
+      if (url.endsWith('/.config/token')) return response(200, 'UPSTREAM_TOKEN\n');
+      if (url.endsWith('/SKILL.md')) return response(200, '# Alpha upstream\n');
+      const match = url.match(/\/contents\/([^?]*)/);
+      if (match) {
+        const items = tree[decodeURIComponent(match[1]).replace(/\/$/, '')];
+        if (items) return response(200, JSON.stringify(items));
+      }
+      return response(404, JSON.stringify({ message: 'Not Found' }), {}, 'Not Found');
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const first = await cmd.execute(['octo/skills', '--skill', 'alpha'], createMockCtx() as never);
+    expect(first.exitCode).toBe(0);
+    await fs.writeFile('/workspace/skills/alpha/scripts/.config/token', 'MY_REAL_TOKEN\n');
+
+    const again = await cmd.execute(
+      ['octo/skills', '--skill', 'alpha', '--force'],
+      createMockCtx() as never
+    );
+
+    expect(again.exitCode).toBe(0);
+    await expect(fs.readTextFile('/workspace/skills/alpha/scripts/.config/token')).resolves.toBe(
+      'MY_REAL_TOKEN\n'
+    );
+  });
+
   it('an anonymous install still spends no rate-limited API request', async () => {
     _resetGlobalFsCache();
     const globalFs = await VirtualFS.create({ dbName: 'slicc-fs-global' });
@@ -322,6 +376,71 @@ describe('upskill update', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('may have moved or been removed upstream');
     await expect(fs.readTextFile('/workspace/skills/alpha/SKILL.md')).resolves.toBe('# Alpha v1\n');
+  });
+
+  it('falls back to the authenticated Contents API when codeload cannot serve the repo', async () => {
+    await installAlpha(fs, V1);
+
+    // Private repo / non-main default branch: codeload 404s, the API serves it.
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(404, 'Not Found');
+      if (url.includes('/contents/alpha?') || url.endsWith('/contents/alpha')) {
+        return response(
+          200,
+          JSON.stringify([
+            {
+              name: 'SKILL.md',
+              path: 'alpha/SKILL.md',
+              type: 'file',
+              download_url: 'https://raw.githubusercontent.com/octo/skills/trunk/alpha/SKILL.md',
+            },
+          ])
+        );
+      }
+      if (url.endsWith('/alpha/SKILL.md')) return response(200, '# Alpha via API\n');
+      if (url.includes('/commits/')) return response(200, JSON.stringify({ sha: 'd'.repeat(40) }));
+      throw new Error(`unexpected url: ${url}`);
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['update', 'alpha'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('alpha: updated');
+    await expect(fs.readTextFile('/workspace/skills/alpha/SKILL.md')).resolves.toBe(
+      '# Alpha via API\n'
+    );
+  });
+
+  it('reports the API fallback error when neither source can be read', async () => {
+    await installAlpha(fs, V1);
+
+    const fetchMock = vi.fn(async (url: string) => {
+      if (url.includes('codeload.github.com')) return response(404, 'Not Found');
+      return response(404, JSON.stringify({ message: 'Not Found' }), {}, 'Not Found');
+    });
+
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['update', 'alpha'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Contents API fallback failed');
+    // A failed batch must not claim everything is current.
+    expect(result.stdout).not.toContain('current');
+  });
+
+  it('does not claim skills are current when a target has no provenance', async () => {
+    await installAlpha(fs, V1);
+    await fs.mkdir('/workspace/skills/legacy', { recursive: true });
+    await fs.writeFile('/workspace/skills/legacy/SKILL.md', '# Legacy\n');
+
+    const cmd = createUpskillCommand(fs, repoFetch(V1) as unknown as SecureFetch);
+    const result = await cmd.execute(['update', 'alpha', 'legacy'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('alpha: already current');
+    expect(result.stdout).not.toContain('All skills are current');
+    expect(result.stderr).toContain('no install provenance for "legacy"');
   });
 
   it('upgrade is an alias for update', async () => {

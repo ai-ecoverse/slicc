@@ -16,7 +16,7 @@ import type { VirtualFS } from '../../../fs/index.js';
 import { isSafeUpskillBranch } from '../../../net/handoff-link.js';
 import { hasDotSegment, listSkillFiles } from './dotfiles.js';
 import { createGitHubRequestContext } from './github/github-auth.js';
-import { fetchRepoZip, stripZipPrefix } from './github/github-zip.js';
+import { fetchGitHubDirFiles, fetchRepoZip, stripZipPrefix } from './github/github-zip.js';
 import { runPostInstallHooks } from './install-pipeline.js';
 import type { UpskillProvenance } from './provenance.js';
 import {
@@ -26,6 +26,7 @@ import {
   writeProvenance,
 } from './provenance.js';
 import { prepareBrowseShSkill } from './registries/browse-sh.js';
+import type { GitHubRequestContext } from './types.js';
 import { SKILLS_DIR } from './types.js';
 
 /** Per-path outcome. Mirrors `upgrade apply`'s classification vocabulary. */
@@ -180,12 +181,13 @@ async function updateGitHubSkill(
     return { ...base, outcome: 'error', error: `unusable source "${provenance.source}"` };
   }
 
-  const zip = await fetchRepoZip(owner, repo, fetchFn, base.ref ?? 'main');
-  if (zip.status !== 'ok') {
-    return { ...base, outcome: 'error', error: zip.message };
-  }
   const upstreamPath = (provenance.path ?? '').replace(/^\/|\/$/g, '');
-  const upstream = upstreamFiles(stripZipPrefix(zip.files), upstreamPath);
+  const github = await createGitHubRequestContext(fetchFn);
+  const fetched = await fetchUpstream(owner, repo, upstreamPath, base.ref, fetchFn, github);
+  if ('error' in fetched) {
+    return { ...base, outcome: 'error', error: fetched.error };
+  }
+  const upstream = fetched.files;
   if (upstream.size === 0) {
     return {
       ...base,
@@ -201,7 +203,6 @@ async function updateGitHubSkill(
     return { ...base, outcome: changed ? 'updated' : 'current', changes };
   }
 
-  const github = await createGitHubRequestContext(fetchFn);
   const sha = (await resolveCommitSha(owner, repo, base.ref, github)) ?? provenance.sha;
   if (changed) await applyPlan(fs, { changes, writes, removals });
   // The provenance record is refreshed either way, so an unchanged run still
@@ -213,6 +214,39 @@ async function updateGitHubSkill(
     files: [...upstream.keys()].sort(),
   });
   return { ...base, to: sha, outcome: changed ? 'updated' : 'current', changes };
+}
+
+/**
+ * Read the upstream skill directory: codeload ZIP first (not rate-limited),
+ * falling back to the authenticated Contents API. The fallback matters because
+ * the install path has one too — a private repo, or one whose default branch
+ * is neither `main` nor `master`, installs fine through the API and would
+ * otherwise be permanently un-updatable.
+ */
+async function fetchUpstream(
+  owner: string,
+  repo: string,
+  upstreamPath: string,
+  ref: string | undefined,
+  fetchFn: SecureFetch,
+  github: GitHubRequestContext
+): Promise<{ files: Map<string, Uint8Array> } | { error: string }> {
+  const zip = await fetchRepoZip(owner, repo, fetchFn, ref ?? 'main');
+  if (zip.status === 'ok') {
+    return { files: upstreamFiles(stripZipPrefix(zip.files), upstreamPath) };
+  }
+  try {
+    const files = await fetchGitHubDirFiles(owner, repo, upstreamPath, ref, github);
+    return { files: sortByPath(files) };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return { error: `${zip.message}; Contents API fallback failed: ${message}` };
+  }
+}
+
+/** Stable path order, so reports and provenance file lists are deterministic. */
+function sortByPath(files: Map<string, Uint8Array>): Map<string, Uint8Array> {
+  return new Map([...files].sort(([a], [b]) => a.localeCompare(b)));
 }
 
 /** Select the ZIP entries under `upstreamPath`, keyed by skill-relative path. */
@@ -227,7 +261,7 @@ function upstreamFiles(
     const relative = path.slice(prefix.length);
     if (relative) upstream.set(relative, content);
   }
-  return new Map([...upstream].sort(([a], [b]) => a.localeCompare(b)));
+  return sortByPath(upstream);
 }
 
 /** Replay a plan onto the VFS. */
@@ -323,10 +357,20 @@ async function resolveTargets(
   return { targets, missing };
 }
 
-function formatReport(results: SkillUpdateResult[], dryRun: boolean, applied: boolean): string {
+/**
+ * `clean` gates the closing line: with a failed or unresolvable skill in the
+ * batch, "all skills are current" would contradict the errors on stderr and
+ * the non-zero exit.
+ */
+function formatReport(
+  results: SkillUpdateResult[],
+  dryRun: boolean,
+  applied: boolean,
+  clean: boolean
+): string {
   let stdout = dryRun ? 'Skill update (dry run — nothing written):\n' : 'Skill update:\n';
   for (const result of results) stdout += formatResult(result, dryRun);
-  if (!applied) {
+  if (!applied && clean) {
     stdout += dryRun
       ? '\nAll skills are current.\n'
       : '\nNothing to update — all skills are current.\n';
@@ -391,17 +435,18 @@ export async function handleUpskillUpdate(
       )
       .join('') + failures.map((r) => `upskill: ${r.skill}: ${r.error}\n`).join('');
 
+  const clean = failures.length === 0 && missing.length === 0;
   if (parsed.json) {
     return {
-      stdout: `${JSON.stringify({ ok: failures.length === 0 && missing.length === 0, dryRun: parsed.dryRun, results })}\n`,
+      stdout: `${JSON.stringify({ ok: clean, dryRun: parsed.dryRun, results })}\n`,
       stderr,
-      exitCode: failures.length > 0 || missing.length > 0 ? 1 : 0,
+      exitCode: clean ? 0 : 1,
     };
   }
 
   return {
-    stdout: formatReport(results, parsed.dryRun, applied),
+    stdout: formatReport(results, parsed.dryRun, applied, clean),
     stderr,
-    exitCode: failures.length > 0 || missing.length > 0 ? 1 : 0,
+    exitCode: clean ? 0 : 1,
   };
 }
