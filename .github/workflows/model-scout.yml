@@ -1,0 +1,133 @@
+name: Bedrock Model Scout
+
+# Weekly canary for the Bedrock model IDs every agentic workflow in this repo
+# resolves to. Bedrock model IDs are mutable infrastructure — retired, renamed,
+# and superseded without notice — and a repository variable holding a dead ID
+# (this happened: `us.anthropic.claude-opus-4-9`, which does not exist) makes
+# every scheduled agent fail on every run with nothing watching. This invokes
+# each reachable ID once for one token and opens/updates a GitHub issue when an
+# ID is genuinely unusable.
+#
+# It is a monitor, not an agent: deterministic, no Claude in the loop, no PR, and
+# no writes to any variable or workflow. A throttled or quota-limited week is
+# classified `inconclusive` and files nothing — a false "your model is dead"
+# issue is the expensive failure here.
+#
+# Required:
+#   secrets.AWS_BEARER_TOKEN_BEDROCK   same Bedrock API key the agents use
+# Optional:
+#   vars.RUM_AWS_REGION                region to probe (default us-east-1)
+#
+# The extraction, classification, and reporting rules are pure and unit-tested in
+# packages/dev-tools/model-scout/lib.test.mjs.
+
+on:
+  schedule:
+    # Mondays at 05:13 UTC — before the workweek, and clear of the other agent
+    # crons (boy-scout 02:17, pr-fix */2h, backlog 09:35, compactor Sat 22:40,
+    # flake hunter Mon 06:50).
+    - cron: '13 5 * * 1'
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Probe + report only; do not open/close issues'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  group: model-scout
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  scout:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      # Third-party actions pinned to immutable commit SHAs (matching the other
+      # workflows) — this job has issues:write.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Probe every Bedrock model ID the workflows can reach
+        id: scan
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          REPORT_FILE: model-scout-report.md
+          # An Actions token cannot read repository variables through the API
+          # (hard 403), so `${{ vars.X }}` interpolation is the only way the
+          # script learns a variable's current value. The variable *list* is
+          # derived from the workflow sources, so this block is the one
+          # hand-maintained thing here — and scan-models.mjs fails the run when a
+          # workflow references a `*_BEDROCK_MODEL` variable that is not below,
+          # so a new variable cannot silently escape the canary.
+          BACKLOG_BEDROCK_MODEL: ${{ vars.BACKLOG_BEDROCK_MODEL }}
+          BOY_SCOUT_BEDROCK_MODEL: ${{ vars.BOY_SCOUT_BEDROCK_MODEL }}
+          COMPACTOR_BEDROCK_MODEL: ${{ vars.COMPACTOR_BEDROCK_MODEL }}
+          FLAKY_HUNTER_BEDROCK_MODEL: ${{ vars.FLAKY_HUNTER_BEDROCK_MODEL }}
+          PATCH_RECONCILE_BEDROCK_MODEL: ${{ vars.PATCH_RECONCILE_BEDROCK_MODEL }}
+          PR_FIX_BEDROCK_MODEL: ${{ vars.PR_FIX_BEDROCK_MODEL }}
+          PR_REVIEW_BEDROCK_MODEL: ${{ vars.PR_REVIEW_BEDROCK_MODEL }}
+          REVIEW_RESPONDER_BEDROCK_MODEL: ${{ vars.REVIEW_RESPONDER_BEDROCK_MODEL }}
+          RUM_BEDROCK_MODEL: ${{ vars.RUM_BEDROCK_MODEL }}
+          SINS_BEDROCK_MODEL: ${{ vars.SINS_BEDROCK_MODEL }}
+        run: node packages/dev-tools/model-scout/scan-models.mjs
+
+      - name: Warn when the canary learned nothing
+        if: steps.scan.outputs.all_inconclusive == 'true'
+        run: |
+          echo "::warning title=Bedrock model scout was blind::Every probe came back inconclusive (throttling, quota, IAM, or 5xx). No model was proven dead, so nothing was filed — but this run verified nothing. Check the AWS_BEARER_TOKEN_BEDROCK key and its Bedrock quota."
+
+      - name: Ensure label exists
+        if: github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh label create bedrock-model-scout --color B60205 --description "Unusable Bedrock model ID in workflow configuration" --force
+
+      - name: Open or update the unusable-model issue
+        if: steps.scan.outputs.has_invalid == 'true' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE: ${{ steps.scan.outputs.issue_title }}
+          REPORT_FILE: ${{ steps.scan.outputs.report_file }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --label bedrock-model-scout --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            echo "Updating existing issue #$existing"
+            gh issue comment "$existing" --body-file "$REPORT_FILE"
+          else
+            echo "Creating new unusable-model issue"
+            gh issue create \
+              --title "$TITLE" \
+              --label bedrock-model-scout \
+              --body-file "$REPORT_FILE"
+          fi
+
+      - name: Resolve the issue once every model answers again
+        # Requires a definite all-clear on EVERY ID: `inconclusive_count == 0`, not
+        # merely "the run was not entirely blind". The dangerous case is narrow and
+        # entirely plausible — the ID this issue is about comes back throttled while
+        # the others answer fine. `all_inconclusive` is false, `has_invalid` is
+        # false, and a looser condition would close an open outage issue on the
+        # strength of never having retested the thing it reports. Closing is the
+        # one irreversible-ish action here, so it gets the strictest gate.
+        if: steps.scan.outputs.has_invalid == 'false' && steps.scan.outputs.inconclusive_count == '0' && github.event.inputs.dry_run != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          OK_COUNT: ${{ steps.scan.outputs.ok_count }}
+        run: |
+          set -euo pipefail
+          existing=$(gh issue list --label bedrock-model-scout --state open --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body "All $OK_COUNT Bedrock model IDs reachable from \`.github/workflows/\` answered a 1-token invoke. Auto-closing."
+            gh issue close "$existing"
+          fi

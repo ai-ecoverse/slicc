@@ -301,6 +301,60 @@ gh workflow run review-responder.yml -f pr_number=2179 -f dry_run=true  # rehear
 gh workflow run review-responder.yml -f pr_number=2179                  # for real
 ```
 
+## model-scout
+
+`model-scout/` is the family's one **non-agentic** member: no selector prompt, no
+Claude step, and it files an issue rather than a PR. It watches the input every
+other workflow here depends on — the Bedrock model ID each one resolves through
+`vars.<NAME>_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL ||
+'global.anthropic.claude-sonnet-4-6'`. Bedrock model IDs are mutable
+infrastructure, and a variable holding a retired one takes down every scheduled
+agent on every run with nothing watching: `us.anthropic.claude-opus-4-9`, an ID
+that does not exist, did exactly that until someone read the run logs by hand.
+`.github/workflows/model-scout.yml` probes each reachable ID with one 1-token
+`InvokeModel` every Monday at 05:13 UTC.
+
+Four things about it are non-obvious:
+
+- **The model surface is derived, never listed.** `extractModelReferences` reads
+  `.github/workflows/*.yml` and returns every `vars.*_BEDROCK_MODEL` name (with
+  the workflows that read it) plus every hardcoded Anthropic model-ID literal in
+  those `||` chains — today ten variables and one literal. A committed list would
+  go stale exactly like the thing it monitors. The scout's own workflow is
+  excluded from the scan, because its env block names every variable and would
+  otherwise appear as a consumer of all of them.
+- **`invalid` vs `inconclusive` is the entire design.** Only a
+  `ResourceNotFoundException`, a `ValidationException` that names the model, or an
+  `AccessDeniedException` saying the model is not accessible counts as a dead ID.
+  A 403 IAM/quota denial, a 429, a 5xx, a timeout, and a transport error are all
+  `inconclusive`, retried with backoff, and never reported as a dead model —
+  a throttled Monday that filed an issue telling someone to change a _working_
+  variable is how a monitor loses its reader. Note that an IAM denial quotes the
+  model ARN, so "the body mentions the model ID" is deliberately not the rule for
+  `AccessDeniedException`.
+- **Silence is the success output, blindness is loud.** A healthy week files
+  nothing (no weekly "all good" issue). A week where _every_ probe was
+  inconclusive also files nothing, but logs `BLIND RUN` plus an Actions warning
+  annotation and blocks the auto-close step — a canary that cannot tell you it is
+  blind is worse than none.
+- **The env block is hand-maintained on purpose.** An Actions token cannot read
+  repository variables through the API (hard 403), so `${{ vars.X }}`
+  interpolation is the only channel for a variable's current value. Because the
+  variable list is derived from the workflows and the values are not,
+  `scan-models.mjs` exits 3 when a workflow references a variable the workflow did
+  not pass in, so a new variable cannot silently escape the canary. A variable
+  that is present but empty is just unset in the repo — the chain falls through,
+  which is expected and logged, not an error.
+
+No replacement ID is ever guessed: `suggestReplacement` names only an ID probed
+`ok` in the same run from the same model family, and the issue otherwise says
+plainly that no verified replacement was found. Rationale and the full env table:
+[`packages/dev-tools/model-scout/README.md`](../packages/dev-tools/model-scout/README.md).
+
+```bash
+gh workflow run model-scout.yml -f dry_run=true  # probe + report, no issue writes
+```
+
 ## doc-dead-reference-gate
 
 `check-doc-refs.mjs` (+ `check-doc-refs-lib.mjs`) skips globs,
