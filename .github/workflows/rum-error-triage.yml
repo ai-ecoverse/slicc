@@ -205,7 +205,6 @@ jobs:
         with:
           use_bedrock: 'true'
           github_token: ${{ github.token }}
-          #
           # Named bots rather than `'*'`: this repo is PUBLIC, and the action's own
           # docs warn that `'*'` lets external Apps invoke it with prompts they
           # control. Both names below are GitHub's first-party bots, which no third

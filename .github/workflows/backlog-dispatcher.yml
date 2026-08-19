@@ -274,7 +274,6 @@ jobs:
           # Job permissions above scope this token; Claude's own `gh`/`git` work
           # runs under BOT_PAT via the env block.
           github_token: ${{ github.token }}
-          #
           # Named bots rather than `'*'`: this repo is PUBLIC, and the action's own
           # docs warn that `'*'` lets external Apps invoke it with prompts they
           # control. Both names below are GitHub's first-party bots, which no third
