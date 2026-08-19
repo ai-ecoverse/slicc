@@ -196,7 +196,16 @@ jobs:
           # default branch, which in this merge-queue repo is `github-merge-queue`
           # (a bot). claude-code-action's human-actor gate otherwise rejects the
           # scheduled run with "Workflow initiated by non-human actor".
-          allowed_bots: '*'
+          #
+          # Named bots rather than `'*'`: this repo is PUBLIC, and the action's own
+          # docs warn that `'*'` lets external Apps invoke it with prompts they
+          # control. Both names below are GitHub's first-party bots, which no third
+          # party can act as, so every installed App (Renovate, Codex, Copilot)
+          # stays out. `github-actions[bot]` is here because a release commit can
+          # land on main between merges, making it the last actor. If a run is ever
+          # rejected by the actor gate, the log names the actor — add it here
+          # deliberately rather than widening back to `'*'`.
+          allowed_bots: 'github-merge-queue[bot],github-actions[bot]'
           # Full turn-by-turn output on manual dispatch only; the cron keeps it
           # off so routine runs don't log tool output that may be sensitive.
           show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
@@ -265,7 +274,16 @@ jobs:
           # Job permissions above scope this token; Claude's own `gh`/`git` work
           # runs under BOT_PAT via the env block.
           github_token: ${{ github.token }}
-          allowed_bots: '*'
+          #
+          # Named bots rather than `'*'`: this repo is PUBLIC, and the action's own
+          # docs warn that `'*'` lets external Apps invoke it with prompts they
+          # control. Both names below are GitHub's first-party bots, which no third
+          # party can act as, so every installed App (Renovate, Codex, Copilot)
+          # stays out. `github-actions[bot]` is here because a release commit can
+          # land on main between merges, making it the last actor. If a run is ever
+          # rejected by the actor gate, the log names the actor — add it here
+          # deliberately rather than widening back to `'*'`.
+          allowed_bots: 'github-merge-queue[bot],github-actions[bot]'
           show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
           claude_args: |
             --model ${{ vars.BACKLOG_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}

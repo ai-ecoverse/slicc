@@ -133,7 +133,16 @@ jobs:
           # (a bot). claude-code-action's human-actor gate otherwise rejects the
           # run with "Workflow initiated by non-human actor". Allow all bots so
           # the cron can run unattended.
-          allowed_bots: '*'
+          #
+          # Named bots rather than `'*'`: this repo is PUBLIC, and the action's own
+          # docs warn that `'*'` lets external Apps invoke it with prompts they
+          # control. Both names below are GitHub's first-party bots, which no third
+          # party can act as, so every installed App (Renovate, Codex, Copilot)
+          # stays out. `github-actions[bot]` is here because a release commit can
+          # land on main between merges, making it the last actor. If a run is ever
+          # rejected by the actor gate, the log names the actor — add it here
+          # deliberately rather than widening back to `'*'`.
+          allowed_bots: 'github-merge-queue[bot],github-actions[bot]'
           # Print Claude's full turn-by-turn output on manual dispatch (to
           # inspect its reasoning); kept off for the weekly cron so routine runs
           # don't log tool output that may contain sensitive data.

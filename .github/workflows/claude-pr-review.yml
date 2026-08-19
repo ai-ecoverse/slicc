@@ -171,7 +171,15 @@ jobs:
           # is what makes reviewing our own agents' PRs possible at all; the
           # job-level `if` still keeps every other bot's PRs (Renovate) out, and
           # the fork guard is unchanged.
-          allowed_bots: '*'
+          #
+          # Named rather than `'*'`: this repo is PUBLIC, and the action's own docs
+          # warn that `'*'` lets external Apps invoke it with prompts they control —
+          # a real concern here, because this job checks out PR-authored code and
+          # runs it. The only bot that can author an in-repo `automation/*` PR is
+          # `github-actions[bot]`. Renovate is excluded by the job `if` and must
+          # stay excluded here too, so a future `if` change cannot quietly let a
+          # third-party App's PR content drive a reviewer that executes code.
+          allowed_bots: 'github-actions[bot]'
           # allowedTools: the inline-comment MCP tool PLUS unrestricted Bash, so
           # the reviewer can use `gh pr comment` / `gh api` for PR context AND
           # actually run the code (npm ci, targeted tests, build) to verify
