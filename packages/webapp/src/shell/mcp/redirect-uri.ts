@@ -1,4 +1,4 @@
-import { resolveFloatTopology } from '../../core/float-topology.js';
+import { resolveFloatTopology } from '../float-topology.js';
 
 /** Hosted callback that treats MCP OAuth `state` as an opaque value. */
 export const MCP_HOSTED_CALLBACK_PATH = '/auth/mcp-callback';
