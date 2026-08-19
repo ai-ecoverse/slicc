@@ -96,7 +96,7 @@
     "cloud-core": {
       "lines": 85,
       "statements": 83,
-      "functions": 76,
+      "functions": 77,
       "branches": 77,
       "coverageExclude": [
         "**/node_modules/**",
