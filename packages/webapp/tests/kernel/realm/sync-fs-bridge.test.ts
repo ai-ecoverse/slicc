@@ -210,6 +210,56 @@ describe('sync FS bridge (integration)', () => {
     // (The failure breadcrumb goes to the worker console, not script stderr.)
   });
 
+  it('a 0-byte file created then deleted in one run flushes cleanly (#2157)', async () => {
+    // #2157: a zero-byte file could not be deleted. The backing store (ZenFS'
+    // OPFS backend) never materialized it, so the flush's `rm` raised a
+    // spurious ENOENT and the delete was reported as "NOT persisted". The
+    // backend fix is in patches/@zenfs+dom+*.patch; this asserts the sync-fs
+    // side stays honest about a create+delete pair for the empty file AND for
+    // the 1-byte control, which always worked and isolates the size-0 trigger.
+    const ctx = makeCtx();
+    const out = await runCode(
+      `const fs = require('fs');
+       fs.writeFileSync('/workspace/empty.txt', '');
+       fs.writeFileSync('/workspace/onebyte.txt', 'x');
+       fs.rmSync('/workspace/empty.txt');
+       fs.rmSync('/workspace/onebyte.txt');
+       console.log(fs.existsSync('/workspace/empty.txt'), fs.existsSync('/workspace/onebyte.txt'));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.trim()).toBe('false false');
+    // No flush breadcrumb — the silent-success class this issue belongs to is
+    // exactly a flush that reports nothing while losing the mutation.
+    expect(out.stderr).not.toContain('[sync-fs] ERROR');
+    expect(await ctx.fs.exists('/workspace/empty.txt')).toBe(false);
+    expect(await ctx.fs.exists('/workspace/onebyte.txt')).toBe(false);
+  });
+
+  it('a 0-byte file flushed by one run is deletable by the next (#2157)', async () => {
+    // The realm boundary #2157 called out: an empty file created in run 1 is
+    // flushed at the END of run 1, and run 2 deletes it. Both halves have to
+    // hold for `: > f` followed by a separate `rm f` to work.
+    const ctx = makeCtx();
+    const create = await runCode(
+      `const fs = require('fs');
+       fs.writeFileSync('/workspace/two-runs.txt', '');`,
+      ctx
+    );
+    expect(create.exitCode).toBe(0);
+    expect(create.stderr).not.toContain('[sync-fs] ERROR');
+    expect(await ctx.fs.exists('/workspace/two-runs.txt')).toBe(true);
+
+    const remove = await runCode(
+      `const fs = require('fs');
+       fs.rmSync('/workspace/two-runs.txt');`,
+      ctx
+    );
+    expect(remove.exitCode).toBe(0);
+    expect(remove.stderr).toBe('');
+    expect(await ctx.fs.exists('/workspace/two-runs.txt')).toBe(false);
+  });
+
   it('sync and async coexist on same require("fs")', async () => {
     const ctx = makeCtx({ files: { '/workspace/both.txt': 'original' } });
     const out = await runCode(
