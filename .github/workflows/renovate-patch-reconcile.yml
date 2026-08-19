@@ -17,8 +17,13 @@ name: Renovate Patch Reconcile
 # Trigger gating: Renovate-authored PRs in THIS repo (not forks) carrying the
 # `patched-dependency` label. claude-code-action normally rejects bot-initiated
 # runs; `allowed_bots: renovate[bot]` opts this one bot in (a fixed prompt — the
-# PR's dependency diff is data, not instructions — and a private repo, so the
-# external-App caveat in the action docs does not apply).
+# PR's dependency diff is data, not instructions).
+#
+# The action's external-App caveat DOES apply here: this repo is public, and
+# Renovate is a third-party App. Naming exactly one bot is what bounds it —
+# only Renovate can initiate this workflow, on its own labelled PRs in this
+# repo, with a prompt this file controls. (An earlier version of this comment
+# waved the caveat away on the grounds that the repo was private. It is not.)
 #
 # Security: the reconcile step runs `npm ci` (executing the bumped dependency's
 # lifecycle scripts) and pushes to the PR branch with contents:write. That is
