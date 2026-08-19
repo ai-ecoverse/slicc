@@ -88,14 +88,14 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
         }
     }
 
-    private static let placements: [AvatarType: BandPlacement] = [
-        .scoop: .init(left: 0.15, top: 0.30, width: 0.70, height: 0.45, zoom: 2.65),
-        .cone: .init(left: 0.17, top: -0.185, width: 0.70, height: 0.44, zoom: 3),
-    ]
-
+    /// An exhaustive `switch`, not a lookup table: a third avatar type has to
+    /// declare where its band lands rather than silently inheriting the
+    /// scoop's, which is the failure this whole property exists to undo.
     private var placement: BandPlacement {
-        // Every type has an entry; the fallback keeps the property total.
-        Self.placements[type] ?? Self.placements[.scoop]!
+        switch type {
+        case .scoop: .init(left: 0.15, top: 0.30, width: 0.70, height: 0.45, zoom: 2.65)
+        case .cone: .init(left: 0.17, top: -0.185, width: 0.70, height: 0.44, zoom: 3)
+        }
     }
 
     /// One 200x100 band unit in points.
