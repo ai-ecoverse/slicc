@@ -34,6 +34,10 @@ const magick: BuiltinShadow = {
   command: 'magick',
   example: 'magick input.png output.jpg',
 };
+const pdftoppm: BuiltinShadow = {
+  command: 'pdftoppm',
+  example: 'pdftoppm -png -r 150 doc.pdf page',
+};
 
 export const BUILTIN_SHADOW_MAP: Readonly<Record<string, BuiltinShadow>> = {
   '@biomejs/biome': biome,
@@ -53,6 +57,12 @@ export const BUILTIN_SHADOW_MAP: Readonly<Record<string, BuiltinShadow>> = {
     example: 'tsc --noEmit',
     bootstrap: TYPESCRIPT_VFS_INSTALL_COMMAND,
   },
+  'pdf-poppler': pdftoppm,
+  'pdf-to-img': pdftoppm,
+  pdf2pic: pdftoppm,
+  'pdf-img-convert': pdftoppm,
+  poppler: pdftoppm,
+  'poppler-utils': pdftoppm,
   imagemagick: convert,
   'imagemagick-cli': convert,
   'imagemagick-convert': convert,
