@@ -17,6 +17,14 @@
 /** poppler's `pdftoppm` default resolution. */
 export const DEFAULT_PDF_DPI = 150;
 
+/**
+ * ImageMagick's default PDF rasterization density, which differs from
+ * poppler's. Confirmed against the Ghostscript invocation real ImageMagick
+ * builds for a PDF input: `-r72x72`. It is why `-density 150` is the standard
+ * advice for a readable `convert doc.pdf out.png`.
+ */
+export const IMAGEMAGICK_DEFAULT_DPI = 72;
+
 /** PDF user-space units are 1/72 inch, so DPI maps to a pdf.js scale directly. */
 export function dpiToScale(dpi: number): number {
   return dpi / 72;

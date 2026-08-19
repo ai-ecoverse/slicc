@@ -2,7 +2,7 @@ import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import annotationFontUrl from '../../../../assets/fonts/AdobeClean-Regular.otf?url';
 import { getMagick, type IpkResolutionContext } from './magick-wasm.js';
-import { DEFAULT_PDF_DPI, dpiToScale, isPdfBytes, renderPdfPage } from './pdf-raster.js';
+import { dpiToScale, IMAGEMAGICK_DEFAULT_DPI, isPdfBytes, renderPdfPage } from './pdf-raster.js';
 
 /**
  * Build an {@link IpkResolutionContext} from a command's `ctx` so
@@ -128,7 +128,7 @@ Operations:
   -colorspace TYPE   convert color space (sRGB, Gray, CMYK, ...)
   -transparent COLOR make matching pixels transparent
   -blur / -sharpen R[xS] apply a Gaussian effect
-  -density DPI       rasterization DPI for PDF inputs (default ${DEFAULT_PDF_DPI})
+  -density DPI       rasterization DPI for PDF inputs (default ${IMAGEMAGICK_DEFAULT_DPI})
   -auto-gamma / -auto-level / -normalize / -negate
   +append            join all images in the current sequence horizontally
   -append            join all images in the current sequence vertically
@@ -146,8 +146,9 @@ Examples:
   convert frame1.jpg frame2.jpg +append filmstrip.jpg
   convert \\( a.jpg b.jpg +append \\) \\( c.jpg d.jpg +append \\) -append grid.jpg
 
-PDF inputs are rasterized with pdf.js. Select a page with a bracket suffix
-(0-based, as ImageMagick does); page 0 is used when none is given:
+PDF inputs are rasterized with pdf.js at ${IMAGEMAGICK_DEFAULT_DPI} DPI unless
+-density says otherwise, matching ImageMagick. Select a page with a bracket
+suffix (0-based, as ImageMagick does); page 0 is used when none is given:
   convert -density 150 doc.pdf page0.png
   convert doc.pdf[2] -resize 800x page3.png
 Use pdftoppm to rasterize a whole document in one pass.
@@ -195,7 +196,7 @@ interface ParsedConvertArgs {
 class ConvertArgParser {
   private index = 0;
   /** Current `-density` setting; applies to every subsequent input. */
-  private density = DEFAULT_PDF_DPI;
+  private density = IMAGEMAGICK_DEFAULT_DPI;
 
   constructor(private readonly tokens: string[]) {}
 

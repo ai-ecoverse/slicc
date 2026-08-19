@@ -154,9 +154,12 @@ describe('convert with a PDF input', () => {
     expect(raster.calls[0].pageNumber).toBe(1);
   });
 
-  it('rasterizes at 150 DPI by default, matching ImageMagick', async () => {
+  it('rasterizes at 72 DPI by default, matching ImageMagick not poppler', async () => {
+    // ImageMagick's PDF default is 72 DPI (its Ghostscript delegate is invoked
+    // with -r72x72); poppler's pdftoppm defaults to 150. The two commands
+    // deliberately differ here rather than sharing one constant.
     await run(['doc.pdf', 'out.png']);
-    expect(raster.calls[0].options.scale).toBeCloseTo(150 / 72, 6);
+    expect(raster.calls[0].options.scale).toBeCloseTo(1, 6);
   });
 
   it('honours -density before the input', async () => {
@@ -169,7 +172,7 @@ describe('convert with a PDF input', () => {
     // input is *read*, so it has to precede it. Writing it afterwards is a
     // no-op for rasterization rather than a retroactive override.
     await run(['doc.pdf', '-density', '288', 'out.png']);
-    expect(raster.calls[0].options.scale).toBeCloseTo(150 / 72, 6);
+    expect(raster.calls[0].options.scale).toBeCloseTo(1, 6);
   });
 
   it('lets the last -density before the input win', async () => {
@@ -190,16 +193,16 @@ describe('convert with a PDF input', () => {
 
   it('carries -density forward to a later PDF input, as a setting not an operation', async () => {
     installMagickMock();
-    await run(['-density', '72', 'a.pdf', 'b.pdf', '+append', 'out.png']);
+    await run(['-density', '144', 'a.pdf', 'b.pdf', '+append', 'out.png']);
     expect(raster.calls).toHaveLength(2);
-    for (const call of raster.calls) expect(call.options.scale).toBeCloseTo(1, 6);
+    for (const call of raster.calls) expect(call.options.scale).toBeCloseTo(2, 6);
   });
 
   it('carries -density into a parenthesized group', async () => {
     installMagickMock();
-    await run(['-density', '72', '(', 'a.pdf', 'b.pdf', '+append', ')', 'out.png']);
+    await run(['-density', '144', '(', 'a.pdf', 'b.pdf', '+append', ')', 'out.png']);
     expect(raster.calls).toHaveLength(2);
-    for (const call of raster.calls) expect(call.options.scale).toBeCloseTo(1, 6);
+    for (const call of raster.calls) expect(call.options.scale).toBeCloseTo(2, 6);
   });
 
   it('lets a -density between inputs apply only from that point on', async () => {
