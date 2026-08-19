@@ -2,6 +2,7 @@ package logging
 
 import (
 	"fmt"
+	"io"
 	"log/slog"
 	"strings"
 	"sync"
@@ -29,6 +30,7 @@ func TestPionFactoryRoutesEveryLevel(t *testing.T) {
 			defer mu.Unlock()
 			events = append(events, pionRecord{scope, level, msg})
 		},
+		nil,
 	)
 
 	log := factory.NewLogger("turnc")
@@ -43,17 +45,19 @@ func TestPionFactoryRoutesEveryLevel(t *testing.T) {
 	log.Error("e")
 	log.Errorf("e%d", 1)
 
-	if len(lines) != 10 || len(events) != 10 {
-		t.Fatalf("routed %d lines / %d events, want 10 each", len(lines), len(events))
+	// The logger takes every level; the event tap is for link problems only, so
+	// pion's running commentary (trace/debug/info) never reaches it.
+	if len(lines) != 10 {
+		t.Fatalf("routed %d lines, want 10: %v", len(lines), lines)
 	}
 	if !strings.HasPrefix(lines[0], "pion turnc: ") {
 		t.Errorf("record %q is missing the scope prefix", lines[0])
 	}
-	// Levels must survive the trip; the status bar counts warnings and errors.
 	wantLevels := []slog.Level{
-		slog.LevelDebug, slog.LevelDebug, slog.LevelDebug, slog.LevelDebug,
-		slog.LevelInfo, slog.LevelInfo, slog.LevelWarn, slog.LevelWarn,
-		slog.LevelError, slog.LevelError,
+		slog.LevelWarn, slog.LevelWarn, slog.LevelError, slog.LevelError,
+	}
+	if len(events) != len(wantLevels) {
+		t.Fatalf("tapped %d events, want %d: %v", len(events), len(wantLevels), events)
 	}
 	for i, want := range wantLevels {
 		if events[i].level != want {
@@ -63,22 +67,22 @@ func TestPionFactoryRoutesEveryLevel(t *testing.T) {
 			t.Errorf("event %d scope = %q, want turnc", i, events[i].scope)
 		}
 	}
-	if events[1].msg != "t1" {
-		t.Errorf("formatted message = %q, want t1", events[1].msg)
+	if events[1].msg != "w1" {
+		t.Errorf("formatted message = %q, want w1", events[1].msg)
 	}
 }
 
 func TestPionFactoryWithNoSinksIsSilent(_ *testing.T) {
 	// Nothing consumes the records, so nothing should be formatted either —
 	// pion traces every STUN packet at trace level.
-	log := PionFactory(nil, nil).NewLogger("ice")
+	log := PionFactory(nil, nil, nil).NewLogger("ice")
 	log.Errorf("%s", panicOnFormat{})
 	log.Error("plain")
 }
 
 func TestPionFactoryEventOnlyStillFires(t *testing.T) {
 	var got int
-	log := PionFactory(nil, func(string, slog.Level, string) { got++ }).NewLogger("sctp")
+	log := PionFactory(nil, func(string, slog.Level, string) { got++ }, nil).NewLogger("sctp")
 	log.Warnf("dropped %d", 3)
 	if got != 1 {
 		t.Errorf("event fired %d times, want 1", got)
@@ -88,7 +92,7 @@ func TestPionFactoryEventOnlyStillFires(t *testing.T) {
 func TestPionFactoryThroughTheDiagnosticLogger(t *testing.T) {
 	var buf strings.Builder
 	logger := New(&buf, Config{Enabled: true, Level: slog.LevelDebug})
-	PionFactory(logger.Logf, nil).NewLogger("turnc").
+	PionFactory(logger.Logf, nil, logger.EnabledAt).NewLogger("turnc").
 		Errorf("Fail to refresh permissions: %s", "broken pipe")
 
 	out := buf.String()
@@ -102,7 +106,7 @@ func TestPionFactoryIsQuietWhenTheLoggerIsOff(t *testing.T) {
 	// off a user's terminal.
 	var buf strings.Builder
 	logger := New(&buf, Config{})
-	PionFactory(logger.Logf, nil).NewLogger("turnc").Error("Fail to refresh permissions")
+	PionFactory(logger.Logf, nil, logger.EnabledAt).NewLogger("turnc").Error("Fail to refresh permissions")
 	if buf.String() != "" {
 		t.Errorf("a disabled logger must emit nothing, got %q", buf.String())
 	}
@@ -112,3 +116,48 @@ func TestPionFactoryIsQuietWhenTheLoggerIsOff(t *testing.T) {
 type panicOnFormat struct{}
 
 func (panicOnFormat) String() string { panic("formatted a record nobody consumes") }
+
+func TestPionFactorySkipsFormattingForALoggerThatWouldDropIt(t *testing.T) {
+	// The production wiring: logf is a live closure over a logger that is off by
+	// default, and the event tap is always installed. pion still calls Tracef per
+	// STUN packet, so the record must die before it is formatted.
+	logger := New(io.Discard, Config{})
+	log := PionFactory(logger.Logf, func(string, slog.Level, string) {}, logger.EnabledAt).NewLogger("ice")
+	log.Tracef("%s", panicOnFormat{})
+	log.Debugf("%s", panicOnFormat{})
+	log.Infof("%s", panicOnFormat{})
+
+	// Warn and above still reach the tap, so those are formatted.
+	var got string
+	tapped := PionFactory(logger.Logf, func(_ string, _ slog.Level, msg string) { got = msg }, logger.EnabledAt).
+		NewLogger("turnc")
+	tapped.Errorf("Fail to refresh permissions: %s", "broken pipe")
+	if got != "Fail to refresh permissions: broken pipe" {
+		t.Errorf("tapped %q, want the formatted record", got)
+	}
+}
+
+func TestPionFactoryFormatsWhatTheLoggerAsksFor(t *testing.T) {
+	// SLICC_DEBUG=1: now the trace records are wanted, and nothing may swallow
+	// them.
+	var buf strings.Builder
+	logger := New(&buf, Config{Enabled: true, Level: slog.LevelDebug})
+	PionFactory(logger.Logf, nil, logger.EnabledAt).NewLogger("ice").Tracef("candidate %d", 7)
+	if !strings.Contains(buf.String(), "pion ice: candidate 7") {
+		t.Errorf("debug output %q dropped a wanted trace record", buf.String())
+	}
+}
+
+func TestEnabledAtFollowsTheConfiguredLevel(t *testing.T) {
+	warn := New(io.Discard, Config{Enabled: true, Level: slog.LevelWarn})
+	if warn.EnabledAt(slog.LevelDebug) {
+		t.Error("a warn logger claims to want debug records")
+	}
+	if !warn.EnabledAt(slog.LevelError) {
+		t.Error("a warn logger refuses error records")
+	}
+	var off *Logger
+	if off.EnabledAt(slog.LevelError) {
+		t.Error("a nil logger claims to want records")
+	}
+}

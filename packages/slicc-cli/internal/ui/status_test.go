@@ -83,14 +83,24 @@ func TestStatusBadges(t *testing.T) {
 
 func TestStatusRenderNeverExceedsWidth(t *testing.T) {
 	now := time.Now()
-	st := Status{
-		Started: now.Add(-time.Hour), State: StateConnected, Sessions: 9, Execs: 99, Diags: 999,
-		LastBeat: now, Peer: "someone@a-very-long-hostname-indeed · docker exec -i sandbox sh -c",
+	peers := []string{
+		"someone@a-very-long-hostname-indeed · docker exec -i sandbox sh -c",
+		// Characters whose drawn width depends on the terminal's locale. The
+		// per-field measurement can undercount them, so the whole bar is clamped
+		// too: one cell too many wraps it, and a wrapped bar pushes the log up on
+		// every repaint.
+		"私@ホスト · bash -c",
 	}
-	for _, mode := range []Mode{unicodeMode, {Unicode: true, Color: true}, {}} {
-		for width := 1; width <= 120; width++ {
-			if got := visibleWidth(st.render(mode, now, 0, width)); got > width {
-				t.Fatalf("width %d overflowed to %d cells (mode %+v)", width, got, mode)
+	for _, peer := range peers {
+		st := Status{
+			Started: now.Add(-time.Hour), State: StateConnected, Sessions: 9, Execs: 99, Diags: 999,
+			LastBeat: now, Peer: peer,
+		}
+		for _, mode := range []Mode{unicodeMode, {Unicode: true, Color: true}, {}} {
+			for width := 1; width <= 120; width++ {
+				if got := visibleWidth(st.render(mode, now, 0, width)); got > width {
+					t.Fatalf("width %d overflowed to %d cells (mode %+v, peer %q)", width, got, mode, peer)
+				}
 			}
 		}
 	}

@@ -116,6 +116,17 @@ func (l *Logger) Enabled() bool {
 	return l != nil && l.enabled
 }
 
+// EnabledAt reports whether a record at level would be emitted. It lets a hot
+// producer skip building a record the handler would only drop — pion emits a
+// trace record per STUN packet, and formatting all of them to discard them is
+// pure waste in the default silent build.
+func (l *Logger) EnabledAt(level slog.Level) bool {
+	if !l.Enabled() {
+		return false
+	}
+	return l.slog.Enabled(context.Background(), level)
+}
+
 // With returns a Logger that adds attrs to every record.
 func (l *Logger) With(args ...any) *Logger {
 	if !l.Enabled() || len(args) == 0 {

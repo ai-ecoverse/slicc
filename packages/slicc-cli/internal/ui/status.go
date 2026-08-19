@@ -87,7 +87,11 @@ func (s *Status) render(m Mode, now time.Time, frame, width int) string {
 	if tape := s.tape.render(m); tape != "" {
 		segs = append(segs, segment{tape, StyleNone})
 	}
-	return joinSegments(m, segs, width)
+	// Clamped as a whole as well as per field: Peer carries a hostname and a
+	// runner command, and cellWidth cannot know how wide a terminal draws an
+	// "ambiguous width" character in either. One cell too many wraps the bar, and
+	// a wrapped bar pushes the log up on every repaint, so the width wins.
+	return truncateVisible(joinSegments(m, segs, width), width)
 }
 
 // badge is the leading state indicator: a colored dot for a settled state, a

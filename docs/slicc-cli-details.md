@@ -83,7 +83,10 @@ console): raw ANSI, ~4 files.
   are zero cells, the East Asian wide/fullwidth blocks and the emoji blocks are
   two, everything else one. `visibleWidth` sums those (skipping escapes) and
   `truncateVisible` drops a double-wide rune rather than splitting it, since half
-  a cell is what makes a terminal wrap.
+  a cell is what makes a terminal wrap. The bar is clamped twice — per field in
+  `joinSegments` and as a whole in `render` — because "ambiguous width"
+  characters in a hostname or runner can still be undercounted, and a bar that
+  wraps pushes the log up on every repaint.
 - **Events** — `Line` stamps and marks the first row and indents continuation
   rows (`│ …`), so a multi-line error reads as one event. An identical
   consecutive event is folded in place with a `(×3)` counter; one that cannot be
@@ -114,7 +117,14 @@ the CLI's output under `turnc ERROR: Fail to refresh permissions: …` walls tha
 no `SLICC_LOG_LEVEL` can quiet. Routed through the factory they become ordinary
 diagnostics (silent by default, back with `SLICC_DEBUG=1`), and
 `Options.OnLinkDiag` tallies the warn-and-above ones into the status bar's
-`link ⚠ N` field. `Options.OnActivity` feeds the `♥ <age>` field and fires on
+`link ⚠ N` field — that tap only sees **warn and above**, since everything below
+is pion's per-packet commentary. Formatting is gated on the same question:
+`Options.LogWanted` (wired to `diagLogger.EnabledAt`) lets the adapter drop a
+trace record before `Sprintf` touches it, because `Logf` in this binary is always
+a live closure over a logger that is usually disabled — without the predicate,
+every STUN packet would be formatted just to be thrown away.
+
+`Options.OnActivity` feeds the `♥ <age>` field and fires on
 **every** inbound frame, not just keepalives: the leader _answers_ pings
 (`tray-follower-sync.ts` is the pinger, `LEADER_TRAY_PING_INTERVAL_MS` is the
 signaling socket's keepalive, not a data-channel ping), so a follower watching

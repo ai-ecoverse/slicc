@@ -10,6 +10,7 @@ import (
 	"crypto/rand"
 	"encoding/json"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"strings"
 	"sync"
@@ -85,6 +86,11 @@ type Options struct {
 	OnLinkDiag logging.PionEvent
 	// Logf is an optional diagnostic logger.
 	Logf func(format string, args ...any)
+	// LogWanted, when set, reports whether Logf would do anything with a record
+	// at that level. It exists for pion's records, which arrive per STUN packet
+	// at trace level: without it each one is formatted only for a disabled logger
+	// to throw it away. nil → every record is formatted.
+	LogWanted func(level slog.Level) bool
 	// HTTPClient overrides the signaling HTTP client (tests). nil → default.
 	HTTPClient *http.Client
 }
@@ -348,7 +354,7 @@ func (c *Conn) configurePeer(iceServers []signaling.TurnIceServer, sig *signalin
 // CLI's own output under `turnc ERROR: Fail to refresh permissions` lines that
 // no log level of ours can quiet.
 func (c *Conn) pionLoggerFactory() pionlogging.LoggerFactory {
-	return logging.PionFactory(c.opts.Logf, c.opts.OnLinkDiag)
+	return logging.PionFactory(c.opts.Logf, c.opts.OnLinkDiag, c.opts.LogWanted)
 }
 
 func (c *Conn) recreatePeer(iceServers []signaling.TurnIceServer, sig *signaling.Client, controllerID string, bootstrapIDRef *string) error {

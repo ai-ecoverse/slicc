@@ -76,7 +76,7 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		}
 	}
 
-	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf})
+	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
 	if err != nil {
 		errLine("prompt", "%s", err)
 		reportRuntimeError("dial", err)
@@ -143,7 +143,7 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 		}
 	}
 
-	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf})
+	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf, LogWanted: diagLogger.EnabledAt})
 	if err != nil {
 		errLine("exec", "%s", err)
 		reportRuntimeError("dial", err)
@@ -272,6 +272,7 @@ func watchOnce(ctx context.Context, joinURL, scoopJid string, r watchRender) (cl
 		OnActivity: r.console.Beat,
 		OnLinkDiag: linkDiagCounter(r.console),
 		Logf:       debugLogf,
+		LogWanted:  diagLogger.EnabledAt,
 	})
 	if dialErr != nil {
 		return false, dialErr
@@ -424,6 +425,7 @@ func followOnce(
 		Capabilities: caps,
 		Motd:         followMotd(runner, eval != nil),
 		Logf:         debugLogf,
+		LogWanted:    diagLogger.EnabledAt,
 		OnActivity:   console.Beat,
 		OnLinkDiag:   linkDiagCounter(console),
 		OnMessage: func(typ string, raw []byte) {
