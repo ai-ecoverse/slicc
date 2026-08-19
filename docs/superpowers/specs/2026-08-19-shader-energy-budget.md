@@ -2,7 +2,7 @@
 
 **Date:** 2026-08-19
 **Branch:** `worktree-shader-energy-budget`
-**Status:** Approved (root cause confirmed live on 2026-08-19)
+**Status:** Approved (root cause confirmed live on 2026-08-19). Codex (gpt-5.5, xhigh) pre-implementation review returned REWORK with 9 findings on 2026-08-19; this revision addresses all of them.
 
 ## Problem
 
@@ -28,10 +28,11 @@ Why Chrome doesn't save us: rAF pauses only for _hidden_ pages. A leader tab tha
 ## Goals
 
 1. **Ambient frame budget:** decorative motion renders at 15 fps, not display rate (~75% cost cut).
-2. **Burst on interaction:** `pulse()`, observed attribute changes (incl. `scroll` parallax), theme flips, resizes, and context restore render at full display rate for a short window (800 ms) so direct responses stay crisp.
-3. **True static stop:** a field with no intrinsic motion — `cone` with `speed=0`, or `prefers-reduced-motion` — renders **once per stimulus and stops the loop**. "0 = paused" becomes literally true.
+2. **Burst on interaction:** `pulse()`, observed attribute changes (incl. `scroll` parallax), theme flips, and resizes render at full display rate for a short window (800 ms) so direct responses stay crisp. Context restore is NOT a burst stimulus — the first-frame rule (`#lastFrameTs = -Infinity` reset) already renders immediately on restore, and 800 ms of full-rate frames after it would buy nothing.
+3. **True static stop:** a field with no intrinsic motion — `cone` with `speed=0`, or `prefers-reduced-motion` — renders **once per stimulus and stops the loop**. "0 = paused" becomes literally true. A mode switch into a static field renders exactly its one synchronous anti-flicker frame — no post-switch burst double-draw.
 4. **Resolution budget:** default canvas DPR cap drops 2 → 1 (the field is clamped to a ±20% deviation budget around the theme background; half-res is imperceptible, 4× fewer pixels on Retina). New `dpr` attribute (0.5–2) as an escape hatch for showcase/hero uses.
-5. **Docs:** the frame-budget rule joins the existing "no per-frame reflow" animation rule (webcomponents `CLAUDE.md`, `docs/webcomponents-details.md`), and the incident lands in `docs/pitfalls.md`.
+5. **Context-loss safety:** while the WebGL context is lost, the scheduler parks entirely (`#contextLost` guard in `#wake`) — without it, any stimulus during the lost window spins an empty rAF loop in animated modes because `#gl` stays non-null while `#program`/`#buffer` are invalid. Restore (and reconnect after a lost-context disconnect) clears the flag.
+6. **Docs:** the frame-budget rule joins the existing "no per-frame reflow" animation rule (webcomponents `CLAUDE.md`, `docs/webcomponents-details.md`), and the incident lands in `docs/pitfalls.md`.
 
 Combined idle-visible cost target: 60 fps→15 fps (÷4) and DPR 2→1 (÷4 pixels) ≈ **~44% → ~3% GPU process**, renderer main thread ~8.5% → ~2%.
 
@@ -58,12 +59,13 @@ DOM-free, unit-testable frame-gating logic (the repo already uses "verbatim pure
 
 Replace `#startLoop` / `#renderIfStatic` with **one entry point and a self-terminating tick**:
 
-- New state: `#lastFrameTs = Number.NEGATIVE_INFINITY`, `#burstUntil = 0`.
+- New state: `#lastFrameTs = Number.NEGATIVE_INFINITY`, `#burstUntil = 0`, `#contextLost = false`.
 - `#isAnimated(): boolean` — `false` when `#reduced`, `false` when `mode === 'cone' && speed === 0` (with `u_speed = 0` the crack clock, micro-wobble, and parallax — `sign(u_speed)` — are all zeroed, so the cone field is genuinely static), `true` otherwise (scoop and freezer animate on `u_time` unconditionally).
-- `#wake({ burst? })` — sets `#burstUntil = performance.now() + BURST_MS` when bursting; schedules a rAF if none pending and a GL context exists. Called from: `connectedCallback` (no burst), `attributeChangedCallback` (burst), `pulse()` (burst), theme refresh (burst), `ResizeObserver` (burst), `webglcontextrestored` (no burst).
-- `#tick(ts)` — `energetic = ts < #burstUntil || #energy > 0`; renders when `shouldRender(...)` admits the frame (updating `#lastFrameTs` via `advanceFrameTs`); then **self-terminates** when `#reduced || (!#isAnimated() && #energy === 0)`, else re-schedules. Self-termination runs _after_ the render so the final at-rest frame paints.
-- `pulse()` keeps energy decay semantics (×0.95 per rendered frame, floor to 0 below 0.001); `#energy > 0` counts as energetic so glow decay runs at display rate and completes in the same wall time as today. Reduced-motion pulses render one frame per call and never loop (current behavior preserved).
-- The synchronous anti-flicker render in the mode-switch branch of `attributeChangedCallback` stays, and additionally sets `#lastFrameTs = performance.now()`.
+- `#wake({ burst? })` — sets `#burstUntil = performance.now() + BURST_MS` when bursting; schedules a rAF only if none pending, a GL context exists, AND the context is not lost. Called from: `connectedCallback` (no burst; also resets `#contextLost` so a reconnect after a lost-context disconnect works), `attributeChangedCallback` (burst — EXCEPT the mode-switch sync-render branch, which wakes without burst because the synchronous frame already delivered the response and a burst would double-draw a static field), `pulse()` (burst), theme refresh (burst), `ResizeObserver` (burst), `webglcontextrestored` (no burst).
+- `#tick(ts)` — `energetic = ts < #burstUntil || #energy > 0`; renders when `shouldRender(...)` admits the frame (updating `#lastFrameTs` via `advanceFrameTs`); then **self-terminates** when `#reduced || (!#isAnimated() && #energy === 0)`, else re-schedules. Self-termination runs _after_ the render so the final at-rest frame paints, and is unconditional on the burst window — a static field bursts at most one frame per wake.
+- `pulse()` keeps energy decay semantics (×0.95 per rendered frame, floor to 0 below 0.001); `#energy > 0` counts as energetic so glow decay runs at display rate and completes in the same wall time as today. **Reduced-motion contract change:** pulses render one frame **per coalesced wake** — multiple `pulse()` calls before the next rAF draw once with the accumulated energy (previously each call drew synchronously). Intentional; do not restore per-call draws.
+- Context-loss guard: `webglcontextlost` sets `#contextLost = true` (in addition to the existing `#stopLoop` + cache drop); `webglcontextrestored` clears it after `#setupGlResources()` succeeds.
+- The synchronous anti-flicker render in the mode-switch branch of `attributeChangedCallback` stays, and additionally sets `#lastFrameTs = performance.now()` so the follow-up wake does not immediately re-draw.
 - `#stopLoop()` survives for `disconnectedCallback` and `webglcontextlost`.
 - Batched same-microtask attribute changes coalesce naturally into the single pending rAF.
 
@@ -82,9 +84,10 @@ Replace `#startLoop` / `#renderIfStatic` with **one entry point and a self-termi
 
 ## Acceptance criteria
 
-1. Mounted `mode="scoop"` (inherently animated) issues **≤ ~15 draw calls/second** ambient (behavioral test with wide CI margins), not display rate.
-2. Mounted `cone` with `speed=0`: **zero** draw calls after settling; a `pulse()` or attribute change renders and then re-stops.
-3. Attribute changes (`scroll`, `tint`, `mode`, …) still re-render promptly (burst window).
-4. Default canvas backing-store resolution is capped at DPR 1; `dpr="0.5"`/`dpr="2"` respected.
-5. All 29 pre-existing `slicc-shader.test.ts` tests still pass unmodified.
-6. Full verification pass green (`lint:ci`, `deadcode`, `typecheck`, webcomponents suite, `test:coverage:webcomponents`, root `test`, both builds, `lint:docs`).
+1. Mounted `mode="scoop"` (inherently animated) renders at **≤ 20 fps averaged over ≥ 1.5 s** (budget target 15; the bound rejects a 30 or 60 fps regression while tolerating CI jitter — behavioral draw-call-count test).
+2. Mounted `cone` with `speed=0`: **zero** draw calls after settling; a `pulse()` or attribute change renders and then re-stops; a mode switch from an animated mode into the static field settles to a stopped loop.
+3. Attribute changes (`scroll`, `tint`, `mode`, …) still re-render promptly (burst window, or the mode-switch synchronous frame).
+4. Backing-store resolution proven under a stubbed `devicePixelRatio = 2`: default width 240 for a 240px element (cap 1), `dpr="2"` → 480 (escape hatch), `dpr="0.5"` → 120.
+5. While the WebGL context is lost, stimuli (`pulse()`, attribute changes) issue **zero** draw calls and do not start a loop.
+6. All 29 pre-existing `slicc-shader.test.ts` tests still pass unmodified.
+7. Full verification pass green: `npm run verify`, `lint:ci`, `deadcode`, `deadcode:production-files`, `typecheck`, root `test`, webcomponents suite, `test:coverage:webcomponents`, both `build`s, `bundle-size`, `lint:docs`.

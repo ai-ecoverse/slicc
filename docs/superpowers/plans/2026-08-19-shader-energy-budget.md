@@ -10,9 +10,12 @@
 
 **Spec:** `docs/superpowers/specs/2026-08-19-shader-energy-budget.md` (read it first — it carries the measured evidence, the design rationale, and the rejected alternatives).
 
+**Review log:** Codex (gpt-5.5, xhigh) adversarial pre-implementation review on 2026-08-19 returned REWORK with 9 findings; this revision addresses all of them (exact-indentation snippets in formatter-proof fences, `#contextLost` guard, no-burst mode-switch wake, per-wake reduced-motion pulse contract, no-burst context restore, robust pulse-decay test, DPR tests under stubbed `devicePixelRatio`, tighter ambient margins over a longer window, full CI gate list).
+
 ## Global Constraints
 
-- Work in this worktree on branch `worktree-shader-energy-budget` (already created; `npm install` and `npx playwright install chromium` already run; baseline `slicc-shader.test.ts` = 29/29 green).
+- Work in this worktree on branch `worktree-shader-energy-budget` (already created; `npm install` and `npx playwright install chromium` already run; baseline `slicc-shader.test.ts` = 29/29 green). Leave the locally-modified `package-lock.json` uncommitted.
+- **Old-string discipline:** when performing a "Replace X with Y" edit, ALWAYS open `slicc-shader.ts` and copy the old text from the source with its exact leading whitespace — do not paste from this document, in case a doc formatter re-wrapped a fence. Method bodies are 4-space indented; nested blocks 6-space. This matters doubly for the two textually-identical replace targets — the `connectedCallback` tail (4-space indent) and the `webglcontextrestored` tail (6-space indent) — where indentation is the ONLY disambiguator.
 - Node >= 22.18.0.
 - Relative imports MUST carry `.js` (`./frame-budget.js`) — NodeNext, tsc-enforced, including in tests.
 - No `innerHTML` (lint-gated); build DOM via `internal/dom.ts` helpers — not relevant here but do not regress.
@@ -200,11 +203,11 @@ git commit -m "feat(webcomponents): pure frame-budget gating for decorative anim
 **Interfaces:**
 
 - Consumes: `shouldRender`, `advanceFrameTs`, `BURST_MS` from `./frame-budget.js` (Task 1).
-- Produces: unchanged public API. Behavioral contract for Task 3/4: every stimulus routes through the private `#wake(opts?: { burst?: boolean })`; the tick self-terminates when `#reduced || (!#isAnimated() && #energy === 0)`.
+- Produces: unchanged public API. Behavioral contract for Tasks 3/4: every stimulus routes through the private `#wake(opts?: { burst?: boolean })`; the tick self-terminates when `#reduced || (!#isAnimated() && #energy === 0)`; `#wake` is a no-op while `#contextLost` is set.
 
 - [ ] **Step 1: Write the failing behavioral tests**
 
-Append to `packages/webcomponents/tests/freezer/slicc-shader.test.ts` (inside the top-level `describe('slicc-shader', ...)` block, after the last existing `it`). The file already imports `vi` from vitest and defines `mount()`:
+Append to `packages/webcomponents/tests/freezer/slicc-shader.test.ts` (inside the top-level `describe('slicc-shader', ...)` block, after the last existing `it`). The file already imports `afterEach` and `vi` from vitest and defines `mount()` and `frame()`:
 
 ```ts
 describe('frame budget', () => {
@@ -219,11 +222,12 @@ describe('frame budget', () => {
     if (el.noWebgl) return; // CSS-fallback host: nothing to measure
     await wait(50); // let the first frame land
     const spy = spyDraws();
-    await wait(800);
-    // 800ms at 15fps ≈ 12 draws; at display rate it would be ≈ 48+.
-    // Margins are deliberately wide for slow CI runners — do not tighten.
-    expect(spy.mock.calls.length).toBeGreaterThanOrEqual(3);
-    expect(spy.mock.calls.length).toBeLessThanOrEqual(24);
+    await wait(1500);
+    // 1500ms at 15fps ≈ 23 draws. Upper bound 30 (= 20fps average) rejects a
+    // 30fps or 60fps regression while tolerating rAF jitter; lower bound
+    // tolerates heavily-throttled CI. Do not tighten either bound.
+    expect(spy.mock.calls.length).toBeGreaterThanOrEqual(5);
+    expect(spy.mock.calls.length).toBeLessThanOrEqual(30);
   });
 
   it('cone with speed=0 renders once and stops', async () => {
@@ -250,31 +254,67 @@ describe('frame budget', () => {
     if (el.noWebgl) return;
     await wait(150);
     const spy = spyDraws();
-    // 0.002 decays below the 0.001 rest floor in ~14 rendered frames.
-    el.pulse(0.002);
-    await wait(600);
-    const afterDecay = spy.mock.calls.length;
-    expect(afterDecay).toBeGreaterThanOrEqual(2);
+    // 0.0011 falls below the 0.001 rest floor after ~2 rendered frames, so
+    // decay completes fast even on a throttled CI rAF.
+    el.pulse(0.0011);
+    await wait(200);
+    expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    // Poll until the draw count is stable across a 250ms window (decay done),
+    // then assert it stays stable for one more window.
+    let settled = spy.mock.calls.length;
+    for (let i = 0; i < 20; i++) {
+      await wait(250);
+      const next = spy.mock.calls.length;
+      if (next === settled) break;
+      settled = next;
+    }
     await wait(250);
-    expect(spy.mock.calls.length).toBe(afterDecay);
+    expect(spy.mock.calls.length).toBe(settled);
+  });
+
+  it('switching an animated field into cone speed=0 settles to a stopped loop', async () => {
+    const el = mount({ mode: 'scoop' });
+    if (el.noWebgl) return;
+    await wait(100);
+    el.setAttribute('speed', '0');
+    el.setAttribute('mode', 'cone');
+    await wait(900); // outlast the attribute-change burst window
+    const spy = spyDraws();
+    await wait(250);
+    expect(spy.mock.calls.length).toBe(0);
+  });
+
+  it('ignores stimuli while the WebGL context is lost', async () => {
+    const el = mount({ mode: 'scoop' });
+    if (el.noWebgl) return;
+    await wait(100);
+    const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+    const gl = canvas.getContext('webgl') as WebGLRenderingContext;
+    const lose = gl.getExtension('WEBGL_lose_context');
+    if (!lose) return; // extension unavailable: nothing to exercise
+    lose.loseContext();
+    await wait(100); // let the webglcontextlost event land
+    const spy = spyDraws();
+    el.pulse();
+    el.setAttribute('scroll', '50');
+    await wait(250);
+    expect(spy.mock.calls.length).toBe(0);
   });
 });
 ```
 
-Also add `afterEach` to the existing vitest import if not present (it already imports `afterEach` — verify).
-
 - [ ] **Step 2: Run tests to verify the new ones fail**
 
 Run: `npm run test -w @slicc/webcomponents -- tests/freezer/slicc-shader.test.ts`
-Expected: the 29 pre-existing tests PASS; `renders ambient motion on the 15fps budget` FAILS (count ≈ 48 > 24), `cone with speed=0 renders once and stops` FAILS (count > 0), `pulse() … re-stops` FAILS.
+Expected: the 29 pre-existing tests PASS. New failures: `renders ambient motion` (count ≈ 90 > 30), `cone with speed=0 renders once and stops` (count > 0), `switching an animated field into cone speed=0` (count > 0), `pulse() … re-stops` (count keeps growing on the old always-on loop... it stabilizes only because the old loop never stops — the final equality fails), `ignores stimuli while the WebGL context is lost` may pass or fail on the old code (loop is stopped by the lost handler; a passing result here pre-implementation is acceptable — it exists to pin the NEW `#wake` paths). `an attribute change re-renders a static field` passes before and after (the old loop draws constantly) — it exists to guard the new wake path.
 
 - [ ] **Step 3: Implement the scheduler**
 
-All edits in `packages/webcomponents/src/freezer/slicc-shader.ts`.
+All edits in `packages/webcomponents/src/freezer/slicc-shader.ts`. **Copy every old-string from the source file, never from this plan** (see Global Constraints). The snippets below are shown in formatter-proof plain fences with the source's real indentation.
 
 **3a.** Add the import at the top (after the existing two imports):
 
-```ts
+```
 import { advanceFrameTs, BURST_MS, shouldRender } from './frame-budget.js';
 ```
 
@@ -311,9 +351,9 @@ with
  *   0 genuinely pauses — the field renders once per change and stops)
 ```
 
-**3c.** Add scheduler state. Replace
+**3c.** Add scheduler state. Replace (2-space class-field indent)
 
-```ts
+```
   #raf = 0;
   #start = 0;
   #energy = 0;
@@ -321,33 +361,37 @@ with
 
 with
 
-```ts
+```
   #raf = 0;
   #start = 0;
   #energy = 0;
   #lastFrameTs = Number.NEGATIVE_INFINITY;
   #burstUntil = 0;
+  #contextLost = false;
 ```
 
-**3d.** Rewire `connectedCallback`. Replace its tail
+**3d.** Rewire the `connectedCallback` tail (4-space indent — NOT the 6-space twin inside `#installContextHandlers`). Replace
 
-```ts
-this.#start = performance.now() / 1000;
-if (this.#reduced) this.#renderFrame();
-else this.#startLoop();
+```
+    this.#start = performance.now() / 1000;
+    if (this.#reduced) this.#renderFrame();
+    else this.#startLoop();
 ```
 
 with
 
-```ts
-this.#start = performance.now() / 1000;
-this.#lastFrameTs = Number.NEGATIVE_INFINITY;
-this.#wake();
+```
+    this.#start = performance.now() / 1000;
+    this.#lastFrameTs = Number.NEGATIVE_INFINITY;
+    this.#contextLost = false;
+    this.#wake();
 ```
 
-**3e.** Rewire `attributeChangedCallback`. Replace the whole method body
+(The `#contextLost` reset matters: a disconnect while the context was lost must not brick a later reconnect, which acquires a fresh context via `#initGl`.)
 
-```ts
+**3e.** Rewire `attributeChangedCallback`. Replace the whole method (2-space method indent, body 4/6)
+
+```
   attributeChangedCallback(name: string): void {
     if (!this.isConnected) return;
     // `tint` drives the tint + event-tint uniforms. A mode change also refreshes
@@ -369,7 +413,7 @@ this.#wake();
 
 with
 
-```ts
+```
   attributeChangedCallback(name: string): void {
     if (!this.isConnected) return;
     // `tint` drives the tint + event-tint uniforms. A mode change also refreshes
@@ -382,7 +426,10 @@ with
         this.#renderFrame();
         this.#lastFrameTs = performance.now();
         this.#applyFallbackBg();
-        this.#wake({ burst: true });
+        // No burst: the sync render above already delivered the response, and
+        // a burst here would double-draw a static field. The wake only (re)arms
+        // the loop for animated modes.
+        this.#wake();
         return;
       }
     }
@@ -393,7 +440,7 @@ with
 
 **3f.** Rewire `pulse`. Replace
 
-```ts
+```
   pulse(amount = 1): void {
     this.#energy = Math.min(1.4, this.#energy + amount);
     if (this.#reduced) this.#renderFrame();
@@ -402,49 +449,51 @@ with
 
 with
 
-```ts
+```
   pulse(amount = 1): void {
     this.#energy = Math.min(1.4, this.#energy + amount);
     this.#wake({ burst: true });
   }
 ```
 
+Contract note (spec §Design): under reduced motion, multiple `pulse()` calls in the same frame now coalesce into ONE rendered frame (the wake is rAF-pending); the accumulated energy still shows. This is an intentional improvement over the previous per-call synchronous render — do not "fix" it back.
+
 **3g.** Delete the `#renderIfStatic` method entirely:
 
-```ts
+```
   #renderIfStatic(): void {
     if (this.#reduced && this.#gl) this.#renderFrame();
   }
 ```
 
-**3h.** Rewire its two remaining callers. In `connectedCallback`, replace
+**3h.** Rewire its two remaining callers. In `connectedCallback` (6-space indent), replace
 
-```ts
-this.#ro = new ResizeObserver(() => this.#renderIfStatic());
+```
+      this.#ro = new ResizeObserver(() => this.#renderIfStatic());
 ```
 
 with
 
-```ts
-this.#ro = new ResizeObserver(() => this.#wake({ burst: true }));
+```
+      this.#ro = new ResizeObserver(() => this.#wake({ burst: true }));
 ```
 
-In `#observeTheme`, replace
+In `#observeTheme` (4-space indent, 6-space body), replace
 
-```ts
-const refresh = (): void => {
-  this.#refreshColorUniforms();
-  this.#renderIfStatic();
-};
+```
+    const refresh = (): void => {
+      this.#refreshColorUniforms();
+      this.#renderIfStatic();
+    };
 ```
 
 with
 
-```ts
-const refresh = (): void => {
-  this.#refreshColorUniforms();
-  this.#wake({ burst: true });
-};
+```
+    const refresh = (): void => {
+      this.#refreshColorUniforms();
+      this.#wake({ burst: true });
+    };
 ```
 
 Also update the `#observeTheme` doc comment's last sentence — replace
@@ -461,25 +510,65 @@ with
  *  field renders exactly one frame and re-stops. */
 ```
 
-**3i.** Rewire `webglcontextrestored`. Inside `#installContextHandlers`, replace
+**3i.** Guard the context-loss window. In `#installContextHandlers`, replace (4-space assignment, 6-space body)
 
-```ts
-this.#start = performance.now() / 1000;
-if (this.#reduced) this.#renderFrame();
-else this.#startLoop();
+```
+    this.#onContextLost = (e: Event) => {
+      e.preventDefault();
+      this.#stopLoop();
 ```
 
 with
 
-```ts
-this.#start = performance.now() / 1000;
-this.#lastFrameTs = Number.NEGATIVE_INFINITY;
-this.#wake();
+```
+    this.#onContextLost = (e: Event) => {
+      e.preventDefault();
+      this.#contextLost = true;
+      this.#stopLoop();
 ```
 
-**3j.** Replace `#startLoop` with the new scheduler. Replace
+and replace
 
-```ts
+```
+    this.#onContextRestored = () => {
+      if (!this.isConnected || !this.#gl) return;
+      this.#programs = {};
+      if (!this.#setupGlResources()) return;
+```
+
+with
+
+```
+    this.#onContextRestored = () => {
+      if (!this.isConnected || !this.#gl) return;
+      this.#programs = {};
+      if (!this.#setupGlResources()) return;
+      this.#contextLost = false;
+```
+
+Why: after `webglcontextlost`, `#gl` stays non-null while `#program`/`#buffer` are invalid. Without the flag, any pulse/attribute/theme/resize during the lost window schedules `#tick`, `#renderFrame()` no-ops, energy never decays, and an animated mode reschedules an empty rAF loop forever.
+
+**3j.** Rewire the `webglcontextrestored` tail (6-space indent — the twin of 3d). Replace
+
+```
+      this.#start = performance.now() / 1000;
+      if (this.#reduced) this.#renderFrame();
+      else this.#startLoop();
+```
+
+with
+
+```
+      this.#start = performance.now() / 1000;
+      this.#lastFrameTs = Number.NEGATIVE_INFINITY;
+      this.#wake();
+```
+
+(No burst on restore — the `-Infinity` reset makes the first tick render immediately via the first-frame rule; a burst would add nothing but 800 ms of full-rate frames.)
+
+**3k.** Replace `#startLoop` with the new scheduler. Replace
+
+```
   #startLoop(): void {
     if (this.#raf) return;
     const tick = (): void => {
@@ -492,7 +581,7 @@ this.#wake();
 
 with
 
-```ts
+```
   /** True while the field has intrinsic motion. Cone glass with `speed` 0 is
    *  genuinely static — u_speed zeroes the crack clock, the micro-wobble, and
    *  (via sign(u_speed)) the parallax — while scoop and freezer animate on
@@ -508,10 +597,11 @@ with
    *  `burst` opens a BURST_MS full-rate window so the response is crisp; the
    *  tick decides per-frame whether the budget admits a render and whether the
    *  loop keeps running at all. Batched same-microtask stimuli coalesce into
-   *  the one pending rAF. */
+   *  the one pending rAF. A lost GL context parks the scheduler entirely until
+   *  restore (render would no-op but an animated mode would spin the loop). */
   #wake(opts: { burst?: boolean } = {}): void {
     if (opts.burst) this.#burstUntil = performance.now() + BURST_MS;
-    if (this.#raf || !this.#gl) return;
+    if (this.#raf || !this.#gl || this.#contextLost) return;
     this.#raf = requestAnimationFrame(this.#tick);
   }
 
@@ -534,7 +624,7 @@ with
 - [ ] **Step 4: Run the full shader suite**
 
 Run: `npm run test -w @slicc/webcomponents -- tests/freezer/slicc-shader.test.ts`
-Expected: PASS — all 29 pre-existing + 4 new. If `renders ambient motion` is flaky-low on your machine, the loop is over-gated (check `FRAME_EPSILON_MS` wiring); if flaky-high, bursts are leaking (check that `connectedCallback` wakes WITHOUT burst).
+Expected: PASS — all 29 pre-existing + 6 new. If `renders ambient motion` is flaky-low on your machine, the loop is over-gated (check `FRAME_EPSILON_MS` wiring); if flaky-high, bursts are leaking (check that `connectedCallback` and the mode-switch branch wake WITHOUT burst).
 
 - [ ] **Step 5: Run the frame-budget tests and typecheck**
 
@@ -565,32 +655,32 @@ git commit -m "perf(webcomponents): frame-budget the slicc-shader loop (15fps am
 
 - [ ] **Step 1: Write the failing tests**
 
-Append inside the `describe('frame budget', ...)` block's parent describe (same level as the other `it`s):
+Append at the same level as the other `it`s in the top-level describe. CI runs at `devicePixelRatio` 1, where a DPR-1 cap is invisible — so the cap test stubs the ratio to 2 (this is what makes the default-cap assertion genuinely fail before implementation: uncapped width would be 480):
 
 ```ts
-it('caps the canvas backing store at DPR 1 by default', async () => {
-  const el = mount();
-  if (el.noWebgl) return;
-  await frame();
-  await frame();
-  const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
-  // 240px element; effective dpr = min(1, devicePixelRatio) — headless CI
-  // runs at devicePixelRatio 1, so the cap and the floor agree on 240.
-  expect(canvas.width).toBe(240);
-  expect(el.dpr).toBe(1);
-});
-
-it('respects a sub-1 dpr cap and re-renders when it changes', async () => {
-  const el = mount({ dpr: '0.5' });
-  if (el.noWebgl) return;
-  await frame();
-  await frame();
-  const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
-  expect(canvas.width).toBe(120);
-  el.setAttribute('dpr', '1');
-  await frame();
-  await frame();
-  expect(canvas.width).toBe(240);
+it('caps the backing store at DPR 1 by default and honors the dpr escape hatch', async () => {
+  const original = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+  Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true });
+  try {
+    const el = mount();
+    if (el.noWebgl) return;
+    await frame();
+    await frame();
+    const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+    expect(el.dpr).toBe(1);
+    expect(canvas.width).toBe(240); // min(cap 1, ratio 2) × 240px — was 480 uncapped
+    el.setAttribute('dpr', '2');
+    await frame();
+    await frame();
+    expect(canvas.width).toBe(480); // escape hatch: min(2, 2)
+    el.setAttribute('dpr', '0.5');
+    await frame();
+    await frame();
+    expect(canvas.width).toBe(120);
+  } finally {
+    if (original) Object.defineProperty(window, 'devicePixelRatio', original);
+    else delete (window as { devicePixelRatio?: number }).devicePixelRatio;
+  }
 });
 
 it('clamps dpr to 0.5..2 and defaults bogus values to 1', () => {
@@ -603,10 +693,12 @@ it('clamps dpr to 0.5..2 and defaults bogus values to 1', () => {
 });
 ```
 
+Note: the default cone (speed 0.0625) is animated, so the loop is live and `#resize` picks the new ratio up within the two awaited frames plus the attribute-change burst.
+
 - [ ] **Step 2: Run to verify failure**
 
 Run: `npm run test -w @slicc/webcomponents -- tests/freezer/slicc-shader.test.ts`
-Expected: the three new tests FAIL (`el.dpr` undefined; default canvas width 480 on a dpr-2 host / cap ignored).
+Expected: both new tests FAIL — `el.dpr` is `undefined`, and the default-cap assertion sees `canvas.width === 480` (uncapped `MAX_DPR = 2` behavior under the stubbed ratio).
 
 - [ ] **Step 3: Implement**
 
@@ -614,13 +706,13 @@ In `packages/webcomponents/src/freezer/slicc-shader.ts`:
 
 **3a.** Replace the constant
 
-```ts
+```
 const MAX_DPR = 2;
 ```
 
 with
 
-```ts
+```
 /** Backing-store resolution caps, in device-pixel-ratio units. The field is a
  *  background clamped to a ±20% deviation budget around the theme bg, so
  *  DPR 1 is visually indistinguishable at a quarter of DPR 2's pixel cost on
@@ -630,16 +722,16 @@ const MIN_DPR_CAP = 0.5;
 const MAX_DPR_CAP = 2;
 ```
 
-**3b.** Add `'dpr'` to `observedAttributes` (after `'speed'`):
+**3b.** Add `'dpr'` to `observedAttributes` (after the `'speed'` entry, 4-space indent):
 
-```ts
+```
     'speed',
     'dpr',
 ```
 
-**3c.** Add the accessor pair after the `speed` setter:
+**3c.** Add the accessor pair after the `speed` setter (2-space member indent):
 
-```ts
+```
   /** Canvas resolution cap in device-pixel-ratio units (0.5..2, default 1). */
   get dpr(): number {
     return clampNum(
@@ -654,19 +746,19 @@ const MAX_DPR_CAP = 2;
   }
 ```
 
-**3d.** Rewire `#resize`. Replace
+**3d.** Rewire `#resize` (4-space indent). Replace
 
-```ts
-const dpr = Math.min(MAX_DPR, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+```
+    const dpr = Math.min(MAX_DPR, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
 ```
 
 with
 
-```ts
-const dpr = Math.min(this.dpr, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+```
+    const dpr = Math.min(this.dpr, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
 ```
 
-**3e.** Add to the docblock's `@attr` list (after the `speed` line):
+**3e.** Add to the docblock's `@attr` list (after the `speed` lines):
 
 ```
  * @attr dpr - canvas resolution cap in device-pixel-ratio units (0.5..2,
@@ -676,7 +768,7 @@ const dpr = Math.min(this.dpr, (typeof window !== 'undefined' && window.devicePi
 - [ ] **Step 4: Run the suite**
 
 Run: `npm run test -w @slicc/webcomponents -- tests/freezer/slicc-shader.test.ts`
-Expected: PASS (29 + 4 + 3).
+Expected: PASS (29 + 6 + 2).
 
 - [ ] **Step 5: Commit**
 
@@ -794,6 +886,8 @@ Every decorative/ambient animation loop must carry a frame budget:
 - Full-screen fragment work should default to a reduced backing-store
   resolution (`dpr` cap 1) when it is a washed background rather than hero
   content.
+- Park the scheduler entirely while the WebGL context is lost — rendering
+  no-ops then, but an animated mode would still spin an empty rAF loop.
 
 **Related Files**
 
@@ -821,19 +915,22 @@ git commit -m "docs: frame-budget rule for decorative animation loops + shader i
 
 **Files:** none new — verification only.
 
-- [ ] **Step 1: Read the verification runbook**
+- [ ] **Step 1: Read the verification runbook, then run the gates**
 
-Read `.agents/skills/verifying-before-push/SKILL.md` and follow it. At minimum, in this order:
+Read `.agents/skills/verifying-before-push/SKILL.md` and follow it — it is authoritative for CI-only gates (the touched-file debt gate / `check-touched-exemptions`, manifest justifications, coverage floors). Then run, in order:
 
 ```bash
+npm run verify           # the repo's own pre-push gate script — run this FIRST
 npm run lint:ci          # biome check WITHOUT --write — fixable organizeImports = error here
 npm run deadcode         # knip — new frame-budget.ts exports must all be consumed or test-covered
+npm run deadcode:production-files
 npm run typecheck        # browser + node configs
 npm run test             # root vitest (node projects; webcomponents excluded by design)
 npm run test -w @slicc/webcomponents          # full browser-mode suite
 npm run test:coverage:webcomponents           # coverage floor (coverage-thresholds.json)
 npm run build            # production build, all workspaces
 npm run build -w @slicc/chrome-extension      # extension build
+npm run bundle-size      # size-limit gate (webcomponents changes trigger it in CI)
 npm run lint:docs
 ```
 
@@ -845,8 +942,4 @@ Expected: all green. Known trap: if `deadcode` flags `frame-budget.ts` exports (
 
 - [ ] **Step 3: Push and open the PR**
 
-Follow `.agents/skills/verifying-before-push/SKILL.md` for push mechanics (rebase onto `origin/main` first — CI enforces linear history). PR title: `perf(webcomponents): frame-budget the slicc-shader background (idle 44% GPU → ~3%)`. PR body must link the spec/plan (they ship in this branch by repo convention — do NOT strip them; the release process purges them from main), state the measured before/after from the spec, and note that Storybook PR screenshots will re-capture the `freezer` area stories (expected: visually near-identical — CI captures at devicePixelRatio 1 where the DPR cap is a no-op).
-
-```
-
-```
+Follow `.agents/skills/verifying-before-push/SKILL.md` for push mechanics (rebase onto `origin/main` first — CI enforces linear history). PR title: `perf(webcomponents): frame-budget the slicc-shader background (idle 44% GPU → ~3%)`. PR body must link the spec/plan (they ship in this branch by repo convention — do NOT strip them; the release process purges them from main), state the measured before/after from the spec, note the Codex review verdict and that all findings were addressed, and note that Storybook PR screenshots will re-capture the `freezer` area stories (expected: visually near-identical — CI captures at devicePixelRatio 1 where the DPR cap is a no-op).
