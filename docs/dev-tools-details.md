@@ -186,6 +186,121 @@ a targeted run cannot be used to aim a fixer at a human's PR.
 one-hour settling wait, leaving the decided-label dedup, the denylist, the
 in-flight-PR check, and the dispatch budget in force.
 
+## review-responder
+
+`review-responder/` is the family's one **event-driven** member: where the five
+above go looking for work on a schedule, this one is woken by a reviewer. It
+answers the review feedback left on the `automation/*` PRs the other five open —
+Codex, Copilot, and this repo's own `claude-pr-review.yml`. Before it existed
+that feedback simply sat there; a human had to open a local session and say "take
+over PR X and address the review comments".
+
+Same two-part shape as its siblings: `scan-review-feedback.mjs` decides, one
+Claude step does the work. Several things about it are non-obvious:
+
+- **Only trusted authors reach the prompt, and the filter fails closed.** This repo
+  is public, so anyone with a GitHub account can comment on a PR — and every
+  comment body that survives the scan becomes prompt text for a step with
+  unrestricted `Bash` and a checkout carrying `BOT_PAT`. `dropReason` therefore
+  keeps feedback only from the three named reviewer bots
+  (`TRUSTED_REVIEWER_BOTS` — the same identities as the workflow's `allowed_bots`,
+  pinned equal by a test) or from an author whose `author_association` is `OWNER`,
+  `MEMBER` or `COLLABORATOR`, the three that imply write access. `CONTRIBUTOR` is
+  the trap: it only means an account has had a commit merged. That, the
+  `FIRST_*`/`NONE`/`MANNEQUIN` values, and a missing or unrecognised association
+  are dropped as `untrusted-author` and reported by `formatDrops`, because a
+  swallowed comment must not look like an empty PR. `allowed_bots` cannot cover
+  this — it gates the triggering **actor**, not the feedback a run collects — and
+  the trigger is left ungated on purpose: a stranger's comment may start a run,
+  which then finds nothing trusted and skips.
+- **The marker records the feedback it processed, not when it finished.**
+  `<!-- review-response:<sha>:<iso8601> -->`, where the timestamp is the newest
+  `createdAt` in the snapshot that run answered (`feedback_watermark` from the
+  scan, `none` for an empty snapshot). Comparing against the marker comment's own
+  `created_at` loses a comment left after the snapshot but before the marker: it
+  predates the marker, so the next run counted it as already answered and nothing
+  ever re-raised it. `decideResponse` takes `respondedWatermark` from
+  `lastResponseWatermark`; `lastResponseAt` survives for reporting only. Markers
+  without a watermark still parse and fall back to the comment's `created_at`, so a
+  PR mid-flight when this shipped does not re-answer everything. The marker is
+  written in two places — `buildResponseMarker` and the workflow's `printf` — and a
+  test asserts they are byte-equal.
+
+- **It must read all THREE feedback endpoints.** `claude-pr-review.yml` posts its
+  verdict as a top-level ISSUE comment, so `GET /pulls/{n}/reviews` alone sees
+  nothing at all from the house reviewer — the scan looks like it works while
+  ignoring the reviewer whose findings are most specific to this repo. Reviews,
+  inline comments (`/pulls/{n}/comments`) and top-level comments
+  (`/issues/{n}/comments`) are all required; `lib.test.mjs` pins the
+  house-reviewer-only case as a regression test.
+- **A reviewer can be wrong, and the prompt says so explicitly.** The right
+  response to a bad finding is a reply explaining why, not a change; changing code
+  to satisfy a finding the model believes is mistaken makes the code worse _and_
+  hides the disagreement. The brief cites the real precedent from #2170, where the
+  house reviewer LGTM'd a `Record<string, unknown>` rename that Codex correctly
+  identified as defeating the spelling-based debt gate. Reviewers disagreeing is
+  normal; the model is told to reason about the code rather than count votes.
+- **A three-reviewer burst must produce one run.** `concurrency:
+review-responder-<pr>` **queues** the runs (`cancel-in-progress: false`) behind a
+  leading `sleep 300` debounce: the first answers a complete feedback set, and the
+  rest wake to find its marker at an unmoved head SHA and skip. Two responders on
+  one branch would race each other's pushes. `cancel-in-progress: true` is the
+  trap: concurrency is evaluated _before_ the job `if:`, so a run the `if:` would
+  skip still cancels the run in progress — and every inline reply the responder
+  posts is such an event. The first reply would kill the responder that wrote it
+  before it recorded its marker, and the replacement would start over: unbounded
+  ping-pong presenting as cancelled runs rather than failures.
+- **The gate must not be run by the branch it is judging.** The scanner executes
+  from a checkout pinned to the default branch with `persist-credentials: false`.
+  On `pull_request_review*` the default ref is the PR's merge ref, so omitting
+  `ref:` would run the PR's own copy of the script that decides whether the
+  privileged step happens. `BOT_PAT` and the branch's code enter the workspace
+  only in a second checkout, after the gate has approved the head.
+- **Loop safety is doubled everywhere, and the self-filter is NOT author-based.**
+  The responder posts comments and comments are its trigger, so the job `if:`
+  refuses any run whose triggering comment/review author is
+  `github-actions[bot]`, AND `isSelfOutput` drops our own output from the
+  feedback. It cannot drop it by author: `claude-pr-review.yml` posts its verdict
+  under that same login (`claude-code-action` runs its Bash `gh` under
+  GITHUB_TOKEN), so an author filter would discard the house reviewer entirely —
+  the same blindness as the endpoint trap above, arrived at from the other side.
+  The test is structural instead: either marker in the body at any authorship, or
+  an inline comment authored by us with `in_reply_to_id` set (we only ever reply;
+  the reviewer's inline comments open new threads). That is also why the workflow
+  — not Claude — posts the summary, as one comment carrying the SHA marker.
+  `allowed_bots` is not in tension with that `if:` — `allowed_bots` gates the
+  _action_ for a triggering **actor**, the `if:` gates which **trigger** is worth a
+  run. Claude's push fires `synchronize`, which this workflow does not subscribe
+  to.
+- **The reviewer bots are named actors** (`github-actions[bot]`,
+  `chatgpt-codex-connector[bot]`, `copilot-pull-request-reviewer[bot]`), never
+  `'*'`. Admitting third-party Apps as actors grants them no content control they
+  lack anyway — their findings are this workflow's input by design, whichever event
+  starts the run — while excluding them breaks the feature silently: Codex ignores
+  bot-authored PRs and the house reviewer stands down once inline comments exist,
+  so Copilot's review is sometimes the only event an `automation/*` PR gets.
+
+Merging, opening a PR, and closing anything are removed from the tool surface
+(`--disallowedTools "Bash(gh pr merge:*),Bash(gh pr create:*),Bash(gh pr close:*),Bash(gh issue close:*)"`)
+rather than merely discouraged in the prompt: a model that ignores an instruction
+regresses silently in a way that looks like success. Force-pushing is forbidden
+because the branch may carry a human's commits, and the job holds `contents: read`
+— the push goes through the `BOT_PAT` credential the checkout persisted, for the
+same anti-recursion reason as its siblings.
+
+The session is **not** resumed, deliberately. GitHub already is the durable state:
+the diff is on the branch, the reasoning is in the threads, the verdict is the
+check suite. A resumed session would be a second, private copy of that state that
+can disagree with the public one — and would not survive a human pushing to the
+branch, a rebase, or a week's delay anyway. The only memory the run needs is "did
+we already answer at this SHA?", which is one HTML comment. Full rationale:
+[`packages/dev-tools/review-responder/README.md`](../packages/dev-tools/review-responder/README.md).
+
+```bash
+gh workflow run review-responder.yml -f pr_number=2179 -f dry_run=true  # rehearse
+gh workflow run review-responder.yml -f pr_number=2179                  # for real
+```
+
 ## doc-dead-reference-gate
 
 `check-doc-refs.mjs` (+ `check-doc-refs-lib.mjs`) skips globs,
