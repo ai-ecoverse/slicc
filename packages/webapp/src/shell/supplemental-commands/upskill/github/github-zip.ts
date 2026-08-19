@@ -12,6 +12,7 @@ import type { VirtualFS } from '../../../../fs/index.js';
 import { consumeCachedBinaryByUrl } from '../../../binary-cache.js';
 import { getFetchBodyBytes, parseFetchJson } from '../../../fetch-body.js';
 import { describeFetchError } from '../fetch-error.js';
+import { writeSkillFileGuarded } from '../provenance.js';
 import type { GitHubContent, GitHubRequestContext } from '../types.js';
 import { formatGitHubFailure } from './github-errors.js';
 
@@ -88,10 +89,7 @@ export async function writeZipFilesToDir(
     if (!path.startsWith(prefix)) continue;
     const relativePath = path.slice(prefix.length);
     if (!relativePath || path.endsWith('/')) continue;
-    const filePath = `${destDir}/${relativePath}`;
-    const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
-    if (parentDir !== destDir) await fs.mkdir(parentDir, { recursive: true });
-    await fs.writeFile(filePath, content);
+    await writeSkillFileGuarded(fs, destDir, relativePath, content);
     fileCount++;
   }
   return fileCount;
@@ -115,7 +113,7 @@ export async function downloadGitHubDir(
         );
       }
       const cached = consumeCachedBinaryByUrl(item.download_url);
-      await fs.writeFile(`${destBase}/${item.name}`, cached ?? fileResponse.body);
+      await writeSkillFileGuarded(fs, destBase, item.name, cached ?? fileResponse.body);
     } else if (item.type === 'dir') {
       const subBase = `https://api.github.com/repos/${owner}/${repo}/contents/${item.path}`;
       const subUrl = branch ? `${subBase}?ref=${encodeURIComponent(branch)}` : subBase;

@@ -10,7 +10,6 @@
 
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import type { BrowserAPI } from '../../../cdp/index.js';
 import type { VirtualFS } from '../../../fs/index.js';
 import { isSafeUpskillBranch, isSafeUpskillPath } from '../../../net/handoff-link.js';
 import { parseFetchJson } from '../../fetch-body.js';
@@ -32,6 +31,8 @@ import {
   upskillHelp,
 } from './help.js';
 import { installSkillFromZip, runPostInstallHooks } from './install-pipeline.js';
+import type { UpskillProvenance } from './provenance.js';
+import { readProvenance, recordProvenance } from './provenance.js';
 import { installRecommendedSkills } from './recommendations.js';
 import { installFromBrowseSh, parseBrowseShRef } from './registries/browse-sh.js';
 import { searchRegistries } from './registries/search.js';
@@ -45,6 +46,14 @@ import type {
   UserProfile,
 } from './types.js';
 import { SKILL_CATALOG_URL } from './types.js';
+import { handleUpskillOutdated, handleUpskillUpdate, parseUpdateArgs } from './update.js';
+
+/**
+ * The browser handle `upskill tabs` needs, derived from `handleTabs` rather than
+ * imported from `cdp/`: an import from `shell/` into `cdp/` points up the
+ * documented layer stack, and this file only passes the handle through.
+ */
+type TabsBrowser = Parameters<typeof handleTabs>[2];
 
 /**
  * Handle the `upskill recommendations` subcommand.
@@ -255,6 +264,20 @@ async function handleUpskillList(
   };
 }
 
+/** Render the `.upskill` record as `info` output lines (empty when absent). */
+function formatProvenance(provenance: UpskillProvenance | null): string {
+  if (!provenance) return 'Installed from: (not recorded)\n';
+  if (provenance.kind === 'browse.sh') {
+    return `Installed from: browse.sh ${provenance.slug ?? '(unknown slug)'}\nInstalled at: ${provenance.installedAt}\n`;
+  }
+  const ref = provenance.ref ? `@${provenance.ref}` : '';
+  const path = provenance.path ? `/${provenance.path}` : '';
+  let out = `Installed from: ${provenance.kind} ${provenance.owner}/${provenance.repo}${ref}${path}\n`;
+  if (provenance.sha) out += `Installed commit: ${provenance.sha}\n`;
+  out += `Installed at: ${provenance.installedAt}\n`;
+  return out;
+}
+
 async function handleUpskillInfoRead(
   arg: string,
   skillName: string | undefined,
@@ -269,13 +292,56 @@ async function handleUpskillInfoRead(
     if (!skill) {
       return { stdout: '', stderr: `upskill: skill "${skillName}" not found\n`, exitCode: 1 };
     }
-    return { stdout: formatSkillInfo(skill), stderr: '', exitCode: 0 };
+    // `Source:`/`Source root:` describe the *discovery* root, not the origin —
+    // append the recorded install provenance so `info` answers "where did this
+    // come from, and can I update it?" without a second command.
+    return {
+      stdout: formatSkillInfo(skill) + formatProvenance(await readProvenance(fs, skillName)),
+      stderr: '',
+      exitCode: 0,
+    };
   }
   const instructions = await skills.readSkillInstructions(fs, skillName);
   if (instructions === null) {
     return { stdout: '', stderr: `upskill: no SKILL.md found for "${skillName}"\n`, exitCode: 1 };
   }
   return { stdout: instructions + '\n', stderr: '', exitCode: 0 };
+}
+
+interface InstallBatchResult {
+  output: string;
+  errors: string;
+  successCount: number;
+  /** Names of the skills that installed cleanly — the set that gets `.upskill`. */
+  installed: string[];
+}
+
+/**
+ * Write `.upskill` for every skill that just installed cleanly.
+ *
+ * Deliberately records no commit sha: installs go through the codeload ZIP
+ * precisely because it is not rate-limited, and adding a commits-API call here
+ * would spend the caller's anonymous GitHub budget on every install. The first
+ * `upskill update` resolves and stores the sha, so only that one update pays for
+ * a whole-tree comparison and every later one takes the cheap sha short-circuit.
+ */
+async function recordGitHubProvenance(
+  fs: VirtualFS,
+  installedNames: string[],
+  skillsToInstall: Array<{ name: string; path: string }>,
+  source: { owner: string; repo: string; ref?: string; kind: 'github' | 'tessl' }
+): Promise<void> {
+  for (const name of installedNames) {
+    const skill = skillsToInstall.find((entry) => entry.name === name);
+    if (!skill) continue;
+    await recordProvenance(fs, name, {
+      kind: source.kind,
+      owner: source.owner,
+      repo: source.repo,
+      path: skill.path,
+      ref: source.ref,
+    });
+  }
 }
 
 async function installGitHubBatchViaZip(
@@ -286,10 +352,11 @@ async function installGitHubBatchViaZip(
   fs: VirtualFS,
   force: boolean,
   startTime: number
-): Promise<{ output: string; errors: string; successCount: number }> {
+): Promise<InstallBatchResult> {
   let output = '';
   let errors = '';
   let successCount = 0;
+  const installed: string[] = [];
   const totalSkills = skillsToInstall.length;
   for (let si = 0; si < skillsToInstall.length; si++) {
     const skill = skillsToInstall[si];
@@ -304,12 +371,13 @@ async function installGitHubBatchViaZip(
     if (result.ok) {
       output += `[${idx}/${totalSkills}] Installed "${skill.name}" from ${owner}/${repo} (${elapsed}s)${eta}\n`;
       successCount++;
+      installed.push(skill.name);
     } else {
       output += `[${idx}/${totalSkills}] Failed "${skill.name}": ${result.error}${eta}\n`;
       errors += `upskill: ${result.error}\n`;
     }
   }
-  return { output, errors, successCount };
+  return { output, errors, successCount, installed };
 }
 
 async function installGitHubBatchViaApi(
@@ -321,10 +389,11 @@ async function installGitHubBatchViaApi(
   force: boolean,
   effectiveBranch: string | undefined,
   startTime: number
-): Promise<{ output: string; errors: string; successCount: number }> {
+): Promise<InstallBatchResult> {
   let output = '';
   let errors = '';
   let successCount = 0;
+  const installed: string[] = [];
   const totalSkills = skillsToInstall.length;
   // ZIP unavailable — fall back to Contents API per skill
   for (let si = 0; si < skillsToInstall.length; si++) {
@@ -350,12 +419,13 @@ async function installGitHubBatchViaApi(
     if (installResult.exitCode === 0) {
       output += `[${idx}/${totalSkills}] Installed "${skill.name}" from ${owner}/${repo} (${elapsed}s)${eta}\n`;
       successCount++;
+      installed.push(skill.name);
     } else {
       output += `[${idx}/${totalSkills}] Failed "${skill.name}": ${installResult.stderr.trim()}${eta}\n`;
       errors += installResult.stderr;
     }
   }
-  return { output, errors, successCount };
+  return { output, errors, successCount, installed };
 }
 
 async function installGitHubSingle(
@@ -367,10 +437,11 @@ async function installGitHubSingle(
   force: boolean,
   fetchFn: SecureFetch,
   effectiveBranch: string | undefined
-): Promise<{ output: string; errors: string; successCount: number }> {
+): Promise<InstallBatchResult> {
   let output = '';
   let errors = '';
   let successCount = 0;
+  const installed: string[] = [];
   for (const skill of skillsToInstall) {
     const r = await installFromGitHub(
       owner,
@@ -386,11 +457,12 @@ async function installGitHubSingle(
     if (r.exitCode === 0) {
       output += r.stdout;
       successCount++;
+      installed.push(skill.name);
     } else {
       errors += r.stderr;
     }
   }
-  return { output, errors, successCount };
+  return { output, errors, successCount, installed };
 }
 
 function listAvailableSkills(
@@ -473,6 +545,7 @@ async function handleGitHubInstall(
   let output = '';
   let errors = '';
   let successCount = 0;
+  let installedNames: string[] = [];
 
   // For batch installs (--all or multiple --skill), use ZIP and skip per-skill hooks
   if (totalSkills > 1) {
@@ -487,7 +560,7 @@ async function handleGitHubInstall(
         parsed.force,
         startTime
       );
-      ({ output, errors, successCount } = batch);
+      ({ output, errors, successCount, installed: installedNames } = batch);
     } else {
       const batch = await installGitHubBatchViaApi(
         skillsToInstall,
@@ -499,11 +572,16 @@ async function handleGitHubInstall(
         effectiveBranch,
         startTime
       );
-      ({ output, errors, successCount } = batch);
+      ({ output, errors, successCount, installed: installedNames } = batch);
     }
   } else {
     // Single skill — use the existing installFromGitHub path
-    ({ output, errors, successCount } = await installGitHubSingle(
+    ({
+      output,
+      errors,
+      successCount,
+      installed: installedNames,
+    } = await installGitHubSingle(
       skillsToInstall,
       owner,
       repo,
@@ -518,6 +596,12 @@ async function handleGitHubInstall(
   const totalElapsed = ((Date.now() - startTime) / 1000).toFixed(1);
   if (successCount > 0) {
     output += `\nInstalled ${successCount} skill(s)${totalSkills > 1 ? ` in ${totalElapsed}s` : ''}\n`;
+    await recordGitHubProvenance(fs, installedNames, skillsToInstall, {
+      owner,
+      repo,
+      ref: effectiveBranch,
+      kind: 'github',
+    });
     await runPostInstallHooks();
   }
 
@@ -525,37 +609,65 @@ async function handleGitHubInstall(
 }
 
 /**
+ * Dispatch the named subcommands (`tabs`, `list`, `update`, …).
+ *
+ * Returns null when `args[0]` is not a subcommand, so the caller falls through
+ * to the install-source parser. Split out from `createUpskillCommand` so
+ * neither half carries the cognitive complexity of both.
+ */
+async function dispatchSubcommand(
+  args: string[],
+  fs: VirtualFS,
+  fetchFn: SecureFetch,
+  browser: TabsBrowser
+): Promise<{ stdout: string; stderr: string; exitCode: number } | null> {
+  switch (args[0]) {
+    // `upskill tabs [--json]` — surface skill suggestions for open browser
+    // tabs. Handled up-front so the rest of the arg parser doesn't try to
+    // interpret `tabs` as a GitHub `owner/repo` ref.
+    case 'tabs':
+      return handleTabs(fs, fetchFn, browser, args.includes('--json'));
+    case 'recommendations':
+      return handleRecommendations(fs, fetchFn, args.includes('--install'));
+    case 'list':
+      return handleUpskillList(fs);
+    // `upgrade` is an alias: `update` is canonical (it matches the `.upskill`
+    // provenance vocabulary), but the shell already has a top-level `upgrade`
+    // command for bundled workspace files, so both words are accepted here.
+    case 'update':
+    case 'upgrade':
+      return handleUpskillUpdate(fs, fetchFn, parseUpdateArgs(args.slice(1)));
+    case 'outdated':
+      return handleUpskillOutdated(fs, fetchFn);
+    case 'info':
+    case 'read':
+      return handleUpskillInfoRead(args[0], args[1], fs);
+    case 'search':
+      return handleUpskillSearch(args, fetchFn);
+    default:
+      return null;
+  }
+}
+
+/**
  * Create the upskill command with access to the virtual filesystem.
  *
- * @param browser Optional BrowserAPI used by the `tabs` subcommand. When
+ * @param browser Optional browser handle used by the `tabs` subcommand. When
  *   omitted (e.g. headless tests or pre-CDP boot), `upskill tabs` exits
  *   non-zero with a clear "browser APIs unavailable" message.
  */
 export function createUpskillCommand(
   fs: VirtualFS,
   fetchFn: SecureFetch,
-  browser?: BrowserAPI
+  browser?: TabsBrowser
 ): Command {
   return defineCommand('upskill', async (args, _ctx: CommandContext) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
       return upskillHelp();
     }
 
-    // `upskill tabs [--json]` — surface skill suggestions for open browser
-    // tabs. Handled up-front so the rest of the arg parser doesn't try to
-    // interpret `tabs` as a GitHub `owner/repo` ref.
-    if (args[0] === 'tabs') {
-      return handleTabs(fs, fetchFn, browser, args.includes('--json'));
-    }
-    if (args[0] === 'recommendations') {
-      return handleRecommendations(fs, fetchFn, args.includes('--install'));
-    }
-    if (args[0] === 'list') return handleUpskillList(fs);
-    if (args[0] === 'info' || args[0] === 'read') {
-      return handleUpskillInfoRead(args[0], args[1], fs);
-    }
-
-    if (args[0] === 'search') return handleUpskillSearch(args, fetchFn);
+    const subcommand = await dispatchSubcommand(args, fs, fetchFn, browser);
+    if (subcommand) return subcommand;
 
     const parsed = parseUpskillFlags(args);
     if (parsed.earlyReturn) return parsed.earlyReturn;
@@ -617,7 +729,7 @@ async function handleTesslInstall(
     return { stdout: '', stderr: `upskill: ${resolved.error}\n`, exitCode: 1 };
   }
   const github = await createGitHubRequestContext(fetchFn);
-  return installFromGitHub(
+  const result = await installFromGitHub(
     resolved.owner,
     resolved.repo,
     resolved.skillPath,
@@ -627,4 +739,13 @@ async function handleTesslInstall(
     force,
     fetchFn
   );
+  if (result.exitCode === 0) {
+    await recordGitHubProvenance(
+      fs,
+      [resolved.skillName],
+      [{ name: resolved.skillName, path: resolved.skillPath }],
+      { owner: resolved.owner, repo: resolved.repo, kind: 'tessl' }
+    );
+  }
+  return result;
 }

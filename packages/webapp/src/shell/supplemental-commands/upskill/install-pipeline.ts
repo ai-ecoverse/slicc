@@ -7,16 +7,27 @@
  */
 
 import type { VirtualFS } from '../../../fs/index.js';
+import { pruneSkillDirPreservingDotfiles, writeSkillFileGuarded } from './provenance.js';
 import { SKILLS_DIR } from './types.js';
+
+/**
+ * The two globals the post-install hooks reach for. Both are installed by the
+ * page realm (or, in the kernel worker, a BroadcastChannel-backed proxy), so
+ * they are optional and must be feature-detected rather than assumed.
+ */
+interface InstallHookGlobals {
+  __slicc_reloadSkills?: () => Promise<void> | void;
+  __slicc_sprinkleManager?: { openNewAutoOpenSprinkles?: () => Promise<void> | void };
+}
 
 /** After a successful install, reload skills on all active agent contexts. */
 export async function reloadSkillsAfterInstall(): Promise<void> {
   try {
     // CLI mode: direct window hook (check both window and globalThis for testability)
-    const global = typeof window !== 'undefined' ? window : globalThis;
-    const hook = (global as unknown as Record<string, unknown>).__slicc_reloadSkills;
+    const global = (typeof window !== 'undefined' ? window : globalThis) as InstallHookGlobals;
+    const hook = global.__slicc_reloadSkills;
     if (typeof hook === 'function') {
-      await (hook as () => Promise<void>)();
+      await hook();
       return;
     }
     // Extension mode: send message to offscreen document
@@ -37,9 +48,9 @@ export async function refreshSprinklesAfterInstall(): Promise<void> {
     // Read from `globalThis` so the lookup works in both the page
     // realm (real `SprinkleManager`) and the kernel-worker realm
     // (BroadcastChannel-backed proxy).
-    const mgr = (globalThis as Record<string, unknown>).__slicc_sprinkleManager;
-    if (mgr && typeof (mgr as Record<string, unknown>).openNewAutoOpenSprinkles === 'function') {
-      await (mgr as { openNewAutoOpenSprinkles: () => Promise<void> }).openNewAutoOpenSprinkles();
+    const mgr = (globalThis as InstallHookGlobals).__slicc_sprinkleManager;
+    if (typeof mgr?.openNewAutoOpenSprinkles === 'function') {
+      await mgr.openNewAutoOpenSprinkles();
     }
   } catch {
     /* best-effort */
@@ -64,12 +75,17 @@ export async function installSkillFromZip(
   force: boolean = false
 ): Promise<{ ok: boolean; error?: string }> {
   const destDir = `${SKILLS_DIR}/${skillName}`;
+  let replacing = false;
   try {
     await fs.stat(destDir);
     if (!force) {
       return { ok: false, error: `skill "${skillName}" already exists (use --force to overwrite)` };
     }
-    await fs.rm(destDir, { recursive: true });
+    // `--force` used to `rm -rf` the whole directory, which deleted the
+    // dotfiles a skill keeps its credentials (`scripts/.config`) and its
+    // provenance (`.upskill`) in. Prune only the non-dot content instead.
+    await pruneSkillDirPreservingDotfiles(fs, destDir);
+    replacing = true;
   } catch {
     // Doesn't exist, continue
   }
@@ -97,22 +113,34 @@ export async function installSkillFromZip(
         continue; // skip malicious entry
       }
 
-      const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
-      if (parentDir !== destDir) {
-        await fs.mkdir(parentDir, { recursive: true });
-      }
-
-      await fs.writeFile(filePath, content);
+      await writeSkillFileGuarded(fs, destDir, relativePath, content);
       fileCount++;
     }
   } catch (err) {
-    await fs.rm(destDir, { recursive: true }).catch(() => {});
+    await cleanupFailedInstall(fs, destDir, replacing);
     throw err;
   }
 
   if (fileCount === 0) {
-    await fs.rm(destDir, { recursive: true }).catch(() => {});
+    await cleanupFailedInstall(fs, destDir, replacing);
     return { ok: false, error: `no files found for skill "${skillName}" in ZIP` };
   }
   return { ok: true };
+}
+
+/**
+ * Undo a failed install. A brand-new skill directory is removed outright; a
+ * directory that already existed keeps its dotfiles, because a failed refresh
+ * must not be more destructive than a successful one.
+ */
+async function cleanupFailedInstall(
+  fs: VirtualFS,
+  destDir: string,
+  replacing: boolean
+): Promise<void> {
+  if (replacing) {
+    await pruneSkillDirPreservingDotfiles(fs, destDir).catch(() => {});
+    return;
+  }
+  await fs.rm(destDir, { recursive: true }).catch(() => {});
 }

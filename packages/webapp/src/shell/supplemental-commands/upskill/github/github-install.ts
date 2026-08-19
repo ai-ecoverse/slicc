@@ -14,6 +14,7 @@ import {
   reloadSkillsAfterInstall,
   runPostInstallHooks,
 } from '../install-pipeline.js';
+import { pruneSkillDirPreservingDotfiles } from '../provenance.js';
 import type { GitHubContent, GitHubRequestContext } from '../types.js';
 import { SKILLS_DIR } from '../types.js';
 import { formatGitHubFailure } from './github-errors.js';
@@ -121,6 +122,7 @@ export async function installFromGitHub(
   try {
     // Check if skill already exists
     const destDir = `${SKILLS_DIR}/${skillName}`;
+    let replacing = false;
     try {
       await fs.stat(destDir);
       if (!force) {
@@ -130,7 +132,11 @@ export async function installFromGitHub(
           exitCode: 1,
         };
       }
-      await fs.rm(destDir, { recursive: true });
+      // `--force` used to `rm -rf` here, which deleted the dotfiles a skill
+      // keeps its credentials (`scripts/.config`) and provenance (`.upskill`)
+      // in. Prune only non-dot content — see `provenance.ts`.
+      await pruneSkillDirPreservingDotfiles(fs, destDir);
+      replacing = true;
     } catch {
       // Doesn't exist, continue
     }
@@ -179,7 +185,11 @@ export async function installFromGitHub(
       await downloadGitHubDir(contents, destDir, owner, repo, branch, fs, github);
     } catch (downloadErr) {
       try {
-        await fs.rm(destDir, { recursive: true });
+        if (replacing) {
+          await pruneSkillDirPreservingDotfiles(fs, destDir);
+        } else {
+          await fs.rm(destDir, { recursive: true });
+        }
       } catch {
         /* best-effort */
       }

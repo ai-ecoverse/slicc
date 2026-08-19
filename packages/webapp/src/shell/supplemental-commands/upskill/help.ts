@@ -81,6 +81,9 @@ Commands:
   tabs [--json]              Suggest skills for open browser tabs
   info <name>                Show details about a discoverable local skill
   read <name>                Read the SKILL.md instructions
+  update [<skill>…]          Refresh installed skills from recorded provenance
+  upgrade [<skill>…]         Alias of update
+  outdated                   List installed skills behind their recorded source
   <owner/repo>               Install skill(s) from GitHub repository
   tessl:<name>               Install skill from Tessl registry
   browse:<hostname>/<task>   Install site-specific skill from browse.sh
@@ -93,6 +96,25 @@ GitHub Installation:
   upskill owner/repo --path subdir       Restrict to subfolder
   upskill owner/repo@branch              Install from a specific branch
   upskill owner/repo --branch name       Same, using flag syntax
+
+Updating installed skills:
+  upskill update                         Update every skill with recorded provenance
+  upskill update <skill>                 Update just that skill
+  upskill update --dry-run               Report what would change; write nothing
+  upskill update <skill> --branch <ref>  Update from a different ref
+  upskill update <skill> --from o/r      Record provenance for a pre-provenance skill
+  upskill outdated                       List skills whose recorded sha is behind
+
+  Every install records \`<skill>/.upskill\` — source kind, owner/repo, ref,
+  resolved commit sha, timestamp. Updates classify each path as unchanged /
+  updated / added / removed / kept-local, and report "already current" when the
+  recorded sha still matches the tip of the tracked ref.
+
+  Dotfiles are protected: upskill never overwrites and never deletes a dotfile
+  that already exists in a skill directory (this is what preserves
+  \`scripts/.config\` credentials and the \`.upskill\` record). A dotfile that is
+  absent locally is still installed, so skills that ship \`.gitignore\` upstream
+  work as before.
 
 Recommendations:
   upskill recommendations                Show skills matching your profile
@@ -112,7 +134,9 @@ Options:
   --path <subfolder>       Only discover skills under this subfolder
   --branch, -b <name>      Install from a specific branch (default: main)
   --list                   List available skills without installing
-  --force                  Overwrite existing skills
+  --force                  Overwrite existing skills (dotfiles are preserved)
+  --dry-run, -n            update/upgrade only: report changes, write nothing
+  --from <owner>/<repo>    update only: source for a skill with no .upskill
   -h, --help               Show help
 
 GitHub rate limits:

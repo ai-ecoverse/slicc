@@ -16,6 +16,7 @@ import type { VirtualFS } from '../../../../fs/index.js';
 import { decodeFetchBody, parseFetchJson } from '../../../fetch-body.js';
 import { describeFetchError } from '../fetch-error.js';
 import { runPostInstallHooks } from '../install-pipeline.js';
+import { pruneSkillDirPreservingDotfiles, recordProvenance } from '../provenance.js';
 import type { BrowseShDetail, BrowseShSkillSummary, UnifiedSearchResult } from '../types.js';
 import { BROWSE_SH_API, SKILLS_DIR } from '../types.js';
 
@@ -46,7 +47,10 @@ export function _resetBrowseShCatalogCache(): void {
  */
 export async function fetchBrowseShCatalog(fetch: SecureFetch): Promise<BrowseShSkillSummary[]> {
   if (cachedBrowseShCatalog) return cachedBrowseShCatalog;
-  if (cachedBrowseShCatalogPromise) return cachedBrowseShCatalogPromise;
+  // Compared against `undefined` rather than used as a bare truthy conditional:
+  // a Promise is always truthy, so the short form reads like a bug (and trips
+  // `noMisusedPromises`). The intent is "a fetch is already in flight".
+  if (cachedBrowseShCatalogPromise !== undefined) return cachedBrowseShCatalogPromise;
   cachedBrowseShCatalogPromise = (async () => {
     let response;
     try {
@@ -328,7 +332,9 @@ export async function installFromBrowseSh(
         exitCode: 1,
       };
     }
-    await fs.rm(destDir, { recursive: true });
+    // Prune non-dot content only: `--force` must not delete the dotfiles a
+    // skill keeps credentials and provenance in (see `provenance.ts`).
+    await pruneSkillDirPreservingDotfiles(fs, destDir);
   } catch {
     // doesn't exist, continue
   }
@@ -338,6 +344,7 @@ export async function installFromBrowseSh(
 
   await fs.mkdir(destDir, { recursive: true });
   await fs.writeFile(`${destDir}/SKILL.md`, fileContent);
+  await recordProvenance(fs, dirName, { kind: 'browse.sh', slug });
 
   await runPostInstallHooks();
 

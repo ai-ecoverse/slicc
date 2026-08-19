@@ -50,7 +50,6 @@
   "packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/theme-command.ts": 3,
   "packages/webapp/src/shell/supplemental-commands/upskill/tabs.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/upskill/upskill-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/usb-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/workflow-command.ts": 3
 }
