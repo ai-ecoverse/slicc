@@ -2,6 +2,7 @@ import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import annotationFontUrl from '../../../../assets/fonts/AdobeClean-Regular.otf?url';
 import { getMagick, type IpkResolutionContext } from './magick-wasm.js';
+import { DEFAULT_PDF_DPI, dpiToScale, isPdfBytes, renderPdfPage } from './pdf-raster.js';
 
 /**
  * Build an {@link IpkResolutionContext} from a command's `ctx` so
@@ -66,6 +67,7 @@ type OperationType =
   | 'fill'
   | 'undercolor'
   | 'pointsize'
+  | 'density'
   | 'annotate';
 
 interface ParsedOperation {
@@ -118,6 +120,7 @@ Operations:
   -colorspace TYPE   convert color space (sRGB, Gray, CMYK, ...)
   -transparent COLOR make matching pixels transparent
   -blur / -sharpen R[xS] apply a Gaussian effect
+  -density DPI       rasterization DPI for PDF inputs (default ${DEFAULT_PDF_DPI})
   -auto-gamma / -auto-level / -normalize / -negate
   +append            join all images in the current sequence horizontally
   -append            join all images in the current sequence vertically
@@ -134,6 +137,12 @@ Examples:
   convert input.png -crop 100x100+50+50 cropped.png
   convert frame1.jpg frame2.jpg +append filmstrip.jpg
   convert \\( a.jpg b.jpg +append \\) \\( c.jpg d.jpg +append \\) -append grid.jpg
+
+PDF inputs are rasterized with pdf.js. Select a page with a bracket suffix
+(0-based, as ImageMagick does); page 0 is used when none is given:
+  convert -density 150 doc.pdf page0.png
+  convert doc.pdf[2] -resize 800x page3.png
+Use pdftoppm to rasterize a whole document in one pass.
 `;
 
 function convertHelp(): CmdResult {
@@ -166,6 +175,7 @@ const OP_ARG_COUNTS = new Map<string, number>([
   ['-fill', 1],
   ['-undercolor', 1],
   ['-pointsize', 1],
+  ['-density', 1],
   ['-annotate', 2],
 ]);
 
@@ -470,6 +480,11 @@ function applyOperation(
     return;
   }
   switch (op.type) {
+    case 'density':
+      // Consumed by `loadInputData` when rasterizing a PDF input. ImageMagick
+      // also treats it as a pre-input setting, so there is nothing to apply
+      // to an already-decoded raster.
+      return;
     case 'resize':
       applyResize(magick, image, op.value);
       return;
@@ -634,6 +649,33 @@ async function renderExpression(
   });
 }
 
+/**
+ * Split ImageMagick's `file.pdf[2]` scene-selector suffix off a path. Only
+ * a bare non-negative integer is treated as a selector, so a real filename
+ * like `report[final].png` still resolves as itself.
+ */
+export function splitSceneSelector(path: string): { path: string; scene?: number } {
+  const match = path.match(/^(.*)\[(\d+)\]$/);
+  if (!match) return { path };
+  return { path: match[1], scene: Number(match[2]) };
+}
+
+/** Last `-density` wins, as it does in ImageMagick. */
+function densityFor(expression: InputExpression): number {
+  let dpi = DEFAULT_PDF_DPI;
+  for (const operation of expression.operations) {
+    if (operation.type !== 'density') continue;
+    // ImageMagick accepts `-density 150x150`; both axes are the same here
+    // because pdf.js scales uniformly, so take the first component.
+    const parsed = Number(operation.value.split('x')[0]);
+    if (!Number.isFinite(parsed) || parsed <= 0) {
+      throw new Error(`Invalid density: ${operation.value}`);
+    }
+    dpi = parsed;
+  }
+  return dpi;
+}
+
 async function loadInputData(
   expression: ImageExpression,
   ctx: CommandContext,
@@ -641,11 +683,24 @@ async function loadInputData(
   pathCache = new Map<string, Uint8Array>()
 ): Promise<Map<InputExpression, Uint8Array>> {
   if (expression.kind === 'input') {
-    const path = ctx.fs.resolvePath(ctx.cwd, expression.path);
+    const { path: rawPath, scene } = splitSceneSelector(expression.path);
+    const path = ctx.fs.resolvePath(ctx.cwd, rawPath);
     let data = pathCache.get(path);
     if (data === undefined) {
       data = await ctx.fs.readFileBuffer(path);
       pathCache.set(path, data);
+    }
+    // magick-wasm has no PDF delegate (real ImageMagick shells out to
+    // Ghostscript). Rasterize first so `convert doc.pdf out.png` works like
+    // the tool an agent expects, instead of failing on an unknown format.
+    if (isPdfBytes(data)) {
+      // The scene selector is 0-based; pdf.js pages are 1-based.
+      const page = await renderPdfPage(data, (scene ?? 0) + 1, {
+        scale: dpiToScale(densityFor(expression)),
+        format: 'png',
+      });
+      result.set(expression, page.bytes);
+      return result;
     }
     result.set(expression, data);
     return result;

@@ -3,8 +3,8 @@ name: image-processing
 description: |
   Use this when converting, resizing, cropping, stitching, or annotating images;
   building a filmstrip, contact sheet, or grid; correcting orientation or color;
-  or applying common ImageMagick-style effects with SLICC's `convert` / `magick`
-  shell command.
+  turning a PDF into PNG or JPEG images; or applying common ImageMagick-style
+  effects with SLICC's `convert` / `magick` and `pdftoppm` shell commands.
 allowed-tools: bash
 ---
 
@@ -64,12 +64,44 @@ Annotation uses the bundled Adobe Clean font; custom `-font` selection is not su
 
 Use `-gravity` with `northwest`, `north`, `northeast`, `west`, `center`, `east`, `southwest`, `south`, or `southeast`. Quote label text and colors containing `#`.
 
+## Rasterize a PDF
+
+`pdftoppm` turns PDF pages into images. `pdftocairo` is an alias.
+
+```bash
+pdftoppm -png -r 150 doc.pdf page      # page-1.png, page-2.png, ...
+pdftoppm -jpeg -jpegopt quality=80 doc.pdf page
+pdftoppm -png -f 2 -l 4 doc.pdf page   # pages 2-4 only
+pdftoppm -png -singlefile doc.pdf cover  # exactly cover.png, no page suffix
+pdftoppm -png -scale-to 1024 doc.pdf thumb
+```
+
+Page files are numbered `<prefix>-<n>.<ext>`, zero-padded to the digit width of
+the last page — `page-1.png` for a 9-page document, `page-01.png` for a 12-page
+one. `pdftoppm` prints the filenames it wrote.
+
+For a single page you can also feed the PDF straight to `convert`, which
+rasterizes it first and accepts ImageMagick's 0-based bracket page selector:
+
+```bash
+convert -density 150 doc.pdf cover.png     # first page
+convert doc.pdf[2] -resize 800x page3.jpg  # third page, resized
+```
+
+Prefer `pdftoppm` for whole documents: it parses the PDF once, while repeated
+`convert` calls re-parse it per page.
+
+Rasterization needs `OffscreenCanvas`, so it is unavailable in the Node CLI
+float. `pdftk` handles page-level PDF work (merge, split, rotate, text
+extraction) without rendering.
+
 ## Verify and inspect
 
 ```bash
 file /tmp/grid.jpg
 open --view --size high /tmp/grid.jpg
 convert --help
+pdftoppm --help
 ```
 
 Keep the output path last. Multiple inputs must be reduced with `+append` or `-append`; escape group parentheses as `\(` and `\)` so the shell passes them to `convert`.
