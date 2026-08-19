@@ -9,7 +9,8 @@
 import type { VirtualFS } from '../../../fs/index.js';
 import { canWriteSkillFile, clearSkillDirPreservingDotfiles } from './dotfiles.js';
 import type { UpskillProvenance } from './provenance.js';
-import { writeProvenance } from './provenance.js';
+import { readProvenance, writeProvenance } from './provenance.js';
+import { isSafeSkillRelativePath } from './skill-paths.js';
 import { SKILLS_DIR } from './types.js';
 
 /** Provenance fields an install path supplies; `skill`/`files` are filled in here. */
@@ -93,8 +94,9 @@ export async function installSkillFromZip(
     }
     existed = true;
     // Reinstall clears the skill's own files but never its dotfiles — those
-    // hold credentials (`scripts/.config`) and the `.upskill` provenance.
-    await clearSkillDirPreservingDotfiles(fs, destDir);
+    // hold credentials (`scripts/.config`) and the `.upskill` provenance —
+    // and never files no recorded install wrote, matching `upskill update`.
+    await clearSkillDirPreservingDotfiles(fs, destDir, await managedFiles(fs, skillName));
   } catch {
     // Doesn't exist, continue
   }
@@ -114,17 +116,9 @@ export async function installSkillFromZip(
       // left exactly as the user (or a previous install) left it.
       if (!(await canWriteSkillFile(fs, destDir, relativePath))) continue;
 
+      // Zip-slip protection: reject paths that escape destDir.
+      if (!isSafeSkillRelativePath(relativePath)) continue;
       const filePath = `${destDir}/${relativePath}`;
-
-      // Zip-slip protection: reject paths that escape destDir
-      const normalizedPath = filePath.replace(/\/+/g, '/');
-      if (
-        normalizedPath.includes('/../') ||
-        normalizedPath.includes('/..') ||
-        !normalizedPath.startsWith(destDir + '/')
-      ) {
-        continue; // skip malicious entry
-      }
 
       const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
       if (parentDir !== destDir) {
@@ -152,6 +146,18 @@ export async function installSkillFromZip(
     });
   }
   return { ok: true };
+}
+
+/**
+ * The file list a previous install recorded, or undefined when the skill has
+ * no provenance yet (nothing is attributable, so nothing is spared).
+ */
+export async function managedFiles(
+  fs: VirtualFS,
+  skillName: string
+): Promise<Set<string> | undefined> {
+  const provenance = await readProvenance(fs, skillName);
+  return provenance?.files?.length ? new Set(provenance.files) : undefined;
 }
 
 /**

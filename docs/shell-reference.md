@@ -555,11 +555,15 @@ Skill package manager. Installs into `/workspace/skills/<name>/` from three regi
 | `upskill tessl:<name>`             | Tessl registry (resolves to a GitHub source under the hood).                                                                                                                                 |
 | `upskill browse:<hostname>/<task>` | [browse.sh](https://browse.sh) site-specific skills. Equivalent URL form: `upskill https://browse.sh/skills/<hostname>/<task>`. Installs into `/workspace/skills/browse-<hostname>-<name>/`. |
 
-### `upskill update|upgrade [<skill>…] [--dry-run] [--branch <ref>] [--json]`
+### `upskill update|upgrade [<skill>…] [--dry-run] [--branch <ref>] [--from <owner>/<repo>] [--path <dir>] [--json]`
 
 Re-installs skills from the source recorded at install time, so refreshing a skill no longer means remembering the repo and running `--force`. With no skill name, every skill that has provenance is updated.
 
-Each install writes `<skill>/.upskill` — source kind, `owner/repo` (or browse.sh slug), ref, resolved commit sha, install timestamp, and the file list it wrote. `upskill info <name>` surfaces it as `Installed from:`. The sha lookup is skipped unless a `github.token` is configured, so anonymous installs keep spending zero rate-limited API requests; the update then classifies by content compare instead.
+Each install writes `<skill>/.upskill` — source kind, `owner/repo` (or browse.sh slug), ref, resolved commit sha, the timestamp of the last install/update, and the file list it wrote. `upskill info <name>` surfaces it as `Installed from:`.
+
+**The sha is the fast path.** When the recorded commit still equals the ref's head and every recorded file is still on disk, `update` reports `already current` from one ~200-byte commits call and never downloads the archive. A moved sha, a missing file, or no recorded sha falls through to the full content compare. The two commands treat the API differently on purpose: an _install_ skips the sha lookup unless a `github.token` is configured, because the codeload path is deliberately rate-limit-free (pinned by `tessl.test.ts`); an explicit _update_ spends the request, because there it replaces a whole repo archive.
+
+`--from <owner>/<repo>` records a source for a skill that has none — installed by hand, or before provenance tracking. The skill directory is located in the repo by its `SKILL.md` (pass `--path <dir>` if that lookup is ambiguous or the skill is vendored deeper), and the resolved path is recorded, so the next update needs no arguments. Because nothing is attributable to a previous install, that first update can add and overwrite but never delete.
 
 Every path is classified with the vocabulary `upgrade apply` uses for bundled workspace files:
 
@@ -573,9 +577,14 @@ Every path is classified with the vocabulary `upgrade apply` uses for bundled wo
 
 `--dry-run` reports the classification and writes nothing. `--json` emits `{ ok, dryRun, results[] }` for scripted callers.
 
-### Dotfiles are never touched
+### What upskill never touches
 
-`upskill` never modifies or deletes a dotfile inside a skill directory — on install, on `--force`, or on `update`. Skills keep credentials there (`skills/bb/scripts/.config`, `skills/gmail/scripts/.config`), and before this rule a `--force` refresh silently revoked them along with the `.upskill` record. Upstream dotfiles (`.gitignore`, `.config.example`) are still written on **first** install, otherwise they could never land at all; after that they belong to the user. A reinstall clears the skill's non-dot files and keeps the directory skeleton that reaches the dotfiles.
+Two rules, and `--force` and `update` obey both, so "refresh this skill" means the same thing whichever command the user reaches for:
+
+1. **Dotfiles in a skill directory.** Never modified, never deleted — on install, on `--force`, or on `update`. Skills keep credentials there (`skills/bb/scripts/.config`, `skills/gmail/scripts/.config`), and before this rule a `--force` refresh silently revoked them along with the `.upskill` record. Upstream dotfiles (`.gitignore`, `.config.example`) are still written on **first** install, otherwise they could never land at all; after that they belong to the user.
+2. **Files no recorded install wrote.** Only paths in the `.upskill` file list are removable, so a user's own `NOTES-local.md` is reported `kept-local` and survives. A skill with no record (installed before provenance tracking) has nothing attributable, so a `--force` reinstall still clears its non-dot files — recording a source with `upskill update <skill> --from <owner>/<repo>` is what upgrades it to the protected behavior.
+
+Archive entries whose path escapes the skill directory (`../`, absolute, or backslash-separated) are dropped by every write path — install, `--force`, and `update` — and never enter the recorded file list.
 
 `upskill search "<query>"` round-robin interleaves results from Tessl and the browse.sh catalog (first hit from each source, then second from each, …) so both registries get visibility in the top page. `upskill recommendations` matches your profile; add `--install` to write the matches.
 

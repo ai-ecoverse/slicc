@@ -16,7 +16,7 @@ import type { VirtualFS } from '../../../../fs/index.js';
 import { decodeFetchBody, parseFetchJson } from '../../../fetch-body.js';
 import { clearSkillDirPreservingDotfiles } from '../dotfiles.js';
 import { describeFetchError } from '../fetch-error.js';
-import { runPostInstallHooks } from '../install-pipeline.js';
+import { managedFiles, runPostInstallHooks } from '../install-pipeline.js';
 import { writeProvenance } from '../provenance.js';
 import type { BrowseShDetail, BrowseShSkillSummary, UnifiedSearchResult } from '../types.js';
 import { BROWSE_SH_API, SKILLS_DIR } from '../types.js';
@@ -206,6 +206,19 @@ function buildBrowseShPreamble(detail: BrowseShDetail, slug: string): string {
 }
 
 /**
+ * Drop the SLICC adapter preamble from an installed `SKILL.md`, so two copies
+ * can be compared on upstream content alone.
+ *
+ * The preamble carries browse.sh's `updated` date, which moves on its own
+ * schedule; without this, `upskill update` would report every browse.sh skill
+ * as `updated` on a date bump with a byte-identical body.
+ */
+export function stripBrowseShPreamble(content: string): string {
+  const preamble = /(?:^|\n)> \[!NOTE\] \*\*Imported from browse\.sh\*\*[\s\S]*?(?:\n\n|$)/;
+  return content.replace(preamble, '\n');
+}
+
+/**
  * Insert the SLICC adapter preamble immediately below the upstream YAML
  * frontmatter. The upstream frontmatter and body MUST round-trip byte-identical
  * around the preamble — we splice `\n<preamble>\n\n` between the closing `---`
@@ -344,8 +357,9 @@ export async function installFromBrowseSh(
         exitCode: 1,
       };
     }
-    // Reinstall keeps dotfiles (credentials, `.upskill`) — see `dotfiles.ts`.
-    await clearSkillDirPreservingDotfiles(fs, destDir);
+    // Reinstall keeps dotfiles (credentials, `.upskill`) and any file no
+    // recorded install wrote — see `dotfiles.ts`.
+    await clearSkillDirPreservingDotfiles(fs, destDir, await managedFiles(fs, dirName));
   } catch {
     // doesn't exist, continue
   }

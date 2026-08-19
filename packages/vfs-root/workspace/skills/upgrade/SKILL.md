@@ -77,7 +77,7 @@ A new SLICC release is a good moment to check them. This is read-only:
 upskill update --dry-run
 ```
 
-It reads each skill's `.upskill` provenance record (written at install time: source repo, ref, resolved commit, file list), fetches the source, and classifies every path with the same vocabulary as `upgrade apply` — `unchanged`, `updated`, `added`, `removed`, `kept-local`. Skills that are current report `already current`.
+It reads each skill's `.upskill` provenance record (written at install time: source repo, ref, resolved commit, file list) and compares the recorded commit against the ref's head. Skills whose commit has not moved report `already current` without downloading anything; the rest are fetched and classified with the same vocabulary as `upgrade apply` — `unchanged`, `updated`, `added`, `removed`, `kept-local`.
 
 Report what would change and let the user decide. To apply:
 
@@ -90,7 +90,7 @@ Notes worth knowing:
 
 - **Dotfiles are never touched.** `upskill` will not modify or delete a dotfile in a skill directory, so credentials (`scripts/.config`) and the `.upskill` record survive updates and `--force` reinstalls. Never hand-copy a credential file "to be safe" — it is already safe, and moving it can break the skill.
 - **`kept-local` is not a failure.** It marks dotfiles and files the user added themselves; leaving them is the correct outcome.
-- A skill installed before provenance tracking reports `no install provenance` — re-installing it once from its source records the provenance and makes future updates argument-free.
+- A skill installed before provenance tracking reports `no install provenance`. If the user knows where it came from, record it in place — `upskill update <skill> --from <owner>/<repo> --dry-run` first, then without `--dry-run`. That first update never deletes anything, because nothing is attributable to a previous install yet.
 
 ## Do not
 

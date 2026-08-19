@@ -30,7 +30,10 @@ export interface UpskillProvenance {
   path?: string;
   /** Resolved commit sha, when the API call succeeded. */
   sha?: string;
-  /** ISO-8601 install timestamp. */
+  /**
+   * ISO-8601 timestamp of the last install or update — i.e. when this record
+   * was written, which is what "how current is this skill" actually asks.
+   */
   installed: string;
   /** Skill-relative paths written by the install (dotfiles excluded). */
   files?: string[];
@@ -65,10 +68,17 @@ export async function writeProvenance(
   record: Omit<UpskillProvenance, 'version' | 'installed'> & { installed?: string }
 ): Promise<void> {
   try {
+    // `record` is spread FIRST. Update callers pass `{ ...provenance, … }`,
+    // which still carries the on-disk `version` and `installed`; spreading it
+    // last would let a stale record veto both stamps — pinning `installed` to
+    // the original install forever and making `PROVENANCE_VERSION` unable to
+    // migrate an existing file, which is the one job a version field has.
+    // (Excess-property checking does not catch this: the fields arrive via a
+    // spread, so `Omit<…, 'version' | 'installed'>` cannot reject them.)
     const full: UpskillProvenance = {
-      version: PROVENANCE_VERSION,
-      installed: record.installed ?? new Date().toISOString(),
       ...record,
+      version: PROVENANCE_VERSION,
+      installed: new Date().toISOString(),
     };
     await fs.writeFile(provenancePath(skillName), `${JSON.stringify(full, null, 2)}\n`);
   } catch {
@@ -96,21 +106,25 @@ export async function listProvenancedSkills(
 }
 
 /**
- * Resolve a ref to its commit sha, but only when a GitHub token is configured.
+ * Resolve a ref to its commit sha.
  *
  * The install path deliberately prefers codeload (not rate-limited) over the
- * API, so an anonymous install must not spend its one rate-limited request on
- * bookkeeping. Without a token the record simply carries no sha — `upskill
- * update` still classifies exactly, it just compares content instead of
- * short-circuiting on the sha.
+ * API, so an anonymous *install* must not spend its one rate-limited request on
+ * bookkeeping — hence the token gate, which `tessl.test.ts` pins. An explicit
+ * `upskill update` passes `allowAnonymous` because there the trade runs the
+ * other way: the sha is what makes "already current" exact and archive-free.
  */
 export async function resolveCommitSha(
   owner: string,
   repo: string,
   ref: string | undefined,
-  github: GitHubRequestContext
+  github: GitHubRequestContext,
+  allowAnonymous = false
 ): Promise<string | undefined> {
-  if (!github.hasToken) return undefined;
+  // `allowAnonymous` is what `upskill update` passes: there, one ~200-byte
+  // commits response replaces a whole repo archive, so spending the request is
+  // the cheap option rather than the expensive one. Installs keep the gate.
+  if (!github.hasToken && !allowAnonymous) return undefined;
   try {
     const target = ref || 'HEAD';
     const response = await github.request(

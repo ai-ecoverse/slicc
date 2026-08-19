@@ -12,6 +12,7 @@ import { parseFetchJson } from '../../../fetch-body.js';
 import { clearSkillDirPreservingDotfiles } from '../dotfiles.js';
 import {
   discardFailedInstall,
+  managedFiles,
   refreshSprinklesAfterInstall,
   reloadSkillsAfterInstall,
   runPostInstallHooks,
@@ -162,8 +163,9 @@ export async function installFromGitHub(
       }
       existed = true;
       // Never `rm -r` the directory: dotfiles there hold the skill's
-      // credentials and its `.upskill` provenance record.
-      await clearSkillDirPreservingDotfiles(fs, destDir);
+      // credentials and its `.upskill` provenance record, and files no
+      // recorded install wrote belong to the user (same rule as `update`).
+      await clearSkillDirPreservingDotfiles(fs, destDir, await managedFiles(fs, skillName));
     } catch {
       // Doesn't exist, continue
     }

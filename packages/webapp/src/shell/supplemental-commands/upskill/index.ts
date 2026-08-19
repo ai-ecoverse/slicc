@@ -32,6 +32,7 @@ export {
   parseBrowseShRef,
 } from './registries/browse-sh.js';
 export { createSkillCommand } from './skill-command.js';
+export { isSafeSkillRelativePath } from './skill-paths.js';
 export type {
   BrowseShSkillSummary,
   TabCatalogMatch,

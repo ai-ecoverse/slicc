@@ -211,7 +211,9 @@ async function fetchGitHubPluginTo(
     // Didn't exist — fine.
   }
   await fs.mkdir(destDir, { recursive: true });
-  const written = await writeZipFilesToDir(files, prefix, destDir, fs);
+  // `false`: the destination was just wiped, and the never-overwrite-a-dotfile
+  // rule belongs to skill installs, not to agent plugins.
+  const written = await writeZipFilesToDir(files, prefix, destDir, fs, false);
   if (written.length === 0) {
     return `no files found at ${ref.display}`;
   }

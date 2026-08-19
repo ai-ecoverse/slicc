@@ -7,6 +7,7 @@ import { VirtualFS } from '../../../../src/fs/index.js';
 import {
   _resetGlobalFsCache,
   createUpskillCommand,
+  isSafeSkillRelativePath,
   readProvenance,
 } from '../../../../src/shell/supplemental-commands/upskill/index.js';
 import { createMockCtx, response } from './test-helpers.js';
@@ -38,6 +39,9 @@ function repoFetch(files: Record<string, string>, sha = 'a'.repeat(40)) {
   });
 }
 
+/** Upstream moved: a content change is a new commit. */
+const MOVED_SHA = 'b'.repeat(40);
+
 const V1 = {
   'alpha/SKILL.md': '# Alpha v1\n',
   'alpha/scripts/run.sh': 'echo v1\n',
@@ -66,6 +70,31 @@ async function installAlpha(fs: VirtualFS, files: Record<string, string>): Promi
   const result = await cmd.execute(['octo/skills', '--skill', 'alpha'], createMockCtx() as never);
   expect(result.exitCode).toBe(0);
 }
+
+describe('isSafeSkillRelativePath', () => {
+  it('accepts ordinary skill-relative paths', () => {
+    for (const path of ['SKILL.md', 'scripts/run.sh', '.config', 'a/b/c/d.txt', 'weird name.md']) {
+      expect(isSafeSkillRelativePath(path)).toBe(true);
+    }
+  });
+
+  it('rejects every shape that can escape the skill directory', () => {
+    for (const path of [
+      '',
+      '..',
+      '../etc/passwd',
+      'a/../../etc/passwd',
+      'a/./b',
+      '/etc/passwd',
+      'a//b',
+      'a\\..\\b',
+      'C:/Windows/system32',
+      'a\u0000b',
+    ]) {
+      expect(isSafeSkillRelativePath(path)).toBe(false);
+    }
+  });
+});
 
 describe('upskill install — dotfile protection and provenance', () => {
   let fs: VirtualFS;
@@ -211,6 +240,39 @@ describe('upskill install — dotfile protection and provenance', () => {
     expect(provenance?.sha).toBeUndefined();
   });
 
+  it('refuses to write archive entries that escape the skill directory', async () => {
+    const evil = {
+      'alpha/SKILL.md': '# Alpha\n',
+      'alpha/../../../etc/pwned.txt': 'ESCAPED\n',
+    };
+    const cmd = createUpskillCommand(fs, repoFetch(evil) as unknown as SecureFetch);
+    const result = await cmd.execute(['octo/skills', '--skill', 'alpha'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(0);
+    await expect(fs.exists('/etc/pwned.txt')).resolves.toBe(false);
+    // …and the traversal entry never enters the provenance file list, which is
+    // what a later update consults when deciding what it may delete.
+    expect((await readProvenance(fs, 'alpha'))?.files).toEqual(['SKILL.md']);
+  });
+
+  it('--force keeps user-added files, matching update', async () => {
+    await installAlpha(fs, V1);
+    await fs.writeFile('/workspace/skills/alpha/NOTES-local.md', 'user notes\n');
+
+    const cmd = createUpskillCommand(fs, repoFetch(V2, MOVED_SHA) as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['octo/skills', '--skill', 'alpha', '--force'],
+      createMockCtx() as never
+    );
+
+    expect(result.exitCode).toBe(0);
+    await expect(fs.readTextFile('/workspace/skills/alpha/NOTES-local.md')).resolves.toBe(
+      'user notes\n'
+    );
+    // Files a previous install did write are still replaced.
+    await expect(fs.readTextFile('/workspace/skills/alpha/SKILL.md')).resolves.toBe('# Alpha v2\n');
+  });
+
   it('info reports the recorded source, not just the root kind', async () => {
     await installAlpha(fs, V1);
 
@@ -252,7 +314,7 @@ describe('upskill update', () => {
   it('--dry-run classifies every path and writes nothing', async () => {
     await installAlpha(fs, V1);
 
-    const cmd = createUpskillCommand(fs, repoFetch(V2) as unknown as SecureFetch);
+    const cmd = createUpskillCommand(fs, repoFetch(V2, MOVED_SHA) as unknown as SecureFetch);
     const result = await cmd.execute(['update', 'alpha', '--dry-run'], createMockCtx() as never);
 
     expect(result.exitCode).toBe(0);
@@ -272,7 +334,7 @@ describe('upskill update', () => {
     await fs.writeFile('/workspace/skills/alpha/.config', 'PROBE_SECRET=keep-me\n');
     await fs.writeFile('/workspace/skills/alpha/NOTES-local.md', 'user notes\n');
 
-    const cmd = createUpskillCommand(fs, repoFetch(V2, 'b'.repeat(40)) as unknown as SecureFetch);
+    const cmd = createUpskillCommand(fs, repoFetch(V2, MOVED_SHA) as unknown as SecureFetch);
     const result = await cmd.execute(['update', 'alpha'], createMockCtx() as never);
 
     expect(result.exitCode).toBe(0);
@@ -292,7 +354,7 @@ describe('upskill update', () => {
     );
     // Provenance advanced to the new sha and file list.
     const provenance = await readProvenance(fs, 'alpha');
-    expect(provenance?.sha).toBe('b'.repeat(40));
+    expect(provenance?.sha).toBe(MOVED_SHA);
     expect(provenance?.files).toContain('scripts/new.sh');
     expect(provenance?.files).not.toContain('scripts/gone.sh');
   });
@@ -300,7 +362,7 @@ describe('upskill update', () => {
   it('--json emits the classification for scripted callers', async () => {
     await installAlpha(fs, V1);
 
-    const cmd = createUpskillCommand(fs, repoFetch(V2) as unknown as SecureFetch);
+    const cmd = createUpskillCommand(fs, repoFetch(V2, MOVED_SHA) as unknown as SecureFetch);
     const result = await cmd.execute(
       ['update', 'alpha', '--dry-run', '--json'],
       createMockCtx() as never
@@ -327,7 +389,7 @@ describe('upskill update', () => {
   it('honors --branch as a one-off override of the recorded ref', async () => {
     await installAlpha(fs, V1);
 
-    const fetchMock = repoFetch(V2);
+    const fetchMock = repoFetch(V2, MOVED_SHA);
     const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
     await cmd.execute(['update', 'alpha', '--branch', 'dev'], createMockCtx() as never);
 
@@ -369,7 +431,7 @@ describe('upskill update', () => {
 
     const cmd = createUpskillCommand(
       fs,
-      repoFetch({ 'beta/SKILL.md': '# Beta\n' }) as unknown as SecureFetch
+      repoFetch({ 'beta/SKILL.md': '# Beta\n' }, MOVED_SHA) as unknown as SecureFetch
     );
     const result = await cmd.execute(['update', 'alpha'], createMockCtx() as never);
 
@@ -443,6 +505,180 @@ describe('upskill update', () => {
     expect(result.stderr).toContain('no install provenance for "legacy"');
   });
 
+  it('refuses traversal entries on the update write path too', async () => {
+    await installAlpha(fs, V1);
+
+    const evil = { ...V2, 'alpha/../../../etc/pwned.txt': 'ESCAPED\n' };
+    const cmd = createUpskillCommand(fs, repoFetch(evil, MOVED_SHA) as unknown as SecureFetch);
+    const result = await cmd.execute(['update', 'alpha'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(0);
+    await expect(fs.exists('/etc/pwned.txt')).resolves.toBe(false);
+    expect(result.stdout).not.toContain('..');
+    expect((await readProvenance(fs, 'alpha'))?.files).not.toContain('../../../etc/pwned.txt');
+  });
+
+  it('short-circuits on the recorded sha without downloading the archive', async () => {
+    await installAlpha(fs, V1);
+
+    const fetchMock = repoFetch(V1);
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['update', 'alpha'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('already current');
+    const urls = fetchMock.mock.calls.map(([url]) => String(url));
+    expect(urls.some((u) => u.includes('/commits/'))).toBe(true);
+    expect(urls.some((u) => u.includes('codeload.github.com'))).toBe(false);
+  });
+
+  it('resolves the sha without a token, so the short-circuit works anonymously', async () => {
+    await installAlpha(fs, V1);
+    _resetGlobalFsCache();
+    const globalFs = await VirtualFS.create({ dbName: 'slicc-fs-global' });
+    await globalFs.rm('/workspace/.git/github-token').catch(() => {});
+    _resetGlobalFsCache();
+
+    const fetchMock = repoFetch(V1);
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['update', 'alpha'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('/commits/'))).toBe(true);
+  });
+
+  it('does not short-circuit when a recorded file is missing locally', async () => {
+    await installAlpha(fs, V1);
+    await fs.rm('/workspace/skills/alpha/scripts/run.sh');
+
+    const fetchMock = repoFetch(V1);
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['update', 'alpha'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(fetchMock.mock.calls.some(([url]) => String(url).includes('codeload'))).toBe(true);
+    await expect(fs.readTextFile('/workspace/skills/alpha/scripts/run.sh')).resolves.toBe(
+      'echo v1\n'
+    );
+  });
+
+  it('advances the provenance timestamp and version stamp on update', async () => {
+    await installAlpha(fs, V1);
+    await fs.writeFile(
+      '/workspace/skills/alpha/.upskill',
+      JSON.stringify({
+        version: 0,
+        kind: 'github',
+        source: 'octo/skills',
+        skill: 'alpha',
+        path: 'alpha',
+        sha: 'a'.repeat(40),
+        installed: '1999-01-01T00:00:00.000Z',
+        files: ['SKILL.md', 'scripts/gone.sh', 'scripts/run.sh'],
+      })
+    );
+
+    const cmd = createUpskillCommand(fs, repoFetch(V2, MOVED_SHA) as unknown as SecureFetch);
+    await cmd.execute(['update', 'alpha'], createMockCtx() as never);
+
+    const provenance = await readProvenance(fs, 'alpha');
+    expect(provenance?.version).toBe(1);
+    expect(provenance?.installed).not.toBe('1999-01-01T00:00:00.000Z');
+    expect(new Date(provenance?.installed ?? 0).getFullYear()).toBeGreaterThan(2000);
+  });
+
+  it('--from records a source for a skill installed without provenance', async () => {
+    // A hand-installed skill: files on disk, no `.upskill`.
+    await fs.mkdir('/workspace/skills/alpha', { recursive: true });
+    await fs.writeFile('/workspace/skills/alpha/SKILL.md', '# stale local copy\n');
+
+    const cmd = createUpskillCommand(fs, repoFetch(V2, MOVED_SHA) as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['update', 'alpha', '--from', 'octo/skills'],
+      createMockCtx() as never
+    );
+
+    expect(result.exitCode).toBe(0);
+    await expect(fs.readTextFile('/workspace/skills/alpha/SKILL.md')).resolves.toBe('# Alpha v2\n');
+    // The path was discovered from the archive and recorded, so the next
+    // update needs no arguments at all.
+    const provenance = await readProvenance(fs, 'alpha');
+    expect(provenance).toMatchObject({ source: 'octo/skills', path: 'alpha', sha: MOVED_SHA });
+    expect(provenance?.files).toContain('scripts/new.sh');
+  });
+
+  it('--from never deletes files on the first recorded update', async () => {
+    await fs.mkdir('/workspace/skills/alpha', { recursive: true });
+    await fs.writeFile('/workspace/skills/alpha/SKILL.md', '# stale\n');
+    await fs.writeFile('/workspace/skills/alpha/hand-written.md', 'mine\n');
+
+    const cmd = createUpskillCommand(fs, repoFetch(V2, MOVED_SHA) as unknown as SecureFetch);
+    const result = await cmd.execute(
+      ['update', 'alpha', '--from', 'octo/skills', '--dry-run'],
+      createMockCtx() as never
+    );
+
+    expect(result.stdout).not.toContain('removed');
+    expect(result.stdout).toMatch(/kept-local/);
+    await expect(fs.exists('/workspace/skills/alpha/hand-written.md')).resolves.toBe(true);
+  });
+
+  it('reports an unknown skill as not installed, not as missing provenance', async () => {
+    const fetchMock = repoFetch(V1);
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['update', 'no-such-skill'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no skill named "no-such-skill" is installed');
+    expect(result.stderr).not.toContain('provenance');
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('points at --from when an installed skill has no provenance', async () => {
+    await fs.mkdir('/workspace/skills/legacy', { recursive: true });
+    await fs.writeFile('/workspace/skills/legacy/SKILL.md', '# Legacy\n');
+
+    const cmd = createUpskillCommand(fs, repoFetch(V1) as unknown as SecureFetch);
+    const result = await cmd.execute(['update', 'legacy'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--from <owner>/<repo>');
+  });
+
+  it('does not report a browse.sh skill as updated when only its date moved', async () => {
+    const detail = (updated: string) =>
+      JSON.stringify({
+        slug: 'weather.gov/forecast',
+        hostname: 'weather.gov',
+        task: 'forecast',
+        title: 'Forecast',
+        updated,
+        skillMd: '---\nname: forecast\n---\n\nBody that never changes.\n',
+      });
+    const browseFetch = (updated: string) =>
+      vi.fn(async (url: string) => {
+        if (url.includes('browse.sh/api/skills/weather.gov/forecast')) {
+          return response(200, detail(updated));
+        }
+        throw new Error(`unexpected url: ${url}`);
+      });
+
+    const install = createUpskillCommand(fs, browseFetch('2026-01-01') as unknown as SecureFetch);
+    const installed = await install.execute(
+      ['browse:weather.gov/forecast'],
+      createMockCtx() as never
+    );
+    expect(installed.exitCode).toBe(0);
+
+    // Upstream re-publishes with a newer date but a byte-identical body.
+    const cmd = createUpskillCommand(fs, browseFetch('2026-08-19') as unknown as SecureFetch);
+    const result = await cmd.execute(['update', '--dry-run'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('already current');
+    expect(result.stdout).not.toContain('would update');
+  });
+
   it('upgrade is an alias for update', async () => {
     await installAlpha(fs, V1);
 
@@ -459,6 +695,9 @@ describe('upskill update', () => {
 
     expect(result.stdout).toContain('upskill update');
     expect(result.stdout).toContain('--dry-run');
-    expect(result.stdout).toContain('never modifies or deletes a dotfile');
+    expect(result.stdout).toContain('--from');
+    // Both halves of the "what upskill never touches" contract.
+    expect(result.stdout).toContain('Dotfiles in a skill directory');
+    expect(result.stdout).toContain('Files no recorded install wrote');
   });
 });

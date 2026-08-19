@@ -13,6 +13,7 @@ import { consumeCachedBinaryByUrl } from '../../../binary-cache.js';
 import { getFetchBodyBytes, parseFetchJson } from '../../../fetch-body.js';
 import { canWriteSkillFile, hasDotSegment } from '../dotfiles.js';
 import { describeFetchError } from '../fetch-error.js';
+import { isSafeSkillRelativePath } from '../skill-paths.js';
 import type { GitHubContent, GitHubRequestContext } from '../types.js';
 import { formatGitHubFailure } from './github-errors.js';
 
@@ -79,22 +80,32 @@ export function stripZipPrefix(files: Record<string, Uint8Array>): Record<string
 }
 
 /**
- * Write the ZIP entries under `prefix` into `destDir`. Returns the
- * skill-relative paths actually written — dotfiles that already exist are
- * skipped (see `dotfiles.ts`), so the count can be lower than the entry count.
+ * Write the ZIP entries under `prefix` into `destDir`. Returns the paths
+ * actually written, relative to `destDir`.
+ *
+ * `keepExistingDotfiles` (default true) is the skill-install contract: an
+ * existing dotfile holds credentials or provenance and is never overwritten,
+ * so the returned list can be shorter than the entry list. `plugin-command.ts`
+ * shares this helper for agent-plugin installs and opts out explicitly — it
+ * wipes the destination first, so there is nothing to preserve and the plugin
+ * subsystem does not silently inherit a skill-specific rule.
  */
 export async function writeZipFilesToDir(
   files: Record<string, Uint8Array>,
   prefix: string,
   destDir: string,
-  fs: VirtualFS
+  fs: VirtualFS,
+  keepExistingDotfiles = true
 ): Promise<string[]> {
   const written: string[] = [];
   for (const [path, content] of Object.entries(files)) {
     if (!path.startsWith(prefix)) continue;
     const relativePath = path.slice(prefix.length);
-    if (!relativePath || path.endsWith('/')) continue;
-    if (!(await canWriteSkillFile(fs, destDir, relativePath))) continue;
+    if (path.endsWith('/')) continue;
+    // Zip-slip: this fast path never had the guard `installSkillFromZip`
+    // carries, and its return value now feeds the provenance file list.
+    if (!isSafeSkillRelativePath(relativePath)) continue;
+    if (keepExistingDotfiles && !(await canWriteSkillFile(fs, destDir, relativePath))) continue;
     const filePath = `${destDir}/${relativePath}`;
     const parentDir = filePath.substring(0, filePath.lastIndexOf('/'));
     if (parentDir !== destDir) await fs.mkdir(parentDir, { recursive: true });
@@ -135,6 +146,7 @@ export async function fetchGitHubDirFiles(
   }
   for (const item of parseFetchJson<GitHubContent[]>(response.body)) {
     const relative = relPrefix ? `${relPrefix}/${item.name}` : item.name;
+    if (!isSafeSkillRelativePath(relative)) continue;
     if (item.type === 'file' && item.download_url) {
       const fileResponse = await github.request(item.download_url, '*/*');
       if (fileResponse.status !== 200) {
@@ -164,6 +176,7 @@ export async function downloadGitHubDir(
 ): Promise<string[]> {
   for (const item of items) {
     const relativePath = relPrefix ? `${relPrefix}/${item.name}` : item.name;
+    if (!isSafeSkillRelativePath(relativePath)) continue;
     if (item.type === 'file' && item.download_url) {
       // The dot check must see the whole skill-relative path: recursion moves
       // `destBase` into the subdirectory, so `scripts/.config/token` would look

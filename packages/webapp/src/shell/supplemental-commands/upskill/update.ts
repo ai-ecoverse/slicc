@@ -13,9 +13,10 @@
 
 import type { SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../../fs/index.js';
-import { isSafeUpskillBranch } from '../../../net/handoff-link.js';
+import { isSafeUpskillBranch, isSafeUpskillPath } from '../../../net/handoff-link.js';
 import { hasDotSegment, listSkillFiles } from './dotfiles.js';
 import { createGitHubRequestContext } from './github/github-auth.js';
+import { parseGitHubRef } from './github/github-install.js';
 import { fetchGitHubDirFiles, fetchRepoZip, stripZipPrefix } from './github/github-zip.js';
 import { runPostInstallHooks } from './install-pipeline.js';
 import type { UpskillProvenance } from './provenance.js';
@@ -25,7 +26,8 @@ import {
   resolveCommitSha,
   writeProvenance,
 } from './provenance.js';
-import { prepareBrowseShSkill } from './registries/browse-sh.js';
+import { prepareBrowseShSkill, stripBrowseShPreamble } from './registries/browse-sh.js';
+import { isSafeSkillRelativePath } from './skill-paths.js';
 import type { GitHubRequestContext } from './types.js';
 import { SKILLS_DIR } from './types.js';
 
@@ -55,26 +57,70 @@ interface ParsedUpdateArgs {
   skills: string[];
   dryRun: boolean;
   branch?: string;
+  /** `owner/repo` supplied for a skill that has no provenance record yet. */
+  from?: string;
+  /** Repo-relative directory of the skill, when `--from` cannot be discovered. */
+  path?: string;
   json: boolean;
   error?: string;
 }
+
+/**
+ * Flags that take a value, each with the validation its target needs. Table
+ * form keeps the parser flat — and keeps the accepted syntax readable next to
+ * the error the user sees when they miss it.
+ */
+const UPDATE_VALUE_FLAGS: Array<{
+  names: string[];
+  validate: (value: string) => boolean;
+  error: string;
+  apply: (parsed: ParsedUpdateArgs, value: string) => void;
+}> = [
+  {
+    names: ['--branch', '-b'],
+    validate: (value) => !value.startsWith('-') && isSafeUpskillBranch(value),
+    error:
+      'upskill: --branch must be a git ref of [A-Za-z0-9._/-]+ with no "..", leading "-"/"/", trailing "/" or ".lock", or shell metacharacters',
+    apply: (parsed, value) => {
+      parsed.branch = value;
+    },
+  },
+  {
+    names: ['--from'],
+    validate: (value) => parseGitHubRef(value) !== null,
+    error:
+      'upskill: --from requires a GitHub source (owner/repo, owner/repo@branch, or a github.com URL)',
+    apply: (parsed, value) => {
+      parsed.from = value;
+    },
+  },
+  {
+    names: ['--path', '-p'],
+    validate: (value) => isSafeUpskillPath(value),
+    error:
+      'upskill: --path must be a repo-relative sub-path of [A-Za-z0-9._/-]+ with no "..", leading "-"/"/", or shell metacharacters',
+    apply: (parsed, value) => {
+      parsed.path = value;
+    },
+  },
+];
 
 function parseUpdateArgs(args: string[]): ParsedUpdateArgs {
   const parsed: ParsedUpdateArgs = { skills: [], dryRun: false, json: false };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg === '--dry-run' || arg === '-n') {
+    const flag = UPDATE_VALUE_FLAGS.find((candidate) => candidate.names.includes(arg));
+    if (flag) {
+      const value = args[++i];
+      if (!value || !flag.validate(value)) {
+        parsed.error = flag.error;
+        return parsed;
+      }
+      flag.apply(parsed, value);
+    } else if (arg === '--dry-run' || arg === '-n') {
       parsed.dryRun = true;
     } else if (arg === '--json') {
       parsed.json = true;
-    } else if (arg === '--branch' || arg === '-b') {
-      const value = args[++i];
-      if (!value || value.startsWith('-') || !isSafeUpskillBranch(value)) {
-        parsed.error =
-          'upskill: --branch must be a git ref of [A-Za-z0-9._/-]+ with no "..", leading "-"/"/", trailing "/" or ".lock", or shell metacharacters';
-        return parsed;
-      }
-      parsed.branch = value;
     } else if (arg.startsWith('-')) {
       parsed.error = `upskill: unknown option "${arg}" for update`;
       return parsed;
@@ -183,16 +229,31 @@ async function updateGitHubSkill(
 
   const upstreamPath = (provenance.path ?? '').replace(/^\/|\/$/g, '');
   const github = await createGitHubRequestContext(fetchFn);
-  const fetched = await fetchUpstream(owner, repo, upstreamPath, base.ref, fetchFn, github);
+
+  // Sha first: when the recorded commit still equals the ref's head and every
+  // file we installed is still on disk, the skill is current by definition and
+  // no archive needs downloading. One ~200-byte response replaces a repo ZIP.
+  const headSha = await resolveCommitSha(owner, repo, base.ref, github, true);
+  if (
+    headSha &&
+    provenance.sha === headSha &&
+    (await recordedFilesPresent(fs, skill, provenance))
+  ) {
+    return { ...base, to: headSha, outcome: 'current', changes: [] };
+  }
+
+  const fetched = await fetchUpstream(owner, repo, upstreamPath, skill, base.ref, fetchFn, github);
   if ('error' in fetched) {
     return { ...base, outcome: 'error', error: fetched.error };
   }
   const upstream = fetched.files;
+  // A discovered path is recorded, so the next update needs no `--path`.
+  const resolvedPath = fetched.path;
   if (upstream.size === 0) {
     return {
       ...base,
       outcome: 'error',
-      error: `no files at ${owner}/${repo}${upstreamPath ? `/${upstreamPath}` : ''} — the skill may have moved or been removed upstream`,
+      error: `no files at ${owner}/${repo}${resolvedPath ? `/${resolvedPath}` : ''} — the skill may have moved or been removed upstream`,
     };
   }
 
@@ -203,17 +264,35 @@ async function updateGitHubSkill(
     return { ...base, outcome: changed ? 'updated' : 'current', changes };
   }
 
-  const sha = (await resolveCommitSha(owner, repo, base.ref, github)) ?? provenance.sha;
+  const sha = headSha ?? provenance.sha;
   if (changed) await applyPlan(fs, { changes, writes, removals });
   // The provenance record is refreshed either way, so an unchanged run still
   // moves the sha forward and the next one can report an exact "already current".
   await writeProvenance(fs, skill, {
     ...provenance,
     ref: base.ref,
+    path: resolvedPath,
     sha,
     files: [...upstream.keys()].sort(),
   });
   return { ...base, to: sha, outcome: changed ? 'updated' : 'current', changes };
+}
+
+/**
+ * Every file the last install/update recorded is still on disk. Guards the sha
+ * short-circuit: a matching sha proves upstream has not moved, not that the
+ * local copy is intact — a deleted file still needs the full compare.
+ */
+async function recordedFilesPresent(
+  fs: VirtualFS,
+  skill: string,
+  provenance: UpskillProvenance
+): Promise<boolean> {
+  if (!provenance.files?.length) return false;
+  for (const relative of provenance.files) {
+    if (!(await fs.exists(`${SKILLS_DIR}/${skill}/${relative}`))) return false;
+  }
+  return true;
 }
 
 /**
@@ -227,21 +306,54 @@ async function fetchUpstream(
   owner: string,
   repo: string,
   upstreamPath: string,
+  skill: string,
   ref: string | undefined,
   fetchFn: SecureFetch,
   github: GitHubRequestContext
-): Promise<{ files: Map<string, Uint8Array> } | { error: string }> {
+): Promise<{ files: Map<string, Uint8Array>; path: string } | { error: string }> {
   const zip = await fetchRepoZip(owner, repo, fetchFn, ref ?? 'main');
   if (zip.status === 'ok') {
-    return { files: upstreamFiles(stripZipPrefix(zip.files), upstreamPath) };
+    const files = stripZipPrefix(zip.files);
+    // A record written by `--from` has no path yet: locate `<skill>/SKILL.md`
+    // in the archive rather than treating the whole repo as the skill.
+    const path = upstreamPath || discoverSkillPath(files, skill);
+    if (path === null) {
+      return {
+        error: `could not find "${skill}/SKILL.md" in ${owner}/${repo} — pass --path <dir> to say where the skill lives`,
+      };
+    }
+    return { files: upstreamFiles(files, path), path };
   }
   try {
     const files = await fetchGitHubDirFiles(owner, repo, upstreamPath, ref, github);
-    return { files: sortByPath(files) };
+    return { files: sortByPath(onlySafePaths(files)), path: upstreamPath };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     return { error: `${zip.message}; Contents API fallback failed: ${message}` };
   }
+}
+
+/**
+ * Locate a skill directory inside a repo archive by its `SKILL.md`. Shallowest
+ * match wins, so a top-level `mixtape/` beats a vendored copy nested deeper.
+ * Returns `''` for a repo whose root is itself the skill, `null` when absent.
+ */
+export function discoverSkillPath(files: Record<string, Uint8Array>, skill: string): string | null {
+  const candidates: string[] = [];
+  for (const path of Object.keys(files)) {
+    if (path === 'SKILL.md') candidates.push('');
+    else if (path.endsWith(`/${skill}/SKILL.md`) || path === `${skill}/SKILL.md`) {
+      candidates.push(path.slice(0, -'/SKILL.md'.length));
+    }
+  }
+  if (candidates.length === 0) return null;
+  candidates.sort((a, b) => a.split('/').length - b.split('/').length || a.localeCompare(b));
+  return candidates[0];
+}
+
+/** Drop any entry whose path escapes the skill directory. */
+function onlySafePaths(files: Map<string, Uint8Array>): Map<string, Uint8Array> {
+  return new Map([...files].filter(([path]) => isSafeSkillRelativePath(path)));
 }
 
 /** Stable path order, so reports and provenance file lists are deterministic. */
@@ -259,7 +371,11 @@ function upstreamFiles(
   for (const [path, content] of Object.entries(files)) {
     if (!path.startsWith(prefix) || path.endsWith('/')) continue;
     const relative = path.slice(prefix.length);
-    if (relative) upstream.set(relative, content);
+    // Zip-slip: an entry like `skills/foo/../../../etc/passwd` would otherwise
+    // be written outside the skill directory — and would be recorded in the
+    // provenance file list, making it deletable by a later update too.
+    if (!isSafeSkillRelativePath(relative)) continue;
+    upstream.set(relative, content);
   }
   return sortByPath(upstream);
 }
@@ -302,7 +418,13 @@ async function updateBrowseShSkill(
   const target = `${SKILLS_DIR}/${skill}/SKILL.md`;
   const local = await readLocal(fs, target);
   const content = new TextEncoder().encode(prepared.content);
-  if (bytesEqual(local, content)) {
+  // Compare on upstream content only: the SLICC preamble embeds browse.sh's
+  // `updated` date, which moves without the skill body changing.
+  const sameBody =
+    local !== undefined &&
+    stripBrowseShPreamble(new TextDecoder().decode(local)) ===
+      stripBrowseShPreamble(prepared.content);
+  if (bytesEqual(local, content) || sameBody) {
     return { ...base, changes: [{ path: 'SKILL.md', status: 'unchanged' }] };
   }
   const status: UpdateStatus = local ? 'updated' : 'added';
@@ -339,22 +461,79 @@ function formatResult(result: SkillUpdateResult, dryRun: boolean): string {
   return output;
 }
 
-/** Resolve the skills to update: named ones, or every skill with provenance. */
+/**
+ * Provenance synthesized from `--from`, for a skill installed before
+ * provenance tracking (or by hand). No `files` list: nothing is attributable
+ * to a previous install, so the first update may add and overwrite but never
+ * delete.
+ */
+function provenanceFromFlag(
+  skill: string,
+  from: string,
+  path: string | undefined,
+  branch: string | undefined
+): UpskillProvenance | null {
+  const ref = parseGitHubRef(from);
+  if (!ref) return null;
+  return {
+    version: 1,
+    kind: 'github',
+    source: `${ref.owner}/${ref.repo}`,
+    skill,
+    ref: branch ?? ref.branch,
+    path: path ?? ref.path,
+    installed: new Date().toISOString(),
+  };
+}
+
+/**
+ * Resolve the skills to update: named ones, or every skill with provenance.
+ *
+ * `missing` distinguishes its two causes so the error can point at the actual
+ * problem — a typo'd name is not the same as an installed-but-unrecorded skill.
+ */
 async function resolveTargets(
   fs: VirtualFS,
-  names: string[]
-): Promise<{ targets: Array<{ name: string; provenance: UpskillProvenance }>; missing: string[] }> {
+  names: string[],
+  parsed: ParsedUpdateArgs
+): Promise<{
+  targets: Array<{ name: string; provenance: UpskillProvenance }>;
+  missing: Array<{ name: string; reason: 'not-installed' | 'no-provenance' }>;
+}> {
   if (names.length === 0) {
     return { targets: await listProvenancedSkills(fs), missing: [] };
   }
   const targets: Array<{ name: string; provenance: UpskillProvenance }> = [];
-  const missing: string[] = [];
+  const missing: Array<{ name: string; reason: 'not-installed' | 'no-provenance' }> = [];
   for (const name of names) {
     const provenance = await readProvenance(fs, name);
-    if (provenance) targets.push({ name, provenance });
-    else missing.push(name);
+    if (provenance) {
+      targets.push({ name, provenance });
+      continue;
+    }
+    if (!(await fs.exists(`${SKILLS_DIR}/${name}`))) {
+      missing.push({ name, reason: 'not-installed' });
+      continue;
+    }
+    // `--from` is how the user supplies the source the record is missing;
+    // the update then records it, so the next one needs no arguments.
+    const supplied = parsed.from
+      ? provenanceFromFlag(name, parsed.from, parsed.path, parsed.branch)
+      : null;
+    if (supplied) targets.push({ name, provenance: supplied });
+    else missing.push({ name, reason: 'no-provenance' });
   }
   return { targets, missing };
+}
+
+/** The stderr line for a skill that could not be resolved to a source. */
+function missingMessage(entry: { name: string; reason: string }): string {
+  if (entry.reason === 'not-installed') {
+    return `upskill: no skill named "${entry.name}" is installed — check \`upskill list\`
+`;
+  }
+  return `upskill: no install provenance for "${entry.name}" — re-run with --from <owner>/<repo> (optionally --path <dir>) to record its source, or reinstall it once
+`;
 }
 
 /**
@@ -391,17 +570,12 @@ export async function handleUpskillUpdate(
     return { stdout: '', stderr: `${parsed.error}\n`, exitCode: 1 };
   }
 
-  const { targets, missing } = await resolveTargets(fs, parsed.skills);
+  const { targets, missing } = await resolveTargets(fs, parsed.skills, parsed);
 
   if (targets.length === 0) {
     const stderr = missing.length
-      ? missing
-          .map(
-            (name) =>
-              `upskill: no install provenance for "${name}" — reinstall it once (upskill <source> --skill ${name} --force) to record where it came from\n`
-          )
-          .join('')
-      : 'upskill: no skill has install provenance yet — reinstall a skill to record its source\n';
+      ? missing.map(missingMessage).join('')
+      : 'upskill: no skill has install provenance yet — reinstall a skill, or run `upskill update <skill> --from <owner>/<repo>`, to record its source\n';
     return { stdout: '', stderr, exitCode: 1 };
   }
 
@@ -428,12 +602,8 @@ export async function handleUpskillUpdate(
   }
 
   const stderr =
-    missing
-      .map(
-        (name) =>
-          `upskill: no install provenance for "${name}" — reinstall it once to record where it came from\n`
-      )
-      .join('') + failures.map((r) => `upskill: ${r.skill}: ${r.error}\n`).join('');
+    missing.map(missingMessage).join('') +
+    failures.map((r) => `upskill: ${r.skill}: ${r.error}\n`).join('');
 
   const clean = failures.length === 0 && missing.length === 0;
   if (parsed.json) {

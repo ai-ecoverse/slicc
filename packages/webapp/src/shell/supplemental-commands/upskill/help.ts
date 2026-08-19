@@ -101,17 +101,21 @@ Updating installed skills:
   upskill update mixtape                 Update just that skill
   upskill update --dry-run               Report what would change, write nothing
   upskill update mixtape --branch dev    Override the recorded ref
+  upskill update mixtape --from o/repo   Record a source for an unrecorded skill
 
   Every install records its source in <skill>/.upskill (repo, ref, resolved
-  commit, timestamp, file list), so update needs no arguments. Paths are
-  classified unchanged, updated, added, removed, or kept-local — the same
+  commit, last-updated timestamp, file list), so update needs no arguments.
+  When the recorded commit still matches the ref's head, update says "already
+  current" from one small API call instead of downloading the archive. Paths
+  are classified unchanged, updated, added, removed, or kept-local — the same
   vocabulary the "upgrade" command uses for bundled workspace files.
 
-Dotfiles:
-  upskill never modifies or deletes a dotfile inside a skill directory. That
-  keeps credentials (scripts/.config) and provenance (.upskill) intact across
-  --force reinstalls and updates. Upstream dotfiles are written on first
-  install only.
+What upskill never touches:
+  - Dotfiles in a skill directory. Credentials (scripts/.config) and provenance
+    (.upskill) survive --force reinstalls and updates; upstream dotfiles are
+    written on first install only.
+  - Files no recorded install wrote. Your own NOTES.md is kept-local by both
+    --force and update; only files listed in .upskill can be removed.
 
 Recommendations:
   upskill recommendations                Show skills matching your profile
@@ -133,6 +137,7 @@ Options:
   --list                   List available skills without installing
   --force                  Overwrite existing skills (keeps dotfiles)
   --dry-run, -n            update only: report changes without writing
+  --from <owner>/<repo>    update only: record a source for an unrecorded skill
   --json                   update only: machine-readable result
   -h, --help               Show help
 

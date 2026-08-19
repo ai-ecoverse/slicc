@@ -41,12 +41,19 @@ export async function canWriteSkillFile(
  * depth) and the directories needed to reach them. Returns true when anything
  * was preserved.
  *
- * Used instead of `fs.rm(destDir, { recursive: true })` on the `--force` and
- * `update` paths.
+ * Used instead of `fs.rm(destDir, { recursive: true })` on the `--force` path.
+ *
+ * `managed` — the file list from the skill's `.upskill` record — narrows the
+ * deletion to files a previous install actually wrote, so a user's own
+ * `NOTES-local.md` survives a `--force` reinstall exactly as it survives
+ * `upskill update`. Without a record (skills installed before provenance
+ * tracking) every non-dot file is still cleared, which is the old behavior.
  */
 export async function clearSkillDirPreservingDotfiles(
   fs: VirtualFS,
-  dir: string
+  dir: string,
+  managed?: Set<string>,
+  prefix = ''
 ): Promise<boolean> {
   let entries: Array<{ name: string; type: 'file' | 'directory' }>;
   try {
@@ -57,17 +64,20 @@ export async function clearSkillDirPreservingDotfiles(
   let kept = false;
   for (const entry of entries) {
     const path = `${dir}/${entry.name}`;
+    const relative = prefix ? `${prefix}/${entry.name}` : entry.name;
     if (entry.name.startsWith('.')) {
       kept = true;
       continue;
     }
     if (entry.type === 'directory') {
-      const keptInside = await clearSkillDirPreservingDotfiles(fs, path);
+      const keptInside = await clearSkillDirPreservingDotfiles(fs, path, managed, relative);
       if (keptInside) {
         kept = true;
       } else {
         await fs.rm(path, { recursive: true });
       }
+    } else if (managed && !managed.has(relative)) {
+      kept = true;
     } else {
       await fs.rm(path);
     }
