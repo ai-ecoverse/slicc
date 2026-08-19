@@ -1,5 +1,5 @@
 diff --git a/node_modules/@zenfs/dom/dist/access.js b/node_modules/@zenfs/dom/dist/access.js
-index ec02258..74d4c83 100644
+index ec02258..afe78ef 100644
 --- a/node_modules/@zenfs/dom/dist/access.js
 +++ b/node_modules/@zenfs/dom/dist/access.js
 @@ -52,15 +52,25 @@ export class WebAccessFS extends Async(IndexFS) {
@@ -45,7 +45,57 @@ index ec02258..74d4c83 100644
              if (isKind(handle, 'file')) {
                  const file = await handle.getFile();
                  inode.update({
-@@ -165,7 +181,17 @@ export class WebAccessFS extends Async(IndexFS) {
+@@ -114,13 +130,48 @@ export class WebAccessFS extends Async(IndexFS) {
+         const dirHandle = await this.get('directory', path);
+         return await Array.fromAsync(dirHandle.keys());
+     }
++    // PATCH(#2157): a 0-byte file never reached OPFS at all, because the VFS
++    // vnode only calls `write` for dirty BYTE ranges and an empty file has
++    // none — `createFile` put an inode in the index and nothing ever created
++    // the FileSystemFileHandle. `stat`/`exists` then reported the file
++    // (index-backed) while `unlink` raised ENOENT from `removeEntry`, and
++    // because ZenFS clears the vnode cache only AFTER a successful `unlink`,
++    // the entry reverted to existing — so `rm` could not delete a 0-byte file
++    // at all (`rm -f` / `rm -rf` reported success while deleting nothing).
++    // Materialize the handle at create time so every file the index knows
++    // about also exists on disk; this also warms `_handles`, so the first
++    // `write` skips the failing lookup it used to pay for.
++    async createFile(path, options) {
++        const inode = await super.createFile(path, options);
++        const parent = await this.get('directory', dirname(path));
++        const handle = await parent.getFileHandle(basename(path), { create: true }).catch((ex) => _throw(convertException(ex, path)));
++        if (!this.disableHandleCache)
++            this._handles.set(path, handle);
++        return inode;
++    }
+     async remove(path) {
+         const handle = await this.get('directory', dirname(path));
+         for (const p of this._handles.keys())
+             if (dirname(p) == path)
+                 this._handles.delete(p);
+         this._handles.delete(path);
+-        await handle.removeEntry(basename(path), { recursive: true }).catch(ex => _throw(convertException(ex, path)));
++        // PATCH(#2157): tolerate an already-absent OPFS entry. `IndexFS` has
++        // already validated existence against the index (and removed the
++        // entry) before calling us, so the index — not OPFS — is authoritative
++        // here. Any path the index knows but OPFS does not is undeletable
++        // otherwise: every `unlink` throws ENOENT, the caller's exit code is
++        // wrong, and ZenFS keeps the vnode cached because the removal
++        // "failed", so the file comes back. That is the long-standing phantom-
++        // deletion class (0-byte files written before the `createFile` fix
++        // above, and any entry restored from a metadata sidecar whose OPFS
++        // counterpart is gone). Deleting something already gone is the
++        // requested end state, so report success.
++        await handle.removeEntry(basename(path), { recursive: true }).catch(ex => {
++            const converted = convertException(ex, path);
++            if (converted.code == 'ENOENT')
++                return;
++            _throw(converted);
++        });
+     }
+     removeSync() {
+         throw log.crit(withErrno('ENOSYS'));
+@@ -165,7 +216,17 @@ export class WebAccessFS extends Async(IndexFS) {
              log.crit(withErrno('EIO', 'Mismatch in entry kind on write'));
              return;
          }

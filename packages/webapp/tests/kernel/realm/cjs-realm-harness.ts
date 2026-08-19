@@ -22,9 +22,8 @@ export interface RunResult {
 export function makeTreeFs(files: Record<string, string>): IFileSystem {
   const store = new Map<string, string>();
   const dirs = new Set<string>(['/']);
-  for (const [rawPath, content] of Object.entries(files)) {
-    const path = normalizePath(rawPath);
-    store.set(path, content);
+  /** Register every ancestor directory of `path` so `stat`/`readdir` see them. */
+  function addAncestorDirs(path: string): void {
     let dir = path.slice(0, path.lastIndexOf('/')) || '/';
     while (dir && !dirs.has(dir)) {
       dirs.add(dir);
@@ -34,6 +33,11 @@ export function makeTreeFs(files: Record<string, string>): IFileSystem {
         break;
       }
     }
+  }
+  for (const [rawPath, content] of Object.entries(files)) {
+    const path = normalizePath(rawPath);
+    store.set(path, content);
+    addAncestorDirs(path);
   }
   const fileStat = (size: number, isDir: boolean): FsStat => ({
     isFile: !isDir,
@@ -53,7 +57,12 @@ export function makeTreeFs(files: Record<string, string>): IFileSystem {
       return new TextEncoder().encode(await fs.readFile(p));
     },
     async writeFile(p: string, c: string | Uint8Array): Promise<void> {
-      store.set(normalizePath(p), typeof c === 'string' ? c : new TextDecoder().decode(c));
+      const path = normalizePath(p);
+      store.set(path, typeof c === 'string' ? c : new TextDecoder().decode(c));
+      // A write materializes its parents, like a real VFS. Without this a file
+      // written AFTER construction left `/workspace` unknown to `stat`, so a
+      // second realm run's snapshot walk bailed at the root and came up empty.
+      addAncestorDirs(path);
     },
     async appendFile(p: string, c: string | Uint8Array): Promise<void> {
       const path = normalizePath(p);

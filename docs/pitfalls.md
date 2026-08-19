@@ -381,6 +381,26 @@ disk forever: a 92 MB file rewritten as 4 MB left 92 MB of unreclaimable OPFS
 quota. The patch keeps the copy only where the write needs it — a non-zero
 offset, or a buffer that does not span the indexed size.
 
+**A file the index knows is not necessarily a file OPFS has.** ZenFS' VFS layer
+only calls the backend's `write` for dirty **byte ranges**, and an empty file has
+none — so `IndexFS.createFile` recorded an inode and no `FileSystemFileHandle`
+was ever created. `stat`/`exists` then answered from the index (the file looked
+real, size 0) while `unlink` raised `ENOENT` from `removeEntry`, and ZenFS clears
+the vnode cache only **after** a successful `unlink`, so the entry reverted to
+existing. A zero-byte file was therefore undeletable: `rm` exited 1 with a
+spurious "No such file or directory", and `rm -f` / `rm -rf` exited 0 with no
+diagnostic at all while deleting nothing (#2157). Two rules fall out of it, both
+enforced by `patches/@zenfs+dom+*.patch`:
+
+- **Materialize the handle when the entry is created**, not when bytes first
+  arrive, so the index and the backing store never disagree about existence.
+- **Treat the index as authoritative on removal.** `IndexFS` has already checked
+  (and dropped) the entry before the backend sees the path, so an absent OPFS
+  entry means the requested end state is already reached — report success.
+  Failing there makes every such path permanently undeletable, which is the
+  mechanism behind the long-standing "phantom deletions" in `/workspace`
+  (files a `git` checkout reports as deleted that will not go away).
+
 ## CDP Transport: Extension Mode
 
 **File**: `packages/webapp/src/cdp/extension-bridge-transport.ts`
