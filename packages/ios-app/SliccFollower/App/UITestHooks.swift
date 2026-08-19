@@ -38,8 +38,11 @@ import UIKit
 
         /// Route straight to the isolated avatar matrix. The value selects the
         /// screenshot variant: `light-centered`, `light-offset`, `dark-centered`,
-        /// `dark-offset`, or the deterministic TV-noise states `light-static`
-        /// and `dark-static`.
+        /// `dark-offset`, the deterministic TV-noise states `light-static`
+        /// and `dark-static`, the expression matrix `light-expression` /
+        /// `dark-expression`, or `light-toolbar` / `dark-toolbar` — the header's
+        /// own `.principal` toolbar layout, which the in-stack grids cannot
+        /// stand in for.
         static var avatarFixtureVariant: String? {
             UserDefaults.standard.string(forKey: "uiTestAvatarFixture")
         }

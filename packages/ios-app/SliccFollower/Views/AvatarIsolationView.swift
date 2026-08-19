@@ -18,6 +18,7 @@ import SwiftUI
         private var isOffset: Bool { variant.hasSuffix("offset") }
         private var isStatic: Bool { variant.hasSuffix("static") }
         private var isExpression: Bool { variant.hasSuffix("expression") }
+        private var isToolbar: Bool { variant.hasSuffix("toolbar") }
         private var scheme: ColorScheme { isDark ? .dark : .light }
 
         /// One expression-kit tile: an activity plus an optional transient,
@@ -111,11 +112,65 @@ import SwiftUI
         }
 
         var body: some View {
-            if isExpression {
+            if isToolbar {
+                toolbarBody
+            } else if isExpression {
                 expressionBody
             } else {
                 poseBody
             }
+        }
+
+        /// The header's own layout, reproduced leaderlessly: the avatar as a
+        /// `.principal` toolbar item at the size `ChatView` gives it. The grid
+        /// fixtures cannot stand in for this — they put the tile straight into
+        /// a stack, where the eye pair happened to land correctly even while
+        /// the toolbar dropped the right eye a half tile and clipped it into
+        /// the corner. Every activity is captured, since the expression kit's
+        /// animating path is the one that broke.
+        private var toolbarBody: some View {
+            NavigationStack {
+                ScrollView {
+                    VStack(spacing: 12) {
+                        Text("Toolbar · \(isDark ? "dark" : "light")")
+                            .font(.headline)
+                            .accessibilityIdentifier("avatar-fixture-toolbar")
+                        // The same tiles inline, so one capture holds the
+                        // toolbar avatar and its in-stack twin for comparison.
+                        HStack(spacing: 12) {
+                            ForEach(expressionStates.prefix(4).indices, id: \.self) { index in
+                                let state = expressionStates[index]
+                                SliccAgentAvatarView(
+                                    avatar: headerGeometry(for: state),
+                                    expression: engine(for: state)
+                                )
+                                .frame(width: 36, height: 36)
+                            }
+                        }
+                    }
+                    .frame(maxWidth: .infinity)
+                    .padding(.top, 24)
+                }
+                .toolbar {
+                    ToolbarItem(placement: .principal) {
+                        SliccAgentAvatarView(
+                            avatar: headerGeometry(for: expressionStates[0]),
+                            expression: engine(for: expressionStates[0])
+                        )
+                        .frame(width: 36, height: 36)
+                    }
+                }
+            }
+            .background(isDark ? Color.black : Color.white)
+            .foregroundStyle(isDark ? Color.white : Color.black)
+            .environment(\.colorScheme, scheme)
+        }
+
+        /// `ChatView.selectedAvatar`'s shape: a 30pt cone tile in a 36pt slot.
+        private func headerGeometry(for state: ExpressionState) -> SliccAgentAvatarGeometry {
+            SliccAgentAvatarGeometry(
+                type: .cone, color: "#B07823", eyes: state.eyes, fill: state.fill,
+                blink: false, sideLength: 30, activity: state.activity)
         }
 
         /// The expression-kit state matrix — the iOS twin of the Storybook
@@ -145,14 +200,37 @@ import SwiftUI
                 }
                 HStack(spacing: 10) {
                     Text("26pt").font(.caption)
-                    ForEach(Array(expressionStates.prefix(4).enumerated()), id: \.offset) {
-                        _, state in
+                    ForEach(expressionStates.prefix(4).indices, id: \.self) { index in
+                        let state = expressionStates[index]
                         SliccAgentAvatarView(
                             avatar: SliccAgentAvatarGeometry(
                                 type: .scoop, color: "#8B5CF6", eyes: state.eyes,
                                 fill: state.fill, blink: false, sideLength: 26,
                                 activity: state.activity),
                             expression: engine(for: state))
+                    }
+                }
+                // The cone crops its eye band harder than the scoop does, so it
+                // needs its own row: a scoop-only matrix cannot catch a cone
+                // mapping that drifts from `slicc-agent-avatar.ts`.
+                Text("cone").font(.caption)
+                HStack(spacing: 10) {
+                    ForEach(expressionStates.prefix(4).indices, id: \.self) { index in
+                        let state = expressionStates[index]
+                        VStack(spacing: 3) {
+                            SliccAgentAvatarView(
+                                avatar: SliccAgentAvatarGeometry(
+                                    type: .cone, color: "#B07823", eyes: state.eyes,
+                                    fill: state.fill, blink: false, sideLength: 72,
+                                    activity: state.activity),
+                                expression: engine(for: state))
+                            SliccAgentAvatarView(
+                                avatar: SliccAgentAvatarGeometry(
+                                    type: .cone, color: "#B07823", eyes: state.eyes,
+                                    fill: state.fill, blink: false, sideLength: 26,
+                                    activity: state.activity),
+                                expression: engine(for: state))
+                        }
                     }
                 }
             }
