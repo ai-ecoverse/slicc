@@ -78,6 +78,44 @@ function extractChains(text) {
  * @param {Array<{name: string, text: string}>} files
  * @returns {{variables: Array<{name: string, workflows: string[]}>, literals: Array<{value: string, workflows: string[]}>, chains: Array<{workflow: string, expression: string}>}}
  */
+/**
+ * Drop YAML comments before scanning, tracking quote state so a `#` inside a
+ * string survives.
+ *
+ * A commented-out reference is not reachable, and treating it as reachable fails
+ * in both directions: a disabled `vars.X_BEDROCK_MODEL` would trip the
+ * unwatched-variable guard and abort every scheduled run, and a retired model ID
+ * left in a comment would be probed and reported dead — a weekly false alarm
+ * about a model nothing calls. Both are worse than missing a reference, because
+ * both train people to ignore this issue.
+ *
+ * @param {string} text
+ * @returns {string}
+ */
+function stripYamlComments(text) {
+  return String(text)
+    .split('\n')
+    .map((line) => {
+      let quote = null;
+      for (let i = 0; i < line.length; i += 1) {
+        const char = line[i];
+        if (quote) {
+          if (char === quote) quote = null;
+          continue;
+        }
+        if (char === "'" || char === '"') {
+          quote = char;
+          continue;
+        }
+        // A YAML comment needs whitespace (or line start) before the `#`, which
+        // is what keeps `us.anthropic.foo#bar` from being cut in half.
+        if (char === '#' && (i === 0 || /\s/.test(line[i - 1]))) return line.slice(0, i);
+      }
+      return line;
+    })
+    .join('\n');
+}
+
 export function extractModelReferences(files) {
   /** @type {Map<string, Set<string>>} */
   const variables = new Map();
@@ -94,7 +132,7 @@ export function extractModelReferences(files) {
   };
 
   for (const file of Array.isArray(files) ? files : []) {
-    const text = String(file?.text ?? '');
+    const text = stripYamlComments(String(file?.text ?? ''));
     const workflow = String(file?.name ?? '');
     for (const name of matchAll(text, MODEL_VAR_RE)) {
       record(variables, name, workflow);

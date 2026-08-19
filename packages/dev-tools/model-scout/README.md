@@ -73,8 +73,15 @@ be the last of these issues anybody reads. Three protections stack:
 - `buildReport` files only on `invalid`. When every probe was inconclusive it
   files nothing **and** the run logs a `BLIND RUN` warning plus an Actions
   warning annotation — a canary that cannot tell you it is blind is worse than
-  none. That state also blocks the auto-close step, so a blind week cannot
-  resolve an open issue.
+  none.
+- The auto-close step requires `inconclusive_count == 0`, so an open issue is
+  resolved only when **every** ID returned a definite `ok`. The case that makes
+  the weaker "not entirely blind" test wrong is narrow and likely: the very ID the
+  issue is about comes back throttled while the others answer, which would close
+  a live outage report without ever retesting the thing it reports.
+- Commented-out references are stripped before scanning, so a disabled variable
+  cannot trip the unwatched-variable guard and a retired ID left in a comment
+  cannot be probed and reported dead.
 
 A healthy week files nothing at all. There is no weekly "all good" issue.
 

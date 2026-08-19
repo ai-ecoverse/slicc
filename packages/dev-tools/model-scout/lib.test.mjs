@@ -120,6 +120,53 @@ describe('isBedrockAnthropicModelId', () => {
 });
 
 describe('extractModelReferences', () => {
+  it('ignores commented-out variables and model IDs', () => {
+    // A commented-out reference is not reachable. Counting one would break the
+    // scout in both directions: a disabled variable trips the unwatched-variable
+    // guard and aborts every scheduled run, and a retired ID left in a comment
+    // gets probed and reported dead every week.
+    const files = [
+      {
+        name: 'agent.yml',
+        text: [
+          '      # model: ${{ vars.DISABLED_BEDROCK_MODEL }}',
+          "      # was 'us.anthropic.claude-opus-4-9' until it was retired",
+          "      model: ${{ vars.LIVE_BEDROCK_MODEL || 'us.anthropic.claude-opus-4-8' }}",
+        ].join('\n'),
+      },
+    ];
+    const references = extractModelReferences(files);
+
+    expect(references.variables.map((v) => v.name)).toEqual(['LIVE_BEDROCK_MODEL']);
+    expect(references.literals.map((l) => l.value)).toEqual(['us.anthropic.claude-opus-4-8']);
+  });
+
+  it('keeps a reference on a line whose comment comes after it', () => {
+    const files = [
+      {
+        name: 'agent.yml',
+        text: "      model: ${{ vars.LIVE_BEDROCK_MODEL || 'us.anthropic.claude-opus-4-8' }} # pinned\n",
+      },
+    ];
+    const references = extractModelReferences(files);
+
+    expect(references.variables.map((v) => v.name)).toEqual(['LIVE_BEDROCK_MODEL']);
+    expect(references.literals.map((l) => l.value)).toEqual(['us.anthropic.claude-opus-4-8']);
+  });
+
+  it('does not treat a # inside a quoted string as a comment', () => {
+    const files = [
+      {
+        name: 'agent.yml',
+        text: "      run: echo 'issue #42' && echo '${{ vars.LIVE_BEDROCK_MODEL }}'\n",
+      },
+    ];
+
+    expect(extractModelReferences(files).variables.map((v) => v.name)).toEqual([
+      'LIVE_BEDROCK_MODEL',
+    ]);
+  });
+
   it('extracts both the variables and the literal from a fallback chain', () => {
     const files = [
       {

@@ -113,9 +113,14 @@ jobs:
           fi
 
       - name: Resolve the issue once every model answers again
-        # Deliberately requires a definite all-clear: a run where every probe was
-        # inconclusive must not close an open issue, because it proved nothing.
-        if: steps.scan.outputs.has_invalid == 'false' && steps.scan.outputs.all_inconclusive == 'false' && github.event.inputs.dry_run != 'true'
+        # Requires a definite all-clear on EVERY ID: `inconclusive_count == 0`, not
+        # merely "the run was not entirely blind". The dangerous case is narrow and
+        # entirely plausible — the ID this issue is about comes back throttled while
+        # the others answer fine. `all_inconclusive` is false, `has_invalid` is
+        # false, and a looser condition would close an open outage issue on the
+        # strength of never having retested the thing it reports. Closing is the
+        # one irreversible-ish action here, so it gets the strictest gate.
+        if: steps.scan.outputs.has_invalid == 'false' && steps.scan.outputs.inconclusive_count == '0' && github.event.inputs.dry_run != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           OK_COUNT: ${{ steps.scan.outputs.ok_count }}
