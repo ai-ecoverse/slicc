@@ -65,19 +65,38 @@ console): raw ANSI, ~4 files.
   bucket. Fields are laid out most-important-first and any that no longer fits
   is _skipped_, not treated as the end of the line — otherwise one long hostname
   on a narrow pane would hide the short fields behind it. Width is re-queried
-  per repaint, so a resize needs no SIGWINCH handler. Only `follow` gets the
-  bar unconditionally: `watch` streams the transcript to stdout in partial
-  lines, so when stdout is a terminal too it keeps the colors and drops the bar
-  rather than let the two fight over the last row. Deliberately **no alternate screen buffer and no scroll regions**:
+  per repaint, so a resize needs no SIGWINCH handler. Deliberately **no alternate screen buffer and no scroll regions**:
   output still scrolls back normally and a killed process leaves a usable
   terminal. Repaints from state changes are throttled (80 ms); the 1 s ticker
   catches up.
+- **The bar needs the last row to itself**, so it is dropped (colors kept)
+  whenever something else writes to the same stream — there are two such cases,
+  and both are decided once, at startup, in `commands.go`:
+  - `watch` streams the transcript to **stdout** in partial lines (a
+    `content_delta` rarely ends at a line boundary), so `watchModes` drops the
+    bar when stdout is a terminal too.
+  - the diagnostic logger writes to **stderr** on its own once turned up, so
+    `stickyUnlessLogging` drops the bar whenever `diagLogger.Enabled()`. Without
+    it, `SLICC_DEBUG=1` on a terminal would land a record on the bar's row and
+    every later erase would target the wrong line.
+- **Width accounting** (`cellWidth`) — combining marks and variation selectors
+  are zero cells, the East Asian wide/fullwidth blocks and the emoji blocks are
+  two, everything else one. `visibleWidth` sums those (skipping escapes) and
+  `truncateVisible` drops a double-wide rune rather than splitting it, since half
+  a cell is what makes a terminal wrap.
 - **Events** — `Line` stamps and marks the first row and indents continuation
   rows (`│ …`), so a multi-line error reads as one event. An identical
-  consecutive event is folded in place with a `(×3)` counter; one too tall
-  (> 6 rows) or too wide to rewrite safely — a soft-wrapped row invalidates the
-  cursor walk — keeps its detail on screen once and collapses into a single
-  `↺ repeated (×N)` row instead. `Note` prints **only** in plain mode, for
+  consecutive event is folded in place with a `(×3)` counter; one that cannot be
+  rewritten keeps its detail on screen once and collapses into a single
+  `↺ repeated (×N)` row instead, which is then rewritten from there on. Three
+  things disqualify a rewrite, all of them cases where the cursor walk would
+  land somewhere other than where the event started: more than 6 rows, a row at
+  or past the terminal width (it has soft-wrapped), and a row holding anything
+  beyond ASCII plus this package's own symbols (`rewriteSafe`). That last one is
+  deliberately blunt: leader-supplied text can contain emoji ZWJ sequences,
+  "ambiguous width" characters a CJK locale draws wide, or bytes the terminal
+  replaces with a glyph of its own choosing, and an undercounted row wraps
+  invisibly — so such an event is never rewritten, only marked. `Note` prints **only** in plain mode, for
   information the bar already carries live (the reconnect wait): duplicating it
   would also interleave the identical errors and defeat the collapsing.
 - **Seams** — `LineWriter(kind)` adapts the console to an `io.Writer` so

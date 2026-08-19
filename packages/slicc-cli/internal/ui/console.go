@@ -358,14 +358,15 @@ const maxRewritableRows = 6
 // rewritableRows reports how many rows the event occupies for the purpose of
 // rewriting it, or 0 when it must not be rewritten: a row at or past the
 // terminal width has soft-wrapped, so the row count no longer matches what the
-// terminal actually did.
+// terminal actually did, and a row whose width cannot be measured with certainty
+// might have wrapped without us knowing.
 func (c *Console) rewritableRows(rows []string) int {
 	if len(rows) == 0 || len(rows) > maxRewritableRows {
 		return 0
 	}
 	width := c.widthLocked()
 	for _, row := range rows {
-		if visibleWidth(row) >= width {
+		if !rewriteSafe(row) || visibleWidth(row) >= width {
 			return 0
 		}
 	}

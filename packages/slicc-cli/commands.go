@@ -493,7 +493,21 @@ func outputMode(f *os.File, plain bool) ui.Mode {
 	if plain {
 		return ui.Mode{}
 	}
-	return ui.Detect(f, os.LookupEnv)
+	return stickyUnlessLogging(ui.Detect(f, os.LookupEnv), diagLogger)
+}
+
+// stickyUnlessLogging drops the bar while the diagnostic logger is emitting.
+// diagLogger writes to stderr on its own — `tray` logs its retries and ICE
+// transitions there — and the bar can only own the last row while nothing else
+// writes to it. Turned up (SLICC_DEBUG=1, SLICC_LOG_LEVEL=…), a record would land
+// on the bar's row and every later erase would target the wrong line. Debugging
+// wants the full record stream anyway, so the records win and the bar steps
+// aside; the status lines keep their colors.
+func stickyUnlessLogging(mode ui.Mode, diag *logging.Logger) ui.Mode {
+	if diag.Enabled() {
+		mode.Sticky = false
+	}
+	return mode
 }
 
 // errLine writes a one-shot verb's fatal stderr line — red on an interactive

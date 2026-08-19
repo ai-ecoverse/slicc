@@ -399,3 +399,48 @@ func TestConsoleColorsLinesWithoutTheBar(t *testing.T) {
 		t.Errorf("output %q moved the cursor without a bar to maintain", got)
 	}
 }
+
+func TestRepeatOfUnmeasurableTextUsesTheMarkerNotACursorRewind(t *testing.T) {
+	var buf syncBuffer
+	c := stickyConsole(&buf, 80)
+	// Leader-supplied text: the CJK run may be drawn two cells per rune, so the
+	// row may already have wrapped. Rewinding over it would erase whatever the
+	// terminal put on the extra row.
+	msg := "tray attach failed: 世界世界"
+	c.Line(KindError, "%s", msg)
+	first := buf.String()
+	if strings.Contains(first, cursorUp) {
+		t.Fatalf("first occurrence moved the cursor: %q", first)
+	}
+	c.Line(KindError, "%s", msg)
+
+	got := strings.TrimPrefix(buf.String(), first)
+	if !strings.Contains(got, "repeated (×2)") {
+		t.Errorf("repeat %q did not fall back to the marker", got)
+	}
+	if strings.Contains(got, "世界") {
+		t.Errorf("repeat %q rewrote the unmeasurable row in place", got)
+	}
+	// The marker itself is built from runes we control, so from here on it is
+	// rewritten in place rather than adding a row per occurrence.
+	c.Line(KindError, "%s", msg)
+	if last := strings.TrimPrefix(buf.String(), first+got); !strings.Contains(last, cursorUp) {
+		t.Errorf("marker %q was not rewritten in place", last)
+	}
+}
+
+func TestRepeatOfPlainTextStillCollapsesInPlace(t *testing.T) {
+	var buf syncBuffer
+	c := stickyConsole(&buf, 80)
+	c.Line(KindError, "connection closed")
+	before := buf.String()
+	c.Line(KindError, "connection closed")
+
+	got := strings.TrimPrefix(buf.String(), before)
+	if !strings.Contains(got, cursorUp) || !strings.Contains(got, "(×2)") {
+		t.Errorf("repeat %q did not rewrite the row in place", got)
+	}
+	if strings.Contains(got, "repeated") {
+		t.Errorf("repeat %q used the marker for a row it could measure", got)
+	}
+}

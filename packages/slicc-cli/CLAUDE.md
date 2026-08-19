@@ -102,12 +102,18 @@ countdown), uptime, `♥` age of the last frame from the leader (fed by
 `tray.Options.OnActivity`, which fires on _every_ inbound frame — the leader
 answers pings rather than sending them, so keepalives alone would never
 populate it), exec + reconnect counts, suppressed link diagnostics,
-`user@host · runner`, and a per-5s connection-history strip. `watch` drops the
-bar when **stdout** is also a terminal: it streams the transcript there in
-partial lines, and both cannot own the last row.
+`user@host · runner`, and a per-5s connection-history strip.
 Event lines are stamped, colored and glyph-marked; an identical repeat folds in
-place as `(×N)` (or a compact `↺ repeated (×N)` row when the event is too
-tall/wide to rewrite), so a reconnect loop no longer scrolls the screen away.
+place as `(×N)`, or into a compact `↺ repeated (×N)` row when the event cannot
+be rewritten safely (too tall, soft-wrapped, or holding text whose cell width we
+cannot be sure of — emoji, CJK, invalid bytes). So a reconnect loop no longer
+scrolls the screen away.
+
+**The bar must own the last row**, so it is dropped (colors kept) when anything
+else writes to the same stream: `watch` when **stdout** is also a terminal (its
+transcript arrives in partial lines), and any verb once the diagnostic logger is
+turned up (`SLICC_DEBUG=1` and friends write to **stderr** directly). Both
+decisions live in `commands.go` — `watchModes` and `stickyUnlessLogging`.
 
 **Plain mode is the contract**: with no terminal attached, output is
 byte-for-byte the pre-TUI `slicc <verb>: <msg>` text, escape-free, with every

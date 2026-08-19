@@ -91,3 +91,71 @@ func TestTruncateVisible(t *testing.T) {
 		t.Errorf("multibyte truncate = %q, want ♥♥", got)
 	}
 }
+
+func TestCellWidthCountsTerminalCells(t *testing.T) {
+	cases := map[rune]int{
+		'a':      1,
+		'✔':      1, // our own symbols are single-cell
+		'界':      2, // CJK unified
+		'ｗ':      2, // fullwidth form
+		'한':      2, // Hangul syllable
+		'🚀':      2, // emoji
+		'\u0301': 0, // combining acute
+		'\ufe0f': 0, // variation selector
+		'\u200d': 0, // zero-width joiner
+	}
+	for r, want := range cases {
+		if got := cellWidth(r); got != want {
+			t.Errorf("cellWidth(%q) = %d, want %d", r, got, want)
+		}
+	}
+}
+
+func TestVisibleWidthMeasuresWideAndCombiningRunes(t *testing.T) {
+	// Two double-wide runes plus an accented "e" whose mark adds nothing.
+	if got := visibleWidth("世界e\u0301"); got != 5 {
+		t.Errorf("visibleWidth = %d, want 5", got)
+	}
+	// Styling still costs nothing.
+	if got := visibleWidth("\x1b[31m世\x1b[0m"); got != 2 {
+		t.Errorf("visibleWidth with color = %d, want 2", got)
+	}
+}
+
+func TestTruncateVisibleKeepsWideRunesWhole(t *testing.T) {
+	// One cell left over: the next rune needs two, so it is dropped rather than
+	// half-written — a split cell is exactly what makes a terminal wrap.
+	got := truncateVisible("a世界", 2)
+	if got != "a" {
+		t.Errorf("truncateVisible = %q, want %q", got, "a")
+	}
+	if got := truncateVisible("a世界", 3); got != "a世" {
+		t.Errorf("truncateVisible = %q, want %q", got, "a世")
+	}
+}
+
+func TestRewriteSafeOnlyTrustsRunesWeControl(t *testing.T) {
+	safe := []string{
+		"12:00:00 + connected",
+		"12:00:00 ✔ connected",                   // our glyph
+		"\x1b[2m12:00:00\x1b[0m ↺ repeated (×3)", // the repeat marker
+		"⠋ connecting  up 4s  ♥ 0s  ▁▄███",       // every bar symbol
+	}
+	for _, s := range safe {
+		if !rewriteSafe(s) {
+			t.Errorf("rewriteSafe(%q) = false, want true", s)
+		}
+	}
+	unsafe := []string{
+		"tray attach failed: 世界", // leader text a CJK locale may draw wide
+		"deploy 🚀 failed",        // emoji width is terminal-specific
+		"combining e\u0301",      // a mark whose placement we cannot verify
+		"tab\there",              // a control character moves the cursor
+		"bad utf8: \xff",         // replaced by a glyph of the terminal's choosing
+	}
+	for _, s := range unsafe {
+		if rewriteSafe(s) {
+			t.Errorf("rewriteSafe(%q) = true, want false", s)
+		}
+	}
+}

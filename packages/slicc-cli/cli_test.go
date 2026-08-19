@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"io"
 	"log/slog"
 	"os"
 	"path/filepath"
@@ -10,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/ai-ecoverse/slicc-cli/internal/logging"
 	"github.com/ai-ecoverse/slicc-cli/internal/ui"
 )
 
@@ -304,5 +306,32 @@ func TestWatchModesDropTheBarWhenStdoutIsATerminal(t *testing.T) {
 	// Transcript redirected: stderr alone owns the screen, bar included.
 	if console, _ = watchModes(tty, piped); !console.Sticky {
 		t.Error("dropped the status bar even though stdout is redirected")
+	}
+}
+
+func TestStickyUnlessLogging(t *testing.T) {
+	tty := ui.Mode{Color: true, Sticky: true, Unicode: true}
+
+	// Diagnostics off (the default): the bar owns the last row.
+	off := logging.New(io.Discard, logging.Config{})
+	if got := stickyUnlessLogging(tty, off); !got.Sticky {
+		t.Error("dropped the status bar while nothing else writes to stderr")
+	}
+
+	// SLICC_DEBUG=1: tray's records go straight to stderr, so the bar has to
+	// step aside — but the status lines keep their colors.
+	on := logging.New(io.Discard, logging.Config{Enabled: true, Level: slog.LevelDebug})
+	got := stickyUnlessLogging(tty, on)
+	if got.Sticky {
+		t.Error("kept the status bar while diagnostics write to the same stream")
+	}
+	if !got.Color || !got.Unicode {
+		t.Errorf("lost more than the bar: %+v", got)
+	}
+
+	// A nil logger is a valid no-op logger; it must not be mistaken for one that
+	// is emitting.
+	if got := stickyUnlessLogging(tty, nil); !got.Sticky {
+		t.Error("a nil logger dropped the status bar")
 	}
 }
