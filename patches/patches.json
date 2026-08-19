@@ -16,14 +16,6 @@
     "removeWhen": "Local workaround — no upstream PR is tracked. Remove once @zenfs/dom decides keepExistingData per write (or truncates the handle on a narrowing touch) AND materializes a backing handle for empty files upstream.",
     "verify": "npm run test -w @slicc/webapp -- zenfs-dom-overwrite-patch zero-byte-file-delete"
   },
-  "e2b": {
-    "patchedVersion": "2.35.1",
-    "upstream": "https://github.com/e2b-dev/e2b",
-    "issue": null,
-    "reason": "e2b >=2.33.0 emits a top-level `var __require = (() => createRequire(import.meta.url))()` ESM-interop shim (from its bundler, Rolldown) in dist/index.mjs. It runs at module-eval time; under Cloudflare workerd `import.meta.url` is undefined, so createRequire throws on import and crashes the tray-hub worker (which bundles e2b via @slicc/cloud-core). The patch makes __require lazy (init on first call); __require is only reached on Node paths, so this is behaviour-preserving. See docs/pitfalls.md.",
-    "removeWhen": "Remove once e2b ships the shim lazily (init on first use) or provides an edge/browser export condition without the node:module path. e2b officially lists Workers/Edge as unsupported, so this may be long-lived; do NOT drop the patch while the tray-hub worker still bundles the e2b SDK.",
-    "verify": "npm run test -w @slicc/cloud-core -- e2b-workerd-patch"
-  },
   "kerium": {
     "patchedVersion": "1.4.2",
     "upstream": "https://github.com/zen-fs/kerium",
