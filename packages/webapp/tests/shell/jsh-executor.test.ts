@@ -176,6 +176,32 @@ describe('executeJshFile', () => {
     expect(result.stdout.trim()).toBe('hello_env');
   });
 
+  it('provides process.versions.node / version / platform / arch (#2200)', async () => {
+    // Packages feature-detect on these at require time — esbuild's Node entry
+    // does `process.versions.node.split('.')` at module scope, which threw
+    // `Cannot read properties of undefined (reading 'node')` while they were
+    // absent. `.split('.')` here IS that check.
+    const ctx = createMockCtx({
+      '/workspace/ident.jsh': [
+        'const [major] = process.versions.node.split(".");',
+        'console.log(JSON.stringify({',
+        '  major: Number(major),',
+        '  version: process.version,',
+        '  platform: process.platform,',
+        '  arch: process.arch,',
+        '}));',
+      ].join('\n'),
+    });
+    const result = await executeJshFile('/workspace/ident.jsh', [], ctx);
+    expect(result.exitCode).toBe(0);
+    const ident = JSON.parse(result.stdout.trim());
+    expect(ident.major).toBeGreaterThanOrEqual(20);
+    expect(ident.version).toMatch(/^v\d+\.\d+\.\d+/);
+    // Must agree with the `os` shim (`helpers/node-os.ts`).
+    expect(ident.platform).toBe('linux');
+    expect(ident.arch).toBe('x64');
+  });
+
   it('provides process.cwd()', async () => {
     const ctx = createMockCtx({
       '/workspace/cwd.jsh': 'console.log(process.cwd());',

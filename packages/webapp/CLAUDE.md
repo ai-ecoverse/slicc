@@ -71,6 +71,11 @@ never-rules below flag what a reviewer must recognise.
 - **`typescript` v7 has no browser/WASM API** — use `typescript-js` (v6) for browser
   `tsc`/`test`/`esm-transpile`. `builtin-shadow-map.ts` is authoritative for
   `ipx`/`npx` → built-in redirects.
+- **`esbuild.initialize` needs `worker: false` + a bounded wait** in every browser
+  float: with `worker: true` it settles only on a nested `blob:` Worker's first
+  message (no `onerror`, no timeout), so a blocked blob worker hangs forever
+  (#2200). Never cache a load promise that can stay pending — `esbuild-wasm.ts`
+  records a stall instead. See `docs/pitfalls.md`.
 - **Speech is page-realm only** (mic, AudioContext); kernel worker bridges via
   `hear-*` panel-RPC. Extension `uiOnly` side panel: Chrome denies `getUserMedia`
   from a cross-origin iframe, so `wc-follower.ts` skips `ptt` and drops

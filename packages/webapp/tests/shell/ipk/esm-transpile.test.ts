@@ -18,6 +18,7 @@ import {
 } from '../../../src/shell/ipk/esm-transpile.js';
 import { buildModuleGraph } from '../../../src/shell/ipk/module-loader.js';
 import type { ModuleReader } from '../../../src/shell/ipk/resolver.js';
+import { EsbuildInitStallError } from '../../../src/shell/supplemental-commands/esbuild-wasm.js';
 import { resetTypeScriptForTests } from '../../../src/shell/supplemental-commands/shared.js';
 
 function makeReader(files: Record<string, string>): ModuleReader {
@@ -189,6 +190,25 @@ describe('createEsmTranspile() — typescript fallback path', () => {
     const exp = evalCjs(cjs);
     expect((exp.default as () => string)()).toBe('file:///app/node_modules/pkg/index.mjs');
     expect((exp.asset as () => string)()).toBe('file:///app/node_modules/pkg/d.txt');
+  });
+
+  it('falls back when the esbuild wasm service stalls instead of transpiling nothing (#2200)', async () => {
+    const { getTypeScript } = await import('../../../src/shell/supplemental-commands/shared.js');
+    // A stalled handshake now surfaces as `EsbuildInitStallError` (the loader
+    // bounds `initialize`), so the documented TypeScript fallback becomes
+    // reachable: before, the loader never settled and the transpile hung.
+    const transpile = createEsmTranspile({
+      loadEsbuild: async () => {
+        throw new EsbuildInitStallError(
+          'esbuild-wasm found at /workspace/node_modules/esbuild-wasm (13978850 bytes) ' +
+            'but the wasm service did not start within 20s'
+        );
+      },
+      loadTypeScript: getTypeScript,
+    });
+    const cjs = await transpile({ source: ESM_SRC, path: PATH, kind: 'esm' });
+    expect(cjs).not.toContain('export default');
+    expect((evalCjs(cjs).default as () => string)()).toBe('file:///app/node_modules/pkg/index.mjs');
   });
 
   it('surfaces the pinned TypeScript 6 install command when the browser fallback is absent', async () => {

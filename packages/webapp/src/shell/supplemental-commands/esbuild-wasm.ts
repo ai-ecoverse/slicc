@@ -8,14 +8,16 @@
  * caller with its own fallback (e.g. `esm-transpile.ts` →
  * TypeScript) takes over.
  *
- * Extension mode: the wasm bytes are materialized through the
- * VFS, compiled to a `WebAssembly.Module`, and handed to
- * `initialize({ wasmModule })` — sidestepping any blob-URL or
- * `wasmURL` CSP differences between extension and standalone.
- *
- * Standalone CLI: same path. `initialize` accepts either a
- * `wasmURL` or a `wasmModule`; passing the compiled module keeps
- * the loader symmetric across floats.
+ * Every browser float takes the same path: the wasm bytes are
+ * materialized through the VFS, compiled to a `WebAssembly.Module`,
+ * and handed to `initialize({ wasmModule, worker: false })` —
+ * sidestepping the blob-URL / `wasmURL` CSP differences between
+ * extension and standalone, and the nested-blob-Worker handshake
+ * that can stall forever (#2200, see `loadEsbuild`). `initialize`
+ * accepts either a `wasmURL` or a `wasmModule`; passing the compiled
+ * module keeps the loader symmetric across floats. The handshake is
+ * bounded by {@link ESBUILD_INIT_TIMEOUT_MS} so a stall becomes a
+ * named rejection instead of an indefinite hang.
  *
  * Vitest / Node: the `esbuild-wasm` npm package's Node entry
  * (`lib/main.js`, picked when `"main"` resolves) spawns a wasm
@@ -28,11 +30,38 @@
 import * as esbuild from 'esbuild-wasm';
 import { splitPath } from '../../fs/path-utils.js';
 import { compileWasmModule } from '../../kernel/realm/wasm-compiler.js';
-import { type ModuleReader, resolve } from '../ipk/resolver.js';
-import { isExtensionRuntime, isNodeRuntime } from './shared.js';
+import { type ModuleReader, nodeModulesSearchPath, resolve } from '../ipk/resolver.js';
+import { isNodeRuntime } from './shared.js';
 
 /** Version string read off the installed `esbuild-wasm` package. */
 export const ESBUILD_VERSION = esbuild.version;
+
+/**
+ * Budget for the `esbuild.initialize` service handshake (compile is done by
+ * then; this covers only the Go runtime boot + first stdout message).
+ *
+ * A stalled handshake used to hang every caller forever with no output
+ * (#2200): `node` on any ESM source and the `esbuild` command simply
+ * produced nothing until killed. A named rejection inside the budget is
+ * strictly better — the ESM transpiler can fall back to TypeScript and the
+ * `esbuild` command can print why.
+ */
+export const ESBUILD_INIT_TIMEOUT_MS = 20_000;
+
+/**
+ * Thrown when `esbuild.initialize` neither resolves nor rejects within
+ * {@link ESBUILD_INIT_TIMEOUT_MS}. Distinct type because a stall is not
+ * retryable: `initialize` may be called only once per realm, and the
+ * abandoned call keeps esbuild's own internal promise pending, so every
+ * later `getEsbuild` re-rejects with the recorded stall instead of
+ * starting a second load.
+ */
+export class EsbuildInitStallError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'EsbuildInitStallError';
+  }
+}
 
 /**
  * Read-only VFS context the loader needs to read an ipk-installed
@@ -50,12 +79,29 @@ export interface IpkResolutionContext {
 }
 
 let esbuildPromise: Promise<typeof esbuild> | null = null;
+/**
+ * Recorded stall (see {@link EsbuildInitStallError}) — sticky for the
+ * lifetime of the realm because the abandoned `initialize` cannot be
+ * retried. Kept separate from `esbuildPromise` so the cache holds only
+ * pending-or-resolved loads and can never hold a promise that will never
+ * settle.
+ */
+let esbuildStall: EsbuildInitStallError | null = null;
+/** Effective handshake budget; only tests shorten it (`resetEsbuildForTests`). */
+let initTimeoutMs: number = ESBUILD_INIT_TIMEOUT_MS;
 
 /**
  * Public entry point. Idempotent across calls within a session —
  * `esbuild.initialize` may only be called once per realm, so the
  * loader memoizes the underlying promise and re-throws the same
  * failure if init was rejected (a fresh import would still reject).
+ *
+ * A REJECTED load clears the cache so the next call retries (a package
+ * installed in the meantime, or a different cwd, then resolves). A
+ * STALLED load (init never settled) is bounded by
+ * {@link ESBUILD_INIT_TIMEOUT_MS} and recorded in `esbuildStall`, so
+ * later callers fail fast with the same diagnosis instead of awaiting a
+ * dead promise for the rest of the session (#2200).
  *
  * In Node / vitest, `ipk` is unused (the package's Node entry boots
  * lazily on first `build` / `transform`). In the browser, `ipk` is
@@ -65,13 +111,23 @@ let esbuildPromise: Promise<typeof esbuild> | null = null;
 export async function getEsbuild(
   options: { onProgress?: (msg: string) => void; ipk?: IpkResolutionContext } = {}
 ): Promise<typeof esbuild> {
+  if (esbuildStall) throw esbuildStall;
   if (!esbuildPromise) {
     esbuildPromise = loadEsbuild(options.onProgress, options.ipk).catch((err) => {
       esbuildPromise = null;
+      if (err instanceof EsbuildInitStallError) esbuildStall = err;
       throw err;
     });
   }
   return esbuildPromise;
+}
+
+/** A located, readable ipk-installed `esbuild-wasm` binary. */
+export interface EsbuildWasmBinary {
+  /** Directory of the resolved `esbuild-wasm` package. */
+  packageDir: string;
+  /** Bytes of `<packageDir>/esbuild.wasm`. */
+  bytes: Uint8Array;
 }
 
 /**
@@ -87,7 +143,7 @@ export async function getEsbuild(
  */
 export async function tryLoadEsbuildWasmFromNodeModules(
   ipk: IpkResolutionContext
-): Promise<Uint8Array | null> {
+): Promise<EsbuildWasmBinary | null> {
   let resolved;
   try {
     resolved = await resolve('esbuild-wasm/package.json', ipk.fromDir, ipk.reader);
@@ -95,13 +151,44 @@ export async function tryLoadEsbuildWasmFromNodeModules(
     return null;
   }
   if (resolved.type !== 'file') return null;
-  const pkgDir = splitPath(resolved.path).dir;
-  const wasmPath = `${pkgDir}/esbuild.wasm`;
+  const packageDir = splitPath(resolved.path).dir;
+  const wasmPath = `${packageDir}/esbuild.wasm`;
   if (!(await ipk.reader.exists(wasmPath))) return null;
   try {
-    return await ipk.readBytes(wasmPath);
+    return { packageDir, bytes: await ipk.readBytes(wasmPath) };
   } catch {
     return null;
+  }
+}
+
+/**
+ * Race `esbuild.initialize` against {@link ESBUILD_INIT_TIMEOUT_MS} and
+ * turn a stall into an {@link EsbuildInitStallError} naming the resolved
+ * package, its wasm byte count and the budget. The abandoned call is left
+ * running (esbuild exposes no abort for it); `getEsbuild` records the stall
+ * so nothing awaits it again.
+ */
+async function initializeWithTimeout(
+  wasmModule: WebAssembly.Module,
+  binary: EsbuildWasmBinary
+): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const budget = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(() => {
+      reject(
+        new EsbuildInitStallError(
+          `esbuild-wasm found at ${binary.packageDir} (${binary.bytes.byteLength} bytes) ` +
+            `but the wasm service did not start within ${initTimeoutMs / 1000}s ` +
+            '(in-thread mode, `worker: false`). esbuild stays unavailable until this ' +
+            'session is reloaded; ESM transpiles fall back to TypeScript.'
+        )
+      );
+    }, initTimeoutMs);
+  });
+  try {
+    await Promise.race([esbuild.initialize({ wasmModule, worker: false }), budget]);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
   }
 }
 
@@ -130,35 +217,54 @@ async function loadEsbuild(
       `esbuild-wasm is not available: install via \`ipk add esbuild-wasm@${ESBUILD_VERSION}\``
     );
   }
-  const bytes = await tryLoadEsbuildWasmFromNodeModules(ipk);
-  if (!bytes) {
+  const binary = await tryLoadEsbuildWasmFromNodeModules(ipk);
+  if (!binary) {
+    // Resolution is cwd-relative, so name the walked directories: an
+    // `esbuild-wasm` installed in `/workspace/node_modules` is invisible
+    // from `/shared`, and the bare "not installed" claim reads as a lie
+    // there (#2200).
     throw new Error(
-      `esbuild-wasm is not installed in node_modules: run \`ipk add esbuild-wasm@${ESBUILD_VERSION}\``
+      `esbuild-wasm is not installed in node_modules: run \`ipk add esbuild-wasm@${ESBUILD_VERSION}\`` +
+        ` (searched from ${ipk.fromDir}: ${nodeModulesSearchPath(ipk.fromDir).join(', ')})`
     );
   }
-  log(`esbuild.wasm loaded from ipk node_modules (${bytes.byteLength} bytes)`);
+  const bytes = binary.bytes;
+  log(`esbuild.wasm loaded from ${binary.packageDir} (${bytes.byteLength} bytes)`);
   // Compile through the shared host-context helper (same primitive the
   // realm-host `wasm` channel uses), so esbuild and biome share one
   // compilation path. This already runs host-side (the `esm-transpile`
   // hook), so there's no realm-worker OOM to avoid here — the consolidation
   // is for a single source of truth.
   const wasmModule = await compileWasmModule(bytes);
-  // Run the wasm in a web worker by default to keep the calling
-  // thread responsive. The extension's offscreen document opts out
-  // because spawning a worker that imports `https://...` source
-  // bumps into the extension origin's CSP; running on the offscreen
-  // thread is fine because the offscreen document is already
-  // dedicated to the agent runtime.
-  await esbuild.initialize({ wasmModule, worker: !isExtensionRuntime() });
+  // `worker: false` in EVERY browser float, deliberately.
+  //
+  // With `worker: true` esbuild spawns a nested `blob:` Worker and settles
+  // its handshake promise ONLY on that worker's first `message`: it attaches
+  // no `onerror` and no timeout. Anything that stops the blob worker from
+  // running (a `worker-src`/`child-src` CSP, blob URLs unavailable, nested
+  // workers disallowed) therefore leaves `initialize()` pending forever with
+  // no diagnostic — the #2200 hang, reproduced in a headless Chromium
+  // DedicatedWorker under `worker-src 'self'`. `worker: false` needs no
+  // nested worker, resolved in ~130 ms in every configuration tested
+  // (including that CSP), and surfaces boot failures as rejections. This
+  // code already runs off the UI thread (kernel worker / offscreen
+  // document), so there is no thread to keep responsive.
+  await initializeWithTimeout(wasmModule, binary);
   log('esbuild ready');
   return esbuild;
 }
 
 /**
- * Drop the cached esbuild promise so the next `getEsbuild` call
- * rebuilds from scratch. Test-only — production callers share the
- * single loaded instance for the lifetime of the realm.
+ * Drop the cached esbuild promise (and any recorded stall) so the next
+ * `getEsbuild` call rebuilds from scratch. Test-only — production callers
+ * share the single loaded instance for the lifetime of the realm.
+ *
+ * `initTimeoutMs` shortens the handshake budget so a test can exercise the
+ * stall path in milliseconds instead of {@link ESBUILD_INIT_TIMEOUT_MS};
+ * omitting it restores the production budget.
  */
-export function resetEsbuildForTests(): void {
+export function resetEsbuildForTests(options: { initTimeoutMs?: number } = {}): void {
   esbuildPromise = null;
+  esbuildStall = null;
+  initTimeoutMs = options.initTimeoutMs ?? ESBUILD_INIT_TIMEOUT_MS;
 }

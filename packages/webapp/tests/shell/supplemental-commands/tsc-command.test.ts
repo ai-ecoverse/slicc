@@ -256,6 +256,49 @@ describe('install-required guidance (browser branch)', () => {
     }
   });
 
+  it('names the walked node_modules directories when nothing resolves (#2200)', async () => {
+    resetTypeScriptForTests();
+    vi.stubGlobal('process', undefined);
+    try {
+      const result = await createTscCommand().execute(
+        ['--version'],
+        createMockCtx({ cwd: '/shared/nodetest' })
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('searched from /shared/nodetest');
+      expect(result.stderr).toContain('/shared/nodetest/node_modules');
+      expect(result.stderr).toContain('/shared/node_modules');
+    } finally {
+      vi.unstubAllGlobals();
+      resetTypeScriptForTests();
+    }
+  });
+
+  it('explains an installed TypeScript 7 instead of claiming nothing is installed (#2200)', async () => {
+    resetTypeScriptForTests();
+    const ctx = createMockCtx();
+    // TS 7 is the native port: the npm package ships no `lib/typescript.js`,
+    // so `transpileModule` does not exist in the browser. Saying "TypeScript 6
+    // is not installed" while 7.0.2 sits right there sent the reporter looking
+    // for a missing install that was not missing.
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/typescript/package.json',
+      JSON.stringify({ name: 'typescript', version: '7.0.2', main: 'lib/version.cjs' })
+    );
+    vi.stubGlobal('process', undefined);
+    try {
+      const result = await createTscCommand().execute(['--version'], ctx);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('typescript@7.0.2');
+      expect(result.stderr).toContain('/workspace/node_modules/typescript');
+      expect(result.stderr).toContain('no JS compiler API');
+      expect(result.stderr).toContain('ipk add typescript@6.0.3');
+    } finally {
+      vi.unstubAllGlobals();
+      resetTypeScriptForTests();
+    }
+  });
+
   it('help text includes the pinned TypeScript 6 hint (zero network)', () => {
     // The HELP_TEXT is the canonical user-facing surface for the install
     // requirement. The command always emits it on `--help`, even when

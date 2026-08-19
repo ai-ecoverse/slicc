@@ -15,6 +15,7 @@ import {
   createVfsModuleReader,
   detectModuleKind,
   type ModuleReader,
+  nodeModulesSearchPath,
   resolve,
 } from '../../../src/shell/ipk/resolver.js';
 
@@ -643,5 +644,35 @@ describe('createVfsModuleReader()', () => {
       readFile: async () => '',
     });
     expect(await reader.isDirectory('/missing')).toBe(false);
+  });
+});
+
+describe('nodeModulesSearchPath()', () => {
+  it('lists the node_modules chain a bare lookup walks, nearest first', () => {
+    expect(nodeModulesSearchPath('/shared/nodetest')).toEqual([
+      '/shared/nodetest/node_modules',
+      '/shared/node_modules',
+      '/node_modules',
+    ]);
+  });
+
+  it('terminates at the VFS root for root and empty starting directories', () => {
+    expect(nodeModulesSearchPath('/')).toEqual(['/node_modules']);
+    expect(nodeModulesSearchPath('')).toEqual(['/node_modules']);
+  });
+
+  it('matches where resolve() actually finds a package (the walk it reports is the walk it did)', async () => {
+    // The chain is what the "not installed" errors quote (#2200), so it must
+    // not drift from resolution: a package in `/workspace/node_modules` is
+    // reachable from `/workspace/sub` and unreachable from `/shared`.
+    const reader = makeReader({
+      '/workspace/node_modules/pkg/package.json': JSON.stringify({ name: 'pkg', main: 'i.js' }),
+      '/workspace/node_modules/pkg/i.js': 'module.exports = 1;',
+    });
+    expect(nodeModulesSearchPath('/workspace/sub')).toContain('/workspace/node_modules');
+    await expect(resolve('pkg', '/workspace/sub', reader)).resolves.toMatchObject({ type: 'file' });
+
+    expect(nodeModulesSearchPath('/shared')).not.toContain('/workspace/node_modules');
+    await expect(resolve('pkg', '/shared', reader)).rejects.toThrow();
   });
 });
