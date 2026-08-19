@@ -1,0 +1,433 @@
+name: Review Responder
+
+# Closes the last open loop in the agentic PR pipeline. Our scheduled agents
+# (boy-scout debt, backlog dispatcher, flake hunter) open `automation/*` PRs;
+# Codex, Copilot and this repo's own `claude-pr-review.yml` review them. Until
+# now nothing picked that feedback up — a human had to open a local session and
+# say "take over PR X and address the review comments". This workflow does that:
+# it reads the feedback, fixes what is worth fixing, replies in every thread
+# (including to say "this finding is wrong, and here is why"), and pushes to the
+# PR's existing head branch.
+#
+# STATELESS with respect to Claude sessions, deliberately. There is no session to
+# resume: GitHub *is* the durable state — the diff is on the branch, the
+# reasoning is in the review threads, the verdict is the check suite. A resumed
+# session would add a second, private copy of that state which can disagree with
+# the public one.
+#
+# SHAPE — the house two-part pattern (see boy-scout-debt-dispatcher.yml,
+# pr-fix-dispatcher.yml): a deterministic Node selector
+# (packages/dev-tools/review-responder/) enumerates, filters and dedups and
+# writes its decision to $GITHUB_OUTPUT, then ONE Claude step does the work that
+# genuinely needs judgement. "Is there unseen feedback from someone other than
+# us, on a PR in scope?" is a rule and lives in unit-tested pure functions. "Is
+# this reviewer right, and what is the correct fix?" is judgement and is the
+# model's.
+#
+# LOOP SAFETY. This workflow posts comments; comments are its trigger. Every path
+# is closed twice, because either guard alone is one careless edit from being
+# lost:
+#   1. job `if:` — a run whose triggering comment carries `<!-- review-response`
+#      never starts. That is a MARKER test, not an author test: the house reviewer
+#      posts under the same `github-actions[bot]` login this workflow does, so
+#      excluding that author would make the responder unable to see the one
+#      reviewer that is always present on an `automation/*` PR. See the note on
+#      the `if:` itself.
+#   2. the selector — `normalizeFeedback`/`isSelfOutput` drop our own output, so
+#      even a run started some other way sees none of it as feedback. Note the
+#      test is STRUCTURAL, not by author: `claude-pr-review.yml` posts its verdict
+#      under the same `github-actions[bot]` login we do (claude-code-action runs
+#      its Bash `gh` under GITHUB_TOKEN), so dropping that login wholesale would
+#      make this workflow blind to the reviewer whose findings matter most. What
+#      is dropped is (a) any body carrying `<!-- review-response:<sha> -->` or
+#      `<!-- review-response-summary -->`, and (b) our own inline comments that
+#      are REPLIES in an existing thread. Every comment this workflow writes has
+#      one of those shapes by construction — which is why the summary is posted
+#      by the deterministic step below and not by Claude.
+#   3. the push — Claude's commit fires `synchronize`, which this workflow does
+#      NOT subscribe to. CI re-runs (that is why the push must use BOT_PAT); the
+#      responder does not.
+#   4. the SHA marker — `<!-- review-response:<sha> -->` makes the decision once
+#      per head SHA, so a burst that survives the debounce still cannot produce a
+#      second identical response.
+#
+# A REVIEW BURST IS ONE RUN, NOT THREE. Codex, Copilot and the house reviewer all
+# land within a few minutes of each other, each firing its own event. The
+# `concurrency` group below is keyed to the PR with `cancel-in-progress: true`,
+# and every run opens with a 5-minute debounce sleep: the first two runs are
+# cancelled while still sleeping and only the last one survives to read a set of
+# feedback that is by then complete. Two responders must never run on one branch
+# — they would race each other's pushes.
+#
+# Required repository secrets (both already present, shared with
+# pr-fix-dispatcher.yml / boy-scout-debt-dispatcher.yml):
+#   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key (Adobe CAMP `ABSK...`
+#                             bearer token) for claude-code-action.
+#   BOT_PAT                   Fine-grained PAT (contents + pull-requests write).
+#                             The response commit MUST be pushed with BOT_PAT,
+#                             not GITHUB_TOKEN: GitHub's anti-recursion guard
+#                             suppresses workflow runs for GITHUB_TOKEN-authored
+#                             pushes, so `synchronize` would never fire and the
+#                             PR would sit on stale green checks that never saw
+#                             the fix. This repo has already been bitten by that
+#                             exact bug (`checks: 0` on #2168/#2169).
+# Optional repo variables: REVIEW_RESPONDER_BEDROCK_MODEL / RUM_BEDROCK_MODEL,
+# RUM_AWS_REGION.
+#
+# Third-party actions are pinned to immutable commit SHAs (the same SHAs used by
+# pr-fix-dispatcher.yml) — this job can push to a PR branch.
+
+on:
+  pull_request_review:
+    types: [submitted]
+  pull_request_review_comment:
+    types: [created]
+  issue_comment:
+    types: [created]
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: 'PR to respond on (waives the debounce sleep so it is testable on demand)'
+        required: true
+      dry_run:
+        description: 'Scan and report only; no Claude, no push, no comments'
+        type: boolean
+        required: false
+        default: false
+
+concurrency:
+  # Keyed per PR: a burst of reviewer events on one PR collapses to a single
+  # surviving run, while two different PRs are still answered in parallel.
+  # `cancel-in-progress` is what makes the debounce sleep below a debounce rather
+  # than just a delay.
+  group: review-responder-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+  cancel-in-progress: true
+
+jobs:
+  respond:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    permissions:
+      # read, not write: the response commit is pushed with BOT_PAT (see header),
+      # so the job token never needs push rights. Keeping it read means a bug in
+      # the Claude step cannot push with the job token either.
+      contents: read
+      # Reply in review threads, read the diff, and post the summary comment.
+      pull-requests: write
+      # A top-level PR comment is an ISSUE comment (POST /issues/{n}/comments) —
+      # gated on `issues`, not `pull-requests`. The response marker is posted
+      # through that endpoint, so without this the run would do all the work and
+      # then fail to record that it had.
+      issues: write
+      # claude-code-action fetches an OIDC token during setup.
+      id-token: write
+    # Four gates, all of which must hold:
+    #  • the triggering comment must not be one of OURS, tested by marker rather
+    #    than by author. Excluding `github-actions[bot]` as an author is the
+    #    obvious way to write this and it is WRONG here: `claude-pr-review.yml`
+    #    posts the house review under that same login (claude-code-action runs its
+    #    Bash `gh` under GITHUB_TOKEN), and on an `automation/*` PR that review is
+    #    often the ONLY one — Codex ignores bot-authored PRs, and Copilot silently
+    #    degrades to "unable to review this pull request" when its quota is spent
+    #    (observed on #2179). An author-based gate would therefore make this
+    #    workflow unreachable in exactly the case it exists for. `<!-- review-
+    #    response` is a prefix of both markers we write, so this one clause covers
+    #    the summary comment and the failure notice.
+    #  • issue_comment fires on plain issues too — `github.event.issue.pull_request`
+    #    is the only way to tell a PR comment from an issue comment.
+    #  • fork guard: secrets are unavailable to fork PRs and this job holds write
+    #    access. The selector refuses a fork head too; this is the outer guard.
+    #  • the PR must be open. A comment on a merged or closed PR is not work.
+    #
+    # Claude's own inline thread replies are NOT excluded here, and that is
+    # deliberate: they carry no marker, and requiring the model to add one would
+    # make loop safety depend on the model remembering. They instead start a run
+    # that the selector immediately skips (`isSelfOutput` recognises them
+    # structurally: our login + an inline comment that is a reply). The cost is one
+    # idle run per burst — bounded by the concurrency group and the debounce, and a
+    # bounded waste is the right trade for a guard that cannot be forgotten.
+    #
+    # Scope (`automation/*` only), the SHA dedup, and filtering our other
+    # dispatchers' bookkeeping comments are the selector's job — they need the API,
+    # and expressing them here would put decision logic in YAML.
+    if: >-
+      github.event_name == 'workflow_dispatch' || (
+        !contains(github.event.comment.body, '<!-- review-response') &&
+        !contains(github.event.review.body, '<!-- review-response') &&
+        (github.event_name != 'issue_comment' || github.event.issue.pull_request) &&
+        (
+          github.event_name == 'issue_comment' ||
+          github.event.pull_request.head.repo.full_name == github.repository
+        ) &&
+        (github.event.pull_request.state || github.event.issue.state) == 'open'
+      )
+    steps:
+      # Debounce, not politeness. Combined with `cancel-in-progress` above this
+      # is what turns a three-reviewer burst into one run: runs started by the
+      # earlier events are cancelled here, mid-sleep, having done nothing. It
+      # also means the surviving run reads the feedback set AFTER all three
+      # reviewers have posted, so it answers everything in one pass instead of
+      # replying to Codex and then discovering Copilot. Waived for
+      # workflow_dispatch — an operator naming a PR has nothing to wait for.
+      - name: Debounce the reviewer burst
+        if: github.event_name != 'workflow_dispatch'
+        run: sleep 300
+
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0 # full history: the debt gate resolves a merge-base against origin/main
+          # BOT_PAT persisted as the push credential so Claude's response commit
+          # fires `synchronize` and CI re-runs on it. See the header note on
+          # GitHub's anti-recursion guard.
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          cache: npm
+
+      # Deterministic gate, run BEFORE the head branch is checked out and before
+      # `npm ci`: it needs nothing but Node builtins, and it decides whether a
+      # privileged step runs, so it must not execute code from the branch it is
+      # deciding about. Same trust ordering as claude-pr-review.yml's gate.
+      #
+      # Reads all three feedback endpoints (reviews, inline comments, and
+      # top-level issue comments — the house reviewer posts its verdict as the
+      # last of those, so dropping it would make this workflow blind to the
+      # reviewer that matters most), drops our own output, and decides. It
+      # performs no GitHub write at all, not even a label.
+      - name: Scan review feedback
+        id: scan
+        env:
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          GH_TOKEN: ${{ github.token }}
+          DRY_RUN: ${{ inputs.dry_run || 'false' }}
+        run: node packages/dev-tools/review-responder/scan-review-feedback.mjs
+
+      - name: Check out the PR head branch
+        if: steps.scan.outputs.should_respond == 'true'
+        env:
+          HEAD_REF: ${{ steps.scan.outputs.head_ref }}
+        run: |
+          set -euo pipefail
+          git fetch --quiet origin "$HEAD_REF"
+          git checkout --quiet -B "$HEAD_REF" "origin/$HEAD_REF"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      # After the head checkout, so the install matches the branch's lockfile —
+      # the PR under review may itself be a dependency change. The responder runs
+      # biome, typecheck, targeted vitest and the debt gate before it pushes, so
+      # it needs a full install.
+      - name: Install dependencies
+        if: steps.scan.outputs.should_respond == 'true'
+        run: npm ci
+
+      - name: Respond to the review feedback with Claude
+        id: claude
+        if: steps.scan.outputs.should_respond == 'true'
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
+        env:
+          # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
+          # CAMP `ABSK...` bearer token). RUM_AWS_REGION /
+          # REVIEW_RESPONDER_BEDROCK_MODEL tune region + inference profile.
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          # claude-code-action does NOT expose a token to the Bash tool's `gh`,
+          # so set it explicitly or `gh api` / `gh pr comment` fail. Branch
+          # pushes go through the BOT_PAT credential persisted by the checkout,
+          # not through this token.
+          GH_TOKEN: ${{ github.token }}
+          # Claude writes the top-level summary here; the "Record the response"
+          # step posts it together with the SHA marker as ONE comment. Passed as
+          # env so the prompt and that step cannot drift apart.
+          SUMMARY_FILE: ${{ runner.temp }}/review-response-summary.md
+        with:
+          use_bedrock: 'true'
+          # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
+          # directly instead of attempting an OIDC -> GitHub App token exchange
+          # (which fails with "User does not have write access" when the Claude
+          # GitHub App is not installed on this repo).
+          github_token: ${{ github.token }}
+          # The triggering actor for an `automation/*` PR's review events is
+          # `github-actions[bot]`, and the action's human-actor gate would
+          # otherwise reject the run with "Workflow initiated by non-human
+          # actor". This is the actor gate, not the trigger gate: the job `if:`
+          # above separately refuses runs whose triggering COMMENT was written by
+          # that same bot. See the note there.
+          #
+          # Named rather than `'*'`: this repo is PUBLIC, and the action's own
+          # docs warn that `'*'` lets external Apps invoke it with prompts they
+          # control — acutely relevant here, because the prompt this step builds
+          # includes reviewer-authored text and the step can push code. Codex and
+          # Copilot are third-party Apps whose comments this workflow reads; they
+          # must never be able to be the allowed actor.
+          allowed_bots: 'github-actions[bot]'
+          # Full turn-by-turn output on manual dispatch only; routine runs keep
+          # it off so they don't log tool output that may be sensitive.
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.REVIEW_RESPONDER_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --disallowedTools "Bash(gh pr merge:*),Bash(gh pr create:*),Bash(gh pr close:*),Bash(gh issue close:*)"
+            --max-turns 200
+          # The disallowedTools list above is the enforcement, not the prose
+          # below. A model that ignores a "do not merge" instruction regresses
+          # silently in a way that looks exactly like success, so merging,
+          # opening a PR, and closing anything are removed from the tool surface
+          # rather than merely discouraged.
+          prompt: |
+            You are responding to code-review feedback on an existing pull
+            request in the SLICC codebase.
+
+            REPO: ${{ github.repository }}
+            PR: https://github.com/${{ github.repository }}/pull/${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+            Title: ${{ steps.scan.outputs.pr_title }}
+            Head branch: ${{ steps.scan.outputs.head_ref }}
+            Head SHA: ${{ steps.scan.outputs.head_sha }}
+
+            A deterministic scan has ALREADY established that this PR has
+            unaddressed review feedback — you do not need to re-derive that, and
+            you should not second-guess whether to engage. The feedback it found
+            is in this JSON file, one entry per item, with `kind`
+            (review/inline/top-level), `author`, `path`, `line` and `body`:
+
+              ${{ steps.scan.outputs.feedback_file }}
+
+            Read that file first. You are already checked out on the PR's head
+            branch with dependencies installed.
+
+            A REVIEWER CAN BE WRONG. This is the most important thing to
+            understand about this job. Some of these reviewers are automated, and
+            an automated reviewer confidently states incorrect things. The right
+            response to a bad finding is a REPLY EXPLAINING WHY IT IS WRONG — not
+            a change. Changing code to satisfy a finding you believe is mistaken
+            is the worst available outcome: it makes the code worse and it hides
+            the disagreement.
+
+            Reviewers also disagree with each other, and that is normal. Real
+            precedent from this repo: on PR #2170 the house reviewer LGTM'd a
+            change that renamed `Record<string, unknown>` occurrences, while
+            Codex correctly identified that the rename defeated the
+            spelling-based debt gate the baseline depends on. Codex was right and
+            the house reviewer was wrong. Do not count votes; reason about the
+            code, read the gate or the test that is actually involved, and decide
+            on the merits. Say which reviewer you agree with and why.
+
+            For each item of feedback, do exactly one of:
+              (a) it is right → make the smallest correct fix;
+              (b) it is wrong → change nothing and reply explaining why,
+                  citing the code, gate, or test that settles it;
+              (c) it is right but out of scope for this PR → change nothing,
+                  reply saying so, and open nothing (you cannot open issues or
+                  PRs here; naming it in the reply is the deliverable).
+
+            VERIFY BEFORE YOU PUSH. The repo's gates are listed in
+            `.agents/skills/verifying-before-push/SKILL.md` — read it. At minimum
+            run `npm run verify`, the targeted tests for what you touched, and
+            `node packages/dev-tools/tools/check-touched-exemptions.mjs origin/main`
+            (the boy-scout debt gate, which is NOT part of `npm run lint` and is
+            the gate most often missed locally). Do not push a change you have
+            not run.
+
+            REPLY IN EVERY THREAD. Use `gh api` to reply to each inline comment
+            in its own thread (POST
+            /repos/{owner}/{repo}/pulls/{pr}/comments/{comment_id}/replies) so
+            the reasoning sits next to the code it is about. Every item in the
+            JSON file with a `path` gets a reply in its thread; items without one
+            (review summaries and top-level comments) are answered in the summary
+            below.
+
+            THE SUMMARY IS A FILE, NOT A COMMENT. Write ONE short markdown
+            summary — what you changed, what you declined and why, and which
+            reviewer you agreed with where they disagreed — to the path in
+            $SUMMARY_FILE. A deterministic step posts it after you finish. Do NOT
+            run `gh pr comment` yourself: a top-level comment you post is
+            indistinguishable from a reviewer's, and this workflow reads top-level
+            comments as its trigger, so posting one is how the responder ends up
+            answering itself. Thread replies are fine — those are structurally
+            identifiable as ours.
+
+            HARD CONSTRAINTS:
+            - Commit and `git push` to the EXISTING head branch. Never
+              `git push --force` and never `git push --force-with-lease`: this
+              branch may carry a human's commits and rewriting them destroys
+              their work. If your push is rejected, fetch and rebase or merge,
+              then push again.
+            - Do not merge this PR, do not open a new PR, do not close anything,
+              and do not edit the PR's title, body, base, draft state, labels,
+              assignees, or reviewers.
+            - Do not add dependencies, do not change CI configuration, and do not
+              touch coverage thresholds.
+            - Keep the change scoped to the feedback. If addressing a finding
+              properly needs a redesign, a dependency, or a decision you cannot
+              make, do (c): reply saying so, and leave the code alone.
+
+      # The summary and the SHA marker are ONE comment, posted here rather than by
+      # Claude, and that is load-bearing for loop safety rather than cosmetic:
+      # every top-level comment the responder writes then carries the marker, so
+      # "our own output" is decidable structurally. A bare model-authored summary
+      # would be indistinguishable from a reviewer's comment — and the house
+      # reviewer posts under the same `github-actions[bot]` login we do, so author
+      # is not a usable discriminator (see isSelfOutput in lib.mjs).
+      #
+      # Only AFTER Claude succeeded: the marker is the "we already answered at
+      # this SHA" dedup key, so writing it before the work (or on a failed run)
+      # would suppress the retry the PR needs. Posted through the Issues API —
+      # hence `issues: write` above.
+      - name: Record the response
+        if: success() && steps.scan.outputs.should_respond == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          HEAD_SHA: ${{ steps.scan.outputs.head_sha }}
+          FEEDBACK_COUNT: ${{ steps.scan.outputs.feedback_count }}
+          SUMMARY_FILE: ${{ runner.temp }}/review-response-summary.md
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          # Assembled in a file rather than inlined: the marker is an HTML comment
+          # and the body is multi-line, both fragile through `--body` quoting
+          # inside a YAML block scalar.
+          BODY_FILE="$RUNNER_TEMP/review-response-comment.md"
+          {
+            printf '🍨 **Review Responder** answered %s review item(s) at head SHA `%s`.\n\n' \
+              "$FEEDBACK_COUNT" "${HEAD_SHA:0:7}"
+            if [ -s "$SUMMARY_FILE" ]; then
+              cat "$SUMMARY_FILE"
+              printf '\n'
+            else
+              # Claude finished but wrote no summary. Say so plainly rather than
+              # implying it reported nothing worth reporting.
+              printf '_The responder finished without writing a summary; its replies are in the threads above._\n'
+            fi
+            printf '\nReplies are in the threads above; the run log shows what it verified: %s\n\n' "$RUN_URL"
+            printf 'Pushing a new commit, or leaving new feedback, makes this PR eligible for another pass.\n\n'
+            printf '<!-- review-response:%s -->\n' "$HEAD_SHA"
+          } > "$BODY_FILE"
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$BODY_FILE"
+
+      # A responder that died owes the PR one plain-language comment: no SHA
+      # marker is written on this path, so a later event can retry, but a silent
+      # failure would leave the reviewers' findings looking ignored.
+      #
+      # It carries `<!-- review-response-summary -->` instead. Without a marker of
+      # some kind this comment is just another top-level comment by
+      # `github-actions[bot]` — which is also the house reviewer's login — and the
+      # next run would read the responder's own crash notice as review feedback.
+      - name: Report a failed responder
+        if: failure() && steps.scan.outputs.should_respond == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number || github.event.issue.number || inputs.pr_number }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          BODY_FILE="$RUNNER_TEMP/review-response-failure.md"
+          {
+            printf '🚑 **Review Responder — the responder did not finish.** It stopped before it could answer the review feedback (it may have run out of turns, failed verification, or crashed). No response was recorded, so new feedback or a new commit will trigger another attempt. Run log: %s\n\n' "$RUN_URL"
+            printf '<!-- review-response-summary -->\n'
+          } > "$BODY_FILE"
+          gh pr comment "$PR_NUMBER" --repo "$REPO" --body-file "$BODY_FILE" || true
