@@ -13,7 +13,6 @@
   "packages/webapp/src/scoops/sprinkle-bridge-channel.ts": 2,
   "packages/webapp/src/scoops/sprinkle-manager-proxy.ts": 1,
   "packages/webapp/src/shell/bsh-watchdog.ts": 3,
-  "packages/webapp/src/shell/mcp/redirect-uri.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/cherry-emit-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/crontask-command.ts": 6,
   "packages/webapp/src/shell/supplemental-commands/extension-media-capture.ts": 1,
