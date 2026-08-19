@@ -26,6 +26,8 @@ SLICC discovers five kinds of skill roots:
 | `<mount>/.claude-plugin/marketplace.json` → plugin `skills/` | Claude Code marketplace (mounted repos)      | Read-only (discovered, not managed) |
 | `<plugin-root>/skills/<name>/SKILL.md`                       | Agent Plugins installed via `plugin install` | Read-only (discovered, not managed) |
 
+Skills under `/workspace/skills/` installed with `upskill` carry a `.upskill` provenance record (source, ref, commit, file list) that `upskill update [--dry-run]` uses to refresh them. `upskill` never modifies or deletes a **dotfile** in a skill directory, so that is where a skill should keep its credentials and local state (`scripts/.config`) — everything else is replaced on update.
+
 The marketplace root is auto-discovered: when a mounted directory contains `.claude-plugin/marketplace.json`, SLICC reads the manifest, resolves each plugin's `source` path, and discovers skills at `<plugin-source>/skills/<name>/SKILL.md`. No install step needed — mount the repo and the skills are live immediately. Agent Plugins (agent-plugins.org packages with a `plugin.json` manifest) require an explicit `plugin install <path|repo>` — `<repo>` may be a local directory or a GitHub reference (`owner/repo`, `owner/repo@branch`, or a `https://github.com/owner/repo[/tree/branch[/dir]]` URL, downloaded into `/workspace/.plugins/sources/`); their skills then surface automatically. Precedence: native > agents > claude > marketplace > plugin.
 
 When you create a new skill **for SLICC**, put it in `/workspace/skills/<name>/`. The `.agents/`, `.claude/`, and marketplace paths exist so SLICC can pick up skills authored for other agents without modification — don't create new skills there.

@@ -14,8 +14,10 @@
 import type { SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../../../fs/index.js';
 import { decodeFetchBody, parseFetchJson } from '../../../fetch-body.js';
+import { clearSkillDirPreservingDotfiles } from '../dotfiles.js';
 import { describeFetchError } from '../fetch-error.js';
 import { runPostInstallHooks } from '../install-pipeline.js';
+import { writeProvenance } from '../provenance.js';
 import type { BrowseShDetail, BrowseShSkillSummary, UnifiedSearchResult } from '../types.js';
 import { BROWSE_SH_API, SKILLS_DIR } from '../types.js';
 
@@ -46,7 +48,10 @@ export function _resetBrowseShCatalogCache(): void {
  */
 export async function fetchBrowseShCatalog(fetch: SecureFetch): Promise<BrowseShSkillSummary[]> {
   if (cachedBrowseShCatalog) return cachedBrowseShCatalog;
-  if (cachedBrowseShCatalogPromise) return cachedBrowseShCatalogPromise;
+  // Explicit `!== undefined` rather than a truthiness test: the value is an
+  // in-flight promise (deliberately returned unawaited so concurrent callers
+  // share one fetch), and a bare `if (promise)` reads as a mistake.
+  if (cachedBrowseShCatalogPromise !== undefined) return cachedBrowseShCatalogPromise;
   cachedBrowseShCatalogPromise = (async () => {
     let response;
     try {
@@ -220,22 +225,23 @@ function insertBrowseShPreamble(skillMd: string, preamble: string): string {
 }
 
 /**
- * Install a single browse.sh skill into `/workspace/skills/browse-{hostname}-{name}/`.
+ * Resolve a browse.sh skill to its install directory name and final SKILL.md
+ * body (upstream markdown + SLICC adapter preamble) without touching the VFS.
  *
  * - GETs the detail endpoint for `skillMd`/`skillMdUrl`.
  * - Prefers the Vercel Blob URL (CORS-safe) for the raw markdown body; falls
  *   back to the inline `skillMd` field if the blob fetch fails or is absent.
- * - Honors `force` for collision overwrites.
- * - Writes a single `SKILL.md` with the SLICC adapter preamble inserted below
- *   the upstream YAML frontmatter.
+ *
+ * Shared by install and `upskill update`, which needs the resolved content to
+ * classify the skill as unchanged or updated before writing anything.
  */
-export async function installFromBrowseSh(
+export async function prepareBrowseShSkill(
   hostname: string,
   task: string,
-  fs: VirtualFS,
-  fetch: SecureFetch,
-  force: boolean = false
-): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  fetch: SecureFetch
+): Promise<
+  { ok: true; dirName: string; slug: string; content: string } | { ok: false; error: string }
+> {
   const slug = `${hostname}/${task}`;
   const detailUrl = `${BROWSE_SH_API}/${hostname}/${task}`;
 
@@ -243,27 +249,15 @@ export async function installFromBrowseSh(
   try {
     const response = await fetch(detailUrl, { headers: { Accept: 'application/json' } });
     if (response.status === 404) {
-      return {
-        stdout: '',
-        stderr: `upskill: browse.sh skill "${slug}" not found\n`,
-        exitCode: 1,
-      };
+      return { ok: false, error: `browse.sh skill "${slug}" not found` };
     }
     if (response.status !== 200) {
-      return {
-        stdout: '',
-        stderr: `upskill: browse.sh returned HTTP ${response.status} for "${slug}"\n`,
-        exitCode: 1,
-      };
+      return { ok: false, error: `browse.sh returned HTTP ${response.status} for "${slug}"` };
     }
     detail = parseFetchJson<BrowseShDetail>(response.body);
   } catch (err) {
     const msg = describeFetchError(err, detailUrl);
-    return {
-      stdout: '',
-      stderr: `upskill: failed to fetch browse.sh skill "${slug}": ${msg}\n`,
-      exitCode: 1,
-    };
+    return { ok: false, error: `failed to fetch browse.sh skill "${slug}": ${msg}` };
   }
 
   let skillMd: string | undefined;
@@ -281,11 +275,7 @@ export async function installFromBrowseSh(
     skillMd = detail.skillMd;
   }
   if (!skillMd) {
-    return {
-      stdout: '',
-      stderr: `upskill: browse.sh skill "${slug}" has no SKILL.md content\n`,
-      exitCode: 1,
-    };
+    return { ok: false, error: `browse.sh skill "${slug}" has no SKILL.md content` };
   }
 
   // Derive install dir name. Prefer `name` parsed from the upstream
@@ -301,9 +291,8 @@ export async function installFromBrowseSh(
   // `..` segments, NUL, shell metachars).
   if (!isSafeBrowseShSegment(skillName) || skillName.length > 64) {
     return {
-      stdout: '',
-      stderr: `upskill: refusing to install browse.sh skill with unsafe name "${skillName}"\n`,
-      exitCode: 1,
+      ok: false,
+      error: `refusing to install browse.sh skill with unsafe name "${skillName}"`,
     };
   }
   // Defense in depth: re-validate the hostname segment too. parseBrowseShRef
@@ -311,12 +300,39 @@ export async function installFromBrowseSh(
   // shouldn't trust the call site.
   if (!isSafeBrowseShSegment(hostname)) {
     return {
-      stdout: '',
-      stderr: `upskill: refusing to install browse.sh skill with unsafe hostname "${hostname}"\n`,
-      exitCode: 1,
+      ok: false,
+      error: `refusing to install browse.sh skill with unsafe hostname "${hostname}"`,
     };
   }
-  const dirName = `browse-${hostname}-${skillName}`;
+
+  const preamble = buildBrowseShPreamble(detail, slug);
+  return {
+    ok: true,
+    dirName: `browse-${hostname}-${skillName}`,
+    slug,
+    content: insertBrowseShPreamble(skillMd, preamble),
+  };
+}
+
+/**
+ * Install a single browse.sh skill into `/workspace/skills/browse-{hostname}-{name}/`.
+ *
+ * - Resolves name + content through `prepareBrowseShSkill`.
+ * - Honors `force` for collision overwrites (dotfiles survive either way).
+ * - Writes a single `SKILL.md` plus the `.upskill` provenance record.
+ */
+export async function installFromBrowseSh(
+  hostname: string,
+  task: string,
+  fs: VirtualFS,
+  fetch: SecureFetch,
+  force: boolean = false
+): Promise<{ stdout: string; stderr: string; exitCode: number }> {
+  const prepared = await prepareBrowseShSkill(hostname, task, fetch);
+  if (!prepared.ok) {
+    return { stdout: '', stderr: `upskill: ${prepared.error}\n`, exitCode: 1 };
+  }
+  const { dirName, slug, content } = prepared;
   const destDir = `${SKILLS_DIR}/${dirName}`;
 
   try {
@@ -328,16 +344,20 @@ export async function installFromBrowseSh(
         exitCode: 1,
       };
     }
-    await fs.rm(destDir, { recursive: true });
+    // Reinstall keeps dotfiles (credentials, `.upskill`) — see `dotfiles.ts`.
+    await clearSkillDirPreservingDotfiles(fs, destDir);
   } catch {
     // doesn't exist, continue
   }
 
-  const preamble = buildBrowseShPreamble(detail, slug);
-  const fileContent = insertBrowseShPreamble(skillMd, preamble);
-
   await fs.mkdir(destDir, { recursive: true });
-  await fs.writeFile(`${destDir}/SKILL.md`, fileContent);
+  await fs.writeFile(`${destDir}/SKILL.md`, content);
+  await writeProvenance(fs, dirName, {
+    kind: 'browse.sh',
+    source: slug,
+    skill: dirName,
+    files: ['SKILL.md'],
+  });
 
   await runPostInstallHooks();
 

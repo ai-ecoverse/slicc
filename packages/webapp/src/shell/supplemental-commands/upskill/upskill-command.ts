@@ -10,7 +10,6 @@
 
 import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import type { BrowserAPI } from '../../../cdp/index.js';
 import type { VirtualFS } from '../../../fs/index.js';
 import { isSafeUpskillBranch, isSafeUpskillPath } from '../../../net/handoff-link.js';
 import { parseFetchJson } from '../../fetch-body.js';
@@ -31,12 +30,23 @@ import {
   formatSkillInfo,
   upskillHelp,
 } from './help.js';
+import type { InstallProvenance } from './install-pipeline.js';
 import { installSkillFromZip, runPostInstallHooks } from './install-pipeline.js';
+import { formatProvenance, readProvenance, resolveCommitSha } from './provenance.js';
 import { installRecommendedSkills } from './recommendations.js';
 import { installFromBrowseSh, parseBrowseShRef } from './registries/browse-sh.js';
 import { searchRegistries } from './registries/search.js';
 import { resolveTesslRef } from './registries/tessl.js';
 import { handleTabs } from './tabs.js';
+
+/**
+ * The browser handle the `tabs` subcommand needs, derived from `handleTabs`
+ * rather than imported from `cdp/`: this module only threads the value
+ * through, and importing the CDP type here would invert the layer stack
+ * (`docs/review-patterns.md` § Layer-stack import direction).
+ */
+type TabsBrowser = NonNullable<Parameters<typeof handleTabs>[2]>;
+
 import type {
   CatalogSkill,
   GitHubRequestContext,
@@ -45,6 +55,7 @@ import type {
   UserProfile,
 } from './types.js';
 import { SKILL_CATALOG_URL } from './types.js';
+import { handleUpskillUpdate } from './update.js';
 
 /**
  * Handle the `upskill recommendations` subcommand.
@@ -269,7 +280,13 @@ async function handleUpskillInfoRead(
     if (!skill) {
       return { stdout: '', stderr: `upskill: skill "${skillName}" not found\n`, exitCode: 1 };
     }
-    return { stdout: formatSkillInfo(skill), stderr: '', exitCode: 0 };
+    // `Source:` is the discovery root kind; the provenance record is what says
+    // which repo/registry the skill actually came from.
+    const provenance = await readProvenance(fs, skillName);
+    const provenanceBlock = provenance
+      ? formatProvenance(provenance)
+      : 'Installed from: (no provenance recorded — reinstall to enable `upskill update`)\n';
+    return { stdout: formatSkillInfo(skill) + provenanceBlock, stderr: '', exitCode: 0 };
   }
   const instructions = await skills.readSkillInstructions(fs, skillName);
   if (instructions === null) {
@@ -285,7 +302,8 @@ async function installGitHubBatchViaZip(
   files: Record<string, Uint8Array>,
   fs: VirtualFS,
   force: boolean,
-  startTime: number
+  startTime: number,
+  provenance?: Omit<InstallProvenance, 'path'>
 ): Promise<{ output: string; errors: string; successCount: number }> {
   let output = '';
   let errors = '';
@@ -293,7 +311,14 @@ async function installGitHubBatchViaZip(
   const totalSkills = skillsToInstall.length;
   for (let si = 0; si < skillsToInstall.length; si++) {
     const skill = skillsToInstall[si];
-    const result = await installSkillFromZip(skill.path, skill.name, files, fs, force);
+    const result = await installSkillFromZip(
+      skill.path,
+      skill.name,
+      files,
+      fs,
+      force,
+      provenance ? { ...provenance, path: skill.path } : undefined
+    );
     const idx = si + 1;
     const elapsed = ((Date.now() - startTime) / 1000).toFixed(1);
     const avgTime = (Date.now() - startTime) / idx;
@@ -478,6 +503,9 @@ async function handleGitHubInstall(
   if (totalSkills > 1) {
     const zip = await fetchRepoZip(owner, repo, fetchFn, effectiveBranch);
     if (zip.status === 'ok') {
+      // One sha lookup for the whole batch — every skill in it comes from the
+      // same tree, and the lookup is the only rate-limited call on this path.
+      const sha = await resolveCommitSha(owner, repo, effectiveBranch, github);
       const batch = await installGitHubBatchViaZip(
         skillsToInstall,
         owner,
@@ -485,7 +513,8 @@ async function handleGitHubInstall(
         stripZipPrefix(zip.files),
         fs,
         parsed.force,
-        startTime
+        startTime,
+        { kind: 'github', source: `${owner}/${repo}`, ref: effectiveBranch, sha }
       );
       ({ output, errors, successCount } = batch);
     } else {
@@ -525,37 +554,59 @@ async function handleGitHubInstall(
 }
 
 /**
+ * Route the named subcommands. Handled before flag parsing so the arg parser
+ * never tries to read `tabs`/`update`/… as a GitHub `owner/repo` ref. Returns
+ * null when `args` is an install ref rather than a subcommand.
+ *
+ * @param browser Optional TabsBrowser used by the `tabs` subcommand. When
+ *   omitted (e.g. headless tests or pre-CDP boot), `upskill tabs` exits
+ *   non-zero with a clear "browser APIs unavailable" message.
+ */
+async function dispatchSubcommand(
+  args: string[],
+  fs: VirtualFS,
+  fetchFn: SecureFetch,
+  browser?: TabsBrowser
+): Promise<{ stdout: string; stderr: string; exitCode: number } | null> {
+  switch (args[0]) {
+    case 'tabs':
+      return handleTabs(fs, fetchFn, browser, args.includes('--json'));
+    case 'recommendations':
+      return handleRecommendations(fs, fetchFn, args.includes('--install'));
+    case 'update':
+    case 'upgrade':
+      return handleUpskillUpdate(args.slice(1), fs, fetchFn);
+    case 'list':
+      return handleUpskillList(fs);
+    case 'info':
+    case 'read':
+      return handleUpskillInfoRead(args[0], args[1], fs);
+    case 'search':
+      return handleUpskillSearch(args, fetchFn);
+    default:
+      return null;
+  }
+}
+
+/**
  * Create the upskill command with access to the virtual filesystem.
  *
- * @param browser Optional BrowserAPI used by the `tabs` subcommand. When
+ * @param browser Optional TabsBrowser used by the `tabs` subcommand. When
  *   omitted (e.g. headless tests or pre-CDP boot), `upskill tabs` exits
  *   non-zero with a clear "browser APIs unavailable" message.
  */
 export function createUpskillCommand(
   fs: VirtualFS,
   fetchFn: SecureFetch,
-  browser?: BrowserAPI
+  browser?: TabsBrowser
 ): Command {
   return defineCommand('upskill', async (args, _ctx: CommandContext) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
       return upskillHelp();
     }
 
-    // `upskill tabs [--json]` — surface skill suggestions for open browser
-    // tabs. Handled up-front so the rest of the arg parser doesn't try to
-    // interpret `tabs` as a GitHub `owner/repo` ref.
-    if (args[0] === 'tabs') {
-      return handleTabs(fs, fetchFn, browser, args.includes('--json'));
-    }
-    if (args[0] === 'recommendations') {
-      return handleRecommendations(fs, fetchFn, args.includes('--install'));
-    }
-    if (args[0] === 'list') return handleUpskillList(fs);
-    if (args[0] === 'info' || args[0] === 'read') {
-      return handleUpskillInfoRead(args[0], args[1], fs);
-    }
-
-    if (args[0] === 'search') return handleUpskillSearch(args, fetchFn);
+    const subcommand = await dispatchSubcommand(args, fs, fetchFn, browser);
+    if (subcommand) return subcommand;
 
     const parsed = parseUpskillFlags(args);
     if (parsed.earlyReturn) return parsed.earlyReturn;

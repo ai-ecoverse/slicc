@@ -211,8 +211,8 @@ async function fetchGitHubPluginTo(
     // Didn't exist — fine.
   }
   await fs.mkdir(destDir, { recursive: true });
-  const fileCount = await writeZipFilesToDir(files, prefix, destDir, fs);
-  if (fileCount === 0) {
+  const written = await writeZipFilesToDir(files, prefix, destDir, fs);
+  if (written.length === 0) {
     return `no files found at ${ref.display}`;
   }
   return null;

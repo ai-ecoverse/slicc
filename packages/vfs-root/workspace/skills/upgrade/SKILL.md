@@ -5,8 +5,9 @@ description: |
   boot whenever the bundled SLICC version differs from the previous run. The
   lick renders a binary action card: `lick_confirm` to Update workspace files
   (three-way merge of bundled `vfs-root` files against the user's local edits)
-  or `lick_dismiss` to clear it. Reviewing the changelog from GitHub is a
-  separate step you can run first. Never auto-applies; the user resolves the
+  or `lick_dismiss` to clear it. Reviewing the changelog from GitHub, and
+  checking installed skills for updates with `upskill update --dry-run`, are
+  separate steps you can run first. Never auto-applies; the user resolves the
   card.
 allowed-tools: bash, read_file, write_file, edit_file
 ---
@@ -66,9 +67,35 @@ An exit code of `1` means discovery/fetch failed or at least one path needs revi
 
 The command can also be run directly with explicit release versions for manual recovery, but an upgrade card still requires the user's confirmation before changing files.
 
+## Also check installed skills (separate step — not a card action)
+
+The card only covers **bundled** files (`/workspace/skills`, `/shared/sprinkles`, `/shared/sounds`, `/shared/MEMORY.md`). Skills the user installed themselves with `upskill` are never touched by it, and they drift silently — a stale one can sit months behind upstream while still loading fine.
+
+A new SLICC release is a good moment to check them. This is read-only:
+
+```bash
+upskill update --dry-run
+```
+
+It reads each skill's `.upskill` provenance record (written at install time: source repo, ref, resolved commit, file list), fetches the source, and classifies every path with the same vocabulary as `upgrade apply` — `unchanged`, `updated`, `added`, `removed`, `kept-local`. Skills that are current report `already current`.
+
+Report what would change and let the user decide. To apply:
+
+```bash
+upskill update              # every skill with provenance
+upskill update <skill>      # just one
+```
+
+Notes worth knowing:
+
+- **Dotfiles are never touched.** `upskill` will not modify or delete a dotfile in a skill directory, so credentials (`scripts/.config`) and the `.upskill` record survive updates and `--force` reinstalls. Never hand-copy a credential file "to be safe" — it is already safe, and moving it can break the skill.
+- **`kept-local` is not a failure.** It marks dotfiles and files the user added themselves; leaving them is the correct outcome.
+- A skill installed before provenance tracking reports `no install provenance` — re-installing it once from its source records the provenance and makes future updates argument-free.
+
 ## Do not
 
 - Do not run `upgrade apply` before the user confirms. Confirmation runs it automatically; dismissal runs nothing.
 - Do not delete files that no longer exist in the new release — many users name-collide their own scripts with bundled ones; deletion is too dangerous to automate.
 - Do not modify files outside `/workspace/skills/`, `/shared/sprinkles/`, `/shared/sounds/`, and `/shared/MEMORY.md` without the user explicitly extending the scope.
+- Do not run `upskill update` (without `--dry-run`) unless the user asks for it — the dry run is the safe default when you are volunteering the check.
 - Do not advance the bundled version marker yourself. The runtime advances it automatically once this lick has been routed; if the user dismisses, the lick will not fire again until the next upgrade.

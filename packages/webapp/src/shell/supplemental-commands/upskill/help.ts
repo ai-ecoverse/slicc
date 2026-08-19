@@ -78,6 +78,8 @@ Install skills from GitHub repositories, the Tessl registry, or browse.sh.
 Commands:
   search <query>             Search registries for skills
   list                       List discoverable local skills
+  update [<skill>…]          Re-install skills from their recorded source
+  upgrade [<skill>…]         Alias for update
   tabs [--json]              Suggest skills for open browser tabs
   info <name>                Show details about a discoverable local skill
   read <name>                Read the SKILL.md instructions
@@ -93,6 +95,23 @@ GitHub Installation:
   upskill owner/repo --path subdir       Restrict to subfolder
   upskill owner/repo@branch              Install from a specific branch
   upskill owner/repo --branch name       Same, using flag syntax
+
+Updating installed skills:
+  upskill update                         Update every skill with provenance
+  upskill update mixtape                 Update just that skill
+  upskill update --dry-run               Report what would change, write nothing
+  upskill update mixtape --branch dev    Override the recorded ref
+
+  Every install records its source in <skill>/.upskill (repo, ref, resolved
+  commit, timestamp, file list), so update needs no arguments. Paths are
+  classified unchanged, updated, added, removed, or kept-local — the same
+  vocabulary the "upgrade" command uses for bundled workspace files.
+
+Dotfiles:
+  upskill never modifies or deletes a dotfile inside a skill directory. That
+  keeps credentials (scripts/.config) and provenance (.upskill) intact across
+  --force reinstalls and updates. Upstream dotfiles are written on first
+  install only.
 
 Recommendations:
   upskill recommendations                Show skills matching your profile
@@ -112,7 +131,9 @@ Options:
   --path <subfolder>       Only discover skills under this subfolder
   --branch, -b <name>      Install from a specific branch (default: main)
   --list                   List available skills without installing
-  --force                  Overwrite existing skills
+  --force                  Overwrite existing skills (keeps dotfiles)
+  --dry-run, -n            update only: report changes without writing
+  --json                   update only: machine-readable result
   -h, --help               Show help
 
 GitHub rate limits:
@@ -127,6 +148,7 @@ Examples:
   upskill aemcoder/skills@fix/stateless-tab-targeting --all
   upskill tessl:postgres-pro
   upskill browse:weather.gov/get-forecast-1uezib
+  upskill update --dry-run
 `,
     stderr: '',
     exitCode: 0,
