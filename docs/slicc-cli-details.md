@@ -19,7 +19,8 @@ authoritative command list, safety rules, env-var and Makefile references.
 | `update.go`           | `cmdUpdate` + on-launch update-notice hook                                           |
 | `telemetry.go`        | `initTelemetry`/`reportRuntimeError` — RUM via `@ai-ecoverse/go-optel`               |
 | `internal/update/`    | Release discovery (sparse scan) + self-update apply + cached notice                  |
-| `internal/logging/`   | `log/slog` diagnostic logger + `Logf` adapter for the `tray` seam                    |
+| `internal/logging/`   | `log/slog` diagnostic logger + `Logf` adapter for the `tray` seam + pion factory     |
+| `internal/ui/`        | Terminal presentation: capability detection, event lines, sticky status bar          |
 
 ## `watch` rendering
 
@@ -28,6 +29,79 @@ sends nothing and renders the human's prompt (`user_message_echo` → `> …`),
 assistant text (`content_delta`), and tool calls (`tool_use_start` → `⚙ …`,
 `tool_result` → `↳ …`), blanking a line at each turn boundary — reconnecting
 with backoff (`cmdWatch`/`watchOnce`; `printWatchEvent` does the rendering).
+
+Glyphs and wording on stdout are **literal, not mode-dependent** — the stream is
+a transcript other tools grep (`cli_e2e_test.go` asserts `> <text>` and
+`⚙ <tool>`); only the color varies, and only when stdout itself is a terminal.
+
+## Terminal presentation (`internal/ui`)
+
+`internal/ui` is the CLI's presentation layer for the long-running verbs. No
+dependencies beyond the stdlib and `golang.org/x/sys` (winsize ioctl / Windows
+console): raw ANSI, ~4 files.
+
+- **Capability detection** (`Detect`) — resolves a `Mode{Color, Sticky, Unicode}`
+  per stream. `Sticky` (cursor movement) requires a character device **that also
+  answers a window-size query**, because `/dev/null` is a character device too.
+  `Unicode` is inferred from `LC_ALL`/`LC_CTYPE`/`LANG` (plus `WT_SESSION`), and
+  a false negative matters: mojibake on a legacy code page breaks the bar's
+  width accounting, so every glyph has an ASCII twin. Windows opts the console
+  into `ENABLE_VIRTUAL_TERMINAL_PROCESSING` and falls back to plain output if
+  the console refuses.
+- **Plain mode is the contract.** With no terminal (pipe, file, CI) the console
+  writes `"<tag>: <msg>"` — byte-for-byte what the CLI emitted before this
+  package existed, newlines inside a message included, with no repeat
+  collapsing (a redirected stream is someone's log; every occurrence belongs in
+  it). Without the bar the same one-line form is used, colored when the stream
+  can take it — `Paint` is a no-op without color, so redirected bytes are
+  unchanged either way. `--plain` and `SLICC_NO_TUI=1` force plain; `NO_COLOR`
+  keeps the bar but drops color; `FORCE_COLOR`/`CLICOLOR_FORCE` colors a
+  redirected stream but never makes it sticky.
+- **Sticky status bar** — one repainted line below the log: state badge
+  (spinner while connecting, live countdown while waiting to retry), uptime,
+  time since the last frame from the leader (green→yellow→red as it ages), exec
+  count, reconnect count, suppressed link diagnostics, `user@host · runner`, and
+  a 16-cell history strip whose cells hold the **worst** state seen per 5 s
+  bucket. Fields are laid out most-important-first and any that no longer fits
+  is _skipped_, not treated as the end of the line — otherwise one long hostname
+  on a narrow pane would hide the short fields behind it. Width is re-queried
+  per repaint, so a resize needs no SIGWINCH handler. Only `follow` gets the
+  bar unconditionally: `watch` streams the transcript to stdout in partial
+  lines, so when stdout is a terminal too it keeps the colors and drops the bar
+  rather than let the two fight over the last row. Deliberately **no alternate screen buffer and no scroll regions**:
+  output still scrolls back normally and a killed process leaves a usable
+  terminal. Repaints from state changes are throttled (80 ms); the 1 s ticker
+  catches up.
+- **Events** — `Line` stamps and marks the first row and indents continuation
+  rows (`│ …`), so a multi-line error reads as one event. An identical
+  consecutive event is folded in place with a `(×3)` counter; one too tall
+  (> 6 rows) or too wide to rewrite safely — a soft-wrapped row invalidates the
+  cursor walk — keeps its detail on screen once and collapses into a single
+  `↺ repeated (×N)` row instead. `Note` prints **only** in plain mode, for
+  information the bar already carries live (the reconnect wait): duplicating it
+  would also interleave the identical errors and defeat the collapsing.
+- **Seams** — `LineWriter(kind)` adapts the console to an `io.Writer` so
+  `follow.Session`'s per-command log needs no console awareness (it writes a
+  bare `exec: <command>`; the console owns the prefix). `Raw` writes verbatim,
+  for the banner, whose wording must not vary with the output stream.
+
+### pion's own logging
+
+`Conn.pionLoggerFactory` (`internal/tray/conn.go`) installs
+`logging.PionFactory` on `SettingEngine.LoggerFactory`. This is load-bearing:
+left nil, webrtc installs `pion/logging.NewDefaultLoggerFactory()`, which writes
+**error records straight to `os.Stderr`** — a flaky TURN allocation then buries
+the CLI's output under `turnc ERROR: Fail to refresh permissions: …` walls that
+no `SLICC_LOG_LEVEL` can quiet. Routed through the factory they become ordinary
+diagnostics (silent by default, back with `SLICC_DEBUG=1`), and
+`Options.OnLinkDiag` tallies the warn-and-above ones into the status bar's
+`link ⚠ N` field. `Options.OnActivity` feeds the `♥ <age>` field and fires on
+**every** inbound frame, not just keepalives: the leader _answers_ pings
+(`tray-follower-sync.ts` is the pinger, `LEADER_TRAY_PING_INTERVAL_MS` is the
+signaling socket's keepalive, not a data-channel ping), so a follower watching
+ping/pong alone would show an empty field forever. Anything arriving — chunk
+framing, an unparseable frame — is proof the leader is alive, which is what the
+field claims.
 
 ## `follow` startup ergonomics
 

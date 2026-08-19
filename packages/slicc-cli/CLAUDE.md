@@ -9,8 +9,9 @@ module, not an npm workspace** (like `packages/ios-app`) — built with
 ```
 slicc <join-url> prompt "<text>"                Stream one assistant turn, then exit
 slicc <join-url> exec "<command>"               Run a command in the leader's shell, stream output
-slicc <join-url> watch [scoop]                  Tail the leader's live agent output, read-only
-slicc <join-url> follow [--no-banner] [runner]  Stay connected; run leader-issued commands via <runner>
+slicc <join-url> watch [--plain] [scoop]        Tail the leader's live agent output, read-only
+slicc <join-url> follow [--no-banner] [--plain] [runner]
+                                                Stay connected; run leader-issued commands via <runner>
 slicc <join-url> follow --eval [repl]           Same, into ONE persistent REPL (state persists; see README)
 slicc update [--check]                          Self-update to the newest released CLI binary
 slicc list-sessions [--json]                    List iCloud-synced tray sessions (macOS only; no join URLs)
@@ -61,7 +62,7 @@ Cloudflare TURN. No native toolchain.
 
 `main.go` (argv + dispatch), `commands.go` (`prompt`/`exec`/`follow`),
 `cloud.go` (`list-sessions` + `<verb>-cloud`), `update.go`, `telemetry.go`,
-`internal/{protocol,signaling,tray,cloud,execrun,update,logging}/`. Full
+`internal/{protocol,signaling,tray,cloud,execrun,update,logging,ui}/`. Full
 per-file map: [details](../../docs/slicc-cli-details.md#layout).
 
 ## Protocol parity
@@ -80,16 +81,48 @@ JSON and update Go structs + `corpus_test.go` alongside TS + Swift mirrors.
 - **Diagnostics** — signaling retries, supersede redirects, ICE failures,
   unparseable frames go through `internal/logging` (`log/slog` `diagLogger`
   in `commands.go`, to stderr); `debugLogf` adapts to `tray.Options.Logf`.
+- **pion's own records** — `Conn.pionLoggerFactory` installs
+  `logging.PionFactory` on `SettingEngine.LoggerFactory`. **Required**: left
+  nil, webrtc installs pion's default factory, which writes error records
+  straight to `os.Stderr` — TURN refresh churn (`turnc ERROR: Fail to refresh
+permissions`) then buries the CLI's own output and no log level of ours can
+  quiet it. Warn-and-above records are tallied into the status bar
+  (`tray.Options.OnLinkDiag`) instead of printed.
 
 Off by default. `SLICC_DEBUG=1` (legacy = `SLICC_LOG_LEVEL=debug`) or
 `SLICC_LOG_LEVEL=debug|info|warn|error`; `SLICC_LOG_FORMAT=json` swaps
 `slog.TextHandler` for `slog.JSONHandler`.
 
+## Terminal presentation (`internal/ui`)
+
+`follow`/`watch` render through `internal/ui` (stdlib + `golang.org/x/sys`, raw
+ANSI — no TUI framework). On an interactive terminal `follow` keeps a **sticky
+one-line status bar** below the log: state badge (connect spinner, live retry
+countdown), uptime, `♥` age of the last frame from the leader (fed by
+`tray.Options.OnActivity`, which fires on _every_ inbound frame — the leader
+answers pings rather than sending them, so keepalives alone would never
+populate it), exec + reconnect counts, suppressed link diagnostics,
+`user@host · runner`, and a per-5s connection-history strip. `watch` drops the
+bar when **stdout** is also a terminal: it streams the transcript there in
+partial lines, and both cannot own the last row.
+Event lines are stamped, colored and glyph-marked; an identical repeat folds in
+place as `(×N)` (or a compact `↺ repeated (×N)` row when the event is too
+tall/wide to rewrite), so a reconnect loop no longer scrolls the screen away.
+
+**Plain mode is the contract**: with no terminal attached, output is
+byte-for-byte the pre-TUI `slicc <verb>: <msg>` text, escape-free, with every
+occurrence kept. Cursor control is never written to a non-terminal.
+`--plain` / `SLICC_NO_TUI=1` force plain; `NO_COLOR` keeps the bar without
+color; `FORCE_COLOR`/`CLICOLOR_FORCE` colors a redirected stream (still not
+sticky); `COLUMNS` overrides the detected width. Design notes + the glyph/ASCII
+fallback rules: [details](../../docs/slicc-cli-details.md).
+
 ## Exec safety (`follow`)
 
 A `follow` with a runner advertises `hello.capabilities.exec = true`; each
 command runs as `<runner> <command>` (runner sandboxes the exec surface),
-as the user who started `slicc`, echoed to stderr. **A `follow` with no
+as the user who started `slicc`, echoed to stderr (`follow.Session` writes a
+bare `exec: <command>`; the console owns the prefix and styling). **A `follow` with no
 runner advertises no capability and refuses every `exec.request` with an
 error.** Banner + safety warning on start (`--no-banner` drops art, keeps
 warning); `runnerExecWarning` flags the `follow bash` vs `follow bash -c`

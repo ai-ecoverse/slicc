@@ -7,7 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
-	"io"
+	"log/slog"
 	"os"
 	"runtime"
 	"strings"
@@ -18,6 +18,7 @@ import (
 	"github.com/ai-ecoverse/slicc-cli/internal/logging"
 	"github.com/ai-ecoverse/slicc-cli/internal/protocol"
 	"github.com/ai-ecoverse/slicc-cli/internal/tray"
+	"github.com/ai-ecoverse/slicc-cli/internal/ui"
 )
 
 type inbound struct {
@@ -52,7 +53,7 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 			case protocol.AgentTurnEnd:
 				finish(0)
 			case protocol.AgentError:
-				fmt.Fprintf(os.Stderr, "\nslicc prompt: %s\n", env.Event.Error)
+				errLineAfterStream("prompt", "%s", env.Event.Error)
 				finish(1)
 			}
 		case protocol.TypeStatus:
@@ -70,14 +71,14 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 				Error string `json:"error"`
 			}
 			_ = json.Unmarshal(raw, &e)
-			fmt.Fprintf(os.Stderr, "\nslicc prompt: %s\n", e.Error)
+			errLineAfterStream("prompt", "%s", e.Error)
 			finish(1)
 		}
 	}
 
 	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "slicc prompt: %s\n", err)
+		errLine("prompt", "%s", err)
 		reportRuntimeError("dial", err)
 		return 1
 	}
@@ -86,7 +87,7 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 	if err := conn.SendJSON(protocol.UserMessage{
 		Type: "user_message", Text: text, MessageID: newID(),
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "slicc prompt: %s\n", err)
+		errLine("prompt", "%s", err)
 		return 1
 	}
 
@@ -95,7 +96,7 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 		fmt.Println()
 		return code
 	case <-conn.Done():
-		fmt.Fprintln(os.Stderr, "\nslicc prompt: connection closed before the turn completed")
+		errLineAfterStream("prompt", "connection closed before the turn completed")
 		return 1
 	case <-ctx.Done():
 		// Tell the leader to stop the turn so it doesn't keep spending tokens.
@@ -136,7 +137,7 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 				return
 			}
 			if r.Error != "" {
-				fmt.Fprintf(os.Stderr, "slicc exec: %s\n", r.Error)
+				errLine("exec", "%s", r.Error)
 			}
 			finish(r.ExitCode)
 		}
@@ -144,7 +145,7 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 
 	conn, err := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf})
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "slicc exec: %s\n", err)
+		errLine("exec", "%s", err)
 		reportRuntimeError("dial", err)
 		return 1
 	}
@@ -153,7 +154,7 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 	if err := conn.SendJSON(protocol.ExecRequest{
 		Type: "exec.request", RequestID: requestID, Command: command,
 	}); err != nil {
-		fmt.Fprintf(os.Stderr, "slicc exec: %s\n", err)
+		errLine("exec", "%s", err)
 		return 1
 	}
 
@@ -161,7 +162,7 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 	case code := <-done:
 		return code
 	case <-conn.Done():
-		fmt.Fprintln(os.Stderr, "slicc exec: connection closed")
+		errLine("exec", "connection closed")
 		return 1
 	case <-ctx.Done():
 		// Ctrl+C: ask the leader to interrupt the command, then wait briefly.
@@ -182,19 +183,24 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 // blank line at each turn boundary — until interrupted. It sends nothing to the
 // leader and never completes on its own: a read-only `tail -f` on what the agent
 // is doing, reconnecting with backoff so it survives leader reloads.
-func cmdWatch(ctx context.Context, joinURL, scoopJid string) int {
+func cmdWatch(ctx context.Context, joinURL, scoopJid string, plain bool) int {
 	what := "the leader's agent output"
 	if scoopJid != "" {
 		what = fmt.Sprintf("scoop %q", scoopJid)
 	}
-	fmt.Fprintf(os.Stderr, "slicc watch: tailing %s (Ctrl+C to stop)\n", what)
+	consoleMode, outMode := watchModes(outputMode(os.Stderr, plain), outputMode(os.Stdout, plain))
+	r := watchRender{console: newConsole("slicc watch", consoleMode), out: outMode}
+	r.console.Line(ui.KindInfo, "tailing %s (Ctrl+C to stop)", what)
+	r.console.Start()
+	defer printSessionSummary(r.console)
 	backoff := time.Second
 	failures := 0
 	for {
 		if ctx.Err() != nil {
 			return 0
 		}
-		clean, err := watchOnce(ctx, joinURL, scoopJid)
+		r.console.Update(func(s *ui.Status) { s.State = ui.StateConnecting; s.Attempt = failures })
+		clean, err := watchOnce(ctx, joinURL, scoopJid, r)
 		if ctx.Err() != nil {
 			return 0
 		}
@@ -204,15 +210,16 @@ func cmdWatch(ctx context.Context, joinURL, scoopJid string) int {
 		} else {
 			failures++
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "slicc watch: %s\n", err)
+				r.console.Line(ui.KindError, "%s", err)
 				reportRuntimeError("watch", err)
 			}
 			if failures >= 20 {
-				fmt.Fprintln(os.Stderr, "slicc watch: giving up after 20 failed attempts")
+				r.console.Line(ui.KindError, "giving up after 20 failed attempts")
 				return 1
 			}
 		}
-		fmt.Fprintf(os.Stderr, "slicc watch: reconnecting in %s…\n", backoff)
+		r.console.Update(retrying(failures, backoff))
+		r.console.Note(ui.KindInfo, "reconnecting in %s…", backoff)
 		if !sleepCtx(ctx, backoff) {
 			return 0
 		}
@@ -220,7 +227,14 @@ func cmdWatch(ctx context.Context, joinURL, scoopJid string) int {
 	}
 }
 
-func watchOnce(ctx context.Context, joinURL, scoopJid string) (clean bool, err error) {
+// watchRender carries `watch`'s two output surfaces: the status console on
+// stderr and the resolved styling for the agent stream on stdout.
+type watchRender struct {
+	console *ui.Console
+	out     ui.Mode
+}
+
+func watchOnce(ctx context.Context, joinURL, scoopJid string, r watchRender) (clean bool, err error) {
 	sawProcessing := false
 	// Empty scoopJid = no filter (tail whatever the leader broadcasts).
 	inScoop := func(js string) bool { return scoopJid == "" || js == scoopJid }
@@ -231,12 +245,12 @@ func watchOnce(ctx context.Context, joinURL, scoopJid string) (clean bool, err e
 			// shows the same thread as the browser.
 			var m protocol.UserMessageEcho
 			if json.Unmarshal(raw, &m) == nil && inScoop(m.ScoopJid) {
-				fmt.Printf("\n> %s\n", m.Text)
+				fmt.Printf("\n%s\n", r.out.Paint(ui.StyleBold, "> "+m.Text))
 			}
 		case protocol.TypeAgentEvent:
 			var env protocol.AgentEventEnvelope
 			if json.Unmarshal(raw, &env) == nil && inScoop(env.ScoopJid) {
-				printWatchEvent(env.Event)
+				printWatchEvent(env.Event, r)
 			}
 		case protocol.TypeStatus:
 			var s protocol.Status
@@ -253,40 +267,52 @@ func watchOnce(ctx context.Context, joinURL, scoopJid string) (clean bool, err e
 			}
 		}
 	}
-	conn, dialErr := tray.Dial(ctx, joinURL, tray.Options{OnMessage: handler, Logf: debugLogf})
+	conn, dialErr := tray.Dial(ctx, joinURL, tray.Options{
+		OnMessage:  handler,
+		OnActivity: r.console.Beat,
+		OnLinkDiag: linkDiagCounter(r.console),
+		Logf:       debugLogf,
+	})
 	if dialErr != nil {
 		return false, dialErr
 	}
 	defer conn.Close()
-	fmt.Fprintln(os.Stderr, "slicc watch: connected")
+	r.console.Update(markConnected)
+	r.console.Line(ui.KindOk, "connected")
 	select {
 	case <-ctx.Done():
 		return true, nil
 	case <-conn.Done():
-		fmt.Fprintln(os.Stderr, "slicc watch: connection closed")
+		r.console.Update(func(s *ui.Status) { s.State = ui.StateOffline })
+		r.console.Line(ui.KindWarn, "connection closed")
 		return true, nil
 	}
 }
 
 // printWatchEvent renders one agent event the way the browser thread shows it:
 // assistant text inline, tool calls + a short result on their own lines, errors
-// on stderr. Unmodeled event types are silently skipped.
-func printWatchEvent(ev protocol.AgentEvent) {
+// through the status console. Unmodeled event types are silently skipped.
+//
+// The glyphs are literal rather than mode-dependent: the stream is a transcript
+// other tools grep, so only color varies with the terminal.
+func printWatchEvent(ev protocol.AgentEvent, r watchRender) {
 	switch ev.Type {
 	case protocol.AgentContentDelta:
 		fmt.Print(ev.Text)
 	case protocol.AgentToolUseStart:
-		fmt.Printf("\n⚙ %s%s\n", ev.ToolName, compactArgs(ev.ToolInput))
+		fmt.Printf("\n%s%s\n",
+			r.out.Paint(ui.StyleBoldCyan, "⚙ "+ev.ToolName),
+			r.out.Paint(ui.StyleDim, compactArgs(ev.ToolInput)))
 	case protocol.AgentToolResult:
-		mark := "↳"
+		mark, style := "↳", ui.StyleDim
 		if ev.IsError != nil && *ev.IsError {
-			mark = "↳ ✗"
+			mark, style = "↳ ✗", ui.StyleRed
 		}
-		fmt.Printf("%s %s\n", mark, truncateOneLine(ev.Result, 200))
+		fmt.Println(r.out.Paint(style, fmt.Sprintf("%s %s", mark, truncateOneLine(ev.Result, 200))))
 	case protocol.AgentTurnEnd:
 		fmt.Println()
 	case protocol.AgentError:
-		fmt.Fprintf(os.Stderr, "\nslicc watch: %s\n", ev.Error)
+		r.console.Line(ui.KindError, "%s", ev.Error)
 	}
 }
 
@@ -324,25 +350,30 @@ func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
 	var eval *execrun.EvalSession
 	if fa.eval {
 		if len(fa.runner) == 0 {
-			fmt.Fprintln(os.Stderr, "slicc follow --eval: missing REPL runner (e.g. follow --eval python -i)")
+			errLine("follow --eval", "missing REPL runner (e.g. follow --eval python -i)")
 			return 2
 		}
 		var err error
 		eval, err = execrun.StartEval(execrun.EvalOptions{Runner: fa.runner, Quiet: fa.evalQuiet})
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "slicc follow --eval: starting %s: %s\n", strings.Join(fa.runner, " "), err)
+			errLine("follow --eval", "starting %s: %s", strings.Join(fa.runner, " "), err)
 			return 1
 		}
 		defer eval.Close()
 	}
-	printFollowBanner(os.Stderr, fa)
+	console := newConsole("slicc follow", outputMode(os.Stderr, fa.plain))
+	printFollowBanner(console, fa)
+	console.Update(func(s *ui.Status) { s.Peer = followPeer(console.Mode(), fa.runner) })
+	console.Start()
+	defer printSessionSummary(console)
 	backoff := time.Second
 	failures := 0
 	for {
 		if ctx.Err() != nil {
 			return 0
 		}
-		connected, err := followOnce(ctx, joinURL, fa.runner, eval)
+		console.Update(func(s *ui.Status) { s.State = ui.StateConnecting; s.Attempt = failures })
+		connected, err := followOnce(ctx, joinURL, fa.runner, eval, console)
 		if ctx.Err() != nil {
 			return 0
 		}
@@ -352,15 +383,16 @@ func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
 		} else {
 			failures++
 			if err != nil {
-				fmt.Fprintf(os.Stderr, "slicc follow: %s\n", err)
+				console.Line(ui.KindError, "%s", err)
 				reportRuntimeError("follow", err)
 			}
 			if failures >= 20 {
-				fmt.Fprintln(os.Stderr, "slicc follow: giving up after 20 failed attempts")
+				console.Line(ui.KindError, "giving up after 20 failed attempts")
 				return 1
 			}
 		}
-		fmt.Fprintf(os.Stderr, "slicc follow: reconnecting in %s…\n", backoff)
+		console.Update(retrying(failures, backoff))
+		console.Note(ui.KindInfo, "reconnecting in %s…", backoff)
 		if !sleepCtx(ctx, backoff) {
 			return 0
 		}
@@ -373,6 +405,7 @@ func followOnce(
 	joinURL string,
 	runner []string,
 	eval *execrun.EvalSession,
+	console *ui.Console,
 ) (connected bool, err error) {
 	// Connection-scoped context: cancelled on ANY return (disconnect, ctx done),
 	// so a leader-issued command that's still running is killed with the
@@ -391,6 +424,8 @@ func followOnce(
 		Capabilities: caps,
 		Motd:         followMotd(runner, eval != nil),
 		Logf:         debugLogf,
+		OnActivity:   console.Beat,
+		OnLinkDiag:   linkDiagCounter(console),
 		OnMessage: func(typ string, raw []byte) {
 			select {
 			case msgCh <- inbound{typ: typ, raw: raw}:
@@ -402,25 +437,155 @@ func followOnce(
 		return false, dialErr
 	}
 	defer conn.Close()
+	execLog := console.LineWriter(ui.KindExec)
 	var session *follow.Session
 	if eval != nil {
-		session = follow.NewEvalSession(conn, eval, os.Stderr)
+		session = follow.NewEvalSession(conn, eval, execLog)
 	} else {
-		session = follow.NewSession(conn, runner, os.Stderr)
+		session = follow.NewSession(conn, runner, execLog)
 	}
-	fmt.Fprintln(os.Stderr, "slicc follow: connected")
+	console.Update(markConnected)
+	console.Line(ui.KindOk, "connected")
 
 	for {
 		select {
 		case <-ctx.Done():
 			return true, nil
 		case <-conn.Done():
-			fmt.Fprintln(os.Stderr, "slicc follow: connection closed")
+			console.Update(func(s *ui.Status) { s.State = ui.StateOffline })
+			console.Line(ui.KindWarn, "connection closed")
 			return true, nil
 		case m := <-msgCh:
+			if m.typ == protocol.TypeExecRequest && caps != nil {
+				console.Update(func(s *ui.Status) { s.Execs++ })
+			}
 			session.Handle(connCtx, m.typ, m.raw)
 		}
 	}
+}
+
+// --- presentation ------------------------------------------------------------
+
+// newConsole builds the stderr status console for a long-running verb.
+func newConsole(tag string, mode ui.Mode) *ui.Console {
+	return ui.New(os.Stderr, ui.Options{
+		Mode:  mode,
+		Tag:   tag,
+		Width: func() int { return ui.Width(os.Stderr, os.LookupEnv) },
+	})
+}
+
+// watchModes resolves `watch`'s two surfaces. The status bar owns the last line
+// of the terminal, which only works while nothing else writes there — and
+// `watch` streams the agent transcript to stdout in partial lines (a
+// content_delta rarely ends at a line boundary). So when stdout is a terminal
+// too, the transcript wins: the console keeps its colors and drops the bar.
+func watchModes(console, out ui.Mode) (ui.Mode, ui.Mode) {
+	if out.Sticky {
+		console.Sticky = false
+	}
+	return console, out
+}
+
+// outputMode resolves how much decoration f can take, with --plain as an
+// override.
+func outputMode(f *os.File, plain bool) ui.Mode {
+	if plain {
+		return ui.Mode{}
+	}
+	return ui.Detect(f, os.LookupEnv)
+}
+
+// errLine writes a one-shot verb's fatal stderr line — red on an interactive
+// terminal, and the same text as always when redirected. The one-shot verbs
+// (`prompt`, `exec`) get no status bar: they are pipeline citizens whose stdout
+// is the payload.
+func errLine(verb, format string, args ...any) {
+	mode := outputMode(os.Stderr, false)
+	msg := fmt.Sprintf("slicc %s: %s", verb, fmt.Sprintf(format, args...))
+	fmt.Fprintln(os.Stderr, mode.Paint(ui.StyleRed, msg))
+}
+
+// errLineAfterStream is errLine preceded by a blank line, for a failure that
+// interrupts leader output already streaming on stdout.
+func errLineAfterStream(verb, format string, args ...any) {
+	fmt.Fprintln(os.Stderr)
+	errLine(verb, format, args...)
+}
+
+// markConnected records a successful connection.
+func markConnected(s *ui.Status) {
+	s.State = ui.StateConnected
+	s.Sessions++
+	s.Attempt = 0
+	s.RetryAt = time.Time{}
+}
+
+// retrying records the wait before the next attempt, which the status bar
+// counts down.
+func retrying(failures int, backoff time.Duration) func(*ui.Status) {
+	retryAt := time.Now().Add(backoff)
+	return func(s *ui.Status) {
+		s.State = ui.StateRetrying
+		s.RetryAt = retryAt
+		s.Attempt = failures
+	}
+}
+
+// linkDiagCounter tallies pion's own warnings and errors in the status bar.
+// They are the ICE/TURN churn that used to scroll past as `turnc ERROR: Fail to
+// refresh permissions` walls: worth a count, not worth a line each. The records
+// themselves stay available through SLICC_DEBUG=1.
+func linkDiagCounter(console *ui.Console) logging.PionEvent {
+	return func(_ string, level slog.Level, _ string) {
+		if level >= slog.LevelWarn {
+			console.CountDiag()
+		}
+	}
+}
+
+// printSessionSummary tears the status bar down and, for a session that reached
+// the leader at least once, replaces it with one closing line — the numbers the
+// bar was showing, kept in the scrollback.
+func printSessionSummary(console *ui.Console) {
+	console.Stop()
+	st := console.Snapshot()
+	if st.Sessions == 0 {
+		return
+	}
+	console.Line(ui.KindInfo, "session ended after %s — %s, %s, %s",
+		ui.CompactDuration(time.Since(st.Started)),
+		plural(st.Execs, "exec"),
+		plural(st.Sessions-1, "reconnect"),
+		plural(st.Diags, "link diagnostic"))
+}
+
+// followPeer is the status bar's "who and how" field: the identity a leader
+// command would run as, plus the runner it goes through.
+//
+// The host is shortened to its first label — the bar competes for one line, and
+// "laptop" says the same thing there as "laptop.local". The banner and the MOTD
+// keep the full name; those are the identity record.
+func followPeer(mode ui.Mode, runner []string) string {
+	who := fmt.Sprintf("%s@%s", currentUser(), shortHost(hostname()))
+	if len(runner) == 0 {
+		return who + " (no exec)"
+	}
+	return fmt.Sprintf("%s %s %s", who, mode.Glyph(ui.GlyphSeparator), strings.Join(runner, " "))
+}
+
+func shortHost(host string) string {
+	if i := strings.IndexByte(host, '.'); i > 0 {
+		return host[:i]
+	}
+	return host
+}
+
+func plural(n int, noun string) string {
+	if n == 1 {
+		return fmt.Sprintf("%d %s", n, noun)
+	}
+	return fmt.Sprintf("%d %ss", n, noun)
 }
 
 // --- helpers -----------------------------------------------------------------
@@ -439,27 +604,34 @@ const followArt = `   _____ _ _
 // printFollowBanner writes the startup banner: the ASCII wordmark (unless
 // suppressed), who the leader would run as, the runner, and — when the runner
 // looks like it won't actually execute commands — a heuristic warning.
-func printFollowBanner(w io.Writer, fa followArgs) {
+//
+// The banner is written with Console.Raw, so its wording and layout are
+// byte-identical whether or not a terminal is attached: only the color changes.
+// A safety warning is not a place to vary text by output stream.
+func printFollowBanner(console *ui.Console, fa followArgs) {
 	if fa.showBanner {
-		fmt.Fprint(w, followArt)
+		console.Raw(ui.StyleBoldCyan, followArt)
 	}
 	who := fmt.Sprintf("%s@%s", currentUser(), hostname())
 	if len(fa.runner) == 0 {
-		fmt.Fprintf(w, "slicc follow: connecting as %s (exec disabled — no runner given)\n", who)
+		console.Line(ui.KindInfo, "connecting as %s (exec disabled — no runner given)", who)
 		return
 	}
-	fmt.Fprintf(w, "⚠  the leader can run commands on this machine as %s\n", who)
+	console.Raw(ui.StyleBoldRed, fmt.Sprintf("⚠  the leader can run commands on this machine as %s", who))
 	if fa.eval {
-		fmt.Fprintf(w, "   REPL/eval mode: one persistent `%s` process; each command is a line on its stdin\n", strings.Join(fa.runner, " "))
-		fmt.Fprint(w, "   (a response ends once the REPL goes quiet; state persists across commands)\n")
+		console.Raw(ui.StyleDim, fmt.Sprintf(
+			"   REPL/eval mode: one persistent `%s` process; each command is a line on its stdin",
+			strings.Join(fa.runner, " ")))
+		console.Raw(ui.StyleDim, "   (a response ends once the REPL goes quiet; state persists across commands)")
 		if warn := evalRunnerWarning(fa.runner); warn != "" {
-			fmt.Fprintf(w, "⚠  %s\n", warn)
+			console.Raw(ui.StyleYellow, "⚠  "+warn)
 		}
 		return
 	}
-	fmt.Fprintf(w, "   via: %s <command>   (each command is printed here as it runs)\n", strings.Join(fa.runner, " "))
+	console.Raw(ui.StyleDim, fmt.Sprintf(
+		"   via: %s <command>   (each command is printed here as it runs)", strings.Join(fa.runner, " ")))
 	if warn := runnerExecWarning(fa.runner); warn != "" {
-		fmt.Fprintf(w, "⚠  %s\n", warn)
+		console.Raw(ui.StyleYellow, "⚠  "+warn)
 	}
 }
 

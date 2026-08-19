@@ -33,7 +33,9 @@ type Session struct {
 	// execrun.EvalSession). The eval session outlives this connection so REPL
 	// state survives reconnects.
 	eval *execrun.EvalSession
-	// Log receives one line per command as it starts (per-command visibility).
+	// log receives one line per command as it starts (per-command visibility).
+	// The line carries no CLI prefix: the writer the caller passes owns the
+	// presentation (the `follow` console prefixes or decorates it).
 	log io.Writer
 
 	mu      sync.Mutex
@@ -97,7 +99,7 @@ func (s *Session) Handle(ctx context.Context, msgType string, raw []byte) {
 
 func (s *Session) startExec(ctx context.Context, req protocol.ExecRequest) {
 	if s.log != nil {
-		fmt.Fprintf(s.log, "slicc follow: exec: %s\n", req.Command)
+		fmt.Fprintf(s.log, "exec: %s\n", req.Command)
 	}
 	ctrl := make(chan string, 4)
 	s.mu.Lock()
