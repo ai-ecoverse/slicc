@@ -171,6 +171,63 @@ export function extractModelReferences(files) {
  * @param {{references: ReturnType<typeof extractModelReferences>, env: Record<string, string|undefined>}} input
  * @returns {{targets: Array<{modelId: string, variables: string[], workflows: string[], viaLiteral: boolean}>, missingEnv: string[], unsetVariables: string[]}}
  */
+/**
+ * Parse the manual `probe_extra_ids` self-test input.
+ *
+ * These IDs are probed and classified so the `invalid` path can be exercised
+ * against real Bedrock — while every configured ID is healthy that branch is
+ * unreachable, and it is the only branch that ever alerts anyone, so leaving it
+ * unproven means the canary's failure mode is silence. Anything that is not a
+ * Bedrock Anthropic model ID is discarded rather than probed, so a typo becomes a
+ * dropped entry instead of a request to an arbitrary URL path.
+ *
+ * @param {string} raw
+ * @returns {{ids: string[], rejected: string[]}}
+ */
+export function parseExtraProbeIds(raw) {
+  const ids = [];
+  const rejected = [];
+  for (const part of String(raw ?? '').split(',')) {
+    const value = part.trim();
+    if (!value) continue;
+    if (isBedrockAnthropicModelId(value)) {
+      if (!ids.includes(value)) ids.push(value);
+    } else {
+      rejected.push(value);
+    }
+  }
+  return { ids, rejected };
+}
+
+/**
+ * Compare self-test verdicts against the classification the operator expected.
+ *
+ * Printing the verdict is not a test: the regression this guards against is
+ * Bedrock rewording its rejection so a dead ID starts classifying as
+ * `inconclusive`, and the whole problem with that regression is that it is
+ * *quiet*. If nobody reads the log line, the canary looks healthy while its only
+ * alerting path is broken. An expectation turns that into a red run.
+ *
+ * @param {{verdicts: Array<{modelId: string, classification: string}>, expected: string}} input
+ * @returns {{checked: boolean, failures: Array<{modelId: string, expected: string, actual: string}>}}
+ */
+export function evaluateSelfTest({ verdicts = [], expected = '' }) {
+  const want = String(expected ?? '')
+    .trim()
+    .toLowerCase();
+  if (!want || want === 'any') {
+    return { checked: false, failures: [] };
+  }
+  const failures = (Array.isArray(verdicts) ? verdicts : [])
+    .filter((verdict) => verdict?.classification !== want)
+    .map((verdict) => ({
+      modelId: String(verdict?.modelId ?? ''),
+      expected: want,
+      actual: String(verdict?.classification ?? ''),
+    }));
+  return { checked: true, failures };
+}
+
 export function resolveProbeTargets({ references, env }) {
   /** @type {Map<string, {modelId: string, variables: string[], workflows: Set<string>, viaLiteral: boolean}>} */
   const targets = new Map();

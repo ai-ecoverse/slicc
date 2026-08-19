@@ -142,3 +142,27 @@ Every `*_BEDROCK_MODEL` key must be present (empty is fine) or the run exits 3.
 The workflow lives in `.github/workflows/model-scout.yml`. All extraction,
 classification, and reporting rules are pure and unit-tested in `lib.test.mjs`
 (the `dev-tools` vitest project).
+
+## Self-testing the `invalid` path
+
+The `ok` path proves itself every Monday. The `invalid` path — the only one that
+alerts anybody — is unreachable while every configured ID is healthy, and its
+failure mode is silence, so it needs a way to be exercised deliberately:
+
+```
+gh workflow run model-scout.yml -f dry_run=true \
+  -f probe_extra_ids=us.anthropic.claude-opus-4-9
+```
+
+`us.anthropic.claude-opus-4-9` is the ID that caused the outage this canary
+exists to catch. The run logs what real Bedrock returns for it and how
+`classifyProbeResult` classifies it. These IDs are probed **after** the real
+targets and never enter `results`, so they cannot move a count, alter the report,
+or open or close an issue. Entries that are not Bedrock Anthropic model IDs are
+dropped rather than probed.
+
+Add `-f probe_extra_expect=invalid` to make it an assertion rather than a log
+line. A verdict nobody reads leaves the regression that matters — Bedrock
+rewording its rejection until a dead ID classifies as `inconclusive` — exactly as
+quiet as the outage it causes; with an expectation set, that mismatch exits 4 and
+fails the run.
