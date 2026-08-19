@@ -1312,7 +1312,7 @@ and Vite injects `vite:preloadError` only into the PAGE bundle — so a `window`
 listener alone can't catch it. Recovery is the four-trigger guarded reload in
 `core/stale-asset-channel.ts` + `ui/boot/setup-preload-error-reload.ts`.
 
-## e2b SDK in the Worker: `createRequire` Breaks workerd (patched)
+## e2b SDK in the Worker: `createRequire` Breaks workerd (fixed upstream)
 
 The tray-hub worker (`slicc-tray-hub`) bundles the **e2b SDK** — its
 `CloudSessionsDurableObject` drives the cloud-cone lifecycle
@@ -1331,31 +1331,23 @@ var __require = /* #__PURE__ */ (() => createRequire(import.meta.url))();
 This runs at **module-eval time**. Under Cloudflare **workerd**, `import.meta.url`
 is `undefined`, so `createRequire(undefined)` throws
 `TypeError: The argument 'path' … Received 'undefined'` the instant the worker is
-instantiated — before any request. That kills both `wrangler dev` (the webapp E2E
-web-server can't start) and `wrangler deploy` (Cloudflare's API rejects the
-version with validation error 10021). e2b `2.32.x` had no such shim (a clean
-worker bundle has **zero** `createRequire`), and the SDK is otherwise
-fetch-based (`openapi-fetch` + `@connectrpc/connect-web`), so it runs in workerd
-fine — this is purely a build-artifact regression, and it persists through the
-latest e2b (checked 2.33.1 / 2.34.0 / 2.35.0).
+instantiated — before any request. That killed both `wrangler dev` (the webapp E2E
+web-server couldn't start) and `wrangler deploy` (Cloudflare's API rejected the
+version with validation error 10021). We carried a `patch-package` patch that
+made `__require` lazy so a bare `import` no longer threw under workerd.
 
-**Mitigation:** we carry a `patch-package` patch (`patches/e2b+<ver>.patch`) that
-makes `__require` **lazy** — it initializes `createRequire(import.meta.url)` on
-first call instead of at module-eval, so a bare `import` no longer throws under
-workerd. `__require` is only reached on Node paths (edge paths use Web Crypto /
-browser guards), so the patch is behaviour-preserving; verified by building and
-booting the tray-hub worker on the current e2b (`wrangler dev` → `Ready`, zero
-eager `createRequire` in the bundle). This let us drop the earlier `<2.33.0` pin
-and move e2b forward. Guardrails: e2b is routed into Renovate's "patched
-dependencies" group (labelled, never auto-merged — the `renovate-patch-reconcile`
-workflow regenerates the patch on each bump and `lint:patches` blocks a version
-mismatch), and `packages/cloud-core/tests/e2b-workerd-patch.test.ts` fails if the
-eager shim ever reappears in the installed dist. Remove the patch once e2b ships
-the shim lazily or provides an edge/browser export condition — but note e2b
-officially lists Workers/Edge as **unsupported**, so it may be long-lived. Do
-**not** un-bundle e2b from the worker as a "fix": the worker genuinely calls the
-SDK at runtime, so that would mean relocating the whole cloud-cone lifecycle off
-workerd (architectural), not a bundling tweak.
+**Fixed upstream in e2b `2.35.2`.** Its release notes call out the crash by
+name: SHA-256 hashing now uses WebCrypto directly, `node:url` is imported
+statically like the other Node.js built-ins, and their build emits **no**
+`createRequire` shim. e2b also added their own bundle test that fails if a
+`require` shim ever reappears in the ESM bundle. The patch (and its
+`patches/patches.json` entry) was removed when e2b moved to `2.35.3`.
+`packages/cloud-core/tests/e2b-workerd-patch.test.ts` stays as a defensive
+regression guard on our side — it fails if the eager shim ever reappears in the
+installed dist. If e2b regresses this in a future release, either land a fresh
+`patches/e2b+<ver>.patch` (`patch-package`) or pin the range in
+`packages/cloud-core/package.json` until upstream fixes it — do **not** un-bundle
+e2b from the worker, since the worker genuinely calls the SDK at runtime.
 
 ## Biome Build-Asset Strip: Cloudflare 25 MiB Cap
 
