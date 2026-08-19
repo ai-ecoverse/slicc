@@ -31,7 +31,10 @@ Already-installed packages, locally resolved bins, and unmapped package names ke
 npm run                      # list scripts
 npm run build                # run build, with prebuild/postbuild around it
 npm run build -- --watch     # pass extra args to the script body
-npm run --silent build       # no banner, script output only
+npm run build --silent       # no banner, script output only (either side of the name)
+npm run lint -- --help       # --help after -- goes to the script, not to npm
 ```
 
-A bare bin word in a script body (`vitest run`) is rewritten to `ipx vitest run` when that package is installed, because `$PATH` does not cover `node_modules/.bin` shims. A SLICC built-in with the same name wins, and an unknown word is not installed implicitly — install it with `ipk add <pkg>` first.
+`--silent`/`-s` and `--if-present` are npm's own flags anywhere before `--`; everything after `--` reaches the script untouched. Missing `start` falls back to `node server.js` when the package has one, and missing `restart` to `npm stop --if-present && npm start`.
+
+A bare bin word in a script body (`vitest run`) is rewritten to `ipx vitest run` when that package is installed, because `$PATH` does not cover `node_modules/.bin` shims. This also applies after keywords like `if`/`then`/`do`. A SLICC built-in with the same name wins, and an unknown word is not installed implicitly — install it with `ipk add <pkg>` first.

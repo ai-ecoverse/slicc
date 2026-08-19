@@ -152,19 +152,27 @@ directory. `npm run` with no script name lists what is defined.
 
 - `pre<script>` and `post<script>` run around the body; a failing `pre` aborts before it.
 - Arguments after the script name (and after an optional `--`) are appended to the body,
-  shell-quoted: `npm run build -- --watch`.
+  shell-quoted: `npm run build -- --watch`. Everything after `--` belongs to the script,
+  including `--help` and flags that would otherwise be npm's.
 - `npm_lifecycle_event`, `npm_lifecycle_script`, `npm_package_name`, and
   `npm_package_version` are exported, and every reachable `node_modules/.bin` is prepended
   to `$PATH`.
 - `--silent` / `-s` drops the `> pkg@version script` banner; `--if-present` turns a missing
-  script into exit 0.
+  script into exit 0. Both are recognized on either side of the script name
+  (`npm run build --silent` works), but never after `--`.
+- `start` falls back to `node server.js` when the package has a `server.js`, and `restart`
+  to `npm stop --if-present && npm start`, matching npm's built-in lifecycle defaults.
+  `test` and `stop` have no default.
 - The failing stage's exit code is the command's exit code.
 
 `$PATH` lookup only finds `.jsh`/`.bsh` scripts, not the JS `node_modules/.bin` shims `ipk`
 writes, so a command-position word that names no registered command but does have a `.bin`
-shim is rewritten to `ipx <word>` (the runner that can execute those shims). Nothing else is
-rewritten: a registered built-in keeps priority, and an unknown word stays unknown — no
-implicit install, so a typo still fails as a typo.
+shim is rewritten to `ipx <word>` (the runner that can execute those shims). Command position
+survives keywords a command follows directly (`if`, `then`, `else`, `elif`, `while`, `until`,
+`do`, `time`, `!`), so `if mytool; then mytool2; fi` rewrites both. Nothing else is rewritten:
+a registered built-in keeps priority, the subject of `for`/`case` is never treated as a
+command, and an unknown word stays unknown — no implicit install, so a typo still fails as a
+typo.
 
 ### Biome wrapper behavior
 

@@ -73,8 +73,26 @@ const SHELL_KEYWORDS = new Set([
   'do',
   'done',
   'case',
+  'in',
   'esac',
   'function',
+  'time',
+  '!',
+]);
+/**
+ * Keywords a command follows directly, so the command position survives them:
+ * in `if mytool; then mytool2; fi` both bins are still command words. `for` /
+ * `case` / `function` are excluded — the word after them is a variable, a
+ * subject, or a name, never a command.
+ */
+const POSITION_KEEPING_KEYWORDS = new Set([
+  'if',
+  'then',
+  'else',
+  'elif',
+  'while',
+  'until',
+  'do',
   'time',
   '!',
 ]);
@@ -201,8 +219,13 @@ function scanCommandWords(script: string): ScannedWord[] {
       i++;
       continue;
     }
-    // `FOO=bar cmd` — assignments precede the command word.
+    // `FOO=bar cmd` — assignments precede the command word, and `if cmd`
+    // (like `then cmd`) keeps the command position on the following word.
     if (atCommand && !ASSIGNMENT_RE.test(word.text)) {
+      if (POSITION_KEEPING_KEYWORDS.has(word.text)) {
+        i = word.end;
+        continue;
+      }
       found.push(word);
       atCommand = false;
     }
@@ -289,22 +312,50 @@ function formatScriptList(name: string, host: ScriptHost): string {
   return `${lines.join('\n')}\n`;
 }
 
-function parseRunFlags(args: string[]): { flags: RunFlags; rest: string[] } {
-  const flags: RunFlags = { silent: false, ifPresent: false };
-  let i = 0;
-  for (; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === '--silent' || arg === '-s') flags.silent = true;
-    else if (arg === '--if-present') flags.ifPresent = true;
-    else break;
+/** Consume a recognized npm option; returns false for anything else. */
+function applyRunFlag(flags: RunFlags, arg: string): boolean {
+  if (arg === '--silent' || arg === '-s') {
+    flags.silent = true;
+    return true;
   }
-  return { flags, rest: args.slice(i) };
+  if (arg === '--if-present') {
+    flags.ifPresent = true;
+    return true;
+  }
+  return false;
 }
 
-/** Extra argv for the script body: everything after the name, minus one `--`. */
-function extraArgsOf(rest: string[]): string[] {
-  const extra = rest.slice(1);
-  return extra[0] === '--' ? extra.slice(1) : extra;
+interface ParsedRunArgs {
+  flags: RunFlags;
+  script?: string;
+  extraArgs: string[];
+}
+
+/**
+ * Split `run` arguments the way npm does: recognized npm options are consumed
+ * on EITHER side of the script name (`npm run build --silent` works), the first
+ * remaining word is the script, and everything after an explicit `--` is passed
+ * through verbatim — including flags that would otherwise be npm's.
+ */
+function parseRunArgs(args: string[]): ParsedRunArgs {
+  const flags: RunFlags = { silent: false, ifPresent: false };
+  const extraArgs: string[] = [];
+  let script: string | undefined;
+  let passThrough = false;
+  for (const arg of args) {
+    if (passThrough) {
+      extraArgs.push(arg);
+      continue;
+    }
+    if (arg === '--') {
+      passThrough = true;
+      continue;
+    }
+    if (applyRunFlag(flags, arg)) continue;
+    if (script === undefined) script = arg;
+    else extraArgs.push(arg);
+  }
+  return { flags, script, extraArgs };
 }
 
 function failure(name: string, message: string): ExecResult {
@@ -317,15 +368,34 @@ interface Stage {
 }
 
 /** `pre<script>`, `<script>` (with extra args), `post<script>`. */
-function buildStages(host: ScriptHost, script: string, extraArgs: string[]): Stage[] {
+function buildStages(host: ScriptHost, script: string, body: string, extraArgs: string[]): Stage[] {
   const suffix = extraArgs.length > 0 ? ` ${extraArgs.map(quoteArg).join(' ')}` : '';
   const stages: Stage[] = [];
   const pre = host.scripts[`pre${script}`];
   if (pre !== undefined) stages.push({ event: `pre${script}`, body: pre });
-  stages.push({ event: script, body: `${host.scripts[script]}${suffix}` });
+  stages.push({ event: script, body: `${body}${suffix}` });
   const post = host.scripts[`post${script}`];
   if (post !== undefined) stages.push({ event: `post${script}`, body: post });
   return stages;
+}
+
+/**
+ * npm's built-in lifecycle defaults, applied only when the manifest has no such
+ * script: a package with a `server.js` gets `node server.js` for `start`, and
+ * `restart` is always synthesized from `stop` + `start` (matching npm's
+ * `lib/commands/run.js`). `test` and `stop` have no default and stay missing.
+ */
+async function lifecycleDefault(
+  name: string,
+  host: ScriptHost,
+  script: string,
+  fs: VirtualFS
+): Promise<string | undefined> {
+  if (script === 'start' && (await fs.exists(joinPath(host.dir, 'server.js')))) {
+    return 'node server.js';
+  }
+  if (script === 'restart') return `${name} stop --if-present && ${name} start`;
+  return undefined;
 }
 
 function makeHooks(fs: VirtualFS, host: ScriptHost, ctx: CommandContext): BinRewriteHooks {
@@ -402,13 +472,14 @@ export async function runNpmScript(
     );
   }
 
-  const { flags, rest } = parseRunFlags(args);
-  if (rest.length === 0) {
+  const { flags, script, extraArgs } = parseRunArgs(args);
+  if (script === undefined) {
     return { stdout: formatScriptList(name, host), stderr: '', exitCode: 0 };
   }
 
-  const script = rest[0];
-  if (host.scripts[script] === undefined) {
+  const body =
+    host.scripts[script] ?? (await lifecycleDefault(name, host, script, deps.fs)) ?? undefined;
+  if (body === undefined) {
     if (flags.ifPresent) return { stdout: '', stderr: '', exitCode: 0 };
     const available = Object.keys(host.scripts);
     const hint =
@@ -418,5 +489,5 @@ export async function runNpmScript(
     return failure(name, `missing script: ${script}${hint}`);
   }
 
-  return runStages(name, host, buildStages(host, script, extraArgsOf(rest)), flags, ctx, deps);
+  return runStages(name, host, buildStages(host, script, body, extraArgs), flags, ctx, deps);
 }

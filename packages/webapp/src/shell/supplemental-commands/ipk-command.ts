@@ -49,11 +49,16 @@ Script running:
   ${name} run <script>       run that scripts entry in the directory holding
                              the nearest package.json, with pre<script> and
                              post<script> around it
-  ${name} run <script> -- -x pass extra arguments through to the script body
+  ${name} run <script> -- -x pass extra arguments through to the script body;
+                             everything after -- is the script's, including
+                             --help and flags that would otherwise be ours
   ${name} test               shortcut for '${name} run test' (also start, stop,
-                             restart)
+                             restart). A missing 'start' falls back to
+                             'node server.js' when the package has one, and
+                             a missing 'restart' to stop + start
   --silent, -s               do not echo the script banner
   --if-present               exit 0 instead of failing on a missing script
+                             (both are accepted on either side of <script>)
 
 Spec forms:
   <pkg>            install the latest published version
@@ -74,8 +79,14 @@ no-op.
 `;
 }
 
+/**
+ * Help flags count only BEFORE a `--` separator: everything after it belongs to
+ * the script (`npm run lint -- --help` asks lint for its help, not ipk).
+ */
 function isHelpRequest(args: string[]): boolean {
-  return args.includes('--help') || args.includes('-h');
+  const separator = args.indexOf('--');
+  const own = separator === -1 ? args : args.slice(0, separator);
+  return own.includes('--help') || own.includes('-h');
 }
 
 function describeError(err: unknown): string {

@@ -219,6 +219,54 @@ describe('npm run', () => {
     expect(calls).toHaveLength(0);
   });
 
+  it('consumes npm flags placed AFTER the script name', async () => {
+    await writeManifest(fs, '/work', {
+      name: 'demo',
+      scripts: { build: 'echo built', test: 'echo tested' },
+    });
+
+    const silent = harness('/work', {
+      results: [{ stdout: 'built\n', stderr: '', exitCode: 0 }],
+    });
+    const r = await npm(fs).execute(['run', 'build', '--silent'], silent.ctx);
+    expect(r.stdout).toBe('built\n');
+    expect(silent.calls[0].command).toBe('echo built');
+
+    const shortcut = harness('/work', {
+      results: [{ stdout: 'tested\n', stderr: '', exitCode: 0 }],
+    });
+    const viaTest = await npm(fs).execute(['test', '--silent'], shortcut.ctx);
+    expect(viaTest.stdout).toBe('tested\n');
+    expect(shortcut.calls[0].command).toBe('echo tested');
+
+    const present = harness('/work');
+    const missing = await npm(fs).execute(['run', 'nope', '--if-present'], present.ctx);
+    expect(missing).toEqual({ stdout: '', stderr: '', exitCode: 0 });
+    expect(present.calls).toHaveLength(0);
+  });
+
+  it('passes npm-looking flags after -- through to the script', async () => {
+    await writeManifest(fs, '/work', { name: 'demo', scripts: { build: 'echo built' } });
+    const { ctx, calls } = harness('/work');
+
+    const r = await npm(fs).execute(['run', 'build', '--', '--silent', '--if-present'], ctx);
+
+    expect(r.exitCode).toBe(0);
+    expect(calls[0].command).toBe(`echo built '--silent' '--if-present'`);
+    expect(r.stdout).toContain('> demo build');
+  });
+
+  it('treats --help after -- as the script\u2019s flag, not ipk\u2019s', async () => {
+    await writeManifest(fs, '/work', { name: 'demo', scripts: { lint: 'echo linting' } });
+    const { ctx, calls } = harness('/work');
+
+    const r = await npm(fs).execute(['run', 'lint', '--', '--help'], ctx);
+
+    expect(r.exitCode).toBe(0);
+    expect(calls[0].command).toBe(`echo linting '--help'`);
+    expect(r.stdout).not.toMatch(/install packages from the npm registry/);
+  });
+
   it('--silent suppresses the banner but keeps script output', async () => {
     await writeManifest(fs, '/work', { name: 'demo', scripts: { build: 'echo built' } });
     const { ctx } = harness('/work', {
@@ -245,6 +293,40 @@ describe('npm run', () => {
     expect((await npm(fs).execute(['test'], shortcut.ctx)).exitCode).toBe(0);
     expect(shortcut.calls[0].command).toBe('echo tested');
     expect(shortcut.calls[0].env.npm_lifecycle_event).toBe('test');
+  });
+
+  it('falls back to npm start / restart lifecycle defaults', async () => {
+    await writeManifest(fs, '/work', { name: 'demo', scripts: { stop: 'echo stopping' } });
+    await fs.writeFile('/work/server.js', 'listen();\n');
+
+    const start = harness('/work');
+    expect((await npm(fs).execute(['start'], start.ctx)).exitCode).toBe(0);
+    expect(start.calls[0].command).toBe('node server.js');
+    expect(start.calls[0].env.npm_lifecycle_event).toBe('start');
+
+    const restart = harness('/work');
+    expect((await npm(fs).execute(['restart'], restart.ctx)).exitCode).toBe(0);
+    expect(restart.calls[0].command).toBe('npm stop --if-present && npm start');
+  });
+
+  it('prefers a declared start script over the server.js default', async () => {
+    await writeManifest(fs, '/work', { name: 'demo', scripts: { start: 'echo declared' } });
+    await fs.writeFile('/work/server.js', 'listen();\n');
+    const { ctx, calls } = harness('/work');
+
+    expect((await npm(fs).execute(['start'], ctx)).exitCode).toBe(0);
+    expect(calls[0].command).toBe('echo declared');
+  });
+
+  it('still reports a missing start when the package has no server.js', async () => {
+    await writeManifest(fs, '/work', { name: 'demo', scripts: { build: 'echo built' } });
+    const { ctx, calls } = harness('/work');
+
+    const r = await npm(fs).execute(['start'], ctx);
+
+    expect(r.exitCode).not.toBe(0);
+    expect(r.stderr).toMatch(/missing script: start/);
+    expect(calls).toHaveLength(0);
   });
 
   it('reports a clear error when no package.json is reachable', async () => {
@@ -328,6 +410,49 @@ describe('npm run bin rewriting', () => {
 
     expect((await npm(fs).execute(['run', 'build'], ctx)).exitCode).toBe(0);
     expect(calls[0].command).toBe('ipx tsup src');
+  });
+
+  it('keeps the command position after shell keywords', async () => {
+    await writeManifest(fs, '/work', {
+      name: 'demo',
+      scripts: {
+        cond: 'if tsup src; then tsup dist; fi',
+        loop: 'while tsup check; do tsup step; done',
+        negated: '! tsup fail',
+      },
+    });
+    await writeBinShim(fs, '/work', 'tsup');
+    const { ctx, calls } = harness('/work', { registered: [] });
+
+    await npm(fs).execute(['run', 'cond'], ctx);
+    await npm(fs).execute(['run', 'loop'], ctx);
+    await npm(fs).execute(['run', 'negated'], ctx);
+
+    expect(calls.map((c) => c.command)).toEqual([
+      'if ipx tsup src; then ipx tsup dist; fi',
+      'while ipx tsup check; do ipx tsup step; done',
+      '! ipx tsup fail',
+    ]);
+  });
+
+  it('does not rewrite the subject of for/case, which is never a command', async () => {
+    await writeManifest(fs, '/work', {
+      name: 'demo',
+      scripts: {
+        loop: 'for tsup in a b; do echo $tsup; done',
+        pick: 'case tsup in *) echo x;; esac',
+      },
+    });
+    await writeBinShim(fs, '/work', 'tsup');
+    const { ctx, calls } = harness('/work', { registered: ['echo'] });
+
+    await npm(fs).execute(['run', 'loop'], ctx);
+    await npm(fs).execute(['run', 'pick'], ctx);
+
+    expect(calls.map((c) => c.command)).toEqual([
+      'for tsup in a b; do echo $tsup; done',
+      'case tsup in *) echo x;; esac',
+    ]);
   });
 
   it('leaves registered commands, unknown words, and paths untouched', async () => {

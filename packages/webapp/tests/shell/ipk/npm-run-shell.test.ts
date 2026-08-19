@@ -122,13 +122,68 @@ describe('npm run via real AlmostBashShell', () => {
       scripts: { test: 'echo tested', build: 'echo built' },
     });
 
+    // `--silent` after the script name is npm's, not an argument to the body.
     const viaTest = await shell.executeCommand('npm test --silent');
     expect(viaTest.exitCode).toBe(0);
-    expect(viaTest.stdout).toContain('tested');
+    expect(viaTest.stdout).toBe('tested\n');
 
     const viaIpk = await shell.executeCommand('ipk run --silent build');
     expect(viaIpk.exitCode).toBe(0);
     expect(viaIpk.stdout).toContain('built');
+    await fs.dispose();
+  });
+
+  it('forwards --help after -- to the script instead of printing ipk usage', async () => {
+    await writeManifest(fs, '/work', {
+      name: 'demo',
+      version: '1.0.0',
+      scripts: { lint: 'echo linting' },
+    });
+
+    const r = await shell.executeCommand('npm run --silent lint -- --help');
+
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.trim()).toBe('linting --help');
+    await fs.dispose();
+  });
+
+  it('rewrites a .bin word that follows a shell keyword', async () => {
+    await writeManifest(fs, '/work', {
+      name: 'demo',
+      version: '1.0.0',
+      scripts: { guard: 'if mytool ok; then echo ran; fi' },
+    });
+    await writeManifest(fs, '/work/node_modules/mytool', {
+      name: 'mytool',
+      version: '1.0.0',
+      bin: './cli.js',
+    });
+    await fs.writeFile(
+      '/work/node_modules/mytool/cli.js',
+      '#!/usr/bin/env node\nconsole.log("MYTOOL:" + process.argv.slice(2).join("|"));\n'
+    );
+    await fs.mkdir('/work/node_modules/.bin', { recursive: true });
+    await fs.writeFile(
+      '/work/node_modules/.bin/mytool',
+      '#!/usr/bin/env node\nrequire("../mytool/cli.js");\n'
+    );
+
+    const r = await shell.executeCommand('npm run --silent guard');
+
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('MYTOOL:ok');
+    expect(r.stdout).toContain('ran');
+    await fs.dispose();
+  });
+
+  it('runs the npm start default for a package with only server.js', async () => {
+    await writeManifest(fs, '/work', { name: 'demo', version: '1.0.0', scripts: {} });
+    await fs.writeFile('/work/server.js', 'console.log("SERVER-UP");\n');
+
+    const r = await shell.executeCommand('npm start --silent');
+
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('SERVER-UP');
     await fs.dispose();
   });
 
