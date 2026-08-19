@@ -1010,6 +1010,11 @@ does **not** see its own source as stdin (`fs.readFileSync(0)` returns empty),
 and relative `require('./x')` resolves against the shell's cwd rather than
 `/dev`.
 
+`--help` / `-h` / `--version` / `-v` are node's own options only when they
+_precede_ the program source. After it they belong to the script, so
+`node /dev/stdin --help` runs the heredoc with `--help` in `process.argv`
+instead of printing the shim's usage.
+
 ---
 
 ## .jsh Script Commands

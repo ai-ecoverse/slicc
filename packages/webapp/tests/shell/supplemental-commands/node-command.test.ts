@@ -10,6 +10,7 @@ import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
 import { unsafeBytesFromLatin1 } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { createNodeCommand } from '../../../src/shell/supplemental-commands/node-command.js';
+import { NODE_VERSION } from '../../../src/shell/supplemental-commands/shared.js';
 
 /** Minimal in-memory IFileSystem for tests — mirrors jsh-executor.test.ts */
 function createMockFs(files: Record<string, string> = {}): IFileSystem {
@@ -354,5 +355,66 @@ describe('node command — explicit stdin script tokens (`node /dev/stdin << EOF
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('cannot find module');
+  });
+});
+
+describe('node command — --help / --version are node options, not script args', () => {
+  function stdinCtx(code: string): CommandContext {
+    return {
+      fs: createMockFs(),
+      cwd: '/workspace',
+      env: new Map(),
+      stdin: unsafeBytesFromLatin1(code),
+    };
+  }
+
+  it('still prints usage for a bare `node --help`', async () => {
+    const result = await createNodeCommand().execute(['--help'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('usage: node');
+  });
+
+  it('still prints the version for a bare `node -v`', async () => {
+    const result = await createNodeCommand().execute(['-v'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout.trim()).toBe(NODE_VERSION);
+  });
+
+  it('forwards `--help` after /dev/stdin to the script instead of printing usage', async () => {
+    const ctx = stdinCtx('console.log(JSON.stringify(process.argv.slice(2)));\n');
+    const result = await createNodeCommand().execute(['/dev/stdin', '--help'], ctx);
+
+    expect(result.stdout).not.toContain('usage: node');
+    expect(JSON.parse(result.stdout.trim())).toEqual(['--help']);
+  });
+
+  it('forwards `-v` after `-` to the script instead of printing the version', async () => {
+    const ctx = stdinCtx('console.log(JSON.stringify(process.argv.slice(2)));\n');
+    const result = await createNodeCommand().execute(['-', '-v'], ctx);
+
+    expect(result.stdout.trim()).not.toBe(NODE_VERSION);
+    expect(JSON.parse(result.stdout.trim())).toEqual(['-v']);
+  });
+
+  it('forwards `--version` after a script path to the script', async () => {
+    const ctx = createMockCtx(
+      { '/workspace/a.js': 'console.log(JSON.stringify(process.argv.slice(2)));' },
+      '/workspace'
+    );
+    const result = await createNodeCommand().execute(['./a.js', '--version'], ctx);
+
+    expect(result.stdout.trim()).not.toBe(NODE_VERSION);
+    expect(JSON.parse(result.stdout.trim())).toEqual(['--version']);
+  });
+
+  it('forwards `-h` after `-e` code to the script', async () => {
+    const ctx = createMockCtx({}, '/workspace');
+    const result = await createNodeCommand().execute(
+      ['-e', 'console.log(JSON.stringify(process.argv.slice(1)));', '-h'],
+      ctx
+    );
+
+    expect(result.stdout).not.toContain('usage: node');
+    expect(JSON.parse(result.stdout.trim())).toEqual(['-h']);
   });
 });

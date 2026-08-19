@@ -44,6 +44,24 @@ export interface NodeCommandOptions {
  */
 const STDIN_SCRIPT_TOKENS = new Set(['-', '/dev/stdin', '/dev/fd/0', '/proc/self/fd/0']);
 
+/**
+ * Index of the token that introduces the program (`-e`, a stdin token, or a
+ * script path), or `args.length` when the vector is all node options.
+ *
+ * Everything at or after that index belongs to the *script*, not to node — so
+ * `node /dev/stdin --help` must reach `process.argv`, not print the shim's
+ * usage. Only the leading slice is scanned for `--help` / `--version`.
+ */
+function programSourceIndex(args: string[]): number {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '-e' || arg === '--eval') return i;
+    if (STDIN_SCRIPT_TOKENS.has(arg)) return i;
+    if (!arg.startsWith('-')) return i;
+  }
+  return args.length;
+}
+
 function nodeHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: 'usage: node -e <code> [args...]\n',
@@ -168,8 +186,11 @@ export function createNodeCommand(options: NodeCommandOptions = {}): Command {
     // are registered.
     trusted: true,
     async execute(args: string[], ctx: CommandContext) {
-      if (args.includes('--help') || args.includes('-h')) return nodeHelp();
-      if (args.includes('--version') || args.includes('-v')) return nodeVersion();
+      // Scan only the options that PRECEDE the program source: Node treats
+      // `--help` / `-v` after the script token as script arguments.
+      const nodeOptions = args.slice(0, programSourceIndex(args));
+      if (nodeOptions.includes('--help') || nodeOptions.includes('-h')) return nodeHelp();
+      if (nodeOptions.includes('--version') || nodeOptions.includes('-v')) return nodeVersion();
 
       const resolved = await resolveInvocation(args, ctx);
       if (resolved.kind === 'result') return resolved.result;
