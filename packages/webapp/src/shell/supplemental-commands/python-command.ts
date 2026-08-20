@@ -199,7 +199,7 @@ export interface PythonCommandOptions {
    * the realm — #1116). When omitted (or when it returns `undefined`), the
    * command falls back to the global / ephemeral PM with `ppid: 1`.
    */
-  buildProcessConfig?: (runSignal?: AbortSignal) => JshProcessConfig | undefined;
+  buildProcessConfig?: (runEnv?: ReadonlyMap<string, string>) => JshProcessConfig | undefined;
 }
 
 /**
@@ -450,7 +450,7 @@ export function createPython3LikeCommand(
     // the caller at the async `slicc.fs` module.
     const mountPoints = computeOverlappingMountPoints(ctx.fs, syncDirs);
 
-    const pmConfig = options.buildProcessConfig?.(ctx.signal);
+    const pmConfig = options.buildProcessConfig?.(ctx.env);
     const pm = pmConfig?.processManager ?? lookupGlobalPm();
     const owner: ProcessOwner = pmConfig?.owner ?? { kind: 'system' };
     const ppid = pmConfig?.getParentPid?.();

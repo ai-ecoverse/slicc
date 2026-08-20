@@ -21,6 +21,7 @@
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 import type { BashExecResult } from 'just-bash';
+import { createLogger } from '../base/logger.js';
 import {
   AlmostBashShellHeadless,
   type HeadlessShellLike,
@@ -56,6 +57,8 @@ export interface AlmostBashShellOptions extends HeadlessShellOptions {
  * from `AlmostBashShellHeadless`; adds xterm mount + line editor + media
  * preview.
  */
+const log = createLogger('almost-bash-shell-view');
+
 export class AlmostBashShell extends AlmostBashShellHeadless {
   private terminal: Terminal | null = null;
   private fitAddon: FitAddon | null = null;
@@ -87,9 +90,10 @@ export class AlmostBashShell extends AlmostBashShellHeadless {
    */
   protected override async runCommand(
     command: string,
-    signal?: AbortSignal
+    signal?: AbortSignal,
+    runPid?: number
   ): Promise<BashExecResult> {
-    return super.runCommand(command, signal ?? this.execAbort?.signal);
+    return super.runCommand(command, signal ?? this.execAbort?.signal, runPid);
   }
 
   // -------------------------------------------------------------------------
@@ -360,7 +364,10 @@ export class AlmostBashShell extends AlmostBashShellHeadless {
       for (const ch of data) {
         switch (ch) {
           case '\r':
-            this.handleEnter();
+            // Fire-and-forget by necessity — a keystroke handler cannot await
+            // the command it starts. Surfaced rather than swallowed so a
+            // rejected run leaves a trace instead of a dead prompt.
+            void this.handleEnter().catch((e) => log.error('handleEnter failed', e));
             break;
           case '\x7f':
             this.handleBackspace();
@@ -369,7 +376,7 @@ export class AlmostBashShell extends AlmostBashShellHeadless {
             this.handleCtrlC();
             break;
           case '\t':
-            this.handleTab();
+            void this.handleTab().catch((e) => log.error('handleTab failed', e));
             break;
           default:
             if (ch >= ' ') this.insertChar(ch);

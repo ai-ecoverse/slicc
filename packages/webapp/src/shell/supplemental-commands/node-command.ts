@@ -32,7 +32,7 @@ export interface NodeCommandOptions {
    * the realm — #1116). When omitted, `executeJsCode` falls back to the
    * global / ephemeral PM with `ppid: 1`.
    */
-  buildProcessConfig?: (runSignal?: AbortSignal) => JshProcessConfig | undefined;
+  buildProcessConfig?: (runEnv?: ReadonlyMap<string, string>) => JshProcessConfig | undefined;
 }
 
 /**
@@ -202,7 +202,7 @@ export function createNodeCommand(options: NodeCommandOptions = {}): Command {
         stripShebang(code),
         argv,
         innerCtx,
-        options.buildProcessConfig?.(ctx.signal),
+        options.buildProcessConfig?.(ctx.env),
         { filename }
       );
     },
