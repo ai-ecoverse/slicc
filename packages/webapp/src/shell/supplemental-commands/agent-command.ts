@@ -6,6 +6,17 @@ import { normalizePath } from '../../fs/path-utils.js';
 
 const log = createLogger('agent-command');
 
+/**
+ * A JSON Schema object as decoded from `--schema-b64` and forwarded verbatim to
+ * the bridge. Structurally mirrors `JsonSchemaObject` in `tools/types.ts`:
+ * `shell/` sits below `tools/` in the layer stack, so the shape is restated here
+ * rather than imported (the same reason `AgentSpawnOptions` below is a mirror).
+ */
+interface JsonSchemaObject {
+  type?: string;
+  [keyword: string]: unknown;
+}
+
 /** Options forwarded to the orchestrator bridge. */
 interface AgentSpawnOptions {
   cwd: string;
@@ -26,8 +37,13 @@ interface AgentSpawnOptions {
   invokingCwd?: string;
   /** Forwarded to the bridge as the spawned scoop's thinking-level override. */
   thinkingLevel?: ThinkingLevel;
+  /**
+   * Seconds the spawned scoop's `bash` tool waits before detaching a command
+   * (its `background_after` default). Forwarded verbatim to the bridge.
+   */
+  backgroundAfterSeconds?: number;
   /** Structured output schema for the spawned scoop. */
-  structuredOutputSchema?: Record<string, unknown>;
+  structuredOutputSchema?: JsonSchemaObject;
   /**
    * Tri-value session-transcript persistence forwarded to the bridge:
    * `true` (`--persist-session`) writes a durable `/sessions/...` archive,
@@ -103,6 +119,13 @@ Options:
                           explicit list if you want them back (e.g.
                           "/workspace/,$(pwd)"). Each entry is normalized to
                           a trailing slash.
+  --background-after <s>  Seconds the spawned scoop's bash tool waits for a
+                          command before detaching it to the background and
+                          continuing (default 600). The detached command's exit
+                          code and output come back to the scoop as a
+                          "Background Command" lick, so a slow or stuck command
+                          never wedges an unsupervised run. Use 0 to detach
+                          every command immediately. Must be >= 0.
   --persist-session       Write the spawned agent's full session transcript to
                           /sessions/agent-<name>-<timestamp>.md (durable —
                           survives a new chat) for later human analysis.
@@ -118,6 +141,7 @@ Examples:
   agent --model claude-haiku-4-5 . "*" "summarize files in this directory"
   agent --thinking high . "*" "design a careful plan first"
   agent --read-only /workspace/,/shared/assets/ . "*" "review the docs"
+  agent --background-after 60 . "*" "run the slow build and report"
 `;
 
 interface ParsedArgs {
@@ -128,7 +152,8 @@ interface ParsedArgs {
   modelId?: string;
   visiblePaths?: string[];
   thinkingLevel?: ThinkingLevel;
-  structuredOutputSchema?: Record<string, unknown>;
+  backgroundAfterSeconds?: number;
+  structuredOutputSchema?: JsonSchemaObject;
   persistSession?: boolean;
   error?: string;
 }
@@ -170,6 +195,28 @@ function parseThinkingFlag(
   return { value: result.value, consumed: result.consumed };
 }
 
+/**
+ * Parse `--background-after <seconds>`. `0` is a legitimate value (detach every
+ * command immediately), so the guard rejects only non-numeric and negative
+ * input — silently ignoring a typo would leave the scoop on the ten-minute
+ * default, i.e. exactly the stall the caller was trying to bound.
+ */
+function parseBackgroundAfterFlag(
+  args: string[],
+  i: number
+): { error?: string; value?: number; consumed: number } {
+  const result = parseFlagWithValue('--background-after', args, i);
+  if ('error' in result) return { error: result.error, consumed: 0 };
+  const seconds = Number(result.value);
+  if (!Number.isFinite(seconds) || seconds < 0) {
+    return {
+      error: 'agent: --background-after must be a number of seconds >= 0',
+      consumed: 0,
+    };
+  }
+  return { value: seconds, consumed: result.consumed };
+}
+
 /** Parse --read-only flag. */
 function parseReadOnlyFlag(
   args: string[],
@@ -189,7 +236,7 @@ function parseReadOnlyFlag(
 function parseSchemaFlag(
   args: string[],
   i: number
-): { error?: string; value?: Record<string, unknown>; consumed: number } {
+): { error?: string; value?: JsonSchemaObject; consumed: number } {
   const next = args[i + 1];
   if (next === undefined || next === '' || (next.length > 0 && next.startsWith('-'))) {
     return { error: 'agent: --schema-b64 requires a value', consumed: 0 };
@@ -202,7 +249,7 @@ function parseSchemaFlag(
     if (typeof decoded !== 'object' || decoded === null) {
       return { error: 'agent: --schema-b64 must decode to a JSON object', consumed: 0 };
     }
-    return { value: decoded as Record<string, unknown>, consumed: 2 };
+    return { value: decoded as JsonSchemaObject, consumed: 2 };
   } catch {
     return { error: 'agent: --schema-b64 must be valid base64-encoded JSON', consumed: 0 };
   }
@@ -215,7 +262,8 @@ interface ParseState {
   modelId?: string;
   visiblePaths?: string[];
   thinkingLevel?: ThinkingLevel;
-  schemaOut?: Record<string, unknown>;
+  backgroundAfterSeconds?: number;
+  schemaOut?: JsonSchemaObject;
   persistSession?: boolean;
 }
 
@@ -247,6 +295,13 @@ function processArg(
     const result = parseThinkingFlag(arg, args, i);
     if (result.error) return { error: result.error, consumed: 0 };
     state.thinkingLevel = result.value;
+    return { consumed: result.consumed };
+  }
+
+  if (arg === '--background-after') {
+    const result = parseBackgroundAfterFlag(args, i);
+    if (result.error) return { error: result.error, consumed: 0 };
+    state.backgroundAfterSeconds = result.value;
     return { consumed: result.consumed };
   }
 
@@ -352,6 +407,7 @@ function parseArgs(args: string[]): ParsedArgs {
     modelId: state.modelId,
     visiblePaths: state.visiblePaths,
     thinkingLevel: state.thinkingLevel,
+    backgroundAfterSeconds: state.backgroundAfterSeconds,
     structuredOutputSchema: state.schemaOut,
     persistSession: state.persistSession,
   };
@@ -401,8 +457,14 @@ function formatForStderr(finalText: string | null | undefined): string {
   return finalText.replace(/\n+$/, '') + '\n';
 }
 
+/**
+ * The global slot `publishAgentBridge` (`scoops/agent-bridge.ts`) writes the
+ * bridge to. Declared here too because `shell/` cannot import from `scoops/`.
+ */
+type SliccAgentGlobal = typeof globalThis & { __slicc_agent?: AgentBridge };
+
 function getBridge(): AgentBridge | undefined {
-  const hook = (globalThis as Record<string, unknown>).__slicc_agent as AgentBridge | undefined;
+  const hook = (globalThis as SliccAgentGlobal).__slicc_agent;
   if (!hook || typeof hook.spawn !== 'function') {
     return undefined;
   }
@@ -457,6 +519,9 @@ function buildSpawnOptions(
   }
   if (parsed.thinkingLevel !== undefined) {
     spawnOptions.thinkingLevel = parsed.thinkingLevel;
+  }
+  if (parsed.backgroundAfterSeconds !== undefined) {
+    spawnOptions.backgroundAfterSeconds = parsed.backgroundAfterSeconds;
   }
   if (parsed.structuredOutputSchema !== undefined) {
     spawnOptions.structuredOutputSchema = parsed.structuredOutputSchema;

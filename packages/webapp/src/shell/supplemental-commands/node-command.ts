@@ -32,7 +32,7 @@ export interface NodeCommandOptions {
    * the realm — #1116). When omitted, `executeJsCode` falls back to the
    * global / ephemeral PM with `ppid: 1`.
    */
-  buildProcessConfig?: () => JshProcessConfig | undefined;
+  buildProcessConfig?: (runSignal?: AbortSignal) => JshProcessConfig | undefined;
 }
 
 /**
@@ -196,9 +196,15 @@ export function createNodeCommand(options: NodeCommandOptions = {}): Command {
       if (resolved.kind === 'result') return resolved.result;
       const { code, filename, argv, innerCtx } = resolved;
 
-      return executeJsCode(stripShebang(code), argv, innerCtx, options.buildProcessConfig?.(), {
-        filename,
-      });
+      // `ctx.signal` identifies the run this command belongs to, so the realm
+      // child parents to the right shell job even when several runs overlap.
+      return executeJsCode(
+        stripShebang(code),
+        argv,
+        innerCtx,
+        options.buildProcessConfig?.(ctx.signal),
+        { filename }
+      );
     },
   };
 }

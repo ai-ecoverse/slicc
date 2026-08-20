@@ -10,12 +10,33 @@ import {
   formatSize,
   truncateTail,
 } from '@earendil-works/pi-coding-agent/dist/core/tools/truncate.js';
+import type { LickEvent } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { AlmostBashShell } from '../shell/index.js';
-import type { ToolDefinition, ToolResult } from './types.js';
+import type {
+  BashJobHost,
+  BashJobProcess,
+  ToolDefinition,
+  ToolInputSchema,
+  ToolResult,
+} from './types.js';
 
 const log = createLogger('tool:bash');
+
+/**
+ * Default `background_after`: how long the agent waits for a `bash` command
+ * before the run is detached and the turn continues. A command that never
+ * returns used to wedge the whole turn — merely annoying in the cone (the user
+ * cancels), unrecoverable in a scoop, where there is no user to cancel and the
+ * scoop's caller is blocked on it. Ten minutes is longer than any legitimate
+ * interactive command and short enough that a stuck run does not eat the
+ * session.
+ */
+export const DEFAULT_BASH_BACKGROUND_AFTER_SECONDS = 600;
+
+/** Bytes of a backgrounded job's output carried inline in its completion lick. */
+const BASH_LICK_PREVIEW_MAX_BYTES = 2 * 1024;
 
 /**
  * Cap on bash output returned to the model. An unbounded tool result can
@@ -153,66 +174,450 @@ function isExpectedNoMatchSearch(command: string, exitCode: number, stderr: stri
 }
 
 /**
+ * The `bash` tool's own argument bag — its `inputSchema` above is the contract.
+ * Every value arrives from the model, so each is validated here rather than
+ * trusted (`command` is the one required field; the two budgets are optional
+ * numbers whose invalid values fall back to the context default).
+ */
+export interface BashToolInput {
+  command?: unknown;
+  timeout?: unknown;
+  background_after?: unknown;
+}
+
+/** Shell result shape shared by the foreground and background paths. */
+interface ShellRunResult {
+  stdout: string;
+  stderr: string;
+  exitCode: number;
+}
+
+/** Terminal state of a shell run, normalized so neither race branch rejects. */
+type SettledRun = { ok: true; result: ShellRunResult } | { ok: false; error: string };
+
+/** Options accepted by {@link createBashTool}. */
+export interface BashToolOptions {
+  /**
+   * Seconds the agent waits before a still-running command is detached to the
+   * background. Defaults to {@link DEFAULT_BASH_BACKGROUND_AFTER_SECONDS}; a
+   * per-call `background_after` argument overrides it. `0` detaches
+   * immediately. Set by `ScoopContext` from `ScoopConfig.backgroundAfterSeconds`
+   * so a spawned scoop can be given a tighter (or looser) budget than the cone.
+   */
+  defaultBackgroundAfterSeconds?: number;
+  /**
+   * Emit the completion lick for a detached job. `ScoopContext` wires this to
+   * the orchestrator's lick handler; when absent (tests, contexts without a
+   * lick manager) a job still detaches and still writes its output file — only
+   * the notification is dropped, with a warning.
+   */
+  fireLick?: (event: LickEvent) => void;
+  /**
+   * Scoop this tool belongs to, as `LickEvent.targetScoop` — the lick is routed
+   * back to the scoop that spawned the run. `undefined` for the cone (untargeted
+   * licks route to the cone by default).
+   */
+  targetScoop?: string;
+  /**
+   * Registers each invocation as a kernel process. Without it a run is invisible
+   * to `ps`, unreachable by `kill`, and — the reason this exists — a `timeout`
+   * cannot do more than ask just-bash to stop at its next statement boundary,
+   * which never interrupts a realm-backed `node` / `python3` command.
+   */
+  jobHost?: BashJobHost;
+}
+
+/**
+ * Per-instance wiring the module-level run helpers need. Passed explicitly
+ * rather than closed over so the orchestration below stays testable and
+ * `createBashTool` stays thin.
+ */
+interface BashRunContext {
+  shell: AlmostBashShell;
+  fs: VirtualFS;
+  tempDir: string;
+  options: BashToolOptions;
+  defaultBackgroundAfter: number;
+  nextOutputSeq: () => number;
+  nextJobId: () => string;
+}
+
+/** A started run: its kernel process, its cancel handle, and its outcome. */
+interface StartedRun {
+  job: BashJobProcess | null;
+  controller: AbortController;
+  settled: Promise<SettledRun>;
+  /** Drops the TURN's abort listener (kept out of `finally` on the detach path). */
+  releaseTurnSignal: () => void;
+}
+
+/** Read an optional non-negative number argument; invalid values are ignored. */
+function readSeconds(value: unknown): number | undefined {
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) return undefined;
+  return value;
+}
+
+/**
+ * Tool description. Built per instance because the detach budget is per context
+ * (a scoop may run with a tighter one) and the model needs the real number.
+ */
+function buildDescription(defaultBackgroundAfter: number): string {
+  return (
+    'Execute a bash command. Full shell with pipes, redirects, chaining, control flow. ' +
+    'Includes: grep, rg, sed, awk, jq, find, curl, git, node, python3, sqlite3, ' +
+    'open (--view for vision), playwright-cli (browser automation). Run `commands` for full list. ' +
+    `Output is capped at ${BASH_OUTPUT_MAX_BYTES / 1024}KB (the tail is kept); when truncated the ` +
+    'full output is written to a temp file named in the result so you can page it. ' +
+    `A command still running after background_after seconds (default ${defaultBackgroundAfter}) is ` +
+    'detached: you get a job id at once and a Background Command lick delivers its exit code and ' +
+    'output later, so a stuck command never wedges the turn.'
+  );
+}
+
+/** Input schema; also per instance, for the same reason as the description. */
+function buildInputSchema(defaultBackgroundAfter: number): ToolInputSchema {
+  return {
+    type: 'object',
+    properties: {
+      command: {
+        type: 'string',
+        description: 'The bash command to execute.',
+      },
+      timeout: {
+        type: 'number',
+        description:
+          'Hard ceiling in seconds: the command is killed and this call returns an error — no ' +
+          'job, no lick. Omit for no ceiling (the default), which detaches a slow command ' +
+          'instead of killing it.',
+      },
+      background_after: {
+        type: 'number',
+        description:
+          `Seconds to wait before detaching the command. Defaults to ${defaultBackgroundAfter}. ` +
+          'Use 0 to detach immediately (dev servers, watchers), or a large value when you must ' +
+          'have the output in this turn. A smaller timeout wins: the command is killed, not detached.',
+      },
+    },
+    required: ['command'],
+  };
+}
+
+/** Result text for a run killed at its hard ceiling. */
+function timeoutResult(waitSeconds: number): ToolResult {
+  return {
+    content:
+      `Command timed out after ${waitSeconds}s and was killed; no output was captured. Re-run it ` +
+      'with a larger timeout, a larger background_after so it detaches instead of dying, or narrow ' +
+      'the command so it finishes sooner.',
+    isError: true,
+  };
+}
+
+/**
+ * Start a run: register it as a kernel process, funnel every cancel source into
+ * one controller, and hand back its (never-rejecting) outcome.
+ *
+ * Two cancel sources reach the run, and they have different lifetimes:
+ *  - The TURN's signal — the `kind:'tool'` record the tool adapter spawned.
+ *    Dropped when a run detaches, because a detached job outlives the turn.
+ *  - The JOB pid's own signal — `kill <pid>` from any shell plus the fan-out a
+ *    turn cancel / `drop_scoop` sends down the ppid tree. Kept for the whole
+ *    run, detached included: this is what makes a background job killable.
+ */
+function startRun(
+  ctx: BashRunContext,
+  command: string,
+  turnSignal: AbortSignal | undefined
+): StartedRun {
+  const controller = new AbortController();
+  const job = ctx.options.jobHost?.spawn(command) ?? null;
+
+  const onTurnAbort = () => controller.abort();
+  if (turnSignal?.aborted) controller.abort();
+  else turnSignal?.addEventListener('abort', onTurnAbort, { once: true });
+
+  if (job) {
+    if (job.signal.aborted) controller.abort();
+    else job.signal.addEventListener('abort', () => controller.abort(), { once: true });
+  }
+
+  // Never rejects: both branches of the race read this, and an unobserved
+  // rejection from a detached run would surface as an unhandled rejection in
+  // the kernel worker.
+  //
+  // `job.pid` is the third argument for a reason: the shell stamps it as the
+  // parent of any realm-backed command this run spawns, so the realm worker is
+  // a descendant of THIS job rather than of the whole turn. That is what makes
+  // the SIGKILL below reach it.
+  const settled: Promise<SettledRun> = ctx.shell
+    .executeCommand(command, controller.signal, job?.pid)
+    .then(
+      (result) => ({ ok: true, result }) as SettledRun,
+      (err) =>
+        ({ ok: false, error: err instanceof Error ? err.message : String(err) }) as SettledRun
+    );
+
+  return {
+    job,
+    controller,
+    settled,
+    releaseTurnSignal: () => turnSignal?.removeEventListener('abort', onTurnAbort),
+  };
+}
+
+/**
+ * Hard-kill a run. SIGKILL on the job pid fans out over the ppid tree, and the
+ * realm runner turns that into a synchronous `worker.terminate()` — the only
+ * uncatchable stop for a CPU-tight `node -e 'while(true){}'`. The cooperative
+ * abort is still raised for the in-worker just-bash path, which has no worker to
+ * terminate and can only stop at a statement boundary.
+ */
+function hardKill(run: StartedRun): void {
+  run.job?.kill();
+  run.controller.abort();
+  run.job?.exit(null);
+}
+
+/**
+ * Reap the job record on completion. A job that was SIGNALLED passes `null` so
+ * the manager derives the conventional signal exit code (130 / 137), matching
+ * what the tool adapter does for tool pids. The test is the JOB's signal, not the
+ * combined controller: a cancelled turn aborts the run without ever signalling
+ * the job pid, and that should record the interrupted command's own code rather
+ * than a "clean exit" the manager would derive from an absent signal.
+ */
+function finishJob(run: StartedRun, exitCode: number): void {
+  run.job?.exit(run.job.signal.aborted ? null : exitCode);
+}
+
+/**
+ * Result text for a detached run. States plainly that the turn is not blocked
+ * and that re-running is wrong, because "still running" otherwise reads to a
+ * model as a failure worth retrying.
+ */
+function detachedResult(
+  jobId: string,
+  pid: number | undefined,
+  waitSeconds: number,
+  outputPath: string,
+  timeoutSeconds: number | undefined
+): ToolResult {
+  const killNote =
+    timeoutSeconds === undefined ? '' : ` Its ${timeoutSeconds}s timeout still applies.`;
+  // The pid is the whole point of registering the job: without naming it here
+  // the model has a job id it cannot act on.
+  const pidNote =
+    pid === undefined ? '' : ` Pid ${pid}: \`ps\` lists it, \`kill ${pid}\` stops it.`;
+  return {
+    content:
+      `Still running after ${waitSeconds}s — detached as background job ${jobId}. ` +
+      'This turn is NOT blocked on it: continue with other work, and do not re-run the command. ' +
+      'A "Background Command" lick will arrive with the exit code and a preview once it finishes, ' +
+      `and its full output will be written to ${outputPath}.${pidNote}${killNote} ` +
+      'No output is available before it completes.',
+  };
+}
+
+/**
  * Create the bash tool bound to a AlmostBashShell instance. `fs` (ungated — NOT
- * the sudo-wrapped handle) backs the temp-file paging for truncated output, and
- * `tempDir` is the context's writable+readable temp directory (`/tmp` for the
- * cone, `/scoops/<folder>` for a scoop). See {@link boundBashOutput}.
+ * the sudo-wrapped handle) backs the temp-file paging for truncated output and
+ * the durable output file of a detached job, and `tempDir` is the context's
+ * writable+readable temp directory (`/tmp` for the cone, `/scoops/<folder>` for
+ * a scoop). See {@link boundBashOutput}.
  */
 export function createBashTool(
   shell: AlmostBashShell,
   fs: VirtualFS,
-  tempDir: string
+  tempDir: string,
+  options: BashToolOptions = {}
 ): ToolDefinition {
   let outputSeq = 0;
+  let jobSeq = 0;
+  const ctx: BashRunContext = {
+    shell,
+    fs,
+    tempDir,
+    options,
+    defaultBackgroundAfter:
+      readSeconds(options.defaultBackgroundAfterSeconds) ?? DEFAULT_BASH_BACKGROUND_AFTER_SECONDS,
+    nextOutputSeq: () => (outputSeq += 1),
+    nextJobId: () => `bg-${(jobSeq += 1)}`,
+  };
+
   return {
     name: 'bash',
-    description:
-      'Execute a bash command. Full shell with pipes, redirects, chaining, control flow. ' +
-      'Includes: grep, rg, sed, awk, jq, find, curl, git, node, python3, sqlite3, ' +
-      'open (--view for vision), playwright-cli (browser automation). Run `commands` for full list. ' +
-      `Output is capped at ${BASH_OUTPUT_MAX_BYTES / 1024}KB (the tail is kept); when truncated the ` +
-      'full output is written to a temp file named in the result so you can page it.',
-    inputSchema: {
-      type: 'object',
-      properties: {
-        command: {
-          type: 'string',
-          description: 'The bash command to execute.',
-        },
-      },
-      required: ['command'],
-    },
-    async execute(input: Record<string, unknown>, signal?: AbortSignal): Promise<ToolResult> {
-      const command = input['command'] as string;
-      log.debug('Execute', { command });
-
-      try {
-        const result = await shell.executeCommand(command, signal);
-
-        log.debug('Result', {
-          exitCode: result.exitCode,
-          stdoutLength: result.stdout.length,
-          stderrLength: result.stderr.length,
-        });
-
-        let output = '';
-        if (result.stdout) output += result.stdout;
-        if (result.stderr) output += result.stderr;
-        if (!output) output = `(exit code: ${result.exitCode})`;
-
-        const bounded = await boundBashOutput(output, fs, tempDir, () => (outputSeq += 1));
-
-        return {
-          content: bounded,
-          isError:
-            result.exitCode !== 0 &&
-            !isExpectedNoMatchSearch(command, result.exitCode, result.stderr),
-        };
-      } catch (err) {
-        const message = err instanceof Error ? err.message : String(err);
-        log.error('Error', { command, error: message });
-        return { content: `Shell error: ${message}`, isError: true };
-      }
-    },
+    description: buildDescription(ctx.defaultBackgroundAfter),
+    inputSchema: buildInputSchema(ctx.defaultBackgroundAfter),
+    execute: (input: BashToolInput, signal?: AbortSignal) => runBashCommand(ctx, input, signal),
   };
+}
+
+/**
+ * Persist a detached job's full (untruncated) output and announce it as a `bash`
+ * lick carrying a bounded preview. Runs long after the tool call returned, so
+ * every failure is contained here: a lost output file must not cost the agent
+ * its completion notification.
+ */
+async function deliverBackgroundJob(
+  ctx: BashRunContext,
+  jobId: string,
+  pid: number | undefined,
+  command: string,
+  outputPath: string,
+  settled: SettledRun
+): Promise<void> {
+  const output = settled.ok
+    ? [settled.result.stdout, settled.result.stderr].filter(Boolean).join('') ||
+      `(exit code: ${settled.result.exitCode})`
+    : `Shell error: ${settled.error}`;
+  const exitCode = settled.ok ? settled.result.exitCode : 1;
+
+  let persistedPath: string | undefined;
+  try {
+    await ctx.fs.writeFile(outputPath, output);
+    persistedPath = outputPath;
+  } catch (err) {
+    log.warn('Failed to persist background bash output', {
+      jobId,
+      outputPath,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+
+  if (!ctx.options.fireLick) {
+    log.warn('Background bash job finished with no lick sink', { jobId, exitCode });
+    return;
+  }
+  const preview = truncateTail(output, { maxBytes: BASH_LICK_PREVIEW_MAX_BYTES });
+  ctx.options.fireLick({
+    type: 'bash',
+    bashJobId: jobId,
+    bashCommand: command,
+    bashExitCode: exitCode,
+    ...(pid !== undefined ? { bashJobPid: pid } : {}),
+    resultPath: persistedPath,
+    preview: preview.content,
+    ...(ctx.options.targetScoop ? { targetScoop: ctx.options.targetScoop } : {}),
+    timestamp: new Date().toISOString(),
+    body: { jobId, pid: pid ?? null, command, exitCode, resultPath: persistedPath ?? null },
+  });
+}
+
+/**
+ * Stop waiting on a still-running command and let it finish on its own pid.
+ *
+ * The job record stays `running`, so `ps` lists the background job and `kill`
+ * reaches it; only the agent's wait ends here. A `timeout` above the detach
+ * point keeps applying — its remaining budget becomes a hard kill against the
+ * detached job.
+ */
+function detachRun(
+  ctx: BashRunContext,
+  run: StartedRun,
+  command: string,
+  waitSeconds: number,
+  timeoutSeconds: number | undefined,
+  backgroundAfter: number
+): ToolResult {
+  const jobId = ctx.nextJobId();
+  const pid = run.job?.pid;
+  const outputPath = `${ctx.tempDir}/bash-${jobId}.txt`;
+  const killAfter = timeoutSeconds === undefined ? undefined : timeoutSeconds - backgroundAfter;
+  const killTimer =
+    killAfter === undefined ? undefined : setTimeout(() => hardKill(run), killAfter * 1000);
+
+  void run.settled
+    .then((settled) => {
+      if (killTimer !== undefined) clearTimeout(killTimer);
+      finishJob(run, settled.ok ? settled.result.exitCode : 1);
+      return deliverBackgroundJob(ctx, jobId, pid, command, outputPath, settled);
+    })
+    .catch((err) => log.error('Background bash delivery failed', { jobId, error: err }));
+
+  log.info('Bash command detached to background', { command, jobId, pid, killAfter });
+  return detachedResult(jobId, pid, waitSeconds, outputPath, timeoutSeconds);
+}
+
+/** Format a completed run's output for the model. */
+async function foregroundResult(
+  ctx: BashRunContext,
+  command: string,
+  result: ShellRunResult
+): Promise<ToolResult> {
+  log.debug('Result', {
+    exitCode: result.exitCode,
+    stdoutLength: result.stdout.length,
+    stderrLength: result.stderr.length,
+  });
+
+  let output = '';
+  if (result.stdout) output += result.stdout;
+  if (result.stderr) output += result.stderr;
+  if (!output) output = `(exit code: ${result.exitCode})`;
+
+  return {
+    content: await boundBashOutput(output, ctx.fs, ctx.tempDir, ctx.nextOutputSeq),
+    isError:
+      result.exitCode !== 0 && !isExpectedNoMatchSearch(command, result.exitCode, result.stderr),
+  };
+}
+
+/**
+ * Run one `bash` invocation: wait up to the smaller of its two budgets, then
+ * either hard-kill it (`timeout` wins) or detach it (`background_after` wins).
+ */
+async function runBashCommand(
+  ctx: BashRunContext,
+  input: BashToolInput,
+  turnSignal?: AbortSignal
+): Promise<ToolResult> {
+  const command = input.command as string;
+  const timeoutSeconds = readSeconds(input.timeout);
+  const backgroundAfter = readSeconds(input.background_after) ?? ctx.defaultBackgroundAfter;
+  log.debug('Execute', { command, timeoutSeconds, backgroundAfter });
+
+  const run = startRun(ctx, command, turnSignal);
+
+  // A timeout at or below the detach point pre-empts detaching entirely; above
+  // it, the command detaches first and the ceiling keeps applying to the
+  // detached job (that is what makes `timeout` a kill and not a "stop waiting").
+  const timeoutFirst = timeoutSeconds !== undefined && timeoutSeconds <= backgroundAfter;
+  const waitSeconds = timeoutFirst ? (timeoutSeconds as number) : backgroundAfter;
+
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const elapsed: Promise<'elapsed'> = new Promise((resolve) => {
+    timer = setTimeout(() => resolve('elapsed'), waitSeconds * 1000);
+  });
+
+  try {
+    const outcome = await Promise.race([run.settled, elapsed]);
+
+    if (outcome === 'elapsed' && timeoutFirst) {
+      hardKill(run);
+      log.warn('Bash command timed out', {
+        command,
+        timeoutSeconds: waitSeconds,
+        pid: run.job?.pid,
+      });
+      return timeoutResult(waitSeconds);
+    }
+
+    if (outcome === 'elapsed') {
+      return detachRun(ctx, run, command, waitSeconds, timeoutSeconds, backgroundAfter);
+    }
+
+    finishJob(run, outcome.ok ? outcome.result.exitCode : 1);
+
+    if (!outcome.ok) {
+      log.error('Error', { command, error: outcome.error });
+      return { content: `Shell error: ${outcome.error}`, isError: true };
+    }
+    return await foregroundResult(ctx, command, outcome.result);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    // Dropped on every path, detach included: a detached job intentionally
+    // outlives the turn, so it must not be aborted by the turn's signal. Its
+    // own pid stays signal-reachable — that is the supported way to stop it.
+    run.releaseTurnSignal();
+  }
 }

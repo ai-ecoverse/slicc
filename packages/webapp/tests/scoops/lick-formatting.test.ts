@@ -429,6 +429,41 @@ describe('webhook lick preview attribution', () => {
     expect(formatted!.content).toContain('preview:tray.tok:c1');
   });
 
+  it('formats a backgrounded bash completion with its verdict, output path, and preview', () => {
+    const out = formatLickEventForCone({
+      type: 'bash',
+      bashJobId: 'bg-2',
+      bashCommand: 'npm run build',
+      bashExitCode: 0,
+      resultPath: '/tmp/bash-bg-2.txt',
+      preview: 'built in 12s',
+      timestamp: new Date().toISOString(),
+      body: {},
+    } as never);
+    expect(out!.label).toBe('Background Command');
+    expect(out!.content).toContain('[Background Command: bg-2]');
+    expect(out!.content).toContain('`npm run build` succeeded');
+    expect(out!.content).toContain('/tmp/bash-bg-2.txt');
+    expect(out!.content).toContain('built in 12s');
+    // The agent must not treat a delayed result as a fresh instruction to re-run.
+    expect(out!.content).toContain('do not re-run it');
+  });
+
+  it('reports a failed bash job with its exit code and survives a missing output file', () => {
+    const out = formatLickEventForCone({
+      type: 'bash',
+      bashJobId: 'bg-9',
+      bashCommand: 'make',
+      bashExitCode: 2,
+      preview: 'error: no rule',
+      timestamp: new Date().toISOString(),
+      body: {},
+    } as never);
+    expect(out!.content).toContain('failed (exit code 2)');
+    expect(out!.content).toContain('could NOT be written');
+    expect(out!.content).toContain('error: no rule');
+  });
+
   it('renders a plain webhook lick (no preview headers) as the generic Webhook Event chip', () => {
     const formatted = formatLickEventForCone({
       type: 'webhook',

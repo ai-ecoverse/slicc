@@ -8,6 +8,9 @@
 
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
 import type { MessageAttachment } from '../core/attachments.js';
+// Legal down-edge (`scoops/` → `tools/`): the JSON Schema shape a scoop's
+// structured-output contract is expressed in is owned by the tool layer.
+import type { JsonSchemaObject } from '../tools/types.js';
 
 // The runtime enumeration and guard live in the foundational `base/` layer so
 // lower layers (shell/'s `agent` command) can validate a `--thinking` value
@@ -116,6 +119,16 @@ export interface ScoopConfig {
   maxTurns?: number;
   /** Hard per-prompt-run wall-clock ceiling in ms — same semantics. */
   maxWallClockMs?: number;
+  /**
+   * Seconds the scoop's `bash` tool waits for a command before detaching it to
+   * the background and continuing the turn (the tool's `background_after`
+   * default; a per-call argument still wins). Unset → the tool's own
+   * `DEFAULT_BASH_BACKGROUND_AFTER_SECONDS` (600). This matters most for an
+   * unattended scoop: nobody is there to cancel a wedged turn, so a scoop given
+   * a tight budget fails soft (a lick arrives later) instead of hanging its
+   * caller.
+   */
+  backgroundAfterSeconds?: number;
   /** Assistant name override for this scoop */
   assistantName?: string;
   /** Model ID override (e.g., "claude-sonnet-4-20250514"). Uses globally selected model if not set. */
@@ -171,7 +184,7 @@ export interface ScoopConfig {
    * a `StructuredOutput` tool is injected so the agent must return
    * its result in the specified schema shape.
    */
-  structuredOutputSchema?: Record<string, unknown>;
+  structuredOutputSchema?: JsonSchemaObject;
 }
 
 /** Message from any channel */

@@ -40,6 +40,7 @@ Status transitions: `running` → `exited` (clean) or `killed` (any terminating 
 | `scoop-turn` | `ScoopContext.prompt()`                             | `['prompt', <truncated user text>]`     |
 | `tool`       | `tool-adapter.ts adaptTool()`                       | `[tool.name, <principal string param>]` |
 | `shell`      | `TerminalSessionHost.handleExec()` (panel terminal) | `[command-line]`                        |
+| `shell`      | `ScoopContext.spawnBashJob()` (agent `bash` tool)   | `['bash', '-c', command]`               |
 | `jsh`        | `executeJshFile` / `executeJsCode` (via realm)      | `['node', scriptPath, …args]`           |
 | `py`         | `python` / `python3` shell command (via realm)      | `['python3', …]`                        |
 
@@ -55,7 +56,7 @@ The principal-arg extraction for tools (`extractToolArg` in `tool-adapter.ts`) t
 | `SIGSTOP` | Pauses `Process.gate`. Subsequent IO-boundary `await proc.gate.wait()` calls block until SIGCONT.                                                                                                                                                                                                                                                                                                                                                             |
 | `SIGCONT` | Resumes the gate. All waiters wake at once.                                                                                                                                                                                                                                                                                                                                                                                                                   |
 
-First-wins applies only to `SIGINT` / `SIGTERM`. `SIGKILL` is uncatchable: it always overwrites `terminatedBy`, mirroring POSIX. The realm runner (`kind:'jsh'` and `kind:'py'`) is the only path with a hard-stop guarantee on SIGKILL today.
+First-wins applies only to `SIGINT` / `SIGTERM`. `SIGKILL` is uncatchable: it always overwrites `terminatedBy`, mirroring POSIX. The realm runner (`kind:'jsh'` and `kind:'py'`) is the only path with a hard-stop guarantee, and it applies that guarantee to **every** terminating signal, not just SIGKILL — see [Realm runner](#realm-runner).
 
 ## Pause / resume
 
@@ -95,9 +96,27 @@ Deliberate omissions: no `/proc/self` (would require `currentPid()` tracking whi
 
 ## Realm runner
 
-`runInRealm(opts)` spawns a per-task realm — a `DedicatedWorker` (standalone JS, both-mode Python) or a per-task sandbox iframe (extension JS) — and registers a `kind:'jsh'` (for `kind:'js'`) or `kind:'py'` process. The runner subscribes to `pm.onSignal`; on SIGKILL it calls `realm.terminate()` (`worker.terminate()` / `iframe.remove()`, both uncatchable) and exits 137. For SIGINT/SIGTERM, the runner records the state but does NOT terminate — the running script is opaque from this side; cooperative cancel of an arbitrary tool's awaits isn't possible without threading abort signals through every layer.
+`runInRealm(opts)` spawns a per-task realm — a `DedicatedWorker` (standalone JS, both-mode Python) or a per-task sandbox iframe (extension JS) — and registers a `kind:'jsh'` (for `kind:'js'`) or `kind:'py'` process. The runner subscribes to `pm.onSignal` and escalates **every** terminating signal that reaches its pid to a synchronous `realm.terminate()` (`worker.terminate()` / `iframe.remove()`, both uncatchable), exiting 137 / 130 / 143 per the POSIX 128+signo convention. Realm code is opaque from the kernel side — there is no cooperative cancel hook to await — so a recorded-but-not-terminated SIGINT would leave the realm running forever (#1116). SIGSTOP / SIGCONT are pause/resume and are ignored here.
+
+`runInRealm` takes **no** `AbortSignal`: `pm.signal(pid, …)` is its only stop path. Anything that wants to preempt realm-backed work must therefore own a pid the realm parents under, which is what the bash job below is for.
 
 The user-facing surface is the `node` (`-e`/`script.js`/stdin), `.jsh` discovery, and `python`/`python3` (`-c`/`script.py`/stdin) commands. Realm code runs inside an `AsyncFunction` (JS) or Pyodide (Python) with shimmed `console`, `process.argv`/`sys.argv`, `process.env`, `process.stdout`/`process.stderr`, `process.exit(N)` / Python `SystemExit`. The realm-host on the kernel side proxies `vfs` (read/write/list/etc.), `exec` (just-bash subcommand), and `fetch` (SecureFetch with secret substitution) over the realm's port, so realm scripts get a full Node-like surface without holding kernel-side state.
+
+## Bash jobs (agent `bash` tool)
+
+Every `bash` tool call registers a `kind:'shell'` job (`ScoopContext.spawnBashJob`) in addition to the `kind:'tool'` record the tool adapter already spawns. The job pid is passed as the third argument of `AlmostBashShell.executeCommand`, so any realm-backed command inside the run (`node`, `python3`, a `.jsh`) parents under **that job** rather than under the whole turn. That parentage is what makes preemption real: `pm.signal(jobPid, 'SIGKILL')` fans out over the ppid tree and the realm runner terminates each realm worker synchronously.
+
+| Event                                 | Effect                                                                                                                          |
+| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------- |
+| `timeout` reached                     | SIGKILL the job pid (fan-out terminates realm descendants) + cooperative abort; record reaped with the derived signal exit code |
+| `background_after` reached            | The agent stops waiting; the job record stays `running`, so `ps` lists it and `kill <pid>` reaches it                           |
+| Detached job finishes                 | Record reaped with the command's exit code; a `bash` lick carries the code, a preview, `resultPath`, and the pid                |
+| Normal turn end (`pm.exit(turnPid)`)  | No cascade — a detached job survives to deliver its lick                                                                        |
+| Turn cancel / `stop()` / `drop_scoop` | Those SIGNAL the turn pid, so the fan-out reaps the job and its realm descendants                                               |
+
+**Per-run parentage under concurrency.** Detaching makes several runs share one `AlmostBashShell`, so the single `activeShellPid` field is no longer sufficient: a detached run that spawns its realm child late would otherwise attach it to whichever run started most recently. just-bash passes each command context the `signal` its exec was started with, so the shell keeps a `WeakMap<AbortSignal, number>` (`jobPidByRunSignal`) and `buildJshProcessConfig(runSignal)` prefers it, falling back to `activeShellPid` (panel terminal) and then `getCurrentShellPid` (turn pid). Pinned by `tests/scoops/scoop-realm-parenting.test.ts`.
+
+**What is still not preemptible.** just-bash builtins (`grep`, `sed`, `jq`, …) execute in the kernel worker itself, so there is no worker to terminate: a SIGKILL on the job aborts cooperatively and just-bash observes it only at its next statement boundary. A single CPU-bound builtin blocks the worker's event loop, which also means the detach and timeout timers cannot fire while it runs. Closing that gap would mean hosting just-bash in a realm as well, which the ~108 kernel-resident supplemental commands (CDP, sudo brokers, secrets, orchestrator) currently rule out.
 
 ## Synchronous filesystem bridge
 

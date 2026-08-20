@@ -17,9 +17,11 @@ const LOCAL_ONLY: ReadonlySet<LickEvent['type']> = new Set([
   // after the leader receives a `cherry.host_event` from a follower, so it's
   // never a follower-side forward source.
   'cherry',
-  // Workflow completions, sudo-request chips, and preview lifecycle events
-  // are produced and consumed on the float that owns them.
+  // Workflow completions, backgrounded-bash completions, sudo-request chips,
+  // and preview lifecycle events are produced and consumed on the float that
+  // owns them (the bash tool runs in the leader's kernel worker).
   'workflow',
+  'bash',
   'sudo-request',
   'preview',
 ]);
@@ -33,6 +35,7 @@ const ALL_LICK_TYPES: LickEvent['type'][] = [
   'upgrade',
   'cherry',
   'workflow',
+  'bash',
   'sudo-request',
   'preview',
   'discovery',
@@ -47,6 +50,7 @@ const _exhaustive: Record<LickEvent['type'], true> = {
   upgrade: true,
   cherry: true,
   workflow: true,
+  bash: true,
   'sudo-request': true,
   preview: true,
   discovery: true,

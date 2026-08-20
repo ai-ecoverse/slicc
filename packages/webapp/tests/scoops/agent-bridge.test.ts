@@ -1449,6 +1449,35 @@ describe('createAgentBridge — run bounds + cancellation (#1972)', () => {
     expect(registerCalls[0].config).toMatchObject({ maxTurns: 25, maxWallClockMs: 120_000 });
   });
 
+  it('copies backgroundAfterSeconds into the scoop config, including 0', async () => {
+    for (const seconds of [45, 0]) {
+      const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+      const { fs } = makeMockSharedFs();
+      const bridge = createAgentBridge(orchestrator, fs, null, {
+        generateName: () => 'detached-sorbet',
+      });
+      scripts.set('agent_detached_sorbet', (obs) => obs.onSendMessage?.('done'));
+
+      await bridge.spawn({ ...BASE_OPTS, backgroundAfterSeconds: seconds });
+
+      expect(registerCalls[0].config).toMatchObject({ backgroundAfterSeconds: seconds });
+    }
+  });
+
+  it('rejects a negative backgroundAfterSeconds without spawning', async () => {
+    const { orchestrator, registerCalls } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'strict-sorbet',
+    });
+
+    const result = await bridge.spawn({ ...BASE_OPTS, backgroundAfterSeconds: -1 });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('invalid backgroundAfterSeconds');
+    expect(registerCalls).toHaveLength(0);
+  });
+
   it('rejects non-positive or fractional bounds without spawning', async () => {
     const { orchestrator, registerCalls } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();

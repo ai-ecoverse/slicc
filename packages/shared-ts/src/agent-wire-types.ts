@@ -160,6 +160,7 @@ export interface LickEvent {
     | 'upgrade'
     | 'cherry'
     | 'workflow'
+    | 'bash'
     | 'sudo-request'
     | 'preview'
     | 'discovery';
@@ -233,6 +234,22 @@ export interface LickEvent {
   /** Workflow completion (SP2): set by WorkflowRunManager on cone-origin runs. */
   workflowRunId?: string;
   workflowName?: string;
+  /**
+   * Completion of a `bash` tool run that outlived its `background_after` budget
+   * and was detached. Fired at the scoop (or cone) that started it — see
+   * `targetScoop` — so an unattended scoop still learns the outcome of a command
+   * nobody was left waiting on.
+   */
+  bashJobId?: string;
+  bashCommand?: string;
+  bashExitCode?: number;
+  /**
+   * Kernel pid the detached run held. Absent when the context has no process
+   * manager (tests, floats without a kernel host). Reported so the recipient can
+   * correlate the completion with what it saw in `ps` while the job was live.
+   */
+  bashJobPid?: number;
+  /** Durable output file: a workflow run's result JSON, or a bash job's output. */
   resultPath?: string;
   preview?: string;
   timestamp: string;

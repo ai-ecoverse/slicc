@@ -11,6 +11,7 @@ interface SpawnArgs {
   visiblePaths?: string[];
   invokingCwd?: string;
   thinkingLevel?: string;
+  backgroundAfterSeconds?: number;
   structuredOutputSchema?: Record<string, unknown>;
   persistSession?: boolean;
 }
@@ -1022,6 +1023,72 @@ describe('agent command', () => {
       expect(result.exitCode).toBe(0);
       expect(result.stdout).toMatch(/--thinking/);
       expect(result.stdout).toMatch(/off, minimal, low, medium, high, xhigh/);
+    });
+  });
+
+  describe('--background-after flag', () => {
+    it('forwards the value to the bridge', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      const result = await createAgentCommand().execute(
+        ['--background-after', '90', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(captured?.backgroundAfterSeconds).toBe(90);
+    });
+
+    it('forwards 0 (detach every command immediately) rather than treating it as unset', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(
+        ['--background-after', '0', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(captured?.backgroundAfterSeconds).toBe(0);
+    });
+
+    it('omits the field when the flag is absent', async () => {
+      let captured: SpawnArgs | undefined;
+      installBridge((args) => {
+        captured = args;
+        return { finalText: 'ok', exitCode: 0 };
+      });
+      await createAgentCommand().execute(['.', '*', 'p'], createMockCtx());
+      expect(captured?.backgroundAfterSeconds).toBeUndefined();
+    });
+
+    it('rejects a non-numeric value without invoking the bridge', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(
+        ['--background-after', 'soon', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/--background-after must be a number of seconds >= 0/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('rejects a missing value', async () => {
+      const bridge = vi.fn();
+      installBridge(bridge);
+      const result = await createAgentCommand().execute(['--background-after'], createMockCtx());
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/--background-after requires a value/);
+      expect(bridge).not.toHaveBeenCalled();
+    });
+
+    it('mentions --background-after in --help', async () => {
+      installBridge(() => ({ finalText: '', exitCode: 0 }));
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.stdout).toMatch(/--background-after/);
     });
   });
 

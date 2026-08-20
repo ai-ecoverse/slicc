@@ -1,9 +1,13 @@
 import 'fake-indexeddb/auto';
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RestrictedFS, VirtualFS } from '../../src/fs/index.js';
 import { AlmostBashShell } from '../../src/shell/index.js';
-import { createBashTool, splitCommandSegments } from '../../src/tools/bash-tool.js';
-import type { ToolDefinition } from '../../src/tools/types.js';
+import {
+  createBashTool,
+  DEFAULT_BASH_BACKGROUND_AFTER_SECONDS,
+  splitCommandSegments,
+} from '../../src/tools/bash-tool.js';
+import type { BashJobHost, ToolDefinition } from '../../src/tools/types.js';
 
 describe('splitCommandSegments', () => {
   it('splits on ;, |, && and ||', () => {
@@ -276,5 +280,371 @@ describe('Bash Tool', () => {
     expect(usrBin.content).toContain('playwright');
     expect(usrBin.content).toContain('playwright-cli');
     expect(usrBin.content).toContain('puppeteer');
+  });
+});
+
+/**
+ * A shell whose command never finishes until the test says so — the only way to
+ * exercise the detach / timeout races deterministically. Records the signal each
+ * run received so a test can assert the hard kill actually reached the shell.
+ */
+function pendingShell() {
+  const signals: (AbortSignal | undefined)[] = [];
+  const shellPids: (number | undefined)[] = [];
+  let settle!: (result: { stdout: string; stderr: string; exitCode: number }) => void;
+  let fail!: (err: Error) => void;
+  const shell = {
+    executeCommand: (_command: string, signal?: AbortSignal, shellPid?: number) => {
+      signals.push(signal);
+      shellPids.push(shellPid);
+      return new Promise<{ stdout: string; stderr: string; exitCode: number }>((res, rej) => {
+        settle = res;
+        fail = rej;
+      });
+    },
+  };
+  return {
+    shell: shell as unknown as AlmostBashShell,
+    signals,
+    shellPids,
+    settle: (result: { stdout: string; stderr: string; exitCode: number }) => settle(result),
+    fail: (err: Error) => fail(err),
+  };
+}
+
+/**
+ * A {@link BashJobHost} that records what the tool did to each job, without a
+ * real `ProcessManager` (the PM cascade itself is covered by
+ * `tests/tools/bash-job-process.test.ts`).
+ */
+function fakeJobHost(startPid = 4000) {
+  const jobs: {
+    pid: number;
+    command: string;
+    killed: number;
+    exits: (number | null)[];
+    controller: AbortController;
+  }[] = [];
+  const host: BashJobHost = {
+    spawn: (command) => {
+      const controller = new AbortController();
+      const entry = {
+        pid: startPid + jobs.length,
+        command,
+        killed: 0,
+        exits: [] as (number | null)[],
+        controller,
+      };
+      jobs.push(entry);
+      return {
+        pid: entry.pid,
+        signal: controller.signal,
+        kill: () => {
+          entry.killed += 1;
+          controller.abort();
+        },
+        exit: (code: number | null) => entry.exits.push(code),
+      };
+    },
+  };
+  return { host, jobs };
+}
+
+describe('Bash Tool background_after / timeout', () => {
+  let fs: VirtualFS;
+  let dbCounter = 0;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({ dbName: `test-bash-bg-${dbCounter++}`, wipe: true });
+  });
+
+  it('advertises both knobs and the configured default in its schema', () => {
+    const bash = createBashTool(new AlmostBashShell({ fs }), fs, '/tmp', {
+      defaultBackgroundAfterSeconds: 42,
+    });
+    const props = bash.inputSchema.properties as Record<string, { description: string }>;
+    expect(Object.keys(props)).toEqual(['command', 'timeout', 'background_after']);
+    expect(props['background_after'].description).toContain('42');
+    expect(bash.description).toContain('42');
+  });
+
+  it('defaults to ten minutes when no default is configured', () => {
+    const bash = createBashTool(new AlmostBashShell({ fs }), fs, '/tmp');
+    const props = bash.inputSchema.properties as Record<string, { description: string }>;
+    expect(props['background_after'].description).toContain(
+      String(DEFAULT_BASH_BACKGROUND_AFTER_SECONDS)
+    );
+  });
+
+  it('detaches a command that outlives background_after and reports the job', async () => {
+    const { shell } = pendingShell();
+    const bash = createBashTool(shell, fs, '/tmp');
+
+    const result = await bash.execute({ command: 'sleep 999', background_after: 0 });
+
+    expect(result.isError).toBeFalsy();
+    expect(result.content).toContain('detached as background job bg-1');
+    expect(result.content).toContain('/tmp/bash-bg-1.txt');
+    expect(result.content).toContain('NOT blocked');
+  });
+
+  it('fires a bash lick with the exit code, preview, and output file when the job finishes', async () => {
+    const { shell, settle } = pendingShell();
+    const fireLick = vi.fn();
+    const bash = createBashTool(shell, fs, '/tmp', { fireLick, targetScoop: 'andy-scoop' });
+
+    await bash.execute({ command: 'slow-build', background_after: 0 });
+    settle({ stdout: 'built ok\n', stderr: '', exitCode: 0 });
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+
+    const event = fireLick.mock.calls[0][0];
+    expect(event.type).toBe('bash');
+    expect(event.bashJobId).toBe('bg-1');
+    expect(event.bashCommand).toBe('slow-build');
+    expect(event.bashExitCode).toBe(0);
+    expect(event.resultPath).toBe('/tmp/bash-bg-1.txt');
+    expect(event.preview).toContain('built ok');
+    // Routed back to the scoop that started the run, not to the cone.
+    expect(event.targetScoop).toBe('andy-scoop');
+    expect(await fs.readFile('/tmp/bash-bg-1.txt', { encoding: 'utf-8' })).toContain('built ok');
+  });
+
+  it('leaves targetScoop unset for the cone (untargeted licks route to the cone)', async () => {
+    const { shell, settle } = pendingShell();
+    const fireLick = vi.fn();
+    const bash = createBashTool(shell, fs, '/tmp', { fireLick });
+
+    await bash.execute({ command: 'x', background_after: 0 });
+    settle({ stdout: 'done', stderr: '', exitCode: 0 });
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+
+    expect(fireLick.mock.calls[0][0].targetScoop).toBeUndefined();
+  });
+
+  it('reports a failed detached job with its exit code, and a thrown one as a shell error', async () => {
+    const failing = pendingShell();
+    const fireLick = vi.fn();
+    const bash = createBashTool(failing.shell, fs, '/tmp', { fireLick });
+    await bash.execute({ command: 'boom', background_after: 0 });
+    failing.settle({ stdout: '', stderr: 'nope\n', exitCode: 3 });
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+    expect(fireLick.mock.calls[0][0].bashExitCode).toBe(3);
+    expect(fireLick.mock.calls[0][0].preview).toContain('nope');
+
+    const throwing = pendingShell();
+    const fireLick2 = vi.fn();
+    const bash2 = createBashTool(throwing.shell, fs, '/tmp', { fireLick: fireLick2 });
+    await bash2.execute({ command: 'crash', background_after: 0 });
+    throwing.fail(new Error('shell exploded'));
+    await vi.waitFor(() => expect(fireLick2).toHaveBeenCalledTimes(1));
+    expect(fireLick2.mock.calls[0][0].bashExitCode).toBe(1);
+    expect(fireLick2.mock.calls[0][0].preview).toContain('shell exploded');
+  });
+
+  it('still persists a detached job output file when no lick sink is wired', async () => {
+    const { shell, settle } = pendingShell();
+    const bash = createBashTool(shell, fs, '/tmp');
+
+    await bash.execute({ command: 'x', background_after: 0 });
+    settle({ stdout: 'orphan output', stderr: '', exitCode: 0 });
+
+    await vi.waitFor(async () =>
+      expect(await fs.readFile('/tmp/bash-bg-1.txt', { encoding: 'utf-8' })).toContain(
+        'orphan output'
+      )
+    );
+  });
+
+  it('numbers detached jobs per tool instance', async () => {
+    const first = pendingShell();
+    const bash = createBashTool(first.shell, fs, '/tmp');
+    const a = await bash.execute({ command: 'a', background_after: 0 });
+    const b = await bash.execute({ command: 'b', background_after: 0 });
+    expect(a.content).toContain('bg-1');
+    expect(b.content).toContain('bg-2');
+  });
+
+  it('kills the command at timeout instead of detaching when timeout <= background_after', async () => {
+    const { shell, signals } = pendingShell();
+    const fireLick = vi.fn();
+    const bash = createBashTool(shell, fs, '/tmp', { fireLick });
+
+    const result = await bash.execute({ command: 'hang', timeout: 0, background_after: 5 });
+
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('timed out after 0s');
+    expect(signals[0]?.aborted).toBe(true);
+    expect(fireLick).not.toHaveBeenCalled();
+  });
+
+  it('detaches first, then still enforces a larger timeout on the detached job', async () => {
+    const { shell, signals } = pendingShell();
+    const bash = createBashTool(shell, fs, '/tmp');
+
+    const result = await bash.execute({ command: 'hang', timeout: 0.05, background_after: 0 });
+
+    expect(result.content).toContain('detached as background job');
+    expect(result.content).toContain('0.05s timeout');
+    expect(signals[0]?.aborted).toBe(false);
+    await vi.waitFor(() => expect(signals[0]?.aborted).toBe(true));
+  });
+
+  it('honors the configured default and lets a per-call argument override it', async () => {
+    const configured = pendingShell();
+    const bash = createBashTool(configured.shell, fs, '/tmp', {
+      defaultBackgroundAfterSeconds: 0,
+    });
+    const detached = await bash.execute({ command: 'x' });
+    expect(detached.content).toContain('detached as background job');
+
+    // A per-call budget the command finishes inside of keeps the result inline.
+    const quick = createBashTool(new AlmostBashShell({ fs }), fs, '/tmp', {
+      defaultBackgroundAfterSeconds: 0,
+    });
+    const inline = await quick.execute({ command: 'echo hi', background_after: 30 });
+    expect(inline.content).toContain('hi');
+    expect(inline.content).not.toContain('detached');
+  });
+
+  it('ignores a negative or non-numeric background_after and falls back to the default', async () => {
+    const bash = createBashTool(new AlmostBashShell({ fs }), fs, '/tmp', {
+      defaultBackgroundAfterSeconds: 30,
+    });
+    const result = await bash.execute({ command: 'echo hi', background_after: -5 });
+    expect(result.content).toContain('hi');
+  });
+
+  it('does not abort a detached job when the turn signal aborts afterwards', async () => {
+    const { shell, signals } = pendingShell();
+    const bash = createBashTool(shell, fs, '/tmp');
+    const controller = new AbortController();
+
+    await bash.execute({ command: 'long', background_after: 0 }, controller.signal);
+    controller.abort();
+
+    expect(signals[0]?.aborted).toBe(false);
+  });
+});
+
+describe('Bash Tool job process (ps / kill reachability)', () => {
+  let fs: VirtualFS;
+  let dbCounter = 0;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({ dbName: `test-bash-job-${dbCounter++}`, wipe: true });
+  });
+
+  it('registers one job per invocation and threads its pid into the shell', async () => {
+    const { host, jobs } = fakeJobHost();
+    const shell = new AlmostBashShell({ fs });
+    const spy = vi.spyOn(shell, 'executeCommand');
+    const bash = createBashTool(shell, fs, '/tmp', { jobHost: host });
+
+    await bash.execute({ command: 'echo hi' });
+
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0].command).toBe('echo hi');
+    // Third argument = the job pid, so realm-backed children parent to the job.
+    expect(spy.mock.calls[0][2]).toBe(jobs[0].pid);
+  });
+
+  it('reaps the job with the command exit code when it completes normally', async () => {
+    const { host, jobs } = fakeJobHost();
+    const bash = createBashTool(new AlmostBashShell({ fs }), fs, '/tmp', { jobHost: host });
+
+    await bash.execute({ command: 'exit 3' });
+
+    expect(jobs[0].exits).toEqual([3]);
+    expect(jobs[0].killed).toBe(0);
+  });
+
+  it('records the interrupted exit code when the TURN is cancelled (job never signalled)', async () => {
+    const { host, jobs } = fakeJobHost();
+    const { shell, fail } = pendingShell();
+    const bash = createBashTool(shell, fs, '/tmp', { jobHost: host });
+    const turn = new AbortController();
+
+    const pending = bash.execute({ command: 'long', background_after: 30 }, turn.signal);
+    turn.abort();
+    fail(new Error('aborted'));
+    await pending;
+
+    // Not `null`: nothing signalled the job pid, so the manager must not derive
+    // a clean exit for a command that was interrupted.
+    expect(jobs[0].exits).toEqual([1]);
+    expect(jobs[0].killed).toBe(0);
+  });
+
+  it('SIGKILLs the job at timeout so realm descendants die with it', async () => {
+    const { host, jobs } = fakeJobHost();
+    const { shell, signals } = pendingShell();
+    const bash = createBashTool(shell, fs, '/tmp', { jobHost: host });
+
+    const result = await bash.execute({ command: 'node -e "while(true){}"', timeout: 0 });
+
+    expect(result.isError).toBe(true);
+    expect(jobs[0].killed).toBe(1);
+    // `null` lets the process manager derive the signal exit code (137).
+    expect(jobs[0].exits).toEqual([null]);
+    // The cooperative abort is still raised for the in-worker just-bash path.
+    expect(signals[0]?.aborted).toBe(true);
+  });
+
+  it('keeps a detached job running (ps-visible) and names its pid for the model', async () => {
+    const { host, jobs } = fakeJobHost();
+    const { shell, settle } = pendingShell();
+    const fireLick = vi.fn();
+    const bash = createBashTool(shell, fs, '/tmp', { jobHost: host, fireLick });
+
+    const result = await bash.execute({ command: 'long-build', background_after: 0 });
+
+    // Still live: nothing reaped the record while the command runs.
+    expect(jobs[0].exits).toEqual([]);
+    expect(result.content).toContain(`Pid ${jobs[0].pid}`);
+    expect(result.content).toContain(`kill ${jobs[0].pid}`);
+
+    settle({ stdout: 'done', stderr: '', exitCode: 0 });
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+    expect(jobs[0].exits).toEqual([0]);
+    expect(fireLick.mock.calls[0][0].bashJobPid).toBe(jobs[0].pid);
+  });
+
+  it('aborts a detached run when its pid is killed from outside (kill <pid>)', async () => {
+    const { host, jobs } = fakeJobHost();
+    const { shell, signals, fail } = pendingShell();
+    const fireLick = vi.fn();
+    const bash = createBashTool(shell, fs, '/tmp', { jobHost: host, fireLick });
+
+    await bash.execute({ command: 'long-build', background_after: 0 });
+    // What `kill <pid>` does: the manager aborts the job record's controller.
+    jobs[0].controller.abort();
+    expect(signals[0]?.aborted).toBe(true);
+
+    // The shell surfaces the abort; the job still reports back rather than
+    // vanishing silently.
+    fail(new Error('aborted'));
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+    expect(fireLick.mock.calls[0][0].bashExitCode).toBe(1);
+  });
+
+  it('hard-kills a detached job when its larger timeout runs out', async () => {
+    const { host, jobs } = fakeJobHost();
+    const { shell } = pendingShell();
+    const bash = createBashTool(shell, fs, '/tmp', { jobHost: host });
+
+    await bash.execute({ command: 'hang', timeout: 0.05, background_after: 0 });
+
+    expect(jobs[0].killed).toBe(0);
+    await vi.waitFor(() => expect(jobs[0].killed).toBe(1));
+  });
+
+  it('runs unregistered (and without a pid note) when no job host is wired', async () => {
+    const { shell } = pendingShell();
+    const bash = createBashTool(shell, fs, '/tmp');
+
+    const result = await bash.execute({ command: 'x', background_after: 0 });
+
+    expect(result.content).toContain('detached as background job bg-1');
+    expect(result.content).not.toContain('Pid ');
   });
 });

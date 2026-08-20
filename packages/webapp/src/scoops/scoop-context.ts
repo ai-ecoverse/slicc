@@ -55,6 +55,7 @@ import { AlmostBashShell } from '../shell/index.js';
 import { DEFAULT_JSH_SEARCH_ROOTS } from '../shell/jsh-discovery.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import { createBashTool, createFileTools } from '../tools/index.js';
+import type { BashJobProcess } from '../tools/types.js';
 import { getAdobeSessionId } from './llm-session-id.js';
 import {
   createScoopManagementTools,
@@ -65,6 +66,16 @@ import { getLeaderStatusWithFallback } from './tray-leader.js';
 import { type RegisteredScoop, THINKING_LEVELS } from './types.js';
 
 const log = createLogger('scoop-context');
+
+/**
+ * The orchestrator's lick sink, published on `globalThis` by
+ * `Orchestrator.setLickManager` (the LickManager lives in the kernel worker,
+ * the emitters are scattered across shell commands and tools). Mirrors the
+ * `SliccGlobalHooks` shape in `orchestrator.ts`.
+ */
+type SliccLickGlobal = typeof globalThis & {
+  __slicc_lick_handler?: (event: import('@slicc/shared-ts').LickEvent) => void;
+};
 
 /**
  * Debounce for mid-turn session checkpoints (#1987): long enough to coalesce
@@ -583,7 +594,33 @@ export class ScoopContext {
       createBashTool(
         this.shell!,
         this.fs! as VirtualFS,
-        this.scoop.isCone ? '/tmp' : `/scoops/${this.scoop.folder}`
+        this.scoop.isCone ? '/tmp' : `/scoops/${this.scoop.folder}`,
+        {
+          // Unset → the tool's own ten-minute default.
+          defaultBackgroundAfterSeconds: this.scoop.config?.backgroundAfterSeconds,
+          // Route a detached job's completion lick back to THIS scoop. The cone
+          // is the default target for an untargeted lick, so it stays unset
+          // there (its `folder` is not a valid lick target alias).
+          targetScoop: this.scoop.isCone ? undefined : this.scoop.folder,
+          // Every invocation becomes a kernel pid, so `timeout` is a real kill
+          // (SIGKILL fans out to realm workers) and a detached job stays visible
+          // to `ps` / reachable by `kill`.
+          jobHost: { spawn: (command) => this.spawnBashJob(command) },
+          // Same sink `fswatch` uses to raise a lick from inside the shell: the
+          // orchestrator publishes it in `setLickManager`. Read per event rather
+          // than captured once, so a context built before the lick manager was
+          // attached still delivers.
+          fireLick: (event) => {
+            const handler = (globalThis as SliccLickGlobal).__slicc_lick_handler;
+            if (!handler) {
+              log.warn('No lick handler for background bash completion', {
+                folder: this.scoop.folder,
+              });
+              return;
+            }
+            handler(event);
+          },
+        }
       ),
       ...scoopManagementTools,
     ];
@@ -876,6 +913,42 @@ export class ScoopContext {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Register one `bash` invocation as a `kind:'shell'` process so it is a real
+   * pid: `ps` lists it, `kill <pid>` reaches it, and a SIGKILL fans out over the
+   * ppid tree to any realm-backed descendant (`node` / `python3` / `.jsh`), which
+   * `worker.terminate()`s uncatchably. The bash tool passes the pid back into
+   * `AlmostBashShell.executeCommand` so those descendants parent HERE instead of
+   * to the turn.
+   *
+   * Parented to the turn pid deliberately: `pm.exit()` (normal turn end) does not
+   * cascade, so a detached job survives to deliver its lick, while an explicit
+   * cancel / `stop()` / `drop_scoop` — all of which SIGNAL the turn pid — fans
+   * out and reaps the whole tree (#1166).
+   */
+  private spawnBashJob(command: string): BashJobProcess | null {
+    const pm = this.processManager;
+    if (!pm) return null;
+    const proc = pm.spawn({
+      kind: 'shell',
+      argv: ['bash', '-c', command],
+      cwd: this.scoop.isCone ? '/workspace' : `/scoops/${this.scoop.folder}/workspace`,
+      owner: {
+        kind: this.scoop.isCone ? 'cone' : 'scoop',
+        scoopJid: this.scoop.jid,
+      },
+      ppid: this.currentTurnProcess?.pid,
+    });
+    return {
+      pid: proc.pid,
+      signal: proc.abort.signal,
+      kill: () => {
+        pm.signal(proc.pid, 'SIGKILL');
+      },
+      exit: (exitCode) => pm.exit(proc.pid, exitCode),
+    };
   }
 
   /** Register turn process with process manager. */

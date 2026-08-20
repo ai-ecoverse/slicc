@@ -275,11 +275,11 @@ All skills (native and compatibility) are read-only — the slicc-specific `mani
 
 ### packages/webapp/src/tools/ — Agent Tools
 
-| File            | Purpose                                                               |
-| --------------- | --------------------------------------------------------------------- |
-| `bash-tool.ts`  | `bash` tool: execute shell commands via AlmostBashShell               |
-| `file-tools.ts` | `read_file`, `write_file`, `edit_file` tools for VirtualFS operations |
-| `index.ts`      | Tool factory functions (createBashTool, createFileTools)              |
+| File            | Purpose                                                                                                                                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bash-tool.ts`  | `bash` tool: execute shell commands via AlmostBashShell; each run is a `kind:'shell'` pid, bounded by `background_after` (detach + later `bash` lick) and `timeout` (SIGKILL, fans out to realm children) |
+| `file-tools.ts` | `read_file`, `write_file`, `edit_file` tools for VirtualFS operations                                                                                                                                     |
+| `index.ts`      | Tool factory functions (createBashTool, createFileTools)                                                                                                                                                  |
 
 ### packages/webapp/src/ui/ — User Interface
 

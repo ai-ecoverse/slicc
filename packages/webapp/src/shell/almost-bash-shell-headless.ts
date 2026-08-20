@@ -293,14 +293,32 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   private activeShellPid: number | undefined;
 
   /**
+   * Per-run parent pid, keyed by the run's own abort signal.
+   *
+   * `activeShellPid` alone is a single mutable field, which is correct only
+   * while one `executeCommand` is in flight per shell. The agent's `bash` tool
+   * breaks that assumption on purpose: a detached run keeps executing after the
+   * tool returned, so a later command's pid would be the "active" one when the
+   * detached run finally spawns its realm child, and a `kill` would hit the
+   * wrong tree. just-bash hands every command context the `signal` its exec was
+   * started with, so that signal identifies the run — a `WeakMap` on it gives
+   * exact parentage with no cleanup (entries die with the signal).
+   */
+  private readonly jobPidByRunSignal = new WeakMap<AbortSignal, number>();
+
+  /**
    * Stable callback handed to realm-backed commands (`node` / `python`)
    * via `createSupplementalCommands`. Resolves the per-exec jsh process
    * config (PM, owner, parent pid) lazily at command-execution time. A
    * bound class field rather than an inline constructor arrow so the
    * (already large) constructor stays under the cognitive-complexity cap.
+   *
+   * `runSignal` is the calling command's `ctx.signal`; it disambiguates
+   * concurrent runs (see {@link jobPidByRunSignal}).
    */
-  private readonly resolveJshProcessConfig = (): JshProcessConfig | undefined =>
-    this.buildJshProcessConfig();
+  private readonly resolveJshProcessConfig = (
+    runSignal?: AbortSignal
+  ): JshProcessConfig | undefined => this.buildJshProcessConfig(runSignal);
 
   /**
    * When sudo is wired with `defaultDisposition: 'require-approval'` the
@@ -590,6 +608,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const previousShellPid = this.activeShellPid;
     if (shellPid !== undefined) this.activeShellPid = shellPid;
+    // Pin the parentage to this run's signal too, so a run that outlives the
+    // call (the bash tool's detached jobs) still parents its realm children
+    // correctly once `activeShellPid` has moved on to a later command.
+    if (shellPid !== undefined && signal !== undefined) {
+      this.jobPidByRunSignal.set(signal, shellPid);
+    }
     try {
       const result = await this.runCommand(command, signal);
       return {
@@ -1222,15 +1246,19 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * `undefined` when no manager is wired (the jsh-executor then
    * skips registration).
    */
-  protected buildJshProcessConfig(): JshProcessConfig | undefined {
+  protected buildJshProcessConfig(runSignal?: AbortSignal): JshProcessConfig | undefined {
     if (!this.options.processManager || !this.options.processOwner) return undefined;
     return {
       processManager: this.options.processManager,
       owner: this.options.processOwner,
-      // Prefer the per-exec shell pid (panel terminal) and fall back to
-      // the static `getCurrentShellPid` (scoop turn pid) so both the
-      // panel and the agent's bash tool parent realm children correctly.
-      getParentPid: () => this.activeShellPid ?? this.options.getCurrentShellPid?.(),
+      // Preference order: the pid registered for THIS run (exact under
+      // concurrency — the agent's bash tool detaches runs, so several can be in
+      // flight on one shell), then the per-exec field the panel terminal sets,
+      // then the static `getCurrentShellPid` (scoop turn pid).
+      getParentPid: () =>
+        (runSignal === undefined ? undefined : this.jobPidByRunSignal.get(runSignal)) ??
+        this.activeShellPid ??
+        this.options.getCurrentShellPid?.(),
     };
   }
 }

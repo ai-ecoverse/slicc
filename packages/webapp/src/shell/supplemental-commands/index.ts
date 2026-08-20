@@ -165,7 +165,7 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    * Returns `undefined` on floats with no wired ProcessManager (the realm
    * then falls back to the global PM / an ephemeral PM, parented to pid 1).
    */
-  buildProcessConfig?: () => JshProcessConfig | undefined;
+  buildProcessConfig?: (runSignal?: AbortSignal) => JshProcessConfig | undefined;
 }
 
 export function createSupplementalCommands(options: SupplementalCommandsConfig = {}): Command[] {

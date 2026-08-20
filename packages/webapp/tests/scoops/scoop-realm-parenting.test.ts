@@ -79,8 +79,8 @@ describe('PR #1166 (P1) — agent bash-tool realm children parent under the scoo
       processOwner: { kind: 'scoop', scoopJid: 'scoop_test' },
       getCurrentShellPid: () => turn.pid,
     });
-    // The agent's `bash` tool calls executeCommand WITHOUT a shell pid, so the
-    // realm child must fall back to `getCurrentShellPid` (the scoop-turn pid).
+    // A caller with no per-run job pid (any `executeCommand` without one) must
+    // still fall back to `getCurrentShellPid` (the scoop-turn pid).
     const execPromise = shell.executeCommand(YIELDING_NODE);
     const realmPid = await waitForRealmPid(pm);
     const realm = pm.get(realmPid)!;
@@ -93,6 +93,58 @@ describe('PR #1166 (P1) — agent bash-tool realm children parent under the scoo
     shell.dispose();
     expect(outcome.timedOut, 'realm child survived the scoop-turn signal').toBe(false);
     expect(realmStatus, 'realm child still running after scoop-turn SIGTERM').not.toBe('running');
+  }, 10_000);
+
+  it("parents each concurrent run's realm child to ITS OWN job pid", async () => {
+    // The bash tool detaches slow commands, so two runs share one shell. The
+    // per-run parentage must follow the run, not whichever `executeCommand`
+    // touched `activeShellPid` last — otherwise `kill <pid>` on one job reaps
+    // the other job's realm worker.
+    const fs = await makeFs();
+    const pm = new ProcessManager();
+    const turn = spawnTurn(pm);
+    const shell = new AlmostBashShell({
+      fs,
+      cwd: '/scoops/test/workspace',
+      browserAPI: {} as BrowserAPI,
+      processManager: pm,
+      processOwner: { kind: 'scoop', scoopJid: 'scoop_test' },
+      getCurrentShellPid: () => turn.pid,
+    });
+    const spawnJob = (command: string) =>
+      pm.spawn({
+        kind: 'shell',
+        argv: ['bash', '-c', command],
+        cwd: '/scoops/test/workspace',
+        owner: { kind: 'scoop', scoopJid: 'scoop_test' },
+        ppid: turn.pid,
+      });
+
+    // Job A spawns its realm child LATE (after job B has taken over as the
+    // most-recent run) — the exact shape that mis-parented before.
+    const slowThenRealm = `sleep 0.3 && ${YIELDING_NODE}`;
+    const jobA = spawnJob(slowThenRealm);
+    const jobB = spawnJob('sleep 5');
+    const abortA = new AbortController();
+    const abortB = new AbortController();
+    const execA = shell.executeCommand(slowThenRealm, abortA.signal, jobA.pid);
+    const execB = shell.executeCommand('sleep 5', abortB.signal, jobB.pid);
+
+    const realmPid = await waitForRealmPid(pm);
+    expect(pm.get(realmPid)!.ppid, "realm child must parent to its own run's job pid").toBe(
+      jobA.pid
+    );
+
+    // And the consequence that matters: killing job A reaches that realm child
+    // while job B is untouched.
+    pm.signal(jobA.pid, 'SIGKILL');
+    expect(pm.get(realmPid)?.terminatedBy).toBe('SIGKILL');
+    expect(pm.get(jobB.pid)?.status).toBe('running');
+
+    abortA.abort();
+    abortB.abort();
+    await Promise.allSettled([execA, execB]);
+    shell.dispose();
   }, 10_000);
 
   it('control: without the turn-pid wiring the realm orphans at ppid:1 and survives', async () => {
