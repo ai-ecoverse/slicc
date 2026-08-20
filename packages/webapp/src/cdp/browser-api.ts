@@ -166,12 +166,16 @@ export class BrowserAPI {
   }
 
   /**
-   * Construct a {@link HarRecorder} bound to this browser's current transport.
+   * Construct a {@link HarRecorder} bound to a CDP transport.
    * Lets the shell-layer `record` handler create a recorder without importing
    * the cdp-layer class directly (which would invert the layer stack).
+   *
+   * Pass the `transport` that produced the recording's session ID so the
+   * recorder stays bound to that CDP channel even if a concurrent operation
+   * swaps `this.client` in the meantime; defaults to the current transport.
    */
-  createHarRecorder(fs: VirtualFS): HarRecorder {
-    return new HarRecorder(this.client, fs);
+  createHarRecorder(fs: VirtualFS, transport: CDPTransport = this.client): HarRecorder {
+    return new HarRecorder(transport, fs);
   }
 
   /**

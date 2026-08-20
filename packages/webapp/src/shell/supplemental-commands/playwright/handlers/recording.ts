@@ -23,7 +23,7 @@ export const recordHandler: PlaywrightHandler = async ({
   });
   const sessionId = attachResult['sessionId'] as string;
   if (!state.harRecorder) {
-    state.harRecorder = browser.createHarRecorder(fs);
+    state.harRecorder = browser.createHarRecorder(fs, transport);
   }
   const recordingId = await state.harRecorder.startRecording(newTargetId, sessionId, filterCode);
   return {
