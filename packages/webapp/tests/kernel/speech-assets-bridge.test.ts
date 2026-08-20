@@ -117,4 +117,65 @@ describe('speech-assets-bridge', () => {
     ).resolves.toBeUndefined();
     stop();
   });
+
+  it('coalesces concurrent requests onto ONE ensure run and answers every caller', async () => {
+    // `hear --warmup`, `say --warmup` and the composer warmup all stage the same
+    // files; two overlapping `hf download`s of one repo is the staging race.
+    let runs = 0;
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    let emit!: (p: SpeechAssetProgress) => void;
+    const stop = installSpeechAssetsResponder({
+      instanceId: 'co',
+      ensure: async (onProgress) => {
+        runs += 1;
+        emit = onProgress;
+        await gate;
+        return { ok: true };
+      },
+    });
+    const seenA: SpeechAssetProgress[] = [];
+    const seenB: SpeechAssetProgress[] = [];
+    const a = callEnsureSpeechAssets({ instanceId: 'co', onProgress: (p) => seenA.push(p) });
+    // Let A's request reach the responder before B arrives.
+    await new Promise((r) => setTimeout(r, 0));
+    const b = callEnsureSpeechAssets({ instanceId: 'co', onProgress: (p) => seenB.push(p) });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(runs).toBe(1);
+    emit({ asset: 'owner/model', phase: 'downloaded', filesLoaded: 1, filesTotal: 2 });
+    await new Promise((r) => setTimeout(r, 0));
+    // Progress fans out to BOTH subscribers, each under its own request id.
+    expect(seenA).toHaveLength(1);
+    expect(seenB).toHaveLength(1);
+    release();
+    await expect(Promise.all([a, b])).resolves.toEqual([undefined, undefined]);
+    expect(runs).toBe(1);
+
+    // After the run settled, a new request starts a fresh (fast no-op) run.
+    release = () => {};
+    await callEnsureSpeechAssets({ instanceId: 'co' }).catch(() => {});
+    expect(runs).toBe(2);
+    stop();
+  });
+
+  it('fans a failure of the shared run out to every joined caller', async () => {
+    let reject!: (e: Error) => void;
+    const stop = installSpeechAssetsResponder({
+      instanceId: 'cf',
+      ensure: () =>
+        new Promise((_r, rej) => {
+          reject = rej;
+        }),
+    });
+    const a = callEnsureSpeechAssets({ instanceId: 'cf' });
+    await new Promise((r) => setTimeout(r, 0));
+    const b = callEnsureSpeechAssets({ instanceId: 'cf' });
+    await new Promise((r) => setTimeout(r, 0));
+    reject(new Error('HF unreachable'));
+    await expect(a).rejects.toThrow('HF unreachable');
+    await expect(b).rejects.toThrow('HF unreachable');
+    stop();
+  });
 });

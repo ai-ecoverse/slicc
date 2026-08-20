@@ -98,13 +98,26 @@ export interface EnsureSpeechAssetsResult {
   repos: Array<{ repo: string; downloaded: number; skipped: number }>;
 }
 
-/** Stage the ort wasm runtime if any known dist file is missing. */
+/**
+ * The dist files an ort install MUST carry for speech to run: the JSEP
+ * (WebGPU) and plain SIMD (CPU) threaded builds. The remaining entries of
+ * `ORT_WASM_DIST_FILES` (asyncify / jspi variants) come and go across ort-web
+ * releases and are read only when present, so their absence must NOT trigger
+ * a reinstall: `ipk add` rewrites the whole `dist/` directory, and an engine
+ * that is loading at that moment reads ENOENT for every file and fails with
+ * the misleading "onnxruntime-web is not installed".
+ */
+const ORT_REQUIRED_DIST_FILES: ReadonlyArray<string> = ORT_WASM_DIST_FILES.filter(
+  (f) => !/\.(asyncify|jspi)\./.test(f)
+);
+
+/** Stage the ort wasm runtime if any REQUIRED dist file is missing. */
 async function ensureOrtStaged(
   deps: EnsureSpeechAssetsDeps,
   onProgress?: SpeechAssetProgressFn
 ): Promise<boolean> {
   const present = await Promise.all(
-    ORT_WASM_DIST_FILES.map((f) => deps.fs.exists(`${ORT_DIST_VFS_PATH}${f}`))
+    ORT_REQUIRED_DIST_FILES.map((f) => deps.fs.exists(`${ORT_DIST_VFS_PATH}${f}`))
   );
   if (present.every(Boolean)) {
     onProgress?.({ asset: ORT_PACKAGE, phase: 'present' });

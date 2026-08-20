@@ -91,13 +91,14 @@ describe('downloadHfRepo', () => {
     expect(await fs.exists('/m/b.txt')).toBe(false);
   });
 
-  it('skips byte-present files unless force is set', async () => {
+  it('skips files already present at the listed byte length unless force is set', async () => {
     const fetch = makeFetch({ 'a.txt': bytes('A') });
     await fs.mkdir('/m', { recursive: true });
-    await fs.writeFile('/m/a.txt', bytes('PRE'));
+    // Same length as the listed file → complete → skipped (content untouched).
+    await fs.writeFile('/m/a.txt', bytes('P'));
     const skip = await downloadHfRepo({ fetch, fs, repo: 'owner/name', targetDir: '/m' });
     expect(skip).toMatchObject({ downloaded: 0, skipped: 1 });
-    expect(await fs.readFile('/m/a.txt')).toBe('PRE');
+    expect(await fs.readFile('/m/a.txt')).toBe('P');
     const forced = await downloadHfRepo({
       fetch,
       fs,
@@ -142,5 +143,40 @@ describe('downloadHfRepo', () => {
     );
     expect(err).not.toBeInstanceOf(HfFileDownloadError);
     expect(String(err)).toMatch(/has no files/);
+  });
+
+  it('re-downloads a present file whose size differs from the listing (torn write)', async () => {
+    // A download that died mid-stream (or a concurrent stager still writing)
+    // leaves a file of the wrong length. Presence alone must not "skip" it —
+    // the engine would later fail to load it with a size-mismatch EIO.
+    const fetch = makeFetch({ 'model.onnx': bytes('COMPLETE') });
+    await fs.mkdir('/m', { recursive: true });
+    await fs.writeFile('/m/model.onnx', bytes('COMP'));
+    const events: HfFileEvent[] = [];
+    const r = await downloadHfRepo({
+      fetch,
+      fs,
+      repo: 'owner/name',
+      targetDir: '/m',
+      progress: { onFile: (e) => events.push(e) },
+    });
+    expect(r).toMatchObject({ downloaded: 1, skipped: 0 });
+    expect(await fs.readFile('/m/model.onnx')).toBe('COMPLETE');
+    expect(events[0]).toMatchObject({ file: 'model.onnx', status: 'downloaded', bytes: 8 });
+  });
+
+  it('keeps presence-only skipping for an explicit file list (no declared sizes)', async () => {
+    const fetch = makeFetch({ 'a.txt': bytes('A') });
+    await fs.mkdir('/m', { recursive: true });
+    await fs.writeFile('/m/a.txt', bytes('PRE'));
+    const r = await downloadHfRepo({
+      fetch,
+      fs,
+      repo: 'owner/name',
+      targetDir: '/m',
+      files: ['a.txt'],
+    });
+    expect(r).toMatchObject({ downloaded: 0, skipped: 1 });
+    expect(await fs.readFile('/m/a.txt')).toBe('PRE');
   });
 });
