@@ -128,6 +128,27 @@ describe('FileMentionResolver', () => {
     expect((await resolver.resolve('./pkg/main.ts')).matches).toEqual(['/workspace/pkg/main.ts']);
   });
 
+  it('resolves a ~/-prefixed mention', async () => {
+    // No absolute VFS path ends with a literal `~/` segment, so the prefix has
+    // to be stripped or these mentions could never match.
+    const fs = fakeVfs(['/workspace/.config/app.toml']);
+    const resolver = new FileMentionResolver(fs, ROOTS);
+    expect((await resolver.resolve('~/.config/app.toml')).matches).toEqual([
+      '/workspace/.config/app.toml',
+    ]);
+  });
+
+  it('resolves a ../-prefixed mention, however deeply relative', async () => {
+    const fs = fakeVfs(['/workspace/pkg/src/main.ts']);
+    const resolver = new FileMentionResolver(fs, ROOTS);
+    expect((await resolver.resolve('../src/main.ts')).matches).toEqual([
+      '/workspace/pkg/src/main.ts',
+    ]);
+    expect((await resolver.resolve('../../src/main.ts')).matches).toEqual([
+      '/workspace/pkg/src/main.ts',
+    ]);
+  });
+
   it('builds the index once no matter how many lookups follow', async () => {
     const fs = fakeVfs(['/workspace/a.ts', '/workspace/b.ts', '/workspace/c.ts']);
     const resolver = new FileMentionResolver(fs, { ...ROOTS, ttlMs: Number.POSITIVE_INFINITY });

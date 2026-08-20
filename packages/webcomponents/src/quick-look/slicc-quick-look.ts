@@ -419,6 +419,15 @@ export class SliccQuickLook extends HTMLElement {
           newFile: { name, contents },
           containerWrapper: mount,
         });
+        // A `path:42` mention opens on the DIFF whenever the file is modified,
+        // so the line has to be honoured here too — otherwise the advertised
+        // path (clicking `main.ts:42`) silently loses its highlight on exactly
+        // the files most likely to be discussed.
+        if (opts.line !== undefined) {
+          // `additions` is the post-change side — the line numbers a `path:42`
+          // mention refers to.
+          diff.setSelectedLines({ start: opts.line, end: opts.line, side: 'additions' });
+        }
       } else {
         const file = new mod.File(codeOptions);
         file.render({ file: { name, contents }, containerWrapper: mount });

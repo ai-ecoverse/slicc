@@ -93,10 +93,26 @@ const DEFAULT_MAX_DEPTH = 12;
  */
 const DEFAULT_TTL_MS = 30_000;
 
-/** Normalize a mention into something comparable with a VFS path. */
+/**
+ * Normalize a mention into something comparable with a VFS path.
+ *
+ * The detector emits the prefixes people actually type — `./`, `../`, `~/` —
+ * and none of them survive a suffix match: no absolute VFS path ends with a
+ * literal `~/` or `../` segment, so a mention like `~/.config/app.toml` could
+ * never resolve. Each is stripped to the meaningful tail (`.config/app.toml`),
+ * which the suffix rule then matches at a segment boundary wherever it really
+ * lives. That is deliberately looser than expanding `~` to a specific home
+ * directory: the VFS has several plausible roots, and a suffix match is both
+ * simpler and more forgiving of a mention written relative to a cwd we cannot
+ * know.
+ */
 function normalizeQuery(query: string): string {
   let path = query.trim();
-  if (path.startsWith('./')) path = path.slice(2);
+  // Repeated `../` from a deeply relative mention all collapse the same way.
+  while (path.startsWith('./') || path.startsWith('../')) {
+    path = path.slice(path.startsWith('./') ? 2 : 3);
+  }
+  if (path.startsWith('~/')) path = path.slice(2);
   return path.replace(/\/{2,}/g, '/');
 }
 

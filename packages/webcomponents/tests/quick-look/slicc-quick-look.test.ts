@@ -267,6 +267,43 @@ describe('slicc-quick-look', () => {
       expect(await waitForRich(ql)).toBe(true);
     });
 
+    it('honours a line number in diff mode, not just whole-file mode', async () => {
+      // `openFilePreview` opens on the diff whenever a file is modified and
+      // still forwards `line`, so a `main.ts:42` mention would otherwise lose
+      // its highlight on exactly the files most likely to be discussed.
+      SliccQuickLook.open({
+        path: '/repo/src/main.ts',
+        content: 'const a = 1;\nconst b = 2;\nconst c = 3;\n',
+        mimeType: 'text/typescript',
+        baseContent: 'const a = 1;\nconst b = 0;\nconst c = 3;\n',
+        gitStatus: 'modified',
+        line: 2,
+      });
+      const withLine = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(await waitForRich(withLine)).toBe(true);
+      const selectedHtml =
+        withLine.shadowRoot?.querySelector('diffs-container')?.shadowRoot?.innerHTML ?? '';
+
+      // Compare against the same diff rendered WITHOUT a line, rather than
+      // asserting on the library's internal class names: the point is that the
+      // selection reaches the diff at all, and the markup that expresses it is
+      // the library's business.
+      SliccQuickLook.open({
+        path: '/repo/src/main.ts',
+        content: 'const a = 1;\nconst b = 2;\nconst c = 3;\n',
+        mimeType: 'text/typescript',
+        baseContent: 'const a = 1;\nconst b = 0;\nconst c = 3;\n',
+        gitStatus: 'modified',
+      });
+      const withoutLine = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(await waitForRich(withoutLine)).toBe(true);
+      const plainHtml =
+        withoutLine.shadowRoot?.querySelector('diffs-container')?.shadowRoot?.innerHTML ?? '';
+
+      expect(selectedHtml).not.toBe('');
+      expect(selectedHtml).not.toBe(plainHtml);
+    });
+
     it('does not upgrade a binary preview', async () => {
       SliccQuickLook.open({
         path: '/a/photo.png',

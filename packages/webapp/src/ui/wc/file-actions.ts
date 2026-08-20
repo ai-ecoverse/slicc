@@ -159,19 +159,26 @@ export function wireFileActions(deps: FileActionDeps): void {
     // Preview / Reference / Download used to be hover buttons on the row. The
     // tree's renderer has no slot for arbitrary row controls, so they live here
     // now — the events they raise are unchanged.
+    //
+    // Rename / Duplicate / Delete are FILE-only, matching the old tree (which
+    // drew no action buttons on directory rows at all). They are not merely
+    // untested on directories, they cannot work: `copyFileContent` reads the
+    // path as a file and fails with EISDIR, and `rm` without `recursive` fails
+    // on a populated directory. Offering them would advertise operations that
+    // always error.
     const items: MenuItem[] = [
       { id: 'preview', label: 'Preview', visible: isFile },
       { id: 'reference', label: 'Reference in chat', visible: isFile },
       { id: 'download', label: 'Download', visible: isFile },
-      { id: 'rename', label: 'Rename' },
-      { id: 'duplicate', label: 'Duplicate' },
+      { id: 'rename', label: 'Rename', visible: isFile },
+      { id: 'duplicate', label: 'Duplicate', visible: isFile },
       { id: 'copy-path', label: 'Copy path' },
       {
         id: 'open-browser',
         label: 'Open in browser',
-        visible: isPreviewableInBrowser(path),
+        visible: isFile && isPreviewableInBrowser(path),
       },
-      { id: 'delete', label: 'Delete', destructive: true },
+      { id: 'delete', label: 'Delete', destructive: true, visible: isFile },
     ];
     // dispatchTarget: the file tree host outlives the periodic 3s refresh that
     // rebuilds row DOM (and thus `anchor`) out from under a still-open menu.
@@ -184,14 +191,21 @@ export function wireFileActions(deps: FileActionDeps): void {
     const { path } = context;
     try {
       switch (action) {
+        // Re-dispatched rather than handled inline: `file-preview` /
+        // `file-reference` / `file-download` are the component's documented
+        // events, and hosts (plus the stories) listen for them. Calling the
+        // implementations directly would make the menu work while silently
+        // breaking every other consumer of the contract.
         case 'preview':
-          await openFilePreview(await openFs(), path);
-          break;
         case 'reference':
-          insertReference(path);
-          break;
         case 'download':
-          await downloadFile(await openFs(), path);
+          fileTree.dispatchEvent(
+            new CustomEvent(`file-${action}`, {
+              detail: { id: path, path },
+              bubbles: true,
+              composed: true,
+            })
+          );
           break;
         case 'copy-path':
           await navigator.clipboard.writeText(path);
