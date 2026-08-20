@@ -1666,12 +1666,71 @@ jobs:
       - name: Pack
         run: echo "tarball=$(npm pack --quiet | tail -1)" >> "$GITHUB_OUTPUT"
         id: pack
+      # `npm install -g <tarball>` and `npx sliccy@file:…` resolve the packed
+      # tarball's dependencies FRESH from the registry — the repo lockfile does
+      # not apply to either — so this is the one job whose result depends on
+      # registry state at the moment it runs. That is deliberate (it is what a
+      # real `npm i -g sliccy` does), but it means transient registry flux fails
+      # a job that has nothing to do with the diff under test.
+      #
+      # Seen 2026-08-20: a newly published `@peculiar/*` release pinned
+      # `@peculiar/asn1-schema@^2.9.4` before that version had replicated to the
+      # runner's registry mirror, and the install died with
+      # `ETARGET No matching version found`. The same commit passed this job 15
+      # minutes earlier and again 15 minutes later. npm's own fetch-retries do
+      # not cover it — the packument fetch SUCCEEDS, it just does not list the
+      # version yet — so nothing retried and a green PR (#2216) was dequeued from
+      # the merge queue, where a run gets no second chance.
+      #
+      # `prefer-online` carries as much weight as the loop: without it a retry
+      # can re-read the same stale packument from the runner's metadata cache and
+      # fail identically. A dependency that genuinely does not resolve still
+      # fails, just after ~45s of trying.
       - name: Test global install
+        env:
+          npm_config_prefer_online: 'true'
         run: |
-          npm install -g ./${{ steps.pack.outputs.tarball }}
+          set -o pipefail
+          attempts=3
+          for i in $(seq 1 "$attempts"); do
+            echo "::group::npm install -g (attempt $i/$attempts)"
+            status=0
+            npm install -g "./${{ steps.pack.outputs.tarball }}" || status=$?
+            echo "::endgroup::"
+            if [ "$status" -eq 0 ]; then
+              break
+            fi
+            if [ "$i" -ge "$attempts" ]; then
+              echo "global install failed (exit $status) after $attempts attempts" >&2
+              exit "$status"
+            fi
+            delay=$((i * 15))
+            echo "global install failed (exit $status) on attempt $i/$attempts; retrying in ${delay}s" >&2
+            sleep "$delay"
+          done
           slicc --version
       - name: Test npx
-        run: npx --yes "sliccy@file:./${{ steps.pack.outputs.tarball }}" --version
+        env:
+          npm_config_prefer_online: 'true'
+        run: |
+          set -o pipefail
+          attempts=3
+          for i in $(seq 1 "$attempts"); do
+            echo "::group::npx (attempt $i/$attempts)"
+            status=0
+            npx --yes "sliccy@file:./${{ steps.pack.outputs.tarball }}" --version || status=$?
+            echo "::endgroup::"
+            if [ "$status" -eq 0 ]; then
+              exit 0
+            fi
+            if [ "$i" -ge "$attempts" ]; then
+              echo "npx failed (exit $status) after $attempts attempts" >&2
+              exit "$status"
+            fi
+            delay=$((i * 15))
+            echo "npx failed (exit $status) on attempt $i/$attempts; retrying in ${delay}s" >&2
+            sleep "$delay"
+          done
 
   # Wait for any in-progress release before allowing merge queue to land.
   # Only runs on merge_group events; skipped (= passing) for PRs.
