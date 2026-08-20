@@ -51,10 +51,11 @@ never-rules below flag what a reviewer must recognise.
 
 ## File mentions + preview
 
-Clicking a file name the agent wrote in chat. Four modules, deliberately split so the guessing and the verifying stay separate:
+Clicking a file name the agent wrote in chat. Five modules, deliberately split so the guessing and the verifying stay separate:
 
 - `core/file-mentions.ts` — the heuristic. Pure; finds CANDIDATES in prose and knows nothing about the VFS.
-- `core/file-mention-resolver.ts` — checks candidates against the VFS via a lazily built, bounded basename index.
+- `core/tool-call-paths.ts` — harvests the paths a tool call's parameters named (bash redirects, `path`-ish fields), so prose can be read against what the agent already did.
+- `core/file-mention-resolver.ts` — checks candidates against the VFS via a lazily built, bounded basename index, with those paths as hints.
 - `ui/file-mention-linker.ts` — walks a rendered message and links only what resolved.
 - `ui/wc/wire-file-mentions.ts` — lifecycle: observes the thread, waits for streaming to finish, opens the preview.
 
@@ -66,6 +67,9 @@ Non-obvious rules:
 - **Never linkify a streaming bubble.** A half-arrived path resolves to nothing; bubbles are processed only once `streaming` clears.
 - **`getMimeType()` (`core/mime-types.ts`) is for SERVING, `sniffFileType()` (`core/file-type.ts`) is for READING.** Never swap them: sniffing a type you then put in a `Content-Type` header is how MIME-confusion bugs happen, and serving's conservative `application/octet-stream` fallback is exactly what made `.jsh` unpreviewable. Precedence is magic bytes → extension → UTF-8 decodability.
 - **`isomorphic-git` is imported lazily** in `git-preview-source.ts`; the UI layer must not pull the `src/git/` stack for a preview. Its fs shim is read-only ON PURPOSE — a preview surface must never be able to write to a repo.
+- **Hints come from the typed `ToolCall`, not from parsed markup.** `wc-message-view.ts` stamps each rendered tool row with `data-file-paths` (JSON) at render time; `wire-file-mentions.ts` reads the rows that PRECEDE a bubble in document order — chronological in a transcript — capped at the most recent 40. A hint is believed only after `stat()` confirms it, which is what lets it resolve a file outside the indexed roots (`/home/lars/foo.md`) without ever inventing a link.
+- **A hint without a directory is dropped.** The whole value of a hint is the path segment prose does not carry; a bare basename tells the resolver nothing the index did not already know, and would only cost a `stat()`.
+- **Markdown is detected by EXTENSION, on purpose** (`richPreviewKind` in `core/file-type.ts`). It has no magic bytes and is byte-identical to plain text — the name is the only declaration there is, and being wrong changes only which view opens first. Markdown is converted by `ui/message-renderer.ts` (DOMPurify-sanitized) and mounted inline; **raw HTML is never sanitized and never mounted inline** — it goes to Quick Look's sandboxed iframe. Documents over 512 KB get no rendered view (synchronous conversion would freeze the overlay).
 - **The mention resolver's index is bounded** (`maxEntries`, `maxDepth`, skipped `node_modules`-class directories). A mention that would only resolve past the ceiling stays plain text; stalling the transcript to prove otherwise is worse.
 
 ## Never-Rules

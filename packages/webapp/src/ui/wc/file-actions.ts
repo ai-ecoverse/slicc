@@ -6,10 +6,11 @@
 import type { MenuItem } from '@slicc/webcomponents';
 import { SliccOverflowMenu, SliccQuickLook } from '@slicc/webcomponents';
 
-import { sniffFileType } from '../../core/file-type.js';
+import { richPreviewKind, sniffFileType } from '../../core/file-type.js';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../../kernel/writable-vfs-client.js';
 import { readGitBase } from '../git-preview-source.js';
+import { renderMessageContent } from '../message-renderer.js';
 
 function isPreviewableInBrowser(path: string): boolean {
   const ext = path.slice(path.lastIndexOf('.')).toLowerCase();
@@ -37,6 +38,43 @@ async function readAndIdentify(
   bytes.set(raw);
   const { mime, text } = sniffFileType(path, bytes);
   return { mime, text, bytes };
+}
+
+/**
+ * Beyond this size a file gets no rendered view.
+ *
+ * Rendering is synchronous work on the main thread — `marked` + DOMPurify for
+ * markdown, a layout pass for HTML — and a multi-megabyte document would freeze
+ * the overlay it is supposed to be filling. Source view has no such problem
+ * (`@pierre/diffs` virtualizes), so the large file still previews; it just
+ * previews as source.
+ */
+const RENDERED_PREVIEW_MAX_BYTES = 512 * 1024;
+
+/**
+ * The rendered half of a markdown or HTML preview, if this file has one.
+ *
+ * Markdown goes through the SAME renderer the transcript uses, so a README
+ * previews exactly the way the agent's prose does — and, crucially, arrives
+ * sanitized: `renderMessageContent` runs DOMPurify, and Quick Look mounts an
+ * `inline` payload as trusted markup. HTML is NOT sanitized and is never
+ * mounted inline; it goes into a sandboxed iframe, which is the only honest way
+ * to show a file that may contain anything.
+ */
+function buildRenderedView(
+  path: string,
+  mime: string,
+  contents: string
+): { mount: 'inline' | 'sandbox'; html: string } | null {
+  if (contents.length > RENDERED_PREVIEW_MAX_BYTES) return null;
+  switch (richPreviewKind(path, mime)) {
+    case 'markdown':
+      return { mount: 'inline', html: renderMessageContent(contents) };
+    case 'html':
+      return { mount: 'sandbox', html: contents };
+    default:
+      return null;
+  }
 }
 
 /**
@@ -69,6 +107,7 @@ export async function openFilePreview(
 
   const contents = new TextDecoder().decode(bytes);
   const base = await readGitBase(fs, path, contents);
+  const rendered = buildRenderedView(path, mime, contents);
 
   SliccQuickLook.open({
     path,
@@ -76,6 +115,7 @@ export async function openFilePreview(
     mimeType: mime,
     text: true,
     ...(base ? { baseContent: base.baseContent, gitStatus: base.status } : {}),
+    ...(rendered ? { rendered } : {}),
     ...(options.line !== undefined ? { line: options.line } : {}),
   });
 }

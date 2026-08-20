@@ -11,6 +11,7 @@ import { describe, expect, it } from 'vitest';
 import {
   isTextMimeType,
   looksLikeText,
+  richPreviewKind,
   sniffFileType,
   sniffMagicBytes,
 } from '../../src/core/file-type.js';
@@ -155,5 +156,30 @@ describe('isTextMimeType', () => {
     for (const mime of ['image/png', 'application/pdf', 'application/octet-stream', 'video/mp4']) {
       expect(isTextMimeType(mime)).toBe(false);
     }
+  });
+});
+
+describe('richPreviewKind', () => {
+  it('recognizes markdown by the only signal it has — the name', () => {
+    // Sniffing cannot help here: markdown and plain text are byte-identical.
+    for (const path of ['/w/README.md', '/w/notes.markdown', '/w/x.mkd']) {
+      expect(richPreviewKind(path, 'text/plain')).toBe('markdown');
+    }
+  });
+
+  it('recognizes HTML by type or by name', () => {
+    expect(richPreviewKind('/w/page.html', 'text/html')).toBe('html');
+    expect(richPreviewKind('/w/page.htm', 'text/plain')).toBe('html');
+    expect(richPreviewKind('/w/page.html', 'text/html; charset=utf-8')).toBe('html');
+  });
+
+  it('leaves .mdx alone — a markdown parser would drop the half that matters', () => {
+    expect(richPreviewKind('/w/doc.mdx', 'text/plain')).toBeNull();
+  });
+
+  it('offers nothing for files with only one form', () => {
+    expect(richPreviewKind('/w/app.ts', 'text/plain')).toBeNull();
+    expect(richPreviewKind('/w/photo.png', 'image/png')).toBeNull();
+    expect(richPreviewKind('/w/Makefile', 'text/plain')).toBeNull();
   });
 });

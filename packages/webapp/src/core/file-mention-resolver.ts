@@ -136,6 +136,43 @@ function matchesSuffix(candidate: string, query: string): boolean {
 }
 
 /**
+ * Whether a hinted path could be what `query` names.
+ *
+ * A query with segments must match the hint's tail at a boundary — the same
+ * rule the index uses. A bare basename matches on basename alone, which is the
+ * whole point: prose says `foo.md` and the hint supplies the directory.
+ */
+function sameFile(hint: string, query: string): boolean {
+  const path = normalizeQuery(hint);
+  if (query.includes('/')) return matchesSuffix(path, query);
+  return basenameOf(path) === query;
+}
+
+/**
+ * The hints worth checking for one query, most recent first, deduped.
+ *
+ * Later tool calls win ties because a turn that touches the same basename twice
+ * almost always means the file it touched LAST. The cap bounds the `stat()`
+ * calls one mention can trigger, however long the transcript grows.
+ */
+function relevantHints(query: string, hints: readonly string[]): string[] {
+  const picked: string[] = [];
+  const seen = new Set<string>();
+  for (let i = hints.length - 1; i >= 0; i -= 1) {
+    const hint = hints[i];
+    if (hint === undefined || seen.has(hint)) continue;
+    if (!sameFile(hint, query)) continue;
+    seen.add(hint);
+    picked.push(normalizeQuery(hint));
+    if (picked.length >= MAX_HINTS_PER_QUERY) break;
+  }
+  return picked;
+}
+
+/** How many hinted paths a single mention may `stat()`. */
+const MAX_HINTS_PER_QUERY = 4;
+
+/**
  * Resolves file mentions against a VFS, caching both the index and individual
  * answers for the lifetime of the instance.
  *
@@ -158,6 +195,8 @@ export class FileMentionResolver {
   #indexBuild: Promise<Map<string, string[]>> | null = null;
   /** Memoized answers, keyed by normalized query. */
   readonly #answers = new Map<string, Promise<ResolvedMention>>();
+  /** Memoized `stat()` verdicts for hinted paths, keyed by absolute path. */
+  readonly #hintChecks = new Map<string, Promise<boolean>>();
 
   constructor(fs: LocalVfsClient, options: FileMentionResolverOptions = {}) {
     this.#fs = fs;
@@ -172,10 +211,39 @@ export class FileMentionResolver {
    * Resolve one mention. Repeated calls for the same query share a single
    * in-flight promise, so a message mentioning `main.ts` six times costs one
    * lookup.
+   *
+   * `hints` are paths the turn already named in a tool call (see
+   * `core/tool-call-paths.ts`). They do two things no index lookup can: they
+   * rank an ambiguous basename toward the file this turn actually touched, and
+   * they resolve a file that lives OUTSIDE the indexed roots — `/home/lars/foo.md`
+   * from `echo test > /home/lars/foo.md` is never in the index, but it is still
+   * a real file the user can preview. A hint is only ever believed after a
+   * `stat()` confirms it, so a stale or wrong one costs nothing but the check.
    */
-  resolve(query: string): Promise<ResolvedMention> {
+  resolve(query: string, hints: readonly string[] = []): Promise<ResolvedMention> {
     this.#expireStaleIndex();
     const normalized = normalizeQuery(query);
+    const base = this.#baseAnswer(normalized);
+    const relevant = relevantHints(normalized, hints);
+    if (relevant.length === 0) return base;
+    return this.#withHints(normalized, base, relevant);
+  }
+
+  /** Resolve many mentions concurrently, preserving input order. */
+  resolveAll(queries: string[], hints: readonly string[] = []): Promise<ResolvedMention[]> {
+    return Promise.all(queries.map((query) => this.resolve(query, hints)));
+  }
+
+  /** Drop the index and every memoized answer, so the next lookup re-reads. */
+  invalidate(): void {
+    this.#index = null;
+    this.#indexBuild = null;
+    this.#answers.clear();
+    this.#hintChecks.clear();
+  }
+
+  /** The hint-free answer, memoized. Hinted answers are layered on top of it. */
+  #baseAnswer(normalized: string): Promise<ResolvedMention> {
     const cached = this.#answers.get(normalized);
     if (cached) return cached;
 
@@ -186,16 +254,55 @@ export class FileMentionResolver {
     return pending;
   }
 
-  /** Resolve many mentions concurrently, preserving input order. */
-  resolveAll(queries: string[]): Promise<ResolvedMention[]> {
-    return Promise.all(queries.map((query) => this.resolve(query)));
+  /**
+   * Fold the turn's own paths into an answer.
+   *
+   * Two distinct effects, in this order:
+   *
+   *  1. An ABSOLUTE hint the index never saw is `stat()`ed and, if it is a real
+   *     file, becomes the preferred match. This is the `/home/lars/foo.md` case.
+   *  2. Index matches that a hint corroborates float to the front, so an
+   *     ambiguous `main.ts` opens the one this turn was working on.
+   *
+   * Hint verification is memoized separately from the answer cache: the same
+   * path is typically named by several mentions in the same message.
+   */
+  async #withHints(
+    query: string,
+    base: Promise<ResolvedMention>,
+    hints: string[]
+  ): Promise<ResolvedMention> {
+    const { matches } = await base;
+    const known = new Set(matches);
+
+    const verified: string[] = [];
+    for (const hint of hints) {
+      if (!hint.startsWith('/') || known.has(hint)) continue;
+      if (await this.#hintIsFile(hint)) verified.push(hint);
+    }
+
+    // Stable partition: corroborated index matches keep their relative order,
+    // as do the rest. Nothing is dropped — an ambiguous mention still reports
+    // every candidate so the caller can show the alternatives.
+    // `hints` arrives most-recent-first, so ranking by hint position is what
+    // makes the file the turn touched LAST outrank one it touched earlier.
+    // Ties keep index order (a stable sort), which is the depth preference.
+    const rank = (path: string): number => hints.findIndex((hint) => matchesSuffix(path, hint));
+    const corroborated = matches
+      .filter((path) => rank(path) >= 0)
+      .sort((a, b) => rank(a) - rank(b));
+    const promoted = new Set(corroborated);
+    const rest = matches.filter((path) => !promoted.has(path));
+
+    return { query, matches: [...verified, ...corroborated, ...rest] };
   }
 
-  /** Drop the index and every memoized answer, so the next lookup re-reads. */
-  invalidate(): void {
-    this.#index = null;
-    this.#indexBuild = null;
-    this.#answers.clear();
+  #hintIsFile(path: string): Promise<boolean> {
+    const cached = this.#hintChecks.get(path);
+    if (cached) return cached;
+    const pending = this.#isFile(path);
+    this.#hintChecks.set(path, pending);
+    return pending;
   }
 
   async #resolveUncached(query: string): Promise<ResolvedMention> {

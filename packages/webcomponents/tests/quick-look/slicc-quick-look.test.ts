@@ -2,6 +2,24 @@ import { beforeEach, describe, expect, it } from 'vitest';
 import { SliccQuickLook } from '../../src/quick-look/slicc-quick-look.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
+/** The labels of the view toggle, in the order they render. */
+function toggleLabels(ql: SliccQuickLook): string[] {
+  return [...(ql.shadowRoot?.querySelectorAll('.toggle button') ?? [])].map(
+    (b) => b.textContent ?? ''
+  );
+}
+
+function pressedLabel(ql: SliccQuickLook): string | undefined {
+  return (
+    ql.shadowRoot?.querySelector('.toggle button[aria-pressed="true"]')?.textContent ?? undefined
+  );
+}
+
+function clickToggle(ql: SliccQuickLook, label: string): void {
+  const buttons = [...(ql.shadowRoot?.querySelectorAll('.toggle button') ?? [])];
+  (buttons.find((b) => b.textContent === label) as HTMLElement | undefined)?.click();
+}
+
 describe('slicc-quick-look', () => {
   beforeEach(() => {
     ensureGlobalTokens();
@@ -184,7 +202,7 @@ describe('slicc-quick-look', () => {
       expect(ql.shadowRoot?.querySelector('.chip--git')?.textContent).toBe('modified');
     });
 
-    it('offers a diff/file toggle only when a base version was supplied', () => {
+    it('offers a diff/source toggle only when a base version was supplied', () => {
       SliccQuickLook.open(modified);
       let ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
       expect(ql.shadowRoot?.querySelector('.toggle')).not.toBeNull();
@@ -204,10 +222,78 @@ describe('slicc-quick-look', () => {
     it('switches to the whole file when the toggle is clicked', () => {
       SliccQuickLook.open(modified);
       const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
-      const buttons = [...(ql.shadowRoot?.querySelectorAll('.toggle button') ?? [])];
-      (buttons.find((b) => b.textContent === 'File') as HTMLElement | undefined)?.click();
+      clickToggle(ql, 'Source');
       const pressed = ql.shadowRoot?.querySelector('.toggle button[aria-pressed="true"]');
-      expect(pressed?.textContent).toBe('File');
+      expect(pressed?.textContent).toBe('Source');
+    });
+  });
+
+  // -- rendered (markdown / HTML) vs source --
+
+  describe('rendered views', () => {
+    const readme = {
+      path: '/workspace/README.md',
+      content: '# Title\n',
+      mimeType: 'text/plain',
+      text: true,
+      rendered: { mount: 'inline' as const, html: '<h1>Title</h1><p>Hello</p>' },
+    };
+
+    it('opens on the rendered document, because that is what a reader wants', () => {
+      SliccQuickLook.open(readme);
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(ql.shadowRoot?.querySelector('.rendered h1')?.textContent).toBe('Title');
+      expect(pressedLabel(ql)).toBe('Preview');
+    });
+
+    it('offers the source view alongside it', () => {
+      SliccQuickLook.open(readme);
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(toggleLabels(ql)).toEqual(['Preview', 'Source']);
+
+      clickToggle(ql, 'Source');
+      expect(ql.shadowRoot?.querySelector('pre')?.textContent).toContain('# Title');
+      expect(ql.shadowRoot?.querySelector('.rendered')).toBeNull();
+    });
+
+    it('goes back to the rendered view', () => {
+      SliccQuickLook.open(readme);
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      clickToggle(ql, 'Source');
+      clickToggle(ql, 'Preview');
+      expect(ql.shadowRoot?.querySelector('.rendered h1')?.textContent).toBe('Title');
+    });
+
+    it('keeps the diff reachable for a modified document', () => {
+      SliccQuickLook.open({ ...readme, baseContent: '# Old\n', gitStatus: 'modified' });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(toggleLabels(ql)).toEqual(['Preview', 'Source', 'Diff']);
+      // A modified README is still a README: it opens on the prose.
+      expect(pressedLabel(ql)).toBe('Preview');
+    });
+
+    it('mounts an HTML file in a sandboxed iframe, never inline', () => {
+      const source = '<h1>Report</h1><script>window.pwned = true;</script>';
+      SliccQuickLook.open({
+        path: '/workspace/report.html',
+        content: source,
+        mimeType: 'text/html',
+        rendered: { mount: 'sandbox', html: source },
+      });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      const frame = ql.shadowRoot?.querySelector('iframe');
+
+      expect(frame).not.toBeNull();
+      // An empty `sandbox` is the whole point: no scripts, no same-origin.
+      expect(frame?.getAttribute('sandbox')).toBe('');
+      expect(frame?.getAttribute('srcdoc')).toBe(source);
+      expect(ql.shadowRoot?.querySelector('.rendered')).toBeNull();
+    });
+
+    it('shows no toggle for a file with only one form', () => {
+      SliccQuickLook.open({ path: '/a/b.ts', content: 'x', mimeType: 'text/typescript' });
+      const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+      expect(ql.shadowRoot?.querySelector('.toggle')).toBeNull();
     });
   });
 

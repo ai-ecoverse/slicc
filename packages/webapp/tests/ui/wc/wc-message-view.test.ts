@@ -431,6 +431,18 @@ describe('tool presentation', () => {
     };
   }
 
+  it('stamps a tool row with the paths its call named', () => {
+    // The row is where the mention linker reads them back off (see
+    // `ui/wc/wire-file-mentions.ts`), so the paths must survive rendering.
+    const [, row] = messageEls(call('bash', { command: 'echo "test" > /home/lars/foo.md' }));
+    expect(row.getAttribute('data-file-paths')).toBe(JSON.stringify(['/home/lars/foo.md']));
+  });
+
+  it('leaves the attribute off a call that named no path', () => {
+    const [, row] = messageEls(call('bash', { command: 'ls -la' }));
+    expect(row.hasAttribute('data-file-paths')).toBe(false);
+  });
+
   it('titles tools as human phrases with fitting lucide icons', () => {
     const cases: Array<[string, unknown, string, string]> = [
       ['bash', { command: 'git push origin main' }, "Use Sliccy's computer", 'git-branch'],

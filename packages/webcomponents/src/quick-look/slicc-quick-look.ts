@@ -22,6 +22,22 @@
  * `text` option lets a caller assert readability directly when it knows better
  * than the MIME string does.
  *
+ * ## Rendered vs source
+ *
+ * Markdown and HTML are two files at once: the markup, and the document it
+ * describes. Neither is the "real" one — reading a README wants the rendered
+ * prose, checking what the agent actually wrote wants the source — so a caller
+ * that can supply a rendered form (`rendered`) gets a toggle instead of a
+ * verdict. Rendered opens FIRST for those types, because someone who clicked a
+ * `.md` file name meant to read it.
+ *
+ * The component never converts anything itself. Markdown arrives as HTML the
+ * caller already sanitized (the webapp's `message-renderer.ts`, the same
+ * pipeline the transcript uses), and HTML arrives as its own source, mounted in
+ * a `sandbox`-attribute iframe so a previewed file cannot run script or reach
+ * the app. Keeping the conversion out here is what keeps a markdown parser out
+ * of the component library.
+ *
  * ## Git awareness
  *
  * When a caller supplies `baseContent` (the committed version of a modified
@@ -50,6 +66,15 @@ export interface QuickLookOptions {
   baseContent?: string;
   /** Short git status label shown in the header (`modified`, `staged`, …). */
   gitStatus?: string;
+  /**
+   * A rendered view of this file, for types that HAVE one (markdown, HTML).
+   *
+   * `inline` HTML is mounted directly and MUST already be sanitized by the
+   * caller. `sandbox` HTML is mounted in a sandboxed iframe instead — the right
+   * treatment for a raw HTML file, which is not ours to sanitize and must not
+   * be able to run script in the app's origin.
+   */
+  rendered?: { mount: 'inline' | 'sandbox'; html: string };
   /** 1-based line to scroll to and highlight. */
   line?: number;
 }
@@ -188,6 +213,53 @@ iframe {
   border: 0;
   display: block;
 }
+/* The rendered document view. Deliberately plain prose chrome — this is a file
+   preview, not a themed reader — but it must not inherit the mono/pre look. */
+.rendered {
+  font-family: var(--ui);
+  font-size: 14px;
+  line-height: 1.55;
+  color: var(--ink, #131313);
+  max-height: 62vh;
+  overflow: auto;
+}
+.rendered > :first-child { margin-top: 0; }
+.rendered > :last-child { margin-bottom: 0; }
+.rendered h1, .rendered h2, .rendered h3, .rendered h4, .rendered h5, .rendered h6 {
+  margin: 1.1em 0 .35em;
+  line-height: 1.25;
+}
+.rendered h1 { font-size: 22px; }
+.rendered h2 { font-size: 18px; }
+.rendered h3 { font-size: 16px; }
+.rendered p, .rendered ul, .rendered ol, .rendered blockquote { margin: 0 0 .7em; }
+.rendered ul, .rendered ol { padding-left: 1.4em; }
+.rendered a { color: var(--accent, #6d28d9); }
+.rendered code {
+  font-family: var(--mono, monospace);
+  font-size: 12.5px;
+  background: var(--ghost, rgba(0,0,0,.05));
+  border-radius: 5px;
+  padding: 1px 5px;
+}
+.rendered pre {
+  max-height: none;
+  background: var(--ghost, rgba(0,0,0,.05));
+  border: 1px solid var(--line, #e1e1e1);
+  border-radius: 8px;
+  padding: 10px 12px;
+}
+.rendered pre code { background: none; padding: 0; }
+.rendered blockquote {
+  border-left: 3px solid var(--line, #e1e1e1);
+  padding-left: 12px;
+  color: var(--txt-2, #4a4a4a);
+}
+.rendered table { border-collapse: collapse; font-size: 13px; }
+.rendered th, .rendered td { border: 1px solid var(--line, #e1e1e1); padding: 5px 10px; }
+.rendered img { max-height: 40vh; }
+/* A sandboxed document owns its own page box, so it gets the full panel. */
+.rendered-frame { height: 70vh; }
 .fallback {
   text-align: center;
   padding: 32px 16px;
@@ -197,6 +269,42 @@ iframe {
 .fallback code { font-family: var(--mono, monospace); font-size: 12px; }
 `;
 const SHEET = sheet(STYLE);
+
+/**
+ * What the content box is showing.
+ *
+ * `rendered` is the document (markdown as prose, HTML as a page), `file` is the
+ * source, `diff` is the source against its committed version.
+ */
+type ViewMode = 'rendered' | 'file' | 'diff';
+
+const MODE_LABELS: Record<ViewMode, string> = {
+  rendered: 'Preview',
+  file: 'Source',
+  diff: 'Diff',
+};
+
+/** The views this payload can offer, in toggle order. */
+function availableModes(opts: QuickLookOptions): ViewMode[] {
+  const modes: ViewMode[] = [];
+  if (opts.rendered) modes.push('rendered');
+  if (isTextual(opts)) modes.push('file');
+  if (opts.baseContent !== undefined) modes.push('diff');
+  return modes;
+}
+
+/**
+ * Which view opens first.
+ *
+ * A rendered form wins even over a diff. Someone who clicked a `.md` file name
+ * asked to READ the file; a modified README is still a README. The diff is one
+ * click away, and for every file WITHOUT a rendered form the old
+ * diff-first behavior is unchanged.
+ */
+function initialMode(opts: QuickLookOptions): ViewMode {
+  if (opts.rendered) return 'rendered';
+  return opts.baseContent !== undefined ? 'diff' : 'file';
+}
 
 let activeInstance: SliccQuickLook | null = null;
 let escapeHandler: ((e: KeyboardEvent) => void) | null = null;
@@ -269,7 +377,7 @@ export class SliccQuickLook extends HTMLElement {
   #generation = 0;
   #options: QuickLookOptions | null = null;
   #contentBox: HTMLElement | null = null;
-  #mode: 'diff' | 'file' = 'file';
+  #mode: ViewMode = 'file';
 
   constructor() {
     super();
@@ -288,7 +396,7 @@ export class SliccQuickLook extends HTMLElement {
     const el = document.createElement('slicc-quick-look') as SliccQuickLook;
     el.#options = opts;
     el.#generation += 1;
-    el.#mode = opts.baseContent !== undefined ? 'diff' : 'file';
+    el.#mode = initialMode(opts);
 
     const filename = opts.path.split('/').pop() || opts.path;
     const dir = opts.path.slice(0, opts.path.length - filename.length);
@@ -307,14 +415,13 @@ export class SliccQuickLook extends HTMLElement {
     if (opts.gitStatus) {
       header.appendChild(h('span', { class: 'chip chip--git' }, opts.gitStatus));
     }
-    if (opts.baseContent !== undefined) {
-      header.appendChild(el.#buildModeToggle());
-    }
+    const modes = availableModes(opts);
+    if (modes.length > 1) header.appendChild(el.#buildModeToggle(modes));
     header.appendChild(closeBtn);
 
     const content = h('div', { class: 'content' });
     el.#contentBox = content;
-    content.appendChild(el.#buildContent(opts));
+    el.#applyMode();
 
     const panel = h('div', { class: 'panel' }, header, content) as HTMLElement;
     panel.tabIndex = -1;
@@ -333,10 +440,6 @@ export class SliccQuickLook extends HTMLElement {
       if (e.key === 'Escape') el.#dismiss('escape');
     };
     document.addEventListener('keydown', escapeHandler);
-
-    // Upgrade the plain text baseline to the highlighted view. Fire-and-forget:
-    // failure leaves the `<pre>` in place, which is a usable preview.
-    if (isTextual(opts)) void el.#enhance(el.#generation);
   }
 
   static close(): void {
@@ -353,25 +456,75 @@ export class SliccQuickLook extends HTMLElement {
     }
   }
 
-  #buildModeToggle(): HTMLElement {
-    const diffBtn = h('button', { type: 'button' }, 'Diff');
-    const fileBtn = h('button', { type: 'button' }, 'File');
+  #buildModeToggle(modes: readonly ViewMode[]): HTMLElement {
+    const buttons = modes.map((mode) => h('button', { type: 'button' }, MODE_LABELS[mode]));
     const setPressed = (): void => {
-      diffBtn.setAttribute('aria-pressed', String(this.#mode === 'diff'));
-      fileBtn.setAttribute('aria-pressed', String(this.#mode === 'file'));
+      for (const [i, mode] of modes.entries()) {
+        buttons[i]?.setAttribute('aria-pressed', String(this.#mode === mode));
+      }
     };
     setPressed();
 
-    const switchTo = (mode: 'diff' | 'file') => () => {
-      if (this.#mode === mode) return;
-      this.#mode = mode;
-      setPressed();
-      void this.#enhance(this.#generation);
-    };
-    diffBtn.addEventListener('click', switchTo('diff'));
-    fileBtn.addEventListener('click', switchTo('file'));
+    for (const [i, mode] of modes.entries()) {
+      buttons[i]?.addEventListener('click', () => {
+        if (this.#mode === mode) return;
+        this.#mode = mode;
+        setPressed();
+        this.#applyMode();
+      });
+    }
 
-    return h('div', { class: 'toggle' }, diffBtn, fileBtn);
+    return h('div', { class: 'toggle' }, ...buttons);
+  }
+
+  /**
+   * (Re-)render the content box for the current mode.
+   *
+   * Views are rebuilt on every switch rather than kept alive: holding a Shiki
+   * render AND an iframe document for panels the user may never look at again
+   * costs more than re-rendering the one they asked for.
+   */
+  #applyMode(): void {
+    const opts = this.#options;
+    const box = this.#contentBox;
+    if (!opts || !box) return;
+
+    box.replaceChildren(this.#buildContent(opts));
+    // Only a full-bleed view (a sandboxed document, or the `@pierre/diffs`
+    // mount once it lands) drops the content box's padding; inline prose keeps
+    // it, the way a page has margins.
+    box.classList.toggle(
+      'content--rich',
+      this.#mode === 'rendered' && opts.rendered?.mount === 'sandbox'
+    );
+    if (this.#mode !== 'rendered' && isTextual(opts)) void this.#enhance(this.#generation);
+  }
+
+  /** Mount the caller's rendered HTML: inline fragment, or sandboxed iframe. */
+  #buildRendered(opts: QuickLookOptions): HTMLElement {
+    const rendered = opts.rendered;
+    if (!rendered) return h('pre', null, decode(opts.content));
+
+    if (rendered.mount === 'sandbox') {
+      const frame = document.createElement('iframe');
+      // No `allow-scripts`, no `allow-same-origin`: a previewed HTML file gets
+      // to lay itself out and nothing else. `srcdoc` keeps it same-document
+      // enough to render without minting a blob URL that would outlive it.
+      frame.setAttribute('sandbox', '');
+      frame.srcdoc = rendered.html;
+      frame.title = `${opts.path.split('/').pop() || opts.path} preview`;
+      frame.className = 'rendered-frame';
+      return frame;
+    }
+
+    // Inline: the caller sanitized this (webapp `message-renderer.ts`). Built as
+    // a fragment via `createContextualFragment` — the same no-innerHTML path
+    // `slicc-agent-message.setBodyHtml()` uses.
+    const host = h('div', { class: 'rendered' });
+    const range = this.ownerDocument.createRange();
+    range.selectNodeContents(host);
+    host.appendChild(range.createContextualFragment(rendered.html));
+    return host;
   }
 
   #dismiss(reason: 'escape' | 'backdrop' | 'close-button'): void {
@@ -444,6 +597,8 @@ export class SliccQuickLook extends HTMLElement {
 
   #buildContent(opts: QuickLookOptions): HTMLElement {
     const mime = opts.mimeType;
+
+    if (this.#mode === 'rendered') return this.#buildRendered(opts);
 
     if (isTextual(opts)) {
       return h('pre', null, decode(opts.content));
