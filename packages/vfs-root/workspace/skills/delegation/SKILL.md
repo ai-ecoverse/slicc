@@ -87,7 +87,7 @@ agent <cwd> <allowed-commands> <prompt> [--model <id>] [--read-only <paths>] [--
 - `<cwd>` — sole writable prefix (plus `/shared/`, the scoop's scratch folder, and `/tmp/`). Relative paths resolve against the caller's cwd.
 - `<allowed-commands>` — comma-separated allow-list; `*` for unrestricted.
 - `<prompt>` — forwarded verbatim. The spawned scoop has no access to the caller's history; pack context into the prompt.
-- `--model` — defaults to the parent scoop's model (or the cone's, when invoked from the terminal). Accepts an exact id or a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), resolved against the selected provider's catalog. An id that cannot be resolved is a hard error (exit 1) — it never silently falls back to the parent's model.
+- `--model` — defaults to the parent scoop's model (or the cone's, when invoked from the terminal). Accepts an exact id, a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), or the `provider:model` form `models` prints (`openrouter:openai/gpt-5.6-terra-pro`). A bare id resolves against the selected provider first, then against any other configured provider that offers it; if several do, the error lists the qualified ids to pick from. The scoop runs on the provider the model resolved from. An id that cannot be resolved is a hard error (exit 1) — it never silently falls back to the parent's model. Models from a provider other than the selected one must additionally be allowed in `/etc/models` (see [Model access policy](#model-access-policy)); a blocked model exits 1 and the error quotes the line to add.
 - `--read-only` — pure-replace list of read-only paths. Default: `/workspace/` plus the invoking shell's cwd.
 - `--background-after <seconds>` — how long the spawned scoop's `bash` waits for a command before detaching it and moving on (default 600). Nobody can cancel a spawned scoop's turn, so a command that never returns would otherwise burn the whole run on one call; a detached command reports its exit code back to that scoop as a `Background Command` lick. `0` detaches every command immediately.
 
@@ -249,7 +249,7 @@ Use `cost --all` only when you need the historical picture: it adds dropped scoo
 
 ## Model selection for scoops
 
-**Always run `models` to verify available models before specifying one.** Model availability depends on the configured provider and API key. `model` accepts an exact id or a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), resolved against the selected provider's catalog. An id that cannot be resolved is rejected outright — it never silently falls back to the cone's model.
+**Always run `models` to verify available models before specifying one.** Model availability depends on the configured provider and API key. `model` accepts an exact id, a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), or the `provider:model` form `models` prints (`openrouter:openai/gpt-5.6-terra-pro`). A bare id resolves against the selected provider first, then against any other configured provider that offers it; matching several is an error listing the qualified ids. The scoop runs on the provider the model resolved from. An id that cannot be resolved is rejected outright — it never silently falls back to the cone's model. Cross-provider models also need an `/etc/models` allow entry (see [Model access policy](#model-access-policy)).
 
 Use `models --json` to compare. Intelligence, speed, and cost are independent dimensions:
 
@@ -272,3 +272,24 @@ scoop_scoop({ name: "architect", model: "claude-opus-4-6", prompt: "Design the n
 ## Browser tabs
 
 Browser-tab handling rules (track your IDs, never close tabs you didn't open, handle "tab not found" gracefully) live in `/workspace/skills/playwright-cli/SKILL.md` under "Multi-Agent Tab Behavior". Read that skill before delegating browser work.
+
+## Model access policy
+
+`/etc/models` decides which `provider:model` combinations you may spawn against. It
+is keyed by the **selected** provider:
+
+```ini
+[adobe]              # while `adobe` is selected…
+openrouter:*         # …any openrouter model may be targeted
+-adobe:claude-opus-5 # …but never adobe's own Opus 5
+```
+
+- The selected provider's own models are allowed by default — you never list them.
+- Any other provider's model is denied until an entry allows it. This is a spend
+  boundary: the user may keep separate work and personal accounts.
+- `models` and the picker hide only what a `-` entry denies, so a model you can see
+  is not automatically one you may spawn against; the rejection names the exact
+  line to add.
+
+Do not edit `/etc/models` to unblock yourself — the write requires a human approval
+(`Write /etc/models` in `/etc/sudoers`). Ask the user instead, quoting the line.

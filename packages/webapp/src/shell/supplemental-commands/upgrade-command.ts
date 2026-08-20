@@ -8,15 +8,21 @@ import { getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
 const REPO = 'ai-ecoverse/slicc';
 const BUNDLED_PREFIX = 'packages/vfs-root';
 const FETCH_TIMEOUT_MS = 30_000;
-// Directory prefixes plus one single-file scope. `MEMORY.md` is seeded only
-// when absent, so a curator-contract change would otherwise never reach an
-// existing workspace; the three-way merge is what makes that safe to ship,
-// since the file is meant to be user-edited.
+// Directory prefixes plus one single-file scope. `MEMORY.md` and everything
+// under `/etc/` are seeded only when absent, so a change to the curator
+// contract or to a policy file (`sudoers`, `models`, `llmstxtignore`) would
+// otherwise never reach an existing profile; the three-way merge is what makes
+// that safe to ship, since those files are all meant to be user-edited.
+//
+// `/etc/sudoers` is self-protected, and the shell runs on the FS-gated handle,
+// so applying a change there still raises a human approval — the upgrade card
+// authorizes the merge, not the policy edit.
 const SCOPES = [
   `${BUNDLED_PREFIX}/workspace/skills/`,
   `${BUNDLED_PREFIX}/shared/sprinkles/`,
   `${BUNDLED_PREFIX}/shared/sounds/`,
   `${BUNDLED_PREFIX}/shared/MEMORY.md`,
+  `${BUNDLED_PREFIX}/etc/`,
 ] as const;
 const CLASSIFICATIONS = [
   'auto-applied',

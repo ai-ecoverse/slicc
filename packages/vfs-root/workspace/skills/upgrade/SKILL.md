@@ -61,7 +61,7 @@ Show the conventional-commit messages grouped by type (`feat`, `fix`, `chore`, .
 upgrade apply --from="${FROM_VERSION}" --to="${TO_VERSION}"
 ```
 
-The command discovers bundled files at both release refs under `/workspace/skills`, `/shared/sprinkles`, and `/shared/sounds`, plus the single file `/shared/MEMORY.md` (the memory-curator contract, seeded only when absent — this merge is the only way a curator-rule change reaches an existing workspace); prefetches and preflights every path; then applies safe updates with `VirtualFS` and the built-in three-way merge. Its JSON output classifies every bundled path as `auto-applied`, `merged-clean`, `kept-local`, `needs-review`, `unchanged`, or `added-new`.
+The command discovers bundled files at both release refs under `/workspace/skills`, `/shared/sprinkles`, `/shared/sounds`, and `/etc`, plus the single file `/shared/MEMORY.md`; prefetches and preflights every path; then applies safe updates with `VirtualFS` and the built-in three-way merge. `/shared/MEMORY.md` (the memory-curator contract) and the `/etc` policy files (`sudoers`, `models`, `llmstxtignore`) are seeded only when absent, so this merge is the only way a rule change in them reaches an existing profile — including approval rules such as the `Write /etc/models` gate. Applying a change to `/etc/sudoers` still raises its own approval prompt: the card authorizes the merge, not the policy edit. Its JSON output classifies every bundled path as `auto-applied`, `merged-clean`, `kept-local`, `needs-review`, `unchanged`, or `added-new`.
 
 An exit code of `1` means discovery/fetch failed or at least one path needs review. Conflicts are written to the reported collision-safe sidecar while the live file remains unchanged. Show the JSON summary and sidecar paths to the user; never copy conflict markers into the live file automatically. The command never deletes local-only files.
 
@@ -69,7 +69,7 @@ The command can also be run directly with explicit release versions for manual r
 
 ## Also check installed skills (separate step — not a card action)
 
-The card only covers **bundled** files (`/workspace/skills`, `/shared/sprinkles`, `/shared/sounds`, `/shared/MEMORY.md`). Skills the user installed themselves with `upskill` are never touched by it, and they drift silently — a stale one can sit months behind upstream while still loading fine.
+The card only covers **bundled** files (`/workspace/skills`, `/shared/sprinkles`, `/shared/sounds`, `/shared/MEMORY.md`, `/etc`). Skills the user installed themselves with `upskill` are never touched by it, and they drift silently — a stale one can sit months behind upstream while still loading fine.
 
 A new SLICC release is a good moment to check them. This is read-only:
 
@@ -96,6 +96,6 @@ Notes worth knowing:
 
 - Do not run `upgrade apply` before the user confirms. Confirmation runs it automatically; dismissal runs nothing.
 - Do not delete files that no longer exist in the new release — many users name-collide their own scripts with bundled ones; deletion is too dangerous to automate.
-- Do not modify files outside `/workspace/skills/`, `/shared/sprinkles/`, `/shared/sounds/`, and `/shared/MEMORY.md` without the user explicitly extending the scope.
+- Do not modify files outside `/workspace/skills/`, `/shared/sprinkles/`, `/shared/sounds/`, `/shared/MEMORY.md`, and `/etc/` without the user explicitly extending the scope.
 - Do not run `upskill update` (without `--dry-run`) unless the user asks for it — the dry run is the safe default when you are volunteering the check.
 - Do not advance the bundled version marker yourself. The runtime advances it automatically once this lick has been routed; if the user dismisses, the lick will not fire again until the next upgrade.

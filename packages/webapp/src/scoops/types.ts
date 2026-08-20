@@ -134,6 +134,16 @@ export interface ScoopConfig {
   /** Model ID override (e.g., "claude-sonnet-4-20250514"). Uses globally selected model if not set. */
   modelId?: string;
   /**
+   * Provider {@link ScoopConfig.modelId} must run on (e.g. `openrouter`).
+   * Set by every spawn path that resolves a model id, including for the
+   * selected provider. Without it `ScoopContext.init()` resolves `modelId`
+   * against whatever provider is selected AT INIT TIME and silently degrades
+   * to the cone's own model when that provider doesn't offer it — how a
+   * cheap cross-provider scoop ends up billing as Opus (#2195). When set, a
+   * mismatch is a hard init error instead.
+   */
+  modelProviderId?: string;
+  /**
    * Reasoning / thinking level forwarded to `pi-agent-core`'s
    * {@link import('@earendil-works/pi-agent-core').AgentState.thinkingLevel}.
    * One of `off | minimal | low | medium | high | xhigh`. When unset, the

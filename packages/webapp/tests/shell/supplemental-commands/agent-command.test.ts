@@ -536,6 +536,41 @@ describe('agent command', () => {
       expect(spawn.mock.calls[0][0].modelId).toBe('claude-haiku-4-5');
     });
 
+    // #2195: `provider:model` is the canonical display form; the command must
+    // forward it verbatim so the bridge's resolver can pin the provider.
+    it('forwards a provider-qualified id verbatim to the bridge', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
+      installBridge(spawn);
+      await createAgentCommand().execute(
+        ['--model', 'openrouter:openai/gpt-5.6-terra-pro', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(spawn.mock.calls[0][0].modelId).toBe('openrouter:openai/gpt-5.6-terra-pro');
+    });
+
+    it("surfaces the bridge's model error (including ambiguity) on stderr", async () => {
+      const spawn = vi.fn().mockResolvedValue({
+        finalText:
+          'agent: ambiguous model: opus matches adobe:claude-opus-5, openrouter:anthropic/claude-opus-5-fast',
+        exitCode: 1,
+      });
+      installBridge(spawn);
+      const result = await createAgentCommand().execute(
+        ['--model', 'opus', '.', '*', 'p'],
+        createMockCtx()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(`${result.stdout ?? ''}${result.stderr ?? ''}`).toContain(
+        'openrouter:anthropic/claude-opus-5-fast'
+      );
+    });
+
+    it('documents provider:model in the help text', async () => {
+      installBridge(vi.fn());
+      const result = await createAgentCommand().execute(['--help'], createMockCtx());
+      expect(result.stdout).toContain("'provider:model'");
+    });
+
     it('does NOT pass modelId when --model is absent', async () => {
       const spawn = vi.fn().mockResolvedValue({ finalText: 'x', exitCode: 0 });
       installBridge(spawn);

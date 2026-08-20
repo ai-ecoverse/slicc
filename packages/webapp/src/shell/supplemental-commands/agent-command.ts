@@ -105,12 +105,20 @@ Default sandbox:
 
 Options:
   --model <id>            Override the model id used by the spawned scoop.
-                          Accepts an exact id or a shorthand ('haiku',
-                          'sonnet', 'claude-haiku-4-5'), resolved against the
-                          selected provider's catalog. An id that cannot be
-                          resolved exits 1 — it never falls back to the
-                          parent's model. Defaults to inheriting the parent's
-                          model.
+                          Accepts an exact id, a shorthand ('haiku', 'sonnet',
+                          'claude-haiku-4-5'), or the 'provider:model' form
+                          the 'models' command prints
+                          ('openrouter:openai/gpt-5.6-terra-pro'). A bare id
+                          resolves against the selected provider first, then
+                          against any other CONFIGURED provider that offers
+                          it; matching several is an error listing the
+                          qualified ids. The scoop runs on the provider the
+                          model was resolved from. A model from a provider
+                          other than the selected one must also be allowed in
+                          /etc/models; the error quotes the line to add. An id
+                          that cannot be resolved (or is not allowed) exits 1 —
+                          it never falls back to the parent's model. Defaults
+                          to inheriting the parent's model.
   --thinking <level>      Reasoning / thinking level for the spawned scoop.
                           One of: off, minimal, low, medium, high, xhigh.
                           Defaults to inheriting the parent's level (or 'off'

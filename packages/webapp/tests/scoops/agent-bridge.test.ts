@@ -18,31 +18,42 @@ import {
 } from '../../src/scoops/agent-bridge.js';
 
 // `defaultResolveModel` is a thin delegate over account-store's
-// `resolveModelIdForScoop`; mock just that seam and keep every other
+// `resolveModelSelectionForScoop`; mock just that seam and keep every other
 // provider-settings export real so the rest of the suite is unaffected. The
 // resolver's own alias/provider-scoping semantics are covered against the real
 // pi-ai catalogue in tests/providers/model-alias-resolution.test.ts.
 //
-// The mock stands in for a single selected provider offering these ids. It
-// includes claude-haiku-4-5, which the real picker hides via
+// The mock stands in for two configured providers — `adobe` (selected) and
+// `openrouter` — mirroring the #2195 setup. The adobe list includes
+// claude-haiku-4-5, which the real picker hides via
 // PICKER_HIDDEN_MODEL_PATTERNS — the regression: a picker-hidden model must
 // still validate for an explicit sub-agent target.
-const MOCK_MODELS = [
-  { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', contextWindow: 200000 },
-  { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200000 },
-  { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', contextWindow: 1000000 },
-  { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', contextWindow: 1000000 },
-  { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000 },
-  { id: 'gpt-5', name: 'GPT-5', contextWindow: 1000000 },
-  { id: 'o3', name: 'o3', contextWindow: 200000 },
-];
+const MOCK_CATALOGUES: Record<
+  string,
+  Array<{ id: string; name: string; contextWindow: number }>
+> = {
+  adobe: [
+    { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6', contextWindow: 200000 },
+    { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5', contextWindow: 200000 },
+    { id: 'claude-opus-4-8', name: 'Claude Opus 4.8', contextWindow: 1000000 },
+    { id: 'claude-opus-4-6', name: 'Claude Opus 4.6', contextWindow: 1000000 },
+  ],
+  openrouter: [
+    { id: 'openai/gpt-5.6-terra-pro', name: 'GPT-5.6 Terra Pro', contextWindow: 400000 },
+    { id: 'gpt-4o', name: 'GPT-4o', contextWindow: 128000 },
+    { id: 'gpt-5', name: 'GPT-5', contextWindow: 1000000 },
+    { id: 'o3', name: 'o3', contextWindow: 200000 },
+    { id: 'anthropic/claude-opus-5-fast', name: 'Claude Opus 5 Fast', contextWindow: 1000000 },
+  ],
+};
+const MOCK_SELECTED_PROVIDER = 'adobe';
 
 /** Exact id, else the keyword match with the largest context window. */
-function mockResolveModelIdForScoop(input: string): string | null {
-  if (!input) return null;
-  if (MOCK_MODELS.some((m) => m.id === input)) return input;
+function matchInProvider(input: string, providerId: string): string | null {
+  const catalogue = MOCK_CATALOGUES[providerId] ?? [];
+  if (catalogue.some((m) => m.id === input)) return input;
   const keyword = input.toLowerCase();
-  const matches = MOCK_MODELS.filter(
+  const matches = catalogue.filter(
     (m) => m.id.toLowerCase().includes(keyword) || m.name.toLowerCase().includes(keyword)
   );
   if (matches.length === 0) return null;
@@ -54,13 +65,55 @@ function mockResolveModelIdForScoop(input: string): string | null {
   ).id;
 }
 
+/** Structural stand-in for `resolveModelSelectionForScoop`. */
+function mockResolveModelSelectionForScoop(input: string): {
+  ok: boolean;
+  selection?: { modelId: string; providerId: string };
+  error?: string;
+} {
+  if (!input) return { ok: false, error: 'unknown model: (empty)' };
+  const idx = input.indexOf(':');
+  const prefix = idx > 0 ? input.slice(0, idx) : null;
+  if (prefix !== null && Object.hasOwn(MOCK_CATALOGUES, prefix)) {
+    const modelId = matchInProvider(input.slice(idx + 1), prefix);
+    return modelId === null
+      ? { ok: false, error: `unknown model: ${input}` }
+      : { ok: true, selection: { modelId, providerId: prefix } };
+  }
+  const selected = matchInProvider(input, MOCK_SELECTED_PROVIDER);
+  if (selected !== null) {
+    return { ok: true, selection: { modelId: selected, providerId: MOCK_SELECTED_PROVIDER } };
+  }
+  const others = Object.keys(MOCK_CATALOGUES)
+    .filter((p) => p !== MOCK_SELECTED_PROVIDER)
+    .flatMap((providerId) => {
+      const modelId = matchInProvider(input, providerId);
+      return modelId === null ? [] : [{ modelId, providerId }];
+    });
+  if (others.length === 1) return { ok: true, selection: others[0] };
+  if (others.length > 1) {
+    return {
+      ok: false,
+      error: `ambiguous model: ${input} matches ${others
+        .map((o) => `${o.providerId}:${o.modelId}`)
+        .join(', ')} — qualify it as provider:model`,
+    };
+  }
+  return { ok: false, error: `unknown model: ${input}` };
+}
+
 vi.mock('../../src/providers/account-store.js', async (importActual) => {
   const actual = await importActual<typeof import('../../src/providers/account-store.js')>();
   return {
     ...actual,
-    resolveModelIdForScoop: mockResolveModelIdForScoop,
+    resolveModelSelectionForScoop: mockResolveModelSelectionForScoop,
   };
 });
+
+/** Shorthand for a successful resolver stub in `deps.resolveModel`. */
+function pinned(modelId: string, providerId = MOCK_SELECTED_PROVIDER) {
+  return { ok: true as const, selection: { modelId, providerId } };
+}
 
 import type { Orchestrator, ScoopObserver } from '../../src/scoops/orchestrator.js';
 import type { ScoopContext } from '../../src/scoops/scoop-context.js';
@@ -173,7 +226,7 @@ describe('createAgentBridge — config construction', () => {
     const { fs: sharedFs } = makeMockSharedFs();
     const bridge = createAgentBridge(orchestrator, sharedFs, null, {
       generateName: () => 'exuberant-lavender',
-      resolveModel: (id) => id,
+      resolveModel: (id) => pinned(id),
     });
 
     scripts.set('agent_exuberant_lavender', (obs) => {
@@ -572,7 +625,7 @@ describe('createAgentBridge — model resolution', () => {
     const { fs } = makeMockSharedFs();
     const bridge = createAgentBridge(orchestrator, fs, null, {
       generateName: () => 'jolly-mint',
-      resolveModel: (id) => id,
+      resolveModel: (id) => pinned(id),
     });
     scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
 
@@ -586,7 +639,7 @@ describe('createAgentBridge — model resolution', () => {
     const { fs, rmCalls } = makeMockSharedFs();
     const bridge = createAgentBridge(orchestrator, fs, null, {
       generateName: () => 'jolly-mint',
-      resolveModel: () => null,
+      resolveModel: (id) => ({ ok: false as const, error: `unknown model: ${id}` }),
     });
 
     const result = await bridge.spawn({ ...BASE_OPTS, modelId: 'not-a-model' });
@@ -602,7 +655,7 @@ describe('createAgentBridge — model resolution', () => {
     const { fs } = makeMockSharedFs();
     const bridge = createAgentBridge(orchestrator, fs, null, {
       generateName: () => 'jolly-mint',
-      resolveModel: (id) => (id === 'opus' ? 'claude-opus-4-8' : id),
+      resolveModel: (id) => pinned(id === 'opus' ? 'claude-opus-4-8' : id),
     });
     scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
 
@@ -628,7 +681,7 @@ describe('createAgentBridge — model resolution', () => {
     });
     const bridge = createAgentBridge(orchestrator, fs, null, {
       generateName: () => 'jolly-mint',
-      resolveModel: (id) => id,
+      resolveModel: (id) => pinned(id),
     });
     scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
 
@@ -719,6 +772,142 @@ describe('createAgentBridge — model resolution', () => {
 
     expect(registerCalls[0].config?.modelId).toBeUndefined();
   });
+  // #2195: a cross-provider model must be pinned to ITS provider on the scoop
+  // config. Storing the id alone would let ScoopContext re-resolve it against
+  // the selected provider and silently run the scoop on that provider's
+  // (far more expensive) model.
+  it('records the resolved provider alongside a cross-provider model id', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, modelId: 'openrouter:openai/gpt-5.6-terra-pro' });
+
+    expect(registerCalls[0].config?.modelId).toBe('openai/gpt-5.6-terra-pro');
+    expect(registerCalls[0].config?.modelProviderId).toBe('openrouter');
+  });
+
+  it('pins a bare id that only a non-selected provider offers', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, modelId: 'openai/gpt-5.6-terra-pro' });
+
+    expect(registerCalls[0].config?.modelId).toBe('openai/gpt-5.6-terra-pro');
+    expect(registerCalls[0].config?.modelProviderId).toBe('openrouter');
+  });
+
+  it('accepts modelProviderId as a separate option, equivalently to the qualified form', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({
+      ...BASE_OPTS,
+      modelId: 'openai/gpt-5.6-terra-pro',
+      modelProviderId: 'openrouter',
+    });
+
+    expect(registerCalls[0].config?.modelProviderId).toBe('openrouter');
+  });
+
+  // The cost-overrun guard: an explicit cross-provider model must not leave
+  // the parent's provider (or its model) on the child's config.
+  it('never inherits the parent provider when an explicit cross-provider model resolves', async () => {
+    const { orchestrator, registerCalls, scripts, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    knownScoops.push({
+      jid: 'cone_1',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: '2026-04-19T00:00:00Z',
+      config: { modelId: 'claude-opus-4-8', modelProviderId: 'adobe' },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({
+      ...BASE_OPTS,
+      modelId: 'openrouter:openai/gpt-5.6-terra-pro',
+      parentJid: 'cone_1',
+    });
+
+    expect(registerCalls[0].config?.modelId).toBe('openai/gpt-5.6-terra-pro');
+    expect(registerCalls[0].config?.modelProviderId).toBe('openrouter');
+  });
+
+  it('inherits the parent provider together with the parent model id', async () => {
+    const { orchestrator, registerCalls, scripts, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    knownScoops.push({
+      jid: 'scoop_parent',
+      name: 'parent',
+      folder: 'parent',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: false,
+      assistantLabel: 'parent',
+      addedAt: '2026-04-19T00:00:00Z',
+      config: { modelId: 'openai/gpt-5.6-terra-pro', modelProviderId: 'openrouter' },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+    scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, parentJid: 'scoop_parent' });
+
+    expect(registerCalls[0].config?.modelId).toBe('openai/gpt-5.6-terra-pro');
+    expect(registerCalls[0].config?.modelProviderId).toBe('openrouter');
+  });
+
+  it('rejects a qualified id whose provider does not offer the model', async () => {
+    const { orchestrator, registerCalls } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      modelId: 'openrouter:claude-haiku-4-5',
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('unknown model');
+    expect(registerCalls).toHaveLength(0);
+  });
+
+  it('surfaces the resolver error verbatim after the "agent:" prefix', async () => {
+    const { orchestrator } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+      resolveModel: () => ({ ok: false as const, error: 'ambiguous model: opus matches a:b, c:d' }),
+    });
+
+    const result = await bridge.spawn({ ...BASE_OPTS, modelId: 'opus' });
+
+    expect(result.finalText).toBe('agent: ambiguous model: opus matches a:b, c:d');
+  });
 });
 
 describe('createAgentBridge — thinking level resolution', () => {
@@ -727,7 +916,7 @@ describe('createAgentBridge — thinking level resolution', () => {
     const { fs } = makeMockSharedFs();
     const bridge = createAgentBridge(orchestrator, fs, null, {
       generateName: () => 'jolly-mint',
-      resolveModel: (id) => id,
+      resolveModel: (id) => pinned(id),
     });
     scripts.set('agent_jolly_mint', (obs) => obs.onSendMessage?.('done'));
 
@@ -1247,44 +1436,83 @@ describe('publishAgentBridge', () => {
 });
 
 describe('defaultResolveModel', () => {
+  /** Assert the pinned model id, ignoring the provider. */
+  function idOf(input: string): string | null {
+    const resolution = defaultResolveModel(input);
+    return resolution.ok ? resolution.selection.modelId : null;
+  }
+
   it('accepts a model in the full provider list even if hidden from the picker', () => {
     // claude-haiku-4-5 is hidden from the cone picker (PICKER_HIDDEN_MODEL_PATTERNS),
     // so it is absent from getAllAvailableModels() — but it IS a real provider model and
     // a valid explicit sub-agent target. Regression: it must validate, not be rejected.
-    expect(defaultResolveModel('claude-haiku-4-5')).toBe('claude-haiku-4-5');
-    expect(defaultResolveModel('claude-sonnet-4-6')).toBe('claude-sonnet-4-6');
-    expect(defaultResolveModel('claude-opus-4-8')).toBe('claude-opus-4-8');
+    expect(idOf('claude-haiku-4-5')).toBe('claude-haiku-4-5');
+    expect(idOf('claude-sonnet-4-6')).toBe('claude-sonnet-4-6');
+    expect(idOf('claude-opus-4-8')).toBe('claude-opus-4-8');
+  });
+
+  it('pins a resolved model to the provider that offers it', () => {
+    expect(defaultResolveModel('claude-haiku-4-5')).toEqual({
+      ok: true,
+      selection: { modelId: 'claude-haiku-4-5', providerId: 'adobe' },
+    });
   });
 
   it('rejects a model no configured provider advertises', () => {
-    expect(defaultResolveModel('nonexistent-xyz-999')).toBeNull();
+    const resolution = defaultResolveModel('nonexistent-xyz-999');
+    expect(resolution.ok).toBe(false);
+    expect(resolution.ok === false && resolution.error).toContain('unknown model');
   });
 
   it('resolves bare "opus" to the best available opus model (lexicographic tiebreaker)', () => {
     // Both opus-4-8 and opus-4-6 have contextWindow=1000000; lexicographic tiebreaker picks 4-8
-    expect(defaultResolveModel('opus')).toBe('claude-opus-4-8');
+    expect(idOf('opus')).toBe('claude-opus-4-8');
   });
 
   it('resolves bare "sonnet" to the best available sonnet model', () => {
-    expect(defaultResolveModel('sonnet')).toBe('claude-sonnet-4-6');
+    expect(idOf('sonnet')).toBe('claude-sonnet-4-6');
   });
 
   it('resolves bare "haiku" to the best available haiku model', () => {
-    expect(defaultResolveModel('haiku')).toBe('claude-haiku-4-5');
+    expect(idOf('haiku')).toBe('claude-haiku-4-5');
   });
 
   it('resolves "gpt" to the best GPT model by context window', () => {
     // gpt-5 has 1000000 context, gpt-4o has 128000 → picks gpt-5
-    expect(defaultResolveModel('gpt')).toBe('gpt-5');
+    expect(idOf('gpt')).toBe('gpt-5');
   });
 
   it('resolves shorthands case-insensitively', () => {
-    expect(defaultResolveModel('Opus')).toBe('claude-opus-4-8');
-    expect(defaultResolveModel('GPT')).toBe('gpt-5');
+    expect(idOf('Opus')).toBe('claude-opus-4-8');
+    expect(idOf('GPT')).toBe('gpt-5');
   });
 
   it('does not match unrelated keywords', () => {
-    expect(defaultResolveModel('llama')).toBeNull();
+    expect(idOf('llama')).toBeNull();
+  });
+
+  // #2195: a bare id only the non-selected provider offers used to be
+  // rejected outright ("unknown model") because validation was locked to the
+  // selected provider's catalogue.
+  it('pins a bare id unique to a non-selected provider to that provider', () => {
+    expect(defaultResolveModel('openai/gpt-5.6-terra-pro')).toEqual({
+      ok: true,
+      selection: { modelId: 'openai/gpt-5.6-terra-pro', providerId: 'openrouter' },
+    });
+  });
+
+  it('accepts the canonical provider:model form for a non-selected provider', () => {
+    expect(defaultResolveModel('openrouter:openai/gpt-5.6-terra-pro')).toEqual({
+      ok: true,
+      selection: { modelId: 'openai/gpt-5.6-terra-pro', providerId: 'openrouter' },
+    });
+  });
+
+  it('accepts the canonical provider:model form for the SELECTED provider', () => {
+    expect(defaultResolveModel('adobe:claude-haiku-4-5')).toEqual({
+      ok: true,
+      selection: { modelId: 'claude-haiku-4-5', providerId: 'adobe' },
+    });
   });
 });
 

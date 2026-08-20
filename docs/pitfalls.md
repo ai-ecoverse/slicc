@@ -872,6 +872,45 @@ const vfs = new VirtualFS(`slicc-fs-test-${Date.now()}`);
 
 **Code**: `isPreviewUrl(url)` in `packages/webapp/src/shell/supplemental-commands/shared.ts` matches both forms (legacy `/preview/` and the unified `<token>.sliccy.now` / `<token>.sliccy.dev` host). The app-tab detector in `playwright-command.ts:resolveAppTabId` excludes URLs that match.
 
+## Scoop Model Ids Must Carry Their Provider
+
+**Files**: `packages/webapp/src/providers/account-store.ts`, `packages/webapp/src/scoops/scoop-context.ts`
+
+`resolveModelById(modelId)` resolves against whatever provider is SELECTED and
+degrades to `resolveCurrentModel()` (the cone's own model) for an id that
+provider doesn't offer. So a model id alone is not enough to spawn a scoop: with
+two providers configured, accepting `openrouter:openai/gpt-5.6-terra-pro` while
+still resolving against `adobe` runs the scoop on Adobe Opus at many times the
+intended price, silently (#2195, and its #1752 ancestor).
+
+**Rules**
+
+- Resolve spawn-time model input with `resolveModelSelectionForScoop()`, which
+  returns `{ modelId, providerId }` — never with a bare catalogue lookup.
+- Persist BOTH: `ScoopConfig.modelId` and `ScoopConfig.modelProviderId`. Any
+  path that inherits a parent's model must inherit its provider too.
+- Pass the provider back in at resolve time: `resolveModelById(id, providerId)`.
+  Pinned, it throws instead of degrading, and `ScoopContext.init()` fails the
+  scoop when the resolved model or provider doesn't match what was configured.
+- The CREDENTIAL follows the pin too: `getApiKey()` returns the _selected_
+  provider's key, so a pinned scoop must read `getApiKeyForProvider(pinned)`
+  for the agent, compaction, and the init guard — otherwise one provider's
+  token is sent to another provider's route (auth failure plus credential
+  exposure).
+- Compare providers with `modelRunsOnProvider()`, not `===`: some providers
+  serve another registry's catalogue unchanged (`azure-ai-foundry` proxies
+  Anthropic, so its models report `provider: 'anthropic'`).
+- `provider:model` is the canonical display form (the `models` command prints
+  it). Split it on the FIRST colon and only when the prefix names a real
+  provider — model ids legitimately contain colons
+  (`us.anthropic.claude-haiku-4-5-20251001-v1:0`).
+- Resolvable is not the same as permitted: `/etc/models` is an allow-list keyed
+  by the SELECTED provider, so cross-provider targeting is opt-in per provider
+  (a work account must not be spent by a stray `--model`). Enforce it on spawn
+  resolution; apply only its `-provider:model` denials to the picker and the
+  `models` command, or the user can no longer switch accounts from the UI. See
+  [`docs/approvals.md`](approvals.md#model-access-policy----etcmodels).
+
 ## Scoop Lifecycle
 
 **File**: `packages/webapp/src/scoops/orchestrator.ts`
