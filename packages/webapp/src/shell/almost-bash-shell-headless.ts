@@ -29,7 +29,14 @@
  * envelope emit.
  */
 
-import type { BashExecResult, Command, CommandContext, CommandName, ExecResult } from 'just-bash';
+import type {
+  BashExecResult,
+  Command,
+  CommandContext,
+  CommandName,
+  ExecResult,
+  ResolvedCommandContext,
+} from 'just-bash';
 import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
 // The shell only FORWARDS a BrowserAPI (to the supplemental commands and
 // upskill); it never calls one. Sourcing the type from the sibling that owns
@@ -895,7 +902,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     return {
       name: command.name,
       trusted: command.trusted,
-      async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
+      async execute(args: string[], ctx: ResolvedCommandContext): Promise<ExecResult> {
         const denial = await guard(args);
         if (denial) return denial;
         return command.execute(args, ctx);

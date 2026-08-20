@@ -1,5 +1,4 @@
-import type { CommandContext } from 'just-bash';
-import { unsafeBytesFromLatin1 } from 'just-bash';
+import { createCommandContext, unsafeBytesFromLatin1 } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { WebhookEntry } from '../../src/scoops/lick-manager.js';
 
@@ -114,7 +113,7 @@ async function runServe(
     '../../src/shell/supplemental-commands/serve-command.js'
   );
 
-  const ctx: CommandContext = {
+  const ctx = createCommandContext({
     cwd: '/workspace',
     env: new Map<string, string>(),
     stdin: unsafeBytesFromLatin1(''),
@@ -134,7 +133,7 @@ async function runServe(
       },
     } as any,
     exec: {} as any,
-  };
+  });
 
   const cmd = createServeCommand();
   const result = (await cmd.execute(argv, ctx)) as {
