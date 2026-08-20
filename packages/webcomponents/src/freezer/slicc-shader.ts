@@ -368,6 +368,8 @@ export class SliccShader extends HTMLElement {
   #raf = 0;
   #start = 0;
   #energy = 0;
+  // #lastFrameTs / #burstUntil are ms on the rAF / performance.now() clock —
+  // distinct from #start and the u_time uniform, which are in seconds.
   #lastFrameTs = Number.NEGATIVE_INFINITY;
   #burstUntil = 0;
   #contextLost = false;
@@ -407,8 +409,9 @@ export class SliccShader extends HTMLElement {
     }
     this.removeAttribute('no-webgl');
     if (typeof ResizeObserver !== 'undefined') {
-      // ResizeObserver delivers a mandatory initial notification on observe();
-      // that is a mount artifact, not a user resize — bursting on it would open
+      // ResizeObserver delivers an initial notification on observe() for any
+      // rendered, non-zero-size element; that is a mount artifact, not a user
+      // resize — bursting on it would open
       // an 800 ms full-rate window on every connect (the connect render via
       // #wake() already paints the initial size). Skip exactly one.
       let initial = true;
@@ -592,6 +595,11 @@ export class SliccShader extends HTMLElement {
 
   /** Bump the reactive energy (an event landed) — glows + surges briefly. */
   pulse(amount = 1): void {
+    // Guard non-finite input: NaN would never clear the `#energy < 0.001` floor,
+    // so `#energy === 0` self-termination could never fire and a static field
+    // would spin forever uploading a NaN u_energy — the exact idle burn this
+    // component exists to prevent.
+    if (!Number.isFinite(amount)) return;
     this.#energy = Math.min(1.4, this.#energy + amount);
     this.#wake({ burst: true });
   }
@@ -768,7 +776,16 @@ export class SliccShader extends HTMLElement {
     this.#onContextRestored = () => {
       if (!this.isConnected || !this.#gl) return;
       this.#programs = {};
-      if (!this.#setupGlResources()) return;
+      if (!this.#setupGlResources()) {
+        // A restored context we cannot rebuild on (link failure, exhausted
+        // buffers) must degrade to the CSS gradient exactly like the initial
+        // #initGl failure path — never leave the field parked and blank with
+        // #contextLost stuck true and no signal.
+        console.error('[slicc-shader] GL restore failed; falling back to CSS gradient');
+        this.setAttribute('no-webgl', '');
+        this.#dispose();
+        return;
+      }
       this.#contextLost = false;
       this.#start = performance.now() / 1000;
       this.#lastFrameTs = Number.NEGATIVE_INFINITY;

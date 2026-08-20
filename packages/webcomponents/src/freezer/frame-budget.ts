@@ -8,7 +8,8 @@
  *
  * Rule of thumb (see docs/webcomponents-details.md "Animation loops"): a
  * background field whose fastest visible component is well under 1 Hz —
- * slicc-shader's is sin(t*2.7) ≈ 0.43 Hz — is ~35x oversampled at 15 fps.
+ * slicc-shader's is sin(t*2.7) ≈ 0.43 Hz at max speed — is ~35x oversampled
+ * at 15 fps.
  */
 
 /** Ambient cadence for decorative fields. */

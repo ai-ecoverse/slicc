@@ -293,6 +293,49 @@ describe('slicc-shader', () => {
       await wait(250);
       expect(spy.mock.calls.length).toBe(0);
     });
+
+    it('cone with speed=0 renders exactly one frame (not zero)', async () => {
+      const spy = spyDraws();
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await wait(200); // connect renders one frame, then the loop self-terminates
+      // Pins "renders once and stops" against a regression that drops the
+      // connect frame entirely (which the stop-focused test above cannot catch).
+      expect(spy.mock.calls.length).toBe(1);
+    });
+
+    it('a theme change re-renders a static field and it re-stops', async () => {
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await wait(150); // settle: one connect frame, then stopped
+      const spy = spyDraws();
+      const html = document.documentElement;
+      const hadDark = html.classList.contains('dark');
+      html.classList.toggle('dark'); // fires the theme MutationObserver -> #wake
+      try {
+        await wait(150);
+        expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
+        // ...and the static field re-stops rather than looping on.
+        const settled = spy.mock.calls.length;
+        await wait(250);
+        expect(spy.mock.calls.length).toBe(settled);
+      } finally {
+        if (hadDark) html.classList.add('dark');
+        else html.classList.remove('dark');
+      }
+    });
+
+    it('pulse(NaN) does not spin a static field', async () => {
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await wait(150); // settle: stopped
+      const spy = spyDraws();
+      el.pulse(Number.NaN);
+      await wait(300);
+      // The finite guard rejects NaN, so no wake and no loop; without it a NaN
+      // energy would never clear the rest floor and the loop would run forever.
+      expect(spy.mock.calls.length).toBe(0);
+    });
   });
 
   it('caps the backing store at DPR 1 by default and honors the dpr escape hatch', async () => {
