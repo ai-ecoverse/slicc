@@ -189,7 +189,13 @@ export const CODE_SIGNATURES = [
   {
     category: 'debt-gate',
     pattern:
-      /check-touched-exemptions:\s*FAIL|still on the [\w-]+ debt list|debt list is frozen and must not grow/i,
+      // The rule label is matched loosely on purpose. Every label today is a
+      // single hyphenated token, so `[\w-]+` would do — but this whole class of
+      // failure was invisible for exactly one reason: a phrase the classifier
+      // expected did not match the phrase the gate printed, and the symptom was
+      // silence rather than an error. A label gaining a space should not be able
+      // to re-create that.
+      /check-touched-exemptions:\s*FAIL|still on the .{1,40}? debt list|debt list is frozen and must not grow/i,
   },
   {
     category: 'lint',
