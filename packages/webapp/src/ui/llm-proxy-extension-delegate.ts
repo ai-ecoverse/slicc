@@ -15,7 +15,7 @@
  * structural port (`onmessage` + optional `start`/`close`).
  */
 
-import type { ResponseMsg } from '../../../chrome-extension/src/fetch-proxy-shared.js';
+import type { FetchProxyResponseMsg } from '@slicc/shared-ts';
 import { decodeForbiddenResponseHeaders } from '../shell/proxy-headers.js';
 
 /**
@@ -81,7 +81,7 @@ export function buildDelegatedResponseStream(port: DelegateResponsePort): {
     }
   };
 
-  const onHead = (msg: Extract<ResponseMsg, { type: 'response-head' }>): void => {
+  const onHead = (msg: Extract<FetchProxyResponseMsg, { type: 'response-head' }>): void => {
     if (headReceived) return;
     headReceived = true;
     const headers = new Headers();
@@ -95,7 +95,7 @@ export function buildDelegatedResponseStream(port: DelegateResponsePort): {
     resolveResp(new Response(body, { status: msg.status, statusText: msg.statusText, headers }));
   };
 
-  const onError = (msg: Extract<ResponseMsg, { type: 'response-error' }>): void => {
+  const onError = (msg: Extract<FetchProxyResponseMsg, { type: 'response-error' }>): void => {
     terminated = true;
     const err = new Error(msg.error);
     if (headReceived) errorStream(err);
@@ -104,7 +104,7 @@ export function buildDelegatedResponseStream(port: DelegateResponsePort): {
   };
 
   port.onmessage = (event: MessageEvent) => {
-    const msg = event.data as ResponseMsg;
+    const msg = event.data as FetchProxyResponseMsg;
     if (!msg || typeof (msg as { type?: unknown }).type !== 'string' || terminated) return;
     if (msg.type === 'response-head') onHead(msg);
     else if (msg.type === 'response-chunk') controller?.enqueue(decodeBase64Bytes(msg.dataBase64));

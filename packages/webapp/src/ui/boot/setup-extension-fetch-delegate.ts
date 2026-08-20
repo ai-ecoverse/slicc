@@ -12,10 +12,7 @@
  * stays intact). The chrome Port maps 1:1 to the SW's `MessageChannel`.
  */
 
-import type {
-  RequestMsg,
-  ResponseMsg,
-} from '../../../../chrome-extension/src/fetch-proxy-shared.js';
+import type { FetchProxyRequestMsg, FetchProxyResponseMsg } from '@slicc/shared-ts';
 import { createLogger } from '../../core/index.js';
 import {
   type ExtensionFetchDelegateRequest,
@@ -59,7 +56,7 @@ function runDelegatedFetch(
       responsePort.postMessage({
         type: 'response-error',
         error: 'extension-delegate: chrome.runtime.connect unavailable',
-      } satisfies ResponseMsg);
+      } satisfies FetchProxyResponseMsg);
     } catch {
       /* port may already be gone */
     }
@@ -76,7 +73,7 @@ function runDelegatedFetch(
       responsePort.postMessage({
         type: 'response-error',
         error: `extension-delegate: connect failed — ${err instanceof Error ? err.message : String(err)}`,
-      } satisfies ResponseMsg);
+      } satisfies FetchProxyResponseMsg);
     } catch {
       /* port may already be gone */
     }
@@ -101,7 +98,7 @@ function runDelegatedFetch(
 
   port.onMessage.addListener((raw: unknown) => {
     if (terminated) return;
-    const msg = raw as ResponseMsg;
+    const msg = raw as FetchProxyResponseMsg;
     try {
       responsePort.postMessage(msg);
     } catch {
@@ -116,7 +113,7 @@ function runDelegatedFetch(
       responsePort.postMessage({
         type: 'response-error',
         error: 'extension-delegate: fetch-proxy port disconnected',
-      } satisfies ResponseMsg);
+      } satisfies FetchProxyResponseMsg);
     } catch {
       /* already gone */
     }
@@ -124,7 +121,7 @@ function runDelegatedFetch(
   });
 
   // Re-add the `request` discriminator the SW stripped before delegating.
-  port.postMessage({ type: 'request', ...envelope.request } satisfies RequestMsg);
+  port.postMessage({ type: 'request', ...envelope.request } satisfies FetchProxyRequestMsg);
 }
 
 /**
