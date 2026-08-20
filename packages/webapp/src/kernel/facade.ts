@@ -1017,6 +1017,29 @@ export class Bridge implements KernelFacade {
    * Session-stats pull: total cost (floatbar counter) + per-scoop
    * context-window fill (the chip pupils dilate as the context fills).
    */
+  /**
+   * Gate a page-originated action through the orchestrator's SudoManager
+   * (policy check → broker → "Always" persistence). Fail closed: no manager,
+   * or a throwing broker, replies `deny`.
+   */
+  private async handleRequestSudoApproval(
+    requestId: string,
+    request: import('../sudo/types.js').SudoRequest
+  ): Promise<void> {
+    let decision: import('../sudo/types.js').SudoDecision = { decision: 'deny' };
+    const manager = this.orchestrator?.getSudoManager() ?? null;
+    if (!manager) {
+      console.warn('[kernel-bridge] request-sudo-approval before SudoManager init — denying');
+    } else {
+      try {
+        decision = await manager.approve(request);
+      } catch (err) {
+        console.warn('[kernel-bridge] sudo approval threw — denying', err);
+      }
+    }
+    this.emit({ type: 'sudo-approval', requestId, decision });
+  }
+
   private handleRequestSessionStats(requestId: string): void {
     let totalCost = 0;
     let burnRate = 0;
@@ -1355,6 +1378,10 @@ export class Bridge implements KernelFacade {
 
       case 'request-session-stats':
         this.handleRequestSessionStats(msg.requestId);
+        break;
+
+      case 'request-sudo-approval':
+        void this.handleRequestSudoApproval(msg.requestId, msg.request);
         break;
 
       case 'clear-chat': {

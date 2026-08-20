@@ -31,6 +31,7 @@ import type {
   SessionStatsMsg,
   SetThinkingLevelAckMsg,
   StateSnapshotMsg,
+  SudoApprovalMsg,
   TrayFollowerStatusSnapshot,
   TrayLeaderStatusSnapshot,
   TrayRuntimeStatusMsg,
@@ -182,6 +183,10 @@ export class OffscreenClient implements KernelClientFacade {
     (messages: ScoopMessagesReplacedMsg['messages']) => void
   >();
   private pendingStatsRequests = new Map<string, (stats: SessionStats) => void>();
+  private pendingSudoRequests = new Map<
+    string,
+    (decision: import('../sudo/types.js').SudoDecision) => void
+  >();
   /**
    * KernelTransport — defaults to the chrome.runtime adapter.
    * A `MessageChannel`-backed transport can be passed via the
@@ -561,6 +566,30 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   /**
+   * Gate an action through the kernel's sudo policy + broker (issue #2062).
+   * Waits on a human, so the window is generous; a kernel that never answers
+   * resolves `deny`.
+   */
+  async requestSudoApproval(
+    request: import('../sudo/types.js').SudoRequest,
+    timeoutMs = 10 * 60 * 1000
+  ): Promise<import('../sudo/types.js').SudoDecision> {
+    const requestId = `sudo-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const reply = new Promise<import('../sudo/types.js').SudoDecision>((resolve) => {
+      this.pendingSudoRequests.set(requestId, resolve);
+    });
+    this.send({ type: 'request-sudo-approval', requestId, request } as PanelToOffscreenMessage);
+    const result = await Promise.race([
+      reply,
+      new Promise<import('../sudo/types.js').SudoDecision>((resolve) =>
+        setTimeout(() => resolve({ decision: 'deny' }), timeoutMs)
+      ),
+    ]);
+    this.pendingSudoRequests.delete(requestId);
+    return result;
+  }
+
+  /**
    * Session-stats pull: total session cost + per-scoop context-window
    * fill. Resolves `null` on timeout (the UI keeps its last values).
    */
@@ -831,6 +860,16 @@ export class OffscreenClient implements KernelClientFacade {
         if (resolve) {
           this.pendingChatMessagesRequests.delete(m.requestId);
           resolve(m.messages);
+        }
+        break;
+      }
+
+      case 'sudo-approval': {
+        const m = msg as SudoApprovalMsg;
+        const resolve = this.pendingSudoRequests.get(m.requestId);
+        if (resolve) {
+          this.pendingSudoRequests.delete(m.requestId);
+          resolve(m.decision);
         }
         break;
       }

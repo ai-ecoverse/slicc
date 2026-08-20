@@ -20,7 +20,9 @@
  * originate `tab.open` against another runtime, so that path is TS-only. iOS
  * DOES originate `tab.teleport.request` (pull a tray tab here, with state).
  * The delegated-OAuth pair (`oauth.popup.*`) is TS-only: iOS has no popup
- * model and never advertises `capabilities.oauthPopup`. The per-variant iOS decision is MECHANICALLY enforced by the
+ * model and never advertises `capabilities.oauthPopup`. The delegated sudo
+ * triple (`sudo.approve.*`, v7) and `push.register` are TS + iOS: the phone is
+ * the approval surface the leader has been missing (issue #2062). The per-variant iOS decision is MECHANICALLY enforced by the
  * golden-fixture corpus
  * (`packages/webapp/src/scoops/tray-sync-protocol-corpus.ts` →
  * `packages/ios-app/.../Fixtures/tray-sync-corpus.json`, decoded by both the
@@ -57,7 +59,7 @@ export const CHERRY_RUNTIME_TAG = 'slicc-cherry';
  * build is outdated — both cases log loudly instead of surfacing as silently
  * missing features. Bump when the wire format changes incompatibly.
  */
-export const TRAY_SYNC_PROTOCOL_VERSION = 6;
+export const TRAY_SYNC_PROTOCOL_VERSION = 7;
 
 /**
  * An opaque Chrome DevTools Protocol payload — a `params` or `result` bag.
@@ -131,7 +133,44 @@ export interface TraySyncCapabilities {
    * (CLI) and iOS never set it.
    */
   oauthPopup?: boolean;
+  /**
+   * This peer can render a delegated sudo approval (`sudo.approve.request`)
+   * to a human and reply with `sudo.approve.response` (v7, issue #2062).
+   * Leaders never send a sudo prompt to a peer that omits this.
+   */
+  sudoApproval?: boolean;
+  /**
+   * This peer gates its Allow / Always gestures behind device-owner
+   * authentication (Face ID / Touch ID / passcode via `LAContext`). Only a
+   * `biometric` peer may answer `always` — the leader downgrades an `always`
+   * from any other peer to a one-shot `allow`, so an unauthenticated web tab
+   * can never widen the policy.
+   */
+  biometric?: boolean;
 }
+
+// ---------------------------------------------------------------------------
+// Delegated sudo approval (v7, issue #2062)
+// ---------------------------------------------------------------------------
+
+/**
+ * What kind of sensitive action a sudo prompt gates. Mirrors the webapp's
+ * `SudoRequest.kind`; lives here because the wire carries it. `export` is the
+ * transcript-export gate, folded into sudo in v7 (previously its own
+ * `transcript.export.approve.*` pair).
+ */
+export type TraySudoKind = 'command' | 'read' | 'write' | 'secret' | 'export';
+
+/** The human's verdict on a delegated sudo prompt. */
+export type TraySudoDecision = 'allow' | 'deny' | 'always';
+
+/**
+ * Which gate the follower's human passed before answering. `biometric` =
+ * Face ID / Touch ID, `passcode` = the device passcode fallback, `none` = a
+ * plain click (web followers). Informational for the leader's log + lick
+ * card; the `always` downgrade keys off the advertised capability, not this.
+ */
+export type TraySudoAttestation = 'biometric' | 'passcode' | 'none';
 
 // ---------------------------------------------------------------------------
 // Transport-level chunk framing
@@ -254,21 +293,31 @@ export type LeaderToFollowerMessage =
   | { type: 'transcript.export.pending'; requestId: string }
   | { type: 'transcript.export.denied'; requestId: string }
   /**
-   * Delegated approval prompt (v4). Sent **only** when the leader has no
-   * interactive human of its own — the hosted-leader (cloud) float, where the
-   * leader tab is headless Chromium in an e2b sandbox. The requesting follower
-   * renders the same approval dialog the leader would have shown and replies
-   * with `transcript.export.approve.response`.
-   *
-   * Carries no transcript metadata beyond what the follower already supplied in
-   * its own request (`selector`), plus an optional size estimate.
+   * Delegated sudo prompt (v7, issue #2062). The leader has decided this
+   * follower's human is the right person to ask — it is headless (the hosted /
+   * cloud float), or the last user message came from a follower. Every
+   * `sudoApproval`-capable follower receives the same prompt; the first reply
+   * wins and the rest get `sudo.approve.cancel`. Carries exactly what the
+   * native dialog would show: the kind, the concrete command / path / selector,
+   * and the editable "Always" pattern. `expiresAt` (epoch ms) is when the
+   * leader gives up and denies, so the follower can drop a stale card.
    */
   | {
-      type: 'transcript.export.approve.request';
+      type: 'sudo.approve.request';
       requestId: string;
-      selector: TranscriptExportSelector;
-      estimatedBytes?: number;
+      kind: TraySudoKind;
+      detail: string;
+      suggestedPattern?: string;
+      /** Requesting scoop's label when the action came from a scoop, else absent. */
+      scoopName?: string;
+      expiresAt: number;
     }
+  /**
+   * Withdraw a `sudo.approve.request`: another follower answered first, the
+   * leader timed out, or the request was aborted. The follower closes its card
+   * / notification; a late reply is ignored by the leader anyway.
+   */
+  | { type: 'sudo.approve.cancel'; requestId: string }
   | {
       type: 'transcript.export.start';
       requestId: string;
@@ -378,12 +427,32 @@ export type FollowerToLeaderMessage =
    */
   | { type: 'transcript.export.ack'; requestId: string; index: number }
   /**
-   * Reply to a delegated `transcript.export.approve.request` (v4). `approved`
-   * is the human's verdict from the follower-rendered dialog. Any other
-   * outcome (no handler, dialog error, timeout, disconnect) is resolved as a
-   * denial by the leader — the gate is fail-closed.
+   * Reply to a delegated `sudo.approve.request` (v7). `pattern` accompanies
+   * `always` (the human-edited glob to persist as a NOPASSWD rule).
+   * `attestation` says which gate the human passed. Any other outcome — no
+   * handler, dialog error, timeout, disconnect, malformed reply — is a denial
+   * on the leader; the gate is fail-closed.
    */
-  | { type: 'transcript.export.approve.response'; requestId: string; approved: boolean }
+  | {
+      type: 'sudo.approve.response';
+      requestId: string;
+      decision: TraySudoDecision;
+      pattern?: string;
+      attestation?: TraySudoAttestation;
+    }
+  /**
+   * Register this follower's push token with the tray so the hub can wake it
+   * for `turn_end` and priority `sudo_request` notifications while it is
+   * suspended (v7, issue #2062). The leader forwards it to the tray hub over
+   * its controller socket and never persists it. `environment` selects the
+   * APNs sandbox vs production gateway.
+   */
+  | {
+      type: 'push.register';
+      platform: 'ios';
+      token: string;
+      environment: 'sandbox' | 'production';
+    }
   | {
       type: 'user_message';
       text: string;

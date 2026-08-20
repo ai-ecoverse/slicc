@@ -6,6 +6,7 @@
 import type {
   LeaderToWorkerControlMessage,
   TranscriptExportSelector,
+  TraySudoKind,
   WorkerBridgeCdpResponse,
   WorkerBridgeConnected,
   WorkerBridgeDisconnected,
@@ -18,6 +19,7 @@ import type { CDPTransport } from '../cdp/transport.js';
 import type { AgentEvent } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
+import type { SudoDecision, SudoRequest } from '../sudo/types.js';
 import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';
 import type { LickEvent } from './lick-manager.js';
@@ -43,6 +45,7 @@ import {
 import { PreviewBridgeManager, type PreviewLifecycleRecord } from './tray-leader/preview-bridge.js';
 import { type RemoteExecResult, RemoteExecRouter } from './tray-leader/remote-exec.js';
 import { type LastUserMessageOrigin, RequesterTracker } from './tray-leader/requester-tracker.js';
+import { SudoDelegation } from './tray-leader/sudo-delegation.js';
 import { TabRouter } from './tray-leader/tab-router.js';
 import { TabTeleportRouter } from './tray-leader/tab-teleport-router.js';
 import { isCherryTarget, selectTeleportPool, TeleportPool } from './tray-leader/teleport-pool.js';
@@ -184,17 +187,20 @@ export interface LeaderSyncManagerOptions {
   /** Close the persistent leader shell owned by a disconnected follower. */
   closeExecShell?: (sessionId: string) => void;
   /**
-   * Called when a follower requests a transcript export. The leader shows an
-   * approval dialog and resolves true (allow) or false (deny). Derive follower
-   * identity from connected state; never trust the request payload for it.
+   * Gate a follower-originated action through the kernel's sudo policy +
+   * broker (issue #2062 folded the transcript-export approval into sudo).
+   * The kernel checks `NOPASSWD` grants, routes the prompt to the human —
+   * which may come straight back to this page as a tray delegation — and
+   * persists "Always". Derive follower identity from connected state; never
+   * trust the request payload for it. Unset → the gate denies.
    */
-  requestTranscriptExportApproval?: (request: {
-    requestId: string;
+  requestSudoApproval?: (request: {
+    kind: TraySudoKind;
+    detail: string;
+    suggestedPattern?: string;
     followerLabel: string;
     hostOrigin?: string;
-    selector: TranscriptExportSelector;
-    estimatedBytes?: number;
-  }) => Promise<boolean>;
+  }) => Promise<SudoDecision>;
   /**
    * True when this leader tab has no interactive human of its own. The approval
    * gate is delegated to the requesting follower rather than skipped.
@@ -226,6 +232,9 @@ export class LeaderSyncManager {
   private readonly requesterTracker = new RequesterTracker();
   private readonly tabTeleportRouter: TabTeleportRouter;
   private readonly oauthPopupDelegation: OAuthPopupDelegation;
+  private readonly sudoDelegation: SudoDelegation;
+  /** Follower bootstrap ids that registered a push token this session. */
+  private readonly pushRegistered = new Set<string>();
   private get followers(): Map<string, ConnectedFollower> {
     return this.followerRegistry.followers;
   }
@@ -266,6 +275,7 @@ export class LeaderSyncManager {
       getTargetEntries: () => this.teleportPool.getConnectedEntries(),
     });
     this.oauthPopupDelegation = new OAuthPopupDelegation(context);
+    this.sudoDelegation = new SudoDelegation(context);
     this.followerDispatch = new FollowerDispatch(context, {
       broadcast: this.broadcast,
       cdpRouter: this.cdpRouter,
@@ -278,6 +288,18 @@ export class LeaderSyncManager {
       requesterTracker: this.requesterTracker,
       tabTeleportRouter: this.tabTeleportRouter,
       oauthPopupDelegation: this.oauthPopupDelegation,
+      sudoDelegation: this.sudoDelegation,
+      registerPushToken: (bootstrapId, registration) => {
+        this.pushRegistered.add(bootstrapId);
+        try {
+          this.options.sendControl({ type: 'push.register', bootstrapId, ...registration });
+        } catch (err) {
+          log.warn('Could not forward push.register to the tray hub', {
+            bootstrapId,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        }
+      },
     });
     this.followerRegistry.onFollowerRemoved({
       afterRegistryCleanup: (bootstrapId) =>
@@ -440,6 +462,42 @@ export class LeaderSyncManager {
     floatType: FloatType;
   } | null {
     return this.teleportPool.getBestFollowerForTeleport();
+  }
+
+  /**
+   * Should a sudo prompt go to a tray follower's human instead of this
+   * leader's native dialog? Same shape as {@link shouldDelegateOAuthLogin}: a
+   * headless leader always says yes (it parks the prompt and push-wakes a
+   * phone if nobody is connected); a leader with a human says yes only when a
+   * `sudoApproval` follower is connected AND the last user message came from a
+   * follower — the human is demonstrably elsewhere (issue #2062).
+   */
+  shouldDelegateSudo(): boolean {
+    if (this.options.headlessLeader === true) return true;
+    if (!this.sudoDelegation.hasCapableFollower()) return false;
+    return this.requesterTracker.get()?.kind === 'follower';
+  }
+
+  /** Ship a sudo prompt to the capable followers; first verdict wins. */
+  delegateSudoApproval(request: SudoRequest, opts?: { scoopName?: string }): Promise<SudoDecision> {
+    return this.sudoDelegation.requestApproval(request, opts);
+  }
+
+  /**
+   * The leader's turn finished. Ask the hub to wake registered phones with a
+   * `turn_end` banner (metadata only). No-op until some follower has
+   * registered a push token this session, so leaders without an iOS follower
+   * never chatter at the hub.
+   */
+  notifyTurnEnd(scoopLabel: string): void {
+    if (this.pushRegistered.size === 0) return;
+    try {
+      this.options.sendControl({ type: 'push.send', category: 'turn_end', label: scoopLabel });
+    } catch (err) {
+      log.debug?.('push.send(turn_end) not delivered', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /** Record that the leader's own UI submitted a user message. */

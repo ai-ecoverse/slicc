@@ -15,7 +15,7 @@ import { requireLoopback } from '../cloud-status.js';
 import { selectSudoBackend } from './select.js';
 import type { SudoApproveRequest, SudoBackend, SudoDecision, SudoKind } from './types.js';
 
-const VALID_KINDS: readonly SudoKind[] = ['command', 'read', 'write', 'secret'];
+const VALID_KINDS: readonly SudoKind[] = ['command', 'read', 'write', 'secret', 'export'];
 
 export interface SudoEndpointOptions {
   /**
@@ -30,7 +30,7 @@ export interface SudoEndpointOptions {
 
 function isSudoApproveRequest(x: unknown): x is SudoApproveRequest {
   if (typeof x !== 'object' || x === null) return false;
-  const p = x as Record<string, unknown>;
+  const p = x as { kind?: unknown; detail?: unknown; suggestedPattern?: unknown };
   if (typeof p.kind !== 'string' || !VALID_KINDS.includes(p.kind as SudoKind)) return false;
   if (typeof p.detail !== 'string' || p.detail.length === 0) return false;
   if ('suggestedPattern' in p && typeof p.suggestedPattern !== 'string') return false;

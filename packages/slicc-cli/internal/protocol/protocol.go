@@ -17,7 +17,7 @@ import "encoding/json"
 // selecting this follower as a teleport destination: its `tab.open` would hang
 // rather than fail, so the leader now requires the flag instead of optimistically
 // assuming an un-advertised follower can serve one.
-const TraySyncProtocolVersion = 6
+const TraySyncProtocolVersion = 7
 
 // RuntimeTag is the runtime the CLI attaches with (mirrors 'slicc-standalone').
 const RuntimeTag = "slicc-cli"
@@ -32,6 +32,14 @@ type Capabilities struct {
 	// two behave alike today — but only one of them survives a round-trip, and
 	// the iOS follower does send an explicit false.
 	Exec bool `json:"exec"`
+	// Browser / OAuthPopup / SudoApproval / Biometric are additive flags the
+	// browser and iOS followers advertise (v7 added the sudo pair, #2062).
+	// The CLI never sets them; they are modeled so a corpus round-trip keeps
+	// every field a real peer sends.
+	Browser      *bool `json:"browser,omitempty"`
+	OAuthPopup   *bool `json:"oauthPopup,omitempty"`
+	SudoApproval *bool `json:"sudoApproval,omitempty"`
+	Biometric    *bool `json:"biometric,omitempty"`
 }
 
 // Hello is the additive version handshake both sides send first.

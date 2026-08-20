@@ -171,16 +171,22 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
     ios: 'unknown',
     message: { type: 'transcript.export.error', requestId: 'te-1', code: 'session-not-found' },
   },
-  // Delegated approval prompt — only sent by a headless (hosted/cloud) leader.
-  // iOS never originates exports, so it never receives this.
-  'transcript.export.approve.request': {
-    ios: 'unknown',
+  // Delegated sudo prompt (#2062): iOS renders it behind Face ID.
+  'sudo.approve.request': {
+    ios: 'decoded',
     message: {
-      type: 'transcript.export.approve.request',
-      requestId: 'te-1',
-      selector: { kind: 'active' },
-      estimatedBytes: 1024,
+      type: 'sudo.approve.request',
+      requestId: 'sudo-1',
+      kind: 'command',
+      detail: 'git push origin main',
+      suggestedPattern: 'git push *',
+      scoopName: 'Researcher',
+      expiresAt: 1750000300000,
     },
+  },
+  'sudo.approve.cancel': {
+    ios: 'decoded',
+    message: { type: 'sudo.approve.cancel', requestId: 'sudo-1' },
   },
   snapshot: {
     ios: 'decoded',
@@ -534,10 +540,26 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
     ios: 'undecodable',
     message: { type: 'transcript.export.ack', requestId: 'te-2', index: 0 },
   },
-  // TS-only: iOS never originates exports so it is never asked to approve one.
-  'transcript.export.approve.response': {
-    ios: 'undecodable',
-    message: { type: 'transcript.export.approve.response', requestId: 'te-2', approved: true },
+  // iOS answers delegated sudo prompts after a Face ID / passcode gate (#2062).
+  'sudo.approve.response': {
+    ios: 'decoded',
+    message: {
+      type: 'sudo.approve.response',
+      requestId: 'sudo-1',
+      decision: 'always',
+      pattern: 'git push *',
+      attestation: 'biometric',
+    },
+  },
+  // iOS registers its APNs token on every connect so the hub can wake it.
+  'push.register': {
+    ios: 'decoded',
+    message: {
+      type: 'push.register',
+      platform: 'ios',
+      token: '0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef',
+      environment: 'sandbox',
+    },
   },
   user_message: {
     ios: 'decoded',
@@ -733,7 +755,7 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
       type: 'hello',
       protocolVersion: 1,
       runtime: 'slicc-ios',
-      capabilities: { exec: true },
+      capabilities: { exec: true, browser: true, sudoApproval: true, biometric: true },
       motd: 'SLICC iOS follower on iPhone (iOS 26.0) — only supported command: open',
     },
   },

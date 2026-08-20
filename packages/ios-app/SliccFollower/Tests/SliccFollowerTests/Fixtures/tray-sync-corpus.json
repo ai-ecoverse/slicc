@@ -1,7 +1,7 @@
 {
-  "traySyncProtocolVersion": 6,
-  "leaderVariantCount": 40,
-  "followerVariantCount": 35,
+  "traySyncProtocolVersion": 7,
+  "leaderVariantCount": 41,
+  "followerVariantCount": 36,
   "agentEventVariantCount": 11,
   "leaderToFollower": [
     {
@@ -378,6 +378,27 @@
       }
     },
     {
+      "type": "sudo.approve.cancel",
+      "ios": "decoded",
+      "message": {
+        "type": "sudo.approve.cancel",
+        "requestId": "sudo-1"
+      }
+    },
+    {
+      "type": "sudo.approve.request",
+      "ios": "decoded",
+      "message": {
+        "type": "sudo.approve.request",
+        "requestId": "sudo-1",
+        "kind": "command",
+        "detail": "git push origin main",
+        "suggestedPattern": "git push *",
+        "scoopName": "Researcher",
+        "expiresAt": 1750000300000
+      }
+    },
+    {
       "type": "tab.open",
       "ios": "decoded",
       "message": {
@@ -428,18 +449,6 @@
       "message": {
         "type": "theme.apply",
         "themeJson": "{\"accent\":\"#ff0066\"}"
-      }
-    },
-    {
-      "type": "transcript.export.approve.request",
-      "ios": "unknown",
-      "message": {
-        "type": "transcript.export.approve.request",
-        "requestId": "te-1",
-        "selector": {
-          "kind": "active"
-        },
-        "estimatedBytes": 1024
       }
     },
     {
@@ -645,7 +654,10 @@
         "protocolVersion": 1,
         "runtime": "slicc-ios",
         "capabilities": {
-          "exec": true
+          "exec": true,
+          "browser": true,
+          "sudoApproval": true,
+          "biometric": true
         },
         "motd": "SLICC iOS follower on iPhone (iOS 26.0) — only supported command: open"
       }
@@ -710,6 +722,16 @@
       }
     },
     {
+      "type": "push.register",
+      "ios": "decoded",
+      "message": {
+        "type": "push.register",
+        "platform": "ios",
+        "token": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        "environment": "sandbox"
+      }
+    },
+    {
       "type": "request_snapshot",
       "ios": "decoded",
       "message": {
@@ -751,6 +773,17 @@
       "ios": "decoded",
       "message": {
         "type": "sprinkles.refresh"
+      }
+    },
+    {
+      "type": "sudo.approve.response",
+      "ios": "decoded",
+      "message": {
+        "type": "sudo.approve.response",
+        "requestId": "sudo-1",
+        "decision": "always",
+        "pattern": "git push *",
+        "attestation": "biometric"
       }
     },
     {
@@ -823,15 +856,6 @@
         "type": "transcript.export.ack",
         "requestId": "te-2",
         "index": 0
-      }
-    },
-    {
-      "type": "transcript.export.approve.response",
-      "ios": "undecodable",
-      "message": {
-        "type": "transcript.export.approve.response",
-        "requestId": "te-2",
-        "approved": true
       }
     },
     {

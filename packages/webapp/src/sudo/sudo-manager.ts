@@ -20,7 +20,10 @@
 import sudoersDefault from '../../../vfs-root/etc/sudoers?raw';
 import { createLogger } from '../base/logger.js';
 import {
+  type Directive,
+  directiveForKind,
   emptyPolicy,
+  matchExport,
   mergePolicies,
   parseSudoers,
   SUDOERS_D_DIR,
@@ -36,7 +39,7 @@ import { FsError } from '../fs/types.js';
 import type { ScoopConfig } from '../scoops/types.js';
 import type { ShellSudoConfig } from '../shell/almost-bash-shell-headless.js';
 import { createSudoBroker } from './index.js';
-import type { SudoBroker } from './types.js';
+import type { SudoBroker, SudoDecision, SudoRequest } from './types.js';
 
 const log = createLogger('sudo:manager');
 
@@ -175,6 +178,39 @@ export class SudoManager {
   /** The single float-appropriate approval broker. */
   getBroker(): SudoBroker {
     return this.broker;
+  }
+
+  /**
+   * Gate one action through the policy + broker as a unit: an `export`
+   * request pre-granted by a `NOPASSWD Export` rule is allowed with no prompt;
+   * anything else goes to the broker, and an `always` verdict is persisted to
+   * `/etc/sudoers.d/granted` under the kind's directive before it is returned.
+   *
+   * This is the single entry point the page realm uses for human-facing
+   * gates that are not already wrapped by `SudoFS` / the command guard —
+   * today the follower transcript export (issue #2062 folded it into sudo).
+   * The returned decision is what the caller acts on; `always` has already
+   * been made durable by the time it resolves.
+   */
+  async approve(req: SudoRequest): Promise<SudoDecision> {
+    if (req.kind === 'export' && matchExport(this.policy, req.detail) === 'nopasswd-allow') {
+      log.info('Export pre-granted by sudoers', { subject: req.detail });
+      return { decision: 'allow' };
+    }
+    const decision = await this.broker.requestApproval(req);
+    if (decision.decision === 'always') {
+      const pattern = decision.pattern?.trim() || req.suggestedPattern?.trim() || req.detail;
+      try {
+        await this.persistGrant(directiveForKind(req.kind), pattern);
+      } catch (err) {
+        log.warn('Failed to persist "Always" grant; honouring as one-shot allow', {
+          kind: req.kind,
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return { decision: 'allow', attestation: decision.attestation };
+      }
+    }
+    return decision;
   }
 
   /** The live merged policy snapshot (re-read on every change). */
@@ -380,7 +416,12 @@ export class SudoManager {
     }
   }
 
-  private async persistCommandGrant(pattern: string): Promise<void> {
+  private persistCommandGrant(pattern: string): Promise<void> {
+    return this.persistGrant('Cmnd', pattern);
+  }
+
+  /** Append `NOPASSWD <directive> <pattern>` to the auto-managed grants file and reload. */
+  private async persistGrant(directive: Directive, pattern: string): Promise<void> {
     const safe = sanitizeGrantPattern(pattern);
     if (!safe) return;
     let existing = '';
@@ -398,7 +439,8 @@ export class SudoManager {
       /* already exists */
     }
     const prefix = existing && !existing.endsWith('\n') ? `${existing}\n` : existing;
-    await this.fs.writeFile(GRANTED_FILE, `${prefix}NOPASSWD Cmnd  ${safe}\n`);
+    const pad = directive === 'Cmnd' ? '  ' : ' ';
+    await this.fs.writeFile(GRANTED_FILE, `${prefix}NOPASSWD ${directive}${pad}${safe}\n`);
     await this.reload();
   }
 

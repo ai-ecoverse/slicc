@@ -393,6 +393,13 @@ import UIKit
             UserDefaults.standard.bool(forKey: "uiTestOpenApproval")
         }
 
+        /// Stage a delegated sudo approval card without a leader
+        /// (`-uiTestSudoApproval YES`, #2062). The Face ID gate is replaced by
+        /// an always-authenticated seam so the card can be driven end to end.
+        static var stagesSudoApprovalFixture: Bool {
+            UserDefaults.standard.bool(forKey: "uiTestSudoApproval")
+        }
+
         /// Stage a canned photo in the composer on launch
         /// (`-uiTestAttachmentFixture YES`): PhotosPicker runs out of
         /// process and cannot be driven hermetically, so attachment UI

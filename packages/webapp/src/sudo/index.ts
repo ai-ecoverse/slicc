@@ -27,6 +27,7 @@ import { withApprovalTimeout } from './approval-timeout.js';
 import { createExtensionSudoBroker } from './extension-broker.js';
 import { createHttpSudoBroker } from './http-broker.js';
 import { createPanelRpcSudoBroker } from './panel-rpc-broker.js';
+import { createTrayFirstSudoBroker } from './tray-first-broker.js';
 import type { SudoBroker, SudoRequest } from './types.js';
 
 export {
@@ -50,12 +51,21 @@ export {
 export { createExtensionSudoBroker } from './extension-broker.js';
 export { createHttpSudoBroker } from './http-broker.js';
 export {
+  resetSudoPageServiceForTests,
+  resolveSudoApprovalInPage,
+  type SudoPagePrompt,
+  type SudoTrayDelegate,
+  setSudoPagePrompt,
+  setSudoTrayDelegate,
+} from './page-approval-service.js';
+export {
   installPanelSudoResponder,
   type PanelResponderDeps,
   resolveSudoRequest,
 } from './panel-responder.js';
 export { createPanelRpcSudoBroker } from './panel-rpc-broker.js';
 export { suggestPattern } from './suggest-pattern.js';
+export { createTrayFirstSudoBroker } from './tray-first-broker.js';
 export type { SudoBroker, SudoDecision, SudoKind, SudoRequest } from './types.js';
 export { SUDO_APPROVE_PATH, SUDO_REQUEST_TYPE } from './types.js';
 
@@ -84,8 +94,11 @@ function isThinBridgeWorker(): boolean {
  * Construct the {@link SudoBroker} for the current float. Extension mode relays
  * offscreen → side-panel; the thin-bridge extension leader's kernel worker
  * relays to its page realm over panel-RPC (where the native modal lives); every
- * other float (standalone CLI, Electron) talks to the node-server
- * `/api/sudo-approve` endpoint.
+ * other float (standalone CLI, Electron, hosted leader) talks to the
+ * node-server `/api/sudo-approve` endpoint — wrapped tray-first (issue #2062)
+ * so the page realm can hand the prompt to a tray follower's human (or its own
+ * in-page dialog when there is no node-server) before the OS dialog fires.
+ * The panel-RPC broker already settles in the page, so it needs no wrapper.
  *
  * Every float is wrapped in {@link withApprovalTimeout} so a prompt nobody
  * answers releases the blocked agent turn fail-closed instead of hanging on it
@@ -104,7 +117,7 @@ function createFloatSudoBroker(): SudoBroker {
   if (isThinBridgeWorker()) {
     return createPanelRpcSudoBroker();
   }
-  return createHttpSudoBroker();
+  return createTrayFirstSudoBroker(createHttpSudoBroker());
 }
 
 /** The single property {@link installSudoTestHook} grafts onto `globalThis`. */

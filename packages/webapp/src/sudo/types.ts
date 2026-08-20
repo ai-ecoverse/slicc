@@ -7,8 +7,14 @@
  * hard (threat model)".
  */
 
-/** What kind of sensitive action is being gated. */
-export type SudoKind = 'command' | 'read' | 'write' | 'secret';
+import type { TraySudoKind } from '@slicc/shared-ts';
+
+/**
+ * What kind of sensitive action is being gated. Shared with the tray wire
+ * (`TraySudoKind`) because a prompt may be delegated to a follower's human
+ * (issue #2062). `export` is the transcript-export gate, folded into sudo.
+ */
+export type SudoKind = TraySudoKind;
 
 /** A request for native human approval. */
 export interface SudoRequest {
@@ -42,6 +48,12 @@ export interface SudoDecision {
    * branches on `decision === 'deny'`, so a new variant would fail OPEN.
    */
   reason?: SudoTimeoutReason;
+  /**
+   * Which gate the human passed when the decision came from a delegated tray
+   * follower: `biometric` (Face ID / Touch ID), `passcode`, or `none` (a plain
+   * click). Absent for native brokers. Informational.
+   */
+  attestation?: 'biometric' | 'passcode' | 'none';
 }
 
 /** Which approval leg ran out of time. See {@link SudoDecision.reason}. */

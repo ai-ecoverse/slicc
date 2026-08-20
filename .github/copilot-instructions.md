@@ -64,7 +64,8 @@ developer `SKILL.md` files. Run the skill-router and any specialized sync check.
 
 ## 13. Transcript export — redaction boundary (Critical)
 
-Require fail-closed redaction, `reasoningExcluded: true`, one-time reachable approval, binary
+Require fail-closed redaction, `reasoningExcluded: true`, approval through the sudo funnel
+(`kind: 'export'`; only `NOPASSWD Export` skips it, delegated to a follower when headless), binary
 integrity, and `transfer-corrupt` for unknown errors or SHA-256 mismatches.
 
 ## 14. `--help` that does the thing

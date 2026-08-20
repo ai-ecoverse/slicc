@@ -4,9 +4,13 @@
  */
 
 import type {
+  CDPPayload,
   TranscriptExportErrorCode,
   TranscriptExportProgress,
   TranscriptExportSelector,
+  TraySudoAttestation,
+  TraySudoDecision,
+  TraySudoKind,
 } from '@slicc/shared-ts';
 import {
   reassembleCDPResponse,
@@ -154,24 +158,32 @@ export interface FollowerSyncManagerOptions {
    */
   makeExportSpool?: (requestId: string) => ExportSpool;
   /**
-   * Render the transcript-export approval dialog on behalf of a **headless**
-   * leader (the hosted-leader / cloud float, where the leader tab is headless
-   * Chromium in an e2b sandbox and has no human to ask).
+   * Render a delegated sudo approval on behalf of the leader (issue #2062):
+   * the leader is headless (hosted / cloud), or its human is driving from
+   * here. Resolve the human's verdict; `pattern` only matters for `always`
+   * (and the leader accepts `always` only from biometric-gated followers).
    *
-   * Resolve `true` for "Allow once", `false` for deny. When this is unset, or
-   * it rejects, the follower replies with a denial — the gate is fail-closed,
-   * so a follower that cannot prompt can never silently authorize an export.
-   *
-   * `signal` aborts when the underlying export is settled by something other
-   * than this dialog (leader approval timeout, local cancel, disconnect,
-   * error). Implementations MUST close the prompt and resolve `false` on abort
-   * so a stale dialog cannot linger past the request it belongs to.
+   * When unset, or when it rejects, the follower replies `deny` — the gate is
+   * fail-closed. `signal` aborts when the leader withdraws the prompt
+   * (`sudo.approve.cancel`: someone else answered, or it timed out) or the
+   * channel closes; implementations MUST close the dialog on abort.
    */
-  onTranscriptExportApprovalRequest?: (request: {
-    selector: TranscriptExportSelector;
-    estimatedBytes?: number;
+  onSudoApprovalRequest?: (request: {
+    requestId: string;
+    kind: TraySudoKind;
+    detail: string;
+    suggestedPattern?: string;
+    scoopName?: string;
+    expiresAt: number;
     signal: AbortSignal;
-  }) => Promise<boolean> | boolean;
+  }) => Promise<SudoApprovalVerdict> | SudoApprovalVerdict;
+}
+
+/** A follower-rendered sudo verdict. */
+export interface SudoApprovalVerdict {
+  decision: TraySudoDecision;
+  pattern?: string;
+  attestation?: TraySudoAttestation;
 }
 
 const DEFAULT_SPRINKLE_FETCH_TIMEOUT_MS = 15000;
@@ -297,14 +309,11 @@ export class FollowerSyncManager implements AgentHandle {
       signal: AbortSignal;
       onAbort: () => void;
       onProgress?: (progress: TranscriptExportProgress) => void;
-      /**
-       * Aborts a delegated approval dialog that is still on screen. Set while a
-       * headless leader's prompt is open; fired by every terminal outcome so a
-       * stale dialog cannot outlive the request it belongs to.
-       */
-      approvalAbort?: AbortController;
     }
   >();
+
+  /** Open delegated sudo prompts keyed by requestId; aborted on cancel / close. */
+  private readonly openSudoPrompts = new Map<string, AbortController>();
 
   constructor(
     channel: TrayDataChannelLike,
@@ -327,11 +336,16 @@ export class FollowerSyncManager implements AgentHandle {
       this.handleLeaderMessage(message);
     });
     // Version handshake first — additive; legacy leaders drop it harmlessly.
+    // A follower that can render a delegated sudo prompt says so (#2062);
+    // the leader never sends one to a peer that did not.
+    const capabilities = this.options.onSudoApprovalRequest
+      ? { exec: false, ...(this.options.helloCapabilities ?? {}), sudoApproval: true }
+      : this.options.helloCapabilities;
     this.sync.send({
       type: 'hello',
       protocolVersion: TRAY_SYNC_PROTOCOL_VERSION,
       ...(this.options.selfRuntimeId ? { runtime: this.options.selfRuntimeId } : {}),
-      ...(this.options.helloCapabilities ? { capabilities: this.options.helloCapabilities } : {}),
+      ...(capabilities ? { capabilities } : {}),
     });
     this.keepalive = new DataChannelKeepalive({
       sendPing: () => this.sync.send({ type: 'ping' }),
@@ -503,6 +517,10 @@ export class FollowerSyncManager implements AgentHandle {
     // whose answer can never be delivered.
     for (const controller of this.oauthPopupAborts.values()) controller.abort();
     this.oauthPopupAborts.clear();
+    // A delegated sudo prompt cannot outlive its channel: the leader will
+    // deny on disconnect, so a later "Allow" here would land nowhere.
+    for (const controller of this.openSudoPrompts.values()) controller.abort();
+    this.openSudoPrompts.clear();
     const err = new Error(reason);
     for (const { reject } of this.tabOpenResolvers.values()) reject(err);
     this.tabOpenResolvers.clear();
@@ -515,7 +533,6 @@ export class FollowerSyncManager implements AgentHandle {
     // Remove each AbortSignal listener, cancel the spool (releasing OPFS
     // temp files and memory), and clear the map.
     for (const [, entry] of this.activeExportRequests) {
-      entry.approvalAbort?.abort();
       entry.signal.removeEventListener('abort', entry.onAbort);
       void entry.spool.cancel();
       entry.reject(new TranscriptExportError('transfer-aborted'));
@@ -923,8 +940,11 @@ export class FollowerSyncManager implements AgentHandle {
       case 'transcript.export.chunk':
       case 'transcript.export.complete':
       case 'transcript.export.error':
-      case 'transcript.export.approve.request':
         this.handleExportLeaderMessage(message);
+        break;
+      case 'sudo.approve.request':
+      case 'sudo.approve.cancel':
+        this.handleSudoLeaderMessage(message);
         break;
       case 'oauth.popup.request':
         void this.handleOAuthPopupRequest(message.requestId, message.url);
@@ -1358,7 +1378,7 @@ export class FollowerSyncManager implements AgentHandle {
     // symmetry, but the transport routes by sessionId/method alone.
     _localTargetId: string,
     method: string,
-    params: Record<string, unknown> | undefined,
+    params: CDPPayload | undefined,
     sessionId: string | undefined
   ): Promise<void> {
     const transport = this.options.browserTransport;
@@ -1421,7 +1441,7 @@ export class FollowerSyncManager implements AgentHandle {
     ];
 
     for (const eventName of events) {
-      const listener = (params: Record<string, unknown>) => {
+      const listener = (params: CDPPayload) => {
         // Only forward events that belong to our remote session
         if (params['sessionId'] !== remoteSessionId) return;
         if (!this.remoteCDPSessions.has(remoteSessionId)) return;
@@ -1554,8 +1574,7 @@ export class FollowerSyncManager implements AgentHandle {
           | 'transcript.export.start'
           | 'transcript.export.chunk'
           | 'transcript.export.complete'
-          | 'transcript.export.error'
-          | 'transcript.export.approve.request';
+          | 'transcript.export.error';
       }
     >
   ): void {
@@ -1589,12 +1608,6 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       case 'transcript.export.error':
         this.handleExportError(message.requestId, message.code);
-        break;
-      case 'transcript.export.approve.request':
-        void this.handleExportApprovalRequest(message.requestId, {
-          selector: message.selector,
-          ...(message.estimatedBytes != null ? { estimatedBytes: message.estimatedBytes } : {}),
-        });
         break;
       default: {
         // Exhaustiveness guard: a new export message variant fails compile here
@@ -1635,9 +1648,6 @@ export class FollowerSyncManager implements AgentHandle {
       const onAbort = (): void => {
         const entry = this.activeExportRequests.get(requestId);
         if (!entry) return;
-        // Close a delegated approval dialog opened for this request — a Cherry
-        // host abort must not leave a live prompt behind.
-        entry.approvalAbort?.abort();
         this.sync.send({ type: 'transcript.export.cancel', requestId });
         this.activeExportRequests.delete(requestId);
         void entry.spool.cancel();
@@ -1671,63 +1681,92 @@ export class FollowerSyncManager implements AgentHandle {
     });
   }
 
-  /**
-   * Render the approval dialog for a headless leader that delegated the prompt,
-   * then reply with the human's verdict.
-   *
-   * Fail-closed: no handler wired, or a handler that throws, replies with a
-   * denial rather than leaving the leader to time out.
-   */
-  private async handleExportApprovalRequest(
-    requestId: string,
-    request: { selector: TranscriptExportSelector; estimatedBytes?: number }
-  ): Promise<void> {
-    // Only ever prompt for an export this follower actually asked for and is
-    // still waiting on. Drops unsolicited prompts from a misbehaving or
-    // version-skewed leader, and prompts that arrive after a local cancel.
-    const entry = this.activeExportRequests.get(requestId);
-    if (!entry) {
-      log.warn('Ignoring approval prompt for an unknown export request', { requestId });
-      this.sync.send({ type: 'transcript.export.approve.response', requestId, approved: false });
+  /** Route the delegated-sudo pair: open a prompt, or withdraw an open one. */
+  private handleSudoLeaderMessage(
+    message: Extract<
+      LeaderToFollowerMessage,
+      { type: 'sudo.approve.request' | 'sudo.approve.cancel' }
+    >
+  ): void {
+    if (message.type === 'sudo.approve.cancel') {
+      this.openSudoPrompts.get(message.requestId)?.abort();
       return;
     }
+    void this.handleSudoApprovalRequest(message);
+  }
 
-    // Tie the dialog to the request: a leader timeout, a local abort, a
-    // disconnect, or an error closes it instead of leaving a stale prompt whose
-    // "Allow" would land on a leader that has already given up.
-    const approvalAbort = new AbortController();
-    entry.approvalAbort = approvalAbort;
-
-    let approved = false;
+  /**
+   * Render a delegated sudo prompt and reply with the human's verdict
+   * (issue #2062). Fail-closed: no handler, a handler that throws, or a prompt
+   * withdrawn before the human answered all reply `deny`. A verdict that lands
+   * after `sudo.approve.cancel` is reported as `deny` too — the leader ignores
+   * it either way, but a stale "Allow" must never read as consent.
+   */
+  private async handleSudoApprovalRequest(
+    message: Extract<LeaderToFollowerMessage, { type: 'sudo.approve.request' }>
+  ): Promise<void> {
+    const { requestId } = message;
+    const reply = (verdict: SudoApprovalVerdict): void => {
+      this.sync.send({
+        type: 'sudo.approve.response',
+        requestId,
+        decision: verdict.decision,
+        ...(verdict.decision === 'always' && verdict.pattern ? { pattern: verdict.pattern } : {}),
+        ...(verdict.attestation ? { attestation: verdict.attestation } : {}),
+      });
+    };
+    const handler = this.options.onSudoApprovalRequest;
+    if (!handler) {
+      log.warn('No sudo approval handler wired — denying delegated prompt', { requestId });
+      reply({ decision: 'deny' });
+      return;
+    }
+    if (this.openSudoPrompts.has(requestId)) return;
+    const abort = new AbortController();
+    this.openSudoPrompts.set(requestId, abort);
+    let verdict: SudoApprovalVerdict = { decision: 'deny' };
     try {
-      approved =
-        (await this.options.onTranscriptExportApprovalRequest?.({
-          ...request,
-          signal: approvalAbort.signal,
-        })) === true;
+      verdict = await handler({
+        requestId,
+        kind: message.kind,
+        detail: message.detail,
+        ...(message.suggestedPattern ? { suggestedPattern: message.suggestedPattern } : {}),
+        ...(message.scoopName ? { scoopName: message.scoopName } : {}),
+        expiresAt: message.expiresAt,
+        signal: abort.signal,
+      });
     } catch (err) {
-      log.warn('Transcript export approval dialog failed — denying', {
+      log.warn('Sudo approval dialog failed — denying', {
         requestId,
         error: err instanceof Error ? err.message : String(err),
       });
-      approved = false;
+      verdict = { decision: 'deny' };
+    } finally {
+      this.openSudoPrompts.delete(requestId);
     }
-
-    // Re-check: the request may have been settled while the dialog was open. A
-    // late verdict must not be reported as an approval the leader would ignore.
-    if (approvalAbort.signal.aborted || !this.activeExportRequests.has(requestId)) {
-      this.sync.send({ type: 'transcript.export.approve.response', requestId, approved: false });
+    if (abort.signal.aborted) {
+      reply({ decision: 'deny' });
       return;
     }
-    this.sync.send({ type: 'transcript.export.approve.response', requestId, approved });
+    reply(verdict);
+  }
+
+  /**
+   * Register this device's push token with the leader, which forwards it to
+   * the tray hub (issue #2062). Browser followers have no APNs token; this is
+   * the TS mirror of what the iOS follower sends on every connect.
+   */
+  registerPushToken(registration: {
+    platform: 'ios';
+    token: string;
+    environment: 'sandbox' | 'production';
+  }): boolean {
+    return this.sync.send({ type: 'push.register', ...registration });
   }
 
   private handleExportDenied(requestId: string): void {
     const entry = this.activeExportRequests.get(requestId);
     if (!entry) return;
-    // Covers the leader's approval timeout: close our own prompt if it is
-    // somehow still open, so "Allow" cannot be clicked into a dead request.
-    entry.approvalAbort?.abort();
     entry.signal.removeEventListener('abort', entry.onAbort);
     this.activeExportRequests.delete(requestId);
     void entry.spool.cancel();
@@ -1849,7 +1888,6 @@ export class FollowerSyncManager implements AgentHandle {
   private handleExportError(requestId: string, code: TranscriptExportErrorCode): void {
     const entry = this.activeExportRequests.get(requestId);
     if (!entry) return;
-    entry.approvalAbort?.abort();
     entry.signal.removeEventListener('abort', entry.onAbort);
     this.activeExportRequests.delete(requestId);
     void entry.spool.cancel();

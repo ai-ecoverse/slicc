@@ -43,8 +43,8 @@ function createCollaborators(): FollowerDispatchCollaborators {
       handleTranscriptExportRequest: vi.fn(async () => {}),
       handleTranscriptExportCancel: vi.fn(),
       handleTranscriptExportAck: vi.fn(),
-      handleTranscriptExportApprovalResponse: vi.fn(),
     },
+    sudoDelegation: { handleResponse: vi.fn(), handleFollowerReady: vi.fn() },
     cherryRouter: { routeCherryHostEvent: vi.fn() },
     requesterTracker: { noteFollowerUserMessage: vi.fn() },
     tabTeleportRouter: { handleTeleportRequest: vi.fn(async () => {}) },
@@ -317,11 +317,19 @@ describe('FollowerDispatch', () => {
       2
     );
     route(
-      { type: 'transcript.export.approve.response', requestId: 'export', approved: true },
-      c.transcriptExport.handleTranscriptExportApprovalResponse,
+      {
+        type: 'sudo.approve.response',
+        requestId: 'sudo-1',
+        decision: 'always',
+        pattern: 'git push *',
+        attestation: 'biometric',
+      },
+      c.sudoDelegation.handleResponse,
       'follower',
-      'export',
-      true
+      'sudo-1',
+      'always',
+      'git push *',
+      'biometric'
     );
     const cherry = {
       type: 'cherry.host_event',

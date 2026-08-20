@@ -14,6 +14,7 @@ import type { FsRouter } from './fs-router.js';
 import type { OAuthPopupDelegation } from './oauth-popup-delegation.js';
 import type { RemoteExecRouter } from './remote-exec.js';
 import type { RequesterTracker } from './requester-tracker.js';
+import type { SudoDelegation } from './sudo-delegation.js';
 import type { TabRouter } from './tab-router.js';
 import type { TabTeleportRouter } from './tab-teleport-router.js';
 import type { TeleportPool } from './teleport-pool.js';
@@ -40,13 +41,16 @@ export interface FollowerDispatchCollaborators {
   oauthPopupDelegation: Pick<OAuthPopupDelegation, 'handlePopupResponse'>;
   transcriptExport: Pick<
     TranscriptExportManager,
-    | 'handleTranscriptExportRequest'
-    | 'handleTranscriptExportCancel'
-    | 'handleTranscriptExportAck'
-    | 'handleTranscriptExportApprovalResponse'
+    'handleTranscriptExportRequest' | 'handleTranscriptExportCancel' | 'handleTranscriptExportAck'
   >;
+  sudoDelegation: Pick<SudoDelegation, 'handleResponse' | 'handleFollowerReady'>;
   cherryRouter: Pick<CherryRouter, 'routeCherryHostEvent'>;
   requesterTracker: Pick<RequesterTracker, 'noteFollowerUserMessage'>;
+  /** Forward a follower's push-token registration to the tray hub (issue #2062). */
+  registerPushToken?: (
+    bootstrapId: string,
+    registration: { platform: 'ios'; token: string; environment: 'sandbox' | 'production' }
+  ) => void;
 }
 
 /** Exhaustive follower-to-leader wire-message dispatcher. */
@@ -167,12 +171,17 @@ export class FollowerDispatch {
       case 'transcript.export.ack':
         transcriptExport.handleTranscriptExportAck(bootstrapId, message.requestId, message.index);
         break;
-      case 'transcript.export.approve.response':
-        transcriptExport.handleTranscriptExportApprovalResponse(
+      case 'sudo.approve.response':
+        this.collaborators.sudoDelegation.handleResponse(
           bootstrapId,
           message.requestId,
-          message.approved
+          message.decision,
+          message.pattern,
+          message.attestation
         );
+        break;
+      case 'push.register':
+        this.handlePushRegister(bootstrapId, message);
         break;
       case 'cherry.host_event':
         cherryRouter.routeCherryHostEvent(bootstrapId, message);
@@ -428,6 +437,24 @@ export class FollowerDispatch {
     follower.sync.send({ type: 'pong' });
   }
 
+  /**
+   * A follower registered a push token. Validate the shape defensively — the
+   * token is opaque hex from APNs — and forward to the hub with the follower's
+   * identity derived from the channel, never the payload.
+   */
+  private handlePushRegister(
+    bootstrapId: string,
+    message: FollowerToLeaderMessage & { type: 'push.register' }
+  ): void {
+    const token = typeof message.token === 'string' ? message.token.trim() : '';
+    const environment = message.environment === 'production' ? 'production' : 'sandbox';
+    if (message.platform !== 'ios' || !/^[0-9a-fA-F]{32,400}$/.test(token)) {
+      this.context.log.warn('Ignoring malformed push.register', { bootstrapId });
+      return;
+    }
+    this.collaborators.registerPushToken?.(bootstrapId, { platform: 'ios', token, environment });
+  }
+
   private handlePong(bootstrapId: string): void {
     const follower = this.context.followers.followers.get(bootstrapId);
     if (!follower) return;
@@ -445,6 +472,9 @@ export class FollowerDispatch {
       follower.peerCapabilities = message.capabilities;
       follower.peerMotd = message.motd;
       this.context.followers.notifyFollowerCountChanged();
+      // A sudo-capable follower just arrived — hand it any prompt a headless
+      // leader parked while no one could answer (issue #2062).
+      this.collaborators.sudoDelegation.handleFollowerReady(bootstrapId);
     }
     if (message.protocolVersion > TRAY_SYNC_PROTOCOL_VERSION) {
       this.context.log.warn('Follower speaks a newer tray sync protocol — update this build', {

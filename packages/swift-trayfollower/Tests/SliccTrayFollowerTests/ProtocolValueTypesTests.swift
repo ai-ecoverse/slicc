@@ -11,13 +11,18 @@ final class ProtocolValueTypesTests: XCTestCase {
     // MARK: - Globals
 
     func testProtocolVersionMatchesSharedTs() {
-        XCTAssertEqual(traySyncProtocolVersion, 6)
+        XCTAssertEqual(traySyncProtocolVersion, 7)
     }
 
     func testAdvertisedFollowerCapabilities() {
         XCTAssertTrue(trayFollowerCapabilities.exec)
         XCTAssertEqual(trayFollowerCapabilities.browser, true)
         XCTAssertNil(trayFollowerCapabilities.oauthPopup)
+        // v7 (#2062): every iOS build renders delegated sudo prompts; only a
+        // device that can authenticate its owner claims `biometric`.
+        XCTAssertEqual(trayFollowerCapabilities.sudoApproval, true)
+        XCTAssertNil(trayFollowerCapabilities.biometric)
+        XCTAssertEqual(makeTrayFollowerCapabilities(deviceOwnerAuth: true).biometric, true)
     }
 
     // MARK: - Enums

@@ -2,6 +2,9 @@ import SwiftUI
 
 @main
 struct SliccFollowerApp: App {
+    /// APNs token callbacks and the notification-center delegate install
+    /// need a UIKit app delegate; nothing else lives there (#2062).
+    @UIApplicationDelegateAdaptor(SliccAppDelegate.self) private var appDelegate
     @StateObject private var appState = AppState()
     /// The process-wide inbound funnel — App Intents enqueue into the same
     /// instance, so the scene must observe the shared one (#1918).

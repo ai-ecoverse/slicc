@@ -23,6 +23,15 @@
 	<array>
 		<string>group.ai.sliccy.follower</string>
 	</array>
+	<!-- APNs for turn_end + time-sensitive sudo_request pushes (#2062). Xcode
+	     rewrites `development` to `production` for distribution builds; the
+	     App ID must carry Push Notifications + Time Sensitive Notifications.
+	     Unsigned dev/simulator builds never get a token and fall back to
+	     local notifications while the data channel is alive. -->
+	<key>aps-environment</key>
+	<string>development</string>
+	<key>com.apple.developer.usernotifications.time-sensitive</key>
+	<true/>
 	<key>keychain-access-groups</key>
 	<array>
 		<string>$(AppIdentifierPrefix)ai.sliccy.follower.credentials</string>

@@ -450,3 +450,7 @@ BRIDGE_DEV_ALLOWED_ORIGINS=http://localhost:8787 \
 Reach the worker via **localhost:8787**, not `127.0.0.1:8787` — `buildPreviewUrl`'s
 lookup table only has a `localhost:8787` row. Browsers resolve `*.localhost` to
 loopback; the `.localhost` host is dev-only.
+
+## Follower push (APNs, #2062)
+
+Four secrets, all or nothing: `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_PRIVATE_KEY` (the `.p8` PEM, newlines intact — `npx wrangler secret put APNS_PRIVATE_KEY < AuthKey_XXXX.p8`), `APNS_TOPIC` (`com.sliccy.follower`). Missing → the DO logs `push.send ignored` once and nothing else changes. Staging talks to whatever gateway the registering phone asked for (`environment` on `push.register`: debug builds = sandbox, TestFlight/App Store = production), so a TestFlight build against staging needs the production key. Verify with a time-sensitive test: run a headless leader, background the phone, `sudo` something — the banner must arrive within seconds; a 403 `InvalidProviderToken` in `wrangler tail` means the key id / team id pair is wrong.

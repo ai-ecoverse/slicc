@@ -70,6 +70,8 @@ class AppState: ObservableObject {
     @Published var toolUICards: [ToolUIPlaceholder] = []
     @Published var openApprovals: [OpenApprovalRequest] = []
     @Published var openGrants: [OpenGrant] = []
+    /// Delegated sudo prompts awaiting this phone's human (#2062).
+    @Published var sudoApprovals: [SudoApprovalRequest] = []
     @Published var isStreaming: Bool = false {
         // A turn's streaming edge: starting one clears the wait, ending one
         // starts it. Every writer (turn_end, `status: ready`, the error path,
@@ -151,6 +153,7 @@ class AppState: ObservableObject {
         self?.sendToLeader($0) ?? false
     }
     private(set) lazy var openApprovalController = makeOpenApprovalController()
+    private(set) lazy var sudoApprovalController = makeSudoApprovalController()
     /// Follower-originated CDP for tab previews (#1865).
     private(set) lazy var cdpPreviews = CdpPreviewClient { [weak self] message in
         self?.sendToLeader(message) ?? false
@@ -272,7 +275,9 @@ class AppState: ObservableObject {
                 leaderActiveScoopJid = fixtureScoops.first?.jid
             }
             configureOpenApprovalFixture()
+            configureSudoApprovalFixture()
         #endif
+        wireNotificationActions()
     }
 
     // MARK: - Private Networking / Sync
@@ -739,9 +744,10 @@ class AppState: ObservableObject {
             .hello(
                 protocolVersion: traySyncProtocolVersion,
                 runtime: "slicc-ios",
-                capabilities: trayFollowerCapabilities,
+                capabilities: followerCapabilities(),
                 motd: trayFollowerMotd))
         openApprovalController.transportAvailable()
+        startPushRegistration()
 
         // Request the preserved view so the fresh leader follower record
         // re-registers it before thinking changes can target that scoop.
@@ -985,6 +991,9 @@ class AppState: ObservableObject {
         case .themeApply(let themeJson):
             applyLeaderTheme(themeJson)
 
+        case .sudoApproveRequest, .sudoApproveCancel:
+            handleSudoLeaderMessage(msg)
+
         case .hello(let protocolVersion, let runtime, let capabilities, let motd):
             handleLeaderHello(
                 protocolVersion: protocolVersion, runtime: runtime, capabilities: capabilities,
@@ -1220,6 +1229,7 @@ class AppState: ObservableObject {
                 }
                 speakIfDictated(buffer[idx], scoopJid: scoopJid, isVisible: isVisible)
                 inboundPrompt.settle(with: buffer[idx].content, scoopJid: scoopJid)
+                notifyTurnEndIfBackgrounded(scoopJid: scoopJid)
             }
 
         case .toolUseStart(let messageId, let toolName, let toolInput):
@@ -1271,6 +1281,7 @@ class AppState: ObservableObject {
                 }
                 speakIfDictated(buffer[idx], scoopJid: scoopJid, isVisible: isVisible)
                 inboundPrompt.settle(with: buffer[idx].content, scoopJid: scoopJid)
+                notifyTurnEndIfBackgrounded(scoopJid: scoopJid)
             }
 
         case .error(let error):
@@ -1431,6 +1442,7 @@ class AppState: ObservableObject {
         guard connectionState == .connected || connectionState == .reconnecting else { return }
 
         openApprovalController.disconnect()
+        sudoApprovalController.transportLost()
         terminalClient.disconnect()
 
         // A stall that ends in a real disconnect must not leave the composer
@@ -1511,6 +1523,7 @@ extension AppState {
     /// `disconnect()` to fully drop tabs on a user-initiated disconnect.
     fileprivate func tearDown() {
         openApprovalController.disconnect()
+        sudoApprovalController.transportLost()
         terminalClient.disconnect()
         connectTask?.cancel()
         connectTask = nil
@@ -1600,26 +1613,6 @@ extension AppState {
         // authority used to validate a later thinking.set.
         sendToLeader(.scoopsSelect(scoopJid: jid))
         refreshModels()
-    }
-
-    /// Swipe left → next scoop in the list. Wraps around to the first when at end.
-    func swipeToNextScoop() {
-        guard !scoops.isEmpty else { return }
-        let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
-        let nextIndex = (currentIndex + 1) % scoops.count
-        selectScoop(jid: scoops[nextIndex].jid)
-    }
-
-    /// Swipe right → previous scoop. Falls back to the cone if we'd otherwise
-    /// underflow (matches the user's "or cone if no more are left" expectation).
-    func swipeToPreviousScoop() {
-        guard !scoops.isEmpty else { return }
-        let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
-        if currentIndex > 0 {
-            selectScoop(jid: scoops[currentIndex - 1].jid)
-        } else if let cone = scoops.first(where: { $0.isCone }) {
-            selectScoop(jid: cone.jid)
-        }
     }
 
     /// The summary for the currently-viewed scoop, if any.

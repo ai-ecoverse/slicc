@@ -1,11 +1,12 @@
 # /etc/sudoers — SLICC agent approval policy
 #
 # This file controls which agent actions require a native human approval
-# prompt (an OS dialog in CLI/Electron, or a window.confirm/prompt in the
-# Chrome extension) before they run. By default EVERYTHING below is commented
+# prompt (an OS dialog in CLI/Electron, a window.confirm/prompt in the Chrome
+# extension, or a Face ID card on a connected iPhone when you are driving
+# from it) before they run. By default EVERYTHING below is commented
 # out, so no extra prompts fire — uncomment a rule to start gating an action.
 #
-# Every line is one of three directives. A leading `NOPASSWD` tag turns a rule
+# Every line is one of four directives. A leading `NOPASSWD` tag turns a rule
 # into an explicit grant (matching actions run with no prompt):
 #
 #   Cmnd  <glob>        Require approval before a shell command segment that
@@ -13,6 +14,9 @@
 #                       segment of the command line).
 #   Read  <glob>        Require approval before reading a VFS path.
 #   Write <glob>        Require approval before writing a VFS path.
+#   Export <glob>       A follower's transcript export. ALWAYS gated; only a
+#                       NOPASSWD grant skips the prompt. Subjects: `active`
+#                       (live session) or `frozen:<sessionId>` (an archive).
 #
 # Globs:
 #   - Command globs: `*` and `**` match any run of characters, `?` matches one.
@@ -61,3 +65,6 @@ Write /etc/models
 #
 # Gate writes anywhere under /mnt (mounted external storage):
 # Write /mnt/**
+#
+# Let connected followers export the live transcript without a prompt:
+# NOPASSWD Export active
