@@ -17,6 +17,8 @@
  * wire contract and lives in `packages/cloudflare-worker/src/shared.ts`.
  */
 
+import type { CDPPayload } from './tray-sync-protocol.js';
+
 export const TRAY_BOOTSTRAP_TIMEOUT_MS = 20_000;
 export const TRAY_BOOTSTRAP_MAX_RETRIES = 3;
 export const TRAY_BOOTSTRAP_RETRY_AFTER_MS = 1_000;
@@ -161,7 +163,7 @@ export interface WorkerBridgeCdpResponse {
   type: 'bridge.cdp.response';
   connId: string;
   id: number;
-  result?: Record<string, unknown>;
+  result?: CDPPayload;
   error?: { code: number; message: string };
 }
 
@@ -251,7 +253,7 @@ export interface LeaderBridgeCdpRequest {
   connId: string;
   id: number;
   method: string;
-  params?: Record<string, unknown>;
+  params?: CDPPayload;
   sessionId?: string;
 }
 

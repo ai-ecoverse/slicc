@@ -38,7 +38,7 @@
  * worker routes DOM-bound ops (e.g. `sudo-request`) through it.
  */
 
-import type { OAuthExtraDomainsStore, SignAndForwardReply } from '@slicc/shared-ts';
+import type { CDPPayload, OAuthExtraDomainsStore, SignAndForwardReply } from '@slicc/shared-ts';
 import type {
   DockTreeSpecLike,
   DockZoneName,
@@ -443,7 +443,7 @@ export type PanelRpcRequest =
         runtimeId: string;
         localTargetId: string;
         method: string;
-        params?: Record<string, unknown>;
+        params?: CDPPayload;
         sessionId?: string;
         /**
          * Per-op CDP timeout (ms) forwarded to the page-side
@@ -527,6 +527,7 @@ export type PanelRpcRequest =
       // replicas / scrubbed text. Best-effort: the worker maps an absent
       // `response` to its existing safe default so secrets never block boot.
       op: 'secrets-bridge';
+      // biome-ignore lint/plugin: the fields are whatever the named SW secrets handler declares; the bridge relays them without inspecting.
       payload: { type: string; payload?: Record<string, unknown> };
     }
   | {
@@ -707,7 +708,7 @@ export interface PanelRpcResults {
   'list-remote-targets': {
     targets: Array<{ targetId: string; title: string; url: string }>;
   };
-  'remote-cdp-send': Record<string, unknown>;
+  'remote-cdp-send': CDPPayload;
   'remote-cdp-subscribe': { ok: true };
   'remote-cdp-unsubscribe': { ok: true };
   'remote-cdp-detach': { ok: true };
@@ -892,7 +893,7 @@ export interface RemoteCdpEventPayload {
   runtimeId: string;
   localTargetId: string;
   method: string;
-  params?: Record<string, unknown>;
+  params?: CDPPayload;
 }
 
 /**

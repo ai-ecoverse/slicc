@@ -4,6 +4,7 @@
  */
 
 import type {
+  CDPPayload,
   TranscriptExportErrorCode,
   TranscriptExportProgress,
   TranscriptExportSelector,
@@ -1377,7 +1378,7 @@ export class FollowerSyncManager implements AgentHandle {
     // symmetry, but the transport routes by sessionId/method alone.
     _localTargetId: string,
     method: string,
-    params: Record<string, unknown> | undefined,
+    params: CDPPayload | undefined,
     sessionId: string | undefined
   ): Promise<void> {
     const transport = this.options.browserTransport;
@@ -1440,7 +1441,7 @@ export class FollowerSyncManager implements AgentHandle {
     ];
 
     for (const eventName of events) {
-      const listener = (params: Record<string, unknown>) => {
+      const listener = (params: CDPPayload) => {
         // Only forward events that belong to our remote session
         if (params['sessionId'] !== remoteSessionId) return;
         if (!this.remoteCDPSessions.has(remoteSessionId)) return;

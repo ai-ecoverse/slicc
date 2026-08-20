@@ -757,16 +757,26 @@ async function tryHandleOAuthRoutes(
       return handleOAuthMethodNotAllowed(request);
     }
     if (url.pathname === '/oauth/token') {
-      return handleOAuthToken(request, env as unknown as Record<string, unknown>, fetchImpl);
+      return handleOAuthToken(request, env as unknown as OAuthHandlerEnv, fetchImpl);
     }
-    return handleOAuthRevoke(request, env as unknown as Record<string, unknown>, fetchImpl);
+    return handleOAuthRevoke(request, env as unknown as OAuthHandlerEnv, fetchImpl);
   }
 
   return null;
 }
 
+/** The env view the OAuth exchange handlers declare (`EnvRecord` in oauth-exchange.ts). */
+type OAuthHandlerEnv = Parameters<typeof handleOAuthToken>[1];
+
+/** Dev-harness override vars that are deliberately absent from `WorkerEnv`. */
+interface RuntimeConfigOverrides {
+  TRAY_WORKER_BASE_URL_OVERRIDE?: unknown;
+  /** Public OAuth client id; a var in wrangler.jsonc, typed loosely here. */
+  GITHUB_CLIENT_ID?: unknown;
+}
+
 function handleRuntimeConfig(url: URL, request: Request, env: WorkerEnv): Response {
-  const envRecord = env as unknown as Record<string, unknown>;
+  const envRecord = env as WorkerEnv & RuntimeConfigOverrides;
   // Dev harness override: when the worker runs locally via `wrangler dev`
   // and the real relay is on a different origin (e.g. the staging worker),
   // `TRAY_WORKER_BASE_URL_OVERRIDE` lets the harness point

@@ -8,6 +8,7 @@
  * to its primary consumers.
  */
 
+import type { CDPPayload } from '@slicc/shared-ts';
 import type { MessageAttachment } from '../core/attachments.js';
 import type { AgentSpawnOptions, AgentSpawnResult } from '../scoops/agent-bridge.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
@@ -312,7 +313,7 @@ export interface PanelCdpCommandMsg {
   type: 'panel-cdp-command';
   id: number;
   method: string;
-  params?: Record<string, unknown>;
+  params?: CDPPayload;
   sessionId?: string;
 }
 
@@ -1059,7 +1060,7 @@ export interface TrayFollowerStatusSnapshot {
 export interface PanelCdpResponseMsg {
   type: 'panel-cdp-response';
   id: number;
-  result?: Record<string, unknown>;
+  result?: CDPPayload;
   error?: string;
 }
 
@@ -1188,21 +1189,21 @@ export interface CdpCommandMsg {
   type: 'cdp-command';
   id: number;
   method: string;
-  params?: Record<string, unknown>;
+  params?: CDPPayload;
   sessionId?: string;
 }
 
 export interface CdpResponseMsg {
   type: 'cdp-response';
   id: number;
-  result?: Record<string, unknown>;
+  result?: CDPPayload;
   error?: string;
 }
 
 export interface CdpEventMsg {
   type: 'cdp-event';
   method: string;
-  params?: Record<string, unknown>;
+  params?: CDPPayload;
 }
 
 export type CdpProxyMessage = CdpCommandMsg | CdpResponseMsg | CdpEventMsg;

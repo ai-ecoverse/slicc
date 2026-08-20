@@ -1,4 +1,5 @@
 import {
+  type CDPPayload,
   type FollowerAttachResponse,
   type FollowerAttachResult,
   type FollowerBootstrapRequest,
@@ -79,6 +80,17 @@ interface SessionTrayOptions {
   fetchImpl?: typeof fetch;
   /** Push sender seam (tests). Defaults to APNs from env, or disabled. */
   apnsSender?: ApnsSender | null;
+}
+
+/** Loosely-typed follower bootstrap POST body; every field is re-validated below. */
+interface FollowerBootstrapBody {
+  action?: unknown;
+  controllerId?: unknown;
+  bootstrapId?: unknown;
+  runtime?: unknown;
+  cursor?: unknown;
+  answer?: unknown;
+  candidate?: unknown;
 }
 
 /** Cap on registered push devices per tray; oldest registrations are evicted. */
@@ -318,7 +330,7 @@ export class SessionTrayDurableObject {
     let msg: {
       t?: string;
       id: number;
-      result?: Record<string, unknown>;
+      result?: CDPPayload;
       error?: { code: number; message: string };
       name?: string;
       detail?: unknown;
@@ -1765,7 +1777,7 @@ export class SessionTrayDurableObject {
     }
 
     try {
-      const body = (await request.json()) as Record<string, unknown>;
+      const body = (await request.json()) as FollowerBootstrapBody;
       const controllerId =
         typeof body['controllerId'] === 'string' ? body['controllerId'] : queryAttach.controllerId;
       const bootstrapId = typeof body['bootstrapId'] === 'string' ? body['bootstrapId'] : undefined;
