@@ -72,7 +72,7 @@
     "webapp": {
       "lines": 81,
       "statements": 79,
-      "functions": 79,
+      "functions": 80,
       "branches": 70,
       "coverageExclude": [
         "**/node_modules/**",
@@ -94,7 +94,7 @@
       "branches": 76
     },
     "cloud-core": {
-      "lines": 85,
+      "lines": 86,
       "statements": 83,
       "functions": 77,
       "branches": 77,
