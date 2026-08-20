@@ -13,10 +13,9 @@
 
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import type { BrowserAPI } from '../../cdp/index.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { playwrightHandlers } from './playwright/handlers/index.js';
-import { formatHelp } from './playwright/help.js';
+import { formatHelp, formatSubcommandHelp } from './playwright/help.js';
 import { autoSaveSnapshot, logSession } from './playwright/session-log.js';
 import {
   AUTO_SNAPSHOT_COMMANDS,
@@ -24,7 +23,7 @@ import {
   getSharedState,
   parseFlags,
 } from './playwright/state.js';
-import type { CmdResult } from './playwright/types.js';
+import type { CmdResult, PlaywrightHandlerCtx } from './playwright/types.js';
 
 export { asWebFetch } from './playwright/discover.js';
 export { getSharedState, PLAYWRIGHT_COMMAND_NAMES } from './playwright/state.js';
@@ -39,8 +38,15 @@ export type {
   PlaywrightDiscoveryResult,
 } from './playwright/types.js';
 
+/**
+ * The browser port, taken from the handler context rather than imported from
+ * `cdp/`: `playwright/types.ts` is the one module in this subtree that names
+ * the CDP type, so the dispatcher stays inside the shell layer.
+ */
+type PlaywrightBrowser = PlaywrightHandlerCtx['browser'];
+
 async function commandErrorResult(
-  browser: BrowserAPI,
+  browser: PlaywrightBrowser,
   flags: Record<string, string>,
   err: unknown
 ): Promise<CmdResult> {
@@ -51,7 +57,7 @@ async function commandErrorResult(
 
 export function createPlaywrightCommand(
   name: string,
-  browser: BrowserAPI | null | undefined,
+  browser: PlaywrightBrowser | null | undefined,
   fs: VirtualFS
 ): Command {
   const helpText = formatHelp(name);
@@ -62,17 +68,14 @@ export function createPlaywrightCommand(
       return { stdout: helpText + '\n', stderr: '', exitCode: 0 };
     }
 
-    if (!browser || !state) {
-      return {
-        stdout: '',
-        stderr: `${name}: browser APIs are unavailable in this environment\n`,
-        exitCode: 1,
-      };
-    }
-
     const subcommand = args[0];
     const subArgs = args.slice(1);
 
+    // Parse first — parsing has no side effects, and it is what decides
+    // whether a `--help` token is a help request or the VALUE of a
+    // value-taking flag (`route --body --help` mocks a "--help" body; the
+    // shared parser shadows the value onto the flag, so `flags.help` stays
+    // unset).
     let positional: string[];
     let flags: Record<string, string>;
     try {
@@ -80,6 +83,21 @@ export function createPlaywrightCommand(
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       return { stdout: '', stderr: `${name} ${subcommand}: ${msg}\n`, exitCode: 1 };
+    }
+
+    // `<cmd> <verb> --help` answers BEFORE the handler runs — `record` and
+    // `open` default a missing URL to about:blank, so help used to open a
+    // tab.
+    if (flags['help'] === 'true' || flags['h'] === 'true') {
+      return { stdout: formatSubcommandHelp(name, subcommand), stderr: '', exitCode: 0 };
+    }
+
+    if (!browser || !state) {
+      return {
+        stdout: '',
+        stderr: `${name}: browser APIs are unavailable in this environment\n`,
+        exitCode: 1,
+      };
     }
 
     // Note: Per-tab teleport blocking is now handled within command handlers

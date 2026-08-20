@@ -53,3 +53,5 @@ Numbering matches the root checklist. Full catalog:
     and developer `SKILL.md` files.
 13. **Transcript export** — fail-closed redaction; approval gate; unknown
     errors → `transfer-corrupt`; SHA-256.
+14. **`--help` that does the thing** — a verb dispatcher must answer
+    `cmd <verb> --help` before the handler runs, scanning all args.

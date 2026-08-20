@@ -119,6 +119,21 @@ describe('sprinkle command', () => {
     expect(result.stderr).toContain('unknown subcommand');
   });
 
+  it('`open --help` prints help instead of opening the sprinkle', async () => {
+    const result = await run(['open', '--help']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('open <name>');
+    expect(mockMgr.open).not.toHaveBeenCalled();
+  });
+
+  it('`chat --help` prints help instead of rendering the flag as Tool UI', async () => {
+    // Regression: `chat` treats its trailing args as HTML, so asking it for
+    // help rendered "--help" into the chat transcript.
+    const result = await run(['chat', '--help']);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('chat <html>');
+  });
+
   it('returns error when sprinkle manager not initialized', async () => {
     delete (globalThis as any).__slicc_sprinkleManager; // clear the publish
     const cmd = createSprinkleCommand();

@@ -67,6 +67,12 @@ developer `SKILL.md` files. Run the skill-router and any specialized sync check.
 Require fail-closed redaction, `reasoningExcluded: true`, one-time reachable approval, binary
 integrity, and `transfer-corrupt` for unknown errors or SHA-256 mismatches.
 
+## 14. `--help` that does the thing
+
+A verb dispatcher that checks only `args[0] === '--help'` sends `cmd <verb> --help` into the
+handler; if that handler defaults a missing arg, help performs the action. Require the help
+check before dispatch, scanning all args.
+
 ## Severity
 
 🔴 Critical = likely production issue · 🟡 Major = scenario-specific · 🔵 Minor = quality.

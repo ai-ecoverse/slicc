@@ -2,6 +2,7 @@
  * Help text for the playwright-cli command family.
  */
 
+import { subcommandHelpText } from '../subcommand-help.js';
 import { PLAYWRIGHT_COMMAND_NAMES } from './state.js';
 
 export function formatHelp(commandName: string): string {
@@ -132,4 +133,16 @@ Commands:
   help                   Show this help message
 
 Aliases: ${aliases.join(', ')}`;
+}
+
+/**
+ * Help for a single subcommand — the matching entry from {@link formatHelp},
+ * or the full help text when the verb is undocumented.
+ *
+ * `<cmd> <verb> --help` must never reach the verb's handler: `record` and
+ * `open` default a missing URL to `about:blank`, so asking for help used to
+ * open a tab (and, for `record`, start a HAR recording).
+ */
+export function formatSubcommandHelp(commandName: string, sub: string): string {
+  return subcommandHelpText(commandName, sub, formatHelp(commandName));
 }

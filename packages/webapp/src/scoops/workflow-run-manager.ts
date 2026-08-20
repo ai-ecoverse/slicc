@@ -1,8 +1,27 @@
 // packages/webapp/src/scoops/workflow-run-manager.ts
 import { createLogger } from '../base/logger.js';
+import type {
+  CommandContextLike,
+  ExecResultLike,
+  WorkflowRunManager,
+  WorkflowRunState,
+  WorkflowStartOptions,
+} from '../shell/workflow-run-handle.js';
+import { WORKFLOW_MANAGER_GLOBAL_KEY } from '../shell/workflow-run-handle.js';
+
+// The manager's contract lives in `shell/` so the `workflow` command can reach
+// it without importing up the layer stack; re-exported here so existing
+// importers of this module keep resolving the same names.
+export type {
+  CommandContextLike,
+  ExecResultLike,
+  WorkflowRunManager,
+  WorkflowRunState,
+  WorkflowStartOptions,
+} from '../shell/workflow-run-handle.js';
+export { WORKFLOW_MANAGER_GLOBAL_KEY } from '../shell/workflow-run-handle.js';
 
 const log = createLogger('workflow-run-manager');
-export const WORKFLOW_MANAGER_GLOBAL_KEY = '__slicc_workflows';
 const RUNS_DIR = '/shared/workflow-runs';
 // Memory bounds: a chatty/looping workflow's logs and a long session's run history would
 // otherwise grow without limit. Cap per-run log lines (oldest dropped), and evict the
@@ -10,71 +29,6 @@ const RUNS_DIR = '/shared/workflow-runs';
 // paused run; the durable result file under /shared/workflow-runs/ survives either way.
 const MAX_LOG_LINES = 1000;
 const MAX_RETAINED_RUNS = 100;
-
-export interface WorkflowRunState {
-  id: string;
-  name: string | null;
-  source: string;
-  origin: 'cone' | 'scoop' | 'terminal';
-  status:
-    | 'running'
-    /** reserved for SP5 pause/resume — not written in SP2; the terminal-status guards already tolerate it */
-    | 'paused'
-    | 'done'
-    | 'error'
-    | 'killed';
-  currentPhase: string | null;
-  agentsStarted: number;
-  agentsDone: number;
-  logs: string[];
-  startedAt: string;
-  finishedAt: string | null;
-  resultPath: string | null;
-  preview: string | null;
-  error: string | null;
-  pid: number | null;
-}
-
-export interface WorkflowStartOptions {
-  code: string;
-  source: string;
-  name: string | null;
-  filename: string;
-  parentJid: string | undefined;
-  ctx: CommandContextLike;
-  /**
-   * The result sentinel. Built ONCE by the command (Task 7) and passed into BOTH
-   * `buildWorkflowCode({ sentinel })` (the realm code) and here, so `splitResult`
-   * matches exactly what the realm emits. The manager does not invent its own.
-   */
-  sentinel: string;
-  /**
-   * Optional caller-supplied run id. When present the manager uses it verbatim
-   * instead of minting one via `deps.makeRunId()`. The command threads the SAME
-   * id it baked into the per-run scratch cwd (`/shared/workflow-runs/<id>/scratch/`)
-   * so the scratch tree, the result file (`/shared/workflow-runs/<id>.json`),
-   * `workflow status <id>`, and the realm argv all key off one id.
-   */
-  runId?: string;
-}
-
-// Minimal shell ctx shape the manager needs (subset of just-bash CommandContext).
-export interface CommandContextLike {
-  cwd: string;
-  env: Map<string, string>;
-  // stdin is never read by the manager (the tap reads cwd/exec); typed loosely so the real
-  // just-bash CommandContext (branded ByteString stdin) is assignable without a lossy double-cast.
-  stdin: unknown;
-  exec?: ((cmd: string, opts?: { cwd?: string; args?: string[] }) => Promise<ExecResultLike>) & {
-    spawn?: (argv: string[]) => Promise<ExecResultLike>;
-  };
-  fs?: unknown;
-}
-export interface ExecResultLike {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
 
 export interface WorkflowRunManagerDeps {
   sharedFs: {
@@ -100,15 +54,6 @@ export interface WorkflowRunManagerDeps {
     stdout: string,
     sentinel: string
   ) => { result: unknown; log: string; hadResult: boolean };
-}
-
-export interface WorkflowRunManager {
-  start(opts: WorkflowStartOptions): Promise<{ runId: string }>;
-  // Returns are `Readonly` — consumers (the `workflow` command) only ever read
-  // run state; the manager is the sole mutator.
-  getRun(runId: string): Readonly<WorkflowRunState> | null;
-  listRuns(): readonly Readonly<WorkflowRunState>[];
-  observeRun(runId: string, handler: (s: WorkflowRunState) => void): () => void;
 }
 
 export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): WorkflowRunManager {
@@ -297,7 +242,9 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
  */
 export function publishWorkflowRunManager(deps: WorkflowRunManagerDeps): WorkflowRunManager {
   const mgr = createWorkflowRunManager(deps);
-  (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY] = mgr;
+  (globalThis as Partial<Record<typeof WORKFLOW_MANAGER_GLOBAL_KEY, WorkflowRunManager>>)[
+    WORKFLOW_MANAGER_GLOBAL_KEY
+  ] = mgr;
   log.info('workflow run manager published on globalThis.__slicc_workflows');
   return mgr;
 }

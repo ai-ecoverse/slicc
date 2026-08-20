@@ -17,6 +17,7 @@ import { defineCommand } from 'just-bash';
 import { getTranscriptExportService } from '../../transcript/export-provider.js';
 import type { TranscriptSessionSelector } from '../../transcript/export-service.js';
 import type { TranscriptZipResult } from '../../transcript/zip-stream.js';
+import { isHelpRequest } from './subcommand-help.js';
 
 // ---------------------------------------------------------------------------
 // Arg parsing
@@ -136,6 +137,8 @@ async function collectAndVerify(result: TranscriptZipResult): Promise<Uint8Array
 export function createSessionCommand(): Command {
   return defineCommand('session', async (args, ctx) => {
     const sub = args[0];
+
+    if (isHelpRequest(args)) return { stdout: USAGE, stderr: '', exitCode: 0 };
 
     if (sub !== 'export') {
       return {

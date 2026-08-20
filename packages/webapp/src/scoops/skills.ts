@@ -9,8 +9,8 @@
  * Skills provide instructions that the agent can follow.
  */
 
+import { getPreset } from '../base/dock-tree-spec.js';
 import { createLogger } from '../base/logger.js';
-import { getPreset } from '../core/dock-tree-spec.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { SkillDiscoverySource } from '../skills/index.js';
 import { discoverSkills } from '../skills/index.js';

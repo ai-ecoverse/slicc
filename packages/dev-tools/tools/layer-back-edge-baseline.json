@@ -20,14 +20,12 @@
   "packages/webapp/src/shell/supplemental-commands/hid-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/host-command.ts": 7,
   "packages/webapp/src/shell/supplemental-commands/imgcat-command.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/layout-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/lick-surface.ts": 8,
   "packages/webapp/src/shell/supplemental-commands/local-llm-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/models-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/oauth-domain-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/open-command.ts": 2,
   "packages/webapp/src/shell/supplemental-commands/picker-popup.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/playwright-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/console.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/interaction.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/network-requests.ts": 1,
@@ -44,9 +42,7 @@
   "packages/webapp/src/shell/supplemental-commands/secret-backends.ts": 2,
   "packages/webapp/src/shell/supplemental-commands/serial-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/serve-command.ts": 3,
-  "packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/theme-command.ts": 3,
   "packages/webapp/src/shell/supplemental-commands/upskill/tabs.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/usb-command.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/workflow-command.ts": 3
+  "packages/webapp/src/shell/supplemental-commands/usb-command.ts": 1
 }

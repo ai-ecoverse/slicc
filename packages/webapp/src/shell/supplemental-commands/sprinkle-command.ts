@@ -13,7 +13,6 @@
 
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { showToolUIFromContext } from '../../tools/tool-ui.js';
 import { stdinAsText } from '../just-bash-compat.js';
 import type { SprinkleManagerHandle } from '../sprinkle-manager-handle.js';
 import {
@@ -22,6 +21,8 @@ import {
   getSprinkleRoute,
   setSprinkleRoute,
 } from '../sprinkle-routes.js';
+import { showToolUIFromContext } from '../tool-ui.js';
+import { isHelpRequest, stripOptionTerminator, subcommandHelpText } from './subcommand-help.js';
 
 type Result = { stdout: string; stderr: string; exitCode: number };
 
@@ -46,9 +47,16 @@ function sprinkleHelp(): Result {
   };
 }
 
+/**
+ * The manager is published on `globalThis` (as `window` in the page realm, as
+ * the worker global for the kernel proxy) so the same lookup works in both.
+ */
+interface SprinkleGlobals {
+  __slicc_sprinkleManager?: SprinkleManagerHandle;
+}
+
 function getSprinkleManager(): SprinkleManagerHandle | null {
-  const mgr = (globalThis as Record<string, unknown>).__slicc_sprinkleManager;
-  return (mgr as SprinkleManagerHandle) ?? null;
+  return (globalThis as SprinkleGlobals).__slicc_sprinkleManager ?? null;
 }
 
 async function handleChat(args: string[], ctx: CommandContext): Promise<Result> {
@@ -190,7 +198,16 @@ export function createSprinkleCommand(): Command {
       return sprinkleHelp();
     }
     const sub = args[0];
-    if (sub === 'chat') return handleChat(args, ctx);
+    // Help before the handler: `chat --help` used to render the flag as
+    // Tool-UI HTML. `sprinkle chat -- --help` still renders it literally.
+    if (isHelpRequest(args.slice(1), { valueFlags: ['--scoop'] })) {
+      return {
+        stdout: subcommandHelpText('sprinkle', sub, sprinkleHelp().stdout),
+        stderr: '',
+        exitCode: 0,
+      };
+    }
+    if (sub === 'chat') return handleChat(stripOptionTerminator(args), ctx);
 
     const mgr = getSprinkleManager();
     if (!mgr) {

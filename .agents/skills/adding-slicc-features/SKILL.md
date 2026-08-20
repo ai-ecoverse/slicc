@@ -51,6 +51,13 @@ Use these common extension points:
 
 **Implementation**:
 
+If the command dispatches on a subcommand verb (`my-command list|create|delete`), answer
+`--help` before dispatching — use `isHelpRequest()` and `subcommandHelpText()` from
+`supplemental-commands/subcommand-help.ts`, and register the command in `DISPATCHERS` in
+`tests/shell/supplemental-commands/subcommand-help.test.ts` (its coverage test fails if you
+don't). An `args[0] === '--help'` check answers only the bare command: `my-command delete
+--help` then runs `delete`. See review pattern 14 in `docs/review-patterns.md`.
+
 Define a command using just-bash's `defineCommand`:
 
 ```typescript
@@ -384,6 +391,7 @@ describe('my_tool', () => {
 - Keep browser automation shell-first through `playwright-cli` / `playwright` / `puppeteer`.
 - A handler is a `PlaywrightHandler` — `(ctx: { browser, fs, state, positional, flags }) => Promise<CmdResult>`; add the subcommand name (and any alias) to the `playwrightHandlers` map.
 - Reuse shared preview helpers for VFS URLs instead of manually constructing `/preview/...` paths.
+- Document the subcommand in `playwright/help.ts` as a two-space-indented entry — the dispatcher extracts that entry for `playwright-cli <subcommand> --help`, and the help path must never reach your handler.
 - Use `serve <dir>` for app directories (default `index.html`, optional `--entry`) and `open` for single files, URLs, downloads, or inline image viewing.
 - Preserve the current tab + snapshot model (the shared `PlaywrightState` in `playwright/state.ts`) when adding stateful browser actions.
 

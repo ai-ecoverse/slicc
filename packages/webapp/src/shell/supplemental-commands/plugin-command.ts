@@ -27,6 +27,7 @@ import type { Command, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import type { LoadedPlugin, PluginDiagnostic, PluginLoadResult } from '../plugins/types.js';
+import { isHelpRequest } from './subcommand-help.js';
 
 /** Managed extraction root for GitHub-sourced plugins. */
 export const PLUGIN_SOURCES_DIR = '/workspace/.plugins/sources';
@@ -455,7 +456,7 @@ async function cmdList(args: string[], deps: PluginCommandDeps): Promise<ExecRes
 // ── info ────────────────────────────────────────────────────────────
 
 async function cmdInfo(args: string[], deps: PluginCommandDeps): Promise<ExecResult> {
-  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+  if (args.length === 0 || isHelpRequest(args)) {
     return args.length === 0
       ? err('plugin info: expected <name>')
       : ok('usage: plugin info <name>\n');
@@ -505,7 +506,7 @@ async function cmdValidate(
   cwd: string,
   deps: PluginCommandDeps
 ): Promise<ExecResult> {
-  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+  if (args.length === 0 || isHelpRequest(args)) {
     return args.length === 0
       ? err('plugin validate: expected <path|repo>')
       : ok('usage: plugin validate <path|repo>\n');
@@ -561,7 +562,7 @@ async function cmdValidate(
 // ── remove ──────────────────────────────────────────────────────────
 
 async function cmdRemove(args: string[], deps: PluginCommandDeps): Promise<ExecResult> {
-  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+  if (args.length === 0 || isHelpRequest(args)) {
     return args.length === 0
       ? err('plugin remove: expected <name>')
       : ok('usage: plugin remove <name>\n');

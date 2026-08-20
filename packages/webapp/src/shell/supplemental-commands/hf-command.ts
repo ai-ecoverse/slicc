@@ -24,6 +24,7 @@
 
 import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash';
 import { downloadHfRepo, HfFileDownloadError, resolveTargetDir } from './hf-download.js';
+import { isHelpRequest } from './subcommand-help.js';
 
 // `resolveTargetDir` now lives in the reusable core; re-export it so existing
 // importers (and tests) keep resolving it from this module.
@@ -175,7 +176,10 @@ export function createHfCommand(deps: HfCommandDeps): Command {
   return {
     name: 'hf',
     async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
-      if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+      if (
+        args.length === 0 ||
+        isHelpRequest(args, { valueFlags: ['--to', '--revision', '--rev'] })
+      ) {
         return help(args.length === 0 ? 1 : 0);
       }
       const sub = args[0];
