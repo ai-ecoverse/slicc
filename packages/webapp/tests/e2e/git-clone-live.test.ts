@@ -90,14 +90,7 @@ test.describe('live git clone (real network)', () => {
       dock.selectItem('term');
     });
     await page.waitForFunction(() => window.__slicc_terminal_view != null, null, {
-      // 90s, not 30s: the lazy mount legitimately exceeds half a minute on a
-      // loaded CI runner. Observed failing at 30s on PRs that touch nothing
-      // near the terminal — `git-clone-live` survives only because it retries,
-      // while `speech-roundtrip` (deliberately `retries: 0`) turns the same
-      // flake into a red run. Raising the wait fixes the measurement, not the
-      // symptom: this is a lazy import + session handshake, so a slow runner
-      // taking longer is expected rather than a product defect.
-      timeout: 90_000,
+      timeout: 30_000,
     });
 
     // Run the real clone into a clean target dir. Pin to the immutable

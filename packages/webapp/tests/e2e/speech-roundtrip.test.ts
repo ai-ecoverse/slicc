@@ -153,7 +153,22 @@ test.describe('say -o WAV output (real kokoro)', () => {
   // The engine race this spec exists to catch (see the espeak readiness note in
   // `vite-plugins/fix-kokoro-espeak-readiness.ts`) is one of those. Fail once,
   // fast, and honestly. Other e2e specs keep the CI retries.
-  test.describe.configure({ retries: 0 });
+  // One retry, where this spec used to take none.
+  //
+  // The intent behind `retries: 0` was to fail fast and honestly, and that
+  // still holds for the kokoro work itself. What it did not anticipate is that
+  // `bootLeader`'s terminal mount fails on the FIRST browser context and
+  // recovers on a fresh one — repo-wide, not something about speech: on
+  // unrelated, fully green PRs `git-clone-live` fails its first attempt on the
+  // identical `__slicc_terminal_view` wait and passes on retry. Raising the
+  // wait does not help (90s fails the same way), because the mount does not
+  // eventually succeed — it needs the new context.
+  //
+  // Without a retry this spec converts that shared flake into a red run, but
+  // only on the PRs that happen to match the `speech` change-filter (which
+  // includes `wc-live.ts`), so the failure lands on whoever touched an
+  // unrelated file. One retry puts it on equal footing with every other spec.
+  test.describe.configure({ retries: 1 });
 
   test.skip(
     !RUN,
@@ -235,14 +250,7 @@ test.describe('say -o WAV output (real kokoro)', () => {
         dock.selectItem('term');
       });
       await page.waitForFunction(() => window.__slicc_terminal_view != null, null, {
-        // 90s, not 30s: the lazy mount legitimately exceeds half a minute on a
-        // loaded CI runner. Observed failing at 30s on PRs that touch nothing
-        // near the terminal — `git-clone-live` survives only because it retries,
-        // while `speech-roundtrip` (deliberately `retries: 0`) turns the same
-        // flake into a red run. Raising the wait fixes the measurement, not the
-        // symptom: this is a lazy import + session handshake, so a slow runner
-        // taking longer is expected rather than a product defect.
-        timeout: 90_000,
+        timeout: 30_000,
       });
     };
     await bootLeader();
