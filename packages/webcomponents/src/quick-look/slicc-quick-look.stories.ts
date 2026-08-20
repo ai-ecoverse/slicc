@@ -1,11 +1,23 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
-import { SliccQuickLook } from './slicc-quick-look.js';
+import { type QuickLookOptions, SliccQuickLook } from './slicc-quick-look.js';
 
-function buildStory(opts: {
-  path: string;
-  content: string | ArrayBuffer;
-  mimeType: string;
-}): HTMLElement {
+/**
+ * Render the overlay immediately rather than behind a click.
+ *
+ * The PR screenshot job captures a story as it mounts, so a click-to-open story
+ * photographs the button and never the preview. Stories that exist to show what
+ * the preview LOOKS like open themselves.
+ */
+function buildOpenStory(opts: QuickLookOptions): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.style.cssText = 'padding:40px;font-family:var(--ui);min-height:520px;';
+  // A frame's delay lets Storybook attach the theme scope before the overlay
+  // reads its tokens.
+  requestAnimationFrame(() => SliccQuickLook.open(opts));
+  return wrap;
+}
+
+function buildStory(opts: QuickLookOptions): HTMLElement {
   const wrap = document.createElement('div');
   wrap.style.cssText = 'padding:40px;font-family:var(--ui);';
 
@@ -124,5 +136,50 @@ export const UnknownType: Story = {
       path: '/workspace/data.bin',
       content: new ArrayBuffer(2048),
       mimeType: 'application/octet-stream',
+    }),
+};
+
+/**
+ * A file whose extension no MIME table knows — the case that used to dead-end.
+ *
+ * The caller sniffed the bytes (`core/file-type.ts`) and passes `text: true`,
+ * so `.jsh` previews as source instead of "Preview not available".
+ */
+export const UnknownExtension: Story = {
+  render: () =>
+    buildOpenStory({
+      path: '/workspace/skills/slack/scripts/slack.jsh',
+      content: `#!/usr/bin/env jsh
+# post a message to a channel
+set -e
+channel="$1"; shift
+curl -sS -X POST "$SLACK_API/chat.postMessage" \\
+  -H "Authorization: Bearer $SLACK_TOKEN" \\
+  -d "channel=$channel" -d "text=$*"
+`,
+      mimeType: 'text/plain',
+      text: true,
+    }),
+};
+
+/**
+ * A file with uncommitted changes opens on its DIFF, because that is the
+ * question a modified file poses. The header carries the git status and a
+ * toggle back to the whole file.
+ */
+export const ModifiedFile: Story = {
+  render: () =>
+    buildOpenStory({
+      path: '/repo/src/greeting.ts',
+      content: `export function greet(name: string): string {
+  return \`Hello, \${name}! Welcome back.\`;
+}
+`,
+      mimeType: 'text/typescript',
+      baseContent: `export function greet(name: string): string {
+  return "Hello!";
+}
+`,
+      gitStatus: 'modified',
     }),
 };

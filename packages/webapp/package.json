@@ -25,7 +25,7 @@
       "name": "webapp: total JS payload",
       "path": "../../dist/ui/**/*.js",
       "brotli": false,
-      "limit": "31 MB"
+      "limit": "34 MB"
     }
   ],
   "dependencies": {
@@ -73,6 +73,7 @@
     "openai": "^7.0.0",
     "pako": "^3.0.0",
     "semver": "7.8.5",
+    "shiki": "3.23.0",
     "sql.js": "^1.14.0",
     "tst": "9.4.0",
     "unpdf": "^1.4.0",

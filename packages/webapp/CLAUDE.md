@@ -49,6 +49,25 @@ never-rules below flag what a reviewer must recognise.
 - Sprinkles + Dips — `ui/sprinkle-*.ts`, `ui/dip.ts`
 - Stale-asset recovery — `setup-preload-error-reload.ts` + `stale-asset-channel.ts`
 
+## File mentions + preview
+
+Clicking a file name the agent wrote in chat. Four modules, deliberately split so the guessing and the verifying stay separate:
+
+- `core/file-mentions.ts` — the heuristic. Pure; finds CANDIDATES in prose and knows nothing about the VFS.
+- `core/file-mention-resolver.ts` — checks candidates against the VFS via a lazily built, bounded basename index.
+- `ui/file-mention-linker.ts` — walks a rendered message and links only what resolved.
+- `ui/wc/wire-file-mentions.ts` — lifecycle: observes the thread, waits for streaming to finish, opens the preview.
+
+Plus `core/file-type.ts` (content sniffing) and `ui/git-preview-source.ts` (the HEAD blob for diff mode). `ui/wc/file-actions.ts` owns `openFilePreview`, the single entry point both the file tree and a clicked mention go through.
+
+Non-obvious rules:
+
+- **Confirm, then linkify.** Nothing is decorated optimistically — the heuristic is permissive precisely BECAUSE verification gates it. A candidate that does not resolve stays plain text.
+- **Never linkify a streaming bubble.** A half-arrived path resolves to nothing; bubbles are processed only once `streaming` clears.
+- **`getMimeType()` (`core/mime-types.ts`) is for SERVING, `sniffFileType()` (`core/file-type.ts`) is for READING.** Never swap them: sniffing a type you then put in a `Content-Type` header is how MIME-confusion bugs happen, and serving's conservative `application/octet-stream` fallback is exactly what made `.jsh` unpreviewable. Precedence is magic bytes → extension → UTF-8 decodability.
+- **`isomorphic-git` is imported lazily** in `git-preview-source.ts`; the UI layer must not pull the `src/git/` stack for a preview. Its fs shim is read-only ON PURPOSE — a preview surface must never be able to write to a repo.
+- **The mention resolver's index is bounded** (`maxEntries`, `maxDepth`, skipped `node_modules`-class directories). A mention that would only resolve past the ceiling stays plain text; stalling the transcript to prove otherwise is worse.
+
 ## Never-Rules
 
 - **Kernel realms**: `runInRealm()` spawns per-task `DedicatedWorker`; SIGKILL → exit 137. Sync `readFileSync`/`writeFileSync` and

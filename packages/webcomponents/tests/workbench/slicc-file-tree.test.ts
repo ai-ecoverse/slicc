@@ -1,32 +1,86 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+/**
+ * Tests for `<slicc-file-tree>` after the move to `@pierre/trees`.
+ *
+ * These assert the component's CONTRACT — the `FileTreeItem` input shape, the
+ * `items`/`selected`/`gitStatus` accessors, and the `file-*` / `dir-toggle`
+ * events — rather than the markup. The previous suite tested the hand-rolled
+ * light-DOM structure (`.f` rows, `.sz` spans, computed row tints); that markup
+ * now belongs to the library and asserting on it would just be testing someone
+ * else's renderer.
+ */
+
+import { beforeEach, describe, expect, it } from 'vitest';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
-import type { FileTreeItem } from '../../src/workbench/slicc-file-tree.js';
-import { SliccFileTree } from '../../src/workbench/slicc-file-tree.js';
+import { type FileTreeItem, SliccFileTree } from '../../src/workbench/slicc-file-tree.js';
 
-/** rgb() form of a `#rrggbb` hex, matching getComputedStyle output. */
-const rgb = (hex: string): string => {
-  const n = Number.parseInt(hex.slice(1), 16);
-  return `rgb(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255})`;
-};
-
-/** The prototype VFS sidebar items. */
-const ITEMS: FileTreeItem[] = [
-  { kind: 'group', label: 'workspace/' },
-  { kind: 'file', id: 'hero.tsx', label: 'hero.tsx', path: 'workspace/hero.tsx' },
-  { kind: 'file', id: 'hero.css', label: 'hero.css', path: 'workspace/hero.css' },
-  { kind: 'file', id: 'tokens.css', label: 'tokens.css' },
-  { kind: 'group', label: 'skills/' },
-  { kind: 'file', id: 'sprinkles/', label: 'sprinkles/' },
-];
-
-function makeTree(items: FileTreeItem[] = ITEMS): SliccFileTree {
-  const el = document.createElement('slicc-file-tree') as SliccFileTree;
-  el.items = items;
-  return el;
+/** The library renders asynchronously; give it a frame or two to settle. */
+async function settle(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 60));
 }
 
-function fileRow(el: SliccFileTree, id: string): HTMLElement | null {
-  return el.querySelector<HTMLElement>(`.f[data-id="${id}"]`);
+async function mount(items: FileTreeItem[]): Promise<SliccFileTree> {
+  const tree = document.createElement('slicc-file-tree') as SliccFileTree;
+  tree.style.cssText = 'display:block;width:320px;height:420px;';
+  document.body.appendChild(tree);
+  tree.items = items;
+  await settle();
+  return tree;
+}
+
+const SAMPLE: FileTreeItem[] = [
+  {
+    kind: 'dir',
+    id: '/workspace',
+    label: 'workspace',
+    open: true,
+    children: [
+      {
+        kind: 'file',
+        id: '/workspace/bb.jsh',
+        label: 'bb.jsh',
+        path: '/workspace/bb.jsh',
+        size: 2048,
+      },
+      {
+        kind: 'dir',
+        id: '/workspace/src',
+        label: 'src',
+        children: [
+          {
+            kind: 'file',
+            id: '/workspace/src/main.ts',
+            label: 'main.ts',
+            path: '/workspace/src/main.ts',
+          },
+        ],
+      },
+    ],
+  },
+];
+
+/**
+ * The names of the rows the library painted.
+ *
+ * Each row is a `<button aria-label="<name>">` inside the container's shadow
+ * root. Reading the accessible name (rather than raw `textContent`, which also
+ * carries ~40 KB of injected stylesheet) keeps these assertions about what a
+ * user can actually see and reach.
+ */
+function rowLabels(tree: SliccFileTree): string[] {
+  const root = tree.querySelector('file-tree-container')?.shadowRoot;
+  if (!root) return [];
+  // The accessible name is the primary source, but a row whose whole path
+  // collapsed into the flattened root carries an empty one — so the visible
+  // text is included too. Reading the rows (rather than the shadow root at
+  // large) keeps ~40 KB of injected stylesheet out of the assertion.
+  return [...root.querySelectorAll('button')].map(
+    (row) => `${row.getAttribute('aria-label') ?? ''} ${row.textContent ?? ''}`
+  );
+}
+
+/** All row names joined, for `toContain`-style assertions. */
+function renderedText(tree: SliccFileTree): string {
+  return rowLabels(tree).join('\n');
 }
 
 describe('slicc-file-tree', () => {
@@ -39,846 +93,370 @@ describe('slicc-file-tree', () => {
     expect(customElements.get('slicc-file-tree')).toBe(SliccFileTree);
   });
 
-  describe('structure', () => {
-    it('renders group headers and file rows into its light DOM (no shadow root)', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      expect(el.shadowRoot).toBeNull();
-      const groups = el.querySelectorAll('.grp');
-      const files = el.querySelectorAll('.f');
-      expect(groups).toHaveLength(2);
-      expect(files).toHaveLength(4);
-      expect(groups[0].textContent).toBe('workspace/');
-      expect(groups[1].textContent).toBe('skills/');
-      expect(fileRow(el, 'hero.tsx')?.textContent).toBe('hero.tsx');
+  describe('items', () => {
+    it('renders the supplied files', async () => {
+      const tree = await mount(SAMPLE);
+      expect(renderedText(tree)).toContain('bb.jsh');
     });
 
-    it('renders nothing for an empty item set', () => {
-      const el = makeTree([]);
-      document.body.appendChild(el);
-      expect(el.querySelectorAll('.f')).toHaveLength(0);
-      expect(el.querySelectorAll('.grp')).toHaveLength(0);
+    it('reflects an assigned array back through the getter, copied not aliased', async () => {
+      const tree = await mount(SAMPLE);
+      const read = tree.items;
+      expect(read).toEqual(SAMPLE);
+      read.push({ kind: 'file', id: '/x', label: 'x' });
+      expect(tree.items).toHaveLength(SAMPLE.length);
     });
 
-    it('escapes file and group labels', () => {
-      const el = makeTree([
-        { kind: 'group', label: '<b>grp</b>' },
-        { kind: 'file', id: 'x', label: '<script>x</script>' },
+    it('re-renders when items are reassigned', async () => {
+      const tree = await mount(SAMPLE);
+      tree.items = [{ kind: 'file', id: '/only.txt', label: 'only.txt' }];
+      await settle();
+      const text = renderedText(tree);
+      expect(text).toContain('only.txt');
+      expect(text).not.toContain('bb.jsh');
+    });
+
+    it('renders nothing for an empty item set', async () => {
+      const tree = await mount([]);
+      expect(tree.querySelector('file-tree-container')).toBeNull();
+    });
+
+    it('tolerates a non-array assignment', async () => {
+      const tree = await mount(SAMPLE);
+      (tree as unknown as { items: unknown }).items = null;
+      await settle();
+      expect(tree.items).toEqual([]);
+    });
+
+    it('hoists group rows away rather than rendering them as paths', async () => {
+      // A `group` is a visual header with no path; the library builds hierarchy
+      // from paths alone, so groups flatten out and their children survive.
+      const tree = await mount([
+        { kind: 'group', label: 'Recent' },
+        { kind: 'file', id: '/a.ts', label: 'a.ts' },
       ]);
-      document.body.appendChild(el);
-      expect(el.querySelector('script')).toBeNull();
-      expect(el.querySelector('.grp')?.querySelector('b')).toBeNull();
-      expect(fileRow(el, 'x')?.textContent).toBe('<script>x</script>');
+      const text = renderedText(tree);
+      expect(text).toContain('a.ts');
+      expect(text).not.toContain('Recent');
     });
 
-    it('adopts slotted light-DOM children as the initial items', () => {
-      const el = document.createElement('slicc-file-tree') as SliccFileTree;
-      el.innerHTML =
-        '<div data-group>workspace/</div>' +
-        '<div data-id="a.ts">a.ts</div>' +
-        '<div id="b.ts">b.ts</div>';
-      document.body.appendChild(el);
-      expect(el.querySelectorAll('.grp')).toHaveLength(1);
-      expect(el.querySelectorAll('.f')).toHaveLength(2);
-      expect(fileRow(el, 'a.ts')).not.toBeNull();
-      expect(fileRow(el, 'b.ts')).not.toBeNull();
+    it('keeps an empty directory visible', async () => {
+      const tree = await mount([{ kind: 'dir', id: '/empty', label: 'empty', children: [] }]);
+      expect(renderedText(tree)).toContain('empty');
+    });
+
+    it('shows a file size as a row decoration', async () => {
+      const tree = await mount(SAMPLE);
+      // 2048 bytes renders in the compact form the old `.sz` span used.
+      expect(renderedText(tree)).toContain('2K');
     });
   });
 
-  describe('items property', () => {
-    it('reflects an assigned array back through the getter (copied, not aliased)', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const out = el.items;
-      expect(out).toHaveLength(ITEMS.length);
-      out.push({ kind: 'file', id: 'leak', label: 'leak' });
-      expect(el.items).toHaveLength(ITEMS.length);
-    });
-
-    it('re-renders when items are reassigned', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      el.items = [{ kind: 'file', id: 'only.ts', label: 'only.ts' }];
-      expect(el.querySelectorAll('.f')).toHaveLength(1);
-      expect(fileRow(el, 'only.ts')).not.toBeNull();
-    });
-  });
-
-  describe('file size display', () => {
-    it('renders a .sz span when the file item has a size', () => {
-      const el = makeTree([{ kind: 'file', id: 'big.zip', label: 'big.zip', size: 1536 }]);
-      document.body.appendChild(el);
-      const sz = fileRow(el, 'big.zip')?.querySelector('.sz');
-      expect(sz?.textContent).toBe('1.5K');
-    });
-
-    it('formats sizes across B / K / M / G boundaries', () => {
-      const el = makeTree([
-        { kind: 'file', id: 'b', label: 'b', size: 512 },
-        { kind: 'file', id: 'k', label: 'k', size: 1024 },
-        { kind: 'file', id: 'm', label: 'm', size: 1024 * 1024 },
-        { kind: 'file', id: 'g', label: 'g', size: 1024 * 1024 * 1024 },
-      ]);
-      document.body.appendChild(el);
-      expect(fileRow(el, 'b')?.querySelector('.sz')?.textContent).toBe('512 B');
-      expect(fileRow(el, 'k')?.querySelector('.sz')?.textContent).toBe('1.0K');
-      expect(fileRow(el, 'm')?.querySelector('.sz')?.textContent).toBe('1.0M');
-      expect(fileRow(el, 'g')?.querySelector('.sz')?.textContent).toBe('1.0G');
-    });
-
-    it('omits .sz when size is not provided', () => {
-      const el = makeTree([{ kind: 'file', id: 'no-size.ts', label: 'no-size.ts' }]);
-      document.body.appendChild(el);
-      expect(fileRow(el, 'no-size.ts')?.querySelector('.sz')).toBeNull();
-    });
-  });
-
-  describe('open-dir preservation across refresh', () => {
-    it('preserves user-expanded dirs when items is re-assigned', () => {
-      const el = makeTree([
-        {
-          kind: 'dir',
-          id: 'src',
-          label: 'src',
-          children: [{ kind: 'file', id: 'a.ts', label: 'a.ts' }],
-        },
-      ]);
-      document.body.appendChild(el);
-      el.toggleDir('src');
-      expect(el.isDirOpen('src')).toBe(true);
-      el.items = [
-        {
-          kind: 'dir',
-          id: 'src',
-          label: 'src',
-          children: [
-            { kind: 'file', id: 'a.ts', label: 'a.ts' },
-            { kind: 'file', id: 'b.ts', label: 'b.ts' },
-          ],
-        },
-      ];
-      expect(el.isDirOpen('src')).toBe(true);
-    });
-
-    it('seeds open dirs from item.open on the first assignment', () => {
-      const el = document.createElement('slicc-file-tree') as SliccFileTree;
-      el.items = [
-        {
-          kind: 'dir',
-          id: 'lib',
-          label: 'lib',
-          open: true,
-          children: [],
-        },
-      ];
-      document.body.appendChild(el);
-      expect(el.isDirOpen('lib')).toBe(true);
-    });
-
-    it('user-collapsed dir (open:true in items) stays collapsed after refresh', () => {
-      // Regression for: 3s refresh re-opens dirs the user manually collapsed.
-      // buildVfsTreeItems always emits root dirs with open:true, so the
-      // old union logic would re-add a collapsed root on every refresh.
-      const el = document.createElement('slicc-file-tree') as SliccFileTree;
-      el.items = [{ kind: 'dir', id: 'workspace', label: 'workspace', open: true, children: [] }];
-      document.body.appendChild(el);
-      expect(el.isDirOpen('workspace')).toBe(true);
-      // User collapses the dir
-      el.toggleDir('workspace');
-      expect(el.isDirOpen('workspace')).toBe(false);
-      // Simulate a refresh: re-assign items, still carrying open:true
-      el.items = [{ kind: 'dir', id: 'workspace', label: 'workspace', open: true, children: [] }];
-      // Must stay collapsed — the refresh must not undo the user's toggle
-      expect(el.isDirOpen('workspace')).toBe(false);
-    });
-  });
-
-  describe('selected attribute ↔ property reflection', () => {
-    it('reflects the selected property to the attribute and back', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      expect(el.selected).toBeNull();
-      el.selected = 'hero.css';
-      expect(el.getAttribute('selected')).toBe('hero.css');
-      el.setAttribute('selected', 'hero.tsx');
-      expect(el.selected).toBe('hero.tsx');
-      el.selected = null;
-      expect(el.hasAttribute('selected')).toBe(false);
-    });
-
-    it('applies `.on` to the row named by the selected attribute', () => {
-      const el = makeTree();
-      el.selected = 'hero.css';
-      document.body.appendChild(el);
-      expect(fileRow(el, 'hero.css')?.classList.contains('on')).toBe(true);
-      el.selected = 'hero.tsx';
-      expect(fileRow(el, 'hero.css')?.classList.contains('on')).toBe(false);
-      expect(fileRow(el, 'hero.tsx')?.classList.contains('on')).toBe(true);
-    });
-  });
-
-  describe('single-selection behavior + file-select event', () => {
-    it('selectFile tints exactly one row and emits file-select with id + path', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const onSelect = vi.fn();
-      el.addEventListener('file-select', onSelect);
-
-      el.selectFile('hero.css');
-      expect(el.querySelectorAll('.f.on')).toHaveLength(1);
-      expect(fileRow(el, 'hero.css')?.classList.contains('on')).toBe(true);
-      expect(el.selected).toBe('hero.css');
-      expect(onSelect).toHaveBeenCalledTimes(1);
-      const detail = onSelect.mock.calls[0][0].detail;
-      expect(detail).toEqual({ id: 'hero.css', path: 'workspace/hero.css' });
-    });
-
-    it('falls back to the label as the path when no explicit path is given', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const onSelect = vi.fn();
-      el.addEventListener('file-select', onSelect);
-      el.selectFile('tokens.css');
-      expect(onSelect.mock.calls[0][0].detail).toEqual({
-        id: 'tokens.css',
-        path: 'tokens.css',
+  describe('selection', () => {
+    it('selectFile emits file-select with id and path', async () => {
+      const tree = await mount(SAMPLE);
+      const seen: Array<{ id: string; path: string }> = [];
+      tree.addEventListener('file-select', (e) => {
+        seen.push((e as CustomEvent<{ id: string; path: string }>).detail);
       });
+
+      tree.selectFile('/workspace/bb.jsh');
+      expect(seen).toEqual([{ id: '/workspace/bb.jsh', path: '/workspace/bb.jsh' }]);
     });
 
-    it('moves the selection (only one active row at a time)', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      el.selectFile('hero.tsx');
-      el.selectFile('sprinkles/');
-      expect(fileRow(el, 'hero.tsx')?.classList.contains('on')).toBe(false);
-      expect(fileRow(el, 'sprinkles/')?.classList.contains('on')).toBe(true);
-      expect(el.querySelectorAll('.f.on')).toHaveLength(1);
-    });
-
-    it('emits the event composed + bubbling so it crosses boundaries', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const onBody = vi.fn();
-      document.body.addEventListener('file-select', onBody);
-      el.selectFile('hero.css');
-      expect(onBody).toHaveBeenCalledTimes(1);
-      const ev = onBody.mock.calls[0][0] as CustomEvent;
-      expect(ev.bubbles).toBe(true);
-      expect(ev.composed).toBe(true);
-      document.body.removeEventListener('file-select', onBody);
-    });
-
-    it('is a no-op (no event) for an unknown id', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const onSelect = vi.fn();
-      el.addEventListener('file-select', onSelect);
-      el.selectFile('does-not-exist');
-      expect(onSelect).not.toHaveBeenCalled();
-      expect(el.querySelectorAll('.f.on')).toHaveLength(0);
-    });
-
-    it('selects on a row click', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const onSelect = vi.fn();
-      el.addEventListener('file-select', onSelect);
-      // Click on the row's text node target — the handler resolves the closest .f.
-      fileRow(el, 'nav.tsx');
-      const row = fileRow(el, 'hero.tsx');
-      row?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      expect(onSelect).toHaveBeenCalledTimes(1);
-      expect(fileRow(el, 'hero.tsx')?.classList.contains('on')).toBe(true);
-    });
-
-    it('stops handling clicks after disconnect', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const onSelect = vi.fn();
-      el.addEventListener('file-select', onSelect);
-      el.remove();
-      fileRow(el, 'hero.tsx')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      expect(onSelect).not.toHaveBeenCalled();
-    });
-  });
-
-  describe('nested directories (fold/expand)', () => {
-    const NESTED: FileTreeItem[] = [
-      { kind: 'group', label: 'workspace/' },
-      {
-        kind: 'dir',
-        id: 'components',
-        label: 'components',
-        open: true,
-        children: [
-          {
-            kind: 'file',
-            id: 'hero.tsx',
-            label: 'hero.tsx',
-            path: 'workspace/components/hero.tsx',
-          },
-          {
-            kind: 'dir',
-            id: 'ui',
-            label: 'ui',
-            children: [
-              {
-                kind: 'file',
-                id: 'button.tsx',
-                label: 'button.tsx',
-                path: 'workspace/components/ui/button.tsx',
-              },
-            ],
-          },
-        ],
-      },
-      { kind: 'file', id: 'tokens.css', label: 'tokens.css' },
-    ];
-
-    function makeNested(): SliccFileTree {
-      const el = document.createElement('slicc-file-tree') as SliccFileTree;
-      el.items = NESTED;
-      document.body.appendChild(el);
-      return el;
-    }
-
-    /** The `.children` wrapper that immediately follows the named `.dir` row. */
-    function childrenOf(el: SliccFileTree, dirId: string): HTMLElement | null {
-      const dir = el.querySelector<HTMLElement>(`.dir[data-dir-id="${dirId}"]`);
-      const next = dir?.nextElementSibling;
-      return next instanceof HTMLElement && next.classList.contains('children') ? next : null;
-    }
-
-    it('renders a `.dir` toggle row with a chevron <svg> for each directory', () => {
-      const el = makeNested();
-      const dir = el.querySelector<HTMLElement>('.dir[data-dir-id="components"]');
-      expect(dir).not.toBeNull();
-      expect(dir?.querySelector('svg.chev')).not.toBeNull();
-      expect(dir?.textContent).toContain('components');
-    });
-
-    it('seeds the open state from the item `open` flag (open shows, default hides)', () => {
-      const el = makeNested();
-      expect(el.isDirOpen('components')).toBe(true);
-      expect(el.isDirOpen('ui')).toBe(false);
-      // open dir → children wrapper visible; closed dir → hidden.
-      expect(childrenOf(el, 'components')?.hasAttribute('hidden')).toBe(false);
-      expect(childrenOf(el, 'ui')?.hasAttribute('hidden')).toBe(true);
-    });
-
-    it('toggling a directory shows/hides its children and flips aria-expanded', () => {
-      const el = makeNested();
-      el.toggleDir('components');
-      expect(el.isDirOpen('components')).toBe(false);
-      expect(childrenOf(el, 'components')?.hasAttribute('hidden')).toBe(true);
-      expect(
-        el.querySelector('.dir[data-dir-id="components"]')?.getAttribute('aria-expanded')
-      ).toBe('false');
-      el.toggleDir('components');
-      expect(el.isDirOpen('components')).toBe(true);
-      expect(childrenOf(el, 'components')?.hasAttribute('hidden')).toBe(false);
-      expect(
-        el.querySelector('.dir[data-dir-id="components"]')?.getAttribute('aria-expanded')
-      ).toBe('true');
-    });
-
-    it('toggles on a directory row click and emits dir-toggle { id, open }', () => {
-      const el = makeNested();
-      const onToggle = vi.fn();
-      el.addEventListener('dir-toggle', onToggle);
-      el.querySelector<HTMLElement>('.dir[data-dir-id="ui"]')?.dispatchEvent(
-        new MouseEvent('click', { bubbles: true })
-      );
-      expect(el.isDirOpen('ui')).toBe(true);
-      expect(childrenOf(el, 'ui')?.hasAttribute('hidden')).toBe(false);
-      expect(onToggle).toHaveBeenCalledTimes(1);
-      expect(onToggle.mock.calls[0][0].detail).toEqual({ id: 'ui', open: true });
-    });
-
-    it('emits dir-toggle composed + bubbling and is a no-op for an unknown id', () => {
-      const el = makeNested();
-      const onBody = vi.fn();
-      document.body.addEventListener('dir-toggle', onBody);
-      el.toggleDir('components');
-      expect(onBody).toHaveBeenCalledTimes(1);
-      const ev = onBody.mock.calls[0][0] as CustomEvent;
-      expect(ev.bubbles).toBe(true);
-      expect(ev.composed).toBe(true);
-      document.body.removeEventListener('dir-toggle', onBody);
-
-      const onToggle = vi.fn();
-      el.addEventListener('dir-toggle', onToggle);
-      el.toggleDir('does-not-exist');
-      expect(onToggle).not.toHaveBeenCalled();
-    });
-
-    it('indents nested children (the `.children` wrapper carries left padding)', () => {
-      const el = makeNested();
-      const wrap = childrenOf(el, 'components') as HTMLElement;
-      expect(Number.parseFloat(getComputedStyle(wrap).paddingLeft)).toBeGreaterThan(0);
-      // A doubly-nested file sits further right than a singly-nested one.
-      el.toggleDir('ui');
-      const shallow = fileRow(el, 'hero.tsx') as HTMLElement;
-      const deep = fileRow(el, 'button.tsx') as HTMLElement;
-      expect(deep.getBoundingClientRect().left).toBeGreaterThan(
-        shallow.getBoundingClientRect().left
-      );
-    });
-
-    it('selects a nested file (selection still works) with its full path', () => {
-      const el = makeNested();
-      const onSelect = vi.fn();
-      el.addEventListener('file-select', onSelect);
-      el.selectFile('hero.tsx');
-      expect(fileRow(el, 'hero.tsx')?.classList.contains('on')).toBe(true);
-      expect(el.querySelectorAll('.f.on')).toHaveLength(1);
-      expect(onSelect.mock.calls[0][0].detail).toEqual({
-        id: 'hero.tsx',
-        path: 'workspace/components/hero.tsx',
+    it('falls back to the label as the path when none is given', async () => {
+      const tree = await mount([{ kind: 'file', id: '/a.ts', label: 'a.ts' }]);
+      const seen: Array<{ path: string }> = [];
+      tree.addEventListener('file-select', (e) => {
+        seen.push((e as CustomEvent<{ path: string }>).detail);
       });
+
+      tree.selectFile('/a.ts');
+      expect(seen[0]?.path).toBe('a.ts');
     });
 
-    it('selects a nested file on a row click without toggling its ancestor dirs', () => {
-      const el = makeNested();
-      el.toggleDir('ui'); // open it so the row is visible
-      const onSelect = vi.fn();
-      el.addEventListener('file-select', onSelect);
-      fileRow(el, 'button.tsx')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      expect(onSelect).toHaveBeenCalledTimes(1);
-      expect(fileRow(el, 'button.tsx')?.classList.contains('on')).toBe(true);
-      // The surrounding directories stay as they were.
-      expect(el.isDirOpen('ui')).toBe(true);
-      expect(el.isDirOpen('components')).toBe(true);
-    });
-  });
+    it('is a no-op with no event for an unknown id', async () => {
+      const tree = await mount(SAMPLE);
+      let fired = 0;
+      tree.addEventListener('file-select', () => {
+        fired += 1;
+      });
 
-  describe('appearance (getComputedStyle, real Chromium)', () => {
-    it('is a fixed 190px, non-shrinking column with a right divider', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const cs = getComputedStyle(el);
-      expect(cs.width).toBe('190px');
-      expect(cs.flexGrow).toBe('0');
-      expect(cs.flexShrink).toBe('0');
-      expect(cs.overflowX).toBe('auto');
-      expect(cs.borderRightWidth).toBe('1px');
-      // light --line === #e5e5e5
-      expect(cs.borderRightColor).toBe(rgb('#e5e5e5'));
+      tree.selectFile('/nope.ts');
+      expect(fired).toBe(0);
     });
 
-    it('paints group headers in --txt-3 and idle files in --ink', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      // light --txt-3 === #a1a1a1, --ink === #0a0a0a
-      expect(getComputedStyle(el.querySelector('.grp') as HTMLElement).color).toBe(rgb('#a1a1a1'));
-      expect(getComputedStyle(fileRow(el, 'hero.tsx') as HTMLElement).color).toBe(rgb('#0a0a0a'));
+    it('reflects the selected property to the attribute and back', async () => {
+      const tree = await mount(SAMPLE);
+      tree.selected = '/workspace/bb.jsh';
+      expect(tree.getAttribute('selected')).toBe('/workspace/bb.jsh');
+
+      tree.selected = null;
+      expect(tree.hasAttribute('selected')).toBe(false);
+      expect(tree.selected).toBeNull();
     });
 
-    it('tints the active row violet (text + icon) in light mode', () => {
-      const el = makeTree();
-      el.selected = 'hero.css';
-      document.body.appendChild(el);
-      const row = fileRow(el, 'hero.css') as HTMLElement;
-      // light --violet === #8b5cf6
-      expect(getComputedStyle(row).color).toBe(rgb('#8b5cf6'));
-      // icon inherits the violet tint via .f.on .ficon rule
-      const icon = row.querySelector<HTMLElement>('.ficon');
-      expect(icon).not.toBeNull();
-      expect(getComputedStyle(icon as HTMLElement).color).toBe(rgb('#8b5cf6'));
-      // active background is a violet/canvas mix, distinct from the idle row.
-      const idle = getComputedStyle(fileRow(el, 'hero.tsx') as HTMLElement).backgroundColor;
-      expect(getComputedStyle(row).backgroundColor).not.toBe(idle);
+    it('records the selection made through selectFile', async () => {
+      const tree = await mount(SAMPLE);
+      tree.selectFile('/workspace/bb.jsh');
+      expect(tree.selected).toBe('/workspace/bb.jsh');
     });
 
-    it('renders a file icon on every file row', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const icon = fileRow(el, 'hero.tsx')?.querySelector('.ficon');
-      expect(icon).not.toBeNull();
-      expect(icon?.tagName.toLowerCase()).toBe('svg');
-    });
+    it('emits file-select composed and bubbling so it crosses shadow boundaries', async () => {
+      const tree = await mount(SAMPLE);
+      const events: Event[] = [];
+      document.body.addEventListener('file-select', (e) => events.push(e));
 
-    it('re-bases the active tint over --canvas in dark mode', () => {
-      const wrap = document.createElement('div');
-      wrap.className = 'dark';
-      const light = makeTree();
-      light.selected = 'hero.css';
-      const dark = makeTree();
-      dark.selected = 'hero.css';
-      document.body.appendChild(light);
-      wrap.appendChild(dark);
-      document.body.appendChild(wrap);
-
-      const lightBg = getComputedStyle(fileRow(light, 'hero.css') as HTMLElement).backgroundColor;
-      const darkBg = getComputedStyle(fileRow(dark, 'hero.css') as HTMLElement).backgroundColor;
-      // 22% over dark --canvas (#161618) differs from 10% over light --canvas (#fff).
-      expect(darkBg).not.toBe(lightBg);
-      // violet text survives the theme flip.
-      expect(getComputedStyle(fileRow(dark, 'hero.css') as HTMLElement).color).toBe(rgb('#8b5cf6'));
+      tree.selectFile('/workspace/bb.jsh');
+      expect(events[0]?.composed).toBe(true);
+      expect(events[0]?.bubbles).toBe(true);
     });
   });
 
-  describe('hover action strip', () => {
-    it('renders action buttons inside each .f row', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const row = fileRow(el, 'hero.tsx') as HTMLElement;
-      const strip = row.querySelector('.actions') as HTMLElement;
-      expect(strip).not.toBeNull();
-      expect(strip.querySelectorAll('button')).toHaveLength(4);
+  describe('directories', () => {
+    it('reports a directory seeded open by its item flag', async () => {
+      const tree = await mount(SAMPLE);
+      expect(tree.isDirOpen('/workspace')).toBe(true);
     });
 
-    it('does not let the idle (opacity:0) actions strip intercept clicks meant for the row', () => {
-      // Regression: the strip used to keep pointer-events:auto while hidden,
-      // silently swallowing clicks over the right ~60% of the row (hitting an
-      // invisible action button) instead of selecting the file.
-      const el = makeTree();
-      document.body.appendChild(el);
-      const row = fileRow(el, 'hero.tsx') as HTMLElement;
-      const strip = row.querySelector('.actions') as HTMLElement;
-      expect(getComputedStyle(strip).pointerEvents).toBe('none');
+    it('toggleDir flips the state and emits dir-toggle', async () => {
+      const tree = await mount(SAMPLE);
+      const seen: Array<{ id: string; open: boolean }> = [];
+      tree.addEventListener('dir-toggle', (e) => {
+        seen.push((e as CustomEvent<{ id: string; open: boolean }>).detail);
+      });
 
-      const r = row.getBoundingClientRect();
-      const hit = document.elementFromPoint(r.right - 5, r.top + r.height / 2);
-      expect(hit?.closest('.actions')).toBeNull();
-      expect(hit?.closest<HTMLElement>('.f')?.dataset.id).toBe('hero.tsx');
+      tree.toggleDir('/workspace');
+      expect(seen[0]).toEqual({ id: '/workspace', open: false });
+      expect(tree.isDirOpen('/workspace')).toBe(false);
+
+      tree.toggleDir('/workspace');
+      expect(seen[1]?.open).toBe(true);
     });
 
-    it('does NOT render action buttons on directory rows', () => {
-      const items: FileTreeItem[] = [
-        {
-          kind: 'dir',
-          id: 'src',
-          label: 'src',
-          children: [{ kind: 'file', id: 'a.ts', label: 'a.ts' }],
-        },
+    it('toggleDir is a no-op for an unknown id and for a file', async () => {
+      const tree = await mount(SAMPLE);
+      let fired = 0;
+      tree.addEventListener('dir-toggle', () => {
+        fired += 1;
+      });
+
+      tree.toggleDir('/nope');
+      tree.toggleDir('/workspace/bb.jsh');
+      expect(fired).toBe(0);
+    });
+
+    it('isDirOpen is false for a file and for an unknown id', async () => {
+      const tree = await mount(SAMPLE);
+      expect(tree.isDirOpen('/workspace/bb.jsh')).toBe(false);
+      expect(tree.isDirOpen('/nope')).toBe(false);
+    });
+  });
+
+  describe('preview', () => {
+    it('previewFile emits file-preview with id and path', async () => {
+      const tree = await mount(SAMPLE);
+      const seen: Array<{ id: string; path: string }> = [];
+      tree.addEventListener('file-preview', (e) => {
+        seen.push((e as CustomEvent<{ id: string; path: string }>).detail);
+      });
+
+      tree.previewFile('/workspace/bb.jsh');
+      expect(seen).toEqual([{ id: '/workspace/bb.jsh', path: '/workspace/bb.jsh' }]);
+    });
+
+    it('does not preview a directory or an unknown id', async () => {
+      const tree = await mount(SAMPLE);
+      let fired = 0;
+      tree.addEventListener('file-preview', () => {
+        fired += 1;
+      });
+
+      tree.previewFile('/workspace');
+      tree.previewFile('/nope.ts');
+      expect(fired).toBe(0);
+    });
+  });
+
+  describe('git status', () => {
+    it('accepts and reflects a git status list', async () => {
+      const tree = await mount(SAMPLE);
+      tree.gitStatus = [{ path: '/workspace/bb.jsh', status: 'modified' }];
+      await settle();
+      expect(tree.gitStatus).toEqual([{ path: '/workspace/bb.jsh', status: 'modified' }]);
+    });
+
+    it('copies the assigned list rather than aliasing it', async () => {
+      const tree = await mount(SAMPLE);
+      const input: Array<{ path: string; status: 'modified' }> = [
+        { path: '/workspace/bb.jsh', status: 'modified' },
       ];
-      const el = makeTree(items);
-      document.body.appendChild(el);
-      const dir = el.querySelector('.dir') as HTMLElement;
-      expect(dir.querySelector('.actions')).toBeNull();
+      tree.gitStatus = input;
+      input.push({ path: '/other', status: 'modified' });
+      expect(tree.gitStatus).toHaveLength(1);
     });
 
-    it('clicking the preview button emits file-preview with id + path', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const onPreview = vi.fn();
-      el.addEventListener('file-preview', onPreview);
-      const row = fileRow(el, 'hero.tsx') as HTMLElement;
-      const previewBtn = row.querySelector('[data-action="preview"]') as HTMLElement;
-      previewBtn.click();
-      expect(onPreview).toHaveBeenCalledTimes(1);
-      expect(onPreview.mock.calls[0][0].detail).toEqual({
-        id: 'hero.tsx',
-        path: 'workspace/hero.tsx',
+    it('still renders when a status names a path that is not in the tree', async () => {
+      const tree = await mount(SAMPLE);
+      tree.gitStatus = [{ path: '/gone.ts', status: 'deleted' }];
+      await settle();
+      expect(renderedText(tree)).toContain('bb.jsh');
+    });
+  });
+
+  describe('row interaction', () => {
+    /** The rendered row whose accessible name is `name`. */
+    function row(tree: SliccFileTree, name: string): HTMLElement | null {
+      const root = tree.querySelector('file-tree-container')?.shadowRoot;
+      return (
+        [...(root?.querySelectorAll('button') ?? [])].find(
+          (b) => b.getAttribute('aria-label') === name
+        ) ?? null
+      );
+    }
+
+    it('opens the previewer on a double-click', async () => {
+      const tree = await mount(SAMPLE);
+      const seen: string[] = [];
+      tree.addEventListener('file-preview', (e) => {
+        seen.push((e as CustomEvent<{ path: string }>).detail.path);
       });
+
+      const target = row(tree, 'bb.jsh');
+      target?.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+      await settle();
+      target?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, composed: true }));
+      await settle();
+
+      expect(seen).toEqual(['/workspace/bb.jsh']);
     });
 
-    it('clicking the reference button emits file-reference with id + path', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const onRef = vi.fn();
-      el.addEventListener('file-reference', onRef);
-      const row = fileRow(el, 'hero.tsx') as HTMLElement;
-      const refBtn = row.querySelector('[data-action="reference"]') as HTMLElement;
-      refBtn.click();
-      expect(onRef).toHaveBeenCalledTimes(1);
-      expect(onRef.mock.calls[0][0].detail).toEqual({ id: 'hero.tsx', path: 'workspace/hero.tsx' });
+    it('opens the previewer on Enter', async () => {
+      const tree = await mount(SAMPLE);
+      const seen: string[] = [];
+      tree.addEventListener('file-preview', (e) => {
+        seen.push((e as CustomEvent<{ path: string }>).detail.path);
+      });
+
+      const target = row(tree, 'bb.jsh');
+      target?.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+      await settle();
+      target?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'Enter', bubbles: true, composed: true })
+      );
+      await settle();
+
+      expect(seen).toEqual(['/workspace/bb.jsh']);
     });
 
-    it('clicking the download button emits file-download with id + path', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const onDl = vi.fn();
-      el.addEventListener('file-download', onDl);
-      const row = fileRow(el, 'hero.tsx') as HTMLElement;
-      const dlBtn = row.querySelector('[data-action="download"]') as HTMLElement;
-      dlBtn.click();
-      expect(onDl).toHaveBeenCalledTimes(1);
-      expect(onDl.mock.calls[0][0].detail).toEqual({ id: 'hero.tsx', path: 'workspace/hero.tsx' });
+    it('ignores other keys', async () => {
+      const tree = await mount(SAMPLE);
+      let fired = 0;
+      tree.addEventListener('file-preview', () => {
+        fired += 1;
+      });
+
+      const target = row(tree, 'bb.jsh');
+      target?.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+      await settle();
+      target?.dispatchEvent(
+        new KeyboardEvent('keydown', { key: 'a', bubbles: true, composed: true })
+      );
+      await settle();
+
+      expect(fired).toBe(0);
     });
 
-    it('clicking the overflow button emits file-overflow with id + path + anchor', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const onOverflow = vi.fn();
-      el.addEventListener('file-overflow', onOverflow);
-      const row = fileRow(el, 'hero.tsx') as HTMLElement;
-      const overflowBtn = row.querySelector('[data-action="overflow"]') as HTMLElement;
-      overflowBtn.click();
-      expect(onOverflow).toHaveBeenCalledTimes(1);
-      const detail = onOverflow.mock.calls[0][0].detail;
-      expect(detail.id).toBe('hero.tsx');
-      expect(detail.path).toBe('workspace/hero.tsx');
-      expect(detail.anchor).toBe(overflowBtn);
+    it('emits file-overflow with an anchor when the context menu opens', async () => {
+      const tree = await mount(SAMPLE);
+      const seen: Array<{ id: string; path: string; anchor: HTMLElement; kind: string }> = [];
+      tree.addEventListener('file-overflow', (e) => {
+        seen.push(
+          (e as CustomEvent<{ id: string; path: string; anchor: HTMLElement; kind: string }>).detail
+        );
+      });
+
+      row(tree, 'bb.jsh')?.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, composed: true })
+      );
+      await settle();
+
+      expect(seen[0]?.id).toBe('/workspace/bb.jsh');
+      expect(seen[0]?.path).toBe('/workspace/bb.jsh');
+      expect(seen[0]?.kind).toBe('file');
+      expect(seen[0]?.anchor).toBeInstanceOf(HTMLElement);
     });
 
-    it('action button clicks do NOT trigger file-select', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const onSelect = vi.fn();
-      el.addEventListener('file-select', onSelect);
-      const row = fileRow(el, 'hero.tsx') as HTMLElement;
-      const previewBtn = row.querySelector('[data-action="preview"]') as HTMLElement;
-      previewBtn.click();
-      expect(onSelect).not.toHaveBeenCalled();
+    it('reports a directory context menu as a directory', async () => {
+      const tree = await mount(SAMPLE);
+      const seen: Array<{ kind: string }> = [];
+      tree.addEventListener('file-overflow', (e) => {
+        seen.push((e as CustomEvent<{ kind: string }>).detail);
+      });
+
+      row(tree, 'src')?.dispatchEvent(
+        new MouseEvent('contextmenu', { bubbles: true, composed: true })
+      );
+      await settle();
+
+      expect(seen[0]?.kind).toBe('directory');
+    });
+
+    it('emits file-select once when a row is clicked, not twice', async () => {
+      // The attribute reflection round-trips through the library's selection
+      // callback; only the originating action may emit.
+      const tree = await mount(SAMPLE);
+      const seen: string[] = [];
+      tree.addEventListener('file-select', (e) => {
+        seen.push((e as CustomEvent<{ path: string }>).detail.path);
+      });
+
+      row(tree, 'bb.jsh')?.dispatchEvent(
+        new MouseEvent('click', { bubbles: true, composed: true })
+      );
+      await settle();
+
+      expect(seen).toEqual(['/workspace/bb.jsh']);
+    });
+
+    it('keeps a user-collapsed directory collapsed across a refresh', async () => {
+      const tree = await mount(SAMPLE);
+      tree.toggleDir('/workspace');
+      await settle();
+      expect(tree.isDirOpen('/workspace')).toBe(false);
+
+      // A background poll re-assigns the same items; the seed `open: true` must
+      // not re-open what the user just closed.
+      tree.items = SAMPLE;
+      await settle();
+      expect(tree.isDirOpen('/workspace')).toBe(false);
     });
   });
 
-  describe('directory selection', () => {
-    function dirRow(el: SliccFileTree, id: string): HTMLElement | null {
-      return el.querySelector<HTMLElement>(`.dir[data-dir-id="${id}"]`);
-    }
-
-    it('clicking a dir row selects/highlights it in addition to toggling it open', () => {
-      const el = makeTree([
-        { kind: 'dir', id: 'src', label: 'src', children: [] },
-        { kind: 'file', id: 'a.ts', label: 'a.ts' },
-      ]);
-      document.body.appendChild(el);
-      dirRow(el, 'src')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      expect(el.selected).toBe('src');
-      expect(dirRow(el, 'src')?.classList.contains('on')).toBe(true);
-      expect(el.isDirOpen('src')).toBe(true);
+  describe('lifecycle', () => {
+    it('tears the tree down on disconnect', async () => {
+      const tree = await mount(SAMPLE);
+      tree.remove();
+      await settle();
+      // Post-teardown calls must not throw on a detached component.
+      expect(() => tree.toggleDir('/workspace')).not.toThrow();
+      expect(tree.isDirOpen('/workspace')).toBe(false);
     });
 
-    it('selecting a dir clears a previous file selection (single selection across kinds)', () => {
-      const el = makeTree([
-        { kind: 'dir', id: 'src', label: 'src', children: [] },
-        { kind: 'file', id: 'a.ts', label: 'a.ts' },
-      ]);
-      document.body.appendChild(el);
-      el.selectFile('a.ts');
-      dirRow(el, 'src')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      expect(fileRow(el, 'a.ts')?.classList.contains('on')).toBe(false);
-      expect(dirRow(el, 'src')?.classList.contains('on')).toBe(true);
+    it('renders again when re-connected', async () => {
+      const tree = await mount(SAMPLE);
+      tree.remove();
+      document.body.appendChild(tree);
+      await settle();
+      expect(renderedText(tree)).toContain('bb.jsh');
     });
 
-    it('keeps focus on the row across the click-triggered toggle re-render', () => {
-      // Regression: clicking a dir selects+focuses it, then toggleDir()
-      // immediately replaceChildren()s the whole tree, which used to strand
-      // focus on the now-detached old row (breaking Ctrl+C right after click).
-      const el = makeTree([{ kind: 'dir', id: 'src', label: 'src', children: [] }]);
-      document.body.appendChild(el);
-      dirRow(el, 'src')?.dispatchEvent(new MouseEvent('click', { bubbles: true }));
-      expect(document.activeElement).toBe(dirRow(el, 'src'));
-    });
-  });
-
-  describe('Ctrl/Cmd+C copy-path', () => {
-    afterEach(() => {
-      vi.useRealTimers();
-      vi.restoreAllMocks();
-    });
-
-    function fireCopy(el: SliccFileTree, opts: KeyboardEventInit = {}): void {
-      el.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true, ...opts })
-      );
-    }
-
-    /**
-     * Fires Ctrl+C on `document.activeElement` rather than on the host
-     * directly, so it only reaches `el`'s listener via real DOM bubbling —
-     * exactly what a genuine keypress does. `fireCopy` above dispatches
-     * straight on the host and would pass even if focus had been silently
-     * dropped (the actual bug these tests guard against).
-     */
-    function fireCopyOnFocusedRow(): void {
-      document.activeElement?.dispatchEvent(
-        new KeyboardEvent('keydown', { key: 'c', ctrlKey: true, bubbles: true })
-      );
-    }
-
-    it('copies the selected file path and flashes the row on Ctrl+C', async () => {
-      vi.useFakeTimers();
-      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
-      const el = makeTree();
-      document.body.appendChild(el);
-      el.selectFile('hero.css');
-
-      fireCopy(el);
-      await Promise.resolve(); // flush the writeText().then() microtask
-
-      expect(writeText).toHaveBeenCalledWith('workspace/hero.css');
-      const row = fileRow(el, 'hero.css') as HTMLElement;
-      expect(row.classList.contains('ft-copy-flash')).toBe(true);
-      vi.advanceTimersByTime(300);
-      expect(row.classList.contains('ft-copy-flash')).toBe(false);
-    });
-
-    it('also responds to Cmd+C (metaKey)', () => {
-      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
-      const el = makeTree();
-      document.body.appendChild(el);
-      el.selectFile('hero.css');
-
-      fireCopy(el, { ctrlKey: false, metaKey: true });
-
-      expect(writeText).toHaveBeenCalledWith('workspace/hero.css');
-    });
-
-    it('copies the selected directory path (falling back to id when no path is given)', () => {
-      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
-      const el = makeTree([{ kind: 'dir', id: '/workspace/src', label: 'src', children: [] }]);
-      document.body.appendChild(el);
-      el.querySelector<HTMLElement>('.dir')?.dispatchEvent(
-        new MouseEvent('click', { bubbles: true })
-      );
-
-      fireCopy(el);
-
-      expect(writeText).toHaveBeenCalledWith('/workspace/src');
-    });
-
-    it('honors an explicit dir path over its id', () => {
-      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
-      const el = makeTree([
-        { kind: 'dir', id: 'src', label: 'src', path: '/workspace/src', children: [] },
-      ]);
-      document.body.appendChild(el);
-      el.querySelector<HTMLElement>('.dir')?.dispatchEvent(
-        new MouseEvent('click', { bubbles: true })
-      );
-
-      fireCopy(el);
-
-      expect(writeText).toHaveBeenCalledWith('/workspace/src');
-    });
-
-    it('is a no-op when nothing is selected', () => {
-      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
-      const el = makeTree();
-      document.body.appendChild(el);
-
-      fireCopy(el);
-
-      expect(writeText).not.toHaveBeenCalled();
-    });
-
-    it('ignores a plain "c" keydown with no modifier', () => {
-      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
-      const el = makeTree();
-      document.body.appendChild(el);
-      el.selectFile('hero.css');
-
-      fireCopy(el, { ctrlKey: false });
-
-      expect(writeText).not.toHaveBeenCalled();
-    });
-
-    it('stops handling Ctrl+C after disconnect', () => {
-      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
-      const el = makeTree();
-      document.body.appendChild(el);
-      el.selectFile('hero.css');
-      el.remove();
-
-      fireCopy(el);
-
-      expect(writeText).not.toHaveBeenCalled();
-    });
-
-    it('does not flash the row when the clipboard write fails', async () => {
-      // Review fix: a rejected write must not report a false success.
-      vi.spyOn(navigator.clipboard, 'writeText').mockRejectedValue(new Error('denied'));
-      const el = makeTree();
-      document.body.appendChild(el);
-      el.selectFile('hero.css');
-
-      fireCopy(el);
-      await Promise.resolve();
-      await Promise.resolve(); // flush both the rejection and the .catch()
-
-      expect(fileRow(el, 'hero.css')?.classList.contains('ft-copy-flash')).toBe(false);
-    });
-
-    it('cancels a pending flash timeout on disconnect instead of touching a detached row', async () => {
-      // Review fix: the flash setTimeout is now tracked so it can be
-      // cleared rather than firing against a torn-down component later.
-      vi.useFakeTimers();
-      vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
-      const el = makeTree();
-      document.body.appendChild(el);
-      el.selectFile('hero.css');
-
-      fireCopy(el);
-      await Promise.resolve();
-      const row = fileRow(el, 'hero.css') as HTMLElement;
-      expect(row.classList.contains('ft-copy-flash')).toBe(true);
-
-      el.remove();
-      // Should not throw, and the (now-detached) row's class is untouched.
-      vi.advanceTimersByTime(300);
-      expect(row.classList.contains('ft-copy-flash')).toBe(true);
-    });
-
-    it('a second Ctrl+C within the flash window resets the fade instead of stacking timeouts', async () => {
-      vi.useFakeTimers();
-      vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
-      const el = makeTree();
-      document.body.appendChild(el);
-      el.selectFile('hero.css');
-      const row = fileRow(el, 'hero.css') as HTMLElement;
-
-      fireCopy(el);
-      await Promise.resolve();
-      vi.advanceTimersByTime(200);
-      fireCopy(el);
-      await Promise.resolve();
-
-      // The first timeout (due at 300ms) must not clear a flash re-applied
-      // by the second copy at 200ms.
-      vi.advanceTimersByTime(100);
-      expect(row.classList.contains('ft-copy-flash')).toBe(true);
-      vi.advanceTimersByTime(200);
-      expect(row.classList.contains('ft-copy-flash')).toBe(false);
-    });
-
-    it('still copies a directory path right after the click-triggered toggle re-render', () => {
-      // End-to-end regression for the reported bug: clicking a dir used to
-      // strand focus on the destroyed pre-toggle row, so a real keypress
-      // (which targets document.activeElement) never reached the listener.
-      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
-      const el = makeTree([{ kind: 'dir', id: '/workspace/src', label: 'src', children: [] }]);
-      document.body.appendChild(el);
-      el.querySelector<HTMLElement>('.dir')?.dispatchEvent(
-        new MouseEvent('click', { bubbles: true })
-      );
-
-      fireCopyOnFocusedRow();
-
-      expect(writeText).toHaveBeenCalledWith('/workspace/src');
-    });
-
-    it('keeps working after a background `items` refresh while the row is focused', () => {
-      // Regression: the workbench polls the VFS and reassigns `.items` every
-      // 3s while the Files panel is open, which used to strand focus on the
-      // destroyed pre-refresh row exactly like the toggle case above.
-      const writeText = vi.spyOn(navigator.clipboard, 'writeText').mockResolvedValue(undefined);
-      const el = makeTree();
-      document.body.appendChild(el);
-      el.selectFile('hero.css');
-
-      const currentItems = el.items;
-      el.items = currentItems; // simulate the periodic refresh reassigning items
-
-      fireCopyOnFocusedRow();
-
-      expect(writeText).toHaveBeenCalledWith('workspace/hero.css');
-    });
-
-    it('does not steal focus on a background refresh when nothing in the tree is focused', () => {
-      const el = makeTree();
-      document.body.appendChild(el);
-      const outside = document.createElement('input');
-      document.body.appendChild(outside);
-      outside.focus();
-
-      const currentItems = el.items;
-      el.items = currentItems;
-
-      expect(document.activeElement).toBe(outside);
+    it('accepts items assigned before connection', async () => {
+      const tree = document.createElement('slicc-file-tree') as SliccFileTree;
+      tree.items = SAMPLE;
+      document.body.appendChild(tree);
+      await settle();
+      expect(renderedText(tree)).toContain('bb.jsh');
     });
   });
 });

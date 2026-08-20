@@ -7,48 +7,50 @@ interface FileTreeArgs {
 }
 
 /**
- * The prototype VFS sidebar contents (`workspace/` + `skills/` groups), now with
- * nested foldable directories (`dir`) demonstrating fold/expand. `components/` is
- * seeded open and itself nests a collapsed `ui/`; the `skills/` group keeps the
- * selectable directory-style file rows from the prototype alongside a foldable
- * `.mcp` directory.
+ * The prototype VFS sidebar contents, expressed the way the live workbench does.
+ *
+ * Every `id` is a full path because the tree derives its hierarchy from paths,
+ * not from the nesting of the `children` arrays — a flat id like `hero.tsx`
+ * would render at the root regardless of where it sits in this literal.
+ * `group` rows are still accepted (they flatten away) so older producers keep
+ * working.
  */
 const PROTOTYPE_ITEMS: FileTreeItem[] = [
   { kind: 'group', label: 'workspace/' },
   {
     kind: 'dir',
-    id: 'components',
+    id: 'workspace/components',
     label: 'components',
     open: true,
     children: [
       {
         kind: 'file',
-        id: 'hero.tsx',
+        id: 'workspace/components/hero.tsx',
         label: 'hero.tsx',
         path: 'workspace/components/hero.tsx',
         size: 3412,
       },
       {
         kind: 'file',
-        id: 'hero.css',
+        id: 'workspace/components/hero.css',
         label: 'hero.css',
         path: 'workspace/components/hero.css',
         size: 1842,
       },
       {
         kind: 'dir',
-        id: 'ui',
+        id: 'workspace/components/ui',
         label: 'ui',
         children: [
           {
             kind: 'file',
-            id: 'button.tsx',
+            id: 'workspace/components/ui/button.tsx',
             label: 'button.tsx',
             path: 'workspace/components/ui/button.tsx',
           },
           {
             kind: 'file',
-            id: 'icon-button.tsx',
+            id: 'workspace/components/ui/icon-button.tsx',
             label: 'icon-button.tsx',
             path: 'workspace/components/ui/icon-button.tsx',
           },
@@ -56,18 +58,23 @@ const PROTOTYPE_ITEMS: FileTreeItem[] = [
       },
     ],
   },
-  { kind: 'file', id: 'tokens.css', label: 'tokens.css', path: 'workspace/tokens.css' },
-  { kind: 'file', id: 'nav.tsx', label: 'nav.tsx', path: 'workspace/nav.tsx' },
+  { kind: 'file', id: 'workspace/tokens.css', label: 'tokens.css', path: 'workspace/tokens.css' },
+  { kind: 'file', id: 'workspace/nav.tsx', label: 'nav.tsx', path: 'workspace/nav.tsx' },
   { kind: 'group', label: 'skills/' },
-  { kind: 'file', id: 'sprinkles/', label: 'sprinkles/', path: 'workspace/skills/sprinkles/' },
+  {
+    kind: 'file',
+    id: 'workspace/skills/sprinkles',
+    label: 'sprinkles',
+    path: 'workspace/skills/sprinkles',
+  },
   {
     kind: 'dir',
-    id: 'mcp',
+    id: 'workspace/.mcp',
     label: '.mcp',
     children: [
       {
         kind: 'file',
-        id: 'servers.json',
+        id: 'workspace/.mcp/servers.json',
         label: 'servers.json',
         path: 'workspace/.mcp/servers.json',
       },
@@ -119,7 +126,7 @@ type Story = StoryObj<FileTreeArgs>;
 export const Default: Story = { args: {} };
 
 /** The prototype state: `hero.css` selected (violet `.f.on` tint). */
-export const ActiveFile: Story = { args: { selected: 'hero.css' } };
+export const ActiveFile: Story = { args: { selected: 'workspace/components/hero.css' } };
 
 /**
  * Nested directories that fold/expand: `components/` is open (chevron rotated,
@@ -127,7 +134,7 @@ export const ActiveFile: Story = { args: { selected: 'hero.css' } };
  * below. Click a directory row to toggle it. The directory-style `sprinkles/`
  * file row stays selected, preserving the existing selection behavior.
  */
-export const DirectorySelected: Story = { args: { selected: 'sprinkles/' } };
+export const DirectorySelected: Story = { args: { selected: 'workspace/skills/sprinkles' } };
 
 /**
  * Production VFS panel layout: `workspace` and `shared` are collapsible `dir`
@@ -239,14 +246,17 @@ export const VfsPanel: Story = {
 };
 
 /**
- * Hover actions visible: four action buttons (Preview, Reference, Download,
- * Overflow) appear on the right side of each file row on hover. Click an action
- * button to emit the corresponding event. File selection is active to demonstrate
- * that action buttons render correctly over both idle and selected rows.
+ * Row actions, which now live in the context menu.
+ *
+ * The old tree drew four buttons (Preview, Reference, Download, Overflow) on
+ * every file row on hover; `@pierre/trees` renders row decorations as text or an
+ * icon only, so the actions moved to the row's context menu — reachable by
+ * right-click or the trigger that appears on hover. The events are unchanged,
+ * so what the host wires up did not move with them.
  */
-export const HoverActionsVisible: Story = {
+export const RowActions: Story = {
   render: () => {
-    const wrap = buildTree({ selected: 'hero.css' });
+    const wrap = buildTree({ selected: 'workspace/components/hero.css' });
     const status = wrap.querySelector('div:last-child') as HTMLElement;
     const tree = wrap.querySelector('slicc-file-tree') as SliccFileTree;
     tree.addEventListener('file-preview', (e) => {
@@ -264,4 +274,95 @@ export const HoverActionsVisible: Story = {
     return wrap;
   },
   args: {},
+};
+
+/**
+ * Git status lanes — a capability the hand-rolled tree never had.
+ *
+ * Assigning `gitStatus` paints per-row state (added / modified / deleted /
+ * untracked) using the same tokens as the rest of the UI, so the tree flips with
+ * the theme. Paths that carry no entry render unchanged.
+ */
+export const GitStatus: Story = {
+  args: {},
+  render: () => {
+    const wrap = buildTree({});
+    const tree = wrap.querySelector('slicc-file-tree') as SliccFileTree;
+    tree.gitStatus = [
+      { path: 'workspace/components/hero.tsx', status: 'modified' },
+      { path: 'workspace/components/ui/button.tsx', status: 'added' },
+      { path: 'workspace/tokens.css', status: 'untracked' },
+      { path: 'workspace/nav.tsx', status: 'deleted' },
+    ];
+    return wrap;
+  },
+};
+
+/**
+ * Type-to-search, also new with the library: the tree filters as you type and
+ * keeps the matches reachable from the keyboard.
+ */
+export const Search: Story = {
+  args: {},
+  render: () => {
+    const wrap = buildTree({});
+    const status = wrap.querySelector('div:last-child') as HTMLElement;
+    status.textContent = 'focus a row and start typing to filter';
+    return wrap;
+  },
+};
+
+/**
+ * Build the tree at a pinned rail width, for reviewing responsive behaviour.
+ *
+ * The tree no longer pins itself to the old fixed 190px — it fills whatever the
+ * surrounding layout gives it (the `files` panel declares `minWidth: 220`, and
+ * the dock zone is user-resizable), so the widths worth reviewing are the ends
+ * of that range rather than one canonical number.
+ */
+function buildAtWidth(width: string, note: string): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.style.cssText =
+    'display:flex;align-items:stretch;height:340px;font-family:var(--ui);color:var(--ink);background:var(--canvas);';
+
+  const rail = document.createElement('div');
+  rail.style.cssText = `width:${width};flex:0 0 auto;min-width:0;display:flex;`;
+
+  const tree = document.createElement('slicc-file-tree') as SliccFileTree;
+  tree.items = PROTOTYPE_ITEMS;
+  tree.gitStatus = [
+    { path: 'workspace/components/hero.tsx', status: 'modified' },
+    { path: 'workspace/components/ui/button.tsx', status: 'added' },
+    { path: 'workspace/nav.tsx', status: 'deleted' },
+  ];
+  rail.appendChild(tree);
+
+  const panel = document.createElement('div');
+  panel.style.cssText =
+    'flex:1;padding:14px 16px;font-size:12.5px;line-height:1.6;color:var(--txt-2);';
+  panel.textContent = note;
+
+  wrap.append(rail, panel);
+  return wrap;
+}
+
+/**
+ * Narrow rail (200px) — near the low end of the resizable range. Long names
+ * elide rather than overflowing, the size and git-status decorations stay
+ * pinned to the right edge, and indentation still reads.
+ */
+export const NarrowRail: Story = {
+  args: {},
+  render: () =>
+    buildAtWidth('200px', 'Narrow rail: 200px — names elide, decorations hold the right edge.'),
+};
+
+/**
+ * Wide rail (420px) — what a user gets after dragging the dock divider out.
+ * Rows keep their left alignment instead of stretching, and the extra width
+ * goes to showing more of each name.
+ */
+export const WideRail: Story = {
+  args: {},
+  render: () => buildAtWidth('420px', 'Wide rail: 420px — extra width reveals more of each name.'),
 };

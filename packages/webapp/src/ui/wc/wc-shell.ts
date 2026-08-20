@@ -179,17 +179,14 @@ const CSS = [
   '.wcui-term .terminal-panel__terminal-host{flex:1 1 auto;min-height:0;}',
   '.wcui-term .terminal-panel__preview{flex:0 0 auto;}',
   // The files surface is the tree: no dead second column, no divider.
+  //
+  // The row rules that used to live here (`.f` / `.dir` positioning and the
+  // `.ft-acts` hover-button strip) are gone with the DOM they targeted: rows
+  // now render inside `@pierre/trees`' shadow root, which this stylesheet
+  // cannot reach, and the row actions moved into the context menu. Styling the
+  // rows is done by handing CSS variables across the boundary — see `TREE_CSS`
+  // in `slicc-file-tree.ts`.
   '.wcui-frame slicc-file-tree{width:100%;border-right:none;}',
-  // Rows need a positioning context so the absolute button never shifts row height.
-  'slicc-file-tree .f,slicc-file-tree .dir{position:relative;}',
-  // Hover action button container — absolutely positioned at the row's right edge.
-  'slicc-file-tree .ft-acts{position:absolute;right:8px;top:50%;transform:translateY(-50%);',
-  'display:flex;gap:3px;}',
-  // Individual action buttons inside .ft-acts.
-  'slicc-file-tree .ft-act{padding:0 5px;font-size:10px;line-height:16px;height:16px;',
-  'box-sizing:border-box;font-family:var(--ui);border-radius:3px;border:1px solid var(--line);',
-  'background:var(--canvas);color:var(--txt-2);cursor:pointer;}',
-  'slicc-file-tree .ft-act:hover{background:var(--ghost);}',
   '.wcui-memory{flex:1;min-height:0;overflow:hidden;}',
   '.wcui-monitor{flex:1;min-height:0;}',
   '.wcui-placeholder{flex:1;display:flex;align-items:center;justify-content:center;',

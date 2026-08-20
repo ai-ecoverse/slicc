@@ -6,40 +6,93 @@
 import type { MenuItem } from '@slicc/webcomponents';
 import { SliccOverflowMenu, SliccQuickLook } from '@slicc/webcomponents';
 
+import { sniffFileType } from '../../core/file-type.js';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../../kernel/writable-vfs-client.js';
-
-const MIME_MAP: Record<string, string> = {
-  '.md': 'text/markdown',
-  '.txt': 'text/plain',
-  '.ts': 'text/typescript',
-  '.js': 'text/javascript',
-  '.json': 'application/json',
-  '.html': 'text/html',
-  '.css': 'text/css',
-  '.svg': 'image/svg+xml',
-  '.png': 'image/png',
-  '.jpg': 'image/jpeg',
-  '.jpeg': 'image/jpeg',
-  '.gif': 'image/gif',
-  '.webp': 'image/webp',
-  '.mp3': 'audio/mpeg',
-  '.wav': 'audio/wav',
-  '.ogg': 'audio/ogg',
-  '.m4a': 'audio/mp4',
-  '.mp4': 'video/mp4',
-  '.webm': 'video/webm',
-  '.mov': 'video/quicktime',
-};
-
-function mimeFromPath(path: string): string {
-  const ext = path.slice(path.lastIndexOf('.')).toLowerCase();
-  return MIME_MAP[ext] || 'application/octet-stream';
-}
+import { readGitBase } from '../git-preview-source.js';
 
 function isPreviewableInBrowser(path: string): boolean {
   const ext = path.slice(path.lastIndexOf('.')).toLowerCase();
   return ext === '.html' || ext === '.svg';
+}
+
+/**
+ * Read a file and identify it from its BYTES, not its name.
+ *
+ * The download path still wants a type for its `Blob`, and the preview path
+ * wants to know whether the content is readable — both now come from the same
+ * sniff, so a file previews and downloads as the same thing. This replaced a
+ * second hardcoded extension table that had drifted from `core/mime-types.ts`
+ * and, like it, answered `application/octet-stream` for anything it had not
+ * been told about.
+ */
+async function readAndIdentify(
+  fs: LocalVfsClient,
+  path: string
+): Promise<{ mime: string; text: boolean; bytes: Uint8Array<ArrayBuffer> }> {
+  const raw = (await fs.readFile(path, { encoding: 'binary' })) as Uint8Array;
+  // Re-materialize into a plain same-realm Uint8Array: the raw value can be a
+  // pooled or foreign buffer (see the copies in the other handlers here).
+  const bytes = new Uint8Array(new ArrayBuffer(raw.length));
+  bytes.set(raw);
+  const { mime, text } = sniffFileType(path, bytes);
+  return { mime, text, bytes };
+}
+
+/**
+ * Read `path`, work out what it is, and show it in Quick Look.
+ *
+ * Exported because two surfaces open previews: the file tree's preview action
+ * and a clicked file mention in the transcript. Routing both through one
+ * function is what keeps a mention and a tree row showing the SAME thing —
+ * same sniffed type, same git diff, same line highlight.
+ *
+ * A file that turns out to have uncommitted changes opens on its diff; looking
+ * that up costs a lazy `isomorphic-git` load, so it is only attempted for text.
+ */
+export async function openFilePreview(
+  fs: LocalVfsClient,
+  path: string,
+  options: { line?: number } = {}
+): Promise<void> {
+  const { mime, text, bytes } = await readAndIdentify(fs, path);
+
+  if (!text) {
+    SliccQuickLook.open({
+      path,
+      content: bytes.buffer as ArrayBuffer,
+      mimeType: mime,
+      text: false,
+    });
+    return;
+  }
+
+  const contents = new TextDecoder().decode(bytes);
+  const base = await readGitBase(fs, path, contents);
+
+  SliccQuickLook.open({
+    path,
+    content: contents,
+    mimeType: mime,
+    text: true,
+    ...(base ? { baseContent: base.baseContent, gitStatus: base.status } : {}),
+    ...(options.line !== undefined ? { line: options.line } : {}),
+  });
+}
+
+/** Save `path` to the user's downloads, typed by the same sniff the preview uses. */
+async function downloadFile(fs: LocalVfsClient, path: string): Promise<void> {
+  const { mime, bytes } = await readAndIdentify(fs, path);
+  const blob = new Blob([bytes], { type: mime });
+  const url = URL.createObjectURL(blob);
+  try {
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = path.split('/').pop() || 'download';
+    link.click();
+  } finally {
+    URL.revokeObjectURL(url);
+  }
 }
 
 async function copyFileContent(fs: WritableVfsClient, from: string, to: string): Promise<void> {
@@ -78,18 +131,7 @@ export function wireFileActions(deps: FileActionDeps): void {
   fileTree.addEventListener('file-preview', async (e) => {
     const { path } = (e as CustomEvent<{ id: string; path: string }>).detail;
     try {
-      const fs = await openFs();
-      const mime = mimeFromPath(path);
-      let content: string | ArrayBuffer;
-      if (mime.startsWith('text/') || mime === 'application/json') {
-        content = (await fs.readFile(path, { encoding: 'utf-8' })) as string;
-      } else {
-        const raw = (await fs.readFile(path, { encoding: 'binary' })) as Uint8Array;
-        const copy = new Uint8Array(raw.length);
-        copy.set(raw);
-        content = copy.buffer;
-      }
-      SliccQuickLook.open({ path, content, mimeType: mime });
+      await openFilePreview(await openFs(), path);
     } catch (err) {
       log.error('File preview failed', err);
     }
@@ -103,37 +145,40 @@ export function wireFileActions(deps: FileActionDeps): void {
   fileTree.addEventListener('file-download', async (e) => {
     const { path } = (e as CustomEvent<{ id: string; path: string }>).detail;
     try {
-      const fs = await openFs();
-      const rawData = (await fs.readFile(path, { encoding: 'binary' })) as Uint8Array;
-      const data = new Uint8Array(rawData.length);
-      data.set(rawData);
-      const filename = path.split('/').pop() || 'download';
-      const mime = mimeFromPath(path);
-      const blob = new Blob([data], { type: mime });
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = filename;
-      a.click();
-      URL.revokeObjectURL(url);
+      await downloadFile(await openFs(), path);
     } catch (err) {
       log.error('File download failed', err);
     }
   });
 
   fileTree.addEventListener('file-overflow', (e) => {
-    const { path, anchor } = (e as CustomEvent<{ id: string; path: string; anchor: HTMLElement }>)
-      .detail;
+    const { path, anchor, kind } = (
+      e as CustomEvent<{ id: string; path: string; anchor: HTMLElement; kind?: string }>
+    ).detail;
+    const isFile = kind !== 'directory';
+    // Preview / Reference / Download used to be hover buttons on the row. The
+    // tree's renderer has no slot for arbitrary row controls, so they live here
+    // now — the events they raise are unchanged.
+    //
+    // Rename / Duplicate / Delete are FILE-only, matching the old tree (which
+    // drew no action buttons on directory rows at all). They are not merely
+    // untested on directories, they cannot work: `copyFileContent` reads the
+    // path as a file and fails with EISDIR, and `rm` without `recursive` fails
+    // on a populated directory. Offering them would advertise operations that
+    // always error.
     const items: MenuItem[] = [
-      { id: 'rename', label: 'Rename' },
-      { id: 'duplicate', label: 'Duplicate' },
+      { id: 'preview', label: 'Preview', visible: isFile },
+      { id: 'reference', label: 'Reference in chat', visible: isFile },
+      { id: 'download', label: 'Download', visible: isFile },
+      { id: 'rename', label: 'Rename', visible: isFile },
+      { id: 'duplicate', label: 'Duplicate', visible: isFile },
       { id: 'copy-path', label: 'Copy path' },
       {
         id: 'open-browser',
         label: 'Open in browser',
-        visible: isPreviewableInBrowser(path),
+        visible: isFile && isPreviewableInBrowser(path),
       },
-      { id: 'delete', label: 'Delete', destructive: true },
+      { id: 'delete', label: 'Delete', destructive: true, visible: isFile },
     ];
     // dispatchTarget: the file tree host outlives the periodic 3s refresh that
     // rebuilds row DOM (and thus `anchor`) out from under a still-open menu.
@@ -146,6 +191,22 @@ export function wireFileActions(deps: FileActionDeps): void {
     const { path } = context;
     try {
       switch (action) {
+        // Re-dispatched rather than handled inline: `file-preview` /
+        // `file-reference` / `file-download` are the component's documented
+        // events, and hosts (plus the stories) listen for them. Calling the
+        // implementations directly would make the menu work while silently
+        // breaking every other consumer of the contract.
+        case 'preview':
+        case 'reference':
+        case 'download':
+          fileTree.dispatchEvent(
+            new CustomEvent(`file-${action}`, {
+              detail: { id: path, path },
+              bubbles: true,
+              composed: true,
+            })
+          );
+          break;
         case 'copy-path':
           await navigator.clipboard.writeText(path);
           break;

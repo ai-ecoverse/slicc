@@ -42,6 +42,7 @@ import { setupSyncFsBootNonce } from './wc-live-sync-fs.js';
 import { applyThreadContext } from './wc-live-thinking-hydration.js';
 import { mountWcShell, type WcShellRefs } from './wc-shell.js';
 import { createWorkbenchActivator, type WorkbenchActivator } from './wc-workbench.js';
+import { wireFileMentions } from './wire-file-mentions.js';
 
 export {
   createWcLiveCallbacks,
@@ -811,6 +812,17 @@ export function attachWcClient(
       )
       .catch((err) => log.error('panelize failed — keeping the classic shell', err));
   }
+
+  // File mentions: agents name files constantly ("I rewrote bb.jsh"), and those
+  // names are the most clickable thing in a transcript. Each one is verified
+  // against the VFS before it becomes a link, so a mention that does not
+  // resolve stays ordinary text.
+  //
+  // Wired AFTER panelization on purpose. Linking is decoration on text the user
+  // is already reading, whereas the block above starts the tool panels' pollers
+  // and lazy mounts — including the terminal's. Ordering it last means it can
+  // neither delay that work nor, if it throws, prevent it.
+  wireFileMentions({ thread: refs.thread, openFs: openReader, log });
 
   // Floatbar click toggles the monitor panel.
   refs.floatbar.addEventListener('click', () => {
