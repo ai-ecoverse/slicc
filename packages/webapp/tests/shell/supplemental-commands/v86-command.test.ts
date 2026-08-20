@@ -498,6 +498,46 @@ describe('v86 command lifecycle (mocked engine)', () => {
     expect(emulator.restore_state).toHaveBeenCalled();
   });
 
+  it('`stop --help` prints help and leaves the VM running', async () => {
+    // Regression: only `args[0]` was checked for --help, so asking `stop`
+    // for help powered the VM off.
+    const emulator = makeFakeEmulator();
+    await startVm(emulator);
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+    const help = await cmd.execute(['stop', '--help'], makeCtx().ctx);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain('v86 stop');
+    expect(emulator.destroy).not.toHaveBeenCalled();
+    expect(getVm('vm0')).toBeDefined();
+  });
+
+  it('`-append --help` is a kernel cmdline, not a help request', async () => {
+    // Same review point as playwright's `--body --help`: a value-taking
+    // flag's value must not be read as a help flag.
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(makeFakeEmulator()) });
+    const result = await cmd.execute(['start', '-append', '--help'], makeCtx().ctx);
+    // No bootable media -> the start parser rejects it; the point is that it
+    // got to the parser at all instead of printing usage.
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('no bootable media');
+  });
+
+  it('`type --help` prints help; `type -- --help` types the literal flag', async () => {
+    const emulator = makeFakeEmulator();
+    await startVm(emulator);
+    const cmd = createV86Command({ loadEngine: async () => makeEngine(emulator) });
+    const { ctx } = makeCtx();
+
+    const help = await cmd.execute(['type', '--help'], ctx);
+    expect(help.exitCode).toBe(0);
+    expect(emulator.keyboard_send_text).not.toHaveBeenCalled();
+
+    // `--` is the escape hatch for free-text payloads that look like flags.
+    const typed = await cmd.execute(['type', '--', '--help'], ctx);
+    expect(typed.exitCode).toBe(0);
+    expect(emulator.keyboard_send_text).toHaveBeenCalledWith('--help');
+  });
+
   it('stops and unregisters a VM', async () => {
     const emulator = makeFakeEmulator();
     await startVm(emulator);

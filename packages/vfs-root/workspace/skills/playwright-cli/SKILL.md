@@ -16,6 +16,8 @@ Use `playwright-cli` (also aliased as `playwright` and `puppeteer`) via the bash
 
 **Every tab-operating command requires `--tab=<targetId>`.** There is no implicit "current tab". Always specify which tab you're operating on.
 
+`playwright-cli <command> --help` prints that command's usage and does nothing else — safe to run before any action.
+
 ## Quick Start
 
 ```bash

@@ -129,5 +129,6 @@ Reviewers (Claude action, Codex `AGENTS.md`, Copilot `.github/copilot-instructio
 11. Untyped string-keyed bags (`Record<string, unknown>`)
 12. Agent skill freshness
 13. Transcript export
+14. `--help` that does the thing
 
 When you change a category, update `docs/review-patterns.md` (source of truth) and the ≤4,000-char `.github/copilot-instructions.md` so all reviewers stay in sync.

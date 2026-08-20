@@ -412,6 +412,47 @@ Changes to export-service, redaction logic, or the Cherry/follower export protoc
 confirm the approval dialog is rendered before `streamExport()` is called; check both
 follower (tray) and Cherry paths. See [docs/transcript-export.md](transcript-export.md).
 
+### 14. `--help` that does the thing
+
+Any command that dispatches on a subcommand verb — shell commands, CLI entry points, follower
+tools.
+
+**Trigger patterns**
+
+- A dispatcher checks `args[0] === '--help'` (or `args.length === 0`) and then routes
+  `args[0]` into a handler. That answers `cmd --help` but sends `cmd <verb> --help` straight
+  into the verb.
+- A handler defaults a missing argument (`positional[0] ?? 'about:blank'`, `rest[0] ?? '/tmp/x'`)
+  or ignores its trailing args entirely (`case 'reset': return { kind: 'reset' }`). Combined
+  with the above, asking for help performs the action.
+- A destructive verb (`stop`, `delete`, `remove`, `reset`, `clear`) whose help check reads only
+  the verb's _own_ position — `mcp delete <name> --help` deleted `<name>`.
+
+**What to check**
+
+- Help is answered **before** the handler runs, for every verb, and exits `0` on stdout.
+- The check scans the whole arg list, not one index — `isHelpRequest()` in
+  `packages/webapp/src/shell/supplemental-commands/subcommand-help.ts`.
+- It respects value-taking flags: a `--help` that is a flag's VALUE
+  (`route --body --help`) is not a help request. Parse first and read
+  `flags.help` when the shared `arg-parser` is in play; otherwise declare the
+  flags via `isHelpRequest(args, { valueFlags })`.
+- Verbs whose payload is free text (`v86 type`, `sprinkle chat`, `playwright-cli fill`) keep a
+  `--` escape so the literal string still gets through.
+- POSIX conflicts are respected: `df -h` is `--human-readable`, not help.
+
+**Historical precedent** — `playwright-cli record --help` opened a tab and started a HAR
+recording (reported by a user, not by CI); the same dispatcher bug made `v86 stop --help` power
+off the VM, `layout reset --help` rearrange the workbench, `sprinkle chat --help` render the
+flag into the chat transcript, and `mcp delete x --help` delete the server.
+
+**Remediation** — route the verb through `isHelpRequest()` / `subcommandHelpText()` and add the
+command to `DISPATCHERS` in
+`packages/webapp/tests/shell/supplemental-commands/subcommand-help.test.ts`. That suite builds
+every command with dependencies that throw on use and runs `--help` against every verb, so a
+help path that touches the browser, VFS, or network fails with the call site. Its coverage test
+also fails when a new verb-dispatching command is added but not registered.
+
 ---
 
 ## Approval gate changes in `wc-tray.ts` or `wc-transcript-export.ts`

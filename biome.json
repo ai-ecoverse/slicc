@@ -309,7 +309,6 @@
         "packages/webapp/src/kernel/remote-sprinkle-vfs.ts",
         "packages/webapp/src/net/link-header.ts",
         "packages/webapp/src/shell/supplemental-commands/afplay-command.ts",
-        "packages/webapp/src/shell/supplemental-commands/fswatch-command.ts",
         "packages/webapp/src/shell/supplemental-commands/local-llm-command.ts",
         "packages/webapp/src/shell/supplemental-commands/models-command.ts",
         "packages/webapp/src/shell/supplemental-commands/oauth-domain-command.ts",
@@ -352,7 +351,6 @@
         "packages/webapp/tests/kernel/realm/realm-runner.test.ts",
         "packages/webapp/tests/shell/di/di.test.ts",
         "packages/webapp/tests/shell/supplemental-commands/esbuild-command.test.ts",
-        "packages/webapp/tests/shell/supplemental-commands/v86-command.test.ts",
         "packages/webapp/tests/ui/provider-settings.test.ts",
         "packages/webcomponents/src/primitives/slicc-image-preview.stories.ts"
       ],

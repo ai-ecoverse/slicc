@@ -26,6 +26,7 @@ import type { FetchLike } from '../mcp/oauth.js';
 import { resolveMcpRedirectUri } from '../mcp/redirect-uri.js';
 import type { McpAppDef, McpFetchLike, McpServerEntry, McpToolDef } from '../mcp/types.js';
 import type { ScriptCatalog } from '../script-catalog.js';
+import { isHelpRequest } from './subcommand-help.js';
 
 const log = createLogger('mcp-command');
 
@@ -330,7 +331,7 @@ function formatTable(rows: string[][]): string {
 // ── search ──────────────────────────────────────────────────────────
 
 async function cmdSearch(args: string[], deps: McpCommandDeps): Promise<ExecResult> {
-  if (args[0] === '--help' || args[0] === '-h') {
+  if (isHelpRequest(args)) {
     return ok(`usage: mcp search <query>
 
 Case-insensitive substring search across the cached tools of every
@@ -396,7 +397,7 @@ function truncateDescription(desc: string): string {
 // ── delete ──────────────────────────────────────────────────────────
 
 async function cmdDelete(args: string[], deps: McpCommandDeps): Promise<ExecResult> {
-  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+  if (args.length === 0 || isHelpRequest(args)) {
     return args.length === 0
       ? err('mcp delete: expected <name>')
       : ok('usage: mcp delete <name>\n');
@@ -614,10 +615,37 @@ function formatServerHelp(name: string, entry: McpServerEntry, tools: McpToolDef
   return lines.join('\n') + '\n';
 }
 
+/**
+ * The slice of JSON Schema this command reads out of a tool's `inputSchema`.
+ * A server may send far more; everything below is what `mcp invoke` acts on,
+ * so it is the whole contract between us and an arbitrary tool definition.
+ */
+interface JsonSchemaProperty {
+  type?: string;
+  description?: string;
+  items?: { type?: string };
+}
+
+interface JsonSchemaObject {
+  properties?: Record<string, JsonSchemaProperty>;
+  required?: string[];
+}
+
+/** A coerced flag value: a JSON scalar, or an array of them for `type: array`. */
+type McpArgValue = string | number | boolean | McpArgValue[];
+
+/** `--flag value` pairs coerced against the tool's own input schema. */
+type McpToolArguments = Record<string, McpArgValue>;
+
+/** Read an untyped `inputSchema` as the subset above. */
+function asSchemaObject(schema: unknown): JsonSchemaObject {
+  return (schema ?? {}) as JsonSchemaObject;
+}
+
 function formatToolHelp(name: string, tool: McpToolDef): string {
-  const schema = (tool.inputSchema ?? {}) as Record<string, unknown>;
-  const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
-  const required = new Set(Array.isArray(schema.required) ? (schema.required as string[]) : []);
+  const schema = asSchemaObject(tool.inputSchema);
+  const properties = schema.properties ?? {};
+  const required = new Set(Array.isArray(schema.required) ? schema.required : []);
   const lines: string[] = [];
   lines.push(`usage: ${name} ${tool.name} [flags]`);
   if (tool.description) {
@@ -633,15 +661,13 @@ function formatToolHelp(name: string, tool: McpToolDef): string {
   lines.push('');
   lines.push('Flags:');
   const labels = propNames.map((p) => {
-    const meta = properties[p] ?? {};
-    const type = typeof meta.type === 'string' ? meta.type : 'string';
+    const type = properties[p]?.type ?? 'string';
     return `  --${p} <${type}>`;
   });
   const width = labels.reduce((m, l) => Math.max(m, l.length), 0);
   for (let i = 0; i < propNames.length; i++) {
     const p = propNames[i];
-    const meta = properties[p] ?? {};
-    const desc = typeof meta.description === 'string' ? (meta.description as string) : '';
+    const desc = properties[p]?.description ?? '';
     const req = required.has(p) ? ' (required)' : '';
     lines.push(`${labels[i].padEnd(width)}  ${desc}${req}`.trimEnd());
   }
@@ -650,7 +676,7 @@ function formatToolHelp(name: string, tool: McpToolDef): string {
 
 interface CoerceResult {
   ok: true;
-  value: Record<string, unknown>;
+  value: McpToolArguments;
 }
 interface CoerceErr {
   ok: false;
@@ -659,10 +685,10 @@ interface CoerceErr {
 
 /** Coerce `--flag value` pairs against a JSON Schema object. */
 export function coerceArgsBySchema(args: string[], schema: unknown): CoerceResult | CoerceErr {
-  const s = (schema ?? {}) as Record<string, unknown>;
-  const properties = (s.properties ?? {}) as Record<string, Record<string, unknown>>;
-  const required = new Set(Array.isArray(s.required) ? (s.required as string[]) : []);
-  const out: Record<string, unknown> = {};
+  const s = asSchemaObject(schema);
+  const properties = s.properties ?? {};
+  const required = new Set(Array.isArray(s.required) ? s.required : []);
+  const out: McpToolArguments = {};
 
   let i = 0;
   while (i < args.length) {
@@ -683,8 +709,8 @@ export function coerceArgsBySchema(args: string[], schema: unknown): CoerceResul
 function parseOneFlag(
   args: string[],
   i: number,
-  properties: Record<string, Record<string, unknown>>,
-  out: Record<string, unknown>
+  properties: Record<string, JsonSchemaProperty>,
+  out: McpToolArguments
 ): (CoerceErr & { nextIndex?: never }) | { ok: true; nextIndex: number } {
   const a = args[i];
   if (!a.startsWith('--')) {
@@ -692,12 +718,9 @@ function parseOneFlag(
   }
   const { key, inlineValue } = splitFlag(a);
   const meta = properties[key];
-  const type = typeof meta?.type === 'string' ? (meta.type as string) : 'string';
+  const type = meta?.type ?? 'string';
   const isArray = type === 'array';
-  const itemType =
-    isArray && meta?.items && typeof (meta.items as Record<string, unknown>).type === 'string'
-      ? ((meta.items as Record<string, unknown>).type as string)
-      : 'string';
+  const itemType = (isArray ? meta?.items?.type : undefined) ?? 'string';
 
   let raw: string | undefined = inlineValue;
   let nextIndex: number;
@@ -738,7 +761,7 @@ function splitFlag(a: string): { key: string; inlineValue: string | undefined } 
 function coerceScalar(
   raw: string,
   type: string
-): { ok: true; value: unknown } | { ok: false; error: string } {
+): { ok: true; value: McpArgValue } | { ok: false; error: string } {
   switch (type) {
     case 'integer': {
       if (!/^-?\d+$/.test(raw)) return { ok: false, error: `expected integer, got "${raw}"` };
@@ -806,7 +829,7 @@ export function renderToolResult(raw: unknown): ExecResult {
 // ── refresh ─────────────────────────────────────────────────────────
 
 async function cmdRefresh(args: string[], deps: McpCommandDeps): Promise<ExecResult> {
-  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
+  if (args.length === 0 || isHelpRequest(args)) {
     return args.length === 0
       ? err('mcp refresh: expected <name>')
       : ok(

@@ -248,6 +248,25 @@ describe('playwright-cli help', () => {
     expect(result.stdout).toContain('Usage: playwright-cli');
   });
 
+  it('record --help prints the record entry instead of opening a tab', async () => {
+    // Regression: `--help` was swallowed into flags, so `record` ran with no
+    // URL — defaulting to about:blank, opening a tab and starting a HAR.
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['record', '--help'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('usage: playwright-cli record');
+    expect(result.stdout).toContain('HAR recording');
+    expect(browser.createPage).not.toHaveBeenCalled();
+  });
+
+  it('open --help prints the open entry instead of opening a tab', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['open', '--help'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('usage: playwright-cli open');
+    expect(browser.createPage).not.toHaveBeenCalled();
+  });
+
   it('shows alias-specific help when invoked through an alias', async () => {
     const cmd = createPlaywrightCommand('playwright', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['--help'], mockCtx);
@@ -5253,6 +5272,23 @@ describe('playwright-cli route / route-list / unroute', () => {
       h({ sessionId, requestId, request: { url, headers: {} } });
     }
   }
+
+  it('--body --help mocks a "--help" body instead of printing help', async () => {
+    // Review feedback: the help check must respect the arg-parser's
+    // value-shadowing contract — `--help` here is `--body`'s VALUE.
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['route', '--tab=tab-1', 'https://example.com/**', '--body', '--help'],
+      mockCtx
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain('usage: playwright-cli route');
+    expect(browser.getTransport().send).toHaveBeenCalledWith(
+      'Fetch.enable',
+      expect.anything(),
+      'session-1'
+    );
+  });
 
   it('route requires --tab', async () => {
     const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);

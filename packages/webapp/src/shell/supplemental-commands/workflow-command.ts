@@ -1,10 +1,11 @@
 // packages/webapp/src/shell/supplemental-commands/workflow-command.ts
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { createLogger } from '../../core/logger.js';
-import type { CommandContextLike, WorkflowRunManager } from '../../scoops/workflow-run-manager.js';
-import { WORKFLOW_MANAGER_GLOBAL_KEY } from '../../scoops/workflow-run-manager.js';
+import { createLogger } from '../../base/logger.js';
 import { executeJsCode } from '../jsh-executor.js';
+import type { CommandContextLike, WorkflowRunManager } from '../workflow-run-handle.js';
+import { WORKFLOW_MANAGER_GLOBAL_KEY } from '../workflow-run-handle.js';
+import { isHelpRequest } from './subcommand-help.js';
 import { WORKFLOW_PRELUDE } from './workflow-prelude.js';
 import {
   buildWorkflowCode,
@@ -24,6 +25,9 @@ const HELP = `usage: workflow run <file.js> [--args <json>] [--budget <n>] [--co
 Runs a Claude-Code-format dynamic workflow. Default is non-blocking (returns a run id);
 pass --wait to block and print the full result.`;
 
+/** Verbs handled outside `parse` — see the dispatcher's help check. */
+const SIMPLE_SUBCOMMANDS = new Set(['list', 'status', 'stop', 'save']);
+
 type ExecResult = { stdout: string; stderr: string; exitCode: number };
 
 interface Parsed {
@@ -38,10 +42,11 @@ interface Parsed {
   wait?: boolean;
 }
 
+/** The run manager the scoops layer publishes on `globalThis` at boot. */
+type WorkflowGlobals = Record<typeof WORKFLOW_MANAGER_GLOBAL_KEY, WorkflowRunManager | undefined>;
+
 function getRunManager(): WorkflowRunManager | undefined {
-  return (globalThis as Record<string, unknown>)[WORKFLOW_MANAGER_GLOBAL_KEY] as
-    | WorkflowRunManager
-    | undefined;
+  return (globalThis as Partial<WorkflowGlobals>)[WORKFLOW_MANAGER_GLOBAL_KEY];
 }
 
 export function resolveMaxCap(): number {
@@ -127,6 +132,11 @@ export function createWorkflowCommand(
   } = {}
 ): Command {
   return defineCommand('workflow', async (args, ctx) => {
+    // `run` does its own in-order parse (so a `--script '--help'` body is
+    // not mistaken for a help request); the other verbs bypass it, so they
+    // need the check here.
+    if (SIMPLE_SUBCOMMANDS.has(args[0]) && isHelpRequest(args.slice(1)))
+      return { stdout: HELP + '\n', stderr: '', exitCode: 0 };
     if (args[0] === 'list' || args[0] === 'status' || args[0] === 'stop')
       return runSubcommand(args, ctx);
     if (args[0] === 'save') return runSave(args, ctx, options);

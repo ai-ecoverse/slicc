@@ -14,6 +14,7 @@ import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { diAdd, diList, type ListRow } from '../di/index.js';
+import { isHelpRequest } from './subcommand-help.js';
 
 export interface DiCommandDeps {
   fs: VirtualFS;
@@ -117,7 +118,7 @@ export function createDiCommand(name: string, deps: DiCommandDeps): Command {
     if (args.length === 0) {
       return { stdout: usage(name), stderr: `${name}: missing verb\n`, exitCode: 1 };
     }
-    if (args[0] === '--help' || args[0] === '-h') {
+    if (isHelpRequest(args)) {
       return { stdout: usage(name), stderr: '', exitCode: 0 };
     }
 

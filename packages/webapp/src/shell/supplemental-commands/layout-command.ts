@@ -26,16 +26,40 @@ import {
   getPreset,
   LAYOUT_PRESETS,
   type SurfaceSizeSpecLike,
-} from '../../core/dock-tree-spec.js';
+} from '../../base/dock-tree-spec.js';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
+import { isHelpRequest, subcommandHelpText } from './subcommand-help.js';
 
 const ZONE_NAMES: readonly DockZoneName[] = ['top', 'left', 'middle', 'right', 'bottom'];
+
+const HELP = `usage: layout <verb> [args]
+
+  list                          List the built-in presets
+  set <preset>                  Switch to a built-in preset
+  chat <zone>                   Move the chat panel to a zone
+  open <surfaceId> <zone>       Place a panel or sprinkle in a zone
+  close <surfaceId>             Remove a placed panel
+  move <surfaceId> <zone>       Move a placed panel to another zone
+  size <surfaceId> [--width <n>px|<n>%] [--height <n>px|<n>%]
+                                Resize a placed panel
+  show <panelId>                Reveal a hidden panel
+  hide <panelId>                Hide a placed panel
+  save <name> [--protected]     Persist the current arrangement
+  load <name>                   Restore a saved arrangement
+  delete <name>                 Delete a saved arrangement
+  reset                         Restore the default arrangement
+  edit                          Alias for \`layout set ${DEFAULT_LAYOUT}\` (there is no edit mode)
+  docs                          Describe the layout surfaces
+  panels                        List the registered panel ids
+
+Zones: ${ZONE_NAMES.join(', ')}
+`;
 
 /**
  * `chat`, the fixed tool-panel ids, and the `sprinkle:` prefix — redeclared here
  * rather than imported from `wc-sprinkles.ts`, which lives in `ui/`: this module runs
  * in the kernel worker (no DOM), and the layer stack forbids `shell/` importing
- * `ui/`. The spec types come from `core/dock-tree-spec.ts` for the same reason.
+ * `ui/`. The spec types come from `base/dock-tree-spec.ts` for the same reason.
  */
 const CHAT_SURFACE_ID = 'chat';
 const TOOL_PANEL_IDS: ReadonlySet<string> = new Set(['files', 'term', 'memory', 'monitor']);
@@ -250,6 +274,12 @@ export function parseLayoutArgs(args: string[]): LayoutApplyMsg | { error: strin
 
 export function createLayoutCommand(): Command {
   return defineCommand('layout', async (args) => {
+    if (isHelpRequest(args)) {
+      // Help before parsing: `reset` and `edit` ignore their remaining
+      // args, so `layout reset --help` used to rearrange the workbench.
+      const stdout = args[0]?.startsWith('-') ? HELP : subcommandHelpText('layout', args[0], HELP);
+      return { stdout, stderr: '', exitCode: 0 };
+    }
     if (args[0] === 'list' || args.length === 0) {
       const names = Object.keys(LAYOUT_PRESETS).join(', ');
       return {

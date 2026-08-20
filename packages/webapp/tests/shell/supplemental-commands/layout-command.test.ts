@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { parseLayoutArgs } from '../../../src/shell/supplemental-commands/layout-command.js';
+import {
+  createLayoutCommand,
+  parseLayoutArgs,
+} from '../../../src/shell/supplemental-commands/layout-command.js';
 import { LAYOUT_PRESETS } from '../../../src/ui/wc/layout-spec.js';
 
 describe('parseLayoutArgs', () => {
@@ -210,5 +213,33 @@ describe('parseLayoutArgs', () => {
       const r = parseLayoutArgs(['size', 'weather', '--width', 'huge']);
       expect('error' in r && r.error).toMatch(/invalid size/i);
     });
+  });
+});
+
+describe('layout --help', () => {
+  const run = (args: string[]) =>
+    (createLayoutCommand() as any).execute(args, { cwd: '/', env: {}, fs: {} as any });
+
+  it('prints usage for the bare command', async () => {
+    const r = await run(['--help']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('usage: layout');
+  });
+
+  it('`reset --help` prints help instead of resetting the workbench', async () => {
+    // Regression: `reset` and `edit` ignore their trailing args, so asking
+    // them for help rearranged the user's panels. There is no panel-RPC
+    // client in tests — a non-zero exit here would mean the verb ran.
+    const r = await run(['reset', '--help']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toContain('reset');
+  });
+
+  it('`edit --help` prints help instead of applying the default preset', async () => {
+    const r = await run(['edit', '--help']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toContain('edit');
   });
 });

@@ -87,7 +87,7 @@ export function sprinkleNameFromId(id: string | null | undefined): string | null
 }
 
 /**
- * The dock-tree spec types now live in `core/dock-tree-spec.ts` — the shell, scoops
+ * The dock-tree spec types now live in `base/dock-tree-spec.ts` — the shell, scoops
  * and kernel layers need them and cannot import `ui/` (layer stack). Re-exported here
  * so this module's existing consumers keep their import path.
  */
@@ -95,7 +95,7 @@ import type {
   DockTreeSpecLike,
   DockZoneName,
   SurfaceSizeSpecLike,
-} from '../../core/dock-tree-spec.js';
+} from '../../base/dock-tree-spec.js';
 
 export type { DockTreeSpecLike, DockZoneName, SurfaceSizeSpecLike };
 
@@ -534,6 +534,14 @@ function wireSprinkleLongPressFullscreen(refs: WcShellRefs): void {
   });
 }
 
+/**
+ * Where the page publishes the live manager: the `sprinkle` shell command
+ * reads it off `globalThis` from whichever realm it runs in.
+ */
+interface SprinkleManagerGlobal {
+  __slicc_sprinkleManager?: import('../sprinkle-manager.js').SprinkleManager;
+}
+
 export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSprinklesHandle> {
   const {
     refs,
@@ -591,7 +599,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
       onAttachImage: onAttachImage ?? (() => {}),
     }
   );
-  (window as unknown as Record<string, unknown>).__slicc_sprinkleManager = manager;
+  (window as unknown as SprinkleManagerGlobal).__slicc_sprinkleManager = manager;
   setDipExecHandler(execHandler);
   if (instanceId !== undefined) {
     // Standalone: worker→panel sprinkle ops over the BroadcastChannel.

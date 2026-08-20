@@ -23,6 +23,7 @@ import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { ProcessManager } from '../../kernel/process-manager.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
+import { isHelpRequest, stripOptionTerminator, subcommandHelpText } from './subcommand-help.js';
 import {
   captureFrame,
   DEFAULT_MEMORY_MIB,
@@ -204,6 +205,18 @@ function setPath(
 }
 
 /** Parse `v86 start` boot options. Exported for unit tests. */
+/**
+ * Flags that consume the next token. Passed to `isHelpRequest` so a value
+ * that happens to look like a help flag (`-append --help`) stays a value.
+ */
+const V86_VALUE_FLAGS: readonly string[] = [
+  ...Object.keys(START_FLAG_SETTERS),
+  '--fps',
+  '--tail',
+  '--send',
+  '--to',
+];
+
 export function parseStartArgs(args: readonly string[]): StartParseResult {
   const parsed: ParsedStartArgs = {
     name: DEFAULT_VM_NAME,
@@ -415,7 +428,7 @@ async function readVfsImage(
   ctx: CommandContext,
   path: string,
   label: string
-): Promise<{ buffer: ArrayBuffer } | CmdResult> {
+): Promise<VfsImage | CmdResult> {
   const resolved = ctx.fs.resolvePath(ctx.cwd, path);
   if (!(await ctx.fs.exists(resolved))) return fail(`${label}: no such file: ${path}`);
   const bytes = await ctx.fs.readFileBuffer(resolved);
@@ -452,9 +465,44 @@ export interface V86CommandDeps {
   proxiedFetch?: SecureFetch;
 }
 
+/** Globals the kernel host publishes for commands that need the live PM. */
+interface KernelGlobals {
+  __slicc_pm?: unknown;
+}
+
+/**
+ * The v86 constructor options `v86 start` populates. The engine accepts a
+ * larger bag; these are the keys this command sets, from its own flags and
+ * the images it stages out of the VFS. A type alias (not an interface) so it
+ * stays assignable to the engine's own untyped constructor signature.
+ */
+type V86Options = {
+  wasm_fn: (imports: WebAssembly.Imports) => Promise<WebAssembly.Exports>;
+  memory_size: number;
+  vga_memory_size: number;
+  autostart: boolean;
+  disable_speaker: boolean;
+  fastboot: boolean;
+  /** BIOS blobs + guest images, staged as `{ buffer }` by `readVfsImage`. */
+  bios?: VfsImage;
+  vga_bios?: VfsImage;
+  cdrom?: VfsImage;
+  hda?: VfsImage;
+  fda?: VfsImage;
+  bzimage?: VfsImage;
+  initrd?: VfsImage;
+  initial_state?: VfsImage;
+  cmdline?: string;
+  boot_order?: number;
+  filesystem?: { baseurl: string };
+  net_device?: { type: string; relay_url?: string };
+};
+
+/** A guest image read off the VFS, in the shape the engine expects. */
+type VfsImage = { buffer: ArrayBuffer };
+
 function lookupGlobalPm(): ProcessManager | null {
-  const g = globalThis as Record<string, unknown>;
-  const pm = g.__slicc_pm;
+  const pm = (globalThis as KernelGlobals).__slicc_pm;
   return pm instanceof Object && typeof (pm as ProcessManager).signal === 'function'
     ? (pm as ProcessManager)
     : null;
@@ -472,7 +520,13 @@ export function createV86Command(deps: V86CommandDeps = {}): Command {
     if (args[0] === '--version') return v86Version(ctx, deps);
 
     const sub = args[0];
-    const subArgs = args.slice(1);
+    // Help before the handler: `stop --help` used to power the VM off,
+    // `serve --help` to start the frame pump, `type --help` to type the
+    // flag into the guest. `v86 type -- --help` still types it literally.
+    if (isHelpRequest(args.slice(1), { valueFlags: V86_VALUE_FLAGS })) {
+      return ok(subcommandHelpText('v86', sub, HELP, { prefix: 'v86' }));
+    }
+    const subArgs = stripOptionTerminator(args.slice(1));
     try {
       switch (sub) {
         case 'start':
@@ -531,7 +585,7 @@ async function v86Version(ctx: CommandContext, deps: V86CommandDeps): Promise<Cm
 async function stageBios(
   parsed: ParsedStartArgs,
   ctx: CommandContext,
-  options: Record<string, unknown>
+  options: V86Options
 ): Promise<CmdResult | null> {
   if (parsed.state && !parsed.bios && !parsed.vgabios) return null;
   const bios = await readVfsImage(ctx, parsed.bios ?? `${DEFAULT_BIOS_DIR}/seabios.bin`, '-bios');
@@ -558,7 +612,7 @@ async function stageBios(
 async function stageBootImages(
   parsed: ParsedStartArgs,
   ctx: CommandContext,
-  options: Record<string, unknown>
+  options: V86Options
 ): Promise<CmdResult | null> {
   const biosError = await stageBios(parsed, ctx, options);
   if (biosError) return biosError;
@@ -695,7 +749,7 @@ async function v86Start(
   const ipk = createIpkContextFromCtx(ctx);
   const engine = deps.loadEngine ? await deps.loadEngine(ipk) : await getV86Module({ ipk });
 
-  const options: Record<string, unknown> = {
+  const options: V86Options = {
     wasm_fn: makeWasmFn(engine.wasmModule),
     memory_size: parsed.memoryMib * 1024 * 1024,
     // Sizes the Bochs-dispi SVGA/VBE framebuffer — high-res VESA modes
