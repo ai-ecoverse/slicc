@@ -107,6 +107,11 @@ Non-obvious rules:
   `packages/cherry/src/protocol.ts` is a structural mirror; keep in sync.
 - **Sudo self-protection**: writes to `/etc/sudoers` + `/etc/sudoers.d/*` always
   require approval, hardcoded in `matchPath`. Deep reference: `docs/approvals.md`.
+- **`/tmp` is granted to every scoop, sandbox or not** — `builtinScoopGrants()`
+  (`base/sudoers.ts`, merged by `getPolicyForScoop`) + `ALWAYS_WRITABLE_PREFIXES`
+  (`fs/restricted-fs.ts`). Both layers gate independently, so change them
+  together. The space is SHARED across scoops: never put a secret there; private
+  scratch is `/scoops/<folder>/tmp`.
 - **"Agent can't self-approve" does NOT cover page-realm code** (which can reassign
   `globalThis.confirm`): `sudo/panel-responder.ts` captures natives at module
   init; approval chrome mounts via `ui/wc/trusted-layer.ts`, never `document.body`.

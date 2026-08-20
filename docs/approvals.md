@@ -113,6 +113,33 @@ approval — a `NOPASSWD` rule cannot override this. It is hardcoded in `matchPa
 (`packages/webapp/src/base/sudoers.ts`), independent of the loaded policy.
 Reads of those files are allowed (visudo-style).
 
+### Built-in scoop grants — `/tmp` (always on)
+
+Every non-cone scoop carries an unconditional `NOPASSWD Read` + `NOPASSWD Write`
+grant on `/tmp` and `/tmp/**`, on top of whatever its own sudoers file says.
+`/tmp` is global scratch space in SLICC the same way it is on Unix: tooling
+hardcodes `/tmp/<file>` rather than discovering a scratch dir, and without the
+grant every such write escalated to the cone for approval.
+
+The space is **shared, not per-scoop** — scoops can read and clobber each
+other's scratch files, and the cone sees all of them. Nothing secret or
+trust-bearing belongs in `/tmp`. A scoop that needs private scratch has
+`/scoops/<folder>/tmp`, which `ScoopContext.ensureDirectoryStructure` creates.
+
+Two consequences worth knowing:
+
+- Because a `NOPASSWD` grant beats a plain match, a `Write /tmp/**` rule in
+  `/etc/sudoers` **cannot** gate a scoop's `/tmp` writes. The cone's own view
+  (`getPolicy()`) still honours it.
+- The grant lives in code (`builtinScoopGrants()` in
+  `packages/webapp/src/base/sudoers.ts`), merged in by `getPolicyForScoop`, not
+  in the generated `/scoops/<folder>/etc/sudoers`. That file is written only
+  when absent — so a file-based grant would never reach an already-created
+  scoop. The matching ACL exemption is `ALWAYS_WRITABLE_PREFIXES` in
+  `packages/webapp/src/fs/restricted-fs.ts`; `SudoFS` and `RestrictedFS` gate
+  independently, so both layers must agree or the write is walled underneath
+  the grant.
+
 ### Live reload
 
 `SudoManager` watches `/etc` via the shared `FsWatcher` and re-reads + re-merges
@@ -211,7 +238,7 @@ Orchestrator.init()
   └─ new SudoManager({ fs: sharedFs, watcher })  // seed + load + watch
        ├─ getBroker()         → createSudoBroker()         // user broker (cone)
        ├─ getPolicy()         → live merged global SudoersPolicy
-       ├─ getPolicyForScoop() → global ∪ /scoops/<folder>/etc/sudoers
+       ├─ getPolicyForScoop() → builtin /tmp grants ∪ global ∪ /scoops/<folder>/etc/sudoers
        └─ getShellConfig()    → { getPolicy, broker, persistCommandGrant }
 
 Orchestrator.createScoopTab(jid)
@@ -389,7 +416,8 @@ actions escalate to the cone instead of dying with a hard wall:
   passes through to the outer `SudoFS`, whose `defaultDisposition:
 'require-approval'` upgrades the unmatched `no-match` to an escalation. The
   per-scoop sudoers file (seeded from `ScoopConfig.writablePaths` as
-  `NOPASSWD Write <p>/**` rules) keeps in-sandbox writes prompt-free.
+  `NOPASSWD Write <p>/**` rules) keeps in-sandbox writes prompt-free, and the
+  built-in `/tmp` grant does the same for shared scratch space.
   - **Reads stay silently filtered.** `SudoFS` only applies the
     `'require-approval'` default to **writes** — `RestrictedFS` keeps
     returning `ENOENT`/`[]` for out-of-sandbox reads. This is intentional:

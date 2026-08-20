@@ -2018,6 +2018,10 @@ export class ScoopContext {
           `/scoops/${this.scoop.folder}/home`,
           `/scoops/${this.scoop.folder}/tmp`,
           '/shared',
+          // Shared global scratch space (see `builtinScoopGrants`). Normally
+          // the cone has already created it, but a scoop must not depend on
+          // that ordering.
+          '/tmp',
         ];
 
     for (const dir of dirs) {

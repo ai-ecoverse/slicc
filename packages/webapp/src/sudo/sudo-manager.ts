@@ -20,6 +20,7 @@
 import sudoersDefault from '../../../vfs-root/etc/sudoers?raw';
 import { createLogger } from '../base/logger.js';
 import {
+  builtinScoopGrants,
   type Directive,
   directiveForKind,
   emptyPolicy,
@@ -91,6 +92,11 @@ function trimTrailingSlash(s: string): string {
  *     containing `'*'` → unrestricted `NOPASSWD Cmnd *`.
  *   - `writablePaths`   → `NOPASSWD Write <p>/**` per entry.
  *   - `visiblePaths`    → `NOPASSWD Read  <p>/**` per entry.
+ *
+ * The always-on `/tmp` grant is deliberately NOT emitted here — this file is
+ * only written when one does not already exist, so a scoop created before the
+ * grant landed would never pick it up. It lives in `builtinScoopGrants()`
+ * (`base/sudoers.ts`) and is merged in by {@link SudoManager.getPolicyForScoop}.
  *
  * Each pattern is run through {@link sanitizeGrantPattern} so a value carrying
  * an embedded newline can never inject extra rules. Self-protection is NOT
@@ -219,13 +225,17 @@ export class SudoManager {
   }
 
   /**
-   * Effective policy for a scoop: global `/etc/sudoers` (+ `/etc/sudoers.d/*`)
-   * ∪ that scoop's own `/scoops/<folder>/etc/sudoers`. The cone does not own a
-   * scoop folder and should keep calling {@link getPolicy} directly.
+   * Effective policy for a scoop: {@link builtinScoopGrants} ∪ global
+   * `/etc/sudoers` (+ `/etc/sudoers.d/*`) ∪ that scoop's own
+   * `/scoops/<folder>/etc/sudoers`. The cone does not own a scoop folder and
+   * should keep calling {@link getPolicy} directly — it is unrestricted, so
+   * the built-in grants are a no-op for it.
    */
   getPolicyForScoop(folder: string): SudoersPolicy {
     const local = this.scoopPolicies.get(folder);
-    return local ? mergePolicies(this.policy, local) : this.policy;
+    const policies = [builtinScoopGrants(), this.policy];
+    if (local) policies.push(local);
+    return mergePolicies(...policies);
   }
 
   /**
