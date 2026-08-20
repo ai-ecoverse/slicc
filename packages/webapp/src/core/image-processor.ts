@@ -7,6 +7,7 @@
  */
 
 import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
+import { isSupportedImageFormat, SUPPORTED_IMAGE_MIMES } from '../base/image-markers.js';
 import { createLogger } from '../base/logger.js';
 import type { ImageContent, TextContent } from './types.js';
 
@@ -17,7 +18,7 @@ export const MAX_IMAGE_BYTES = 5 * 1024 * 1024; // 5MB API limit (on base64 stri
 const MAX_RAW_BYTES = Math.floor((MAX_IMAGE_BYTES * 3) / 4);
 export const OPTIMAL_LONG_EDGE = 1568; // px — avoids server-side resize
 export const MAX_DIMENSION = 8000; // px — hard reject by API
-export const SUPPORTED_MIMES = new Set(['image/jpeg', 'image/png', 'image/gif', 'image/webp']);
+export const SUPPORTED_MIMES = SUPPORTED_IMAGE_MIMES;
 
 /** Estimate decoded byte size from base64 without full decode. */
 export function getImageByteSize(base64: string): number {
@@ -28,9 +29,7 @@ export function getImageByteSize(base64: string): number {
   return Math.ceil((data.length * 3) / 4) - padding;
 }
 
-export function isSupportedImageFormat(mimeType: string): boolean {
-  return SUPPORTED_MIMES.has(mimeType);
-}
+export { isSupportedImageFormat };
 
 type Dimensions = { width: number; height: number };
 

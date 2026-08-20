@@ -153,6 +153,12 @@ Non-obvious rules:
   `tool-adapter.ts`.
 - **Logging**: `createLogger('namespace')` (`base/logger.ts`).
 - **Extension detection**: `isExtensionRealm()` from `base/runtime-env.ts`.
+- **Tool-output images**: `<img:data:…>` markers are parsed in exactly one place
+  (`base/image-markers.ts`) so every consumer agrees on what is an image — the
+  bash tool exempts markers from its 40KB cap, `core/tool-adapter.ts` turns them
+  into image content blocks, `scoops/transcript-limits.ts` strips them, and
+  `ui/wc/wc-message-view.ts` renders them inline. Marker-shaped prose and
+  markers sliced mid-payload stay inert text everywhere.
 - **Dual-mode compatibility**: features must work in both standalone/CLI and
   extension. The thin extension runs no dynamic code itself — realms, WASM, and
   sprinkles/dips run in the hosted leader tab / kernel worker.

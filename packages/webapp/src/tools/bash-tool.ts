@@ -11,6 +11,7 @@ import {
   truncateTail,
 } from '@earendil-works/pi-coding-agent/dist/core/tools/truncate.js';
 import type { LickEvent } from '@slicc/shared-ts';
+import { classifyImageMarkers } from '../base/image-markers.js';
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { AlmostBashShell } from '../shell/index.js';
@@ -51,6 +52,118 @@ const BASH_LICK_PREVIEW_MAX_BYTES = 2 * 1024;
 const BASH_OUTPUT_MAX_BYTES = 40 * 1024;
 
 /**
+ * Budget for *accumulated* `<img:…>` markers carried past
+ * {@link BASH_OUTPUT_MAX_BYTES}.
+ *
+ * Markers are exempt from the text cap — a tail truncation that cuts through
+ * one destroys it, so the model gets the base64 tail and no image, and the
+ * chat row loses the inline preview too (#2217). Accumulation still needs a
+ * bound: `open --view --size medium` is ~270 KB, and a loop over a directory
+ * of screenshots would otherwise dwarf the text cap it bypassed. Newest
+ * markers win, matching the tail-keeping convention for text.
+ *
+ * This is NOT a per-image ceiling. The newest marker is always kept, however
+ * large — a single `open --view --size high` on a photo can exceed 1MB on its
+ * own, and dropping it would just relocate #2217's failure. The real ceiling
+ * for one image is `processImageContent`'s 5MB API limit.
+ */
+const BASH_IMAGE_MARKER_MAX_BYTES = 1024 * 1024;
+
+/** NUL-delimited stand-in for a lifted marker: never present in real output. */
+const IMAGE_PLACEHOLDER_PREFIX = '\u0000slicc-img:';
+const IMAGE_PLACEHOLDER_SUFFIX = '\u0000';
+
+/**
+ * Replace well-formed image markers in `output` with short placeholders, so
+ * the base64 is neither measured against the text cap nor cut in half by it,
+ * and drop the oldest markers over {@link BASH_IMAGE_MARKER_MAX_BYTES}.
+ *
+ * Only markers the vision path can actually use are lifted. A marker-shaped
+ * run of prose, or a marker already sliced by an upstream `head`, stays in the
+ * text, where it is inert and where the byte cap may legitimately trim it.
+ *
+ * Placeholders keep each image at its original position, so the label a
+ * command printed above its image still precedes it after bounding.
+ */
+function liftImageMarkers(output: string): { text: string; markers: Map<string, string> } {
+  const found = classifyImageMarkers(output).filter((m) => m.kind === 'image');
+  if (found.length === 0) return { text: output, markers: new Map() };
+
+  // Walk newest-first so the byte budget keeps the tail of the image stream,
+  // matching the tail-keeping convention for text. The newest marker is kept
+  // unconditionally: one deliberately-requested `open --view --size high` can
+  // exceed the budget by itself, and dropping it would just relocate the bug
+  // this budget sits next to. `processImageContent`'s 5MB API limit is the
+  // real ceiling for a single image; this budget only bounds *accumulation*.
+  const keptIndices = new Set<number>();
+  let budget = BASH_IMAGE_MARKER_MAX_BYTES;
+  for (let i = found.length - 1; i >= 0; i--) {
+    const size = found[i].marker.length;
+    if (size > budget && keptIndices.size > 0) break;
+    budget -= size;
+    keptIndices.add(i);
+  }
+
+  const markers = new Map<string, string>();
+  let text = '';
+  let lastIndex = 0;
+  found.forEach((m, i) => {
+    text += output.slice(lastIndex, m.index);
+    if (keptIndices.has(i)) {
+      const key = `${IMAGE_PLACEHOLDER_PREFIX}${i}${IMAGE_PLACEHOLDER_SUFFIX}`;
+      markers.set(key, m.marker);
+      text += key;
+    } else {
+      text += `[image dropped: a newer image in this command used up the ${
+        BASH_IMAGE_MARKER_MAX_BYTES / 1024
+      }KB image budget. View it on its own to see it.]`;
+    }
+    lastIndex = m.index + m.marker.length;
+  });
+  text += output.slice(lastIndex);
+  return { text, markers };
+}
+
+/**
+ * Replace usable image markers with `[image]`. For text destinations that can
+ * never carry a picture — the paging file, a backgrounded job's lick preview —
+ * where the base64 would just be noise the reader has to scroll past.
+ */
+function replaceImageMarkers(text: string): string {
+  const found = classifyImageMarkers(text).filter((m) => m.kind === 'image');
+  if (found.length === 0) return text;
+  let out = '';
+  let lastIndex = 0;
+  for (const m of found) {
+    out += `${text.slice(lastIndex, m.index)}[image]`;
+    lastIndex = m.index + m.marker.length;
+  }
+  return out + text.slice(lastIndex);
+}
+
+/** Render placeholders as `[image]` for the plain-text paging file. */
+function stripImagePlaceholders(text: string): string {
+  return text.replaceAll(
+    new RegExp(`${IMAGE_PLACEHOLDER_PREFIX}\\d+${IMAGE_PLACEHOLDER_SUFFIX}`, 'g'),
+    '[image]'
+  );
+}
+
+/**
+ * Put lifted markers back where their placeholders survived bounding. A
+ * placeholder the tail cut away takes its image with it — the text that
+ * introduced it is gone too, and the truncation footer already says so.
+ */
+function restoreImageMarkers(text: string, markers: Map<string, string>): string {
+  if (markers.size === 0) return text;
+  let restored = text;
+  for (const [key, marker] of markers) {
+    if (restored.includes(key)) restored = restored.replace(key, () => marker);
+  }
+  return restored;
+}
+
+/**
  * Bound bash output to {@link BASH_OUTPUT_MAX_BYTES}, keeping the TAIL (errors and
  * final results live at the end), matching pi's bash convention. When truncated,
  * the full output is written to a temp file under `tempDir` and a footer tells
@@ -70,26 +183,29 @@ async function boundBashOutput(
   tempDir: string,
   nextSeq: () => number
 ): Promise<string> {
-  const truncation = truncateTail(output, { maxBytes: BASH_OUTPUT_MAX_BYTES });
-  if (!truncation.truncated) return output;
+  const { text, markers } = liftImageMarkers(output);
+  const truncation = truncateTail(text, { maxBytes: BASH_OUTPUT_MAX_BYTES });
+  if (!truncation.truncated) return restoreImageMarkers(text, markers);
 
   const shown = `showing the last ${formatSize(truncation.outputBytes)} of ${formatSize(
     truncation.totalBytes
   )} (${truncation.totalLines} lines)`;
   const path = `${tempDir}/bash-output-${nextSeq()}.txt`;
   try {
-    await fs.writeFile(path, output);
-    return (
+    await fs.writeFile(path, stripImagePlaceholders(text));
+    return restoreImageMarkers(
       `${truncation.content}\n\n[Output truncated: ${shown}. Full output written to ${path} — ` +
-      `read specific ranges with \`sed -n 'START,ENDp' ${path}\`, \`tail -n +N ${path}\`, or \`grep\`.]`
+        `read specific ranges with \`sed -n 'START,ENDp' ${path}\`, \`tail -n +N ${path}\`, or \`grep\`.]`,
+      markers
     );
   } catch (err) {
     log.warn('Failed to persist full bash output', {
       error: err instanceof Error ? err.message : String(err),
     });
-    return (
+    return restoreImageMarkers(
       `${truncation.content}\n\n[Output truncated: ${shown}. Re-run piping through ` +
-      '`head`/`tail`/`grep`/`sed -n` to narrow the output.]'
+        '`head`/`tail`/`grep`/`sed -n` to narrow the output.]',
+      markers
     );
   }
 }
@@ -279,6 +395,9 @@ function buildDescription(defaultBackgroundAfter: number): string {
     'open (--view for vision), playwright-cli (browser automation). Run `commands` for full list. ' +
     `Output is capped at ${BASH_OUTPUT_MAX_BYTES / 1024}KB (the tail is kept); when truncated the ` +
     'full output is written to a temp file named in the result so you can page it. ' +
+    `Inline images (\`open --view\`) do not count against that cap — up to ${
+      BASH_IMAGE_MARKER_MAX_BYTES / 1024
+    }KB of images per command reaches you as pictures, not base64. ` +
     `A command still running after background_after seconds (default ${defaultBackgroundAfter}) is ` +
     'detached: you get a job id at once and a Background Command lick delivers its exit code and ' +
     'output later, so a stuck command never wedges the turn.'
@@ -524,7 +643,12 @@ async function deliverBackgroundJob(
     log.warn('Background bash job finished with no lick sink', { jobId, exitCode });
     return;
   }
-  const preview = truncateTail(output, { maxBytes: BASH_LICK_PREVIEW_MAX_BYTES });
+  // The preview is a text teaser, not a vision channel: 2KB of a marker's
+  // base64 is unreadable and would crowd out the lines that matter (#2217).
+  // The persisted output file still holds the marker for a follow-up read.
+  const preview = truncateTail(replaceImageMarkers(output), {
+    maxBytes: BASH_LICK_PREVIEW_MAX_BYTES,
+  });
   ctx.options.fireLick({
     type: 'bash',
     bashJobId: jobId,

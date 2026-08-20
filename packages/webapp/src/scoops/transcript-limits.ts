@@ -16,7 +16,7 @@
  * MUST NOT be routed through these helpers.
  */
 
-import { createImageMarkerRegex } from '../core/tool-result-images.js';
+import { createImageMarkerRegex } from '../base/image-markers.js';
 
 /** Per tool-result / per input-string-field transcript budget. */
 export const MAX_TRANSCRIPT_TOOL_TEXT_CHARS = 64 * 1024;
@@ -73,10 +73,12 @@ export function capTranscriptToolInput(
     }
     return copy ?? input;
   }
+  // biome-ignore lint/plugin: walks arbitrary tool input JSON; the cap is shape-agnostic by design.
   let copy: Record<string, unknown> | null = null;
   for (const [key, value] of Object.entries(input)) {
     const capped = capTranscriptToolInput(value, max, depth - 1);
     if (capped !== value) {
+      // biome-ignore lint/plugin: same arbitrary tool input JSON as the accumulator above.
       copy ??= { ...(input as Record<string, unknown>) };
       copy[key] = capped;
     }

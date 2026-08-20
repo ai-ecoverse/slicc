@@ -8,6 +8,7 @@
  */
 
 import type { AgentTool, AgentToolResult } from '@earendil-works/pi-agent-core';
+import { classifyImageMarkers } from '../base/image-markers.js';
 import { createLogger } from '../base/logger.js';
 import type { ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
 import {
@@ -17,7 +18,6 @@ import {
 } from '../tools/tool-ui.js';
 import type { ToolDefinition } from '../tools/types.js';
 import { processImageContent } from './image-processor.js';
-import { createImageMarkerRegex, parseImageMarker } from './tool-result-images.js';
 import type { ImageContent, TextContent } from './types.js';
 
 const log = createLogger('tool-adapter');
@@ -25,26 +25,31 @@ const log = createLogger('tool-adapter');
 /**
  * Parse a tool result string, extracting `<img:...>` tags into ImageContent blocks.
  * Sync version — extracts tags without image processing.
+ *
+ * Only markers carrying a real base64 payload become image blocks; an
+ * `unsupported` MIME type still does, so {@link processImageContent} can
+ * replace it with a one-line placeholder instead of leaking the payload.
+ * Marker-shaped prose and markers sliced mid-payload stay text — reporting
+ * those as an unsupported image format names the wrong cause (#2217).
  */
 export function parseToolResultContentRaw(text: string): (TextContent | ImageContent)[] {
   const blocks: (TextContent | ImageContent)[] = [];
   let lastIndex = 0;
 
-  for (const match of text.matchAll(createImageMarkerRegex())) {
-    const image = parseImageMarker(match[0]);
-    if (!image) continue;
+  for (const found of classifyImageMarkers(text)) {
+    if (found.kind === 'inert' || !found.parsed) continue;
     // Add any text before this match
-    const before = text.slice(lastIndex, match.index);
+    const before = text.slice(lastIndex, found.index);
     if (before.trim()) {
       blocks.push({ type: 'text', text: before.trimEnd() });
     }
     // Add the image as a proper content block
     blocks.push({
       type: 'image',
-      mimeType: image.mimeType,
-      data: image.data,
+      mimeType: found.parsed.mimeType,
+      data: found.parsed.data,
     });
-    lastIndex = match.index! + match[0].length;
+    lastIndex = found.index + found.marker.length;
   }
 
   // Add any remaining text after the last match
@@ -218,6 +223,7 @@ export function adaptTool(
 
       try {
         const result = await tool.execute(
+          // biome-ignore lint/plugin: per-tool argument bag, shape declared by the tool's inputSchema.
           (params ?? {}) as Record<string, unknown>,
           process.effectiveSignal
         );
@@ -268,6 +274,7 @@ export function adaptTools(
  */
 function extractToolArg(params: unknown): string[] {
   if (typeof params !== 'object' || params === null) return [];
+  // biome-ignore lint/plugin: same per-tool argument bag; this probes a few well-known field names across every tool.
   const obj = params as Record<string, unknown>;
   // Ordered by specificity — we prefer the field most uniquely
   // identifying the tool's invocation. `command` (bash),
