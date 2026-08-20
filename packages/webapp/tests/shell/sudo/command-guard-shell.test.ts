@@ -1,9 +1,9 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { parseSudoers } from '../../../src/base/sudoers.js';
 import { FsError, VirtualFS } from '../../../src/fs/index.js';
 import type { ShellSudoConfig } from '../../../src/shell/almost-bash-shell-headless.js';
 import { AlmostBashShell } from '../../../src/shell/index.js';
-import { parseSudoers } from '../../../src/shell/sudo/sudoers.js';
 import type { SudoBroker, SudoDecision } from '../../../src/sudo/types.js';
 
 const POLICY = parseSudoers('Cmnd  touch /workspace/gated*');

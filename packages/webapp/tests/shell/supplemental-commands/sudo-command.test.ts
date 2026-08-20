@@ -114,6 +114,20 @@ describe('sudo command', () => {
       expect(exec).not.toHaveBeenCalled();
     });
 
+    it('on timeout: blocks, and says unanswered rather than denied', async () => {
+      const broker = brokerReturning({ decision: 'deny', reason: 'user-timeout' });
+      const exec = vi.fn(async () => execResult());
+      const cmd = createSudoCommand({ broker });
+
+      const result = await cmd.execute(['rm', '-rf', '/tmp/x'], createMockCtx({ exec }));
+
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('timed out');
+      expect(result.stderr).toContain('not a denial');
+      expect(result.stderr).not.toContain('approval denied');
+      expect(exec).not.toHaveBeenCalled();
+    });
+
     it('on always: persists the broker-supplied pattern then runs the inner command', async () => {
       const broker = brokerReturning({ decision: 'always', pattern: 'git push *' });
       const persistGrant = vi.fn(async () => {});

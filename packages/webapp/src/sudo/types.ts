@@ -27,11 +27,40 @@ export interface SudoDecision {
   decision: 'allow' | 'deny' | 'always';
   /** The (human-edited) glob pattern to persist as a NOPASSWD rule. */
   pattern?: string;
+  /**
+   * Why a `deny` was reached when nobody actually refused. Absent for a real
+   * gesture. Enforcement layers use it to tell the agent "unanswered", not
+   * "refused", so it does not immediately re-request the same action.
+   *
+   *   - `user-timeout` — the native prompt went unanswered past the approval
+   *     budget (`USER_SUDO_TIMEOUT_MS`). The human was not at the machine.
+   *   - `cone-timeout` — a scoop's cone-mediated request went unanswered past
+   *     `CONE_SUDO_TIMEOUT_MS`. No human was ever prompted; the cone agent is
+   *     the approver on that leg, so the recovery advice differs.
+   *
+   * Deliberately a field rather than a fourth `decision` value: every consumer
+   * branches on `decision === 'deny'`, so a new variant would fail OPEN.
+   */
+  reason?: SudoTimeoutReason;
+}
+
+/** Which approval leg ran out of time. See {@link SudoDecision.reason}. */
+export type SudoTimeoutReason = 'user-timeout' | 'cone-timeout';
+
+/** Per-call options every {@link SudoBroker} accepts. */
+export interface SudoRequestOptions {
+  /**
+   * Cancels the approval attempt. `withApprovalTimeout` aborts this when the
+   * budget expires, so a broker whose pre-prompt work (pattern suggestion,
+   * transport setup) is still in flight MUST NOT go on to raise a native
+   * prompt for an action the caller has already abandoned.
+   */
+  signal?: AbortSignal;
 }
 
 /** Trusted-realm approval surface. */
 export interface SudoBroker {
-  requestApproval(req: SudoRequest): Promise<SudoDecision>;
+  requestApproval(req: SudoRequest, opts?: SudoRequestOptions): Promise<SudoDecision>;
 }
 
 /**

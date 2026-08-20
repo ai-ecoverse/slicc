@@ -23,11 +23,21 @@
 import { createLogger } from '../base/logger.js';
 import { isExtensionRealm } from '../core/runtime-env.js';
 import { getExtensionDelegateId } from '../shell/proxied-fetch.js';
+import { withApprovalTimeout } from './approval-timeout.js';
 import { createExtensionSudoBroker } from './extension-broker.js';
 import { createHttpSudoBroker } from './http-broker.js';
 import { createPanelRpcSudoBroker } from './panel-rpc-broker.js';
 import type { SudoBroker, SudoRequest } from './types.js';
 
+export {
+  type ApprovalTimeoutOptions,
+  isTimedOut,
+  sudoRefusalMessage,
+  timedOutDecision,
+  timeoutNotice,
+  USER_SUDO_TIMEOUT_MS,
+  withApprovalTimeout,
+} from './approval-timeout.js';
 export {
   CONE_SUDO_TIMEOUT_MS,
   type ConeApprovalRouter,
@@ -76,8 +86,18 @@ function isThinBridgeWorker(): boolean {
  * relays to its page realm over panel-RPC (where the native modal lives); every
  * other float (standalone CLI, Electron) talks to the node-server
  * `/api/sudo-approve` endpoint.
+ *
+ * Every float is wrapped in {@link withApprovalTimeout} so a prompt nobody
+ * answers releases the blocked agent turn fail-closed instead of hanging on it
+ * forever. The wrap lives here rather than in each broker so all three floats
+ * share one budget and one `reason: 'timeout'` contract.
  */
 export function createSudoBroker(): SudoBroker {
+  return withApprovalTimeout(createFloatSudoBroker());
+}
+
+/** The raw, float-appropriate broker before the timeout wrap. */
+function createFloatSudoBroker(): SudoBroker {
   if (isExtensionRuntime()) {
     return createExtensionSudoBroker();
   }
@@ -85,6 +105,11 @@ export function createSudoBroker(): SudoBroker {
     return createPanelRpcSudoBroker();
   }
   return createHttpSudoBroker();
+}
+
+/** The single property {@link installSudoTestHook} grafts onto `globalThis`. */
+interface SudoBridgeGlobal {
+  [SUDO_BRIDGE_GLOBAL_KEY]: SudoBridge;
 }
 
 /** Public contract exposed on `globalThis.__slicc_sudo`. */
@@ -107,7 +132,7 @@ export function installSudoTestHook(broker: SudoBroker = createSudoBroker()): Su
   const bridge: SudoBridge = {
     requestApproval: (req: SudoRequest) => broker.requestApproval(req),
   };
-  (globalThis as Record<string, unknown>)[SUDO_BRIDGE_GLOBAL_KEY] = bridge;
+  (globalThis as unknown as SudoBridgeGlobal)[SUDO_BRIDGE_GLOBAL_KEY] = bridge;
   log.info('sudo broker test hook published on globalThis.__slicc_sudo');
   return bridge;
 }

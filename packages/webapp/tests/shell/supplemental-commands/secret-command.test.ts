@@ -141,6 +141,19 @@ describe('secret command — gated ops', () => {
     expect(backend.setPersisted).not.toHaveBeenCalled();
   });
 
+  it('persisted set reports a timeout as unanswered, not denied', async () => {
+    const backend = makeBackend();
+    const broker = makeBroker({ decision: 'deny', reason: 'user-timeout' });
+    const res = await run(['set', 'TOKEN', 'v', '--domain', 'api.x.com', '--persist'], {
+      backend,
+      broker: broker.broker,
+    });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('timed out');
+    expect(res.stderr).not.toContain('approval denied');
+    expect(backend.setPersisted).not.toHaveBeenCalled();
+  });
+
   it('persisted set proceeds on allow', async () => {
     const backend = makeBackend();
     const broker = makeBroker({ decision: 'allow' });

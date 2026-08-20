@@ -2,11 +2,12 @@ import { isAllowedDomain } from '@slicc/shared-ts';
 import type { Command, CommandContext, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { isValidShellEnvName } from '../../base/shell-env-name.js';
+import { commandGlobToRegExp } from '../../base/sudoers.js';
+import { sudoRefusalMessage } from '../../sudo/approval-timeout.js';
 import { createSudoBroker } from '../../sudo/index.js';
-import type { SudoBroker } from '../../sudo/types.js';
+import type { SudoBroker, SudoDecision } from '../../sudo/types.js';
 import { resolveFloatTopology } from '../float-topology.js';
 import { type ByteString, stdinAsText } from '../just-bash-compat.js';
-import { commandGlobToRegExp } from '../sudo/sudoers.js';
 import { createDefaultSecretBackend, type SecretBackend } from './secret-backends.js';
 
 function helpText(): string {
@@ -116,15 +117,23 @@ export interface SecretCommandDeps {
   setEnv?: (name: string, value: string) => void;
 }
 
+/**
+ * Outcome of one intrinsic gate: `'ok'` to proceed, otherwise the decision that
+ * blocked it. The decision is carried (not flattened to a boolean) so the
+ * message can distinguish a refusal from an unanswered request — see
+ * `sudoRefusalMessage`.
+ */
+type GateOutcome = 'ok' | SudoDecision;
+
 interface SecretCmdEnv {
   backend: SecretBackend;
   inExtension: boolean;
-  gate: (op: GatedOp, name: string) => Promise<boolean>;
+  gate: (op: GatedOp, name: string) => Promise<GateOutcome>;
   injectMaskedEnv: (name: string) => Promise<void>;
 }
 
-function denied(): ExecResult {
-  return { stdout: '', stderr: 'secret: approval denied\n', exitCode: 1 };
+function refused(decision: SudoDecision): ExecResult {
+  return { stdout: '', stderr: `${sudoRefusalMessage('secret', decision)}\n`, exitCode: 1 };
 }
 
 function buildEnv(deps: SecretCommandDeps): SecretCmdEnv {
@@ -140,16 +149,16 @@ function buildEnv(deps: SecretCommandDeps): SecretCmdEnv {
   };
 
   // Intrinsic gate: prompt unless an "Always" grant already covers the op.
-  // Returns true to proceed, false when denied.
-  const gate = async (op: GatedOp, name: string): Promise<boolean> => {
+  // Returns `'ok'` to proceed, otherwise why the op is blocked.
+  const gate = async (op: GatedOp, name: string): Promise<GateOutcome> => {
     const pattern = `secret:${op}:${name}`;
-    if (grantCovers(grants, pattern)) return true;
+    if (grantCovers(grants, pattern)) return 'ok';
     const decision = await getBroker().requestApproval({
       kind: 'secret',
       detail: `${OP_LABEL[op]}: ${name}`,
       suggestedPattern: pattern,
     });
-    if (decision.decision === 'deny') return false;
+    if (decision.decision === 'deny') return decision;
     if (decision.decision === 'always') {
       // Only store an edited pattern when it actually matches this subject;
       // otherwise fall back to the exact pattern so we never persist a silent
@@ -157,7 +166,7 @@ function buildEnv(deps: SecretCommandDeps): SecretCmdEnv {
       const accepted = decision.pattern?.trim();
       grants.add(accepted && grantMatches(accepted, pattern) ? accepted : pattern);
     }
-    return true;
+    return 'ok';
   };
 
   // Best-effort masked-value injection into the owning shell's live env, called
@@ -201,7 +210,8 @@ async function handleSetPersisted(
 ): Promise<ExecResult> {
   // Persisted set writes to secrets.env / Keychain / chrome.storage —
   // a sensitive, durable mutation, so it's gated.
-  if (!(await env.gate('persist', name))) return denied();
+  const persistGate = await env.gate('persist', name);
+  if (persistGate !== 'ok') return refused(persistGate);
   await env.backend.setPersisted(name, value, domains);
   await env.injectMaskedEnv(name);
   return {
@@ -220,7 +230,10 @@ async function handleSetSession(
   // Session set: free for a new name; changing the value of an existing
   // secret is gated (an agent must not silently overwrite a real one).
   const info = await env.backend.getInfo(name);
-  if (info && !(await env.gate('value', name))) return denied();
+  if (info) {
+    const valueGate = await env.gate('value', name);
+    if (valueGate !== 'ok') return refused(valueGate);
+  }
   await env.backend.setSession(name, value, domains);
   await env.injectMaskedEnv(name);
   return {
@@ -319,7 +332,8 @@ async function handleScope(args: string[], env: SecretCmdEnv): Promise<ExecResul
       exitCode: 1,
     };
   }
-  if (!(await env.gate('scope', name))) return denied();
+  const scopeGate = await env.gate('scope', name);
+  if (scopeGate !== 'ok') return refused(scopeGate);
   await env.backend.setScope(name, domains);
   return {
     stdout: `Updated scope for "${name}" (domains: ${domains.join(', ')})\n`,

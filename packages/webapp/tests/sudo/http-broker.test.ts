@@ -26,6 +26,34 @@ function jsonResponse(body: unknown, ok = true, status = 200): Response {
 const suggest = vi.fn(async () => 'git push*');
 
 describe('createHttpSudoBroker', () => {
+  it('does not POST when the caller aborted while the suggester was slow', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async () => jsonResponse({ decision: 'allow' }));
+    // A suggester that outlives the approval budget: the wrapper aborts, and
+    // only then does the pattern resolve. Prompting now would raise an OS
+    // dialog for an action the agent already gave up on.
+    const slowSuggest = vi.fn(async () => {
+      controller.abort();
+      return 'git push*';
+    });
+    const broker = createHttpSudoBroker({ fetchImpl, suggest: slowSuggest });
+
+    expect(await broker.requestApproval(REQ, { signal: controller.signal })).toEqual({
+      decision: 'deny',
+    });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it('passes the abort signal to the endpoint request', async () => {
+    const controller = new AbortController();
+    const fetchImpl = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
+      jsonResponse({ decision: 'allow' })
+    );
+    const broker = createHttpSudoBroker({ fetchImpl, suggest });
+    await broker.requestApproval(REQ, { signal: controller.signal });
+    expect((fetchImpl.mock.calls[0][1] as RequestInit).signal).toBe(controller.signal);
+  });
+
   it('POSTs the request with the suggested pattern and returns the decision', async () => {
     const fetchImpl = vi.fn(async (_url: URL | RequestInfo, _init?: RequestInit) =>
       jsonResponse({ decision: 'allow' })

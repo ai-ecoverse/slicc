@@ -1676,7 +1676,7 @@ describe('ScoopContext buildSudoWiring (per-scoop command grant isolation)', () 
     const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
     const { VirtualFS } = await import('../../src/fs/index.js');
     const { SudoManager } = await import('../../src/sudo/sudo-manager.js');
-    const { matchCommand } = await import('../../src/shell/sudo/sudoers.js');
+    const { matchCommand } = await import('../../src/base/sudoers.js');
 
     const vfs = await VirtualFS.create({
       dbName: `test-scoop-ctx-grant-isolation-${Date.now()}`,
@@ -1731,7 +1731,7 @@ describe('ScoopContext buildSudoWiring (per-scoop command grant isolation)', () 
     const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
     const { VirtualFS } = await import('../../src/fs/index.js');
     const { SudoManager } = await import('../../src/sudo/sudo-manager.js');
-    const { matchCommand } = await import('../../src/shell/sudo/sudoers.js');
+    const { matchCommand } = await import('../../src/base/sudoers.js');
 
     const vfs = await VirtualFS.create({
       dbName: `test-scoop-ctx-grant-cone-${Date.now()}`,

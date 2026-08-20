@@ -46,7 +46,7 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 
 ## Sudo (agent action approvals)
 
-- Paths: `shell/sudo/sudoers.ts` (parser/matcher), `fs/sudo-fs.ts` (FS gate), `shell/sudo/command-guard.ts` (command gate), `sudo/` (brokers + manager).
+- Paths: `base/sudoers.ts` (parser/matcher), `fs/sudo-fs.ts` (FS gate), `shell/sudo/command-guard.ts` (command gate), `sudo/` (brokers + manager).
 - `SudoManager` (`sudo/sudo-manager.ts`) per-float policy store; seeds and live-reloads `/etc/sudoers` + `/etc/sudoers.d/*` (edits and "Always" grants apply without restart). `scoop-context.ts` wraps the agent's FS once with `createSudoFs`; single handle backs both file tools and shell. Panel terminal is intentionally NOT gated. Brokers float-specific (`createSudoBroker`): extension-delegate relays via hosted leader tab; standalone/Electron POSTs `/api/sudo-approve`.
 - **Self-protection**: writes to `/etc/sudoers` + `/etc/sudoers.d/*` always require approval, hardcoded in `matchPath` regardless of policy.
 - **"Agent can't self-approve" does NOT cover page-realm code** (which can reassign `globalThis.confirm`): `sudo/panel-responder.ts` captures natives at module init; approval chrome mounts via `ui/wc/trusted-layer.ts`, never `document.body`.

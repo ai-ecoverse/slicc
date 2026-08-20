@@ -9,11 +9,16 @@
 
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mergePolicies, parseSudoers, type SudoersPolicy } from '../../src/base/sudoers.js';
 import { FsError, RestrictedFS, VirtualFS } from '../../src/fs/index.js';
 import type { MountBackend } from '../../src/fs/mount/backend.js';
-import { createSudoFs, GRANTED_FILE } from '../../src/fs/sudo-fs.js';
+import {
+  createSudoFs,
+  FS_DENIED_MESSAGE,
+  fsSudoMessage,
+  GRANTED_FILE,
+} from '../../src/fs/sudo-fs.js';
 import { NO_OP_WRITE_DEVICE_PATHS } from '../../src/fs/virtual-device-paths.js';
-import { mergePolicies, parseSudoers, type SudoersPolicy } from '../../src/shell/sudo/sudoers.js';
 import type { SudoDecision, SudoRequest } from '../../src/sudo/types.js';
 
 function makeBroker(decision: SudoDecision | ((req: SudoRequest) => SudoDecision)) {
@@ -42,8 +47,10 @@ describe('SudoFS', () => {
     await vfs.writeFile('/workspace/.git/config', 'cfg');
     await vfs.writeFile('/shared/secrets/api.key', 'sekret');
   });
-  afterEach(() => {
-    vfs.dispose?.();
+  afterEach(async () => {
+    // Awaited so the IDB handle is closed before the next test's `wipe: true`
+    // create — a floating dispose races the delete and flakes the suite.
+    await vfs.dispose?.();
   });
 
   it('gates protected reads and passes through non-protected reads', async () => {
@@ -70,6 +77,20 @@ describe('SudoFS', () => {
     await sfs.writeFile('/workspace/note.txt', 'changed');
     expect(await vfs.readTextFile('/workspace/note.txt')).toBe('changed');
     expect(calls).toHaveLength(1);
+  });
+
+  it('reports an unanswered prompt as a timeout, not a denial', async () => {
+    const { broker } = makeBroker({ decision: 'deny', reason: 'user-timeout' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+    const timeoutMessage = fsSudoMessage({ decision: 'deny', reason: 'user-timeout' });
+
+    await expect(sfs.writeFile('/workspace/.git/config', 'evil')).rejects.toMatchObject({
+      code: 'EACCES',
+      message: expect.stringContaining(timeoutMessage),
+    });
+    expect(timeoutMessage).toContain('timed out');
+    expect(timeoutMessage).toContain('not a denial');
+    expect(timeoutMessage).not.toBe(FS_DENIED_MESSAGE);
   });
 
   it('always-protects writes to sudoers files regardless of policy', async () => {

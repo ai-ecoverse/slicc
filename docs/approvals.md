@@ -58,7 +58,9 @@ dispatch.
 The agent's FS handle is wrapped once with `createSudoFs`, and that single gated
 handle backs both the file tools and the shell, so a `cat`/`echo >` in bash is
 gated by the same `Read`/`Write` rules as the file tools. Denied commands exit
-`1` with `sudo: approval denied`; denied file ops throw `EACCES`.
+`1` with `sudo: approval denied`; denied file ops throw `EACCES`. A prompt that
+goes unanswered for five minutes blocks the same way but reports a _timeout_
+instead — see [Approval timeout](#approval-timeout).
 
 The **panel terminal is not gated** — the human typing there is already the approver.
 
@@ -89,7 +91,7 @@ A fully commented-out default template ships on a fresh VFS
 
 Writes to `/etc/sudoers` and anything under `/etc/sudoers.d/` **always** require
 approval — a `NOPASSWD` rule cannot override this. It is hardcoded in `matchPath`
-(`packages/webapp/src/shell/sudo/sudoers.ts`), independent of the loaded policy.
+(`packages/webapp/src/base/sudoers.ts`), independent of the loaded policy.
 Reads of those files are allowed (visudo-style).
 
 ### Live reload
@@ -157,6 +159,55 @@ Brokers (`packages/webapp/src/sudo/`):
 All brokers **fail closed**: any transport error, malformed response, or missing
 gesture resolves to `deny`.
 
+#### Approval timeout
+
+A sudo prompt blocks the requesting agent turn: until the human answers, the cone
+sits on an unresolved `requestApproval` promise and cannot make progress. When
+nobody is at the machine that wait is unbounded — the dialog stays up and the
+turn hangs indefinitely.
+
+`createSudoBroker` therefore wraps whichever float broker it selects in
+`withApprovalTimeout` (`packages/webapp/src/sudo/approval-timeout.ts`). After
+`USER_SUDO_TIMEOUT_MS` (5 minutes) the request settles fail-closed as
+`{ decision: 'deny', reason: 'user-timeout' }`. That matches
+`CONE_SUDO_TIMEOUT_MS`, so both hops of a delegated scoop → cone → user approval
+expire on the same budget.
+
+`reason` is a **field on the decision, not a fourth `decision` value**. Every
+enforcement layer branches on `decision === 'deny'`, so a new variant would fail
+_open_; the field keeps the fail-closed default and only enriches the message.
+
+**Two legs, two notices.** The approver differs per leg, so the recovery advice
+must too — telling a scoop to wait for a human who was never prompted is wrong:
+
+| `reason`       | Which leg expired | What the agent is told                                     |
+| -------------- | ----------------- | ---------------------------------------------------------- |
+| `user-timeout` | cone → user       | the user was not there; report it and wait for them        |
+| `cone-timeout` | scoop → cone      | the cone never resolved it; no human was prompted, move on |
+
+Every gate renders both through one helper, `sudoRefusalMessage(prefix, decision)`,
+so denial and timeout wording can never drift apart:
+
+| Layer                        | Denied                         | Timed out                                     |
+| ---------------------------- | ------------------------------ | --------------------------------------------- |
+| Command guard / `sudo <cmd>` | `sudo: approval denied`        | `sudo: approval request timed out — …`        |
+| `SudoFS`                     | `EACCES sudo: approval denied` | `EACCES sudo: approval request timed out — …` |
+| `secret` command             | `secret: approval denied`      | `secret: approval request timed out — …`      |
+
+**Cancellation.** Settling the caller is not enough on its own. Each broker does
+pre-prompt work — an LLM `suggest` call for the "Always" pattern, transport setup
+— _before_ it raises the native surface. If that work outlives the budget and
+then recovers, an un-cancelled broker would pop a brand-new dialog for an action
+the agent abandoned minutes ago. So `withApprovalTimeout` aborts an `AbortSignal`
+(`SudoRequestOptions.signal`) before it resolves the caller; every broker passes
+it to `suggest`, re-checks `signal.aborted` before prompting, and the HTTP broker
+also hands it to `fetch` so the in-flight POST is cancelled.
+
+Known limitation: a dialog _already on screen_ when the budget expires stays
+there — there is no cancel channel to `window.confirm` or an OS dialog. A gesture
+that lands after the timeout is logged and discarded, including an "Always" grant
+(the enforcement layer that owns the persist sink has already moved on).
+
 #### Scope of the "unforgeable gesture" guarantee
 
 The native modal cannot be answered by **the agent's realms** (kernel worker,
@@ -205,7 +256,10 @@ The pending-request registry lives on the `Orchestrator` (`enqueueSudoRequest`,
 FS/shell sees a regular `SudoBroker` built by `createConeApprovalBroker` whose
 `requestApproval` enqueues into the same registry as the explicit tool. Both
 paths resolve fail-closed (`deny`) on transport error, scoop drop, orchestrator
-shutdown, or the per-request timeout (`CONE_SUDO_TIMEOUT_MS`).
+shutdown, or the per-request timeout (`CONE_SUDO_TIMEOUT_MS`). The timeout path
+tags its decision `reason: 'cone-timeout'` so the scoop is told its escalation
+went unanswered rather than refused — and, unlike the cone → user leg, is not
+told to wait for a user who was never prompted.
 
 "Always" grants for `kind: 'command' | 'read' | 'write'` are persisted via
 `SudoManager.appendScoopRule(folder, kind, pattern)` (raw-VFS write, same trusted
@@ -328,7 +382,9 @@ Behavior:
   second prompt for the same invocation. A nested inner command that itself
   runs a separately-gated subject still prompts once on its own.
 - **Deny** exits `1` with `sudo: approval denied`; the inner command does not
-  run.
+  run. An unanswered prompt exits `1` too, with the distinct
+  `sudo: approval request timed out — …` message (see
+  [Approval timeout](#approval-timeout)).
 - **Always** persists the broker-supplied pattern (defaulting to the canonical
   subject) via the same `persistCommandGrant` sink the transparent gate uses, so
   the `NOPASSWD Cmnd` line appears in `/etc/sudoers.d/granted` and live-reload
@@ -340,12 +396,13 @@ Behavior:
 
 | Path                                                              | Role                                                                          |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `packages/webapp/src/shell/sudo/sudoers.ts`                       | Parser + matcher + self-protection                                            |
+| `packages/webapp/src/base/sudoers.ts`                             | Parser + matcher + self-protection                                            |
 | `packages/webapp/src/sudo/sudo-manager.ts`                        | Live policy store + reload + broker                                           |
 | `packages/webapp/src/fs/sudo-fs.ts`                               | FS-level gate (`createSudoFs`)                                                |
 | `packages/webapp/src/shell/sudo/command-guard.ts`                 | Command-level gate                                                            |
 | `packages/webapp/src/shell/supplemental-commands/sudo-command.ts` | `sudo <cmd>` explicit-request surface                                         |
 | `packages/webapp/src/sudo/*-broker.ts`                            | Float-specific approval brokers                                               |
+| `packages/webapp/src/sudo/approval-timeout.ts`                    | 5-minute fail-closed wrap + `reason: 'timeout'` contract                      |
 | `packages/webapp/src/sudo/cone-broker.ts`                         | Cone-mediated broker + pending-request registry                               |
 | `packages/webapp/src/scoops/scoop-management-tools.ts`            | `sudo_request` / `lick_confirm` / `lick_dismiss` / `list_sudo_requests` tools |
 | `packages/node-server/src/sudo/`                                  | `/api/sudo-approve` + OS dialogs                                              |

@@ -19,9 +19,14 @@
  * scoops (the cone keeps the user broker). Those land in follow-up tasks.
  */
 
+import { timedOutDecision } from './approval-timeout.js';
 import type { SudoBroker, SudoDecision, SudoRequest } from './types.js';
 
-/** Default fail-closed timeout for a single pending sudo request. */
+/**
+ * Default fail-closed timeout for a single pending sudo request. Matches
+ * `USER_SUDO_TIMEOUT_MS` (the cone → user leg) so both hops of a delegated
+ * approval expire on the same budget.
+ */
 export const CONE_SUDO_TIMEOUT_MS = 5 * 60 * 1000;
 
 /** Snapshot of a single pending request (read-only view for listing surfaces). */
@@ -156,7 +161,10 @@ export class ConeRequestRegistry {
           const entry = this.pending.get(id);
           if (!entry) return;
           this.pending.delete(id);
-          entry.resolve({ decision: 'deny' });
+          // `cone-timeout` (not `user-timeout`): no human was ever prompted on
+          // this leg, so the scoop's gate must not tell it to wait for the
+          // user — the cone is the approver that never answered.
+          entry.resolve(timedOutDecision('cone-timeout'));
           this.notifyAutoSettle(id, 'expired');
         }, this.timeoutMs);
       }

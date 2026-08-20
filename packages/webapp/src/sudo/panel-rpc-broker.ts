@@ -13,20 +13,23 @@
  * The "Always" pattern suggestion is computed here in the worker realm (where
  * `quickLabel` reaches the provider) and shipped as the editable default —
  * same as the HTTP / extension brokers. Fail closed: no panel-RPC client, a
- * transport error / timeout, or a malformed decision resolves to `deny`.
+ * transport error / timeout, an aborted `signal` (the caller's approval budget
+ * expired), or a malformed decision resolves to `deny`.
  */
 
 import { createLogger } from '../base/logger.js';
 import type { PanelRpcClient } from '../kernel/panel-rpc.js';
 import { suggestPattern } from './suggest-pattern.js';
-import type { SudoBroker, SudoDecision, SudoRequest } from './types.js';
+import type { SudoBroker, SudoDecision, SudoRequest, SudoRequestOptions } from './types.js';
 
 const log = createLogger('sudo-panel-rpc');
 
 /**
  * Per-call timeout for the page relay. Unlike the panel-RPC default (15s),
  * a sudo prompt waits on a human gesture, so the window is generous; it only
- * exists to release a request whose page realm has gone away.
+ * exists to release a request whose page realm has gone away. In practice the
+ * `withApprovalTimeout` wrap around this broker (5 min) settles the caller
+ * first — this is the transport backstop underneath it.
  */
 const DEFAULT_SUDO_RPC_TIMEOUT_MS = 600_000;
 
@@ -53,10 +56,11 @@ export function createPanelRpcSudoBroker(deps: PanelRpcSudoBrokerDeps = {}): Sud
     });
 
   return {
-    async requestApproval(req: SudoRequest): Promise<SudoDecision> {
+    async requestApproval(req: SudoRequest, opts?: SudoRequestOptions): Promise<SudoDecision> {
+      const signal = opts?.signal;
       let suggestedPattern: string;
       try {
-        suggestedPattern = await suggest(req);
+        suggestedPattern = await suggest(req, signal);
       } catch {
         suggestedPattern = req.detail;
       }
@@ -74,6 +78,13 @@ export function createPanelRpcSudoBroker(deps: PanelRpcSudoBrokerDeps = {}): Sud
       }
       if (!client) {
         log.warn('panel-RPC client unavailable in worker realm — denying');
+        return { decision: 'deny' };
+      }
+
+      // The suggester / client lookup can outlive the caller's budget. Relaying
+      // now would raise a native modal for an action that already timed out.
+      if (signal?.aborted) {
+        log.warn('sudo approval aborted before prompting — denying', { detail: req.detail });
         return { decision: 'deny' };
       }
 
