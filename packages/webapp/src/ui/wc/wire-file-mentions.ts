@@ -24,6 +24,7 @@
  */
 
 import { FileMentionResolver } from '../../core/file-mention-resolver.js';
+import { findFileMentions } from '../../core/file-mentions.js';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import {
   FILE_MENTION_OPEN_EVENT,
@@ -42,6 +43,20 @@ export interface FileMentionWiringDeps {
 
 /** Tag whose bodies carry linkable prose. */
 const MESSAGE_TAG = 'slicc-agent-message';
+
+/**
+ * Run `task` when the browser is idle, falling back to a macrotask.
+ *
+ * `requestIdleCallback` is absent in Safari and in some test environments, and
+ * a missing scheduler must not mean the work never happens — only that it is
+ * merely deferred rather than idle-scheduled.
+ */
+function whenIdle(task: () => void): void {
+  const idle = (globalThis as { requestIdleCallback?: (cb: () => void) => number })
+    .requestIdleCallback;
+  if (typeof idle === 'function') idle(task);
+  else setTimeout(task, 0);
+}
 
 /**
  * Start linkifying file mentions in `thread`, and open a preview when one is
@@ -81,9 +96,23 @@ function wireFileMentionsUnsafe(deps: FileMentionWiringDeps): () => void {
     // Still streaming — the text is incomplete, so any lookup would be wasted.
     if (bubble.hasAttribute('streaming')) return;
     const body = bubble.querySelector<HTMLElement>('.body') ?? bubble;
-    void getResolver()
-      .then((resolver) => linkifyFileMentions(body, resolver))
-      .catch((err) => log.error('File mention linking failed', err));
+
+    // Cheap synchronous check BEFORE touching the VFS. `getResolver()` opens
+    // the page-side VFS client, and the first message to render is the cone's
+    // welcome text — which contains no file names at all. Opening the VFS for
+    // it put filesystem work on the critical path at boot, competing with the
+    // kernel worker while the terminal was trying to lazy-mount. A regex over
+    // the body costs nothing by comparison, and most messages never mention a
+    // file.
+    if (findFileMentions(body.textContent ?? '').length === 0) return;
+
+    // Linking is never urgent — it decorates text the user is already reading —
+    // so it yields to anything the browser considers more important.
+    whenIdle(() => {
+      void getResolver()
+        .then((resolver) => linkifyFileMentions(body, resolver))
+        .catch((err) => log.error('File mention linking failed', err));
+    });
   };
 
   const scan = (root: ParentNode): void => {

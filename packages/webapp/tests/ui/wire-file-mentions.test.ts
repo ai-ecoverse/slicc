@@ -92,6 +92,41 @@ describe('wireFileMentions', () => {
     expect(thread.querySelector('a')).toBeNull();
   });
 
+  it('does not touch the VFS for a message with no file names', async () => {
+    // This is what broke CI: the cone's welcome message renders during boot,
+    // the observer fired, and opening the page-side VFS client put filesystem
+    // work on the critical path while the kernel worker was still starting and
+    // the terminal was trying to lazy-mount. Most messages mention no files, so
+    // the cheap regex must gate the expensive open.
+    const thread = document.createElement('div');
+    document.body.appendChild(thread);
+    const openFs = vi.fn(() => Promise.resolve(fakeFs()));
+
+    wireFileMentions({ thread, openFs, log: silentLog });
+
+    const bubble = document.createElement('slicc-agent-message');
+    bubble.innerHTML = '<div class="body"><p>Welcome to SLICC</p></div>';
+    thread.appendChild(bubble);
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(openFs).not.toHaveBeenCalled();
+  });
+
+  it('does open the VFS once a message actually names a file', async () => {
+    const thread = document.createElement('div');
+    document.body.appendChild(thread);
+    const openFs = vi.fn(() => Promise.resolve(fakeFs()));
+
+    wireFileMentions({ thread, openFs, log: silentLog });
+
+    const bubble = document.createElement('slicc-agent-message');
+    bubble.innerHTML = '<div class="body"><p>I rewrote bb.jsh</p></div>';
+    thread.appendChild(bubble);
+
+    await new Promise((resolve) => setTimeout(resolve, 30));
+    expect(openFs).toHaveBeenCalled();
+  });
+
   it('stops processing after teardown', async () => {
     const thread = document.createElement('div');
     document.body.appendChild(thread);

@@ -795,12 +795,6 @@ export function attachWcClient(
   });
   boot.setActivateSurface(workbenchActivator);
 
-  // File mentions: agents name files constantly ("I rewrote bb.jsh"), and those
-  // names are the most clickable thing in a transcript. Each one is verified
-  // against the VFS before it becomes a link, so a mention that does not resolve
-  // stays ordinary text.
-  wireFileMentions({ thread: refs.thread, openFs: openReader, log });
-
   // Panelize when `panel-layouts` is on (see the flag read above).
   //
   // Placed after `workbenchActivator` exists because panelization takes over the
@@ -818,6 +812,17 @@ export function attachWcClient(
       )
       .catch((err) => log.error('panelize failed — keeping the classic shell', err));
   }
+
+  // File mentions: agents name files constantly ("I rewrote bb.jsh"), and those
+  // names are the most clickable thing in a transcript. Each one is verified
+  // against the VFS before it becomes a link, so a mention that does not
+  // resolve stays ordinary text.
+  //
+  // Wired AFTER panelization on purpose. Linking is decoration on text the user
+  // is already reading, whereas the block above starts the tool panels' pollers
+  // and lazy mounts — including the terminal's. Ordering it last means it can
+  // neither delay that work nor, if it throws, prevent it.
+  wireFileMentions({ thread: refs.thread, openFs: openReader, log });
 
   // Floatbar click toggles the monitor panel.
   refs.floatbar.addEventListener('click', () => {
