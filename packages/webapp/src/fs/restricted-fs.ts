@@ -71,9 +71,13 @@ const VIRTUAL_DEVICES: Record<string, VirtualDevice> = {
  *
  * SudoFS gates independently of this class, so the sandbox surface has to
  * agree in both layers: the matching unconditional `NOPASSWD Read/Write`
- * grants live in `generateScoopSudoers` (`sudo/sudo-manager.ts`). Changing
- * one without the other either re-introduces the approval prompt or walls
- * the write underneath it.
+ * grants live in `builtinScoopGrants()` (`base/sudoers.ts`), merged in by
+ * `SudoManager.getPolicyForScoop`. Changing one without the other either
+ * re-introduces the approval prompt or walls the write underneath it.
+ *
+ * They are deliberately NOT in the generated `/scoops/<folder>/etc/sudoers`
+ * — that file is written only when absent, so a rule there would never
+ * reach an already-created scoop.
  */
 const ALWAYS_WRITABLE_PREFIXES = ['/tmp/'];
 
