@@ -111,6 +111,46 @@ describe('upgrade apply', () => {
     expect(await fs.readFile('/workspace/skills/local-only.txt')).toBe('mine\n');
   });
 
+  // #2195: policy files under /etc are seeded only when absent, so a rule added
+  // to the shipped template (e.g. the `Write /etc/models` gate) reaches an
+  // existing profile ONLY through this merge.
+  it('carries an /etc policy-file change to a profile that already has one', async () => {
+    const base = '# sudoers\n# example\n';
+    const upstream = '# sudoers\nWrite /etc/models\n# example\n';
+    await fs.mkdir('/etc', { recursive: true });
+    await fs.writeFile('/etc/sudoers', base);
+
+    const { result, json } = await run(
+      fs,
+      makeFetch({
+        'v1.0.0': { '/etc/sudoers': base },
+        'v2.0.0': { '/etc/sudoers': upstream, '/etc/models': '# model policy\n' },
+      })
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(json.ok).toBe(true);
+    expect(await fs.readFile('/etc/sudoers')).toBe(upstream);
+    // A policy file the profile never had arrives too.
+    expect(await fs.readFile('/etc/models')).toBe('# model policy\n');
+  });
+
+  it('keeps a locally edited /etc policy file when upstream did not move', async () => {
+    const shipped = '# sudoers\nWrite /etc/models\n';
+    await fs.mkdir('/etc', { recursive: true });
+    await fs.writeFile('/etc/sudoers', '# sudoers\n# my own policy\n');
+
+    const { json } = await run(
+      fs,
+      makeFetch({ 'v1.0.0': { '/etc/sudoers': shipped }, 'v2.0.0': { '/etc/sudoers': shipped } })
+    );
+
+    // Upstream did not move, so there is nothing to deliver — the local edit
+    // stands (classified `unchanged`, not overwritten with the template).
+    expect(json.summary.unchanged).toBe(1);
+    expect(await fs.readFile('/etc/sudoers')).toBe('# sudoers\n# my own policy\n');
+  });
+
   it('writes conflicts to a collision-safe sidecar without changing the live file', async () => {
     const path = '/workspace/skills/conflict.txt';
     const existingSidecar = `${path}.upgrade-v1.0.0-to-v2.0.0.conflict`;

@@ -14,6 +14,11 @@
  * Runs against real provider registration (no mocked model lists).
  */
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import {
+  emptyModelPolicy,
+  parseModelPolicy,
+  setActiveModelPolicy,
+} from '../../src/providers/model-policy.js';
 
 const storage = new Map<string, string>();
 const storageStub = {
@@ -92,9 +97,14 @@ describe('resolveModelSelectionForScoop (two providers configured)', () => {
       ])
     );
     storage.set('selected-model', `${SELECTED}:claude-opus-5`);
+    // Cross-provider targeting is opt-in per selected provider (`/etc/models`,
+    // see the deny-by-default block below). These cases are about RESOLUTION,
+    // so they run with both other providers allowed.
+    setActiveModelPolicy(parseModelPolicy(`[${SELECTED}]\n${OTHER}:*\n${SECOND_OTHER}:*\n`));
   });
 
   afterEach(async () => {
+    setActiveModelPolicy(emptyModelPolicy());
     const { unregisterProviderConfig } = await import('../../src/providers/index.js');
     for (const id of [SELECTED, OTHER, SECOND_OTHER]) unregisterProviderConfig(id);
   });
@@ -247,5 +257,127 @@ describe('modelRunsOnProvider (registry aliases)', () => {
       ok: true,
       selection: { modelId: 'claude-sonnet-4-6', providerId: 'azure-ai-foundry' },
     });
+  });
+});
+
+/**
+ * `/etc/models` is an allow-list keyed by the selected provider: a resolvable
+ * model from ANOTHER account is refused until the user opts in, because a
+ * stray `--model` would otherwise move spend onto (say) a work account.
+ */
+describe('resolveModelSelectionForScoop (/etc/models policy)', () => {
+  beforeEach(async () => {
+    storage.clear();
+    await registerProviders();
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: SELECTED, apiKey: '', accessToken: 'x' },
+        { providerId: OTHER, apiKey: 'sk-or-x' },
+      ])
+    );
+    storage.set('selected-model', `${SELECTED}:claude-opus-5`);
+    setActiveModelPolicy(emptyModelPolicy());
+  });
+
+  afterEach(async () => {
+    setActiveModelPolicy(emptyModelPolicy());
+    const { unregisterProviderConfig } = await import('../../src/providers/index.js');
+    for (const id of [SELECTED, OTHER, SECOND_OTHER]) unregisterProviderConfig(id);
+  });
+
+  it('refuses a resolvable cross-provider model when no policy allows it', async () => {
+    const { resolveModelSelectionForScoop } = await import('../../src/providers/account-store.js');
+    const resolution = resolveModelSelectionForScoop(`${OTHER}:openai/gpt-5.6-terra-pro`);
+    expect(resolution.ok).toBe(false);
+    const error = resolution.ok === false ? resolution.error : '';
+    expect(error).toContain('model not allowed');
+    expect(error).toContain('/etc/models');
+  });
+
+  it('names the exact line to add, so the fix is copy-pasteable', async () => {
+    const { resolveModelSelectionForScoop } = await import('../../src/providers/account-store.js');
+    const resolution = resolveModelSelectionForScoop(`${OTHER}:openai/gpt-5.6-terra-pro`);
+    const error = resolution.ok === false ? resolution.error : '';
+    expect(error).toContain(`[${SELECTED}]`);
+    expect(error).toContain(`${OTHER}:openai/gpt-5.6-terra-pro`);
+  });
+
+  it('keeps the selected provider’s own models usable with no policy at all', async () => {
+    const { resolveModelSelectionForScoop } = await import('../../src/providers/account-store.js');
+    expect(resolveModelSelectionForScoop('claude-haiku-4-5')).toEqual({
+      ok: true,
+      selection: { modelId: 'claude-haiku-4-5', providerId: SELECTED },
+    });
+  });
+
+  it('admits a cross-provider model once a wildcard entry allows it', async () => {
+    setActiveModelPolicy(parseModelPolicy(`[${SELECTED}]\n${OTHER}:*\n`));
+    const { resolveModelSelectionForScoop } = await import('../../src/providers/account-store.js');
+    expect(resolveModelSelectionForScoop(`${OTHER}:openai/gpt-5.6-terra-pro`)).toEqual({
+      ok: true,
+      selection: { modelId: 'openai/gpt-5.6-terra-pro', providerId: OTHER },
+    });
+  });
+
+  it('admits exactly the model a single-entry allow names, and no sibling', async () => {
+    setActiveModelPolicy(parseModelPolicy(`[${SELECTED}]\n${OTHER}:openai/gpt-5.6-terra-pro\n`));
+    const { resolveModelSelectionForScoop } = await import('../../src/providers/account-store.js');
+    expect(resolveModelSelectionForScoop(`${OTHER}:openai/gpt-5.6-terra-pro`).ok).toBe(true);
+    expect(resolveModelSelectionForScoop(`${OTHER}:shared/ambiguous-model`).ok).toBe(false);
+  });
+
+  it('refuses a denied model from the SELECTED provider too', async () => {
+    setActiveModelPolicy(parseModelPolicy(`[${SELECTED}]\n-${SELECTED}:claude-haiku-4-5\n`));
+    const { resolveModelSelectionForScoop } = await import('../../src/providers/account-store.js');
+    const resolution = resolveModelSelectionForScoop('claude-haiku-4-5');
+    expect(resolution.ok).toBe(false);
+    expect(resolution.ok === false && resolution.error).toContain('model not allowed');
+  });
+
+  it('does not let a blocked model make an allowed one ambiguous', async () => {
+    // Both other providers offer `shared/ambiguous-model`; allowing exactly one
+    // of them must resolve cleanly instead of reporting ambiguity.
+    storage.set(
+      'slicc_accounts',
+      JSON.stringify([
+        { providerId: SELECTED, apiKey: '', accessToken: 'x' },
+        { providerId: OTHER, apiKey: 'sk-or-x' },
+        { providerId: SECOND_OTHER, apiKey: 'sk-third-x' },
+      ])
+    );
+    setActiveModelPolicy(parseModelPolicy(`[${SELECTED}]\n${SECOND_OTHER}:*\n`));
+    const { resolveModelSelectionForScoop } = await import('../../src/providers/account-store.js');
+    expect(resolveModelSelectionForScoop('shared/ambiguous-model')).toEqual({
+      ok: true,
+      selection: { modelId: 'shared/ambiguous-model', providerId: SECOND_OTHER },
+    });
+  });
+
+  it('reports the policy, not "unknown model", when every bare match is blocked', async () => {
+    const { resolveModelSelectionForScoop } = await import('../../src/providers/account-store.js');
+    const resolution = resolveModelSelectionForScoop('openai/gpt-5.6-terra-pro');
+    expect(resolution.ok).toBe(false);
+    const error = resolution.ok === false ? resolution.error : '';
+    expect(error).toContain('model not allowed');
+    expect(error).not.toContain('unknown model');
+  });
+
+  it('hides an explicitly denied model from the picker', async () => {
+    setActiveModelPolicy(parseModelPolicy(`[${SELECTED}]\n-${SELECTED}:claude-haiku-4-5\n`));
+    const { getAllAvailableModels } = await import('../../src/providers/account-store.js');
+    const ids = getAllAvailableModels()
+      .flatMap((g) => g.models)
+      .map((m) => m.id);
+    expect(ids).not.toContain('claude-haiku-4-5');
+    expect(ids).toContain('claude-opus-5');
+  });
+
+  it('leaves a merely un-allowed provider visible in the picker', async () => {
+    // The allow-list half must NOT reach the picker, or the user could never
+    // switch to their other account from the UI.
+    const { getAllAvailableModels } = await import('../../src/providers/account-store.js');
+    const providers = getAllAvailableModels().map((g) => g.providerId);
+    expect(providers).toContain(OTHER);
   });
 });

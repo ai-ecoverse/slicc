@@ -48,6 +48,7 @@ import {
 } from './lick-manager.js';
 import { LickRegistry } from './lick-registry.js';
 import { LlmsTxtIgnorePolicy } from './llms-txt-ignore.js';
+import { ModelPolicyFile } from './model-policy-file.js';
 import { withMountHeartbeat } from './mount-heartbeat.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopApprovalRouter } from './scoop-approval-router.js';
@@ -162,6 +163,8 @@ export class Orchestrator implements ConeApprovalRouter {
   private sudoManager: SudoManager | null = null;
   /** Live /etc/llmstxtignore policy installed into the LickManager upstream gate. */
   private llmsTxtIgnorePolicy: LlmsTxtIgnorePolicy | null = null;
+  /** Live `/etc/models` loader — publishes the model access policy (#2195). */
+  private modelPolicyFile: ModelPolicyFile | null = null;
   /**
    * Owns the per-scoop `tabs` / `contexts` maps, the context-callback factory,
    * the fatal-error escalation, and the per-scoop event observers
@@ -392,6 +395,11 @@ export class Orchestrator implements ConeApprovalRouter {
     await this.sudoManager.init();
     this.llmsTxtIgnorePolicy = new LlmsTxtIgnorePolicy(this.sharedFs, this.fsWatcher);
     await this.llmsTxtIgnorePolicy.init();
+    // Seed + load `/etc/models` BEFORE any scoop is restored: the policy gates
+    // which provider a scoop may be spawned against, and an unloaded policy is
+    // closed (own catalogue only), so loading late would reject valid spawns.
+    this.modelPolicyFile = new ModelPolicyFile(this.sharedFs, this.fsWatcher);
+    await this.modelPolicyFile.init();
 
     const savedScoops = await db.getAllScoops();
 
@@ -937,6 +945,9 @@ export class Orchestrator implements ConeApprovalRouter {
     this.llmsTxtIgnorePolicy?.dispose();
     this.llmsTxtIgnorePolicy = new LlmsTxtIgnorePolicy(this.sharedFs, this.fsWatcher);
     await this.llmsTxtIgnorePolicy.init();
+    this.modelPolicyFile?.dispose();
+    this.modelPolicyFile = new ModelPolicyFile(this.sharedFs, this.fsWatcher);
+    await this.modelPolicyFile.init();
     this.lickManager?.setDiscoveryIgnore?.(
       (event) => this.llmsTxtIgnorePolicy?.ignores(event) ?? false
     );
@@ -1119,6 +1130,8 @@ export class Orchestrator implements ConeApprovalRouter {
     this.lickManager?.setDiscoveryIgnore?.(null);
     this.llmsTxtIgnorePolicy?.dispose();
     this.llmsTxtIgnorePolicy = null;
+    this.modelPolicyFile?.dispose();
+    this.modelPolicyFile = null;
     this.sudoManager?.dispose();
     this.sudoManager = null;
 

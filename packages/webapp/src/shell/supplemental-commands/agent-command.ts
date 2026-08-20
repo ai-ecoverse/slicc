@@ -113,10 +113,12 @@ Options:
                           against any other CONFIGURED provider that offers
                           it; matching several is an error listing the
                           qualified ids. The scoop runs on the provider the
-                          model was resolved from. An id that cannot be
-                          resolved exits 1 — it never falls back to the
-                          parent's model. Defaults to inheriting the parent's
-                          model.
+                          model was resolved from. A model from a provider
+                          other than the selected one must also be allowed in
+                          /etc/models; the error quotes the line to add. An id
+                          that cannot be resolved (or is not allowed) exits 1 —
+                          it never falls back to the parent's model. Defaults
+                          to inheriting the parent's model.
   --thinking <level>      Reasoning / thinking level for the spawned scoop.
                           One of: off, minimal, low, medium, high, xhigh.
                           Defaults to inheriting the parent's level (or 'off'

@@ -54,6 +54,22 @@ describe('SudoManager', () => {
     mgr.dispose();
   });
 
+  // #2195: /etc/models decides which provider:model combos a scoop may be
+  // spawned with — including models billed to a different account — so editing
+  // it is the one write the shipped template gates out of the box.
+  it('gates writes to /etc/models straight from the shipped template', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+
+    expect(matchPath(mgr.getPolicy(), 'write', '/etc/models')).toBe('require-approval');
+    // Reads stay open: the agent has to be able to explain a refusal.
+    expect(matchPath(mgr.getPolicy(), 'read', '/etc/models')).toBe('no-match');
+    // …and it remains the ONLY active rule in the template.
+    expect(matchCommand(mgr.getPolicy(), 'git push origin main')).toBe('no-match');
+    expect(matchPath(mgr.getPolicy(), 'write', '/workspace/notes.md')).toBe('no-match');
+    mgr.dispose();
+  });
+
   it('does not overwrite an existing /etc/sudoers', async () => {
     await vfs.mkdir('/etc', { recursive: true });
     await vfs.writeFile(SUDOERS_FILE, 'Cmnd  git push*\n');

@@ -904,6 +904,12 @@ intended price, silently (#2195, and its #1752 ancestor).
   it). Split it on the FIRST colon and only when the prefix names a real
   provider — model ids legitimately contain colons
   (`us.anthropic.claude-haiku-4-5-20251001-v1:0`).
+- Resolvable is not the same as permitted: `/etc/models` is an allow-list keyed
+  by the SELECTED provider, so cross-provider targeting is opt-in per provider
+  (a work account must not be spent by a stray `--model`). Enforce it on spawn
+  resolution; apply only its `-provider:model` denials to the picker and the
+  `models` command, or the user can no longer switch accounts from the UI. See
+  [`docs/approvals.md`](approvals.md#model-access-policy----etcmodels).
 
 ## Scoop Lifecycle
 

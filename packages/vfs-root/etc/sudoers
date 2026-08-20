@@ -32,6 +32,13 @@
 # generalized pattern is appended to /etc/sudoers.d/granted (auto-managed —
 # edit /etc/sudoers here for durable rules instead).
 #
+# The one rule active by default: /etc/models decides which provider:model
+# combinations a scoop may be spawned with, including models billed to an
+# account other than the selected one, so an agent that could rewrite it could
+# authorize its own spend. Reads stay ungated (it must be able to explain a
+# refusal). Delete this line to drop the prompt.
+Write /etc/models
+
 # ---------------------------------------------------------------------------
 # Example rules — uncomment and adapt to taste.
 # ---------------------------------------------------------------------------

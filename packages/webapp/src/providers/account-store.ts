@@ -28,6 +28,13 @@ import {
   getRegisteredProviderIds,
   shouldIncludeProvider,
 } from './index.js';
+import {
+  getActiveModelPolicy,
+  isModelAllowedByPolicy,
+  isModelDeniedByPolicy,
+  MODELS_POLICY_FILE,
+  policyHintFor,
+} from './model-policy.js';
 import type { CompatOverrides } from './types.js';
 
 export type { ProviderConfig } from './index.js';
@@ -582,6 +589,24 @@ function pickerVisible<T extends { id: string }>(models: T[]): T[] {
   return models.filter((m) => !isModelHiddenFromPicker(m.id));
 }
 
+/**
+ * Drop models an `/etc/models` `-provider:model` entry denies while the
+ * current provider is selected — a denied model must not be offered anywhere
+ * it could be picked or spawned.
+ *
+ * Only the DENY half of the policy is applied here. The cross-provider
+ * allow-list is not: it would empty every other account's group and leave the
+ * user unable to switch providers from the picker at all. Deliberately
+ * switching accounts is the user's call; spawning against another account is
+ * what the allow-list gates (see `providers/model-policy.ts`).
+ */
+export function policyVisible<T extends { id: string }>(models: T[], providerId: string): T[] {
+  const selected = safeSelectedProvider();
+  if (selected === null) return models;
+  const policy = getActiveModelPolicy();
+  return models.filter((m) => !isModelDeniedByPolicy(policy, selected, providerId, m.id));
+}
+
 /** Get models from all configured provider accounts, grouped by provider. */
 export function getAllAvailableModels(): GroupedModels[] {
   const accounts = getAccounts();
@@ -598,7 +623,10 @@ export function getAllAvailableModels(): GroupedModels[] {
     // account) must not surface models — pi's browser stream for them is
     // unsupported. Registered providers like `bedrock-camp` are unaffected.
     if (isBuildExcludedPiProvider(account.providerId)) continue;
-    const models = pickerVisible(getProviderModels(account.providerId));
+    const models = policyVisible(
+      pickerVisible(getProviderModels(account.providerId)),
+      account.providerId
+    );
     if (models.length === 0) continue;
     const group: GroupedModels = {
       providerId: account.providerId,
@@ -1917,9 +1945,52 @@ export function resolveModelSelectionForScoop(input: string): ScoopModelResoluti
   }
   if (selectedProvider !== null) {
     const selection = selectModelFromProvider(input, selectedProvider);
-    if (selection) return { ok: true, selection };
+    if (selection) return applyModelPolicy(selection);
   }
   return resolveCrossProviderSelection(input, selectedProvider);
+}
+
+/** The selected provider, or null when storage is unavailable. */
+function safeSelectedProvider(): string | null {
+  try {
+    return getSelectedProvider();
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Whether `/etc/models` permits spawning against this selection. A resolvable
+ * model is not automatically a permitted one: cross-provider targeting moves
+ * spend onto another account, so it is opt-in per selected provider (#2195).
+ */
+function policyPermits(selection: ScoopModelSelection): boolean {
+  const selected = safeSelectedProvider();
+  // No selected provider (storage fault) means no section to evaluate; the
+  // resolver already restricted the candidate to a configured provider's
+  // catalogue, so don't invent a denial on top of a broken localStorage.
+  if (selected === null) return true;
+  return isModelAllowedByPolicy(
+    getActiveModelPolicy(),
+    selected,
+    selection.providerId,
+    selection.modelId
+  );
+}
+
+/** The rejection for a resolvable model the policy does not permit. */
+function policyRejection(selection: ScoopModelSelection): ScoopModelResolution {
+  const selected = safeSelectedProvider() ?? '<none>';
+  const qualified = `${selection.providerId}:${selection.modelId}`;
+  return {
+    ok: false,
+    error: `model not allowed: ${qualified} is blocked by ${MODELS_POLICY_FILE} while "${selected}" is selected — ${policyHintFor(selected, selection.providerId, selection.modelId)}`,
+  };
+}
+
+/** Gate a resolved selection on `/etc/models`. */
+function applyModelPolicy(selection: ScoopModelSelection): ScoopModelResolution {
+  return policyPermits(selection) ? { ok: true, selection } : policyRejection(selection);
 }
 
 /** Validate a `provider:model` input against the named provider. */
@@ -1937,7 +2008,7 @@ function resolveQualifiedSelection(
     };
   }
   const selection = selectModelFromProvider(qualified.modelId, qualified.providerId);
-  if (selection) return { ok: true, selection };
+  if (selection) return applyModelPolicy(selection);
   return {
     ok: false,
     error: `unknown model: ${input} (provider "${qualified.providerId}" does not offer "${qualified.modelId}")`,
@@ -1956,14 +2027,20 @@ function resolveCrossProviderSelection(
 ): ScoopModelResolution {
   const others = configuredProviderIds().filter((id) => id !== selectedProvider);
   for (const tier of ['exact', 'shorthand'] as const) {
-    const matches: ScoopModelSelection[] = [];
+    const found: ScoopModelSelection[] = [];
     for (const providerId of others) {
       const candidate =
         tier === 'exact' ? input : bestShorthandMatch(input.toLowerCase(), [providerId]);
       if (candidate === null) continue;
       const selection = selectModelFromProvider(candidate, providerId, false);
-      if (selection) matches.push(selection);
+      if (selection) found.push(selection);
     }
+    // Judge ambiguity on what the policy actually permits: a model the user
+    // has not allowed must not make a permitted one ambiguous, and when every
+    // match is blocked the useful answer is the policy line to add — not
+    // "unknown model", which reads like a typo.
+    const matches = found.filter(policyPermits);
+    if (matches.length === 0 && found.length > 0) return policyRejection(found[0]);
     if (matches.length === 1) return { ok: true, selection: matches[0] };
     if (matches.length > 1) {
       return {

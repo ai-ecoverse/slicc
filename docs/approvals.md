@@ -84,8 +84,19 @@ Globs:
 Precedence: a matching `NOPASSWD` grant wins (no prompt); otherwise any plain
 match requires approval; no match is never gated.
 
-A fully commented-out default template ships on a fresh VFS
-(`packages/vfs-root/etc/sudoers`), so out of the box nothing extra prompts.
+A default template ships on a fresh VFS (`packages/vfs-root/etc/sudoers`). Every
+example rule in it is commented out; the one **active** rule is `Write /etc/models`
+— see [Model access policy](#model-access-policy----etcmodels) for why that file
+in particular is gated. Nothing else prompts out of the box.
+
+The template is only ever written to a _fresh_ filesystem, so an existing profile
+keeps its own `/etc/sudoers`. Rule changes reach it through `upgrade apply` (the
+upgrade lick's card), which three-way-merges `packages/vfs-root/etc/` — see the
+[upgrade skill](../packages/vfs-root/workspace/skills/upgrade/SKILL.md). Applying
+such a merge still raises an approval prompt of its own, because the shell runs on
+the FS-gated handle and `/etc/sudoers` is self-protected: the card authorizes the
+merge, the prompt authorizes the policy edit. A user who dismisses the card keeps
+their current policy.
 
 ### Self-protection (always on)
 
@@ -108,6 +119,47 @@ immediately — no restart:
 Command-level "Always" grants are persisted through the manager's raw-VFS sink
 (`getShellConfig().persistCommandGrant`) so the grant write to
 `/etc/sudoers.d/granted` does not itself trip self-protection.
+
+## Model access policy — `/etc/models`
+
+`agent --model` and `scoop_scoop` accept a `provider:model` id, so a scoop can be
+spawned on a provider OTHER than the selected one (#2195). That moves spend onto a
+different account — a work provider rather than a personal one — so which
+combinations are permitted is configured in `/etc/models`, keyed by the **selected**
+provider:
+
+```ini
+[adobe]                      # in force while `adobe` is selected
+openrouter:*                 # any openrouter model may be targeted
+anthropic:claude-opus-4-6    # …plus exactly this one
+-openrouter:openai/o3-pro    # …except this one
+-adobe:claude-opus-5         # and not adobe's own Opus 5 either
+```
+
+- The selected provider's **own** catalogue is always allowed — never list it —
+  until a `-` entry subtracts a model.
+- Every **other** provider's model needs an explicit allow entry. No file, or no
+  section for the selected provider, means own-models-only. A rejection quotes the
+  exact line to add.
+- A deny beats an allow, in any order. `provider:*` covers a whole catalogue.
+
+Two surfaces read it, deliberately differently:
+
+| Surface                                           | Applies                   |
+| ------------------------------------------------- | ------------------------- |
+| Spawn resolution (`agent --model`, `scoop_scoop`) | the whole policy          |
+| Model picker + `models` command                   | only explicit `-` denials |
+
+Applying the allow-list to the picker would hide every other account's models and
+leave the user unable to switch providers at all. Switching your own account is the
+user's call; spawning against another account behind their back is what is gated.
+
+`ModelPolicyFile` (scoops layer) seeds the template, parses the file and publishes
+the snapshot the synchronous resolvers read; it watches `/etc` for live reload, and
+fails **closed** — an unreadable or deleted policy falls back to own-models-only
+rather than keeping the last parse. Writes are gated by the shipped `Write
+/etc/models` sudoers rule: an agent that could rewrite this file could authorize its
+own spend. Reads stay ungated so the agent can explain a refusal.
 
 ### Architecture
 
@@ -394,19 +446,23 @@ Behavior:
 
 ### Files
 
-| Path                                                              | Role                                                                          |
-| ----------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `packages/webapp/src/base/sudoers.ts`                             | Parser + matcher + self-protection                                            |
-| `packages/webapp/src/sudo/sudo-manager.ts`                        | Live policy store + reload + broker                                           |
-| `packages/webapp/src/fs/sudo-fs.ts`                               | FS-level gate (`createSudoFs`)                                                |
-| `packages/webapp/src/shell/sudo/command-guard.ts`                 | Command-level gate                                                            |
-| `packages/webapp/src/shell/supplemental-commands/sudo-command.ts` | `sudo <cmd>` explicit-request surface                                         |
-| `packages/webapp/src/sudo/*-broker.ts`                            | Float-specific approval brokers                                               |
-| `packages/webapp/src/sudo/approval-timeout.ts`                    | 5-minute fail-closed wrap + `reason: 'timeout'` contract                      |
-| `packages/webapp/src/sudo/cone-broker.ts`                         | Cone-mediated broker + pending-request registry                               |
-| `packages/webapp/src/scoops/scoop-management-tools.ts`            | `sudo_request` / `lick_confirm` / `lick_dismiss` / `list_sudo_requests` tools |
-| `packages/node-server/src/sudo/`                                  | `/api/sudo-approve` + OS dialogs                                              |
-| `packages/vfs-root/etc/sudoers`                                   | Default commented-out template                                                |
+| Path                                                                 | Role                                                                          |
+| -------------------------------------------------------------------- | ----------------------------------------------------------------------------- |
+| `packages/webapp/src/base/sudoers.ts`                                | Parser + matcher + self-protection                                            |
+| `packages/webapp/src/sudo/sudo-manager.ts`                           | Live policy store + reload + broker                                           |
+| `packages/webapp/src/fs/sudo-fs.ts`                                  | FS-level gate (`createSudoFs`)                                                |
+| `packages/webapp/src/shell/sudo/command-guard.ts`                    | Command-level gate                                                            |
+| `packages/webapp/src/shell/supplemental-commands/sudo-command.ts`    | `sudo <cmd>` explicit-request surface                                         |
+| `packages/webapp/src/sudo/*-broker.ts`                               | Float-specific approval brokers                                               |
+| `packages/webapp/src/sudo/approval-timeout.ts`                       | 5-minute fail-closed wrap + `reason: 'timeout'` contract                      |
+| `packages/webapp/src/sudo/cone-broker.ts`                            | Cone-mediated broker + pending-request registry                               |
+| `packages/webapp/src/scoops/scoop-management-tools.ts`               | `sudo_request` / `lick_confirm` / `lick_dismiss` / `list_sudo_requests` tools |
+| `packages/node-server/src/sudo/`                                     | `/api/sudo-approve` + OS dialogs                                              |
+| `packages/vfs-root/etc/sudoers`                                      | Default template (only `Write /etc/models` active)                            |
+| `packages/webapp/src/shell/supplemental-commands/upgrade-command.ts` | Merges bundled `/etc` policy files into an existing profile                   |
+| `packages/webapp/src/providers/model-policy.ts`                      | `/etc/models` parser + evaluator + live snapshot                              |
+| `packages/webapp/src/scoops/model-policy-file.ts`                    | `/etc/models` seeding, loading, live reload                                   |
+| `packages/vfs-root/etc/models`                                       | Default model access policy template                                          |
 
 ---
 
