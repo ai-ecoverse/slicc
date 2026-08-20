@@ -1480,3 +1480,47 @@ OOM that is very hard to diagnose.
 The deep subpath `@slicc/webcomponents/composer/speech` exports only the interface
 and factory — no element-registration side effect — and is the only safe import path
 for any code that may run in a DOM-less realm.
+
+## Decorative rAF/WebGL Loops Must Budget Frames
+
+**The Incident**
+
+The `<slicc-shader>` full-viewport WebGL background ran an unconditional
+`requestAnimationFrame` loop at display rate. With the thin-extension leader
+tab _visible but backgrounded_ (the selected tab of a partially visible
+window — macOS occlusion marks a tab hidden only under 100% coverage), the
+loop never paused: ~44% GPU-process CPU + ~18% renderer CPU, continuously,
+while SLICC sat idle. Confirmed causal by removing the element live
+(44% → 2%). Two system facts made "the browser will throttle it" false:
+
+1. Chrome pauses rAF only for **hidden** pages — a visible-but-background
+   window renders at full rate.
+2. The leader tab holds an open WebRTC tray connection, which exempts it
+   from timer throttling and freezing — deliberately (a frozen leader kills
+   the tray), so nothing else reins a hot loop in either.
+
+**The Rule**
+
+Every decorative/ambient animation loop must carry a frame budget:
+
+- Ambient cadence capped well below display rate
+  (`packages/webcomponents/src/freezer/frame-budget.ts`, `AMBIENT_FPS = 15`),
+  with a short full-rate burst window for interactive stimuli.
+- A field with no intrinsic motion must render once per stimulus and STOP
+  its loop ("paused" attributes must actually pause the draw calls, not just
+  zero a uniform — `slicc-shader`'s `speed=0` originally still paid full
+  per-frame shader cost).
+- Stay on `requestAnimationFrame`. Timer-based scheduling
+  (`setTimeout`/`setInterval`) runs at full rate in the throttle-exempt
+  leader tab even when hidden.
+- Full-screen fragment work should default to a reduced backing-store
+  resolution (`dpr` cap 1) when it is a washed background rather than hero
+  content.
+- Park the scheduler entirely while the WebGL context is lost — rendering
+  no-ops then, but an animated mode would still spin an empty rAF loop.
+
+**Related Files**
+
+- `packages/webcomponents/src/freezer/frame-budget.ts` — shared gating logic
+- `packages/webcomponents/src/freezer/slicc-shader.ts` — reference consumer
+- `docs/webcomponents-details.md` — the companion no-reflow-per-frame rule

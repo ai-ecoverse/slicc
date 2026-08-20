@@ -218,7 +218,7 @@ Non-obvious rules:
   (`tests/switcher/manual-clock.ts`) instead of racing real timers. Timestamps
   use `null`, never `0`, for "not started": a clock may legitimately read 0.
 
-## Animation loops and forced reflow
+## Animation loops: no forced reflow, and a frame budget
 
 A `requestAnimationFrame` loop must never call `getComputedStyle` or read
 computed style/layout per frame — the regression that motivated this rule was
@@ -226,6 +226,20 @@ computed style/layout per frame — the regression that motivated this rule was
 values once and cache them; invalidate on attribute and theme changes via a
 `MutationObserver` on `<html>`/`<body>` `class`/`data-theme` plus a
 `prefers-color-scheme` listener, both torn down in `disconnectedCallback`.
+
+A decorative loop must also carry a **frame budget**
+(`src/freezer/frame-budget.ts`): ambient motion renders at `AMBIENT_FPS` (15 —
+the shader's fastest visible component is ~0.43 Hz, so this is still ~35x
+oversampled), interactive stimuli (pulse, attribute/theme/size changes) open a
+`BURST_MS` (800 ms) full-display-rate window, and a field with no intrinsic
+motion (cone glass at `speed=0`, `prefers-reduced-motion`) renders one frame
+per stimulus and stops its loop entirely. The regression that motivated THIS
+rule was `slicc-shader` again: its ungated 60 fps loop burned ~44% of Chrome's
+GPU process while the leader tab sat idle but visible in a background window —
+rAF only pauses for _hidden_ pages, and the tray's open WebRTC connection
+exempts the tab from every other throttle. Never move a decorative loop to
+`setTimeout`/`setInterval` for the same reason: timers keep firing in that tab
+even when it IS hidden; rAF is the only scheduler that pauses with visibility.
 
 ## Storybook PR screenshots
 
