@@ -461,10 +461,47 @@ jobs:
           sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc \
                       /opt/hostedtoolcache/CodeQL /usr/local/share/boost || true
           df -h /
-      - name: E2E tests
+      # Chromium for Playwright is ~170 MB per run; key on the pinned
+      # @playwright/test version so a bump re-downloads and nothing else does.
+      - name: Cache Playwright browsers
+        id: playwright-cache
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-chromium-${{ runner.os }}-${{ hashFiles('package-lock.json') }}
+          restore-keys: |
+            playwright-chromium-${{ runner.os }}-
+      - name: Install Playwright Chromium
         run: |
-          npx playwright install --with-deps chromium
-          npm run test:e2e
+          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
+            npx playwright install-deps chromium
+          else
+            npx playwright install --with-deps chromium
+          fi
+      # The speech leg stages ~92 MB of Kokoro weights through the virtual
+      # shell's `hf download`. Serve them from a disk-cached local mirror
+      # (`HF_ENDPOINT`) so a warm run never touches the CDN; the store is keyed
+      # on the spec, which pins the exact file list, with a prefix fallback.
+      - name: Cache Hugging Face mirror store
+        if: needs.changes.outputs.speech == 'true'
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: .cache/hf-mirror
+          key: hf-mirror-${{ hashFiles('packages/webapp/tests/e2e/speech-roundtrip.test.ts') }}
+          restore-keys: |
+            hf-mirror-
+      - name: Start Hugging Face caching mirror
+        if: needs.changes.outputs.speech == 'true'
+        run: |
+          mkdir -p .cache/hf-mirror
+          nohup node packages/dev-tools/tools/hf-cache-mirror.mjs \
+            --port 8791 --dir .cache/hf-mirror --ready-file .cache/hf-mirror.ready \
+            > .cache/hf-mirror.log 2>&1 &
+          for i in $(seq 1 50); do [ -f .cache/hf-mirror.ready ] && break; sleep 0.2; done
+          test -f .cache/hf-mirror.ready || { cat .cache/hf-mirror.log; exit 1; }
+          echo "HF_ENDPOINT=http://127.0.0.1:8791" >> "$GITHUB_ENV"
+      - name: E2E tests
+        run: npm run test:e2e
         env:
           # Surface wrangler's own diagnostics so a crash during workerd
           # cold-start doesn't reduce to an empty `X [ERROR]` in the Playwright
@@ -475,6 +512,9 @@ jobs:
           # Un-skip the real-Kokoro speech round-trip only when speech
           # surfaces changed; everywhere else the test self-skips.
           RUN_REAL_SPEECH_E2E: ${{ needs.changes.outputs.speech == 'true' && '1' || '' }}
+      - name: Mirror log
+        if: always() && needs.changes.outputs.speech == 'true'
+        run: cat .cache/hf-mirror.log || true
       - name: Upload Playwright artifacts
         # Playwright's report + trace + screenshots are the primary post-mortem
         # surface when the E2E job flakes. Without them a failure reduces to a

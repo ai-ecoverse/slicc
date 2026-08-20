@@ -281,6 +281,15 @@ test.describe('say -o WAV output (real kokoro)', () => {
     //    Without an explicit install the model loads and every voice lists
     //    fine, then synthesis fails on an espeak with zero languages:
     //    `Invalid language identifier: "en-us". Should be one of: .`
+    // CI runs a disk-cached huggingface.co mirror (`hf-cache-mirror.mjs`) and
+    // hands its origin over as HF_ENDPOINT; the virtual shell's `hf` reads the
+    // same variable, so the 92 MB of weights below come off the runner's
+    // actions/cache instead of the CDN on every warm run.
+    const hfEndpoint = process.env['HF_ENDPOINT'];
+    if (hfEndpoint) {
+      const exported = await exec(page, `export HF_ENDPOINT=${JSON.stringify(hfEndpoint)}`);
+      expect(exported.exitCode, `export HF_ENDPOINT stderr: ${exported.stderr}`).toBe(0);
+    }
     const pkgs = await exec(
       page,
       'cd /workspace && ipk add @huggingface/transformers onnxruntime-web kokoro-js espeak-ng'

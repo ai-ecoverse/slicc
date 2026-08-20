@@ -24,13 +24,33 @@ export interface DownloadFs {
 }
 
 const HF_HOST = ['huggingface', 'co'].join('.');
+/** Default hub origin; `HF_ENDPOINT` (the Hugging Face convention) overrides it. */
+export const DEFAULT_HF_ENDPOINT = `https://${HF_HOST}`;
 
-function hfApiUrl(repo: string, revision: string): string {
-  return `https://${HF_HOST}/api/models/${repo}/tree/${revision}?recursive=true`;
+/**
+ * Normalize an `HF_ENDPOINT` value to an origin-ish base URL (scheme + host +
+ * optional path, no trailing slash). Anything that is not an absolute
+ * http(s) URL falls back to the default so a typo cannot send weights
+ * requests to a relative path on the leader origin.
+ */
+export function resolveHfEndpoint(raw: string | undefined | null): string {
+  const trimmed = raw?.trim();
+  if (!trimmed) return DEFAULT_HF_ENDPOINT;
+  try {
+    const url = new URL(trimmed);
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') return DEFAULT_HF_ENDPOINT;
+    return url.href.replace(/\/+$/, '');
+  } catch {
+    return DEFAULT_HF_ENDPOINT;
+  }
 }
 
-function hfResolveUrl(repo: string, revision: string, file: string): string {
-  return `https://${HF_HOST}/${repo}/resolve/${revision}/${file}`;
+function hfApiUrl(endpoint: string, repo: string, revision: string): string {
+  return `${endpoint}/api/models/${repo}/tree/${revision}?recursive=true`;
+}
+
+function hfResolveUrl(endpoint: string, repo: string, revision: string, file: string): string {
+  return `${endpoint}/${repo}/resolve/${revision}/${file}`;
 }
 
 /**
@@ -87,9 +107,12 @@ export interface HfRepoFile {
 export async function listRepoTree(
   fetchFn: SecureFetch,
   repo: string,
-  revision: string
+  revision: string,
+  endpoint: string = DEFAULT_HF_ENDPOINT
 ): Promise<HfRepoFile[]> {
-  const resp = await fetchWithHostContext(fetchFn, hfApiUrl(repo, revision), { method: 'GET' });
+  const resp = await fetchWithHostContext(fetchFn, hfApiUrl(endpoint, repo, revision), {
+    method: 'GET',
+  });
   if (resp.status < 200 || resp.status >= 300) {
     throw new Error(`HF API ${resp.status} ${resp.statusText} for ${repo}@${revision}`);
   }
@@ -116,6 +139,7 @@ async function downloadOne(
   file: string,
   targetDir: string,
   force: boolean,
+  endpoint: string,
   declaredSize?: number
 ): Promise<{ status: 'downloaded' | 'skipped'; bytes: number }> {
   const destPath = `${targetDir}/${file}`;
@@ -136,7 +160,7 @@ async function downloadOne(
       // fall through to re-download
     }
   }
-  const resp = await fetchWithHostContext(fetchFn, hfResolveUrl(repo, revision, file), {
+  const resp = await fetchWithHostContext(fetchFn, hfResolveUrl(endpoint, repo, revision, file), {
     method: 'GET',
   });
   if (resp.status < 200 || resp.status >= 300) {
@@ -195,6 +219,11 @@ export interface DownloadHfRepoOptions {
   revision?: string;
   /** Re-download even when a same-byte-length file already exists. */
   force?: boolean;
+  /**
+   * Hub base URL (`HF_ENDPOINT`). Defaults to huggingface.co; CI points it at
+   * a local caching mirror (`packages/dev-tools/tools/hf-cache-mirror.mjs`).
+   */
+  endpoint?: string;
   progress?: HfRepoDownloadProgress;
 }
 
@@ -233,12 +262,13 @@ export class HfFileDownloadError extends Error {
 export async function downloadHfRepo(opts: DownloadHfRepoOptions): Promise<HfRepoDownloadResult> {
   const revision = opts.revision ?? 'main';
   const force = opts.force ?? false;
+  const endpoint = resolveHfEndpoint(opts.endpoint);
 
   let files = opts.files ?? [];
   /** Declared byte length per file, known only after a tree listing. */
   const declaredSizes = new Map<string, number>();
   if (files.length === 0) {
-    const tree = await listRepoTree(opts.fetch, opts.repo, revision);
+    const tree = await listRepoTree(opts.fetch, opts.repo, revision, endpoint);
     if (tree.length === 0) {
       throw new Error(`repo ${opts.repo}@${revision} has no files`);
     }
@@ -265,6 +295,7 @@ export async function downloadHfRepo(opts: DownloadHfRepoOptions): Promise<HfRep
         file,
         opts.targetDir,
         force,
+        endpoint,
         declaredSizes.get(file)
       );
     } catch (err) {
