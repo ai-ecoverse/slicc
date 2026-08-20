@@ -124,6 +124,19 @@ describe('Bash Tool', () => {
     expect(result.content).toContain('image dropped');
   });
 
+  it('keeps a single image that alone exceeds the budget (#2224 review)', async () => {
+    // The budget bounds accumulation, not one deliberately-requested image:
+    // `open --view --size high` on a photo can pass 1MB by itself, and dropping
+    // it would just move #2217's failure from "truncated" to "gone".
+    const huge = `<img:data:image/png;base64,${'A'.repeat(1200 * 1024)}>`;
+    await fs.writeFile('/huge.txt', `photo.png\n${huge}`);
+
+    const result = await bash.execute({ command: 'cat /huge.txt' });
+
+    expect(result.content).toContain(huge);
+    expect(result.content).not.toContain('image dropped');
+  });
+
   it('still truncates a marker-shaped run that is not a usable image (#2217)', async () => {
     // Prose quoting the syntax carries no payload, so it stays subject to the
     // text cap — exempting it would be a cap bypass.

@@ -13,6 +13,9 @@
  *     the request body has `stream: false` the same content is returned
  *     as a single `chat.completion` JSON.
  *   - `GET  /v1/models` — `{ data: [{ id, object, owned_by, ... }] }`.
+ *   - `GET  /__requests` — test-only; the `messages` array of each recent
+ *     `/v1/chat/completions` request, oldest first, so a scenario can assert
+ *     on what the agent sent.
  *   - `POST /__reset` — test-only control endpoint that rewinds the
  *     turn cursor + request counter (same effect as
  *     {@link FakeLlmServer.reset}). Lets a Playwright retry replay the
@@ -53,6 +56,9 @@ export interface StartOptions {
   host?: string;
 }
 
+/** Requests kept for `/__requests`; a scenario only ever inspects the tail. */
+const MAX_RECORDED_REQUESTS = 50;
+
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
@@ -71,6 +77,8 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
   let cursor = 0;
   let requestCount = 0;
   let lastUsedTurnIndex = -1;
+  /** Bounded ring of the message arrays this server was sent, oldest first. */
+  const recordedRequests: unknown[][] = [];
 
   const server = createServer((req, res) => {
     handleRequest(req, res).catch((err) => {
@@ -106,6 +114,14 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
       // with `fixture_overflow`. See `resetFakeLlm` + `reference-scenario`.
       resetState();
       writeJson(res, 200, { object: 'fake_llm.reset', cursor, requestCount });
+      return;
+    }
+    if (method === 'GET' && pathIs('/__requests')) {
+      // Test-only: what the agent actually put on the wire. Lets a scenario
+      // assert on the *request* — e.g. that a tool result carries an image
+      // block and not a wall of base64 (#2217) — rather than only on what
+      // the fixture scripted back.
+      writeJson(res, 200, { object: 'fake_llm.requests', requests: recordedRequests });
       return;
     }
     if (method === 'POST' && pathIs('/__fixture')) {
@@ -167,6 +183,8 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
   async function handleChatCompletions(req: IncomingMessage, res: ServerResponse): Promise<void> {
     requestCount += 1;
     const body = await readJsonBody(req);
+    recordedRequests.push(Array.isArray(body?.messages) ? body.messages : []);
+    if (recordedRequests.length > MAX_RECORDED_REQUESTS) recordedRequests.shift();
     const stream = body?.stream !== false;
     const latestUserMessage = extractLatestUserMessage(body);
     const picked = pickTurn(fixture, cursor, latestUserMessage);
@@ -190,6 +208,7 @@ export async function startFakeLlmServer(opts: StartOptions): Promise<FakeLlmSer
     cursor = 0;
     requestCount = 0;
     lastUsedTurnIndex = -1;
+    recordedRequests.length = 0;
   }
 
   function pickTurn(fx: Fixture, fromCursor: number, userMessage: string | null) {

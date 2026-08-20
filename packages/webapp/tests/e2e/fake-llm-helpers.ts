@@ -53,6 +53,28 @@ export async function resetFakeLlm(baseUrl: string = FAKE_LLM_BASE_URL): Promise
   }
 }
 
+/** One recorded `/v1/chat/completions` request: its `messages` array. */
+export type RecordedRequest = Array<{ role: string; content?: unknown }>;
+
+/**
+ * Read what the agent actually sent the provider, oldest request first.
+ *
+ * The scripted fixture proves what came *back*; this proves what went *out* —
+ * the only place a scenario can assert that a tool result reached the model as
+ * the intended payload (e.g. an image, not a wall of base64: #2217).
+ */
+export async function readFakeLlmRequests(
+  baseUrl: string = FAKE_LLM_BASE_URL
+): Promise<RecordedRequest[]> {
+  const origin = baseUrl.replace(/\/v1\/?$/, '');
+  const res = await fetch(`${origin}/__requests`);
+  if (!res.ok) {
+    throw new Error(`readFakeLlmRequests: HTTP ${res.status} at ${origin}/__requests`);
+  }
+  const body = (await res.json()) as { requests?: RecordedRequest[] };
+  return body.requests ?? [];
+}
+
 /**
  * Swap the fake-LLM server's active fixture at runtime. The shared E2E
  * `webServer` boots with the default reference-scenario fixture; a test whose

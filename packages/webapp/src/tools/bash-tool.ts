@@ -52,13 +52,20 @@ const BASH_LICK_PREVIEW_MAX_BYTES = 2 * 1024;
 const BASH_OUTPUT_MAX_BYTES = 40 * 1024;
 
 /**
- * Budget for `<img:…>` markers carried past {@link BASH_OUTPUT_MAX_BYTES}.
+ * Budget for *accumulated* `<img:…>` markers carried past
+ * {@link BASH_OUTPUT_MAX_BYTES}.
+ *
  * Markers are exempt from the text cap — a tail truncation that cuts through
  * one destroys it, so the model gets the base64 tail and no image, and the
- * chat row loses the inline preview too (#2217). They still need a bound of
- * their own: `open --view --size medium` is ~270 KB, and a loop over a
- * directory of screenshots would otherwise dwarf the text cap it bypassed.
- * Newest markers win, matching the tail-keeping convention for text.
+ * chat row loses the inline preview too (#2217). Accumulation still needs a
+ * bound: `open --view --size medium` is ~270 KB, and a loop over a directory
+ * of screenshots would otherwise dwarf the text cap it bypassed. Newest
+ * markers win, matching the tail-keeping convention for text.
+ *
+ * This is NOT a per-image ceiling. The newest marker is always kept, however
+ * large — a single `open --view --size high` on a photo can exceed 1MB on its
+ * own, and dropping it would just relocate #2217's failure. The real ceiling
+ * for one image is `processImageContent`'s 5MB API limit.
  */
 const BASH_IMAGE_MARKER_MAX_BYTES = 1024 * 1024;
 
@@ -83,12 +90,16 @@ function liftImageMarkers(output: string): { text: string; markers: Map<string, 
   if (found.length === 0) return { text: output, markers: new Map() };
 
   // Walk newest-first so the byte budget keeps the tail of the image stream,
-  // matching the tail-keeping convention for text.
+  // matching the tail-keeping convention for text. The newest marker is kept
+  // unconditionally: one deliberately-requested `open --view --size high` can
+  // exceed the budget by itself, and dropping it would just relocate the bug
+  // this budget sits next to. `processImageContent`'s 5MB API limit is the
+  // real ceiling for a single image; this budget only bounds *accumulation*.
   const keptIndices = new Set<number>();
   let budget = BASH_IMAGE_MARKER_MAX_BYTES;
   for (let i = found.length - 1; i >= 0; i--) {
     const size = found[i].marker.length;
-    if (size > budget) break;
+    if (size > budget && keptIndices.size > 0) break;
     budget -= size;
     keptIndices.add(i);
   }
@@ -103,9 +114,9 @@ function liftImageMarkers(output: string): { text: string; markers: Map<string, 
       markers.set(key, m.marker);
       text += key;
     } else {
-      text += `[image dropped: image output is capped at ${
+      text += `[image dropped: a newer image in this command used up the ${
         BASH_IMAGE_MARKER_MAX_BYTES / 1024
-      }KB per command and the newest images are kept]`;
+      }KB image budget. View it on its own to see it.]`;
     }
     lastIndex = m.index + m.marker.length;
   });

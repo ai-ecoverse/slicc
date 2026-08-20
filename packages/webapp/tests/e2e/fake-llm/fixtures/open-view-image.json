@@ -1,0 +1,30 @@
+{
+  "model": "fake-viewer",
+  "turns": [
+    {
+      "whenUserMessageMatches": "make a noisy image",
+      "content": "Generating a deterministic noise PNG in the VFS.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": {
+            "command": "mkdir -p /workspace/viewtest; node -e \"const S=512;const c=new OffscreenCanvas(S,S);const x=c.getContext('2d');const d=x.createImageData(S,S);let s=1234567;for(let i=0;i<d.data.length;i+=4){s=(s*1103515245+12345)>>>0;d.data[i]=s&255;d.data[i+1]=(s>>>8)&255;d.data[i+2]=(s>>>16)&255;d.data[i+3]=255;}x.putImageData(d,0,0);const b=await c.convertToBlob({type:'image/png'});const buf=new Uint8Array(await b.arrayBuffer());require('fs').writeFileSync('/workspace/viewtest/noise.png',buf);console.log('bytes '+buf.length);\"; ls -l /workspace/viewtest"
+          }
+        }
+      ]
+    },
+    { "content": "Done. Wrote noise.png." },
+    {
+      "whenUserMessageMatches": "show me the image",
+      "content": "Viewing it.",
+      "tool_calls": [
+        {
+          "name": "bash",
+          "arguments": { "command": "open --view --size medium /workspace/viewtest/noise.png" }
+        }
+      ]
+    },
+    { "content": "I can see the noise image." }
+  ],
+  "onOverflow": "error"
+}
