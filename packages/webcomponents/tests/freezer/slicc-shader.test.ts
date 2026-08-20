@@ -202,6 +202,98 @@ describe('slicc-shader', () => {
       getExtensionSpy.mockRestore();
     }
   });
+
+  describe('frame budget', () => {
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    /** Count WebGL draw calls from the moment of installation. */
+    const spyDraws = () => vi.spyOn(WebGLRenderingContext.prototype, 'drawArrays');
+
+    afterEach(() => vi.restoreAllMocks());
+
+    it('renders ambient motion on the 15fps budget, not at display rate', async () => {
+      const el = mount({ mode: 'scoop' }); // scoop animates unconditionally
+      if (el.noWebgl) return; // CSS-fallback host: nothing to measure
+      await wait(50); // let the first frame land
+      const spy = spyDraws();
+      await wait(1500);
+      // 1500ms at 15fps ≈ 23 draws. Upper bound 30 (= 20fps average) rejects a
+      // 30fps or 60fps regression while tolerating rAF jitter; lower bound
+      // tolerates heavily-throttled CI. Do not tighten either bound.
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(5);
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(30);
+    });
+
+    it('cone with speed=0 renders once and stops', async () => {
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await wait(150); // settle: connect renders exactly one frame
+      const spy = spyDraws();
+      await wait(250);
+      expect(spy.mock.calls.length).toBe(0);
+    });
+
+    it('an attribute change re-renders a static field', async () => {
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await wait(150);
+      const spy = spyDraws();
+      el.setAttribute('scroll', '120');
+      await wait(120);
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('pulse() wakes a static field and it re-stops after the energy decays', async () => {
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await wait(150);
+      const spy = spyDraws();
+      // 0.0011 falls below the 0.001 rest floor after ~2 rendered frames, so
+      // decay completes fast even on a throttled CI rAF.
+      el.pulse(0.0011);
+      await wait(200);
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
+      // Poll until the draw count is stable across a 250ms window (decay done),
+      // then assert it stays stable for one more window.
+      let settled = spy.mock.calls.length;
+      for (let i = 0; i < 20; i++) {
+        await wait(250);
+        const next = spy.mock.calls.length;
+        if (next === settled) break;
+        settled = next;
+      }
+      await wait(250);
+      expect(spy.mock.calls.length).toBe(settled);
+    });
+
+    it('switching an animated field into cone speed=0 settles to a stopped loop', async () => {
+      const el = mount({ mode: 'scoop' });
+      if (el.noWebgl) return;
+      await wait(100);
+      el.setAttribute('speed', '0');
+      el.setAttribute('mode', 'cone');
+      await wait(900); // outlast the attribute-change burst window
+      const spy = spyDraws();
+      await wait(250);
+      expect(spy.mock.calls.length).toBe(0);
+    });
+
+    it('ignores stimuli while the WebGL context is lost', async () => {
+      const el = mount({ mode: 'scoop' });
+      if (el.noWebgl) return;
+      await wait(100);
+      const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+      const gl = canvas.getContext('webgl') as WebGLRenderingContext;
+      const lose = gl.getExtension('WEBGL_lose_context');
+      if (!lose) return; // extension unavailable: nothing to exercise
+      lose.loseContext();
+      await wait(100); // let the webglcontextlost event land
+      const spy = spyDraws();
+      el.pulse();
+      el.setAttribute('scroll', '50');
+      await wait(250);
+      expect(spy.mock.calls.length).toBe(0);
+    });
+  });
 });
 
 describe('slicc-shader program cache + immediate repaint (anti-flicker)', () => {

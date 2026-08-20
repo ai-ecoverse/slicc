@@ -475,7 +475,18 @@ Contract note (spec §Design): under reduced motion, multiple `pulse()` calls in
 with
 
 ```
-      this.#ro = new ResizeObserver(() => this.#wake({ burst: true }));
+      // ResizeObserver delivers a mandatory initial notification on observe();
+      // that is a mount artifact, not a user resize — bursting on it would open
+      // an 800 ms full-rate window on every connect (the connect render via
+      // #wake() already paints the initial size). Skip exactly one.
+      let initial = true;
+      this.#ro = new ResizeObserver(() => {
+        if (initial) {
+          initial = false;
+          return;
+        }
+        this.#wake({ burst: true });
+      });
 ```
 
 In `#observeTheme` (4-space indent, 6-space body), replace
@@ -624,7 +635,7 @@ with
 - [ ] **Step 4: Run the full shader suite**
 
 Run: `npm run test -w @slicc/webcomponents -- tests/freezer/slicc-shader.test.ts`
-Expected: PASS — all 29 pre-existing + 6 new. If `renders ambient motion` is flaky-low on your machine, the loop is over-gated (check `FRAME_EPSILON_MS` wiring); if flaky-high, bursts are leaking (check that `connectedCallback` and the mode-switch branch wake WITHOUT burst).
+Expected: PASS — all 29 pre-existing + 6 new. If `renders ambient motion` is flaky-low on your machine, the loop is over-gated (check `FRAME_EPSILON_MS` wiring); if flaky-high, bursts are leaking (check that `connectedCallback` and the mode-switch branch wake WITHOUT burst, AND that the ResizeObserver initial notification is skipped — it fires once on every observe()).
 
 - [ ] **Step 5: Run the frame-budget tests and typecheck**
 
