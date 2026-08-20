@@ -4,9 +4,9 @@
     "patchedVersion": "2.6.2",
     "upstream": "https://github.com/zen-fs/core",
     "issue": null,
-    "reason": "Make globalThis.__zenfs__ a null-prototype own-property copy of fs (Object.assign(Object.create(null), fs)) instead of a prototype view, so the fs export's enumerable members are reliably visible on the global probe. ALSO (#2146): VCache.ref coalesced DIFFERENT paths onto one vnode when their inodes shared an ino (poisoned indexes carry many ino-0 entries) — the shared inode object cross-stamps size/mode between unrelated files. The patch refuses cross-path coalescing when ino is 0 or the format bits differ (hardlinks share both a real ino and a mode, so they still coalesce).",
+    "reason": "Make globalThis.__zenfs__ a null-prototype own-property copy of fs (Object.assign(Object.create(null), fs)) instead of a prototype view, so the fs export's enumerable members are reliably visible on the global probe. ALSO (#2146): VCache.ref coalesced DIFFERENT paths onto one vnode when their inodes shared an ino (poisoned indexes carry many ino-0 entries) — the shared inode object cross-stamps size/mode between unrelated files. The patch refuses cross-path coalescing unless the inodes are a genuine hardlink: ino must be nonzero, format bits must match, AND nlink must be > 1 on both sides (#2034). A duplicated real ino with nlink 1 is a poisoned index, not a link — and because every vnode also owns its sparse data cache, two colliding paths open at once returned each other's bytes (8 parallel preview fetches all served the entry file; sequential reads evicted the vnode between calls and were correct).",
     "removeWhen": "Local workaround — no upstream PR is tracked. Re-evaluate whenever @zenfs/core changes the __zenfs__ global or the fs export shape; if a newer version no longer needs the override, remove the patch.",
-    "verify": "npm run test -w @slicc/webapp -- zenfs-ino-collision-patch"
+    "verify": "npm run test -w @slicc/webapp -- zenfs-ino-collision-patch virtual-fs-concurrent-read"
   },
   "@zenfs/dom": {
     "patchedVersion": "1.2.10",

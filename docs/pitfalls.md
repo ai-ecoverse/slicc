@@ -434,6 +434,19 @@ enforced by `patches/@zenfs+dom+*.patch`:
   mechanism behind the long-standing "phantom deletions" in `/workspace`
   (files a `git` checkout reports as deleted that will not go away).
 
+**Concurrent reads are only as safe as the inode numbers.** ZenFS keys its
+vnode cache by `ino`, and every vnode owns a sparse data cache. Two paths whose
+inodes share an ino while both are open therefore share one vnode — and the
+second reader is served the first file's cached bytes. That was #2034: eight
+parallel `/preview/*` fetches of distinct `dist/*.js` chunks all returned the
+entry file, while sequential fetches were byte-correct because the vnode is
+evicted on the last `unref` between calls. The ino floods came from the #2146
+minting bugs; `patches/@zenfs+core+*.patch` now lets `VCache.ref` share a vnode
+across paths **only for a genuine hardlink** (nonzero ino, matching format bits,
+`nlink > 1` on both sides — `IndexFS.link` is `ENOSYS` on OPFS anyway). Callers
+do not need to serialize reads; `preview-vfs-responder` keeps its queue only as
+defense in depth. Regression: `tests/fs/virtual-fs-concurrent-read.test.ts`.
+
 ## CDP Transport: Extension Mode
 
 **File**: `packages/webapp/src/cdp/extension-bridge-transport.ts`

@@ -9,23 +9,30 @@ index 555af55..e88a5b9 100644
 -globalThis.__zenfs__ = Object.create(fs);
 +globalThis.__zenfs__ = Object.assign(Object.create(null), fs);
 diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
-index e978bba..c34939b 100644
+index e978bba..0e00a9e 100644
 --- a/node_modules/@zenfs/core/dist/vfs/vcache.js
 +++ b/node_modules/@zenfs/core/dist/vfs/vcache.js
-@@ -76,6 +76,20 @@ export class VCache {
+@@ -76,6 +76,27 @@ export class VCache {
       */
      ref(path, inode) {
          let node = this.byIno.get(inode.ino);
-+        // PATCH(#2146): never coalesce DIFFERENT paths onto one vnode via a
-+        // zero/unset ino, or across differing format bits. Hardlinks share a
-+        // real ino AND a mode; a poisoned index (thousands of ino-0 entries
-+        // observed in the field) must not make unrelated files share an
-+        // inode object — the shared vnode stamps one file's size/mode onto
-+        // the other path on sync.
++        // PATCH(#2146, #2034): never coalesce DIFFERENT paths onto one vnode
++        // unless they are a genuine hardlink. Hardlinks share a real ino, a
++        // mode, AND carry nlink > 1; anything else with a matching ino is a
++        // poisoned index (ino-0 floods and duplicated ids both observed in
++        // the field). A shared vnode shares its inode object (stamping one
++        // file's size/mode onto the other on sync) and its data cache —
++        // which is why concurrent reads of two colliding paths returned the
++        // same bytes (#2034): the second open found the first file's vnode
++        // and its cached regions, while sequential reads evicted the vnode
++        // between calls and never collided.
 +        if (node && !node.paths.has(path)
-+            && (inode.ino === 0 || ((node.inode.mode ^ inode.mode) & 0o170000) !== 0)) {
-+            // The byIno slot may have been claimed by ANOTHER ino-0 path; a
-+            // re-ref of an already-known path must still find its own vnode.
++            && (inode.ino === 0
++                || inode.nlink <= 1
++                || node.inode.nlink <= 1
++                || ((node.inode.mode ^ inode.mode) & 0o170000) !== 0)) {
++            // The byIno slot may have been claimed by ANOTHER colliding path;
++            // a re-ref of an already-known path must still find its own vnode.
 +            node = this.byPath.get(path);
 +            if (node && ((node.inode.mode ^ inode.mode) & 0o170000) !== 0)
 +                node = undefined;
