@@ -31,11 +31,15 @@ vi.mock('../../src/sudo/http-broker.js', () => ({
 // prompt to a tray follower before the OS dialog fires; the wrapper tags the
 // inner id so the selection assertions below stay about the inner broker.
 vi.mock('../../src/sudo/tray-first-broker.js', () => ({
-  createTrayFirstSudoBroker: vi.fn((inner: { __id: string }) => ({
-    requestApproval: vi.fn(),
-    __id: inner.__id,
-    __trayFirst: true,
-  })),
+  createTrayFirstSudoBroker: vi.fn(
+    (inner: { __id: string; requestApproval: (...args: unknown[]) => unknown }) => ({
+      // Forward like the real wrapper so the timeout wrap above still sees a
+      // hanging inner prompt.
+      requestApproval: (...args: unknown[]) => inner.requestApproval(...args),
+      __id: inner.__id,
+      __trayFirst: true,
+    })
+  ),
 }));
 
 let delegateId: string | null = null;
@@ -47,8 +51,8 @@ import { USER_SUDO_TIMEOUT_MS } from '../../src/sudo/approval-timeout.js';
 import { createExtensionSudoBroker } from '../../src/sudo/extension-broker.js';
 import { createHttpSudoBroker } from '../../src/sudo/http-broker.js';
 import { createSudoBroker } from '../../src/sudo/index.js';
-import { createTrayFirstSudoBroker } from '../../src/sudo/tray-first-broker.js';
 import { createPanelRpcSudoBroker } from '../../src/sudo/panel-rpc-broker.js';
+import { createTrayFirstSudoBroker } from '../../src/sudo/tray-first-broker.js';
 
 const ORIGINAL_CHROME = (globalThis as { chrome?: unknown }).chrome;
 
