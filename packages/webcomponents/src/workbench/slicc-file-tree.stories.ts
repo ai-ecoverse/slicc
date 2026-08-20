@@ -311,3 +311,58 @@ export const Search: Story = {
     return wrap;
   },
 };
+
+/**
+ * Build the tree at a pinned rail width, for reviewing responsive behaviour.
+ *
+ * The tree no longer pins itself to the old fixed 190px — it fills whatever the
+ * surrounding layout gives it (the `files` panel declares `minWidth: 220`, and
+ * the dock zone is user-resizable), so the widths worth reviewing are the ends
+ * of that range rather than one canonical number.
+ */
+function buildAtWidth(width: string, note: string): HTMLElement {
+  const wrap = document.createElement('div');
+  wrap.style.cssText =
+    'display:flex;align-items:stretch;height:340px;font-family:var(--ui);color:var(--ink);background:var(--canvas);';
+
+  const rail = document.createElement('div');
+  rail.style.cssText = `width:${width};flex:0 0 auto;min-width:0;display:flex;`;
+
+  const tree = document.createElement('slicc-file-tree') as SliccFileTree;
+  tree.items = PROTOTYPE_ITEMS;
+  tree.gitStatus = [
+    { path: 'workspace/components/hero.tsx', status: 'modified' },
+    { path: 'workspace/components/ui/button.tsx', status: 'added' },
+    { path: 'workspace/nav.tsx', status: 'deleted' },
+  ];
+  rail.appendChild(tree);
+
+  const panel = document.createElement('div');
+  panel.style.cssText =
+    'flex:1;padding:14px 16px;font-size:12.5px;line-height:1.6;color:var(--txt-2);';
+  panel.textContent = note;
+
+  wrap.append(rail, panel);
+  return wrap;
+}
+
+/**
+ * Narrow rail (200px) — near the low end of the resizable range. Long names
+ * elide rather than overflowing, the size and git-status decorations stay
+ * pinned to the right edge, and indentation still reads.
+ */
+export const NarrowRail: Story = {
+  args: {},
+  render: () =>
+    buildAtWidth('200px', 'Narrow rail: 200px — names elide, decorations hold the right edge.'),
+};
+
+/**
+ * Wide rail (420px) — what a user gets after dragging the dock divider out.
+ * Rows keep their left alignment instead of stretching, and the extra width
+ * goes to showing more of each name.
+ */
+export const WideRail: Story = {
+  args: {},
+  render: () => buildAtWidth('420px', 'Wide rail: 420px — extra width reveals more of each name.'),
+};

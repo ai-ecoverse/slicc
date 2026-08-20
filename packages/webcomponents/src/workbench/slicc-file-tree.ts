@@ -104,6 +104,45 @@ const TREE_CSS = `
 `;
 
 /**
+ * Host chrome for the light-DOM element.
+ *
+ * The hand-rolled tree pinned itself to `width: 190px; flex: 0 0 auto` — a rail
+ * that was always exactly that wide regardless of the space it was given. This
+ * fills its container instead, because the surrounding layout already knows the
+ * right width (the `files` panel declares `minWidth: 220`, and the dock zone is
+ * user-resizable) and a virtualized tree is happy at any of them. The rest of
+ * the old chrome — the divider, the padding, border-box sizing — is preserved.
+ *
+ * `min-width: 0` matters: without it the host refuses to shrink below its
+ * content in a flex row, and a narrow rail overflows instead of eliding.
+ */
+const HOST_STYLE = `
+slicc-file-tree {
+  display: block;
+  box-sizing: border-box;
+  width: 100%;
+  min-width: 0;
+  height: 100%;
+  min-height: 0;
+  overflow: hidden;
+  border-right: 1px solid var(--line);
+  font-family: var(--ui);
+  font-size: 13px;
+}
+`;
+
+const STYLE_ID = 'slicc-file-tree-style';
+
+/** Inject the host stylesheet into a document once (idempotent). */
+function ensureFileTreeStyle(doc: Document): void {
+  if (doc.getElementById(STYLE_ID)) return;
+  const style = doc.createElement('style');
+  style.id = STYLE_ID;
+  style.textContent = HOST_STYLE;
+  (doc.head ?? doc.documentElement).appendChild(style);
+}
+
+/**
  * Narrow an item handle to the directory half of the union.
  *
  * The library discriminates with `isDirectory(): true | false`, which TypeScript
@@ -227,6 +266,7 @@ export class SliccFileTree extends HTMLElement {
   }
 
   connectedCallback(): void {
+    ensureFileTreeStyle(this.ownerDocument);
     if (!this.#mount) {
       this.#mount = document.createElement('div');
       this.#mount.style.cssText = 'display:flex;flex-direction:column;height:100%;min-height:0;';
