@@ -390,6 +390,22 @@ describe('headless leader parks the prompt until a capable follower arrives', ()
     expect(await pending).toEqual({ decision: 'allow', attestation: 'biometric' });
   });
 
+  it('re-delivers the prompt WITH its scoop label to a phone that reconnects after the push', async () => {
+    const { manager } = makeLeader({ headlessLeader: true });
+    const pending = manager.delegateSudoApproval(REQUEST, { scoopName: 'Researcher' });
+    await flush();
+    const phone = addFollower(manager, 'phone', { sudoApproval: true, biometric: true });
+    await flush();
+    const prompt = phone.find<{ requestId: string; scoopName?: string }>('sudo.approve.request');
+    expect(prompt?.scoopName).toBe('Researcher');
+    phone.simulate({
+      type: 'sudo.approve.response',
+      requestId: prompt?.requestId ?? '',
+      decision: 'deny',
+    } as FollowerToLeaderMessage);
+    expect(await pending).toEqual({ decision: 'deny' });
+  });
+
   it('keeps waiting when the only prompted follower drops, then times out', async () => {
     vi.useFakeTimers();
     const { manager } = makeLeader({ headlessLeader: true });

@@ -36,6 +36,8 @@ export const SUDO_DELEGATION_TIMEOUT_MS = 5 * 60 * 1000;
 interface PendingDelegation {
   requestId: string;
   request: SudoRequest;
+  /** Requesting scoop's label; rides on every prompt, including late re-deliveries. */
+  scoopName?: string;
   /** Followers that currently hold an open prompt for this request. */
   prompted: Set<string>;
   expiresAt: number;
@@ -101,7 +103,8 @@ export class SudoDelegation {
     return new Promise<SudoDecision>((resolve) => {
       const entry: PendingDelegation = {
         requestId,
-        request: { ...request, ...(opts.scoopName ? {} : {}) },
+        request,
+        scoopName: opts.scoopName,
         prompted: new Set(),
         expiresAt,
         timer: setTimeout(() => {
@@ -112,14 +115,13 @@ export class SudoDelegation {
       };
       this.pending.set(requestId, entry);
 
-      const scoopName = opts.scoopName;
       for (const bootstrapId of this.capableFollowers()) {
-        this.prompt(entry, bootstrapId, scoopName);
+        this.prompt(entry, bootstrapId);
       }
 
       // Wake suspended phones. Metadata only — the request itself travels over
       // the data channel once the phone reconnects.
-      this.sendPush(request, requestId, scoopName);
+      this.sendPush(request, requestId, entry.scoopName);
 
       if (entry.prompted.size === 0 && this.context.options.headlessLeader !== true) {
         // A leader with a human of its own only delegates when someone is
@@ -197,9 +199,10 @@ export class SudoDelegation {
     this.settle(requestId, verdict, bootstrapId);
   }
 
-  private prompt(entry: PendingDelegation, bootstrapId: string, scoopName?: string): void {
+  private prompt(entry: PendingDelegation, bootstrapId: string): void {
     const follower = this.context.followers.followers.get(bootstrapId);
     if (!follower) return;
+    const scoopName = entry.scoopName;
     const sent = follower.sync.send({
       type: 'sudo.approve.request',
       requestId: entry.requestId,

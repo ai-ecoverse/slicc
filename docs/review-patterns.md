@@ -372,14 +372,19 @@ Changes to export-service, redaction logic, or the Cherry/follower export protoc
 - `privacy.reasoningExcluded` must always be `true`. Any path that can produce an export with
   a reasoning block is a Critical finding.
 - Binary attachments go through unchanged — confirm no text-redaction step touches them.
-- Approval gate: every follower/Cherry export path must call `openTranscriptExportApproval()`
-  before streaming. A bypass is Critical.
-- Approval semantics: **one-time per request** — no "Always allow" option.
+- Approval gate: every follower/Cherry export path must go through the sudo funnel —
+  `requestSudoApproval({ kind: 'export', detail: <subject> })` → `SudoManager.approve()` —
+  before streaming. A bypass, or a second export path that raises its own dialog, is Critical.
+- Approval semantics: an export is **always gated**; the only way to skip the prompt is an
+  explicit `NOPASSWD Export <glob>` sudoers grant (written by "Always" on the prompt, subject
+  `active` / `frozen:<sessionId>`). There is no "no match means ungated" for `Export`.
 - Approval **reachability**: a gate is only real if a human can answer it. A leader with
-  `kind: 'hosted'` (cloud) is headless — it delegates the prompt to the requesting follower via
-  `transcript.export.approve.request`. When touching approval code, check it still resolves in
-  _both_ realms, and that every failure path (timeout, disconnect, unwired handler, throw)
-  denies rather than hangs.
+  `kind: 'hosted'` (cloud) is headless — `shouldDelegateSudo()` routes the prompt to a
+  `sudoApproval`-capable follower via `sudo.approve.request` (the iOS card behind Face ID, or the
+  web follower's `<slicc-dialog>`), parking it and push-waking phones when nobody is connected.
+  `always` is honoured only from `biometric` followers. When touching approval code, check it
+  still resolves in _every_ realm, and that every failure path (timeout, disconnect, unwired
+  handler, throw, malformed reply) denies rather than hangs.
 - Approval **lifecycle**: a consent dialog must not outlive the request it authorizes. Prompt
   only for a request that is still in flight, pass an `AbortSignal` that closes the dialog on
   every terminal outcome, and report a post-settlement verdict as a denial. A stale prompt whose

@@ -47,13 +47,13 @@ export interface SudoDecision {
    * Deliberately a field rather than a fourth `decision` value: every consumer
    * branches on `decision === 'deny'`, so a new variant would fail OPEN.
    */
+  reason?: SudoTimeoutReason;
   /**
    * Which gate the human passed when the decision came from a delegated tray
    * follower: `biometric` (Face ID / Touch ID), `passcode`, or `none` (a plain
    * click). Absent for native brokers. Informational.
    */
   attestation?: 'biometric' | 'passcode' | 'none';
-  reason?: SudoTimeoutReason;
 }
 
 /** Which approval leg ran out of time. See {@link SudoDecision.reason}. */
