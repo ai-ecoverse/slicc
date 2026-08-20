@@ -19,6 +19,7 @@
  */
 
 import '../../shims/buffer-polyfill.js';
+import { readSliccVersion } from '../../base/slicc-version.js';
 import { createNodeReadline } from './helpers/node-readline.js';
 import { createHttpGlobal } from './http-global.js';
 import { createCli, createColor, createNodeChildProcess } from './js-realm-helpers.js';
@@ -162,10 +163,32 @@ function installSyncBridges(
   });
 }
 
-/** `globalThis` narrowed to the realm-internal WASM compile bridge hook. */
+/**
+ * `globalThis` narrowed to the realm-internal WASM compile bridge hook and the
+ * `SLICC_VERSION` capability marker realm scripts read (see `installSliccVersion`).
+ */
 type GlobalWithWasmCompile = typeof globalThis & {
   __slicc_compileWasm?: (path: string) => Promise<WebAssembly.Module>;
+  SLICC_VERSION?: string;
 };
+
+/**
+ * Publish the running SLICC version as `globalThis.SLICC_VERSION` so a skill or
+ * script can gate on a capability without shelling out to `uname -r`. Same
+ * single source as `uname` and `upgrade status`: `__SLICC_VERSION__`, baked
+ * from the root `package.json` at build time. Non-enumerable and read-only so
+ * user code can't leave a forged version behind for the next realm on a
+ * globalThis the host also owns.
+ */
+export function installSliccVersion(target: typeof globalThis = globalThis): void {
+  if (Object.prototype.hasOwnProperty.call(target, 'SLICC_VERSION')) return;
+  Object.defineProperty(target, 'SLICC_VERSION', {
+    value: readSliccVersion().version,
+    writable: false,
+    enumerable: false,
+    configurable: false,
+  });
+}
 
 /**
  * Build the realm's `c` / `cli` pair. Constructed together so cli.die/warn
@@ -365,6 +388,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   // back to in-realm compile. The returned `WebAssembly.Module` is
   // structured-cloneable, so it round-trips over the realm port.
   const g = globalThis as GlobalWithWasmCompile;
+  installSliccVersion();
   g.__slicc_compileWasm = (path: string): Promise<WebAssembly.Module> =>
     rpc.call('wasm', 'compile', [path]);
 

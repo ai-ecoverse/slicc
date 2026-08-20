@@ -99,6 +99,7 @@ const DISPATCHERS: readonly Dispatcher[] = [
   { command: 'secret', source: 'secret-command.ts', verbs: 'source' },
   { command: 'serial', source: 'serial-command.ts', verbs: 'source' },
   { command: 'theme', source: 'theme-command.ts', verbs: 'source' },
+  { command: 'upgrade', source: 'upgrade-command.ts', verbs: 'source' },
   { command: 'usb', source: 'usb-command.ts', verbs: 'source' },
   { command: 'webhook', source: 'webhook-command.ts', verbs: 'source' },
   { command: 'skill', source: 'upskill/skill-command.ts', verbs: 'source' },

@@ -1,5 +1,6 @@
 import type { LeaderToWorkerControlMessage, WorkerToLeaderControlMessage } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
+import { LEADER_STATUS_STORAGE_KEY } from '../base/tray-role.js';
 import { isProxyError, readProxyErrorMessage } from '../core/proxy-error.js';
 import { isExtensionRealm } from '../core/runtime-env.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
@@ -75,12 +76,10 @@ export function getLeaderTrayRuntimeStatus(): LeaderTrayRuntimeStatus {
 
 /**
  * Key for the page→worker `localStorage` shim mirroring the leader tray
- * status. `main.ts` writes this on every `subscribeToLeaderTrayRuntimeStatus`
- * tick; `installPageStorageSync` forwards page-side writes into the kernel
- * worker's Map-backed `localStorage` shim so worker readers see the same
- * value.
+ * status. Defined in `base/tray-role.ts` (which `uname -n` reads from a layer
+ * below this one) and re-exported here under its established name.
  */
-export const LEADER_STATUS_STORAGE_KEY = 'slicc.leaderTrayStatus';
+export { LEADER_STATUS_STORAGE_KEY };
 
 /**
  * Leader tray status with a `localStorage` fallback for the standalone

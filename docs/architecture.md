@@ -223,7 +223,7 @@ The extension is a thin CDP pass-through + bootstrapper. The webapp UI and agent
 | `sqlite-command.ts`      | `sqlite3` — SQLite database operations (in-memory or VFS-backed)                                                                                                            |
 | `unzip-command.ts`       | `unzip` — extract archives                                                                                                                                                  |
 | `upskill-command.ts`     | `upskill` — install skills from GitHub, the Tessl registry, or browse.sh; `upskill tabs` suggests skills for open browser tabs                                              |
-| `uname-command.ts`       | `uname` — print the current browser user agent                                                                                                                              |
+| `uname-command.ts`       | `uname` — SLICC identity: `-r` version, `-n` tray role, `-o` user agent, `-a` all                                                                                           |
 | `webhook-command.ts`     | `webhook` — manage webhooks for event-driven automation                                                                                                                     |
 | `which-command.ts`       | `which` — resolve command to path (built-ins: `/usr/bin/<name>`, `.jsh` scripts: actual VFS path)                                                                           |
 | `zip-command.ts`         | `zip` — create archives                                                                                                                                                     |

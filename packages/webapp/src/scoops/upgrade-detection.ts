@@ -10,6 +10,7 @@
  * into the user's workspace.
  */
 
+import { readSliccVersion, writeLastSeenVersionToShim } from '../base/slicc-version.js';
 import { getState, setState } from './db.js';
 
 const LAST_SEEN_STATE_KEY = 'slicc:last-seen-version';
@@ -28,26 +29,30 @@ export interface UpgradeDetection {
 }
 
 /**
- * Return the bundled SLICC version baked into this build. Sourced from the
- * root `package.json` via Vite `define` in `packages/webapp/vite.config.ts`
- * and `packages/chrome-extension/vite.config.ts`.
+ * Return the bundled SLICC version baked into this build. Thin projection of
+ * {@link readSliccVersion} (`base/slicc-version.ts`), which is the single place
+ * the build-time `define`s are read.
  */
 export function readBundledVersion(): BundledVersion {
-  return {
-    version: __SLICC_VERSION__,
-    releasedAt: __SLICC_RELEASED_AT__,
-  };
+  const { version, releasedAt } = readSliccVersion();
+  return { version, releasedAt };
 }
 
 export async function getLastSeenVersion(): Promise<string | null> {
   const raw = await getState(LAST_SEEN_STATE_KEY);
   // Treat both nullish and empty-string as "no recorded version" so the
   // marker can be cleared by writing an empty string in tests/dev tools.
-  return raw && raw.length > 0 ? raw : null;
+  const value = raw && raw.length > 0 ? raw : null;
+  // Keep the localStorage mirror current on the read path too, so a profile
+  // that predates the mirror publishes it on the next boot (`upgrade status`
+  // reads the mirror — see `base/slicc-version.ts`).
+  if (value) writeLastSeenVersionToShim(value);
+  return value;
 }
 
 export async function setLastSeenVersion(version: string): Promise<void> {
   await setState(LAST_SEEN_STATE_KEY, version);
+  writeLastSeenVersionToShim(version);
 }
 
 /**
