@@ -202,6 +202,311 @@ describe('slicc-shader', () => {
       getExtensionSpy.mockRestore();
     }
   });
+
+  describe('frame budget', () => {
+    const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
+    /** Count WebGL draw calls from the moment of installation. */
+    const spyDraws = () => vi.spyOn(WebGLRenderingContext.prototype, 'drawArrays');
+
+    afterEach(() => vi.restoreAllMocks());
+
+    it('renders ambient motion on the 15fps budget, not at display rate', async () => {
+      const el = mount({ mode: 'scoop' }); // scoop animates unconditionally
+      if (el.noWebgl) return; // CSS-fallback host: nothing to measure
+      await wait(50); // let the first frame land
+      const spy = spyDraws();
+      await wait(1500);
+      // 1500ms at 15fps ≈ 23 draws. Upper bound 30 (= 20fps average) rejects a
+      // 30fps or 60fps regression while tolerating rAF jitter; lower bound
+      // tolerates heavily-throttled CI. Do not tighten either bound.
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(5);
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(30);
+    });
+
+    it('cone with speed=0 renders once and stops', async () => {
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await wait(150); // settle: connect renders exactly one frame
+      const spy = spyDraws();
+      await wait(250);
+      expect(spy.mock.calls.length).toBe(0);
+    });
+
+    it('an attribute change re-renders a static field', async () => {
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await wait(150);
+      const spy = spyDraws();
+      el.setAttribute('scroll', '120');
+      await wait(120);
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('pulse() wakes a static field and it re-stops after the energy decays', async () => {
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await wait(150);
+      const spy = spyDraws();
+      // 0.0011 falls below the 0.001 rest floor after ~2 rendered frames, so
+      // decay completes fast even on a throttled CI rAF.
+      el.pulse(0.0011);
+      await wait(200);
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
+      // Poll until the draw count is stable across a 250ms window (decay done),
+      // then assert it stays stable for one more window.
+      let settled = spy.mock.calls.length;
+      for (let i = 0; i < 20; i++) {
+        await wait(250);
+        const next = spy.mock.calls.length;
+        if (next === settled) break;
+        settled = next;
+      }
+      await wait(250);
+      expect(spy.mock.calls.length).toBe(settled);
+    });
+
+    it('switching an animated field into cone speed=0 settles to a stopped loop', async () => {
+      const el = mount({ mode: 'scoop' });
+      if (el.noWebgl) return;
+      await wait(100);
+      const spy = spyDraws();
+      el.setAttribute('speed', '0');
+      el.setAttribute('mode', 'cone');
+      // The mode switch repaints synchronously exactly once (pins
+      // #lastFrameTs = performance.now()); no rAF has fired yet.
+      expect(spy.mock.calls.length).toBe(1);
+      await wait(900); // outlast the attribute-change burst window
+      const settled = spy.mock.calls.length;
+      await wait(250);
+      expect(spy.mock.calls.length).toBe(settled); // loop has settled/stopped
+    });
+
+    it('ignores stimuli while the WebGL context is lost', async () => {
+      const el = mount({ mode: 'scoop' });
+      if (el.noWebgl) return;
+      await wait(100);
+      const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+      const gl = canvas.getContext('webgl') as WebGLRenderingContext;
+      const lose = gl.getExtension('WEBGL_lose_context');
+      if (!lose) return; // extension unavailable: nothing to exercise
+      lose.loseContext();
+      await wait(100); // let the webglcontextlost event land
+      const spy = spyDraws();
+      el.pulse();
+      el.setAttribute('scroll', '50');
+      await wait(250);
+      expect(spy.mock.calls.length).toBe(0);
+    });
+
+    it('cone with speed=0 renders at least one frame (not zero) then stops', async () => {
+      const spy = spyDraws();
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await wait(200); // connect renders, then the loop self-terminates
+      // Pins "renders (not zero)" against a regression that drops the connect
+      // frame entirely (which the stop-focused test above cannot catch). The
+      // upper bound is 2: the connect frame plus at most one ambient frame from
+      // the ResizeObserver initial-notification wake (a static field then stops).
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(2);
+    });
+
+    it('a theme change re-renders a static field and it re-stops', async () => {
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await wait(150); // settle: one connect frame, then stopped
+      const spy = spyDraws();
+      const html = document.documentElement;
+      const hadDark = html.classList.contains('dark');
+      html.classList.toggle('dark'); // fires the theme MutationObserver -> #wake
+      // The 150/250 ms windows below deliberately sit INSIDE the 800 ms burst:
+      // this is the only test pinning static-field behavior mid-burst (a static
+      // field must render once and re-stop even while a burst is open). Do not
+      // widen these waits past BURST_MS.
+      try {
+        await wait(150);
+        expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
+        // ...and the static field re-stops rather than looping on.
+        const settled = spy.mock.calls.length;
+        await wait(250);
+        expect(spy.mock.calls.length).toBe(settled);
+      } finally {
+        if (hadDark) html.classList.add('dark');
+        else html.classList.remove('dark');
+      }
+    });
+
+    it('pulse(NaN) does not spin a static field', async () => {
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await wait(150); // settle: stopped
+      const spy = spyDraws();
+      el.pulse(Number.NaN);
+      await wait(300);
+      // The finite guard rejects NaN, so no wake and no loop; without it a NaN
+      // energy would never clear the rest floor and the loop would run forever.
+      expect(spy.mock.calls.length).toBe(0);
+    });
+
+    it('a static field revealed from display:none renders at its real size', async () => {
+      // Mounted hidden: ResizeObserver delivers NO initial notification, so the
+      // FIRST notification is the real "became visible" resize — it must wake
+      // (fix skips the burst, not the wake), else the field stays a 1×1 canvas.
+      const wrapper = document.createElement('div');
+      wrapper.style.display = 'none';
+      const el = document.createElement('slicc-shader');
+      el.setAttribute('speed', '0'); // static: no ambient loop to mask the bug
+      el.style.cssText = 'position:relative;display:block;width:240px;height:160px;';
+      wrapper.appendChild(el);
+      document.body.appendChild(wrapper);
+      if (el.noWebgl) return;
+      await wait(150); // connected but hidden
+      const spy = spyDraws();
+      wrapper.style.display = 'block';
+      await wait(300);
+      const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
+      expect(canvas.width).toBeGreaterThan(1); // real size, not the hidden 1×1 stretch
+    });
+
+    it('an animated field returns to the ambient budget after a burst expires', async () => {
+      // The one realistic route back to the original burn: a burst that never
+      // expires (the finding's "continuous scroll bursts") keeping the field at
+      // display rate. A `scroll` change opens a PURE burst — unlike pulse(),
+      // whose glow energy also decays over rendered frames and would keep the
+      // field at display rate past BURST_MS in a frame-rate-dependent way,
+      // confounding a burst-expiry measurement.
+      const el = mount({ mode: 'scoop' });
+      if (el.noWebgl) return;
+      el.setAttribute('scroll', '40'); // opens an 800 ms burst, no lingering energy
+      await wait(1000); // past BURST_MS
+      const spy = spyDraws();
+      await wait(1000);
+      // Ambient ≈ 15 draws/s; a never-expiring burst (the original burn) reads
+      // 60+. Wide bounds for slow CI — do not tighten.
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(3);
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(22);
+    });
+
+    it('resumes rendering after the WebGL context is restored (animated)', async () => {
+      const el = mount({ mode: 'scoop' });
+      if (el.noWebgl) return;
+      await wait(100);
+      const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+      const gl = canvas.getContext('webgl') as WebGLRenderingContext;
+      const lose = gl.getExtension('WEBGL_lose_context');
+      if (!lose) return;
+      lose.loseContext();
+      await wait(100); // let webglcontextlost land
+      lose.restoreContext();
+      await wait(200); // let webglcontextrestored + relink land
+      const spy = spyDraws();
+      await wait(500);
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1);
+    });
+
+    it('re-renders and re-stops a static field after context restore', async () => {
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await wait(150);
+      const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+      const gl = canvas.getContext('webgl') as WebGLRenderingContext;
+      const lose = gl.getExtension('WEBGL_lose_context');
+      if (!lose) return;
+      lose.loseContext();
+      await wait(100);
+      const spy = spyDraws();
+      lose.restoreContext();
+      await wait(300);
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(1); // repainted on restore
+      const settled = spy.mock.calls.length;
+      await wait(250);
+      expect(spy.mock.calls.length).toBe(settled); // and re-stopped
+    });
+
+    it('degrades to the CSS fallback when a restored context cannot rebuild GL', async () => {
+      const el = mount({ mode: 'scoop' });
+      if (el.noWebgl) return;
+      await wait(100);
+      const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+      const gl = canvas.getContext('webgl') as WebGLRenderingContext;
+      const lose = gl.getExtension('WEBGL_lose_context');
+      if (!lose) return;
+      lose.loseContext();
+      await wait(100);
+      // Force #setupGlResources() to fail on restore (Fix e001cb5b4 degrade path).
+      vi.spyOn(WebGLRenderingContext.prototype, 'createBuffer').mockReturnValue(
+        null as unknown as WebGLBuffer
+      );
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      const spy = spyDraws();
+      lose.restoreContext();
+      await wait(300);
+      expect(el.noWebgl).toBe(true);
+      expect(spy.mock.calls.length).toBe(0);
+      expect(errSpy).toHaveBeenCalled(); // emitted a diagnostic, not silent
+    });
+
+    it('reduced motion renders one frame per wake and stops', async () => {
+      const realMatchMedia = window.matchMedia.bind(window);
+      vi.spyOn(window, 'matchMedia').mockImplementation((q: string) =>
+        q.includes('prefers-reduced-motion')
+          ? ({
+              matches: true,
+              media: q,
+              addEventListener() {},
+              removeEventListener() {},
+            } as unknown as MediaQueryList)
+          : realMatchMedia(q)
+      );
+      const spy = spyDraws();
+      const el = mount({ mode: 'scoop' }); // animated mode, but reduced motion wins
+      if (el.noWebgl) return;
+      await wait(300);
+      // Connect wakes once, and the ResizeObserver initial notification wakes
+      // again — each renders exactly one frame under reduced motion, then stops.
+      const afterMount = spy.mock.calls.length;
+      expect(afterMount).toBeGreaterThanOrEqual(1);
+      expect(afterMount).toBeLessThanOrEqual(2);
+      el.pulse();
+      await wait(300);
+      expect(spy.mock.calls.length).toBe(afterMount + 1); // exactly one more per wake
+    });
+  });
+
+  it('caps the backing store at DPR 1 by default and honors the dpr escape hatch', async () => {
+    const original = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+    Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true });
+    try {
+      const el = mount();
+      if (el.noWebgl) return;
+      await frame();
+      await frame();
+      const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+      expect(el.dpr).toBe(1);
+      expect(canvas.width).toBe(240); // min(cap 1, ratio 2) × 240px — was 480 uncapped
+      el.setAttribute('dpr', '2');
+      await frame();
+      await frame();
+      expect(canvas.width).toBe(480); // escape hatch: min(2, 2)
+      el.setAttribute('dpr', '0.5');
+      await frame();
+      await frame();
+      expect(canvas.width).toBe(120);
+    } finally {
+      if (original) Object.defineProperty(window, 'devicePixelRatio', original);
+      else delete (window as { devicePixelRatio?: number }).devicePixelRatio;
+    }
+  });
+
+  it('clamps dpr to 0.5..2 and defaults bogus values to 1', () => {
+    const el = mount({ dpr: '9' });
+    expect(el.dpr).toBe(2);
+    el.setAttribute('dpr', '0.1');
+    expect(el.dpr).toBe(0.5);
+    el.setAttribute('dpr', 'nope');
+    expect(el.dpr).toBe(1);
+  });
 });
 
 describe('slicc-shader program cache + immediate repaint (anti-flicker)', () => {

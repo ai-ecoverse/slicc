@@ -1,5 +1,6 @@
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
+import { advanceFrameTs, BURST_MS, shouldRender } from './frame-budget.js';
 
 /**
  * The SLICC background field — a single WebGL element with three program modes:
@@ -9,13 +10,22 @@ import { h, sheet } from '../internal/dom.js';
  * the `mode` attribute.
  *
  * Sits behind the app (`position: fixed; inset: 0; z-index: 0; pointer-events:
- * none`). Honors `prefers-reduced-motion` (one static frame), pauses on
- * disconnect, and falls back to a per-mode CSS gradient when WebGL is absent.
+ * none`). Renders on a frame budget: ambient motion at 15 fps (`AMBIENT_FPS`),
+ * bursting to display rate for 800 ms (`BURST_MS`) after an interactive stimulus
+ * (pulse, attribute / theme / size changes — a `mode` switch instead repaints
+ * synchronously with no burst). A static field — `cone` with `speed=0`, or
+ * `prefers-reduced-motion` — renders once per stimulus and stops the loop
+ * entirely (a `pulse()` first plays out its glow decay; reduced motion is
+ * strictly one frame per wake). Pauses on disconnect and falls back to a
+ * per-mode CSS gradient when WebGL is absent.
  *
  * @attr mode - `cone` (default) | `scoop` | `freezer`
  * @attr tint - CSS color washed into the scoop field / event glow (the active accent)
  * @attr coverage - 0..1 freezer frost growth / cone glass density and geometry
- * @attr speed - 0..2 cone glass animation rate multiplier (default 0.0625)
+ * @attr speed - 0..2 cone glass animation rate multiplier (default 0.0625;
+ *   0 genuinely pauses — the field renders once per change and stops)
+ * @attr dpr - canvas resolution cap in device-pixel-ratio units (0.5..2,
+ *   default 1 — the washed background field does not need Retina density)
  * @attr scroll - chat scroll offset in CSS px; pans the field with the content
  * @attr intensity - multiplier for coverage (freezer)
  * @attr no-webgl - reflected when WebGL is unavailable (CSS fallback)
@@ -276,7 +286,15 @@ const STYLE = `
 :host([no-webgl]) .fallback { display: block; }`;
 const SHEET = sheet(STYLE);
 
-const MAX_DPR = 2;
+/** Backing-store resolution caps, in device-pixel-ratio units. The field is a
+ *  washed background — cone hard-clamps to ±0.20 around the theme bg, freezer
+ *  washes ~22% over its icy ground, and scoop is a soft low-frequency gradient;
+ *  none carries detail worth Retina density, so DPR 1 is visually
+ *  indistinguishable at a quarter of DPR 2's pixel cost on Retina, and
+ *  showcase/hero uses can opt back up via the `dpr` attribute. */
+const DEFAULT_DPR_CAP = 1;
+const MIN_DPR_CAP = 0.5;
+const MAX_DPR_CAP = 2;
 
 /** Fraction of the chat scroll the field pans by (1 = attached, 0 = static). */
 const SCROLL_PARALLAX = 0.35;
@@ -339,6 +357,7 @@ export class SliccShader extends HTMLElement {
     'noise',
     'blur',
     'speed',
+    'dpr',
   ];
 
   readonly #root: ShadowRoot;
@@ -353,6 +372,11 @@ export class SliccShader extends HTMLElement {
   #raf = 0;
   #start = 0;
   #energy = 0;
+  // #lastFrameTs / #burstUntil are ms on the rAF / performance.now() clock —
+  // distinct from #start and the u_time uniform, which are in seconds.
+  #lastFrameTs = Number.NEGATIVE_INFINITY;
+  #burstUntil = 0;
+  #contextLost = false;
   #ro: ResizeObserver | null = null;
   #reduced = false;
   // Cached CSS-derived uniforms. Resolved on connect / `tint` change / theme
@@ -389,14 +413,26 @@ export class SliccShader extends HTMLElement {
     }
     this.removeAttribute('no-webgl');
     if (typeof ResizeObserver !== 'undefined') {
-      this.#ro = new ResizeObserver(() => this.#renderIfStatic());
+      let initial = true;
+      this.#ro = new ResizeObserver(() => {
+        // The spec-mandated initial notification (only delivered for rendered,
+        // non-zero-size elements) must not open an 800 ms burst on connect —
+        // but it MUST still wake: for an element mounted hidden, the first
+        // notification is the real "became visible" resize, and a swallowed
+        // wake would leave a static field as a stale 1×1 canvas forever.
+        // A redundant initial wake coalesces to at most one ambient frame.
+        const wasInitial = initial;
+        initial = false;
+        this.#wake({ burst: !wasInitial });
+      });
       this.#ro.observe(this);
     }
     this.#refreshColorUniforms();
     this.#observeTheme();
     this.#start = performance.now() / 1000;
-    if (this.#reduced) this.#renderFrame();
-    else this.#startLoop();
+    this.#lastFrameTs = Number.NEGATIVE_INFINITY;
+    this.#contextLost = false;
+    this.#wake();
   }
 
   disconnectedCallback(): void {
@@ -423,12 +459,17 @@ export class SliccShader extends HTMLElement {
       // previous mode's frame does not linger for a rAF — the blue flicker.
       if (this.#linkMode()) {
         this.#renderFrame();
+        this.#lastFrameTs = performance.now();
         this.#applyFallbackBg();
+        // No burst: the sync render above already delivered the response, and
+        // a burst here would double-draw a static field. The wake only (re)arms
+        // the loop for animated modes.
+        this.#wake();
         return;
       }
     }
     this.#applyFallbackBg();
-    this.#renderIfStatic();
+    this.#wake({ burst: true });
   }
 
   /** Active program. */
@@ -538,14 +579,32 @@ export class SliccShader extends HTMLElement {
     this.setAttribute('speed', String(value));
   }
 
+  /** Canvas resolution cap in device-pixel-ratio units (0.5..2, default 1). */
+  get dpr(): number {
+    return clampNum(
+      Number.parseFloat(this.getAttribute('dpr') ?? ''),
+      MIN_DPR_CAP,
+      MAX_DPR_CAP,
+      DEFAULT_DPR_CAP
+    );
+  }
+  set dpr(value: number) {
+    this.setAttribute('dpr', String(value));
+  }
+
   get noWebgl(): boolean {
     return this.hasAttribute('no-webgl');
   }
 
   /** Bump the reactive energy (an event landed) — glows + surges briefly. */
   pulse(amount = 1): void {
-    this.#energy = Math.min(1.4, this.#energy + amount);
-    if (this.#reduced) this.#renderFrame();
+    // Guard non-finite input: NaN would never clear the `#energy < 0.001` floor,
+    // so `#energy === 0` self-termination could never fire and a static field
+    // would spin forever uploading a NaN u_energy — the exact idle burn this
+    // component exists to prevent.
+    if (!Number.isFinite(amount)) return;
+    this.#energy = Math.min(1.4, Math.max(0, this.#energy + amount));
+    this.#wake({ burst: true });
   }
 
   // ---- internals ----
@@ -553,10 +612,6 @@ export class SliccShader extends HTMLElement {
   #applyFallbackBg(): void {
     const fb = this.#root.querySelector<HTMLElement>('.fallback');
     if (fb) fb.style.background = FALLBACK[this.mode];
-  }
-
-  #renderIfStatic(): void {
-    if (this.#reduced && this.#gl) this.#renderFrame();
   }
 
   /** Resolve + cache the CSS-derived uniforms (tint, event tint, dark mode).
@@ -577,12 +632,12 @@ export class SliccShader extends HTMLElement {
    *  `var(--waffle)` and `--ink` is theme-dependent, so a light/dark toggle (a
    *  class / `data-theme` change on <html>/<body>, or the OS color-scheme media
    *  query) changes the resolved values WITHOUT firing attributeChangedCallback.
-   *  A running rAF loop picks the new cache up on its next frame; reduced-motion
-   *  mode repaints once via #renderIfStatic. */
+   *  The wake below repaints promptly (burst window); a static or reduced-motion
+   *  field renders exactly one frame and re-stops. */
   #observeTheme(): void {
     const refresh = (): void => {
       this.#refreshColorUniforms();
-      this.#renderIfStatic();
+      this.#wake({ burst: true });
     };
     if (typeof MutationObserver !== 'undefined') {
       this.#themeObserver = new MutationObserver(refresh);
@@ -713,6 +768,7 @@ export class SliccShader extends HTMLElement {
     this.#removeContextHandlers(cv);
     this.#onContextLost = (e: Event) => {
       e.preventDefault();
+      this.#contextLost = true;
       this.#stopLoop();
       this.#programs = {};
       this.#program = null;
@@ -723,10 +779,21 @@ export class SliccShader extends HTMLElement {
     this.#onContextRestored = () => {
       if (!this.isConnected || !this.#gl) return;
       this.#programs = {};
-      if (!this.#setupGlResources()) return;
+      if (!this.#setupGlResources()) {
+        // A restored context we cannot rebuild on (link failure, exhausted
+        // buffers) must degrade to the CSS gradient exactly like the initial
+        // #initGl failure path — never leave the field parked and blank with
+        // #contextLost stuck true and no signal.
+        this.#contextLost = false;
+        console.error('[slicc-shader] GL restore failed; falling back to CSS gradient');
+        this.setAttribute('no-webgl', '');
+        this.#dispose();
+        return;
+      }
+      this.#contextLost = false;
       this.#start = performance.now() / 1000;
-      if (this.#reduced) this.#renderFrame();
-      else this.#startLoop();
+      this.#lastFrameTs = Number.NEGATIVE_INFINITY;
+      this.#wake();
     };
     cv.addEventListener('webglcontextlost', this.#onContextLost, false);
     cv.addEventListener('webglcontextrestored', this.#onContextRestored, false);
@@ -743,7 +810,7 @@ export class SliccShader extends HTMLElement {
   #resize(): void {
     const cv = this.#canvas;
     if (!cv) return;
-    const dpr = Math.min(MAX_DPR, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+    const dpr = Math.min(this.dpr, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
     const w = Math.max(1, (cv.clientWidth * dpr) | 0);
     const h = Math.max(1, (cv.clientHeight * dpr) | 0);
     if (cv.width !== w || cv.height !== h) {
@@ -818,14 +885,41 @@ export class SliccShader extends HTMLElement {
     if (this.#energy < 0.001) this.#energy = 0;
   }
 
-  #startLoop(): void {
-    if (this.#raf) return;
-    const tick = (): void => {
-      this.#renderFrame();
-      this.#raf = requestAnimationFrame(tick);
-    };
-    this.#raf = requestAnimationFrame(tick);
+  /** True while the field has intrinsic motion. Cone glass with `speed` 0 is
+   *  genuinely static — u_speed zeroes the crack clock, the micro-wobble, and
+   *  (via sign(u_speed)) the parallax — while scoop and freezer animate on
+   *  u_time unconditionally. Reduced motion always reads as static. */
+  #isAnimated(): boolean {
+    if (this.#reduced) return false;
+    if (this.mode === 'cone' && this.speed === 0) return false;
+    return true;
   }
+
+  /** Single scheduler entry point — every stimulus lands here: connect, any
+   *  observed attribute change, theme flip, resize, context restore, pulse().
+   *  `burst` opens a BURST_MS full-rate window so the response is crisp; the
+   *  tick decides per-frame whether the budget admits a render and whether the
+   *  loop keeps running at all. Batched same-microtask stimuli coalesce into
+   *  the one pending rAF. A lost GL context parks the scheduler entirely until
+   *  restore (render would no-op but an animated mode would spin the loop). */
+  #wake(opts: { burst?: boolean } = {}): void {
+    if (opts.burst) this.#burstUntil = performance.now() + BURST_MS;
+    if (this.#raf || !this.#gl || this.#contextLost) return;
+    this.#raf = requestAnimationFrame(this.#tick);
+  }
+
+  #tick = (ts: number): void => {
+    this.#raf = 0;
+    const energetic = ts < this.#burstUntil || this.#energy > 0;
+    if (shouldRender(ts, this.#lastFrameTs, energetic)) {
+      this.#lastFrameTs = advanceFrameTs(ts, this.#lastFrameTs, energetic);
+      this.#renderFrame();
+    }
+    // Self-terminate AFTER the render so the final at-rest frame paints:
+    // static fields stop dead; reduced motion never loops (one frame per wake).
+    if (this.#reduced || (!this.#isAnimated() && this.#energy === 0)) return;
+    this.#raf = requestAnimationFrame(this.#tick);
+  };
 
   #stopLoop(): void {
     if (this.#raf) cancelAnimationFrame(this.#raf);
