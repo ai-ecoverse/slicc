@@ -234,10 +234,11 @@ oversampled), interactive stimuli (pulse, attribute/theme/size changes) open a
 `BURST_MS` (800 ms) full-display-rate window, and a field with no intrinsic
 motion (cone glass at `speed=0`, `prefers-reduced-motion`) renders one frame
 per stimulus and stops its loop entirely. The regression that motivated THIS
-rule was `slicc-shader` again: its ungated 60 fps loop burned ~44% of Chrome's
+rule was `slicc-shader` again: its ungated display-rate loop burned ~44% of Chrome's
 GPU process while the leader tab sat idle but visible in a background window —
-rAF only pauses for _hidden_ pages, and the tray's open WebRTC connection
-exempts the tab from every other throttle. Never move a decorative loop to
+rAF only pauses for hidden pages, and the tray's open WebRTC connection exempts
+the tab from timer throttling (freezing is separately opted out — see the shader
+pitfall in docs/pitfalls.md). Never move a decorative loop to
 `setTimeout`/`setInterval` for the same reason: timers keep firing in that tab
 even when it IS hidden; rAF is the only scheduler that pauses with visibility.
 
