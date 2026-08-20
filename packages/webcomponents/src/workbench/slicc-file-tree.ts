@@ -322,15 +322,29 @@ export class SliccFileTree extends HTMLElement {
     this.dispatchEvent(new CustomEvent(type, { detail, bubbles: true, composed: true }));
   }
 
-  /** Snapshot the currently expanded directories for the next re-render. */
+  /**
+   * Snapshot which directories are open, so the workbench's periodic refresh
+   * cannot collapse what the user just expanded.
+   *
+   * Read at re-render time rather than from a `subscribe` listener: the library
+   * notifies on view changes including SCROLL, and walking every row on each
+   * scroll tick would make a large tree pay an O(rows) cost per frame for state
+   * only ever consumed here.
+   *
+   * The library exposes no `getExpandedPaths()`, so expansion is derived from
+   * the visible rows — which is exactly the set that matters for restoring.
+   */
   #captureExpansion(): void {
     const tree = this.#tree;
     if (!tree) return;
-    const rows = tree.getVisibleRows(0, tree.getVisibleCount());
-    const open = rows.filter((row) => row.isExpanded).map((row) => row.path);
-    // A tree that has not painted yet reports nothing; keeping the previous
-    // snapshot avoids throwing away the seed expansion on the first frame.
-    if (open.length > 0 || this.#expanded !== null) this.#expanded = open;
+    const count = tree.getVisibleCount();
+    // A tree that has not painted yet reports nothing, and recording that would
+    // read as "the user collapsed everything". Only a painted tree is evidence.
+    if (count === 0) return;
+    const rows = tree.getVisibleRows(0, count);
+    // Assigned even when empty: collapsing the last open directory IS the state
+    // to remember, and must not fall back to the items' `open` seeds.
+    this.#expanded = rows.filter((row) => row.isExpanded).map((row) => row.path);
   }
 
   #applySelection(): void {
@@ -352,6 +366,7 @@ export class SliccFileTree extends HTMLElement {
 
     // Keep whatever the user has expanded across a refresh; only the first
     // build honours the `open` flags from the items themselves.
+    this.#captureExpansion();
     const expanded = this.#expanded ?? initiallyOpen;
 
     this.#tree?.unmount();
@@ -423,9 +438,6 @@ export class SliccFileTree extends HTMLElement {
     // cannot collapse what the user just expanded. The library exposes no
     // `getExpandedPaths()`, so the state is read off the visible rows — which
     // is exactly the set that matters for restoring the view.
-    tree.subscribe(() => this.#captureExpansion());
-    this.#captureExpansion();
-
     this.#wireActivation();
   }
 
