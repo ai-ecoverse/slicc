@@ -22,6 +22,8 @@ import { advanceFrameTs, BURST_MS, shouldRender } from './frame-budget.js';
  * @attr coverage - 0..1 freezer frost growth / cone glass density and geometry
  * @attr speed - 0..2 cone glass animation rate multiplier (default 0.0625;
  *   0 genuinely pauses — the field renders once per change and stops)
+ * @attr dpr - canvas resolution cap in device-pixel-ratio units (0.5..2,
+ *   default 1 — the washed background field does not need Retina density)
  * @attr scroll - chat scroll offset in CSS px; pans the field with the content
  * @attr intensity - multiplier for coverage (freezer)
  * @attr no-webgl - reflected when WebGL is unavailable (CSS fallback)
@@ -282,7 +284,13 @@ const STYLE = `
 :host([no-webgl]) .fallback { display: block; }`;
 const SHEET = sheet(STYLE);
 
-const MAX_DPR = 2;
+/** Backing-store resolution caps, in device-pixel-ratio units. The field is a
+ *  background clamped to a ±20% deviation budget around the theme bg, so
+ *  DPR 1 is visually indistinguishable at a quarter of DPR 2's pixel cost on
+ *  Retina; showcase/hero uses can opt back up via the `dpr` attribute. */
+const DEFAULT_DPR_CAP = 1;
+const MIN_DPR_CAP = 0.5;
+const MAX_DPR_CAP = 2;
 
 /** Fraction of the chat scroll the field pans by (1 = attached, 0 = static). */
 const SCROLL_PARALLAX = 0.35;
@@ -345,6 +353,7 @@ export class SliccShader extends HTMLElement {
     'noise',
     'blur',
     'speed',
+    'dpr',
   ];
 
   readonly #root: ShadowRoot;
@@ -564,6 +573,19 @@ export class SliccShader extends HTMLElement {
     this.setAttribute('speed', String(value));
   }
 
+  /** Canvas resolution cap in device-pixel-ratio units (0.5..2, default 1). */
+  get dpr(): number {
+    return clampNum(
+      Number.parseFloat(this.getAttribute('dpr') ?? ''),
+      MIN_DPR_CAP,
+      MAX_DPR_CAP,
+      DEFAULT_DPR_CAP
+    );
+  }
+  set dpr(value: number) {
+    this.setAttribute('dpr', String(value));
+  }
+
   get noWebgl(): boolean {
     return this.hasAttribute('no-webgl');
   }
@@ -767,7 +789,7 @@ export class SliccShader extends HTMLElement {
   #resize(): void {
     const cv = this.#canvas;
     if (!cv) return;
-    const dpr = Math.min(MAX_DPR, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
+    const dpr = Math.min(this.dpr, (typeof window !== 'undefined' && window.devicePixelRatio) || 1);
     const w = Math.max(1, (cv.clientWidth * dpr) | 0);
     const h = Math.max(1, (cv.clientHeight * dpr) | 0);
     if (cv.width !== w || cv.height !== h) {

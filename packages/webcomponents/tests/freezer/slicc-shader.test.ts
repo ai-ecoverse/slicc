@@ -294,6 +294,40 @@ describe('slicc-shader', () => {
       expect(spy.mock.calls.length).toBe(0);
     });
   });
+
+  it('caps the backing store at DPR 1 by default and honors the dpr escape hatch', async () => {
+    const original = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+    Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true });
+    try {
+      const el = mount();
+      if (el.noWebgl) return;
+      await frame();
+      await frame();
+      const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+      expect(el.dpr).toBe(1);
+      expect(canvas.width).toBe(240); // min(cap 1, ratio 2) × 240px — was 480 uncapped
+      el.setAttribute('dpr', '2');
+      await frame();
+      await frame();
+      expect(canvas.width).toBe(480); // escape hatch: min(2, 2)
+      el.setAttribute('dpr', '0.5');
+      await frame();
+      await frame();
+      expect(canvas.width).toBe(120);
+    } finally {
+      if (original) Object.defineProperty(window, 'devicePixelRatio', original);
+      else delete (window as { devicePixelRatio?: number }).devicePixelRatio;
+    }
+  });
+
+  it('clamps dpr to 0.5..2 and defaults bogus values to 1', () => {
+    const el = mount({ dpr: '9' });
+    expect(el.dpr).toBe(2);
+    el.setAttribute('dpr', '0.1');
+    expect(el.dpr).toBe(0.5);
+    el.setAttribute('dpr', 'nope');
+    expect(el.dpr).toBe(1);
+  });
 });
 
 describe('slicc-shader program cache + immediate repaint (anti-flicker)', () => {
