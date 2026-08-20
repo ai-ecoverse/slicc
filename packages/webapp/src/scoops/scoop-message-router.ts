@@ -250,12 +250,23 @@ export class ScoopMessageRouter {
     await this.flushScoopQueue(message.chatJid);
   }
 
+  /**
+   * A `requiresTrigger` scoop only sees messages containing its `@trigger` —
+   * except for machine-addressed licks, which nothing types a trigger into.
+   *
+   * Deliberately narrower than `EXTERNAL_LICK_CHANNELS`: this is the set of
+   * events that address a scoop directly, not every channel that formats as a
+   * lick. `bash` belongs here because a detached job's completion is the result
+   * of work that scoop itself started — dropping it would silently break the
+   * promise the tool made when it returned the job id.
+   */
   private passesTriggerGate(scoop: RegisteredScoop | undefined, message: ChannelMessage): boolean {
     const isLick =
       message.channel === 'webhook' ||
       message.channel === 'cron' ||
       message.channel === 'fswatch' ||
-      message.channel === 'sprinkle';
+      message.channel === 'sprinkle' ||
+      message.channel === 'bash';
     return (
       !scoop ||
       scoop.isCone ||

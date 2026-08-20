@@ -34,6 +34,8 @@ import type { SessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath } from '../fs/path-utils.js';
 import { resolveModelIdForScoop } from '../providers/account-store.js';
+// Legal down-edge (`scoops/` → `tools/`) for the JSON Schema shape.
+import type { JsonSchemaObject } from '../tools/types.js';
 import { serializeAgentSessionArchive } from './agent-session-archive.js';
 import type { Orchestrator } from './orchestrator.js';
 import {
@@ -117,7 +119,7 @@ export interface AgentSpawnOptions {
    * a `StructuredOutput` tool is injected and the scoop must return its
    * result in the specified schema shape.
    */
-  structuredOutputSchema?: Record<string, unknown>;
+  structuredOutputSchema?: JsonSchemaObject;
   /**
    * Announce completion to the cone on the `scoop-notify` lick channel.
    * Defaults to `false`: a one-shot `agent` call is synchronous for its
@@ -176,6 +178,16 @@ export interface AgentSpawnOptions {
    * against a 120 s timeout).
    */
   maxWallClockMs?: number;
+  /**
+   * Seconds the spawned scoop's `bash` tool waits for a command before
+   * detaching it and continuing the turn (its `background_after` default; a
+   * per-call tool argument still wins). Unset → the tool's ten-minute default.
+   * Worth tightening for a spawn nobody supervises: the detached command's
+   * result comes back as a `bash` lick to the scoop, so the run keeps moving
+   * instead of burning its wall-clock ceiling on one wedged command. Must be a
+   * number of seconds >= 0 (`0` detaches immediately).
+   */
+  backgroundAfterSeconds?: number;
   /**
    * Caller-held cancel handle. Aborting stops the running scoop (via
    * `orchestrator.stopScoop`) and resolves the spawn with a non-zero
@@ -236,6 +248,16 @@ export interface AgentBridgeDeps {
 
 /** Global hook name used by {@link publishAgentBridge}. */
 export const AGENT_BRIDGE_GLOBAL_KEY = '__slicc_agent';
+
+/**
+ * The one property this module adds to `globalThis`. Named so the publish path
+ * does not cast the global object to an untyped bag; the `agent` command reads
+ * the same slot through its own mirror of this declaration (it sits below
+ * `scoops/` in the layer stack and cannot import from here).
+ */
+type AgentBridgeGlobal = typeof globalThis & {
+  [AGENT_BRIDGE_GLOBAL_KEY]?: AgentBridge;
+};
 
 /** Context for bridge spawn helpers - closed over by the factory. */
 interface BridgeContext {
@@ -320,6 +342,21 @@ function validateSpawnOptions(
     return {
       error: {
         finalText: `agent: invalid thinking level: ${String(requestedLevel)} (one of: ${THINKING_LEVELS.join(', ')})`,
+        exitCode: 1,
+      },
+    };
+  }
+
+  const backgroundAfter = options.backgroundAfterSeconds;
+  if (
+    backgroundAfter !== undefined &&
+    (typeof backgroundAfter !== 'number' ||
+      !Number.isFinite(backgroundAfter) ||
+      backgroundAfter < 0)
+  ) {
+    return {
+      error: {
+        finalText: `agent: invalid backgroundAfterSeconds: ${String(backgroundAfter)} (seconds >= 0)`,
         exitCode: 1,
       },
     };
@@ -456,6 +493,9 @@ function buildScoopConfig(
   if (options.maxWallClockMs !== undefined) {
     scoopConfig.maxWallClockMs = options.maxWallClockMs;
   }
+  if (options.backgroundAfterSeconds !== undefined) {
+    scoopConfig.backgroundAfterSeconds = options.backgroundAfterSeconds;
+  }
   if (effectiveModelId) {
     scoopConfig.modelId = effectiveModelId;
   }
@@ -509,7 +549,7 @@ async function runScoopAndCaptureOutput(
   orchestrator: Orchestrator,
   jid: string,
   prompt: string,
-  structuredOutputSchema: Record<string, unknown> | undefined,
+  structuredOutputSchema: JsonSchemaObject | undefined,
   observerState: ReturnType<typeof registerScoopObserver>
 ): Promise<AgentSpawnResult | null> {
   await orchestrator.sendPrompt(jid, prompt, 'agent', 'agent');
@@ -750,7 +790,7 @@ export function publishAgentBridge(
   deps: AgentBridgeDeps = {}
 ): AgentBridge {
   const bridge = createAgentBridge(orchestrator, sharedFs, sessionStore, deps);
-  (globalThis as Record<string, unknown>)[AGENT_BRIDGE_GLOBAL_KEY] = bridge;
+  (globalThis as AgentBridgeGlobal)[AGENT_BRIDGE_GLOBAL_KEY] = bridge;
   log.info('agent bridge published on globalThis.__slicc_agent');
   return bridge;
 }

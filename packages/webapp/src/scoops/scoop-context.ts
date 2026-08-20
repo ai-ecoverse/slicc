@@ -55,6 +55,7 @@ import { AlmostBashShell } from '../shell/index.js';
 import { DEFAULT_JSH_SEARCH_ROOTS } from '../shell/jsh-discovery.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import { createBashTool, createFileTools } from '../tools/index.js';
+import type { BashJobProcess } from '../tools/types.js';
 import { getAdobeSessionId } from './llm-session-id.js';
 import {
   createScoopManagementTools,
@@ -65,6 +66,16 @@ import { getLeaderStatusWithFallback } from './tray-leader.js';
 import { type RegisteredScoop, THINKING_LEVELS } from './types.js';
 
 const log = createLogger('scoop-context');
+
+/**
+ * The orchestrator's lick sink, published on `globalThis` by
+ * `Orchestrator.setLickManager` (the LickManager lives in the kernel worker,
+ * the emitters are scattered across shell commands and tools). Mirrors the
+ * `SliccGlobalHooks` shape in `orchestrator.ts`.
+ */
+type SliccLickGlobal = typeof globalThis & {
+  __slicc_lick_handler?: (event: import('@slicc/shared-ts').LickEvent) => void;
+};
 
 /**
  * Debounce for mid-turn session checkpoints (#1987): long enough to coalesce
@@ -381,6 +392,18 @@ export class ScoopContext {
   private processManager: ProcessManager | null = null;
   private currentTurnProcess: Process | null = null;
 
+  /**
+   * Pids of `bash` jobs still running, so `dispose()` can reap them.
+   *
+   * Signalling the turn pid is not enough: a detached job outlives its turn on
+   * purpose (that is how its completion lick still arrives), and the turn record
+   * is gone by then — so a later `drop_scoop`, or the automatic teardown of a
+   * one-shot `agent` scoop, would leave the command running against a scoop
+   * directory that is being deleted. Entries are removed as each job exits or is
+   * killed, so this holds only genuinely live pids.
+   */
+  private readonly liveBashJobPids = new Set<number>();
+
   private sessionStore: SessionStore | null = null;
   private sessionId: string;
   private sessionCreatedAt: number = 0;
@@ -583,7 +606,37 @@ export class ScoopContext {
       createBashTool(
         this.shell!,
         this.fs! as VirtualFS,
-        this.scoop.isCone ? '/tmp' : `/scoops/${this.scoop.folder}`
+        this.scoop.isCone ? '/tmp' : `/scoops/${this.scoop.folder}`,
+        {
+          // Unset → the tool's own ten-minute default.
+          defaultBackgroundAfterSeconds: this.scoop.config?.backgroundAfterSeconds,
+          // Route a detached job's completion lick back to THIS scoop. The cone
+          // is the default target for an untargeted lick, so it stays unset
+          // there (its `folder` is not a valid lick target alias).
+          targetScoop: this.scoop.isCone ? undefined : this.scoop.folder,
+          // Every invocation becomes a kernel pid, so `timeout` is a real kill
+          // (SIGKILL fans out to realm workers) and a detached job stays visible
+          // to `ps` / reachable by `kill`.
+          jobHost: { spawn: (command) => this.spawnBashJob(command) },
+          // A detached job's output skips the `adaptTools` tool-result boundary
+          // (it arrives as a lick, not a tool result), so the same real→masked
+          // pass is wired in here.
+          scrubOutput: getToolResultScrubber(),
+          // Same sink `fswatch` uses to raise a lick from inside the shell: the
+          // orchestrator publishes it in `setLickManager`. Read per event rather
+          // than captured once, so a context built before the lick manager was
+          // attached still delivers.
+          fireLick: (event) => {
+            const handler = (globalThis as SliccLickGlobal).__slicc_lick_handler;
+            if (!handler) {
+              log.warn('No lick handler for background bash completion', {
+                folder: this.scoop.folder,
+              });
+              return;
+            }
+            handler(event);
+          },
+        }
       ),
       ...scoopManagementTools,
     ];
@@ -876,6 +929,73 @@ export class ScoopContext {
       return true;
     }
     return false;
+  }
+
+  /**
+   * Register one `bash` invocation as a `kind:'shell'` process so it is a real
+   * pid: `ps` lists it, `kill <pid>` reaches it, and a SIGKILL fans out over the
+   * ppid tree to any realm-backed descendant (`node` / `python3` / `.jsh`), which
+   * `worker.terminate()`s uncatchably. The bash tool passes the pid back into
+   * `AlmostBashShell.executeCommand` so those descendants parent HERE instead of
+   * to the turn.
+   *
+   * Parented to the turn pid deliberately: `pm.exit()` (normal turn end) does not
+   * cascade, so a detached job survives to deliver its lick, while an explicit
+   * cancel / `stop()` / `drop_scoop` — all of which SIGNAL the turn pid — fans
+   * out and reaps the whole tree (#1166).
+   */
+  private spawnBashJob(command: string): BashJobProcess | null {
+    const pm = this.processManager;
+    if (!pm) return null;
+    const forget = (pid: number) => {
+      this.liveBashJobPids.delete(pid);
+    };
+    const proc = pm.spawn({
+      kind: 'shell',
+      argv: ['bash', '-c', command],
+      cwd: this.scoop.isCone ? '/workspace' : `/scoops/${this.scoop.folder}/workspace`,
+      owner: {
+        kind: this.scoop.isCone ? 'cone' : 'scoop',
+        scoopJid: this.scoop.jid,
+      },
+      ppid: this.currentTurnProcess?.pid,
+    });
+    this.liveBashJobPids.add(proc.pid);
+    return {
+      pid: proc.pid,
+      signal: proc.abort.signal,
+      kill: () => {
+        forget(proc.pid);
+        pm.signal(proc.pid, 'SIGKILL');
+      },
+      exit: (exitCode) => {
+        forget(proc.pid);
+        pm.exit(proc.pid, exitCode);
+      },
+    };
+  }
+
+  /**
+   * SIGKILL every still-running `bash` job on teardown.
+   *
+   * A detached job survives its own turn deliberately, so by dispose time its
+   * parent turn record is usually gone and the turn-pid signal above cannot
+   * reach it. SIGKILL rather than SIGTERM because the point is that the command
+   * stops: the manager fans it out to the job's realm descendants, which
+   * `worker.terminate()` uncatchably. Any pending completion lick is moot — for
+   * `drop_scoop` and one-shot `agent` teardown the scoop directory the output
+   * would be written to is being removed with it.
+   */
+  private reapBashJobs(): void {
+    const pm = this.processManager;
+    if (!pm || this.liveBashJobPids.size === 0) return;
+    const pids = [...this.liveBashJobPids];
+    this.liveBashJobPids.clear();
+    log.info('Reaping background bash jobs on dispose', {
+      folder: this.scoop.folder,
+      pids,
+    });
+    for (const pid of pids) pm.signal(pid, 'SIGKILL');
   }
 
   /** Register turn process with process manager. */
@@ -1444,6 +1564,7 @@ export class ScoopContext {
     } else {
       this.promptAbortController?.abort();
     }
+    this.reapBashJobs();
     this.promptAbortController = null;
     this.agent?.clearAllQueues?.();
     this.agent?.abort?.();

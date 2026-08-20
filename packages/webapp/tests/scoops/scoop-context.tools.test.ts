@@ -26,7 +26,9 @@ const mocks = vi.hoisted(() => {
     createBashTool: vi.fn(() => ({ name: 'bash' })),
     createScoopManagementTools: vi.fn(() => [{ name: 'send_message' }]),
     AlmostBashShell: vi.fn(function () {
-      return {};
+      // `dispose` is real on the shell and `ScoopContext.dispose()` calls it, so
+      // the stub needs it for any test that exercises teardown.
+      return { dispose: vi.fn() };
     }),
     getApiKey: vi.fn(() => 'test-api-key'),
     getSelectedProvider: vi.fn(() => 'anthropic'),
@@ -165,6 +167,74 @@ describe('ScoopContext active tool surface', () => {
     expect(shellOptions.processManager).toBe(pm);
     expect(shellOptions.processOwner).toEqual({ kind: 'scoop', scoopJid: 'scoop_test_1' });
     expect(typeof shellOptions.getCurrentShellPid).toBe('function');
+  });
+
+  // Codex review on PR #2210 (P1): a detached bash job deliberately outlives its
+  // turn, so by dispose time the turn pid it was parented to is gone and the
+  // turn-pid SIGTERM in `dispose()` cannot reach it. Without an explicit reap, a
+  // `drop_scoop` (or one-shot `agent` teardown) deletes the scoop directory and
+  // leaves the command running against it.
+  describe('detached bash job reaping on dispose', () => {
+    function pmMock() {
+      let nextPid = 5000;
+      const signals: Array<{ pid: number; signal: string }> = [];
+      return {
+        signals,
+        pm: {
+          spawn: vi.fn(() => ({ pid: nextPid++, abort: new AbortController() })),
+          signal: vi.fn((pid: number, signal: string) => {
+            signals.push({ pid, signal });
+          }),
+          exit: vi.fn(),
+        },
+      };
+    }
+
+    async function initWithPm(pm: unknown) {
+      const ctx = new ScoopContext(
+        testScoop,
+        createMockCallbacks(),
+        createMockFs() as any,
+        undefined,
+        undefined,
+        undefined,
+        pm as any
+      );
+      await ctx.init();
+      const options = (mocks.createBashTool.mock.calls[0] as unknown[])[3] as {
+        jobHost: { spawn: (command: string) => { pid: number; exit: (c: number | null) => void } };
+        scrubOutput?: (text: string) => Promise<string>;
+      };
+      return { ctx, options };
+    }
+
+    it('SIGKILLs a job that is still running at dispose', async () => {
+      const { pm, signals } = pmMock();
+      const { ctx, options } = await initWithPm(pm);
+
+      const job = options.jobHost.spawn('sleep 999');
+      ctx.dispose();
+
+      expect(signals).toContainEqual({ pid: job.pid, signal: 'SIGKILL' });
+    });
+
+    it('does not signal a job that already finished', async () => {
+      const { pm, signals } = pmMock();
+      const { ctx, options } = await initWithPm(pm);
+
+      const job = options.jobHost.spawn('echo hi');
+      job.exit(0);
+      ctx.dispose();
+
+      expect(signals.some((s) => s.pid === job.pid)).toBe(false);
+    });
+
+    it('wires the secret scrubber for detached output', async () => {
+      const { pm } = pmMock();
+      const { options } = await initWithPm(pm);
+
+      expect(typeof options.scrubOutput).toBe('function');
+    });
   });
 
   it('owns the bash-tool shell as the cone when isCone', async () => {

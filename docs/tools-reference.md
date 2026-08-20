@@ -96,11 +96,11 @@ export function adaptTools(tools: ToolDefinition[]): AgentTool[] {
 
 Execute shell commands in a full Unix-like environment (`just-bash`; see `packages/webapp/package.json` for the pinned version).
 
-| Property   | Value                                 |
-| ---------- | ------------------------------------- |
-| **Name**   | `bash`                                |
-| **Input**  | `{ command: string }`                 |
-| **Output** | `{ content: stdout+stderr, isError }` |
+| Property   | Value                                                              |
+| ---------- | ------------------------------------------------------------------ |
+| **Name**   | `bash`                                                             |
+| **Input**  | `{ command: string, timeout?: number, background_after?: number }` |
+| **Output** | `{ content: stdout+stderr, isError }`                              |
 
 **Schema**:
 
@@ -108,11 +108,77 @@ Execute shell commands in a full Unix-like environment (`just-bash`; see `packag
 {
   "type": "object",
   "properties": {
-    "command": { "type": "string", "description": "The bash command to execute" }
+    "command": { "type": "string", "description": "The bash command to execute" },
+    "timeout": {
+      "type": "number",
+      "description": "Hard ceiling in seconds — the run is aborted and the call returns an error"
+    },
+    "background_after": {
+      "type": "number",
+      "description": "Seconds to wait before detaching the run (default 600; 0 detaches immediately)"
+    }
   },
   "required": ["command"]
 }
 ```
+
+**Long-running commands (`background_after` / `timeout`)**:
+
+A command that never returns used to hold the turn open: annoying in the cone
+(the user cancels the turn) and unrecoverable in a scoop, where there is no user
+to cancel and the scoop's caller stays blocked. So the wait is bounded by
+default.
+
+- `background_after` (default `600`, per-scoop default via
+  `ScoopConfig.backgroundAfterSeconds`) — after this many seconds the tool stops
+  waiting, returns a job id (`bg-1`, `bg-2`, … per tool instance), and the turn
+  continues. The command itself keeps running. `0` detaches immediately, which is
+  the right shape for a dev server or a watcher.
+- `timeout` (no default) — the hard kill. At the ceiling the job pid is SIGKILLed
+  (which the process manager fans out over the ppid tree, so realm-backed
+  descendants get an uncatchable `worker.terminate()`) and the call returns
+  `isError: true` with no job and no follow-up lick. A `timeout` at or below
+  `background_after` pre-empts detaching entirely; above it, the command detaches
+  first and is still killed when the ceiling lands.
+- When a detached job finishes, its full output is written to
+  `<tempDir>/bash-<jobId>.txt` (`/tmp` for the cone, `/scoops/<folder>` for a
+  scoop) and a **`bash` lick** ("Background Command") is delivered to the scoop
+  that started it (`targetScoop`; unset for the cone, which is the default lick
+  target) carrying the exit code and a 2 KB tail preview. A dropped scoop's job
+  lick is logged and discarded.
+- Output is only available at completion — `just-bash` has no incremental stream
+  — so a detach result carries no partial output.
+- A detached job's output is secret-scrubbed by the tool itself (`scrubOutput`,
+  wired from `getToolResultScrubber()`) before the file is written and the preview
+  is cut: it never crosses the `adaptTools` tool-result boundary that scrubs a
+  normal `bash` result. A scrub failure withholds the output rather than passing
+  it through; the lick still reports the exit code.
+- A still-running job is SIGKILLed when its scoop context is disposed
+  (`drop_scoop`, one-shot `agent` teardown, shutdown), since the scoop directory
+  its output would land in goes away with it.
+- The `bash` lick bypasses the scoop trigger gate
+  (`ScoopMessageRouter.passesTriggerGate`), like `webhook` / `cron` / `fswatch` /
+  `sprinkle`: a `requiresTrigger` scoop would otherwise never see the result of
+  the job it started, since nothing types its `@trigger` into a machine-generated
+  completion.
+- An `agent` command run inside a `bash` invocation inherits the run's abort
+  signal, so a `timeout` kill (or a cancelled turn) also stops the scoop it
+  spawned instead of leaving it running up model calls.
+
+**Every run is a pid.** Each invocation registers a `kind:'shell'` job process
+(`ScoopContext.spawnBashJob`), so `ps` lists a live background job and
+`kill <pid>` / `kill -9 <pid>` stops it; the detach result and the completion lick
+both name the pid. Realm-backed commands inside the run (`node`, `python3`,
+`.jsh`) parent under that job, which is what makes the kill reach them. In-worker
+just-bash builtins have no worker to terminate and stop cooperatively at their
+next statement boundary — a CPU-bound builtin is not preemptible, and blocks the
+detach/timeout timers while it runs. Full semantics:
+[`kernel/process-model.md` § Bash jobs](kernel/process-model.md#bash-jobs-agent-bash-tool).
+
+Defaults are set per context: `ScoopContext` passes
+`ScoopConfig.backgroundAfterSeconds` (from `scoop_scoop`'s `background_after`
+argument or `agent --background-after`) into the tool factory; the tool's own
+fallback is `DEFAULT_BASH_BACKGROUND_AFTER_SECONDS`.
 
 **Features**:
 

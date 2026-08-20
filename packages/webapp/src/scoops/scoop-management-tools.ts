@@ -136,6 +136,26 @@ function parseThinkingLevel(
 }
 
 /**
+ * Validate `scoop_scoop`'s `background_after` argument (seconds the new scoop's
+ * `bash` tool waits before detaching a command). `0` is meaningful — detach
+ * immediately — so only non-numbers and negatives are rejected. A silent
+ * fallback to the default would hide the mistake behind a ten-minute stall,
+ * exactly the failure this option exists to prevent.
+ */
+function parseBackgroundAfter(
+  value: number | undefined
+): { ok: true; seconds?: number } | { ok: false; content: string } {
+  if (value === undefined) return { ok: true };
+  if (typeof value !== 'number' || !Number.isFinite(value) || value < 0) {
+    return {
+      ok: false,
+      content: `Invalid background_after "${String(value)}". Must be a number of seconds >= 0.`,
+    };
+  }
+  return { ok: true, seconds: value };
+}
+
+/**
  * Canonicalize `scoop_scoop`'s `model` argument, or return an error result.
  * Omitting the model is fine (the scoop inherits the cone's), but an id that
  * cannot be resolved MUST be rejected rather than silently inherited — see
@@ -289,18 +309,32 @@ async function executeListScoops(config: ScoopManagementToolsConfig): Promise<To
   return { content: `Registered scoops:\n${formatted}` };
 }
 
-/** Build the partial `RegisteredScoop` record passed to onScoopScoop. */
-function buildScoopRecord(
-  name: string,
-  folder: string,
-  model: string | undefined,
-  visiblePaths: string[] | undefined,
-  writablePaths: string[] | undefined,
-  allowedCommands: string[] | undefined,
-  thinkingLevel: ThinkingLevel | undefined,
+/** Inputs to {@link buildScoopRecord} — one bag so the arg list stays readable. */
+interface ScoopRecordInput {
+  name: string;
+  folder: string;
+  model: string | undefined;
+  visiblePaths: string[] | undefined;
+  writablePaths: string[] | undefined;
+  allowedCommands: string[] | undefined;
+  thinkingLevel: ThinkingLevel | undefined;
+  backgroundAfterSeconds: number | undefined;
   /** JID of the scoop (cone) that invoked scoop_scoop; recorded for delegation-chain reconstruction. */
-  parentJid: string
-): Omit<RegisteredScoop, 'jid'> {
+  parentJid: string;
+}
+
+/** Build the partial `RegisteredScoop` record passed to onScoopScoop. */
+function buildScoopRecord({
+  name,
+  folder,
+  model,
+  visiblePaths,
+  writablePaths,
+  allowedCommands,
+  thinkingLevel,
+  backgroundAfterSeconds,
+  parentJid,
+}: ScoopRecordInput): Omit<RegisteredScoop, 'jid'> {
   return {
     name,
     folder,
@@ -316,6 +350,7 @@ function buildScoopRecord(
       writablePaths: writablePaths ?? [`/scoops/${folder}/`, '/shared/'],
       ...(allowedCommands ? { allowedCommands } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
+      ...(backgroundAfterSeconds !== undefined ? { backgroundAfterSeconds } : {}),
     },
     configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
     // Record the creating scoop's JID. originToolCallId is intentionally absent:
@@ -361,6 +396,7 @@ async function executeScoopScoop(
     writablePaths,
     allowedCommands,
     thinking,
+    background_after: backgroundAfter,
   } = input as {
     name: string;
     model?: string;
@@ -369,26 +405,33 @@ async function executeScoopScoop(
     writablePaths?: string[];
     allowedCommands?: string[];
     thinking?: string;
+    background_after?: number;
   };
 
   const parsed = parseThinkingLevel(thinking);
   if (!parsed.ok) return { content: parsed.content, isError: parsed.isError };
+
+  const parsedBackgroundAfter = parseBackgroundAfter(backgroundAfter);
+  if (!parsedBackgroundAfter.ok) {
+    return { content: parsedBackgroundAfter.content, isError: true };
+  }
 
   const parsedModel = parseModelId(model, config.resolveModelId);
   if (!parsedModel.ok) return { content: parsedModel.content, isError: parsedModel.isError };
 
   const folder = folderFromDisplayName(name);
   try {
-    const record = buildScoopRecord(
+    const record = buildScoopRecord({
       name,
       folder,
-      parsedModel.modelId,
+      model: parsedModel.modelId,
       visiblePaths,
       writablePaths,
       allowedCommands,
-      parsed.level,
-      config.scoop.jid
-    );
+      thinkingLevel: parsed.level,
+      backgroundAfterSeconds: parsedBackgroundAfter.seconds,
+      parentJid: config.scoop.jid,
+    });
     const newScoop = await config.onScoopScoop!(record);
     log.info('Scoop created', { name, folder });
     if (taskPrompt && config.onFeedScoop) {
@@ -794,6 +837,11 @@ function scoopScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
           enum: [...THINKING_LEVELS],
           description:
             'Reasoning / thinking-level for this scoop (pi-ai effort). One of: off, minimal, low, medium, high, xhigh. Omit to inherit the global default ("off"). Non-reasoning models always clamp to "off"; "xhigh" clamps to "high" on models that do not support the max tier.',
+        },
+        background_after: {
+          type: 'number',
+          description:
+            "Seconds this scoop's bash tool waits for a command before detaching it to the background and continuing (default 600). Lower it for a scoop that must never stall on a slow command — nobody can cancel a scoop's turn, and its detached commands report back via a Background Command lick. Use 0 to detach every command immediately.",
         },
       },
       required: ['name'],

@@ -5,7 +5,7 @@
  * This set overlaps `LickEvent.type` in `scoops/lick-manager.ts` but is
  * neither a subset nor a superset of it: it covers most external-event
  * types emitted by the LickManager (webhook, cron, sprinkle, fswatch,
- * session-reload, navigate, discovery, upgrade, workflow) AND the synthetic
+ * session-reload, navigate, discovery, upgrade, workflow, bash) AND the synthetic
  * scoop-lifecycle channels (`scoop-notify`, `scoop-idle`, `scoop-wait`)
  * the Orchestrator fires when a scoop completes, stays idle, or when a
  * previously scheduled `scoop_wait` resolves. `'preview'` is included because
@@ -32,6 +32,7 @@ export type LickChannel =
   | 'discovery'
   | 'upgrade'
   | 'workflow'
+  | 'bash'
   | 'preview'
   | 'scoop-notify'
   | 'scoop-idle'
@@ -48,6 +49,7 @@ export const LICK_CHANNELS: ReadonlySet<LickChannel> = new Set<LickChannel>([
   'discovery',
   'upgrade',
   'workflow',
+  'bash',
   'preview',
   'scoop-notify',
   'scoop-idle',

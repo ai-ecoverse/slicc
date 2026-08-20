@@ -46,6 +46,7 @@ const KIND_ICON: Record<string, string> = {
   webhook: 'webhook',
   cron: 'clock',
   workflow: 'workflow',
+  bash: 'square-terminal',
   'session-reload': 'rotate-ccw',
   navigate: 'compass',
   discovery: 'radar',

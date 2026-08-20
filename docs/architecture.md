@@ -275,11 +275,11 @@ All skills (native and compatibility) are read-only — the slicc-specific `mani
 
 ### packages/webapp/src/tools/ — Agent Tools
 
-| File            | Purpose                                                               |
-| --------------- | --------------------------------------------------------------------- |
-| `bash-tool.ts`  | `bash` tool: execute shell commands via AlmostBashShell               |
-| `file-tools.ts` | `read_file`, `write_file`, `edit_file` tools for VirtualFS operations |
-| `index.ts`      | Tool factory functions (createBashTool, createFileTools)              |
+| File            | Purpose                                                                                                                                                                                                   |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `bash-tool.ts`  | `bash` tool: execute shell commands via AlmostBashShell; each run is a `kind:'shell'` pid, bounded by `background_after` (detach + later `bash` lick) and `timeout` (SIGKILL, fans out to realm children) |
+| `file-tools.ts` | `read_file`, `write_file`, `edit_file` tools for VirtualFS operations                                                                                                                                     |
+| `index.ts`      | Tool factory functions (createBashTool, createFileTools)                                                                                                                                                  |
 
 ### packages/webapp/src/ui/ — User Interface
 
@@ -783,7 +783,7 @@ Each secret is masked using `HMAC-SHA256(session_id + secret_name, secret_value)
 Real secret values are scrubbed at every output boundary before reaching the agent:
 
 1. **Shell environment** — env vars contain masked values, not real ones (source-masking invariant: secrets enter the agent realm already masked, so most tool output is secret-free by construction)
-2. **Tool output** — every completed `bash`, `read_file`, and other tool-result buffer is forwarded to the active `SecretsPipeline` (SW for the thin extension, node-server for CLI/Electron/hosted, swift-server for the native macOS server) for a single real→masked scrub pass before reaching the agent loop. Wired in `packages/webapp/src/core/tool-adapter.ts` via the `scrubToolResult` config that `scoop-context.ts` populates from `getToolResultScrubber()`; the SW handler is `secrets.scrub-tool-result` and the node-server endpoint is `POST /api/secrets/scrub`. Direction is real→masked ONLY, so the pass is idempotent — already-masked tokens and secret-free output round-trip unchanged — and never returns a secret to the agent. Scrub-RPC failure degrades to unscrubbed output rather than blocking the tool result; the env-var source-masking invariant remains the load-bearing defense
+2. **Tool output** — every completed `bash`, `read_file`, and other tool-result buffer is forwarded to the active `SecretsPipeline` (SW for the thin extension, node-server for CLI/Electron/hosted, swift-server for the native macOS server) for a single real→masked scrub pass before reaching the agent loop. Wired in `packages/webapp/src/core/tool-adapter.ts` via the `scrubToolResult` config that `scoop-context.ts` populates from `getToolResultScrubber()`; the SW handler is `secrets.scrub-tool-result` and the node-server endpoint is `POST /api/secrets/scrub`. Direction is real→masked ONLY, so the pass is idempotent — already-masked tokens and secret-free output round-trip unchanged — and never returns a secret to the agent. Scrub-RPC failure degrades to unscrubbed output rather than blocking the tool result; the env-var source-masking invariant remains the load-bearing defense. A **detached** `bash` job reaches the agent as a lick rather than a tool result, so it never crosses that boundary — `bash-tool.ts` applies the same scrubber itself (`BashToolOptions.scrubOutput`) before writing the output file and cutting the lick preview
 3. **Fetch proxy (outbound)** — masked values in request headers are unmasked if the domain matches; 403 if not. Masked values in request bodies are unmasked for matching domains and passed through unchanged otherwise
 4. **Fetch proxy (inbound)** — response bodies and headers are scanned for real values and replaced with masks
 5. **Chat messages** — user-typed real values are scrubbed before entering the agent conversation

@@ -199,7 +199,7 @@ export interface PythonCommandOptions {
    * the realm — #1116). When omitted (or when it returns `undefined`), the
    * command falls back to the global / ephemeral PM with `ppid: 1`.
    */
-  buildProcessConfig?: () => JshProcessConfig | undefined;
+  buildProcessConfig?: (runSignal?: AbortSignal) => JshProcessConfig | undefined;
 }
 
 /**
@@ -450,7 +450,7 @@ export function createPython3LikeCommand(
     // the caller at the async `slicc.fs` module.
     const mountPoints = computeOverlappingMountPoints(ctx.fs, syncDirs);
 
-    const pmConfig = options.buildProcessConfig?.();
+    const pmConfig = options.buildProcessConfig?.(ctx.signal);
     const pm = pmConfig?.processManager ?? lookupGlobalPm();
     const owner: ProcessOwner = pmConfig?.owner ?? { kind: 'system' };
     const ppid = pmConfig?.getParentPid?.();
@@ -530,9 +530,16 @@ export function createPython3LikeCommand(
 // Internals
 // ---------------------------------------------------------------------------
 
+/**
+ * The one global slot this lookup reads — `createKernelHost` publishes the
+ * manager there for callers that cannot take it by injection. Typed as `unknown`
+ * because the value crosses a realm/bundle boundary, which is why the duck-type
+ * check below still runs before it is trusted.
+ */
+type SliccPmGlobal = typeof globalThis & { __slicc_pm?: unknown };
+
 function lookupGlobalPm(): ProcessManager | null {
-  const g = globalThis as Record<string, unknown>;
-  const pm = g.__slicc_pm;
+  const pm = (globalThis as SliccPmGlobal).__slicc_pm;
   if (
     pm &&
     typeof pm === 'object' &&

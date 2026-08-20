@@ -307,6 +307,38 @@ describe('scoop_scoop tool — config defaults', () => {
       thinkingLevel: 'xhigh',
     });
   });
+
+  // ── background_after (bash detach budget) ───────────────────────────
+
+  it('forwards background_after onto the new scoop config', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'patient', background_after: 45 });
+
+    expect(onScoopScoop.mock.calls[0][0].config?.backgroundAfterSeconds).toBe(45);
+  });
+
+  it('forwards background_after: 0 (detach every command immediately)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'impatient', background_after: 0 });
+
+    expect(onScoopScoop.mock.calls[0][0].config?.backgroundAfterSeconds).toBe(0);
+  });
+
+  it('omits backgroundAfterSeconds when unset (inherits the tool default)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'default-bg' });
+
+    expect(onScoopScoop.mock.calls[0][0].config?.backgroundAfterSeconds).toBeUndefined();
+  });
+
+  it('rejects a negative background_after without creating the scoop', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    const result = await tool.execute({ name: 'bad-bg', background_after: -1 });
+
+    expect(result.isError).toBe(true);
+    expect(String(result.content)).toMatch(/Invalid background_after/);
+    expect(onScoopScoop).not.toHaveBeenCalled();
+  });
 });
 
 describe('scoop_mute / scoop_unmute / scoop_wait tools', () => {

@@ -81,7 +81,7 @@ Never drop when:
 `agent` is a shell command that spawns a one-shot sub-scoop, feeds it a prompt, blocks until the agent loop completes, and prints the final message on stdout. Runs from any bash context (terminal, `feed_scoop` prompt, `.jsh` script, dip lick handler, sprinkle button handler).
 
 ```
-agent <cwd> <allowed-commands> <prompt> [--model <id>] [--read-only <paths>]
+agent <cwd> <allowed-commands> <prompt> [--model <id>] [--read-only <paths>] [--background-after <s>]
 ```
 
 - `<cwd>` — sole writable prefix (plus `/shared/`, the scoop's scratch folder, and `/tmp/`). Relative paths resolve against the caller's cwd.
@@ -89,6 +89,7 @@ agent <cwd> <allowed-commands> <prompt> [--model <id>] [--read-only <paths>]
 - `<prompt>` — forwarded verbatim. The spawned scoop has no access to the caller's history; pack context into the prompt.
 - `--model` — defaults to the parent scoop's model (or the cone's, when invoked from the terminal). Accepts an exact id or a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), resolved against the selected provider's catalog. An id that cannot be resolved is a hard error (exit 1) — it never silently falls back to the parent's model.
 - `--read-only` — pure-replace list of read-only paths. Default: `/workspace/` plus the invoking shell's cwd.
+- `--background-after <seconds>` — how long the spawned scoop's `bash` waits for a command before detaching it and moving on (default 600). Nobody can cancel a spawned scoop's turn, so a command that never returns would otherwise burn the whole run on one call; a detached command reports its exit code back to that scoop as a `Background Command` lick. `0` detaches every command immediately.
 
 **Critical property: no handoff.** Ephemeral scoops do NOT notify the cone on completion. Running `agent` from a non-cone shell does not trigger an unsolicited cone turn. The caller gets the result on stdout, nothing else. This makes `agent` the right choice for cheap, predictable interactions inside dips and sprinkles where you don't want the cone or owning scoop woken up.
 
@@ -182,6 +183,23 @@ scoop_scoop({
 - Don't widen `writablePaths` "just in case." A scoop with surprise write access can clobber files outside its task — drop and re-spawn with a tighter scope is cheaper than recovering from that.
 - Don't narrow `allowedCommands` to "look secure" if you don't know which commands the scoop will need. The agent will hit a wall mid-task and either lie ("I'll skip that step") or spam tool errors.
 - Don't forget the `writablePaths`-also-readable rule. `visiblePaths: []` alone does not produce a blind sandbox.
+
+### `background_after` — bounding a scoop's slow commands
+
+`scoop_scoop({ background_after: <seconds> })` sets how long that scoop's `bash`
+tool waits for a command before detaching it and continuing the turn (default
+600). This is a resilience knob, not a sandbox one: a scoop's turn cannot be
+cancelled by anyone, so a command that never returns would hang the scoop (and,
+for a blocking `agent` call, its caller) indefinitely. When a detached command
+finishes, that scoop receives a `Background Command` lick with the exit code, a
+preview, and the path to the full output.
+
+```
+# A scoop whose commands must never stall it for more than a minute.
+scoop_scoop({ name: "flaky-net", background_after: 60, allowedCommands: ["curl", "jq"], prompt: "..." })
+```
+
+The scoop can also override the budget per call (`bash({ command, background_after, timeout })`). Each run is a real pid: `ps` lists a detached job and `kill <pid>` stops it, so `timeout` is a kill rather than just a detach.
 
 ## Parallel orchestration: `scoop_mute` / `scoop_unmute` / `scoop_wait`
 
