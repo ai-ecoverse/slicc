@@ -53,6 +53,14 @@ export interface FileMentionResolverOptions {
   maxEntries?: number;
   /** Deepest directory level the walk descends to. */
   maxDepth?: number;
+  /**
+   * How long an index stays fresh, in milliseconds.
+   *
+   * Agents create files mid-conversation and then name them, so an index cached
+   * for the life of the view would leave exactly those mentions unlinkable.
+   * Pass `Infinity` to cache forever (tests do, to assert the walk happens once).
+   */
+  ttlMs?: number;
 }
 
 const DEFAULT_ROOTS = ['/workspace', '/shared', '/memory', '/scoops', '/mnt'];
@@ -77,6 +85,13 @@ const DEFAULT_IGNORED_DIRS = new Set([
 
 const DEFAULT_MAX_ENTRIES = 20_000;
 const DEFAULT_MAX_DEPTH = 12;
+
+/**
+ * Long enough that scrolling a transcript never re-walks, short enough that a
+ * file the agent just wrote becomes clickable while the user is still reading
+ * the message that named it.
+ */
+const DEFAULT_TTL_MS = 30_000;
 
 /** Normalize a mention into something comparable with a VFS path. */
 function normalizeQuery(query: string): string {
@@ -118,6 +133,9 @@ export class FileMentionResolver {
   readonly #ignoredDirs: Set<string>;
   readonly #maxEntries: number;
   readonly #maxDepth: number;
+  readonly #ttlMs: number;
+  /** When the current index was built, for the TTL check. */
+  #builtAt = 0;
 
   /** basename → every path with that basename. Built once, on first need. */
   #index: Map<string, string[]> | null = null;
@@ -131,6 +149,7 @@ export class FileMentionResolver {
     this.#ignoredDirs = options.ignoredDirs ?? DEFAULT_IGNORED_DIRS;
     this.#maxEntries = options.maxEntries ?? DEFAULT_MAX_ENTRIES;
     this.#maxDepth = options.maxDepth ?? DEFAULT_MAX_DEPTH;
+    this.#ttlMs = options.ttlMs ?? DEFAULT_TTL_MS;
   }
 
   /**
@@ -139,6 +158,7 @@ export class FileMentionResolver {
    * lookup.
    */
   resolve(query: string): Promise<ResolvedMention> {
+    this.#expireStaleIndex();
     const normalized = normalizeQuery(query);
     const cached = this.#answers.get(normalized);
     if (cached) return cached;
@@ -188,10 +208,25 @@ export class FileMentionResolver {
     }
   }
 
+  /**
+   * Drop an index that has outlived its TTL.
+   *
+   * Checked on lookup rather than on a timer so an idle transcript costs
+   * nothing — the work happens only when someone actually asks a question.
+   * Memoized ANSWERS are cleared with it: a negative answer ("no such file") is
+   * exactly the one most likely to have gone stale.
+   */
+  #expireStaleIndex(): void {
+    if (!this.#index || this.#ttlMs === Number.POSITIVE_INFINITY) return;
+    if (Date.now() - this.#builtAt < this.#ttlMs) return;
+    this.invalidate();
+  }
+
   #ensureIndex(): Promise<Map<string, string[]>> {
     if (this.#index) return Promise.resolve(this.#index);
     this.#indexBuild ??= this.#buildIndex().then((index) => {
       this.#index = index;
+      this.#builtAt = Date.now();
       return index;
     });
     return this.#indexBuild;

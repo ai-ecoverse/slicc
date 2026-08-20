@@ -130,7 +130,7 @@ describe('FileMentionResolver', () => {
 
   it('builds the index once no matter how many lookups follow', async () => {
     const fs = fakeVfs(['/workspace/a.ts', '/workspace/b.ts', '/workspace/c.ts']);
-    const resolver = new FileMentionResolver(fs, ROOTS);
+    const resolver = new FileMentionResolver(fs, { ...ROOTS, ttlMs: Number.POSITIVE_INFINITY });
     await Promise.all([resolver.resolve('a.ts'), resolver.resolve('b.ts')]);
     const afterFirst = fs.readDirCalls;
     await resolver.resolve('c.ts');
@@ -166,6 +166,30 @@ describe('FileMentionResolver', () => {
     const resolver = new FileMentionResolver(fs, { ...ROOTS, maxEntries: 10 });
     const found = await resolver.resolveAll(many.map((p) => p.slice('/workspace/'.length)));
     expect(found.filter((r) => r.matches.length > 0).length).toBe(10);
+  });
+
+  it('re-walks after the index TTL expires, so new files become linkable', async () => {
+    // Agents create a file and then name it in the same turn; an index cached
+    // for the life of the view would leave exactly that mention unlinkable.
+    const fs = fakeVfs(['/workspace/a.ts']);
+    const resolver = new FileMentionResolver(fs, { ...ROOTS, ttlMs: 0 });
+
+    await resolver.resolve('a.ts');
+    const afterFirst = fs.readDirCalls;
+    await resolver.resolve('a.ts');
+
+    expect(fs.readDirCalls).toBeGreaterThan(afterFirst);
+  });
+
+  it('does not re-walk while the index is still fresh', async () => {
+    const fs = fakeVfs(['/workspace/a.ts', '/workspace/b.ts']);
+    const resolver = new FileMentionResolver(fs, { ...ROOTS, ttlMs: 60_000 });
+
+    await resolver.resolve('a.ts');
+    const afterFirst = fs.readDirCalls;
+    await resolver.resolve('b.ts');
+
+    expect(fs.readDirCalls).toBe(afterFirst);
   });
 
   it('survives a root that does not exist', async () => {
