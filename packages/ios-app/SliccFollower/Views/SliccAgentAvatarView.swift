@@ -128,18 +128,31 @@ struct SliccAgentAvatarView: View {
         }
     }
 
+    /// Both eyes overlay the WHOLE tile: `.position` reads its coordinates from
+    /// the parent's space, so the pair has to share one container that measures
+    /// `sideLength` on both axes. The explicit `ZStack` is what guarantees that.
+    /// Handed to `TimelineView` bare, the two eyes are its multi-view content
+    /// and get stacked vertically instead — each one laid out in half the tile,
+    /// which drops the right eye a half tile below the left and clips it to the
+    /// bottom-right corner. That only bit the animating path (the settled
+    /// reduced-motion frame the screenshot fixtures capture went straight into
+    /// this view's own ZStack), which is why the live header disagreed with the
+    /// fixtures.
     private func expressionEyes(
         snapshot: AvatarExpressionEngine.Snapshot
     ) -> some View {
-        ForEach(Array(avatar.eyeCenters.enumerated()), id: \.offset) { index, center in
-            ExpressiveAvatarEye(
-                avatar: avatar,
-                snapshot: snapshot,
-                eyeIndex: index,
-                pupilOffset: expressionPupilOffset(snapshot: snapshot, eyeIndex: index)
-            )
-            .position(x: center.x, y: center.y)
+        ZStack {
+            ForEach(Array(avatar.eyeCenters.enumerated()), id: \.offset) { index, center in
+                ExpressiveAvatarEye(
+                    avatar: avatar,
+                    snapshot: snapshot,
+                    eyeIndex: index,
+                    pupilOffset: expressionPupilOffset(snapshot: snapshot, eyeIndex: index)
+                )
+                .position(x: center.x, y: center.y)
+            }
         }
+        .frame(width: avatar.sideLength, height: avatar.sideLength)
     }
 
     /// While a tool runs, CoreMotion tilt owns the gaze — the web's pointer

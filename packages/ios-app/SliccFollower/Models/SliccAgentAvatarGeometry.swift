@@ -54,18 +54,70 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
         self.activity = activity
     }
 
-    var tileCornerRadius: Double { 0.269 * sideLength }
-    var eyeRadius: Double { 0.352 * sideLength }
-    var eyeOutlineWidth: Double { 0.037 * sideLength }
-    var eyeDiameter: Double { eyeRadius * 2 }
-    var eyeCenters: [Point] {
-        [
-            Point(x: 0.083 * sideLength, y: 0.5 * sideLength),
-            Point(x: 0.917 * sideLength, y: 0.5 * sideLength),
-        ]
+    /// How `slicc-agent-avatar.ts` lands the 200x100 eye band on the tile, per
+    /// avatar type. The web positions `.eyes` at `top/left/width/height` inside
+    /// `.icon-inner`, which then carries `translate(--tx,--ty) scale(--zoom)`;
+    /// the SVG itself meets its box. Both types share the same band unit, so
+    /// the ONLY thing that differs is the zoom and where the band sits — and
+    /// the cone zooms harder (3 vs 2.65) into a band pulled above the tile.
+    /// Hard-coding the scoop's numbers for both is what left cone eyes too
+    /// small and too far inboard.
+    private struct BandPlacement {
+        /// `TYPE.<type>.eyes`, as fractions of the tile side.
+        let left: Double
+        let top: Double
+        let width: Double
+        let height: Double
+        /// `TYPE.<type>.zoom`.
+        let zoom: Double
+
+        /// One 200x100 band unit as a fraction of the tile side, after the SVG's
+        /// `xMidYMid meet` fit and the `icon-inner` zoom.
+        var unit: Double { zoom * min(width / 200, height / 100) }
+
+        /// Tile-space position of a band point, as fractions of the tile side.
+        func place(x bandX: Double, y bandY: Double) -> Point {
+            let fit = min(width / 200, height / 100)
+            let originX = left + (width - 200 * fit) / 2
+            let originY = top + (height - 100 * fit) / 2
+            let translateX = 0.5 - zoom * (left + width / 2)
+            let translateY = 0.5 - zoom * (top + height / 2)
+            return Point(
+                x: zoom * (originX + bandX * fit) + translateX,
+                y: zoom * (originY + bandY * fit) + translateY)
+        }
     }
 
-    var pupilRadius: Double { 0.167 * sideLength * Self.fillScale(for: fill) }
+    /// An exhaustive `switch`, not a lookup table: a third avatar type has to
+    /// declare where its band lands rather than silently inheriting the
+    /// scoop's, which is the failure this whole property exists to undo.
+    private var placement: BandPlacement {
+        switch type {
+        case .scoop: .init(left: 0.15, top: 0.30, width: 0.70, height: 0.45, zoom: 2.65)
+        case .cone: .init(left: 0.17, top: -0.185, width: 0.70, height: 0.44, zoom: 3)
+        }
+    }
+
+    /// One 200x100 band unit in points.
+    private var bandUnit: Double { placement.unit * sideLength }
+
+    var tileCornerRadius: Double { 0.269 * sideLength }
+    var eyeRadius: Double { AvatarExpression.eyeRadius * bandUnit }
+    var eyeOutlineWidth: Double { Self.bandStrokeWidth * bandUnit }
+    var eyeDiameter: Double { eyeRadius * 2 }
+    var eyeCenters: [Point] {
+        [AvatarExpression.leftEyeX, AvatarExpression.rightEyeX].map { bandX in
+            let placed = placement.place(x: bandX, y: AvatarExpression.eyeCenterY)
+            return Point(x: placed.x * sideLength, y: placed.y * sideLength)
+        }
+    }
+
+    /// The socket/lid stroke, `stroke-width: 4` in band units on the web side.
+    static let bandStrokeWidth = 4.0
+
+    var pupilRadius: Double {
+        AvatarExpression.pupilRadius * bandUnit * Self.fillScale(for: fill)
+    }
     var highlightRadius: Double { 0.4 * pupilRadius }
     var highlightOffset: Point {
         Point(x: -0.3 * pupilRadius, y: -0.35 * pupilRadius)
@@ -74,7 +126,7 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
     /// Radial travel available to device tilt, clamped exactly like the web avatar.
     var maxPupilTravel: Double {
         let unclamped = eyeRadius - pupilRadius - eyeOutlineWidth
-        return min(0.148 * sideLength, max(0.019 * sideLength, unclamped))
+        return min(AvatarExpression.maxOffset * bandUnit, max(2 * bandUnit, unclamped))
     }
 
     /// Applies the web avatar's radial max-offset clamp to a proposed pupil offset.

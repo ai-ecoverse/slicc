@@ -1,5 +1,5 @@
 {
-  "$comment": "Screen registry for the iOS PR screenshots job (.github/workflows/ios-screenshots.yml). Each screen is a deterministic, leaderless app state reached purely through UITestHooks launch arguments (DEBUG builds only \u2014 see App/UITestHooks.swift), so capture needs no taps and no leader. Every screen runs on every ios-app PR: unlike Storybook there is no per-story diff mapping \u2014 the app is one connected surface and the whole set costs under two simulator-minutes. Add a screen when you add a hook; names are kebab-case and become the screenshot filenames (ios-<name>.png). Dedup note: the capture pins the simulator status bar so static screens hash stably across runs; screens showing iOS 26 glass chrome (sheet Done buttons) or live animations render nondeterministically and re-upload on every push \u2014 expected, not a bug.",
+  "$comment": "Screen registry for the iOS PR screenshots job (.github/workflows/ios-screenshots.yml). Each screen is a deterministic, leaderless app state reached purely through UITestHooks launch arguments (DEBUG builds only — see App/UITestHooks.swift), so capture needs no taps and no leader. Every screen runs on every ios-app PR: unlike Storybook there is no per-story diff mapping — the app is one connected surface and the whole set costs under two simulator-minutes. Add a screen when you add a hook; names are kebab-case and become the screenshot filenames (ios-<name>.png). Dedup note: the capture pins the simulator status bar so static screens hash stably across runs; screens showing iOS 26 glass chrome (sheet Done buttons) or live animations render nondeterministically and re-upload on every push — expected, not a bug.",
   "screens": [
     {
       "name": "settings",
@@ -258,6 +258,22 @@
       "args": [
         "-uiTestAvatarFixture",
         "dark-expression"
+      ]
+    },
+    {
+      "name": "avatar-toolbar-light",
+      "description": "The header avatar in its real home: a `.principal` toolbar item at the 30pt-tile-in-36pt-slot size ChatView gives it, over the same four activities inline. The grid fixtures put the tile straight into a stack, so only this one exercises the toolbar layout where the eye pair was stacked vertically instead of side by side.",
+      "args": [
+        "-uiTestAvatarFixture",
+        "light-toolbar"
+      ]
+    },
+    {
+      "name": "avatar-toolbar-dark",
+      "description": "The same toolbar avatar in dark mode.",
+      "args": [
+        "-uiTestAvatarFixture",
+        "dark-toolbar"
       ]
     }
   ]

@@ -27,19 +27,59 @@ private final class ManuallyEmittingAvatarTiltSource: SliccAgentAvatarTiltSource
 final class SliccAgentAvatarGeometryTests: XCTestCase {
     private let accuracy = 0.000_001
 
-    func testGeometryScalesFromTileSideLength() {
+    /// The scoop band: `TYPE.scoop` is `left 15% / top 30% / 70x45%` at
+    /// `zoom 2.65`, so one 200x100 band unit is `2.65 * 0.0035 = 0.9275%` of
+    /// the tile side. Every socket length below is that unit times the band
+    /// constant `slicc-agent-avatar.ts` uses.
+    func testScoopGeometryMatchesWebEyeBandPlacement() {
         let geometry = SliccAgentAvatarGeometry(
             type: .scoop, color: "#8B5CF6", fill: 50, sideLength: 100)
+        let unit = 0.9275
 
         XCTAssertEqual(geometry.tileCornerRadius, 26.9, accuracy: accuracy)
-        XCTAssertEqual(geometry.eyeRadius, 35.2, accuracy: accuracy)
-        XCTAssertEqual(geometry.eyeOutlineWidth, 3.7, accuracy: accuracy)
-        XCTAssertEqual(geometry.eyeCenters[0], .init(x: 8.3, y: 50))
-        XCTAssertEqual(geometry.eyeCenters[1], .init(x: 91.7, y: 50))
-        XCTAssertEqual(geometry.pupilRadius, 16.7, accuracy: accuracy)
-        XCTAssertEqual(geometry.highlightRadius, 6.68, accuracy: accuracy)
-        XCTAssertEqual(geometry.highlightOffset.x, -5.01, accuracy: accuracy)
-        XCTAssertEqual(geometry.highlightOffset.y, -5.845, accuracy: accuracy)
+        XCTAssertEqual(geometry.eyeRadius, 38 * unit, accuracy: accuracy)
+        XCTAssertEqual(geometry.eyeOutlineWidth, 4 * unit, accuracy: accuracy)
+        XCTAssertEqual(geometry.eyeCenters[0].x, 8.2625, accuracy: accuracy)
+        XCTAssertEqual(geometry.eyeCenters[1].x, 91.7375, accuracy: accuracy)
+        XCTAssertEqual(geometry.pupilRadius, 18 * unit, accuracy: accuracy)
+        XCTAssertEqual(geometry.highlightRadius, 0.4 * 18 * unit, accuracy: accuracy)
+        XCTAssertEqual(geometry.highlightOffset.x, -0.3 * 18 * unit, accuracy: accuracy)
+        XCTAssertEqual(geometry.highlightOffset.y, -0.35 * 18 * unit, accuracy: accuracy)
+        XCTAssertEqual(geometry.maxPupilTravel, 16 * unit, accuracy: accuracy)
+    }
+
+    /// The cone crops the SAME band harder: `left 17% / top -18.5% / 70x44%` at
+    /// `zoom 3`, so its unit is `3 * 0.0035 = 1.05%` — bigger sockets pushed
+    /// almost onto the tile edges. Reusing the scoop's placement (the bug this
+    /// pins) shrank cone eyes and pulled them inboard.
+    func testConeGeometryUsesItsOwnEyeBandPlacement() {
+        let geometry = SliccAgentAvatarGeometry(
+            type: .cone, color: "#B07823", fill: 50, sideLength: 100)
+        let unit = 1.05
+
+        XCTAssertEqual(geometry.eyeRadius, 38 * unit, accuracy: accuracy)
+        XCTAssertEqual(geometry.eyeOutlineWidth, 4 * unit, accuracy: accuracy)
+        XCTAssertEqual(geometry.eyeCenters[0].x, 2.75, accuracy: accuracy)
+        XCTAssertEqual(geometry.eyeCenters[1].x, 97.25, accuracy: accuracy)
+        XCTAssertEqual(geometry.pupilRadius, 18 * unit, accuracy: accuracy)
+        XCTAssertEqual(geometry.maxPupilTravel, 16 * unit, accuracy: accuracy)
+    }
+
+    /// Whatever the type, both sockets sit on ONE horizontal line and stay
+    /// mirrored about the tile centre — the band's `EYE_CY` is shared and its
+    /// two `cx` values are symmetric. This is the invariant the header avatar
+    /// broke when the animating path stacked the eyes vertically.
+    func testEyesShareOneBaselineAndMirrorAboutTheTileCentre() {
+        for type in [SliccAgentAvatarGeometry.AvatarType.scoop, .cone] {
+            let geometry = SliccAgentAvatarGeometry(
+                type: type, color: "#8B5CF6", fill: 50, sideLength: 100)
+            let left = geometry.eyeCenters[0]
+            let right = geometry.eyeCenters[1]
+
+            XCTAssertEqual(left.y, right.y, accuracy: accuracy, "\(type) eyes off one baseline")
+            XCTAssertEqual(left.y, 50, accuracy: accuracy, "\(type) baseline off tile centre")
+            XCTAssertEqual(left.x, 100 - right.x, accuracy: accuracy, "\(type) eyes not mirrored")
+        }
     }
 
     func testFillScaleMatchesWebBoundariesAndMidpoint() {
@@ -94,6 +134,7 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
     }
 
     func testMaxTravelClampsAtBothBounds() {
+        // Band units per tile side: 1.05% on the cone, 0.9275% on the scoop.
         let lowFill = SliccAgentAvatarGeometry(
             type: .cone, color: "#F59E0B", fill: 0, sideLength: 100)
         let highFill = SliccAgentAvatarGeometry(
@@ -101,9 +142,14 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         let midpoint = SliccAgentAvatarGeometry(
             type: .scoop, color: "#8B5CF6", fill: 67.5, sideLength: 100)
 
-        XCTAssertEqual(lowFill.maxPupilTravel, 14.8, accuracy: accuracy)
-        XCTAssertEqual(highFill.maxPupilTravel, 1.9, accuracy: accuracy)
-        XCTAssertEqual(midpoint.maxPupilTravel, 4.78, accuracy: accuracy)
+        // Upper bound: the web's `min(MAX_OFFSET, …)` at 16 band units.
+        XCTAssertEqual(lowFill.maxPupilTravel, 16 * 1.05, accuracy: accuracy)
+        // Lower bound: the web's `max(2, …)` floor, once a full pupil eats the socket.
+        XCTAssertEqual(highFill.maxPupilTravel, 2 * 0.9275, accuracy: accuracy)
+        // In between, the unclamped `r - pupil - stroke` wins.
+        XCTAssertEqual(
+            midpoint.maxPupilTravel,
+            (38 - 18 * 1.6 - 4) * 0.9275, accuracy: accuracy)
     }
 
     func testPupilOffsetUsesRadialMaxTravelClamp() {
@@ -112,8 +158,9 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
 
         XCTAssertEqual(geometry.clampedPupilOffset(.init(x: 1, y: 2)), .init(x: 1, y: 2))
         let clamped = geometry.clampedPupilOffset(.init(x: 30, y: 40))
-        XCTAssertEqual(clamped.x, 2.868, accuracy: accuracy)
-        XCTAssertEqual(clamped.y, 3.824, accuracy: accuracy)
+        // (30, 40) has length 50, so the clamp scales it to maxPupilTravel/50.
+        XCTAssertEqual(clamped.x, 30 * geometry.maxPupilTravel / 50, accuracy: accuracy)
+        XCTAssertEqual(clamped.y, 40 * geometry.maxPupilTravel / 50, accuracy: accuracy)
         XCTAssertEqual(hypot(clamped.x, clamped.y), geometry.maxPupilTravel, accuracy: accuracy)
     }
 
@@ -167,7 +214,7 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         let geometry = scoopSummary(isCone: false, state: nil, fill: nil).avatarGeometry()
 
         XCTAssertNil(geometry.fill)
-        XCTAssertEqual(geometry.pupilRadius, 0.167 * 26, accuracy: accuracy)
+        XCTAssertEqual(geometry.pupilRadius, 18 * 0.009275 * 26, accuracy: accuracy)
     }
 
     func testScoopSummaryMapsLifecycleToWebEyeStates() {
