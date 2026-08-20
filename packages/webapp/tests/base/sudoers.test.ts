@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   applyDefaultDisposition,
+  builtinScoopGrants,
   commandGlobToRegExp,
   emptyPolicy,
   matchCommand,
@@ -340,5 +341,43 @@ describe('applyDefaultDisposition', () => {
   it('never overrides an explicit nopasswd-allow grant', () => {
     expect(applyDefaultDisposition('nopasswd-allow', 'allow')).toBe('nopasswd-allow');
     expect(applyDefaultDisposition('nopasswd-allow', 'require-approval')).toBe('nopasswd-allow');
+  });
+});
+
+describe('builtinScoopGrants', () => {
+  it('grants read + write on /tmp and everything under it', () => {
+    const p = builtinScoopGrants();
+    expect(matchPath(p, 'write', '/tmp')).toBe('nopasswd-allow');
+    expect(matchPath(p, 'write', '/tmp/scratch.txt')).toBe('nopasswd-allow');
+    expect(matchPath(p, 'write', '/tmp/nested/deep/file.bin')).toBe('nopasswd-allow');
+    expect(matchPath(p, 'read', '/tmp/scratch.txt')).toBe('nopasswd-allow');
+  });
+
+  it('grants nothing outside /tmp', () => {
+    const p = builtinScoopGrants();
+    expect(matchPath(p, 'write', '/workspace/file.txt')).toBe('no-match');
+    expect(matchPath(p, 'write', '/tmpfoo/file.txt')).toBe('no-match');
+    expect(matchPath(p, 'read', '/shared/secrets/aws.env')).toBe('no-match');
+    expect(p.cmnd).toEqual([]);
+  });
+
+  it('cannot override self-protection on the sudoers files', () => {
+    const p = builtinScoopGrants();
+    expect(matchPath(p, 'write', SUDOERS_FILE)).toBe('require-approval');
+    expect(matchPath(p, 'write', `${SUDOERS_D_DIR}/granted`)).toBe('require-approval');
+  });
+
+  it('still escalates an unmatched write under the require-approval default', () => {
+    const p = builtinScoopGrants();
+    expect(applyDefaultDisposition(matchPath(p, 'write', '/tmp/x'), 'require-approval')).toBe(
+      'nopasswd-allow'
+    );
+    expect(applyDefaultDisposition(matchPath(p, 'write', '/etc/models'), 'require-approval')).toBe(
+      'require-approval'
+    );
+  });
+
+  it('returns a stable shared policy without recompiling', () => {
+    expect(builtinScoopGrants()).toBe(builtinScoopGrants());
   });
 });

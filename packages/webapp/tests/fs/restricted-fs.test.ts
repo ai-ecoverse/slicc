@@ -630,3 +630,52 @@ describe('RestrictedFS', () => {
     });
   });
 });
+
+/**
+ * `/tmp` is global scratch space every sandbox gets unconditionally
+ * (`ALWAYS_WRITABLE_PREFIXES`), so tooling that hardcodes `/tmp/<file>` works
+ * without a sudo escalation. Deliberately shared across scoops.
+ */
+describe('RestrictedFS /tmp exemption', () => {
+  let vfs: VirtualFS;
+  let restricted: RestrictedFS;
+
+  beforeAll(async () => {
+    vfs = await VirtualFS.create({ dbName: 'test-restricted-fs-tmp', wipe: true });
+    await vfs.mkdir('/scoops/tmp-scoop', { recursive: true });
+    await vfs.mkdir('/tmp', { recursive: true });
+    await vfs.mkdir('/tmpfoo', { recursive: true });
+    await vfs.writeFile('/tmp/from-elsewhere.txt', 'planted');
+    await vfs.writeFile('/tmpfoo/decoy.txt', 'decoy');
+    // Note: `/tmp` is NOT among the configured writable prefixes.
+    restricted = new RestrictedFS(vfs, ['/scoops/tmp-scoop/']);
+  });
+
+  it('writes under /tmp in hard enforcement mode', async () => {
+    await restricted.writeFile('/tmp/scratch.txt', 'ok');
+    expect(await vfs.readTextFile('/tmp/scratch.txt')).toBe('ok');
+  });
+
+  it('creates directories under /tmp', async () => {
+    await restricted.mkdir('/tmp/nested/deep', { recursive: true });
+    await restricted.writeFile('/tmp/nested/deep/file.txt', 'deep');
+    expect(await restricted.readTextFile('/tmp/nested/deep/file.txt')).toBe('deep');
+  });
+
+  it('reads files another context left in /tmp (shared, not per-scoop)', async () => {
+    expect(await restricted.readTextFile('/tmp/from-elsewhere.txt')).toBe('planted');
+  });
+
+  it('reports /tmp as writable via canWrite', () => {
+    expect(restricted.canWrite('/tmp')).toBe(true);
+    expect(restricted.canWrite('/tmp/scratch.txt')).toBe(true);
+  });
+
+  it('does not leak the exemption to a same-prefix sibling', async () => {
+    expect(restricted.canWrite('/tmpfoo/x.txt')).toBe(false);
+    await expect(restricted.writeFile('/tmpfoo/x.txt', 'nope')).rejects.toThrow(
+      /permission denied/
+    );
+    await expect(restricted.readTextFile('/tmpfoo/decoy.txt')).rejects.toThrow();
+  });
+});

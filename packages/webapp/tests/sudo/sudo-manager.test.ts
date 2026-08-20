@@ -355,6 +355,43 @@ describe('SudoManager per-scoop policy view', () => {
     mgr.dispose();
   });
 
+  it('grants /tmp to every scoop, even one whose seeded sudoers predates the grant', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+
+    // A scoop whose on-disk sudoers was generated without any /tmp rule —
+    // `ensureSudoersLoaded` never regenerates an existing file, so the grant
+    // has to come from the built-in policy rather than from this body.
+    await mgr.seedScoopSudoers('andy', {
+      writablePaths: ['/scoops/andy'],
+      allowedCommands: ['git'],
+    });
+    const written = (await vfs.readFile(scoopSudoersPath('andy'), {
+      encoding: 'utf-8',
+    })) as string;
+    expect(written).not.toContain('/tmp');
+
+    const policy = mgr.getPolicyForScoop('andy');
+    expect(matchPath(policy, 'write', '/tmp/scratch.txt')).toBe('nopasswd-allow');
+    expect(matchPath(policy, 'read', '/tmp/scratch.txt')).toBe('nopasswd-allow');
+    // Unrelated out-of-sandbox writes still escalate.
+    expect(matchPath(policy, 'write', '/workspace/file.txt')).toBe('no-match');
+    mgr.dispose();
+  });
+
+  it('lets a global gating rule on /tmp still require approval', async () => {
+    await vfs.mkdir('/etc', { recursive: true });
+    await vfs.writeFile(SUDOERS_FILE, 'Write /tmp/**\n');
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+
+    // NOPASSWD wins over a plain match by design, so a user who wants /tmp
+    // gated cannot get it from /etc/sudoers — document the actual behavior.
+    expect(matchPath(mgr.getPolicyForScoop('andy'), 'write', '/tmp/x')).toBe('nopasswd-allow');
+    expect(matchPath(mgr.getPolicy(), 'write', '/tmp/x')).toBe('require-approval');
+    mgr.dispose();
+  });
+
   it("does not bleed one scoop's grants into another scoop's policy view", async () => {
     const mgr = new SudoManager({ fs: vfs, watcher, broker });
     await mgr.init();

@@ -59,6 +59,24 @@ const VIRTUAL_DEVICES: Record<string, VirtualDevice> = {
   },
 };
 
+/**
+ * Prefixes every sandbox may read AND write regardless of its configured
+ * ACLs. `/tmp` is global scratch space in SLICC the same way it is on Unix:
+ * tooling hardcodes `/tmp/<file>` rather than discovering a scratch dir, and
+ * a scoop must not need a sudo escalation to do the obvious thing.
+ *
+ * This space is deliberately SHARED, not per-scoop — scoops can read and
+ * overwrite each other's scratch files, and the cone sees all of them, so
+ * nothing secret or trust-bearing belongs here.
+ *
+ * SudoFS gates independently of this class, so the sandbox surface has to
+ * agree in both layers: the matching unconditional `NOPASSWD Read/Write`
+ * grants live in `generateScoopSudoers` (`sudo/sudo-manager.ts`). Changing
+ * one without the other either re-introduces the approval prompt or walls
+ * the write underneath it.
+ */
+const ALWAYS_WRITABLE_PREFIXES = ['/tmp/'];
+
 export class RestrictedFS {
   private vfs: VirtualFS;
   private allowedPrefixes: string[];
@@ -86,7 +104,12 @@ export class RestrictedFS {
   /** Get all prefixes including dynamic mount paths (as read-only). */
   private getAllPrefixes(): string[] {
     const mountPrefixes = this.vfs.listMounts().map((p) => (p.endsWith('/') ? p : p + '/'));
-    return [...this.allowedPrefixes, ...this.readOnlyPrefixes, ...mountPrefixes];
+    return [
+      ...this.allowedPrefixes,
+      ...this.readOnlyPrefixes,
+      ...mountPrefixes,
+      ...ALWAYS_WRITABLE_PREFIXES,
+    ];
   }
 
   /**
@@ -156,7 +179,7 @@ export class RestrictedFS {
   /** Check if a path is within read-write prefixes only (excludes read-only). */
   private isWritable(path: string): boolean {
     const normalized = normalizePath(path);
-    return this.allowedPrefixes.some(
+    return [...this.allowedPrefixes, ...ALWAYS_WRITABLE_PREFIXES].some(
       (prefix) => normalized === prefix.slice(0, -1) || normalized.startsWith(prefix)
     );
   }

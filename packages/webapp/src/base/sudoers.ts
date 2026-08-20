@@ -245,6 +245,46 @@ export function parseSudoers(text: string): SudoersPolicy {
   }
 }
 
+/**
+ * Grants every scoop sandbox carries on top of its own sudoers file.
+ *
+ * `/tmp` is global scratch space in SLICC the same way it is on Unix: tooling
+ * hardcodes `/tmp/<file>` rather than discovering a scratch dir, so without
+ * this every such write escalates to the cone for approval. The space is
+ * deliberately SHARED, not per-scoop — scoops can read and clobber each
+ * other's scratch files and the cone sees all of them, so nothing secret or
+ * trust-bearing belongs here.
+ *
+ * These live in code rather than in the generated `/scoops/<folder>/etc/sudoers`
+ * because that file is written only when absent (it carries persisted "Always"
+ * grants), so a file-based grant would never reach an already-created scoop.
+ *
+ * Self-protection is unaffected: it lives in `matchPath` and no `NOPASSWD`
+ * rule — including these — can override it.
+ */
+const BUILTIN_SCOOP_GRANTS = [
+  'NOPASSWD Read /tmp',
+  'NOPASSWD Read /tmp/**',
+  'NOPASSWD Write /tmp',
+  'NOPASSWD Write /tmp/**',
+].join('\n');
+
+let builtinScoopPolicy: SudoersPolicy | null = null;
+
+/**
+ * The compiled {@link BUILTIN_SCOOP_GRANTS} policy. Parsed once and shared —
+ * rules are treated as immutable everywhere (matching only ever calls
+ * `regex.test`), so handing the same objects to every merge is safe.
+ *
+ * The matching ACL exemption is `ALWAYS_WRITABLE_PREFIXES` in
+ * `fs/restricted-fs.ts`. SudoFS and RestrictedFS gate independently, so both
+ * layers must agree — granting here alone leaves the write walled underneath.
+ */
+export function builtinScoopGrants(): SudoersPolicy {
+  builtinScoopPolicy ??= parseSudoers(BUILTIN_SCOOP_GRANTS);
+  return builtinScoopPolicy;
+}
+
 /** Merge multiple parsed policies into one (order is irrelevant to results). */
 export function mergePolicies(...policies: SudoersPolicy[]): SudoersPolicy {
   const merged = emptyPolicy();

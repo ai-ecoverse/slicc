@@ -840,7 +840,7 @@ function scoopScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
           type: 'array',
           items: { type: 'string' },
           description:
-            'VFS paths the scoop can READ AND WRITE. Pure replace. Omit to use the default ["/scoops/<folder>/", "/shared/"] which gives the scoop its own sandbox plus shared space. Pass [] to block all writes. Trailing slash recommended.',
+            'VFS paths the scoop can READ AND WRITE. Pure replace. Omit to use the default ["/scoops/<folder>/", "/shared/"] which gives the scoop its own sandbox plus shared space. Pass [] to block all writes — note that /tmp stays readable and writable regardless, as shared scratch space every scoop gets (so nothing secret belongs there). Trailing slash recommended.',
         },
         allowedCommands: {
           type: 'array',
