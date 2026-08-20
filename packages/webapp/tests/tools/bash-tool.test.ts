@@ -79,6 +79,62 @@ describe('Bash Tool', () => {
     expect(typeof full === 'string' ? full.length : 0).toBeGreaterThanOrEqual(60 * 1024);
   });
 
+  it('carries an oversized image marker past the 40KB text cap intact (#2217)', async () => {
+    // `open --view` emits the image as a `<img:data:…>` marker in bash output.
+    // Tail-truncating through it left the model with a base64 tail and no
+    // image, and cost the chat row its inline preview.
+    const marker = `<img:data:image/png;base64,${'A'.repeat(200 * 1024)}>`;
+    await fs.writeFile('/shot.txt', `/shared/shot.png (1536x1506, 198 KB, image/png)\n${marker}`);
+
+    const result = await bash.execute({ command: 'cat /shot.txt' });
+
+    expect(result.content).toContain(marker);
+    expect(result.content).toContain('/shared/shot.png (1536x1506, 198 KB, image/png)');
+    // The marker alone is over the cap, yet the text around it is not truncated.
+    expect(result.content).not.toContain('Output truncated');
+  });
+
+  it('keeps the image marker in place when the surrounding text IS truncated (#2217)', async () => {
+    const marker = `<img:data:image/png;base64,${'A'.repeat(1024)}>`;
+    await fs.writeFile('/mixed.txt', `${'y'.repeat(60 * 1024)}\nshot.png\n${marker}`);
+
+    const result = await bash.execute({ command: 'cat /mixed.txt' });
+
+    expect(result.content).toContain('Output truncated');
+    expect(result.content).toContain(marker);
+    // The image still follows the line that introduced it, not the footer.
+    expect(result.content.indexOf('shot.png')).toBeLessThan(result.content.indexOf(marker));
+    // The paging file holds the text, with the base64 replaced by a stub.
+    const path = result.content.match(/\/tmp\/bash-output-\d+\.txt/)?.[0];
+    const full = await fs.readFile(path!, { encoding: 'utf-8' });
+    expect(full).not.toContain('<img:');
+    expect(full).toContain('[image]');
+  });
+
+  it('drops the oldest images over the 1MB image budget (#2217)', async () => {
+    // Each marker is ~600KB, so only the newest fits the budget.
+    const first = `<img:data:image/png;base64,${'A'.repeat(600 * 1024)}>`;
+    const second = `<img:data:image/png;base64,${'B'.repeat(600 * 1024)}>`;
+    await fs.writeFile('/two.txt', `one\n${first}\ntwo\n${second}`);
+
+    const result = await bash.execute({ command: 'cat /two.txt' });
+
+    expect(result.content).not.toContain(first);
+    expect(result.content).toContain(second);
+    expect(result.content).toContain('image dropped');
+  });
+
+  it('still truncates a marker-shaped run that is not a usable image (#2217)', async () => {
+    // Prose quoting the syntax carries no payload, so it stays subject to the
+    // text cap — exempting it would be a cap bypass.
+    await fs.writeFile('/prose.txt', `<img:data:image/${'x'.repeat(60 * 1024)}>`);
+
+    const result = await bash.execute({ command: 'cat /prose.txt' });
+
+    expect(result.content).toContain('Output truncated');
+    expect(result.content.length).toBeLessThan(60 * 1024);
+  });
+
   it('leaves small output unchanged (no truncation footer)', async () => {
     const result = await bash.execute({ command: 'echo hello world' });
     expect(result.content).toContain('hello world');
@@ -407,6 +463,29 @@ describe('Bash Tool background_after / timeout', () => {
     // Routed back to the scoop that started the run, not to the cone.
     expect(event.targetScoop).toBe('andy-scoop');
     expect(await fs.readFile('/tmp/bash-bg-1.txt', { encoding: 'utf-8' })).toContain('built ok');
+  });
+
+  it('keeps base64 out of a background job lick preview (#2217)', async () => {
+    const { shell, settle } = pendingShell();
+    const fireLick = vi.fn();
+    const bash = createBashTool(shell, fs, '/tmp', { fireLick });
+    const marker = `<img:data:image/png;base64,${'A'.repeat(8 * 1024)}>`;
+
+    await bash.execute({ command: 'open --view --size small shot.png', background_after: 0 });
+    settle({
+      stdout: `shot.png (768x768, 78 KB, image/png)\n${marker}\n`,
+      stderr: '',
+      exitCode: 0,
+    });
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+
+    const event = fireLick.mock.calls[0][0];
+    // The 2KB preview can't carry a picture, so it carries the line that matters.
+    expect(event.preview).toContain('shot.png (768x768, 78 KB, image/png)');
+    expect(event.preview).toContain('[image]');
+    expect(event.preview).not.toContain('AAAA');
+    // The marker survives in the persisted file, so `cat` still shows the image.
+    expect(await fs.readFile('/tmp/bash-bg-1.txt', { encoding: 'utf-8' })).toContain(marker);
   });
 
   it('leaves targetScoop unset for the cone (untargeted licks route to the cone)', async () => {

@@ -46,7 +46,6 @@
   "packages/webapp/src/core/feature-flags-remote.ts": 1,
   "packages/webapp/src/core/feature-flags.ts": 2,
   "packages/webapp/src/core/secrets-bridge-client.ts": 2,
-  "packages/webapp/src/core/tool-adapter.ts": 2,
   "packages/webapp/src/core/tool-registry.ts": 1,
   "packages/webapp/src/core/types.ts": 2,
   "packages/webapp/src/fs/mount/backend-local.ts": 1,
@@ -82,7 +81,6 @@
   "packages/webapp/src/providers/oauth-code-exchange.ts": 2,
   "packages/webapp/src/scoops/onboarding-orchestrator.ts": 1,
   "packages/webapp/src/scoops/sprinkle-manager-proxy.ts": 1,
-  "packages/webapp/src/scoops/transcript-limits.ts": 2,
   "packages/webapp/src/scoops/tray-follower-sync.ts": 2,
   "packages/webapp/src/scoops/tray-follower.ts": 5,
   "packages/webapp/src/scoops/tray-leader/cdp-router.ts": 5,
@@ -132,7 +130,6 @@
   "packages/webapp/src/ui/sprinkle-renderer.ts": 3,
   "packages/webapp/src/ui/tray-leave-runtime.ts": 1,
   "packages/webapp/src/ui/wc/wc-attach.ts": 3,
-  "packages/webapp/src/ui/wc/wc-message-view.ts": 2,
   "packages/webapp/src/ui/wc/wc-onboarding.ts": 1,
   "packages/webcomponents/src/composer/speech.ts": 1,
   "packages/webcomponents/src/overlay/slicc-permissions.stories.ts": 5

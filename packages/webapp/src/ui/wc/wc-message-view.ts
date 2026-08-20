@@ -7,8 +7,8 @@
  */
 
 import { hasIcon, type SliccUserMessage } from '@slicc/webcomponents';
+import { splitToolResultImages } from '../../base/image-markers.js';
 import type { MessageAttachment } from '../../core/attachments.js';
-import { splitToolResultImages } from '../../core/tool-result-images.js';
 import { stripDictationMarkers } from '../../speech/dictation-priming.js';
 import { ansiToDom } from '../ansi-to-dom.js';
 import { renderAssistantMessageContent, renderMessageContent } from '../message-renderer.js';
@@ -103,6 +103,7 @@ export function summarizeToolInput(input: unknown): string {
   if (input == null) return '';
   if (typeof input === 'string') return firstLine(input);
   if (typeof input === 'object') {
+    // biome-ignore lint/plugin: any tool's input bag; the row label probes well-known field names across all of them.
     const record = input as Record<string, unknown>;
     const primary = record['path'] ?? record['file_path'] ?? record['command'] ?? record['name'];
     if (typeof primary === 'string') return firstLine(primary);
@@ -117,6 +118,7 @@ function firstLine(text: string): string {
 
 function inputField(input: unknown, field: string): string {
   if (typeof input !== 'object' || input == null) return '';
+  // biome-ignore lint/plugin: same any-tool input bag, read by caller-supplied field name.
   const value = (input as Record<string, unknown>)[field];
   return typeof value === 'string' ? value : '';
 }

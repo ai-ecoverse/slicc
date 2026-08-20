@@ -52,12 +52,22 @@ describe('parseToolResultContentRaw', () => {
   });
 
   it('handles img tag as the entire text', () => {
-    const text = '<img:data:image/png;base64,onlyimage>';
+    const text = '<img:data:image/png;base64,onlyimages>';
     const blocks = parseToolResultContentRaw(text);
 
     // Should have the image and an empty text block won't be added since blocks.length > 0
     expect(blocks).toHaveLength(1);
-    expect(blocks[0]).toEqual({ type: 'image', mimeType: 'image/png', data: 'onlyimage' });
+    expect(blocks[0]).toEqual({ type: 'image', mimeType: 'image/png', data: 'onlyimages' });
+  });
+
+  it('leaves a marker sliced mid-payload as inert text (#2217)', () => {
+    // A `head`/`cut` upstream can leave a marker whose base64 no longer decodes,
+    // and prose can quote the syntax outright. Neither is an image, and neither
+    // should be reported as an unsupported image format.
+    const text = 'see <img:data:image/...> and <img:data:image/png;base64,not*valid*b64>';
+    const blocks = parseToolResultContentRaw(text);
+
+    expect(blocks).toEqual([{ type: 'text', text }]);
   });
 
   it('returns empty string as text when input is empty', () => {

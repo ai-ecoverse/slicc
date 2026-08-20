@@ -328,8 +328,12 @@ open /workspace/app/index.html
 # Force download instead of opening in tab
 open --download /workspace/report.pdf
 
-# View an image (agent can see it in the response)
-open --view /workspace/screenshot.png
+# View an image (agent can see it in the response). The image travels as an
+# `<img:data:…>` marker in the bash result, which the agent adapter turns into
+# an image content block and the chat row renders inline. Markers are exempt
+# from the 40KB bash output cap (up to 1MB of images per command, newest kept),
+# so the base64 is never tail-truncated into unreadable text (#2217).
+open --view --size medium /workspace/screenshot.png
 
 # Execute JavaScript
 node -e "console.log('Hello from Node')"
