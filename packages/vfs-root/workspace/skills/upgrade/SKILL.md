@@ -40,6 +40,10 @@ The runtime renders the upgrade lick as a binary action card automatically — y
 
 The card flips to ✓ on confirm / muted ✗ on dismiss. Never auto-run the merge — the user must choose. Reviewing the changelog is **not** a card action; it is a separate step you can run first to help the user decide.
 
+## Which version am I running?
+
+`uname -r` prints the running version. `upgrade status` adds the last-booted one, whether a merge is pending, and the exact `upgrade apply` line to run when it is — that is where `--from`/`--to` come from without a card on screen. Realm scripts read `globalThis.SLICC_VERSION`.
+
 ## Changelog review (separate step — not a card action)
 
 Before the user decides, you can fetch the GitHub compare API for the two tags and summarize the result. This is optional and independent of the card; it does not resolve the lick.

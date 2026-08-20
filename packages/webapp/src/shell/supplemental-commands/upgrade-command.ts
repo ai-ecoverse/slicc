@@ -1,11 +1,13 @@
 /** Browser-native upgrade of bundled VFS files across SLICC release refs. */
 import type { Command, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { getLastSeenVersionReader, readSliccVersion } from '../../base/slicc-version.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { threeWayMerge } from '../../git/merge-file-core.js';
 import { getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
 
 const REPO = 'ai-ecoverse/slicc';
+const USAGE = 'usage: upgrade status | upgrade apply --from=<version> --to=<version>';
 const BUNDLED_PREFIX = 'packages/vfs-root';
 const FETCH_TIMEOUT_MS = 30_000;
 // Directory prefixes plus one single-file scope. `MEMORY.md` and everything
@@ -50,6 +52,8 @@ interface UpgradePlan {
 export interface UpgradeCommandDeps {
   fs: VirtualFS;
   fetch: SecureFetch;
+  /** Override the "last seen version" reader (tests). Defaults to the kernel-host-registered one. */
+  getLastSeen?: () => Promise<string | null>;
 }
 
 function emptySummary(): Record<UpgradeClassification, number> {
@@ -78,7 +82,7 @@ function output(from: string, to: string, plans: UpgradePlan[], errors: string[]
 
 function parseArgs(args: string[]): { from: string; to: string } {
   if (args[0] !== 'apply') {
-    throw new Error('usage: upgrade apply --from=<version> --to=<version>');
+    throw new Error(USAGE);
   }
   const flags = new Map<string, string>();
   for (const arg of args.slice(1)) {
@@ -333,8 +337,68 @@ async function applyUpgrade(
   return plans;
 }
 
+/**
+ * `upgrade status` — what version is running, what version this profile last
+ * booted, and whether the bundled workspace files still need merging into it.
+ *
+ * This is the answer to «what do I pass to `--from`?»: when a merge is pending,
+ * the exact `upgrade apply` invocation is spelled out in the `apply` field.
+ * Read-only — unlike `detectUpgrade()`, it never advances the last-seen marker,
+ * so asking for status cannot swallow a pending upgrade lick. The marker is
+ * read live through the reader the kernel host registers (see
+ * `base/slicc-version.ts`), not from a snapshot, so the answer is current even
+ * if boot-time detection is still in flight.
+ */
+async function status(deps: UpgradeCommandDeps): Promise<string> {
+  const { version, releasedAt, buildId } = readSliccVersion();
+  const errors: string[] = [];
+  let lastSeen: string | null = null;
+  const readLastSeen = deps.getLastSeen ?? getLastSeenVersionReader();
+  if (!readLastSeen) {
+    // No reader wired in this runtime. Report that as unknown rather than
+    // letting it read as `null` — "no marker recorded" (a genuine first boot,
+    // nothing to merge) and "could not look the marker up" are different
+    // answers, and only one of them means `mergePending: false` is trustworthy.
+    errors.push('last-seen version unavailable: no reader registered in this runtime');
+  } else {
+    try {
+      lastSeen = await readLastSeen();
+    } catch (error) {
+      errors.push(
+        `last-seen version unavailable: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
+  }
+  const mergePending = lastSeen !== null && lastSeen !== version;
+  return `${JSON.stringify({
+    ok: errors.length === 0,
+    version,
+    releasedAt,
+    build: buildId,
+    lastSeen,
+    mergePending,
+    ...(mergePending ? { apply: `upgrade apply --from=${lastSeen} --to=${version}` } : {}),
+    errors,
+  })}\n`;
+}
+
 export function createUpgradeCommand(deps: UpgradeCommandDeps): Command {
   return defineCommand('upgrade', async (args) => {
+    if (args.includes('--help') || args.includes('-h')) {
+      return { stdout: `${USAGE}\n`, stderr: '', exitCode: 0 };
+    }
+
+    if (args[0] === 'status') {
+      if (args.length > 1) {
+        return {
+          stdout: output('', '', [], [`unsupported argument: ${args[1]}`]),
+          stderr: '',
+          exitCode: 1,
+        };
+      }
+      return { stdout: await status(deps), stderr: '', exitCode: 0 };
+    }
+
     let from = '';
     let to = '';
     try {

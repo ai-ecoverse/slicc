@@ -6,6 +6,8 @@
  * to display follower status.
  */
 
+import { FOLLOWER_STATUS_STORAGE_KEY } from '../base/tray-role.js';
+
 export interface FollowerTrayRuntimeStatus {
   state: 'inactive' | 'connecting' | 'connected' | 'reconnecting' | 'error';
   joinUrl: string | null;
@@ -55,12 +57,10 @@ export function getFollowerTrayRuntimeStatus(): FollowerTrayRuntimeStatus {
 
 /**
  * Key for the page→worker `localStorage` shim mirroring the follower tray
- * status. `wc-tray.ts` writes this on every `subscribeToFollowerTrayRuntimeStatus`
- * tick (and seeds it on boot); `installPageStorageSync` forwards the write into
- * the kernel worker's Map-backed `localStorage` shim so worker readers see it.
- * Symmetric with `LEADER_STATUS_STORAGE_KEY` in `tray-leader.ts`.
+ * status. Defined in `base/tray-role.ts` and re-exported here under its
+ * established name. Symmetric with `LEADER_STATUS_STORAGE_KEY`.
  */
-export const FOLLOWER_STATUS_STORAGE_KEY = 'slicc.followerTrayStatus';
+export { FOLLOWER_STATUS_STORAGE_KEY };
 
 /**
  * Follower tray status with a `localStorage` fallback for the standalone

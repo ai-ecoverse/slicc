@@ -10,6 +10,7 @@
  * into the user's workspace.
  */
 
+import { readSliccVersion } from '../base/slicc-version.js';
 import { getState, setState } from './db.js';
 
 const LAST_SEEN_STATE_KEY = 'slicc:last-seen-version';
@@ -28,15 +29,13 @@ export interface UpgradeDetection {
 }
 
 /**
- * Return the bundled SLICC version baked into this build. Sourced from the
- * root `package.json` via Vite `define` in `packages/webapp/vite.config.ts`
- * and `packages/chrome-extension/vite.config.ts`.
+ * Return the bundled SLICC version baked into this build. Thin projection of
+ * {@link readSliccVersion} (`base/slicc-version.ts`), which is the single place
+ * the build-time `define`s are read.
  */
 export function readBundledVersion(): BundledVersion {
-  return {
-    version: __SLICC_VERSION__,
-    releasedAt: __SLICC_RELEASED_AT__,
-  };
+  const { version, releasedAt } = readSliccVersion();
+  return { version, releasedAt };
 }
 
 export async function getLastSeenVersion(): Promise<string | null> {

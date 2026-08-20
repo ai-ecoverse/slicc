@@ -47,6 +47,7 @@
  * their float.
  */
 
+import { setLastSeenVersionReader } from '../base/slicc-version.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type DiscoveryEvent, NavigationWatcher } from '../cdp/navigation-watcher.js';
 import { getDiscoveryEnabled } from '../core/discovery-preference.js';
@@ -809,6 +810,31 @@ function scheduleMountRecovery(
 }
 
 /**
+ * Step 0: publish the "last seen version" marker reader for the shell.
+ *
+ * `upgrade status` lives in the shell layer and cannot import the scoops-owned
+ * reader itself, and the marker is only meaningful in this realm — the same one
+ * that runs upgrade detection (step 11). Registered synchronously at the top of
+ * `createKernelHost`, before any shell can exist, so no command ever sees an
+ * unwired marker.
+ *
+ * The body is lazily imported, so this costs nothing at boot, and it reads the
+ * live IndexedDB marker on every call rather than caching a value: a snapshot
+ * would go stale the moment `recordVersionSeen` advances it, and would still be
+ * empty during the window before fire-and-forget detection completes — exactly
+ * when `upgrade status` would wrongly report no merge pending.
+ *
+ * Exported for the wiring test — a reader that is documented but never
+ * registered is exactly the failure mode this replaced.
+ */
+export function publishLastSeenVersionReader(): void {
+  setLastSeenVersionReader(async () => {
+    const { getLastSeenVersion } = await import('../scoops/upgrade-detection.js');
+    return getLastSeenVersion();
+  });
+}
+
+/**
  * Step 11: upgrade detection (fire-and-forget). MUST run after cone bootstrap
  * so an upgrade lick has a routable target. The caller gates on `sharedFs`.
  */
@@ -887,6 +913,9 @@ export async function createKernelHost(config: KernelHostConfig): Promise<Kernel
   const { container, browser, bridge, callbacks, skipConeBootstrap = false } = config;
   const log: KernelHostLogger = config.logger ?? console;
   const progress = (stage: string): void => config.onBootProgress?.(stage);
+
+  // 0. Publish the marker reader `upgrade status` reads (before any shell exists).
+  publishLastSeenVersionReader();
 
   // Steps 1–4b: construct + init the orchestrator, bind the bridge, wire tray
   // subs, seed chat buffers. See `bootOrchestrator` for the per-step detail.
