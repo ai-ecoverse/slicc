@@ -183,6 +183,30 @@ describe('agent command', () => {
       expect(bridge).not.toHaveBeenCalled();
     });
 
+    // Codex review on PR #2210 (P1): `AgentBridge.spawn` stops the spawned scoop
+    // when `options.signal` aborts, but the command never passed one — so the
+    // bash tool's `timeout` kill (or a cancelled turn) ended the `agent` command
+    // while the child kept making billable model calls.
+    it("threads the command context's signal into the bridge so a killed run stops the child", async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'ok', exitCode: 0 });
+      installBridge(spawn);
+      const controller = new AbortController();
+      const ctx = { ...createMockCtx(), signal: controller.signal };
+
+      await createAgentCommand().execute(['.', '*', 'say hi'], ctx);
+
+      expect(spawn.mock.calls[0][0].signal).toBe(controller.signal);
+    });
+
+    it('omits signal when the context has none', async () => {
+      const spawn = vi.fn().mockResolvedValue({ finalText: 'ok', exitCode: 0 });
+      installBridge(spawn);
+
+      await createAgentCommand().execute(['.', '*', 'say hi'], createMockCtx());
+
+      expect(spawn.mock.calls[0][0].signal).toBeUndefined();
+    });
+
     it('three positional args are accepted as the happy path', async () => {
       const spawn = vi.fn().mockResolvedValue({ finalText: 'ok', exitCode: 0 });
       installBridge(spawn);

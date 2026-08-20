@@ -45,6 +45,12 @@ interface AgentSpawnOptions {
   /** Structured output schema for the spawned scoop. */
   structuredOutputSchema?: JsonSchemaObject;
   /**
+   * The invoking command's abort signal. `AgentBridge.spawn` stops the spawned
+   * scoop when this aborts, which is what makes a `bash` `timeout` kill (or a
+   * cancelled turn) reach a nested `agent` instead of leaving it running.
+   */
+  signal?: AbortSignal;
+  /**
    * Tri-value session-transcript persistence forwarded to the bridge:
    * `true` (`--persist-session`) writes a durable `/sessions/...` archive,
    * `false` (`--no-persist-session`) writes nothing, and `undefined` (neither
@@ -503,7 +509,7 @@ function buildSpawnOptions(
   resolvedCwd: string,
   allowedCommands: string[],
   prompt: string,
-  ctx: { cwd: string },
+  ctx: { cwd: string; signal?: AbortSignal },
   getParentJid?: () => string | undefined
 ): AgentSpawnOptions {
   const spawnOptions: AgentSpawnOptions = {
@@ -531,6 +537,13 @@ function buildSpawnOptions(
   }
   if (ctx.cwd && ctx.cwd.length > 0) {
     spawnOptions.invokingCwd = ctx.cwd;
+  }
+  // Without this the spawned scoop outlives whatever stopped its caller: the
+  // bash tool's `timeout` kill, a cancelled turn, or a `drop_scoop` would end
+  // the `agent` command while the child kept making (billable) model calls.
+  // `AgentBridge.spawn` already stops the scoop when this aborts.
+  if (ctx.signal !== undefined) {
+    spawnOptions.signal = ctx.signal;
   }
   const parentJid = getParentJid?.();
   if (parentJid !== undefined && parentJid.length > 0) {

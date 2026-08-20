@@ -156,6 +156,14 @@ default.
 - A still-running job is SIGKILLed when its scoop context is disposed
   (`drop_scoop`, one-shot `agent` teardown, shutdown), since the scoop directory
   its output would land in goes away with it.
+- The `bash` lick bypasses the scoop trigger gate
+  (`ScoopMessageRouter.passesTriggerGate`), like `webhook` / `cron` / `fswatch` /
+  `sprinkle`: a `requiresTrigger` scoop would otherwise never see the result of
+  the job it started, since nothing types its `@trigger` into a machine-generated
+  completion.
+- An `agent` command run inside a `bash` invocation inherits the run's abort
+  signal, so a `timeout` kill (or a cancelled turn) also stops the scoop it
+  spawned instead of leaving it running up model calls.
 
 **Every run is a pid.** Each invocation registers a `kind:'shell'` job process
 (`ScoopContext.spawnBashJob`), so `ps` lists a live background job and

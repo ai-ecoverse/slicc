@@ -314,7 +314,11 @@ describe('ScoopMessageRouter trigger gate', () => {
     expect(senders).toEqual(['eligible-id:eligible-name']);
   });
 
-  it.each<ChannelMessage['channel']>(['webhook', 'cron', 'fswatch', 'sprinkle'])(
+  // `bash` is in this list because a detached job's completion is the result of
+  // work the scoop itself started: gating it on the scoop's `@trigger` (which
+  // nothing types into a machine-generated lick) would drop the result the bash
+  // tool promised when it handed back a job id.
+  it.each<ChannelMessage['channel']>(['webhook', 'cron', 'fswatch', 'sprinkle', 'bash'])(
     'lets %s rows bypass the trigger gate',
     async (channel) => {
       const message = { ...makeMessage('scoop', 0, channel), content: 'no trigger' };
