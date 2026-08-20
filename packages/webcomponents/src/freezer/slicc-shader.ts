@@ -10,12 +10,14 @@ import { advanceFrameTs, BURST_MS, shouldRender } from './frame-budget.js';
  * the `mode` attribute.
  *
  * Sits behind the app (`position: fixed; inset: 0; z-index: 0; pointer-events:
- * none`). Renders on a frame budget: ambient motion at 15 fps, bursting to
- * display rate for 800 ms after an interactive stimulus (pulse, attribute /
- * theme / size changes). A static field — `cone` with `speed=0`, or
+ * none`). Renders on a frame budget: ambient motion at 15 fps (`AMBIENT_FPS`),
+ * bursting to display rate for 800 ms (`BURST_MS`) after an interactive stimulus
+ * (pulse, attribute / theme / size changes — a `mode` switch instead repaints
+ * synchronously with no burst). A static field — `cone` with `speed=0`, or
  * `prefers-reduced-motion` — renders once per stimulus and stops the loop
- * entirely. Pauses on disconnect and falls back to a per-mode CSS gradient
- * when WebGL is absent.
+ * entirely (a `pulse()` first plays out its glow decay; reduced motion is
+ * strictly one frame per wake). Pauses on disconnect and falls back to a
+ * per-mode CSS gradient when WebGL is absent.
  *
  * @attr mode - `cone` (default) | `scoop` | `freezer`
  * @attr tint - CSS color washed into the scoop field / event glow (the active accent)
@@ -285,9 +287,11 @@ const STYLE = `
 const SHEET = sheet(STYLE);
 
 /** Backing-store resolution caps, in device-pixel-ratio units. The field is a
- *  background clamped to a ±20% deviation budget around the theme bg, so
- *  DPR 1 is visually indistinguishable at a quarter of DPR 2's pixel cost on
- *  Retina; showcase/hero uses can opt back up via the `dpr` attribute. */
+ *  washed background — cone hard-clamps to ±0.20 around the theme bg, freezer
+ *  washes ~22% over its icy ground, and scoop is a soft low-frequency gradient;
+ *  none carries detail worth Retina density, so DPR 1 is visually
+ *  indistinguishable at a quarter of DPR 2's pixel cost on Retina, and
+ *  showcase/hero uses can opt back up via the `dpr` attribute. */
 const DEFAULT_DPR_CAP = 1;
 const MIN_DPR_CAP = 0.5;
 const MAX_DPR_CAP = 2;
@@ -409,18 +413,17 @@ export class SliccShader extends HTMLElement {
     }
     this.removeAttribute('no-webgl');
     if (typeof ResizeObserver !== 'undefined') {
-      // ResizeObserver delivers an initial notification on observe() for any
-      // rendered, non-zero-size element; that is a mount artifact, not a user
-      // resize — bursting on it would open
-      // an 800 ms full-rate window on every connect (the connect render via
-      // #wake() already paints the initial size). Skip exactly one.
       let initial = true;
       this.#ro = new ResizeObserver(() => {
-        if (initial) {
-          initial = false;
-          return;
-        }
-        this.#wake({ burst: true });
+        // The spec-mandated initial notification (only delivered for rendered,
+        // non-zero-size elements) must not open an 800 ms burst on connect —
+        // but it MUST still wake: for an element mounted hidden, the first
+        // notification is the real "became visible" resize, and a swallowed
+        // wake would leave a static field as a stale 1×1 canvas forever.
+        // A redundant initial wake coalesces to at most one ambient frame.
+        const wasInitial = initial;
+        initial = false;
+        this.#wake({ burst: !wasInitial });
       });
       this.#ro.observe(this);
     }
@@ -600,7 +603,7 @@ export class SliccShader extends HTMLElement {
     // would spin forever uploading a NaN u_energy — the exact idle burn this
     // component exists to prevent.
     if (!Number.isFinite(amount)) return;
-    this.#energy = Math.min(1.4, this.#energy + amount);
+    this.#energy = Math.min(1.4, Math.max(0, this.#energy + amount));
     this.#wake({ burst: true });
   }
 
@@ -781,6 +784,7 @@ export class SliccShader extends HTMLElement {
         // buffers) must degrade to the CSS gradient exactly like the initial
         // #initGl failure path — never leave the field parked and blank with
         // #contextLost stuck true and no signal.
+        this.#contextLost = false;
         console.error('[slicc-shader] GL restore failed; falling back to CSS gradient');
         this.setAttribute('no-webgl', '');
         this.#dispose();

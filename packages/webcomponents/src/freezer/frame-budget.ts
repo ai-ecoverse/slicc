@@ -18,9 +18,10 @@ export const AMBIENT_FRAME_MS = 1000 / AMBIENT_FPS;
 /** Full-rate window opened by an interactive stimulus. */
 export const BURST_MS = 800;
 /**
- * Scheduling jitter allowance. Without it a 60 Hz host (16.67 ms ticks)
- * arrives just under each 66.67 ms deadline and slips a whole tick late,
- * sagging the effective rate toward 12 fps.
+ * Scheduling jitter allowance. Without it a 60 Hz tick arriving just under a
+ * 66.67 ms deadline renders a whole tick late — the grid keeps the average at
+ * 15 fps, but pacing degrades to alternating ~50/83 ms intervals; the epsilon
+ * lands each render on the tick straddling its deadline.
  */
 export const FRAME_EPSILON_MS = 4;
 
