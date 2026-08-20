@@ -61,10 +61,24 @@ function newRequestId(): string {
 export type EnsureSpeechAssetsRunner = (onProgress: SpeechAssetProgressFn) => Promise<unknown>;
 
 /**
- * Install the worker-side responder. Each incoming request runs `ensure`,
- * forwarding every progress event back on the channel, then posts a final
- * response (empty on success, `error` on failure). Returns a disposer. No-op
- * when `BroadcastChannel` is unavailable (older test runners).
+ * Install the worker-side responder. Incoming requests are **coalesced onto a
+ * single in-flight `ensure` run**: the first request starts it, any request
+ * arriving while it runs subscribes to the same run, every progress event
+ * fans out to all subscribers (each under its own request id), and the final
+ * response (empty on success, `error` on failure) is posted to each. A request
+ * arriving after the run settled starts a fresh one (already-staged assets
+ * make that a fast no-op).
+ *
+ * Why coalesce: `hear --warmup`, `say --warmup` and the composer's push-to-talk
+ * warmup are independent page-side callers that all stage the SAME files. Run
+ * concurrently, two `hf download`s of one repo overlap — the second sees the
+ * first's half-written file, "skips" it, reports staging complete, and its
+ * caller's engine load runs against a tree the first run is still writing
+ * (`weights … are missing` / size-mismatch EIO). One run, awaited by every
+ * caller, is what makes "staged" mean staged.
+ *
+ * Returns a disposer. No-op when `BroadcastChannel` is unavailable (older test
+ * runners).
  */
 export function installSpeechAssetsResponder(options: {
   instanceId?: string;
@@ -84,20 +98,45 @@ export function installSpeechAssetsResponder(options: {
     }
   };
 
-  const listener = async (event: MessageEvent): Promise<void> => {
+  /** Request ids waiting on the current run; `null` when nothing is running. */
+  let inflight: Set<string> | null = null;
+
+  const settleAll = (error?: string): void => {
+    const ids = inflight ?? new Set<string>();
+    inflight = null;
+    for (const id of ids) {
+      post(
+        error === undefined
+          ? { type: 'speech-assets-response', id }
+          : { type: 'speech-assets-response', id, error }
+      );
+    }
+  };
+
+  const listener = (event: MessageEvent): void => {
     const msg = event.data as RequestMsg | undefined;
     if (msg?.type !== 'speech-assets-request') return;
     const { id } = msg;
-    try {
-      await options.ensure((progress) => post({ type: 'speech-assets-progress', id, progress }));
-      post({ type: 'speech-assets-response', id });
-    } catch (err) {
-      post({
-        type: 'speech-assets-response',
-        id,
-        error: err instanceof Error ? err.message : String(err),
-      });
+    if (inflight) {
+      // Join the run already in progress — never start a parallel stager.
+      inflight.add(id);
+      return;
     }
+    const subscribers = new Set<string>([id]);
+    inflight = subscribers;
+    let run: Promise<unknown>;
+    try {
+      run = options.ensure((progress) => {
+        for (const sid of subscribers) post({ type: 'speech-assets-progress', id: sid, progress });
+      });
+    } catch (err) {
+      settleAll(err instanceof Error ? err.message : String(err));
+      return;
+    }
+    void run.then(
+      () => settleAll(),
+      (err) => settleAll(err instanceof Error ? err.message : String(err))
+    );
   };
 
   channel.addEventListener('message', listener as (ev: MessageEvent) => void);

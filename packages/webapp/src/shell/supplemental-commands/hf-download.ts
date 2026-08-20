@@ -115,13 +115,23 @@ async function downloadOne(
   revision: string,
   file: string,
   targetDir: string,
-  force: boolean
+  force: boolean,
+  declaredSize?: number
 ): Promise<{ status: 'downloaded' | 'skipped'; bytes: number }> {
   const destPath = `${targetDir}/${file}`;
   if (!force && (await fs.exists(destPath))) {
     try {
       const stat = await fs.stat(destPath);
-      return { status: 'skipped', bytes: stat.size ?? 0 };
+      // Skip only a COMPLETE file. When the tree listing told us the declared
+      // byte length, a present file of any other size is a torn write — a
+      // download that died mid-stream, or a concurrent stager still writing
+      // it — and "skipping" it would hand the caller a truncated weight file
+      // that later fails to load with a size-mismatch EIO. Without a declared
+      // size (explicit file list, or a listing without sizes) presence is the
+      // best we can check.
+      const complete =
+        declaredSize === undefined || declaredSize <= 0 || stat.size === declaredSize;
+      if (complete) return { status: 'skipped', bytes: stat.size ?? 0 };
     } catch {
       // fall through to re-download
     }
@@ -225,12 +235,15 @@ export async function downloadHfRepo(opts: DownloadHfRepoOptions): Promise<HfRep
   const force = opts.force ?? false;
 
   let files = opts.files ?? [];
+  /** Declared byte length per file, known only after a tree listing. */
+  const declaredSizes = new Map<string, number>();
   if (files.length === 0) {
     const tree = await listRepoTree(opts.fetch, opts.repo, revision);
     if (tree.length === 0) {
       throw new Error(`repo ${opts.repo}@${revision} has no files`);
     }
     files = tree.map((e) => e.path);
+    for (const e of tree) declaredSizes.set(e.path, e.size);
     const totalBytes = tree.reduce((sum, e) => sum + e.size, 0);
     opts.progress?.onListed?.({ files, totalBytes });
   }
@@ -244,7 +257,16 @@ export async function downloadHfRepo(opts: DownloadHfRepoOptions): Promise<HfRep
     const file = files[i];
     let r: { status: 'downloaded' | 'skipped'; bytes: number };
     try {
-      r = await downloadOne(opts.fetch, opts.fs, opts.repo, revision, file, opts.targetDir, force);
+      r = await downloadOne(
+        opts.fetch,
+        opts.fs,
+        opts.repo,
+        revision,
+        file,
+        opts.targetDir,
+        force,
+        declaredSizes.get(file)
+      );
     } catch (err) {
       throw new HfFileDownloadError(file, err);
     }

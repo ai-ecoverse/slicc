@@ -159,4 +159,28 @@ describe('ensureSpeechAssetsStaged', () => {
       /failed to stage onnxruntime-web/
     );
   });
+
+  it('does not reinstall ort when only an optional (asyncify/jspi) variant is absent', async () => {
+    // A reinstall rewrites the whole dist/ under any engine that is loading it
+    // ("onnxruntime-web is not installed" despite the files existing). Only the
+    // REQUIRED jsep + plain threaded builds gate the install.
+    const fs = await newFs();
+    await stageEspeak(fs);
+    await fs.mkdir(ORT_DIST_VFS_PATH, { recursive: true });
+    for (const f of ORT_WASM_DIST_FILES) {
+      if (/\.asyncify\./.test(f)) continue;
+      await fs.writeFile(`${ORT_DIST_VFS_PATH}${f}`, bytes('wasm'));
+    }
+    let registryHits = 0;
+    const fetch = (async (url: string) => {
+      if (url.includes('registry.npmjs.org')) {
+        registryHits += 1;
+        throw new Error('registry must not be contacted');
+      }
+      return hfFetch({ 'config.json': bytes('{}') })(url);
+    }) as unknown as SecureFetch;
+    const result = await ensureSpeechAssetsStaged({ fs, fetch, repos: [REPO] });
+    expect(result.ortStaged).toBe(false);
+    expect(registryHits).toBe(0);
+  });
 });
