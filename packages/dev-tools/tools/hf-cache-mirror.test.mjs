@@ -19,6 +19,12 @@ function startUpstream() {
     } else if (req.url === '/cdn/blob-1') {
       res.writeHead(200, { 'content-type': 'application/octet-stream' });
       res.end(Buffer.from([1, 2, 3, 4, 5]));
+    } else if (req.url === '/acme/kokoro/resolve/main/onnx/truncated.onnx') {
+      // Announce a 200 with more bytes than we deliver, then drop the socket:
+      // the mirror's store must fail, clean up its temp file, and not cache.
+      res.writeHead(200, { 'content-type': 'application/octet-stream', 'content-length': '1000' });
+      res.write(Buffer.from([9, 9, 9]));
+      setTimeout(() => res.destroy(), 20);
     } else {
       res.writeHead(404, { 'content-type': 'text/plain' });
       res.end('nope');
@@ -105,7 +111,23 @@ describe('hf-cache-mirror', () => {
     expect(again.status).toBe(404);
     expect(upstream.hits.filter((h) => h.includes('missing'))).toHaveLength(2);
     const entries = await readdir(dir, { recursive: true });
-    expect(entries.some((e) => e.endsWith('.part'))).toBe(false);
+    expect(entries.some((e) => e.includes('.part-'))).toBe(false);
+  });
+
+  it('drops the temp file and caches nothing when the upstream body dies mid-download', async () => {
+    const path = '/acme/kokoro/resolve/main/onnx/truncated.onnx';
+    const res = await fetch(`${base}${path}`);
+    expect(res.status).toBe(502);
+    expect(res.headers.get('x-hf-mirror')).toBe('store-error');
+    const entries = await readdir(dir, { recursive: true });
+    expect(entries.some((e) => e.includes('.part-'))).toBe(false);
+    const key = cachePathFor(dir, path).slice(dir.length + 1);
+    expect(entries).not.toContain(key);
+    expect(entries).not.toContain(`${key}.json`);
+    // A later request goes back upstream rather than serving a ghost entry.
+    const again = await fetch(`${base}${path}`);
+    expect(again.status).toBe(502);
+    expect(upstream.hits.filter((h) => h === path)).toHaveLength(2);
   });
 
   it('rejects non-GET methods', async () => {
