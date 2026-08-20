@@ -101,9 +101,16 @@ function chainKokoroWarmup(): void {
     .catch((err) => log.warn('kokoro warmup (chained after whisper) failed', err));
 }
 
+/** The slice of transformers.js' ASR call options `transcribe` passes. */
+interface AsrCallOptions {
+  chunk_length_s: number;
+  task: 'transcribe';
+  language?: string;
+}
+
 type AsrPipeline = (
   audio: Float32Array,
-  opts: Record<string, unknown>
+  opts: AsrCallOptions
 ) => Promise<{ text?: string } | Array<{ text?: string }>>;
 
 async function loadWhisper(): Promise<WhisperAsr> {
@@ -162,6 +169,7 @@ async function loadWhisper(): Promise<WhisperAsr> {
 
   return {
     async transcribe(audio, opts) {
+      const t0 = performance.now();
       const out = await asr(audio, {
         // Long inputs (hear -i on a recording) chunk transparently; PTT
         // utterances fit one window.
@@ -170,6 +178,15 @@ async function loadWhisper(): Promise<WhisperAsr> {
         ...(opts?.language ? { language: opts.language } : {}),
       });
       const text = Array.isArray(out) ? out.map((o) => o.text ?? '').join(' ') : (out.text ?? '');
+      // Wall-clock per inference, tagged with the ort thread count, so the
+      // single- vs multi-threaded comparison (#2042) reads straight off the
+      // console log: `localStorage.slicc_ort_num_threads` flips the policy.
+      log.info('whisper transcribe', {
+        elapsedMs: Math.round(performance.now() - t0),
+        audioSeconds: Math.round(audio.length / 160) / 100,
+        numThreads: env.backends?.onnx?.wasm?.numThreads,
+        device: wantGpu ? 'webgpu' : 'wasm',
+      });
       return text.trim();
     },
   };

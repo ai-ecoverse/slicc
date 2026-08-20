@@ -106,7 +106,6 @@
   "packages/webapp/src/shell/supplemental-commands/websocat-command.ts": 1,
   "packages/webapp/src/skills/catalog.ts": 3,
   "packages/webapp/src/speech/hear.ts": 1,
-  "packages/webapp/src/speech/whisper-engine.ts": 1,
   "packages/webapp/src/tools/file-tools.ts": 3,
   "packages/webapp/src/transcript/normalize.ts": 2,
   "packages/webapp/src/transcript/redact.ts": 4,

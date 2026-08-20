@@ -69,10 +69,10 @@ describe('configureTransformersEnv', () => {
     expect(wasmPaths).toMatch(/\/preview\/workspace\/node_modules\/onnxruntime-web\/dist\/$/);
     // Defense in depth: must not point at any CDN host.
     expect(wasmPaths).not.toMatch(/jsdelivr|unpkg|huggingface/);
-    // With the leader cross-origin isolated (Document-Isolation-Policy),
-    // ort-web would auto-select multi-threaded execution — the explicit
-    // single-thread pin is what keeps that a deliberate choice, so its
-    // removal must fail a test, not ship silently.
+    // numThreads is always set EXPLICITLY (never left to ort-web's
+    // isolation auto-detect). This realm is not cross-origin isolated, so
+    // the policy pins 1; the isolated matrix lives in
+    // transformers-env.threads.test.ts (#2042).
     expect(env.backends?.onnx?.wasm?.numThreads).toBe(1);
   });
 

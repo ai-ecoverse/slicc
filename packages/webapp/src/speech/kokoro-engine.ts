@@ -479,11 +479,22 @@ async function loadKokoro(onProgress?: WhisperProgress): Promise<KokoroTts> {
         return synthesizeWithEspeak(tts, text, espeakLang, voiceId, opts?.speed, phonemize);
       }
       try {
+        const t0 = performance.now();
         const audio = await tts.generate(text, {
           ...(opts?.voice ? { voice: opts.voice as never } : {}),
           ...(opts?.speed ? { speed: opts.speed } : {}),
         });
-        return { audio: audio.audio as Float32Array, sampleRate: audio.sampling_rate };
+        const pcm = audio.audio as Float32Array;
+        // Wall-clock per synthesis, tagged with the ort thread count, so the
+        // single- vs multi-threaded comparison (#2042) reads straight off
+        // the console log (`localStorage.slicc_ort_num_threads` flips it).
+        log.info('kokoro synthesize', {
+          elapsedMs: Math.round(performance.now() - t0),
+          chars: text.length,
+          audioSeconds: Math.round((pcm.length / audio.sampling_rate) * 100) / 100,
+          numThreads: transformers.env.backends?.onnx?.wasm?.numThreads,
+        });
+        return { audio: pcm, sampleRate: audio.sampling_rate };
       } catch (err) {
         const fallback = await englishEspeakFallback(err, voiceId);
         if (!fallback) throw err;

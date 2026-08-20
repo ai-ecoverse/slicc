@@ -381,6 +381,68 @@ export function __resetTransformersEnvForTests(): void {
 }
 
 /**
+ * Ceiling for ort-web's wasm thread pool on an isolated leader. Whisper-tiny
+ * and Kokoro are small graphs; past four workers the pthread fan-out cost
+ * outweighs the per-op speedup, and every worker pins a wasm memory view.
+ */
+export const ORT_MAX_THREADS = 4;
+
+/**
+ * `localStorage` key that overrides the thread policy for benchmarking
+ * (`1` re-pins single-threaded on an isolated leader; `N` forces a pool).
+ * Page-realm only — speech runs nowhere else. Parsed, bounded, never trusted
+ * past `ORT_MAX_THREADS`.
+ */
+export const ORT_THREADS_OVERRIDE_KEY = 'slicc_ort_num_threads';
+
+export interface OrtThreadPolicyInput {
+  /** `globalThis.crossOriginIsolated` — the only thing that makes SAB legal. */
+  isolated: boolean;
+  /** `navigator.hardwareConcurrency` (undefined when the UA hides it). */
+  hardwareConcurrency?: number;
+  /** Raw `localStorage[ORT_THREADS_OVERRIDE_KEY]`, if any. */
+  override?: string | null;
+}
+
+/**
+ * Thread-count policy for ort-web's wasm backend (#2042). Pure, so the
+ * matrix is unit-testable without a browser:
+ *
+ *  - not isolated → `1`, always. Threaded ort needs `SharedArrayBuffer`,
+ *    which embedded floats (Cherry, spoon/Electron, the extension side
+ *    panel) never have; an override cannot lift this.
+ *  - isolated → `min(ORT_MAX_THREADS, hardwareConcurrency)`, floored at 1,
+ *    or `1` when the UA hides concurrency (treat unknown as single-core).
+ *  - isolated + valid override → the override clamped to
+ *    `[1, ORT_MAX_THREADS]`.
+ */
+export function resolveOrtNumThreadsFrom(input: OrtThreadPolicyInput): number {
+  if (!input.isolated) return 1;
+  const override = input.override == null ? Number.NaN : Number.parseInt(input.override, 10);
+  if (Number.isFinite(override) && override >= 1) {
+    return Math.min(ORT_MAX_THREADS, override);
+  }
+  const cores = input.hardwareConcurrency;
+  if (typeof cores !== 'number' || !Number.isFinite(cores) || cores < 1) return 1;
+  return Math.max(1, Math.min(ORT_MAX_THREADS, Math.floor(cores)));
+}
+
+/** Probe the live realm and apply {@link resolveOrtNumThreadsFrom}. */
+export function resolveOrtNumThreads(): number {
+  let override: string | null = null;
+  try {
+    override = globalThis.localStorage?.getItem(ORT_THREADS_OVERRIDE_KEY) ?? null;
+  } catch {
+    /* storage access can throw in opaque/sandboxed realms — no override */
+  }
+  return resolveOrtNumThreadsFrom({
+    isolated: globalThis.crossOriginIsolated === true,
+    hardwareConcurrency: globalThis.navigator?.hardwareConcurrency,
+    override,
+  });
+}
+
+/**
  * Point ort-web at VFS-resolved blob URLs (no preview-SW HTTP round-trip),
  * pin transformers to local-only model loading, and override `env.fetch` so
  * model files load from VFS bytes and any residual HF probe still survives
@@ -398,13 +460,12 @@ export function configureTransformersEnv(env: TransformersEnvLike): void {
     // by the time ort reads wasmPaths at session-creation time the object
     // form is in place.
     onnxWasm.wasmPaths = toPreviewUrl(ORT_DIST_VFS_PATH);
-    // Pin single-threaded execution explicitly. With the leader now
-    // cross-origin isolated (Document-Isolation-Policy, #2036), ort-web
-    // would otherwise auto-select multi-threaded execution — a silent
-    // behavior change with its own worker-spawning and memory profile.
-    // Raising this is a deliberate future perf experiment, not a side
-    // effect of enabling isolation.
-    onnxWasm.numThreads = 1;
+    // Set the thread count EXPLICITLY — never leave it to ort-web's
+    // auto-detect, which flips to multi-threaded the moment the page is
+    // cross-origin isolated (Document-Isolation-Policy, #2036) and would
+    // make worker spawning + memory profile a silent side effect of the
+    // isolation rollout. `resolveOrtNumThreads` owns the policy (#2042).
+    onnxWasm.numThreads = resolveOrtNumThreads();
   }
   env.allowRemoteModels = false;
   env.allowLocalModels = true;
