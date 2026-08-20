@@ -1,5 +1,7 @@
 import {
   base64ToUint8,
+  type FetchProxyRequestMsg,
+  type FetchProxyResponseMsg,
   HMAC_SIGN_HEADER,
   type SecretsPipeline,
   uint8ToBase64,
@@ -55,33 +57,12 @@ export interface PortLike {
   postMessage: (msg: unknown) => void;
 }
 
-export interface RequestMsg {
-  type: 'request';
-  url: string;
-  method: string;
-  headers: Record<string, string>;
-  bodyBase64?: string;
-  requestBodyTooLarge?: boolean;
-}
-
-/**
- * Port-streamed response protocol. The SW emits exactly one `response-head`
- * followed by 0..N `response-chunk`s + a terminating `response-end`, OR a
- * single `response-error` (terminal). Discriminated union so both the SW
- * emitters AND the page consumer narrow on `type` exhaustively — typos like
- * `response-haed` no longer compile, and adding a new variant forces an
- * update at both ends.
- */
-export type ResponseMsg =
-  | {
-      type: 'response-head';
-      status: number;
-      statusText: string;
-      headers: Record<string, string>;
-    }
-  | { type: 'response-chunk'; dataBase64: string }
-  | { type: 'response-end' }
-  | { type: 'response-error'; error: string };
+// The fetch-proxy wire contract lives in `@slicc/shared-ts` (the platform-
+// agnostic layer both `@slicc/webapp` and this float depend on *downward*).
+// Local aliases keep the SW-side code reading in terms of request/response
+// without re-declaring the shapes here.
+export type RequestMsg = FetchProxyRequestMsg;
+export type ResponseMsg = FetchProxyResponseMsg;
 
 function send(port: PortLike, msg: ResponseMsg): void {
   port.postMessage(msg);
@@ -349,6 +330,46 @@ async function processProxyRequest(
 }
 
 /**
+ * Handle the single `request` message a fetch-proxy Port carries: await the
+ * pipeline, then unmask/fetch/stream. Split out of the onMessage listener so
+ * the listener itself stays synchronous and `void`-returning — Chrome ignores
+ * a listener's return value, so handing it a Promise would strand rejections.
+ */
+async function handleProxyMessage(
+  port: PortLike,
+  pipelinePromise: Promise<SecretsPipeline>,
+  raw: unknown,
+  signal: AbortSignal
+): Promise<void> {
+  const msg = raw as RequestMsg;
+  if (msg.type !== 'request') return;
+
+  if (msg.requestBodyTooLarge) {
+    send(port, {
+      type: 'response-head',
+      status: 413,
+      statusText: 'Payload Too Large',
+      headers: {},
+    });
+    send(port, { type: 'response-end' });
+    return;
+  }
+
+  let pipeline: SecretsPipeline;
+  try {
+    pipeline = await pipelinePromise;
+  } catch (err) {
+    send(port, {
+      type: 'response-error',
+      error: `fetch-proxy init failed: ${err instanceof Error ? err.message : String(err)}`,
+    });
+    return;
+  }
+
+  await processProxyRequest(port, pipeline, msg, signal);
+}
+
+/**
  * Variant that accepts a Promise for the pipeline so the caller can attach
  * the onMessage listener SYNCHRONOUSLY in the onConnect callback — Chrome
  * drops port messages that arrive before any listener exists, and the
@@ -365,35 +386,18 @@ export function handleFetchProxyConnectionAsync(
 
   port.onDisconnect.addListener(() => ac.abort());
 
-  port.onMessage.addListener(async (raw) => {
+  port.onMessage.addListener((raw) => {
     if (started) return;
     started = true;
-    const msg = raw as RequestMsg;
-    if (msg.type !== 'request') return;
-
-    if (msg.requestBodyTooLarge) {
-      send(port, {
-        type: 'response-head',
-        status: 413,
-        statusText: 'Payload Too Large',
-        headers: {},
-      });
-      send(port, { type: 'response-end' });
-      return;
-    }
-
-    let pipeline: SecretsPipeline;
-    try {
-      pipeline = await pipelinePromise;
-    } catch (err) {
+    handleProxyMessage(port, pipelinePromise, raw, ac.signal).catch((err) => {
+      // `processProxyRequest` already converts upstream failures into a
+      // `response-error`; this is the safety net for a throw in the
+      // pre-dispatch envelope handling itself.
       send(port, {
         type: 'response-error',
-        error: `fetch-proxy init failed: ${err instanceof Error ? err.message : String(err)}`,
+        error: err instanceof Error ? err.message : String(err),
       });
-      return;
-    }
-
-    await processProxyRequest(port, pipeline, msg, ac.signal);
+    });
   });
 }
 

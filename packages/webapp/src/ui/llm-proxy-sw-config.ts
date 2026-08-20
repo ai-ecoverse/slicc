@@ -21,7 +21,7 @@
  * `bridgeToken` from the controlling client's URL.
  */
 
-import type { RequestMsg } from '../../../chrome-extension/src/fetch-proxy-shared.js';
+import type { FetchProxyRequestMsg } from '@slicc/shared-ts';
 import {
   LEADER_EXT_ID_QUERY_NAME,
   LEADER_RUNTIME_QUERY_NAME,
@@ -292,7 +292,7 @@ export interface ExtensionFetchDelegateRequest {
   /** Extension id the page should `chrome.runtime.connect` to. */
   extensionId: string;
   /** Upstream request in the extension fetch-proxy wire shape. */
-  request: Omit<RequestMsg, 'type'>;
+  request: Omit<FetchProxyRequestMsg, 'type'>;
 }
 
 /** Type guard for the page → SW extension-delegate config message. */
