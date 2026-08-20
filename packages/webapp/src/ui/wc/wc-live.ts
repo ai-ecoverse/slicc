@@ -42,6 +42,7 @@ import { setupSyncFsBootNonce } from './wc-live-sync-fs.js';
 import { applyThreadContext } from './wc-live-thinking-hydration.js';
 import { mountWcShell, type WcShellRefs } from './wc-shell.js';
 import { createWorkbenchActivator, type WorkbenchActivator } from './wc-workbench.js';
+import { wireFileMentions } from './wire-file-mentions.js';
 
 export {
   createWcLiveCallbacks,
@@ -793,6 +794,12 @@ export function attachWcClient(
     log,
   });
   boot.setActivateSurface(workbenchActivator);
+
+  // File mentions: agents name files constantly ("I rewrote bb.jsh"), and those
+  // names are the most clickable thing in a transcript. Each one is verified
+  // against the VFS before it becomes a link, so a mention that does not resolve
+  // stays ordinary text.
+  wireFileMentions({ thread: refs.thread, openFs: openReader, log });
 
   // Panelize when `panel-layouts` is on (see the flag read above).
   //

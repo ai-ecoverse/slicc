@@ -39,6 +39,14 @@ slicc-agent-message .body h4 { font-size: 14px; }
 slicc-agent-message .body h5, slicc-agent-message .body h6 { font-size: 13px; color: var(--txt-2); }
 slicc-agent-message .body a { color: var(--accent); text-decoration: none; overflow-wrap: anywhere; }
 slicc-agent-message .body a:hover { text-decoration: underline; }
+/* A verified file mention. It reads as a file rather than a hyperlink — mono
+   face, a dotted underline that only solidifies on hover — because these are
+   dense in agent prose and full link chrome on every one would shout. The rule
+   applies inside inline code too, where the surrounding <code> already supplies
+   the family and background. */
+slicc-agent-message .body a.file-mention { font-family: var(--mono); font-size: .94em; text-decoration: underline dotted color-mix(in srgb, var(--ctx) 45%, transparent); text-underline-offset: 2px; cursor: pointer; border-radius: 3px; }
+slicc-agent-message .body a.file-mention:hover { text-decoration: underline solid var(--accent); background: color-mix(in srgb, var(--ctx) 10%, transparent); }
+slicc-agent-message .body code a.file-mention { font-family: inherit; font-size: inherit; color: inherit; }
 slicc-agent-message .body ul:not(.plan):not(.check), slicc-agent-message .body ol { margin: 0.45em 0; padding-left: 1.4em; }
 slicc-agent-message .body li { margin: 3px 0; }
 slicc-agent-message .body blockquote { margin: 0.45em 0; border-left: 3px solid var(--accent); padding-left: 12px; color: var(--txt-2); }

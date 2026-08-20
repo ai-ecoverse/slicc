@@ -18,6 +18,13 @@ const floors = allFloors?.typescript?.webcomponents ?? {
 };
 
 export default defineConfig({
+  // Pre-bundle the Pierre libraries up front. Discovering them mid-run makes
+  // Vite re-optimize and reload the page, and a reload after a custom element
+  // has been defined leaves the tag bound to the PRE-reload class — so
+  // `document.createElement('slicc-file-tree')` returns an element whose
+  // lifecycle callbacks never fire, and every tree/preview test fails in a way
+  // that looks like a component bug.
+  optimizeDeps: { include: ['@pierre/trees', '@pierre/diffs'] },
   test: {
     name: 'webcomponents',
     globals: true,
