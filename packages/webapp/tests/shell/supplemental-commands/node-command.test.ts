@@ -6,8 +6,8 @@
  * are all correct for both relative and absolute invocations.
  */
 
-import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
-import { unsafeBytesFromLatin1 } from 'just-bash';
+import type { FsStat, IFileSystem, ResolvedCommandContext } from 'just-bash';
+import { createCommandContext, unsafeBytesFromLatin1 } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { createNodeCommand } from '../../../src/shell/supplemental-commands/node-command.js';
 import { NODE_VERSION } from '../../../src/shell/supplemental-commands/shared.js';
@@ -115,13 +115,16 @@ function createMockFs(files: Record<string, string> = {}): IFileSystem {
   return fs;
 }
 
-function createMockCtx(files: Record<string, string> = {}, cwd = '/workspace'): CommandContext {
-  return {
+function createMockCtx(
+  files: Record<string, string> = {},
+  cwd = '/workspace'
+): ResolvedCommandContext {
+  return createCommandContext({
     fs: createMockFs(files),
     cwd,
     env: new Map(),
     stdin: unsafeBytesFromLatin1(''),
-  };
+  });
 }
 
 describe('node command — trusted dispatch', () => {
@@ -272,12 +275,12 @@ describe('node command — shebang stripping (Wave 15 / fix B1)', () => {
   });
 
   it('runs a shebang-prefixed script read from stdin without a parse error', async () => {
-    const ctx: CommandContext = {
+    const ctx = createCommandContext({
       fs: createMockFs(),
       cwd: '/workspace',
       env: new Map(),
       stdin: unsafeBytesFromLatin1('#!/usr/bin/env node\nconsole.log("via stdin");\n'),
-    };
+    });
     const cmd = createNodeCommand();
     const result = await cmd.execute([], ctx);
 
@@ -302,13 +305,13 @@ describe('node command — shebang stripping (Wave 15 / fix B1)', () => {
 });
 
 describe('node command — explicit stdin script tokens (`node /dev/stdin << EOF`)', () => {
-  function stdinCtx(code: string, files: Record<string, string> = {}): CommandContext {
-    return {
+  function stdinCtx(code: string, files: Record<string, string> = {}): ResolvedCommandContext {
+    return createCommandContext({
       fs: createMockFs(files),
       cwd: '/workspace',
       env: new Map(),
       stdin: unsafeBytesFromLatin1(code),
-    };
+    });
   }
 
   for (const token of ['/dev/stdin', '-', '/dev/fd/0', '/proc/self/fd/0']) {
@@ -359,13 +362,13 @@ describe('node command — explicit stdin script tokens (`node /dev/stdin << EOF
 });
 
 describe('node command — --help / --version are node options, not script args', () => {
-  function stdinCtx(code: string): CommandContext {
-    return {
+  function stdinCtx(code: string): ResolvedCommandContext {
+    return createCommandContext({
       fs: createMockFs(),
       cwd: '/workspace',
       env: new Map(),
       stdin: unsafeBytesFromLatin1(code),
-    };
+    });
   }
 
   it('still prints usage for a bare `node --help`', async () => {

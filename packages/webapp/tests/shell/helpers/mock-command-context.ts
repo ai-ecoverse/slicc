@@ -1,5 +1,5 @@
-import type { CommandContext, IFileSystem } from 'just-bash';
-import { unsafeBytesFromLatin1 } from 'just-bash';
+import type { CommandContext, IFileSystem, ResolvedCommandContext } from 'just-bash';
+import { createCommandContext, unsafeBytesFromLatin1 } from 'just-bash';
 
 /**
  * Build a typed `CommandContext` for supplemental-command tests.
@@ -9,6 +9,10 @@ import { unsafeBytesFromLatin1 } from 'just-bash';
  * `ByteString` brand, so those never typechecked (#1337). `stdin` here is
  * tagged via `unsafeBytesFromLatin1`, which is what the real pipeline edge
  * does (identity at runtime, so test behavior is unchanged).
+ *
+ * Since just-bash@3.4 `Command.execute` receives a `ResolvedCommandContext`
+ * (required `limits`), so the mock is built through upstream's
+ * `createCommandContext`, which fills in the default execution limits.
  */
 export interface MockCommandContextOptions {
   /** Partial FS stub; merged over a default `resolvePath` implementation. */
@@ -22,17 +26,19 @@ export interface MockCommandContextOptions {
   overrides?: Partial<CommandContext>;
 }
 
-export function mockCommandContext(options: MockCommandContextOptions = {}): CommandContext {
+export function mockCommandContext(
+  options: MockCommandContextOptions = {}
+): ResolvedCommandContext {
   const fs: Partial<IFileSystem> = {
     resolvePath: (base: string, path: string) => (path.startsWith('/') ? path : `${base}/${path}`),
     ...options.fs,
   };
-  return {
+  return createCommandContext({
     fs: fs as IFileSystem,
     cwd: options.cwd ?? '/home',
     env: options.env ?? new Map<string, string>(),
     stdin: unsafeBytesFromLatin1(options.stdin ?? ''),
     ...(options.exportedEnv ? { exportedEnv: options.exportedEnv } : {}),
     ...options.overrides,
-  };
+  });
 }

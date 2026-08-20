@@ -1,4 +1,5 @@
-import type { CommandContext, ExecResult, IFileSystem } from 'just-bash';
+import type { ExecResult, IFileSystem, ResolvedCommandContext } from 'just-bash';
+import { createCommandContext } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import { createSudoCommand } from '../../../src/shell/supplemental-commands/sudo-command.js';
 import type { SudoBroker, SudoDecision } from '../../../src/sudo/types.js';
@@ -9,18 +10,18 @@ function brokerReturning(decision: SudoDecision): SudoBroker {
 
 interface MockCtxOptions {
   cwd?: string;
-  exec?: CommandContext['exec'];
+  exec?: ResolvedCommandContext['exec'];
 }
 
-function createMockCtx(options: MockCtxOptions = {}): CommandContext {
+function createMockCtx(options: MockCtxOptions = {}): ResolvedCommandContext {
   const fs: Partial<IFileSystem> = {};
-  return {
+  return createCommandContext({
     fs: fs as IFileSystem,
     cwd: options.cwd ?? '/workspace',
     env: new Map<string, string>(),
-    stdin: '' as unknown as CommandContext['stdin'],
+    stdin: '' as unknown as ResolvedCommandContext['stdin'],
     exec: options.exec,
-  };
+  });
 }
 
 function execResult(overrides: Partial<ExecResult> = {}): ExecResult {

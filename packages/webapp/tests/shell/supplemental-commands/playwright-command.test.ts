@@ -1,5 +1,5 @@
-import type { CommandContext, SecureFetch } from 'just-bash';
-import { EMPTY_BYTES } from 'just-bash';
+import type { ResolvedCommandContext, SecureFetch } from 'just-bash';
+import { createCommandContext, EMPTY_BYTES } from 'just-bash';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccessibilityNode, BrowserAPI } from '../../../src/cdp/index.js';
 import { HarRecorder } from '../../../src/cdp/index.js';
@@ -16,13 +16,13 @@ import {
 } from '../../../src/shell/supplemental-commands/playwright-command.js';
 import { _resetBrowseShCatalogCache } from '../../../src/shell/supplemental-commands/upskill/index.js';
 
-// Minimal CommandContext stub — playwright-cli handlers ignore ctx entirely.
-const mockCtx: CommandContext = {
+// Minimal ResolvedCommandContext stub — playwright-cli handlers ignore ctx entirely.
+const mockCtx: ResolvedCommandContext = createCommandContext({
   fs: {} as import('just-bash').IFileSystem,
   cwd: '/',
   env: new Map<string, string>(),
   stdin: EMPTY_BYTES,
-};
+});
 
 /**
  * Install a minimal `globalThis.localStorage` reporting a configured leader

@@ -11,7 +11,7 @@
  *     commands and unknown words are left alone.
  */
 import 'fake-indexeddb/auto';
-import type { CommandContext, ExecResult, IFileSystem, SecureFetch } from 'just-bash';
+import type { ExecResult, IFileSystem, ResolvedCommandContext, SecureFetch } from 'just-bash';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { createIpkCommand } from '../../../src/shell/supplemental-commands/ipk-command.js';
@@ -34,7 +34,7 @@ interface ExecCall {
 }
 
 interface Harness {
-  ctx: CommandContext;
+  ctx: ResolvedCommandContext;
   calls: ExecCall[];
 }
 
@@ -60,7 +60,7 @@ function harness(
       calls.push({ command, cwd: opts.cwd, env: opts.env ?? {} });
       return results[calls.length - 1] ?? { stdout: '', stderr: '', exitCode: 0 };
     },
-  } as unknown as CommandContext;
+  } as unknown as ResolvedCommandContext;
   return { ctx, calls };
 }
 
@@ -353,7 +353,7 @@ describe('npm run', () => {
   it('reports a context without exec support instead of silently succeeding', async () => {
     await writeManifest(fs, '/work', { name: 'demo', scripts: { build: 'echo built' } });
     const { ctx } = harness('/work');
-    const noExec = { ...ctx, exec: undefined } as unknown as CommandContext;
+    const noExec = { ...ctx, exec: undefined } as unknown as ResolvedCommandContext;
 
     const r = await npm(fs).execute(['run', 'build'], noExec);
 

@@ -1,4 +1,4 @@
-import type { CommandContext } from 'just-bash';
+import type { ResolvedCommandContext } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSshCommand } from '../../../src/shell/supplemental-commands/ssh-command.js';
 
@@ -22,8 +22,8 @@ vi.mock('../../../src/shell/supplemental-commands/host-command.js', () => ({
 }));
 
 /** ssh only reads `ctx.signal`; a bare object suffices. */
-function ctx(signal?: AbortSignal): CommandContext {
-  return { signal } as unknown as CommandContext;
+function ctx(signal?: AbortSignal): ResolvedCommandContext {
+  return { signal } as unknown as ResolvedCommandContext;
 }
 
 describe('ssh command', () => {

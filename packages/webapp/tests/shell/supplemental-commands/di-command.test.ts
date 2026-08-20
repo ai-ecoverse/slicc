@@ -1,5 +1,5 @@
 import 'fake-indexeddb/auto';
-import type { CommandContext, SecureFetch } from 'just-bash';
+import type { ResolvedCommandContext, SecureFetch } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { PYODIDE_VERSION } from '../../../src/kernel/realm/py-realm-shared.js';
@@ -19,13 +19,13 @@ function bytes(s: string): Uint8Array {
   return new TextEncoder().encode(s);
 }
 
-function ctx(cwd = '/workspace'): CommandContext {
+function ctx(cwd = '/workspace'): ResolvedCommandContext {
   return {
     cwd,
     env: new Map<string, string>(),
     fs: undefined as never,
     stdin: '' as never,
-  } as unknown as CommandContext;
+  } as unknown as ResolvedCommandContext;
 }
 
 interface Pkg {

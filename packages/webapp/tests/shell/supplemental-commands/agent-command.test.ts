@@ -1,5 +1,5 @@
 import type { IFileSystem } from 'just-bash';
-import { unsafeBytesFromLatin1 } from 'just-bash';
+import { createCommandContext, unsafeBytesFromLatin1 } from 'just-bash';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { createAgentCommand } from '../../../src/shell/supplemental-commands/agent-command.js';
 
@@ -55,12 +55,12 @@ function createMockCtx(cwd = '/home', fsOptions: MockFsOptions = {}) {
       })),
     canWrite: fsOptions.canWrite ?? (() => true),
   };
-  return {
+  return createCommandContext({
     fs: fs as unknown as IFileSystem,
     cwd,
     env: new Map<string, string>(),
     stdin: unsafeBytesFromLatin1(''),
-  };
+  });
 }
 
 function installBridge(spawn: (args: SpawnArgs) => Promise<SpawnResult> | SpawnResult) {

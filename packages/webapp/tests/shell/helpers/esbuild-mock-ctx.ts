@@ -1,15 +1,15 @@
-import type { CommandContext, IFileSystem } from 'just-bash';
+import type { IFileSystem, ResolvedCommandContext } from 'just-bash';
 import { vi } from 'vitest';
 
 /**
- * File-store-backed {@link CommandContext} for esbuild command tests. Reads and
+ * File-store-backed {@link ResolvedCommandContext} for esbuild command tests. Reads and
  * writes go through an in-memory map so bundle/transform paths resolve VFS
  * files without a real filesystem. Shared by the mocked-loader unit suite and
  * the opt-in live-wasm suite so the ctx shape stays identical across both.
  */
 export function createEsbuildMockCtx(
   overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string; stdin: string }> = {}
-): CommandContext {
+): ResolvedCommandContext {
   const fileStore = new Map<string, string>();
   const fs: Partial<IFileSystem> = {
     resolvePath: (base: string, path: string) =>
@@ -35,5 +35,5 @@ export function createEsbuildMockCtx(
     cwd: overrides.cwd ?? '/workspace',
     env: new Map<string, string>(),
     stdin: overrides.stdin ?? '',
-  } as unknown as CommandContext;
+  } as unknown as ResolvedCommandContext;
 }

@@ -60,3 +60,13 @@ describe('just-bash UTF-8 text/byte statement interleave (just-bash@3.0.2)', () 
     expect(Array.from(out)).toEqual([0x80, 0xff, 0x00, 0x90]);
   });
 });
+
+describe('just-bash cat GNU display flags (just-bash@3.2.0+)', () => {
+  it('supports cat -A (show-all) instead of rejecting the flag', async () => {
+    const b = new Bash({ files: { '/t.txt': 'a\tb\n' } });
+    const r = await b.exec('cat -A /t.txt');
+    expect(r.exitCode).toBe(0);
+    expect(r.stderr).toBe('');
+    expect(r.stdout).toBe('a^Ib$\n');
+  });
+});

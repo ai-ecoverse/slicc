@@ -2,12 +2,12 @@
  * Tests for `ps`.
  */
 
-import type { CommandContext } from 'just-bash';
+import type { ResolvedCommandContext } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { ProcessManager } from '../../../src/kernel/process-manager.js';
 import { createPsCommand } from '../../../src/shell/supplemental-commands/ps-command.js';
 
-const mockCtx = {} as CommandContext;
+const mockCtx = {} as ResolvedCommandContext;
 
 describe('ps command', () => {
   it('lists no rows when the manager is empty', async () => {

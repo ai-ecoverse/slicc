@@ -1,4 +1,4 @@
-import { unsafeBytesFromLatin1 } from 'just-bash';
+import { createCommandContext, unsafeBytesFromLatin1 } from 'just-bash';
 import { describe, expect, it, vi } from 'vitest';
 import { discoverLinks } from '../../src/net/discover-links.js';
 import { parseLinkHeader } from '../../src/net/link-header.js';
@@ -173,12 +173,15 @@ describe('discover --follow proxied fetch routing (issue F)', () => {
     proxiedModule.__proxiedFetchCalls.length = 0;
 
     const cmd = createDiscoverCommand();
-    const result = await cmd.execute(['--follow', 'https://example.com/'], {
-      fs: {} as never,
-      cwd: '/',
-      env: new Map<string, string>(),
-      stdin: unsafeBytesFromLatin1(''),
-    });
+    const result = await cmd.execute(
+      ['--follow', 'https://example.com/'],
+      createCommandContext({
+        fs: {} as never,
+        cwd: '/',
+        env: new Map<string, string>(),
+        stdin: unsafeBytesFromLatin1(''),
+      })
+    );
 
     expect(result.exitCode).toBe(0);
     expect(proxiedModule.__proxiedFetchCalls).toContain('https://example.com/');

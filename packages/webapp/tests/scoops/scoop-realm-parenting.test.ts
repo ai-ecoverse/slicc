@@ -151,6 +151,49 @@ describe('PR #1166 (P1) — agent bash-tool realm children parent under the scoo
   // but the two `.jsh` dispatch paths still called `buildJshProcessConfig()` bare,
   // so a discovered `.jsh` fell back to the mutable `activeShellPid` and a
   // concurrent run could steal its parentage.
+  // The per-run pid rides the run's own env (just-bash >= 3.2 no longer hands a
+  // command the signal its exec started with, so the old signal-keyed WeakMap
+  // never hit). That tag must not outlive its run: it is stripped from the env
+  // written back onto the shell, or a later untagged run would inherit a dead
+  // pid and parent its realm child to an already-reaped job.
+  it("does not leak a finished run's pid into a later untagged run", async () => {
+    const fs = await makeFs();
+    const pm = new ProcessManager();
+    const turn = spawnTurn(pm);
+    const shell = new AlmostBashShell({
+      fs,
+      cwd: '/scoops/test/workspace',
+      browserAPI: {} as BrowserAPI,
+      processManager: pm,
+      processOwner: { kind: 'scoop', scoopJid: 'scoop_test' },
+      getCurrentShellPid: () => turn.pid,
+    });
+    const job = pm.spawn({
+      kind: 'shell',
+      argv: ['bash', '-c', 'true'],
+      cwd: '/scoops/test/workspace',
+      owner: { kind: 'scoop', scoopJid: 'scoop_test' },
+      ppid: turn.pid,
+    });
+    // A tagged run that finishes and is reaped.
+    await shell.executeCommand('true', undefined, job.pid);
+    pm.signal(job.pid, 'SIGKILL');
+
+    // The tag is internal — it must not be observable in a later run's env.
+    const envOut = await shell.executeCommand('env');
+    expect(envOut.stdout).not.toContain('__SLICC_RUN_PID');
+
+    // And a later run with no pid of its own falls back to the scoop turn.
+    const abort = new AbortController();
+    const execPromise = shell.executeCommand(YIELDING_NODE, abort.signal);
+    const realmPid = await waitForRealmPid(pm);
+    expect(pm.get(realmPid)!.ppid, 'stale run pid inherited by a later run').toBe(turn.pid);
+
+    abort.abort();
+    await execPromise.catch(() => undefined);
+    shell.dispose();
+  }, 10_000);
+
   it("parents a discovered .jsh realm child to ITS OWN run's job pid", async () => {
     const fs = await makeFs();
     await fs.mkdir('/workspace/skills/bgjob/scripts', { recursive: true });

@@ -2,12 +2,12 @@
  * Tests for `kill`.
  */
 
-import type { CommandContext } from 'just-bash';
+import type { ResolvedCommandContext } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { ProcessManager } from '../../../src/kernel/process-manager.js';
 import { createKillCommand } from '../../../src/shell/supplemental-commands/kill-command.js';
 
-const mockCtx = {} as CommandContext;
+const mockCtx = {} as ResolvedCommandContext;
 
 describe('kill command', () => {
   it('default signal is SIGTERM', async () => {

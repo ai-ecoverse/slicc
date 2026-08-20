@@ -29,7 +29,14 @@
  * envelope emit.
  */
 
-import type { BashExecResult, Command, CommandContext, CommandName, ExecResult } from 'just-bash';
+import type {
+  BashExecResult,
+  Command,
+  CommandContext,
+  CommandName,
+  ExecResult,
+  ResolvedCommandContext,
+} from 'just-bash';
 import { Bash, defineCommand, getCommandNames, getNetworkCommandNames } from 'just-bash';
 // The shell only FORWARDS a BrowserAPI (to the supplemental commands and
 // upskill); it never calls one. Sourcing the type from the sibling that owns
@@ -226,6 +233,33 @@ type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {
 
 const log = createLogger('almost-bash-shell');
 
+/**
+ * Env var carrying the parent pid of the run a command belongs to.
+ *
+ * Realm-backed commands (`node` / `python` / `.jsh`) register their realm child
+ * under it, so `kill <job pid>` reaches that child and only that child. Reading
+ * it from the command's OWN `ctx.env` is what makes parentage exact while
+ * several detached runs share one shell — see `AlmostBashShellHeadless`'s
+ * per-run parentage note. Internal: stripped from the env written back onto the
+ * shell, so it never outlives its run.
+ */
+const RUN_PID_ENV = '__SLICC_RUN_PID';
+
+/** Read the run's parent pid back out of a command's environment. */
+function runPidFromEnv(runEnv?: ReadonlyMap<string, string>): number | undefined {
+  const raw = runEnv?.get(RUN_PID_ENV);
+  if (raw === undefined) return undefined;
+  const pid = Number.parseInt(raw, 10);
+  return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
+}
+
+/** Copy of `env` without the internal per-run tag. */
+function stripRunPid(env: Record<string, string>): Record<string, string> {
+  if (!(RUN_PID_ENV in env)) return { ...env };
+  const { [RUN_PID_ENV]: _runPid, ...rest } = env;
+  return rest;
+}
+
 export class AlmostBashShellHeadless implements HeadlessShellLike {
   protected bash: Bash;
   protected vfsAdapter: VfsAdapter;
@@ -293,18 +327,29 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   private activeShellPid: number | undefined;
 
   /**
-   * Per-run parent pid, keyed by the run's own abort signal.
+   * Per-run parent pid, carried to realm-backed commands through the run's
+   * OWN environment (see {@link RUN_PID_ENV}).
    *
    * `activeShellPid` alone is a single mutable field, which is correct only
    * while one `executeCommand` is in flight per shell. The agent's `bash` tool
    * breaks that assumption on purpose: a detached run keeps executing after the
    * tool returned, so a later command's pid would be the "active" one when the
    * detached run finally spawns its realm child, and a `kill` would hit the
-   * wrong tree. just-bash hands every command context the `signal` its exec was
-   * started with, so that signal identifies the run — a `WeakMap` on it gives
-   * exact parentage with no cleanup (entries die with the signal).
+   * wrong tree.
+   *
+   * This used to key a `WeakMap` on the run's `AbortSignal`, because just-bash
+   * handed every command context the very signal its exec was started with.
+   * just-bash >= 3.2 derives a FRESH signal per dispatched command (it composes
+   * the caller's signal with the per-command execution-limit budget), so that
+   * identity is gone and the map never hit — every realm child silently fell
+   * back to `activeShellPid`, i.e. the exact mis-parenting #2210 fixed.
+   *
+   * `env` is the one per-exec channel just-bash still passes through untouched:
+   * concurrent execs on one `Bash` keep separate env maps, and a nested/inner
+   * exec inherits its parent's — which is what we want, since it is the same
+   * run. The tag is stripped from the env written back onto the shell so a
+   * later, untagged run cannot inherit a stale pid.
    */
-  private readonly jobPidByRunSignal = new WeakMap<AbortSignal, number>();
 
   /**
    * Stable callback handed to realm-backed commands (`node` / `python`)
@@ -313,12 +358,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * bound class field rather than an inline constructor arrow so the
    * (already large) constructor stays under the cognitive-complexity cap.
    *
-   * `runSignal` is the calling command's `ctx.signal`; it disambiguates
-   * concurrent runs (see {@link jobPidByRunSignal}).
+   * `runEnv` is the calling command's `ctx.env`; it carries the run's pid tag
+   * and so disambiguates concurrent runs (see {@link RUN_PID_ENV}).
    */
   private readonly resolveJshProcessConfig = (
-    runSignal?: AbortSignal
-  ): JshProcessConfig | undefined => this.buildJshProcessConfig(runSignal);
+    runEnv?: ReadonlyMap<string, string>
+  ): JshProcessConfig | undefined => this.buildJshProcessConfig(runPidFromEnv(runEnv));
 
   /**
    * When sudo is wired with `defaultDisposition: 'require-approval'` the
@@ -608,14 +653,11 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const previousShellPid = this.activeShellPid;
     if (shellPid !== undefined) this.activeShellPid = shellPid;
-    // Pin the parentage to this run's signal too, so a run that outlives the
-    // call (the bash tool's detached jobs) still parents its realm children
-    // correctly once `activeShellPid` has moved on to a later command.
-    if (shellPid !== undefined && signal !== undefined) {
-      this.jobPidByRunSignal.set(signal, shellPid);
-    }
     try {
-      const result = await this.runCommand(command, signal);
+      // `shellPid` also rides this run's env, so a run that outlives the call
+      // (the bash tool's detached jobs) still parents its realm children
+      // correctly once `activeShellPid` has moved on to a later command.
+      const result = await this.runCommand(command, signal, shellPid);
       return {
         stdout: result.stdout,
         stderr: result.stderr,
@@ -792,7 +834,11 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     }
   }
 
-  protected async runCommand(command: string, signal?: AbortSignal): Promise<BashExecResult> {
+  protected async runCommand(
+    command: string,
+    signal?: AbortSignal,
+    runPid?: number
+  ): Promise<BashExecResult> {
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
     emitShellCommand(commandName);
 
@@ -822,7 +868,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     // AbortSignal, but we still forward it so external callers and
     // terminal Ctrl+C keep a consistent cancellation path.
     const execOptions: BashExecOptionsWithSignal = {
-      env: this.lastEnv,
+      // Tagged per run so realm-backed commands can recover THIS run's parent
+      // pid from their own `ctx.env` under concurrency (see `RUN_PID_ENV`).
+      env: runPid === undefined ? this.lastEnv : { ...this.lastEnv, [RUN_PID_ENV]: String(runPid) },
       cwd: this.cwd,
       signal,
     };
@@ -832,7 +880,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     // are outside just-bash's execution box (where VFS async timers are blocked).
     await this.flushPendingCommandGrants();
     if (result.env) {
-      this.lastEnv = { ...result.env };
+      // Drop the per-run tag: it belongs to the run that just finished, and a
+      // later untagged run must not inherit its pid.
+      this.lastEnv = stripRunPid(result.env);
     }
     // `export PATH=…` changes where commands live (#2085): re-register before
     // the next command so `mytool` works immediately after `export PATH=…;`.
@@ -857,7 +907,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     }
 
     if (result.exitCode === 127) {
-      const jshResult = await this.tryJshFallback(command, signal);
+      const jshResult = await this.tryJshFallback(command, runPid);
       if (jshResult) {
         void this.syncJshCommands().catch(() => undefined);
         return jshResult;
@@ -895,7 +945,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     return {
       name: command.name,
       trusted: command.trusted,
-      async execute(args: string[], ctx: CommandContext): Promise<ExecResult> {
+      async execute(args: string[], ctx: ResolvedCommandContext): Promise<ExecResult> {
         const denial = await guard(args);
         if (denial) return denial;
         return command.execute(args, ctx);
@@ -1101,7 +1151,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           code,
           ['node', jshPath, ...args],
           { fs: ctx.fs, cwd: ctx.cwd, env: ctx.env, stdin: ctx.stdin, exec: execFn },
-          this.buildJshProcessConfig(ctx.signal)
+          this.buildJshProcessConfig(runPidFromEnv(ctx.env))
         );
       }
 
@@ -1195,14 +1245,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   /**
    * `.jsh` fallback when bash returns 127.
    *
-   * `runSignal` is the originating exec's signal — it keys this run's parent pid
-   * so a `.jsh` reached through the fallback parents its realm child to the job
-   * that ran it, not to whichever concurrent run happens to be active.
+   * `runPid` is the originating run's parent pid — passed straight down (we are
+   * still in that run's own frame here) so a `.jsh` reached through the fallback
+   * parents its realm child to the job that ran it, not to whichever concurrent
+   * run happens to be active.
    */
-  private async tryJshFallback(
-    command: string,
-    runSignal?: AbortSignal
-  ): Promise<BashExecResult | null> {
+  private async tryJshFallback(command: string, runPid?: number): Promise<BashExecResult | null> {
     const trimmed = command.trim();
     const firstSpace = trimmed.indexOf(' ');
     const cmdName = firstSpace >= 0 ? trimmed.slice(0, firstSpace) : trimmed;
@@ -1239,7 +1287,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         stdin: EMPTY_BYTES,
         exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
       },
-      this.buildJshProcessConfig(runSignal)
+      this.buildJshProcessConfig(runPid)
     );
 
     return {
@@ -1255,19 +1303,16 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * `undefined` when no manager is wired (the jsh-executor then
    * skips registration).
    */
-  protected buildJshProcessConfig(runSignal?: AbortSignal): JshProcessConfig | undefined {
+  protected buildJshProcessConfig(runPid?: number): JshProcessConfig | undefined {
     if (!this.options.processManager || !this.options.processOwner) return undefined;
     return {
       processManager: this.options.processManager,
       owner: this.options.processOwner,
-      // Preference order: the pid registered for THIS run (exact under
-      // concurrency — the agent's bash tool detaches runs, so several can be in
-      // flight on one shell), then the per-exec field the panel terminal sets,
-      // then the static `getCurrentShellPid` (scoop turn pid).
-      getParentPid: () =>
-        (runSignal === undefined ? undefined : this.jobPidByRunSignal.get(runSignal)) ??
-        this.activeShellPid ??
-        this.options.getCurrentShellPid?.(),
+      // Preference order: the pid carried by THIS run (exact under concurrency
+      // — the agent's bash tool detaches runs, so several can be in flight on
+      // one shell), then the per-exec field the panel terminal sets, then the
+      // static `getCurrentShellPid` (scoop turn pid).
+      getParentPid: () => runPid ?? this.activeShellPid ?? this.options.getCurrentShellPid?.(),
     };
   }
 }

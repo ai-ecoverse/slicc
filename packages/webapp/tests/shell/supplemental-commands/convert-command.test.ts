@@ -1,6 +1,6 @@
 import { readFileSync } from 'fs';
 import type { IFileSystem } from 'just-bash';
-import { unsafeBytesFromLatin1 } from 'just-bash';
+import { createCommandContext, unsafeBytesFromLatin1 } from 'just-bash';
 import { createRequire } from 'module';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -805,12 +805,12 @@ describe('install-required guidance (browser branch)', () => {
         }
       }),
     };
-    return {
+    return createCommandContext({
       fs: fs as IFileSystem,
       cwd: '/workspace',
       env: new Map<string, string>(),
       stdin: unsafeBytesFromLatin1(''),
-    };
+    });
   }
 
   it('tryLoadMagickWasmFromNodeModules returns null when the package is absent', async () => {
