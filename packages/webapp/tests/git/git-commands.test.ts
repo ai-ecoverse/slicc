@@ -7,6 +7,7 @@ import 'fake-indexeddb/auto';
 vi.mock('isomorphic-git', async (importOriginal) => ({ ...(await importOriginal()) }));
 
 import * as isoGit from 'isomorphic-git';
+import { parseSudoers } from '../../src/base/sudoers.js';
 import { GLOBAL_FS_DB_NAME } from '../../src/fs/global-db.js';
 import { RestrictedFS } from '../../src/fs/restricted-fs.js';
 import { createSudoFs } from '../../src/fs/sudo-fs.js';
@@ -14,7 +15,6 @@ import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { GitCommands } from '../../src/git/git-commands.js';
 import { createIsomorphicGitFs } from '../../src/git/vfs-fs-adapter.js';
 import { AlmostBashShell } from '../../src/shell/index.js';
-import { parseSudoers } from '../../src/shell/sudo/sudoers.js';
 
 describe('GitCommands', () => {
   let vfs: VirtualFS;

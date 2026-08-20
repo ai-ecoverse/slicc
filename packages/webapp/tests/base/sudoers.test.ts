@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'vitest';
-import { NO_OP_WRITE_DEVICE_PATHS } from '../../../src/fs/virtual-device-paths.js';
 import {
   applyDefaultDisposition,
   commandGlobToRegExp,
@@ -15,7 +14,8 @@ import {
   type SudoersPolicy,
   sanitizeGrantPattern,
   scoopSudoersPath,
-} from '../../../src/shell/sudo/sudoers.js';
+} from '../../src/base/sudoers.js';
+import { NO_OP_WRITE_DEVICE_PATHS } from '../../src/fs/virtual-device-paths.js';
 
 const SAMPLE = `# SLICC sudoers
 # Writing to /etc/sudoers always requires sudo.

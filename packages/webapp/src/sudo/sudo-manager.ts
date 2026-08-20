@@ -19,12 +19,6 @@
 
 import sudoersDefault from '../../../vfs-root/etc/sudoers?raw';
 import { createLogger } from '../base/logger.js';
-import type { FsWatcher } from '../fs/fs-watcher.js';
-import type { VirtualFS } from '../fs/index.js';
-import { GRANTED_FILE } from '../fs/sudo-fs.js';
-import { FsError } from '../fs/types.js';
-import type { ScoopConfig } from '../scoops/types.js';
-import type { ShellSudoConfig } from '../shell/almost-bash-shell-headless.js';
 import {
   emptyPolicy,
   mergePolicies,
@@ -34,7 +28,13 @@ import {
   type SudoersPolicy,
   sanitizeGrantPattern,
   scoopSudoersPath,
-} from '../shell/sudo/sudoers.js';
+} from '../base/sudoers.js';
+import type { FsWatcher } from '../fs/fs-watcher.js';
+import type { VirtualFS } from '../fs/index.js';
+import { GRANTED_FILE } from '../fs/sudo-fs.js';
+import { FsError } from '../fs/types.js';
+import type { ScoopConfig } from '../scoops/types.js';
+import type { ShellSudoConfig } from '../shell/almost-bash-shell-headless.js';
 import { createSudoBroker } from './index.js';
 import type { SudoBroker } from './types.js';
 

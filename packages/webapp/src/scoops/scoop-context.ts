@@ -448,8 +448,8 @@ export class ScoopContext {
    */
   private buildSudoWiring(): {
     broker: import('../sudo/types.js').SudoBroker;
-    getPolicy: () => import('../shell/sudo/sudoers.js').SudoersPolicy;
-    defaultDisposition: import('../shell/sudo/sudoers.js').DefaultDisposition;
+    getPolicy: () => import('../base/sudoers.js').SudoersPolicy;
+    defaultDisposition: import('../base/sudoers.js').DefaultDisposition;
     shellConfig: import('../shell/almost-bash-shell-headless.js').ShellSudoConfig;
   } | null {
     if (!this.sudoManager) return null;
@@ -463,7 +463,7 @@ export class ScoopContext {
         ? manager.getBroker()
         : { requestApproval: (request) => coneBrokerFn(request) };
     const getPolicy = isCone ? () => manager.getPolicy() : () => manager.getPolicyForScoop(folder);
-    const defaultDisposition: import('../shell/sudo/sudoers.js').DefaultDisposition = isCone
+    const defaultDisposition: import('../base/sudoers.js').DefaultDisposition = isCone
       ? 'allow'
       : 'require-approval';
 

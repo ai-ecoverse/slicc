@@ -269,7 +269,7 @@ The free path is the default because SLICC doesn't prompt for ordinary agent wor
 — writing a sprinkle or running a shell command is ungated, so saving a layout
 should be too. The protected root is the opt-in exception for arrangements that
 shouldn't change without your say-so; it's enforced in `matchPath`
-(`shell/sudo/sudoers.ts`) where **no `NOPASSWD` rule can override it**, the same
+(`base/sudoers.ts`) where **no `NOPASSWD` rule can override it**, the same
 invariant as `/etc/sudoers`. Reads are never gated, so loading a pinned layout at
 boot never prompts.
 

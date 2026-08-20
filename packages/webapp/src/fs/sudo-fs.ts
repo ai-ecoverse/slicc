@@ -17,7 +17,7 @@
  * gates), mirroring `RestrictedFS`'s ACL-correct sync behavior.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import {
   applyDefaultDisposition,
   type DefaultDisposition,
@@ -27,7 +27,7 @@ import {
   SUDOERS_D_DIR,
   type SudoersPolicy,
   sanitizeGrantPattern,
-} from '../shell/sudo/sudoers.js';
+} from '../base/sudoers.js';
 import { isTimedOut, SUDO_TIMEOUT_NOTICE } from '../sudo/approval-timeout.js';
 import type { SudoBroker, SudoKind } from '../sudo/types.js';
 import { normalizePath } from './path-utils.js';
@@ -50,6 +50,14 @@ const log = createLogger('sudo:fs');
  * no import cycle. See `skills/catalog.ts`.
  */
 export const MONKEYPATCH_UNSAFE_FS: unique symbol = Symbol.for('slicc.fs.monkeypatchUnsafe');
+
+/**
+ * The wrapped handle viewed as a bag of fs methods keyed by name. `createSudoFs`
+ * builds its overrides by looking methods up dynamically (the wrapped type is a
+ * generic `T`), so the lookup is genuinely by-name; `Partial<FsMethodBag>` is
+ * the shape for probing whether one exists.
+ */
+type FsMethodBag = Record<string, (...a: unknown[]) => unknown>;
 
 /** Drop-in file for persisted "Always" grants. */
 export const GRANTED_FILE = `${SUDOERS_D_DIR}/granted`;
@@ -190,14 +198,14 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
     return matchPath(getPolicy(), 'read', normalizePath(path)) !== 'require-approval';
   }
 
-  const has = (prop: string) => typeof (target as Record<string, unknown>)[prop] === 'function';
+  const has = (prop: string) => typeof (target as Partial<FsMethodBag>)[prop] === 'function';
 
   const overrides: Record<string, (...args: unknown[]) => unknown> = {};
   for (const name of READ_ASYNC) {
     if (has(name)) {
       overrides[name] = async (path: unknown, ...rest: unknown[]) => {
         await gate('read', path as string);
-        return (target as Record<string, (...a: unknown[]) => unknown>)[name](path, ...rest);
+        return (target as FsMethodBag)[name](path, ...rest);
       };
     }
   }
@@ -205,7 +213,7 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
     if (has(name)) {
       overrides[name] = async (path: unknown, ...rest: unknown[]) => {
         await gate('write', path as string, true);
-        return (target as Record<string, (...a: unknown[]) => unknown>)[name](path, ...rest);
+        return (target as FsMethodBag)[name](path, ...rest);
       };
     }
   }
@@ -213,7 +221,7 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
     if (has(name)) {
       overrides[name] = async (path: unknown, ...rest: unknown[]) => {
         await gate('write', path as string);
-        return (target as Record<string, (...a: unknown[]) => unknown>)[name](path, ...rest);
+        return (target as FsMethodBag)[name](path, ...rest);
       };
     }
   }
@@ -234,7 +242,7 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
       // out-of-sandbox `linkPath`. The link's payload (the `linkTarget`
       // string) is not a read of that target, so it is not gated.
       await gate('write', linkPath as string);
-      return (target as Record<string, (...a: unknown[]) => unknown>).symlink(linkTarget, linkPath);
+      return (target as FsMethodBag).symlink(linkTarget, linkPath);
     };
   }
   if (has('rename')) {
@@ -245,45 +253,41 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
       await gate('read', oldPath as string);
       await gate('write', oldPath as string);
       await gate('write', newPath as string);
-      return (target as Record<string, (...a: unknown[]) => unknown>).rename(oldPath, newPath);
+      return (target as FsMethodBag).rename(oldPath, newPath);
     };
   }
   if (has('copyFile')) {
     overrides.copyFile = async (src: unknown, dest: unknown) => {
       await gate('read', src as string);
       await gate('write', dest as string);
-      return (target as Record<string, (...a: unknown[]) => unknown>).copyFile(src, dest);
+      return (target as FsMethodBag).copyFile(src, dest);
     };
   }
   if (has('mount')) {
     overrides.mount = async (path: unknown, ...rest: unknown[]) => {
       await gate('write', path as string);
-      return (target as Record<string, (...a: unknown[]) => unknown>).mount(path, ...rest);
+      return (target as FsMethodBag).mount(path, ...rest);
     };
   }
   if (has('unmount')) {
     overrides.unmount = async (path: unknown) => {
       await gate('write', path as string);
-      return (target as Record<string, (...a: unknown[]) => unknown>).unmount(path);
+      return (target as FsMethodBag).unmount(path);
     };
   }
   if (has('refreshMount')) {
     overrides.refreshMount = async (path: unknown, ...rest: unknown[]) => {
       await gate('write', path as string);
-      return (target as Record<string, (...a: unknown[]) => unknown>).refreshMount(path, ...rest);
+      return (target as FsMethodBag).refreshMount(path, ...rest);
     };
   }
   if (has('statSync')) {
     overrides.statSync = (path: unknown) =>
-      syncAllowed(path as string)
-        ? (target as Record<string, (...a: unknown[]) => unknown>).statSync(path)
-        : null;
+      syncAllowed(path as string) ? (target as FsMethodBag).statSync(path) : null;
   }
   if (has('readDirSync')) {
     overrides.readDirSync = (path: unknown) =>
-      syncAllowed(path as string)
-        ? (target as Record<string, (...a: unknown[]) => unknown>).readDirSync(path)
-        : null;
+      syncAllowed(path as string) ? (target as FsMethodBag).readDirSync(path) : null;
   }
 
   return new Proxy(target, {

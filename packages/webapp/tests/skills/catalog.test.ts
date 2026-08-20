@@ -1,9 +1,9 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { IDBFactory } from 'fake-indexeddb';
+import { emptyPolicy } from '../../src/base/sudoers.js';
 import { VirtualFS } from '../../src/fs/index.js';
 import { createSudoFs, MONKEYPATCH_UNSAFE_FS } from '../../src/fs/sudo-fs.js';
-import { emptyPolicy } from '../../src/shell/sudo/sudoers.js';
 import { discoverSkillCandidates, resolveSkillNameCollisions } from '../../src/skills/catalog.js';
 
 describe('discoverSkillCandidates', () => {

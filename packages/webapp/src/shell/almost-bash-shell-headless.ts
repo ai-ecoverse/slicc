@@ -41,6 +41,7 @@ import type { SupplementalCommandsConfig } from './supplemental-commands/index.j
 type BrowserAPI = NonNullable<SupplementalCommandsConfig['browserAPI']>;
 
 import { createLogger } from '../base/logger.js';
+import { SUDOERS_D_DIR, type SudoersPolicy, sanitizeGrantPattern } from '../base/sudoers.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { MountCommands } from '../fs/mount-commands.js';
 import { FsError } from '../fs/types.js';
@@ -58,7 +59,6 @@ import { parseShellArgs } from './parse-shell-args.js';
 import { createProxiedFetch } from './proxied-fetch.js';
 import { ScriptCatalog } from './script-catalog.js';
 import { enforceCommandSudo } from './sudo/command-guard.js';
-import { SUDOERS_D_DIR, type SudoersPolicy, sanitizeGrantPattern } from './sudo/sudoers.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill/index.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
@@ -158,7 +158,7 @@ export interface ShellSudoConfig {
    * not pre-filtered — every command registers and the dispatch-time gate
    * decides per call.
    */
-  defaultDisposition?: import('./sudo/sudoers.js').DefaultDisposition;
+  defaultDisposition?: import('../base/sudoers.js').DefaultDisposition;
 }
 
 // ---------------------------------------------------------------------------

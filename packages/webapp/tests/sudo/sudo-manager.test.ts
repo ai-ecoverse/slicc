@@ -8,16 +8,16 @@
 
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { FsWatcher } from '../../src/fs/fs-watcher.js';
-import { VirtualFS } from '../../src/fs/index.js';
-import { FsError } from '../../src/fs/types.js';
 import {
   matchCommand,
   matchPath,
   parseSudoers,
   SUDOERS_FILE,
   scoopSudoersPath,
-} from '../../src/shell/sudo/sudoers.js';
+} from '../../src/base/sudoers.js';
+import { FsWatcher } from '../../src/fs/fs-watcher.js';
+import { VirtualFS } from '../../src/fs/index.js';
+import { FsError } from '../../src/fs/types.js';
 import { generateScoopSudoers, SudoManager } from '../../src/sudo/sudo-manager.js';
 import type { SudoBroker } from '../../src/sudo/types.js';
 

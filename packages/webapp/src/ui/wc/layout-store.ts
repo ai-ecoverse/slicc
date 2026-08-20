@@ -11,7 +11,7 @@
  * The free path is the default because SLICC does not prompt for ordinary agent
  * work — writing a sprinkle or running a shell command is ungated, so saving a
  * layout should be too. The protected root is the opt-in exception, enforced in
- * `shell/sudo/sudoers.ts`'s `matchPath` where no `NOPASSWD` rule can override it.
+ * `base/sudoers.ts`'s `matchPath` where no `NOPASSWD` rule can override it.
  *
  * A skill ships layouts by writing them into either root; discovery just lists
  * both, so "load an app including its UI" needs no separate registration step.
@@ -23,8 +23,8 @@
 // `CSSStyleSheet`. Same rationale as `@slicc/webcomponents/composer/speech`.
 import { type LayoutDocument, parseLayoutDocument } from '@slicc/webcomponents/panel/layout-schema';
 import { createLogger } from '../../base/logger.js';
+import { PROTECTED_LAYOUTS_DIR } from '../../base/sudoers.js';
 import type { VirtualFS } from '../../fs/index.js';
-import { PROTECTED_LAYOUTS_DIR } from '../../shell/sudo/sudoers.js';
 
 const log = createLogger('layout-store');
 

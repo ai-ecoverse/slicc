@@ -1,7 +1,7 @@
 /**
  * Layout document store — the two VFS roots and their different protection.
  *
- * The sudo enforcement itself lives in `shell/sudo/sudoers.ts` (and is tested
+ * The sudo enforcement itself lives in `base/sudoers.ts` (and is tested
  * there); these tests cover the store's own contract: where files land, the
  * user-shadows-protected lookup rule, and that one corrupt document never hides
  * the good ones.
@@ -15,8 +15,8 @@ import {
   type LayoutDocument,
 } from '@slicc/webcomponents/panel/layout-schema';
 import { beforeEach, describe, expect, it } from 'vitest';
+import { PROTECTED_LAYOUTS_DIR } from '../../../src/base/sudoers.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
-import { PROTECTED_LAYOUTS_DIR } from '../../../src/shell/sudo/sudoers.js';
 import {
   deleteLayout,
   layoutPath,

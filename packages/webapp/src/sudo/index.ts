@@ -106,6 +106,11 @@ function createFloatSudoBroker(): SudoBroker {
   return createHttpSudoBroker();
 }
 
+/** The single property {@link installSudoTestHook} grafts onto `globalThis`. */
+interface SudoBridgeGlobal {
+  [SUDO_BRIDGE_GLOBAL_KEY]: SudoBridge;
+}
+
 /** Public contract exposed on `globalThis.__slicc_sudo`. */
 export interface SudoBridge {
   requestApproval(req: SudoRequest): Promise<import('./types.js').SudoDecision>;
@@ -126,7 +131,7 @@ export function installSudoTestHook(broker: SudoBroker = createSudoBroker()): Su
   const bridge: SudoBridge = {
     requestApproval: (req: SudoRequest) => broker.requestApproval(req),
   };
-  (globalThis as Record<string, unknown>)[SUDO_BRIDGE_GLOBAL_KEY] = bridge;
+  (globalThis as unknown as SudoBridgeGlobal)[SUDO_BRIDGE_GLOBAL_KEY] = bridge;
   log.info('sudo broker test hook published on globalThis.__slicc_sudo');
   return bridge;
 }

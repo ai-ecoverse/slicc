@@ -91,7 +91,7 @@ A fully commented-out default template ships on a fresh VFS
 
 Writes to `/etc/sudoers` and anything under `/etc/sudoers.d/` **always** require
 approval — a `NOPASSWD` rule cannot override this. It is hardcoded in `matchPath`
-(`packages/webapp/src/shell/sudo/sudoers.ts`), independent of the loaded policy.
+(`packages/webapp/src/base/sudoers.ts`), independent of the loaded policy.
 Reads of those files are allowed (visudo-style).
 
 ### Live reload
@@ -381,7 +381,7 @@ Behavior:
 
 | Path                                                              | Role                                                                          |
 | ----------------------------------------------------------------- | ----------------------------------------------------------------------------- |
-| `packages/webapp/src/shell/sudo/sudoers.ts`                       | Parser + matcher + self-protection                                            |
+| `packages/webapp/src/base/sudoers.ts`                             | Parser + matcher + self-protection                                            |
 | `packages/webapp/src/sudo/sudo-manager.ts`                        | Live policy store + reload + broker                                           |
 | `packages/webapp/src/fs/sudo-fs.ts`                               | FS-level gate (`createSudoFs`)                                                |
 | `packages/webapp/src/shell/sudo/command-guard.ts`                 | Command-level gate                                                            |

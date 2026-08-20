@@ -1,10 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
+import { parseSudoers } from '../../../src/base/sudoers.js';
 import {
   COMMAND_DENIED_MESSAGE,
   COMMAND_TIMEOUT_MESSAGE,
   enforceCommandSudo,
 } from '../../../src/shell/sudo/command-guard.js';
-import { parseSudoers } from '../../../src/shell/sudo/sudoers.js';
 import type { SudoBroker, SudoDecision } from '../../../src/sudo/types.js';
 
 const GATED = parseSudoers('Cmnd  git push*\nCmnd  rm -rf *');

@@ -5,7 +5,7 @@
  *
  *   - `RestrictedFS` (`restricted-fs.ts`) registers the device behavior and
  *     keys `VIRTUAL_DEVICES` off {@link DEV_NULL}.
- *   - The sudoers matcher (`shell/sudo/sudoers.ts`) permits CONTENT writes
+ *   - The sudoers matcher (`base/sudoers.ts`) permits CONTENT writes
  *     (`writeFile`) to these paths so scoops never hit an approval prompt for a
  *     write that discards its payload.
  *

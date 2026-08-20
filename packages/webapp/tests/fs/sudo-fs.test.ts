@@ -9,6 +9,7 @@
 
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { mergePolicies, parseSudoers, type SudoersPolicy } from '../../src/base/sudoers.js';
 import { FsError, RestrictedFS, VirtualFS } from '../../src/fs/index.js';
 import type { MountBackend } from '../../src/fs/mount/backend.js';
 import {
@@ -18,7 +19,6 @@ import {
   GRANTED_FILE,
 } from '../../src/fs/sudo-fs.js';
 import { NO_OP_WRITE_DEVICE_PATHS } from '../../src/fs/virtual-device-paths.js';
-import { mergePolicies, parseSudoers, type SudoersPolicy } from '../../src/shell/sudo/sudoers.js';
 import type { SudoDecision, SudoRequest } from '../../src/sudo/types.js';
 
 function makeBroker(decision: SudoDecision | ((req: SudoRequest) => SudoDecision)) {
@@ -47,8 +47,10 @@ describe('SudoFS', () => {
     await vfs.writeFile('/workspace/.git/config', 'cfg');
     await vfs.writeFile('/shared/secrets/api.key', 'sekret');
   });
-  afterEach(() => {
-    vfs.dispose?.();
+  afterEach(async () => {
+    // Awaited so the IDB handle is closed before the next test's `wipe: true`
+    // create — a floating dispose races the delete and flakes the suite.
+    await vfs.dispose?.();
   });
 
   it('gates protected reads and passes through non-protected reads', async () => {

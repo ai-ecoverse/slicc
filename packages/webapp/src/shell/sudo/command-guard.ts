@@ -23,14 +23,14 @@
  * sink so this module stays unit-testable in isolation.
  */
 
-import { isTimedOut, SUDO_TIMEOUT_NOTICE } from '../../sudo/approval-timeout.js';
-import type { SudoBroker } from '../../sudo/types.js';
 import {
   applyDefaultDisposition,
   type DefaultDisposition,
   matchCommand,
   type SudoersPolicy,
-} from './sudoers.js';
+} from '../../base/sudoers.js';
+import { isTimedOut, SUDO_TIMEOUT_NOTICE } from '../../sudo/approval-timeout.js';
+import type { SudoBroker } from '../../sudo/types.js';
 
 /** stderr message emitted (and shown to the agent) when approval is denied. */
 export const COMMAND_DENIED_MESSAGE = 'sudo: approval denied';

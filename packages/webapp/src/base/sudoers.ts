@@ -8,14 +8,16 @@
  * read/write to a path require approval. A hardcoded self-protection
  * invariant always gates writes to the sudoers files themselves.
  *
- * No UI, no FS, no shell wiring — those live in their own tasks.
+ * No UI, no FS, no shell wiring — those live in their own tasks. It sits in
+ * `sudo/` (not `shell/`) so the FS gate can reach it without importing up the
+ * stack — see the layer-back-edge ratchet in `packages/dev-tools/tools/`.
  */
 
-import { createLogger } from '../../base/logger.js';
-import { normalizePath, pathGlobToRegExp } from '../../fs/path-utils.js';
-import { isNoOpWriteDevicePath } from '../../fs/virtual-device-paths.js';
+import { normalizePath, pathGlobToRegExp } from '../fs/path-utils.js';
+import { isNoOpWriteDevicePath } from '../fs/virtual-device-paths.js';
+import { createLogger } from './logger.js';
 
-export { pathGlobToRegExp } from '../../fs/path-utils.js';
+export { pathGlobToRegExp } from '../fs/path-utils.js';
 
 const log = createLogger('sudo:sudoers');
 

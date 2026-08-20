@@ -21,6 +21,7 @@
 import type { CommandContext } from 'just-bash';
 import 'fake-indexeddb/auto';
 import { expect, test } from 'vitest';
+import { mergePolicies, parseSudoers, type SudoersPolicy } from '../../../src/base/sudoers.js';
 import { RestrictedFS } from '../../../src/fs/restricted-fs.js';
 import { createSudoFs } from '../../../src/fs/sudo-fs.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
@@ -33,11 +34,6 @@ import {
   mintSyncFsToken,
   revokeSyncFsToken,
 } from '../../../src/kernel/realm/sync-fs-token-registry.js';
-import {
-  mergePolicies,
-  parseSudoers,
-  type SudoersPolicy,
-} from '../../../src/shell/sudo/sudoers.js';
 import { VfsAdapter } from '../../../src/shell/vfs-adapter.js';
 import type { SudoDecision, SudoRequest } from '../../../src/sudo/types.js';
 
