@@ -31,7 +31,6 @@
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/console.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/interaction.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/network-requests.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/playwright/handlers/recording.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/routing.ts": 2,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/snapshot.ts": 3,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/teleport.ts": 2,

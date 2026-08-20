@@ -7,7 +7,9 @@
 
 import type { TrayTargetEntry } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
+import type { VirtualFS } from '../fs/index.js';
 import { CDPClient } from './cdp-client.js';
+import { HarRecorder } from './har-recorder.js';
 import { INJECTED_ARIA_SNAPSHOT_SCRIPT } from './injected-aria-snapshot.js';
 import { normalizeAccessibilityText } from './normalize-accessibility-text.js';
 import type { CDPTransport } from './transport.js';
@@ -161,6 +163,15 @@ export class BrowserAPI {
    */
   getTransport(): CDPTransport {
     return this.client;
+  }
+
+  /**
+   * Construct a {@link HarRecorder} bound to this browser's current transport.
+   * Lets the shell-layer `record` handler create a recorder without importing
+   * the cdp-layer class directly (which would invert the layer stack).
+   */
+  createHarRecorder(fs: VirtualFS): HarRecorder {
+    return new HarRecorder(this.client, fs);
   }
 
   /**

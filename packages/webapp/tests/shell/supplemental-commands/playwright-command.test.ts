@@ -2,6 +2,7 @@ import type { CommandContext, SecureFetch } from 'just-bash';
 import { EMPTY_BYTES } from 'just-bash';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { AccessibilityNode, BrowserAPI } from '../../../src/cdp/index.js';
+import { HarRecorder } from '../../../src/cdp/index.js';
 import type { VirtualFS } from '../../../src/fs/index.js';
 import type { FloatType } from '../../../src/scoops/tray-leader-sync.js';
 import { TRAY_WORKER_STORAGE_KEY } from '../../../src/scoops/tray-runtime-config.js';
@@ -41,7 +42,7 @@ function withTrayConfigured(): () => void {
 
 /** Minimal mock BrowserAPI. */
 function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
-  return {
+  const browser = {
     listPages: vi.fn().mockResolvedValue([
       {
         targetId: 'tab-1',
@@ -100,6 +101,10 @@ function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
     getTransport: vi.fn().mockReturnValue({
       send: vi.fn().mockResolvedValue({}),
     }),
+    // Mirror the real BrowserAPI.createHarRecorder: bind a HarRecorder to the
+    // browser's current transport (read lazily so per-test getTransport
+    // overrides apply).
+    createHarRecorder: vi.fn((fs: VirtualFS) => new HarRecorder(browser.getTransport(), fs)),
     getSessionId: vi.fn().mockReturnValue('session-1'),
     withTab: vi
       .fn()
@@ -108,6 +113,7 @@ function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
       }),
     ...overrides,
   } as unknown as BrowserAPI;
+  return browser;
 }
 
 function createMockFS(): VirtualFS & { _files: Map<string, string | Uint8Array> } {

@@ -1,7 +1,12 @@
+import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserAPI, getDefaultCdpUrl } from '../../src/cdp/browser-api.js';
 import type { CDPClient } from '../../src/cdp/cdp-client.js';
+import { HarRecorder } from '../../src/cdp/har-recorder.js';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../../src/cdp/remote-cdp-transport.js';
+import { VirtualFS } from '../../src/fs/virtual-fs.js';
+
+let dbCounter = 0;
 
 // ---------------------------------------------------------------------------
 // Mock CDPClient
@@ -1285,6 +1290,22 @@ describe('BrowserAPI', () => {
 
       // All three must execute in strict FIFO order
       expect(order).toEqual(['1-start', '1-end', '2-start', '2-end', '3-start', '3-end']);
+    });
+  });
+
+  describe('createHarRecorder', () => {
+    it('returns a HarRecorder bound to the browser transport', async () => {
+      const fs = await VirtualFS.create({ dbName: `har-factory-${dbCounter++}`, wipe: true });
+
+      const recorder = api.createHarRecorder(fs);
+      expect(recorder).toBeInstanceOf(HarRecorder);
+
+      // The recorder must drive the same transport the browser exposes, so a
+      // recording started through it subscribes to events on that transport.
+      const recordingId = await recorder.startRecording('target-1', 'session-1');
+      expect(recordingId).toMatch(/^rec-/);
+      expect(mockClient.send).toHaveBeenCalledWith('Network.enable', {}, 'session-1');
+      expect(mockClient.on).toHaveBeenCalledWith('Network.requestWillBeSent', expect.any(Function));
     });
   });
 });
