@@ -13,6 +13,17 @@
  * built-ins and HARD-FAILS the rest with the browser-unavailable message.
  */
 
+/**
+ * Node version the realm reports as `process.versions.node` /
+ * `process.version`, and the base of the `node --version` string. Packages
+ * feature-detect on it at require time (esbuild's Node entry does
+ * `process.versions.node.split('.')` at module scope), so it must be a plain
+ * parseable version with no shim suffix — a missing `process.versions` made
+ * `require('esbuild-wasm')` die with `Cannot read properties of undefined
+ * (reading 'node')` before any diagnostics could run (#2200).
+ */
+export const NODE_SHIM_VERSION = '20.0.0';
+
 /** Bare Node built-ins the realm serves directly (never from `node_modules`). */
 export const NODE_BUILTIN_AVAILABLE: ReadonlySet<string> = new Set([
   'child_process',

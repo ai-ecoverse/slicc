@@ -77,6 +77,39 @@ the single documented runtime-CDN exception for Pyodide's wheel ecosystem only
 an exact version in `package.json` so the npm loader and the wheel host stay in
 lockstep.
 
+## esbuild-wasm: `worker: false` Always, and Bound the Handshake
+
+`esbuild.initialize({ wasmModule, worker: true })` starts the Go service in a
+nested `blob:` Worker and settles its promise **only** on that worker's first
+`message`. It attaches no `onerror` and no timeout. So anything that stops the
+blob worker from running — a `worker-src` / `child-src` CSP, blob URLs
+unavailable, nested workers disallowed — leaves `initialize()` pending forever
+with no observable diagnostic. Reproduced in a headless Chromium
+DedicatedWorker: under `worker-src 'self'` the nested worker fires a bare
+`error` event and `initialize()` never settles; `worker: false` resolved in
+~130 ms in every configuration tested, needs no `unsafe-eval`, and surfaces
+boot failures as rejections.
+
+That hang was #2200: `node` on any ESM source and the `esbuild` command
+produced no output and no error until killed, in every browser float. Two
+rules follow, both enforced in
+`shell/supplemental-commands/esbuild-wasm.ts`:
+
+1. **Pass `worker: false` in every browser float.** The loader already runs off
+   the UI thread (kernel worker / offscreen document), so there is no thread to
+   keep responsive.
+2. **Bound the handshake** (`ESBUILD_INIT_TIMEOUT_MS`) and never cache a
+   promise that may never settle. `esbuild.initialize` may be called only once
+   per realm, so a stall is recorded and re-reported to later callers instead
+   of being retried or awaited: a module-scope `Promise` cleared only in
+   `.catch` poisons the whole session when the promise never settles.
+
+Related: a "package is not installed" error from an ipk loader must name the
+`node_modules` directories it walked (`nodeModulesSearchPath`). Resolution
+starts at the command's cwd, so a package sitting in `/workspace/node_modules`
+is genuinely invisible from `/shared`, and the bare message reads as a false
+claim.
+
 ## emscripten WASM Heap Views: Copy Inside the Callback
 
 WASM modules built with emscripten — magick-wasm, Pyodide, sql.js — hand

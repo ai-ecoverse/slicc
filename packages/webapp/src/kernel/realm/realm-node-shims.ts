@@ -4,6 +4,7 @@
  * `js-realm-shared.ts`; no behavior change.
  */
 import { attachArgvParseFlags, nodeStream } from './js-realm-helpers.js';
+import { NODE_SHIM_VERSION } from './node-builtins.js';
 import type { RealmInitMsg } from './realm-types.js';
 
 export function dirnameOf(filePath: string): string {
@@ -66,6 +67,10 @@ interface RealmWritableShim {
 export interface RealmProcessShim {
   argv: string[];
   env: Record<string, string>;
+  versions: { node: string };
+  version: string;
+  platform: string;
+  arch: string;
   cwd: () => string;
   exit: (codeValue?: number) => never;
   stdin: StdinShim;
@@ -102,6 +107,16 @@ export function createProcessShim(
   const processShim: RealmProcessShim = {
     argv: argvWithParseFlags,
     env: init.env,
+    // Identity fields packages sniff at require time. Leaving them undefined
+    // turned a diagnosable failure into a TypeError deep inside a dependency
+    // (`process.versions.node` in esbuild's Node entry, #2200), and Go's
+    // `wasm_exec` glue branches on the same globals. The values mirror the
+    // `os` shim (`helpers/node-os.ts`: linux/x64) so a script that reads both
+    // sees one consistent machine.
+    versions: { node: NODE_SHIM_VERSION },
+    version: `v${NODE_SHIM_VERSION}`,
+    platform: 'linux',
+    arch: 'x64',
     cwd: () => init.cwd,
     exit: (codeValue?: number) => {
       const normalized = Number.isFinite(codeValue) ? Number(codeValue) : 0;

@@ -1,8 +1,13 @@
 import type { CommandContext } from 'just-bash';
-import { getMimeType } from '../../core/mime-types.js';
-import { isExtensionRealm } from '../../core/runtime-env.js';
+import { getMimeType } from '../../base/mime-types.js';
+import { isExtensionRealm } from '../../base/runtime-env.js';
 import { normalizePath, splitPath } from '../../fs/path-utils.js';
-import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
+import { NODE_SHIM_VERSION } from '../../kernel/realm/node-builtins.js';
+import {
+  resolve as ipkResolve,
+  type ModuleReader,
+  nodeModulesSearchPath,
+} from '../ipk/resolver.js';
 
 export interface SqlJsResultSet {
   columns: string[];
@@ -34,7 +39,13 @@ export function resolvePinnedPackageVersion(packageName: string, versionSpec: un
   return versionSpec;
 }
 
-export const NODE_VERSION = 'v20.0.0-js-shim';
+/**
+ * `node --version` output. Carries the `-js-shim` marker so a user can tell
+ * this is not a real Node, while the realm's `process.version` /
+ * `process.versions.node` stay plain and parseable (see
+ * {@link NODE_SHIM_VERSION}) because dependencies split them numerically.
+ */
+export const NODE_VERSION = `v${NODE_SHIM_VERSION}-js-shim`;
 
 let sqlJsPromise: Promise<SqlJsModule> | null = null;
 let typeScriptPromise: Promise<TypeScriptModule> | null = null;
@@ -230,6 +241,65 @@ const TYPESCRIPT_NOT_INSTALLED =
   '(no network fallback)';
 
 /**
+ * Explain a browser-branch TypeScript miss in terms of what was actually
+ * found. Three shapes, because "not installed" is misleading in two of them
+ * (#2200):
+ *
+ *  - nothing resolved -> name the `node_modules` directories walked, since
+ *    resolution starts at the command's cwd and a package installed
+ *    elsewhere is genuinely invisible;
+ *  - a `typescript` whose major is not 6 -> name the version and say why it
+ *    cannot serve (TypeScript 7 is the native port: its npm package ships no
+ *    JS compiler API, so `transpileModule` does not exist in the browser);
+ *  - resolved TypeScript 6 without a readable `lib/typescript.js` -> the
+ *    canonical install guidance.
+ *
+ * The pin stays at 6.0.3 deliberately (#1658); a workspace on 7.x has to
+ * install the 6 line into a directory the command's cwd can see.
+ */
+async function describeTypeScriptMiss(ipk: TypeScriptIpkContext): Promise<string> {
+  let manifest: string | null = null;
+  let manifestPath: string | null = null;
+  try {
+    const resolved = await ipkResolve('typescript/package.json', ipk.fromDir, ipk.reader);
+    if (resolved.type === 'file') {
+      manifestPath = resolved.path;
+      manifest = await ipk.reader.readFile(resolved.path);
+    }
+  } catch {
+    manifest = null;
+  }
+  if (manifest === null || manifestPath === null) {
+    return (
+      `TypeScript 6 is not installed in node_modules: run \`${TYPESCRIPT_VFS_INSTALL_COMMAND}\` ` +
+      `(no network fallback; searched from ${ipk.fromDir}: ` +
+      `${nodeModulesSearchPath(ipk.fromDir).join(', ')})`
+    );
+  }
+  let version: unknown;
+  try {
+    version = (JSON.parse(manifest) as { version?: unknown }).version;
+  } catch {
+    version = undefined;
+  }
+  const major = typeof version === 'string' ? Number.parseInt(version, 10) : Number.NaN;
+  if (Number.isFinite(major) && major !== 6) {
+    // Only the native port (7+) dropped `lib/typescript.js`; older majors do
+    // ship the JS compiler API and are refused solely by the pin.
+    const why =
+      major > 6
+        ? 'which ships no JS compiler API for the browser (no `lib/typescript.js`, so no `transpileModule`)'
+        : 'which predates the pinned 6.x line this build loads';
+    return (
+      `TypeScript 6 is required but ${splitPath(manifestPath).dir} holds typescript@${String(version)}, ` +
+      `${why}: run \`${TYPESCRIPT_VFS_INSTALL_COMMAND}\` in a directory this command's cwd resolves from ` +
+      '(no network fallback)'
+    );
+  }
+  return TYPESCRIPT_NOT_INSTALLED;
+}
+
+/**
  * Lazy singleton for the classic TypeScript JS compiler API. Pure JS (no WASM init).
  *
  * Node runtime (vitest, build tooling): falls back to the
@@ -268,7 +338,7 @@ async function loadTypeScript(ipk?: TypeScriptIpkContext): Promise<TypeScriptMod
   }
   if (!ipk) throw new Error(TYPESCRIPT_NOT_INSTALLED);
   const source = await tryLoadTypeScriptSourceFromNodeModules(ipk);
-  if (source === null) throw new Error(TYPESCRIPT_NOT_INSTALLED);
+  if (source === null) throw new Error(await describeTypeScriptMiss(ipk));
   return evaluateTypeScriptModule(source);
 }
 
@@ -309,6 +379,7 @@ export async function tryLoadTypeScriptSourceFromNodeModules(
  * evaluator in `module-loader.ts`.
  */
 function evaluateTypeScriptModule(source: string): TypeScriptModule {
+  // biome-ignore lint/plugin: the TypeScript UMD bundle writes its own API surface onto `module.exports`; the shape is the compiler's (narrowed to `TypeScriptModule` on return), not ours to name.
   const module: { exports: Record<string, unknown> } = { exports: {} };
   const evaluator = new Function('module', 'exports', source);
   evaluator(module, module.exports);

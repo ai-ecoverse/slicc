@@ -42,7 +42,8 @@ describe('getEsbuild browser recovery guidance', () => {
 
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe(
-      `esbuild-wasm is not installed in node_modules: run \`${bootstrap}\``
+      `esbuild-wasm is not installed in node_modules: run \`${bootstrap}\`` +
+        ' (searched from /workspace: /workspace/node_modules, /node_modules)'
     );
     expect((error as Error).message).not.toContain('ipx esbuild');
   });

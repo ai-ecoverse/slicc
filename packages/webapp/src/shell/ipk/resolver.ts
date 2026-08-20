@@ -362,6 +362,16 @@ async function readManifest(reader: ModuleReader, dir: string): Promise<Resolver
 }
 
 /**
+ * A raw package.json `exports` / `imports` map as authored: keys are
+ * author-chosen subpaths (`.`, `./sub`), conditions (`node`, `browser`,
+ * `import`) or `#`-imports, and a value is a string target, a nested map or an
+ * array of fallbacks. Open-ended by specification, so values stay `unknown`
+ * and every read narrows before use.
+ */
+// biome-ignore lint/plugin: package.json exports/imports maps are author-defined and open-ended per the Node spec; this alias is the single place that shape is named.
+type PackageEntryMap = Record<string, unknown>;
+
+/**
  * Resolve an `exports` target (string, conditions object, or array of either)
  * against the ordered `conditions`. Returns the first matching relative target
  * string or null. `default` participates only when listed in `conditions`.
@@ -376,7 +386,7 @@ function resolveExportsTarget(field: unknown, conditions: string[]): string | nu
     }
     return null;
   }
-  const obj = field as Record<string, unknown>;
+  const obj = field as PackageEntryMap;
   for (const condition of conditions) {
     if (Object.hasOwn(obj, condition)) {
       const resolved = resolveExportsTarget(obj[condition], conditions);
@@ -394,7 +404,7 @@ function isSubpathExports(field: unknown): boolean {
 
 function rootExportsField(field: unknown): unknown {
   if (isSubpathExports(field)) {
-    return (field as Record<string, unknown>)['.'];
+    return (field as PackageEntryMap)['.'];
   }
   return field;
 }
@@ -468,7 +478,7 @@ async function resolveInPackage(
   }
   const manifest = await readManifest(reader, pkgDir);
   if (manifest?.exports !== undefined && isSubpathExports(manifest.exports)) {
-    const sub = (manifest.exports as Record<string, unknown>)[`./${subpath}`];
+    const sub = (manifest.exports as PackageEntryMap)[`./${subpath}`];
     if (sub !== undefined) {
       const target = resolveExportsTarget(sub, conditions);
       if (target) {
@@ -483,17 +493,34 @@ async function resolveInPackage(
   return loadAsFileOrDirectory(reader, joinPath(pkgDir, subpath), conditions);
 }
 
+/**
+ * The ordered `node_modules` directories a bare-specifier lookup from
+ * `fromDir` walks (nearest first, VFS root last) — the same chain
+ * {@link findPackageDir} tries. Exported so a "package is not installed"
+ * error can name the directories it actually searched: resolution is
+ * cwd-relative, so a package installed in `/workspace/node_modules` is
+ * genuinely invisible from `/shared`, and a message that omits the walk
+ * reads as a false claim that nothing is installed anywhere (#2200).
+ */
+export function nodeModulesSearchPath(fromDir: string): string[] {
+  const dirs: string[] = [];
+  let dir = fromDir || '/';
+  while (true) {
+    dirs.push(joinPath(dir, 'node_modules'));
+    if (dir === '/' || dir === '') break;
+    dir = dirOf(dir);
+  }
+  return dirs;
+}
+
 async function findPackageDir(
   reader: ModuleReader,
   fromDir: string,
   name: string
 ): Promise<string | null> {
-  let dir = fromDir || '/';
-  while (true) {
-    const candidate = joinPath(dir, 'node_modules', name);
+  for (const nodeModules of nodeModulesSearchPath(fromDir)) {
+    const candidate = joinPath(nodeModules, name);
     if (await reader.isDirectory(candidate)) return candidate;
-    if (dir === '/' || dir === '') break;
-    dir = dirOf(dir);
   }
   return null;
 }
@@ -538,10 +565,7 @@ interface MatchedImport {
  * `*` pattern key (`#internal/*`). Returns the matched target field plus the
  * captured `*` substring, or null when nothing matches.
  */
-function matchImportsKey(
-  specifier: string,
-  importsMap: Record<string, unknown>
-): MatchedImport | null {
+function matchImportsKey(specifier: string, importsMap: PackageEntryMap): MatchedImport | null {
   if (Object.hasOwn(importsMap, specifier)) {
     return { field: importsMap[specifier], star: '' };
   }
@@ -579,7 +603,7 @@ async function resolvePackageImports(
   const manifest = await readManifest(reader, scopeDir);
   const imports = manifest?.imports;
   if (!imports || typeof imports !== 'object' || Array.isArray(imports)) return null;
-  const matched = matchImportsKey(specifier, imports as Record<string, unknown>);
+  const matched = matchImportsKey(specifier, imports as PackageEntryMap);
   if (!matched) return null;
   const browserConditions = browserPreferringConditions(conditions);
   const target = resolveExportsTarget(matched.field, browserConditions);
