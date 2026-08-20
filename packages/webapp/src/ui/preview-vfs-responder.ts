@@ -67,7 +67,13 @@ export interface PreviewVfsResponderOptions {
   /** Pre-constructed channel; tests inject the polyfill. */
   channel: PreviewVfsChannelLike;
   /** Optional logger — defaults to silent on ENOENT, error on the rest. */
-  logger?: { error(msg: string, meta?: Record<string, unknown>): void };
+  logger?: { error(msg: string, meta?: PreviewVfsReadFailure): void };
+}
+
+/** Structured context attached to a failed-read log line. */
+export interface PreviewVfsReadFailure {
+  path: string;
+  error: string;
 }
 
 export interface PreviewVfsResponderHandle {
@@ -123,15 +129,18 @@ export function installPreviewVfsResponder(
     }
   }
 
-  // Reads are SERIALIZED through this per-responder chain. The kernel VFS
-  // (ZenFS WebAccess-on-OPFS behind the RemoteVfsClient RPC) is not safe
-  // under same-context concurrent reads: overlapping readFile calls can
-  // resolve with each other's content. Observed live with a parallel
-  // module-graph fetch through the preview SW — every chunk URL of an
-  // ipk-installed package came back with the entry file's bytes, so the
-  // import linked but failed with a missing-export error. Sequential
-  // reads are verified correct; the throughput cost is negligible next
-  // to the BroadcastChannel + RPC round trip each read already pays.
+  // Reads are SERIALIZED through this per-responder chain. Observed live
+  // (#2034) with a parallel module-graph fetch through the preview SW —
+  // every chunk URL of an ipk-installed package came back with the entry
+  // file's bytes, so the import linked but failed with a missing-export
+  // error. Root cause: ZenFS keys its vnode cache by ino and each vnode
+  // owns a data cache, so paths with colliding inos (the poisoned-index
+  // class of #2146) shared one vnode while concurrently open. That is
+  // fixed at the FS layer (patches/@zenfs+core: VCache.ref only shares
+  // across paths for genuine hardlinks); the queue stays as defense in
+  // depth — its cost is negligible next to the BroadcastChannel + RPC
+  // round trip each read already pays, and the ack/start protocol below
+  // is built on it.
   let queue: Promise<void> = Promise.resolve();
 
   const listener = (event: MessageEvent): void => {

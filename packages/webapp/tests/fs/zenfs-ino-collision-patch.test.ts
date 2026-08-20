@@ -17,8 +17,11 @@ import { describe, expect, it } from 'vitest';
 //
 // Two patches close it: @zenfs/dom allocates unique ino/data pairs at both
 // minting sites, and @zenfs/core's VCache refuses to coalesce DIFFERENT
-// paths onto one vnode when the ino is 0 or the format bits differ. These
-// tests fail if either patch is missing or stops applying.
+// paths onto one vnode unless they are a genuine hardlink (nonzero ino,
+// matching format bits, nlink > 1 on both sides — #2034 added the nlink
+// rule after a duplicated real ino made concurrent reads of two paths
+// return the same bytes). These tests fail if either patch is missing or
+// stops applying.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 describe('@zenfs/dom ino allocation patch (#2146)', () => {
@@ -54,7 +57,7 @@ describe('@zenfs/core vnode-cache coalescing guard (#2146)', () => {
   it('the guard is present in the installed dist', () => {
     const src = readFileSync(vcachePath, 'utf8');
     expect(
-      src.includes('PATCH(#2146)'),
+      src.includes('PATCH(#2146, #2034)'),
       'Installed @zenfs/core VCache.ref still coalesces different paths onto ' +
         'one vnode for ino-0/format-mismatched inodes; ' +
         'patches/@zenfs+core+*.patch is missing or failed to apply. ' +
@@ -85,10 +88,23 @@ describe('@zenfs/core vnode-cache coalescing guard (#2146)', () => {
     const d = cache.ref('/dir', { ino: 7, mode: S_IFDIR | 0o755, size: 0 });
     expect(f).not.toBe(d);
 
-    // Genuine hardlinks — same real ino, same mode — still share one vnode.
-    const h1 = cache.ref('/link1', { ino: 9, mode: S_IFREG | 0o644, size: 42 });
-    const h2 = cache.ref('/link2', { ino: 9, mode: S_IFREG | 0o644, size: 42 });
+    // Genuine hardlinks — same real ino, same mode, nlink > 1 — still share
+    // one vnode.
+    const h1 = cache.ref('/link1', { ino: 9, mode: S_IFREG | 0o644, size: 42, nlink: 2 });
+    const h2 = cache.ref('/link2', { ino: 9, mode: S_IFREG | 0o644, size: 42, nlink: 2 });
     expect(h1).toBe(h2);
+
+    // A DUPLICATED real ino with nlink 1 is a poisoned index, not a hardlink
+    // (#2034): the two paths must keep separate vnodes — and separate data
+    // caches — or a concurrent read of one returns the other's bytes.
+    const p = cache.ref('/dist/index.js', { ino: 11, mode: S_IFREG | 0o644, size: 50, nlink: 1 });
+    const q = cache.ref('/dist/chunk-a.js', { ino: 11, mode: S_IFREG | 0o644, size: 70, nlink: 1 });
+    expect(p).not.toBe(q);
+    expect(p.inode.size).toBe(50);
+    expect(q.inode.size).toBe(70);
+    expect(
+      cache.ref('/dist/index.js', { ino: 11, mode: S_IFREG | 0o644, size: 50, nlink: 1 })
+    ).toBe(p);
 
     // Re-refing the SAME path with ino 0 joins its own vnode (no churn).
     const a2 = cache.ref('/a.txt', { ino: 0, mode: S_IFREG | 0o644, size: 100 });
