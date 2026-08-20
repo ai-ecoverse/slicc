@@ -1,25 +1,35 @@
 /**
- * mount command dispatcher — routes local, S3, and DA mount requests through
- * their respective backend factories. Handles flag parsing for --source,
- * --profile, --no-probe, --max-body-mb, --clear-cache, and --bodies.
+ * mount command dispatcher — routes local, S3, DA, and AEM mount requests
+ * through their respective backend factories. Handles flag parsing for
+ * --source, --profile, --backend, --no-probe, --max-body-mb, --clear-cache,
+ * and --bodies.
  *
  * Local mounts (no --source) launch the picker UI via LocalMountBackend.create
  * (cone approval card + popup, extension terminal popup, or standalone direct
  * picker). The click is required to satisfy Chrome's user-gesture rule for the
  * File System Access API, not as a consent gate.
  *
- * Remote mounts (s3://... or da://...) build their backend, probe the source,
- * and mount directly — no approval ceremony, since the trust boundary lives at
- * the credential profile resolver in node-server / SW, not in the chat.
+ * Remote mounts (s3://..., da://..., aem://...) build their backend, probe the
+ * source, and mount directly — no approval ceremony, since the trust boundary
+ * lives at the credential profile resolver in node-server / SW, not in the chat.
+ *
+ * `da://` is ambiguous by itself: a site upgraded to Helix 6 keeps its
+ * `<org>/<site>` identity but moves its content off `admin.da.live`, so
+ * mounting it there quietly indexes an unrelated repository (issue #2227).
+ * Every `da://` mount therefore probes the site config first and re-routes to
+ * the Source Bus when that is where the content lives. `--backend da|aem`
+ * forces the choice when the probe is wrong or unavailable.
  *
  * Scoop fail-fast lives in LocalMountBackend.create().
  */
 
-import { isExtensionRealm } from '../core/runtime-env.js';
-import { getToolExecutionContext } from '../tools/tool-ui.js';
+import { isExtensionRealm } from '../base/runtime-env.js';
+import { getToolExecutionContext } from '../base/tool-execution-context.js';
+import { AemMountBackend } from './mount/backend-aem.js';
 import { DaMountBackend, type SignedFetchDa } from './mount/backend-da.js';
 import { LocalMountBackend } from './mount/backend-local.js';
 import { S3MountBackend, type SignedFetchS3 } from './mount/backend-s3.js';
+import { type ContentBackendKind, probeContentSource } from './mount/content-source.js';
 import { newMountId } from './mount/mount-id.js';
 import { RemoteMountCache } from './mount/remote-cache.js';
 import { makeSignedFetchDa, makeSignedFetchS3 } from './mount/signed-fetch.js';
@@ -54,10 +64,13 @@ interface ParsedArgs {
   positional: string[];
   source?: string;
   profile?: string;
+  backend?: ContentBackendKind;
   noProbe: boolean;
   maxBodyMb?: number;
   clearCache: boolean;
   bodies: boolean;
+  /** Set when `--backend` was given a value that isn't `da` or `aem`. */
+  backendError?: string;
 }
 
 function parseArgs(args: string[]): ParsedArgs {
@@ -73,6 +86,10 @@ function parseArgs(args: string[]): ParsedArgs {
       out.source = args[++i];
     } else if (a === '--profile') {
       out.profile = args[++i];
+    } else if (a === '--backend') {
+      const value = args[++i];
+      if (value === 'da' || value === 'aem') out.backend = value;
+      else out.backendError = value;
     } else if (a === '--no-probe') {
       out.noProbe = true;
     } else if (a === '--max-body-mb') {
@@ -86,6 +103,31 @@ function parseArgs(args: string[]): ParsedArgs {
     }
   }
   return out;
+}
+
+/** `da://org/repo[/path]` or `aem://org/site[/path]`, split into its parts. */
+interface ParsedAdobeSource {
+  scheme: 'da' | 'aem';
+  org: string;
+  /** Repo (DA) or site (Source Bus) — the same identifier under both names. */
+  name: string;
+  /** Sub-path within the repo/site; '' when the whole tree is mounted. */
+  path: string;
+}
+
+function parseAdobeSource(source: string): ParsedAdobeSource | null {
+  const m = source.match(/^(da|aem):\/\/([^/]+)\/([^/]+)(?:\/(.*))?$/);
+  if (!m) return null;
+  return {
+    scheme: m[1] as 'da' | 'aem',
+    org: m[2],
+    name: m[3],
+    path: (m[4] ?? '').replace(/^\/+/, '').replace(/\/+$/, ''),
+  };
+}
+
+function toAemSource(parsed: ParsedAdobeSource): string {
+  return `aem://${parsed.org}/${parsed.name}${parsed.path ? `/${parsed.path}` : ''}`;
 }
 
 export class MountCommands {
@@ -122,16 +164,22 @@ export class MountCommands {
     }
     const targetPath = this.resolvePath(parsed.positional[0], cwd);
 
+    if (parsed.backendError !== undefined) {
+      return this.usageError(
+        `mount: invalid --backend '${parsed.backendError}' — expected 'da' or 'aem'`
+      );
+    }
+
     // Dispatch on URL scheme.
     if (parsed.source) {
       if (parsed.source.startsWith('s3://')) {
         return this.mountS3(targetPath, parsed);
       }
-      if (parsed.source.startsWith('da://')) {
-        return this.mountDa(targetPath, parsed);
+      if (parsed.source.startsWith('da://') || parsed.source.startsWith('aem://')) {
+        return this.mountAdobe(targetPath, parsed);
       }
       return this.usageError(
-        `mount: invalid source '${parsed.source}' — expected s3://... or da://...`
+        `mount: invalid source '${parsed.source}' — expected s3://..., da://... or aem://...`
       );
     }
 
@@ -242,26 +290,81 @@ export class MountCommands {
     };
   }
 
-  private async mountDa(targetPath: string, parsed: ParsedArgs): Promise<MountCommandResult> {
+  /**
+   * Mount an Adobe authoring source — `da://<org>/<repo>` (Helix 5
+   * Document Authoring) or `aem://<org>/<site>` (Helix 6 Source Bus).
+   *
+   * Both speak the same IMS-bearer transport, so the only real decision is
+   * *which store holds this site's content*. `aem://` states it outright.
+   * `da://` does not: the scheme survived the Helix 6 upgrade even though the
+   * content moved, which is how a mount can succeed against `admin.da.live`
+   * and hand back a different project's boilerplate. So `da://` asks the site
+   * config, and says so on stderr when the answer is the Source Bus.
+   */
+  private async mountAdobe(targetPath: string, parsed: ParsedArgs): Promise<MountCommandResult> {
     if (!parsed.source) {
       return this.usageError('mount: --source required');
     }
     const profileName = parsed.profile ?? 'default';
-
     // The IMS bearer token comes from the browser-side Adobe LLM provider on
     // each request; the transport (signedFetch) fetches it fresh per call so
     // refreshes apply. Tests inject signedFetch directly and bypass this.
+    const signedFetch = this.signedFetchDa ?? makeSignedFetchDa();
+
+    const parsedSource = parseAdobeSource(parsed.source);
+    if (!parsedSource) {
+      return this.usageError(
+        `mount: invalid source '${parsed.source}' — expected da://org/repo or aem://org/site`
+      );
+    }
+
+    let kind: ContentBackendKind = parsedSource.scheme === 'aem' ? 'aem' : 'da';
+    let notice = '';
+    // An explicit --backend is the user overriding the probe; an aem:// URL
+    // already names its backend. Only a bare da:// needs asking.
+    if (parsed.backend) {
+      kind = parsed.backend;
+    } else if (parsedSource.scheme === 'da') {
+      try {
+        const probe = await probeContentSource(parsedSource.org, parsedSource.name, signedFetch);
+        kind = probe.backend;
+        if (kind === 'aem') {
+          notice =
+            `mount: ${parsedSource.org}/${parsedSource.name} is on Helix 6 — its content lives in ` +
+            `the Source Bus at https://api.aem.live/${parsedSource.org}/sites/${parsedSource.name}/source, ` +
+            `not admin.da.live. Mounting through aem://${parsedSource.org}/${parsedSource.name}. ` +
+            `Pass --backend da to force the old endpoint.\n`;
+        }
+      } catch (err) {
+        // Failing closed is the point: mounting the wrong store silently is
+        // the bug this probe exists to prevent, so an unreadable config stops
+        // the mount and names the escape hatch.
+        return {
+          stdout: '',
+          stderr:
+            `mount: could not determine the content source for ${parsed.source} — ` +
+            `${err instanceof Error ? err.message : String(err)}. ` +
+            `Pass --backend da or --backend aem to skip this probe.\n`,
+          exitCode: 1,
+        };
+      }
+    }
 
     const mountId = newMountId();
     const cache = new RemoteMountCache({ mountId, ttlMs: 30_000 });
-    const backend = new DaMountBackend({
-      source: parsed.source,
+    const backendOpts = {
+      source:
+        kind === 'aem'
+          ? toAemSource(parsedSource)
+          : `da://${parsedSource.org}/${parsedSource.name}${parsedSource.path ? `/${parsedSource.path}` : ''}`,
       profile: profileName,
       cache,
       maxBodyBytes: parsed.maxBodyMb ? parsed.maxBodyMb * 1024 * 1024 : undefined,
       mountId,
-      signedFetch: this.signedFetchDa ?? makeSignedFetchDa(),
-    });
+      signedFetch,
+    };
+    const backend =
+      kind === 'aem' ? new AemMountBackend(backendOpts) : new DaMountBackend(backendOpts);
 
     if (!parsed.noProbe) {
       try {
@@ -270,7 +373,9 @@ export class MountCommands {
         await backend.close();
         return {
           stdout: '',
-          stderr: `mount: probe failed for ${parsed.source} — ${err instanceof Error ? err.message : String(err)}\n`,
+          stderr:
+            notice +
+            `mount: probe failed for ${backendOpts.source} — ${err instanceof Error ? err.message : String(err)}\n`,
           exitCode: 1,
         };
       }
@@ -280,7 +385,7 @@ export class MountCommands {
     const desc = backend.describe();
     return {
       stdout: `Mounted '${desc.displayName}' → ${targetPath} (profile: ${profileName})\n`,
-      stderr: '',
+      stderr: notice,
       exitCode: 0,
     };
   }
@@ -298,12 +403,13 @@ export class MountCommands {
       // Look up the descriptor BEFORE unmount so we keep the mountId for
       // cache clearing. After unmount the entry is gone from the table.
       let mountIdForCache: string | undefined;
-      let kindForCache: 's3' | 'da' | undefined;
+      let kindForCache: 's3' | 'da' | 'aem' | undefined;
       if (parsed.clearCache) {
         const { getAllMountEntries } = await import('./mount-table-store.js');
         const entries = await getAllMountEntries();
         const entry = entries.find((e) => e.targetPath === targetPath);
-        if (entry && (entry.descriptor.kind === 's3' || entry.descriptor.kind === 'da')) {
+        const kind = entry?.descriptor.kind;
+        if (entry && (kind === 's3' || kind === 'da' || kind === 'aem')) {
           mountIdForCache = entry.descriptor.mountId;
           kindForCache = entry.descriptor.kind;
         }
@@ -435,14 +541,21 @@ export class MountCommands {
           '       mount list',
           '       mount refresh [--bodies] <path>',
           '',
-          'Mount a local directory, S3 bucket, or DA repository into the virtual filesystem.',
+          'Mount a local directory, S3 bucket, or AEM authoring source into the',
+          'virtual filesystem.',
           '',
           'Without --source, opens a directory picker (local mount). With --source, mounts',
-          'a remote source (S3-compatible or da.live).',
+          'a remote source (S3-compatible, da.live, or the Helix 6 Source Bus).',
+          '',
+          'A da:// source is checked against the site config first: sites upgraded to',
+          'Helix 6 are re-routed to the Source Bus, because admin.da.live no longer',
+          'holds their content. Use --backend to force either endpoint.',
           '',
           'Options:',
-          '  --source <url>      Remote source: s3://bucket[/prefix] or da://org/repo',
+          '  --source <url>      Remote source: s3://bucket[/prefix], da://org/repo,',
+          '                      or aem://org/site',
           '  --profile <name>    Profile name (default: "default")',
+          '  --backend <da|aem>  Force the Adobe backend instead of probing the site config',
           '  --no-probe          Skip the root-level probe on mount',
           '  --max-body-mb <n>   Override body size limit (MB)',
           '',
@@ -455,6 +568,7 @@ export class MountCommands {
           '  mount /mnt/myapp',
           '  mount --source s3://my-bucket --profile default /mnt/s3',
           '  mount --source da://my-org/my-repo /mnt/da',
+          '  mount --source aem://my-org/my-site /mnt/aem',
           '  mount list',
           '  mount refresh /mnt/myapp',
           '  mount unmount /mnt/myapp',

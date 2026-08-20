@@ -124,7 +124,7 @@ export function computeOverlappingMountPoints(
   syncDirs: readonly string[]
 ): RealmMountPoint[] {
   const wrapped = fs as unknown as {
-    listMountPoints?: () => { path: string; kind: 'local' | 's3' | 'da' | 'proc' }[];
+    listMountPoints?: () => { path: string; kind: 'local' | 's3' | 'da' | 'aem' | 'proc' }[];
   };
   if (typeof wrapped.listMountPoints !== 'function') return [];
   const overlap = (mountPath: string): boolean => {

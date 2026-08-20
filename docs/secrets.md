@@ -134,7 +134,7 @@ A secret is only unmasked in a request if the target URL's hostname matches at l
 
 ## Mount backend secrets
 
-The `mount --source s3://...` and `mount --source da://...` shell commands resolve credentials from the same secret store. S3 uses a profile-namespaced convention; DA reuses the existing Adobe IMS token.
+The `mount --source s3://...`, `mount --source da://...`, and `mount --source aem://...` shell commands resolve credentials from the same secret store. S3 uses a profile-namespaced convention; DA and AEM reuse the existing Adobe IMS token.
 
 ### S3 / S3-compatible (AWS, R2, MinIO, …)
 
@@ -165,7 +165,7 @@ The mount backend reads the secret values directly (it doesn't go through the fe
 
 ### Adobe da.live
 
-DA mounts authenticate with the IMS bearer token from the existing Adobe provider. There is no DA-specific secret to set: if you've already configured Adobe as your LLM provider, `mount --source da://org/repo /mnt/da` will reuse that identity. The `--profile` flag is accepted for symmetry but multi-identity DA support is a v2 follow-up.
+DA mounts authenticate with the IMS bearer token from the existing Adobe provider. There is no DA-specific secret to set: if you've already configured Adobe as your LLM provider, `mount --source da://org/repo /mnt/da` (and `mount --source aem://org/site /mnt/aem`, the Helix 6 Source Bus) will reuse that identity. The `--profile` flag is accepted for symmetry but multi-identity DA support is a v2 follow-up.
 
 When IMS hasn't been authed (or the token has expired beyond what a refresh can recover), mount-time fails with an `EACCES` pointing at `oauth-token adobe` or the provider settings UI.
 
@@ -186,15 +186,15 @@ All HTTP requests from the agent route through a server-side fetch proxy (`/api/
 
 Different types of HTTP traffic route through different code paths:
 
-| Request shape                              | Goes through                                                                                                                                                                                       |
-| ------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `read/write to /mnt/r2/foo.txt` (VFS API)  | mount backend → `s3-sign-and-forward` (CLI) or `mount.s3-sign-and-forward` (SW); SigV4-signed                                                                                                      |
-| `mount --source da://...` ops              | mount backend → `da-sign-and-forward`; IMS bearer attached server/SW-side                                                                                                                          |
-| `git push` / `git clone` over HTTPS        | isomorphic-git → `createProxiedFetch` → `/api/fetch-proxy` (CLI) or `fetch-proxy.fetch` (SW); Basic-auth unmask                                                                                    |
-| `curl`, `wget`, `node fetch(...)`          | shell → `createProxiedFetch` → fetch proxy (CLI/SW); header-substring + Basic + URL-creds unmask                                                                                                   |
-| `upskill <github-url>`                     | `createProxiedFetch` → fetch proxy; `Authorization: Bearer <masked>` unmasked at boundary                                                                                                          |
-| LLM provider streaming (Anthropic, etc.)   | direct `fetch()` from page; routed via `llm-proxy-sw.ts` to `/api/fetch-proxy` (CLI) or extension `host_permissions` (CORS bypass; no secret injection — provider holds real key in webapp memory) |
-| `aws s3 cp` from agent shell (raw S3 HTTP) | shell → `createProxiedFetch` → upstream. NOT signed. **Use `mount` instead.**                                                                                                                      |
+| Request shape                               | Goes through                                                                                                                                                                                       |
+| ------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `read/write to /mnt/r2/foo.txt` (VFS API)   | mount backend → `s3-sign-and-forward` (CLI) or `mount.s3-sign-and-forward` (SW); SigV4-signed                                                                                                      |
+| `mount --source da://...` / `aem://...` ops | mount backend → `da-sign-and-forward`; IMS bearer attached server/SW-side. The envelope's `origin` picks `admin.da.live` or `api.aem.live`; the allow-list keeps that set closed                   |
+| `git push` / `git clone` over HTTPS         | isomorphic-git → `createProxiedFetch` → `/api/fetch-proxy` (CLI) or `fetch-proxy.fetch` (SW); Basic-auth unmask                                                                                    |
+| `curl`, `wget`, `node fetch(...)`           | shell → `createProxiedFetch` → fetch proxy (CLI/SW); header-substring + Basic + URL-creds unmask                                                                                                   |
+| `upskill <github-url>`                      | `createProxiedFetch` → fetch proxy; `Authorization: Bearer <masked>` unmasked at boundary                                                                                                          |
+| LLM provider streaming (Anthropic, etc.)    | direct `fetch()` from page; routed via `llm-proxy-sw.ts` to `/api/fetch-proxy` (CLI) or extension `host_permissions` (CORS bypass; no secret injection — provider holds real key in webapp memory) |
+| `aws s3 cp` from agent shell (raw S3 HTTP)  | shell → `createProxiedFetch` → upstream. NOT signed. **Use `mount` instead.**                                                                                                                      |
 
 ## HMAC request signing
 
@@ -304,7 +304,7 @@ The OAuth login popup flow is the user-approval gate. Once a token is cached, su
 
 In Chrome extension mode, agent-initiated HTTP requests now route through the `fetch-proxy.fetch` SW Port handler, providing full secret-injection coverage equivalent to CLI mode.
 
-For **mount backends specifically** (`mount --source s3://...` and `mount --source da://...`), the extension is self-contained. Secrets live in `chrome.storage.local`, the service worker holds them, signs requests with SigV4 (S3) or attaches the IMS Bearer (DA), and forwards via `fetch()` (extension `host_permissions: <all_urls>` covers any S3/da.live host). The agent's tools (`bash` via just-bash, `node -e` and `javascript` in the kernel worker's JS realm — a DedicatedWorker) have no `chrome.*` API access, so they cannot read `chrome.storage` directly — the same isolation property that keeps `~/.slicc/secrets.env` out of the agent in CLI mode.
+For **mount backends specifically** (`mount --source s3://...` and `mount --source da://...`), the extension is self-contained. Secrets live in `chrome.storage.local`, the service worker holds them, signs requests with SigV4 (S3) or attaches the IMS Bearer (DA), and forwards via `fetch()` (extension `host_permissions: <all_urls>` covers any S3, da.live, or api.aem.live host). The agent's tools (`bash` via just-bash, `node -e` and `javascript` in the kernel worker's JS realm — a DedicatedWorker) have no `chrome.*` API access, so they cannot read `chrome.storage` directly — the same isolation property that keeps `~/.slicc/secrets.env` out of the agent in CLI mode.
 
 ### Extension Options page (recommended)
 

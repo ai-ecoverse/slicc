@@ -1274,19 +1274,14 @@ export class VirtualFS {
     const descriptor: BackendDescriptor =
       backend.kind === 'local'
         ? { kind: 'local', mountId: backend.mountId, idbHandleKey: normalized }
-        : backend.kind === 's3'
-          ? {
-              kind: 's3',
-              mountId: backend.mountId,
-              source: backend.source!,
-              profile: backend.profile ?? 'default',
-            }
-          : {
-              kind: 'da',
-              mountId: backend.mountId,
-              source: backend.source!,
-              profile: backend.profile ?? 'default',
-            };
+        : {
+            // Every remote backend persists the same shape; the kind decides
+            // which class `reconstructBackendFromDescriptor` rebuilds.
+            kind: backend.kind === 's3' ? 's3' : backend.kind === 'aem' ? 'aem' : 'da',
+            mountId: backend.mountId,
+            source: backend.source!,
+            profile: backend.profile ?? 'default',
+          };
     try {
       this.mountSyncChannel?.postMessage({ type: 'mount', path: normalized, descriptor });
     } catch {
@@ -1372,6 +1367,19 @@ export class VirtualFS {
           signedFetch: makeSignedFetchDa(),
         });
       }
+      case 'aem': {
+        const { AemMountBackend, RemoteMountCache, makeSignedFetchDa } = await import(
+          './mount/index.js'
+        );
+        const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
+        return new AemMountBackend({
+          source: descriptor.source,
+          profile: descriptor.profile,
+          cache,
+          mountId: descriptor.mountId,
+          signedFetch: makeSignedFetchDa(),
+        });
+      }
     }
   }
 
@@ -1399,7 +1407,7 @@ export class VirtualFS {
 
   /**
    * Like {@link listMounts}, but also returns each mount's backend
-   * `kind` ('local' | 's3' | 'da' | 'proc'). Used by the `python`
+   * `kind` ('local' | 's3' | 'da' | 'aem' | 'proc'). Used by the `python`
    * command to compute the overlap of user mounts with the realm sync
    * dirs and tag remote ones for the remote-mount size cap. Internal
    * mounts are excluded for the same reason `listMounts()` hides them.

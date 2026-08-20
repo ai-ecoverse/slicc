@@ -33,13 +33,14 @@
 import type { MountBackend } from './mount/backend.js';
 import { LocalMountBackend } from './mount/backend-local.js';
 import {
+  AemMountBackend,
   DaMountBackend,
   makeSignedFetchDa,
   makeSignedFetchS3,
   RemoteMountCache,
   S3MountBackend,
 } from './mount/index.js';
-import type { MountTableEntry } from './mount-table-store.js';
+import type { BackendDescriptor, MountTableEntry } from './mount-table-store.js';
 import { loadMountHandle } from './mount-table-store.js';
 
 /**
@@ -52,7 +53,8 @@ import { loadMountHandle } from './mount-table-store.js';
 export type MountRecoveryEntry =
   | { kind: 'local'; path: string; dirName: string }
   | { kind: 's3'; path: string; source: string; profile: string; reason: string }
-  | { kind: 'da'; path: string; source: string; profile: string; reason: string };
+  | { kind: 'da'; path: string; source: string; profile: string; reason: string }
+  | { kind: 'aem'; path: string; source: string; profile: string; reason: string };
 
 export interface MountRecoveryResult {
   /** Entries that were silently re-mounted. */
@@ -80,6 +82,98 @@ export interface MountRecoveryLogger {
  * Callers should only emit a session-reload lick when `needsRecovery`
  * is non-empty.
  */
+/** Outcome of one entry's recovery attempt. */
+interface RecoveryOutcome {
+  entry: MountRecoveryEntry;
+  ok: boolean;
+}
+
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/**
+ * Restore a local (FS Access) mount. The handle survives a reload but its
+ * permission may not, and neither the handle nor the grant can be recreated
+ * without a user gesture — so anything short of a granted, live handle lands
+ * in `needsRecovery` for the cone to surface.
+ */
+async function recoverLocalMount(
+  targetPath: string,
+  descriptor: Extract<BackendDescriptor, { kind: 'local' }>,
+  fs: MountRecoveryFS,
+  log?: MountRecoveryLogger
+): Promise<RecoveryOutcome> {
+  const handle = await loadMountHandle(descriptor.idbHandleKey);
+  const dirName = typeof handle?.name === 'string' ? handle.name : '';
+  const entry: MountRecoveryEntry = { kind: 'local', path: targetPath, dirName };
+
+  if (!handle || !('queryPermission' in handle)) return { entry, ok: false };
+
+  let perm: string;
+  try {
+    perm = await (
+      handle as unknown as {
+        queryPermission: (desc: { mode: string }) => Promise<string>;
+      }
+    ).queryPermission({ mode: 'readwrite' });
+  } catch (err) {
+    log?.warn?.('queryPermission threw on persisted handle', {
+      path: targetPath,
+      error: errMessage(err),
+    });
+    return { entry, ok: false };
+  }
+  if (perm !== 'granted') return { entry, ok: false };
+
+  try {
+    const backend = LocalMountBackend.fromHandle(handle, { mountId: descriptor.mountId });
+    await fs.mount(targetPath, backend);
+    log?.info?.('Restored mount from previous session', { path: targetPath, name: dirName });
+    return { entry, ok: true };
+  } catch (err) {
+    log?.warn?.('Failed to re-mount persisted handle', {
+      path: targetPath,
+      error: errMessage(err),
+    });
+    return { entry, ok: false };
+  }
+}
+
+/**
+ * Restore a remote mount — S3, DA (Helix 5 da.live), or AEM (Helix 6 Source
+ * Bus). All three persist the same descriptor shape and resolve credentials
+ * lazily, so construction alone can't fail on a missing login; only the
+ * `fs.mount` call can, and that is what decides the outcome.
+ */
+async function recoverRemoteMount(
+  targetPath: string,
+  descriptor: Extract<BackendDescriptor, { kind: 's3' | 'da' | 'aem' }>,
+  fs: MountRecoveryFS,
+  log?: MountRecoveryLogger
+): Promise<RecoveryOutcome> {
+  const { kind, source, profile, mountId } = descriptor;
+  const label = kind === 's3' ? 'S3' : kind === 'aem' ? 'AEM' : 'DA';
+  try {
+    const cache = new RemoteMountCache({ mountId, ttlMs: 30_000 });
+    const opts = { source, profile, cache, mountId };
+    const backend =
+      kind === 's3'
+        ? new S3MountBackend({ ...opts, signedFetch: makeSignedFetchS3(profile) })
+        : kind === 'aem'
+          ? new AemMountBackend({ ...opts, signedFetch: makeSignedFetchDa() })
+          : new DaMountBackend({ ...opts, signedFetch: makeSignedFetchDa() });
+    await fs.mount(targetPath, backend);
+    log?.info?.(`Restored ${label} mount from previous session`, { path: targetPath, source });
+    // Successfully recovered; reason is empty.
+    return { entry: { kind, path: targetPath, source, profile, reason: '' }, ok: true };
+  } catch (err) {
+    const reason = errMessage(err);
+    log?.warn?.(`Failed to restore ${label} mount`, { path: targetPath, error: reason });
+    return { entry: { kind, path: targetPath, source, profile, reason }, ok: false };
+  }
+}
+
 export async function recoverMounts(
   entries: MountTableEntry[],
   fs: MountRecoveryFS,
@@ -88,120 +182,12 @@ export async function recoverMounts(
   const restored: MountRecoveryEntry[] = [];
   const needsRecovery: MountRecoveryEntry[] = [];
 
-  for (const entry of entries) {
-    const { targetPath, descriptor } = entry;
-
-    if (descriptor.kind === 'local') {
-      const handle = await loadMountHandle(descriptor.idbHandleKey);
-      const dirName = typeof handle?.name === 'string' ? handle.name : '';
-      if (!handle || !('queryPermission' in handle)) {
-        needsRecovery.push({ kind: 'local', path: targetPath, dirName });
-        continue;
-      }
-      let perm: string;
-      try {
-        perm = await (
-          handle as unknown as {
-            queryPermission: (desc: { mode: string }) => Promise<string>;
-          }
-        ).queryPermission({ mode: 'readwrite' });
-      } catch (err) {
-        log?.warn?.('queryPermission threw on persisted handle', {
-          path: targetPath,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        needsRecovery.push({ kind: 'local', path: targetPath, dirName });
-        continue;
-      }
-      if (perm !== 'granted') {
-        needsRecovery.push({ kind: 'local', path: targetPath, dirName });
-        continue;
-      }
-      try {
-        const backend = LocalMountBackend.fromHandle(handle, { mountId: descriptor.mountId });
-        await fs.mount(targetPath, backend);
-        log?.info?.('Restored mount from previous session', { path: targetPath, name: dirName });
-        restored.push({ kind: 'local', path: targetPath, dirName });
-      } catch (err) {
-        log?.warn?.('Failed to re-mount persisted handle', {
-          path: targetPath,
-          error: err instanceof Error ? err.message : String(err),
-        });
-        needsRecovery.push({ kind: 'local', path: targetPath, dirName });
-      }
-      continue;
-    }
-
-    if (descriptor.kind === 's3') {
-      try {
-        const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
-        const backend = new S3MountBackend({
-          source: descriptor.source,
-          profile: descriptor.profile,
-          cache,
-          mountId: descriptor.mountId,
-          signedFetch: makeSignedFetchS3(descriptor.profile),
-        });
-        await fs.mount(targetPath, backend);
-        log?.info?.('Restored S3 mount from previous session', {
-          path: targetPath,
-          source: descriptor.source,
-        });
-        restored.push({
-          kind: 's3',
-          path: targetPath,
-          source: descriptor.source,
-          profile: descriptor.profile,
-          reason: '', // Successfully recovered; reason is empty
-        });
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        log?.warn?.('Failed to restore S3 mount', { path: targetPath, error: reason });
-        needsRecovery.push({
-          kind: 's3',
-          path: targetPath,
-          source: descriptor.source,
-          profile: descriptor.profile,
-          reason,
-        });
-      }
-      continue;
-    }
-
-    if (descriptor.kind === 'da') {
-      try {
-        const cache = new RemoteMountCache({ mountId: descriptor.mountId, ttlMs: 30_000 });
-        const backend = new DaMountBackend({
-          source: descriptor.source,
-          profile: descriptor.profile,
-          cache,
-          mountId: descriptor.mountId,
-          signedFetch: makeSignedFetchDa(),
-        });
-        await fs.mount(targetPath, backend);
-        log?.info?.('Restored DA mount from previous session', {
-          path: targetPath,
-          source: descriptor.source,
-        });
-        restored.push({
-          kind: 'da',
-          path: targetPath,
-          source: descriptor.source,
-          profile: descriptor.profile,
-          reason: '', // Successfully recovered; reason is empty
-        });
-      } catch (err) {
-        const reason = err instanceof Error ? err.message : String(err);
-        log?.warn?.('Failed to restore DA mount', { path: targetPath, error: reason });
-        needsRecovery.push({
-          kind: 'da',
-          path: targetPath,
-          source: descriptor.source,
-          profile: descriptor.profile,
-          reason,
-        });
-      }
-    }
+  for (const { targetPath, descriptor } of entries) {
+    const outcome =
+      descriptor.kind === 'local'
+        ? await recoverLocalMount(targetPath, descriptor, fs, log)
+        : await recoverRemoteMount(targetPath, descriptor, fs, log);
+    (outcome.ok ? restored : needsRecovery).push(outcome.entry);
   }
 
   return { restored, needsRecovery };
@@ -241,7 +227,7 @@ export function mdInlineCode(value: string): string {
  *
  *   - **local**: tells the cone the user must re-grant permission via
  *     a fresh `mount <path>` (which opens the directory picker).
- *   - **s3** / **da**: includes the source URI, profile, reason, and a
+ *   - **s3** / **da** / **aem**: includes the source URI, profile, reason, and a
  *     pre-filled `mount --source <url> --profile <p> <path>` retry hint.
  *
  * Returns `null` when there is nothing to report — callers should treat
@@ -259,8 +245,13 @@ export function formatMountRecoveryPrompt(mounts: MountRecoveryEntry[]): string 
   const remoteMounts = mounts.filter(
     (
       m
-    ): m is { kind: 's3' | 'da'; path: string; source: string; profile: string; reason: string } =>
-      m.kind === 's3' || m.kind === 'da'
+    ): m is {
+      kind: 's3' | 'da' | 'aem';
+      path: string;
+      source: string;
+      profile: string;
+      reason: string;
+    } => m.kind === 's3' || m.kind === 'da' || m.kind === 'aem'
   );
 
   const lines: string[] = [

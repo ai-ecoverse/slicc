@@ -1,15 +1,17 @@
 /**
  * MountBackend interface — the central seam of the mount system.
  *
- * Three implementations live alongside this file: backend-local.ts (FS Access
+ * Four implementations live alongside this file: backend-local.ts (FS Access
  * API, wraps a FileSystemDirectoryHandle), backend-s3.ts (HTTP + SigV4),
- * backend-da.ts (HTTP + IMS bearer). VirtualFS.mount() takes any of them.
+ * backend-da.ts (HTTP + IMS bearer, Helix 5 da.live), and backend-aem.ts
+ * (HTTP + IMS bearer, Helix 6 Source Bus). VirtualFS.mount() takes any of
+ * them.
  *
  * See docs/superpowers/specs/2026-04-30-s3-da-mounts-design.md for the
  * design rationale; this file only declares the shapes.
  */
 
-export type MountKind = 'local' | 's3' | 'da' | 'proc';
+export type MountKind = 'local' | 's3' | 'da' | 'aem' | 'proc';
 
 /** A single entry returned by readDir() — file or synthesized directory. */
 export interface MountDirEntry {
@@ -48,6 +50,7 @@ export interface RefreshReport {
  *   - local: picked directory's `name`
  *   - s3:    '<bucket>/<prefix>' (or just '<bucket>' if no prefix)
  *   - da:    '<org>/<repo>'
+ *   - aem:   '<org>/<site>'
  */
 export interface MountDescription {
   displayName: string;
@@ -59,7 +62,7 @@ export interface MountDescription {
 
 export interface MountBackend {
   readonly kind: MountKind;
-  /** URL form: 's3://bucket/prefix', 'da://org/repo', undefined for local. */
+  /** URL form: 's3://bucket/prefix', 'da://org/repo', 'aem://org/site', undefined for local. */
   readonly source: string | undefined;
   readonly profile?: string;
   readonly mountId: string;
@@ -68,7 +71,7 @@ export interface MountBackend {
   readFile(path: string): Promise<Uint8Array>;
   writeFile(path: string, body: Uint8Array): Promise<void>;
   stat(path: string): Promise<MountStat>;
-  /** Always a no-op on S3 / DA — both APIs materialize paths on first write. */
+  /** Always a no-op on S3 / DA / AEM — all three materialize paths on first write. */
   mkdir(path: string): Promise<void>;
   remove(path: string, opts?: { recursive?: boolean }): Promise<void>;
 

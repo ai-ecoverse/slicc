@@ -15,6 +15,22 @@
 
 import type { AgentToolResult } from '@earendil-works/pi-agent-core';
 import { createLogger } from '../base/logger.js';
+import {
+  type OnUpdateCallback as BaseOnUpdateCallback,
+  getToolExecutionContext,
+} from '../base/tool-execution-context.js';
+
+/**
+ * The execution-context stack lives in `base/tool-execution-context.ts` so
+ * the `fs/` layer can read it without importing up the stack. Re-exported
+ * here because this module has always been its public address.
+ */
+export type { ToolExecutionContext } from '../base/tool-execution-context.js';
+export {
+  getToolExecutionContext,
+  popToolExecutionContext,
+  pushToolExecutionContext,
+} from '../base/tool-execution-context.js';
 
 const log = createLogger('tool-ui');
 
@@ -218,7 +234,7 @@ class ToolUIRegistry {
 export const toolUIRegistry = new ToolUIRegistry();
 
 /** Type for the onUpdate callback from AgentTool. */
-type OnUpdateCallback = (partialResult: AgentToolResult<unknown>) => void;
+type OnUpdateCallback = BaseOnUpdateCallback;
 
 /**
  * Show interactive UI from a tool execution.
@@ -304,54 +320,6 @@ export async function showToolUI(
       } as unknown as AgentToolResult<unknown>);
     }
   });
-}
-
-/**
- * Execution context for tool UI - set by the tool adapter during execution.
- * This allows shell commands (like mount) to show UI even though they don't
- * have direct access to onUpdate.
- */
-export interface ToolExecutionContext {
-  onUpdate: OnUpdateCallback;
-  toolName: string;
-  toolCallId: string;
-}
-
-/**
- * Stack of execution contexts to handle nested/concurrent tool calls.
- * Each tool pushes its context on start and pops on finish.
- */
-const executionContextStack: ToolExecutionContext[] = [];
-
-/**
- * Push a tool execution context onto the stack.
- * Call this before executing a tool that might need to show UI.
- * Returns the context so it can be passed to popToolExecutionContext.
- */
-export function pushToolExecutionContext(ctx: ToolExecutionContext): ToolExecutionContext {
-  executionContextStack.push(ctx);
-  return ctx;
-}
-
-/**
- * Pop a specific tool execution context from the stack.
- * Call this after tool execution completes.
- */
-export function popToolExecutionContext(ctx: ToolExecutionContext): void {
-  const idx = executionContextStack.lastIndexOf(ctx);
-  if (idx !== -1) {
-    executionContextStack.splice(idx, 1);
-  }
-}
-
-/**
- * Get the current (top) tool execution context.
- * Returns null if not in a tool execution context.
- */
-export function getToolExecutionContext(): ToolExecutionContext | null {
-  return executionContextStack.length > 0
-    ? executionContextStack[executionContextStack.length - 1]
-    : null;
 }
 
 /**

@@ -90,9 +90,9 @@ export class VfsAdapter implements IFileSystem {
    * Returns an empty array when the wrapped FS doesn't expose mount
    * metadata (e.g. test stubs).
    */
-  listMountPoints(): { path: string; kind: 'local' | 's3' | 'da' | 'proc' }[] {
+  listMountPoints(): { path: string; kind: 'local' | 's3' | 'da' | 'aem' | 'proc' }[] {
     const wrapped = this.vfs as unknown as {
-      listMountPoints?: () => { path: string; kind: 'local' | 's3' | 'da' | 'proc' }[];
+      listMountPoints?: () => { path: string; kind: 'local' | 's3' | 'da' | 'aem' | 'proc' }[];
     };
     return typeof wrapped.listMountPoints === 'function' ? wrapped.listMountPoints() : [];
   }

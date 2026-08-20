@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
+import type { SignedFetchDaRequest } from '../../src/fs/mount/backend-da.js';
 import { MountCommands } from '../../src/fs/mount-commands.js';
 import type { VirtualFS } from '../../src/fs/virtual-fs.js';
 import {
@@ -390,6 +391,162 @@ describe('MountCommands', () => {
       const [, backend] = mountFn.mock.calls[0] as [string, { kind: string; source: string }];
       expect(backend.kind).toBe('da');
       expect(backend.source).toBe('da://my-org/my-repo');
+    });
+
+    // Issue #2227: a da:// source is checked against the site config before
+    // anything is mounted. Mounting a Helix 6 site through admin.da.live
+    // succeeds and silently returns another project's content, so the probe
+    // is the only thing standing between the user and wrong-repo edits.
+    it('da:// re-routes to the Source Bus when the site is on Helix 6', async () => {
+      const fs = makeFs();
+      const responses = [
+        // config.json probe
+        new Response(
+          JSON.stringify({
+            content: {
+              source: {
+                type: 'markup',
+                url: 'https://api.aem.live/adobe/sites/aem-website/source',
+              },
+            },
+          }),
+          { status: 200 }
+        ),
+        // root listing probe
+        new Response('[]', { status: 200 }),
+      ];
+      const cmd = new MountCommands({
+        fs,
+        signedFetchDa: async () => responses.shift()!,
+      });
+      const result = await cmd.execute(
+        ['--source', 'da://adobe/aem-website', '/mnt/da'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toMatch(/Helix 6/);
+      expect(result.stderr).toMatch(/api\.aem\.live/);
+      const mountFn = fs.mount as ReturnType<typeof vi.fn>;
+      const [, backend] = mountFn.mock.calls[0] as [string, { kind: string; source: string }];
+      expect(backend.kind).toBe('aem');
+      expect(backend.source).toBe('aem://adobe/aem-website');
+    });
+
+    it('da:// stays on DA when the site config points at content.da.live', async () => {
+      const fs = makeFs();
+      const responses = [
+        new Response(
+          JSON.stringify({
+            content: { source: { type: 'markup', url: 'https://content.da.live/my-org/my-repo/' } },
+          }),
+          { status: 200 }
+        ),
+        new Response('[]', { status: 200 }),
+      ];
+      const cmd = new MountCommands({ fs, signedFetchDa: async () => responses.shift()! });
+      const result = await cmd.execute(
+        ['--source', 'da://my-org/my-repo', '/mnt/da'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stderr).toBe('');
+      const mountFn = fs.mount as ReturnType<typeof vi.fn>;
+      const [, backend] = mountFn.mock.calls[0] as [string, { kind: string }];
+      expect(backend.kind).toBe('da');
+    });
+
+    it('da:// fails loudly when the content source cannot be determined', async () => {
+      const fs = makeFs();
+      const cmd = new MountCommands({
+        fs,
+        signedFetchDa: async () => new Response('', { status: 401 }),
+      });
+      const result = await cmd.execute(
+        ['--source', 'da://my-org/my-repo', '/mnt/da'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/could not determine the content source/);
+      expect(result.stderr).toMatch(/--backend/);
+      expect(fs.mount as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
+    });
+
+    it('--backend da forces the old endpoint with no config probe', async () => {
+      const fs = makeFs();
+      const signedFetchDa = vi.fn(async () => new Response('[]', { status: 200 }));
+      const cmd = new MountCommands({ fs, signedFetchDa });
+      const result = await cmd.execute(
+        ['--source', 'da://adobe/aem-website', '--backend', 'da', '--no-probe', '/mnt/da'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(signedFetchDa).not.toHaveBeenCalled();
+      const mountFn = fs.mount as ReturnType<typeof vi.fn>;
+      const [, backend] = mountFn.mock.calls[0] as [string, { kind: string; source: string }];
+      expect(backend.kind).toBe('da');
+    });
+
+    it('--backend aem forces the Source Bus for a da:// source', async () => {
+      const fs = makeFs();
+      const cmd = new MountCommands({
+        fs,
+        signedFetchDa: async () => new Response('[]', { status: 200 }),
+      });
+      const result = await cmd.execute(
+        ['--source', 'da://my-org/my-repo/blog', '--backend', 'aem', '--no-probe', '/mnt/x'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      const mountFn = fs.mount as ReturnType<typeof vi.fn>;
+      const [, backend] = mountFn.mock.calls[0] as [string, { kind: string; source: string }];
+      expect(backend.kind).toBe('aem');
+      expect(backend.source).toBe('aem://my-org/my-repo/blog');
+    });
+
+    it('rejects an unknown --backend value', async () => {
+      const cmd = new MountCommands({ fs: makeFs() });
+      const result = await cmd.execute(
+        ['--source', 'da://my-org/my-repo', '--backend', 'helix7', '/mnt/x'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/invalid --backend 'helix7'/);
+    });
+
+    it('aem:// mounts the Source Bus directly without a config probe', async () => {
+      const fs = makeFs();
+      const requests: SignedFetchDaRequest[] = [];
+      const signedFetchDa = vi.fn(async (req: SignedFetchDaRequest) => {
+        requests.push(req);
+        return new Response('[]', { status: 200 });
+      });
+      const cmd = new MountCommands({ fs, signedFetchDa });
+      const result = await cmd.execute(
+        ['--source', 'aem://adobe/aem-website', '/mnt/aem'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      // Exactly one call: the root listing probe. No config.json round trip.
+      expect(requests).toHaveLength(1);
+      expect(requests[0]).toMatchObject({
+        path: '/adobe/sites/aem-website/source/',
+        origin: 'https://api.aem.live',
+      });
+      const mountFn = fs.mount as ReturnType<typeof vi.fn>;
+      const [, backend] = mountFn.mock.calls[0] as [string, { kind: string; source: string }];
+      expect(backend.kind).toBe('aem');
+    });
+
+    it('aem:// surfaces a probe failure and does not mount', async () => {
+      const fs = makeFs();
+      const cmd = new MountCommands({
+        fs,
+        signedFetchDa: async () => new Response('', { status: 404 }),
+      });
+      const result = await cmd.execute(['--source', 'aem://adobe/nope', '/mnt/aem'], '/workspace');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toMatch(/probe failed for aem:\/\/adobe\/nope/);
+      expect(fs.mount as ReturnType<typeof vi.fn>).not.toHaveBeenCalled();
     });
 
     // Lock-down for the new contract (PR #603): remote mounts mount directly

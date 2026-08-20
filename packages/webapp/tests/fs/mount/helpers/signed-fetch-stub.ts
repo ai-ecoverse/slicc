@@ -68,14 +68,16 @@ export function createSignedFetchS3Stub(
  *
  * `apiBase` defaults to `https://admin.da.live`; tests override it to
  * pin URL assertions to a custom origin (e.g. when the existing test
- * suite was written against `https://da.test.example`).
+ * suite was written against `https://da.test.example`). A request that
+ * carries its own `origin` (as every `AemMountBackend` request does)
+ * wins over `apiBase`, mirroring `executeDaSignAndForward`.
  */
 export function createSignedFetchDaStub(
   profile: DaProfile,
   apiBase: string = 'https://admin.da.live'
 ): SignedFetchDa {
   return async (req: SignedFetchDaRequest): Promise<Response> => {
-    const url = new URL(apiBase + req.path);
+    const url = new URL((req.origin ?? apiBase) + req.path);
     if (req.query) {
       for (const [k, v] of Object.entries(req.query)) {
         url.searchParams.set(k, v);

@@ -35,7 +35,8 @@ interface MountTableEntry {
   descriptor:
     | { kind: 'local'; mountId: string; idbHandleKey: string }
     | { kind: 's3'; mountId: string; source: string; profile: string }
-    | { kind: 'da'; mountId: string; source: string; profile: string };
+    | { kind: 'da'; mountId: string; source: string; profile: string }
+    | { kind: 'aem'; mountId: string; source: string; profile: string };
   createdAt: number;
 }
 
@@ -260,6 +261,32 @@ describe('recoverMounts', () => {
       source: 'da://my-org/my-repo',
       profile: 'default',
     });
+  });
+
+  it('AEM recovery rebuilds a Source Bus backend from the persisted source', async () => {
+    const entry: MountTableEntry = {
+      targetPath: '/mnt/aem',
+      descriptor: {
+        kind: 'aem',
+        mountId: newMountId(),
+        source: 'aem://adobe/aem-website',
+        profile: 'default',
+      },
+      createdAt: Date.now(),
+    };
+    const kinds: string[] = [];
+    const { fs, mounts } = mockFs(async (_path, backend) => {
+      kinds.push(backend.kind);
+    });
+    const result = await recoverMounts([entry], fs);
+    expect(result.needsRecovery).toEqual([]);
+    expect(result.restored[0]).toMatchObject({
+      kind: 'aem',
+      path: '/mnt/aem',
+      source: 'aem://adobe/aem-website',
+    });
+    expect(kinds).toEqual(['aem']);
+    expect(mounts[0].name).toBe('adobe/aem-website');
   });
 });
 

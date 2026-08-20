@@ -7,7 +7,7 @@
  *   - **`mounts`** (legacy + still active for FS Access handles):
  *     keyed by `idbHandleKey`, value is `FileSystemDirectoryHandle`. Local
  *     backends store the live handle here so it can be re-loaded on session
- *     restore. Remote backends (S3, DA) don't use this store.
+ *     restore. Remote backends (S3, DA, AEM) don't use this store.
  *
  *   - **`mount-entries`** (new, since v2):
  *     keyed by `targetPath` (the VFS mount path), value is `MountTableEntry`
@@ -34,7 +34,8 @@ const ENTRY_STORE = 'mount-entries';
 export type BackendDescriptor =
   | { kind: 'local'; mountId: string; idbHandleKey: string }
   | { kind: 's3'; mountId: string; source: string; profile: string }
-  | { kind: 'da'; mountId: string; source: string; profile: string };
+  | { kind: 'da'; mountId: string; source: string; profile: string }
+  | { kind: 'aem'; mountId: string; source: string; profile: string };
 
 export interface MountTableEntry {
   targetPath: string;
