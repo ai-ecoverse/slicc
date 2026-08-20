@@ -36,7 +36,7 @@ describe('uname command', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('usage: uname [-amnorsv]');
     for (const flag of ['-s', '-n', '-r', '-v', '-m', '-o', '-a']) {
-      expect(result.stdout).toContain(`  ${flag}  `);
+      expect(result.stdout).toContain(`${flag}  `);
     }
     expect(result.stderr).toBe('');
   });

@@ -24,12 +24,9 @@ function unameHelp(): { stdout: string; stderr: string; exitCode: number } {
   return {
     stdout: [
       USAGE,
-      '  -s  kernel name (SLICC)',
-      '  -n  nodename (tray role: leader, follower, or standalone)',
-      '  -r  kernel release (running SLICC version)',
-      '  -v  kernel version (build stamp, with release date when known)',
-      '  -m  machine (platform this realm reports)',
-      '  -o  operating system (browser user agent)',
+      '  -s  kernel name (SLICC)          -n  nodename (leader/follower/standalone)',
+      '  -r  release (SLICC version)      -v  build stamp',
+      '  -m  machine (realm platform)     -o  operating system (user agent)',
       '  -a  all of the above, in uname order',
       '',
     ].join('\n'),

@@ -42,14 +42,7 @@ The card flips to ✓ on confirm / muted ✗ on dismiss. Never auto-run the merg
 
 ## Which version am I running?
 
-Two read-only commands answer this without a lick:
-
-```bash
-uname -r                # 6.66.1 — the running SLICC version
-upgrade status          # {"ok":true,"version":"6.66.1","releasedAt":…,"build":…,"lastSeen":"6.65.0","mergePending":true,"apply":"upgrade apply --from=6.65.0 --to=6.66.1","errors":[]}
-```
-
-`upgrade status` is where `--from` and `--to` come from when a card is not on screen: `mergePending` is true when this profile last booted a different version, and `apply` spells out the exact invocation. Realm scripts can read `globalThis.SLICC_VERSION` instead of shelling out.
+`uname -r` prints the running version. `upgrade status` adds the last-booted one, whether a merge is pending, and the exact `upgrade apply` line to run when it is — that is where `--from`/`--to` come from without a card on screen. Realm scripts read `globalThis.SLICC_VERSION`.
 
 ## Changelog review (separate step — not a card action)
 
