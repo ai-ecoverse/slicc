@@ -46,9 +46,26 @@ const MESSAGE_TAG = 'slicc-agent-message';
 /**
  * Start linkifying file mentions in `thread`, and open a preview when one is
  * clicked. Returns a teardown function.
+ *
+ * Never throws. This runs partway through `wc-live`'s boot sequence, ahead of
+ * the wiring that lazy-mounts tool panels — so an exception here would take the
+ * terminal down with it. Clickable file names are a convenience; nothing else
+ * in the shell may fail because they could not be set up.
  */
 export function wireFileMentions(deps: FileMentionWiringDeps): () => void {
+  try {
+    return wireFileMentionsUnsafe(deps);
+  } catch (err) {
+    deps.log.error('File mention wiring failed; continuing without it', err);
+    return () => {};
+  }
+}
+
+function wireFileMentionsUnsafe(deps: FileMentionWiringDeps): () => void {
   const { thread, openFs, log } = deps;
+  // A shell variant that renders no thread (or has not built one yet) is not an
+  // error — there is simply nothing to linkify.
+  if (!(thread instanceof Node)) return () => {};
 
   // The resolver is created lazily and then reused: its basename index is the
   // expensive part, and it is only worth building once a mention actually needs
