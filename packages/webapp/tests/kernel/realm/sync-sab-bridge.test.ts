@@ -11,6 +11,7 @@
 import { describe, expect, it } from 'vitest';
 import { createSyncExecXhrBridge } from '../../../src/kernel/realm/sync-exec-xhr-bridge.js';
 import type { SyncFsResult } from '../../../src/kernel/realm/sync-fs-dispatch.js';
+import { SYNC_EXEC_XHR_MARGIN_MS } from '../../../src/kernel/realm/sync-fs-wire.js';
 import {
   createSyncExecSabTransport,
   createSyncFsSabBridge,
@@ -262,6 +263,26 @@ describe('createSyncExecSabTransport — plugs into createSyncExecXhrBridge', ()
       stderr: '',
       exitCode: 0,
     });
+  });
+
+  it('waits a margin past the command budget so a just-in-time success wins', () => {
+    // Parity with the SW transport's SYNC_EXEC_XHR_MARGIN_MS: the kernel aborts
+    // at the budget and encodes/publishes afterwards, so the realm's deadline
+    // must sit past the budget, never on it.
+    const seen: number[] = [];
+    const transport = {
+      call: (_req: unknown, timeoutMs: number) => {
+        seen.push(timeoutMs);
+        return {
+          ok: true as const,
+          kind: 'json' as const,
+          json: { stdout: '', stderr: '', exitCode: 0 },
+        };
+      },
+    };
+    const exec = createSyncExecXhrBridge('t', { transport: createSyncExecSabTransport(transport) });
+    exec.run('true', { timeout: 5000 });
+    expect(seen).toEqual([5000 + SYNC_EXEC_XHR_MARGIN_MS]);
   });
 
   it('surfaces ETIMEDOUT from the dispatcher as an errno error', () => {

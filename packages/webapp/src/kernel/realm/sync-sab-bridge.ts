@@ -23,7 +23,7 @@ import type { SyncExecRequestPayload } from './sync-exec-dispatch.js';
 import { SYNC_EXEC_CHANNEL, type SyncExecResultPayload } from './sync-exec-dispatch.js';
 import type { SyncExecTransport } from './sync-exec-xhr-bridge.js';
 import type { SyncFsResult } from './sync-fs-dispatch.js';
-import { SYNC_FS_REQUEST_TIMEOUT_MS } from './sync-fs-wire.js';
+import { SYNC_EXEC_XHR_MARGIN_MS, SYNC_FS_REQUEST_TIMEOUT_MS } from './sync-fs-wire.js';
 import type { SyncFsBridgeStat, SyncFsXhrMutatingBridge } from './sync-fs-xhr-bridge.js';
 import {
   decodeSabResult,
@@ -234,7 +234,16 @@ export function createSyncFsSabBridge(
  */
 export function createSyncExecSabTransport(transport: SyncSabTransport): SyncExecTransport {
   return (payload: SyncExecRequestPayload, timeoutMs: number, label: string) => {
-    const result = transport.call({ ...payload, channel: SYNC_EXEC_CHANNEL }, timeoutMs, label);
+    // Wait a margin PAST the command budget, exactly like the SW transport
+    // (`SYNC_EXEC_XHR_MARGIN_MS`): the kernel aborts `ctx.exec` at the budget
+    // and only THEN encodes + publishes the result, so a deadline equal to the
+    // budget would let a just-in-time success be clobbered by a realm-side
+    // ETIMEDOUT. The kernel's authoritative result must win that race.
+    const result = transport.call(
+      { ...payload, channel: SYNC_EXEC_CHANNEL },
+      timeoutMs + SYNC_EXEC_XHR_MARGIN_MS,
+      label
+    );
     if (!result.ok) throw syncXhrError(result.errno, label);
     const json = (
       result.kind === 'json' ? result.json : null
