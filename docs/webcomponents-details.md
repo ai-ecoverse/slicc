@@ -229,7 +229,7 @@ values once and cache them; invalidate on attribute and theme changes via a
 
 A decorative loop must also carry a **frame budget**
 (`src/freezer/frame-budget.ts`): ambient motion renders at `AMBIENT_FPS` (15 —
-the shader's fastest visible component is ~0.43 Hz, so this is still ~35x
+the shader's fastest visible component is ~0.43 Hz at max speed, so this is still ~35x
 oversampled), interactive stimuli (pulse, attribute/theme/size changes) open a
 `BURST_MS` (800 ms) full-display-rate window, and a field with no intrinsic
 motion (cone glass at `speed=0`, `prefers-reduced-motion`) renders one frame

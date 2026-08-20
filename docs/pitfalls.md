@@ -1496,8 +1496,9 @@ while SLICC sat idle. Confirmed causal by removing the element live
 1. Chrome pauses rAF only for **hidden** pages — a visible-but-background
    window renders at full rate.
 2. The leader tab holds an open WebRTC tray connection, which exempts it
-   from timer throttling and freezing — deliberately (a frozen leader kills
-   the tray), so nothing else reins a hot loop in either.
+   from timer throttling; and SLICC deliberately disables tab freezing via
+   launch flags (a frozen leader kills the tray — see the Memory-Saver
+   pitfall above), so nothing else reins a hot loop in either.
 
 **The Rule**
 
