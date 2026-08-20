@@ -314,7 +314,7 @@ export class SliccFileTree extends HTMLElement {
   /** Open the previewer for `id`. No-op for an unknown id or a directory. */
   previewFile(id: string): void {
     const meta = this.#meta.get(toTreePath(id));
-    if (!meta || meta.kind !== 'file') return;
+    if (meta?.kind !== 'file') return;
     this.#emit('file-preview', { id, path: meta.path });
   }
 

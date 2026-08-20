@@ -40,6 +40,26 @@ const sliccEditorEntry = resolve(Dirname, 'src/ui/slicc-editor-entry.ts');
 const sliccDiffEntry = resolve(Dirname, 'src/ui/slicc-diff-entry.ts');
 const lucideIconsEntry = resolve(Dirname, 'src/ui/lucide-icons.ts');
 
+/**
+ * esbuild plugin: give the `<slicc-diff>` IIFE the same curated Shiki bundle
+ * the Vite build gets.
+ *
+ * esbuild inlines rather than code-splits, so the full grammar set lands in one
+ * file — `dist/ui/slicc-diff.js` was 9.7 MB of mostly-unreachable languages
+ * shipped to a sprinkle iframe. Pointing it at the shim keeps the language set
+ * identical to the main app's, so a file highlights the same way in both.
+ */
+function curatedShikiEsbuildPlugin() {
+  return {
+    name: 'curated-shiki-bundle-esbuild',
+    setup(build: { onResolve: Function }) {
+      build.onResolve({ filter: /^shiki$/ }, () => ({
+        path: resolve(Dirname, 'src/shims/shiki-bundle.ts'),
+      }));
+    },
+  };
+}
+
 /** esbuild plugin: resolve @pierre/diffs internal imports that aren't in the exports map. */
 function pierreDiffsPlugin() {
   return {
@@ -48,6 +68,29 @@ function pierreDiffsPlugin() {
       build.onResolve({ filter: /^@pierre\/diffs\/dist\// }, (args: { path: string }) => ({
         path: resolve(workspaceRoot, 'node_modules', args.path.replace(/\.js$/, '') + '.js'),
       }));
+    },
+  };
+}
+
+/**
+ * Vite plugin: serve `@pierre/diffs` a curated Shiki language bundle.
+ *
+ * `@pierre/diffs` imports `bundledLanguages` from `shiki`, i.e. all 332
+ * grammars. Rolldown code-splits every one, so they are fetched lazily but
+ * still SHIPPED — ~10 MB over the total-JS-payload budget. `src/shims/
+ * shiki-bundle.ts` re-exports Shiki's `bundle/web` subset plus the languages
+ * this repo is written in.
+ *
+ * Matching is exact: `shiki/bundle/web`, `shiki/langs/*`, `shiki/core` and the
+ * engine subpaths must keep resolving to the real package, or the shim would
+ * recurse into itself.
+ */
+function curatedShikiBundlePlugin() {
+  return {
+    name: 'curated-shiki-bundle',
+    enforce: 'pre' as const,
+    resolveId(source: string) {
+      return source === 'shiki' ? resolve(Dirname, 'src/shims/shiki-bundle.ts') : undefined;
     },
   };
 }
@@ -204,7 +247,7 @@ async function buildProductionRuntimeAssets(): Promise<void> {
     ...PROD_IIFE_DEFAULTS,
     entryPoints: [sliccDiffEntry],
     outfile: resolve(uiOutDir, 'slicc-diff.js'),
-    plugins: [pierreDiffsPlugin()],
+    plugins: [pierreDiffsPlugin(), curatedShikiEsbuildPlugin()],
   });
 
   // Lucide icons bundle for sprinkle iframes.
@@ -294,6 +337,7 @@ export default defineConfig(({ mode }) => ({
   plugins: [
     stripBiomeWasmAssetPlugin(),
     stripOrtWasmAssetPlugin(),
+    curatedShikiBundlePlugin(),
     stubPiNodeInternalsPlugin(),
     buildWebappRuntimeAssetsPlugin(),
     // Sanitize the unpkg ffmpeg-core URL literal that @ffmpeg/ffmpeg bakes
@@ -426,7 +470,7 @@ export default defineConfig(({ mode }) => ({
   // through to config.js at module load, and fileURLToPath() crashes).
   worker: {
     format: 'es',
-    plugins: () => [stubPiNodeInternalsPlugin()],
+    plugins: () => [curatedShikiBundlePlugin(), stubPiNodeInternalsPlugin()],
   },
   build: {
     outDir: 'dist/ui',
