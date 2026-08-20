@@ -13,12 +13,17 @@ runs:
         attempts=3
         for i in $(seq 1 "$attempts"); do
           echo "::group::npm ci (attempt $i/$attempts)"
-          if npm ci; then
-            echo "::endgroup::"
+          # Capture the status from the command itself. `if npm ci; then …; fi`
+          # followed by `status=$?` reads the status of the IF STATEMENT, which
+          # is 0 whenever no branch ran — so a genuinely failing `npm ci` used to
+          # log "failed (exit 0)" and, worse, `exit "$status"` below handed the
+          # step a SUCCESS after all attempts were spent.
+          status=0
+          npm ci || status=$?
+          echo "::endgroup::"
+          if [ "$status" -eq 0 ]; then
             exit 0
           fi
-          status=$?
-          echo "::endgroup::"
           if [ "$i" -lt "$attempts" ]; then
             delay=$((i * 15))
             echo "npm ci failed (exit $status) on attempt $i/$attempts; retrying in ${delay}s" >&2
