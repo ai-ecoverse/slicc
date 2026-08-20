@@ -149,6 +149,41 @@ hardcoded, so promoting this to `ai-ecoverse/.github` for the org is a packaging
 change (`workflow_call` plus a repo input), not a rewrite. Linear support is
 deliberately absent — Cosmos's `LINEAR_TEAM_KEYS` was empty.
 
+### What the PR fixer recognises, and the failure it sees most
+
+`pr-fix-dispatcher/lib.mjs` names a failing job's cause from its name plus a
+bounded log excerpt, and the `debt-gate` signature is deliberately first in
+`CODE_SIGNATURES`. The Debt boy-scout gate
+(`tools/check-touched-exemptions.mjs`, the `lint` job's last step) fails any PR
+that touches a file still on a debt list — function size, cognitive complexity,
+floating or misused promises, layer back-edges, untyped string-keyed bags — and
+the boy-scout and backlog dispatchers are built to edit precisely those files.
+That makes it the most probable way an automation PR in this repo fails, and one
+of the most mechanically fixable: the gate prints both the offending file and the
+change it wants.
+
+Two properties of that output are what the dispatcher has to accommodate:
+
+- **It never uses linter vocabulary.** No "biome", no "eslint", no "lint error"
+  — it prints `check-touched-exemptions: FAIL`, `still on the <rule> debt list`,
+  and, for the frozen-list check, `debt list is frozen and must not grow`. A
+  signature table written for ordinary linters classifies it as `unknown`, and
+  `unknown` is a skip, so the PR strands waiting for a human.
+- **The actionable part reads as calm prose.** The filename line and the `Fix:`
+  paragraph contain no failure-ish word, so a per-line "keep the error lines"
+  filter keeps the announcement and discards the diagnosis.
+  `extractLogExcerpt()` therefore keeps a few lines _after_ each failure line
+  (trailing only — the detail always follows the announcement, and leading
+  context would just re-add the passing output) within the same size cap, since
+  the excerpt is what the fixer's prompt is built from.
+
+The `CI / ci` aggregator (`if: always()` over `needs: [everything]`) fails
+alongside whichever job actually broke, and its own log says only "One or more
+jobs failed". It classifies as `unknown` and cannot outrank a sibling: verdicts
+fold in `blocked` → `code` → `infra` order, with `unknown` used only when nothing
+else matched. The flake hunter's `PLUMBING_LINE` guard solves the same problem for
+signatures rather than verdicts.
+
 ### Running one on demand
 
 Every one takes `workflow_dispatch`, and each has an input that forces work to

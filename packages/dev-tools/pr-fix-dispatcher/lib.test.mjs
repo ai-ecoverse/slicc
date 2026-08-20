@@ -12,10 +12,32 @@ import {
   hasRerunForSha,
   isAutomationPr,
   parseMarkers,
+  screenPr,
   summarizeChecks,
 } from './lib.mjs';
 
 const NOW = new Date('2025-01-15T12:00:00Z');
+
+/**
+ * Verbatim tail of the `lint` job log of PR #2215
+ * (`automation/backlog/issue-2209`), whose only real failure was the Debt
+ * boy-scout gate. The dispatcher classified this as `unknown` and skipped the PR.
+ */
+const DEBT_GATE_EXCERPT = [
+  'check-touched-exemptions: FAIL',
+  '',
+  'The following changed files are still on the misused-promise debt list',
+  '(biome.json `overrides` → nursery.noMisusedPromises = off):',
+  '',
+  '  - packages/chrome-extension/src/fetch-proxy-shared.ts  [misused-promise]',
+  '',
+  'Fix: in this same PR, keep promises out of synchronous callback/conditional',
+  'positions, then remove the file from the debt-list override in biome.json.',
+  '##[error]Process completed with exit code 1.',
+].join('\n');
+
+/** What the `CI / ci` aggregator (`if: always()` over `needs: [*]`) prints. */
+const AGGREGATOR_EXCERPT = '::error::One or more jobs failed or were cancelled';
 const minutesAgo = (m) => new Date(NOW.getTime() - m * 60_000).toISOString();
 const SHA = 'abc1234def5678000000000000000000000000aa';
 const OTHER_SHA = 'bbb1234def5678000000000000000000000000cc';
@@ -225,6 +247,36 @@ describe('classifyFailure', () => {
     }
   });
 
+  it('classifies the debt boy-scout gate as a fixable code failure (PR #2215)', () => {
+    const out = classifyFailure({ jobName: 'lint', logExcerpt: DEBT_GATE_EXCERPT });
+    expect(out.kind).toBe('code');
+    expect(out.category).toBe('debt-gate');
+  });
+
+  it('recognises every debt list check-touched-exemptions.mjs can name', () => {
+    const labels = [
+      'function-size',
+      'cognitive-complexity',
+      'floating-promise',
+      'misused-promise',
+      'layer-back-edge',
+      'record-string-unknown',
+    ];
+    for (const label of labels) {
+      const touched = classifyFailure({
+        jobName: 'lint',
+        logExcerpt: `check-touched-exemptions: FAIL\nThe following changed files are still on the ${label} debt list\n  - packages/webapp/src/x.ts  [${label}]`,
+      });
+      expect(touched, label).toMatchObject({ kind: 'code', category: 'debt-gate' });
+
+      const grown = classifyFailure({
+        jobName: 'lint',
+        logExcerpt: `The ${label} debt list is frozen and must not grow; this PR adds new entries\n  + packages/webapp/src/x.ts  [${label}]`,
+      });
+      expect(grown, `${label} (grown)`).toMatchObject({ kind: 'code', category: 'debt-gate' });
+    }
+  });
+
   it('prefers the code signature when a cancel line accompanies an assertion failure', () => {
     const out = classifyFailure({
       jobName: 'test',
@@ -284,6 +336,24 @@ describe('classifyFailures', () => {
         { name: 'lint', logExcerpt: 'biome found 1 error' },
       ]).kind
     ).toBe('code');
+  });
+
+  // `CI / ci` is `if: always()` over `needs: [everything]`, so it fails whenever
+  // any child job does while its own log names no failure mode. It must never
+  // decide the PR's verdict when a sibling job named a real cause.
+  it('does not let the unknown CI aggregator mask a diagnosable sibling failure', () => {
+    for (const failures of [
+      [
+        { name: 'ci', logExcerpt: AGGREGATOR_EXCERPT },
+        { name: 'lint', logExcerpt: DEBT_GATE_EXCERPT },
+      ],
+      [
+        { name: 'lint', logExcerpt: DEBT_GATE_EXCERPT },
+        { name: 'ci', logExcerpt: AGGREGATOR_EXCERPT },
+      ],
+    ]) {
+      expect(classifyFailures(failures)).toMatchObject({ kind: 'code', category: 'debt-gate' });
+    }
   });
 
   it('reports unknown for an empty list', () => {
@@ -630,5 +700,70 @@ describe('extractLogExcerpt', () => {
   it('honours the char budget and tolerates empty input', () => {
     expect(extractLogExcerpt(`error ${'y'.repeat(500)}`, 50)).toHaveLength(50);
     expect(extractLogExcerpt()).toBe('');
+  });
+
+  it('keeps the detail that follows a failure line, even though it reads as calm prose', () => {
+    const stamp = (n, line) => `2025-01-15T11:59:${String(n).padStart(2, '0')}.1234567Z ${line}`;
+    const log = [
+      stamp(0, '##[group]Run node packages/dev-tools/tools/check-touched-exemptions.mjs'),
+      stamp(1, 'Checked 12 changed file(s) against 6 debt list(s)'),
+      stamp(2, 'check-touched-exemptions: FAIL'),
+      stamp(3, ''),
+      stamp(4, 'The following changed files are still on the misused-promise debt list'),
+      stamp(5, '(biome.json `overrides` → nursery.noMisusedPromises = off):'),
+      stamp(6, ''),
+      stamp(7, '  - packages/chrome-extension/src/fetch-proxy-shared.ts  [misused-promise]'),
+      stamp(8, ''),
+      stamp(9, 'Fix: in this same PR, keep promises out of synchronous callback/conditional'),
+      stamp(10, 'positions, then remove the file from the debt-list override in biome.json.'),
+    ].join('\n');
+    const out = extractLogExcerpt(log);
+    expect(out).toContain('packages/chrome-extension/src/fetch-proxy-shared.ts');
+    expect(out).toContain('Fix: in this same PR');
+    // The passing chatter that preceded the failure is still dropped.
+    expect(out).not.toContain('##[group]');
+    expect(out).not.toContain('Checked 12 changed file(s)');
+  });
+
+  it('still respects the size cap once context lines are kept', () => {
+    const log = Array.from({ length: 200 }, (_, i) =>
+      i % 10 === 0 ? `FAIL at step ${i}` : `detail line ${i} ${'z'.repeat(80)}`
+    ).join('\n');
+    expect(extractLogExcerpt(log, 600)).toHaveLength(600);
+  });
+});
+
+// PR #2215 (`automation/backlog/issue-2209`) failed exactly two checks: the
+// `lint` job on the Debt boy-scout gate, and the `CI / ci` aggregator mirroring
+// it. The dispatcher named neither, called the PR `unknown`, and skipped it,
+// stranding a mechanically fixable PR for a human.
+describe('regression: PR #2215 — a debt-gate-only automation PR', () => {
+  const failing = [
+    { name: 'lint', conclusion: 'failure', logExcerpt: DEBT_GATE_EXCERPT },
+    { name: 'ci', conclusion: 'failure', logExcerpt: AGGREGATOR_EXCERPT },
+  ];
+  const input = candidate({
+    pr: {
+      number: 2215,
+      title: 'feat(chrome-extension): share the fetch proxy',
+      headRef: 'automation/backlog/issue-2209',
+      headSha: SHA,
+      labels: [],
+      user: { type: 'User', login: 'trieloff' },
+    },
+    failing,
+    checks: { failing, pending: false, newestFailureAt: minutesAgo(90) },
+  });
+
+  it('reaches the rubric rather than being screened out', () => {
+    expect(screenPr(input)).toBeNull();
+  });
+
+  it('is dispatched to a fixer with the debt gate named', () => {
+    const out = decidePrAction(input);
+    expect(out.action).toBe('dispatch');
+    expect(out.category).toBe('debt-gate');
+    expect(out.reason).toMatch(/debt-gate/);
+    expect(out.reason).not.toMatch(/no plausible cause/i);
   });
 });

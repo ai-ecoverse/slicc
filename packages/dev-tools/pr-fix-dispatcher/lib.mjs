@@ -178,6 +178,25 @@ export const INFRA_SIGNATURES = [
  * the rubric's "canceled with no preceding assertion failure" rule.
  */
 export const CODE_SIGNATURES = [
+  // First, because it is this repo's single most likely automation-PR failure and
+  // its output never says "biome", "lint error", or anything else the broader
+  // `lint` entry below looks for. The boy-scout and backlog dispatchers edit
+  // debt-listed files by design, so `check-touched-exemptions.mjs` — which fails
+  // a PR that touches a file still on ANY debt list (function size, cognitive
+  // complexity, floating/misused promises, layer back-edges, untyped
+  // string-keyed bags) — is exactly the gate they trip. Matches both the
+  // touched-file variant and the "list must not grow" variant.
+  {
+    category: 'debt-gate',
+    pattern:
+      // The rule label is matched loosely on purpose. Every label today is a
+      // single hyphenated token, so `[\w-]+` would do — but this whole class of
+      // failure was invisible for exactly one reason: a phrase the classifier
+      // expected did not match the phrase the gate printed, and the symptom was
+      // silence rather than an error. A label gaining a space should not be able
+      // to re-create that.
+      /check-touched-exemptions:\s*FAIL|still on the .{1,40}? debt list|debt list is frozen and must not grow/i,
+  },
   {
     category: 'lint',
     pattern: /biome (found|check)|eslint|prettier|lint(ing)? (error|failed)|format(ter)? would/i,
@@ -630,8 +649,22 @@ export function formatFailuresForMatrix(failures = [], maxChars = 1500) {
     .slice(0, maxChars);
 }
 
+/** A line that, on its own, looks like it names a failure. */
+const FAILURE_LINE = /error|fail|✕|✗|cannot|unable|denied|conflict|timed out|canceled|cancelled/i;
+
 /**
- * Collapse a raw job log to the tail lines most likely to name the failure.
+ * Lines kept after each {@link FAILURE_LINE}. A gate that fails usually announces
+ * the failure on one line and then spends the next few naming the offending file
+ * and prescribing the fix — none of which contain a failure-ish word, so a
+ * line-by-line filter throws away the only actionable part. Trailing context
+ * only: the detail follows the announcement in every gate this repo runs, and
+ * leading context would pad the excerpt with the passing output that preceded it.
+ */
+const CONTEXT_AFTER = 8;
+
+/**
+ * Collapse a raw job log to the tail lines most likely to name the failure,
+ * each with the following lines that explain it.
  * @param {string} log raw text from `GET /actions/jobs/{id}/logs`
  * @param {number} maxChars
  * @returns {string}
@@ -642,9 +675,13 @@ export function extractLogExcerpt(log, maxChars = 2000) {
     // Strip the ISO timestamp Actions prefixes every log line with.
     .map((line) => line.replace(/^\d{4}-\d{2}-\d{2}T[\d:.]+Z\s?/, ''))
     .filter((line) => line.trim().length > 0);
-  const interesting = lines.filter((line) =>
-    /error|fail|✕|✗|cannot|unable|denied|conflict|timed out|canceled|cancelled/i.test(line)
-  );
+  const keep = new Set();
+  for (const [index, line] of lines.entries()) {
+    if (!FAILURE_LINE.test(line)) continue;
+    const last = Math.min(lines.length - 1, index + CONTEXT_AFTER);
+    for (let i = index; i <= last; i += 1) keep.add(i);
+  }
+  const interesting = [...keep].sort((a, b) => a - b).map((i) => lines[i]);
   const chosen = (interesting.length ? interesting : lines).slice(-40);
   return chosen.join('\n').slice(-maxChars);
 }
