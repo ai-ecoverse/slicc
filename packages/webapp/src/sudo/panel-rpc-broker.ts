@@ -26,7 +26,9 @@ const log = createLogger('sudo-panel-rpc');
 /**
  * Per-call timeout for the page relay. Unlike the panel-RPC default (15s),
  * a sudo prompt waits on a human gesture, so the window is generous; it only
- * exists to release a request whose page realm has gone away.
+ * exists to release a request whose page realm has gone away. In practice the
+ * `withApprovalTimeout` wrap around this broker (5 min) settles the caller
+ * first — this is the transport backstop underneath it.
  */
 const DEFAULT_SUDO_RPC_TIMEOUT_MS = 600_000;
 

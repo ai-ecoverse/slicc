@@ -137,11 +137,13 @@ describe('ConeRequestRegistry.resolve idempotency', () => {
 });
 
 describe('ConeRequestRegistry fail-closed paths', () => {
-  it('resolves deny when the per-request timer fires', async () => {
+  it('resolves deny when the per-request timer fires, tagged as a timeout', async () => {
     const { registry, fireAllTimers } = makeRegistry();
     const { pending } = registry.register('scoop_a', REQ);
     fireAllTimers();
-    await expect(pending).resolves.toEqual({ decision: 'deny' });
+    // `reason: 'timeout'` is what lets the scoop's gate say "unanswered"
+    // rather than "refused" — a drop / shutdown deliberately carries no reason.
+    await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'timeout' });
     expect(registry.size()).toBe(0);
   });
 
@@ -280,7 +282,7 @@ describe('ConeRequestRegistry timeout configuration', () => {
       vi.advanceTimersByTime(99);
       expect(registry.size()).toBe(1);
       vi.advanceTimersByTime(2);
-      await expect(pending).resolves.toEqual({ decision: 'deny' });
+      await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'timeout' });
       // Subsequent resolve is a no-op (entry already drained by the timer).
       expect(registry.resolve(id, { decision: 'allow' })).toBe(false);
     } finally {

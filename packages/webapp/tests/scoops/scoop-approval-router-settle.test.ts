@@ -153,7 +153,9 @@ describe('ScoopApprovalRouter settle paths flip the lick card off pending', () =
         expect.objectContaining({ lickState: 'dismissed' })
       );
       expect(h.handleMessage).toHaveBeenCalledTimes(1);
-      await expect(decision).resolves.toEqual({ decision: 'deny' });
+      // Tagged `timeout` so the scoop hears "the cone never answered" rather
+      // than "the cone said no" — see sudo/approval-timeout.ts.
+      await expect(decision).resolves.toEqual({ decision: 'deny', reason: 'timeout' });
     } finally {
       vi.useRealTimers();
     }

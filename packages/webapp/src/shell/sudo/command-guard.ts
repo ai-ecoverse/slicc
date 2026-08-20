@@ -23,6 +23,7 @@
  * sink so this module stays unit-testable in isolation.
  */
 
+import { isTimedOut, SUDO_TIMEOUT_NOTICE } from '../../sudo/approval-timeout.js';
 import type { SudoBroker } from '../../sudo/types.js';
 import {
   applyDefaultDisposition,
@@ -33,6 +34,14 @@ import {
 
 /** stderr message emitted (and shown to the agent) when approval is denied. */
 export const COMMAND_DENIED_MESSAGE = 'sudo: approval denied';
+
+/**
+ * stderr message emitted when the approval prompt went unanswered. Distinct
+ * from {@link COMMAND_DENIED_MESSAGE} on purpose — a denial is a decision the
+ * agent should respect, a timeout means nobody was there, and re-prompting
+ * just blocks the next turn for another full budget.
+ */
+export const COMMAND_TIMEOUT_MESSAGE = `sudo: approval request timed out — ${SUDO_TIMEOUT_NOTICE}`;
 
 /** Dependencies injected by the shell for one enforcement pass. */
 export interface CommandSudoDeps {
@@ -89,7 +98,10 @@ export async function enforceCommandSudo(
   const decision = await deps.broker.requestApproval({ kind: 'command', detail: trimmed });
 
   if (decision.decision === 'deny') {
-    return { allowed: false, message: COMMAND_DENIED_MESSAGE };
+    return {
+      allowed: false,
+      message: isTimedOut(decision) ? COMMAND_TIMEOUT_MESSAGE : COMMAND_DENIED_MESSAGE,
+    };
   }
   if (decision.decision === 'always') {
     const pattern = decision.pattern?.trim() || trimmed;

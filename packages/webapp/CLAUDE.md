@@ -94,6 +94,10 @@ never-rules below flag what a reviewer must recognise.
   The panel terminal is intentionally NOT gated.
 - **Sudo brokers** are float-specific (`createSudoBroker`): extension-delegate
   relays via hosted leader tab; standalone/Electron POSTs `/api/sudo-approve`.
+  All of them are wrapped in `withApprovalTimeout` — an unanswered prompt
+  settles after 5 min as `{ decision: 'deny', reason: 'timeout' }` so the
+  blocked turn is released. `reason` is a FIELD, never a fourth `decision`
+  value: every gate branches on `deny`, so a new variant would fail open.
 - **Frozen-session recovery** must go through the **bounded** legacy enrichment
   call — never the unbounded curator (`timeoutSeconds` cannot stop it). Save /
   Skip memory / Erase clear cone chat and non-mount `/tmp`, not scoops.

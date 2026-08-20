@@ -11,7 +11,12 @@ import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { FsError, RestrictedFS, VirtualFS } from '../../src/fs/index.js';
 import type { MountBackend } from '../../src/fs/mount/backend.js';
-import { createSudoFs, GRANTED_FILE } from '../../src/fs/sudo-fs.js';
+import {
+  createSudoFs,
+  FS_DENIED_MESSAGE,
+  FS_TIMEOUT_MESSAGE,
+  GRANTED_FILE,
+} from '../../src/fs/sudo-fs.js';
 import { NO_OP_WRITE_DEVICE_PATHS } from '../../src/fs/virtual-device-paths.js';
 import { mergePolicies, parseSudoers, type SudoersPolicy } from '../../src/shell/sudo/sudoers.js';
 import type { SudoDecision, SudoRequest } from '../../src/sudo/types.js';
@@ -70,6 +75,18 @@ describe('SudoFS', () => {
     await sfs.writeFile('/workspace/note.txt', 'changed');
     expect(await vfs.readTextFile('/workspace/note.txt')).toBe('changed');
     expect(calls).toHaveLength(1);
+  });
+
+  it('reports an unanswered prompt as a timeout, not a denial', async () => {
+    const { broker } = makeBroker({ decision: 'deny', reason: 'timeout' });
+    const sfs = createSudoFs(vfs, { broker, getPolicy });
+
+    await expect(sfs.writeFile('/workspace/.git/config', 'evil')).rejects.toMatchObject({
+      code: 'EACCES',
+      message: expect.stringContaining(FS_TIMEOUT_MESSAGE),
+    });
+    expect(FS_TIMEOUT_MESSAGE).toContain('timed out');
+    expect(FS_TIMEOUT_MESSAGE).not.toBe(FS_DENIED_MESSAGE);
   });
 
   it('always-protects writes to sudoers files regardless of policy', async () => {

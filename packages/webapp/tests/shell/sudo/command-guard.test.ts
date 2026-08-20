@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   COMMAND_DENIED_MESSAGE,
+  COMMAND_TIMEOUT_MESSAGE,
   enforceCommandSudo,
 } from '../../../src/shell/sudo/command-guard.js';
 import { parseSudoers } from '../../../src/shell/sudo/sudoers.js';
@@ -43,6 +44,22 @@ describe('enforceCommandSudo', () => {
 
     expect(result.allowed).toBe(false);
     expect(result.message).toBe(COMMAND_DENIED_MESSAGE);
+  });
+
+  it('match -> unanswered prompt -> block with the timeout message', async () => {
+    const broker = brokerReturning({ decision: 'deny', reason: 'timeout' });
+
+    const result = await enforceCommandSudo('rm -rf /workspace', {
+      policy: GATED,
+      broker,
+      persistGrant: vi.fn(async () => {}),
+    });
+
+    expect(result.allowed).toBe(false);
+    expect(result.message).toBe(COMMAND_TIMEOUT_MESSAGE);
+    // The agent must not read an absent human as a refusal.
+    expect(result.message).not.toBe(COMMAND_DENIED_MESSAGE);
+    expect(result.message).toContain('timed out');
   });
 
   it('always -> persists the human-confirmed NOPASSWD pattern', async () => {

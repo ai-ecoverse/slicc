@@ -27,6 +27,16 @@ export interface SudoDecision {
   decision: 'allow' | 'deny' | 'always';
   /** The (human-edited) glob pattern to persist as a NOPASSWD rule. */
   pattern?: string;
+  /**
+   * Why a `deny` was reached when no human actually refused. Absent for a real
+   * gesture. `'timeout'` means the prompt went unanswered past the approval
+   * budget (see `approval-timeout.ts` / `CONE_SUDO_TIMEOUT_MS`) — enforcement
+   * layers use it to tell the agent "unanswered", not "refused", so it does
+   * not immediately re-request the same action. Deliberately a field rather
+   * than a fourth `decision` value: every consumer branches on
+   * `decision === 'deny'`, so a new variant would fail OPEN.
+   */
+  reason?: 'timeout';
 }
 
 /** Trusted-realm approval surface. */

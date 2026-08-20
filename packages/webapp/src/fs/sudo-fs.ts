@@ -6,7 +6,8 @@
  * and write is funneled through one `matchPath` check against the live sudoers
  * policy plus the hardcoded self-protection invariant:
  *
- *   - `require-approval` → ask the {@link SudoBroker}; `deny` → `FsError('EACCES')`,
+ *   - `require-approval` → ask the {@link SudoBroker}; `deny` → `FsError('EACCES')`
+ *     (with a distinct message when the prompt merely went unanswered),
  *     `allow` → pass through once, `always` → persist a `NOPASSWD` grant to
  *     `/etc/sudoers.d/granted` (broker-mediated, exempt from future prompts).
  *   - `nopasswd-allow` / `no-match` → pass straight through to the wrapped fs.
@@ -27,6 +28,7 @@ import {
   type SudoersPolicy,
   sanitizeGrantPattern,
 } from '../shell/sudo/sudoers.js';
+import { isTimedOut, SUDO_TIMEOUT_NOTICE } from '../sudo/approval-timeout.js';
 import type { SudoBroker, SudoKind } from '../sudo/types.js';
 import { normalizePath } from './path-utils.js';
 import { FsError } from './types.js';
@@ -51,6 +53,16 @@ export const MONKEYPATCH_UNSAFE_FS: unique symbol = Symbol.for('slicc.fs.monkeyp
 
 /** Drop-in file for persisted "Always" grants. */
 export const GRANTED_FILE = `${SUDOERS_D_DIR}/granted`;
+
+/** `EACCES` message for a gated op the human explicitly refused. */
+export const FS_DENIED_MESSAGE = 'sudo: approval denied';
+
+/**
+ * `EACCES` message for a gated op whose prompt went unanswered. Kept distinct
+ * from {@link FS_DENIED_MESSAGE} so the agent does not read an absent human as
+ * a refusal — and does not re-request the same path on the next turn.
+ */
+export const FS_TIMEOUT_MESSAGE = `sudo: approval request timed out — ${SUDO_TIMEOUT_NOTICE}`;
 
 /** Async + sync read methods routed through a `read` match. */
 const READ_ASYNC = ['readFile', 'readTextFile', 'readDir', 'exists', 'stat'] as const;
@@ -159,7 +171,11 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
     const kind: SudoKind = op;
     const decision = await broker.requestApproval({ kind, detail: normalized });
     if (decision.decision === 'deny') {
-      throw new FsError('EACCES', 'sudo: approval denied', normalized);
+      throw new FsError(
+        'EACCES',
+        isTimedOut(decision) ? FS_TIMEOUT_MESSAGE : FS_DENIED_MESSAGE,
+        normalized
+      );
     }
     if (decision.decision === 'always') {
       await applyGrant(op, decision.pattern?.trim() || normalized);

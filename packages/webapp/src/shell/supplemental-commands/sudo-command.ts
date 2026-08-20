@@ -1,6 +1,7 @@
 import type { Command, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import type { SudoBroker } from '../../sudo/types.js';
+import { isTimedOut, SUDO_TIMEOUT_NOTICE } from '../../sudo/approval-timeout.js';
+import type { SudoBroker, SudoDecision } from '../../sudo/types.js';
 
 const SUDO_HELP = `usage: sudo <command> [args...]
 
@@ -17,8 +18,19 @@ Options:
 
 const SUDO_USAGE_ERROR = 'sudo: usage: sudo <command> [args...]';
 const SUDO_DENIED_MESSAGE = 'sudo: approval denied';
+const SUDO_TIMEOUT_MESSAGE = `sudo: approval request timed out — ${SUDO_TIMEOUT_NOTICE}`;
 const SUDO_UNSUPPORTED_MESSAGE = 'sudo: command-level approval is not configured';
 const SUDO_NO_EXEC_MESSAGE = 'sudo: cannot dispatch inner command in this context';
+
+/**
+ * Result for a `deny`, distinguishing a real refusal from a prompt the human
+ * never answered — an absent user is not a "no", and the agent must not
+ * re-request the action on the next turn.
+ */
+function refusalResult(decision: SudoDecision): ExecResult {
+  const message = isTimedOut(decision) ? SUDO_TIMEOUT_MESSAGE : SUDO_DENIED_MESSAGE;
+  return { stdout: '', stderr: `${message}\n`, exitCode: 1 };
+}
 
 /** Options accepted by {@link createSudoCommand}. */
 export interface SudoCommandOptions {
@@ -86,7 +98,7 @@ export function createSudoCommand(options: SudoCommandOptions = {}): Command {
     const decision = await broker.requestApproval({ kind: 'command', detail: subject });
 
     if (decision.decision === 'deny') {
-      return { stdout: '', stderr: `${SUDO_DENIED_MESSAGE}\n`, exitCode: 1 };
+      return refusalResult(decision);
     }
     if (decision.decision === 'always') {
       const pattern = decision.pattern?.trim() || subject;
