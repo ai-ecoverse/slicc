@@ -13,7 +13,8 @@
  * The "Always" pattern suggestion is computed here in the offscreen realm
  * (where `quickLabel` can reach the provider) and shipped as the editable
  * default. Fail closed: no `chrome.runtime`, a `lastError`, an empty/garbled
- * response, or any thrown error resolves to `deny`.
+ * response, an aborted `signal` (the caller's approval budget expired), or any
+ * thrown error resolves to `deny`.
  */
 
 import { createLogger } from '../base/logger.js';
@@ -23,6 +24,7 @@ import {
   type SudoBroker,
   type SudoDecision,
   type SudoRequest,
+  type SudoRequestOptions,
 } from './types.js';
 
 const log = createLogger('sudo-ext');
@@ -52,12 +54,19 @@ export function createExtensionSudoBroker(deps: ExtensionSudoBrokerDeps = {}): S
   const suggest = deps.suggest ?? suggestPattern;
 
   return {
-    async requestApproval(req: SudoRequest): Promise<SudoDecision> {
+    async requestApproval(req: SudoRequest, opts?: SudoRequestOptions): Promise<SudoDecision> {
+      const signal = opts?.signal;
       let suggestedPattern: string;
       try {
-        suggestedPattern = await suggest(req);
+        suggestedPattern = await suggest(req, signal);
       } catch {
         suggestedPattern = req.detail;
+      }
+      // The suggester can outlive the caller's budget. Relaying now would raise
+      // a native modal for an action that already timed out, so bail first.
+      if (signal?.aborted) {
+        log.warn('sudo approval aborted before prompting — denying', { detail: req.detail });
+        return { decision: 'deny' };
       }
 
       const enriched: SudoRequest = { ...req, suggestedPattern };

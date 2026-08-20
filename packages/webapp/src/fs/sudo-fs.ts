@@ -28,8 +28,8 @@ import {
   type SudoersPolicy,
   sanitizeGrantPattern,
 } from '../base/sudoers.js';
-import { isTimedOut, SUDO_TIMEOUT_NOTICE } from '../sudo/approval-timeout.js';
-import type { SudoBroker, SudoKind } from '../sudo/types.js';
+import { sudoRefusalMessage } from '../sudo/approval-timeout.js';
+import type { SudoBroker, SudoDecision, SudoKind } from '../sudo/types.js';
 import { normalizePath } from './path-utils.js';
 import { FsError } from './types.js';
 
@@ -62,15 +62,17 @@ type FsMethodBag = Record<string, (...a: unknown[]) => unknown>;
 /** Drop-in file for persisted "Always" grants. */
 export const GRANTED_FILE = `${SUDOERS_D_DIR}/granted`;
 
-/** `EACCES` message for a gated op the human explicitly refused. */
+/** `EACCES` message for a gated op the approver explicitly refused. */
 export const FS_DENIED_MESSAGE = 'sudo: approval denied';
 
 /**
- * `EACCES` message for a gated op whose prompt went unanswered. Kept distinct
- * from {@link FS_DENIED_MESSAGE} so the agent does not read an absent human as
- * a refusal — and does not re-request the same path on the next turn.
+ * `EACCES` message for a gated op. An unanswered request is kept distinct from
+ * {@link FS_DENIED_MESSAGE} so the agent does not read an absent approver as a
+ * refusal — and does not re-request the same path on the next turn.
  */
-export const FS_TIMEOUT_MESSAGE = `sudo: approval request timed out — ${SUDO_TIMEOUT_NOTICE}`;
+export function fsSudoMessage(decision: SudoDecision): string {
+  return sudoRefusalMessage('sudo', decision);
+}
 
 /** Async + sync read methods routed through a `read` match. */
 const READ_ASYNC = ['readFile', 'readTextFile', 'readDir', 'exists', 'stat'] as const;
@@ -179,11 +181,7 @@ export function createSudoFs<T extends object>(target: T, deps: SudoFsDeps): T {
     const kind: SudoKind = op;
     const decision = await broker.requestApproval({ kind, detail: normalized });
     if (decision.decision === 'deny') {
-      throw new FsError(
-        'EACCES',
-        isTimedOut(decision) ? FS_TIMEOUT_MESSAGE : FS_DENIED_MESSAGE,
-        normalized
-      );
+      throw new FsError('EACCES', fsSudoMessage(decision), normalized);
     }
     if (decision.decision === 'always') {
       await applyGrant(op, decision.pattern?.trim() || normalized);

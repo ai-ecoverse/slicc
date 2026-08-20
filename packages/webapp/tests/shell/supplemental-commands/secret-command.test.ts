@@ -143,7 +143,7 @@ describe('secret command — gated ops', () => {
 
   it('persisted set reports a timeout as unanswered, not denied', async () => {
     const backend = makeBackend();
-    const broker = makeBroker({ decision: 'deny', reason: 'timeout' });
+    const broker = makeBroker({ decision: 'deny', reason: 'user-timeout' });
     const res = await run(['set', 'TOKEN', 'v', '--domain', 'api.x.com', '--persist'], {
       backend,
       broker: broker.broker,

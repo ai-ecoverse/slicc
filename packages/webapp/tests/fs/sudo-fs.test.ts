@@ -15,7 +15,7 @@ import type { MountBackend } from '../../src/fs/mount/backend.js';
 import {
   createSudoFs,
   FS_DENIED_MESSAGE,
-  FS_TIMEOUT_MESSAGE,
+  fsSudoMessage,
   GRANTED_FILE,
 } from '../../src/fs/sudo-fs.js';
 import { NO_OP_WRITE_DEVICE_PATHS } from '../../src/fs/virtual-device-paths.js';
@@ -80,15 +80,17 @@ describe('SudoFS', () => {
   });
 
   it('reports an unanswered prompt as a timeout, not a denial', async () => {
-    const { broker } = makeBroker({ decision: 'deny', reason: 'timeout' });
+    const { broker } = makeBroker({ decision: 'deny', reason: 'user-timeout' });
     const sfs = createSudoFs(vfs, { broker, getPolicy });
+    const timeoutMessage = fsSudoMessage({ decision: 'deny', reason: 'user-timeout' });
 
     await expect(sfs.writeFile('/workspace/.git/config', 'evil')).rejects.toMatchObject({
       code: 'EACCES',
-      message: expect.stringContaining(FS_TIMEOUT_MESSAGE),
+      message: expect.stringContaining(timeoutMessage),
     });
-    expect(FS_TIMEOUT_MESSAGE).toContain('timed out');
-    expect(FS_TIMEOUT_MESSAGE).not.toBe(FS_DENIED_MESSAGE);
+    expect(timeoutMessage).toContain('timed out');
+    expect(timeoutMessage).toContain('not a denial');
+    expect(timeoutMessage).not.toBe(FS_DENIED_MESSAGE);
   });
 
   it('always-protects writes to sudoers files regardless of policy', async () => {

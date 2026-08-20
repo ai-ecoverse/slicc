@@ -161,9 +161,10 @@ export class ConeRequestRegistry {
           const entry = this.pending.get(id);
           if (!entry) return;
           this.pending.delete(id);
-          // `reason: 'timeout'` so the scoop's gate reports "unanswered" and
-          // does not immediately re-request what the cone never got to.
-          entry.resolve(timedOutDecision());
+          // `cone-timeout` (not `user-timeout`): no human was ever prompted on
+          // this leg, so the scoop's gate must not tell it to wait for the
+          // user — the cone is the approver that never answered.
+          entry.resolve(timedOutDecision('cone-timeout'));
           this.notifyAutoSettle(id, 'expired');
         }, this.timeoutMs);
       }

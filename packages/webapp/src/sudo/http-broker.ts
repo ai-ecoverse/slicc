@@ -10,7 +10,9 @@
  * as the editable default.
  *
  * Fail closed: any transport error, non-OK status, or malformed body resolves
- * to `deny`. The endpoint never auto-resolves on the server side either.
+ * to `deny`. The endpoint never auto-resolves on the server side either. An
+ * aborted `signal` (the caller's approval budget expired) both cancels the
+ * in-flight POST and stops a slow suggester from raising a stale dialog.
  */
 
 import { createLogger } from '../base/logger.js';
@@ -21,6 +23,7 @@ import {
   type SudoBroker,
   type SudoDecision,
   type SudoRequest,
+  type SudoRequestOptions,
 } from './types.js';
 
 const log = createLogger('sudo-http');
@@ -42,12 +45,19 @@ export function createHttpSudoBroker(deps: HttpSudoBrokerDeps = {}): SudoBroker 
   const suggest = deps.suggest ?? suggestPattern;
 
   return {
-    async requestApproval(req: SudoRequest): Promise<SudoDecision> {
+    async requestApproval(req: SudoRequest, opts?: SudoRequestOptions): Promise<SudoDecision> {
+      const signal = opts?.signal;
       let suggestedPattern: string;
       try {
-        suggestedPattern = await suggest(req);
+        suggestedPattern = await suggest(req, signal);
       } catch {
         suggestedPattern = req.detail;
+      }
+      // The suggester can outlive the caller's budget. Raising the OS dialog
+      // now would prompt for an action that already timed out, so bail first.
+      if (signal?.aborted) {
+        log.warn('sudo approval aborted before prompting — denying', { detail: req.detail });
+        return { decision: 'deny' };
       }
 
       try {
@@ -59,6 +69,7 @@ export function createHttpSudoBroker(deps: HttpSudoBrokerDeps = {}): SudoBroker 
             detail: req.detail,
             suggestedPattern,
           }),
+          signal,
         });
         if (!resp.ok) {
           log.warn('sudo endpoint returned non-OK status — denying', {

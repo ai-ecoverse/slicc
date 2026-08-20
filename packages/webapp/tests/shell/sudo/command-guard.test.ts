@@ -2,7 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import { parseSudoers } from '../../../src/base/sudoers.js';
 import {
   COMMAND_DENIED_MESSAGE,
-  COMMAND_TIMEOUT_MESSAGE,
+  commandSudoMessage,
   enforceCommandSudo,
 } from '../../../src/shell/sudo/command-guard.js';
 import type { SudoBroker, SudoDecision } from '../../../src/sudo/types.js';
@@ -47,7 +47,7 @@ describe('enforceCommandSudo', () => {
   });
 
   it('match -> unanswered prompt -> block with the timeout message', async () => {
-    const broker = brokerReturning({ decision: 'deny', reason: 'timeout' });
+    const broker = brokerReturning({ decision: 'deny', reason: 'user-timeout' });
 
     const result = await enforceCommandSudo('rm -rf /workspace', {
       policy: GATED,
@@ -56,7 +56,7 @@ describe('enforceCommandSudo', () => {
     });
 
     expect(result.allowed).toBe(false);
-    expect(result.message).toBe(COMMAND_TIMEOUT_MESSAGE);
+    expect(result.message).toBe(commandSudoMessage({ decision: 'deny', reason: 'user-timeout' }));
     // The agent must not read an absent human as a refusal.
     expect(result.message).not.toBe(COMMAND_DENIED_MESSAGE);
     expect(result.message).toContain('timed out');

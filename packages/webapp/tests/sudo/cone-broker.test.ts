@@ -141,9 +141,10 @@ describe('ConeRequestRegistry fail-closed paths', () => {
     const { registry, fireAllTimers } = makeRegistry();
     const { pending } = registry.register('scoop_a', REQ);
     fireAllTimers();
-    // `reason: 'timeout'` is what lets the scoop's gate say "unanswered"
-    // rather than "refused" — a drop / shutdown deliberately carries no reason.
-    await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'timeout' });
+    // `cone-timeout` (not `user-timeout`) is what lets the scoop's gate say
+    // "the cone never answered" rather than "the user was absent" — no human
+    // is prompted on this leg. A drop / shutdown deliberately carries no reason.
+    await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'cone-timeout' });
     expect(registry.size()).toBe(0);
   });
 
@@ -282,7 +283,7 @@ describe('ConeRequestRegistry timeout configuration', () => {
       vi.advanceTimersByTime(99);
       expect(registry.size()).toBe(1);
       vi.advanceTimersByTime(2);
-      await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'timeout' });
+      await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'cone-timeout' });
       // Subsequent resolve is a no-op (entry already drained by the timer).
       expect(registry.resolve(id, { decision: 'allow' })).toBe(false);
     } finally {

@@ -32,8 +32,9 @@ import type { SudoBroker, SudoRequest } from './types.js';
 export {
   type ApprovalTimeoutOptions,
   isTimedOut,
-  SUDO_TIMEOUT_NOTICE,
+  sudoRefusalMessage,
   timedOutDecision,
+  timeoutNotice,
   USER_SUDO_TIMEOUT_MS,
   withApprovalTimeout,
 } from './approval-timeout.js';

@@ -95,9 +95,12 @@ never-rules below flag what a reviewer must recognise.
 - **Sudo brokers** are float-specific (`createSudoBroker`): extension-delegate
   relays via hosted leader tab; standalone/Electron POSTs `/api/sudo-approve`.
   All of them are wrapped in `withApprovalTimeout` — an unanswered prompt
-  settles after 5 min as `{ decision: 'deny', reason: 'timeout' }` so the
-  blocked turn is released. `reason` is a FIELD, never a fourth `decision`
-  value: every gate branches on `deny`, so a new variant would fail open.
+  settles after 5 min as `{ decision: 'deny', reason: 'user-timeout' }` (the
+  scoop → cone leg uses `cone-timeout`; different approver, different recovery)
+  so the blocked turn is released. `reason` is a FIELD, never a fourth
+  `decision` value: every gate branches on `deny`, so a new variant would fail
+  open. The wrapper also aborts `SudoRequestOptions.signal` before resolving, so
+  a broker whose `suggest` outlived the budget cannot raise a stale prompt.
 - **Frozen-session recovery** must go through the **bounded** legacy enrichment
   call — never the unbounded curator (`timeoutSeconds` cannot stop it). Save /
   Skip memory / Erase clear cone chat and non-mount `/tmp`, not scoops.

@@ -115,7 +115,7 @@ describe('sudo command', () => {
     });
 
     it('on timeout: blocks, and says unanswered rather than denied', async () => {
-      const broker = brokerReturning({ decision: 'deny', reason: 'timeout' });
+      const broker = brokerReturning({ decision: 'deny', reason: 'user-timeout' });
       const exec = vi.fn(async () => execResult());
       const cmd = createSudoCommand({ broker });
 

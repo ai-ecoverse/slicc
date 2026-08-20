@@ -169,14 +169,24 @@ turn hangs indefinitely.
 `createSudoBroker` therefore wraps whichever float broker it selects in
 `withApprovalTimeout` (`packages/webapp/src/sudo/approval-timeout.ts`). After
 `USER_SUDO_TIMEOUT_MS` (5 minutes) the request settles fail-closed as
-`{ decision: 'deny', reason: 'timeout' }`. That matches `CONE_SUDO_TIMEOUT_MS`,
-so both hops of a delegated scoop → cone → user approval expire on the same
-budget.
+`{ decision: 'deny', reason: 'user-timeout' }`. That matches
+`CONE_SUDO_TIMEOUT_MS`, so both hops of a delegated scoop → cone → user approval
+expire on the same budget.
 
-`reason: 'timeout'` is a **field on the decision, not a fourth `decision` value**.
-Every enforcement layer branches on `decision === 'deny'`, so a new variant would
-fail _open_; the field keeps the fail-closed default and only enriches the
-message. Each layer reports "unanswered" rather than "refused":
+`reason` is a **field on the decision, not a fourth `decision` value**. Every
+enforcement layer branches on `decision === 'deny'`, so a new variant would fail
+_open_; the field keeps the fail-closed default and only enriches the message.
+
+**Two legs, two notices.** The approver differs per leg, so the recovery advice
+must too — telling a scoop to wait for a human who was never prompted is wrong:
+
+| `reason`       | Which leg expired | What the agent is told                                     |
+| -------------- | ----------------- | ---------------------------------------------------------- |
+| `user-timeout` | cone → user       | the user was not there; report it and wait for them        |
+| `cone-timeout` | scoop → cone      | the cone never resolved it; no human was prompted, move on |
+
+Every gate renders both through one helper, `sudoRefusalMessage(prefix, decision)`,
+so denial and timeout wording can never drift apart:
 
 | Layer                        | Denied                         | Timed out                                     |
 | ---------------------------- | ------------------------------ | --------------------------------------------- |
@@ -184,15 +194,19 @@ message. Each layer reports "unanswered" rather than "refused":
 | `SudoFS`                     | `EACCES sudo: approval denied` | `EACCES sudo: approval request timed out — …` |
 | `secret` command             | `secret: approval denied`      | `secret: approval request timed out — …`      |
 
-The shared tail is `SUDO_TIMEOUT_NOTICE`, written for the model: it states that
-no answer arrived, that this is _not_ a denial, and that the action must not be
-retried — an immediate re-request would just block the next turn for another
-five minutes.
+**Cancellation.** Settling the caller is not enough on its own. Each broker does
+pre-prompt work — an LLM `suggest` call for the "Always" pattern, transport setup
+— _before_ it raises the native surface. If that work outlives the budget and
+then recovers, an un-cancelled broker would pop a brand-new dialog for an action
+the agent abandoned minutes ago. So `withApprovalTimeout` aborts an `AbortSignal`
+(`SudoRequestOptions.signal`) before it resolves the caller; every broker passes
+it to `suggest`, re-checks `signal.aborted` before prompting, and the HTTP broker
+also hands it to `fetch` so the in-flight POST is cancelled.
 
-Known limitation: there is no cancel channel to the native surface, so a dialog
-already on screen stays there. A gesture that lands after the timeout is logged
-and discarded, including an "Always" grant (the enforcement layer that owns the
-persist sink has already moved on).
+Known limitation: a dialog _already on screen_ when the budget expires stays
+there — there is no cancel channel to `window.confirm` or an OS dialog. A gesture
+that lands after the timeout is logged and discarded, including an "Always" grant
+(the enforcement layer that owns the persist sink has already moved on).
 
 #### Scope of the "unforgeable gesture" guarantee
 
@@ -243,8 +257,9 @@ FS/shell sees a regular `SudoBroker` built by `createConeApprovalBroker` whose
 `requestApproval` enqueues into the same registry as the explicit tool. Both
 paths resolve fail-closed (`deny`) on transport error, scoop drop, orchestrator
 shutdown, or the per-request timeout (`CONE_SUDO_TIMEOUT_MS`). The timeout path
-tags its decision `reason: 'timeout'` so the scoop is told its request went
-unanswered rather than refused — same contract as the cone → user leg above.
+tags its decision `reason: 'cone-timeout'` so the scoop is told its escalation
+went unanswered rather than refused — and, unlike the cone → user leg, is not
+told to wait for a user who was never prompted.
 
 "Always" grants for `kind: 'command' | 'read' | 'write'` are persisted via
 `SudoManager.appendScoopRule(folder, kind, pattern)` (raw-VFS write, same trusted

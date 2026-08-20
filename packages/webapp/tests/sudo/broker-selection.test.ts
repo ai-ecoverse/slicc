@@ -100,7 +100,7 @@ describe('createSudoBroker selection', () => {
       delegateId = null;
       const pending = createSudoBroker().requestApproval({ kind: 'command', detail: 'git push' });
       await vi.advanceTimersByTimeAsync(USER_SUDO_TIMEOUT_MS);
-      await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'timeout' });
+      await expect(pending).resolves.toEqual({ decision: 'deny', reason: 'user-timeout' });
     } finally {
       vi.useRealTimers();
     }

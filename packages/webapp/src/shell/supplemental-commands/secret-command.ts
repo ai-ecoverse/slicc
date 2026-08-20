@@ -3,9 +3,9 @@ import type { Command, CommandContext, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { isValidShellEnvName } from '../../base/shell-env-name.js';
 import { commandGlobToRegExp } from '../../base/sudoers.js';
-import { isTimedOut, SUDO_TIMEOUT_NOTICE } from '../../sudo/approval-timeout.js';
+import { sudoRefusalMessage } from '../../sudo/approval-timeout.js';
 import { createSudoBroker } from '../../sudo/index.js';
-import type { SudoBroker } from '../../sudo/types.js';
+import type { SudoBroker, SudoDecision } from '../../sudo/types.js';
 import { resolveFloatTopology } from '../float-topology.js';
 import { type ByteString, stdinAsText } from '../just-bash-compat.js';
 import { createDefaultSecretBackend, type SecretBackend } from './secret-backends.js';
@@ -118,11 +118,12 @@ export interface SecretCommandDeps {
 }
 
 /**
- * Outcome of one intrinsic gate. `'timeout'` is kept apart from `'denied'` so
- * the agent is told nobody answered rather than that the user refused — see
- * {@link SUDO_TIMEOUT_NOTICE}.
+ * Outcome of one intrinsic gate: `'ok'` to proceed, otherwise the decision that
+ * blocked it. The decision is carried (not flattened to a boolean) so the
+ * message can distinguish a refusal from an unanswered request — see
+ * `sudoRefusalMessage`.
  */
-type GateOutcome = 'ok' | 'denied' | 'timeout';
+type GateOutcome = 'ok' | SudoDecision;
 
 interface SecretCmdEnv {
   backend: SecretBackend;
@@ -131,12 +132,8 @@ interface SecretCmdEnv {
   injectMaskedEnv: (name: string) => Promise<void>;
 }
 
-function refused(outcome: GateOutcome): ExecResult {
-  const message =
-    outcome === 'timeout'
-      ? `secret: approval request timed out — ${SUDO_TIMEOUT_NOTICE}`
-      : 'secret: approval denied';
-  return { stdout: '', stderr: `${message}\n`, exitCode: 1 };
+function refused(decision: SudoDecision): ExecResult {
+  return { stdout: '', stderr: `${sudoRefusalMessage('secret', decision)}\n`, exitCode: 1 };
 }
 
 function buildEnv(deps: SecretCommandDeps): SecretCmdEnv {
@@ -161,7 +158,7 @@ function buildEnv(deps: SecretCommandDeps): SecretCmdEnv {
       detail: `${OP_LABEL[op]}: ${name}`,
       suggestedPattern: pattern,
     });
-    if (decision.decision === 'deny') return isTimedOut(decision) ? 'timeout' : 'denied';
+    if (decision.decision === 'deny') return decision;
     if (decision.decision === 'always') {
       // Only store an edited pattern when it actually matches this subject;
       // otherwise fall back to the exact pattern so we never persist a silent
