@@ -43,6 +43,7 @@ import type {
   RealmKind,
   RealmMountPoint,
 } from './realm-types.js';
+import { isSyncSabSupported, SAB_DEFAULT_WINDOW_BYTES, SAB_HEADER_BYTES } from './sync-sab-wire.js';
 
 // ---------------------------------------------------------------------------
 // Realm abstraction
@@ -58,6 +59,14 @@ export interface Realm {
   readonly controlPort: RealmPortLike;
   /** Synchronous hard-stop. Idempotent. */
   terminate(): void;
+  /**
+   * `true` when the realm executes on its OWN thread (a `DedicatedWorker`),
+   * i.e. it may block in `Atomics.wait` without stalling the kernel. Only such
+   * realms get the SharedArrayBuffer sync bridge (#2043); the in-process test
+   * factory leaves this unset and keeps the SW / snapshot paths — a blocking
+   * wait on the kernel thread would deadlock against its own responder.
+   */
+  readonly isolatedThread?: boolean;
   /**
    * Optional: kernel-host can subscribe to abnormal realm ends. `error`
    * fires on an uncaught bootstrap error / worker crash; `messageerror`
@@ -152,6 +161,11 @@ export interface RunInRealmOptions {
    * today's snapshot behavior and is what the in-process test factory uses.
    */
   syncFsBridgeEnabled?: boolean;
+  /**
+   * Payload window size for the Atomics/SAB sync bridge (#2043); default
+   * `SAB_DEFAULT_WINDOW_BYTES`. Tests shrink it to exercise chunking.
+   */
+  syncSabBytes?: number;
 }
 
 export interface RealmResult {
@@ -194,12 +208,19 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
   // register each realm-spawned command as a real PM process (parented to
   // THIS realm's pid, so a signal to the realm fans out to its children)
   // and a `kill` op can signal it. See `realm-host.ts` dispatchExecStart.
+  // Atomics/SAB fast path (#2043): on a cross-origin-isolated leader a realm
+  // that owns its thread gets a shared buffer and blocks on it directly —
+  // no Service Worker in the loop, so the SW-confirmation gate
+  // (`syncFsBridgeEnabled`) is not required to mint its token. Everywhere
+  // else the SW transport (when confirmed) or the snapshot remains.
+  const syncSab = realm.isolatedThread ? allocateSyncSab(opts.syncSabBytes) : undefined;
   const host: RealmHostHandle = attachRealmHost(realm.controlPort, opts.ctx, {
     ...(opts.owner.scoopJid !== undefined ? { scoopJid: opts.owner.scoopJid } : {}),
     pm: opts.pm,
     owner: opts.owner,
     ppid: proc.pid,
-    syncFsBridgeEnabled: opts.syncFsBridgeEnabled,
+    syncFsBridgeEnabled: Boolean(opts.syncFsBridgeEnabled) || syncSab !== undefined,
+    ...(syncSab ? { syncSab } : {}),
   });
 
   return new Promise<RealmResult>((resolve) => {
@@ -310,7 +331,24 @@ export async function runInRealm(opts: RunInRealmOptions): Promise<RealmResult> 
       // Thread the minted sync-fs token (present only when the bridge is
       // enabled) so the realm can address its own ctx.fs over the SW bridge.
       ...(host.syncFsToken !== undefined ? { syncFsToken: host.syncFsToken } : {}),
+      ...(syncSab ? { syncSab } : {}),
     };
     realm.controlPort.postMessage(init);
   });
+}
+
+/**
+ * Allocate the per-realm shared buffer for the Atomics fast path, or
+ * `undefined` where `SharedArrayBuffer` is not constructible (a non-isolated
+ * document). Exported for tests.
+ */
+export function allocateSyncSab(windowBytes?: number): SharedArrayBuffer | undefined {
+  if (!isSyncSabSupported()) return undefined;
+  try {
+    return new SharedArrayBuffer(SAB_HEADER_BYTES + (windowBytes ?? SAB_DEFAULT_WINDOW_BYTES));
+  } catch {
+    // Constructor can still throw (quota, an isolation probe that lied):
+    // degrade to the SW / snapshot paths rather than failing the run.
+    return undefined;
+  }
 }

@@ -131,9 +131,27 @@ works on every float — including embedded leaders (Cherry, spoon/Electron)
 that can never be isolated. The hosted leader document _is_ now
 cross-origin isolated via `Document-Isolation-Policy` (per-document, no
 COOP/COEP, SW control unaffected — see the `serveSPA` comment in
-`packages/cloudflare-worker/src/index.ts`), which makes an Atomics/SAB
-fast path a possible future perf lever where `crossOriginIsolated` is
-true; the SW sync-XHR path below remains the universal baseline:
+`packages/cloudflare-worker/src/index.ts`). Where `crossOriginIsolated` is
+true the bridges take the **Atomics/SharedArrayBuffer fast path** below; the
+SW sync-XHR path remains the universal baseline everywhere else:
+
+**Atomics/SAB fast path (isolated leaders, #2043)**: `realm-runner` allocates
+one `SharedArrayBuffer` per realm that owns its thread (`Realm.isolatedThread`
+— a `DedicatedWorker`; never the in-process factory, which would deadlock
+against its own responder) and hands it over in `RealmInitMsg.syncSab`. The
+realm (`realm/sync-sab-bridge.ts`) posts the structured request on its control
+port and blocks in `Atomics.wait`; the kernel-side `realm/sync-sab-responder.ts`
+— attached to the same port by `attachRealmHost` — runs it through the SAME
+token-scoped `dispatchSyncFs` / `dispatchSyncExec` as the SW route (identical
+ACL, sudo, errno), writes the encoded result into the shared window and
+`Atomics.notify`s. Results larger than the window stream in rounds
+(`sync-sab-next`), one post per chunk, so the kernel never blocks and needs no
+`Atomics.waitAsync`. The body carries no token: the port is private to one
+realm, so the responder binds the host-minted token itself. Layout + encode/
+decode live in the dependency-free `realm/sync-sab-wire.ts`. On this path the
+SW-confirmation gate (`syncFsBridgeEnabled`) is not required to mint the realm's
+token — the SAB is the transport — and `ENOSYNC` never reaches user code: every
+over-cap or post-snapshot read falls through to a live, unbounded, chunked read.
 
 **Fast path**: an in-memory snapshot of up to 500 files / 1 MB total / 10 MB
 per file, warm-populated at realm start. Reads that hit the snapshot return

@@ -54,6 +54,12 @@ import { createSkillGlobal, type SkillFsBridge } from './skill-global.js';
 import { createSyncExecXhrBridge, type SyncExecXhrBridge } from './sync-exec-xhr-bridge.js';
 import { SyncFsCache, type SyncFsSnapshot } from './sync-fs-cache.js';
 import { createSyncFsXhrBridge, type SyncFsXhrMutatingBridge } from './sync-fs-xhr-bridge.js';
+import {
+  createSyncExecSabTransport,
+  createSyncFsSabBridge,
+  createSyncSabTransport,
+  type SyncSabTransport,
+} from './sync-sab-bridge.js';
 
 /**
  * Request the `vfs.snapshot` RPC and build the {@link SyncFsCache} it backs.
@@ -106,8 +112,28 @@ function syncFsSnapshotErrorSink(
  * absent (default / in-process tests / boot-before-control) → `undefined` →
  * the bounded snapshot fallback. See `sync-fs-xhr-bridge.ts` + the plan.
  */
-function resolveSyncFsBridge(init: RealmInitMsg): SyncFsXhrMutatingBridge | undefined {
+function resolveSyncFsBridge(
+  init: RealmInitMsg,
+  sab: SyncSabTransport | undefined
+): SyncFsXhrMutatingBridge | undefined {
+  if (sab) return createSyncFsSabBridge(sab);
   return init.syncFsToken ? createSyncFsXhrBridge(init.syncFsToken) : undefined;
+}
+
+/**
+ * The Atomics/SAB transport (#2043) when the host handed us a shared buffer —
+ * only ever on a cross-origin-isolated leader for a realm on its own thread
+ * (`Realm.isolatedThread`); `Atomics.wait` is otherwise unavailable or a
+ * deadlock. The SW sync-XHR path stays the universal baseline.
+ */
+function resolveSyncSabTransport(
+  init: RealmInitMsg,
+  port: RealmPortLike
+): SyncSabTransport | undefined {
+  if (!init.syncSab || typeof Atomics === 'undefined' || typeof Atomics.wait !== 'function') {
+    return undefined;
+  }
+  return createSyncSabTransport(init.syncSab, port);
 }
 
 /**
@@ -120,16 +146,19 @@ function resolveSyncFsBridge(init: RealmInitMsg): SyncFsXhrMutatingBridge | unde
  */
 function installSyncBridges(
   init: RealmInitMsg,
+  port: RealmPortLike,
   syncFs: SyncFsCache,
   fsBridge: object,
   stdio: RealmStdioBridge
 ): SyncExecXhrBridge | undefined {
-  const syncFsXhr = resolveSyncFsBridge(init);
+  const sab = resolveSyncSabTransport(init, port);
+  const syncFsXhr = resolveSyncFsBridge(init, sab);
   Object.assign(fsBridge, createSyncFsBridge(syncFs, init.cwd, syncFsXhr, stdio));
   if (!init.syncFsToken) return undefined;
   return createSyncExecXhrBridge(init.syncFsToken, {
     syncFs,
     ...(syncFsXhr ? { fsBridge: syncFsXhr } : {}),
+    ...(sab ? { transport: createSyncExecSabTransport(sab) } : {}),
   });
 }
 
@@ -233,7 +262,7 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
   const fsBridge = createFsBridge(rpc, realmFetch, stdio);
 
   const syncFs = await initSyncFsCache(rpc, init.cwd, syncFsSnapshotErrorSink(init, writeStderr));
-  const syncExecBridge = installSyncBridges(init, syncFs, fsBridge, stdio);
+  const syncExecBridge = installSyncBridges(init, port, syncFs, fsBridge, stdio);
 
   const execBridge = createExecBridge(rpc, syncFs, init.cwd, writeStderr);
   const agentModule = createSliccyAgentModule(execBridge, { cwd: init.cwd });
