@@ -901,6 +901,9 @@ struct ConversationView: View {
                 toolUICards: appState.toolUICards,
                 openApprovals: appState.openApprovals,
                 onOpenApprovalDecision: appState.resolveOpenApproval,
+                sudoApprovals: appState.sudoApprovals,
+                sudoAllowAlways: AppState.deviceOwnerAuthAvailable(),
+                onSudoApprovalDecision: appState.resolveSudoApproval,
                 onInlineSprinkleLick: { body, target in
                     appState.sendSprinkleLick("inline", body: body, targetScoop: target)
                 },

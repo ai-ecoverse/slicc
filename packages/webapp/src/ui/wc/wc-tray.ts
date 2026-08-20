@@ -440,10 +440,16 @@ export function createLeaderOptionsFactory(
     onCherryHostEvent: (runtimeId, name, detail) =>
       client.sendCherryHostEvent(runtimeId, name, detail),
     onPreviewLick: (event) => client.sendPreviewLick(event),
-    requestTranscriptExportApproval: (request) =>
-      import('./wc-transcript-export.js').then(({ openTranscriptExportApproval }) =>
-        openTranscriptExportApproval(request)
-      ),
+    // Follower-originated gates (transcript export) are sudo actions (#2062):
+    // the kernel checks `NOPASSWD Export` grants, routes the prompt to the
+    // human — possibly straight back here as a tray delegation — and persists
+    // "Always". `followerLabel`/`hostOrigin` are informational.
+    requestSudoApproval: (request) =>
+      client.requestSudoApproval({
+        kind: request.kind,
+        detail: request.detail,
+        ...(request.suggestedPattern ? { suggestedPattern: request.suggestedPattern } : {}),
+      }),
     createTranscriptExport: async (selector, signal) => {
       const { runTranscriptExportForFollower } = await import('./wc-transcript-export.js');
       return runTranscriptExportForFollower(selector, signal, client);
@@ -495,6 +501,8 @@ export function createLeaderOptionsFactory(
   });
 }
 
+let leaderTurnEndUnsubscribe: (() => void) | null = null;
+
 /** Leader-only hooks: shell `host` command surfaces + broadcast taps. */
 function createLeaderHookSetup(
   deps: WcTrayDeps,
@@ -502,6 +510,23 @@ function createLeaderHookSetup(
 ): { wireLeaderHooks(handle: PageLeaderTrayHandle): void; clearLeaderHooks(): void } {
   return {
     wireLeaderHooks: (handle) => {
+      // The page-realm sudo service asks the leader whether a follower's
+      // human should answer a prompt instead of the local dialog (#2062).
+      void import('../../sudo/page-approval-service.js').then(({ setSudoTrayDelegate }) =>
+        setSudoTrayDelegate({
+          shouldDelegate: () => handle.sync.shouldDelegateSudo(),
+          requestApproval: (req) => handle.sync.delegateSudoApproval(req),
+        })
+      );
+      // Wake suspended phones when a turn lands (metadata only; no-op until an
+      // iOS follower registered a push token this session).
+      const offTurnEnd = deps.agentHandle.onEvent((event) => {
+        if (event.type === 'turn_end') {
+          const jid = deps.getSelectedJid();
+          handle.sync.notifyTurnEnd(jid === 'cone' ? 'SLICC' : jid);
+        }
+      });
+      leaderTurnEndUnsubscribe = offTurnEnd;
       setConnectedFollowersGetter(() => getLeaderConnectedFollowers(handle));
       setTrayResetter(() => handle.reset());
       // Page-realm teleport selection: the kernel-worker realm covers itself
@@ -541,6 +566,11 @@ function createLeaderHookSetup(
         .catch((err) => deps.log.error('failed to install tray theme sync', err));
     },
     clearLeaderHooks: () => {
+      void import('../../sudo/page-approval-service.js').then(({ setSudoTrayDelegate }) =>
+        setSudoTrayDelegate(null)
+      );
+      leaderTurnEndUnsubscribe?.();
+      leaderTurnEndUnsubscribe = null;
       setConnectedFollowersGetter(null);
       writeConnectedFollowersToShim([]);
       setTrayResetter(null);

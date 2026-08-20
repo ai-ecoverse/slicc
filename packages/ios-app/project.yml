@@ -49,6 +49,9 @@ targets:
             CFBundleURLSchemes: [slicc]
           - CFBundleURLName: com.sliccy.follower.open-callback
             CFBundleURLSchemes: [slicc-open-callback]
+        # Remote pushes (turn_end + time-sensitive sudo_request, #2062) reach
+        # a suspended app only with this mode declared.
+        UIBackgroundModes: [remote-notification]
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower
@@ -68,6 +71,7 @@ targets:
         INFOPLIST_KEY_NSCameraUsageDescription: 'Take a photo to attach it to your message.'
         INFOPLIST_KEY_NSMicrophoneUsageDescription: 'Hold the message field to dictate a message with your voice.'
         INFOPLIST_KEY_NSSpeechRecognitionUsageDescription: 'Dictated audio is transcribed on this device when possible to fill the message field.'
+        INFOPLIST_KEY_NSFaceIDUsageDescription: 'Face ID confirms it is you before an agent action you approve is allowed to run.'
         INFOPLIST_KEY_ITSAppUsesNonExemptEncryption: NO
         # iCloud KVS for tray-session discovery. The App Store provisioning
         # profile must carry the iCloud capability; dev/simulator builds
@@ -85,6 +89,8 @@ targets:
       - sdk: WebKit.framework
       - sdk: AVFoundation.framework
       - sdk: CoreMotion.framework
+      - sdk: LocalAuthentication.framework
+      - sdk: UserNotifications.framework
   SliccFileProvider:
     type: app-extension
     supportedDestinations: [iOS]

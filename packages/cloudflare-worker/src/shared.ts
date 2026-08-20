@@ -117,6 +117,19 @@ export interface PreviewRecord {
   totalBytes?: number;
 }
 
+/**
+ * One registered push device (issue #2062). Keyed by the APNs token in
+ * `TrayRecord.pushTokens`; the DO forgets it when APNs says the token is dead
+ * or when the tray record is pruned. The leader never sees tokens.
+ */
+export interface PushTokenRecord {
+  platform: 'ios';
+  environment: 'sandbox' | 'production';
+  /** Follower bootstrap id that registered it (informational). */
+  bootstrapId: string;
+  registeredAt: string;
+}
+
 export interface TrayRecord {
   trayId: string;
   createdAt: string;
@@ -138,6 +151,8 @@ export interface TrayRecord {
    * `TRAY_EXPIRED` forever — the old tray's leader socket will never come back.
    */
   supersededByJoinUrl?: string;
+  /** Push devices to wake for `turn_end` / `sudo_request` (issue #2062). */
+  pushTokens?: Record<string, PushTokenRecord>;
 }
 
 export interface CreateTrayRequest {

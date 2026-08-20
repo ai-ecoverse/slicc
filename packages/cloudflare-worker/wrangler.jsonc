@@ -65,6 +65,9 @@
   // Secrets must be set via: npx wrangler secret put <SECRET_NAME>
   // - CLOUDFLARE_TURN_API_TOKEN
   // - GITHUB_CLIENT_SECRET
+  // - APNS_TEAM_ID / APNS_KEY_ID / APNS_PRIVATE_KEY (.p8 PEM) / APNS_TOPIC
+  //   (iOS follower push for turn_end + sudo_request, #2062; all four or
+  //   pushing is disabled and `push.send` is a no-op)
   "durable_objects": {
     "bindings": [
       {

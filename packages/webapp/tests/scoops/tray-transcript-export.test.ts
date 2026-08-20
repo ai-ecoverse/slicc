@@ -20,7 +20,12 @@ import type {
 } from '../../src/scoops/tray-sync-protocol.js';
 import { CHERRY_RUNTIME_TAG } from '../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../src/scoops/tray-webrtc.js';
+import type { SudoDecision } from '../../src/sudo/types.js';
 import type { ExportSpool } from '../../src/transcript/export-spool.js';
+
+/** The export gate is a sudo action (#2062): allow/deny verdicts stand in for the old booleans. */
+const ALLOW: SudoDecision = { decision: 'allow' };
+const DENY: SudoDecision = { decision: 'deny' };
 
 // ---------------------------------------------------------------------------
 // Fake data channel with backpressure simulation
@@ -116,14 +121,14 @@ function createLeaderManager(overrides?: Partial<LeaderSyncManagerOptions>): {
   manager: LeaderSyncManager;
   approval: ReturnType<typeof vi.fn>;
 } {
-  const approval = vi.fn().mockResolvedValue(true);
+  const approval = vi.fn().mockResolvedValue(ALLOW);
   const options: LeaderSyncManagerOptions = {
     sendControl: () => {},
     getMessages: () => [],
     getScoopJid: () => 'cone',
     onFollowerMessage: vi.fn(),
     onFollowerAbort: vi.fn(),
-    requestTranscriptExportApproval: approval,
+    requestSudoApproval: approval,
     createTranscriptExport: vi
       .fn()
       .mockResolvedValue(makeZipResult([new Uint8Array([1, 2, 3, 4])])),
@@ -190,7 +195,7 @@ describe('Leader: transcript export approval', () => {
 
   it('sends denied without metadata when user denies', async () => {
     const { manager } = createLeaderManager({
-      requestTranscriptExportApproval: vi.fn().mockResolvedValue(false),
+      requestSudoApproval: vi.fn().mockResolvedValue(DENY),
     });
     const ch = new FakeChannel();
     manager.addFollower('b1', ch);
@@ -221,8 +226,8 @@ describe('Leader: transcript export approval', () => {
   });
 
   it('derives follower identity from connected state, not request payload', async () => {
-    const approval = vi.fn().mockResolvedValue(true);
-    const { manager } = createLeaderManager({ requestTranscriptExportApproval: approval });
+    const approval = vi.fn().mockResolvedValue(ALLOW);
+    const { manager } = createLeaderManager({ requestSudoApproval: approval });
     const ch = new FakeChannel();
     manager.addFollower('b1', ch, { runtime: 'slicc-standalone' });
 
@@ -238,18 +243,17 @@ describe('Leader: transcript export approval', () => {
     expect(call).toBeDefined();
     // followerLabel derived from the connected meta runtime, not from the message
     expect(call.followerLabel).toContain('standalone');
-    // requestId forwarded
-    expect(call.requestId).toBe('r3');
-    // selector forwarded
-    expect(call.selector).toEqual({ kind: 'active' });
+    // The gate is a sudo action (#2062): kind + sudoers subject, not the raw selector
+    expect(call.kind).toBe('export');
+    expect(call.detail).toBe('active');
   });
 
   it('is one-use: a second request with same ID is ignored', async () => {
     let approvalCount = 0;
     const { manager } = createLeaderManager({
-      requestTranscriptExportApproval: vi.fn().mockImplementation(() => {
+      requestSudoApproval: vi.fn().mockImplementation(() => {
         approvalCount++;
-        return Promise.resolve(true);
+        return Promise.resolve(ALLOW);
       }),
     });
     const ch = new FakeChannel();
@@ -387,7 +391,7 @@ describe('Leader: cancellation', () => {
 
   it('cleans up AbortController on every exit path', async () => {
     const { manager } = createLeaderManager({
-      requestTranscriptExportApproval: vi.fn().mockResolvedValue(false),
+      requestSudoApproval: vi.fn().mockResolvedValue(DENY),
     });
     const ch = new FakeChannel();
     manager.addFollower('b1', ch);
@@ -899,9 +903,9 @@ describe('Security: cross-follower cancel attack', () => {
   it('requestId replay collision from different follower does not block second follower', async () => {
     let approvalCalls = 0;
     const { manager } = createLeaderManager({
-      requestTranscriptExportApproval: vi.fn().mockImplementation(() => {
+      requestSudoApproval: vi.fn().mockImplementation(() => {
         approvalCalls++;
-        return Promise.resolve(true);
+        return Promise.resolve(ALLOW);
       }),
       createTranscriptExport: vi.fn().mockResolvedValue(makeZipResult([new Uint8Array([1])])),
     });
@@ -944,9 +948,9 @@ describe('Leader: Cherry hostOrigin derivation', () => {
   afterEach(() => vi.clearAllMocks());
 
   it('derives hostOrigin from cherry target URL for Cherry followers', async () => {
-    const approval = vi.fn().mockResolvedValue(true);
+    const approval = vi.fn().mockResolvedValue(ALLOW);
     const { manager } = createLeaderManager({
-      requestTranscriptExportApproval: approval,
+      requestSudoApproval: approval,
     });
     const ch = new FakeChannel();
     // Add follower with the Cherry runtime tag
@@ -981,9 +985,9 @@ describe('Leader: Cherry hostOrigin derivation', () => {
   });
 
   it('does not pass hostOrigin for non-Cherry followers', async () => {
-    const approval = vi.fn().mockResolvedValue(true);
+    const approval = vi.fn().mockResolvedValue(ALLOW);
     const { manager } = createLeaderManager({
-      requestTranscriptExportApproval: approval,
+      requestSudoApproval: approval,
     });
     const ch = new FakeChannel();
     manager.addFollower('standalone-b1', ch, { runtime: 'slicc-standalone' });
@@ -1001,9 +1005,9 @@ describe('Leader: Cherry hostOrigin derivation', () => {
   });
 
   it('omits hostOrigin when cherry target URL is malformed', async () => {
-    const approval = vi.fn().mockResolvedValue(true);
+    const approval = vi.fn().mockResolvedValue(ALLOW);
     const { manager } = createLeaderManager({
-      requestTranscriptExportApproval: approval,
+      requestSudoApproval: approval,
     });
     const ch = new FakeChannel();
     manager.addFollower('cherry-b2', ch, { runtime: CHERRY_RUNTIME_TAG });
@@ -1126,11 +1130,11 @@ describe('Leader: per-follower concurrency cap', () => {
 
   it('auto-denies a second concurrent export request from the same follower', async () => {
     // First request blocks in approval so the second arrives while first is pending
-    let resolveApproval: (v: boolean) => void = () => {};
+    let resolveApproval: (v: SudoDecision) => void = () => {};
     const { manager } = createLeaderManager({
-      requestTranscriptExportApproval: vi.fn().mockImplementation(
+      requestSudoApproval: vi.fn().mockImplementation(
         () =>
-          new Promise<boolean>((res) => {
+          new Promise<SudoDecision>((res) => {
             resolveApproval = res;
           })
       ),
@@ -1173,7 +1177,7 @@ describe('Leader: per-follower concurrency cap', () => {
     expect(exportFlow).toHaveLength(0);
 
     // Clean up: resolve the first approval
-    resolveApproval(false);
+    resolveApproval(DENY);
   });
 });
 
@@ -1185,9 +1189,9 @@ describe('Leader: approval throw and empty-ZIP', () => {
   beforeEach(() => resetLoggerDedupForTests());
   afterEach(() => vi.clearAllMocks());
 
-  it('sends denied when requestTranscriptExportApproval throws', async () => {
+  it('sends denied when requestSudoApproval throws', async () => {
     const { manager } = createLeaderManager({
-      requestTranscriptExportApproval: vi.fn().mockRejectedValue(new Error('dialog crashed')),
+      requestSudoApproval: vi.fn().mockRejectedValue(new Error('dialog crashed')),
     });
     const ch = new FakeChannel();
     manager.addFollower('b1', ch);
@@ -1662,9 +1666,9 @@ describe('Leader: composite export key (wave 2)', () => {
   it('still blocks the same follower sending duplicate requestId', async () => {
     let approvalCount = 0;
     const { manager } = createLeaderManager({
-      requestTranscriptExportApproval: vi.fn().mockImplementation(async () => {
+      requestSudoApproval: vi.fn().mockImplementation(async () => {
         approvalCount++;
-        return true;
+        return ALLOW;
       }),
     });
     const ch = new FakeChannel();

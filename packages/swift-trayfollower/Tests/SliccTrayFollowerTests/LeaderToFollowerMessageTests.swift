@@ -449,7 +449,6 @@ final class LeaderToFollowerMessageTests: XCTestCase {
             "transcript.export.chunk",
             "transcript.export.complete",
             "transcript.export.error",
-            "transcript.export.approve.request",
         ]
         for type in types {
             guard case .unknown(let decoded) = try WireCodec.decode(LeaderToFollowerMessage.self, from: #"{"type":"\#(type)"}"#) else {

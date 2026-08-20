@@ -8,7 +8,12 @@ import type {
   LeaderToFollowerMessage,
 } from '../../../src/scoops/tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../../../src/scoops/tray-webrtc.js';
+import type { SudoDecision } from '../../../src/sudo/types.js';
 import type { TranscriptZipResult } from '../../../src/transcript/zip-stream.js';
+
+/** The export gate is a sudo action (#2062): allow/deny verdicts stand in for the old booleans. */
+const ALLOW: SudoDecision = { decision: 'allow' };
+const DENY: SudoDecision = { decision: 'deny' };
 
 class FakeChannel implements TrayDataChannelLike {
   readyState = 'open';
@@ -65,7 +70,7 @@ describe('LeaderSyncManager follower disconnect integration', () => {
       onFollowerAbort: vi.fn(),
       sendControl: vi.fn(),
       onRemoteTransportsCleaned: () => order.push('cdp'),
-      requestTranscriptExportApproval: vi.fn().mockResolvedValue(true),
+      requestSudoApproval: vi.fn().mockResolvedValue(ALLOW),
       createTranscriptExport: vi.fn((_selector, signal) => {
         signal.addEventListener('abort', () => order.push('transcript'), { once: true });
         markTranscriptStarted();

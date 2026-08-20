@@ -10,7 +10,7 @@
  * prompt must settle as a timeout instead of blocking the agent forever).
  */
 
-import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
 
 /** Never-settling approval: stands in for a prompt nobody answers. */
 const sentinel = (id: string) => ({
@@ -27,6 +27,16 @@ vi.mock('../../src/sudo/panel-rpc-broker.js', () => ({
 vi.mock('../../src/sudo/http-broker.js', () => ({
   createHttpSudoBroker: vi.fn(() => sentinel('http')),
 }));
+// The HTTP broker is wrapped tray-first (#2062) so the page can hand the
+// prompt to a tray follower before the OS dialog fires; the wrapper tags the
+// inner id so the selection assertions below stay about the inner broker.
+vi.mock('../../src/sudo/tray-first-broker.js', () => ({
+  createTrayFirstSudoBroker: vi.fn((inner: { __id: string }) => ({
+    requestApproval: vi.fn(),
+    __id: inner.__id,
+    __trayFirst: true,
+  })),
+}));
 
 let delegateId: string | null = null;
 vi.mock('../../src/shell/proxied-fetch.js', () => ({
@@ -37,6 +47,7 @@ import { USER_SUDO_TIMEOUT_MS } from '../../src/sudo/approval-timeout.js';
 import { createExtensionSudoBroker } from '../../src/sudo/extension-broker.js';
 import { createHttpSudoBroker } from '../../src/sudo/http-broker.js';
 import { createSudoBroker } from '../../src/sudo/index.js';
+import { createTrayFirstSudoBroker } from '../../src/sudo/tray-first-broker.js';
 import { createPanelRpcSudoBroker } from '../../src/sudo/panel-rpc-broker.js';
 
 const ORIGINAL_CHROME = (globalThis as { chrome?: unknown }).chrome;
@@ -73,13 +84,16 @@ describe('createSudoBroker selection', () => {
     expect(createHttpSudoBroker).not.toHaveBeenCalled();
   });
 
-  it('falls back to the HTTP broker when no chrome and no delegate id', () => {
+  it('falls back to the tray-first-wrapped HTTP broker when no chrome and no delegate id', () => {
     setChrome(undefined);
     delegateId = null;
     createSudoBroker();
     expect(createHttpSudoBroker).toHaveBeenCalledTimes(1);
     expect(createExtensionSudoBroker).not.toHaveBeenCalled();
     expect(createPanelRpcSudoBroker).not.toHaveBeenCalled();
+    // The HTTP broker is the one handed to the tray-first wrapper (#2062).
+    expect(createTrayFirstSudoBroker).toHaveBeenCalledTimes(1);
+    expect((createTrayFirstSudoBroker as Mock).mock.calls[0]?.[0]).toMatchObject({ __id: 'http' });
   });
 
   it('keeps the HTTP broker for a non-extension page realm even with a delegate id', () => {

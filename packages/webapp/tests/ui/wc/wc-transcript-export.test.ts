@@ -6,7 +6,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { TranscriptZipResult } from '../../../src/transcript/zip-stream.js';
 import {
   downloadTranscriptBlob,
-  openTranscriptExportApproval,
   transcriptZipToBlob,
 } from '../../../src/ui/wc/wc-transcript-export.js';
 
@@ -146,92 +145,5 @@ describe('downloadTranscriptBlob', () => {
     expect(document.querySelectorAll('a[data-transcript-dl]').length).toBe(0);
 
     clickSpy.mockRestore();
-  });
-});
-
-describe('openTranscriptExportApproval', () => {
-  beforeEach(() => {
-    document.body.innerHTML = '';
-  });
-
-  const dialog = (): HTMLElement | null => document.querySelector('slicc-dialog');
-  const button = (label: string): HTMLButtonElement | undefined =>
-    [...document.querySelectorAll('button')].find((b) => b.textContent === label);
-
-  it('resolves true on "Allow once" and removes the dialog', async () => {
-    const promise = openTranscriptExportApproval({ selector: { kind: 'active' } });
-    button('Allow once')?.click();
-    expect(await promise).toBe(true);
-    expect(dialog()).toBeNull();
-  });
-
-  it('resolves false on "Deny"', async () => {
-    const promise = openTranscriptExportApproval({ selector: { kind: 'active' } });
-    button('Deny')?.click();
-    expect(await promise).toBe(false);
-  });
-
-  it('closes and denies when the signal aborts (leader timeout / cancel)', async () => {
-    const controller = new AbortController();
-    const promise = openTranscriptExportApproval({
-      selector: { kind: 'active' },
-      signal: controller.signal,
-    });
-    expect(dialog()).not.toBeNull();
-
-    controller.abort();
-
-    expect(await promise).toBe(false);
-    // The element must be gone so a later click cannot reach it.
-    expect(dialog()).toBeNull();
-  });
-
-  it('never opens a dialog for an already-aborted signal', async () => {
-    const controller = new AbortController();
-    controller.abort();
-    const promise = openTranscriptExportApproval({
-      selector: { kind: 'active' },
-      signal: controller.signal,
-    });
-    expect(await promise).toBe(false);
-    expect(dialog()).toBeNull();
-  });
-
-  it('ignores a late click after an abort', async () => {
-    const controller = new AbortController();
-    const promise = openTranscriptExportApproval({
-      selector: { kind: 'active' },
-      signal: controller.signal,
-    });
-    const allow = button('Allow once');
-    controller.abort();
-    allow?.click();
-    expect(await promise).toBe(false);
-  });
-
-  it('names the recipient per realm', async () => {
-    const text = async (
-      req: Parameters<typeof openTranscriptExportApproval>[0]
-    ): Promise<string> => {
-      const promise = openTranscriptExportApproval(req);
-      const body = document.body.textContent ?? '';
-      button('Deny')?.click();
-      await promise;
-      return body;
-    };
-
-    expect(await text({ selector: { kind: 'active' }, followerLabel: 'Chrome' })).toContain(
-      'The follower will receive'
-    );
-    expect(await text({ selector: { kind: 'active' }, delegated: true })).toContain(
-      'This device will download'
-    );
-    expect(
-      await text({
-        selector: { kind: 'active' },
-        delegated: true,
-        hostOrigin: 'https://shop.example',
-      })
-    ).toContain('The embedding page will receive');
   });
 });

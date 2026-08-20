@@ -33,6 +33,7 @@ Once you're in, you can:
 
 - Connect other browser windows or Electron apps into one shared session
 - Run leader-shell commands from the native iOS follower's Terminal tab, or ask the leader to open another iOS app after an on-device approval
+- Approve the agent's sudo requests from your iPhone with Face ID — including when the leader is running headless in the cloud — and get a push when a turn finishes or an approval is waiting
 - Install skills that teach the agent how to perform challenging tasks
 - Give it practical tools models already know how to use (`bash`, `git`, `node`, `python`, `playwright`)
 - Delegate parallel work to sub-agents so tasks get done faster

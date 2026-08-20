@@ -13,6 +13,7 @@ import type { AgentSpawnOptions, AgentSpawnResult } from '../scoops/agent-bridge
 import type { ChatMessage } from '../scoops/chat-types.js';
 import type { ScoopTabState } from '../scoops/types.js';
 import type { TerminalControlMsg, TerminalEventMsg } from '../shell/terminal-protocol.js';
+import type { SudoDecision, SudoRequest } from '../sudo/types.js';
 
 /**
  * Local mirror of `SprinkleSummary` from
@@ -180,6 +181,26 @@ export interface ScoopChatMessagesMsg {
 export interface RequestSessionStatsMsg {
   type: 'request-session-stats';
   requestId: string;
+}
+
+/**
+ * Panel → engine: gate an action through the kernel's sudo policy + broker
+ * (issue #2062). Used by the page-realm tray leader for follower-originated
+ * gates (transcript export). The kernel may route the prompt straight back to
+ * the page (tray delegation / in-page dialog) — the round trip is what keeps
+ * the policy check and the "Always" persistence in one place.
+ */
+export interface RequestSudoApprovalMsg {
+  type: 'request-sudo-approval';
+  requestId: string;
+  request: SudoRequest;
+}
+
+/** Reply to {@link RequestSudoApprovalMsg}. */
+export interface SudoApprovalMsg {
+  type: 'sudo-approval';
+  requestId: string;
+  decision: SudoDecision;
 }
 
 /** Reply to {@link RequestSessionStatsMsg}. */
@@ -763,6 +784,7 @@ export type PanelToOffscreenMessage =
   | RequestScoopTranscriptMsg
   | RequestScoopChatMessagesMsg
   | RequestSessionStatsMsg
+  | RequestSudoApprovalMsg
   | ClearChatMsg
   | AgentSpawnRequestMsg
   | AgentSpawnAbortMsg
@@ -1137,6 +1159,7 @@ export type OffscreenToPanelMessage =
   | ScoopTranscriptMsg
   | ScoopChatMessagesMsg
   | SessionStatsMsg
+  | SudoApprovalMsg
   | PanelCdpResponseMsg
   | OAuthResultMsg
   | TrayRuntimeStatusMsg

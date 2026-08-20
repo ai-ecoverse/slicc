@@ -49,7 +49,7 @@ Events arrive as `[<Event>: <name>]` with JSON body. **Navigate** (handoff): `ma
 
 ## Approvals (sudo)
 
-`/etc/sudoers` gates actions; deny → exit 1/`EACCES`. Rules: `Cmnd`/`Read`/`Write <glob>` (+`NOPASSWD`); "Always" → `/etc/sudoers.d/granted`. `sudo <cmd>` requests one. Scoops escalate via `sudo_request` (you resolve; `always` persists).
+`/etc/sudoers` gates actions; deny → exit 1/`EACCES`. `Cmnd`/`Read`/`Write`/`Export <glob>` (+`NOPASSWD`); "Always" → `sudoers.d/granted`. `sudo <cmd>` requests one. Scoops escalate via `sudo_request` (you resolve; `always` persists).
 
 ## Style
 

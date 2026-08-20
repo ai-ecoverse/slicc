@@ -9,7 +9,8 @@
  * here.
  */
 
-export type SudoKind = 'command' | 'read' | 'write' | 'secret';
+/** `export` = a follower's transcript export (issue #2062 folded it into sudo). */
+export type SudoKind = 'command' | 'read' | 'write' | 'secret' | 'export';
 
 /** Inbound request body for `POST /api/sudo-approve`. */
 export interface SudoApproveRequest {

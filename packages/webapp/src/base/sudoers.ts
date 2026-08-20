@@ -3,9 +3,10 @@
  *
  * Pure, framework-free module that loads and evaluates the SLICC sudoers
  * policy (`/etc/sudoers` + `/etc/sudoers.d/*` drop-ins). It parses `Cmnd`,
- * `Read`, and `Write` directives (plus `NOPASSWD`-tagged variants) and
- * answers two questions: does a command segment require approval, and does a
- * read/write to a path require approval. A hardcoded self-protection
+ * `Read`, `Write`, and `Export` directives (plus `NOPASSWD`-tagged variants)
+ * and answers three questions: does a command segment require approval, does
+ * a read/write to a path require approval, and is a transcript export
+ * pre-granted. A hardcoded self-protection
  * invariant always gates writes to the sudoers files themselves.
  *
  * No UI, no FS, no shell wiring — those live in their own tasks. It sits in
@@ -42,6 +43,14 @@ export interface SudoersPolicy {
   cmnd: SudoersRule[];
   read: SudoersRule[];
   write: SudoersRule[];
+  /**
+   * Transcript-export grants (`Export <glob>`), matched against the export
+   * subject (`active` or `frozen:<sessionId>`). Unlike the other directives
+   * an export is ALWAYS gated (there is no "no-match means ungated"): a
+   * `NOPASSWD Export` rule is the only way to skip the prompt. Plain
+   * `Export` rules are accepted for symmetry but change nothing.
+   */
+  export: SudoersRule[];
 }
 
 /** Path to the primary sudoers file (self-protected for writes). */
@@ -98,7 +107,7 @@ export function applyDefaultDisposition(
 
 /** An empty, self-protection-only policy (the fail-safe baseline). */
 export function emptyPolicy(): SudoersPolicy {
-  return { cmnd: [], read: [], write: [] };
+  return { cmnd: [], read: [], write: [], export: [] };
 }
 
 /** Escape a single literal character for use inside a RegExp. */
@@ -140,10 +149,29 @@ export function sanitizeGrantPattern(pattern: string): string {
   return pattern.split(/\r?\n/, 1)[0]?.trim() ?? '';
 }
 
-const DIRECTIVES = new Set(['Cmnd', 'Read', 'Write']);
+const DIRECTIVES = new Set(['Cmnd', 'Read', 'Write', 'Export']);
 
 /** Recognized directive keyword for a parsed rule. */
-type Directive = 'Cmnd' | 'Read' | 'Write';
+export type Directive = 'Cmnd' | 'Read' | 'Write' | 'Export';
+
+/**
+ * Sudoers directive for a sudo request kind. `secret` gates persist through
+ * the command table (`Cmnd`) like the `secret` shell command does today.
+ */
+export function directiveForKind(
+  kind: 'command' | 'read' | 'write' | 'secret' | 'export'
+): Directive {
+  switch (kind) {
+    case 'read':
+      return 'Read';
+    case 'write':
+      return 'Write';
+    case 'export':
+      return 'Export';
+    default:
+      return 'Cmnd';
+  }
+}
 
 interface ParsedLine {
   directive: Directive;
@@ -194,7 +222,12 @@ export function parseSudoers(text: string): SudoersPolicy {
         log.warn('Skipping unrecognized sudoers line', { line });
         continue;
       }
-      const compile = parsed.directive === 'Cmnd' ? commandGlobToRegExp : pathGlobToRegExp;
+      // Export subjects (`active`, `frozen:<id>`) are flat tokens like
+      // commands, so they share the command glob (no path-segment semantics).
+      const compile =
+        parsed.directive === 'Cmnd' || parsed.directive === 'Export'
+          ? commandGlobToRegExp
+          : pathGlobToRegExp;
       const rule: SudoersRule = {
         pattern: parsed.pattern,
         nopasswd: parsed.nopasswd,
@@ -202,6 +235,7 @@ export function parseSudoers(text: string): SudoersPolicy {
       };
       if (parsed.directive === 'Cmnd') policy.cmnd.push(rule);
       else if (parsed.directive === 'Read') policy.read.push(rule);
+      else if (parsed.directive === 'Export') policy.export.push(rule);
       else policy.write.push(rule);
     }
     return policy;
@@ -219,6 +253,7 @@ export function mergePolicies(...policies: SudoersPolicy[]): SudoersPolicy {
     merged.cmnd.push(...p.cmnd);
     merged.read.push(...p.read);
     merged.write.push(...p.write);
+    merged.export.push(...(p.export ?? []));
   }
   return merged;
 }
@@ -237,6 +272,17 @@ function resolve(rules: SudoersRule[], subject: string): MatchResult {
     }
   }
   return required ? 'require-approval' : 'no-match';
+}
+
+/**
+ * Match a transcript-export subject against the policy's `Export` rules.
+ * Exports are always gated, so the only two outcomes are `nopasswd-allow`
+ * (a matching grant — skip the prompt) and `require-approval`.
+ */
+export function matchExport(policy: SudoersPolicy, subject: string): MatchResult {
+  return resolve(policy.export ?? [], subject) === 'nopasswd-allow'
+    ? 'nopasswd-allow'
+    : 'require-approval';
 }
 
 /** Match a single command segment against the policy's `Cmnd` rules. */

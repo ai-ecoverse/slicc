@@ -505,8 +505,16 @@ export type PanelRpcRequest =
       // no `/api/sudo-approve`, so the broker bridges here instead of failing
       // closed. The request already carries the worker-computed
       // `suggestedPattern`. Mirrors the `proxied-fetch` worker→page delegate.
+      //
+      // `mode` (issue #2062): `'resolve'` (default) — the page MUST settle the
+      // request itself (tray delegation when applicable, else its native
+      // modal). `'tray-first'` — the page settles it only when it can do
+      // better than the worker's native broker (a tray follower's human is
+      // the right approver, or this float has no native dialog at all) and
+      // otherwise returns `handled: false` so the worker falls through to
+      // its own broker (node-server OS dialog, extension panel confirm).
       op: 'sudo-request';
-      payload: { request: SudoRequest };
+      payload: { request: SudoRequest; mode?: 'resolve' | 'tray-first' };
     }
   | {
       // Bridge a `secrets.crud` control message from the kernel-worker realm
@@ -709,7 +717,7 @@ export interface PanelRpcResults {
     body: ArrayBuffer;
   };
   'permission-request': { grants: PermissionRpcGrant[] };
-  'sudo-request': { decision: SudoDecision };
+  'sudo-request': { decision: SudoDecision; handled?: boolean };
   'secrets-bridge': { response: unknown };
   'mount-sign-and-forward': { response: SignAndForwardReply };
   'theme-apply': { applied: string | null };

@@ -226,12 +226,12 @@ export interface StartPageFollowerTrayOptions {
   /** Receive the leader's active model and selected-scoop thinking state. */
   onModelState?: FollowerSyncManagerOptions['onModelState'];
   /**
-   * Render the transcript-export approval dialog for a **headless** leader (the
-   * hosted-leader / cloud float) that delegated the prompt to this follower.
-   * Forwarded verbatim to `FollowerSyncManager`; when unset the follower replies
-   * with a denial, so the gate stays fail-closed.
+   * Render a sudo approval the leader delegated to this follower's human
+   * (headless leader, or the human is driving from here — issue #2062).
+   * Forwarded verbatim to `FollowerSyncManager`; when unset the follower
+   * replies with a denial, so the gate stays fail-closed.
    */
-  onTranscriptExportApprovalRequest?: FollowerSyncManagerOptions['onTranscriptExportApprovalRequest'];
+  onSudoApprovalRequest?: FollowerSyncManagerOptions['onSudoApprovalRequest'];
 
   // --- Page-side wiring callbacks ---
   /**
@@ -429,7 +429,7 @@ export function startPageFollowerTray(
       onModelsList: options.onModelsList,
       onModelState: options.onModelState,
       onThemeApply: applyFollowerLeaderTheme,
-      onTranscriptExportApprovalRequest: options.onTranscriptExportApprovalRequest,
+      onSudoApprovalRequest: options.onSudoApprovalRequest,
       selfRuntimeId: runtimeId,
       onTargetsChanged: () => void refreshTargets(),
       onSprinklesList: (sprinkles) => {

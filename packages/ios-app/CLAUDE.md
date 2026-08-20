@@ -4,8 +4,9 @@ iOS follower app in `packages/ios-app/` — native iOS 26 SwiftUI SPM project (`
 
 ## Layout
 
-- `SliccFollower/App/` — `SliccFollowerApp`, `@MainActor AppState`; inbound coordinator (`InboundActions`, `AppGroupInbox`, `OpenInSliccIntents`) + `SliccShareExtension/` funnel `slicc://open|prompt` (+`x-callback-url`), `sliccy.ai/app/*` universal links, App Intents, share URLs in `group.ai.sliccy.follower`. Deep links confirm via card (fail-closed).
+- `SliccFollower/App/` — `SliccFollowerApp` (+ `SliccAppDelegate` for APNs callbacks), `@MainActor AppState` (`AppState+SudoApproval` = Face ID gate + push registration); inbound coordinator (`InboundActions`, `AppGroupInbox`, `OpenInSliccIntents`) + `SliccShareExtension/` funnel `slicc://open|prompt` (+`x-callback-url`), `sliccy.ai/app/*` universal links, App Intents, share URLs in `group.ai.sliccy.follower`. Deep links confirm via card (fail-closed).
 - `SliccFollower/Models/` — `ScoopStatus`; `ICloudSessionList` + `SliccFollower.entitlements` (iCloud via `SliccTraySession` + KVS); `*Avatar*`.
+- `SliccFollower/Notifications/` — `NotificationCoordinator`: `UNUserNotificationCenter` delegate, categories `SLICC_TURN_END` / `SLICC_SUDO_REQUEST` (mirrors the hub's `apns.ts`), local fallbacks, lock-screen Deny.
 - `SliccFollower/Sync/` — `Keepalive` (`DataChannelKeepalive`); `TerminalClient` (single-flight `exec.*`); `ConnectionSettle` (`ConnectionHealth` + `ConnectionSettler`, the blip hold behind `AppState.settledConnection`).
 - `SliccFollower/CDP/` — `CDPBridge` + `CDPTarget` host WKWebViews as CDP targets.
 - `SliccFollower/Views/` — `ChatView`/`MessageListView`/`MarkdownText` (`ChatPresentationState`; compact workbench sets `toolbarSuppressed`; http(s) links open in-app unless Settings → Advanced `openLinksInBuiltInBrowser` off); `SprinkleWebView`/`InlineSprinkleView`/`SprinkleDetailView` (`.shtml`); `DockModel`/`DockRail`/`WorkbenchHost`/`LucideIcon` (48pt rail); `TerminalView`/`TerminalViewModel`; `TabsCarouselView` (full-screen hides rail via `AppState.browserViewingTabId`).
@@ -21,6 +22,7 @@ Plain SPM commands do nothing on a macOS host; build/test go through XcodeGen. *
 
 - `preview.open` → `CDPBridge.handleTabOpen`, acks `tab.opened`.
 - iOS never originates transcript export; those prompts decode to `.unknown` / `undecodable`.
+- `sudo.approve.request` / `.cancel` → `SudoApprovalController` (SliccTrayKit/Sudo); reply `sudo.approve.response`. Allow / Always pass `LAContext` `.deviceOwnerAuthentication` first, Deny never does. `hello` advertises `sudoApproval: true` and `biometric: true` iff the device can authenticate its owner. `push.register` carries the APNs token on every connect. Details: [`docs/ios-app-details.md`](../../docs/ios-app-details.md#sudo-approval-and-push).
 - `capabilities.exec: true`; `handleExecMessage` accepts only `open [--universal|--x-callback] <url>`, scoped-approval gated. URL validation + tombstoning: [`docs/ios-app-details.md`](../../docs/ios-app-details.md#exec-capability); `--x-callback` nonces, JSON result shape, 16-param / 16-KiB caps: [`docs/ios-app-details.md`](../../docs/ios-app-details.md#x-callback-exec).
 
 Adding a variant is a fixed six-step order ending in the corpus + architecture matrix: [`docs/ios-app-details.md`](../../docs/ios-app-details.md#protocol-variant-checklist).

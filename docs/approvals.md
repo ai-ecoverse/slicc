@@ -49,11 +49,18 @@ dispatch.
 
 ### What gets gated
 
-| Layer             | Where                                   | Matches              |
-| ----------------- | --------------------------------------- | -------------------- |
-| Filesystem reads  | `read_file` tool + shell file reads     | `Read <glob>` rules  |
-| Filesystem writes | `write_file`/`edit_file` + shell writes | `Write <glob>` rules |
-| Commands          | each top-level segment of a `bash` line | `Cmnd <glob>` rules  |
+| Layer             | Where                                       | Matches               |
+| ----------------- | ------------------------------------------- | --------------------- |
+| Filesystem reads  | `read_file` tool + shell file reads         | `Read <glob>` rules   |
+| Filesystem writes | `write_file`/`edit_file` + shell writes     | `Write <glob>` rules  |
+| Commands          | each top-level segment of a `bash` line     | `Cmnd <glob>` rules   |
+| Transcript export | a follower's / Cherry host's export request | `Export <glob>` rules |
+
+`Export` is the odd one out: an export is **always** gated (there is no "no match
+means ungated"), so a `NOPASSWD Export <glob>` grant is the only way to skip its
+prompt. The subject is `active` for the live session or `frozen:<sessionId>` for
+an archive. Issue #2062 folded this gate into sudo — it used to be its own
+`transcript.export.approve.*` dialog pair.
 
 The agent's FS handle is wrapped once with `createSudoFs`, and that single gated
 handle backs both the file tools and the shell, so a `cat`/`echo >` in bash is
@@ -73,6 +80,7 @@ Cmnd  git push*                 # prompt before any matching command segment
 Read  /shared/secrets/**        # prompt before reading a matching VFS path
 Write /workspace/.git/**        # prompt before writing a matching VFS path
 NOPASSWD Cmnd  git push origin* # explicit grant: matching action runs, no prompt
+NOPASSWD Export active          # let followers export the live transcript unprompted
 ```
 
 Globs:
@@ -162,6 +170,41 @@ rather than keeping the last parse. Writes are gated by the shipped `Write
 own spend. Reads stay ungated so the agent can explain a refusal.
 
 ### Architecture
+
+#### Where the prompt goes (sudo over tray, #2062)
+
+The kernel worker owns the policy (`SudoManager`) and asks a **broker** for the
+human gesture. Since #2062 the broker is tray-aware: before the float's native
+dialog fires, the page realm (`sudo/page-approval-service.ts`, reached over the
+`sudo-request` panel-RPC op) decides who the right approver is —
+
+1. **A tray follower's human** — when the leader is headless (hosted/cloud
+   float) or the last user message came from a follower and a follower
+   advertised `capabilities.sudoApproval`. `LeaderSyncManager.delegateSudoApproval`
+   broadcasts `sudo.approve.request`; first verdict wins, the rest get
+   `sudo.approve.cancel`; 5-minute fail-closed timeout. iOS answers behind
+   Face ID / passcode and is the only kind of follower whose `always` is
+   honoured (`capabilities.biometric`); a web follower's `always` is downgraded
+   to a one-shot allow. A headless leader with nobody connected parks the
+   prompt and asks the hub to push-wake registered phones.
+2. **The native dialog** — node-server OS dialog (CLI/Electron), extension
+   panel `confirm`, or panel-RPC to the page for the thin-bridge leader.
+3. **The in-page `<slicc-dialog>`** — for a leader tab with a human but no
+   node-server (the hosted leader viewed directly in a browser).
+
+Follower-originated gates (transcript export) enter the same funnel from the
+page: `LeaderSyncManager` → `request-sudo-approval` kernel message →
+`SudoManager.approve()` (policy check, broker, `NOPASSWD Export` persistence)
+→ back to the page's broker chain. One policy, one persistence path, one
+audit surface.
+
+**Push** — the tray hub DO stores the iOS follower's APNs token (`push.register`,
+forwarded by the leader, never persisted by it) and fans out `push.send` for
+`turn_end` (normal banner) and `sudo_request` (time-sensitive banner with
+Deny / Review… actions; Allow is deliberately not a lock-screen action).
+Payloads are metadata only. Secrets: `APNS_TEAM_ID`, `APNS_KEY_ID`,
+`APNS_PRIVATE_KEY`, `APNS_TOPIC` on the worker — missing means pushing is off
+and nothing else changes.
 
 ```text
 Orchestrator.init()
@@ -675,10 +718,14 @@ permission surface is mounted (early boot / non-WC realms).
 
 ### Summary
 
-When a tray follower or a Cherry-embedded host requests a transcript export, the
-leader's user must explicitly approve each individual request before any data
-is sent. Approval is **one-time per request** — a second export always requires
-a new prompt.
+When a tray follower or a Cherry-embedded host requests a transcript export, a
+human must explicitly approve each individual request before any data is sent.
+Since #2062 that approval **is a sudo action** (`kind: 'export'`): it runs
+through `SudoManager.approve()`, so a `NOPASSWD Export <glob>` rule pre-grants
+it, "Always" on the prompt writes one, and the prompt itself goes wherever
+sudo prompts go — including a tray follower's Face ID sheet when the leader is
+headless or the human is on the phone. Without a grant, approval is one-time
+per request.
 
 ### Threat model
 

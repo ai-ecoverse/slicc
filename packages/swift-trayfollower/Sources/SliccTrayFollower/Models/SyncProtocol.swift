@@ -9,7 +9,7 @@ public enum NewSessionAction: String, Codable {
 /// Mirrors `TRAY_SYNC_PROTOCOL_VERSION` from
 /// packages/shared-ts/src/tray-sync-protocol.ts. Exchanged
 /// via the additive `hello` message both sides send on channel open.
-public let traySyncProtocolVersion = 6
+public let traySyncProtocolVersion = 7
 
 // MARK: - AgentEvent
 
@@ -416,15 +416,44 @@ public struct TraySyncCapabilities: Codable, Equatable {
     /// a leader will not delegate a login here.
     public let oauthPopup: Bool?
 
-    public init(exec: Bool, browser: Bool? = nil, oauthPopup: Bool? = nil) {
+    /// This peer renders delegated sudo prompts (`sudo.approve.request`) to a
+    /// human and answers with `sudo.approve.response` (v7, #2062). iOS does.
+    public let sudoApproval: Bool?
+
+    /// Allow / Always on this peer sit behind device-owner authentication
+    /// (Face ID / Touch ID / passcode). Only such a peer may answer `always`;
+    /// the leader downgrades anyone else's to a one-shot allow. iOS claims it
+    /// when `LAContext` reports `.deviceOwnerAuthentication` available.
+    public let biometric: Bool?
+
+    public init(
+        exec: Bool,
+        browser: Bool? = nil,
+        oauthPopup: Bool? = nil,
+        sudoApproval: Bool? = nil,
+        biometric: Bool? = nil
+    ) {
         self.exec = exec
         self.browser = browser
         self.oauthPopup = oauthPopup
+        self.sudoApproval = sudoApproval
+        self.biometric = biometric
     }
 }
 
-/// What this build tells the leader it can do.
-public let trayFollowerCapabilities = TraySyncCapabilities(exec: true, browser: true)
+/// What this build tells the leader it can do. `biometric` is decided at
+/// connect time from the device's authentication policy — see
+/// `makeTrayFollowerCapabilities(deviceOwnerAuth:)`.
+public let trayFollowerCapabilities = makeTrayFollowerCapabilities(deviceOwnerAuth: false)
+
+/// Capability advertisement for a follower whose device can (or cannot)
+/// authenticate its owner. `sudoApproval` is always on: the card renders
+/// either way, and a device with no passcode still gets Allow / Deny — the
+/// leader just refuses its `always`.
+public func makeTrayFollowerCapabilities(deviceOwnerAuth: Bool) -> TraySyncCapabilities {
+    TraySyncCapabilities(
+        exec: true, browser: true, sudoApproval: true, biometric: deviceOwnerAuth ? true : nil)
+}
 
 // MARK: - LeaderToFollowerMessage
 
@@ -496,6 +525,17 @@ public enum LeaderToFollowerMessage: Codable {
     /// `tokens` (raw `css` and per-component overrides are ignored — see
     /// `AppState.applyLeaderTheme`); `null` resets to the system scheme.
     case themeApply(themeJson: String?)
+    /// Delegated sudo prompt (v7, #2062): the leader wants this phone's human
+    /// to approve a gated action. `expiresAt` is epoch milliseconds.
+    case sudoApproveRequest(
+        requestId: String,
+        kind: String,
+        detail: String,
+        suggestedPattern: String?,
+        scoopName: String?,
+        expiresAt: Double)
+    /// The leader withdrew a `sudo.approve.request` (answered elsewhere / timed out).
+    case sudoApproveCancel(requestId: String)
     /// Additive version handshake (`hello`) — both sides send it first.
     /// `capabilities` gates leader-backed surfaces such as Terminal; `motd` is
     /// retained for protocol parity.
@@ -516,6 +556,7 @@ public enum LeaderToFollowerMessage: Codable {
         case request, response
         case capabilities, motd
         case command, cwd, env, stream, exitCode, signal
+        case kind, suggestedPattern, scoopName, expiresAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -631,11 +672,20 @@ public enum LeaderToFollowerMessage: Codable {
             "transcript.export.start",
             "transcript.export.chunk",
             "transcript.export.complete",
-            "transcript.export.error",
-            // Delegated approval prompt from a headless (cloud) leader. iOS
-            // never originates an export, so it is never asked to approve one.
-            "transcript.export.approve.request":
+            "transcript.export.error":
             self = .unknown(type: type)
+        case "sudo.approve.request":
+            self = .sudoApproveRequest(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                kind: try container.decode(String.self, forKey: .kind),
+                detail: try container.decode(String.self, forKey: .detail),
+                suggestedPattern: try container.decodeIfPresent(
+                    String.self, forKey: .suggestedPattern),
+                scoopName: try container.decodeIfPresent(String.self, forKey: .scoopName),
+                expiresAt: try container.decode(Double.self, forKey: .expiresAt))
+        case "sudo.approve.cancel":
+            self = .sudoApproveCancel(
+                requestId: try container.decode(String.self, forKey: .requestId))
         case "hello":
             self = .hello(
                 protocolVersion: try container.decode(Int.self, forKey: .protocolVersion),
@@ -787,6 +837,18 @@ public enum LeaderToFollowerMessage: Codable {
         case .themeApply(let themeJson):
             try container.encode("theme.apply", forKey: .type)
             try container.encodeIfPresent(themeJson, forKey: .themeJson)
+        case .sudoApproveRequest(
+            let requestId, let kind, let detail, let suggestedPattern, let scoopName, let expiresAt):
+            try container.encode("sudo.approve.request", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(kind, forKey: .kind)
+            try container.encode(detail, forKey: .detail)
+            try container.encodeIfPresent(suggestedPattern, forKey: .suggestedPattern)
+            try container.encodeIfPresent(scoopName, forKey: .scoopName)
+            try container.encode(expiresAt, forKey: .expiresAt)
+        case .sudoApproveCancel(let requestId):
+            try container.encode("sudo.approve.cancel", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
         case .hello(let protocolVersion, let runtime, let capabilities, let motd):
             try container.encode("hello", forKey: .type)
             try container.encode(protocolVersion, forKey: .protocolVersion)
@@ -923,6 +985,13 @@ public enum FollowerToLeaderMessage: Codable {
     /// own message: `sprinkle` is NOT forwardable, and routing it through here
     /// would get it dropped with a warning.
     case lick(event: LickEvent)
+    /// Verdict for a delegated `sudo.approve.request` (v7, #2062). `pattern`
+    /// only with `always`; `attestation` names the gate the human passed
+    /// (`biometric` / `passcode` / `none`).
+    case sudoApproveResponse(
+        requestId: String, decision: String, pattern: String?, attestation: String?)
+    /// Register this device's APNs token so the hub can wake it (v7, #2062).
+    case pushRegister(platform: String, token: String, environment: String)
     /// Additive version handshake (`hello`) — iOS sends it first on channel open.
     case hello(
         protocolVersion: Int, runtime: String?, capabilities: TraySyncCapabilities?, motd: String?)
@@ -939,6 +1008,7 @@ public enum FollowerToLeaderMessage: Codable {
         case protocolVersion, runtime
         case targetRuntimeId, localTargetId, request, response
         case command, cwd, env, stream, data, exitCode, signal
+        case decision, pattern, attestation, platform, token, environment
     }
 
     public init(from decoder: Decoder) throws {
@@ -1053,6 +1123,17 @@ public enum FollowerToLeaderMessage: Codable {
                 signal: try container.decode(String.self, forKey: .signal))
         case "lick":
             self = .lick(event: try container.decode(LickEvent.self, forKey: .event))
+        case "sudo.approve.response":
+            self = .sudoApproveResponse(
+                requestId: try container.decode(String.self, forKey: .requestId),
+                decision: try container.decode(String.self, forKey: .decision),
+                pattern: try container.decodeIfPresent(String.self, forKey: .pattern),
+                attestation: try container.decodeIfPresent(String.self, forKey: .attestation))
+        case "push.register":
+            self = .pushRegister(
+                platform: try container.decode(String.self, forKey: .platform),
+                token: try container.decode(String.self, forKey: .token),
+                environment: try container.decode(String.self, forKey: .environment))
         case "hello":
             self = .hello(
                 protocolVersion: try container.decode(Int.self, forKey: .protocolVersion),
@@ -1161,6 +1242,17 @@ public enum FollowerToLeaderMessage: Codable {
         case .lick(let event):
             try container.encode("lick", forKey: .type)
             try container.encode(event, forKey: .event)
+        case .sudoApproveResponse(let requestId, let decision, let pattern, let attestation):
+            try container.encode("sudo.approve.response", forKey: .type)
+            try container.encode(requestId, forKey: .requestId)
+            try container.encode(decision, forKey: .decision)
+            try container.encodeIfPresent(pattern, forKey: .pattern)
+            try container.encodeIfPresent(attestation, forKey: .attestation)
+        case .pushRegister(let platform, let token, let environment):
+            try container.encode("push.register", forKey: .type)
+            try container.encode(platform, forKey: .platform)
+            try container.encode(token, forKey: .token)
+            try container.encode(environment, forKey: .environment)
         case .hello(let protocolVersion, let runtime, let capabilities, let motd):
             try container.encode("hello", forKey: .type)
             try container.encode(protocolVersion, forKey: .protocolVersion)

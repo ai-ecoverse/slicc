@@ -281,19 +281,20 @@ function buildMountBridgeHandler() {
 }
 
 /**
- * `sudo-request`: raise the native approval modal in the page realm on behalf
- * of the kernel-worker broker. The worker has no scriptable
- * `window.confirm`/`window.prompt`; the page (the hosted leader tab the thin
- * extension pins) does, so it runs `resolveSudoRequest` here — a genuine human
- * gesture the agent can't fabricate. The request already carries the
- * worker-computed `suggestedPattern`. Mirrors the `proxied-fetch` worker→page
- * delegate.
+ * `sudo-request`: settle a sudo approval in the page realm on behalf of the
+ * kernel-worker broker. The page is where the tray leader lives, so it can
+ * delegate the prompt to a follower's human (iOS + Face ID, issue #2062); it
+ * also owns the in-page dialog for floats with no native modal. `mode`
+ * decides whether the page must settle (`resolve`) or may decline and let the
+ * worker's native broker run (`tray-first`) — see `page-approval-service.ts`.
+ * The request already carries the worker-computed `suggestedPattern`. Mirrors
+ * the `proxied-fetch` worker→page delegate.
  */
 function buildSudoRequestHandler() {
   return {
-    'sudo-request': async ({ request }) => {
-      const { resolveSudoRequest } = await import('../sudo/panel-responder.js');
-      return { decision: resolveSudoRequest(request) };
+    'sudo-request': async ({ request, mode }) => {
+      const { resolveSudoApprovalInPage } = await import('../sudo/page-approval-service.js');
+      return resolveSudoApprovalInPage(request, mode ?? 'resolve');
     },
   } satisfies Partial<PanelRpcHandlers>;
 }

@@ -64,6 +64,11 @@ export interface WorkerEnv {
   PREVIEW_STORAGE: R2Bucket;
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
+  /** APNs token auth for follower push (issue #2062); all four or pushing is off. */
+  APNS_TEAM_ID?: string;
+  APNS_KEY_ID?: string;
+  APNS_PRIVATE_KEY?: string;
+  APNS_TOPIC?: string;
   E2B_API_KEY?: string;
   ADOBE_PROXY_ENDPOINT?: string;
   IMS_RELAY_URL?: string;

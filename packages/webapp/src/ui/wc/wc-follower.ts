@@ -722,25 +722,28 @@ export async function mountWcUiFollower(
         if (event.type === 'tool_result' && event.isError) boot.refs.switcher.glower();
       });
     },
-    // A headless (hosted / cloud) leader has no human to show the export
-    // approval dialog to, so it delegates the prompt here — this follower's
-    // user is the only person in the session. Same dialog, same one-time
-    // semantics; only the realm it renders in differs.
-    onTranscriptExportApprovalRequest: async (request) => {
-      const { openTranscriptExportApproval } = await import('./wc-transcript-export.js');
-      // Cherry: the bytes leave SLICC for the embedding page, so name it. Use
-      // the origin the transport already resolved at boot rather than reading
-      // `location.ancestorOrigins` again — that API is absent in Firefox, where
-      // Cherry still boots via the referrer fallback, and re-deriving it would
-      // mislabel the recipient as this device.
+    // The leader decided this follower's human should answer a sudo prompt —
+    // it is headless (hosted / cloud), or the user is driving from here
+    // (#2062). Same dialog the leader would show; "Always" is withheld
+    // because the leader only honours it from biometric-gated followers.
+    onSudoApprovalRequest: async (request) => {
+      const { openSudoApprovalDialog } = await import('./wc-sudo-approval.js');
       const cherryHostOrigin = isCherry ? prelude.cherryTransport?.hostOrigin : undefined;
-      return openTranscriptExportApproval({
-        delegated: true,
-        selector: request.selector,
-        signal: request.signal,
-        ...(cherryHostOrigin ? { hostOrigin: cherryHostOrigin } : {}),
-        ...(request.estimatedBytes != null ? { estimatedBytes: request.estimatedBytes } : {}),
-      });
+      const decision = await openSudoApprovalDialog(
+        {
+          kind: request.kind,
+          detail: request.detail,
+          ...(request.suggestedPattern ? { suggestedPattern: request.suggestedPattern } : {}),
+        },
+        {
+          allowAlways: false,
+          signal: request.signal,
+          expiresAt: request.expiresAt,
+          requester:
+            request.scoopName ?? (cherryHostOrigin ? `via ${cherryHostOrigin}` : undefined),
+        }
+      );
+      return { decision: decision.decision, attestation: 'none' };
     },
     onConnectionChange: (connected) => {
       boot.refs.switcher.connection = connected ? 'connected' : 'disconnected';

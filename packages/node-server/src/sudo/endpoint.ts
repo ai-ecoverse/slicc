@@ -15,7 +15,7 @@ import { requireLoopback } from '../cloud-status.js';
 import { selectSudoBackend } from './select.js';
 import type { SudoApproveRequest, SudoBackend, SudoDecision, SudoKind } from './types.js';
 
-const VALID_KINDS: readonly SudoKind[] = ['command', 'read', 'write', 'secret'];
+const VALID_KINDS: readonly SudoKind[] = ['command', 'read', 'write', 'secret', 'export'];
 
 export interface SudoEndpointOptions {
   /**

@@ -262,8 +262,37 @@ export interface LeaderBridgeClose {
   connId: string;
 }
 
+/**
+ * Leader → worker: a follower registered a push token (`push.register` on the
+ * data channel, forwarded verbatim plus the follower's bootstrap id). The tray
+ * DO stores it; the leader never does (issue #2062).
+ */
+export interface LeaderPushRegister {
+  type: 'push.register';
+  bootstrapId: string;
+  platform: 'ios';
+  token: string;
+  environment: 'sandbox' | 'production';
+}
+
+/**
+ * Leader → worker: wake every registered device. Metadata only — the body
+ * names the scoop and the category; the phone reconnects and fetches the real
+ * request over the data channel. `requestId` lets the DO collapse duplicate
+ * sudo pushes and lets the app deep-link to the right card.
+ */
+export interface LeaderPushSend {
+  type: 'push.send';
+  category: 'turn_end' | 'sudo_request';
+  /** Human label for the banner (scoop name). Never transcript text. */
+  label: string;
+  requestId?: string;
+}
+
 export type LeaderToWorkerControlMessage =
   | { type: 'ping' }
+  | LeaderPushRegister
+  | LeaderPushSend
   | LeaderBootstrapOfferMessage
   | LeaderBootstrapIceCandidateMessage
   | LeaderBootstrapFailedMessage

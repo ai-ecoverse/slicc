@@ -16,10 +16,10 @@ import {
 } from '../src/tray-sync-protocol.js';
 
 describe('tray-sync-protocol', () => {
-  it('exposes protocol version 6 and the cherry runtime tag', () => {
+  it('exposes protocol version 7 and the cherry runtime tag', () => {
     // v6 added `tab.teleport.request` (follower-initiated state-carrying tab
     // pull). The Swift mirror asserts the same constant — bump both together.
-    expect(TRAY_SYNC_PROTOCOL_VERSION).toBe(6);
+    expect(TRAY_SYNC_PROTOCOL_VERSION).toBe(7);
     expect(CHERRY_RUNTIME_TAG).toBe('slicc-cherry');
   });
 

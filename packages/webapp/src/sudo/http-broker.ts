@@ -48,10 +48,14 @@ export function createHttpSudoBroker(deps: HttpSudoBrokerDeps = {}): SudoBroker 
     async requestApproval(req: SudoRequest, opts?: SudoRequestOptions): Promise<SudoDecision> {
       const signal = opts?.signal;
       let suggestedPattern: string;
-      try {
-        suggestedPattern = await suggest(req, signal);
-      } catch {
-        suggestedPattern = req.detail;
+      if (req.suggestedPattern) {
+        suggestedPattern = req.suggestedPattern;
+      } else {
+        try {
+          suggestedPattern = await suggest(req, signal);
+        } catch {
+          suggestedPattern = req.detail;
+        }
       }
       // The suggester can outlive the caller's budget. Raising the OS dialog
       // now would prompt for an action that already timed out, so bail first.

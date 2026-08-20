@@ -34,6 +34,10 @@ struct MessageListView: View {
     /// Pending native external-app approvals, separate from read-only tool UI.
     var openApprovals: [OpenApprovalRequest] = []
     var onOpenApprovalDecision: ((String, OpenApprovalDecision) -> Void)?
+    /// Delegated sudo prompts (#2062), same treatment as the open approvals.
+    var sudoApprovals: [SudoApprovalRequest] = []
+    var sudoAllowAlways = false
+    var onSudoApprovalDecision: ((String, SudoApprovalDecision) -> Void)?
     /// Forwarded to inline sprinkle bubbles for `sprinkle.lick` events.
     var onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)?
     /// Owned above ChatView's compact/regular branch so subtree replacement
@@ -46,6 +50,9 @@ struct MessageListView: View {
         toolUICards: [ToolUIPlaceholder] = [],
         openApprovals: [OpenApprovalRequest] = [],
         onOpenApprovalDecision: ((String, OpenApprovalDecision) -> Void)? = nil,
+        sudoApprovals: [SudoApprovalRequest] = [],
+        sudoAllowAlways: Bool = false,
+        onSudoApprovalDecision: ((String, SudoApprovalDecision) -> Void)? = nil,
         onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)? = nil,
         scrollPosition: Binding<ScrollPosition>
     ) {
@@ -54,6 +61,9 @@ struct MessageListView: View {
         self.toolUICards = toolUICards
         self.openApprovals = openApprovals
         self.onOpenApprovalDecision = onOpenApprovalDecision
+        self.sudoApprovals = sudoApprovals
+        self.sudoAllowAlways = sudoAllowAlways
+        self.onSudoApprovalDecision = onSudoApprovalDecision
         self.onInlineSprinkleLick = onInlineSprinkleLick
         _scrollPosition = scrollPosition
     }
@@ -62,7 +72,9 @@ struct MessageListView: View {
 
     var body: some View {
         Group {
-            if messages.isEmpty && toolUICards.isEmpty && openApprovals.isEmpty {
+            if messages.isEmpty && toolUICards.isEmpty && openApprovals.isEmpty
+                && sudoApprovals.isEmpty
+            {
                 emptyState
             } else {
                 messageList
@@ -133,6 +145,14 @@ struct MessageListView: View {
                     .readableTranscriptColumn()
                 }
 
+                ForEach(sudoApprovals) { request in
+                    SudoApprovalCard(request: request, allowAlways: sudoAllowAlways) { decision in
+                        onSudoApprovalDecision?(request.requestId, decision)
+                    }
+                    .padding(.horizontal, 12)
+                    .readableTranscriptColumn()
+                }
+
                 // Invisible anchor at bottom. Its greedy width is load-bearing:
                 // the rows are centered by this stack's `.center` alignment,
                 // which can only center them if the stack itself spans the
@@ -155,6 +175,9 @@ struct MessageListView: View {
             scrollToBottom()
         }
         .onChange(of: openApprovals.count) { _, _ in
+            scrollToBottom()
+        }
+        .onChange(of: sudoApprovals.count) { _, _ in
             scrollToBottom()
         }
         .onChange(of: messages.last?.content) { _, _ in

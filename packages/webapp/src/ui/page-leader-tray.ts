@@ -114,7 +114,7 @@ export interface StartPageLeaderTrayOptions {
   onCherryHostEvent?: LeaderSyncManagerOptions['onCherryHostEvent'];
   onPreviewLick?: LeaderSyncManagerOptions['onPreviewLick'];
   /** Show approval dialog for a follower transcript export request. */
-  requestTranscriptExportApproval?: LeaderSyncManagerOptions['requestTranscriptExportApproval'];
+  requestSudoApproval?: LeaderSyncManagerOptions['requestSudoApproval'];
   /** Create a transcript ZIP for an approved follower export. */
   createTranscriptExport?: LeaderSyncManagerOptions['createTranscriptExport'];
 
@@ -258,11 +258,11 @@ function buildSyncManager(
     closeExecShell: options.closeExecShell,
     onCherryHostEvent: options.onCherryHostEvent,
     onPreviewLick: options.onPreviewLick,
-    requestTranscriptExportApproval: options.requestTranscriptExportApproval,
+    requestSudoApproval: options.requestSudoApproval,
     createTranscriptExport: options.createTranscriptExport,
     // `kind: 'hosted'` is the cloud float: the leader tab is headless Chromium
-    // in an e2b sandbox, so there is no human here to answer an export approval
-    // dialog. The sync manager delegates the prompt to the requesting follower.
+    // in an e2b sandbox, so there is no human here to answer an approval
+    // dialog. The sync manager delegates sudo prompts to a follower's human.
     headlessLeader: options.kind === 'hosted',
     browserAPI: options.browserAPI,
     browserTransport: options.browserTransport,

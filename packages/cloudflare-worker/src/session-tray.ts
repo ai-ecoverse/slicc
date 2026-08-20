@@ -16,6 +16,7 @@ import {
   type TurnIceServer,
   type WorkerToLeaderControlMessage,
 } from '@slicc/shared-ts';
+import { type ApnsSender, apnsConfigFromEnv, WebCryptoApnsSender } from './apns.js';
 import { deletePreviewArchivePrefix } from './persistent-preview-storage.js';
 import { previewTokenFromHost } from './preview-host.js';
 import {
@@ -65,13 +66,23 @@ export interface SessionTrayEnv {
   CLOUDFLARE_TURN_KEY_ID?: string;
   CLOUDFLARE_TURN_API_TOKEN?: string;
   PREVIEW_STORAGE?: R2Bucket;
+  /** APNs token auth (issue #2062). All four or pushing is disabled. */
+  APNS_TEAM_ID?: string;
+  APNS_KEY_ID?: string;
+  APNS_PRIVATE_KEY?: string;
+  APNS_TOPIC?: string;
 }
 
 interface SessionTrayOptions {
   now?: () => number;
   webSocketPairFactory?: () => { client: unknown; server: TrayWebSocketLike };
   fetchImpl?: typeof fetch;
+  /** Push sender seam (tests). Defaults to APNs from env, or disabled. */
+  apnsSender?: ApnsSender | null;
 }
+
+/** Cap on registered push devices per tray; oldest registrations are evicted. */
+const MAX_PUSH_TOKENS_PER_TRAY = 16;
 
 const TRAY_STORAGE_KEY = 'tray';
 const TURN_CREDENTIAL_REFRESH_MARGIN_MS = 5 * 60 * 1000;
@@ -113,6 +124,8 @@ export class SessionTrayDurableObject {
   private readonly turnKeyId: string | undefined;
   private readonly turnApiToken: string | undefined;
   private readonly previewStorage: R2Bucket | undefined;
+  private readonly apns: ApnsSender | null;
+  private apnsDisabledLogged = false;
   private tray: TrayRecord | null = null;
   private leaderSocket: TrayWebSocketLike | null = null;
   private cachedIceServers: CachedIceServers | null = null;
@@ -140,6 +153,14 @@ export class SessionTrayDurableObject {
     this.turnKeyId = typedEnv.CLOUDFLARE_TURN_KEY_ID;
     this.turnApiToken = typedEnv.CLOUDFLARE_TURN_API_TOKEN;
     this.previewStorage = typedEnv.PREVIEW_STORAGE;
+    if (options.apnsSender !== undefined) {
+      this.apns = options.apnsSender;
+    } else {
+      const apnsConfig = apnsConfigFromEnv(typedEnv);
+      this.apns = apnsConfig
+        ? new WebCryptoApnsSender(apnsConfig, { fetchImpl: this.fetchImpl, now: this.now })
+        : null;
+    }
     this.webSocketPairFactory =
       options.webSocketPairFactory ??
       (() => {
@@ -1196,6 +1217,11 @@ export class SessionTrayDurableObject {
           });
         }
         persistentMutation = false;
+      } else if (message.type === 'push.register') {
+        this.handlePushRegister(message);
+      } else if (message.type === 'push.send') {
+        await this.handlePushSend(message);
+        persistentMutation = false;
       } else if (message.type === 'bridge.close') {
         // Leader closed a preview target: close that visitor's bridge socket and
         // tell the leader it's gone (a server-initiated close won't re-fire
@@ -1864,6 +1890,103 @@ export class SessionTrayDurableObject {
           bootstraps: storedTray.bootstraps ?? {},
         }
       : null;
+  }
+
+  /**
+   * A follower registered a push token via the leader (issue #2062). The
+   * leader already validated the shape; re-check here because the DO is the
+   * trust boundary for what it stores. Bounded per tray; re-registering the
+   * same token just refreshes it.
+   */
+  private handlePushRegister(message: {
+    bootstrapId?: unknown;
+    platform?: unknown;
+    token?: unknown;
+    environment?: unknown;
+  }): void {
+    const tray = this.requireTray();
+    const token = typeof message.token === 'string' ? message.token.trim() : '';
+    if (message.platform !== 'ios' || !/^[0-9a-fA-F]{32,400}$/.test(token)) return;
+    const environment = message.environment === 'production' ? 'production' : 'sandbox';
+    const bootstrapId = typeof message.bootstrapId === 'string' ? message.bootstrapId : '';
+    tray.pushTokens ??= {};
+    tray.pushTokens[token] = {
+      platform: 'ios',
+      environment,
+      bootstrapId,
+      registeredAt: this.isoNow(),
+    };
+    const entries = Object.entries(tray.pushTokens);
+    if (entries.length > MAX_PUSH_TOKENS_PER_TRAY) {
+      const evict = entries
+        .sort((a, b) => a[1].registeredAt.localeCompare(b[1].registeredAt))
+        .slice(0, entries.length - MAX_PUSH_TOKENS_PER_TRAY);
+      for (const [dead] of evict) delete tray.pushTokens[dead];
+    }
+  }
+
+  /**
+   * Fan a leader push out to every registered device. Dead tokens (410 /
+   * BadDeviceToken) are forgotten and the record persisted; transport errors
+   * are logged and the token kept. Never throws into the leader socket loop.
+   */
+  private async handlePushSend(message: {
+    category?: unknown;
+    label?: unknown;
+    requestId?: unknown;
+  }): Promise<void> {
+    const tray = this.requireTray();
+    const tokens = Object.entries(tray.pushTokens ?? {});
+    if (tokens.length === 0) return;
+    if (!this.apns) {
+      if (!this.apnsDisabledLogged) {
+        this.apnsDisabledLogged = true;
+        console.warn('[push] APNs secrets not configured — push.send ignored', {
+          trayId: tray.trayId,
+        });
+      }
+      return;
+    }
+    const category = message.category === 'sudo_request' ? 'sudo_request' : 'turn_end';
+    if (message.category !== 'sudo_request' && message.category !== 'turn_end') return;
+    const label =
+      typeof message.label === 'string' && message.label.trim()
+        ? message.label.trim().slice(0, 80)
+        : 'SLICC';
+    const requestId =
+      typeof message.requestId === 'string' && message.requestId ? message.requestId : undefined;
+
+    const results = await Promise.all(
+      tokens.map(([token, record]) =>
+        this.apns!.send({
+          token,
+          environment: record.environment,
+          category,
+          label,
+          trayId: tray.trayId,
+          ...(requestId ? { requestId } : {}),
+        }).catch((err) => ({
+          token,
+          status: 0,
+          reason: err instanceof Error ? err.message : String(err),
+          dropToken: false,
+        }))
+      )
+    );
+    let mutated = false;
+    for (const result of results) {
+      if (result.dropToken) {
+        delete tray.pushTokens?.[result.token];
+        mutated = true;
+      } else if (result.status !== 200) {
+        console.warn('[push] APNs delivery failed', {
+          trayId: tray.trayId,
+          status: result.status,
+          reason: result.reason,
+        });
+      }
+    }
+    if (mutated) await this.persistTray();
   }
 
   private async persistTray(): Promise<void> {
