@@ -2,7 +2,6 @@
  * HAR recording subcommands: record, stop-recording.
  */
 
-import { HarRecorder } from '../../../../cdp/index.js';
 import { resolveAppTabId } from '../snapshot.js';
 import type { PlaywrightHandler } from '../types.js';
 
@@ -24,7 +23,7 @@ export const recordHandler: PlaywrightHandler = async ({
   });
   const sessionId = attachResult['sessionId'] as string;
   if (!state.harRecorder) {
-    state.harRecorder = new HarRecorder(transport, fs);
+    state.harRecorder = browser.createHarRecorder(fs, transport);
   }
   const recordingId = await state.harRecorder.startRecording(newTargetId, sessionId, filterCode);
   return {
