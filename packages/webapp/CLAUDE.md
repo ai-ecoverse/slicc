@@ -73,7 +73,10 @@ Non-obvious rules:
 - **Kernel realms**: `runInRealm()` spawns per-task `DedicatedWorker`; SIGKILL → exit 137. Sync `readFileSync`/`writeFileSync` and
   `child_process.execSync`/`execFileSync`/`spawnSync` from realm scripts go through
   `realm/sync-{xhr,fs-*,exec-*}.ts` + `ui/sync-fs-sw-handler.ts` with per-realm
-  capability tokens; never bypass. Deep reference: `docs/kernel/process-model.md`.
+  capability tokens; never bypass. On an isolated leader the same dispatchers are
+  reached over `realm/sync-sab-*.ts` (Atomics/SharedArrayBuffer on the realm's
+  own port) — only for `Realm.isolatedThread` realms; the in-process factory must
+  never get a SAB (self-deadlock). Deep reference: `docs/kernel/process-model.md`.
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without
   queue/watermark loss; user `web` bypasses the window (immediate/awaited,
   prevents deferral). `transcript-limits.ts` caps bridge/event transcripts at 64 KB

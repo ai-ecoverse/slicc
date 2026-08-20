@@ -53,6 +53,17 @@ export interface RealmInitMsg {
    */
   syncFsToken?: SyncFsToken;
   /**
+   * Atomics/SharedArrayBuffer fast path for the synchronous bridges (#2043).
+   * Present only on a cross-origin-isolated leader AND for a realm that runs
+   * on its own thread (a `DedicatedWorker` — see `Realm.isolatedThread`): the
+   * realm then blocks in `Atomics.wait` on this buffer instead of issuing a
+   * sync XHR through the Service Worker. The structured-clone of a SAB shares
+   * memory rather than copying it. The kernel-side responder is attached to
+   * the realm's control port by `attachRealmHost`. Absent → the SW transport
+   * (when {@link syncFsToken} is present) or the bounded snapshot.
+   */
+  syncSab?: SharedArrayBuffer;
+  /**
    * Optional initial stdin (string). Consumed by both realms:
    *   • Python — surfaced as `sys.stdin`.
    *   • JS — surfaced as `process.stdin.read()` / `for await ... of
@@ -254,6 +265,15 @@ export interface SerializedFetchResponse {
 }
 
 /**
+ * A caller-authored deep-match template for an observed WebSocket frame:
+ * arbitrary JSON keys, each compared by deep equality against the parsed
+ * frame. It has no fixed shape by design — the keys are the caller's.
+ */
+export interface WsFrameTemplate {
+  [key: string]: unknown;
+}
+
+/**
  * Declarative WebSocket frame selector. Skill code never supplies a
  * `Function` or a string of JS — only a JSON object whose `where` is
  * a deep-equality template the runtime matches against the parsed
@@ -268,7 +288,7 @@ export interface WsSelector {
    * Deep-equality template. Every key/value present in `where` must
    * match the parsed frame. Missing keys on the frame fail the match.
    */
-  where?: Record<string, unknown>;
+  where?: WsFrameTemplate;
   /** Project a subset of the parsed object's top-level fields. */
   project?: readonly string[];
 }

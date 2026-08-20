@@ -82,6 +82,10 @@ function wrapWorker(worker: Worker): Realm {
   let terminated = false;
   return {
     controlPort: port,
+    // A real DedicatedWorker owns its thread, so it may block in
+    // `Atomics.wait` — this is what lets the runner hand it the SAB sync
+    // bridge (#2043). The in-process fallbacks deliberately leave it unset.
+    isolatedThread: true,
     // Forwards both `error` (worker crash / uncaught bootstrap throw) and
     // `messageerror` (realm posted an un-deserializable message — a worker
     // that died mid-post) so the runner can settle non-zero on either.

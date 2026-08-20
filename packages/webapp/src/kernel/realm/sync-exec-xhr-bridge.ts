@@ -31,6 +31,7 @@
 import {
   clampSyncExecTimeout,
   SYNC_EXEC_CHANNEL,
+  type SyncExecRequestPayload,
   type SyncExecResultPayload,
 } from './sync-exec-dispatch.js';
 import type { SyncFsCache } from './sync-fs-cache.js';
@@ -54,6 +55,44 @@ export interface SyncExecOptions {
 
 export interface SyncExecXhrBridge {
   run(command: string | string[], opts?: SyncExecOptions): SyncExecResultPayload;
+}
+
+/**
+ * One blocking exec round-trip. The default is the sync-XHR → SW route; the
+ * Atomics/SAB fast path (`sync-sab-bridge.ts`) supplies its own. Either way
+ * the envelope is the same `SyncExecRequestPayload`, so `dispatchSyncExec`
+ * cannot tell the transports apart. Must throw an errno `Error` on any
+ * transport or dispatch failure and return only a well-formed payload.
+ */
+export type SyncExecTransport = (
+  payload: SyncExecRequestPayload,
+  timeoutMs: number,
+  label: string
+) => SyncExecResultPayload;
+
+function xhrExecTransport(token: string): SyncExecTransport {
+  return (payload, timeoutMs, label) => {
+    const json = synchronifyJson({
+      method: 'POST',
+      url: SYNC_EXEC_ROUTE,
+      token,
+      body: new TextEncoder().encode(JSON.stringify({ ...payload, channel: SYNC_EXEC_CHANNEL })),
+      // Give the transport a margin over the command budget so the SW's
+      // authoritative errno wins the race with the bare XHR-timeout EIO —
+      // same ordering the fs channel relies on.
+      timeoutMs: timeoutMs + SYNC_EXEC_XHR_MARGIN_MS,
+      label,
+    }) as Partial<SyncExecResultPayload> | null;
+    if (
+      !json ||
+      typeof json.stdout !== 'string' ||
+      typeof json.stderr !== 'string' ||
+      typeof json.exitCode !== 'number'
+    ) {
+      throw syncXhrError('EIO', label);
+    }
+    return { stdout: json.stdout, stderr: json.stderr, exitCode: json.exitCode };
+  };
 }
 
 /**
@@ -81,10 +120,17 @@ function flushBeforeSyncExec(syncFs: SyncFsCache, fsBridge: SyncFsXhrMutatingBri
  */
 export function createSyncExecXhrBridge(
   token: string,
-  opts: { syncFs?: SyncFsCache; fsBridge?: SyncFsXhrMutatingBridge; timeoutMs?: number } = {}
+  opts: {
+    syncFs?: SyncFsCache;
+    fsBridge?: SyncFsXhrMutatingBridge;
+    timeoutMs?: number;
+    /** Blocking transport; defaults to the sync-XHR → SW route bound to `token`. */
+    transport?: SyncExecTransport;
+  } = {}
 ): SyncExecXhrBridge {
   const defaultTimeoutMs = opts.timeoutMs ?? SYNC_EXEC_DEFAULT_TIMEOUT_MS;
   const { syncFs, fsBridge } = opts;
+  const transport = opts.transport ?? xhrExecTransport(token);
 
   return {
     run(command: string | string[], runOpts: SyncExecOptions = {}): SyncExecResultPayload {
@@ -98,34 +144,14 @@ export function createSyncExecXhrBridge(
       // SYNC_EXEC_XHR_MARGIN_MS; an oversized one must hit the wire ceiling
       // here too, or the XHR waits long past the command the SW already killed.
       const timeoutMs = clampSyncExecTimeout(runOpts.timeout, defaultTimeoutMs);
-      const payload = {
+      const payload: SyncExecRequestPayload = {
         command,
         ...(runOpts.args !== undefined ? { args: runOpts.args } : {}),
         ...(runOpts.input !== undefined ? { stdin: runOpts.input } : {}),
         timeoutMs,
-        channel: SYNC_EXEC_CHANNEL,
       };
       try {
-        const json = synchronifyJson({
-          method: 'POST',
-          url: SYNC_EXEC_ROUTE,
-          token,
-          body: new TextEncoder().encode(JSON.stringify(payload)),
-          // Give the transport a margin over the command budget so the SW's
-          // authoritative errno wins the race with the bare XHR-timeout EIO —
-          // same ordering the fs channel relies on.
-          timeoutMs: timeoutMs + SYNC_EXEC_XHR_MARGIN_MS,
-          label,
-        }) as Partial<SyncExecResultPayload> | null;
-        if (
-          !json ||
-          typeof json.stdout !== 'string' ||
-          typeof json.stderr !== 'string' ||
-          typeof json.exitCode !== 'number'
-        ) {
-          throw syncXhrError('EIO', label);
-        }
-        return { stdout: json.stdout, stderr: json.stderr, exitCode: json.exitCode };
+        return transport(payload, timeoutMs, label);
       } finally {
         // INVALIDATE (not re-snapshot): the command may have changed anything
         // under the cache, and every sync read falls through to the live fs

@@ -58,6 +58,7 @@ import type {
 import type { SyncFsMutations, SyncFsSnapshot } from './sync-fs-cache.js';
 import { mintSyncFsToken, revokeSyncFsToken } from './sync-fs-token-registry.js';
 import type { SyncFsToken } from './sync-fs-wire.js';
+import { attachSyncSabResponder } from './sync-sab-responder.js';
 import { compileWasmFromVfs } from './wasm-compiler.js';
 import type { WsSubscriberRegistry } from './ws-subscribers.js';
 
@@ -135,6 +136,13 @@ export interface RealmHostOptions {
    * can actually be served. Default off → no token → today's snapshot fallback.
    */
   syncFsBridgeEnabled?: boolean;
+  /**
+   * Shared buffer for the Atomics/SAB sync fast path (#2043). When present
+   * (and the token is minted), a `sync-sab-responder` is attached to the same
+   * port and answers the realm's blocking fs/exec requests through the same
+   * token-scoped dispatchers the SW route uses. Disposed with the host.
+   */
+  syncSab?: SharedArrayBuffer;
 }
 
 /**
@@ -188,12 +196,19 @@ export function attachRealmHost(
     void respond(port, req, ctx, opts, hidCtx, execCtx);
   };
   port.addEventListener('message', handler);
+  // The SAB responder shares this port: the realm's blocking requests are
+  // plain messages, answered into the shared window (see sync-sab-responder).
+  const sabResponder =
+    syncFsToken && opts.syncSab
+      ? attachSyncSabResponder(port, opts.syncSab, syncFsToken)
+      : undefined;
   port.start?.();
   return {
     syncFsToken,
     dispose: () => {
       if (disposed) return;
       disposed = true;
+      sabResponder?.dispose();
       if (syncFsToken) revokeSyncFsToken(syncFsToken);
       port.removeEventListener('message', handler);
       // Abort any in-flight `exec.start` commands so a terminated realm
