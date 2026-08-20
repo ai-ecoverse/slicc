@@ -12,6 +12,7 @@
 #
 # Required env vars (set by semantic-release / release.yml):
 #   CLOUDFLARE_TURN_API_TOKEN, GITHUB_CLIENT_SECRET, E2B_API_KEY,
+#   APNS_TEAM_ID, APNS_KEY_ID, APNS_PRIVATE_KEY, APNS_TOPIC (follower push, #2062),
 #   CLOUDFLARE_API_TOKEN, CLOUDFLARE_ACCOUNT_ID (the latter two consumed by wrangler).
 #   SLICC_LAST_RELEASE_TAG (empty means first release and always deploys).
 set -euo pipefail
@@ -91,6 +92,16 @@ echo "[publish-worker] Uploading worker secrets..."
 echo "$CLOUDFLARE_TURN_API_TOKEN" | npx wrangler secret put CLOUDFLARE_TURN_API_TOKEN --config "$WRANGLER_CONFIG"
 echo "$GITHUB_CLIENT_SECRET"      | npx wrangler secret put GITHUB_CLIENT_SECRET      --config "$WRANGLER_CONFIG"
 echo "$E2B_API_KEY"               | npx wrangler secret put E2B_API_KEY               --config "$WRANGLER_CONFIG"
+# APNs token auth for follower push (#2062). All four or the hub disables
+# pushing; uploaded only when set so a fork without the key still releases.
+if [ -n "${APNS_PRIVATE_KEY:-}" ]; then
+  echo "$APNS_TEAM_ID"     | npx wrangler secret put APNS_TEAM_ID     --config "$WRANGLER_CONFIG"
+  echo "$APNS_KEY_ID"      | npx wrangler secret put APNS_KEY_ID      --config "$WRANGLER_CONFIG"
+  printf '%s' "$APNS_PRIVATE_KEY" | npx wrangler secret put APNS_PRIVATE_KEY --config "$WRANGLER_CONFIG"
+  echo "$APNS_TOPIC"       | npx wrangler secret put APNS_TOPIC       --config "$WRANGLER_CONFIG"
+else
+  echo "[publish-worker] APNS_PRIVATE_KEY not set; skipping APNs secrets (follower push stays disabled)."
+fi
 
 # Hard-fail before deploy if archiving fails; a build must never go live
 # unarchived. The deploy path keeps its established template/secrets/archive order.
