@@ -147,6 +147,22 @@ describe('linkifyFileMentions', () => {
     expect(root.querySelectorAll(`a.${FILE_MENTION_CLASS}`).length).toBe(1);
   });
 
+  it('re-links when the same element is given new content', async () => {
+    // `slicc-agent-message.setBodyHtml()` reuses the `.body` element and swaps
+    // its children, so a sticky "already done" flag would leave the replacement
+    // text permanently unlinked.
+    const root = render('<p>nothing here yet</p>');
+    const resolver = fakeResolver({ 'bb.jsh': ['/workspace/bb.jsh'] });
+
+    await linkifyFileMentions(root, resolver);
+    expect(root.querySelector('a')).toBeNull();
+
+    root.innerHTML = '<p>now it mentions bb.jsh</p>';
+    await linkifyFileMentions(root, resolver);
+
+    expect(root.querySelector(`a.${FILE_MENTION_CLASS}`)?.textContent).toBe('bb.jsh');
+  });
+
   it('does no resolver work for a message with no candidates', async () => {
     const root = render('<p>All checks are green and mergeable</p>');
     const resolver = fakeResolver({});

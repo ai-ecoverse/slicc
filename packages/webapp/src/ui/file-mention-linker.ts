@@ -35,8 +35,28 @@ import { findFileMentions } from '../core/file-mentions.js';
 /** Class applied to every generated link, and the hook for styling. */
 export const FILE_MENTION_CLASS = 'file-mention';
 
-/** Marks a subtree as already linkified, so re-renders don't redo the work. */
+/**
+ * Records WHAT was linkified, not merely that something was.
+ *
+ * `slicc-agent-message.setBodyHtml()` reuses the same `.body` element and
+ * replaces its contents, so a sticky boolean flag would survive a re-render and
+ * permanently suppress linking in the new text. Storing a cheap fingerprint of
+ * the content instead makes the skip conditional on the content being the same
+ * one already processed.
+ */
 const PROCESSED_ATTR = 'data-file-mentions';
+
+/**
+ * A cheap stand-in for "is this the same rendered content?".
+ *
+ * Node count plus text length is not collision-proof, and does not need to be:
+ * a missed re-link costs a few unlinked mentions, never a wrong link, and the
+ * alternative (hashing every message body on every mutation) is real work on
+ * the transcript's hot path.
+ */
+function contentFingerprint(root: HTMLElement): string {
+  return `${root.childNodes.length}:${root.textContent?.length ?? 0}`;
+}
 
 /** Element names whose text is never a file reference worth linking. */
 const SKIPPED_ANCESTORS = new Set(['A', 'PRE', 'SCRIPT', 'STYLE', 'TEXTAREA']);
@@ -65,11 +85,12 @@ export async function linkifyFileMentions(
   root: HTMLElement,
   resolver: FileMentionResolver
 ): Promise<void> {
-  if (root.getAttribute(PROCESSED_ATTR) === 'done') return;
+  const fingerprint = contentFingerprint(root);
+  if (root.getAttribute(PROCESSED_ATTR) === fingerprint) return;
 
   const targets = collectTextNodes(root);
   if (targets.length === 0) {
-    root.setAttribute(PROCESSED_ATTR, 'done');
+    root.setAttribute(PROCESSED_ATTR, fingerprint);
     return;
   }
 
@@ -85,7 +106,7 @@ export async function linkifyFileMentions(
   }
 
   if (work.length === 0) {
-    root.setAttribute(PROCESSED_ATTR, 'done');
+    root.setAttribute(PROCESSED_ATTR, fingerprint);
     return;
   }
 
@@ -100,7 +121,9 @@ export async function linkifyFileMentions(
     replaceWithLinks(node, confirmed, byQuery);
   }
 
-  root.setAttribute(PROCESSED_ATTR, 'done');
+  // Fingerprint the POST-link content: linking splits text nodes, so recording
+  // the pre-link value would make the very next pass think the body changed.
+  root.setAttribute(PROCESSED_ATTR, contentFingerprint(root));
 }
 
 /** Every text node under `root` that is eligible to contain a file mention. */
