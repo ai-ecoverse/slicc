@@ -390,8 +390,12 @@ export const ORT_MAX_THREADS = 4;
 /**
  * `localStorage` key that overrides the thread policy for benchmarking
  * (`1` re-pins single-threaded on an isolated leader; `N` forces a pool).
- * Page-realm only — speech runs nowhere else. Parsed, bounded, never trusted
- * past `ORT_MAX_THREADS`.
+ * Page-realm only — speech runs nowhere else. Parsed and bounded: never past
+ * `ORT_MAX_THREADS`, never past `hardwareConcurrency` (a pool wider than the
+ * cores only adds contention). **It is persistent** — a value left behind
+ * after an A/B run re-pins every later session on that leader until it is
+ * removed, so `resolveOrtNumThreads` warns whenever it is in effect and the
+ * per-inference `numThreads` log line shows the applied value.
  */
 export const ORT_THREADS_OVERRIDE_KEY = 'slicc_ort_num_threads';
 
@@ -414,20 +418,28 @@ export interface OrtThreadPolicyInput {
  *  - isolated → `min(ORT_MAX_THREADS, hardwareConcurrency)`, floored at 1,
  *    or `1` when the UA hides concurrency (treat unknown as single-core).
  *  - isolated + valid override → the override clamped to
- *    `[1, ORT_MAX_THREADS]`.
+ *    `[1, min(ORT_MAX_THREADS, hardwareConcurrency)]` (unknown concurrency
+ *    bounds it by `ORT_MAX_THREADS` alone).
  */
 export function resolveOrtNumThreadsFrom(input: OrtThreadPolicyInput): number {
   if (!input.isolated) return 1;
+  const cores = input.hardwareConcurrency;
+  const coresKnown = typeof cores === 'number' && Number.isFinite(cores) && cores >= 1;
+  const ceiling = coresKnown ? Math.min(ORT_MAX_THREADS, Math.floor(cores)) : ORT_MAX_THREADS;
   const override = input.override == null ? Number.NaN : Number.parseInt(input.override, 10);
   if (Number.isFinite(override) && override >= 1) {
-    return Math.min(ORT_MAX_THREADS, override);
+    return Math.max(1, Math.min(ceiling, override));
   }
-  const cores = input.hardwareConcurrency;
-  if (typeof cores !== 'number' || !Number.isFinite(cores) || cores < 1) return 1;
-  return Math.max(1, Math.min(ORT_MAX_THREADS, Math.floor(cores)));
+  return coresKnown ? Math.max(1, ceiling) : 1;
 }
 
-/** Probe the live realm and apply {@link resolveOrtNumThreadsFrom}. */
+/**
+ * Probe the live realm and apply {@link resolveOrtNumThreadsFrom}. An active
+ * override is reported with `console.warn` every time the policy is resolved
+ * (engine load), because the knob persists across sessions and would
+ * otherwise silently re-pin the leader — the very class of silent behaviour
+ * change #2039 guarded against.
+ */
 export function resolveOrtNumThreads(): number {
   let override: string | null = null;
   try {
@@ -435,11 +447,18 @@ export function resolveOrtNumThreads(): number {
   } catch {
     /* storage access can throw in opaque/sandboxed realms — no override */
   }
-  return resolveOrtNumThreadsFrom({
+  const input: OrtThreadPolicyInput = {
     isolated: globalThis.crossOriginIsolated === true,
     hardwareConcurrency: globalThis.navigator?.hardwareConcurrency,
     override,
-  });
+  };
+  const threads = resolveOrtNumThreadsFrom(input);
+  if (override != null && input.isolated) {
+    console.warn(
+      `[speech] ort-web numThreads=${threads} forced by localStorage.${ORT_THREADS_OVERRIDE_KEY}=${JSON.stringify(override)} — this persists until removed`
+    );
+  }
+  return threads;
 }
 
 /**

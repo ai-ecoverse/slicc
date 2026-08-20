@@ -44,10 +44,16 @@ describe('resolveOrtNumThreadsFrom — policy matrix', () => {
     expect(
       resolveOrtNumThreadsFrom({ isolated: true, hardwareConcurrency: 8, override: '2' })
     ).toBe(2);
-    // Clamped to the ceiling — an override cannot spawn an unbounded pool.
+    // Clamped to the ceiling — an override cannot spawn an unbounded pool…
     expect(
       resolveOrtNumThreadsFrom({ isolated: true, hardwareConcurrency: 8, override: '64' })
     ).toBe(ORT_MAX_THREADS);
+    // …nor one wider than the machine: 4 requested on 2 cores → 2.
+    expect(
+      resolveOrtNumThreadsFrom({ isolated: true, hardwareConcurrency: 2, override: '4' })
+    ).toBe(2);
+    // Unknown concurrency bounds the override by ORT_MAX_THREADS alone.
+    expect(resolveOrtNumThreadsFrom({ isolated: true, override: '3' })).toBe(3);
     // Garbage falls back to the default policy.
     for (const bad of ['0', '-3', 'lots', '', null, undefined]) {
       expect(
@@ -72,6 +78,25 @@ describe('resolveOrtNumThreads — live-realm probe', () => {
       getItem: (k: string) => (k === ORT_THREADS_OVERRIDE_KEY ? '1' : null),
     });
     expect(resolveOrtNumThreads()).toBe(1);
+  });
+
+  it('warns whenever a persisted override is in effect (sticky knob)', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    vi.stubGlobal('crossOriginIsolated', true);
+    vi.stubGlobal('navigator', { hardwareConcurrency: 8 });
+    vi.stubGlobal('localStorage', { getItem: () => '1' });
+    expect(resolveOrtNumThreads()).toBe(1);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).toMatch(/slicc_ort_num_threads.*persists/);
+    // No override → no warning; not isolated → the override is inert and silent.
+    warn.mockClear();
+    vi.stubGlobal('localStorage', { getItem: () => null });
+    resolveOrtNumThreads();
+    vi.stubGlobal('crossOriginIsolated', false);
+    vi.stubGlobal('localStorage', { getItem: () => '1' });
+    expect(resolveOrtNumThreads()).toBe(1);
+    expect(warn).not.toHaveBeenCalled();
+    warn.mockRestore();
   });
 
   it('survives a localStorage that throws (opaque/sandboxed realm)', () => {
