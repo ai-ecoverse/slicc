@@ -147,6 +147,61 @@ describe('PR #1166 (P1) — agent bash-tool realm children parent under the scoo
     shell.dispose();
   }, 10_000);
 
+  // Codex review on PR #2210 (P2): the `node`/`python` commands were signal-aware
+  // but the two `.jsh` dispatch paths still called `buildJshProcessConfig()` bare,
+  // so a discovered `.jsh` fell back to the mutable `activeShellPid` and a
+  // concurrent run could steal its parentage.
+  it("parents a discovered .jsh realm child to ITS OWN run's job pid", async () => {
+    const fs = await makeFs();
+    await fs.mkdir('/workspace/skills/bgjob/scripts', { recursive: true });
+    await fs.writeFile(
+      '/workspace/skills/bgjob/scripts/hangjsh.jsh',
+      'await new Promise((r) => setTimeout(r, 60000));'
+    );
+    const pm = new ProcessManager();
+    const turn = spawnTurn(pm);
+    const shell = new AlmostBashShell({
+      fs,
+      cwd: '/workspace',
+      browserAPI: {} as BrowserAPI,
+      processManager: pm,
+      processOwner: { kind: 'scoop', scoopJid: 'scoop_test' },
+      getCurrentShellPid: () => turn.pid,
+    });
+    const spawnJob = (command: string) =>
+      pm.spawn({
+        kind: 'shell',
+        argv: ['bash', '-c', command],
+        cwd: '/workspace',
+        owner: { kind: 'scoop', scoopJid: 'scoop_test' },
+        ppid: turn.pid,
+      });
+
+    // Same late-spawn shape as the `node` case: job A reaches its `.jsh` only
+    // after job B has become the most recent run on this shell.
+    const jshCommand = 'sleep 0.3 && hangjsh';
+    const jobA = spawnJob(jshCommand);
+    const jobB = spawnJob('sleep 5');
+    const abortA = new AbortController();
+    const abortB = new AbortController();
+    const execA = shell.executeCommand(jshCommand, abortA.signal, jobA.pid);
+    const execB = shell.executeCommand('sleep 5', abortB.signal, jobB.pid);
+
+    const realmPid = await waitForRealmPid(pm);
+    expect(pm.get(realmPid)!.ppid, ".jsh realm child must parent to its own run's job").toBe(
+      jobA.pid
+    );
+
+    pm.signal(jobA.pid, 'SIGKILL');
+    expect(pm.get(realmPid)?.terminatedBy).toBe('SIGKILL');
+    expect(pm.get(jobB.pid)?.status).toBe('running');
+
+    abortA.abort();
+    abortB.abort();
+    await Promise.allSettled([execA, execB]);
+    shell.dispose();
+  }, 10_000);
+
   it('control: without the turn-pid wiring the realm orphans at ppid:1 and survives', async () => {
     const fs = await makeFs();
     const pm = new ProcessManager();

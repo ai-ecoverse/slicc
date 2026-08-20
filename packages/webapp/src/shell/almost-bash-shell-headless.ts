@@ -857,7 +857,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     }
 
     if (result.exitCode === 127) {
-      const jshResult = await this.tryJshFallback(command);
+      const jshResult = await this.tryJshFallback(command, signal);
       if (jshResult) {
         void this.syncJshCommands().catch(() => undefined);
         return jshResult;
@@ -1101,7 +1101,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           code,
           ['node', jshPath, ...args],
           { fs: ctx.fs, cwd: ctx.cwd, env: ctx.env, stdin: ctx.stdin, exec: execFn },
-          this.buildJshProcessConfig()
+          this.buildJshProcessConfig(ctx.signal)
         );
       }
 
@@ -1192,8 +1192,17 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     return [...(await this.getFilteredWorkflowCommands()).keys()];
   }
 
-  /** `.jsh` fallback when bash returns 127. */
-  private async tryJshFallback(command: string): Promise<BashExecResult | null> {
+  /**
+   * `.jsh` fallback when bash returns 127.
+   *
+   * `runSignal` is the originating exec's signal — it keys this run's parent pid
+   * so a `.jsh` reached through the fallback parents its realm child to the job
+   * that ran it, not to whichever concurrent run happens to be active.
+   */
+  private async tryJshFallback(
+    command: string,
+    runSignal?: AbortSignal
+  ): Promise<BashExecResult | null> {
     const trimmed = command.trim();
     const firstSpace = trimmed.indexOf(' ');
     const cmdName = firstSpace >= 0 ? trimmed.slice(0, firstSpace) : trimmed;
@@ -1230,7 +1239,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         stdin: EMPTY_BYTES,
         exec: (cmd, opts) => this.bash.exec(cmd, { env: this.lastEnv, cwd: opts?.cwd ?? this.cwd }),
       },
-      this.buildJshProcessConfig()
+      this.buildJshProcessConfig(runSignal)
     );
 
     return {

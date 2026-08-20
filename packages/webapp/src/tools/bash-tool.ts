@@ -225,6 +225,17 @@ export interface BashToolOptions {
    * which never interrupts a realm-backed `node` / `python3` command.
    */
   jobHost?: BashJobHost;
+  /**
+   * Secret scrubber for a DETACHED job's output.
+   *
+   * A foreground result is scrubbed for free at the `adaptTools` boundary
+   * (`core/tool-adapter.ts`), but a detached job's output reaches the agent as a
+   * lick preview and a file on disk, neither of which crosses that boundary — so
+   * the same real→masked pass is applied here instead. Wired by `ScoopContext`
+   * from `getToolResultScrubber()`; absent (tests, floats with no pipeline) means
+   * no scrub, matching the identity scrubber that surface already returns.
+   */
+  scrubOutput?: (text: string) => Promise<string>;
 }
 
 /**
@@ -458,6 +469,28 @@ export function createBashTool(
  * every failure is contained here: a lost output file must not cost the agent
  * its completion notification.
  */
+/**
+ * Apply the configured secret scrub to a detached job's output.
+ *
+ * A throwing scrubber must not cost the agent its completion notification, but
+ * it must not leak either: on failure the output is replaced wholesale rather
+ * than passed through. (The scrubbers built by `getToolResultScrubber()` already
+ * degrade internally — this covers the unexpected throw.)
+ */
+async function scrubJobOutput(ctx: BashRunContext, jobId: string, output: string): Promise<string> {
+  const scrub = ctx.options.scrubOutput;
+  if (!scrub || !output) return output;
+  try {
+    return await scrub(output);
+  } catch (err) {
+    log.warn('Background bash output scrub failed; withholding output', {
+      jobId,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return '[output withheld: secret scrub unavailable]';
+  }
+}
+
 async function deliverBackgroundJob(
   ctx: BashRunContext,
   jobId: string,
@@ -466,11 +499,14 @@ async function deliverBackgroundJob(
   outputPath: string,
   settled: SettledRun
 ): Promise<void> {
-  const output = settled.ok
+  const raw = settled.ok
     ? [settled.result.stdout, settled.result.stderr].filter(Boolean).join('') ||
       `(exit code: ${settled.result.exitCode})`
     : `Shell error: ${settled.error}`;
   const exitCode = settled.ok ? settled.result.exitCode : 1;
+  // Scrub BEFORE the write, so the persisted file the agent is told to `cat` is
+  // masked too — a `preview`-only scrub would just move the leak to disk.
+  const output = await scrubJobOutput(ctx, jobId, raw);
 
   let persistedPath: string | undefined;
   try {

@@ -514,6 +514,50 @@ describe('Bash Tool background_after / timeout', () => {
     expect(result.content).toContain('hi');
   });
 
+  // A detached job's output never crosses the `adaptTools` tool-result boundary
+  // that scrubs a normal bash result, so the tool applies the scrub itself —
+  // otherwise a configured secret printed by a background command would reach
+  // agent history, the UI, and the transcript in the clear.
+  it('scrubs a detached job output in BOTH the lick preview and the persisted file', async () => {
+    const { shell, settle } = pendingShell();
+    const fireLick = vi.fn();
+    const scrubOutput = vi.fn(async (text: string) => text.replaceAll('sk-live-secret', '***'));
+    const bash = createBashTool(shell, fs, '/tmp', { fireLick, scrubOutput });
+
+    await bash.execute({ command: 'printenv TOKEN', background_after: 0 });
+    settle({ stdout: 'TOKEN=sk-live-secret\n', stderr: '', exitCode: 0 });
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+
+    expect(scrubOutput).toHaveBeenCalledWith('TOKEN=sk-live-secret\n');
+    expect(fireLick.mock.calls[0][0].preview).toBe('TOKEN=***\n');
+    // The file is what the agent is told to `cat`, so it must be masked too.
+    expect(await fs.readFile('/tmp/bash-bg-1.txt', { encoding: 'utf-8' })).toBe('TOKEN=***\n');
+  });
+
+  it('withholds the output rather than leaking it when the scrubber throws', async () => {
+    const { shell, settle } = pendingShell();
+    const fireLick = vi.fn();
+    const bash = createBashTool(shell, fs, '/tmp', {
+      fireLick,
+      scrubOutput: async () => {
+        throw new Error('pipeline down');
+      },
+    });
+
+    await bash.execute({ command: 'printenv', background_after: 0 });
+    settle({ stdout: 'TOKEN=sk-live-secret\n', stderr: '', exitCode: 0 });
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+
+    const event = fireLick.mock.calls[0][0];
+    expect(event.preview).not.toContain('sk-live-secret');
+    expect(event.preview).toContain('secret scrub unavailable');
+    // Still delivered: the agent learns the job finished, and with which code.
+    expect(event.bashExitCode).toBe(0);
+    expect(await fs.readFile('/tmp/bash-bg-1.txt', { encoding: 'utf-8' })).not.toContain(
+      'sk-live-secret'
+    );
+  });
+
   it('does not abort a detached job when the turn signal aborts afterwards', async () => {
     const { shell, signals } = pendingShell();
     const bash = createBashTool(shell, fs, '/tmp');

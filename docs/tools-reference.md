@@ -148,6 +148,14 @@ default.
   lick is logged and discarded.
 - Output is only available at completion — `just-bash` has no incremental stream
   — so a detach result carries no partial output.
+- A detached job's output is secret-scrubbed by the tool itself (`scrubOutput`,
+  wired from `getToolResultScrubber()`) before the file is written and the preview
+  is cut: it never crosses the `adaptTools` tool-result boundary that scrubs a
+  normal `bash` result. A scrub failure withholds the output rather than passing
+  it through; the lick still reports the exit code.
+- A still-running job is SIGKILLed when its scoop context is disposed
+  (`drop_scoop`, one-shot `agent` teardown, shutdown), since the scoop directory
+  its output would land in goes away with it.
 
 **Every run is a pid.** Each invocation registers a `kind:'shell'` job process
 (`ScoopContext.spawnBashJob`), so `ps` lists a live background job and
