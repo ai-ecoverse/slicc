@@ -28,37 +28,33 @@ export function readSliccVersion(): SliccVersion {
 }
 
 /**
- * localStorage mirror of the "last seen version" marker that
- * `scoops/upgrade-detection.ts` keeps in IndexedDB.
+ * The "last seen version" marker — the version this profile booted last time —
+ * lives in IndexedDB and is owned by `scoops/upgrade-detection.ts`. The shell
+ * sits BELOW scoops in the layer stack, so `upgrade status` cannot import that
+ * reader directly. Instead the kernel host (which already owns upgrade
+ * detection) registers one here at boot, the same way it publishes the
+ * ProcessManager and LickManager for shell commands.
  *
- * The marker itself is scoops-owned state, and the shell sits below scoops in
- * the layer stack — so `upgrade status` reads this mirror rather than inverting
- * the stack to reach the store. Same mechanism the tray status/follower shims
- * use: the page writes it, and the kernel worker sees it via the boot-time
- * `localStorageSeed` plus `installPageStorageSync`'s live forwarding.
+ * Registration is synchronous and happens during `createKernelHost`, before
+ * any shell exists, so there is no window in which a command sees a
+ * half-initialized marker. The reader itself hits IndexedDB on demand, so it
+ * always reflects the CURRENT marker rather than a snapshot — including after
+ * `recordVersionSeen` advances it mid-session.
  */
-export const LAST_SEEN_VERSION_STORAGE_KEY = 'slicc.lastSeenVersion';
+export type LastSeenVersionReader = () => Promise<string | null>;
 
-/** Read the mirror. `null` when absent, empty, or storage is unavailable. */
-export function readLastSeenVersionFromShim(): string | null {
-  try {
-    const value = (globalThis as { localStorage?: Storage }).localStorage?.getItem(
-      LAST_SEEN_VERSION_STORAGE_KEY
-    );
-    return value && value.length > 0 ? value : null;
-  } catch {
-    return null;
-  }
+let lastSeenVersionReader: LastSeenVersionReader | null = null;
+
+/** Publish the marker reader. Pass `null` to unregister (tests, teardown). */
+export function setLastSeenVersionReader(reader: LastSeenVersionReader | null): void {
+  lastSeenVersionReader = reader;
 }
 
-/** Best-effort mirror write — a missing localStorage or a quota error is ignored. */
-export function writeLastSeenVersionToShim(version: string): void {
-  try {
-    (globalThis as { localStorage?: Storage }).localStorage?.setItem(
-      LAST_SEEN_VERSION_STORAGE_KEY,
-      version
-    );
-  } catch {
-    // best-effort mirror
-  }
+/**
+ * The registered marker reader, or `null` in a runtime that never wired one
+ * (a bare unit-test shell). Callers must report that as "unknown" rather than
+ * as "no version recorded" — the two are different answers.
+ */
+export function getLastSeenVersionReader(): LastSeenVersionReader | null {
+  return lastSeenVersionReader;
 }

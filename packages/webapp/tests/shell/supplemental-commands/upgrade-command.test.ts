@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import type { SecureFetch } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { LAST_SEEN_VERSION_STORAGE_KEY } from '../../../src/base/slicc-version.js';
+import { setLastSeenVersionReader } from '../../../src/base/slicc-version.js';
 import { VirtualFS } from '../../../src/fs/index.js';
 import { readBundledVersion } from '../../../src/scoops/upgrade-detection.js';
 import { createSupplementalCommands } from '../../../src/shell/supplemental-commands/index.js';
@@ -359,12 +359,10 @@ describe('upgrade status', () => {
     expect(json.errors[0]).toContain('IndexedDB unavailable');
   });
 
-  it('reads the last-seen marker from the localStorage mirror by default', async () => {
-    // The IndexedDB marker is scoops-owned; the shell reads the mirror
-    // `setLastSeenVersion` writes (see base/slicc-version.ts).
-    vi.stubGlobal('localStorage', {
-      getItem: (key: string) => (key === LAST_SEEN_VERSION_STORAGE_KEY ? '1.2.3' : null),
-    });
+  it('reads the marker through the reader the kernel host registers', async () => {
+    // The IndexedDB marker is scoops-owned; the kernel host publishes a reader
+    // for it at boot (see base/slicc-version.ts).
+    setLastSeenVersionReader(async () => '1.2.3');
     try {
       const result = await createUpgradeCommand({ fs, fetch: makeFetch({}) }).execute(
         ['status'],
@@ -372,8 +370,44 @@ describe('upgrade status', () => {
       );
       expect(JSON.parse(result.stdout).lastSeen).toBe('1.2.3');
     } finally {
-      vi.unstubAllGlobals();
+      setLastSeenVersionReader(null);
     }
+  });
+
+  it('reads the marker live on each call, not from a boot-time snapshot', async () => {
+    // `recordVersionSeen` can advance the marker mid-session; status must see it.
+    let marker = '1.0.0';
+    setLastSeenVersionReader(async () => marker);
+    try {
+      const command = createUpgradeCommand({ fs, fetch: makeFetch({}) });
+      const before = await command.execute(['status'], {} as never);
+      expect(JSON.parse(before.stdout).lastSeen).toBe('1.0.0');
+
+      marker = readBundledVersion().version;
+      const after = await command.execute(['status'], {} as never);
+      expect(JSON.parse(after.stdout).lastSeen).toBe(marker);
+      expect(JSON.parse(after.stdout).mergePending).toBe(false);
+    } finally {
+      setLastSeenVersionReader(null);
+    }
+  });
+
+  it('reports the marker as unavailable — not as absent — when no reader is wired', async () => {
+    // "no marker recorded" (a real first boot) and "could not look it up" are
+    // different answers; only the first makes `mergePending: false` meaningful.
+    const result = await createUpgradeCommand({ fs, fetch: makeFetch({}) }).execute(
+      ['status'],
+      {} as never
+    );
+    const json = JSON.parse(result.stdout);
+
+    expect(result.exitCode).toBe(0);
+    expect(json.version).toBe(readBundledVersion().version);
+    expect(json.ok).toBe(false);
+    expect(json.lastSeen).toBe(null);
+    expect(json.errors).toEqual([
+      'last-seen version unavailable: no reader registered in this runtime',
+    ]);
   });
 
   it('rejects extra arguments after status', async () => {

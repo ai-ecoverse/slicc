@@ -1,7 +1,7 @@
 /** Browser-native upgrade of bundled VFS files across SLICC release refs. */
 import type { Command, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { readLastSeenVersionFromShim, readSliccVersion } from '../../base/slicc-version.js';
+import { getLastSeenVersionReader, readSliccVersion } from '../../base/slicc-version.js';
 import type { VirtualFS } from '../../fs/index.js';
 import { threeWayMerge } from '../../git/merge-file-core.js';
 import { getFetchBodyBytes, parseFetchJson } from '../fetch-body.js';
@@ -52,7 +52,7 @@ interface UpgradePlan {
 export interface UpgradeCommandDeps {
   fs: VirtualFS;
   fetch: SecureFetch;
-  /** Override the "last seen version" reader (tests). Defaults to the localStorage mirror. */
+  /** Override the "last seen version" reader (tests). Defaults to the kernel-host-registered one. */
   getLastSeen?: () => Promise<string | null>;
 }
 
@@ -344,18 +344,30 @@ async function applyUpgrade(
  * This is the answer to «what do I pass to `--from`?»: when a merge is pending,
  * the exact `upgrade apply` invocation is spelled out in the `apply` field.
  * Read-only — unlike `detectUpgrade()`, it never advances the last-seen marker,
- * so asking for status cannot swallow a pending upgrade lick.
+ * so asking for status cannot swallow a pending upgrade lick. The marker is
+ * read live through the reader the kernel host registers (see
+ * `base/slicc-version.ts`), not from a snapshot, so the answer is current even
+ * if boot-time detection is still in flight.
  */
 async function status(deps: UpgradeCommandDeps): Promise<string> {
   const { version, releasedAt, buildId } = readSliccVersion();
   const errors: string[] = [];
   let lastSeen: string | null = null;
-  try {
-    lastSeen = await (deps.getLastSeen ?? (async () => readLastSeenVersionFromShim()))();
-  } catch (error) {
-    errors.push(
-      `last-seen version unavailable: ${error instanceof Error ? error.message : String(error)}`
-    );
+  const readLastSeen = deps.getLastSeen ?? getLastSeenVersionReader();
+  if (!readLastSeen) {
+    // No reader wired in this runtime. Report that as unknown rather than
+    // letting it read as `null` — "no marker recorded" (a genuine first boot,
+    // nothing to merge) and "could not look the marker up" are different
+    // answers, and only one of them means `mergePending: false` is trustworthy.
+    errors.push('last-seen version unavailable: no reader registered in this runtime');
+  } else {
+    try {
+      lastSeen = await readLastSeen();
+    } catch (error) {
+      errors.push(
+        `last-seen version unavailable: ${error instanceof Error ? error.message : String(error)}`
+      );
+    }
   }
   const mergePending = lastSeen !== null && lastSeen !== version;
   return `${JSON.stringify({

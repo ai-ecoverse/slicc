@@ -10,7 +10,7 @@
  * into the user's workspace.
  */
 
-import { readSliccVersion, writeLastSeenVersionToShim } from '../base/slicc-version.js';
+import { readSliccVersion } from '../base/slicc-version.js';
 import { getState, setState } from './db.js';
 
 const LAST_SEEN_STATE_KEY = 'slicc:last-seen-version';
@@ -42,17 +42,11 @@ export async function getLastSeenVersion(): Promise<string | null> {
   const raw = await getState(LAST_SEEN_STATE_KEY);
   // Treat both nullish and empty-string as "no recorded version" so the
   // marker can be cleared by writing an empty string in tests/dev tools.
-  const value = raw && raw.length > 0 ? raw : null;
-  // Keep the localStorage mirror current on the read path too, so a profile
-  // that predates the mirror publishes it on the next boot (`upgrade status`
-  // reads the mirror — see `base/slicc-version.ts`).
-  if (value) writeLastSeenVersionToShim(value);
-  return value;
+  return raw && raw.length > 0 ? raw : null;
 }
 
 export async function setLastSeenVersion(version: string): Promise<void> {
   await setState(LAST_SEEN_STATE_KEY, version);
-  writeLastSeenVersionToShim(version);
 }
 
 /**
