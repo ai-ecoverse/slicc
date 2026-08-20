@@ -28,11 +28,11 @@ schedule (every 2h) ─▶ scan-failing-prs.mjs ─▶ queue (JSON) ─▶ fix j
 
 ## The three paths
 
-| Path         | When                                                                                                                                     | Side effects                                                       |
-| ------------ | ---------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| **re-run**   | The failure never evaluated the code: artifact up/download, DNS/reset/timeout, registry 5xx, runner lost, a bare cancel. Once per SHA.   | `rerun-failed-jobs` only — no label, no comment.                   |
-| **dispatch** | The failure is in the code and mechanically fixable: lint/format, types, a snapshot or coverage floor, lockfile drift, a merge conflict. | `ci-fix-dispatched` + one marker comment, then the `fix` job runs. |
-| **skip**     | Everything else, and always for the hard overrides below.                                                                                | `ci-fix-skipped` + one short comment (never two for the same SHA). |
+| Path         | When                                                                                                                                                              | Side effects                                                       |
+| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| **re-run**   | The failure never evaluated the code: artifact up/download, DNS/reset/timeout, registry 5xx, runner lost, a bare cancel. Once per SHA.                            | `rerun-failed-jobs` only — no label, no comment.                   |
+| **dispatch** | The failure is in the code and mechanically fixable: the debt boy-scout gate, lint/format, types, a snapshot or coverage floor, lockfile drift, a merge conflict. | `ci-fix-dispatched` + one marker comment, then the `fix` job runs. |
+| **skip**     | Everything else, and always for the hard overrides below.                                                                                                         | `ci-fix-skipped` + one short comment (never two for the same SHA). |
 
 Hard overrides to skip: auth, billing, secrets/credentials, schema migrations,
 release/publish/deploy jobs, an expired token or exhausted quota, an
@@ -40,6 +40,24 @@ infrastructure failure that **recurred after a re-run** (so it is not a flake), 
 fix needing a new dependency / version change / CI-config change, and any failure
 whose cause cannot be named. When in doubt between dispatch and skip, skip; when
 in doubt between re-run and skip, re-run.
+
+### The debt boy-scout gate is the likeliest dispatch of all
+
+`check-touched-exemptions.mjs` (the `lint` job's "Debt boy-scout gate" step) fails
+any PR that touches a file still on a debt list — function size, cognitive
+complexity, floating or misused promises, layer back-edges, untyped string-keyed
+bags. The boy-scout and backlog dispatchers exist to edit exactly those files, so
+this is the failure an automation PR is most likely to hit, and it is mechanically
+fixable: the gate prints the offending file and the fix it wants.
+
+It is also invisible to a keyword list built for ordinary linters, because its
+output never says "biome", "eslint", or "lint error" — it says
+`check-touched-exemptions: FAIL` and `still on the <rule> debt list`. Both
+phrasings, plus the "debt list is frozen and must not grow" variant, are matched
+by the `debt-gate` code signature, which is checked before the broader `lint` one.
+The log excerpt keeps the lines that _follow_ a failure line for the same reason:
+the filename and the `Fix:` instruction contain no failure-ish word of their own,
+and without them the fixer's prompt names a failure it cannot act on.
 
 Silent drops (no label, no comment) happen before the rubric: the PR is not
 machine-authored, CI is green or still running, the newest failing conclusion is
