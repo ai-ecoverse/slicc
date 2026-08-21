@@ -53,7 +53,7 @@ import {
   resolveModelById,
   resolveModelSelectionForScoop,
 } from '../providers/account-store.js';
-import { AlmostBashShell } from '../shell/index.js';
+import { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import { DEFAULT_JSH_SEARCH_ROOTS } from '../shell/jsh-discovery.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import { createBashTool, createFileTools } from '../tools/index.js';
@@ -363,7 +363,7 @@ export class ScoopContext {
   private scoop: RegisteredScoop;
   private callbacks: ScoopContextCallbacks;
   private fs: VirtualFS | RestrictedFS | null = null;
-  private shell: AlmostBashShell | null = null;
+  private shell: AlmostBashShellHeadless | null = null;
   private agent: Agent | null = null;
   private status: 'initializing' | 'ready' | 'processing' | 'error' = 'initializing';
   private isProcessing = false;
@@ -543,7 +543,7 @@ export class ScoopContext {
     ) as VirtualFS;
 
     const shellEnv = buildScoopShellEnv(this.scoop.isCone, this.scoop.folder, secretEnv);
-    this.shell = new AlmostBashShell({
+    this.shell = new AlmostBashShellHeadless({
       fs: gatedFs,
       cwd,
       env: Object.keys(shellEnv).length > 0 ? shellEnv : undefined,
@@ -1463,7 +1463,7 @@ export class ScoopContext {
   }
 
   /** Get the scoop's shell */
-  getShell(): AlmostBashShell | null {
+  getShell(): AlmostBashShellHeadless | null {
     return this.shell;
   }
 

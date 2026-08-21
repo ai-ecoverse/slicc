@@ -856,6 +856,40 @@ If a new npm dependency imports Node builtins:
 
 **Example**: `@smithy/node-http-handler` imports `stream`, `http`, `https`, `http2` (stubbed at `packages/webapp/src/shims/{stream,http,https,http2}.ts`).
 
+## Bundle Graphs: The Page and the Kernel Worker Are Built Separately
+
+**The Problem**
+
+Vite builds `kernel-worker.ts` as its own Rollup graph, and any standalone
+esbuild bundle (`dist/ui/slicc-diff.js`, …) is a third one. Nothing is shared
+between them, so a single import edge can duplicate megabytes:
+
+- `ensure-speech-assets.ts` (worker) imported `KOKORO_MODEL_ID` — a string —
+  from `kokoro-engine.ts`. The engine's `await import('kokoro-js')` then emitted
+  `kokoro-js` + `@huggingface/transformers` into the WORKER build: ~1.8 MB of
+  chunks the page graph already shipped, in a realm with no Web Audio.
+- `say` / `hear` keep their page and panel-RPC branches in one module, so the
+  worker build carried the page branch too.
+- `dist/ui/slicc-diff.js` was an esbuild IIFE. esbuild INLINES dynamic imports
+  where Rollup code-splits them, so the curated Shiki grammar set (5.1 MB)
+  landed eagerly in one file — a second copy of chunks the app already had.
+
+Lazy `import()` bounds what a user DOWNLOADS at boot; it does not bound what a
+build SHIPS. The total-JS-payload budget counts every emitted file.
+
+**The Solution**
+
+- Import cross-realm constants from a dependency-free module
+  (`speech/model-ids.ts`), never from the module that implements them.
+- Stub page-only modules in the worker build (`stubPageRealmSpeechPlugin`,
+  passed to `worker.plugins` — which is NOT derived from `plugins`).
+- Make a browser-loaded bundle a Rollup entry (`build.rollupOptions.input`) plus
+  a stable-name loader shim, rather than a parallel esbuild bundle, whenever it
+  shares dependencies with the app.
+
+`packages/webapp/tests/speech/worker-realm-boundary.test.ts` guards the first
+two; `npm run size -w @slicc/webapp` guards the total.
+
 ## IndexedDB Database Names
 
 Five databases exist:

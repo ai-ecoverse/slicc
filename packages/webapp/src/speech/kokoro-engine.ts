@@ -33,6 +33,7 @@ import {
   isUnusablePhonemizerError,
   phonemizeForKokoro,
 } from './kokoro-phonemize.js';
+import { KOKORO_MODEL_ID } from './model-ids.js';
 import {
   assertLocalModelPresent,
   configureTransformersEnv,
@@ -43,7 +44,7 @@ import type { WhisperProgress } from './whisper-engine.js';
 const log = createLogger('speech:kokoro');
 
 /** The TTS model the enhanced voice runs (https://ttslab.dev/models/kokoro-82m). */
-export const KOKORO_MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
+export { KOKORO_MODEL_ID };
 
 /** A kokoro voice, normalized for pickers and `say --list`. */
 export interface KokoroVoiceInfo {

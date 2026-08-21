@@ -1,9 +1,10 @@
 /**
- * IIFE entry point for the <slicc-editor> custom element bundle.
+ * Entry point for the <slicc-editor> custom element bundle sprinkle iframes load.
  *
- * Built by esbuild into a standalone script that can be injected into
- * sprinkle iframes. All CM6 packages are bundled together so singleton
- * instanceof checks work correctly.
+ * A Rollup entry in the app's own build (`build.rollupOptions.input`), reached
+ * through the stable-name loader shim `dist/ui/slicc-editor.js`. One CM6 copy
+ * for the app and for sprinkles, so singleton instanceof checks still hold and
+ * the packages are not bundled twice.
  */
 
 import './slicc-editor.js';

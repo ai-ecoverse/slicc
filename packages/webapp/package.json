@@ -25,7 +25,7 @@
       "name": "webapp: total JS payload",
       "path": "../../dist/ui/**/*.js",
       "brotli": false,
-      "limit": "34 MB"
+      "limit": "25 MB"
     }
   ],
   "dependencies": {

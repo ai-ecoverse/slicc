@@ -14,7 +14,7 @@ import type { LickEvent } from '@slicc/shared-ts';
 import { classifyImageMarkers } from '../base/image-markers.js';
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
-import type { AlmostBashShell } from '../shell/index.js';
+import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import type {
   BashJobHost,
   BashJobProcess,
@@ -360,7 +360,7 @@ export interface BashToolOptions {
  * `createBashTool` stays thin.
  */
 interface BashRunContext {
-  shell: AlmostBashShell;
+  shell: AlmostBashShellHeadless;
   fs: VirtualFS;
   tempDir: string;
   options: BashToolOptions;
@@ -556,7 +556,7 @@ function detachedResult(
  * a scoop). See {@link boundBashOutput}.
  */
 export function createBashTool(
-  shell: AlmostBashShell,
+  shell: AlmostBashShellHeadless,
   fs: VirtualFS,
   tempDir: string,
   options: BashToolOptions = {}

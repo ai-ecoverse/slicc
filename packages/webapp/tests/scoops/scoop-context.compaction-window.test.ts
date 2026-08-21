@@ -72,8 +72,8 @@ vi.mock('../../src/tools/index.js', () => ({
   createBashTool: () => ({ name: 'bash' }),
 }));
 
-vi.mock('../../src/shell/index.js', () => ({
-  AlmostBashShell: vi.fn(function () {
+vi.mock('../../src/shell/almost-bash-shell-headless.js', () => ({
+  AlmostBashShellHeadless: vi.fn(function () {
     return {};
   }),
 }));
