@@ -16,7 +16,7 @@ const log = createLogger('agentic-memory');
 
 export const MEMORY_INSTRUCTIONS_PATH = '/shared/MEMORY.md';
 export const DEFAULT_MEMORY_TIMEOUT_SECONDS = 600;
-export const MAX_MEMORY_TIMEOUT_SECONDS = 600;
+export const MAX_MEMORY_TIMEOUT_SECONDS = 1200;
 
 /**
  * Exactly the memory file, not `/workspace/`. The curator is given `upskill` so
@@ -190,7 +190,7 @@ export async function runAgenticMemoryPass(
     }
     if (outcome.result.exitCode !== 0) {
       // A name-in-use rejection means a PRIOR curator is still running and holds
-      // the fixed `memory-curator` name (its window is now up to 10 min). Unlike
+      // the fixed `memory-curator` name (its window is now up to 20 min). Unlike
       // a curator that spawned and failed, no run has released — the legacy
       // append is NOT safe: the running namesake read the memory file before
       // this session's append and its whole-file rewrite would clobber it. Defer
