@@ -120,7 +120,7 @@ export class ScoopCompletionService {
    * Any registered waiters are resolved with `null` so `scoop_wait` callers
    * unblock on teardown instead of stalling indefinitely.
    */
-  forgetScoop(jid: string, reason: 'unregister' | 'fatal-error'): void {
+  forgetScoop(jid: string, reason: 'unregister' | 'fatal-error' | 'close'): void {
     this.scoopResponseBuffer.delete(jid);
     this.mutedScoops.delete(jid);
     this.pendingCompletions.delete(jid);

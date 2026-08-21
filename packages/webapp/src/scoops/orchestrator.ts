@@ -36,6 +36,7 @@ import { registerTranscriptExportService } from '../transcript/export-provider.j
 import { DefaultTranscriptExportService } from '../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
+import type { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { WorkUnitManager } from '../work-unit/manager.js';
 import { SessionStore as UiSessionStore } from './chat-session-store.js';
 import { ConeMemoryStore } from './cone-memory-store.js';
@@ -957,6 +958,11 @@ export class Orchestrator implements ConeApprovalRouter {
   /** Hierarchy-aware work-unit view over the registry (#1666). */
   getWorkUnits(): WorkUnitManager {
     return this.workUnits;
+  }
+
+  /** The owning live runtime of a scoop, once spawned or observed. */
+  getLiveUnit(jid: string): LiveWorkUnit | undefined {
+    return this.lifecycle.getUnit(jid);
   }
 
   /** Wipe the virtual filesystem and re-seed default files (skills, shared CLAUDE.md). */

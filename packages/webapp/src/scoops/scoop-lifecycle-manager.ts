@@ -8,8 +8,11 @@
  * "unrecoverable scoop failure" handler that escalates a fatal error to the
  * cone (`handleFatalError`).
  *
- * Extracted from `Orchestrator` so the lifecycle maps (`tabs`, `contexts`,
- * `scoopObservers`) live next to the methods that mutate them. Everything
+ * Since #1666 (Phase 2) the manager is a host of {@link LiveWorkUnit}s: one
+ * `Map<jid, LiveWorkUnit>` owns each scoop's context, tab record and
+ * observers, and `getContexts()` / `getTabsMap()` are derived views kept for
+ * the message router, cost tracker and idle timers. `LiveWorkUnit.close()` is
+ * the single teardown path. Everything
  * else — scoop registry, callbacks, memory store, completion service, sudo
  * pieces, idle timers, message router — is reached through
  * {@link ScoopLifecycleDeps}, so this module stays free of orchestrator
@@ -25,6 +28,7 @@ import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
 import type { SudoDecision, SudoRequest } from '../sudo/index.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
+import { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState, ThinkingLevel } from './types.js';
@@ -101,7 +105,7 @@ export interface ScoopLifecycleDeps {
     appendResponseChunk(jid: string, chunk: string): void;
     setResponseFull(jid: string, text: string): void;
     notifyCompletion(jid: string): Promise<void> | void;
-    forgetScoop(jid: string, reason: string): void;
+    forgetScoop(jid: string, reason: 'unregister' | 'fatal-error' | 'close'): void;
     clearResponse(jid: string): void;
   };
   /** Persistent storage for scoop records. Threaded so tests can stub. */
@@ -172,34 +176,62 @@ export interface ScoopLifecycleDeps {
 }
 
 export class ScoopLifecycleManager {
-  private tabs: Map<string, ScoopTabState> = new Map();
-  private contexts: Map<string, ScoopContext> = new Map();
-  private scoopObservers: Map<string, Set<ScoopObserver>> = new Map();
+  /** One owning runtime per scoop jid (#1666). */
+  private units: Map<string, LiveWorkUnit> = new Map();
 
   constructor(private deps: ScoopLifecycleDeps) {}
 
-  /** Live contexts view. */
+  /** The live unit for `jid`, or `undefined` when none has been spawned or observed. */
+  getUnit(jid: string): LiveWorkUnit | undefined {
+    return this.units.get(jid);
+  }
+
+  /**
+   * Get-or-create the unit record for `jid`. A unit can exist before its
+   * context (an observer subscribed ahead of spawn, or a boot-time error
+   * tab) — it simply has no `context` / `tab` yet.
+   */
+  private ensureUnit(jid: string): LiveWorkUnit {
+    let unit = this.units.get(jid);
+    if (!unit || unit.isClosed) {
+      unit = new LiveWorkUnit(jid, {
+        getScoop: (j) => this.deps.getScoops().get(j),
+        sendPrompt: (j, text, senderId, senderName, options) =>
+          this.sendPrompt(j, text, senderId, senderName, [], options),
+        clearIdleTimer: (j) => this.deps.idleTimers.clear(j),
+        forgetCompletion: (j, reason) => this.deps.completionService.forgetScoop(j, reason),
+      });
+      this.units.set(jid, unit);
+    }
+    return unit;
+  }
+
+  /** Live contexts view (derived; read-only for callers). */
   getContexts(): Map<string, ScoopContext> {
-    return this.contexts;
+    const out = new Map<string, ScoopContext>();
+    for (const [jid, unit] of this.units) {
+      if (unit.context) out.set(jid, unit.context as ScoopContext);
+    }
+    return out;
   }
 
   /** Live context for a single jid (or `undefined`). */
   getContext(jid: string): ScoopContext | undefined {
-    return this.contexts.get(jid);
+    return (this.units.get(jid)?.context as ScoopContext | null | undefined) ?? undefined;
   }
 
   /** Synchronize live read ACLs after a global or per-scoop policy reload. */
   syncReadGrants(folder?: string): void {
     for (const scoop of this.deps.getScoops().values()) {
       if (scoop.isCone || (folder !== undefined && scoop.folder !== folder)) continue;
-      const fs = this.contexts.get(scoop.jid)?.getFS();
+      const fs = this.getContext(scoop.jid)?.getFS();
       this.applyPolicyReadGrants(scoop, fs);
     }
   }
 
   /** Live tab state for a single jid (or `undefined`). */
   getTab(jid: string): ScoopTabState | undefined {
-    return this.tabs.get(jid);
+    return this.units.get(jid)?.tab ?? undefined;
   }
 
   /**
@@ -208,18 +240,7 @@ export class ScoopLifecycleManager {
    * set holds strong references and leaks otherwise.
    */
   observe(jid: string, observer: ScoopObserver): () => void {
-    let set = this.scoopObservers.get(jid);
-    if (!set) {
-      set = new Set();
-      this.scoopObservers.set(jid, set);
-    }
-    set.add(observer);
-    return () => {
-      const s = this.scoopObservers.get(jid);
-      if (!s) return;
-      s.delete(observer);
-      if (s.size === 0) this.scoopObservers.delete(jid);
-    };
+    return this.ensureUnit(jid).observe(observer);
   }
 
   private dispatch<K extends keyof ScoopObserver>(
@@ -227,21 +248,7 @@ export class ScoopLifecycleManager {
     event: K,
     ...args: Parameters<NonNullable<ScoopObserver[K]>>
   ): void {
-    const observers = this.scoopObservers.get(jid);
-    if (!observers) return;
-    for (const o of observers) {
-      const handler = o[event];
-      if (!handler) continue;
-      try {
-        (handler as (...a: unknown[]) => void)(...(args as unknown[]));
-      } catch (err) {
-        log.warn('scoop observer threw', {
-          jid,
-          event,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
-    }
+    this.units.get(jid)?.dispatch(event, ...args);
   }
 
   /**
@@ -286,13 +293,11 @@ export class ScoopLifecycleManager {
     const scoop = this.deps.getScoops().get(jid);
     if (!scoop) throw new Error(`Scoop not found: ${jid}`);
 
-    if (this.contexts.has(jid)) {
-      const existingTab = this.tabs.get(jid);
-      if (existingTab?.status === 'error') {
+    const unit = this.ensureUnit(jid);
+    if (unit.context) {
+      if (unit.tab?.status === 'error') {
         log.info('Re-creating context after error', { jid });
-        this.contexts.get(jid)?.dispose();
-        this.contexts.delete(jid);
-        this.tabs.delete(jid);
+        unit.disposeContext();
       } else {
         log.debug('Context already exists', { jid });
         return;
@@ -341,20 +346,11 @@ export class ScoopLifecycleManager {
       this.deps.getSudoManager()
     );
 
-    this.contexts.set(jid, context);
-    this.tabs.set(jid, {
-      jid,
-      contextId,
-      status: 'initializing',
-      lastActivity: new Date().toISOString(),
-    });
+    unit.attachContext(context, contextId);
 
     await context.init();
 
-    const initTab = this.tabs.get(jid);
-    if (initTab && initTab.status === 'initializing') {
-      initTab.status = 'ready';
-      this.tabs.set(jid, initTab);
+    if (unit.tab?.status === 'initializing' && unit.transition('ready')) {
       this.deps.callbacks.onStatusChange(jid, 'ready');
       this.dispatch(jid, 'onStatusChange', 'ready');
       // Probe persisted messages when context init did not emit its own ready
@@ -380,32 +376,24 @@ export class ScoopLifecycleManager {
   /** Destroy a scoop context. */
   destroyTab(jid: string): void {
     this.deps.idleTimers.clear(jid);
-    const context = this.contexts.get(jid);
-    if (context) {
-      context.dispose();
-      this.contexts.delete(jid);
-      this.tabs.delete(jid);
-      // Drop any lingering per-scoop observers alongside the context so
-      // the shutdown / reset paths (which call us directly, bypassing
-      // `unregisterScoop`) also reclaim them.
-      this.scoopObservers.delete(jid);
-      log.info('Scoop context destroyed', { jid });
-    }
+    const unit = this.units.get(jid);
+    if (!unit) return;
+    // `close()` is the single teardown: stops the turn, disposes the context
+    // (realm workers + shell processes), drops observers and releases any
+    // `scoop_wait` caller. Shutdown / reset / rollback paths that bypass
+    // `unregister` reclaim everything the same way.
+    void unit.close();
+    this.units.delete(jid);
+    log.info('Scoop context destroyed', { jid });
   }
 
-  /** Drop the observer set for a scoop. Used by `unregisterScoop`. */
-  forgetObservers(jid: string): void {
-    this.scoopObservers.delete(jid);
-  }
-
-  /** Live tabs view; the message router reads through this. */
+  /** Live tabs view (derived; read-only for callers). */
   getTabsMap(): Map<string, ScoopTabState> {
-    return this.tabs;
-  }
-
-  /** Write back a tab record. Used by `sendPrompt` to flip `processing`. */
-  setTab(jid: string, tab: ScoopTabState): void {
-    this.tabs.set(jid, tab);
+    const out = new Map<string, ScoopTabState>();
+    for (const [jid, unit] of this.units) {
+      if (unit.tab) out.set(jid, unit.tab);
+    }
+    return out;
   }
 
   /**
@@ -417,13 +405,10 @@ export class ScoopLifecycleManager {
    * a silent no-tab (or stuck `'initializing'`) entry that can never recover.
    */
   markTabError(jid: string, message: string): void {
-    const existing = this.tabs.get(jid);
-    this.tabs.set(jid, {
-      jid,
-      contextId: existing?.contextId ?? `scoop-error-${jid}`,
-      status: 'error',
+    const unit = this.ensureUnit(jid);
+    unit.transition('error', {
+      contextId: unit.tab?.contextId ?? `scoop-error-${jid}`,
       error: message,
-      lastActivity: new Date().toISOString(),
     });
   }
 
@@ -443,16 +428,14 @@ export class ScoopLifecycleManager {
    * the new VFS is swapped in.
    */
   stopAndClearAllContexts(): void {
-    for (const [jid, ctx] of this.contexts.entries()) {
-      this.deps.idleTimers.clear(jid);
-      ctx.stop();
-      this.contexts.delete(jid);
+    for (const unit of this.units.values()) {
+      unit.detachContext();
     }
   }
 
   /** Destroy every live context. Used by `shutdown`. */
   async destroyAllTabs(): Promise<void> {
-    for (const jid of Array.from(this.contexts.keys())) {
+    for (const jid of Array.from(this.units.keys())) {
       this.destroyTab(jid);
     }
   }
@@ -461,7 +444,7 @@ export class ScoopLifecycleManager {
   private async waitForTabReady(jid: string, timeoutMs: number = 10000): Promise<boolean> {
     const start = Date.now();
     while (Date.now() - start < timeoutMs) {
-      const tab = this.tabs.get(jid);
+      const tab = this.getTab(jid);
       if (!tab) return false;
       if (tab.status === 'ready' || tab.status === 'processing') return true;
       if (tab.status === 'error') return false;
@@ -484,26 +467,25 @@ export class ScoopLifecycleManager {
     images: ImageContent[] = [],
     options?: { steer?: boolean }
   ): Promise<void> {
-    let context = this.contexts.get(jid);
+    let context = this.getContext(jid);
 
     if (!context) {
       await this.createTab(jid);
-      context = this.contexts.get(jid);
+      context = this.getContext(jid);
     }
 
-    let tab = this.tabs.get(jid);
-    if (tab?.status === 'initializing') {
+    const unit = this.units.get(jid);
+    if (unit?.tab?.status === 'initializing') {
       log.debug('Context initializing, waiting to send message', { jid });
       const ready = await this.waitForTabReady(jid);
       if (!ready) {
         log.error('Context did not become ready in time, dropping prompt', { jid });
         return;
       }
-      context = this.contexts.get(jid);
-      tab = this.tabs.get(jid);
+      context = this.getContext(jid);
     }
 
-    if (!context) {
+    if (!context || !unit) {
       log.error('Context not found after creation', { jid });
       return;
     }
@@ -511,10 +493,7 @@ export class ScoopLifecycleManager {
     this.deps.idleTimers.clear(jid);
 
     this.deps.completionService.clearResponse(jid);
-    if (tab) {
-      tab.status = 'processing';
-      tab.lastActivity = new Date().toISOString();
-      this.tabs.set(jid, tab);
+    if (unit.tab && unit.transition('processing')) {
       this.deps.callbacks.onStatusChange(jid, 'processing');
       this.dispatch(jid, 'onStatusChange', 'processing');
     }
@@ -604,7 +583,6 @@ export class ScoopLifecycleManager {
       });
     }
 
-    this.deps.idleTimers.clear(jid);
     this.destroyTab(jid);
     this.deps
       .getSessionStore()
@@ -618,7 +596,6 @@ export class ScoopLifecycleManager {
     await this.deps.db.deleteScoop(jid);
     scoops.delete(jid);
     this.deps.messageRouter.forgetScoop(jid);
-    this.scoopObservers.delete(jid);
     this.deps.completionService.forgetScoop(jid, 'unregister');
     const sudoFailed = this.deps.approvalRouter.failScoop(jid);
     if (sudoFailed > 0) {
@@ -642,17 +619,18 @@ export class ScoopLifecycleManager {
 
   /** Update the model on every active scoop context. */
   updateModelOnAll(): void {
-    for (const context of this.contexts.values()) {
+    const contexts = this.getContexts();
+    for (const context of contexts.values()) {
       context.updateModel();
     }
-    log.info('Model updated on all active contexts', { contextCount: this.contexts.size });
+    log.info('Model updated on all active contexts', { contextCount: contexts.size });
   }
 
   /** Reload skills on every ready / processing scoop context. */
   async reloadAllSkills(): Promise<void> {
     const promises: Promise<void>[] = [];
-    for (const [jid, context] of this.contexts) {
-      const tab = this.tabs.get(jid);
+    for (const [jid, context] of this.getContexts()) {
+      const tab = this.getTab(jid);
       if (tab?.status === 'ready' || tab?.status === 'processing') {
         promises.push(
           context.reloadSkills().catch((err) => {
@@ -682,7 +660,7 @@ export class ScoopLifecycleManager {
     const scoop = this.deps.getScoops().get(jid);
     if (!scoop) return null;
 
-    const context = this.contexts.get(jid);
+    const context = this.getContext(jid);
     const applied = context ? context.setThinkingLevel(level, effortOverride) : null;
 
     // Persist the requested level (not the resolved/clamped one): on a
@@ -745,22 +723,13 @@ export class ScoopLifecycleManager {
         // Per-turn callback — DON'T set tab to 'ready' here.
         // The tab stays 'processing' until prompt() resolves (setStatus('ready') in finally).
         // This prevents the message queue from dequeuing during multi-turn.
-        const tab = this.tabs.get(jid);
-        if (tab) {
-          tab.lastActivity = new Date().toISOString();
-          this.tabs.set(jid, tab);
-        }
+        this.units.get(jid)?.touch();
         callbacks.onResponseDone(jid);
       },
       onError: (error) => {
         if (!scoops().has(jid)) return;
 
-        const tab = this.tabs.get(jid);
-        if (tab) {
-          tab.status = 'error';
-          tab.error = error;
-          this.tabs.set(jid, tab);
-        }
+        this.units.get(jid)?.transition('error', { error });
         emitScoopLifecycle('error', scoop.folder, error);
         callbacks.onError(jid, error);
         callbacks.onStatusChange(jid, 'error');
@@ -771,12 +740,7 @@ export class ScoopLifecycleManager {
       onStatusChange: (status) => {
         if (!scoops().has(jid)) return;
 
-        const tab = this.tabs.get(jid);
-        if (tab) {
-          tab.status = status;
-          tab.lastActivity = new Date().toISOString();
-          this.tabs.set(jid, tab);
-        }
+        this.units.get(jid)?.transition(status);
         callbacks.onStatusChange(jid, status);
         this.dispatch(jid, 'onStatusChange', status);
 
@@ -814,7 +778,7 @@ export class ScoopLifecycleManager {
         this.dispatch(jid, 'onSendMessage', text);
       },
       getScoops: () => cone.getScoops(),
-      getScoopTabState: scoop.isCone ? (j: string) => this.tabs.get(j) : undefined,
+      getScoopTabState: scoop.isCone ? (j: string) => this.getTab(j) : undefined,
       onFeedScoop: scoop.isCone
         ? (scoopJid, prompt) => cone.delegateToScoop(scoopJid, prompt, scoop.assistantLabel)
         : undefined,
@@ -874,12 +838,7 @@ export class ScoopLifecycleManager {
 
     emitScoopLifecycle('error', scoopRecord.folder, error);
 
-    const tab = this.tabs.get(jid);
-    if (tab) {
-      tab.status = 'error';
-      tab.error = error;
-      this.tabs.set(jid, tab);
-    }
+    this.units.get(jid)?.transition('error', { error });
     this.deps.callbacks.onError(jid, error);
     this.deps.callbacks.onStatusChange(jid, 'error');
     this.dispatch(jid, 'onError', error);
