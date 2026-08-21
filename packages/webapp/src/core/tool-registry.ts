@@ -6,6 +6,15 @@
 
 import type { ToolDefinition, ToolResult } from '../tools/types.js';
 
+/**
+ * The per-tool argument bag a dispatched tool receives. Derived from the sole
+ * source of truth — `ToolDefinition.execute`'s own first parameter — so the
+ * registry accepts exactly what it forwards, and there is no second, drifting
+ * spelling of the shape. The real fields are declared by each tool's
+ * `inputSchema` and differ per tool (see the note on {@link ToolDefinition}).
+ */
+type ToolInput = Parameters<ToolDefinition['execute']>[0];
+
 export class ToolRegistry {
   private tools = new Map<string, ToolDefinition>();
 
@@ -53,11 +62,7 @@ export class ToolRegistry {
    * Execute a tool by name with the given input.
    * Returns a ToolResult, catching any errors.
    */
-  async execute(
-    name: string,
-    input: Record<string, unknown>,
-    signal?: AbortSignal
-  ): Promise<ToolResult> {
+  async execute(name: string, input: ToolInput, signal?: AbortSignal): Promise<ToolResult> {
     const tool = this.tools.get(name);
     if (!tool) {
       return { content: `Unknown tool: ${name}`, isError: true };
