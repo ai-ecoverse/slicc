@@ -43,6 +43,7 @@ never-rules below flag what a reviewer must recognise.
 - Tools (file/`bash`/scoop helpers) — `packages/webapp/src/tools/`; browser
   automation routes through shell commands, not a separate tool family
 - Sudo — `packages/webapp/src/sudo/` + `fs/sudo-fs.ts` + `shell/sudo/`
+- Bash progress overlay — `shell/progress/` (emitter ≤4 events/s per id, `sleep` ticker via `BashOptions.sleep`, `wrapCommandForProgress` outside `wrapCommandForSudo`); events ride `ToolExecutionContext.onUpdate` as `progress` partials → `tool_progress` agent event → `applyToolProgress` on the tool row. Design: `docs/exploration/bash-progress-overlay.md`
   (also `docs/approvals.md`)
 - Core agent — `packages/webapp/src/core/` (pi-agent-core + pi-ai;
   `tool-adapter.ts` bridges legacy tools; feature flags, context compaction)

@@ -55,6 +55,30 @@ export interface ChatMessageUsage {
   };
 }
 
+/**
+ * One progress tick for a unit of work inside a tool call (a `sleep 30`, a
+ * download, a loop). Emitted by the webapp's bash progress overlay
+ * (`packages/webapp/src/shell/progress/`) as a `progress` partial tool result
+ * and forwarded to the chat UI as a `tool_progress` agent event. Mirrors what
+ * just-bash upstream would carry (vercel-labs/just-bash#319) so it can collapse
+ * onto that protocol later.
+ */
+export interface ToolProgressEvent {
+  /** Stable id per running unit (command invocation or loop). */
+  id: string;
+  /** Human label: "sleep 30", "curl …/big.tar.gz", "for (3 of 12)". */
+  label: string;
+  /** 0..1 when determinate; undefined => indeterminate spinner. */
+  fraction?: number;
+  /** Best-effort remaining ms; undefined when unknown. */
+  etaMs?: number;
+  /** Optional unit counters, e.g. bytes or iterations. */
+  done?: number;
+  total?: number;
+  unit?: 'bytes' | 'iterations' | 'ms';
+  phase: 'start' | 'update' | 'end';
+}
+
 export type AgentEvent =
   | { type: 'message_start'; messageId: string }
   | { type: 'content_delta'; messageId: string; text: string }
@@ -68,6 +92,7 @@ export type AgentEvent =
   | { type: 'tool_result'; messageId: string; toolName: string; result: string; isError?: boolean }
   | { type: 'tool_ui'; messageId: string; toolName: string; requestId: string; html: string }
   | { type: 'tool_ui_done'; messageId: string; requestId: string }
+  | { type: 'tool_progress'; messageId: string; toolName: string; progress: ToolProgressEvent }
   | { type: 'turn_end'; messageId: string }
   | { type: 'error'; error: string }
   | { type: 'screenshot'; base64: string; url?: string }

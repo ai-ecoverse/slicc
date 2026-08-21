@@ -1012,6 +1012,41 @@ export class OffscreenClient implements KernelClientFacade {
     this.callbacks.onScoopPhaseChange?.(scoopJid, after > 0 ? 'tool' : 'thinking');
   }
 
+  /**
+   * `tool_ui` / `tool_ui_done` / `tool_progress` → UI events. Split out of
+   * `handleAgentEvent` to keep that switch under the complexity cap.
+   */
+  private handleToolUiAgentEvent(msg: AgentEventMsg): void {
+    if (msg.eventType === 'tool_ui') {
+      let msgId = this.currentMessageId.get(msg.scoopJid);
+      if (!msgId) {
+        msgId = `scoop-${msg.scoopJid}-${uid()}`;
+        this.currentMessageId.set(msg.scoopJid, msgId);
+        this.emitToUI({ type: 'message_start', messageId: msgId });
+      }
+      this.emitToUI({
+        type: 'tool_ui',
+        messageId: msgId,
+        toolName: msg.toolName ?? '',
+        requestId: msg.requestId ?? '',
+        html: msg.html ?? '',
+      });
+      return;
+    }
+    const msgId = this.currentMessageId.get(msg.scoopJid);
+    if (!msgId) return;
+    if (msg.eventType === 'tool_ui_done') {
+      this.emitToUI({ type: 'tool_ui_done', messageId: msgId, requestId: msg.requestId ?? '' });
+    } else if (msg.progress) {
+      this.emitToUI({
+        type: 'tool_progress',
+        messageId: msgId,
+        toolName: msg.toolName ?? '',
+        progress: msg.progress,
+      });
+    }
+  }
+
   private handleAgentEvent(msg: AgentEventMsg): void {
     // Per-scoop activity ping fires BEFORE the selection gate so the
     // host can move the navbar eyes onto a non-selected scoop that is
@@ -1086,34 +1121,11 @@ export class OffscreenClient implements KernelClientFacade {
         break;
       }
 
-      case 'tool_ui': {
-        let msgId = this.currentMessageId.get(msg.scoopJid);
-        if (!msgId) {
-          msgId = `scoop-${msg.scoopJid}-${uid()}`;
-          this.currentMessageId.set(msg.scoopJid, msgId);
-          this.emitToUI({ type: 'message_start', messageId: msgId });
-        }
-        this.emitToUI({
-          type: 'tool_ui',
-          messageId: msgId,
-          toolName: msg.toolName ?? '',
-          requestId: msg.requestId ?? '',
-          html: msg.html ?? '',
-        });
+      case 'tool_ui':
+      case 'tool_ui_done':
+      case 'tool_progress':
+        this.handleToolUiAgentEvent(msg);
         break;
-      }
-
-      case 'tool_ui_done': {
-        const msgId = this.currentMessageId.get(msg.scoopJid);
-        if (msgId) {
-          this.emitToUI({
-            type: 'tool_ui_done',
-            messageId: msgId,
-            requestId: msg.requestId ?? '',
-          });
-        }
-        break;
-      }
 
       case 'response_done': {
         const msgId = this.currentMessageId.get(msg.scoopJid);

@@ -10,6 +10,7 @@
  */
 
 import type { Api, Model } from '@earendil-works/pi-ai';
+import type { ToolProgressEvent } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import { SessionStore } from '../core/session.js';
@@ -116,6 +117,8 @@ export interface OrchestratorCallbacks {
   onToolUI?: (scoopJid: string, toolName: string, requestId: string, html: string) => void;
   /** Called when tool UI interaction is complete */
   onToolUIDone?: (scoopJid: string, requestId: string) => void;
+  /** Called for each bash progress tick inside a tool call */
+  onToolProgress?: (scoopJid: string, toolName: string, progress: ToolProgressEvent) => void;
   /** Called when a message is routed to a scoop (delegation, lick, etc.) */
   onIncomingMessage?: (scoopJid: string, message: ChannelMessage) => void;
   /**

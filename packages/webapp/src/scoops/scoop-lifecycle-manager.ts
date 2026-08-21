@@ -20,6 +20,7 @@
  */
 
 import type { Api, Model } from '@earendil-works/pi-ai';
+import type { ToolProgressEvent } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { SessionStore } from '../core/session.js';
 import type { ImageContent } from '../core/types.js';
@@ -72,6 +73,7 @@ export interface ScoopLifecycleCallbacks {
   onToolEnd?(scoopJid: string, toolName: string, result: string, isError: boolean): void;
   onToolUI?(scoopJid: string, toolName: string, requestId: string, html: string): void;
   onToolUIDone?(scoopJid: string, requestId: string): void;
+  onToolProgress?(scoopJid: string, toolName: string, progress: ToolProgressEvent): void;
   onIncomingMessage?(scoopJid: string, message: ChannelMessage): void;
   onScoopUnregistered?(scoop: RegisteredScoop): void;
 }
@@ -814,6 +816,9 @@ export class ScoopLifecycleManager {
       },
       onToolUIDone: (requestId) => {
         callbacks.onToolUIDone?.(jid, requestId);
+      },
+      onToolProgress: (toolName, progress) => {
+        callbacks.onToolProgress?.(jid, toolName, progress);
       },
       onSendMessage: (text, sender) => {
         const prefixed = `${sender ? `[${sender}] ` : ''}${text}`;
