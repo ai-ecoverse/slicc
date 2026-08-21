@@ -63,6 +63,7 @@ export class AgentEventStream {
           messageId,
           toolName: message.toolName ?? '',
           toolInput: message.toolInput,
+          toolCallId: message.toolCallId,
         });
         break;
       }
@@ -75,6 +76,7 @@ export class AgentEventStream {
           toolName: message.toolName ?? '',
           result: message.toolResult ?? '',
           isError: message.isError,
+          toolCallId: message.toolCallId,
         });
         break;
       }
@@ -103,6 +105,7 @@ export class AgentEventStream {
           messageId,
           toolName: message.toolName ?? '',
           progress: message.progress,
+          toolCallId: message.toolCallId,
         });
         break;
       }

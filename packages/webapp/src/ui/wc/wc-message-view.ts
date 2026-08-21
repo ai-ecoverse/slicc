@@ -394,21 +394,20 @@ const WCMSG_CSS = [
   // The cluster keeps its "N steps" count; the dots sit just before it.
   'slicc-tool-cluster[data-progress] .wcmsg-dots{margin-left:auto;}',
   'slicc-tool-cluster[data-progress] .slicc-cluster__count{margin-left:8px;}',
-  'slicc-action-row[data-progress] .slicc-act__body,slicc-tool-cluster[data-progress] .slicc-cluster__body{',
-  'position:relative;overflow:hidden;}',
-  'slicc-action-row[data-progress] .slicc-act__body::before,',
-  'slicc-tool-cluster[data-progress] .slicc-cluster__body::before{content:"";position:absolute;',
+  // The top-border bar is deliberately ROW-ONLY. A cluster is a summary of
+  // many calls; a bar there reads as noise, so it advances through the icon
+  // fill and the dots alone as calls complete.
+  'slicc-action-row[data-progress] .slicc-act__body{position:relative;overflow:hidden;}',
+  'slicc-action-row[data-progress] .slicc-act__body::before{content:"";position:absolute;',
   'top:0;left:0;height:3px;width:calc(var(--slicc-progress,0)*100%);',
   'background:var(--slicc-progress-ink,var(--accent));transition:width .25s linear;z-index:1;}',
   'slicc-action-row[data-progress] .slicc-act__body:has(> .wcmsg-bash)::before{background:#9ad17e;}',
-  'slicc-action-row[data-progress="indeterminate"] .slicc-act__body::before,',
-  'slicc-tool-cluster[data-progress="indeterminate"] .slicc-cluster__body::before{width:30%;',
+  'slicc-action-row[data-progress="indeterminate"] .slicc-act__body::before{width:30%;',
   'animation:wcmsg-progress-slide 1.2s ease-in-out infinite;}',
   '@keyframes wcmsg-progress-slide{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}',
   '@media (prefers-reduced-motion:reduce){.wcmsg-dots__dot,',
   'slicc-action-row[data-progress] .slicc-act__ic,slicc-tool-cluster[data-progress] .slicc-cluster__ic,',
-  'slicc-action-row[data-progress] .slicc-act__body::before,',
-  'slicc-tool-cluster[data-progress] .slicc-cluster__body::before{animation:none!important;}}',
+  'slicc-action-row[data-progress] .slicc-act__body::before{animation:none!important;}}',
 ].join('');
 
 function ensureWcmsgStyle(): void {
@@ -543,30 +542,41 @@ export function applyClusterProgress(cluster: HTMLElement, unit: ToolProgressEve
   applyProgressTreatment(cluster, unit, CLUSTER_CHROME);
 }
 
+/** One wrapped call's state, as read off the cluster's rows. */
+export interface ClusterCallState {
+  /** The call has a result (finished, success or error). */
+  done: boolean;
+  /** Live fraction of a still-running call, when it reports one. */
+  fraction?: number;
+}
+
 /**
- * Fold several in-flight tool-call units into one synthetic unit for a
- * cluster head: determinate (mean fraction) only when EVERY unit is
- * determinate — one unknown child makes the whole cluster indeterminate —
- * with the longest child ETA. `null` when nothing is running.
+ * Fold a cluster's calls into ONE determinate unit: "how far through this
+ * batch are we", not "how fast is the current command".
+ *
+ * The count is known up front — a message's tool calls all arrive before any
+ * of them finishes — so this is `(finished + partial) / total` and never
+ * indeterminate. A still-running call contributes its own fraction when it
+ * has one, which keeps the icon filling smoothly between completions instead
+ * of jumping a whole step. Returns `null` once nothing is running, which
+ * clears the treatment.
  */
 export function aggregateClusterProgress(
-  units: readonly ToolProgressEvent[]
+  calls: readonly ClusterCallState[]
 ): ToolProgressEvent | null {
-  if (units.length === 0) return null;
-  const fractions = units.map((u) => u.fraction);
-  const determinate = fractions.every((f) => typeof f === 'number' && Number.isFinite(f));
-  const fraction = determinate
-    ? (fractions as number[]).reduce((a, b) => a + b, 0) / fractions.length
-    : undefined;
-  const etaMs = units.reduce<number | undefined>((max, u) => {
-    if (u.etaMs === undefined) return max;
-    return max === undefined ? u.etaMs : Math.max(max, u.etaMs);
-  }, undefined);
+  const total = calls.length;
+  if (total === 0) return null;
+  const done = calls.filter((c) => c.done).length;
+  if (done === total) return null;
+  const partial = calls
+    .filter((c) => !c.done && typeof c.fraction === 'number' && Number.isFinite(c.fraction))
+    .reduce((sum, c) => sum + Math.min(1, Math.max(0, c.fraction as number)), 0);
   return {
     id: 'cluster',
-    label: `${units.length} running`,
-    fraction,
-    etaMs,
+    label: `${done} of ${total} done`,
+    fraction: Math.min(1, (done + partial) / total),
+    done,
+    total,
     unit: 'iterations',
     phase: 'update',
   };

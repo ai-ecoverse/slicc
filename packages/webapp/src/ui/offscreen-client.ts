@@ -1043,6 +1043,7 @@ export class OffscreenClient implements KernelClientFacade {
         messageId: msgId,
         toolName: msg.toolName ?? '',
         progress: msg.progress,
+        toolCallId: msg.toolCallId,
       });
     }
   }
@@ -1103,6 +1104,7 @@ export class OffscreenClient implements KernelClientFacade {
           messageId: msgId,
           toolName: msg.toolName ?? '',
           toolInput: msg.toolInput,
+          toolCallId: msg.toolCallId,
         });
         break;
       }
@@ -1116,6 +1118,7 @@ export class OffscreenClient implements KernelClientFacade {
             toolName: msg.toolName ?? '',
             result: msg.toolResult ?? '',
             isError: msg.isError,
+            toolCallId: msg.toolCallId,
           });
         }
         break;

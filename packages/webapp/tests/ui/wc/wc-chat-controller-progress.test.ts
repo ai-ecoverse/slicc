@@ -60,6 +60,7 @@ describe('WcChatController tool_progress handling', () => {
       messageId: 'm1',
       toolName: 'bash',
       toolInput: { command: 'sleep 30' },
+      toolCallId: 'tc-1',
     });
   });
 
@@ -139,37 +140,95 @@ describe('WcChatController tool_progress handling', () => {
     expect(ring.at(-1)).toBeCloseTo(0.4);
   });
 
-  it('propagates progress onto a tool cluster head once 3+ calls collapse', () => {
+  it('fills the cluster head as calls complete (k of N), with no progress bar', () => {
     // beforeEach already started one bash call; two more collapse into a cluster.
-    for (let i = 0; i < 2; i++) {
+    for (const id of ['c2', 'c3']) {
       agent.emit({
         type: 'tool_use_start',
         messageId: 'm1',
         toolName: 'bash',
-        toolInput: { command: `echo ${i}` },
+        toolInput: { command: `echo ${id}` },
+        toolCallId: id,
       });
     }
-    const cluster = thread.querySelector<HTMLElement>('slicc-tool-cluster');
-    expect(cluster).not.toBeNull();
-    expect(cluster?.querySelectorAll('slicc-action-row[data-tool-id]')).toHaveLength(3);
+    const cluster = () => thread.querySelector<HTMLElement>('slicc-tool-cluster');
+    expect(cluster()?.querySelectorAll('slicc-action-row[data-tool-id]')).toHaveLength(3);
 
-    // Drive the most recent in-flight bash call (the controller resolves the id).
-    emit(progress({ fraction: 0.6 }));
-    const head = cluster?.querySelector('.slicc-cluster__head');
-    expect(cluster?.getAttribute('data-progress')).toBe('determinate');
+    // Nothing finished yet, one call reporting 0.6 → (0 + 0.6) / 3.
+    agent.emit({
+      type: 'tool_progress',
+      messageId: 'm1',
+      toolName: 'bash',
+      progress: progress({ fraction: 0.6 }),
+      toolCallId: 'c2',
+    });
+    const head = cluster()?.querySelector('.slicc-cluster__head');
+    expect(cluster()?.getAttribute('data-progress')).toBe('determinate');
     expect(head?.querySelectorAll('.wcmsg-dots__dot')).toHaveLength(3);
-    // One of three rows running at 0.6 → cluster mean is 0.6 (in-flight units only).
-    expect(cluster?.style.getPropertyValue('--slicc-progress')).toBe('0.6');
-    expect(cluster?.getAttribute('title')).toContain('1 running');
+    expect(Number(cluster()?.style.getPropertyValue('--slicc-progress'))).toBeCloseTo(0.2);
+    expect(cluster()?.getAttribute('title')).toContain('0 of 3 done');
     // The cluster keeps its "3 steps" count alongside the dots.
-    expect(cluster?.querySelector('.slicc-cluster__count')?.textContent).toContain('3');
+    expect(cluster()?.querySelector('.slicc-cluster__count')?.textContent).toContain('3');
 
-    // Finishing that call clears the cluster treatment. (tool_result rerenders
-    // the message, so the cluster element is rebuilt — re-query it.)
-    agent.emit({ type: 'tool_result', messageId: 'm1', toolName: 'bash', result: 'done' });
-    const after = thread.querySelector<HTMLElement>('slicc-tool-cluster');
-    expect(after?.hasAttribute('data-progress')).toBe(false);
-    expect(after?.querySelector('.slicc-cluster__head .wcmsg-dots')).toBeNull();
+    // A completed call advances the fill by a whole step.
+    agent.emit({
+      type: 'tool_result',
+      messageId: 'm1',
+      toolName: 'bash',
+      result: 'ok',
+      toolCallId: 'c2',
+    });
+    expect(Number(cluster()?.style.getPropertyValue('--slicc-progress'))).toBeCloseTo(1 / 3);
+    expect(cluster()?.getAttribute('title')).toContain('1 of 3 done');
+
+    // A cluster never wears the row's top-border bar — icon + dots only.
+    const css = document.getElementById('slicc-wcmsg-style')?.textContent ?? '';
+    expect(css).toContain('slicc-action-row[data-progress] .slicc-act__body::before');
+    expect(css).not.toContain('slicc-tool-cluster[data-progress] .slicc-cluster__body::before');
+
+    // Once every call has settled the treatment clears entirely.
+    for (const id of ['c3', 'tc-1']) {
+      agent.emit({
+        type: 'tool_result',
+        messageId: 'm1',
+        toolName: 'bash',
+        result: 'ok',
+        toolCallId: id,
+      });
+    }
+    expect(cluster()?.hasAttribute('data-progress')).toBe(false);
+    expect(cluster()?.querySelector('.slicc-cluster__head .wcmsg-dots')).toBeNull();
+  });
+
+  it('pairs results with the right row when same-named calls run concurrently', () => {
+    // Regression: a message's tool calls execute under Promise.all, so three
+    // `bash` calls are in flight at once. Matching a result by "last unfinished
+    // call with this name" attached outputs to the wrong row — `echo BBB`
+    // rendered `CCC` on the live harness.
+    for (const id of ['c2', 'c3']) {
+      agent.emit({
+        type: 'tool_use_start',
+        messageId: 'm1',
+        toolName: 'bash',
+        toolInput: { command: `echo ${id}` },
+        toolCallId: id,
+      });
+    }
+    // Resolve the MIDDLE call first — the id must decide, not arrival order.
+    agent.emit({
+      type: 'tool_result',
+      messageId: 'm1',
+      toolName: 'bash',
+      result: 'output-for-c2',
+      toolCallId: 'c2',
+    });
+    const byId = (id: string) =>
+      thread.querySelector<HTMLElement>(`slicc-action-row[data-tool-id="${id}"]`);
+    expect(byId('c2')?.getAttribute('result')).toBe('done');
+    expect(byId('c3')?.getAttribute('result')).toBe('…');
+    expect(byId('tc-1')?.getAttribute('result')).toBe('…');
+    expect(byId('c2')?.textContent).toContain('output-for-c2');
+    expect(byId('c3')?.textContent ?? '').not.toContain('output-for-c2');
   });
 
   it('ignores progress for an unknown message or a tool with no in-flight call', () => {

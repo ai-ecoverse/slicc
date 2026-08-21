@@ -252,15 +252,15 @@ export interface ScoopContextCallbacks {
   onFatalError?: (error: string) => void;
   onStatusChange: (status: 'initializing' | 'ready' | 'processing' | 'error') => void;
   /** Called when a tool starts executing */
-  onToolStart?: (toolName: string, toolInput: unknown) => void;
+  onToolStart?: (toolName: string, toolInput: unknown, toolCallId?: string) => void;
   /** Called when a tool finishes executing */
-  onToolEnd?: (toolName: string, result: string, isError: boolean) => void;
+  onToolEnd?: (toolName: string, result: string, isError: boolean, toolCallId?: string) => void;
   /** Called when a tool requests UI interaction */
   onToolUI?: (toolName: string, requestId: string, html: string) => void;
   /** Called when tool UI interaction is complete */
   onToolUIDone?: (requestId: string) => void;
   /** Called for each bash progress tick (`tool_progress` agent event). */
-  onToolProgress?: (toolName: string, progress: ToolProgressEvent) => void;
+  onToolProgress?: (toolName: string, progress: ToolProgressEvent, toolCallId?: string) => void;
   /** Called when agent uses send_message tool */
   onSendMessage: (text: string, sender?: string) => void;
   /** Get all scoops (for cone) */
@@ -1639,7 +1639,11 @@ export class ScoopContext {
   }
 
   /** Handle tool UI events. */
-  private handleToolUIEvents(event: { partialResult: unknown; toolName: string }): void {
+  private handleToolUIEvents(event: {
+    partialResult: unknown;
+    toolName: string;
+    toolCallId?: string;
+  }): void {
     const partialResult = event.partialResult as {
       content?: Array<{
         type: string;
@@ -1654,13 +1658,18 @@ export class ScoopContext {
       } else if (c.type === 'tool_ui_done' && c.requestId) {
         this.callbacks.onToolUIDone?.(c.requestId);
       } else if (c.type === PROGRESS_CONTENT_TYPE && c.progress) {
-        this.callbacks.onToolProgress?.(event.toolName, c.progress);
+        this.callbacks.onToolProgress?.(event.toolName, c.progress, event.toolCallId);
       }
     }
   }
 
   /** Handle tool result formatting. */
-  private formatToolResult(event: { result: unknown; toolName: string; isError: boolean }): void {
+  private formatToolResult(event: {
+    result: unknown;
+    toolName: string;
+    isError: boolean;
+    toolCallId?: string;
+  }): void {
     const result = event.result as {
       content: Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
     };
@@ -1682,7 +1691,7 @@ export class ScoopContext {
       const telemetryText = parts.filter((p) => !p.startsWith('<img:')).join('\n');
       emitAgentError('tool', `${event.toolName}: ${telemetryText}`);
     }
-    this.callbacks.onToolEnd?.(event.toolName, joined, event.isError);
+    this.callbacks.onToolEnd?.(event.toolName, joined, event.isError, event.toolCallId);
   }
 
   private shouldRecoverFromOverflow(message: PiAssistantMessage): boolean {
@@ -1785,7 +1794,7 @@ export class ScoopContext {
       }
 
       case 'tool_execution_start': {
-        this.callbacks.onToolStart?.(event.toolName, event.args);
+        this.callbacks.onToolStart?.(event.toolName, event.args, event.toolCallId);
         break;
       }
 

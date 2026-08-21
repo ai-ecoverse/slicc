@@ -318,14 +318,14 @@ export class Bridge implements KernelFacade {
         } satisfies LickBackpressureMsg);
       },
 
-      onToolStart: (scoopJid, toolName, toolInput) => {
+      onToolStart: (scoopJid, toolName, toolInput, toolCallId) => {
         if (HIDDEN_TOOL_NAMES.has(toolName)) return;
-        bridge.bufferToolStart(scoopJid, toolName, toolInput);
+        bridge.bufferToolStart(scoopJid, toolName, toolInput, toolCallId);
       },
 
-      onToolEnd: (scoopJid, toolName, result, isError) => {
+      onToolEnd: (scoopJid, toolName, result, isError, toolCallId) => {
         if (HIDDEN_TOOL_NAMES.has(toolName)) return;
-        bridge.bufferToolEnd(scoopJid, toolName, result, isError);
+        bridge.bufferToolEnd(scoopJid, toolName, result, isError, toolCallId);
       },
 
       onToolUI: (scoopJid, toolName, requestId, html) => {
@@ -348,13 +348,14 @@ export class Bridge implements KernelFacade {
         });
       },
 
-      onToolProgress: (scoopJid, toolName, progress) => {
+      onToolProgress: (scoopJid, toolName, progress, toolCallId) => {
         bridge.emit({
           type: 'agent-event',
           scoopJid,
           eventType: 'tool_progress',
           toolName,
           progress,
+          toolCallId,
         });
       },
 
@@ -374,12 +375,19 @@ export class Bridge implements KernelFacade {
    * human-facing transcript is capped — uncapped it grows ~1:1 with
    * tool traffic and OOMs long sessions (see transcript-limits.ts).
    */
-  private bufferToolStart(scoopJid: string, toolName: string, toolInput: unknown): void {
+  private bufferToolStart(
+    scoopJid: string,
+    toolName: string,
+    toolInput: unknown,
+    toolCallId?: string
+  ): void {
     const cappedInput = capTranscriptToolInput(toolInput);
 
     const msg = this.getOrCreateAssistantMsg(scoopJid);
     if (!msg.toolCalls) msg.toolCalls = [];
-    msg.toolCalls.push({ id: uid(), name: toolName, input: cappedInput });
+    // Prefer the provider's tool-call id so `bufferToolEnd` can pair results
+    // by identity; `uid()` only when a caller predates the threaded id.
+    msg.toolCalls.push({ id: toolCallId ?? uid(), name: toolName, input: cappedInput });
 
     this.emit({
       type: 'agent-event',
@@ -387,6 +395,7 @@ export class Bridge implements KernelFacade {
       eventType: 'tool_start',
       toolName,
       toolInput: cappedInput,
+      toolCallId,
     });
   }
 
@@ -402,16 +411,21 @@ export class Bridge implements KernelFacade {
     scoopJid: string,
     toolName: string,
     result: string,
-    isError: boolean
+    isError: boolean,
+    toolCallId?: string
   ): void {
     const msgId = this.currentMessageId.get(scoopJid);
     if (msgId) {
       const buf = this.getBuffer(scoopJid);
       const msg = buf.find((m) => m.id === msgId);
       if (msg?.toolCalls) {
-        const tc = [...msg.toolCalls]
-          .reverse()
-          .find((t) => t.name === toolName && t.result === undefined);
+        // Pair by id when we have one: a message's tool calls run under
+        // `Promise.all`, so several same-named calls can be in flight at once
+        // and "last unfinished call with this name" attaches results to the
+        // wrong entry. Name matching stays as the pre-id fallback.
+        const tc = toolCallId
+          ? msg.toolCalls.find((t) => t.id === toolCallId)
+          : [...msg.toolCalls].reverse().find((t) => t.name === toolName && t.result === undefined);
         if (tc) {
           tc.result = capTranscriptToolResultForBuffer(result);
           tc.isError = isError;
@@ -428,6 +442,7 @@ export class Bridge implements KernelFacade {
       toolName,
       toolResult: capTranscriptToolResultForEvent(result),
       isError,
+      toolCallId,
     });
   }
 
