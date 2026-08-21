@@ -22,8 +22,10 @@ slicc update [--check]                          Self-update to the newest releas
 `watch` is read-only: it prints the leader's agent output as it streams (a
 `tail -f` on what the cone is doing) and sends nothing back.
 
-`<join-url>` is a leader's `https://…/join/<token>` link (from the leader's
-"Copy tray join URL", or its `host` command's `join_url`).
+`<join-url>` is a leader's `https://…/join/<token>` link — the join link. Get it
+from the leader's avatar menu → **Enable multi-browser sync** → the **Terminal**
+tab of the Session sharing dialog, which hands you this whole command
+ready to paste; or from its `host` command's `join_url`.
 
 The `<text>`/`<command>` is curl-style — a literal string, `@path` (read a file),
 or `-` / `@-` (read stdin):

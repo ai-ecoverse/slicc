@@ -29,12 +29,31 @@ vi.mock('../../../src/providers/oauth-service.js', () => ({
   createInterceptingOAuthLauncherForCurrentRuntime: async () => null,
 }));
 
+// The session-sharing dialog and the clipboard are stubbed so the two doors
+// into it (avatar menu, floatbar segment) can be told apart by what they do.
+// `vi.hoisted` because `wc-nav.ts` imports the clipboard statically: a plain
+// `const` would still be in its temporal dead zone when the hoisted factory runs.
+const { copyTextToClipboardSpy, showSyncEnabledDialogSpy } = vi.hoisted(() => ({
+  copyTextToClipboardSpy: vi.fn(async () => true),
+  showSyncEnabledDialogSpy: vi.fn(),
+}));
+vi.mock('../../../src/ui/sync-dialog.js', () => ({
+  showSyncEnabledDialog: showSyncEnabledDialogSpy,
+}));
+vi.mock('../../../src/ui/clipboard.js', () => ({
+  copyTextToClipboard: copyTextToClipboardSpy,
+}));
+vi.mock('../../../src/ui/legacy-styles.js', () => ({
+  loadLegacyDialogStyles: vi.fn(async () => undefined),
+}));
+
 import {
   FEATURE_FLAG_STORAGE_KEY,
   initFeatureFlags,
   setFeatureFlagOverride,
 } from '../../../src/core/feature-flags.js';
 import { registerProviderConfig, unregisterProviderConfig } from '../../../src/providers/index.js';
+import { setLeaderTrayRuntimeStatus } from '../../../src/scoops/tray-leader.js';
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
 import type { GroupedModels } from '../../../src/ui/provider-settings.js';
 import { accountIdentity, modelListForMeta, wireWcNav } from '../../../src/ui/wc/wc-nav.js';
@@ -93,8 +112,9 @@ describe('wireWcNav', () => {
     const inputCard = document.createElement('slicc-input-card');
     inputCard.append(document.createElement('slicc-send-button'));
     const thread = document.createElement('slicc-chat-thread');
-    document.body.append(composerMeta, avatarMenu, inputCard, thread);
-    return { composerMeta, avatarMenu, inputCard, thread } as unknown as WcShellRefs;
+    const floatbar = document.createElement('slicc-floatbar');
+    document.body.append(composerMeta, avatarMenu, inputCard, thread, floatbar);
+    return { composerMeta, avatarMenu, inputCard, thread, floatbar } as unknown as WcShellRefs;
   }
 
   it('feeds the model picker, persists selection, and wires the menu', async () => {
@@ -518,5 +538,85 @@ describe('wireWcNav', () => {
       localStorage.removeItem('selected-model');
       unregisterProviderConfig('adobe-pill-test');
     }
+  });
+});
+
+describe('session-sharing entry points', () => {
+  const JOIN_URL = 'https://tray.example.com/join/tok';
+
+  function makeRefs(): WcShellRefs {
+    const composerMeta = document.createElement('slicc-composer-meta');
+    const avatarMenu = document.createElement('slicc-avatar-menu');
+    avatarMenu.append(document.createElement('slicc-avatar'));
+    const inputCard = document.createElement('slicc-input-card');
+    inputCard.append(document.createElement('slicc-send-button'));
+    const thread = document.createElement('slicc-chat-thread');
+    const floatbar = document.createElement('slicc-floatbar');
+    document.body.append(composerMeta, avatarMenu, inputCard, thread, floatbar);
+    return { composerMeta, avatarMenu, inputCard, thread, floatbar } as unknown as WcShellRefs;
+  }
+
+  async function wire(): Promise<WcShellRefs> {
+    const refs = makeRefs();
+    await wireWcNav({
+      refs,
+      client: { updateModel: vi.fn() } as unknown as OffscreenClient,
+      log: { error: vi.fn() } as never,
+    });
+    return refs;
+  }
+
+  afterEach(() => {
+    showSyncEnabledDialogSpy.mockClear();
+    copyTextToClipboardSpy.mockClear();
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+    document.body.replaceChildren();
+  });
+
+  it('opens the dialog on its Status tab from the floatbar, without touching the clipboard', async () => {
+    setLeaderTrayRuntimeStatus({
+      state: 'leader',
+      session: { joinUrl: JOIN_URL } as never,
+      error: null,
+    });
+    const refs = await wire();
+
+    refs.floatbar.dispatchEvent(
+      new CustomEvent('slicc-followers-click', { bubbles: true, composed: true })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(copyTextToClipboardSpy).not.toHaveBeenCalled();
+    expect(showSyncEnabledDialogSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ joinUrl: JOIN_URL, copied: false, initialTab: 'status' })
+    );
+  });
+
+  it('copies the link when the avatar menu asks for it', async () => {
+    setLeaderTrayRuntimeStatus({
+      state: 'leader',
+      session: { joinUrl: JOIN_URL } as never,
+      error: null,
+    });
+    const refs = await wire();
+
+    refs.avatarMenu.dispatchEvent(
+      new CustomEvent('slicc-avatar-action', { detail: { id: 'tray-copy' } })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(copyTextToClipboardSpy).toHaveBeenCalledWith(JOIN_URL);
+    expect(showSyncEnabledDialogSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ copied: true, initialTab: undefined })
+    );
+  });
+
+  it('does nothing when there is no join link to share', async () => {
+    const refs = await wire();
+    refs.floatbar.dispatchEvent(
+      new CustomEvent('slicc-followers-click', { bubbles: true, composed: true })
+    );
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(showSyncEnabledDialogSpy).not.toHaveBeenCalled();
   });
 });

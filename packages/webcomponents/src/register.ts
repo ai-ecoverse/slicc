@@ -44,6 +44,7 @@ import './primitives/slicc-avatar.js';
 import './primitives/slicc-cost-overlay.js';
 import './primitives/slicc-day-separator.js';
 import './primitives/slicc-floatbar.js';
+import './primitives/slicc-follower-hud.js';
 import './primitives/slicc-googly-eyes.js';
 import './primitives/slicc-icon-button.js';
 import './primitives/slicc-image-preview.js';

@@ -9,6 +9,13 @@ import type { MountTableEntry } from '../../fs/mount-table-store.js';
 import type { CronTaskEntry, WebhookEntry } from '../../scoops/lick-manager.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 import type { ConnectedFollowerInfo } from '../../shell/supplemental-commands/host-command.js';
+import {
+  followerIcon,
+  followerMeta,
+  followerStatus,
+  followerTitle,
+  shortFollowerId,
+} from '../follower-presentation.js';
 
 /**
  * A persisted mount entry, augmented with the permission state as of the
@@ -68,55 +75,6 @@ export interface MonitorDeps {
   getConnectedFollowers(): ConnectedFollowerInfo[];
 }
 
-function shortId(runtimeId: string): string {
-  const unprefixed = runtimeId.replace(/^follower-/, '');
-  return unprefixed.length > 12 ? `${unprefixed.slice(0, 8)}…` : unprefixed;
-}
-
-function followerTypeLabel(follower: ConnectedFollowerInfo): string {
-  if (follower.floatType === 'ios') return 'iOS';
-  if (follower.floatType === 'electron') return 'Electron';
-  if (follower.floatType === 'extension') return 'Extension';
-  if (follower.floatType === 'standalone') return 'Standalone';
-  return follower.runtime?.includes('cli') ? 'CLI' : 'Follower';
-}
-
-function followerIcon(follower: ConnectedFollowerInfo): string {
-  if (follower.floatType === 'ios') return 'smartphone';
-  if (follower.floatType === 'electron' || follower.floatType === 'standalone') return 'monitor';
-  if (follower.floatType === 'extension') return 'blocks';
-  return follower.runtime?.includes('cli') ? 'terminal' : 'radio';
-}
-
-function elapsedSince(connectedAt?: string): string | null {
-  if (!connectedAt) return null;
-  const timestamp = new Date(connectedAt).getTime();
-  if (!Number.isFinite(timestamp)) return null;
-  const seconds = Math.max(0, Math.floor((Date.now() - timestamp) / 1000));
-  if (seconds < 60) return `${seconds}s`;
-  if (seconds < 3600) return `${Math.floor(seconds / 60)}m`;
-  if (seconds < 86_400) return `${Math.floor(seconds / 3600)}h`;
-  return `${Math.floor(seconds / 86_400)}d`;
-}
-
-function followerStatus(follower: ConnectedFollowerInfo): 'active' | 'warn' | 'idle' {
-  if (follower.health === 'stalled') return 'warn';
-  if (follower.peerState === 'connecting') return 'idle';
-  if (follower.peerState === 'connected' && follower.health === 'live') return 'active';
-  return 'idle';
-}
-
-function followerMeta(follower: ConnectedFollowerInfo): string {
-  const state =
-    follower.health === 'stalled'
-      ? 'stalled'
-      : follower.peerState === 'connecting'
-        ? 'connecting'
-        : 'connected';
-  const age = elapsedSince(follower.connectedAt);
-  return age ? `${state} ${age}` : state;
-}
-
 export function buildFollowersSection(followers: ConnectedFollowerInfo[]): MonitorSection {
   const stalled = followers.filter((follower) => follower.health === 'stalled').length;
   const connecting = followers.filter(
@@ -140,7 +98,7 @@ export function buildFollowersSection(followers: ConnectedFollowerInfo[]): Monit
       const sublabel = follower.hostOrigin ? `${detail} · ${follower.hostOrigin}` : detail;
       const badges = [follower.exec ? 'ssh' : '', follower.cdp ? 'playwright' : ''].filter(Boolean);
       return {
-        name: `${followerTypeLabel(follower)} · ${shortId(follower.runtimeId)}`,
+        name: followerTitle(follower),
         sublabel,
         meta: followerMeta(follower),
         icon: followerIcon(follower),
@@ -161,7 +119,7 @@ function buildTraySection(tray: MonitorTrayInfo): MonitorSection {
         : tray.state === 'leader' || tray.state === 'connected'
           ? 'active'
           : 'idle';
-  const session = tray.sessionId ? `Session ${shortId(tray.sessionId)}` : null;
+  const session = tray.sessionId ? `Session ${shortFollowerId(tray.sessionId)}` : null;
   const worker = tray.workerBaseUrl ? `Worker · ${tray.workerBaseUrl}` : null;
   return {
     id: 'tray',

@@ -173,6 +173,7 @@ describe('WC tray connected follower mapping', () => {
 
   it('uses the registry count for the floatbar while mirroring connecting rows', () => {
     const floatbar = { setAttribute: vi.fn() };
+    const dispatchEvent = vi.fn();
     const storage = { setItem: vi.fn() };
     vi.stubGlobal('localStorage', storage);
     const handle = {
@@ -197,6 +198,7 @@ describe('WC tray connected follower mapping', () => {
       refs: { floatbar },
       client: {},
       baseFloatLabel: 'standalone · live',
+      window: { dispatchEvent },
     } as unknown as Parameters<typeof createLeaderOptionsFactory>[0];
     const state = {
       leader: handle,
@@ -220,5 +222,72 @@ describe('WC tray connected follower mapping', () => {
       'slicc.leaderTrayFollowers',
       expect.stringContaining('"peerState":"connecting"')
     );
+    // A connecting peer is mirrored to the shim but is NOT a follower yet, so
+    // the floatbar segment stays empty and the sync dialog hears about it.
+    expect((floatbar as unknown as { followers: unknown[] }).followers).toEqual([]);
+    expect(dispatchEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ type: 'slicc:followers-changed' })
+    );
+  });
+
+  it('feeds the floatbar one HUD row per connected follower', () => {
+    const floatbar = { setAttribute: vi.fn() };
+    const storage = { setItem: vi.fn() };
+    vi.stubGlobal('localStorage', storage);
+    const handle = {
+      sync: {
+        getExecCapableBootstrapIds: () => new Set(['cli-1']),
+        getBrowserCapableBootstrapIds: () => new Set(),
+        getTeleportEligibleBootstrapIds: () => new Set(),
+        getFollowerMotds: () => new Map([['cli-1', 'lars@build-box']]),
+        getFollowerDetails: () => [
+          {
+            bootstrapId: 'cli-1',
+            runtime: 'slicc-cli',
+            connectedAt: new Date().toISOString(),
+            lastActivity: 1,
+            floatType: 'unknown' as const,
+            health: 'live' as const,
+          },
+        ],
+      },
+      peers: {
+        getPeers: () => [
+          { bootstrapId: 'cli-1', state: 'connected' as const, runtime: 'slicc-cli' },
+        ],
+      },
+    } as unknown as PageLeaderTrayHandle;
+    const deps = {
+      refs: { floatbar },
+      client: {},
+      baseFloatLabel: 'standalone · live',
+      window: { dispatchEvent: vi.fn() },
+    } as unknown as Parameters<typeof createLeaderOptionsFactory>[0];
+    const state = {
+      leader: handle,
+      follower: null,
+      persistenceGuard: { activate: vi.fn(), deactivate: vi.fn() },
+      lockRelease: null,
+    } as unknown as Parameters<typeof createLeaderOptionsFactory>[1];
+
+    createLeaderOptionsFactory(
+      deps,
+      state,
+      {} as Parameters<typeof createLeaderOptionsFactory>[2]
+    )('https://tray.example').onFollowerCountChanged?.(1);
+
+    // The count no longer rides in the label string — it has its own segment.
+    expect(floatbar.setAttribute).toHaveBeenCalledWith('label', 'tray · live');
+    expect((floatbar as unknown as { followers: unknown[] }).followers).toEqual([
+      {
+        id: 'follower-cli-1',
+        icon: 'terminal',
+        title: 'CLI · cli-1',
+        detail: 'lars@build-box',
+        state: 'active',
+        stateText: 'connected 0s',
+        chips: ['can run commands'],
+      },
+    ]);
   });
 });

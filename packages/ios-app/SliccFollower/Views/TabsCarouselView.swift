@@ -319,7 +319,7 @@ struct TabsCarouselView: View {
             Text(
                 canControlTabs
                     ? "Tabs you open live on this device — and the leader can drive them over the CDP bridge."
-                    : "Connect to a leader (Settings → Join URL) to host browser tabs here."
+                    : "Connect to a leader (Settings → Join link) to host browser tabs here."
             )
             .font(.caption)
             .foregroundStyle(.secondary)
