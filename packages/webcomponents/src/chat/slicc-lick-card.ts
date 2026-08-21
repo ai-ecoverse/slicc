@@ -283,7 +283,7 @@ export class SliccLickCard extends HTMLElement {
   }
 
   connectedCallback(): void {
-    ensureSlottedStyle(this.ownerDocument ?? document);
+    ensureSlottedStyle(this.ownerDocument);
     this.#render();
   }
 
