@@ -334,7 +334,10 @@ function resolveOwnerVisibleRoot(orchestrator: Orchestrator, parentJid: string |
     seen.add(current.jid);
     current = byJid.get(current.parentJid);
   }
-  const owner = current ?? rootsOf(scoops)[0];
+  // `current` is only the owner when the walk actually reached a root — a
+  // dangling parent or a cycle in a corrupt registry leaves a non-root here,
+  // whose `/scoops/<folder>` is not a workspace to hand out.
+  const owner = current?.parentJid === null ? current : rootsOf(scoops)[0];
   return `${owner ? workspaceFor(owner).root : PRIMARY_WORKSPACE.root}/`;
 }
 

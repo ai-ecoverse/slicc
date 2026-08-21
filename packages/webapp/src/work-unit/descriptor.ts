@@ -61,10 +61,9 @@ export function workspaceFor(
  * `session-cone` archive + its memory extraction, the legacy shared-memory
  * migration).
  */
-export const PRIMARY_WORKSPACE: WorkUnitWorkspace = workspaceFor({
-  parentJid: null,
-  folder: PRIMARY_CONE_FOLDER,
-});
+export const PRIMARY_WORKSPACE: WorkUnitWorkspace = Object.freeze(
+  workspaceFor({ parentJid: null, folder: PRIMARY_CONE_FOLDER })
+);
 
 /** Project a record (and optional live tab) onto a descriptor. */
 export function toDescriptor(scoop: RegisteredScoop, tab?: ScoopTabState): WorkUnitDescriptor {
