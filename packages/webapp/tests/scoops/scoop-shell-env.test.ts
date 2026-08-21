@@ -1,6 +1,7 @@
 /**
  * Tests for buildScoopShellEnv (#2085 + Codex P2 on #2143): scoop shells pin
- * HOME/USER/PATH, and user-created secrets must never override those pins.
+ * HOME/USER/PATH/TMPDIR (#2267), and user-created secrets must never
+ * override those pins.
  */
 
 import { describe, expect, it } from 'vitest';
@@ -8,10 +9,12 @@ import { buildScoopShellEnv } from '../../src/scoops/scoop-context.js';
 import { DEFAULT_JSH_SEARCH_ROOTS } from '../../src/shell/jsh-discovery.js';
 
 describe('buildScoopShellEnv', () => {
-  it('pins HOME, USER, and PATH for a non-cone scoop', () => {
+  it('pins HOME, USER, TMPDIR, and PATH for a non-cone scoop', () => {
     const env = buildScoopShellEnv(false, 'research', {});
     expect(env.HOME).toBe('/scoops/research/home');
     expect(env.USER).toBe('research');
+    // The scratch root a scoop may actually write (#2267).
+    expect(env.TMPDIR).toBe('/scoops/research/tmp');
     expect(env.PATH).toBe(
       [
         '/usr/bin',
@@ -31,6 +34,7 @@ describe('buildScoopShellEnv', () => {
     const env = buildScoopShellEnv(false, 'research', {
       PATH: '/evil',
       HOME: '/evil-home',
+      TMPDIR: '/evil-tmp',
       USER: 'root',
       API_KEY: 'masked',
     });
@@ -38,6 +42,7 @@ describe('buildScoopShellEnv', () => {
     expect(env.PATH).not.toContain('/evil');
     expect(env.HOME).toBe('/scoops/research/home');
     expect(env.USER).toBe('research');
+    expect(env.TMPDIR).toBe('/scoops/research/tmp');
     // Ordinary secrets still pass through.
     expect(env.API_KEY).toBe('masked');
   });
