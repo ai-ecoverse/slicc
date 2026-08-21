@@ -1305,12 +1305,13 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
 
   interface OrchestratorObserverInternals {
     lifecycle: {
-      scoopObservers: Map<string, Set<unknown>>;
       dispatchEvent(jid: string, event: 'onSendMessage', text: string): void;
     };
   }
-  const observerSet = (o: Orchestrator) =>
-    (o as unknown as OrchestratorObserverInternals).lifecycle.scoopObservers;
+  // Observers are owned by the scoop's LiveWorkUnit (#1666 Phase 2); a
+  // closed unit reports zero and is dropped from the host.
+  const hasObservers = (o: Orchestrator, jid: string) =>
+    (o.getLiveUnit(jid)?.observerCount ?? 0) > 0;
   const dispatch = (o: Orchestrator, jid: string, ev: 'onSendMessage', text: string) =>
     (o as unknown as OrchestratorObserverInternals).lifecycle.dispatchEvent(jid, ev, text);
 
@@ -1343,11 +1344,11 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
     // on purpose.
     orch.observeScoop(scoop.jid, { onSendMessage: handler });
 
-    expect(observerSet(orch).has(scoop.jid)).toBe(true);
+    expect(hasObservers(orch, scoop.jid)).toBe(true);
 
     await orch.unregisterScoop(scoop.jid);
 
-    expect(observerSet(orch).has(scoop.jid)).toBe(false);
+    expect(hasObservers(orch, scoop.jid)).toBe(false);
 
     // A post-teardown dispatch must NOT reach the lingering handler.
     dispatch(orch, scoop.jid, 'onSendMessage', 'post-teardown text');
@@ -1416,11 +1417,11 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
     const handler = vi.fn();
     orch.observeScoop(scoop.jid, { onSendMessage: handler });
 
-    expect(observerSet(orch).has(scoop.jid)).toBe(true);
+    expect(hasObservers(orch, scoop.jid)).toBe(true);
 
     await orch.destroyScoopTab(scoop.jid);
 
-    expect(observerSet(orch).has(scoop.jid)).toBe(false);
+    expect(hasObservers(orch, scoop.jid)).toBe(false);
     dispatch(orch, scoop.jid, 'onSendMessage', 'post-teardown text');
     expect(handler).not.toHaveBeenCalled();
   });

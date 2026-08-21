@@ -63,6 +63,8 @@ export interface WorkUnitHost {
         getContextFill(): number;
       }
     | undefined;
+  /** The owning live runtime for `jid` when one exists (Phase 2 hosts). */
+  getLiveUnit?(jid: WorkUnitId): WorkUnitRuntime | undefined;
 }
 
 /** Phase 1 adapter: a `WorkUnitRuntime` view over a registered scoop. */

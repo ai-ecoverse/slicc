@@ -281,6 +281,7 @@ All skills (native and compatibility) are read-only — the slicc-specific `mani
 | `policy.ts`     | Root/child presets, `derivePolicy`, `isRootUnit` (`parentJid === null` — the only root test), `isPolicySubset`, `childrenOf`, `rootsOf`                                     |
 | `descriptor.ts` | Pure projection of a `RegisteredScoop` + tab state onto a descriptor; `workspaceFor` computes cwd / memory / scratch paths                                                  |
 | `runtime.ts`    | `WorkUnitRuntime` contract + `ScoopContextWorkUnit` adapter over `ScoopContext` / `ScoopLifecycleManager`                                                                   |
+| `live-unit.ts`  | `LiveWorkUnit` — owning runtime per scoop (context, tab, observers); legal-transition table; `close()` single teardown. `ScoopLifecycleManager` hosts these                 |
 | `manager.ts`    | `WorkUnitManager` (`Orchestrator.getWorkUnits()`): hierarchy queries (`getParent`, `getChildren`, `roots`, `resolveDefaultRoot`) replacing the global `scoops.find(isCone)` |
 
 Cone and scoop are roles over this one runtime; see [`docs/work-unit.md`](./work-unit.md) for the decision record and migration phases.

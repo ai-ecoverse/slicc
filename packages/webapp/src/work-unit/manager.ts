@@ -47,7 +47,7 @@ export function buildWorkUnitRecord(
 }
 
 export class WorkUnitManager {
-  private readonly runtimes = new Map<WorkUnitId, ScoopContextWorkUnit>();
+  private readonly runtimes = new Map<WorkUnitId, WorkUnitRuntime>();
 
   constructor(private readonly host: WorkUnitManagerHost) {}
 
@@ -71,6 +71,13 @@ export class WorkUnitManager {
     if (!this.host.getScoop(id)) {
       this.runtimes.delete(id);
       return null;
+    }
+    // Prefer the owning live runtime; fall back to the read-through adapter
+    // for a record whose runtime has not been spawned yet.
+    const live = this.host.getLiveUnit?.(id);
+    if (live) {
+      this.runtimes.set(id, live);
+      return live;
     }
     let runtime = this.runtimes.get(id);
     if (!runtime) {
