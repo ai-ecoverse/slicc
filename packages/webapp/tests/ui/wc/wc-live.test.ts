@@ -42,6 +42,7 @@ function scoop(overrides: Partial<RegisteredScoop>): RegisteredScoop {
     name: 'researcher',
     folder: 'researcher',
     isCone: false,
+    parentJid: 'scoop-1',
     type: 'scoop',
     requiresTrigger: false,
     assistantLabel: 'researcher',

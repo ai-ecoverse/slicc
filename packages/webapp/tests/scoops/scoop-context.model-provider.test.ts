@@ -131,6 +131,7 @@ function makeScoop(config: RegisteredScoop['config']): RegisteredScoop {
     name: 'jolly-mint',
     folder: 'agent-jolly-mint',
     isCone: false,
+    parentJid: 'cone',
     type: 'scoop',
     requiresTrigger: false,
     assistantLabel: 'agent-jolly-mint',

@@ -17,6 +17,7 @@ const sample = (jid: string): RegisteredScoop => ({
   folder: 'sample',
   requiresTrigger: false,
   isCone: false,
+  parentJid: 'cone',
   type: 'scoop',
   assistantLabel: 'sample',
   addedAt: '2025-01-01T00:00:00.000Z',

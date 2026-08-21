@@ -1167,7 +1167,7 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleScoopCreated(msg: ScoopCreatedMsg): void {
-    const scoop = this.msgScoopToRegistered(msg.scoop);
+    const scoop = this.msgScoopToRegistered(msg.scoop, this.coneJidFromList(this.scoops));
     // Remove optimistic entry (same name, different JID) and add the real one
     this.scoops = this.scoops.filter((s) => s.name !== scoop.name || s.jid === scoop.jid);
     if (!this.scoops.find((s) => s.jid === scoop.jid)) {
@@ -1197,7 +1197,9 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleScoopList(msg: ScoopListMsg): void {
-    this.scoops = msg.scoops.map((s) => this.msgScoopToRegistered(s));
+    this.scoops = msg.scoops.map((s) =>
+      this.msgScoopToRegistered(s, this.coneJidFromList(msg.scoops))
+    );
     for (const s of msg.scoops) {
       this.scoopStatuses.set(s.jid, s.status);
     }
@@ -1207,7 +1209,9 @@ export class OffscreenClient implements KernelClientFacade {
   private handleStateSnapshot(msg: StateSnapshotMsg): void {
     log.info('Received state snapshot', { scoopCount: msg.scoops.length });
 
-    this.scoops = msg.scoops.map((s) => this.msgScoopToRegistered(s));
+    this.scoops = msg.scoops.map((s) =>
+      this.msgScoopToRegistered(s, this.coneJidFromList(msg.scoops))
+    );
     for (const s of msg.scoops) {
       this.scoopStatuses.set(s.jid, s.status);
     }
@@ -1250,13 +1254,23 @@ export class OffscreenClient implements KernelClientFacade {
     });
   }
 
-  private msgScoopToRegistered(s: ScoopListMsg['scoops'][number]): RegisteredScoop {
+  private coneJidFromList(scoops: ReadonlyArray<{ jid: string; isCone: boolean }>): string | null {
+    return scoops.find((s) => s.isCone)?.jid ?? null;
+  }
+
+  private msgScoopToRegistered(
+    s: ScoopListMsg['scoops'][number],
+    coneJid: string | null
+  ): RegisteredScoop {
     return {
       jid: s.jid,
       name: s.name,
       folder: s.folder,
       isCone: s.isCone,
       type: s.isCone ? 'cone' : 'scoop',
+      // The wire carries no ownership edge yet; a panel-side scoop belongs to
+      // the list's cone (#1666 Phase 4 puts `parentId` on the wire).
+      parentJid: s.isCone ? null : coneJid,
       requiresTrigger: !s.isCone,
       assistantLabel: s.assistantLabel,
       addedAt: new Date().toISOString(),

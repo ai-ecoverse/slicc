@@ -36,6 +36,7 @@ import { registerTranscriptExportService } from '../transcript/export-provider.j
 import { DefaultTranscriptExportService } from '../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
+import { WorkUnitManager } from '../work-unit/manager.js';
 import { SessionStore as UiSessionStore } from './chat-session-store.js';
 import { ConeMemoryStore } from './cone-memory-store.js';
 import * as db from './db.js';
@@ -148,6 +149,12 @@ export interface AssistantConfig {
 
 export class Orchestrator implements ConeApprovalRouter {
   private scoops: Map<string, RegisteredScoop> = new Map();
+  /**
+   * Hierarchy-aware view over {@link scoops} (#1666). Answers parent / child /
+   * default-root questions from the explicit `parentJid` edge; creation and
+   * teardown still flow through {@link registerScoop} / {@link unregisterScoop}.
+   */
+  private readonly workUnits = new WorkUnitManager(this);
   private container: HTMLElement;
   private callbacks: OrchestratorCallbacks;
   private config: AssistantConfig;
@@ -402,6 +409,7 @@ export class Orchestrator implements ConeApprovalRouter {
     await this.modelPolicyFile.init();
 
     const savedScoops = await db.getAllScoops();
+    const restoredRootJid = Object.values(savedScoops).find((s) => s.isCone)?.jid;
 
     for (const scoop of Object.values(savedScoops)) {
       // Sanitize legacy cone records (may have trigger: '@Andy' from old groups code)
@@ -411,6 +419,7 @@ export class Orchestrator implements ConeApprovalRouter {
         scoop.assistantLabel = scoop.assistantLabel || 'sliccy';
       }
       this.migrateScoopConfig(scoop);
+      await this.backfillParent(scoop, restoredRootJid);
       this.scoops.set(scoop.jid, scoop);
       this.messageRouter.ensureQueue(scoop.jid);
 
@@ -495,6 +504,29 @@ export class Orchestrator implements ConeApprovalRouter {
 
     // Start polling for pending messages
     this.messageRouter.startMessageLoop();
+  }
+
+  /**
+   * Backfill the work-unit ownership edge on records saved before
+   * `parentJid` was required (#1666). A cone becomes a root; a scoop is
+   * adopted by the single restored cone (there was exactly one). Unlike
+   * {@link migrateScoopConfig} this IS written back — the field is required
+   * and every later phase routes on it.
+   */
+  private async backfillParent(
+    scoop: RegisteredScoop,
+    restoredRootJid: string | undefined
+  ): Promise<void> {
+    if (scoop.parentJid !== undefined) return;
+    scoop.parentJid = scoop.isCone ? null : (restoredRootJid ?? null);
+    try {
+      await db.saveScoop(scoop);
+    } catch (err) {
+      log.warn('Failed to persist backfilled parentJid; will retry next boot', {
+        jid: scoop.jid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -915,6 +947,16 @@ export class Orchestrator implements ConeApprovalRouter {
   /** Get scoop by JID */
   getScoop(jid: string): RegisteredScoop | undefined {
     return this.scoops.get(jid);
+  }
+
+  /** Live tab state of a scoop's runtime (`undefined` before its context exists). */
+  getScoopTabState(jid: string): ScoopTabState | undefined {
+    return this.lifecycle.getTab(jid);
+  }
+
+  /** Hierarchy-aware work-unit view over the registry (#1666). */
+  getWorkUnits(): WorkUnitManager {
+    return this.workUnits;
   }
 
   /** Wipe the virtual filesystem and re-seed default files (skills, shared CLAUDE.md). */

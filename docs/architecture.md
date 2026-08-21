@@ -273,6 +273,18 @@ All skills (native and compatibility) are read-only — the slicc-specific `mani
 | `types.ts`                  | RegisteredScoop, ChannelMessage, ScoopTabState, ScheduledTask, WebhookEntry, CronTaskEntry                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 | `index.ts`                  | Re-exports                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                |
 
+### packages/webapp/src/work-unit/ — WorkUnit Runtime (#1666)
+
+| File            | Purpose                                                                                                                                                                     |
+| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `types.ts`      | `WorkUnitDescriptor`, `WorkUnitPolicy`, `CompletionPolicy`, lifecycle `WorkUnitStatus`, events                                                                              |
+| `policy.ts`     | Root/child presets, `derivePolicy`, `isRootUnit` (`parentJid === null` — the only root test), `isPolicySubset`, `childrenOf`, `rootsOf`                                     |
+| `descriptor.ts` | Pure projection of a `RegisteredScoop` + tab state onto a descriptor; `workspaceFor` computes cwd / memory / scratch paths                                                  |
+| `runtime.ts`    | `WorkUnitRuntime` contract + `ScoopContextWorkUnit` adapter over `ScoopContext` / `ScoopLifecycleManager`                                                                   |
+| `manager.ts`    | `WorkUnitManager` (`Orchestrator.getWorkUnits()`): hierarchy queries (`getParent`, `getChildren`, `roots`, `resolveDefaultRoot`) replacing the global `scoops.find(isCone)` |
+
+Cone and scoop are roles over this one runtime; see [`docs/work-unit.md`](./work-unit.md) for the decision record and migration phases.
+
 ### packages/webapp/src/tools/ — Agent Tools
 
 | File            | Purpose                                                                                                                                                                                                   |

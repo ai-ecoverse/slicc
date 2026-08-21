@@ -28,6 +28,7 @@ function scoop(jid: string, isCone: boolean): RegisteredScoop {
     name: jid,
     folder: `${jid}-folder`,
     isCone,
+    parentJid: isCone ? null : 'cone',
     type: isCone ? 'cone' : 'scoop',
     requiresTrigger: false,
     assistantLabel: jid,

@@ -61,6 +61,7 @@ function cone(): RegisteredScoop {
     name: 'sliccy',
     folder: 'cone',
     isCone: true,
+    parentJid: null,
     type: 'cone',
     requiresTrigger: false,
     assistantLabel: 'sliccy',

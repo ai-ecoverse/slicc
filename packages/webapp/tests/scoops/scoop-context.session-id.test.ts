@@ -121,6 +121,7 @@ const baseScoop: RegisteredScoop = {
   name: 'cone',
   folder: '',
   isCone: true,
+  parentJid: null,
   type: 'cone',
   requiresTrigger: false,
   assistantLabel: 'sliccy',

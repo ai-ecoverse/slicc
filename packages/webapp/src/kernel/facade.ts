@@ -1001,6 +1001,7 @@ export class Bridge implements KernelFacade {
       name,
       folder: 'cone',
       isCone: true,
+      parentJid: null,
       type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',

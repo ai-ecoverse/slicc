@@ -84,6 +84,7 @@ const testScoop: RegisteredScoop = {
   name: 'test',
   folder: 'test-scoop',
   isCone: false,
+  parentJid: 'cone',
   type: 'scoop',
   requiresTrigger: false,
   assistantLabel: 'test-scoop',

@@ -33,6 +33,8 @@ never-rules below flag what a reviewer must recognise.
 
 - Kernel host — `packages/webapp/src/kernel/` (also `docs/kernel/process-model.md`)
 - Orchestrator + tray — `packages/webapp/src/scoops/`
+- WorkUnit runtime (cone/scoop as roles) — `packages/webapp/src/work-unit/`
+  (also `docs/work-unit.md`)
 - VirtualFS + mounts — `packages/webapp/src/fs/` (also `docs/mounts.md`)
 - Shell (`.jsh`/`.bsh`, MCP) — `packages/webapp/src/shell/`
   (also `docs/shell-reference.md`)
@@ -77,6 +79,13 @@ Non-obvious rules:
   reached over `realm/sync-sab-*.ts` (Atomics/SharedArrayBuffer on the realm's
   own port) — only for `Realm.isolatedThread` realms; the in-process factory must
   never get a SAB (self-deadlock). Deep reference: `docs/kernel/process-model.md`.
+- **Cone and scoop are roles over one `WorkUnit`** (#1666): `RegisteredScoop.parentJid`
+  is required — `null` is THE root test (`isRootUnit`), `isCone`/`type` are derived
+  presentation kept for the wire. New `scoops/` and `kernel/` code asks
+  `orchestrator.getWorkUnits()` (`getParent`, `getChildren`, `resolveDefaultRoot`) or
+  the unit's `policy.*`; never add a `scoops.find((s) => s.isCone)` or an
+  `isCone` branch. Every creation path sets `parentJid` explicitly; restore
+  backfills and persists it. See `docs/work-unit.md`.
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without
   queue/watermark loss; user `web` bypasses the window (immediate/awaited,
   prevents deferral). `transcript-limits.ts` caps bridge/event transcripts at 64 KB
