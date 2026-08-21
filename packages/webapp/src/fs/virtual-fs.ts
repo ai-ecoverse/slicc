@@ -1148,6 +1148,24 @@ export class VirtualFS {
     ) {
       return null;
     }
+    // The root can never be a symlink, so the walk below has nothing to do —
+    // and its first step (`sync.lstatSync('/')`) is exactly the lookup ZenFS
+    // cannot serve for a mount point (see {@link lstat}), which made the root
+    // fall out of the sync fast path entirely and cost every caller an
+    // unnecessary async round-trip.
+    if (normalized === '/') {
+      try {
+        const s = sync.statSync(normalized);
+        return {
+          type: s.isDirectory() ? 'directory' : 'file',
+          size: s.size,
+          mtime: s.mtimeMs,
+          ctime: s.ctimeMs,
+        };
+      } catch {
+        return null;
+      }
+    }
     // Resolve symlinks with a bounded hop counter — ZenFS' native
     // `statSync` follows symlinks via unbounded recursion and a `/a → /b
     // → /a` cycle blows the stack. Mirrors {@link realpath}'s bounded
@@ -1187,6 +1205,9 @@ export class VirtualFS {
     if (this.findMount(normalized)) return null;
     const sync = this.lfsSync;
     if (typeof sync.lstatSync !== 'function') return null;
+    // Root: never a symlink, and `sync.lstatSync('/')` is the lookup ZenFS
+    // cannot serve for a mount point — same reason as {@link lstat}.
+    if (normalized === '/') return this.statSync(normalized);
     try {
       const s = sync.lstatSync(normalized);
       if (s.isSymbolicLink()) {
@@ -2289,6 +2310,24 @@ export class VirtualFS {
       // Mount points don't support symlinks — fall through to regular stat
       return this.stat(normalized);
     }
+    // The VFS root is the ONE path ZenFS' `lstat` cannot resolve. Unlike
+    // `stat`, it does not route the final path component through the mount
+    // table: it resolves the PARENT to a filesystem and then stats the
+    // basename inside THAT filesystem (`@zenfs/core/dist/vfs/async.js`, the
+    // `lstat` branch of `stat()`). A mount point is not an entry in its
+    // parent's filesystem — it exists only in the mount table — so the
+    // lookup misses and raises ENOENT.
+    //
+    // Every VirtualFS mounts its backend at `/__opfs__/<dbName>` (memory:
+    // `/__zenfs__/<dbName>`) and maps VFS `/` onto exactly that mount point,
+    // so `lstat('/')` — and only `/` — always failed, while `stat('/')`,
+    // `exists('/')`, and `readDir('/')` all worked. That asymmetry took out
+    // `du -sh /`, `stat /`, `find / -maxdepth 1 -type d`, and any path that
+    // normalizes to the root (`/.`, `/workspace/..`).
+    //
+    // The root is always a directory and can never be a symlink, so `lstat`
+    // and `stat` are definitionally the same answer here.
+    if (normalized === '/') return this.stat(normalized);
     try {
       const s = await this.lfs.lstat(normalized);
       if (s.isSymbolicLink()) {
