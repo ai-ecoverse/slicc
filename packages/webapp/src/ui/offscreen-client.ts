@@ -470,13 +470,16 @@ export class OffscreenClient implements KernelClientFacade {
    * racing the offscreen document (which survives the panel reload in
    * extension mode). A 5-second timeout backs out cleanly in the rare
    * case the bridge is wedged; reload still proceeds.
+   *
+   * `scoopJid` names the root to clear (#2272) — the panel passes the
+   * selected cone. Omitted, the bridge clears the default root.
    */
-  async clearAllMessages(): Promise<void> {
+  async clearAllMessages(scoopJid?: string): Promise<void> {
     const requestId = `clear-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const ack = new Promise<void>((resolve) => {
       this.pendingClearAcks.set(requestId, resolve);
     });
-    this.send({ type: 'clear-chat', requestId });
+    this.send({ type: 'clear-chat', requestId, ...(scoopJid ? { scoopJid } : {}) });
     await Promise.race([ack, new Promise<void>((resolve) => setTimeout(resolve, 5000))]);
     this.pendingClearAcks.delete(requestId);
   }

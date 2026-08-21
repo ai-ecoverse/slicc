@@ -85,6 +85,20 @@ export interface FrozenSessionIndexEntry {
    * transcript bundle was not produced.
    */
   completeSnapshotUnavailable?: true;
+  /**
+   * Storage folder of the root unit whose chat this archive froze
+   * (`cone` for the primary, `cone-<slug>` for an extra cone — #2272).
+   * Archives written before the field existed carry no value and are
+   * treated as the primary cone's.
+   */
+  cone?: string;
+  /**
+   * Human label of that cone at freeze time (the rail chip's
+   * `assistantLabel`). Only written for extra cones — the primary's
+   * `sliccy` would be noise on every card. Cosmetic: the freezer falls
+   * back to the folder when it is absent.
+   */
+  coneLabel?: string;
 }
 
 export interface FrozenSessionArchive {
@@ -97,6 +111,10 @@ export interface FrozenSessionArchive {
   messages: ChatMessage[];
   cost?: FrozenSessionCost;
   models?: FrozenSessionModel[];
+  /** Folder of the cone this archive froze — see {@link FrozenSessionIndexEntry.cone}. */
+  cone?: string;
+  /** Label of that cone — see {@link FrozenSessionIndexEntry.coneLabel}. */
+  coneLabel?: string;
 }
 
 /**
@@ -137,10 +155,10 @@ export function frozenSessionPath(entry: FrozenSessionIndexEntry): string {
  */
 export function parseFrozenArchive(
   markdown: string
-): Pick<FrozenSessionArchive, 'title' | 'messages' | 'cost' | 'models'> {
+): Pick<FrozenSessionArchive, 'title' | 'messages' | 'cost' | 'models' | 'cone' | 'coneLabel'> {
   let body = markdown;
   let title = 'Untitled';
-  const usageSummary: Pick<FrozenSessionArchive, 'cost' | 'models'> = {};
+  const meta: Pick<FrozenSessionArchive, 'cost' | 'models' | 'cone' | 'coneLabel'> = {};
 
   // 1. Strip YAML-style frontmatter and pull out the title.
   //    The writer emits `title: ${JSON.stringify(value)}`, which means
@@ -153,25 +171,16 @@ export function parseFrozenArchive(
     body = body.slice(fmMatch[0].length);
     const cost = parseFrontmatterJson<FrozenSessionCost>(fmMatch[1], 'cost');
     const models = parseFrontmatterJson<FrozenSessionModel[]>(fmMatch[1], 'models');
-    if (cost) usageSummary.cost = cost;
-    if (models) usageSummary.models = models;
+    if (cost) meta.cost = cost;
+    if (models) meta.models = models;
+    // Provenance of the frozen chat (#2272). `cone` is a folder slug written
+    // raw; `coneLabel` is user text written JSON-quoted like `title`.
+    const cone = fmMatch[1].match(/^cone:\s*(.+?)\s*$/m)?.[1];
+    if (cone) meta.cone = cone;
+    const coneLabel = fmMatch[1].match(/^coneLabel:\s*(.+?)\s*$/m)?.[1];
+    if (coneLabel) meta.coneLabel = decodeFrontmatterString(coneLabel);
     const titleLine = fmMatch[1].match(/^title:\s*(.+?)\s*$/m);
-    if (titleLine) {
-      const raw = titleLine[1].trim();
-      if (raw.startsWith('"')) {
-        try {
-          // JSON.parse handles \", \\, \n, \uXXXX, etc. — same escapes
-          // JSON.stringify produced on the way in.
-          const decoded = JSON.parse(raw);
-          if (typeof decoded === 'string') title = decoded;
-        } catch {
-          // Malformed quoted value — strip surrounding quotes as a last resort.
-          title = raw.replace(/^"|"$/g, '');
-        }
-      } else {
-        title = raw;
-      }
-    }
+    if (titleLine) title = decodeFrontmatterString(titleLine[1]);
   }
 
   // 2. Prefer the embedded structured-data block when present —
@@ -182,7 +191,7 @@ export function parseFrozenArchive(
       const restored = dataMatch[1].replace(/-- >/g, '-->');
       const parsed = JSON.parse(restored);
       if (Array.isArray(parsed)) {
-        return { title, messages: parsed as ChatMessage[], ...usageSummary };
+        return { title, messages: parsed as ChatMessage[], ...meta };
       }
     } catch {
       // Malformed block — fall through to text parser.
@@ -194,7 +203,25 @@ export function parseFrozenArchive(
   // 3. Drop the leading `# title` heading if present.
   body = body.replace(/^#\s+[^\n]*\n+/, '');
 
-  return { title, messages: parseHeadingFallback(body), ...usageSummary };
+  return { title, messages: parseHeadingFallback(body), ...meta };
+}
+
+/**
+ * Decode a frontmatter scalar the writer produced with `JSON.stringify`.
+ * `JSON.parse` handles `\"`, `\\`, `\n`, `\uXXXX` — the same escapes
+ * `JSON.stringify` emitted on the way in. Unquoted scalars (legacy
+ * archives) are returned verbatim.
+ */
+function decodeFrontmatterString(raw: string): string {
+  const value = raw.trim();
+  if (!value.startsWith('"')) return value;
+  try {
+    const decoded = JSON.parse(value);
+    if (typeof decoded === 'string') return decoded;
+  } catch {
+    // Malformed quoted value — strip surrounding quotes as a last resort.
+  }
+  return value.replace(/^"|"$/g, '');
 }
 
 function parseFrontmatterJson<T>(frontmatter: string, key: string): T | undefined {

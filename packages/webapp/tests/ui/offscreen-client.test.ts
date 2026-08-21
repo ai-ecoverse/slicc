@@ -422,6 +422,27 @@ describe('OffscreenClient', () => {
     await pending;
   });
 
+  it('omits scoopJid when no cone is named, carries it when one is (#2272)', async () => {
+    const bare = client.clearAllMessages();
+    const bareEnvelope = sentMessages[0] as { source: string; payload: any };
+    expect('scoopJid' in bareEnvelope.payload).toBe(false);
+    simulateMessage('offscreen', {
+      type: 'clear-chat-ack',
+      requestId: bareEnvelope.payload.requestId,
+    });
+    await bare;
+
+    sentMessages.length = 0;
+    const targeted = client.clearAllMessages('cone_2');
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    expect(envelope.payload.scoopJid).toBe('cone_2');
+    simulateMessage('offscreen', {
+      type: 'clear-chat-ack',
+      requestId: envelope.payload.requestId,
+    });
+    await targeted;
+  });
+
   it('awaits thinking acknowledgment and updates the cached scoop before resolving', async () => {
     simulateMessage('offscreen', {
       type: 'scoop-list',

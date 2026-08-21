@@ -233,6 +233,12 @@ export interface ClearChatMsg {
    *  (the offscreen document survives panel reload in extension mode,
    *  so a missed clear would leave the old agent state running). */
   requestId: string;
+  /**
+   * Root unit whose conversation to clear (#2272). The panel sends the
+   * selected cone; omitting it clears the default root, which is what
+   * every sender did before multiple cones existed.
+   */
+  scoopJid?: string;
 }
 
 export interface ClearChatAckMsg {

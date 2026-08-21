@@ -279,6 +279,44 @@ describe('Kernel facade parity', () => {
     expect(orchestrator.clearAllMessages).not.toHaveBeenCalled();
   });
 
+  // 3b. With several roots, clear-chat targets the one the panel names
+  //     (#2272): cone B's session and runtime state are reset, cone A's are
+  //     untouched. An unknown jid falls back to the default root.
+  it('client.clearAllMessages(jid) → clears that root only', async () => {
+    orchestrator.getScoops.mockReturnValue([
+      ...orchestrator.getScoops(),
+      {
+        jid: 'cone_2',
+        name: 'Research',
+        folder: 'cone-research',
+        isCone: true,
+        parentJid: null,
+        type: 'cone' as const,
+        requiresTrigger: false,
+        assistantLabel: 'Research',
+        addedAt: new Date().toISOString(),
+      },
+    ]);
+
+    void client.clearAllMessages('cone_2');
+    await tick();
+
+    const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;
+    expect(sessionStore.delete).toHaveBeenCalledWith('session-cone-research');
+    expect(sessionStore.delete).not.toHaveBeenCalledWith('session-cone');
+    expect(orchestrator.clearScoopMessages).toHaveBeenCalledWith('cone_2');
+    expect(orchestrator.clearScoopMessages).not.toHaveBeenCalledWith('cone_1');
+  });
+
+  it('client.clearAllMessages(unknown jid) falls back to the default root', async () => {
+    void client.clearAllMessages('cone_gone');
+    await tick();
+
+    const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;
+    expect(sessionStore.delete).toHaveBeenCalledWith('session-cone');
+    expect(orchestrator.clearScoopMessages).toHaveBeenCalledWith('cone_1');
+  });
+
   // 4. panel-cdp-command round-trip
   it('panel-cdp-command goes through BrowserAPI and returns panel-cdp-response', async () => {
     const send = vi.fn().mockResolvedValue({ ok: true, foo: 1 });

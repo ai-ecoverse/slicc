@@ -3,6 +3,9 @@ import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import {
   defaultRootOf,
   orderForSwitcher,
+  rootFolderForContext,
+  rootForConeFolder,
+  rootForSelection,
   switcherLabelFor,
   threadContextFor,
   unitForContext,
@@ -93,5 +96,81 @@ describe('wc-unit-context', () => {
       'scoop_2',
       'scoop_1',
     ]);
+  });
+
+  describe('rootForSelection (#2272)', () => {
+    const all = [worker, research, primary, helper];
+
+    it('returns a selected root unchanged', () => {
+      expect(rootForSelection(all, research)?.jid).toBe('cone_2');
+      expect(rootForSelection(all, primary)?.jid).toBe('cone_1');
+    });
+
+    it('walks a selected child up to the root that owns it', () => {
+      expect(rootForSelection(all, worker)?.jid).toBe('cone_1');
+      expect(rootForSelection(all, helper)?.jid).toBe('cone_2');
+    });
+
+    it('walks a grandchild up through its parent chain', () => {
+      const grandchild = unit({ jid: 'scoop_3', parentJid: 'scoop_2', folder: 'deep' });
+      expect(rootForSelection([...all, grandchild], grandchild)?.jid).toBe('cone_2');
+    });
+
+    it('falls back to the default root with nothing selected', () => {
+      expect(rootForSelection(all, null)?.jid).toBe('cone_1');
+      expect(rootForSelection(all, undefined)?.jid).toBe('cone_1');
+    });
+
+    it('falls back to the default root for a stale selection or an orphan', () => {
+      expect(rootForSelection(all, { jid: 'gone', parentJid: null })?.jid).toBe('cone_1');
+      const orphan = unit({ jid: 'scoop_9', parentJid: 'vanished', folder: 'orphan' });
+      expect(rootForSelection([...all, orphan], orphan)?.jid).toBe('cone_1');
+    });
+
+    it('does not spin on a cyclic parent chain', () => {
+      const a = unit({ jid: 'a', parentJid: 'b', folder: 'a' });
+      const b = unit({ jid: 'b', parentJid: 'a', folder: 'b' });
+      expect(rootForSelection([primary, a, b], a)?.jid).toBe('cone_1');
+    });
+
+    it('returns undefined when the roster has no root at all', () => {
+      expect(rootForSelection([worker], worker)).toBeUndefined();
+    });
+  });
+
+  describe('rootFolderForContext (#2272)', () => {
+    it('maps cone contexts to their storage folder', () => {
+      expect(rootFolderForContext(null)).toBe('cone');
+      expect(rootFolderForContext(undefined)).toBe('cone');
+      expect(rootFolderForContext('cone')).toBe('cone');
+      expect(rootFolderForContext('cone:cone-research')).toBe('cone-research');
+    });
+
+    it('treats an empty cone folder as the primary one', () => {
+      expect(rootFolderForContext('cone:')).toBe('cone');
+    });
+
+    it('returns null for non-cone contexts', () => {
+      expect(rootFolderForContext('scoop:worker')).toBeNull();
+      expect(rootFolderForContext('freezer:2026-01-01-x.md')).toBeNull();
+    });
+  });
+
+  describe('rootForConeFolder (#2272)', () => {
+    const all = [worker, research, primary, helper];
+
+    it('resolves an archive folder back to its root', () => {
+      expect(rootForConeFolder(all, 'cone-research')?.jid).toBe('cone_2');
+      expect(rootForConeFolder(all, 'cone')?.jid).toBe('cone_1');
+    });
+
+    it('falls back to the default root for a legacy (missing) or removed folder', () => {
+      expect(rootForConeFolder(all, undefined)?.jid).toBe('cone_1');
+      expect(rootForConeFolder(all, 'cone-deleted')?.jid).toBe('cone_1');
+    });
+
+    it('never resolves a child folder as a root', () => {
+      expect(rootForConeFolder(all, 'worker-scoop')?.jid).toBe('cone_1');
+    });
   });
 });

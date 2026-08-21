@@ -3011,3 +3011,167 @@ describe('markSnapshotUnavailable — serialized inside indexWriteChain', () => 
     expect(vfs.files.get(SESSIONS_INDEX_PATH)).toBe(durableIndex);
   });
 });
+
+/**
+ * Per-cone freezing (#2272). "New chat" runs against the cone the user has
+ * selected, so the freezer loads that cone's chat session key and stamps the
+ * archive with where it came from.
+ */
+describe('freezeConeSession — cone provenance (#2272)', () => {
+  beforeEach(() => {
+    mockRunOneOffCompactionCall.mockReset();
+    mockRunAgenticMemoryPass.mockReset();
+    mockApplyConeMemoryBudget.mockReset().mockResolvedValue({
+      restructured: false,
+      reason: 'no-llm',
+    });
+    mockReadSessionCount.mockReset().mockResolvedValue(1);
+  });
+
+  /** Store double that records which session key the freezer asked for. */
+  function makeKeyedStore(sessions: Record<string, Session>) {
+    const requested: string[] = [];
+    const store = {
+      async load(id: string): Promise<Session | null> {
+        requested.push(id);
+        return sessions[id] ?? null;
+      },
+    } as unknown as SessionStore;
+    return { store, requested };
+  }
+
+  function session(id: string, first: string): Session {
+    return {
+      id,
+      messages: [
+        userMessage(first),
+        assistantMessage('sure'),
+        userMessage('and then?'),
+        assistantMessage('done'),
+      ],
+      createdAt: 100,
+      updatedAt: 200,
+    };
+  }
+
+  it('defaults to the primary cone and records it as the archive owner', async () => {
+    const vfs = makeFakeVfs();
+    const { store, requested } = makeKeyedStore({ 'session-cone': session('session-cone', 'hi') });
+
+    const frozen = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+    });
+
+    expect(requested).toEqual(['session-cone']);
+    expect(frozen!.cone).toBe('cone');
+    expect(frozen!.coneLabel).toBeUndefined();
+    expect(frozen!.archive.cone).toBe('cone');
+  });
+
+  it('freezes the selected extra cone, not the primary one', async () => {
+    const vfs = makeFakeVfs();
+    const { store, requested } = makeKeyedStore({
+      'session-cone': session('session-cone', 'primary chat'),
+      'session-cone-research': session('session-cone-research', 'research chat'),
+    });
+
+    const frozen = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+      cone: { folder: 'cone-research', label: 'Research' },
+    });
+
+    expect(requested).toEqual(['session-cone-research']);
+    expect(frozen!.archive.messages[0].content).toBe('research chat');
+    expect(frozen!.cone).toBe('cone-research');
+    expect(frozen!.coneLabel).toBe('Research');
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index[0]).toMatchObject({ cone: 'cone-research', coneLabel: 'Research' });
+  });
+
+  it('writes provenance into the archive frontmatter and parses it back', async () => {
+    const vfs = makeFakeVfs();
+    const { store } = makeKeyedStore({
+      'session-cone-note-taking': session('session-cone-note-taking', 'take notes'),
+    });
+
+    const frozen = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+      cone: { folder: 'cone-note-taking', label: 'Note "taking"' },
+    });
+
+    const markdown = vfs.files.get(`/sessions/${frozen!.filename}`)!;
+    expect(markdown).toContain('cone: cone-note-taking');
+    const parsed = parseFrozenArchive(markdown);
+    expect(parsed.cone).toBe('cone-note-taking');
+    // Labels are user text — quotes must round-trip like the title's do.
+    expect(parsed.coneLabel).toBe('Note "taking"');
+  });
+
+  it('omits the label for the primary cone (every card would say the same)', async () => {
+    const vfs = makeFakeVfs();
+    const { store } = makeKeyedStore({ 'session-cone': session('session-cone', 'hello') });
+
+    const frozen = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+      cone: { folder: 'cone', label: 'sliccy' },
+    });
+
+    expect(frozen!.cone).toBe('cone');
+    expect(frozen!.coneLabel).toBeUndefined();
+    expect(vfs.files.get(`/sessions/${frozen!.filename}`)).not.toContain('coneLabel:');
+  });
+
+  it('skips (and reports nothing) when the selected cone has no history', async () => {
+    const vfs = makeFakeVfs();
+    const { store, requested } = makeKeyedStore({
+      'session-cone': session('session-cone', 'primary has plenty'),
+    });
+
+    const frozen = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+      cone: { folder: 'cone-empty' },
+    });
+
+    expect(requested).toEqual(['session-cone-empty']);
+    expect(frozen).toBeNull();
+    expect(vfs.files.has(SESSIONS_INDEX_PATH)).toBe(false);
+  });
+
+  it('keeps provenance across the enrichment rename', async () => {
+    const vfs = makeFakeVfs();
+    const { store } = makeKeyedStore({
+      'session-cone-research': session('session-cone-research', 'debug the build pipeline'),
+    });
+    const frozen = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      mode: 'quick',
+      cone: { folder: 'cone-research', label: 'Research' },
+    });
+
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('- learned something')
+      .mockResolvedValueOnce('Build pipeline debug');
+
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      frozen as FrozenSessionIndexEntry,
+      { model: fakeModel!, apiKey: 'k' }
+    );
+
+    expect(updated!.filename).not.toBe(frozen!.filename);
+    expect(updated).toMatchObject({ cone: 'cone-research', coneLabel: 'Research' });
+  });
+});

@@ -188,4 +188,28 @@ describe('welcome-detection', () => {
       expect(after.isFirstRun).toBe(false);
     });
   });
+
+  /**
+   * Decision (#2272): the welcome sequence is a first-run flow for the
+   * user, so it stays anchored to the primary cone. Extra cones created
+   * from the Cones rail neither fire it nor suppress it.
+   */
+  describe('primary cone only (#2272)', () => {
+    it('keys off the primary cone session', () => {
+      expect(__test__.CONE_SESSION_ID).toBe('session-cone');
+    });
+
+    it('ignores a welcome lick sitting in an extra cone history', async () => {
+      await writeChatSession({
+        id: 'session-cone-research',
+        messages: [{ role: 'user', content: `${__test__.WELCOME_LICK_HEADER}\n\nwelcome, again` }],
+      });
+      try {
+        expect(await hasWelcomeLickInHistory()).toBe(false);
+        expect((await detectWelcomeFirstRun(vfs)).isFirstRun).toBe(true);
+      } finally {
+        await deleteChatSession('session-cone-research').catch(() => {});
+      }
+    });
+  });
 });

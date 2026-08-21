@@ -14,6 +14,7 @@ import { FsError } from '../../../src/fs/types.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import { readSessionCount } from '../../../src/scoops/cone-memory-budget.js';
 import {
+  coneBadgeFor,
   enrichFreezerIcons,
   type FrozenSessionIndexEntry,
   frozenCard,
@@ -61,6 +62,26 @@ describe('frozenCard', () => {
     expect(card.getAttribute('title')).toBe('Fix the build');
     expect(card.getAttribute('slug')).toBe(ENTRY.filename);
     expect(card.getAttribute('meta')).toContain('2 turns');
+  });
+});
+
+describe('cone provenance on cards (#2272)', () => {
+  it('shows no cone badge for the primary cone or a legacy archive', () => {
+    expect(coneBadgeFor(ENTRY)).toBeUndefined();
+    expect(coneBadgeFor({ ...ENTRY, cone: 'cone' })).toBeUndefined();
+    expect(frozenCard(ENTRY).getAttribute('meta')).toBe(
+      frozenCard({ ...ENTRY, cone: 'cone' }).getAttribute('meta')
+    );
+  });
+
+  it('names the extra cone an archive came from', () => {
+    const entry = { ...ENTRY, cone: 'cone-research', coneLabel: 'Research' };
+    expect(coneBadgeFor(entry)).toBe('Research');
+    expect(frozenCard(entry).getAttribute('meta')).toContain('· Research');
+  });
+
+  it('falls back to the folder slug when no label was recorded', () => {
+    expect(coneBadgeFor({ ...ENTRY, cone: 'cone-side-quest' })).toBe('side-quest');
   });
 });
 
@@ -183,6 +204,8 @@ describe('corrupt-index recovery', () => {
         'messageCount: 3',
         'cost: {"total":0.25,"input":0.1,"output":0.15,"cacheRead":0,"cacheWrite":0}',
         'models: [{"model":"model-a","cost":0.25,"turns":2,"tokens":300}]',
+        'cone: cone-research',
+        'coneLabel: "Research"',
         '---',
         '',
       ].join('\n')
@@ -199,8 +222,12 @@ describe('corrupt-index recovery', () => {
       pendingEnrichment: true,
       cost: { total: 0.25, input: 0.1, output: 0.15, cacheRead: 0, cacheWrite: 0 },
       models: [{ model: 'model-a', cost: 0.25, turns: 2, tokens: 300 }],
+      // Provenance survives the rebuild — the archives are the ground truth.
+      cone: 'cone-research',
+      coneLabel: 'Research',
     });
     expect(rebuilt[1]).toMatchObject({ filename: ENTRY.filename, title: 'Fix the build' });
+    expect(rebuilt[1].cone).toBeUndefined();
   });
 
   it('keeps readSessionCount compatible with cost-bearing index entries', async () => {

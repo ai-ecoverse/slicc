@@ -1441,7 +1441,7 @@ export class Bridge implements KernelFacade {
         break;
 
       case 'clear-chat': {
-        await this.handleClearChat(msg.requestId);
+        await this.handleClearChat(msg.requestId, msg.scoopJid);
         break;
       }
 
@@ -1730,14 +1730,25 @@ export class Bridge implements KernelFacade {
    * completed before it calls `location.reload()` — important in
    * extension mode where the offscreen document survives a panel
    * reload.
+   *
+   * `scoopJid` selects WHICH root to clear (#2272): the panel sends the
+   * cone the user is looking at, so clearing cone B leaves cone A's
+   * conversation and persisted session untouched. An unknown or absent
+   * jid falls back to the default root and the primary cone's session
+   * key, matching the pre-multiple-cones behaviour.
    */
-  private async handleClearChat(requestId: string): Promise<void> {
-    const coneJid = this.getConeJid() ?? undefined;
+  private async handleClearChat(requestId: string, scoopJid?: string): Promise<void> {
+    const scoops = this.orchestrator?.getScoops() ?? [];
+    const target =
+      (scoopJid ? scoops.find((scoop) => scoop.jid === scoopJid) : undefined) ?? rootsOf(scoops)[0];
+    const coneJid = target?.jid;
     if (coneJid) {
       await this.orchestrator?.clearScoopMessages(coneJid);
     }
     if (this.sessionStore) {
-      await this.sessionStore.delete('session-cone');
+      await this.sessionStore.delete(
+        chatSessionIdFor({ folder: target?.folder ?? PRIMARY_CONE_FOLDER })
+      );
     }
     if (coneJid) {
       this.messageBuffers.delete(coneJid);

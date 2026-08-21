@@ -3,7 +3,7 @@
  * completed the onboarding flow.
  *
  * On first run (no `/shared/.welcomed` marker file AND no prior
- * welcome lick in the cone's chat history), the caller (ui/main.ts)
+ * welcome lick in the primary cone's chat history), the caller (ui/main.ts)
  * emits a `sprinkle` lick with name `welcome` and action `first-run`
  * to the cone. The welcome skill then renders the welcome dip in chat
  * via the `![](/shared/sprinkles/welcome/welcome.shtml)` image syntax
@@ -22,6 +22,7 @@
 
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
+import { chatSessionIdFor, PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 
 const log = createLogger('welcome-detection');
 
@@ -30,15 +31,22 @@ const WELCOMED_MARKER_PATH = '/shared/.welcomed';
 /**
  * IndexedDB layer that holds the chat-panel's persisted conversations.
  * Mirrors `scoops/chat-session-store.ts` literally — DB name + store + the
- * `session-cone` key the chat panel uses for the cone scoop. We avoid
- * importing the UI `SessionStore` so this module stays inside the
- * scoops layer (which `main.ts` imports from both CLI and extension
- * boot paths) without pulling in chat-panel internals.
+ * session key the chat panel uses. We avoid importing the UI `SessionStore`
+ * so this module stays inside the scoops layer (which `main.ts` imports from
+ * both CLI and extension boot paths) without pulling in chat-panel
+ * internals.
+ *
+ * **Primary cone only, deliberately (#2272).** Welcome is a first-run flow
+ * for the *user*, not a per-conversation greeting: an extra cone created
+ * from the Cones rail belongs to someone who has already been onboarded, so
+ * it never gets the lick and never gets scanned for one. Everything else
+ * session-level ("New chat", the Freezer, `clear-chat`) does follow the
+ * selected cone; this is the one path that does not.
  */
 const CHAT_DB_NAME = 'browser-coding-agent';
 const CHAT_DB_VERSION = 1;
 const CHAT_STORE_NAME = 'sessions';
-const CONE_SESSION_ID = 'session-cone';
+const CONE_SESSION_ID = chatSessionIdFor({ folder: PRIMARY_CONE_FOLDER });
 
 /**
  * Header literal the orchestrator prepends to every welcome lick

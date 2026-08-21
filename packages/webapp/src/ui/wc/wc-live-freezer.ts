@@ -22,7 +22,12 @@ import {
 } from './wc-freezer.js';
 import type { WcPageVfs } from './wc-live.js';
 import { applyShellContext, type WcShellRefs } from './wc-shell.js';
-import { defaultRootOf } from './wc-unit-context.js';
+import {
+  defaultRootOf,
+  rootForConeFolder,
+  rootForSelection,
+  switcherLabelFor,
+} from './wc-unit-context.js';
 
 export interface FreezerRailDeps {
   refs: WcShellRefs;
@@ -97,6 +102,12 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
     newSessionInFlight = true;
     freezerNew()?.setAttribute('busy', '');
     void (async () => {
+      // "New chat" belongs to the cone the user is looking at (#2272): a
+      // selected scoop resolves to the root that owns it, nothing selected
+      // to the default root. Captured BEFORE the awaits so a roster refresh
+      // mid-freeze cannot move the target between archive and clear.
+      const root = rootForSelection(client.getScoops(), getSelected());
+      const cone = root ? { folder: root.folder, label: switcherLabelFor(root) } : undefined;
       try {
         const { writer } = await openVfs();
         const { resetNewSessionTmp, runNewSessionFreeze, runNewSessionFreezeQuick } = await import(
@@ -118,6 +129,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
           if (action === 'save') {
             await runNewSessionFreeze({
               vfs: writer,
+              cone,
               agenticMemorySpawn: (options) => client.spawnAgent(options),
               captureCompleteSnapshot,
               onProgress: (fraction) => {
@@ -129,19 +141,23 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
               onBackgroundEnriched: refreshFreezer,
             });
           } else {
-            await runNewSessionFreezeQuick({ vfs: writer, captureCompleteSnapshot });
+            await runNewSessionFreezeQuick({ vfs: writer, cone, captureCompleteSnapshot });
           }
         }
         await resetNewSessionTmp(writer);
-        await client.clearAllMessages();
+        await client.clearAllMessages(root?.jid);
         getController()?.loadMessages([]);
         window.dispatchEvent(new CustomEvent(LEADER_BROADCAST_SNAPSHOT_EVENT));
         void import('../../speech/dictation-priming.js')
           .then(({ resetDictationPriming }) => resetDictationPriming())
           .catch(() => undefined);
         refreshFreezer();
-        const cone = defaultRootOf(client.getScoops());
-        if (cone) selectScoop(cone);
+        // Stay on the cone we just cleared — its record may have been
+        // replaced by a roster refresh, so re-resolve by jid.
+        const next =
+          client.getScoops().find((scoop) => scoop.jid === root?.jid) ??
+          defaultRootOf(client.getScoops());
+        if (next) selectScoop(next);
       } catch (err) {
         log.error('WC new session failed', err);
       } finally {
@@ -163,9 +179,11 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   });
 
   const openFrozen = async (slug: string): Promise<void> => {
+    // Hoisted so the catch can route the fallback selection to the cone the
+    // archive named, even when the thaw itself is what failed.
+    let entry = frozenEntries.find((candidate) => candidate.filename === slug);
     try {
       const { reader } = await openVfs();
-      let entry = frozenEntries.find((candidate) => candidate.filename === slug);
       if (!entry) {
         entry = ((await readFreezerEntries(reader)) ?? []).find(
           (candidate) => candidate.filename === slug
@@ -186,7 +204,10 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
     } catch (err) {
       log.error('WC thaw failed', err);
       if (!getSelected()) {
-        const cone = defaultRootOf(client.getScoops());
+        // Fall back to the cone the archive came from, not blindly to the
+        // primary one (#2272); legacy archives carry no `cone` field and
+        // resolve to the default root as before.
+        const cone = rootForConeFolder(client.getScoops(), entry?.cone);
         if (cone) selectScoop(cone);
       }
     }

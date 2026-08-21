@@ -5,12 +5,36 @@
  * leader's snapshot lands without a stale-IndexedDB flash.
  */
 
-import { describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
-import { shouldSkipSessionHydration } from '../../../src/ui/wc/wc-live-thinking-hydration.js';
+const sessionLoads: string[] = [];
+const STORED_SESSIONS: Record<string, { id: string; messages: unknown[] }> = {
+  'session-cone': {
+    id: 'session-cone',
+    messages: [{ id: 'm1', role: 'user', content: 'primary history', timestamp: 1 }],
+  },
+  'session-cone-research': {
+    id: 'session-cone-research',
+    messages: [{ id: 'm2', role: 'user', content: 'research history', timestamp: 1 }],
+  },
+};
+vi.mock('../../../src/scoops/chat-session-store.js', () => ({
+  SessionStore: class {
+    async init(): Promise<void> {}
+    async load(id: string): Promise<unknown> {
+      sessionLoads.push(id);
+      return STORED_SESSIONS[id] ?? null;
+    }
+  },
+}));
+
+import {
+  hydratePersistedConeSession,
+  shouldSkipSessionHydration,
+} from '../../../src/ui/wc/wc-live-thinking-hydration.js';
 
 function fakeWindow(
   href: string,
@@ -31,6 +55,10 @@ function fakeWindow(
     } as Storage,
   };
 }
+
+beforeEach(() => {
+  sessionLoads.length = 0;
+});
 
 describe('shouldSkipSessionHydration', () => {
   it('returns false for a plain standalone boot (no join URL, no cherry)', () => {
@@ -63,5 +91,48 @@ describe('shouldSkipSessionHydration', () => {
   it('returns false when pendingUrlContext is explicitly "cone"', () => {
     const win = fakeWindow('http://localhost:5710/?ctx=cone');
     expect(shouldSkipSessionHydration('cone', win)).toBe(false);
+  });
+
+  it('returns false for an extra cone deep link — it has its own history (#2272)', () => {
+    const win = fakeWindow('http://localhost:5710/?ctx=cone:cone-research');
+    expect(shouldSkipSessionHydration('cone:cone-research', win)).toBe(false);
+  });
+
+  it('still skips an extra cone deep link inside a cherry embed', () => {
+    const win = fakeWindow('https://www.sliccy.ai/?cherry=1&ctx=cone:cone-research');
+    expect(shouldSkipSessionHydration('cone:cone-research', win)).toBe(true);
+  });
+});
+
+describe('hydratePersistedConeSession (#2272)', () => {
+  const win = fakeWindow('http://localhost:5710/');
+
+  async function hydrate(pendingUrlContext: string | null) {
+    const loaded: import('../../../src/ui/types.js').ChatMessage[][] = [];
+    await hydratePersistedConeSession({
+      pendingUrlContext,
+      win,
+      hasSelection: () => false,
+      loadMessages: (messages) => loaded.push(messages),
+      onHydrated: () => {},
+    });
+    return loaded;
+  }
+
+  it('hydrates the primary cone on a bare boot', async () => {
+    const loaded = await hydrate(null);
+    expect(sessionLoads).toEqual(['session-cone']);
+    expect(loaded[0]?.[0]?.content).toBe('primary history');
+  });
+
+  it('hydrates the cone the URL context addresses, not the primary one', async () => {
+    const loaded = await hydrate('cone:cone-research');
+    expect(sessionLoads).toEqual(['session-cone-research']);
+    expect(loaded[0]?.[0]?.content).toBe('research history');
+  });
+
+  it('never touches the store for a non-cone context', async () => {
+    expect(await hydrate('scoop:worker')).toEqual([]);
+    expect(sessionLoads).toEqual([]);
   });
 });
