@@ -24,7 +24,7 @@ swift trigger path:
 - **webcomponents** — re-exports `SliccLauncher` + launcher-state from spoon
   (barrel + `register.ts`) so `?ui=wc` and existing consumers keep working.
 
-The **chrome-extension** is *not* a consumer: the thin bridge has no
+The **chrome-extension** is _not_ a consumer: the thin bridge has no
 `content_scripts` and embeds no launcher; the overlay lives in the hosted
 leader tab served by the webapp.
 
