@@ -2529,7 +2529,7 @@ describe('Bridge handleRequestScoopMessages', () => {
     expect(replaced?.payload.messages[0].id).toBe('m1');
   });
 
-  it('swallows sessionStore.load errors without emitting', async () => {
+  it('swallows sessionStore.load errors but still clears the thread', async () => {
     const store = (bridge as any).sessionStore;
     store.load = vi.fn().mockRejectedValue(new Error('idb closed'));
     await expect(
@@ -2538,21 +2538,76 @@ describe('Bridge handleRequestScoopMessages', () => {
         scoopJid: 'cone_1',
       })
     ).resolves.toBeUndefined();
-    expect(sentMessages.filter((m: any) => m.payload?.type === 'scoop-messages-replaced')).toEqual(
-      []
-    );
+    // An unreadable store is still not a licence to leave the previously
+    // selected scoop's transcript on screen under this scoop's label.
+    const replaced = sentMessages.filter(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    ) as Array<{ payload: { scoopJid: string; messages: unknown[] } }>;
+    expect(replaced).toHaveLength(1);
+    expect(replaced[0].payload.scoopJid).toBe('cone_1');
+    expect(replaced[0].payload.messages).toEqual([]);
   });
 
-  it('emits nothing when sessionStore returns no messages', async () => {
+  it('emits an EMPTY replace when every source is empty', async () => {
     const store = (bridge as any).sessionStore;
     store.load = vi.fn().mockResolvedValue({ messages: [] });
     await (bridge as any).handlePanelMessage({
       type: 'request-scoop-messages',
       scoopJid: 'cone_1',
     });
-    expect(sentMessages.filter((m: any) => m.payload?.type === 'scoop-messages-replaced')).toEqual(
-      []
-    );
+    const replaced = sentMessages.filter(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    ) as Array<{ payload: { scoopJid: string; messages: unknown[] } }>;
+    expect(replaced).toHaveLength(1);
+    expect(replaced[0].payload.scoopJid).toBe('cone_1');
+    expect(replaced[0].payload.messages).toEqual([]);
+  });
+
+  it('seeds no buffer for an empty scoop so a later event starts fresh', async () => {
+    const store = (bridge as any).sessionStore;
+    store.load = vi.fn().mockResolvedValue({ messages: [] });
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-messages',
+      scoopJid: 'cone_1',
+    });
+    expect((bridge as any).messageBuffers.get('cone_1')).toBeUndefined();
+  });
+
+  // Regression: switching to a scoop with no history left the PREVIOUS
+  // scoop's thread rendered under the new scoop's label/accent, because the
+  // handler returned without emitting and `scoop-messages-replaced` is the
+  // only thing that drives the panel's `loadMessages`.
+  it('clears the thread when switching from a scoop WITH history to one without', async () => {
+    mockOrchestrator.getScoops.mockReturnValue([
+      { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+      { jid: 'scoop_fresh', name: 'fresh', folder: 'fresh-scoop', isCone: false },
+    ]);
+    const store = (bridge as any).sessionStore;
+    store.load = vi.fn().mockResolvedValue(null);
+
+    // Scoop A: a populated in-flight buffer, as after a live turn.
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push({ id: 'a1', role: 'assistant', content: 'cone history', timestamp: 100 });
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-messages',
+      scoopJid: 'cone_1',
+    });
+
+    // Scoop B: brand new, nothing anywhere.
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-messages',
+      scoopJid: 'scoop_fresh',
+    });
+
+    const replaced = sentMessages.filter(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    ) as Array<{ payload: { scoopJid: string; messages: Array<{ id: string }> } }>;
+    expect(replaced).toHaveLength(2);
+    expect(replaced[0].payload.scoopJid).toBe('cone_1');
+    expect(replaced[0].payload.messages.map((m) => m.id)).toEqual(['a1']);
+    expect(replaced[1].payload.scoopJid).toBe('scoop_fresh');
+    expect(replaced[1].payload.messages).toEqual([]);
+    expect(store.load).toHaveBeenCalledWith('session-fresh-scoop');
   });
 });
 

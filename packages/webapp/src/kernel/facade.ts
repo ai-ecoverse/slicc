@@ -900,6 +900,9 @@ export class Bridge implements KernelFacade {
    *      a streaming tail).
    *   2. Translate the scoop's `AgentMessage[]` into the chat shape.
    *   3. Fall back to whatever the UI `sessionStore` has on disk.
+   *
+   * A scoop with no history anywhere still gets an EMPTY replace — see the
+   * tail of the method for why silence is not an option.
    */
   private async handleRequestScoopMessages(scoopJid: string): Promise<void> {
     if (!this.orchestrator) return;
@@ -962,6 +965,7 @@ export class Bridge implements KernelFacade {
             scoopJid,
             messages: messages as unknown as BufferedChatMessage[],
           });
+          return;
         }
       } catch (err) {
         log.error('sessionStore load failed', {
@@ -970,6 +974,16 @@ export class Bridge implements KernelFacade {
         });
       }
     }
+
+    // Every source came back empty (a brand-new scoop, a cone whose history
+    // was just cleared, or an unreadable session store). Emit the empty
+    // replace anyway: `scoop-messages-replaced` is the ONLY thing that drives
+    // the panel's `loadMessages`, so staying silent leaves the PREVIOUSLY
+    // selected scoop's thread rendered underneath the new scoop's label and
+    // accent — and the next real message for this scoop appends onto that
+    // foreign transcript. No buffer is seeded: with nothing to restore, a
+    // later agent event should start a fresh buffer.
+    this.emit({ type: 'scoop-messages-replaced', scoopJid, messages: [] });
   }
 
   /**
