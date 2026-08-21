@@ -36,6 +36,9 @@ export const PROVIDER_API_KEY_ENV: Readonly<Record<string, string>> = Object.fre
   'ant-ling': 'ANT_LING_API_KEY',
   'qwen-token-plan': 'QWEN_TOKEN_PLAN_API_KEY',
   'qwen-token-plan-cn': 'QWEN_TOKEN_PLAN_CN_API_KEY',
+  // pi-ai 0.84.2 split the individual Qwen plan into its own provider id; it
+  // reads the same variable as `qwen-token-plan`.
+  'qwen-token-plan-individual': 'QWEN_TOKEN_PLAN_API_KEY',
   openai: 'OPENAI_API_KEY',
   'azure-openai-responses': 'AZURE_OPENAI_API_KEY',
   nvidia: 'NVIDIA_API_KEY',
