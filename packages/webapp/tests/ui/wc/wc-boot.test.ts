@@ -67,6 +67,7 @@ function cone(): RegisteredScoop {
     name: 'sliccy',
     folder: 'cone',
     isCone: true,
+    parentJid: null,
     type: 'cone',
     requiresTrigger: false,
     assistantLabel: 'sliccy',
@@ -445,6 +446,7 @@ describe('URL state sync (live boot)', () => {
       jid: 'scoop-r',
       name: 'researcher',
       isCone: false,
+      parentJid: 'cone-1',
       type: 'scoop',
     } as RegisteredScoop;
     fake.raw.getScoops.mockReturnValue([cone(), researcher]);

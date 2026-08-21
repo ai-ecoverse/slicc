@@ -561,6 +561,7 @@ describe('createAgentBridge — name generation', () => {
       name: 'agent-cozy-vanilla',
       folder: 'agent-cozy-vanilla',
       isCone: false,
+      parentJid: 'cone_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'agent-cozy-vanilla',
@@ -590,6 +591,7 @@ describe('createAgentBridge — name generation', () => {
       name: 'agent-cozy-vanilla',
       folder: 'agent-cozy-vanilla',
       isCone: false,
+      parentJid: 'cone_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'agent-cozy-vanilla',
@@ -672,6 +674,7 @@ describe('createAgentBridge — model resolution', () => {
       name: 'parent',
       folder: 'parent',
       isCone: false,
+      parentJid: 'cone_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'parent',
@@ -701,6 +704,7 @@ describe('createAgentBridge — model resolution', () => {
       name: 'Cone',
       folder: 'cone',
       isCone: true,
+      parentJid: null,
       type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
@@ -726,6 +730,7 @@ describe('createAgentBridge — model resolution', () => {
       name: 'Cone',
       folder: 'cone',
       isCone: true,
+      parentJid: null,
       type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
@@ -758,6 +763,7 @@ describe('createAgentBridge — model resolution', () => {
       name: 'Cone',
       folder: 'cone',
       isCone: true,
+      parentJid: null,
       type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
@@ -831,6 +837,7 @@ describe('createAgentBridge — model resolution', () => {
       name: 'Cone',
       folder: 'cone',
       isCone: true,
+      parentJid: null,
       type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
@@ -861,6 +868,7 @@ describe('createAgentBridge — model resolution', () => {
       name: 'parent',
       folder: 'parent',
       isCone: false,
+      parentJid: 'cone_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'parent',
@@ -933,6 +941,7 @@ describe('createAgentBridge — thinking level resolution', () => {
       name: 'parent',
       folder: 'parent',
       isCone: false,
+      parentJid: 'cone_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'parent',
@@ -958,6 +967,7 @@ describe('createAgentBridge — thinking level resolution', () => {
       name: 'parent',
       folder: 'parent',
       isCone: false,
+      parentJid: 'cone_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'parent',
@@ -1529,6 +1539,7 @@ describe('createAgentBridge — parentJid propagation', () => {
       name: 'Cone',
       folder: 'cone',
       isCone: true,
+      parentJid: null,
       type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
@@ -1544,7 +1555,33 @@ describe('createAgentBridge — parentJid propagation', () => {
     expect(registerCalls[0].parentJid).toBe('cone_main_1');
   });
 
-  it('leaves parentJid undefined on the registered scoop when options.parentJid is absent', async () => {
+  it('adopts the default root as owner when options.parentJid is absent (#1666)', async () => {
+    const { orchestrator, registerCalls, scripts, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    knownScoops.push({
+      jid: 'cone_main_1',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      parentJid: null,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: '2026-04-19T00:00:00Z',
+    });
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'cedar-fig',
+    });
+    scripts.set('agent_cedar_fig', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn(BASE_OPTS);
+
+    // Ownership is never inferred from names or timestamps — it is the
+    // registered root. (`originToolCallId` stays unset; see the next test.)
+    expect(registerCalls[0].parentJid).toBe('cone_main_1');
+  });
+
+  it('records a null parent only when no root is registered at all', async () => {
     const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();
     const bridge = createAgentBridge(orchestrator, fs, null, {
@@ -1554,7 +1591,7 @@ describe('createAgentBridge — parentJid propagation', () => {
 
     await bridge.spawn(BASE_OPTS);
 
-    expect(registerCalls[0].parentJid).toBeUndefined();
+    expect(registerCalls[0].parentJid).toBeNull();
   });
 
   it('does not set originToolCallId (never inferred in agent-bridge path)', async () => {
@@ -1565,6 +1602,7 @@ describe('createAgentBridge — parentJid propagation', () => {
       name: 'worker',
       folder: 'worker',
       isCone: false,
+      parentJid: 'cone_1',
       type: 'scoop',
       requiresTrigger: true,
       assistantLabel: 'worker',

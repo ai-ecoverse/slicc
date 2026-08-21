@@ -14,6 +14,7 @@ const mockScoop: RegisteredScoop = {
   name: 'Test Scoop',
   folder: 'test-scoop',
   isCone: false,
+  parentJid: 'cone',
   type: 'scoop',
   trigger: '@test-scoop',
   requiresTrigger: true,

@@ -48,6 +48,7 @@ Architecture and build:
 - [verifying-before-push](../.agents/skills/verifying-before-push/SKILL.md) — pre-push/PR validation pass: lint internals, the boy-scout debt gate, coverage floors, and other CI-only gates
 - [adding-slicc-features](../.agents/skills/adding-slicc-features/SKILL.md) — how to add a new shell command, tool, provider, sprinkle, etc.
 - `kernel/process-model.md` — kernel-host / process-manager deep reference
+- `work-unit.md` — ADR for #1666: cone and scoop as roles over one `WorkUnit` runtime; policy table, invariants, migration phases
 - `layouts.md` — the panel system (`SliccPanel` + `<slicc-layout>`), layout documents and their two VFS roots, the `layout` shell command, locking, the Cherry-pushed-layout wire path, and the dock-tree it supersedes
 - `panel-system-design.md` — why the panel system is shaped the way it is: the trust model for agent-authored panels, docked-vs-floating, and the two hardening measures (approval-path capture, trusted layer)
 

@@ -76,11 +76,15 @@ export interface RegisteredScoop {
    */
   configSchemaVersion?: number;
   /**
-   * JID of the parent scoop or cone that created this scoop.
-   * Set when the creation context knows the invoking scoop's JID.
-   * Used by the transcript export to reconstruct delegation chains.
+   * Ownership edge of the work-unit tree (#1666). `null` marks a root unit
+   * (a cone); a child unit (a scoop) carries the JID of the unit that owns
+   * it — the cone or scoop that created it. Always explicit: creation paths
+   * set it and {@link Orchestrator.init} backfills legacy records on
+   * restore, so `parentJid === null` is THE root test and `isCone` is
+   * derived presentation. Also read by the transcript export to
+   * reconstruct delegation chains.
    */
-  parentJid?: string;
+  parentJid: string | null;
   /**
    * Tool-call ID from the parent conversation that triggered scoop creation.
    * Only set where an actual tool-call ID is available — never inferred

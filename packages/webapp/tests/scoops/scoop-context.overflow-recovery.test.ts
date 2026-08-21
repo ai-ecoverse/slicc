@@ -8,6 +8,7 @@ const scoop: RegisteredScoop = {
   name: 'overflow-worker',
   folder: 'overflow-worker',
   isCone: false,
+  parentJid: 'cone',
   type: 'scoop',
   requiresTrigger: false,
   assistantLabel: 'overflow-worker',

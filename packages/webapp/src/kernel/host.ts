@@ -513,6 +513,7 @@ async function bootstrapCone(orchestrator: OrchestratorType): Promise<void> {
       name: 'Cone',
       folder: 'cone',
       isCone: true,
+      parentJid: null,
       type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
