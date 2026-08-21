@@ -70,10 +70,10 @@
       ]
     },
     "webapp": {
-      "lines": 81,
+      "lines": 82,
       "statements": 79,
       "functions": 80,
-      "branches": 70,
+      "branches": 71,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -152,9 +152,9 @@
       "regions": 83
     },
     "swift-trayfollower": {
-      "lines": 63,
+      "lines": 64,
       "functions": 48,
-      "regions": 73
+      "regions": 74
     },
     "ios-app": {
       "lines": 73,
