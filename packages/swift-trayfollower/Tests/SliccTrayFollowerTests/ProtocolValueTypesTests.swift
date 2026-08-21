@@ -58,6 +58,32 @@ final class ProtocolValueTypesTests: XCTestCase {
         XCTAssertNil(scoop.trigger)
         XCTAssertNil(scoop.state)
         XCTAssertNil(scoop.fill)
+        XCTAssertNil(scoop.parentId)
+    }
+
+    /// #1666 / #2270: the ownership edge rides the wire next to the derived
+    /// `isCone` flag. A scoop carries its cone's jid; a cone carries `null`;
+    /// a leader that predates the field sends nothing — all three decode.
+    func testScoopSummaryParentIdRoundTripAndLegacyDecode() throws {
+        let scoop = ScoopSummary(
+            jid: "s1", name: "reviewer", folder: "/scoops/reviewer", isCone: false,
+            assistantLabel: "Reviewer", parentId: "cone")
+        XCTAssertEqual(try WireCodec.roundTrip(scoop), scoop)
+        XCTAssertEqual(try WireCodec.roundTrip(scoop).parentId, "cone")
+
+        let decoder = JSONDecoder()
+        let explicitNull = Data(
+            #"{"jid":"c","name":"Cone","folder":"cone","isCone":true,"assistantLabel":"sliccy","parentId":null}"#
+                .utf8)
+        let cone = try decoder.decode(ScoopSummary.self, from: explicitNull)
+        XCTAssertTrue(cone.isCone)
+        XCTAssertNil(cone.parentId)
+
+        let legacy = Data(
+            #"{"jid":"s","name":"old","folder":"/scoops/old","isCone":false,"assistantLabel":"old"}"#.utf8)
+        let old = try decoder.decode(ScoopSummary.self, from: legacy)
+        XCTAssertFalse(old.isCone)
+        XCTAssertNil(old.parentId)
     }
 
     // MARK: - SprinkleSummary

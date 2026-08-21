@@ -578,6 +578,57 @@ describe('OffscreenClient', () => {
     expect(envelope.payload.type).toBe('scoop-drop');
   });
 
+  it('uses the wire parentId for ownership and only infers it from legacy leaders', () => {
+    simulateMessage('offscreen', {
+      type: 'state-snapshot',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          parentId: null,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+        {
+          jid: 'cone_2',
+          name: 'Two',
+          folder: 'cone-two',
+          isCone: true,
+          parentId: null,
+          assistantLabel: 'Two',
+          status: 'ready',
+        },
+        {
+          jid: 'scoop_b',
+          name: 'b',
+          folder: 'b-scoop',
+          isCone: false,
+          parentId: 'cone_2',
+          assistantLabel: 'b',
+          status: 'ready',
+        },
+        // legacy leader entry (no parentId): inferred as the list's first cone
+        {
+          jid: 'scoop_old',
+          name: 'old',
+          folder: 'old-scoop',
+          isCone: false,
+          assistantLabel: 'old',
+          status: 'ready',
+        },
+      ],
+      activeScoopJid: null,
+    });
+    expect(client.getScoops().map((s) => [s.jid, s.parentJid])).toEqual([
+      ['cone_1', null],
+      ['cone_2', null],
+      ['scoop_b', 'cone_2'],
+      ['scoop_old', 'cone_1'],
+    ]);
+  });
+
   it('unregisterScoop refuses to drop the last cone and drops an extra cone', async () => {
     simulateMessage('offscreen', {
       type: 'state-snapshot',

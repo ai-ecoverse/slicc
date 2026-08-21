@@ -5,7 +5,7 @@ import type { SwitcherScoop } from './wc-shell.js';
 
 type SummarySource = Pick<
   RegisteredScoop,
-  'jid' | 'name' | 'folder' | 'isCone' | 'assistantLabel' | 'trigger'
+  'jid' | 'name' | 'folder' | 'isCone' | 'parentJid' | 'assistantLabel' | 'trigger'
 >;
 type RenderedState = Pick<SwitcherScoop, 'key' | 'state' | 'fill' | 'phase' | 'awaiting'>;
 type WireActivity = NonNullable<ScoopSummary['activity']>;
@@ -77,6 +77,7 @@ export function toScoopSummaries(
       name: scoop.name,
       folder: scoop.folder,
       isCone: scoop.isCone,
+      parentId: scoop.parentJid,
       assistantLabel: scoop.assistantLabel,
       trigger: scoop.trigger,
       ...toWire(descriptor),
@@ -85,19 +86,50 @@ export function toScoopSummaries(
   });
 }
 
-/** Map tray summaries onto the descriptors shared by follower and Cherry tabs. */
+/** `true` when a wire summary describes a root (cone): the edge when sent, the flag from older leaders. */
+export function summaryIsRoot(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): boolean {
+  return scoop.parentId === undefined ? scoop.isCone : scoop.parentId === null;
+}
+
+/**
+ * Map tray summaries onto the descriptors shared by follower and Cherry tabs.
+ * Cones first (in leader order), then each cone's scoops right after it so a
+ * follower with several cones reads as "cone, its scoops, next cone, …";
+ * scoops whose owner is unknown (older leader) keep the leader's order.
+ */
 export function toFollowerSwitcherScoops(scoops: readonly ScoopSummary[]): SwitcherScoop[] {
-  return scoops.map((scoop) => {
+  return orderByOwner(scoops).map((scoop) => {
     const expanded = fromWire(scoop);
     return {
       key: scoop.jid,
-      type: scoop.isCone ? 'cone' : 'scoop',
-      color: scoopColor(scoop),
-      label: scoop.isCone ? scoop.assistantLabel : scoop.name,
+      type: summaryIsRoot(scoop) ? 'cone' : 'scoop',
+      color: scoopColor({ isCone: summaryIsRoot(scoop), name: scoop.name }),
+      label: summaryIsRoot(scoop) ? scoop.assistantLabel : scoop.name,
       eyes:
         expanded.state === 'broken' ? 'dead' : expanded.state === 'initializing' ? 'none' : 'open',
       fill: typeof scoop.fill === 'number' ? scoop.fill : 0,
       ...expanded,
     };
   });
+}
+
+/** Roots first; a scoop follows its owner when the owner is known, else keeps leader order. */
+function orderByOwner(scoops: readonly ScoopSummary[]): ScoopSummary[] {
+  if (!scoops.some((s) => s.parentId !== undefined)) {
+    return [...scoops].sort((a, b) => Number(b.isCone) - Number(a.isCone));
+  }
+  const roots = scoops.filter(summaryIsRoot);
+  const placed = new Set(roots.map((s) => s.jid));
+  const out: ScoopSummary[] = [];
+  for (const root of roots) {
+    out.push(root);
+    for (const s of scoops) {
+      if (!placed.has(s.jid) && s.parentId === root.jid) {
+        out.push(s);
+        placed.add(s.jid);
+      }
+    }
+  }
+  for (const s of scoops) if (!placed.has(s.jid)) out.push(s);
+  return out;
 }

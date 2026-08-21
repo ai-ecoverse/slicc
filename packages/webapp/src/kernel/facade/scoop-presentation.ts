@@ -36,8 +36,9 @@ export class ScoopPresentation {
       jid: scoop.jid,
       name: scoop.name,
       folder: scoop.folder,
-      // Wire field for followers; derived from the ownership edge (#1666).
+      // Wire fields for followers: the derived flag plus the edge it derives from (#1666).
       isCone: isRootUnit(scoop),
+      parentId: scoop.parentJid,
       assistantLabel: scoop.assistantLabel,
       status: this.statuses.get(scoop.jid) ?? 'ready',
       ...(config ? { config } : {}),

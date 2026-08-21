@@ -72,3 +72,19 @@ describe('ScoopPresentation', () => {
     expect(projected.config).toEqual({ modelId: 'model-1', thinkingLevel: 'high' });
   });
 });
+
+describe('ScoopPresentation parentId projection (#2270)', () => {
+  it('projects the ownership edge next to the derived isCone flag', () => {
+    const presentation = new ScoopPresentation();
+    const root = scoop();
+    const child = scoop({
+      jid: 'scoop-9',
+      folder: 'nine',
+      isCone: false,
+      type: 'scoop',
+      parentJid: 'cone-1',
+    });
+    expect(presentation.projectScoop(root)).toMatchObject({ isCone: true, parentId: null });
+    expect(presentation.projectScoop(child)).toMatchObject({ isCone: false, parentId: 'cone-1' });
+  });
+});

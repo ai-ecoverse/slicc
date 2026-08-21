@@ -224,6 +224,7 @@
             "name": "sliccy",
             "folder": "/workspace",
             "isCone": true,
+            "parentId": null,
             "assistantLabel": "Sliccy"
           },
           {
@@ -231,6 +232,7 @@
             "name": "thinker",
             "folder": "/scoops/thinker",
             "isCone": false,
+            "parentId": "cone",
             "assistantLabel": "Thinker",
             "state": "working",
             "activity": "thinking",
@@ -241,6 +243,7 @@
             "name": "tooler",
             "folder": "/scoops/tooler",
             "isCone": false,
+            "parentId": "cone",
             "assistantLabel": "Tooler",
             "state": "working",
             "activity": "tool",
@@ -251,6 +254,7 @@
             "name": "waiter",
             "folder": "/scoops/waiter",
             "isCone": false,
+            "parentId": "cone",
             "assistantLabel": "Waiter",
             "state": "idle",
             "activity": "awaiting",
@@ -261,6 +265,7 @@
             "name": "resting",
             "folder": "/scoops/resting",
             "isCone": false,
+            "parentId": "cone",
             "assistantLabel": "Resting",
             "state": "idle",
             "fill": 5
@@ -270,6 +275,7 @@
             "name": "tester",
             "folder": "/scoops/tester",
             "isCone": false,
+            "parentId": "cone",
             "assistantLabel": "Tester",
             "state": "broken",
             "fill": 84
@@ -279,6 +285,7 @@
             "name": "booting",
             "folder": "/scoops/booting",
             "isCone": false,
+            "parentId": "cone",
             "assistantLabel": "Booting",
             "state": "initializing"
           }
@@ -1234,6 +1241,7 @@
         "isCone",
         "jid",
         "name",
+        "parentId",
         "state",
         "trigger"
       ],
@@ -1243,6 +1251,7 @@
         "name": "reviewer",
         "folder": "/scoops/reviewer",
         "isCone": false,
+        "parentId": "cone",
         "assistantLabel": "Reviewer",
         "trigger": "on-push",
         "state": "idle",
