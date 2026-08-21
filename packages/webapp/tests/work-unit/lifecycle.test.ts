@@ -18,11 +18,13 @@ function makeDeps(records = [rootRecord(), childRecord('cone_1')]) {
     sendPrompt: ReturnType<typeof vi.fn<LiveWorkUnitDeps['sendPrompt']>>;
     clearIdleTimer: ReturnType<typeof vi.fn<LiveWorkUnitDeps['clearIdleTimer']>>;
     forgetCompletion: ReturnType<typeof vi.fn<LiveWorkUnitDeps['forgetCompletion']>>;
+    unregister: ReturnType<typeof vi.fn<LiveWorkUnitDeps['unregister']>>;
   } = {
     getScoop: (jid) => scoops.get(jid),
     sendPrompt: vi.fn(async () => {}),
     clearIdleTimer: vi.fn(),
     forgetCompletion: vi.fn(),
+    unregister: vi.fn(async () => {}),
   };
   return { deps, scoops };
 }
@@ -164,7 +166,30 @@ describe('LiveWorkUnit context ownership', () => {
   });
 });
 
-describe('LiveWorkUnit.close() is the single teardown', () => {
+describe('LiveWorkUnit.close() unregisters through the host', () => {
+  it('routes to deps.unregister so the active-licks guard and record deletion apply', async () => {
+    const { deps } = makeDeps();
+    const unit = new LiveWorkUnit('scoop_worker-scoop_1', deps);
+    unit.attachContext(makeContext(), 'ctx-1');
+    await unit.close();
+    expect(deps.unregister).toHaveBeenCalledWith('scoop_worker-scoop_1');
+    // teardown itself is the host's job (it ends in `teardown()`); close()
+    // alone must not half-drop the unit.
+    expect(unit.isClosed).toBe(false);
+  });
+
+  it('propagates the active-licks rejection unchanged and is a no-op once torn down', async () => {
+    const { deps } = makeDeps();
+    deps.unregister.mockRejectedValueOnce(new Error('has active licks'));
+    const unit = new LiveWorkUnit('scoop_worker-scoop_1', deps);
+    await expect(unit.close()).rejects.toThrow('has active licks');
+    await unit.teardown();
+    await unit.close();
+    expect(deps.unregister).toHaveBeenCalledOnce();
+  });
+});
+
+describe('LiveWorkUnit.teardown() is the single runtime teardown', () => {
   it('tears down idle timer, turn, context, observers and completion state in order', async () => {
     const { deps } = makeDeps();
     const unit = new LiveWorkUnit('scoop_worker-scoop_1', deps);
@@ -180,7 +205,7 @@ describe('LiveWorkUnit.close() is the single teardown', () => {
     ctx.dispose.mockImplementation(() => order.push('dispose'));
     deps.forgetCompletion.mockImplementation(() => order.push('forget'));
 
-    await unit.close();
+    await unit.teardown();
 
     expect(order).toEqual(['idle', 'stop', 'dispose', 'forget']);
     expect(deps.forgetCompletion).toHaveBeenCalledWith('scoop_worker-scoop_1', 'close');
@@ -208,8 +233,8 @@ describe('LiveWorkUnit.close() is the single teardown', () => {
       throw new Error('dispose exploded');
     });
     unit.attachContext(ctx, 'ctx-1');
-    await expect(unit.close()).resolves.toBeUndefined();
-    await unit.close();
+    await expect(unit.teardown()).resolves.toBeUndefined();
+    await unit.teardown();
     expect(ctx.dispose).toHaveBeenCalledOnce();
     expect(deps.forgetCompletion).toHaveBeenCalledOnce();
   });
@@ -217,7 +242,7 @@ describe('LiveWorkUnit.close() is the single teardown', () => {
   it('closes cleanly when no context was ever attached', async () => {
     const { deps } = makeDeps();
     const unit = new LiveWorkUnit('cone_1', deps);
-    await unit.close();
+    await unit.teardown();
     expect(unit.isClosed).toBe(true);
     expect(deps.clearIdleTimer).toHaveBeenCalledWith('cone_1');
     expect(deps.forgetCompletion).toHaveBeenCalledWith('cone_1', 'close');
