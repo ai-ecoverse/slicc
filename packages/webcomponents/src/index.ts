@@ -189,6 +189,7 @@ export {
 } from './primitives/slicc-cost-overlay.js';
 export { SliccDaySeparator } from './primitives/slicc-day-separator.js';
 export { SliccFloatbar } from './primitives/slicc-floatbar.js';
+export { type FollowerHudRow, SliccFollowerHud } from './primitives/slicc-follower-hud.js';
 export { SliccGooglyEyes } from './primitives/slicc-googly-eyes.js';
 export { SliccIconButton } from './primitives/slicc-icon-button.js';
 export { SliccImagePreview } from './primitives/slicc-image-preview.js';

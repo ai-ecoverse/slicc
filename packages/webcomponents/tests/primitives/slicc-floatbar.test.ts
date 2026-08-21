@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import '../../src/nav/slicc-nav.js';
 import { SliccFloatbar } from '../../src/primitives/slicc-floatbar.js';
+import type { SliccFollowerHud } from '../../src/primitives/slicc-follower-hud.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
 const rgb = (hex: string): string => {
@@ -484,6 +485,177 @@ describe('slicc-floatbar', () => {
 
       const overlay = el.shadowRoot?.querySelector('slicc-cost-overlay') as any;
       expect(overlay.models).toBe(newModels);
+    });
+  });
+
+  describe('followers segment', () => {
+    const rows = () => [
+      {
+        id: 'follower-cli1',
+        icon: 'terminal',
+        title: 'CLI · build-box',
+        state: 'active' as const,
+        stateText: 'connected 2h',
+        chips: ['can run commands'],
+      },
+      {
+        id: 'follower-ios1',
+        icon: 'smartphone',
+        title: 'iOS · phone1',
+        state: 'active' as const,
+        stateText: 'connected 4m',
+      },
+    ];
+
+    it('renders nothing until there are followers', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      expect(el.shadowRoot?.querySelector('.followers')).toBeNull();
+      expect(el.hasAttribute('follower-count')).toBe(false);
+    });
+
+    it('renders the count and reflects follower-count once followers arrive', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      const segment = el.shadowRoot?.querySelector('.followers') as HTMLElement;
+      expect(segment).not.toBeNull();
+      expect(segment.textContent).toContain('2');
+      expect(el.getAttribute('follower-count')).toBe('2');
+    });
+
+    it('drops the segment and the attribute when the last follower leaves', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      el.followers = [];
+      expect(el.shadowRoot?.querySelector('.followers')).toBeNull();
+      expect(el.hasAttribute('follower-count')).toBe(false);
+    });
+
+    it('is a button with an accessible name naming the count', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = [rows()[0]];
+      const segment = el.shadowRoot?.querySelector('.followers') as HTMLButtonElement;
+      expect(segment.tagName).toBe('BUTTON');
+      expect(segment.getAttribute('aria-label')).toMatch(/^1 follower connected/);
+      expect(segment.getAttribute('aria-haspopup')).toBe('dialog');
+    });
+
+    it('opens the follower HUD on hover and closes it on leave', async () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      const segment = el.shadowRoot?.querySelector('.followers') as HTMLElement;
+
+      segment.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      const hud = el.shadowRoot?.querySelector('slicc-follower-hud');
+      expect(hud?.hasAttribute('open')).toBe(true);
+
+      segment.dispatchEvent(new MouseEvent('mouseleave', { bubbles: true }));
+      await new Promise((resolve) => setTimeout(resolve, 200));
+      expect(hud?.hasAttribute('open')).toBe(false);
+    });
+
+    it('opens the HUD on keyboard focus too', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      const segment = el.shadowRoot?.querySelector('.followers') as HTMLElement;
+      segment.dispatchEvent(new FocusEvent('focus'));
+      expect(el.shadowRoot?.querySelector('slicc-follower-hud')?.hasAttribute('open')).toBe(true);
+    });
+
+    it('closes the HUD on Escape', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      const segment = el.shadowRoot?.querySelector('.followers') as HTMLElement;
+      segment.dispatchEvent(new FocusEvent('focus'));
+      segment.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }));
+      expect(el.shadowRoot?.querySelector('slicc-follower-hud')?.hasAttribute('open')).toBe(false);
+    });
+
+    it('hands the HUD the current rows', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      const segment = el.shadowRoot?.querySelector('.followers') as HTMLElement;
+      segment.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      const hud = el.shadowRoot?.querySelector('slicc-follower-hud') as SliccFollowerHud;
+      expect(hud.rows).toHaveLength(2);
+      expect(hud.shadowRoot?.textContent).toContain('CLI · build-box');
+    });
+
+    it('keeps an open HUD open — and refreshes it — when the roster changes', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      const segment = el.shadowRoot?.querySelector('.followers') as HTMLElement;
+      segment.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      expect(el.shadowRoot?.querySelector('slicc-follower-hud')?.hasAttribute('open')).toBe(true);
+
+      // A follower connects while the cursor is on the segment.
+      el.followers = [
+        ...rows(),
+        {
+          id: 'follower-new',
+          icon: 'monitor',
+          title: 'Standalone · fresh',
+          state: 'active' as const,
+          stateText: 'connected 1s',
+        },
+      ];
+
+      const hud = el.shadowRoot?.querySelector('slicc-follower-hud') as SliccFollowerHud;
+      expect(hud).not.toBeNull();
+      expect(hud.hasAttribute('open')).toBe(true);
+      expect(hud.rows).toHaveLength(3);
+      expect(hud.shadowRoot?.textContent).toContain('Standalone · fresh');
+      expect(el.shadowRoot?.querySelector('.followers')?.textContent).toContain('3');
+    });
+
+    it('drops the HUD when the last follower leaves', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      const segment = el.shadowRoot?.querySelector('.followers') as HTMLElement;
+      segment.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      el.followers = [];
+      expect(el.shadowRoot?.querySelector('slicc-follower-hud')).toBeNull();
+    });
+
+    it('does not resurrect a closed HUD on a roster change', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      const segment = el.shadowRoot?.querySelector('.followers') as HTMLElement;
+      segment.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      (el.shadowRoot?.querySelector('slicc-follower-hud') as SliccFollowerHud).removeAttribute(
+        'open'
+      );
+      el.followers = [rows()[0]];
+      expect(el.shadowRoot?.querySelector('slicc-follower-hud')).toBeNull();
+    });
+
+    it('emits a composed slicc-followers-click on activation', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      let seen = 0;
+      document.addEventListener('slicc-followers-click', () => {
+        seen += 1;
+      });
+      (el.shadowRoot?.querySelector('.followers') as HTMLButtonElement).click();
+      expect(seen).toBe(1);
+    });
+
+    it('surfaces the follower count in the collapsed-view tip', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      expect(el.shadowRoot?.querySelector('.tip')?.textContent).toContain('2 followers');
     });
   });
 });

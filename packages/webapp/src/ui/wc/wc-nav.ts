@@ -15,10 +15,15 @@ import {
   DEFAULT_STAGING_TRAY_WORKER_BASE_URL,
   resolveTrayWorkerBaseUrl,
 } from '../../scoops/tray-runtime-config.js';
+import {
+  getConnectedFollowersWithFallback,
+  getTrayResetter,
+} from '../../shell/supplemental-commands/host-command.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { copyTextToClipboard } from '../clipboard.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import type { GroupedModels } from '../provider-settings.js';
+import type { SyncDialogTabId } from '../sync-dialog-model.js';
 import { computeTrayMenuModel } from '../tray-join-url.js';
 import type { WcShellRefs } from './wc-shell.js';
 
@@ -244,6 +249,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   );
   const openTheme = buildOpenTheme(log);
   const openExperimental = buildOpenExperimental(log);
+  wireFollowersSegment(refs, log);
 
   refs.avatarMenu.addEventListener('slicc-avatar-action', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
@@ -291,7 +297,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   // in place rather than re-running the same failing turn.
   await wireLoginEvent({ refs, log, openSettings, refreshModels, applyIdentity, client });
 
-  wireAccountsChangedResync({ refreshModels, refreshModelPill, applyIdentity, client });
+  await wireAccountsChangedResync({ refreshModels, refreshModelPill, applyIdentity, client });
 }
 
 function buildOpenSettings(
@@ -328,6 +334,43 @@ function buildOpenExperimental(log: BootStageLogger): () => void {
   };
 }
 
+/**
+ * The floatbar's followers segment is the second door into the sync dialog:
+ * hovering it shows the read-only HUD, clicking lands on the Status tab.
+ */
+function wireFollowersSegment(refs: WcShellRefs, log: BootStageLogger): void {
+  refs.floatbar.addEventListener('slicc-followers-click', () => {
+    openSyncDialog(log, { copy: false, initialTab: 'status' });
+  });
+}
+
+/**
+ * Open the session-sharing dialog. `copy` copies the join link on the way in
+ * (the avatar-menu affordance); `initialTab` forces a starting tab (the
+ * floatbar's followers segment opens on Status).
+ */
+function openSyncDialog(
+  log: BootStageLogger,
+  opts: { copy: boolean; initialTab?: SyncDialogTabId }
+): void {
+  const joinUrl = getLeaderTrayRuntimeStatus().session?.joinUrl;
+  if (!joinUrl) return;
+  if (opts.copy) void copyTextToClipboard(joinUrl).catch(() => undefined);
+  void import('../legacy-styles.js')
+    .then(({ loadLegacyDialogStyles }) => loadLegacyDialogStyles())
+    .then(async () => {
+      const { showSyncEnabledDialog } = await import('../sync-dialog.js');
+      showSyncEnabledDialog({
+        joinUrl,
+        copied: opts.copy,
+        initialTab: opts.initialTab,
+        followers: getConnectedFollowersWithFallback(),
+        onReset: getTrayResetter() ?? null,
+      });
+    })
+    .catch((err) => log.error('sync dialog failed', err));
+}
+
 function handleTrayActionId(id: string, log: BootStageLogger): boolean {
   if (id === 'tray-enable') {
     void resolveTrayWorkerBaseUrl({
@@ -344,17 +387,11 @@ function handleTrayActionId(id: string, log: BootStageLogger): boolean {
     return true;
   }
   if (id === 'tray-copy') {
-    const joinUrl = getLeaderTrayRuntimeStatus().session?.joinUrl;
-    if (joinUrl) {
-      void copyTextToClipboard(joinUrl).catch(() => undefined);
-      void import('../legacy-styles.js')
-        .then(({ loadLegacyDialogStyles }) => loadLegacyDialogStyles())
-        .then(async () => {
-          const { showSyncEnabledDialog } = await import('../sync-dialog.js');
-          showSyncEnabledDialog({ joinUrl, copied: true });
-        })
-        .catch((err) => log.error('sync dialog failed', err));
-    }
+    // The avatar-menu entry is an explicit "give me the link" — it copies
+    // first, then explains. The floatbar entry (openSyncDialog with
+    // `copy: false`) must NOT touch the clipboard: clicking a status readout
+    // should never overwrite what you had on it.
+    openSyncDialog(log, { copy: true });
     return true;
   }
   if (id === 'tray-stop') {
@@ -510,6 +547,12 @@ async function wireModelPicker(
  * provider with a dynamic catalog (getModelIds) fetches it asynchronously:
  * kick its refreshModels and sync again when the catalog lands, so the
  * picker fills without a hard reload.
+ */
+/**
+ * Re-sync the model list, model pill and avatar identity whenever accounts
+ * change. Awaited by `wireWcNav` rather than left floating: its dynamic
+ * provider-settings import is already resolved by then, so awaiting costs
+ * nothing, and a floating call swallowed any failure of that import.
  */
 async function wireAccountsChangedResync(opts: {
   refreshModels(): void;

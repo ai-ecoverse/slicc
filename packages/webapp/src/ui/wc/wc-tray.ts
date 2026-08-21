@@ -7,6 +7,7 @@
  * are reused verbatim — they were already Layout-free.
  */
 
+import type { SliccFloatbar } from '@slicc/webcomponents';
 import type { BrowserAPI, CDPTransport } from '../../cdp/index.js';
 import { type PanelRpcPushMsg, panelRpcChannelName } from '../../kernel/panel-rpc.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
@@ -45,6 +46,7 @@ import type { TeleportFollowerInfo } from '../../shell/supplemental-commands/pla
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
 import type { BootStageLogger } from '../boot/types.js';
+import { FOLLOWERS_CHANGED_EVENT, toFollowerHudRows } from '../follower-presentation.js';
 import { LeaderExecSessionPool } from '../leader-exec-runner.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { type PageFollowerTrayHandle, startPageFollowerTray } from '../page-follower-tray.js';
@@ -317,6 +319,45 @@ export function buildFollowerOptions(
   };
 }
 
+/**
+ * Publish the leader's follower roster to every surface that shows it: the
+ * tab-persistence guard, the floatbar (label + followers segment + HUD rows),
+ * the kernel-worker `localStorage` shim `host`/`ssh` read, and the window
+ * event an open sync dialog listens on.
+ */
+function applyFollowerPresentation(
+  deps: WcTrayDeps,
+  state: TrayRoleState,
+  fallbackCount: number
+): void {
+  const followers = state.leader ? getLeaderConnectedFollowers(state.leader) : [];
+  const count = fallbackCount;
+  if (count > 0) {
+    state.persistenceGuard.activate();
+  } else {
+    state.persistenceGuard.deactivate();
+  }
+  // The count used to be smuggled into the label string; it now has its own
+  // hoverable/clickable segment, so the label goes back to naming the float.
+  deps.refs.floatbar.setAttribute(
+    'label',
+    count > 0 ? 'tray · live' : (deps.baseFloatLabel ?? 'standalone · live')
+  );
+  // A peer still handshaking is mirrored to the shim and shown in the Monitor,
+  // but it is NOT counted by the registry — so it must not appear in the pill
+  // either, or the segment would contradict its own count. Anything without an
+  // explicit `connecting` state stays visible.
+  (deps.refs.floatbar as SliccFloatbar).followers = toFollowerHudRows(
+    followers.filter((follower) => follower.peerState !== 'connecting')
+  );
+  writeConnectedFollowersToShim(followers);
+  // Let an open sync dialog re-render (its Status tab appears on the first
+  // follower and its rows go live) without polling the roster. Dispatched on
+  // the INJECTED window (`deps.window`), the same one the rest of this module
+  // uses — never the global, which a detached/worker-side caller may not have.
+  deps.window.dispatchEvent(new CustomEvent(FOLLOWERS_CHANGED_EVENT, { detail: { followers } }));
+}
+
 /** Leader option factory — the WC equivalent of `buildLeaderTrayOptions`. */
 export function createLeaderOptionsFactory(
   deps: WcTrayDeps,
@@ -325,20 +366,7 @@ export function createLeaderOptionsFactory(
 ): (workerBaseUrl: string) => StartPageLeaderTrayOptions {
   const { client, refs } = deps;
   const refreshFollowerPresentation = (fallbackCount = 0): void => {
-    const followers = state.leader ? getLeaderConnectedFollowers(state.leader) : [];
-    const count = fallbackCount;
-    if (count > 0) {
-      state.persistenceGuard.activate();
-    } else {
-      state.persistenceGuard.deactivate();
-    }
-    refs.floatbar.setAttribute(
-      'label',
-      count > 0
-        ? `tray · ${count} follower${count === 1 ? '' : 's'}`
-        : (deps.baseFloatLabel ?? 'standalone · live')
-    );
-    writeConnectedFollowersToShim(followers);
+    applyFollowerPresentation(deps, state, fallbackCount);
   };
   const execSessions = new LeaderExecSessionPool(client);
   return (workerBaseUrl) => ({

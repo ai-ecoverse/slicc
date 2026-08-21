@@ -58,6 +58,14 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 
 Modules in `scoops/`: `tray-leader-sync.ts` (façade + lifecycle), `context.ts`, `follower-registry.ts`, `follower-dispatch.ts`, `broadcast.ts`, `cdp-router.ts`, `fs-router.ts`, `tab-router.ts`, `remote-exec.ts`, `transcript-export.ts` (streaming), `preview-bridge.ts`, `cherry-router.ts`, `teleport-pool.ts`. Follower model/thinking pills share `ui/wc/wc-follower-model-surface.ts`; `wc-follower.ts` mount and `wc-tray.ts`'s `slicc:tray-join` role switch both consume it. Cherry gated by `CherryFeatureSet.modelPicker`. See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
 
+### Session sharing surfaces (join link + followers)
+
+One roster, three renderings, one vocabulary — `ui/follower-presentation.ts` owns what a follower is called, its icon, its capability chips (`exec` → "can run commands", `cdp` → "hosts tabs") and its `connected 4m` state string. Consumers: the Monitor panel's Followers section (`wc/wc-monitor.ts`), the floatbar hover HUD, and the sync dialog's Status tab. `ssh --list` / `host` keep their own terser text output.
+
+- **`ui/sync-dialog.ts`** — the "Session sharing" dialog, reached from the avatar menu (**Enable multi-browser sync**, which also copies) and from the floatbar. Tabs come from the DOM-free `ui/sync-dialog-model.ts`: Browser · iPhone · Terminal, with **Status** prepended (and defaulted to) the moment a follower is attached. The join link is masked to `…/join/••••••••` until **Show** — it is a bearer secret, so it is never rendered by default and never sent anywhere for rendering (this is why there is no hosted-QR option). Revoke is two clicks: the first arms and names the blast radius.
+- **Floatbar followers segment** (`slicc-floatbar`'s `followers` property → `slicc-follower-hud`): the count used to be smuggled into the `label` string; it is now a real `<button>` with a `follower-count` reflection. Hover/focus opens the read-only HUD (same 150 ms grace as the cost overlay), click emits `slicc-followers-click` → the dialog on its Status tab. **Opening from the floatbar must never write the clipboard** — only the avatar-menu path copies.
+- **`FOLLOWERS_CHANGED_EVENT`** (`slicc:followers-changed`) — `wc/wc-tray.ts`'s `applyFollowerPresentation` is the single producer, on every follower-count change. An open dialog re-renders from it, so the Status tab appears live without polling the roster.
+
 ## Feature Flags
 
 - Add IDs to `FeatureFlagId`/`FEATURE_FLAGS` in `core/feature-flags.ts` and both `wrangler.jsonc` `FEATURE_FLAGS` lists. User-toggleable flags live in the standalone **Experimental features…** avatar dialog (`listFlags()`), not Account settings.

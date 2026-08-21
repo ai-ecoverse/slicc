@@ -278,7 +278,7 @@ host
 # join_url exposes the tray join capability directly when a session exists
 
 # Follow another browser's tray as a follower. Paste the https://…/join/<token>
-# URL the leader shows under "Copy tray join URL". Works in both the
+# join link the leader shows in its Session sharing dialog. Works in both the
 # standalone and extension floats — in the extension this is the only way to
 # follow a leader, since the WC UI dropped the join field. The follower
 # connects asynchronously; run `host` afterwards to check the status.

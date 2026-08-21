@@ -3,6 +3,8 @@ import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
 import type { CostOverlayModel, CostOverlayScoop, SliccCostOverlay } from './slicc-cost-overlay.js';
 import './slicc-cost-overlay.js';
+import type { FollowerHudRow, SliccFollowerHud } from './slicc-follower-hud.js';
+import './slicc-follower-hud.js';
 
 const DEFAULT_LABEL = 'CLI float';
 
@@ -76,6 +78,37 @@ const STYLE = `
   background: var(--line);
 }
 
+/* Followers segment: lucide users icon + count. A real button — click opens
+   the sync dialog's Status tab, hover/focus reveals the follower HUD. */
+.followers {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  flex: 0 0 auto;
+  margin: 0;
+  padding: 2px 6px;
+  border: 0;
+  border-radius: 9999px;
+  background: none;
+  color: inherit;
+  font: inherit;
+  font-variant-numeric: tabular-nums;
+  line-height: 1;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.followers:hover,
+.followers:focus-visible {
+  background: color-mix(in srgb, var(--ctx) 55%, transparent);
+  color: var(--ink);
+}
+.followers svg {
+  display: block;
+  flex: 0 0 auto;
+  width: 12px;
+  height: 12px;
+}
+
 /* Hourly rate segment: lucide coin icon + formatted amount */
 .spent {
   display: inline-flex;
@@ -130,11 +163,13 @@ const STYLE = `
 }
 
 @container slicc-nav (max-width: 560px) {
-  .sep, .spent { display: none; }
+  .sep--spent, .spent { display: none; }
 }
 
+/* The followers segment outranks the runtime name: a leader with followers
+   keeps the pill (and the count) instead of collapsing to the square badge. */
 @container slicc-nav (max-width: 420px) {
-  :host {
+  :host(:not([follower-count])) {
     width: var(--ctl-h, 30px);
     aspect-ratio: 1 / 1;
     padding: 0;
@@ -164,9 +199,15 @@ const SHEET = sheet(STYLE);
  * @attr rate - hourly cost, a number or numeric string (e.g. `23.1`); renders a
  *   coin-icon + formatted `$23.10/h` cost segment after a thin divider
  * @attr spent - cumulative cost shown in the cost overlay's total row
+ * @attr follower-count - READ-ONLY; reflected from the `followers` property
+ * @property followers - {@link FollowerHudRow}[]; renders the followers segment
+ *   and feeds `<slicc-follower-hud>` on hover/focus
+ * @fires slicc-followers-click - the followers segment was activated (open the
+ *   sync dialog on its Status tab)
  * @csspart dot - the green status dot (present only when `online`)
  * @csspart label - the runtime label span
- * @csspart sep - the thin divider before the cost segment
+ * @csspart sep - the thin dividers before the followers and cost segments
+ * @csspart followers - the followers segment button
  * @csspart spent - the cost segment wrapper
  * @csspart rate - alias for the cost segment wrapper
  * @csspart tip - the narrow-view hover/focus tooltip surfacing the collapsed label
@@ -181,6 +222,9 @@ export class SliccFloatbar extends HTMLElement {
   #costModels: CostOverlayModel[] = [];
   #costScoops: CostOverlayScoop[] = [];
   #hideTimer: ReturnType<typeof setTimeout> | undefined;
+  #followers: FollowerHudRow[] = [];
+  #followerHud: SliccFollowerHud | null = null;
+  #followerHideTimer: ReturnType<typeof setTimeout> | undefined;
 
   constructor() {
     super();
@@ -201,6 +245,7 @@ export class SliccFloatbar extends HTMLElement {
     this.#resizeObserver?.disconnect();
     this.#resizeObserver = null;
     clearTimeout(this.#hideTimer);
+    clearTimeout(this.#followerHideTimer);
   }
 
   attributeChangedCallback(_name: string, oldValue: string | null, newValue: string | null): void {
@@ -265,6 +310,26 @@ export class SliccFloatbar extends HTMLElement {
     if (this.#overlay) this.#overlay.models = value;
   }
 
+  /**
+   * The followers attached to this leader. Setting it reflects the count to
+   * the read-only `follower-count` attribute (a CSS + test hook) and renders
+   * the followers segment; an empty array removes both.
+   */
+  get followers(): FollowerHudRow[] {
+    return this.#followers;
+  }
+
+  set followers(value: FollowerHudRow[]) {
+    this.#followers = value;
+    if (value.length > 0) this.setAttribute('follower-count', String(value.length));
+    else this.removeAttribute('follower-count');
+    // `#render()` carries an OPEN hud across the rebuild and refreshes its rows
+    // (see `#render`), so a follower connecting or leaving updates the card
+    // under the cursor instead of yanking it away mid-read.
+    if (this.isConnected) this.#render();
+    else if (this.#followerHud) this.#followerHud.rows = value;
+  }
+
   get costScoops(): CostOverlayScoop[] {
     return this.#costScoops;
   }
@@ -282,6 +347,10 @@ export class SliccFloatbar extends HTMLElement {
    */
   #tipText(): string {
     const parts: string[] = [this.label];
+    const followers = this.#followers.length;
+    if (followers > 0) {
+      parts.push(`${followers} ${followers === 1 ? 'follower' : 'followers'}`);
+    }
     parts.push(formatRate(this.rate));
     parts.push('recency-weighted session avg');
     parts.push(this.online ? 'online' : 'offline');
@@ -313,7 +382,12 @@ export class SliccFloatbar extends HTMLElement {
     }
     nodes.push(h('span', { class: 'label', part: 'label' }, h('slot', null, ...fallback)));
 
-    nodes.push(h('span', { class: 'sep', part: 'sep' }));
+    if (this.#followers.length > 0) {
+      nodes.push(h('span', { class: 'sep sep--followers', part: 'sep' }));
+      nodes.push(this.#followersEl(this.#followers.length));
+    }
+
+    nodes.push(h('span', { class: 'sep sep--spent', part: 'sep' }));
     const spentEl = h(
       'span',
       { class: 'spent', part: 'spent rate' },
@@ -326,9 +400,83 @@ export class SliccFloatbar extends HTMLElement {
 
     nodes.push(h('span', { class: 'tip', part: 'tip', 'aria-hidden': 'true' }, this.#tipText()));
 
+    // `replaceChildren` drops every existing child, including an open overlay
+    // or hud. The cost overlay is rebuilt on next hover, but the follower hud
+    // re-renders on every roster change — the one moment the user is most
+    // likely to be hovering it — so an OPEN hud is carried across the rebuild
+    // with fresh rows rather than torn down. A closed one is discarded as
+    // before; it costs nothing to rebuild on the next hover.
+    const openHud =
+      this.#followerHud?.hasAttribute('open') && this.#followers.length > 0
+        ? this.#followerHud
+        : null;
     this.#overlay = null;
+    this.#followerHud = openHud;
     this.#root.replaceChildren(...nodes);
+    if (openHud) {
+      openHud.rows = this.#followers;
+      this.#root.appendChild(openHud);
+    }
     this.#syncTitle();
+  }
+
+  /**
+   * The followers segment. A `<button>` (not a span) so the roster is
+   * keyboard-reachable: focus reveals the HUD exactly like hover, and
+   * Enter/Space emits `slicc-followers-click` for the host to open the sync
+   * dialog on its Status tab.
+   */
+  #followersEl(count: number): HTMLElement {
+    const label = `${count} ${count === 1 ? 'follower' : 'followers'}`;
+    const el = h(
+      'button',
+      {
+        class: 'followers',
+        part: 'followers',
+        type: 'button',
+        'aria-haspopup': 'dialog',
+        'aria-label': `${label} connected — open session sharing`,
+      },
+      iconEl('users', { size: 12 }),
+      h('span', { class: 'follower-count' }, String(count))
+    );
+    el.addEventListener('mouseenter', () => this.#showFollowerHud());
+    el.addEventListener('mouseleave', () => this.#scheduleFollowerHide());
+    el.addEventListener('focus', () => this.#showFollowerHud());
+    el.addEventListener('blur', () => this.#scheduleFollowerHide());
+    el.addEventListener('keydown', (event) => {
+      if ((event as KeyboardEvent).key === 'Escape') this.#hideFollowerHud();
+    });
+    el.addEventListener('click', () => {
+      this.#hideFollowerHud();
+      this.dispatchEvent(
+        new CustomEvent('slicc-followers-click', { bubbles: true, composed: true })
+      );
+    });
+    return el;
+  }
+
+  #showFollowerHud(): void {
+    clearTimeout(this.#followerHideTimer);
+    if (!this.#followerHud) {
+      const hud = document.createElement('slicc-follower-hud') as SliccFollowerHud;
+      hud.rows = this.#followers;
+      hud.hint = 'Click for sharing options.';
+      hud.addEventListener('mouseenter', () => this.#showFollowerHud());
+      hud.addEventListener('mouseleave', () => this.#scheduleFollowerHide());
+      this.#root.appendChild(hud);
+      this.#followerHud = hud;
+    }
+    this.#followerHud.toggleAttribute('open', true);
+  }
+
+  #scheduleFollowerHide(): void {
+    this.#followerHideTimer = setTimeout(() => this.#hideFollowerHud(), 150);
+  }
+
+  #hideFollowerHud(): void {
+    clearTimeout(this.#followerHideTimer);
+    this.#followerHud?.removeAttribute('open');
   }
 
   #showOverlay(): void {

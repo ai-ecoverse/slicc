@@ -252,7 +252,7 @@ struct SettingsView: View {
     private var connectionSection: some View {
         Section {
             HStack {
-                TextField("Join URL", text: $appState.joinUrl)
+                TextField("Join link", text: $appState.joinUrl)
                     .textContentType(.URL)
                     .autocorrectionDisabled()
                     .textInputAutocapitalization(.never)
@@ -272,7 +272,7 @@ struct SettingsView: View {
         } header: {
             Text("Connection")
         } footer: {
-            Text("Connect to a Sliccy session with its Join URL.")
+            Text("Connect to a Sliccy session with its join link.")
         }
     }
 
@@ -332,7 +332,7 @@ struct SettingsView: View {
         case .failed, .gaveUp:
             HStack(spacing: 8) {
                 Circle().fill(.red).frame(width: 8, height: 8)
-                Text(appState.lastError ?? "Couldn't connect. Check the Join URL and try again.")
+                Text(appState.lastError ?? "Couldn't connect. Check the join link and try again.")
                     .font(.footnote)
                     .foregroundStyle(.secondary)
             }
@@ -355,22 +355,22 @@ struct SettingsView: View {
                 )
                 joinUrlStep(
                     number: 2,
-                    text: "Click your avatar in the top-right corner and choose **Enable multi-browser sync** — the Join URL is copied to your clipboard."
+                    text: "Click your avatar in the top-right corner and choose **Enable multi-browser sync** — the join link is copied to your clipboard."
                 )
                 joinUrlStep(
                     number: 3,
-                    text: "On the latest version you can also ask the agent: _“Run host for me and give me the tray join URL.”_"
+                    text: "On the latest version you can also ask the agent: _“Run host for me and give me the tray join link.”_"
                 )
                 joinUrlStep(
                     number: 4,
-                    text: "Paste the URL into the **Join URL** field above. Both sides must be on the same Sliccy version."
+                    text: "Paste it into the **Join link** field above. Both sides must be on the same Sliccy version."
                 )
             }
             .padding(.vertical, 4)
             .font(.footnote)
             .foregroundStyle(.secondary)
         } label: {
-            Label("How do I get a Join URL?", systemImage: "questionmark.circle")
+            Label("How do I get a join link?", systemImage: "questionmark.circle")
                 .font(.subheadline)
         }
     }
