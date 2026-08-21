@@ -1,14 +1,15 @@
 /**
- * Memory surface for the WC workbench: the cone's `/workspace/CLAUDE.md`
+ * Memory surface for the WC workbench: the selected cone's `CLAUDE.md`
  * rendered as `<slicc-memrow>` cards — one per memory bullet, with section
- * headings carried into the row title.
+ * headings carried into the row title. Each cone has its own file (#2271), so
+ * the path is passed in rather than hardcoded.
  */
 
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
+import { PRIMARY_WORKSPACE } from '../../work-unit/descriptor.js';
 import { renderMessageContent } from '../message-renderer.js';
 import '@slicc/webcomponents/src/memory/slicc-memrow.js';
 
-const MEMORY_PATH = '/workspace/CLAUDE.md';
 const TITLE_TARGET = 64;
 export const MEMORY_TITLE_MAX = 96;
 const MIN_TITLE_LENGTH = 12;
@@ -255,11 +256,17 @@ export function createMemoryRows(markdown: string): HTMLElement[] {
   });
 }
 
-/** Read the cone memory file and render it as memrow cards. */
-export async function buildMemoryRows(fs: LocalVfsClient): Promise<HTMLElement[]> {
+/**
+ * Read a cone's memory file and render it as memrow cards. `memoryPath`
+ * defaults to the primary cone's (#2271).
+ */
+export async function buildMemoryRows(
+  fs: LocalVfsClient,
+  memoryPath: string = PRIMARY_WORKSPACE.memoryPath
+): Promise<HTMLElement[]> {
   let markdown = '';
   try {
-    const raw = await fs.readFile(MEMORY_PATH, { encoding: 'utf-8' });
+    const raw = await fs.readFile(memoryPath, { encoding: 'utf-8' });
     markdown = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
   } catch {
     markdown = '';

@@ -610,6 +610,62 @@ describe('Orchestrator session-restore compat for path config', () => {
     expect(o.getScoop('scoop_nested_1')?.parentJid).toBe('scoop_parent_1');
   });
 
+  // #2271: an extra cone moved off `/workspace`; the scoops it had already
+  // spawned kept the historical read-only default and would otherwise keep
+  // reading the PRIMARY cone's files.
+  it('re-points a v2 scoop of an extra cone at its owner workspace', async () => {
+    const primary: RegisteredScoop = {
+      jid: 'cone_primary',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      parentJid: null,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const extra: RegisteredScoop = {
+      ...primary,
+      jid: 'cone_beta',
+      name: 'Beta',
+      folder: 'cone-beta',
+      assistantLabel: 'Beta',
+      addedAt: '2026-01-02T00:00:00.000Z',
+    };
+    const v2 = (jid: string, folder: string, parentJid: string, visiblePaths: string[]) =>
+      ({
+        jid,
+        name: folder,
+        folder,
+        trigger: `@${folder}`,
+        isCone: false,
+        parentJid,
+        type: 'scoop',
+        requiresTrigger: true,
+        assistantLabel: folder,
+        addedAt: new Date().toISOString(),
+        config: { visiblePaths, writablePaths: [`/scoops/${folder}/`, '/shared/'] },
+        configSchemaVersion: 2,
+      }) as RegisteredScoop;
+
+    await saveScoop(primary);
+    await saveScoop(extra);
+    await saveScoop(v2('scoop_beta', 'beta-worker', extra.jid, ['/workspace/']));
+    await saveScoop(v2('scoop_primary', 'primary-worker', primary.jid, ['/workspace/']));
+    // A deliberate configuration, not the injected default — left alone.
+    await saveScoop(v2('scoop_explicit', 'explicit-worker', extra.jid, ['/workspace/', '/mnt/']));
+
+    const o = await initOrchestrator();
+
+    expect(o.getScoop('scoop_beta')?.config?.visiblePaths).toEqual([
+      '/cones/cone-beta/workspace/',
+      '/workspace/skills/',
+    ]);
+    expect(o.getScoop('scoop_primary')?.config?.visiblePaths).toEqual(['/workspace/']);
+    expect(o.getScoop('scoop_explicit')?.config?.visiblePaths).toEqual(['/workspace/', '/mnt/']);
+  });
+
   it('backfills both visiblePaths and writablePaths for truly-legacy non-cone scoops', async () => {
     const legacy: RegisteredScoop = {
       jid: 'scoop_legacy_1',

@@ -9,7 +9,7 @@ import { createLogger } from '../base/logger.js';
 import type { ScoopModelResolution } from '../providers/account-store.js';
 import type { SudoDecision, SudoKind, SudoRequest } from '../sudo/types.js';
 import type { ToolDefinition } from '../tools/types.js';
-import { workspaceFor } from '../work-unit/descriptor.js';
+import { defaultChildVisibleRoots, workspaceFor } from '../work-unit/descriptor.js';
 import { derivePolicy, isRootUnit } from '../work-unit/policy.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
@@ -340,11 +340,12 @@ interface ScoopRecordInput {
   /** JID of the scoop (cone) that invoked scoop_scoop; recorded for delegation-chain reconstruction. */
   parentJid: string;
   /**
-   * Read-only root a scoop gets when the caller named none: the creating
-   * cone's workspace, so a scoop spawned by an extra cone reads THAT cone's
-   * files rather than the primary's (#2271).
+   * Read-only roots a scoop gets when the caller named none: the creating
+   * cone's workspace (plus the shared skills library when that lives outside
+   * it), so a scoop spawned by an extra cone reads THAT cone's files rather
+   * than the primary's (#2271).
    */
-  defaultVisibleRoot: string;
+  defaultVisibleRoots: string[];
 }
 
 /** Build the partial `RegisteredScoop` record passed to onScoopScoop. */
@@ -359,7 +360,7 @@ function buildScoopRecord({
   thinkingLevel,
   backgroundAfterSeconds,
   parentJid,
-  defaultVisibleRoot,
+  defaultVisibleRoots,
 }: ScoopRecordInput): Omit<RegisteredScoop, 'jid'> {
   return {
     name,
@@ -373,7 +374,7 @@ function buildScoopRecord({
     config: {
       ...(model ? { modelId: model } : {}),
       ...(model && modelProviderId ? { modelProviderId } : {}),
-      visiblePaths: visiblePaths ?? [defaultVisibleRoot],
+      visiblePaths: visiblePaths ?? defaultVisibleRoots,
       writablePaths: writablePaths ?? [`/scoops/${folder}/`, '/shared/'],
       ...(allowedCommands ? { allowedCommands } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
@@ -459,7 +460,7 @@ async function executeScoopScoop(
       thinkingLevel: parsed.level,
       backgroundAfterSeconds: parsedBackgroundAfter.seconds,
       parentJid: config.scoop.jid,
-      defaultVisibleRoot: `${workspaceFor(config.scoop).root}/`,
+      defaultVisibleRoots: defaultChildVisibleRoots(workspaceFor(config.scoop)),
     });
     const newScoop = await config.onScoopScoop!(record);
     log.info('Scoop created', { name, folder });
@@ -850,7 +851,7 @@ function scoopScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
           type: 'array',
           items: { type: 'string' },
           description:
-            'VFS paths the scoop can READ (not write). Pure replace — what you set is what you get. Omit to use the default ["/workspace/"] which exposes the shared skills tree. Pass [] for no extra read-only paths. Note: the scoop\'s writablePaths are always readable too, so a true read-nothing sandbox also requires writablePaths: []. Mounts remain readable regardless. Trailing slash recommended (e.g. "/shared/data/").',
+            'VFS paths the scoop can READ (not write). Pure replace — what you set is what you get. Omit to use the default: YOUR OWN workspace plus the shared skills tree — ["/workspace/"] for the primary cone, ["/cones/<folder>/workspace/", "/workspace/skills/"] for any other. Prefer omitting it over naming "/workspace/" explicitly, which would point the scoop at a different cone\'s files. Pass [] for no extra read-only paths. Note: the scoop\'s writablePaths are always readable too, so a true read-nothing sandbox also requires writablePaths: []. Mounts remain readable regardless. Trailing slash recommended (e.g. "/shared/data/").',
         },
         writablePaths: {
           type: 'array',

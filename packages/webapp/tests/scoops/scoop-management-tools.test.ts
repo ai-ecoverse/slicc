@@ -118,7 +118,8 @@ describe('scoop_scoop tool — config defaults', () => {
   });
 
   // #2271: an extra cone owns `/cones/<folder>/workspace`, so the scoops it
-  // spawns must read THAT workspace by default — not the primary cone's.
+  // spawns must read THAT workspace by default — not the primary cone's — plus
+  // the skills library, which lives outside it.
   it('defaults visiblePaths to the creating cone workspace for an extra cone', async () => {
     const extraCone: RegisteredScoop = {
       ...cone,
@@ -131,7 +132,10 @@ describe('scoop_scoop tool — config defaults', () => {
     await tool.execute({ name: 'hero-block' });
 
     const created = onScoopScoop.mock.calls[0][0];
-    expect(created.config?.visiblePaths).toEqual(['/cones/cone-beta/workspace/']);
+    expect(created.config?.visiblePaths).toEqual([
+      '/cones/cone-beta/workspace/',
+      '/workspace/skills/',
+    ]);
     // The scoop's own sandbox is unchanged — scoop folders stay float-wide.
     expect(created.config?.writablePaths).toEqual(['/scoops/hero-block-scoop/', '/shared/']);
   });

@@ -5,7 +5,7 @@
  */
 
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
-import { deriveCompletion, derivePolicy, isRootUnit } from './policy.js';
+import { deriveCompletion, derivePolicy, isRootUnit, rootOwnerOf, rootsOf } from './policy.js';
 import { isPrimaryRoot, PRIMARY_CONE_FOLDER } from './record.js';
 import { statusFromTab, type WorkUnitDescriptor, type WorkUnitWorkspace } from './types.js';
 
@@ -64,6 +64,33 @@ export function workspaceFor(
 export const PRIMARY_WORKSPACE: WorkUnitWorkspace = Object.freeze(
   workspaceFor({ parentJid: null, folder: PRIMARY_CONE_FOLDER })
 );
+
+/**
+ * Workspace of the root that owns `unit` — the cone whose files a spawned
+ * child should read and whose tree the UI should show while that unit is
+ * selected. Falls back to the default (oldest) root, then to the primary
+ * cone's layout, so a dangling ownership edge can never hand out a child's
+ * `/scoops/<folder>` as a workspace (#2271).
+ */
+export function ownerWorkspaceFor<
+  T extends Pick<RegisteredScoop, 'jid' | 'parentJid' | 'folder' | 'addedAt'>,
+>(units: Iterable<T>, unit: T | undefined): WorkUnitWorkspace {
+  const all = [...units];
+  const owner = rootOwnerOf(all, unit) ?? rootsOf(all)[0];
+  return owner ? workspaceFor(owner) : PRIMARY_WORKSPACE;
+}
+
+/**
+ * Read-only roots a delegated child gets by default: the workspace of the cone
+ * that spawned it, plus the shared skills library when that lives outside it
+ * (#2271). Under the primary cone the library is already inside `/workspace`,
+ * so the list stays the historical `['/workspace/']`.
+ */
+export function defaultChildVisibleRoots(owner: WorkUnitWorkspace): string[] {
+  const root = `${owner.root}/`;
+  const skills = `${SKILLS_LIBRARY_DIR}/`;
+  return skills.startsWith(root) ? [root] : [root, skills];
+}
 
 /** Project a record (and optional live tab) onto a descriptor. */
 export function toDescriptor(scoop: RegisteredScoop, tab?: ScoopTabState): WorkUnitDescriptor {

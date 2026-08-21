@@ -19,6 +19,7 @@ import { registerTranscriptExportService } from '../../transcript/export-provide
 import { DefaultTranscriptExportService } from '../../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../../transcript/strict-secret-client.js';
+import { ownerWorkspaceFor } from '../../work-unit/descriptor.js';
 import {
   guardedReload,
   installWorkerStaleAssetReloadListener,
@@ -792,6 +793,10 @@ export function attachWcClient(
     openWriter: async () => (await openVfs()).writer,
     onKernelReady: (fn) => boot.onClientReady(fn),
     getMonitorDeps: () => createWcMonitorDeps({ client, openReader, storage: window.localStorage }),
+    // The workbench shows the files and memory of the cone that owns the
+    // current selection — the primary's `/workspace` until an extra cone is
+    // selected (#2271).
+    getWorkspace: () => ownerWorkspaceFor(client.getScoops(), boot.getSelected() ?? undefined),
     mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
     insertReference: (path: string) => {
       const card = refs.inputCard as HTMLElement & { value: string; focus(): void };

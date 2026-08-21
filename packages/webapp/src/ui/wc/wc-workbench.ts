@@ -10,14 +10,16 @@ import type { SliccFileTree, SliccMonitor } from '@slicc/webcomponents';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../../kernel/writable-vfs-client.js';
 import { toPreviewUrl } from '../../shell/supplemental-commands/shared.js';
+import { PRIMARY_WORKSPACE } from '../../work-unit/descriptor.js';
+import type { WorkUnitWorkspace } from '../../work-unit/types.js';
 import { wireFileActions } from './file-actions.js';
 import { buildMemoryRows } from './wc-memory.js';
 import { fetchMonitorData, type MonitorDeps } from './wc-monitor.js';
 
 type FileTreeItem = NonNullable<SliccFileTree['items']>[number];
 
-/** Directories surfaced in the workbench file tree. */
-const TREE_ROOTS = ['/workspace', '/shared'] as const;
+/** Directory shared by every unit, always shown beside the selected root. */
+const SHARED_TREE_ROOT = '/shared';
 const MAX_DEPTH = 3;
 const MAX_ENTRIES_PER_DIR = 200;
 
@@ -70,17 +72,23 @@ async function dirChildren(
 }
 
 /**
- * Build `<slicc-file-tree>` items for the VFS workbench roots: each root is
- * rendered as an expanded `dir` item so it looks and behaves like any other
- * folder (chevron, collapsible, consistent icon).
+ * Build `<slicc-file-tree>` items for the VFS workbench roots — the SELECTED
+ * cone's workspace plus `/shared` (#2271) — each rendered as an expanded `dir`
+ * item so it looks and behaves like any other folder (chevron, collapsible,
+ * consistent icon).
  */
-export async function buildVfsTreeItems(fs: LocalVfsClient): Promise<FileTreeItem[]> {
+export async function buildVfsTreeItems(
+  fs: LocalVfsClient,
+  workspaceRoot: string = PRIMARY_WORKSPACE.root
+): Promise<FileTreeItem[]> {
   const items: FileTreeItem[] = [];
-  for (const root of TREE_ROOTS) {
+  for (const root of [workspaceRoot, SHARED_TREE_ROOT]) {
     items.push({
       kind: 'dir',
       id: root,
-      label: root.slice(1), // 'workspace' | 'shared'
+      // `workspace` / `shared` for the primary cone; an extra cone's root is
+      // `/cones/<folder>/workspace`, where the folder is what identifies it.
+      label: root.replace(/^\/(cones\/)?/, ''),
       open: true,
       children: await dirChildren(fs, root, 1),
     });
@@ -110,6 +118,12 @@ export interface WcWorkbenchDeps {
   onKernelReady(fn: () => void): void;
   /** Injects @/path/to/file mention token into ChatPanel input. */
   insertReference(path: string): void;
+  /**
+   * Filesystem coordinates of the cone whose files the workbench shows — the
+   * root that owns the current selection (#2271). Read per refresh, so
+   * switching cones re-points the tree on the next poll.
+   */
+  getWorkspace(): WorkUnitWorkspace;
   log: { error(message: string, ...data: unknown[]): void };
 }
 
@@ -142,7 +156,7 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActiva
     void deps
       .openFs()
       .then(async (fs) => {
-        deps.fileTree.items = await buildVfsTreeItems(fs);
+        deps.fileTree.items = await buildVfsTreeItems(fs, deps.getWorkspace().root);
         if (!fileActionsWired) {
           fileActionsWired = true;
           wireFileActions({
@@ -202,7 +216,7 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActiva
         void deps
           .openFs()
           .then(async (fs) => {
-            const rows = await buildMemoryRows(fs);
+            const rows = await buildMemoryRows(fs, deps.getWorkspace().memoryPath);
             if (deps.memoryHost.setRows) deps.memoryHost.setRows(rows);
             else deps.memoryHost.replaceChildren(...rows);
           })

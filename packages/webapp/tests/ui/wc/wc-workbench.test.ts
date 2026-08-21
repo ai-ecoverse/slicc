@@ -17,6 +17,7 @@ import {
   createWorkbenchActivator,
   type WcWorkbenchDeps,
 } from '../../../src/ui/wc/wc-workbench.js';
+import { PRIMARY_WORKSPACE, workspaceFor } from '../../../src/work-unit/descriptor.js';
 
 async function seededFs(): Promise<VirtualFS> {
   const fs = await VirtualFS.create({ dbName: `wc-workbench-${Math.random()}`, wipe: true });
@@ -57,6 +58,30 @@ describe('buildVfsTreeItems', () => {
     expect(sharedChildren.some((i) => i.kind === 'file' && i.id === '/shared/notes.txt')).toBe(
       true
     );
+  });
+
+  // #2271: the tree follows the SELECTED cone, so an extra cone sees its own
+  // files instead of the primary cone's.
+  it('maps an extra cone workspace root beside /shared', async () => {
+    const fs = await seededFs();
+    await fs.mkdir('/cones/cone-beta/workspace', { recursive: true });
+    await fs.writeFile('/cones/cone-beta/workspace/beta.txt', 'b');
+
+    const beta = workspaceFor({ parentJid: null, folder: 'cone-beta' });
+    const items = await buildVfsTreeItems(fs, beta.root);
+
+    expect(items.filter((i) => i.kind === 'dir').map((i) => i.id)).toEqual([
+      '/cones/cone-beta/workspace',
+      '/shared',
+    ]);
+    const root = items.find((i) => i.kind === 'dir' && i.id === beta.root);
+    expect(root?.kind === 'dir' && root.label).toBe('cone-beta/workspace');
+    expect(
+      root?.kind === 'dir' &&
+        root.children.some(
+          (c) => c.kind === 'file' && c.id === '/cones/cone-beta/workspace/beta.txt'
+        )
+    ).toBe(true);
   });
 
   it('lists directories before files, alphabetically', async () => {
@@ -109,6 +134,7 @@ describe('createWorkbenchActivator', () => {
       // In tests the "kernel" is always ready — fire the callback immediately.
       onKernelReady: vi.fn((fn: () => void) => fn()),
       insertReference: vi.fn(),
+      getWorkspace: vi.fn(() => PRIMARY_WORKSPACE),
       log: { error: vi.fn() },
     };
     // Partial deps: the activation paths under test never touch
@@ -136,6 +162,29 @@ describe('createWorkbenchActivator', () => {
     activator.activate('term');
     await vi.waitFor(() => expect(deps.mountTerminal).toHaveBeenCalledTimes(1));
     expect(deps.mountTerminal).toHaveBeenCalledWith(deps.termSurface);
+  });
+
+  // #2271: both panels read the selected cone's coordinates per refresh.
+  it('reads the selected cone workspace and memory file', async () => {
+    const deps = makeDeps();
+    const beta = workspaceFor({ parentJid: null, folder: 'cone-beta' });
+    deps.getWorkspace.mockReturnValue(beta);
+    const activator = createWorkbenchActivator(deps);
+
+    activator.activate('files');
+    await vi.waitFor(() => {
+      expect(deps.fileTree.items?.length).toBeGreaterThan(0);
+    });
+    // The seeded FS has no `/cones/...` tree — the point is that the tree asked
+    // for the extra cone's root, not the primary's.
+    expect(deps.fileTree.items?.map((i) => ('id' in i ? i.id : ''))).toEqual([
+      '/cones/cone-beta/workspace',
+      '/shared',
+    ]);
+
+    activator.activate('memory');
+    await vi.waitFor(() => expect(deps.memoryHost.setRows).toHaveBeenCalled());
+    expect(deps.getWorkspace).toHaveBeenCalled();
   });
 
   it('hands parsed rows to the memory panel on memory activation', async () => {

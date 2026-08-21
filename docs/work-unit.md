@@ -106,13 +106,25 @@ per-scoop sudoers.
   `full-workspace` (unrestricted `VirtualFS`) — two cones do not _see_ each
   other's files by default because their roots are disjoint and each starts in
   its own cwd, not because a wall stops them. A scoop IS walled: the read-only
-  root `scoop_scoop` injects is now the creating cone's workspace, so a scoop
-  spawned by an extra cone reads that cone's files, not the primary's. Same for
-  the `agent` command, which walks the ownership chain to its root.
+  roots `scoop_scoop` injects are now the creating cone's workspace plus the
+  skills library (`defaultChildVisibleRoots`), so a scoop spawned by an extra
+  cone reads that cone's files, not the primary's. Same for the `agent`
+  command, which resolves its owner with `ownerWorkspaceFor` (the shared
+  `rootOwnerOf` walk, which refuses a dangling or looping ownership chain
+  rather than handing out a child's `/scoops/<folder>`).
+- **The UI follows the selection.** The workbench file tree and the memory
+  panel take their roots from the cone that owns the current selection, so
+  switching cones re-points both (`WcWorkbenchDeps.getWorkspace`).
 - **Memory**: the sink path is bound by `ScoopLifecycleManager` from the unit's
   own record (`workspaceFor(scoop).memoryPath`), never from the caller's meta,
   so an extra cone's compaction pass cannot append to the primary's file. The
   logarithmic budget pass (`applyConeMemoryBudget`) takes the same path.
+- **Scoop config migration** (`ScoopConfig` schema v3): a scoop saved before
+  this change keeps a `visiblePaths` list its owning cone has since moved away
+  from. On restore, exactly the historical default (`['/workspace/']`) on a
+  scoop owned by an extra cone is re-pointed at that cone's roots; any other
+  list is a deliberate configuration and is left alone, and scoops of the
+  primary cone never change.
 - **Migration**: extra cones created under #2262 are NOT migrated. They used
   `/workspace` because every root did; on the first boot after this change they
   start with a fresh, empty `/cones/<folder>/workspace` and `CLAUDE.md`. Nothing

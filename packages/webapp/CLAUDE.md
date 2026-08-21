@@ -109,7 +109,8 @@ Non-obvious rules:
   — never the canonical `agent-sessions` history or compaction input.
 - **Agent bridge defaults** (`agent-bridge.ts`): writable
   `[cwd, /shared/, <scratch>/, /tmp/]`, visible
-  `[<owning cone's workspace>/, invokingCwd]`; `--read-only` replaces them.
+  `[...defaultChildVisibleRoots(owning cone), invokingCwd]`; `--read-only`
+  replaces them.
 - **Mount signing is browser-naive**: CLI → `/api/s3-sign-and-forward`,
   extension → SW. Never sign in the browser. See `docs/mounts.md`.
 - **Shell/mount cache**: `script-catalog.ts` caches per `$PATH` root set;

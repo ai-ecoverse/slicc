@@ -39,7 +39,7 @@ import {
 } from '../providers/account-store.js';
 // Legal down-edge (`scoops/` → `tools/`) for the JSON Schema shape.
 import type { JsonSchemaObject } from '../tools/types.js';
-import { PRIMARY_WORKSPACE, workspaceFor } from '../work-unit/descriptor.js';
+import { defaultChildVisibleRoots, ownerWorkspaceFor } from '../work-unit/descriptor.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { serializeAgentSessionArchive } from './agent-session-archive.js';
 import type { Orchestrator } from './orchestrator.js';
@@ -320,25 +320,15 @@ function resolveParentModelSelection(
 }
 
 /**
- * Default read-only root for a spawned agent: the workspace of the ROOT that
- * owns the invoking unit, so an agent spawned inside an extra cone (or by one
- * of its scoops) reads that cone's files instead of the primary's (#2271).
- * Walks the ownership chain; falls back to the default root's workspace.
+ * Default read-only roots for a spawned agent: the workspace of the ROOT that
+ * owns the invoking unit (plus the shared skills library when it lives
+ * elsewhere), so an agent spawned inside an extra cone — or by one of its
+ * scoops — reads that cone's files instead of the primary's (#2271).
  */
-function resolveOwnerVisibleRoot(orchestrator: Orchestrator, parentJid: string | null): string {
+function resolveOwnerVisibleRoots(orchestrator: Orchestrator, parentJid: string | null): string[] {
   const scoops = orchestrator.getScoops();
-  const byJid = new Map(scoops.map((s) => [s.jid, s]));
-  const seen = new Set<string>();
-  let current = parentJid === null ? undefined : byJid.get(parentJid);
-  while (current && current.parentJid !== null && !seen.has(current.jid)) {
-    seen.add(current.jid);
-    current = byJid.get(current.parentJid);
-  }
-  // `current` is only the owner when the walk actually reached a root — a
-  // dangling parent or a cycle in a corrupt registry leaves a non-root here,
-  // whose `/scoops/<folder>` is not a workspace to hand out.
-  const owner = current?.parentJid === null ? current : rootsOf(scoops)[0];
-  return `${owner ? workspaceFor(owner).root : PRIMARY_WORKSPACE.root}/`;
+  const parent = parentJid === null ? undefined : scoops.find((s) => s.jid === parentJid);
+  return defaultChildVisibleRoots(ownerWorkspaceFor(scoops, parent));
 }
 
 /**
@@ -533,10 +523,10 @@ function buildScoopConfig(
   effectiveModelProviderId: string | undefined,
   effectiveThinkingLevel: ThinkingLevel | undefined,
   scratchFolder: string,
-  defaultVisibleRoot: string
+  defaultVisibleRoots: string[]
 ): NonNullable<RegisteredScoop['config']> {
   const cwdPrefix = normalizeRwPrefix(options.cwd);
-  const visiblePaths = resolveVisiblePaths(options, defaultVisibleRoot);
+  const visiblePaths = resolveVisiblePaths(options, defaultVisibleRoots);
   const configuredWritable = resolveWritablePaths(options.writablePaths, cwdPrefix);
   const writablePaths = dedupePrefixes([...configuredWritable, `${scratchFolder}/`, '/tmp/']);
 
@@ -788,7 +778,7 @@ export function createAgentBridge(
       effectiveModelProviderId,
       effectiveThinkingLevel,
       scratchFolder,
-      resolveOwnerVisibleRoot(ctx.orchestrator, parentJid)
+      resolveOwnerVisibleRoots(ctx.orchestrator, parentJid)
     );
 
     const scoop: RegisteredScoop = {
@@ -1040,18 +1030,18 @@ function resolveWritablePaths(paths: string[] | undefined, cwdPrefix: string): s
  * - `--read-only` set (any value, including `[]`): pure replace. The
  *   caller explicitly opted out of BOTH the owning cone's workspace AND
  *   the implicit `invokingCwd` add — we don't fight that.
- * - `--read-only` absent: return `defaultVisibleRoot` — the workspace of the
- *   root that owns the spawning unit (`/workspace/` for the primary cone,
- *   `/cones/<folder>/workspace/` for an extra one, #2271) — unioned with
+ * - `--read-only` absent: return `defaultVisibleRoots` — the workspace of the
+ *   root that owns the spawning unit plus the shared skills library
+ *   (`['/workspace/']` for the primary cone, #2271) — unioned with
  *   the invoking shell's `ctx.cwd` (when provided), so agents launched
  *   from anywhere on the VFS can still READ the directory they were
  *   spawned from. De-duped on the normalized trailing-slash form.
  */
-function resolveVisiblePaths(options: AgentSpawnOptions, defaultVisibleRoot: string): string[] {
+function resolveVisiblePaths(options: AgentSpawnOptions, defaultVisibleRoots: string[]): string[] {
   if (options.visiblePaths !== undefined) {
     return options.visiblePaths.map(normalizeRwPrefix);
   }
-  const base = [defaultVisibleRoot];
+  const base = [...defaultVisibleRoots];
   if (options.invokingCwd && options.invokingCwd.length > 0) {
     base.push(normalizeRwPrefix(options.invokingCwd));
   }

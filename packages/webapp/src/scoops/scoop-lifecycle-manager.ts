@@ -30,7 +30,7 @@ import type { SudoDecision, SudoRequest } from '../sudo/index.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import { toDescriptor, workspaceFor } from '../work-unit/descriptor.js';
 import { LiveWorkUnit } from '../work-unit/live-unit.js';
-import { rootsOf } from '../work-unit/policy.js';
+import { rootOwnerOf, rootsOf } from '../work-unit/policy.js';
 import { normalizeScoopRecord } from '../work-unit/record.js';
 import type { AppendConeMemoryMeta } from './cone-memory-store.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
@@ -277,13 +277,7 @@ export class ScoopLifecycleManager {
   /** The owning root of `scoop` (itself for a root), walking `parentJid`. */
   private rootOf(scoop: RegisteredScoop): RegisteredScoop | undefined {
     const scoops = this.deps.getScoops();
-    const seen = new Set<string>();
-    let current: RegisteredScoop | undefined = scoop;
-    while (current && current.parentJid !== null && !seen.has(current.jid)) {
-      seen.add(current.jid);
-      current = scoops.get(current.parentJid);
-    }
-    return current ?? rootsOf(scoops.values())[0];
+    return rootOwnerOf(scoops.values(), scoop) ?? rootsOf(scoops.values())[0];
   }
 
   /**

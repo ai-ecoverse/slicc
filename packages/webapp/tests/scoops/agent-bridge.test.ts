@@ -378,12 +378,19 @@ describe('createAgentBridge — config construction', () => {
     scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
 
     await bridge.spawn({ ...BASE_OPTS, parentJid: extraCone.jid });
-    expect(registerCalls[0].config?.visiblePaths).toEqual(['/cones/cone-beta/workspace/']);
+    // The skills library rides along — it lives outside the cone's workspace.
+    expect(registerCalls[0].config?.visiblePaths).toEqual([
+      '/cones/cone-beta/workspace/',
+      '/workspace/skills/',
+    ]);
 
     // …and through a scoop of that cone: the chain is walked up to the root.
     scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
     await bridge.spawn({ ...BASE_OPTS, parentJid: betaScoop.jid });
-    expect(registerCalls[1].config?.visiblePaths).toEqual(['/cones/cone-beta/workspace/']);
+    expect(registerCalls[1].config?.visiblePaths).toEqual([
+      '/cones/cone-beta/workspace/',
+      '/workspace/skills/',
+    ]);
   });
 
   it('passes an explicit visiblePaths list through pure-replace (no merge with /workspace/)', async () => {
