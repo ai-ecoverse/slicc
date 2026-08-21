@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { SliccQuickLook } from '../../src/quick-look/slicc-quick-look.js';
 import { ensureGlobalTokens } from '../../src/theme/tokens.js';
 
@@ -286,8 +286,57 @@ describe('slicc-quick-look', () => {
       expect(frame).not.toBeNull();
       // An empty `sandbox` is the whole point: no scripts, no same-origin.
       expect(frame?.getAttribute('sandbox')).toBe('');
-      expect(frame?.getAttribute('srcdoc')).toBe(source);
+      expect(frame?.getAttribute('srcdoc')).toContain(source);
       expect(ql.shadowRoot?.querySelector('.rendered')).toBeNull();
+    });
+
+    describe('the sandboxed document knows which theme it landed in', () => {
+      const openHtml = (html: string): HTMLIFrameElement | null | undefined => {
+        SliccQuickLook.open({
+          path: '/workspace/report.html',
+          content: html,
+          mimeType: 'text/html',
+          rendered: { mount: 'sandbox', html },
+        });
+        const ql = document.querySelector('slicc-quick-look') as SliccQuickLook;
+        return ql.shadowRoot?.querySelector('iframe');
+      };
+
+      afterEach(() => {
+        delete document.documentElement.dataset.theme;
+      });
+
+      it('states the app theme, not the OS preference', () => {
+        document.documentElement.dataset.theme = 'dark';
+        expect(openHtml('<h1>Report</h1>')?.getAttribute('srcdoc')).toContain('color-scheme:dark');
+
+        document.documentElement.dataset.theme = 'light';
+        expect(openHtml('<h1>Report</h1>')?.getAttribute('srcdoc')).toContain('color-scheme:light');
+      });
+
+      it('gives an unstyled document a matching surface', () => {
+        document.documentElement.dataset.theme = 'dark';
+        const srcdoc = openHtml('<h1>Report</h1>')?.getAttribute('srcdoc') ?? '';
+        expect(srcdoc).toContain('background:Canvas');
+        expect(srcdoc).toContain('color:CanvasText');
+      });
+
+      it('keeps a doctype first, so the file never lands in quirks mode', () => {
+        const srcdoc =
+          openHtml('<!doctype html>\n<html><body><p>Hi</p></body></html>')?.getAttribute(
+            'srcdoc'
+          ) ?? '';
+        expect(srcdoc.startsWith('<!doctype html>')).toBe(true);
+        // Injected after the doctype but before the markup it is a base for.
+        expect(srcdoc.indexOf('color-scheme')).toBeLessThan(srcdoc.indexOf('<html'));
+      });
+
+      it("lets the file's own styles outrank the base", () => {
+        const source = '<style>html{background:#fff;color:#111;}</style><h1>Report</h1>';
+        const srcdoc = openHtml(source)?.getAttribute('srcdoc') ?? '';
+        // Ours comes first, so an author rule of equal specificity wins.
+        expect(srcdoc.indexOf('color-scheme')).toBeLessThan(srcdoc.indexOf('background:#fff'));
+      });
     });
 
     it('shows no toggle for a file with only one form', () => {

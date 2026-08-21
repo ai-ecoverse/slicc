@@ -361,6 +361,38 @@ function registerSliccExtensions(mod: typeof import('@pierre/diffs')): void {
   }
 }
 
+/**
+ * Wrap a sandboxed document's own markup in a minimal base stylesheet.
+ *
+ * An iframe document starts transparent with black text, so an HTML file that
+ * declares no colors of its own — the common shape of an agent-written report —
+ * rendered as near-black prose on the panel's dark ground. The file is not
+ * broken and neither is the panel; nobody told the document which theme it
+ * landed in.
+ *
+ * `color-scheme` is what tells it, and it has to be stated explicitly rather
+ * than inherited: the app's theme is a `data-theme` attribute, which a separate
+ * document knows nothing about, and the OS preference it would otherwise follow
+ * can disagree with it. With the scheme set, `Canvas`/`CanvasText` resolve to a
+ * matching surface, and the document's default link colors, scrollbars and form
+ * controls follow too.
+ *
+ * The base is injected FIRST so that every author rule outranks it at equal
+ * specificity — a file that brings its own palette keeps it. The limit of that:
+ * a file that sets only a text color and assumes a white page behind it stays
+ * hard to read in dark mode. Rewriting author colors to fix that would be a
+ * bigger lie than leaving them alone.
+ */
+function sandboxDocument(html: string, theme: 'dark' | 'light'): string {
+  const base = `<style>:root{color-scheme:${theme};}html{background:Canvas;color:CanvasText;}</style>`;
+  // A doctype must stay the FIRST thing in the document — anything before it
+  // drops the page into quirks mode and changes the file's own layout out from
+  // under it, which is exactly what a preview must not do.
+  const doctype = /^\s*<!doctype[^>]*>/i.exec(html);
+  if (!doctype) return base + html;
+  return html.slice(0, doctype[0].length) + base + html.slice(doctype[0].length);
+}
+
 /** The theme half `@pierre/diffs` should render for, read off the live document. */
 function currentThemeType(): 'dark' | 'light' {
   const root = document.documentElement;
@@ -511,7 +543,7 @@ export class SliccQuickLook extends HTMLElement {
       // to lay itself out and nothing else. `srcdoc` keeps it same-document
       // enough to render without minting a blob URL that would outlive it.
       frame.setAttribute('sandbox', '');
-      frame.srcdoc = rendered.html;
+      frame.srcdoc = sandboxDocument(rendered.html, currentThemeType());
       frame.title = `${opts.path.split('/').pop() || opts.path} preview`;
       frame.className = 'rendered-frame';
       return frame;
