@@ -9,19 +9,24 @@ webapp UI changes skip it.
 
 ## Why this package exists
 
-Four runtimes consume the launcher, so it can't live inside the large
+Four consumers embed the launcher, so it can't live inside the large
 `@slicc/webcomponents` graph without dragging unrelated UI changes into the
 swift trigger path:
 
-- **webapp** — `src/ui/slicc-launcher-inject.ts` re-exports spoon; vite serves
-  spoon's `overlay-entry.ts` at `/electron-overlay-entry.js`.
-- **chrome-extension** — `content-script.ts` imports `SliccLauncher` from spoon.
+- **webapp** — `vite.config.ts` resolves `packages/spoon/src/overlay-entry.ts`
+  directly (no re-export shim in `src/ui/`), bundles it with esbuild into
+  `dist/ui/electron-overlay-entry.js`, and serves it at
+  `/electron-overlay-entry.js`.
 - **node-server** — reads the built `dist/ui/electron-overlay-entry.js` IIFE
   (`getElectronOverlayEntryDistPath`) and injects it via CDP / Electron.
 - **swift-server / swift-launcher** — `assemble-app.mjs` copies the built IIFE
   into the `.app`; `ElectronLauncher.swift` reads it at runtime.
 - **webcomponents** — re-exports `SliccLauncher` + launcher-state from spoon
   (barrel + `register.ts`) so `?ui=wc` and existing consumers keep working.
+
+The **chrome-extension** is *not* a consumer: the thin bridge has no
+`content_scripts` and embeds no launcher; the overlay lives in the hosted
+leader tab served by the webapp.
 
 **Zero dependency on `@slicc/webcomponents`** — that's the whole point. Spoon
 carries its own minimal `internal/define.ts` + `internal/dom.ts` (`h`/`sheet`)
