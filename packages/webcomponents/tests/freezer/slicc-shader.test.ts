@@ -544,6 +544,39 @@ describe('slicc-shader program cache + immediate repaint (anti-flicker)', () => 
     }
   });
 
+  it('logs and keeps the prior program active when a mode switch fails to link', async () => {
+    const el = mount({ mode: 'cone' });
+    await frame();
+    if (el.noWebgl) return; // no WebGL in this runner — link failure is N/A
+    const useProgramSpy = vi.spyOn(WebGLRenderingContext.prototype, 'useProgram');
+    const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    // Force the fresh (scoop) program to fail linking without disturbing the
+    // already-built cone program — the finding's "compile/link failure" path.
+    const realGetProgramParameter = WebGLRenderingContext.prototype.getProgramParameter;
+    const linkSpy = vi
+      .spyOn(WebGLRenderingContext.prototype, 'getProgramParameter')
+      .mockImplementation(function (this: WebGLRenderingContext, program, pname) {
+        if (pname === this.LINK_STATUS) return false;
+        return realGetProgramParameter.call(this, program, pname);
+      });
+    try {
+      const activeBefore = useProgramSpy.mock.calls.at(-1)?.[0];
+      el.mode = 'scoop';
+      // The getter reports the requested mode even though the link failed…
+      expect(el.mode).toBe('scoop');
+      // …a diagnostic is emitted rather than silently rendering the stale field…
+      expect(errSpy).toHaveBeenCalledWith('[slicc-shader] mode switch failed to link program');
+      // …and no NEW program was activated (the prior cone program stays bound).
+      const activeAfter = useProgramSpy.mock.calls.at(-1)?.[0];
+      expect(activeAfter).toBe(activeBefore);
+      el.remove();
+    } finally {
+      linkSpy.mockRestore();
+      errSpy.mockRestore();
+      useProgramSpy.mockRestore();
+    }
+  });
+
   it('repaints immediately with the new program on a mode change (not deferred to rAF)', async () => {
     const drawSpy = vi.spyOn(WebGLRenderingContext.prototype, 'drawArrays');
     const useProgramSpy = vi.spyOn(WebGLRenderingContext.prototype, 'useProgram');

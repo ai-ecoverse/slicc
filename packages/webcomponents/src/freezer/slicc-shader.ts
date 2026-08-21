@@ -467,6 +467,13 @@ export class SliccShader extends HTMLElement {
         this.#wake();
         return;
       }
+      // #linkMode() failed (compile/link) without touching #program/#loc/#builtMode:
+      // the `mode` getter already reports the new value, but the next #renderFrame
+      // keeps drawing the PREVIOUS mode's program, and the CSS fallback stays
+      // hidden (`no-webgl` is unset). Log so the stale render is not silent — all
+      // three sources are hardcoded and compile-verified, so this realistically
+      // only fires under an already-dying context.
+      console.error('[slicc-shader] mode switch failed to link program');
     }
     this.#applyFallbackBg();
     this.#wake({ burst: true });
