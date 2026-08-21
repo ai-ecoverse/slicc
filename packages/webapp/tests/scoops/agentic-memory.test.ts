@@ -124,9 +124,10 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
     expect(spawn.mock.calls[0][0]).toMatchObject({
       persistSession: true,
       name: 'memory-curator',
-      // Shipped MEMORY.md sets timeoutSeconds: 600 → a 10-minute wall-clock
-      // ceiling, generous enough that a slow pass is not killed mid-write.
-      maxWallClockMs: 600_000,
+      // Shipped MEMORY.md sets timeoutSeconds: 1200 → a 20-minute wall-clock
+      // ceiling, generous enough that a slow pass is not killed mid-write
+      // and left over budget (#2263).
+      maxWallClockMs: 1_200_000,
     });
   });
 
@@ -150,8 +151,8 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
     );
     expect(prompt).toContain('Prioritize re-verifying the oldest-dated sections');
     expect(prompt).toContain('Treat undated headings as maximally stale');
-    // The soft time budget: aim to finish under 5 minutes (hard stop at 10).
-    expect(prompt).toContain('should finish in well under 5 minutes');
+    // The soft time budget: aim to finish under 10 minutes (hard stop at 20).
+    expect(prompt).toContain('should finish in well under 10 minutes');
     expect(prompt).not.toContain('Preserve the user-authored header');
   });
 
@@ -404,7 +405,7 @@ Curate {{MEMORY_PATH}}.`;
   });
 
   it('defers (legacyFallbackSafe:false) when the curator name is already in use', async () => {
-    // A prior curator (now up to a 10-minute window) still holds the fixed
+    // A prior curator (now up to a 20-minute window) still holds the fixed
     // `memory-curator` name, so this spawn is rejected before it runs. No run
     // released — a legacy append here would be clobbered by the running
     // namesake's whole-file rewrite, so the pass must NOT mark it safe; the
@@ -450,7 +451,7 @@ Curate {{MEMORY_PATH}}.`;
     });
   });
 
-  it('clamps timeoutSeconds to the 600-second maximum', async () => {
+  it('clamps timeoutSeconds to the 1200-second maximum', async () => {
     vi.useFakeTimers();
     const memoryMd = `---\ntimeoutSeconds: 9999\n---\nCurate {{MEMORY_PATH}}.`;
     const spawn = vi.fn(
@@ -463,7 +464,7 @@ Curate {{MEMORY_PATH}}.`;
       sessionArchivePath: ARCHIVE_PATH,
       sessionCount: 1,
     });
-    await vi.advanceTimersByTimeAsync(599_999 + 30_000);
+    await vi.advanceTimersByTimeAsync(1_199_999 + 30_000);
     let settled = false;
     void pass.then(() => {
       settled = true;

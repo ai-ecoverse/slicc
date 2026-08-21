@@ -16,7 +16,7 @@ const log = createLogger('agentic-memory');
 
 export const MEMORY_INSTRUCTIONS_PATH = '/shared/MEMORY.md';
 export const DEFAULT_MEMORY_TIMEOUT_SECONDS = 600;
-export const MAX_MEMORY_TIMEOUT_SECONDS = 600;
+export const MAX_MEMORY_TIMEOUT_SECONDS = 1200;
 
 /**
  * Exactly the memory file, not `/workspace/`. The curator is given `upskill` so
