@@ -66,6 +66,54 @@ export class VfsAdapter implements IFileSystem {
   }
 
   /**
+   * Stats for the synthetic `/usr` tree, or `null` when the path is not part
+   * of it. `/usr`, `/usr/bin`, and `/usr/bin/<command>` are synthesized from
+   * the command registry — they have no VFS entry at all, so every
+   * metadata surface has to answer for them itself.
+   *
+   * This exists because `exists()` and `stat()` each carried their own copy
+   * of the branch and `lstat()` carried none, so it fell through to the VFS
+   * and raised ENOENT for the whole virtual bin tree. Anything that lstats
+   * — `du`, `find -type`, `tar` — could not see `/usr`, and because `du`
+   * reports any throw during its walk as `cannot access '<argument>'`, even
+   * `du -sh /` failed: the walk reached `/usr` and gave up on the whole
+   * root. One shared helper so the three surfaces cannot drift again.
+   *
+   * `stat` and `lstat` share one answer: none of these paths can be a
+   * symlink, so following links changes nothing.
+   */
+  private virtualUsrStat(normalized: string): FsStat | null {
+    if (normalized === '/usr' || normalized === '/usr/bin') {
+      return {
+        isFile: false,
+        isDirectory: true,
+        isSymbolicLink: false,
+        mode: 0o755,
+        size: 0,
+        mtime: new Date(0),
+      };
+    }
+    if (normalized.startsWith('/usr/bin/')) {
+      const cmdName = normalized.slice('/usr/bin/'.length);
+      if (
+        cmdName.length > 0 &&
+        !cmdName.includes('/') &&
+        this.getVirtualBinCommands().includes(cmdName)
+      ) {
+        return {
+          isFile: true,
+          isDirectory: false,
+          isSymbolicLink: false,
+          mode: 0o755,
+          size: 0,
+          mtime: new Date(0),
+        };
+      }
+    }
+    return null;
+  }
+
+  /**
    * Writability predicate — delegates to the wrapped `VirtualFS` /
    * `RestrictedFS`. Exposed so shell commands can check whether a path
    * is writable under the current sandbox (if any) BEFORE delegating an
@@ -243,15 +291,7 @@ export class VfsAdapter implements IFileSystem {
   async exists(path: string): Promise<boolean> {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
-      if (normalized === '/usr' || normalized === '/usr/bin') return true;
-      if (normalized.startsWith('/usr/bin/')) {
-        const cmdName = normalized.slice('/usr/bin/'.length);
-        return (
-          cmdName.length > 0 &&
-          !cmdName.includes('/') &&
-          this.getVirtualBinCommands().includes(cmdName)
-        );
-      }
+      if (this.virtualUsrStat(normalized)) return true;
       return this.vfs.exists(normalized);
     });
   }
@@ -259,35 +299,9 @@ export class VfsAdapter implements IFileSystem {
   async stat(path: string): Promise<FsStat> {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
-      // Virtual /usr and /usr/bin directories
-      if (normalized === '/usr' || normalized === '/usr/bin') {
-        return {
-          isFile: false,
-          isDirectory: true,
-          isSymbolicLink: false,
-          mode: 0o755,
-          size: 0,
-          mtime: new Date(0),
-        };
-      }
-      // Virtual /usr/bin/<command> entries
-      if (normalized.startsWith('/usr/bin/')) {
-        const cmdName = normalized.slice('/usr/bin/'.length);
-        if (
-          cmdName.length > 0 &&
-          !cmdName.includes('/') &&
-          this.getVirtualBinCommands().includes(cmdName)
-        ) {
-          return {
-            isFile: true,
-            isDirectory: false,
-            isSymbolicLink: false,
-            mode: 0o755,
-            size: 0,
-            mtime: new Date(0),
-          };
-        }
-      }
+      // Virtual /usr, /usr/bin, and /usr/bin/<command> entries
+      const virtual = this.virtualUsrStat(normalized);
+      if (virtual) return virtual;
       // Fast path: synchronous CacheFS stat for non-mounted paths
       const fast = this.vfs.statSync(normalized);
       if (fast) {
@@ -315,6 +329,11 @@ export class VfsAdapter implements IFileSystem {
   async lstat(path: string): Promise<FsStat> {
     return this.trusted(async () => {
       const normalized = normalizePath(path);
+      // Virtual /usr entries — none of them can be a symlink, so `lstat`
+      // answers exactly as `stat` does. Omitting this is what made `du`,
+      // `find -type`, and `tar` blind to the virtual bin tree.
+      const virtual = this.virtualUsrStat(normalized);
+      if (virtual) return virtual;
       // Fast path: synchronous CacheFS lstat for non-mounted paths
       const fast = this.vfs.lstatSync(normalized);
       if (fast) {

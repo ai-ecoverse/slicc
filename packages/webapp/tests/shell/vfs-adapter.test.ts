@@ -202,6 +202,68 @@ describe('VfsAdapter', () => {
       expect(entries).toEqual([]);
       expect(await freshAdapter.exists('/usr/bin')).toBe(true);
     });
+
+    // `lstat` used to have no synthetic-/usr branch at all — `exists` and
+    // `stat` each carried their own copy and `lstat` fell through to the VFS,
+    // raising ENOENT for the whole virtual bin tree. Anything that lstats
+    // (`du`, `find -type`, `tar`) went blind, and because `du` reports ANY
+    // throw during its walk as `cannot access '<argument>'`, the live failures
+    // named the wrong path:
+    //
+    //   $ stat /usr                 → File: /usr, Size: 0        (worked)
+    //   $ du -sh /usr               → du: cannot access '/usr'   (really /usr/bin)
+    //   $ du -sh /                  → du: cannot access '/'      (walk hit /usr)
+    //   $ find / -maxdepth 1 -type d→ (nothing at all)
+    //
+    // The three surfaces now share one `virtualUsrStat()` helper so they
+    // cannot drift again.
+
+    it.each(['/usr', '/usr/bin'])('lstat reports a directory for %s', async (path) => {
+      const st = await adapter.lstat(path);
+      expect(st.isDirectory).toBe(true);
+      expect(st.isSymbolicLink).toBe(false);
+    });
+
+    it('lstat returns file for /usr/bin/<registered command>', async () => {
+      const st = await adapter.lstat('/usr/bin/ls');
+      expect(st.isFile).toBe(true);
+      expect(st.isSymbolicLink).toBe(false);
+    });
+
+    // The invariant that was violated: none of these paths can be a symlink,
+    // so following links changes nothing and the two must agree.
+    it.each(['/usr', '/usr/bin', '/usr/bin/ls'])('stat and lstat agree on %s', async (path) => {
+      const [st, lst] = [await adapter.stat(path), await adapter.lstat(path)];
+      expect(lst.isFile).toBe(st.isFile);
+      expect(lst.isDirectory).toBe(st.isDirectory);
+      expect(lst.isSymbolicLink).toBe(st.isSymbolicLink);
+    });
+
+    it('lstat still rejects an unregistered command', async () => {
+      await expect(adapter.lstat('/usr/bin/nonexistent')).rejects.toThrow();
+    });
+
+    it('a du-style recursive walk of /usr completes instead of aborting', async () => {
+      // Mirror just-bash's `du`: readdir, lstat every entry, recurse — and let
+      // any throw abort the whole walk the way `du` does.
+      const seen: string[] = [];
+      const walk = async (dir: string): Promise<void> => {
+        for (const name of await adapter.readdir(dir)) {
+          const child = dir === '/' ? `/${name}` : `${dir}/${name}`;
+          const st = await adapter.lstat(child); // pre-fix: threw on /usr/bin
+          seen.push(child);
+          if (st.isDirectory) await walk(child);
+        }
+      };
+      await expect(walk('/usr')).resolves.toBeUndefined();
+      expect(seen).toEqual([
+        '/usr/bin',
+        '/usr/bin/cat',
+        '/usr/bin/git',
+        '/usr/bin/ls',
+        '/usr/bin/node',
+      ]);
+    });
   });
 
   describe('readdirWithFileTypes — symlink Dirent semantics (no-follow)', () => {
