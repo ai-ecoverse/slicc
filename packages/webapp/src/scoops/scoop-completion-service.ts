@@ -538,11 +538,23 @@ export class ScoopCompletionService {
 
   private async deliverWaitResultsToCone(results: WaitResult[]): Promise<void> {
     if (results.length === 0) return;
-    // Every scoop in one `scoop_wait` call was scheduled by the same caller —
-    // the parent of any of them is the waiter.
-    const cone = this.deps.findParent(results[0].jid);
-    if (!cone) return;
+    // `resolveScoopNames` matches scoop names globally, so one `scoop_wait`
+    // batch may span children of different parents once several roots exist.
+    // Group by parent and deliver each parent exactly its own results.
+    const byParent = new Map<string, { parent: RegisteredScoop; results: WaitResult[] }>();
+    for (const r of results) {
+      const parent = this.deps.findParent(r.jid);
+      if (!parent) continue;
+      const group = byParent.get(parent.jid) ?? { parent, results: [] };
+      group.results.push(r);
+      byParent.set(parent.jid, group);
+    }
+    for (const { parent, results: own } of byParent.values()) {
+      await this.deliverWaitResultsTo(parent, own);
+    }
+  }
 
+  private async deliverWaitResultsTo(cone: RegisteredScoop, results: WaitResult[]): Promise<void> {
     const lines: string[] = ['[scoop_wait completed]'];
     let timedOutCount = 0;
     let completedCount = 0;

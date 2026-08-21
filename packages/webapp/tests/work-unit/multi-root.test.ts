@@ -70,6 +70,39 @@ describe('multiple roots', () => {
     expect(routed[1].content).toContain('A is done');
   });
 
+  it('a scoop_wait batch spanning two roots delivers each root only its own results', async () => {
+    const scoops = registry();
+    const routed: ChannelMessage[] = [];
+    const service = new ScoopCompletionService({
+      getSharedFs: () => null,
+      getScoop: (jid) => scoops.get(jid),
+      findParent: parentOrDefaultRoot(scoops),
+      hasScoop: (jid) => scoops.has(jid),
+      notifyIncomingMessage: vi.fn(),
+      handleMessage: async (msg) => {
+        routed.push(msg);
+      },
+      reportError: vi.fn(),
+    });
+
+    const { scheduled } = service.scheduleScoopWait([childA.jid, childB.jid], 10_000);
+    expect(scheduled).toEqual([childA.jid, childB.jid]);
+    service.setResponseFull(childA.jid, 'A result');
+    await service.notifyCompletion(childA.jid);
+    service.setResponseFull(childB.jid, 'B result');
+    await service.notifyCompletion(childB.jid);
+    await new Promise((r) => setTimeout(r, 0));
+
+    const waits = routed.filter((m) => m.channel === 'scoop-wait');
+    expect(waits.map((m) => m.chatJid).sort()).toEqual([rootA.jid, rootB.jid].sort());
+    const forA = waits.find((m) => m.chatJid === rootA.jid)!;
+    const forB = waits.find((m) => m.chatJid === rootB.jid)!;
+    expect(forA.content).toContain('A result');
+    expect(forA.content).not.toContain('B result');
+    expect(forB.content).toContain('B result');
+    expect(forB.content).not.toContain('A result');
+  });
+
   it('a root never produces a completion notification', async () => {
     const scoops = registry();
     const handleMessage = vi.fn(async () => {});
