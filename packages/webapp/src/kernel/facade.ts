@@ -980,8 +980,6 @@ export class Bridge implements KernelFacade {
           sessionId,
           error: err instanceof Error ? err.message : String(err),
         });
-        // A store error is not "no history" — keep whatever the panel shows.
-        return;
       }
     }
 
