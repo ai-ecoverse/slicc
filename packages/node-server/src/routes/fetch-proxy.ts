@@ -226,6 +226,13 @@ function forwardUpstreamHeaders(
   // input available. Exact only when upstream sent identity encoding —
   // undici has already decompressed a `content-encoding` body, so its
   // length would not match the bytes we forward.
+  //
+  // Cross-runtime parity: this hint is node-server-only. `swift-server`
+  // (Sliccstart) serves the same `/api/fetch-proxy` route and also strips
+  // `content-length` (`Sources/Server/APIRoutes.swift`), so a swift-backed
+  // leader simply falls back to the indeterminate download bar — a graceful
+  // degradation, not a break. Mirror this there if determinate download
+  // progress is wanted on that runtime.
   const upstreamLength = upstream.headers.get('content-length');
   if (upstreamLength && !upstream.headers.get('content-encoding') && /^\d+$/.test(upstreamLength)) {
     res.setHeader(FETCH_PROXY_CONTENT_LENGTH_HEADER, upstreamLength);

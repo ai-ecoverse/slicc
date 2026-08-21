@@ -1,4 +1,6 @@
 export {
+  capLabel,
+  MAX_LABEL_CHARS,
   MAX_UPDATES_PER_SECOND,
   ProgressEmitter,
   type ProgressEmitterOptions,

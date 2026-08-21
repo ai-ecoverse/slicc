@@ -302,14 +302,18 @@ export function planScriptProgress(ast: ScriptNode, known: ReadonlySet<string>):
   return { totalSteps: total !== null && total > 0 ? total : null };
 }
 
-/** Short, single-line handle for the script (first non-empty line, capped). */
-export function scriptLabel(script: string, max = 60): string {
+/**
+ * Single-line handle for the script (first non-comment line). Deliberately
+ * NOT truncated — the emitter caps the label after scrubbing secrets out of
+ * it (see `capLabel`); shortening a script line here could smuggle half a
+ * token past the scrubber.
+ */
+export function scriptLabel(script: string): string {
   const line = script
     .split('\n')
     .map((l) => l.trim())
     .find((l) => l.length > 0 && !l.startsWith('#'));
-  if (!line) return 'bash';
-  return line.length > max ? `${line.slice(0, max - 1)}…` : line;
+  return line || 'bash';
 }
 
 interface ChildState {

@@ -4,6 +4,8 @@ import {
   pushToolExecutionContext,
 } from '../../../src/base/tool-execution-context.js';
 import {
+  capLabel,
+  MAX_LABEL_CHARS,
   MAX_UPDATES_PER_SECOND,
   ProgressEmitter,
   type ProgressEvent,
@@ -170,11 +172,52 @@ describe('ProgressEmitter aggregator routing', () => {
 });
 
 describe('progressLabel', () => {
-  it('joins argv and caps the length', () => {
+  it('joins argv WITHOUT truncating (the emitter caps after scrubbing)', () => {
     expect(progressLabel('sleep', ['30'])).toBe('sleep 30');
     expect(progressLabel('ls', [])).toBe('ls');
     const long = progressLabel('curl', ['x'.repeat(200)]);
-    expect(long.length).toBe(80);
+    expect(long.length).toBe(205);
+    expect(long.endsWith('…')).toBe(false);
+  });
+});
+
+describe('capLabel', () => {
+  it('shortens only past the cap, with an ellipsis', () => {
+    expect(capLabel('short')).toBe('short');
+    const long = capLabel('y'.repeat(200));
+    expect(long.length).toBe(MAX_LABEL_CHARS);
     expect(long.endsWith('…')).toBe(true);
+  });
+});
+
+describe('secret scrubbing vs truncation order', () => {
+  // Regression: labels used to be truncated by `progressLabel` BEFORE the
+  // scrub ran. Scrubbers replace WHOLE known secret strings, so a token
+  // straddling the cut survived as a prefix in the card title.
+  const SECRET = 'sk-abcdefghijklmnopqrstuvwxyz0123456789';
+
+  it('scrubs a secret that straddles the display cap', async () => {
+    const seen: ProgressEvent[] = [];
+    const scrub = vi.fn(async (text: string) => text.split(SECRET).join('***'));
+    const emitter = new ProgressEmitter({ sink: (e) => seen.push(e), scrubLabel: scrub });
+    // Size the padding so the secret STARTS before the cap and ENDS after it
+    // (that is the only case where truncate-then-scrub leaked a prefix).
+    // "curl " + pad + " " + "-H " + "Authorization: Bearer " = 31 + pad chars.
+    const pad = 'x'.repeat(Math.max(0, MAX_LABEL_CHARS - 41));
+    const label = progressLabel('curl', [pad, '-H', `Authorization: Bearer ${SECRET}`]);
+    expect(label.length).toBeGreaterThan(MAX_LABEL_CHARS);
+    expect(label.indexOf(SECRET)).toBeLessThan(MAX_LABEL_CHARS);
+    expect(label.indexOf(SECRET) + SECRET.length).toBeGreaterThan(MAX_LABEL_CHARS);
+
+    emitter.emit({ id: 'net-1', label, phase: 'start' });
+    await vi.waitFor(() => expect(seen).toHaveLength(1));
+
+    // The scrubber saw the FULL label…
+    expect(scrub).toHaveBeenCalledWith(label);
+    // …and no fragment of the secret reaches the sink.
+    expect(seen[0].label).not.toContain('sk-');
+    expect(seen[0].label).toContain('***');
+    // Still capped for display.
+    expect(seen[0].label.length).toBeLessThanOrEqual(MAX_LABEL_CHARS);
   });
 });

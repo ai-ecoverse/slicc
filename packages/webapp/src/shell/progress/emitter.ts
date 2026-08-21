@@ -168,7 +168,8 @@ export class ProgressEmitter {
     }
     const { label } = state;
     if (typeof label === 'string') {
-      sink(label === event.label ? event : { ...event, label });
+      const shown = capLabel(label);
+      sink(shown === event.label ? event : { ...event, label: shown });
       return;
     }
     // Label still being scrubbed: chain behind the previous emit for this id
@@ -176,7 +177,7 @@ export class ProgressEmitter {
     state.tail = state.tail.then(async () => {
       const resolved = await label;
       state.label = resolved;
-      sink({ ...event, label: resolved });
+      sink({ ...event, label: capLabel(resolved) });
     });
   }
 }
@@ -194,11 +195,28 @@ async function scrubSafely(
 }
 
 /**
- * Build a progress label from a command's argv. Arguments are joined with a
- * single space and the whole thing is capped so a 4 KB `curl` invocation does
- * not become the card title.
+ * Longest label handed to the UI. Applied by {@link capLabel} in `deliver`,
+ * i.e. AFTER the secret scrub.
  */
-export function progressLabel(name: string, args: readonly string[], max = 80): string {
-  const full = args.length ? `${name} ${args.join(' ')}` : name;
-  return full.length > max ? `${full.slice(0, max - 1)}…` : full;
+export const MAX_LABEL_CHARS = 80;
+
+/**
+ * Cap a label for display.
+ *
+ * MUST run after the scrub, never before: the scrubbers replace WHOLE known
+ * secret strings, so truncating first can cut a token in half and smuggle the
+ * surviving prefix past the scrubber into the progress card (a `curl -H
+ * "Authorization: Bearer …"` whose token straddles the cut). Every label
+ * builder therefore returns the full text and only this function shortens it.
+ */
+export function capLabel(label: string, max = MAX_LABEL_CHARS): string {
+  return label.length > max ? `${label.slice(0, max - 1)}…` : label;
+}
+
+/**
+ * Build a progress label from a command's argv. Arguments are joined with a
+ * single space. Deliberately NOT truncated here — see {@link capLabel}.
+ */
+export function progressLabel(name: string, args: readonly string[]): string {
+  return args.length ? `${name} ${args.join(' ')}` : name;
 }

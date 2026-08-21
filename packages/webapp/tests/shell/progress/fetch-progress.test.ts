@@ -21,7 +21,8 @@ describe('fetchLabel', () => {
     );
     expect(fetchLabel('https://example.com/')).toBe('↓ example.com');
     expect(fetchLabel('not a url')).toBe('↓ not a url');
-    expect(fetchLabel(`https://example.com/${'x'.repeat(200)}`).length).toBeLessThanOrEqual(74);
+    // Not truncated here — the emitter caps after scrubbing (see capLabel).
+    expect(fetchLabel(`https://example.com/${'x'.repeat(200)}`).length).toBe(214);
   });
 });
 

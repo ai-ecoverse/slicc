@@ -81,7 +81,8 @@ describe('scriptLabel', () => {
   it('takes the first non-comment line, capped', () => {
     expect(scriptLabel('# setup\n\nls -la /workspace\necho done')).toBe('ls -la /workspace');
     expect(scriptLabel('   ')).toBe('bash');
-    expect(scriptLabel('x'.repeat(100)).length).toBe(60);
+    // Not truncated here — the emitter caps after scrubbing (see capLabel).
+    expect(scriptLabel('x'.repeat(100)).length).toBe(100);
   });
 });
 

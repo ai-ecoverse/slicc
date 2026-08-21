@@ -17,17 +17,18 @@ interface InFlight {
   startedAt: number;
 }
 
-/** "↓ host/path" capped for the card; query strings and credentials dropped. */
-export function fetchLabel(url: string, max = 72): string {
-  let shown: string;
+/**
+ * "↓ host/path" for the card; query strings and credentials dropped (that is
+ * where tokens usually live). Deliberately NOT truncated — the emitter caps
+ * the label after scrubbing (see `capLabel`).
+ */
+export function fetchLabel(url: string): string {
   try {
     const u = new URL(url);
-    shown = `${u.host}${u.pathname === '/' ? '' : u.pathname}`;
+    return `↓ ${u.host}${u.pathname === '/' ? '' : u.pathname}`;
   } catch {
-    shown = url;
+    return `↓ ${url}`;
   }
-  if (shown.length > max) shown = `${shown.slice(0, max - 1)}…`;
-  return `↓ ${shown}`;
 }
 
 export function createFetchProgressObserver(
