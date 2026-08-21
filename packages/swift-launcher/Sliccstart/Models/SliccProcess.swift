@@ -1102,6 +1102,11 @@ final class SliccProcess {
             return
         }
 
+        // Once the app PID is known, a `kill(pid, 0)` probe is enough; only
+        // fall back to the `NSWorkspace` scan when the PID is gone or unknown.
+        if let observedAppPID = record.observedAppPID, Self.isPIDRunning(observedAppPID) {
+            return
+        }
         let runningApps = runningElectronApplications(for: target)
         if let app = runningApps.first {
             record.observedAppPID = app.processIdentifier
@@ -1203,7 +1208,16 @@ final class SliccProcess {
     }
 
     private func isElectronAppRunning(_ target: AppTarget) -> Bool {
-        !runningElectronApplications(for: target).isEmpty
+        // Fast path: a launch record that already observed the app's PID only
+        // needs a `kill(pid, 0)` probe. The full `NSWorkspace` scan below is
+        // called from every SwiftUI render *and* the 2s refresh timer, so it
+        // must stay off the hot path once the app is known.
+        if let observedAppPID = launchRecords[target.id]?.observedAppPID,
+            Self.isPIDRunning(observedAppPID)
+        {
+            return true
+        }
+        return !runningElectronApplications(for: target).isEmpty
     }
 
     private func runningElectronApplications(for target: AppTarget) -> [NSRunningApplication] {
@@ -1230,21 +1244,55 @@ final class SliccProcess {
     }
 
     private static func runningElectronApplications(atAppPaths appPaths: [String]) -> [NSRunningApplication] {
-        let appURLs = Set(appPaths.map { standardizedFileURL(path: $0) })
+        let candidates = candidateBundlePaths(for: appPaths)
         return NSWorkspace.shared.runningApplications.filter { app in
             guard !app.isTerminated else { return false }
-            if let bundleURL = app.bundleURL.map({ standardizedFileURL(path: $0.path) }),
-                appURLs.contains(bundleURL)
-            {
-                return true
-            }
-            if let executableURL = app.executableURL?.standardizedFileURL.resolvingSymlinksInPath() {
-                return appURLs.contains { appURL in
-                    executableURL.path.hasPrefix(appURL.appendingPathComponent("Contents/MacOS").path)
-                }
-            }
-            return false
+            return appMatches(
+                bundlePath: app.bundleURL?.path,
+                executablePath: app.executableURL?.path,
+                candidateBundlePaths: candidates
+            )
         }
+    }
+
+    /// Expands each launcher-side app path into the set of spellings a running
+    /// app's `bundleURL` may report (as given, tilde-expanded, standardized,
+    /// symlink-resolved). Symlink resolution touches the filesystem, so it is
+    /// done once per *candidate* here rather than once per *running app* in
+    /// the scan — the latter cost ~35% CPU on the main thread with a few
+    /// hundred apps running (lstat per path component, every 2s and every
+    /// SwiftUI render).
+    static func candidateBundlePaths(for appPaths: [String]) -> Set<String> {
+        var candidates = Set<String>()
+        for path in appPaths {
+            let expanded = NSString(string: path).expandingTildeInPath
+            let url = URL(fileURLWithPath: expanded)
+            for variant in [expanded, url.standardizedFileURL.path, standardizedFileURL(path: path).path] {
+                candidates.insert(stripTrailingSlash(variant))
+            }
+        }
+        return candidates
+    }
+
+    /// Pure string comparison — no filesystem access. `bundlePath` matches
+    /// exactly; `executablePath` matches when it lives under a candidate's
+    /// `Contents/MacOS/`.
+    static func appMatches(
+        bundlePath: String?,
+        executablePath: String?,
+        candidateBundlePaths: Set<String>
+    ) -> Bool {
+        if let bundlePath, candidateBundlePaths.contains(stripTrailingSlash(bundlePath)) {
+            return true
+        }
+        if let executablePath {
+            return candidateBundlePaths.contains { executablePath.hasPrefix($0 + "/Contents/MacOS/") }
+        }
+        return false
+    }
+
+    private static func stripTrailingSlash(_ path: String) -> String {
+        path.count > 1 && path.hasSuffix("/") ? String(path.dropLast()) : path
     }
 
     private static func standardizedFileURL(path: String) -> URL {

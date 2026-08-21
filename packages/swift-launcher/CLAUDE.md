@@ -27,6 +27,10 @@ npm run format -w @slicc/swift-launcher        # swift format --in-place
 
 `Sliccstart/` — SwiftUI app (`SliccstartApp.swift` boots UI; `Models/AppScanner.swift` finds Chromium/CDP apps; `Models/SliccBootstrapper.swift` + `Models/SliccProcess.swift` handle launch/lifecycle; `Views/`). `SliccstartTests/` — tests. `assemble-app.mjs` — assembles `.app` bundle. `sign-and-package.sh` — signing/packaging.
 
+## Runtime Refresh Budget
+
+`SliccstartApp` ticks `refreshRuntimeStates` every 2 s and `runtimeState(for:)` runs on every SwiftUI render, so anything on that path must be O(1) and filesystem-free in the steady state. Electron liveness uses the launch record's `observedAppPID` (`kill(pid, 0)`) first; the `NSWorkspace.runningApplications` scan (`candidateBundlePaths` + `appMatches`, pure string compares) is a fallback only. Do not reintroduce per-app `resolvingSymlinksInPath()` — with ~270 running apps it pinned the launcher at ~40% CPU. Tests: `ElectronAppMatchingTests`.
+
 ## Operational Telemetry (OpTel)
 
 `SliccstartApp.swift`'s `WindowGroup` root calls `.optelAutoInstrument(appID:)` from `@slicc/swift-optel` once; on macOS that activates `enter`, global `click`, `navigate`, and `error` (uncaught `NSException`). `appID = Bundle.main.bundleIdentifier` (`com.slicc.sliccstart`); beacons land in `helix-225321.helix_rum.cluster`.
