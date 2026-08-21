@@ -87,6 +87,7 @@ export interface StartPageLeaderTrayOptions {
   onFollowerThinkingSet?: LeaderSyncManagerOptions['onFollowerThinkingSet'];
   readSprinkleContent?: LeaderSyncManagerOptions['readSprinkleContent'];
   onSprinkleLick?: LeaderSyncManagerOptions['onSprinkleLick'];
+  onSprinkleInstancesChanged?: LeaderSyncManagerOptions['onSprinkleInstancesChanged'];
   onForwardedLick?: (event: LickEvent, originBootstrapId: string) => void;
   onFollowerMessage: LeaderSyncManagerOptions['onFollowerMessage'];
   onFollowerAbort: LeaderSyncManagerOptions['onFollowerAbort'];
@@ -248,6 +249,7 @@ function buildSyncManager(
     onFollowerThinkingSet: options.onFollowerThinkingSet,
     readSprinkleContent: options.readSprinkleContent,
     onSprinkleLick: options.onSprinkleLick,
+    onSprinkleInstancesChanged: options.onSprinkleInstancesChanged,
     onForwardedLick: options.onForwardedLick,
     onFollowerMessage: options.onFollowerMessage,
     onFollowerAbort: options.onFollowerAbort,

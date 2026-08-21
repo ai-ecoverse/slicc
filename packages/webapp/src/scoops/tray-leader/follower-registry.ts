@@ -1,4 +1,5 @@
 import type { Logger } from '../../base/logger.js';
+import type { SprinkleInstance } from '../../shell/sprinkle-manager-handle.js';
 import { DataChannelKeepalive } from '../data-channel-keepalive.js';
 import {
   createLeaderSyncChannel,
@@ -50,6 +51,12 @@ export interface ConnectedFollower {
   legacyPeerLogged?: boolean;
   peerCapabilities?: TraySyncCapabilities;
   peerMotd?: string;
+  /**
+   * Sprinkles this follower reported as RENDERED (`sprinkle.instances`).
+   * Absent until the follower reports — an iOS follower never does, so its
+   * documents are absent from `sprinkle list` rather than guessed at.
+   */
+  sprinkleInstances?: string[];
 }
 
 export interface FollowerRegistryOptions {
@@ -196,6 +203,29 @@ export class FollowerRegistry {
       if (candidate === bootstrapId) return runtimeId;
     }
     return undefined;
+  }
+
+  /** Record a follower's latest rendered-sprinkle report. */
+  setSprinkleInstances(bootstrapId: string, sprinkleNames: string[]): void {
+    const follower = this.followers.get(bootstrapId);
+    if (!follower) return;
+    follower.sprinkleInstances = [...sprinkleNames];
+  }
+
+  /**
+   * Every follower-rendered sprinkle document, flattened for `sprinkle list`.
+   * Dropping a follower drops its instances with it — the registry entry is
+   * the only place they live.
+   */
+  getSprinkleInstances(): SprinkleInstance[] {
+    const instances: SprinkleInstance[] = [];
+    for (const [bootstrapId, follower] of this.followers) {
+      const runtimeId = this.runtimeIdForBootstrap(bootstrapId) ?? bootstrapId;
+      for (const name of follower.sprinkleInstances ?? []) {
+        instances.push({ name, runtimeId, runtime: follower.runtime });
+      }
+    }
+    return instances;
   }
 
   getFollowerMotds(): Map<string, string> {

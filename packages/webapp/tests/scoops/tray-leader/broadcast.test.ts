@@ -173,4 +173,77 @@ describe('BroadcastManager', () => {
     ]);
     expect(getModelSelectionState).toHaveBeenCalledWith('scoop-1');
   });
+  // ── issue #2166: targeted sprinkle delivery ───────────────────────────────
+
+  describe('broadcastSprinkleUpdate', () => {
+    it('fans out to every follower and reports which runtimes were reached', () => {
+      const { broadcast, registry, sent } = createHarness();
+      registry.setRuntimeId('follower-8a47', 'follower');
+
+      const result = broadcast.broadcastSprinkleUpdate('loose-ends', { action: 'load-items' });
+
+      expect(sent).toEqual([
+        { type: 'sprinkle.update', sprinkleName: 'loose-ends', data: { action: 'load-items' } },
+      ]);
+      expect(result).toEqual({ followers: ['follower-8a47'] });
+    });
+
+    it('delivers to a single runtime when targeted', () => {
+      const { broadcast, registry, sent } = createHarness();
+      registry.setRuntimeId('follower-8a47', 'follower');
+      const otherSend = vi.fn(() => true);
+      registry.followers.set('other', {
+        bootstrapId: 'other',
+        sync: { send: otherSend },
+      } as unknown as ConnectedFollower);
+      registry.setRuntimeId('follower-other', 'other');
+
+      const result = broadcast.broadcastSprinkleUpdate(
+        'loose-ends',
+        { action: 'load-items' },
+        { runtime: 'follower-8a47' }
+      );
+
+      expect(result).toEqual({ followers: ['follower-8a47'] });
+      expect(sent).toHaveLength(1);
+      expect(otherSend).not.toHaveBeenCalled();
+    });
+
+    it('reports an unresolvable runtime instead of falling back to a broadcast', () => {
+      // The repro in #2166 fabricated a runtime id and got the same success
+      // as the real one. A target that resolves to nothing must be visible.
+      const { broadcast, sent } = createHarness();
+
+      const result = broadcast.broadcastSprinkleUpdate(
+        'loose-ends',
+        { action: 'noop-probe' },
+        { runtime: 'TOTALLY-FAKE-ID' }
+      );
+
+      expect(result).toEqual({ followers: [], unknownRuntime: 'TOTALLY-FAKE-ID' });
+      expect(sent).toHaveLength(0);
+    });
+
+    it('leaves a follower whose channel refused the message out of the report', () => {
+      const { broadcast, registry } = createHarness();
+      registry.setRuntimeId('follower-8a47', 'follower');
+      const deadSend = vi.fn(() => false);
+      registry.followers.set('dead', {
+        bootstrapId: 'dead',
+        sync: { send: deadSend },
+      } as unknown as ConnectedFollower);
+      registry.setRuntimeId('follower-dead', 'dead');
+
+      const result = broadcast.broadcastSprinkleUpdate('loose-ends', { action: 'x' });
+
+      expect(result.followers).toEqual(['follower-8a47']);
+    });
+
+    it('reports no followers when none are connected', () => {
+      const { broadcast, registry } = createHarness();
+      registry.followers.clear();
+
+      expect(broadcast.broadcastSprinkleUpdate('loose-ends', { a: 1 })).toEqual({ followers: [] });
+    });
+  });
 });

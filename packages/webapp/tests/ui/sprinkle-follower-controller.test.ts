@@ -115,6 +115,8 @@ interface FakeSync extends SprinkleFollowerSync {
   fetched: string[];
   licks: Array<{ name: string; body: unknown; targetScoop?: string }>;
   cancels: Array<{ name: string; reason?: string }>;
+  /** Every `sprinkle.instances` report the controller sent, in order. */
+  instanceReports: string[][];
   contentByName: Map<string, string>;
   /** When set for a given name, calls to `fetchSprinkleContent(name)` resolve
    *  only when the test invokes the returned resolver. Used to drive timing
@@ -130,6 +132,7 @@ function makeFakeSync(): FakeSync {
   const fetched: string[] = [];
   const licks: Array<{ name: string; body: unknown; targetScoop?: string }> = [];
   const cancels: Array<{ name: string; reason?: string }> = [];
+  const instanceReports: string[][] = [];
   const manualGate = new Map<
     string,
     { resolve: (content: string) => void; reject: (err: Error) => void }
@@ -144,7 +147,11 @@ function makeFakeSync(): FakeSync {
     fetched,
     licks,
     cancels,
+    instanceReports,
     contentByName,
+    reportSprinkleInstances: vi.fn((names: string[]): void => {
+      instanceReports.push([...names]);
+    }),
     fetchSprinkleContent: vi.fn(async (name: string): Promise<string> => {
       fetched.push(name);
       const gate = manualGate.get(name);
@@ -755,6 +762,57 @@ describe('SprinkleFollowerController', () => {
 
       controller.handleSprinkleUpdate('dash', { x: 1 });
       expect(listener).not.toHaveBeenCalled();
+    });
+  });
+  // ── issue #2166: instance reporting ──────────────────────────────────────
+
+  describe('sprinkle.instances reporting', () => {
+    it('reports the rendered set after a sprinkle attaches', async () => {
+      sync.contentByName.set('loose-ends', '<p>hi</p>');
+
+      await controller.updateAvailable([makeSprinkle('loose-ends', { open: true })]);
+
+      // The owner needs to know a document exists here — otherwise it cannot
+      // tell "hydrated" from "push vanished".
+      expect(sync.instanceReports.at(-1)).toEqual(['loose-ends']);
+    });
+
+    it('reports the shrunken set after a close', async () => {
+      sync.contentByName.set('loose-ends', '<p>hi</p>');
+      await controller.updateAvailable([makeSprinkle('loose-ends', { open: true })]);
+
+      await controller.updateAvailable([makeSprinkle('loose-ends', { open: false })]);
+
+      expect(sync.instanceReports.at(-1)).toEqual([]);
+    });
+
+    it('does not report a sprinkle whose fetch failed', async () => {
+      // No content stub → the fetch rejects, nothing renders. Reporting it
+      // would recreate the "instance that plausibly stayed empty" ambiguity.
+      await controller.updateAvailable([makeSprinkle('bad', { open: true })]);
+
+      expect(sync.instanceReports.at(-1)).toEqual([]);
+    });
+
+    it('reports an empty set on dispose', async () => {
+      sync.contentByName.set('loose-ends', '<p>hi</p>');
+      await controller.updateAvailable([makeSprinkle('loose-ends', { open: true })]);
+
+      controller.dispose();
+
+      expect(sync.instanceReports.at(-1)).toEqual([]);
+    });
+
+    it('survives a sync that throws mid-reconnect', async () => {
+      sync.contentByName.set('loose-ends', '<p>hi</p>');
+      vi.mocked(sync.reportSprinkleInstances).mockImplementation(() => {
+        throw new Error('channel closed');
+      });
+
+      await expect(
+        controller.updateAvailable([makeSprinkle('loose-ends', { open: true })])
+      ).resolves.toBeUndefined();
+      expect(addSprinkle).toHaveBeenCalledTimes(1);
     });
   });
 });

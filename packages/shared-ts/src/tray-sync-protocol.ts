@@ -481,6 +481,17 @@ export type FollowerToLeaderMessage =
       body: unknown;
       targetScoop?: string;
     }
+  /**
+   * Sprinkles this follower currently has RENDERED, sent whenever the set
+   * changes (open, close, render failure). The leader keeps the latest report
+   * per follower so `sprinkle list` can show one line per live document
+   * instead of one line per sprinkle — an owner otherwise cannot tell that two
+   * documents exist against one store (issue #2166).
+   *
+   * Reported rather than inferred on the leader: a follower that was told to
+   * open a sprinkle but failed to render it must not count as an instance.
+   */
+  | { type: 'sprinkle.instances'; sprinkles: string[] }
   | { type: 'lick'; event: Omit<LickEvent, 'originFollowerId' | 'originLabel'> }
   | { type: 'targets.advertise'; targets: RemoteTargetInfo[]; runtimeId: string }
   | {

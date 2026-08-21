@@ -111,6 +111,10 @@ export class FollowerDispatch {
       case 'sprinkle.lick':
         this.handleFollowerSprinkleLick(bootstrapId, message);
         break;
+      case 'sprinkle.instances':
+        this.context.followers.setSprinkleInstances(bootstrapId, message.sprinkles);
+        this.context.options.onSprinkleInstancesChanged?.();
+        break;
       case 'lick':
         this.handleFollowerLick(bootstrapId, message);
         break;

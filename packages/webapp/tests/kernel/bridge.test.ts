@@ -11,6 +11,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { MAX_TRANSCRIPT_TOOL_TEXT_CHARS } from '../../src/scoops/transcript-limits.js';
 import type { ChannelMessage } from '../../src/scoops/types.js';
+import { clearSprinkleRoute, setSprinkleRoute } from '../../src/shell/sprinkle-routes.js';
 
 // Mock chrome.runtime
 const messageListeners: Array<
@@ -1584,6 +1585,65 @@ describe('Bridge.routeSprinkleLick', () => {
     expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
       expect.objectContaining({ chatJid: 'scoop-3' })
     );
+  });
+
+  /**
+   * `sprinkle-routes.ts` is localStorage-backed. Node's test realm has no
+   * `localStorage` (the kernel worker gets the page-synced shim), so the
+   * route table would silently read empty without this stub.
+   */
+  function withRouteStorage<T>(run: () => T): T {
+    const store = new Map<string, string>();
+    const original = (globalThis as { localStorage?: Storage }).localStorage;
+    Object.defineProperty(globalThis, 'localStorage', {
+      configurable: true,
+      value: {
+        getItem: (k: string) => store.get(k) ?? null,
+        setItem: (k: string, v: string) => void store.set(k, v),
+        removeItem: (k: string) => void store.delete(k),
+      },
+    });
+    try {
+      return run();
+    } finally {
+      if (original === undefined) {
+        Reflect.deleteProperty(globalThis, 'localStorage');
+      } else {
+        Object.defineProperty(globalThis, 'localStorage', {
+          configurable: true,
+          value: original,
+        });
+      }
+    }
+  }
+
+  it('applies the configured route when the caller stamped no targetScoop', async () => {
+    // A follower-forwarded lick carries no `targetScoop` — the follower has
+    // no route table and treats the leader as the route authority. Before
+    // this resolution nobody applied the route on that path, so a
+    // follower-mounted panel's licks reached the cone no matter what
+    // `sprinkle route` said (issue #2166).
+    await withRouteStorage(async () => {
+      setSprinkleRoute('welcome', 'helper');
+      await bridge.routeSprinkleLick('welcome', { action: 'go' });
+      expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ chatJid: 'scoop-2', channel: 'sprinkle' })
+      );
+      clearSprinkleRoute('welcome');
+    });
+  });
+
+  it('prefers an explicit targetScoop over the configured route', async () => {
+    await withRouteStorage(async () => {
+      setSprinkleRoute('welcome', 'helper');
+      await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'nope-not-a-scoop');
+      // Explicit target wins; it matches nothing, so the cone fallback applies
+      // rather than the route silently overriding the caller.
+      expect(mockOrchestrator.handleMessage).toHaveBeenCalledWith(
+        expect.objectContaining({ chatJid: 'cone-1' })
+      );
+      clearSprinkleRoute('welcome');
+    });
   });
 
   it('is a no-op when no orchestrator is bound', async () => {

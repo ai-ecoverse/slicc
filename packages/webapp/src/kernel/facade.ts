@@ -26,6 +26,7 @@ import {
 } from '../scoops/transcript-limits.js';
 import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../scoops/types.js';
+import { getSprinkleRoute } from '../shell/sprinkle-routes.js';
 import { TOOL_UI_MOUNTED_ACTION, toolUIRegistry } from '../tools/tool-ui.js';
 import { AgentEventStream } from './facade/agent-event-stream.js';
 import { ScoopPresentation } from './facade/scoop-presentation.js';
@@ -648,12 +649,21 @@ export class Bridge implements KernelFacade {
       void this.orchestrator.resolveNavigateHandoffByHuman(handoff.lickId, handoff.accepted);
     }
     const scoops = this.orchestrator.getScoops();
-    let target = targetScoop
+    // Resolve the configured route when the caller didn't stamp one. Licks
+    // raised on the leader's own panel arrive pre-stamped by
+    // `ui/sprinkle-bridge.ts`, but licks forwarded from a follower
+    // deliberately carry no `targetScoop` — the follower has no route table
+    // and treats the leader as the route authority. Before this lookup
+    // nobody applied the route on that path, so a follower-mounted panel's
+    // licks went to the cone no matter what `sprinkle route` said, and the
+    // owning scoop never saw its own panel's events (issue #2166).
+    const resolvedTarget = targetScoop ?? getSprinkleRoute(sprinkleName);
+    let target = resolvedTarget
       ? scoops.find(
           (s) =>
-            s.name === targetScoop ||
-            s.folder === targetScoop ||
-            s.folder === `${targetScoop}-scoop`
+            s.name === resolvedTarget ||
+            s.folder === resolvedTarget ||
+            s.folder === `${resolvedTarget}-scoop`
         )
       : undefined;
     if (!target) {

@@ -166,4 +166,42 @@ describe('FollowerRegistry', () => {
     expect(log.error).toHaveBeenCalledTimes(2);
     registry.removeFollower('stuck');
   });
+  // ── issue #2166: follower-reported sprinkle instances ────────────────────
+
+  it("reports a follower's rendered sprinkles with its runtime id", () => {
+    const registry = createRegistry();
+    registry.addFollower('b1', new FakeChannel(), { runtime: 'slicc-standalone' });
+    registry.setRuntimeId('follower-8a47', 'b1');
+
+    registry.setSprinkleInstances('b1', ['loose-ends', 'dash']);
+
+    expect(registry.getSprinkleInstances()).toEqual([
+      { name: 'loose-ends', runtimeId: 'follower-8a47', runtime: 'slicc-standalone' },
+      { name: 'dash', runtimeId: 'follower-8a47', runtime: 'slicc-standalone' },
+    ]);
+    registry.removeFollower('b1');
+  });
+
+  it("drops a follower's instances when it disconnects", () => {
+    const registry = createRegistry();
+    registry.addFollower('b1', new FakeChannel());
+    registry.setSprinkleInstances('b1', ['loose-ends']);
+
+    registry.removeFollower('b1');
+
+    expect(registry.getSprinkleInstances()).toEqual([]);
+  });
+
+  it('ignores a report from an unknown follower', () => {
+    const registry = createRegistry();
+    registry.setSprinkleInstances('ghost', ['loose-ends']);
+    expect(registry.getSprinkleInstances()).toEqual([]);
+  });
+
+  it('reports nothing for a follower that never sent a report (e.g. iOS)', () => {
+    const registry = createRegistry();
+    registry.addFollower('b1', new FakeChannel());
+    expect(registry.getSprinkleInstances()).toEqual([]);
+    registry.removeFollower('b1');
+  });
 });

@@ -7,14 +7,22 @@
  * callback map instead of temporary onMessage listeners.
  */
 
-import type { SprinkleManager } from '../ui/sprinkle-manager.js';
+import type {
+  SprinkleEntry,
+  SprinkleManagerProxySurface,
+  SprinkleSendReport,
+  SprinkleSendTarget,
+} from '../shell/sprinkle-manager-handle.js';
 
-interface Sprinkle {
-  name: string;
-  title: string;
-  path: string;
-  autoOpen: boolean;
-  icon?: string;
+/**
+ * Arguments a `sprinkle-op` request can carry. Named rather than an open
+ * string-keyed bag so the ops and their payloads stay checkable — the op
+ * vocabulary is fixed and small.
+ */
+interface SprinkleOpArgs {
+  name?: string;
+  data?: unknown;
+  target?: SprinkleSendTarget;
 }
 
 const TIMEOUT = 8000;
@@ -53,8 +61,8 @@ export function handleSprinkleOpResponse(payload: {
  * Creates a proxy that implements the SprinkleManager interface.
  * Runs in the offscreen document.
  */
-export function createSprinkleManagerProxy(): SprinkleManager {
-  function request(op: string, args: Record<string, unknown> = {}): Promise<unknown> {
+export function createSprinkleManagerProxy(): SprinkleManagerProxySurface {
+  function request(op: string, args: SprinkleOpArgs = {}): Promise<unknown> {
     const id = `sp-${Date.now()}-${Math.random().toString(36).slice(2)}`;
     return new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
@@ -75,28 +83,38 @@ export function createSprinkleManagerProxy(): SprinkleManager {
     });
   }
 
-  let cachedAvailable: Sprinkle[] = [];
+  let cachedAvailable: SprinkleEntry[] = [];
   let cachedOpened: string[] = [];
 
   return {
     async refresh(): Promise<void> {
-      cachedAvailable = ((await request('list')) as Sprinkle[]) ?? [];
+      cachedAvailable = ((await request('list')) as SprinkleEntry[]) ?? [];
       cachedOpened = ((await request('opened')) as string[]) ?? [];
     },
     async open(name: string, _zone?: string): Promise<void> {
       await request('open', { name });
     },
+    async reload(name: string): Promise<void> {
+      await request('reload', { name });
+    },
     close(name: string): void {
       request('close', { name }).catch(() => {});
     },
-    available(): Sprinkle[] {
+    available(): SprinkleEntry[] {
       return cachedAvailable;
     },
     opened(): string[] {
       return cachedOpened;
     },
-    sendToSprinkle(name: string, data: unknown): void {
-      request('send', { name, data }).catch(() => {});
+    async sendToSprinkle(
+      name: string,
+      data: unknown,
+      target?: SprinkleSendTarget
+    ): Promise<SprinkleSendReport> {
+      // Awaited so `sprinkle send` can report real reach and fail when the
+      // push reached nothing (issue #2166).
+      const result = (await request('send', { name, data, target })) as SprinkleSendReport | null;
+      return result ?? { leader: false, followers: [] };
     },
     async openNewAutoOpenSprinkles(): Promise<void> {
       await request('openNewAutoOpen');
@@ -104,5 +122,5 @@ export function createSprinkleManagerProxy(): SprinkleManager {
     async restoreOpenSprinkles(): Promise<void> {
       // No-op in proxy — side panel handles restore directly
     },
-  } as unknown as SprinkleManager;
+  };
 }
