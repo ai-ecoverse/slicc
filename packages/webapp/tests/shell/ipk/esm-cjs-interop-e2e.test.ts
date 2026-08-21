@@ -1,6 +1,6 @@
 /**
  * Real-shell e2e for CJS<->ESM interop (esm-cjs-interop, M5): `ipk install`
- * synthesized ESM / CJS fixture tarballs over a real AlmostBashShell +
+ * synthesized ESM / CJS fixture tarballs over a real AlmostBashShellHeadless +
  * fake-indexeddb VFS, then drive `node` / `node <script>` through the
  * production realm seam (host transpile + uniform CJS graph). Proves the
  * interop both directions and the dynamic-import-of-CJS case end-to-end:
@@ -147,10 +147,12 @@ let dbCounter = 0;
 
 async function newShell() {
   const { VirtualFS } = await import('../../../src/fs/index.js');
-  const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
+  const { AlmostBashShellHeadless } = await import(
+    '../../../src/shell/almost-bash-shell-headless.js'
+  );
   const fs = await VirtualFS.create({ dbName: `test-esm-interop-${dbCounter++}`, wipe: true });
   await fs.mkdir('/work', { recursive: true });
-  const shell = new AlmostBashShell({ fs, cwd: '/work' });
+  const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });
   return { shell, fs };
 }
 

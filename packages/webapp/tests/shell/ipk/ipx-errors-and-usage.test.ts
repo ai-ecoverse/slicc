@@ -1,6 +1,6 @@
 /**
  * Real-shell e2e for `ipx` error and usage handling (M6): drives the
- * production realm seam over a real AlmostBashShell + fake-indexeddb VFS with
+ * production realm seam over a real AlmostBashShellHeadless + fake-indexeddb VFS with
  * a mocked registry serving synthesized `.tgz` fixtures. Proves:
  *  - VAL-IPX-009: an unresolvable package produces a clear error, non-zero
  *    exit, and runs nothing (no stdout, no on-disk pollution).
@@ -151,10 +151,12 @@ let dbCounter = 0;
 
 async function newShell() {
   const { VirtualFS } = await import('../../../src/fs/index.js');
-  const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
+  const { AlmostBashShellHeadless } = await import(
+    '../../../src/shell/almost-bash-shell-headless.js'
+  );
   const fs = await VirtualFS.create({ dbName: `test-ipx-err-${dbCounter++}`, wipe: true });
   await fs.mkdir('/work', { recursive: true });
-  const shell = new AlmostBashShell({ fs, cwd: '/work' });
+  const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });
   return { shell, fs };
 }
 

@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
-import { AlmostBashShell } from '../../src/shell/index.js';
+import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
 import { VfsAdapter } from '../../src/shell/vfs-adapter.js';
 
 describe('shell symlink removal', () => {
   let fs: VirtualFS;
-  let shell: AlmostBashShell;
+  let shell: AlmostBashShellHeadless;
 
   beforeEach(async () => {
     fs = await VirtualFS.create({ dbName: 'shell-symlink-removal', wipe: true });
-    shell = new AlmostBashShell({ fs });
+    shell = new AlmostBashShellHeadless({ fs });
     await fs.mkdir('/target');
     await fs.writeFile('/target/keep.txt', 'important');
   });

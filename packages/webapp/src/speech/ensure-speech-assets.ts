@@ -38,9 +38,8 @@ import {
   resolveTargetDir,
 } from '../shell/supplemental-commands/hf-download.js';
 import { ESPEAK_DIST_VFS_PATH, ESPEAK_GLUE_FILE, ESPEAK_WASM_FILE } from './espeak-phonemizer.js';
-import { KOKORO_MODEL_ID } from './kokoro-engine.js';
+import { KOKORO_MODEL_ID, WHISPER_MODEL_ID } from './model-ids.js';
 import { ORT_DIST_VFS_PATH, ORT_WASM_DIST_FILES } from './transformers-env.js';
-import { WHISPER_MODEL_ID } from './whisper-engine.js';
 
 const log = createLogger('speech:ensure-assets');
 

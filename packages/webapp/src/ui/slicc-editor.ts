@@ -32,6 +32,7 @@ import {
   placeholder,
 } from '@codemirror/view';
 import { tags } from '@lezer/highlight';
+import { upgradeOwnProperties } from './upgrade-own-properties.js';
 
 // Built-in language imports (lazy-loaded via compartment swap)
 const LANG_LOADERS: Record<string, () => Promise<Extension>> = {
@@ -260,6 +261,11 @@ export class SliccEditorElement extends HTMLElement {
     if (lang) {
       void this.loadLanguage(lang);
     }
+
+    // The bundle loads asynchronously in sprinkle iframes, so `el.value = …`
+    // from an inline script can land before this class did. Adopt it now that
+    // the view exists — `set value` no-ops without one.
+    upgradeOwnProperties(this, ['value']);
   }
 
   disconnectedCallback() {

@@ -3,7 +3,7 @@
  * `node:` / bare `fs` built-ins from inside a `.jsh` script
  * (esm-schemes-and-sliccy, M5; VAL-GLOBALS-014, VAL-ESM-009/010).
  *
- * Drives a real `AlmostBashShell` over a `fake-indexeddb` VirtualFS through the
+ * Drives a real `AlmostBashShellHeadless` over a `fake-indexeddb` VirtualFS through the
  * production realm seam (host transpile + uniform CJS graph). `sliccy:`/`node:`
  * /bare `fs` are built-in schemes, so no `ipk install` / registry mock is
  * needed — these prove a `.jsh` using `import` from those schemes runs
@@ -16,10 +16,12 @@ let dbCounter = 0;
 
 async function newShell() {
   const { VirtualFS } = await import('../../../src/fs/index.js');
-  const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
+  const { AlmostBashShellHeadless } = await import(
+    '../../../src/shell/almost-bash-shell-headless.js'
+  );
   const fs = await VirtualFS.create({ dbName: `test-esm-schemes-jsh-${dbCounter++}`, wipe: true });
   await fs.mkdir('/work', { recursive: true });
-  const shell = new AlmostBashShell({ fs, cwd: '/work' });
+  const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });
   return { shell, fs };
 }
 

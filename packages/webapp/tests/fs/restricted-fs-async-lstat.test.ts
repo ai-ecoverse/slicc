@@ -23,7 +23,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
 import { RestrictedFS } from '../../src/fs/restricted-fs.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import { AlmostBashShell } from '../../src/shell/almost-bash-shell.js';
+import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
 
 describe('RestrictedFS async lstat rejects ancestor-symlink escape (VAL-FS-019 parity)', () => {
   let vfs: VirtualFS;
@@ -114,7 +114,7 @@ describe('RestrictedFS async lstat rejects ancestor-symlink escape (VAL-FS-019 p
 describe('RestrictedFS async-lstat shell integration (VAL-FS-019 parity)', () => {
   let vfs: VirtualFS;
   let restricted: RestrictedFS;
-  let shell: AlmostBashShell;
+  let shell: AlmostBashShellHeadless;
   const scoopFolder = '/scoops/agent-async-lstat-shell/';
   const cwd = '/home/wiki/';
 
@@ -136,7 +136,7 @@ describe('RestrictedFS async-lstat shell integration (VAL-FS-019 parity)', () =>
     await vfs.symlink('/scoops/other-scoop', '/shared/escape-link');
 
     restricted = new RestrictedFS(vfs, [scoopFolder, '/shared/', cwd], ['/workspace/']);
-    shell = new AlmostBashShell({
+    shell = new AlmostBashShellHeadless({
       fs: restricted as unknown as VirtualFS,
       cwd,
     });

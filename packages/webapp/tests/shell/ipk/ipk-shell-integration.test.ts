@@ -1,6 +1,6 @@
 /**
  * End-to-end integration test for `ipk install` driven through a real
- * AlmostBashShell over a fake-indexeddb VirtualFS, with `SecureFetch`
+ * AlmostBashShellHeadless over a fake-indexeddb VirtualFS, with `SecureFetch`
  * mocked to serve synthesized `.tgz` fixtures.
  */
 import 'fake-indexeddb/auto';
@@ -174,20 +174,22 @@ vi.mock('../../../src/shell/proxied-fetch.js', async (importOriginal) => {
 
 let dbCounter = 0;
 
-describe('ipk via real AlmostBashShell', () => {
+describe('ipk via real AlmostBashShellHeadless', () => {
   beforeEach(() => {
     sharedRegistry.current = { packuments: {}, tarballs: {} };
   });
 
   async function newShell() {
     const { VirtualFS } = await import('../../../src/fs/index.js');
-    const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
+    const { AlmostBashShellHeadless } = await import(
+      '../../../src/shell/almost-bash-shell-headless.js'
+    );
     const fs = await VirtualFS.create({
       dbName: `test-ipk-shell-${dbCounter++}`,
       wipe: true,
     });
     await fs.mkdir('/work', { recursive: true });
-    const shell = new AlmostBashShell({ fs, cwd: '/work' });
+    const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });
     return { shell, fs };
   }
 

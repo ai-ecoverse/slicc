@@ -1,6 +1,6 @@
 /**
  * Discoverability e2e for the ipk/ipx command family (M6, VAL-CROSS-014):
- * drives a real AlmostBashShell over a fake-indexeddb VFS and proves that all
+ * drives a real AlmostBashShellHeadless over a fake-indexeddb VFS and proves that all
  * four commands are present in the command catalog (`commands`) and on the
  * `which`/`/usr/bin` surfaces, and that each responds to `--help` with a
  * non-empty, recognizable usage block and exit 0.
@@ -13,7 +13,7 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
-import { AlmostBashShell } from '../../../src/shell/almost-bash-shell.js';
+import { AlmostBashShellHeadless } from '../../../src/shell/almost-bash-shell-headless.js';
 
 const PACKAGE_COMMANDS = ['ipk', 'npm', 'ipx', 'npx'] as const;
 
@@ -26,7 +26,7 @@ describe('ipk/ipx discoverability (VAL-CROSS-014)', () => {
   });
 
   it('lists ipk, npm, ipx, npx in the `commands` catalog under Packages', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const result = await shell.executeCommand('commands');
     expect(result.exitCode).toBe(0);
 
@@ -41,7 +41,7 @@ describe('ipk/ipx discoverability (VAL-CROSS-014)', () => {
   });
 
   it('resolves all four commands through `which` and /usr/bin', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const which = await shell.executeCommand('which ipk npm ipx npx');
     expect(which.exitCode).toBe(0);
     for (const name of PACKAGE_COMMANDS) {
@@ -56,7 +56,7 @@ describe('ipk/ipx discoverability (VAL-CROSS-014)', () => {
   });
 
   it('prints recognizable `ipk --help` usage mentioning install/i and exits 0', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const help = await shell.executeCommand('ipk --help');
     expect(help.exitCode).toBe(0);
     expect(help.stdout.trim().length).toBeGreaterThan(0);
@@ -68,7 +68,7 @@ describe('ipk/ipx discoverability (VAL-CROSS-014)', () => {
   });
 
   it('prints recognizable `npm --help` usage (ipk alias) and exits 0', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const help = await shell.executeCommand('npm --help');
     expect(help.exitCode).toBe(0);
     expect(help.stdout.trim().length).toBeGreaterThan(0);
@@ -79,7 +79,7 @@ describe('ipk/ipx discoverability (VAL-CROSS-014)', () => {
   });
 
   it('prints recognizable `ipx --help` usage mentioning running a package/bin and exits 0', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const help = await shell.executeCommand('ipx --help');
     expect(help.exitCode).toBe(0);
     expect(help.stdout.trim().length).toBeGreaterThan(0);
@@ -91,7 +91,7 @@ describe('ipk/ipx discoverability (VAL-CROSS-014)', () => {
   });
 
   it('prints recognizable `npx --help` usage (ipx alias) and exits 0', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const help = await shell.executeCommand('npx --help');
     expect(help.exitCode).toBe(0);
     expect(help.stdout.trim().length).toBeGreaterThan(0);
@@ -103,7 +103,7 @@ describe('ipk/ipx discoverability (VAL-CROSS-014)', () => {
   });
 
   it('`ipk install --help` prints usage and exits 0', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const help = await shell.executeCommand('ipk install --help');
     expect(help.exitCode).toBe(0);
     expect(help.stdout).toContain('Usage:');
@@ -112,7 +112,7 @@ describe('ipk/ipx discoverability (VAL-CROSS-014)', () => {
   });
 
   it('resolves a single `--help` from `commands <name>` for each package command', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     for (const name of PACKAGE_COMMANDS) {
       const help = await shell.executeCommand(`commands ${name}`);
       expect(help.exitCode).toBe(0);

@@ -1,6 +1,6 @@
 /**
  * Real-shell e2e for the `ipx` runner (ipx-run-installed, M6): `ipk install`
- * synthesized bin fixtures over a real AlmostBashShell + fake-indexeddb VFS,
+ * synthesized bin fixtures over a real AlmostBashShellHeadless + fake-indexeddb VFS,
  * then drive `ipx` through the production realm seam. Proves:
  *  - VAL-IPX-001: runs an installed package bin and prints its output.
  *  - VAL-IPX-002: argv and stdin are forwarded to the bin (no injection/drop).
@@ -150,10 +150,12 @@ let dbCounter = 0;
 
 async function newShell() {
   const { VirtualFS } = await import('../../../src/fs/index.js');
-  const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
+  const { AlmostBashShellHeadless } = await import(
+    '../../../src/shell/almost-bash-shell-headless.js'
+  );
   const fs = await VirtualFS.create({ dbName: `test-ipx-${dbCounter++}`, wipe: true });
   await fs.mkdir('/work', { recursive: true });
-  const shell = new AlmostBashShell({ fs, cwd: '/work' });
+  const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });
   return { shell, fs };
 }
 

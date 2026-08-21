@@ -4,13 +4,13 @@
  *
  * `ScoopContext.initShellAndSkills` now threads the scoop's process context
  * (`processManager` + `processOwner` + `getCurrentShellPid`) into the
- * `AlmostBashShell` it builds for the agent's `bash` tool. Without it,
+ * `AlmostBashShellHeadless` it builds for the agent's `bash` tool. Without it,
  * `buildJshProcessConfig()` returns `undefined` and a hanging `node`/`.jsh`/
  * `python` registers at `ppid:1`; the scoop's stop/dispose/drop path signals
  * the `kind:'scoop-turn'` pid, whose ppid fan-out only reaches true
  * descendants — so the orphaned realm child survives and keeps running.
  *
- * This drives the REAL `ProcessManager` + `AlmostBashShell` (in-process realm)
+ * This drives the REAL `ProcessManager` + `AlmostBashShellHeadless` (in-process realm)
  * so the parenting + fan-out is exercised end-to-end.
  */
 
@@ -19,7 +19,7 @@ import 'fake-indexeddb/auto';
 import type { BrowserAPI } from '../../src/cdp/index.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { ProcessManager } from '../../src/kernel/process-manager.js';
-import { AlmostBashShell } from '../../src/shell/index.js';
+import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
 
 /** A realm-backed foreground job that yields (so the in-process realm settles). */
 const YIELDING_NODE = "node -e 'await new Promise(r=>setTimeout(r,60000))'";
@@ -71,7 +71,7 @@ describe('PR #1166 (P1) — agent bash-tool realm children parent under the scoo
     const fs = await makeFs();
     const pm = new ProcessManager();
     const turn = spawnTurn(pm);
-    const shell = new AlmostBashShell({
+    const shell = new AlmostBashShellHeadless({
       fs,
       cwd: '/scoops/test/workspace',
       browserAPI: {} as BrowserAPI,
@@ -103,7 +103,7 @@ describe('PR #1166 (P1) — agent bash-tool realm children parent under the scoo
     const fs = await makeFs();
     const pm = new ProcessManager();
     const turn = spawnTurn(pm);
-    const shell = new AlmostBashShell({
+    const shell = new AlmostBashShellHeadless({
       fs,
       cwd: '/scoops/test/workspace',
       browserAPI: {} as BrowserAPI,
@@ -160,7 +160,7 @@ describe('PR #1166 (P1) — agent bash-tool realm children parent under the scoo
     const fs = await makeFs();
     const pm = new ProcessManager();
     const turn = spawnTurn(pm);
-    const shell = new AlmostBashShell({
+    const shell = new AlmostBashShellHeadless({
       fs,
       cwd: '/scoops/test/workspace',
       browserAPI: {} as BrowserAPI,
@@ -203,7 +203,7 @@ describe('PR #1166 (P1) — agent bash-tool realm children parent under the scoo
     );
     const pm = new ProcessManager();
     const turn = spawnTurn(pm);
-    const shell = new AlmostBashShell({
+    const shell = new AlmostBashShellHeadless({
       fs,
       cwd: '/workspace',
       browserAPI: {} as BrowserAPI,
@@ -251,7 +251,7 @@ describe('PR #1166 (P1) — agent bash-tool realm children parent under the scoo
     const turn = spawnTurn(pm);
     // Same manager + owner, but NO `getCurrentShellPid` — mirrors the pre-fix
     // construction where `buildJshProcessConfig` has no parent pid to attach.
-    const shell = new AlmostBashShell({
+    const shell = new AlmostBashShellHeadless({
       fs,
       cwd: '/scoops/test/workspace',
       browserAPI: {} as BrowserAPI,

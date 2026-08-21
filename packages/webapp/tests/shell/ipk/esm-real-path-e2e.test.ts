@@ -1,5 +1,5 @@
 /**
- * Real-path ESM e2e (esm-parity-and-real-e2e, M5): drive a real AlmostBashShell
+ * Real-path ESM e2e (esm-parity-and-real-e2e, M5): drive a real AlmostBashShellHeadless
  * over a fake-indexeddb VFS with a mocked `createProxiedFetch` serving
  * synthesized `.tgz` fixtures shaped like the contract's real registry packages
  * (`nanoid` ESM-only, `uuid` dual CJS/ESM, `escape-string-regexp` ESM-only,
@@ -152,10 +152,12 @@ let dbCounter = 0;
 
 async function newShell() {
   const { VirtualFS } = await import('../../../src/fs/index.js');
-  const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
+  const { AlmostBashShellHeadless } = await import(
+    '../../../src/shell/almost-bash-shell-headless.js'
+  );
   const fs = await VirtualFS.create({ dbName: `test-esm-real-${dbCounter++}`, wipe: true });
   await fs.mkdir('/work', { recursive: true });
-  const shell = new AlmostBashShell({ fs, cwd: '/work' });
+  const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });
   return { shell, fs };
 }
 

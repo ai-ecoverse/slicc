@@ -288,6 +288,16 @@ editor.setGutterMarkers({
 ></slicc-diff>
 ```
 
+**Element bundles load asynchronously.** `<slicc-diff>` and `<slicc-editor>`
+arrive after your inline script runs, so set PROPERTIES (adopted on upgrade) and
+await the bundle before calling METHODS:
+
+```javascript
+window.__SLICC_SPRINKLE_ASSETS__['slicc-editor.js'].then(function () {
+  document.getElementById('lyrics').setHighlighter({ token: myTokenizer });
+});
+```
+
 **Patch mode** (unified diff string):
 
 ```html

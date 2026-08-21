@@ -2,7 +2,7 @@
  * Real-shell e2e for require-error -> shell exit-status parity
  * (m4-fix-node-require-error-exit-code).
  *
- * Drives a real `AlmostBashShell` over a fake-indexeddb VirtualFS and runs
+ * Drives a real `AlmostBashShellHeadless` over a fake-indexeddb VirtualFS and runs
  * `node -e "require(...)"` / `node <script>` through the production realm seam,
  * asserting that EVERY uncaught realm error maps to a NON-ZERO shell exit
  * status (Node parity: a failing require exits 1), while a successful require
@@ -26,13 +26,15 @@ let dbCounter = 0;
 
 async function newShell() {
   const { VirtualFS } = await import('../../../src/fs/index.js');
-  const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
+  const { AlmostBashShellHeadless } = await import(
+    '../../../src/shell/almost-bash-shell-headless.js'
+  );
   const fs = await VirtualFS.create({
     dbName: `test-require-exit-${dbCounter++}`,
     wipe: true,
   });
   await fs.mkdir('/work/node_modules', { recursive: true });
-  const shell = new AlmostBashShell({ fs, cwd: '/work' });
+  const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });
   return { shell, fs };
 }
 

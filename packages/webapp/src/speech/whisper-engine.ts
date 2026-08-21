@@ -26,6 +26,7 @@
 
 import { createLogger } from '../base/logger.js';
 import { createDownloadTracker, type DownloadSnapshot } from './download-progress.js';
+import { WHISPER_MODEL_ID } from './model-ids.js';
 import {
   assertLocalModelPresent,
   configureTransformersEnv,
@@ -35,7 +36,7 @@ import {
 const log = createLogger('speech:whisper');
 
 /** The model the enhanced engine runs (https://ttslab.dev/models/whisper-tiny). */
-export const WHISPER_MODEL_ID = 'onnx-community/whisper-tiny';
+export { WHISPER_MODEL_ID };
 
 export type WhisperProgress = (snapshot: DownloadSnapshot) => void;
 

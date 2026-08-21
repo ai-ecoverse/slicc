@@ -25,7 +25,7 @@ const mocks = vi.hoisted(() => {
     ]),
     createBashTool: vi.fn(() => ({ name: 'bash' })),
     createScoopManagementTools: vi.fn(() => [{ name: 'send_message' }]),
-    AlmostBashShell: vi.fn(function () {
+    AlmostBashShellHeadless: vi.fn(function () {
       // `dispose` is real on the shell and `ScoopContext.dispose()` calls it, so
       // the stub needs it for any test that exercises teardown.
       return { dispose: vi.fn() };
@@ -55,8 +55,8 @@ vi.mock('../../src/tools/index.js', () => ({
   createBashTool: mocks.createBashTool,
 }));
 
-vi.mock('../../src/shell/index.js', () => ({
-  AlmostBashShell: mocks.AlmostBashShell,
+vi.mock('../../src/shell/almost-bash-shell-headless.js', () => ({
+  AlmostBashShellHeadless: mocks.AlmostBashShellHeadless,
 }));
 
 vi.mock('../../src/providers/account-store.js', () => ({
@@ -162,8 +162,8 @@ describe('ScoopContext active tool surface', () => {
 
     await ctx.init();
 
-    expect(mocks.AlmostBashShell).toHaveBeenCalledTimes(1);
-    const shellOptions = (mocks.AlmostBashShell.mock.calls[0] as unknown[])[0] as Record<
+    expect(mocks.AlmostBashShellHeadless).toHaveBeenCalledTimes(1);
+    const shellOptions = (mocks.AlmostBashShellHeadless.mock.calls[0] as unknown[])[0] as Record<
       string,
       unknown
     >;
@@ -246,7 +246,7 @@ describe('ScoopContext active tool surface', () => {
 
     await ctx.init();
 
-    const shellOptions = (mocks.AlmostBashShell.mock.calls[0] as unknown[])[0] as Record<
+    const shellOptions = (mocks.AlmostBashShellHeadless.mock.calls[0] as unknown[])[0] as Record<
       string,
       unknown
     >;

@@ -1,6 +1,6 @@
 /**
  * Real-shell e2e for the CJS require hard-switch (cjs-require-rewire-core):
- * `ipk install` a package over a real AlmostBashShell + fake-indexeddb VFS,
+ * `ipk install` a package over a real AlmostBashShellHeadless + fake-indexeddb VFS,
  * then `node` `require()` it through the production realm seam. Proves that
  * `require()` resolves from the installed `node_modules` graph (VAL-CROSS-001),
  * transitive deps deep-require transparently (VAL-CROSS-002), and a missing
@@ -155,10 +155,12 @@ let dbCounter = 0;
 
 async function newShell() {
   const { VirtualFS } = await import('../../../src/fs/index.js');
-  const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
+  const { AlmostBashShellHeadless } = await import(
+    '../../../src/shell/almost-bash-shell-headless.js'
+  );
   const fs = await VirtualFS.create({ dbName: `test-ipk-require-${dbCounter++}`, wipe: true });
   await fs.mkdir('/work', { recursive: true });
-  const shell = new AlmostBashShell({ fs, cwd: '/work' });
+  const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });
   return { shell, fs };
 }
 

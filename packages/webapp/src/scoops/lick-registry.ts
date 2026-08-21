@@ -13,7 +13,7 @@
 import { type MountRecoveryEntry, shellQuote } from '../fs/mount-recovery.js';
 import type { RestrictedFS } from '../fs/restricted-fs.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
-import type { AlmostBashShell } from '../shell/almost-bash-shell.js';
+import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import type { SudoDecision } from '../sudo/index.js';
 import type { LickEvent } from './lick-manager.js';
 import { appendLlmsTxtIgnoreHost, discoveryHostname } from './llms-txt-ignore.js';
@@ -60,7 +60,7 @@ export interface LickRegistryDeps {
    * paths to actually run the relevant commands in the cone's environment.
    * Returns `null` when no cone is registered or its context is not ready.
    */
-  getConeShell(): AlmostBashShell | null;
+  getConeShell(): AlmostBashShellHeadless | null;
   /** Cone filesystem used to persist a dismissed discovery host. */
   getConeFs(): VirtualFS | RestrictedFS | null;
   /**

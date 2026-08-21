@@ -21,6 +21,7 @@
  */
 
 import { type FileContents, FileDiff, parsePatchFiles, type ThemeTypes } from '@pierre/diffs';
+import { upgradeOwnProperties } from './upgrade-own-properties.js';
 
 // The <diffs-container> web component and core CSS are provided by the IIFE
 // bundle (slicc-diff-entry.ts → web-components.js). For the renderInline path,
@@ -99,6 +100,9 @@ export class SliccDiffElement extends HTMLElement {
   connectedCallback() {
     if (this.connected) return;
     this.connected = true;
+    // The bundle loads asynchronously in sprinkle iframes, so `el.patch = …`
+    // from an inline script can land before this class did.
+    upgradeOwnProperties(this, ['oldFile', 'newFile', 'patch', 'options']);
 
     // Ensure the host element is block-level so it has dimensions
     if (!this.style.display) {

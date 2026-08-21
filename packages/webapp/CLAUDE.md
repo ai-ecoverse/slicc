@@ -106,6 +106,22 @@ Non-obvious rules:
   `hear-*` panel-RPC. Extension `uiOnly` side panel: Chrome denies `getUserMedia`
   from a cross-origin iframe, so `wc-follower.ts` skips `ptt` and drops
   "Take a photo".
+- **Sprinkle element bundles ride the app's chunk graph.** `<slicc-diff>` /
+  `<slicc-editor>` are Rollup entries (`build.rollupOptions.input`), and
+  `dist/ui/slicc-diff.js` / `slicc-editor.js` are stable-name loader shims that
+  dynamic-import the hashed entry — so Shiki, `@pierre/diffs`, and CM6 are the
+  SAME chunks the app ships, not a second eager copy (`slicc-diff.js` alone was
+  5.8 MB as an esbuild IIFE, because esbuild inlines dynamic imports). Loading
+  is async: elements must adopt pre-upgrade properties
+  (`ui/upgrade-own-properties.ts`), and sprinkles awaiting a method API use
+  `window.__SLICC_SPRINKLE_ASSETS__['slicc-diff.js']`.
+- **The kernel-worker build stubs `speech/speak.ts` + `speech/hear.ts`**
+  (`stubPageRealmSpeechPlugin`, `worker.plugins` only). `say`/`hear` keep their
+  local and panel-RPC branches in one module; the local branch is gated on
+  `speechSynthesis`, so in a worker it is dead code that was dragging
+  `kokoro-js` + `@huggingface/transformers` (~1.8 MB) into a build the page
+  graph already covers. Same reason `speech/model-ids.ts` exists — a model-id
+  constant must never be imported from an engine.
 - **Cherry origin detection** (`cherry-host-transport.ts`): `resolveParentOrigin()`
   prefers `location.ancestorOrigins[0]` (unforgeable); `document.referrer` alone
   breaks when Referer is stripped or in HTTP-in-HTTPS dev embeds.
