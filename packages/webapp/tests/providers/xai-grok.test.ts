@@ -254,6 +254,22 @@ describe('xai-grok provider', () => {
     );
   });
 
+  // Catalog-staleness guard: `getModelIds()` is a pass-through over pi-ai's
+  // bundled xAI data, so a stale `@earendil-works/pi-ai` pin is the only way a
+  // shipped Grok model can go missing from the dropdown. Assert against the
+  // real catalog (not the mock) so a lockfile that predates a model release
+  // fails here instead of silently in the UI.
+  it('surfaces every shipped Grok model from the real pi-ai catalog', async () => {
+    const { getModels } = await vi.importActual<typeof import('@earendil-works/pi-ai/compat')>(
+      '@earendil-works/pi-ai/compat'
+    );
+
+    const ids = (getModels('xai') as Model<Api>[]).map((model) => model.id);
+
+    expect(ids).toContain('grok-4.6');
+    expect(ids).toContain(config.defaultModelId);
+  });
+
   it('defaults to Grok 4.5 without the retired Grok Heavy copy', () => {
     expect(config.defaultModelId).toBe('grok-4.5');
     expect(config.description).toContain('Default model is Grok 4.5');
