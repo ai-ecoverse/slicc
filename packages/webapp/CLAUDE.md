@@ -84,8 +84,9 @@ Non-obvious rules:
   presentation kept for the wire. New `scoops/` and `kernel/` code asks
   `orchestrator.getWorkUnits()` (`getParent`, `getChildren`, `resolveDefaultRoot`) or
   the unit's `policy.*`; never add a `scoops.find((s) => s.isCone)` or an
-  `isCone` branch. Every creation path sets `parentJid` explicitly; restore
-  backfills and persists it. See `docs/work-unit.md`.
+  `isCone` branch — `npm run lint:iscone-ratchet` fails on new reads outside
+  `ui/`. Every creation path sets `parentJid` explicitly; restore backfills
+  and persists it. See `docs/work-unit.md`.
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without
   queue/watermark loss; user `web` bypasses the window (immediate/awaited,
   prevents deferral). `transcript-limits.ts` caps bridge/event transcripts at 64 KB

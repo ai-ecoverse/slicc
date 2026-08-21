@@ -280,7 +280,11 @@ describe('ScoopContext overflow compaction recovery', () => {
   });
 
   it('keeps cone exhaustion human-facing instead of fatal', async () => {
-    ctx = new ScoopContext({ ...scoop, isCone: true, type: 'cone' }, cb, {} as never);
+    ctx = new ScoopContext(
+      { ...scoop, isCone: true, type: 'cone', parentJid: null },
+      cb,
+      {} as never
+    );
     injectAgent(ctx, { secondOverflow: true });
 
     await ctx.prompt('work');

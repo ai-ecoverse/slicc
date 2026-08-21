@@ -40,7 +40,8 @@ export function matchesLlmsTxtIgnore(hostname: string, entries: readonly string[
 
 /** True when a scoop can fetch URLs or drive a browser. */
 export function scoopCanBrowse(scoop: RegisteredScoop): boolean {
-  if (scoop.isCone) return true;
+  // A root unit's browsing is gated by the user policy, not by `allowedCommands`.
+  if (scoop.parentJid === null) return true;
   const allowed = scoop.config?.allowedCommands;
   if (allowed === undefined || allowed.includes('*')) return true;
   return allowed.some((command) =>

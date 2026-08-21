@@ -269,7 +269,7 @@ export class ScoopMessageRouter {
       message.channel === 'bash';
     return (
       !scoop ||
-      scoop.isCone ||
+      scoop.parentJid === null ||
       !scoop.requiresTrigger ||
       !scoop.trigger ||
       isLick ||

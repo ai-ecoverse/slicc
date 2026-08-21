@@ -55,6 +55,7 @@ function makeHarness(sudoManager: SudoManager | null = null) {
   const onMessageUpdate = vi.fn();
   const deps: ScoopApprovalRouterDeps = {
     getScoops: () => scoops,
+    findApprover: () => cone,
     getSudoManager: () => sudoManager,
     getLickManager: () => null,
     handleMessage,

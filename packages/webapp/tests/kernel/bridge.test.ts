@@ -76,7 +76,14 @@ describe('Bridge createCallbacks', () => {
 
     mockOrchestrator = {
       getScoops: vi.fn(() => [
-        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          parentJid: null,
+          assistantLabel: 'sliccy',
+        },
         {
           jid: 'scoop_test',
           name: 'Test',
@@ -383,7 +390,14 @@ describe('Bridge buildStateSnapshot', () => {
 
     mockOrchestrator = {
       getScoops: vi.fn(() => [
-        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          parentJid: null,
+          assistantLabel: 'sliccy',
+        },
         {
           jid: 'scoop_test',
           name: 'Test',
@@ -492,7 +506,14 @@ describe('Bridge getBuffer/getOrCreateAssistantMsg', () => {
 
     mockOrchestrator = {
       getScoops: vi.fn(() => [
-        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          parentJid: null,
+          assistantLabel: 'sliccy',
+        },
         {
           jid: 'scoop_test',
           name: 'Test',
@@ -579,7 +600,14 @@ describe('Bridge persistScoop', () => {
 
     mockOrchestrator = {
       getScoops: vi.fn(() => [
-        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          parentJid: null,
+          assistantLabel: 'sliccy',
+        },
         {
           jid: 'scoop_test',
           name: 'Test',
@@ -818,7 +846,14 @@ describe('Bridge handlePanelMessage', () => {
     bridge = new Bridge();
     mockOrchestrator = {
       getScoops: vi.fn(() => [
-        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          parentJid: null,
+          assistantLabel: 'sliccy',
+        },
         {
           jid: 'scoop_test',
           name: 'Test',
@@ -1129,7 +1164,14 @@ describe('Bridge follower mode', () => {
     bridge = new Bridge();
     mockOrchestrator = {
       getScoops: vi.fn(() => [
-        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          parentJid: null,
+          assistantLabel: 'sliccy',
+        },
         {
           jid: 'scoop_test',
           name: 'Test',
@@ -1521,7 +1563,14 @@ describe('Bridge.routeSprinkleLick', () => {
     bridge = new Bridge();
     mockOrchestrator = {
       getScoops: vi.fn(() => [
-        { jid: 'cone-1', name: 'cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'cone-1',
+          name: 'cone',
+          folder: 'cone',
+          isCone: true,
+          parentJid: null,
+          assistantLabel: 'sliccy',
+        },
         {
           jid: 'scoop-2',
           name: 'helper',
@@ -1580,7 +1629,14 @@ describe('Bridge.routeSprinkleLick', () => {
 
   it('matches targetScoop by folder with a "-scoop" suffix', async () => {
     mockOrchestrator.getScoops = vi.fn(() => [
-      { jid: 'cone-1', name: 'cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+      {
+        jid: 'cone-1',
+        name: 'cone',
+        folder: 'cone',
+        isCone: true,
+        parentJid: null,
+        assistantLabel: 'sliccy',
+      },
       {
         jid: 'scoop-3',
         name: 'Helper',
@@ -1916,7 +1972,14 @@ describe('Bridge request-scoop-transcript', () => {
     bridge = new Bridge();
     await bridge.bind({
       getScoops: vi.fn(() => [
-        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          parentJid: null,
+          assistantLabel: 'sliccy',
+        },
       ]),
       handleMessage: vi.fn().mockResolvedValue(undefined),
       getScoopContext: vi.fn(() => undefined),
@@ -1984,7 +2047,14 @@ describe('Bridge request-scoop-chat-messages', () => {
     bridge = new Bridge();
     await bridge.bind({
       getScoops: vi.fn(() => [
-        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          parentJid: null,
+          assistantLabel: 'sliccy',
+        },
       ]),
       handleMessage: vi.fn().mockResolvedValue(undefined),
       getScoopContext: vi.fn(() => undefined),
@@ -2089,7 +2159,14 @@ describe('Bridge handlePanelMessage dispatch', () => {
     bridge = new Bridge();
     mockOrchestrator = {
       getScoops: vi.fn(() => [
-        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          parentJid: null,
+          assistantLabel: 'sliccy',
+        },
         {
           jid: 'scoop_a',
           name: 'A',
@@ -2479,7 +2556,14 @@ describe('Bridge handleRequestScoopMessages', () => {
     bridge = new Bridge();
     mockOrchestrator = {
       getScoops: vi.fn(() => [
-        { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          parentJid: null,
+          assistantLabel: 'sliccy',
+        },
       ]),
       handleMessage: vi.fn().mockResolvedValue(undefined),
       getScoopContext: vi.fn(() => undefined),

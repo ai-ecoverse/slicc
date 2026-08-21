@@ -242,7 +242,7 @@ describe('ScoopContext active tool surface', () => {
   });
 
   it('owns the bash-tool shell as the cone when isCone', async () => {
-    const cone: RegisteredScoop = { ...testScoop, isCone: true, folder: '' };
+    const cone: RegisteredScoop = { ...testScoop, isCone: true, parentJid: null, folder: '' };
     const ctx = new ScoopContext(cone, createMockCallbacks(), createMockFs() as any);
 
     await ctx.init();
@@ -300,7 +300,7 @@ describe('ScoopContext active tool surface', () => {
         `AVAILABLE SKILLS\n${skills.map((skill) => `Path: ${skill.path}`).join('\n')}`) as any
     );
 
-    const cone: RegisteredScoop = { ...testScoop, isCone: true, folder: '' };
+    const cone: RegisteredScoop = { ...testScoop, isCone: true, parentJid: null, folder: '' };
     const ctx = new ScoopContext(cone, createMockCallbacks(), createMockFs() as any);
     await ctx.init();
 

@@ -9,6 +9,7 @@ import { createLogger } from '../base/logger.js';
 import type { ScoopModelResolution } from '../providers/account-store.js';
 import type { SudoDecision, SudoKind, SudoRequest } from '../sudo/types.js';
 import type { ToolDefinition } from '../tools/types.js';
+import { derivePolicy, isRootUnit } from '../work-unit/policy.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
   isThinkingLevel,
@@ -101,7 +102,7 @@ function resolveScoopNames(
   const resolved: RegisteredScoop[] = [];
   const unknown: string[] = [];
   for (const name of names) {
-    const s = all.find((x) => !x.isCone && (x.folder === name || x.name === name));
+    const s = all.find((x) => x.parentJid !== null && (x.folder === name || x.name === name));
     if (s) resolved.push(s);
     else unknown.push(name);
   }
@@ -191,7 +192,7 @@ function parseModelId(
 /** Render a "scoop not found" error including the available list. */
 function notFoundError(name: string, getScoops: () => RegisteredScoop[]) {
   const available = getScoops()
-    .filter((s) => !s.isCone)
+    .filter((s) => s.parentJid !== null)
     .map((s) => s.folder)
     .join(', ');
   return { content: `Scoop "${name}" not found. Available: ${available}`, isError: true as const };
@@ -214,7 +215,7 @@ function formatScoopLine(
       })
     : '';
   const statusSuffix = activity ? ` — ${status} (since ${activity})` : ` — ${status}`;
-  if (s.isCone) return `- ${s.assistantLabel} (${s.folder}) [CONE]${statusSuffix}`;
+  if (s.parentJid === null) return `- ${s.assistantLabel} (${s.folder}) [CONE]${statusSuffix}`;
   return `- ${s.name} (${s.folder})${statusSuffix}`;
 }
 
@@ -300,7 +301,10 @@ async function executeFeedScoop(
   const { scoop_name, prompt } = input as { scoop_name: string; prompt: string };
   const target = config.getScoops().find((s) => s.folder === scoop_name || s.name === scoop_name);
   if (!target) return notFoundError(scoop_name, config.getScoops);
-  if (target.isCone) return { content: 'Cannot feed the cone (yourself).', isError: true };
+  if (target.jid === config.scoop.jid) return { content: 'Cannot feed yourself.', isError: true };
+  if (target.parentJid === null) {
+    return { content: 'Cannot feed a cone (root unit).', isError: true };
+  }
   try {
     await config.onFeedScoop!(target.jid, prompt);
     log.info('Fed scoop', { target: target.folder, promptLength: prompt.length });
@@ -469,7 +473,10 @@ async function executeDropScoop(
   const { scoop_name } = input as { scoop_name: string };
   const target = config.getScoops().find((s) => s.folder === scoop_name || s.name === scoop_name);
   if (!target) return notFoundError(scoop_name, config.getScoops);
-  if (target.isCone) return { content: 'Cannot drop the cone (yourself).', isError: true };
+  if (target.jid === config.scoop.jid) return { content: 'Cannot drop yourself.', isError: true };
+  if (target.parentJid === null) {
+    return { content: 'Cannot drop a cone (root unit).', isError: true };
+  }
   try {
     await config.onDropScoop!(target.jid);
     log.info('Scoop dropped', { name: target.name, folder: target.folder });
@@ -1040,16 +1047,19 @@ function updateGlobalMemoryTool(config: ScoopManagementToolsConfig): ToolDefinit
  */
 export function createScoopManagementTools(config: ScoopManagementToolsConfig): ToolDefinition[] {
   const tools: ToolDefinition[] = [];
-  const isCone = config.scoop.isCone;
+  const policy = derivePolicy(config.scoop);
+  const isRoot = isRootUnit(config.scoop);
 
-  // Scoop-only surface.
-  if (!isCone) {
+  // Delegated-unit surface: a child streams progress to its parent and
+  // escalates privileged requests to its approval authority.
+  if (!isRoot) {
     tools.push(sendMessageTool(config));
     if (config.onSudoRequest) tools.push(sudoRequestTool(config));
   }
 
-  // Cone-only surface.
-  if (isCone) {
+  // Orchestration surface. The individual callbacks are already gated on
+  // the policy by the lifecycle manager; `list_scoops` follows the same gate.
+  if (policy.canManageChildren) {
     if (config.onFeedScoop) tools.push(feedScoopTool(config));
     tools.push(listScoopsTool(config));
     if (config.onScoopScoop) tools.push(scoopScoopTool(config));

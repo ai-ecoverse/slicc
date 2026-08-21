@@ -26,8 +26,10 @@ const log = createLogger('scoop-idle-timers');
 export const SCOOP_IDLE_TIMEOUT_MS = 2 * 60 * 1000;
 
 export interface ScoopIdleTimersDeps {
-  /** Live snapshot of registered scoops; the timer reads `isCone`, `assistantLabel`, `folder`, `name`. */
+  /** Live snapshot of registered scoops; the timer reads `parentJid`, `assistantLabel`, `folder`, `name`. */
   getScoops(): Map<string, RegisteredScoop>;
+  /** The unit an idle notice for `jid` goes to — its parent, or the default root (#1666). */
+  findParent(jid: string): RegisteredScoop | undefined;
   /** Live snapshot of per-scoop tabs; the timer guards on `status === 'ready'` before firing. */
   getTabs(): Map<string, ScoopTabState>;
   /** Route the cone-facing idle notice through the orchestrator's normal queue. */
@@ -77,13 +79,13 @@ export class ScoopIdleTimers {
   private fire(jid: string): void {
     const scoops = this.deps.getScoops();
     const scoop = scoops.get(jid);
-    if (!scoop || scoop.isCone) return;
+    if (!scoop || scoop.parentJid === null) return;
 
     // Only notify if still in ready state (never processed).
     const tab = this.deps.getTabs().get(jid);
     if (tab?.status !== 'ready') return;
 
-    const cone = Array.from(scoops.values()).find((s) => s.isCone);
+    const cone = this.deps.findParent(jid);
     if (!cone) return;
 
     const notifyMsg: ChannelMessage = {

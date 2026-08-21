@@ -58,6 +58,9 @@ import { DEFAULT_JSH_SEARCH_ROOTS } from '../shell/jsh-discovery.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import { createBashTool, createFileTools } from '../tools/index.js';
 import type { BashJobProcess } from '../tools/types.js';
+import { toDescriptor } from '../work-unit/descriptor.js';
+import { processOwnerKindFor } from '../work-unit/record.js';
+import type { WorkUnitDescriptor } from '../work-unit/types.js';
 import { getAdobeSessionId } from './llm-session-id.js';
 import {
   createScoopManagementTools,
@@ -417,6 +420,14 @@ export class ScoopContext {
   private overflowRecoveryPromise: Promise<void> | null = null;
   private overflowRecoveryEscalated = false;
   private coneJid: string | undefined;
+  /**
+   * Policy / workspace / completion view of this unit, derived once from the
+   * record's ownership edge (#1666). Every former `isCone` branch in this
+   * class reads a field of this descriptor instead.
+   */
+  private readonly unit: WorkUnitDescriptor;
+  /** Process-owner label for the kernel process table. */
+  private readonly ownerKind: 'cone' | 'scoop';
 
   private skillsFs: VirtualFS | null = null;
   private skillsDir: string = '/workspace/skills';
@@ -438,6 +449,8 @@ export class ScoopContext {
     sudoManager?: SudoManager | null
   ) {
     this.scoop = scoop;
+    this.unit = toDescriptor(scoop);
+    this.ownerKind = processOwnerKindFor(scoop);
     this.callbacks = callbacks;
     this.fs = fs;
     this.sessionStore = sessionStore ?? null;
@@ -479,18 +492,20 @@ export class ScoopContext {
   } | null {
     if (!this.sudoManager) return null;
     const manager = this.sudoManager;
-    const isCone = this.scoop.isCone;
+    const { policy } = this.unit;
+    const userIsAuthority = policy.approvalAuthority === 'user';
     const folder = this.scoop.folder;
-    const coneBrokerFn = this.callbacks.onSudoRequest;
+    const parentBrokerFn = this.callbacks.onSudoRequest;
 
     const broker: import('../sudo/types.js').SudoBroker =
-      isCone || !coneBrokerFn
+      userIsAuthority || !parentBrokerFn
         ? manager.getBroker()
-        : { requestApproval: (request) => coneBrokerFn(request) };
-    const getPolicy = isCone ? () => manager.getPolicy() : () => manager.getPolicyForScoop(folder);
-    const defaultDisposition: import('../base/sudoers.js').DefaultDisposition = isCone
-      ? 'allow'
-      : 'require-approval';
+        : { requestApproval: (request) => parentBrokerFn(request) };
+    const getPolicy = userIsAuthority
+      ? () => manager.getPolicy()
+      : () => manager.getPolicyForScoop(folder);
+    const defaultDisposition: import('../base/sudoers.js').DefaultDisposition =
+      policy.sudoDefaultDisposition;
 
     const baseShell = manager.getShellConfig();
     // Cones inherit the global `persistCommandGrant` sink (writes to
@@ -500,7 +515,9 @@ export class ScoopContext {
     // already persists scoped via `Orchestrator.resolveSudoRequestAndPersist`
     // → `SudoManager.appendScoopRule`, so the shell-side sink is a no-op
     // for non-cone scoops here.
-    const persistCommandGrant = isCone ? baseShell.persistCommandGrant : async () => {};
+    const persistCommandGrant = policy.persistCommandGrants
+      ? baseShell.persistCommandGrant
+      : async () => {};
     const shellConfig: import('../shell/almost-bash-shell-headless.js').ShellSudoConfig = {
       ...baseShell,
       broker,
@@ -513,11 +530,12 @@ export class ScoopContext {
 
   /** Create shell and load skills. */
   private async initShellAndSkills() {
-    const cwd = this.scoop.isCone ? '/workspace' : `/scoops/${this.scoop.folder}/workspace`;
+    const cwd = this.unit.workspace.root;
     const browser = this.callbacks.getBrowserAPI();
     this.skillsDir = '/workspace/skills';
 
-    if (this.scoop.isCone) {
+    // Only a unit that sees the whole workspace seeds the bundled skills.
+    if (this.unit.policy.filesystem.kind === 'full-workspace') {
       await createDefaultSkills(this.fs as VirtualFS, this.skillsDir);
     }
 
@@ -542,7 +560,11 @@ export class ScoopContext {
         : this.fs!
     ) as VirtualFS;
 
-    const shellEnv = buildScoopShellEnv(this.scoop.isCone, this.scoop.folder, secretEnv);
+    const shellEnv = buildScoopShellEnv(
+      this.unit.policy.filesystem.kind === 'full-workspace',
+      this.scoop.folder,
+      secretEnv
+    );
     this.shell = new AlmostBashShell({
       fs: gatedFs,
       cwd,
@@ -555,7 +577,7 @@ export class ScoopContext {
       jshDiscoveryFs: this.skillsFs ? effectiveSkillsFs : undefined,
       allowedCommands: this.scoop.config?.allowedCommands,
       getParentJid: () => this.scoop.jid,
-      isScoop: () => !this.scoop.isCone,
+      isScoop: () => this.unit.display.role === 'child',
       sudo: sudoWiring?.shellConfig,
       // Wire the scoop's process context so realm-backed commands (`node` /
       // `.jsh` / `python`) launched by the agent's `bash` tool parent their
@@ -565,7 +587,7 @@ export class ScoopContext {
       // pid never reaches it and it survives the turn (#1166).
       processManager: this.processManager ?? undefined,
       processOwner: {
-        kind: this.scoop.isCone ? 'cone' : 'scoop',
+        kind: this.ownerKind,
         scoopJid: this.scoop.jid,
       },
       getCurrentShellPid: () => this.currentTurnProcess?.pid,
@@ -605,41 +627,36 @@ export class ScoopContext {
       // the context can also read back: `/tmp` for the cone, the scoop's own
       // writable root for a scoop (its sandbox excludes `/tmp`). Per-context dirs
       // also keep parallel scoops from colliding on the same filename.
-      createBashTool(
-        this.shell!,
-        this.fs! as VirtualFS,
-        this.scoop.isCone ? '/tmp' : `/scoops/${this.scoop.folder}`,
-        {
-          // Unset → the tool's own ten-minute default.
-          defaultBackgroundAfterSeconds: this.scoop.config?.backgroundAfterSeconds,
-          // Route a detached job's completion lick back to THIS scoop. The cone
-          // is the default target for an untargeted lick, so it stays unset
-          // there (its `folder` is not a valid lick target alias).
-          targetScoop: this.scoop.isCone ? undefined : this.scoop.folder,
-          // Every invocation becomes a kernel pid, so `timeout` is a real kill
-          // (SIGKILL fans out to realm workers) and a detached job stays visible
-          // to `ps` / reachable by `kill`.
-          jobHost: { spawn: (command) => this.spawnBashJob(command) },
-          // A detached job's output skips the `adaptTools` tool-result boundary
-          // (it arrives as a lick, not a tool result), so the same real→masked
-          // pass is wired in here.
-          scrubOutput: getToolResultScrubber(),
-          // Same sink `fswatch` uses to raise a lick from inside the shell: the
-          // orchestrator publishes it in `setLickManager`. Read per event rather
-          // than captured once, so a context built before the lick manager was
-          // attached still delivers.
-          fireLick: (event) => {
-            const handler = (globalThis as SliccLickGlobal).__slicc_lick_handler;
-            if (!handler) {
-              log.warn('No lick handler for background bash completion', {
-                folder: this.scoop.folder,
-              });
-              return;
-            }
-            handler(event);
-          },
-        }
-      ),
+      createBashTool(this.shell!, this.fs! as VirtualFS, this.unit.workspace.scratch, {
+        // Unset → the tool's own ten-minute default.
+        defaultBackgroundAfterSeconds: this.scoop.config?.backgroundAfterSeconds,
+        // Route a detached job's completion lick back to THIS scoop. The cone
+        // is the default target for an untargeted lick, so it stays unset
+        // there (its `folder` is not a valid lick target alias).
+        targetScoop: this.unit.display.role === 'child' ? this.scoop.folder : undefined,
+        // Every invocation becomes a kernel pid, so `timeout` is a real kill
+        // (SIGKILL fans out to realm workers) and a detached job stays visible
+        // to `ps` / reachable by `kill`.
+        jobHost: { spawn: (command) => this.spawnBashJob(command) },
+        // A detached job's output skips the `adaptTools` tool-result boundary
+        // (it arrives as a lick, not a tool result), so the same real→masked
+        // pass is wired in here.
+        scrubOutput: getToolResultScrubber(),
+        // Same sink `fswatch` uses to raise a lick from inside the shell: the
+        // orchestrator publishes it in `setLickManager`. Read per event rather
+        // than captured once, so a context built before the lick manager was
+        // attached still delivers.
+        fireLick: (event) => {
+          const handler = (globalThis as SliccLickGlobal).__slicc_lick_handler;
+          if (!handler) {
+            log.warn('No lick handler for background bash completion', {
+              folder: this.scoop.folder,
+            });
+            return;
+          }
+          handler(event);
+        },
+      }),
       ...scoopManagementTools,
     ];
 
@@ -660,7 +677,7 @@ export class ScoopContext {
           {
             processManager: this.processManager,
             owner: {
-              kind: this.scoop.isCone ? 'cone' : 'scoop',
+              kind: this.ownerKind,
               scoopJid: this.scoop.jid,
             },
             getParentPid: () => this.currentTurnProcess?.pid,
@@ -672,9 +689,7 @@ export class ScoopContext {
 
   /** Load scoop memory and global memory. */
   private async loadMemories() {
-    const memoryPath = this.scoop.isCone
-      ? '/workspace/CLAUDE.md'
-      : `/scoops/${this.scoop.folder}/CLAUDE.md`;
+    const memoryPath = this.unit.workspace.memoryPath;
     let scoopMemory = '';
     try {
       const content = await this.fs!.readFile(memoryPath, { encoding: 'utf-8' });
@@ -684,7 +699,7 @@ export class ScoopContext {
     }
 
     const globalMemory = await this.callbacks.getGlobalMemory();
-    if (globalMemory && this.scoop.isCone) {
+    if (globalMemory && this.unit.policy.canWriteSharedMemory) {
       try {
         const underlying =
           'getUnderlyingFS' in this.fs!
@@ -758,7 +773,7 @@ export class ScoopContext {
       model.provider === 'adobe' ? { 'X-Session-Id': adobeSessionId } : undefined;
     const getCompactionApiKey = () => this.getModelApiKey() ?? undefined;
     const onMemoryUpdates =
-      this.scoop.isCone && this.callbacks.appendConeMemory
+      this.unit.policy.canWriteSharedMemory && this.callbacks.appendConeMemory
         ? (bullets: string) =>
             this.callbacks.appendConeMemory!(bullets, {
               source: 'compaction',
@@ -827,7 +842,7 @@ export class ScoopContext {
       const model = configuredModelId
         ? resolveModelById(configuredModelId, configuredProviderId)
         : resolveCurrentModel();
-      const label = this.scoop.isCone ? 'Cone' : `Scoop "${this.scoop.name}"`;
+      const label = this.unit.display.role === 'primary' ? 'Cone' : `Scoop "${this.scoop.name}"`;
       console.log(`[model] ${label} using model: ${model.id} (provider: ${model.provider})`);
       // A pinned provider is a hard contract: the scoop was spawned with a
       // model the caller chose from a SPECIFIC provider's catalogue, and
@@ -983,9 +998,9 @@ export class ScoopContext {
     const proc = pm.spawn({
       kind: 'shell',
       argv: ['bash', '-c', command],
-      cwd: this.scoop.isCone ? '/workspace' : `/scoops/${this.scoop.folder}/workspace`,
+      cwd: this.unit.workspace.root,
       owner: {
-        kind: this.scoop.isCone ? 'cone' : 'scoop',
+        kind: this.ownerKind,
         scoopJid: this.scoop.jid,
       },
       ppid: this.currentTurnProcess?.pid,
@@ -1036,9 +1051,9 @@ export class ScoopContext {
     return this.processManager.spawn({
       kind: 'scoop-turn',
       argv: turnArgv,
-      cwd: this.scoop.isCone ? '/workspace' : `/scoops/${this.scoop.folder}/workspace`,
+      cwd: this.unit.workspace.root,
       owner: {
-        kind: this.scoop.isCone ? 'cone' : 'scoop',
+        kind: this.ownerKind,
         scoopJid: this.scoop.jid,
       },
       adoptAbort: abortController,
@@ -1077,11 +1092,11 @@ export class ScoopContext {
       folder: this.scoop.folder,
       error: message,
     });
-    // Only a CONE turn is user-resubmittable — pass isCone so the page marks
-    // the dropped turn for one-shot auto-resubmit after the recovery reload.
-    // Scoop turns are cone-delegated; they broadcast (false) to reload but are
-    // never replayed.
-    broadcastStaleAssetReload(this.scoop.isCone);
+    // Only an interactive (user-facing) turn is user-resubmittable — pass
+    // that so the page marks the dropped turn for one-shot auto-resubmit
+    // after the recovery reload. Delegated turns broadcast (false) to reload
+    // but are never replayed.
+    broadcastStaleAssetReload(this.unit.completion.mode === 'interactive');
     emitAgentError('llm', message);
     this.setStatus('error');
     if (this.callbacks.onFatalError) {
@@ -1510,9 +1525,7 @@ export class ScoopContext {
 
     // Re-read memories for prompt rebuild
     let scoopMemory = '';
-    const memoryPath = this.scoop.isCone
-      ? '/workspace/CLAUDE.md'
-      : `/scoops/${this.scoop.folder}/CLAUDE.md`;
+    const memoryPath = this.unit.workspace.memoryPath;
     try {
       const content = await this.fs!.readFile(memoryPath, { encoding: 'utf-8' });
       scoopMemory = typeof content === 'string' ? content : new TextDecoder().decode(content);
@@ -1923,7 +1936,7 @@ export class ScoopContext {
     });
     this.setStatus('error');
     const message = `Scoop "${this.scoop.name}" context window was exceeded and could not be reduced. Re-delegate with a narrower task.`;
-    if (this.scoop.isCone) {
+    if (this.unit.completion.mode === 'interactive') {
       this.callbacks.onError(message);
     } else if (this.callbacks.onFatalError) {
       this.callbacks.onFatalError(message);
@@ -2010,19 +2023,20 @@ export class ScoopContext {
   private async ensureDirectoryStructure(): Promise<void> {
     if (!this.fs) return;
 
-    const dirs = this.scoop.isCone
-      ? ['/workspace', '/shared', '/scoops', '/home', '/home/user', '/tmp', '/mnt']
-      : [
-          `/scoops/${this.scoop.folder}`,
-          `/scoops/${this.scoop.folder}/workspace`,
-          `/scoops/${this.scoop.folder}/home`,
-          `/scoops/${this.scoop.folder}/tmp`,
-          '/shared',
-          // Shared global scratch space (see `builtinScoopGrants`). Normally
-          // the cone has already created it, but a scoop must not depend on
-          // that ordering.
-          '/tmp',
-        ];
+    const dirs =
+      this.unit.policy.filesystem.kind === 'full-workspace'
+        ? ['/workspace', '/shared', '/scoops', '/home', '/home/user', '/tmp', '/mnt']
+        : [
+            `/scoops/${this.scoop.folder}`,
+            `/scoops/${this.scoop.folder}/workspace`,
+            `/scoops/${this.scoop.folder}/home`,
+            `/scoops/${this.scoop.folder}/tmp`,
+            '/shared',
+            // Shared global scratch space (see `builtinScoopGrants`). Normally
+            // the cone has already created it, but a scoop must not depend on
+            // that ordering.
+            '/tmp',
+          ];
 
     for (const dir of dirs) {
       try {
@@ -2038,15 +2052,13 @@ export class ScoopContext {
     // legitimate configuration — a read-only / audit-style scoop
     // simply runs without a persisted memory file. Swallowing the
     // EACCES keeps init on the happy path for zero-write sandboxes.
-    const memoryPath = this.scoop.isCone
-      ? '/workspace/CLAUDE.md'
-      : `/scoops/${this.scoop.folder}/CLAUDE.md`;
+    const memoryPath = this.unit.workspace.memoryPath;
     try {
       await this.fs.readFile(memoryPath);
     } catch {
       const defaultMemory = `# ${this.scoop.assistantLabel} Memory
 
-${this.scoop.isCone ? 'Role: Cone (main orchestrator)' : `Scoop: ${this.scoop.name}`}
+${this.unit.display.role === 'primary' ? 'Role: Cone (main orchestrator)' : `Scoop: ${this.scoop.name}`}
 Folder: ${this.scoop.folder}
 Created: ${new Date().toISOString()}
 
@@ -2078,23 +2090,28 @@ Created: ${new Date().toISOString()}
     skills: import('./skills.js').Skill[]
   ): string {
     const assistantName = this.scoop.config?.assistantName || this.scoop.assistantLabel;
+    // Prompt text is presentation of the role; capabilities the prompt
+    // advertises come from the policy so the text can never promise a tool
+    // the unit does not have.
+    const isRoot = this.unit.display.role === 'primary';
+    const { policy, workspace } = this.unit;
 
     const basePrompt = `# ${assistantName}
 
-You are ${assistantName}, ${this.scoop.isCone ? 'the main assistant (cone)' : 'a scoop assistant'} in SLICC (Self-Licking Ice Cream Cone).
+You are ${assistantName}, ${isRoot ? 'the main assistant (cone)' : 'a scoop assistant'} in SLICC (Self-Licking Ice Cream Cone).
 
 ## Your Capabilities
 
 You have access to:
-- A virtual filesystem at ${this.scoop.isCone ? '/workspace' : `/scoops/${this.scoop.folder}/workspace`} (your working directory)
+- A virtual filesystem at ${workspace.root} (your working directory)
 - A bash shell for running commands (via the bash tool)
 - File reading, writing, and editing tools
 - Use shell commands like \`rg\`, \`grep\`, and \`find\` through the bash tool for search
-${this.scoop.isCone ? '' : '- **send_message**: Send messages immediately while working (for progress updates)\n'}- **schedule_task**: Schedule recurring or one-time tasks
+${isRoot ? '' : '- **send_message**: Send messages immediately while working (for progress updates)\n'}- **schedule_task**: Schedule recurring or one-time tasks
 - **list_tasks**, **pause_task**, **resume_task**, **cancel_task**: Manage scheduled tasks
 
 ${
-  this.scoop.isCone
+  policy.canManageChildren
     ? `
 As the cone (main assistant), you have elevated privileges:
 - **list_scoops**: See all registered scoops
@@ -2126,15 +2143,15 @@ You are a scoop with restricted filesystem access:
 ## Memory
 
 Your memory is organized hierarchically:
-- **Global memory** (/shared/CLAUDE.md): Read by all scoops, ${this.scoop.isCone ? 'use update_global_memory tool to modify it' : 'read-only for you'}
-- **${this.scoop.isCone ? 'Cone' : 'Scoop'} memory** (${this.scoop.isCone ? '/workspace/CLAUDE.md' : `/scoops/${this.scoop.folder}/CLAUDE.md`}): Your private memory
+- **Global memory** (/shared/CLAUDE.md): Read by all scoops, ${policy.canWriteSharedMemory ? 'use update_global_memory tool to modify it' : 'read-only for you'}
+- **${isRoot ? 'Cone' : 'Scoop'} memory** (${workspace.memoryPath}): Your private memory
 
 When you learn something important:
 - Use your memory for context-specific notes (edit with write_file or edit_file)
-${this.scoop.isCone ? '- Use update_global_memory tool for information that should be shared across all scoops' : ''}
+${policy.canWriteSharedMemory ? '- Use update_global_memory tool for information that should be shared across all scoops' : ''}
 
 ${
-  this.scoop.isCone
+  isRoot
     ? ''
     : `## Communication
 
@@ -2168,7 +2185,7 @@ ${globalMemory}
       fullPrompt += `
 
 ---
-${this.scoop.isCone ? 'CONE' : 'SCOOP'} MEMORY (${this.scoop.name}):
+${isRoot ? 'CONE' : 'SCOOP'} MEMORY (${this.scoop.name}):
 ${scoopMemory}
 ---`;
     }

@@ -28,7 +28,10 @@ import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
 import type { SudoDecision, SudoRequest } from '../sudo/index.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
+import { toDescriptor } from '../work-unit/descriptor.js';
 import { LiveWorkUnit } from '../work-unit/live-unit.js';
+import { rootsOf } from '../work-unit/policy.js';
+import { normalizeScoopRecord } from '../work-unit/record.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState, ThinkingLevel } from './types.js';
@@ -227,7 +230,8 @@ export class ScoopLifecycleManager {
   /** Synchronize live read ACLs after a global or per-scoop policy reload. */
   syncReadGrants(folder?: string): void {
     for (const scoop of this.deps.getScoops().values()) {
-      if (scoop.isCone || (folder !== undefined && scoop.folder !== folder)) continue;
+      if (folder !== undefined && scoop.folder !== folder) continue;
+      // `applyPolicyReadGrants` is a no-op for a full-workspace unit.
       const fs = this.getContext(scoop.jid)?.getFS();
       this.applyPolicyReadGrants(scoop, fs);
     }
@@ -253,6 +257,29 @@ export class ScoopLifecycleManager {
     ...args: Parameters<NonNullable<ScoopObserver[K]>>
   ): void {
     this.units.get(jid)?.dispatch(event, ...args);
+  }
+
+  /**
+   * The unit that owns `scoop`, falling back to the default (oldest) root
+   * when the recorded parent is gone — a delegated result must land
+   * somewhere a user can see it.
+   */
+  private parentOf(scoop: RegisteredScoop): RegisteredScoop | undefined {
+    const scoops = this.deps.getScoops();
+    const parent = scoop.parentJid === null ? undefined : scoops.get(scoop.parentJid);
+    return parent ?? rootsOf(scoops.values())[0];
+  }
+
+  /** The owning root of `scoop` (itself for a root), walking `parentJid`. */
+  private rootOf(scoop: RegisteredScoop): RegisteredScoop | undefined {
+    const scoops = this.deps.getScoops();
+    const seen = new Set<string>();
+    let current: RegisteredScoop | undefined = scoop;
+    while (current && current.parentJid !== null && !seen.has(current.jid)) {
+      seen.add(current.jid);
+      current = scoops.get(current.parentJid);
+    }
+    return current ?? rootsOf(scoops.values())[0];
   }
 
   /**
@@ -322,23 +349,27 @@ export class ScoopLifecycleManager {
     // EACCES in RestrictedFS stays active in both modes — a
     // `/scoops/<f>/escape` symlink to `/etc/sudoers` is a security
     // invariant, not a policy choice.
-    const fs = scoop.isCone
-      ? sharedFs
-      : new RestrictedFS(
-          sharedFs,
-          scoop.config?.writablePaths ? [...scoop.config.writablePaths] : [],
-          scoop.config?.visiblePaths ? [...scoop.config.visiblePaths] : [],
-          'sudo-delegated'
-        );
+    const unitDescriptor = toDescriptor(scoop);
+    const fsPolicy = unitDescriptor.policy.filesystem;
+    const fs =
+      fsPolicy.kind === 'full-workspace'
+        ? sharedFs
+        : new RestrictedFS(
+            sharedFs,
+            [...fsPolicy.writablePaths],
+            [...fsPolicy.visiblePaths],
+            'sudo-delegated'
+          );
 
-    if (!scoop.isCone) {
+    if (fsPolicy.kind === 'restricted') {
       await this.ensureSudoersLoaded(scoop);
       this.applyPolicyReadGrants(scoop, fs);
     }
 
     const contextCallbacks = this.buildContextCallbacks(jid, scoop);
 
-    const coneJid = Array.from(this.deps.getScoops().values()).find((s) => s.isCone)?.jid;
+    // Session-id anchor: the owning root of this unit (itself for a root).
+    const coneJid = this.rootOf(scoop)?.jid;
     const context = new ScoopContext(
       scoop,
       contextCallbacks,
@@ -369,8 +400,10 @@ export class ScoopLifecycleManager {
         });
     }
 
+    // The "no work received yet" notifier only makes sense for a delegated
+    // unit — somebody is expected to feed it.
     const scoopForTimer = this.deps.getScoops().get(jid);
-    if (scoopForTimer && !scoopForTimer.isCone) {
+    if (scoopForTimer && scoopForTimer.parentJid !== null) {
       this.deps.idleTimers.start(jid);
     }
 
@@ -514,6 +547,7 @@ export class ScoopLifecycleManager {
    */
   async register(scoop: RegisteredScoop): Promise<void> {
     const scoops = this.deps.getScoops();
+    normalizeScoopRecord(scoop);
     await this.deps.db.saveScoop(scoop);
     scoops.set(scoop.jid, scoop);
     this.deps.messageRouter.ensureQueue(scoop.jid);
@@ -522,7 +556,7 @@ export class ScoopLifecycleManager {
       await this.createTab(scoop.jid);
       // Cones are tracked separately via boot-time `createTab` (not
       // `register`), so this only fires for runtime-spawned sub-scoops.
-      if (!scoop.isCone) emitScoopLifecycle('spawn', scoop.folder);
+      if (scoop.parentJid !== null) emitScoopLifecycle('spawn', scoop.folder);
     } catch (err) {
       log.error('Scoop init failed', {
         jid: scoop.jid,
@@ -697,12 +731,14 @@ export class ScoopLifecycleManager {
   /**
    * Build the {@link ScoopContextCallbacks} wired into a scoop's context by
    * {@link createTab}. Mostly thin per-scoop adapters over the orchestrator's
-   * top-level callbacks; cone-only capabilities (scoop management, memory
-   * writes) are gated on `scoop.isCone`.
+   * top-level callbacks; privileged capabilities (child management, shared
+   * memory writes, approval resolution) are gated on the unit's policy.
    */
   private buildContextCallbacks(jid: string, scoop: RegisteredScoop): ScoopContextCallbacks {
     const { callbacks, completionService, cone } = this.deps;
     const scoops = () => this.deps.getScoops();
+    const { policy, completion } = toDescriptor(scoop);
+    const reportsToParent = completion.mode !== 'interactive';
     return {
       onResponse: (text, isPartial) => {
         if (!scoops().has(jid)) return;
@@ -713,7 +749,7 @@ export class ScoopLifecycleManager {
         // (streaming deltas) and full (non-streaming) variants are buffered
         // since models without streaming emit isPartial=false with the full
         // text.
-        if (!scoop.isCone) {
+        if (reportsToParent) {
           if (isPartial) {
             completionService.appendResponseChunk(jid, text);
           } else {
@@ -754,7 +790,7 @@ export class ScoopLifecycleManager {
 
         // When a non-cone scoop finishes, route its response to the cone
         // with a VFS path + preview so the cone can decide how to follow up.
-        if (status === 'ready' && !scoop.isCone) {
+        if (status === 'ready' && reportsToParent) {
           void completionService.notifyCompletion(jid);
         }
       },
@@ -782,11 +818,11 @@ export class ScoopLifecycleManager {
         this.dispatch(jid, 'onSendMessage', text);
       },
       getScoops: () => cone.getScoops(),
-      getScoopTabState: scoop.isCone ? (j: string) => this.getTab(j) : undefined,
-      onFeedScoop: scoop.isCone
+      getScoopTabState: policy.canManageChildren ? (j: string) => this.getTab(j) : undefined,
+      onFeedScoop: policy.canManageChildren
         ? (scoopJid, prompt) => cone.delegateToScoop(scoopJid, prompt, scoop.assistantLabel)
         : undefined,
-      onScoopScoop: scoop.isCone
+      onScoopScoop: policy.canCreateChildren
         ? async (newScoop) => {
             const fullScoop: RegisteredScoop = {
               ...newScoop,
@@ -800,30 +836,37 @@ export class ScoopLifecycleManager {
             return fullScoop;
           }
         : undefined,
-      onDropScoop: scoop.isCone
+      onDropScoop: policy.canManageChildren
         ? async (scoopJid) => {
             await cone.unregisterScoop(scoopJid);
           }
         : undefined,
-      onMuteScoops: scoop.isCone ? (jids) => cone.muteScoops(jids) : undefined,
-      onUnmuteScoops: scoop.isCone ? (jids) => cone.unmuteScoops(jids) : undefined,
-      onScheduleScoopWait: scoop.isCone
+      onMuteScoops: policy.canManageChildren ? (jids) => cone.muteScoops(jids) : undefined,
+      onUnmuteScoops: policy.canManageChildren ? (jids) => cone.unmuteScoops(jids) : undefined,
+      onScheduleScoopWait: policy.canManageChildren
         ? (jids, timeoutMs) => cone.scheduleScoopWait(jids, timeoutMs)
         : undefined,
       getGlobalMemory: () => cone.getGlobalMemory(),
-      setGlobalMemory: scoop.isCone ? (content) => cone.setGlobalMemory(content) : undefined,
-      appendConeMemory: scoop.isCone
+      setGlobalMemory: policy.canWriteSharedMemory
+        ? (content) => cone.setGlobalMemory(content)
+        : undefined,
+      appendConeMemory: policy.canWriteSharedMemory
         ? (bullets, meta) => cone.appendConeMemory(bullets, meta)
         : undefined,
       // Sudo escalation wiring — symmetrical to the brokers but exposed as
       // tools. Scoops get `onSudoRequest` (routes through the pending-request
       // registry); the cone gets `onSudoResolve` + `onListSudoRequests` to
       // drain it. The cone keeps the user broker for its own FS / shell gate.
-      onSudoRequest: scoop.isCone ? undefined : (request) => cone.enqueueSudoRequest(jid, request),
-      onSudoResolve: scoop.isCone
+      onSudoRequest:
+        policy.approvalAuthority === 'user'
+          ? undefined
+          : (request) => cone.enqueueSudoRequest(jid, request),
+      onSudoResolve: policy.canResolveApprovals
         ? (id, decision) => cone.resolveActionableLick(id, decision)
         : undefined,
-      onListSudoRequests: scoop.isCone ? () => cone.listPendingSudoRequests() : undefined,
+      onListSudoRequests: policy.canResolveApprovals
+        ? () => cone.listPendingSudoRequests()
+        : undefined,
       getBrowserAPI: () => callbacks.getBrowserAPI(),
     };
   }
@@ -848,14 +891,16 @@ export class ScoopLifecycleManager {
     this.dispatch(jid, 'onError', error);
     this.dispatch(jid, 'onStatusChange', 'error');
 
-    if (scoopRecord.isCone) return;
+    // An interactive root reports to the user directly; a delegated unit
+    // escalates to whoever owns it.
+    if (toDescriptor(scoopRecord).completion.mode === 'interactive') return;
 
     // Force-unmute, drop any partial response, and release any pending
-    // waiters so the error notification reaches the cone and `scoop_wait`
+    // waiters so the error notification reaches the parent and `scoop_wait`
     // callers unblock instead of stalling.
     this.deps.completionService.forgetScoop(jid, 'fatal-error');
 
-    const cone = Array.from(scoops.values()).find((s) => s.isCone);
+    const cone = this.parentOf(scoopRecord);
     if (!cone) return;
 
     const notifyMsg: ChannelMessage = {
