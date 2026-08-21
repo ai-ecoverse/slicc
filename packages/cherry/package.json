@@ -24,7 +24,7 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "@types/jsdom": "^28.0.0",
+    "@types/jsdom": "^30.0.0",
     "esbuild": "^0.28.1",
     "jsdom": "^30.0.0",
     "typescript": "7.0.2"
