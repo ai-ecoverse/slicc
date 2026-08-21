@@ -96,12 +96,12 @@ describe('createProxiedFetch progress (CLI path)', () => {
     expect(calls).toEqual([['end', url]]);
   });
 
-  it('reads the body in one shot when no observer is attached', async () => {
-    const resp = streamResponse(['one'], { 'content-type': 'text/plain' });
+  it('streams the body even without an observer (the size ceiling needs the chunks)', async () => {
+    const resp = streamResponse(['one', 'two'], { 'content-type': 'text/plain' });
     const arrayBuffer = vi.spyOn(resp, 'arrayBuffer');
     fetchSpy.mockResolvedValue(resp);
     const result = await createProxiedFetch()(url);
-    expect(new TextDecoder().decode(result.body)).toBe('one');
-    expect(arrayBuffer).toHaveBeenCalledTimes(1);
+    expect(new TextDecoder().decode(result.body)).toBe('onetwo');
+    expect(arrayBuffer).not.toHaveBeenCalled();
   });
 });

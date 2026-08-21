@@ -23,5 +23,13 @@
     "reason": "kerium's log() retains EVERY entry in a module-global List (a plain Set underneath) with no cap or rotation — even entries below the output threshold that are never printed (default minLevel is ALERT). A long-lived kernel worker under log pressure (e.g. ZenFS's per-inode nlink warning) eventually hits V8's 2^24-element Set cap, after which entries.add throws RangeError('Set maximum size exceeded') into every logging caller — every ZenFS op failed and the VFS went offline (2026-08-18 incident). The patch evicts the oldest entry beyond a 10,000-entry ring so the backlog stays bounded.",
     "removeWhen": "Remove once kerium bounds its log backlog upstream (ring buffer or opt-in retention).",
     "verify": "npm run test -w @slicc/webapp -- kerium-log-cap-patch"
+  },
+  "just-bash": {
+    "patchedVersion": "3.4.1",
+    "upstream": "https://github.com/vercel-labs/just-bash",
+    "issue": null,
+    "reason": "curl formats the response for stdout (`N(...)` → latin1 decode of the WHOLE body via `Buffer.from(body).toString('binary')`) BEFORE checking `-o`/`-O`, then discards the string. In the browser the `buffer` polyfill's latin1Slice builds that string one `+=` per byte, so every downloaded byte costs a ~32-byte V8 cons-string node: a 250 MB `curl -o` needed ~8 GB of V8 heap and crashed the leader tab (renderer OOM → Inspector.targetCrashed). The patch skips the stdout formatting when the body is going to a file (unless `-v`, which still prints it), so `curl -o` costs the body bytes, not a string copy of them.",
+    "removeWhen": "Remove once just-bash's curl only formats the body for stdout when it will be printed (or streams `-o` output to the fs).",
+    "verify": "npm run test -w @slicc/webapp -- just-bash-curl-output-patch"
   }
 }
