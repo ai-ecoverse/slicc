@@ -60,10 +60,11 @@ import { PROGRESS_CONTENT_TYPE, type ToolProgressEvent } from '../shell/progress
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import { createBashTool, createFileTools } from '../tools/index.js';
 import type { BashJobProcess } from '../tools/types.js';
-import { toDescriptor } from '../work-unit/descriptor.js';
+import { SKILLS_LIBRARY_DIR, toDescriptor } from '../work-unit/descriptor.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { processOwnerKindFor } from '../work-unit/record.js';
 import type { WorkUnitDescriptor } from '../work-unit/types.js';
+import type { AppendConeMemoryMeta } from './cone-memory-store.js';
 import { getAdobeSessionId } from './llm-session-id.js';
 import {
   createScoopManagementTools,
@@ -330,25 +331,17 @@ export interface ScoopContextCallbacks {
    */
   setGlobalMemory?: (content: string) => Promise<void>;
   /**
-   * Append auto-extracted memory bullets to /workspace/CLAUDE.md (cone only).
-   * Called by the compaction memory-extraction pass. When omitted the
+   * Append auto-extracted memory bullets to the cone's own `CLAUDE.md` (cone
+   * only). Called by the compaction memory-extraction pass. When omitted the
    * compaction pass skips its second LLM call entirely. The explicit-edit
    * surface for `/shared/CLAUDE.md` is the `update_global_memory` tool.
    *
    * `meta` may carry the active LLM model + credentials so the sink can
    * run a budget-driven restructure pass when an append overshoots the
-   * size budget — see `cone-memory-budget.ts`.
+   * size budget — see `cone-memory-budget.ts`. `meta.memoryPath` is bound by
+   * `ScoopLifecycleManager` from the unit's record, not by the caller.
    */
-  appendConeMemory?: (
-    bullets: string,
-    meta: {
-      source: string;
-      model?: Model<Api>;
-      apiKey?: string;
-      headers?: Record<string, string>;
-      signal?: AbortSignal;
-    }
-  ) => Promise<void>;
+  appendConeMemory?: (bullets: string, meta: AppendConeMemoryMeta) => Promise<void>;
   /**
    * Optional lifecycle hook for compaction. Emitted by the compaction
    * `transformContext` before and after each LLM call so the panel can
@@ -461,7 +454,11 @@ export class ScoopContext {
   private readonly ownerKind: 'cone' | 'scoop';
 
   private skillsFs: VirtualFS | null = null;
-  private skillsDir: string = '/workspace/skills';
+  /**
+   * Skills are a shared library, not a per-cone directory — see
+   * {@link SKILLS_LIBRARY_DIR}.
+   */
+  private skillsDir: string = SKILLS_LIBRARY_DIR;
   private sudoManager: SudoManager | null = null;
 
   private structuredOutputValue: unknown;
@@ -571,7 +568,7 @@ export class ScoopContext {
   private async initShellAndSkills() {
     const cwd = this.unit.workspace.root;
     const browser = this.callbacks.getBrowserAPI();
-    this.skillsDir = '/workspace/skills';
+    this.skillsDir = SKILLS_LIBRARY_DIR;
 
     // Only a unit that sees the whole workspace seeds the bundled skills.
     if (this.unit.policy.filesystem.kind === 'full-workspace') {
@@ -2081,9 +2078,12 @@ export class ScoopContext {
   private async ensureDirectoryStructure(): Promise<void> {
     if (!this.fs) return;
 
+    // A cone creates its OWN workspace root — `/workspace` for the primary,
+    // `/cones/<folder>/workspace` for an extra cone (#2271) — plus the
+    // float-wide directories every unit shares.
     const dirs =
       this.unit.policy.filesystem.kind === 'full-workspace'
-        ? ['/workspace', '/shared', '/scoops', '/home', '/home/user', '/tmp', '/mnt']
+        ? [this.unit.workspace.root, '/shared', '/scoops', '/home', '/home/user', '/tmp', '/mnt']
         : [
             `/scoops/${this.scoop.folder}`,
             `/scoops/${this.scoop.folder}/workspace`,

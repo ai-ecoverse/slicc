@@ -9,7 +9,6 @@
  * - Owns a single shared VirtualFS instance
  */
 
-import type { Api, Model } from '@earendil-works/pi-ai';
 import type { ToolProgressEvent } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
@@ -42,7 +41,7 @@ import { WorkUnitManager } from '../work-unit/manager.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { normalizeScoopRecord } from '../work-unit/record.js';
 import { SessionStore as UiSessionStore } from './chat-session-store.js';
-import { ConeMemoryStore } from './cone-memory-store.js';
+import { type AppendConeMemoryMeta, ConeMemoryStore } from './cone-memory-store.js';
 import * as db from './db.js';
 import { isExternalLickChannel } from './lick-formatting.js';
 import {
@@ -622,21 +621,13 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
-   * Append a block of auto-extracted memory bullets to /workspace/CLAUDE.md.
-   * Used by the compaction memory-extraction pass and by the "New session"
-   * freezer flow. Delegates to {@link ConeMemoryStore} — see that module for
-   * serialization + budget semantics.
+   * Append a block of auto-extracted memory bullets to the calling cone's
+   * `CLAUDE.md` (`meta.memoryPath`; the primary's when absent). Used by the
+   * compaction memory-extraction pass and by the "New session" freezer flow.
+   * Delegates to {@link ConeMemoryStore} — see that module for serialization
+   * + budget semantics.
    */
-  appendConeMemory(
-    bullets: string,
-    meta: {
-      source: string;
-      model?: Model<Api>;
-      apiKey?: string;
-      headers?: Record<string, string>;
-      signal?: AbortSignal;
-    }
-  ): Promise<void> {
+  appendConeMemory(bullets: string, meta: AppendConeMemoryMeta): Promise<void> {
     return this.memoryStore.appendConeMemory(bullets, meta);
   }
 

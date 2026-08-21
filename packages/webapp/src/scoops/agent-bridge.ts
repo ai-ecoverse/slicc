@@ -39,6 +39,7 @@ import {
 } from '../providers/account-store.js';
 // Legal down-edge (`scoops/` → `tools/`) for the JSON Schema shape.
 import type { JsonSchemaObject } from '../tools/types.js';
+import { PRIMARY_WORKSPACE, workspaceFor } from '../work-unit/descriptor.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { serializeAgentSessionArchive } from './agent-session-archive.js';
 import type { Orchestrator } from './orchestrator.js';
@@ -91,7 +92,8 @@ export interface AgentSpawnOptions {
   /**
    * Optional read-only VFS roots exposed to the spawned scoop
    * (`visiblePaths` in `ScoopConfig`). Pure replace semantics: when
-   * provided, this list entirely supplants the default `['/workspace/']`.
+   * provided, this list entirely supplants the owning cone's workspace
+   * default (`['/workspace/']` under the primary cone).
    * Pass `[]` for no extra read-only roots (writablePaths remain readable).
    * Each entry should end with a trailing slash; the bridge normalizes
    * missing ones before forwarding to the orchestrator.
@@ -318,6 +320,25 @@ function resolveParentModelSelection(
 }
 
 /**
+ * Default read-only root for a spawned agent: the workspace of the ROOT that
+ * owns the invoking unit, so an agent spawned inside an extra cone (or by one
+ * of its scoops) reads that cone's files instead of the primary's (#2271).
+ * Walks the ownership chain; falls back to the default root's workspace.
+ */
+function resolveOwnerVisibleRoot(orchestrator: Orchestrator, parentJid: string | null): string {
+  const scoops = orchestrator.getScoops();
+  const byJid = new Map(scoops.map((s) => [s.jid, s]));
+  const seen = new Set<string>();
+  let current = parentJid === null ? undefined : byJid.get(parentJid);
+  while (current && current.parentJid !== null && !seen.has(current.jid)) {
+    seen.add(current.jid);
+    current = byJid.get(current.parentJid);
+  }
+  const owner = current ?? rootsOf(scoops)[0];
+  return `${owner ? workspaceFor(owner).root : PRIMARY_WORKSPACE.root}/`;
+}
+
+/**
  * Look up the parent scoop's thinkingLevel from the orchestrator registry.
  */
 function resolveParentThinkingLevel(
@@ -508,10 +529,11 @@ function buildScoopConfig(
   effectiveModelId: string,
   effectiveModelProviderId: string | undefined,
   effectiveThinkingLevel: ThinkingLevel | undefined,
-  scratchFolder: string
+  scratchFolder: string,
+  defaultVisibleRoot: string
 ): NonNullable<RegisteredScoop['config']> {
   const cwdPrefix = normalizeRwPrefix(options.cwd);
-  const visiblePaths = resolveVisiblePaths(options);
+  const visiblePaths = resolveVisiblePaths(options, defaultVisibleRoot);
   const configuredWritable = resolveWritablePaths(options.writablePaths, cwdPrefix);
   const writablePaths = dedupePrefixes([...configuredWritable, `${scratchFolder}/`, '/tmp/']);
 
@@ -752,12 +774,18 @@ export function createAgentBridge(
     }
     const scratchFolder = `/scoops/${folder}`;
 
+    // Ownership edge: the invoking unit when the caller supplied it,
+    // otherwise the default root — a spawned agent always has an owner.
+    // (`originToolCallId` stays never-inferred; this is ownership, not
+    // tool-call provenance.)
+    const parentJid = options.parentJid ?? rootsOf(ctx.orchestrator.getScoops())[0]?.jid ?? null;
     const scoopConfig = buildScoopConfig(
       options,
       effectiveModelId,
       effectiveModelProviderId,
       effectiveThinkingLevel,
-      scratchFolder
+      scratchFolder,
+      resolveOwnerVisibleRoot(ctx.orchestrator, parentJid)
     );
 
     const scoop: RegisteredScoop = {
@@ -772,11 +800,7 @@ export function createAgentBridge(
       config: scoopConfig,
       configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
       notifyOnComplete: options.notifyOnComplete === true,
-      // Ownership edge: the invoking unit when the caller supplied it,
-      // otherwise the default root — a spawned agent always has an owner.
-      // (`originToolCallId` stays never-inferred; this is ownership, not
-      // tool-call provenance.)
-      parentJid: options.parentJid ?? rootsOf(ctx.orchestrator.getScoops())[0]?.jid ?? null,
+      parentJid,
     };
 
     const observerHandle = registerScoopObserver(ctx.orchestrator, jid);
@@ -1011,18 +1035,20 @@ function resolveWritablePaths(paths: string[] | undefined, cwdPrefix: string): s
  * Compute the visiblePaths list from spawn options.
  *
  * - `--read-only` set (any value, including `[]`): pure replace. The
- *   caller explicitly opted out of BOTH the default `/workspace/` AND
+ *   caller explicitly opted out of BOTH the owning cone's workspace AND
  *   the implicit `invokingCwd` add — we don't fight that.
- * - `--read-only` absent: return the default `/workspace/` unioned with
+ * - `--read-only` absent: return `defaultVisibleRoot` — the workspace of the
+ *   root that owns the spawning unit (`/workspace/` for the primary cone,
+ *   `/cones/<folder>/workspace/` for an extra one, #2271) — unioned with
  *   the invoking shell's `ctx.cwd` (when provided), so agents launched
  *   from anywhere on the VFS can still READ the directory they were
  *   spawned from. De-duped on the normalized trailing-slash form.
  */
-function resolveVisiblePaths(options: AgentSpawnOptions): string[] {
+function resolveVisiblePaths(options: AgentSpawnOptions, defaultVisibleRoot: string): string[] {
   if (options.visiblePaths !== undefined) {
     return options.visiblePaths.map(normalizeRwPrefix);
   }
-  const base = ['/workspace/'];
+  const base = [defaultVisibleRoot];
   if (options.invokingCwd && options.invokingCwd.length > 0) {
     base.push(normalizeRwPrefix(options.invokingCwd));
   }

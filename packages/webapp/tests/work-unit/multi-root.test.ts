@@ -10,13 +10,20 @@ import { ScoopApprovalRouter } from '../../src/scoops/scoop-approval-router.js';
 import { ScoopCompletionService } from '../../src/scoops/scoop-completion-service.js';
 import { SCOOP_IDLE_TIMEOUT_MS, ScoopIdleTimers } from '../../src/scoops/scoop-idle-timers.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../../src/scoops/types.js';
+import { workspaceFor } from '../../src/work-unit/descriptor.js';
 import { WorkUnitManager } from '../../src/work-unit/manager.js';
 import { rootsOf } from '../../src/work-unit/policy.js';
 import { normalizeScoopRecord } from '../../src/work-unit/record.js';
 import { childRecord, makeFakeHost, rootRecord } from './fixtures.js';
 
 const rootA = rootRecord({ jid: 'cone_a', name: 'A', addedAt: '2026-01-01T00:00:00.000Z' });
-const rootB = rootRecord({ jid: 'cone_b', name: 'B', addedAt: '2026-01-02T00:00:00.000Z' });
+// An extra cone as `coneFolderFor` allocates it: `cone-<slug>`, not `cone`.
+const rootB = rootRecord({
+  jid: 'cone_b',
+  name: 'B',
+  folder: 'cone-b',
+  addedAt: '2026-01-02T00:00:00.000Z',
+});
 const childA = childRecord(rootA.jid, { folder: 'a-worker' });
 const childB = childRecord(rootB.jid, { folder: 'b-worker' });
 
@@ -43,6 +50,25 @@ describe('multiple roots', () => {
     expect(manager.rootOf(childB.jid)?.descriptor.id).toBe(rootB.jid);
     // unaddressed events still have a deterministic home
     expect(manager.resolveDefaultRoot()?.descriptor.id).toBe(rootA.jid);
+  });
+
+  // #2271
+  it('each root owns a private workspace and memory file; scratch stays shared', () => {
+    const host = makeFakeHost([rootA, childA, rootB, childB]);
+    const manager = new WorkUnitManager(host);
+    const a = manager.get(rootA.jid)!.descriptor.workspace;
+    const b = manager.get(rootB.jid)!.descriptor.workspace;
+
+    expect(a.root).toBe('/workspace');
+    expect(b.root).toBe('/cones/cone-b/workspace');
+    expect(b.memoryPath).toBe('/cones/cone-b/CLAUDE.md');
+    // Neither root is a prefix of the other: `ls` in one lists none of the
+    // other's files.
+    expect(b.root.startsWith(`${a.root}/`)).toBe(false);
+    expect(a.root.startsWith(`${b.root}/`)).toBe(false);
+    expect(a.scratch).toBe(b.scratch);
+    // A child's sandbox is unaffected by which root owns it.
+    expect(workspaceFor(childB).root).toBe('/scoops/b-worker/workspace');
   });
 
   it('a completion is delivered to the child’s own parent', async () => {

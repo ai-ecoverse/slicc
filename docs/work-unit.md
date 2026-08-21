@@ -10,16 +10,16 @@ The **cone** (the user's root agent) and every **scoop** (a delegated child) are
 
 They differ in exactly one structural fact — the ownership edge — and in what is derived from it:
 
-|                                                                                                   | Root (cone)                    | Child (scoop)                                                |
-| ------------------------------------------------------------------------------------------------- | ------------------------------ | ------------------------------------------------------------ |
-| `RegisteredScoop.parentJid`                                                                       | `null`                         | jid of the owning unit                                       |
-| `display.role`                                                                                    | `primary`                      | `child`                                                      |
-| `policy.filesystem`                                                                               | `full-workspace` (`VirtualFS`) | `restricted` (`RestrictedFS` over the config paths)          |
-| `policy.approvalAuthority`                                                                        | `user`                         | `{ parentId }`                                               |
-| `policy.canCreateChildren` / `canManageChildren` / `canWriteSharedMemory` / `canResolveApprovals` | `true`                         | `false`                                                      |
-| `policy.sudoDefaultDisposition`                                                                   | `allow`                        | `require-approval`                                           |
-| `completion.mode`                                                                                 | `interactive`                  | `notify-parent` (`silent` when `notifyOnComplete === false`) |
-| `workspace.root`                                                                                  | `/workspace`                   | `/scoops/<folder>/workspace`                                 |
+|                                                                                                   | Root (cone)                                                            | Child (scoop)                                                |
+| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------ |
+| `RegisteredScoop.parentJid`                                                                       | `null`                                                                 | jid of the owning unit                                       |
+| `display.role`                                                                                    | `primary`                                                              | `child`                                                      |
+| `policy.filesystem`                                                                               | `full-workspace` (`VirtualFS`)                                         | `restricted` (`RestrictedFS` over the config paths)          |
+| `policy.approvalAuthority`                                                                        | `user`                                                                 | `{ parentId }`                                               |
+| `policy.canCreateChildren` / `canManageChildren` / `canWriteSharedMemory` / `canResolveApprovals` | `true`                                                                 | `false`                                                      |
+| `policy.sudoDefaultDisposition`                                                                   | `allow`                                                                | `require-approval`                                           |
+| `completion.mode`                                                                                 | `interactive`                                                          | `notify-parent` (`silent` when `notifyOnComplete === false`) |
+| `workspace.root`                                                                                  | `/workspace` (primary cone) / `/cones/<folder>/workspace` (extra cone) | `/scoops/<folder>/workspace`                                 |
 
 Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). They are no longer kernel types.
 
@@ -47,7 +47,7 @@ Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). Th
 | --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `types.ts`      | `WorkUnitDescriptor`, `WorkUnitPolicy`, `CompletionPolicy`, `WorkUnitStatus` (`creating → ready ⇄ running`, `* → failed`, `* → closed`), events, `statusFromTab`                  |
 | `policy.ts`     | `interactiveRootPolicy`, `delegatedChildPolicy`, `derivePolicy`, `deriveCompletion`, `isRootUnit`, `isPolicySubset`, `childrenOf`, `rootsOf`                                      |
-| `descriptor.ts` | `toDescriptor(scoop, tab?)`, `workspaceFor` — pure projections                                                                                                                    |
+| `descriptor.ts` | `toDescriptor(scoop, tab?)`, `workspaceFor`, `PRIMARY_WORKSPACE`, `SKILLS_LIBRARY_DIR` — pure projections; the ONE place the per-unit directory layout is decided                 |
 | `runtime.ts`    | `WorkUnitRuntime` contract + `ScoopContextWorkUnit`, the Phase 1 adapter over `ScoopContext` / `ScoopLifecycleManager`                                                            |
 | `live-unit.ts`  | `LiveWorkUnit` — the owning runtime: holds the `ScoopContext`, tab record and observer set; `transition()` enforces `LEGAL_TRANSITIONS`; `close()` is the single teardown         |
 | `record.ts`     | `normalizeScoopRecord` (derives `isCone`/`type` from the edge on register/restore), `chatSessionIdFor`, `isPrimaryRoot`, `coneFolderFor`, `processOwnerKindFor`, `sourceLabelFor` |
@@ -77,7 +77,54 @@ A strangler migration, each phase a separate PR with deletion criteria:
 - `scoop-drop` of a root goes through `WorkUnitManager.close()` (cascades to its scoops, forgets every dropped buffer/session) and refuses the last root; the rail hides ✕ on the last cone for the same rule.
 - The tray wire carries the edge: `ScoopSummary.parentId` / `ScoopListMsg.scoops[].parentId` (`null` for a cone; absent from leaders older than this). Browser followers group each cone with its own scoops (`toFollowerSwitcherScoops`), the extension panel takes ownership from the wire (`OffscreenClient`) and only infers it for legacy leaders; iOS decodes the field and keeps `isCone` as its root test.
 - Presentation lives in `ui/wc/wc-unit-context.ts`: chip label = `assistantLabel` for roots, thread/URL context `cone` (primary) / `cone:<folder>` (extra) / `scoop:<name>`, default root = primary else oldest. Followers render every cone from the unchanged wire.
-- Extra cones share `/workspace` and `/workspace/CLAUDE.md`; per-cone workspaces are a later phase.
+- Per-cone workspaces landed separately (#2271) — see below.
+
+### Per-cone workspace and memory (#2271)
+
+`workspaceFor` (`work-unit/descriptor.ts`) is the single source for a unit's
+directory layout. Every consumer reads it — `ScoopContext` (dirs, cwd, memory
+file, system prompt), `ConeMemoryStore` / `appendConeMemory`, `scoop_scoop`'s
+and the `agent` command's path defaults, and through those the generated
+per-scoop sudoers.
+
+| Unit                         | Workspace                    | Memory                       | Scratch            |
+| ---------------------------- | ---------------------------- | ---------------------------- | ------------------ |
+| primary cone (folder `cone`) | `/workspace`                 | `/workspace/CLAUDE.md`       | `/tmp`             |
+| extra cone (`cone-<slug>`)   | `/cones/<folder>/workspace`  | `/cones/<folder>/CLAUDE.md`  | `/tmp`             |
+| scoop                        | `/scoops/<folder>/workspace` | `/scoops/<folder>/CLAUDE.md` | `/scoops/<folder>` |
+
+- **The primary cone never moves.** `/workspace` is named by mounts, deep
+  links, skills, `upskill`, workflow discovery and every existing profile;
+  `isPrimaryRoot` (folder `cone`) keeps it exactly where it was.
+- **Shared by design**: `/shared`, `/tmp` (the float-wide scratch space
+  `builtinScoopGrants` already grants every scoop), `/mnt`, `/scoops`,
+  `/sessions`, and the skills library at `/workspace/skills`
+  (`SKILLS_LIBRARY_DIR`). Skills are a library, not a home: `upskill` installs
+  there and `PATH` / `.jsh` / workflow / sprinkle discovery all name it, so a
+  private per-cone copy would only ever hold stale bundled defaults.
+- **Isolation is by layout, not by enforcement.** Every cone is
+  `full-workspace` (unrestricted `VirtualFS`) — two cones do not _see_ each
+  other's files by default because their roots are disjoint and each starts in
+  its own cwd, not because a wall stops them. A scoop IS walled: the read-only
+  root `scoop_scoop` injects is now the creating cone's workspace, so a scoop
+  spawned by an extra cone reads that cone's files, not the primary's. Same for
+  the `agent` command, which walks the ownership chain to its root.
+- **Memory**: the sink path is bound by `ScoopLifecycleManager` from the unit's
+  own record (`workspaceFor(scoop).memoryPath`), never from the caller's meta,
+  so an extra cone's compaction pass cannot append to the primary's file. The
+  logarithmic budget pass (`applyConeMemoryBudget`) takes the same path.
+- **Migration**: extra cones created under #2262 are NOT migrated. They used
+  `/workspace` because every root did; on the first boot after this change they
+  start with a fresh, empty `/cones/<folder>/workspace` and `CLAUDE.md`. Nothing
+  is moved or deleted — their previous files and memory bullets stay in
+  `/workspace`, which every cone can still `cd` into. Copying was rejected
+  because the files of two cones that shared one directory are indistinguishable
+  after the fact, and the flag is experimental and off by default.
+
+Known limits (unchanged by this phase): the freezer / "New session" flow and the
+agentic-memory curator are primary-cone-only (they archive `session-cone`), and
+the workflow prelude's `agent()` still grants sub-agents a read-only
+`/workspace/` alongside the invoking cwd.
 
 ### Per-cone sessions ([#2272](https://github.com/ai-ecoverse/slicc/issues/2272))
 

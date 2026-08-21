@@ -9,6 +9,7 @@ import { createLogger } from '../base/logger.js';
 import type { ScoopModelResolution } from '../providers/account-store.js';
 import type { SudoDecision, SudoKind, SudoRequest } from '../sudo/types.js';
 import type { ToolDefinition } from '../tools/types.js';
+import { workspaceFor } from '../work-unit/descriptor.js';
 import { derivePolicy, isRootUnit } from '../work-unit/policy.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
@@ -338,6 +339,12 @@ interface ScoopRecordInput {
   backgroundAfterSeconds: number | undefined;
   /** JID of the scoop (cone) that invoked scoop_scoop; recorded for delegation-chain reconstruction. */
   parentJid: string;
+  /**
+   * Read-only root a scoop gets when the caller named none: the creating
+   * cone's workspace, so a scoop spawned by an extra cone reads THAT cone's
+   * files rather than the primary's (#2271).
+   */
+  defaultVisibleRoot: string;
 }
 
 /** Build the partial `RegisteredScoop` record passed to onScoopScoop. */
@@ -352,6 +359,7 @@ function buildScoopRecord({
   thinkingLevel,
   backgroundAfterSeconds,
   parentJid,
+  defaultVisibleRoot,
 }: ScoopRecordInput): Omit<RegisteredScoop, 'jid'> {
   return {
     name,
@@ -365,7 +373,7 @@ function buildScoopRecord({
     config: {
       ...(model ? { modelId: model } : {}),
       ...(model && modelProviderId ? { modelProviderId } : {}),
-      visiblePaths: visiblePaths ?? ['/workspace/'],
+      visiblePaths: visiblePaths ?? [defaultVisibleRoot],
       writablePaths: writablePaths ?? [`/scoops/${folder}/`, '/shared/'],
       ...(allowedCommands ? { allowedCommands } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
@@ -451,6 +459,7 @@ async function executeScoopScoop(
       thinkingLevel: parsed.level,
       backgroundAfterSeconds: parsedBackgroundAfter.seconds,
       parentJid: config.scoop.jid,
+      defaultVisibleRoot: `${workspaceFor(config.scoop).root}/`,
     });
     const newScoop = await config.onScoopScoop!(record);
     log.info('Scoop created', { name, folder });

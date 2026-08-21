@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'vitest';
-import { toDescriptor, workspaceFor } from '../../src/work-unit/descriptor.js';
+import {
+  PRIMARY_WORKSPACE,
+  SKILLS_LIBRARY_DIR,
+  toDescriptor,
+  workspaceFor,
+} from '../../src/work-unit/descriptor.js';
 import { statusFromTab } from '../../src/work-unit/types.js';
 import { childRecord, rootRecord } from './fixtures.js';
 
@@ -24,6 +29,31 @@ describe('work-unit descriptor', () => {
       memoryPath: '/scoops/andy-scoop/CLAUDE.md',
       scratch: '/scoops/andy-scoop',
     });
+  });
+
+  // #2271: extra cones get a private root + memory file so two cones neither
+  // list each other's files by default nor append to one `CLAUDE.md`.
+  it('gives every non-primary cone its own workspace and memory file', () => {
+    const extra = workspaceFor(rootRecord({ jid: 'cone_2', folder: 'cone-beta' }));
+    expect(extra).toEqual({
+      root: '/cones/cone-beta/workspace',
+      memoryPath: '/cones/cone-beta/CLAUDE.md',
+      // `/tmp` is the float-wide scratch space every unit already writes to.
+      scratch: '/tmp',
+    });
+    const primary = workspaceFor(rootRecord());
+    expect(extra.root.startsWith(primary.root)).toBe(false);
+    expect(extra.memoryPath).not.toBe(primary.memoryPath);
+    expect(extra.scratch).toBe(primary.scratch);
+  });
+
+  it('pins the primary cone (and the skills library) to the historical layout', () => {
+    // Compatibility contract: existing profiles, mounts and deep links.
+    expect(PRIMARY_WORKSPACE).toEqual(workspaceFor(rootRecord()));
+    expect(PRIMARY_WORKSPACE.root).toBe('/workspace');
+    // Skills are a shared library, NOT per-cone — `upskill` installs here and
+    // every shell's discovery roots name it.
+    expect(SKILLS_LIBRARY_DIR).toBe('/workspace/skills');
   });
 
   it('projects a root record', () => {

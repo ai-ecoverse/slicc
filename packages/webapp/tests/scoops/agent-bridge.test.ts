@@ -346,6 +346,46 @@ describe('createAgentBridge — config construction', () => {
     expect(registerCalls[0].config?.visiblePaths).toEqual(['/workspace/']);
   });
 
+  // #2271: the default read-only root is the workspace of the ROOT that owns
+  // the spawning unit, so an agent spawned inside an extra cone (or by one of
+  // its scoops) reads that cone's files, not the primary cone's.
+  it('defaults visiblePaths to the owning cone workspace when spawned under an extra cone', async () => {
+    const { orchestrator, registerCalls, scripts, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const extraCone: RegisteredScoop = {
+      jid: 'cone_beta',
+      name: 'Beta',
+      folder: 'cone-beta',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'Beta',
+      addedAt: new Date().toISOString(),
+      parentJid: null,
+    };
+    const betaScoop: RegisteredScoop = {
+      ...extraCone,
+      jid: 'scoop_beta_worker',
+      name: 'worker',
+      folder: 'beta-worker',
+      isCone: false,
+      type: 'scoop',
+      assistantLabel: 'beta-worker',
+      parentJid: extraCone.jid,
+    };
+    knownScoops.push(extraCone, betaScoop);
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, parentJid: extraCone.jid });
+    expect(registerCalls[0].config?.visiblePaths).toEqual(['/cones/cone-beta/workspace/']);
+
+    // …and through a scoop of that cone: the chain is walked up to the root.
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+    await bridge.spawn({ ...BASE_OPTS, parentJid: betaScoop.jid });
+    expect(registerCalls[1].config?.visiblePaths).toEqual(['/cones/cone-beta/workspace/']);
+  });
+
   it('passes an explicit visiblePaths list through pure-replace (no merge with /workspace/)', async () => {
     const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
     const { fs } = makeMockSharedFs();

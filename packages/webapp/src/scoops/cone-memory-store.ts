@@ -4,9 +4,12 @@
  * - `/shared/CLAUDE.md` (the global, scoop-visible file) — read/written by
  *   `get/setGlobalMemory`; the orchestrator's `update_global_memory` tool sits
  *   on top of this.
- * - `/workspace/CLAUDE.md` (the cone's auto-extracted memory) — appended via
+ * - the owning cone's `CLAUDE.md` (its auto-extracted memory) — appended via
  *   {@link appendConeMemory}; serialized through `memoryWriteChain` so
- *   concurrent compaction + "New session" passes can't race.
+ *   concurrent compaction + "New session" passes can't race. The path travels
+ *   with the call (`meta.memoryPath`, bound per unit by
+ *   `ScoopLifecycleManager`) so an extra cone appends to its own file (#2271)
+ *   and defaults to the primary's `/workspace/CLAUDE.md`.
  * - One-shot migration of legacy `## Auto-extracted` blocks from the shared
  *   file into the cone file; sentinel at `/workspace/.cone-memory-migrated`.
  *
@@ -23,6 +26,12 @@ import { createDefaultSharedFiles } from './skills.js';
 
 const log = createLogger('cone-memory-store');
 
+/** Directory holding `path` (`/cones/b/CLAUDE.md` → `/cones/b`). */
+function parentDirOf(path: string): string {
+  const idx = path.lastIndexOf('/');
+  return idx <= 0 ? '/' : path.slice(0, idx);
+}
+
 export interface ConeMemoryStoreDeps {
   /** Live shared VFS handle; `null` before orchestrator `init()` resolves. */
   getSharedFs(): VirtualFS | null;
@@ -30,6 +39,12 @@ export interface ConeMemoryStoreDeps {
 
 export interface AppendConeMemoryMeta {
   source: string;
+  /**
+   * Cone memory file to append to. Bound to the calling unit's
+   * `workspace.memoryPath` by the lifecycle manager; defaults to the primary
+   * cone's file for the float-wide callers that predate multiple cones.
+   */
+  memoryPath?: string;
   model?: Model<Api>;
   apiKey?: string;
   headers?: Record<string, string>;
@@ -89,8 +104,8 @@ export class ConeMemoryStore {
   }
 
   /**
-   * Append a dated `## Auto-extracted` block of memory bullets to
-   * `/workspace/CLAUDE.md` (the cone's memory). Serializes writes through an
+   * Append a dated `## Auto-extracted` block of memory bullets to the calling
+   * cone's `CLAUDE.md` (`meta.memoryPath`). Serializes writes through an
    * internal promise chain so concurrent compaction + "New session" passes
    * cannot race. After each append, runs the logarithmic-budget restructure
    * pass best-effort.
@@ -100,12 +115,13 @@ export class ConeMemoryStore {
     const trimmed = bullets.trim();
     if (!trimmed) return;
 
+    const memoryPath = meta.memoryPath ?? CONE_MEMORY_PATH;
     const next = this.memoryWriteChain.then(async () => {
       const fs = this.deps.getSharedFs();
       if (!fs) return;
       let current = '';
       try {
-        const raw = await fs.readFile(CONE_MEMORY_PATH, { encoding: 'utf-8' });
+        const raw = await fs.readFile(memoryPath, { encoding: 'utf-8' });
         current = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
       } catch (err) {
         // Only treat "file doesn't exist yet" as empty. Anything else (transient
@@ -115,20 +131,26 @@ export class ConeMemoryStore {
         // new bullets. Mirrors the ENOENT-only pattern from `readIfPresent` in
         // packages/cloud-core/src/operations/resume.ts (PR #1357).
         if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
-        // Parent may still be missing on a truly-fresh cone; `recursive: true`
-        // makes this a no-op when the directory already exists.
-        await fs.mkdir('/workspace', { recursive: true });
+        // Parent may still be missing on a truly-fresh cone (and always is for
+        // an extra cone's `/cones/<folder>`); `recursive: true` makes this a
+        // no-op when the directory already exists.
+        await fs.mkdir(parentDirOf(memoryPath), { recursive: true });
       }
       const date = new Date().toISOString().slice(0, 10);
       const heading = `## Auto-extracted (${date}, ${meta.source})`;
       const separator = current.length === 0 || current.endsWith('\n') ? '' : '\n';
       const block = `${separator}\n${heading}\n\n${trimmed}\n`;
-      await fs.writeFile(CONE_MEMORY_PATH, current + block);
-      log.info('Cone memory appended', { source: meta.source, length: trimmed.length });
+      await fs.writeFile(memoryPath, current + block);
+      log.info('Cone memory appended', {
+        source: meta.source,
+        length: trimmed.length,
+        path: memoryPath,
+      });
 
       try {
         await applyConeMemoryBudget({
           vfs: fs,
+          memoryPath,
           model: meta.model,
           apiKey: meta.apiKey,
           headers: meta.headers,

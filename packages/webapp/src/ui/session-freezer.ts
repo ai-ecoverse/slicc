@@ -34,7 +34,11 @@ import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import type { AgentBridge } from '../scoops/agent-bridge.js';
 import { curatorReceiptPath, runAgenticMemoryPass } from '../scoops/agentic-memory.js';
 import type { SessionStore } from '../scoops/chat-session-store.js';
-import { applyConeMemoryBudget, readSessionCount } from '../scoops/cone-memory-budget.js';
+import {
+  applyConeMemoryBudget,
+  CONE_MEMORY_PATH,
+  readSessionCount,
+} from '../scoops/cone-memory-budget.js';
 import type {
   FrozenSessionArchive,
   FrozenSessionCost,
@@ -777,7 +781,8 @@ async function ensureDir(vfs: WritableVfsClient, path: string): Promise<void> {
 }
 
 /**
- * Append auto-extracted bullets to `/workspace/CLAUDE.md`, then route through
+ * Append auto-extracted bullets to the primary cone's `CLAUDE.md`, then route
+ * through
  * the logarithmic memory budget (`applyConeMemoryBudget`) so a long-running
  * series of freezer/enrichment appends gets restructured the same way the
  * orchestrator's compaction-driven `appendConeMemory` path does. The budget
@@ -795,7 +800,10 @@ async function appendConeMemoryViaVfs(
     signal?: AbortSignal;
   }
 ): Promise<void> {
-  const path = '/workspace/CLAUDE.md';
+  // The freezer is a primary-cone flow end to end — it archives `session-cone`
+  // — so the primary's memory file is the right sink here. An extra cone's
+  // memory is written by its own compaction pass (#2271).
+  const path = CONE_MEMORY_PATH;
   let current = '';
   try {
     const raw = await vfs.readFile(path, { encoding: 'utf-8' });
@@ -808,7 +816,7 @@ async function appendConeMemoryViaVfs(
     // the ENOENT-only pattern from `readIfPresent` in
     // packages/cloud-core/src/operations/resume.ts (PR #1357).
     if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
-    await ensureDir(vfs, '/workspace');
+    await ensureDir(vfs, path.slice(0, path.lastIndexOf('/')));
   }
   const date = new Date().toISOString().slice(0, 10);
   const heading = `## Auto-extracted (${date}, ${source})`;
@@ -817,7 +825,7 @@ async function appendConeMemoryViaVfs(
   await vfs.writeFile(path, current + block);
 
   // Post-append budget step. Symmetric to the orchestrator path —
-  // bound `/workspace/CLAUDE.md` against the logarithmic budget when
+  // bound the primary cone's `CLAUDE.md` against the logarithmic budget when
   // credentials are wired through. Failures are swallowed by the sink
   // itself, but wrap in try/catch defensively so a thrown error never
   // escapes the freezer.

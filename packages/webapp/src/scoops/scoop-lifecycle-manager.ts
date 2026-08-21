@@ -19,7 +19,6 @@
  * coupling.
  */
 
-import type { Api, Model } from '@earendil-works/pi-ai';
 import type { ToolProgressEvent } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { SessionStore } from '../core/session.js';
@@ -29,10 +28,11 @@ import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
 import type { SudoDecision, SudoRequest } from '../sudo/index.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
-import { toDescriptor } from '../work-unit/descriptor.js';
+import { toDescriptor, workspaceFor } from '../work-unit/descriptor.js';
 import { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { normalizeScoopRecord } from '../work-unit/record.js';
+import type { AppendConeMemoryMeta } from './cone-memory-store.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState, ThinkingLevel } from './types.js';
@@ -162,16 +162,7 @@ export interface ScoopLifecycleDeps {
     getScoops(): RegisteredScoop[];
     getGlobalMemory(): Promise<string>;
     setGlobalMemory(content: string): Promise<void>;
-    appendConeMemory(
-      bullets: string,
-      meta: {
-        source: string;
-        model?: Model<Api>;
-        apiKey?: string;
-        headers?: Record<string, string>;
-        signal?: AbortSignal;
-      }
-    ): Promise<void>;
+    appendConeMemory(bullets: string, meta: AppendConeMemoryMeta): Promise<void>;
     enqueueSudoRequest(scoopJid: string, request: SudoRequest): Promise<SudoDecision>;
     resolveActionableLick(
       id: string,
@@ -872,8 +863,15 @@ export class ScoopLifecycleManager {
       setGlobalMemory: policy.canWriteSharedMemory
         ? (content) => cone.setGlobalMemory(content)
         : undefined,
+      // The memory file is bound HERE, from the unit's own record — not taken
+      // from the caller's meta — so an extra cone's compaction pass can only
+      // ever append to its own `CLAUDE.md` (#2271).
       appendConeMemory: policy.canWriteSharedMemory
-        ? (bullets, meta) => cone.appendConeMemory(bullets, meta)
+        ? (bullets, meta) =>
+            cone.appendConeMemory(bullets, {
+              ...meta,
+              memoryPath: workspaceFor(scoop).memoryPath,
+            })
         : undefined,
       // Sudo escalation wiring — symmetrical to the brokers but exposed as
       // tools. Scoops get `onSudoRequest` (routes through the pending-request

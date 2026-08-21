@@ -2808,6 +2808,39 @@ describe('Orchestrator legacy cone-memory migration', () => {
     // /workspace/CLAUDE.md was not created by this no-op call.
     await expect(fs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' })).rejects.toBeDefined();
   });
+
+  // #2271: the memory sink takes the path from the calling unit's record, so
+  // an extra cone's auto-extraction lands in ITS `CLAUDE.md`.
+  it('appends to the cone memory file named by meta.memoryPath, creating its directory', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+    await fs.rm('/workspace/CLAUDE.md').catch(() => {});
+
+    await orch.appendConeMemory('- beta learned something', {
+      source: 'compaction',
+      memoryPath: '/cones/cone-beta/CLAUDE.md',
+    });
+
+    // `/cones/cone-beta` did not exist — the sink created it.
+    const betaMemory = await readUtf8(fs, '/cones/cone-beta/CLAUDE.md');
+    expect(betaMemory).toContain('- beta learned something');
+    expect(betaMemory).toMatch(/## Auto-extracted \(\d{4}-\d{2}-\d{2}, compaction\)/);
+    // The primary cone's file is untouched.
+    await expect(fs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' })).rejects.toBeDefined();
+
+    // No path → the primary cone's file, as every pre-#2271 caller expects.
+    await orch.appendConeMemory('- primary learned something', { source: 'new-session' });
+    expect(await readUtf8(fs, '/workspace/CLAUDE.md')).toContain('- primary learned something');
+    expect(await readUtf8(fs, '/cones/cone-beta/CLAUDE.md')).not.toContain(
+      '- primary learned something'
+    );
+  });
 });
 
 describe('Orchestrator.handleCherryHostEvent', () => {
