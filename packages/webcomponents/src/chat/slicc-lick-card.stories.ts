@@ -255,3 +255,23 @@ export const Dismissed: Story = {
       'A <b>sudo request</b> the user <b>dismissed</b> — a red cross and the whole card mutes.',
   },
 };
+
+/**
+ * A cron lick whose payload is a fenced JSON block — the shape the webapp's
+ * markdown renderer slots in. The long single-line task string WRAPS inside the
+ * card instead of rendering an unwrapped `<pre>` that bursts the card and drags
+ * the whole chat column sideways.
+ */
+export const LongCodeBody: Story = {
+  args: { kind: 'cron', 'event-label': 'pr277-ci-poll', collapsible: true, 'no-animate': true },
+  render: (args) => {
+    const el = build(args);
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.className = 'language-json';
+    code.textContent = `{\n  "task": "check CI on ai-ecoverse/skills PR 277 with: gh pr checks 277 --repo ai-ecoverse/skills. If every check has settled, report the review (slack) Tessl score to Lars and delete this crontask."\n}`;
+    pre.append(code);
+    el.append(pre);
+    return el;
+  },
+};

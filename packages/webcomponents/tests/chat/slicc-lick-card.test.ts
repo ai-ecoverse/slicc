@@ -550,3 +550,60 @@ describe('scoop-accent hue', () => {
     el.remove();
   });
 });
+
+describe('slotted body containment', () => {
+  /**
+   * Mount a card in a fixed-width wrapper with a slotted markdown body — the
+   * shape the webapp produces (`renderMessageContent` HTML inside a section
+   * div), here a cron payload as one very long fenced JSON line.
+   */
+  function mountWithCode(): { el: SliccLickCard; pre: HTMLPreElement } {
+    const wrap = document.createElement('div');
+    wrap.style.width = '400px';
+    document.body.appendChild(wrap);
+    const el = document.createElement('slicc-lick-card') as SliccLickCard;
+    el.setAttribute('kind', 'cron');
+    const section = document.createElement('div');
+    const pre = document.createElement('pre');
+    const code = document.createElement('code');
+    code.className = 'language-json';
+    code.textContent = `{ "task": "${'check CI on ai-ecoverse/skills PR 277 and report the score '.repeat(6)}" }`;
+    pre.appendChild(code);
+    section.appendChild(pre);
+    el.appendChild(section);
+    wrap.appendChild(el);
+    return { el, pre };
+  }
+
+  it('wraps a slotted code block instead of bursting the card', () => {
+    const { el, pre } = mountWithCode();
+    expect(getComputedStyle(pre).whiteSpace).toBe('pre-wrap');
+    // The long JSON line wraps inside the card — no horizontal overflow that
+    // would drag the whole chat column sideways.
+    expect(pre.scrollWidth).toBeLessThanOrEqual(pre.clientWidth + 1);
+    // The card itself doesn't overflow either (it stays inside its 85% cap).
+    const cardEl = card(el);
+    expect(cardEl.scrollWidth).toBeLessThanOrEqual(cardEl.clientWidth + 1);
+    expect(cardEl.getBoundingClientRect().width).toBeLessThanOrEqual(400);
+  });
+
+  it('breaks a single unbroken token rather than overflowing', () => {
+    const wrap = document.createElement('div');
+    wrap.style.width = '400px';
+    document.body.appendChild(wrap);
+    const el = document.createElement('slicc-lick-card') as SliccLickCard;
+    const section = document.createElement('div');
+    const pre = document.createElement('pre');
+    pre.textContent = 'x'.repeat(600);
+    section.appendChild(pre);
+    el.appendChild(section);
+    wrap.appendChild(el);
+    expect(pre.scrollWidth).toBeLessThanOrEqual(pre.clientWidth + 1);
+  });
+
+  it('injects the slotted-body stylesheet exactly once', () => {
+    mountWithCode();
+    mountWithCode();
+    expect(document.querySelectorAll('#slicc-lick-card-slotted-style')).toHaveLength(1);
+  });
+});
