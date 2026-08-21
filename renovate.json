@@ -19,15 +19,21 @@
   },
   "packageRules": [
     {
+      "description": "Pin every npm dependency to an exact version. Renovate cannot see the locked version of a dep declared in a workspace package.json: npm hoists everything into the root `node_modules/`, but since renovatebot/renovate#37407 Renovate looks the dep up under `packages/<pkg>/node_modules/<dep>` and gives up when that never-written key is missing. With `lockedVersion: null` it can only offer updates that change the range, so caret-ranged workspace deps silently froze at whatever the lockfile happened to hold — `@earendil-works/pi-ai` sat on 0.84.0 under `^0.84.0` for a week, which is why Grok 4.6 never reached the model dropdown (PR #2293). Exact pins make every version change a visible package.json diff in its own PR, which is what the one-dep-per-PR philosophy above wants anyway. Scoped to dependencies/devDependencies so `engines` and `peerDependencies` keep their ranges.",
+      "matchManagers": ["npm"],
+      "matchDepTypes": ["dependencies", "devDependencies"],
+      "rangeStrategy": "pin"
+    },
+    {
       "matchPackageNames": ["pyodide"],
       "rangeStrategy": "pin"
     },
     {
-      "matchPackagePrefixes": ["@semantic-release/"],
+      "matchPackageNames": ["@semantic-release/{/,}**"],
       "groupName": "semantic-release packages"
     },
     {
-      "matchPackagePrefixes": ["@xterm/"],
+      "matchPackageNames": ["@xterm/{/,}**"],
       "groupName": "xterm packages"
     },
     {
@@ -54,7 +60,7 @@
     },
     {
       "description": "pi (Earendil) agent engine packages: fast-track with a shorter 3-day cooldown. Placed after the 14-day major rule so even major bumps get 3 days.",
-      "matchPackagePrefixes": ["@earendil-works/"],
+      "matchPackageNames": ["@earendil-works/{/,}**"],
       "groupName": "earendil-works packages",
       "minimumReleaseAge": "3 days"
     },
@@ -68,6 +74,12 @@
       "description": "Formatter/linter bumps (biome, prettier) reflow existing source, so `biome check .` / `prettier --check .` in the CI lint gate fail on files the new version would reformat (e.g. biome 2.5.4's curried-call reflow, PR #1602). The Mend-hosted Renovate app can't run postUpgradeTasks, so label these and let the renovate-format-reconcile workflow run the formatter and push the reflow to the PR branch (mirrors the renovate-patch-reconcile pattern). Keep separate PRs (no groupName) per the one-dep-per-PR philosophy above.",
       "matchPackageNames": ["@biomejs/biome", "prettier"],
       "addLabels": ["formatter-bump"]
+    },
+    {
+      "description": "go-optel is a sibling module resolved through a `replace` directive in packages/slicc-cli/go.mod, so it is never published to a proxy and every run reports it under 'Package lookup failures' on the Dependency Dashboard. Disable it so that banner only ever means a real lookup failure.",
+      "matchManagers": ["gomod"],
+      "matchDepNames": ["github.com/ai-ecoverse/go-optel"],
+      "enabled": false
     }
   ]
 }
