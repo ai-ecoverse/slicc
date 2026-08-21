@@ -41,20 +41,16 @@ function sprinkleHelp(): Result {
   return {
     stdout:
       'usage: sprinkle <subcommand> [args]\n\n' +
-      '  list [--runtime <id>] List available .shtml sprinkles and their open\n' +
-      '                        instances (one per rendering runtime); --runtime\n' +
-      '                        limits the report to that runtime\n' +
+      '  list [--runtime <id>] List sprinkles + an instance line per runtime\n' +
       '  open <name>           Open a sprinkle by name\n' +
       '  close <name>          Close an open sprinkle\n' +
       '  reload <name>         Reload an open sprinkle (re-read .shtml)\n' +
       '  refresh               Re-scan VFS for .shtml files\n' +
       '  send <name> <json> [--runtime <id>]\n' +
-      '                        Push data to a sprinkle. Without --runtime this\n' +
-      '                        BROADCASTS to every open instance (the leader and\n' +
-      '                        every connected follower); with it, only that\n' +
-      '                        runtime is updated. Runtime ids come from `host`.\n' +
-      '                        Reports how many instances were reached and exits\n' +
-      '                        non-zero when the push reached none.\n' +
+      '                        Push data. Broadcasts to every open instance\n' +
+      '                        (leader + followers) unless --runtime names one\n' +
+      '                        (ids from `host`). Reports instances reached;\n' +
+      '                        exits non-zero when it reached none.\n' +
       '  route <name> --scoop <scoop>  Route lick events to a scoop instead of cone\n' +
       '  route <name> --clear          Clear routing (revert to cone)\n' +
       '  route                         List all sprinkle routes\n' +

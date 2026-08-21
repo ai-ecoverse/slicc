@@ -279,12 +279,12 @@ This is the difference between "every click adds a turn to your owning scoop" (e
 
 ## Managing sprinkles via bash
 
-- `sprinkle list` — see available sprinkles, with one `instance:` line per runtime that has the sprinkle rendered (the leader plus each connected follower that reported it). `sprinkle list --runtime <id>` narrows the report to one runtime.
+- `sprinkle list` — available sprinkles, plus one `instance:` line per runtime rendering each (leader + reporting followers). `--runtime <id>` narrows it.
 - `sprinkle open <name>` — show a sprinkle in the sidebar.
 - `sprinkle close <name>` — remove it.
-- `sprinkle send <name> '<json>'` — push data (single-quote the JSON!). **This is a broadcast**: every open instance of that sprinkle receives it, on the leader and on every connected follower. It prints how many instances it reached and exits non-zero when it reached none, so a push that vanished is visible.
-- `sprinkle send <name> '<json>' --runtime <id>` — push to ONE runtime only. Use this to answer a `request-load` from a specific follower panel; runtime ids come from `host` (`leader` targets the local one).
-- Unknown flags are rejected. `sprinkle list --runtime=MADE-UP-ID` fails instead of quietly printing the same listing as a real id — a probe that exits 0 must mean the flag was honoured.
+- `sprinkle send <name> '<json>'` — push data (single-quote the JSON!). **Broadcasts** to every open instance, leader and followers. Prints the instances reached; exits non-zero when it reached none, so a vanished push is visible.
+- `sprinkle send <name> '<json>' --runtime <id>` — push to ONE runtime (ids from `host`; `leader` is the local one). Use it to answer a `request-load` from a specific follower panel.
+- Unknown flags are rejected, so a probe that exits 0 means the flag was honoured.
 - `sprinkle chat '<html>'` — show inline HTML in the chat (for quick confirmations / choices). Blocks until the user clicks; returns the lick result as JSON. Use when a tool needs user input mid-execution.
 - `open /path/to/file.shtml` — also opens as a sprinkle.
 
