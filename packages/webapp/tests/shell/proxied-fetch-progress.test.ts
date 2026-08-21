@@ -59,6 +59,24 @@ describe('createProxiedFetch progress (CLI path)', () => {
     ]);
   });
 
+  it('copes with a length hint that is too small or too large', async () => {
+    for (const [hint, text] of [
+      ['3', 'hello world'],
+      ['100', 'hello world'],
+    ] as const) {
+      fetchSpy.mockResolvedValue(
+        streamResponse(['hello ', 'world'], {
+          'content-type': 'text/plain',
+          'x-proxy-content-length': hint,
+        })
+      );
+      const { observer } = recorder();
+      const result = await createProxiedFetch({ progress: observer })(url);
+      expect(new TextDecoder().decode(result.body), `hint ${hint}`).toBe(text);
+      expect(result.body.byteLength).toBe(11);
+    }
+  });
+
   it('reports an unknown total when the hint is absent or malformed', async () => {
     fetchSpy.mockResolvedValue(
       streamResponse(['abc'], { 'content-type': 'text/plain', 'x-proxy-content-length': 'nope' })
