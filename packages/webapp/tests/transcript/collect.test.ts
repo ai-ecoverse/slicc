@@ -18,6 +18,7 @@ import type { ChatMessage, Session } from '../../src/scoops/chat-types.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 import {
   collectActiveTranscriptSources,
+  subtreeOf,
   type TranscriptCollectionDeps,
 } from '../../src/transcript/collect.js';
 
@@ -581,5 +582,133 @@ describe('collectActiveTranscriptSources — message-generation signature', () =
 
     // Stable null on both sides — no retry
     expect(loadCount).toBe(1);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Tests: per-cone scoping (#2272)
+// ---------------------------------------------------------------------------
+
+const coneB: RegisteredScoop = {
+  ...cone,
+  jid: 'cone-b-jid',
+  name: 'Research',
+  folder: 'cone-research',
+  assistantLabel: 'Research',
+};
+
+const scoopB: RegisteredScoop = {
+  ...scoop,
+  jid: 'scoop-b-jid',
+  name: 'Helper',
+  folder: 'helper-scoop',
+  parentJid: 'cone-b-jid',
+};
+
+const grandchild: RegisteredScoop = {
+  ...scoop,
+  jid: 'grandchild-jid',
+  name: 'Deep',
+  folder: 'deep-scoop',
+  parentJid: 'scoop-b-jid',
+};
+
+describe('subtreeOf', () => {
+  const all = [cone, scoop, coneB, scoopB, grandchild];
+
+  it('returns the root plus every unit it transitively owns', () => {
+    expect(subtreeOf(all, 'cone-b-jid').map((s) => s.jid)).toEqual([
+      'cone-b-jid',
+      'scoop-b-jid',
+      'grandchild-jid',
+    ]);
+  });
+
+  it('excludes a sibling root and its children', () => {
+    expect(subtreeOf(all, 'cone-jid').map((s) => s.jid)).toEqual(['cone-jid', 'scoop-jid']);
+  });
+
+  it('can be rooted at a child', () => {
+    expect(subtreeOf(all, 'scoop-b-jid').map((s) => s.jid)).toEqual([
+      'scoop-b-jid',
+      'grandchild-jid',
+    ]);
+  });
+
+  it('returns nothing for a root that is no longer registered', () => {
+    expect(subtreeOf(all, 'gone')).toEqual([]);
+  });
+});
+
+describe('collectActiveTranscriptSources — rootJid scope (#2272)', () => {
+  function deps(overrides: Partial<TranscriptCollectionDeps> = {}): TranscriptCollectionDeps {
+    return {
+      listScoops: () => [cone, scoop, coneB, scoopB],
+      isProcessing: () => false,
+      getAgentMessages: (jid) => (jid === 'cone-b-jid' ? coneMessages : []),
+      loadPersistedSessions: async () => [],
+      loadUiChatSessions: async () => [
+        makeUiSession('session-cone', [
+          { id: 'a', role: 'user', content: 'cone A secret', timestamp: 1 },
+        ]),
+        makeUiSession('session-cone-research', [
+          { id: 'b', role: 'user', content: 'cone B chat', timestamp: 1 },
+        ]),
+      ],
+      wait: noop,
+      ...overrides,
+    };
+  }
+
+  it('collects only the named cone and its scoops', async () => {
+    const result = await collectActiveTranscriptSources(deps(), undefined, {
+      rootJid: 'cone-b-jid',
+    });
+
+    expect(result.sources.map((s) => s.id)).toEqual(['cone-b-jid', 'scoop-b-jid']);
+    expect([...result.chatMessagesByConversation.keys()]).toEqual(['cone-b-jid']);
+  });
+
+  it('collects everything when no scope is given', async () => {
+    const result = await collectActiveTranscriptSources(deps());
+
+    expect(result.sources.map((s) => s.id)).toEqual([
+      'cone-jid',
+      'scoop-jid',
+      'cone-b-jid',
+      'scoop-b-jid',
+    ]);
+  });
+
+  it('does not wait on a sibling cone that is still processing', async () => {
+    const wait = vi.fn(noop);
+    const result = await collectActiveTranscriptSources(
+      deps({ isProcessing: (jid) => jid === 'cone-jid', wait }),
+      undefined,
+      { rootJid: 'cone-b-jid' }
+    );
+
+    expect(wait).not.toHaveBeenCalled();
+    expect(result.sources.map((s) => s.id)).toEqual(['cone-b-jid', 'scoop-b-jid']);
+  });
+
+  it('still waits for a scoop inside the scoped subtree', async () => {
+    let processing = true;
+    const wait = vi.fn(async () => {
+      processing = false;
+    });
+    await collectActiveTranscriptSources(
+      deps({ isProcessing: (jid) => jid === 'scoop-b-jid' && processing, wait }),
+      undefined,
+      { rootJid: 'cone-b-jid' }
+    );
+
+    expect(wait).toHaveBeenCalled();
+  });
+
+  it('collects nothing for a root that vanished mid-freeze', async () => {
+    const result = await collectActiveTranscriptSources(deps(), undefined, { rootJid: 'gone' });
+
+    expect(result.sources).toEqual([]);
   });
 });

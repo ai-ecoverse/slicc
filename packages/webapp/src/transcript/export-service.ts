@@ -48,6 +48,13 @@ export interface FrozenTranscriptMetadata {
   frozenAt: string;
   createdAt: number;
   updatedAt: number;
+  /**
+   * Root unit the archive belongs to (#2272). Scopes the snapshot to that
+   * cone and its scoops, so freezing cone B never bundles cone A's
+   * conversation — nor waits for cone A's turn to end. Omitted, every
+   * registered unit is captured, as before multiple cones existed.
+   */
+  rootJid?: string;
 }
 
 export interface TranscriptExportService {
@@ -277,7 +284,14 @@ export class DefaultTranscriptExportService implements TranscriptExportService {
   }
 
   async captureFrozen(metadata: FrozenTranscriptMetadata, signal?: AbortSignal): Promise<void> {
-    const collected = await collectActiveTranscriptSources(this.deps.collection, signal);
+    const collected = await collectActiveTranscriptSources(this.deps.collection, signal, {
+      ...(metadata.rootJid ? { rootJid: metadata.rootJid } : {}),
+    });
+    // A named root that no longer exists (dropped while the freeze ran)
+    // collects nothing. Writing that empty snapshot would be worse than
+    // writing none: `buildFrozenSnapshot` PREFERS a stored snapshot over the
+    // Markdown archive, so an empty one would mask the real transcript.
+    if (metadata.rootJid && collected.sources.length === 0) return;
     const normalized = normalizeConversations(collected.sources);
 
     const document = buildDocumentSkeleton(

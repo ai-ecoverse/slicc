@@ -46,6 +46,57 @@ export interface FreezerRailHandles {
   getViewedFrozenSessionId(): string | null;
 }
 
+interface ArchiveConeSessionDeps {
+  action: 'save' | 'skip';
+  writer: Awaited<ReturnType<FreezerRailDeps['openVfs']>>['writer'];
+  /** Root being archived; `undefined` only if the roster is empty. */
+  root: RegisteredScoop | undefined;
+  client: Pick<OffscreenClient, 'spawnAgent'>;
+  freezerNew(): HTMLElement | null;
+  refreshFreezer(): void;
+  runNewSessionFreeze: typeof import('../new-session.js').runNewSessionFreeze;
+  runNewSessionFreezeQuick: typeof import('../new-session.js').runNewSessionFreezeQuick;
+}
+
+/**
+ * The archive half of "New chat" — everything before the clear. Both the
+ * Markdown freeze and the complete-snapshot capture are scoped to `root`
+ * (#2272): a sibling cone's conversation does not belong in this archive's
+ * bundle, and a sibling cone's running turn must not hold up the freeze.
+ */
+async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
+  const { root } = deps;
+  const cone = root ? { folder: root.folder, label: switcherLabelFor(root) } : undefined;
+  const captureCompleteSnapshot = async (frozen: FrozenSession): Promise<void> => {
+    const { getTranscriptExportService } = await import('../../transcript/export-provider.js');
+    await getTranscriptExportService().captureFrozen({
+      sessionId: frozen.sessionId ?? frozen.archive.id,
+      title: frozen.archive.title,
+      frozenAt: frozen.archive.frozenAt,
+      createdAt: frozen.archive.createdAt,
+      updatedAt: frozen.archive.updatedAt,
+      ...(root ? { rootJid: root.jid } : {}),
+    });
+  };
+  if (deps.action !== 'save') {
+    await deps.runNewSessionFreezeQuick({ vfs: deps.writer, cone, captureCompleteSnapshot });
+    return;
+  }
+  await deps.runNewSessionFreeze({
+    vfs: deps.writer,
+    cone,
+    agenticMemorySpawn: (options) => deps.client.spawnAgent(options),
+    captureCompleteSnapshot,
+    onProgress: (fraction) => {
+      const el = deps.freezerNew();
+      if (!el) return;
+      if (fraction === null) el.removeAttribute('progress');
+      else el.setAttribute('progress', String(fraction));
+    },
+    onBackgroundEnriched: deps.refreshFreezer,
+  });
+}
+
 /** Wire frozen-session refresh, new-session actions, and read-only thaw routing. */
 export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   const { refs, openVfs, client, getController, getSelected, clearSelection, log } = deps;
@@ -107,42 +158,22 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
       // to the default root. Captured BEFORE the awaits so a roster refresh
       // mid-freeze cannot move the target between archive and clear.
       const root = rootForSelection(client.getScoops(), getSelected());
-      const cone = root ? { folder: root.folder, label: switcherLabelFor(root) } : undefined;
       try {
         const { writer } = await openVfs();
         const { resetNewSessionTmp, runNewSessionFreeze, runNewSessionFreezeQuick } = await import(
           '../new-session.js'
         );
         if (action !== 'erase') {
-          const captureCompleteSnapshot = async (frozen: FrozenSession): Promise<void> => {
-            const { getTranscriptExportService } = await import(
-              '../../transcript/export-provider.js'
-            );
-            await getTranscriptExportService().captureFrozen({
-              sessionId: frozen.sessionId ?? frozen.archive.id,
-              title: frozen.archive.title,
-              frozenAt: frozen.archive.frozenAt,
-              createdAt: frozen.archive.createdAt,
-              updatedAt: frozen.archive.updatedAt,
-            });
-          };
-          if (action === 'save') {
-            await runNewSessionFreeze({
-              vfs: writer,
-              cone,
-              agenticMemorySpawn: (options) => client.spawnAgent(options),
-              captureCompleteSnapshot,
-              onProgress: (fraction) => {
-                const el = freezerNew();
-                if (!el) return;
-                if (fraction === null) el.removeAttribute('progress');
-                else el.setAttribute('progress', String(fraction));
-              },
-              onBackgroundEnriched: refreshFreezer,
-            });
-          } else {
-            await runNewSessionFreezeQuick({ vfs: writer, cone, captureCompleteSnapshot });
-          }
+          await archiveConeSession({
+            action,
+            writer,
+            root,
+            client,
+            freezerNew,
+            refreshFreezer,
+            runNewSessionFreeze,
+            runNewSessionFreezeQuick,
+          });
         }
         await resetNewSessionTmp(writer);
         await client.clearAllMessages(root?.jid);

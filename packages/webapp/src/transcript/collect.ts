@@ -37,6 +37,17 @@ export interface CollectedTranscriptInput {
   chatMessagesByConversation: Map<string, readonly ChatMessage[]>;
 }
 
+export interface TranscriptCollectionScope {
+  /**
+   * Restrict collection to this unit and everything it transitively owns
+   * (#2272). A frozen archive belongs to exactly one cone, so its snapshot
+   * must not carry a sibling cone's conversation — and must not wait for a
+   * sibling cone's turn to finish. Omitted, every registered unit is
+   * collected, which is what a whole-workspace `session export` wants.
+   */
+  rootJid?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -50,6 +61,29 @@ const POLL_INTERVAL_MS = 50;
 /** Compute the UI session-store ID for a given scoop. */
 function uiSessionId(scoop: RegisteredScoop): string {
   return chatSessionIdFor(scoop);
+}
+
+/**
+ * `rootJid`'s unit plus every unit it transitively owns, in registry order.
+ * Empty when the root is no longer registered — the caller decides what an
+ * empty scope means rather than silently widening back to everything.
+ */
+export function subtreeOf(scoops: readonly RegisteredScoop[], rootJid: string): RegisteredScoop[] {
+  const owned = new Set<string>([rootJid]);
+  // One pass per generation: a child is admitted once its parent is, and the
+  // depth of the ownership tree can never exceed the roster size.
+  for (let pass = 0; pass < scoops.length; pass++) {
+    let grew = false;
+    for (const scoop of scoops) {
+      if (owned.has(scoop.jid)) continue;
+      if (scoop.parentJid !== null && owned.has(scoop.parentJid)) {
+        owned.add(scoop.jid);
+        grew = true;
+      }
+    }
+    if (!grew) break;
+  }
+  return scoops.filter((scoop) => owned.has(scoop.jid));
 }
 
 /**
@@ -140,7 +174,8 @@ function assembleResult(
 // ---------------------------------------------------------------------------
 
 /**
- * Collect transcript sources from all active scoops.
+ * Collect transcript sources from all active scoops, or — with
+ * `scope.rootJid` — from one root's subtree only.
  *
  * Polls every 50 ms while any scoop is processing, then loads persisted
  * sessions (fallback for live) and UI chat sessions (for attachments and
@@ -154,13 +189,16 @@ function assembleResult(
  */
 export async function collectActiveTranscriptSources(
   deps: TranscriptCollectionDeps,
-  signal?: AbortSignal
+  signal?: AbortSignal,
+  scope: TranscriptCollectionScope = {}
 ): Promise<CollectedTranscriptInput> {
+  const inScope = (all: readonly RegisteredScoop[]): readonly RegisteredScoop[] =>
+    scope.rootJid === undefined ? all : subtreeOf(all, scope.rootJid);
   // Retry until a stable completed-turn boundary is confirmed, or signal fires.
   // Each iteration: poll → snapshot → load → verify. If the snapshot changed
   // during the load, the next iteration re-polls from a fresh scoop list.
   while (true) {
-    const scoops = deps.listScoops();
+    const scoops = inScope(deps.listScoops());
 
     // Poll until every scoop has reached a completed-turn boundary.
     while (scoops.some((s) => deps.isProcessing(s.jid))) {
@@ -182,7 +220,7 @@ export async function collectActiveTranscriptSources(
 
     // Re-read scoop list and processing states; verify they match the pre-load snapshot.
     // If any scoop joined, left, or changed processing state during the load, retry.
-    const afterScoops = deps.listScoops();
+    const afterScoops = inScope(deps.listScoops());
     const signatureAfter = computeSnapshotSignature(afterScoops, deps);
 
     if (signatureBefore === signatureAfter) {
