@@ -24,8 +24,8 @@
  */
 
 import { base64ToUint8, type SignAndForwardReply, uint8ToBase64 } from '@slicc/shared-ts';
-import { isExtensionRealm } from '../../core/runtime-env.js';
-import { apiHeaders, getExtensionDelegateId, resolveApiUrl } from '../../shell/proxied-fetch.js';
+import { apiHeaders, getExtensionDelegateId, resolveApiUrl } from '../../base/api-endpoint.js';
+import { isExtensionRealm } from '../../base/runtime-env.js';
 import { FsError } from '../types.js';
 import type { SignedFetchDa, SignedFetchDaRequest } from './backend-da.js';
 import type { SignedFetchS3, SignedFetchS3Request } from './backend-s3.js';
@@ -247,6 +247,7 @@ export function makeSignedFetchDa(opts?: { getImsToken?: () => Promise<string> }
       imsToken,
       method: req.method,
       path: req.path,
+      origin: req.origin,
       query: req.query,
       headers: req.headers,
       bodyBase64: req.body ? encodeBase64(req.body) : undefined,

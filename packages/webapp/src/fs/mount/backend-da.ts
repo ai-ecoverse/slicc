@@ -18,7 +18,7 @@
  * reconcile via HEAD) mirrors S3MountBackend.writeFile.
  */
 
-import { getMimeType } from '../../core/mime-types.js';
+import { getMimeType } from '../../base/mime-types.js';
 import { FsError } from '../types.js';
 import type {
   MountBackend,
@@ -76,6 +76,13 @@ export interface SignedFetchDaRequest {
   method: 'GET' | 'PUT' | 'POST' | 'DELETE' | 'HEAD';
   /** Full DA path starting with /, e.g. `/source/<org>/<repo>/<key>` or `/list/<org>/<repo>/<dir>`. */
   path: string;
+  /**
+   * Upstream origin. Omit for `https://admin.da.live` (Helix 5 DA);
+   * `AemMountBackend` sets `https://api.aem.live` to reach the Helix 6
+   * Source Bus over the same IMS-bearer transport. The allow-list lives
+   * in `executeDaSignAndForward`.
+   */
+  origin?: string;
   query?: Record<string, string>;
   headers?: Record<string, string>;
   body?: Uint8Array;

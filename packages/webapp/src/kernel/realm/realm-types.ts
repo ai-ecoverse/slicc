@@ -120,12 +120,12 @@ export interface RealmInitMsg {
 
 /**
  * One entry of {@link RealmInitMsg.mountPoints}. `kind` mirrors
- * `MountBackend.kind` ('local' | 's3' | 'da'). Internal mounts
+ * `MountBackend.kind` ('local' | 's3' | 'da' | 'aem'). Internal mounts
  * (`/proc`, …) are excluded by the kernel before this list is built.
  */
 export interface RealmMountPoint {
   path: string;
-  kind: 'local' | 's3' | 'da';
+  kind: 'local' | 's3' | 'da' | 'aem';
 }
 
 /** Posted by the realm after a clean exit (incl. user-code throw → exit 1). */

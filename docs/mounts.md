@@ -1,6 +1,6 @@
 # Mounts
 
-`mount` bridges remote storage into the VFS so the agent's file tools (`read_file`, `write_file`, `edit_file`, `bash`) work transparently against S3, S3-compatible services (Cloudflare R2, MinIO), and Adobe da.live — alongside the original local FS Access mounts.
+`mount` bridges remote storage into the VFS so the agent's file tools (`read_file`, `write_file`, `edit_file`, `bash`) work transparently against S3, S3-compatible services (Cloudflare R2, MinIO), and Adobe authoring content — alongside the original local FS Access mounts.
 
 ## What you get
 
@@ -8,7 +8,8 @@ After mounting, the remote source looks like a regular directory:
 
 ```bash
 mount --source s3://my-bucket/site --profile aws  /mnt/aws
-mount --source da://my-org/my-repo               /mnt/da
+mount --source da://my-org/my-repo               /mnt/da    # Helix 5 da.live
+mount --source aem://my-org/my-site              /mnt/aem   # Helix 6 Source Bus
 
 ls /mnt/da                          # listing — first call hits network, then cached
 read_file /mnt/da/index.html        # downloads + caches the body (TTL + ETag)
@@ -29,6 +30,31 @@ Reads cache for 30 s with ETag-conditional revalidation (zero RTT within TTL, 30
 | Cloudflare R2                      | S3 with custom endpoint | `s3://<bucket>` + `endpoint` profile field            |
 | MinIO / other S3-compatible        | S3 with custom endpoint | `s3://<bucket>` + `endpoint`, often `path_style=true` |
 | Adobe Document Authoring (da.live) | DA                      | `da://<org>/<repo>[/<path>]`                          |
+| AEM site on Helix 6                | AEM Source Bus          | `aem://<org>/<site>[/<path>]`                         |
+
+### DA vs AEM: which store holds the content
+
+A site upgraded to the Helix 6 architecture keeps its `da.live` authoring UI and its `<org>/<site>` identity, but its documents move out of `admin.da.live` and into the Source Bus at `https://api.aem.live/<org>/sites/<site>/source`. Mounting such a site through `admin.da.live` **succeeds** and indexes an unrelated project's boilerplate — the paths look plausible and the HTML parses, so neither a user nor an agent can tell from the mount output that it is the wrong repository (issue #2227).
+
+So the URL scheme is not the decision:
+
+- `aem://<org>/<site>` says "Source Bus" outright, and mounts it.
+- `da://<org>/<repo>` **probes the site config first** — `GET https://api.aem.live/<org>/sites/<site>/config.json` — and looks at the host of `content.source.url`. `api.aem.live` means Helix 6, and the mount is re-routed to the Source Bus with a note on stderr. `content.da.live` (or anything else) stays on `admin.da.live`.
+- If the config can't be read (no Adobe login, unknown site, transport failure), the mount **fails** rather than guessing. Silently mounting the wrong store is the outcome this rules out; writes against it would land somewhere real and invisible.
+- `--backend da` / `--backend aem` forces the choice and skips the probe.
+
+The two backends differ in what the API gives them:
+
+|                  | DA (`admin.da.live`)                       | AEM Source Bus (`api.aem.live`)                                                                                       |
+| ---------------- | ------------------------------------------ | --------------------------------------------------------------------------------------------------------------------- |
+| Listing          | `GET /list/<org>/<repo>/<dir>`             | `GET /<org>/sites/<site>/source/<dir>/` — the **trailing slash** is what makes it a listing; without it the path 404s |
+| Listing metadata | name, ext, mtime                           | name, size, content type, mtime, explicit `application/folder` marker                                                 |
+| Write            | `POST` multipart/form-data                 | `PUT` raw body + the document's `Content-Type`, 201 on create _and_ overwrite                                         |
+| Delete           | `DELETE`, 404 when absent                  | `DELETE` → 204, 404 when absent                                                                                       |
+| Versioning       | strong ETags, `If-Match` / `If-None-Match` | **no ETags and no conditional requests** — extra headers trip a CORS preflight the endpoint rejects                   |
+| Empty folders    | listed                                     | do not exist; a folder 404s once its last file is gone                                                                |
+
+Both authenticate with the same Adobe IMS bearer token and share the `da-sign-and-forward` transport; the envelope's `origin` field selects the upstream, and the allow-list in `executeDaSignAndForward` keeps that set closed to those two hosts.
 
 ## Setting up credentials
 
@@ -106,7 +132,7 @@ DA mounts reuse the IMS bearer token from the existing Adobe LLM provider. If yo
 ## Mount syntax
 
 ```bash
-mount [--source <url>] [--profile <name>] [--no-probe] [--max-body-mb <n>] <target-path>
+mount [--source <url>] [--profile <name>] [--backend <da|aem>] [--no-probe] [--max-body-mb <n>] <target-path>
 mount unmount [--clear-cache] <target-path>
 mount list
 mount refresh [--bodies] <target-path>
@@ -114,23 +140,25 @@ mount refresh [--bodies] <target-path>
 
 Flags:
 
-- `--source <url>` — `s3://bucket[/prefix]` or `da://org/repo[/path]`. Without it, falls back to the local FS-Access picker (cone only — needs a user gesture; see [`docs/approvals.md` — Local mount picker](./approvals.md#local-mount-picker)).
+- `--source <url>` — `s3://bucket[/prefix]`, `da://org/repo[/path]`, or `aem://org/site[/path]`. Without it, falls back to the local FS-Access picker (cone only — needs a user gesture; see [`docs/approvals.md` — Local mount picker](./approvals.md#local-mount-picker)).
 - `--profile <name>` — selects which `s3.<profile>.*` keys to use. Defaults to `default`. Accepted for symmetry on DA but DA has only one identity in v1.
-- `--no-probe` — skip the mount-time `HEAD bucket` / `GET /list` probe. Use when you want the mount to land even if the source is temporarily unreachable; the first read or write surfaces any auth error instead.
-- `--max-body-mb <n>` — override the per-mount body-size limit. Defaults: S3 25 MB, DA 5 MB.
+- `--backend <da|aem>` — force the Adobe backend instead of probing the site config. Use it when the probe is wrong, or when the config endpoint is unreachable but you know which store holds the content.
+- `--no-probe` — skip the mount-time `HEAD bucket` / `GET /list` probe. It does **not** skip the `da://` content-source probe — that one decides _where_ to mount, not whether the source is reachable; `--backend` is the flag for that. Use when you want the mount to land even if the source is temporarily unreachable; the first read or write surfaces any auth error instead.
+- `--max-body-mb <n>` — override the per-mount body-size limit. Defaults: S3 25 MB, DA/AEM 5 MB.
 - `--clear-cache` (on `unmount`) — drop the `RemoteMountCache` listings + bodies for that mount.
 - `--bodies` (on `refresh`) — also conditionally re-fetch bodies whose ETag changed; without it, only listings are diffed.
 
 ## Common error patterns
 
-| Error                                                                                    | What it means                                                                     | Fix                                                                                          |
-| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------- |
-| `mount: probe failed for s3://… — profile 'aws' missing required field 'access_key_id'.` | The named profile isn't fully configured                                          | Walk the user through `secret set s3.<profile>.*` (CLI) or open the Options page (extension) |
-| `EACCES: s3 access denied`                                                               | Wrong credentials, wrong region for the bucket, or bucket policy denies           | Verify with the AWS CLI: `aws s3 ls s3://<bucket>`                                           |
-| `EACCES: da access denied`                                                               | IMS token expired or user not authed against the Adobe provider                   | Re-auth Adobe in Settings → Providers                                                        |
-| `EBUSY: remote modified since last read — re-read and retry`                             | Another writer changed the file between your read and your write                  | Re-read with `read_file` then retry the edit                                                 |
-| `EFBIG: body exceeds maxBodyBytes`                                                       | File is larger than the per-mount limit (S3 25 MB / DA 5 MB)                      | Pass `--max-body-mb <n>` at mount time, or use AWS CLI / DA UI for very large files          |
-| `mount: cannot mount local directories from a scoop (no UI).`                            | Local mounts need a user gesture ([approvals](./approvals.md#local-mount-picker)) | Have the cone do the mount, or use S3/DA which work in scoops                                |
+| Error                                                                                    | What it means                                                                                 | Fix                                                                                              |
+| ---------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------ |
+| `mount: probe failed for s3://… — profile 'aws' missing required field 'access_key_id'.` | The named profile isn't fully configured                                                      | Walk the user through `secret set s3.<profile>.*` (CLI) or open the Options page (extension)     |
+| `EACCES: s3 access denied`                                                               | Wrong credentials, wrong region for the bucket, or bucket policy denies                       | Verify with the AWS CLI: `aws s3 ls s3://<bucket>`                                               |
+| `EACCES: da access denied` / `EACCES: aem access denied`                                 | IMS token expired or user not authed against the Adobe provider                               | Re-auth Adobe in Settings → Providers                                                            |
+| `mount: could not determine the content source for da://… `                              | The site config probe failed, so SLICC won't guess between `admin.da.live` and the Source Bus | Log in to the Adobe provider, check the org/site names, or pass `--backend da` / `--backend aem` |
+| `EBUSY: remote modified since last read — re-read and retry`                             | Another writer changed the file between your read and your write                              | Re-read with `read_file` then retry the edit                                                     |
+| `EFBIG: body exceeds maxBodyBytes`                                                       | File is larger than the per-mount limit (S3 25 MB / DA 5 MB)                                  | Pass `--max-body-mb <n>` at mount time, or use AWS CLI / DA UI for very large files              |
+| `mount: cannot mount local directories from a scoop (no UI).`                            | Local mounts need a user gesture ([approvals](./approvals.md#local-mount-picker))             | Have the cone do the mount, or use S3/DA which work in scoops                                    |
 
 ## Caching and conflict semantics
 
@@ -138,6 +166,8 @@ The `RemoteMountCache` (TTL + ETag, IDB-backed under `slicc-mount-cache`) sits i
 
 - **Reads**: cache-fresh → zero RTT; cache-stale → conditional `GET` with `If-None-Match` (304 keeps the cached body, 200 replaces it); cache-miss → unconditional `GET`.
 - **Writes**: existing files use `If-Match: <etag>`; new files use `If-None-Match: *` to refuse silent overwrite. A 412 from a fresh first-attempt PUT surfaces as `FsError('EBUSY', …)` so the agent's edit loop can re-read and retry. (412 inside a bounded retry window of an in-flight PUT is silently reconciled — that case means "we already won this PUT" rather than a conflict.)
+- **AEM Source Bus, no ETags**: the Source Bus returns only `last-modified`, so the cache's `etag` slot holds a _surrogate_ — the modification time normalized to epoch-ms. Reads revalidate on TTL alone (no conditional GET). Writes cannot use `If-Match`, so a write against a file that was read first is preceded by a `HEAD`: a remote whose `last-modified` moved raises the same `EBUSY` the DA backend raises on a 412. A first write to a path SLICC has never read carries no guard, because there is no known version to lose an update against.
+- **AEM listing sizes are the stored size**, not the decoded one. Cloudflare compresses these responses, so `content-length` (and the `size` in a listing) can be well under the bytes a `read_file` returns. `stat` reports the decoded size once the body is cached.
 - **Mount-relative cache keys**: cached entries live under `(mountId, mountRelativePath)` so re-mounting at the same target path with a different source produces a fresh cache namespace; no aliasing.
 
 ## Index bounds and skip states

@@ -38,7 +38,21 @@ const HOP_BY_HOP = new Set([
   'upgrade',
 ]);
 
+/**
+ * Default upstream for DA envelopes — the Helix 5 Document Authoring admin.
+ */
 const DA_ORIGIN = 'https://admin.da.live';
+
+/**
+ * Origins a DA envelope is allowed to target. `admin.da.live` is the
+ * Helix 5 DA store; `api.aem.live` is the Helix 6 Source Bus, which
+ * serves the same IMS-bearer contract under
+ * `/<org>/sites/<site>/source/...`. Both are reached with the same
+ * Adobe IMS access token, so one envelope type covers both — but the
+ * set stays closed so a malformed (or hostile) envelope can't turn the
+ * orchestrator into an open proxy for the caller's IMS token.
+ */
+const DA_ALLOWED_ORIGINS = new Set([DA_ORIGIN, 'https://api.aem.live']);
 
 export interface S3SignAndForwardEnvelope {
   profile: string;
@@ -55,6 +69,12 @@ export interface DaSignAndForwardEnvelope {
   method: SignedMethod;
   /** Path including leading slash, e.g. `/source/<org>/<repo>/<key>`. */
   path: string;
+  /**
+   * Upstream origin. Omit for `https://admin.da.live` (Helix 5 DA);
+   * `https://api.aem.live` selects the Helix 6 Source Bus. Anything
+   * else is rejected as `invalid_request`.
+   */
+  origin?: string;
   query?: Record<string, string>;
   headers?: Record<string, string>;
   bodyBase64?: string | null;
@@ -306,9 +326,18 @@ export async function executeDaSignAndForward(
     };
   }
 
+  const origin = env.origin ?? DA_ORIGIN;
+  if (!DA_ALLOWED_ORIGINS.has(origin)) {
+    return {
+      ok: false,
+      error: `origin '${origin}' is not an allowed DA upstream`,
+      errorCode: 'invalid_request',
+    };
+  }
+
   let url: URL;
   try {
-    url = new URL(DA_ORIGIN + env.path);
+    url = new URL(origin + env.path);
     if (env.query) {
       for (const [k, v] of Object.entries(env.query)) {
         url.searchParams.set(k, v);

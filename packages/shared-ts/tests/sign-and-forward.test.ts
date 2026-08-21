@@ -358,6 +358,44 @@ describe('executeDaSignAndForward', () => {
     if (!reply.ok) expect(reply.error).toContain('starting with /');
   });
 
+  it('defaults to admin.da.live and honours an explicit api.aem.live origin', async () => {
+    const { fetch, calls } = makeFetchMock([
+      { status: 200, headers: {}, body: new TextEncoder().encode('[]') },
+    ]);
+    const reply = await executeDaSignAndForward(
+      {
+        imsToken: 'ims-token-here',
+        method: 'GET',
+        path: '/adobe/sites/aem-website/source/',
+        origin: 'https://api.aem.live',
+      },
+      fetch
+    );
+    expect(reply.ok).toBe(true);
+    expect(calls[0].url).toBe('https://api.aem.live/adobe/sites/aem-website/source/');
+  });
+
+  // The envelope carries the caller's IMS token, so an unbounded `origin`
+  // would turn the orchestrator into a token-leaking open proxy.
+  it('rejects an origin outside the allow-list without fetching', async () => {
+    const { fetch, calls } = makeFetchMock([]);
+    const reply = await executeDaSignAndForward(
+      {
+        imsToken: 'ims-token-here',
+        method: 'GET',
+        path: '/source/o/r/k',
+        origin: 'https://evil.example',
+      },
+      fetch
+    );
+    expect(reply.ok).toBe(false);
+    if (!reply.ok) {
+      expect(reply.errorCode).toBe('invalid_request');
+      expect(reply.error).toContain('evil.example');
+    }
+    expect(calls).toHaveLength(0);
+  });
+
   it('attaches Bearer token and forwards to admin.da.live', async () => {
     const { fetch, calls } = makeFetchMock([
       {
