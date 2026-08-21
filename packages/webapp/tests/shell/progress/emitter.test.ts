@@ -121,6 +121,23 @@ describe('ProgressEmitter', () => {
     expect(scrub).toHaveBeenCalledTimes(1);
   });
 
+  it('re-scrubs when the label changes mid-unit and passes changed labels through unscrubbed', async () => {
+    const seen: ProgressEvent[] = [];
+    const scrub = vi.fn(async (text: string) => text.replace('sk-secret', '***'));
+    const emitter = new ProgressEmitter({ sink: (e) => seen.push(e), scrubLabel: scrub });
+    emitter.emit(ev({ label: 'for f (0/2)', phase: 'start' }));
+    emitter.emit(ev({ label: 'for f (1/2) sk-secret', phase: 'end' }));
+    await vi.waitFor(() => expect(seen).toHaveLength(2));
+    expect(seen.map((e) => e.label)).toEqual(['for f (0/2)', 'for f (1/2) ***']);
+    expect(scrub).toHaveBeenCalledTimes(2);
+
+    const plain: ProgressEvent[] = [];
+    const noScrub = new ProgressEmitter({ sink: (e) => plain.push(e) });
+    noScrub.emit(ev({ label: 'a', phase: 'start' }));
+    noScrub.emit(ev({ label: 'b', phase: 'end' }));
+    expect(plain.map((e) => e.label)).toEqual(['a', 'b']);
+  });
+
   it('withholds the label when the scrubber throws', async () => {
     const seen: ProgressEvent[] = [];
     const emitter = new ProgressEmitter({

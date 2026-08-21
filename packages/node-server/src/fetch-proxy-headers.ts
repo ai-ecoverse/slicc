@@ -67,6 +67,14 @@ export const FETCH_PROXY_SKIP_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
  * middleware remains the sole CORS authority. `x-proxy-` is the proxy's
  * own response-marker namespace — never echo an upstream value.
  */
+/**
+ * Proxy-set response header carrying the upstream `content-length` when it is
+ * exact (identity encoding). Read by the webapp's `proxied-fetch.ts` to drive
+ * determinate download progress; never copied from upstream (the `x-proxy-`
+ * prefix below guarantees that).
+ */
+export const FETCH_PROXY_CONTENT_LENGTH_HEADER = 'X-Proxy-Content-Length';
+
 export const FETCH_PROXY_SKIP_RESPONSE_PREFIXES: readonly string[] = [
   'access-control-',
   'x-proxy-',

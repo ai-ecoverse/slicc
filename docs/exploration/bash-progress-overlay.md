@@ -1,8 +1,14 @@
 # Bash progress / ETA overlay (no just-bash patch)
 
-Status: Tier 1 shipped (`packages/webapp/src/shell/progress/`: `sleep` ticks,
-generic start/end wrapper, `tool_progress` agent event + chat-row bar). Loop
-counting, curl bytes and duration history remain exploration. Tracks upstream idea
+Status: Tiers 1–2 shipped (`packages/webapp/src/shell/progress/`: `sleep`
+ticks, generic start/end wrapper, `for` loop iteration counting, `curl`/`wget`
+byte progress via `proxied-fetch.ts`, `tool_progress` agent event + chat-row
+bar). Duration history (Tier 3) remains exploration.
+
+Implementation note: just-bash's `trace` callback only fires for `find`
+internals — it emits nothing per command — so loop iterations are counted at
+the shell's own dispatch wrapper (`wrapCommandForDispatch`), not via `trace`.
+The plan below is kept as originally written. Tracks upstream idea
 [vercel-labs/just-bash#319](https://github.com/vercel-labs/just-bash/issues/319)
 (no maintainer response as of 2026-08-21). This doc describes how SLICC can ship
 progress-bar / ETA feedback for `bash` tool calls _today_, entirely on top of

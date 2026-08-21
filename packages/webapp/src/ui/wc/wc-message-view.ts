@@ -404,6 +404,28 @@ export function formatEta(ms: number): string {
   return `${h}h${String(m % 60).padStart(2, '0')}m`;
 }
 
+/** "512 B", "1.2 kB", "34.5 MB" — SI units, one decimal below 10. */
+export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '';
+  if (n < 1000) return `${Math.round(n)} B`;
+  const units = ['kB', 'MB', 'GB', 'TB'];
+  let v = n / 1000;
+  let i = 0;
+  while (v >= 1000 && i < units.length - 1) {
+    v /= 1000;
+    i += 1;
+  }
+  return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
+}
+
+/** Middle column of a progress unit: percent when determinate, else a byte counter. */
+function progressCounter(unit: ToolProgressEvent, fraction: number | undefined): string {
+  if (fraction !== undefined) return `${Math.round(fraction * 100)}%`;
+  if (unit.unit === 'bytes' && unit.done !== undefined && unit.done > 0)
+    return formatBytes(unit.done);
+  return '';
+}
+
 const PROGRESS_CLASS = 'wcmsg-progress';
 
 /**
@@ -436,7 +458,7 @@ function progressUnitEl(unit: ToolProgressEvent): HTMLElement {
   const label = el('span', { class: 'wcmsg-progress__label', title: unit.label });
   label.textContent = unit.label;
   const pct = el('span', { class: 'wcmsg-progress__pct' });
-  pct.textContent = fraction === undefined ? '' : `${Math.round(fraction * 100)}%`;
+  pct.textContent = progressCounter(unit, fraction);
   const eta = el('span', { class: 'wcmsg-progress__eta' });
   eta.textContent = unit.etaMs === undefined ? '' : `~${formatEta(unit.etaMs)}`;
   const track = el('div', {

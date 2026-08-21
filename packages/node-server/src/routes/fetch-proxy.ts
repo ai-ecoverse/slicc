@@ -3,6 +3,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { HMAC_SIGN_HEADER, isTextContentType } from '@slicc/shared-ts';
 import type { Express, Request, Response } from 'express';
 import {
+  FETCH_PROXY_CONTENT_LENGTH_HEADER,
   FETCH_PROXY_SKIP_HEADERS,
   FETCH_PROXY_SKIP_RESPONSE_HEADERS,
   FETCH_PROXY_SKIP_RESPONSE_PREFIXES,
@@ -218,6 +219,16 @@ function forwardUpstreamHeaders(
   });
   if (setCookieValues.length > 0) {
     res.setHeader('X-Proxy-Set-Cookie', secretProxy.scrubResponse(JSON.stringify(setCookieValues)));
+  }
+  // Byte-progress hint for the webapp's bash progress overlay (`curl`/`wget`
+  // bars). The real `content-length` is dropped above because the scrub
+  // transform re-chunks the body; the upstream size is still the best ETA
+  // input available. Exact only when upstream sent identity encoding —
+  // undici has already decompressed a `content-encoding` body, so its
+  // length would not match the bytes we forward.
+  const upstreamLength = upstream.headers.get('content-length');
+  if (upstreamLength && !upstream.headers.get('content-encoding') && /^\d+$/.test(upstreamLength)) {
+    res.setHeader(FETCH_PROXY_CONTENT_LENGTH_HEADER, upstreamLength);
   }
 }
 

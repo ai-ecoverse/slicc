@@ -73,10 +73,13 @@ export { isTextContentType };
  * string-based write paths can still recover the original bytes without
  * corruption.
  */
-export async function readResponseBody(resp: Response, url?: string): Promise<Uint8Array> {
+export async function readResponseBody(
+  resp: Response,
+  url?: string,
+  onChunk?: (loaded: number) => void
+): Promise<Uint8Array> {
   const contentType = resp.headers.get('content-type') ?? '';
-  const buf = await resp.arrayBuffer();
-  const bytes = new Uint8Array(buf);
+  const bytes = await readBodyBytes(resp, onChunk);
   if (!isTextContentType(contentType)) {
     // Prefer the URL cache (the common case) — it avoids the multi-MB latin1
     // string allocation. VfsAdapter.writeFile still recovers exact bytes on
@@ -95,8 +98,77 @@ export async function readResponseBody(resp: Response, url?: string): Promise<Ui
   return bytes;
 }
 
+/**
+ * Drain a Response body. With an `onChunk` observer the body is pulled chunk
+ * by chunk (cumulative byte count per call); without one it is a plain
+ * `arrayBuffer()`.
+ */
+async function readBodyBytes(
+  resp: Response,
+  onChunk?: (loaded: number) => void
+): Promise<Uint8Array<ArrayBuffer>> {
+  if (!onChunk || !resp.body) return new Uint8Array(await resp.arrayBuffer());
+  const reader = resp.body.getReader();
+  const chunks: Uint8Array<ArrayBuffer>[] = [];
+  let loaded = 0;
+  for (;;) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    const chunk = value as Uint8Array<ArrayBuffer>;
+    chunks.push(chunk);
+    loaded += chunk.byteLength;
+    onChunk(loaded);
+  }
+  return concatChunks(chunks);
+}
+
 /** Convert Headers or Record<string, string> to a plain Record<string, string>. */
 export const headersToRecord = _headersToRecord;
+
+/**
+ * Observer for download progress of one proxied fetch. `total` is the
+ * upstream byte count when known (`content-length` on the raw Port path,
+ * the proxy's `X-Proxy-Content-Length` hint on the CLI path), else
+ * undefined. `loaded` is cumulative. `end` always fires, also on failure.
+ */
+export interface FetchProgressObserver {
+  start(url: string, total: number | undefined): void;
+  chunk(url: string, loaded: number, total: number | undefined): void;
+  end(url: string): void;
+}
+
+export interface ProxiedFetchOptions {
+  /** Download-progress observer (bash progress overlay). */
+  progress?: FetchProgressObserver;
+}
+
+/** Header carrying the exact upstream size on the CLI proxy path. */
+export const PROXY_CONTENT_LENGTH_HEADER = 'x-proxy-content-length';
+
+function contentLengthOf(headers: Record<string, string> | Headers): number | undefined {
+  const get = (name: string) =>
+    headers instanceof Headers
+      ? headers.get(name)
+      : (Object.entries(headers).find(([k]) => k.toLowerCase() === name)?.[1] ?? null);
+  const raw = get(PROXY_CONTENT_LENGTH_HEADER) ?? get('content-length');
+  if (raw === null || raw === undefined || !/^\d+$/.test(raw)) return undefined;
+  const n = Number(raw);
+  return Number.isSafeInteger(n) && n >= 0 ? n : undefined;
+}
+
+/** Run a collector so the observer's `end` fires on every exit path. */
+async function withProgressEnd<T>(
+  progress: FetchProgressObserver | undefined,
+  url: string,
+  run: () => Promise<T>
+): Promise<T> {
+  if (!progress) return run();
+  try {
+    return await run();
+  } finally {
+    progress.end(url);
+  }
+}
 
 /**
  * Bodies that are NOT text-shaped (multipart form payloads, git packfiles,
@@ -247,7 +319,8 @@ async function buildPortRequest(
 async function collectViaPort(
   connect: () => FetchProxyPort,
   url: string,
-  options?: Parameters<SecureFetch>[1]
+  options?: Parameters<SecureFetch>[1],
+  progress?: FetchProgressObserver
 ): Promise<{ head: ProxyHead; body: ArrayBuffer }> {
   const { method, transportHeaders, bodyBase64, requestBodyTooLarge } =
     await buildPortRequest(options);
@@ -256,14 +329,21 @@ async function collectViaPort(
   return new Promise((resolve, reject) => {
     let headInfo: ProxyHead | null = null;
     let ended = false;
+    let loaded = 0;
+    let total: number | undefined;
     const chunks: Uint8Array<ArrayBuffer>[] = [];
 
     port.onMessage.addListener((raw: unknown) => {
       const msg = raw as FetchProxyResponseMsg;
       if (msg.type === 'response-head') {
         headInfo = { status: msg.status, statusText: msg.statusText, headers: msg.headers };
+        total = contentLengthOf(msg.headers);
+        progress?.start(url, total);
       } else if (msg.type === 'response-chunk') {
-        chunks.push(decodeBase64Chunk(msg.dataBase64));
+        const chunk = decodeBase64Chunk(msg.dataBase64);
+        chunks.push(chunk);
+        loaded += chunk.byteLength;
+        progress?.chunk(url, loaded, total);
       } else if (msg.type === 'response-end') {
         ended = true;
         if (!headInfo) {
@@ -308,16 +388,20 @@ async function collectViaPort(
 
 async function extensionPortFetch(
   url: string,
-  options?: Parameters<SecureFetch>[1]
+  options?: Parameters<SecureFetch>[1],
+  progress?: FetchProgressObserver
 ): ReturnType<SecureFetch> {
   // readResponseBody (inside finalizeProxyResponse) decides text vs binary
   // (binary goes to binary-cache; preserves git-http's binary packfile path);
   // forbidden response headers are decoded back to their browser-stripped
   // names — matches the CLI client.
-  const { head, body } = await collectViaPort(
-    () => chrome.runtime.connect({ name: 'fetch-proxy.fetch' }),
-    url,
-    options
+  const { head, body } = await withProgressEnd(progress, url, () =>
+    collectViaPort(
+      () => chrome.runtime.connect({ name: 'fetch-proxy.fetch' }),
+      url,
+      options,
+      progress
+    )
   );
   return finalizeProxyResponse(head, new Uint8Array(body), url);
 }
@@ -333,7 +417,8 @@ async function extensionPortFetch(
  */
 export async function collectViaExtensionDelegate(
   url: string,
-  options?: Parameters<SecureFetch>[1]
+  options?: Parameters<SecureFetch>[1],
+  progress?: FetchProgressObserver
 ): Promise<{ head: ProxyHead; body: ArrayBuffer }> {
   const id = getExtensionDelegateId();
   if (!id) {
@@ -344,7 +429,7 @@ export async function collectViaExtensionDelegate(
       connect: (extensionId: string, info: { name: string }) => FetchProxyPort;
     }
   ).connect;
-  return collectViaPort(() => connect(id, { name: 'fetch-proxy.fetch' }), url, options);
+  return collectViaPort(() => connect(id, { name: 'fetch-proxy.fetch' }), url, options, progress);
 }
 
 /**
@@ -354,11 +439,12 @@ export async function collectViaExtensionDelegate(
  *
  * Binary responses are preserved as raw bytes.
  */
-export function createProxiedFetch(): SecureFetch {
+export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): SecureFetch {
+  const progress = fetchOptions.progress;
   // 1. Real extension page (offscreen / options): `chrome.runtime.id` is
   //    truthy. Use the id-less Port connect — UNCHANGED.
   if (isChromeExtensionRealm()) {
-    return extensionPortFetch;
+    return (url, options) => extensionPortFetch(url, options, progress);
   }
 
   // 2. Thin-bridge leader PAGE realm: `chrome.runtime.connect` exists but
@@ -371,7 +457,9 @@ export function createProxiedFetch(): SecureFetch {
     getExtensionDelegateId()
   ) {
     return async (url, options) => {
-      const { head, body } = await collectViaExtensionDelegate(url, options);
+      const { head, body } = await withProgressEnd(progress, url, () =>
+        collectViaExtensionDelegate(url, options, progress)
+      );
       return finalizeProxyResponse(head, new Uint8Array(body), url);
     };
   }
@@ -393,12 +481,17 @@ export function createProxiedFetch(): SecureFetch {
       // page-side collector encodes forbidden headers exactly once and
       // prepares the body via the same `prepareRequestBody` contract.
       const plainHeaders = headersToRecord(options?.headers) ?? {};
-      const { head, body } = await client.call(
-        'proxied-fetch',
-        { url, method, headers: plainHeaders, body: options?.body },
-        // Generous timeout — multi-MB wasm / package downloads outlast the
-        // panel-RPC default 15s.
-        { timeoutMs: 120_000 }
+      // The page realm collects the chunks; the worker only sees the whole
+      // body, so this path reports an indeterminate in-flight unit.
+      progress?.start(url, undefined);
+      const { head, body } = await withProgressEnd(progress, url, () =>
+        client.call(
+          'proxied-fetch',
+          { url, method, headers: plainHeaders, body: options?.body },
+          // Generous timeout — multi-MB wasm / package downloads outlast the
+          // panel-RPC default 15s.
+          { timeoutMs: 120_000 }
+        )
       );
       return finalizeProxyResponse(head, new Uint8Array(body), url);
     };
@@ -424,24 +517,32 @@ export function createProxiedFetch(): SecureFetch {
       init.body = prepareRequestBody(options.body, headers);
     }
 
-    const resp = await fetch(resolveFetchProxyUrl(), init);
+    return withProgressEnd(progress, url, async () => {
+      const resp = await fetch(resolveFetchProxyUrl(), init);
 
-    // Only treat the response as a proxy infrastructure failure when the
-    // proxy itself tags it with `X-Proxy-Error: 1`. Upstream 4xx/5xx
-    // responses (e.g. Google OAuth's HTTP 400 with `{error:"invalid_client"}`)
-    // must flow through to curl/fetch unchanged — otherwise the caller can't
-    // distinguish "Google said no" from "the proxy is broken".
-    if (isProxyError(resp)) {
-      throw new Error(await readProxyErrorMessage(resp));
-    }
+      // Only treat the response as a proxy infrastructure failure when the
+      // proxy itself tags it with `X-Proxy-Error: 1`. Upstream 4xx/5xx
+      // responses (e.g. Google OAuth's HTTP 400 with `{error:"invalid_client"}`)
+      // must flow through to curl/fetch unchanged — otherwise the caller can't
+      // distinguish "Google said no" from "the proxy is broken".
+      if (isProxyError(resp)) {
+        throw new Error(await readProxyErrorMessage(resp));
+      }
 
-    const body = await readResponseBody(resp, url);
-    const rawHeaders: Record<string, string> = {};
-    resp.headers.forEach((v, k) => {
-      rawHeaders[k] = v;
+      const total = contentLengthOf(resp.headers);
+      progress?.start(url, total);
+      const body = await readResponseBody(
+        resp,
+        url,
+        progress ? (loaded) => progress.chunk(url, loaded, total) : undefined
+      );
+      const rawHeaders: Record<string, string> = {};
+      resp.headers.forEach((v, k) => {
+        rawHeaders[k] = v;
+      });
+      const respHeaders = decodeForbiddenResponseHeaders(rawHeaders);
+
+      return { status: resp.status, statusText: resp.statusText, headers: respHeaders, body, url };
     });
-    const respHeaders = decodeForbiddenResponseHeaders(rawHeaders);
-
-    return { status: resp.status, statusText: resp.statusText, headers: respHeaders, body, url };
   };
 }
