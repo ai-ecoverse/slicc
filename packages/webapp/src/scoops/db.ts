@@ -44,20 +44,23 @@ function runMigrationV1(database: IDBDatabase): void {
   }
 }
 
-function mapLegacyGroupToScoop(g: {
-  jid: string;
-  name: string;
-  folder: string;
-  trigger?: string;
-  requiresTrigger?: boolean;
-  isMain?: boolean;
-  addedAt: string;
-  config?: {
-    systemPromptAppend?: string;
-    timeout?: number;
-    assistantName?: string;
-  };
-}): RegisteredScoop {
+function mapLegacyGroupToScoop(
+  g: {
+    jid: string;
+    name: string;
+    folder: string;
+    trigger?: string;
+    requiresTrigger?: boolean;
+    isMain?: boolean;
+    addedAt: string;
+    config?: {
+      systemPromptAppend?: string;
+      timeout?: number;
+      assistantName?: string;
+    };
+  },
+  coneJid?: string
+): RegisteredScoop {
   const isCone = g.isMain ?? false;
   return {
     jid: g.jid,
@@ -67,6 +70,10 @@ function mapLegacyGroupToScoop(g: {
     requiresTrigger: !isCone && (g.requiresTrigger ?? true),
     isCone,
     type: isCone ? 'cone' : 'scoop',
+    // Legacy groups predate the work-unit tree; a non-main group belonged to
+    // the single main group every legacy store had. Without one (should not
+    // happen) the record can only become a root.
+    parentJid: isCone ? null : (coneJid ?? null),
     assistantLabel: isCone ? 'sliccy' : g.config?.assistantName || g.folder,
     addedAt: g.addedAt,
     config: g.config
@@ -90,8 +97,11 @@ function runMigrationV2(event: IDBVersionChangeEvent, database: IDBDatabase): vo
       database.deleteObjectStore('groups');
       const scoopsStore = database.createObjectStore(STORES.SCOOPS, { keyPath: 'jid' });
       scoopsStore.createIndex('type', 'type');
+      const coneJid = (oldGroups as Array<{ jid: string; isMain?: boolean }>).find(
+        (g) => g.isMain
+      )?.jid;
       for (const g of oldGroups) {
-        scoopsStore.put(mapLegacyGroupToScoop(g));
+        scoopsStore.put(mapLegacyGroupToScoop(g, coneJid));
       }
     };
     return;

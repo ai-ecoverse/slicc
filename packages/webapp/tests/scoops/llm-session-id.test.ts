@@ -14,18 +14,37 @@ import {
 } from '../../src/scoops/llm-session-id.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 
-const baseScoop: Omit<RegisteredScoop, 'jid' | 'folder' | 'name' | 'isCone' | 'type'> = {
+const baseScoop: Omit<
+  RegisteredScoop,
+  'jid' | 'folder' | 'name' | 'isCone' | 'type' | 'parentJid'
+> = {
   requiresTrigger: false,
   assistantLabel: 'x',
   addedAt: '2026-04-23T00:00:00.000Z',
 };
 
 function cone(jid: string): RegisteredScoop {
-  return { ...baseScoop, jid, folder: 'cone', name: 'sliccy', isCone: true, type: 'cone' };
+  return {
+    ...baseScoop,
+    jid,
+    folder: 'cone',
+    name: 'sliccy',
+    isCone: true,
+    type: 'cone',
+    parentJid: null,
+  };
 }
 
 function scoop(folder: string, jid = `scoop_${folder}_1`): RegisteredScoop {
-  return { ...baseScoop, jid, folder, name: folder, isCone: false, type: 'scoop' };
+  return {
+    ...baseScoop,
+    jid,
+    folder,
+    name: folder,
+    isCone: false,
+    type: 'scoop',
+    parentJid: 'cone_1',
+  };
 }
 
 class MemoryStorage implements Storage {

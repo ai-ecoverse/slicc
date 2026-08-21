@@ -60,6 +60,12 @@ describe('feature flag registry', () => {
         defaultValue: 'off',
         userToggleable: true,
       }),
+      expect.objectContaining({
+        id: 'multiple-cones',
+        label: 'Multiple cones',
+        defaultValue: 'off',
+        userToggleable: true,
+      }),
     ]);
     expect(listFlags()[0]).not.toHaveProperty('overridableFloats');
     expect(listFlags()[2]).not.toHaveProperty('floatDefaults');
@@ -141,6 +147,7 @@ describe('feature flag registry', () => {
       'experimental-settings': 'off',
       'panel-layouts': 'off',
       'agentic-memory': 'off',
+      'multiple-cones': 'off',
     });
     expect(
       resolveFlags(
@@ -152,6 +159,7 @@ describe('feature flag registry', () => {
       'experimental-settings': 'off',
       'panel-layouts': 'off',
       'agentic-memory': 'off',
+      'multiple-cones': 'off',
     });
   });
 

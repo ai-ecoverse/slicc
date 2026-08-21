@@ -57,8 +57,8 @@ function makeCollectionDeps(): TranscriptCollectionDeps {
             jid: 'jid-cone',
             isCone: true,
             name: 'Sliccy',
-            folder: undefined,
-            parentJid: undefined,
+            folder: 'cone',
+            parentJid: null,
             originToolCallId: undefined,
           },
         ] as any

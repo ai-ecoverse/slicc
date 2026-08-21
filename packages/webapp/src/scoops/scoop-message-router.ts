@@ -269,7 +269,7 @@ export class ScoopMessageRouter {
       message.channel === 'bash';
     return (
       !scoop ||
-      scoop.isCone ||
+      scoop.parentJid === null ||
       !scoop.requiresTrigger ||
       !scoop.trigger ||
       isLick ||
@@ -589,8 +589,10 @@ export class ScoopMessageRouter {
     // DedicatedWorker contexts. The standalone runtime runs the orchestrator
     // in a worker; `window` is undefined there.
     this.pollInterval = setInterval(() => {
+      // `getTabs()` is a per-tick snapshot; read it once per tick, not per scoop.
+      const tabs = this.deps.getTabs();
       for (const jid of this.deps.getScoops().keys()) {
-        const tab = this.deps.getTabs().get(jid);
+        const tab = tabs.get(jid);
         this.recordBusyDeferralIfPresent(jid);
         const queueHasMessages = (this.messageQueues.get(jid)?.length ?? 0) > 0;
         if (tab?.status === 'ready' && queueHasMessages && !this.debounceStates.has(jid)) {

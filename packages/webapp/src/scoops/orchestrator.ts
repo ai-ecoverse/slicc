@@ -36,6 +36,10 @@ import { registerTranscriptExportService } from '../transcript/export-provider.j
 import { DefaultTranscriptExportService } from '../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
+import type { LiveWorkUnit } from '../work-unit/live-unit.js';
+import { WorkUnitManager } from '../work-unit/manager.js';
+import { rootsOf } from '../work-unit/policy.js';
+import { normalizeScoopRecord } from '../work-unit/record.js';
 import { SessionStore as UiSessionStore } from './chat-session-store.js';
 import { ConeMemoryStore } from './cone-memory-store.js';
 import * as db from './db.js';
@@ -148,6 +152,12 @@ export interface AssistantConfig {
 
 export class Orchestrator implements ConeApprovalRouter {
   private scoops: Map<string, RegisteredScoop> = new Map();
+  /**
+   * Hierarchy-aware view over {@link scoops} (#1666). Answers parent / child /
+   * default-root questions from the explicit `parentJid` edge; creation and
+   * teardown still flow through {@link registerScoop} / {@link unregisterScoop}.
+   */
+  private readonly workUnits = new WorkUnitManager(this);
   private container: HTMLElement;
   private callbacks: OrchestratorCallbacks;
   private config: AssistantConfig;
@@ -182,6 +192,7 @@ export class Orchestrator implements ConeApprovalRouter {
   private idleTimers: ScoopIdleTimers = new ScoopIdleTimers({
     getScoops: () => this.scoops,
     getTabs: () => this.lifecycle.getTabsMap(),
+    findParent: (jid) => this.parentOrDefaultRoot(jid),
     handleMessage: (msg) => this.handleMessage(msg),
     notifyIncomingMessage: (jid, msg) => this.callbacks.onIncomingMessage?.(jid, msg),
   });
@@ -199,7 +210,7 @@ export class Orchestrator implements ConeApprovalRouter {
   private completionService: ScoopCompletionService = new ScoopCompletionService({
     getSharedFs: () => this.sharedFs,
     getScoop: (jid) => this.scoops.get(jid),
-    findCone: () => Array.from(this.scoops.values()).find((s) => s.isCone),
+    findParent: (jid) => this.parentOrDefaultRoot(jid),
     hasScoop: (jid) => this.scoops.has(jid),
     notifyIncomingMessage: (jid, msg) => this.callbacks.onIncomingMessage?.(jid, msg),
     handleMessage: (msg) => this.handleMessage(msg),
@@ -226,6 +237,7 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   private approvalRouter: ScoopApprovalRouter = new ScoopApprovalRouter({
     getScoops: () => this.scoops,
+    findApprover: (scoopJid) => this.parentOrDefaultRoot(scoopJid),
     getSudoManager: () => this.sudoManager,
     getLickManager: () => this.lickManager,
     handleMessage: (msg) => this.handleMessage(msg),
@@ -245,11 +257,11 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   private lickRegistry: LickRegistry = new LickRegistry({
     getConeShell: () => {
-      const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+      const cone = this.defaultRoot();
       return cone ? (this.lifecycle.getContext(cone.jid)?.getShell() ?? null) : null;
     },
     getConeFs: () => {
-      const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+      const cone = this.defaultRoot();
       return cone ? (this.lifecycle.getContext(cone.jid)?.getFS() ?? null) : null;
     },
     persistLickDecision: (id, decision) => this.approvalRouter.persistLickDecision(id, decision),
@@ -402,14 +414,15 @@ export class Orchestrator implements ConeApprovalRouter {
     await this.modelPolicyFile.init();
 
     const savedScoops = await db.getAllScoops();
+    // Legacy records predate the ownership edge; `isCone` is the only root
+    // signal they carry, so it anchors the backfill once, here.
+    const restoredRootJid = Object.values(savedScoops).find((s) => s.isCone)?.jid;
 
     for (const scoop of Object.values(savedScoops)) {
-      // Sanitize legacy cone records (may have trigger: '@Andy' from old groups code)
-      if (scoop.isCone) {
-        scoop.trigger = undefined;
-        scoop.requiresTrigger = false;
-        scoop.assistantLabel = scoop.assistantLabel || 'sliccy';
-      }
+      await this.backfillParent(scoop, restoredRootJid);
+      // Derive the presentation fields from the edge (also sanitizes legacy
+      // cone records that carried a trigger from the old groups code).
+      normalizeScoopRecord(scoop);
       this.migrateScoopConfig(scoop);
       this.scoops.set(scoop.jid, scoop);
       this.messageRouter.ensureQueue(scoop.jid);
@@ -464,7 +477,7 @@ export class Orchestrator implements ConeApprovalRouter {
         log.warn('Skipping scoop whose context failed to initialize during boot', {
           jid: scoop.jid,
           folder: scoop.folder,
-          isCone: scoop.isCone,
+          root: scoop.parentJid === null,
           error: message,
         });
         // Leave a NON-cone scoop in a retryable 'error' state so a later
@@ -473,7 +486,7 @@ export class Orchestrator implements ConeApprovalRouter {
         // entry that stays unusable until a full reset. A failed cone is
         // effectively fatal — there is no usable cone to retry into — so keep
         // skipping+logging it rather than surfacing a phantom error tab.
-        if (!scoop.isCone) {
+        if (scoop.parentJid !== null) {
           this.lifecycle.markTabError(scoop.jid, message);
         }
       } finally {
@@ -498,6 +511,29 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
+   * Backfill the work-unit ownership edge on records saved before
+   * `parentJid` was required (#1666). A cone becomes a root; a scoop is
+   * adopted by the single restored cone (there was exactly one). Unlike
+   * {@link migrateScoopConfig} this IS written back — the field is required
+   * and every later phase routes on it.
+   */
+  private async backfillParent(
+    scoop: RegisteredScoop,
+    restoredRootJid: string | undefined
+  ): Promise<void> {
+    if (scoop.parentJid !== undefined) return;
+    scoop.parentJid = scoop.isCone ? null : (restoredRootJid ?? null);
+    try {
+      await db.saveScoop(scoop);
+    } catch (err) {
+      log.warn('Failed to persist backfilled parentJid; will retry next boot', {
+        jid: scoop.jid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
    * One-shot in-memory compat migration for `ScoopConfig`. Mutates the scoop
    * record in place so the rest of the runtime sees the normalized shape;
    * the DB copy stays legacy until some other operation happens to call
@@ -515,7 +551,7 @@ export class Orchestrator implements ConeApprovalRouter {
    * Cones have no `ScoopConfig` path surface at all; they ignore the version.
    */
   private migrateScoopConfig(scoop: RegisteredScoop): void {
-    if (scoop.isCone) return;
+    if (scoop.parentJid === null) return;
     const version = scoop.configSchemaVersion ?? 0;
     if (version >= CURRENT_SCOOP_CONFIG_VERSION) return;
 
@@ -917,6 +953,37 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.scoops.get(jid);
   }
 
+  /** Live tab state of a scoop's runtime (`undefined` before its context exists). */
+  getScoopTabState(jid: string): ScoopTabState | undefined {
+    return this.lifecycle.getTab(jid);
+  }
+
+  /** The default (oldest) root — where unaddressed events land. */
+  private defaultRoot(): RegisteredScoop | undefined {
+    return rootsOf(this.scoops.values())[0];
+  }
+
+  /**
+   * The unit that owns `jid`, or the default root when the parent is gone or
+   * `jid` is unknown. Delegated results, idle notices and approval requests
+   * must always land somewhere a user can see them.
+   */
+  private parentOrDefaultRoot(jid: string | undefined): RegisteredScoop | undefined {
+    const scoop = jid === undefined ? undefined : this.scoops.get(jid);
+    const parent = scoop?.parentJid ? this.scoops.get(scoop.parentJid) : undefined;
+    return parent ?? this.defaultRoot();
+  }
+
+  /** Hierarchy-aware work-unit view over the registry (#1666). */
+  getWorkUnits(): WorkUnitManager {
+    return this.workUnits;
+  }
+
+  /** The owning live runtime of a scoop, once spawned or observed. */
+  getLiveUnit(jid: string): LiveWorkUnit | undefined {
+    return this.lifecycle.getUnit(jid);
+  }
+
   /** Wipe the virtual filesystem and re-seed default files (skills, shared CLAUDE.md). */
   async resetFilesystem(): Promise<void> {
     // Destroy all scoop contexts (they hold references to the old VFS)
@@ -1180,7 +1247,7 @@ export class Orchestrator implements ConeApprovalRouter {
       },
       vfs: fs as unknown as LocalVfsClient,
       getActiveSessionInfo: () => {
-        const cone = Array.from(this.scoops.values()).find((s) => s.isCone);
+        const cone = this.defaultRoot();
         return { id: cone?.jid ?? `session-${Date.now()}`, title: cone?.name ?? 'Active Session' };
       },
       version: __SLICC_VERSION__,

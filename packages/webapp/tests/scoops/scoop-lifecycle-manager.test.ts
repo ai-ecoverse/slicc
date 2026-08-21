@@ -22,6 +22,7 @@ const scoop: RegisteredScoop = {
   name: 'Main',
   folder: 'main',
   isCone: true,
+  parentJid: null,
   type: 'cone',
   requiresTrigger: false,
   assistantLabel: 'sliccy',
@@ -33,6 +34,7 @@ const worker: RegisteredScoop = {
   name: 'overflow-worker',
   folder: 'overflow-worker',
   isCone: false,
+  parentJid: 'cone',
   type: 'scoop',
   requiresTrigger: false,
   assistantLabel: 'overflow-worker',
@@ -89,6 +91,34 @@ describe('ScoopLifecycleManager', () => {
     expect(flushOnIdle).toHaveBeenCalledOnce();
   });
 
+  it('never unregisters the last cone', async () => {
+    const scoops = new Map([[scoop.jid, scoop]]);
+    const deleteScoop = vi.fn(async () => {});
+    const manager = new ScoopLifecycleManager({
+      getScoops: () => scoops,
+      getSharedFs: () => ({}),
+      getSessionStore: () => null,
+      getProcessManager: () => null,
+      getSudoManager: () => null,
+      getLickManager: () => null,
+      callbacks: { onStatusChange: vi.fn() },
+      db: { saveScoop: vi.fn(async () => {}), deleteScoop },
+      idleTimers: { start: vi.fn(), clear: vi.fn() },
+      messageRouter: {
+        ensureQueue: vi.fn(),
+        forgetScoop: vi.fn(),
+        flushOnIdle: vi.fn(async () => {}),
+      },
+      costTracker: { snapshot: vi.fn() },
+      approvalRouter: { failScoop: vi.fn(() => 0) },
+      completionService: { forgetScoop: vi.fn(), clearResponse: vi.fn() },
+    } as unknown as ScoopLifecycleDeps);
+
+    await expect(manager.unregister(scoop.jid)).rejects.toThrow(/last cone/);
+    expect(scoops.has(scoop.jid)).toBe(true);
+    expect(deleteScoop).not.toHaveBeenCalled();
+  });
+
   it('routes fatal scoop errors to the cone and releases active scoop_wait callers', async () => {
     const scoops = new Map([
       [scoop.jid, scoop],
@@ -99,7 +129,7 @@ describe('ScoopLifecycleManager', () => {
     const completionService = new ScoopCompletionService({
       getSharedFs: () => null,
       getScoop: (jid) => scoops.get(jid),
-      findCone: () => scoop,
+      findParent: () => scoop,
       hasScoop: (jid) => scoops.has(jid),
       notifyIncomingMessage: (_jid, message) => incoming.push(message),
       handleMessage: async (message) => {

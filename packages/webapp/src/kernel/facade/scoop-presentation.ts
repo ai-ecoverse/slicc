@@ -1,4 +1,5 @@
 import type { RegisteredScoop, ScoopTabState } from '../../scoops/types.js';
+import { isRootUnit, rootsOf } from '../../work-unit/policy.js';
 import type {
   ScoopListMsg,
   ScoopSnapshotConfig,
@@ -35,7 +36,8 @@ export class ScoopPresentation {
       jid: scoop.jid,
       name: scoop.name,
       folder: scoop.folder,
-      isCone: scoop.isCone,
+      // Wire field for followers; derived from the ownership edge (#1666).
+      isCone: isRootUnit(scoop),
       assistantLabel: scoop.assistantLabel,
       status: this.statuses.get(scoop.jid) ?? 'ready',
       ...(config ? { config } : {}),
@@ -51,7 +53,7 @@ export class ScoopPresentation {
     trayRuntimeStatus: Pick<TrayRuntimeStatusMsg, 'leader' | 'follower'>
   ): StateSnapshotMsg {
     const scoops = this.projectScoops(registeredScoops);
-    const cone = scoops.find((scoop) => scoop.isCone);
+    const cone = rootsOf(registeredScoops)[0];
     return {
       type: 'state-snapshot',
       scoops,

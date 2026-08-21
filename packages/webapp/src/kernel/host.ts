@@ -73,6 +73,7 @@ import {
 import { executeJsCode } from '../shell/jsh-executor.js';
 import { createProxiedFetch } from '../shell/proxied-fetch.js';
 import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/workflow-script.js';
+import { rootsOf } from '../work-unit/policy.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
 import { installSyncFsResponder } from './realm/sync-fs-responder.js';
@@ -320,7 +321,7 @@ function routeFormattedLickToCone(
   const scoops = orchestrator.getScoops();
   let resolvedTarget: RegisteredScoop | undefined;
   if (!event.targetScoop) {
-    resolvedTarget = scoops.find((s) => s.isCone);
+    resolvedTarget = rootsOf(scoops)[0];
   } else {
     resolvedTarget = scoops.find(
       (s) =>
@@ -506,13 +507,14 @@ async function initCostsAndLickManager(
  */
 async function bootstrapCone(orchestrator: OrchestratorType): Promise<void> {
   const allScoops = orchestrator.getScoops();
-  const hasCone = allScoops.some((s) => s.isCone);
-  if (!hasCone) {
+  const hasRoot = rootsOf(allScoops).length > 0;
+  if (!hasRoot) {
     await orchestrator.registerScoop({
       jid: `cone_${Date.now()}`,
       name: 'Cone',
       folder: 'cone',
       isCone: true,
+      parentJid: null,
       type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
@@ -541,7 +543,7 @@ function publishWorkflowRunManagerForHost(deps: {
   const { orchestrator, processManager, lickManager, sharedFs } = deps;
   publishWorkflowRunManager({
     sharedFs,
-    getConeJid: () => orchestrator.getScoops().find((s) => s.isCone)?.jid,
+    getConeJid: () => orchestrator.getWorkUnits().resolveDefaultRoot()?.descriptor.id,
     fireLick: (event) => lickManager.emitEvent(event),
     processManager,
     // `CommandContextLike` is a structural subset of `executeJsCode`'s ctx

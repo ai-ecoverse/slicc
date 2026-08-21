@@ -48,7 +48,11 @@ function truncateForWaiter(text: string): string {
 export interface ScoopCompletionServiceDeps {
   getSharedFs(): VirtualFS | null;
   getScoop(jid: string): RegisteredScoop | undefined;
-  findCone(): RegisteredScoop | undefined;
+  /**
+   * The unit a completed scoop reports to — its parent, or the default root
+   * when the parent is gone (#1666). `undefined` only when no root exists.
+   */
+  findParent(jid: string): RegisteredScoop | undefined;
   /** True iff `jid` is a currently-registered scoop. */
   hasScoop(jid: string): boolean;
   /** Notify the UI of an incoming message (fires the lick chip). */
@@ -120,7 +124,7 @@ export class ScoopCompletionService {
    * Any registered waiters are resolved with `null` so `scoop_wait` callers
    * unblock on teardown instead of stalling indefinitely.
    */
-  forgetScoop(jid: string, reason: 'unregister' | 'fatal-error'): void {
+  forgetScoop(jid: string, reason: 'unregister' | 'fatal-error' | 'close'): void {
     this.scoopResponseBuffer.delete(jid);
     this.mutedScoops.delete(jid);
     this.pendingCompletions.delete(jid);
@@ -174,7 +178,7 @@ export class ScoopCompletionService {
    */
   async notifyCompletion(jid: string): Promise<void> {
     const scoop = this.deps.getScoop(jid);
-    if (!scoop || scoop.isCone) return;
+    if (!scoop || scoop.parentJid === null) return;
 
     // Emit completion telemetry before the notify-policy / mute / waiter
     // branches AND before the empty-response early-return: any non-cone
@@ -214,14 +218,14 @@ export class ScoopCompletionService {
       return;
     }
 
-    await this.deliverCompletionToCone(scoop, responseText);
+    await this.deliverCompletionToParent(scoop, responseText);
   }
 
-  private async deliverCompletionToCone(
+  private async deliverCompletionToParent(
     scoop: RegisteredScoop,
     responseText: string
   ): Promise<void> {
-    const cone = this.deps.findCone();
+    const cone = this.deps.findParent(scoop.jid);
     if (!cone) return;
 
     const lineCount = countTextLines(responseText);
@@ -363,7 +367,7 @@ export class ScoopCompletionService {
       if (!pending) continue;
       this.pendingCompletions.delete(jid);
       const scoop = this.deps.getScoop(jid);
-      if (!scoop || scoop.isCone) continue;
+      if (!scoop || scoop.parentJid === null) continue;
       const summary = truncateForWaiter(pending.responseText);
       const entry: UnmuteResult = {
         jid,
@@ -534,9 +538,23 @@ export class ScoopCompletionService {
 
   private async deliverWaitResultsToCone(results: WaitResult[]): Promise<void> {
     if (results.length === 0) return;
-    const cone = this.deps.findCone();
-    if (!cone) return;
+    // `resolveScoopNames` matches scoop names globally, so one `scoop_wait`
+    // batch may span children of different parents once several roots exist.
+    // Group by parent and deliver each parent exactly its own results.
+    const byParent = new Map<string, { parent: RegisteredScoop; results: WaitResult[] }>();
+    for (const r of results) {
+      const parent = this.deps.findParent(r.jid);
+      if (!parent) continue;
+      const group = byParent.get(parent.jid) ?? { parent, results: [] };
+      group.results.push(r);
+      byParent.set(parent.jid, group);
+    }
+    for (const { parent, results: own } of byParent.values()) {
+      await this.deliverWaitResultsTo(parent, own);
+    }
+  }
 
+  private async deliverWaitResultsTo(cone: RegisteredScoop, results: WaitResult[]): Promise<void> {
     const lines: string[] = ['[scoop_wait completed]'];
     let timedOutCount = 0;
     let completedCount = 0;

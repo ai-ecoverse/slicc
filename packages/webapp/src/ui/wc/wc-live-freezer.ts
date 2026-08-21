@@ -22,6 +22,7 @@ import {
 } from './wc-freezer.js';
 import type { WcPageVfs } from './wc-live.js';
 import { applyShellContext, type WcShellRefs } from './wc-shell.js';
+import { defaultRootOf } from './wc-unit-context.js';
 
 export interface FreezerRailDeps {
   refs: WcShellRefs;
@@ -139,7 +140,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
           .then(({ resetDictationPriming }) => resetDictationPriming())
           .catch(() => undefined);
         refreshFreezer();
-        const cone = client.getScoops().find((scoop) => scoop.isCone);
+        const cone = defaultRootOf(client.getScoops());
         if (cone) selectScoop(cone);
       } catch (err) {
         log.error('WC new session failed', err);
@@ -185,7 +186,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
     } catch (err) {
       log.error('WC thaw failed', err);
       if (!getSelected()) {
-        const cone = client.getScoops().find((scoop) => scoop.isCone);
+        const cone = defaultRootOf(client.getScoops());
         if (cone) selectScoop(cone);
       }
     }

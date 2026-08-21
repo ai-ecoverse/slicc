@@ -15,6 +15,8 @@ import { TranscriptExportError } from '@slicc/shared-ts';
 import type { SessionData } from '../core/types.js';
 import type { ChatMessage, Session } from '../scoops/chat-types.js';
 import type { RegisteredScoop } from '../scoops/types.js';
+import { isRootUnit } from '../work-unit/policy.js';
+import { chatSessionIdFor } from '../work-unit/record.js';
 import type { TranscriptConversationSource } from './normalize.js';
 
 // ---------------------------------------------------------------------------
@@ -47,7 +49,7 @@ const POLL_INTERVAL_MS = 50;
 
 /** Compute the UI session-store ID for a given scoop. */
 function uiSessionId(scoop: RegisteredScoop): string {
-  return scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+  return chatSessionIdFor(scoop);
 }
 
 /**
@@ -114,9 +116,9 @@ function assembleResult(
 
     const source: TranscriptConversationSource = {
       id: scoop.jid,
-      kind: scoop.isCone ? 'cone' : 'scoop',
+      kind: isRootUnit(scoop) ? 'cone' : 'scoop',
       name: scoop.name,
-      ...(scoop.folder && !scoop.isCone ? { folder: scoop.folder } : {}),
+      ...(scoop.folder && !isRootUnit(scoop) ? { folder: scoop.folder } : {}),
       ...(scoop.parentJid ? { parentConversationId: scoop.parentJid } : {}),
       ...(scoop.originToolCallId ? { originToolCallId: scoop.originToolCallId } : {}),
       messages,

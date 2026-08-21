@@ -327,6 +327,7 @@ describe('OffscreenClient', () => {
         name: 'Test',
         folder: 'test-scoop',
         isCone: false,
+        parentJid: 'cone_1',
         assistantLabel: 'test-scoop',
         status: 'ready',
       },
@@ -346,6 +347,7 @@ describe('OffscreenClient', () => {
           name: 'Cone',
           folder: 'cone',
           isCone: true,
+          parentJid: null,
           assistantLabel: 'sliccy',
           status: 'ready',
         },
@@ -354,6 +356,7 @@ describe('OffscreenClient', () => {
           name: 'Worker',
           folder: 'worker-scoop',
           isCone: false,
+          parentJid: 'cone_1',
           assistantLabel: 'worker-scoop',
           status: 'processing',
         },
@@ -428,6 +431,7 @@ describe('OffscreenClient', () => {
           name: 'Cone',
           folder: 'cone',
           isCone: true,
+          parentJid: null,
           assistantLabel: 'sliccy',
           status: 'ready',
           config: { thinkingLevel: 'off' },
@@ -520,6 +524,7 @@ describe('OffscreenClient', () => {
       name: 'Cone',
       folder: 'cone',
       isCone: true,
+      parentJid: null,
       type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
@@ -539,6 +544,7 @@ describe('OffscreenClient', () => {
         name: 'Rogue',
         folder: 'rogue-scoop',
         isCone: false,
+        parentJid: 'cone_1',
         type: 'scoop',
         requiresTrigger: true,
         assistantLabel: 'rogue-scoop',
@@ -557,6 +563,7 @@ describe('OffscreenClient', () => {
           name: 'Test',
           folder: 'test',
           isCone: false,
+          parentJid: 'cone_1',
           assistantLabel: 'test',
           status: 'ready',
         },
@@ -569,6 +576,52 @@ describe('OffscreenClient', () => {
     expect(client.getScoops().length).toBe(0);
     const envelope = sentMessages[0] as { payload: any };
     expect(envelope.payload.type).toBe('scoop-drop');
+  });
+
+  it('unregisterScoop refuses to drop the last cone and drops an extra cone', async () => {
+    simulateMessage('offscreen', {
+      type: 'state-snapshot',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+      ],
+      activeScoopJid: null,
+    });
+    await expect(client.unregisterScoop('cone_1')).rejects.toThrow(/last cone/);
+    expect(client.getScoops().length).toBe(1);
+    expect(sentMessages.some((m: any) => m.payload?.type === 'scoop-drop')).toBe(false);
+
+    simulateMessage('offscreen', {
+      type: 'state-snapshot',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+        {
+          jid: 'cone_2',
+          name: 'Two',
+          folder: 'cone-two',
+          isCone: true,
+          assistantLabel: 'Two',
+          status: 'ready',
+        },
+      ],
+      activeScoopJid: null,
+    });
+    await client.unregisterScoop('cone_2');
+    expect(client.getScoops().map((s) => s.jid)).toEqual(['cone_1']);
+    expect(sentMessages.some((m: any) => m.payload?.type === 'scoop-drop')).toBe(true);
   });
 
   it('stopScoop sends abort', () => {
@@ -588,6 +641,7 @@ describe('OffscreenClient', () => {
           name: 'Cone',
           folder: 'cone',
           isCone: true,
+          parentJid: null,
           assistantLabel: 'sliccy',
           status: 'ready',
         },

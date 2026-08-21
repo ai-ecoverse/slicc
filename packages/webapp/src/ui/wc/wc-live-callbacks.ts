@@ -9,6 +9,13 @@ import type { ChatMessage } from '../types.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import { scoopColor } from './wc-scoop-color.js';
 import type { SwitcherScoop, WcShellRefs } from './wc-shell.js';
+import {
+  defaultRootOf,
+  orderForSwitcher,
+  switcherLabelFor,
+  unitForContext,
+  unitSlugFor,
+} from './wc-unit-context.js';
 
 /** Scoop runtime status, as broadcast by `onStatusChange`. */
 export type ScoopStatus = 'initializing' | 'ready' | 'processing' | 'error';
@@ -21,6 +28,8 @@ export interface LickBackpressureState {
 /** Mutable live state shared between kernel callbacks and shell wiring. */
 export interface WcLiveWiring {
   refs: WcShellRefs;
+  /** Re-render the freezer rail's Cones section (set by the live shell). */
+  refreshConesRail?: () => void;
   statuses: Map<string, ScoopStatus>;
   fills: Map<string, number>;
   phases: Map<string, ScoopBusyPhase>;
@@ -67,23 +76,21 @@ export function toSwitcherScoops(
   phases?: ReadonlyMap<string, ScoopBusyPhase>,
   awaitingJid?: string | null
 ): SwitcherScoop[] {
-  return [...scoops]
-    .sort((a, b) => Number(b.isCone) - Number(a.isCone))
-    .map((scoop) => {
-      const fill = fills?.get(scoop.jid);
-      const status = statuses?.get(scoop.jid);
-      return {
-        key: scoop.jid,
-        type: scoop.isCone ? 'cone' : 'scoop',
-        color: scoopColor(scoop),
-        label: scoop.isCone ? 'sliccy' : scoop.name,
-        eyes: eyesFor(status),
-        state: stateFor(status),
-        fill: typeof fill === 'number' ? Math.round(fill * 100) : undefined,
-        phase: status === 'processing' ? phases?.get(scoop.jid) : undefined,
-        awaiting: awaitingJid === scoop.jid || undefined,
-      };
-    });
+  return orderForSwitcher(scoops).map((scoop) => {
+    const fill = fills?.get(scoop.jid);
+    const status = statuses?.get(scoop.jid);
+    return {
+      key: scoop.jid,
+      type: scoop.isCone ? 'cone' : 'scoop',
+      color: scoopColor(scoop),
+      label: switcherLabelFor(scoop),
+      eyes: eyesFor(status),
+      state: stateFor(status),
+      fill: typeof fill === 'number' ? Math.round(fill * 100) : undefined,
+      phase: status === 'processing' ? phases?.get(scoop.jid) : undefined,
+      awaiting: awaitingJid === scoop.jid || undefined,
+    };
+  });
 }
 
 /** Kernel callbacks for the WC live shell, factored for worker-free tests. */
@@ -99,6 +106,7 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
         wiring.awaitingInput
       );
     }
+    wiring.refreshConesRail?.();
   };
   wiring.refreshScoops = refreshScoops;
 
@@ -110,16 +118,15 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
     const scoops = wiring.getClient()?.getScoops() ?? [];
     const pending = wiring.pendingUrlContext;
     if (pending?.startsWith('freezer:')) return;
-    if (pending?.startsWith('scoop:')) {
-      const name = pending.slice('scoop:'.length);
-      const scoop = scoops.find((candidate) => !candidate.isCone && candidate.name === name);
+    if (pending?.startsWith('scoop:') || pending?.startsWith('cone:')) {
+      const scoop = unitForContext(scoops, pending);
       if (scoop) {
         wiring.pendingUrlContext = null;
         wiring.selectScoop(scoop);
         return;
       }
     }
-    const cone = scoops.find((scoop) => scoop.isCone);
+    const cone = defaultRootOf(scoops);
     if (cone) {
       wiring.pendingUrlContext = null;
       wiring.selectScoop(cone);
@@ -182,7 +189,7 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       else wiring.lickBackpressure.set(jid, info);
       const selected = wiring.getSelected();
       if (selected?.jid !== jid) return;
-      const scoopName = selected.isCone ? 'cone' : selected.name;
+      const scoopName = unitSlugFor(selected);
       wiring.getController()?.setLickBackpressure(info.count, info.waitingMs, scoopName);
     },
     onMessageUpdate: (jid, update) => {

@@ -7,6 +7,7 @@ function scoop(allowedCommands: string[]) {
     name: 'restricted',
     folder: 'restricted',
     isCone: false,
+    parentJid: 'cone',
     type: 'scoop',
     requiresTrigger: false,
     assistantLabel: 'restricted',

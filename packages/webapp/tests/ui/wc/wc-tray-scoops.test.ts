@@ -7,6 +7,7 @@ const cone = {
   name: 'sliccy',
   folder: 'cone',
   isCone: true,
+  parentJid: null,
   assistantLabel: 'sliccy',
 };
 

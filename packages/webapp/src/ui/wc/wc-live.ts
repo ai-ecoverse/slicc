@@ -28,6 +28,7 @@ import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { WcChatController } from './wc-chat-controller.js';
+import { wireConesRail } from './wc-cones-rail.js';
 import {
   createWcLiveCallbacks,
   type LickBackpressureState,
@@ -41,6 +42,7 @@ import { createWcMonitorDeps } from './wc-live-monitor-deps.js';
 import { setupSyncFsBootNonce } from './wc-live-sync-fs.js';
 import { applyThreadContext } from './wc-live-thinking-hydration.js';
 import { mountWcShell, type WcShellRefs } from './wc-shell.js';
+import { switcherLabelFor, unitForContext, unitSlugFor } from './wc-unit-context.js';
 import { createWorkbenchActivator, type WorkbenchActivator } from './wc-workbench.js';
 import { wireFileMentions } from './wire-file-mentions.js';
 
@@ -140,7 +142,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     controller?.setLickBackpressure(
       cachedBackpressure?.count ?? 0,
       cachedBackpressure?.waitingMs ?? 0,
-      scoop.isCone ? 'cone' : scoop.name
+      unitSlugFor(scoop)
     );
     client.setSelectedScoopJid(scoop.jid);
     refs.inputCard.removeAttribute('disabled');
@@ -408,7 +410,7 @@ export function wireWcChipTips(deps: {
       chip.title = cached.tip;
       return;
     }
-    if (!chip.title) chip.title = scoop.isCone ? 'sliccy' : scoop.name;
+    if (!chip.title) chip.title = switcherLabelFor(scoop);
     if (!activity || inFlight.has(jid)) return;
     inFlight.add(jid);
     void (async () => {
@@ -420,7 +422,7 @@ export function wireWcChipTips(deps: {
             'no quotes, no trailing period.',
           prompt:
             `Summarize what this agent has been doing.\n` +
-            `Agent: ${scoop.isCone ? 'sliccy (the main agent)' : scoop.name}\n` +
+            `Agent: ${scoop.isCone ? `${switcherLabelFor(scoop)} (a main agent)` : scoop.name}\n` +
             `Most recent activity:\n${activity}`,
           maxTokens: 40,
         });
@@ -492,10 +494,7 @@ function wireWcUrlContext(
       void openFrozen(ctx.slice('freezer:'.length));
       return;
     }
-    const scoops = client.getScoops();
-    const scoop = ctx.startsWith('scoop:')
-      ? scoops.find((s) => !s.isCone && s.name === ctx.slice('scoop:'.length))
-      : scoops.find((s) => s.isCone);
+    const scoop = unitForContext(client.getScoops(), ctx);
     if (scoop && scoop.jid !== boot.getSelected()?.jid) boot.selectScoop(scoop);
   };
   boot.refs.thread.addEventListener('slicc-url-context', (event) => {
@@ -851,6 +850,21 @@ export function attachWcClient(
   // request hangs silently) — re-run once the kernel reports ready.
   refreshFreezer();
   boot.onClientReady(refreshFreezer);
+
+  // Cones section of the rail: add / switch / remove root units (#1666).
+  // Experimental — behind the `multiple-cones` flag (Settings → Experimental).
+  // Re-rendered from the roster whenever the switcher chips refresh.
+  if (isFeatureEnabled('multiple-cones')) {
+    const conesRail = wireConesRail({
+      refs,
+      client,
+      getSelected: () => boot.getSelected(),
+      selectScoop: boot.selectScoop,
+      log,
+    });
+    boot.wiring.refreshConesRail = conesRail.refresh;
+    boot.onClientReady(conesRail.refresh);
+  }
 
   wireWcUrlContext(boot, client, openFrozen);
 

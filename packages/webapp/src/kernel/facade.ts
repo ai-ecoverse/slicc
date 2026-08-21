@@ -28,6 +28,14 @@ import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 import { getSprinkleRoute } from '../shell/sprinkle-routes.js';
 import { TOOL_UI_MOUNTED_ACTION, toolUIRegistry } from '../tools/tool-ui.js';
+import { buildWorkUnitRecord } from '../work-unit/manager.js';
+import { isRootUnit, rootsOf } from '../work-unit/policy.js';
+import {
+  chatSessionIdFor,
+  coneFolderFor,
+  PRIMARY_CONE_FOLDER,
+  sourceLabelFor,
+} from '../work-unit/record.js';
 import { AgentEventStream } from './facade/agent-event-stream.js';
 import { ScoopPresentation } from './facade/scoop-presentation.js';
 import { buildTrayRuntimeSnapshot } from './facade/tray-runtime.js';
@@ -454,8 +462,8 @@ export class Bridge implements KernelFacade {
     // dead ephemeral scoops otherwise pile up in the
     // `browser-coding-agent` store. The cone never unregisters, but
     // guard anyway: its session must survive.
-    if (!scoop.isCone && this.sessionStore) {
-      this.sessionStore.delete(`session-${scoop.folder}`).catch((err) => {
+    if (scoop.parentJid !== null && this.sessionStore) {
+      this.sessionStore.delete(chatSessionIdFor(scoop)).catch((err) => {
         console.warn(
           '[kernel-bridge] Failed to delete session for unregistered scoop:',
           scoop.folder,
@@ -667,7 +675,7 @@ export class Bridge implements KernelFacade {
         )
       : undefined;
     if (!target) {
-      target = scoops.find((s) => s.isCone);
+      target = rootsOf(scoops)[0];
     }
     if (!target) return;
     const msgId = `sprinkle-${sprinkleName}-${Date.now()}`;
@@ -710,7 +718,7 @@ export class Bridge implements KernelFacade {
    */
   applyFollowerSnapshot(messages: ChatMessage[]): void {
     if (!this.orchestrator) return;
-    const cone = this.orchestrator.getScoops().find((s) => s.isCone);
+    const cone = rootsOf(this.orchestrator.getScoops())[0];
     if (!cone) return;
     const buf = messages.map((m) => ({
       id: m.id,
@@ -735,7 +743,7 @@ export class Bridge implements KernelFacade {
     this.currentMessageId.delete(cone.jid);
     this.agentEventStream.clear(cone.jid);
     if (this.sessionStore) {
-      const sessionId = cone.isCone ? 'session-cone' : `session-${cone.folder}`;
+      const sessionId = chatSessionIdFor(cone);
       this.sessionStore.saveMessages(sessionId, messages).catch((err) => {
         log.error('applyFollowerSnapshot persist failed', {
           error: err instanceof Error ? err.message : String(err),
@@ -751,7 +759,7 @@ export class Bridge implements KernelFacade {
 
   /** Resolve the local cone scoop's jid (panel-known), if any. */
   getConeJid(): string | null {
-    return this.orchestrator?.getScoops().find((s) => s.isCone)?.jid ?? null;
+    return this.orchestrator ? (rootsOf(this.orchestrator.getScoops())[0]?.jid ?? null) : null;
   }
 
   /** Bridge follower-side AgentEvents into panel-bound agent-event messages. */
@@ -847,7 +855,7 @@ export class Bridge implements KernelFacade {
     if (agentMessages.length === 0) return null;
     const { agentMessagesToChatMessages } = await import('../scoops/agent-message-to-chat.js');
     const chatMessages = agentMessagesToChatMessages(agentMessages, {
-      source: scoop.isCone ? 'cone' : (scoop.name ?? scoop.folder),
+      source: sourceLabelFor(scoop),
     });
     return chatMessages.map((m) => ({
       id: m.id,
@@ -962,7 +970,7 @@ export class Bridge implements KernelFacade {
     // the new entries, reintroducing the truncation race this
     // handler exists to prevent.
     if (this.sessionStore) {
-      const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+      const sessionId = chatSessionIdFor(scoop);
       try {
         const session = await this.sessionStore.load(sessionId);
         const messages = session?.messages ?? [];
@@ -1020,15 +1028,14 @@ export class Bridge implements KernelFacade {
    */
   private async handleConeCreate(name: string): Promise<void> {
     if (!this.orchestrator) return;
+    const existing = this.orchestrator.getScoops();
+    const folder = coneFolderFor(name, existing);
+    const primary = folder === PRIMARY_CONE_FOLDER;
+    // The primary root keeps its historical `sliccy` label; an extra cone is
+    // addressed by the name the user gave it (chip label, `cone:<folder>` URL).
     const scoop: RegisteredScoop = {
-      jid: `cone_${Date.now()}`,
-      name,
-      folder: 'cone',
-      isCone: true,
-      type: 'cone',
-      requiresTrigger: false,
-      assistantLabel: 'sliccy',
-      addedAt: new Date().toISOString(),
+      ...buildWorkUnitRecord({ parentId: null, name, folder }),
+      assistantLabel: primary ? 'sliccy' : name,
     };
     await this.orchestrator.registerScoop(scoop);
     this.emit({
@@ -1132,7 +1139,7 @@ export class Bridge implements KernelFacade {
       const agentMessages = context.getAgentMessages();
       if (agentMessages.length > 0) {
         const chatMessages = agentMessagesToChatMessages(agentMessages, {
-          source: scoop.isCone ? 'cone' : (scoop.name ?? scoop.folder),
+          source: sourceLabelFor(scoop),
         });
         this.emit({
           type: 'scoop-transcript',
@@ -1179,7 +1186,7 @@ export class Bridge implements KernelFacade {
     }
 
     if (this.sessionStore) {
-      const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+      const sessionId = chatSessionIdFor(scoop);
       try {
         const session = await this.sessionStore.load(sessionId);
         const messages = session?.messages ?? [];
@@ -1221,7 +1228,7 @@ export class Bridge implements KernelFacade {
     if (!this.sessionStore || !this.orchestrator) return;
     const scoop = this.orchestrator.getScoops().find((s) => s.jid === jid);
     if (!scoop) return;
-    const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+    const sessionId = chatSessionIdFor(scoop);
     const buf = this.messageBuffers.get(jid);
     if (!buf || buf.length === 0) return;
     try {
@@ -1260,7 +1267,7 @@ export class Bridge implements KernelFacade {
 
     const scoops = this.orchestrator?.getScoops() ?? [];
     const scoop = scoops.find((s) => s.jid === jid);
-    const source = scoop?.isCone ? 'cone' : (scoop?.name ?? 'unknown');
+    const source = scoop ? sourceLabelFor(scoop) : 'unknown';
 
     const msg: BufferedChatMessage = {
       id: msgId,
@@ -1646,19 +1653,49 @@ export class Bridge implements KernelFacade {
    */
   private async handleScoopDrop(scoopJid: string): Promise<void> {
     if (!this.orchestrator) return;
-    const droppedScoop = this.orchestrator.getScoops().find((s) => s.jid === scoopJid);
-    await this.orchestrator.unregisterScoop(scoopJid);
-    this.messageBuffers.delete(scoopJid);
-    this.currentMessageId.delete(scoopJid);
-    this.agentEventStream.clear(scoopJid);
-    this.scoopPresentation.clearStatus(scoopJid);
-    if (droppedScoop && this.sessionStore) {
-      const sessionId = droppedScoop.isCone ? 'session-cone' : `session-${droppedScoop.folder}`;
+    const scoops = this.orchestrator.getScoops();
+    const droppedScoop = scoops.find((s) => s.jid === scoopJid);
+    if (droppedScoop && isRootUnit(droppedScoop)) {
+      // A cone owns its scoops: dropping it drops its whole subtree. The
+      // last root is never dropped — the user would be left with no agent
+      // to talk to (the panel hides the control, this is the backstop).
+      if (rootsOf(scoops).length <= 1) {
+        console.warn('[kernel-bridge] Refusing to drop the last cone:', scoopJid);
+        this.emitScoopList();
+        return;
+      }
+      const subtree = this.descendantsOf(scoops, scoopJid);
+      await this.orchestrator.getWorkUnits().close(scoopJid);
+      for (const scoop of [...subtree, droppedScoop]) this.forgetDroppedScoop(scoop);
+    } else {
+      await this.orchestrator.unregisterScoop(scoopJid);
+      this.forgetDroppedScoop(droppedScoop ?? { jid: scoopJid });
+    }
+    this.emitScoopList();
+  }
+
+  /** Every unit below `jid`, deepest first (so buffers clear bottom-up). */
+  private descendantsOf(scoops: readonly RegisteredScoop[], jid: string): RegisteredScoop[] {
+    const out: RegisteredScoop[] = [];
+    for (const child of scoops) {
+      if (child.parentJid !== jid) continue;
+      out.push(...this.descendantsOf(scoops, child.jid), child);
+    }
+    return out;
+  }
+
+  /** Drop the panel-side buffers and persisted UI session of a removed unit. */
+  private forgetDroppedScoop(scoop: Pick<RegisteredScoop, 'jid'> & Partial<RegisteredScoop>): void {
+    this.messageBuffers.delete(scoop.jid);
+    this.currentMessageId.delete(scoop.jid);
+    this.agentEventStream.clear(scoop.jid);
+    this.scoopPresentation.clearStatus(scoop.jid);
+    if (scoop.folder && this.sessionStore) {
+      const sessionId = chatSessionIdFor({ folder: scoop.folder });
       this.sessionStore.delete(sessionId).catch((err) => {
         console.warn('[kernel-bridge] Failed to delete session on scoop drop:', sessionId, err);
       });
     }
-    this.emitScoopList();
   }
 
   /**
@@ -1670,7 +1707,7 @@ export class Bridge implements KernelFacade {
    * reload.
    */
   private async handleClearChat(requestId: string): Promise<void> {
-    const coneJid = this.orchestrator?.getScoops().find((s) => s.isCone)?.jid;
+    const coneJid = this.getConeJid() ?? undefined;
     if (coneJid) {
       await this.orchestrator?.clearScoopMessages(coneJid);
     }

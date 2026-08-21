@@ -8,7 +8,11 @@ export type FeatureFlagFloat =
   | 'cherry'
   | 'follower';
 
-export type FeatureFlagId = 'experimental-settings' | 'panel-layouts' | 'agentic-memory';
+export type FeatureFlagId =
+  | 'experimental-settings'
+  | 'panel-layouts'
+  | 'agentic-memory'
+  | 'multiple-cones';
 export type FeatureFlagValues = Partial<Record<FeatureFlagId, string>>;
 
 export interface FeatureFlagDefinition {
@@ -47,6 +51,14 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     label: 'Agentic memory',
     description:
       'Curate session memory with a background agent instead of a one-shot extraction call.',
+    defaultValue: 'off',
+    userToggleable: true,
+  }),
+  Object.freeze({
+    id: 'multiple-cones',
+    label: 'Multiple cones',
+    description:
+      'Add, switch between and remove cones from the freezer rail. Extra cones share the workspace.',
     defaultValue: 'off',
     userToggleable: true,
   }),
@@ -162,9 +174,16 @@ export function initFeatureFlags(
  * anything dropped. Never touches `localStorage` — reset on every
  * `initFeatureFlags` call, exactly like a pushed `theme`/`layout`.
  */
-export function applyHostFlagOverrides(
-  values: Readonly<Record<string, unknown>>
-): FeatureFlagValues {
+/**
+ * Flag values as they arrive from an untrusted source (an embedder's
+ * handshake, parsed `localStorage`): keyed by flag id, values unchecked until
+ * {@link sanitizeValues} / {@link applyHostFlagOverrides} narrow them.
+ */
+export interface UntrustedFlagValues {
+  readonly [flagId: string]: unknown;
+}
+
+export function applyHostFlagOverrides(values: UntrustedFlagValues): FeatureFlagValues {
   const applied: FeatureFlagValues = {};
   for (const [id, value] of Object.entries(values)) {
     const definition = FEATURE_FLAGS_BY_ID.get(id as FeatureFlagId);
@@ -201,7 +220,7 @@ function canOverride(definition: FeatureFlagDefinition, float: FeatureFlagFloat)
 
 function sanitizeValues(value: unknown): FeatureFlagValues {
   if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
-  const candidate = value as Record<string, unknown>;
+  const candidate = value as UntrustedFlagValues;
   const sanitized: FeatureFlagValues = {};
   for (const definition of FEATURE_FLAGS) {
     const flagValue = candidate[definition.id];

@@ -44,6 +44,11 @@ import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js'
 import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
 import type { TerminalEventMsg } from '../shell/terminal-protocol.js';
+import { isRootUnit, rootsOf } from '../work-unit/policy.js';
+
+/** Placeholder owner for a scoop whose cone is not in the same wire list. */
+const UNKNOWN_PARENT_JID = 'unknown-parent';
+
 import type { AgentHandle, ChatMessage, AgentEvent as UIAgentEvent } from './types.js';
 
 const log = createLogger('offscreen-client');
@@ -355,8 +360,16 @@ export class OffscreenClient implements KernelClientFacade {
     this.send({ type: 'cone-create', name: scoop.name });
   }
 
-  /** Called by ScoopsPanel delete button. */
+  /**
+   * Drop a scoop or an extra cone. The last cone can never be dropped — the
+   * panel would be left with no agent to talk to — so that is rejected here
+   * before any optimistic removal (the kernel refuses it independently).
+   */
   async unregisterScoop(jid: string): Promise<void> {
+    const target = this.scoops.find((s) => s.jid === jid);
+    if (target && isRootUnit(target) && rootsOf(this.scoops).length <= 1) {
+      throw new Error('Cannot remove the last cone');
+    }
     this.send({ type: 'scoop-drop', scoopJid: jid });
     // Optimistically remove
     this.scoops = this.scoops.filter((s) => s.jid !== jid);
@@ -1167,7 +1180,7 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleScoopCreated(msg: ScoopCreatedMsg): void {
-    const scoop = this.msgScoopToRegistered(msg.scoop);
+    const scoop = this.msgScoopToRegistered(msg.scoop, this.coneJidFromList(this.scoops));
     // Remove optimistic entry (same name, different JID) and add the real one
     this.scoops = this.scoops.filter((s) => s.name !== scoop.name || s.jid === scoop.jid);
     if (!this.scoops.find((s) => s.jid === scoop.jid)) {
@@ -1197,7 +1210,9 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleScoopList(msg: ScoopListMsg): void {
-    this.scoops = msg.scoops.map((s) => this.msgScoopToRegistered(s));
+    this.scoops = msg.scoops.map((s) =>
+      this.msgScoopToRegistered(s, this.coneJidFromList(msg.scoops))
+    );
     for (const s of msg.scoops) {
       this.scoopStatuses.set(s.jid, s.status);
     }
@@ -1207,7 +1222,9 @@ export class OffscreenClient implements KernelClientFacade {
   private handleStateSnapshot(msg: StateSnapshotMsg): void {
     log.info('Received state snapshot', { scoopCount: msg.scoops.length });
 
-    this.scoops = msg.scoops.map((s) => this.msgScoopToRegistered(s));
+    this.scoops = msg.scoops.map((s) =>
+      this.msgScoopToRegistered(s, this.coneJidFromList(msg.scoops))
+    );
     for (const s of msg.scoops) {
       this.scoopStatuses.set(s.jid, s.status);
     }
@@ -1250,13 +1267,25 @@ export class OffscreenClient implements KernelClientFacade {
     });
   }
 
-  private msgScoopToRegistered(s: ScoopListMsg['scoops'][number]): RegisteredScoop {
+  private coneJidFromList(scoops: ReadonlyArray<{ jid: string; isCone: boolean }>): string | null {
+    return scoops.find((s) => s.isCone)?.jid ?? null;
+  }
+
+  private msgScoopToRegistered(
+    s: ScoopListMsg['scoops'][number],
+    coneJid: string | null
+  ): RegisteredScoop {
     return {
       jid: s.jid,
       name: s.name,
       folder: s.folder,
       isCone: s.isCone,
       type: s.isCone ? 'cone' : 'scoop',
+      // The wire carries no ownership edge yet; a panel-side scoop belongs to
+      // the list's cone. A list without a cone (partial snapshots in tests,
+      // a follower mid-join) must still not turn a scoop into a root, so an
+      // unknown parent is a non-null sentinel. Phase 5 puts `parentId` on the wire.
+      parentJid: s.isCone ? null : (coneJid ?? UNKNOWN_PARENT_JID),
       requiresTrigger: !s.isCone,
       assistantLabel: s.assistantLabel,
       addedAt: new Date().toISOString(),

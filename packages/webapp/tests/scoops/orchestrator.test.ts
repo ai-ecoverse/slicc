@@ -30,6 +30,7 @@ const cone: RegisteredScoop = {
   name: 'Main',
   folder: 'main',
   isCone: true,
+  parentJid: null,
   type: 'cone',
   requiresTrigger: false,
   assistantLabel: 'sliccy',
@@ -42,6 +43,7 @@ const testScoop: RegisteredScoop = {
   folder: 'test-scoop',
   trigger: '@test-scoop',
   isCone: false,
+  parentJid: 'cone_main_1',
   type: 'scoop',
   requiresTrigger: true,
   assistantLabel: 'test-scoop',
@@ -54,6 +56,7 @@ const otherScoop: RegisteredScoop = {
   folder: 'other-scoop',
   trigger: '@other-scoop',
   isCone: false,
+  parentJid: 'cone_main_1',
   type: 'scoop',
   requiresTrigger: true,
   assistantLabel: 'other-scoop',
@@ -527,6 +530,86 @@ describe('Orchestrator session-restore compat for path config', () => {
     return orch;
   }
 
+  it('backfills the work-unit parent edge on restore and persists it (#1666)', async () => {
+    // Records saved before `parentJid` was required: a cone and a scoop with
+    // no ownership edge at all.
+    const legacyCone = {
+      jid: 'cone_legacy_1',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: new Date().toISOString(),
+    } as unknown as RegisteredScoop;
+    const legacyScoop = {
+      jid: 'scoop_orphan_1',
+      name: 'orphan',
+      folder: 'orphan-scoop',
+      trigger: '@orphan-scoop',
+      isCone: false,
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'orphan-scoop',
+      addedAt: new Date().toISOString(),
+      config: { visiblePaths: [], writablePaths: [] },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    } as unknown as RegisteredScoop;
+    await saveScoop(legacyCone);
+    await saveScoop(legacyScoop);
+
+    const o = await initOrchestrator();
+    expect(o.getScoop('cone_legacy_1')?.parentJid).toBeNull();
+    expect(o.getScoop('scoop_orphan_1')?.parentJid).toBe('cone_legacy_1');
+
+    // Written back, not just patched in memory — later phases route on it.
+    const persisted = await getAllScoops();
+    expect(persisted['cone_legacy_1'].parentJid).toBeNull();
+    expect(persisted['scoop_orphan_1'].parentJid).toBe('cone_legacy_1');
+
+    // And the hierarchy view agrees with the records.
+    const units = o.getWorkUnits();
+    expect(units.roots().map((u) => u.descriptor.id)).toEqual(['cone_legacy_1']);
+    expect(units.getParent('scoop_orphan_1')?.descriptor.id).toBe('cone_legacy_1');
+    expect(units.getChildren('cone_legacy_1').map((u) => u.descriptor.id)).toEqual([
+      'scoop_orphan_1',
+    ]);
+  });
+
+  it('leaves an explicit parentJid alone on restore', async () => {
+    const cone: RegisteredScoop = {
+      jid: 'cone_a',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      parentJid: null,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: new Date().toISOString(),
+    };
+    const nested: RegisteredScoop = {
+      jid: 'scoop_nested_1',
+      name: 'nested',
+      folder: 'nested-scoop',
+      trigger: '@nested-scoop',
+      isCone: false,
+      parentJid: 'scoop_parent_1',
+      type: 'scoop',
+      requiresTrigger: true,
+      assistantLabel: 'nested-scoop',
+      addedAt: new Date().toISOString(),
+      config: { visiblePaths: [], writablePaths: [] },
+      configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
+    };
+    await saveScoop(cone);
+    await saveScoop(nested);
+
+    const o = await initOrchestrator();
+    expect(o.getScoop('scoop_nested_1')?.parentJid).toBe('scoop_parent_1');
+  });
+
   it('backfills both visiblePaths and writablePaths for truly-legacy non-cone scoops', async () => {
     const legacy: RegisteredScoop = {
       jid: 'scoop_legacy_1',
@@ -534,6 +617,7 @@ describe('Orchestrator session-restore compat for path config', () => {
       folder: 'legacy-scoop',
       trigger: '@legacy-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: true,
       assistantLabel: 'legacy-scoop',
@@ -559,6 +643,7 @@ describe('Orchestrator session-restore compat for path config', () => {
       folder: 'v1-scoop',
       trigger: '@v1-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: true,
       assistantLabel: 'v1-scoop',
@@ -582,6 +667,7 @@ describe('Orchestrator session-restore compat for path config', () => {
       folder: 'configured-writable-scoop',
       trigger: '@configured-writable-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: true,
       assistantLabel: 'configured-writable-scoop',
@@ -606,6 +692,7 @@ describe('Orchestrator session-restore compat for path config', () => {
       folder: 'strict-writable-scoop',
       trigger: '@strict-writable-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: true,
       assistantLabel: 'strict-writable-scoop',
@@ -629,6 +716,7 @@ describe('Orchestrator session-restore compat for path config', () => {
       folder: 'empty-writable-scoop',
       trigger: '@empty-writable-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: true,
       assistantLabel: 'empty-writable-scoop',
@@ -649,6 +737,7 @@ describe('Orchestrator session-restore compat for path config', () => {
       name: 'Cone',
       folder: 'cone',
       isCone: true,
+      parentJid: null,
       type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
@@ -755,6 +844,7 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
       name: 'notify-default',
       folder: 'notify-default-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'notify-default-scoop',
@@ -796,6 +886,7 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
       name: 'notify-fallback',
       folder: 'notify-fallback-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'notify-fallback-scoop',
@@ -835,6 +926,7 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
       name: 'ephemeral',
       folder: 'agent-ephemeral',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'agent-ephemeral',
@@ -866,6 +958,7 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
       name: 'noout',
       folder: 'noout-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'noout-scoop',
@@ -899,6 +992,7 @@ describe('Orchestrator scoop-notify gating (notifyOnComplete)', () => {
         name: 'empty-lifecycle',
         folder: 'empty-lifecycle-scoop',
         isCone: false,
+        parentJid: 'cone_main_1',
         type: 'scoop',
         requiresTrigger: false,
         assistantLabel: 'empty-lifecycle-scoop',
@@ -993,6 +1087,7 @@ describe('Orchestrator scoop-notify file artifacts', () => {
       name: 'truncate-test',
       folder: 'truncate-test-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'truncate-test-scoop',
@@ -1040,6 +1135,7 @@ describe('Orchestrator scoop-notify file artifacts', () => {
       name: 'no-truncate-test',
       folder: 'no-truncate-test-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'no-truncate-test-scoop',
@@ -1083,6 +1179,7 @@ describe('Orchestrator scoop-notify file artifacts', () => {
       name: 'trailing-newline',
       folder: 'trailing-newline-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'trailing-newline-scoop',
@@ -1117,6 +1214,7 @@ describe('Orchestrator scoop-notify file artifacts', () => {
       name: 'prune-test',
       folder: 'prune-test-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'prune-test-scoop',
@@ -1207,12 +1305,13 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
 
   interface OrchestratorObserverInternals {
     lifecycle: {
-      scoopObservers: Map<string, Set<unknown>>;
       dispatchEvent(jid: string, event: 'onSendMessage', text: string): void;
     };
   }
-  const observerSet = (o: Orchestrator) =>
-    (o as unknown as OrchestratorObserverInternals).lifecycle.scoopObservers;
+  // Observers are owned by the scoop's LiveWorkUnit (#1666 Phase 2); a
+  // closed unit reports zero and is dropped from the host.
+  const hasObservers = (o: Orchestrator, jid: string) =>
+    (o.getLiveUnit(jid)?.observerCount ?? 0) > 0;
   const dispatch = (o: Orchestrator, jid: string, ev: 'onSendMessage', text: string) =>
     (o as unknown as OrchestratorObserverInternals).lifecycle.dispatchEvent(jid, ev, text);
 
@@ -1222,6 +1321,7 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
       name: 'observer-leak',
       folder: 'observer-leak-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'observer-leak-scoop',
@@ -1244,11 +1344,11 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
     // on purpose.
     orch.observeScoop(scoop.jid, { onSendMessage: handler });
 
-    expect(observerSet(orch).has(scoop.jid)).toBe(true);
+    expect(hasObservers(orch, scoop.jid)).toBe(true);
 
     await orch.unregisterScoop(scoop.jid);
 
-    expect(observerSet(orch).has(scoop.jid)).toBe(false);
+    expect(hasObservers(orch, scoop.jid)).toBe(false);
 
     // A post-teardown dispatch must NOT reach the lingering handler.
     dispatch(orch, scoop.jid, 'onSendMessage', 'post-teardown text');
@@ -1261,6 +1361,7 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
       name: 'unreg-cb',
       folder: 'unreg-cb-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'unreg-cb-scoop',
@@ -1297,6 +1398,7 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
       name: 'observer-leak-2',
       folder: 'observer-leak-2-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'observer-leak-2-scoop',
@@ -1315,11 +1417,11 @@ describe('Orchestrator observer cleanup on scoop teardown', () => {
     const handler = vi.fn();
     orch.observeScoop(scoop.jid, { onSendMessage: handler });
 
-    expect(observerSet(orch).has(scoop.jid)).toBe(true);
+    expect(hasObservers(orch, scoop.jid)).toBe(true);
 
     await orch.destroyScoopTab(scoop.jid);
 
-    expect(observerSet(orch).has(scoop.jid)).toBe(false);
+    expect(hasObservers(orch, scoop.jid)).toBe(false);
     dispatch(orch, scoop.jid, 'onSendMessage', 'post-teardown text');
     expect(handler).not.toHaveBeenCalled();
   });
@@ -1381,6 +1483,7 @@ describe('Orchestrator registerScoop init-failure rollback', () => {
       name: 'init-rollback',
       folder: 'init-rollback-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'init-rollback-scoop',
@@ -1517,6 +1620,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'notify-vis',
       folder: 'notify-vis-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'notify-vis-scoop',
@@ -1558,6 +1662,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'mute-scoop',
       folder: 'mute-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'mute-scoop',
@@ -1613,6 +1718,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'unmute-noop',
       folder: 'unmute-noop-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'unmute-noop-scoop',
@@ -1646,6 +1752,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'wait-a',
       folder: 'wait-a-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'wait-a-scoop',
@@ -1708,6 +1815,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'wait-timeout',
       folder: 'wait-timeout-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'wait-timeout-scoop',
@@ -1746,6 +1854,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'wait-prepend',
       folder: 'wait-prepend-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'wait-prepend-scoop',
@@ -1794,6 +1903,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'wait-dedup',
       folder: 'wait-dedup-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'wait-dedup-scoop',
@@ -1839,6 +1949,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'wait-zero',
       folder: 'wait-zero-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'wait-zero-scoop',
@@ -1874,6 +1985,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'wait-shutdown',
       folder: 'wait-shutdown-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'wait-shutdown-scoop',
@@ -1929,6 +2041,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'sched-a',
       folder: 'sched-a-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'sched-a-scoop',
@@ -2003,6 +2116,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'sched-timeout',
       folder: 'sched-timeout-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'sched-timeout-scoop',
@@ -2051,6 +2165,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'sched-partial',
       folder: 'sched-partial-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'sched-partial-scoop',
@@ -2100,6 +2215,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'sched-dedup',
       folder: 'sched-dedup-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'sched-dedup-scoop',
@@ -2147,6 +2263,7 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
       name: 'sched-id-a',
       folder: 'sched-id-a-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'sched-id-a-scoop',
@@ -3750,6 +3867,7 @@ describe('Orchestrator boot resilience to a corrupt scoop file', () => {
       name: 'corrupt-boot',
       folder: 'corrupt-boot-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'corrupt-boot-scoop',
@@ -3761,6 +3879,7 @@ describe('Orchestrator boot resilience to a corrupt scoop file', () => {
       name: 'healthy-boot',
       folder: 'healthy-boot-scoop',
       isCone: false,
+      parentJid: 'cone_main_1',
       type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'healthy-boot-scoop',
