@@ -5,18 +5,58 @@
  * no longer needs a singleton cone (#1666, Phase 3).
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import type { LickEvent } from '@slicc/shared-ts';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { defaultLickEventHandler, type LickRoutingContext } from '../../src/kernel/host.js';
 import { ScoopApprovalRouter } from '../../src/scoops/scoop-approval-router.js';
 import { ScoopCompletionService } from '../../src/scoops/scoop-completion-service.js';
 import { SCOOP_IDLE_TIMEOUT_MS, ScoopIdleTimers } from '../../src/scoops/scoop-idle-timers.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../../src/scoops/types.js';
+import {
+  clearDefaultRootJid,
+  pickDefaultRoot,
+  setDefaultRootJid,
+} from '../../src/work-unit/default-root.js';
+import { resolveLickTarget } from '../../src/work-unit/lick-target.js';
 import { WorkUnitManager } from '../../src/work-unit/manager.js';
 import { rootsOf } from '../../src/work-unit/policy.js';
 import { normalizeScoopRecord } from '../../src/work-unit/record.js';
+import { type FakeLocalStorage, installFakeLocalStorage } from '../helpers/fake-local-storage.js';
 import { childRecord, makeFakeHost, rootRecord } from './fixtures.js';
 
+function webhookLick(targetScoop?: string): LickEvent {
+  return {
+    type: 'webhook',
+    webhookId: 'wh-1',
+    webhookName: 'deploy',
+    ...(targetScoop ? { targetScoop } : {}),
+    timestamp: '2026-08-21T00:00:00.000Z',
+    headers: {},
+    body: { ok: true },
+  };
+}
+
+/** Minimal routing context: records the chat each lick was delivered to. */
+function routingContext(scoops: RegisteredScoop[], routed: string[]): LickRoutingContext {
+  return {
+    orchestrator: {
+      getScoops: () => scoops,
+      handleMessage: async (msg: ChannelMessage) => {
+        routed.push(msg.chatJid);
+      },
+    } as never,
+    lickManager: {} as never,
+    log: { info: vi.fn(), warn: vi.fn(), debug: vi.fn() },
+  };
+}
+
 const rootA = rootRecord({ jid: 'cone_a', name: 'A', addedAt: '2026-01-01T00:00:00.000Z' });
-const rootB = rootRecord({ jid: 'cone_b', name: 'B', addedAt: '2026-01-02T00:00:00.000Z' });
+const rootB = rootRecord({
+  jid: 'cone_b',
+  name: 'B',
+  folder: 'cone-research',
+  addedAt: '2026-01-02T00:00:00.000Z',
+});
 const childA = childRecord(rootA.jid, { folder: 'a-worker' });
 const childB = childRecord(rootB.jid, { folder: 'b-worker' });
 
@@ -207,5 +247,123 @@ describe('multiple roots', () => {
     });
     const lyingChild = normalizeScoopRecord(childRecord(rootA.jid, { isCone: true, type: 'cone' }));
     expect(lyingChild).toMatchObject({ isCone: false, type: 'scoop', trigger: '@worker-scoop' });
+  });
+});
+
+/**
+ * With two cones registered, "the default" is no longer a coin toss: it is a
+ * persisted pick, and every unaddressed event honours it (#2273). A cone is
+ * addressable by folder (`cone-research`), so a webhook or a background job
+ * can name one the way it has always named a scoop.
+ */
+describe('two-root event routing', () => {
+  let storage: FakeLocalStorage;
+
+  beforeEach(() => {
+    storage = installFakeLocalStorage();
+  });
+  afterEach(() => {
+    storage.restore();
+  });
+
+  const registered = [rootA, childA, rootB, childB];
+
+  it('the default root is the persisted pick while it is still a root', () => {
+    expect(pickDefaultRoot(registered)?.jid).toBe(rootA.jid);
+    setDefaultRootJid(rootB.jid);
+    expect(pickDefaultRoot(registered)?.jid).toBe(rootB.jid);
+    expect(new WorkUnitManager(makeFakeHost(registered)).resolveDefaultRoot()?.descriptor.id).toBe(
+      rootB.jid
+    );
+  });
+
+  it('falls back to the primary cone, then the oldest, and never to a child', () => {
+    // A jid that is not a registered root (dropped cone, or a scoop someone
+    // pointed the setting at) must not swallow events.
+    setDefaultRootJid('cone_gone');
+    expect(pickDefaultRoot(registered)?.jid).toBe(rootA.jid);
+    setDefaultRootJid(childB.jid);
+    expect(pickDefaultRoot(registered)?.jid).toBe(rootA.jid);
+    // No primary `cone` folder at all → oldest root wins.
+    const noPrimary = [
+      rootRecord({ jid: 'cone_x', folder: 'cone-x', addedAt: '2026-03-01' }),
+      rootB,
+    ];
+    clearDefaultRootJid();
+    expect(pickDefaultRoot(noPrimary)?.jid).toBe(rootB.jid);
+  });
+
+  it('resolves a lick target by cone folder, scoop name and scoop folder', () => {
+    expect(resolveLickTarget(registered, 'cone-research')?.jid).toBe(rootB.jid);
+    expect(resolveLickTarget(registered, 'cone')?.jid).toBe(rootA.jid);
+    expect(resolveLickTarget(registered, 'B')?.jid).toBe(rootB.jid);
+    expect(resolveLickTarget(registered, 'b-worker')?.jid).toBe(childB.jid);
+    const helper = childRecord(rootB.jid, {
+      jid: 'scoop_helper',
+      name: 'helper',
+      folder: 'helper-scoop',
+    });
+    expect(resolveLickTarget([...registered, helper], 'helper')?.jid).toBe(helper.jid);
+  });
+
+  it('drops an unmatched target but lets sprinkle routing fall through', () => {
+    setDefaultRootJid(rootB.jid);
+    expect(resolveLickTarget(registered, 'ghost-scoop')).toBeUndefined();
+    expect(resolveLickTarget(registered, 'ghost-scoop', { unmatched: 'default-root' })?.jid).toBe(
+      rootB.jid
+    );
+    expect(resolveLickTarget(registered, undefined)?.jid).toBe(rootB.jid);
+  });
+
+  it('a webhook reaches the cone it names, and the configured default without one', () => {
+    const routed: string[] = [];
+    const ctx = routingContext(registered, routed);
+
+    defaultLickEventHandler(webhookLick('cone-research'), ctx);
+    setDefaultRootJid(rootB.jid);
+    defaultLickEventHandler(webhookLick(), ctx);
+    clearDefaultRootJid();
+    defaultLickEventHandler(webhookLick(), ctx);
+
+    expect(routed).toEqual([rootB.jid, rootB.jid, rootA.jid]);
+  });
+
+  it('a cron task naming cone B keeps firing into cone B', () => {
+    const routed: string[] = [];
+    // `crontask create --scoop cone-research` persists the cone folder, so the
+    // task still reaches cone B after a reload — even though the default root
+    // is cone A.
+    defaultLickEventHandler(
+      {
+        type: 'cron',
+        cronId: 'cr-1',
+        cronName: 'nightly',
+        targetScoop: rootB.folder,
+        timestamp: 't',
+        body: { time: 't' },
+      },
+      routingContext(registered, routed)
+    );
+    expect(routed).toEqual([rootB.jid]);
+  });
+
+  it('a background bash job in cone B reports back into cone B', () => {
+    const routed: string[] = [];
+    // What `ScoopContext` stamps: the owning unit's folder, root or child.
+    defaultLickEventHandler(
+      {
+        type: 'bash',
+        targetScoop: rootB.folder,
+        bashJobId: 'bg-1',
+        bashCommand: 'npm run build',
+        bashExitCode: 0,
+        resultPath: '/tmp/bash-bg-1.txt',
+        preview: 'built',
+        timestamp: 't',
+        body: {},
+      } as LickEvent,
+      routingContext(registered, routed)
+    );
+    expect(routed).toEqual([rootB.jid]);
   });
 });

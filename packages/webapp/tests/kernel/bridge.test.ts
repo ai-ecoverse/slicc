@@ -1637,6 +1637,38 @@ describe('Bridge.routeSprinkleLick', () => {
     );
   });
 
+  it('routes to an extra cone named by its folder, and to the default root otherwise', async () => {
+    mockOrchestrator.getScoops = vi.fn(() => [
+      {
+        jid: 'cone-1',
+        name: 'cone',
+        folder: 'cone',
+        isCone: true,
+        parentJid: null,
+        assistantLabel: 'sliccy',
+        addedAt: '2026-01-01T00:00:00.000Z',
+      },
+      {
+        jid: 'cone-2',
+        name: 'Research',
+        folder: 'cone-research',
+        isCone: true,
+        parentJid: null,
+        assistantLabel: 'Research',
+        addedAt: '2026-01-02T00:00:00.000Z',
+      },
+    ]);
+    await bridge.routeSprinkleLick('welcome', { action: 'go' }, 'cone-research');
+    expect(mockOrchestrator.handleMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ chatJid: 'cone-2', channel: 'sprinkle' })
+    );
+    // Unaddressed → the default root (no pick stored → the primary cone).
+    await bridge.routeSprinkleLick('welcome', { action: 'go' });
+    expect(mockOrchestrator.handleMessage).toHaveBeenLastCalledWith(
+      expect.objectContaining({ chatJid: 'cone-1', channel: 'sprinkle' })
+    );
+  });
+
   it('matches targetScoop by folder with a "-scoop" suffix', async () => {
     mockOrchestrator.getScoops = vi.fn(() => [
       {

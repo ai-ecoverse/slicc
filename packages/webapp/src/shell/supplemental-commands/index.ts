@@ -132,6 +132,13 @@ export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
    */
   getParentJid?: () => string | undefined;
   /**
+   * Storage folder of the work unit owning this shell — its lick-target alias
+   * (`cone`, `cone-research`, `<name>-scoop`). `fswatch` uses it as the default
+   * `--scoop`, so a watcher started in cone B reports back into cone B rather
+   * than into the global default root (#2273).
+   */
+  getUnitFolder?: () => string | undefined;
+  /**
    * Process manager threaded into `ps` / `kill`. When omitted,
    * those commands fall back to `globalThis.__slicc_pm`
    * (published by `createKernelHost`). Tests prefer DI; production
@@ -215,7 +222,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createCrontaskCommand(),
     createMcpCommand({ fs: options.fs, scriptCatalog: options.scriptCatalog }),
     createPluginCommand({ fs: options.fs, fetch: options.fetch }),
-    createFsWatchCommand(),
+    createFsWatchCommand({ getUnitFolder: options.getUnitFolder }),
     createSprinkleCommand(),
     createPdftkCommand('pdftk'),
     createPdftkCommand('pdf'),

@@ -102,6 +102,14 @@ export interface HeadlessShellOptions {
   allowedCommands?: readonly string[];
   /** JID of the parent scoop, when this shell runs inside a scoop. */
   getParentJid?: () => string | undefined;
+  /**
+   * Storage folder of the work unit owning this shell (`cone`,
+   * `cone-research`, `<name>-scoop`). It is the unit's lick-target alias, so
+   * an `fswatch` registered without an explicit `--scoop` routes back to the
+   * unit that created it instead of to the global default root (#2273).
+   * Undefined for the standalone terminal shell, which has no owning unit.
+   */
+  getUnitFolder?: () => string | undefined;
   /** True if owned by a non-interactive scoop (gates the `mount` picker). */
   isScoop?: () => boolean;
   /**
@@ -431,6 +439,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       browserAPI: options.browserAPI,
       webhook: options.webhook,
       getParentJid: options.getParentJid,
+      getUnitFolder: options.getUnitFolder,
       buildProcessConfig: this.resolveJshProcessConfig,
       // Thread the manager into `ps` / `kill`. When the
       // shell is constructed without one (extension offscreen,

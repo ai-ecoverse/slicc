@@ -18,7 +18,7 @@ SLICC's automation primitives turn external or VFS-internal events into **licks*
 | `crontask` | Cron schedule                     | Recurring background work                |
 | `fswatch`  | VFS file create / modify / delete | React to authored content changes        |
 
-All three deliver events as licks. If `--scoop <name>` is set, the lick goes to that scoop; otherwise it goes to the cone.
+All three deliver events as licks. `--scoop <name>` names the target: a scoop, or a **cone** by folder (`cone`, `cone-research`). Omitted, the lick goes to the default cone — the starred one, not necessarily yours. With several cones, name your own.
 
 ## `webhook`
 
@@ -33,7 +33,7 @@ webhook delete wh-1
 
 Flags:
 
-- `--scoop <name>` — route the event to a specific scoop. Omit to route to the cone.
+- `--scoop <name>` — required; the target scoop, or a cone by folder (`cone-research`).
 - `--name <label>` — human-friendly label shown in `webhook list`.
 - `--filter <js>` — JavaScript expression evaluated per request; falsy result drops the event before it reaches the agent.
 
@@ -50,7 +50,7 @@ crontask delete ct-1   # `kill` is an alias for `delete`
 Flags:
 
 - `--cron <expr>` — required; 5-field cron expression.
-- `--scoop <name>` — target scoop. Omit to route to the cone.
+- `--scoop <name>` — target scoop, or a cone by folder. **Name your own unit**: an omitted target resolves against the default cone at fire time, so your task can start reporting elsewhere.
 - `--name <label>` — human-friendly label.
 - `--filter <js>` — JavaScript expression evaluated each tick; falsy result skips that fire.
 
@@ -62,7 +62,7 @@ Watch a VFS path; deliver events as licks when files matching the pattern are cr
 # Route .md changes under /workspace to a scoop.
 fswatch create --path /workspace --pattern "*.md" --scoop doc-watcher --name md-changes
 
-# Untargeted: route to the cone.
+# Untargeted: routes back to the unit that created the watcher.
 fswatch create --path /workspace/src --pattern "*.ts"
 
 fswatch list
@@ -75,4 +75,5 @@ Events include the change type (`create`, `modify`, `delete`) and the file path.
 
 - Don't poll on a `crontask` to do work the cone could do reactively. Cron is for genuinely recurring jobs (digests, refreshes); reactive work belongs on `fswatch` or `webhook`.
 - Don't leave watchers/webhooks/crons orphaned. If the owning scoop is gone, the lick has nowhere to go — `... list` and `... delete` to clean up.
+- Don't rely on the implicit cone target for anything you want back in _your_ chat. Only `fswatch` defaults to its creating unit; `webhook` and `crontask` need `--scoop`.
 - Don't fan a single trigger out to multiple scoops by registering N near-identical entries. Register once, let the receiving scoop dispatch.

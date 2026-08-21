@@ -36,9 +36,9 @@ import { registerTranscriptExportService } from '../transcript/export-provider.j
 import { DefaultTranscriptExportService } from '../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
+import { pickDefaultRoot } from '../work-unit/default-root.js';
 import type { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { WorkUnitManager } from '../work-unit/manager.js';
-import { rootsOf } from '../work-unit/policy.js';
 import { normalizeScoopRecord } from '../work-unit/record.js';
 import { SessionStore as UiSessionStore } from './chat-session-store.js';
 import { ConeMemoryStore } from './cone-memory-store.js';
@@ -958,9 +958,9 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.lifecycle.getTab(jid);
   }
 
-  /** The default (oldest) root — where unaddressed events land. */
+  /** The default root — where unaddressed events land (#2273: user-selectable). */
   private defaultRoot(): RegisteredScoop | undefined {
-    return rootsOf(this.scoops.values())[0];
+    return pickDefaultRoot(this.scoops.values());
   }
 
   /**

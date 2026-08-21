@@ -577,6 +577,9 @@ export class ScoopContext {
       jshDiscoveryFs: this.skillsFs ? effectiveSkillsFs : undefined,
       allowedCommands: this.scoop.config?.allowedCommands,
       getParentJid: () => this.scoop.jid,
+      // Lick-target alias of this unit — the default `--scoop` for `fswatch`
+      // (#2273).
+      getUnitFolder: () => this.scoop.folder,
       isScoop: () => this.unit.display.role === 'child',
       sudo: sudoWiring?.shellConfig,
       // Wire the scoop's process context so realm-backed commands (`node` /
@@ -630,10 +633,11 @@ export class ScoopContext {
       createBashTool(this.shell!, this.fs! as VirtualFS, this.unit.workspace.scratch, {
         // Unset → the tool's own ten-minute default.
         defaultBackgroundAfterSeconds: this.scoop.config?.backgroundAfterSeconds,
-        // Route a detached job's completion lick back to THIS scoop. The cone
-        // is the default target for an untargeted lick, so it stays unset
-        // there (its `folder` is not a valid lick target alias).
-        targetScoop: this.unit.display.role === 'child' ? this.scoop.folder : undefined,
+        // Route a detached job's completion lick back to THIS unit. A cone's
+        // folder (`cone`, `cone-research`) is a lick target alias like any
+        // other since #2273, so a root stamps itself too — otherwise a job
+        // started in cone B reported into whichever root is the default.
+        targetScoop: this.scoop.folder,
         // Every invocation becomes a kernel pid, so `timeout` is a real kill
         // (SIGKILL fans out to realm workers) and a detached job stays visible
         // to `ps` / reachable by `kill`.

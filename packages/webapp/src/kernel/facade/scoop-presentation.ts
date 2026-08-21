@@ -1,5 +1,6 @@
 import type { RegisteredScoop, ScoopTabState } from '../../scoops/types.js';
-import { isRootUnit, rootsOf } from '../../work-unit/policy.js';
+import { pickDefaultRoot } from '../../work-unit/default-root.js';
+import { isRootUnit } from '../../work-unit/policy.js';
 import type {
   ScoopListMsg,
   ScoopSnapshotConfig,
@@ -54,7 +55,7 @@ export class ScoopPresentation {
     trayRuntimeStatus: Pick<TrayRuntimeStatusMsg, 'leader' | 'follower'>
   ): StateSnapshotMsg {
     const scoops = this.projectScoops(registeredScoops);
-    const cone = rootsOf(registeredScoops)[0];
+    const cone = pickDefaultRoot(registeredScoops);
     return {
       type: 'state-snapshot',
       scoops,

@@ -10,6 +10,7 @@
  */
 
 import { CURRENT_SCOOP_CONFIG_VERSION, type RegisteredScoop } from '../scoops/types.js';
+import { pickDefaultRoot } from './default-root.js';
 import { childrenOf, rootsOf } from './policy.js';
 import { ScoopContextWorkUnit, type WorkUnitHost, type WorkUnitRuntime } from './runtime.js';
 import type { CreateWorkUnitOptions, WorkUnitDescriptor, WorkUnitId } from './types.js';
@@ -108,11 +109,12 @@ export class WorkUnitManager {
 
   /**
    * The root an unaddressed event (lick, sprinkle, webhook) should reach:
-   * the oldest root. Replaces the global cone lookup; a later phase makes
-   * this the UI-selected root.
+   * the user's "Make default" pick from the Cones rail while that root is
+   * still registered, else the primary cone, else the oldest root (#2273).
    */
   resolveDefaultRoot(): WorkUnitRuntime | null {
-    return this.roots()[0] ?? null;
+    const record = pickDefaultRoot(this.host.getScoops());
+    return record ? this.get(record.jid) : null;
   }
 
   /** Owning root of `id` (itself when `id` is a root), or `null` when unknown. */

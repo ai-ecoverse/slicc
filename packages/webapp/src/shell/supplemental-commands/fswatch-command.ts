@@ -22,6 +22,15 @@ interface FsWatchEntry {
 
 type Result = { stdout: string; stderr: string; exitCode: number };
 
+export interface FsWatchCommandOptions {
+  /**
+   * Lick-target alias of the work unit owning this shell. A watcher created
+   * without `--scoop` routes its change events back to that unit rather than
+   * to the global default root (#2273).
+   */
+  getUnitFolder?: () => string | undefined;
+}
+
 /** A change event as the VFS watcher reports it. */
 interface FsWatchEvent {
   type: string;
@@ -64,7 +73,9 @@ Commands:
 Options:
   --path <path>       Base VFS path to watch (required)
   --pattern <glob>    File pattern to match, e.g. "*.md", "*.bsh" (required)
-  --scoop <name>      Route change events to this scoop as lick events
+  --scoop <name>      Route change events to this scoop or cone as lick events
+                      (defaults to the unit that created the watcher; a cone is
+                      named by its folder, e.g. "cone" or "cone-research")
   --name <name>       Human-readable name for the watcher
 `;
 
@@ -130,9 +141,12 @@ function globFilter(pattern: string): (path: string) => boolean {
   return (path: string) => globRegex.test(path.split('/').pop() ?? '');
 }
 
-function handleCreate(args: string[]): Result {
+function handleCreate(args: string[], options: FsWatchCommandOptions): Result {
   const opts = parseCreateOptions(args);
   if (!opts.basePath || !opts.pattern) return fail('--path and --pattern are required');
+  // Unaddressed → the creating unit; the standalone terminal has none, and
+  // falls through to the configured default root as before.
+  opts.scoop ||= options.getUnitFolder?.() ?? '';
 
   // Access VFS watcher via global hook
   const globals = globalThis as FsWatchGlobals;
@@ -179,7 +193,7 @@ function handleCreate(args: string[]): Result {
   return ok(output);
 }
 
-export function createFsWatchCommand(): Command {
+export function createFsWatchCommand(options: FsWatchCommandOptions = {}): Command {
   return defineCommand('fswatch', async (args) => {
     const subcommand = args[0];
     // Help before the verb runs — `create --help` must not register a watcher.
@@ -191,7 +205,7 @@ export function createFsWatchCommand(): Command {
       case 'delete':
         return handleDelete(args[1]);
       case 'create':
-        return handleCreate(args);
+        return handleCreate(args, options);
       default:
         return fail(`unknown command: ${subcommand}`);
     }

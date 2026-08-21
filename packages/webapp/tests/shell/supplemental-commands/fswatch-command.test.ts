@@ -6,10 +6,10 @@ import { mockCommandContext } from '../helpers/mock-command-context.js';
  * fswatch maintains a module-level registry of active watchers, so each test
  * re-imports the command with a fresh module graph to stay isolated.
  */
-async function freshCommand(): Promise<Command> {
+async function freshCommand(unitFolder?: string): Promise<Command> {
   vi.resetModules();
   const mod = await import('../../../src/shell/supplemental-commands/fswatch-command.js');
-  return mod.createFsWatchCommand();
+  return mod.createFsWatchCommand(unitFolder ? { getUnitFolder: () => unitFolder } : {});
 }
 
 type WatchCallback = (events: Array<{ type: string; path: string }>) => void;
@@ -169,6 +169,38 @@ describe('fswatch command', () => {
     expect(event.type).toBe('fswatch');
     expect(event.targetScoop).toBe('andy');
     expect(event.changes).toEqual([{ type: 'change', path: '/workspace/notes.md' }]);
+  });
+
+  it('routes change events to the creating unit when --scoop is omitted (#2273)', async () => {
+    const watcher = installWatcher();
+    const lickHandler = vi.fn();
+    (globalThis as Record<string, unknown>).__slicc_lick_handler = lickHandler;
+
+    // A watcher started in cone B reports into cone B, not into whichever
+    // root happens to be the default.
+    const cmd = await freshCommand('cone-research');
+    await cmd.execute(
+      ['create', '--path', '/workspace', '--pattern', '*.md'],
+      mockCommandContext()
+    );
+    watcher.fire([{ type: 'change', path: '/workspace/notes.md' }]);
+
+    expect(lickHandler.mock.calls[0][0].targetScoop).toBe('cone-research');
+  });
+
+  it('lets an explicit --scoop win over the creating unit', async () => {
+    const watcher = installWatcher();
+    const lickHandler = vi.fn();
+    (globalThis as Record<string, unknown>).__slicc_lick_handler = lickHandler;
+
+    const cmd = await freshCommand('cone-research');
+    await cmd.execute(
+      ['create', '--path', '/workspace', '--pattern', '*.md', '--scoop', 'andy'],
+      mockCommandContext()
+    );
+    watcher.fire([{ type: 'change', path: '/workspace/notes.md' }]);
+
+    expect(lickHandler.mock.calls[0][0].targetScoop).toBe('andy');
   });
 
   it('lists then deletes an active watcher', async () => {

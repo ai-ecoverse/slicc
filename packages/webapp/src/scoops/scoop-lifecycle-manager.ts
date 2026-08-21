@@ -28,6 +28,7 @@ import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
 import type { SudoDecision, SudoRequest } from '../sudo/index.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
+import { pickDefaultRoot } from '../work-unit/default-root.js';
 import { toDescriptor } from '../work-unit/descriptor.js';
 import { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { rootsOf } from '../work-unit/policy.js';
@@ -260,14 +261,14 @@ export class ScoopLifecycleManager {
   }
 
   /**
-   * The unit that owns `scoop`, falling back to the default (oldest) root
-   * when the recorded parent is gone — a delegated result must land
-   * somewhere a user can see it.
+   * The unit that owns `scoop`, falling back to the default root when the
+   * recorded parent is gone — a delegated result must land somewhere a user
+   * can see it.
    */
   private parentOf(scoop: RegisteredScoop): RegisteredScoop | undefined {
     const scoops = this.deps.getScoops();
     const parent = scoop.parentJid === null ? undefined : scoops.get(scoop.parentJid);
-    return parent ?? rootsOf(scoops.values())[0];
+    return parent ?? pickDefaultRoot(scoops.values());
   }
 
   /** The owning root of `scoop` (itself for a root), walking `parentJid`. */
@@ -279,7 +280,7 @@ export class ScoopLifecycleManager {
       seen.add(current.jid);
       current = scoops.get(current.parentJid);
     }
-    return current ?? rootsOf(scoops.values())[0];
+    return current ?? pickDefaultRoot(scoops.values());
   }
 
   /**

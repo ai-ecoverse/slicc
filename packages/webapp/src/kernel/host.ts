@@ -73,6 +73,7 @@ import {
 import { executeJsCode } from '../shell/jsh-executor.js';
 import { createProxiedFetch } from '../shell/proxied-fetch.js';
 import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/workflow-script.js';
+import { resolveLickTarget } from '../work-unit/lick-target.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
@@ -319,17 +320,11 @@ function routeFormattedLickToCone(
   { orchestrator, log }: LickRoutingContext
 ): void {
   const scoops = orchestrator.getScoops();
-  let resolvedTarget: RegisteredScoop | undefined;
-  if (!event.targetScoop) {
-    resolvedTarget = rootsOf(scoops)[0];
-  } else {
-    resolvedTarget = scoops.find(
-      (s) =>
-        s.name === event.targetScoop ||
-        s.folder === event.targetScoop ||
-        s.folder === `${event.targetScoop}-scoop`
-    );
-  }
+  // Named target → that unit (a cone is addressable by its folder, `cone` /
+  // `cone-research`); unaddressed → the user's default root. A named target
+  // that matches nothing is dropped rather than redirected, so a lick meant
+  // for a dead scoop never surfaces in someone else's chat.
+  const resolvedTarget: RegisteredScoop | undefined = resolveLickTarget(scoops, event.targetScoop);
 
   if (!resolvedTarget) {
     log.warn('Lick target scoop not found', event.targetScoop);

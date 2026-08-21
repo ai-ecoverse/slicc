@@ -93,7 +93,12 @@ Non-obvious rules:
   and persists it. Several roots may exist: UI code resolves "the cone" via
   `ui/wc/wc-unit-context.ts` (`defaultRootOf`, `threadContextFor`,
   `switcherLabelFor`), never `find(s => s.isCone)`; chat sessions are keyed
-  `session-<folder>` (`chatSessionIdFor`). See `docs/work-unit.md`.
+  `session-<folder>` (`chatSessionIdFor`). "Where does an unaddressed event
+  go?" has exactly one answer — `work-unit/default-root.ts` `pickDefaultRoot`
+  (user pick → primary → oldest); "which unit does this `targetScoop` name?"
+  exactly one — `work-unit/lick-target.ts` `resolveLickTarget`. Never
+  re-derive either as `rootsOf(...)[0]` or an inline `scoops.find`.
+  See `docs/work-unit.md`.
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without
   queue/watermark loss; user `web` bypasses the window (immediate/awaited,
   prevents deferral). `transcript-limits.ts` caps bridge/event transcripts at 64 KB

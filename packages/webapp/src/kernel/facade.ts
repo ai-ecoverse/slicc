@@ -28,6 +28,8 @@ import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 import { getSprinkleRoute } from '../shell/sprinkle-routes.js';
 import { TOOL_UI_MOUNTED_ACTION, toolUIRegistry } from '../tools/tool-ui.js';
+import { pickDefaultRoot } from '../work-unit/default-root.js';
+import { resolveLickTarget } from '../work-unit/lick-target.js';
 import { buildWorkUnitRecord } from '../work-unit/manager.js';
 import { isRootUnit, rootsOf } from '../work-unit/policy.js';
 import {
@@ -665,18 +667,14 @@ export class Bridge implements KernelFacade {
     // nobody applied the route on that path, so a follower-mounted panel's
     // licks went to the cone no matter what `sprinkle route` said, and the
     // owning scoop never saw its own panel's events (issue #2166).
-    const resolvedTarget = targetScoop ?? getSprinkleRoute(sprinkleName);
-    let target = resolvedTarget
-      ? scoops.find(
-          (s) =>
-            s.name === resolvedTarget ||
-            s.folder === resolvedTarget ||
-            s.folder === `${resolvedTarget}-scoop`
-        )
-      : undefined;
-    if (!target) {
-      target = rootsOf(scoops)[0];
-    }
+    //
+    // Shared alias vocabulary with the lick pipeline (`kernel/host.ts`), so a
+    // route may name a cone by folder too. Unlike a lick, a stale route that
+    // matches nothing falls through to the default root instead of dropping
+    // the event: the panel raised it, the user must see it somewhere.
+    const target = resolveLickTarget(scoops, targetScoop ?? getSprinkleRoute(sprinkleName), {
+      unmatched: 'default-root',
+    });
     if (!target) return;
     const msgId = `sprinkle-${sprinkleName}-${Date.now()}`;
     const formatted = formatLickEventForCone({
@@ -718,7 +716,7 @@ export class Bridge implements KernelFacade {
    */
   applyFollowerSnapshot(messages: ChatMessage[]): void {
     if (!this.orchestrator) return;
-    const cone = rootsOf(this.orchestrator.getScoops())[0];
+    const cone = pickDefaultRoot(this.orchestrator.getScoops());
     if (!cone) return;
     const buf = messages.map((m) => ({
       id: m.id,
@@ -757,9 +755,9 @@ export class Bridge implements KernelFacade {
     });
   }
 
-  /** Resolve the local cone scoop's jid (panel-known), if any. */
+  /** Resolve the local default-root cone's jid (panel-known), if any. */
   getConeJid(): string | null {
-    return this.orchestrator ? (rootsOf(this.orchestrator.getScoops())[0]?.jid ?? null) : null;
+    return this.orchestrator ? (pickDefaultRoot(this.orchestrator.getScoops())?.jid ?? null) : null;
   }
 
   /** Bridge follower-side AgentEvents into panel-bound agent-event messages. */

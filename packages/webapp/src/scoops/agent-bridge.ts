@@ -39,7 +39,7 @@ import {
 } from '../providers/account-store.js';
 // Legal down-edge (`scoops/` → `tools/`) for the JSON Schema shape.
 import type { JsonSchemaObject } from '../tools/types.js';
-import { rootsOf } from '../work-unit/policy.js';
+import { pickDefaultRoot } from '../work-unit/default-root.js';
 import { serializeAgentSessionArchive } from './agent-session-archive.js';
 import type { Orchestrator } from './orchestrator.js';
 import {
@@ -776,7 +776,7 @@ export function createAgentBridge(
       // otherwise the default root — a spawned agent always has an owner.
       // (`originToolCallId` stays never-inferred; this is ownership, not
       // tool-call provenance.)
-      parentJid: options.parentJid ?? rootsOf(ctx.orchestrator.getScoops())[0]?.jid ?? null,
+      parentJid: options.parentJid ?? pickDefaultRoot(ctx.orchestrator.getScoops())?.jid ?? null,
     };
 
     const observerHandle = registerScoopObserver(ctx.orchestrator, jid);

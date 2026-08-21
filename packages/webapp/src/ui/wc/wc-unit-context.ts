@@ -9,6 +9,7 @@
  */
 
 import type { RegisteredScoop } from '../../scoops/types.js';
+import { pickDefaultRoot } from '../../work-unit/default-root.js';
 import { isRootUnit, rootsOf } from '../../work-unit/policy.js';
 import { isPrimaryRoot } from '../../work-unit/record.js';
 
@@ -55,9 +56,9 @@ export function unitForContext(
   return defaultRootOf(scoops);
 }
 
-/** The primary root when present, else the oldest root. */
+/** The user-selected default root, else the primary root, else the oldest. */
 export function defaultRootOf(scoops: readonly RegisteredScoop[]): RegisteredScoop | undefined {
-  return scoops.find((s) => isPrimaryRoot(s)) ?? rootsOf(scoops)[0];
+  return pickDefaultRoot(scoops);
 }
 
 /** Roots first (oldest first), then children in registry order. */
