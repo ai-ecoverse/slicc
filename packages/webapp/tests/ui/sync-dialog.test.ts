@@ -142,14 +142,27 @@ describe('showSyncEnabledDialog', () => {
   });
 
   describe('the Terminal tab', () => {
+    it('leads with installing the CLI, so `slicc` exists before it is invoked', async () => {
+      showSyncEnabledDialog({ joinUrl: JOIN_URL, copied: false, initialTab: 'terminal' });
+      const install = overlayEl().querySelector('[data-command="copy-install"]') as HTMLElement;
+      expect(install.textContent).toBe('curl -fsSL https://tray.example.com/install-cli | sh');
+      expect(overlayEl().textContent).toMatch(/Windows: irm .*\/install-cli\.ps1 \| iex/);
+
+      buttonByText(/Copy install command/).click();
+      await Promise.resolve();
+      expect(mockedCopy).toHaveBeenCalledWith(
+        'curl -fsSL https://tray.example.com/install-cli | sh'
+      );
+    });
+
     it('offers a runner-bearing follow command and copies it unmasked', async () => {
       showSyncEnabledDialog({ joinUrl: JOIN_URL, copied: false, initialTab: 'terminal' });
-      const command = overlayEl().querySelector('[data-command]') as HTMLElement;
+      const command = overlayEl().querySelector('[data-command="copy-command"]') as HTMLElement;
       expect(command.textContent).toMatch(
         /^slicc https:\/\/tray\.example\.com\/join\/•+ follow bash -c$/
       );
 
-      buttonByText(/Copy command/).click();
+      buttonByText(/^Copy command$/).click();
       await Promise.resolve();
       expect(mockedCopy).toHaveBeenCalledWith(`slicc ${JOIN_URL} follow bash -c`);
     });
@@ -242,6 +255,40 @@ describe('showSyncEnabledDialog', () => {
       expect(onReset).toHaveBeenCalledTimes(1);
     });
 
+    it('goes red only once armed — the idle button is not the destructive one', async () => {
+      showSyncEnabledDialog({
+        joinUrl: JOIN_URL,
+        copied: true,
+        onReset: async () => {},
+        followers: [cliFollower],
+      });
+      const revoke = buttonByText(/Revoke link/);
+      expect(revoke.dataset.armed).toBe('0');
+      expect(revoke.style.background).toBe('');
+
+      revoke.click();
+      await Promise.resolve();
+      expect(revoke.dataset.armed).toBe('1');
+      expect(revoke.style.background).toBe('var(--s2-negative)');
+    });
+
+    it('disarms — and drops the red — when the reset fails', async () => {
+      showSyncEnabledDialog({
+        joinUrl: JOIN_URL,
+        copied: true,
+        onReset: async () => {
+          throw new Error('boom');
+        },
+      });
+      const revoke = buttonByText(/Revoke link/);
+      revoke.click();
+      revoke.click();
+      await Promise.resolve();
+      await Promise.resolve();
+      expect(revoke.dataset.armed).toBe('0');
+      expect(revoke.style.background).toBe('');
+    });
+
     it('reports success and stops offering the stale link', async () => {
       showSyncEnabledDialog({ joinUrl: JOIN_URL, copied: true, onReset: async () => {} });
       const revoke = buttonByText(/Revoke link/);
@@ -279,6 +326,28 @@ describe('showSyncEnabledDialog', () => {
       await Promise.resolve();
       await Promise.resolve();
       expect(overlayEl().textContent).toMatch(/Revoke failed: string-reason/);
+    });
+  });
+
+  describe('contrast', () => {
+    it('states an explicit color on its text — `.dialog` only colors its own title/desc classes', () => {
+      showSyncEnabledDialog({ joinUrl: JOIN_URL, copied: false, followers: [cliFollower] });
+      const uncolored = Array.from(overlayEl().querySelectorAll('div')).filter((node) => {
+        const el = node as HTMLElement;
+        // Layout-only wrappers carry no text of their own.
+        const ownText = Array.from(el.childNodes).some(
+          (child) => child.nodeType === Node.TEXT_NODE && (child.textContent ?? '').trim() !== ''
+        );
+        return ownText && el.style.color === '' && !el.className.startsWith('dialog__');
+      });
+      expect(uncolored.map((el) => el.textContent)).toEqual([]);
+    });
+
+    it('uses the themed semantic colors for follower state, not hardcoded hexes', () => {
+      showSyncEnabledDialog({ joinUrl: JOIN_URL, copied: false, followers: [cliFollower] });
+      const dot = overlayEl().querySelector('[data-follower] span') as HTMLElement;
+      expect(overlayEl().innerHTML).not.toMatch(/#22c55e|#f59e0b/);
+      expect(dot).toBeTruthy();
     });
   });
 

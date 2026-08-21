@@ -24,6 +24,8 @@ import {
 import {
   buildSyncDialogTabs,
   cliFollowCommand,
+  cliInstallCommand,
+  cliInstallCommandWindows,
   defaultSyncDialogTab,
   maskJoinUrl,
   revokeConfirmLabel,
@@ -58,8 +60,14 @@ interface SyncDialogCtx {
 }
 
 const MONO =
-  'font-family: var(--s2-font-mono); font-size: 11px; word-break: break-all; padding: 8px 12px; background: var(--s2-bg-sunken); border-radius: var(--s2-radius-default); border: 1px solid var(--s2-border-subtle);';
+  'font-family: var(--s2-font-mono); font-size: 11px; color: var(--s2-content-default); word-break: break-all; padding: 8px 12px; background: var(--s2-bg-sunken); border-radius: var(--s2-radius-default); border: 1px solid var(--s2-border-subtle);';
 const MUTED = 'font-size: 11px; color: var(--s2-content-secondary);';
+/**
+ * `.dialog` only colors `.dialog__title` / `.dialog__desc`, so any element
+ * this module builds MUST state its own color — an inherited one resolves to
+ * the document default and renders near-black on the dark dialog surface.
+ */
+const BODY = 'font-size: 12px; color: var(--s2-content-default);';
 /** Escapes `.dialog__btn { width: 100% }` for buttons that sit inline in a row. */
 const INLINE_BTN = 'flex: 0 0 auto; width: auto; padding: 8px 14px;';
 
@@ -97,6 +105,7 @@ async function handleRevoke(ctx: SyncDialogCtx): Promise<void> {
   if (!ctx.revokeArmed) {
     ctx.revokeArmed = true;
     button.textContent = revokeConfirmLabel(ctx.followers.length);
+    setRevokeArmedStyle(button, true);
     return;
   }
   button.disabled = true;
@@ -113,9 +122,23 @@ async function handleRevoke(ctx: SyncDialogCtx): Promise<void> {
     setStatus(ctx, `Revoke failed: ${err instanceof Error ? err.message : String(err)}`, 'error');
     ctx.revokeArmed = false;
     button.textContent = 'Revoke link';
+    setRevokeArmedStyle(button, false);
     button.disabled = false;
     ctx.doneBtn.disabled = false;
   }
+}
+
+/**
+ * The armed state is the destructive one, so it is the only one that goes
+ * red: an idle "Revoke link" is just another secondary button, while
+ * "Revoke link? 3 connected devices will be disconnected." is a click away
+ * from dropping every follower.
+ */
+function setRevokeArmedStyle(button: HTMLButtonElement, armed: boolean): void {
+  button.dataset.armed = armed ? '1' : '0';
+  button.style.background = armed ? 'var(--s2-negative)' : '';
+  button.style.borderColor = armed ? 'transparent' : '';
+  button.style.color = armed ? '#fff' : '';
 }
 
 /** Copy-the-link block shared by the Browser and iPhone tabs. */
@@ -153,22 +176,71 @@ function linkBlock(ctx: SyncDialogCtx): HTMLElement {
   return wrap;
 }
 
-/** The Terminal tab: a ready-to-paste `slicc … follow` line, and what it grants. */
-function terminalBlock(ctx: SyncDialogCtx, note: string): HTMLElement {
-  const wrap = el('div');
-  const command = cliFollowCommand(ctx.options.joinUrl);
-  const shown = ctx.urlRevealed ? command : cliFollowCommand(maskJoinUrl(ctx.options.joinUrl));
-  const commandEl = el('div', `${MONO} margin-bottom: 8px;`, shown);
-  commandEl.dataset.command = '1';
+/**
+ * A labelled step: caption, mono command, and its own copy button. `copyValue`
+ * defaults to what is shown — the connect step overrides it so the clipboard
+ * carries the real token while the display stays masked.
+ */
+function commandStep(
+  ctx: SyncDialogCtx,
+  opts: {
+    caption: string;
+    command: string;
+    copyValue?: string;
+    action: string;
+    copyLabel: string;
+    okMessage: string;
+  }
+): HTMLElement {
+  const wrap = el('div', 'margin-bottom: 10px;');
+  wrap.appendChild(el('div', `${MUTED} margin-bottom: 4px;`, opts.caption));
+  const commandEl = el('div', `${MONO} margin-bottom: 6px;`, opts.command);
+  commandEl.dataset.command = opts.action;
   wrap.appendChild(commandEl);
-
-  const copyBtn = el('button', 'margin-bottom: 8px;', 'Copy command');
+  const copyBtn = el('button', 'margin-bottom: 0;', opts.copyLabel);
   copyBtn.className = 'dialog__btn dialog__btn--secondary';
-  copyBtn.dataset.action = 'copy-command';
+  copyBtn.dataset.action = opts.action;
   copyBtn.addEventListener('click', () => {
-    void copyInto(ctx, command, 'Command copied.');
+    void copyInto(ctx, opts.copyValue ?? opts.command, opts.okMessage);
   });
   wrap.appendChild(copyBtn);
+  return wrap;
+}
+
+/**
+ * The Terminal tab: install the CLI, then connect with it. Handing over a
+ * `slicc …` command without saying where `slicc` comes from was the gap —
+ * anyone who doesn't already have the binary hits `command not found`.
+ */
+function terminalBlock(ctx: SyncDialogCtx, note: string): HTMLElement {
+  const wrap = el('div');
+  const { joinUrl } = ctx.options;
+  const command = cliFollowCommand(joinUrl);
+  const shown = ctx.urlRevealed ? command : cliFollowCommand(maskJoinUrl(joinUrl));
+
+  wrap.appendChild(
+    commandStep(ctx, {
+      caption: '1. Install the slicc CLI (skip if you already have it):',
+      command: cliInstallCommand(joinUrl),
+      action: 'copy-install',
+      copyLabel: 'Copy install command',
+      okMessage: 'Install command copied.',
+    })
+  );
+  wrap.appendChild(
+    el('div', `${MUTED} margin: -6px 0 12px;`, `Windows: ${cliInstallCommandWindows(joinUrl)}`)
+  );
+
+  wrap.appendChild(
+    commandStep(ctx, {
+      caption: '2. Connect that machine to this session:',
+      command: shown,
+      copyValue: command,
+      action: 'copy-command',
+      copyLabel: 'Copy command',
+      okMessage: 'Command copied.',
+    })
+  );
 
   const toggle = el(
     'button',
@@ -183,15 +255,14 @@ function terminalBlock(ctx: SyncDialogCtx, note: string): HTMLElement {
   });
   wrap.appendChild(toggle);
 
-  wrap.appendChild(el('div', `${MUTED} margin-bottom: 8px;`, `⚠ ${note}`));
-  wrap.appendChild(el('div', MUTED, 'Get the slicc CLI at github.com/ai-ecoverse/slicc/releases'));
+  wrap.appendChild(el('div', `${MUTED} margin-bottom: 0;`, `\u26a0 ${note}`));
   return wrap;
 }
 
 function renderHowTo(ctx: SyncDialogCtx, tab: Exclude<SyncDialogTabId, 'status'>): HTMLElement {
   const wrap = el('div');
   const [lead, note] = syncDialogCopy(tab);
-  wrap.appendChild(el('div', 'font-size: 12px; line-height: 1.5; margin-bottom: 6px;', lead));
+  wrap.appendChild(el('div', `${BODY} line-height: 1.5; margin-bottom: 6px;`, lead));
   if (tab === 'terminal') {
     // The terminal note is a warning about what `follow` grants, so it stays
     // next to the command it qualifies.
@@ -216,7 +287,7 @@ function followerRow(follower: ConnectedFollowerInfo): HTMLElement {
   row.appendChild(icon);
 
   const main = el('div', 'display: flex; flex-direction: column; gap: 2px; min-width: 0;');
-  main.appendChild(el('div', 'font-size: 12px; font-weight: 500;', followerTitle(follower)));
+  main.appendChild(el('div', `${BODY} font-weight: 500;`, followerTitle(follower)));
   const detail = followerDetail(follower);
   if (detail) main.appendChild(el('div', `${MUTED} overflow-wrap: anywhere;`, detail));
   const chips = followerCapabilities(follower);
@@ -237,7 +308,11 @@ function followerRow(follower: ConnectedFollowerInfo): HTMLElement {
 
   const state = followerStatus(follower);
   const dotColor =
-    state === 'active' ? '#22c55e' : state === 'warn' ? '#f59e0b' : 'var(--s2-content-secondary)';
+    state === 'active'
+      ? 'var(--s2-positive)'
+      : state === 'warn'
+        ? 'var(--s2-notice)'
+        : 'var(--s2-content-tertiary)';
   const stateEl = el(
     'div',
     `display: flex; align-items: center; gap: 5px; ${MUTED} white-space: nowrap;`
@@ -274,9 +349,9 @@ function tabButton(ctx: SyncDialogCtx, id: SyncDialogTabId, label: string): HTML
     'button',
     `flex: 0 0 auto; padding: 4px 10px; border-radius: 9999px; font-size: 12px; cursor: pointer; border: 1px solid ${
       isActive ? 'var(--s2-border-subtle)' : 'transparent'
-    }; background: ${isActive ? 'var(--s2-bg-layer-1)' : 'transparent'}; color: var(--s2-content-${
-      isActive ? 'primary' : 'secondary'
-    });`,
+    }; background: ${isActive ? 'var(--s2-bg-layer-1)' : 'transparent'}; color: ${
+      isActive ? 'var(--s2-content-default)' : 'var(--s2-content-secondary)'
+    };`,
     label
   );
   btn.type = 'button';
@@ -305,6 +380,7 @@ function render(ctx: SyncDialogCtx): void {
   ctx.summaryEl.textContent = sharingSummary(ctx.followers.length);
   if (ctx.revokeBtn && !ctx.revokeArmed && ctx.revokeBtn.textContent !== 'Revoked') {
     ctx.revokeBtn.textContent = 'Revoke link';
+    setRevokeArmedStyle(ctx.revokeBtn, false);
   }
 }
 

@@ -8,6 +8,8 @@
  * by a unit test, the same way `tray-join-url.ts` covers the avatar popover.
  */
 
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
+
 export type SyncDialogTabId = 'status' | 'browser' | 'iphone' | 'terminal';
 
 export interface SyncDialogTab {
@@ -70,6 +72,34 @@ export function cliFollowCommand(joinUrl: string): string {
   return `slicc ${joinUrl} follow bash -c`;
 }
 
+/** Where the CLI installers live when the join link can't be parsed. */
+const DEFAULT_TRAY_ORIGIN = SLICC_HOSTED_ORIGIN;
+
+/**
+ * The origin serving this session — which is also the origin serving
+ * `/install-cli`. Deriving the installer from the join link rather than
+ * hardcoding production means a staging leader hands out the staging
+ * installer, so the CLI you install can actually talk to the leader you got
+ * it from.
+ */
+export function trayOriginFor(joinUrl: string): string {
+  try {
+    return new URL(joinUrl).origin;
+  } catch {
+    return DEFAULT_TRAY_ORIGIN;
+  }
+}
+
+/** One-line POSIX install (macOS, Linux, WSL, Git Bash) → `~/.local/bin`. */
+export function cliInstallCommand(joinUrl: string): string {
+  return `curl -fsSL ${trayOriginFor(joinUrl)}/install-cli | sh`;
+}
+
+/** Native-Windows install, for the same binary. */
+export function cliInstallCommandWindows(joinUrl: string): string {
+  return `irm ${trayOriginFor(joinUrl)}/install-cli.ps1 | iex`;
+}
+
 /** Per-tab body copy. Two sentences maximum: the button below does the work. */
 export function syncDialogCopy(tab: Exclude<SyncDialogTabId, 'status'>): string[] {
   switch (tab) {
@@ -85,7 +115,7 @@ export function syncDialogCopy(tab: Exclude<SyncDialogTabId, 'status'>): string[
       ];
     case 'terminal':
       return [
-        'Lend a machine to this session — run this in its terminal:',
+        'Lend a machine to this session — run these in its terminal:',
         'The agent can then run commands on that machine as you.',
       ];
   }

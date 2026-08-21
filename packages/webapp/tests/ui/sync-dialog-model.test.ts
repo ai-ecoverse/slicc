@@ -4,15 +4,19 @@
  * `sync-dialog.test.ts` covers the rendering.
  */
 
+import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
 import {
   buildSyncDialogTabs,
   cliFollowCommand,
+  cliInstallCommand,
+  cliInstallCommandWindows,
   defaultSyncDialogTab,
   maskJoinUrl,
   revokeConfirmLabel,
   sharingSummary,
   syncDialogCopy,
+  trayOriginFor,
 } from '../../src/ui/sync-dialog-model.js';
 
 describe('buildSyncDialogTabs', () => {
@@ -83,6 +87,31 @@ describe('cliFollowCommand', () => {
     expect(cliFollowCommand('https://tray.example.com/join/tok')).toBe(
       'slicc https://tray.example.com/join/tok follow bash -c'
     );
+  });
+});
+
+describe('the CLI installers', () => {
+  it('derives the installer from the join link, so a staging leader hands out the staging CLI', () => {
+    expect(trayOriginFor('https://staging.example.com/join/tok')).toBe(
+      'https://staging.example.com'
+    );
+    expect(cliInstallCommand('https://staging.example.com/join/tok')).toBe(
+      'curl -fsSL https://staging.example.com/install-cli | sh'
+    );
+    expect(cliInstallCommandWindows('https://staging.example.com/join/tok')).toBe(
+      'irm https://staging.example.com/install-cli.ps1 | iex'
+    );
+  });
+
+  it('falls back to production when the join link is unparseable', () => {
+    expect(trayOriginFor('nonsense')).toBe(SLICC_HOSTED_ORIGIN);
+    expect(cliInstallCommand('nonsense')).toBe(
+      `curl -fsSL ${SLICC_HOSTED_ORIGIN}/install-cli | sh`
+    );
+  });
+
+  it('never leaks the join token into the install command', () => {
+    expect(cliInstallCommand('https://tray.example.com/join/s3cr3t')).not.toContain('s3cr3t');
   });
 });
 
