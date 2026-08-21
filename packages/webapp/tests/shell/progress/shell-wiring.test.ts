@@ -62,6 +62,25 @@ describe('AlmostBashShellHeadless progress wiring', () => {
     expect(ls[0].fraction).toBeUndefined();
   });
 
+  it('counts for-loop iterations on command completion', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+    const { events, onUpdate } = captureProgress();
+    const ctx = pushToolExecutionContext({ onUpdate, toolName: 'bash', toolCallId: 'tc-loop' });
+    try {
+      await shell.executeCommand('for i in 1 2 3; do echo $i; done');
+    } finally {
+      popToolExecutionContext(ctx);
+    }
+    const loop = events.filter((e) => e.id.startsWith('loop-'));
+    expect(loop[0]).toMatchObject({ phase: 'start', total: 3, done: 0, label: 'for i (0/3)' });
+    // The loop finishes in microseconds, so the ≤4/s throttle keeps only the
+    // first update; `end` still carries the final count.
+    const updates = loop.filter((e) => e.phase === 'update').map((e) => e.done);
+    expect(updates[0]).toBe(1);
+    expect(updates).toEqual([...updates].sort((a, b) => a - b));
+    expect(loop.at(-1)).toMatchObject({ phase: 'end', done: 3, fraction: 1 });
+  });
+
   it('emits nothing for the human terminal (no tool context)', async () => {
     const shell = new AlmostBashShellHeadless({ fs });
     const { events, onUpdate } = captureProgress();

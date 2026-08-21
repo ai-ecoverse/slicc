@@ -1013,12 +1013,16 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     const onDispatch = () => this.loopRun?.onDispatch();
     return {
       ...wrapped,
-      execute(args, ctx) {
+      async execute(args, ctx) {
         // Loop counting seam: every registry dispatch, including the ones
-        // `wrapCommandForProgress` skips (`echo`, …). O(1) when no loop is
-        // being tracked.
-        onDispatch();
-        return wrapped.execute(args, ctx);
+        // `wrapCommandForProgress` skips (`echo`, …). Counted on COMPLETION
+        // so "for f (1/3)" appears after the first iteration finishes, not
+        // while its command is still running. O(1) when no loop is tracked.
+        try {
+          return await wrapped.execute(args, ctx);
+        } finally {
+          onDispatch();
+        }
       },
     };
   }
