@@ -236,8 +236,11 @@ export interface KernelClientFacade {
    * after the host has acknowledged the clear so the panel can safely
    * `location.reload()` without racing the offscreen agent context (in
    * extension mode the offscreen document survives the panel reload).
+   *
+   * `scoopJid` names the root to clear (#2272) — the panel passes the
+   * selected cone. Omitted, the host clears the default root.
    */
-  clearAllMessages(): Promise<void>;
+  clearAllMessages(scoopJid?: string): Promise<void>;
   spawnAgent(options: AgentSpawnOptions): Promise<AgentSpawnResult>;
   clearFilesystem(): void;
   requestState(): void;

@@ -198,7 +198,6 @@ describe('New chat targets the selected cone (#2272)', () => {
 describe('thaw fallback follows the archive (#2272)', () => {
   it('lands on the cone an unreadable archive named, not the primary one', async () => {
     const state = harness(null);
-    state.selected = null;
     state.files.set(
       '/sessions/index.json',
       JSON.stringify([
@@ -220,7 +219,6 @@ describe('thaw fallback follows the archive (#2272)', () => {
 
   it('lands on the default root for a legacy archive with no cone field', async () => {
     const state = harness(null);
-    state.selected = null;
     state.files.set(
       '/sessions/index.json',
       JSON.stringify([
