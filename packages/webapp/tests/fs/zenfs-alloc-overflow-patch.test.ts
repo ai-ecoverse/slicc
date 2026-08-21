@@ -45,28 +45,36 @@ describe('ZenFS Index._alloc spread-overflow patch', () => {
     ).toBe(false);
   });
 
-  it('behaviorally: allocates over an index far past the spread-argument ceiling', async () => {
-    const { Index, Inode } = await import('@zenfs/core');
+  // `_alloc()` reads exactly two fields off each value — `ino` and `data` —
+  // through `Index`'s inherited `Map.values()`. `Index extends Map` and does
+  // not override `set`, so a plain `{ ino, data }` record exercises the same
+  // contract as a real `Inode` for a fraction of the cost. That matters here:
+  // the bug only shows at six-figure entry counts, and building 150,000
+  // buffer-backed `Inode`s took ~22 s on a CI runner (vs ~3 s locally) purely
+  // in fixture setup — a timeout that said nothing about `_alloc` itself.
+  async function indexOfSize(count: number) {
+    const { Index } = await import('@zenfs/core');
     const index = new Index();
-    // 150,000 entries = 300,000 spread arguments — well past every host's
-    // ceiling (Node throws around 100,000 entries, Chrome around 31,775).
-    const count = 150_000;
     for (let i = 0; i < count; i++) {
-      index.set(`/f${i}`, new Inode({ ino: 2 * i + 2, data: 2 * i + 3, mode: 0o100644, nlink: 1 }));
+      index.set(`/f${i}`, { ino: 2 * i + 2, data: 2 * i + 3 } as never);
     }
+    return index;
+  }
+
+  it('behaviorally: allocates over an index far past the spread-argument ceiling', async () => {
+    // 150,000 entries = 300,000 spread arguments — past every host's ceiling
+    // (Node throws around 100,000 entries, Chrome around 31,775).
+    const count = 150_000;
+    const index = await indexOfSize(count);
     // Highest id in the index is `data` of the last entry: 2*(count-1)+3.
     expect(index._alloc()).toBe(2 * (count - 1) + 3 + 1);
   });
 
   it('behaviorally: still allocates correctly from a deep call stack', async () => {
-    const { Index, Inode } = await import('@zenfs/core');
-    const index = new Index();
-    for (let i = 0; i < 60_000; i++) {
-      index.set(`/f${i}`, new Inode({ ino: 2 * i + 2, data: 2 * i + 3, mode: 0o100644, nlink: 1 }));
-    }
+    const index = await indexOfSize(60_000);
     // The real caller (`IndexFS.create`) runs deep inside an async FS chain;
     // the unpatched spread threw at this size once ~1,000 frames were already
-    // on the stack.
+    // on the stack, even though the same size succeeded from a shallow one.
     const deep = (depth: number): number => (depth > 0 ? deep(depth - 1) : index._alloc());
     expect(deep(2_000)).toBe(2 * 59_999 + 3 + 1);
   });
