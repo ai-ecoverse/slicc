@@ -113,23 +113,25 @@ export function toFollowerSwitcherScoops(scoops: readonly ScoopSummary[]): Switc
   });
 }
 
-/** Roots first; a scoop follows its owner when the owner is known, else keeps leader order. */
+/**
+ * Roots first; every unit follows its owner, depth-first, so a nested scoop
+ * (a scoop spawned by a scoop) still sits inside its cone's group. Units whose
+ * owner is unknown or missing keep leader order at the tail. A leader that
+ * sends no edges at all keeps the legacy cone-first order.
+ */
 function orderByOwner(scoops: readonly ScoopSummary[]): ScoopSummary[] {
   if (!scoops.some((s) => s.parentId !== undefined)) {
     return [...scoops].sort((a, b) => Number(b.isCone) - Number(a.isCone));
   }
-  const roots = scoops.filter(summaryIsRoot);
-  const placed = new Set(roots.map((s) => s.jid));
+  const placed = new Set<string>();
   const out: ScoopSummary[] = [];
-  for (const root of roots) {
-    out.push(root);
-    for (const s of scoops) {
-      if (!placed.has(s.jid) && s.parentId === root.jid) {
-        out.push(s);
-        placed.add(s.jid);
-      }
-    }
-  }
+  const visit = (owner: ScoopSummary): void => {
+    if (placed.has(owner.jid)) return;
+    placed.add(owner.jid);
+    out.push(owner);
+    for (const s of scoops) if (s.parentId === owner.jid) visit(s);
+  };
+  for (const root of scoops) if (summaryIsRoot(root)) visit(root);
   for (const s of scoops) if (!placed.has(s.jid)) out.push(s);
   return out;
 }

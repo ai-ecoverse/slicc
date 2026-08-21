@@ -220,6 +220,28 @@ describe('parentId on the wire (#1666 / #2270)', () => {
     expect(descriptors.map((d) => d.label)).toEqual(['Research', 'b', 'sliccy', 'a']);
   });
 
+  it('keeps a nested scoop inside its cone group (depth-first by owner)', () => {
+    const grandchild = {
+      ...cone,
+      jid: 'scoop_aa',
+      name: 'aa',
+      isCone: false,
+      parentJid: 'scoop_a',
+    };
+    const orphan = { ...cone, jid: 'scoop_x', name: 'x', isCone: false, parentJid: 'gone' };
+    const descriptors = toFollowerSwitcherScoops(
+      toScoopSummaries([orphan, grandchild, b, a, research, cone], [])
+    );
+    expect(descriptors.map((d) => d.key)).toEqual([
+      'cone_2',
+      'scoop_b',
+      'cone',
+      'scoop_a',
+      'scoop_aa',
+      'scoop_x',
+    ]);
+  });
+
   it('keeps the legacy cone-first order when a leader sends no parentId', () => {
     const legacy = [
       { jid: 's', name: 's', folder: 's', isCone: false, assistantLabel: 's' },
