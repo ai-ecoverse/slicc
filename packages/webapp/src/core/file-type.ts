@@ -253,3 +253,44 @@ export function isTextMimeType(mime: string): boolean {
     base.endsWith('+xml')
   );
 }
+
+/**
+ * File types that have a RENDERED form as well as a source form.
+ *
+ * Markdown and HTML are the two a transcript actually produces: an agent writes
+ * a report and the user wants to read it, then wants to check what was written.
+ * Neither view is the true one, so the previewer offers both (see
+ * `slicc-quick-look`'s `rendered` option).
+ */
+export type RichPreviewKind = 'markdown' | 'html';
+
+/**
+ * Extensions that DECLARE markdown.
+ *
+ * The rest of this module answers "what is this?" from bytes on purpose, and
+ * this is the honest exception: markdown has no signature, and a markdown file
+ * and a text file are byte-identical until someone says otherwise. The name is
+ * that statement. Being wrong costs only which of two views opens first, never
+ * whether the file previews — the source view is always there.
+ *
+ * `.mdx` is absent: it is JSX in markdown clothing, and rendering it with a
+ * plain markdown parser silently drops the half that matters.
+ */
+const MARKDOWN_EXTENSIONS = new Set(['md', 'markdown', 'mdown', 'mkd', 'mkdn', 'mdwn']);
+
+/**
+ * Whether `path`/`mime` name a file worth rendering, and how.
+ *
+ * `null` means "source only" — every other text file, which has no second form
+ * to show.
+ */
+export function richPreviewKind(path: string, mime: string): RichPreviewKind | null {
+  const base = mime.split(';', 1)[0]?.trim() ?? mime;
+  if (base === 'text/html') return 'html';
+  if (base === 'text/markdown' || base === 'text/x-markdown') return 'markdown';
+  const dot = path.lastIndexOf('.');
+  const ext = dot > 0 ? path.slice(dot + 1).toLowerCase() : '';
+  if (MARKDOWN_EXTENSIONS.has(ext)) return 'markdown';
+  if (ext === 'html' || ext === 'htm') return 'html';
+  return null;
+}

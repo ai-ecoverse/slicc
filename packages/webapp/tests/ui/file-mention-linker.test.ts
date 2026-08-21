@@ -16,6 +16,18 @@ import {
   linkifyFileMentions,
 } from '../../src/ui/file-mention-linker.js';
 
+/** A resolver that records the hints it was handed, and confirms nothing. */
+function recordingResolver(seen: string[][]): FileMentionResolver {
+  return {
+    resolve: (query: string) => Promise.resolve({ query, matches: [] }),
+    resolveAll: (queries: string[], hints: readonly string[] = []) => {
+      seen.push([...hints]);
+      return Promise.resolve(queries.map((query) => ({ query, matches: [] })));
+    },
+    invalidate: () => {},
+  } as unknown as FileMentionResolver;
+}
+
 /** A resolver that confirms exactly the paths it is given, keyed by basename. */
 function fakeResolver(known: Record<string, string[]>): FileMentionResolver {
   const resolve = (query: string): Promise<ResolvedMention> =>
@@ -170,5 +182,22 @@ describe('linkifyFileMentions', () => {
 
     await linkifyFileMentions(root, resolver);
     expect(spy).not.toHaveBeenCalled();
+  });
+
+  it("passes the turn's tool-call paths through to the resolver", async () => {
+    const seen: string[][] = [];
+    const root = render('<p>wrote foo.md</p>');
+    await linkifyFileMentions(root, recordingResolver(seen), ['/home/lars/foo.md']);
+
+    expect(seen).toEqual([['/home/lars/foo.md']]);
+  });
+
+  it('links a mention written with a relative prefix', async () => {
+    // The resolver reports the NORMALIZED query it looked up, so a linker that
+    // keyed its answers off that string would never find `./check.sh` again.
+    const root = render('<p>run ./check.sh now</p>');
+    await linkifyFileMentions(root, fakeResolver({ './check.sh': ['/w/check.sh'] }));
+
+    expect(root.querySelector(`a.${FILE_MENTION_CLASS}`)?.textContent).toBe('./check.sh');
   });
 });

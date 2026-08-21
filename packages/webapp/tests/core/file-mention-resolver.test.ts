@@ -229,3 +229,80 @@ describe('FileMentionResolver', () => {
     expect((await resolver.resolve('a.ts')).matches).toEqual([]);
   });
 });
+
+describe('FileMentionResolver with tool-call hints', () => {
+  it('resolves a file outside the indexed roots when a tool call named it', async () => {
+    // `echo test > /home/lars/foo.md` — the file is real but no walk will ever
+    // reach it, so the hint is the only way this mention becomes a link.
+    const fs = fakeVfs(['/home/lars/foo.md', '/workspace/other.ts']);
+    const resolver = new FileMentionResolver(fs, ROOTS);
+
+    expect((await resolver.resolve('foo.md')).matches).toEqual([]);
+    expect((await resolver.resolve('foo.md', ['/home/lars/foo.md'])).matches).toEqual([
+      '/home/lars/foo.md',
+    ]);
+  });
+
+  it('ignores a hint that does not exist', async () => {
+    const fs = fakeVfs(['/workspace/a.ts']);
+    const resolver = new FileMentionResolver(fs, ROOTS);
+    expect((await resolver.resolve('gone.md', ['/home/lars/gone.md'])).matches).toEqual([]);
+  });
+
+  it('ignores a hint for a different file', async () => {
+    const fs = fakeVfs(['/home/lars/foo.md', '/home/lars/bar.md']);
+    const resolver = new FileMentionResolver(fs, ROOTS);
+    expect((await resolver.resolve('foo.md', ['/home/lars/bar.md'])).matches).toEqual([]);
+  });
+
+  it('promotes the hinted match of an ambiguous basename', async () => {
+    const fs = fakeVfs([
+      '/workspace/a/main.ts',
+      '/workspace/b/main.ts',
+      '/workspace/c/deep/main.ts',
+    ]);
+    const resolver = new FileMentionResolver(fs, ROOTS);
+
+    const unhinted = (await resolver.resolve('main.ts')).matches;
+    expect(unhinted[0]).toBe('/workspace/a/main.ts');
+
+    const hinted = (await resolver.resolve('main.ts', ['/workspace/b/main.ts'])).matches;
+    expect(hinted[0]).toBe('/workspace/b/main.ts');
+    // Nothing is dropped — the mention is still ambiguous, and the caller shows
+    // the alternatives.
+    expect([...hinted].sort()).toEqual([...unhinted].sort());
+  });
+
+  it('lets the most recent hint win when a turn touched the name twice', async () => {
+    const fs = fakeVfs(['/workspace/a/main.ts', '/workspace/b/main.ts']);
+    const resolver = new FileMentionResolver(fs, ROOTS);
+    const hints = ['/workspace/a/main.ts', '/workspace/b/main.ts'];
+    expect((await resolver.resolve('main.ts', hints)).matches[0]).toBe('/workspace/b/main.ts');
+  });
+
+  it('accepts a partial-path mention against a hint', async () => {
+    const fs = fakeVfs(['/home/lars/docs/notes.md']);
+    const resolver = new FileMentionResolver(fs, ROOTS);
+    expect((await resolver.resolve('docs/notes.md', ['/home/lars/docs/notes.md'])).matches).toEqual(
+      ['/home/lars/docs/notes.md']
+    );
+  });
+
+  it('leaves the hint-free answer memoized and unpolluted', async () => {
+    const fs = fakeVfs(['/home/lars/foo.md']);
+    const resolver = new FileMentionResolver(fs, ROOTS);
+
+    await resolver.resolve('foo.md', ['/home/lars/foo.md']);
+    // A later mention with no hints must not inherit the hinted answer: the
+    // file is still outside the roots and still unresolvable on its own.
+    expect((await resolver.resolve('foo.md')).matches).toEqual([]);
+  });
+
+  it('bounds how many hints one mention can check', async () => {
+    const files = Array.from({ length: 12 }, (_, i) => `/home/lars/d${i}/foo.md`);
+    const fs = fakeVfs(files);
+    const resolver = new FileMentionResolver(fs, ROOTS);
+    const matches = (await resolver.resolve('foo.md', files)).matches;
+    expect(matches.length).toBeLessThanOrEqual(4);
+  });
+});

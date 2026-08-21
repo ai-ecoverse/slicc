@@ -80,10 +80,15 @@ export const FILE_MENTION_OPEN_EVENT = 'file-mention-open';
  * Resolves in the background and returns once the rewrite is done, so callers
  * that want to await it (tests, transcript export) can. Fire-and-forget is the
  * normal usage.
+ *
+ * `hints` are the paths the turn's tool calls already named. They are how a
+ * bare `foo.md` in prose finds the `/home/lars/foo.md` the agent just wrote —
+ * see `core/tool-call-paths.ts`.
  */
 export async function linkifyFileMentions(
   root: HTMLElement,
-  resolver: FileMentionResolver
+  resolver: FileMentionResolver,
+  hints: readonly string[] = []
 ): Promise<void> {
   const fingerprint = contentFingerprint(root);
   if (root.getAttribute(PROCESSED_ATTR) === fingerprint) return;
@@ -110,8 +115,12 @@ export async function linkifyFileMentions(
     return;
   }
 
-  const resolutions = await resolver.resolveAll([...queries]);
-  const byQuery = new Map(resolutions.map((r) => [r.query, r.matches]));
+  // Zipped by INDEX, not by `r.query`: the resolver reports the NORMALIZED
+  // query it looked up (`./foo.ts` becomes `foo.ts`), so keying off it would
+  // lose every mention written with a relative prefix.
+  const asked = [...queries];
+  const resolutions = await resolver.resolveAll(asked, hints);
+  const byQuery = new Map(asked.map((query, i) => [query, resolutions[i]?.matches ?? []]));
 
   for (const { node, mentions } of work) {
     // The node may have been replaced by a re-render while we awaited.

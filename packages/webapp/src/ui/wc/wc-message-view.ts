@@ -9,6 +9,11 @@
 import { hasIcon, type SliccUserMessage } from '@slicc/webcomponents';
 import { splitToolResultImages } from '../../base/image-markers.js';
 import type { MessageAttachment } from '../../core/attachments.js';
+import {
+  formatPathHints,
+  TOOL_PATH_HINTS_ATTR,
+  toolCallPathHints,
+} from '../../core/tool-call-paths.js';
 import { stripDictationMarkers } from '../../speech/dictation-priming.js';
 import { ansiToDom } from '../ansi-to-dom.js';
 import { renderAssistantMessageContent, renderMessageContent } from '../message-renderer.js';
@@ -506,6 +511,12 @@ function toolCallRow(call: ToolCall, msgId?: string): HTMLElement {
   // anchors label scheduling and per-row lookups.
   if (msgId) row.setAttribute('data-msg-id', msgId);
   if (call.id) row.setAttribute('data-tool-id', call.id);
+  // The paths this call named, harvested from the TYPED input while it is still
+  // in hand. `ui/wc/wire-file-mentions.ts` reads them back off the row to tell
+  // which `foo.md` a later sentence means — the row is simply where the two
+  // meet, since the transcript DOM is what that module already observes.
+  const hints = formatPathHints(toolCallPathHints(call));
+  if (hints) row.setAttribute(TOOL_PATH_HINTS_ATTR, hints);
   const body = toolBody(call);
   if (body) row.append(body);
   return row;

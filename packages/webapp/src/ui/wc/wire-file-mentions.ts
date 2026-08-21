@@ -25,6 +25,7 @@
 
 import { FileMentionResolver } from '../../core/file-mention-resolver.js';
 import { findFileMentions } from '../../core/file-mentions.js';
+import { parsePathHints, TOOL_PATH_HINTS_ATTR } from '../../core/tool-call-paths.js';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import {
   FILE_MENTION_OPEN_EVENT,
@@ -43,6 +44,41 @@ export interface FileMentionWiringDeps {
 
 /** Tag whose bodies carry linkable prose. */
 const MESSAGE_TAG = 'slicc-agent-message';
+
+/** Tool rows carry the paths their call named, harvested at render time. */
+const TOOL_ROW_SELECTOR = `slicc-action-row[${TOOL_PATH_HINTS_ATTR}]`;
+
+/**
+ * How many tool rows back a message looks for path hints.
+ *
+ * Recency is what makes a hint right: the `foo.md` a sentence means is the one
+ * the turn just wrote, not one from an hour ago. The cap keeps the scan (and
+ * the `stat()` calls it can cause) constant as a session grows to hundreds of
+ * tool calls.
+ */
+const HINT_ROW_LOOKBACK = 40;
+
+/**
+ * Paths named by the tool calls that ran BEFORE this message.
+ *
+ * "Before" is document order, which in a transcript is chronological: a bubble
+ * is disambiguated by what the agent had already done when it wrote the text,
+ * exactly as a reader would read it. Rows are read from the rendered DOM rather
+ * than the message model because that is what this module already observes —
+ * the paths themselves were extracted from the typed `ToolCall` upstream (see
+ * `ui/wc/wc-message-view.ts`), so nothing is parsed out of markup here.
+ */
+function collectPathHints(thread: ParentNode, bubble: HTMLElement): string[] {
+  const rows: string[] = [];
+  const all = thread.querySelectorAll<HTMLElement>(TOOL_ROW_SELECTOR);
+  for (const row of all) {
+    // DOCUMENT_POSITION_FOLLOWING (4): the row comes after the bubble, so its
+    // call had not run yet when the text was written.
+    if (bubble.compareDocumentPosition(row) & Node.DOCUMENT_POSITION_FOLLOWING) break;
+    rows.push(row.getAttribute(TOOL_PATH_HINTS_ATTR) ?? '');
+  }
+  return rows.slice(-HINT_ROW_LOOKBACK).flatMap((value) => parsePathHints(value));
+}
 
 /**
  * Run `task` when the browser is idle, falling back to a macrotask.
@@ -109,8 +145,9 @@ function wireFileMentionsUnsafe(deps: FileMentionWiringDeps): () => void {
     // Linking is never urgent — it decorates text the user is already reading —
     // so it yields to anything the browser considers more important.
     whenIdle(() => {
+      const hints = collectPathHints(thread, bubble);
       void getResolver()
-        .then((resolver) => linkifyFileMentions(body, resolver))
+        .then((resolver) => linkifyFileMentions(body, resolver, hints))
         .catch((err) => log.error('File mention linking failed', err));
     });
   };

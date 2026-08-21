@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { formatPathHints, TOOL_PATH_HINTS_ATTR } from '../../src/core/tool-call-paths.js';
 import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
 import { wireFileMentions } from '../../src/ui/wc/wire-file-mentions.js';
 
@@ -20,6 +21,32 @@ function fakeFs(): LocalVfsClient {
     readFile: () => Promise.resolve(''),
     stat: () => Promise.reject(new Error('ENOENT')),
   };
+}
+
+/** A VFS whose only real file is `existing`, and which indexes nothing. */
+function fsWith(existing: string): LocalVfsClient {
+  return {
+    readDir: () => Promise.resolve([]),
+    readFile: () => Promise.resolve(''),
+    stat: (path: string) =>
+      path === existing
+        ? Promise.resolve({ type: 'file' as const, size: 1, mtime: 0, ctime: 0 })
+        : Promise.reject(new Error('ENOENT')),
+  } as unknown as LocalVfsClient;
+}
+
+/** A rendered tool row carrying the paths its call named. */
+function toolRow(paths: string[]): HTMLElement {
+  const row = document.createElement('slicc-action-row');
+  const hints = formatPathHints(paths);
+  if (hints) row.setAttribute(TOOL_PATH_HINTS_ATTR, hints);
+  return row;
+}
+
+function bubbleWith(html: string): HTMLElement {
+  const bubble = document.createElement('slicc-agent-message');
+  bubble.innerHTML = `<div class="body">${html}</div>`;
+  return bubble;
 }
 
 describe('wireFileMentions', () => {
@@ -141,5 +168,44 @@ describe('wireFileMentions', () => {
 
     await new Promise((resolve) => setTimeout(resolve, 20));
     expect(openFs).not.toHaveBeenCalled();
+  });
+
+  it('links a bare mention using a path an earlier tool call named', async () => {
+    // `echo "test" > /home/lars/foo.md` ran, then the agent wrote "see foo.md".
+    // Nothing in the indexed roots is called foo.md, so only the hint can
+    // resolve it.
+    const thread = document.createElement('div');
+    document.body.appendChild(thread);
+
+    wireFileMentions({
+      thread,
+      openFs: () => Promise.resolve(fsWith('/home/lars/foo.md')),
+      log: silentLog,
+    });
+
+    thread.appendChild(toolRow(['/home/lars/foo.md']));
+    thread.appendChild(bubbleWith('<p>see foo.md for the result</p>'));
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(thread.querySelector('a')?.getAttribute('data-path')).toBe('/home/lars/foo.md');
+  });
+
+  it('ignores tool calls that had not run yet when the text was written', async () => {
+    const thread = document.createElement('div');
+    document.body.appendChild(thread);
+
+    wireFileMentions({
+      thread,
+      openFs: () => Promise.resolve(fsWith('/home/lars/foo.md')),
+      log: silentLog,
+    });
+
+    // The row FOLLOWS the bubble in the transcript, so its path was not known
+    // when the sentence was written.
+    thread.appendChild(bubbleWith('<p>see foo.md for the result</p>'));
+    thread.appendChild(toolRow(['/home/lars/foo.md']));
+
+    await new Promise((resolve) => setTimeout(resolve, 40));
+    expect(thread.querySelector('a')).toBeNull();
   });
 });
