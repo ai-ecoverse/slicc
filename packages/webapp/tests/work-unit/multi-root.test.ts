@@ -306,6 +306,36 @@ describe('two-root event routing', () => {
     expect(resolveLickTarget([...registered, helper], 'helper')?.jid).toBe(helper.jid);
   });
 
+  it('resolves an ambiguous alias by folder, not by registry order', () => {
+    // Names are user-typed and not unique against folders: a cone the user
+    // called "reviewer" next to a scoop living in `reviewer-scoop` must not
+    // resolve by whichever record happens to sort first.
+    const named = rootRecord({
+      jid: 'cone_named',
+      name: 'reviewer',
+      folder: 'cone-reviewer',
+      addedAt: '2026-01-03T00:00:00.000Z',
+    });
+    const foldered = childRecord(rootA.jid, {
+      jid: 'scoop_reviewer',
+      name: 'checker',
+      folder: 'reviewer',
+    });
+    const suffixed = childRecord(rootA.jid, {
+      jid: 'scoop_reviewer_suffixed',
+      name: 'other',
+      folder: 'reviewer-scoop',
+    });
+    // Exact folder wins over the `-scoop` folder and over the name, in both
+    // registry orders.
+    expect(resolveLickTarget([named, suffixed, foldered], 'reviewer')?.jid).toBe(foldered.jid);
+    expect(resolveLickTarget([foldered, suffixed, named], 'reviewer')?.jid).toBe(foldered.jid);
+    // Without the exact folder, `<alias>-scoop` beats the name.
+    expect(resolveLickTarget([named, suffixed], 'reviewer')?.jid).toBe(suffixed.jid);
+    // Name only when nothing else claims the alias.
+    expect(resolveLickTarget([named], 'reviewer')?.jid).toBe(named.jid);
+  });
+
   it('drops an unmatched target but lets sprinkle routing fall through', () => {
     setDefaultRootJid(rootB.jid);
     expect(resolveLickTarget(registered, 'ghost-scoop')).toBeUndefined();

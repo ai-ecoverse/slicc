@@ -32,17 +32,27 @@ export interface ResolveLickTargetOptions {
 }
 
 /**
- * Match a `targetScoop` alias against the registry. Accepts a unit's `name`,
- * its `folder` (which is how a cone is addressed: `cone`, `cone-research`) or
- * the bare name of a scoop whose folder carries the conventional `-scoop`
- * suffix.
+ * Match a `targetScoop` alias against the registry, most-specific first:
+ *
+ *   1. an exact `folder` — the unique key, and how a cone is addressed
+ *      (`cone`, `cone-research`);
+ *   2. the conventional `<alias>-scoop` folder, so a scoop is reachable by
+ *      its bare name;
+ *   3. a `name`.
+ *
+ * The passes are ordered rather than OR-ed into one `find` on purpose. Names
+ * are user-typed and not unique against folders — a cone named `reviewer`
+ * next to a scoop in `reviewer-scoop` would otherwise resolve by whichever
+ * happened to sit earlier in the registry.
  */
 function matchLickTargetAlias(
   scoops: readonly RegisteredScoop[],
   alias: string
 ): RegisteredScoop | undefined {
-  return scoops.find(
-    (s) => s.name === alias || s.folder === alias || s.folder === `${alias}-scoop`
+  return (
+    scoops.find((s) => s.folder === alias) ??
+    scoops.find((s) => s.folder === `${alias}-scoop`) ??
+    scoops.find((s) => s.name === alias)
   );
 }
 
