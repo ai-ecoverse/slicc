@@ -60,6 +60,8 @@ interface SyncDialogCtx {
 const MONO =
   'font-family: var(--s2-font-mono); font-size: 11px; word-break: break-all; padding: 8px 12px; background: var(--s2-bg-sunken); border-radius: var(--s2-radius-default); border: 1px solid var(--s2-border-subtle);';
 const MUTED = 'font-size: 11px; color: var(--s2-content-secondary);';
+/** Escapes `.dialog__btn { width: 100% }` for buttons that sit inline in a row. */
+const INLINE_BTN = 'flex: 0 0 auto; width: auto; padding: 8px 14px;';
 
 function el<K extends keyof HTMLElementTagNameMap>(
   tag: K,
@@ -128,10 +130,15 @@ function linkBlock(ctx: SyncDialogCtx): HTMLElement {
   wrap.appendChild(copyBtn);
 
   const urlRow = el('div', 'display: flex; align-items: center; gap: 8px;');
-  const url = el('div', `${MONO} flex: 1; color: var(--s2-content-secondary);`);
+  const url = el(
+    'div',
+    `${MONO} flex: 1 1 auto; min-width: 0; color: var(--s2-content-secondary);`
+  );
   url.dataset.joinUrl = '1';
   url.textContent = ctx.urlRevealed ? ctx.options.joinUrl : maskJoinUrl(ctx.options.joinUrl);
-  const toggle = el('button', 'flex: 0 0 auto;', ctx.urlRevealed ? 'Hide' : 'Show');
+  // `width: auto` overrides `.dialog__btn { width: 100% }` — without it the
+  // button claims the row and squeezes the link into a 6-character column.
+  const toggle = el('button', `${INLINE_BTN}`, ctx.urlRevealed ? 'Hide' : 'Show');
   toggle.className = 'dialog__btn dialog__btn--secondary';
   toggle.dataset.action = 'toggle-url';
   toggle.addEventListener('click', () => {
@@ -163,7 +170,11 @@ function terminalBlock(ctx: SyncDialogCtx, note: string): HTMLElement {
   });
   wrap.appendChild(copyBtn);
 
-  const toggle = el('button', 'margin-bottom: 8px;', ctx.urlRevealed ? 'Hide link' : 'Show link');
+  const toggle = el(
+    'button',
+    `${INLINE_BTN} margin-bottom: 8px;`,
+    ctx.urlRevealed ? 'Hide link' : 'Show link'
+  );
   toggle.className = 'dialog__btn dialog__btn--secondary';
   toggle.dataset.action = 'toggle-url';
   toggle.addEventListener('click', () => {
@@ -180,13 +191,15 @@ function terminalBlock(ctx: SyncDialogCtx, note: string): HTMLElement {
 function renderHowTo(ctx: SyncDialogCtx, tab: Exclude<SyncDialogTabId, 'status'>): HTMLElement {
   const wrap = el('div');
   const [lead, note] = syncDialogCopy(tab);
-  wrap.appendChild(el('div', 'font-size: 12px; line-height: 1.5; margin-bottom: 10px;', lead));
+  wrap.appendChild(el('div', 'font-size: 12px; line-height: 1.5; margin-bottom: 6px;', lead));
   if (tab === 'terminal') {
+    // The terminal note is a warning about what `follow` grants, so it stays
+    // next to the command it qualifies.
     wrap.appendChild(terminalBlock(ctx, note));
     return wrap;
   }
+  wrap.appendChild(el('div', `${MUTED} margin-bottom: 10px;`, note));
   wrap.appendChild(linkBlock(ctx));
-  wrap.appendChild(el('div', `${MUTED} margin-top: 8px;`, note));
   return wrap;
 }
 
