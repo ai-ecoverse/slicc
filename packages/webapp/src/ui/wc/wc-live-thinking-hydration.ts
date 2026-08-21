@@ -5,6 +5,7 @@ import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
 import { metaThinkingForScoop } from './wc-follower-model-surface.js';
 import { scoopColor } from './wc-scoop-color.js';
 import { applyShellContext, type WcShellRefs } from './wc-shell.js';
+import { threadContextFor } from './wc-unit-context.js';
 
 export {
   effortOverrideForAgent,
@@ -37,7 +38,7 @@ export function shouldSkipSessionHydration(
 
 /** Point the thread chrome at a scoop (context label + accent hue + model). */
 export async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): Promise<void> {
-  refs.thread.setAttribute('context', scoop.isCone ? 'cone' : `scoop:${scoop.name}`);
+  refs.thread.setAttribute('context', threadContextFor(scoop));
   refs.thread.setAttribute('accent', scoopColor(scoop));
   refs.switcher.setAttribute('active', scoop.jid);
   applyShellContext(

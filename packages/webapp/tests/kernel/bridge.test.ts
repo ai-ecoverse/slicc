@@ -949,8 +949,17 @@ describe('Bridge handlePanelMessage', () => {
     simulatePanelMessage({ type: 'cone-create', name: 'sliccy' });
     await new Promise((r) => setTimeout(r, 10));
 
+    // The mock roster already holds the primary cone (`cone_1`, folder
+    // `cone`), so a second cone gets its own `cone-<slug>` folder and is
+    // labelled by its name (#1666 phase 4).
     expect(mockOrchestrator.registerScoop).toHaveBeenCalledWith(
-      expect.objectContaining({ isCone: true, name: 'sliccy', folder: 'cone' })
+      expect.objectContaining({
+        isCone: true,
+        parentJid: null,
+        name: 'sliccy',
+        folder: 'cone-sliccy',
+        assistantLabel: 'sliccy',
+      })
     );
     const created = sentMessages.find((m: any) => m?.payload?.type === 'scoop-created') as any;
     expect(created?.payload?.scoop?.name).toBe('sliccy');
@@ -2151,6 +2160,7 @@ describe('Bridge request-scoop-chat-messages', () => {
 describe('Bridge handlePanelMessage dispatch', () => {
   let bridge: InstanceType<typeof Bridge>;
   let mockOrchestrator: any;
+  const workUnitClose = vi.fn().mockResolvedValue(undefined);
 
   beforeEach(async () => {
     sentMessages.length = 0;
@@ -2179,6 +2189,7 @@ describe('Bridge handlePanelMessage dispatch', () => {
       handleMessage: vi.fn().mockResolvedValue(undefined),
       registerScoop: vi.fn().mockResolvedValue(undefined),
       unregisterScoop: vi.fn().mockResolvedValue(undefined),
+      getWorkUnits: vi.fn(() => ({ close: workUnitClose })),
       delegateToScoop: vi.fn().mockResolvedValue(undefined),
       updateModel: vi.fn(),
       setScoopThinkingLevel: vi.fn().mockResolvedValue(undefined),
@@ -2195,19 +2206,94 @@ describe('Bridge handlePanelMessage dispatch', () => {
     await bridge.bind(mockOrchestrator);
   });
 
-  it('cone-create registers a new cone scoop and emits scoop-created', async () => {
+  it('cone-create registers an extra cone with its own folder and label, and emits scoop-created', async () => {
     await (bridge as any).handlePanelMessage({ type: 'cone-create', name: 'NewCone' });
     expect(mockOrchestrator.registerScoop).toHaveBeenCalledTimes(1);
     const registered = mockOrchestrator.registerScoop.mock.calls[0][0];
     expect(registered.isCone).toBe(true);
+    expect(registered.parentJid).toBeNull();
     expect(registered.name).toBe('NewCone');
-    expect(registered.folder).toBe('cone');
-    expect(registered.assistantLabel).toBe('sliccy');
+    // the primary `cone` folder is taken by cone_1 → `cone-<slug>`
+    expect(registered.folder).toBe('cone-newcone');
+    expect(registered.assistantLabel).toBe('NewCone');
     const event = sentMessages.find((m: any) => m.payload?.type === 'scoop-created') as
       | { payload: { scoop: { isCone: boolean; name: string } } }
       | undefined;
     expect(event?.payload.scoop.isCone).toBe(true);
     expect(event?.payload.scoop.name).toBe('NewCone');
+  });
+
+  it('cone-create on an empty roster bootstraps the primary cone (folder cone, label sliccy)', async () => {
+    mockOrchestrator.getScoops.mockReturnValue([]);
+    await (bridge as any).handlePanelMessage({ type: 'cone-create', name: 'Cone' });
+    const registered = mockOrchestrator.registerScoop.mock.calls[0][0];
+    expect(registered).toMatchObject({
+      isCone: true,
+      parentJid: null,
+      folder: 'cone',
+      assistantLabel: 'sliccy',
+    });
+  });
+
+  it('scoop-drop of a cone cascades through the work-unit manager and forgets its subtree', async () => {
+    mockOrchestrator.getScoops.mockReturnValue([
+      { jid: 'cone_1', name: 'Cone', folder: 'cone', isCone: true, parentJid: null, addedAt: '1' },
+      {
+        jid: 'cone_2',
+        name: 'Two',
+        folder: 'cone-two',
+        isCone: true,
+        parentJid: null,
+        addedAt: '2',
+      },
+      {
+        jid: 'scoop_b',
+        name: 'B',
+        folder: 'b-scoop',
+        isCone: false,
+        parentJid: 'cone_2',
+        addedAt: '3',
+      },
+    ]);
+    (bridge as any).getBuffer('cone_2').push({ id: 'm', role: 'user', content: 'x' });
+    (bridge as any).getBuffer('scoop_b').push({ id: 'n', role: 'user', content: 'y' });
+    await (bridge as any).handlePanelMessage({ type: 'scoop-drop', scoopJid: 'cone_2' });
+    expect(workUnitClose).toHaveBeenCalledWith('cone_2');
+    expect(mockOrchestrator.unregisterScoop).not.toHaveBeenCalled();
+    expect((bridge as any).messageBuffers.has('cone_2')).toBe(false);
+    expect((bridge as any).messageBuffers.has('scoop_b')).toBe(false);
+    const store = (bridge as any).sessionStore;
+    expect(store.delete).toHaveBeenCalledWith('session-cone-two');
+    expect(store.delete).toHaveBeenCalledWith('session-b-scoop');
+    expect(sentMessages.some((m: any) => m.payload?.type === 'scoop-list')).toBe(true);
+  });
+
+  it('request-scoop-messages replies with an empty list when a unit has no history anywhere', async () => {
+    mockOrchestrator.getScoops.mockReturnValue([
+      {
+        jid: 'cone_2',
+        name: 'Two',
+        folder: 'cone-two',
+        isCone: true,
+        parentJid: null,
+        addedAt: '2',
+      },
+    ]);
+    mockOrchestrator.getScoopContext.mockReturnValue(undefined);
+    (bridge as any).sessionStore.load = vi.fn().mockResolvedValue(undefined);
+    await (bridge as any).handleRequestScoopMessages('cone_2');
+    const replaced = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced' && m.payload.scoopJid === 'cone_2'
+    ) as any;
+    expect(replaced?.payload.messages).toEqual([]);
+  });
+
+  it('scoop-drop refuses to drop the last cone', async () => {
+    await (bridge as any).handlePanelMessage({ type: 'scoop-drop', scoopJid: 'cone_1' });
+    expect(workUnitClose).not.toHaveBeenCalled();
+    expect(mockOrchestrator.unregisterScoop).not.toHaveBeenCalled();
+    // the panel's optimistic removal is corrected by a fresh roster
+    expect(sentMessages.some((m: any) => m.payload?.type === 'scoop-list')).toBe(true);
   });
 
   it('scoop-feed dispatches to orchestrator.delegateToScoop with "sliccy"', async () => {

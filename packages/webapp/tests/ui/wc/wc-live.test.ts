@@ -51,7 +51,15 @@ function scoop(overrides: Partial<RegisteredScoop>): RegisteredScoop {
   } as RegisteredScoop;
 }
 
-const cone = scoop({ jid: 'cone-1', name: 'sliccy', isCone: true, type: 'cone' });
+const cone = scoop({
+  jid: 'cone-1',
+  name: 'sliccy',
+  folder: 'cone',
+  isCone: true,
+  type: 'cone',
+  parentJid: null,
+  assistantLabel: 'sliccy',
+});
 
 describe('wc-live compatibility re-exports', () => {
   it('keeps moved helpers available to existing importers', async () => {

@@ -93,7 +93,7 @@ export function toFollowerSwitcherScoops(scoops: readonly ScoopSummary[]): Switc
       key: scoop.jid,
       type: scoop.isCone ? 'cone' : 'scoop',
       color: scoopColor(scoop),
-      label: scoop.isCone ? 'sliccy' : scoop.name,
+      label: scoop.isCone ? scoop.assistantLabel : scoop.name,
       eyes:
         expanded.state === 'broken' ? 'dead' : expanded.state === 'initializing' ? 'none' : 'open',
       fill: typeof scoop.fill === 'number' ? scoop.fill : 0,

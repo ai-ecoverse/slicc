@@ -5,6 +5,7 @@ import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { WcChatController } from './wc-chat-controller.js';
 import type { WcShellRefs } from './wc-shell.js';
+import { unitSlugFor } from './wc-unit-context.js';
 
 /** Mutable slot for the lazily-wired welcome-flow lick interceptor. */
 export interface WelcomeInterceptHolder {
@@ -47,7 +48,7 @@ export function createWcController(
     resolveTelemetryContext: () => {
       const scoop = getSelected();
       if (!scoop) return null;
-      const scoopName = scoop.isCone ? 'cone' : scoop.name;
+      const scoopName = unitSlugFor(scoop);
       try {
         const modelId = scoop.config?.modelId;
         const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();

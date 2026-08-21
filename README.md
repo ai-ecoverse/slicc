@@ -174,7 +174,7 @@ SLICC shares one core across every runtime ("float"). The browser is not just wh
 
 Once the product makes sense, the ice-cream language is easier to enjoy: it maps to real architecture, not just mascot energy.
 
-- **Cone** — the main agent you interact with. It holds the broad context, owns the overall workflow, and delegates work.
+- **Cone** — the main agent you interact with. It holds the broad context, owns the overall workflow, and delegates work. You can run several: the **Cones** section of the left rail adds a named cone, switches between them, and removes one (together with its scoops). The original cone stays the default for licks and the freezer.
 - **Scoops** — isolated sub-agents with their own filesystem sandbox, shell, and conversation history.
 - **Licks** — external events that wake an agent up: webhooks, cron jobs, and other signals from the outside world.
 - **Floats** — normal engineers would call it runtimes, but would normal engineers have come up with this?
