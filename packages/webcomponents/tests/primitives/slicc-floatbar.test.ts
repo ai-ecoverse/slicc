@@ -588,6 +588,57 @@ describe('slicc-floatbar', () => {
       expect(hud.shadowRoot?.textContent).toContain('CLI · build-box');
     });
 
+    it('keeps an open HUD open — and refreshes it — when the roster changes', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      const segment = el.shadowRoot?.querySelector('.followers') as HTMLElement;
+      segment.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      expect(el.shadowRoot?.querySelector('slicc-follower-hud')?.hasAttribute('open')).toBe(true);
+
+      // A follower connects while the cursor is on the segment.
+      el.followers = [
+        ...rows(),
+        {
+          id: 'follower-new',
+          icon: 'monitor',
+          title: 'Standalone · fresh',
+          state: 'active' as const,
+          stateText: 'connected 1s',
+        },
+      ];
+
+      const hud = el.shadowRoot?.querySelector('slicc-follower-hud') as SliccFollowerHud;
+      expect(hud).not.toBeNull();
+      expect(hud.hasAttribute('open')).toBe(true);
+      expect(hud.rows).toHaveLength(3);
+      expect(hud.shadowRoot?.textContent).toContain('Standalone · fresh');
+      expect(el.shadowRoot?.querySelector('.followers')?.textContent).toContain('3');
+    });
+
+    it('drops the HUD when the last follower leaves', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      const segment = el.shadowRoot?.querySelector('.followers') as HTMLElement;
+      segment.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      el.followers = [];
+      expect(el.shadowRoot?.querySelector('slicc-follower-hud')).toBeNull();
+    });
+
+    it('does not resurrect a closed HUD on a roster change', () => {
+      const el = document.createElement('slicc-floatbar') as SliccFloatbar;
+      document.body.appendChild(el);
+      el.followers = rows();
+      const segment = el.shadowRoot?.querySelector('.followers') as HTMLElement;
+      segment.dispatchEvent(new MouseEvent('mouseenter', { bubbles: true }));
+      (el.shadowRoot?.querySelector('slicc-follower-hud') as SliccFollowerHud).removeAttribute(
+        'open'
+      );
+      el.followers = [rows()[0]];
+      expect(el.shadowRoot?.querySelector('slicc-follower-hud')).toBeNull();
+    });
+
     it('emits a composed slicc-followers-click on activation', () => {
       const el = document.createElement('slicc-floatbar') as SliccFloatbar;
       document.body.appendChild(el);

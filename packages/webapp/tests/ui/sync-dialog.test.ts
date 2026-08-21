@@ -64,6 +64,10 @@ const iosFollower: ConnectedFollowerInfo = {
 };
 
 beforeEach(() => {
+  // Close (don't just detach) any dialog a previous test left up: the module
+  // tracks the live instance so it can tear down its listeners on re-open, and
+  // `replaceChildren` alone would leave that state pointing at a dead dialog.
+  document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
   document.body.replaceChildren();
   mockedCopy.mockReset();
   mockedCopy.mockResolvedValue(true);
@@ -216,6 +220,46 @@ describe('showSyncEnabledDialog', () => {
       window.dispatchEvent(new CustomEvent(FOLLOWERS_CHANGED_EVENT, { detail: { followers: [] } }));
       expect(tabIds()).toEqual(['browser', 'iphone', 'terminal']);
       expect(activeTab()).toBe('browser');
+    });
+
+    it('re-opening tears the previous instance down — no orphaned roster listener', () => {
+      // The leak is invisible in the DOM (an orphaned instance re-renders into
+      // its own detached tree), so count the registrations instead: every
+      // roster listener a dialog adds must come back off.
+      const added = vi.spyOn(window, 'addEventListener');
+      const removed = vi.spyOn(window, 'removeEventListener');
+      // The DOM lib types `type` against the ambient global's event map, which
+      // knows nothing of our custom event name — compare as plain strings.
+      const countFor = (spy: typeof added) =>
+        spy.mock.calls.filter(([type]) => String(type) === FOLLOWERS_CHANGED_EVENT).length;
+
+      showSyncEnabledDialog({ joinUrl: JOIN_URL, copied: false });
+      const addedAfterFirst = countFor(added);
+      const removedAfterFirst = countFor(removed);
+
+      // Re-open, the way the avatar menu and the floatbar segment can in turn.
+      showSyncEnabledDialog({ joinUrl: JOIN_URL, copied: false, initialTab: 'terminal' });
+      expect(document.querySelectorAll('.dialog-overlay[data-sync-dialog]')).toHaveLength(1);
+      expect(countFor(added) - addedAfterFirst).toBe(1);
+      // The first instance's listener came off when the second replaced it.
+      expect(countFor(removed) - removedAfterFirst).toBe(1);
+
+      buttonByText(/^Done$/).click();
+      expect(countFor(removed) - removedAfterFirst).toBe(2);
+
+      window.dispatchEvent(
+        new CustomEvent(FOLLOWERS_CHANGED_EVENT, { detail: { followers: [cliFollower] } })
+      );
+      expect(document.querySelector('[data-follower]')).toBeNull();
+      added.mockRestore();
+      removed.mockRestore();
+    });
+
+    it('a re-opened dialog still closes on Escape (its listener is the live one)', () => {
+      showSyncEnabledDialog({ joinUrl: JOIN_URL, copied: false });
+      showSyncEnabledDialog({ joinUrl: JOIN_URL, copied: false });
+      document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }));
+      expect(overlayEl()).toBeNull();
     });
 
     it('stops listening for roster changes once closed', () => {

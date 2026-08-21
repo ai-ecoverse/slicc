@@ -434,7 +434,20 @@ function buildShell(options: SyncEnabledDialogOptions): SyncDialogCtx {
   };
 }
 
+/**
+ * Teardown for the dialog currently on screen, if any. Removing the overlay
+ * NODE is not enough: the live instance also holds a `FOLLOWERS_CHANGED_EVENT`
+ * window listener and a `keydown` document listener, and both re-open paths
+ * (the avatar menu's tray-copy and the floatbar's followers segment) can fire
+ * while a dialog is already up. Without this, each re-open leaves the previous
+ * instance listening forever and re-rendering into a detached tree.
+ */
+let closeActiveDialog: (() => void) | null = null;
+
 export function showSyncEnabledDialog(options: SyncEnabledDialogOptions): void {
+  closeActiveDialog?.();
+  // Belt and braces: an overlay from an instance whose closer was lost (a hot
+  // reload, an older build) still gets cleared.
   document.querySelectorAll('.dialog-overlay[data-sync-dialog]').forEach((node) => {
     node.remove();
   });
@@ -465,6 +478,7 @@ export function showSyncEnabledDialog(options: SyncEnabledDialogOptions): void {
     window.removeEventListener(FOLLOWERS_CHANGED_EVENT, onFollowersChanged);
     document.removeEventListener('keydown', onKeydown);
     ctx.overlay.remove();
+    if (closeActiveDialog === close) closeActiveDialog = null;
   }
 
   ctx.doneBtn.addEventListener('click', () => close());
@@ -474,6 +488,7 @@ export function showSyncEnabledDialog(options: SyncEnabledDialogOptions): void {
   window.addEventListener(FOLLOWERS_CHANGED_EVENT, onFollowersChanged);
   document.addEventListener('keydown', onKeydown);
 
+  closeActiveDialog = close;
   if (options.copied) setStatus(ctx, 'Join link copied to clipboard.');
   render(ctx);
   document.body.appendChild(ctx.overlay);

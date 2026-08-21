@@ -323,8 +323,11 @@ export class SliccFloatbar extends HTMLElement {
     this.#followers = value;
     if (value.length > 0) this.setAttribute('follower-count', String(value.length));
     else this.removeAttribute('follower-count');
-    if (this.#followerHud) this.#followerHud.rows = value;
+    // `#render()` carries an OPEN hud across the rebuild and refreshes its rows
+    // (see `#render`), so a follower connecting or leaving updates the card
+    // under the cursor instead of yanking it away mid-read.
     if (this.isConnected) this.#render();
+    else if (this.#followerHud) this.#followerHud.rows = value;
   }
 
   get costScoops(): CostOverlayScoop[] {
@@ -397,9 +400,23 @@ export class SliccFloatbar extends HTMLElement {
 
     nodes.push(h('span', { class: 'tip', part: 'tip', 'aria-hidden': 'true' }, this.#tipText()));
 
+    // `replaceChildren` drops every existing child, including an open overlay
+    // or hud. The cost overlay is rebuilt on next hover, but the follower hud
+    // re-renders on every roster change — the one moment the user is most
+    // likely to be hovering it — so an OPEN hud is carried across the rebuild
+    // with fresh rows rather than torn down. A closed one is discarded as
+    // before; it costs nothing to rebuild on the next hover.
+    const openHud =
+      this.#followerHud?.hasAttribute('open') && this.#followers.length > 0
+        ? this.#followerHud
+        : null;
     this.#overlay = null;
-    this.#followerHud = null;
+    this.#followerHud = openHud;
     this.#root.replaceChildren(...nodes);
+    if (openHud) {
+      openHud.rows = this.#followers;
+      this.#root.appendChild(openHud);
+    }
     this.#syncTitle();
   }
 
