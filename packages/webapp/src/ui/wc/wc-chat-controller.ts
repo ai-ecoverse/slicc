@@ -20,6 +20,8 @@ import { type DipInstance, mountDip } from '../dip.js';
 import type { AgentEvent, AgentHandle, ChatMessage, ToolCall } from '../types.js';
 import { createCopyRow } from './wc-copy-row.js';
 import {
+  aggregateClusterProgress,
+  applyClusterProgress,
   applyToolProgress,
   collateLickMessages,
   daySeparatorEl,
@@ -1065,8 +1067,26 @@ export class WcChatController {
     const row = this.#thread.querySelector<HTMLElement>(
       `slicc-action-row[data-tool-id="${CSS.escape(toolCallId)}"]`
     );
-    if (!row) return;
-    applyToolProgress(row, this.#toolProgress.get(toolCallId) ?? null);
+    if (row) applyToolProgress(row, this.#toolProgress.get(toolCallId) ?? null);
+    // Three-plus tool calls collapse into a <slicc-tool-cluster> whose rows
+    // are hidden; mirror the aggregate onto the visible cluster head.
+    this.#refreshClusterProgress();
+  }
+
+  /**
+   * Recompute each tool cluster's head treatment from the live progress of
+   * the rows it wraps (rows are hidden while collapsed). Cheap — a handful of
+   * clusters, each with a few rows — and idempotent, so it also covers the
+   * post-reflow reapply.
+   */
+  #refreshClusterProgress(): void {
+    const clusters = this.#thread.querySelectorAll<HTMLElement>('slicc-tool-cluster');
+    for (const cluster of clusters) {
+      const units = [...cluster.querySelectorAll<HTMLElement>('slicc-action-row[data-tool-id]')]
+        .map((r) => (r.dataset.toolId ? this.#toolProgress.get(r.dataset.toolId) : undefined))
+        .filter((u): u is ToolProgressEvent => u !== undefined);
+      applyClusterProgress(cluster, aggregateClusterProgress(units));
+    }
   }
 
   /**
@@ -1223,6 +1243,8 @@ export class WcChatController {
       if (call.id && this.#toolProgress.has(call.id)) this.#applyToolProgress(call.id);
     }
     this.#reflowToolClusters();
+    // Reflow may have (re)built the clusters around those rows — repaint heads.
+    this.#refreshClusterProgress();
     if (!message.isStreaming) this.#onMessageRendered?.(message, next);
     this.#followThread();
   }

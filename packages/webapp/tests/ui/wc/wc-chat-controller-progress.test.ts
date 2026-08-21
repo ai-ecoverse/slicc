@@ -139,6 +139,39 @@ describe('WcChatController tool_progress handling', () => {
     expect(ring.at(-1)).toBeCloseTo(0.4);
   });
 
+  it('propagates progress onto a tool cluster head once 3+ calls collapse', () => {
+    // beforeEach already started one bash call; two more collapse into a cluster.
+    for (let i = 0; i < 2; i++) {
+      agent.emit({
+        type: 'tool_use_start',
+        messageId: 'm1',
+        toolName: 'bash',
+        toolInput: { command: `echo ${i}` },
+      });
+    }
+    const cluster = thread.querySelector<HTMLElement>('slicc-tool-cluster');
+    expect(cluster).not.toBeNull();
+    expect(cluster?.querySelectorAll('slicc-action-row[data-tool-id]')).toHaveLength(3);
+
+    // Drive the most recent in-flight bash call (the controller resolves the id).
+    emit(progress({ fraction: 0.6 }));
+    const head = cluster?.querySelector('.slicc-cluster__head');
+    expect(cluster?.getAttribute('data-progress')).toBe('determinate');
+    expect(head?.querySelectorAll('.wcmsg-dots__dot')).toHaveLength(3);
+    // One of three rows running at 0.6 → cluster mean is 0.6 (in-flight units only).
+    expect(cluster?.style.getPropertyValue('--slicc-progress')).toBe('0.6');
+    expect(cluster?.getAttribute('title')).toContain('1 running');
+    // The cluster keeps its "3 steps" count alongside the dots.
+    expect(cluster?.querySelector('.slicc-cluster__count')?.textContent).toContain('3');
+
+    // Finishing that call clears the cluster treatment. (tool_result rerenders
+    // the message, so the cluster element is rebuilt — re-query it.)
+    agent.emit({ type: 'tool_result', messageId: 'm1', toolName: 'bash', result: 'done' });
+    const after = thread.querySelector<HTMLElement>('slicc-tool-cluster');
+    expect(after?.hasAttribute('data-progress')).toBe(false);
+    expect(after?.querySelector('.slicc-cluster__head .wcmsg-dots')).toBeNull();
+  });
+
   it('ignores progress for an unknown message or a tool with no in-flight call', () => {
     agent.emit({
       type: 'tool_progress',

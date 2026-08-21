@@ -373,10 +373,12 @@ const WCMSG_CSS = [
   // 2. the result badge becomes three dots, one per third — done dots solid,
   //    the active one blinking, the rest faded;
   // 3. an open dark terminal body wears a 3px top-border bar.
-  'slicc-action-row[data-progress] .slicc-act__ic{background:linear-gradient(to top,',
+  'slicc-action-row[data-progress] .slicc-act__ic,slicc-tool-cluster[data-progress] .slicc-cluster__ic{',
+  'background:linear-gradient(to top,',
   'var(--slicc-progress-ink,var(--accent)) calc(var(--slicc-progress,0)*100%),',
   'color-mix(in srgb,var(--slicc-progress-ink,var(--accent)) 30%,transparent) 0);}',
-  'slicc-action-row[data-progress="indeterminate"] .slicc-act__ic{',
+  'slicc-action-row[data-progress="indeterminate"] .slicc-act__ic,',
+  'slicc-tool-cluster[data-progress="indeterminate"] .slicc-cluster__ic{',
   'animation:wcmsg-progress-breathe 1.6s ease-in-out infinite;}',
   '@keyframes wcmsg-progress-breathe{0%,100%{opacity:.45}50%{opacity:1}}',
   '.wcmsg-dots{margin-left:auto;display:inline-flex;gap:4px;align-items:center;',
@@ -389,16 +391,24 @@ const WCMSG_CSS = [
   '.wcmsg-dots--indeterminate .wcmsg-dots__dot:nth-child(3){animation-delay:.4s}',
   '@keyframes wcmsg-progress-blink{0%,100%{opacity:1}50%{opacity:.25}}',
   'slicc-action-row[data-progress] .slicc-act__head .slicc-act__badge{display:none;}',
-  'slicc-action-row[data-progress] .slicc-act__body{position:relative;overflow:hidden;}',
-  'slicc-action-row[data-progress] .slicc-act__body::before{content:"";position:absolute;',
+  // The cluster keeps its "N steps" count; the dots sit just before it.
+  'slicc-tool-cluster[data-progress] .wcmsg-dots{margin-left:auto;}',
+  'slicc-tool-cluster[data-progress] .slicc-cluster__count{margin-left:8px;}',
+  'slicc-action-row[data-progress] .slicc-act__body,slicc-tool-cluster[data-progress] .slicc-cluster__body{',
+  'position:relative;overflow:hidden;}',
+  'slicc-action-row[data-progress] .slicc-act__body::before,',
+  'slicc-tool-cluster[data-progress] .slicc-cluster__body::before{content:"";position:absolute;',
   'top:0;left:0;height:3px;width:calc(var(--slicc-progress,0)*100%);',
-  'background:var(--slicc-progress-ink,var(--accent));transition:width .25s linear;}',
+  'background:var(--slicc-progress-ink,var(--accent));transition:width .25s linear;z-index:1;}',
   'slicc-action-row[data-progress] .slicc-act__body:has(> .wcmsg-bash)::before{background:#9ad17e;}',
-  'slicc-action-row[data-progress="indeterminate"] .slicc-act__body::before{width:30%;',
+  'slicc-action-row[data-progress="indeterminate"] .slicc-act__body::before,',
+  'slicc-tool-cluster[data-progress="indeterminate"] .slicc-cluster__body::before{width:30%;',
   'animation:wcmsg-progress-slide 1.2s ease-in-out infinite;}',
   '@keyframes wcmsg-progress-slide{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}',
-  '@media (prefers-reduced-motion:reduce){.wcmsg-dots__dot,slicc-action-row[data-progress] .slicc-act__ic,',
-  'slicc-action-row[data-progress] .slicc-act__body::before{animation:none!important;}}',
+  '@media (prefers-reduced-motion:reduce){.wcmsg-dots__dot,',
+  'slicc-action-row[data-progress] .slicc-act__ic,slicc-tool-cluster[data-progress] .slicc-cluster__ic,',
+  'slicc-action-row[data-progress] .slicc-act__body::before,',
+  'slicc-tool-cluster[data-progress] .slicc-cluster__body::before{animation:none!important;}}',
 ].join('');
 
 function ensureWcmsgStyle(): void {
@@ -450,36 +460,59 @@ function progressTitle(unit: ToolProgressEvent, fraction: number | undefined): s
   return tail.length ? `${parts.join(' · ')} — ${tail.join(', ')}` : parts.join(' · ');
 }
 
+/** Class names of the container-specific chrome the treatment paints onto. */
+interface ProgressChrome {
+  head: string;
+  chev: string;
+  /** Selector for the element the dots sit before (chevron, or a count badge). */
+  dotsBefore: string;
+}
+const ROW_CHROME: ProgressChrome = {
+  head: 'slicc-act__head',
+  chev: 'slicc-act__chev',
+  dotsBefore: '.slicc-act__chev',
+};
+const CLUSTER_CHROME: ProgressChrome = {
+  head: 'slicc-cluster__head',
+  chev: 'slicc-cluster__chev',
+  // Keep the "N steps" count; the dots slot in just before it.
+  dotsBefore: '.slicc-cluster__count',
+};
+
 /**
- * Apply (or clear, with `null`) the progress treatment for a tool row: the
- * icon fill, the three-dot badge and the body top bar all read the same
- * `--slicc-progress` custom property + `data-progress` state, so this only
- * sets those and upserts the dots. Idempotent; safe after a row rebuild.
+ * Apply (or clear, with `null`) the progress treatment to a tool row OR a
+ * tool cluster: the icon fill, the three-dot badge and the body top bar all
+ * read the same `--slicc-progress` custom property + `data-progress` state,
+ * so this only sets those and upserts the dots. Idempotent; safe after a
+ * rebuild. `chrome` selects which container's class names to target.
  */
-export function applyToolProgress(row: HTMLElement, unit: ToolProgressEvent | null): void {
+function applyProgressTreatment(
+  host: HTMLElement,
+  unit: ToolProgressEvent | null,
+  chrome: ProgressChrome
+): void {
   ensureWcmsgStyle();
-  const head = row.querySelector<HTMLElement>(':scope > .slicc-act__head');
+  const head = host.querySelector<HTMLElement>(`:scope > .${chrome.head}`);
   const existing = head?.querySelector<HTMLElement>(`:scope > .${DOTS_CLASS}`) ?? null;
   if (!unit || unit.phase === 'end') {
-    row.removeAttribute(PROGRESS_ATTR);
-    row.style.removeProperty('--slicc-progress');
-    row.removeAttribute('title');
+    host.removeAttribute(PROGRESS_ATTR);
+    host.style.removeProperty('--slicc-progress');
+    host.removeAttribute('title');
     existing?.remove();
     return;
   }
   const determinate = typeof unit.fraction === 'number' && Number.isFinite(unit.fraction);
   const fraction = determinate ? Math.min(1, Math.max(0, unit.fraction as number)) : undefined;
-  row.setAttribute(PROGRESS_ATTR, determinate ? 'determinate' : 'indeterminate');
-  row.style.setProperty('--slicc-progress', fraction === undefined ? '0' : String(fraction));
-  row.setAttribute('title', progressTitle(unit, fraction));
+  host.setAttribute(PROGRESS_ATTR, determinate ? 'determinate' : 'indeterminate');
+  host.style.setProperty('--slicc-progress', fraction === undefined ? '0' : String(fraction));
+  host.setAttribute('title', progressTitle(unit, fraction));
   if (!head) return;
   let dots = existing;
   if (!dots) {
     dots = el('span', { class: DOTS_CLASS, role: 'progressbar', 'aria-label': unit.label });
     for (let i = 0; i < DOT_COUNT; i++) dots.append(el('span', { class: 'wcmsg-dots__dot' }));
-    // Before the chevron, where the "…" badge sits.
-    const chevron = head.querySelector(':scope > .slicc-act__chev');
-    if (chevron) head.insertBefore(dots, chevron);
+    const anchor = head.querySelector(`:scope > ${chrome.dotsBefore}`);
+    if (anchor) head.insertBefore(dots, anchor);
     else head.append(dots);
   }
   dots.classList.toggle(`${DOTS_CLASS}--indeterminate`, fraction === undefined);
@@ -498,6 +531,45 @@ export function applyToolProgress(row: HTMLElement, unit: ToolProgressEvent | nu
     dot.classList.toggle('is-done', fraction !== undefined && (i < active || fraction >= 1));
     dot.classList.toggle('is-active', fraction !== undefined && fraction < 1 && i === active);
   });
+}
+
+/** Progress treatment for a single tool row. */
+export function applyToolProgress(row: HTMLElement, unit: ToolProgressEvent | null): void {
+  applyProgressTreatment(row, unit, ROW_CHROME);
+}
+
+/** Progress treatment for a `<slicc-tool-cluster>` summary head. */
+export function applyClusterProgress(cluster: HTMLElement, unit: ToolProgressEvent | null): void {
+  applyProgressTreatment(cluster, unit, CLUSTER_CHROME);
+}
+
+/**
+ * Fold several in-flight tool-call units into one synthetic unit for a
+ * cluster head: determinate (mean fraction) only when EVERY unit is
+ * determinate — one unknown child makes the whole cluster indeterminate —
+ * with the longest child ETA. `null` when nothing is running.
+ */
+export function aggregateClusterProgress(
+  units: readonly ToolProgressEvent[]
+): ToolProgressEvent | null {
+  if (units.length === 0) return null;
+  const fractions = units.map((u) => u.fraction);
+  const determinate = fractions.every((f) => typeof f === 'number' && Number.isFinite(f));
+  const fraction = determinate
+    ? (fractions as number[]).reduce((a, b) => a + b, 0) / fractions.length
+    : undefined;
+  const etaMs = units.reduce<number | undefined>((max, u) => {
+    if (u.etaMs === undefined) return max;
+    return max === undefined ? u.etaMs : Math.max(max, u.etaMs);
+  }, undefined);
+  return {
+    id: 'cluster',
+    label: `${units.length} running`,
+    fraction,
+    etaMs,
+    unit: 'iterations',
+    phase: 'update',
+  };
 }
 
 function precedingTextLine(text: string): string | null {
