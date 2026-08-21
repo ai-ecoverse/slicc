@@ -13,6 +13,7 @@
 
 import type { AssistantMessage } from '../core/types.js';
 import type { ScoopCostData } from '../shell/supplemental-commands/cost-command.js';
+import { isRootUnit } from '../work-unit/policy.js';
 import type { ScoopContext } from './scoop-context.js';
 import type { RegisteredScoop } from './types.js';
 
@@ -107,7 +108,7 @@ export function buildScoopCost(
 
   return {
     name: scoop.assistantLabel,
-    type: scoop.isCone ? 'cone' : 'scoop',
+    type: isRootUnit(scoop) ? 'cone' : 'scoop',
     model: topModel,
     models: [...modelCosts.entries()]
       .sort(([, costA], [, costB]) => costB - costA)

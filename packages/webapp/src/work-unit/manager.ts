@@ -132,9 +132,16 @@ export class WorkUnitManager {
     return runtime ? runtime.abort(reason) : Promise.resolve();
   }
 
+  /**
+   * Close a unit and, first, everything it owns. A parent never outlives its
+   * children's teardown, and closing root A never touches root B's subtree.
+   */
   async close(id: WorkUnitId): Promise<void> {
     const runtime = this.get(id);
     if (!runtime) return;
+    for (const child of this.getChildren(id)) {
+      await this.close(child.descriptor.id);
+    }
     await runtime.close();
     this.runtimes.delete(id);
   }

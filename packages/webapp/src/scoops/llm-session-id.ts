@@ -118,7 +118,7 @@ export async function getAdobeSessionId(
 ): Promise<string> {
   const anchor = coneJid ?? scoop.jid;
   const uuid = getDailyAdobeUuid(anchor);
-  if (scoop.isCone) return uuid;
+  if (scoop.parentJid === null) return uuid;
   const folderHash = await hashFolder(scoop.folder, uuid);
   return `${uuid}/${folderHash}`;
 }

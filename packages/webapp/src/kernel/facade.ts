@@ -27,6 +27,8 @@ import {
 import type { FollowerSyncManager } from '../scoops/tray-follower-sync.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 import { TOOL_UI_MOUNTED_ACTION, toolUIRegistry } from '../tools/tool-ui.js';
+import { rootsOf } from '../work-unit/policy.js';
+import { chatSessionIdFor, sourceLabelFor } from '../work-unit/record.js';
 import { AgentEventStream } from './facade/agent-event-stream.js';
 import { ScoopPresentation } from './facade/scoop-presentation.js';
 import { buildTrayRuntimeSnapshot } from './facade/tray-runtime.js';
@@ -453,8 +455,8 @@ export class Bridge implements KernelFacade {
     // dead ephemeral scoops otherwise pile up in the
     // `browser-coding-agent` store. The cone never unregisters, but
     // guard anyway: its session must survive.
-    if (!scoop.isCone && this.sessionStore) {
-      this.sessionStore.delete(`session-${scoop.folder}`).catch((err) => {
+    if (scoop.parentJid !== null && this.sessionStore) {
+      this.sessionStore.delete(chatSessionIdFor(scoop)).catch((err) => {
         console.warn(
           '[kernel-bridge] Failed to delete session for unregistered scoop:',
           scoop.folder,
@@ -657,7 +659,7 @@ export class Bridge implements KernelFacade {
         )
       : undefined;
     if (!target) {
-      target = scoops.find((s) => s.isCone);
+      target = rootsOf(scoops)[0];
     }
     if (!target) return;
     const msgId = `sprinkle-${sprinkleName}-${Date.now()}`;
@@ -700,7 +702,7 @@ export class Bridge implements KernelFacade {
    */
   applyFollowerSnapshot(messages: ChatMessage[]): void {
     if (!this.orchestrator) return;
-    const cone = this.orchestrator.getScoops().find((s) => s.isCone);
+    const cone = rootsOf(this.orchestrator.getScoops())[0];
     if (!cone) return;
     const buf = messages.map((m) => ({
       id: m.id,
@@ -725,7 +727,7 @@ export class Bridge implements KernelFacade {
     this.currentMessageId.delete(cone.jid);
     this.agentEventStream.clear(cone.jid);
     if (this.sessionStore) {
-      const sessionId = cone.isCone ? 'session-cone' : `session-${cone.folder}`;
+      const sessionId = chatSessionIdFor(cone);
       this.sessionStore.saveMessages(sessionId, messages).catch((err) => {
         log.error('applyFollowerSnapshot persist failed', {
           error: err instanceof Error ? err.message : String(err),
@@ -741,7 +743,7 @@ export class Bridge implements KernelFacade {
 
   /** Resolve the local cone scoop's jid (panel-known), if any. */
   getConeJid(): string | null {
-    return this.orchestrator?.getScoops().find((s) => s.isCone)?.jid ?? null;
+    return this.orchestrator ? (rootsOf(this.orchestrator.getScoops())[0]?.jid ?? null) : null;
   }
 
   /** Bridge follower-side AgentEvents into panel-bound agent-event messages. */
@@ -837,7 +839,7 @@ export class Bridge implements KernelFacade {
     if (agentMessages.length === 0) return null;
     const { agentMessagesToChatMessages } = await import('../scoops/agent-message-to-chat.js');
     const chatMessages = agentMessagesToChatMessages(agentMessages, {
-      source: scoop.isCone ? 'cone' : (scoop.name ?? scoop.folder),
+      source: sourceLabelFor(scoop),
     });
     return chatMessages.map((m) => ({
       id: m.id,
@@ -952,7 +954,7 @@ export class Bridge implements KernelFacade {
     // the new entries, reintroducing the truncation race this
     // handler exists to prevent.
     if (this.sessionStore) {
-      const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+      const sessionId = chatSessionIdFor(scoop);
       try {
         const session = await this.sessionStore.load(sessionId);
         const messages = session?.messages ?? [];
@@ -1123,7 +1125,7 @@ export class Bridge implements KernelFacade {
       const agentMessages = context.getAgentMessages();
       if (agentMessages.length > 0) {
         const chatMessages = agentMessagesToChatMessages(agentMessages, {
-          source: scoop.isCone ? 'cone' : (scoop.name ?? scoop.folder),
+          source: sourceLabelFor(scoop),
         });
         this.emit({
           type: 'scoop-transcript',
@@ -1170,7 +1172,7 @@ export class Bridge implements KernelFacade {
     }
 
     if (this.sessionStore) {
-      const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+      const sessionId = chatSessionIdFor(scoop);
       try {
         const session = await this.sessionStore.load(sessionId);
         const messages = session?.messages ?? [];
@@ -1212,7 +1214,7 @@ export class Bridge implements KernelFacade {
     if (!this.sessionStore || !this.orchestrator) return;
     const scoop = this.orchestrator.getScoops().find((s) => s.jid === jid);
     if (!scoop) return;
-    const sessionId = scoop.isCone ? 'session-cone' : `session-${scoop.folder}`;
+    const sessionId = chatSessionIdFor(scoop);
     const buf = this.messageBuffers.get(jid);
     if (!buf || buf.length === 0) return;
     try {
@@ -1251,7 +1253,7 @@ export class Bridge implements KernelFacade {
 
     const scoops = this.orchestrator?.getScoops() ?? [];
     const scoop = scoops.find((s) => s.jid === jid);
-    const source = scoop?.isCone ? 'cone' : (scoop?.name ?? 'unknown');
+    const source = scoop ? sourceLabelFor(scoop) : 'unknown';
 
     const msg: BufferedChatMessage = {
       id: msgId,
@@ -1644,7 +1646,7 @@ export class Bridge implements KernelFacade {
     this.agentEventStream.clear(scoopJid);
     this.scoopPresentation.clearStatus(scoopJid);
     if (droppedScoop && this.sessionStore) {
-      const sessionId = droppedScoop.isCone ? 'session-cone' : `session-${droppedScoop.folder}`;
+      const sessionId = chatSessionIdFor(droppedScoop);
       this.sessionStore.delete(sessionId).catch((err) => {
         console.warn('[kernel-bridge] Failed to delete session on scoop drop:', sessionId, err);
       });
@@ -1661,7 +1663,7 @@ export class Bridge implements KernelFacade {
    * reload.
    */
   private async handleClearChat(requestId: string): Promise<void> {
-    const coneJid = this.orchestrator?.getScoops().find((s) => s.isCone)?.jid;
+    const coneJid = this.getConeJid() ?? undefined;
     if (coneJid) {
       await this.orchestrator?.clearScoopMessages(coneJid);
     }

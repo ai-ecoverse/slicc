@@ -58,7 +58,7 @@ function makeCollectionDeps(): TranscriptCollectionDeps {
             isCone: true,
             name: 'Sliccy',
             folder: undefined,
-            parentJid: undefined,
+            parentJid: null,
             originToolCallId: undefined,
           },
         ] as any

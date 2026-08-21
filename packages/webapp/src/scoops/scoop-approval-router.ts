@@ -33,8 +33,13 @@ import type { ChannelMessage, RegisteredScoop } from './types.js';
 const log = createLogger('scoop-approval-router');
 
 export interface ScoopApprovalRouterDeps {
-  /** Live snapshot of registered scoops; the router reads `isCone`, `assistantLabel`, `folder`, `name`. */
+  /** Live snapshot of registered scoops; the router reads `parentJid`, `assistantLabel`, `folder`, `name`. */
   getScoops(): Map<string, RegisteredScoop>;
+  /**
+   * The unit that settles approvals for `scoopJid` — its parent, or the
+   * default root when the parent is gone / `scoopJid` is unknown (#1666).
+   */
+  findApprover(scoopJid: string | undefined): RegisteredScoop | undefined;
   /** Live SudoManager (or null before init / after shutdown). The `'always'` path writes a NOPASSWD rule via this sink. */
   getSudoManager(): SudoManager | null;
   /** Live LickManager (or null before wiring). Used to emit the `'sudo-request'` UI chip. */
@@ -116,9 +121,9 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
 
   async enqueueSudoRequest(scoopJid: string, request: SudoRequest): Promise<SudoDecision> {
     const scoops = this.deps.getScoops();
-    const cone = Array.from(scoops.values()).find((s) => s.isCone);
+    const cone = this.deps.findApprover(scoopJid);
     if (!cone) {
-      log.warn('Sudo request received but no cone is registered — failing closed', {
+      log.warn('Sudo request received but no approver is registered — failing closed', {
         scoopJid,
         kind: request.kind,
       });
@@ -233,7 +238,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     let persistedPattern: string | undefined;
     let persistError: string | undefined;
 
-    if (decision.decision === 'always' && sudoManager && scoop && !scoop.isCone) {
+    if (decision.decision === 'always' && sudoManager && scoop && scoop.parentJid !== null) {
       if (kind === 'command' || kind === 'read' || kind === 'write') {
         const raw =
           decision.pattern?.trim() ||
@@ -272,7 +277,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
    */
   async persistLickDecision(lickId: string, decision: SudoDecision['decision']): Promise<void> {
     const lickState = decision === 'deny' ? 'dismissed' : 'confirmed';
-    const cone = Array.from(this.deps.getScoops().values()).find((s) => s.isCone);
+    const cone = this.deps.findApprover(this.registry.get(lickId)?.scoopJid);
     if (!cone) return;
     try {
       const messages = await this.deps.getMessagesForScoop(cone.jid);

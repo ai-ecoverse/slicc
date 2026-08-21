@@ -50,7 +50,9 @@ Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). Th
 | `descriptor.ts` | `toDescriptor(scoop, tab?)`, `workspaceFor` — pure projections                                                                                                            |
 | `runtime.ts`    | `WorkUnitRuntime` contract + `ScoopContextWorkUnit`, the Phase 1 adapter over `ScoopContext` / `ScoopLifecycleManager`                                                    |
 | `live-unit.ts`  | `LiveWorkUnit` — the owning runtime: holds the `ScoopContext`, tab record and observer set; `transition()` enforces `LEGAL_TRANSITIONS`; `close()` is the single teardown |
+| `record.ts`     | `normalizeScoopRecord` (derives `isCone`/`type` from the edge on register/restore), `chatSessionIdFor`, `processOwnerKindFor`, `sourceLabelFor`                           |
 | `live-unit.ts`  | `LiveWorkUnit` — the owning runtime: holds the `ScoopContext`, tab record and observer set; `transition()` enforces `LEGAL_TRANSITIONS`; `close()` is the single teardown |
+| `record.ts`     | `normalizeScoopRecord` (derives `isCone`/`type` from the edge on register/restore), `chatSessionIdFor`, `processOwnerKindFor`, `sourceLabelFor`                           |
 | `manager.ts`    | `WorkUnitManager` — `create / list / get / getParent / getChildren / roots / rootOf / resolveDefaultRoot / abort / close`; exposed as `Orchestrator.getWorkUnits()`       |
 
 Tests: `packages/webapp/tests/work-unit/`. `conformance.ts` is a reusable suite any `WorkUnitRuntime` implementation must pass.
@@ -59,12 +61,21 @@ Tests: `packages/webapp/tests/work-unit/`. `conformance.ts` is a reusable suite 
 
 A strangler migration, each phase a separate PR with deletion criteria:
 
-| Phase | Scope                                                                                                                                                                                                                                                                                                     | Status                    |
-| ----- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| 1     | Types, required `parentJid` + restore backfill, adapter, manager facade, conformance tests. No behaviour change.                                                                                                                                                                                          | done                      |
-| 2     | Lifecycle ownership: `ScoopLifecycleManager` hosts one `LiveWorkUnit` per scoop (its context, tab, observers); `getContexts()` / `getTabsMap()` are derived views; `close()` is the single teardown; transitions tested as one state machine.                                                             | done                      |
-| 3     | Replace `isCone` with hierarchy and policy, one category at a time: filesystem, approvals, child tools, shared memory, completion, default-target routing, presentation. Add a CI ratchet that forbids new `isCone` reads outside presentation files. Prove two independent roots with children in tests. | planned                   |
-| 4–9   | `WorkUnitClient` for local/remote UI, one persistence store, `CapabilityBroker`, explicit workspace sharing modes, generic parallel APIs, deletion of legacy paths.                                                                                                                                       | deferred; separate issues |
+| Phase | Scope                                                                                                                                                                                                                                                                                                         | Status                    |
+| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| 1     | Types, required `parentJid` + restore backfill, adapter, manager facade, conformance tests. No behaviour change.                                                                                                                                                                                              | done                      |
+| 2     | Lifecycle ownership: `ScoopLifecycleManager` hosts one `LiveWorkUnit` per scoop (its context, tab, observers); `getContexts()` / `getTabsMap()` are derived views; `close()` is the single teardown; transitions tested as one state machine.                                                                 | done                      |
+| 3     | `isCone` replaced by hierarchy and policy in `scoops/` and `kernel/` (filesystem, approvals, child tools, shared memory, completion, default-target routing, presentation); `check-iscone-ratchet.mjs` forbids new reads outside `ui/`; two independent roots proven in `tests/work-unit/multi-root.test.ts`. | done                      |
+| 4–9   | `WorkUnitClient` for local/remote UI, one persistence store, `CapabilityBroker`, explicit workspace sharing modes, generic parallel APIs, deletion of legacy paths.                                                                                                                                           | deferred; separate issues |
+
+### Phase 3 detail
+
+- `ScoopContext` holds a `WorkUnitDescriptor` built once in its constructor and reads `unit.policy.*`, `unit.workspace.*`, `unit.completion.mode` and `unit.display.role` where it used to branch on `isCone` (filesystem reach, sudo wiring, memory paths, scratch dir, process owner, stale-asset resubmit, overflow escalation, system prompt).
+- `ScoopLifecycleManager` picks `VirtualFS` vs `RestrictedFS` from `policy.filesystem`, gates every privileged callback on the policy (`canCreateChildren`, `canManageChildren`, `canWriteSharedMemory`, `canResolveApprovals`, `approvalAuthority`), and routes fatal errors to the unit's parent.
+- Completion, idle notices and sudo requests take a `findParent` / `findApprover` dependency: the child's parent, falling back to the default (oldest) root when the parent is gone, so a delegated result always lands somewhere a user can see it.
+- Unaddressed events (licks, sprinkles, workflow completions, follower snapshots) resolve the default root through `rootsOf(...)[0]` / `WorkUnitManager.resolveDefaultRoot()`; `bootstrapCone` only seeds a root when none exists.
+- `normalizeScoopRecord` rewrites `isCone` / `type` from `parentJid` on register and restore; `ScoopPresentation` projects `isCone` for the wire from `isRootUnit`. UI code (`packages/webapp/src/ui/`) may still read the derived flag; `npm run lint:iscone-ratchet` fails on any new read elsewhere.
+- `WorkUnitManager.close(id)` cascades to the unit's children first; closing root A leaves root B's subtree untouched.
 
 ### Phase 2 detail
 
