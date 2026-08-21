@@ -180,3 +180,36 @@ describe('downloadHfRepo', () => {
     expect(await fs.readFile('/m/a.txt')).toBe('PRE');
   });
 });
+
+describe('HF_ENDPOINT override', () => {
+  it('builds every hub URL on the configured endpoint', async () => {
+    const fs = await newFs();
+    const recorder = { calls: [] as string[] };
+    const fetch = makeFetch({ 'a.txt': bytes('A') }, recorder);
+    await downloadHfRepo({
+      fetch,
+      fs,
+      repo: 'owner/name',
+      targetDir: '/m',
+      endpoint: 'http://127.0.0.1:8791/',
+    });
+    expect(recorder.calls.length).toBeGreaterThan(0);
+    for (const url of recorder.calls) {
+      expect(url.startsWith('http://127.0.0.1:8791/')).toBe(true);
+    }
+    expect(recorder.calls.some((c) => c.includes('/api/models/owner/name/tree/main'))).toBe(true);
+    expect(recorder.calls.some((c) => c.endsWith('/owner/name/resolve/main/a.txt'))).toBe(true);
+  });
+
+  it('normalizes endpoints and falls back to huggingface.co for junk', async () => {
+    const { DEFAULT_HF_ENDPOINT, resolveHfEndpoint } = await import(
+      '../../../src/shell/supplemental-commands/hf-download.js'
+    );
+    expect(resolveHfEndpoint(undefined)).toBe(DEFAULT_HF_ENDPOINT);
+    expect(resolveHfEndpoint('  ')).toBe(DEFAULT_HF_ENDPOINT);
+    expect(resolveHfEndpoint('http://127.0.0.1:8791/')).toBe('http://127.0.0.1:8791');
+    expect(resolveHfEndpoint('https://mirror.example/hf/')).toBe('https://mirror.example/hf');
+    expect(resolveHfEndpoint('ftp://nope')).toBe(DEFAULT_HF_ENDPOINT);
+    expect(resolveHfEndpoint('not a url')).toBe(DEFAULT_HF_ENDPOINT);
+  });
+});

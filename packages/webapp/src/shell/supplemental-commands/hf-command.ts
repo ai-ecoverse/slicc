@@ -145,6 +145,9 @@ async function runDownload(
       files: parsed.files,
       revision: parsed.revision,
       force: parsed.force,
+      // `HF_ENDPOINT` (Hugging Face's own convention) points the download at
+      // a mirror — CI uses it for a disk-cached local one.
+      endpoint: ctx.env.get('HF_ENDPOINT'),
       progress: {
         onListed: ({ files }) => {
           stderr += `hf: ${files.length} file(s) listed in ${parsed.repo}@${parsed.revision}\n`;
