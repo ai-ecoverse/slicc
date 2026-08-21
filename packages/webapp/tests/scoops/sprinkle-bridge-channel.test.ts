@@ -186,6 +186,24 @@ describe('sprinkle bridge channel', () => {
     stop();
   });
 
+  it('awaits a promise-returning manager instead of postMessaging the promise', async () => {
+    // `SprinkleManagerHandle.sendToSprinkle` is typed
+    // `SprinkleSendReport | Promise<SprinkleSendReport>`. `respond` goes
+    // through `postMessage`, so handing it a promise throws DataCloneError
+    // rather than serializing oddly — the page-side manager happens to be
+    // synchronous today, which is exactly why this needs a test.
+    const manager = makeFakeManager();
+    manager.sendToSprinkle = (() =>
+      Promise.resolve({ leader: false, followers: ['follower-8a47'] })) as never;
+    const stop = installSprinkleManagerHandlerOverChannel(manager);
+    const proxy = createSprinkleManagerProxyOverChannel();
+
+    const report = await proxy.sendToSprinkle('demo', { hello: 'world' });
+
+    expect(report).toEqual({ leader: false, followers: ['follower-8a47'] });
+    stop();
+  });
+
   it('carries a --runtime target across the channel', async () => {
     const manager = makeFakeManager();
     const stop = installSprinkleManagerHandlerOverChannel(manager);

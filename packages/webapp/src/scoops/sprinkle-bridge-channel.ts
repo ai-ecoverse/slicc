@@ -271,7 +271,12 @@ export function installSprinkleManagerHandlerOverChannel(
             respond(id, true);
             return;
           case 'send':
-            respond(id, manager.sendToSprinkle(name ?? '', data, req.target));
+            // Awaited like every sibling op: the handle type allows a
+            // `Promise<SprinkleSendReport>`, and `respond` postMessages its
+            // argument — a promise would throw `DataCloneError` rather than
+            // serialize oddly. Unreachable with today's synchronous page-side
+            // manager, but the union is what the type promises.
+            respond(id, await manager.sendToSprinkle(name ?? '', data, req.target));
             return;
           case 'reload':
             await manager.reload(name ?? '');
