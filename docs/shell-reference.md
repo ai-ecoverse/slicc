@@ -1142,7 +1142,7 @@ workspace roots prepended (`/scoops/<folder>/workspace/{skills,bin}`).
 
 ```typescript
 process.argv: string[]                       // ['node', 'script.jsh', ...args]
-process.env: object                          // Environment variables
+process.env: object                          // Environment variables (+ selected-provider API key, see below)
 process.cwd(): string                        // Current working directory
 process.exit(code?: number)                  // Exit with code (0 default)
 process.stdout.write(s)                      // Write to stdout
@@ -1153,6 +1153,19 @@ process.stdin.on(event, cb)                  // EventEmitter surface: 'data' →
 process.stdin[Symbol.asyncIterator]()        // Yields the buffered string once
 String(process.stdin)                        // Non-consuming view of the buffer
 ```
+
+#### Provider API key in `process.env`
+
+When the provider steering the cone has a plain API-key account, realm scripts
+(`.jsh`, `node -e`, `ipx`) see that key under the env name the provider's own
+SDK reads — `AI_GATEWAY_API_KEY` for `vercel-ai-gateway`, `OPENAI_API_KEY` for
+`openai`, `GEMINI_API_KEY` for `google`, … (table: `shell/provider-env-seed.ts`,
+mirroring pi-ai). Only the _selected_ provider is seeded, only into realms the
+cone owns (scoop shells never see it), OAuth access tokens are not seeded (use
+`oauth-token <provider>`), and an explicit shell assignment
+(`AI_GATEWAY_API_KEY=… fx …`) always wins. The `fx` skill in
+[ai-ecoverse/skills](https://github.com/ai-ecoverse/skills) relies on this to
+run Vercel's fx agent with zero credential plumbing.
 
 #### stdin (via `process.stdin`)
 

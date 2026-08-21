@@ -71,6 +71,10 @@ import {
   WORKFLOW_MANAGER_GLOBAL_KEY,
 } from '../scoops/workflow-run-manager.js';
 import { executeJsCode } from '../shell/jsh-executor.js';
+import {
+  createAccountStoreEnvSeeder,
+  registerProviderEnvSeeder,
+} from '../shell/provider-env-seed.js';
 import { createProxiedFetch } from '../shell/proxied-fetch.js';
 import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/workflow-script.js';
 import { rootsOf } from '../work-unit/policy.js';
@@ -439,6 +443,11 @@ async function bootOrchestrator(
   // supplemental command is constructed via
   // `createSupplementalCommands`.
   kernelHostGlobals().__slicc_pm = processManager;
+  // Publish the selected provider's API key to realm scripts under its SDK
+  // env name (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`, …) so embedded agent
+  // runtimes (e.g. the `fx` skill in ai-ecoverse/skills) need no credential
+  // plumbing.
+  registerProviderEnvSeeder(createAccountStoreEnvSeeder());
   // Expose the BrowserAPI so the OAuth intercept launcher
   // (`providers/intercepted-oauth.ts`) can reach the active CDP
   // transport without dragging in BrowserAPI as a constructor dep.
@@ -1158,7 +1167,10 @@ export function releaseHostGlobals(refs: {
   wsRegistry?: unknown;
 }): void {
   const g = kernelHostGlobals();
-  if (g.__slicc_pm === refs.processManager) delete g.__slicc_pm;
+  if (g.__slicc_pm === refs.processManager) {
+    delete g.__slicc_pm;
+    registerProviderEnvSeeder(null);
+  }
   if (g.__slicc_lickManager === refs.lickManager) delete g.__slicc_lickManager;
   if (refs.browser && g.__slicc_browser === refs.browser) delete g.__slicc_browser;
   if (refs.wsRegistry && g.__slicc_wsSubscribers === refs.wsRegistry) {
