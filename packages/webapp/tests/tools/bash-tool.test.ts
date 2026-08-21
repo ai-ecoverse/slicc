@@ -1,7 +1,7 @@
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { RestrictedFS, VirtualFS } from '../../src/fs/index.js';
-import { AlmostBashShell } from '../../src/shell/index.js';
+import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
 import {
   createBashTool,
   DEFAULT_BASH_BACKGROUND_AFTER_SECONDS,
@@ -43,7 +43,7 @@ describe('splitCommandSegments', () => {
 
 describe('Bash Tool', () => {
   let fs: VirtualFS;
-  let shell: AlmostBashShell;
+  let shell: AlmostBashShellHeadless;
   let bash: ToolDefinition;
   let dbCounter = 0;
 
@@ -52,7 +52,7 @@ describe('Bash Tool', () => {
       dbName: `test-bash-tool-${dbCounter++}`,
       wipe: true,
     });
-    shell = new AlmostBashShell({ fs });
+    shell = new AlmostBashShellHeadless({ fs });
     bash = createBashTool(shell, fs, '/tmp');
   });
 
@@ -161,7 +161,7 @@ describe('Bash Tool', () => {
     // the injected, context-accessible temp dir instead.
     await fs.mkdir('/scoops/andy-scoop', { recursive: true });
     const restricted = new RestrictedFS(fs, ['/scoops/andy-scoop/', '/shared/']);
-    const scoopShell = new AlmostBashShell({ fs: restricted as unknown as VirtualFS });
+    const scoopShell = new AlmostBashShellHeadless({ fs: restricted as unknown as VirtualFS });
     const scoopBash = createBashTool(
       scoopShell,
       restricted as unknown as VirtualFS,
@@ -323,7 +323,7 @@ describe('Bash Tool', () => {
   });
 
   it('exposes playwright aliases like normal shell commands when browser support is available', async () => {
-    const browserShell = new AlmostBashShell({ fs, browserAPI: {} as any });
+    const browserShell = new AlmostBashShellHeadless({ fs, browserAPI: {} as any });
     const browserBash = createBashTool(browserShell, fs, '/tmp');
 
     const help = await browserBash.execute({ command: 'playwright --help' });
@@ -373,7 +373,7 @@ function pendingShell() {
     },
   };
   return {
-    shell: shell as unknown as AlmostBashShell,
+    shell: shell as unknown as AlmostBashShellHeadless,
     signals,
     shellPids,
     settle: (result: { stdout: string; stderr: string; exitCode: number }) => settle(result),
@@ -428,7 +428,7 @@ describe('Bash Tool background_after / timeout', () => {
   });
 
   it('advertises both knobs and the configured default in its schema', () => {
-    const bash = createBashTool(new AlmostBashShell({ fs }), fs, '/tmp', {
+    const bash = createBashTool(new AlmostBashShellHeadless({ fs }), fs, '/tmp', {
       defaultBackgroundAfterSeconds: 42,
     });
     const props = bash.inputSchema.properties as Record<string, { description: string }>;
@@ -438,7 +438,7 @@ describe('Bash Tool background_after / timeout', () => {
   });
 
   it('defaults to ten minutes when no default is configured', () => {
-    const bash = createBashTool(new AlmostBashShell({ fs }), fs, '/tmp');
+    const bash = createBashTool(new AlmostBashShellHeadless({ fs }), fs, '/tmp');
     const props = bash.inputSchema.properties as Record<string, { description: string }>;
     expect(props['background_after'].description).toContain(
       String(DEFAULT_BASH_BACKGROUND_AFTER_SECONDS)
@@ -590,7 +590,7 @@ describe('Bash Tool background_after / timeout', () => {
     expect(detached.content).toContain('detached as background job');
 
     // A per-call budget the command finishes inside of keeps the result inline.
-    const quick = createBashTool(new AlmostBashShell({ fs }), fs, '/tmp', {
+    const quick = createBashTool(new AlmostBashShellHeadless({ fs }), fs, '/tmp', {
       defaultBackgroundAfterSeconds: 0,
     });
     const inline = await quick.execute({ command: 'echo hi', background_after: 30 });
@@ -599,7 +599,7 @@ describe('Bash Tool background_after / timeout', () => {
   });
 
   it('ignores a negative or non-numeric background_after and falls back to the default', async () => {
-    const bash = createBashTool(new AlmostBashShell({ fs }), fs, '/tmp', {
+    const bash = createBashTool(new AlmostBashShellHeadless({ fs }), fs, '/tmp', {
       defaultBackgroundAfterSeconds: 30,
     });
     const result = await bash.execute({ command: 'echo hi', background_after: -5 });
@@ -672,7 +672,7 @@ describe('Bash Tool job process (ps / kill reachability)', () => {
 
   it('registers one job per invocation and threads its pid into the shell', async () => {
     const { host, jobs } = fakeJobHost();
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const spy = vi.spyOn(shell, 'executeCommand');
     const bash = createBashTool(shell, fs, '/tmp', { jobHost: host });
 
@@ -686,7 +686,7 @@ describe('Bash Tool job process (ps / kill reachability)', () => {
 
   it('reaps the job with the command exit code when it completes normally', async () => {
     const { host, jobs } = fakeJobHost();
-    const bash = createBashTool(new AlmostBashShell({ fs }), fs, '/tmp', { jobHost: host });
+    const bash = createBashTool(new AlmostBashShellHeadless({ fs }), fs, '/tmp', { jobHost: host });
 
     await bash.execute({ command: 'exit 3' });
 

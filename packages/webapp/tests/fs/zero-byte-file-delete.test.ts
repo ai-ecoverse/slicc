@@ -30,7 +30,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
-import { AlmostBashShell } from '../../src/shell/index.js';
+import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
 import { createMutableDirectoryHandle, type MutableDirectoryHandle } from './fsa-test-helpers.js';
 
 // Each case gets its own dbName: same-dbName instances share one resolved
@@ -149,10 +149,10 @@ describe('zero-byte files on the OPFS backend (#2157)', () => {
   });
 
   describe('through the shell', () => {
-    let shell: AlmostBashShell;
+    let shell: AlmostBashShellHeadless;
 
     beforeEach(() => {
-      shell = new AlmostBashShell({ fs });
+      shell = new AlmostBashShellHeadless({ fs });
     });
 
     it.each([

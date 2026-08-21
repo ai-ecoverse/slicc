@@ -1,15 +1,15 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
-import { AlmostBashShell } from '../../src/shell/index.js';
+import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
 
 describe('rmdir -p (parents flag)', () => {
   let fs: VirtualFS;
-  let shell: AlmostBashShell;
+  let shell: AlmostBashShellHeadless;
 
   beforeEach(async () => {
     fs = await VirtualFS.create({ dbName: 'rmdir-parents-test', wipe: true });
     await fs.mkdir('/workspace', { recursive: true });
-    shell = new AlmostBashShell({ fs });
+    shell = new AlmostBashShellHeadless({ fs });
   });
 
   it('removes a single directory without -p', async () => {

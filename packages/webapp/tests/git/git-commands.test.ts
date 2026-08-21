@@ -14,7 +14,7 @@ import { createSudoFs } from '../../src/fs/sudo-fs.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { GitCommands } from '../../src/git/git-commands.js';
 import { createIsomorphicGitFs } from '../../src/git/vfs-fs-adapter.js';
-import { AlmostBashShell } from '../../src/shell/index.js';
+import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
 
 describe('GitCommands', () => {
   let vfs: VirtualFS;
@@ -3918,7 +3918,7 @@ describe('GitCommands', () => {
 });
 
 // Regression for issue #507: git ops in a scoop sandbox failed because
-// `RestrictedFS` (which scoops pass to `AlmostBashShell`/`GitCommands`) was
+// `RestrictedFS` (which scoops pass to `AlmostBashShellHeadless`/`GitCommands`) was
 // missing `isPathUnderMount`. Exercising every basic git op through a
 // `RestrictedFS` confirms the adapter no longer crashes on the missing
 // method.
@@ -3933,7 +3933,7 @@ describe('GitCommands with RestrictedFS (scoop sandbox, issue #507)', () => {
     const vfs = await VirtualFS.create({ dbName: `git-restricted-fs-507-${testId}`, wipe: true });
     await vfs.mkdir('/scoops/regression-507', { recursive: true });
     const restricted = new RestrictedFS(vfs, ['/scoops/regression-507/', '/shared/']);
-    // The cone's AlmostBashShell does the same cast — we mirror it here so
+    // The cone's AlmostBashShellHeadless does the same cast — we mirror it here so
     // the test reproduces the exact runtime configuration that crashed.
     const git = new GitCommands({
       fs: restricted as unknown as VirtualFS,
@@ -3992,7 +3992,7 @@ describe('GitCommands flush through production scoop filesystem wrappers', () =>
         getPolicy: () => parseSudoers(`NOPASSWD Write ${scoopDir}/**`),
         defaultDisposition: 'require-approval',
       });
-      const shell = new AlmostBashShell({
+      const shell = new AlmostBashShellHeadless({
         fs: sudoFs as unknown as VirtualFS,
         cwd: scoopDir,
       });

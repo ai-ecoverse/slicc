@@ -1,6 +1,6 @@
 /**
  * Integration test for `secret set` masked-env injection through a real
- * AlmostBashShell. Verifies that after `secret set K v`, the next exec sees the
+ * AlmostBashShellHeadless. Verifies that after `secret set K v`, the next exec sees the
  * masked value under `$K` (LLM-context parity), and that the value can be
  * piped via stdin.
  *
@@ -12,7 +12,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
-import { AlmostBashShell } from '../../src/shell/almost-bash-shell.js';
+import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
 
 interface SessionEntry {
   name: string;
@@ -66,7 +66,7 @@ function installSecretApiFetchMock(session: Map<string, SessionEntry>) {
   return fetchMock;
 }
 
-describe('AlmostBashShell + secret set — masked-env injection (LLM-context parity)', () => {
+describe('AlmostBashShellHeadless + secret set — masked-env injection (LLM-context parity)', () => {
   let fs: VirtualFS;
   let dbCounter = 0;
   let session: Map<string, SessionEntry>;
@@ -85,7 +85,7 @@ describe('AlmostBashShell + secret set — masked-env injection (LLM-context par
   });
 
   it('exposes the masked value under $NAME after secret set, not the real value', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
 
     const setRes = await shell.executeCommand('secret set K real-value --domain api.x.com');
     expect(setRes.exitCode).toBe(0);
@@ -101,7 +101,7 @@ describe('AlmostBashShell + secret set — masked-env injection (LLM-context par
   });
 
   it('accepts the value via stdin (echo v | secret set K2)', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
 
     const setRes = await shell.executeCommand(
       'echo piped-value | secret set K2 --domain api.x.com'
@@ -116,7 +116,7 @@ describe('AlmostBashShell + secret set — masked-env injection (LLM-context par
   });
 
   it('rejects a domainless argument value before calling the backend', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const res = await shell.executeCommand('secret set K value');
 
     expect(res.exitCode).toBe(1);
@@ -126,7 +126,7 @@ describe('AlmostBashShell + secret set — masked-env injection (LLM-context par
   });
 
   it('rejects a domainless stdin value before calling the backend', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const res = await shell.executeCommand('echo piped-value | secret set K');
 
     expect(res.exitCode).toBe(1);
@@ -136,7 +136,7 @@ describe('AlmostBashShell + secret set — masked-env injection (LLM-context par
   });
 
   it('errors when both arg and stdin are provided', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const res = await shell.executeCommand('echo stdin-v | secret set K arg-v --domain api.x.com');
     expect(res.exitCode).toBe(1);
     expect(res.stderr).toContain('argument OR via stdin');

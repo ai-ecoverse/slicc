@@ -1,6 +1,6 @@
 /**
  * Real-shell e2e for the install->require LIFECYCLE (install-require-lifecycle).
- * Drives the production `AlmostBashShell` over a real `fake-indexeddb`
+ * Drives the production `AlmostBashShellHeadless` over a real `fake-indexeddb`
  * `VirtualFS` with a mocked `SecureFetch` serving synthesized `.tgz` fixtures,
  * proving the integration behaviors that string the whole stack together:
  *
@@ -202,17 +202,21 @@ async function newVfs(dbName: string, wipe: boolean) {
 }
 
 async function newShell() {
-  const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
+  const { AlmostBashShellHeadless } = await import(
+    '../../../src/shell/almost-bash-shell-headless.js'
+  );
   const dbName = `test-lifecycle-${dbCounter++}`;
   const fs = await newVfs(dbName, true);
   await fs.mkdir('/work', { recursive: true });
-  const shell = new AlmostBashShell({ fs, cwd: '/work' });
+  const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });
   return { shell, fs, dbName };
 }
 
 async function shellOn(fs: Awaited<ReturnType<typeof newVfs>>, cwd = '/work') {
-  const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
-  return new AlmostBashShell({ fs, cwd });
+  const { AlmostBashShellHeadless } = await import(
+    '../../../src/shell/almost-bash-shell-headless.js'
+  );
+  return new AlmostBashShellHeadless({ fs, cwd });
 }
 
 describe('install->require lifecycle e2e (real shell + mocked registry)', () => {

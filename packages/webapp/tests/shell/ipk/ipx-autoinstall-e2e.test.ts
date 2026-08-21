@@ -1,6 +1,6 @@
 /**
  * Real-shell e2e for the `ipx`/`npx` npx-like auto-install (M6): drives the
- * production realm seam over a real AlmostBashShell + fake-indexeddb VFS with a
+ * production realm seam over a real AlmostBashShellHeadless + fake-indexeddb VFS with a
  * mocked registry serving synthesized `.tgz` fixtures. Proves:
  *  - VAL-IPX-003: an uninstalled package auto-installs (full transitive tree
  *    materialized) and then runs.
@@ -152,10 +152,12 @@ let dbCounter = 0;
 
 async function newShell() {
   const { VirtualFS } = await import('../../../src/fs/index.js');
-  const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
+  const { AlmostBashShellHeadless } = await import(
+    '../../../src/shell/almost-bash-shell-headless.js'
+  );
   const fs = await VirtualFS.create({ dbName: `test-ipx-auto-${dbCounter++}`, wipe: true });
   await fs.mkdir('/work', { recursive: true });
-  const shell = new AlmostBashShell({ fs, cwd: '/work' });
+  const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });
   return { shell, fs };
 }
 

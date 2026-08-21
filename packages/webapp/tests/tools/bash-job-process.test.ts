@@ -7,7 +7,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/index.js';
 import { ProcessManager } from '../../src/kernel/process-manager.js';
-import type { AlmostBashShell } from '../../src/shell/index.js';
+import type { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
 import { createBashTool } from '../../src/tools/bash-tool.js';
 import type { BashJobHost } from '../../src/tools/types.js';
 
@@ -26,7 +26,7 @@ function pendingShell() {
     },
   };
   return {
-    shell: shell as unknown as AlmostBashShell,
+    shell: shell as unknown as AlmostBashShellHeadless,
     shellPids,
     signals,
     settle: (r: { stdout: string; stderr: string; exitCode: number }) => settle(r),

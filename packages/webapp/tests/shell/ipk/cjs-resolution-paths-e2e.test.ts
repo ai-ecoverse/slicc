@@ -1,6 +1,6 @@
 /**
  * Real-shell e2e for the Node resolution surface through `require()`
- * (cjs-resolution-paths). Drives the production `AlmostBashShell` over a real
+ * (cjs-resolution-paths). Drives the production `AlmostBashShellHeadless` over a real
  * `fake-indexeddb` `VirtualFS` with a synthesized `node_modules` tree (no
  * registry needed), exercising the realm-wiring-dependent behaviors through the
  * actual `node <script.js>` command path (`node-command.ts`): the
@@ -15,10 +15,12 @@ let dbCounter = 0;
 
 async function newShell() {
   const { VirtualFS } = await import('../../../src/fs/index.js');
-  const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
+  const { AlmostBashShellHeadless } = await import(
+    '../../../src/shell/almost-bash-shell-headless.js'
+  );
   const fs = await VirtualFS.create({ dbName: `test-cjs-resolve-${dbCounter++}`, wipe: true });
   await fs.mkdir('/work', { recursive: true });
-  const shell = new AlmostBashShell({ fs, cwd: '/work' });
+  const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });
   return { shell, fs };
 }
 

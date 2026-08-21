@@ -191,13 +191,15 @@ vi.mock('../../../src/shell/proxied-fetch.js', async (importOriginal) => {
 let dbCounter = 0;
 async function newShell() {
   const { VirtualFS } = await import('../../../src/fs/index.js');
-  const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
+  const { AlmostBashShellHeadless } = await import(
+    '../../../src/shell/almost-bash-shell-headless.js'
+  );
   const fs = await VirtualFS.create({
     dbName: `test-ipk-no-arg-shell-${dbCounter++}`,
     wipe: true,
   });
   await fs.mkdir('/work', { recursive: true });
-  const shell = new AlmostBashShell({ fs, cwd: '/work' });
+  const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });
   return { shell, fs };
 }
 
@@ -209,7 +211,7 @@ function tarballFetchCount(reg: Registry): number {
   return n;
 }
 
-describe('ipk install (no-arg) via real AlmostBashShell', () => {
+describe('ipk install (no-arg) via real AlmostBashShellHeadless', () => {
   beforeEach(() => {
     sharedRegistry.current = { packuments: {}, tarballs: {}, calls: [] };
   });

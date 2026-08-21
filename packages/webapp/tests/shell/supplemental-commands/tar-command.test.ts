@@ -1,12 +1,12 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
-import { AlmostBashShell } from '../../../src/shell/almost-bash-shell.js';
+import { AlmostBashShellHeadless } from '../../../src/shell/almost-bash-shell-headless.js';
 import { writeTar } from '../../../src/shell/ipk/tar.js';
 
 describe('tar command', () => {
   let fs: VirtualFS;
-  let shell: AlmostBashShell;
+  let shell: AlmostBashShellHeadless;
   let dbCounter = 0;
 
   beforeEach(async () => {
@@ -14,7 +14,7 @@ describe('tar command', () => {
       dbName: `test-tar-command-${dbCounter++}`,
       wipe: true,
     });
-    shell = new AlmostBashShell({ fs });
+    shell = new AlmostBashShellHeadless({ fs });
     await fs.mkdir('/workspace/source/nested', { recursive: true });
     await fs.mkdir('/workspace/source/empty', { recursive: true });
     await fs.writeFile('/workspace/source/hello.txt', 'hello tar');

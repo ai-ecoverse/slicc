@@ -1,5 +1,5 @@
 /**
- * Tests for AlmostBashShell utility functions.
+ * Tests for AlmostBashShellHeadless utility functions.
  */
 
 import 'fake-indexeddb/auto';
@@ -8,12 +8,12 @@ import type { BrowserAPI } from '../../src/cdp/index.js';
 import { FsWatcher, VirtualFS } from '../../src/fs/index.js';
 import { registerProviderConfig, unregisterProviderConfig } from '../../src/providers/index.js';
 import { WORKFLOW_MANAGER_GLOBAL_KEY } from '../../src/scoops/workflow-run-manager.js';
+import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
 import {
-  AlmostBashShell,
   decodeForbiddenResponseHeaders,
   encodeForbiddenRequestHeaders,
   isTextContentType,
-} from '../../src/shell/almost-bash-shell.js';
+} from '../../src/shell/proxied-fetch.js';
 
 describe('isTextContentType', () => {
   it('identifies text/* as text', () => {
@@ -212,7 +212,7 @@ describe('decodeForbiddenResponseHeaders', () => {
   });
 });
 
-describe('AlmostBashShell playwright command discoverability', () => {
+describe('AlmostBashShellHeadless playwright command discoverability', () => {
   let fs: VirtualFS;
   let dbCounter = 0;
 
@@ -224,7 +224,7 @@ describe('AlmostBashShell playwright command discoverability', () => {
   });
 
   it('exposes playwright aliases and host through which, commands, and /usr/bin when browserAPI is provided', async () => {
-    const shell = new AlmostBashShell({
+    const shell = new AlmostBashShellHeadless({
       fs,
       browserAPI: {} as BrowserAPI,
     });
@@ -254,7 +254,7 @@ describe('AlmostBashShell playwright command discoverability', () => {
   });
 
   it('keeps playwright aliases and host discoverable even without browserAPI', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
 
     const whichResult = await shell.executeCommand('which playwright-cli host');
     expect(whichResult.exitCode).toBe(0);
@@ -280,7 +280,7 @@ describe('AlmostBashShell playwright command discoverability', () => {
     expect(openResult.stderr).toContain('browser APIs are unavailable');
   });
   it('accepts an external AbortSignal when executing commands programmatically', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const controller = new AbortController();
     const execSpy = vi.spyOn((shell as any).bash, 'exec');
 
@@ -300,7 +300,7 @@ describe('AlmostBashShell playwright command discoverability', () => {
     fs.setWatcher(new FsWatcher());
     await fs.writeFile('/workspace/login.example.com.bsh', 'console.log("login");');
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
 
     expect((await shell.getScriptCatalog().getBshEntries()).map((entry) => entry.path)).toEqual([
       '/workspace/login.example.com.bsh',
@@ -308,7 +308,7 @@ describe('AlmostBashShell playwright command discoverability', () => {
   });
 });
 
-describe('AlmostBashShell GitHub token renewal wiring', () => {
+describe('AlmostBashShellHeadless GitHub token renewal wiring', () => {
   it('uses the registered expiry-gated hook only for git network operations', async () => {
     const fs = await VirtualFS.create({ dbName: 'test-shell-github-renewal', wipe: true });
     const getValidAccessToken = vi.fn(async () => 'ghp_fresh');
@@ -322,7 +322,7 @@ describe('AlmostBashShell GitHub token renewal wiring', () => {
     });
 
     try {
-      const shell = new AlmostBashShell({ fs });
+      const shell = new AlmostBashShellHeadless({ fs });
       await shell.executeCommand('git fetch');
       expect(getValidAccessToken).toHaveBeenCalledTimes(1);
 
@@ -337,7 +337,7 @@ describe('AlmostBashShell GitHub token renewal wiring', () => {
 
 let homeDbCounter = 0;
 
-describe('AlmostBashShell HOME and ~/.profile (#2085)', () => {
+describe('AlmostBashShellHeadless HOME and ~/.profile (#2085)', () => {
   let fs: VirtualFS;
 
   beforeEach(async () => {
@@ -354,7 +354,7 @@ describe('AlmostBashShell HOME and ~/.profile (#2085)', () => {
   it('resolves $HOME and $USER from the onboarded /home/<slug> on a cold shell', async () => {
     await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const result = await shell.executeCommand('echo "$HOME:$USER"');
     expect(result.stdout.trim()).toBe('/home/lars:lars');
 
@@ -363,7 +363,7 @@ describe('AlmostBashShell HOME and ~/.profile (#2085)', () => {
   });
 
   it('falls back to /home/user when onboarding never ran, without writing', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const result = await shell.executeCommand('echo "$HOME"');
     expect(result.stdout.trim()).toBe('/home/user');
     // The shell must NOT create the dir itself — its fs can be sudo-gated,
@@ -377,7 +377,7 @@ describe('AlmostBashShell HOME and ~/.profile (#2085)', () => {
     await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
     await fs.writeFile('/home/lars/.profile', 'export GREETING="hello from profile"');
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const first = await shell.executeCommand('echo "$GREETING"');
     expect(first.stdout.trim()).toBe('hello from profile');
     // ...and it survives into later commands like any exported var.
@@ -392,7 +392,7 @@ describe('AlmostBashShell HOME and ~/.profile (#2085)', () => {
       'export GOOD=yes\nthis-command-does-not-exist-anywhere'
     );
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const result = await shell.executeCommand('echo "ok $GOOD"');
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('ok yes');
@@ -403,7 +403,7 @@ describe('AlmostBashShell HOME and ~/.profile (#2085)', () => {
     await fs.mkdir('/workspace', { recursive: true });
     await fs.writeFile('/home/lars/.profile', 'cd /home/lars\nexport MARKER=set');
 
-    const shell = new AlmostBashShell({ fs, cwd: '/workspace' });
+    const shell = new AlmostBashShellHeadless({ fs, cwd: '/workspace' });
     const result = await shell.executeCommand('pwd; echo "$MARKER"');
     expect(result.stdout.trim().split('\n')).toEqual(['/workspace', 'set']);
   });
@@ -414,7 +414,7 @@ describe('AlmostBashShell HOME and ~/.profile (#2085)', () => {
     await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
     await fs.writeFile('/scoops/research/home/.profile', 'export SCOPE=scoop');
 
-    const shell = new AlmostBashShell({
+    const shell = new AlmostBashShellHeadless({
       fs,
       env: { HOME: '/scoops/research/home', USER: 'research' },
     });
@@ -427,7 +427,7 @@ describe('AlmostBashShell HOME and ~/.profile (#2085)', () => {
     await new Promise((resolve) => setTimeout(resolve, 10));
     await fs.writeFile('/home/second/.welcome.json', '{"name":"Second"}');
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const result = await shell.executeCommand('echo "$HOME"');
     expect(result.stdout.trim()).toBe('/home/second');
   });
@@ -435,7 +435,7 @@ describe('AlmostBashShell HOME and ~/.profile (#2085)', () => {
 
 let pathDbCounter = 0;
 
-describe('AlmostBashShell $PATH-driven command lookup (#2085)', () => {
+describe('AlmostBashShellHeadless $PATH-driven command lookup (#2085)', () => {
   let fs: VirtualFS;
 
   beforeEach(async () => {
@@ -452,7 +452,7 @@ describe('AlmostBashShell $PATH-driven command lookup (#2085)', () => {
   it('a .jsh outside the PATH roots is not a command until PATH is extended', async () => {
     await fs.writeFile('/opt/tools/mytool.jsh', 'console.log("tool ran");');
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const miss = await shell.executeCommand('mytool');
     expect(miss.exitCode).toBe(127);
 
@@ -476,7 +476,7 @@ describe('AlmostBashShell $PATH-driven command lookup (#2085)', () => {
     // anywhere-walk — is what made mytool resolvable.
     await fs.writeFile('/opt/elsewhere/hidden.jsh', 'console.log("never");');
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     // Cold shell, no explicit sync — the profile-sourced PATH must feed the
     // initial registration (the #2084-gated scan runs after the profile).
     const result = await shell.executeCommand('mytool | cat');
@@ -491,7 +491,7 @@ describe('AlmostBashShell $PATH-driven command lookup (#2085)', () => {
     await fs.writeFile('/home/lars/.welcome.json', '{"name":"Lars"}');
     await fs.writeFile('/home/lars/.profile', 'unset PRESEEDED');
 
-    const shell = new AlmostBashShell({ fs, env: { PRESEEDED: 'leak' } });
+    const shell = new AlmostBashShellHeadless({ fs, env: { PRESEEDED: 'leak' } });
     const result = await shell.executeCommand('echo "${PRESEEDED:-gone}"');
     expect(result.stdout.trim()).toBe('gone');
   });
@@ -499,7 +499,7 @@ describe('AlmostBashShell $PATH-driven command lookup (#2085)', () => {
   it('which stops reporting a script after its PATH root is removed (Codex P2)', async () => {
     await fs.writeFile('/opt/tools/mytool.jsh', 'console.log("x");');
 
-    const shell = new AlmostBashShell({ fs, env: { PATH: '/usr/bin:/opt/tools' } });
+    const shell = new AlmostBashShellHeadless({ fs, env: { PATH: '/usr/bin:/opt/tools' } });
     const before = await shell.executeCommand('which mytool');
     expect(before.exitCode).toBe(0);
     expect(before.stdout).toContain('/opt/tools/mytool.jsh');
@@ -519,7 +519,7 @@ describe('AlmostBashShell $PATH-driven command lookup (#2085)', () => {
   it('which resolves from the same PATH roots as dispatch', async () => {
     await fs.writeFile('/opt/tools/mytool.jsh', 'console.log("x");');
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const miss = await shell.executeCommand('which mytool');
     expect(miss.exitCode).toBe(1);
 
@@ -531,7 +531,7 @@ describe('AlmostBashShell $PATH-driven command lookup (#2085)', () => {
 
 let jshRegistrationDbCounter = 0;
 
-describe('AlmostBashShell .jsh command registration', () => {
+describe('AlmostBashShellHeadless .jsh command registration', () => {
   let fs: VirtualFS;
 
   beforeEach(async () => {
@@ -553,7 +553,7 @@ describe('AlmostBashShell .jsh command registration', () => {
       'console.log("hello from jsh");'
     );
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     // Wait for async syncJshCommands to complete
     await shell.syncJshCommands();
 
@@ -581,7 +581,7 @@ describe('AlmostBashShell .jsh command registration', () => {
   it('resolves .jsh in a compound command on a cold shell (no explicit sync)', async () => {
     await fs.writeFile('/workspace/skills/test-cmd/scripts/cold.jsh', 'console.log("cold ok");');
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     // Deliberately NO `await shell.syncJshCommands()` — that is the warm path
     // the other tests exercise, and it is what hid this bug.
     const compound = await shell.executeCommand('cold; echo done');
@@ -599,7 +599,7 @@ describe('AlmostBashShell .jsh command registration', () => {
   // The handler must convert failures into results so diagnostics survive.
   it('a .jsh dispatch failure surfaces its real message, not a sanitized <path> (#2146)', async () => {
     await fs.writeFile('/workspace/skills/test-cmd/scripts/failer.jsh', 'console.log("hi");');
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     await shell.syncJshCommands();
 
     const catalog = shell.getScriptCatalog();
@@ -620,7 +620,7 @@ describe('AlmostBashShell .jsh command registration', () => {
   it('still resolves a bare .jsh command on a cold shell', async () => {
     await fs.writeFile('/workspace/skills/test-cmd/scripts/bare.jsh', 'console.log("bare ok");');
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const result = await shell.executeCommand('bare');
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('bare ok');
@@ -641,9 +641,9 @@ describe('AlmostBashShell .jsh command registration', () => {
         await new Promise<never>(() => {}); // never settles, never yields
       },
       readFile: async () => '',
-    } as unknown as ConstructorParameters<typeof AlmostBashShell>[0]['jshDiscoveryFs'];
+    } as unknown as ConstructorParameters<typeof AlmostBashShellHeadless>[0]['jshDiscoveryFs'];
 
-    const shell = new AlmostBashShell({ fs, jshDiscoveryFs: neverFinishes });
+    const shell = new AlmostBashShellHeadless({ fs, jshDiscoveryFs: neverFinishes });
     const controller = new AbortController();
     controller.abort();
 
@@ -657,7 +657,7 @@ describe('AlmostBashShell .jsh command registration', () => {
   it('makes .jsh commands visible via which and /usr/bin', async () => {
     await fs.writeFile('/workspace/skills/test-cmd/scripts/mycmd.jsh', 'console.log("ok");');
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     await shell.syncJshCommands();
 
     const whichResult = await shell.executeCommand('which mycmd');
@@ -674,7 +674,7 @@ describe('AlmostBashShell .jsh command registration', () => {
       'console.log("hello " + process.argv.slice(2).join(" "));'
     );
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     await shell.syncJshCommands();
 
     const result = await shell.executeCommand('greet world');
@@ -691,7 +691,7 @@ describe('AlmostBashShell .jsh command registration', () => {
       'process.stdout.write(process.stdin.read().toUpperCase());'
     );
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     await shell.syncJshCommands();
 
     const piped = await shell.executeCommand('echo -n hello | upper');
@@ -705,7 +705,7 @@ describe('AlmostBashShell .jsh command registration', () => {
       'console.log(process.stdin.read().length);'
     );
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     await shell.syncJshCommands();
 
     const piped = await shell.executeCommand('echo -n abcdef | wc-bytes');
@@ -717,7 +717,7 @@ describe('AlmostBashShell .jsh command registration', () => {
     // Create a .jsh file named "echo" — should NOT override the built-in
     await fs.writeFile('/workspace/skills/test-cmd/scripts/echo.jsh', 'console.log("fake echo");');
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     await shell.syncJshCommands();
 
     const result = await shell.executeCommand('echo real');
@@ -728,7 +728,7 @@ describe('AlmostBashShell .jsh command registration', () => {
 
 let allowlistDbCounter = 0;
 
-describe('AlmostBashShell command allow-list', () => {
+describe('AlmostBashShellHeadless command allow-list', () => {
   let fs: VirtualFS;
 
   beforeEach(async () => {
@@ -743,7 +743,7 @@ describe('AlmostBashShell command allow-list', () => {
   });
 
   it('registers all commands when allowedCommands is omitted (default)', async () => {
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
 
     expect((await shell.executeCommand('echo hi')).exitCode).toBe(0);
     expect((await shell.executeCommand('pwd')).exitCode).toBe(0);
@@ -751,14 +751,14 @@ describe('AlmostBashShell command allow-list', () => {
   });
 
   it('registers all commands when allowedCommands is the wildcard ["*"]', async () => {
-    const shell = new AlmostBashShell({ fs, allowedCommands: ['*'] });
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['*'] });
 
     expect((await shell.executeCommand('echo hi')).exitCode).toBe(0);
     expect((await shell.executeCommand('ls /')).exitCode).toBe(0);
   });
 
   it('blocks every command when allowedCommands is empty', async () => {
-    const shell = new AlmostBashShell({ fs, allowedCommands: [] });
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: [] });
 
     const result = await shell.executeCommand('echo hi');
     expect(result.exitCode).not.toBe(0);
@@ -766,7 +766,7 @@ describe('AlmostBashShell command allow-list', () => {
   });
 
   it('allows listed commands and rejects unlisted ones with exit 127', async () => {
-    const shell = new AlmostBashShell({ fs, allowedCommands: ['echo'] });
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo'] });
 
     const ok = await shell.executeCommand('echo hello');
     expect(ok.exitCode).toBe(0);
@@ -779,7 +779,7 @@ describe('AlmostBashShell command allow-list', () => {
   });
 
   it('blocks disallowed commands inside a pipeline', async () => {
-    const shell = new AlmostBashShell({ fs, allowedCommands: ['echo'] });
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo'] });
 
     // `echo` is allowed but `cat` is not — the pipeline should fail at `cat`.
     const piped = await shell.executeCommand('echo hi | cat');
@@ -789,7 +789,7 @@ describe('AlmostBashShell command allow-list', () => {
   });
 
   it('blocks disallowed commands inside command substitution', async () => {
-    const shell = new AlmostBashShell({ fs, allowedCommands: ['echo'] });
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo'] });
 
     // The substitution `$(ls /)` invokes `ls`, which must be blocked. Bash
     // continues and runs `echo` with an empty substitution, but stderr
@@ -803,7 +803,7 @@ describe('AlmostBashShell command allow-list', () => {
   it('filters custom (supplemental) commands the same way as built-ins', async () => {
     // Use a custom command — `mount` is created by MountCommands. Omitting it
     // from the allow-list should block it; including it should keep it working.
-    const blockedShell = new AlmostBashShell({ fs, allowedCommands: ['echo'] });
+    const blockedShell = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo'] });
     const blocked = await blockedShell.executeCommand('mount');
     expect(blocked.exitCode).toBe(127);
     expect(blocked.stderr).toMatch(/mount/);
@@ -812,7 +812,7 @@ describe('AlmostBashShell command allow-list', () => {
     // When `mount` is allow-listed the custom command is dispatched — even if
     // it returns non-zero for missing args, the stderr must not say
     // "command not found" (that would mean the allow-list blocked it).
-    const allowedShell = new AlmostBashShell({ fs, allowedCommands: ['mount'] });
+    const allowedShell = new AlmostBashShellHeadless({ fs, allowedCommands: ['mount'] });
     const allowed = await allowedShell.executeCommand('mount');
     expect(allowed.stderr).not.toMatch(/not found/i);
   });
@@ -825,14 +825,14 @@ describe('AlmostBashShell command allow-list', () => {
     );
 
     // With `greet` blocked, the shell should not dispatch to the .jsh file.
-    const blocked = new AlmostBashShell({ fs, allowedCommands: ['echo'] });
+    const blocked = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo'] });
     await blocked.syncJshCommands();
     const blockedResult = await blocked.executeCommand('greet');
     expect(blockedResult.exitCode).toBe(127);
     expect(blockedResult.stderr).toMatch(/not found/i);
 
     // With `greet` listed, the .jsh file is registered and runs normally.
-    const allowed = new AlmostBashShell({ fs, allowedCommands: ['greet'] });
+    const allowed = new AlmostBashShellHeadless({ fs, allowedCommands: ['greet'] });
     await allowed.syncJshCommands();
     const allowedResult = await allowed.executeCommand('greet');
     expect(allowedResult.exitCode).toBe(0);
@@ -840,7 +840,7 @@ describe('AlmostBashShell command allow-list', () => {
   });
 
   it('omits blocked commands from the /usr/bin virtual directory', async () => {
-    const shell = new AlmostBashShell({ fs, allowedCommands: ['echo', 'ls'] });
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo', 'ls'] });
 
     const listing = await shell.executeCommand('ls /usr/bin');
     expect(listing.exitCode).toBe(0);
@@ -853,11 +853,11 @@ describe('AlmostBashShell command allow-list', () => {
   it('blocks network commands (curl, wget) that just-bash auto-registers when fetch is set', async () => {
     // just-bash's constructor unconditionally registers every network command
     // when `fetch` or `network` is provided, regardless of `BashOptions.commands`.
-    // `AlmostBashShell` always provides `fetch`, so without post-construction cleanup
+    // `AlmostBashShellHeadless` always provides `fetch`, so without post-construction cleanup
     // a scoop with `allowedCommands: ['echo']` could still run `curl`. This
-    // test guards the cleanup in `AlmostBashShell`'s constructor. See Codex review
+    // test guards the cleanup in `AlmostBashShellHeadless`'s constructor. See Codex review
     // of #433.
-    const shell = new AlmostBashShell({ fs, allowedCommands: ['echo'] });
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['echo'] });
 
     const curl = await shell.executeCommand('curl http://example.com');
     expect(curl.exitCode).toBe(127);
@@ -874,7 +874,7 @@ describe('AlmostBashShell command allow-list', () => {
     // Inverse of the above — when a network command IS allowed, the cleanup
     // must not remove it. We don't try to actually fetch (would need a real
     // network); it's enough that the command name is recognized at dispatch.
-    const shell = new AlmostBashShell({ fs, allowedCommands: ['curl'] });
+    const shell = new AlmostBashShellHeadless({ fs, allowedCommands: ['curl'] });
 
     const result = await shell.executeCommand('curl');
     // curl with no args exits with usage error (2) — NOT 127. If cleanup
@@ -893,7 +893,7 @@ function installFakeWfManager(): void {
   };
 }
 
-describe('AlmostBashShell workflow command registration', () => {
+describe('AlmostBashShellHeadless workflow command registration', () => {
   let fs: VirtualFS;
   beforeEach(async () => {
     fs = await VirtualFS.create({ dbName: `test-wf-reg-${Math.random()}`, wipe: true });
@@ -910,7 +910,7 @@ describe('AlmostBashShell workflow command registration', () => {
       '/workspace/.workflows/audit.workflow.js',
       "export const meta = { name: 'audit' };\nreturn 1"
     );
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     await shell.syncJshCommands();
     const res = await shell.executeCommand('audit');
     expect(res.exitCode).toBe(0);
@@ -924,7 +924,7 @@ describe('AlmostBashShell workflow command registration', () => {
       '/workspace/skills/triage/.workflows/sweep.workflow.js',
       "export const meta = { name: 'sweep' };\nreturn 1"
     );
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     await shell.syncJshCommands();
     const res = await shell.executeCommand('triage:sweep');
     expect(res.exitCode).toBe(0);
@@ -939,7 +939,7 @@ describe('AlmostBashShell workflow command registration', () => {
       "export const meta={name:'foo'};\nreturn 1"
     );
     await fs.writeFile('/workspace/bin/foo.jsh', "console.log('JSH-WON');");
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     await shell.syncJshCommands();
     const res = await shell.executeCommand('foo');
     expect(res.stdout).toContain('JSH-WON');
@@ -953,7 +953,7 @@ describe('AlmostBashShell workflow command registration', () => {
       "export const meta={name:'foo'};\nreturn 1"
     );
     await fs.writeFile('/workspace/bin/foo.jsh', "console.log('JSH-WON');");
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     await shell.syncJshCommands();
     await fs.rm('/workspace/bin/foo.jsh');
     const res = await shell.executeCommand('foo');
@@ -967,7 +967,7 @@ describe('AlmostBashShell workflow command registration', () => {
       '/workspace/.workflows/foo.workflow.js',
       "export const meta={name:'foo'};\nreturn 1"
     );
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     await shell.syncJshCommands();
     const before = await shell.executeCommand('foo');
     expect(before.stdout).toMatch(/started/i); // workflow-only → runs the workflow
@@ -992,7 +992,7 @@ let vfsRoundTripDbCounter = 0;
  * `shell.executeCommand('cat …')` (the bash-tool path) sees the writes, and a
  * direct `fs.readFile(…)` on the shared instance sees them too.
  */
-describe('AlmostBashShell VFS round-trip', () => {
+describe('AlmostBashShellHeadless VFS round-trip', () => {
   let fs: VirtualFS;
 
   beforeEach(async () => {
@@ -1017,7 +1017,7 @@ describe('AlmostBashShell VFS round-trip', () => {
       ].join('\n')
     );
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
 
     // Realm-side: the script's shell commands run successfully.
     const run = await shell.executeScriptFile('/workspace/exec-writer.jsh');
@@ -1046,7 +1046,7 @@ describe('AlmostBashShell VFS round-trip', () => {
       ].join('\n')
     );
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
 
     // Realm-side: the fs bridge write succeeds.
     const run = await shell.executeScriptFile('/workspace/fs-writer.jsh');
@@ -1081,7 +1081,7 @@ describe('AlmostBashShell VFS round-trip', () => {
         ].join('\n')
       );
 
-      const shell = new AlmostBashShell({ fs });
+      const shell = new AlmostBashShellHeadless({ fs });
 
       // Realm-side: the fetch went through the host fetch and wrote the bytes.
       const run = await shell.executeScriptFile('/workspace/fetcher.jsh');
@@ -1117,7 +1117,7 @@ let coherenceDbCounter = 0;
  * later `exec`, and an `exec`'s writes are visible to a later `readFileSync`.
  * All of this is gated on the sync-fs API actually being used (perf).
  */
-describe('AlmostBashShell sync-fs ↔ exec coherence', () => {
+describe('AlmostBashShellHeadless sync-fs ↔ exec coherence', () => {
   let fs: VirtualFS;
 
   beforeEach(async () => {
@@ -1145,7 +1145,7 @@ describe('AlmostBashShell sync-fs ↔ exec coherence', () => {
       ].join('\n')
     );
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const run = await shell.executeScriptFile('/workspace/a.jsh');
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toContain('EXEC:sync-payload');
@@ -1165,7 +1165,7 @@ describe('AlmostBashShell sync-fs ↔ exec coherence', () => {
       ].join('\n')
     );
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const run = await shell.executeScriptFile('/workspace/b.jsh');
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toContain('READ:hi-from-exec');
@@ -1185,7 +1185,7 @@ describe('AlmostBashShell sync-fs ↔ exec coherence', () => {
       ].join('\n')
     );
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const run = await shell.executeScriptFile('/workspace/c.jsh');
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toContain('EXEC:async-payload');
@@ -1209,7 +1209,7 @@ describe('AlmostBashShell sync-fs ↔ exec coherence', () => {
       ].join('\n')
     );
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const run = await shell.executeScriptFile('/workspace/d.jsh');
     expect(run.exitCode).toBe(0);
 
@@ -1247,7 +1247,7 @@ describe('AlmostBashShell sync-fs ↔ exec coherence', () => {
       ].join('\n')
     );
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const run = await shell.executeScriptFile('/workspace/e.jsh');
     expect(run.exitCode).toBe(0);
 
@@ -1277,7 +1277,7 @@ describe('AlmostBashShell sync-fs ↔ exec coherence', () => {
       ].join('\n')
     );
 
-    const shell = new AlmostBashShell({ fs });
+    const shell = new AlmostBashShellHeadless({ fs });
     const run = await shell.executeScriptFile('/workspace/f.jsh');
     expect(run.exitCode).toBe(0);
     // `done` resolved as terminated by SIGTERM (128 + 15).

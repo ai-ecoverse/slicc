@@ -1,5 +1,5 @@
 /**
- * End-to-end `npm run` over a real `AlmostBashShell` + fake-indexeddb VFS.
+ * End-to-end `npm run` over a real `AlmostBashShellHeadless` + fake-indexeddb VFS.
  * Proves the parts a stubbed `ctx.exec` cannot: the script body is parsed and
  * run by the real shell, the exec cwd is the package directory (not the
  * caller's), env vars reach the script, exit codes propagate, and a bare
@@ -15,10 +15,12 @@ let dbCounter = 0;
 
 async function newShell() {
   const { VirtualFS } = await import('../../../src/fs/index.js');
-  const { AlmostBashShell } = await import('../../../src/shell/almost-bash-shell.js');
+  const { AlmostBashShellHeadless } = await import(
+    '../../../src/shell/almost-bash-shell-headless.js'
+  );
   const fs = await VirtualFS.create({ dbName: `test-npm-run-shell-${dbCounter++}`, wipe: true });
   await fs.mkdir('/work', { recursive: true });
-  const shell = new AlmostBashShell({ fs, cwd: '/work' });
+  const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });
   return { shell, fs };
 }
 
@@ -27,7 +29,7 @@ async function writeManifest(fs: VirtualFS, dir: string, manifest: unknown): Pro
   await fs.writeFile(`${dir}/package.json`, JSON.stringify(manifest, null, 2));
 }
 
-describe('npm run via real AlmostBashShell', () => {
+describe('npm run via real AlmostBashShellHeadless', () => {
   let shell: Awaited<ReturnType<typeof newShell>>['shell'];
   let fs: VirtualFS;
 
