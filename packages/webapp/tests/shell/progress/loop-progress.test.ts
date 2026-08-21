@@ -1,10 +1,21 @@
+import { parse } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import {
   LoopRun,
   ProgressEmitter,
   type ProgressEvent,
-  planLoopProgress,
+  planLoopProgress as planFromAst,
 } from '../../../src/shell/progress/index.js';
+
+function planLoopProgress(script: string, known: ReadonlySet<string>) {
+  let ast: ReturnType<typeof parse>;
+  try {
+    ast = parse(script);
+  } catch {
+    return null;
+  }
+  return planFromAst(ast, known);
+}
 
 const KNOWN = new Set(['echo', 'ls', 'cat', 'touch', 'sleep', 'seq', 'wc', 'grep', 'pandoc']);
 

@@ -1033,7 +1033,14 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       this.loopRun = null;
       return null;
     }
-    const plan = planLoopProgress(command, this.registryNames);
+    // `transform()` re-parses (cheap; just-bash parses again in `exec`).
+    // A parse error here just means no loop bar — exec reports it properly.
+    let plan: ReturnType<typeof planLoopProgress> = null;
+    try {
+      plan = planLoopProgress(this.bash.transform(command).ast, this.registryNames);
+    } catch {
+      plan = null;
+    }
     if (!plan) return null;
     this.loopRun = new LoopRun(plan, this.progress);
     return this.loopRun;

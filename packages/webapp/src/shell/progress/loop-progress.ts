@@ -1,8 +1,9 @@
 /**
  * Loop iteration counting for the bash progress overlay.
  *
- * We never rewrite the script. Before `bash.exec` the shell hands the raw
- * script to `planLoopProgress`, which `parse()`s it and looks for ONE
+ * We never rewrite the script. Before `bash.exec` the shell hands the AST
+ * (`bash.transform(script).ast` — the browser bundle exports no `parse`) to
+ * `planLoopProgress`, which looks for ONE
  * top-level `for VAR in <static list>; do …; done` whose iteration count is
  * knowable up front (literal words, brace ranges, `$(seq a b)` with literal
  * bounds). Iterations are then inferred from command dispatches: every
@@ -22,13 +23,7 @@
  * individual commands.
  */
 
-import {
-  type CommandNode,
-  parse,
-  type ScriptNode,
-  type StatementNode,
-  type WordNode,
-} from 'just-bash';
+import type { CommandNode, ScriptNode, StatementNode, WordNode } from 'just-bash';
 import type { ProgressEmitter } from './emitter.js';
 
 // just-bash's main entry exports only the top-level AST node types; derive
@@ -243,16 +238,10 @@ function staticWordCount(words: WordNode[]): number | null {
 }
 
 /**
- * Inspect a script and return a plan when exactly one top-level, statically
- * countable `for` loop is present. Returns null (no loop progress) otherwise.
+ * Inspect a parsed script and return a plan when its first top-level `for`
+ * loop is statically countable. Returns null (no loop progress) otherwise.
  */
-export function planLoopProgress(script: string, known: ReadonlySet<string>): LoopPlan | null {
-  let ast: ScriptNode;
-  try {
-    ast = parse(script);
-  } catch {
-    return null;
-  }
+export function planLoopProgress(ast: ScriptNode, known: ReadonlySet<string>): LoopPlan | null {
   let pre = 0;
   let found: LoopPlan | null = null;
   for (const stmt of ast.statements) {
