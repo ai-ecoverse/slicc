@@ -1160,8 +1160,9 @@ When the provider steering the cone has a plain API-key account, realm scripts
 (`.jsh`, `node -e`, `ipx`) see that key under the env name the provider's own
 SDK reads — `AI_GATEWAY_API_KEY` for `vercel-ai-gateway`, `OPENAI_API_KEY` for
 `openai`, `GEMINI_API_KEY` for `google`, … (table: `shell/provider-env-seed.ts`,
-mirroring pi-ai). Only the _selected_ provider is seeded, OAuth access tokens
-are not (use `oauth-token <provider>`), and an explicit shell assignment
+mirroring pi-ai). Only the _selected_ provider is seeded, only into realms the
+cone owns (scoop shells never see it), OAuth access tokens are not seeded (use
+`oauth-token <provider>`), and an explicit shell assignment
 (`AI_GATEWAY_API_KEY=… fx …`) always wins. The `fx` skill in
 [ai-ecoverse/skills](https://github.com/ai-ecoverse/skills) relies on this to
 run Vercel's fx agent with zero credential plumbing.

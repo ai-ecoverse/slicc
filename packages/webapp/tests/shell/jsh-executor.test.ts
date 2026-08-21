@@ -195,6 +195,27 @@ describe('executeJshFile', () => {
     }
   });
 
+  it('never seeds the provider env into scoop-owned realms', async () => {
+    const { ProcessManager } = await import('../../src/kernel/process-manager.js');
+    registerProviderEnvSeeder(() => ({ AI_GATEWAY_API_KEY: 'vck_seeded' }));
+    try {
+      const run = (kind: 'cone' | 'scoop' | 'system') =>
+        executeJshFile(
+          '/workspace/seed.jsh',
+          [],
+          createMockCtx({
+            '/workspace/seed.jsh': 'console.log(String(process.env.AI_GATEWAY_API_KEY));',
+          }),
+          { processManager: new ProcessManager(), owner: { kind } }
+        );
+      expect((await run('scoop')).stdout.trim()).toBe('undefined');
+      expect((await run('cone')).stdout.trim()).toBe('vck_seeded');
+      expect((await run('system')).stdout.trim()).toBe('vck_seeded');
+    } finally {
+      registerProviderEnvSeeder(null);
+    }
+  });
+
   it('provides process.versions.node / version / platform / arch (#2200)', async () => {
     // Packages feature-detect on these at require time — esbuild's Node entry
     // does `process.versions.node.split('.')` at module scope, which threw

@@ -11,6 +11,8 @@
  * exactly as it would under Node.
  *
  * Scope is deliberately narrow:
+ *   - cone/system-owned realms only — `executeJsCode` skips the seed for
+ *     `owner.kind === 'scoop'`, so a sandboxed scoop cannot read the key;
  *   - only the SELECTED provider, never every configured account;
  *   - only plain API keys (`account.apiKey`) — OAuth access tokens keep going
  *     through `oauth-token <provider>`, which owns their refresh semantics;

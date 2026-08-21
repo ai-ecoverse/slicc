@@ -105,8 +105,10 @@ export async function executeJsCode(
   const owner: ProcessOwner = pmConfig?.owner ?? { kind: 'system' };
   const filename = options.filename ?? argv[1] ?? '<eval>';
   // Selected-provider API key under its SDK env name (see provider-env-seed.ts).
-  // Spread first so an explicit shell assignment (`FOO=bar node …`) wins.
-  const providerEnv = await resolveProviderEnvSeed();
+  // Cone/system only: a sandboxed scoop's model traffic goes through the
+  // capability-gated bridge and must never see the raw credential. Spread
+  // first so an explicit shell assignment (`FOO=bar node …`) wins.
+  const providerEnv = owner.kind === 'scoop' ? {} : await resolveProviderEnvSeed();
 
   const result = await runInRealm({
     pm,
