@@ -1594,9 +1594,15 @@ describe('Bridge.routeSprinkleLick', () => {
    */
   function withRouteStorage<T>(run: () => T): T {
     const store = new Map<string, string>();
-    const original = (globalThis as { localStorage?: Storage }).localStorage;
+    // Capture and restore the exact descriptor. Node >= 25 defines a real
+    // `globalThis.localStorage`, so neither deleting it nor re-defining it
+    // with a bare `{ value }` (which is non-writable) is safe: the plain
+    // `globalThis.localStorage = fake` assignments the local-storage tests
+    // below rely on would then throw "Cannot assign to read only property".
+    const prior = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
     Object.defineProperty(globalThis, 'localStorage', {
       configurable: true,
+      writable: true,
       value: {
         getItem: (k: string) => store.get(k) ?? null,
         setItem: (k: string, v: string) => void store.set(k, v),
@@ -1606,14 +1612,8 @@ describe('Bridge.routeSprinkleLick', () => {
     try {
       return run();
     } finally {
-      if (original === undefined) {
-        Reflect.deleteProperty(globalThis, 'localStorage');
-      } else {
-        Object.defineProperty(globalThis, 'localStorage', {
-          configurable: true,
-          value: original,
-        });
-      }
+      if (prior) Object.defineProperty(globalThis, 'localStorage', prior);
+      else Reflect.deleteProperty(globalThis, 'localStorage');
     }
   }
 
