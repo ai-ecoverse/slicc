@@ -226,7 +226,17 @@ test.describe('say -o WAV output (real kokoro)', () => {
     // the test boots — init scripts (webgpu delete, rejection log) re-apply on
     // every navigation, and VFS state (ipk installs, downloaded weights)
     // persists in OPFS/IndexedDB across the reload.
-    const bootLeader = async () => {
+    //
+    // `firstRun` gates the welcome assertion, which is a COLD-boot-only
+    // signal: `detectWelcomeFirstRun` suppresses the lick once the cone's
+    // history already holds one (and returns `isFirstRun: false` outright
+    // when the marker read throws — which is exactly what a wedged OPFS
+    // session does). The staging recovery below re-boots a page that has
+    // already been greeted, so asserting it there fails on a thread whose
+    // only text is the "New messages" follow chip. The terminal-view wait
+    // is the signal that holds for both boots: `mountWorkbenchTerminal`
+    // publishes it only once the kernel session is live.
+    const bootLeader = async ({ firstRun = true }: { firstRun?: boolean } = {}) => {
       await gotoLeader(page);
       await waitForSW(page);
 
@@ -234,9 +244,11 @@ test.describe('say -o WAV output (real kokoro)', () => {
       // cone's welcome message renders only after the kernel-worker cone
       // bootstrap has completed and the OffscreenClient is wired.
       await page.waitForSelector('slicc-input-card');
-      await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC', {
-        timeout: 20_000,
-      });
+      if (firstRun) {
+        await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC', {
+          timeout: 20_000,
+        });
+      }
 
       // Activate the term surface via the dock rail's documented entry point;
       // `selectItem` fires `slicc-dock-select`, which `wc-sprinkles.ts` routes
@@ -328,7 +340,7 @@ test.describe('say -o WAV output (real kokoro)', () => {
       console.warn(
         'hf download still failing after in-place retries; rebooting the leader page once'
       );
-      await bootLeader();
+      await bootLeader({ firstRun: false });
       await clearPartialWeights();
       kokoroDl = await exec(page, KOKORO_DL_CMD);
     }
