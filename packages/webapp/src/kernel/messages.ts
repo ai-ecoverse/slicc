@@ -886,7 +886,15 @@ export interface ScoopListMsg {
     jid: string;
     name: string;
     folder: string;
+    /** Derived presentation flag (`parentId === null`). */
     isCone: boolean;
+    /**
+     * Ownership edge: `null` for a cone, the owning unit's jid for a scoop
+     * (#1666). Optional to match the additive wire contract (`ScoopSummary`,
+     * Swift) — a snapshot from a kernel older than this field has none, and
+     * the panel must not invent one.
+     */
+    parentId?: string | null;
     assistantLabel: string;
     status: ScoopTabState['status'];
     /**

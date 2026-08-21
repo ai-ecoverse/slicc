@@ -147,6 +147,11 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
     public let name: String
     public let folder: String
     public let isCone: Bool
+    /// Ownership edge of the work-unit tree (#1666): `nil` for a cone (root) or
+    /// when the leader predates the field; the owning unit's jid for a scoop.
+    /// `isCone` stays the root test for rendering — this field only attributes
+    /// a scoop to its cone, and is never used to promote a scoop to a root.
+    public let parentId: String?
     public let assistantLabel: String
     public let trigger: String?
     /// Agent-tab lifecycle state. Optional for compatibility with older leaders.
@@ -174,12 +179,14 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         trigger: String? = nil,
         state: String? = nil,
         activity: String? = nil,
-        fill: Double? = nil
+        fill: Double? = nil,
+        parentId: String? = nil
     ) {
         self.jid = jid
         self.name = name
         self.folder = folder
         self.isCone = isCone
+        self.parentId = parentId
         self.assistantLabel = assistantLabel
         self.trigger = trigger
         self.state = state

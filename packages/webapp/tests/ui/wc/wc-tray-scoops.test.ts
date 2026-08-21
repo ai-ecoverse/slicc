@@ -1,6 +1,10 @@
 import type { ScoopSummary } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
-import { toFollowerSwitcherScoops, toScoopSummaries } from '../../../src/ui/wc/wc-tray-scoops.js';
+import {
+  summaryIsRoot,
+  toFollowerSwitcherScoops,
+  toScoopSummaries,
+} from '../../../src/ui/wc/wc-tray-scoops.js';
 
 const cone = {
   jid: 'cone',
@@ -177,5 +181,72 @@ describe('tray scoop tab adapters', () => {
   it('defaults lifecycle state and fill from an older leader payload', () => {
     const [descriptor] = toFollowerSwitcherScoops([cone]);
     expect(descriptor).toMatchObject({ state: 'idle', fill: 0, eyes: 'open' });
+  });
+});
+
+describe('parentId on the wire (#1666 / #2270)', () => {
+  const research = { ...cone, jid: 'cone_2', name: 'Research', assistantLabel: 'Research' };
+  const a = { ...cone, jid: 'scoop_a', name: 'a', isCone: false, parentJid: 'cone' };
+  const b = { ...cone, jid: 'scoop_b', name: 'b', isCone: false, parentJid: 'cone_2' };
+
+  it('toScoopSummaries carries the ownership edge', () => {
+    const summaries = toScoopSummaries([cone, a, research, b], []);
+    expect(summaries.map((s) => [s.jid, s.parentId])).toEqual([
+      ['cone', null],
+      ['scoop_a', 'cone'],
+      ['cone_2', null],
+      ['scoop_b', 'cone_2'],
+    ]);
+  });
+
+  it('summaryIsRoot uses the edge when sent and the flag from older leaders', () => {
+    expect(summaryIsRoot({ isCone: true, parentId: null })).toBe(true);
+    expect(summaryIsRoot({ isCone: false, parentId: 'cone' })).toBe(false);
+    // a lying flag loses to the edge
+    expect(summaryIsRoot({ isCone: true, parentId: 'cone' })).toBe(false);
+    // legacy leader: no edge at all
+    expect(summaryIsRoot({ isCone: true })).toBe(true);
+    expect(summaryIsRoot({ isCone: false })).toBe(false);
+  });
+
+  it('groups each cone with its own scoops in follower descriptors', () => {
+    const descriptors = toFollowerSwitcherScoops(toScoopSummaries([b, a, research, cone], []));
+    expect(descriptors.map((d) => `${d.type}:${d.key}`)).toEqual([
+      'cone:cone_2',
+      'scoop:scoop_b',
+      'cone:cone',
+      'scoop:scoop_a',
+    ]);
+    expect(descriptors.map((d) => d.label)).toEqual(['Research', 'b', 'sliccy', 'a']);
+  });
+
+  it('keeps a nested scoop inside its cone group (depth-first by owner)', () => {
+    const grandchild = {
+      ...cone,
+      jid: 'scoop_aa',
+      name: 'aa',
+      isCone: false,
+      parentJid: 'scoop_a',
+    };
+    const orphan = { ...cone, jid: 'scoop_x', name: 'x', isCone: false, parentJid: 'gone' };
+    const descriptors = toFollowerSwitcherScoops(
+      toScoopSummaries([orphan, grandchild, b, a, research, cone], [])
+    );
+    expect(descriptors.map((d) => d.key)).toEqual([
+      'cone_2',
+      'scoop_b',
+      'cone',
+      'scoop_a',
+      'scoop_aa',
+      'scoop_x',
+    ]);
+  });
+
+  it('keeps the legacy cone-first order when a leader sends no parentId', () => {
+    const legacy = [
+      { jid: 's', name: 's', folder: 's', isCone: false, assistantLabel: 's' },
+      { jid: 'c', name: 'c', folder: 'cone', isCone: true, assistantLabel: 'sliccy' },
+    ];
+    expect(toFollowerSwitcherScoops(legacy).map((d) => d.key)).toEqual(['c', 's']);
   });
 });

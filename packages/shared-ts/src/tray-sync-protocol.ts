@@ -718,7 +718,15 @@ export interface ScoopSummary {
   jid: string;
   name: string;
   folder: string;
+  /** Derived presentation flag: `true` for a root unit (a cone). Kept for older followers. */
   isCone: boolean;
+  /**
+   * Ownership edge of the work-unit tree (#1666): `null` for a root (cone),
+   * the owning unit's jid for a scoop. Absent from older leaders — a follower
+   * that does not receive it must not invent one (treat the owner as
+   * unknown), and must never turn a scoop into a root.
+   */
+  parentId?: string | null;
   assistantLabel: string;
   trigger?: string;
   /**

@@ -1281,11 +1281,12 @@ export class OffscreenClient implements KernelClientFacade {
       folder: s.folder,
       isCone: s.isCone,
       type: s.isCone ? 'cone' : 'scoop',
-      // The wire carries no ownership edge yet; a panel-side scoop belongs to
-      // the list's cone. A list without a cone (partial snapshots in tests,
-      // a follower mid-join) must still not turn a scoop into a root, so an
-      // unknown parent is a non-null sentinel. Phase 5 puts `parentId` on the wire.
-      parentJid: s.isCone ? null : (coneJid ?? UNKNOWN_PARENT_JID),
+      // Ownership edge straight from the wire (#1666). A legacy leader that
+      // predates `parentId` gets the old inference: a scoop belongs to the
+      // list's cone, and a list without a cone must still not turn a scoop
+      // into a root, so an unknown parent is a non-null sentinel.
+      parentJid:
+        s.parentId !== undefined ? s.parentId : s.isCone ? null : (coneJid ?? UNKNOWN_PARENT_JID),
       requiresTrigger: !s.isCone,
       assistantLabel: s.assistantLabel,
       addedAt: new Date().toISOString(),
