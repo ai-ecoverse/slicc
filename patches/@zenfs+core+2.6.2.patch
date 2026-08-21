@@ -1,3 +1,33 @@
+diff --git a/node_modules/@zenfs/core/dist/internal/file_index.js b/node_modules/@zenfs/core/dist/internal/file_index.js
+index 399050b..3054275 100644
+--- a/node_modules/@zenfs/core/dist/internal/file_index.js
++++ b/node_modules/@zenfs/core/dist/internal/file_index.js
+@@ -79,7 +79,24 @@ export class Index extends Map {
+      * @internal
+      */
+     _alloc() {
+-        return Math.max(...[...this.values()].flatMap(i => [i.ino, i.data])) + 1;
++        // PATCH(zen-fs/core#312): the original spread `2 * entryCount`
++        // arguments into `Math.max`, so every createFile/mkdir threw
++        // `RangeError: Maximum call stack size exceeded` once the index grew
++        // past the host's spread-argument ceiling — and, because that ceiling
++        // is really "arguments vs. remaining stack", intermittently well
++        // before it, depending on how deep the async FS chain already was.
++        // The reduction has no argument limit and allocates nothing.
++        // Only difference: an EMPTY index yields 1 here and -Infinity
++        // upstream. `IndexFS.create` requires the parent entry to exist,
++        // so it can never reach `_alloc` on an empty index.
++        let max = 0;
++        for (const i of this.values()) {
++            if (i.ino > max)
++                max = i.ino;
++            if (i.data > max)
++                max = i.data;
++        }
++        return max + 1;
+     }
+     /**
+      * Gets a list of entries for each directory in the index.
 diff --git a/node_modules/@zenfs/core/dist/vfs/vcache.js b/node_modules/@zenfs/core/dist/vfs/vcache.js
 index e978bba..0e00a9e 100644
 --- a/node_modules/@zenfs/core/dist/vfs/vcache.js

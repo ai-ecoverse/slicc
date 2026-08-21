@@ -63,6 +63,25 @@ export function convertError(err: unknown, path: string): FsError {
         path
       );
     }
+    // Same class, different marker: a STACK overflow. `RangeError: Maximum
+    // call stack size exceeded` shares no substring with the Set/Map guard
+    // above ('call stack size exceeded' vs 'maximum size exceeded'), carries
+    // no `.code`, and matches no errno text — so it fell all the way through
+    // to the EINVAL default and users saw
+    // `EINVAL: Maximum call stack size exceeded` on writes. That reads as a
+    // bad argument, and worse, `withKindMismatchRetryPaths` treats EINVAL as
+    // a poisoned-index entry: every overflow bought a pointless OPFS probe
+    // and a retry that overflowed again. The known source was ZenFS'
+    // `Index._alloc` spreading the whole index into `Math.max`
+    // (zen-fs/core#312, fixed in patches/@zenfs+core+2.6.2.patch); this guard
+    // makes any future engine-limit failure name itself instead.
+    if (overflowMsg.includes('call stack size exceeded')) {
+      return new FsError(
+        'EIO',
+        `internal overflow, not storage: ${overflowMsg} — reload the session`,
+        path
+      );
+    }
   }
   // ZenFS ErrnoError carries `.code` directly (POSIX string).
   const structured = (err as { code?: unknown })?.code;
