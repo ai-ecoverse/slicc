@@ -78,7 +78,6 @@
   "packages/webapp/src/scoops/tray-webrtc.ts": 1,
   "packages/webapp/src/shell/arg-parser.ts": 2,
   "packages/webapp/src/shell/bsh-watchdog.ts": 1,
-  "packages/webapp/src/shell/jsh-executor.ts": 1,
   "packages/webapp/src/shell/mcp/store.ts": 2,
   "packages/webapp/src/shell/plugins/loader.ts": 10,
   "packages/webapp/src/shell/plugins/store.ts": 2,

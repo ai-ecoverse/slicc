@@ -24,6 +24,7 @@ import type { RealmFactory } from '../kernel/realm/realm-runner.js';
 import { runInRealm } from '../kernel/realm/realm-runner.js';
 import { isSyncFsBridgeEnabled } from '../kernel/realm/sync-fs-enabled.js';
 import { stdinAsLatin1 } from './just-bash-compat.js';
+import { resolveProviderEnvSeed } from './provider-env-seed.js';
 
 export interface JshResult {
   stdout: string;
@@ -103,6 +104,9 @@ export async function executeJsCode(
   const pm = pmConfig?.processManager ?? lookupGlobalPm() ?? lazyEphemeralPm();
   const owner: ProcessOwner = pmConfig?.owner ?? { kind: 'system' };
   const filename = options.filename ?? argv[1] ?? '<eval>';
+  // Selected-provider API key under its SDK env name (see provider-env-seed.ts).
+  // Spread first so an explicit shell assignment (`FOO=bar node …`) wins.
+  const providerEnv = await resolveProviderEnvSeed();
 
   const result = await runInRealm({
     pm,
@@ -111,7 +115,7 @@ export async function executeJsCode(
     kind: 'js',
     code,
     argv,
-    env: Object.fromEntries(ctx.env.entries()),
+    env: { ...providerEnv, ...Object.fromEntries(ctx.env.entries()) },
     cwd: ctx.cwd,
     filename,
     // Forward the upstream pipeline's stdin (just-bash v3 exposes it as
@@ -159,7 +163,7 @@ function lazyEphemeralPm(): ProcessManager {
 }
 
 function lookupGlobalPm(): ProcessManager | null {
-  const g = globalThis as Record<string, unknown>;
+  const g = globalThis as { __slicc_pm?: unknown };
   const pm = g.__slicc_pm;
   if (
     pm &&

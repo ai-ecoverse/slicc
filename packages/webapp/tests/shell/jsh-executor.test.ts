@@ -5,6 +5,7 @@ import type { CommandContext, FsStat, IFileSystem } from 'just-bash';
 import { unsafeBytesFromLatin1 } from 'just-bash';
 import { describe, expect, it } from 'vitest';
 import { executeJsCode, executeJshFile } from '../../src/shell/jsh-executor.js';
+import { registerProviderEnvSeeder } from '../../src/shell/provider-env-seed.js';
 
 const here = dirname(fileURLToPath(import.meta.url));
 const repoRoot = resolve(here, '..', '..', '..', '..');
@@ -174,6 +175,24 @@ describe('executeJshFile', () => {
     const result = await executeJshFile('/workspace/env.jsh', [], ctx);
     expect(result.exitCode).toBe(0);
     expect(result.stdout.trim()).toBe('hello_env');
+  });
+
+  it('seeds the registered provider env below explicit shell env', async () => {
+    registerProviderEnvSeeder(() => ({ AI_GATEWAY_API_KEY: 'vck_seeded', OTHER: 'seed' }));
+    try {
+      const ctx = createMockCtx(
+        {
+          '/workspace/seed.jsh':
+            'console.log(process.env.AI_GATEWAY_API_KEY + " " + process.env.OTHER);',
+        },
+        { OTHER: 'explicit' }
+      );
+      const result = await executeJshFile('/workspace/seed.jsh', [], ctx);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout.trim()).toBe('vck_seeded explicit');
+    } finally {
+      registerProviderEnvSeeder(null);
+    }
   });
 
   it('provides process.versions.node / version / platform / arch (#2200)', async () => {
