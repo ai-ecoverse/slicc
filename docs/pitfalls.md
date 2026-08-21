@@ -447,6 +447,16 @@ across paths **only for a genuine hardlink** (nonzero ino, matching format bits,
 do not need to serialize reads; `preview-vfs-responder` keeps its queue only as
 defense in depth. Regression: `tests/fs/virtual-fs-concurrent-read.test.ts`.
 
+**Probe `globalThis.__zenfs__` by existence, never by enumeration.** The global
+is `Object.create(fs)` — a prototype view with **no own properties**, so
+`Object.keys`, `Object.hasOwn` and spread all see an empty object even though
+`__zenfs__.readFileSync` resolves. That is deliberate: upstream keeps the global
+at the bare minimum ZenFS Viewer needs and
+[declined](https://github.com/zen-fs/core/issues/310) to make it enumerable
+(they may restrict it further). We used to patch the line into an own-property
+copy; the patch is gone. A presence check is `typeof globalThis.__zenfs__ !==
+'undefined'`, and the version lives in the `_version` export, not on the global.
+
 ## CDP Transport: Extension Mode
 
 **File**: `packages/webapp/src/cdp/extension-bridge-transport.ts`
