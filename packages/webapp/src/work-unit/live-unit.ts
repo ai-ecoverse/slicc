@@ -8,10 +8,12 @@
  * `Map<jid, LiveWorkUnit>` and every map-shaped view it still exposes
  * (`getContexts()`, `getTabsMap()`) is derived from these units.
  *
- * The one thing this buys that the maps never had: `close()` is a single,
- * idempotent teardown — idle timer, running turn, context (realm workers,
- * shell processes), observers, completion buffers and waiters — so nothing
- * about a dropped unit lingers in a global map.
+ * The one thing this buys that the maps never had: `teardown()` is a single,
+ * idempotent runtime teardown — idle timer, running turn, context (realm
+ * workers, shell processes), observers, completion buffers and waiters — so
+ * nothing about a dropped unit lingers in a global map. `close()` keeps the
+ * `WorkUnitRuntime` contract: it unregisters through the host (which checks
+ * active licks, deletes the record, then ends in `teardown()`).
  *
  * The unit knows nothing about the DOM, floats, the extension, or tray
  * transports; everything external arrives through {@link LiveWorkUnitDeps}.
@@ -59,6 +61,11 @@ export interface LiveWorkUnitDeps {
   clearIdleTimer(jid: WorkUnitId): void;
   /** Drop response buffers / mute state and release `scoop_wait` callers. */
   forgetCompletion(jid: WorkUnitId, reason: 'close'): void;
+  /**
+   * Unregister the unit through the host's full path: rejects when active
+   * licks pin it, deletes the record, and ends in {@link LiveWorkUnit.teardown}.
+   */
+  unregister(jid: WorkUnitId): Promise<void>;
 }
 
 /**
@@ -248,12 +255,22 @@ export class LiveWorkUnit implements WorkUnitRuntime {
   }
 
   /**
-   * The single teardown path. Idempotent. Order matters: disarm the idle
-   * timer first (so it cannot fire into a half-torn unit), stop the turn,
-   * dispose the context (realm workers + shell processes go with it), then
-   * release everyone waiting on this unit.
+   * `WorkUnitRuntime.close()`: unregister and tear down. Routed through the
+   * host so the active-licks guard and record deletion apply exactly as
+   * they do for `drop_scoop`; the host ends in {@link teardown}.
    */
-  async close(): Promise<void> {
+  close(): Promise<void> {
+    if (this.closed) return Promise.resolve();
+    return this.deps.unregister(this.id);
+  }
+
+  /**
+   * The single runtime teardown path. Idempotent. Order matters: disarm the
+   * idle timer first (so it cannot fire into a half-torn unit), stop the
+   * turn, dispose the context (realm workers + shell processes go with it),
+   * then release everyone waiting on this unit.
+   */
+  async teardown(): Promise<void> {
     if (this.closed) return;
     this.closed = true;
     this.deps.clearIdleTimer(this.id);

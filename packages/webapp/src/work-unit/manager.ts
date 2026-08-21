@@ -73,12 +73,11 @@ export class WorkUnitManager {
       return null;
     }
     // Prefer the owning live runtime; fall back to the read-through adapter
-    // for a record whose runtime has not been spawned yet.
+    // for a record whose runtime has not been spawned yet. The live unit is
+    // deliberately NOT cached: once the host drops it (e.g. `destroyScoopTab`
+    // without unregister) a fresh adapter must take over, not a closed unit.
     const live = this.host.getLiveUnit?.(id);
-    if (live) {
-      this.runtimes.set(id, live);
-      return live;
-    }
+    if (live) return live;
     let runtime = this.runtimes.get(id);
     if (!runtime) {
       runtime = new ScoopContextWorkUnit(id, this.host);

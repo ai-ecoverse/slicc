@@ -200,13 +200,17 @@ export class ScoopLifecycleManager {
           this.sendPrompt(j, text, senderId, senderName, [], options),
         clearIdleTimer: (j) => this.deps.idleTimers.clear(j),
         forgetCompletion: (j, reason) => this.deps.completionService.forgetScoop(j, reason),
+        unregister: (j) => this.unregister(j),
       });
       this.units.set(jid, unit);
     }
     return unit;
   }
 
-  /** Live contexts view (derived; read-only for callers). */
+  /**
+   * Live contexts view. A per-call snapshot derived from the units — hold the
+   * result for the duration of a loop rather than re-reading it per item.
+   */
   getContexts(): Map<string, ScoopContext> {
     const out = new Map<string, ScoopContext>();
     for (const [jid, unit] of this.units) {
@@ -378,16 +382,16 @@ export class ScoopLifecycleManager {
     this.deps.idleTimers.clear(jid);
     const unit = this.units.get(jid);
     if (!unit) return;
-    // `close()` is the single teardown: stops the turn, disposes the context
-    // (realm workers + shell processes), drops observers and releases any
-    // `scoop_wait` caller. Shutdown / reset / rollback paths that bypass
-    // `unregister` reclaim everything the same way.
-    void unit.close();
+    // `teardown()` is the single runtime teardown: stops the turn, disposes
+    // the context (realm workers + shell processes), drops observers and
+    // releases any `scoop_wait` caller. Shutdown / reset / rollback paths
+    // that bypass `unregister` reclaim everything the same way.
+    void unit.teardown();
     this.units.delete(jid);
     log.info('Scoop context destroyed', { jid });
   }
 
-  /** Live tabs view (derived; read-only for callers). */
+  /** Live tabs view. A per-call snapshot, like {@link getContexts}. */
   getTabsMap(): Map<string, ScoopTabState> {
     const out = new Map<string, ScoopTabState>();
     for (const [jid, unit] of this.units) {
