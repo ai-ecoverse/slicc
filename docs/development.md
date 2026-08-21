@@ -116,6 +116,19 @@ This repo uses Renovate (`renovate.json`) to keep dependencies current, but enfo
 
 These delays are configured in `renovate.json` via `minimumReleaseAge` (top-level default) and per-rule overrides under `packageRules`. `internalChecksFilter: "strict"` ensures Renovate also applies the cooldown when deciding whether a PR is _eligible to merge_, not just when it is created — automerge will not fire until the release-age threshold has been satisfied for every package in the PR.
 
+### Exact pins, no ranges
+
+Every npm `dependencies` / `devDependencies` entry is pinned to an exact version (`renovate.json` → `rangeStrategy: "pin"` for `matchManagers: ["npm"]`). Do not reintroduce `^` or `~` ranges in a `package.json`; `engines` and `peerDependencies` intentionally keep their ranges.
+
+This is not just a style preference — a caret range in a workspace `package.json` is silently unmaintained. npm hoists every dependency into the root `node_modules/`, but since [renovatebot/renovate#37407](https://github.com/renovatebot/renovate/pull/37407) Renovate resolves a workspace dep's locked version by looking for `packages/<pkg>/node_modules/<dep>` in `package-lock.json` — a key npm never writes when the dep is hoisted. The lookup returns `lockedVersion: null`, so Renovate can only propose updates that change the _range_, and an in-range patch release never produces a PR. `@earendil-works/pi-ai` sat on 0.84.0 under `^0.84.0` for a week that way, which is why Grok 4.6 never reached the model dropdown (PR #2293). Only deps declared in the root `package.json` are unaffected, because their lock key has no directory prefix.
+
+To check for drift by hand, compare the locked version against the registry:
+
+```bash
+node -p "JSON.parse(require('fs').readFileSync('package-lock.json','utf8')).packages['node_modules/<dep>'].version"
+npm view <dep> version
+```
+
 ### Reviewer expectations
 
 - Do not manually merge a Renovate PR that Renovate is still holding for the cooldown window. Wait for Renovate to mark the PR mergeable.
