@@ -85,6 +85,12 @@ export function createWcController(
     onBusyPhaseChange: (phase) => {
       refs.inputCard.querySelector('slicc-send-button')?.setAttribute('phase', phase);
     },
+    onToolProgressChange: (fraction) => {
+      const button = refs.inputCard.querySelector('slicc-send-button');
+      if (!button) return;
+      if (fraction === null) button.removeAttribute('progress');
+      else button.setAttribute('progress', fraction.toFixed(3));
+    },
     onMessageDisposed: (messageId) => {
       const instances = dipInstances.get(messageId);
       if (instances) {

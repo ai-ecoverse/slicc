@@ -65,11 +65,13 @@ import { EMPTY_BYTES } from './just-bash-compat.js';
 import { parseShellArgs } from './parse-shell-args.js';
 import {
   createFetchProgressObserver,
-  LoopRun,
   makeSleepWithProgress,
   ProgressEmitter,
-  planLoopProgress,
+  planScriptProgress,
+  ScriptRun,
+  scriptLabel,
   wrapCommandForProgress,
+  wrapTimeoutForProgress,
 } from './progress/index.js';
 import { createProxiedFetch } from './proxied-fetch.js';
 import { ScriptCatalog } from './script-catalog.js';
@@ -358,15 +360,15 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   private activeRunSignal: AbortSignal | undefined;
 
   /**
-   * Loop iteration counter for the run currently inside `bash.exec`
-   * (`./progress/loop-progress.ts`). One per shell: a second concurrent run
-   * (detached job) starting while one is active disables counting for both
-   * rather than miscounting — see `beginLoopRun`.
+   * Script-level progress unit for the run currently inside `bash.exec`
+   * (`./progress/script-progress.ts`). One per shell: a second concurrent run
+   * (detached job) starting while one is active ends the first rather than
+   * miscounting — see `beginScriptRun`.
    */
-  private loopRun: LoopRun | null = null;
-  private loopRunsActive = 0;
+  private scriptRun: ScriptRun | null = null;
+  private scriptRunsActive = 0;
 
-  /** Registry command names, for the loop planner's "is this a dispatch" test. */
+  /** Registry command names, for the script planner's "is this a dispatch" test. */
   private registryNames: ReadonlySet<string> = new Set();
 
   /**
@@ -932,13 +934,13 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     };
     const pathBeforeExec = this.lastEnv.PATH;
     this.activeRunSignal = signal;
-    const loopRun = this.beginLoopRun(command);
+    const scriptRun = this.beginScriptRun(command);
     let result: BashExecResult;
     try {
       result = await this.bash.exec(command, execOptions);
     } finally {
       if (this.activeRunSignal === signal) this.activeRunSignal = undefined;
-      this.endLoopRun(loopRun);
+      this.endScriptRun(scriptRun);
     }
     // Persist any "Always" command grants confirmed during dispatch now that we
     // are outside just-bash's execution box (where VFS async timers are blocked).
@@ -1009,52 +1011,56 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * workflows) must go through this too.
    */
   private wrapCommandForDispatch(command: Command): Command {
-    const wrapped = wrapCommandForProgress(this.wrapCommandForSudo(command), this.progress);
-    const onDispatch = () => this.loopRun?.onDispatch();
+    const inner = this.wrapCommandForSudo(command);
+    const wrapped =
+      command.name === 'timeout'
+        ? wrapTimeoutForProgress(inner, this.progress)
+        : wrapCommandForProgress(inner, this.progress);
+    const onSettled = () => this.scriptRun?.stepDone();
     return {
       ...wrapped,
       async execute(args, ctx) {
-        // Loop counting seam: every registry dispatch, including the ones
-        // `wrapCommandForProgress` skips (`echo`, …). Counted on COMPLETION
-        // so "for f (1/3)" appears after the first iteration finishes, not
-        // while its command is still running. O(1) when no loop is tracked.
+        // Step counting seam: every registry dispatch, including the ones
+        // `wrapCommandForProgress` skips (`echo`, …). Counted on COMPLETION so
+        // the script bar advances when a step finishes, not when it starts.
+        // O(1) when no script unit is active.
         try {
           return await wrapped.execute(args, ctx);
         } finally {
-          onDispatch();
+          onSettled();
         }
       },
     };
   }
 
-  /** Plan loop progress for a script about to run; null when not countable. */
-  private beginLoopRun(command: string): LoopRun | null {
-    this.loopRunsActive += 1;
+  /** Open the script-level progress unit for a script about to run. */
+  private beginScriptRun(command: string): ScriptRun | null {
+    this.scriptRunsActive += 1;
     if (!this.progress.hasSink()) return null;
-    if (this.loopRunsActive > 1) {
-      // Concurrent runs share one dispatch stream — give up on both.
-      this.loopRun?.end();
-      this.loopRun = null;
+    if (this.scriptRunsActive > 1) {
+      // Concurrent runs share one dispatch stream — close the first rather
+      // than let both miscount; the newer run gets no unit either.
+      this.scriptRun?.end();
+      this.scriptRun = null;
       return null;
     }
-    // `transform()` re-parses (cheap; just-bash parses again in `exec`).
-    // A parse error here just means no loop bar — exec reports it properly.
-    let plan: ReturnType<typeof planLoopProgress> = null;
+    // `transform()` re-parses (cheap; just-bash parses again in `exec`). A
+    // parse error here just means an indeterminate unit — exec reports it.
+    let plan: ReturnType<typeof planScriptProgress> = { totalSteps: null };
     try {
-      plan = planLoopProgress(this.bash.transform(command).ast, this.registryNames);
+      plan = planScriptProgress(this.bash.transform(command).ast, this.registryNames);
     } catch {
-      plan = null;
+      plan = { totalSteps: null };
     }
-    if (!plan) return null;
-    this.loopRun = new LoopRun(plan, this.progress);
-    return this.loopRun;
+    this.scriptRun = new ScriptRun(plan, this.progress, scriptLabel(command));
+    return this.scriptRun;
   }
 
-  private endLoopRun(run: LoopRun | null): void {
-    this.loopRunsActive = Math.max(0, this.loopRunsActive - 1);
+  private endScriptRun(run: ScriptRun | null): void {
+    this.scriptRunsActive = Math.max(0, this.scriptRunsActive - 1);
     if (run) {
       run.end();
-      if (this.loopRun === run) this.loopRun = null;
+      if (this.scriptRun === run) this.scriptRun = null;
     }
   }
 

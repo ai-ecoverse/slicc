@@ -53,7 +53,14 @@ interface IdState {
   tail: Promise<void>;
 }
 
+/** Receives child-unit events while a script-level unit is active. */
+export interface ProgressAggregator {
+  readonly id: string;
+  onChild(event: ProgressEvent): void;
+}
+
 export class ProgressEmitter {
+  private aggregator: ProgressAggregator | null = null;
   private readonly now: () => number;
   private readonly explicitSink: ProgressSink | undefined;
   private readonly scrubLabel: ((text: string) => Promise<string>) | undefined;
@@ -78,12 +85,26 @@ export class ProgressEmitter {
   }
 
   /**
+   * Route every unit other than `aggregator.id` into the aggregator instead of
+   * the sink: the chat UI shows one bar per tool call (see
+   * `script-progress.ts`). `null` restores direct delivery.
+   */
+  setAggregator(aggregator: ProgressAggregator | null): void {
+    this.aggregator = aggregator;
+  }
+
+  /**
    * Emit an event. `start` and `end` always pass; `update` is dropped when
    * the previous update for the same id was less than 250 ms ago. Returns
    * `true` when the event was forwarded (possibly asynchronously, if the
    * label had to be scrubbed first).
    */
   emit(event: ProgressEvent): boolean {
+    const aggregator = this.aggregator;
+    if (aggregator && event.id !== aggregator.id) {
+      aggregator.onChild(event);
+      return true;
+    }
     const sink = this.resolveSink();
     if (!sink) {
       // Nobody listening: forget the id so a later `end` cannot leak state.

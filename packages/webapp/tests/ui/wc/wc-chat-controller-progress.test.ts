@@ -1,9 +1,10 @@
 // @vitest-environment jsdom
 /**
- * Bash progress overlay rendering: `tool_progress` events attach a compact
- * bar (label / percentage / ETA) to the in-flight tool row, indeterminate
- * units get a spinner track, `end` removes the unit, the bar survives a
- * row rebuild, and `tool_result` clears everything for that call.
+ * Bash progress overlay rendering: `tool_progress` events dress the in-flight
+ * tool row with three quiet cues (icon fill via `--slicc-progress`, a
+ * three-dot badge, the body top bar via `data-progress`), survive a row
+ * rebuild, clear on `end`/`tool_result`, and feed the composer ring through
+ * `onToolProgressChange`.
  */
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -21,7 +22,7 @@ vi.mock('../../../src/kernel/telemetry.js', async () => {
 import type { ToolProgressEvent } from '@slicc/shared-ts';
 import type { AgentEvent, AgentHandle } from '../../../src/ui/types.js';
 import { WcChatController } from '../../../src/ui/wc/wc-chat-controller.js';
-import { formatEta } from '../../../src/ui/wc/wc-message-view.js';
+import { formatBytes, formatEta } from '../../../src/ui/wc/wc-message-view.js';
 
 class FakeAgent implements AgentHandle {
   listeners = new Set<(event: AgentEvent) => void>();
@@ -37,20 +38,22 @@ class FakeAgent implements AgentHandle {
 }
 
 function progress(partial: Partial<ToolProgressEvent> = {}): ToolProgressEvent {
-  return { id: 'sleep-1', label: 'sleep 30', phase: 'update', ...partial };
+  return { id: 'script-1', label: 'sleep 30', phase: 'update', ...partial };
 }
 
 describe('WcChatController tool_progress handling', () => {
   let thread: HTMLElement;
   let agent: FakeAgent;
   let controller: WcChatController;
+  let ring: Array<number | null>;
 
   beforeEach(() => {
     document.body.replaceChildren();
     thread = document.createElement('slicc-chat-thread');
     document.body.appendChild(thread);
     agent = new FakeAgent();
-    controller = new WcChatController({ thread, agent });
+    ring = [];
+    controller = new WcChatController({ thread, agent, onToolProgressChange: (f) => ring.push(f) });
     agent.emit({ type: 'message_start', messageId: 'm1' });
     agent.emit({
       type: 'tool_use_start',
@@ -60,73 +63,80 @@ describe('WcChatController tool_progress handling', () => {
     });
   });
 
-  const block = () => thread.querySelector<HTMLElement>('slicc-action-row .wcmsg-progress');
+  const row = () => thread.querySelector<HTMLElement>('slicc-action-row');
+  const dots = () => row()?.querySelectorAll<HTMLElement>('.wcmsg-dots__dot') ?? [];
+  const emit = (p: ToolProgressEvent) =>
+    agent.emit({ type: 'tool_progress', messageId: 'm1', toolName: 'bash', progress: p });
 
-  it('renders label, percentage and ETA for a determinate unit', () => {
-    agent.emit({
-      type: 'tool_progress',
-      messageId: 'm1',
-      toolName: 'bash',
-      progress: progress({ fraction: 0.5, etaMs: 15_000 }),
-    });
-    const el = block();
-    expect(el).not.toBeNull();
-    expect(el?.querySelector('.wcmsg-progress__label')?.textContent).toBe('sleep 30');
-    expect(el?.querySelector('.wcmsg-progress__pct')?.textContent).toBe('50%');
-    expect(el?.querySelector('.wcmsg-progress__eta')?.textContent).toBe('~15s');
-    const fill = el?.querySelector<HTMLElement>('.wcmsg-progress__fill');
-    expect(fill?.style.width).toBe('50%');
-    expect(fill?.classList.contains('wcmsg-progress__fill--indeterminate')).toBe(false);
-    expect(el?.querySelector('[role="progressbar"]')?.getAttribute('aria-valuenow')).toBe('50');
+  it('sets the determinate treatment: custom property, dots by thirds, title', () => {
+    emit(progress({ fraction: 0.5, etaMs: 15_000, done: 3, total: 6, unit: 'iterations' }));
+    const r = row();
+    expect(r?.getAttribute('data-progress')).toBe('determinate');
+    expect(r?.style.getPropertyValue('--slicc-progress')).toBe('0.5');
+    expect(r?.getAttribute('title')).toBe('3/6 · sleep 30 — 50%, ~15s left');
+    const d = dots();
+    expect(d).toHaveLength(3);
+    expect([...d].map((x) => x.classList.contains('is-done'))).toEqual([true, false, false]);
+    expect([...d].map((x) => x.classList.contains('is-active'))).toEqual([false, true, false]);
+    expect(r?.querySelector('.wcmsg-dots')?.getAttribute('aria-valuenow')).toBe('50');
+    // Dots replace the "…" badge, before the chevron.
+    const head = r?.querySelector('.slicc-act__head');
+    expect(head?.lastElementChild?.classList.contains('slicc-act__chev')).toBe(true);
+    expect(ring).toEqual([0.5]);
   });
 
-  it('renders an indeterminate spinner when fraction is undefined', () => {
-    agent.emit({
-      type: 'tool_progress',
-      messageId: 'm1',
-      toolName: 'bash',
-      progress: progress({ id: 'cmd-1', label: 'git fetch', phase: 'start' }),
-    });
-    const el = block();
-    expect(el?.querySelector('.wcmsg-progress__pct')?.textContent).toBe('');
-    expect(el?.querySelector('.wcmsg-progress__eta')?.textContent).toBe('');
-    expect(
-      el
-        ?.querySelector('.wcmsg-progress__fill')
-        ?.classList.contains('wcmsg-progress__fill--indeterminate')
-    ).toBe(true);
-    expect(el?.querySelector('[role="progressbar"]')?.hasAttribute('aria-valuenow')).toBe(false);
+  it('marks the last dot active near the end and all done at 100%', () => {
+    emit(progress({ fraction: 0.9 }));
+    expect([...dots()].map((x) => x.classList.contains('is-active'))).toEqual([false, false, true]);
+    emit(progress({ fraction: 1 }));
+    expect([...dots()].map((x) => x.classList.contains('is-done'))).toEqual([true, true, true]);
+    expect([...dots()].some((x) => x.classList.contains('is-active'))).toBe(false);
   });
 
-  it('tracks several units and removes each on end', () => {
-    const emit = (p: ToolProgressEvent) =>
-      agent.emit({ type: 'tool_progress', messageId: 'm1', toolName: 'bash', progress: p });
-    emit(progress({ id: 'a', label: 'a', phase: 'start' }));
-    emit(progress({ id: 'b', label: 'b', phase: 'start' }));
-    expect(block()?.querySelectorAll('.wcmsg-progress__unit')).toHaveLength(2);
-    emit(progress({ id: 'a', label: 'a', phase: 'end' }));
-    expect(block()?.querySelectorAll('.wcmsg-progress__unit')).toHaveLength(1);
-    expect(block()?.querySelector('[data-progress-id="b"]')).not.toBeNull();
-    emit(progress({ id: 'b', label: 'b', phase: 'end' }));
-    expect(block()).toBeNull();
+  it('renders the indeterminate treatment without a fraction', () => {
+    emit(progress({ id: 'script-2', label: 'git fetch', phase: 'start', fraction: undefined }));
+    const r = row();
+    expect(r?.getAttribute('data-progress')).toBe('indeterminate');
+    expect(r?.querySelector('.wcmsg-dots')?.classList.contains('wcmsg-dots--indeterminate')).toBe(
+      true
+    );
+    expect(r?.querySelector('.wcmsg-dots')?.hasAttribute('aria-valuenow')).toBe(false);
+    expect(ring).toEqual([]); // unknown → ring stays indeterminate (no change from null)
   });
 
-  it('keeps the bar across a message rerender and clears it on tool_result', () => {
-    agent.emit({
-      type: 'tool_progress',
-      messageId: 'm1',
-      toolName: 'bash',
-      progress: progress({ fraction: 0.25, etaMs: 22_500 }),
-    });
-    // A second tool starting rebuilds the message's rows.
-    agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'read_file', toolInput: {} });
-    const rows = thread.querySelectorAll('slicc-action-row');
-    expect(rows).toHaveLength(2);
-    expect(rows[0].querySelector('.wcmsg-progress__pct')?.textContent).toBe('25%');
-    expect(rows[1].querySelector('.wcmsg-progress')).toBeNull();
+  it('clears on end and on tool_result, and resets the ring', () => {
+    emit(progress({ fraction: 0.25 }));
+    emit(progress({ fraction: 1, phase: 'end' }));
+    expect(row()?.hasAttribute('data-progress')).toBe(false);
+    expect(dots()).toHaveLength(0);
+    expect(ring).toEqual([0.25, null]);
 
+    emit(progress({ fraction: 0.4 }));
     agent.emit({ type: 'tool_result', messageId: 'm1', toolName: 'bash', result: 'done' });
-    expect(thread.querySelector('.wcmsg-progress')).toBeNull();
+    expect(thread.querySelector('[data-progress]')).toBeNull();
+    expect(ring.at(-1)).toBeNull();
+  });
+
+  it('keeps the treatment across a message rerender', () => {
+    emit(progress({ fraction: 0.25, etaMs: 22_500 }));
+    agent.emit({ type: 'tool_use_start', messageId: 'm1', toolName: 'read_file', toolInput: {} });
+    const rows = thread.querySelectorAll<HTMLElement>('slicc-action-row');
+    expect(rows).toHaveLength(2);
+    expect(rows[0].getAttribute('data-progress')).toBe('determinate');
+    expect(rows[0].querySelectorAll('.wcmsg-dots__dot')).toHaveLength(3);
+    expect(rows[1].hasAttribute('data-progress')).toBe(false);
+  });
+
+  it('averages several in-flight determinate calls for the ring', () => {
+    emit(progress({ fraction: 0.2 }));
+    agent.emit({
+      type: 'tool_use_start',
+      messageId: 'm1',
+      toolName: 'bash',
+      toolInput: { command: 'ls' },
+    });
+    emit(progress({ id: 'script-9', fraction: 0.6 }));
+    expect(ring.at(-1)).toBeCloseTo(0.4);
   });
 
   it('ignores progress for an unknown message or a tool with no in-flight call', () => {
@@ -142,21 +152,22 @@ describe('WcChatController tool_progress handling', () => {
       toolName: 'curl_tool',
       progress: progress(),
     });
-    expect(thread.querySelector('.wcmsg-progress')).toBeNull();
+    expect(thread.querySelector('[data-progress]')).toBeNull();
   });
 
   it('drops tracked progress on dispose', () => {
-    agent.emit({ type: 'tool_progress', messageId: 'm1', toolName: 'bash', progress: progress() });
-    expect(block()).not.toBeNull();
+    emit(progress({ fraction: 0.3 }));
+    expect(ring).toEqual([0.3]);
     controller.dispose();
+    expect(ring).toEqual([0.3, null]);
   });
 });
 
-describe('formatEta', () => {
-  it('formats seconds, minutes and hours coarsely', () => {
-    expect(formatEta(0)).toBe('0s');
+describe('format helpers', () => {
+  it('formats ETAs and byte counts coarsely', () => {
     expect(formatEta(14_600)).toBe('15s');
     expect(formatEta(65_000)).toBe('1m05s');
-    expect(formatEta(3_720_000)).toBe('1h02m');
+    expect(formatBytes(512)).toBe('512 B');
+    expect(formatBytes(1_234_567)).toBe('1.2 MB');
   });
 });

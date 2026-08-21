@@ -5,12 +5,17 @@ export {
   progressLabel,
 } from './emitter.js';
 export { createFetchProgressObserver, fetchLabel } from './fetch-progress.js';
-export { type LoopPlan, LoopRun, planLoopProgress } from './loop-progress.js';
+export { planScriptProgress, type ScriptPlan, ScriptRun, scriptLabel } from './script-progress.js';
 export {
   makeSleepWithProgress,
   SLEEP_TICK_MS,
   type SleepWithProgressOptions,
 } from './sleep-progress.js';
+export {
+  parseDurationMs,
+  timeoutDurationIndex,
+  wrapTimeoutForProgress,
+} from './timeout-progress.js';
 export type { ProgressContent, ProgressEvent, ProgressSink } from './types.js';
 export { PROGRESS_CONTENT_TYPE } from './types.js';
 export { PROGRESS_SKIP_COMMANDS, wrapCommandForProgress } from './wrap-command.js';

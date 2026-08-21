@@ -43,7 +43,7 @@ never-rules below flag what a reviewer must recognise.
 - Tools (file/`bash`/scoop helpers) — `packages/webapp/src/tools/`; browser
   automation routes through shell commands, not a separate tool family
 - Sudo — `packages/webapp/src/sudo/` + `fs/sudo-fs.ts` + `shell/sudo/`
-- Bash progress overlay — `shell/progress/` (emitter ≤4 events/s per id, `sleep` ticker via `BashOptions.sleep`, `wrapCommandForProgress` outside `wrapCommandForSudo`, `planLoopProgress`/`LoopRun` counting static `for` loops at the dispatch wrapper, `createFetchProgressObserver` fed by `proxied-fetch.ts` chunk reads + the node-server `X-Proxy-Content-Length` hint); events ride `ToolExecutionContext.onUpdate` as `progress` partials → `tool_progress` agent event → `applyToolProgress` on the tool row. Design: `docs/exploration/bash-progress-overlay.md`
+- Bash progress overlay — `shell/progress/` (one `ScriptRun` unit per tool call: `planScriptProgress` counts registry dispatches from `bash.transform().ast`, steps tick at `wrapCommandForDispatch` on completion; `sleep`/`timeout` tickers, `wrapCommandForProgress` start/end and `createFetchProgressObserver` bytes (fed by `proxied-fetch.ts` + node-server `X-Proxy-Content-Length`) fold into it via `emitter.setAggregator`; ≤4 events/s per id); events ride `ToolExecutionContext.onUpdate` as `progress` partials → `tool_progress` agent event → `applyToolProgress` (icon fill, 3-dot badge, body top bar) + send-button `progress` ring. Design: `docs/exploration/bash-progress-overlay.md`
   (also `docs/approvals.md`)
 - Core agent — `packages/webapp/src/core/` (pi-agent-core + pi-ai;
   `tool-adapter.ts` bridges legacy tools; feature flags, context compaction)

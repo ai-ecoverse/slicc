@@ -153,6 +153,22 @@ describe('ProgressEmitter', () => {
   });
 });
 
+describe('ProgressEmitter aggregator routing', () => {
+  it('routes foreign ids to the aggregator and its own id to the sink', () => {
+    const sunk: ProgressEvent[] = [];
+    const routed: ProgressEvent[] = [];
+    const emitter = new ProgressEmitter({ sink: (e) => sunk.push(e) });
+    emitter.setAggregator({ id: 'script-1', onChild: (e) => routed.push(e) });
+    emitter.emit(ev({ id: 'sleep-1', phase: 'start' }));
+    emitter.emit(ev({ id: 'script-1', phase: 'start' }));
+    expect(routed.map((e) => e.id)).toEqual(['sleep-1']);
+    expect(sunk.map((e) => e.id)).toEqual(['script-1']);
+    emitter.setAggregator(null);
+    emitter.emit(ev({ id: 'sleep-2', phase: 'start' }));
+    expect(sunk.at(-1)?.id).toBe('sleep-2');
+  });
+});
+
 describe('progressLabel', () => {
   it('joins argv and caps the length', () => {
     expect(progressLabel('sleep', ['30'])).toBe('sleep 30');
