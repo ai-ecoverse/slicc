@@ -19,6 +19,11 @@ import type { CDPTransport } from '../cdp/transport.js';
 import type { AgentEvent } from '../core/agent-types.js';
 import type { MessageAttachment } from '../core/attachments.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
+import type {
+  SprinkleBroadcastResult,
+  SprinkleInstance,
+  SprinkleSendTarget,
+} from '../shell/sprinkle-manager-handle.js';
 import type { SudoDecision, SudoRequest } from '../sudo/types.js';
 import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';
@@ -135,6 +140,12 @@ export interface LeaderSyncManagerOptions {
   vfs?: VirtualFS;
   /** Called whenever a follower is added or removed (incl. via dead detection or stop). */
   onFollowerCountChanged?: (count: number) => void;
+  /**
+   * A follower's set of rendered sprinkles changed. The page mirrors
+   * `getSprinkleInstances()` into the worker shim so `sprinkle list` — which
+   * runs in the kernel worker — can report per-instance state (issue #2166).
+   */
+  onSprinkleInstancesChanged?: () => void;
   /**
    * Called when a follower re-advertises its targets, which can flip its
    * teleport eligibility without changing the follower count. Lets the host
@@ -373,8 +384,17 @@ export class LeaderSyncManager {
     this.broadcast.broadcastModelState();
   }
 
-  broadcastSprinkleUpdate(sprinkleName: string, data: unknown): void {
-    this.broadcast.broadcastSprinkleUpdate(sprinkleName, data);
+  /** Every follower-rendered sprinkle document, for `sprinkle list`. */
+  getSprinkleInstances(): SprinkleInstance[] {
+    return this.followerRegistry.getSprinkleInstances();
+  }
+
+  broadcastSprinkleUpdate(
+    sprinkleName: string,
+    data: unknown,
+    target?: SprinkleSendTarget
+  ): SprinkleBroadcastResult {
+    return this.broadcast.broadcastSprinkleUpdate(sprinkleName, data, target);
   }
 
   broadcastTheme(themeJson: string | null): void {

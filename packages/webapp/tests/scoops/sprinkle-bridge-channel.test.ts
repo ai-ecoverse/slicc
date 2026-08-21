@@ -5,6 +5,7 @@ import {
   SPRINKLE_BRIDGE_CHANNEL,
   sprinkleBridgeChannelName,
 } from '../../src/scoops/sprinkle-bridge-channel.js';
+import type { SprinkleSendTarget } from '../../src/shell/sprinkle-manager-handle.js';
 import type { Sprinkle } from '../../src/ui/sprinkle-discovery.js';
 import type { SprinkleManager } from '../../src/ui/sprinkle-manager.js';
 
@@ -89,8 +90,9 @@ function makeFakeManager(): SprinkleManager & {
     close: (name: string) => {
       calls.push({ op: 'close', args: [name] });
     },
-    sendToSprinkle: (name: string, data: unknown) => {
-      calls.push({ op: 'sendToSprinkle', args: [name, data] });
+    sendToSprinkle: (name: string, data: unknown, target?: SprinkleSendTarget) => {
+      calls.push({ op: 'sendToSprinkle', args: [name, data, target] });
+      return { leader: true, followers: [] };
     },
     openNewAutoOpenSprinkles: async () => {
       calls.push({ op: 'openNewAutoOpenSprinkles' });
@@ -163,20 +165,58 @@ describe('sprinkle bridge channel', () => {
     stop();
   });
 
-  it('close() and sendToSprinkle() are fire-and-forget', async () => {
+  it('close() is fire-and-forget; sendToSprinkle() returns the delivery report', async () => {
+    // `sendToSprinkle` used to be fire-and-forget too. It now awaits the
+    // page's report so `sprinkle send` can say what the push reached and fail
+    // when it reached nothing (issue #2166).
     const manager = makeFakeManager();
     const stop = installSprinkleManagerHandlerOverChannel(manager);
     const proxy = createSprinkleManagerProxyOverChannel();
 
     proxy.close('demo');
-    proxy.sendToSprinkle('demo', { hello: 'world' });
-    // Drain the channel.
-    await new Promise((r) => setTimeout(r, 5));
+    const report = await proxy.sendToSprinkle('demo', { hello: 'world' });
 
+    expect(report).toEqual({ leader: true, followers: [] });
     expect(manager.calls).toEqual(
       expect.arrayContaining([
         { op: 'close', args: ['demo'] },
-        { op: 'sendToSprinkle', args: ['demo', { hello: 'world' }] },
+        { op: 'sendToSprinkle', args: ['demo', { hello: 'world' }, undefined] },
+      ])
+    );
+    stop();
+  });
+
+  it('awaits a promise-returning manager instead of postMessaging the promise', async () => {
+    // `SprinkleManagerHandle.sendToSprinkle` is typed
+    // `SprinkleSendReport | Promise<SprinkleSendReport>`. `respond` goes
+    // through `postMessage`, so handing it a promise throws DataCloneError
+    // rather than serializing oddly — the page-side manager happens to be
+    // synchronous today, which is exactly why this needs a test.
+    const manager = makeFakeManager();
+    manager.sendToSprinkle = (() =>
+      Promise.resolve({ leader: false, followers: ['follower-8a47'] })) as never;
+    const stop = installSprinkleManagerHandlerOverChannel(manager);
+    const proxy = createSprinkleManagerProxyOverChannel();
+
+    const report = await proxy.sendToSprinkle('demo', { hello: 'world' });
+
+    expect(report).toEqual({ leader: false, followers: ['follower-8a47'] });
+    stop();
+  });
+
+  it('carries a --runtime target across the channel', async () => {
+    const manager = makeFakeManager();
+    const stop = installSprinkleManagerHandlerOverChannel(manager);
+    const proxy = createSprinkleManagerProxyOverChannel();
+
+    await proxy.sendToSprinkle('demo', { hello: 'world' }, { runtime: 'follower-8a47' });
+
+    expect(manager.calls).toEqual(
+      expect.arrayContaining([
+        {
+          op: 'sendToSprinkle',
+          args: ['demo', { hello: 'world' }, { runtime: 'follower-8a47' }],
+        },
       ])
     );
     stop();

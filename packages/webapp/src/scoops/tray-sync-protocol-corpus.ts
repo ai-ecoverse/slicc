@@ -618,6 +618,13 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
       targetScoop: 'cone',
     },
   },
+  // The iOS follower renders sprinkles but does not report its instances yet,
+  // so its decoder has no case for this variant. `sprinkle list` therefore
+  // under-reports iOS documents rather than inventing them.
+  'sprinkle.instances': {
+    ios: 'undecodable',
+    message: { type: 'sprinkle.instances', sprinkles: ['todo', 'loose-ends'] },
+  },
   // iOS sends navigate licks for handoffs advertised by pages in its hosted
   // CDP targets. Only the `FORWARDABLE_TO_LEADER` types (`navigate`,
   // `discovery`) are modelled — the leader rejects the rest.

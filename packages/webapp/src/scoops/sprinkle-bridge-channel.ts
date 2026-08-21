@@ -28,8 +28,12 @@
  * open | close | send | openNewAutoOpen`.
  */
 
-import type { Sprinkle } from '../ui/sprinkle-discovery.js';
-import type { SprinkleManager } from '../ui/sprinkle-manager.js';
+import type {
+  SprinkleEntry,
+  SprinkleManagerProxySurface,
+  SprinkleSendReport,
+  SprinkleSendTarget,
+} from '../shell/sprinkle-manager-handle.js';
 
 /**
  * Base BroadcastChannel name. Each tab/worker pair appends an
@@ -52,6 +56,8 @@ export interface SprinkleBridgeRequestMsg {
   op: 'list' | 'opened' | 'refresh' | 'open' | 'close' | 'send' | 'reload' | 'openNewAutoOpen';
   name?: string;
   data?: unknown;
+  /** `send` only — which runtime to deliver to. Omitted means broadcast. */
+  target?: SprinkleSendTarget;
 }
 
 /** Response envelope sent page→worker on the bridge channel. */
@@ -73,7 +79,7 @@ const DEFAULT_TIMEOUT_MS = 8000;
  */
 export function createSprinkleManagerProxyOverChannel(
   options: { timeoutMs?: number; instanceId?: string } = {}
-): SprinkleManager {
+): SprinkleManagerProxySurface {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
 
   if (typeof BroadcastChannel !== 'function') {
@@ -131,24 +137,23 @@ export function createSprinkleManagerProxyOverChannel(
     });
   }
 
-  let cachedAvailable: Sprinkle[] = [];
+  let cachedAvailable: SprinkleEntry[] = [];
   let cachedOpened: string[] = [];
 
-  // The shell commands use a small subset of SprinkleManager. Cast
-  // through `unknown` because the real class has private fields and
-  // many additional public methods we don't proxy (markActivated,
-  // restoreOpenSprinkles, …) — callers in the worker realm only need
-  // the ones below.
+  // The shell commands use a small subset of the real manager, described by
+  // `SprinkleManagerProxySurface`. The class itself lives in `ui/` and is
+  // deliberately NOT imported here — `scoops/` must not reach up the layer
+  // stack — so the proxy is typed by the surface, not by the class.
   return {
     async refresh(): Promise<void> {
       // Errors propagate so the shell command can surface a real
       // failure ("bridge not ready", "timed out") instead of
       // silently reporting an empty list. The cache is left as-is on
       // failure so a later successful refresh can still recover.
-      cachedAvailable = ((await request('list')) as Sprinkle[]) ?? [];
+      cachedAvailable = ((await request('list')) as SprinkleEntry[]) ?? [];
       cachedOpened = ((await request('opened')) as string[]) ?? [];
     },
-    available(): Sprinkle[] {
+    available(): SprinkleEntry[] {
       return cachedAvailable;
     },
     opened(): string[] {
@@ -160,8 +165,16 @@ export function createSprinkleManagerProxyOverChannel(
     close(name: string): void {
       request('close', { name }).catch(() => {});
     },
-    sendToSprinkle(name: string, data: unknown): void {
-      request('send', { name, data }).catch(() => {});
+    async sendToSprinkle(
+      name: string,
+      data: unknown,
+      target?: SprinkleSendTarget
+    ): Promise<SprinkleSendReport> {
+      // Awaited, not fire-and-forget: `sprinkle send` reports what the push
+      // reached and exits non-zero when it reached nothing (issue #2166), so
+      // the report has to travel back across the channel.
+      const result = (await request('send', { name, data, target })) as SprinkleSendReport | null;
+      return result ?? { leader: false, followers: [] };
     },
     async reload(name: string): Promise<void> {
       await request('reload', { name });
@@ -169,10 +182,10 @@ export function createSprinkleManagerProxyOverChannel(
     async openNewAutoOpenSprinkles(): Promise<void> {
       await request('openNewAutoOpen');
     },
-  } as unknown as SprinkleManager;
+  };
 }
 
-function makeNullProxy(): SprinkleManager {
+function makeNullProxy(): SprinkleManagerProxySurface {
   const unavailable = (op: string): Error =>
     new Error(`sprinkle bridge unavailable (no BroadcastChannel) — cannot run '${op}'`);
   return {
@@ -185,14 +198,16 @@ function makeNullProxy(): SprinkleManager {
       throw unavailable('open');
     },
     close: () => {},
-    sendToSprinkle: () => {},
+    sendToSprinkle: () => {
+      throw unavailable('sendToSprinkle');
+    },
     reload: async () => {
       throw unavailable('reload');
     },
     openNewAutoOpenSprinkles: async () => {
       throw unavailable('openNewAutoOpenSprinkles');
     },
-  } as unknown as SprinkleManager;
+  };
 }
 
 function newRequestId(): string {
@@ -216,7 +231,7 @@ function newRequestId(): string {
  * Errors raised inside the manager are forwarded as `error` strings.
  */
 export function installSprinkleManagerHandlerOverChannel(
-  manager: SprinkleManager,
+  manager: SprinkleManagerProxySurface,
   options: { instanceId?: string } = {}
 ): () => void {
   if (typeof BroadcastChannel !== 'function') return () => {};
@@ -256,8 +271,12 @@ export function installSprinkleManagerHandlerOverChannel(
             respond(id, true);
             return;
           case 'send':
-            manager.sendToSprinkle(name ?? '', data);
-            respond(id, true);
+            // Awaited like every sibling op: the handle type allows a
+            // `Promise<SprinkleSendReport>`, and `respond` postMessages its
+            // argument — a promise would throw `DataCloneError` rather than
+            // serialize oddly. Unreachable with today's synchronous page-side
+            // manager, but the union is what the type promises.
+            respond(id, await manager.sendToSprinkle(name ?? '', data, req.target));
             return;
           case 'reload':
             await manager.reload(name ?? '');

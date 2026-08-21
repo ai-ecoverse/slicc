@@ -33,6 +33,7 @@ describe('WC tray connected follower mapping', () => {
         getBrowserCapableBootstrapIds: () => new Set(['browser-1']),
         getTeleportEligibleBootstrapIds: () => new Set(['browser-1']),
         getFollowerMotds: () => new Map([['browser-1', 'remote browser']]),
+        getSprinkleInstances: () => [],
         getFollowerDetails: () => [
           {
             bootstrapId: 'browser-1',
@@ -183,6 +184,7 @@ describe('WC tray connected follower mapping', () => {
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map(),
         getFollowerDetails: () => [],
+        getSprinkleInstances: () => [],
       },
       peers: {
         getPeers: () => [
@@ -240,6 +242,7 @@ describe('WC tray connected follower mapping', () => {
         getBrowserCapableBootstrapIds: () => new Set(),
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map([['cli-1', 'lars@build-box']]),
+        getSprinkleInstances: () => [],
         getFollowerDetails: () => [
           {
             bootstrapId: 'cli-1',

@@ -8,7 +8,13 @@ import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import { trackSprinkleView } from '../kernel/telemetry.js';
 import type { LickEvent } from '../scoops/lick-manager.js';
-import type { SprinkleManagerHandle } from '../shell/sprinkle-manager-handle.js';
+import { LEADER_RUNTIME_ID } from '../shell/sprinkle-instances.js';
+import type {
+  SprinkleBroadcastResult,
+  SprinkleManagerHandle,
+  SprinkleSendReport,
+  SprinkleSendTarget,
+} from '../shell/sprinkle-manager-handle.js';
 import {
   type CaptureScreenResult,
   SprinkleBridge,
@@ -206,6 +212,17 @@ export function readKnownSprinkleNames(): string[] {
  */
 const AUTOOPENED_ONCE_KEY = 'slicc-autoopened-once';
 
+/**
+ * Broadcast hook wired to the leader tray's sync. Called with the target the
+ * caller asked for: `undefined` fans out to every connected follower, a
+ * `{ runtime }` target delivers to that follower alone.
+ */
+export type SprinkleBroadcastHook = (
+  name: string,
+  data: unknown,
+  target?: SprinkleSendTarget
+) => SprinkleBroadcastResult | void;
+
 export interface SprinkleManagerOptions {
   /**
    * How to surface auto-open sprinkles (those carrying
@@ -227,14 +244,19 @@ export interface SprinkleManagerOptions {
    * live state changes the agent pushes, and the only way to recover
    * is a manual snapshot refresh.
    *
-   * Fires only when the named sprinkle is currently open locally;
-   * skipped for closed sprinkles (matches the local-render behavior
-   * — there's nothing to update on the leader side either).
+   * Fires whether or not the sprinkle is open locally. A follower can
+   * render a sprinkle the leader has closed (it keeps the document until
+   * the next `sprinkles.list` reconcile), and gating the broadcast on the
+   * leader's own open set is how an owner's answer to a follower panel's
+   * `request-load` went missing in issue #2166.
+   *
+   * Returns which followers it reached (and which `--runtime` target it
+   * could not resolve) so `sprinkle send` can report real delivery.
    *
    * Hook exceptions are caught and logged — a broken broadcaster
    * must not skip the local renderer push or break the sprinkle.
    */
-  onSendToSprinkle?: (name: string, data: unknown) => void;
+  onSendToSprinkle?: SprinkleBroadcastHook;
   /**
    * Fired after a sprinkle is reloaded (content file changed while
    * the sprinkle was open). Wired by the leader tray boot path to
@@ -302,7 +324,7 @@ export class SprinkleManager implements SprinkleManagerHandle {
   private inflightRefresh: Promise<void> | null = null;
   private lastRefreshAt = 0;
   private autoOpenBehavior: 'activate' | 'attention';
-  private onSendToSprinkle?: (name: string, data: unknown) => void;
+  private onSendToSprinkle?: SprinkleBroadcastHook;
   private onSprinkleReloaded?: (name: string) => void;
   /**
    * Names whose rail icons have been pushed to the layout via
@@ -448,7 +470,7 @@ export class SprinkleManager implements SprinkleManagerHandle {
    * NOT detach: it calls `pageLeaderTray.reset()` which keeps the same
    * `sync` instance alive so the hook stays functional.)
    */
-  setSendToSprinkleHook(hook: ((name: string, data: unknown) => void) | undefined): void {
+  setSendToSprinkleHook(hook: SprinkleBroadcastHook | undefined): void {
     if (this.onSendToSprinkle && !hook) {
       // Audit a defined → undefined transition at `error` level —
       // prod log gate is ERROR, so `info` would be suppressed
@@ -1147,26 +1169,55 @@ export class SprinkleManager implements SprinkleManagerHandle {
     this.watcherUnsub?.();
   }
 
-  /** Push data to an open sprinkle (agent → sprinkle). */
-  sendToSprinkle(name: string, data: unknown): void {
-    const entry = this.openSprinkles.get(name);
-    if (!entry) {
-      log.warn('Cannot send to closed sprinkle', { name });
-      return;
+  /**
+   * Push data to an open sprinkle (agent → sprinkle).
+   *
+   * Without a `target` this is a BROADCAST: the leader's own renderer plus
+   * every connected follower (via the `onSendToSprinkle` hook). With
+   * `target.runtime` it delivers to exactly one runtime — `'leader'` for the
+   * local renderer, otherwise the named follower.
+   *
+   * Returns what the push actually reached, so `sprinkle send` can exit
+   * non-zero when it reached nothing. Previously this returned void and a
+   * push against a closed sprinkle was a `log.warn` the caller never saw,
+   * which is the false-confidence half of issue #2166.
+   */
+  sendToSprinkle(name: string, data: unknown, target?: SprinkleSendTarget): SprinkleSendReport {
+    const wantsLeader = !target?.runtime || target.runtime === LEADER_RUNTIME_ID;
+    const wantsFollowers = !target?.runtime || target.runtime !== LEADER_RUNTIME_ID;
+    const report: SprinkleSendReport = { leader: false, followers: [] };
+
+    if (wantsLeader) {
+      const entry = this.openSprinkles.get(name);
+      if (entry) {
+        // In CLI mode, bridge listeners are on the real bridge object.
+        this.bridge.pushUpdate(name, data);
+        // In extension mode, listeners are inside the sandbox iframe.
+        // Forward via the renderer's postMessage channel.
+        entry.renderer.pushUpdate(data);
+        report.leader = true;
+      } else {
+        log.warn('Cannot send to closed sprinkle', { name });
+      }
     }
-    // In CLI mode, bridge listeners are on the real bridge object.
-    this.bridge.pushUpdate(name, data);
-    // In extension mode, listeners are inside the sandbox iframe.
-    // Forward via the renderer's postMessage channel.
-    entry.renderer.pushUpdate(data);
+
     // Notify the broadcast hook (wired by `ui/main.ts`'s standalone-
     // leader boot path to `pageLeaderTray.sync.broadcastSprinkleUpdate`)
     // so followers receive the same payload as a `sprinkle.update` over
     // the WebRTC channel. Hook exceptions are swallowed — a broken
     // broadcaster must not skip or undo the local pushes above.
-    if (this.onSendToSprinkle) {
+    //
+    // Unlike the local push, this is NOT gated on the sprinkle being open
+    // on the leader: a follower can legitimately render a sprinkle the
+    // leader has closed, and dropping the push in that case is how a
+    // `request-load` answer went missing in issue #2166.
+    if (wantsFollowers && this.onSendToSprinkle) {
       try {
-        this.onSendToSprinkle(name, data);
+        const result = this.onSendToSprinkle(name, data, target);
+        if (result) {
+          report.followers = result.followers;
+          if (result.unknownRuntime) report.unknownRuntime = result.unknownRuntime;
+        }
       } catch (err) {
         // `error` not `warn` — prod default log level is ERROR. A
         // broken broadcaster here would silently drop the agent's
@@ -1178,5 +1229,6 @@ export class SprinkleManager implements SprinkleManagerHandle {
         });
       }
     }
+    return report;
   }
 }

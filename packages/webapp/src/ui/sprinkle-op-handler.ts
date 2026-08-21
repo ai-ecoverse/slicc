@@ -5,6 +5,7 @@
  * posted back over `chrome.runtime`.
  */
 
+import type { SprinkleSendTarget } from '../shell/sprinkle-manager-handle.js';
 import type { SprinkleManager } from './sprinkle-manager.js';
 
 export async function handleSprinkleOp(
@@ -12,7 +13,8 @@ export async function handleSprinkleOp(
   id: unknown,
   op: string,
   name: string,
-  data: unknown
+  data: unknown,
+  target?: SprinkleSendTarget
 ): Promise<void> {
   try {
     let result: unknown;
@@ -37,7 +39,14 @@ export async function handleSprinkleOp(
         result = true;
         break;
       case 'send':
-        sprinkleManager.sendToSprinkle(name, data);
+        // The report travels back to the offscreen proxy so `sprinkle send`
+        // can print what it reached and fail on zero (issue #2166).
+        result = sprinkleManager.sendToSprinkle(name, data, target);
+        break;
+      case 'reload':
+        // Parity with the standalone BroadcastChannel bridge, which has
+        // carried `reload` since sprinkles started re-rendering on VFS change.
+        await sprinkleManager.reload(name);
         result = true;
         break;
       case 'openNewAutoOpen':

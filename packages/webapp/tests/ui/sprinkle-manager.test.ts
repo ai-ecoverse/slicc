@@ -248,11 +248,16 @@ describe('SprinkleManager', () => {
     mgrWithHook.sendToSprinkle('dash', { progress: 0.42 });
 
     expect(onSendToSprinkle).toHaveBeenCalledTimes(1);
-    expect(onSendToSprinkle).toHaveBeenCalledWith('dash', { progress: 0.42 });
+    expect(onSendToSprinkle).toHaveBeenCalledWith('dash', { progress: 0.42 }, undefined);
   });
 
-  it('sendToSprinkle does NOT fire the hook for a closed sprinkle (matches local-render behaviour)', () => {
-    const onSendToSprinkle = vi.fn();
+  it('sendToSprinkle STILL fires the hook for a sprinkle closed on the leader', () => {
+    // Was: the hook was gated on the sprinkle being open locally. A follower
+    // can render a sprinkle the leader has closed, and dropping the push in
+    // that case is how an owner's answer to a follower panel's `request-load`
+    // went missing (issue #2166). The local push is still skipped — there is
+    // no local renderer — and the report says so.
+    const onSendToSprinkle = vi.fn(() => ({ followers: ['follower-1'] }));
     const mgrWithHook = new SprinkleManager(
       vfs,
       lickHandler,
@@ -269,8 +274,78 @@ describe('SprinkleManager', () => {
       { onSendToSprinkle }
     );
 
-    mgrWithHook.sendToSprinkle('not-open', { foo: 1 });
+    const report = mgrWithHook.sendToSprinkle('not-open', { foo: 1 });
 
+    expect(onSendToSprinkle).toHaveBeenCalledWith('not-open', { foo: 1 }, undefined);
+    expect(report).toEqual({ leader: false, followers: ['follower-1'] });
+  });
+
+  it('sendToSprinkle reports a push that reached nothing', () => {
+    // The half of #2166 that produced false confidence: this used to be a
+    // `log.warn` the caller never saw, and `sprinkle send` exited 0 anyway.
+    const report = mgr.sendToSprinkle('not-open', { foo: 1 });
+    expect(report).toEqual({ leader: false, followers: [] });
+  });
+
+  it('sendToSprinkle with a follower target skips the local renderer', async () => {
+    await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title>hi');
+    const onSendToSprinkle = vi.fn(() => ({ followers: ['follower-8a47'] }));
+    const mgrWithHook = new SprinkleManager(
+      vfs,
+      lickHandler,
+      {
+        addSprinkle: addSprinkle as unknown as (
+          name: string,
+          title: string,
+          element: HTMLElement
+        ) => void,
+        removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+        minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
+      },
+      vi.fn(),
+      { onSendToSprinkle }
+    );
+    await mgrWithHook.refresh();
+    await mgrWithHook.open('dash');
+
+    const report = mgrWithHook.sendToSprinkle(
+      'dash',
+      { progress: 1 },
+      { runtime: 'follower-8a47' }
+    );
+
+    expect(report).toEqual({ leader: false, followers: ['follower-8a47'] });
+    expect(onSendToSprinkle).toHaveBeenCalledWith(
+      'dash',
+      { progress: 1 },
+      { runtime: 'follower-8a47' }
+    );
+  });
+
+  it('sendToSprinkle with --runtime=leader does not touch the follower transport', async () => {
+    await vfs.writeFile('/shared/sprinkles/dash/dash.shtml', '<title>D</title>hi');
+    const onSendToSprinkle = vi.fn(() => ({ followers: ['follower-8a47'] }));
+    const mgrWithHook = new SprinkleManager(
+      vfs,
+      lickHandler,
+      {
+        addSprinkle: addSprinkle as unknown as (
+          name: string,
+          title: string,
+          element: HTMLElement
+        ) => void,
+        removeSprinkle: removeSprinkle as unknown as (name: string) => void,
+        minimizeSprinkle: minimizeSprinkle as unknown as (name: string) => void,
+      },
+      vi.fn(),
+      { onSendToSprinkle }
+    );
+    await mgrWithHook.refresh();
+    await mgrWithHook.open('dash');
+
+    const report = mgrWithHook.sendToSprinkle('dash', { progress: 1 }, { runtime: 'leader' });
+
+    expect(report).toEqual({ leader: true, followers: [] });
     expect(onSendToSprinkle).not.toHaveBeenCalled();
   });
 
@@ -323,7 +398,7 @@ describe('SprinkleManager', () => {
     mgr.sendToSprinkle('dash', { progress: 0.5 });
 
     expect(onSendToSprinkle).toHaveBeenCalledTimes(1);
-    expect(onSendToSprinkle).toHaveBeenCalledWith('dash', { progress: 0.5 });
+    expect(onSendToSprinkle).toHaveBeenCalledWith('dash', { progress: 0.5 }, undefined);
   });
 
   it('setSendToSprinkleHook(undefined) detaches a previously-installed hook', async () => {
@@ -369,7 +444,7 @@ describe('SprinkleManager', () => {
 
     expect(constructorHook).not.toHaveBeenCalled();
     expect(setterHook).toHaveBeenCalledTimes(1);
-    expect(setterHook).toHaveBeenCalledWith('dash', { x: 1 });
+    expect(setterHook).toHaveBeenCalledWith('dash', { x: 1 }, undefined);
   });
 
   it('setupWatcher refreshes available list when new .shtml files appear', async () => {

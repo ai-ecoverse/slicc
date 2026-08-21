@@ -1,6 +1,10 @@
 import type { AgentEvent } from '../../core/agent-types.js';
 import type { MessageAttachment } from '../../core/attachments.js';
 import { stripLocalPathsForRemote } from '../../core/attachments.js';
+import type {
+  SprinkleBroadcastResult,
+  SprinkleSendTarget,
+} from '../../shell/sprinkle-manager-handle.js';
 import type { ChatMessage } from '../chat-types.js';
 import type {
   LeaderToFollowerMessage,
@@ -282,9 +286,42 @@ export class BroadcastManager {
     this.broadcast({ type: 'sprinkles.list', sprinkles });
   }
 
-  broadcastSprinkleUpdate(sprinkleName: string, data: unknown): void {
-    if (this.context.followers.followers.size === 0) return;
-    this.broadcast({ type: 'sprinkle.update', sprinkleName, data });
+  /**
+   * Deliver a sprinkle push to followers and report which runtimes got it.
+   *
+   * Without a target this fans out to every connected follower — the
+   * historical behavior, now with a return value so `sprinkle send` can say
+   * what it reached instead of always claiming success. With
+   * `target.runtime` it delivers to that one follower, and an unresolvable
+   * runtime id comes back as `unknownRuntime` rather than being silently
+   * treated as a broadcast (issue #2166).
+   *
+   * "Reached" means the data channel accepted the message. A follower whose
+   * channel refuses it (oversize payload, dead channel) is left out.
+   */
+  broadcastSprinkleUpdate(
+    sprinkleName: string,
+    data: unknown,
+    target?: SprinkleSendTarget
+  ): SprinkleBroadcastResult {
+    const registry = this.context.followers;
+    const message: LeaderToFollowerMessage = { type: 'sprinkle.update', sprinkleName, data };
+
+    if (target?.runtime) {
+      const resolved = registry.resolveFollowerByRuntimeId(target.runtime);
+      if (!resolved) return { followers: [], unknownRuntime: target.runtime };
+      const sent = resolved.follower.sync.send(message);
+      return { followers: sent ? [target.runtime] : [] };
+    }
+
+    if (registry.followers.size === 0) return { followers: [] };
+    const failed = new Set(registry.broadcastToAllFollowers(message));
+    const reached: string[] = [];
+    for (const bootstrapId of registry.followers.keys()) {
+      if (failed.has(bootstrapId)) continue;
+      reached.push(registry.runtimeIdForBootstrap(bootstrapId) ?? bootstrapId);
+    }
+    return { followers: reached };
   }
 
   broadcastTheme(themeJson: string | null): void {

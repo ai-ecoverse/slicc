@@ -33,6 +33,10 @@ import type {
 } from '../../scoops/tray-sync-protocol.js';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import {
+  setFollowerSprinkleInstancesGetter,
+  writeSprinkleInstancesToShim,
+} from '../../shell/sprinkle-instances.js';
+import {
   getConnectedFollowers,
   setConnectedFollowersGetter,
   setTrayResetter,
@@ -320,10 +324,20 @@ export function buildFollowerOptions(
 }
 
 /**
+ * Mirror the leader's follower-reported sprinkle instances into the worker
+ * shim. `sprinkle list` runs in the kernel worker and reads them from there,
+ * so every event that can change the set — a report arriving, a follower
+ * disconnecting — has to refresh it (issue #2166).
+ */
+function mirrorSprinkleInstances(state: TrayRoleState): void {
+  writeSprinkleInstancesToShim(state.leader ? state.leader.sync.getSprinkleInstances() : []);
+}
+
+/**
  * Publish the leader's follower roster to every surface that shows it: the
  * tab-persistence guard, the floatbar (label + followers segment + HUD rows),
- * the kernel-worker `localStorage` shim `host`/`ssh` read, and the window
- * event an open sync dialog listens on.
+ * the kernel-worker `localStorage` shims `host`/`ssh` and `sprinkle list` read,
+ * and the window event an open sync dialog listens on.
  */
 function applyFollowerPresentation(
   deps: WcTrayDeps,
@@ -351,6 +365,9 @@ function applyFollowerPresentation(
     followers.filter((follower) => follower.peerState !== 'connecting')
   );
   writeConnectedFollowersToShim(followers);
+  // A follower that disconnects takes its sprinkle documents with it and sends
+  // no farewell report, so the instance shim refreshes on the same signal.
+  mirrorSprinkleInstances(state);
   // Let an open sync dialog re-render (its Status tab appears on the first
   // follower and its rows go live) without polling the roster. Dispatched on
   // the INJECTED window (`deps.window`), the same one the rest of this module
@@ -434,6 +451,7 @@ export function createLeaderOptionsFactory(
     },
     onSprinkleLick: (name, body, targetScoop, originLabel) =>
       client.sendSprinkleLick(name, body, targetScoop, originLabel),
+    onSprinkleInstancesChanged: () => mirrorSprinkleInstances(state),
     onFollowerMessage: (text, messageId, attachments, options) => {
       deps.getController()?.addUserMessage(text, attachments);
       deps.agentHandle.sendMessage(text, messageId, attachments, options);
@@ -561,8 +579,9 @@ function createLeaderHookSetup(
       // via the `slicc.leaderTrayFollowers` shim (`teleport-follower-shim.ts`).
       setPlaywrightTeleportBestFollower(() => () => handle.sync.getBestFollowerForTeleport());
       setPlaywrightTeleportConnectedFollowers(() => () => getLeaderConnectedFollowers(handle));
-      deps.sprinkleManager.setSendToSprinkleHook((name, data) =>
-        handle.sync.broadcastSprinkleUpdate(name, data)
+      setFollowerSprinkleInstancesGetter(() => handle.sync.getSprinkleInstances());
+      deps.sprinkleManager.setSendToSprinkleHook((name, data, target) =>
+        handle.sync.broadcastSprinkleUpdate(name, data, target)
       );
       deps.sprinkleManager.setReloadHook((name) => handle.sync.broadcastSprinkleReloaded(name));
       deps.getController()?.setOnLocalUserMessage((text, messageId, attachments) => {
@@ -601,6 +620,8 @@ function createLeaderHookSetup(
       leaderTurnEndUnsubscribe = null;
       setConnectedFollowersGetter(null);
       writeConnectedFollowersToShim([]);
+      setFollowerSprinkleInstancesGetter(null);
+      writeSprinkleInstancesToShim([]);
       setTrayResetter(null);
       setPlaywrightTeleportBestFollower(null);
       setPlaywrightTeleportConnectedFollowers(null);

@@ -1,7 +1,7 @@
 {
   "traySyncProtocolVersion": 7,
   "leaderVariantCount": 41,
-  "followerVariantCount": 36,
+  "followerVariantCount": 37,
   "agentEventVariantCount": 11,
   "leaderToFollower": [
     {
@@ -754,6 +754,17 @@
         "type": "sprinkle.fetch",
         "requestId": "req-2",
         "sprinkleName": "todo"
+      }
+    },
+    {
+      "type": "sprinkle.instances",
+      "ios": "undecodable",
+      "message": {
+        "type": "sprinkle.instances",
+        "sprinkles": [
+          "todo",
+          "loose-ends"
+        ]
       }
     },
     {

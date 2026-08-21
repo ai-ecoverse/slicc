@@ -41,6 +41,14 @@ export interface SprinkleFollowerSync {
   fetchSprinkleContent(sprinkleName: string): Promise<string>;
   sendSprinkleLick(sprinkleName: string, body: unknown, targetScoop?: string): void;
   cancelSprinkleFetch(sprinkleName: string, reason?: string): void;
+  /**
+   * Report the sprinkles this follower currently has rendered, so the
+   * leader's `sprinkle list` can show one line per live document
+   * (issue #2166). Required, not optional: a sync surface that forgets to
+   * implement it would make this follower's panels invisible to their owner,
+   * which is the failure the report exists to remove.
+   */
+  reportSprinkleInstances(sprinkleNames: string[]): void;
 }
 
 export interface SprinkleFollowerControllerOptions {
@@ -156,6 +164,7 @@ export class SprinkleFollowerController {
       opens.push(this.openLocally(name, summary));
     }
     await Promise.allSettled(opens);
+    this.reportInstances();
   }
 
   /**
@@ -267,6 +276,10 @@ export class SprinkleFollowerController {
     // future change to that branch and against GC retention through the
     // unsubscribed bridge closures.
     this.updateListeners.clear();
+    // Report the empty set on the way out: a follower that stays connected
+    // through a controller teardown would otherwise keep phantom instances in
+    // the leader's listing. A disconnect is covered by registry cleanup.
+    this.reportInstances();
   }
 
   // ---------------------------------------------------------------------------
@@ -365,6 +378,9 @@ export class SprinkleFollowerController {
     this.open.set(name, { renderer, container });
     this.opening.delete(name);
     renderer.activateBridgeLifecycle();
+    // The document exists now — report before draining buffered updates so
+    // the owner can see the instance even if the drain throws.
+    this.reportInstances();
     if (!this.open.has(name)) return;
     const buffered = this.pendingUpdates.get(name);
     if (buffered !== undefined) {
@@ -396,6 +412,26 @@ export class SprinkleFollowerController {
     }
   }
 
+  /**
+   * Tell the leader which sprinkles are rendered here right now.
+   *
+   * Called after every transition of `this.open` — reconcile, attach, close,
+   * dispose. Sprinkles still in `opening` are deliberately excluded: they
+   * have no document yet, and reporting them would recreate the very
+   * "instance that plausibly stayed empty" ambiguity of issue #2166.
+   */
+  private reportInstances(): void {
+    try {
+      this.sync.reportSprinkleInstances([...this.open.keys()]);
+    } catch (err) {
+      // A sync mid-reconnect must not take the reconcile down with it — the
+      // next transition reports again.
+      log.debug('Failed to report sprinkle instances', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
   private closeLocally(name: string): void {
     // Clear listeners and pending updates regardless of whether the entry is
     // present — a re-open of the same sprinkle name must not inherit stale
@@ -423,6 +459,7 @@ export class SprinkleFollowerController {
         error: err instanceof Error ? err.message : String(err),
       });
     }
+    this.reportInstances();
   }
 
   /**

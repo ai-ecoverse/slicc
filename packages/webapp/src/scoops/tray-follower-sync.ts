@@ -663,6 +663,18 @@ export class FollowerSyncManager implements AgentHandle {
   }
 
   /**
+   * Report which sprinkles this follower currently renders.
+   *
+   * Fire-and-forget by design: the report is a diagnostic aid for the
+   * leader's `sprinkle list`, and a dropped one is corrected by the next
+   * open/close transition. It must never fail a reconcile.
+   */
+  reportSprinkleInstances(sprinkleNames: string[]): void {
+    const ok = this.sync.send({ type: 'sprinkle.instances', sprinkles: sprinkleNames });
+    if (!ok) log.debug('reportSprinkleInstances dropped: tray channel closed');
+  }
+
+  /**
    * Forward a generic lick (e.g. `navigate`) to the leader's agent.
    * Returns false (and drops) if the channel is closed/failed — never
    * falls back to local handling (that is the phantom-cone bug).

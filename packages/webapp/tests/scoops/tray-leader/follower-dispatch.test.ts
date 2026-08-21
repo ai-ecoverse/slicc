@@ -421,4 +421,21 @@ describe('FollowerDispatch', () => {
     dispatch.dispatch('follower', { type: 'pong' });
     expect(keepalive.receivePong).toHaveBeenCalledOnce();
   });
+  // ── issue #2166 ──────────────────────────────────────────────────────────
+
+  it('records a follower sprinkle-instances report and notifies the page', () => {
+    const onSprinkleInstancesChanged = vi.fn();
+    const { dispatch, followers } = createHarness({ onSprinkleInstancesChanged });
+    followers.setRuntimeId('follower-8a47', 'follower');
+
+    dispatch.dispatch('follower', {
+      type: 'sprinkle.instances',
+      sprinkles: ['loose-ends'],
+    } as FollowerToLeaderMessage);
+
+    expect(followers.getSprinkleInstances()).toEqual([
+      { name: 'loose-ends', runtimeId: 'follower-8a47', runtime: 'slicc-extension' },
+    ]);
+    expect(onSprinkleInstancesChanged).toHaveBeenCalledTimes(1);
+  });
 });

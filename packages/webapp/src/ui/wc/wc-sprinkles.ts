@@ -9,6 +9,7 @@
 
 import { isExtensionRealm } from '../../core/runtime-env.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
+import type { SprinkleSendTarget } from '../../shell/sprinkle-manager-handle.js';
 import type { BootStageLogger } from '../boot/types.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import type { SprinkleAddOptions, SprinkleManagerCallbacks } from '../sprinkle-manager.js';
@@ -610,13 +611,14 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     // panel's OffscreenClient transport — same handler the legacy panel uses.
     const { handleSprinkleOp } = await import('../sprinkle-op-handler.js');
     client.setSprinkleOpHandler((payload: unknown) => {
-      const { id, op, name, data } = payload as {
+      const { id, op, name, data, target } = payload as {
         id: unknown;
         op: string;
         name: string;
         data: unknown;
+        target?: SprinkleSendTarget;
       };
-      void handleSprinkleOp(manager, id, op, name, data);
+      void handleSprinkleOp(manager, id, op, name, data, target);
     });
   }
 
