@@ -53,3 +53,26 @@ describe('just-bash curl output patch (just-bash@3.4.1)', () => {
     expect(Array.from(await b.fs.readFileBuffer('/copy.bin'))).toEqual(Array.from(payload));
   });
 });
+
+describe('just-bash curl output patch — installed dist', () => {
+  // just-bash ships curl three ways: the ESM chunk (what Node/Vitest load),
+  // the self-contained browser bundle (what Vite bundles into the webapp —
+  // the copy that actually runs in the leader tab), and the CJS bundle. A
+  // patch that misses the browser bundle passes every Node test and still
+  // crashes the tab, so assert the guard is present in each.
+  it.each([
+    'dist/bundle/browser.js',
+    'dist/bundle/index.cjs',
+    'dist/bundle/chunks/curl-DEHFBW27.js',
+  ])('%s skips stdout formatting for -o/-O', async (rel) => {
+    const { readFile } = await import('node:fs/promises');
+    const src = await readFile(
+      new URL(`../../../../node_modules/just-bash/${rel}`, import.meta.url),
+      'utf8'
+    );
+    expect(
+      /\.useRemoteName\)&&![a-z]\.verbose\?"":/.test(src),
+      `${rel} lacks the -o/-O stdout guard; patches/just-bash+*.patch is missing or failed to apply`
+    ).toBe(true);
+  });
+});
