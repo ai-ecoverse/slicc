@@ -40,7 +40,13 @@ export function unitSlugFor(scoop: UnitLike): string {
   return isRootUnit(scoop) ? scoop.folder : scoop.name;
 }
 
-/** Resolve a thread/URL context back to a registered unit. */
+/**
+ * Resolve a thread/URL context back to a registered unit. Every context
+ * {@link threadContextFor} emits round-trips exactly — including the bare
+ * `cone`, which names the PRIMARY root, not whichever root is starred as the
+ * event default. Only an absent or unrecognised context falls through to
+ * {@link defaultRootOf}.
+ */
 export function unitForContext(
   scoops: readonly RegisteredScoop[],
   ctx: string
@@ -53,6 +59,7 @@ export function unitForContext(
     const folder = ctx.slice('cone:'.length);
     return scoops.find((s) => isRootUnit(s) && s.folder === folder);
   }
+  if (ctx === 'cone') return scoops.find((s) => isPrimaryRoot(s));
   return defaultRootOf(scoops);
 }
 

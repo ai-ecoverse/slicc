@@ -198,13 +198,37 @@ describe('wireConesRail', () => {
     expect(harness([primary]).stars()).toEqual([null]);
   });
 
-  it('forgets the pick when the cone holding it is removed', () => {
+  it('forgets the pick only once the cone has actually left the roster', () => {
     const h = harness([primary, research]);
     h.click(h.stars()[1]);
+    // The kernel refuses a cone pinned by active licks; `unregisterScoop`
+    // resolves on send either way, so a refused drop must keep the pick.
+    h.client.unregisterScoop = vi.fn(async () => {});
     h.click(h.rows()[1].querySelector('.rm'));
     h.click(h.handles.element.querySelector('.confirm .danger'));
     expect(h.client.unregisterScoop).toHaveBeenCalledWith(research.jid);
+    expect(storage.store.get(DEFAULT_ROOT_STORAGE_KEY)).toBe(research.jid);
+
+    // Once the record is gone from the roster, the stale jid is dropped.
+    h.client.getScoops = () => [primary];
+    h.handles.refresh();
     expect(storage.store.get(DEFAULT_ROOT_STORAGE_KEY)).toBeUndefined();
+  });
+
+  it('offers no star on the optimistic placeholder of a cone being created', () => {
+    const h = harness([primary]);
+    h.click(h.handles.element.querySelector('.add'));
+    const input = h.handles.element.querySelector('input')!;
+    input.value = 'Ops';
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+    h.handles.element
+      .querySelector('form')!
+      .dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }));
+    // The kernel replaces `cone-pending-*` with a record carrying a different
+    // jid, so starring the placeholder would persist a jid that never exists.
+    expect(h.labels()).toEqual(['sliccy', 'Ops']);
+    expect(h.stars()[1]).toBeNull();
+    expect(h.stars()[0]?.getAttribute('aria-pressed')).toBe('true');
   });
 
   it('buildNewConeRecord produces a root placeholder with the typed name', () => {

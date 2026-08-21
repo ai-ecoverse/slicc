@@ -43,6 +43,9 @@ export interface ConesRailHandles {
   element: HTMLElement;
 }
 
+/** Folder prefix of the optimistic record the panel shows until the kernel's real one lands. */
+const PENDING_CONE_PREFIX = 'cone-pending-';
+
 const STYLE_ID = 'wcui-cones-style';
 const STYLE = `
 .wcui-cones{display:flex;flex-direction:column;gap:2px;margin:2px 0 6px;flex:0 0 auto;}
@@ -101,7 +104,7 @@ export function buildNewConeRecord(
   // The kernel assigns the real folder / jid (`handleConeCreate`); the panel
   // only needs a placeholder that reads as a root until `scoop-created`
   // replaces it by name.
-  const placeholder = `cone-pending-${existing.length + 1}`;
+  const placeholder = `${PENDING_CONE_PREFIX}${existing.length + 1}`;
   return {
     ...buildWorkUnitRecord({ parentId: null, name, folder: placeholder }),
     assistantLabel: name,
@@ -132,6 +135,8 @@ interface ConeRowOptions {
   isDefault: boolean;
   /** Render the ★ / ✕ actions (suppressed while there is only one cone). */
   showActions: boolean;
+  /** This row is still the optimistic placeholder; its jid is not the real one. */
+  pending: boolean;
   onSelect(): void;
   onMakeDefault(): void;
   onToggleRemove(): void;
@@ -179,7 +184,7 @@ function buildConeRow(o: ConeRowOptions): HTMLButtonElement {
   row.append(o.el('span', { class: 'dot' }), o.el('span', { class: 'lbl' }, label));
   row.addEventListener('click', o.onSelect);
   if (!o.showActions) return row;
-  row.append(buildDefaultRootToggle(o));
+  if (!o.pending) row.append(buildDefaultRootToggle(o));
   const rm = o.el(
     'button',
     { type: 'button', class: 'rm', 'aria-label': `Remove cone ${label}` },
@@ -206,6 +211,19 @@ function buildRemoveConfirm(
   no.addEventListener('click', handlers.onCancel);
   confirm.append(yes, no);
   return confirm;
+}
+
+/**
+ * Forget a pick whose cone has actually left the roster (dropped from this
+ * rail or anywhere else). `pickDefaultRoot` already ignores a stale jid, so
+ * this is hygiene rather than correctness — but it keeps the stored value
+ * honest, and it only fires once the roster is known, never on the empty
+ * first paint or while the kernel is still refusing a pinned cone's removal.
+ */
+function reconcileDefaultRoot(roots: readonly RegisteredScoop[]): void {
+  const configured = getDefaultRootJid();
+  if (!configured || roots.length === 0) return;
+  if (!roots.some((s) => s.jid === configured)) clearDefaultRootJid();
 }
 
 /** Mount the Cones section into the freezer rail and keep it in sync. */
@@ -235,10 +253,10 @@ export function wireConesRail(deps: ConesRailDeps): ConesRailHandles {
       return;
     }
     const wasSelected = deps.getSelected()?.jid === scoop.jid;
-    // Dropping the cone that events default to forgets the pick, so the
-    // fallback (primary, else oldest) takes over instead of leaving a jid
-    // that resolves to nothing.
-    if (getDefaultRootJid() === scoop.jid) clearDefaultRootJid();
+    // The pick is NOT cleared here: `unregisterScoop` resolves once the drop
+    // is *sent*, and the kernel still refuses a cone pinned by active licks.
+    // `reconcileDefaultRoot` clears it when the record actually leaves the
+    // roster, so a refused removal keeps the user's choice.
     void client.unregisterScoop(scoop.jid).catch((err) => log.warn('WC cone remove failed', err));
     if (wasSelected) {
       const next = rootsOf(client.getScoops()).find((s) => s.jid !== scoop.jid);
@@ -262,7 +280,7 @@ export function wireConesRail(deps: ConesRailDeps): ConesRailHandles {
   const adoptPendingSelection = (roots: readonly RegisteredScoop[]): void => {
     if (pendingSelect === null) return;
     const landed = roots.find(
-      (s) => s.name === pendingSelect && !s.folder.startsWith('cone-pending-')
+      (s) => s.name === pendingSelect && !s.folder.startsWith(PENDING_CONE_PREFIX)
     );
     if (!landed) return;
     pendingSelect = null;
@@ -274,6 +292,7 @@ export function wireConesRail(deps: ConesRailDeps): ConesRailHandles {
     // A cone created from this rail becomes the active one as soon as the
     // kernel's real record (not the optimistic placeholder) is in the roster.
     adoptPendingSelection(roots);
+    reconcileDefaultRoot(roots);
     const selected = deps.getSelected()?.jid ?? refs.switcher.getAttribute('active');
     // Resolved, not raw: a stale or unset pick still stars the root that
     // events actually reach (primary, else oldest).
@@ -288,8 +307,11 @@ export function wireConesRail(deps: ConesRailDeps): ConesRailHandles {
           selected: selected === scoop.jid,
           isDefault: defaultJid === scoop.jid,
           // A single cone owns everything by definition: nothing to remove,
-          // nothing to choose between.
+          // nothing to choose between. A `cone-pending-*` placeholder is not
+          // a real record either — the kernel replaces it with a different
+          // jid, so starring it would persist a jid that never exists.
           showActions: roots.length > 1,
+          pending: scoop.folder.startsWith(PENDING_CONE_PREFIX),
           onSelect: () => {
             if (deps.getSelected()?.jid !== scoop.jid) deps.selectScoop(scoop);
           },

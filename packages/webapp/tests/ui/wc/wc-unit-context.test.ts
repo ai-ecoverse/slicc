@@ -8,6 +8,8 @@ import {
   unitForContext,
   unitSlugFor,
 } from '../../../src/ui/wc/wc-unit-context.js';
+import { DEFAULT_ROOT_STORAGE_KEY } from '../../../src/work-unit/default-root.js';
+import { installFakeLocalStorage } from '../../helpers/fake-local-storage.js';
 
 function unit(over: Partial<RegisteredScoop>): RegisteredScoop {
   return {
@@ -78,6 +80,23 @@ describe('wc-unit-context', () => {
     expect(unitForContext(all, 'scoop:cone')).toBeUndefined();
     // an unknown plain context falls back to the default root
     expect(unitForContext(all, 'whatever')?.jid).toBe('cone_1');
+  });
+
+  it('round-trips the bare `cone` context even when another root is starred', () => {
+    // `threadContextFor(primary)` serializes to `cone`; if that resolved
+    // through the event default, sharing or reloading the primary cone's own
+    // URL would open the starred cone instead (#2273).
+    const storage = installFakeLocalStorage({ [DEFAULT_ROOT_STORAGE_KEY]: research.jid });
+    try {
+      const all = [worker, research, primary, helper];
+      expect(unitForContext(all, 'cone')?.jid).toBe(primary.jid);
+      expect(unitForContext(all, 'cone:cone-research')?.jid).toBe(research.jid);
+      // only an unrecognised context defers to the configured default
+      expect(unitForContext(all, 'whatever')?.jid).toBe(research.jid);
+      expect(defaultRootOf(all)?.jid).toBe(research.jid);
+    } finally {
+      storage.restore();
+    }
   });
 
   it('prefers the primary root, else the oldest root, as default', () => {
