@@ -62,14 +62,24 @@ final class UpdateCheckIntegrationTests: XCTestCase {
     }
 
     /// Proves the pagination walk works against GitHub's real `Link` headers:
-    /// with one release per page, page 1 (`v5.81.1`-style tags carry no macOS
-    /// artifact) cannot satisfy the check, so the provider must follow
-    /// `rel="next"` until it reaches a release shipping `Sliccstart-*.zip`.
-    /// A frozen fixture could not catch header-format drift here.
-    func testPaginationWalkFindsAnInstallableReleaseOnRealAPI() async throws {
+    /// forcing `per_page=1` means a single page can never satisfy the walk, so
+    /// the provider must parse `rel="next"` out of a live header to make any
+    /// progress at all. A frozen fixture could not catch header-format drift.
+    ///
+    /// This asserts on the *walk*, deliberately not on reaching an installable
+    /// release. Native artifacts are built conditionally, so the newest
+    /// asset-bearing release drifts arbitrarily far down the list as ordinary
+    /// releases accumulate — at one release per page it slid past the
+    /// `maxReleasePages` loop guard, which failed this test for reasons that
+    /// had nothing to do with pagination. That the walk does reach an
+    /// installable release stays covered by
+    /// `testTolerantProviderFetchesReleasesWithCorrectVersions`, which runs at
+    /// the production page size.
+    func testPaginationWalkFollowsRealLinkHeaders() async throws {
         // `currentVersion` is pinned: the walk stops at the running build's own
         // release, and the XCTest host bundle's version is unrelated to the
         // repo's release history.
+        let pagesFetched = PageCounter()
         let provider = TolerantGithubReleaseProvider(
             currentVersion: Version(0, 0, 0),
             fetchPage: { request in
@@ -79,6 +89,7 @@ final class UpdateCheckIntegrationTests: XCTestCase {
                 components.queryItems = items
                 var paged = request
                 paged.url = components.url
+                await pagesFetched.increment()
                 let (data, response) = try await URLSession.shared.data(for: paged)
                 guard let http = response as? HTTPURLResponse else { throw URLError(.badServerResponse) }
                 return (data, http)
@@ -86,17 +97,30 @@ final class UpdateCheckIntegrationTests: XCTestCase {
 
         let releases = try await provider.fetchReleases(owner: "ai-ecoverse", repo: "slicc", proxy: nil)
 
-        if releases.isEmpty {
-            // Preserve the assertion below unless GitHub itself confirms that
-            // its list endpoint is temporarily inconsistent.
-            _ = try await fetchReleasesJSON(owner: "ai-ecoverse", repo: "slicc")
-        }
-
-        XCTAssertFalse(
-            releases.isEmpty,
-            "Expected the paginated walk to reach a release with an installable Sliccstart asset "
-                + "within \(TolerantGithubReleaseProvider.maxReleasePages) pages"
+        // The first request is unconditional; any page beyond it could only
+        // have come from parsing a real `rel="next"` off GitHub's Link header.
+        let pages = await pagesFetched.value
+        XCTAssertGreaterThan(
+            pages, 1,
+            "Expected the provider to follow rel=\"next\" past the first page; it fetched \(pages). "
+                + "GitHub's Link header format may have drifted."
         )
+
+        // Whatever the walk did surface must be installable — filtering to an
+        // installable asset is the point of `fetchReleases`, and it still holds
+        // when release churn means the walk surfaces nothing.
+        for release in releases {
+            XCTAssertTrue(
+                release.assets.contains { $0.name.hasPrefix("Sliccstart-") && $0.name.hasSuffix(".zip") },
+                "fetchReleases returned \(release.tagName) without an installable Sliccstart-*.zip asset"
+            )
+        }
+    }
+
+    /// Serialises the page tally across the provider's `@Sendable` fetch seam.
+    private actor PageCounter {
+        private(set) var value = 0
+        func increment() { value += 1 }
     }
 
     // MARK: - Strict decoder (the bug — contrast test)
