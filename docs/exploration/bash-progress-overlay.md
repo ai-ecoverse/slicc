@@ -5,15 +5,27 @@ ticks, generic start/end wrapper, `for` loop iteration counting, `curl`/`wget`
 byte progress via `proxied-fetch.ts`, `tool_progress` agent event + chat-row
 bar). Duration history (Tier 3) remains exploration.
 
-Implementation note: just-bash's `trace` callback only fires for `find`
-internals — it emits nothing per command — so loop iterations are counted at
-the shell's own dispatch wrapper (`wrapCommandForDispatch`), not via `trace`.
-The plan below is kept as originally written. Tracks upstream idea
-[vercel-labs/just-bash#319](https://github.com/vercel-labs/just-bash/issues/319)
-(no maintainer response as of 2026-08-21). This doc describes how SLICC can ship
-progress-bar / ETA feedback for `bash` tool calls _today_, entirely on top of
-just-bash's public API, and how that overlay would later collapse onto an
-upstream protocol if one lands.
+Implementation notes (the plan below is kept as originally written):
+
+- just-bash's `trace` callback only fires for `find` internals — it emits
+  nothing per command — so steps are counted at the shell's own dispatch
+  wrapper (`wrapCommandForDispatch`), on completion.
+- The UI shows **one unit per tool call** (`script-progress.ts`): the script
+  is planned into registry-dispatch steps (`echo; echo; echo` = 3, static
+  `for` loops expand, `timeout`/`env` wrappers count their inner command) and
+  `fraction = (doneSteps + currentChildFraction) / totalSteps`. `sleep`,
+  `timeout`, download bytes and per-command start/end are routed into that
+  unit by the emitter instead of reaching the sink — users care how long the
+  tool call takes, not one sub-step.
+- Rendering reuses the row's own chrome rather than adding a bar: the lucide
+  icon chip fills bottom-up, the "…" badge becomes three dots (one per third,
+  active dot blinking), an open terminal body gets a 3px top border, and the
+  composer's tool-phase ring turns into a determinate arc. Tracks upstream idea
+  [vercel-labs/just-bash#319](https://github.com/vercel-labs/just-bash/issues/319)
+  (no maintainer response as of 2026-08-21). This doc describes how SLICC can ship
+  progress-bar / ETA feedback for `bash` tool calls _today_, entirely on top of
+  just-bash's public API, and how that overlay would later collapse onto an
+  upstream protocol if one lands.
 
 ## Why no patch is needed
 

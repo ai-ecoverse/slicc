@@ -72,6 +72,12 @@ export interface WcChatControllerOptions {
    */
   onBusyPhaseChange?: (phase: BusyPhase) => void;
   /**
+   * Overall progress of the in-flight tool call(s) — `null` when unknown or
+   * none is running. The host mirrors it onto the send button's `progress`
+   * attribute so the tool-phase ring becomes a determinate arc.
+   */
+  onToolProgressChange?: (fraction: number | null) => void;
+  /**
    * Invoked when a message reaches a stable (non-streaming) render — the
    * dip-hydration hook. Streaming re-renders don't fire it; a message that
    * streams fires once, on its final render.
@@ -197,6 +203,8 @@ export class WcChatController {
   #agent: AgentHandle;
   readonly #onProcessingChange?: (processing: boolean) => void;
   readonly #onBusyPhaseChange?: (phase: BusyPhase) => void;
+  readonly #onToolProgressChange?: (fraction: number | null) => void;
+  #lastToolProgress: number | null = null;
   readonly #onMessageRendered?: (message: ChatMessage, els: readonly HTMLElement[]) => void;
   readonly #onMessageDisposed?: (messageId: string) => void;
   readonly #onTurnComplete?: (message: ChatMessage | null) => void;
@@ -265,17 +273,19 @@ export class WcChatController {
   readonly #toolUiDips = new Map<string, { instance: DipInstance; container: HTMLElement }>();
 
   /**
-   * In-flight bash progress units per tool-call id (latest event per unit
-   * id). Kept outside `ChatMessage` so it is never persisted; reapplied to
-   * the freshly built row after every `#rerenderMessage`.
+   * Latest script-level progress event per in-flight tool-call id (one unit
+   * per call — sub-steps are folded in shell-side). Kept outside
+   * `ChatMessage` so it is never persisted; reapplied to the freshly built
+   * row after every `#rerenderMessage`.
    */
-  readonly #toolProgress = new Map<string, Map<string, ToolProgressEvent>>();
+  readonly #toolProgress = new Map<string, ToolProgressEvent>();
 
   constructor(options: WcChatControllerOptions) {
     this.#thread = options.thread;
     this.#agent = options.agent;
     this.#onProcessingChange = options.onProcessingChange;
     this.#onBusyPhaseChange = options.onBusyPhaseChange;
+    this.#onToolProgressChange = options.onToolProgressChange;
     this.#onMessageRendered = options.onMessageRendered;
     this.#onMessageDisposed = options.onMessageDisposed;
     this.#onTurnComplete = options.onTurnComplete;
@@ -299,6 +309,7 @@ export class WcChatController {
     this.#thread.removeEventListener('slicc-error-retry', this.#onErrorRetry);
     for (const id of [...this.#toolUiDips.keys()]) this.#disposeToolUiDip(id);
     this.#toolProgress.clear();
+    this.#publishToolProgress();
   }
 
   get processing(): boolean {
@@ -433,6 +444,7 @@ export class WcChatController {
     // the worker-side request is canceled when its scoop unloads.
     for (const id of [...this.#toolUiDips.keys()]) this.#disposeToolUiDip(id);
     this.#toolProgress.clear();
+    this.#publishToolProgress();
     // The queued stack is live-only — a scoop switch / session reload starts
     // with an empty pile rather than carrying the previous scoop's queue.
     // Each dropped id routes through the SAME backend cancel path the local
@@ -920,7 +932,10 @@ export class WcChatController {
     if (!message || !call) return;
     call.result = result;
     call.isError = isError;
-    if (call.id) this.#toolProgress.delete(call.id);
+    if (call.id) {
+      this.#toolProgress.delete(call.id);
+      this.#publishToolProgress();
+    }
     // One fewer tool in flight; once they all settle the turn is back to
     // waiting on / streaming from the LLM, so return to the `thinking` phase.
     this.#activeToolCount = Math.max(0, this.#activeToolCount - 1);
@@ -1040,18 +1055,10 @@ export class WcChatController {
       .reverse()
       .find((t) => t.name === toolName && t.result === undefined);
     if (!call?.id) return;
-    let units = this.#toolProgress.get(call.id);
-    if (progress.phase === 'end') {
-      units?.delete(progress.id);
-      if (units && units.size === 0) this.#toolProgress.delete(call.id);
-    } else {
-      if (!units) {
-        units = new Map();
-        this.#toolProgress.set(call.id, units);
-      }
-      units.set(progress.id, progress);
-    }
+    if (progress.phase === 'end') this.#toolProgress.delete(call.id);
+    else this.#toolProgress.set(call.id, progress);
     this.#applyToolProgress(call.id);
+    this.#publishToolProgress();
   }
 
   #applyToolProgress(toolCallId: string): void {
@@ -1059,7 +1066,23 @@ export class WcChatController {
       `slicc-action-row[data-tool-id="${CSS.escape(toolCallId)}"]`
     );
     if (!row) return;
-    applyToolProgress(row, [...(this.#toolProgress.get(toolCallId)?.values() ?? [])]);
+    applyToolProgress(row, this.#toolProgress.get(toolCallId) ?? null);
+  }
+
+  /**
+   * Composer ring value: the single in-flight call's fraction, or the mean
+   * when several run at once; `null` while any of them is indeterminate or
+   * none is running. Only fires on change.
+   */
+  #publishToolProgress(): void {
+    let next: number | null = null;
+    const units = [...this.#toolProgress.values()];
+    if (units.length > 0 && units.every((u) => typeof u.fraction === 'number')) {
+      next = units.reduce((sum, u) => sum + (u.fraction as number), 0) / units.length;
+    }
+    if (next === this.#lastToolProgress) return;
+    this.#lastToolProgress = next;
+    this.#onToolProgressChange?.(next);
   }
 
   #disposeToolUiDip(requestId: string): void {

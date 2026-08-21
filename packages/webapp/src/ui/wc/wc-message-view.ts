@@ -368,22 +368,37 @@ const WCMSG_CSS = [
   'object-fit:contain;margin:8px 0;border-radius:6px;}',
   '.wcmsg-image-overflow{margin-top:6px;opacity:.7;}',
   '.wcmsg-path{color:var(--txt-3);margin-bottom:4px;}',
-  // Bash progress overlay: one compact line per running unit, below the
-  // row header, visible whether or not the body is expanded.
-  '.wcmsg-progress{display:flex;flex-direction:column;gap:3px;padding:2px 10px 6px 30px;',
-  'font:11px/1.4 var(--mono,ui-monospace,monospace);color:var(--txt-3);}',
-  '.wcmsg-progress__unit{display:grid;grid-template-columns:minmax(0,1fr) 9ch 7ch;',
-  'align-items:center;gap:8px;}',
-  '.wcmsg-progress__label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
-  '.wcmsg-progress__track{grid-column:1/-1;height:3px;border-radius:2px;',
-  'background:color-mix(in srgb,currentColor 18%,transparent);overflow:hidden;}',
-  '.wcmsg-progress__fill{height:100%;background:var(--accent,#4a90e2);',
-  'transition:width .2s linear;}',
-  '.wcmsg-progress__fill--indeterminate{width:30%;',
+  // Bash progress overlay (one unit per tool call), three quiet cues:
+  // 1. the icon chip fills bottom-up with the row accent (indeterminate: breathes);
+  // 2. the result badge becomes three dots, one per third — done dots solid,
+  //    the active one blinking, the rest faded;
+  // 3. an open dark terminal body wears a 3px top-border bar.
+  'slicc-action-row[data-progress] .slicc-act__ic{background:linear-gradient(to top,',
+  'var(--slicc-progress-ink,var(--accent)) calc(var(--slicc-progress,0)*100%),',
+  'color-mix(in srgb,var(--slicc-progress-ink,var(--accent)) 30%,transparent) 0);}',
+  'slicc-action-row[data-progress="indeterminate"] .slicc-act__ic{',
+  'animation:wcmsg-progress-breathe 1.6s ease-in-out infinite;}',
+  '@keyframes wcmsg-progress-breathe{0%,100%{opacity:.45}50%{opacity:1}}',
+  '.wcmsg-dots{margin-left:auto;display:inline-flex;gap:4px;align-items:center;',
+  'color:var(--txt-3);font-variant-numeric:tabular-nums;}',
+  '.wcmsg-dots__dot{width:5px;height:5px;border-radius:50%;background:currentColor;opacity:.25;}',
+  '.wcmsg-dots__dot.is-done{opacity:1;}',
+  '.wcmsg-dots__dot.is-active{opacity:1;animation:wcmsg-progress-blink 1s ease-in-out infinite;}',
+  '.wcmsg-dots--indeterminate .wcmsg-dots__dot{animation:wcmsg-progress-blink 1.2s ease-in-out infinite;}',
+  '.wcmsg-dots--indeterminate .wcmsg-dots__dot:nth-child(2){animation-delay:.2s}',
+  '.wcmsg-dots--indeterminate .wcmsg-dots__dot:nth-child(3){animation-delay:.4s}',
+  '@keyframes wcmsg-progress-blink{0%,100%{opacity:1}50%{opacity:.25}}',
+  'slicc-action-row[data-progress] .slicc-act__head .slicc-act__badge{display:none;}',
+  'slicc-action-row[data-progress] .slicc-act__body{position:relative;overflow:hidden;}',
+  'slicc-action-row[data-progress] .slicc-act__body::before{content:"";position:absolute;',
+  'top:0;left:0;height:3px;width:calc(var(--slicc-progress,0)*100%);',
+  'background:var(--slicc-progress-ink,var(--accent));transition:width .25s linear;}',
+  'slicc-action-row[data-progress] .slicc-act__body:has(> .wcmsg-bash)::before{background:#9ad17e;}',
+  'slicc-action-row[data-progress="indeterminate"] .slicc-act__body::before{width:30%;',
   'animation:wcmsg-progress-slide 1.2s ease-in-out infinite;}',
-  '@keyframes wcmsg-progress-slide{0%{transform:translateX(-100%)}',
-  '100%{transform:translateX(340%)}}',
-  '.wcmsg-progress__pct,.wcmsg-progress__eta{text-align:right;font-variant-numeric:tabular-nums;}',
+  '@keyframes wcmsg-progress-slide{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}',
+  '@media (prefers-reduced-motion:reduce){.wcmsg-dots__dot,slicc-action-row[data-progress] .slicc-act__ic,',
+  'slicc-action-row[data-progress] .slicc-act__body::before{animation:none!important;}}',
 ].join('');
 
 function ensureWcmsgStyle(): void {
@@ -418,68 +433,71 @@ export function formatBytes(n: number): string {
   return `${v < 10 ? v.toFixed(1) : Math.round(v)} ${units[i]}`;
 }
 
-/** Middle column of a progress unit: percent when determinate, else a byte counter. */
-function progressCounter(unit: ToolProgressEvent, fraction: number | undefined): string {
-  if (fraction !== undefined) return `${Math.round(fraction * 100)}%`;
-  if (unit.unit === 'bytes' && unit.done !== undefined && unit.done > 0)
-    return formatBytes(unit.done);
-  return '';
-}
+const PROGRESS_ATTR = 'data-progress';
+const DOTS_CLASS = 'wcmsg-dots';
+const DOT_COUNT = 3;
 
-const PROGRESS_CLASS = 'wcmsg-progress';
+/** Accessible one-liner for the row: "3/7 · sleep 12 — 43%, ~8s left". */
+function progressTitle(unit: ToolProgressEvent, fraction: number | undefined): string {
+  const parts: string[] = [];
+  if (unit.total !== undefined && unit.unit === 'iterations')
+    parts.push(`${unit.done ?? 0}/${unit.total}`);
+  parts.push(unit.label);
+  const tail: string[] = [];
+  if (fraction !== undefined) tail.push(`${Math.round(fraction * 100)}%`);
+  else if (unit.unit === 'bytes' && unit.done) tail.push(formatBytes(unit.done));
+  if (unit.etaMs !== undefined && unit.etaMs > 0) tail.push(`~${formatEta(unit.etaMs)} left`);
+  return tail.length ? `${parts.join(' · ')} — ${tail.join(', ')}` : parts.join(' · ');
+}
 
 /**
- * Upsert the progress block for a tool row. `units` are the in-flight
- * progress units (latest event per id); an empty list removes the block.
- * Rendered as a plain light-DOM child appended AFTER the row has connected
- * (so `<slicc-action-row>` does not slot it into the header label), which
- * places it between the header and the collapsible body.
+ * Apply (or clear, with `null`) the progress treatment for a tool row: the
+ * icon fill, the three-dot badge and the body top bar all read the same
+ * `--slicc-progress` custom property + `data-progress` state, so this only
+ * sets those and upserts the dots. Idempotent; safe after a row rebuild.
  */
-export function applyToolProgress(row: HTMLElement, units: readonly ToolProgressEvent[]): void {
+export function applyToolProgress(row: HTMLElement, unit: ToolProgressEvent | null): void {
   ensureWcmsgStyle();
-  let block = row.querySelector<HTMLElement>(`:scope > .${PROGRESS_CLASS}`);
-  if (units.length === 0) {
-    block?.remove();
+  const head = row.querySelector<HTMLElement>(':scope > .slicc-act__head');
+  const existing = head?.querySelector<HTMLElement>(`:scope > .${DOTS_CLASS}`) ?? null;
+  if (!unit || unit.phase === 'end') {
+    row.removeAttribute(PROGRESS_ATTR);
+    row.style.removeProperty('--slicc-progress');
+    row.removeAttribute('title');
+    existing?.remove();
     return;
   }
-  if (!block) {
-    block = document.createElement('div');
-    block.className = PROGRESS_CLASS;
-    block.setAttribute('role', 'status');
-    row.append(block);
-  }
-  block.replaceChildren(...units.map(progressUnitEl));
-}
-
-function progressUnitEl(unit: ToolProgressEvent): HTMLElement {
   const determinate = typeof unit.fraction === 'number' && Number.isFinite(unit.fraction);
   const fraction = determinate ? Math.min(1, Math.max(0, unit.fraction as number)) : undefined;
-  const wrap = el('div', { class: 'wcmsg-progress__unit', 'data-progress-id': unit.id });
-  const label = el('span', { class: 'wcmsg-progress__label', title: unit.label });
-  label.textContent = unit.label;
-  const pct = el('span', { class: 'wcmsg-progress__pct' });
-  pct.textContent = progressCounter(unit, fraction);
-  const eta = el('span', { class: 'wcmsg-progress__eta' });
-  eta.textContent = unit.etaMs === undefined ? '' : `~${formatEta(unit.etaMs)}`;
-  const track = el('div', {
-    class: 'wcmsg-progress__track',
-    role: 'progressbar',
-    'aria-label': unit.label,
-    ...(fraction === undefined
-      ? {}
-      : {
-          'aria-valuemin': '0',
-          'aria-valuemax': '100',
-          'aria-valuenow': String(Math.round(fraction * 100)),
-        }),
+  row.setAttribute(PROGRESS_ATTR, determinate ? 'determinate' : 'indeterminate');
+  row.style.setProperty('--slicc-progress', fraction === undefined ? '0' : String(fraction));
+  row.setAttribute('title', progressTitle(unit, fraction));
+  if (!head) return;
+  let dots = existing;
+  if (!dots) {
+    dots = el('span', { class: DOTS_CLASS, role: 'progressbar', 'aria-label': unit.label });
+    for (let i = 0; i < DOT_COUNT; i++) dots.append(el('span', { class: 'wcmsg-dots__dot' }));
+    // Before the chevron, where the "…" badge sits.
+    const chevron = head.querySelector(':scope > .slicc-act__chev');
+    if (chevron) head.insertBefore(dots, chevron);
+    else head.append(dots);
+  }
+  dots.classList.toggle(`${DOTS_CLASS}--indeterminate`, fraction === undefined);
+  if (fraction === undefined) {
+    dots.removeAttribute('aria-valuenow');
+  } else {
+    dots.setAttribute('aria-valuemin', '0');
+    dots.setAttribute('aria-valuemax', '100');
+    dots.setAttribute('aria-valuenow', String(Math.round(fraction * 100)));
+  }
+  // Each dot owns a third; the one containing the current position blinks.
+  const active =
+    fraction === undefined ? -1 : Math.min(DOT_COUNT - 1, Math.floor(fraction * DOT_COUNT));
+  const dotEls = dots.querySelectorAll<HTMLElement>('.wcmsg-dots__dot');
+  dotEls.forEach((dot, i) => {
+    dot.classList.toggle('is-done', fraction !== undefined && (i < active || fraction >= 1));
+    dot.classList.toggle('is-active', fraction !== undefined && fraction < 1 && i === active);
   });
-  const fill = el('div', {
-    class: `wcmsg-progress__fill${fraction === undefined ? ' wcmsg-progress__fill--indeterminate' : ''}`,
-  });
-  if (fraction !== undefined) fill.style.width = `${fraction * 100}%`;
-  track.append(fill);
-  wrap.append(label, pct, eta, track);
-  return wrap;
 }
 
 function precedingTextLine(text: string): string | null {

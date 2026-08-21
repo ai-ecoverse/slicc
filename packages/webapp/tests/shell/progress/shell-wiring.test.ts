@@ -1,8 +1,8 @@
 /**
  * End-to-end wiring of the bash progress overlay through
- * `AlmostBashShellHeadless`: `sleep` ticks via `BashOptions.sleep`, ordinary
- * commands get a start/end pair, and everything reaches the tool execution
- * context's `onUpdate` as `progress` partial results.
+ * `AlmostBashShellHeadless`: every tool-call script gets ONE script-level unit;
+ * `sleep`/`timeout` ticks and per-command start/end fold into it; everything
+ * reaches the tool execution context's `onUpdate` as `progress` partials.
  */
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -24,6 +24,17 @@ function captureProgress() {
   return { events, onUpdate };
 }
 
+async function runInTool(shell: AlmostBashShellHeadless, script: string) {
+  const { events, onUpdate } = captureProgress();
+  const ctx = pushToolExecutionContext({ onUpdate, toolName: 'bash', toolCallId: 'tc' });
+  try {
+    const result = await shell.executeCommand(script);
+    return { events, onUpdate, result };
+  } finally {
+    popToolExecutionContext(ctx);
+  }
+}
+
 describe('AlmostBashShellHeadless progress wiring', () => {
   let fs: VirtualFS;
   let dbCounter = 0;
@@ -32,53 +43,43 @@ describe('AlmostBashShellHeadless progress wiring', () => {
     fs = await VirtualFS.create({ dbName: `test-progress-${dbCounter++}`, wipe: true });
   });
 
-  it('reports determinate progress for sleep inside a tool context', async () => {
+  it('emits exactly one unit per script, ticking once per completed command', async () => {
     const shell = new AlmostBashShellHeadless({ fs });
-    const { events, onUpdate } = captureProgress();
-    const ctx = pushToolExecutionContext({ onUpdate, toolName: 'bash', toolCallId: 'tc1' });
-    try {
-      const result = await shell.executeCommand('sleep 0.6');
-      expect(result.exitCode).toBe(0);
-    } finally {
-      popToolExecutionContext(ctx);
-    }
-    const sleepEvents = events.filter((e) => e.id.startsWith('sleep-'));
-    expect(sleepEvents[0]).toMatchObject({ phase: 'start', label: 'sleep 0.6', total: 600 });
-    expect(sleepEvents.at(-1)).toMatchObject({ phase: 'end', fraction: 1 });
-    expect(sleepEvents.some((e) => e.phase === 'update')).toBe(true);
+    const { events } = await runInTool(shell, 'echo a; echo b; echo c');
+    expect(new Set(events.map((e) => e.id)).size).toBe(1);
+    expect(events[0]).toMatchObject({ phase: 'start', fraction: 0, total: 3, done: 0 });
+    // Sub-millisecond steps are throttled; the end event carries the count.
+    expect(events.at(-1)).toMatchObject({ phase: 'end', fraction: 1, done: 3, total: 3 });
   });
 
-  it('wraps ordinary commands with an indeterminate start/end pair', async () => {
+  it('folds sleep ticks into the script fraction', async () => {
     const shell = new AlmostBashShellHeadless({ fs });
-    const { events, onUpdate } = captureProgress();
-    const ctx = pushToolExecutionContext({ onUpdate, toolName: 'bash', toolCallId: 'tc2' });
-    try {
-      await shell.executeCommand('ls /');
-    } finally {
-      popToolExecutionContext(ctx);
-    }
-    const ls = events.filter((e) => e.label === 'ls /');
-    expect(ls.map((e) => e.phase)).toEqual(['start', 'end']);
-    expect(ls[0].fraction).toBeUndefined();
+    const { events, result } = await runInTool(shell, 'sleep 0.6; echo done');
+    expect(result.exitCode).toBe(0);
+    expect(new Set(events.map((e) => e.id)).size).toBe(1);
+    const mid = events.filter(
+      (e) => e.phase === 'update' && (e.fraction ?? 0) > 0 && (e.fraction ?? 0) < 0.5
+    );
+    expect(mid.length).toBeGreaterThan(0);
+    expect(mid[0].label).toContain('sleep 0.6');
+    expect(events.at(-1)).toMatchObject({ phase: 'end', fraction: 1, total: 2 });
   });
 
-  it('counts for-loop iterations on command completion', async () => {
+  it('ticks timeout against its limit', async () => {
     const shell = new AlmostBashShellHeadless({ fs });
-    const { events, onUpdate } = captureProgress();
-    const ctx = pushToolExecutionContext({ onUpdate, toolName: 'bash', toolCallId: 'tc-loop' });
-    try {
-      await shell.executeCommand('for i in 1 2 3; do echo $i; done');
-    } finally {
-      popToolExecutionContext(ctx);
-    }
-    const loop = events.filter((e) => e.id.startsWith('loop-'));
-    expect(loop[0]).toMatchObject({ phase: 'start', total: 3, done: 0, label: 'for i (0/3)' });
-    // The loop finishes in microseconds, so the ≤4/s throttle keeps only the
-    // first update; `end` still carries the final count.
-    const updates = loop.filter((e) => e.phase === 'update').map((e) => e.done);
-    expect(updates[0]).toBe(1);
-    expect(updates).toEqual([...updates].sort((a, b) => a - b));
-    expect(loop.at(-1)).toMatchObject({ phase: 'end', done: 3, fraction: 1 });
+    const { events } = await runInTool(shell, 'timeout 2 sleep 0.6');
+    expect(events[0]).toMatchObject({ phase: 'start', total: 2 });
+    const withTimeout = events.filter((e) => e.label.includes('timeout 2'));
+    expect(withTimeout.length).toBeGreaterThan(0);
+    expect(events.at(-1)).toMatchObject({ phase: 'end', fraction: 1, done: 2 });
+  });
+
+  it('reports an indeterminate unit for unplannable scripts', async () => {
+    const shell = new AlmostBashShellHeadless({ fs });
+    const { events } = await runInTool(shell, 'for f in /*; do echo $f; done');
+    expect(events[0]).toMatchObject({ phase: 'start', fraction: undefined });
+    expect(events[0].total).toBeUndefined();
+    expect(events.at(-1)).toMatchObject({ phase: 'end', fraction: 1 });
   });
 
   it('emits nothing for the human terminal (no tool context)', async () => {
@@ -92,17 +93,14 @@ describe('AlmostBashShellHeadless progress wiring', () => {
   it('runs labels through the configured scrubber', async () => {
     const shell = new AlmostBashShellHeadless({
       fs,
-      scrubProgressLabel: async (text) => text.replace('hunter2', '***'),
+      scrubProgressLabel: async (text) => text.replace(/hunter2/g, '***'),
     });
-    const { events, onUpdate } = captureProgress();
-    const ctx = pushToolExecutionContext({ onUpdate, toolName: 'bash', toolCallId: 'tc3' });
-    try {
-      await shell.executeCommand('ls hunter2 2>/dev/null; true');
-    } finally {
-      popToolExecutionContext(ctx);
-    }
-    await vi.waitFor(() => expect(events.some((e) => e.label.startsWith('ls '))).toBe(true));
+    const { events } = await runInTool(
+      shell,
+      'sleep 0.3 hunter2 2>/dev/null; ls hunter2 2>/dev/null; true'
+    );
+    await vi.waitFor(() => expect(events.length).toBeGreaterThan(0));
     for (const e of events) expect(e.label).not.toContain('hunter2');
-    expect(events.find((e) => e.label.startsWith('ls '))?.label).toBe('ls ***');
+    expect(events[0].label).toContain('***');
   });
 });
