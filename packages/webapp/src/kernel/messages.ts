@@ -8,7 +8,7 @@
  * to its primary consumers.
  */
 
-import type { CDPPayload } from '@slicc/shared-ts';
+import type { CDPPayload, ToolProgressEvent } from '@slicc/shared-ts';
 import type { MessageAttachment } from '../core/attachments.js';
 import type { AgentSpawnOptions, AgentSpawnResult } from '../scoops/agent-bridge.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
@@ -837,8 +837,11 @@ export interface AgentEventMsg {
     | 'turn_end'
     | 'response_done'
     | 'tool_ui'
-    | 'tool_ui_done';
+    | 'tool_ui_done'
+    | 'tool_progress';
   text?: string;
+  /** `tool_progress` payload. */
+  progress?: ToolProgressEvent;
   toolName?: string;
   toolInput?: unknown;
   toolResult?: string;

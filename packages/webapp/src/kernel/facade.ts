@@ -348,6 +348,16 @@ export class Bridge implements KernelFacade {
         });
       },
 
+      onToolProgress: (scoopJid, toolName, progress) => {
+        bridge.emit({
+          type: 'agent-event',
+          scoopJid,
+          eventType: 'tool_progress',
+          toolName,
+          progress,
+        });
+      },
+
       onIncomingMessage: (scoopJid, message) => bridge.bufferIncomingMessage(scoopJid, message),
 
       onMessageUpdate: (scoopJid, update) => bridge.applyMessageUpdate(scoopJid, update),

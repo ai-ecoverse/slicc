@@ -23,6 +23,7 @@ import { formatMessageTimestamp, initTimestampPreference } from '../timestamp-pr
 // preventing a flash of unstyled timestamps on page load.
 initTimestampPreference();
 
+import type { ToolProgressEvent } from '@slicc/shared-ts';
 import type { ChatMessage, ToolCall } from '../types.js';
 
 // Side-effect import registers every element this module instantiates.
@@ -367,6 +368,22 @@ const WCMSG_CSS = [
   'object-fit:contain;margin:8px 0;border-radius:6px;}',
   '.wcmsg-image-overflow{margin-top:6px;opacity:.7;}',
   '.wcmsg-path{color:var(--txt-3);margin-bottom:4px;}',
+  // Bash progress overlay: one compact line per running unit, below the
+  // row header, visible whether or not the body is expanded.
+  '.wcmsg-progress{display:flex;flex-direction:column;gap:3px;padding:2px 10px 6px 30px;',
+  'font:11px/1.4 var(--mono,ui-monospace,monospace);color:var(--txt-3);}',
+  '.wcmsg-progress__unit{display:grid;grid-template-columns:minmax(0,1fr) 9ch 7ch;',
+  'align-items:center;gap:8px;}',
+  '.wcmsg-progress__label{overflow:hidden;text-overflow:ellipsis;white-space:nowrap;}',
+  '.wcmsg-progress__track{grid-column:1/-1;height:3px;border-radius:2px;',
+  'background:color-mix(in srgb,currentColor 18%,transparent);overflow:hidden;}',
+  '.wcmsg-progress__fill{height:100%;background:var(--accent,#4a90e2);',
+  'transition:width .2s linear;}',
+  '.wcmsg-progress__fill--indeterminate{width:30%;',
+  'animation:wcmsg-progress-slide 1.2s ease-in-out infinite;}',
+  '@keyframes wcmsg-progress-slide{0%{transform:translateX(-100%)}',
+  '100%{transform:translateX(340%)}}',
+  '.wcmsg-progress__pct,.wcmsg-progress__eta{text-align:right;font-variant-numeric:tabular-nums;}',
 ].join('');
 
 function ensureWcmsgStyle(): void {
@@ -375,6 +392,72 @@ function ensureWcmsgStyle(): void {
   style.id = WCMSG_STYLE_ID;
   style.textContent = WCMSG_CSS;
   document.head.appendChild(style);
+}
+
+/** "12s", "1m05s", "1h02m" — coarse, this is an estimate. */
+export function formatEta(ms: number): string {
+  const s = Math.max(0, Math.round(ms / 1000));
+  if (s < 60) return `${s}s`;
+  const m = Math.floor(s / 60);
+  if (m < 60) return `${m}m${String(s % 60).padStart(2, '0')}s`;
+  const h = Math.floor(m / 60);
+  return `${h}h${String(m % 60).padStart(2, '0')}m`;
+}
+
+const PROGRESS_CLASS = 'wcmsg-progress';
+
+/**
+ * Upsert the progress block for a tool row. `units` are the in-flight
+ * progress units (latest event per id); an empty list removes the block.
+ * Rendered as a plain light-DOM child appended AFTER the row has connected
+ * (so `<slicc-action-row>` does not slot it into the header label), which
+ * places it between the header and the collapsible body.
+ */
+export function applyToolProgress(row: HTMLElement, units: readonly ToolProgressEvent[]): void {
+  ensureWcmsgStyle();
+  let block = row.querySelector<HTMLElement>(`:scope > .${PROGRESS_CLASS}`);
+  if (units.length === 0) {
+    block?.remove();
+    return;
+  }
+  if (!block) {
+    block = document.createElement('div');
+    block.className = PROGRESS_CLASS;
+    block.setAttribute('role', 'status');
+    row.append(block);
+  }
+  block.replaceChildren(...units.map(progressUnitEl));
+}
+
+function progressUnitEl(unit: ToolProgressEvent): HTMLElement {
+  const determinate = typeof unit.fraction === 'number' && Number.isFinite(unit.fraction);
+  const fraction = determinate ? Math.min(1, Math.max(0, unit.fraction as number)) : undefined;
+  const wrap = el('div', { class: 'wcmsg-progress__unit', 'data-progress-id': unit.id });
+  const label = el('span', { class: 'wcmsg-progress__label', title: unit.label });
+  label.textContent = unit.label;
+  const pct = el('span', { class: 'wcmsg-progress__pct' });
+  pct.textContent = fraction === undefined ? '' : `${Math.round(fraction * 100)}%`;
+  const eta = el('span', { class: 'wcmsg-progress__eta' });
+  eta.textContent = unit.etaMs === undefined ? '' : `~${formatEta(unit.etaMs)}`;
+  const track = el('div', {
+    class: 'wcmsg-progress__track',
+    role: 'progressbar',
+    'aria-label': unit.label,
+    ...(fraction === undefined
+      ? {}
+      : {
+          'aria-valuemin': '0',
+          'aria-valuemax': '100',
+          'aria-valuenow': String(Math.round(fraction * 100)),
+        }),
+  });
+  const fill = el('div', {
+    class: `wcmsg-progress__fill${fraction === undefined ? ' wcmsg-progress__fill--indeterminate' : ''}`,
+  });
+  if (fraction !== undefined) fill.style.width = `${fraction * 100}%`;
+  track.append(fill);
+  wrap.append(label, pct, eta, track);
+  return wrap;
 }
 
 function precedingTextLine(text: string): string | null {

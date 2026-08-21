@@ -63,6 +63,11 @@ import type { JshProcessConfig } from './jsh-executor.js';
 import { executeJsCode, executeJshFile } from './jsh-executor.js';
 import { EMPTY_BYTES } from './just-bash-compat.js';
 import { parseShellArgs } from './parse-shell-args.js';
+import {
+  makeSleepWithProgress,
+  ProgressEmitter,
+  wrapCommandForProgress,
+} from './progress/index.js';
 import { createProxiedFetch } from './proxied-fetch.js';
 import { ScriptCatalog } from './script-catalog.js';
 import { enforceCommandSudo } from './sudo/command-guard.js';
@@ -131,6 +136,14 @@ export interface HeadlessShellOptions {
    * and broker are available.
    */
   sudo?: ShellSudoConfig;
+  /**
+   * Secret scrubber for progress-card labels (bash progress overlay,
+   * `./progress/`). Labels are built from argv, so without it a
+   * `curl -H "Authorization: …"` would surface in the chat UI. Wired by the
+   * scoop context with the same scrubber `adaptTools` uses; the human
+   * terminal (no tool context) never emits progress and can leave it unset.
+   */
+  scrubProgressLabel?: (text: string) => Promise<string>;
 }
 
 /** Command-level sudo enforcement hooks supplied to the shell. */
@@ -327,6 +340,21 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   private activeShellPid: number | undefined;
 
   /**
+   * Bash progress overlay (`docs/exploration/bash-progress-overlay.md`).
+   * Events reach the chat UI through the ambient tool execution context;
+   * with none (human terminal) the emitter is a no-op.
+   */
+  private readonly progress: ProgressEmitter;
+
+  /**
+   * Signal of the run currently inside `bash.exec`. just-bash races
+   * `ctx.sleep` against the per-command signal but cannot cancel the promise,
+   * so the progress ticker probes this between slices. Last-writer under
+   * concurrency — a stale read only costs one extra 250 ms tick.
+   */
+  private activeRunSignal: AbortSignal | undefined;
+
+  /**
    * Per-run parent pid, carried to realm-backed commands through the run's
    * OWN environment (see {@link RUN_PID_ENV}).
    *
@@ -465,6 +493,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
   constructor(protected options: HeadlessShellOptions) {
     this.vfsAdapter = new VfsAdapter(options.fs);
+    this.progress = new ProgressEmitter({ scrubLabel: options.scrubProgressLabel });
     this.allowedCommands = AlmostBashShellHeadless.buildAllowedCommandSet(options);
     const initialCwd = options.cwd ?? '/';
     const initialEnv = AlmostBashShellHeadless.buildInitialEnv(options, initialCwd);
@@ -534,6 +563,11 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       fetch: fetchFn,
       commands: allowedBuiltinNames,
       customCommands,
+      // Progress-reporting `sleep` (ticks inside just-bash's own timer
+      // allowance — see `./progress/sleep-progress.ts`).
+      sleep: makeSleepWithProgress(this.progress, {
+        isAborted: () => this.activeRunSignal?.aborted ?? false,
+      }),
     });
 
     // Network-command post-registration cleanup (Codex P1 on #433).
@@ -566,10 +600,14 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     // terminal opts out via `transparentGating: false` so plain commands run
     // ungated even though `sudo <cmd...>` is still available. Newly-registered
     // `.jsh` commands are wrapped in `doSyncJshCommands` via the same chokepoint.
-    if (this.isTransparentGatingEnabled()) {
+    //
+    // Progress is layered OUTSIDE sudo (`wrapCommandForProgress(wrapCommandForSudo(cmd))`)
+    // so a denied command never runs but still closes its start/end pair;
+    // `wrapCommandForSudo` is the identity when gating is off.
+    {
       const registry = this.bash as unknown as { commands: Map<string, Command> };
       for (const [name, cmd] of registry.commands) {
-        registry.commands.set(name, this.wrapCommandForSudo(cmd));
+        registry.commands.set(name, this.wrapCommandForDispatch(cmd));
       }
     }
 
@@ -875,7 +913,13 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       signal,
     };
     const pathBeforeExec = this.lastEnv.PATH;
-    const result = await this.bash.exec(command, execOptions);
+    this.activeRunSignal = signal;
+    let result: BashExecResult;
+    try {
+      result = await this.bash.exec(command, execOptions);
+    } finally {
+      if (this.activeRunSignal === signal) this.activeRunSignal = undefined;
+    }
     // Persist any "Always" command grants confirmed during dispatch now that we
     // are outside just-bash's execution box (where VFS async timers are blocked).
     await this.flushPendingCommandGrants();
@@ -939,6 +983,15 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * already-tokenized `name + args` subject before delegating to the wrapped
    * `execute`, returning an exit-1 result (without running it) on denial.
    */
+  /**
+   * Dispatch-time decorators for a registry entry: sudo gate inside, progress
+   * start/end outside. Every command registered after construction (`.jsh`,
+   * workflows) must go through this too.
+   */
+  private wrapCommandForDispatch(command: Command): Command {
+    return wrapCommandForProgress(this.wrapCommandForSudo(command), this.progress);
+  }
+
   private wrapCommandForSudo(command: Command): Command {
     if (!this.isTransparentGatingEnabled()) return command;
     const guard = (args: string[]) => this.gateCommandDispatch(command.name, args);
@@ -1085,7 +1138,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         if (!this.isCommandAllowed(name)) continue;
         if (this.builtinCommandNames.has(name) && !this.registeredJshCommands.has(name)) continue;
         if (this.registeredJshCommands.get(name) === scriptPath) continue;
-        this.bash.registerCommand(this.wrapCommandForSudo(this.makeScriptCommand(name)));
+        this.bash.registerCommand(this.wrapCommandForDispatch(this.makeScriptCommand(name)));
         this.registeredJshCommands.set(name, scriptPath);
         this.builtinCommandNames.add(name);
       }
@@ -1101,7 +1154,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
           continue;
         }
         if (this.builtinCommandNames.has(name)) continue; // never override a real built-in
-        this.bash.registerCommand(this.wrapCommandForSudo(this.makeScriptCommand(name)));
+        this.bash.registerCommand(this.wrapCommandForDispatch(this.makeScriptCommand(name)));
         this.registeredWorkflowCommands.add(name);
         this.builtinCommandNames.add(name);
       }

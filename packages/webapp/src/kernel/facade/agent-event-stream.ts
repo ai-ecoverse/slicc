@@ -95,6 +95,17 @@ export class AgentEventStream {
         events.push({ type: 'tool_ui_done', messageId, requestId: message.requestId ?? '' });
         break;
       }
+      case 'tool_progress': {
+        const messageId = this.messageIds.get(scoopJid);
+        if (!messageId || !message.progress) return events;
+        events.push({
+          type: 'tool_progress',
+          messageId,
+          toolName: message.toolName ?? '',
+          progress: message.progress,
+        });
+        break;
+      }
       case 'response_done': {
         const messageId = this.messageIds.get(scoopJid);
         if (!messageId) return events;

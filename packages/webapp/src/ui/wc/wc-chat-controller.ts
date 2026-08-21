@@ -6,6 +6,7 @@
  * `wc-message-view.ts` mapper instead of hand-built DOM.
  */
 
+import type { ToolProgressEvent } from '@slicc/shared-ts';
 import { escapeHtml } from '@slicc/webcomponents/internal/html';
 import { trackChatSend, trackError, trackLickBackpressure } from '../../kernel/telemetry.js';
 import {
@@ -19,6 +20,7 @@ import { type DipInstance, mountDip } from '../dip.js';
 import type { AgentEvent, AgentHandle, ChatMessage, ToolCall } from '../types.js';
 import { createCopyRow } from './wc-copy-row.js';
 import {
+  applyToolProgress,
   collateLickMessages,
   daySeparatorEl,
   isAuthExpiredError,
@@ -262,6 +264,13 @@ export class WcChatController {
    */
   readonly #toolUiDips = new Map<string, { instance: DipInstance; container: HTMLElement }>();
 
+  /**
+   * In-flight bash progress units per tool-call id (latest event per unit
+   * id). Kept outside `ChatMessage` so it is never persisted; reapplied to
+   * the freshly built row after every `#rerenderMessage`.
+   */
+  readonly #toolProgress = new Map<string, Map<string, ToolProgressEvent>>();
+
   constructor(options: WcChatControllerOptions) {
     this.#thread = options.thread;
     this.#agent = options.agent;
@@ -289,6 +298,7 @@ export class WcChatController {
     this.#unsubscribe();
     this.#thread.removeEventListener('slicc-error-retry', this.#onErrorRetry);
     for (const id of [...this.#toolUiDips.keys()]) this.#disposeToolUiDip(id);
+    this.#toolProgress.clear();
   }
 
   get processing(): boolean {
@@ -422,6 +432,7 @@ export class WcChatController {
     // dips — the new thread has no place for the old approval card and
     // the worker-side request is canceled when its scoop unloads.
     for (const id of [...this.#toolUiDips.keys()]) this.#disposeToolUiDip(id);
+    this.#toolProgress.clear();
     // The queued stack is live-only — a scoop switch / session reload starts
     // with an empty pile rather than carrying the previous scoop's queue.
     // Each dropped id routes through the SAME backend cancel path the local
@@ -808,6 +819,9 @@ export class WcChatController {
       case 'tool_ui_done':
         this.#handleToolUIDone(event.requestId);
         break;
+      case 'tool_progress':
+        this.#handleToolProgress(event.messageId, event.toolName, event.progress);
+        break;
       case 'turn_end':
         this.#handleTurnEnd(event.messageId);
         break;
@@ -906,6 +920,7 @@ export class WcChatController {
     if (!message || !call) return;
     call.result = result;
     call.isError = isError;
+    if (call.id) this.#toolProgress.delete(call.id);
     // One fewer tool in flight; once they all settle the turn is back to
     // waiting on / streaming from the LLM, so return to the `thinking` phase.
     this.#activeToolCount = Math.max(0, this.#activeToolCount - 1);
@@ -1012,6 +1027,39 @@ export class WcChatController {
 
   #handleToolUIDone(requestId: string): void {
     this.#disposeToolUiDip(requestId);
+  }
+
+  /**
+   * Bash progress tick. Targets the most recent in-flight call of that tool
+   * (same lookup `#handleToolResult` uses) and patches the row in place —
+   * no message rerender, since ticks arrive up to 4×/s per unit.
+   */
+  #handleToolProgress(messageId: string, toolName: string, progress: ToolProgressEvent): void {
+    const message = this.#findMessage(messageId);
+    const call = [...(message?.toolCalls ?? [])]
+      .reverse()
+      .find((t) => t.name === toolName && t.result === undefined);
+    if (!call?.id) return;
+    let units = this.#toolProgress.get(call.id);
+    if (progress.phase === 'end') {
+      units?.delete(progress.id);
+      if (units && units.size === 0) this.#toolProgress.delete(call.id);
+    } else {
+      if (!units) {
+        units = new Map();
+        this.#toolProgress.set(call.id, units);
+      }
+      units.set(progress.id, progress);
+    }
+    this.#applyToolProgress(call.id);
+  }
+
+  #applyToolProgress(toolCallId: string): void {
+    const row = this.#thread.querySelector<HTMLElement>(
+      `slicc-action-row[data-tool-id="${CSS.escape(toolCallId)}"]`
+    );
+    if (!row) return;
+    applyToolProgress(row, [...(this.#toolProgress.get(toolCallId)?.values() ?? [])]);
   }
 
   #disposeToolUiDip(requestId: string): void {
@@ -1147,6 +1195,10 @@ export class WcChatController {
       this.#thread.append(...next);
     }
     this.#els.set(message.id, next);
+    // Rows were rebuilt — put any in-flight progress bars back on them.
+    for (const call of message.toolCalls ?? []) {
+      if (call.id && this.#toolProgress.has(call.id)) this.#applyToolProgress(call.id);
+    }
     this.#reflowToolClusters();
     if (!message.isStreaming) this.#onMessageRendered?.(message, next);
     this.#followThread();

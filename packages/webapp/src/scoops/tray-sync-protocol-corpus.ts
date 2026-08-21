@@ -880,6 +880,28 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
     fields: { type: 'mirrored', messageId: 'mirrored', requestId: 'mirrored' },
     event: { type: 'tool_ui_done', messageId: 'm2', requestId: 'ui-1' },
   },
+  // Bash progress overlay ticks (≤4/s per unit). iOS has no case yet — the
+  // follower simply shows no bar; the `.unknown` fallthrough keeps the gap
+  // inventoried rather than silent.
+  tool_progress: {
+    ios: 'unknown',
+    fields: { type: 'mirrored', messageId: 'dropped', toolName: 'dropped', progress: 'dropped' },
+    event: {
+      type: 'tool_progress',
+      messageId: 'm2',
+      toolName: 'bash',
+      progress: {
+        id: 'sleep-1',
+        label: 'sleep 30',
+        fraction: 0.5,
+        etaMs: 15000,
+        done: 15000,
+        total: 30000,
+        unit: 'ms',
+        phase: 'update',
+      },
+    },
+  },
   turn_end: {
     ios: 'decoded',
     fields: { type: 'mirrored', messageId: 'mirrored' },
