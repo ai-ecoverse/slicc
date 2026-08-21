@@ -242,6 +242,7 @@ describe('WC tray connected follower mapping', () => {
         getBrowserCapableBootstrapIds: () => new Set(),
         getTeleportEligibleBootstrapIds: () => new Set(),
         getFollowerMotds: () => new Map([['cli-1', 'lars@build-box']]),
+        getSprinkleInstances: () => [],
         getFollowerDetails: () => [
           {
             bootstrapId: 'cli-1',
