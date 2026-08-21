@@ -5,9 +5,10 @@
  * currently steering the cone, realm scripts get that key under the same
  * environment variable name the upstream SDK / pi-ai would read it from
  * (`AI_GATEWAY_API_KEY` for `vercel-ai-gateway`, `OPENAI_API_KEY` for
- * `openai`, …). A skill that embeds a third-party agent runtime (see
- * `/workspace/skills/fx`) therefore needs zero credential plumbing: it reads
- * `process.env.<NAME>` exactly as it would under Node.
+ * `openai`, …). A skill that embeds a third-party agent runtime (e.g. the `fx`
+ * skill in ai-ecoverse/skills, which hosts Vercel's fx on fx-core.wasm)
+ * therefore needs zero credential plumbing: it reads `process.env.<NAME>`
+ * exactly as it would under Node.
  *
  * Scope is deliberately narrow:
  *   - only the SELECTED provider, never every configured account;

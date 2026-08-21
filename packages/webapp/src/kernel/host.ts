@@ -445,7 +445,8 @@ async function bootOrchestrator(
   kernelHostGlobals().__slicc_pm = processManager;
   // Publish the selected provider's API key to realm scripts under its SDK
   // env name (`AI_GATEWAY_API_KEY`, `OPENAI_API_KEY`, …) so embedded agent
-  // runtimes such as the `fx` skill need no credential plumbing.
+  // runtimes (e.g. the `fx` skill in ai-ecoverse/skills) need no credential
+  // plumbing.
   registerProviderEnvSeeder(createAccountStoreEnvSeeder());
   // Expose the BrowserAPI so the OAuth intercept launcher
   // (`providers/intercepted-oauth.ts`) can reach the active CDP
