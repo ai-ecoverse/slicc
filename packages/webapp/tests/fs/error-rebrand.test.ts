@@ -71,6 +71,34 @@ describe('convertError on internal Set/Map overflow (2026-08-18 outage)', () => 
     const err = Object.assign(new Error('EINVAL: invalid argument, chmod'), { code: 'EINVAL' });
     expect(convertError(err, '/p').code).toBe('EINVAL');
   });
+
+  // A STACK overflow is the same class with a marker the Set/Map guard above
+  // misses: 'Maximum call stack size exceeded' does not contain 'maximum size
+  // exceeded'. It carries no `.code` and matches no errno text either, so it
+  // fell through to the EINVAL default and users saw
+  // `EINVAL: Maximum call stack size exceeded` on every write once ZenFS'
+  // `Index._alloc` outgrew the host's spread-argument ceiling
+  // (zen-fs/core#312). EINVAL is additionally retried by
+  // `withKindMismatchRetryPaths` as a poisoned-index entry, so the
+  // misclassification also bought a pointless OPFS probe and a second
+  // overflow on every failure.
+  it('maps a stack overflow to EIO, not the EINVAL unknown-error default', () => {
+    const out = convertError(new RangeError('Maximum call stack size exceeded'), '/workspace/x');
+    expect(out.code).toBe('EIO');
+    expect(out.message).toContain('internal overflow, not storage');
+    expect(out.message).toContain('Maximum call stack size exceeded');
+    expect(out.path).toBe('/workspace/x');
+  });
+
+  it('catches a stack overflow already errno-wrapped by ZenFS', () => {
+    const err = Object.assign(
+      new Error(
+        "EINVAL: undefined: undefined, mkdir '/__opfs__/slicc-fs/workspace/a' (Maximum call stack size exceeded)"
+      ),
+      { code: 'EINVAL' }
+    );
+    expect(convertError(err, '/workspace/a').code).toBe('EIO');
+  });
 });
 
 describe('rebrandFsError', () => {
