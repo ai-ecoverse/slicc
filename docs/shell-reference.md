@@ -1123,6 +1123,16 @@ Rules: earlier root wins a basename conflict; first basename wins inside a root;
        node_modules/ and dot-dirs below a root never register commands.
 ```
 
+`/usr`, `/usr/bin`, and `/usr/bin/<command>` are synthesized from the command
+registry — they have no VFS entry — so `VfsAdapter` answers for them directly.
+All three metadata surfaces agree: `exists`, `stat`, **and `lstat`** (none of
+these paths can be a symlink, so `stat` and `lstat` return the same answer).
+That last one matters for commands that read metadata without following links —
+`du`, `find -type`, `tar`. When `lstat` did not answer, they saw `ENOENT` for
+the whole tree, and because `du` reports any error during its walk as
+`cannot access '<argument>'`, even `du -sh /` failed once the walk reached
+`/usr`.
+
 There is no full-filesystem scan: a `.jsh` outside the roots is not a command
 until its directory is added to `PATH` — `export PATH="$PATH:/my/tools"`
 interactively (registration completes between submissions) or persistently in
