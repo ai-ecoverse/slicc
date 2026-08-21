@@ -4,6 +4,8 @@ export {
   type ProgressEmitterOptions,
   progressLabel,
 } from './emitter.js';
+export { createFetchProgressObserver, fetchLabel } from './fetch-progress.js';
+export { type LoopPlan, LoopRun, planLoopProgress } from './loop-progress.js';
 export {
   makeSleepWithProgress,
   SLEEP_TICK_MS,

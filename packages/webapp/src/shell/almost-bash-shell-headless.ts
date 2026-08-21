@@ -64,8 +64,11 @@ import { executeJsCode, executeJshFile } from './jsh-executor.js';
 import { EMPTY_BYTES } from './just-bash-compat.js';
 import { parseShellArgs } from './parse-shell-args.js';
 import {
+  createFetchProgressObserver,
+  LoopRun,
   makeSleepWithProgress,
   ProgressEmitter,
+  planLoopProgress,
   wrapCommandForProgress,
 } from './progress/index.js';
 import { createProxiedFetch } from './proxied-fetch.js';
@@ -355,6 +358,18 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   private activeRunSignal: AbortSignal | undefined;
 
   /**
+   * Loop iteration counter for the run currently inside `bash.exec`
+   * (`./progress/loop-progress.ts`). One per shell: a second concurrent run
+   * (detached job) starting while one is active disables counting for both
+   * rather than miscounting — see `beginLoopRun`.
+   */
+  private loopRun: LoopRun | null = null;
+  private loopRunsActive = 0;
+
+  /** Registry command names, for the loop planner's "is this a dispatch" test. */
+  private registryNames: ReadonlySet<string> = new Set();
+
+  /**
    * Per-run parent pid, carried to realm-backed commands through the run's
    * OWN environment (see {@link RUN_PID_ENV}).
    *
@@ -530,7 +545,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     }
 
     const gitCommand = this.createGitCustomCommand();
-    const fetchFn = createProxiedFetch();
+    const fetchFn = createProxiedFetch({
+      progress: createFetchProgressObserver(this.progress),
+    });
     const supplementalCommands = this.buildSupplementalCommands(options, fetchFn);
     const mountCommand = this.createMountCustomCommand();
 
@@ -609,6 +626,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       for (const [name, cmd] of registry.commands) {
         registry.commands.set(name, this.wrapCommandForDispatch(cmd));
       }
+      this.registryNames = new Set(registry.commands.keys());
     }
 
     const customCommandNames = customCommands.map((c) => c.name);
@@ -914,11 +932,13 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     };
     const pathBeforeExec = this.lastEnv.PATH;
     this.activeRunSignal = signal;
+    const loopRun = this.beginLoopRun(command);
     let result: BashExecResult;
     try {
       result = await this.bash.exec(command, execOptions);
     } finally {
       if (this.activeRunSignal === signal) this.activeRunSignal = undefined;
+      this.endLoopRun(loopRun);
     }
     // Persist any "Always" command grants confirmed during dispatch now that we
     // are outside just-bash's execution box (where VFS async timers are blocked).
@@ -989,7 +1009,42 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
    * workflows) must go through this too.
    */
   private wrapCommandForDispatch(command: Command): Command {
-    return wrapCommandForProgress(this.wrapCommandForSudo(command), this.progress);
+    const wrapped = wrapCommandForProgress(this.wrapCommandForSudo(command), this.progress);
+    const onDispatch = () => this.loopRun?.onDispatch();
+    return {
+      ...wrapped,
+      execute(args, ctx) {
+        // Loop counting seam: every registry dispatch, including the ones
+        // `wrapCommandForProgress` skips (`echo`, …). O(1) when no loop is
+        // being tracked.
+        onDispatch();
+        return wrapped.execute(args, ctx);
+      },
+    };
+  }
+
+  /** Plan loop progress for a script about to run; null when not countable. */
+  private beginLoopRun(command: string): LoopRun | null {
+    this.loopRunsActive += 1;
+    if (!this.progress.hasSink()) return null;
+    if (this.loopRunsActive > 1) {
+      // Concurrent runs share one dispatch stream — give up on both.
+      this.loopRun?.end();
+      this.loopRun = null;
+      return null;
+    }
+    const plan = planLoopProgress(command, this.registryNames);
+    if (!plan) return null;
+    this.loopRun = new LoopRun(plan, this.progress);
+    return this.loopRun;
+  }
+
+  private endLoopRun(run: LoopRun | null): void {
+    this.loopRunsActive = Math.max(0, this.loopRunsActive - 1);
+    if (run) {
+      run.end();
+      if (this.loopRun === run) this.loopRun = null;
+    }
   }
 
   private wrapCommandForSudo(command: Command): Command {

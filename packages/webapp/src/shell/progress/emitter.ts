@@ -34,7 +34,8 @@ export interface ProgressEmitterOptions {
   /**
    * Secret scrubber applied to `label` before the event leaves the emitter.
    * Labels are built from argv, so a `curl -H "Authorization: …"` would
-   * otherwise leak into the progress card. Scrubbed once per id and cached;
+   * otherwise leak into the progress card. Scrubbed once per distinct label
+   * per id and cached;
    * a throwing scrubber withholds the label rather than passing it through.
    */
   scrubLabel?: (text: string) => Promise<string>;
@@ -44,7 +45,9 @@ const LABEL_WITHHELD = '[label withheld: secret scrub unavailable]';
 
 interface IdState {
   lastUpdateAt: number;
-  /** Resolved scrubbed label (or pending promise) for this id. */
+  /** Label as last handed to `emit`; a change triggers a re-scrub. */
+  rawLabel: string;
+  /** Resolved scrubbed label (or pending promise) for `rawLabel`. */
   label: string | Promise<string>;
   /** Serializes async-scrubbed emits so `end` never overtakes `start`. */
   tail: Promise<void>;
@@ -102,7 +105,8 @@ export class ProgressEmitter {
       const fresh: IdState = {
         // Allow the first update right after start.
         lastUpdateAt: Number.NEGATIVE_INFINITY,
-        label: this.scrubLabel ? scrubSafely(this.scrubLabel, event.label) : event.label,
+        rawLabel: event.label,
+        label: this.scrubbed(event.label),
         tail: Promise.resolve(),
       };
       this.ids.set(event.id, fresh);
@@ -131,7 +135,16 @@ export class ProgressEmitter {
     };
   }
 
+  private scrubbed(label: string): string | Promise<string> {
+    return this.scrubLabel ? scrubSafely(this.scrubLabel, label) : label;
+  }
+
   private deliver(state: IdState, sink: ProgressSink, event: ProgressEvent): void {
+    if (event.label !== state.rawLabel) {
+      // Labels may evolve ("for f (3/12)"); scrub the new text once.
+      state.rawLabel = event.label;
+      state.label = this.scrubbed(event.label);
+    }
     const { label } = state;
     if (typeof label === 'string') {
       sink(label === event.label ? event : { ...event, label });
