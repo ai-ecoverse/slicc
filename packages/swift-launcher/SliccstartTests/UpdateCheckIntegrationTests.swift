@@ -62,9 +62,12 @@ final class UpdateCheckIntegrationTests: XCTestCase {
     }
 
     /// Proves the pagination walk works against GitHub's real `Link` headers:
-    /// forcing `per_page=1` means a single page can never satisfy the walk, so
-    /// the provider must parse `rel="next"` out of a live header to make any
-    /// progress at all. A frozen fixture could not catch header-format drift.
+    /// forcing `per_page=1` keeps each page to a single release, so unless that
+    /// one release is itself installable the provider must parse `rel="next"`
+    /// out of a live header to get anywhere. A frozen fixture could not catch
+    /// header-format drift. `ReleaseFetchPaginationTests` covers the walk's
+    /// mechanics deterministically; this test exists only to notice when the
+    /// real header stops looking like what we parse.
     ///
     /// This asserts on the *walk*, deliberately not on reaching an installable
     /// release. Native artifacts are built conditionally, so the newest
@@ -97,13 +100,21 @@ final class UpdateCheckIntegrationTests: XCTestCase {
 
         let releases = try await provider.fetchReleases(owner: "ai-ecoverse", repo: "slicc", proxy: nil)
 
-        // The first request is unconditional; any page beyond it could only
-        // have come from parsing a real `rel="next"` off GitHub's Link header.
+        // The walk stops as soon as a page yields a viable release, so page 1
+        // is enough exactly when the newest release ships an asset — which is
+        // the state right after a `packages/swift-launcher/**` change cuts a
+        // release. Demanding pagination unconditionally would just invert the
+        // churn flake this test was rewritten to remove.
+        //
+        // What must always hold: the walk either found something, or it proved
+        // it could keep going. Coming back with nothing after a single page is
+        // the signature of a `rel="next"` we failed to parse — a page-1 miss
+        // has more releases behind it, so the walk had somewhere to go.
         let pages = await pagesFetched.value
-        XCTAssertGreaterThan(
-            pages, 1,
-            "Expected the provider to follow rel=\"next\" past the first page; it fetched \(pages). "
-                + "GitHub's Link header format may have drifted."
+        XCTAssertTrue(
+            pages > 1 || !releases.isEmpty,
+            "The walk stopped after \(pages) page(s) with no viable release. GitHub's Link "
+                + "header format may have drifted, leaving `rel=\"next\"` unparsed."
         )
 
         // Whatever the walk did surface must be installable — filtering to an
