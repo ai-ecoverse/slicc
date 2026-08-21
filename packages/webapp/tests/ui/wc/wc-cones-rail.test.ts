@@ -141,6 +141,19 @@ describe('wireConesRail', () => {
     expect(h.handles.element.querySelector('.rm')).toBeNull();
   });
 
+  it('never removes the last cone even through a stale confirm', () => {
+    const h = harness([primary, research]);
+    h.click(h.rows()[1].querySelector('.rm'));
+    const danger = h.handles.element.querySelector<HTMLButtonElement>('.confirm .danger')!;
+    // the other cone disappears underneath (e.g. dropped by the agent) …
+    h.client.getScoops = () => [primary];
+    // … and the stale confirm is clicked: nothing is removed
+    h.click(danger);
+    expect(h.client.unregisterScoop).not.toHaveBeenCalled();
+    expect(h.labels()).toEqual(['sliccy']);
+    expect(h.handles.element.querySelector('.rm')).toBeNull();
+  });
+
   it('mirrors the rail open state and re-renders on roster refresh', () => {
     const h = harness([primary]);
     expect(h.handles.element.hasAttribute('expanded')).toBe(false);

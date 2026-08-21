@@ -44,6 +44,11 @@ import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js'
 import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
 import type { TerminalEventMsg } from '../shell/terminal-protocol.js';
+import { isRootUnit, rootsOf } from '../work-unit/policy.js';
+
+/** Placeholder owner for a scoop whose cone is not in the same wire list. */
+const UNKNOWN_PARENT_JID = 'unknown-parent';
+
 import type { AgentHandle, ChatMessage, AgentEvent as UIAgentEvent } from './types.js';
 
 const log = createLogger('offscreen-client');
@@ -355,8 +360,16 @@ export class OffscreenClient implements KernelClientFacade {
     this.send({ type: 'cone-create', name: scoop.name });
   }
 
-  /** Called by ScoopsPanel delete button. */
+  /**
+   * Drop a scoop or an extra cone. The last cone can never be dropped — the
+   * panel would be left with no agent to talk to — so that is rejected here
+   * before any optimistic removal (the kernel refuses it independently).
+   */
   async unregisterScoop(jid: string): Promise<void> {
+    const target = this.scoops.find((s) => s.jid === jid);
+    if (target && isRootUnit(target) && rootsOf(this.scoops).length <= 1) {
+      throw new Error('Cannot remove the last cone');
+    }
     this.send({ type: 'scoop-drop', scoopJid: jid });
     // Optimistically remove
     this.scoops = this.scoops.filter((s) => s.jid !== jid);
@@ -1269,8 +1282,10 @@ export class OffscreenClient implements KernelClientFacade {
       isCone: s.isCone,
       type: s.isCone ? 'cone' : 'scoop',
       // The wire carries no ownership edge yet; a panel-side scoop belongs to
-      // the list's cone (#1666 Phase 4 puts `parentId` on the wire).
-      parentJid: s.isCone ? null : coneJid,
+      // the list's cone. A list without a cone (partial snapshots in tests,
+      // a follower mid-join) must still not turn a scoop into a root, so an
+      // unknown parent is a non-null sentinel. Phase 5 puts `parentId` on the wire.
+      parentJid: s.isCone ? null : (coneJid ?? UNKNOWN_PARENT_JID),
       requiresTrigger: !s.isCone,
       assistantLabel: s.assistantLabel,
       addedAt: new Date().toISOString(),

@@ -852,16 +852,19 @@ export function attachWcClient(
   boot.onClientReady(refreshFreezer);
 
   // Cones section of the rail: add / switch / remove root units (#1666).
+  // Experimental — behind the `multiple-cones` flag (Settings → Experimental).
   // Re-rendered from the roster whenever the switcher chips refresh.
-  const conesRail = wireConesRail({
-    refs,
-    client,
-    getSelected: () => boot.getSelected(),
-    selectScoop: boot.selectScoop,
-    log,
-  });
-  boot.wiring.refreshConesRail = conesRail.refresh;
-  boot.onClientReady(conesRail.refresh);
+  if (isFeatureEnabled('multiple-cones')) {
+    const conesRail = wireConesRail({
+      refs,
+      client,
+      getSelected: () => boot.getSelected(),
+      selectScoop: boot.selectScoop,
+      log,
+    });
+    boot.wiring.refreshConesRail = conesRail.refresh;
+    boot.onClientReady(conesRail.refresh);
+  }
 
   wireWcUrlContext(boot, client, openFrozen);
 

@@ -8,7 +8,11 @@ export type FeatureFlagFloat =
   | 'cherry'
   | 'follower';
 
-export type FeatureFlagId = 'experimental-settings' | 'panel-layouts' | 'agentic-memory';
+export type FeatureFlagId =
+  | 'experimental-settings'
+  | 'panel-layouts'
+  | 'agentic-memory'
+  | 'multiple-cones';
 export type FeatureFlagValues = Partial<Record<FeatureFlagId, string>>;
 
 export interface FeatureFlagDefinition {
@@ -47,6 +51,14 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     label: 'Agentic memory',
     description:
       'Curate session memory with a background agent instead of a one-shot extraction call.',
+    defaultValue: 'off',
+    userToggleable: true,
+  }),
+  Object.freeze({
+    id: 'multiple-cones',
+    label: 'Multiple cones',
+    description:
+      'Add, switch between and remove cones from the freezer rail. Extra cones share the workspace.',
     defaultValue: 'off',
     userToggleable: true,
   }),

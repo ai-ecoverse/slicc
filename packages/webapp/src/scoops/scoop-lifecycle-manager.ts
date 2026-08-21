@@ -592,6 +592,12 @@ export class ScoopLifecycleManager {
   async unregister(jid: string): Promise<void> {
     const scoops = this.deps.getScoops();
     const scoop = scoops.get(jid);
+    // The last root is never unregistered: every delegated result, lick and
+    // approval needs a user-facing unit to land on. Deepest backstop — the
+    // panel and the bridge refuse this earlier.
+    if (scoop && scoop.parentJid === null && rootsOf(scoops.values()).length <= 1) {
+      throw new Error('Cannot drop the last cone');
+    }
     const lickManager = this.deps.getLickManager();
     if (scoop && lickManager) {
       // Consult persisted (IndexedDB) lick state — a lick that exists on disk

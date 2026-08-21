@@ -123,6 +123,12 @@ export function wireConesRail(deps: ConesRailDeps): ConesRailHandles {
 
   const remove = (scoop: RegisteredScoop): void => {
     pendingRemove = null;
+    // Never remove the last cone — the ✕ is hidden in that state, the
+    // client and the kernel refuse it too; this guards a stale confirm.
+    if (rootsOf(client.getScoops()).length <= 1) {
+      render();
+      return;
+    }
     const wasSelected = deps.getSelected()?.jid === scoop.jid;
     void client.unregisterScoop(scoop.jid).catch((err) => log.warn('WC cone remove failed', err));
     if (wasSelected) {

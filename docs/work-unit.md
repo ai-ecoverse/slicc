@@ -71,6 +71,7 @@ A strangler migration, each phase a separate PR with deletion criteria:
 
 ### Phase 4 detail
 
+- Behind the `multiple-cones` feature flag (Settings → Experimental; off by default). The last cone can never be removed: the rail hides ✕ and ignores a stale confirm, `OffscreenClient.unregisterScoop` rejects, `Bridge.handleScoopDrop` refuses, and `ScoopLifecycleManager.unregister` throws.
 - The panel's existing `cone-create` message now creates _additional_ roots: `Bridge.handleConeCreate` allocates the folder with `coneFolderFor` (`cone` for the first root, `cone-<slug>` afterwards, de-duplicated) and labels extra cones by the user's name; the primary keeps `sliccy`.
 - Chat sessions are keyed per folder (`chatSessionIdFor` → `session-<folder>`), so the primary cone keeps `session-cone` and every other cone gets its own history. The welcome flow, Freezer and "New chat" operate on the primary cone.
 - `scoop-drop` of a root goes through `WorkUnitManager.close()` (cascades to its scoops, forgets every dropped buffer/session) and refuses the last root; the rail hides ✕ on the last cone for the same rule.
