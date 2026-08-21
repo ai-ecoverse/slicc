@@ -76,10 +76,11 @@ export { isTextContentType };
 export async function readResponseBody(
   resp: Response,
   url?: string,
-  onChunk?: (loaded: number) => void
+  onChunk?: (loaded: number) => void,
+  expectedLength?: number
 ): Promise<Uint8Array> {
   const contentType = resp.headers.get('content-type') ?? '';
-  const bytes = await readBodyBytes(resp, onChunk);
+  const bytes = await readBodyBytes(resp, onChunk, expectedLength);
   if (!isTextContentType(contentType)) {
     // Prefer the URL cache (the common case) — it avoids the multi-MB latin1
     // string allocation. VfsAdapter.writeFile still recovers exact bytes on
@@ -105,20 +106,39 @@ export async function readResponseBody(
  */
 async function readBodyBytes(
   resp: Response,
-  onChunk?: (loaded: number) => void
+  onChunk?: (loaded: number) => void,
+  expectedLength?: number
 ): Promise<Uint8Array<ArrayBuffer>> {
   if (!onChunk || !resp.body) return new Uint8Array(await resp.arrayBuffer());
   const reader = resp.body.getReader();
+  // Memory: a multi-hundred-MB `curl -o` already costs several copies
+  // downstream (latin1 string, binary-cache, IndexedDB). Keeping chunks AND a
+  // merged copy here would add one more transient copy at the peak, so when
+  // the size is known we write straight into a preallocated buffer and only
+  // fall back to chunk+concat when it is unknown or the hint was wrong.
+  let target =
+    expectedLength !== undefined && expectedLength > 0 ? new Uint8Array(expectedLength) : null;
   const chunks: Uint8Array<ArrayBuffer>[] = [];
   let loaded = 0;
   for (;;) {
     const { done, value } = await reader.read();
     if (done) break;
     const chunk = value as Uint8Array<ArrayBuffer>;
-    chunks.push(chunk);
+    if (target) {
+      if (loaded + chunk.byteLength <= target.byteLength) {
+        target.set(chunk, loaded);
+      } else {
+        // Hint was too small: demote to chunk mode without losing what we have.
+        chunks.push(target.subarray(0, loaded) as Uint8Array<ArrayBuffer>, chunk);
+        target = null;
+      }
+    } else {
+      chunks.push(chunk);
+    }
     loaded += chunk.byteLength;
     onChunk(loaded);
   }
+  if (target) return loaded === target.byteLength ? target : target.slice(0, loaded);
   return concatChunks(chunks);
 }
 
@@ -534,7 +554,8 @@ export function createProxiedFetch(fetchOptions: ProxiedFetchOptions = {}): Secu
       const body = await readResponseBody(
         resp,
         url,
-        progress ? (loaded) => progress.chunk(url, loaded, total) : undefined
+        progress ? (loaded) => progress.chunk(url, loaded, total) : undefined,
+        total
       );
       const rawHeaders: Record<string, string> = {};
       resp.headers.forEach((v, k) => {
