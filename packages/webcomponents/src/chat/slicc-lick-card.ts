@@ -156,7 +156,17 @@ const STYLE = `
   color:var(--lick-pill-ink,color-mix(in srgb,var(--amber) 40%,#000));font-size:9px;font-weight:700;padding:1px 7px;
 }
 
-.lb{font-size:12.5px;color:var(--ink);line-height:1.4;}
+.lb{
+  font-size:12.5px;color:var(--ink);line-height:1.4;
+  /* A lick body is arbitrary rendered markdown (cron payloads arrive as fenced
+     JSON). Nothing in it may push past the card and drag the chat column
+     sideways: the body is its own min-width:0 box, long unbroken tokens break
+     rather than overflow, and any slotted block is capped at the body width.
+     The slotted <pre> itself wraps via the document-level sheet below —
+     ::slotted() can't reach into a slotted subtree. */
+  min-width:0;overflow-wrap:anywhere;
+}
+.lb ::slotted(*){max-width:100%;min-width:0;}
 .lb ::slotted(b),.lb b{font-weight:600;}
 /* Collapsed hides the body but keeps the header card visible. */
 :host([collapsed]) .lb{display:none;}
@@ -164,6 +174,44 @@ const STYLE = `
 @keyframes lickIn{from{opacity:0;transform:translateX(16px)}to{opacity:1;transform:none}}
 `;
 const SHEET = sheet(STYLE);
+
+/**
+ * Document-level chrome for the card's **slotted** body markdown. The body slot
+ * carries light-DOM content (the webapp renders each lick part through the
+ * markdown renderer), and shadow CSS can only reach the slot's top-level
+ * children via `::slotted()` — never the `<pre>` / `<code>` / `<table>` inside a
+ * slotted wrapper `<div>`. Those live in the host document, so the wrapping
+ * rules ship as a scoped, idempotent document sheet selected by the host tag,
+ * exactly like `slicc-agent-message` / `slicc-action-row` do.
+ *
+ * The point is containment: a cron lick whose payload is one long JSON line
+ * would otherwise render an unwrapped `<pre>` (UA `white-space:pre`) several
+ * thousand pixels wide, bursting the card and scrolling the whole chat column
+ * sideways.
+ */
+const SLOTTED_STYLE = `
+slicc-lick-card pre{
+  white-space:pre-wrap;overflow-wrap:anywhere;word-break:break-word;
+  max-width:100%;overflow-x:auto;margin:6px 0;
+}
+slicc-lick-card code{overflow-wrap:anywhere;word-break:break-word;}
+slicc-lick-card pre code{white-space:inherit;}
+slicc-lick-card a{overflow-wrap:anywhere;}
+slicc-lick-card img{max-width:100%;height:auto;}
+slicc-lick-card table{display:block;max-width:100%;width:fit-content;overflow-x:auto;}
+slicc-lick-card > *{min-width:0;max-width:100%;}
+`;
+
+const SLOTTED_STYLE_ID = 'slicc-lick-card-slotted-style';
+
+/** Inject the slotted-body stylesheet into a document once (idempotent). */
+function ensureSlottedStyle(doc: Document): void {
+  if (doc.getElementById(SLOTTED_STYLE_ID)) return;
+  const style = doc.createElement('style');
+  style.id = SLOTTED_STYLE_ID;
+  style.textContent = SLOTTED_STYLE;
+  (doc.head ?? doc.documentElement).appendChild(style);
+}
 
 /** Hair-spaced middot separator in the "lick · <kind>" header (prototype `&middot;`). */
 const MIDDOT = '·';
@@ -235,6 +283,7 @@ export class SliccLickCard extends HTMLElement {
   }
 
   connectedCallback(): void {
+    ensureSlottedStyle(this.ownerDocument ?? document);
     this.#render();
   }
 
