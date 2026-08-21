@@ -2,7 +2,7 @@
   "traySyncProtocolVersion": 7,
   "leaderVariantCount": 41,
   "followerVariantCount": 37,
-  "agentEventVariantCount": 11,
+  "agentEventVariantCount": 12,
   "leaderToFollower": [
     {
       "type": "agent_event",
@@ -1013,6 +1013,33 @@
       "event": {
         "type": "terminal_output",
         "text": "$ ls\nnotes.md\n"
+      }
+    },
+    {
+      "type": "tool_progress",
+      "ios": "unknown",
+      "mirrored": [
+        "type"
+      ],
+      "dropped": [
+        "messageId",
+        "progress",
+        "toolName"
+      ],
+      "event": {
+        "type": "tool_progress",
+        "messageId": "m2",
+        "toolName": "bash",
+        "progress": {
+          "id": "sleep-1",
+          "label": "sleep 30",
+          "fraction": 0.5,
+          "etaMs": 15000,
+          "done": 15000,
+          "total": 30000,
+          "unit": "ms",
+          "phase": "update"
+        }
       }
     },
     {

@@ -126,7 +126,7 @@ const CORS_BASE_ALLOW_HEADERS = [
  * clients also read protocol negotiation/session headers from proxy responses.
  */
 const CORS_EXPOSE_HEADERS =
-  'Link, X-Proxy-Error, X-Proxy-Set-Cookie, Mcp-Session-Id, MCP-Protocol-Version';
+  'Link, X-Proxy-Error, X-Proxy-Set-Cookie, X-Proxy-Content-Length, Mcp-Session-Id, MCP-Protocol-Version';
 
 /**
  * Methods exposed to the hosted leader. Must cover the FULL `/api/fetch-proxy`

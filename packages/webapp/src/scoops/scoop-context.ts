@@ -55,6 +55,7 @@ import {
 } from '../providers/account-store.js';
 import { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import { DEFAULT_JSH_SEARCH_ROOTS } from '../shell/jsh-discovery.js';
+import { PROGRESS_CONTENT_TYPE, type ToolProgressEvent } from '../shell/progress/types.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import { createBashTool, createFileTools } from '../tools/index.js';
 import type { BashJobProcess } from '../tools/types.js';
@@ -258,6 +259,8 @@ export interface ScoopContextCallbacks {
   onToolUI?: (toolName: string, requestId: string, html: string) => void;
   /** Called when tool UI interaction is complete */
   onToolUIDone?: (requestId: string) => void;
+  /** Called for each bash progress tick (`tool_progress` agent event). */
+  onToolProgress?: (toolName: string, progress: ToolProgressEvent) => void;
   /** Called when agent uses send_message tool */
   onSendMessage: (text: string, sender?: string) => void;
   /** Get all scoops (for cone) */
@@ -579,6 +582,9 @@ export class ScoopContext {
       getParentJid: () => this.scoop.jid,
       isScoop: () => this.unit.display.role === 'child',
       sudo: sudoWiring?.shellConfig,
+      // Progress-card labels carry argv; scrub them with the same pipeline the
+      // tool results go through.
+      scrubProgressLabel: getToolResultScrubber(),
       // Wire the scoop's process context so realm-backed commands (`node` /
       // `.jsh` / `python`) launched by the agent's `bash` tool parent their
       // realm child to the scoop-turn pid. Without this `buildJshProcessConfig`
@@ -1635,13 +1641,20 @@ export class ScoopContext {
   /** Handle tool UI events. */
   private handleToolUIEvents(event: { partialResult: unknown; toolName: string }): void {
     const partialResult = event.partialResult as {
-      content?: Array<{ type: string; requestId?: string; html?: string }>;
+      content?: Array<{
+        type: string;
+        requestId?: string;
+        html?: string;
+        progress?: ToolProgressEvent;
+      }>;
     };
     for (const c of partialResult?.content ?? []) {
       if (c.type === 'tool_ui' && c.requestId && c.html) {
         this.callbacks.onToolUI?.(event.toolName, c.requestId, c.html);
       } else if (c.type === 'tool_ui_done' && c.requestId) {
         this.callbacks.onToolUIDone?.(c.requestId);
+      } else if (c.type === PROGRESS_CONTENT_TYPE && c.progress) {
+        this.callbacks.onToolProgress?.(event.toolName, c.progress);
       }
     }
   }
