@@ -7,7 +7,7 @@ require (
 	github.com/pion/ice/v4 v4.4.1
 	github.com/pion/logging v0.2.4
 	github.com/pion/webrtc/v4 v4.2.18
-	golang.org/x/sys v0.41.0
+	golang.org/x/sys v0.47.0
 )
 
 // go-optel is a sibling package in this monorepo (no go.work file), so the
