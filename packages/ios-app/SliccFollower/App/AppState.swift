@@ -1232,41 +1232,23 @@ class AppState: ObservableObject {
                 notifyTurnEndIfBackgrounded(scoopJid: scoopJid)
             }
 
-        case .toolUseStart(let messageId, let toolName, let toolInput):
+        case .toolUseStart(let messageId, let toolName, let toolInput, let toolCallId):
             logger.info("Agent event: tool_use_start id=\(messageId) tool=\(toolName)")
             if isVisible { runningToolCalls += 1 }
-            if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
-                let tc = ToolCall(id: UUID().uuidString, name: toolName, input: toolInput)
-                if buffer[idx].toolCalls == nil {
-                    buffer[idx].toolCalls = [tc]
-                } else {
-                    buffer[idx].toolCalls?.append(tc)
-                }
-                messagesByScoop[scoopJid] = buffer
-                if isVisible {
-                    cancelPendingMessagesFlush()
-                    messages = buffer
-                }
-            }
+            applyToolUseStart(
+                messageId: messageId, toolName: toolName, toolInput: toolInput,
+                toolCallId: toolCallId, buffer: &buffer, scoopJid: scoopJid, isVisible: isVisible)
 
-        case .toolResult(let messageId, let toolName, let result, let isError):
+        case .toolResult(let messageId, let toolName, let result, let isError, let toolCallId):
             if isVisible {
                 runningToolCalls = max(0, runningToolCalls - 1)
                 // The failure flag is already mirrored on the wire, so the
                 // glower needs no protocol change.
                 if isError == true { avatarExpression.glower() }
             }
-            if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
-                if let tcIdx = buffer[idx].toolCalls?.lastIndex(where: { $0.name == toolName }) {
-                    buffer[idx].toolCalls?[tcIdx].result = result
-                    buffer[idx].toolCalls?[tcIdx].isError = isError
-                    messagesByScoop[scoopJid] = buffer
-                    if isVisible {
-                        cancelPendingMessagesFlush()
-                        messages = buffer
-                    }
-                }
-            }
+            applyToolResult(
+                messageId: messageId, toolName: toolName, result: result, isError: isError,
+                toolCallId: toolCallId, buffer: &buffer, scoopJid: scoopJid, isVisible: isVisible)
 
         case .turnEnd(let messageId):
             logger.info("Agent event: turn_end id=\(messageId)")
@@ -1430,7 +1412,8 @@ class AppState: ObservableObject {
     /// Cancel any in-flight throttled flush — used when a decisive event
     /// (messageStart/contentDone/toolResult/turnEnd) writes a fresh `messages`
     /// snapshot synchronously and we don't want a stale flush to overwrite it.
-    private func cancelPendingMessagesFlush() {
+    /// Internal rather than private so the tool-call extension can flush too.
+    func cancelPendingMessagesFlush() {
         pendingMessagesFlush?.cancel()
         pendingMessagesFlush = nil
     }

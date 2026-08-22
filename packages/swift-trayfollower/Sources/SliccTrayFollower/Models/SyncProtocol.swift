@@ -18,8 +18,16 @@ public enum AgentEvent: Codable {
     case messageStart(messageId: String)
     case contentDelta(messageId: String, text: String)
     case contentDone(messageId: String, model: String?, usage: ChatMessageUsage?)
-    case toolUseStart(messageId: String, toolName: String, toolInput: AnyCodable?)
-    case toolResult(messageId: String, toolName: String, result: String, isError: Bool?)
+    /// `toolCallId` is the provider's tool-call id. A message's tool calls run
+    /// concurrently on the leader (`Promise.all` in the agent loop), so results
+    /// must pair by identity — matching on `toolName` crosses the output of two
+    /// same-named calls in flight. Optional for leaders built before #2306.
+    case toolUseStart(
+        messageId: String, toolName: String, toolInput: AnyCodable?, toolCallId: String? = nil)
+    /// See `toolUseStart` for `toolCallId`.
+    case toolResult(
+        messageId: String, toolName: String, result: String, isError: Bool?,
+        toolCallId: String? = nil)
     case toolUI(messageId: String, toolName: String, requestId: String, html: String)
     case toolUIDone(messageId: String, requestId: String)
     case turnEnd(messageId: String)
@@ -29,7 +37,7 @@ public enum AgentEvent: Codable {
     case unknown(type: String)
 
     private enum CodingKeys: String, CodingKey {
-        case type, messageId, text, toolName, toolInput, result, isError, error
+        case type, messageId, text, toolName, toolInput, result, isError, error, toolCallId
         case model, usage, requestId, html, base64, url
     }
 
@@ -52,13 +60,15 @@ public enum AgentEvent: Codable {
             self = .toolUseStart(
                 messageId: try container.decode(String.self, forKey: .messageId),
                 toolName: try container.decode(String.self, forKey: .toolName),
-                toolInput: try container.decodeIfPresent(AnyCodable.self, forKey: .toolInput))
+                toolInput: try container.decodeIfPresent(AnyCodable.self, forKey: .toolInput),
+                toolCallId: try container.decodeIfPresent(String.self, forKey: .toolCallId))
         case "tool_result":
             self = .toolResult(
                 messageId: try container.decode(String.self, forKey: .messageId),
                 toolName: try container.decode(String.self, forKey: .toolName),
                 result: try container.decode(String.self, forKey: .result),
-                isError: try container.decodeIfPresent(Bool.self, forKey: .isError))
+                isError: try container.decodeIfPresent(Bool.self, forKey: .isError),
+                toolCallId: try container.decodeIfPresent(String.self, forKey: .toolCallId))
         case "tool_ui":
             self = .toolUI(
                 messageId: try container.decode(String.self, forKey: .messageId),
@@ -99,17 +109,19 @@ public enum AgentEvent: Codable {
             try container.encode(messageId, forKey: .messageId)
             try container.encodeIfPresent(model, forKey: .model)
             try container.encodeIfPresent(usage, forKey: .usage)
-        case .toolUseStart(let messageId, let toolName, let toolInput):
+        case .toolUseStart(let messageId, let toolName, let toolInput, let toolCallId):
             try container.encode("tool_use_start", forKey: .type)
             try container.encode(messageId, forKey: .messageId)
             try container.encode(toolName, forKey: .toolName)
             try container.encodeIfPresent(toolInput, forKey: .toolInput)
-        case .toolResult(let messageId, let toolName, let result, let isError):
+            try container.encodeIfPresent(toolCallId, forKey: .toolCallId)
+        case .toolResult(let messageId, let toolName, let result, let isError, let toolCallId):
             try container.encode("tool_result", forKey: .type)
             try container.encode(messageId, forKey: .messageId)
             try container.encode(toolName, forKey: .toolName)
             try container.encode(result, forKey: .result)
             try container.encodeIfPresent(isError, forKey: .isError)
+            try container.encodeIfPresent(toolCallId, forKey: .toolCallId)
         case .toolUI(let messageId, let toolName, let requestId, let html):
             try container.encode("tool_ui", forKey: .type)
             try container.encode(messageId, forKey: .messageId)

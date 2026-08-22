@@ -64,8 +64,10 @@ final class AgentEventTests: XCTestCase {
     func testToolUseStartWithInput() throws {
         let input = try WireCodec.anyCodable(#"{"cmd":"ls"}"#)
         guard
-            case .toolUseStart(let messageId, let toolName, let decodedInput) =
-                try roundTrip(.toolUseStart(messageId: "m1", toolName: "shell", toolInput: input))
+            case .toolUseStart(let messageId, let toolName, let decodedInput, let toolCallId) =
+                try roundTrip(
+                    .toolUseStart(
+                        messageId: "m1", toolName: "shell", toolInput: input, toolCallId: "call-1"))
         else {
             XCTFail("expected toolUseStart")
             return
@@ -73,20 +75,27 @@ final class AgentEventTests: XCTestCase {
         XCTAssertEqual(messageId, "m1")
         XCTAssertEqual(toolName, "shell")
         XCTAssertEqual(decodedInput, input)
+        XCTAssertEqual(toolCallId, "call-1")
     }
 
     func testToolUseStartWithoutInput() throws {
-        guard case .toolUseStart(_, _, let input) = try roundTrip(.toolUseStart(messageId: "m1", toolName: "shell", toolInput: nil)) else {
+        guard case .toolUseStart(_, _, let input, let toolCallId) = try roundTrip(.toolUseStart(messageId: "m1", toolName: "shell", toolInput: nil)) else {
             XCTFail("expected toolUseStart")
             return
         }
         XCTAssertNil(input)
+        // A leader built before #2306 sends no id; the case stays decodable and
+        // the follower falls back to pairing results by tool name.
+        XCTAssertNil(toolCallId)
     }
 
     func testToolResultWithError() throws {
         guard
-            case .toolResult(let messageId, let toolName, let result, let isError) =
-                try roundTrip(.toolResult(messageId: "m1", toolName: "shell", result: "boom", isError: true))
+            case .toolResult(let messageId, let toolName, let result, let isError, let toolCallId) =
+                try roundTrip(
+                    .toolResult(
+                        messageId: "m1", toolName: "shell", result: "boom", isError: true,
+                        toolCallId: "call-2"))
         else {
             XCTFail("expected toolResult")
             return
@@ -95,14 +104,19 @@ final class AgentEventTests: XCTestCase {
         XCTAssertEqual(toolName, "shell")
         XCTAssertEqual(result, "boom")
         XCTAssertEqual(isError, true)
+        XCTAssertEqual(toolCallId, "call-2")
     }
 
     func testToolResultWithoutErrorFlag() throws {
-        guard case .toolResult(_, _, _, let isError) = try roundTrip(.toolResult(messageId: "m1", toolName: "shell", result: "ok", isError: nil)) else {
+        guard
+            case .toolResult(_, _, _, let isError, let toolCallId) = try roundTrip(
+                .toolResult(messageId: "m1", toolName: "shell", result: "ok", isError: nil))
+        else {
             XCTFail("expected toolResult")
             return
         }
         XCTAssertNil(isError)
+        XCTAssertNil(toolCallId)
     }
 
     func testToolUI() throws {

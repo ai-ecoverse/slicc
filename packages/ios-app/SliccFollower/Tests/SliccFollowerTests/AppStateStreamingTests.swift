@@ -69,6 +69,73 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertEqual(state.messages.last?.toolCalls?.last?.name, "bash")
     }
 
+    /// A message's tool calls run concurrently on the leader, so three `bash`
+    /// calls can be in flight at once. Pairing by name attached each result to
+    /// the last same-named row and visibly crossed the outputs; the provider id
+    /// pins each result to its own row.
+    @MainActor
+    func testParallelSameNamedToolResultsPairByCallId() throws {
+        let state = AppState()
+        state.selectedScoopJid = "cone"
+        try send(.messageStart(messageId: "reply"), scoopJid: "cone", to: state)
+        for id in ["call-1", "call-2", "call-3"] {
+            try send(
+                .toolUseStart(
+                    messageId: "reply", toolName: "bash", toolInput: nil, toolCallId: id),
+                scoopJid: "cone", to: state)
+        }
+
+        // Results land out of order, as they do when the shortest command wins.
+        for (id, output) in [("call-3", "CCC"), ("call-1", "AAA"), ("call-2", "BBB")] {
+            try send(
+                .toolResult(
+                    messageId: "reply", toolName: "bash", result: output, isError: false,
+                    toolCallId: id),
+                scoopJid: "cone", to: state)
+        }
+
+        let calls = try XCTUnwrap(state.messages.last?.toolCalls)
+        XCTAssertEqual(calls.map(\.result), ["AAA", "BBB", "CCC"])
+        XCTAssertEqual(calls.map(\.id), ["reply:call-1", "reply:call-2", "reply:call-3"])
+    }
+
+    /// Pre-#2306 leaders send no id. The name scan stays, but it may only claim
+    /// a row that is still awaiting its result — otherwise a second call's
+    /// output overwrites the first one's.
+    @MainActor
+    func testResultsWithoutCallIdFillEachRowOnce() throws {
+        let state = AppState()
+        state.selectedScoopJid = "cone"
+        try send(.messageStart(messageId: "reply"), scoopJid: "cone", to: state)
+        try send(
+            .toolUseStart(messageId: "reply", toolName: "bash", toolInput: nil),
+            scoopJid: "cone", to: state)
+        try send(
+            .toolUseStart(messageId: "reply", toolName: "bash", toolInput: nil),
+            scoopJid: "cone", to: state)
+        try send(
+            .toolResult(messageId: "reply", toolName: "bash", result: "first", isError: false),
+            scoopJid: "cone", to: state)
+        try send(
+            .toolResult(messageId: "reply", toolName: "bash", result: "second", isError: false),
+            scoopJid: "cone", to: state)
+
+        let calls = try XCTUnwrap(state.messages.last?.toolCalls)
+        XCTAssertEqual(Set(calls.compactMap(\.result)), ["first", "second"])
+    }
+
+    /// A history synced from a build that stored the bare provider id still
+    /// pairs — `toolCallIndex` accepts the unscoped form as a second try.
+    @MainActor
+    func testToolCallIndexAcceptsUnscopedLegacyRowId() {
+        let calls = [ToolCall(id: "call-1", name: "bash", input: nil)]
+
+        XCTAssertEqual(
+            AppState.toolCallIndex(
+                in: calls, messageId: "reply", toolName: "bash", toolCallId: "call-1"),
+            0)
+    }
+
     @MainActor
     func testTurnEndSettlesAfterContentDone() throws {
         let state = AppState()
