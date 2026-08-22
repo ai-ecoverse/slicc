@@ -345,4 +345,58 @@ describe('sprinkle open — claims the route for the invoking cone (#2311)', () 
     expect(result.exitCode).toBe(0);
     expect(getSprinkleRoute('dash')).toBeUndefined();
   });
+
+  it('installs the route BEFORE open(), so a startup lick already sees it', async () => {
+    // `mgr.open()` activates the SHTML bridge before its promise resolves — a
+    // startup script's `slicc.lick()` reads the route table mid-await. Claiming
+    // afterwards would send that first lick to the oldest cone (Codex P2).
+    const { getSprinkleRoute } = await import('../../../src/shell/sprinkle-routes.js');
+    let routeDuringOpen: string | undefined;
+    mockMgr.open = vi.fn(async () => {
+      routeDuringOpen = getSprinkleRoute('dash');
+    });
+    const result = await open({ SLICC_LICK_TARGET: 'cone-research' });
+    expect(result.exitCode).toBe(0);
+    expect(routeDuringOpen).toBe('cone-research');
+  });
+
+  it('rolls the claim back when open() throws', async () => {
+    const { getSprinkleRoute } = await import('../../../src/shell/sprinkle-routes.js');
+    mockMgr.open = vi.fn().mockRejectedValue(new Error('no such sprinkle'));
+    const result = await open({ SLICC_LICK_TARGET: 'cone-research' });
+    expect(result.exitCode).toBe(1);
+    // A sprinkle that never opened must not leave a route that would silently
+    // capture a later `open` by another cone.
+    expect(getSprinkleRoute('dash')).toBeUndefined();
+  });
+
+  it('leaves a pre-existing route alone when open() throws', async () => {
+    const { getSprinkleRoute, setSprinkleRoute } = await import(
+      '../../../src/shell/sprinkle-routes.js'
+    );
+    setSprinkleRoute('dash', 'watcher');
+    mockMgr.open = vi.fn().mockRejectedValue(new Error('no such sprinkle'));
+    const result = await open({ SLICC_LICK_TARGET: 'cone-research' });
+    expect(result.exitCode).toBe(1);
+    expect(getSprinkleRoute('dash')).toBe('watcher');
+  });
+});
+
+describe('sprinkle open — route claim without a usable store', () => {
+  it('does not announce a route the store silently refused', async () => {
+    // No `localStorage` at all (a worker realm without the page-storage sync):
+    // `setSprinkleRoute` swallows it, so `open` must not claim it worked.
+    vi.stubGlobal('localStorage', undefined);
+    (globalThis as any).__slicc_sprinkleManager = { open: vi.fn().mockResolvedValue(undefined) };
+    const command = createSprinkleCommand();
+    const result = await (command as any).execute(['open', 'dash'], {
+      cwd: '/',
+      env: { SLICC_LICK_TARGET: 'cone-research' },
+      fs: {} as any,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('Sprinkle "dash" opened.\n');
+    delete (globalThis as any).__slicc_sprinkleManager;
+    vi.unstubAllGlobals();
+  });
 });

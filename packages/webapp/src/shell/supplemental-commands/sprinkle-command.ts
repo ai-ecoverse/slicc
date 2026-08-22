@@ -236,6 +236,30 @@ async function handleList(mgr: SprinkleManagerHandle, args: string[]): Promise<R
   return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
 }
 
+/**
+ * Claim an unrouted sprinkle for the cone whose shell is opening it.
+ *
+ * A panel's `slicc.lick()` events follow the sprinkle's route, and the route
+ * table is global (one entry per sprinkle name, not per shell) — so without a
+ * claim an extra cone's panel posts into the oldest cone's chat (#2311). This
+ * is the same "creator names itself" rule `fswatch` applies to an untargeted
+ * watcher. An existing route always wins; `sprinkle route <name> --clear`
+ * gives the sprinkle back.
+ *
+ * The claim has to be installed BEFORE `mgr.open()`: `open()` renders and
+ * activates the SHTML bridge before its promise resolves, so a startup script
+ * calling `slicc.lick()` reads the route table while we are still awaiting.
+ * Returns the claimed target when it was both new AND actually stored —
+ * `sprinkle-routes.ts` is localStorage-backed and swallows a missing or full
+ * store, and announcing a route that silently did not stick would be a lie.
+ */
+function claimSprinkleRoute(name: string, env: LickTargetEnv): string | null {
+  const claimed = defaultLickTarget(undefined, env);
+  if (!claimed || getSprinkleRoute(name)) return null;
+  setSprinkleRoute(name, claimed);
+  return getSprinkleRoute(name) === claimed ? claimed : null;
+}
+
 async function handleOpen(
   mgr: SprinkleManagerHandle,
   args: string[],
@@ -245,27 +269,17 @@ async function handleOpen(
   if ('error' in parsed) return fail('open', parsed.error);
   const name = parsed.positionals[0];
   if (!name) return fail('open', 'name required');
+  const claimed = claimSprinkleRoute(name, env);
   try {
     await mgr.open(name);
-    // A panel's `slicc.lick()` events follow the sprinkle's route, and the
-    // route table is global (one entry per sprinkle name, not per shell). So
-    // an extra cone opening an unrouted sprinkle claims it here, the same way
-    // `fswatch` claims an untargeted watcher — otherwise its panel's events
-    // would land in the oldest cone's chat (#2311). An existing route always
-    // wins; `sprinkle route <name> --clear` gives the sprinkle back.
-    const claimed = defaultLickTarget(undefined, env);
-    if (claimed && !getSprinkleRoute(name)) {
-      setSprinkleRoute(name, claimed);
-      return {
-        stdout: `Sprinkle "${name}" opened; licks route to "${claimed}".\n`,
-        stderr: '',
-        exitCode: 0,
-      };
-    }
-    return { stdout: `Sprinkle "${name}" opened.\n`, stderr: '', exitCode: 0 };
   } catch (err) {
+    // Roll the claim back — a sprinkle that never opened must not leave a
+    // route behind that would silently capture a later `open` by another cone.
+    if (claimed) clearSprinkleRoute(name);
     return fail('open', err instanceof Error ? err.message : String(err));
   }
+  const routed = claimed ? `; licks route to "${claimed}"` : '';
+  return { stdout: `Sprinkle "${name}" opened${routed}.\n`, stderr: '', exitCode: 0 };
 }
 
 function handleClose(mgr: SprinkleManagerHandle, args: string[]): Result {
