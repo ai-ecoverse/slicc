@@ -152,7 +152,10 @@ async function withDocument<T>(
   try {
     return await callback(pdf);
   } finally {
-    await pdf.destroy?.();
+    // pdf.js dropped `PDFDocumentProxy.destroy()` in favour of tearing the
+    // document down through its loading task; that also terminates the backing
+    // worker, which the proxy-level call never did on its own.
+    await pdf.loadingTask.destroy();
   }
 }
 

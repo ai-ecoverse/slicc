@@ -45,8 +45,13 @@ vi.mock('unpdf', () => ({
           doc.cleaned++;
         },
       }),
-      destroy: async () => {
-        doc.destroyed++;
+      // Teardown hangs off the loading task, not the document proxy — pdf.js
+      // removed `PDFDocumentProxy.destroy()`. Mirroring the real shape here
+      // keeps the mock from papering over a call site that no longer exists.
+      loadingTask: {
+        destroy: async () => {
+          doc.destroyed++;
+        },
       },
     };
   },
