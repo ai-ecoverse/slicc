@@ -1,5 +1,6 @@
 import FileProvider
 import Foundation
+import SliccTrayFollower
 import UniformTypeIdentifiers
 
 @MainActor

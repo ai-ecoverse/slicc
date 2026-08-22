@@ -1,7 +1,7 @@
 import Foundation
 import XCTest
 
-@testable import SliccTrayKit
+@testable import SliccTrayVFS
 
 final class TrayCredentialStoreTests: XCTestCase {
     private final class MemoryKeychain: TrayCredentialKeychain {

@@ -1,8 +1,9 @@
 import FileProvider
 import Foundation
+import SliccTrayFollower
 import XCTest
 
-@testable import SliccTrayKit
+@testable import SliccTrayVFS
 
 @MainActor
 final class LeaderVFSProviderTests: XCTestCase {

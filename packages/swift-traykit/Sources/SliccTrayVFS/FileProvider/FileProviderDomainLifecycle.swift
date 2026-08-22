@@ -1,9 +1,8 @@
 import FileProvider
 import Foundation
 import OSLog
-import SliccTrayKit
 
-protocol FileProviderDomainRegistering {
+public protocol FileProviderDomainRegistering {
     func add(
         _ domain: NSFileProviderDomain,
         completionHandler: @escaping (Error?) -> Void)
@@ -13,27 +12,28 @@ protocol FileProviderDomainRegistering {
     func getDomains(completionHandler: @escaping ([NSFileProviderDomain], Error?) -> Void)
 }
 
-struct SystemFileProviderDomainRegistrar: FileProviderDomainRegistering {
-    func add(
+public struct SystemFileProviderDomainRegistrar: FileProviderDomainRegistering {
+    public init() {}
+    public func add(
         _ domain: NSFileProviderDomain,
         completionHandler: @escaping (Error?) -> Void
     ) {
         NSFileProviderManager.add(domain, completionHandler: completionHandler)
     }
 
-    func remove(
+    public func remove(
         _ domain: NSFileProviderDomain,
         completionHandler: @escaping (Error?) -> Void
     ) {
         NSFileProviderManager.remove(domain, completionHandler: completionHandler)
     }
 
-    func getDomains(completionHandler: @escaping ([NSFileProviderDomain], Error?) -> Void) {
+    public func getDomains(completionHandler: @escaping ([NSFileProviderDomain], Error?) -> Void) {
         NSFileProviderManager.getDomainsWithCompletionHandler(completionHandler)
     }
 }
 
-final class FileProviderDomainLifecycle {
+public final class FileProviderDomainLifecycle {
     /// The identifier is the domain's identity and must NOT follow the name —
     /// changing it orphans the registered domain and the Files.app location
     /// disappears rather than being renamed.
@@ -50,7 +50,8 @@ final class FileProviderDomainLifecycle {
     }
 
     private static let logger = Logger(
-        subsystem: "com.sliccy.follower", category: "FileProviderDomain")
+        subsystem: Bundle.main.bundleIdentifier ?? "com.slicc.sliccstart",
+        category: "FileProviderDomain")
     private static let statusKey = "fileProvider.domainStatus"
     private static let errorKey = "fileProvider.domainError"
     private static let domainsKey = "fileProvider.knownDomains"
@@ -58,7 +59,7 @@ final class FileProviderDomainLifecycle {
     private let registrar: FileProviderDomainRegistering
     private let defaults: UserDefaults?
 
-    init(
+    public init(
         registrar: FileProviderDomainRegistering = SystemFileProviderDomainRegistrar(),
         defaults: UserDefaults? = UserDefaults(suiteName: TrayCredentialStore.appGroupIdentifier)
     ) {
@@ -66,7 +67,7 @@ final class FileProviderDomainLifecycle {
         self.defaults = defaults
     }
 
-    func registerIfCredentialsAvailable(_ credentialsAvailable: Bool) {
+    public func registerIfCredentialsAvailable(_ credentialsAvailable: Bool) {
         guard credentialsAvailable else {
             record(status: "skipped-no-credentials", error: nil)
             return
@@ -90,7 +91,7 @@ final class FileProviderDomainLifecycle {
         }
     }
 
-    func removeDomain() {
+    public func removeDomain() {
         record(status: "removing", error: nil)
         registrar.remove(Self.makeDomain()) { [weak self] error in
             if let error {
