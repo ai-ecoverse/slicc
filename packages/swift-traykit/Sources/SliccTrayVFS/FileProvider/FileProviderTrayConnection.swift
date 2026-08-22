@@ -1,4 +1,5 @@
 import Foundation
+import SliccTrayFollower
 import WebRTC
 
 @MainActor
@@ -316,7 +317,7 @@ extension TrayFileProviderConnection: TrayFollowerConnectorDelegate {
                 self.send(
                     .hello(
                         protocolVersion: traySyncProtocolVersion,
-                        runtime: "slicc-ios-file-provider",
+                        runtime: TrayCredentialConfiguration.fileProviderRuntime,
                         capabilities: trayFollowerCapabilities,
                         motd: nil))
             else {

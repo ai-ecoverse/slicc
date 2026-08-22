@@ -9,6 +9,7 @@
     "packages/swift-server/**",
     "packages/swift-optel/**",
     "packages/swift-traysession/**",
+    "packages/swift-traykit/**",
     "packages/vfs-root/**",
     "packages/dev-tools/**",
     "packages/assets/**",
