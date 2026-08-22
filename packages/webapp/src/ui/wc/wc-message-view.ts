@@ -122,6 +122,45 @@ function firstLine(text: string): string {
   return line.length > 80 ? `${line.slice(0, 79)}…` : line;
 }
 
+function isProbablyUrl(text: string): boolean {
+  return /^https?:\/\//i.test(text);
+}
+
+/** Handoff/upskill navigate licks carry the verb in the JSON body, not the header. */
+function navigateVerbFromLickContent(content: string): string | null {
+  const match = /"verb"\s*:\s*"([^"\\]+)"/.exec(content);
+  return match?.[1] ?? null;
+}
+
+/**
+ * Human-readable pill label for a lick card header. Navigate/discovery licks put
+ * the full target URL in the `[Channel Event: …]` header — using that verbatim
+ * as `event-label` blows out the collapsed card; prefer verb/hostname/ellipsis.
+ */
+export function lickEventLabel(
+  content: string,
+  channel: string | null | undefined,
+  header: RegExpExecArray | null,
+  scoopName: string | null
+): string {
+  if (scoopName) return scoopName;
+  const raw = header?.[2]?.trim();
+  if (!raw) return channel ?? 'event';
+  if (channel === 'navigate') {
+    const verb = navigateVerbFromLickContent(content);
+    if (verb) return verb;
+    if (isProbablyUrl(raw)) return 'navigate';
+  }
+  if (channel === 'discovery' && isProbablyUrl(raw)) {
+    try {
+      return new URL(raw).hostname;
+    } catch {
+      return 'discovery';
+    }
+  }
+  return firstLine(raw);
+}
+
 function inputField(input: unknown, field: string): string {
   if (typeof input !== 'object' || input == null) return '';
   // biome-ignore lint/plugin: same any-tool input bag, read by caller-supplied field name.
@@ -1133,7 +1172,7 @@ function lickCardEl(message: ChatMessage): HTMLElement {
   const scoopName = scoopMarker ? scoopTagName(scoopMarker[1]) : null;
   const card = el('slicc-lick-card', {
     kind: message.channel ?? 'webhook',
-    'event-label': scoopName ?? header?.[2] ?? message.channel ?? 'event',
+    'event-label': lickEventLabel(message.content, message.channel, header, scoopName),
     // Licks are ambient noise until the user opts in: collapsed by default,
     // the header click expands.
     collapsible: '',

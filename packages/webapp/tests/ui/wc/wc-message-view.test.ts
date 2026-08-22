@@ -25,6 +25,7 @@ import {
   isAuthExpiredError,
   isInvalidModelError,
   isNoApiKeyError,
+  lickEventLabel,
   messageEls,
   NO_API_KEY_ERROR_PREFIX,
   summarizeToolInput,
@@ -860,5 +861,47 @@ describe('render-time lick classification + scoop-identity tags', () => {
     expect(run).toHaveLength(1);
     expect(run[0].lickCount).toBe(3);
     expect(run[0].channel).toBe('scoop-idle');
+  });
+});
+
+describe('navigate / discovery lick event labels', () => {
+  const longHandoffUrl =
+    'https://www.sliccy.ai/handoff?handoff=' + 'move-this-to-slicc-and-'.repeat(8);
+
+  it('uses the handoff verb for navigate licks instead of the full URL', () => {
+    const content =
+      `[Navigate Event: ${longHandoffUrl}]\n\`\`\`json\n` +
+      JSON.stringify({ url: longHandoffUrl, verb: 'handoff', target: longHandoffUrl }, null, 2) +
+      '\n```';
+    const [card] = messageEls({
+      id: 'nav-handoff',
+      role: 'user',
+      content,
+      timestamp: 1,
+      source: 'lick',
+      channel: 'navigate',
+    });
+    expect(card.getAttribute('event-label')).toBe('handoff');
+    expect((card.getAttribute('event-label') ?? '').length).toBeLessThan(20);
+  });
+
+  it('falls back to navigate when the header is a URL without a verb', () => {
+    const content = `[Navigate Event: ${longHandoffUrl}]`;
+    const header = /^\[([^:\]]+):\s*([^\]]+)\]\s*\n?/.exec(content);
+    expect(lickEventLabel(content, 'navigate', header, null)).toBe('navigate');
+  });
+
+  it('uses the hostname for discovery licks', () => {
+    const url = 'https://docs.example.com/.well-known/ai-catalog.json';
+    const content = `[Discovery Event: ${url}]\n\`\`\`json\n{"kind":"ai-catalog"}\n\`\`\``;
+    const [card] = messageEls({
+      id: 'disc',
+      role: 'user',
+      content,
+      timestamp: 1,
+      source: 'lick',
+      channel: 'discovery',
+    });
+    expect(card.getAttribute('event-label')).toBe('docs.example.com');
   });
 });
