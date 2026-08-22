@@ -294,6 +294,29 @@ describe('slicc-lick-card', () => {
       expect((el.shadowRoot?.querySelector('.lk') as HTMLElement).textContent).toBe('event');
     });
 
+    it('ellipsizes a long event-label pill instead of bursting the card', () => {
+      const wrap = document.createElement('div');
+      wrap.style.width = '400px';
+      document.body.appendChild(wrap);
+      const el = document.createElement('slicc-lick-card') as SliccLickCard;
+      el.kind = 'navigate';
+      el.eventLabel = `https://www.sliccy.ai/handoff?handoff=${'x'.repeat(200)}`;
+      el.collapsible = true;
+      el.collapsed = true;
+      wrap.appendChild(el);
+      const pill = el.shadowRoot?.querySelector('.lk') as HTMLElement;
+      const cardEl = card(el);
+      expect(getComputedStyle(pill).textOverflow).toBe('ellipsis');
+      expect(getComputedStyle(pill).overflow).toBe('hidden');
+      expect(getComputedStyle(pill).whiteSpace).toBe('nowrap');
+      // Layout containment: the card must stay inside the chat column, not
+      // grow to the full URL width (regression: handoff licks blew the thread).
+      expect(cardEl.scrollWidth).toBeLessThanOrEqual(cardEl.clientWidth + 1);
+      expect(cardEl.getBoundingClientRect().width).toBeLessThanOrEqual(400);
+      el.remove();
+      wrap.remove();
+    });
+
     it('reflects body text (escaped) into the .lb body', () => {
       const el = mount((e) => {
         e.body = 'plain body';

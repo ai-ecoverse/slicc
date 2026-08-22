@@ -116,6 +116,8 @@ const STYLE = `
   /* Shrink to content and cap the width so the right-aligned card never spans
      the full column; the body wraps within this cap. */
   max-width:85%;
+  min-width:0;
+  overflow:hidden;
   border:1px solid var(--lick-border);
   background:var(--lick-bg);
   border-radius:12px;
@@ -137,6 +139,7 @@ const STYLE = `
 
 .lh{
   display:flex;align-items:center;gap:7px;
+  min-width:0;
   font-family:var(--ui);font-size:10.5px;color:var(--lick-head);
   margin-bottom:4px;
 }
@@ -151,9 +154,15 @@ const STYLE = `
 :host([state="dismissed"]) .status{color:var(--lick-dismiss);}
 /* The clickable affordance only exists while collapsible. */
 :host([collapsible]) .lh{cursor:pointer;user-select:none;}
+.lh .kind{
+  min-width:0;flex:1 1 auto;
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+}
 .lk{
   margin-left:auto;border-radius:26px;background:var(--lick-pill,var(--amber));
   color:var(--lick-pill-ink,color-mix(in srgb,var(--amber) 40%,#000));font-size:9px;font-weight:700;padding:1px 7px;
+  flex:0 1 auto;min-width:0;max-width:min(50%,14rem);
+  overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
 }
 
 .lb{
