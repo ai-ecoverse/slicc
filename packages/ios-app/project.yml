@@ -172,9 +172,6 @@ targets:
       # their internals) directly, so the test bundle must link the framework —
       # it is no longer folded into SliccTrayKit.
       - package: SliccTrayFollower
-      # FsClient moved to SliccTrayVFS; unit tests `@testable import` its
-      # diagnostic seams (e.g. inFlightCount).
-      - package: SliccTrayVFS
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.tests
