@@ -211,7 +211,7 @@ func cmdWatch(ctx context.Context, joinURL, scoopJid string, plain bool) int {
 			backoff = time.Second
 		} else {
 			var resetBackoff bool
-			failures, resetBackoff = join.recordReconnectFailure(failures)
+			failures, resetBackoff = join.recordReconnectFailure(failures, err)
 			if resetBackoff {
 				backoff = time.Second
 			}
@@ -397,7 +397,7 @@ func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
 			backoff = time.Second
 		} else {
 			var resetBackoff bool
-			failures, resetBackoff = join.recordReconnectFailure(failures)
+			failures, resetBackoff = join.recordReconnectFailure(failures, err)
 			if resetBackoff {
 				backoff = time.Second
 			}
