@@ -433,7 +433,10 @@ jobs:
     # the speech leg the kokoro spec alone may take up to its 25-minute test
     # timeout (staging recovery = one page reboot + a second ~6-min download
     # pass). 30 could kill the job before the spec's own budget played out.
-    timeout-minutes: 45
+    # The multiple-cones leg (#2313) adds four specs whose own ceiling is 5
+    # minutes each, hence 55 rather than 45 — on a speech run they and the
+    # kokoro spec can both take their worst case.
+    timeout-minutes: 55
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -501,6 +504,12 @@ jobs:
           test -f .cache/hf-mirror.ready || { cat .cache/hf-mirror.log; exit 1; }
           echo "HF_ENDPOINT=http://127.0.0.1:8791" >> "$GITHUB_ENV"
       - name: E2E tests
+        # Includes the two-instance multiple-cones leg (#2313): the same
+        # `wrangler dev` that serves the UI is the tray hub a second browser
+        # context joins, so the leader/follower specs need no extra service —
+        # only the per-spec `test.setTimeout` they set themselves, because CI is
+        # far slower than a laptop at the object construction under a cone
+        # lifecycle. No path gate: cone behaviour is a webapp-wide invariant.
         run: npm run test:e2e
         env:
           # Surface wrangler's own diagnostics so a crash during workerd
