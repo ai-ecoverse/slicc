@@ -147,29 +147,30 @@ const STYLE = `
   align-items: center;
   gap: 6px;
   min-height: 36px;
-  padding: 4px 8px;
+  padding: 4px 0;
   margin-bottom: 4px;
 }
 .fznew-act {
   appearance: none;
-  background: transparent;
-  border: none;
   margin: 0;
   padding: 0;
-  width: 32px;
+  /* Equal shares of the rail width — no trailing gap, whatever the count. */
+  flex: 1 1 0;
+  min-width: 0;
   height: 32px;
   display: grid;
   place-items: center;
   border-radius: 8px;
   cursor: pointer;
-  color: inherit;
-  flex: 0 0 auto;
+  color: var(--ctx);
+  background: color-mix(in srgb, var(--ctx) 14%, var(--canvas));
+  border: 1px solid color-mix(in srgb, var(--ctx) 40%, var(--line));
+  transition: background-color .15s;
 }
-.fznew-act:hover { background: var(--ghost); }
+.fznew-act:hover { background: color-mix(in srgb, var(--ctx) 24%, var(--canvas)); }
 .fznew-act:focus-visible { outline: 2px solid var(--ctx); outline-offset: 2px; }
-.fznew-act .nico svg { display: block; }
+.fznew-act svg { display: block; }
 .fznew-act[disabled] { opacity: .45; cursor: default; }
-.fznew-act[disabled]:hover { background: transparent; }
 
 /* .fznew-spinner — busy/pending progress: the badge glyph swaps to a spinning
    lucide loader the moment the new-chat work is kicked off (optimistically on a
@@ -494,7 +495,7 @@ export class SliccFreezerNew extends HTMLElement {
           'aria-label': text,
           'aria-busy': isSave && busy ? 'true' : undefined,
         },
-        h('span', { class: 'nico' }, glyph)
+        glyph
       );
       btn.addEventListener('click', () => this.#emit(action));
       row.appendChild(btn);

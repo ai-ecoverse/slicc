@@ -97,27 +97,63 @@ function buildConeDialog(doc: Document, spec: ConeDialogSpec): ConeDialog {
   return d;
 }
 
-/** The "New cone" body: a name field (Enter submits) and a one-line hint. */
-function buildNameForm(doc: Document, onSubmit: (name: string) => void): HTMLFormElement {
+/** What the "New cone" dialog collects. Only the name is required. */
+export interface NewConeDraft {
+  name: string;
+  /** What the cone is for — becomes its system-prompt note. */
+  description: string;
+  /** First message; starts the cone's first turn right away. */
+  prompt: string;
+}
+
+/** The "New cone" body: name, purpose, first message. Enter in the name field submits. */
+function buildNameForm(doc: Document, onSubmit: (draft: NewConeDraft) => void): HTMLFormElement {
   const form = doc.createElement('form');
   form.style.cssText = 'display:flex;flex-direction:column;gap:0.5rem;padding:0.25rem 0;';
-  const input = doc.createElement('input');
-  input.type = 'text';
-  input.placeholder = 'Cone name';
-  input.setAttribute('aria-label', 'New cone name');
-  input.maxLength = 40;
-  input.autocomplete = 'off';
-  input.style.cssText =
+  const field =
     'font-size:0.9375rem;padding:0.5rem 0.625rem;border:1px solid var(--s2-border-color,#e0e0e0);' +
-    'border-radius:0.375rem;background:transparent;color:inherit;';
-  const hint = doc.createElement('p');
-  hint.textContent = 'Your current chat stays in this cone. The new cone starts from scratch.';
-  hint.style.cssText = 'font-size:0.8125rem;color:var(--s2-content-secondary,#717171);margin:0;';
-  form.append(input, hint);
+    'border-radius:0.375rem;background:transparent;color:inherit;font-family:inherit;';
+  const name = doc.createElement('input');
+  name.type = 'text';
+  name.name = 'name';
+  name.placeholder = 'Name';
+  name.setAttribute('aria-label', 'Cone name');
+  name.maxLength = 40;
+  name.autocomplete = 'off';
+  name.required = true;
+  name.style.cssText = field;
+  const description = doc.createElement('input');
+  description.type = 'text';
+  description.name = 'description';
+  description.placeholder = 'What is it for? (optional)';
+  description.setAttribute('aria-label', 'What the cone is for');
+  description.maxLength = 200;
+  description.autocomplete = 'off';
+  description.style.cssText = field;
+  const prompt = doc.createElement('textarea');
+  prompt.name = 'prompt';
+  prompt.placeholder = 'First message (optional)';
+  prompt.setAttribute('aria-label', 'First message');
+  prompt.rows = 3;
+  prompt.style.cssText = `${field}resize:vertical;`;
+  form.append(name, description, prompt);
+  const read = (): NewConeDraft => ({
+    name: name.value.trim(),
+    description: description.value.trim(),
+    prompt: prompt.value.trim(),
+  });
   form.addEventListener('submit', (event) => {
     event.preventDefault();
-    onSubmit(input.value.trim());
+    onSubmit(read());
   });
+  // Submit from the textarea with ⌘/Ctrl+Enter (plain Enter is a newline).
+  prompt.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+      event.preventDefault();
+      onSubmit(read());
+    }
+  });
+  (form as HTMLFormElement & { readDraft?: () => NewConeDraft }).readDraft = read;
   return form;
 }
 
@@ -164,17 +200,22 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
     d.show?.();
   };
 
-  const create = (name: string): void => {
-    if (!name) return;
+  const create = (draft: NewConeDraft): void => {
+    if (!draft.name) return;
     closeDialog();
-    const record = buildNewConeRecord(name, client.getScoops());
-    pendingSelect = name;
-    void client.registerScoop(record).catch((err) => log.warn('WC cone create failed', err));
+    const record = buildNewConeRecord(draft.name, client.getScoops());
+    pendingSelect = draft.name;
+    void client
+      .registerScoop(record, {
+        ...(draft.description ? { description: draft.description } : {}),
+        ...(draft.prompt ? { prompt: draft.prompt } : {}),
+      })
+      .catch((err) => log.warn('WC cone create failed', err));
     render();
   };
 
   const askName = (): void => {
-    const form = buildNameForm(doc, create);
+    const form = buildNameForm(doc, create) as HTMLFormElement & { readDraft: () => NewConeDraft };
     openDialog({
       heading: 'New cone',
       body: form,
@@ -183,7 +224,7 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
           text: 'Create',
           style: BTN_PRIMARY,
           data: 'create',
-          onClick: () => create(form.querySelector('input')?.value.trim() ?? ''),
+          onClick: () => create(form.readDraft()),
         },
         { text: 'Cancel', style: BTN_PLAIN, data: 'cancel', onClick: closeDialog },
       ],
@@ -229,8 +270,7 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
   const askDrop = (root: RegisteredScoop): void => {
     const label = switcherLabelFor(root);
     const body = doc.createElement('p');
-    body.textContent =
-      'Its chat goes to the Freezer as it is — no memory is extracted — and its scoops are dropped with it. Frozen cards stay.';
+    body.textContent = 'Its chat goes to the Freezer.';
     body.style.cssText = 'font-size:0.875rem;margin:0;';
     openDialog({
       heading: `Drop ${label}?`,

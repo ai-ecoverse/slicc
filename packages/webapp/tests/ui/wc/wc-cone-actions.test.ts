@@ -49,9 +49,11 @@ function harness(initial: RegisteredScoop[], opts: { freezeFails?: boolean } = {
   document.body.append(freezer);
   const client = {
     getScoops: () => scoops,
-    registerScoop: vi.fn(async (scoop: RegisteredScoop) => {
-      scoops = [...scoops, scoop];
-    }),
+    registerScoop: vi.fn(
+      async (scoop: RegisteredScoop, _options?: { description?: string; prompt?: string }) => {
+        scoops = [...scoops, scoop];
+      }
+    ),
     unregisterScoop: vi.fn(async (jid: string) => {
       scoops = scoops.filter((s) => s.jid !== jid && s.parentJid !== jid);
     }),
@@ -144,14 +146,22 @@ describe('wireConeActions', () => {
     // On the body, not in the rail.
     expect(d.parentElement).toBe(document.body);
     expect(h.row.parentElement?.contains(d)).toBe(false);
-    const input = d.querySelector('input') as HTMLInputElement;
-    expect(input.getAttribute('aria-label')).toBe('New cone name');
+    const input = d.querySelector('input[name="name"]') as HTMLInputElement;
+    expect(input.getAttribute('aria-label')).toBe('Cone name');
     input.value = 'Research';
+    (d.querySelector('input[name="description"]') as HTMLInputElement).value = ' Paper survey ';
+    (d.querySelector('textarea[name="prompt"]') as HTMLTextAreaElement).value =
+      'List the three most cited retrieval papers.';
     h.action('create')?.click();
     await vi.waitFor(() => expect(h.client.registerScoop).toHaveBeenCalledOnce());
-    const record = h.client.registerScoop.mock.calls[0][0];
+    const [record, options] = h.client.registerScoop.mock.calls[0];
     expect(record.parentJid).toBeNull();
     expect(record.name).toBe('Research');
+    // Purpose and first message ride along, trimmed.
+    expect(options).toEqual({
+      description: 'Paper survey',
+      prompt: 'List the three most cited retrieval papers.',
+    });
     // Dialog is gone, the placeholder is not selected…
     expect(h.dialog()).toBeNull();
     expect(document.querySelector('slicc-dialog')).toBeNull();
@@ -168,11 +178,29 @@ describe('wireConeActions', () => {
     form.dispatchEvent(new Event('submit', { cancelable: true }));
     expect(h.client.registerScoop).not.toHaveBeenCalled();
     expect(h.dialog()).not.toBeNull();
-    (form.querySelector('input') as HTMLInputElement).value = '  Beta ';
+    (form.querySelector('input[name="name"]') as HTMLInputElement).value = '  Beta ';
     form.dispatchEvent(new Event('submit', { cancelable: true }));
     expect(h.client.registerScoop).toHaveBeenCalledOnce();
     expect(h.client.registerScoop.mock.calls[0][0].name).toBe('Beta');
+    // Nothing optional was filled in → nothing optional on the wire.
+    expect(h.client.registerScoop.mock.calls[0][1]).toEqual({});
     expect(h.dialog()).toBeNull();
+  });
+
+  it('⌘/Ctrl+Enter in the first-message field submits', () => {
+    const h = harness([primary]);
+    h.fire('new-cone');
+    const d = h.dialog() as HTMLElement;
+    (d.querySelector('input[name="name"]') as HTMLInputElement).value = 'Gamma';
+    const prompt = d.querySelector('textarea[name="prompt"]') as HTMLTextAreaElement;
+    prompt.value = 'go';
+    prompt.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    expect(h.client.registerScoop).not.toHaveBeenCalled();
+    prompt.dispatchEvent(
+      new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true })
+    );
+    expect(h.client.registerScoop).toHaveBeenCalledOnce();
+    expect(h.client.registerScoop.mock.calls[0][1]).toEqual({ prompt: 'go' });
   });
 
   it('Cancel and the dialog closing itself both discard the name form', () => {

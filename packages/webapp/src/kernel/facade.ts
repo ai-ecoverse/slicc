@@ -1051,22 +1051,41 @@ export class Bridge implements KernelFacade {
    * get injected. Building a non-cone scoop here would bypass that layer and
    * yield a sandbox with no writable paths; see #436.
    */
-  private async handleConeCreate(name: string): Promise<void> {
+  private async handleConeCreate(
+    name: string,
+    description?: string,
+    prompt?: string
+  ): Promise<void> {
     if (!this.orchestrator) return;
     const existing = this.orchestrator.getScoops();
     const folder = coneFolderFor(name, existing);
     const primary = folder === PRIMARY_CONE_FOLDER;
     // The primary root keeps its historical `sliccy` label; an extra cone is
     // addressed by the name the user gave it (chip label, `cone:<folder>` URL).
+    const purpose = description?.trim();
     const scoop: RegisteredScoop = {
       ...buildWorkUnitRecord({ parentId: null, name, folder }),
       assistantLabel: primary ? 'sliccy' : name,
+      // "What is it for" rides the same system-prompt hook scoops use, so
+      // the cone knows its purpose from its first turn (#2272).
+      ...(purpose ? { config: { systemPromptAppend: `This cone is for: ${purpose}` } } : {}),
     };
     await this.orchestrator.registerScoop(scoop);
     this.emit({
       type: 'scoop-created',
       scoop: this.toScoopSnapshot(scoop),
     } satisfies ScoopCreatedMsg);
+    // The first message goes through the ordinary user-message path, so it
+    // is buffered, persisted and rendered exactly like a typed one.
+    const first = prompt?.trim();
+    if (first) {
+      await this.handleUserMessage({
+        type: 'user-message',
+        scoopJid: scoop.jid,
+        text: first,
+        messageId: `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+      });
+    }
   }
 
   /**
@@ -1380,7 +1399,7 @@ export class Bridge implements KernelFacade {
       }
 
       case 'cone-create':
-        await this.handleConeCreate(msg.name);
+        await this.handleConeCreate(msg.name, msg.description, msg.prompt);
         break;
 
       case 'scoop-feed': {

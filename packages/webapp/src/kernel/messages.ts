@@ -81,6 +81,10 @@ export interface UserMessageMsg {
 export interface ConeCreateMsg {
   type: 'cone-create';
   name: string;
+  /** What the cone is for — kept on its record (`config.systemPromptAppend`). */
+  description?: string;
+  /** An optional first message that starts the cone's first turn right away. */
+  prompt?: string;
 }
 
 export interface ScoopFeedMsg {
