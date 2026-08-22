@@ -6,7 +6,12 @@ import {
   type AgentSpawnOptions,
   type AgentSpawnResult,
 } from '../../src/scoops/agent-bridge.js';
-import { DEFAULT_MEMORY_MD, runAgenticMemoryPass } from '../../src/scoops/agentic-memory.js';
+import {
+  curatorAgentName,
+  curatorScratchDir,
+  DEFAULT_MEMORY_MD,
+  runAgenticMemoryPass,
+} from '../../src/scoops/agentic-memory.js';
 import { CONE_MEMORY_PATH, computeBudget } from '../../src/scoops/cone-memory-budget.js';
 
 const ARCHIVE_PATH = '/sessions/2026-08-05-memory.md';
@@ -477,6 +482,135 @@ Curate {{MEMORY_PATH}}.`;
       ok: false,
       reason: 'timeout',
       legacyFallbackSafe: false,
+    });
+  });
+
+  describe('per cone (#2271)', () => {
+    const BETA = { folder: 'cone-beta', jid: 'cone_beta' };
+
+    it("curates the extra cone's own memory file, in its own workspace", async () => {
+      const spawn = successSpawn();
+
+      const result = await runAgenticMemoryPass({
+        spawn,
+        vfs: fakeVfs(DEFAULT_MEMORY_MD),
+        sessionArchivePath: ARCHIVE_PATH,
+        sessionCount: 3,
+        today: '2026-08-22',
+        cone: BETA,
+      });
+
+      expect(result).toEqual({ ok: true, report: 'done' });
+      const options = spawn.mock.calls[0][0];
+      expect(options).toMatchObject({
+        cwd: '/cones/cone-beta/workspace',
+        // The shipped MEMORY.md names the PRIMARY memory file; the pass
+        // applies that same policy to this cone's own file instead.
+        writablePaths: ['/cones/cone-beta/CLAUDE.md'],
+        // Parented to the cone it curates, so an escalation reaches that
+        // cone's approval router.
+        parentJid: 'cone_beta',
+        // A distinct name: two cones curate two different files and must not
+        // collide on the fixed `memory-curator` name.
+        name: 'memory-curator-cone-beta',
+      });
+      // `/workspace/` rebases to this cone's root; the shared skills library
+      // is re-added because rebasing moved the only entry that covered it.
+      expect(options.visiblePaths).toEqual([
+        '/sessions/',
+        '/shared/',
+        '/cones/cone-beta/workspace/',
+        '/workspace/skills/',
+      ]);
+      expect(options.prompt).toContain('/cones/cone-beta/CLAUDE.md');
+      expect(options.prompt).not.toContain('/workspace/CLAUDE.md');
+    });
+
+    it("sends the extra cone's drafts to its OWN scratch folder", async () => {
+      const spawn = successSpawn();
+
+      await runAgenticMemoryPass({
+        spawn,
+        vfs: fakeVfs(DEFAULT_MEMORY_MD),
+        sessionArchivePath: ARCHIVE_PATH,
+        sessionCount: 3,
+        cone: BETA,
+      });
+
+      // The bridge derives the scratch folder from the agent name, so a
+      // per-cone name moves it — and a MEMORY.md that predates
+      // `{{SCRATCH_DIR}}` and spells the primary's out is rewritten rather
+      // than sending every draft write into another agent's folder.
+      const prompt = spawn.mock.calls[0][0].prompt;
+      expect(curatorScratchDir('cone-beta')).toBe('/scoops/agent-memory-curator-cone-beta');
+      expect(prompt).toContain('/scoops/agent-memory-curator-cone-beta');
+      expect(prompt).not.toContain('/scoops/agent-memory-curator/');
+    });
+
+    it('rewrites a legacy MEMORY.md that spells the primary scratch folder out', async () => {
+      const memoryMd = `---\ntimeoutSeconds: 60\n---\nDraft in \`/scoops/agent-memory-curator/draft.md\`, then write {{MEMORY_PATH}}.`;
+      const spawn = successSpawn();
+
+      await runAgenticMemoryPass({
+        spawn,
+        vfs: fakeVfs(memoryMd),
+        sessionArchivePath: ARCHIVE_PATH,
+        sessionCount: 1,
+        cone: BETA,
+      });
+
+      expect(spawn.mock.calls[0][0].prompt).toBe(
+        'Draft in `/scoops/agent-memory-curator-cone-beta/draft.md`, then write /cones/cone-beta/CLAUDE.md.'
+      );
+    });
+
+    it('leaves the primary cone byte-identical when named explicitly', async () => {
+      const spawn = successSpawn();
+
+      await runAgenticMemoryPass({
+        spawn,
+        vfs: fakeVfs(DEFAULT_MEMORY_MD),
+        sessionArchivePath: ARCHIVE_PATH,
+        sessionCount: 3,
+        today: '2026-08-22',
+        cone: { folder: 'cone' },
+      });
+
+      const options = spawn.mock.calls[0][0];
+      expect(curatorAgentName('cone')).toBe('memory-curator');
+      expect(options).toMatchObject({
+        cwd: '/workspace',
+        writablePaths: [CONE_MEMORY_PATH],
+        name: 'memory-curator',
+      });
+      expect(options.visiblePaths).toEqual(['/sessions/', '/shared/', '/workspace/']);
+      expect(options.parentJid).toBeUndefined();
+      expect(options.prompt).toContain('/scoops/agent-memory-curator/');
+    });
+
+    it('keeps an explicitly configured non-workspace path unrebased', async () => {
+      const memoryMd = `---
+writablePaths: [/knowledge/notes.md]
+visiblePaths: [/sessions/, /knowledge/]
+---
+Curate {{MEMORY_PATH}}.`;
+      const spawn = successSpawn();
+
+      await runAgenticMemoryPass({
+        spawn,
+        vfs: fakeVfs(memoryMd),
+        sessionArchivePath: ARCHIVE_PATH,
+        sessionCount: 1,
+        cone: BETA,
+      });
+
+      // Nothing under `/workspace/`, so nothing to rebase — a deliberate
+      // configuration is left exactly as written, and the skills library is
+      // NOT added because the original list never covered it either.
+      expect(spawn.mock.calls[0][0]).toMatchObject({
+        writablePaths: ['/knowledge/notes.md'],
+        visiblePaths: ['/sessions/', '/knowledge/'],
+      });
     });
   });
 });

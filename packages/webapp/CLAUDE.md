@@ -102,7 +102,11 @@ Non-obvious rules:
   `/workspace`, extra cone `/cones/<folder>/workspace` + its own `CLAUDE.md`,
   scoop `/scoops/<folder>/workspace`; `/shared`, `/tmp` and the skills library
   (`SKILLS_LIBRARY_DIR`) stay shared. Never hardcode `/workspace` for a unit's
-  root, memory file or spawn default. See `docs/work-unit.md`.
+  root, memory file or spawn default. Memory is per cone on BOTH paths: the
+  compaction sink is bound from the unit's own record, and the agentic curator
+  takes a `cone` (`runAgenticMemoryPass`) — it curates that cone's file, from
+  that cone's workspace, under a per-cone agent name, with `MEMORY.md`'s
+  primary-relative paths rebased onto it. See `docs/work-unit.md`.
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without
   queue/watermark loss; user `web` bypasses the window (immediate/awaited,
   prevents deferral). `transcript-limits.ts` caps bridge/event transcripts at 64 KB

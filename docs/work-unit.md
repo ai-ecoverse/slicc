@@ -109,9 +109,12 @@ per-scoop sudoers.
   roots `scoop_scoop` injects are now the creating cone's workspace plus the
   skills library (`defaultChildVisibleRoots`), so a scoop spawned by an extra
   cone reads that cone's files, not the primary's. Same for the `agent`
-  command, which resolves its owner with `ownerWorkspaceFor` (the shared
-  `rootOwnerOf` walk, which refuses a dangling or looping ownership chain
-  rather than handing out a child's `/scoops/<folder>`).
+  command, which resolves its owner through `WorkUnitManager.rootOf` — the one
+  cycle-safe walk the kernel already uses — falling back to
+  `resolveDefaultRoot()` so a dangling chain can never hand out a child's
+  `/scoops/<folder>` as a workspace. The UI and `scoop_scoop` take the same
+  answer from `ownerWorkspaceFor` (the shared `rootOwnerOf` walk) where no
+  manager is in reach.
 - **The UI follows the selection.** The workbench file tree and the memory
   panel take their roots from the cone that owns the current selection, so
   switching cones re-points both (`WcWorkbenchDeps.getWorkspace`).
@@ -133,10 +136,38 @@ per-scoop sudoers.
   because the files of two cones that shared one directory are indistinguishable
   after the fact, and the flag is experimental and off by default.
 
-Known limits (unchanged by this phase): the freezer / "New session" flow and the
-agentic-memory curator are primary-cone-only (they archive `session-cone`), and
-the workflow prelude's `agent()` still grants sub-agents a read-only
-`/workspace/` alongside the invoking cwd.
+- **The curator runs per cone.** With the `agentic-memory` flag on, compaction
+  extraction is off (`shouldExtractMemories: () => !flag`) and the curator IS
+  the memory path — so it runs for whichever cone was frozen, not just the
+  primary: `runAgenticMemoryPass` takes a `cone: { folder, jid? }`, derives
+  that cone's coordinates from `workspaceFor`, and curates
+  `/cones/<folder>/CLAUDE.md` from `session-<folder>`'s archive. There is no
+  fallback to compaction-time extraction; an extra cone with no curator would
+  have no memory at all.
+  - `cwd` is the cone's own workspace, and `writablePaths` stays the single
+    memory file (an `upskill` install still escalates).
+  - The frontmatter in `/shared/MEMORY.md` is written primary-relative and is
+    user-editable, so it is **rebased** onto the target cone rather than taken
+    verbatim — `/workspace/CLAUDE.md` → this cone's memory file, `/workspace/`
+    → this cone's root. The skills library is never rebased (one library for
+    every cone), and it is re-added to `visiblePaths` when rebasing moved the
+    only entry that covered it.
+  - The agent name is per cone (`memory-curator` for the primary,
+    `memory-curator-<folder>` otherwise), so two cones curating two different
+    files never collide on the name-in-use check — that check exists to stop a
+    second curator clobbering the SAME file. The bridge derives the private
+    scratch folder from the name, so `{{SCRATCH_DIR}}` in the prompt moves with
+    it; a `MEMORY.md` predating that placeholder has the primary's literal path
+    rewritten.
+  - The pass is parented to the cone it curates (`cone.jid`), so escalations
+    reach that cone's approval router and model inheritance follows it.
+- **Legacy (flag-off) extraction is per cone too.** The freezer's own append
+  and the boot catch-up's enrichment write to the frozen archive's cone —
+  resolved from the `cone` provenance the archive already records — and the
+  budget pass bounds that same file.
+
+Known limit (unchanged by this phase): the workflow prelude's `agent()` still
+grants sub-agents a read-only `/workspace/` alongside the invoking cwd.
 
 ### Per-cone sessions ([#2272](https://github.com/ai-ecoverse/slicc/issues/2272))
 

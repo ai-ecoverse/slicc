@@ -119,6 +119,7 @@ import type { Orchestrator, ScoopObserver } from '../../src/scoops/orchestrator.
 import type { ScoopContext } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 import { CURRENT_SCOOP_CONFIG_VERSION } from '../../src/scoops/types.js';
+import { WorkUnitManager } from '../../src/work-unit/manager.js';
 
 /**
  * Observer-driven mock orchestrator. Each `sendPrompt` call drives the
@@ -181,6 +182,8 @@ function makeMockOrchestrator(): {
     getScoopContext: vi.fn(() => undefined),
   };
 
+  mock.getWorkUnits = vi.fn(() => makeWorkUnits(knownScoops));
+
   return {
     orchestrator: mock as unknown as Orchestrator,
     registerCalls,
@@ -190,6 +193,26 @@ function makeMockOrchestrator(): {
     scripts,
     knownScoops,
   };
+}
+
+/**
+ * The bridge resolves a spawned agent's default read-only roots through the
+ * REAL `WorkUnitManager.rootOf` walk (#2271), so every orchestrator double
+ * hands it a manager over its own registry rather than re-implementing the
+ * walk.
+ */
+function makeWorkUnits(scoops: RegisteredScoop[]): WorkUnitManager {
+  return new WorkUnitManager({
+    getScoop: (jid) => scoops.find((s) => s.jid === jid),
+    getScoops: () => scoops,
+    getScoopTabState: () => undefined,
+    sendPrompt: async () => {},
+    observeScoop: () => () => {},
+    stopScoop: () => {},
+    unregisterScoop: async () => {},
+    registerScoop: async () => {},
+    getScoopContext: () => undefined,
+  });
 }
 
 function makeMockSharedFs(options?: {
@@ -1355,6 +1378,7 @@ describe('createAgentBridge — structured output capture', () => {
       unregisterScoop: vi.fn(async () => {}),
       observeScoop: vi.fn(() => () => {}),
       getScoops: vi.fn(() => []),
+      getWorkUnits: vi.fn(() => makeWorkUnits([])),
       getScoopContext: vi.fn(() => ctx as unknown as ScoopContext),
       sendPrompt: vi.fn(async () => {
         prompts++;
@@ -1447,6 +1471,7 @@ describe('createAgentBridge — structured output capture', () => {
         return () => {};
       }),
       getScoops: vi.fn(() => []),
+      getWorkUnits: vi.fn(() => makeWorkUnits([])),
       getScoopContext: vi.fn(() => ctx as unknown as ScoopContext),
       sendPrompt: vi.fn(async () => {
         prompts++;

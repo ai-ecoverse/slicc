@@ -174,7 +174,7 @@ describe('New chat targets the selected cone (#2272)', () => {
     await runNewChat(state, 'save');
 
     expect(freezeCalls).toEqual([
-      { kind: 'save', cone: { folder: 'cone-research', label: 'Research' } },
+      { kind: 'save', cone: { folder: 'cone-research', label: 'Research', jid: 'cone_2' } },
     ]);
     expect(state.clearCalls).toEqual(['cone_2']);
     // Stays on the cone it just cleared.
@@ -188,7 +188,7 @@ describe('New chat targets the selected cone (#2272)', () => {
     await runNewChat(state, 'skip');
 
     expect(freezeCalls).toEqual([
-      { kind: 'quick', cone: { folder: 'cone-research', label: 'Research' } },
+      { kind: 'quick', cone: { folder: 'cone-research', label: 'Research', jid: 'cone_2' } },
     ]);
     expect(state.clearCalls).toEqual(['cone_2']);
   });
@@ -199,7 +199,9 @@ describe('New chat targets the selected cone (#2272)', () => {
 
     await runNewChat(state, 'save');
 
-    expect(freezeCalls).toEqual([{ kind: 'save', cone: { folder: 'cone', label: 'sliccy' } }]);
+    expect(freezeCalls).toEqual([
+      { kind: 'save', cone: { folder: 'cone', label: 'sliccy', jid: 'cone_1' } },
+    ]);
     expect(state.clearCalls).toEqual(['cone_1']);
   });
 
@@ -264,7 +266,7 @@ describe('drop cone freezes without memory (#2272)', () => {
     await state.handles.freezeCone(research);
 
     expect(freezeCalls).toEqual([
-      { kind: 'archive-only', cone: { folder: 'cone-research', label: 'Research' } },
+      { kind: 'archive-only', cone: { folder: 'cone-research', label: 'Research', jid: 'cone_2' } },
     ]);
     // Nothing is cleared or re-selected — the drop itself does that.
     expect(state.clearCalls).toEqual([]);

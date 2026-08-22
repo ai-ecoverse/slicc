@@ -362,6 +362,82 @@ describe('freezeConeSession', () => {
     expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
   });
 
+  it("runs the curator for the cone that was frozen, on that cone's memory file (#2271)", async () => {
+    mockRunOneOffCompactionCall.mockResolvedValueOnce('Beta cone session');
+    const vfs = makeFakeVfs();
+    mockRunAgenticMemoryPass.mockResolvedValueOnce({ ok: true, report: 'curated' });
+
+    const options = {
+      sessionStore: makeFakeStore({
+        id: 'session-cone-beta',
+        messages: [
+          userMessage('q'),
+          assistantMessage('a'),
+          userMessage('r'),
+          assistantMessage('b'),
+        ],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      pickIcon: async () => null,
+      agenticMemorySpawn: vi.fn(),
+      cone: { folder: 'cone-beta', label: 'Beta', jid: 'cone_beta' },
+    };
+    const frozen = await freezeConeSession(options);
+    await curateFrozenSessionMemories(options, frozen!);
+
+    // The archive is this cone's (`session-cone-beta`), and the pass is told
+    // WHICH cone it is curating — `runAgenticMemoryPass` derives that cone's
+    // workspace, memory file and curator name from the folder.
+    expect(mockRunAgenticMemoryPass).toHaveBeenCalledOnce();
+    expect(mockRunAgenticMemoryPass.mock.calls[0][0]).toMatchObject({
+      sessionArchivePath: `/sessions/${frozen!.filename}`,
+      cone: { folder: 'cone-beta', jid: 'cone_beta' },
+    });
+    // Curator success means no legacy append anywhere.
+    expect(vfs.files.get('/cones/cone-beta/CLAUDE.md')).toBeUndefined();
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
+  });
+
+  it("appends an extra cone's legacy-extracted memory to ITS OWN CLAUDE.md (#2271)", async () => {
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('- beta learned something')
+      .mockResolvedValueOnce('Beta session');
+    const vfs = makeFakeVfs();
+
+    const frozen = await freezeConeSession({
+      sessionStore: makeFakeStore({
+        id: 'session-cone-beta',
+        messages: [
+          userMessage('q'),
+          assistantMessage('a'),
+          userMessage('r'),
+          assistantMessage('b'),
+        ],
+        createdAt: 0,
+        updatedAt: 1,
+      }),
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      pickIcon: async () => null,
+      cone: { folder: 'cone-beta', label: 'Beta' },
+    });
+
+    expect(frozen).not.toBeNull();
+    expect(vfs.files.get('/cones/cone-beta/CLAUDE.md')).toContain('beta learned something');
+    // The primary cone's memory is untouched: two cones never interleave.
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
+    // The budget step bounds the SAME file the append landed in.
+    expect(mockApplyConeMemoryBudget).toHaveBeenCalledOnce();
+    expect(mockApplyConeMemoryBudget.mock.calls[0][0]).toMatchObject({
+      memoryPath: '/cones/cone-beta/CLAUDE.md',
+    });
+  });
+
   it('falls back to legacy extraction and budgeting when the agentic pass fails', async () => {
     mockRunOneOffCompactionCall
       .mockResolvedValueOnce('Agentic fallback session')
@@ -1953,6 +2029,35 @@ describe('enrichPendingSession', () => {
     expect(mockRunOneOffCompactionCall).toHaveBeenCalledTimes(2);
     expect(vfs.files.get('/workspace/CLAUDE.md')).toContain('legacy extraction owns memory');
     expect(updated!.memoryPending).toBeUndefined();
+  });
+
+  it("catch-up enrichment writes back to the archive's OWN cone (#2271)", async () => {
+    const vfs = makeFakeVfs();
+    const { pendingFilename, frozenAt } = await seedPending(vfs);
+
+    mockRunOneOffCompactionCall
+      .mockResolvedValueOnce('- a fact beta learned')
+      .mockResolvedValueOnce('Build pipeline debug');
+
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'debug the build pipeline',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+        memoryPending: true,
+        // Provenance recorded at freeze time (#2272) is what routes the
+        // catch-up append — the boot pass has no selected cone to consult.
+        cone: 'cone-beta',
+      },
+      { model: fakeModel!, apiKey: 'k' }
+    );
+
+    expect(updated).not.toBeNull();
+    expect(vfs.files.get('/cones/cone-beta/CLAUDE.md')).toContain('a fact beta learned');
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
   });
 
   it("a sibling archive's memory write is never misattributed (per-entry receipts)", async () => {

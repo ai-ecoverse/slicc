@@ -2,12 +2,20 @@ import DEFAULT_MEMORY_MD from '../../../vfs-root/shared/MEMORY.md?raw';
 import { createLogger } from '../base/logger.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import {
+  defaultChildVisibleRoots,
+  PRIMARY_WORKSPACE,
+  SKILLS_LIBRARY_DIR,
+  workspaceFor,
+} from '../work-unit/descriptor.js';
+import { PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
+import type { WorkUnitWorkspace } from '../work-unit/types.js';
+import {
   AGENT_NAME_IN_USE_PREFIX,
   type AgentBridge,
   type AgentSpawnOptions,
   type AgentSpawnResult,
 } from './agent-bridge.js';
-import { CONE_MEMORY_PATH, computeBudget } from './cone-memory-budget.js';
+import { computeBudget } from './cone-memory-budget.js';
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from './types.js';
 
 export { DEFAULT_MEMORY_MD };
@@ -19,17 +27,24 @@ export const DEFAULT_MEMORY_TIMEOUT_SECONDS = 600;
 export const MAX_MEMORY_TIMEOUT_SECONDS = 1200;
 
 /**
- * Exactly the memory file, not `/workspace/`. The curator is given `upskill` so
- * it can look up skills, and `upskill <owner>/<repo> --all` installs into
- * `/workspace/skills/`, which a `/workspace/` root would have permitted. A
- * single-file root grants the one write the curator actually needs and turns
- * any other write — an install, a stray backup — into a cone escalation.
+ * Exactly the memory file, not the cone's workspace root. The curator is given
+ * `upskill` so it can look up skills, and `upskill <owner>/<repo> --all`
+ * installs into `/workspace/skills/`, which a whole-workspace root would have
+ * permitted. A single-file root grants the one write the curator actually
+ * needs and turns any other write — an install, a stray backup — into a cone
+ * escalation.
  */
-const DEFAULT_WRITABLE_PATHS = [CONE_MEMORY_PATH];
-/** `/workspace/` is readable so the curator can still orient; only writes narrow. */
-const DEFAULT_VISIBLE_PATHS = ['/sessions/', '/shared/', '/workspace/'];
-/** Directory the curator starts in; `writablePaths` may be a bare file. */
-const CURATOR_CWD = '/workspace';
+function defaultWritablePaths(workspace: WorkUnitWorkspace): string[] {
+  return [workspace.memoryPath];
+}
+/**
+ * The cone's workspace is readable so the curator can still orient; only
+ * writes narrow. For an extra cone that is `/cones/<folder>/workspace/` plus
+ * the shared skills library, which lives outside it (#2271).
+ */
+function defaultVisiblePaths(workspace: WorkUnitWorkspace): string[] {
+  return ['/sessions/', '/shared/', ...defaultChildVisibleRoots(workspace)];
+}
 /**
  * Commands the curator may run without escalating. Non-cone scoops run under
  * `defaultDisposition: 'require-approval'`, so a command missing here does not
@@ -122,6 +137,13 @@ export interface RunAgenticMemoryPassOptions {
   vfs: Pick<LocalVfsClient, 'readFile'>;
   sessionArchivePath: string;
   sessionCount: number;
+  /**
+   * The cone whose chat was archived (#2271). The pass runs PER CONE: the
+   * curator reads `session-<folder>`'s archive and rewrites that cone's own
+   * `CLAUDE.md`, under that cone's workspace. Omitted means the primary cone,
+   * which is what every pre-#2271 caller meant.
+   */
+  cone?: CuratorConeRef;
   /** UTC date override for deterministic tests; defaults to today's date. */
   today?: string;
   signal?: AbortSignal;
@@ -134,6 +156,87 @@ export type AgenticMemoryPassResult =
    * `scoop-notify`; it is surfaced here too so callers can log it.
    */
   { ok: true; report: string } | { ok: false; reason: string; legacyFallbackSafe: boolean };
+
+/** The cone a curator pass runs for — its storage folder, and its jid when known. */
+export interface CuratorConeRef {
+  /** Storage folder of the root unit: `cone` (primary) or `cone-<slug>`. */
+  folder: string;
+  /**
+   * JID of that root, when the caller has it. Parents the curator scoop to the
+   * cone it curates, so its sudo escalations reach that cone's approval router
+   * and its model inheritance follows that cone rather than the oldest root.
+   */
+  jid?: string;
+}
+
+/**
+ * Agent name of the curator for `folder`. Per cone (#2271): the fixed name is
+ * what makes a second curator for the SAME memory file collide (see
+ * `AGENT_NAME_IN_USE_PREFIX` below), and two cones curating two different
+ * files must not block each other. The primary keeps the historical
+ * `memory-curator`, so its `/sessions/agent-memory-curator-*.md` transcripts
+ * keep their name.
+ */
+export function curatorAgentName(folder: string): string {
+  return folder === PRIMARY_CONE_FOLDER ? 'memory-curator' : `memory-curator-${folder}`;
+}
+
+/**
+ * The curator's private scratch folder. The agent bridge derives it from the
+ * agent name (`/scoops/agent-<name>`), so a per-cone name moves it too — and
+ * the prompt in `MEMORY.md` sends drafts there by path.
+ */
+export function curatorScratchDir(folder: string): string {
+  return `/scoops/agent-${curatorAgentName(folder)}`;
+}
+
+/** The primary cone's scratch folder — what a pre-#2271 `MEMORY.md` spells out. */
+const PRIMARY_CURATOR_SCRATCH = curatorScratchDir(PRIMARY_CONE_FOLDER);
+
+/** Workspace (root + memory file) of the cone a pass curates. */
+function curatorWorkspaceFor(cone: CuratorConeRef | undefined): WorkUnitWorkspace {
+  if (!cone || cone.folder === PRIMARY_CONE_FOLDER) return PRIMARY_WORKSPACE;
+  return workspaceFor({ parentJid: null, folder: cone.folder });
+}
+
+/**
+ * Rebase a primary-relative path from `MEMORY.md` onto `workspace`.
+ *
+ * The frontmatter is written against the primary cone (`/workspace/CLAUDE.md`,
+ * `/workspace/`) and is user-editable, so an extra cone's pass cannot simply
+ * take it verbatim — it would hand the curator the PRIMARY cone's memory file
+ * to rewrite. The same policy is instead applied to this cone's own files:
+ * the primary memory file becomes this cone's, and anything under
+ * `/workspace/` becomes the same path under this cone's root. The shared
+ * skills library is deliberately NOT rebased — it is one library for every
+ * cone ({@link SKILLS_LIBRARY_DIR}).
+ */
+function rebaseOntoCone(path: string, workspace: WorkUnitWorkspace): string {
+  if (workspace.root === PRIMARY_WORKSPACE.root) return path;
+  if (path === PRIMARY_WORKSPACE.memoryPath) return workspace.memoryPath;
+  if (path === SKILLS_LIBRARY_DIR || path.startsWith(`${SKILLS_LIBRARY_DIR}/`)) return path;
+  const primaryRoot = `${PRIMARY_WORKSPACE.root}/`;
+  if (path === PRIMARY_WORKSPACE.root) return workspace.root;
+  if (path.startsWith(primaryRoot)) return `${workspace.root}/${path.slice(primaryRoot.length)}`;
+  return path;
+}
+
+/**
+ * Rebase a configured path list, then re-add the shared skills library when
+ * rebasing moved the only entry that covered it — a curator that can see
+ * `/workspace/` on the primary can look skills up, and the same pass under an
+ * extra cone must keep that ability (its `upskill` reads are read-only; the
+ * single-file `writablePaths` still blocks installs).
+ */
+function rebaseVisiblePaths(paths: string[], workspace: WorkUnitWorkspace): string[] {
+  const rebased = paths.map((path) => rebaseOntoCone(path, workspace));
+  const covered = (list: string[]): boolean =>
+    list.some((entry) =>
+      `${SKILLS_LIBRARY_DIR}/`.startsWith(entry.endsWith('/') ? entry : `${entry}/`)
+    );
+  if (covered(paths) && !covered(rebased)) rebased.push(`${SKILLS_LIBRARY_DIR}/`);
+  return rebased;
+}
 
 type FrontmatterValue = string | string[];
 type WaitOutcome =
@@ -149,15 +252,27 @@ export async function runAgenticMemoryPass(
     if (opts.signal?.aborted) {
       return { ok: false, reason: 'aborted', legacyFallbackSafe: false };
     }
-    const config = await loadMemoryConfig(opts.vfs);
-    const prompt = substitutePlaceholders(config.promptTemplate, {
-      MEMORY_PATH: CONE_MEMORY_PATH,
-      SESSION_ARCHIVE_PATH: opts.sessionArchivePath,
-      SESSION_COUNT: String(opts.sessionCount),
-      BUDGET_CHARS: String(computeBudget(opts.sessionCount)),
-      TODAY: opts.today ?? new Date().toISOString().slice(0, 10),
-    });
-    const spawnOptions = buildSpawnOptions(config, prompt, opts.sessionArchivePath);
+    const workspace = curatorWorkspaceFor(opts.cone);
+    const scratchDir = curatorScratchDir(opts.cone?.folder ?? PRIMARY_CONE_FOLDER);
+    const config = await loadMemoryConfig(opts.vfs, workspace);
+    const prompt = rebaseScratchMentions(
+      substitutePlaceholders(config.promptTemplate, {
+        MEMORY_PATH: workspace.memoryPath,
+        SESSION_ARCHIVE_PATH: opts.sessionArchivePath,
+        SESSION_COUNT: String(opts.sessionCount),
+        BUDGET_CHARS: String(computeBudget(opts.sessionCount)),
+        SCRATCH_DIR: scratchDir,
+        TODAY: opts.today ?? new Date().toISOString().slice(0, 10),
+      }),
+      scratchDir
+    );
+    const spawnOptions = buildSpawnOptions(
+      config,
+      prompt,
+      opts.sessionArchivePath,
+      workspace,
+      opts.cone
+    );
     if (opts.signal) spawnOptions.signal = opts.signal;
     const spawnPromise = Promise.resolve().then(() => opts.spawn(spawnOptions));
     // The run carries a REAL wall-clock bound now (#1972) — the bounded
@@ -209,34 +324,40 @@ export async function runAgenticMemoryPass(
   }
 }
 
-async function loadMemoryConfig(vfs: Pick<LocalVfsClient, 'readFile'>): Promise<MemoryConfig> {
+async function loadMemoryConfig(
+  vfs: Pick<LocalVfsClient, 'readFile'>,
+  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE
+): Promise<MemoryConfig> {
   try {
     const raw = await vfs.readFile(MEMORY_INSTRUCTIONS_PATH, { encoding: 'utf-8' });
     const text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    return parseMemoryDocument(text);
+    return parseMemoryDocument(text, workspace);
   } catch (error) {
     log.warn('Could not load valid MEMORY.md; using built-in default', {
       error: errorText(error),
     });
-    return parseMemoryDocument(DEFAULT_MEMORY_MD);
+    return parseMemoryDocument(DEFAULT_MEMORY_MD, workspace);
   }
 }
 
-function parseMemoryDocument(content: string): MemoryConfig {
+export function parseMemoryDocument(
+  content: string,
+  workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE
+): MemoryConfig {
   const normalized = content.replace(/^\uFEFF/, '').replace(/\r\n?/g, '\n');
   const match = normalized.match(/^---\s*\n([\s\S]*?)\n---\s*\n([\s\S]*)$/);
   if (!match?.[2].trim()) throw new Error('MEMORY.md requires frontmatter and a prompt');
   const values = parseFrontmatter(match[1]);
-  const writablePaths = readArray(values, 'writablePaths', DEFAULT_WRITABLE_PATHS);
+  const writablePaths = readArray(values, 'writablePaths', defaultWritablePaths(workspace));
   if (writablePaths.length === 0) throw new Error('writablePaths must not be empty');
   validatePaths(writablePaths, 'writablePaths');
-  const visiblePaths = readArray(values, 'visiblePaths', DEFAULT_VISIBLE_PATHS);
+  const visiblePaths = readArray(values, 'visiblePaths', defaultVisiblePaths(workspace));
   validatePaths(visiblePaths, 'visiblePaths');
   const timeoutSeconds = readTimeout(values.timeoutSeconds);
   const model = readOptionalString(values.model, 'model');
   return {
-    writablePaths,
-    visiblePaths,
+    writablePaths: writablePaths.map((path) => rebaseOntoCone(path, workspace)),
+    visiblePaths: rebaseVisiblePaths(visiblePaths, workspace),
     allowedCommands: [
       ...new Set([...DEFAULT_ALLOWED_COMMANDS, ...readArray(values, 'allowedCommands', [])]),
     ],
@@ -394,11 +515,14 @@ export function curatorReceiptPath(sessionArchivePath: string): string {
 function buildSpawnOptions(
   config: MemoryConfig,
   prompt: string,
-  sessionArchivePath: string
+  sessionArchivePath: string,
+  workspace: WorkUnitWorkspace,
+  cone: CuratorConeRef | undefined
 ): AgentSpawnOptions {
   const inheritedModel = config.model === 'parent' || config.model === 'cone';
   return {
-    cwd: CURATOR_CWD,
+    // Directory the curator starts in; `writablePaths` may be a bare file.
+    cwd: workspace.root,
     writablePaths: config.writablePaths,
     visiblePaths: config.visiblePaths,
     allowedCommands: config.allowedCommands,
@@ -407,7 +531,10 @@ function buildSpawnOptions(
     // Durable transcript under a stable name — /sessions/agent-memory-curator-*.md
     // survives a new chat, so a curator run stays auditable for humans.
     persistSession: true,
-    name: 'memory-curator',
+    name: curatorAgentName(cone?.folder ?? PRIMARY_CONE_FOLDER),
+    // Parent the run to the cone it curates so escalations and model
+    // inheritance follow that cone, not the oldest root (#2271).
+    ...(cone?.jid ? { parentJid: cone.jid } : {}),
     // The pass is detached, so the caller's return value goes nowhere. Without
     // this the curator's report — including any skill it found — is discarded
     // and the cone never learns the pass happened at all.
@@ -419,6 +546,19 @@ function buildSpawnOptions(
     maxWallClockMs: config.timeoutSeconds * 1000,
     ...(!inheritedModel && config.model ? { modelId: config.model } : {}),
   };
+}
+
+/**
+ * Compat shim for a `MEMORY.md` that predates `{{SCRATCH_DIR}}` and spells the
+ * primary cone's scratch folder out (`/scoops/agent-memory-curator/`).
+ * `/shared/MEMORY.md` is seeded only when absent, so an existing profile keeps
+ * its literal text; under an extra cone that path is another agent's folder and
+ * every draft write there would escalate. The prompt — not the FS policy —
+ * is rewritten to name this run's own scratch.
+ */
+function rebaseScratchMentions(prompt: string, scratchDir: string): string {
+  if (scratchDir === PRIMARY_CURATOR_SCRATCH) return prompt;
+  return prompt.replaceAll(PRIMARY_CURATOR_SCRATCH, scratchDir);
 }
 
 function substitutePlaceholders(template: string, values: Record<string, string>): string {

@@ -49,14 +49,17 @@ describe('bundled MEMORY.md', () => {
       sessionArchivePath: '/sessions/frozen.md',
       sessionCount: 1,
     });
-    const { writablePaths = [], name } = spawn.mock.calls[0][0];
+    const { writablePaths = [], name, prompt } = spawn.mock.calls[0][0];
     expect(writablePaths).toEqual(['/workspace/CLAUDE.md']);
     const scratchFolder = `/scoops/agent-${name}`;
-    expect(DEFAULT_MEMORY_MD).toContain(`${scratchFolder}/draft.md`);
+    // The document names the scratch folder as `{{SCRATCH_DIR}}` — the folder
+    // follows the per-cone agent name (#2271) — so the assertion is against
+    // the substituted prompt the curator actually receives.
+    expect(prompt).toContain(`${scratchFolder}/draft.md`);
     // Shared `/tmp` is writable too, but a full rewrite of durable memory is
     // readable and clobberable by every other scoop there, so the prompt must
     // not send drafts to it.
-    expect(DEFAULT_MEMORY_MD).not.toContain('/tmp/memory-draft.md');
+    expect(prompt).not.toContain('/tmp/memory-draft.md');
 
     vfs = await VirtualFS.create({ dbName: `memory-scratch-${dbCounter++}`, wipe: true });
     await vfs.mkdir(scratchFolder, { recursive: true });

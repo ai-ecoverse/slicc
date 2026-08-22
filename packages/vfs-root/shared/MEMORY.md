@@ -101,7 +101,7 @@ Measure, decide, then write once. Do not converge on the budget by trial and err
 
 Per-section costs come out of `awk`, not an interpreter: `awk '/^## /{h=$0} {c[h]+=length($0)+1} END{for(k in c) printf "%7d  %s\n", c[k], k}' {{MEMORY_PATH}} | sort -rn` tells you which sections pay for the surplus.
 
-To draft before committing, draft in `/scoops/agent-memory-curator/`. That is your own scratch folder: writable without a grant and without an approval prompt, private to this pass, and deleted when the pass ends. Reuse one filename such as `/scoops/agent-memory-curator/draft.md` rather than numbering drafts — you have no `rm`, so every extra draft survives until the folder goes.
+To draft before committing, draft in `{{SCRATCH_DIR}}`. That is your own scratch folder: writable without a grant and without an approval prompt, private to this pass, and deleted when the pass ends. Reuse one filename such as `{{SCRATCH_DIR}}/draft.md` rather than numbering drafts — you have no `rm`, so every extra draft survives until the folder goes.
 
 If the pass is running long, drop the oldest-dated section wholesale and write. An under-budget file missing one stale section is a good outcome; an over-budget file is a broken one.
 
@@ -109,7 +109,7 @@ Rules:
 
 - Keep durable preferences, stable project facts, validated approaches, named resources, and the pitfalls worth not repeating.
 - Organize retained information into concise per-topic sections rather than one flat list. Let the topic lead the heading; preferences, projects and pitfalls are what to look for, not a required table of contents.
-- Never write next to the memory file. It is versioned, so backups and scratch copies beside it are noise; drafts belong in `/scoops/agent-memory-curator/`. Do not draft in `/tmp/` either: it is shared with every other scoop, which can read and overwrite what you leave there.
+- Never write next to the memory file. It is versioned, so backups and scratch copies beside it are noise; drafts belong in `{{SCRATCH_DIR}}`. Do not draft in `/tmp/` either: it is shared with every other scoop, which can read and overwrite what you leave there.
 - Shell tools only. Interpreters such as `python3` and `node -e` are not on your allow-list, so reaching for one costs an approval round-trip and may fail even when approved — `awk`, `sed`, `wc` and `sort` cover every measurement this pass needs.
 - End every `##` and `###` section heading with its last-verified date in `YYYY-MM-DD` form, for example `## Deployment pipeline (2026-08-06)`. Dates are UTC, matching the session archive timestamps, so a late-evening freeze west of UTC stamps the next day.
 - Stamp sections you write or confirm with today's date, {{TODAY}}.
@@ -124,7 +124,7 @@ Add curator instructions here, for example: also update the knowledge base at /p
 
 writablePaths defaults to the memory file alone rather than /workspace/, because the curator can run upskill and a directory-wide grant would also let it install skills into /workspace/skills. Widen it only as far as a task genuinely needs; a single file is a valid entry, not just a directory.
 
-Scratch space needs no entry here. The curator spawns under the fixed name memory-curator, so the bridge grants it /scoops/agent-memory-curator/ — private to the run, writable without a prompt, and removed when the pass ends — and that is where the prompt sends drafts. /tmp/ is writable too, but it is shared with every other scoop and visible to the cone, so a full rewrite of durable memory does not belong there.
+Scratch space needs no entry here. The curator spawns under a fixed per-cone name (memory-curator for the primary cone), so the bridge grants it {{SCRATCH_DIR}} — private to the run, writable without a prompt, and removed when the pass ends — and that is where the prompt sends drafts. /tmp/ is writable too, but it is shared with every other scoop and visible to the cone, so a full rewrite of durable memory does not belong there.
 
 thinkingLevel accepts off, minimal, low, medium, high, or xhigh. Curation is cheaper with reasoning than without: an unreasoned pass converges on the budget by trial and error, and because every turn re-reads the whole context, turn count is what the pass costs. Lower it to off only if you also shrink the prompt to a single mechanical instruction.
 

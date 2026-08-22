@@ -39,7 +39,7 @@ import {
 } from '../providers/account-store.js';
 // Legal down-edge (`scoops/` → `tools/`) for the JSON Schema shape.
 import type { JsonSchemaObject } from '../tools/types.js';
-import { defaultChildVisibleRoots, ownerWorkspaceFor } from '../work-unit/descriptor.js';
+import { defaultChildVisibleRoots, PRIMARY_WORKSPACE } from '../work-unit/descriptor.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { serializeAgentSessionArchive } from './agent-session-archive.js';
 import type { Orchestrator } from './orchestrator.js';
@@ -324,11 +324,17 @@ function resolveParentModelSelection(
  * owns the invoking unit (plus the shared skills library when it lives
  * elsewhere), so an agent spawned inside an extra cone — or by one of its
  * scoops — reads that cone's files instead of the primary's (#2271).
+ *
+ * The ownership walk is `WorkUnitManager.rootOf` — cycle-safe and the same
+ * walk the kernel and the completion router use — with the manager's own
+ * default-root fallback for a parent that is unknown (a top-level terminal
+ * invocation) or whose chain is dangling, so a child's `/scoops/<folder>`
+ * can never be handed out as a workspace.
  */
 function resolveOwnerVisibleRoots(orchestrator: Orchestrator, parentJid: string | null): string[] {
-  const scoops = orchestrator.getScoops();
-  const parent = parentJid === null ? undefined : scoops.find((s) => s.jid === parentJid);
-  return defaultChildVisibleRoots(ownerWorkspaceFor(scoops, parent));
+  const units = orchestrator.getWorkUnits();
+  const owner = (parentJid === null ? null : units.rootOf(parentJid)) ?? units.resolveDefaultRoot();
+  return defaultChildVisibleRoots(owner?.descriptor.workspace ?? PRIMARY_WORKSPACE);
 }
 
 /**
