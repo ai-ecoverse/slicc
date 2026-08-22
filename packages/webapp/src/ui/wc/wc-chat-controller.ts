@@ -23,6 +23,7 @@ import {
   aggregateClusterProgress,
   applyClusterProgress,
   applyToolProgress,
+  type ClusterCallState,
   collateLickMessages,
   daySeparatorEl,
   isAuthExpiredError,
@@ -282,6 +283,16 @@ export class WcChatController {
    */
   readonly #toolProgress = new Map<string, ToolProgressEvent>();
 
+  /**
+   * Row keys for tool calls THIS session started (via `tool_use_start`), kept
+   * until the thread is reset. Liveness cannot be read off the rendered
+   * `result` badge: a transcript restored after an aborted turn contains
+   * result-less calls whose badge is a permanent `…`, and treating those as
+   * running would pin a stale 0% indicator on a historical cluster. Entries
+   * survive completion so a finished call still counts toward the batch total.
+   */
+  readonly #sessionToolCalls = new Set<string>();
+
   constructor(options: WcChatControllerOptions) {
     this.#thread = options.thread;
     this.#agent = options.agent;
@@ -311,6 +322,7 @@ export class WcChatController {
     this.#thread.removeEventListener('slicc-error-retry', this.#onErrorRetry);
     for (const id of [...this.#toolUiDips.keys()]) this.#disposeToolUiDip(id);
     this.#toolProgress.clear();
+    this.#sessionToolCalls.clear();
     this.#publishToolProgress();
   }
 
@@ -446,6 +458,7 @@ export class WcChatController {
     // the worker-side request is canceled when its scoop unloads.
     for (const id of [...this.#toolUiDips.keys()]) this.#disposeToolUiDip(id);
     this.#toolProgress.clear();
+    this.#sessionToolCalls.clear();
     this.#publishToolProgress();
     // The queued stack is live-only — a scoop switch / session reload starts
     // with an empty pile rather than carrying the previous scoop's queue.
@@ -822,10 +835,21 @@ export class WcChatController {
         this.#handleContentDone(event.messageId, event.model, event.usage);
         break;
       case 'tool_use_start':
-        this.#handleToolUseStart(event.messageId, event.toolName, event.toolInput);
+        this.#handleToolUseStart(
+          event.messageId,
+          event.toolName,
+          event.toolInput,
+          event.toolCallId
+        );
         break;
       case 'tool_result':
-        this.#handleToolResult(event.messageId, event.toolName, event.result, event.isError);
+        this.#handleToolResult(
+          event.messageId,
+          event.toolName,
+          event.result,
+          event.isError,
+          event.toolCallId
+        );
         break;
       case 'tool_ui':
         this.#handleToolUI(event.messageId, event.requestId, event.html);
@@ -834,7 +858,7 @@ export class WcChatController {
         this.#handleToolUIDone(event.requestId);
         break;
       case 'tool_progress':
-        this.#handleToolProgress(event.messageId, event.toolName, event.progress);
+        this.#handleToolProgress(event.messageId, event.toolName, event.progress, event.toolCallId);
         break;
       case 'turn_end':
         this.#handleTurnEnd(event.messageId);
@@ -914,11 +938,30 @@ export class WcChatController {
     this.#rerenderMessage(message);
   }
 
-  #handleToolUseStart(messageId: string, toolName: string, toolInput: unknown): void {
+  /**
+   * Row key for a call. The provider id is scoped by message because it is
+   * only unique per assistant message — a provider that reuses an id in a
+   * later message would otherwise produce duplicate `data-tool-id`s, and the
+   * thread-wide row lookup would paint the first (historical) match.
+   */
+  static #rowKey(messageId: string, toolCallId: string): string {
+    return `${messageId}:${toolCallId}`;
+  }
+
+  #handleToolUseStart(
+    messageId: string,
+    toolName: string,
+    toolInput: unknown,
+    toolCallId?: string
+  ): void {
     const message = this.#findMessage(messageId);
     if (!message) return;
     message.toolCalls = message.toolCalls ?? [];
-    message.toolCalls.push({ id: uid(), name: toolName, input: toolInput });
+    // Adopt the provider's tool-call id (message-scoped) so results and
+    // progress pair by identity; `uid()` only for pre-id senders.
+    const id = toolCallId ? WcChatController.#rowKey(messageId, toolCallId) : uid();
+    this.#sessionToolCalls.add(id);
+    message.toolCalls.push({ id, name: toolName, input: toolInput });
     // A tool is now in flight — flip the busy phase to `tool` so the send
     // button stops the LLM-wait fill treatment and spins instead.
     this.#activeToolCount += 1;
@@ -926,11 +969,35 @@ export class WcChatController {
     this.#rerenderMessage(message);
   }
 
-  #handleToolResult(messageId: string, toolName: string, result: string, isError?: boolean): void {
+  /**
+   * Find the tool call an event belongs to. A message's tool calls execute
+   * concurrently (`Promise.all` in the agent loop), so several same-named
+   * calls can be in flight at once and "last unfinished call with this name"
+   * attaches events to the wrong row — visibly crossing `bash` outputs.
+   * Match on the provider id when present; keep the name scan for pre-id
+   * senders, where the ambiguity is unavoidable.
+   */
+  #findToolCall(message: ChatMessage | undefined, toolName: string, toolCallId?: string) {
+    const calls = message?.toolCalls ?? [];
+    if (toolCallId) {
+      // Rows started this session carry the message-scoped key; a transcript
+      // restored from an older build stored the bare provider id, so accept
+      // both before giving up.
+      const scoped = message ? WcChatController.#rowKey(message.id, toolCallId) : undefined;
+      return calls.find((t) => t.id === scoped) ?? calls.find((t) => t.id === toolCallId);
+    }
+    return [...calls].reverse().find((t) => t.name === toolName && t.result === undefined);
+  }
+
+  #handleToolResult(
+    messageId: string,
+    toolName: string,
+    result: string,
+    isError?: boolean,
+    toolCallId?: string
+  ): void {
     const message = this.#findMessage(messageId);
-    const call = [...(message?.toolCalls ?? [])]
-      .reverse()
-      .find((t) => t.name === toolName && t.result === undefined);
+    const call = this.#findToolCall(message, toolName, toolCallId);
     if (!message || !call) return;
     call.result = result;
     call.isError = isError;
@@ -1051,11 +1118,14 @@ export class WcChatController {
    * (same lookup `#handleToolResult` uses) and patches the row in place —
    * no message rerender, since ticks arrive up to 4×/s per unit.
    */
-  #handleToolProgress(messageId: string, toolName: string, progress: ToolProgressEvent): void {
+  #handleToolProgress(
+    messageId: string,
+    toolName: string,
+    progress: ToolProgressEvent,
+    toolCallId?: string
+  ): void {
     const message = this.#findMessage(messageId);
-    const call = [...(message?.toolCalls ?? [])]
-      .reverse()
-      .find((t) => t.name === toolName && t.result === undefined);
+    const call = this.#findToolCall(message, toolName, toolCallId);
     if (!call?.id) return;
     if (progress.phase === 'end') this.#toolProgress.delete(call.id);
     else this.#toolProgress.set(call.id, progress);
@@ -1082,10 +1152,24 @@ export class WcChatController {
   #refreshClusterProgress(): void {
     const clusters = this.#thread.querySelectorAll<HTMLElement>('slicc-tool-cluster');
     for (const cluster of clusters) {
-      const units = [...cluster.querySelectorAll<HTMLElement>('slicc-action-row[data-tool-id]')]
-        .map((r) => (r.dataset.toolId ? this.#toolProgress.get(r.dataset.toolId) : undefined))
-        .filter((u): u is ToolProgressEvent => u !== undefined);
-      applyClusterProgress(cluster, aggregateClusterProgress(units));
+      // Read each wrapped call's state off its row: the `result` badge is the
+      // rendered truth for "finished" (`…` while in flight), and the live
+      // fraction comes from the per-call progress unit.
+      const calls: ClusterCallState[] = [
+        ...cluster.querySelectorAll<HTMLElement>('slicc-action-row[data-tool-id]'),
+      ]
+        // Only calls this session actually started. Restored history is not
+        // "running" however its badge reads (see `#sessionToolCalls`).
+        .filter((row) => row.dataset.toolId && this.#sessionToolCalls.has(row.dataset.toolId))
+        .map((row) => {
+          const id = row.dataset.toolId as string;
+          const badge = row.getAttribute('result');
+          return {
+            done: badge !== null && badge !== '…',
+            fraction: this.#toolProgress.get(id)?.fraction,
+          };
+        });
+      applyClusterProgress(cluster, aggregateClusterProgress(calls));
     }
   }
 

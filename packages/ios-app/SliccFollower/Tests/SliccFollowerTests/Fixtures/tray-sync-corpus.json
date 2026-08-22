@@ -1024,12 +1024,14 @@
       "dropped": [
         "messageId",
         "progress",
+        "toolCallId",
         "toolName"
       ],
       "event": {
         "type": "tool_progress",
         "messageId": "m2",
         "toolName": "bash",
+        "toolCallId": "call-1",
         "progress": {
           "id": "sleep-1",
           "label": "sleep 30",
@@ -1052,13 +1054,16 @@
         "toolName",
         "type"
       ],
-      "dropped": [],
+      "dropped": [
+        "toolCallId"
+      ],
       "event": {
         "type": "tool_result",
         "messageId": "m2",
         "toolName": "read_file",
         "result": "file contents",
-        "isError": false
+        "isError": false,
+        "toolCallId": "call-1"
       }
     },
     {
@@ -1104,14 +1109,17 @@
         "toolName",
         "type"
       ],
-      "dropped": [],
+      "dropped": [
+        "toolCallId"
+      ],
       "event": {
         "type": "tool_use_start",
         "messageId": "m2",
         "toolName": "read_file",
         "toolInput": {
           "path": "/workspace/notes.md"
-        }
+        },
+        "toolCallId": "call-1"
       }
     },
     {

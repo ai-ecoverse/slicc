@@ -88,11 +88,38 @@ export type AgentEvent =
       model?: string;
       usage?: ChatMessageUsage;
     }
-  | { type: 'tool_use_start'; messageId: string; toolName: string; toolInput: unknown }
-  | { type: 'tool_result'; messageId: string; toolName: string; result: string; isError?: boolean }
+  | {
+      type: 'tool_use_start';
+      messageId: string;
+      toolName: string;
+      toolInput: unknown;
+      /**
+       * Provider tool-call id. Optional only for back-compat with followers
+       * built before it existed; without it the UI must fall back to matching
+       * results by tool NAME, which mispairs concurrent same-named calls
+       * (the agent loop runs a message's tool calls with `Promise.all`).
+       */
+      toolCallId?: string;
+    }
+  | {
+      type: 'tool_result';
+      messageId: string;
+      toolName: string;
+      result: string;
+      isError?: boolean;
+      /** Provider tool-call id; see `tool_use_start`. */
+      toolCallId?: string;
+    }
   | { type: 'tool_ui'; messageId: string; toolName: string; requestId: string; html: string }
   | { type: 'tool_ui_done'; messageId: string; requestId: string }
-  | { type: 'tool_progress'; messageId: string; toolName: string; progress: ToolProgressEvent }
+  | {
+      type: 'tool_progress';
+      messageId: string;
+      toolName: string;
+      progress: ToolProgressEvent;
+      /** Provider tool-call id; see `tool_use_start`. */
+      toolCallId?: string;
+    }
   | { type: 'turn_end'; messageId: string }
   | { type: 'error'; error: string }
   | { type: 'screenshot'; base64: string; url?: string }

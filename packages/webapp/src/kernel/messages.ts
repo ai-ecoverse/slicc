@@ -842,6 +842,8 @@ export interface AgentEventMsg {
   text?: string;
   /** `tool_progress` payload. */
   progress?: ToolProgressEvent;
+  /** Provider tool-call id for `tool_start` / `tool_end` / `tool_progress`. */
+  toolCallId?: string;
   toolName?: string;
   toolInput?: unknown;
   toolResult?: string;

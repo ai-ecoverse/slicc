@@ -110,15 +110,31 @@ export interface OrchestratorCallbacks {
   /** Get the BrowserAPI used by browser automation commands */
   getBrowserAPI: () => BrowserAPI;
   /** Called when a tool starts executing */
-  onToolStart?: (scoopJid: string, toolName: string, toolInput: unknown) => void;
+  onToolStart?: (
+    scoopJid: string,
+    toolName: string,
+    toolInput: unknown,
+    toolCallId?: string
+  ) => void;
   /** Called when a tool finishes executing */
-  onToolEnd?: (scoopJid: string, toolName: string, result: string, isError: boolean) => void;
+  onToolEnd?: (
+    scoopJid: string,
+    toolName: string,
+    result: string,
+    isError: boolean,
+    toolCallId?: string
+  ) => void;
   /** Called when a tool requests UI interaction */
   onToolUI?: (scoopJid: string, toolName: string, requestId: string, html: string) => void;
   /** Called when tool UI interaction is complete */
   onToolUIDone?: (scoopJid: string, requestId: string) => void;
   /** Called for each bash progress tick inside a tool call */
-  onToolProgress?: (scoopJid: string, toolName: string, progress: ToolProgressEvent) => void;
+  onToolProgress?: (
+    scoopJid: string,
+    toolName: string,
+    progress: ToolProgressEvent,
+    toolCallId?: string
+  ) => void;
   /** Called when a message is routed to a scoop (delegation, lick, etc.) */
   onIncomingMessage?: (scoopJid: string, message: ChannelMessage) => void;
   /**

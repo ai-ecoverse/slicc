@@ -69,11 +69,22 @@ export interface ScoopLifecycleCallbacks {
   ): void;
   onError(scoopJid: string, error: string): void;
   getBrowserAPI(): ReturnType<ScoopContextCallbacks['getBrowserAPI']>;
-  onToolStart?(scoopJid: string, toolName: string, toolInput: unknown): void;
-  onToolEnd?(scoopJid: string, toolName: string, result: string, isError: boolean): void;
+  onToolStart?(scoopJid: string, toolName: string, toolInput: unknown, toolCallId?: string): void;
+  onToolEnd?(
+    scoopJid: string,
+    toolName: string,
+    result: string,
+    isError: boolean,
+    toolCallId?: string
+  ): void;
   onToolUI?(scoopJid: string, toolName: string, requestId: string, html: string): void;
   onToolUIDone?(scoopJid: string, requestId: string): void;
-  onToolProgress?(scoopJid: string, toolName: string, progress: ToolProgressEvent): void;
+  onToolProgress?(
+    scoopJid: string,
+    toolName: string,
+    progress: ToolProgressEvent,
+    toolCallId?: string
+  ): void;
   onIncomingMessage?(scoopJid: string, message: ChannelMessage): void;
   onScoopUnregistered?(scoop: RegisteredScoop): void;
 }
@@ -805,11 +816,11 @@ export class ScoopLifecycleManager {
       onCompactionStateChange: (state) => {
         callbacks.onCompactionStateChange?.(jid, state);
       },
-      onToolStart: (toolName, toolInput) => {
-        callbacks.onToolStart?.(jid, toolName, toolInput);
+      onToolStart: (toolName, toolInput, toolCallId) => {
+        callbacks.onToolStart?.(jid, toolName, toolInput, toolCallId);
       },
-      onToolEnd: (toolName, result, isError) => {
-        callbacks.onToolEnd?.(jid, toolName, result, isError);
+      onToolEnd: (toolName, result, isError, toolCallId) => {
+        callbacks.onToolEnd?.(jid, toolName, result, isError, toolCallId);
       },
       onToolUI: (toolName, requestId, html) => {
         callbacks.onToolUI?.(jid, toolName, requestId, html);
@@ -817,8 +828,8 @@ export class ScoopLifecycleManager {
       onToolUIDone: (requestId) => {
         callbacks.onToolUIDone?.(jid, requestId);
       },
-      onToolProgress: (toolName, progress) => {
-        callbacks.onToolProgress?.(jid, toolName, progress);
+      onToolProgress: (toolName, progress, toolCallId) => {
+        callbacks.onToolProgress?.(jid, toolName, progress, toolCallId);
       },
       onSendMessage: (text, sender) => {
         const prefixed = `${sender ? `[${sender}] ` : ''}${text}`;

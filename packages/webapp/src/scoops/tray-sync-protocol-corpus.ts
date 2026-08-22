@@ -830,12 +830,17 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
       messageId: 'mirrored',
       toolName: 'mirrored',
       toolInput: 'mirrored',
+      // New field; `SyncProtocol.swift` has no property for it yet, so a
+      // follower still pairs results by tool NAME and can mispair concurrent
+      // same-named calls. Inventoried here rather than left silent.
+      toolCallId: 'dropped',
     },
     event: {
       type: 'tool_use_start',
       messageId: 'm2',
       toolName: 'read_file',
       toolInput: { path: '/workspace/notes.md' },
+      toolCallId: 'call-1',
     },
   },
   tool_result: {
@@ -846,6 +851,8 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
       toolName: 'mirrored',
       result: 'mirrored',
       isError: 'mirrored',
+      /** See `tool_use_start.toolCallId`. */
+      toolCallId: 'dropped',
     },
     event: {
       type: 'tool_result',
@@ -853,6 +860,7 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
       toolName: 'read_file',
       result: 'file contents',
       isError: false,
+      toolCallId: 'call-1',
     },
   },
   // Tool-UI cards render as interactive HTML on the leader. A follower has no
@@ -885,11 +893,18 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
   // inventoried rather than silent.
   tool_progress: {
     ios: 'unknown',
-    fields: { type: 'mirrored', messageId: 'dropped', toolName: 'dropped', progress: 'dropped' },
+    fields: {
+      type: 'mirrored',
+      messageId: 'dropped',
+      toolName: 'dropped',
+      progress: 'dropped',
+      toolCallId: 'dropped',
+    },
     event: {
       type: 'tool_progress',
       messageId: 'm2',
       toolName: 'bash',
+      toolCallId: 'call-1',
       progress: {
         id: 'sleep-1',
         label: 'sleep 30',
