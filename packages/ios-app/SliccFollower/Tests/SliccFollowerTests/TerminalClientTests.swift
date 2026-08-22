@@ -289,6 +289,24 @@ final class TerminalClientTests: XCTestCase {
         XCTAssertEqual(wire.responses.first?.error, "exec is not supported on this follower")
     }
 
+    func testTerminalErrorsExposeLocalizedDescriptions() {
+        XCTAssertEqual(
+            TerminalClient.TerminalError.alreadyRunning.errorDescription,
+            "A terminal command is already running")
+        XCTAssertEqual(
+            TerminalClient.TerminalError.cancelled.errorDescription,
+            "The terminal command was cancelled")
+        XCTAssertEqual(
+            TerminalClient.TerminalError.disconnected.errorDescription,
+            "Disconnected from the leader")
+        XCTAssertEqual(
+            TerminalClient.TerminalError.malformedChunk.errorDescription,
+            "The leader sent malformed terminal output")
+        XCTAssertEqual(
+            TerminalClient.TerminalError.timedOut.errorDescription,
+            "Timed out waiting for the terminal command")
+    }
+
     func testMalformedOutputFailsTheMatchingRun() async {
         let wire = Wire()
         let client = makeClient(wire: wire)
