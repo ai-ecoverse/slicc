@@ -43,27 +43,33 @@ func toolProgressCaption(_ unit: ToolProgressEvent) -> String {
     return parts.joined(separator: " · ")
 }
 
-/// Byte counter for a `unit: "bytes"` tick, matching the web's `formatBytes`.
+/// Byte counter for a `unit: "bytes"` tick — SI units, one decimal below 10,
+/// byte-for-byte the web's `formatBytes` (which is SI, not binary: 45.7 MB,
+/// not 43.6 MiB-as-MB).
 func formatProgressBytes(_ bytes: Double) -> String {
-    let units = ["B", "KB", "MB", "GB", "TB"]
-    var value = bytes
+    guard bytes.isFinite, bytes >= 0 else { return "" }
+    if bytes < 1000 { return "\(Int(bytes.rounded())) B" }
+    let units = ["kB", "MB", "GB", "TB"]
+    var value = bytes / 1000
     var index = 0
-    while value >= 1024, index < units.count - 1 {
-        value /= 1024
+    while value >= 1000, index < units.count - 1 {
+        value /= 1000
         index += 1
     }
-    return value < 10 && index > 0
+    return value < 10
         ? String(format: "%.1f %@", value, units[index])
         : "\(Int(value.rounded())) \(units[index])"
 }
 
-/// Coarse remaining-time string ("8s", "2m"), matching the web's `formatEta`.
+/// Remaining-time string ("8s", "1m59s", "2h05m"), byte-for-byte the web's
+/// `formatEta`. The remainder is kept: dropping it turned 119s into "1m",
+/// which understates the wait by half.
 func formatProgressEta(_ milliseconds: Double) -> String {
-    let seconds = Int((milliseconds / 1000).rounded())
-    if seconds < 60 { return "\(max(1, seconds))s" }
+    let seconds = max(0, Int((milliseconds / 1000).rounded()))
+    if seconds < 60 { return "\(seconds)s" }
     let minutes = seconds / 60
-    if minutes < 60 { return "\(minutes)m" }
-    return "\(minutes / 60)h"
+    if minutes < 60 { return String(format: "%dm%02ds", minutes, seconds % 60) }
+    return String(format: "%dh%02dm", minutes / 60, minutes % 60)
 }
 
 /// Fold a cluster's calls into ONE determinate unit — "how far through this

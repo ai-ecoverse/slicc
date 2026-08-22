@@ -45,24 +45,31 @@ final class ToolProgressChromeTests: XCTestCase {
     /// count stands in for it.
     func testCaptionFallsBackToBytesWhenIndeterminate() {
         XCTAssertEqual(
-            toolProgressCaption(unit(done: 45_678_901, measure: "bytes")), "44 MB")
+            toolProgressCaption(unit(done: 45_678_901, measure: "bytes")), "46 MB")
     }
 
     func testCaptionIsEmptyForABareIndeterminateUnit() {
         XCTAssertEqual(toolProgressCaption(unit()), "")
     }
 
-    func testEtaFormatsBySize() {
+    /// The remainder is the point: "1m" for 119s halves the reported wait.
+    func testEtaKeepsTheRemainderLikeTheWebFormatter() {
         XCTAssertEqual(formatProgressEta(8_000), "8s")
-        XCTAssertEqual(formatProgressEta(400), "1s")
-        XCTAssertEqual(formatProgressEta(150_000), "2m")
-        XCTAssertEqual(formatProgressEta(7_200_000), "2h")
+        XCTAssertEqual(formatProgressEta(400), "0s")
+        XCTAssertEqual(formatProgressEta(119_000), "1m59s")
+        XCTAssertEqual(formatProgressEta(150_000), "2m30s")
+        XCTAssertEqual(formatProgressEta(3_600_000), "1h00m")
+        XCTAssertEqual(formatProgressEta(7_140_000), "1h59m")
     }
 
+    /// SI, like the web — a `kB` is 1000 bytes, not 1024.
     func testBytesFormatMatchesTheWebScale() {
         XCTAssertEqual(formatProgressBytes(512), "512 B")
-        XCTAssertEqual(formatProgressBytes(2_048), "2.0 KB")
-        XCTAssertEqual(formatProgressBytes(20_480), "20 KB")
+        XCTAssertEqual(formatProgressBytes(2_048), "2.0 kB")
+        XCTAssertEqual(formatProgressBytes(20_480), "20 kB")
+        XCTAssertEqual(formatProgressBytes(5_678_901), "5.7 MB")
+        XCTAssertEqual(formatProgressBytes(45_678_901), "46 MB")
+        XCTAssertEqual(formatProgressBytes(-1), "")
     }
 
     // MARK: - Cluster aggregate

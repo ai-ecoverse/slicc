@@ -80,7 +80,6 @@ class AppState: ObservableObject {
         didSet {
             guard oldValue != isStreaming else { return }
             runningToolCalls = 0
-            toolProgress.removeAll()
             awaitingUserSince = isStreaming ? nil : Date()
         }
     }
@@ -135,9 +134,12 @@ class AppState: ObservableObject {
     var messagesByScoop: [String: [ChatMessage]] = [:]
     /// Live tool-call progress units, keyed by the tool row's id (see
     /// `AppState.toolRowId`). Only in-flight calls appear here — a `tool_result`
-    /// or a `phase == .end` tick removes the entry, and the whole map clears at
-    /// every turn edge and session reset, so a stale bar can never outlive the
-    /// run that painted it. Read by the transcript through `MessageListView`.
+    /// or a `phase == .end` tick removes the entry, the turn that owns a row
+    /// clears it when it ends, a snapshot drops whatever it replaced, and a
+    /// session reset clears the lot, so a stale bar can never outlive the run
+    /// that painted it. The map spans scoops (row ids are message-scoped, so
+    /// they cannot collide), which is what lets a background scoop keep its
+    /// bars while you read another one. Read through `MessageListView`.
     @Published var toolProgress: [String: ToolProgressEvent] = [:]
 
     // Sprinkle awareness
@@ -1176,6 +1178,7 @@ class AppState: ObservableObject {
             VoiceReply.shared.reset()
             DictationPriming.reset()
         }
+        pruneToolProgress(replacing: messagesByScoop[scoopJid] ?? [], with: chatMessages)
         messagesByScoop[scoopJid] = chatMessages
         // A snapshot is the leader re-describing the world. Any approval
         // placeholder we are still holding predates it and can no longer be
@@ -1277,6 +1280,7 @@ class AppState: ObservableObject {
             logger.info("Agent event: turn_end id=\(messageId)")
             if let idx = buffer.firstIndex(where: { $0.id == messageId }) {
                 buffer[idx].isStreaming = false
+                clearToolProgress(for: buffer[idx])
                 messagesByScoop[scoopJid] = buffer
                 if isVisible {
                     cancelPendingMessagesFlush()
@@ -1293,6 +1297,7 @@ class AppState: ObservableObject {
             logger.error("Agent event: error — \(error)")
             if let idx = buffer.lastIndex(where: { $0.isStreaming == true }) {
                 buffer[idx].isStreaming = false
+                clearToolProgress(for: buffer[idx])
                 messagesByScoop[scoopJid] = buffer
                 if isVisible {
                     cancelPendingMessagesFlush()

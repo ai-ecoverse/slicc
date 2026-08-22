@@ -91,6 +91,29 @@ extension AppState {
         }
     }
 
+    /// Drop the units belonging to one message's rows. Called when that turn
+    /// ends (or dies), which is per-message and therefore per-scoop: clearing
+    /// on the `isStreaming` edge instead would wipe a background scoop's bars
+    /// the moment you switched to another one, since `selectScoop` moves that
+    /// flag too.
+    func clearToolProgress(for message: ChatMessage) {
+        guard !toolProgress.isEmpty else { return }
+        for call in message.toolCalls ?? [] { toolProgress[call.id] = nil }
+    }
+
+    /// A snapshot is the leader re-describing a scoop's transcript. Rows it
+    /// dropped can never be rendered again, so their units would sit in the map
+    /// forever; rows it kept stay live (the leader mints the same
+    /// `<messageId>:<toolCallId>` row ids the follower does), so a run that
+    /// spans a reconnect keeps its bar.
+    func pruneToolProgress(replacing old: [ChatMessage], with new: [ChatMessage]) {
+        guard !toolProgress.isEmpty else { return }
+        let surviving = Set(new.flatMap { $0.toolCalls ?? [] }.map(\.id))
+        for call in old.flatMap({ $0.toolCalls ?? [] }) where !surviving.contains(call.id) {
+            toolProgress[call.id] = nil
+        }
+    }
+
     /// Commit a mutated scoop buffer, mirroring it onto the visible transcript.
     private func publish(buffer: [ChatMessage], scoopJid: String, isVisible: Bool) {
         messagesByScoop[scoopJid] = buffer

@@ -134,8 +134,9 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertTrue(state.toolProgress.isEmpty)
     }
 
-    /// `phase: end` clears the unit on its own, and a turn edge clears whatever
-    /// is left — a bar must never outlive the run that painted it.
+    /// `phase: end` clears the unit on its own, and the turn that owns the row
+    /// clears whatever is left — a bar must never outlive the run that painted
+    /// it.
     @MainActor
     func testToolProgressEndPhaseAndTurnEndClearUnits() throws {
         let state = AppState()
@@ -171,6 +172,75 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertFalse(state.toolProgress.isEmpty)
         try send(.turnEnd(messageId: "reply"), scoopJid: "cone", to: state)
         XCTAssertTrue(state.toolProgress.isEmpty)
+    }
+
+    /// `selectScoop` moves `isStreaming`, so clearing progress on that edge
+    /// wiped the bars of every OTHER scoop that was still running. A background
+    /// run keeps its units until its own turn ends.
+    @MainActor
+    func testSwitchingScoopsKeepsBackgroundProgress() throws {
+        let state = AppState()
+        state.scoops = [
+            ScoopSummary(
+                jid: "cone", name: "cone", folder: "/workspace", isCone: true,
+                assistantLabel: "sliccy", trigger: nil, state: nil, fill: nil),
+            ScoopSummary(
+                jid: "other", name: "other", folder: "/scoops/other", isCone: false,
+                assistantLabel: "other", trigger: nil, state: nil, fill: nil),
+        ]
+        state.selectedScoopJid = "cone"
+
+        try send(.messageStart(messageId: "bg"), scoopJid: "other", to: state)
+        try send(
+            .toolUseStart(
+                messageId: "bg", toolName: "bash", toolInput: nil, toolCallId: "call-1"),
+            scoopJid: "other", to: state)
+        try send(
+            .toolProgress(
+                messageId: "bg", toolName: "bash",
+                progress: ToolProgressEvent(id: "u1", label: "sleep 300", phase: .update),
+                toolCallId: "call-1"),
+            scoopJid: "other", to: state)
+        XCTAssertNotNil(state.toolProgress["bg:call-1"])
+
+        state.selectScoop(jid: "other")
+        state.selectScoop(jid: "cone")
+
+        XCTAssertNotNil(
+            state.toolProgress["bg:call-1"],
+            "a background scoop's bar must survive a scoop switch")
+
+        // Its own turn ending is what clears it.
+        try send(.turnEnd(messageId: "bg"), scoopJid: "other", to: state)
+        XCTAssertNil(state.toolProgress["bg:call-1"])
+    }
+
+    /// A snapshot that drops a row drops its unit with it; a snapshot that
+    /// keeps the row keeps the bar, so a run spanning a reconnect is unbroken.
+    @MainActor
+    func testSnapshotPrunesUnitsForRowsItRemoved() throws {
+        let state = AppState()
+        state.selectedScoopJid = "cone"
+        try send(.messageStart(messageId: "reply"), scoopJid: "cone", to: state)
+        try send(
+            .toolUseStart(
+                messageId: "reply", toolName: "bash", toolInput: nil, toolCallId: "call-1"),
+            scoopJid: "cone", to: state)
+        try send(
+            .toolProgress(
+                messageId: "reply", toolName: "bash",
+                progress: ToolProgressEvent(id: "u1", label: "sleep 30", phase: .update),
+                toolCallId: "call-1"),
+            scoopJid: "cone", to: state)
+
+        let kept = ChatMessage(
+            id: "reply", role: .assistant, content: "", timestamp: 0,
+            toolCalls: [ToolCall(id: "reply:call-1", name: "bash", input: nil)])
+        state.pruneToolProgress(replacing: state.messages, with: [kept])
+        XCTAssertNotNil(state.toolProgress["reply:call-1"])
+
+        state.pruneToolProgress(replacing: [kept], with: [])
+        XCTAssertNil(state.toolProgress["reply:call-1"])
     }
 
     /// A tick for a call the transcript has never seen is dropped rather than
