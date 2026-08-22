@@ -28,6 +28,7 @@ import {
   TRAY_WORKER_STORAGE_KEY,
 } from '../../scoops/tray-runtime-config.js';
 import type {
+  ScoopSummary,
   TrayModelCatalogEntry,
   TrayModelSelectionState,
 } from '../../scoops/tray-sync-protocol.js';
@@ -248,6 +249,17 @@ export function buildFollowerOptions(
 ): Parameters<typeof startPageFollowerTray>[0] {
   const { browser, client, getController } = deps;
   let selectedScoopJid: string | null = null;
+  /**
+   * Last roster the leader sent. `toFollowerSwitcherScoops` orders the SELECTED
+   * cone's scoops ahead of the rest, so a local selection has to re-publish the
+   * descriptors — this leader-capable float is the third follower wiring path
+   * (with `wc-follower.ts` and the leader's own `wc-live.ts`) and needs the same
+   * behaviour (#2272).
+   */
+  let followerScoops: readonly ScoopSummary[] = [];
+  const publishFollowerScoops = (): void => {
+    deps.refs.switcher.scoops = toFollowerSwitcherScoops(followerScoops, selectedScoopJid);
+  };
   const modelSurface = createFollowerModelSurface({
     composerMeta: deps.refs.composerMeta,
     getSync,
@@ -272,6 +284,7 @@ export function buildFollowerOptions(
       const scoopJid = (event as CustomEvent<{ key?: string }>).detail?.key;
       if (!scoopJid) return;
       selectedScoopJid = scoopJid;
+      publishFollowerScoops(); // re-order for the new selection, as the leader does
       deps.refs.switcher.setAttribute('active', scoopJid);
       sync.selectScoop(scoopJid);
     },
@@ -308,7 +321,8 @@ export function buildFollowerOptions(
       if (!selectedScoopJid || !scoops.some((scoop) => scoop.jid === selectedScoopJid)) {
         selectedScoopJid = activeScoopJid;
       }
-      deps.refs.switcher.scoops = toFollowerSwitcherScoops(scoops);
+      followerScoops = scoops;
+      publishFollowerScoops();
       deps.refs.switcher.setAttribute('active', selectedScoopJid);
     },
     // #1915: this float has a mounted permissions surface (it can lead), so
