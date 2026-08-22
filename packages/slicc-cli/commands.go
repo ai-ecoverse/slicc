@@ -193,14 +193,16 @@ func cmdWatch(ctx context.Context, joinURL, scoopJid string, plain bool) int {
 	r.console.Line(ui.KindInfo, "tailing %s (Ctrl+C to stop)", what)
 	r.console.Start()
 	defer printSessionSummary(r.console)
+	join := newJoinURLState(joinURL)
 	backoff := time.Second
 	failures := 0
 	for {
 		if ctx.Err() != nil {
 			return 0
 		}
+		join.beginAttempt()
 		r.console.Update(func(s *ui.Status) { s.State = ui.StateConnecting; s.Attempt = failures })
-		clean, err := watchOnce(ctx, joinURL, scoopJid, r)
+		clean, err := watchOnce(ctx, join.current(), scoopJid, r, join.onTrayJoinURLChanged)
 		if ctx.Err() != nil {
 			return 0
 		}
@@ -208,7 +210,11 @@ func cmdWatch(ctx context.Context, joinURL, scoopJid string, plain bool) int {
 			failures = 0
 			backoff = time.Second
 		} else {
-			failures++
+			var resetBackoff bool
+			failures, resetBackoff = join.recordReconnectFailure(failures, err)
+			if resetBackoff {
+				backoff = time.Second
+			}
 			if err != nil {
 				r.console.Line(ui.KindError, "%s", err)
 				reportRuntimeError("watch", err)
@@ -234,7 +240,12 @@ type watchRender struct {
 	out     ui.Mode
 }
 
-func watchOnce(ctx context.Context, joinURL, scoopJid string, r watchRender) (clean bool, err error) {
+func watchOnce(
+	ctx context.Context,
+	joinURL, scoopJid string,
+	r watchRender,
+	onJoinURLChanged func(string),
+) (clean bool, err error) {
 	sawProcessing := false
 	// Empty scoopJid = no filter (tail whatever the leader broadcasts).
 	inScoop := func(js string) bool { return scoopJid == "" || js == scoopJid }
@@ -268,11 +279,12 @@ func watchOnce(ctx context.Context, joinURL, scoopJid string, r watchRender) (cl
 		}
 	}
 	conn, dialErr := tray.Dial(ctx, joinURL, tray.Options{
-		OnMessage:  handler,
-		OnActivity: r.console.Beat,
-		OnLinkDiag: linkDiagCounter(r.console),
-		Logf:       debugLogf,
-		LogWanted:  diagLogger.EnabledAt,
+		OnMessage:        handler,
+		OnActivity:       r.console.Beat,
+		OnLinkDiag:       linkDiagCounter(r.console),
+		OnJoinURLChanged: onJoinURLChanged,
+		Logf:             debugLogf,
+		LogWanted:        diagLogger.EnabledAt,
 	})
 	if dialErr != nil {
 		return false, dialErr
@@ -367,14 +379,16 @@ func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
 	console.Update(func(s *ui.Status) { s.Peer = followPeer(console.Mode(), fa.runner) })
 	console.Start()
 	defer printSessionSummary(console)
+	join := newJoinURLState(joinURL)
 	backoff := time.Second
 	failures := 0
 	for {
 		if ctx.Err() != nil {
 			return 0
 		}
+		join.beginAttempt()
 		console.Update(func(s *ui.Status) { s.State = ui.StateConnecting; s.Attempt = failures })
-		connected, err := followOnce(ctx, joinURL, fa.runner, eval, console)
+		connected, err := followOnce(ctx, join.current(), fa.runner, eval, console, join.onTrayJoinURLChanged)
 		if ctx.Err() != nil {
 			return 0
 		}
@@ -382,7 +396,11 @@ func cmdFollow(ctx context.Context, joinURL string, fa followArgs) int {
 			failures = 0
 			backoff = time.Second
 		} else {
-			failures++
+			var resetBackoff bool
+			failures, resetBackoff = join.recordReconnectFailure(failures, err)
+			if resetBackoff {
+				backoff = time.Second
+			}
 			if err != nil {
 				console.Line(ui.KindError, "%s", err)
 				reportRuntimeError("follow", err)
@@ -407,6 +425,7 @@ func followOnce(
 	runner []string,
 	eval *execrun.EvalSession,
 	console *ui.Console,
+	onJoinURLChanged func(string),
 ) (connected bool, err error) {
 	// Connection-scoped context: cancelled on ANY return (disconnect, ctx done),
 	// so a leader-issued command that's still running is killed with the
@@ -422,12 +441,13 @@ func followOnce(
 	}
 
 	conn, dialErr := tray.Dial(connCtx, joinURL, tray.Options{
-		Capabilities: caps,
-		Motd:         followMotd(runner, eval != nil),
-		Logf:         debugLogf,
-		LogWanted:    diagLogger.EnabledAt,
-		OnActivity:   console.Beat,
-		OnLinkDiag:   linkDiagCounter(console),
+		Capabilities:     caps,
+		Motd:             followMotd(runner, eval != nil),
+		Logf:             debugLogf,
+		LogWanted:        diagLogger.EnabledAt,
+		OnActivity:       console.Beat,
+		OnLinkDiag:       linkDiagCounter(console),
+		OnJoinURLChanged: onJoinURLChanged,
 		OnMessage: func(typ string, raw []byte) {
 			select {
 			case msgCh <- inbound{typ: typ, raw: raw}:
