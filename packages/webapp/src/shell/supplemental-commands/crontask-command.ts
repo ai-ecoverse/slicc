@@ -1,9 +1,20 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { hasLocalNodeServer } from '../../core/float-topology.js';
+import { hasLocalNodeServer } from '../float-topology.js';
+import { defaultLickTarget, type LickTargetEnv } from '../lick-target-env.js';
 import { apiHeaders, resolveApiUrl } from '../proxied-fetch.js';
+import { getLickManagerSurface } from './lick-surface.js';
 
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
+
+/** Standalone before `createKernelHost` published the manager — see `lick-surface.ts`. */
+function notInitializedError(subcommand: string): CommandResult {
+  return {
+    stdout: '',
+    stderr: `crontask ${subcommand}: kernel host has not booted yet — try again in a moment\n`,
+    exitCode: 1,
+  };
+}
 
 function crontaskHelp(): CommandResult {
   return {
@@ -17,7 +28,7 @@ Commands:
 
 Options:
   --name <name>     Name for the cron task (required)
-  --scoop <name>    Route cron events to this scoop (scoop receives events as licks)
+  --scoop <target>  Scoop name, cone name, or folder. Omit for your own cone.
   --cron <expr>     Cron expression: "min hour day month weekday" (required)
   --filter <code>   JS filter function: () => false (skip), true (run), or object (payload)
                     Called on each tick to decide whether to dispatch
@@ -57,26 +68,6 @@ interface CronTaskInfo {
   createdAt: string;
 }
 
-/** Get the worker-resident LickManager from globalThis (published by createKernelHost, kernel/host.ts). */
-function getExtensionLickManager(): import('../../scoops/lick-manager.js').LickManager | null {
-  return (
-    ((globalThis as unknown as Record<string, unknown>).__slicc_lickManager as
-      | import('../../scoops/lick-manager.js').LickManager
-      | null) ?? null
-  );
-}
-
-/** Lazy-loaded proxy fallback for a realm without the direct worker LickManager. */
-let LickProxy: Awaited<
-  ReturnType<typeof import('../../scoops/lick-manager-proxy.js').createLickManagerProxy>
-> | null = null;
-async function getLickProxy() {
-  if (LickProxy) return LickProxy;
-  const { createLickManagerProxy } = await import('../../scoops/lick-manager-proxy.js');
-  LickProxy = createLickManagerProxy();
-  return LickProxy;
-}
-
 async function apiCall(
   method: string,
   path: string,
@@ -95,7 +86,7 @@ async function apiCall(
   return { ok: resp.ok, status: resp.status, data };
 }
 
-async function handleCreate(args: string[]): Promise<CommandResult> {
+async function handleCreate(args: string[], env: LickTargetEnv): Promise<CommandResult> {
   let name: string | undefined;
   let cron: string | undefined;
   let filter: string | undefined;
@@ -120,6 +111,9 @@ async function handleCreate(args: string[]): Promise<CommandResult> {
   if (scoopIdx !== -1 && args[scoopIdx + 1]) {
     scoop = args[scoopIdx + 1];
   }
+  // No `--scoop`: a non-primary cone's shell names itself (SLICC_LICK_TARGET),
+  // exactly as `fswatch` does, so its ticks come back to its own chat (#2311).
+  scoop = defaultLickTarget(scoop, env);
 
   if (!name) {
     return { stdout: '', stderr: 'crontask: --name is required\n', exitCode: 1 };
@@ -139,10 +133,9 @@ async function handleCreate(args: string[]): Promise<CommandResult> {
         exitCode: 1,
       };
     }
-    const extLm = getExtensionLickManager();
-    const entry = extLm
-      ? await extLm.createCronTask(name, cron, scoop)
-      : await (await getLickProxy()).createCronTask(name, cron, scoop);
+    const lm = await getLickManagerSurface();
+    if (!lm) return notInitializedError('create');
+    const entry = await lm.createCronTask(name, cron, scoop);
     let output = `Created cron task "${entry.name}"\n`;
     output += `ID:       ${entry.id}\n`;
     output += `Cron:     ${entry.cron}\n`;
@@ -191,13 +184,9 @@ function formatTaskList(tasks: CronTaskInfo[]): string {
 
 async function handleList(): Promise<CommandResult> {
   if (!hasLocalNodeServer()) {
-    const extLm = getExtensionLickManager();
-    const tasks = extLm
-      ? extLm.listCronTasks()
-      : await (async () => {
-          const { listCronTasksAsync } = await import('../../scoops/lick-manager-proxy.js');
-          return listCronTasksAsync();
-        })();
+    const lm = await getLickManagerSurface();
+    if (!lm) return notInitializedError('list');
+    const tasks = await lm.listCronTasks();
     if (tasks.length === 0) {
       return { stdout: 'No active cron tasks\n', stderr: '', exitCode: 0 };
     }
@@ -229,10 +218,9 @@ async function handleDelete(args: string[]): Promise<CommandResult> {
 
   // No local node-server (extension-delegate/direct): use the worker LickManager (or proxy fallback).
   if (!hasLocalNodeServer()) {
-    const extLm = getExtensionLickManager();
-    const deleted = extLm
-      ? await extLm.deleteCronTask(id)
-      : await (await getLickProxy()).deleteCronTask(id);
+    const lm = await getLickManagerSurface();
+    if (!lm) return notInitializedError('delete');
+    const deleted = await lm.deleteCronTask(id);
     if (!deleted) {
       return { stdout: '', stderr: `crontask: task "${id}" not found\n`, exitCode: 1 };
     }
@@ -255,7 +243,7 @@ async function handleDelete(args: string[]): Promise<CommandResult> {
 }
 
 export function createCrontaskCommand(): Command {
-  return defineCommand('crontask', async (args) => {
+  return defineCommand('crontask', async (args, ctx) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
       return crontaskHelp();
     }
@@ -265,7 +253,7 @@ export function createCrontaskCommand(): Command {
     try {
       switch (subcommand) {
         case 'create':
-          return await handleCreate(args);
+          return await handleCreate(args, ctx.env);
         case 'list':
           return await handleList();
         case 'delete':

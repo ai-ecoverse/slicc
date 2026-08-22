@@ -18,6 +18,7 @@
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { stdinAsText } from '../just-bash-compat.js';
+import { defaultLickTarget, type LickTargetEnv } from '../lick-target-env.js';
 import { getFollowerSprinkleInstances, LEADER_RUNTIME_ID } from '../sprinkle-instances.js';
 import type {
   SprinkleInstance,
@@ -51,7 +52,7 @@ function sprinkleHelp(): Result {
       '                        (leader + followers) unless --runtime names one\n' +
       '                        (ids from `host`). Reports instances reached;\n' +
       '                        exits non-zero when it reached none.\n' +
-      '  route <name> --scoop <scoop>  Route lick events to a scoop instead of cone\n' +
+      '  route <name> --scoop <target> Route licks to a scoop, cone, or folder\n' +
       '  route <name> --clear          Clear routing (revert to cone)\n' +
       '  route                         List all sprinkle routes\n' +
       '  chat <html>           Show inline HTML in chat (Tool UI)\n' +
@@ -235,13 +236,32 @@ async function handleList(mgr: SprinkleManagerHandle, args: string[]): Promise<R
   return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
 }
 
-async function handleOpen(mgr: SprinkleManagerHandle, args: string[]): Promise<Result> {
+async function handleOpen(
+  mgr: SprinkleManagerHandle,
+  args: string[],
+  env: LickTargetEnv
+): Promise<Result> {
   const parsed = parseFlags(args.slice(1), {});
   if ('error' in parsed) return fail('open', parsed.error);
   const name = parsed.positionals[0];
   if (!name) return fail('open', 'name required');
   try {
     await mgr.open(name);
+    // A panel's `slicc.lick()` events follow the sprinkle's route, and the
+    // route table is global (one entry per sprinkle name, not per shell). So
+    // an extra cone opening an unrouted sprinkle claims it here, the same way
+    // `fswatch` claims an untargeted watcher — otherwise its panel's events
+    // would land in the oldest cone's chat (#2311). An existing route always
+    // wins; `sprinkle route <name> --clear` gives the sprinkle back.
+    const claimed = defaultLickTarget(undefined, env);
+    if (claimed && !getSprinkleRoute(name)) {
+      setSprinkleRoute(name, claimed);
+      return {
+        stdout: `Sprinkle "${name}" opened; licks route to "${claimed}".\n`,
+        stderr: '',
+        exitCode: 0,
+      };
+    }
     return { stdout: `Sprinkle "${name}" opened.\n`, stderr: '', exitCode: 0 };
   } catch (err) {
     return fail('open', err instanceof Error ? err.message : String(err));
@@ -415,7 +435,7 @@ export function createSprinkleCommand(): Command {
       case 'list':
         return handleList(mgr, args);
       case 'open':
-        return handleOpen(mgr, args);
+        return handleOpen(mgr, args, ctx.env);
       case 'close':
         return handleClose(mgr, args);
       case 'reload':

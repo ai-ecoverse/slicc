@@ -290,3 +290,59 @@ describe('sprinkle command', () => {
     });
   });
 });
+
+describe('sprinkle open — claims the route for the invoking cone (#2311)', () => {
+  let mockMgr: Partial<SprinkleManager>;
+  let command: ReturnType<typeof createSprinkleCommand>;
+
+  beforeEach(async () => {
+    // `sprinkle-routes.ts` is localStorage-backed and swallows its absence,
+    // so a node-environment test needs a store for the route to survive.
+    const store = new Map<string, string>();
+    vi.stubGlobal('localStorage', {
+      getItem: (k: string) => store.get(k) ?? null,
+      setItem: (k: string, v: string) => void store.set(k, v),
+      removeItem: (k: string) => void store.delete(k),
+    });
+    const { clearSprinkleRoute } = await import('../../../src/shell/sprinkle-routes.js');
+    clearSprinkleRoute('dash');
+    mockMgr = { open: vi.fn().mockResolvedValue(undefined) };
+    (globalThis as any).__slicc_sprinkleManager = mockMgr;
+    command = createSprinkleCommand();
+  });
+
+  afterEach(async () => {
+    delete (globalThis as any).__slicc_sprinkleManager;
+    const { clearSprinkleRoute } = await import('../../../src/shell/sprinkle-routes.js');
+    clearSprinkleRoute('dash');
+    vi.unstubAllGlobals();
+  });
+
+  const open = (env: unknown) =>
+    (command as any).execute(['open', 'dash'], { cwd: '/', env, fs: {} as any });
+
+  it('routes an unrouted sprinkle to the cone that opened it', async () => {
+    const { getSprinkleRoute } = await import('../../../src/shell/sprinkle-routes.js');
+    const result = await open({ SLICC_LICK_TARGET: 'cone-research' });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('cone-research');
+    expect(getSprinkleRoute('dash')).toBe('cone-research');
+  });
+
+  it('never overrides an existing route', async () => {
+    const { getSprinkleRoute, setSprinkleRoute } = await import(
+      '../../../src/shell/sprinkle-routes.js'
+    );
+    setSprinkleRoute('dash', 'watcher');
+    const result = await open({ SLICC_LICK_TARGET: 'cone-research' });
+    expect(result.exitCode).toBe(0);
+    expect(getSprinkleRoute('dash')).toBe('watcher');
+  });
+
+  it('leaves the sprinkle unrouted when the shell carries no target', async () => {
+    const { getSprinkleRoute } = await import('../../../src/shell/sprinkle-routes.js');
+    const result = await open({});
+    expect(result.exitCode).toBe(0);
+    expect(getSprinkleRoute('dash')).toBeUndefined();
+  });
+});

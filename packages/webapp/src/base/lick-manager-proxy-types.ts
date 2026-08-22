@@ -1,4 +1,4 @@
-// Narrowed surface of the canonical `LickManager` (`./lick-manager.ts`)
+// Narrowed surface of the canonical `LickManager` (`../scoops/lick-manager.ts`)
 // that the BroadcastChannel proxy is willing to forward across the
 // kernel-bridge / side-panel boundary. The interface deliberately omits
 // lifecycle (`init`, `dispose`), event-source registration
@@ -6,11 +6,12 @@
 // — those are kernel-host concerns that must not cross runtime contexts.
 //
 // `CronTaskEntry` and `WebhookEntry` are duplicated here so this file
-// stays free of any dependency on the full `lick-manager.ts` module. A
+// stays free of any dependency on the full `lick-manager.ts` module
+// (which lives in `scoops/`, above this layer). A
 // structural-type-equality assertion in
-// `tests/scoops/lick-manager-proxy.test.ts` enforces that both
+// `tests/base/lick-manager-proxy.test.ts` enforces that both
 // definitions stay in sync — if a canonical field shape shifts in
-// `./lick-manager.ts`, the test fails to compile.
+// `../scoops/lick-manager.ts`, the test fails to compile.
 
 export interface CronTaskEntry {
   id: string;

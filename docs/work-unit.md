@@ -184,7 +184,7 @@ own.
 - `wc-live-freezer.ts` resolves the target once, up front, with `rootForSelection(scoops, selected)` (`ui/wc/wc-unit-context.ts`): a selected root is itself, a selected scoop walks `parentJid` up to the root that owns it, nothing selected falls back to `defaultRootOf`. The resolution happens BEFORE the freeze's awaits, so a roster refresh mid-freeze cannot move the target between archive and clear, and the same root is re-selected afterwards.
 - `freezeConeSession` / `runNewSessionFreeze` take a `cone: { folder, label? }` (`FreezerConeRef`). Omitted, they target the primary cone — every pre-#2272 caller is unchanged.
 - The rail's expanded action row (`<slicc-freezer-new>`, `expanded`) is one fixed-height line of icon buttons with tooltips: **New chat** (freeze + extract memories, same cone), **New chat, fast** (freeze, memories extracted later), **Discard** (no freezer, no memories, same cone), then **New cone** / **Drop cone** under the flag. Collapsed, the single badge keeps its click / double-click / long-press gesture. Under `agentic-memory` the fast action is hidden (`no-skip`).
-- Licks a cone produces come back to it: every root except the untargeted default carries `SLICC_LICK_TARGET=<folder>` in its shell (`buildScoopShellEnv`), `fswatch` defaults `--scoop` to it (`defaultLickTarget`, `shell/lick-target-env.ts`; `crontask` follows in #2311), and background bash jobs stamp `targetScoop` the same way (`ownLickTargetFor`). That default is `rootsOf(scoops)[0]` — the **oldest** root, which is what `routeFormattedLickToCone` falls back to — resolved by jid against the live roster, _not_ by asking who holds the reserved `cone` folder: after the original primary is dropped, `coneFolderFor` hands that freed folder to the next new cone, which would then look primary while an older root is still the untargeted destination. Addressing licks to a cone by name from elsewhere is #2311.
+- Licks a cone produces come back to it: every root except the untargeted default carries `SLICC_LICK_TARGET=<folder>` in its shell (`buildScoopShellEnv`), and every producer a cone's shell can start falls back to it — see "Addressing licks to a cone" below. That default is `rootsOf(scoops)[0]` — the **oldest** root, which is what `routeFormattedLickToCone` falls back to — resolved by jid against the live roster, _not_ by asking who holds the reserved `cone` folder: after the original primary is dropped, `coneFolderFor` hands that freed folder to the next new cone, which would then look primary while an older root is still the untargeted destination.
 - `clear-chat` carries an optional `scoopJid`; `Bridge.handleClearChat` clears that root's live context and deletes `chatSessionIdFor(target)`. An unknown or absent jid falls back to the default root and `session-cone`.
 - Archives record their provenance: `cone` (the folder) plus `coneLabel` for extra cones only, in both the index entry and the archive frontmatter — so a rebuild from `/sessions/*.md` recovers it and the enrichment rename preserves it. `memorySkipped` rides the frontmatter for the same reason: `pendingEnrichment` comes back from the `pending-` filename, so an index-only marker would be dropped by a rebuild and the next catch-up would mine a chat that opted out. There is **one Freezer for all cones**: the rail card never names the cone; the thawed chat log opens with a `Frozen chat · from cone Research` caption (`frozenProvenanceEl`, a `<slicc-day-separator>` prepended to the thread column). The primary cone and legacy archives with no `cone` field read `Frozen chat` and are treated as the primary cone's.
 - Thawing stays read-only, so it can never overwrite another cone's view; when a thaw fails, the fallback selection goes to the cone the archive named (`rootForConeFolder`), not blindly to the primary one.
@@ -203,6 +203,68 @@ Model selection is **per work unit and lives on the record**, next to `parentJid
 - **The global `selected-model` setting has two jobs left** (`scoops/model-seed.ts`): seeding the primary cone of a fresh profile, and migrating records saved before `model` existed. The seed is only taken **once the selected provider actually has an account** — the cone is bootstrapped before the user has added one, and `getSelectedProvider()` / `resolveCurrentModel()` answer with built-in defaults until then; stamping those would pin the primary cone to a provider the user may never configure and leave it reporting `No API key configured for provider "anthropic"` even after they add a different one, since a record model beats the global selection by design. Until then the cone carries no model and resolves the global selection at run time, exactly as before. `Orchestrator.init()` backfills those on restore — a legacy `config.modelId` pin first, else the owning cone's model, else the seed — and writes the result back, because a model that only lived in memory would look like a per-cone choice that never stuck. With no account configured yet nothing is written and the next boot retries.
 - **The wire.** `ScoopSummary.model` carries each unit's model to followers (optional; older leaders omit it, older followers ignore it) and the Swift mirror decodes it. `model.select` gained an optional `scoopJid`: the follower names the unit it is looking at, and a follower that doesn't (an older build) has the leader fall back to that follower's `scoops.select` — never to the leader's own selection. `TrayModelSelectionState.activeModelId` is now the named cone's model rather than one global setting, so the follower model surface (`wc-follower-model-surface.ts`) shows and changes the right cone. Panel ⇄ kernel uses `set-scoop-model` / `set-scoop-model-ack`, and `ScoopSnapshotConfig` keeps its historical shape (`modelId`, plus `modelProviderId` / `effortOverride`) projected from the record.
 - **Per-cone model means per-cone provider.** A cone can name a provider this device has no account for (a follower picked it, an account was removed). `ScoopContext.init()` defers exactly as it does with no key at all, and the next prompt reports the existing "no provider" state naming that provider — it does not crash.
+
+### Addressing licks to a cone ([#2311](https://github.com/ai-ecoverse/slicc/issues/2311))
+
+A lick's `targetScoop` names **a unit, not a species** — a scoop or a cone, by
+whichever handle the author had.
+
+**Resolution is three ordered passes** over the whole roster
+(`matchLickTargetAlias`, `base/lick-target-match.ts`), used by
+`routeFormattedLickToCone` (`kernel/host.ts`) and by the sprinkle-route lookup
+in `kernel/facade.ts`:
+
+1. exact `folder` (`cone`, `cone-research`, `reviewer-scoop`)
+2. `<target>-scoop` folder — a scoop addressed by its bare name
+3. exact `name` — a cone's display name, or a scoop's
+
+The ordering is the whole point, and it is why this is not one `find` that ORs
+the three forms: with a cone _named_ `reviewer` sitting next to a scoop in
+folder `reviewer-scoop`, an OR resolves to whichever was registered first.
+Passing over the roster once per form makes the more specific form win
+regardless of registry order. (`lickScoopMatches` in `scoops/lick-manager.ts`
+stays as it is: it answers "does THIS unit match?" for filtering, where order
+cannot matter.)
+
+**Two dispositions for a target that resolves to nothing, deliberately
+different:**
+
+| Lick                                       | Disposition                                                       |
+| ------------------------------------------ | ----------------------------------------------------------------- |
+| **untargeted** (no `targetScoop`)          | the default root — `rootsOf(scoops)[0]`, the oldest surviving one |
+| **targeted at a unit that does not exist** | `log.warn('Lick target scoop not found', …)` and **drop**         |
+
+A dropped targeted lick is not a bug to be papered over: the cone or scoop it
+named is gone (or was misspelled), and silently redirecting it would post
+someone else's automation into the default cone's chat with no way to tell
+where it came from. The `discovery` guard sits after resolution and before the
+lick id is minted, so a non-browsing scoop never leaves a dangling registry
+entry.
+
+**Every producer a cone's shell can start follows the invoking unit**, so an
+extra cone's events come back to it rather than to the oldest root:
+
+| Producer            | How it picks a target                                                                   |
+| ------------------- | --------------------------------------------------------------------------------------- |
+| background `bash`   | `ownLickTargetFor` stamps `targetScoop` (#2272)                                         |
+| `fswatch create`    | `--scoop`, else `defaultLickTarget(…, ctx.env)` (#2272)                                 |
+| `crontask create`   | `--scoop`, else `defaultLickTarget(…, ctx.env)`                                         |
+| `webhook create`    | `--scoop`, else `defaultLickTarget(…, ctx.env)`; still required when neither is present |
+| workflow completion | `getStartingRoot(parentJid)` in `kernel/host.ts` stamps the starting root's folder      |
+| `sprinkle open`     | claims an **unrouted** sprinkle for the opening cone; an existing route always wins     |
+
+`SLICC_LICK_TARGET` is absent from the default root's shell on purpose — its
+folder is not worth spending as an alias when an untargeted lick already lands
+there, and reading it from a folder test rather than from the live roster is
+the bug described in the bullet above.
+
+**From outside the cone's shell**, the same handles work as an explicit flag:
+`webhook create --scoop <cone>`, `crontask create --scoop <cone>`,
+`fswatch create --scoop <cone>` and `sprinkle route <name> --scoop <cone>` all
+accept a cone's `name` or its `folder` (`cone-<slug>`). The extension /
+side-panel path resolves them identically: `lick-manager-proxy.ts` forwards the
+target string verbatim over `BroadcastChannel`, and resolution happens once, in
+the kernel host, for every float.
 
 ### Phase 3 detail
 

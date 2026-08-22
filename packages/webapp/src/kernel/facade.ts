@@ -8,6 +8,7 @@
  * Also maintains an event buffer for state sync on panel reconnect.
  */
 
+import { matchLickTargetAlias } from '../base/lick-target-match.js';
 import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
 import type { AgentEvent } from '../core/agent-types.js';
@@ -694,14 +695,12 @@ export class Bridge implements KernelFacade {
     // licks went to the cone no matter what `sprinkle route` said, and the
     // owning scoop never saw its own panel's events (issue #2166).
     const resolvedTarget = targetScoop ?? getSprinkleRoute(sprinkleName);
-    let target = resolvedTarget
-      ? scoops.find(
-          (s) =>
-            s.name === resolvedTarget ||
-            s.folder === resolvedTarget ||
-            s.folder === `${resolvedTarget}-scoop`
-        )
-      : undefined;
+    // Same three ordered passes the lick pipeline uses, so `sprinkle route
+    // --scoop Research` resolves to the cone named `Research` whether or not a
+    // `Research-scoop` folder also exists (#2311). Unlike a lick, an unmatched
+    // sprinkle route falls back to the default root: the route table is
+    // long-lived and a stale entry must not silence a live panel.
+    let target = resolvedTarget ? matchLickTargetAlias(scoops, resolvedTarget) : undefined;
     if (!target) {
       target = rootsOf(scoops)[0];
     }

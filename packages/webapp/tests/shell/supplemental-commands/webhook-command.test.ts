@@ -445,7 +445,7 @@ describe('webhook command — extension side panel → offscreen via BroadcastCh
       deleteCronTask: vi.fn(),
     };
 
-    const { startLickManagerHost } = await import('../../../src/scoops/lick-manager-proxy.js');
+    const { startLickManagerHost } = await import('../../../src/base/lick-manager-proxy.js');
     startLickManagerHost(mockLickManager as never);
 
     const { command, setStatus } = await loadCommandAndTrayLeader();
@@ -476,7 +476,7 @@ describe('webhook command — extension side panel → offscreen via BroadcastCh
       deleteCronTask: vi.fn(),
     };
 
-    const { startLickManagerHost } = await import('../../../src/scoops/lick-manager-proxy.js');
+    const { startLickManagerHost } = await import('../../../src/base/lick-manager-proxy.js');
     startLickManagerHost(mockLickManager as never);
 
     const { command, setStatus } = await loadCommandAndTrayLeader();
@@ -497,7 +497,7 @@ describe('webhook command — extension side panel → offscreen via BroadcastCh
       deleteCronTask: vi.fn(),
     };
 
-    const { startLickManagerHost } = await import('../../../src/scoops/lick-manager-proxy.js');
+    const { startLickManagerHost } = await import('../../../src/base/lick-manager-proxy.js');
     startLickManagerHost(mockLickManager as never);
 
     const { command } = await loadCommandAndTrayLeader();
@@ -517,7 +517,7 @@ describe('webhook command — extension side panel → offscreen via BroadcastCh
       deleteCronTask: vi.fn(),
     };
 
-    const { startLickManagerHost } = await import('../../../src/scoops/lick-manager-proxy.js');
+    const { startLickManagerHost } = await import('../../../src/base/lick-manager-proxy.js');
     // No tray URL resolver → returns null.
     startLickManagerHost(mockLickManager as never);
 
@@ -548,6 +548,35 @@ describe('webhook command — extension side panel → offscreen via BroadcastCh
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('forwards the shell default target through the proxy (#2311)', async () => {
+    const mockLickManager = {
+      createWebhook: vi.fn().mockResolvedValue({
+        id: 'wh-px2',
+        name: 'inbox',
+        scoop: 'cone-research',
+        createdAt: new Date().toISOString(),
+      } satisfies WebhookEntry),
+      listWebhooks: vi.fn(),
+      deleteWebhook: vi.fn(),
+      createCronTask: vi.fn(),
+      listCronTasks: vi.fn(),
+      deleteCronTask: vi.fn(),
+    };
+    const { startLickManagerHost } = await import('../../../src/base/lick-manager-proxy.js');
+    startLickManagerHost(mockLickManager as never);
+
+    const { command, setStatus } = await loadCommandAndTrayLeader();
+    setStatus({ state: 'leader', session: SESSION, error: null });
+
+    const result = await command.execute(['create', '--name', 'inbox'], {
+      cwd: '/',
+      env: { SLICC_LICK_TARGET: 'cone-research' },
+    } as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(mockLickManager.createWebhook).toHaveBeenCalledWith('inbox', 'cone-research', undefined);
   });
 });
 
@@ -730,5 +759,64 @@ describe('webhook — extension-delegate leader (no node-server)', () => {
     // SESSION.webhookUrl = 'https://hub.slicc.dev/webhook/abc' → per-id suffix.
     expect(result.stdout).toContain('https://hub.slicc.dev/webhook/abc/wh1');
     expect(result.stdout).not.toContain('sliccy.ai/webhooks');
+  });
+});
+
+describe('webhook create — default lick target (#2311)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('chrome', undefined);
+    stubSelfLocation('http://localhost:5710/index.html');
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete (globalThis as Record<string, unknown>).__slicc_lickManager;
+  });
+
+  async function createWithEnv(args: string[], env: unknown) {
+    const createWebhook = vi.fn().mockResolvedValue({
+      id: 'wh-2311',
+      name: 'inbox',
+      createdAt: new Date().toISOString(),
+    } satisfies WebhookEntry);
+    (globalThis as Record<string, unknown>).__slicc_lickManager = buildLickManagerMock({
+      createWebhook,
+    });
+    const { command } = await loadCommandAndTrayLeader();
+    const result = await command.execute(args, { cwd: '/', env } as never);
+    return { result, createWebhook };
+  }
+
+  it('falls back to SLICC_LICK_TARGET when --scoop is absent', async () => {
+    const { result, createWebhook } = await createWithEnv(['create', '--name', 'inbox'], {
+      SLICC_LICK_TARGET: 'cone-research',
+    });
+    expect(result.exitCode).toBe(0);
+    expect(createWebhook).toHaveBeenCalledWith('inbox', 'cone-research', undefined);
+  });
+
+  it('an explicit --scoop wins over the shell default', async () => {
+    const { result, createWebhook } = await createWithEnv(
+      ['create', '--name', 'inbox', '--scoop', 'pr-reviewer'],
+      { SLICC_LICK_TARGET: 'cone-research' }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(createWebhook).toHaveBeenCalledWith('inbox', 'pr-reviewer', undefined);
+  });
+
+  it('still requires --scoop in a shell that carries no target', async () => {
+    const { result } = await createWithEnv(['create', '--name', 'inbox'], {});
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--scoop is required');
+  });
+
+  it('accepts a cone name as --scoop', async () => {
+    const { result, createWebhook } = await createWithEnv(
+      ['create', '--name', 'inbox', '--scoop', 'Research'],
+      {}
+    );
+    expect(result.exitCode).toBe(0);
+    expect(createWebhook).toHaveBeenCalledWith('inbox', 'Research', undefined);
   });
 });

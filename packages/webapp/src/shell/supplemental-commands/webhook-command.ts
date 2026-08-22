@@ -1,6 +1,7 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getTrayWebhookUrl, getWebhookUrl } from '../../base/lick-urls.js';
+import { defaultLickTarget, type LickTargetEnv } from '../lick-target-env.js';
 import { getLickManagerSurface } from './lick-surface.js';
 
 interface WebhookLeaderStatus {
@@ -20,12 +21,12 @@ function webhookHelp(): { stdout: string; stderr: string; exitCode: number } {
     stdout: `usage: webhook <command> [options]
 
 Commands:
-  create --scoop <name> [--name <name>] [--filter <code>]    Create a new webhook endpoint
+  create [--scoop <name>] [--name <name>] [--filter <code>]  Create a new webhook endpoint
   list                                                         List all active webhooks
   delete <id>                                                  Delete a webhook by ID
 
 Options:
-  --scoop <name>    Route webhook events to this scoop (required; scoop receives events as messages)
+  --scoop <target>  Scoop name, cone name, or folder. Required outside a cone.
   --filter <code>   JS filter function: (event) => false (drop), true (keep), or object (transform)
                     The event has: type, webhookId, webhookName, timestamp, headers, body
 
@@ -95,7 +96,8 @@ type CommandResult = { stdout: string; stderr: string; exitCode: number };
 
 async function handleCreate(
   args: string[],
-  options: Required<WebhookCommandOptions>
+  options: Required<WebhookCommandOptions>,
+  env: LickTargetEnv
 ): Promise<CommandResult> {
   let name = 'default';
   let filter: string | undefined;
@@ -116,10 +118,17 @@ async function handleCreate(
     scoop = args[scoopIdx + 1];
   }
 
+  // No `--scoop`: a non-primary cone's shell names itself (SLICC_LICK_TARGET),
+  // so `webhook create` inside an extra cone routes back to that cone (#2311).
+  // The default root carries no such variable, so it still has to say where
+  // the callbacks go — the pre-#2311 rule, unchanged for it.
+  scoop = defaultLickTarget(scoop, env);
+
   if (!scoop) {
     return {
       stdout: '',
-      stderr: 'webhook create: --scoop is required (every webhook must route to a scoop)\n',
+      stderr:
+        "webhook create: --scoop is required (name a scoop or a cone; an extra cone's shell supplies its own)\n",
       exitCode: 1,
     };
   }
@@ -289,7 +298,7 @@ export function createWebhookCommand(commandOptions: WebhookCommandOptions = {})
     hasLocalNodeServer: commandOptions.hasLocalNodeServer ?? (() => true),
     getLeaderStatus: commandOptions.getLeaderStatus ?? (() => DEFAULT_LEADER_STATUS),
   };
-  return defineCommand('webhook', async (args) => {
+  return defineCommand('webhook', async (args, ctx) => {
     if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
       return webhookHelp();
     }
@@ -299,7 +308,7 @@ export function createWebhookCommand(commandOptions: WebhookCommandOptions = {})
     try {
       switch (subcommand) {
         case 'create':
-          return await handleCreate(args, options);
+          return await handleCreate(args, options, ctx.env);
         case 'list':
           return await handleList(options);
         case 'delete':

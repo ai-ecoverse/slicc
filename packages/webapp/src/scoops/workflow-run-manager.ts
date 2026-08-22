@@ -35,7 +35,16 @@ export interface WorkflowRunManagerDeps {
     mkdir(p: string, o: { recursive: boolean }): Promise<void>;
     writeFile(p: string, data: string): Promise<void>;
   };
-  getConeJid: () => string | undefined;
+  /**
+   * The root that started a run, given the starting unit's jid — `null` when
+   * that unit is a scoop or is no longer registered. `lickTarget` is the
+   * folder to stamp on the completion lick, `undefined` for the default
+   * (oldest) root, matching `ownLickTargetFor` (#2311). Before this, the dep
+   * was a single `getConeJid()` compared for equality, so a run started from
+   * an EXTRA cone's shell classified as `'scoop'` and its completion was
+   * never delivered — it only showed up in `workflow status`.
+   */
+  getStartingRoot: (parentJid: string) => { jid: string; lickTarget?: string } | null;
   fireLick: (event: import('./lick-manager.js').LickEvent) => void;
   processManager: {
     // `proc` is structurally compatible with the kernel `Process` (argv is
@@ -56,6 +65,21 @@ export interface WorkflowRunManagerDeps {
   ) => { result: unknown; log: string; hadResult: boolean };
 }
 
+/**
+ * `{ origin, lickTarget }` for the unit that started a run. Only a ROOT's
+ * completion is delivered as a lick; a scoop's or the terminal's stays in
+ * `workflow status`, as before (#2311).
+ */
+function classifyOrigin(
+  deps: WorkflowRunManagerDeps,
+  parentJid: string | undefined
+): { origin: WorkflowRunState['origin']; lickTarget?: string } {
+  if (parentJid === undefined) return { origin: 'terminal' };
+  const root = deps.getStartingRoot(parentJid);
+  if (!root) return { origin: 'scoop' };
+  return { origin: 'cone', lickTarget: root.lickTarget };
+}
+
 export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): WorkflowRunManager {
   const runs = new Map<string, WorkflowRunState>();
   const observers = new Map<string, Set<(s: WorkflowRunState) => void>>();
@@ -72,22 +96,19 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
     }
   };
 
-  const classifyOrigin = (parentJid: string | undefined): WorkflowRunState['origin'] => {
-    if (parentJid === undefined) return 'terminal';
-    return parentJid === deps.getConeJid() ? 'cone' : 'scoop';
-  };
-
   const wrapRunCtx = (ctx: CommandContextLike, runId: string) =>
     wrapCtx(ctx, runId, runs, () => notify(runId));
 
   async function start(opts: WorkflowStartOptions): Promise<{ runId: string }> {
     const runId = opts.runId ?? deps.makeRunId();
     const sentinel = opts.sentinel; // built by the command; never invented here
+    const starter = classifyOrigin(deps, opts.parentJid);
     const state: WorkflowRunState = {
       id: runId,
       name: opts.name,
       source: opts.source,
-      origin: classifyOrigin(opts.parentJid),
+      origin: starter.origin,
+      lickTarget: starter.lickTarget,
       status: 'running',
       currentPhase: null,
       agentsStarted: 0,
@@ -198,6 +219,8 @@ export function createWorkflowRunManager(deps: WorkflowRunManagerDeps): Workflow
     if (state.origin !== 'cone') return; // terminal/scoop: surfaced via `workflow status`
     deps.fireLick({
       type: 'workflow',
+      // Back to the cone that started it, not blindly to the oldest root.
+      targetScoop: state.lickTarget,
       workflowRunId: state.id,
       workflowName: state.name ?? undefined,
       resultPath: state.resultPath ?? undefined,

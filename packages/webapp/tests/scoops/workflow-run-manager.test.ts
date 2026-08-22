@@ -19,7 +19,7 @@ function deferred<T>() {
 function makeDeps(overrides: Partial<Parameters<typeof createWorkflowRunManager>[0]> = {}) {
   return {
     sharedFs: { mkdir: vi.fn(async () => {}), writeFile: vi.fn(async () => {}) } as any,
-    getConeJid: () => 'cone_1',
+    getStartingRoot: (jid: string) => (jid === 'cone_1' ? { jid } : null),
     fireLick: vi.fn(),
     processManager: { on: vi.fn(() => () => {}) } as any,
     // runRealm is the injectable launch (real impl calls executeJsCode); tests stub it.
@@ -489,7 +489,12 @@ describe('WorkflowRunManager', () => {
 
   it("'scoop' origin (parentJid is not the cone jid) does NOT fire a lick", async () => {
     const fireLick = vi.fn();
-    const mgr = createWorkflowRunManager(makeDeps({ fireLick, getConeJid: () => 'cone_1' }) as any);
+    const mgr = createWorkflowRunManager(
+      makeDeps({
+        fireLick,
+        getStartingRoot: (jid: string) => (jid === 'cone_1' ? { jid } : null),
+      }) as any
+    );
     const { runId } = await mgr.start({
       code: 'C',
       source: 'S',
@@ -600,5 +605,54 @@ describe('evictOldRuns (memory bound)', () => {
     const runs = new Map<string, WorkflowRunState>([['x', mk('x', 'done', 't')]]);
     evictOldRuns(runs, new Map(), 100);
     expect(runs.size).toBe(1);
+  });
+});
+
+describe('workflow completion targeting (#2311)', () => {
+  /** Roster: `cone_1` is the oldest root, `cone_2` an extra one, `s_1` a scoop. */
+  const getStartingRoot = (jid: string) =>
+    jid === 'cone_1' ? { jid } : jid === 'cone_2' ? { jid, lickTarget: 'cone-research' } : null;
+
+  async function completeFrom(parentJid: string | undefined) {
+    const fireLick = vi.fn();
+    const mgr = createWorkflowRunManager(makeDeps({ fireLick, getStartingRoot }) as any);
+    const { runId } = await mgr.start({
+      code: 'CODE',
+      source: 'SRC',
+      name: 'demo',
+      filename: 'wf.js',
+      parentJid,
+      sentinel: 'WF_RESULT_x',
+      ctx: { cwd: '/', env: new Map(), stdin: '', exec: vi.fn() } as any,
+    });
+    return { fireLick, run: () => mgr.getRun(runId)! };
+  }
+
+  it('stamps the extra cone that started the run, so the notice comes back to it', async () => {
+    const { fireLick, run } = await completeFrom('cone_2');
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+    expect(run().origin).toBe('cone');
+    expect(fireLick.mock.calls[0][0].targetScoop).toBe('cone-research');
+  });
+
+  it('leaves the default root untargeted — that is where an untargeted lick lands', async () => {
+    const { fireLick, run } = await completeFrom('cone_1');
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+    expect(run().origin).toBe('cone');
+    expect(fireLick.mock.calls[0][0].targetScoop).toBeUndefined();
+  });
+
+  it('still delivers no lick for a scoop-started run (`workflow status` owns it)', async () => {
+    const { fireLick, run } = await completeFrom('s_1');
+    await vi.waitFor(() => expect(run().status).toBe('done'));
+    expect(run().origin).toBe('scoop');
+    expect(fireLick).not.toHaveBeenCalled();
+  });
+
+  it('still delivers no lick for a terminal-started run', async () => {
+    const { fireLick, run } = await completeFrom(undefined);
+    await vi.waitFor(() => expect(run().status).toBe('done'));
+    expect(run().origin).toBe('terminal');
+    expect(fireLick).not.toHaveBeenCalled();
   });
 });
