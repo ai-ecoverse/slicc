@@ -45,8 +45,8 @@ function cone(jid: string, folder: string, model?: RegisteredScoop['model']): Re
   };
 }
 
-function makeOptions(scoops: RegisteredScoop[], selectedJid: string) {
-  const setScoopModel = vi.fn().mockResolvedValue(true);
+function makeOptions(scoops: RegisteredScoop[], selectedJid: string, applied = true) {
+  const setScoopModel = vi.fn().mockResolvedValue(applied);
   const composerMeta = document.createElement('div') as HTMLElement & { model?: string };
   const modelChanges: string[] = [];
   composerMeta.addEventListener('model-change', (event) => {
@@ -84,13 +84,15 @@ describe('follower model selection is per cone (#2310)', () => {
     id: 'claude-sonnet-4-6',
   });
 
-  it('changes cone B while cone A is selected on the leader, and only cone B', () => {
+  it('changes cone B while cone A is selected on the leader, and only cone B', async () => {
     const { options, setScoopModel, modelChanges, composerMeta } = makeOptions(
       [coneA, coneB],
       coneA.jid
     );
 
-    expect(options.onFollowerModelSelect?.('anthropic:claude-opus-4-6', coneB.jid)).toBe(true);
+    await expect(
+      options.onFollowerModelSelect?.('anthropic:claude-opus-4-6', coneB.jid)
+    ).resolves.toBe(true);
 
     expect(setScoopModel).toHaveBeenCalledTimes(1);
     expect(setScoopModel).toHaveBeenCalledWith(coneB.jid, {
@@ -102,13 +104,15 @@ describe('follower model selection is per cone (#2310)', () => {
     expect(composerMeta.model).toBeUndefined();
   });
 
-  it('reflects the pick locally when the follower is on the cone the leader has selected', () => {
+  it('reflects the pick locally when the follower is on the cone the leader has selected', async () => {
     const { options, setScoopModel, modelChanges, composerMeta } = makeOptions(
       [coneA, coneB],
       coneA.jid
     );
 
-    expect(options.onFollowerModelSelect?.('anthropic:claude-opus-4-6', coneA.jid)).toBe(true);
+    await expect(
+      options.onFollowerModelSelect?.('anthropic:claude-opus-4-6', coneA.jid)
+    ).resolves.toBe(true);
 
     expect(setScoopModel).toHaveBeenCalledWith(coneA.jid, {
       provider: 'anthropic',
@@ -118,7 +122,7 @@ describe('follower model selection is per cone (#2310)', () => {
     expect(composerMeta.getAttribute('model')).toBe('Claude Opus 4.6');
   });
 
-  it('applies a pick made while viewing a scoop to the cone that owns it', () => {
+  it('applies a pick made while viewing a scoop to the cone that owns it', async () => {
     const scoop: RegisteredScoop = {
       ...cone('scoop_1', 'worker'),
       isCone: false,
@@ -127,12 +131,25 @@ describe('follower model selection is per cone (#2310)', () => {
     };
     const { options, setScoopModel } = makeOptions([coneA, coneB, scoop], coneA.jid);
 
-    expect(options.onFollowerModelSelect?.('anthropic:claude-opus-4-6', scoop.jid)).toBe(true);
+    await expect(
+      options.onFollowerModelSelect?.('anthropic:claude-opus-4-6', scoop.jid)
+    ).resolves.toBe(true);
 
     expect(setScoopModel).toHaveBeenCalledWith(coneB.jid, {
       provider: 'anthropic',
       id: 'claude-opus-4-6',
     });
+  });
+
+  it('resolves false and leaves the pill alone when the write does not persist', async () => {
+    const { options, modelChanges, composerMeta } = makeOptions([coneA, coneB], coneA.jid, false);
+
+    await expect(
+      options.onFollowerModelSelect?.('anthropic:claude-opus-4-6', coneA.jid)
+    ).resolves.toBe(false);
+
+    expect(modelChanges).toEqual([]);
+    expect(composerMeta.getAttribute('model')).toBeNull();
   });
 
   it('rejects a model id that is not in the advertised catalogue', () => {

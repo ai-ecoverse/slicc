@@ -444,31 +444,36 @@ function leaderModelCallbacks(
       const target = rootForSelection(client.getScoops(), named ?? null);
       if (!target) return false;
       const colon = entry.modelId.indexOf(':');
-      void client
+      // Resolve only once the kernel has persisted it: the leader broadcasts
+      // the follower's new `model.state` off this promise, and broadcasting
+      // early would recompute it from the record's old value.
+      return client
         .setScoopModel(target.jid, {
           provider: entry.modelId.slice(0, colon),
           id: entry.modelId.slice(colon + 1),
         })
-        .catch(() => undefined);
-      // Reflect the pick locally only while the follower is on the cone the
-      // leader has selected; otherwise the leader's pill would show another
-      // cone's model.
-      if (target.jid === deps.getSelectedJid()) {
-        refs.composerMeta.dispatchEvent(
-          new CustomEvent('model-change', {
-            bubbles: true,
-            composed: true,
-            detail: {
-              id: entry.modelId,
-              model: entry.modelName,
-              provider: entry.providerName,
-              source: 'follower',
-            },
-          })
-        );
-        refs.composerMeta.setAttribute('model', entry.modelName);
-      }
-      return true;
+        .then((applied) => {
+          // Reflect the pick locally only while the follower is on the cone
+          // the leader has selected; otherwise the leader's pill would show
+          // another cone's model.
+          if (applied && target.jid === deps.getSelectedJid()) {
+            refs.composerMeta.dispatchEvent(
+              new CustomEvent('model-change', {
+                bubbles: true,
+                composed: true,
+                detail: {
+                  id: entry.modelId,
+                  model: entry.modelName,
+                  provider: entry.providerName,
+                  source: 'follower',
+                },
+              })
+            );
+            refs.composerMeta.setAttribute('model', entry.modelName);
+          }
+          return applied;
+        })
+        .catch(() => false);
     },
   };
 }

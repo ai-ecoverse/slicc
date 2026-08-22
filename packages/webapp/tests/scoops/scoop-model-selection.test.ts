@@ -42,11 +42,13 @@ function root(overrides: Partial<RegisteredScoop> = {}): RegisteredScoop {
   };
 }
 
-function makeManager(scoops: Map<string, RegisteredScoop>): {
+function makeManager(
+  scoops: Map<string, RegisteredScoop>,
+  saveScoop: ReturnType<typeof vi.fn> = vi.fn(async () => {})
+): {
   manager: ScoopLifecycleManager;
   saveScoop: ReturnType<typeof vi.fn>;
 } {
-  const saveScoop = vi.fn(async () => {});
   const manager = new ScoopLifecycleManager({
     getScoops: () => scoops,
     getSharedFs: () => ({}),
@@ -137,6 +139,30 @@ describe('per-cone model selection (#2310)', () => {
     expect(modelFor(coneB)).toEqual({ provider: 'openai', id: 'gpt-4.1' });
     expect(saveScoop).toHaveBeenCalledTimes(1);
     expect(saveScoop).toHaveBeenCalledWith(coneB);
+  });
+
+  // Codex review (P2): a model that never reached disk is not a per-cone
+  // choice — it would revert on reload while the panel showed it as applied.
+  it('rolls back and reports failure when the record cannot be persisted', async () => {
+    const cone = root({ model: { provider: 'anthropic', id: 'claude-opus-4-6' } });
+    const scoops = new Map([[cone.jid, cone]]);
+    let diskFails = false;
+    const saveScoop = vi.fn(async () => {
+      if (diskFails) throw new Error('QuotaExceededError');
+    });
+    const { manager } = makeManager(scoops, saveScoop);
+    await manager.register(cone);
+    diskFails = true;
+    updateModel.mockClear();
+
+    await expect(manager.setModel(cone.jid, { provider: 'openai', id: 'gpt-4.1' })).resolves.toBe(
+      false
+    );
+
+    expect(modelFor(cone)).toEqual({ provider: 'anthropic', id: 'claude-opus-4-6' });
+    // The live agent is put back too, not left running the model that failed
+    // to persist.
+    expect(updateModel).toHaveBeenCalledTimes(2);
   });
 
   it('rejects a model change for a jid the registry does not know', async () => {

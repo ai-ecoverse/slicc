@@ -704,15 +704,22 @@ export class ScoopLifecycleManager {
   async setModel(jid: string, model: WorkUnitModel | undefined): Promise<boolean> {
     const scoop = this.deps.getScoops().get(jid);
     if (!scoop) return false;
+    const previous = scoop.model;
     setUnitModel(scoop, model);
     this.getContext(jid)?.updateModel();
     try {
       await this.deps.db.saveScoop(scoop);
     } catch (err) {
-      log.warn('Failed to persist unit model', {
+      // A model that never reached disk is not a per-cone choice — it would
+      // silently revert on the next reload while the panel (and any follower)
+      // showed it as applied. Roll the live unit back and report failure.
+      setUnitModel(scoop, previous);
+      this.getContext(jid)?.updateModel();
+      log.warn('Failed to persist unit model; rolled back', {
         jid,
         error: err instanceof Error ? err.message : String(err),
       });
+      return false;
     }
     log.info('Unit model updated', { jid, provider: model?.provider, model: model?.id });
     return true;

@@ -148,7 +148,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     );
     client.setSelectedScoopJid(scoop.jid);
     refs.inputCard.removeAttribute('disabled');
-    void applyThreadContext(refs, scoop);
+    void applyThreadContext(refs, scoop, client.getScoops());
     client.requestScoopMessages(scoop.jid);
     controller?.setProcessing(client.isProcessing(scoop.jid));
     // Boot default for the navbar eyes: until any message/input lands, the

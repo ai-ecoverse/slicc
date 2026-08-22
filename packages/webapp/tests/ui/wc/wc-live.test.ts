@@ -470,6 +470,7 @@ describe('prepareWcShell scoop selection', () => {
     boot.setClient({
       selectedScoopJid: null,
       setSelectedScoopJid: vi.fn(),
+      getScoops: vi.fn(() => []),
       requestScoopMessages: vi.fn(),
       isProcessing: vi.fn(() => false),
     } as never);
@@ -496,6 +497,7 @@ describe('prepareWcShell scoop selection', () => {
     boot.setClient({
       selectedScoopJid: null,
       setSelectedScoopJid: vi.fn(),
+      getScoops: vi.fn(() => []),
       requestScoopMessages: vi.fn(),
       isProcessing: vi.fn(() => false),
     } as never);

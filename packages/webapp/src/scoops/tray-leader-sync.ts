@@ -94,8 +94,13 @@ export interface LeaderSyncManagerOptions {
    * looking at (#2310). `scoopJid` is that follower's selected unit — a
    * scoop resolves to the cone that owns it. False rejects the pick without
    * changing state.
+   *
+   * May resolve asynchronously: the model is persisted on the cone's record,
+   * and the leader broadcasts the new `model.state` only once that write is
+   * acknowledged — otherwise the follower's picker snaps back to the value
+   * the record still held.
    */
-  onFollowerModelSelect?: (modelId: string, scoopJid?: string) => boolean;
+  onFollowerModelSelect?: (modelId: string, scoopJid?: string) => boolean | Promise<boolean>;
   /** Apply thinking configuration to the follower's selected scoop. */
   onFollowerThinkingSet?: (
     scoopJid: string,
