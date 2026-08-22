@@ -562,6 +562,36 @@ describe('mountWcUiFollower', () => {
     expect(switcher.getAttribute('active')).toBe('cone-jid');
   });
 
+  it('re-orders the tab strip when the follower selects a cone (Codex P2)', async () => {
+    // `toFollowerSwitcherScoops` puts the SELECTED cone's scoops ahead of the
+    // rest, and the local click handler previously only moved `active` — so the
+    // strip kept showing the previously selected cone's scoops first until the
+    // leader happened to push a fresh roster.
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    const switcher = app.querySelector('slicc-agent-tabs')! as HTMLElement & {
+      scoops: Array<{ key: string }>;
+    };
+    opts.onScoopsList?.(
+      [
+        { jid: 'cone-a', name: 'cone', isCone: true },
+        { jid: 'cone-b', name: 'research', isCone: true },
+        { jid: 'scoop-a', name: 'helper-a', isCone: false, parentId: 'cone-a' },
+        { jid: 'scoop-b', name: 'helper-b', isCone: false, parentId: 'cone-b' },
+      ] as never,
+      'cone-a'
+    );
+    const orderFor = () => switcher.scoops.map((s) => s.key);
+    // cone-a selected: both cones first, then cone-a's scoop, then the rest.
+    expect(orderFor()).toEqual(['cone-a', 'cone-b', 'scoop-a', 'scoop-b']);
+
+    switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'cone-b' } }));
+    // Selecting cone-b must move ITS scoop ahead, without waiting on a roster push.
+    expect(orderFor()).toEqual(['cone-a', 'cone-b', 'scoop-b', 'scoop-a']);
+  });
+
   it('applies status only for the viewed scoop while accepting legacy unscoped status', async () => {
     const { WcChatController } = await import('../../../src/ui/wc/wc-chat-controller.js');
     const setProcessing = vi.spyOn(WcChatController.prototype, 'setProcessing');

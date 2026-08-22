@@ -93,8 +93,11 @@ Non-obvious rules:
   `ui/`. Every creation path sets `parentJid` explicitly; restore backfills
   and persists it. Several roots may exist: UI code resolves "the cone" via
   `ui/wc/wc-unit-context.ts` (`defaultRootOf`, `threadContextFor`,
-  `switcherLabelFor`), never `find(s => s.isCone)`; chat sessions are keyed
-  `session-<folder>` (`chatSessionIdFor`). See `docs/work-unit.md`.
+  `switcherLabelFor`, `orderForSwitcher(scoops, selectedJid)`), never
+  `find(s => s.isCone)`; chat sessions are keyed `session-<folder>`
+  (`chatSessionIdFor`). Cone add/drop lives in `ui/wc/wc-cone-actions.ts`
+  behind `<slicc-freezer-new>`'s action row (name / confirm via
+  `<slicc-dialog>`, never inline); the tab strip is the only switcher. See `docs/work-unit.md`.
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without
   queue/watermark loss; user `web` bypasses the window (immediate/awaited,
   prevents deferral). `transcript-limits.ts` caps bridge/event transcripts at 64 KB
@@ -164,7 +167,13 @@ Non-obvious rules:
   a broker whose `suggest` outlived the budget cannot raise a stale prompt.
 - **Frozen-session recovery** must go through the **bounded** legacy enrichment
   call — never the unbounded curator (`timeoutSeconds` cannot stop it). Save /
-  Skip memory / Erase clear cone chat and non-mount `/tmp`, not scoops.
+  Skip memory / Erase clear the SELECTED cone's chat and non-mount `/tmp`, not
+  scoops: the freezer, `clear-chat` and boot hydration all resolve their root
+  through `ui/wc/wc-unit-context.ts` (`rootForSelection`, `rootFolderForContext`)
+  and key the session with `chatSessionIdFor`, never the literal `session-cone`.
+  Archives record `cone` / `coneLabel` so a card names its cone and a thaw can
+  route back to it. The welcome flow is the one deliberate exception — it stays
+  primary-cone-only (#2272). See `docs/work-unit.md`.
 - **Layouts** (`docs/layouts.md`): behind `panel-layouts` flag. `panelize-shell.ts`
   RE-PARENTS what `mountWcShell` built, so `WcShellRefs` stays valid.
   `setPanelVisible` must add an unplaced panel but never duplicate a placed one;

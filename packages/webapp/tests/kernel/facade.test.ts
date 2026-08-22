@@ -24,6 +24,7 @@
  */
 
 import { beforeEach, describe, expect, it, type Mock, vi } from 'vitest';
+import type { RegisteredScoop } from '../../src/scoops/types.js';
 
 // ---------------------------------------------------------------------------
 // Mock chrome.runtime — fan-out style so a panel-source message reaches the
@@ -277,6 +278,98 @@ describe('Kernel facade parity', () => {
     expect(sessionStore.delete).not.toHaveBeenCalledWith('session-test-scoop');
     expect(orchestrator.clearScoopMessages).toHaveBeenCalledWith('cone_1');
     expect(orchestrator.clearAllMessages).not.toHaveBeenCalled();
+  });
+
+  // 3b. With several roots, clear-chat targets the one the panel names
+  //     (#2272): cone B's session and runtime state are reset, cone A's are
+  //     untouched. An unknown jid falls back to the default root.
+  it('client.clearAllMessages(jid) → clears that root only', async () => {
+    orchestrator.getScoops.mockReturnValue([
+      ...orchestrator.getScoops(),
+      {
+        jid: 'cone_2',
+        name: 'Research',
+        folder: 'cone-research',
+        isCone: true,
+        parentJid: null,
+        type: 'cone' as const,
+        requiresTrigger: false,
+        assistantLabel: 'Research',
+        addedAt: new Date().toISOString(),
+      },
+    ]);
+
+    void client.clearAllMessages('cone_2');
+    await tick();
+
+    const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;
+    expect(sessionStore.delete).toHaveBeenCalledWith('session-cone-research');
+    expect(sessionStore.delete).not.toHaveBeenCalledWith('session-cone');
+    expect(orchestrator.clearScoopMessages).toHaveBeenCalledWith('cone_2');
+    expect(orchestrator.clearScoopMessages).not.toHaveBeenCalledWith('cone_1');
+  });
+
+  // 3c. cone-create with a purpose and a first message (#2272): the purpose
+  //     lands on the record's system-prompt hook, the message goes through
+  //     the ordinary user-message path into the NEW cone's buffer.
+  it('cone-create with description + prompt registers the purpose and starts the first turn', async () => {
+    await client.registerScoop(
+      {
+        jid: 'temp',
+        name: 'Research',
+        folder: 'cone-pending-2',
+        isCone: true,
+        parentJid: null,
+        type: 'cone',
+        requiresTrigger: false,
+        assistantLabel: 'Research',
+        addedAt: '',
+      },
+      { description: ' Paper survey ', prompt: 'Start with the abstracts.' }
+    );
+    await tick();
+
+    expect(orchestrator.registerScoop).toHaveBeenCalledOnce();
+    const record = orchestrator.registerScoop.mock.calls[0][0] as RegisteredScoop;
+    expect(record.parentJid).toBeNull();
+    expect(record.folder).toBe('cone-research');
+    expect(record.config?.systemPromptAppend).toBe('This cone is for: Paper survey');
+    expect(orchestrator.handleMessage).toHaveBeenCalledOnce();
+    const channelMsg = orchestrator.handleMessage.mock.calls[0][0] as {
+      chatJid: string;
+      content: string;
+      senderId: string;
+    };
+    expect(channelMsg.chatJid).toBe(record.jid);
+    expect(channelMsg.content).toBe('Start with the abstracts.');
+    expect(channelMsg.senderId).toBe('user');
+  });
+
+  it('cone-create without extras registers a plain root and starts nothing', async () => {
+    await client.registerScoop({
+      jid: 'temp',
+      name: 'Plain',
+      folder: 'cone-pending-2',
+      isCone: true,
+      parentJid: null,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'Plain',
+      addedAt: '',
+    });
+    await tick();
+    const record = orchestrator.registerScoop.mock.calls[0][0] as RegisteredScoop;
+    expect(record.config).toBeUndefined();
+    expect(orchestrator.handleMessage).not.toHaveBeenCalled();
+  });
+
+  it('client.clearAllMessages(unknown jid) falls back to the default root', async () => {
+    void client.clearAllMessages('cone_gone');
+    await tick();
+
+    const sessionStore = (facade as unknown as { sessionStore: { delete: Mock } }).sessionStore;
+    expect(sessionStore.delete).toHaveBeenCalledWith('session-cone');
+    expect(orchestrator.clearScoopMessages).toHaveBeenCalledWith('cone_1');
   });
 
   // 4. panel-cdp-command round-trip

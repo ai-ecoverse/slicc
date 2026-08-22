@@ -38,6 +38,8 @@ const STYLE = `
 .body { margin-top: 16px; }
 .body::slotted(*) { font-family: var(--ui); }
 .footer { margin-top: 20px; display: flex; gap: 8px; justify-content: flex-end; }
+/* Slotted buttons would otherwise keep the UA stylesheet's system font. */
+.footer ::slotted(*) { font-family: var(--ui); }
 .footer[hidden] { display: none; }
 .x {
   position: absolute; top: 14px; right: 14px;

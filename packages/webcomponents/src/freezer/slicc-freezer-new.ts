@@ -29,20 +29,26 @@ const DEFAULT_LABEL = 'New chat';
 const DOUBLE_CLICK_MS = 350;
 
 /**
- * The three gesture actions, surfaced as a directly-clickable legend in expanded
- * mode: `[event-suffix, lucide icon, label]`. Mirrors the production new-session
- * PressButton wiring (`packages/webapp/src/ui/layout.ts`): single click saves +
- * extracts memories, double click skips memory (back-filled later), long press
- * erases the current chat from history.
+ * The session actions, surfaced as one row of icon buttons in expanded mode:
+ * `[event name, lucide icon, tooltip]`. The first three mirror the collapsed
+ * badge's press gesture (`packages/webapp/src/ui/layout.ts`): single click
+ * saves + extracts memories, double click skips memory (back-filled later),
+ * long press erases the current chat from history. The last two exist only
+ * when the host reports a cone count (`cones` attribute, #2272): a new cone
+ * is always offered, dropping one only while more than one cone exists.
  */
-const OPTIONS: ReadonlyArray<readonly [NewChatAction, string, string]> = [
-  ['save', 'archive', 'Save & start new'],
-  ['skip', 'fast-forward', 'New chat — skip memory'],
-  ['erase', 'trash-2', 'Erase & start new'],
+const ACTIONS: ReadonlyArray<readonly [SessionAction, string, string]> = [
+  ['new-chat-save', 'square-pen', 'New chat — save & extract memories'],
+  ['new-chat-skip', 'fast-forward', 'New chat, fast — memories extracted later'],
+  ['new-chat-erase', 'trash-2', 'Discard this chat — no freezer, no memories'],
+  ['new-cone', 'plus', 'New cone — keep this chat, start another cone'],
+  ['drop-cone', 'circle-minus', 'Drop this cone — freeze its chat, no memories'],
 ];
 
 /** The three new-chat gesture outcomes (event suffix). */
 type NewChatAction = 'save' | 'skip' | 'erase';
+/** Every event the row can fire (the gesture outcomes plus the cone actions). */
+type SessionAction = `new-chat-${NewChatAction}` | 'new-cone' | 'drop-cone';
 
 /**
  * Per-instance stylesheet. Mirrors the prototype's `.fznew` / `.nico` / `.nlbl`
@@ -127,43 +133,44 @@ const STYLE = `
   transition: opacity .25s .15s;
 }
 
-/* .fznew-options — the three gesture actions, surfaced as a small legend of
-   directly-clickable rows. Hidden at rest; in expanded mode they are revealed
-   only on hover or keyboard focus (focus-within), so the rail stays calm by
-   default and the legend is a discoverable hover affordance rather than
-   persistent chrome. Collapsed, the press gesture on the badge is the only
-   affordance. */
-.fznew-options { display: none; }
-:host([expanded]:hover) .fznew-options,
-:host([expanded]:focus-within) .fznew-options {
-  display: flex;
-  flex-direction: column;
-  gap: 1px;
-  margin: 2px 0 4px;
-  padding-left: 38px;
+/* .fznew-row — the expanded-mode action row: one 28px badge per session
+   action, always in the DOM and always the same height, so hovering the rail
+   never shifts the layout (#2272). Collapsed, the row is gone and the press
+   gesture on the single badge is the only affordance. */
+.fznew-row { display: none; }
+:host([expanded]) .fznew {
+  /* The expanded rail shows the row, not the single gesture badge. */
+  display: none;
 }
-.fznew-opt {
-  appearance: none;
-  background: transparent;
-  border: none;
-  margin: 0;
-  font: inherit;
-  font-family: var(--ui);
-  font-size: 11px;
-  font-weight: 500;
-  color: var(--txt-3);
-  text-align: left;
-  padding: 3px 6px;
-  border-radius: 6px;
-  cursor: pointer;
+:host([expanded]) .fznew-row {
   display: flex;
   align-items: center;
   gap: 6px;
-  white-space: nowrap;
+  min-height: 36px;
+  padding: 4px 0;
+  margin-bottom: 4px;
 }
-.fznew-opt:hover { background: var(--ghost); color: var(--ink); }
-.fznew-opt:focus-visible { outline: 2px solid var(--ctx); outline-offset: 1px; }
-.fznew-opt svg { display: block; flex: 0 0 auto; }
+.fznew-act {
+  appearance: none;
+  margin: 0;
+  padding: 0;
+  /* Equal shares of the rail width — no trailing gap, whatever the count. */
+  flex: 1 1 0;
+  min-width: 0;
+  height: 32px;
+  display: grid;
+  place-items: center;
+  border-radius: 8px;
+  cursor: pointer;
+  color: var(--ctx);
+  background: color-mix(in srgb, var(--ctx) 14%, var(--canvas));
+  border: 1px solid color-mix(in srgb, var(--ctx) 40%, var(--line));
+  transition: background-color .15s;
+}
+.fznew-act:hover { background: color-mix(in srgb, var(--ctx) 24%, var(--canvas)); }
+.fznew-act:focus-visible { outline: 2px solid var(--ctx); outline-offset: 2px; }
+.fznew-act svg { display: block; }
+.fznew-act[disabled] { opacity: .45; cursor: default; }
 
 /* .fznew-spinner — busy/pending progress: the badge glyph swaps to a spinning
    lucide loader the moment the new-chat work is kicked off (optimistically on a
@@ -225,11 +232,13 @@ const SHEET = sheet(STYLE);
  * (`new-chat-save`), a double click starts a new chat without memories — they are
  * back-filled later (`new-chat-skip`), and a long press (or modifier-click)
  * erases the current chat from history (`new-chat-erase`). A modifier-click that
- * lands inside the double-click window is treated as the second click. In
- * expanded mode the three actions are also surfaced as a small directly-clickable
- * legend below the button so the hidden gestures are discoverable — the legend is
- * revealed only on hover / keyboard focus (focus-within), not persistently;
- * collapsed, the press gesture on the badge is the only affordance.
+ * lands inside the double-click window is treated as the second click.
+ *
+ * In expanded mode the single gesture badge is replaced by one row of icon
+ * buttons — save / fast / discard, plus new-cone and drop-cone when the host
+ * sets `cones` — each with a tooltip and accessible name. The row is always in
+ * the DOM at a fixed height, so hovering never shifts the rail (#2272).
+ * Collapsed, the press gesture on the badge is the only affordance.
  *
  * On a save activation (and whenever the host sets the `busy` attribute) the
  * badge glyph swaps to a spinning lucide loader, giving immediate "work is
@@ -243,7 +252,9 @@ const SHEET = sheet(STYLE);
  * `save` immediately — no double-click deferral window, so the common gesture
  * gets faster too. Long press / modifier-click stays `erase`.
  *
- * @attr expanded - boolean; reveals the fading "New chat" label + the options legend
+ * @attr expanded - boolean; swaps the gesture badge for the action row
+ * @attr cones - number; how many cones the host has. Absent hides both cone
+ *   actions; any value shows new-cone; a value above 1 also shows drop-cone
  * @attr label - the label text / accessible name (default "New chat")
  * @attr no-skip - boolean; two-outcome mode — hides the skip row and commits a
  *   short click as `save` immediately (no double-click window)
@@ -258,16 +269,26 @@ const SHEET = sheet(STYLE);
  * @csspart spinner - the busy-state spinner wrapper around the loader glyph
  * @csspart ring - the determinate progress ring drawn around the spinner
  * @csspart label - the `.nlbl` text span
- * @csspart options - the `.fznew-options` legend (expanded, hover/focus only)
- * @csspart option-save / option-skip / option-erase - the three legend buttons
+ * @csspart row - the `.fznew-row` action row (expanded only)
+ * @csspart action-new-chat-save / action-new-chat-skip / action-new-chat-erase /
+ *   action-new-cone / action-drop-cone - the row's buttons
  * @slot icon - overrides the default lucide glyph inside the badge
  * @slot - default slot overrides the label text
  * @fires new-chat-save - single click: save + extract memories, then new chat
  * @fires new-chat-skip - double click: new chat without memories (back-filled)
  * @fires new-chat-erase - long press / modifier-click: new chat erasing this one
+ * @fires new-cone - row only: start another cone, keeping this chat where it is
+ * @fires drop-cone - row only (cones > 1): freeze this cone's chat and remove it
  */
 export class SliccFreezerNew extends HTMLElement {
-  static readonly observedAttributes = ['expanded', 'label', 'busy', 'progress', 'no-skip'];
+  static readonly observedAttributes = [
+    'expanded',
+    'label',
+    'busy',
+    'progress',
+    'no-skip',
+    'cones',
+  ];
 
   readonly #root: ShadowRoot;
   #button: HTMLButtonElement | null = null;
@@ -329,6 +350,24 @@ export class SliccFreezerNew extends HTMLElement {
 
   set noSkip(value: boolean) {
     this.toggleAttribute('no-skip', value);
+  }
+
+  /**
+   * How many cones the host has, or `null` when cone management is not
+   * offered (attribute absent — the default, and what a follower or a build
+   * without the `multiple-cones` flag leaves). Any count shows the new-cone
+   * action; a count above one also shows drop-cone. Reflected to `cones`.
+   */
+  get cones(): number | null {
+    const raw = this.getAttribute('cones');
+    if (raw == null) return null;
+    const n = Number.parseInt(raw, 10);
+    return Number.isFinite(n) && n >= 0 ? n : null;
+  }
+
+  set cones(value: number | null) {
+    if (value == null) this.removeAttribute('cones');
+    else this.setAttribute('cones', String(Math.max(0, Math.floor(value))));
   }
 
   /**
@@ -414,27 +453,75 @@ export class SliccFreezerNew extends HTMLElement {
 
     this.#button = button;
     this.#attachGesture(button);
-    this.#root.replaceChildren(button, this.#buildOptions());
+    this.#root.replaceChildren(button, this.#buildRow(busy, showRing));
   }
 
   /**
-   * Build the expanded-mode options legend: three directly-clickable rows, one per
-   * gesture outcome. Hidden by CSS unless `[expanded]`.
+   * Build the expanded-mode action row: one icon badge per session action,
+   * each with a tooltip + accessible name. Hidden by CSS unless `[expanded]`.
+   * The save badge carries the busy spinner / progress ring so the feedback
+   * is the same whichever mode the rail is in.
    */
-  #buildOptions(): HTMLElement {
-    const wrap = h('div', { class: 'fznew-options', part: 'options' });
-    const options = this.noSkip ? OPTIONS.filter(([action]) => action !== 'skip') : OPTIONS;
-    for (const [action, icon, text] of options) {
-      const optBtn = h(
+  #buildRow(busy: boolean, showRing: boolean): HTMLElement {
+    const row = h('div', {
+      class: 'fznew-row',
+      part: 'row',
+      role: 'group',
+      'aria-label': this.label,
+    });
+    for (const [action, icon, text] of this.#visibleActions()) {
+      const isSave = action === 'new-chat-save';
+      const glyph =
+        isSave && busy
+          ? h(
+              'span',
+              { class: 'fznew-spinner' },
+              showRing
+                ? h('span', {
+                    class: 'fznew-ring',
+                    style: `--fznew-progress:${this.progress ?? 0}`,
+                  })
+                : null,
+              iconEl(SPINNER_ICON, { size: ICON_SIZE })
+            )
+          : iconEl(icon, { size: ICON_SIZE });
+      const btn = h(
         'button',
-        { class: `fznew-opt fznew-opt--${action}`, part: `option-${action}`, type: 'button' },
-        iconEl(icon, { size: 13 }),
-        h('span', { class: 'fznew-opt__text' }, text)
+        {
+          class: `fznew-act fznew-act--${action}`,
+          part: `action-${action}`,
+          type: 'button',
+          title: text,
+          'aria-label': text,
+          'aria-busy': isSave && busy ? 'true' : undefined,
+        },
+        glyph
       );
-      optBtn.addEventListener('click', () => this.#emit(action));
-      wrap.appendChild(optBtn);
+      // While a session action is in flight every OTHER action is a race:
+      // New chat and Drop cone both archive, clear and (for a drop) unregister
+      // a cone, guarded only by their own separate in-flight flags, and their
+      // read-modify-write of the freezer index would interleave. `busy` is the
+      // one signal that a run is open, so it disables the whole row, not just
+      // the badge it spins.
+      (btn as HTMLButtonElement).disabled = busy;
+      btn.addEventListener('click', () => {
+        if (this.busy) return;
+        this.#emit(action);
+      });
+      row.appendChild(btn);
     }
-    return wrap;
+    return row;
+  }
+
+  /** The actions the row shows for the current `no-skip` / `cones` state. */
+  #visibleActions(): ReadonlyArray<readonly [SessionAction, string, string]> {
+    const cones = this.cones;
+    return ACTIONS.filter(([action]) => {
+      if (action === 'new-chat-skip') return !this.noSkip;
+      if (action === 'new-cone') return cones !== null;
+      if (action === 'drop-cone') return cones !== null && cones > 1;
+      return true;
+    });
   }
 
   /**
@@ -453,27 +540,27 @@ export class SliccFreezerNew extends HTMLElement {
       onLongPress: () => {
         if (this.#pendingShortTimer !== null) {
           this.#clearPendingShort();
-          this.#emit('skip');
+          this.#emit('new-chat-skip');
           return;
         }
-        this.#emit('erase');
+        this.#emit('new-chat-erase');
       },
       onShortClick: () => {
         // Two-outcome mode: no skip exists, so there is nothing to
         // disambiguate — commit the save immediately instead of holding the
         // click for the double-click window.
         if (this.noSkip) {
-          this.#emit('save');
+          this.#emit('new-chat-save');
           return;
         }
         if (this.#pendingShortTimer !== null) {
           this.#clearPendingShort();
-          this.#emit('skip');
+          this.#emit('new-chat-skip');
           return;
         }
         this.#pendingShortTimer = setTimeout(() => {
           this.#pendingShortTimer = null;
-          this.#emit('save');
+          this.#emit('new-chat-save');
         }, DOUBLE_CLICK_MS);
       },
     });
@@ -486,13 +573,13 @@ export class SliccFreezerNew extends HTMLElement {
     }
   }
 
-  /** Dispatch the composed, bubbling `new-chat-<action>` event. */
-  #emit(action: NewChatAction): void {
+  /** Dispatch the composed, bubbling session-action event. */
+  #emit(type: SessionAction): void {
     // Optimistic progress: a save kicks off a save + memory-extract + reload, so
     // surface the spinner immediately on activation (before the host does any
     // async work / reload). The host may also drive `busy` directly.
-    if (action === 'save') this.busy = true;
-    this.dispatchEvent(new CustomEvent(`new-chat-${action}`, { bubbles: true, composed: true }));
+    if (type === 'new-chat-save') this.busy = true;
+    this.dispatchEvent(new CustomEvent(type, { bubbles: true, composed: true }));
   }
 }
 
@@ -506,5 +593,7 @@ declare global {
     'new-chat-save': CustomEvent<void>;
     'new-chat-skip': CustomEvent<void>;
     'new-chat-erase': CustomEvent<void>;
+    'new-cone': CustomEvent<void>;
+    'drop-cone': CustomEvent<void>;
   }
 }

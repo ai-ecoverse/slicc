@@ -6,6 +6,7 @@
  */
 
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
+import { PRIMARY_CONE_FOLDER } from '../../work-unit/record.js';
 import {
   type FrozenSessionIndexEntry,
   frozenSessionPath,
@@ -18,6 +19,18 @@ export type { FrozenSessionIndexEntry } from '../session-freezer.js';
 export { SESSIONS_INDEX_PATH } from '../session-freezer.js';
 // The ice-blue freezer accent lives with the shell's context switcher.
 export { FREEZER_TINT } from './wc-shell.js';
+
+/**
+ * Which cone an archive belongs to, for the thawed chat log's header —
+ * `undefined` for the primary cone and for legacy archives with no `cone`
+ * field, both of which read as "the cone" and would only add noise. The
+ * rail card itself never shows it: one Freezer for all cones, attribution
+ * lives in the chat log (#2272).
+ */
+export function coneBadgeFor(entry: FrozenSessionIndexEntry): string | undefined {
+  if (!entry.cone || entry.cone === PRIMARY_CONE_FOLDER) return undefined;
+  return entry.coneLabel || entry.cone.replace(/^cone-/, '');
+}
 
 /** Meta line for a card, e.g. `Jan 1 · 12 turns`. */
 function metaLine(entry: FrozenSessionIndexEntry): string {
@@ -131,7 +144,8 @@ export async function readFreezerIndexState(fs: LocalVfsClient): Promise<Freezer
  * ground truth when `index.json` is corrupt (e.g. truncated by a reload that
  * killed the worker mid-write). Titles / timestamps / counts come from each
  * archive's YAML-style header; `pending-*` filenames keep their enrichment
- * marker. Entries sort newest-first like the live index.
+ * marker and cone provenance is recovered from the frontmatter. Entries sort
+ * newest-first like the live index.
  */
 export async function rebuildFreezerIndexFromArchives(
   fs: LocalVfsClient
@@ -160,6 +174,9 @@ export async function rebuildFreezerIndexFromArchives(
         messageCount,
         ...(parsed.cost ? { cost: parsed.cost } : {}),
         ...(parsed.models ? { models: parsed.models } : {}),
+        ...(parsed.cone ? { cone: parsed.cone } : {}),
+        ...(parsed.coneLabel ? { coneLabel: parsed.coneLabel } : {}),
+        ...(parsed.memorySkipped ? { memorySkipped: true as const } : {}),
         ...(filename.startsWith('pending-') ? { pendingEnrichment: true } : {}),
       });
     } catch {

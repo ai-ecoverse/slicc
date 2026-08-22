@@ -209,15 +209,39 @@ describe('parentId on the wire (#1666 / #2270)', () => {
     expect(summaryIsRoot({ isCone: false })).toBe(false);
   });
 
-  it('groups each cone with its own scoops in follower descriptors', () => {
+  it('lists every cone first, then scoops grouped by owner (#2272)', () => {
     const descriptors = toFollowerSwitcherScoops(toScoopSummaries([b, a, research, cone], []));
     expect(descriptors.map((d) => `${d.type}:${d.key}`)).toEqual([
       'cone:cone_2',
-      'scoop:scoop_b',
       'cone:cone',
+      'scoop:scoop_b',
       'scoop:scoop_a',
     ]);
-    expect(descriptors.map((d) => d.label)).toEqual(['Research', 'b', 'sliccy', 'a']);
+    expect(descriptors.map((d) => d.label)).toEqual(['Research', 'sliccy', 'b', 'a']);
+  });
+
+  it("puts the selected cone's scoops right after the cones (#2272)", () => {
+    const summaries = toScoopSummaries([b, a, research, cone], []);
+    // Selecting the primary (or one of its scoops) pulls its scoops forward.
+    expect(toFollowerSwitcherScoops(summaries, 'cone').map((d) => d.key)).toEqual([
+      'cone_2',
+      'cone',
+      'scoop_a',
+      'scoop_b',
+    ]);
+    expect(toFollowerSwitcherScoops(summaries, 'scoop_a').map((d) => d.key)).toEqual([
+      'cone_2',
+      'cone',
+      'scoop_a',
+      'scoop_b',
+    ]);
+    // An unknown selection falls back to plain owner order.
+    expect(toFollowerSwitcherScoops(summaries, 'nope').map((d) => d.key)).toEqual([
+      'cone_2',
+      'cone',
+      'scoop_b',
+      'scoop_a',
+    ]);
   });
 
   it('keeps a nested scoop inside its cone group (depth-first by owner)', () => {
@@ -234,8 +258,8 @@ describe('parentId on the wire (#1666 / #2270)', () => {
     );
     expect(descriptors.map((d) => d.key)).toEqual([
       'cone_2',
-      'scoop_b',
       'cone',
+      'scoop_b',
       'scoop_a',
       'scoop_aa',
       'scoop_x',

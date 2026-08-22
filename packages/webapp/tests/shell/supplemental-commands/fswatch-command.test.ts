@@ -48,6 +48,35 @@ describe('fswatch command', () => {
     delete (globalThis as Record<string, unknown>).__slicc_lick_handler;
   });
 
+  it('defaults --scoop to SLICC_LICK_TARGET from the shell (#2272)', async () => {
+    const cmd = await freshCommand();
+    const watcher = installWatcher();
+    const licks: Array<{ targetScoop?: string }> = [];
+    (globalThis as Record<string, unknown>).__slicc_lick_handler = (e: { targetScoop?: string }) =>
+      licks.push(e);
+    const env = new Map([['SLICC_LICK_TARGET', 'cone-research']]);
+    const result = await cmd.execute(
+      ['create', '--path', '/workspace', '--pattern', '*.md'],
+      mockCommandContext({ env })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Scoop:   cone-research');
+    watcher.fire([{ type: 'create', path: '/workspace/a.md' }]);
+    expect(licks[0]?.targetScoop).toBe('cone-research');
+
+    // An explicit --scoop wins; no env and no flag stays untargeted.
+    await cmd.execute(
+      ['create', '--path', '/workspace', '--pattern', '*.ts', '--scoop', 'helper'],
+      mockCommandContext({ env })
+    );
+    watcher.fire([{ type: 'create', path: '/workspace/b.ts' }]);
+    expect(licks.at(-1)?.targetScoop).toBe('helper');
+    await cmd.execute(['create', '--path', '/tmp', '--pattern', '*'], mockCommandContext());
+    watcher.fire([{ type: 'create', path: '/tmp/c' }]);
+    // Pre-existing shape: an untargeted watch sends an empty target.
+    expect(licks.at(-1)?.targetScoop).toBeFalsy();
+  });
+
   it('has correct name', async () => {
     const cmd = await freshCommand();
     expect(cmd.name).toBe('fswatch');

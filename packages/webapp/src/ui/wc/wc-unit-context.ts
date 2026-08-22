@@ -9,8 +9,9 @@
  */
 
 import type { RegisteredScoop } from '../../scoops/types.js';
+import { subtreeOf } from '../../transcript/collect.js';
 import { isRootUnit, rootsOf } from '../../work-unit/policy.js';
-import { isPrimaryRoot } from '../../work-unit/record.js';
+import { isPrimaryRoot, PRIMARY_CONE_FOLDER } from '../../work-unit/record.js';
 
 type UnitLike = Pick<RegisteredScoop, 'parentJid' | 'folder' | 'name' | 'assistantLabel'>;
 
@@ -61,8 +62,65 @@ export function defaultRootOf(scoops: readonly RegisteredScoop[]): RegisteredSco
 }
 
 /** Roots first (oldest first), then children in registry order. */
-export function orderForSwitcher(scoops: readonly RegisteredScoop[]): RegisteredScoop[] {
+export function orderForSwitcher(
+  scoops: readonly RegisteredScoop[],
+  selectedJid?: string | null
+): RegisteredScoop[] {
   const roots = rootsOf(scoops);
   const rootIds = new Set(roots.map((s) => s.jid));
-  return [...roots, ...scoops.filter((s) => !rootIds.has(s.jid))];
+  const rest = scoops.filter((s) => !rootIds.has(s.jid));
+  // The selected cone's scoops come first (#2272): the strip reads
+  // "cones, then what I am working in, then everything else".
+  const selected = selectedJid ? scoops.find((s) => s.jid === selectedJid) : undefined;
+  const selectedRoot = selected ? rootForSelection(scoops, selected) : undefined;
+  if (!selectedRoot) return [...roots, ...rest];
+  const mine = new Set(subtreeOf(scoops, selectedRoot.jid).map((s) => s.jid));
+  return [
+    ...roots,
+    ...rest.filter((s) => mine.has(s.jid)),
+    ...rest.filter((s) => !mine.has(s.jid)),
+  ];
+}
+
+/**
+ * The root a session-level action ("New chat", the freezer, clear-chat)
+ * belongs to (#2272). A selected root is itself; a selected child resolves
+ * to the root that owns it, walking the ownership edge (`parentJid`) so a
+ * scoop-of-a-scoop still lands on its cone. Nothing selected — or a broken
+ * chain — falls back to the default root, which is what these actions used
+ * before multiple cones existed.
+ */
+export function rootForSelection(
+  scoops: readonly RegisteredScoop[],
+  selected: Pick<RegisteredScoop, 'jid' | 'parentJid'> | null | undefined
+): RegisteredScoop | undefined {
+  let current = selected ? scoops.find((s) => s.jid === selected.jid) : undefined;
+  // Bounded by the roster size: a cycle introduced by a corrupt record must
+  // not spin here.
+  for (let hops = 0; current && hops <= scoops.length; hops++) {
+    if (isRootUnit(current)) return current;
+    const parentJid = current.parentJid;
+    current = scoops.find((s) => s.jid === parentJid);
+  }
+  return defaultRootOf(scoops);
+}
+
+/**
+ * Folder of the root a URL/thread context addresses, or `null` when the
+ * context is not a cone (`scoop:…`, `freezer:…`). An absent context means
+ * the primary cone — that is what a bare boot deep-links to.
+ */
+export function rootFolderForContext(ctx: string | null | undefined): string | null {
+  if (ctx == null || ctx === 'cone') return PRIMARY_CONE_FOLDER;
+  if (ctx.startsWith('cone:')) return ctx.slice('cone:'.length) || PRIMARY_CONE_FOLDER;
+  return null;
+}
+
+/** Resolve the root that owns a frozen archive's `cone` folder, if it still exists. */
+export function rootForConeFolder(
+  scoops: readonly RegisteredScoop[],
+  folder: string | undefined
+): RegisteredScoop | undefined {
+  if (!folder) return defaultRootOf(scoops);
+  return scoops.find((s) => isRootUnit(s) && s.folder === folder) ?? defaultRootOf(scoops);
 }

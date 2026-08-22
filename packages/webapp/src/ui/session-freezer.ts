@@ -1,9 +1,10 @@
 /**
- * Freezer — archive the cone's chat session to the VFS before a "New session"
+ * Freezer — archive a cone's chat session to the VFS before a "New session"
  * reset clears it from IndexedDB.
  *
  * Flow (all best-effort, never throws past the caller):
- *   1. Load `session-cone` from the UI SessionStore.
+ *   1. Load `session-<folder>` for the cone being frozen (`opts.cone`,
+ *      defaulting to the primary cone) from the UI SessionStore.
  *   2. If the session is short (< MIN_MESSAGES_TO_FREEZE), skip everything
  *      and return null — nothing meaningful to extract or archive.
  *   3. Generate a title and icon, falling back to a heuristic title.
@@ -47,6 +48,7 @@ import {
   SESSIONS_DIR,
   SESSIONS_INDEX_PATH,
 } from '../transcript/frozen-archive-format.js';
+import { chatSessionIdFor, PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 import { formatChatForClipboard } from './chat-clipboard.js';
 import type { ChatMessage, Session } from './types.js';
 
@@ -90,6 +92,19 @@ export interface FrozenSession extends FrozenSessionIndexEntry {
   archive: FrozenSessionArchive;
 }
 
+/**
+ * The cone a freeze operates on (#2272). Narrow on purpose — the freezer
+ * needs the storage folder that keys the chat session plus a label for the
+ * rail card, not a whole `RegisteredScoop`. Omitting it targets the primary
+ * cone, which is what every pre-#2272 caller meant.
+ */
+export interface FreezerConeRef {
+  /** Storage folder of the root unit: `cone` (primary) or `cone-<slug>`. */
+  folder: string;
+  /** Chip label of that cone (`assistantLabel`); recorded for extra cones only. */
+  label?: string;
+}
+
 export interface FreezeConeSessionOptions {
   sessionStore: SessionStore;
   /**
@@ -125,6 +140,12 @@ export interface FreezeConeSessionOptions {
    */
   mode?: 'full' | 'quick';
   /**
+   * `'skip'` freezes the chat without extracting memories — neither now nor
+   * in a later catch-up (the archive is marked `memorySkipped`). Used when a
+   * cone is dropped (#2272): its chat is kept, its memory is not mined.
+   */
+  memory?: 'skip';
+  /**
    * Injectable lucide icon picker (tests). Defaults to the page-side
    * `pickLucideIcon` from `quick-llm.js`. Only consulted when the LLM
    * calls are enabled (`mode: 'full'` with model + apiKey).
@@ -136,10 +157,15 @@ export interface FreezeConeSessionOptions {
    * freeze; quick mode and credential-less freezes remain legacy.
    */
   agenticMemorySpawn?: AgentBridge['spawn'];
+  /**
+   * Which cone to freeze. Defaults to the primary cone (`session-cone`), so
+   * callers that predate multiple cones keep their behaviour verbatim.
+   */
+  cone?: FreezerConeRef;
 }
 
 /**
- * Run the freezer over the cone session. Returns the entry written (or null
+ * Run the freezer over a cone's session. Returns the entry written (or null
  * if nothing was frozen). Never throws past the caller — every step is
  * wrapped in try/catch so the New Session flow can always proceed to the
  * clear+reload step.
@@ -147,7 +173,7 @@ export interface FreezeConeSessionOptions {
 export async function freezeConeSession(
   opts: FreezeConeSessionOptions
 ): Promise<FrozenSession | null> {
-  const session = await loadSessionSafely(opts.sessionStore);
+  const session = await loadSessionSafely(opts.sessionStore, coneFolderOf(opts));
   if (!session || session.messages.length < MIN_MESSAGES_TO_FREEZE) {
     log.info('Skipping freeze: session below threshold or missing', {
       messageCount: session?.messages.length ?? 0,
@@ -162,8 +188,9 @@ export async function freezeConeSession(
   const llmEnabled = mode === 'full' && Boolean(opts.apiKey && opts.model);
 
   // A supplied curator spawn owns memory regardless of mode — the legacy
-  // extraction call would double up with the curator's rewrite.
-  if (!opts.agenticMemorySpawn) {
+  // extraction call would double up with the curator's rewrite. A
+  // memory-skipped freeze extracts nothing at all.
+  if (!opts.agenticMemorySpawn && opts.memory !== 'skip') {
     await extractMemoriesBestEffort(opts, agentMessages, llmEnabled);
   }
   const title =
@@ -179,7 +206,7 @@ export async function freezeConeSession(
     title,
     mode,
     icon,
-    Boolean(opts.agenticMemorySpawn)
+    Boolean(opts.agenticMemorySpawn) && opts.memory !== 'skip'
   );
 }
 
@@ -367,6 +394,17 @@ async function writeFrozenArchive(
       ? `pending-${pendingShortId()}.md`
       : `${frozenAt.replace(/[:.]/g, '-')}-${slugify(title)}.md`;
   const usageSummary = summarizeSessionUsage(session.messages);
+  // Provenance: which cone this chat came from, so the rail can label the
+  // card and a thaw can route back to the right root (#2272). The label is
+  // recorded for extra cones only — every primary card would just say
+  // `sliccy`.
+  const coneFolder = coneFolderOf(opts);
+  const provenance = {
+    cone: coneFolder,
+    ...(coneFolder !== PRIMARY_CONE_FOLDER && opts.cone?.label
+      ? { coneLabel: opts.cone.label }
+      : {}),
+  };
   const indexEntry: FrozenSessionIndexEntry = {
     filename,
     sessionId,
@@ -374,9 +412,11 @@ async function writeFrozenArchive(
     frozenAt,
     messageCount: session.messages.length,
     ...(usageSummary ?? {}),
+    ...provenance,
     ...(icon ? { icon } : {}),
     ...(mode === 'quick' ? { pendingEnrichment: true } : {}),
     ...(memoryPending ? { memoryPending: true } : {}),
+    ...(opts.memory === 'skip' ? { memorySkipped: true } : {}),
   };
   try {
     await ensureDir(opts.vfs, SESSIONS_DIR);
@@ -394,6 +434,8 @@ async function writeFrozenArchive(
       messageCount: session.messages.length,
       messages,
       ...(usageSummary ?? {}),
+      ...provenance,
+      ...(opts.memory === 'skip' ? { memorySkipped: true as const } : {}),
     };
     const archiveMarkdown = formatArchiveAsMarkdown(archive);
     await opts.vfs.writeFile(`${SESSIONS_DIR}/${filename}`, archiveMarkdown);
@@ -403,7 +445,12 @@ async function writeFrozenArchive(
     // the archive + index are durable before the caller proceeds to clear the
     // cone (and, on the single-click "save" path, before any LLM enrichment runs).
     await opts.vfs.flush();
-    log.info('Cone session frozen', { filename, title, messageCount: session.messages.length });
+    log.info('Cone session frozen', {
+      filename,
+      title,
+      cone: coneFolder,
+      messageCount: session.messages.length,
+    });
     return { ...indexEntry, archive };
   } catch (err) {
     log.warn('Failed to write frozen session to VFS', {
@@ -564,11 +611,18 @@ function unavailableTmpAttachment(attachment: SessionAttachment): SessionAttachm
   };
 }
 
-async function loadSessionSafely(store: SessionStore): Promise<Session | null> {
+/** Folder of the cone a freeze targets — the primary cone unless told otherwise. */
+function coneFolderOf(opts: Pick<FreezeConeSessionOptions, 'cone'>): string {
+  return opts.cone?.folder || PRIMARY_CONE_FOLDER;
+}
+
+async function loadSessionSafely(store: SessionStore, folder: string): Promise<Session | null> {
+  const sessionId = chatSessionIdFor({ folder });
   try {
-    return await store.load('session-cone');
+    return await store.load(sessionId);
   } catch (err) {
-    log.warn('Failed to load session-cone', {
+    log.warn('Failed to load cone chat session', {
+      sessionId,
       error: err instanceof Error ? err.message : String(err),
     });
     return null;
@@ -638,6 +692,17 @@ function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
   const usageFrontmatter =
     (archive.cost ? `cost: ${JSON.stringify(archive.cost)}\n` : '') +
     (archive.models ? `models: ${JSON.stringify(archive.models)}\n` : '');
+  // Cone provenance rides the archive too, so a rebuild from `/sessions/*.md`
+  // (corrupt index) recovers it. The label is user text — quote it like the
+  // title so newlines and quotes round-trip.
+  const coneFrontmatter =
+    (archive.cone ? `cone: ${archive.cone}\n` : '') +
+    (archive.coneLabel ? `coneLabel: ${JSON.stringify(archive.coneLabel)}\n` : '') +
+    // The memory opt-out has to survive an index rebuild too: `pendingEnrichment`
+    // comes back from the `pending-` filename, so without this marker a rebuilt
+    // entry would look like an ordinary pending freeze and the next catch-up
+    // would extract memories from a chat archived with memory explicitly off.
+    (archive.memorySkipped ? `memorySkipped: true\n` : '');
   const header =
     `---\n` +
     `id: ${archive.id}\n` +
@@ -647,6 +712,7 @@ function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
     `updatedAt: ${archive.updatedAt}\n` +
     `messageCount: ${archive.messageCount}\n` +
     usageFrontmatter +
+    coneFrontmatter +
     `---\n\n`;
   // Escape the only sequence that would prematurely close an HTML comment.
   const dataJson = JSON.stringify(stripEphemeral(archive.messages)).replace(/-->/g, '-- >');
@@ -933,7 +999,9 @@ export async function enrichPendingSession(
     entry.memoryPending === true &&
     opts.skipMemory !== true &&
     (await curatorReceiptExists(vfs, entry));
-  const effectiveOpts = curatorAlreadyRan ? { ...opts, skipMemory: true } : opts;
+  // A memory-skipped archive (dropped cone) is title/icon-only for good.
+  const effectiveOpts =
+    curatorAlreadyRan || entry.memorySkipped === true ? { ...opts, skipMemory: true } : opts;
   const calls = await runEnrichmentCalls(entry, agentMessages, effectiveOpts);
   if (calls === null) return null;
   // Pick the icon BEFORE appending memory: the pick is a read-only LLM call
@@ -1171,10 +1239,16 @@ function buildEnrichedIndexEntry(
     messageCount: entry.messageCount,
     ...(entry.cost ? { cost: entry.cost } : {}),
     ...(entry.models ? { models: entry.models } : {}),
+    // Cone provenance survives the rename — the archive stays the property
+    // of the cone that produced it (#2272).
+    ...(entry.cone ? { cone: entry.cone } : {}),
+    ...(entry.coneLabel ? { coneLabel: entry.coneLabel } : {}),
     ...(entry.sessionId ? { sessionId: entry.sessionId } : {}),
     ...(resolvedIcon ? { icon: resolvedIcon } : {}),
     ...(entry.completeSnapshotUnavailable ? { completeSnapshotUnavailable: true } : {}),
     ...(preserveMemoryPending && entry.memoryPending ? { memoryPending: true } : {}),
+    // A dropped cone's archive stays memory-free after the rename too.
+    ...(entry.memorySkipped ? { memorySkipped: true } : {}),
   };
 }
 

@@ -207,6 +207,28 @@ describe('slicc-shader', () => {
     const wait = (ms: number) => new Promise((r) => setTimeout(r, ms));
     /** Count WebGL draw calls from the moment of installation. */
     const spyDraws = () => vi.spyOn(WebGLRenderingContext.prototype, 'drawArrays');
+    /**
+     * Wait until the field has actually stopped drawing, then return. A fixed
+     * sleep is not enough on a loaded machine: the ResizeObserver's initial
+     * notification wakes a frame, and under CI throttling that frame can land
+     * *after* the sleep -- it would then be counted against a "draws nothing"
+     * assertion as a single stray draw. Polls until one whole window passes
+     * with no draw, so the spy installed afterwards starts from real quiet.
+     */
+    const settle = async (windowMs = 120, timeoutMs = 3000) => {
+      const probe = vi.spyOn(WebGLRenderingContext.prototype, 'drawArrays');
+      try {
+        const deadline = Date.now() + timeoutMs;
+        for (;;) {
+          const before = probe.mock.calls.length;
+          await wait(windowMs);
+          if (probe.mock.calls.length === before) return; // quiet window: settled
+          if (Date.now() > deadline) return; // still busy: let the assertion report it
+        }
+      } finally {
+        probe.mockRestore();
+      }
+    };
 
     afterEach(() => vi.restoreAllMocks());
 
@@ -226,7 +248,7 @@ describe('slicc-shader', () => {
     it('cone with speed=0 renders once and stops', async () => {
       const el = mount({ speed: '0' });
       if (el.noWebgl) return;
-      await wait(150); // settle: connect renders exactly one frame
+      await settle(); // connect renders exactly one frame, then stops
       const spy = spyDraws();
       await wait(250);
       expect(spy.mock.calls.length).toBe(0);
@@ -339,7 +361,7 @@ describe('slicc-shader', () => {
     it('pulse(NaN) does not spin a static field', async () => {
       const el = mount({ speed: '0' });
       if (el.noWebgl) return;
-      await wait(150); // settle: stopped
+      await settle(); // stopped
       const spy = spyDraws();
       el.pulse(Number.NaN);
       await wait(300);

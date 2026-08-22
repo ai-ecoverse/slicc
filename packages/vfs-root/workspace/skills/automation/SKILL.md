@@ -62,7 +62,7 @@ Watch a VFS path; deliver events as licks when files matching the pattern are cr
 # Route .md changes under /workspace to a scoop.
 fswatch create --path /workspace --pattern "*.md" --scoop doc-watcher --name md-changes
 
-# Untargeted: route to the cone.
+# Untargeted: route to the cone you are running in.
 fswatch create --path /workspace/src --pattern "*.ts"
 
 fswatch list

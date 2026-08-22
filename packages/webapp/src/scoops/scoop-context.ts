@@ -55,11 +55,13 @@ import {
 } from '../providers/account-store.js';
 import { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import { DEFAULT_JSH_SEARCH_ROOTS } from '../shell/jsh-discovery.js';
+import { LICK_TARGET_ENV } from '../shell/lick-target-env.js';
 import { PROGRESS_CONTENT_TYPE, type ToolProgressEvent } from '../shell/progress/types.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import { createBashTool, createFileTools } from '../tools/index.js';
 import type { BashJobProcess } from '../tools/types.js';
 import { toDescriptor } from '../work-unit/descriptor.js';
+import { rootsOf } from '../work-unit/policy.js';
 import { processOwnerKindFor } from '../work-unit/record.js';
 import type { WorkUnitDescriptor } from '../work-unit/types.js';
 import { getAdobeSessionId } from './llm-session-id.js';
@@ -224,9 +226,11 @@ export function abortableSleep(ms: number, signal?: AbortSignal): Promise<boolea
 export function buildScoopShellEnv(
   isCone: boolean,
   folder: string,
-  secretEnv: Record<string, string>
+  secretEnv: Record<string, string>,
+  /** Folder a non-primary cone's untargeted licks default to (`SLICC_LICK_TARGET`). */
+  lickTarget?: string
 ): Record<string, string> {
-  if (isCone) return { ...secretEnv };
+  if (isCone) return { ...secretEnv, ...(lickTarget ? { [LICK_TARGET_ENV]: lickTarget } : {}) };
   return {
     ...secretEnv,
     HOME: `/scoops/${folder}/home`,
@@ -238,6 +242,30 @@ export function buildScoopShellEnv(
       ...DEFAULT_JSH_SEARCH_ROOTS,
     ].join(':'),
   };
+}
+
+/**
+ * The lick target a unit stamps on licks it produces (background bash,
+ * `fswatch`/`crontask` via `SLICC_LICK_TARGET`): its own folder for every
+ * unit except the one root an untargeted lick already lands on, whose folder
+ * is therefore not worth spending as a lick alias (#2272).
+ *
+ * That default root is `rootsOf(scoops)[0]` -- the *oldest* root, which is
+ * what `host.ts` falls back to when an event carries no `targetScoop`. It is
+ * deliberately NOT `isPrimaryRoot()`: that asks who holds the reserved `cone`
+ * folder, and after the original primary is dropped `coneFolderFor()` hands
+ * that freed folder to the next new cone. Such a cone would look primary
+ * while the oldest *surviving* root is still the untargeted destination, so a
+ * folder test would drop its stamp and post its `fswatch` events and
+ * background-job completions into someone else's chat.
+ */
+export function ownLickTargetFor(
+  unit: Pick<WorkUnitDescriptor, 'display'>,
+  scoop: Pick<RegisteredScoop, 'parentJid' | 'folder' | 'jid'>,
+  defaultLickRootJid: string | undefined
+): string | undefined {
+  if (unit.display.role === 'child') return scoop.folder;
+  return scoop.jid === defaultLickRootJid ? undefined : scoop.folder;
 }
 
 export interface ScoopContextCallbacks {
@@ -467,6 +495,14 @@ export class ScoopContext {
     this.sessionId = scoop.jid;
   }
 
+  /**
+   * `ownLickTargetFor` against the live roster, so the answer follows roots
+   * being created and dropped instead of a folder name captured at boot.
+   */
+  private ownLickTarget(): string | undefined {
+    return ownLickTargetFor(this.unit, this.scoop, rootsOf(this.callbacks.getScoops())[0]?.jid);
+  }
+
   getStructuredOutput() {
     return { captured: this.structuredOutputCaptured, value: this.structuredOutputValue };
   }
@@ -566,7 +602,8 @@ export class ScoopContext {
     const shellEnv = buildScoopShellEnv(
       this.unit.policy.filesystem.kind === 'full-workspace',
       this.scoop.folder,
-      secretEnv
+      secretEnv,
+      this.ownLickTarget()
     );
     this.shell = new AlmostBashShellHeadless({
       fs: gatedFs,
@@ -636,10 +673,9 @@ export class ScoopContext {
       createBashTool(this.shell!, this.fs! as VirtualFS, this.unit.workspace.scratch, {
         // Unset → the tool's own ten-minute default.
         defaultBackgroundAfterSeconds: this.scoop.config?.backgroundAfterSeconds,
-        // Route a detached job's completion lick back to THIS scoop. The cone
-        // is the default target for an untargeted lick, so it stays unset
-        // there (its `folder` is not a valid lick target alias).
-        targetScoop: this.unit.display.role === 'child' ? this.scoop.folder : undefined,
+        // Route a detached job's completion lick back to THIS unit. Only the
+        // primary cone leaves it unset — it is where untargeted licks land.
+        targetScoop: this.ownLickTarget(),
         // Every invocation becomes a kernel pid, so `timeout` is a real kill
         // (SIGKILL fans out to realm workers) and a detached job stays visible
         // to `ps` / reachable by `kill`.

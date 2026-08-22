@@ -1,6 +1,6 @@
 /**
  * "New session" orchestration — UI-side glue that resolves model/api-key
- * and invokes the freezer over the cone's current chat session.
+ * and invokes the freezer over the selected cone's current chat session.
  *
  * Both the extension and standalone (kernel-worker) paths wire their
  * `onClearChat` to call `runNewSessionFreeze`, so the freezer behavior
@@ -19,6 +19,7 @@ import { getApiKey, resolveCurrentModel } from './provider-settings.js';
 import {
   curateFrozenSessionMemories,
   enrichPendingSession,
+  type FreezerConeRef,
   type FrozenSession,
   type FrozenSessionIndexEntry,
   freezeConeSession,
@@ -142,6 +143,7 @@ async function runAgenticMemoryFreeze(
     vfs: opts.vfs,
     mode: 'quick',
     agenticMemorySpawn: spawn,
+    cone: opts.cone,
   });
   if (!frozen) return null;
   if (opts.captureCompleteSnapshot) {
@@ -209,6 +211,7 @@ async function runAgenticBackgroundPass(
       apiKey,
       headers,
       agenticMemorySpawn: spawn,
+      cone: opts.cone,
     },
     current
   ).catch((err) => {
@@ -267,6 +270,12 @@ export interface RunNewSessionFreezeOptions {
    * is always retained; this hook never writes a raw fallback.
    */
   captureCompleteSnapshot?: (frozen: FrozenSession) => Promise<void>;
+  /**
+   * Which cone's chat to freeze (#2272). The freezer defaults to the primary
+   * cone when omitted, so callers that predate multiple cones are unchanged;
+   * the WC rail passes the currently selected root.
+   */
+  cone?: FreezerConeRef;
 }
 
 type NewSessionTmpVfs = Pick<WritableVfsClient, 'listMountPoints' | 'mkdir' | 'readDir' | 'rm'>;
@@ -379,6 +388,7 @@ export async function runNewSessionFreeze(
     sessionStore,
     vfs: opts.vfs,
     mode: 'quick',
+    cone: opts.cone,
   });
   if (!frozen) return null; // short session / write failure — nothing to do.
 
@@ -488,7 +498,7 @@ async function raceEnrichmentAgainstTimer(
 /**
  * Quick-freeze variant of `runNewSessionFreeze`. Skips the two LLM calls
  * (and therefore the credential/header resolution they need), writing
- * the cone session under a synthetic `pending-…md` filename with the
+ * the selected cone's session under a synthetic `pending-…md` filename with the
  * heuristic title. The archive is durable but **never enriched** — the
  * entry stays with its heuristic title and no icon. Designed for the
  * double-click "impatient" gesture where reload latency matters more
@@ -496,6 +506,25 @@ async function raceEnrichmentAgainstTimer(
  */
 export async function runNewSessionFreezeQuick(
   opts: RunNewSessionFreezeOptions
+): Promise<FrozenSession | null> {
+  return runQuickFreeze(opts, undefined);
+}
+
+/**
+ * Freeze a cone's chat with NO memory extraction, now or later — the "drop
+ * cone" path (#2272). Same durable quick snapshot as the fast new chat, but
+ * the archive is marked `memorySkipped` so the catch-up enriches the title
+ * and icon only.
+ */
+export async function runNewSessionArchiveOnly(
+  opts: RunNewSessionFreezeOptions
+): Promise<FrozenSession | null> {
+  return runQuickFreeze(opts, 'skip');
+}
+
+async function runQuickFreeze(
+  opts: RunNewSessionFreezeOptions,
+  memory: 'skip' | undefined
 ): Promise<FrozenSession | null> {
   const sessionStore = new SessionStore();
   try {
@@ -511,6 +540,8 @@ export async function runNewSessionFreezeQuick(
     sessionStore,
     vfs: opts.vfs,
     mode: 'quick',
+    cone: opts.cone,
+    ...(memory ? { memory } : {}),
   });
 
   // Complete-snapshot hook — same non-blocking pattern as runNewSessionFreeze.

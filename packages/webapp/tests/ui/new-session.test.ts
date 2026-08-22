@@ -46,6 +46,7 @@ vi.mock('../../src/providers/quick-llm.js', () => ({ pickLucideIcon: mockPickLuc
 
 import {
   resetNewSessionTmp,
+  runNewSessionArchiveOnly,
   runNewSessionFreeze,
   runNewSessionFreezeQuick,
   runPendingSessionCatchup,
@@ -501,6 +502,28 @@ describe('runNewSessionFreezeQuick — captureCompleteSnapshot hook', () => {
       })
     );
     expect(result).not.toBeNull();
+  });
+
+  it('runNewSessionArchiveOnly is the quick freeze with memory skipped for good (#2272)', async () => {
+    const captureCompleteSnapshot = vi.fn(async (_frozen: FrozenSession) => {});
+    const result = await runNewSessionArchiveOnly({
+      vfs: {} as never,
+      cone: { folder: 'cone-research', label: 'Research' },
+      captureCompleteSnapshot,
+    });
+    expect(result).not.toBeNull();
+    expect(mockFreezeConeSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        mode: 'quick',
+        memory: 'skip',
+        cone: { folder: 'cone-research', label: 'Research' },
+      })
+    );
+    expect(captureCompleteSnapshot).toHaveBeenCalledOnce();
+    // The plain quick path never asks for that.
+    mockFreezeConeSession.mockClear();
+    await runNewSessionFreezeQuick({ vfs: {} as never });
+    expect(mockFreezeConeSession.mock.calls[0][0]).not.toHaveProperty('memory');
   });
 
   it('does not invoke captureCompleteSnapshot when nothing was archived', async () => {

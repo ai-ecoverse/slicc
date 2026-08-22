@@ -208,7 +208,14 @@ export interface KernelClientFacade {
   getScoops(): RegisteredScoop[];
   getScoop(jid: string): RegisteredScoop | undefined;
   isProcessing(jid: string): boolean;
-  registerScoop(scoop: RegisteredScoop): Promise<void>;
+  /**
+   * Create a cone. `options.description` is kept as the cone's purpose
+   * (`config.systemPromptAppend`); `options.prompt` starts its first turn.
+   */
+  registerScoop(
+    scoop: RegisteredScoop,
+    options?: { description?: string; prompt?: string }
+  ): Promise<void>;
   unregisterScoop(jid: string): Promise<void>;
   createScoopTab(jid: string): void;
   stopScoop(jid: string): void;
@@ -236,8 +243,11 @@ export interface KernelClientFacade {
    * after the host has acknowledged the clear so the panel can safely
    * `location.reload()` without racing the offscreen agent context (in
    * extension mode the offscreen document survives the panel reload).
+   *
+   * `scoopJid` names the root to clear (#2272) — the panel passes the
+   * selected cone. Omitted, the host clears the default root.
    */
-  clearAllMessages(): Promise<void>;
+  clearAllMessages(scoopJid?: string): Promise<void>;
   spawnAgent(options: AgentSpawnOptions): Promise<AgentSpawnResult>;
   clearFilesystem(): void;
   requestState(): void;

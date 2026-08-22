@@ -347,7 +347,10 @@ export class OffscreenClient implements KernelClientFacade {
    *  optimistically so the UI updates immediately, then sends to offscreen.
    *  The real scoop (with a different JID) replaces the optimistic one when
    *  `scoop-created` arrives. */
-  async registerScoop(scoop: RegisteredScoop): Promise<void> {
+  async registerScoop(
+    scoop: RegisteredScoop,
+    options: { description?: string; prompt?: string } = {}
+  ): Promise<void> {
     if (!scoop.isCone) {
       throw new Error(
         'OffscreenClient.registerScoop is cone-only; use scoop_scoop for non-cone scoops'
@@ -357,7 +360,12 @@ export class OffscreenClient implements KernelClientFacade {
       this.scoops.push(scoop);
       this.scoopStatuses.set(scoop.jid, 'initializing');
     }
-    this.send({ type: 'cone-create', name: scoop.name });
+    this.send({
+      type: 'cone-create',
+      name: scoop.name,
+      ...(options.description ? { description: options.description } : {}),
+      ...(options.prompt ? { prompt: options.prompt } : {}),
+    });
   }
 
   /**
@@ -470,13 +478,16 @@ export class OffscreenClient implements KernelClientFacade {
    * racing the offscreen document (which survives the panel reload in
    * extension mode). A 5-second timeout backs out cleanly in the rare
    * case the bridge is wedged; reload still proceeds.
+   *
+   * `scoopJid` names the root to clear (#2272) — the panel passes the
+   * selected cone. Omitted, the bridge clears the default root.
    */
-  async clearAllMessages(): Promise<void> {
+  async clearAllMessages(scoopJid?: string): Promise<void> {
     const requestId = `clear-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const ack = new Promise<void>((resolve) => {
       this.pendingClearAcks.set(requestId, resolve);
     });
-    this.send({ type: 'clear-chat', requestId });
+    this.send({ type: 'clear-chat', requestId, ...(scoopJid ? { scoopJid } : {}) });
     await Promise.race([ack, new Promise<void>((resolve) => setTimeout(resolve, 5000))]);
     this.pendingClearAcks.delete(requestId);
   }

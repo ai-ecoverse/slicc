@@ -7,6 +7,7 @@
 
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { defaultLickTarget, type LickTargetEnv } from '../lick-target-env.js';
 import { isHelpRequest } from './subcommand-help.js';
 
 // Keep a module-level registry of active fswatches
@@ -130,8 +131,10 @@ function globFilter(pattern: string): (path: string) => boolean {
   return (path: string) => globRegex.test(path.split('/').pop() ?? '');
 }
 
-function handleCreate(args: string[]): Result {
+function handleCreate(args: string[], env: LickTargetEnv): Result {
   const opts = parseCreateOptions(args);
+  // No `--scoop`: a non-primary cone's shell names itself (SLICC_LICK_TARGET).
+  opts.scoop = defaultLickTarget(opts.scoop, env) ?? '';
   if (!opts.basePath || !opts.pattern) return fail('--path and --pattern are required');
 
   // Access VFS watcher via global hook
@@ -180,7 +183,7 @@ function handleCreate(args: string[]): Result {
 }
 
 export function createFsWatchCommand(): Command {
-  return defineCommand('fswatch', async (args) => {
+  return defineCommand('fswatch', async (args, ctx) => {
     const subcommand = args[0];
     // Help before the verb runs — `create --help` must not register a watcher.
     if (!subcommand || isHelpRequest(args, { valueFlags: CREATE_VALUE_FLAGS })) return ok(HELP);
@@ -191,7 +194,7 @@ export function createFsWatchCommand(): Command {
       case 'delete':
         return handleDelete(args[1]);
       case 'create':
-        return handleCreate(args);
+        return handleCreate(args, ctx.env);
       default:
         return fail(`unknown command: ${subcommand}`);
     }

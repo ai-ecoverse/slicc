@@ -422,6 +422,27 @@ describe('OffscreenClient', () => {
     await pending;
   });
 
+  it('omits scoopJid when no cone is named, carries it when one is (#2272)', async () => {
+    const bare = client.clearAllMessages();
+    const bareEnvelope = sentMessages[0] as { source: string; payload: any };
+    expect('scoopJid' in bareEnvelope.payload).toBe(false);
+    simulateMessage('offscreen', {
+      type: 'clear-chat-ack',
+      requestId: bareEnvelope.payload.requestId,
+    });
+    await bare;
+
+    sentMessages.length = 0;
+    const targeted = client.clearAllMessages('cone_2');
+    const envelope = sentMessages[0] as { source: string; payload: any };
+    expect(envelope.payload.scoopJid).toBe('cone_2');
+    simulateMessage('offscreen', {
+      type: 'clear-chat-ack',
+      requestId: envelope.payload.requestId,
+    });
+    await targeted;
+  });
+
   it('awaits thinking acknowledgment and updates the cached scoop before resolving', async () => {
     simulateMessage('offscreen', {
       type: 'scoop-list',
@@ -535,6 +556,33 @@ describe('OffscreenClient', () => {
     expect(envelope.payload.name).toBe('Cone');
     // No `isCone` on the wire — the bridge handler knows this path is cone-only.
     expect(envelope.payload.isCone).toBeUndefined();
+    // Nothing optional asked for → nothing optional sent.
+    expect(envelope.payload.description).toBeUndefined();
+    expect(envelope.payload.prompt).toBeUndefined();
+  });
+
+  it('registerScoop forwards the purpose and first message when given (#2272)', () => {
+    client.registerScoop(
+      {
+        jid: 'temp',
+        name: 'Research',
+        folder: 'cone-pending-2',
+        isCone: true,
+        parentJid: null,
+        type: 'cone',
+        requiresTrigger: false,
+        assistantLabel: 'Research',
+        addedAt: '',
+      },
+      { description: 'Paper survey', prompt: 'Start with the abstracts.' }
+    );
+    const envelope = sentMessages[0] as { payload: any };
+    expect(envelope.payload).toEqual({
+      type: 'cone-create',
+      name: 'Research',
+      description: 'Paper survey',
+      prompt: 'Start with the abstracts.',
+    });
   });
 
   it('registerScoop rejects when called with a non-cone scoop', async () => {

@@ -1,11 +1,12 @@
 import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
+import { chatSessionIdFor } from '../../work-unit/record.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
 import { metaThinkingForScoop } from './wc-follower-model-surface.js';
 import { scoopColor } from './wc-scoop-color.js';
 import { applyShellContext, type WcShellRefs } from './wc-shell.js';
-import { threadContextFor } from './wc-unit-context.js';
+import { rootFolderForContext, threadContextFor } from './wc-unit-context.js';
 
 export {
   effortOverrideForAgent,
@@ -26,12 +27,17 @@ export async function applyLeaderLocalThinkingChange(
   return applied;
 }
 
-/** Whether leader-owned state will replace local cone history during boot. */
+/**
+ * Whether leader-owned state will replace local cone history during boot.
+ * A `cone:<folder>` deep link is NOT a skip — it hydrates that cone's own
+ * persisted history (#2272); only non-cone contexts (`scoop:`, `freezer:`)
+ * and leader-owned floats (Cherry, a joined tray) are.
+ */
 export function shouldSkipSessionHydration(
   pendingUrlContext: string | null | undefined,
   win: { location: { href: string }; localStorage: Storage }
 ): boolean {
-  if (pendingUrlContext != null && pendingUrlContext !== 'cone') return true;
+  if (rootFolderForContext(pendingUrlContext) === null) return true;
   if (new URL(win.location.href).searchParams.get('cherry') === '1') return true;
   return hasStoredTrayJoinUrl(win.localStorage);
 }
@@ -67,7 +73,11 @@ export async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredSco
   }
 }
 
-/** Hydrate persisted cone history until the worker's canonical replay arrives. */
+/**
+ * Hydrate persisted cone history until the worker's canonical replay
+ * arrives. The cone is the one the URL context addresses — `?ctx=cone:work`
+ * hydrates `session-cone-work`, a bare boot the primary `session-cone`.
+ */
 export async function hydratePersistedConeSession(deps: {
   pendingUrlContext: string | null | undefined;
   win: { location: { href: string }; localStorage: Storage };
@@ -76,10 +86,12 @@ export async function hydratePersistedConeSession(deps: {
   onHydrated(): void;
 }): Promise<void> {
   if (shouldSkipSessionHydration(deps.pendingUrlContext, deps.win)) return;
+  const folder = rootFolderForContext(deps.pendingUrlContext);
+  if (folder === null) return;
   const { SessionStore } = await import('../../scoops/chat-session-store.js');
   const store = new SessionStore();
   await store.init();
-  const session = await store.load('session-cone');
+  const session = await store.load(chatSessionIdFor({ folder }));
   if (session && session.messages.length > 0 && !deps.hasSelection()) {
     deps.loadMessages(session.messages);
     deps.onHydrated();

@@ -10,6 +10,7 @@ import {
 } from './leader-session-events.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import {
+  coneBadgeFor,
   enrichFreezerIcons,
   FREEZER_TINT,
   type FrozenSessionIndexEntry,
@@ -22,7 +23,12 @@ import {
 } from './wc-freezer.js';
 import type { WcPageVfs } from './wc-live.js';
 import { applyShellContext, type WcShellRefs } from './wc-shell.js';
-import { defaultRootOf } from './wc-unit-context.js';
+import {
+  defaultRootOf,
+  rootForConeFolder,
+  rootForSelection,
+  switcherLabelFor,
+} from './wc-unit-context.js';
 
 export interface FreezerRailDeps {
   refs: WcShellRefs;
@@ -39,6 +45,81 @@ export interface FreezerRailHandles {
   refreshFreezer(): void;
   openFrozen(slug: string): Promise<void>;
   getViewedFrozenSessionId(): string | null;
+  /**
+   * Archive one root's chat into the freezer with no memory extraction —
+   * the "drop cone" path (#2272). Resolves once the archive is durable (or
+   * there was nothing to freeze); rejects only on an unrecoverable VFS.
+   */
+  freezeCone(root: RegisteredScoop): Promise<void>;
+}
+
+interface ArchiveConeSessionDeps {
+  action: 'save' | 'skip';
+  writer: Awaited<ReturnType<FreezerRailDeps['openVfs']>>['writer'];
+  /** Root being archived; `undefined` only if the roster is empty. */
+  root: RegisteredScoop | undefined;
+  client: Pick<OffscreenClient, 'spawnAgent'>;
+  freezerNew(): HTMLElement | null;
+  refreshFreezer(): void;
+  runNewSessionFreeze: typeof import('../new-session.js').runNewSessionFreeze;
+  runNewSessionFreezeQuick: typeof import('../new-session.js').runNewSessionFreezeQuick;
+}
+
+/**
+ * The archive half of "New chat" — everything before the clear. Both the
+ * Markdown freeze and the complete-snapshot capture are scoped to `root`
+ * (#2272): a sibling cone's conversation does not belong in this archive's
+ * bundle, and a sibling cone's running turn must not hold up the freeze.
+ */
+async function captureCompleteSnapshotFor(
+  root: RegisteredScoop | undefined,
+  frozen: FrozenSession
+): Promise<void> {
+  const { getTranscriptExportService } = await import('../../transcript/export-provider.js');
+  await getTranscriptExportService().captureFrozen({
+    sessionId: frozen.sessionId ?? frozen.archive.id,
+    title: frozen.archive.title,
+    frozenAt: frozen.archive.frozenAt,
+    createdAt: frozen.archive.createdAt,
+    updatedAt: frozen.archive.updatedAt,
+    ...(root ? { rootJid: root.jid } : {}),
+  });
+}
+
+async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
+  const { root } = deps;
+  const cone = root ? { folder: root.folder, label: switcherLabelFor(root) } : undefined;
+  const captureCompleteSnapshot = (frozen: FrozenSession): Promise<void> =>
+    captureCompleteSnapshotFor(root, frozen);
+  if (deps.action !== 'save') {
+    await deps.runNewSessionFreezeQuick({ vfs: deps.writer, cone, captureCompleteSnapshot });
+    return;
+  }
+  await deps.runNewSessionFreeze({
+    vfs: deps.writer,
+    cone,
+    agenticMemorySpawn: (options) => deps.client.spawnAgent(options),
+    captureCompleteSnapshot,
+    onProgress: (fraction) => {
+      const el = deps.freezerNew();
+      if (!el) return;
+      if (fraction === null) el.removeAttribute('progress');
+      else el.setAttribute('progress', String(fraction));
+    },
+    onBackgroundEnriched: deps.refreshFreezer,
+  });
+}
+
+/** Caption at the top of a thawed chat naming the cone it was frozen from. */
+export function frozenProvenanceEl(
+  doc: Document,
+  entry: Pick<FrozenSessionIndexEntry, 'cone' | 'coneLabel'> | undefined
+): HTMLElement {
+  const cone = entry ? coneBadgeFor(entry as FrozenSessionIndexEntry) : undefined;
+  const el = doc.createElement('slicc-day-separator');
+  el.setAttribute('label', cone ? `Frozen chat · from cone ${cone}` : 'Frozen chat');
+  el.setAttribute('data-frozen-provenance', cone ?? '');
+  return el;
 }
 
 /** Wire frozen-session refresh, new-session actions, and read-only thaw routing. */
@@ -97,51 +178,42 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
     newSessionInFlight = true;
     freezerNew()?.setAttribute('busy', '');
     void (async () => {
+      // "New chat" belongs to the cone the user is looking at (#2272): a
+      // selected scoop resolves to the root that owns it, nothing selected
+      // to the default root. Captured BEFORE the awaits so a roster refresh
+      // mid-freeze cannot move the target between archive and clear.
+      const root = rootForSelection(client.getScoops(), getSelected());
       try {
         const { writer } = await openVfs();
         const { resetNewSessionTmp, runNewSessionFreeze, runNewSessionFreezeQuick } = await import(
           '../new-session.js'
         );
         if (action !== 'erase') {
-          const captureCompleteSnapshot = async (frozen: FrozenSession): Promise<void> => {
-            const { getTranscriptExportService } = await import(
-              '../../transcript/export-provider.js'
-            );
-            await getTranscriptExportService().captureFrozen({
-              sessionId: frozen.sessionId ?? frozen.archive.id,
-              title: frozen.archive.title,
-              frozenAt: frozen.archive.frozenAt,
-              createdAt: frozen.archive.createdAt,
-              updatedAt: frozen.archive.updatedAt,
-            });
-          };
-          if (action === 'save') {
-            await runNewSessionFreeze({
-              vfs: writer,
-              agenticMemorySpawn: (options) => client.spawnAgent(options),
-              captureCompleteSnapshot,
-              onProgress: (fraction) => {
-                const el = freezerNew();
-                if (!el) return;
-                if (fraction === null) el.removeAttribute('progress');
-                else el.setAttribute('progress', String(fraction));
-              },
-              onBackgroundEnriched: refreshFreezer,
-            });
-          } else {
-            await runNewSessionFreezeQuick({ vfs: writer, captureCompleteSnapshot });
-          }
+          await archiveConeSession({
+            action,
+            writer,
+            root,
+            client,
+            freezerNew,
+            refreshFreezer,
+            runNewSessionFreeze,
+            runNewSessionFreezeQuick,
+          });
         }
         await resetNewSessionTmp(writer);
-        await client.clearAllMessages();
+        await client.clearAllMessages(root?.jid);
         getController()?.loadMessages([]);
         window.dispatchEvent(new CustomEvent(LEADER_BROADCAST_SNAPSHOT_EVENT));
         void import('../../speech/dictation-priming.js')
           .then(({ resetDictationPriming }) => resetDictationPriming())
           .catch(() => undefined);
         refreshFreezer();
-        const cone = defaultRootOf(client.getScoops());
-        if (cone) selectScoop(cone);
+        // Stay on the cone we just cleared — its record may have been
+        // replaced by a roster refresh, so re-resolve by jid.
+        const next =
+          client.getScoops().find((scoop) => scoop.jid === root?.jid) ??
+          defaultRootOf(client.getScoops());
+        if (next) selectScoop(next);
       } catch (err) {
         log.error('WC new session failed', err);
       } finally {
@@ -156,6 +228,17 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   for (const action of ['save', 'skip', 'erase'] as const) {
     refs.freezer.addEventListener(`new-chat-${action}`, () => runNewSession(action));
   }
+
+  const freezeCone = async (root: RegisteredScoop): Promise<void> => {
+    const { writer } = await openVfs();
+    const { runNewSessionArchiveOnly } = await import('../new-session.js');
+    await runNewSessionArchiveOnly({
+      vfs: writer,
+      cone: { folder: root.folder, label: switcherLabelFor(root) },
+      captureCompleteSnapshot: (frozen) => captureCompleteSnapshotFor(root, frozen),
+    });
+    refreshFreezer();
+  };
   if (isFeatureEnabled('agentic-memory')) freezerNew()?.setAttribute('no-skip', '');
   window.addEventListener(LEADER_RUN_NEW_SESSION_EVENT, (event) => {
     const action = (event as CustomEvent<Partial<LeaderRunNewSessionDetail>>).detail?.action;
@@ -163,9 +246,11 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
   });
 
   const openFrozen = async (slug: string): Promise<void> => {
+    // Hoisted so the catch can route the fallback selection to the cone the
+    // archive named, even when the thaw itself is what failed.
+    let entry = frozenEntries.find((candidate) => candidate.filename === slug);
     try {
       const { reader } = await openVfs();
-      let entry = frozenEntries.find((candidate) => candidate.filename === slug);
       if (!entry) {
         entry = ((await readFreezerEntries(reader)) ?? []).find(
           (candidate) => candidate.filename === slug
@@ -178,6 +263,10 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
       refs.thread.setAttribute('context', `freezer:${entry?.filename ?? slug}`);
       currentFrozenSessionId = entry?.sessionId ?? entry?.filename ?? null;
       getController()?.loadMessages(messages);
+      // Attribution lives in the chat log, not on the rail card (#2272):
+      // one Freezer for all cones, and the thawed view says whose chat it is.
+      const column = (refs.thread as { inner?: HTMLElement }).inner ?? refs.thread;
+      column.prepend(frozenProvenanceEl(refs.thread.ownerDocument, entry));
       refs.thread.setAttribute('accent', FREEZER_TINT);
       applyShellContext(refs, { kind: 'freezer' });
       refs.inputCard.setAttribute('disabled', '');
@@ -186,7 +275,10 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
     } catch (err) {
       log.error('WC thaw failed', err);
       if (!getSelected()) {
-        const cone = defaultRootOf(client.getScoops());
+        // Fall back to the cone the archive came from, not blindly to the
+        // primary one (#2272); legacy archives carry no `cone` field and
+        // resolve to the default root as before.
+        const cone = rootForConeFolder(client.getScoops(), entry?.cone);
         if (cone) selectScoop(cone);
       }
     }
@@ -201,5 +293,6 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
     refreshFreezer,
     openFrozen,
     getViewedFrozenSessionId: () => currentFrozenSessionId,
+    freezeCone,
   };
 }

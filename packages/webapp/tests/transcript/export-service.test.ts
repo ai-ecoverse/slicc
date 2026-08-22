@@ -642,6 +642,62 @@ describe('DefaultTranscriptExportService — captureFrozen', () => {
     );
   });
 
+  it('scopes the snapshot to the named root, leaving a sibling cone out (#2272)', async () => {
+    const snapshotStore = makeEmptySnapshotStore();
+    const collection: TranscriptCollectionDeps = {
+      ...makeCollectionDeps(),
+      listScoops: vi.fn(
+        () =>
+          [
+            { jid: 'jid-cone', isCone: true, name: 'Sliccy', folder: 'cone', parentJid: null },
+            { jid: 'jid-scoop-a', isCone: false, name: 'A', folder: 'a', parentJid: 'jid-cone' },
+            {
+              jid: 'jid-cone-b',
+              isCone: true,
+              name: 'Research',
+              folder: 'cone-research',
+              parentJid: null,
+            },
+            { jid: 'jid-scoop-b', isCone: false, name: 'B', folder: 'b', parentJid: 'jid-cone-b' },
+          ] as any
+      ),
+    };
+    const svc = new DefaultTranscriptExportService(makeDeps({ snapshotStore, collection }));
+
+    await svc.captureFrozen({
+      sessionId: 'sess-freeze-scoped',
+      title: 'Research chat',
+      frozenAt: '2024-06-01T12:00:00.000Z',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      rootJid: 'jid-cone-b',
+    });
+
+    const [, snapshot] = snapshotStore.write.mock.calls[0]!;
+    expect(snapshot.document.conversations.map((c: { id: string }) => c.id)).toEqual([
+      'jid-cone-b',
+      'jid-scoop-b',
+    ]);
+  });
+
+  it('writes NO snapshot when the named root vanished mid-freeze (#2272)', async () => {
+    // An empty snapshot would be worse than none: `buildFrozenSnapshot`
+    // prefers a stored snapshot over the Markdown archive.
+    const snapshotStore = makeEmptySnapshotStore();
+    const svc = new DefaultTranscriptExportService(makeDeps({ snapshotStore }));
+
+    await svc.captureFrozen({
+      sessionId: 'sess-freeze-gone',
+      title: 'Gone',
+      frozenAt: '2024-06-01T12:00:00.000Z',
+      createdAt: 1_000,
+      updatedAt: 2_000,
+      rootJid: 'jid-vanished',
+    });
+
+    expect(snapshotStore.write).not.toHaveBeenCalled();
+  });
+
   it('propagates abort signal', async () => {
     const controller = new AbortController();
     controller.abort();

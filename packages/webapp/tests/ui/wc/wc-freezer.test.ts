@@ -14,6 +14,7 @@ import { FsError } from '../../../src/fs/types.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
 import { readSessionCount } from '../../../src/scoops/cone-memory-budget.js';
 import {
+  coneBadgeFor,
   enrichFreezerIcons,
   type FrozenSessionIndexEntry,
   frozenCard,
@@ -61,6 +62,25 @@ describe('frozenCard', () => {
     expect(card.getAttribute('title')).toBe('Fix the build');
     expect(card.getAttribute('slug')).toBe(ENTRY.filename);
     expect(card.getAttribute('meta')).toContain('2 turns');
+  });
+});
+
+describe('cone provenance (#2272)', () => {
+  it('shows no cone badge for the primary cone or a legacy archive', () => {
+    expect(coneBadgeFor(ENTRY)).toBeUndefined();
+    expect(coneBadgeFor({ ...ENTRY, cone: 'cone' })).toBeUndefined();
+  });
+
+  it('names the extra cone an archive came from, but never on the rail card', () => {
+    const entry = { ...ENTRY, cone: 'cone-research', coneLabel: 'Research' };
+    expect(coneBadgeFor(entry)).toBe('Research');
+    // One Freezer for all cones: the card's meta line is the same whichever
+    // cone the chat came from — attribution lives in the chat log.
+    expect(frozenCard(entry).getAttribute('meta')).toBe(frozenCard(ENTRY).getAttribute('meta'));
+  });
+
+  it('falls back to the folder slug when no label was recorded', () => {
+    expect(coneBadgeFor({ ...ENTRY, cone: 'cone-side-quest' })).toBe('side-quest');
   });
 });
 
@@ -183,6 +203,8 @@ describe('corrupt-index recovery', () => {
         'messageCount: 3',
         'cost: {"total":0.25,"input":0.1,"output":0.15,"cacheRead":0,"cacheWrite":0}',
         'models: [{"model":"model-a","cost":0.25,"turns":2,"tokens":300}]',
+        'cone: cone-research',
+        'coneLabel: "Research"',
         '---',
         '',
       ].join('\n')
@@ -199,8 +221,44 @@ describe('corrupt-index recovery', () => {
       pendingEnrichment: true,
       cost: { total: 0.25, input: 0.1, output: 0.15, cacheRead: 0, cacheWrite: 0 },
       models: [{ model: 'model-a', cost: 0.25, turns: 2, tokens: 300 }],
+      // Provenance survives the rebuild — the archives are the ground truth.
+      cone: 'cone-research',
+      coneLabel: 'Research',
     });
     expect(rebuilt[1]).toMatchObject({ filename: ENTRY.filename, title: 'Fix the build' });
+    expect(rebuilt[1].cone).toBeUndefined();
+    // Not marked in the archive → the rebuild must not invent an opt-out.
+    expect(rebuilt[0].memorySkipped).toBeUndefined();
+  });
+
+  it('a memorySkipped archive keeps its opt-out through a rebuild (Codex P2)', async () => {
+    // A dropped cone is frozen with memory off. `pendingEnrichment` comes back
+    // from the `pending-` filename, so if the marker did not ride the archive a
+    // rebuilt entry would look like an ordinary pending freeze and the next
+    // boot catch-up would extract memories from a chat that opted out.
+    const fs = await seededFs();
+    await fs.writeFile(
+      '/sessions/pending-dropped.md',
+      [
+        '---',
+        'title: "dropped cone chat"',
+        'frozenAt: "2026-06-03T09:00:00Z"',
+        'messageCount: 4',
+        'cone: cone-research',
+        'coneLabel: "Research"',
+        'memorySkipped: true',
+        '---',
+        '',
+      ].join('\n')
+    );
+    await fs.writeFile('/sessions/index.json', '[{"filename": "trunca');
+
+    const rebuilt = await rebuildFreezerIndexFromArchives(fs);
+    expect(rebuilt[0]).toMatchObject({
+      filename: 'pending-dropped.md',
+      pendingEnrichment: true,
+      memorySkipped: true,
+    });
   });
 
   it('keeps readSessionCount compatible with cost-bearing index entries', async () => {

@@ -28,8 +28,8 @@ export interface LickBackpressureState {
 /** Mutable live state shared between kernel callbacks and shell wiring. */
 export interface WcLiveWiring {
   refs: WcShellRefs;
-  /** Re-render the freezer rail's Cones section (set by the live shell). */
-  refreshConesRail?: () => void;
+  /** Re-sync the rail's cone actions with the roster (set by the live shell). */
+  refreshConeActions?: () => void;
   statuses: Map<string, ScoopStatus>;
   fills: Map<string, number>;
   phases: Map<string, ScoopBusyPhase>;
@@ -74,9 +74,10 @@ export function toSwitcherScoops(
   statuses?: ReadonlyMap<string, ScoopStatus>,
   fills?: ReadonlyMap<string, number>,
   phases?: ReadonlyMap<string, ScoopBusyPhase>,
-  awaitingJid?: string | null
+  awaitingJid?: string | null,
+  selectedJid?: string | null
 ): SwitcherScoop[] {
-  return orderForSwitcher(scoops).map((scoop) => {
+  return orderForSwitcher(scoops, selectedJid).map((scoop) => {
     const fill = fills?.get(scoop.jid);
     const status = statuses?.get(scoop.jid);
     return {
@@ -103,10 +104,11 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
         wiring.statuses,
         wiring.fills,
         wiring.phases,
-        wiring.awaitingInput
+        wiring.awaitingInput,
+        wiring.getSelected()?.jid
       );
     }
-    wiring.refreshConesRail?.();
+    wiring.refreshConeActions?.();
   };
   wiring.refreshScoops = refreshScoops;
 
