@@ -1,0 +1,37 @@
+{
+  "model": "fake-cone-primary",
+  "models": ["fake-cone-primary", "fake-cone-alternate"],
+  "turns": [
+    {
+      "whenUserMessageMatches": "review the docs",
+      "content": "Reviewer cone online.",
+      "contentChunkSize": 64
+    },
+    {
+      "whenUserMessageMatches": "round one alpha",
+      "content": "Ack alpha.",
+      "contentChunkSize": 64
+    },
+    { "whenUserMessageMatches": "round one beta", "content": "Ack beta.", "contentChunkSize": 64 },
+    {
+      "whenUserMessageMatches": "round two alpha",
+      "content": "Ack second alpha.",
+      "contentChunkSize": 64
+    },
+    {
+      "whenUserMessageMatches": "round two beta",
+      "content": "Ack second beta.",
+      "contentChunkSize": 64
+    },
+    {
+      "whenUserMessageMatches": "round three alpha",
+      "content": "Ack third alpha.",
+      "contentChunkSize": 64
+    },
+    {
+      "whenUserMessageMatches": "round three beta",
+      "content": "Ack third beta.",
+      "contentChunkSize": 64
+    }
+  ]
+}

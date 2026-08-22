@@ -8,6 +8,21 @@ teleported tab. Most wasted time in multi-harness testing comes from testing
 against a follower that cannot do the thing under test, or against a build
 that does not contain the change.
 
+## There is an automated leg — check it before hand-driving
+
+`packages/webapp/tests/e2e/multiple-cones-follower.test.ts` (#2313) already runs
+a leader + follower pair headlessly on every webapp PR: the leader boots against
+the fake LLM, mints a tray on the harness's own `wrangler dev` (a REAL tray hub,
+Durable Objects and all), and a second browser context joins at `/join/<token>`.
+It covers cone-strip mirroring, a follower changing one cone's model, and
+read-only scoop views. Topology helpers: `tests/e2e/two-instance-helpers.ts`;
+how to write one: `.agents/skills/writing-slicc-tests/SKILL.md`.
+
+Reach for the manual harness below when the feature needs something that leg
+cannot give you — a follower with a local CDP surface (teleport, federated CDP),
+a real OAuth popup, or an iOS runtime. The automated follower is UI-only and
+will never be teleport-eligible.
+
 ## Pick the follower by what the feature needs
 
 | Feature under test                                     | Follower must have                                           | Use                               |

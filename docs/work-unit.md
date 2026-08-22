@@ -55,6 +55,16 @@ Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). Th
 
 Tests: `packages/webapp/tests/work-unit/`. `conformance.ts` is a reusable suite any `WorkUnitRuntime` implementation must pass.
 
+End to end, the multi-cone product surface is covered by the fake-LLM Playwright suite ([#2313](https://github.com/ai-ecoverse/slicc/issues/2313)), which runs the real shell with the `multiple-cones` flag on:
+
+| Spec (`packages/webapp/tests/e2e/`) | Covers                                                                                                                                                                                                                                                                     |
+| ----------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `multiple-cones.test.ts`            | create a cone from a brief → chat → `scoop_scoop` → switch → drop; the last-cone guard; oldest-survivor promotion; the rail's session actions and their freezer outcomes (`memorySkipped` on drop, cone attribution on the entry, the `Frozen chat · from cone …` caption) |
+| `multiple-cones-licks.test.ts`      | lick addressing: an untargeted `fswatch` created from an extra cone's shell returns to that cone, one addressed `--scoop <cone name>` resolves by name, and neither reaches the oldest root                                                                                |
+| `multiple-cones-follower.test.ts`   | leader + follower joined through a real `wrangler dev` tray hub: strip mirroring (`orderForSwitcher` vs `toFollowerSwitcherScoops`), a follower changing one cone's model while the leader sits in another, read-only scoop views on both sides                            |
+
+Topology helpers live in `tests/e2e/two-instance-helpers.ts`.
+
 ## Migration phases
 
 A strangler migration, each phase a separate PR with deletion criteria:
