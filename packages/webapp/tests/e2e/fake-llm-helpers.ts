@@ -110,6 +110,13 @@ export interface SeedLocalLlmOptions {
   baseUrl?: string;
   /** Model id to register + select. Matches the fake fixture's `model`. */
   modelId: string;
+  /**
+   * Every model id the account advertises (the provider's comma-separated
+   * `deployment` field, which `local-llm`'s `getModelIds` parses). Defaults to
+   * `[modelId]`. A scenario that switches models needs at least two here, and
+   * the fake server must advertise them too (`Fixture.models`).
+   */
+  modelIds?: readonly string[];
   /** Optional placeholder key. Local servers ignore it; pi-ai requires
    *  a non-empty string. Defaults to `'local'`. */
   apiKey?: string;
@@ -131,12 +138,14 @@ export async function seedLocalLlmProvider(
   const baseUrl = options.baseUrl ?? FAKE_LLM_BASE_URL;
   const apiKey = options.apiKey ?? 'local';
   const { modelId } = options;
+  const deployment = [...(options.modelIds ?? [modelId])].join(',');
   await page.addInitScript(
     (seed: {
       providerId: string;
       apiKey: string;
       baseUrl: string;
       modelId: string;
+      deployment: string;
       accountsKey: string;
       modelKey: string;
     }) => {
@@ -145,7 +154,7 @@ export async function seedLocalLlmProvider(
           providerId: seed.providerId,
           apiKey: seed.apiKey,
           baseUrl: seed.baseUrl,
-          deployment: seed.modelId,
+          deployment: seed.deployment,
         };
         localStorage.setItem(seed.accountsKey, JSON.stringify([entry]));
         localStorage.setItem(seed.modelKey, `${seed.providerId}:${seed.modelId}`);
@@ -158,6 +167,7 @@ export async function seedLocalLlmProvider(
       apiKey,
       baseUrl,
       modelId,
+      deployment,
       accountsKey: ACCOUNTS_KEY,
       modelKey: MODEL_KEY,
     }
