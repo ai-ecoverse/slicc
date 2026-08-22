@@ -34,17 +34,17 @@ export const MAX_MEMORY_TIMEOUT_SECONDS = 1200;
  * needs and turns any other write — an install, a stray backup — into a cone
  * escalation.
  */
-function defaultWritablePaths(workspace: WorkUnitWorkspace): string[] {
-  return [workspace.memoryPath];
-}
+const defaultWritablePaths = (workspace: WorkUnitWorkspace): string[] => [workspace.memoryPath];
 /**
  * The cone's workspace is readable so the curator can still orient; only
  * writes narrow. For an extra cone that is `/cones/<folder>/workspace/` plus
  * the shared skills library, which lives outside it (#2271).
  */
-function defaultVisiblePaths(workspace: WorkUnitWorkspace): string[] {
-  return ['/sessions/', '/shared/', ...defaultChildVisibleRoots(workspace)];
-}
+const defaultVisiblePaths = (workspace: WorkUnitWorkspace): string[] => [
+  '/sessions/',
+  '/shared/',
+  ...defaultChildVisibleRoots(workspace),
+];
 /**
  * Commands the curator may run without escalating. Non-cone scoops run under
  * `defaultDisposition: 'require-approval'`, so a command missing here does not
@@ -192,10 +192,11 @@ export function curatorAgentName(folder: string): string {
  */
 function safeCuratorName(folder: string): string {
   const name = curatorAgentName(folder);
-  return /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)
-    ? name
-    : curatorAgentName(PRIMARY_CONE_FOLDER);
+  return SPAWNABLE_NAME.test(name) ? name : curatorAgentName(PRIMARY_CONE_FOLDER);
 }
+
+/** Mirror of the agent bridge's `AGENT_NAME_PATTERN` (a legal down-edge away). */
+const SPAWNABLE_NAME = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 
 /**
  * The curator's private scratch folder. The agent bridge derives it from the
@@ -209,10 +210,13 @@ export function curatorScratchDir(folder: string): string {
 /** The primary cone's scratch folder — what a pre-#2271 `MEMORY.md` spells out. */
 const PRIMARY_CURATOR_SCRATCH = curatorScratchDir(PRIMARY_CONE_FOLDER);
 
-/** Workspace (root + memory file) of the cone a pass curates. */
+/**
+ * Workspace (root + memory file) of the cone a pass curates. `workspaceFor`
+ * already resolves the primary folder to `/workspace`, so there is no separate
+ * primary branch to keep in sync here.
+ */
 function curatorWorkspaceFor(cone: CuratorConeRef | undefined): WorkUnitWorkspace {
-  if (!cone || cone.folder === PRIMARY_CONE_FOLDER) return PRIMARY_WORKSPACE;
-  return workspaceFor({ parentJid: null, folder: cone.folder });
+  return workspaceFor({ parentJid: null, folder: cone?.folder ?? PRIMARY_CONE_FOLDER });
 }
 
 /**
@@ -245,12 +249,11 @@ function rebaseOntoCone(path: string, workspace: WorkUnitWorkspace): string {
  * single-file `writablePaths` still blocks installs).
  */
 function rebaseVisiblePaths(paths: string[], workspace: WorkUnitWorkspace): string[] {
+  const skills = `${SKILLS_LIBRARY_DIR}/`;
+  const covers = (list: string[]): boolean =>
+    list.some((entry) => skills.startsWith(entry.endsWith('/') ? entry : `${entry}/`));
   const rebased = paths.map((path) => rebaseOntoCone(path, workspace));
-  const covered = (list: string[]): boolean =>
-    list.some((entry) =>
-      `${SKILLS_LIBRARY_DIR}/`.startsWith(entry.endsWith('/') ? entry : `${entry}/`)
-    );
-  if (covered(paths) && !covered(rebased)) rebased.push(`${SKILLS_LIBRARY_DIR}/`);
+  if (covers(paths) && !covers(rebased)) rebased.push(skills);
   return rebased;
 }
 
