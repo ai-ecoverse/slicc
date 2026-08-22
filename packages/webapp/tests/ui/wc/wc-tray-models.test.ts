@@ -82,6 +82,49 @@ describe('role-switch follower model controls', () => {
     expect(selectScoop).toHaveBeenCalledWith('research');
   });
 
+  it('re-orders the strip when this leader-capable follower selects a cone (Codex P2)', () => {
+    // Third follower wiring path, after wc-live (leader) and wc-follower: a
+    // standalone float that joined someone else's tray. It publishes through
+    // the same `toFollowerSwitcherScoops`, so it needs the same selection.
+    const composerMeta = document.createElement('div');
+    const switcher = document.createElement('div') as unknown as HTMLElement & {
+      scoops: Array<{ key: string }>;
+    };
+    const options = buildFollowerOptions(
+      {
+        refs: {
+          composerMeta,
+          switcher,
+          dock: document.createElement('div'),
+          overlaySurfaces: new Set(),
+        },
+        browser: {},
+        client: { sendSetFollowerForwarding: vi.fn() },
+        window: { localStorage: { getItem: vi.fn(() => null) } },
+        getController: () => null,
+        addSprinkle: vi.fn(),
+        removeSprinkle: vi.fn(),
+      } as never,
+      'https://tray.example/join/token',
+      () => ({ selectScoop: vi.fn() }) as never
+    );
+
+    options.onScoopsList?.(
+      [
+        { jid: 'cone-a', name: 'cone', isCone: true },
+        { jid: 'cone-b', name: 'research', isCone: true },
+        { jid: 'scoop-a', name: 'helper-a', isCone: false, parentId: 'cone-a' },
+        { jid: 'scoop-b', name: 'helper-b', isCone: false, parentId: 'cone-b' },
+      ] as never,
+      'cone-a'
+    );
+    const orderFor = () => switcher.scoops.map((entry) => entry.key);
+    expect(orderFor()).toEqual(['cone-a', 'cone-b', 'scoop-a', 'scoop-b']);
+
+    switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'cone-b' } }));
+    expect(orderFor()).toEqual(['cone-a', 'cone-b', 'scoop-b', 'scoop-a']);
+  });
+
   it('preserves the viewed scoop across transient disconnect and falls back when it disappears', () => {
     const composerMeta = document.createElement('div');
     const switcher = document.createElement('div') as HTMLElement & { scoops?: unknown[] };
