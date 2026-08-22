@@ -30,11 +30,6 @@ let package = Package(
         .target(
             name: "SliccTrayKit",
             dependencies: [
-                // WebRTC stays a direct dep: `FileProvider/FileProviderTrayConnection`
-                // still imports it (its `TrayFollowerConnectorDelegate` conformance
-                // names `RTCIceCandidate`). SPM dedupes it with the copy pulled via
-                // SliccTrayFollower, so the framework is not double-shipped.
-                .product(name: "WebRTC", package: "WebRTC"),
                 // The tray-follower transport core (formerly SliccTrayKit's own
                 // Models/ + Networking/), now shared with swift-server. Re-exported
                 // module-wide via SliccTrayKit/TrayFollowerExports.swift.
