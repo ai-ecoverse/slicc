@@ -78,7 +78,8 @@ JSON and update Go structs + `corpus_test.go` alongside TS + Swift mirrors.
 
 - **User-facing** — `prompt`/`exec`/`watch` write leader bytes to stdout,
   status to stderr. **Never route through the logger**; the CLI is pipeable.
-- **Diagnostics** — signaling retries, supersede redirects, ICE failures,
+- **Diagnostics** — signaling retries, supersede redirects (`OnJoinURLChanged`
+  persists the replacement across `follow`/`watch` reconnects), ICE failures,
   unparseable frames go through `internal/logging` (`log/slog` `diagLogger`
   in `commands.go`, to stderr); `debugLogf` adapts to `tray.Options.Logf`.
 - **pion's own records** — `Conn.pionLoggerFactory` installs

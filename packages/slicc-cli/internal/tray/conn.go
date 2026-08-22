@@ -84,6 +84,10 @@ type Options struct {
 	// instead of letting them scroll. Runs on pion goroutines; keep it
 	// non-blocking and concurrency-safe.
 	OnLinkDiag logging.PionEvent
+	// OnJoinURLChanged fires when a TRAY_SUPERSEDED redirect is followed so the
+	// caller can persist the replacement across reconnects (mirrors
+	// tray-webrtc.ts onJoinUrlChanged and Swift currentJoinUrl).
+	OnJoinURLChanged func(joinURL string)
 	// Logf is an optional diagnostic logger.
 	Logf func(format string, args ...any)
 	// LogWanted, when set, reports whether Logf would do anything with a record
@@ -155,17 +159,45 @@ func Dial(ctx context.Context, joinURL string, opts Options) (*Conn, error) {
 			}
 			return dialBootstrap(ctx, sig, controllerID, plan, opts)
 		case "fail":
-			if plan.Code == "TRAY_SUPERSEDED" && plan.JoinURL != "" && redirects < maxSupersedeRetries {
+			nextURL, retry, err := handleAttachFail(plan, redirects, opts)
+			if err != nil {
+				return nil, err
+			}
+			if retry {
 				redirects++
-				currentURL = plan.JoinURL
+				currentURL = nextURL
 				controllerID = newUUID()
-				opts.logf("tray attach superseded; following redirect (%d/%d)", redirects, maxSupersedeRetries)
 				continue
 			}
-			return nil, fmt.Errorf("tray attach failed (%s): %s", plan.Code, plan.Error)
 		default:
 			return nil, fmt.Errorf("tray attach: unexpected action %q", plan.Action)
 		}
+	}
+}
+
+// handleAttachFail normalizes attach failures. When retry is true, the caller
+// should re-attach at nextURL with a fresh controller id.
+func handleAttachFail(plan *signaling.AttachPlan, redirects int, opts Options) (nextURL string, retry bool, err error) {
+	if plan.Code != "TRAY_SUPERSEDED" {
+		return "", false, &AttachError{Code: plan.Code, Message: plan.Error}
+	}
+	if plan.JoinURL != "" && redirects < maxSupersedeRetries {
+		if opts.OnJoinURLChanged != nil {
+			opts.OnJoinURLChanged(plan.JoinURL)
+		}
+		opts.logf("tray attach superseded; following redirect (%d/%d)", redirects+1, maxSupersedeRetries)
+		return plan.JoinURL, true, nil
+	}
+	if plan.JoinURL == "" {
+		msg := plan.Error
+		if msg == "" {
+			msg = "replacement join URL missing"
+		}
+		return "", false, &AttachError{Code: AttachCodeSupersededMissingJoin, Message: msg}
+	}
+	return "", false, &AttachError{
+		Code:    AttachCodeSupersededChainExhausted,
+		Message: supersedeChainExhaustedMessage(),
 	}
 }
 
