@@ -373,12 +373,12 @@ const WCMSG_CSS = [
   // 2. the result badge becomes three dots, one per third — done dots solid,
   //    the active one blinking, the rest faded;
   // 3. an open dark terminal body wears a 3px top-border bar.
-  'slicc-action-row[data-progress] .slicc-act__ic,slicc-tool-cluster[data-progress] .slicc-cluster__ic{',
+  // Clusters wear cue (2) only — no icon fill or body bar on the summary head.
+  'slicc-action-row[data-progress] .slicc-act__ic{',
   'background:linear-gradient(to top,',
   'var(--slicc-progress-ink,var(--accent)) calc(var(--slicc-progress,0)*100%),',
   'color-mix(in srgb,var(--slicc-progress-ink,var(--accent)) 30%,transparent) 0);}',
-  'slicc-action-row[data-progress="indeterminate"] .slicc-act__ic,',
-  'slicc-tool-cluster[data-progress="indeterminate"] .slicc-cluster__ic{',
+  'slicc-action-row[data-progress="indeterminate"] .slicc-act__ic{',
   'animation:wcmsg-progress-breathe 1.6s ease-in-out infinite;}',
   '@keyframes wcmsg-progress-breathe{0%,100%{opacity:.45}50%{opacity:1}}',
   '.wcmsg-dots{margin-left:auto;display:inline-flex;gap:4px;align-items:center;',
@@ -394,9 +394,8 @@ const WCMSG_CSS = [
   // The cluster keeps its "N steps" count; the dots sit just before it.
   'slicc-tool-cluster[data-progress] .wcmsg-dots{margin-left:auto;}',
   'slicc-tool-cluster[data-progress] .slicc-cluster__count{margin-left:8px;}',
-  // The top-border bar is deliberately ROW-ONLY. A cluster is a summary of
-  // many calls; a bar there reads as noise, so it advances through the icon
-  // fill and the dots alone as calls complete.
+  // The top-border bar is deliberately ROW-ONLY. A cluster head advances
+  // through the three-dot badge alone as calls complete.
   'slicc-action-row[data-progress] .slicc-act__body{position:relative;overflow:hidden;}',
   'slicc-action-row[data-progress] .slicc-act__body::before{content:"";position:absolute;',
   'top:0;left:0;height:3px;width:calc(var(--slicc-progress,0)*100%);',
@@ -406,7 +405,7 @@ const WCMSG_CSS = [
   'animation:wcmsg-progress-slide 1.2s ease-in-out infinite;}',
   '@keyframes wcmsg-progress-slide{0%{transform:translateX(-100%)}100%{transform:translateX(340%)}}',
   '@media (prefers-reduced-motion:reduce){.wcmsg-dots__dot,',
-  'slicc-action-row[data-progress] .slicc-act__ic,slicc-tool-cluster[data-progress] .slicc-cluster__ic,',
+  'slicc-action-row[data-progress] .slicc-act__ic,',
   'slicc-action-row[data-progress] .slicc-act__body::before{animation:none!important;}}',
 ].join('');
 
@@ -465,25 +464,28 @@ interface ProgressChrome {
   chev: string;
   /** Selector for the element the dots sit before (chevron, or a count badge). */
   dotsBefore: string;
+  /** When false, only the three-dot badge is painted (cluster summary head). */
+  iconFill: boolean;
 }
 const ROW_CHROME: ProgressChrome = {
   head: 'slicc-act__head',
   chev: 'slicc-act__chev',
   dotsBefore: '.slicc-act__chev',
+  iconFill: true,
 };
 const CLUSTER_CHROME: ProgressChrome = {
   head: 'slicc-cluster__head',
   chev: 'slicc-cluster__chev',
   // Keep the "N steps" count; the dots slot in just before it.
   dotsBefore: '.slicc-cluster__count',
+  iconFill: false,
 };
 
 /**
  * Apply (or clear, with `null`) the progress treatment to a tool row OR a
- * tool cluster: the icon fill, the three-dot badge and the body top bar all
- * read the same `--slicc-progress` custom property + `data-progress` state,
- * so this only sets those and upserts the dots. Idempotent; safe after a
- * rebuild. `chrome` selects which container's class names to target.
+ * tool cluster. Rows get the icon fill, three-dot badge and body top bar;
+ * clusters get the three-dot badge only. Idempotent; safe after a rebuild.
+ * `chrome` selects which container's class names to target.
  */
 function applyProgressTreatment(
   host: HTMLElement,
@@ -503,7 +505,11 @@ function applyProgressTreatment(
   const determinate = typeof unit.fraction === 'number' && Number.isFinite(unit.fraction);
   const fraction = determinate ? Math.min(1, Math.max(0, unit.fraction as number)) : undefined;
   host.setAttribute(PROGRESS_ATTR, determinate ? 'determinate' : 'indeterminate');
-  host.style.setProperty('--slicc-progress', fraction === undefined ? '0' : String(fraction));
+  if (chrome.iconFill) {
+    host.style.setProperty('--slicc-progress', fraction === undefined ? '0' : String(fraction));
+  } else {
+    host.style.removeProperty('--slicc-progress');
+  }
   host.setAttribute('title', progressTitle(unit, fraction));
   if (!head) return;
   let dots = existing;
@@ -940,10 +946,8 @@ export function unwrapToolClusters(container: HTMLElement, openClusterAnchors: S
   }
 }
 
-/** Record the first row's msg id as a sticky open anchor — but only if the
- *  cluster was opened by the user, not auto-opened by the streaming
- *  single-message reflow path (which would otherwise re-open forever after
- *  the user collapsed it mid-stream). */
+/** Record the first row's msg id as a sticky open anchor when the user
+ *  expanded the cluster before the next reflow unwraps it. */
 function captureUserOpenAnchor(
   cluster: HTMLElement,
   rows: readonly HTMLElement[],
@@ -951,13 +955,7 @@ function captureUserOpenAnchor(
 ): void {
   if (!cluster.hasAttribute('open')) return;
   const anchorId = rows[0]?.dataset.msgId;
-  if (!anchorId) return;
-  const allSameMsg = rows.length > 0 && rows.every((r) => r.dataset.msgId === anchorId);
-  const owningBubble = cluster.parentElement?.querySelector(
-    `slicc-agent-message[data-msg-id="${anchorId}"]`
-  );
-  const autoOpen = allSameMsg && owningBubble?.hasAttribute('streaming') === true;
-  if (!autoOpen) openClusterAnchors.add(anchorId);
+  if (anchorId) openClusterAnchors.add(anchorId);
 }
 
 /** Restore an unwrapped row next to its owning `slicc-agent-message` (or
@@ -1041,16 +1039,6 @@ function collectRunsInChain(chain: readonly HTMLElement[]): HTMLElement[][] {
   return runs;
 }
 
-/** True iff `run` is one assistant message's tool calls AND that message
- *  is currently streaming (mid-turn). */
-function isSingleMessageStreaming(parent: ParentNode, run: readonly HTMLElement[]): boolean {
-  const anchorMsgId = run[0]?.dataset.msgId;
-  if (!anchorMsgId) return false;
-  if (!run.every((r) => r.dataset.msgId === anchorMsgId)) return false;
-  const bubble = parent.querySelector(`slicc-agent-message[data-msg-id="${anchorMsgId}"]`);
-  return bubble?.hasAttribute('streaming') === true;
-}
-
 /** Resolve a run's rows back to their owning `ToolCall`s via the
  *  optional lookup; returns `undefined` if any row can't be resolved. */
 function resolveRunToolCalls(
@@ -1087,12 +1075,8 @@ function wrapRunIntoCluster(
   let anchor: Node | null = firstRow.nextSibling;
   while (anchor && runSet.has(anchor)) anchor = anchor.nextSibling;
   const anchorMsgId = firstRow.dataset.msgId;
-  // Anchor preservation keeps a user-expanded cross-message cluster
-  // open across rebuilds. Single-message streaming runs auto-open so
-  // live tool progress is visible (matches pre-merge per-message
-  // behavior). Cross-message runs never auto-open.
-  const userOpen = Boolean(anchorMsgId && opts.openClusterAnchors.has(anchorMsgId));
-  const open = userOpen || isSingleMessageStreaming(parent, run);
+  // Clusters stay collapsed unless the user expanded them before reflow.
+  const open = Boolean(anchorMsgId && opts.openClusterAnchors.has(anchorMsgId));
   const toolCalls = opts.toolCallLookup ? resolveRunToolCalls(run, opts.toolCallLookup) : undefined;
   const cluster = buildClusterFromElements(run, { open, toolCalls });
   parent.insertBefore(cluster, anchor);

@@ -14,6 +14,8 @@ import SwiftUI
 //  3. an EXPANDED row body wears a thin top bar — row-only, never on a cluster
 //     head, because a bar over a summary of N calls reads as noise.
 //
+// Cluster summary heads wear cue (2) only — no icon fill.
+//
 // A phone adds one thing the web leaves to the hover title: the percentage and
 // ETA are always visible, since there is no cursor to hover with.
 

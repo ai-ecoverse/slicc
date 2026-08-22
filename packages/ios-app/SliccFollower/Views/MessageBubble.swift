@@ -307,14 +307,12 @@ struct MessageBubble: View {
     }
 
     /// Collapsed "Working" cluster — mirrors the webapp's
-    /// `.tool-call-cluster` (`packages/webapp/src/ui/chat-panel.ts` →
-    /// `createToolClusterEl`). Three or more consecutive tool calls
-    /// collapse behind a single disclosure so they don't push assistant
-    /// content out of view; one small dot per inner call shows the run's
-    /// progression at a glance, and the comma-joined preview hints at
-    /// what's running.
+    /// `<slicc-tool-cluster>`. Three or more consecutive tool calls
+    /// collapse behind a single disclosure; the summary head shows only
+    /// the three-dot progress badge while the batch runs.
     @ViewBuilder
     private func workingClusterRow(_ toolCalls: [ToolCall]) -> some View {
+        let aggregate = aggregateToolProgress(calls: toolCalls, progress: toolProgress)
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 4) {
                 ForEach(toolCalls) { tc in
@@ -331,8 +329,7 @@ struct MessageBubble: View {
         } label: {
             HStack(spacing: 6) {
                 ToolProgressIcon(
-                    systemName: "gearshape.fill", size: 11,
-                    unit: aggregateToolProgress(calls: toolCalls, progress: toolProgress),
+                    systemName: "gearshape.fill", size: 11, unit: nil,
                     base: palette.ink.opacity(0.55), accent: palette.accent)
                 Text("Working")
                     .font(.system(.caption, design: .monospaced))
@@ -343,7 +340,16 @@ struct MessageBubble: View {
                     .lineLimit(1)
                     .truncationMode(.tail)
                 Spacer(minLength: 4)
-                clusterDots(for: toolCalls)
+                if let aggregate {
+                    Text(toolProgressCaption(aggregate))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(palette.ink.opacity(0.45))
+                        .lineLimit(1)
+                        .accessibilityHidden(true)
+                    ToolProgressDots(unit: aggregate, color: palette.ink.opacity(0.7))
+                } else {
+                    clusterDots(for: toolCalls)
+                }
             }
         }
         .tint(.white.opacity(0.4))
