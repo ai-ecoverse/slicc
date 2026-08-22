@@ -58,6 +58,16 @@ afterEach(() => {
 });
 
 describe('RemoteExecRouter', () => {
+  it('includes base64 stdin on exec.request when provided', async () => {
+    const { followers, router } = createHarness();
+    const sent = addFollower(followers, 'target');
+    const stdin = encoded('hello\n');
+    void router.execOnRemote('runtime-target', 'cat', { stdin });
+    const request = sent.find((message) => message.type === 'exec.request');
+    if (request?.type !== 'exec.request') throw new Error('missing exec request');
+    expect(request.stdin).toBe(stdin);
+  });
+
   it('streams follower chunks to a leader caller in arrival order', async () => {
     const { followers, router } = createHarness();
     const sent = addFollower(followers, 'target');

@@ -644,6 +644,11 @@ export interface TrayExecRequestMessage {
   cwd?: string;
   /** Optional environment variables merged over the receiver's own env. */
   env?: Record<string, string>;
+  /**
+   * Optional stdin for the command, base64-encoded bytes (same encoding as
+   * `exec.chunk` `data`). Omitted when there is no piped input.
+   */
+  stdin?: string;
 }
 
 /**

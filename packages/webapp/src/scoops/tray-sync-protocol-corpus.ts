@@ -486,6 +486,7 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
       requestId: 'exec-1',
       command: 'echo hello',
       cwd: '/workspace',
+      stdin: 'aGVsbG8K',
     },
   },
   'exec.chunk': {

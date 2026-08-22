@@ -59,6 +59,7 @@ export class RemoteExecRouter {
     opts: {
       cwd?: string;
       env?: Record<string, string>;
+      stdin?: string;
       signal?: AbortSignal;
       onChunk?: (stream: 'stdout' | 'stderr', data: string) => void;
       timeoutMs?: number;
@@ -107,6 +108,7 @@ export class RemoteExecRouter {
         command,
         cwd: opts.cwd,
         env: opts.env,
+        stdin: opts.stdin,
       });
       if (!sent) {
         this.pendingRemoteExecs.delete(requestId);

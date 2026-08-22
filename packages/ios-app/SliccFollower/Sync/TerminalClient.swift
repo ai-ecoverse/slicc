@@ -175,7 +175,7 @@ final class TerminalClient {
             guard
                 send(
                     .execRequest(
-                        requestId: requestId, command: command, cwd: cwd, env: env))
+                        requestId: requestId, command: command, cwd: cwd, env: env, stdin: nil))
             else {
                 fail(requestId, with: .disconnected)
                 return

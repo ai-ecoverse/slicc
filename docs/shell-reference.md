@@ -305,6 +305,7 @@ ssh --list
 # `slicc … follow`) and return its stdout/stderr/exit. Ctrl+C interrupts it.
 ssh follower-abc123 "uname -a"
 ssh --cwd /tmp follower-abc123 "ls -la"
+echo "hello" | ssh follower-abc123 cat   # piped stdin is forwarded
 
 # Open a URL in a browser tab
 open https://example.com

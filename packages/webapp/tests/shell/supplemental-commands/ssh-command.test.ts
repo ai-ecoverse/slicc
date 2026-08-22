@@ -1,6 +1,7 @@
 import type { ResolvedCommandContext } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { createSshCommand } from '../../../src/shell/supplemental-commands/ssh-command.js';
+import { mockCommandContext } from '../helpers/mock-command-context.js';
 
 const hoisted = vi.hoisted(() => ({
   client: null as { call: ReturnType<typeof vi.fn> } | null,
@@ -163,6 +164,36 @@ describe('ssh command', () => {
     const r = await createSshCommand().execute(['--timeout', 'nope', 'follower-a', 'ls'], ctx());
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toContain('--timeout');
+  });
+
+  it('forwards piped stdin to tray-exec as base64', async () => {
+    const call = vi.fn(async () => ({ stdout: 'ok\n', stderr: '', exitCode: 0 }));
+    hoisted.client = { call };
+    const r = await createSshCommand().execute(
+      ['follower-a', 'cat'],
+      mockCommandContext({ stdin: 'piped in\n' })
+    );
+    expect(r.exitCode).toBe(0);
+    expect(call).toHaveBeenCalledWith(
+      'tray-exec',
+      expect.objectContaining({
+        runtimeId: 'follower-a',
+        command: 'cat',
+        stdin: Buffer.from('piped in\n', 'utf-8').toString('base64'),
+      }),
+      expect.any(Object)
+    );
+  });
+
+  it('omits stdin when nothing was piped', async () => {
+    const call = vi.fn(async () => ({ stdout: '', stderr: '', exitCode: 0 }));
+    hoisted.client = { call };
+    await createSshCommand().execute(['follower-a', 'echo', 'hi'], mockCommandContext());
+    expect(call).toHaveBeenCalledWith(
+      'tray-exec',
+      expect.not.objectContaining({ stdin: expect.anything() }),
+      expect.any(Object)
+    );
   });
 
   it('forwards Ctrl+C as tray-exec-signal', async () => {

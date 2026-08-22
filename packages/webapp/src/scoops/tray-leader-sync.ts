@@ -428,6 +428,7 @@ export class LeaderSyncManager {
     opts: {
       cwd?: string;
       env?: Record<string, string>;
+      stdin?: string;
       signal?: AbortSignal;
       onChunk?: (stream: 'stdout' | 'stderr', data: string) => void;
       timeoutMs?: number;

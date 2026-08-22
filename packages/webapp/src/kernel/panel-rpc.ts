@@ -280,6 +280,8 @@ export type PanelRpcRequest =
         env?: Record<string, string>;
         execToken: string;
         timeoutMs?: number;
+        /** base64-encoded stdin bytes; omitted when nothing was piped. */
+        stdin?: string;
       };
     }
   | {
