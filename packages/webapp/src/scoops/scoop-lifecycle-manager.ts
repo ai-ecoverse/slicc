@@ -104,6 +104,13 @@ export interface ScoopLifecycleLickGuard {
 export interface ScoopLifecycleDeps {
   /** Live snapshot of registered scoops. */
   getScoops(): Map<string, RegisteredScoop>;
+  /**
+   * The unit an interactive request from `jid` is shown to — the root that
+   * owns it, or `jid` itself when it IS a root (#2312). Same rule as
+   * `findApprover`: a dangling edge falls back to the default root, so a
+   * prompt always lands somewhere a user can answer it.
+   */
+  approverFor(jid: string): RegisteredScoop | undefined;
   /** Shared VFS (or null before init). */
   getSharedFs(): VirtualFS | null;
   /** Live SessionStore (or null before init). Threaded into every new `ScoopContext`. */
@@ -253,6 +260,15 @@ export class ScoopLifecycleManager {
    */
   observe(jid: string, observer: ScoopObserver): () => void {
     return this.ensureUnit(jid).observe(observer);
+  }
+
+  /**
+   * Jid of the unit that renders an interactive request from `jid` — the
+   * owning cone for a scoop, `jid` itself for a cone. Falls back to `jid`
+   * when nothing is registered, so a request is never silently dropped.
+   */
+  private approverJid(jid: string): string {
+    return this.deps.approverFor(jid)?.jid ?? jid;
   }
 
   private dispatch<K extends keyof ScoopObserver>(
@@ -807,11 +823,16 @@ export class ScoopLifecycleManager {
       onToolEnd: (toolName, result, isError, toolCallId) => {
         callbacks.onToolEnd?.(jid, toolName, result, isError, toolCallId);
       },
+      // `tool_ui` is an interactive approval / picker card, so it is rendered
+      // in the transcript of the unit that can ANSWER it — the owning cone for
+      // a scoop, itself for a cone (#2312). The reply travels back by
+      // `requestId` alone (`ToolUIActionMsg`), so the pending promise still
+      // settles in the scoop that raised it.
       onToolUI: (toolName, requestId, html) => {
-        callbacks.onToolUI?.(jid, toolName, requestId, html);
+        callbacks.onToolUI?.(this.approverJid(jid), toolName, requestId, html);
       },
       onToolUIDone: (requestId) => {
-        callbacks.onToolUIDone?.(jid, requestId);
+        callbacks.onToolUIDone?.(this.approverJid(jid), requestId);
       },
       onToolProgress: (toolName, progress, toolCallId) => {
         callbacks.onToolProgress?.(jid, toolName, progress, toolCallId);

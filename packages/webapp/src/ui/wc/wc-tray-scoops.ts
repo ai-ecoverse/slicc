@@ -2,6 +2,7 @@ import type { ScoopSummary } from '../../scoops/tray-sync-protocol.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 import { scoopColor } from './wc-scoop-color.js';
 import type { SwitcherScoop } from './wc-shell.js';
+import type { UnitRole } from './wc-unit-context.js';
 
 type SummarySource = Pick<
   RegisteredScoop,
@@ -91,6 +92,11 @@ export function summaryIsRoot(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>):
   return scoop.parentId === undefined ? scoop.isCone : scoop.parentId === null;
 }
 
+/** The switcher descriptor's role for a wire summary — the follower's half of `unitRoleFor`. */
+export function summaryRole(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): UnitRole {
+  return summaryIsRoot(scoop) ? 'cone' : 'scoop';
+}
+
 /**
  * Map tray summaries onto the descriptors shared by follower and Cherry tabs.
  * Cones first (in leader order), then each cone's scoops right after it so a
@@ -105,7 +111,7 @@ export function toFollowerSwitcherScoops(
     const expanded = fromWire(scoop);
     return {
       key: scoop.jid,
-      type: summaryIsRoot(scoop) ? 'cone' : 'scoop',
+      type: summaryRole(scoop),
       color: scoopColor({ isCone: summaryIsRoot(scoop), name: scoop.name }),
       label: summaryIsRoot(scoop) ? scoop.assistantLabel : scoop.name,
       eyes:

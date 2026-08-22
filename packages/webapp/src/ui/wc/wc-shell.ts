@@ -535,6 +535,25 @@ export function applyShellContext(refs: WcShellRefs, context: ShellContext): voi
   }
 }
 
+/**
+ * Mount or unmount the interactive composer region for the selected unit.
+ *
+ * Users never talk to a scoop (#2312): a read-only unit hides the whole
+ * `<slicc-composer>` band — input card, queued pile, model picker and
+ * thinking pill, dictation and attachments all live inside it — so the
+ * transcript is the only thing left. `slicc-composer[hidden]` is
+ * `display:none`, so nothing is reserved and the thread simply grows into
+ * the freed band; the shell mood (shader/accent) is untouched.
+ *
+ * Re-enabling is deliberately NOT symmetric: the caller owns `disabled`
+ * (a disconnected follower keeps its composer disabled with the connection
+ * placeholder), so this only ever ADDS the read-only lock.
+ */
+export function applyComposerAvailability(refs: WcShellRefs, readOnly: boolean): void {
+  refs.composer.toggleAttribute('hidden', readOnly);
+  if (readOnly) refs.inputCard.setAttribute('disabled', '');
+}
+
 /** Submitted composer text, from the input card's `submit` CustomEvent. */
 export function submittedText(event: Event): string | undefined {
   // `<slicc-input-card>` dispatches a CustomEvent named `submit` (not the

@@ -106,7 +106,18 @@ Non-obvious rules:
   compaction sink is bound from the unit's own record, and the agentic curator
   takes a `cone` (`runAgenticMemoryPass`) — it curates that cone's file, from
   that cone's workspace, under a per-cone agent name, with `MEMORY.md`'s
-  primary-relative paths rebased onto it. See `docs/work-unit.md`.
+  primary-relative paths rebased onto it.
+  **Users never talk to a scoop** (#2312): a selected scoop is a READ-ONLY
+  transcript — `applyComposerAvailability` (`ui/wc/wc-shell.ts`) hides the
+  whole `<slicc-composer>` band and `WcChatController.setReadOnly` drops
+  error-card CTAs + `tool_ui` dips. The rule lives ONCE in `isReadOnlyRole`
+  (`ui/wc/wc-unit-context.ts`) over the switcher descriptor's role — leader
+  via `unitRoleFor`, follower via `summaryRole`; never add a second read-only
+  branch. Anything a scoop needs from a human (`sudo_request`, export
+  approval, idle notice, `tool_ui`) is addressed to the OWNING cone —
+  `findApprover` / `findParent` / `approverFor`, never the raw scoop jid, and
+  never `defaultRoot()` for a unit that is itself a root.
+  See `docs/work-unit.md`.
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without
   queue/watermark loss; user `web` bypasses the window (immediate/awaited,
   prevents deferral). `transcript-limits.ts` caps bridge/event transcripts at 64 KB

@@ -28,6 +28,7 @@ import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
+import type { ChatMessage } from '../types.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import { wireConeActions } from './wc-cone-actions.js';
 import {
@@ -43,7 +44,13 @@ import { createWcMonitorDeps } from './wc-live-monitor-deps.js';
 import { setupSyncFsBootNonce } from './wc-live-sync-fs.js';
 import { applyThreadContext } from './wc-live-thinking-hydration.js';
 import { mountWcShell, type WcShellRefs } from './wc-shell.js';
-import { switcherLabelFor, unitForContext, unitSlugFor } from './wc-unit-context.js';
+import {
+  isReadOnlyRole,
+  switcherLabelFor,
+  unitForContext,
+  unitRoleFor,
+  unitSlugFor,
+} from './wc-unit-context.js';
 import { createWorkbenchActivator, type WorkbenchActivator } from './wc-workbench.js';
 import { wireFileMentions } from './wire-file-mentions.js';
 
@@ -123,9 +130,21 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
   let workbench: WorkbenchActivator | null = null;
   const readyListeners = new Set<() => void>();
 
+  /**
+   * A cone's queued pile held while the user reads one of its scoops (#2312).
+   * Selecting a read-only unit is not "dropping a prompt by navigating away"
+   * — there is nowhere else to talk — so the pile survives the round trip and
+   * is only cancelled if the user then goes to a DIFFERENT cone.
+   */
+  let stashedQueue: { jid: string; items: ChatMessage[] } | null = null;
+
   const selectScoop = (scoop: RegisteredScoop): void => {
     selected = scoop;
     if (!client) return;
+    const readOnly = isReadOnlyRole(unitRoleFor(scoop));
+    const cancelQueued = (jid: string, ids: readonly string[]): void => {
+      for (const id of ids) void client?.deleteQueuedMessage(jid, id).catch(() => undefined);
+    };
     // Scoop-switch queue-cancel: snapshot the OLD scoop's currently-queued
     // ids and cancel them on the backend BEFORE switching selectedScoopJid,
     // so the orchestrator never silently delivers a prompt the user dropped
@@ -135,10 +154,28 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     // delete is a no-op once the backend already removed it).
     const previousJid = client.selectedScoopJid;
     if (previousJid && previousJid !== scoop.jid) {
-      const queued = controller?.getQueuedMessages() ?? [];
-      for (const m of queued) {
-        void client.deleteQueuedMessage(previousJid, m.id).catch(() => undefined);
+      if (readOnly) {
+        const items = controller?.stashQueued() ?? [];
+        if (items.length > 0) stashedQueue = { jid: previousJid, items };
+      } else {
+        const queued = controller?.getQueuedMessages() ?? [];
+        cancelQueued(
+          previousJid,
+          queued.map((m) => m.id)
+        );
       }
+    }
+    if (!readOnly && stashedQueue) {
+      // Back on the cone that owns the pile: hand it to the controller, which
+      // re-installs it after the replay. Anywhere else, the detour is over and
+      // the prompts really were abandoned — cancel them on the backend.
+      if (stashedQueue.jid === scoop.jid) controller?.restoreQueued(stashedQueue.items);
+      else
+        cancelQueued(
+          stashedQueue.jid,
+          stashedQueue.items.map((m) => m.id)
+        );
+      stashedQueue = null;
     }
     const cachedBackpressure = lickBackpressure.get(scoop.jid);
     controller?.setLickBackpressure(
@@ -147,7 +184,12 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       unitSlugFor(scoop)
     );
     client.setSelectedScoopJid(scoop.jid);
-    refs.inputCard.removeAttribute('disabled');
+    // A cone gets its composer back (text and queue intact — the band is
+    // hidden, never rebuilt); `applyThreadContext` re-locks it for a scoop.
+    // Set BEFORE `requestScoopMessages`, so the replay for the new selection
+    // is the first thing rendered under the new mode.
+    controller?.setReadOnly(readOnly);
+    if (!readOnly) refs.inputCard.removeAttribute('disabled');
     void applyThreadContext(refs, scoop);
     client.requestScoopMessages(scoop.jid);
     controller?.setProcessing(client.isProcessing(scoop.jid));

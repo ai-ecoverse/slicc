@@ -26,6 +26,18 @@ describe('slicc-error-card', () => {
     document.body.removeAttribute('data-theme');
   });
 
+  it('renders no action footer at all under `no-action` (read-only transcripts)', () => {
+    // Dropping just `action` falls back to the default Retry button, and a
+    // disabled button would still promise something — so the footer goes.
+    const el = mount({ message: 'nope', 'no-action': '' });
+    expect(el.shadowRoot!.querySelector('.foot')).toBeNull();
+    expect(el.shadowRoot!.querySelector('.retry')).toBeNull();
+    expect(el.noAction).toBe(true);
+
+    el.noAction = false;
+    expect(el.shadowRoot!.querySelector('.retry')).not.toBeNull();
+  });
+
   it('registers the custom element', () => {
     expect(customElements.get('slicc-error-card')).toBe(SliccErrorCard);
   });
