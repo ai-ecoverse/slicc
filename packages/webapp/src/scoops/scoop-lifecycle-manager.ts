@@ -721,7 +721,6 @@ export class ScoopLifecycleManager {
       });
       return false;
     }
-    log.info('Unit model updated', { jid, provider: model?.provider, model: model?.id });
     return true;
   }
 

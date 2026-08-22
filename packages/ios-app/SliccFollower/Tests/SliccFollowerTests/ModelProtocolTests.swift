@@ -38,13 +38,26 @@ final class ModelProtocolTests: XCTestCase {
         XCTAssertEqual(object["effortOverride"] as? String, "max")
     }
 
-    func testModelSelectionIsGlobalOnTheWire() throws {
+    /// Model selection is PER CONE (#2310): the pick names the unit this
+    /// follower is viewing, so the leader changes that cone's record and not
+    /// whichever cone it happens to have selected itself.
+    func testModelSelectionNamesTheViewedConeOnTheWire() throws {
         let data = try JSONEncoder().encode(
-            FollowerToLeaderMessage.modelSelect(modelId: "example:reasoner"))
+            FollowerToLeaderMessage.modelSelect(modelId: "example:reasoner", scoopJid: "cone_2"))
         let object = try XCTUnwrap(
             try JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertEqual(object["type"] as? String, "model.select")
         XCTAssertEqual(object["modelId"] as? String, "example:reasoner")
+        XCTAssertEqual(object["scoopJid"] as? String, "cone_2")
+    }
+
+    /// With nothing selected the key is omitted entirely, and the leader falls
+    /// back to this follower's own `scoops.select`.
+    func testModelSelectionOmitsTheUnitWhenNoneIsSelected() throws {
+        let data = try JSONEncoder().encode(
+            FollowerToLeaderMessage.modelSelect(modelId: "example:reasoner", scoopJid: nil))
+        let object = try XCTUnwrap(
+            try JSONSerialization.jsonObject(with: data) as? [String: Any])
         XCTAssertNil(object["scoopJid"])
     }
 

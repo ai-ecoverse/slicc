@@ -242,7 +242,9 @@ Non-obvious rules:
   against its own record after an account change and retargets nothing. A new
   cone inherits the selected cone's model, a scoop copies its creator's once.
   The global `selected-model` survives only as the first-boot seed / migration
-  source (`scoops/model-seed.ts`). Details: `docs/work-unit.md`.
+  source (`scoops/model-seed.ts`), and only once the selected provider has an
+  account — seeding the built-in default would pin the primary cone to a
+  provider the user may never add. Details: `docs/work-unit.md`.
 - **Provider composition**: pi-ai auto-discovered + `src/providers/built-in/` +
   `providers/`; merge order pi-ai → `modelOverrides` → `getModelIds()`. Build
   filtering: `packages/dev-tools/providers.build.json`.

@@ -12,28 +12,38 @@
  * model selection replaces.
  */
 
-import { createLogger } from '../base/logger.js';
-import { getSelectedProvider, resolveCurrentModel } from '../providers/account-store.js';
+import {
+  getApiKeyForProvider,
+  getSelectedProvider,
+  resolveCurrentModel,
+} from '../providers/account-store.js';
 import type { WorkUnitModel } from './types.js';
-
-const log = createLogger('model-seed');
 
 /**
  * The globally selected provider + model as a work-unit model, or
- * `undefined` when nothing is selectable yet (no account configured, or no
- * storage — a fresh or headless profile). `undefined` is not an error: the
- * unit simply carries no model and resolves the global selection at run
- * time, and the next boot backfills it.
+ * `undefined` when there is nothing worth stamping yet.
+ *
+ * A seed is only taken when the selected provider actually has an account on
+ * this device. On a fresh profile `getSelectedProvider()` /
+ * `resolveCurrentModel()` answer with built-in DEFAULTS (Anthropic's current
+ * model) long before the user has added anything, and the cone is bootstrapped
+ * at that moment: stamping the default pins the primary cone to a provider the
+ * user may never configure, and it then reports `No API key configured for
+ * provider "anthropic"` even after they add a different one — because a record
+ * model beats the global selection by design.
+ *
+ * `undefined` is not an error: the unit carries no model, resolves the global
+ * selection at run time exactly as before, and the first boot after a real
+ * account exists backfills it for good.
  */
 export function globalSeedModel(): WorkUnitModel | undefined {
   try {
     const provider = getSelectedProvider();
+    if (!provider || !getApiKeyForProvider(provider)) return undefined;
     const id = resolveCurrentModel().id;
-    return provider && id ? { provider, id } : undefined;
-  } catch (err) {
-    log.debug('No global model selection to seed from', {
-      error: err instanceof Error ? err.message : String(err),
-    });
+    return id ? { provider, id } : undefined;
+  } catch {
+    // No storage at all (worker shim, tests): nothing to seed from.
     return undefined;
   }
 }
