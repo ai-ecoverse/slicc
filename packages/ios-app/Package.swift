@@ -21,7 +21,7 @@ let package = Package(
         .package(
             url: "https://github.com/huggingface/swift-huggingface",
             .upToNextMinor(from: "0.9.0")),
-        .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor(from: "150.0.0")),
+        .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor(from: "151.0.0")),
         .package(path: "../swift-traysession"),
         .package(path: "../swift-trayfollower"),
     ],
