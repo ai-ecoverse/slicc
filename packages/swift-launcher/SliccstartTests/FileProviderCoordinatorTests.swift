@@ -29,7 +29,10 @@ final class FileProviderCoordinatorTests: XCTestCase {
     private final class MemoryKeychain: TrayCredentialKeychain {
         var data: Data?
         func read() -> Data? { data }
-        func write(_ data: Data) -> Bool { self.data = data; return true }
+        func write(_ data: Data) -> Bool {
+            self.data = data
+            return true
+        }
         func clear() { data = nil }
     }
 
