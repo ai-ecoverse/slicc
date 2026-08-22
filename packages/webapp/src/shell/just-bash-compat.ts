@@ -53,5 +53,13 @@ export function textAsStdin(s: string): ByteString {
   return chars.join('') as unknown as ByteString;
 }
 
+/** Build a `CommandContext.stdin` `ByteString` from raw bytes. */
+export function bytesToStdin(bytes: Uint8Array): ByteString {
+  if (bytes.length === 0) return EMPTY_BYTES;
+  const chars = new Array<string>(bytes.length);
+  for (let i = 0; i < bytes.length; i++) chars[i] = String.fromCharCode(bytes[i]!);
+  return chars.join('') as unknown as ByteString;
+}
+
 /** The empty `ByteString` (no-stdin sentinel for `CommandContext`). */
 export const EMPTY_BYTES: ByteString = '' as unknown as ByteString;

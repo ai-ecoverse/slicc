@@ -131,6 +131,25 @@ describe('RemoteExecRouter', () => {
     ]);
   });
 
+  it('forwards stdin from follower exec.request to execInShell', async () => {
+    const execInShell = vi.fn(async () => ({ exitCode: 0 }));
+    const { followers, router } = createHarness({ execInShell });
+    addFollower(followers, 'requester');
+
+    router.handleFollowerExecMessage('requester', {
+      type: 'exec.request',
+      requestId: 'local-stdin',
+      command: 'cat',
+      stdin: encoded('piped\n'),
+    });
+
+    await vi.waitFor(() => expect(execInShell).toHaveBeenCalled());
+    expect(execInShell).toHaveBeenCalledWith(
+      'cat',
+      expect.objectContaining({ stdin: encoded('piped\n') })
+    );
+  });
+
   it('kills and rejects a leader request when its timeout expires', async () => {
     vi.useFakeTimers();
     const { followers, router } = createHarness();

@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"encoding/base64"
 	"io"
 	"log/slog"
 	"os"
@@ -50,6 +51,22 @@ func TestReadTextArg(t *testing.T) {
 		got, err := readTextArg([]string{"-"}, strings.NewReader("dash stdin"))
 		if err != nil || got != "dash stdin" {
 			t.Fatalf("got %q, err %v; want \"dash stdin\"", got, err)
+		}
+	})
+	t.Run("readPipedStdinBase64 reads piped bytes", func(t *testing.T) {
+		got, err := readPipedStdinBase64(strings.NewReader("hello\n"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := base64.StdEncoding.EncodeToString([]byte("hello\n"))
+		if got != want {
+			t.Fatalf("got %q, want %q", got, want)
+		}
+	})
+	t.Run("readPipedStdinBase64 returns empty for empty pipe", func(t *testing.T) {
+		got, err := readPipedStdinBase64(strings.NewReader(""))
+		if err != nil || got != "" {
+			t.Fatalf("got %q, err %v; want empty", got, err)
 		}
 	})
 	t.Run("missing @file errors", func(t *testing.T) {

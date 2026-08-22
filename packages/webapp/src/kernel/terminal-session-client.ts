@@ -67,6 +67,8 @@ export interface TerminalExecOptions {
   env?: Record<string, string>;
   /** Stream through `onEvent` without retaining output in the result. Default false. */
   discardCapturedOutput?: boolean;
+  /** base64-encoded stdin bytes; omitted when nothing was piped. */
+  stdin?: string;
 }
 
 export interface TerminalSessionTransport {

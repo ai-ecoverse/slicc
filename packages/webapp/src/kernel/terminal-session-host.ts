@@ -34,10 +34,13 @@
  * for when a streaming pty-style mode lands.
  */
 
+import { base64ToUint8 } from '@slicc/shared-ts';
+import type { ByteString } from 'just-bash';
 import type {
   HeadlessShellLike,
   HeadlessShellOptions,
 } from '../shell/almost-bash-shell-headless.js';
+import { bytesToStdin, EMPTY_BYTES } from '../shell/just-bash-compat.js';
 import type {
   TerminalCloseMsg,
   TerminalControlMsg,
@@ -297,7 +300,25 @@ export class TerminalSessionHost {
       // Pass the shell proc pid so realm-backed commands (`node` / `.jsh` /
       // `python`) parent their realm child to it — a terminal signal to this
       // shell pid then fans out to the realm via `pm.signal` (#1116).
-      const result = await session.shell.executeCommand(msg.command, abort.signal, proc?.pid);
+      let stdin: ByteString = EMPTY_BYTES;
+      if (msg.stdin) {
+        try {
+          stdin = bytesToStdin(base64ToUint8(msg.stdin));
+        } catch {
+          this.emitExit(msg, 127);
+          this.log.warn(
+            '[terminal-session-host] exec with invalid stdin (expected base64)',
+            msg.sid
+          );
+          return;
+        }
+      }
+      const result = await session.shell.executeCommand(
+        msg.command,
+        abort.signal,
+        proc?.pid,
+        stdin
+      );
       await this.emitExecSuccess(msg, result, abort, proc);
     } catch (err) {
       this.emitExecError(msg, err, abort, proc);

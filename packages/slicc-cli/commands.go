@@ -7,6 +7,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"io"
 	"log/slog"
 	"os"
 	"runtime"
@@ -105,6 +106,29 @@ func cmdPrompt(ctx context.Context, joinURL, text string) int {
 	}
 }
 
+// readPipedStdinBase64 reads piped stdin when present (non-TTY) and returns
+// base64-encoded bytes for exec.request. When the command itself was read from
+// stdin via "-" / "@-", readTextArg already consumed stdin and this returns "".
+func readPipedStdinBase64(r io.Reader) (string, error) {
+	if f, ok := r.(*os.File); ok {
+		st, err := f.Stat()
+		if err != nil {
+			return "", err
+		}
+		if st.Mode()&os.ModeCharDevice != 0 {
+			return "", nil
+		}
+	}
+	b, err := io.ReadAll(r)
+	if err != nil {
+		return "", err
+	}
+	if len(b) == 0 {
+		return "", nil
+	}
+	return base64.StdEncoding.EncodeToString(b), nil
+}
+
 // cmdExec runs a command in the leader's shell, streaming stdout/stderr, then exits.
 func cmdExec(ctx context.Context, joinURL, command string) int {
 	requestID := newID()
@@ -151,9 +175,16 @@ func cmdExec(ctx context.Context, joinURL, command string) int {
 	}
 	defer conn.Close()
 
-	if err := conn.SendJSON(protocol.ExecRequest{
+	req := protocol.ExecRequest{
 		Type: "exec.request", RequestID: requestID, Command: command,
-	}); err != nil {
+	}
+	if stdin, err := readPipedStdinBase64(os.Stdin); err != nil {
+		errLine("exec", "reading stdin: %s", err)
+		return 1
+	} else if stdin != "" {
+		req.Stdin = stdin
+	}
+	if err := conn.SendJSON(req); err != nil {
 		errLine("exec", "%s", err)
 		return 1
 	}
