@@ -3,9 +3,10 @@
  * `drop-cone` events `<slicc-freezer-new>` fires from its expanded action
  * row, plus the cone count that decides which of the two it shows.
  *
- * There is no cone list here — the top tab strip is the only switcher. The
- * rail only ever grows by one click-triggered line (the name form for a new
- * cone, the confirm for a drop), never on hover, so the layout stays put.
+ * There is no cone list here — the top tab strip is the only switcher, and
+ * nothing is ever inserted into the rail: both actions open a `<slicc-dialog>`
+ * (name a new cone / confirm a drop), so the frozen cards below the row never
+ * move (#2272).
  *
  * Dropping a cone freezes its chat without extracting memories and keeps its
  * frozen cards; the next-oldest root becomes the primary. The last cone can
@@ -38,29 +39,19 @@ export interface ConeActionsDeps {
 export interface ConeActionsHandles {
   /** Re-sync the row's cone count and the pending-selection with the roster. */
   refresh(): void;
-  /** The inline form / confirm line under the row (for tests). */
-  element: HTMLElement;
+  /** The open dialog, if any (for tests). */
+  dialog(): HTMLElement | null;
 }
 
-const STYLE_ID = 'wcui-cone-actions-style';
-const STYLE = `
-.wcui-cone-line{display:flex;align-items:center;gap:6px;padding:2px 8px 6px;flex:0 0 auto;font:500 12px var(--ui);color:var(--ink);}
-.wcui-cone-line:empty{display:none;}
-.wcui-cone-line input{flex:1;min-width:0;border:1px solid var(--line);border-radius:6px;background:var(--canvas);color:var(--ink);
-  font:inherit;font-family:var(--ui);font-size:12.5px;padding:4px 6px;}
-.wcui-cone-line button{border:1px solid var(--line);border-radius:6px;background:transparent;color:inherit;font:inherit;padding:2px 8px;cursor:pointer;}
-.wcui-cone-line button:focus-visible,.wcui-cone-line input:focus-visible{outline:2px solid var(--ctx);outline-offset:2px;}
-.wcui-cone-line .danger{border-color:color-mix(in srgb,#d23 50%,var(--line));color:#d23;}
-.wcui-cone-line .msg{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;}
-`;
-
-function ensureStyles(doc: Document): void {
-  if (doc.getElementById(STYLE_ID)) return;
-  const style = doc.createElement('style');
-  style.id = STYLE_ID;
-  style.textContent = STYLE;
-  (doc.head ?? doc.documentElement).appendChild(style);
-}
+const BTN_PRIMARY =
+  'padding:0.5rem 1.25rem;border-radius:0.375rem;border:none;cursor:pointer;' +
+  'background:var(--s2-accent-color,#0265dc);color:#fff;font-size:0.875rem;';
+const BTN_DANGER =
+  'padding:0.5rem 1.25rem;border-radius:0.375rem;border:none;cursor:pointer;' +
+  'background:#d23;color:#fff;font-size:0.875rem;';
+const BTN_PLAIN =
+  'padding:0.5rem 1.25rem;border-radius:0.375rem;cursor:pointer;' +
+  'background:transparent;border:1px solid var(--s2-border-color,#e0e0e0);font-size:0.875rem;';
 
 /** Build the optimistic record the rail registers for a new cone. */
 export function buildNewConeRecord(
@@ -77,33 +68,68 @@ export function buildNewConeRecord(
   };
 }
 
+type ConeDialog = HTMLElement & { show?: () => void; hide?: () => void };
+
+interface ConeDialogSpec {
+  heading: string;
+  body: HTMLElement;
+  actions: Array<{ text: string; style: string; data: string; onClick: () => void }>;
+  /** Fired when the dialog dismisses itself (Escape, ✕, backdrop). */
+  onDismiss(dialog: ConeDialog): void;
+}
+
+/** Build a `<slicc-dialog>` with footer buttons; the caller mounts and shows it. */
+function buildConeDialog(doc: Document, spec: ConeDialogSpec): ConeDialog {
+  const d = doc.createElement('slicc-dialog') as ConeDialog;
+  d.setAttribute('heading', spec.heading);
+  d.append(spec.body);
+  for (const action of spec.actions) {
+    const btn = doc.createElement('button');
+    btn.setAttribute('slot', 'footer');
+    btn.type = 'button';
+    btn.dataset.coneAction = action.data;
+    btn.textContent = action.text;
+    btn.style.cssText = action.style;
+    btn.addEventListener('click', action.onClick);
+    d.append(btn);
+  }
+  d.addEventListener('slicc-dialog-close', () => spec.onDismiss(d));
+  return d;
+}
+
+/** The "New cone" body: a name field (Enter submits) and a one-line hint. */
+function buildNameForm(doc: Document, onSubmit: (name: string) => void): HTMLFormElement {
+  const form = doc.createElement('form');
+  form.style.cssText = 'display:flex;flex-direction:column;gap:0.5rem;padding:0.25rem 0;';
+  const input = doc.createElement('input');
+  input.type = 'text';
+  input.placeholder = 'Cone name';
+  input.setAttribute('aria-label', 'New cone name');
+  input.maxLength = 40;
+  input.autocomplete = 'off';
+  input.style.cssText =
+    'font-size:0.9375rem;padding:0.5rem 0.625rem;border:1px solid var(--s2-border-color,#e0e0e0);' +
+    'border-radius:0.375rem;background:transparent;color:inherit;';
+  const hint = doc.createElement('p');
+  hint.textContent = 'Your current chat stays in this cone. The new cone starts from scratch.';
+  hint.style.cssText = 'font-size:0.8125rem;color:var(--s2-content-secondary,#717171);margin:0;';
+  form.append(input, hint);
+  form.addEventListener('submit', (event) => {
+    event.preventDefault();
+    onSubmit(input.value.trim());
+  });
+  return form;
+}
+
 /** Wire the row's cone actions and keep its cone count in sync. */
 export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
   const { freezer, client, log } = deps;
   const doc = freezer.ownerDocument;
-  ensureStyles(doc);
 
-  const line = doc.createElement('div');
-  line.className = 'wcui-cone-line';
-  line.setAttribute('role', 'group');
-  line.setAttribute('aria-label', 'Cone');
-
-  type Pending = { kind: 'name'; draft: string } | { kind: 'drop'; jid: string } | null;
-  let pending: Pending = null;
   /** Name of a cone we just asked the kernel for — selected once it lands. */
   let pendingSelect: string | null = null;
   let dropping = false;
-
-  const el = <K extends keyof HTMLElementTagNameMap>(
-    tag: K,
-    attrs: Record<string, string> = {},
-    text?: string
-  ): HTMLElementTagNameMap[K] => {
-    const node = doc.createElement(tag);
-    for (const [k, v] of Object.entries(attrs)) node.setAttribute(k, v);
-    if (text !== undefined) node.textContent = text;
-    return node;
-  };
+  let dialog: ConeDialog | null = null;
 
   const row = (): HTMLElement | null => freezer.querySelector('slicc-freezer-new');
 
@@ -111,19 +137,62 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
   const currentRoot = (): RegisteredScoop | undefined =>
     rootForSelection(client.getScoops(), deps.getSelected());
 
-  const create = (): void => {
-    if (pending?.kind !== 'name') return;
-    const name = pending.draft.trim();
+  const closeDialog = (): void => {
+    if (!dialog) return;
+    const d = dialog;
+    dialog = null;
+    d.hide?.();
+    d.remove();
+  };
+
+  /**
+   * One modal at a time; a second action while one is open replaces it. The
+   * dialog lives on `document.body`, never in the rail, so the cards below
+   * the row do not move.
+   */
+  const openDialog = (spec: Omit<ConeDialogSpec, 'onDismiss'>): void => {
+    closeDialog();
+    const d = buildConeDialog(doc, {
+      ...spec,
+      onDismiss: (closed) => {
+        if (dialog === closed) dialog = null;
+        closed.remove();
+      },
+    });
+    dialog = d;
+    doc.body.append(d);
+    d.show?.();
+  };
+
+  const create = (name: string): void => {
     if (!name) return;
-    pending = null;
+    closeDialog();
     const record = buildNewConeRecord(name, client.getScoops());
     pendingSelect = name;
     void client.registerScoop(record).catch((err) => log.warn('WC cone create failed', err));
     render();
   };
 
+  const askName = (): void => {
+    const form = buildNameForm(doc, create);
+    openDialog({
+      heading: 'New cone',
+      body: form,
+      actions: [
+        {
+          text: 'Create',
+          style: BTN_PRIMARY,
+          data: 'create',
+          onClick: () => create(form.querySelector('input')?.value.trim() ?? ''),
+        },
+        { text: 'Cancel', style: BTN_PLAIN, data: 'cancel', onClick: closeDialog },
+      ],
+    });
+    queueMicrotask(() => form.querySelector('input')?.focus());
+  };
+
   const drop = (jid: string): void => {
-    pending = null;
+    closeDialog();
     const roots = rootsOf(client.getScoops());
     const root = roots.find((s) => s.jid === jid);
     // Never drop the last cone — the row hides the action in that state and
@@ -157,6 +226,22 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
     })();
   };
 
+  const askDrop = (root: RegisteredScoop): void => {
+    const label = switcherLabelFor(root);
+    const body = doc.createElement('p');
+    body.textContent =
+      'Its chat goes to the Freezer as it is — no memory is extracted — and its scoops are dropped with it. Frozen cards stay.';
+    body.style.cssText = 'font-size:0.875rem;margin:0;';
+    openDialog({
+      heading: `Drop ${label}?`,
+      body,
+      actions: [
+        { text: 'Drop', style: BTN_DANGER, data: 'drop', onClick: () => drop(root.jid) },
+        { text: 'Cancel', style: BTN_PLAIN, data: 'cancel', onClick: closeDialog },
+      ],
+    });
+  };
+
   const render = (): void => {
     const roots = rootsOf(client.getScoops());
     // A cone created from the row becomes the active one as soon as the
@@ -170,76 +255,20 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
         if (deps.getSelected()?.jid !== landed.jid) deps.selectScoop(landed);
       }
     }
-    row()?.setAttribute('cones', String(roots.length));
-
-    line.replaceChildren();
-    if (pending?.kind === 'name') {
-      const form = el('form');
-      form.style.display = 'contents';
-      const input = el('input', {
-        type: 'text',
-        placeholder: 'Cone name',
-        'aria-label': 'New cone name',
-        maxlength: '40',
-      });
-      input.value = pending.draft;
-      input.addEventListener('input', () => {
-        if (pending?.kind === 'name') pending.draft = input.value;
-      });
-      const ok = el('button', { type: 'submit' }, 'Create');
-      const cancel = el('button', { type: 'button' }, 'Cancel');
-      cancel.addEventListener('click', () => {
-        pending = null;
-        render();
-      });
-      form.addEventListener('submit', (event) => {
-        event.preventDefault();
-        create();
-      });
-      form.append(input, ok, cancel);
-      line.append(form);
-      queueMicrotask(() => input.focus());
-    } else if (pending?.kind === 'drop') {
-      const jid = pending.jid;
-      const root = roots.find((s) => s.jid === jid);
-      if (!root || roots.length <= 1) {
-        pending = null;
-      } else {
-        line.append(
-          el(
-            'span',
-            { class: 'msg' },
-            `Drop ${switcherLabelFor(root)}? Its chat goes to the freezer.`
-          )
-        );
-        const yes = el('button', { type: 'button', class: 'danger' }, 'Drop');
-        yes.addEventListener('click', () => drop(jid));
-        const no = el('button', { type: 'button' }, 'Cancel');
-        no.addEventListener('click', () => {
-          pending = null;
-          render();
-        });
-        line.append(yes, no);
-      }
-    } else if (dropping) {
-      line.append(el('span', { class: 'msg' }, 'Freezing the cone…'));
-    }
+    const r = row();
+    r?.setAttribute('cones', String(roots.length));
+    // While the drop's freeze runs the row is busy; the user cannot start a
+    // second drop or a new chat on a cone that is going away.
+    r?.toggleAttribute('busy', dropping);
   };
 
-  freezer.addEventListener('new-cone', () => {
-    pending = pending?.kind === 'name' ? null : { kind: 'name', draft: '' };
-    render();
-  });
+  freezer.addEventListener('new-cone', askName);
   freezer.addEventListener('drop-cone', () => {
     const root = currentRoot();
-    pending = !root || pending?.kind === 'drop' ? null : { kind: 'drop', jid: root.jid };
-    render();
+    if (!root || rootsOf(client.getScoops()).length <= 1 || dropping) return;
+    askDrop(root);
   });
 
-  // Sits right under the action row, above the frozen cards.
-  const anchor = row();
-  if (anchor) anchor.after(line);
-  else freezer.prepend(line);
   render();
-  return { refresh: render, element: line };
+  return { refresh: render, dialog: () => dialog };
 }
