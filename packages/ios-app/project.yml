@@ -26,6 +26,8 @@ targets:
       - package: WebRTC
       # Shared tray-follower transport, re-exported via TrayFollowerExports.swift.
       - package: SliccTrayFollower
+      # Shared leader VFS / File Provider logic, re-exported via TrayVFSExports.swift.
+      - package: SliccTrayVFS
       - sdk: FileProvider.framework
       - sdk: Security.framework
       - sdk: UniformTypeIdentifiers.framework
@@ -229,3 +231,5 @@ packages:
     path: ../swift-traysession
   SliccTrayFollower:
     path: ../swift-trayfollower
+  SliccTrayVFS:
+    path: ../swift-traykit

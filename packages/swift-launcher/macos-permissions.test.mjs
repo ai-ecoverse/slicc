@@ -44,10 +44,15 @@ describe('Sliccstart WebRTC.framework packaging', () => {
   // slicc-server links @rpath/WebRTC.framework/WebRTC (via SliccTrayFollower's
   // WebRTC tray transport). Its only bundle-local rpath is @loader_path
   // (Contents/Resources), so the framework must sit next to the binary or dyld
-  // fails at launch and every spawned server dies as "start failed".
+  // fails at launch and every spawned server dies as "start failed". Sliccstart
+  // links the same framework via SliccTrayVFS and resolves it through Resources.
   it('copies WebRTC.framework next to slicc-server in the bundle', () => {
     expect(assemblySource).toContain(".build/release/WebRTC.framework");
     expect(assemblySource).toContain("resolve(resources, 'WebRTC.framework')");
+  });
+
+  it('adds an rpath so the MacOS launcher binary can load Resources/WebRTC.framework', () => {
+    expect(assemblySource).toContain('install_name_tool -add_rpath @executable_path/../Resources');
   });
 
   it('fails assembly fast when the framework was not built', () => {
@@ -86,5 +91,34 @@ describe('Sliccstart iCloud sync packaging', () => {
 
   it('fails fast when PROVISION_PROFILE points at a missing file', () => {
     expect(signingScript).toContain('ERROR: PROVISION_PROFILE set but file not found');
+  });
+});
+
+describe('Sliccstart File Provider packaging', () => {
+  it('declares the team-prefixed app group for credential sharing', () => {
+    expect(entitlements).toContain('S8LB56P782.com.slicc.sliccstart.fileprovider');
+  });
+
+  it('uses the team-prefixed keychain access group (codesign does not expand AppIdentifierPrefix)', () => {
+    expect(entitlements).toContain('S8LB56P782.com.slicc.sliccstart.fileprovider.credentials');
+    expect(entitlements).not.toContain('$(AppIdentifierPrefix)');
+  });
+
+  it('builds and embeds the File Provider appex when project.yml is present', () => {
+    expect(assemblySource).toContain('SliccFileProvider.appex');
+    expect(assemblySource).toContain('Contents/PlugIns/');
+  });
+
+  it('signs the embedded appex with sandbox entitlements in both signing paths', () => {
+    expect(signingScript).toContain('SliccFileProvider.entitlements');
+    expect(signingScript.match(/SliccFileProvider\.entitlements/g)).toHaveLength(2);
+    expect(signingScript.match(/PlugIns\/SliccFileProvider\.appex/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('signs the appex innermost-first, before the outer app', () => {
+    const appex = signingScript.indexOf('PlugIns/SliccFileProvider.appex');
+    const outer = signingScript.lastIndexOf('--entitlements "$ENTITLEMENTS"');
+    expect(appex).toBeGreaterThanOrEqual(0);
+    expect(appex).toBeLessThan(outer);
   });
 });

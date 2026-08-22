@@ -1,5 +1,6 @@
 import Foundation
 import OSLog
+import SliccTrayFollower
 
 /// Request/response correlator for the tray `fs.*` protocol.
 ///

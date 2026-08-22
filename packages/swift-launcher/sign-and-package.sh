@@ -29,6 +29,11 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
     "$APP_DIR/Contents/Resources/WebRTC.framework"
   codesign --force --options runtime --sign "$IDENTITY" --timestamp \
     "$APP_DIR/Contents/Resources/slicc-server"
+  if [ -d "$APP_DIR/Contents/PlugIns/SliccFileProvider.appex" ]; then
+    codesign --force --options runtime --entitlements "$SCRIPT_DIR/SliccFileProvider.entitlements" \
+      --sign "$IDENTITY" --timestamp \
+      "$APP_DIR/Contents/PlugIns/SliccFileProvider.appex"
+  fi
 
   # iCloud key-value sync (cross-device tray sessions) needs an embedded
   # Developer ID provisioning profile that authorizes the ubiquity-kvstore
@@ -96,6 +101,10 @@ else
   echo "No APPLE_TEAM_ID set, using ad-hoc signing..."
   codesign --force --sign - "$APP_DIR/Contents/Resources/WebRTC.framework"
   codesign --force --sign - "$APP_DIR/Contents/Resources/slicc-server"
+  if [ -d "$APP_DIR/Contents/PlugIns/SliccFileProvider.appex" ]; then
+    codesign --force --entitlements "$SCRIPT_DIR/SliccFileProvider.entitlements" --sign - \
+      "$APP_DIR/Contents/PlugIns/SliccFileProvider.appex"
+  fi
   codesign --force --entitlements "$ENTITLEMENTS" --sign - "$APP_DIR"
 fi
 

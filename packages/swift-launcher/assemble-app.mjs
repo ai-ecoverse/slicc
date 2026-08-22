@@ -30,7 +30,19 @@ mkdirSync(macOS, { recursive: true });
 mkdirSync(resources, { recursive: true });
 
 // Copy Sliccstart binary
-cpSync(resolve(__dirname, '.build/release', APP_NAME), resolve(macOS, APP_NAME));
+const sliccstartBin = resolve(macOS, APP_NAME);
+cpSync(resolve(__dirname, '.build/release', APP_NAME), sliccstartBin);
+
+// Sliccstart links WebRTC (via SliccTrayVFS → FileProviderTrayConnection). The
+// framework ships in Contents/Resources for slicc-server (@loader_path); add an
+// rpath so the MacOS executable can resolve the same copy at runtime.
+try {
+  execSync(`install_name_tool -add_rpath @executable_path/../Resources "${sliccstartBin}"`, {
+    stdio: 'pipe',
+  });
+} catch {
+  // Ignore duplicate-rpath errors when re-assembling locally.
+}
 
 // Copy slicc-server binary
 const serverBin = resolve(swiftServerDir, '.build/release/slicc-server');
@@ -42,7 +54,9 @@ chmodSync(serverDest, 0o755);
 // `@rpath/WebRTC.framework/WebRTC` (via `SliccTrayFollower`, which the
 // egress-blocked Electron follower uses for its WebRTC tray transport), and
 // the binary's only bundle-local rpath is `@loader_path` — i.e. its own
-// directory, `Contents/Resources`. Without the framework here dyld fails with
+// directory, `Contents/Resources`. Sliccstart (in MacOS/) gets an added
+// `@executable_path/../Resources` rpath above so it loads the same framework
+// copy. Without the framework here dyld fails with
 // "Library not loaded: @rpath/WebRTC.framework/WebRTC" and *every* spawned
 // slicc-server (leader or follower) dies immediately as a launcher "start
 // failed". SPM stages the macOS slice at `.build/release/WebRTC.framework`;
@@ -119,6 +133,41 @@ const overlayDest = copyElectronOverlayEntry({
   resourcesDir: resources,
 });
 console.log(`Copied Electron overlay bootstrap: ${overlayDest}`);
+
+// ---------------------------------------------------------------------------
+// 3c. File Provider extension (Finder integration)
+// ---------------------------------------------------------------------------
+const fileProviderProject = resolve(__dirname, 'SliccstartFileProvider.xcodeproj');
+const fileProviderAppex = resolve(
+  __dirname,
+  'build/DerivedData/Build/Products/Release/SliccFileProvider.appex'
+);
+if (existsSync(resolve(__dirname, 'project.yml'))) {
+  console.log('Building SliccFileProvider appex...');
+  execSync('xcodegen generate', { cwd: __dirname, stdio: 'inherit' });
+  execSync(
+    [
+      'xcodebuild build',
+      `-project "${fileProviderProject}"`,
+      '-scheme SliccFileProvider',
+      '-configuration Release',
+      `-derivedDataPath "${resolve(__dirname, 'build/DerivedData')}"`,
+      'CODE_SIGNING_ALLOWED=NO',
+      'ONLY_ACTIVE_ARCH=NO',
+    ].join(' '),
+    { cwd: __dirname, stdio: 'inherit' }
+  );
+  if (!existsSync(fileProviderAppex)) {
+    console.error(`ERROR: SliccFileProvider.appex not found at ${fileProviderAppex}`);
+    process.exit(1);
+  }
+  const plugIns = resolve(contents, 'PlugIns');
+  mkdirSync(plugIns, { recursive: true });
+  cpSync(fileProviderAppex, resolve(plugIns, 'SliccFileProvider.appex'), { recursive: true });
+  console.log('Copied SliccFileProvider.appex into Contents/PlugIns/');
+} else {
+  console.warn('WARN: project.yml missing — skipping File Provider appex');
+}
 
 // ---------------------------------------------------------------------------
 // 3b. Credits.html (About panel website link)

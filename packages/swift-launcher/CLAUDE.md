@@ -51,9 +51,17 @@ Terminal rows attach the selected terminal to the current leader via `slicc <joi
 
 Terminal.app and iTerm2 launch through Apple Events; `sign-and-package.sh` signs with `Sliccstart.entitlements` including `com.apple.security.automation.apple-events`.
 
+## Finder File Provider (leader VFS)
+
+Shared provider logic in **`packages/swift-traykit`** (`SliccTrayVFS`). `SliccFileProvider.appex` is built via XcodeGen (`project.yml`) + `xcodebuild`, embedded in `Contents/PlugIns/` by `assemble-app.mjs`. `FileProviderCoordinator` saves join credentials to the team-prefixed app group (`S8LB56P782.com.slicc.sliccstart.fileprovider`) when `leaderJoinUrl` is set; Settings → Startup toggles Finder integration. Clean quit withdraws the domain (update/detach does not). The appex is App Sandbox + notarized alongside the main app; enable once in System Settings → Login Items & Extensions → File Provider. Coverage: `FileProviderCoordinatorTests`, `packages/swift-traykit` provider tests.
+
 ## iCloud Sync (Tray Sessions)
 
 Shared models in **`packages/swift-traysession`**. **Secret-bearing join URLs sync only through same-Apple-ID, encrypted iCloud KVS.** `SessionReachability` follows bounded `TRAY_SUPERSEDED` chains; only HTTP 200 with `leader.connected == true` is live. `SliccstartApp` publishes non-nil `leaderJoinUrl` (refreshes every 4 h); clean quit withdraws, update/detach does not. Coverage: `TraySessionLauncherTests`.
+
+## Finder File Provider (leader VFS)
+
+Shared provider logic in **`packages/swift-traykit`** (`SliccTrayVFS`). `SliccFileProvider.appex` is built via XcodeGen (`project.yml`) + `xcodebuild`, embedded in `Contents/PlugIns/` by `assemble-app.mjs`. `FileProviderCoordinator` saves join credentials to the team-prefixed app group (`S8LB56P782.com.slicc.sliccstart.fileprovider`) when `leaderJoinUrl` is set; Settings → Startup toggles Finder integration. Clean quit withdraws the domain (update/detach does not). The appex is App Sandbox + notarized alongside the main app; enable once in System Settings → Login Items & Extensions → File Provider. Coverage: `FileProviderCoordinatorTests`, `packages/swift-traykit` provider tests.
 
 **`leaderJoinUrl` is the single gate** for Electron/terminal rows _and_ iCloud advertising. `reattach` must call `startLeaderProbe` **after** `spawn` registers the launch record, and the loop's `leaderProbeStep` must keep waiting for a record it has never seen (bounded grace) — `reattachPersistedRecords` is nonisolated `async`, so the probe can outrun the record. Getting this wrong strands the launcher on "Start a browser first" after every smooth update. Tests: `SliccProcessLeaderProbeTests`.
 
