@@ -72,8 +72,8 @@
     "@ai-ecoverse/spoon": "*",
     "@pierre/diffs": "1.3.5",
     "@pierre/trees": "1.0.0-beta.6",
-    "@xterm/addon-fit": "^0.11.0",
-    "@xterm/xterm": "^6.0.0",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "lucide": "1.33.0"
   },
   "devDependencies": {
