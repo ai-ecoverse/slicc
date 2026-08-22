@@ -195,7 +195,7 @@ export class RemoteExecRouter {
     bootstrapId: string,
     message: TrayExecRequestMessage
   ): Promise<void> {
-    const { requestId, command, cwd, env } = message;
+    const { requestId, command, cwd, env, stdin } = message;
     const execInShell = this.context.options.execInShell;
     if (!execInShell) {
       this.context.followers.followers.get(bootstrapId)?.sync.send({
@@ -214,6 +214,7 @@ export class RemoteExecRouter {
         sessionId: bootstrapId,
         cwd,
         env,
+        stdin,
         signal: controller.signal,
         onChunk: (stream, data) => {
           this.context.followers.followers.get(bootstrapId)?.sync.send({

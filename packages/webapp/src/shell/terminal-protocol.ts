@@ -92,6 +92,8 @@ export interface TerminalExecMsg {
   cwd?: string;
   /** Optional env overrides merged into the persistent shell before this command. */
   env?: Record<string, string>;
+  /** Optional base64-encoded stdin bytes (same encoding as tray exec.request). */
+  stdin?: string;
 }
 
 /**

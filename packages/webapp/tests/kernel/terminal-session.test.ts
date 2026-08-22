@@ -170,8 +170,30 @@ describe('TerminalSessionHost ⇄ TerminalSessionClient round-trip', () => {
     expect(ctx.shell.executeCommand).toHaveBeenCalledWith(
       'echo hello',
       expect.any(AbortSignal),
-      undefined
+      undefined,
+      ''
     );
+    ctx.dispose();
+  });
+
+  it('forwards base64 stdin through exec to executeCommand', async () => {
+    const ctx = setupChannel();
+    const stdin = Buffer.from('hello\n', 'utf-8').toString('base64');
+    ctx.shell.executeCommand.mockResolvedValue({
+      stdout: 'hello\n',
+      stderr: '',
+      exitCode: 0,
+    });
+    await ctx.client.open();
+    await ctx.client.exec('cat', { stdin });
+    expect(ctx.shell.executeCommand).toHaveBeenCalledWith(
+      'cat',
+      expect.any(AbortSignal),
+      undefined,
+      expect.anything()
+    );
+    const stdinArg = ctx.shell.executeCommand.mock.calls[0]?.[3];
+    expect((stdinArg as unknown as string).length).toBeGreaterThan(0);
     ctx.dispose();
   });
 
