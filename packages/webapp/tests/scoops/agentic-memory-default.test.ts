@@ -29,12 +29,14 @@ describe('bundled MEMORY.md', () => {
     expect(spawn).toHaveBeenCalledOnce();
   });
 
-  // The prompt tells the curator to draft in `/tmp/` rather than beside the
-  // memory file. That instruction is only true because `/tmp` is writable for
-  // every sandbox regardless of ACLs (`ALWAYS_WRITABLE_PREFIXES`) — the shipped
-  // `writablePaths` never mentions it. Lose that exemption and the curator is
-  // back to escalating a sudo request mid-pass, so pin the pair together.
-  it('can write the scratch path its prompt names, using only the shipped grants', async () => {
+  // The prompt sends drafts to the curator's own scratch folder. That path is
+  // never in the shipped `writablePaths` — the bridge unions `/scoops/agent-<name>/`
+  // in at spawn time from the fixed agent name, and deletes it when the pass
+  // ends. So the literal path in the prompt is only correct as long as the name
+  // stays put; derive it here rather than hardcoding it, and pin that the
+  // sandbox actually admits the write. Lose either half and the curator is back
+  // to escalating a sudo request mid-pass (#2164).
+  it('can write the scratch path its prompt names, using only the grants it is spawned with', async () => {
     const spawn = vi.fn(
       async (_options: AgentSpawnOptions): Promise<AgentSpawnResult> => ({
         finalText: 'done',
@@ -47,19 +49,28 @@ describe('bundled MEMORY.md', () => {
       sessionArchivePath: '/sessions/frozen.md',
       sessionCount: 1,
     });
-    const writablePaths = spawn.mock.calls[0][0].writablePaths ?? [];
+    const { writablePaths = [], name } = spawn.mock.calls[0][0];
     expect(writablePaths).toEqual(['/workspace/CLAUDE.md']);
-    expect(DEFAULT_MEMORY_MD).toContain('/tmp/memory-draft.md');
+    const scratchFolder = `/scoops/agent-${name}`;
+    expect(DEFAULT_MEMORY_MD).toContain(`${scratchFolder}/draft.md`);
+    // Shared `/tmp` is writable too, but a full rewrite of durable memory is
+    // readable and clobberable by every other scoop there, so the prompt must
+    // not send drafts to it.
+    expect(DEFAULT_MEMORY_MD).not.toContain('/tmp/memory-draft.md');
 
     vfs = await VirtualFS.create({ dbName: `memory-scratch-${dbCounter++}`, wipe: true });
-    await vfs.mkdir('/tmp', { recursive: true });
+    await vfs.mkdir(scratchFolder, { recursive: true });
     await vfs.mkdir('/workspace', { recursive: true });
-    const restricted = new RestrictedFS(vfs, writablePaths);
+    // What `buildScoopConfig` hands the sandbox: the frontmatter grants plus
+    // the scratch folder.
+    const restricted = new RestrictedFS(vfs, [...writablePaths, `${scratchFolder}/`]);
 
-    await restricted.writeFile('/tmp/memory-draft.md', 'draft');
-    expect(await restricted.readFile('/tmp/memory-draft.md', { encoding: 'utf-8' })).toBe('draft');
+    await restricted.writeFile(`${scratchFolder}/draft.md`, 'draft');
+    expect(await restricted.readFile(`${scratchFolder}/draft.md`, { encoding: 'utf-8' })).toBe(
+      'draft'
+    );
     // A scratch copy beside the memory file stays blocked — the reason the
-    // prompt sends drafts to `/tmp` instead of next door.
+    // prompt sends drafts elsewhere rather than next door.
     await expect(restricted.writeFile('/workspace/CLAUDE.md.bak', 'copy')).rejects.toThrow(
       'EACCES'
     );
