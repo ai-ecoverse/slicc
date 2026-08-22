@@ -43,15 +43,11 @@ export interface ConeActionsHandles {
   dialog(): HTMLElement | null;
 }
 
-const BTN_PRIMARY =
-  'padding:0.5rem 1.25rem;border-radius:0.375rem;border:none;cursor:pointer;' +
-  'background:var(--s2-accent-color,#0265dc);color:#fff;font-size:0.875rem;';
-const BTN_DANGER =
-  'padding:0.5rem 1.25rem;border-radius:0.375rem;border:none;cursor:pointer;' +
-  'background:#d23;color:#fff;font-size:0.875rem;';
-const BTN_PLAIN =
-  'padding:0.5rem 1.25rem;border-radius:0.375rem;cursor:pointer;' +
-  'background:transparent;border:1px solid var(--s2-border-color,#e0e0e0);font-size:0.875rem;';
+const BTN_BASE =
+  'padding:0.5rem 1.25rem;border-radius:0.375rem;cursor:pointer;font:inherit;font-size:0.875rem;';
+const BTN_PRIMARY = `${BTN_BASE}border:none;background:var(--s2-accent-color,#0265dc);color:#fff;`;
+const BTN_DANGER = `${BTN_BASE}border:none;background:#d23;color:#fff;`;
+const BTN_PLAIN = `${BTN_BASE}background:transparent;border:1px solid var(--s2-border-color,#e0e0e0);color:inherit;`;
 
 /** Build the optimistic record the rail registers for a new cone. */
 export function buildNewConeRecord(
@@ -100,13 +96,16 @@ function buildConeDialog(doc: Document, spec: ConeDialogSpec): ConeDialog {
 /** What the "New cone" dialog collects. Only the name is required. */
 export interface NewConeDraft {
   name: string;
-  /** What the cone is for — becomes its system-prompt note. */
-  description: string;
-  /** First message; starts the cone's first turn right away. */
-  prompt: string;
+  /**
+   * The brief — what the cone should work on. One field, two uses: it is
+   * the cone's first message (its first turn starts at once) and it stays
+   * on the record as the cone's purpose (system-prompt note), so the cone
+   * still knows its job after its chat has been frozen and cleared.
+   */
+  brief: string;
 }
 
-/** The "New cone" body: name, purpose, first message. Enter in the name field submits. */
+/** The "New cone" body: name + brief. Enter in the name field submits, ⌘/Ctrl+Enter in the brief. */
 function buildNameForm(doc: Document, onSubmit: (draft: NewConeDraft) => void): HTMLFormElement {
   const form = doc.createElement('form');
   form.style.cssText = 'display:flex;flex-direction:column;gap:0.5rem;padding:0.25rem 0;';
@@ -122,32 +121,20 @@ function buildNameForm(doc: Document, onSubmit: (draft: NewConeDraft) => void): 
   name.autocomplete = 'off';
   name.required = true;
   name.style.cssText = field;
-  const description = doc.createElement('input');
-  description.type = 'text';
-  description.name = 'description';
-  description.placeholder = 'What is it for? (optional)';
-  description.setAttribute('aria-label', 'What the cone is for');
-  description.maxLength = 200;
-  description.autocomplete = 'off';
-  description.style.cssText = field;
-  const prompt = doc.createElement('textarea');
-  prompt.name = 'prompt';
-  prompt.placeholder = 'First message (optional)';
-  prompt.setAttribute('aria-label', 'First message');
-  prompt.rows = 3;
-  prompt.style.cssText = `${field}resize:vertical;`;
-  form.append(name, description, prompt);
-  const read = (): NewConeDraft => ({
-    name: name.value.trim(),
-    description: description.value.trim(),
-    prompt: prompt.value.trim(),
-  });
+  const brief = doc.createElement('textarea');
+  brief.name = 'brief';
+  brief.placeholder = 'What should it work on? (optional)';
+  brief.setAttribute('aria-label', 'What the cone should work on');
+  brief.rows = 3;
+  brief.style.cssText = `${field}resize:vertical;`;
+  form.append(name, brief);
+  const read = (): NewConeDraft => ({ name: name.value.trim(), brief: brief.value.trim() });
   form.addEventListener('submit', (event) => {
     event.preventDefault();
     onSubmit(read());
   });
   // Submit from the textarea with ⌘/Ctrl+Enter (plain Enter is a newline).
-  prompt.addEventListener('keydown', (event) => {
+  brief.addEventListener('keydown', (event) => {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       onSubmit(read());
@@ -206,10 +193,7 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
     const record = buildNewConeRecord(draft.name, client.getScoops());
     pendingSelect = draft.name;
     void client
-      .registerScoop(record, {
-        ...(draft.description ? { description: draft.description } : {}),
-        ...(draft.prompt ? { prompt: draft.prompt } : {}),
-      })
+      .registerScoop(record, draft.brief ? { description: draft.brief, prompt: draft.brief } : {})
       .catch((err) => log.warn('WC cone create failed', err));
     render();
   };

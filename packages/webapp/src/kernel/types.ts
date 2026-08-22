@@ -208,7 +208,14 @@ export interface KernelClientFacade {
   getScoops(): RegisteredScoop[];
   getScoop(jid: string): RegisteredScoop | undefined;
   isProcessing(jid: string): boolean;
-  registerScoop(scoop: RegisteredScoop): Promise<void>;
+  /**
+   * Create a cone. `options.description` is kept as the cone's purpose
+   * (`config.systemPromptAppend`); `options.prompt` starts its first turn.
+   */
+  registerScoop(
+    scoop: RegisteredScoop,
+    options?: { description?: string; prompt?: string }
+  ): Promise<void>;
   unregisterScoop(jid: string): Promise<void>;
   createScoopTab(jid: string): void;
   stopScoop(jid: string): void;

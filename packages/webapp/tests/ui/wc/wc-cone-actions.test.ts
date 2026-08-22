@@ -149,17 +149,16 @@ describe('wireConeActions', () => {
     const input = d.querySelector('input[name="name"]') as HTMLInputElement;
     expect(input.getAttribute('aria-label')).toBe('Cone name');
     input.value = 'Research';
-    (d.querySelector('input[name="description"]') as HTMLInputElement).value = ' Paper survey ';
-    (d.querySelector('textarea[name="prompt"]') as HTMLTextAreaElement).value =
-      'List the three most cited retrieval papers.';
+    (d.querySelector('textarea[name="brief"]') as HTMLTextAreaElement).value =
+      ' List the three most cited retrieval papers. ';
     h.action('create')?.click();
     await vi.waitFor(() => expect(h.client.registerScoop).toHaveBeenCalledOnce());
     const [record, options] = h.client.registerScoop.mock.calls[0];
     expect(record.parentJid).toBeNull();
     expect(record.name).toBe('Research');
-    // Purpose and first message ride along, trimmed.
+    // The one brief is both the purpose and the first message, trimmed.
     expect(options).toEqual({
-      description: 'Paper survey',
+      description: 'List the three most cited retrieval papers.',
       prompt: 'List the three most cited retrieval papers.',
     });
     // Dialog is gone, the placeholder is not selected…
@@ -187,20 +186,29 @@ describe('wireConeActions', () => {
     expect(h.dialog()).toBeNull();
   });
 
-  it('⌘/Ctrl+Enter in the first-message field submits', () => {
+  it('⌘/Ctrl+Enter in the brief submits', () => {
     const h = harness([primary]);
     h.fire('new-cone');
     const d = h.dialog() as HTMLElement;
     (d.querySelector('input[name="name"]') as HTMLInputElement).value = 'Gamma';
-    const prompt = d.querySelector('textarea[name="prompt"]') as HTMLTextAreaElement;
-    prompt.value = 'go';
-    prompt.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
+    const brief = d.querySelector('textarea[name="brief"]') as HTMLTextAreaElement;
+    brief.value = 'go';
+    brief.dispatchEvent(new KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     expect(h.client.registerScoop).not.toHaveBeenCalled();
-    prompt.dispatchEvent(
+    brief.dispatchEvent(
       new KeyboardEvent('keydown', { key: 'Enter', metaKey: true, bubbles: true })
     );
     expect(h.client.registerScoop).toHaveBeenCalledOnce();
-    expect(h.client.registerScoop.mock.calls[0][1]).toEqual({ prompt: 'go' });
+    expect(h.client.registerScoop.mock.calls[0][1]).toEqual({ description: 'go', prompt: 'go' });
+  });
+
+  it('dialog buttons inherit the UI font instead of the UA button font', () => {
+    const h = harness([primary]);
+    h.fire('new-cone');
+    for (const btn of h.dialog()?.querySelectorAll<HTMLButtonElement>('button[slot="footer"]') ??
+      []) {
+      expect(btn.style.font).toBe('inherit');
+    }
   });
 
   it('Cancel and the dialog closing itself both discard the name form', () => {
