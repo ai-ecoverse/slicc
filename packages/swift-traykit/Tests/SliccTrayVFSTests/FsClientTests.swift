@@ -1,7 +1,6 @@
+import SliccTrayFollower
 import XCTest
 
-@testable import SliccFollower
-@testable import SliccTrayKit
 @testable import SliccTrayVFS
 
 /// Covers the two properties `FsClient` owns that the leader does not: a
