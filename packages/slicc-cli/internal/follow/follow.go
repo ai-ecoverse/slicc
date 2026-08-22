@@ -113,6 +113,13 @@ func (s *Session) startExec(ctx context.Context, req protocol.ExecRequest) {
 		}
 		stdin = decoded
 	}
+	if s.eval != nil && len(stdin) > 0 {
+		_ = s.sender.SendJSON(protocol.ExecResponse{
+			Type: protocol.TypeExecResponse, RequestID: req.RequestID, ExitCode: 127,
+			Error: "exec.request stdin is not supported in follow --eval mode (use per-command follow)",
+		})
+		return
+	}
 	ctrl := make(chan string, 4)
 	s.mu.Lock()
 	s.running[req.RequestID] = ctrl
