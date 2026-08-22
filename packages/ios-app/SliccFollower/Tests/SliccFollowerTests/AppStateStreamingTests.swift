@@ -99,6 +99,98 @@ final class AppStateStreamingTests: XCTestCase {
         XCTAssertEqual(calls.map(\.id), ["reply:call-1", "reply:call-2", "reply:call-3"])
     }
 
+    /// A progress tick lands on the row its call id names, not on the newest
+    /// same-named row — the same pairing `tool_result` uses.
+    @MainActor
+    func testToolProgressPairsByCallIdAndClearsOnResult() throws {
+        let state = AppState()
+        state.selectedScoopJid = "cone"
+        try send(.messageStart(messageId: "reply"), scoopJid: "cone", to: state)
+        for id in ["call-1", "call-2"] {
+            try send(
+                .toolUseStart(
+                    messageId: "reply", toolName: "bash", toolInput: nil, toolCallId: id),
+                scoopJid: "cone", to: state)
+        }
+
+        try send(
+            .toolProgress(
+                messageId: "reply", toolName: "bash",
+                progress: ToolProgressEvent(
+                    id: "u1", label: "sleep 30", fraction: 0.4, phase: .update),
+                toolCallId: "call-1"),
+            scoopJid: "cone", to: state)
+
+        XCTAssertEqual(state.toolProgress["reply:call-1"]?.fraction, 0.4)
+        XCTAssertNil(state.toolProgress["reply:call-2"])
+
+        // The result settles the row, so its unit goes with it even if the
+        // leader never sends the closing `end` tick.
+        try send(
+            .toolResult(
+                messageId: "reply", toolName: "bash", result: "ok", isError: false,
+                toolCallId: "call-1"),
+            scoopJid: "cone", to: state)
+        XCTAssertTrue(state.toolProgress.isEmpty)
+    }
+
+    /// `phase: end` clears the unit on its own, and a turn edge clears whatever
+    /// is left — a bar must never outlive the run that painted it.
+    @MainActor
+    func testToolProgressEndPhaseAndTurnEndClearUnits() throws {
+        let state = AppState()
+        state.selectedScoopJid = "cone"
+        try send(.messageStart(messageId: "reply"), scoopJid: "cone", to: state)
+        try send(
+            .toolUseStart(
+                messageId: "reply", toolName: "bash", toolInput: nil, toolCallId: "call-1"),
+            scoopJid: "cone", to: state)
+        try send(
+            .toolProgress(
+                messageId: "reply", toolName: "bash",
+                progress: ToolProgressEvent(id: "u1", label: "sleep 30", phase: .update),
+                toolCallId: "call-1"),
+            scoopJid: "cone", to: state)
+        XCTAssertNotNil(state.toolProgress["reply:call-1"])
+
+        try send(
+            .toolProgress(
+                messageId: "reply", toolName: "bash",
+                progress: ToolProgressEvent(id: "u1", label: "sleep 30", phase: .end),
+                toolCallId: "call-1"),
+            scoopJid: "cone", to: state)
+        XCTAssertTrue(state.toolProgress.isEmpty)
+
+        // Re-open a unit and let the turn settle instead.
+        try send(
+            .toolProgress(
+                messageId: "reply", toolName: "bash",
+                progress: ToolProgressEvent(id: "u2", label: "sleep 30", phase: .start),
+                toolCallId: "call-1"),
+            scoopJid: "cone", to: state)
+        XCTAssertFalse(state.toolProgress.isEmpty)
+        try send(.turnEnd(messageId: "reply"), scoopJid: "cone", to: state)
+        XCTAssertTrue(state.toolProgress.isEmpty)
+    }
+
+    /// A tick for a call the transcript has never seen is dropped rather than
+    /// parked under a key no row will ever read.
+    @MainActor
+    func testToolProgressForUnknownCallIsIgnored() throws {
+        let state = AppState()
+        state.selectedScoopJid = "cone"
+        try send(.messageStart(messageId: "reply"), scoopJid: "cone", to: state)
+
+        try send(
+            .toolProgress(
+                messageId: "reply", toolName: "bash",
+                progress: ToolProgressEvent(id: "u1", label: "sleep 30", phase: .update),
+                toolCallId: "call-ghost"),
+            scoopJid: "cone", to: state)
+
+        XCTAssertTrue(state.toolProgress.isEmpty)
+    }
+
     /// Pre-#2306 leaders send no id. The name scan stays, but it may only claim
     /// a row that is still awaiting its result — otherwise a second call's
     /// output overwrites the first one's.

@@ -80,6 +80,7 @@ class AppState: ObservableObject {
         didSet {
             guard oldValue != isStreaming else { return }
             runningToolCalls = 0
+            toolProgress.removeAll()
             awaitingUserSince = isStreaming ? nil : Date()
         }
     }
@@ -132,6 +133,12 @@ class AppState: ObservableObject {
     /// Internal (not private) so the delivery extension can flag a failed
     /// send in the buffer too.
     var messagesByScoop: [String: [ChatMessage]] = [:]
+    /// Live tool-call progress units, keyed by the tool row's id (see
+    /// `AppState.toolRowId`). Only in-flight calls appear here — a `tool_result`
+    /// or a `phase == .end` tick removes the entry, and the whole map clears at
+    /// every turn edge and session reset, so a stale bar can never outlive the
+    /// run that painted it. Read by the transcript through `MessageListView`.
+    @Published var toolProgress: [String: ToolProgressEvent] = [:]
 
     // Sprinkle awareness
     @Published var sprinkles: [SprinkleSummary] = []
@@ -449,6 +456,7 @@ class AppState: ObservableObject {
         modelCatalog = []
         modelSelectionState = nil
         messagesByScoop.removeAll()
+        toolProgress.removeAll()
         sprinkles = []
         sprinkleContents.removeAll()
         sprinkleUpdates.removeAll()
@@ -1256,6 +1264,14 @@ class AppState: ObservableObject {
             applyToolResult(
                 messageId: messageId, toolName: toolName, result: result, isError: isError,
                 toolCallId: toolCallId, buffer: &buffer, scoopJid: scoopJid, isVisible: isVisible)
+
+        // Progress ticks resolve against the transcript (to find the row) but
+        // mutate only `toolProgress`, so they never republish `messages` — at
+        // ~4/s per running unit that would be a redraw storm.
+        case .toolProgress(let messageId, let toolName, let progress, let toolCallId):
+            applyToolProgress(
+                messageId: messageId, toolName: toolName, progress: progress,
+                toolCallId: toolCallId, buffer: buffer)
 
         case .turnEnd(let messageId):
             logger.info("Agent event: turn_end id=\(messageId)")

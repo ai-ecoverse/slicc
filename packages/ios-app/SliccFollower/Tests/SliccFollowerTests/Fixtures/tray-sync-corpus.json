@@ -1017,16 +1017,15 @@
     },
     {
       "type": "tool_progress",
-      "ios": "unknown",
+      "ios": "decoded",
       "mirrored": [
-        "type"
-      ],
-      "dropped": [
         "messageId",
         "progress",
         "toolCallId",
-        "toolName"
+        "toolName",
+        "type"
       ],
+      "dropped": [],
       "event": {
         "type": "tool_progress",
         "messageId": "m2",

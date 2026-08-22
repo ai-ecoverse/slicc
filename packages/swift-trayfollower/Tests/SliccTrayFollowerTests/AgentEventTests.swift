@@ -119,6 +119,61 @@ final class AgentEventTests: XCTestCase {
         XCTAssertNil(toolCallId)
     }
 
+    func testToolProgressRoundTrip() throws {
+        let unit = ToolProgressEvent(
+            id: "curl-1", label: "curl …/big.tar.gz", fraction: 0.43, etaMs: 8_000,
+            done: 45_678_901, total: 106_000_000, unit: "bytes", phase: .update)
+        guard
+            case .toolProgress(let messageId, let toolName, let progress, let toolCallId) =
+                try roundTrip(
+                    .toolProgress(
+                        messageId: "m1", toolName: "bash", progress: unit, toolCallId: "call-1"))
+        else {
+            XCTFail("expected toolProgress")
+            return
+        }
+        XCTAssertEqual(messageId, "m1")
+        XCTAssertEqual(toolName, "bash")
+        XCTAssertEqual(toolCallId, "call-1")
+        XCTAssertEqual(progress, unit)
+    }
+
+    func testToolProgressWithoutOptionalCounters() throws {
+        guard
+            case .toolProgress(_, _, let progress, let toolCallId) = try roundTrip(
+                .toolProgress(
+                    messageId: "m1", toolName: "bash",
+                    progress: ToolProgressEvent(id: "sleep-1", label: "sleep 30", phase: .start)))
+        else {
+            XCTFail("expected toolProgress")
+            return
+        }
+        // An indeterminate unit carries no fraction — the follower breathes the
+        // icon instead of filling it.
+        XCTAssertNil(progress.fraction)
+        XCTAssertNil(progress.etaMs)
+        XCTAssertNil(progress.unit)
+        XCTAssertNil(toolCallId)
+        XCTAssertEqual(progress.phase, .start)
+    }
+
+    /// A phase a newer leader invents must not tear the treatment down, and
+    /// must not fail the decode of the surrounding agent event.
+    func testUnknownToolProgressPhaseDecodesAsUpdate() throws {
+        let json = #"""
+            {"type":"tool_progress","messageId":"m1","toolName":"bash",
+             "progress":{"id":"u1","label":"sleep 30","phase":"paused"}}
+            """#
+        guard
+            case .toolProgress(_, _, let progress, _) = try WireCodec.decode(
+                AgentEvent.self, from: json)
+        else {
+            XCTFail("expected toolProgress")
+            return
+        }
+        XCTAssertEqual(progress.phase, .update)
+    }
+
     func testToolUI() throws {
         guard
             case .toolUI(let messageId, let toolName, let requestId, let html) =

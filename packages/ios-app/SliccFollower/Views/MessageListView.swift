@@ -29,6 +29,9 @@ extension View {
 struct MessageListView: View {
     let messages: [ChatMessage]
     let isStreaming: Bool
+    /// Live tool-call progress units keyed by tool row id, straight from
+    /// `AppState.toolProgress`. Empty for frozen sessions and plain history.
+    var toolProgress: [String: ToolProgressEvent] = [:]
     /// Pending read-only approval placeholders, pinned below the transcript.
     var toolUICards: [ToolUIPlaceholder] = []
     /// Pending native external-app approvals, separate from read-only tool UI.
@@ -47,6 +50,7 @@ struct MessageListView: View {
     init(
         messages: [ChatMessage],
         isStreaming: Bool,
+        toolProgress: [String: ToolProgressEvent] = [:],
         toolUICards: [ToolUIPlaceholder] = [],
         openApprovals: [OpenApprovalRequest] = [],
         onOpenApprovalDecision: ((String, OpenApprovalDecision) -> Void)? = nil,
@@ -58,6 +62,7 @@ struct MessageListView: View {
     ) {
         self.messages = messages
         self.isStreaming = isStreaming
+        self.toolProgress = toolProgress
         self.toolUICards = toolUICards
         self.openApprovals = openApprovals
         self.onOpenApprovalDecision = onOpenApprovalDecision
@@ -114,7 +119,8 @@ struct MessageListView: View {
                     ForEach(group.messages) { message in
                         MessageBubble(
                             message: message,
-                            onInlineSprinkleLick: onInlineSprinkleLick
+                            onInlineSprinkleLick: onInlineSprinkleLick,
+                            toolProgress: toolProgress
                         )
                         .id(message.id)
                         .padding(.horizontal, 12)

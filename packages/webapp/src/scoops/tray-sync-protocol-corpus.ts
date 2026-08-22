@@ -888,17 +888,17 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
     fields: { type: 'mirrored', messageId: 'mirrored', requestId: 'mirrored' },
     event: { type: 'tool_ui_done', messageId: 'm2', requestId: 'ui-1' },
   },
-  // Bash progress overlay ticks (≤4/s per unit). iOS has no case yet — the
-  // follower simply shows no bar; the `.unknown` fallthrough keeps the gap
-  // inventoried rather than silent.
+  // Bash progress overlay ticks (≤4/s per unit). The iOS follower paints the
+  // same three cues the webapp row does — icon fill, three dots, a bar on an
+  // open row — off `AppState.toolProgress`.
   tool_progress: {
-    ios: 'unknown',
+    ios: 'decoded',
     fields: {
       type: 'mirrored',
-      messageId: 'dropped',
-      toolName: 'dropped',
-      progress: 'dropped',
-      toolCallId: 'dropped',
+      messageId: 'mirrored',
+      toolName: 'mirrored',
+      progress: 'mirrored',
+      toolCallId: 'mirrored',
     },
     event: {
       type: 'tool_progress',
