@@ -174,6 +174,142 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
         XCTAssertEqual(proc.leaderJoinUrl, "https://example.test/join/replaced.url")
     }
 
+    /// Regression: `reattach` starts the probe from a non-main-actor
+    /// context, so the chromiumBrowser launch record can be registered a
+    /// beat *after* the loop's first stop-condition check. Treating that
+    /// as terminal left `leaderJoinUrl` nil for the whole session after a
+    /// smooth update — every Electron/terminal row stuck on "Start a
+    /// browser first" and no iCloud session advertised.
+    func testProbeWaitsForBrowserRecordRegisteredAfterProbeStart() async throws {
+        let ready = Data(#"{"state":"connected","joinUrl":"https://example.test/join/reattached.url"}"#.utf8)
+        let probe = TrayStatusProbe(fetch: { _ in (200, ready) })
+
+        let proc = SliccProcess(trayStatusProbe: probe)
+        let helper = try launchSleeper()
+        addTeardownBlock { if helper.isRunning { helper.terminate() } }
+
+        // No launch record yet — exactly the reattach ordering.
+        proc.startLeaderProbe(
+            servePort: 35710,
+            innerMaxAttempts: 2,
+            innerRetryDelay: 0,
+            outerBackoff: 0.05
+        )
+        try await Task.sleep(nanoseconds: 60_000_000)
+        XCTAssertNil(proc.leaderJoinUrl, "no record yet — nothing to probe against")
+
+        proc._testing_seedLaunchRecord(
+            id: "browser-1",
+            process: helper,
+            targetType: .chromiumBrowser,
+            cdpPort: 39222,
+            servePort: 35710,
+            targetName: "TestBrowser"
+        )
+
+        let deadline = Date().addingTimeInterval(3.0)
+        while proc.leaderJoinUrl == nil && Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+        XCTAssertEqual(proc.leaderJoinUrl, "https://example.test/join/reattached.url")
+    }
+
+    /// The grace window is bounded: a caller that starts the probe and then
+    /// never spawns (e.g. `spawn` threw on a port clash) must not leave the
+    /// loop running forever.
+    func testProbeGivesUpWhenBrowserRecordNeverAppears() async throws {
+        let ready = Data(#"{"state":"connected","joinUrl":"https://example.test/join/never.url"}"#.utf8)
+        actor Counter {
+            var n = 0
+            func tick() -> Int {
+                n += 1
+                return n
+            }
+            func snapshot() -> Int { n }
+        }
+        let counter = Counter()
+        let probe = TrayStatusProbe(fetch: { _ in
+            _ = await counter.tick()
+            return (200, ready)
+        })
+
+        let proc = SliccProcess(trayStatusProbe: probe)
+        proc.startLeaderProbe(
+            servePort: 35710,
+            innerMaxAttempts: 1,
+            innerRetryDelay: 0,
+            outerBackoff: 0
+        )
+
+        try await Task.sleep(nanoseconds: 300_000_000)
+        XCTAssertNil(proc.leaderJoinUrl)
+        let fetchCount = await counter.snapshot()
+        XCTAssertEqual(fetchCount, 0, "must never probe without a browser record")
+    }
+
+    // MARK: - Step decision table
+
+    func testLeaderProbeStepStopsOnceJoinUrlIsSet() {
+        XCTAssertEqual(
+            SliccProcess.leaderProbeStep(
+                joinUrlAlreadySet: true,
+                hasBrowserRecord: true,
+                hasObservedBrowserRecord: true,
+                recordWaitRoundsLeft: 5
+            ),
+            .stop
+        )
+    }
+
+    func testLeaderProbeStepProbesWhileBrowserRecordIsLive() {
+        XCTAssertEqual(
+            SliccProcess.leaderProbeStep(
+                joinUrlAlreadySet: false,
+                hasBrowserRecord: true,
+                hasObservedBrowserRecord: false,
+                recordWaitRoundsLeft: 0
+            ),
+            .probe
+        )
+    }
+
+    func testLeaderProbeStepWaitsForARecordThatHasNeverAppeared() {
+        XCTAssertEqual(
+            SliccProcess.leaderProbeStep(
+                joinUrlAlreadySet: false,
+                hasBrowserRecord: false,
+                hasObservedBrowserRecord: false,
+                recordWaitRoundsLeft: 1
+            ),
+            .waitForRecord
+        )
+    }
+
+    func testLeaderProbeStepStopsWhenAPreviouslySeenRecordGoesAway() {
+        XCTAssertEqual(
+            SliccProcess.leaderProbeStep(
+                joinUrlAlreadySet: false,
+                hasBrowserRecord: false,
+                hasObservedBrowserRecord: true,
+                recordWaitRoundsLeft: 99
+            ),
+            .stop,
+            "a browser that closed must stop the loop, not re-enter the startup grace window"
+        )
+    }
+
+    func testLeaderProbeStepStopsWhenTheGraceWindowIsExhausted() {
+        XCTAssertEqual(
+            SliccProcess.leaderProbeStep(
+                joinUrlAlreadySet: false,
+                hasBrowserRecord: false,
+                hasObservedBrowserRecord: false,
+                recordWaitRoundsLeft: 0
+            ),
+            .stop
+        )
+    }
+
     // MARK: - Helpers
 
     private func launchSleeper() throws -> Process {

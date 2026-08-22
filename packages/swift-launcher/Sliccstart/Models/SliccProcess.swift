@@ -599,6 +599,54 @@ final class SliccProcess {
         ]
     }
 
+    /// Main-actor state the probe loop reads once per round.
+    struct LeaderProbeSnapshot: Sendable {
+        let joinUrlAlreadySet: Bool
+        let hasBrowserRecord: Bool
+    }
+
+    /// What the probe loop does next for a given round.
+    enum LeaderProbeStep: Equatable, Sendable {
+        /// A chromiumBrowser record is live — poll `/api/tray-status`.
+        case probe
+        /// The record hasn't been registered yet (startup race) — back off
+        /// briefly and re-check instead of exiting.
+        case waitForRecord
+        /// Nothing left to do: the URL landed elsewhere, or a record we had
+        /// already seen went away.
+        case stop
+    }
+
+    /// How many rounds the loop waits for a launch record that has never
+    /// appeared before giving up, and how long each of those rounds waits.
+    /// ~6 s total in production — long enough to cover the spawn that
+    /// follows `startLeaderProbe`, short enough that a failed spawn does
+    /// not leave a loop running.
+    static let leaderProbeRecordWaitRounds = 25
+    static let leaderProbeRecordWaitDelay: TimeInterval = 0.25
+
+    /// Pure decision table for one round of `startLeaderProbe`.
+    ///
+    /// The `hasObservedBrowserRecord` distinction is the whole point: a
+    /// missing record *after* one was seen means the browser closed (stop),
+    /// but a missing record *before* any was seen means the caller hasn't
+    /// finished spawning yet. `reattach` calls `startLeaderProbe` from a
+    /// non-main-actor context, so treating that as terminal left
+    /// `leaderJoinUrl` nil for the whole session after a smooth update —
+    /// which disabled every Electron/terminal row ("Start a browser first")
+    /// and suppressed iCloud session advertising.
+    static func leaderProbeStep(
+        joinUrlAlreadySet: Bool,
+        hasBrowserRecord: Bool,
+        hasObservedBrowserRecord: Bool,
+        recordWaitRoundsLeft: Int
+    ) -> LeaderProbeStep {
+        if joinUrlAlreadySet { return .stop }
+        if hasBrowserRecord { return .probe }
+        if !hasObservedBrowserRecord && recordWaitRoundsLeft > 0 { return .waitForRecord }
+        return .stop
+    }
+
     /// Fire-and-forget tray-status probe that keeps trying until the
     /// leader is actually ready. The bounded `discoverJoinUrl` retry
     /// only covers a ~10s window, so when Chrome auto-launches at
@@ -621,6 +669,10 @@ final class SliccProcess {
     ) {
         let probe = trayStatusProbe
         let serveOrigin = "http://127.0.0.1:\(servePort)"
+        // Cap the "record hasn't appeared yet" wait so a caller that
+        // starts the probe and then fails to spawn cannot leave the loop
+        // spinning forever.
+        let recordWaitDelay = min(outerBackoff, Self.leaderProbeRecordWaitDelay)
 
         leaderProbeTask?.cancel()
         // Capture `self` weakly into the detached Task, then hop to the
@@ -629,20 +681,46 @@ final class SliccProcess {
         // closure) avoids the Swift 6 sendable-capture warning about
         // mutating a captured `var self` from a concurrent context.
         leaderProbeTask = Task { [weak self] in
+            var hasObservedBrowserRecord = false
+            var recordWaitRoundsLeft = Self.leaderProbeRecordWaitRounds
             while !Task.isCancelled {
                 // Stop conditions checked on the main actor before each
-                // round: a join URL set by another path or a missing
-                // chromiumBrowser record both mean the loop has nothing
-                // left to do (matches `clearLeaderIfNoBrowserRunning`
-                // and `stopAll` semantics).
-                let shouldProbe: Bool = await MainActor.run { [weak self] in
-                    guard let self else { return false }
-                    if self.leaderJoinUrl != nil { return false }
-                    return self.launchRecords.values.contains { $0.targetType == .chromiumBrowser }
+                // round: a join URL set by another path or a browser
+                // record that has gone away again both mean the loop has
+                // nothing left to do (matches `clearLeaderIfNoBrowserRunning`
+                // and `stopAll` semantics). A record that has *never* been
+                // seen is a startup race, not a stop condition — see
+                // `leaderProbeStep`.
+                let snapshot: LeaderProbeSnapshot = await MainActor.run { [weak self] in
+                    guard let self else { return LeaderProbeSnapshot(joinUrlAlreadySet: true, hasBrowserRecord: false) }
+                    return LeaderProbeSnapshot(
+                        joinUrlAlreadySet: self.leaderJoinUrl != nil,
+                        hasBrowserRecord: self.launchRecords.values.contains { $0.targetType == .chromiumBrowser }
+                    )
                 }
-                guard shouldProbe else {
+                let observed = snapshot.hasBrowserRecord
+                let joinUrlAlreadySet = snapshot.joinUrlAlreadySet
+                if observed { hasObservedBrowserRecord = true }
+                let step = Self.leaderProbeStep(
+                    joinUrlAlreadySet: joinUrlAlreadySet,
+                    hasBrowserRecord: observed,
+                    hasObservedBrowserRecord: hasObservedBrowserRecord,
+                    recordWaitRoundsLeft: recordWaitRoundsLeft
+                )
+                switch step {
+                case .stop:
                     log.info("startLeaderProbe: stop condition reached, exiting loop")
                     return
+                case .waitForRecord:
+                    // The caller spawns the slicc-server child right after
+                    // starting this probe (reattach does so from an
+                    // off-main-actor context), so the launch record can land
+                    // a beat later. Wait instead of giving up.
+                    recordWaitRoundsLeft -= 1
+                    try? await Task.sleep(nanoseconds: UInt64(recordWaitDelay * 1_000_000_000))
+                    continue
+                case .probe:
+                    break
                 }
 
                 let joinUrl = await probe.discoverJoinUrl(
@@ -918,14 +996,6 @@ final class SliccProcess {
             // launched with (persisted in the record).
             env.merge(Self.thinElectronEnv(bridgeToken: resolvedBridgeToken)) { _, new in new }
         }
-        // Re-probe the leader after reattach so the Desktop App rows
-        // come back enabled across smooth-update relaunches. The
-        // already-running browser still has its tray; the new
-        // slicc-server just needs to refresh the join URL into the
-        // launcher.
-        if target.type == .chromiumBrowser {
-            startLeaderProbe(servePort: record.servePort)
-        }
         try spawn(
             target: target,
             extraArgs: extraArgs,
@@ -938,6 +1008,16 @@ final class SliccProcess {
             // with the same secret instead of dropping back to nil.
             bridgeToken: resolvedBridgeToken
         )
+        // Re-probe the leader after reattach so the Desktop App rows come
+        // back enabled across smooth-update relaunches. The already-running
+        // browser still has its tray; the new slicc-server just needs to
+        // refresh the join URL into the launcher. Must run *after* `spawn`
+        // has registered the launch record — the probe loop's own grace
+        // window covers the remaining main-actor hop, but starting it first
+        // needlessly races it.
+        if target.type == .chromiumBrowser {
+            startLeaderProbe(servePort: record.servePort)
+        }
     }
 
     // MARK: - Private
