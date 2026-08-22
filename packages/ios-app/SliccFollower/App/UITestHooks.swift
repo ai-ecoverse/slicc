@@ -217,6 +217,63 @@ import UIKit
             backend.setData(data, forKey: TraySessionSyncStore.storageKeyPrefix + deviceId)
         }
 
+        /// Seed the Recent list without touching iCloud:
+        /// `-uiTestRecentJoinsFixture YES` yields one row this device recorded
+        /// and one synced from another device (the pasted-elsewhere case the
+        /// feature exists for), `-uiTestRecentJoinsEmpty YES` a deterministic
+        /// empty store. Join URLs dial 127.0.0.1:1, hermetically unreachable.
+        static func recentJoinsFixtureBackend() -> KeyValueSyncBackend? {
+            if UserDefaults.standard.bool(forKey: "uiTestRecentJoinsEmpty") {
+                return InMemoryKeyValueBackend()
+            }
+            guard UserDefaults.standard.bool(forKey: "uiTestRecentJoinsFixture") else {
+                return nil
+            }
+            let backend = InMemoryKeyValueBackend()
+            let now = Date()
+            seed(
+                backend,
+                deviceId: "ios-under-test",
+                recents: [
+                    RecentJoin(
+                        joinUrl: "http://127.0.0.1:1/join/fixture-recent-local",
+                        // Deliberately not one of the live fixture sessions:
+                        // a recent that is still advertised is filtered out.
+                        label: "Safari on Fixture MacBook",
+                        deviceId: "ios-under-test",
+                        deviceName: "iPhone Under Test",
+                        firstConnectedAt: now.addingTimeInterval(-86_400),
+                        lastConnectedAt: now.addingTimeInterval(-600)
+                    )
+                ]
+            )
+            seed(
+                backend,
+                deviceId: "fixture-ipad",
+                recents: [
+                    // No label: the hand-pasted case, which renders as its host.
+                    RecentJoin(
+                        joinUrl: "http://127.0.0.1:1/join/fixture-recent-pasted",
+                        label: "",
+                        deviceId: "fixture-ipad",
+                        deviceName: "Fixture iPad",
+                        firstConnectedAt: now.addingTimeInterval(-7_200),
+                        lastConnectedAt: now.addingTimeInterval(-3_600)
+                    )
+                ]
+            )
+            return backend
+        }
+
+        private static func seed(
+            _ backend: KeyValueSyncBackend,
+            deviceId: String,
+            recents: [RecentJoin]
+        ) {
+            guard let data = try? JSONEncoder().encode(recents) else { return }
+            backend.setData(data, forKey: RecentJoinStore.storageKeyPrefix + deviceId)
+        }
+
         /// Present the freezer surfaces on launch (screenshots + tests that
         /// need the sheet or the frozen view without a tap).
         static var opensFrozenRail: Bool {

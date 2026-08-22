@@ -1,5 +1,5 @@
 {
-  "$comment": "Screen registry for the iOS PR screenshots job (.github/workflows/ios-screenshots.yml). Each screen is a deterministic, leaderless app state reached purely through UITestHooks launch arguments (DEBUG builds only — see App/UITestHooks.swift), so capture needs no taps and no leader. Every screen runs on every ios-app PR: unlike Storybook there is no per-story diff mapping — the app is one connected surface and the whole set costs under two simulator-minutes. Add a screen when you add a hook; names are kebab-case and become the screenshot filenames (ios-<name>.png). Dedup note: the capture pins the simulator status bar so static screens hash stably across runs; screens showing iOS 26 glass chrome (sheet Done buttons) or live animations render nondeterministically and re-upload on every push — expected, not a bug.",
+  "$comment": "Screen registry for the iOS PR screenshots job (.github/workflows/ios-screenshots.yml). Each screen is a deterministic, leaderless app state reached purely through UITestHooks launch arguments (DEBUG builds only \u2014 see App/UITestHooks.swift), so capture needs no taps and no leader. Every screen runs on every ios-app PR: unlike Storybook there is no per-story diff mapping \u2014 the app is one connected surface and the whole set costs under two simulator-minutes. Add a screen when you add a hook; names are kebab-case and become the screenshot filenames (ios-<name>.png). Dedup note: the capture pins the simulator status bar so static screens hash stably across runs; screens showing iOS 26 glass chrome (sheet Done buttons) or live animations render nondeterministically and re-upload on every push \u2014 expected, not a bug.",
   "screens": [
     {
       "name": "settings",
@@ -16,6 +16,18 @@
         "-joinUrl",
         "",
         "-uiTestSessionsFixture",
+        "YES"
+      ]
+    },
+    {
+      "name": "recent-joins",
+      "description": "Settings with the synced Recent list: one row this device recorded, one pasted on another device (no label, so it shows its host)",
+      "args": [
+        "-joinUrl",
+        "",
+        "-uiTestSessionsFixture",
+        "YES",
+        "-uiTestRecentJoinsFixture",
         "YES"
       ]
     },

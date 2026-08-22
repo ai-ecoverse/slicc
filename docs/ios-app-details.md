@@ -28,6 +28,12 @@ Nested horizontal content keeps a drag while it can scroll that way; scoop navig
 
 iCloud keeps advertising the **old** tray after a leader reconnects. `SessionReachability` and both attach loops must follow the `TRAY_SUPERSEDED` chain (`SupersedeRedirect`, which also moves the tray the connection owns) or a row reads live but cannot connect.
 
+## Recent joins
+
+iCloud discovery only covers what the macOS launcher advertises, so a join URL pasted into a phone was invisible to every other device. `RecentJoinStore` closes that: each device writes the URLs that **connected** under its own KVS key and reads the union. Recording happens in `dataChannelOpened`, not in `connect` — a dial that never lands must not sync itself to the household — and after `SupersedeRedirect` has moved `activeJoinUrl`, so what syncs is the URL that works.
+
+Display is `ICloudSessionList.recentRows`: trays the live iCloud list already shows are filtered out by the shared one-way id (one tray, one row), then `RecentJoinStore.rank` sorts reachable-first, newest-connected second, and caps at five — the cap after the ranking, so a session that still answers can displace a fresher dead one. Rows render the label, or the host when a pasted URL has none; the path carries the session secret and never reaches the screen. Swipe-to-Remove and Clear Stored Data clear only this device's key, so a row another device recorded can sync back. Both lists probe on `onAppear` **and** on store change: iCloud can push a row in while the sheet is open, and an unprobed id counts as presumed-reachable, so it would sort above known-live rows and hide its "not responding" note until the sheet was reopened.
+
 ## Local Kokoro models
 
 Settings downloads the anonymous, revision-pinned ~83 MB Hugging Face pack after Wi-Fi consent with progress, cancel, retry, and removal; replies never provision. Pack: nine CoreML stages, two vocabularies, `af_heart`. Marker/cache delete together; weights are not committed. Live-simulator QA: [`docs/ios-simulator-qa.md`](ios-simulator-qa.md).
@@ -89,7 +95,7 @@ The regular-width cap (`MessageListLayout.maximumReadableWidth`) is applied **pe
 
 ## UI-test hooks
 
-`UITestHooks` is `#if DEBUG` only. **No test needs a leader**: `-uiTestFixtureRoute YES` opens the leaderless UI Fixture; `-uiTestSessionsFixture/Empty YES` seeds iCloud sessions; `-uiTestScoopStatusFixture` covers lifecycle/fill; `-uiTestReduceMotion` freezes pupil motion + noise; `-uiTestCompletedTurn YES` feeds a completed turn; `-uiTestConnectionState` pins a start state (published immediately — a pinned state is a premise, not a transition); `-uiTestConnectionBlip "<dropAfter>[,<healsAfter>]"` stages the mid-session drop the settle window exists for. Failure-state dials `http://127.0.0.1:1/…` so the avatar reaches `Connection Failed` without DNS.
+`UITestHooks` is `#if DEBUG` only. **No test needs a leader**: `-uiTestFixtureRoute YES` opens the leaderless UI Fixture; `-uiTestSessionsFixture/Empty YES` seeds iCloud sessions; `-uiTestRecentJoinsFixture/Empty YES` seeds the synced Recent list (one row this device recorded, one synced from a fixture iPad with no label — the hand-pasted case); `-uiTestScoopStatusFixture` covers lifecycle/fill; `-uiTestReduceMotion` freezes pupil motion + noise; `-uiTestCompletedTurn YES` feeds a completed turn; `-uiTestConnectionState` pins a start state (published immediately — a pinned state is a premise, not a transition); `-uiTestConnectionBlip "<dropAfter>[,<healsAfter>]"` stages the mid-session drop the settle window exists for. Failure-state dials `http://127.0.0.1:1/…` so the avatar reaches `Connection Failed` without DNS.
 
 ## Coverage gate details
 
