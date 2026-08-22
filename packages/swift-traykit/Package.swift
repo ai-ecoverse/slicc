@@ -25,7 +25,10 @@ let package = Package(
         ),
         .testTarget(
             name: "SliccTrayVFSTests",
-            dependencies: ["SliccTrayVFS"],
+            dependencies: [
+                "SliccTrayVFS",
+                .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
+            ],
             path: "Tests/SliccTrayVFSTests"
         ),
     ]
