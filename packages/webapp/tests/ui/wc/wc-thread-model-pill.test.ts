@@ -32,6 +32,10 @@ vi.stubGlobal('localStorage', {
 function refs(): WcShellRefs {
   const make = (tag: string): HTMLElement => document.createElement(tag);
   return {
+    // The composer band itself — `applyThreadContext` hides it for a
+    // read-only unit (#2312) before it touches the pills inside it.
+    composer: make('slicc-composer'),
+    inputCard: make('slicc-input-card'),
     composerMeta: make('slicc-composer-meta'),
     thread: make('slicc-chat-thread'),
     switcher: make('slicc-agent-tabs'),
@@ -76,6 +80,10 @@ describe('composer model pill per selected unit (#2310)', () => {
     await applyThreadContext(r, scoop, [cone, scoop]);
     expect(r.composerMeta.getAttribute('model')).toBe('anthropic/claude-opus-4-6');
     expect(r.composerMeta.getAttribute('thinking')).toBe('high');
+    // …but the user never sees it: the whole band is hidden for a scoop
+    // (#2312). The pills are kept correct rather than skipped, so nothing
+    // stale is left inside the band.
+    expect(r.composer.hasAttribute('hidden')).toBe(true);
   });
 
   it('falls back to the selected unit when no roster is given', async () => {

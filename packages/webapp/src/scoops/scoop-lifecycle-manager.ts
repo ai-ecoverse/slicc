@@ -90,8 +90,18 @@ export interface ScoopLifecycleCallbacks {
     isError: boolean,
     toolCallId?: string
   ): void;
-  onToolUI?(scoopJid: string, toolName: string, requestId: string, html: string): void;
-  onToolUIDone?(scoopJid: string, requestId: string): void;
+  /**
+   * `scoopJid` is the ORIGIN (stream identity); `displayScoopJid` is where the
+   * card is rendered when that differs — the owning cone (#2312).
+   */
+  onToolUI?(
+    scoopJid: string,
+    toolName: string,
+    requestId: string,
+    html: string,
+    displayScoopJid?: string
+  ): void;
+  onToolUIDone?(scoopJid: string, requestId: string, displayScoopJid?: string): void;
   onToolProgress?(
     scoopJid: string,
     toolName: string,
@@ -117,6 +127,13 @@ export interface ScoopLifecycleLickGuard {
 export interface ScoopLifecycleDeps {
   /** Live snapshot of registered scoops. */
   getScoops(): Map<string, RegisteredScoop>;
+  /**
+   * The unit an interactive request from `jid` is shown to — the root that
+   * owns it, or `jid` itself when it IS a root (#2312). Same rule as
+   * `findApprover`: a dangling edge falls back to the default root, so a
+   * prompt always lands somewhere a user can answer it.
+   */
+  approverFor(jid: string): RegisteredScoop | undefined;
   /** Shared VFS (or null before init). */
   getSharedFs(): VirtualFS | null;
   /** Live SessionStore (or null before init). Threaded into every new `ScoopContext`. */
@@ -269,6 +286,18 @@ export class ScoopLifecycleManager {
    */
   observe(jid: string, observer: ScoopObserver): () => void {
     return this.ensureUnit(jid).observe(observer);
+  }
+
+  /**
+   * Where an interactive request from `jid` is DISPLAYED, when that differs
+   * from where it came from — the owning cone for a scoop (#2312).
+   * `undefined` for a root (it answers for itself) and whenever nothing is
+   * registered, so the card falls back to rendering at its origin rather than
+   * being routed into the void.
+   */
+  private displayJidFor(jid: string): string | undefined {
+    const owner = this.deps.approverFor(jid)?.jid;
+    return owner && owner !== jid ? owner : undefined;
   }
 
   private dispatch<K extends keyof ScoopObserver>(
@@ -870,11 +899,22 @@ export class ScoopLifecycleManager {
       onToolEnd: (toolName, result, isError, toolCallId) => {
         callbacks.onToolEnd?.(jid, toolName, result, isError, toolCallId);
       },
+      // `tool_ui` is an interactive approval / picker card, so it is rendered
+      // in the transcript of the unit that can ANSWER it — the owning cone for
+      // a scoop, itself for a cone (#2312). The reply travels back by
+      // `requestId` alone (`ToolUIActionMsg`), so the pending promise still
+      // settles in the scoop that raised it.
+      //
+      // The originating jid stays FIRST and unchanged: it is the stream
+      // identity the rest of the pipeline keys on, and this scoop's own
+      // `response_done` / `turn_end` still carry it. The owner rides along as
+      // a separate DISPLAY target (`undefined` when it is the scoop itself,
+      // i.e. a root) — see `AgentEventMsg.displayScoopJid`.
       onToolUI: (toolName, requestId, html) => {
-        callbacks.onToolUI?.(jid, toolName, requestId, html);
+        callbacks.onToolUI?.(jid, toolName, requestId, html, this.displayJidFor(jid));
       },
       onToolUIDone: (requestId) => {
-        callbacks.onToolUIDone?.(jid, requestId);
+        callbacks.onToolUIDone?.(jid, requestId, this.displayJidFor(jid));
       },
       onToolProgress: (toolName, progress, toolCallId) => {
         callbacks.onToolProgress?.(jid, toolName, progress, toolCallId);

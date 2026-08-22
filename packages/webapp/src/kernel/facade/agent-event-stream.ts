@@ -80,8 +80,16 @@ export class AgentEventStream {
         });
         break;
       }
+      // A card routed to another unit (#2312) keeps its ORIGIN as the stream
+      // identity, so it must not open or consume this scoop's message id —
+      // that would leave a synthetic, never-terminated stream (the real
+      // `response_done` still arrives under the origin). The dip is anchored
+      // by `requestId`, so a stable synthetic id is enough. Mirrors
+      // `OffscreenClient.handleToolUiAgentEvent`.
       case 'tool_ui': {
-        const messageId = ensureMessageStart();
+        const messageId = message.displayScoopJid
+          ? `tool-ui-${message.requestId ?? ''}`
+          : ensureMessageStart();
         events.push({
           type: 'tool_ui',
           messageId,
@@ -92,7 +100,9 @@ export class AgentEventStream {
         break;
       }
       case 'tool_ui_done': {
-        const messageId = this.messageIds.get(scoopJid);
+        const messageId = message.displayScoopJid
+          ? `tool-ui-${message.requestId ?? ''}`
+          : this.messageIds.get(scoopJid);
         if (!messageId) return events;
         events.push({ type: 'tool_ui_done', messageId, requestId: message.requestId ?? '' });
         break;

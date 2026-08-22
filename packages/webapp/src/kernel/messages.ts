@@ -903,6 +903,21 @@ export interface AgentEventMsg {
   html?: string;
   model?: string;
   usage?: ChatMessage['usage'];
+  /**
+   * WHERE an interactive `tool_ui` / `tool_ui_done` card is rendered, when
+   * that is not where it came from (#2312): a scoop's approval card is shown
+   * in the cone that owns it, because the user never talks to the scoop.
+   *
+   * This is deliberately a SEPARATE field rather than a rewritten `scoopJid`.
+   * `scoopJid` is the stream identity — `OffscreenClient` keys its
+   * `currentMessageId` bookkeeping by it, and the scoop's own
+   * `response_done` / `turn_end` still carry the originating jid. Rewriting
+   * it would open a synthetic, never-terminated assistant stream on the cone
+   * and could strand the approval card when the cone's own turn completes.
+   *
+   * Absent (the common case) means "render where it came from".
+   */
+  displayScoopJid?: string;
 }
 
 export interface ScoopStatusMsg {

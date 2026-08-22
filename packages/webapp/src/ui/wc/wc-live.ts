@@ -29,6 +29,7 @@ import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
+import type { ChatMessage } from '../types.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import { wireConeActions } from './wc-cone-actions.js';
 import {
@@ -44,7 +45,15 @@ import { createWcMonitorDeps } from './wc-live-monitor-deps.js';
 import { setupSyncFsBootNonce } from './wc-live-sync-fs.js';
 import { applyThreadContext } from './wc-live-thinking-hydration.js';
 import { mountWcShell, type WcShellRefs } from './wc-shell.js';
-import { defaultRootOf, switcherLabelFor, unitForContext, unitSlugFor } from './wc-unit-context.js';
+import {
+  defaultRootOf,
+  isReadOnlyRole,
+  rootForSelection,
+  switcherLabelFor,
+  unitForContext,
+  unitRoleFor,
+  unitSlugFor,
+} from './wc-unit-context.js';
 import { createWorkbenchActivator, type WorkbenchActivator } from './wc-workbench.js';
 import { wireFileMentions } from './wire-file-mentions.js';
 
@@ -124,9 +133,40 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
   let workbench: WorkbenchActivator | null = null;
   const readyListeners = new Set<() => void>();
 
+  /**
+   * A cone's queued pile held while the user reads one of its scoops (#2312).
+   * Selecting a read-only unit is not "dropping a prompt by navigating away"
+   * — there is nowhere else to talk — so the pile survives that round trip.
+   *
+   * The hold is scoped to the OWNING CONE, not merely to "the destination is
+   * read-only": leaving cone A for a scoop of cone B is the user going
+   * somewhere else to work, and A's prompt is abandoned exactly as it would
+   * be by clicking B itself. Only a detour INSIDE A's own subtree preserves
+   * it (Codex P1).
+   */
+  let stashedQueue: { jid: string; items: ChatMessage[] } | null = null;
+
   const selectScoop = (scoop: RegisteredScoop): void => {
     selected = scoop;
     if (!client) return;
+    const readOnly = isReadOnlyRole(unitRoleFor(scoop));
+    const cancelQueued = (jid: string, ids: readonly string[]): void => {
+      for (const id of ids) void client?.deleteQueuedMessage(jid, id).catch(() => undefined);
+    };
+    const roster = client.getScoops();
+    /**
+     * The cone that owns a unit — itself for a cone, its root for a scoop.
+     * `undefined` when the unit is not in the live roster: `rootForSelection`
+     * would fall back to the DEFAULT root there, which would silently read as
+     * "same cone" and preserve a queue the user actually walked away from.
+     * Unknown owner therefore means "cancel", the conservative direction and
+     * the behaviour that predates the hold.
+     */
+    const ownerOf = (jid: string | undefined): string | undefined => {
+      const unit = jid === undefined ? undefined : roster.find((s) => s.jid === jid);
+      return unit ? (rootForSelection(roster, unit)?.jid ?? unit.jid) : undefined;
+    };
+    const destinationOwner = ownerOf(scoop.jid);
     // Scoop-switch queue-cancel: snapshot the OLD scoop's currently-queued
     // ids and cancel them on the backend BEFORE switching selectedScoopJid,
     // so the orchestrator never silently delivers a prompt the user dropped
@@ -136,9 +176,39 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     // delete is a no-op once the backend already removed it).
     const previousJid = client.selectedScoopJid;
     if (previousJid && previousJid !== scoop.jid) {
-      const queued = controller?.getQueuedMessages() ?? [];
-      for (const m of queued) {
-        void client.deleteQueuedMessage(previousJid, m.id).catch(() => undefined);
+      const previousOwner = ownerOf(previousJid);
+      // Held only for a read-only detour that stays inside the queue owner's
+      // own cone; anything else is a real departure.
+      if (readOnly && destinationOwner !== undefined && destinationOwner === previousOwner) {
+        // Keyed by the OWNING CONE, not by the unit we are leaving: the queue
+        // belongs to the cone, so a hop between two of its scoops must not
+        // re-key the hold onto a scoop jid (which no destination owner could
+        // ever match, cancelling the pile on the next hop).
+        const items = controller?.stashQueued() ?? [];
+        if (items.length > 0) stashedQueue = { jid: previousOwner, items };
+      } else {
+        const queued = controller?.getQueuedMessages() ?? [];
+        cancelQueued(
+          previousJid,
+          queued.map((m) => m.id)
+        );
+      }
+    }
+    if (stashedQueue) {
+      // Back on the cone that owns the pile: hand it to the controller, which
+      // re-installs it after the replay. Still somewhere inside that cone's
+      // subtree (a sibling scoop): keep holding. Anywhere else — including a
+      // DIFFERENT cone's scoop — the detour is over and the prompts really
+      // were abandoned, so cancel them on the backend.
+      if (stashedQueue.jid === scoop.jid) {
+        controller?.restoreQueued(stashedQueue.items);
+        stashedQueue = null;
+      } else if (destinationOwner !== stashedQueue.jid) {
+        cancelQueued(
+          stashedQueue.jid,
+          stashedQueue.items.map((m) => m.id)
+        );
+        stashedQueue = null;
       }
     }
     const cachedBackpressure = lickBackpressure.get(scoop.jid);
@@ -148,7 +218,12 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       unitSlugFor(scoop)
     );
     client.setSelectedScoopJid(scoop.jid);
-    refs.inputCard.removeAttribute('disabled');
+    // A cone gets its composer back (text and queue intact — the band is
+    // hidden, never rebuilt); `applyThreadContext` re-locks it for a scoop.
+    // Set BEFORE `requestScoopMessages`, so the replay for the new selection
+    // is the first thing rendered under the new mode.
+    controller?.setReadOnly(readOnly);
+    if (!readOnly) refs.inputCard.removeAttribute('disabled');
     void applyThreadContext(refs, scoop, client.getScoops());
     client.requestScoopMessages(scoop.jid);
     controller?.setProcessing(client.isProcessing(scoop.jid));

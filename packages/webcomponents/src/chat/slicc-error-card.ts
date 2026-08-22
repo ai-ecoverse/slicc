@@ -43,6 +43,8 @@ import { iconEl } from '../internal/icons.js';
  *   "Try again" / "Open Settings" / "Change model" / "Log in again")
  * @attr message-id - id of the failed chat message this card stands for; echoed
  *   back on the action event so the host can bind it to THIS turn
+ * @attr no-action - render header + body only, with no action button at all
+ *   (read-only transcripts — see `noAction`)
  * @attr action - `retry` (default) | `settings` | `change-model` | `login`;
  *   switches the CTA event, default label, and glyph. Unknown values normalize
  *   back to `"retry"` so legacy hosts stay safe.
@@ -157,6 +159,7 @@ export class SliccErrorCard extends HTMLElement {
     'button-label',
     'message-id',
     'action',
+    'no-action',
     'theme',
   ];
 
@@ -240,6 +243,20 @@ export class SliccErrorCard extends HTMLElement {
   set action(value: ErrorAction | null) {
     if (value == null) this.removeAttribute('action');
     else this.setAttribute('action', value);
+  }
+
+  /**
+   * Render the card with NO action affordance at all — header + body only.
+   * For read-only transcripts, where every CTA (retry, settings, sign-in,
+   * change model) would act on behalf of an agent the reader cannot address.
+   * A disabled button would still promise something; this removes the footer.
+   */
+  get noAction(): boolean {
+    return this.hasAttribute('no-action');
+  }
+
+  set noAction(value: boolean) {
+    this.toggleAttribute('no-action', value);
   }
 
   /** Per-element theme override for the card tokens. */
@@ -332,9 +349,10 @@ export class SliccErrorCard extends HTMLElement {
       buttonLabel
     );
 
-    const foot = h('div', { class: 'foot' }, actionBtn);
+    const children = [headerRow, bodyRow];
+    if (!this.noAction) children.push(h('div', { class: 'foot' }, actionBtn));
 
-    const cardEl = h('div', { class: 'err', part: 'card' }, headerRow, bodyRow, foot);
+    const cardEl = h('div', { class: 'err', part: 'card' }, ...children);
     this.#root.replaceChildren(cardEl);
 
     this.#bindAction();

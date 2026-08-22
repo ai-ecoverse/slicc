@@ -332,7 +332,7 @@ export class Bridge implements KernelFacade {
         bridge.bufferToolEnd(scoopJid, toolName, result, isError, toolCallId);
       },
 
-      onToolUI: (scoopJid, toolName, requestId, html) => {
+      onToolUI: (scoopJid, toolName, requestId, html, displayScoopJid) => {
         bridge.emit({
           type: 'agent-event',
           scoopJid,
@@ -340,15 +340,17 @@ export class Bridge implements KernelFacade {
           toolName,
           requestId,
           html,
+          ...(displayScoopJid ? { displayScoopJid } : {}),
         });
       },
 
-      onToolUIDone: (scoopJid, requestId) => {
+      onToolUIDone: (scoopJid, requestId, displayScoopJid) => {
         bridge.emit({
           type: 'agent-event',
           scoopJid,
           eventType: 'tool_ui_done',
           requestId,
+          ...(displayScoopJid ? { displayScoopJid } : {}),
         });
       },
 

@@ -200,6 +200,46 @@ own.
 - Archives record their provenance: `cone` (the folder) plus `coneLabel` for extra cones only, in both the index entry and the archive frontmatter — so a rebuild from `/sessions/*.md` recovers it and the enrichment rename preserves it. `memorySkipped` rides the frontmatter for the same reason: `pendingEnrichment` comes back from the `pending-` filename, so an index-only marker would be dropped by a rebuild and the next catch-up would mine a chat that opted out. There is **one Freezer for all cones**: the rail card never names the cone; the thawed chat log opens with a `Frozen chat · from cone Research` caption (`frozenProvenanceEl`, a `<slicc-day-separator>` prepended to the thread column). The primary cone and legacy archives with no `cone` field read `Frozen chat` and are treated as the primary cone's.
 - Thawing stays read-only, so it can never overwrite another cone's view; when a thaw fails, the fallback selection goes to the cone the archive named (`rootForConeFolder`), not blindly to the primary one.
 - Boot hydration follows the URL context: `?ctx=cone:cone-research` hydrates `session-cone-research`, a bare boot the primary `session-cone`, and `scoop:` / `freezer:` contexts hydrate nothing (`rootFolderForContext`).
+- **Read-only scoop view ([#2312](https://github.com/ai-ecoverse/slicc/issues/2312)).**
+  Users do not talk to scoops. Selecting one in the tab strip opens its
+  transcript with **no interactive chrome**: `applyComposerAvailability`
+  (`ui/wc/wc-shell.ts`) puts `hidden` on the whole `<slicc-composer>` band —
+  input card, queued pile, model picker + thinking pill, dictation and
+  attachments all live inside it — so nothing is left and nothing is
+  reserved. The 'scoop' shell mood (shader, accent, `scoop:<name>` thread
+  context) is unchanged; only the chrome goes. `WcChatController.setReadOnly`
+  covers what the transcript itself renders: error cards drop every CTA
+  (`no-action` on `slicc-error-card`, because an actionless card would fall
+  back to Retry) and an agent-driven `tool_ui` dip is refused outright.
+  - **The rule is stated once**, in `isReadOnlyRole(role)`
+    (`ui/wc/wc-unit-context.ts`), over the role the switcher descriptors
+    already carry. The leader reaches it through `unitRoleFor(scoop)` and the
+    follower through `summaryRole(summary)` (`wc-tray-scoops.ts`, over
+    `parentId` / legacy `isCone`) — one flag, no second code path. On the
+    follower the read-only state outranks the connection state, so a
+    reconnect while a scoop is viewed cannot hand back its composer.
+  - **Every request that needs a human goes to the owning cone.** `sudo_request`
+    (incl. export approvals), idle / "waiting for parent" notices and
+    completion reports already resolved their target through
+    `findApprover` / `findParent`; interactive `tool_ui` cards now do too —
+    `ScoopLifecycleManager` stamps them with `approverFor(jid)`
+    (`Orchestrator.ownerRootOrDefault`: the root that owns the unit, itself
+    for a root, the default root for a dangling edge). Unlike
+    `parentOrDefaultRoot` a cone resolves to **itself**, so a card raised by
+    cone B renders in B rather than in the oldest cone. The reply travels back
+    by `requestId` alone (`ToolUIActionMsg` carries no jid), so the scoop's
+    pending promise still settles where it was raised.
+  - **The cone's queued pile survives the detour.** A selection change
+    normally cancels the pile on the backend — the user navigated away to
+    talk somewhere else. Reading a scoop is not that: there is nowhere else
+    to talk. `stashQueued` / `restoreQueued` hold it across the round trip
+    (re-installed after the returning unit's replay, which clears the pile of
+    its own accord); landing on a _different_ cone cancels it as before.
+  - `feed_scoop` from the cone stays the only way to send a scoop input, and
+    the `scoop:<name>` URL context still opens this read-only view.
+  - **iOS is not wired yet.** The wire already carries what it needs
+    (`ScoopSummary.parentId` / `isCone`); the app still renders its composer
+    for a selected scoop.
 - **The welcome flow stays primary-cone-only, deliberately.** It is a first-run flow for the _user_, not a per-conversation greeting: someone creating a second cone has already been onboarded. `welcome-detection.ts` therefore reads only `chatSessionIdFor({ folder: PRIMARY_CONE_FOLDER })`, and a welcome lick in an extra cone's history neither fires nor suppresses it.
 
 ### Per-cone model ([#2310](https://github.com/ai-ecoverse/slicc/issues/2310))

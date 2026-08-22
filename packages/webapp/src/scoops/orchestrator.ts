@@ -43,7 +43,7 @@ import {
 } from '../work-unit/descriptor.js';
 import type { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { WorkUnitManager } from '../work-unit/manager.js';
-import { rootsOf } from '../work-unit/policy.js';
+import { rootOwnerOf, rootsOf } from '../work-unit/policy.js';
 import {
   legacyRecordIsCone,
   modelFor,
@@ -136,10 +136,20 @@ export interface OrchestratorCallbacks {
     isError: boolean,
     toolCallId?: string
   ) => void;
-  /** Called when a tool requests UI interaction */
-  onToolUI?: (scoopJid: string, toolName: string, requestId: string, html: string) => void;
+  /**
+   * Called when a tool requests UI interaction. `scoopJid` is the ORIGIN;
+   * `displayScoopJid` is where the card is rendered when that differs — the
+   * owning cone for a scoop, since users never talk to scoops (#2312).
+   */
+  onToolUI?: (
+    scoopJid: string,
+    toolName: string,
+    requestId: string,
+    html: string,
+    displayScoopJid?: string
+  ) => void;
   /** Called when tool UI interaction is complete */
-  onToolUIDone?: (scoopJid: string, requestId: string) => void;
+  onToolUIDone?: (scoopJid: string, requestId: string, displayScoopJid?: string) => void;
   /** Called for each bash progress tick inside a tool call */
   onToolProgress?: (
     scoopJid: string,
@@ -338,6 +348,7 @@ export class Orchestrator implements ConeApprovalRouter {
     this.config = config;
     this.lifecycle = new ScoopLifecycleManager({
       getScoops: () => this.scoops,
+      approverFor: (jid) => this.ownerRootOrDefault(jid),
       getSharedFs: () => this.sharedFs,
       getSessionStore: () => this.sessionStore,
       getProcessManager: () => this.processManager,
@@ -1058,6 +1069,18 @@ export class Orchestrator implements ConeApprovalRouter {
     const scoop = jid === undefined ? undefined : this.scoops.get(jid);
     const parent = scoop?.parentJid ? this.scoops.get(scoop.parentJid) : undefined;
     return parent ?? this.defaultRoot();
+  }
+
+  /**
+   * The root that owns `jid` — itself when it IS a root (#2312). Unlike
+   * {@link parentOrDefaultRoot} a cone resolves to itself rather than to the
+   * default root, which matters once several cones exist: an interactive card
+   * raised by cone B must render in B, not in the oldest cone. A dangling or
+   * looping edge falls back to the default root, same as the approval path.
+   */
+  private ownerRootOrDefault(jid: string | undefined): RegisteredScoop | undefined {
+    const scoop = jid === undefined ? undefined : this.scoops.get(jid);
+    return rootOwnerOf(this.scoops.values(), scoop) ?? this.defaultRoot();
   }
 
   /** Hierarchy-aware work-unit view over the registry (#1666). */
