@@ -11,7 +11,7 @@ let package = Package(
         .library(name: "SliccTrayFollower", targets: ["SliccTrayFollower"])
     ],
     dependencies: [
-        .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor(from: "150.0.0"))
+        .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor(from: "151.0.0"))
     ],
     targets: [
         .target(
