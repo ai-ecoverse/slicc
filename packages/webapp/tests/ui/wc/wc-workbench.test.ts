@@ -187,6 +187,34 @@ describe('createWorkbenchActivator', () => {
     expect(deps.getWorkspace).toHaveBeenCalled();
   });
 
+  it('re-reads memory when the selection moves while the panel is open (#2271)', async () => {
+    const deps = makeDeps();
+    const activator = createWorkbenchActivator(deps);
+
+    activator.activate('memory');
+    await vi.waitFor(() => expect(deps.memoryHost.setRows).toHaveBeenCalledTimes(1));
+
+    // Switching cones re-points the panel: memory reads once per activation
+    // (no poller), so without this the open panel would keep showing the
+    // previous cone's memory indefinitely.
+    deps.getWorkspace.mockReturnValue(workspaceFor({ parentJid: null, folder: 'cone-beta' }));
+    activator.refreshMemory();
+    await vi.waitFor(() => expect(deps.memoryHost.setRows).toHaveBeenCalledTimes(2));
+    expect(deps.getWorkspace).toHaveBeenCalled();
+  });
+
+  it('ignores a selection change while the memory panel is closed', async () => {
+    const deps = makeDeps();
+    const activator = createWorkbenchActivator(deps);
+
+    activator.refreshMemory();
+    activator.activate('memory');
+    activator.deactivate('memory');
+    activator.refreshMemory();
+
+    await vi.waitFor(() => expect(deps.memoryHost.setRows).toHaveBeenCalledTimes(1));
+  });
+
   it('hands parsed rows to the memory panel on memory activation', async () => {
     const deps = makeDeps();
     const activator = createWorkbenchActivator(deps);

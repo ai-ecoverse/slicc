@@ -133,6 +133,14 @@ export interface WorkbenchActivator {
   activate(surfaceId: string): void;
   /** Panel left the tree (closed/removed) — stops its poller, if any. */
   deactivate(surfaceId: string): void;
+  /**
+   * Re-read the memory panel because the SELECTION moved (#2271). The panel's
+   * rows come from the cone that owns the selection, and — unlike the file
+   * tree, which its 3 s poller re-points on its own — memory reads once per
+   * activation, so an open panel would otherwise keep showing the previous
+   * cone's memory indefinitely. No-op while the panel is closed.
+   */
+  refreshMemory(): void;
 }
 
 /**
@@ -143,10 +151,13 @@ export interface WorkbenchActivator {
  * auto-refreshes every 3 s and the monitor every 5 s while open; the terminal
  * mounts once on first `term` activation and is never torn down (matches the
  * old show-one behavior — the worker-shell session persists regardless of
- * panel visibility). Memory has no poller: it refreshes once per activation.
+ * panel visibility). Memory has no poller: it refreshes once per activation
+ * and once per selection change (`refreshMemory`), which is every moment its
+ * content can actually differ.
  */
 export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActivator {
   let terminalMounted = false;
+  let memoryOpen = false;
   let filesRefreshTimer: ReturnType<typeof setInterval> | null = null;
   let monitorRefreshTimer: ReturnType<typeof setInterval> | null = null;
   let filesRefreshPending = false;
@@ -187,6 +198,17 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActiva
     }
   };
 
+  const refreshMemory = (): void => {
+    void deps
+      .openFs()
+      .then(async (fs) => {
+        const rows = await buildMemoryRows(fs, deps.getWorkspace().memoryPath);
+        if (deps.memoryHost.setRows) deps.memoryHost.setRows(rows);
+        else deps.memoryHost.replaceChildren(...rows);
+      })
+      .catch((err) => deps.log.error('WC memory refresh failed', err));
+  };
+
   const refreshMonitor = (): void => {
     void (async () => {
       try {
@@ -213,14 +235,8 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActiva
         return;
       }
       if (surfaceId === 'memory') {
-        void deps
-          .openFs()
-          .then(async (fs) => {
-            const rows = await buildMemoryRows(fs, deps.getWorkspace().memoryPath);
-            if (deps.memoryHost.setRows) deps.memoryHost.setRows(rows);
-            else deps.memoryHost.replaceChildren(...rows);
-          })
-          .catch((err) => deps.log.error('WC memory refresh failed', err));
+        memoryOpen = true;
+        refreshMemory();
         return;
       }
       if (surfaceId === 'monitor') {
@@ -240,6 +256,10 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActiva
     deactivate(surfaceId: string): void {
       if (surfaceId === 'files') stopFilesRefresh();
       else if (surfaceId === 'monitor') stopMonitorRefresh();
+      else if (surfaceId === 'memory') memoryOpen = false;
+    },
+    refreshMemory(): void {
+      if (memoryOpen) refreshMemory();
     },
   };
 }

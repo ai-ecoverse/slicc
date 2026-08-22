@@ -117,7 +117,10 @@ per-scoop sudoers.
   manager is in reach.
 - **The UI follows the selection.** The workbench file tree and the memory
   panel take their roots from the cone that owns the current selection, so
-  switching cones re-points both (`WcWorkbenchDeps.getWorkspace`).
+  switching cones re-points both (`WcWorkbenchDeps.getWorkspace`). The tree
+  re-reads on its own 3 s poll; memory has no poller, so a selection change
+  pushes `WorkbenchActivator.refreshMemory()` — otherwise an open panel would
+  keep showing the previous cone's memory indefinitely.
 - **Memory**: the sink path is bound by `ScoopLifecycleManager` from the unit's
   own record (`workspaceFor(scoop).memoryPath`), never from the caller's meta,
   so an extra cone's compaction pass cannot append to the primary's file. The

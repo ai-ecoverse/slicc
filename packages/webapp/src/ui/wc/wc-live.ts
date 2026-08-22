@@ -120,6 +120,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
   let selected: RegisteredScoop | null = null;
   const lickBackpressure = new Map<string, LickBackpressureState>();
   let clientReady = false;
+  let workbench: WorkbenchActivator | null = null;
   const readyListeners = new Set<() => void>();
 
   const selectScoop = (scoop: RegisteredScoop): void => {
@@ -161,6 +162,10 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     // roster/status event or the 15s stats poll would, which is long enough to
     // read as the strip ignoring the click.
     wiring.refreshScoops?.();
+    // The memory panel shows the memory of the cone that owns the selection
+    // (#2271) and reads once per activation, so an open panel has to be told
+    // the selection moved. The file tree re-points itself on its next poll.
+    workbench?.refreshMemory();
   };
 
   const wiring: WcLiveWiring = {
@@ -199,6 +204,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       controller = next;
     },
     setActivateSurface: (next) => {
+      workbench = next;
       // Every tool panel already placed in the restored dock-tree (persisted
       // or default) needs its lazy mount fired retroactively — the activator
       // didn't exist yet when `wireDockTreePersistence` restored the tree.
