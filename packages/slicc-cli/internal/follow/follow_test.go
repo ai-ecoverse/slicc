@@ -177,6 +177,24 @@ func TestFollowEvalHelperProcess(_ *testing.T) {
 	os.Exit(0)
 }
 
+func TestEvalSessionRejectsStdin(t *testing.T) {
+	sender := newFakeSender()
+	session := NewEvalSession(sender, startTestEvalSession(t), nil)
+
+	session.Handle(context.Background(), protocol.TypeExecRequest,
+		mustJSON(protocol.ExecRequest{
+			Type: protocol.TypeExecRequest, RequestID: "r1", Command: "cat",
+			Stdin: base64.StdEncoding.EncodeToString([]byte("piped\n")),
+		}))
+	resp := waitResponse(t, sender)
+	if resp["exitCode"] != float64(127) {
+		t.Fatalf("exitCode = %v, want 127", resp["exitCode"])
+	}
+	if resp["error"] == nil {
+		t.Fatal("expected an error when stdin is sent to eval mode")
+	}
+}
+
 func TestEvalSessionAnswersSequentialRequestsFromOneRepl(t *testing.T) {
 	sender := newFakeSender()
 	session := NewEvalSession(sender, startTestEvalSession(t), nil)
