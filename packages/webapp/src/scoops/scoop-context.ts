@@ -62,7 +62,12 @@ import { createBashTool, createFileTools } from '../tools/index.js';
 import type { BashJobProcess } from '../tools/types.js';
 import { SKILLS_LIBRARY_DIR, toDescriptor } from '../work-unit/descriptor.js';
 import { rootsOf } from '../work-unit/policy.js';
-import { processOwnerKindFor } from '../work-unit/record.js';
+import {
+  modelIdFor,
+  modelProviderFor,
+  processOwnerKindFor,
+  thinkingFor,
+} from '../work-unit/record.js';
 import type { WorkUnitDescriptor } from '../work-unit/types.js';
 import type { AppendConeMemoryMeta } from './cone-memory-store.js';
 import { getAdobeSessionId } from './llm-session-id.js';
@@ -787,7 +792,7 @@ export class ScoopContext {
    * e.g. the Adobe token on the OpenRouter route and fail auth (#2195).
    */
   private getModelApiKey(): string | null {
-    const pinned = this.scoop.config?.modelProviderId;
+    const pinned = modelProviderFor(this.scoop);
     return pinned ? getApiKeyForProvider(pinned) : getApiKey();
   }
 
@@ -876,8 +881,8 @@ export class ScoopContext {
         return;
       }
 
-      const configuredModelId = this.scoop.config?.modelId;
-      const configuredProviderId = this.scoop.config?.modelProviderId;
+      const configuredModelId = modelIdFor(this.scoop);
+      const configuredProviderId = modelProviderFor(this.scoop);
       const model = configuredModelId
         ? resolveModelById(configuredModelId, configuredProviderId)
         : resolveCurrentModel();
@@ -920,11 +925,9 @@ export class ScoopContext {
       this.getCompactionApiKey = getCompactionApiKey;
 
       const lockedEffort = this.getLockedEffortLevel();
-      const thinkingLevel = resolveThinkingLevel(
-        lockedEffort ?? this.scoop.config?.thinkingLevel,
-        model
-      );
-      this.activeEffortOverride = this.scoop.config?.effortOverride;
+      const thinking = thinkingFor(this.scoop);
+      const thinkingLevel = resolveThinkingLevel(lockedEffort ?? thinking.level, model);
+      this.activeEffortOverride = thinking.effortOverride;
 
       this.agent = new Agent({
         initialState: {
@@ -970,7 +973,7 @@ export class ScoopContext {
 
     await this.init();
     if (!this.agent) {
-      let provider = this.scoop.config?.modelProviderId ?? '';
+      let provider = modelProviderFor(this.scoop) ?? '';
       try {
         if (!provider) provider = getSelectedProvider();
       } catch {
@@ -1492,8 +1495,9 @@ export class ScoopContext {
       const used = msg.usage.input + msg.usage.cacheRead + msg.usage.output;
       let window = 200_000;
       try {
-        const model = this.scoop.config?.modelId
-          ? resolveModelById(this.scoop.config.modelId, this.scoop.config.modelProviderId)
+        const pinnedId = modelIdFor(this.scoop);
+        const model = pinnedId
+          ? resolveModelById(pinnedId, modelProviderFor(this.scoop))
           : resolveCurrentModel();
         if (typeof model.contextWindow === 'number' && model.contextWindow > 0) {
           window = model.contextWindow;
@@ -1522,32 +1526,39 @@ export class ScoopContext {
   }
 
   /**
-   * Update the model on the running agent (e.g. when the user changes
-   * the model dropdown).
+   * Re-resolve THIS unit's model from its own record (#2310) and apply it to
+   * the running agent — after the record's `model` changed, or after the
+   * provider catalogue did (a new account, a re-login). There is no global
+   * picker any more: a unit without a record model falls back to the global
+   * selection exactly as a fresh profile does.
    *
    * Also re-resolves the running thinking-level against the new model:
    * `xhigh` clamps down to `high` on a model family that doesn't
    * advertise xhigh, and any non-`off` level snaps to `off` on a
-   * non-reasoning model. The persisted `scoop.config.thinkingLevel`
-   * stays untouched so the user's intent is preserved across model
-   * swaps — the resolver re-evaluates it on every change.
+   * non-reasoning model. The persisted `scoop.thinking` level stays
+   * untouched so the user's intent is preserved across model swaps — the
+   * resolver re-evaluates it on every change.
    */
   updateModel(): void {
     if (!this.agent) return;
-    const model = resolveCurrentModel();
+    const pinnedId = modelIdFor(this.scoop);
+    const model = pinnedId
+      ? resolveModelById(pinnedId, modelProviderFor(this.scoop))
+      : resolveCurrentModel();
     this.agent.state.model = model;
     // Re-resolve the active thinking level against the new model. Read
-    // the user's *intent* off the persisted scoop config (not
+    // the user's *intent* off the persisted record (not
     // `agent.state.thinkingLevel`, which would already have been
     // clamped by a previous resolution) so a model swap that re-enables
     // a higher tier (e.g. switching to an xhigh-capable Opus) restores
     // it instead of leaving the previously-clamped value in place.
     const lockedEffort = this.getLockedEffortLevel();
-    const requested = lockedEffort ?? this.scoop.config?.thinkingLevel;
+    const thinking = thinkingFor(this.scoop);
+    const requested = lockedEffort ?? thinking.level;
     this.agent.state.thinkingLevel = resolveThinkingLevel(requested, model);
     // Re-resolve the effort override: clear it when the new model doesn't
     // support reasoning (non-thinking model makes the override moot).
-    this.activeEffortOverride = model.reasoning ? this.scoop.config?.effortOverride : undefined;
+    this.activeEffortOverride = model.reasoning ? thinking.effortOverride : undefined;
     log.info('Model updated on running agent', {
       folder: this.scoop.folder,
       model: model.id,
@@ -1589,8 +1600,8 @@ export class ScoopContext {
    * Mutates `agent.state.thinkingLevel` directly (it's writable on
    * pi-agent-core's `AgentState`), so the next assistant turn picks up the
    * change without restarting the agent. The caller is responsible for
-   * persisting `scoop.config.thinkingLevel` separately if the change should
-   * survive a reload — `Orchestrator.updateScoopConfig` handles that.
+   * persisting `scoop.thinking` separately if the change should survive a
+   * reload — `ScoopLifecycleManager.setThinkingLevel` handles that.
    *
    * Returns the level actually applied, after model-aware resolution
    * (xhigh→high clamp on unsupported models, off on non-reasoning models).

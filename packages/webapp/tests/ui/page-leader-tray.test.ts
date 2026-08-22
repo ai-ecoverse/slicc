@@ -668,7 +668,9 @@ describe('startPageLeaderTray', () => {
 
     channel.simulate({ type: 'model.select', modelId: 'adobe:claude-opus-4-8' });
 
-    expect(onFollowerModelSelect).toHaveBeenCalledWith('adobe:claude-opus-4-8');
+    // The pick carries the unit it applies to (#2310) — the follower's
+    // selected cone, not the leader's.
+    expect(onFollowerModelSelect).toHaveBeenCalledWith('adobe:claude-opus-4-8', 'cone');
     handle.stop();
   });
 });

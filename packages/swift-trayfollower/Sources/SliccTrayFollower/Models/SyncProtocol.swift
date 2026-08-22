@@ -195,6 +195,11 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
     public let activity: String?
     /// Context-window fullness on the browser agent tabs' 0...100 scale.
     public let fill: Double?
+    /// The model THIS unit runs on (#2310). Model selection is per cone on
+    /// the leader's work-unit record, so a follower shows (and can change)
+    /// the model of the cone it is looking at. `nil` from leaders that
+    /// predate the field — fall back to `model.state`.
+    public let model: ScoopSummaryModel?
 
     public var id: String { jid }
 
@@ -210,7 +215,8 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         state: String? = nil,
         activity: String? = nil,
         fill: Double? = nil,
-        parentId: String? = nil
+        parentId: String? = nil,
+        model: ScoopSummaryModel? = nil
     ) {
         self.jid = jid
         self.name = name
@@ -222,6 +228,21 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
         self.state = state
         self.activity = activity
         self.fill = fill
+        self.model = model
+    }
+}
+
+/// Mirrors ScoopSummaryModel from tray-sync-protocol.ts: the provider-qualified
+/// model of one work unit (#2310).
+public struct ScoopSummaryModel: Codable, Hashable {
+    /// Provider account id the model runs on (e.g. `anthropic`).
+    public let provider: String
+    /// Bare model id within that provider.
+    public let id: String
+
+    public init(provider: String, id: String) {
+        self.provider = provider
+        self.id = id
     }
 }
 
@@ -972,7 +993,10 @@ public enum FollowerToLeaderMessage: Codable {
     case requestSnapshot(scoopJid: String?)
     case scoopsSelect(scoopJid: String)
     case modelsRequest
-    case modelSelect(modelId: String)
+    /// Change the model of ONE cone (#2310): `scoopJid` is the unit this
+    /// follower has selected (a scoop resolves to the cone that owns it).
+    /// `nil` lets the leader fall back to the unit this follower is viewing.
+    case modelSelect(modelId: String, scoopJid: String?)
     case thinkingSet(
         scoopJid: String, thinkingLevel: TrayThinkingLevel, effortOverride: String?)
     case sprinklesRefresh
@@ -1072,7 +1096,9 @@ public enum FollowerToLeaderMessage: Codable {
         case "models.request":
             self = .modelsRequest
         case "model.select":
-            self = .modelSelect(modelId: try container.decode(String.self, forKey: .modelId))
+            self = .modelSelect(
+                modelId: try container.decode(String.self, forKey: .modelId),
+                scoopJid: try container.decodeIfPresent(String.self, forKey: .scoopJid))
         case "thinking.set":
             self = .thinkingSet(
                 scoopJid: try container.decode(String.self, forKey: .scoopJid),
@@ -1216,9 +1242,10 @@ public enum FollowerToLeaderMessage: Codable {
             try container.encode(scoopJid, forKey: .scoopJid)
         case .modelsRequest:
             try container.encode("models.request", forKey: .type)
-        case .modelSelect(let modelId):
+        case .modelSelect(let modelId, let scoopJid):
             try container.encode("model.select", forKey: .type)
             try container.encode(modelId, forKey: .modelId)
+            try container.encodeIfPresent(scoopJid, forKey: .scoopJid)
         case .thinkingSet(let scoopJid, let thinkingLevel, let effortOverride):
             try container.encode("thinking.set", forKey: .type)
             try container.encode(scoopJid, forKey: .scoopJid)

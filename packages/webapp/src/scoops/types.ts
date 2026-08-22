@@ -47,6 +47,46 @@ export const THINKING_LEVEL_CYCLE: readonly ThinkingLevel[] = [
  */
 export const CURRENT_SCOOP_CONFIG_VERSION = 3;
 
+/**
+ * The model a work unit runs on (#2310). Lives on the RECORD, next to
+ * {@link RegisteredScoop.parentJid} / `folder` / {@link WorkUnitThinking} —
+ * not in page localStorage — so every cone keeps its own model across
+ * reloads, rides the tray wire to followers, and can be changed for one
+ * cone without touching any other unit.
+ *
+ * `provider` is always explicit: without it a bare id is resolved against
+ * whatever provider happens to be selected at init time, which is how a
+ * cheap cross-provider unit ends up billing as Opus (#2195).
+ */
+export interface WorkUnitModel {
+  /** Provider account id the model runs on (e.g. `anthropic`, `openrouter`). */
+  provider: string;
+  /** Bare model id within that provider (e.g. `claude-opus-4-6`). */
+  id: string;
+}
+
+/**
+ * Reasoning configuration of a work unit (#2310). Stored on the record next
+ * to {@link RegisteredScoop.model} rather than as a side channel, so a level
+ * set by the user (or a follower) survives a reload and travels with the
+ * unit it belongs to.
+ */
+export interface WorkUnitThinking {
+  /**
+   * Requested reasoning level — the user's *intent*, stored unclamped.
+   * `xhigh` is resolved down to `high` at runtime on a model that does not
+   * advertise it, and re-resolved (not lost) on the next model change.
+   */
+  level?: ThinkingLevel;
+  /**
+   * Raw API effort string that bypasses pi-ai's ThinkingLevel mapping.
+   * `'max'` when the user picks the highest tier (Sprofondato) — pi-ai has
+   * no `max` level, so {@link WorkUnitThinking.level} carries `'xhigh'`
+   * while this field carries the true intent to the stream layer.
+   */
+  effortOverride?: string;
+}
+
 /** Registered scoop metadata */
 export interface RegisteredScoop {
   /** Unique identifier */
@@ -87,6 +127,22 @@ export interface RegisteredScoop {
    * reconstruct delegation chains.
    */
   parentJid: string | null;
+  /**
+   * Model this unit runs on (#2310). Optional only for compatibility with
+   * records written before the field existed — {@link Orchestrator.init}
+   * backfills them (from a legacy `config.modelId` pin, else the owning
+   * cone's model, else the global `selected-model` seed), so live records
+   * always carry one. Read it through `modelFor()` (`work-unit/record.ts`),
+   * never off `config`.
+   */
+  model?: WorkUnitModel;
+  /**
+   * Reasoning configuration of this unit (#2310), next to
+   * {@link RegisteredScoop.model}. Migrated from the legacy
+   * `config.thinkingLevel` / `config.effortOverride` pair on restore; read
+   * it through `thinkingFor()` (`work-unit/record.ts`).
+   */
+  thinking?: WorkUnitThinking;
   /**
    * Tool-call ID from the parent conversation that triggered scoop creation.
    * Only set where an actual tool-call ID is available — never inferred
@@ -137,7 +193,12 @@ export interface ScoopConfig {
   backgroundAfterSeconds?: number;
   /** Assistant name override for this scoop */
   assistantName?: string;
-  /** Model ID override (e.g., "claude-sonnet-4-20250514"). Uses globally selected model if not set. */
+  /**
+   * @deprecated Legacy CREATION INPUT for the model pin. Spawn paths
+   * (`scoop_scoop`, the `agent` command, hosted config) may still set it;
+   * `normalizeScoopRecord` lifts it onto {@link RegisteredScoop.model} and
+   * clears it, which is the only field runtime code reads (#2310).
+   */
   modelId?: string;
   /**
    * Provider {@link ScoopConfig.modelId} must run on (e.g. `openrouter`).
@@ -147,6 +208,9 @@ export interface ScoopConfig {
    * to the cone's own model when that provider doesn't offer it — how a
    * cheap cross-provider scoop ends up billing as Opus (#2195). When set, a
    * mismatch is a hard init error instead.
+   *
+   * @deprecated Same as {@link ScoopConfig.modelId}: creation input, lifted
+   * onto {@link RegisteredScoop.model} by `normalizeScoopRecord` (#2310).
    */
   modelProviderId?: string;
   /**
@@ -159,6 +223,9 @@ export interface ScoopConfig {
    * advertise xhigh support — see `getSupportedThinkingLevels()` from
    * `@earendil-works/pi-ai`.
    * For non-reasoning models the value is ignored entirely.
+   *
+   * @deprecated Creation input only — lifted onto
+   * {@link RegisteredScoop.thinking} by `normalizeScoopRecord` (#2310).
    */
   thinkingLevel?: ThinkingLevel;
   /**
@@ -167,6 +234,9 @@ export interface ScoopConfig {
    * — pi-ai's ThinkingLevel has no `max` value, so `thinkingLevel` is set
    * to `'xhigh'` while this field carries the true intent to the stream
    * layer, which injects it as `output_config.effort`.
+   *
+   * @deprecated Creation input only — lifted onto
+   * {@link RegisteredScoop.thinking} by `normalizeScoopRecord` (#2310).
    */
   effortOverride?: string;
   /**

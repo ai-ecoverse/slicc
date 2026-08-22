@@ -125,7 +125,10 @@ vi.mock('../../src/core/secret-env.js', () => ({
 
 const { ScoopContext } = await import('../../src/scoops/scoop-context.js');
 
-function makeScoop(config: RegisteredScoop['config']): RegisteredScoop {
+function makeScoop(
+  config: RegisteredScoop['config'],
+  model?: RegisteredScoop['model']
+): RegisteredScoop {
   return {
     jid: 'agent_jolly_mint',
     name: 'jolly-mint',
@@ -137,6 +140,7 @@ function makeScoop(config: RegisteredScoop['config']): RegisteredScoop {
     assistantLabel: 'agent-jolly-mint',
     addedAt: new Date().toISOString(),
     config,
+    ...(model ? { model } : {}),
   };
 }
 
@@ -167,12 +171,21 @@ function createMockFs() {
   };
 }
 
-async function initWith(config: RegisteredScoop['config']) {
+async function initWith(config: RegisteredScoop['config'], model?: RegisteredScoop['model']) {
   const callbacks = createMockCallbacks();
-  const ctx = new ScoopContext(makeScoop(config), callbacks as never, createMockFs() as never);
+  const ctx = new ScoopContext(
+    makeScoop(config, model),
+    callbacks as never,
+    createMockFs() as never
+  );
   await ctx.init();
   const call = captures.agentCtorCalls[0];
-  return { callbacks, model: call?.initialState?.model, apiKey: call?.getApiKey?.() };
+  return {
+    callbacks,
+    ctx,
+    model: call?.initialState?.model,
+    apiKey: call?.getApiKey?.(),
+  };
 }
 
 describe('ScoopContext model provider pinning (#2195)', () => {
@@ -253,5 +266,53 @@ describe('ScoopContext model provider pinning (#2195)', () => {
     expect(callbacks.onError).not.toHaveBeenCalled();
     expect(model?.id).toBe('claude-haiku-4-5');
     expect(model?.provider).toBe(SELECTED_PROVIDER);
+  });
+});
+
+describe('per-cone model on the record (#2310)', () => {
+  beforeEach(() => {
+    captures.agentCtorCalls.length = 0;
+  });
+
+  it('runs the unit on the model its RECORD names, provider included', async () => {
+    const { callbacks, model, apiKey } = await initWith(undefined, {
+      provider: 'openrouter',
+      id: 'openai/gpt-5.6-terra-pro',
+    });
+
+    expect(callbacks.onError).not.toHaveBeenCalled();
+    expect(model?.id).toBe('openai/gpt-5.6-terra-pro');
+    expect(model?.provider).toBe('openrouter');
+    expect(apiKey).toBe('sk-or-key');
+  });
+
+  it('surfaces the missing account instead of crashing when the provider has none', async () => {
+    // Per-cone model means per-cone PROVIDER: a cone can name one this device
+    // has no account for (a follower picked it, or the account was removed).
+    const { callbacks, ctx } = await initWith(undefined, {
+      provider: 'never-configured',
+      id: 'some-model',
+    });
+
+    // Init defers rather than throwing, and no agent is constructed.
+    expect(callbacks.onError).not.toHaveBeenCalled();
+    expect(captures.agentCtorCalls).toHaveLength(0);
+
+    // The next prompt reports the same "no provider" state the UI already
+    // knows how to render — naming the provider the cone actually wants.
+    await (ctx as unknown as { ensureAgentReady(): Promise<boolean> }).ensureAgentReady();
+    expect(callbacks.onError).toHaveBeenCalledWith(
+      expect.stringContaining('No API key configured for provider "never-configured"')
+    );
+  });
+
+  it('prefers the record over a stale legacy config pin', async () => {
+    const { model } = await initWith(
+      { modelId: 'claude-haiku-4-5', modelProviderId: 'adobe' },
+      { provider: 'openrouter', id: 'openai/gpt-5.6-terra-pro' }
+    );
+
+    expect(model?.id).toBe('openai/gpt-5.6-terra-pro');
+    expect(model?.provider).toBe('openrouter');
   });
 });

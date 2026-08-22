@@ -93,7 +93,10 @@ export function createFollowerModelSurface(opts: {
       if (!sync) return;
       intercept(event);
       const modelId = (event as CustomEvent<{ id?: string }>).detail?.id;
-      if (modelId) sync.selectModel(modelId);
+      // Name the unit the pick applies to (#2310): the leader changes THAT
+      // cone's model, not its own selection and not a global setting.
+      const scoopJid = opts.getSelectedScoopJid() ?? state?.scoopJid;
+      if (modelId) sync.selectModel(modelId, scoopJid ?? undefined);
       apply();
     },
     { capture: opts.interceptLocalHandlers }

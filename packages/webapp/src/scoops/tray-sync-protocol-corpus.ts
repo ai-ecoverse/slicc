@@ -600,7 +600,9 @@ export const FOLLOWER_TO_LEADER_CORPUS: FollowerCorpus = {
   'models.request': { ios: 'decoded', message: { type: 'models.request' } },
   'model.select': {
     ios: 'decoded',
-    message: { type: 'model.select', modelId: 'example:reasoner' },
+    // The pick names the cone it applies to (#2310); older followers omit it
+    // and the leader falls back to the unit that follower is viewing.
+    message: { type: 'model.select', modelId: 'example:reasoner', scoopJid: 'cone' },
   },
   'thinking.set': {
     ios: 'decoded',
@@ -1068,6 +1070,7 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     state: 'mirrored',
     activity: 'mirrored',
     fill: 'mirrored',
+    model: 'mirrored',
   },
   sample: {
     jid: 'reviewer',
@@ -1082,6 +1085,9 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     state: 'idle',
     activity: 'awaiting',
     fill: 82,
+    // Per-cone model (#2310): a follower reads the model of the unit it is
+    // looking at straight off the list.
+    model: { provider: 'example', id: 'reasoner' },
   },
 };
 

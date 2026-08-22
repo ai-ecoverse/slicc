@@ -478,10 +478,65 @@ describe('OffscreenClient', () => {
     });
 
     await expect(pending).resolves.toBe(true);
-    expect(client.getScoop('cone_1')?.config).toMatchObject({
-      thinkingLevel: 'xhigh',
+    // The ack mirrors onto the record's `thinking` — where the kernel keeps
+    // it since per-cone model selection (#2310) put it next to `model`.
+    expect(client.getScoop('cone_1')?.thinking).toMatchObject({
+      level: 'xhigh',
       effortOverride: 'max',
     });
+  });
+
+  it('setScoopModel applies a picked model to one cone and mirrors the ack (#2310)', async () => {
+    simulateMessage('offscreen', {
+      type: 'scoop-list',
+      scoops: [
+        {
+          jid: 'cone_1',
+          name: 'Cone',
+          folder: 'cone',
+          isCone: true,
+          parentJid: null,
+          parentId: null,
+          assistantLabel: 'sliccy',
+          status: 'ready',
+        },
+        {
+          jid: 'cone_2',
+          name: 'Research',
+          folder: 'cone-research',
+          isCone: true,
+          parentJid: null,
+          parentId: null,
+          assistantLabel: 'Research',
+          status: 'ready',
+        },
+      ],
+    });
+    const pending = client.setScoopModel('cone_2', {
+      provider: 'anthropic',
+      id: 'claude-opus-4-6',
+    });
+    const envelope = sentMessages.at(-1) as { payload: any };
+    expect(envelope.payload).toMatchObject({
+      type: 'set-scoop-model',
+      scoopJid: 'cone_2',
+      model: { provider: 'anthropic', id: 'claude-opus-4-6' },
+    });
+    simulateMessage('offscreen', {
+      type: 'set-scoop-model-ack',
+      requestId: envelope.payload.requestId,
+      scoopJid: 'cone_2',
+      model: { provider: 'anthropic', id: 'claude-opus-4-6' },
+      applied: true,
+    });
+
+    await expect(pending).resolves.toBe(true);
+    expect(client.getScoop('cone_2')?.model).toEqual({
+      provider: 'anthropic',
+      id: 'claude-opus-4-6',
+    });
+    // The cone that was NOT named keeps whatever model it had.
+    expect(client.getScoop('cone_1')?.model).toBeUndefined();
   });
 
   it('bounds a thinking update when the worker does not acknowledge it', async () => {

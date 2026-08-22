@@ -687,7 +687,8 @@
       "ios": "decoded",
       "message": {
         "type": "model.select",
-        "modelId": "example:reasoner"
+        "modelId": "example:reasoner",
+        "scoopJid": "cone"
       }
     },
     {
@@ -1272,6 +1273,7 @@
         "folder",
         "isCone",
         "jid",
+        "model",
         "name",
         "parentId",
         "state",
@@ -1288,7 +1290,11 @@
         "trigger": "on-push",
         "state": "idle",
         "activity": "awaiting",
-        "fill": 82
+        "fill": 82,
+        "model": {
+          "provider": "example",
+          "id": "reasoner"
+        }
       }
     },
     {

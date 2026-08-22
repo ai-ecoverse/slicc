@@ -477,7 +477,7 @@ describe('mountWcUiFollower', () => {
         detail: { id: 'openai:gpt-4.1', model: 'GPT-4.1', provider: 'OpenAI' },
       })
     );
-    expect(selectModel).toHaveBeenCalledWith('openai:gpt-4.1');
+    expect(selectModel).toHaveBeenCalledWith('openai:gpt-4.1', 'cone-jid');
     expect(meta.model).toBe('Claude Sonnet 4.6');
 
     meta.setAttribute('thinking', 'max');

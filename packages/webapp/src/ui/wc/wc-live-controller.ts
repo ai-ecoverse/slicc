@@ -1,6 +1,7 @@
 import { resolveCurrentModel, resolveModelById } from '../../providers/account-store.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
+import { modelFor } from '../../work-unit/record.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { WcChatController } from './wc-chat-controller.js';
@@ -50,8 +51,8 @@ export function createWcController(
       if (!scoop) return null;
       const scoopName = unitSlugFor(scoop);
       try {
-        const modelId = scoop.config?.modelId;
-        const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
+        const pinned = modelFor(scoop);
+        const model = pinned ? resolveModelById(pinned.id, pinned.provider) : resolveCurrentModel();
         return { scoopName, model: model.id };
       } catch {
         return { scoopName, model: '' };

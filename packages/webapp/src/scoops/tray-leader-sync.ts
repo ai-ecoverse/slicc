@@ -87,10 +87,20 @@ export interface LeaderSyncManagerOptions {
   getSprinkles?: () => SprinkleSummary[];
   /** Build the credential-free model catalog advertised to followers. */
   getModelCatalog?: () => TrayModelCatalogEntry[];
-  /** Resolve the current global model and per-scoop thinking state. */
+  /** Resolve the named unit's model and thinking state (#2310). */
   getModelSelectionState?: (scoopJid: string) => TrayModelSelectionState;
-  /** Apply a validated follower model selection. False rejects it without changing state. */
-  onFollowerModelSelect?: (modelId: string) => boolean;
+  /**
+   * Apply a validated follower model selection to the cone the follower is
+   * looking at (#2310). `scoopJid` is that follower's selected unit — a
+   * scoop resolves to the cone that owns it. False rejects the pick without
+   * changing state.
+   *
+   * May resolve asynchronously: the model is persisted on the cone's record,
+   * and the leader broadcasts the new `model.state` only once that write is
+   * acknowledged — otherwise the follower's picker snaps back to the value
+   * the record still held.
+   */
+  onFollowerModelSelect?: (modelId: string, scoopJid?: string) => boolean | Promise<boolean>;
   /** Apply thinking configuration to the follower's selected scoop. */
   onFollowerThinkingSet?: (
     scoopJid: string,

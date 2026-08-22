@@ -91,7 +91,7 @@ export class FollowerDispatch {
         broadcast.sendModelCatalogToFollower(bootstrapId);
         break;
       case 'model.select':
-        this.handleModelSelection(bootstrapId, message.modelId);
+        this.handleModelSelection(bootstrapId, message.modelId, message.scoopJid);
         break;
       case 'thinking.set':
         this.handleThinkingSelection(
@@ -270,16 +270,55 @@ export class FollowerDispatch {
     void this.collaborators.broadcast.sendSnapshotToFollower(bootstrapId, scoopJid);
   }
 
-  private handleModelSelection(bootstrapId: string, modelId: string): void {
+  private handleModelSelection(
+    bootstrapId: string,
+    modelId: string,
+    requestedScoopJid?: string
+  ): void {
+    // The unit the pick applies to: what the follower named, else the unit it
+    // is viewing. Never the leader's selection — a follower changes the cone
+    // it is looking at (#2310).
+    const scoopJid =
+      requestedScoopJid ?? this.context.followers.followers.get(bootstrapId)?.selectedScoopJid;
     try {
-      if (this.context.options.onFollowerModelSelect?.(modelId) !== true) {
-        this.context.log.warn('Rejecting unknown or unresolvable follower model selection', {
-          bootstrapId,
-          modelId,
-        });
+      const applied = this.context.options.onFollowerModelSelect?.(modelId, scoopJid ?? undefined);
+      if (applied === true) {
+        this.collaborators.broadcast.broadcastModelState();
         return;
       }
-      this.collaborators.broadcast.broadcastModelState();
+      if (typeof applied === 'object' && typeof applied?.then === 'function') {
+        // A per-cone pick is persisted asynchronously (#2310). Broadcasting
+        // before the record actually changes would recompute `model.state`
+        // from the OLD value and snap the follower's picker back, while the
+        // kernel goes on to run (and bill) the new model.
+        void applied
+          .then((ok) => {
+            if (ok) {
+              this.collaborators.broadcast.broadcastModelState();
+              return;
+            }
+            this.context.log.warn('Follower model selection was not applied', {
+              bootstrapId,
+              modelId,
+            });
+            // Re-state the truth so the follower's picker leaves the value it
+            // optimistically showed and returns to what the leader has.
+            this.collaborators.broadcast.broadcastModelState();
+          })
+          .catch((err: unknown) => {
+            this.context.log.warn('Follower model selection failed to persist', {
+              bootstrapId,
+              modelId,
+              error: err instanceof Error ? err.message : String(err),
+            });
+            this.collaborators.broadcast.broadcastModelState();
+          });
+        return;
+      }
+      this.context.log.warn('Rejecting unknown or unresolvable follower model selection', {
+        bootstrapId,
+        modelId,
+      });
     } catch (err) {
       this.context.log.warn('Rejecting follower model selection after apply failure', {
         bootstrapId,

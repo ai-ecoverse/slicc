@@ -1,5 +1,6 @@
 import type { RegisteredScoop, ScoopTabState } from '../../scoops/types.js';
 import { isRootUnit, rootsOf } from '../../work-unit/policy.js';
+import { modelIdFor, modelProviderFor, thinkingFor } from '../../work-unit/record.js';
 import type {
   ScoopListMsg,
   ScoopSnapshotConfig,
@@ -64,12 +65,28 @@ export class ScoopPresentation {
   }
 }
 
+/**
+ * Project the unit's own model + thinking (#2310) onto the panel-facing
+ * snapshot. Both now live on the RECORD; the snapshot keeps the historical
+ * `config` shape so a panel from before this change keeps reading the model
+ * id and brain level exactly where it always did.
+ */
 function projectConfig(scoop: RegisteredScoop): ScoopSnapshotConfig | undefined {
-  if (!scoop.config) return undefined;
-  const { modelId, thinkingLevel } = scoop.config;
-  if (modelId === undefined && thinkingLevel === undefined) return undefined;
+  const modelId = modelIdFor(scoop);
+  const modelProviderId = modelProviderFor(scoop);
+  const { level: thinkingLevel, effortOverride } = thinkingFor(scoop);
+  if (
+    modelId === undefined &&
+    modelProviderId === undefined &&
+    thinkingLevel === undefined &&
+    effortOverride === undefined
+  ) {
+    return undefined;
+  }
   return {
     ...(modelId !== undefined ? { modelId } : {}),
+    ...(modelProviderId !== undefined ? { modelProviderId } : {}),
     ...(thinkingLevel !== undefined ? { thinkingLevel } : {}),
+    ...(effortOverride !== undefined ? { effortOverride } : {}),
   };
 }

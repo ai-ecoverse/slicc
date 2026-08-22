@@ -85,6 +85,13 @@ export interface ConeCreateMsg {
   description?: string;
   /** An optional first message that starts the cone's first turn right away. */
   prompt?: string;
+  /**
+   * Model the new cone starts on (#2310) — the page sends the CURRENTLY
+   * SELECTED cone's model, so a new cone continues on the model the user is
+   * already working with. Omitted (older panels, or nothing selected), the
+   * kernel copies the default root's model instead.
+   */
+  model?: ScoopModelSelection;
 }
 
 export interface ScoopFeedMsg {
@@ -280,6 +287,39 @@ export interface ClearFilesystemMsg {
 
 export interface RefreshModelMsg {
   type: 'refresh-model';
+}
+
+/**
+ * The model of ONE work unit (#2310). Mirrors
+ * `RegisteredScoop.model` — provider-qualified so a bare id can never be
+ * resolved against whatever provider happens to be selected (#2195).
+ */
+export interface ScoopModelSelection {
+  provider: string;
+  id: string;
+}
+
+/**
+ * Set the selected cone's model. Per-cone by construction: the panel names
+ * the unit, and the kernel changes that record and no other — the picker is
+ * not global any more (#2310).
+ */
+export interface SetScoopModelMsg {
+  type: 'set-scoop-model';
+  /** Correlates the persisted update with the panel-side request. */
+  requestId?: string;
+  scoopJid: string;
+  /** Undefined clears the pin; the unit falls back to the global selection. */
+  model?: ScoopModelSelection;
+}
+
+export interface SetScoopModelAckMsg {
+  type: 'set-scoop-model-ack';
+  requestId: string;
+  scoopJid: string;
+  model?: ScoopModelSelection;
+  /** `false` when the jid is unknown to the kernel. */
+  applied: boolean;
 }
 
 /**
@@ -801,6 +841,7 @@ export type PanelToOffscreenMessage =
   | AgentSpawnAbortMsg
   | ClearFilesystemMsg
   | RefreshModelMsg
+  | SetScoopModelMsg
   | SetThinkingLevelMsg
   | PanelCdpCommandMsg
   | OAuthRequestMsg
@@ -891,8 +932,17 @@ export interface CompactionStateMsg {
  * NOT mirrored here — the panel never reads those.
  */
 export interface ScoopSnapshotConfig {
+  /** Bare model id of the unit's own model (#2310), not the global selection. */
   modelId?: string;
+  /**
+   * Provider that model runs on. Absent from kernels older than #2310 (and
+   * from a legacy provider-less pin), in which case the panel resolves the
+   * id against the selected provider exactly as it used to.
+   */
+  modelProviderId?: string;
   thinkingLevel?: ExtensionThinkingLevel;
+  /** Raw effort override that rides with the thinking level (`max`). */
+  effortOverride?: string;
 }
 
 export interface ScoopListMsg {
@@ -1189,6 +1239,7 @@ export type OffscreenToPanelMessage =
   | TrayRuntimeStatusMsg
   | ClearChatAckMsg
   | AgentSpawnResultMsg
+  | SetScoopModelAckMsg
   | SetThinkingLevelAckMsg
   | FollowerSprinklesListMsg
   | FollowerSprinkleUpdateMsg

@@ -29,6 +29,7 @@ import type {
   ScoopStatusMsg,
   ScoopTranscriptMsg,
   SessionStatsMsg,
+  SetScoopModelAckMsg,
   SetThinkingLevelAckMsg,
   StateSnapshotMsg,
   SudoApprovalMsg,
@@ -42,9 +43,15 @@ import type { AgentSpawnOptions, AgentSpawnResult } from '../scoops/agent-bridge
 import type { LickEvent } from '../scoops/lick-manager.js';
 import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
-import type { RegisteredScoop, ScoopTabState, ThinkingLevel } from '../scoops/types.js';
+import type {
+  RegisteredScoop,
+  ScoopTabState,
+  ThinkingLevel,
+  WorkUnitModel,
+} from '../scoops/types.js';
 import type { TerminalEventMsg } from '../shell/terminal-protocol.js';
 import { isRootUnit, rootsOf } from '../work-unit/policy.js';
+import { normalizeScoopRecord, setUnitThinking } from '../work-unit/record.js';
 
 /** Placeholder owner for a scoop whose cone is not in the same wire list. */
 const UNKNOWN_PARENT_JID = 'unknown-parent';
@@ -177,6 +184,7 @@ export class OffscreenClient implements KernelClientFacade {
   >();
   /** Pending thinking updates, resolved only after the worker has applied and persisted them. */
   private pendingThinkingAcks = new Map<string, (applied: boolean) => void>();
+  private pendingModelAcks = new Map<string, (applied: boolean) => void>();
   /**
    * Pending `request-scoop-transcript` requests awaiting the bridge's
    * reply. Keyed by `requestId`; resolved with the transcript string
@@ -365,6 +373,9 @@ export class OffscreenClient implements KernelClientFacade {
       name: scoop.name,
       ...(options.description ? { description: options.description } : {}),
       ...(options.prompt ? { prompt: options.prompt } : {}),
+      // The selected cone's model rides along so the new cone starts on it
+      // (#2310); the kernel falls back to the default root's when absent.
+      ...(scoop.model ? { model: scoop.model } : {}),
     });
   }
 
@@ -426,9 +437,34 @@ export class OffscreenClient implements KernelClientFacade {
     this.send({ type: 'delete-queued-message', scoopJid: jid, messageId });
   }
 
+  /**
+   * Tell the kernel to RE-RESOLVE every unit's own recorded model — the
+   * provider catalogue changed (account added, re-login, settings closed).
+   * This is not a model pick: use {@link setScoopModel} for that (#2310).
+   */
   updateModel(): void {
-    // Side panel already wrote to localStorage. Tell offscreen to re-read.
     this.send({ type: 'refresh-model' });
+  }
+
+  /**
+   * Set ONE unit's model (#2310) — the selected cone. Persisted on that
+   * unit's record by the kernel, mirrored onto the panel's copy when the ack
+   * lands, and applied to no other unit: scoops keep the model they were
+   * created with and other cones keep theirs.
+   *
+   * Resolves `false` when the kernel does not know the jid (or the ack is
+   * lost); the caller treats that as "not applied" rather than retrying.
+   */
+  setScoopModel(jid: string, model: WorkUnitModel | undefined): Promise<boolean> {
+    const requestId = `model-${uid()}`;
+    const ack = new Promise<boolean>((resolve) => {
+      this.pendingModelAcks.set(requestId, resolve);
+    });
+    this.send({ type: 'set-scoop-model', requestId, scoopJid: jid, model });
+    return Promise.race([
+      ack,
+      new Promise<false>((resolve) => setTimeout(() => resolve(false), 5000)),
+    ]).finally(() => this.pendingModelAcks.delete(requestId));
   }
 
   /**
@@ -826,6 +862,10 @@ export class OffscreenClient implements KernelClientFacade {
         break;
       }
 
+      case 'set-scoop-model-ack':
+        this.handleScoopModelAck(msg);
+        break;
+
       case 'set-thinking-level-ack':
         this.handleThinkingLevelAck(msg);
         break;
@@ -1216,20 +1256,28 @@ export class OffscreenClient implements KernelClientFacade {
     this.callbacks.onScoopCreated(scoop);
   }
 
+  /** Mirror an applied per-cone model pick onto the panel's record copy. */
+  private handleScoopModelAck(msg: SetScoopModelAckMsg): void {
+    if (msg.applied) {
+      const scoop = this.getScoop(msg.scoopJid);
+      if (scoop) scoop.model = msg.model ? { ...msg.model } : undefined;
+    }
+    this.pendingModelAcks.get(msg.requestId)?.(msg.applied);
+  }
+
   private handleThinkingLevelAck(msg: SetThinkingLevelAckMsg): void {
     if (msg.applied) {
       const scoop = this.getScoop(msg.scoopJid);
+      // Mirror onto the record's `thinking` (#2310), where the kernel now
+      // keeps it — the panel copy must agree or the brain icon rehydrates
+      // from a value the kernel no longer has.
       if (scoop) {
-        if (msg.level === undefined) {
-          const { thinkingLevel: _level, effortOverride: _effort, ...config } = scoop.config ?? {};
-          scoop.config = config;
-        } else {
-          scoop.config = {
-            ...(scoop.config ?? {}),
-            thinkingLevel: msg.level,
-            effortOverride: msg.effortOverride,
-          };
-        }
+        setUnitThinking(
+          scoop,
+          msg.level === undefined
+            ? undefined
+            : { level: msg.level as ThinkingLevel, effortOverride: msg.effortOverride }
+        );
       }
     }
     this.pendingThinkingAcks.get(msg.requestId)?.(msg.applied);
@@ -1301,7 +1349,10 @@ export class OffscreenClient implements KernelClientFacade {
     s: ScoopListMsg['scoops'][number],
     coneJid: string | null
   ): RegisteredScoop {
-    return {
+    // `normalizeScoopRecord` lifts the wire's `config.modelId` /
+    // `config.thinkingLevel` onto the record's `model` / `thinking` (#2310),
+    // so panel code never reads the legacy config fields.
+    return normalizeScoopRecord({
       jid: s.jid,
       name: s.name,
       folder: s.folder,
@@ -1316,14 +1367,14 @@ export class OffscreenClient implements KernelClientFacade {
       requiresTrigger: !s.isCone,
       assistantLabel: s.assistantLabel,
       addedAt: new Date().toISOString(),
-      // Carry the persisted-per-scoop config snapshot through to the
-      // panel-side `RegisteredScoop`. The offscreen bridge populates
-      // `s.config` with `modelId` + `thinkingLevel` (see
-      // `Bridge.toScoopSnapshot`); the panel reads these in
-      // `syncThinkingButtonForExtensionScoop` to drive the brain icon's
-      // visibility and persisted level on scoop switches and reconnect.
+      // Carry the persisted-per-unit model + thinking through to the
+      // panel-side `RegisteredScoop`. The kernel projects them from the
+      // record into the historical `config` shape (`ScoopSnapshotConfig`);
+      // `normalizeScoopRecord` lifts them back onto `model` / `thinking`
+      // here, so panel code reads the same record fields the kernel does
+      // (#2310) and the brain icon / model pill rehydrate per cone.
       ...(s.config ? { config: { ...s.config } } : {}),
-    };
+    });
   }
 
   private emitToUI(event: UIAgentEvent): void {

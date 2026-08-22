@@ -104,6 +104,32 @@ describe('accountIdentity', () => {
   });
 });
 
+/**
+ * A client whose roster is one cone, with the per-cone model surface the
+ * picker now writes through (#2310).
+ */
+function makeClient(overrides: Record<string, unknown> = {}): OffscreenClient {
+  const cone = {
+    jid: 'cone_1',
+    name: 'Cone',
+    folder: 'cone',
+    isCone: true,
+    type: 'cone',
+    parentJid: null,
+    requiresTrigger: false,
+    assistantLabel: 'sliccy',
+    addedAt: '2026-08-22T00:00:00.000Z',
+  };
+  return {
+    updateModel: vi.fn(),
+    setScoopModel: vi.fn().mockResolvedValue(true),
+    getScoops: () => [cone],
+    getScoop: (jid: string) => (jid === cone.jid ? cone : undefined),
+    selectedScoopJid: cone.jid,
+    ...overrides,
+  } as unknown as OffscreenClient;
+}
+
 describe('wireWcNav', () => {
   function makeRefs(): WcShellRefs {
     const composerMeta = document.createElement('slicc-composer-meta');
@@ -119,7 +145,7 @@ describe('wireWcNav', () => {
 
   it('feeds the model picker, persists selection, and wires the menu', async () => {
     const refs = makeRefs();
-    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    const client = makeClient();
     await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
 
     // Models list assigned (registry may be empty under test — array either way).
@@ -139,13 +165,19 @@ describe('wireWcNav', () => {
     // The picker emits a provider-qualified id; the handler must persist it
     // unchanged so `getSelectedProvider()` recovers the correct provider.
     expect(localStorage.getItem('selected-model')).toBe('adobe:claude-opus-4-8');
-    expect(client.updateModel).toHaveBeenCalledTimes(1);
+    // The pick lands on the SELECTED CONE's record, not on every context
+    // (#2310) — there is no global picker any more.
+    expect(client.setScoopModel).toHaveBeenCalledWith('cone_1', {
+      provider: 'adobe',
+      id: 'claude-opus-4-8',
+    });
+    expect(client.updateModel).not.toHaveBeenCalled();
   });
 
   it('shows Experimental features immediately after Export transcript with a real icon', async () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
     const refs = makeRefs();
-    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    const client = makeClient();
     await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
 
     const exportIndex = refs.avatarMenu.items.findIndex((item) => item.id === 'export-transcript');
@@ -161,7 +193,7 @@ describe('wireWcNav', () => {
   it('removes Experimental features on the next menu open when the worker turns it off', async () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
     const refs = makeRefs();
-    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    const client = makeClient();
     await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
     expect(refs.avatarMenu.items.some((item) => item.id === 'experimental-settings')).toBe(true);
 
@@ -178,7 +210,7 @@ describe('wireWcNav', () => {
   it('opens the standalone Experimental dialog from its avatar action', async () => {
     initFeatureFlags('standalone', { 'experimental-settings': 'on' });
     const refs = makeRefs();
-    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    const client = makeClient();
     await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
 
     showExperimentalSettingsSpy.mockClear();
@@ -196,7 +228,7 @@ describe('wireWcNav', () => {
     const avatar = refs.avatarMenu.querySelector('slicc-avatar') as HTMLElement;
     avatar.setAttribute('name', 'SLICC');
     avatar.setAttribute('src', 'https://stale.example/old.png');
-    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    const client = makeClient();
     await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
 
     // The host strips identity so the avatar component falls back to its `?`
@@ -220,7 +252,7 @@ describe('wireWcNav', () => {
     );
     try {
       const refs = makeRefs();
-      const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+      const client = makeClient();
       await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
 
       const send = refs.inputCard.querySelector('slicc-send-button');
@@ -235,7 +267,7 @@ describe('wireWcNav', () => {
 
   it('dispatches tray-leave with a worker URL on tray-stop', async () => {
     const refs = makeRefs();
-    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    const client = makeClient();
     await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
 
     const events: CustomEvent[] = [];
@@ -249,7 +281,7 @@ describe('wireWcNav', () => {
 
   it('routes slicc-error-open-settings from the thread to the settings dialog', async () => {
     const refs = makeRefs();
-    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    const client = makeClient();
     await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
 
     showWcSettingsSpy.mockClear();
@@ -271,7 +303,7 @@ describe('wireWcNav', () => {
     // over the bridge; `setup-standalone-prelude` re-broadcasts it as this window
     // event so the leader lands on the login UI, not a bare focused tab.
     const refs = makeRefs();
-    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    const client = makeClient();
     await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
 
     showWcSettingsSpy.mockClear();
@@ -282,7 +314,7 @@ describe('wireWcNav', () => {
 
   it('opens the same settings dialog for the composer-meta add-ai action', async () => {
     const refs = makeRefs();
-    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    const client = makeClient();
     await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
 
     showWcSettingsSpy.mockClear();
@@ -293,7 +325,7 @@ describe('wireWcNav', () => {
 
   it('opens the composer model picker on slicc-error-change-model from the thread', async () => {
     const refs = makeRefs();
-    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    const client = makeClient();
     const openMenu = vi.fn();
     (refs.composerMeta as HTMLElement & { openMenu?: () => void }).openMenu = openMenu;
     await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
@@ -316,7 +348,7 @@ describe('wireWcNav', () => {
 
   it('auto-replays the failed turn on the NEXT model-change after change-model', async () => {
     const refs = makeRefs();
-    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    const client = makeClient();
     (refs.composerMeta as HTMLElement & { openMenu?: () => void }).openMenu = vi.fn();
     await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
     (refs.composerMeta as HTMLElement & { models?: unknown[] }).models = [
@@ -361,7 +393,7 @@ describe('wireWcNav', () => {
 
   it('routes change-model to settings when there are no models yet (no accounts)', async () => {
     const refs = makeRefs();
-    const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+    const client = makeClient();
     (refs.composerMeta as HTMLElement & { models?: unknown[] }).models = [];
     const openMenu = vi.fn();
     (refs.composerMeta as HTMLElement & { openMenu?: () => void }).openMenu = openMenu;
@@ -425,7 +457,7 @@ describe('wireWcNav', () => {
     localStorage.setItem('selected-model', 'adobe:claude-opus-4-8');
     try {
       const refs = makeRefs();
-      const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+      const client = makeClient();
       await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
 
       refs.thread.dispatchEvent(
@@ -471,7 +503,7 @@ describe('wireWcNav', () => {
     localStorage.removeItem('slicc_accounts');
     try {
       const refs = makeRefs();
-      const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+      const client = makeClient();
       await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
 
       showWcSettingsSpy.mockClear();
@@ -513,7 +545,7 @@ describe('wireWcNav', () => {
     localStorage.setItem('selected-model', 'adobe-pill-test:claude-sonnet-4-6');
     try {
       const refs = makeRefs();
-      const client = { updateModel: vi.fn() } as unknown as OffscreenClient;
+      const client = makeClient();
       await wireWcNav({ refs, client, log: { error: vi.fn() } as never });
 
       // Simulate the model pill being stale (set to haiku 3.5 from pre-connection boot).
@@ -560,7 +592,7 @@ describe('session-sharing entry points', () => {
     const refs = makeRefs();
     await wireWcNav({
       refs,
-      client: { updateModel: vi.fn() } as unknown as OffscreenClient,
+      client: makeClient(),
       log: { error: vi.fn() } as never,
     });
     return refs;

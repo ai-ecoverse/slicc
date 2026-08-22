@@ -116,7 +116,7 @@ import type {
 
 function makeOrchestratorMock() {
   return {
-    getScoops: vi.fn(() => [
+    getScoops: vi.fn((): RegisteredScoop[] => [
       {
         jid: 'cone_1',
         name: 'Cone',
@@ -127,6 +127,7 @@ function makeOrchestratorMock() {
         requiresTrigger: false,
         assistantLabel: 'sliccy',
         addedAt: new Date().toISOString(),
+        model: { provider: 'anthropic', id: 'claude-opus-4-6' },
       },
       {
         jid: 'scoop_test',
@@ -151,7 +152,8 @@ function makeOrchestratorMock() {
     clearAllMessages: vi.fn().mockResolvedValue(undefined),
     clearScoopMessages: vi.fn().mockResolvedValue(undefined),
     delegateToScoop: vi.fn().mockResolvedValue(undefined),
-    updateModel: vi.fn(),
+    refreshModels: vi.fn(),
+    setScoopModel: vi.fn().mockResolvedValue(true),
     setScoopThinkingLevel: vi.fn().mockResolvedValue(undefined),
     resetFilesystem: vi.fn().mockResolvedValue(undefined),
     reloadAllSkills: vi.fn().mockResolvedValue(undefined),
@@ -343,6 +345,45 @@ describe('Kernel facade parity', () => {
     expect(channelMsg.chatJid).toBe(record.jid);
     expect(channelMsg.content).toBe('Start with the abstracts.');
     expect(channelMsg.senderId).toBe('user');
+  });
+
+  // 3d. A new cone starts on the model of the cone the page has selected
+  //      (#2310); a page that sends none falls back to the default root's.
+  it('cone-create starts the new cone on the model the page sent', async () => {
+    await client.registerScoop({
+      jid: 'temp',
+      name: 'Research',
+      folder: 'cone-pending-2',
+      isCone: true,
+      parentJid: null,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'Research',
+      addedAt: '',
+      model: { provider: 'adobe', id: 'claude-sonnet-4-6' },
+    });
+    await tick();
+
+    const record = orchestrator.registerScoop.mock.calls[0][0] as RegisteredScoop;
+    expect(record.model).toEqual({ provider: 'adobe', id: 'claude-sonnet-4-6' });
+  });
+
+  it('cone-create falls back to the default root’s model when the page sends none', async () => {
+    await client.registerScoop({
+      jid: 'temp',
+      name: 'Research',
+      folder: 'cone-pending-2',
+      isCone: true,
+      parentJid: null,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'Research',
+      addedAt: '',
+    });
+    await tick();
+
+    const record = orchestrator.registerScoop.mock.calls[0][0] as RegisteredScoop;
+    expect(record.model).toEqual({ provider: 'anthropic', id: 'claude-opus-4-6' });
   });
 
   it('cone-create without extras registers a plain root and starts nothing', async () => {

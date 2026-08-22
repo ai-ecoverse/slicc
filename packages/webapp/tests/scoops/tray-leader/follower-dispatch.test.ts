@@ -182,7 +182,9 @@ describe('FollowerDispatch', () => {
     expect(c.broadcast.sendModelCatalogToFollower).toHaveBeenCalledWith('follower');
 
     dispatch.dispatch('follower', { type: 'model.select', modelId: 'adobe:claude-opus-4-8' });
-    expect(onFollowerModelSelect).toHaveBeenCalledWith('adobe:claude-opus-4-8');
+    // No `scoopJid` on the wire (an older follower): the leader falls back to
+    // the unit that follower is viewing, never its own selection (#2310).
+    expect(onFollowerModelSelect).toHaveBeenCalledWith('adobe:claude-opus-4-8', 'selected-scoop');
 
     dispatch.dispatch('follower', {
       type: 'thinking.set',
@@ -202,11 +204,66 @@ describe('FollowerDispatch', () => {
       dispatch.dispatch('follower', { type: 'model.select', modelId: 'unknown:nope' })
     ).not.toThrow();
 
-    expect(onFollowerModelSelect).toHaveBeenCalledWith('unknown:nope');
+    expect(onFollowerModelSelect).toHaveBeenCalledWith('unknown:nope', undefined);
     expect(c.broadcast.broadcastModelState).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
       'Rejecting unknown or unresolvable follower model selection',
       expect.objectContaining({ modelId: 'unknown:nope' })
+    );
+  });
+
+  // Codex review (P1): a per-cone pick is persisted asynchronously, so
+  // broadcasting before the ack recomputes `model.state` from the record's OLD
+  // value and snaps the follower's picker back while the kernel runs the new
+  // model (#2310).
+  it('broadcasts model state only after the per-cone write is acknowledged', async () => {
+    let settle: ((applied: boolean) => void) | undefined;
+    const onFollowerModelSelect = vi.fn(
+      () =>
+        new Promise<boolean>((resolve) => {
+          settle = resolve;
+        })
+    );
+    const { collaborators: c, dispatch } = createHarness({ onFollowerModelSelect });
+
+    dispatch.dispatch('follower', {
+      type: 'model.select',
+      modelId: 'adobe:claude-opus-4-8',
+      scoopJid: 'cone_2',
+    });
+    expect(c.broadcast.broadcastModelState).not.toHaveBeenCalled();
+
+    settle?.(true);
+    await vi.waitFor(() => expect(c.broadcast.broadcastModelState).toHaveBeenCalledTimes(1));
+  });
+
+  it('re-states the leader’s truth when an async model pick fails to persist', async () => {
+    const onFollowerModelSelect = vi.fn(() => Promise.resolve(false));
+    const { collaborators: c, dispatch, log } = createHarness({ onFollowerModelSelect });
+
+    dispatch.dispatch('follower', { type: 'model.select', modelId: 'adobe:claude-opus-4-8' });
+
+    // The follower already moved its picker optimistically; a correction is
+    // the only thing that puts it back.
+    await vi.waitFor(() => expect(c.broadcast.broadcastModelState).toHaveBeenCalledTimes(1));
+    expect(log.warn).toHaveBeenCalledWith(
+      'Follower model selection was not applied',
+      expect.objectContaining({ modelId: 'adobe:claude-opus-4-8' })
+    );
+  });
+
+  it('survives a rejected model write and still corrects the follower', async () => {
+    const onFollowerModelSelect = vi.fn(() => Promise.reject(new Error('quota')));
+    const { collaborators: c, dispatch, log } = createHarness({ onFollowerModelSelect });
+
+    expect(() =>
+      dispatch.dispatch('follower', { type: 'model.select', modelId: 'adobe:claude-opus-4-8' })
+    ).not.toThrow();
+
+    await vi.waitFor(() => expect(c.broadcast.broadcastModelState).toHaveBeenCalledTimes(1));
+    expect(log.warn).toHaveBeenCalledWith(
+      'Follower model selection failed to persist',
+      expect.objectContaining({ error: 'quota' })
     );
   });
 

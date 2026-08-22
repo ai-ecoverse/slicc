@@ -33,6 +33,7 @@ import { isRootUnit, rootsOf } from '../work-unit/policy.js';
 import {
   chatSessionIdFor,
   coneFolderFor,
+  modelFor,
   PRIMARY_CONE_FOLDER,
   sourceLabelFor,
 } from '../work-unit/record.js';
@@ -53,7 +54,9 @@ import type {
   ScoopCreatedMsg,
   ScoopListMsg,
   ScoopMessagesReplacedMsg,
+  ScoopModelSelection,
   ScoopStatusMsg,
+  SetScoopModelMsg,
   SetThinkingLevelMsg,
   StateSnapshotMsg,
   ToolUIActionMsg,
@@ -1054,12 +1057,17 @@ export class Bridge implements KernelFacade {
   private async handleConeCreate(
     name: string,
     description?: string,
-    prompt?: string
+    prompt?: string,
+    model?: ScoopModelSelection
   ): Promise<void> {
     if (!this.orchestrator) return;
     const existing = this.orchestrator.getScoops();
     const folder = coneFolderFor(name, existing);
     const primary = folder === PRIMARY_CONE_FOLDER;
+    // Fallback source for the new cone's model: the default root — the
+    // oldest surviving one, the same unit unaddressed events land on.
+    const defaultRoot = rootsOf(existing)[0];
+    const inheritedModel = model ?? (defaultRoot ? modelFor(defaultRoot) : undefined);
     // The primary root keeps its historical `sliccy` label; an extra cone is
     // addressed by the name the user gave it (chip label, `cone:<folder>` URL).
     const purpose = description?.trim();
@@ -1069,6 +1077,11 @@ export class Bridge implements KernelFacade {
       // "What is it for" rides the same system-prompt hook scoops use, so
       // the cone knows its purpose from its first turn (#2272).
       ...(purpose ? { config: { systemPromptAppend: `This cone is for: ${purpose}` } } : {}),
+      // A new cone starts on the selected cone's model (#2310). The page
+      // sends it; a page that doesn't (or a kernel-side create) falls back to
+      // the default root's model, and only a profile with no cone at all
+      // falls through to the global seed in `ScoopLifecycleManager`.
+      ...(inheritedModel ? { model: inheritedModel } : {}),
     };
     await this.orchestrator.registerScoop(scoop);
     this.emit({
@@ -1399,7 +1412,7 @@ export class Bridge implements KernelFacade {
       }
 
       case 'cone-create':
-        await this.handleConeCreate(msg.name, msg.description, msg.prompt);
+        await this.handleConeCreate(msg.name, msg.description, msg.prompt, msg.model);
         break;
 
       case 'scoop-feed': {
@@ -1422,13 +1435,6 @@ export class Bridge implements KernelFacade {
 
       case 'delete-queued-message': {
         this.handleDeleteQueuedMessage(msg.scoopJid, msg.messageId);
-        break;
-      }
-
-      case 'set-model': {
-        // Side panel already wrote to localStorage (shared origin).
-        // Just tell all running ScoopContexts to re-read the model.
-        this.orchestrator.updateModel();
         break;
       }
 
@@ -1480,12 +1486,18 @@ export class Bridge implements KernelFacade {
           .catch((err) => console.error('[kernel-bridge] clear-filesystem failed:', err));
         break;
 
-      case 'refresh-model': {
-        // Side panel already wrote to localStorage (shared origin).
-        // Just tell all running ScoopContexts to re-read the model.
-        this.orchestrator.updateModel();
+      // Credentials or the provider catalogue moved (account added, settings
+      // closed, re-login). Every unit re-resolves ITS OWN recorded model
+      // (#2310): not a model pick, and it retargets nothing.
+      case 'set-model':
+      case 'refresh-model':
+        this.orchestrator.refreshModels();
         break;
-      }
+
+      // A model PICK, applied to exactly the unit it names (#2310).
+      case 'set-scoop-model':
+        await this.handleSetScoopModel(msg);
+        break;
 
       case 'set-thinking-level': {
         await this.handleSetThinkingLevel(msg);
@@ -1599,6 +1611,28 @@ export class Bridge implements KernelFacade {
     } finally {
       this.agentSpawnAborts.delete(msg.requestId);
     }
+  }
+
+  /**
+   * Apply a model pick to ONE unit (#2310) — the cone the panel (or a
+   * follower through the tray) has selected. No other record is touched.
+   */
+  private async handleSetScoopModel(msg: SetScoopModelMsg): Promise<void> {
+    if (!this.orchestrator) return;
+    let applied = false;
+    try {
+      applied = await this.orchestrator.setScoopModel(msg.scoopJid, msg.model);
+    } catch (err) {
+      console.error('[kernel-bridge] set-scoop-model failed:', err);
+    }
+    if (!msg.requestId) return;
+    this.emit({
+      type: 'set-scoop-model-ack',
+      requestId: msg.requestId,
+      scoopJid: msg.scoopJid,
+      model: msg.model,
+      applied,
+    });
   }
 
   private async handleSetThinkingLevel(msg: SetThinkingLevelMsg): Promise<void> {

@@ -7,7 +7,7 @@
  * kernel or scoop lifecycle code. The final phase deletes them.
  */
 
-import type { RegisteredScoop } from '../scoops/types.js';
+import type { RegisteredScoop, WorkUnitModel, WorkUnitThinking } from '../scoops/types.js';
 import { isRootUnit } from './policy.js';
 
 /**
@@ -16,6 +16,7 @@ import { isRootUnit } from './policy.js';
  * naming a parent (or vice versa). Mutates and returns `scoop`.
  */
 export function normalizeScoopRecord(scoop: RegisteredScoop): RegisteredScoop {
+  liftLegacyModelConfig(scoop);
   const root = isRootUnit(scoop);
   scoop.isCone = root;
   scoop.type = root ? 'cone' : 'scoop';
@@ -94,4 +95,115 @@ export function sourceLabelFor(
   scoop: Pick<RegisteredScoop, 'parentJid' | 'name' | 'folder'>
 ): string {
   return isRootUnit(scoop) ? 'cone' : (scoop.name ?? scoop.folder);
+}
+
+/**
+ * The model a unit runs on (#2310), or `undefined` when it has none yet
+ * (a record written before the field existed and not yet backfilled — the
+ * caller falls back to the global selection).
+ *
+ * THE read path: runtime code must never reach into `config.modelId`, which
+ * is legacy creation input `normalizeScoopRecord` has already lifted here.
+ */
+export function modelFor(
+  scoop: Pick<RegisteredScoop, 'model' | 'config'>
+): WorkUnitModel | undefined {
+  if (scoop.model) return scoop.model;
+  const id = scoop.config?.modelId;
+  const provider = scoop.config?.modelProviderId;
+  // A legacy pin with no provider stays unpinned-by-provider: `resolveModelById`
+  // then resolves it against the selected provider exactly as it did before.
+  return id !== undefined && provider !== undefined ? { provider, id } : undefined;
+}
+
+/** Legacy-tolerant read of the bare model id a unit is pinned to, if any. */
+export function modelIdFor(scoop: Pick<RegisteredScoop, 'model' | 'config'>): string | undefined {
+  return scoop.model?.id ?? scoop.config?.modelId;
+}
+
+/** Legacy-tolerant read of the provider a unit's model is pinned to, if any. */
+export function modelProviderFor(
+  scoop: Pick<RegisteredScoop, 'model' | 'config'>
+): string | undefined {
+  return scoop.model?.provider ?? scoop.config?.modelProviderId;
+}
+
+/** Reasoning configuration of a unit (#2310), record first, legacy config second. */
+export function thinkingFor(scoop: Pick<RegisteredScoop, 'thinking' | 'config'>): WorkUnitThinking {
+  if (scoop.thinking) return scoop.thinking;
+  const level = scoop.config?.thinkingLevel;
+  const effortOverride = scoop.config?.effortOverride;
+  return level === undefined && effortOverride === undefined ? {} : { level, effortOverride };
+}
+
+/**
+ * Set (or clear) a unit's model on the record. Mutates and returns `scoop`;
+ * the caller persists it. Never touches any other unit — per-cone model
+ * means exactly one record changes (#2310).
+ */
+export function setUnitModel(
+  scoop: RegisteredScoop,
+  model: WorkUnitModel | undefined
+): RegisteredScoop {
+  if (model) scoop.model = { provider: model.provider, id: model.id };
+  else scoop.model = undefined;
+  clearLegacyModelConfig(scoop);
+  return scoop;
+}
+
+/** Set (or clear) a unit's reasoning configuration on the record. */
+export function setUnitThinking(
+  scoop: RegisteredScoop,
+  thinking: WorkUnitThinking | undefined
+): RegisteredScoop {
+  const next =
+    thinking && (thinking.level !== undefined || thinking.effortOverride !== undefined)
+      ? { level: thinking.level, effortOverride: thinking.effortOverride }
+      : undefined;
+  scoop.thinking = next;
+  clearLegacyThinkingConfig(scoop);
+  return scoop;
+}
+
+/**
+ * Migrate a record written before `model` / `thinking` existed: a spawn-time
+ * `config.modelId` (+ `config.modelProviderId`) pin becomes the record's
+ * model, `config.thinkingLevel` (+ `config.effortOverride`) its thinking.
+ * The legacy fields are then cleared so exactly one place holds the truth —
+ * a stale duplicate is how a model swap silently keeps the old value.
+ *
+ * A record with no pin at all is left without a model here: the orchestrator
+ * backfills it on restore (inherited or seeded from `selected-model`), which
+ * is the only place that can resolve a provider.
+ */
+function liftLegacyModelConfig(scoop: RegisteredScoop): void {
+  const config = scoop.config;
+  if (!config) return;
+  if (!scoop.model && config.modelId !== undefined && config.modelProviderId !== undefined) {
+    scoop.model = { provider: config.modelProviderId, id: config.modelId };
+  }
+  if (
+    !scoop.thinking &&
+    (config.thinkingLevel !== undefined || config.effortOverride !== undefined)
+  ) {
+    scoop.thinking = { level: config.thinkingLevel, effortOverride: config.effortOverride };
+  }
+  // A provider-less legacy pin keeps its `config.modelId` (see `modelFor`):
+  // inventing a provider for it would re-create the #2195 mis-billing.
+  if (scoop.model) clearLegacyModelConfig(scoop);
+  if (scoop.thinking) clearLegacyThinkingConfig(scoop);
+}
+
+function clearLegacyModelConfig(scoop: RegisteredScoop): void {
+  if (!scoop.config) return;
+  if (scoop.config.modelId === undefined && scoop.config.modelProviderId === undefined) return;
+  const { modelId: _id, modelProviderId: _provider, ...rest } = scoop.config;
+  scoop.config = rest;
+}
+
+function clearLegacyThinkingConfig(scoop: RegisteredScoop): void {
+  if (!scoop.config) return;
+  if (scoop.config.thinkingLevel === undefined && scoop.config.effortOverride === undefined) return;
+  const { thinkingLevel: _level, effortOverride: _effort, ...rest } = scoop.config;
+  scoop.config = rest;
 }

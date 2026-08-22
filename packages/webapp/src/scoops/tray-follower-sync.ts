@@ -452,9 +452,14 @@ export class FollowerSyncManager implements AgentHandle {
     this.sync.send({ type: 'models.request' });
   }
 
-  /** Ask the leader to change the global active model. */
-  selectModel(modelId: string): void {
-    this.sync.send({ type: 'model.select', modelId });
+  /**
+   * Ask the leader to change the model of the cone this follower is looking
+   * at (#2310). `scoopJid` names that unit — a scoop resolves to the cone
+   * that owns it on the leader; omitted, the leader uses this follower's
+   * last `scoops.select`.
+   */
+  selectModel(modelId: string, scoopJid?: string): void {
+    this.sync.send({ type: 'model.select', modelId, ...(scoopJid ? { scoopJid } : {}) });
   }
 
   /** Ask the leader to change one scoop's thinking level. */

@@ -103,11 +103,17 @@ final class FollowerToLeaderMessageTests: XCTestCase {
     }
 
     func testModelSelectRoundTrip() throws {
-        guard case .modelSelect(let modelId) = try roundTrip(.modelSelect(modelId: "claude-x")) else {
+        guard
+            case .modelSelect(let modelId, let scoopJid) = try roundTrip(
+                .modelSelect(modelId: "claude-x", scoopJid: "cone_2"))
+        else {
             XCTFail("expected modelSelect")
             return
         }
         XCTAssertEqual(modelId, "claude-x")
+        // The pick names the cone it applies to (#2310) — per-cone models
+        // depend on this surviving the round trip.
+        XCTAssertEqual(scoopJid, "cone_2")
     }
 
     func testThinkingSetWithEffortOverride() throws {

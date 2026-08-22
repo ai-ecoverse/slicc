@@ -1,12 +1,12 @@
 import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
-import { chatSessionIdFor } from '../../work-unit/record.js';
+import { chatSessionIdFor, modelFor, thinkingFor } from '../../work-unit/record.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
 import { metaThinkingForScoop } from './wc-follower-model-surface.js';
 import { scoopColor } from './wc-scoop-color.js';
 import { applyShellContext, type WcShellRefs } from './wc-shell.js';
-import { rootFolderForContext, threadContextFor } from './wc-unit-context.js';
+import { rootFolderForContext, rootForSelection, threadContextFor } from './wc-unit-context.js';
 
 export {
   effortOverrideForAgent,
@@ -42,8 +42,20 @@ export function shouldSkipSessionHydration(
   return hasStoredTrayJoinUrl(win.localStorage);
 }
 
-/** Point the thread chrome at a scoop (context label + accent hue + model). */
-export async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): Promise<void> {
+/**
+ * Point the thread chrome at a scoop (context label + accent hue + model).
+ *
+ * `roster` lets the model pill follow the unit the PICKER edits: a selected
+ * scoop shows the model of the cone that owns it (#2310), because a pick made
+ * while a scoop is selected lands on that cone and scoops are never
+ * retargeted. Thinking stays per selected unit. Without a roster (older
+ * callers) the selected unit answers for itself.
+ */
+export async function applyThreadContext(
+  refs: WcShellRefs,
+  scoop: RegisteredScoop,
+  roster: readonly RegisteredScoop[] = []
+): Promise<void> {
   refs.thread.setAttribute('context', threadContextFor(scoop));
   refs.thread.setAttribute('accent', scoopColor(scoop));
   refs.switcher.setAttribute('active', scoop.jid);
@@ -52,17 +64,20 @@ export async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredSco
     scoop.isCone ? { kind: 'cone' } : { kind: 'scoop', accent: scoopColor(scoop) }
   );
   const lockedEffort = localStorage.getItem('slicc_locked_effort_level');
+  const thinking = thinkingFor(scoop);
   refs.composerMeta.setAttribute(
     'thinking',
     metaThinkingForScoop(
-      (lockedEffort ?? scoop.config?.thinkingLevel) as ThinkingLevel | undefined,
-      scoop.config?.effortOverride
+      (lockedEffort ?? thinking.level) as ThinkingLevel | undefined,
+      thinking.effortOverride
     )
   );
   try {
     const { resolveCurrentModel, resolveModelById } = await import('../provider-settings.js');
-    const modelId = scoop.config?.modelId;
-    const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
+    // The pill follows the model of the cone the picker writes to (#2310) —
+    // switching cones switches the model shown.
+    const pinned = modelFor(rootForSelection(roster, scoop) ?? scoop);
+    const model = pinned ? resolveModelById(pinned.id, pinned.provider) : resolveCurrentModel();
     refs.composerMeta.setAttribute('model', model.name ?? model.id);
     refs.composerMeta.toggleAttribute(
       'no-thinking',

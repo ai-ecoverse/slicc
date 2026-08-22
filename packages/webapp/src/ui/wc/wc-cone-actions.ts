@@ -14,9 +14,10 @@
  * refuse it too. Followers never mount this (the leader owns the registry).
  */
 
-import type { RegisteredScoop } from '../../scoops/types.js';
+import type { RegisteredScoop, WorkUnitModel } from '../../scoops/types.js';
 import { buildWorkUnitRecord } from '../../work-unit/manager.js';
 import { rootsOf } from '../../work-unit/policy.js';
+import { modelFor } from '../../work-unit/record.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { rootForSelection, switcherLabelFor } from './wc-unit-context.js';
 
@@ -52,7 +53,8 @@ const BTN_PLAIN = `${BTN_BASE}background:transparent;border:1px solid var(--s2-b
 /** Build the optimistic record the rail registers for a new cone. */
 export function buildNewConeRecord(
   name: string,
-  existing: readonly RegisteredScoop[]
+  existing: readonly RegisteredScoop[],
+  model?: WorkUnitModel
 ): RegisteredScoop {
   // The kernel assigns the real folder / jid (`handleConeCreate`); the rail
   // only needs a placeholder that reads as a root until `scoop-created`
@@ -61,6 +63,9 @@ export function buildNewConeRecord(
   return {
     ...buildWorkUnitRecord({ parentId: null, name, folder: placeholder }),
     assistantLabel: name,
+    // A new cone starts on the model of the cone the user is working in
+    // (#2310); the kernel falls back to the default root's when absent.
+    ...(model ? { model } : {}),
   };
 }
 
@@ -190,7 +195,12 @@ export function wireConeActions(deps: ConeActionsDeps): ConeActionsHandles {
   const create = (draft: NewConeDraft): void => {
     if (!draft.name) return;
     closeDialog();
-    const record = buildNewConeRecord(draft.name, client.getScoops());
+    const selected = currentRoot();
+    const record = buildNewConeRecord(
+      draft.name,
+      client.getScoops(),
+      selected ? modelFor(selected) : undefined
+    );
     pendingSelect = draft.name;
     void client
       .registerScoop(record, draft.brief ? { description: draft.brief, prompt: draft.brief } : {})
