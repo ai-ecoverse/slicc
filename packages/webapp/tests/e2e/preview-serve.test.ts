@@ -203,17 +203,24 @@ test.describe('preview service worker', () => {
 
       await page.goto('/preview/shared/app/index.html?projectRoot=/shared/app');
 
-      // The UI origin (wrangler/worker) 301-redirects a bare `GET /` (empty
-      // query) to the marketing site — the real production root behavior. So a
-      // correct pass-through (SW excludes `/`) yields an opaque-redirect under
-      // `redirect: 'manual'`. A hijacking SW would instead resolve `/` against
-      // `projectRoot` and return a readable 200 with the VFS 'Fake Root' body
-      // (type 'basic'), never an opaqueredirect.
+      // A hijacking SW resolves `/` against `projectRoot` and returns a
+      // readable 200 carrying the VFS 'Fake Root' body; a correct pass-through
+      // returns whatever the UI origin says about `/` and never that body.
+      //
+      // The pass-through's exact shape is host-dependent, so it is NOT the
+      // assertion: the worker 301-redirects a bare `GET /` to the marketing
+      // site only for the production hostnames, which `wrangler dev` used to
+      // simulate — the harness now pins `--route <harness origin>/*` (the tray
+      // capability URLs have to be local, see `playwright.config.ts`), so `/`
+      // resolves to the SPA instead. Asserting on the absence of the seeded
+      // body tests the SW exclusion directly and holds either way.
       const result = await page.evaluate(async () => {
         const resp = await fetch('/', { redirect: 'manual' });
-        return { type: resp.type, status: resp.status };
+        const body = resp.type === 'opaqueredirect' ? '' : await resp.text();
+        return { type: resp.type, status: resp.status, body: body.slice(0, 500) };
       });
-      expect(result.type).toBe('opaqueredirect');
+      expect(result.body).not.toContain('Fake Root');
+      expect(['opaqueredirect', 'basic']).toContain(result.type);
     });
   });
 
