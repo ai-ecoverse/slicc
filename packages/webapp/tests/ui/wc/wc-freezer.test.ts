@@ -227,6 +227,38 @@ describe('corrupt-index recovery', () => {
     });
     expect(rebuilt[1]).toMatchObject({ filename: ENTRY.filename, title: 'Fix the build' });
     expect(rebuilt[1].cone).toBeUndefined();
+    // Not marked in the archive → the rebuild must not invent an opt-out.
+    expect(rebuilt[0].memorySkipped).toBeUndefined();
+  });
+
+  it('a memorySkipped archive keeps its opt-out through a rebuild (Codex P2)', async () => {
+    // A dropped cone is frozen with memory off. `pendingEnrichment` comes back
+    // from the `pending-` filename, so if the marker did not ride the archive a
+    // rebuilt entry would look like an ordinary pending freeze and the next
+    // boot catch-up would extract memories from a chat that opted out.
+    const fs = await seededFs();
+    await fs.writeFile(
+      '/sessions/pending-dropped.md',
+      [
+        '---',
+        'title: "dropped cone chat"',
+        'frozenAt: "2026-06-03T09:00:00Z"',
+        'messageCount: 4',
+        'cone: cone-research',
+        'coneLabel: "Research"',
+        'memorySkipped: true',
+        '---',
+        '',
+      ].join('\n')
+    );
+    await fs.writeFile('/sessions/index.json', '[{"filename": "trunca');
+
+    const rebuilt = await rebuildFreezerIndexFromArchives(fs);
+    expect(rebuilt[0]).toMatchObject({
+      filename: 'pending-dropped.md',
+      pendingEnrichment: true,
+      memorySkipped: true,
+    });
   });
 
   it('keeps readSessionCount compatible with cost-bearing index entries', async () => {

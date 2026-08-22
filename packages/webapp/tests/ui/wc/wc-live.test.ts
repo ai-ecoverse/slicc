@@ -483,6 +483,28 @@ describe('prepareWcShell scoop selection', () => {
     ]);
   });
 
+  it('republishes the switcher descriptors on selection, after the new selection lands (Codex P2)', () => {
+    // The strip puts the SELECTED cone's scoops ahead of the rest
+    // (`orderForSwitcher`), and nothing else recomputes that on a click — the
+    // next roster/status event or the 15s stats poll would, which reads as the
+    // strip ignoring the click. The refresh must also run AFTER `selected` is
+    // updated, or it would re-publish the OLD ordering.
+    const app = document.createElement('div');
+    const boot = prepareWcShell(app, 'test');
+    const selectedAtRefresh: Array<string | undefined> = [];
+    boot.wiring.refreshScoops = () => selectedAtRefresh.push(boot.getSelected()?.jid);
+    boot.setClient({
+      selectedScoopJid: null,
+      setSelectedScoopJid: vi.fn(),
+      requestScoopMessages: vi.fn(),
+      isProcessing: vi.fn(() => false),
+    } as never);
+
+    const research = scoop({ jid: 'cone-research', name: 'research' });
+    boot.selectScoop(research);
+    expect(selectedAtRefresh).toEqual(['cone-research']);
+  });
+
   it('shows cached backpressure when its scoop is selected and honors an unselected retraction', () => {
     const app = document.createElement('div');
     const boot = prepareWcShell(app, 'test');

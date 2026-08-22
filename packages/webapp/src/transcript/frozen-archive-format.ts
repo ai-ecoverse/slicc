@@ -121,6 +121,12 @@ export interface FrozenSessionArchive {
   cone?: string;
   /** Label of that cone — see {@link FrozenSessionIndexEntry.coneLabel}. */
   coneLabel?: string;
+  /**
+   * Memory extraction was deliberately skipped for this chat — see
+   * {@link FrozenSessionIndexEntry.memorySkipped}. Carried on the archive so a
+   * rebuild from `/sessions/*.md` cannot turn the opt-out back on.
+   */
+  memorySkipped?: true;
 }
 
 /**
@@ -161,10 +167,16 @@ export function frozenSessionPath(entry: FrozenSessionIndexEntry): string {
  */
 export function parseFrozenArchive(
   markdown: string
-): Pick<FrozenSessionArchive, 'title' | 'messages' | 'cost' | 'models' | 'cone' | 'coneLabel'> {
+): Pick<
+  FrozenSessionArchive,
+  'title' | 'messages' | 'cost' | 'models' | 'cone' | 'coneLabel' | 'memorySkipped'
+> {
   let body = markdown;
   let title = 'Untitled';
-  const meta: Pick<FrozenSessionArchive, 'cost' | 'models' | 'cone' | 'coneLabel'> = {};
+  const meta: Pick<
+    FrozenSessionArchive,
+    'cost' | 'models' | 'cone' | 'coneLabel' | 'memorySkipped'
+  > = {};
 
   // 1. Strip YAML-style frontmatter and pull out the title.
   //    The writer emits `title: ${JSON.stringify(value)}`, which means
@@ -185,6 +197,9 @@ export function parseFrozenArchive(
     if (cone) meta.cone = cone;
     const coneLabel = fmMatch[1].match(/^coneLabel:\s*(.+?)\s*$/m)?.[1];
     if (coneLabel) meta.coneLabel = decodeFrontmatterString(coneLabel);
+    // Memory opt-out (#2272). Only `true` is meaningful: absent means "not
+    // decided", which is what an ordinary freeze records.
+    if (/^memorySkipped:\s*true\s*$/m.test(fmMatch[1])) meta.memorySkipped = true;
     const titleLine = fmMatch[1].match(/^title:\s*(.+?)\s*$/m);
     if (titleLine) title = decodeFrontmatterString(titleLine[1]);
   }

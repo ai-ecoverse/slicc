@@ -392,6 +392,32 @@ describe('slicc-freezer-new', () => {
     expect(actionOf(el, 'new-chat-erase').querySelector('.fznew-spinner')).toBeFalsy();
   });
 
+  it('busy disables every row action, not just the badge it spins (Codex P2)', () => {
+    // New chat and Drop cone both archive/clear the same cone behind their own
+    // separate in-flight guards, so a second click while one is running races
+    // the first — including their read-modify-write of the freezer index.
+    const seen: string[] = [];
+    const el = mount((node) => {
+      node.expanded = true;
+      node.cones = 2;
+      node.busy = true;
+    });
+    for (const action of ['new-chat-save', 'new-chat-erase', 'new-cone', 'drop-cone'] as const) {
+      el.addEventListener(action, () => seen.push(action));
+      const btn = actionOf(el, action);
+      expect(btn.disabled).toBe(true);
+      btn.click();
+    }
+    expect(seen).toEqual([]);
+
+    // Clearing busy re-arms the row.
+    el.busy = false;
+    const drop = actionOf(el, 'drop-cone');
+    expect(drop.disabled).toBe(false);
+    drop.click();
+    expect(seen).toEqual(['drop-cone']);
+  });
+
   it('uses a lighter label font weight than the prototype 600', () => {
     const el = mount((node) => {
       node.expanded = true;

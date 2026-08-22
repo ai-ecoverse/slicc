@@ -45,14 +45,34 @@ describe('buildScoopShellEnv', () => {
 describe('ownLickTargetFor', () => {
   const child = { display: { role: 'child' as const, label: 'x' } };
   const root = { display: { role: 'primary' as const, label: 'x' } };
-  it('children and extra cones name themselves; the primary stays untargeted', () => {
-    expect(ownLickTargetFor(child, { parentJid: 'cone_1', folder: 'helper-scoop' })).toBe(
-      'helper-scoop'
-    );
-    expect(ownLickTargetFor(root, { parentJid: null, folder: 'cone-research' })).toBe(
-      'cone-research'
-    );
-    expect(ownLickTargetFor(root, { parentJid: null, folder: 'cone' })).toBeUndefined();
+  it('children and extra cones name themselves; the default root stays untargeted', () => {
+    expect(
+      ownLickTargetFor(child, { parentJid: 'cone_1', folder: 'helper-scoop', jid: 'x_1' }, 'cone_1')
+    ).toBe('helper-scoop');
+    expect(
+      ownLickTargetFor(root, { parentJid: null, folder: 'cone-research', jid: 'cone_2' }, 'cone_1')
+    ).toBe('cone-research');
+    expect(
+      ownLickTargetFor(root, { parentJid: null, folder: 'cone', jid: 'cone_1' }, 'cone_1')
+    ).toBeUndefined();
+  });
+
+  it('a cone that inherited the freed `cone` folder still names itself (Codex P1)', () => {
+    // The original primary was dropped, so `coneFolderFor()` handed its freed
+    // `cone` folder to this newer cone -- but the untargeted default is still
+    // the oldest *surviving* root (`cone_2`). A folder test would call this
+    // one primary and drop its stamp, sending its licks to `cone_2`'s chat.
+    expect(
+      ownLickTargetFor(root, { parentJid: null, folder: 'cone', jid: 'cone_3' }, 'cone_2')
+    ).toBe('cone');
+  });
+
+  it('an unknown default root leaves every cone naming itself', () => {
+    // Fail safe: an explicit self-stamp still routes to the right unit,
+    // whereas a dropped stamp would silently fall back to another cone.
+    expect(
+      ownLickTargetFor(root, { parentJid: null, folder: 'cone', jid: 'cone_1' }, undefined)
+    ).toBe('cone');
   });
 
   it('a secret named PATH/HOME/USER cannot override the scoop pins (Codex P2)', () => {

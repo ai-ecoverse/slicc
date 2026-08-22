@@ -10,7 +10,7 @@ import {
 } from '../../scoops/tray-follower-status.js';
 import { shouldApplyFollowerStatus } from '../../scoops/tray-follower-sync.js';
 import { resolveFollowerJoinUrl, storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
-import type { TrayTargetEntry } from '../../scoops/tray-sync-protocol.js';
+import type { ScoopSummary, TrayTargetEntry } from '../../scoops/tray-sync-protocol.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
@@ -640,6 +640,16 @@ export async function mountWcUiFollower(
   const sprinkleCallbacks = sprinkleZone.callbacks();
 
   let followerSelectedScoop: string | null = null;
+  /**
+   * Last roster the leader sent, kept so a local selection can re-publish the
+   * descriptors. `toFollowerSwitcherScoops` orders the SELECTED cone's scoops
+   * ahead of the rest, so selecting without re-ordering leaves the strip
+   * showing the previously selected cone's scoops first.
+   */
+  let followerScoops: readonly ScoopSummary[] = [];
+  const publishFollowerScoops = (): void => {
+    boot.refs.switcher.scoops = toFollowerSwitcherScoops(followerScoops, followerSelectedScoop);
+  };
   boot.refs.switcher.connection = 'disconnected';
 
   let follower!: ReturnType<typeof startPageFollowerTray>;
@@ -791,7 +801,8 @@ export async function mountWcUiFollower(
       if (!followerSelectedScoop || !scoops.some((scoop) => scoop.jid === followerSelectedScoop)) {
         followerSelectedScoop = activeScoopJid;
       }
-      boot.refs.switcher.scoops = toFollowerSwitcherScoops(scoops, followerSelectedScoop);
+      followerScoops = scoops;
+      publishFollowerScoops();
       boot.refs.switcher.setAttribute('active', followerSelectedScoop ?? activeScoopJid);
     },
     onModelsList: modelSurface.onModelsList,
@@ -826,6 +837,7 @@ export async function mountWcUiFollower(
     const scoopJid = (event as CustomEvent<{ key?: string }>).detail?.key;
     if (scoopJid) {
       followerSelectedScoop = scoopJid;
+      publishFollowerScoops(); // re-order for the new selection, as the leader does
       boot.refs.switcher.setAttribute('active', scoopJid);
       follower.currentSync?.selectScoop(scoopJid);
     }

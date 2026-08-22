@@ -497,7 +497,17 @@ export class SliccFreezerNew extends HTMLElement {
         },
         glyph
       );
-      btn.addEventListener('click', () => this.#emit(action));
+      // While a session action is in flight every OTHER action is a race:
+      // New chat and Drop cone both archive, clear and (for a drop) unregister
+      // a cone, guarded only by their own separate in-flight flags, and their
+      // read-modify-write of the freezer index would interleave. `busy` is the
+      // one signal that a run is open, so it disables the whole row, not just
+      // the badge it spins.
+      (btn as HTMLButtonElement).disabled = busy;
+      btn.addEventListener('click', () => {
+        if (this.busy) return;
+        this.#emit(action);
+      });
       row.appendChild(btn);
     }
     return row;

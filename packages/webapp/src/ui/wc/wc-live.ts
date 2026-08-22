@@ -154,29 +154,37 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     if (!refs.switcher.hasAttribute('attention')) {
       refs.switcher.setAttribute('attention', scoop.jid);
     }
+    // The strip orders every cone first, then the SELECTED cone's scoops
+    // (`orderForSwitcher`), so the descriptors are stale the moment selection
+    // moves. Nothing else republishes them on a selection change — the next
+    // roster/status event or the 15s stats poll would, which is long enough to
+    // read as the strip ignoring the click.
+    wiring.refreshScoops?.();
+  };
+
+  const wiring: WcLiveWiring = {
+    refs,
+    statuses: new Map(),
+    fills: new Map(),
+    phases: new Map(),
+    lickBackpressure,
+    lastActivity: new Map(),
+    // The thread component owns the `ctx` param — the host only routes it.
+    pendingUrlContext:
+      (refs.thread as HTMLElement & { urlContext?: string | null }).urlContext ?? null,
+    getController: () => controller,
+    getClient: () => client,
+    getSelected: () => selected,
+    selectScoop,
+    notifyReady: () => {
+      clientReady = true;
+      for (const fn of readyListeners) fn();
+    },
   };
 
   return {
     refs,
-    wiring: {
-      refs,
-      statuses: new Map(),
-      fills: new Map(),
-      phases: new Map(),
-      lickBackpressure,
-      lastActivity: new Map(),
-      // The thread component owns the `ctx` param — the host only routes it.
-      pendingUrlContext:
-        (refs.thread as HTMLElement & { urlContext?: string | null }).urlContext ?? null,
-      getController: () => controller,
-      getClient: () => client,
-      getSelected: () => selected,
-      selectScoop,
-      notifyReady: () => {
-        clientReady = true;
-        for (const fn of readyListeners) fn();
-      },
-    },
+    wiring,
     setClient: (next) => {
       client = next;
     },

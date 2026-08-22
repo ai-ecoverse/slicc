@@ -305,6 +305,12 @@ describe('freezeConeSession', () => {
     );
     expect(index[0]).toMatchObject({ memorySkipped: true, cone: 'cone-research' });
     expect(index[0].memoryPending).toBeUndefined();
+    // The marker must also ride the archive: `rebuildFreezerIndexFromArchives`
+    // restores `pendingEnrichment` from the filename, so an index-only marker
+    // would be silently dropped by a rebuild and the catch-up would then
+    // extract memories from a chat that opted out (Codex P2).
+    const archive = vfs.files.get(`/sessions/${index[0].filename}`);
+    expect(String(archive)).toContain('memorySkipped: true');
   });
 
   it('writes memoryPending before the agentic pass and clears it on success', async () => {

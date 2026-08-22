@@ -176,6 +176,7 @@ export async function rebuildFreezerIndexFromArchives(
         ...(parsed.models ? { models: parsed.models } : {}),
         ...(parsed.cone ? { cone: parsed.cone } : {}),
         ...(parsed.coneLabel ? { coneLabel: parsed.coneLabel } : {}),
+        ...(parsed.memorySkipped ? { memorySkipped: true as const } : {}),
         ...(filename.startsWith('pending-') ? { pendingEnrichment: true } : {}),
       });
     } catch {

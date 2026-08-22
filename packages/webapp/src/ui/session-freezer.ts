@@ -435,6 +435,7 @@ async function writeFrozenArchive(
       messages,
       ...(usageSummary ?? {}),
       ...provenance,
+      ...(opts.memory === 'skip' ? { memorySkipped: true as const } : {}),
     };
     const archiveMarkdown = formatArchiveAsMarkdown(archive);
     await opts.vfs.writeFile(`${SESSIONS_DIR}/${filename}`, archiveMarkdown);
@@ -696,7 +697,12 @@ function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
   // title so newlines and quotes round-trip.
   const coneFrontmatter =
     (archive.cone ? `cone: ${archive.cone}\n` : '') +
-    (archive.coneLabel ? `coneLabel: ${JSON.stringify(archive.coneLabel)}\n` : '');
+    (archive.coneLabel ? `coneLabel: ${JSON.stringify(archive.coneLabel)}\n` : '') +
+    // The memory opt-out has to survive an index rebuild too: `pendingEnrichment`
+    // comes back from the `pending-` filename, so without this marker a rebuilt
+    // entry would look like an ordinary pending freeze and the next catch-up
+    // would extract memories from a chat archived with memory explicitly off.
+    (archive.memorySkipped ? `memorySkipped: true\n` : '');
   const header =
     `---\n` +
     `id: ${archive.id}\n` +
