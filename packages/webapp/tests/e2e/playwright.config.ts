@@ -84,7 +84,16 @@ export default defineConfig({
       // exactly as the production worker does. The webapp must be built
       // (`npm run build -w @slicc/webapp` → `dist/ui/index.html`) first; the
       // CI `e2e` job builds it before the E2E step.
-      command: `npx wrangler dev --config ${resolve(repoRoot, 'packages/cloudflare-worker/wrangler.jsonc')} --port ${WRANGLER_PORT} --ip 127.0.0.1`,
+      // `--route` overrides the config's production routes
+      // (`www.sliccy.ai/*`), which `wrangler dev` otherwise SIMULATES: the
+      // worker would see `request.url` on the production host and mint
+      // absolute URLs pointing there. That is invisible for asset serving but
+      // fatal for the tray — `POST /tray` returns `capabilities.*.url`, and a
+      // leader that then dials `https://www.sliccy.ai/controller/<token>`
+      // reaches the real hub, which has never heard of the tray it just
+      // created (`TRAY_NOT_INITIALIZED`, HTTP 500). Pinning the route to the
+      // harness origin keeps every URL the worker hands out local.
+      command: `npx wrangler dev --config ${resolve(repoRoot, 'packages/cloudflare-worker/wrangler.jsonc')} --port ${WRANGLER_PORT} --ip 127.0.0.1 --route ${LEADER_ORIGIN}/*`,
       env: {
         // Wrangler 4.118 enables local observability by default. Its extra
         // collector can disconnect Miniflare during this long-running suite.
