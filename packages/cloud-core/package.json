@@ -29,10 +29,10 @@
   },
   "dependencies": {
     "@slicc/shared-ts": "*",
-    "e2b": "^2.35.0"
+    "e2b": "2.45.0"
   },
   "devDependencies": {
-    "@types/node": "^24.12.4",
-    "vitest": "^4.1.6"
+    "@types/node": "24.13.3",
+    "vitest": "4.1.11"
   }
 }

@@ -11,12 +11,12 @@
   "dependencies": {
     "@slicc/cloud-core": "*",
     "@slicc/shared-ts": "*",
-    "e2b": "^2.35.0",
+    "e2b": "2.45.0",
     "werift": "0.24.4"
   },
   "devDependencies": {
-    "@types/express": "^5.0.0",
-    "@types/ws": "^8.5.14",
+    "@types/express": "5.0.6",
+    "@types/ws": "8.18.1",
     "electron": "43.4.0"
   }
 }
