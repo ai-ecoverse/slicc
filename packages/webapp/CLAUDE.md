@@ -231,6 +231,18 @@ Non-obvious rules:
   on a `tool_result` with `isError`. Channels:
   `docs/webcomponents-details.md`.
 - **Model IDs**: pi-ai aliases such as `claude-opus-4-6`, not dated snapshots.
+- **Per-cone model (#2310)**: the model lives on the work-unit record
+  (`RegisteredScoop.model = { provider, id }`, with `thinking` beside it), not in
+  page localStorage. Read it through `work-unit/record.ts`
+  (`modelFor` / `modelIdFor` / `modelProviderFor` / `thinkingFor`) and write it
+  through `setUnitModel` / `setUnitThinking` — `config.modelId` /
+  `config.thinkingLevel` are legacy creation input that `normalizeScoopRecord`
+  lifts onto the record. The picker changes ONLY the selected cone
+  (`Orchestrator.setScoopModel`); `refreshModels()` re-resolves each context
+  against its own record after an account change and retargets nothing. A new
+  cone inherits the selected cone's model, a scoop copies its creator's once.
+  The global `selected-model` survives only as the first-boot seed / migration
+  source (`scoops/model-seed.ts`). Details: `docs/work-unit.md`.
 - **Provider composition**: pi-ai auto-discovered + `src/providers/built-in/` +
   `providers/`; merge order pi-ai → `modelOverrides` → `getModelIds()`. Build
   filtering: `packages/dev-tools/providers.build.json`.

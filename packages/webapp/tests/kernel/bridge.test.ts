@@ -102,7 +102,8 @@ describe('Bridge createCallbacks', () => {
       clearQueuedMessages: vi.fn().mockResolvedValue(undefined),
       clearAllMessages: vi.fn().mockResolvedValue(undefined),
       delegateToScoop: vi.fn().mockResolvedValue(undefined),
-      updateModel: vi.fn().mockResolvedValue(undefined),
+      refreshModels: vi.fn(),
+      setScoopModel: vi.fn().mockResolvedValue(true),
     };
 
     callbacks = Bridge.createCallbacks(bridge);
@@ -873,7 +874,8 @@ describe('Bridge handlePanelMessage', () => {
       clearAllMessages: vi.fn().mockResolvedValue(undefined),
       clearScoopMessages: vi.fn().mockResolvedValue(undefined),
       delegateToScoop: vi.fn().mockResolvedValue(undefined),
-      updateModel: vi.fn(),
+      refreshModels: vi.fn(),
+      setScoopModel: vi.fn().mockResolvedValue(true),
       handleWebhookEvent: vi.fn(),
       handleCherryHostEvent: vi.fn(),
     };
@@ -1199,7 +1201,8 @@ describe('Bridge follower mode', () => {
       clearQueuedMessages: vi.fn().mockResolvedValue(undefined),
       clearAllMessages: vi.fn().mockResolvedValue(undefined),
       delegateToScoop: vi.fn().mockResolvedValue(undefined),
-      updateModel: vi.fn(),
+      refreshModels: vi.fn(),
+      setScoopModel: vi.fn().mockResolvedValue(true),
     };
     await bridge.bind(mockOrchestrator);
 
@@ -1599,7 +1602,8 @@ describe('Bridge.routeSprinkleLick', () => {
       clearAllMessages: vi.fn().mockResolvedValue(undefined),
       clearScoopMessages: vi.fn().mockResolvedValue(undefined),
       delegateToScoop: vi.fn().mockResolvedValue(undefined),
-      updateModel: vi.fn(),
+      refreshModels: vi.fn(),
+      setScoopModel: vi.fn().mockResolvedValue(true),
     };
 
     await bridge.bind(mockOrchestrator);
@@ -2251,7 +2255,8 @@ describe('Bridge handlePanelMessage dispatch', () => {
       unregisterScoop: vi.fn().mockResolvedValue(undefined),
       getWorkUnits: vi.fn(() => ({ close: workUnitClose })),
       delegateToScoop: vi.fn().mockResolvedValue(undefined),
-      updateModel: vi.fn(),
+      refreshModels: vi.fn(),
+      setScoopModel: vi.fn().mockResolvedValue(true),
       setScoopThinkingLevel: vi.fn().mockResolvedValue(undefined),
       resetFilesystem: vi.fn().mockResolvedValue(undefined),
       reloadAllSkills: vi.fn().mockResolvedValue(undefined),
@@ -2369,19 +2374,48 @@ describe('Bridge handlePanelMessage dispatch', () => {
     );
   });
 
-  it('set-model triggers orchestrator.updateModel', async () => {
+  it('set-model re-resolves every unit against its own record', async () => {
     await (bridge as any).handlePanelMessage({
       type: 'set-model',
       provider: 'anthropic',
       model: 'claude-opus-4-6',
       apiKey: 'test',
     });
-    expect(mockOrchestrator.updateModel).toHaveBeenCalledTimes(1);
+    expect(mockOrchestrator.refreshModels).toHaveBeenCalledTimes(1);
   });
 
-  it('refresh-model triggers orchestrator.updateModel', async () => {
+  it('refresh-model re-resolves every unit against its own record', async () => {
     await (bridge as any).handlePanelMessage({ type: 'refresh-model' });
-    expect(mockOrchestrator.updateModel).toHaveBeenCalledTimes(1);
+    expect(mockOrchestrator.refreshModels).toHaveBeenCalledTimes(1);
+  });
+
+  it('set-scoop-model applies to the named unit only and acks (#2310)', async () => {
+    await (bridge as any).handlePanelMessage({
+      type: 'set-scoop-model',
+      requestId: 'model-1',
+      scoopJid: 'cone_2',
+      model: { provider: 'anthropic', id: 'claude-opus-4-6' },
+    });
+    expect(mockOrchestrator.setScoopModel).toHaveBeenCalledWith('cone_2', {
+      provider: 'anthropic',
+      id: 'claude-opus-4-6',
+    });
+    const ack = sentMessages.find((m: any) => m.payload?.type === 'set-scoop-model-ack') as any;
+    expect(ack.payload).toMatchObject({ requestId: 'model-1', scoopJid: 'cone_2', applied: true });
+  });
+
+  it('set-scoop-model acks applied:false for a jid the kernel does not know', async () => {
+    mockOrchestrator.setScoopModel.mockResolvedValueOnce(false);
+    await (bridge as any).handlePanelMessage({
+      type: 'set-scoop-model',
+      requestId: 'model-2',
+      scoopJid: 'ghost',
+      model: { provider: 'anthropic', id: 'claude-opus-4-6' },
+    });
+    const ack = sentMessages
+      .filter((m: any) => m.payload?.type === 'set-scoop-model-ack')
+      .pop() as any;
+    expect(ack.payload.applied).toBe(false);
   });
 
   it('request-state emits a state-snapshot', async () => {

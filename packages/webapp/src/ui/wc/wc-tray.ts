@@ -32,6 +32,7 @@ import type {
   TrayModelCatalogEntry,
   TrayModelSelectionState,
 } from '../../scoops/tray-sync-protocol.js';
+import type { RegisteredScoop } from '../../scoops/types.js';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import {
   setFollowerSprinkleInstancesGetter,
@@ -48,6 +49,7 @@ import {
   setPlaywrightTeleportConnectedFollowers,
 } from '../../shell/supplemental-commands/playwright/teleport.js';
 import type { TeleportFollowerInfo } from '../../shell/supplemental-commands/playwright/teleport-follower-shim.js';
+import { modelFor, thinkingFor } from '../../work-unit/record.js';
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
 import type { BootStageLogger } from '../boot/types.js';
@@ -66,7 +68,6 @@ import {
   getAllAvailableModels,
   getProviderConfig,
   resolveCurrentModel,
-  setSelectedModelId,
 } from '../provider-settings.js';
 import { createRemoteCdpPageBridge, type RemoteCdpPageBridge } from '../remote-cdp-page-bridge.js';
 import { canonicalRuntimeId } from '../runtime-identity.js';
@@ -92,6 +93,7 @@ import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
 import { getLeaderPermissionsSurface } from './wc-permissions-registry.js';
 import type { WcShellRefs } from './wc-shell.js';
 import { toFollowerSwitcherScoops, toScoopSummaries } from './wc-tray-scoops.js';
+import { rootForSelection } from './wc-unit-context.js';
 
 export interface WcTrayDeps {
   refs: WcShellRefs;
@@ -167,6 +169,25 @@ function modelCatalogForTray(): TrayModelCatalogEntry[] {
       modelName: model.name ?? model.id,
       reasoning: model.reasoning === true,
     }))
+  );
+}
+
+/**
+ * The provider-qualified id a follower should show for one unit (#2310):
+ * that unit's own recorded model, falling back to the profile default only
+ * when it has none (a record not yet backfilled).
+ */
+function qualifiedModelIdForUnit(
+  catalog: readonly TrayModelCatalogEntry[],
+  unit: RegisteredScoop | undefined
+): string {
+  const pinned = unit ? modelFor(unit) : undefined;
+  if (!pinned) return currentQualifiedModelId(catalog);
+  const qualified = `${pinned.provider}:${pinned.id}`;
+  return (
+    catalog.find((entry) => entry.modelId === qualified)?.modelId ??
+    catalog.find((entry) => entry.modelId.endsWith(`:${pinned.id}`))?.modelId ??
+    qualified
   );
 }
 
@@ -389,6 +410,69 @@ function applyFollowerPresentation(
   deps.window.dispatchEvent(new CustomEvent(FOLLOWERS_CHANGED_EVENT, { detail: { followers } }));
 }
 
+/**
+ * The leader's per-cone model surface for followers (#2310): what a follower
+ * is told about the unit it is viewing, and what a pick from it changes —
+ * exactly that cone's record, never the leader's own selection.
+ */
+function leaderModelCallbacks(
+  deps: WcTrayDeps
+): Pick<StartPageLeaderTrayOptions, 'getModelSelectionState' | 'onFollowerModelSelect'> {
+  const { client, refs } = deps;
+  return {
+    getModelSelectionState: (scoopJid): TrayModelSelectionState => {
+      const catalog = modelCatalogForTray();
+      const unit = client.getScoop(scoopJid);
+      // The model of the cone the follower is looking at (a scoop shows its
+      // owning cone's), plus that unit's own thinking level.
+      const root = rootForSelection(client.getScoops(), unit ?? null);
+      const thinking = unit ? thinkingFor(unit) : {};
+      return {
+        activeModelId: qualifiedModelIdForUnit(catalog, root),
+        scoopJid,
+        thinkingLevel: thinking.level === 'max' ? 'xhigh' : thinking.level,
+        effortOverride:
+          thinking.level === 'max' ? (thinking.effortOverride ?? 'max') : thinking.effortOverride,
+      };
+    },
+    onFollowerModelSelect: (modelId, scoopJid) => {
+      const entry = modelCatalogForTray().find((model) => model.modelId === modelId);
+      if (!entry) return false;
+      // A follower changes the model of the cone IT is looking at — never the
+      // leader's selected cone and never a global setting.
+      const named = scoopJid ? client.getScoop(scoopJid) : undefined;
+      const target = rootForSelection(client.getScoops(), named ?? null);
+      if (!target) return false;
+      const colon = entry.modelId.indexOf(':');
+      void client
+        .setScoopModel(target.jid, {
+          provider: entry.modelId.slice(0, colon),
+          id: entry.modelId.slice(colon + 1),
+        })
+        .catch(() => undefined);
+      // Reflect the pick locally only while the follower is on the cone the
+      // leader has selected; otherwise the leader's pill would show another
+      // cone's model.
+      if (target.jid === deps.getSelectedJid()) {
+        refs.composerMeta.dispatchEvent(
+          new CustomEvent('model-change', {
+            bubbles: true,
+            composed: true,
+            detail: {
+              id: entry.modelId,
+              model: entry.modelName,
+              provider: entry.providerName,
+              source: 'follower',
+            },
+          })
+        );
+        refs.composerMeta.setAttribute('model', entry.modelName);
+      }
+      return true;
+    },
+  };
+}
+
 /** Leader option factory — the WC equivalent of `buildLeaderTrayOptions`. */
 export function createLeaderOptionsFactory(
   deps: WcTrayDeps,
@@ -407,38 +491,7 @@ export function createLeaderOptionsFactory(
     getScoopJid: () => deps.getSelectedJid(),
     getScoops: () => toScoopSummaries(client.getScoops(), refs.switcher.scoops),
     getModelCatalog: modelCatalogForTray,
-    getModelSelectionState: (scoopJid): TrayModelSelectionState => {
-      const catalog = modelCatalogForTray();
-      const config = client.getScoop(scoopJid)?.config;
-      return {
-        activeModelId: currentQualifiedModelId(catalog),
-        scoopJid,
-        thinkingLevel: config?.thinkingLevel === 'max' ? 'xhigh' : config?.thinkingLevel,
-        effortOverride:
-          config?.thinkingLevel === 'max'
-            ? (config.effortOverride ?? 'max')
-            : config?.effortOverride,
-      };
-    },
-    onFollowerModelSelect: (modelId) => {
-      const entry = modelCatalogForTray().find((model) => model.modelId === modelId);
-      if (!entry) return false;
-      setSelectedModelId(entry.modelId);
-      refs.composerMeta.dispatchEvent(
-        new CustomEvent('model-change', {
-          bubbles: true,
-          composed: true,
-          detail: {
-            id: entry.modelId,
-            model: entry.modelName,
-            provider: entry.providerName,
-            source: 'follower',
-          },
-        })
-      );
-      refs.composerMeta.setAttribute('model', entry.modelName);
-      return true;
-    },
+    ...leaderModelCallbacks(deps),
     onFollowerThinkingSet: (scoopJid, thinkingLevel, effortOverride) =>
       client.setScoopThinkingLevel(scoopJid, thinkingLevel, effortOverride),
     getSprinkles: () => {

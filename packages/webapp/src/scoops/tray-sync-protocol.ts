@@ -41,6 +41,7 @@ export type {
   LeaderToFollowerMessage,
   RemoteTargetInfo,
   ScoopSummary,
+  ScoopSummaryModel,
   SprinkleSummary,
   TranscriptExportSelector,
   TrayChunkFrame,

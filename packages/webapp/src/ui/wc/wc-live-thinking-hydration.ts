@@ -1,6 +1,6 @@
 import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
-import { chatSessionIdFor } from '../../work-unit/record.js';
+import { chatSessionIdFor, modelFor, thinkingFor } from '../../work-unit/record.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
 import { metaThinkingForScoop } from './wc-follower-model-surface.js';
@@ -52,17 +52,21 @@ export async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredSco
     scoop.isCone ? { kind: 'cone' } : { kind: 'scoop', accent: scoopColor(scoop) }
   );
   const lockedEffort = localStorage.getItem('slicc_locked_effort_level');
+  const thinking = thinkingFor(scoop);
   refs.composerMeta.setAttribute(
     'thinking',
     metaThinkingForScoop(
-      (lockedEffort ?? scoop.config?.thinkingLevel) as ThinkingLevel | undefined,
-      scoop.config?.effortOverride
+      (lockedEffort ?? thinking.level) as ThinkingLevel | undefined,
+      thinking.effortOverride
     )
   );
   try {
     const { resolveCurrentModel, resolveModelById } = await import('../provider-settings.js');
-    const modelId = scoop.config?.modelId;
-    const model = modelId ? resolveModelById(modelId) : resolveCurrentModel();
+    // The pill follows the SELECTED cone's own model (#2310) — switching
+    // cones switches the model shown, and the picker writes back to whichever
+    // cone is selected.
+    const pinned = modelFor(scoop);
+    const model = pinned ? resolveModelById(pinned.id, pinned.provider) : resolveCurrentModel();
     refs.composerMeta.setAttribute('model', model.name ?? model.id);
     refs.composerMeta.toggleAttribute(
       'no-thinking',

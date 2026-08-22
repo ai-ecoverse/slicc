@@ -37,7 +37,10 @@ function child(jid: string, parentJid: string): RegisteredScoop {
   };
 }
 
-const primary = root('cone_1', 'cone', 'sliccy', '2026-01-01T00:00:00.000Z');
+const primary = {
+  ...root('cone_1', 'cone', 'sliccy', '2026-01-01T00:00:00.000Z'),
+  model: { provider: 'anthropic', id: 'claude-opus-4-6' },
+};
 const research = root('cone_2', 'cone-research', 'Research', '2026-01-02T00:00:00.000Z');
 
 function harness(initial: RegisteredScoop[], opts: { freezeFails?: boolean } = {}) {
@@ -119,6 +122,18 @@ describe('buildNewConeRecord', () => {
     expect(record.name).toBe('Research');
     expect(record.assistantLabel).toBe('Research');
   });
+
+  it('starts the new cone on the model it is given (#2310)', () => {
+    const record = buildNewConeRecord('Research', [primary], {
+      provider: 'anthropic',
+      id: 'claude-opus-4-6',
+    });
+    expect(record.model).toEqual({ provider: 'anthropic', id: 'claude-opus-4-6' });
+  });
+
+  it('carries no model when the creating page has none to pass', () => {
+    expect(buildNewConeRecord('Research', [primary]).model).toBeUndefined();
+  });
 });
 
 describe('wireConeActions', () => {
@@ -161,6 +176,9 @@ describe('wireConeActions', () => {
       description: 'List the three most cited retrieval papers.',
       prompt: 'List the three most cited retrieval papers.',
     });
+    // A new cone continues on the model of the cone the user is working in
+    // (#2310) — here the selected primary's.
+    expect(record.model).toEqual({ provider: 'anthropic', id: 'claude-opus-4-6' });
     // Dialog is gone, the placeholder is not selected…
     expect(h.dialog()).toBeNull();
     expect(document.querySelector('slicc-dialog')).toBeNull();

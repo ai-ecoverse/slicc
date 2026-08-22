@@ -25,7 +25,9 @@ import type { OffscreenClient } from '../offscreen-client.js';
 import type { GroupedModels } from '../provider-settings.js';
 import type { SyncDialogTabId } from '../sync-dialog-model.js';
 import { computeTrayMenuModel } from '../tray-join-url.js';
+import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
 import type { WcShellRefs } from './wc-shell.js';
+import { rootForSelection } from './wc-unit-context.js';
 
 export interface MetaModel {
   name: string;
@@ -492,9 +494,17 @@ async function wireLoginEvent(opts: {
 }
 
 /**
- * Model pick + capability reflection: picking a model persists the global
- * default (legacy `selected-model` key) and tells the worker to re-resolve,
- * and the active model's reasoning capability toggles `no-thinking` on the
+ * Model pick + capability reflection. The pick applies to the SELECTED CONE
+ * only (#2310): it is written to that cone's record, so every other cone —
+ * and every scoop the cone already spawned — keeps the model it had. Nothing
+ * here is global any more.
+ *
+ * The legacy `selected-model` key is still written, but only as the profile
+ * default: it seeds the first cone of a fresh profile and backs the
+ * provider-scoped globals (`getSelectedProvider()` → API key, catalogue
+ * defaults). No unit resolves its model from it once it has its own.
+ *
+ * The active model's reasoning capability toggles `no-thinking` on the
  * composer so the thinking-effort pill only shows for a model that supports it.
  */
 async function wireModelPicker(
@@ -527,13 +537,18 @@ async function wireModelPicker(
   };
   applyThinkingCapability();
   refs.composerMeta.addEventListener('model-change', (event) => {
-    const id = (event as CustomEvent<{ id?: string }>).detail?.id;
+    const detail = (event as CustomEvent<{ id?: string; source?: string }>).detail;
+    const id = detail?.id;
     if (!id) return;
+    // A follower's pick already travelled through the tray and was applied to
+    // the cone it named; re-applying it here would retarget the LEADER's
+    // selected cone instead (#2310).
+    if (detail?.source === 'follower') return;
     // Route through `setSelectedModelId` so the `providerId:` prefix is
     // guaranteed even if the picker ever hands us a bare id.
     setSelectedModelId(id);
     applyThinkingCapability(id);
-    client.updateModel();
+    void applyModelPickToSelectedCone(client, id);
     // The change-model CTA stages a pending retry: now that a new model is
     // selected, fire it so the originating turn re-runs without a second
     // click. The hook is a no-op when no retry is staged.
@@ -554,6 +569,34 @@ async function wireModelPicker(
  * provider-settings import is already resolved by then, so awaiting costs
  * nothing, and a floating call swallowed any failure of that import.
  */
+/**
+ * Apply a picked `providerId:modelId` to the selected cone's record (#2310).
+ * A selected scoop resolves to the root that owns it — scoops are never
+ * retargeted, so the pick lands on that scoop's cone and applies from its
+ * next spawn on.
+ */
+export async function applyModelPickToSelectedCone(
+  client: Pick<OffscreenClient, 'getScoops' | 'getScoop' | 'selectedScoopJid' | 'setScoopModel'>,
+  qualifiedModelId: string,
+  notify: () => void = notifyLeaderLocalModelStateChanged
+): Promise<boolean> {
+  const colon = qualifiedModelId.indexOf(':');
+  if (colon <= 0) return false;
+  const model = {
+    provider: qualifiedModelId.slice(0, colon),
+    id: qualifiedModelId.slice(colon + 1),
+  };
+  const selectedJid = client.selectedScoopJid;
+  const selected = selectedJid ? (client.getScoop(selectedJid) ?? null) : null;
+  const root = rootForSelection(client.getScoops(), selected);
+  if (!root) return false;
+  const applied = await client.setScoopModel(root.jid, model);
+  // Followers mirror the leader's per-cone selection; refresh only once the
+  // record actually changed.
+  if (applied) notify();
+  return applied;
+}
+
 async function wireAccountsChangedResync(opts: {
   refreshModels(): void;
   /** Sync the model-pill label after accounts or catalog change. */

@@ -31,11 +31,24 @@ import type { SudoManager } from '../sudo/sudo-manager.js';
 import { toDescriptor, workspaceFor } from '../work-unit/descriptor.js';
 import { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { rootOwnerOf, rootsOf } from '../work-unit/policy.js';
-import { normalizeScoopRecord } from '../work-unit/record.js';
+import {
+  modelFor,
+  modelIdFor,
+  normalizeScoopRecord,
+  setUnitModel,
+  setUnitThinking,
+} from '../work-unit/record.js';
 import type { AppendConeMemoryMeta } from './cone-memory-store.js';
+import { globalSeedModel } from './model-seed.js';
 import { ScoopContext, type ScoopContextCallbacks } from './scoop-context.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
-import type { ChannelMessage, RegisteredScoop, ScoopTabState, ThinkingLevel } from './types.js';
+import type {
+  ChannelMessage,
+  RegisteredScoop,
+  ScoopTabState,
+  ThinkingLevel,
+  WorkUnitModel,
+} from './types.js';
 
 const log = createLogger('scoop-lifecycle-manager');
 
@@ -546,6 +559,7 @@ export class ScoopLifecycleManager {
   async register(scoop: RegisteredScoop): Promise<void> {
     const scoops = this.deps.getScoops();
     normalizeScoopRecord(scoop);
+    this.inheritModel(scoop);
     await this.deps.db.saveScoop(scoop);
     scoops.set(scoop.jid, scoop);
     this.deps.messageRouter.ensureQueue(scoop.jid);
@@ -584,6 +598,26 @@ export class ScoopLifecycleManager {
       });
       throw err;
     }
+  }
+
+  /**
+   * Stamp a new unit's model (#2310) when its creator didn't pass one:
+   *
+   * - a scoop COPIES its creating unit's model, once, at creation. It is
+   *   never retargeted afterwards — a later model change on the cone leaves
+   *   every scoop it already spawned exactly where it was.
+   * - a root with no creator model (the very first cone of a profile) is
+   *   seeded from the global `selected-model` setting, the last job that
+   *   setting has.
+   *
+   * A record that already names a model — including a legacy provider-less
+   * `config.modelId` pin — is left alone.
+   */
+  private inheritModel(scoop: RegisteredScoop): void {
+    if (modelIdFor(scoop)) return;
+    const parent = scoop.parentJid ? this.deps.getScoops().get(scoop.parentJid) : undefined;
+    const model = (parent ? modelFor(parent) : undefined) ?? globalSeedModel();
+    if (model) setUnitModel(scoop, model);
   }
 
   /** Unregister a scoop. Throws if the scoop has active licks (webhooks/cron tasks). */
@@ -659,13 +693,43 @@ export class ScoopLifecycleManager {
     }
   }
 
-  /** Update the model on every active scoop context. */
-  updateModelOnAll(): void {
+  /**
+   * Set ONE unit's model (#2310): persist it on that unit's record and
+   * re-resolve its running agent. No other unit is touched — there is no
+   * global picker, so changing the selected cone's model can never retarget
+   * its scoops or another cone.
+   *
+   * Returns `false` when the jid is unknown.
+   */
+  async setModel(jid: string, model: WorkUnitModel | undefined): Promise<boolean> {
+    const scoop = this.deps.getScoops().get(jid);
+    if (!scoop) return false;
+    setUnitModel(scoop, model);
+    this.getContext(jid)?.updateModel();
+    try {
+      await this.deps.db.saveScoop(scoop);
+    } catch (err) {
+      log.warn('Failed to persist unit model', {
+        jid,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+    log.info('Unit model updated', { jid, provider: model?.provider, model: model?.id });
+    return true;
+  }
+
+  /**
+   * Re-resolve every active context's model against ITS OWN record (#2310).
+   * Not a global model change — the provider catalogue moved (an account was
+   * added, a token re-issued), so each unit re-reads the model it already
+   * has.
+   */
+  refreshModels(): void {
     const contexts = this.getContexts();
     for (const context of contexts.values()) {
       context.updateModel();
     }
-    log.info('Model updated on all active contexts', { contextCount: contexts.size });
+    log.info('Models re-resolved on all active contexts', { contextCount: contexts.size });
   }
 
   /** Reload skills on every ready / processing scoop context. */
@@ -691,7 +755,7 @@ export class ScoopLifecycleManager {
   /**
    * Update a single scoop's reasoning / thinking level. Mutates the live
    * agent for the next turn AND persists the value into
-   * `scoop.config.thinkingLevel` on disk so it survives reloads. Returns
+   * `scoop.thinking` on disk so it survives reloads. Returns
    * the level actually applied after model-aware resolution.
    */
   async setThinkingLevel(
@@ -705,21 +769,11 @@ export class ScoopLifecycleManager {
     const context = this.getContext(jid);
     const applied = context ? context.setThinkingLevel(level, effortOverride) : null;
 
-    // Persist the requested level (not the resolved/clamped one): on a
-    // model swap later, we want the user's stated preference re-resolved
-    // against the new model, not the stale clamped value.
-    if (level === undefined) {
-      if (scoop.config && scoop.config.thinkingLevel !== undefined) {
-        const { thinkingLevel: _omit, effortOverride: _omit2, ...rest } = scoop.config;
-        scoop.config = rest;
-      }
-    } else {
-      scoop.config = {
-        ...(scoop.config ?? {}),
-        thinkingLevel: level,
-        effortOverride,
-      };
-    }
+    // Persist the requested level (not the resolved/clamped one) on the
+    // record, next to the unit's model (#2310): on a model swap later, we
+    // want the user's stated preference re-resolved against the new model,
+    // not the stale clamped value.
+    setUnitThinking(scoop, level === undefined ? undefined : { level, effortOverride });
 
     try {
       await this.deps.db.saveScoop(scoop);

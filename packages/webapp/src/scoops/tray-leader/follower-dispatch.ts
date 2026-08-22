@@ -91,7 +91,7 @@ export class FollowerDispatch {
         broadcast.sendModelCatalogToFollower(bootstrapId);
         break;
       case 'model.select':
-        this.handleModelSelection(bootstrapId, message.modelId);
+        this.handleModelSelection(bootstrapId, message.modelId, message.scoopJid);
         break;
       case 'thinking.set':
         this.handleThinkingSelection(
@@ -270,9 +270,18 @@ export class FollowerDispatch {
     void this.collaborators.broadcast.sendSnapshotToFollower(bootstrapId, scoopJid);
   }
 
-  private handleModelSelection(bootstrapId: string, modelId: string): void {
+  private handleModelSelection(
+    bootstrapId: string,
+    modelId: string,
+    requestedScoopJid?: string
+  ): void {
+    // The unit the pick applies to: what the follower named, else the unit it
+    // is viewing. Never the leader's selection — a follower changes the cone
+    // it is looking at (#2310).
+    const scoopJid =
+      requestedScoopJid ?? this.context.followers.followers.get(bootstrapId)?.selectedScoopJid;
     try {
-      if (this.context.options.onFollowerModelSelect?.(modelId) !== true) {
+      if (this.context.options.onFollowerModelSelect?.(modelId, scoopJid ?? undefined) !== true) {
         this.context.log.warn('Rejecting unknown or unresolvable follower model selection', {
           bootstrapId,
           modelId,

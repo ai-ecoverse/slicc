@@ -182,7 +182,9 @@ describe('FollowerDispatch', () => {
     expect(c.broadcast.sendModelCatalogToFollower).toHaveBeenCalledWith('follower');
 
     dispatch.dispatch('follower', { type: 'model.select', modelId: 'adobe:claude-opus-4-8' });
-    expect(onFollowerModelSelect).toHaveBeenCalledWith('adobe:claude-opus-4-8');
+    // No `scoopJid` on the wire (an older follower): the leader falls back to
+    // the unit that follower is viewing, never its own selection (#2310).
+    expect(onFollowerModelSelect).toHaveBeenCalledWith('adobe:claude-opus-4-8', 'selected-scoop');
 
     dispatch.dispatch('follower', {
       type: 'thinking.set',
@@ -202,7 +204,7 @@ describe('FollowerDispatch', () => {
       dispatch.dispatch('follower', { type: 'model.select', modelId: 'unknown:nope' })
     ).not.toThrow();
 
-    expect(onFollowerModelSelect).toHaveBeenCalledWith('unknown:nope');
+    expect(onFollowerModelSelect).toHaveBeenCalledWith('unknown:nope', undefined);
     expect(c.broadcast.broadcastModelState).not.toHaveBeenCalled();
     expect(log.warn).toHaveBeenCalledWith(
       'Rejecting unknown or unresolvable follower model selection',

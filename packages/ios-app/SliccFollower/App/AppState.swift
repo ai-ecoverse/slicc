@@ -1665,14 +1665,15 @@ extension AppState {
         sendToLeader(.modelsRequest)
     }
 
-    /// Ask the leader to change its global model selection. Only advertised
-    /// catalog ids are accepted, preventing arbitrary provider/account data
-    /// from reaching the wire.
+    /// Ask the leader to change the model of the cone this follower is
+    /// looking at (#2310) — model selection is per cone, so the selected unit
+    /// travels with the pick. Only advertised catalog ids are accepted,
+    /// preventing arbitrary provider/account data from reaching the wire.
     func selectModel(_ modelId: String) {
         guard supportsModelControls,
             modelCatalog.contains(where: { $0.modelId == modelId })
         else { return }
-        sendToLeader(.modelSelect(modelId: modelId))
+        sendToLeader(.modelSelect(modelId: modelId, scoopJid: selectedScoopJid))
     }
 
     /// Map the Settings control's browser-compatible scale onto the wire. The

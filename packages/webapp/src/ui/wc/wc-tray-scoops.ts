@@ -1,11 +1,20 @@
 import type { ScoopSummary } from '../../scoops/tray-sync-protocol.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
+import { modelFor } from '../../work-unit/record.js';
 import { scoopColor } from './wc-scoop-color.js';
 import type { SwitcherScoop } from './wc-shell.js';
 
 type SummarySource = Pick<
   RegisteredScoop,
-  'jid' | 'name' | 'folder' | 'isCone' | 'parentJid' | 'assistantLabel' | 'trigger'
+  | 'jid'
+  | 'name'
+  | 'folder'
+  | 'isCone'
+  | 'parentJid'
+  | 'assistantLabel'
+  | 'trigger'
+  | 'model'
+  | 'config'
 >;
 type RenderedState = Pick<SwitcherScoop, 'key' | 'state' | 'fill' | 'phase' | 'awaiting'>;
 type WireActivity = NonNullable<ScoopSummary['activity']>;
@@ -72,6 +81,7 @@ export function toScoopSummaries(
   const byJid = new Map(rendered.map((scoop) => [scoop.key, scoop]));
   return scoops.map((scoop) => {
     const descriptor = byJid.get(scoop.jid);
+    const model = modelFor(scoop);
     return {
       jid: scoop.jid,
       name: scoop.name,
@@ -80,6 +90,10 @@ export function toScoopSummaries(
       parentId: scoop.parentJid,
       assistantLabel: scoop.assistantLabel,
       trigger: scoop.trigger,
+      // Per-unit model (#2310) — a follower shows the model of the cone it is
+      // looking at, not one global setting. Omitted for a record that has
+      // none yet, which older followers ignore anyway.
+      ...(model ? { model } : {}),
       ...toWire(descriptor),
       fill: typeof descriptor?.fill === 'number' ? descriptor.fill : 0,
     };

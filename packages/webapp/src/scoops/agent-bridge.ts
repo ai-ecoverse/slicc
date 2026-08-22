@@ -41,6 +41,7 @@ import {
 import type { JsonSchemaObject } from '../tools/types.js';
 import { defaultChildVisibleRoots, PRIMARY_WORKSPACE } from '../work-unit/descriptor.js';
 import { rootsOf } from '../work-unit/policy.js';
+import { modelIdFor, modelProviderFor, thinkingFor } from '../work-unit/record.js';
 import { serializeAgentSessionArchive } from './agent-session-archive.js';
 import type { Orchestrator } from './orchestrator.js';
 import {
@@ -313,9 +314,9 @@ function resolveParentModelSelection(
   if (parentJid === undefined) return null;
   const parent = orchestrator.getScoops().find((s) => s.jid === parentJid);
   if (!parent) return null;
-  const modelId = parent.config?.modelId;
+  const modelId = modelIdFor(parent);
   if (!modelId || modelId.length === 0) return null;
-  const providerId = parent.config?.modelProviderId;
+  const providerId = modelProviderFor(parent);
   return providerId ? { modelId, providerId } : { modelId };
 }
 
@@ -347,7 +348,7 @@ function resolveParentThinkingLevel(
   if (parentJid === undefined) return null;
   const parent = orchestrator.getScoops().find((s) => s.jid === parentJid);
   if (!parent) return null;
-  const level = parent.config?.thinkingLevel;
+  const level = thinkingFor(parent).level;
   return level && isThinkingLevel(level) ? level : null;
 }
 

@@ -33,6 +33,18 @@ describe('tray sync golden-fixture corpus', () => {
     ).toEqual(buildCorpusDocument());
   });
 
+  it('carries each cone’s own model on ScoopSummary, mirrored by iOS (#2310)', () => {
+    const summary = NESTED_PAYLOAD_CORPUS.ScoopSummary;
+    expect(summary.fields.model).toBe('mirrored');
+    expect(summary.sample.model).toEqual({ provider: 'example', id: 'reasoner' });
+    // The pick a follower sends names the cone it applies to; without it the
+    // leader would fall back to the unit that follower happens to be viewing.
+    expect(FOLLOWER_TO_LEADER_CORPUS['model.select'].message).toMatchObject({
+      modelId: 'example:reasoner',
+      scoopJid: 'cone',
+    });
+  });
+
   it('every fixture declares the type it is keyed under', () => {
     for (const [key, { message }] of Object.entries(LEADER_TO_FOLLOWER_CORPUS)) {
       expect(message.type).toBe(key);

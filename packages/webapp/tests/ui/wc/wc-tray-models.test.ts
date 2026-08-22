@@ -77,7 +77,7 @@ describe('role-switch follower model controls', () => {
     composerMeta.dispatchEvent(new CustomEvent('thinking-change', { detail: { thinking: 'max' } }));
     switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'research' } }));
 
-    expect(selectModel).toHaveBeenCalledWith('anthropic:claude-sonnet-4-6');
+    expect(selectModel).toHaveBeenCalledWith('anthropic:claude-sonnet-4-6', 'cone');
     expect(setThinkingLevel).toHaveBeenCalledWith('cone', 'xhigh', 'max');
     expect(selectScoop).toHaveBeenCalledWith('research');
   });

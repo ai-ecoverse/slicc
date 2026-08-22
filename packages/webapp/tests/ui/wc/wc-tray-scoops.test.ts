@@ -49,6 +49,21 @@ describe('tray scoop tab adapters', () => {
     }
   });
 
+  it('carries each unit’s own model to followers, and omits it when there is none (#2310)', () => {
+    const research = {
+      ...cone,
+      jid: 'cone_2',
+      folder: 'cone-research',
+      model: { provider: 'anthropic', id: 'claude-opus-4-6' },
+    };
+    const [plain, withModel] = toScoopSummaries([cone, research], []);
+
+    expect(withModel.model).toEqual({ provider: 'anthropic', id: 'claude-opus-4-6' });
+    // A record with no model yet sends none — an older follower ignores the
+    // field anyway, and a current one falls back to `model.state`.
+    expect('model' in plain).toBe(false);
+  });
+
   it('collapses the toolbar model onto a legacy state plus an activity refinement', () => {
     const collapse = (rendered: Record<string, unknown>): Record<string, unknown> => {
       const [summary] = toScoopSummaries([cone], [{ key: 'cone', fill: 64, ...rendered } as never]);

@@ -44,7 +44,7 @@ import {
 import type { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { WorkUnitManager } from '../work-unit/manager.js';
 import { rootsOf } from '../work-unit/policy.js';
-import { normalizeScoopRecord } from '../work-unit/record.js';
+import { modelFor, modelIdFor, normalizeScoopRecord, setUnitModel } from '../work-unit/record.js';
 import { SessionStore as UiSessionStore } from './chat-session-store.js';
 import { type AppendConeMemoryMeta, ConeMemoryStore } from './cone-memory-store.js';
 import * as db from './db.js';
@@ -58,6 +58,7 @@ import {
 import { LickRegistry } from './lick-registry.js';
 import { LlmsTxtIgnorePolicy } from './llms-txt-ignore.js';
 import { ModelPolicyFile } from './model-policy-file.js';
+import { globalSeedModel } from './model-seed.js';
 import { withMountHeartbeat } from './mount-heartbeat.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopApprovalRouter } from './scoop-approval-router.js';
@@ -74,6 +75,7 @@ import {
   type RegisteredScoop,
   type ScoopTabState,
   type ThinkingLevel,
+  type WorkUnitModel,
 } from './types.js';
 
 export type { ScoopObserver };
@@ -458,6 +460,9 @@ export class Orchestrator implements ConeApprovalRouter {
       if (ts) this.messageRouter.setLastAgentTimestamp(scoop.jid, ts);
     }
 
+    // Records saved before per-cone model selection (#2310) carry no `model`.
+    await this.backfillModels();
+
     // Initialize global memory
     await this.memoryStore.ensureGlobalMemory();
 
@@ -556,6 +561,46 @@ export class Orchestrator implements ConeApprovalRouter {
         jid: scoop.jid,
         error: err instanceof Error ? err.message : String(err),
       });
+    }
+  }
+
+  /**
+   * Give every restored record a model (#2310). Records written before the
+   * field existed carry none; a spawn-time `config.modelId` pin has already
+   * been lifted onto the record by `normalizeScoopRecord`, so what is left
+   * inherits: a root from the global `selected-model` seed (its last job), a
+   * scoop from the unit that owns it — the same rule creation follows, so a
+   * migrated profile and a fresh one agree.
+   *
+   * Written back (like {@link backfillParent}, unlike
+   * {@link migrateScoopConfig}) because the model is now authoritative: left
+   * in memory only, a reload would resolve the global selection again and a
+   * per-cone choice would look like it never stuck. When no global selection
+   * is resolvable yet (no account configured), nothing is written and the
+   * next boot retries.
+   */
+  private async backfillModels(): Promise<void> {
+    const pending = [...this.scoops.values()].filter((scoop) => !modelIdFor(scoop));
+    if (pending.length === 0) return;
+    const seed = globalSeedModel();
+    // Roots first, so a scoop whose root was itself backfilled inherits the
+    // value that root just received rather than falling through to the seed.
+    const ordered = [...pending].sort(
+      (a, b) => Number(a.parentJid !== null) - Number(b.parentJid !== null)
+    );
+    for (const scoop of ordered) {
+      const parent = scoop.parentJid ? this.scoops.get(scoop.parentJid) : undefined;
+      const model = (parent ? modelFor(parent) : undefined) ?? seed;
+      if (!model) continue;
+      setUnitModel(scoop, model);
+      try {
+        await db.saveScoop(scoop);
+      } catch (err) {
+        log.warn('Failed to persist backfilled model; will retry next boot', {
+          jid: scoop.jid,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      }
     }
   }
 
@@ -1140,9 +1185,22 @@ export class Orchestrator implements ConeApprovalRouter {
     this.messageRouter.stopMessageLoop();
   }
 
-  /** Update the model on all active scoop contexts. */
-  updateModel(): void {
-    this.lifecycle.updateModelOnAll();
+  /**
+   * Set the model of ONE unit (#2310) — the selected cone, from the picker,
+   * or the cone a follower is looking at. Never touches another unit: there
+   * is no global picker any more. Resolves `false` for an unknown jid.
+   */
+  setScoopModel(jid: string, model: WorkUnitModel | undefined): Promise<boolean> {
+    return this.lifecycle.setModel(jid, model);
+  }
+
+  /**
+   * Re-resolve every active context's model against its OWN record — after
+   * the provider catalogue changed (account added, re-login), not after a
+   * model pick.
+   */
+  refreshModels(): void {
+    this.lifecycle.refreshModels();
   }
 
   /** Update a single scoop's reasoning / thinking level. */

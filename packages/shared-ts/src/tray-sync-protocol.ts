@@ -466,7 +466,17 @@ export type FollowerToLeaderMessage =
   | { type: 'request_snapshot'; scoopJid?: string }
   | { type: 'scoops.select'; scoopJid: string }
   | { type: 'models.request' }
-  | { type: 'model.select'; modelId: string }
+  | {
+      type: 'model.select';
+      modelId: string;
+      /**
+       * The unit the pick applies to (#2310) — the follower's selected cone,
+       * or the cone that owns its selected scoop. Absent from older
+       * followers, in which case the leader applies it to the cone that
+       * follower is viewing (its `scoops.select`), never to a scoop.
+       */
+      scoopJid?: string;
+    }
   | {
       type: 'thinking.set';
       scoopJid: string;
@@ -701,7 +711,15 @@ export interface TrayModelCatalogEntry {
   reasoning: boolean;
 }
 
-/** The leader's global model selection and one scoop's thinking configuration. */
+/**
+ * The model + thinking configuration of ONE unit as the leader sees it.
+ *
+ * `activeModelId` used to be the leader's single global selection; since
+ * per-cone model selection (#2310) it is the model of the cone named by
+ * `scoopJid` (a scoop resolves to the cone that owns it). Followers read it
+ * exactly as before, so an older follower simply shows the right cone's
+ * model instead of a global one.
+ */
 export interface TrayModelSelectionState {
   activeModelId: string;
   scoopJid: string;
@@ -759,6 +777,26 @@ export interface ScoopSummary {
   activity?: 'thinking' | 'tool' | 'awaiting';
   /** Context-window fullness on the same 0-100 scale as the agent tabs. Absent from older leaders. */
   fill?: number;
+  /**
+   * The model THIS unit runs on (#2310). Model selection is per cone and
+   * lives on the leader's work-unit record, so a follower can show — and
+   * change — the model of the cone it is looking at instead of one global
+   * setting.
+   *
+   * Absent from older leaders (and from a unit whose model has not been
+   * backfilled yet): a follower that does not receive it falls back to the
+   * leader's `model.state`, which is what every shipped follower already
+   * renders.
+   */
+  model?: ScoopSummaryModel;
+}
+
+/** Provider-qualified model of one work unit on the wire (#2310). */
+export interface ScoopSummaryModel {
+  /** Provider account id the model runs on (e.g. `anthropic`). */
+  provider: string;
+  /** Bare model id within that provider. */
+  id: string;
 }
 
 /** Lightweight sprinkle description sent to followers for the sprinkle sidebar. */
