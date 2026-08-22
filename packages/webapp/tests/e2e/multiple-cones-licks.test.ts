@@ -24,6 +24,7 @@ import {
   CONE_TEST_TIMEOUT_MS,
   createCone,
   execInTerminal,
+  expectReply,
   PRIMARY_CONE_LABEL,
   selectTab,
   thread,
@@ -41,7 +42,7 @@ test.describe('multiple cones — lick addressing', () => {
     // The extra cone registers its own watcher, from its own shell, with no
     // `--scoop` — the untargeted case.
     await createCone(page, { name: 'watcher', brief: 'watch for your own notes' });
-    await expect(thread(page)).toContainText('Watching for my own notes.', { timeout: 60_000 });
+    await expectReply(page, 'Watching for my own notes.');
 
     // A watcher addressed at the cone BY NAME, created from a shell that is
     // not that cone's.

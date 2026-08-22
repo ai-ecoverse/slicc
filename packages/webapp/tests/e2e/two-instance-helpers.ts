@@ -47,6 +47,21 @@ import { LEADER_ORIGIN } from './playwright.config.js';
  */
 export const CONE_TEST_TIMEOUT_MS = 300_000;
 
+/**
+ * Budget for a spec that runs TWO runtimes over a real tray. It is not the
+ * single-runtime budget with slack: a healthy CI run of the follower scenario
+ * takes ~1.5 min against ~10 s locally, so the ceiling has to absorb a loaded
+ * runner rather than merely a slow one — 300 s left too little headroom and
+ * dropped the PR out of the merge queue.
+ */
+export const TWO_INSTANCE_TEST_TIMEOUT_MS = 600_000;
+
+/** Navigation budget for a boot / join. */
+const NAV_TIMEOUT_MS = 60_000;
+
+/** Budget for a single UI action (a tab click). */
+const ACTION_TIMEOUT_MS = 30_000;
+
 /** Model id every multi-cone fixture advertises and every cone runs on. */
 export const CONE_MODEL = 'fake-cone-primary';
 /** Second advertised model, so a follower has something to switch cone B to. */
@@ -123,7 +138,12 @@ export async function bootMultiConeLeader(page: Page, options: BootLeaderOptions
   // `/api/runtime-config` (see `resolveTrayRuntimeConfig`), which would
   // otherwise point the tray at the production hub.
   if (options.tray) query.set('trayWorkerUrl', LEADER_ORIGIN);
-  await page.goto(`/?${query.toString()}`);
+  // Every navigation and action in this file carries an explicit timeout.
+  // Playwright's defaults are 0 (unbounded, cut off only by the TEST timeout),
+  // which is how a stuck step reports itself as a bare "Test timeout of Nms
+  // exceeded" with no indication of where it was — exactly the CI failure this
+  // rule exists to prevent.
+  await page.goto(`/?${query.toString()}`, { timeout: NAV_TIMEOUT_MS });
   await page.waitForSelector('slicc-input-card');
   await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC', {
     timeout: 30_000,
@@ -205,7 +225,7 @@ export async function joinAsFollower(
 ): Promise<FollowerHandle> {
   const context = await browser.newContext();
   const page = await context.newPage();
-  await page.goto(joinUrl);
+  await page.goto(joinUrl, { timeout: NAV_TIMEOUT_MS });
   await page.waitForSelector('slicc-agent-tabs', { timeout: options.timeoutMs ?? 45_000 });
   // The strip is empty until the first `scoops.list` lands over the tray.
   await expect
@@ -242,7 +262,7 @@ export async function selectTab(page: Page, label: string): Promise<void> {
     .locator('slicc-agent-tabs .slicc-agent-tabs__segment')
     .filter({ has: page.locator('.slicc-agent-tabs__label', { hasText: exact(label) }) })
     .first()
-    .click();
+    .click({ timeout: ACTION_TIMEOUT_MS });
 }
 
 /** The label of the currently selected tab (`active` attribute → descriptor). */
@@ -498,6 +518,92 @@ export async function followerSelectModel(page: Page, modelId: string): Promise<
  */
 export async function chat(page: Page, prompt: string, expectedReply: string): Promise<void> {
   await submitUserMessage(page, prompt);
-  await expect(thread(page)).toContainText(expectedReply, { timeout: 60_000 });
+  await expectReply(page, expectedReply);
   await waitForTurnComplete(page, { timeoutMs: 60_000, riseTimeoutMs: 1_000 });
+}
+
+/**
+ * Wait for a scripted reply — or for the turn to fail, whichever happens first.
+ *
+ * A turn that dies (provider error, fixture overflow, retries exhausted)
+ * renders a `<slicc-error-card>` and NEVER renders the expected text, so a bare
+ * `toContainText` would sit there until the test-level timeout and report
+ * "Test timeout exceeded" with no cause — which is precisely how this spec
+ * burned three 5-minute CI attempts without saying what went wrong. Racing the
+ * two turns that silence into a message naming the agent error.
+ */
+export async function expectReply(
+  page: Page,
+  expectedReply: string,
+  timeoutMs = 60_000
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (await thread(page).getByText(expectedReply, { exact: false }).count()) return;
+    const failure = await agentErrorText(page);
+    if (failure) {
+      throw new Error(
+        `expectReply: the turn failed before rendering ${JSON.stringify(expectedReply)} — ` +
+          `the thread shows an error card: ${failure}`
+      );
+    }
+    await page.waitForTimeout(250);
+  }
+  // Let Playwright produce its usual diff / snapshot for the timeout case.
+  await expect(thread(page)).toContainText(expectedReply, { timeout: 1_000 });
+}
+
+/** Text of the first agent-error card in the thread, if the turn failed. */
+async function agentErrorText(page: Page): Promise<string | null> {
+  return page.evaluate(() => {
+    const card = document.querySelector('slicc-chat-thread slicc-error-card');
+    if (!card) return null;
+    return card.getAttribute('message') ?? card.textContent?.trim() ?? 'unknown error';
+  });
+}
+
+// ── Diagnostics ────────────────────────────────────────────────────
+
+export interface BrowserDiagnostics {
+  /** Every captured line, oldest first, prefixed with its runtime label. */
+  entries: string[];
+  /**
+   * Re-throw helper: returns the error with the captured console tail
+   * appended. A two-instance failure is otherwise reported as a bare Playwright
+   * timeout, with the actual cause (an agent error, a dropped tray socket)
+   * visible only in a 190 MB trace artifact nobody downloads.
+   */
+  annotate(err: unknown): Error;
+}
+
+/**
+ * Capture the console lines that explain a two-instance failure: errors and
+ * warnings from either runtime, plus anything the agent / tray / CDP layers
+ * say. Pass an existing {@link BrowserDiagnostics} as `into` to fold a second
+ * runtime's output into one ordered log.
+ */
+export function watchBrowserDiagnostics(
+  page: Page,
+  label: string,
+  into?: BrowserDiagnostics
+): BrowserDiagnostics {
+  const diagnostics: BrowserDiagnostics = into ?? {
+    entries: [],
+    annotate(err: unknown): Error {
+      const error = err instanceof Error ? err : new Error(String(err));
+      const tail = diagnostics.entries.slice(-40).join('\n');
+      error.message = `${error.message}\n--- browser diagnostics (last 40) ---\n${
+        tail || '(nothing captured)'
+      }`;
+      return error;
+    },
+  };
+  page.on('console', (msg) => {
+    const type = msg.type();
+    if (type === 'error' || type === 'warning' || /(scoop|tray|cdp|model|lick)/i.test(msg.text())) {
+      diagnostics.entries.push(`[${label}.${type}] ${msg.text()}`);
+    }
+  });
+  page.on('pageerror', (err) => diagnostics.entries.push(`[${label}.pageerror] ${err.message}`));
+  return diagnostics;
 }

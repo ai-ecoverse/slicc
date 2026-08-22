@@ -806,10 +806,33 @@ Two more rules the cone scenarios paid for:
   `execInTerminal()`) fires `dock.selectItem('term')` first. A bare wait on the
   global just burns its timeout.
 
-Give a two-instance test its own `test.setTimeout` (the cone suite uses
-`CONE_TEST_TIMEOUT_MS`): the config's 30s default covers one turn, not a cone
-lifecycle plus a tray handshake, and CI is roughly 6× slower than a laptop at
-the object construction underneath both.
+Give a two-instance test its own `test.setTimeout` (`TWO_INSTANCE_TEST_TIMEOUT_MS`,
+10 min; single-runtime cone specs use `CONE_TEST_TIMEOUT_MS`, 5). The config's
+30s default covers one turn, not a cone lifecycle plus a tray handshake — a
+healthy CI run of the follower scenario takes ~1.5 min against ~10s locally, so
+size the ceiling for a LOADED runner, not merely a slow one.
+
+**Bound every step, or a hang tells you nothing.** Playwright's default
+`actionTimeout` / `navigationTimeout` is `0` — unbounded, cut off only by the
+test timeout. A `goto` or `.click()` left at the default turns any stall into a
+bare `Test timeout of Nms exceeded` whose stack points at whatever ran last
+(usually your `finally`). This dropped #2328 out of the merge queue three
+attempts in a row before the cause was even visible. Pass an explicit `timeout`
+to every navigation and action.
+
+**A failed turn never renders the reply you are waiting for.** When a turn dies
+— provider error, fixture overflow, retries exhausted — the thread renders a
+`<slicc-error-card>` and the scripted text never arrives, so `toContainText`
+waits out the whole budget. Use `expectReply()`, which races the expected text
+against that card and throws naming the agent error.
+
+Capture both runtimes' console output with `watchBrowserDiagnostics()` and
+re-throw through `diagnostics.annotate(err)`. Without it a CI failure's cause
+lives only in the trace artifact, which for the `e2e` job is ~190 MB.
+
+Tune `retries` per spec when an attempt is expensive: the follower spec sets
+`test.describe.configure({ retries: 1 })` because three attempts at a 10-minute
+ceiling would consume half the `e2e` job's budget and starve the specs after it.
 
 ### Run the E2E Framework
 

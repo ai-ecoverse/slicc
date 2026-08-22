@@ -29,10 +29,10 @@ import {
   bootMultiConeLeader,
   CONE_MODEL,
   CONE_MODEL_ALT,
-  CONE_TEST_TIMEOUT_MS,
   chat,
   composerIsUsable,
   createCone,
+  expectReply,
   followerSelectModel,
   joinAsFollower,
   leaderJoinUrl,
@@ -40,7 +40,8 @@ import {
   PRIMARY_CONE_LABEL,
   selectTab,
   switcherLabels,
-  thread,
+  TWO_INSTANCE_TEST_TIMEOUT_MS,
+  watchBrowserDiagnostics,
 } from './two-instance-helpers.js';
 
 /**
@@ -50,19 +51,30 @@ import {
 const READ_ONLY_SCOOP_VIEW = false;
 
 test.describe('multiple cones — leader + follower', () => {
+  // One retry, against the config's CI-wide `retries: 2`. Two runtimes and a
+  // real tray make this the most expensive spec in the suite, and its ceiling
+  // is 10 minutes — three attempts at that would be half the `e2e` job's whole
+  // budget, starving the specs after it. A second attempt still absorbs a
+  // genuine blip; a third only pays for the same failure twice more, and the
+  // failure is now diagnostic (bounded steps + `expectReply` + captured console)
+  // rather than a silent timeout, so re-rolling it buys nothing.
+  test.describe.configure({ retries: 1 });
+
   test.beforeEach(async () => {
     await resetFakeLlm();
   });
 
   test('follower mirrors the cone strip and drives one cone’s model', async ({ page, browser }) => {
-    test.setTimeout(CONE_TEST_TIMEOUT_MS);
+    test.setTimeout(TWO_INSTANCE_TEST_TIMEOUT_MS);
+    const diagnostics = watchBrowserDiagnostics(page, 'leader');
     await bootMultiConeLeader(page, { fixture: followerFixture, tray: true });
 
     await createCone(page, { name: 'reviewer', brief: 'review the docs' });
-    await expect(thread(page)).toContainText('Reviewer cone online.', { timeout: 60_000 });
+    await expectReply(page, 'Reviewer cone online.');
     await chat(page, 'spawn a helper scoop', 'Helper scoop is ready.');
 
     const follower = await joinAsFollower(browser, await leaderJoinUrl(page));
+    watchBrowserDiagnostics(follower.page, 'follower', diagnostics);
     try {
       // ── The strip mirrors, order and all ────────────────────────────
       const leaderStrip = await switcherLabels(page);
@@ -89,6 +101,8 @@ test.describe('multiple cones — leader + follower', () => {
       await expect.poll(() => modelPill(page), { timeout: 60_000 }).toBe(CONE_MODEL_ALT);
       await selectTab(page, PRIMARY_CONE_LABEL);
       await expect.poll(() => modelPill(page), { timeout: 30_000 }).toBe(CONE_MODEL);
+    } catch (err) {
+      throw diagnostics.annotate(err);
     } finally {
       await follower.close();
     }
@@ -104,14 +118,16 @@ test.describe('multiple cones — leader + follower', () => {
    */
   test('a scoop is a read-only transcript on both sides', async ({ page, browser }) => {
     test.fixme(!READ_ONLY_SCOOP_VIEW, 'awaiting #2312 — read-only scoop view');
-    test.setTimeout(CONE_TEST_TIMEOUT_MS);
+    test.setTimeout(TWO_INSTANCE_TEST_TIMEOUT_MS);
+    const diagnostics = watchBrowserDiagnostics(page, 'leader');
     await bootMultiConeLeader(page, { fixture: followerFixture, tray: true });
 
     await createCone(page, { name: 'reviewer', brief: 'review the docs' });
-    await expect(thread(page)).toContainText('Reviewer cone online.', { timeout: 60_000 });
+    await expectReply(page, 'Reviewer cone online.');
     await chat(page, 'spawn a helper scoop', 'Helper scoop is ready.');
 
     const follower = await joinAsFollower(browser, await leaderJoinUrl(page));
+    watchBrowserDiagnostics(follower.page, 'follower', diagnostics);
     try {
       // A scoop is a transcript, not a conversation: no composer to type into.
       await selectTab(page, 'helper');
@@ -126,6 +142,8 @@ test.describe('multiple cones — leader + follower', () => {
       await selectTab(page, 'reviewer');
       await expect.poll(() => activeTabLabel(page), { timeout: 30_000 }).toBe('reviewer');
       expect(await composerIsUsable(page)).toBe(true);
+    } catch (err) {
+      throw diagnostics.annotate(err);
     } finally {
       await follower.close();
     }

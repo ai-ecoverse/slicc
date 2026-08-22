@@ -26,6 +26,7 @@ import {
   createCone,
   dropSelectedCone,
   expandFreezerRail,
+  expectReply,
   freezerCardTitles,
   openFreezerCard,
   PRIMARY_CONE_LABEL,
@@ -55,7 +56,7 @@ test.describe('multiple cones — leader', () => {
 
     // A brief starts the cone's first turn immediately.
     await createCone(page, { name: 'reviewer', brief: 'review the docs' });
-    await expect(thread(page)).toContainText('Reviewer cone online.', { timeout: 60_000 });
+    await expectReply(page, 'Reviewer cone online.');
     expect(await activeTabLabel(page)).toBe('reviewer');
 
     // A scoop spawned from the new cone sits behind the cones in the strip.
@@ -102,7 +103,7 @@ test.describe('multiple cones — leader', () => {
     await bootMultiConeLeader(page, { fixture: railFixture });
 
     await createCone(page, { name: 'reviewer', brief: 'review the docs' });
-    await expect(thread(page)).toContainText('Reviewer cone online.', { timeout: 60_000 });
+    await expectReply(page, 'Reviewer cone online.');
     await chat(page, 'round one alpha', 'Ack alpha.');
     await chat(page, 'round one beta', 'Ack beta.');
 
