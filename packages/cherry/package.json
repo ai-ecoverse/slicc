@@ -16,7 +16,7 @@
     "dist"
   ],
   "dependencies": {
-    "html2canvas-pro": "^2.0.4"
+    "html2canvas-pro": "2.3.9"
   },
   "scripts": {
     "build": "tsc -p tsconfig.build.json && node scripts/build-preview-bootstrap.mjs",
@@ -24,9 +24,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json"
   },
   "devDependencies": {
-    "@types/jsdom": "^30.0.0",
-    "esbuild": "^0.28.1",
-    "jsdom": "^30.0.0",
+    "@types/jsdom": "30.0.0",
+    "esbuild": "0.28.2",
+    "jsdom": "30.0.1",
     "typescript": "7.0.2"
   }
 }
