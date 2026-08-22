@@ -82,10 +82,12 @@ struct StartupSettingsView: View {
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Divider()
-            Toggle(isOn: Binding(
-                get: { fileProviderCoordinator.isEnabled },
-                set: { fileProviderCoordinator.isEnabled = $0 }
-            )) {
+            Toggle(
+                isOn: Binding(
+                    get: { fileProviderCoordinator.isEnabled },
+                    set: { fileProviderCoordinator.isEnabled = $0 }
+                )
+            ) {
                 Text("Show leader files in Finder")
             }
             .accessibilityIdentifier("finder-file-provider")
