@@ -46,9 +46,11 @@ enum SecretNameValidator {
 }
 
 struct SettingsView: View {
+    var fileProviderCoordinator: FileProviderCoordinator
+
     var body: some View {
         TabView {
-            StartupSettingsView()
+            StartupSettingsView(fileProviderCoordinator: fileProviderCoordinator)
                 .tabItem { Label("Startup", systemImage: "power") }
             TerminalsSettingsView()
                 .tabItem { Label("Terminals", systemImage: "terminal") }
@@ -61,6 +63,7 @@ struct SettingsView: View {
 // MARK: - Startup tab
 
 struct StartupSettingsView: View {
+    var fileProviderCoordinator: FileProviderCoordinator
     @AppStorage(StartupPreference.enabledKey) private var launchAtStartup = false
     @State private var topBrowserName: String?
     @State private var isDefaultBrowser = false
@@ -78,6 +81,21 @@ struct StartupSettingsView: View {
             Text("Launches the browser at the top of your Browsers list. Drag to reorder that list in the main window to change which one starts.")
                 .font(.caption)
                 .foregroundStyle(.secondary)
+            Divider()
+            Toggle(isOn: Binding(
+                get: { fileProviderCoordinator.isEnabled },
+                set: { fileProviderCoordinator.isEnabled = $0 }
+            )) {
+                Text("Show leader files in Finder")
+            }
+            .accessibilityIdentifier("finder-file-provider")
+            Text(
+                "Mounts the leader workspace under Finder → Locations as \"Sliccy\". "
+                    + "Enable the extension once in System Settings → Login Items & Extensions → File Provider. "
+                    + "The mount is only available while a leader is running."
+            )
+            .font(.caption)
+            .foregroundStyle(.secondary)
             // Only offered alongside auto-launch: as the default browser
             // Sliccstart hands every link to the leader browser, so without a
             // leader waiting at startup the links would have nowhere to go.

@@ -121,6 +121,41 @@ const overlayDest = copyElectronOverlayEntry({
 console.log(`Copied Electron overlay bootstrap: ${overlayDest}`);
 
 // ---------------------------------------------------------------------------
+// 3c. File Provider extension (Finder integration)
+// ---------------------------------------------------------------------------
+const fileProviderProject = resolve(__dirname, 'SliccstartFileProvider.xcodeproj');
+const fileProviderAppex = resolve(
+  __dirname,
+  'build/DerivedData/Build/Products/Release/SliccFileProvider.appex'
+);
+if (existsSync(resolve(__dirname, 'project.yml'))) {
+  console.log('Building SliccFileProvider appex...');
+  execSync('xcodegen generate', { cwd: __dirname, stdio: 'inherit' });
+  execSync(
+    [
+      'xcodebuild build',
+      `-project "${fileProviderProject}"`,
+      '-scheme SliccFileProvider',
+      '-configuration Release',
+      `-derivedDataPath "${resolve(__dirname, 'build/DerivedData')}"`,
+      'CODE_SIGNING_ALLOWED=NO',
+      'ONLY_ACTIVE_ARCH=NO',
+    ].join(' '),
+    { cwd: __dirname, stdio: 'inherit' }
+  );
+  if (!existsSync(fileProviderAppex)) {
+    console.error(`ERROR: SliccFileProvider.appex not found at ${fileProviderAppex}`);
+    process.exit(1);
+  }
+  const plugIns = resolve(contents, 'PlugIns');
+  mkdirSync(plugIns, { recursive: true });
+  cpSync(fileProviderAppex, resolve(plugIns, 'SliccFileProvider.appex'), { recursive: true });
+  console.log('Copied SliccFileProvider.appex into Contents/PlugIns/');
+} else {
+  console.warn('WARN: project.yml missing — skipping File Provider appex');
+}
+
+// ---------------------------------------------------------------------------
 // 3b. Credits.html (About panel website link)
 // ---------------------------------------------------------------------------
 const creditsSrc = resolve(__dirname, 'Sliccstart/Resources/Credits.html');

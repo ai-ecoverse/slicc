@@ -40,6 +40,7 @@ jobs:
       swift-optel: ${{ steps.filter.outputs.swift-optel }}
       swift-traysession: ${{ steps.filter.outputs.swift-traysession }}
       swift-trayfollower: ${{ steps.filter.outputs.swift-trayfollower }}
+      swift-traykit: ${{ steps.filter.outputs.swift-traykit }}
       swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
       ios-app: ${{ steps.filter.outputs.ios-app }}
       go-optel: ${{ steps.filter.outputs.go-optel }}
@@ -87,6 +88,8 @@ jobs:
               - 'packages/swift-traysession/**'
             swift-trayfollower:
               - 'packages/swift-trayfollower/**'
+            swift-traykit:
+              - 'packages/swift-traykit/**'
             swift-launcher:
               - 'packages/swift-launcher/**'
             ios-app:
@@ -1172,6 +1175,7 @@ jobs:
       needs.changes.outputs.is-queue-leader == 'true' &&
       (needs.changes.outputs.swift-server == 'true' ||
       needs.changes.outputs.swift-trayfollower == 'true' ||
+      needs.changes.outputs.swift-traykit == 'true' ||
       needs.changes.outputs.swift-config == 'true')
     runs-on: macos-latest
     steps:
@@ -1385,6 +1389,57 @@ jobs:
           # blocking PRs while existing findings get cleaned up incrementally.
           cd packages/swift-trayfollower && periphery scan --disable-update-check || true
 
+  swift-traykit:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.swift-traykit == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-traykit && swiftlint lint --reporter github-actions-logging
+      - name: Lint (swift-format)
+        run: cd packages/swift-traykit && swift format lint --strict --parallel --recursive Sources Tests Package.swift
+      - name: Build
+        run: cd packages/swift-traykit && swift build -c release
+      - name: Build (iOS Simulator)
+        run: |
+          cd packages/swift-traykit
+          xcodebuild build -scheme SliccTrayVFS \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath .build/xcodebuild-ios
+      - name: Test (with coverage threshold gate)
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-traykit SliccTrayVFSPackageTests
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-swift-traykit
+          path: packages/swift-traykit/.build/coverage/
+          if-no-files-found: ignore
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timings-swift-traykit
+          path: packages/swift-traykit/.build/coverage/test-timings*
+          if-no-files-found: ignore
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+          cd packages/swift-traykit && periphery scan --disable-update-check || true
+
   swift-launcher:
     needs: [changes, lint]
     # The launcher no longer bundles the webapp (`dist/ui`) — the UI loads from
@@ -1406,6 +1461,7 @@ jobs:
       needs.changes.outputs.swift-server == 'true' ||
       needs.changes.outputs.swift-optel == 'true' ||
       needs.changes.outputs.swift-traysession == 'true' ||
+      needs.changes.outputs.swift-traykit == 'true' ||
       needs.changes.outputs.swift-config == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.assets == 'true' ||
@@ -1438,9 +1494,9 @@ jobs:
             packages/swift-launcher/.build
             !packages/swift-launcher/.build/coverage
             packages/swift-server/.build
-          key: swift-launcher-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.id }}-${{ hashFiles('packages/swift-launcher/Package.*', 'packages/swift-server/Package.*', 'packages/swift-optel/Package.*', 'packages/swift-traysession/Package.*') }}-${{ hashFiles('packages/swift-launcher/Sliccstart/**', 'packages/swift-launcher/SliccstartTests/**', 'packages/swift-server/Sources/**', 'packages/swift-server/Tests/**', 'packages/swift-optel/Sources/**', 'packages/swift-traysession/Sources/**') }}
+          key: swift-launcher-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.id }}-${{ hashFiles('packages/swift-launcher/Package.*', 'packages/swift-server/Package.*', 'packages/swift-optel/Package.*', 'packages/swift-traysession/Package.*', 'packages/swift-traykit/Package.*') }}-${{ hashFiles('packages/swift-launcher/Sliccstart/**', 'packages/swift-launcher/SliccstartTests/**', 'packages/swift-launcher/SliccFileProvider/**', 'packages/swift-server/Sources/**', 'packages/swift-server/Tests/**', 'packages/swift-optel/Sources/**', 'packages/swift-traysession/Sources/**', 'packages/swift-traykit/Sources/**') }}
           restore-keys: |
-            swift-launcher-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.id }}-${{ hashFiles('packages/swift-launcher/Package.*', 'packages/swift-server/Package.*', 'packages/swift-optel/Package.*', 'packages/swift-traysession/Package.*') }}-
+            swift-launcher-build-${{ runner.os }}-${{ runner.arch }}-${{ steps.swift-toolchain.outputs.id }}-${{ hashFiles('packages/swift-launcher/Package.*', 'packages/swift-server/Package.*', 'packages/swift-optel/Package.*', 'packages/swift-traysession/Package.*', 'packages/swift-traykit/Package.*') }}-
       - name: Lint (SwiftLint)
         run: cd packages/swift-launcher && swiftlint lint --reporter github-actions-logging
       # swift-format ships with the toolchain; config is the root .swift-format.
@@ -1484,6 +1540,8 @@ jobs:
         # webapp-free esbuild) and must exist before assembly or
         # `copyElectronOverlayEntry` fails fast.
         run: npm run build -w @ai-ecoverse/spoon
+      - name: Install XcodeGen
+        run: brew install xcodegen
       - name: Build
         run: npm run build -w @slicc/swift-launcher
       - name: Upload Sliccstart.app artifact (unsigned, for PR verification)
@@ -1508,6 +1566,7 @@ jobs:
       (needs.changes.outputs.ios-app == 'true' ||
       needs.changes.outputs.swift-traysession == 'true' ||
       needs.changes.outputs.swift-trayfollower == 'true' ||
+      needs.changes.outputs.swift-traykit == 'true' ||
       needs.changes.outputs.swift-config == 'true')
     # The iOS 26 deployment target requires the Xcode 26 SDK.
     runs-on: macos-26
@@ -1587,6 +1646,7 @@ jobs:
       (needs.changes.outputs.ios-app == 'true' ||
       needs.changes.outputs.swift-traysession == 'true' ||
       needs.changes.outputs.swift-trayfollower == 'true' ||
+      needs.changes.outputs.swift-traykit == 'true' ||
       needs.changes.outputs.swift-config == 'true')
     strategy:
       fail-fast: false
@@ -1864,6 +1924,7 @@ jobs:
         swift-optel,
         swift-traysession,
         swift-trayfollower,
+        swift-traykit,
         ios-app,
         ios-app-tests,
         go-optel,

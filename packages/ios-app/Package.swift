@@ -24,6 +24,7 @@ let package = Package(
         .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor(from: "150.0.0")),
         .package(path: "../swift-traysession"),
         .package(path: "../swift-trayfollower"),
+        .package(path: "../swift-traykit"),
     ],
     targets: [
         .target(
@@ -38,6 +39,9 @@ let package = Package(
                 // Models/ + Networking/), now shared with swift-server. Re-exported
                 // module-wide via SliccTrayKit/TrayFollowerExports.swift.
                 .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
+                // Shared leader VFS / File Provider logic (FsClient, credentials,
+                // LeaderVFSProvider). Re-exported via TrayVFSExports.swift.
+                .product(name: "SliccTrayVFS", package: "swift-traykit"),
             ],
             path: "SliccTrayKit"
         ),

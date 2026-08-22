@@ -156,6 +156,11 @@
       "functions": 48,
       "regions": 74
     },
+    "swift-traykit": {
+      "lines": 60,
+      "functions": 55,
+      "regions": 58
+    },
     "ios-app": {
       "lines": 73,
       "functions": 72,

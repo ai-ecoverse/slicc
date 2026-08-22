@@ -1,7 +1,7 @@
 import FileProvider
 import XCTest
 
-@testable import SliccFollower
+@testable import SliccTrayVFS
 
 @MainActor
 final class FileProviderDomainLifecycleTests: XCTestCase {

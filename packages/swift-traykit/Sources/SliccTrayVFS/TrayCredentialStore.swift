@@ -20,15 +20,15 @@ public struct TrayCredentials: Equatable, Sendable {
     }
 }
 
-protocol TrayCredentialKeychain: AnyObject {
+public protocol TrayCredentialKeychain: AnyObject {
     func read() -> Data?
     func write(_ data: Data) -> Bool
     func clear()
 }
 
 public final class TrayCredentialStore {
-    public static let appGroupIdentifier = "group.ai.sliccy.follower"
-    public static let keychainAccessGroup = "S8LB56P782.ai.sliccy.follower.credentials"
+    public static var appGroupIdentifier: String { TrayCredentialConfiguration.appGroupIdentifier }
+    public static var keychainAccessGroup: String { TrayCredentialConfiguration.keychainAccessGroup }
 
     private enum MetadataKey {
         static let trayID = "trayCredential.trayID"

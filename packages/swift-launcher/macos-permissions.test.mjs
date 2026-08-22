@@ -88,3 +88,27 @@ describe('Sliccstart iCloud sync packaging', () => {
     expect(signingScript).toContain('ERROR: PROVISION_PROFILE set but file not found');
   });
 });
+
+describe('Sliccstart File Provider packaging', () => {
+  it('declares the team-prefixed app group for credential sharing', () => {
+    expect(entitlements).toContain('S8LB56P782.com.slicc.sliccstart.fileprovider');
+  });
+
+  it('builds and embeds the File Provider appex when project.yml is present', () => {
+    expect(assemblySource).toContain('SliccFileProvider.appex');
+    expect(assemblySource).toContain('Contents/PlugIns/');
+  });
+
+  it('signs the embedded appex with sandbox entitlements in both signing paths', () => {
+    expect(signingScript).toContain('SliccFileProvider.entitlements');
+    expect(signingScript.match(/SliccFileProvider\.entitlements/g)).toHaveLength(2);
+    expect(signingScript.match(/PlugIns\/SliccFileProvider\.appex/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('signs the appex innermost-first, before the outer app', () => {
+    const appex = signingScript.indexOf('PlugIns/SliccFileProvider.appex');
+    const outer = signingScript.lastIndexOf('--entitlements "$ENTITLEMENTS"');
+    expect(appex).toBeGreaterThanOrEqual(0);
+    expect(appex).toBeLessThan(outer);
+  });
+});

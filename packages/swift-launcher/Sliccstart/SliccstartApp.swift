@@ -18,6 +18,7 @@ private let log = Logger(subsystem: "com.slicc.sliccstart", category: "App")
 final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
     let sliccProcess = SliccProcess()
     let sessionStore = TraySessionSyncStore()
+    let fileProviderCoordinator = FileProviderCoordinator()
     /// Created on the first incoming link (only reachable while Sliccstart is
     /// the default web browser, or the handler for an HTML document) and kept
     /// afterwards, so its queue survives a burst of clicks.
@@ -49,6 +50,7 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
         sliccProcess.stopAll()
         // The leader is going away, so stop advertising it to other devices.
         sessionStore.withdrawLocalSessions()
+        fileProviderCoordinator.withdrawOnQuit()
     }
 }
 
@@ -91,6 +93,7 @@ struct SliccstartApp: App {
 
     private var sliccProcess: SliccProcess { appDelegate.sliccProcess }
     private var sessionStore: TraySessionSyncStore { appDelegate.sessionStore }
+    private var fileProviderCoordinator: FileProviderCoordinator { appDelegate.fileProviderCoordinator }
     private var isUpdateDownloaded: Bool {
         if case .downloaded = appUpdater.state { return true }
         return false
@@ -207,8 +210,10 @@ struct SliccstartApp: App {
                 if let joinUrl = newValue, !joinUrl.isEmpty {
                     let label = sliccProcess.leaderTargetName ?? "SLICC"
                     sessionStore.publish(joinUrl: joinUrl, label: label)
+                    fileProviderCoordinator.leaderJoinUrlChanged(joinUrl, label: label)
                 } else {
                     sessionStore.withdrawLocalSessions()
+                    fileProviderCoordinator.leaderJoinUrlChanged(nil, label: nil)
                 }
             }
             .onReceive(sessionRepublishTimer) { _ in
@@ -276,7 +281,7 @@ struct SliccstartApp: App {
         }
 
         Settings {
-            SettingsView()
+            SettingsView(fileProviderCoordinator: appDelegate.fileProviderCoordinator)
         }
     }
 
