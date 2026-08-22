@@ -898,6 +898,7 @@ struct ConversationView: View {
             MessageListView(
                 messages: appState.messages,
                 isStreaming: appState.isStreaming,
+                toolProgress: appState.toolProgress,
                 toolUICards: appState.toolUICards,
                 openApprovals: appState.openApprovals,
                 onOpenApprovalDecision: appState.resolveOpenApproval,
@@ -1012,6 +1013,7 @@ struct FixtureConversationView: View {
             MessageListView(
                 messages: messages,
                 isStreaming: messages.last?.isStreaming == true,
+                toolProgress: ChatFixture.toolProgress,
                 toolUICards: [
                     ToolUIPlaceholder(requestId: "fx-tool-ui-1", html: ChatFixture.toolUIHtml)
                 ],

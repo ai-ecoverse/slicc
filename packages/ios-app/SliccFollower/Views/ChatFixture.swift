@@ -334,6 +334,48 @@ enum ChatFixture {
                 error: true
             ))
 
+        // 6b. Bash progress overlay (#2282) — one in-flight call carrying a
+        // determinate unit, plus a parallel batch that collapses into the
+        // cluster head so both progress treatments are on screen at once.
+        out.append(
+            ChatMessage(
+                id: "fx-assistant-progress", role: .assistant,
+                content: "Fetching the archive and warming the caches.",
+                timestamp: ts(18.5),
+                toolCalls: [
+                    ToolCall(
+                        id: progressRowId, name: "bash",
+                        input: AnyCodable(
+                            ["command": "curl -O https://example.com/big.tar.gz"]
+                                as [String: Any]),
+                        result: nil, isError: nil
+                    )
+                ]
+            ))
+        out.append(
+            ChatMessage(
+                id: "fx-assistant-progress-cluster", role: .assistant,
+                content: "Running the three checks in parallel.",
+                timestamp: ts(18.7),
+                toolCalls: [
+                    ToolCall(
+                        id: clusterRowIds[0], name: "bash",
+                        input: AnyCodable(["command": "npm run lint"] as [String: Any]),
+                        result: "0 problems", isError: nil
+                    ),
+                    ToolCall(
+                        id: clusterRowIds[1], name: "bash",
+                        input: AnyCodable(["command": "npm run typecheck"] as [String: Any]),
+                        result: nil, isError: nil
+                    ),
+                    ToolCall(
+                        id: clusterRowIds[2], name: "bash",
+                        input: AnyCodable(["command": "npm run test"] as [String: Any]),
+                        result: nil, isError: nil
+                    ),
+                ]
+            ))
+
         // 7. Queued messages + streaming tail
         out.append(
             ChatMessage(
@@ -359,6 +401,32 @@ enum ChatFixture {
 
         return out
     }
+
+    // MARK: - Tool progress fixture
+
+    /// Row ids the progress fixture pins its units to. Real rows are keyed
+    /// `<messageId>:<toolCallId>` (see `AppState.toolRowId`); the fixture keeps
+    /// the same shape so the lookup it exercises is the real one.
+    private static let progressRowId = "fx-assistant-progress:call-curl"
+    private static let clusterRowIds = [
+        "fx-assistant-progress-cluster:call-lint",
+        "fx-assistant-progress-cluster:call-typecheck",
+        "fx-assistant-progress-cluster:call-test",
+    ]
+
+    /// Live progress units for the fixture transcript — a determinate download
+    /// with an ETA, one determinate call inside the cluster and one
+    /// indeterminate one, so every branch of the treatment renders at once.
+    static let toolProgress: [String: ToolProgressEvent] = [
+        progressRowId: ToolProgressEvent(
+            id: "curl-1", label: "curl …/big.tar.gz", fraction: 0.43, etaMs: 8_000,
+            done: 45_678_901, total: 106_000_000, unit: "bytes", phase: .update),
+        clusterRowIds[1]: ToolProgressEvent(
+            id: "tsc-1", label: "tsc --noEmit", fraction: 0.72, etaMs: 21_000,
+            phase: .update),
+        clusterRowIds[2]: ToolProgressEvent(
+            id: "vitest-1", label: "vitest run", phase: .start),
+    ]
 
     /// Build a lick row with the standard `[Channel Event: name]\n```json …```` body.
     private static func lick(

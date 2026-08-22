@@ -62,7 +62,56 @@ extension AppState {
         else { return }
         buffer[idx].toolCalls?[tcIdx].result = result
         buffer[idx].toolCalls?[tcIdx].isError = isError
+        // A settled call has no progress left to report. The leader sends a
+        // `phase: end` tick too, but only for units it opened — clearing here
+        // covers a call that died mid-run.
+        if let rowId = buffer[idx].toolCalls?[tcIdx].id { toolProgress[rowId] = nil }
         publish(buffer: buffer, scoopJid: scoopJid, isVisible: isVisible)
+    }
+
+    /// Live progress tick for a running call. Ticks arrive up to ~4/s per unit,
+    /// so this only touches the `toolProgress` map — the transcript itself is
+    /// unchanged, and the row treatment redraws off that one published value.
+    /// Progress for a background scoop is kept: switching to it mid-run should
+    /// find the bar where the leader left it.
+    func applyToolProgress(
+        messageId: String, toolName: String, progress: ToolProgressEvent, toolCallId: String?,
+        buffer: [ChatMessage]
+    ) {
+        guard let idx = buffer.firstIndex(where: { $0.id == messageId }),
+            let tcIdx = Self.toolCallIndex(
+                in: buffer[idx].toolCalls, messageId: messageId, toolName: toolName,
+                toolCallId: toolCallId),
+            let rowId = buffer[idx].toolCalls?[tcIdx].id
+        else { return }
+        if progress.phase == .end {
+            toolProgress[rowId] = nil
+        } else {
+            toolProgress[rowId] = progress
+        }
+    }
+
+    /// Drop the units belonging to one message's rows. Called when that turn
+    /// ends (or dies), which is per-message and therefore per-scoop: clearing
+    /// on the `isStreaming` edge instead would wipe a background scoop's bars
+    /// the moment you switched to another one, since `selectScoop` moves that
+    /// flag too.
+    func clearToolProgress(for message: ChatMessage) {
+        guard !toolProgress.isEmpty else { return }
+        for call in message.toolCalls ?? [] { toolProgress[call.id] = nil }
+    }
+
+    /// A snapshot is the leader re-describing a scoop's transcript. Rows it
+    /// dropped can never be rendered again, so their units would sit in the map
+    /// forever; rows it kept stay live (the leader mints the same
+    /// `<messageId>:<toolCallId>` row ids the follower does), so a run that
+    /// spans a reconnect keeps its bar.
+    func pruneToolProgress(replacing old: [ChatMessage], with new: [ChatMessage]) {
+        guard !toolProgress.isEmpty else { return }
+        let surviving = Set(new.flatMap { $0.toolCalls ?? [] }.map(\.id))
+        for call in old.flatMap({ $0.toolCalls ?? [] }) where !surviving.contains(call.id) {
+            toolProgress[call.id] = nil
+        }
     }
 
     /// Commit a mutated scoop buffer, mirroring it onto the visible transcript.

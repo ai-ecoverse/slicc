@@ -184,6 +184,59 @@ public struct ChatMessageUsage: Codable, Hashable {
     }
 }
 
+// MARK: - ToolProgressEvent
+
+/// Mirrors `ToolProgressEvent` from `packages/shared-ts/src/agent-wire-types.ts`
+/// — one live progress unit for a running tool call (the bash overlay, #2282).
+/// Ticks arrive up to ~4/s per unit, so keep this cheap to decode.
+public struct ToolProgressEvent: Codable, Hashable {
+    /// Stable id per running unit (command invocation or loop).
+    public let id: String
+    /// Human label: "sleep 30", "curl …/big.tar.gz", "for (3 of 12)".
+    public let label: String
+    /// 0..1 when determinate; `nil` means an indeterminate unit.
+    public let fraction: Double?
+    /// Best-effort remaining ms; `nil` when unknown.
+    public let etaMs: Double?
+    /// Optional unit counters, e.g. bytes or iterations.
+    public let done: Double?
+    public let total: Double?
+    /// `bytes`, `iterations` or `ms` on the wire. Kept as a raw string: the
+    /// follower only branches on `iterations`, and an unknown unit from a newer
+    /// leader must not fail the decode of the whole agent event.
+    public let unit: String?
+    public let phase: ToolProgressPhase
+
+    public init(
+        id: String, label: String, fraction: Double? = nil, etaMs: Double? = nil,
+        done: Double? = nil, total: Double? = nil, unit: String? = nil,
+        phase: ToolProgressPhase = .update
+    ) {
+        self.id = id
+        self.label = label
+        self.fraction = fraction
+        self.etaMs = etaMs
+        self.done = done
+        self.total = total
+        self.unit = unit
+        self.phase = phase
+    }
+}
+
+/// Lifecycle of a progress unit. Lenient like `LickState` — an unrecognized
+/// phase reads as `.update`, which keeps the treatment on screen rather than
+/// tearing it down on a value a newer leader invented.
+public enum ToolProgressPhase: String, Codable {
+    case start
+    case update
+    case end
+
+    public init(from decoder: Decoder) throws {
+        let raw = try decoder.singleValueContainer().decode(String.self)
+        self = ToolProgressPhase(rawValue: raw) ?? .update
+    }
+}
+
 // MARK: - LickState
 
 /// Mirrors `LickState` from agent-wire-types.ts: the settled result of an

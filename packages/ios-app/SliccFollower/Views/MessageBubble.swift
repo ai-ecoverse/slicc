@@ -10,6 +10,10 @@ struct MessageBubble: View {
     let message: ChatMessage
     /// Optional callback for inline sprinkle licks (forwarded to AppState).
     var onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)?
+    /// Live progress units for the tool rows in this message, keyed by row id
+    /// (`AppState.toolProgress`). Empty for history and for every fixture that
+    /// does not stage a run.
+    var toolProgress: [String: ToolProgressEvent] = [:]
 
     @Environment(\.palette) private var palette
 
@@ -234,8 +238,16 @@ struct MessageBubble: View {
     /// the parsed input + (truncated) result.
     @ViewBuilder
     private func singleToolCallRow(_ tc: ToolCall) -> some View {
+        let unit = toolProgress[tc.id]
         DisclosureGroup {
             VStack(alignment: .leading, spacing: 4) {
+                // The bar rides the OPEN body only, like the web row's
+                // `::before` — a closed row already carries the icon fill and
+                // the dots.
+                if let unit {
+                    ToolProgressBar(unit: unit, color: palette.accent)
+                        .padding(.bottom, 2)
+                }
                 if let preview = toolPreview(for: tc), !preview.isEmpty {
                     Text(preview)
                         .font(.system(.caption2, design: .monospaced))
@@ -261,9 +273,9 @@ struct MessageBubble: View {
                 Circle()
                     .fill(SliccIcons.toolStatusColor(tc))
                     .frame(width: 6, height: 6)
-                Image(systemName: SliccIcons.tool(tc.name))
-                    .font(.system(size: 11))
-                    .foregroundStyle(palette.ink.opacity(0.55))
+                ToolProgressIcon(
+                    systemName: SliccIcons.tool(tc.name), size: 11, unit: unit,
+                    base: palette.ink.opacity(0.55), accent: palette.accent)
                 Text(SliccIcons.toolTitle(tc.name))
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(palette.ink.opacity(0.7))
@@ -274,7 +286,17 @@ struct MessageBubble: View {
                         .lineLimit(1)
                         .truncationMode(.tail)
                 }
-                if tc.result == nil {
+                if let unit {
+                    // A running unit replaces the spinner: the dots say how far
+                    // in, the caption says how far left.
+                    Spacer(minLength: 4)
+                    Text(toolProgressCaption(unit))
+                        .font(.system(size: 10, design: .monospaced))
+                        .foregroundStyle(palette.ink.opacity(0.45))
+                        .lineLimit(1)
+                        .accessibilityHidden(true)
+                    ToolProgressDots(unit: unit, color: palette.ink.opacity(0.7))
+                } else if tc.result == nil {
                     ProgressView()
                         .scaleEffect(0.5)
                         .frame(width: 12, height: 12)
@@ -308,9 +330,10 @@ struct MessageBubble: View {
             }
         } label: {
             HStack(spacing: 6) {
-                Image(systemName: "gearshape.fill")
-                    .font(.system(size: 11))
-                    .foregroundStyle(palette.ink.opacity(0.55))
+                ToolProgressIcon(
+                    systemName: "gearshape.fill", size: 11,
+                    unit: aggregateToolProgress(calls: toolCalls, progress: toolProgress),
+                    base: palette.ink.opacity(0.55), accent: palette.accent)
                 Text("Working")
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(palette.ink.opacity(0.7))

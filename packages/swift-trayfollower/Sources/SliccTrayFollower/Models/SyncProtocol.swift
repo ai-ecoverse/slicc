@@ -28,6 +28,11 @@ public enum AgentEvent: Codable {
     case toolResult(
         messageId: String, toolName: String, result: String, isError: Bool?,
         toolCallId: String? = nil)
+    /// Live progress for a running tool call (the bash overlay, #2282). Ticks
+    /// arrive up to ~4/s per unit; `phase == .end` clears the treatment.
+    case toolProgress(
+        messageId: String, toolName: String, progress: ToolProgressEvent,
+        toolCallId: String? = nil)
     case toolUI(messageId: String, toolName: String, requestId: String, html: String)
     case toolUIDone(messageId: String, requestId: String)
     case turnEnd(messageId: String)
@@ -38,6 +43,7 @@ public enum AgentEvent: Codable {
 
     private enum CodingKeys: String, CodingKey {
         case type, messageId, text, toolName, toolInput, result, isError, error, toolCallId
+        case progress
         case model, usage, requestId, html, base64, url
     }
 
@@ -68,6 +74,12 @@ public enum AgentEvent: Codable {
                 toolName: try container.decode(String.self, forKey: .toolName),
                 result: try container.decode(String.self, forKey: .result),
                 isError: try container.decodeIfPresent(Bool.self, forKey: .isError),
+                toolCallId: try container.decodeIfPresent(String.self, forKey: .toolCallId))
+        case "tool_progress":
+            self = .toolProgress(
+                messageId: try container.decode(String.self, forKey: .messageId),
+                toolName: try container.decode(String.self, forKey: .toolName),
+                progress: try container.decode(ToolProgressEvent.self, forKey: .progress),
                 toolCallId: try container.decodeIfPresent(String.self, forKey: .toolCallId))
         case "tool_ui":
             self = .toolUI(
@@ -121,6 +133,12 @@ public enum AgentEvent: Codable {
             try container.encode(toolName, forKey: .toolName)
             try container.encode(result, forKey: .result)
             try container.encodeIfPresent(isError, forKey: .isError)
+            try container.encodeIfPresent(toolCallId, forKey: .toolCallId)
+        case .toolProgress(let messageId, let toolName, let progress, let toolCallId):
+            try container.encode("tool_progress", forKey: .type)
+            try container.encode(messageId, forKey: .messageId)
+            try container.encode(toolName, forKey: .toolName)
+            try container.encode(progress, forKey: .progress)
             try container.encodeIfPresent(toolCallId, forKey: .toolCallId)
         case .toolUI(let messageId, let toolName, let requestId, let html):
             try container.encode("tool_ui", forKey: .type)
