@@ -1,5 +1,6 @@
 import Foundation
 import SliccTraySession
+import UIKit
 
 /// Delivery-failure surfacing, separated from the main type body so the
 /// connection coordinator stays under the lint size cap.
@@ -34,5 +35,23 @@ extension AppState {
             }
         #endif
         return TraySessionSyncStore()
+    }
+
+    /// Recently-connected join URLs, synced through the same iCloud KVS under
+    /// their own key namespace. Unlike `sessionStore` the phone *is* a
+    /// producer here: a URL pasted into this device is otherwise invisible to
+    /// every other one. `deviceName` is passed explicitly because the shared
+    /// package is Foundation-only and cannot reach `UIDevice`.
+    static func makeRecentJoinStore() -> RecentJoinStore {
+        #if DEBUG
+            if let fixture = UITestHooks.recentJoinsFixtureBackend() {
+                return RecentJoinStore(
+                    backend: fixture,
+                    deviceId: "ios-under-test",
+                    deviceName: "iPhone Under Test"
+                )
+            }
+        #endif
+        return RecentJoinStore(deviceName: UIDevice.current.name)
     }
 }

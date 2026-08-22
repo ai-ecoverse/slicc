@@ -47,6 +47,7 @@ struct SettingsView: View {
         NavigationStack {
             Form {
                 iCloudSessionsSection
+                if !recentRows.isEmpty { recentSessionsSection }
                 connectionSection
                 speechSection
                 if appState.connectionState == .connected {
@@ -157,8 +158,10 @@ struct SettingsView: View {
         }
         .onAppear {
             appState.sessionStore.reload()
+            appState.recentJoinStore.reload()
             now = Date()
             reachability.probe(appState.sessionStore.sessions)
+            reachability.probe(appState.recentJoinStore.recents)
         }
         .onReceive(staleTicker) { now = $0 }
     }
@@ -245,6 +248,75 @@ struct SettingsView: View {
         await Task.detached(priority: .userInitiated) {
             FileManager.default.ubiquityIdentityToken != nil
         }.value
+    }
+
+    // MARK: - Recent Sessions
+
+    /// Join URLs that connected before, from any device on this Apple ID —
+    /// including ones pasted by hand, which the launcher never advertises and
+    /// which therefore reach a second device only through this list.
+    private var recentSessionsSection: some View {
+        Section {
+            ForEach(recentRows) { recent in
+                recentRow(recent)
+            }
+        } header: {
+            Text("Recent")
+        } footer: {
+            Text("Sessions you have connected to before, on this device or your others.")
+        }
+    }
+
+    /// Live sessions are excluded — the iCloud list above already shows those,
+    /// and one tray must not occupy two rows. Reachability outranks recency,
+    /// so a session that still answers beats a fresher dead one.
+    private var recentRows: [RecentJoin] {
+        ICloudSessionList.recentRows(
+            from: appState.recentJoinStore.recents,
+            excluding: appState.sessionStore.sessions,
+            isReachable: { reachability.presumedReachable($0) })
+    }
+
+    private func recentRow(_ recent: RecentJoin) -> some View {
+        let unreachable = reachability.verdicts[recent.id] == .unreachable
+        return Button {
+            awaitingConnect = true
+            // The discovered-session path: the secret-bearing URL is dialed
+            // without ever landing in the Join URL field.
+            appState.connectToDiscoveredSession(
+                joinUrl: recent.joinUrl,
+                displayName: recent.label.isEmpty ? nil : recent.label)
+        } label: {
+            HStack {
+                VStack(alignment: .leading, spacing: 2) {
+                    Text(ICloudSessionList.recentTitle(recent))
+                        .foregroundStyle(.primary)
+                    Text(
+                        ICloudSessionList.recentSubtitle(
+                            recent,
+                            thisDeviceId: appState.recentJoinStore.deviceId,
+                            now: now,
+                            unreachable: unreachable)
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                }
+                Spacer()
+                Image(systemName: unreachable ? "clock.arrow.circlepath" : "arrow.right.circle")
+                    .foregroundStyle(unreachable ? AnyShapeStyle(.secondary) : AnyShapeStyle(.tint))
+            }
+            .opacity(unreachable ? 0.55 : 1)
+        }
+        // The one-way hash, deliberately — never the join URL.
+        .accessibilityIdentifier("recent-session-\(recent.id)")
+        .disabled(appState.connectionState == .connecting)
+        .swipeActions(edge: .trailing) {
+            // Clears this device's copy only; nothing may write another
+            // device's iCloud key, so a row it recorded can sync back.
+            Button("Remove", role: .destructive) {
+                appState.recentJoinStore.forget(id: recent.id)
+            }
+        }
     }
 
     // MARK: - Connection Section
@@ -470,22 +542,6 @@ struct SettingsView: View {
 
             Toggle("Open links in Sliccy", isOn: $openLinksInBuiltInBrowser)
                 .accessibilityIdentifier("open-links-in-app-toggle")
-
-            if !appState.joinUrlHistory.isEmpty {
-                DisclosureGroup("Recent URLs") {
-                    ForEach(appState.joinUrlHistory, id: \.self) { url in
-                        Button {
-                            appState.joinUrl = url
-                        } label: {
-                            Text(url)
-                                .font(.caption)
-                                .lineLimit(1)
-                                .truncationMode(.middle)
-                        }
-                        .foregroundStyle(.primary)
-                    }
-                }
-            }
 
             Button("Clear Stored Data", role: .destructive) {
                 appState.clearStoredData()

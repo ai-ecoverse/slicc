@@ -177,9 +177,6 @@ class AppState: ObservableObject {
     @Published var connectedSince: Date?
     @Published var autoReconnect: Bool = true
 
-    // Join URL history (last 5)
-    @Published var joinUrlHistory: [String] = []
-
     /// Last *transport* error, surfaced to the UI. A dropped channel, a refused
     /// signaling attempt, an exhausted reconnect. Kept apart from `leaderError`
     /// so a network blip and a cone failure do not read identically.
@@ -249,6 +246,10 @@ class AppState: ObservableObject {
     /// directly; without iCloud provisioning it degrades to a local cache
     /// and simply stays empty.
     let sessionStore: TraySessionSyncStore
+    /// Join URLs that actually connected — from this device or any other on
+    /// the same Apple ID. Publishing them is the only way a hand-pasted URL
+    /// (which no launcher ever advertised) reaches a second device.
+    let recentJoinStore: RecentJoinStore
     private let credentialStore: TrayCredentialStore
     private let fileProviderDomainLifecycle: FileProviderDomainLifecycle
     let openGrantStore: OpenGrantStore
@@ -259,6 +260,7 @@ class AppState: ObservableObject {
         openGrantStore: OpenGrantStore = OpenGrantStore()
     ) {
         sessionStore = AppState.makeSessionStore()
+        recentJoinStore = AppState.makeRecentJoinStore()
         self.credentialStore = credentialStore
         self.fileProviderDomainLifecycle = fileProviderDomainLifecycle
         self.openGrantStore = openGrantStore
@@ -377,7 +379,7 @@ class AppState: ObservableObject {
         }
     }
 
-    private func connect(to rawUrl: String, displayName: String?, rememberInHistory: Bool) {
+    private func connect(to rawUrl: String, displayName: String?) {
         let trimmed = rawUrl.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty, let url = URL(string: trimmed) else { return }
         guard connectionState != .connecting else { return }
@@ -387,7 +389,8 @@ class AppState: ObservableObject {
         // Per-leader state: a new session must not inherit the previous
         // leader's palette. A themed leader re-sends theme.apply on join.
         leaderTheme = nil
-        if rememberInHistory { addToHistory(trimmed) }
+        // Recents are recorded on success (`dataChannelOpened`), never here:
+        // a typo'd paste must not sync itself to every other device.
         activeJoinUrl = trimmed
         activeDisplayName = displayName
 
@@ -698,6 +701,10 @@ class AppState: ObservableObject {
         modelCatalog = []
         modelSelectionState = nil
         let credentialsSaved = persistTrayCredentials(connectedAt: connectedAt)
+        // A connection that landed is the signal recents keep — whichever way
+        // it started (paste, deep link, iCloud row, stored credentials), and
+        // after any supersede hop, so what syncs is the URL that works.
+        recentJoinStore.record(joinUrl: activeJoinUrl, label: activeDisplayName ?? "")
         fileProviderDomainLifecycle.registerIfCredentialsAvailable(credentialsSaved)
         Task { await VoiceReply.shared.prewarm() }
 
@@ -1488,10 +1495,7 @@ class AppState: ObservableObject {
             // moves us out of `.reconnecting`; abandon the budget silently.
             guard connectionState == .reconnecting else { return }
 
-            connect(
-                to: activeJoinUrl,
-                displayName: activeDisplayName,
-                rememberInHistory: false)
+            connect(to: activeJoinUrl, displayName: activeDisplayName)
 
             // `connect(to:)` drives its own async signaling; wait for it to settle
             // before deciding whether this attempt earned another.
@@ -1541,21 +1545,14 @@ extension AppState {
         stopTargetsAdvertiseTimer()
     }
 
-    fileprivate func addToHistory(_ url: String) {
-        let trimmed = url.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else { return }
-        joinUrlHistory.removeAll { $0 == trimmed }
-        joinUrlHistory.insert(trimmed, at: 0)
-        if joinUrlHistory.count > 5 {
-            joinUrlHistory = Array(joinUrlHistory.prefix(5))
-        }
-    }
 }
 
 extension AppState {
     /// Clear all stored data (history, credentials, etc.)
     func clearStoredData() {
-        joinUrlHistory = []
+        // Only this device's recents: nothing can write another device's
+        // iCloud key, so a row it recorded can sync back.
+        recentJoinStore.clearLocalHistory()
         credentialStore.clear()
         fileProviderDomainLifecycle.removeDomain()
         Self.purgeLegacyJoinURLDefaults()
@@ -1704,13 +1701,14 @@ extension AppState {
 extension AppState {
     /// Attempt to connect to the tray using the current joinUrl.
     func connect() {
-        connect(to: joinUrl, displayName: nil, rememberInHistory: true)
+        connect(to: joinUrl, displayName: nil)
     }
 
     /// Join an iCloud-discovered session. The URL stays out of the Join URL
-    /// field and Recent URLs list; only non-secret metadata is shared.
+    /// field; recents remember it only once the connection lands, and render
+    /// it as label plus host — never as the secret-bearing URL.
     func connectToDiscoveredSession(joinUrl url: String, displayName: String? = nil) {
-        connect(to: url, displayName: displayName, rememberInHistory: false)
+        connect(to: url, displayName: displayName)
     }
 
     /// A device that has connected before lands in the conversation, not in
@@ -1726,8 +1724,7 @@ extension AppState {
         else { return false }
         connect(
             to: credentials.joinURL.absoluteString,
-            displayName: credentials.displayName,
-            rememberInHistory: false)
+            displayName: credentials.displayName)
         return true
     }
 }

@@ -55,7 +55,7 @@ public final class SessionReachability {
         verdicts[id] != .unreachable
     }
 
-    public func probe(_ sessions: [SyncedTraySession]) {
+    public func probe(_ sessions: [some ProbableSession]) {
         for tray in sessions {
             guard !inFlight.contains(tray.id), let url = URL(string: tray.joinUrl) else { continue }
             inFlight.insert(tray.id)
@@ -117,6 +117,19 @@ public final class SessionReachability {
         return request
     }
 }
+
+/// Anything with an opaque identity and a join URL can be probed: live
+/// iCloud sessions (`SyncedTraySession`) and remembered ones (`RecentJoin`)
+/// share the same liveness question and the same secret-handling rules.
+public protocol ProbableSession {
+    /// One-way session id — the only identity that may leave this type.
+    var id: String { get }
+    /// Secret-bearing join URL. Probed, never logged, never persisted here.
+    var joinUrl: String { get }
+}
+
+extension SyncedTraySession: ProbableSession {}
+extension RecentJoin: ProbableSession {}
 
 private struct ProbePayload: Decodable {
     struct Leader: Decodable {

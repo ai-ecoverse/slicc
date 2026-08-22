@@ -57,3 +57,61 @@ enum ICloudSessionList {
         return "\(Int(seconds / 86_400))d ago"
     }
 }
+
+/// Presentation logic for the "Recent" list — join URLs this Apple ID has
+/// connected to before, synced through `RecentJoinStore`. Kept beside the
+/// live-session helpers because the two lists share a section and must not
+/// show the same tray twice.
+extension ICloudSessionList {
+    /// The rows to render: recents that are not already visible as a live
+    /// iCloud session, ranked reachable-first then newest-connected, capped.
+    ///
+    /// The exclusion keys on the shared one-way id — a recent recorded from a
+    /// launcher-published session has the same identity as that session — so
+    /// a tray that is live right now appears once, in the list that can say
+    /// something about it.
+    static func recentRows(
+        from recents: [RecentJoin],
+        excluding advertised: [SyncedTraySession],
+        limit: Int = RecentJoinStore.maxRecents,
+        isReachable: (String) -> Bool
+    ) -> [RecentJoin] {
+        let live = Set(advertised.map(\.id))
+        return RecentJoinStore.rank(
+            recents.filter { !live.contains($0.id) },
+            limit: limit,
+            isReachable: isReachable)
+    }
+
+    /// What a recent row calls itself. A hand-pasted URL has no label, so the
+    /// host stands in — never the path, which carries the session secret.
+    static func recentTitle(_ recent: RecentJoin) -> String {
+        if !recent.label.isEmpty { return recent.label }
+        if !recent.displayHost.isEmpty { return recent.displayHost }
+        return "Sliccy session"
+    }
+
+    /// Provenance and age, plus the probe verdict when it is bad news. The
+    /// device that recorded the row is named so a row synced from the iPad
+    /// does not read as something this phone did.
+    static func recentSubtitle(
+        _ recent: RecentJoin,
+        thisDeviceId: String,
+        now: Date,
+        unreachable: Bool
+    ) -> String {
+        let device =
+            recent.deviceId == thisDeviceId
+            ? "This device"
+            : (recent.deviceName.isEmpty ? "Unknown device" : recent.deviceName)
+        // The title already showed the host when there was no label; repeating
+        // it here would say the same thing twice.
+        let host = recent.label.isEmpty ? "" : recent.displayHost
+        return [
+            device, host.isEmpty ? nil : host, age(of: recent.lastConnectedAt, now: now),
+            unreachable ? "not responding" : nil,
+        ]
+        .compactMap { $0 }
+        .joined(separator: " · ")
+    }
+}

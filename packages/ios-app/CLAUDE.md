@@ -35,6 +35,8 @@ Lifecycle `connect`/`disconnect`/`dataChannelOpened`/`handleDisconnect`; `Keepal
 
 `AppState.sessionStore` uses **`packages/swift-traysession`**; launcher publishes, `SettingsView` joins. Liveness requires a connected leader. KVS `S8LB56P782.ai.sliccy.trays` MUST match macOS. Unprovisioned builds have no cache; `SLICC_IOS_NO_ICLOUD=1` omits iCloud. **Never expose `joinUrl`.** Attach loops after reconnect must follow `TRAY_SUPERSEDED` / `SupersedeRedirect`: [`docs/ios-app-details.md`](../../docs/ios-app-details.md#icloud-tray-supersede-chain).
 
+**Recent joins**: `AppState.recentJoinStore` (`RecentJoinStore`) records the join URL on `dataChannelOpened` — every path (paste, deep link, iCloud row, stored credentials), after any supersede hop, never at dial time — and syncs it, so a URL pasted on one device reaches the others. `SettingsView` renders the "Recent" section from `ICloudSessionList.recentRows` (live sessions excluded, `RecentJoinStore.rank` order, five rows); rows show label-or-`displayHost` and **never the join URL**. Replaced the device-local `joinUrlHistory`. Hooks: `-uiTestRecentJoinsFixture/Empty`.
+
 **Frozen sessions**: `FrozenSessions.swift` mirrors `transcript/frozen-archive-format.ts`; opens saved transcripts read-only. Hook: `-uiTestFrozenFixture/Empty`.
 
 ## Push to Talk
