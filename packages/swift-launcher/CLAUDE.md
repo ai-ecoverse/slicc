@@ -55,6 +55,8 @@ Terminal.app and iTerm2 launch through Apple Events; `sign-and-package.sh` signs
 
 Shared models in **`packages/swift-traysession`**. **Secret-bearing join URLs sync only through same-Apple-ID, encrypted iCloud KVS.** `SessionReachability` follows bounded `TRAY_SUPERSEDED` chains; only HTTP 200 with `leader.connected == true` is live. `SliccstartApp` publishes non-nil `leaderJoinUrl` (refreshes every 4 h); clean quit withdraws, update/detach does not. Coverage: `TraySessionLauncherTests`.
 
+**`leaderJoinUrl` is the single gate** for Electron/terminal rows *and* iCloud advertising. `reattach` must call `startLeaderProbe` **after** `spawn` registers the launch record, and the loop's `leaderProbeStep` must keep waiting for a record it has never seen (bounded grace) — `reattachPersistedRecords` is nonisolated `async`, so the probe can outrun the record. Getting this wrong strands the launcher on "Start a browser first" after every smooth update. Tests: `SliccProcessLeaderProbeTests`.
+
 **Headless CLI (`Sliccstart --list-sessions`)** — parsed in `main.swift` **before** SwiftUI boots. Prints JSON, **metadata only** (`joinUrl` redacted). `--reveal-urls` gates behind `NSAlert`; headless/SSH callers **denied** (exit 3). Pure logic in `Models/TraySessionCLI.swift`; glue in `TraySessionCLIRunner`.
 
 ## App Ordering, Browser Followers, Startup
