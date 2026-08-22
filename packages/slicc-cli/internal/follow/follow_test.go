@@ -78,6 +78,22 @@ func waitResponse(t *testing.T, f *fakeSender) map[string]any {
 	}
 }
 
+func TestSessionForwardsStdin(t *testing.T) {
+	sender := newFakeSender()
+	s := NewSession(sender, testRunner(), nil)
+	s.Handle(context.Background(), protocol.TypeExecRequest, mustJSON(protocol.ExecRequest{
+		Type: "exec.request", RequestID: "r1", Command: "cat",
+		Stdin: base64.StdEncoding.EncodeToString([]byte("piped\n")),
+	}))
+	resp := waitResponse(t, sender)
+	if resp["exitCode"] != float64(0) {
+		t.Fatalf("exitCode = %v, want 0", resp["exitCode"])
+	}
+	if got := sender.chunks("stdout"); got != "piped\n" {
+		t.Fatalf("stdout = %q, want piped\\n", got)
+	}
+}
+
 func TestSessionRunsCommandAndStreams(t *testing.T) {
 	sender := newFakeSender()
 	s := NewSession(sender, testRunner(), nil)
@@ -159,6 +175,24 @@ func TestFollowEvalHelperProcess(_ *testing.T) {
 		fmt.Printf("echo:%s\n", scanner.Text())
 	}
 	os.Exit(0)
+}
+
+func TestEvalSessionRejectsStdin(t *testing.T) {
+	sender := newFakeSender()
+	session := NewEvalSession(sender, startTestEvalSession(t), nil)
+
+	session.Handle(context.Background(), protocol.TypeExecRequest,
+		mustJSON(protocol.ExecRequest{
+			Type: protocol.TypeExecRequest, RequestID: "r1", Command: "cat",
+			Stdin: base64.StdEncoding.EncodeToString([]byte("piped\n")),
+		}))
+	resp := waitResponse(t, sender)
+	if resp["exitCode"] != float64(127) {
+		t.Fatalf("exitCode = %v, want 127", resp["exitCode"])
+	}
+	if resp["error"] == nil {
+		t.Fatal("expected an error when stdin is sent to eval mode")
+	}
 }
 
 func TestEvalSessionAnswersSequentialRequestsFromOneRepl(t *testing.T) {

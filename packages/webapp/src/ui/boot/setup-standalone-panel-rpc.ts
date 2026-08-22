@@ -17,6 +17,13 @@ import { storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { PageLeaderTrayHandle } from '../page-leader-tray.js';
 import type { RemoteCdpPageBridge } from '../remote-cdp-page-bridge.js';
 
+/** JWT claim bag we read for account identity hashing. */
+interface JwtIdentityClaims {
+  email?: string;
+  user_id?: string;
+  sub?: string;
+}
+
 /** Extract a stable identity string from an account for hashing.
  * Prefers userName (set by OAuth flows), falls back to email/user_id from JWT access token. */
 function accountIdentity(account: {
@@ -29,8 +36,8 @@ function accountIdentity(account: {
     try {
       const payload = JSON.parse(
         atob(account.accessToken.split('.')[1].replace(/-/g, '+').replace(/_/g, '/'))
-      ) as Record<string, unknown>;
-      const id = (payload['email'] ?? payload['user_id'] ?? payload['sub']) as string | undefined;
+      ) as JwtIdentityClaims;
+      const id = payload.email ?? payload.user_id ?? payload.sub;
       if (id) return `${account.providerId}:${id}`;
     } catch {
       /* not a JWT or missing claim */
@@ -137,7 +144,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
       emitEvent: (channel, payload) => panelRpcEventEmitter.emit(channel, payload),
       emitCherrySliccEvent: (runtimeId, name, detail) =>
         getLeader()?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,
-      execOnRemote: async ({ runtimeId, command, cwd, env, execToken, timeoutMs }) => {
+      execOnRemote: async ({ runtimeId, command, cwd, env, execToken, timeoutMs, stdin }) => {
         const sync = getLeader()?.currentLeaderSync;
         if (!sync) throw new Error('ssh: no active leader tray');
         const controller = new AbortController();
@@ -146,6 +153,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
           return await sync.execOnRemote(runtimeId, command, {
             cwd,
             env,
+            stdin,
             signal: controller.signal,
             timeoutMs,
           });

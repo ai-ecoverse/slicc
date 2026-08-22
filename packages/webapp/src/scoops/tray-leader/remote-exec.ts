@@ -59,6 +59,7 @@ export class RemoteExecRouter {
     opts: {
       cwd?: string;
       env?: Record<string, string>;
+      stdin?: string;
       signal?: AbortSignal;
       onChunk?: (stream: 'stdout' | 'stderr', data: string) => void;
       timeoutMs?: number;
@@ -107,6 +108,7 @@ export class RemoteExecRouter {
         command,
         cwd: opts.cwd,
         env: opts.env,
+        stdin: opts.stdin,
       });
       if (!sent) {
         this.pendingRemoteExecs.delete(requestId);
@@ -193,7 +195,7 @@ export class RemoteExecRouter {
     bootstrapId: string,
     message: TrayExecRequestMessage
   ): Promise<void> {
-    const { requestId, command, cwd, env } = message;
+    const { requestId, command, cwd, env, stdin } = message;
     const execInShell = this.context.options.execInShell;
     if (!execInShell) {
       this.context.followers.followers.get(bootstrapId)?.sync.send({
@@ -212,6 +214,7 @@ export class RemoteExecRouter {
         sessionId: bootstrapId,
         cwd,
         env,
+        stdin,
         signal: controller.signal,
         onChunk: (stream, data) => {
           this.context.followers.followers.get(bootstrapId)?.sync.send({

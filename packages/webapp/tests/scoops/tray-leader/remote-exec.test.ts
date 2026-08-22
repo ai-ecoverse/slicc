@@ -58,6 +58,16 @@ afterEach(() => {
 });
 
 describe('RemoteExecRouter', () => {
+  it('includes base64 stdin on exec.request when provided', async () => {
+    const { followers, router } = createHarness();
+    const sent = addFollower(followers, 'target');
+    const stdin = encoded('hello\n');
+    void router.execOnRemote('runtime-target', 'cat', { stdin });
+    const request = sent.find((message) => message.type === 'exec.request');
+    if (request?.type !== 'exec.request') throw new Error('missing exec request');
+    expect(request.stdin).toBe(stdin);
+  });
+
   it('streams follower chunks to a leader caller in arrival order', async () => {
     const { followers, router } = createHarness();
     const sent = addFollower(followers, 'target');
@@ -119,6 +129,25 @@ describe('RemoteExecRouter', () => {
       { type: 'exec.chunk', requestId: 'local-1', stream: 'stdout', data: encoded('out') },
       { type: 'exec.chunk', requestId: 'local-1', stream: 'stderr', data: encoded('err') },
     ]);
+  });
+
+  it('forwards stdin from follower exec.request to execInShell', async () => {
+    const execInShell = vi.fn(async () => ({ exitCode: 0 }));
+    const { followers, router } = createHarness({ execInShell });
+    addFollower(followers, 'requester');
+
+    router.handleFollowerExecMessage('requester', {
+      type: 'exec.request',
+      requestId: 'local-stdin',
+      command: 'cat',
+      stdin: encoded('piped\n'),
+    });
+
+    await vi.waitFor(() => expect(execInShell).toHaveBeenCalled());
+    expect(execInShell).toHaveBeenCalledWith(
+      'cat',
+      expect.objectContaining({ stdin: encoded('piped\n') })
+    );
   });
 
   it('kills and rejects a leader request when its timeout expires', async () => {

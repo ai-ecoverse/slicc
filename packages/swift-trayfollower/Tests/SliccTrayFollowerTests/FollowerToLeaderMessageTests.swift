@@ -302,8 +302,8 @@ final class FollowerToLeaderMessageTests: XCTestCase {
 
     func testExecRequestRoundTrip() throws {
         guard
-            case .execRequest(let requestId, let command, let cwd, let env) =
-                try roundTrip(.execRequest(requestId: "r1", command: "echo hi", cwd: nil, env: nil))
+            case .execRequest(let requestId, let command, let cwd, let env, let stdin) =
+                try roundTrip(.execRequest(requestId: "r1", command: "echo hi", cwd: nil, env: nil, stdin: nil))
         else {
             XCTFail("expected execRequest")
             return
@@ -312,6 +312,7 @@ final class FollowerToLeaderMessageTests: XCTestCase {
         XCTAssertEqual(command, "echo hi")
         XCTAssertNil(cwd)
         XCTAssertNil(env)
+        XCTAssertNil(stdin)
     }
 
     func testExecChunkRoundTrip() throws {

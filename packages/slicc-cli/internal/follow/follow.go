@@ -101,6 +101,25 @@ func (s *Session) startExec(ctx context.Context, req protocol.ExecRequest) {
 	if s.log != nil {
 		fmt.Fprintf(s.log, "exec: %s\n", req.Command)
 	}
+	var stdin []byte
+	if req.Stdin != "" {
+		decoded, err := base64.StdEncoding.DecodeString(req.Stdin)
+		if err != nil {
+			_ = s.sender.SendJSON(protocol.ExecResponse{
+				Type: protocol.TypeExecResponse, RequestID: req.RequestID, ExitCode: 127,
+				Error: "invalid exec.request stdin (expected base64)",
+			})
+			return
+		}
+		stdin = decoded
+	}
+	if s.eval != nil && len(stdin) > 0 {
+		_ = s.sender.SendJSON(protocol.ExecResponse{
+			Type: protocol.TypeExecResponse, RequestID: req.RequestID, ExitCode: 127,
+			Error: "exec.request stdin is not supported in follow --eval mode (use per-command follow)",
+		})
+		return
+	}
 	ctrl := make(chan string, 4)
 	s.mu.Lock()
 	s.running[req.RequestID] = ctrl
@@ -123,6 +142,7 @@ func (s *Session) startExec(ctx context.Context, req protocol.ExecRequest) {
 				Runner:  s.runner,
 				Cwd:     req.Cwd,
 				Env:     req.Env,
+				Stdin:   stdin,
 				Control: ctrl,
 				OnChunk: onChunk,
 			})

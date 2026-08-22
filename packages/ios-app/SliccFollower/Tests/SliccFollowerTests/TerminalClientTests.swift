@@ -85,7 +85,7 @@ final class TerminalClientTests: XCTestCase {
         await waitForRun(client)
 
         guard
-            case .execRequest(let requestId, let command, let cwd, let env) = wire.sent.first
+            case .execRequest(let requestId, let command, let cwd, let env, _) = wire.sent.first
         else { return XCTFail("expected exec.request") }
         XCTAssertEqual(requestId, "req-1")
         XCTAssertEqual(command, "printf café")

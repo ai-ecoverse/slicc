@@ -554,7 +554,7 @@ public enum LeaderToFollowerMessage: Codable {
     case fsRequest(requestId: String, request: TrayFsRequest)
     /// Reply to a follower-originated `fs.request`, chunked for large reads.
     case fsResponse(requestId: String, response: TrayFsResponse)
-    case execRequest(requestId: String, command: String, cwd: String?, env: [String: String]?)
+    case execRequest(requestId: String, command: String, cwd: String?, env: [String: String]?, stdin: String?)
     case execChunk(requestId: String, stream: String, data: String)
     case execResponse(requestId: String, exitCode: Int, signal: String?, error: String?)
     case execSignal(requestId: String, signal: String)
@@ -592,7 +592,7 @@ public enum LeaderToFollowerMessage: Codable {
         case themeJson, protocolVersion, runtime
         case request, response
         case capabilities, motd
-        case command, cwd, env, stream, exitCode, signal
+        case command, cwd, env, stream, exitCode, signal, stdin
         case kind, suggestedPattern, scoopName, expiresAt
     }
 
@@ -756,7 +756,8 @@ public enum LeaderToFollowerMessage: Codable {
                 requestId: try container.decode(String.self, forKey: .requestId),
                 command: try container.decode(String.self, forKey: .command),
                 cwd: try container.decodeIfPresent(String.self, forKey: .cwd),
-                env: try container.decodeIfPresent([String: String].self, forKey: .env))
+                env: try container.decodeIfPresent([String: String].self, forKey: .env),
+                stdin: try container.decodeIfPresent(String.self, forKey: .stdin))
         case "exec.chunk":
             return .execChunk(
                 requestId: try container.decode(String.self, forKey: .requestId),
@@ -913,12 +914,13 @@ public enum LeaderToFollowerMessage: Codable {
             try container.encode("fs.response", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(response, forKey: .response)
-        case .execRequest(let requestId, let command, let cwd, let env):
+        case .execRequest(let requestId, let command, let cwd, let env, let stdin):
             try container.encode("exec.request", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(command, forKey: .command)
             try container.encodeIfPresent(cwd, forKey: .cwd)
             try container.encodeIfPresent(env, forKey: .env)
+            try container.encodeIfPresent(stdin, forKey: .stdin)
         case .execChunk(let requestId, let stream, let data):
             try container.encode("exec.chunk", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
@@ -1012,7 +1014,7 @@ public enum FollowerToLeaderMessage: Codable {
     case fsRequest(requestId: String, targetRuntimeId: String, request: TrayFsRequest)
     /// Answer to a leader-originated `fs.request`.
     case fsResponse(requestId: String, response: TrayFsResponse)
-    case execRequest(requestId: String, command: String, cwd: String?, env: [String: String]?)
+    case execRequest(requestId: String, command: String, cwd: String?, env: [String: String]?, stdin: String?)
     case execChunk(requestId: String, stream: String, data: String)
     case execResponse(requestId: String, exitCode: Int, signal: String?, error: String?)
     case execSignal(requestId: String, signal: String)
@@ -1044,7 +1046,7 @@ public enum FollowerToLeaderMessage: Codable {
         case method, params, sessionId, targetId, url
         case protocolVersion, runtime
         case targetRuntimeId, localTargetId, request, response
-        case command, cwd, env, stream, data, exitCode, signal
+        case command, cwd, env, stream, data, exitCode, signal, stdin
         case decision, pattern, attestation, platform, token, environment
     }
 
@@ -1142,7 +1144,8 @@ public enum FollowerToLeaderMessage: Codable {
                 requestId: try container.decode(String.self, forKey: .requestId),
                 command: try container.decode(String.self, forKey: .command),
                 cwd: try container.decodeIfPresent(String.self, forKey: .cwd),
-                env: try container.decodeIfPresent([String: String].self, forKey: .env))
+                env: try container.decodeIfPresent([String: String].self, forKey: .env),
+                stdin: try container.decodeIfPresent(String.self, forKey: .stdin))
         case "exec.chunk":
             self = .execChunk(
                 requestId: try container.decode(String.self, forKey: .requestId),
@@ -1316,12 +1319,13 @@ public enum FollowerToLeaderMessage: Codable {
             try container.encode("fs.response", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(response, forKey: .response)
-        case .execRequest(let requestId, let command, let cwd, let env):
+        case .execRequest(let requestId, let command, let cwd, let env, let stdin):
             try container.encode("exec.request", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(command, forKey: .command)
             try container.encodeIfPresent(cwd, forKey: .cwd)
             try container.encodeIfPresent(env, forKey: .env)
+            try container.encodeIfPresent(stdin, forKey: .stdin)
         case .execChunk(let requestId, let stream, let data):
             try container.encode("exec.chunk", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
