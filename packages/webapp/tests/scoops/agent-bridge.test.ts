@@ -1945,6 +1945,26 @@ describe('createAgentBridge — session archive (persistSession)', () => {
     expect(writes).toHaveLength(0);
   });
 
+  it('accepts digits inside a name token (per-cone curator names)', async () => {
+    const { orchestrator, registerCalls } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+
+    // `memory-curator-<folder>` carries a cone folder, and `coneFolderFor`
+    // mints digits — from the user's name and from its de-duplication
+    // suffix (#2271). A leading digit is still rejected: the jid is
+    // `agent_<token>`.
+    const ok = await bridge.spawn({ ...BASE_OPTS, name: 'memory-curator-cone-beta-2' });
+    expect(ok.exitCode).toBe(0);
+    expect(registerCalls[0].folder).toBe('agent-memory-curator-cone-beta-2');
+
+    const bad = await bridge.spawn({ ...BASE_OPTS, name: '2cone' });
+    expect(bad.exitCode).toBe(1);
+    expect(bad.finalText).toContain('invalid name');
+  });
+
   it('rejects a fixed name whose jid is already registered, without spawning', async () => {
     const { orchestrator, registerCalls, knownScoops } = makeMockOrchestrator();
     const { fs, writes } = makeMockSharedFs();

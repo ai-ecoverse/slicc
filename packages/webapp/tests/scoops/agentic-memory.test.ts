@@ -588,6 +588,47 @@ Curate {{MEMORY_PATH}}.`;
       expect(options.prompt).toContain('/scoops/agent-memory-curator/');
     });
 
+    it('curates a cone whose folder carries digits (name stays spawnable)', async () => {
+      const spawn = successSpawn();
+
+      // `coneFolderFor` mints digits both from the user's name and from its
+      // own de-duplication suffix, and the bridge validates a fixed agent
+      // name — a letters-only name token would have failed the spawn outright
+      // and left this cone with no memory at all.
+      await runAgenticMemoryPass({
+        spawn,
+        vfs: fakeVfs(DEFAULT_MEMORY_MD),
+        sessionArchivePath: ARCHIVE_PATH,
+        sessionCount: 1,
+        cone: { folder: 'cone-beta-2' },
+      });
+
+      const options = spawn.mock.calls[0][0];
+      expect(options.name).toBe('memory-curator-cone-beta-2');
+      expect(options.name).toMatch(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/);
+      expect(options.writablePaths).toEqual(['/cones/cone-beta-2/CLAUDE.md']);
+    });
+
+    it('falls back to the primary curator name for an unusable folder', async () => {
+      const spawn = successSpawn();
+
+      // A folder that did not come from `coneFolderFor` (restored record,
+      // hand-edited profile) could be unspawnable as a name. Curating THIS
+      // cone's file under the shared name is strictly better than an
+      // `invalid name` spawn error and no memory.
+      await runAgenticMemoryPass({
+        spawn,
+        vfs: fakeVfs(DEFAULT_MEMORY_MD),
+        sessionArchivePath: ARCHIVE_PATH,
+        sessionCount: 1,
+        cone: { folder: 'Cone_Weird!' },
+      });
+
+      const options = spawn.mock.calls[0][0];
+      expect(options.name).toBe('memory-curator');
+      expect(options.writablePaths).toEqual(['/cones/Cone_Weird!/CLAUDE.md']);
+    });
+
     it('keeps an explicitly configured non-workspace path unrebased', async () => {
       const memoryMd = `---
 writablePaths: [/knowledge/notes.md]

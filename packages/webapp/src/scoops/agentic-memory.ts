@@ -182,12 +182,28 @@ export function curatorAgentName(folder: string): string {
 }
 
 /**
+ * `agent` name tokens are `[a-z][a-z0-9]*` joined by single dashes, which is
+ * exactly the shape `coneFolderFor` mints — but a folder that came from
+ * somewhere else (a restored record, a hand-edited profile) could still be
+ * unusable as a name, and the spawn would then fail with `invalid name`
+ * instead of curating. Fall back to the primary curator name in that case:
+ * `writablePaths` still points at THIS cone's memory file, so the worst case
+ * is the two passes serializing on one name, never a cross-cone write.
+ */
+function safeCuratorName(folder: string): string {
+  const name = curatorAgentName(folder);
+  return /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/.test(name)
+    ? name
+    : curatorAgentName(PRIMARY_CONE_FOLDER);
+}
+
+/**
  * The curator's private scratch folder. The agent bridge derives it from the
  * agent name (`/scoops/agent-<name>`), so a per-cone name moves it too — and
  * the prompt in `MEMORY.md` sends drafts there by path.
  */
 export function curatorScratchDir(folder: string): string {
-  return `/scoops/agent-${curatorAgentName(folder)}`;
+  return `/scoops/agent-${safeCuratorName(folder)}`;
 }
 
 /** The primary cone's scratch folder — what a pre-#2271 `MEMORY.md` spells out. */
@@ -340,7 +356,7 @@ async function loadMemoryConfig(
   }
 }
 
-export function parseMemoryDocument(
+function parseMemoryDocument(
   content: string,
   workspace: WorkUnitWorkspace = PRIMARY_WORKSPACE
 ): MemoryConfig {
@@ -531,7 +547,7 @@ function buildSpawnOptions(
     // Durable transcript under a stable name — /sessions/agent-memory-curator-*.md
     // survives a new chat, so a curator run stays auditable for humans.
     persistSession: true,
-    name: curatorAgentName(cone?.folder ?? PRIMARY_CONE_FOLDER),
+    name: safeCuratorName(cone?.folder ?? PRIMARY_CONE_FOLDER),
     // Parent the run to the cone it curates so escalations and model
     // inheritance follow that cone, not the oldest root (#2271).
     ...(cone?.jid ? { parentJid: cone.jid } : {}),

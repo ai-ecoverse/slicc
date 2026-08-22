@@ -467,7 +467,12 @@ async function writeSuccessReceipt(sharedFs: VirtualFS, path: string): Promise<v
 }
 
 /** A valid fixed agent name: one or more lowercase tokens joined by dashes. */
-const AGENT_NAME_PATTERN = /^[a-z]+(?:-[a-z]+)*$/;
+// Digits are allowed inside a token because a per-cone curator name carries
+// the cone's storage folder (`memory-curator-cone-beta-2`, `…-cone-v86`), and
+// `coneFolderFor` mints digits both from the user's name and from its own
+// de-duplication suffix (#2271). A leading letter is still required so the
+// `agent_<token>` jid never starts with a digit.
+const AGENT_NAME_PATTERN = /^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/;
 function isValidAgentName(name: string): boolean {
   return AGENT_NAME_PATTERN.test(name);
 }
