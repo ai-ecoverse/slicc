@@ -1051,12 +1051,11 @@
         "isError",
         "messageId",
         "result",
+        "toolCallId",
         "toolName",
         "type"
       ],
-      "dropped": [
-        "toolCallId"
-      ],
+      "dropped": [],
       "event": {
         "type": "tool_result",
         "messageId": "m2",
@@ -1105,13 +1104,12 @@
       "ios": "decoded",
       "mirrored": [
         "messageId",
+        "toolCallId",
         "toolInput",
         "toolName",
         "type"
       ],
-      "dropped": [
-        "toolCallId"
-      ],
+      "dropped": [],
       "event": {
         "type": "tool_use_start",
         "messageId": "m2",

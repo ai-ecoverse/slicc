@@ -830,10 +830,10 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
       messageId: 'mirrored',
       toolName: 'mirrored',
       toolInput: 'mirrored',
-      // New field; `SyncProtocol.swift` has no property for it yet, so a
-      // follower still pairs results by tool NAME and can mispair concurrent
-      // same-named calls. Inventoried here rather than left silent.
-      toolCallId: 'dropped',
+      // Provider tool-call id — the follower pairs results by identity rather
+      // than by tool name, which crosses the output of concurrent same-named
+      // calls.
+      toolCallId: 'mirrored',
     },
     event: {
       type: 'tool_use_start',
@@ -852,7 +852,7 @@ export const AGENT_EVENT_CORPUS: AgentEventCorpus = {
       result: 'mirrored',
       isError: 'mirrored',
       /** See `tool_use_start.toolCallId`. */
-      toolCallId: 'dropped',
+      toolCallId: 'mirrored',
     },
     event: {
       type: 'tool_result',
