@@ -98,6 +98,29 @@ describe('wc-unit-context', () => {
     ]);
   });
 
+  it("puts the selected cone's scoops first among the children (#2272)", () => {
+    const roster = [helper, research, worker, primary];
+    // Selecting the primary cone, or one of its scoops, pulls `worker` forward.
+    for (const selected of ['cone_1', 'scoop_1']) {
+      expect(orderForSwitcher(roster, selected).map((s) => s.jid)).toEqual([
+        'cone_1',
+        'cone_2',
+        'scoop_1',
+        'scoop_2',
+      ]);
+    }
+    // Cones never move; an unknown selection keeps registry order.
+    expect(orderForSwitcher(roster, 'cone_2').map((s) => s.jid)).toEqual([
+      'cone_1',
+      'cone_2',
+      'scoop_2',
+      'scoop_1',
+    ]);
+    expect(orderForSwitcher(roster, 'nope').map((s) => s.jid)).toEqual(
+      orderForSwitcher(roster).map((s) => s.jid)
+    );
+  });
+
   describe('rootForSelection (#2272)', () => {
     const all = [worker, research, primary, helper];
 

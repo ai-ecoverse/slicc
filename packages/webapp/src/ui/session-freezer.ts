@@ -140,6 +140,12 @@ export interface FreezeConeSessionOptions {
    */
   mode?: 'full' | 'quick';
   /**
+   * `'skip'` freezes the chat without extracting memories — neither now nor
+   * in a later catch-up (the archive is marked `memorySkipped`). Used when a
+   * cone is dropped (#2272): its chat is kept, its memory is not mined.
+   */
+  memory?: 'skip';
+  /**
    * Injectable lucide icon picker (tests). Defaults to the page-side
    * `pickLucideIcon` from `quick-llm.js`. Only consulted when the LLM
    * calls are enabled (`mode: 'full'` with model + apiKey).
@@ -182,8 +188,9 @@ export async function freezeConeSession(
   const llmEnabled = mode === 'full' && Boolean(opts.apiKey && opts.model);
 
   // A supplied curator spawn owns memory regardless of mode — the legacy
-  // extraction call would double up with the curator's rewrite.
-  if (!opts.agenticMemorySpawn) {
+  // extraction call would double up with the curator's rewrite. A
+  // memory-skipped freeze extracts nothing at all.
+  if (!opts.agenticMemorySpawn && opts.memory !== 'skip') {
     await extractMemoriesBestEffort(opts, agentMessages, llmEnabled);
   }
   const title =
@@ -199,7 +206,7 @@ export async function freezeConeSession(
     title,
     mode,
     icon,
-    Boolean(opts.agenticMemorySpawn)
+    Boolean(opts.agenticMemorySpawn) && opts.memory !== 'skip'
   );
 }
 
@@ -409,6 +416,7 @@ async function writeFrozenArchive(
     ...(icon ? { icon } : {}),
     ...(mode === 'quick' ? { pendingEnrichment: true } : {}),
     ...(memoryPending ? { memoryPending: true } : {}),
+    ...(opts.memory === 'skip' ? { memorySkipped: true } : {}),
   };
   try {
     await ensureDir(opts.vfs, SESSIONS_DIR);
@@ -985,7 +993,9 @@ export async function enrichPendingSession(
     entry.memoryPending === true &&
     opts.skipMemory !== true &&
     (await curatorReceiptExists(vfs, entry));
-  const effectiveOpts = curatorAlreadyRan ? { ...opts, skipMemory: true } : opts;
+  // A memory-skipped archive (dropped cone) is title/icon-only for good.
+  const effectiveOpts =
+    curatorAlreadyRan || entry.memorySkipped === true ? { ...opts, skipMemory: true } : opts;
   const calls = await runEnrichmentCalls(entry, agentMessages, effectiveOpts);
   if (calls === null) return null;
   // Pick the icon BEFORE appending memory: the pick is a read-only LLM call
@@ -1231,6 +1241,8 @@ function buildEnrichedIndexEntry(
     ...(resolvedIcon ? { icon: resolvedIcon } : {}),
     ...(entry.completeSnapshotUnavailable ? { completeSnapshotUnavailable: true } : {}),
     ...(preserveMemoryPending && entry.memoryPending ? { memoryPending: true } : {}),
+    // A dropped cone's archive stays memory-free after the rename too.
+    ...(entry.memorySkipped ? { memorySkipped: true } : {}),
   };
 }
 

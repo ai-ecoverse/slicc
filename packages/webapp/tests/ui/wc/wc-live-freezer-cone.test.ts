@@ -12,7 +12,11 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 installWcDomStubs();
 
 const freezeCalls = vi.hoisted(
-  () => [] as Array<{ kind: 'save' | 'quick'; cone?: { folder: string; label?: string } }>
+  () =>
+    [] as Array<{
+      kind: 'save' | 'quick' | 'archive-only';
+      cone?: { folder: string; label?: string };
+    }>
 );
 vi.mock('../../../src/ui/new-session.js', () => ({
   resetNewSessionTmp: vi.fn(async () => undefined),
@@ -22,6 +26,10 @@ vi.mock('../../../src/ui/new-session.js', () => ({
   }),
   runNewSessionFreezeQuick: vi.fn(async (opts: { cone?: { folder: string; label?: string } }) => {
     freezeCalls.push({ kind: 'quick', cone: opts.cone });
+    return null;
+  }),
+  runNewSessionArchiveOnly: vi.fn(async (opts: { cone?: { folder: string; label?: string } }) => {
+    freezeCalls.push({ kind: 'archive-only', cone: opts.cone });
     return null;
   }),
 }));
@@ -34,7 +42,7 @@ vi.mock('../../../src/speech/dictation-priming.js', () => ({
 
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
-import { wireFreezerRail } from '../../../src/ui/wc/wc-live-freezer.js';
+import { frozenProvenanceEl, wireFreezerRail } from '../../../src/ui/wc/wc-live-freezer.js';
 
 function unit(over: Partial<RegisteredScoop>): RegisteredScoop {
   return {
@@ -72,6 +80,8 @@ const ROSTER = [primary, research, helper];
 
 interface Harness {
   freezer: HTMLElement;
+  thread: HTMLElement;
+  loaded: unknown[][];
   clearCalls: Array<string | undefined>;
   selected: RegisteredScoop | null;
   selections: string[];
@@ -99,14 +109,18 @@ function harness(selected: RegisteredScoop | null): Harness {
     },
     readDir: async () => [],
   };
+  const thread = document.createElement('slicc-thread');
+  const loaded: unknown[][] = [];
   const refs = {
     freezer,
-    thread: document.createElement('slicc-thread'),
+    thread,
     inputCard: document.createElement('slicc-input-card'),
     switcher: document.createElement('slicc-switcher'),
   };
   const state: Harness = {
     freezer,
+    thread,
+    loaded,
     clearCalls,
     selected,
     selections,
@@ -126,7 +140,12 @@ function harness(selected: RegisteredScoop | null): Harness {
       },
       spawnAgent: vi.fn(),
     } as unknown as OffscreenClient,
-    getController: () => ({ loadMessages: vi.fn() }) as never,
+    getController: () =>
+      ({
+        loadMessages: (messages: unknown[]) => {
+          loaded.push(messages);
+        },
+      }) as never,
     getSelected: () => state.selected,
     selectScoop: (scoop) => {
       state.selected = scoop;
@@ -234,5 +253,76 @@ describe('thaw fallback follows the archive (#2272)', () => {
     await state.handles.openFrozen('legacy.md');
 
     expect(state.selected?.jid).toBe('cone_1');
+  });
+});
+
+describe('drop cone freezes without memory (#2272)', () => {
+  it('archives the cone with the archive-only path and refreshes the rail', async () => {
+    freezeCalls.length = 0;
+    const state = harness(primary);
+
+    await state.handles.freezeCone(research);
+
+    expect(freezeCalls).toEqual([
+      { kind: 'archive-only', cone: { folder: 'cone-research', label: 'Research' } },
+    ]);
+    // Nothing is cleared or re-selected — the drop itself does that.
+    expect(state.clearCalls).toEqual([]);
+    expect(state.selections).toEqual([]);
+  });
+});
+
+describe('thawed chats say which cone they came from (#2272)', () => {
+  it('captions an extra cone by label, the primary and legacy archives plainly', () => {
+    const caption = (entry?: { cone?: string; coneLabel?: string }) =>
+      frozenProvenanceEl(document, entry).getAttribute('label');
+    expect(caption({ cone: 'cone-research', coneLabel: 'Research' })).toBe(
+      'Frozen chat · from cone Research'
+    );
+    expect(caption({ cone: 'cone-side-quest' })).toBe('Frozen chat · from cone side-quest');
+    expect(caption({ cone: 'cone' })).toBe('Frozen chat');
+    expect(caption(undefined)).toBe('Frozen chat');
+    expect(frozenProvenanceEl(document, undefined).tagName.toLowerCase()).toBe(
+      'slicc-day-separator'
+    );
+  });
+
+  it('prepends the caption to the thawed chat log, not to the rail', async () => {
+    const state = harness(null);
+    state.files.set(
+      '/sessions/index.json',
+      JSON.stringify([
+        {
+          filename: 'research.md',
+          title: 'Research notes',
+          frozenAt: '2026-01-01T00:00:00.000Z',
+          messageCount: 2,
+          cone: 'cone-research',
+          coneLabel: 'Research',
+        },
+      ])
+    );
+    state.files.set(
+      '/sessions/research.md',
+      [
+        '---',
+        'title: "Research notes"',
+        '---',
+        '',
+        '# Research notes',
+        '',
+        '## User',
+        '',
+        'hi',
+        '',
+      ].join('\n')
+    );
+
+    await state.handles.openFrozen('research.md');
+
+    expect(state.loaded).toHaveLength(1);
+    const caption = state.thread.querySelector('[data-frozen-provenance]');
+    expect(caption?.getAttribute('label')).toBe('Frozen chat · from cone Research');
+    expect(state.freezer.querySelector('[data-frozen-provenance]')).toBeNull();
   });
 });

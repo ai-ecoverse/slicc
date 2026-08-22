@@ -791,7 +791,7 @@ export async function mountWcUiFollower(
       if (!followerSelectedScoop || !scoops.some((scoop) => scoop.jid === followerSelectedScoop)) {
         followerSelectedScoop = activeScoopJid;
       }
-      boot.refs.switcher.scoops = toFollowerSwitcherScoops(scoops);
+      boot.refs.switcher.scoops = toFollowerSwitcherScoops(scoops, followerSelectedScoop);
       boot.refs.switcher.setAttribute('active', followerSelectedScoop ?? activeScoopJid);
     },
     onModelsList: modelSurface.onModelsList,

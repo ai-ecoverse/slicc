@@ -14,10 +14,13 @@ const buttonOf = (el: SliccFreezerNew) =>
   el.shadowRoot?.querySelector('button.fznew') as HTMLButtonElement;
 const badgeOf = (el: SliccFreezerNew) => el.shadowRoot?.querySelector('.nico') as HTMLElement;
 const labelOf = (el: SliccFreezerNew) => el.shadowRoot?.querySelector('.nlbl') as HTMLElement;
-const optionsOf = (el: SliccFreezerNew) =>
-  el.shadowRoot?.querySelector('.fznew-options') as HTMLElement;
-const optionOf = (el: SliccFreezerNew, action: 'save' | 'skip' | 'erase') =>
-  el.shadowRoot?.querySelector(`.fznew-opt--${action}`) as HTMLButtonElement;
+const rowOf = (el: SliccFreezerNew) => el.shadowRoot?.querySelector('.fznew-row') as HTMLElement;
+const actionOf = (el: SliccFreezerNew, action: string) =>
+  el.shadowRoot?.querySelector(`.fznew-act--${action}`) as HTMLButtonElement;
+const actionsOf = (el: SliccFreezerNew) =>
+  Array.from(el.shadowRoot?.querySelectorAll<HTMLButtonElement>('.fznew-act') ?? []).map((b) =>
+    b.className.replace(/.*fznew-act--/, '')
+  );
 
 /** Resolve a token expression (e.g. `var(--ghost)`) to its computed rgb(). */
 function rgb(value: string): string {
@@ -188,14 +191,12 @@ describe('slicc-freezer-new', () => {
     expect(el.noSkip).toBe(false);
   });
 
-  it('no-skip: hides the skip row — only save and erase remain in the legend', () => {
+  it('no-skip: hides the fast action — only save and discard remain in the row', () => {
     const el = mount((n) => {
       n.setAttribute('expanded', '');
       n.setAttribute('no-skip', '');
     });
-    expect(optionOf(el, 'save')).toBeTruthy();
-    expect(optionOf(el, 'erase')).toBeTruthy();
-    expect(optionOf(el, 'skip')).toBeFalsy();
+    expect(actionsOf(el)).toEqual(['new-chat-save', 'new-chat-erase']);
   });
 
   it('no-skip: a short click commits new-chat-save immediately (no double-click window)', () => {
@@ -279,52 +280,55 @@ describe('slicc-freezer-new', () => {
     }
   });
 
-  // --- expanded options legend ---------------------------------------------
+  // --- expanded action row ---------------------------------------------------
 
-  it('renders the three option buttons; collapsed hides the legend', () => {
+  it('renders the three chat actions in a row; collapsed hides the row', () => {
     const el = mount();
-    expect(optionOf(el, 'save')).toBeTruthy();
-    expect(optionOf(el, 'skip')).toBeTruthy();
-    expect(optionOf(el, 'erase')).toBeTruthy();
-    expect(optionsOf(el).getAttribute('part')).toBe('options');
-    // collapsed by default → legend not displayed
-    expect(getComputedStyle(optionsOf(el)).display).toBe('none');
+    expect(actionsOf(el)).toEqual(['new-chat-save', 'new-chat-skip', 'new-chat-erase']);
+    expect(rowOf(el).getAttribute('part')).toBe('row');
+    // collapsed by default → the gesture badge shows, the row does not
+    expect(getComputedStyle(rowOf(el)).display).toBe('none');
+    expect(getComputedStyle(buttonOf(el)).display).not.toBe('none');
   });
 
-  it('keeps the options legend hidden at rest even when expanded', () => {
+  it('expanded: shows the row in place of the gesture badge, without hover', () => {
     const el = mount((node) => {
       node.expanded = true;
     });
-    // No hover / focus → the legend stays hidden (revealed only on hover/focus).
-    expect(getComputedStyle(optionsOf(el)).display).toBe('none');
+    expect(getComputedStyle(rowOf(el)).display).toBe('flex');
+    expect(getComputedStyle(buttonOf(el)).display).toBe('none');
   });
 
-  it('reveals the options legend on keyboard focus (focus-within) when expanded', () => {
-    const el = mount((node) => {
-      node.expanded = true;
-    });
-    buttonOf(el).focus();
-    expect(getComputedStyle(optionsOf(el)).display).toBe('flex');
-    buttonOf(el).blur();
-    expect(getComputedStyle(optionsOf(el)).display).toBe('none');
-  });
-
-  it('has an expanded-hover rule that reveals the options legend', () => {
+  it('the row never depends on hover or focus (no layout shift, #2272)', () => {
     const el = mount((node) => {
       node.expanded = true;
     });
     const sheet = (el.shadowRoot as ShadowRoot).adoptedStyleSheets[0];
     const rules = Array.from(sheet.cssRules) as CSSStyleRule[];
-    const hoverRule = rules.find(
+    const reveal = rules.filter(
       (r) =>
-        r.selectorText?.includes(':host([expanded]:hover)') &&
-        r.selectorText.includes('.fznew-options')
+        r.selectorText?.includes('.fznew-row') &&
+        (r.selectorText.includes(':hover') || r.selectorText.includes(':focus-within'))
     );
-    expect(hoverRule).toBeDefined();
-    expect(hoverRule?.style.display).toBe('flex');
+    expect(reveal).toEqual([]);
+    const before = rowOf(el).getBoundingClientRect().height;
+    actionOf(el, 'new-chat-save').focus();
+    expect(rowOf(el).getBoundingClientRect().height).toBe(before);
   });
 
-  it('clicking an option button fires its event immediately', () => {
+  it('every row action carries a tooltip and an accessible name', () => {
+    const el = mount((node) => {
+      node.expanded = true;
+      node.cones = 2;
+    });
+    for (const btn of el.shadowRoot?.querySelectorAll<HTMLButtonElement>('.fznew-act') ?? []) {
+      expect(btn.title.length).toBeGreaterThan(0);
+      expect(btn.getAttribute('aria-label')).toBe(btn.title);
+      expect(btn.querySelector('svg')).toBeTruthy();
+    }
+  });
+
+  it('clicking a row action fires its event immediately', () => {
     const el = mount((node) => {
       node.expanded = true;
     });
@@ -332,10 +336,60 @@ describe('slicc-freezer-new', () => {
     for (const t of ['new-chat-save', 'new-chat-skip', 'new-chat-erase']) {
       el.addEventListener(t, () => evts.push(t));
     }
-    optionOf(el, 'skip').click();
-    optionOf(el, 'erase').click();
-    optionOf(el, 'save').click();
+    actionOf(el, 'new-chat-skip').click();
+    actionOf(el, 'new-chat-erase').click();
+    actionOf(el, 'new-chat-save').click();
     expect(evts).toEqual(['new-chat-skip', 'new-chat-erase', 'new-chat-save']);
+  });
+
+  // --- cone actions ------------------------------------------------------------
+
+  it('cones: absent hides both cone actions', () => {
+    const el = mount((node) => {
+      node.expanded = true;
+    });
+    expect(el.cones).toBeNull();
+    expect(actionOf(el, 'new-cone')).toBeFalsy();
+    expect(actionOf(el, 'drop-cone')).toBeFalsy();
+  });
+
+  it('cones: one cone offers new-cone only; two offer drop-cone too', () => {
+    const el = mount((node) => {
+      node.expanded = true;
+      node.setAttribute('cones', '1');
+    });
+    expect(actionsOf(el)).toEqual(['new-chat-save', 'new-chat-skip', 'new-chat-erase', 'new-cone']);
+    el.cones = 2;
+    expect(el.getAttribute('cones')).toBe('2');
+    expect(actionsOf(el).slice(-2)).toEqual(['new-cone', 'drop-cone']);
+    el.cones = null;
+    expect(el.hasAttribute('cones')).toBe(false);
+  });
+
+  it('cone actions fire composed, bubbling events and never enter busy', () => {
+    const el = mount((node) => {
+      node.expanded = true;
+      node.cones = 3;
+    });
+    const evts: string[] = [];
+    for (const t of ['new-cone', 'drop-cone']) {
+      document.addEventListener(t, (e) => evts.push(`${t}:${e.composed}`), { once: true });
+    }
+    actionOf(el, 'new-cone').click();
+    actionOf(el, 'drop-cone').click();
+    expect(evts).toEqual(['new-cone:true', 'drop-cone:true']);
+    expect(el.busy).toBe(false);
+  });
+
+  it('busy: the save badge in the row shows the spinner and aria-busy', () => {
+    const el = mount((node) => {
+      node.expanded = true;
+      node.busy = true;
+    });
+    const save = actionOf(el, 'new-chat-save');
+    expect(save.getAttribute('aria-busy')).toBe('true');
+    expect(save.querySelector('.fznew-spinner')).toBeTruthy();
+    expect(actionOf(el, 'new-chat-erase').querySelector('.fznew-spinner')).toBeFalsy();
   });
 
   it('uses a lighter label font weight than the prototype 600', () => {
@@ -501,19 +555,20 @@ describe('slicc-freezer-new', () => {
 
   // --- base appearance / metrics (real Chromium) ---------------------------
 
-  it('is a full-width 36px-row button with an 8px radius and pointer cursor', () => {
-    const el = mount((node) => {
-      node.expanded = true;
-    });
-    const btn = buttonOf(el);
-    const cs = getComputedStyle(btn);
+  it('collapsed: the gesture badge is a 36px-row button with an 8px radius and pointer cursor', () => {
+    const el = mount();
+    const cs = getComputedStyle(buttonOf(el));
     expect(cs.minHeight).toBe('36px');
     expect(cs.borderTopLeftRadius).toBe('8px');
     expect(cs.cursor).toBe('pointer');
     expect(cs.backgroundColor).toBe('rgba(0, 0, 0, 0)'); // transparent at rest
-    // full-width row: CSS width:100% resolves to the parent's content width in px.
-    expect(cs.width).toMatch(/px$/);
-    expect(Number.parseFloat(cs.width)).toBeGreaterThan(100);
+  });
+
+  it('expanded: the row keeps the same 36px minimum height as the badge', () => {
+    const el = mount((node) => {
+      node.expanded = true;
+    });
+    expect(getComputedStyle(rowOf(el)).minHeight).toBe('36px');
   });
 
   it('context-tints the .nico badge from --ctx (28px circle, ctx glyph color)', () => {
@@ -543,17 +598,12 @@ describe('slicc-freezer-new', () => {
     expect(btn.columnGap).toBe('0px');
   });
 
-  it('expanded: label fades in to full opacity beside the badge', () => {
+  it('expanded: the row replaces the badge and its label entirely', () => {
     const el = mount((node) => {
       node.expanded = true;
     });
-    const label = getComputedStyle(labelOf(el));
-    expect(label.opacity).toBe('1');
-    expect(labelOf(el).getBoundingClientRect().width).toBeGreaterThan(0);
-
-    const btn = getComputedStyle(buttonOf(el));
-    // gap restored when expanded (prototype gap:10px)
-    expect(btn.columnGap).toBe('10px');
+    expect(labelOf(el).getBoundingClientRect().width).toBe(0);
+    expect(rowOf(el).getBoundingClientRect().width).toBeGreaterThan(0);
   });
 
   it('toggling expanded flips the label visibility live', () => {

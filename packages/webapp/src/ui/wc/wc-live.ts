@@ -28,7 +28,7 @@ import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import type { WcChatController } from './wc-chat-controller.js';
-import { wireConesRail } from './wc-cones-rail.js';
+import { wireConeActions } from './wc-cone-actions.js';
 import {
   createWcLiveCallbacks,
   type LickBackpressureState,
@@ -300,7 +300,8 @@ function wireWcStats(wiring: WcLiveWiring, client: OffscreenClient): () => void 
         wiring.statuses,
         wiring.fills,
         wiring.phases,
-        wiring.awaitingInput
+        wiring.awaitingInput,
+        wiring.getSelected()?.jid
       );
     });
   };
@@ -836,7 +837,7 @@ export function attachWcClient(
 
   // Freezer rail: frozen cone sessions thaw read-only into the thread;
   // selecting any scoop chip returns to the live conversation.
-  const { refreshFreezer, openFrozen, getViewedFrozenSessionId } = wireFreezerRail({
+  const freezerRail = wireFreezerRail({
     refs,
     openVfs,
     client,
@@ -846,24 +847,27 @@ export function attachWcClient(
     clearSelection: boot.clearSelection,
     log,
   });
+  const { refreshFreezer, openFrozen, getViewedFrozenSessionId } = freezerRail;
   // The boot-time refresh races the worker's VfsRpcHost installation (a lost
   // request hangs silently) — re-run once the kernel reports ready.
   refreshFreezer();
   boot.onClientReady(refreshFreezer);
 
-  // Cones section of the rail: add / switch / remove root units (#1666).
-  // Experimental — behind the `multiple-cones` flag (Settings → Experimental).
-  // Re-rendered from the roster whenever the switcher chips refresh.
+  // Cone actions of the rail's action row: new cone / drop cone (#1666,
+  // #2272). Experimental — behind the `multiple-cones` flag (Settings →
+  // Experimental); without it the row never learns a cone count and shows
+  // neither. Re-synced from the roster whenever the switcher chips refresh.
   if (isFeatureEnabled('multiple-cones')) {
-    const conesRail = wireConesRail({
-      refs,
+    const coneActions = wireConeActions({
+      freezer: refs.freezer,
       client,
       getSelected: () => boot.getSelected(),
       selectScoop: boot.selectScoop,
+      freezeCone: freezerRail.freezeCone,
       log,
     });
-    boot.wiring.refreshConesRail = conesRail.refresh;
-    boot.onClientReady(conesRail.refresh);
+    boot.wiring.refreshConeActions = coneActions.refresh;
+    boot.onClientReady(coneActions.refresh);
   }
 
   wireWcUrlContext(boot, client, openFrozen);

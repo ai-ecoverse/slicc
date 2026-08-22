@@ -75,6 +75,12 @@ export interface FrozenSessionIndexEntry {
    */
   memoryPending?: true;
   /**
+   * The user chose to freeze this chat WITHOUT any memory extraction — now
+   * or later (a dropped cone, #2272). The title/icon catch-up still runs;
+   * the memory half of the legacy enrichment is skipped for good.
+   */
+  memorySkipped?: true;
+  /**
    * Number of boot-time catch-up attempts already started for either pending
    * marker. Persisted before the LLM call; entries at the retry cap are skipped.
    */

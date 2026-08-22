@@ -93,8 +93,11 @@ Non-obvious rules:
   `ui/`. Every creation path sets `parentJid` explicitly; restore backfills
   and persists it. Several roots may exist: UI code resolves "the cone" via
   `ui/wc/wc-unit-context.ts` (`defaultRootOf`, `threadContextFor`,
-  `switcherLabelFor`), never `find(s => s.isCone)`; chat sessions are keyed
-  `session-<folder>` (`chatSessionIdFor`). See `docs/work-unit.md`.
+  `switcherLabelFor`, `orderForSwitcher(scoops, selectedJid)`), never
+  `find(s => s.isCone)`; chat sessions are keyed `session-<folder>`
+  (`chatSessionIdFor`). Cone add/drop lives in `ui/wc/wc-cone-actions.ts`
+  behind `<slicc-freezer-new>`'s action row; the tab strip is the only
+  switcher. See `docs/work-unit.md`.
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without
   queue/watermark loss; user `web` bypasses the window (immediate/awaited,
   prevents deferral). `transcript-limits.ts` caps bridge/event transcripts at 64 KB

@@ -7,6 +7,7 @@ interface FreezerNewArgs {
   label?: string;
   busy?: boolean;
   noSkip?: boolean;
+  cones?: number;
 }
 
 /**
@@ -33,18 +34,29 @@ const meta: Meta<FreezerNewArgs> = {
     busy: { control: 'boolean', description: 'Spinning loader glyph (work-in-progress state)' },
     noSkip: {
       control: 'boolean',
-      description: 'Two-outcome mode: hide the skip row, short click saves immediately',
+      description: 'Two-outcome mode: hide the fast action, short click saves immediately',
+    },
+    cones: {
+      control: 'number',
+      description: 'Cone count: absent hides the cone actions, >1 also shows drop-cone',
     },
   },
-  render: ({ expanded, label, busy, noSkip }) => {
+  render: ({ expanded, label, busy, noSkip, cones }) => {
     const el = document.createElement('slicc-freezer-new');
     if (expanded) el.setAttribute('expanded', '');
     if (label) el.setAttribute('label', label);
     if (busy) el.setAttribute('busy', '');
     if (noSkip) el.setAttribute('no-skip', '');
+    if (typeof cones === 'number') el.setAttribute('cones', String(cones));
     // The three-state gesture (single / double / long-press) + the expanded
-    // legend buttons all surface as distinct events — log each for review.
-    for (const type of ['new-chat-save', 'new-chat-skip', 'new-chat-erase']) {
+    // row buttons all surface as distinct events — log each for review.
+    for (const type of [
+      'new-chat-save',
+      'new-chat-skip',
+      'new-chat-erase',
+      'new-cone',
+      'drop-cone',
+    ]) {
       el.addEventListener(type, () => {
         // eslint-disable-next-line no-console
         console.log(type);
@@ -61,43 +73,38 @@ type Story = StoryObj<FreezerNewArgs>;
 export const Collapsed: Story = { args: { expanded: false } };
 
 /**
- * Expanded — the "New chat" label fades in beside the context-tinted badge. The
- * three-state gesture actions (save / skip memory / erase) are NOT shown at rest;
- * they are revealed only on hover or keyboard focus (see the Hover story).
+ * Expanded — the gesture badge gives way to one row of icon buttons (save /
+ * fast / discard), each with a tooltip. The row is always present at a fixed
+ * height: nothing is revealed on hover, so the rail never shifts (#2272).
  */
 export const Expanded: Story = { args: { expanded: true } };
 
 /**
- * Hover — ghost background plus the revealed options legend (save / skip / erase),
- * surfaced via the global Pseudo States toolbar. The legend only appears on
- * hover / focus-within, never persistently.
+ * Multiple cones — the host reports `cones`, so the row also offers new-cone;
+ * with more than one cone it offers drop-cone as well.
  */
-export const Hover: Story = {
-  args: { expanded: true },
-  parameters: { pseudo: { hover: true } },
-};
+export const MultipleCones: Story = { args: { expanded: true, cones: 2 } };
+
+/** One cone — new-cone is offered, drop-cone is not (the last cone stays). */
+export const SingleCone: Story = { args: { expanded: true, cones: 1 } };
 
 /**
  * Two-outcome mode (`no-skip`) — used when a background memory curator owns
- * the memory decision (agentic memory): the legend reduces to "with a saved
- * transcript" (save) and "without" (erase), and a short click saves
- * immediately with no double-click window.
+ * the memory decision (agentic memory): the row reduces to save and discard,
+ * and a collapsed short click saves immediately with no double-click window.
  */
-export const TwoOutcomeHover: Story = {
-  args: { expanded: true, noSkip: true },
-  parameters: { pseudo: { hover: true } },
-};
+export const TwoOutcome: Story = { args: { expanded: true, noSkip: true, cones: 2 } };
 
 /**
  * Busy — the work-in-progress state entered on a save click (or driven by the
- * host via the `busy` attribute): the badge glyph swaps to a spinning lucide
- * loader for immediate feedback before the save + reload completes. The spin is
- * held static under `prefers-reduced-motion: reduce`.
+ * host via the `busy` attribute): the save badge's glyph swaps to a spinning
+ * lucide loader for immediate feedback before the save + reload completes. The
+ * spin is held static under `prefers-reduced-motion: reduce`.
  */
-export const Busy: Story = { args: { expanded: true, busy: true } };
+export const Busy: Story = { args: { expanded: true, busy: true, cones: 2 } };
 
-/** Custom label text (also overridable via the default slot). */
-export const CustomLabel: Story = { args: { expanded: true, label: 'Start fresh' } };
+/** Custom label text (collapsed badge; also overridable via the default slot). */
+export const CustomLabel: Story = { args: { expanded: false, label: 'Start fresh' } };
 
 /**
  * Custom glyph — the named `icon` slot overrides the default lucide `square-pen`
@@ -107,13 +114,12 @@ export const CustomLabel: Story = { args: { expanded: true, label: 'Start fresh'
 export const CustomIcon: Story = {
   render: () => {
     const el = document.createElement('slicc-freezer-new');
-    el.setAttribute('expanded', '');
     el.setAttribute('label', 'New chat');
     const icon = document.createElement('span');
     icon.slot = 'icon';
     icon.appendChild(iconEl('plus', { size: 16 }));
     el.appendChild(icon);
-    return railFrame(el, true);
+    return railFrame(el, false);
   },
 };
 

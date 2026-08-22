@@ -97,8 +97,11 @@ export function summaryIsRoot(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>):
  * follower with several cones reads as "cone, its scoops, next cone, …";
  * scoops whose owner is unknown (older leader) keep the leader's order.
  */
-export function toFollowerSwitcherScoops(scoops: readonly ScoopSummary[]): SwitcherScoop[] {
-  return orderByOwner(scoops).map((scoop) => {
+export function toFollowerSwitcherScoops(
+  scoops: readonly ScoopSummary[],
+  selectedJid?: string | null
+): SwitcherScoop[] {
+  return orderByOwner(scoops, selectedJid).map((scoop) => {
     const expanded = fromWire(scoop);
     return {
       key: scoop.jid,
@@ -114,24 +117,49 @@ export function toFollowerSwitcherScoops(scoops: readonly ScoopSummary[]): Switc
 }
 
 /**
- * Roots first; every unit follows its owner, depth-first, so a nested scoop
- * (a scoop spawned by a scoop) still sits inside its cone's group. Units whose
- * owner is unknown or missing keep leader order at the tail. A leader that
- * sends no edges at all keeps the legacy cone-first order.
+ * Every root first, then the selected cone's scoops (depth-first, so a
+ * nested scoop still sits with its cone), then every other cone's scoops in
+ * the same owner order — the leader's strip order (#2272). Units whose owner
+ * is unknown or missing keep leader order at the tail. A leader that sends no
+ * edges at all keeps the legacy cone-first order.
  */
-function orderByOwner(scoops: readonly ScoopSummary[]): ScoopSummary[] {
+function orderByOwner(
+  scoops: readonly ScoopSummary[],
+  selectedJid?: string | null
+): ScoopSummary[] {
   if (!scoops.some((s) => s.parentId !== undefined)) {
     return [...scoops].sort((a, b) => Number(b.isCone) - Number(a.isCone));
   }
   const placed = new Set<string>();
-  const out: ScoopSummary[] = [];
-  const visit = (owner: ScoopSummary): void => {
-    if (placed.has(owner.jid)) return;
-    placed.add(owner.jid);
-    out.push(owner);
-    for (const s of scoops) if (s.parentId === owner.jid) visit(s);
+  const descendants = (owner: ScoopSummary, out: ScoopSummary[]): ScoopSummary[] => {
+    for (const s of scoops) {
+      if (s.parentId === owner.jid && !placed.has(s.jid)) {
+        placed.add(s.jid);
+        out.push(s);
+        descendants(s, out);
+      }
+    }
+    return out;
   };
-  for (const root of scoops) if (summaryIsRoot(root)) visit(root);
-  for (const s of scoops) if (!placed.has(s.jid)) out.push(s);
-  return out;
+  const roots = scoops.filter(summaryIsRoot);
+  for (const root of roots) placed.add(root.jid);
+  const selectedRoot = rootOfSummary(scoops, selectedJid);
+  const mine = selectedRoot ? descendants(selectedRoot, []) : [];
+  const others = roots.flatMap((root) => descendants(root, []));
+  const tail = scoops.filter((s) => !placed.has(s.jid));
+  return [...roots, ...mine, ...others, ...tail];
+}
+
+/** The root that owns `jid` (itself when it is a root); `undefined` when unknown. */
+function rootOfSummary(
+  scoops: readonly ScoopSummary[],
+  jid: string | null | undefined
+): ScoopSummary | undefined {
+  let current = jid ? scoops.find((s) => s.jid === jid) : undefined;
+  for (let hops = 0; current && hops <= scoops.length; hops++) {
+    if (summaryIsRoot(current)) return current;
+    const parentId = current.parentId;
+    current = scoops.find((s) => s.jid === parentId);
+  }
+  return undefined;
 }

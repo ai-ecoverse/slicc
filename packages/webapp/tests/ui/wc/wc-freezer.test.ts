@@ -65,19 +65,18 @@ describe('frozenCard', () => {
   });
 });
 
-describe('cone provenance on cards (#2272)', () => {
+describe('cone provenance (#2272)', () => {
   it('shows no cone badge for the primary cone or a legacy archive', () => {
     expect(coneBadgeFor(ENTRY)).toBeUndefined();
     expect(coneBadgeFor({ ...ENTRY, cone: 'cone' })).toBeUndefined();
-    expect(frozenCard(ENTRY).getAttribute('meta')).toBe(
-      frozenCard({ ...ENTRY, cone: 'cone' }).getAttribute('meta')
-    );
   });
 
-  it('names the extra cone an archive came from', () => {
+  it('names the extra cone an archive came from, but never on the rail card', () => {
     const entry = { ...ENTRY, cone: 'cone-research', coneLabel: 'Research' };
     expect(coneBadgeFor(entry)).toBe('Research');
-    expect(frozenCard(entry).getAttribute('meta')).toContain('· Research');
+    // One Freezer for all cones: the card's meta line is the same whichever
+    // cone the chat came from — attribution lives in the chat log.
+    expect(frozenCard(entry).getAttribute('meta')).toBe(frozenCard(ENTRY).getAttribute('meta'));
   });
 
   it('falls back to the folder slug when no label was recorded', () => {

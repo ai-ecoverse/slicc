@@ -507,6 +507,25 @@ async function raceEnrichmentAgainstTimer(
 export async function runNewSessionFreezeQuick(
   opts: RunNewSessionFreezeOptions
 ): Promise<FrozenSession | null> {
+  return runQuickFreeze(opts, undefined);
+}
+
+/**
+ * Freeze a cone's chat with NO memory extraction, now or later — the "drop
+ * cone" path (#2272). Same durable quick snapshot as the fast new chat, but
+ * the archive is marked `memorySkipped` so the catch-up enriches the title
+ * and icon only.
+ */
+export async function runNewSessionArchiveOnly(
+  opts: RunNewSessionFreezeOptions
+): Promise<FrozenSession | null> {
+  return runQuickFreeze(opts, 'skip');
+}
+
+async function runQuickFreeze(
+  opts: RunNewSessionFreezeOptions,
+  memory: 'skip' | undefined
+): Promise<FrozenSession | null> {
   const sessionStore = new SessionStore();
   try {
     await sessionStore.init();
@@ -522,6 +541,7 @@ export async function runNewSessionFreezeQuick(
     vfs: opts.vfs,
     mode: 'quick',
     cone: opts.cone,
+    ...(memory ? { memory } : {}),
   });
 
   // Complete-snapshot hook — same non-blocking pattern as runNewSessionFreeze.

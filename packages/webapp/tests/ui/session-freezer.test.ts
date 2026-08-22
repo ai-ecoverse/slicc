@@ -265,6 +265,48 @@ describe('freezeConeSession', () => {
     expect(vfs.files.get('/shared/CLAUDE.md')).toBeUndefined();
   });
 
+  it("memory: 'skip' freezes without any memory call and marks the archive memorySkipped (#2272)", async () => {
+    const store = makeFakeStore({
+      id: 'session-cone-research',
+      messages: [
+        userMessage('q1'),
+        assistantMessage('a1'),
+        userMessage('q2'),
+        assistantMessage('a2'),
+      ],
+      createdAt: 100,
+      updatedAt: 200,
+    });
+    const vfs = makeFakeVfs();
+    const spawn = vi.fn();
+
+    const result = await freezeConeSession({
+      sessionStore: store,
+      vfs: vfs as unknown as Parameters<typeof freezeConeSession>[0]['vfs'],
+      model: fakeModel,
+      apiKey: 'k',
+      mode: 'quick',
+      memory: 'skip',
+      // Even a wired curator is not started for a dropped cone.
+      agenticMemorySpawn: spawn as never,
+      cone: { folder: 'cone-research', label: 'Research' },
+    });
+
+    expect(result).not.toBeNull();
+    expect(result!.memorySkipped).toBe(true);
+    expect(result!.memoryPending).toBeUndefined();
+    expect(result!.pendingEnrichment).toBe(true);
+    expect(mockRunOneOffCompactionCall).not.toHaveBeenCalled();
+    expect(mockRunAgenticMemoryPass).not.toHaveBeenCalled();
+    expect(spawn).not.toHaveBeenCalled();
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index[0]).toMatchObject({ memorySkipped: true, cone: 'cone-research' });
+    expect(index[0].memoryPending).toBeUndefined();
+  });
+
   it('writes memoryPending before the agentic pass and clears it on success', async () => {
     mockRunOneOffCompactionCall.mockResolvedValueOnce('Agentic memory session');
     const vfs = makeFakeVfs();
@@ -2020,6 +2062,37 @@ describe('enrichPendingSession', () => {
     expect(lastCall.vfs).toBe(vfs);
     expect(lastCall.model).toBe(fakeModel);
     expect(lastCall.apiKey).toBe('k');
+  });
+
+  it('memorySkipped archive (dropped cone): title-only pass, no memory, marker survives the rename (#2272)', async () => {
+    const vfs = makeFakeVfs();
+    const { pendingFilename, frozenAt } = await seedPending(vfs);
+    mockRunOneOffCompactionCall.mockResolvedValueOnce('Build pipeline debug');
+
+    const updated = await enrichPendingSession(
+      vfs as unknown as Parameters<typeof enrichPendingSession>[0],
+      {
+        filename: pendingFilename,
+        title: 'debug the build pipeline',
+        frozenAt,
+        messageCount: 4,
+        pendingEnrichment: true,
+        memorySkipped: true,
+      },
+      // The caller asks for memory; the archive says no.
+      { model: fakeModel!, apiKey: 'k' }
+    );
+
+    expect(updated).not.toBeNull();
+    expect(mockRunOneOffCompactionCall).toHaveBeenCalledOnce();
+    expect(mockRunOneOffCompactionCall.mock.calls[0][0].instruction).toBe('TITLE');
+    expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
+    expect(updated!.pendingEnrichment).toBeUndefined();
+    expect(updated!.memoryPending).toBeUndefined();
+    const index = await readSessionsIndex(
+      vfs as unknown as Parameters<typeof readSessionsIndex>[0]
+    );
+    expect(index[0].memorySkipped).toBe(true);
   });
 
   it('skipMemory: title-only pass skips the memory call and keeps memoryPending across the rename', async () => {

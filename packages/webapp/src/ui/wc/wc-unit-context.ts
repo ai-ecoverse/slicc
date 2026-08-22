@@ -9,6 +9,7 @@
  */
 
 import type { RegisteredScoop } from '../../scoops/types.js';
+import { subtreeOf } from '../../transcript/collect.js';
 import { isRootUnit, rootsOf } from '../../work-unit/policy.js';
 import { isPrimaryRoot, PRIMARY_CONE_FOLDER } from '../../work-unit/record.js';
 
@@ -61,10 +62,24 @@ export function defaultRootOf(scoops: readonly RegisteredScoop[]): RegisteredSco
 }
 
 /** Roots first (oldest first), then children in registry order. */
-export function orderForSwitcher(scoops: readonly RegisteredScoop[]): RegisteredScoop[] {
+export function orderForSwitcher(
+  scoops: readonly RegisteredScoop[],
+  selectedJid?: string | null
+): RegisteredScoop[] {
   const roots = rootsOf(scoops);
   const rootIds = new Set(roots.map((s) => s.jid));
-  return [...roots, ...scoops.filter((s) => !rootIds.has(s.jid))];
+  const rest = scoops.filter((s) => !rootIds.has(s.jid));
+  // The selected cone's scoops come first (#2272): the strip reads
+  // "cones, then what I am working in, then everything else".
+  const selected = selectedJid ? scoops.find((s) => s.jid === selectedJid) : undefined;
+  const selectedRoot = selected ? rootForSelection(scoops, selected) : undefined;
+  if (!selectedRoot) return [...roots, ...rest];
+  const mine = new Set(subtreeOf(scoops, selectedRoot.jid).map((s) => s.jid));
+  return [
+    ...roots,
+    ...rest.filter((s) => mine.has(s.jid)),
+    ...rest.filter((s) => !mine.has(s.jid)),
+  ];
 }
 
 /**

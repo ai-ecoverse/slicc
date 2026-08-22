@@ -21,23 +21,24 @@ export { SESSIONS_INDEX_PATH } from '../session-freezer.js';
 export { FREEZER_TINT } from './wc-shell.js';
 
 /**
- * Which cone an archive belongs to, for the card's meta line — `undefined`
- * for the primary cone and for legacy archives with no `cone` field, both
- * of which read as "the cone" and would only add noise (#2272).
+ * Which cone an archive belongs to, for the thawed chat log's header —
+ * `undefined` for the primary cone and for legacy archives with no `cone`
+ * field, both of which read as "the cone" and would only add noise. The
+ * rail card itself never shows it: one Freezer for all cones, attribution
+ * lives in the chat log (#2272).
  */
 export function coneBadgeFor(entry: FrozenSessionIndexEntry): string | undefined {
   if (!entry.cone || entry.cone === PRIMARY_CONE_FOLDER) return undefined;
   return entry.coneLabel || entry.cone.replace(/^cone-/, '');
 }
 
-/** Meta line for a card, e.g. `Jan 1 · 12 turns` (`· research` for an extra cone). */
+/** Meta line for a card, e.g. `Jan 1 · 12 turns`. */
 function metaLine(entry: FrozenSessionIndexEntry): string {
   const day = new Date(entry.frozenAt).toLocaleDateString(undefined, {
     month: 'short',
     day: 'numeric',
   });
-  const cone = coneBadgeFor(entry);
-  return `${day} · ${entry.messageCount} turns${cone ? ` · ${cone}` : ''}`;
+  return `${day} · ${entry.messageCount} turns`;
 }
 
 /** Build one freezer card; `slug` carries the archive filename. */
