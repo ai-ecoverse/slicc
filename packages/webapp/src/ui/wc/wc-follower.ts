@@ -28,14 +28,15 @@ import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
 import { prepareWcShell } from './wc-live.js';
 import { installLeaderPermissionsSurface } from './wc-permissions.js';
 import type { WcShellRefs } from './wc-shell.js';
-import { submittedSteer, submittedText } from './wc-shell.js';
+import { applyComposerAvailability, submittedSteer, submittedText } from './wc-shell.js';
 import {
   buildWelcomeHandoffCard,
   isLoginDipAction,
   showSignInRedirect,
 } from './wc-signin-redirect.js';
 import { WcSprinkleZone } from './wc-sprinkles.js';
-import { toFollowerSwitcherScoops } from './wc-tray-scoops.js';
+import { summaryRole, toFollowerSwitcherScoops } from './wc-tray-scoops.js';
+import { isReadOnlyRole } from './wc-unit-context.js';
 
 const log = createLogger('wc-follower');
 
@@ -547,9 +548,22 @@ export async function mountWcUiFollower(
   // the whole reason a stall must not read as a disconnect — the connection is
   // fine and recovers by itself, so the placeholder says "busy", not "lost".
   const LEADER_BUSY = 'The leader is busy — hang on…';
+  /**
+   * The selected unit is a scoop, so the composer band is unmounted (#2312).
+   * The follower reaches that decision through the SAME descriptor role the
+   * leader uses (`summaryRole` → `isReadOnlyRole`) — there is no second rule.
+   */
+  let composerReadOnly = false;
+  /** Last connection-driven composer state, replayed after a selection change. */
+  let composerEnabled = false;
+  let composerPlaceholder = CONNECTING;
   const setComposerState = (enabled: boolean, placeholder: string): void => {
+    composerEnabled = enabled;
+    composerPlaceholder = placeholder;
     boot.refs.inputCard.setAttribute('placeholder', placeholder);
-    if (enabled) boot.refs.inputCard.removeAttribute('disabled');
+    // A read-only selection outranks the connection state: reconnecting while
+    // a scoop is selected must not hand back a composer for it.
+    if (enabled && !composerReadOnly) boot.refs.inputCard.removeAttribute('disabled');
     else boot.refs.inputCard.setAttribute('disabled', '');
   };
   setComposerState(false, CONNECTING);
@@ -649,6 +663,19 @@ export async function mountWcUiFollower(
   let followerScoops: readonly ScoopSummary[] = [];
   const publishFollowerScoops = (): void => {
     boot.refs.switcher.scoops = toFollowerSwitcherScoops(followerScoops, followerSelectedScoop);
+  };
+  /**
+   * Mount or unmount the interactive chrome for the current selection —
+   * the follower's mirror of the leader's `selectScoop` (#2312). A selection
+   * the roster does not describe yet keeps the composer: that is the
+   * pre-multiple-cones default, and the next `scoop-list` re-asserts it.
+   */
+  const applyFollowerSelectionChrome = (): void => {
+    const selected = followerScoops.find((scoop) => scoop.jid === followerSelectedScoop);
+    composerReadOnly = selected ? isReadOnlyRole(summaryRole(selected)) : false;
+    applyComposerAvailability(boot.refs, composerReadOnly);
+    boot.getController()?.setReadOnly(composerReadOnly);
+    setComposerState(composerEnabled, composerPlaceholder);
   };
   boot.refs.switcher.connection = 'disconnected';
 
@@ -803,6 +830,7 @@ export async function mountWcUiFollower(
       }
       followerScoops = scoops;
       publishFollowerScoops();
+      applyFollowerSelectionChrome();
       boot.refs.switcher.setAttribute('active', followerSelectedScoop ?? activeScoopJid);
     },
     onModelsList: modelSurface.onModelsList,
@@ -838,6 +866,9 @@ export async function mountWcUiFollower(
     if (scoopJid) {
       followerSelectedScoop = scoopJid;
       publishFollowerScoops(); // re-order for the new selection, as the leader does
+      // Before `selectScoop`, so the leader's replay for the new unit is the
+      // first thing rendered under the new mode.
+      applyFollowerSelectionChrome();
       boot.refs.switcher.setAttribute('active', scoopJid);
       follower.currentSync?.selectScoop(scoopJid);
     }

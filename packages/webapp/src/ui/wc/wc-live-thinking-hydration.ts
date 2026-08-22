@@ -5,8 +5,13 @@ import type { OffscreenClient } from '../offscreen-client.js';
 import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
 import { metaThinkingForScoop } from './wc-follower-model-surface.js';
 import { scoopColor } from './wc-scoop-color.js';
-import { applyShellContext, type WcShellRefs } from './wc-shell.js';
-import { rootFolderForContext, threadContextFor } from './wc-unit-context.js';
+import { applyComposerAvailability, applyShellContext, type WcShellRefs } from './wc-shell.js';
+import {
+  isReadOnlyRole,
+  rootFolderForContext,
+  threadContextFor,
+  unitRoleFor,
+} from './wc-unit-context.js';
 
 export {
   effortOverrideForAgent,
@@ -42,15 +47,27 @@ export function shouldSkipSessionHydration(
   return hasStoredTrayJoinUrl(win.localStorage);
 }
 
-/** Point the thread chrome at a scoop (context label + accent hue + model). */
+/**
+ * Point the thread chrome at a scoop (context label + accent hue + model).
+ *
+ * A scoop is a READ-ONLY transcript (#2312): the composer band is unmounted
+ * and the model / thinking chrome inside it is left untouched, since a scoop
+ * copies its cone's model once and offers no picker of its own (#2310).
+ */
 export async function applyThreadContext(refs: WcShellRefs, scoop: RegisteredScoop): Promise<void> {
+  const role = unitRoleFor(scoop);
+  const readOnly = isReadOnlyRole(role);
   refs.thread.setAttribute('context', threadContextFor(scoop));
   refs.thread.setAttribute('accent', scoopColor(scoop));
   refs.switcher.setAttribute('active', scoop.jid);
+  // The 'scoop' shell mood (shader + accent) is unchanged — only the
+  // interactive chrome goes away.
   applyShellContext(
     refs,
-    scoop.isCone ? { kind: 'cone' } : { kind: 'scoop', accent: scoopColor(scoop) }
+    role === 'cone' ? { kind: 'cone' } : { kind: 'scoop', accent: scoopColor(scoop) }
   );
+  applyComposerAvailability(refs, readOnly);
+  if (readOnly) return;
   const lockedEffort = localStorage.getItem('slicc_locked_effort_level');
   refs.composerMeta.setAttribute(
     'thinking',

@@ -43,7 +43,7 @@ import {
 } from '../work-unit/descriptor.js';
 import type { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { WorkUnitManager } from '../work-unit/manager.js';
-import { rootsOf } from '../work-unit/policy.js';
+import { rootOwnerOf, rootsOf } from '../work-unit/policy.js';
 import { normalizeScoopRecord } from '../work-unit/record.js';
 import { SessionStore as UiSessionStore } from './chat-session-store.js';
 import { type AppendConeMemoryMeta, ConeMemoryStore } from './cone-memory-store.js';
@@ -330,6 +330,7 @@ export class Orchestrator implements ConeApprovalRouter {
     this.config = config;
     this.lifecycle = new ScoopLifecycleManager({
       getScoops: () => this.scoops,
+      approverFor: (jid) => this.ownerRootOrDefault(jid),
       getSharedFs: () => this.sharedFs,
       getSessionStore: () => this.sessionStore,
       getProcessManager: () => this.processManager,
@@ -1006,6 +1007,18 @@ export class Orchestrator implements ConeApprovalRouter {
     const scoop = jid === undefined ? undefined : this.scoops.get(jid);
     const parent = scoop?.parentJid ? this.scoops.get(scoop.parentJid) : undefined;
     return parent ?? this.defaultRoot();
+  }
+
+  /**
+   * The root that owns `jid` — itself when it IS a root (#2312). Unlike
+   * {@link parentOrDefaultRoot} a cone resolves to itself rather than to the
+   * default root, which matters once several cones exist: an interactive card
+   * raised by cone B must render in B, not in the oldest cone. A dangling or
+   * looping edge falls back to the default root, same as the approval path.
+   */
+  private ownerRootOrDefault(jid: string | undefined): RegisteredScoop | undefined {
+    const scoop = jid === undefined ? undefined : this.scoops.get(jid);
+    return rootOwnerOf(this.scoops.values(), scoop) ?? this.defaultRoot();
   }
 
   /** Hierarchy-aware work-unit view over the registry (#1666). */

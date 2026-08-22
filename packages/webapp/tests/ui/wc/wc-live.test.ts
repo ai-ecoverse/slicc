@@ -511,6 +511,9 @@ describe('prepareWcShell scoop selection', () => {
     let noticeCount = 0;
     const controller = {
       getQueuedMessages: () => [],
+      stashQueued: () => [],
+      restoreQueued: vi.fn(),
+      setReadOnly: vi.fn(),
       setLickBackpressure: vi.fn((count: number) => {
         noticeCount = count;
       }),

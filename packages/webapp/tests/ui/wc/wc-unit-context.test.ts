@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import {
   defaultRootOf,
+  isReadOnlyRole,
   orderForSwitcher,
   rootFolderForContext,
   rootForConeFolder,
@@ -9,6 +10,7 @@ import {
   switcherLabelFor,
   threadContextFor,
   unitForContext,
+  unitRoleFor,
   unitSlugFor,
 } from '../../../src/ui/wc/wc-unit-context.js';
 
@@ -57,6 +59,14 @@ const helper = unit({
 });
 
 describe('wc-unit-context', () => {
+  it('reads a unit’s role off the ownership edge and makes only scoops read-only (#2312)', () => {
+    expect(unitRoleFor(primary)).toBe('cone');
+    expect(unitRoleFor(research)).toBe('cone');
+    expect(unitRoleFor(worker)).toBe('scoop');
+    expect(isReadOnlyRole('cone')).toBe(false);
+    expect(isReadOnlyRole('scoop')).toBe(true);
+  });
+
   it('labels roots by assistant label and children by name', () => {
     expect(switcherLabelFor(primary)).toBe('sliccy');
     expect(switcherLabelFor(research)).toBe('Research');

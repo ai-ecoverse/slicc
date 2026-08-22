@@ -1183,24 +1183,42 @@ function delegationEls(message: ChatMessage): HTMLElement[] {
  *   to the connected provider's OAuth window by `wireWcNav` since the retry
  *   path would just re-hit the same expired session.
  */
-function errorCardEl(message: ChatMessage): HTMLElement {
+function errorCardEl(message: ChatMessage, readOnly: boolean): HTMLElement {
   const attrs: Record<string, string> = {
     message: message.content,
     'message-id': message.id,
   };
+  // A read-only transcript (a scoop, #2312) shows WHAT failed but offers no
+  // CTA: retry, settings, sign-in and "Change model" all act on behalf of a
+  // unit the user does not talk to. `no-action` drops the footer entirely —
+  // dropping just `action` would fall back to the default Retry button, and a
+  // disabled one would still promise something.
+  if (readOnly) {
+    attrs['no-action'] = '';
+    return el('slicc-error-card', attrs);
+  }
   if (isNoApiKeyError(message.content)) attrs.action = 'settings';
   else if (isInvalidModelError(message.content)) attrs.action = 'change-model';
   else if (isAuthExpiredError(message.content)) attrs.action = 'login';
   return el('slicc-error-card', attrs);
 }
 
+/** Rendering options shared by {@link messageEls} and {@link buildThreadChildren}. */
+export interface MessageRenderOptions {
+  /**
+   * The transcript belongs to a unit the user cannot address (a scoop):
+   * render the messages, drop every affordance that would act on it.
+   */
+  readOnly?: boolean;
+}
+
 /** Elements for a single chat message, in thread order. */
-export function messageEls(message: ChatMessage): HTMLElement[] {
+export function messageEls(message: ChatMessage, opts: MessageRenderOptions = {}): HTMLElement[] {
   if (message.source === 'lick') return [lickCardEl(message)];
   if (message.source === 'delegation' || message.channel === 'delegation') {
     return delegationEls(message);
   }
-  if (message.error) return [errorCardEl(message)];
+  if (message.error) return [errorCardEl(message, opts.readOnly === true)];
   if (message.role === 'assistant') return assistantMessageEls(message);
   // Unstamped lick bodies (histories persisted before channel stamping)
   // classify at render so old idle/completed notifications never regress
@@ -1272,7 +1290,10 @@ export function daySeparatorEl(timestamp: number): HTMLElement {
  * any other one-shot caller) gets the same clustering the live controller
  * applies after each render pass.
  */
-export function buildThreadChildren(messages: readonly ChatMessage[]): HTMLElement[] {
+export function buildThreadChildren(
+  messages: readonly ChatMessage[],
+  opts: MessageRenderOptions = {}
+): HTMLElement[] {
   const children: HTMLElement[] = [];
   let lastDay = '';
   for (const message of messages) {
@@ -1281,7 +1302,7 @@ export function buildThreadChildren(messages: readonly ChatMessage[]): HTMLEleme
       children.push(daySeparatorEl(message.timestamp));
       lastDay = day;
     }
-    children.push(...messageEls(message));
+    children.push(...messageEls(message, opts));
   }
   // Reflow needs a real parent to walk siblings against; do the wrap into
   // a transient fragment so callers still receive a flat array. A lookup
