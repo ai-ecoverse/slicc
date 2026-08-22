@@ -99,7 +99,8 @@ Arguments:
   <prompt>            Prompt forwarded verbatim to the scoop.
 
 Default sandbox:
-  The spawned scoop sees (read-only):  /workspace/ + the invoking shell's cwd
+  The spawned scoop sees (read-only):  the OWNING cone's workspace (+ skills)
+                                       + the invoking shell's cwd
   The spawned scoop writes to:         <cwd>, /shared/, /scoops/<name>/, /tmp/
   /tmp/ is always writable — no flag toggles it.
 
@@ -127,12 +128,12 @@ Options:
                           support it. Ignored entirely for non-reasoning
                           models. Aliased as --effort.
   --read-only <paths>     Comma-separated VFS paths exposed read-only to the
-                          spawned scoop (visiblePaths). Pure replace — when
-                          set, the default ["/workspace/"] AND the implicit
-                          ctx.cwd read-only add are BOTH dropped. Pass an
-                          explicit list if you want them back (e.g.
-                          "/workspace/,$(pwd)"). Each entry is normalized to
-                          a trailing slash.
+                          spawned scoop (visiblePaths). Pure replace — the
+                          owning cone's roots AND the implicit ctx.cwd add are
+                          BOTH dropped. To keep them, name your own cone's
+                          workspace ("$(pwd),/workspace/skills/") — a literal
+                          /workspace/ is the PRIMARY cone's. Each entry is
+                          normalized to a trailing slash.
   --background-after <s>  Seconds the spawned scoop's bash tool waits for a
                           command before detaching it to the background and
                           continuing (default 600). The detached command's exit

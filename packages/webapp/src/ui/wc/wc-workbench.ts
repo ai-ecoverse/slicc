@@ -158,6 +158,7 @@ export interface WorkbenchActivator {
 export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActivator {
   let terminalMounted = false;
   let memoryOpen = false;
+  let memorySeq = 0;
   let filesRefreshTimer: ReturnType<typeof setInterval> | null = null;
   let monitorRefreshTimer: ReturnType<typeof setInterval> | null = null;
   let filesRefreshPending = false;
@@ -199,10 +200,16 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActiva
   };
 
   const refreshMemory = (): void => {
+    // Last-write-wins by SEQUENCE, not by completion order: switching cones
+    // while a read is in flight starts a second one, and the two files differ
+    // in size, so cone A's slower read could land after cone B's and leave the
+    // panel showing A indefinitely (no poller corrects it).
+    const seq = ++memorySeq;
     void deps
       .openFs()
       .then(async (fs) => {
         const rows = await buildMemoryRows(fs, deps.getWorkspace().memoryPath);
+        if (seq !== memorySeq) return;
         if (deps.memoryHost.setRows) deps.memoryHost.setRows(rows);
         else deps.memoryHost.replaceChildren(...rows);
       })

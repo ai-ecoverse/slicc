@@ -203,6 +203,48 @@ describe('createWorkbenchActivator', () => {
     expect(deps.getWorkspace).toHaveBeenCalled();
   });
 
+  it('never lets a slower earlier memory read overwrite a newer one (#2271)', async () => {
+    const deps = makeDeps();
+    const fs = await seededFs();
+    // The window is the memory READ, not `openFs`: the workspace path is
+    // resolved when the read starts, so a read that began under cone A
+    // carries A's rows however late it lands.
+    let releaseFirstRead: (() => void) | undefined;
+    let firstReadDone = false;
+    const slowFs = Object.create(fs) as typeof fs;
+    slowFs.readFile = (async (...args: Parameters<typeof fs.readFile>) => {
+      await new Promise<void>((resolve) => {
+        releaseFirstRead = resolve;
+      });
+      try {
+        return await fs.readFile(...args);
+      } finally {
+        firstReadDone = true;
+      }
+    }) as typeof fs.readFile;
+    deps.openFs.mockImplementationOnce(async () => slowFs).mockImplementationOnce(async () => fs);
+    const activator = createWorkbenchActivator(deps);
+
+    activator.activate('memory'); // cone A — blocked mid-read
+    await vi.waitFor(() => expect(releaseFirstRead).toBeDefined());
+
+    deps.getWorkspace.mockReturnValue(workspaceFor({ parentJid: null, folder: 'cone-beta' }));
+    activator.refreshMemory(); // cone B — reads and paints while A is stuck
+    await vi.waitFor(() => expect(deps.memoryHost.setRows).toHaveBeenCalledTimes(1));
+
+    releaseFirstRead?.();
+    // A's rows are cone A's, and they arrive last. The sequence guard drops
+    // them; without it the panel would sit on the previous cone's memory
+    // indefinitely, since memory has no poller to correct it.
+    // Once A's read has settled, its paint decision is a fixed, small number
+    // of microtasks away (`buildMemoryRows` is one read plus synchronous row
+    // building) — no wall-clock tick-counting, which would go flaky under
+    // full-suite load.
+    await vi.waitFor(() => expect(firstReadDone).toBe(true));
+    for (let i = 0; i < 5; i++) await Promise.resolve();
+    expect(deps.memoryHost.setRows).toHaveBeenCalledTimes(1);
+  });
+
   it('ignores a selection change while the memory panel is closed', async () => {
     const deps = makeDeps();
     const activator = createWorkbenchActivator(deps);
