@@ -40,6 +40,7 @@ import { createLocalLlmCommand } from './local-llm-command.js';
 import { createManCommand } from './man-command.js';
 import { createMcpCommand } from './mcp-command.js';
 import { createMeminfoCommand } from './meminfo-command.js';
+import { createMktempCommand } from './mktemp-command.js';
 import { createModelsCommand } from './models-command.js';
 import { createNodeCommand } from './node-command.js';
 import { createNukeCommand } from './nuke-command.js';
@@ -233,6 +234,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createThemeCommand(),
     createUnameCommand(),
     createUnlinkCommand(),
+    createMktempCommand(),
     createManCommand(),
     createDigCommand(),
     createOAuthTokenCommand(),

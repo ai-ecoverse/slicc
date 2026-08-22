@@ -211,6 +211,7 @@ export function abortableSleep(ms: number, signal?: AbortSignal): Promise<boolea
  * - HOME to their per-scoop home (created by ensureDirectoryStructure) — it
  *   is inside their writable ACL, unlike `/home`, which their RestrictedFS
  *   cannot even see;
+ * - TMPDIR to `/scoops/<folder>/tmp` for the same reason (#2267);
  * - USER to the scoop folder;
  * - PATH with their own workspace roots ahead of the shared defaults, so
  *   scoop-local commands win a basename conflict (mirroring the old scan
@@ -230,6 +231,11 @@ export function buildScoopShellEnv(
   return {
     ...secretEnv,
     HOME: `/scoops/${folder}/home`,
+    // TMPDIR to their own scratch root (also created by
+    // ensureDirectoryStructure, and inside the default writable ACL) so
+    // `mktemp` and `$TMPDIR` hand back a path the scoop may actually write
+    // instead of a `/tmp` that is out of grant (#2267).
+    TMPDIR: `/scoops/${folder}/tmp`,
     USER: folder,
     PATH: [
       '/usr/bin',
