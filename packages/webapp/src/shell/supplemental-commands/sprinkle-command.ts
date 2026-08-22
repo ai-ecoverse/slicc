@@ -18,6 +18,7 @@
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { stdinAsText } from '../just-bash-compat.js';
+import { defaultLickTarget, type LickTargetEnv } from '../lick-target-env.js';
 import { getFollowerSprinkleInstances, LEADER_RUNTIME_ID } from '../sprinkle-instances.js';
 import type {
   SprinkleInstance,
@@ -51,7 +52,7 @@ function sprinkleHelp(): Result {
       '                        (leader + followers) unless --runtime names one\n' +
       '                        (ids from `host`). Reports instances reached;\n' +
       '                        exits non-zero when it reached none.\n' +
-      '  route <name> --scoop <scoop>  Route lick events to a scoop instead of cone\n' +
+      '  route <name> --scoop <target> Route licks to a scoop, cone, or folder\n' +
       '  route <name> --clear          Clear routing (revert to cone)\n' +
       '  route                         List all sprinkle routes\n' +
       '  chat <html>           Show inline HTML in chat (Tool UI)\n' +
@@ -235,17 +236,50 @@ async function handleList(mgr: SprinkleManagerHandle, args: string[]): Promise<R
   return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
 }
 
-async function handleOpen(mgr: SprinkleManagerHandle, args: string[]): Promise<Result> {
+/**
+ * Claim an unrouted sprinkle for the cone whose shell is opening it.
+ *
+ * A panel's `slicc.lick()` events follow the sprinkle's route, and the route
+ * table is global (one entry per sprinkle name, not per shell) — so without a
+ * claim an extra cone's panel posts into the oldest cone's chat (#2311). This
+ * is the same "creator names itself" rule `fswatch` applies to an untargeted
+ * watcher. An existing route always wins; `sprinkle route <name> --clear`
+ * gives the sprinkle back.
+ *
+ * The claim has to be installed BEFORE `mgr.open()`: `open()` renders and
+ * activates the SHTML bridge before its promise resolves, so a startup script
+ * calling `slicc.lick()` reads the route table while we are still awaiting.
+ * Returns the claimed target when it was both new AND actually stored —
+ * `sprinkle-routes.ts` is localStorage-backed and swallows a missing or full
+ * store, and announcing a route that silently did not stick would be a lie.
+ */
+function claimSprinkleRoute(name: string, env: LickTargetEnv): string | null {
+  const claimed = defaultLickTarget(undefined, env);
+  if (!claimed || getSprinkleRoute(name)) return null;
+  setSprinkleRoute(name, claimed);
+  return getSprinkleRoute(name) === claimed ? claimed : null;
+}
+
+async function handleOpen(
+  mgr: SprinkleManagerHandle,
+  args: string[],
+  env: LickTargetEnv
+): Promise<Result> {
   const parsed = parseFlags(args.slice(1), {});
   if ('error' in parsed) return fail('open', parsed.error);
   const name = parsed.positionals[0];
   if (!name) return fail('open', 'name required');
+  const claimed = claimSprinkleRoute(name, env);
   try {
     await mgr.open(name);
-    return { stdout: `Sprinkle "${name}" opened.\n`, stderr: '', exitCode: 0 };
   } catch (err) {
+    // Roll the claim back — a sprinkle that never opened must not leave a
+    // route behind that would silently capture a later `open` by another cone.
+    if (claimed) clearSprinkleRoute(name);
     return fail('open', err instanceof Error ? err.message : String(err));
   }
+  const routed = claimed ? `; licks route to "${claimed}"` : '';
+  return { stdout: `Sprinkle "${name}" opened${routed}.\n`, stderr: '', exitCode: 0 };
 }
 
 function handleClose(mgr: SprinkleManagerHandle, args: string[]): Result {
@@ -415,7 +449,7 @@ export function createSprinkleCommand(): Command {
       case 'list':
         return handleList(mgr, args);
       case 'open':
-        return handleOpen(mgr, args);
+        return handleOpen(mgr, args, ctx.env);
       case 'close':
         return handleClose(mgr, args);
       case 'reload':

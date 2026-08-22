@@ -47,6 +47,7 @@
  * their float.
  */
 
+import { matchLickTargetAlias } from '../base/lick-target-match.js';
 import { setLastSeenVersionReader } from '../base/slicc-version.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import { type DiscoveryEvent, NavigationWatcher } from '../cdp/navigation-watcher.js';
@@ -323,17 +324,14 @@ function routeFormattedLickToCone(
   { orchestrator, log }: LickRoutingContext
 ): void {
   const scoops = orchestrator.getScoops();
-  let resolvedTarget: RegisteredScoop | undefined;
-  if (!event.targetScoop) {
-    resolvedTarget = rootsOf(scoops)[0];
-  } else {
-    resolvedTarget = scoops.find(
-      (s) =>
-        s.name === event.targetScoop ||
-        s.folder === event.targetScoop ||
-        s.folder === `${event.targetScoop}-scoop`
-    );
-  }
+  // Two dispositions for a target that resolves to nothing, deliberately
+  // different (docs/work-unit.md § Addressing licks): an UNTARGETED lick falls
+  // back to the default root — `rootsOf(scoops)[0]`, the oldest surviving one —
+  // while a TARGETED lick naming a unit that is gone (or never existed) is
+  // warned about and dropped, never silently redirected into someone else's chat.
+  const resolvedTarget: RegisteredScoop | undefined = event.targetScoop
+    ? matchLickTargetAlias(scoops, event.targetScoop)
+    : rootsOf(scoops)[0];
 
   if (!resolvedTarget) {
     log.warn('Lick target scoop not found', event.targetScoop);
@@ -541,7 +539,7 @@ async function bootstrapCone(orchestrator: OrchestratorType): Promise<void> {
  * and `splitResult` (`splitSentinel`) — the sentinel itself is built by the
  * command and threaded via `WorkflowStartOptions.sentinel`. (The deps also wire
  * the float-specific `runRealm`/`sharedFs`/`processManager`/`fireLick`/
- * `getConeJid`.)
+ * `getStartingRoot`.)
  */
 function publishWorkflowRunManagerForHost(deps: {
   orchestrator: OrchestratorType;
@@ -552,7 +550,17 @@ function publishWorkflowRunManagerForHost(deps: {
   const { orchestrator, processManager, lickManager, sharedFs } = deps;
   publishWorkflowRunManager({
     sharedFs,
-    getConeJid: () => orchestrator.getWorkUnits().resolveDefaultRoot()?.descriptor.id,
+    getStartingRoot: (parentJid) => {
+      // Only a ROOT's completion is delivered as a lick; a scoop's stays in
+      // `workflow status`, unchanged. Stamping the starting root's folder is
+      // the same rule `ownLickTargetFor` applies to background bash and
+      // `fswatch`: the oldest root is where an untargeted lick already lands,
+      // so its folder is not worth spending as an alias (#2311).
+      const roots = rootsOf(orchestrator.getScoops());
+      const root = roots.find((r) => r.jid === parentJid);
+      if (!root) return null;
+      return { jid: root.jid, lickTarget: root.jid === roots[0]?.jid ? undefined : root.folder };
+    },
     fireLick: (event) => lickManager.emitEvent(event),
     processManager,
     // `CommandContextLike` is a structural subset of `executeJsCode`'s ctx

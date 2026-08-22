@@ -825,3 +825,192 @@ describe('crontask command - extension-direct equivalence', () => {
     expect(fetch).not.toHaveBeenCalled();
   });
 });
+
+describe('crontask create - default lick target (#2311)', () => {
+  // An extra cone's shell carries SLICC_LICK_TARGET=<its folder>; `crontask`
+  // falls back to it exactly as `fswatch` does, so its ticks come back to it.
+  let command: ReturnType<typeof createCrontaskCommand>;
+  let mockLm: { createCronTask: ReturnType<typeof vi.fn> };
+
+  beforeEach(async () => {
+    vi.stubGlobal('chrome', { runtime: { id: 'real-ext-id' } });
+    vi.stubGlobal('fetch', vi.fn());
+    vi.resetModules();
+    mockLm = {
+      createCronTask: vi.fn().mockResolvedValue({ id: 'c1', name: 'digest', cron: '0 9 * * *' }),
+    };
+    (globalThis as Record<string, unknown>).__slicc_lickManager = mockLm;
+    const { createCrontaskCommand } = await import(
+      '../../../src/shell/supplemental-commands/crontask-command.js'
+    );
+    command = createCrontaskCommand();
+  });
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__slicc_lickManager;
+    vi.clearAllMocks();
+  });
+
+  const run = (args: string[], env: unknown) =>
+    (command as any).execute(args, { cwd: '/', env, fs: {} as any });
+
+  it('falls back to SLICC_LICK_TARGET when --scoop is absent', async () => {
+    const result = await run(['create', '--name', 'digest', '--cron', '0 9 * * *'], {
+      SLICC_LICK_TARGET: 'cone-research',
+    });
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.createCronTask).toHaveBeenCalledWith('digest', '0 9 * * *', 'cone-research');
+  });
+
+  it('reads the same variable out of a Map env (just-bash hands either)', async () => {
+    const result = await run(
+      ['create', '--name', 'digest', '--cron', '0 9 * * *'],
+      new Map([['SLICC_LICK_TARGET', 'cone-research']])
+    );
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.createCronTask).toHaveBeenCalledWith('digest', '0 9 * * *', 'cone-research');
+  });
+
+  it('an explicit --scoop always wins over the shell default', async () => {
+    const result = await run(
+      ['create', '--name', 'digest', '--cron', '0 9 * * *', '--scoop', 'watcher'],
+      { SLICC_LICK_TARGET: 'cone-research' }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.createCronTask).toHaveBeenCalledWith('digest', '0 9 * * *', 'watcher');
+  });
+
+  it('stays untargeted (default root) when the shell carries no target', async () => {
+    const result = await run(['create', '--name', 'digest', '--cron', '0 9 * * *'], {});
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.createCronTask).toHaveBeenCalledWith('digest', '0 9 * * *', undefined);
+  });
+
+  it('accepts a cone name as an explicit --scoop', async () => {
+    const result = await run(
+      ['create', '--name', 'digest', '--cron', '0 9 * * *', '--scoop', 'Research'],
+      {}
+    );
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.createCronTask).toHaveBeenCalledWith('digest', '0 9 * * *', 'Research');
+  });
+});
+
+// ─── Proxy-path parity for cone addressing (#2311) ────────────────────────
+//
+// The side-panel terminal reaches the LickManager over BroadcastChannel. A
+// cone target must survive that hop byte-for-byte — the target string is
+// resolved centrally in `routeFormattedLickToCone`, so the proxy's only job
+// is to not mangle it. These tests do NOT preset `__slicc_lickManager`,
+// forcing the command through the proxy branch. `webhook`'s matching
+// parity test lives in `webhook-command.test.ts` (it needs the tray-leader
+// singleton for its URL).
+describe('lick registration — cone targets round-trip through the proxy', () => {
+  class MockBroadcastChannel {
+    static channels = new Map<string, Set<MockBroadcastChannel>>();
+    name: string;
+    onmessage: ((ev: MessageEvent) => void) | null = null;
+    constructor(name: string) {
+      this.name = name;
+      const set = MockBroadcastChannel.channels.get(name) ?? new Set();
+      set.add(this);
+      MockBroadcastChannel.channels.set(name, set);
+    }
+    postMessage(data: unknown): void {
+      const peers = MockBroadcastChannel.channels.get(this.name);
+      if (!peers) return;
+      for (const ch of peers) {
+        if (ch !== this && ch.onmessage) ch.onmessage(new MessageEvent('message', { data }));
+      }
+    }
+    close(): void {
+      MockBroadcastChannel.channels.get(this.name)?.delete(this);
+    }
+  }
+
+  beforeEach(() => {
+    vi.stubGlobal('chrome', { runtime: { id: 'ext-test-id' } });
+    vi.stubGlobal('BroadcastChannel', MockBroadcastChannel);
+    vi.stubGlobal('self', {
+      location: {
+        href: 'chrome-extension://ext-test-id/index.html',
+        origin: 'chrome-extension://ext-test-id',
+      },
+    });
+    MockBroadcastChannel.channels.clear();
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    MockBroadcastChannel.channels.clear();
+    delete (globalThis as Record<string, unknown>).__slicc_lickManager;
+  });
+
+  async function hostedManager() {
+    const lm = {
+      createWebhook: vi.fn(),
+      listWebhooks: vi.fn().mockReturnValue([]),
+      deleteWebhook: vi.fn(),
+      createCronTask: vi.fn().mockResolvedValue({ id: 'ct-px', name: 'digest', cron: '0 9 * * *' }),
+      listCronTasks: vi.fn().mockReturnValue([]),
+      deleteCronTask: vi.fn(),
+    };
+    const { startLickManagerHost } = await import('../../../src/base/lick-manager-proxy.js');
+    startLickManagerHost(lm as never);
+    return lm;
+  }
+
+  it('forwards an explicit cone folder from `crontask create`', async () => {
+    const lm = await hostedManager();
+    const { createCrontaskCommand } = await import(
+      '../../../src/shell/supplemental-commands/crontask-command.js'
+    );
+    const result = await (createCrontaskCommand() as any).execute(
+      ['create', '--name', 'digest', '--cron', '0 9 * * *', '--scoop', 'cone-research'],
+      { cwd: '/', env: {}, fs: {} as any }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(lm.createCronTask).toHaveBeenCalledWith(
+      'digest',
+      '0 9 * * *',
+      'cone-research',
+      undefined
+    );
+  });
+
+  it('forwards the shell default from `crontask create` with no --scoop', async () => {
+    const lm = await hostedManager();
+    const { createCrontaskCommand } = await import(
+      '../../../src/shell/supplemental-commands/crontask-command.js'
+    );
+    const result = await (createCrontaskCommand() as any).execute(
+      ['create', '--name', 'digest', '--cron', '0 9 * * *'],
+      { cwd: '/', env: { SLICC_LICK_TARGET: 'cone-research' }, fs: {} as any }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(lm.createCronTask).toHaveBeenCalledWith(
+      'digest',
+      '0 9 * * *',
+      'cone-research',
+      undefined
+    );
+  });
+
+  it('lists cron tasks through the proxy (no direct manager present)', async () => {
+    const lm = await hostedManager();
+    lm.listCronTasks.mockReturnValue([
+      { id: 'ct-px', name: 'digest', cron: '0 9 * * *', scoop: 'cone-research', status: 'active' },
+    ]);
+    const { createCrontaskCommand } = await import(
+      '../../../src/shell/supplemental-commands/crontask-command.js'
+    );
+    const result = await (createCrontaskCommand() as any).execute(['list'], {
+      cwd: '/',
+      env: {},
+      fs: {} as any,
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('-> cone-research');
+  });
+});

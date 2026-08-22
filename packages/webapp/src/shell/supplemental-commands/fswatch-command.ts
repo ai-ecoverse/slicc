@@ -65,7 +65,7 @@ Commands:
 Options:
   --path <path>       Base VFS path to watch (required)
   --pattern <glob>    File pattern to match, e.g. "*.md", "*.bsh" (required)
-  --scoop <name>      Route change events to this scoop as lick events
+  --scoop <target>    Scoop name, cone name, or folder. Omit for your own cone.
   --name <name>       Human-readable name for the watcher
 `;
 

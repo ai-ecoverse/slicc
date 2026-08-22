@@ -35,6 +35,13 @@ export interface WorkflowRunState {
   preview: string | null;
   error: string | null;
   pid: number | null;
+  /**
+   * Lick target for the completion notice: the folder of the root that started
+   * the run, or `undefined` for the default (oldest) root, which is where an
+   * untargeted lick lands anyway. Routing metadata only — `workflow status`
+   * does not print it (#2311).
+   */
+  lickTarget?: string;
 }
 
 export interface WorkflowStartOptions {

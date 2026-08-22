@@ -1,23 +1,48 @@
-import { hasLocalNodeServer } from '../../core/float-topology.js';
+import type {
+  CronTaskEntry,
+  LickManager,
+  WebhookEntry,
+} from '../../base/lick-manager-proxy-types.js';
+import { hasLocalNodeServer } from '../float-topology.js';
+
+/**
+ * The kernel-host globals this module reads. Named rather than a
+ * `Record<string, unknown>` bag so the cast below states the one shape it
+ * actually expects — `createKernelHost` publishes exactly this key
+ * (`kernel/host.ts`, step 8).
+ */
+interface LickManagerGlobals {
+  __slicc_lickManager?: LickManager | null;
+}
 
 /** Get the LickManager from globalThis (published by `createKernelHost`). */
-function getDirectLickManager(): import('../../scoops/lick-manager.js').LickManager | null {
-  return (
-    ((globalThis as unknown as Record<string, unknown>).__slicc_lickManager as
-      | import('../../scoops/lick-manager.js').LickManager
-      | null) ?? null
-  );
+function getDirectLickManager(): LickManager | null {
+  return (globalThis as unknown as LickManagerGlobals).__slicc_lickManager ?? null;
 }
 
 /** Fallback for a realm without the direct worker LickManager — proxy through BroadcastChannel instead. */
 let LickProxy: ReturnType<
-  typeof import('../../scoops/lick-manager-proxy.js').createLickManagerProxy
+  typeof import('../../base/lick-manager-proxy.js').createLickManagerProxy
 > | null = null;
 async function getLickProxy() {
   if (LickProxy) return LickProxy;
-  const { createLickManagerProxy } = await import('../../scoops/lick-manager-proxy.js');
+  const { createLickManagerProxy } = await import('../../base/lick-manager-proxy.js');
   LickProxy = createLickManagerProxy();
   return LickProxy;
+}
+
+/**
+ * The lick-registration surface both `webhook` and `crontask` drive. Listing
+ * is async on both sides (the proxy needs a BroadcastChannel round-trip), so
+ * the shape does not vary with the realm the command happens to run in.
+ */
+export interface LickManagerSurface {
+  createWebhook: (name: string, scoop?: string, filter?: string) => Promise<WebhookEntry>;
+  deleteWebhook: (id: string) => Promise<boolean>;
+  listWebhooks: () => Promise<WebhookEntry[]>;
+  createCronTask: (name: string, cron: string, scoop?: string) => Promise<CronTaskEntry>;
+  deleteCronTask: (id: string) => Promise<boolean>;
+  listCronTasks: () => Promise<CronTaskEntry[]>;
 }
 
 /**
@@ -31,29 +56,29 @@ async function getLickProxy() {
  * When only the proxy surface is available it may still be booting / unloaded,
  * which manifests as the proxy's 5s timeout (named per-op via the proxy's error message).
  */
-export async function getLickManagerSurface(): Promise<{
-  createWebhook: (
-    name: string,
-    scoop?: string,
-    filter?: string
-  ) => Promise<import('../../scoops/lick-manager.js').WebhookEntry>;
-  deleteWebhook: (id: string) => Promise<boolean>;
-  listWebhooks: () => Promise<import('../../scoops/lick-manager.js').WebhookEntry[]>;
-} | null> {
+export async function getLickManagerSurface(): Promise<LickManagerSurface | null> {
   const direct = getDirectLickManager();
   if (direct) {
     return {
       createWebhook: (name, scoop?, filter?) => direct.createWebhook(name, scoop, filter),
       deleteWebhook: (id) => direct.deleteWebhook(id),
       listWebhooks: async () => direct.listWebhooks(),
+      createCronTask: (name, cron, scoop?) => direct.createCronTask(name, cron, scoop),
+      deleteCronTask: (id) => direct.deleteCronTask(id),
+      listCronTasks: async () => direct.listCronTasks(),
     };
   }
   if (hasLocalNodeServer()) return null;
   const proxy = await getLickProxy();
-  const { listWebhooksAsync } = await import('../../scoops/lick-manager-proxy.js');
+  const { listCronTasksAsync, listWebhooksAsync } = await import(
+    '../../base/lick-manager-proxy.js'
+  );
   return {
     createWebhook: (name, scoop?, filter?) => proxy.createWebhook(name, scoop, filter),
     deleteWebhook: (id) => proxy.deleteWebhook(id),
     listWebhooks: () => listWebhooksAsync(),
+    createCronTask: (name, cron, scoop?) => proxy.createCronTask(name, cron, scoop),
+    deleteCronTask: (id) => proxy.deleteCronTask(id),
+    listCronTasks: () => listCronTasksAsync(),
   };
 }

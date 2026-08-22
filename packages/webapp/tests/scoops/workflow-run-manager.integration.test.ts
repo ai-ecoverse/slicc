@@ -14,7 +14,7 @@ it('backgrounds a fan-out: progress advances, file written, cone lick fired', as
         writes.push({ path: p, data: d });
       }),
     } as any,
-    getConeJid: () => 'cone_1',
+    getStartingRoot: (jid: string) => (jid === 'cone_1' ? { jid } : null),
     fireLick,
     processManager: { on: vi.fn(() => () => {}) } as any,
     runRealm: async (
