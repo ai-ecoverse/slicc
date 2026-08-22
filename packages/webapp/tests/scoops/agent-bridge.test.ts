@@ -119,6 +119,7 @@ import type { Orchestrator, ScoopObserver } from '../../src/scoops/orchestrator.
 import type { ScoopContext } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 import { CURRENT_SCOOP_CONFIG_VERSION } from '../../src/scoops/types.js';
+import { WorkUnitManager } from '../../src/work-unit/manager.js';
 
 /**
  * Observer-driven mock orchestrator. Each `sendPrompt` call drives the
@@ -181,6 +182,8 @@ function makeMockOrchestrator(): {
     getScoopContext: vi.fn(() => undefined),
   };
 
+  mock.getWorkUnits = vi.fn(() => makeWorkUnits(knownScoops));
+
   return {
     orchestrator: mock as unknown as Orchestrator,
     registerCalls,
@@ -190,6 +193,26 @@ function makeMockOrchestrator(): {
     scripts,
     knownScoops,
   };
+}
+
+/**
+ * The bridge resolves a spawned agent's default read-only roots through the
+ * REAL `WorkUnitManager.rootOf` walk (#2271), so every orchestrator double
+ * hands it a manager over its own registry rather than re-implementing the
+ * walk.
+ */
+function makeWorkUnits(scoops: RegisteredScoop[]): WorkUnitManager {
+  return new WorkUnitManager({
+    getScoop: (jid) => scoops.find((s) => s.jid === jid),
+    getScoops: () => scoops,
+    getScoopTabState: () => undefined,
+    sendPrompt: async () => {},
+    observeScoop: () => () => {},
+    stopScoop: () => {},
+    unregisterScoop: async () => {},
+    registerScoop: async () => {},
+    getScoopContext: () => undefined,
+  });
 }
 
 function makeMockSharedFs(options?: {
@@ -344,6 +367,53 @@ describe('createAgentBridge — config construction', () => {
     await bridge.spawn(BASE_OPTS);
 
     expect(registerCalls[0].config?.visiblePaths).toEqual(['/workspace/']);
+  });
+
+  // #2271: the default read-only root is the workspace of the ROOT that owns
+  // the spawning unit, so an agent spawned inside an extra cone (or by one of
+  // its scoops) reads that cone's files, not the primary cone's.
+  it('defaults visiblePaths to the owning cone workspace when spawned under an extra cone', async () => {
+    const { orchestrator, registerCalls, scripts, knownScoops } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const extraCone: RegisteredScoop = {
+      jid: 'cone_beta',
+      name: 'Beta',
+      folder: 'cone-beta',
+      isCone: true,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'Beta',
+      addedAt: new Date().toISOString(),
+      parentJid: null,
+    };
+    const betaScoop: RegisteredScoop = {
+      ...extraCone,
+      jid: 'scoop_beta_worker',
+      name: 'worker',
+      folder: 'beta-worker',
+      isCone: false,
+      type: 'scoop',
+      assistantLabel: 'beta-worker',
+      parentJid: extraCone.jid,
+    };
+    knownScoops.push(extraCone, betaScoop);
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS, parentJid: extraCone.jid });
+    // The skills library rides along — it lives outside the cone's workspace.
+    expect(registerCalls[0].config?.visiblePaths).toEqual([
+      '/cones/cone-beta/workspace/',
+      '/workspace/skills/',
+    ]);
+
+    // …and through a scoop of that cone: the chain is walked up to the root.
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+    await bridge.spawn({ ...BASE_OPTS, parentJid: betaScoop.jid });
+    expect(registerCalls[1].config?.visiblePaths).toEqual([
+      '/cones/cone-beta/workspace/',
+      '/workspace/skills/',
+    ]);
   });
 
   it('passes an explicit visiblePaths list through pure-replace (no merge with /workspace/)', async () => {
@@ -1308,6 +1378,7 @@ describe('createAgentBridge — structured output capture', () => {
       unregisterScoop: vi.fn(async () => {}),
       observeScoop: vi.fn(() => () => {}),
       getScoops: vi.fn(() => []),
+      getWorkUnits: vi.fn(() => makeWorkUnits([])),
       getScoopContext: vi.fn(() => ctx as unknown as ScoopContext),
       sendPrompt: vi.fn(async () => {
         prompts++;
@@ -1400,6 +1471,7 @@ describe('createAgentBridge — structured output capture', () => {
         return () => {};
       }),
       getScoops: vi.fn(() => []),
+      getWorkUnits: vi.fn(() => makeWorkUnits([])),
       getScoopContext: vi.fn(() => ctx as unknown as ScoopContext),
       sendPrompt: vi.fn(async () => {
         prompts++;
@@ -1871,6 +1943,26 @@ describe('createAgentBridge — session archive (persistSession)', () => {
     expect(result.finalText).toContain('invalid name');
     expect(registerCalls).toHaveLength(0);
     expect(writes).toHaveLength(0);
+  });
+
+  it('accepts digits inside a name token (per-cone curator names)', async () => {
+    const { orchestrator, registerCalls } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'jolly-mint',
+    });
+
+    // `memory-curator-<folder>` carries a cone folder, and `coneFolderFor`
+    // mints digits — from the user's name and from its de-duplication
+    // suffix (#2271). A leading digit is still rejected: the jid is
+    // `agent_<token>`.
+    const ok = await bridge.spawn({ ...BASE_OPTS, name: 'memory-curator-cone-beta-2' });
+    expect(ok.exitCode).toBe(0);
+    expect(registerCalls[0].folder).toBe('agent-memory-curator-cone-beta-2');
+
+    const bad = await bridge.spawn({ ...BASE_OPTS, name: '2cone' });
+    expect(bad.exitCode).toBe(1);
+    expect(bad.finalText).toContain('invalid name');
   });
 
   it('rejects a fixed name whose jid is already registered, without spawning', async () => {

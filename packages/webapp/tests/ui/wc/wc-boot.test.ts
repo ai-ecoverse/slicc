@@ -421,7 +421,7 @@ describe('URL state sync (live boot)', () => {
       boot.refs.dockTree as unknown as { placeSurface(id: string, zone: string): void }
     ).placeSurface('files', 'right');
     const activate = vi.fn();
-    boot.setActivateSurface({ activate, deactivate: vi.fn() });
+    boot.setActivateSurface({ activate, deactivate: vi.fn(), refreshMemory: vi.fn() });
     // The re-fire is gated behind kernel ready (VFS RPCs need the worker).
     expect(activate).not.toHaveBeenCalled();
     boot.wiring.notifyReady?.();
@@ -430,7 +430,7 @@ describe('URL state sync (live boot)', () => {
     // Without any tool panel placed, the assignment stays passive.
     (boot.refs.dockTree as unknown as { removeSurface(id: string): void }).removeSurface('files');
     const idle = vi.fn();
-    boot.setActivateSurface({ activate: idle, deactivate: vi.fn() });
+    boot.setActivateSurface({ activate: idle, deactivate: vi.fn(), refreshMemory: vi.fn() });
     boot.wiring.notifyReady?.();
     expect(idle).not.toHaveBeenCalled();
   });

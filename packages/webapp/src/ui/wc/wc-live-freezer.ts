@@ -88,7 +88,11 @@ async function captureCompleteSnapshotFor(
 
 async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
   const { root } = deps;
-  const cone = root ? { folder: root.folder, label: switcherLabelFor(root) } : undefined;
+  // `jid` rides along so an agentic curator pass is parented to the cone it
+  // curates (#2271); every other freezer step keys off `folder`.
+  const cone = root
+    ? { folder: root.folder, label: switcherLabelFor(root), jid: root.jid }
+    : undefined;
   const captureCompleteSnapshot = (frozen: FrozenSession): Promise<void> =>
     captureCompleteSnapshotFor(root, frozen);
   if (deps.action !== 'save') {
@@ -234,7 +238,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
     const { runNewSessionArchiveOnly } = await import('../new-session.js');
     await runNewSessionArchiveOnly({
       vfs: writer,
-      cone: { folder: root.folder, label: switcherLabelFor(root) },
+      cone: { folder: root.folder, label: switcherLabelFor(root), jid: root.jid },
       captureCompleteSnapshot: (frozen) => captureCompleteSnapshotFor(root, frozen),
     });
     refreshFreezer();

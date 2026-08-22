@@ -1,4 +1,5 @@
 import { describe, expect, it, vi } from 'vitest';
+import type { AppendConeMemoryMeta } from '../../src/scoops/cone-memory-store.js';
 import { ScoopCompletionService } from '../../src/scoops/scoop-completion-service.js';
 import {
   type ScoopLifecycleDeps,
@@ -117,6 +118,58 @@ describe('ScoopLifecycleManager', () => {
     await expect(manager.unregister(scoop.jid)).rejects.toThrow(/last cone/);
     expect(scoops.has(scoop.jid)).toBe(true);
     expect(deleteScoop).not.toHaveBeenCalled();
+  });
+
+  // #2271: the sink path is bound from the unit's own record, so an extra
+  // cone's compaction pass can only append to its own `CLAUDE.md`.
+  it('binds each cone memory append to that cone workspace', async () => {
+    const extraCone: RegisteredScoop = {
+      ...scoop,
+      jid: 'cone_beta',
+      name: 'Beta',
+      folder: 'cone-beta',
+      assistantLabel: 'Beta',
+    };
+    const primary: RegisteredScoop = { ...scoop, folder: 'cone' };
+    const scoops = new Map([
+      [primary.jid, primary],
+      [extraCone.jid, extraCone],
+    ]);
+    const appendConeMemory = vi.fn(async (_bullets: string, _meta: AppendConeMemoryMeta) => {});
+    const manager = new ScoopLifecycleManager({
+      getScoops: () => scoops,
+      getSharedFs: () => ({}),
+      getSessionStore: () => null,
+      getProcessManager: () => null,
+      getSudoManager: () => null,
+      callbacks: { onStatusChange: vi.fn() },
+      idleTimers: { start: vi.fn(), clear: vi.fn() },
+      messageRouter: {
+        ensureQueue: vi.fn(),
+        forgetScoop: vi.fn(),
+        flushOnIdle: vi.fn(async () => {}),
+      },
+      cone: { appendConeMemory },
+    } as unknown as ScoopLifecycleDeps);
+
+    for (const jid of [primary.jid, extraCone.jid]) {
+      await manager.createTab(jid);
+      const context = manager.getContext(jid) as unknown as {
+        callbacks: {
+          appendConeMemory(bullets: string, meta: AppendConeMemoryMeta): Promise<void>;
+        };
+      };
+      // A caller-supplied path must not win — the manager owns the binding.
+      await context.callbacks.appendConeMemory('- a fact', {
+        source: 'compaction',
+        memoryPath: '/workspace/CLAUDE.md',
+      });
+    }
+
+    expect(appendConeMemory.mock.calls.map(([, meta]) => meta.memoryPath)).toEqual([
+      '/workspace/CLAUDE.md',
+      '/cones/cone-beta/CLAUDE.md',
+    ]);
   });
 
   it('routes fatal scoop errors to the cone and releases active scoop_wait callers', async () => {

@@ -19,6 +19,7 @@ import { registerTranscriptExportService } from '../../transcript/export-provide
 import { DefaultTranscriptExportService } from '../../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../../transcript/strict-secret-client.js';
+import { ownerWorkspaceFor } from '../../work-unit/descriptor.js';
 import {
   guardedReload,
   installWorkerStaleAssetReloadListener,
@@ -119,6 +120,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
   let selected: RegisteredScoop | null = null;
   const lickBackpressure = new Map<string, LickBackpressureState>();
   let clientReady = false;
+  let workbench: WorkbenchActivator | null = null;
   const readyListeners = new Set<() => void>();
 
   const selectScoop = (scoop: RegisteredScoop): void => {
@@ -160,6 +162,10 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     // roster/status event or the 15s stats poll would, which is long enough to
     // read as the strip ignoring the click.
     wiring.refreshScoops?.();
+    // The memory panel shows the memory of the cone that owns the selection
+    // (#2271) and reads once per activation, so an open panel has to be told
+    // the selection moved. The file tree re-points itself on its next poll.
+    workbench?.refreshMemory();
   };
 
   const wiring: WcLiveWiring = {
@@ -198,6 +204,7 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
       controller = next;
     },
     setActivateSurface: (next) => {
+      workbench = next;
       // Every tool panel already placed in the restored dock-tree (persisted
       // or default) needs its lazy mount fired retroactively — the activator
       // didn't exist yet when `wireDockTreePersistence` restored the tree.
@@ -792,6 +799,10 @@ export function attachWcClient(
     openWriter: async () => (await openVfs()).writer,
     onKernelReady: (fn) => boot.onClientReady(fn),
     getMonitorDeps: () => createWcMonitorDeps({ client, openReader, storage: window.localStorage }),
+    // The workbench shows the files and memory of the cone that owns the
+    // current selection — the primary's `/workspace` until an extra cone is
+    // selected (#2271).
+    getWorkspace: () => ownerWorkspaceFor(client.getScoops(), boot.getSelected() ?? undefined),
     mountTerminal: (container) => mountWorkbenchTerminal(boot, client, container),
     insertReference: (path: string) => {
       const card = refs.inputCard as HTMLElement & { value: string; focus(): void };

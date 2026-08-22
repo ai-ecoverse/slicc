@@ -610,6 +610,62 @@ describe('Orchestrator session-restore compat for path config', () => {
     expect(o.getScoop('scoop_nested_1')?.parentJid).toBe('scoop_parent_1');
   });
 
+  // #2271: an extra cone moved off `/workspace`; the scoops it had already
+  // spawned kept the historical read-only default and would otherwise keep
+  // reading the PRIMARY cone's files.
+  it('re-points a v2 scoop of an extra cone at its owner workspace', async () => {
+    const primary: RegisteredScoop = {
+      jid: 'cone_primary',
+      name: 'Cone',
+      folder: 'cone',
+      isCone: true,
+      parentJid: null,
+      type: 'cone',
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: '2026-01-01T00:00:00.000Z',
+    };
+    const extra: RegisteredScoop = {
+      ...primary,
+      jid: 'cone_beta',
+      name: 'Beta',
+      folder: 'cone-beta',
+      assistantLabel: 'Beta',
+      addedAt: '2026-01-02T00:00:00.000Z',
+    };
+    const v2 = (jid: string, folder: string, parentJid: string, visiblePaths: string[]) =>
+      ({
+        jid,
+        name: folder,
+        folder,
+        trigger: `@${folder}`,
+        isCone: false,
+        parentJid,
+        type: 'scoop',
+        requiresTrigger: true,
+        assistantLabel: folder,
+        addedAt: new Date().toISOString(),
+        config: { visiblePaths, writablePaths: [`/scoops/${folder}/`, '/shared/'] },
+        configSchemaVersion: 2,
+      }) as RegisteredScoop;
+
+    await saveScoop(primary);
+    await saveScoop(extra);
+    await saveScoop(v2('scoop_beta', 'beta-worker', extra.jid, ['/workspace/']));
+    await saveScoop(v2('scoop_primary', 'primary-worker', primary.jid, ['/workspace/']));
+    // A deliberate configuration, not the injected default — left alone.
+    await saveScoop(v2('scoop_explicit', 'explicit-worker', extra.jid, ['/workspace/', '/mnt/']));
+
+    const o = await initOrchestrator();
+
+    expect(o.getScoop('scoop_beta')?.config?.visiblePaths).toEqual([
+      '/cones/cone-beta/workspace/',
+      '/workspace/skills/',
+    ]);
+    expect(o.getScoop('scoop_primary')?.config?.visiblePaths).toEqual(['/workspace/']);
+    expect(o.getScoop('scoop_explicit')?.config?.visiblePaths).toEqual(['/workspace/', '/mnt/']);
+  });
+
   it('backfills both visiblePaths and writablePaths for truly-legacy non-cone scoops', async () => {
     const legacy: RegisteredScoop = {
       jid: 'scoop_legacy_1',
@@ -2807,6 +2863,39 @@ describe('Orchestrator legacy cone-memory migration', () => {
     expect(await readUtf8(fs, '/shared/CLAUDE.md')).toBe(polluted);
     // /workspace/CLAUDE.md was not created by this no-op call.
     await expect(fs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' })).rejects.toBeDefined();
+  });
+
+  // #2271: the memory sink takes the path from the calling unit's record, so
+  // an extra cone's auto-extraction lands in ITS `CLAUDE.md`.
+  it('appends to the cone memory file named by meta.memoryPath, creating its directory', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+    await fs.rm('/workspace/CLAUDE.md').catch(() => {});
+
+    await orch.appendConeMemory('- beta learned something', {
+      source: 'compaction',
+      memoryPath: '/cones/cone-beta/CLAUDE.md',
+    });
+
+    // `/cones/cone-beta` did not exist — the sink created it.
+    const betaMemory = await readUtf8(fs, '/cones/cone-beta/CLAUDE.md');
+    expect(betaMemory).toContain('- beta learned something');
+    expect(betaMemory).toMatch(/## Auto-extracted \(\d{4}-\d{2}-\d{2}, compaction\)/);
+    // The primary cone's file is untouched.
+    await expect(fs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' })).rejects.toBeDefined();
+
+    // No path → the primary cone's file, as every pre-#2271 caller expects.
+    await orch.appendConeMemory('- primary learned something', { source: 'new-session' });
+    expect(await readUtf8(fs, '/workspace/CLAUDE.md')).toContain('- primary learned something');
+    expect(await readUtf8(fs, '/cones/cone-beta/CLAUDE.md')).not.toContain(
+      '- primary learned something'
+    );
   });
 });
 

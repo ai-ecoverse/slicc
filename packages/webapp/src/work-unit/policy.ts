@@ -107,6 +107,28 @@ export function childrenOf<T extends Pick<RegisteredScoop, 'parentJid'>>(
   return out;
 }
 
+/**
+ * The root that owns `unit` — the unit itself when it is one. Walks the
+ * `parentJid` chain; returns `undefined` when the chain dangles (a parent that
+ * is no longer registered) or loops, so callers can fall back deliberately
+ * instead of treating a child as an owner.
+ */
+export function rootOwnerOf<T extends Pick<RegisteredScoop, 'jid' | 'parentJid'>>(
+  units: Iterable<T>,
+  unit: T | undefined
+): T | undefined {
+  if (!unit) return undefined;
+  const byJid = new Map<string, T>();
+  for (const u of units) byJid.set(u.jid, u);
+  const seen = new Set<string>();
+  let current: T | undefined = unit;
+  while (current && current.parentJid !== null && !seen.has(current.jid)) {
+    seen.add(current.jid);
+    current = byJid.get(current.parentJid);
+  }
+  return current?.parentJid === null ? current : undefined;
+}
+
 /** Root records, oldest first (`addedAt` ascending, then jid for stability). */
 export function rootsOf<T extends Pick<RegisteredScoop, 'parentJid' | 'addedAt' | 'jid'>>(
   scoops: Iterable<T>

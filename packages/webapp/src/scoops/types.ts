@@ -42,8 +42,10 @@ export const THINKING_LEVEL_CYCLE: readonly ThinkingLevel[] = [
  *
  * - `1`: `visiblePaths` is authoritative (may be an explicit empty list).
  * - `2`: `writablePaths` is authoritative (may be an explicit empty list).
+ * - `3`: `visiblePaths` is relative to the OWNING cone's workspace, not to a
+ *   float-wide `/workspace` (#2271).
  */
-export const CURRENT_SCOOP_CONFIG_VERSION = 2;
+export const CURRENT_SCOOP_CONFIG_VERSION = 3;
 
 /** Registered scoop metadata */
 export interface RegisteredScoop {

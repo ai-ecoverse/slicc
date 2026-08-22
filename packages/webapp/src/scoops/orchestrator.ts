@@ -9,7 +9,6 @@
  * - Owns a single shared VirtualFS instance
  */
 
-import type { Api, Model } from '@earendil-works/pi-ai';
 import type { ToolProgressEvent } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/index.js';
@@ -37,12 +36,17 @@ import { registerTranscriptExportService } from '../transcript/export-provider.j
 import { DefaultTranscriptExportService } from '../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
+import {
+  defaultChildVisibleRoots,
+  ownerWorkspaceFor,
+  PRIMARY_WORKSPACE,
+} from '../work-unit/descriptor.js';
 import type { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { WorkUnitManager } from '../work-unit/manager.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { normalizeScoopRecord } from '../work-unit/record.js';
 import { SessionStore as UiSessionStore } from './chat-session-store.js';
-import { ConeMemoryStore } from './cone-memory-store.js';
+import { type AppendConeMemoryMeta, ConeMemoryStore } from './cone-memory-store.js';
 import * as db from './db.js';
 import { isExternalLickChannel } from './lick-formatting.js';
 import {
@@ -442,7 +446,10 @@ export class Orchestrator implements ConeApprovalRouter {
       // Derive the presentation fields from the edge (also sanitizes legacy
       // cone records that carried a trigger from the old groups code).
       normalizeScoopRecord(scoop);
-      this.migrateScoopConfig(scoop);
+      // Every saved record (not just the ones already in `this.scoops`) — the
+      // v3 step resolves the owning cone, whose record may come later in this
+      // very loop.
+      this.migrateScoopConfig(scoop, Object.values(savedScoops));
       this.scoops.set(scoop.jid, scoop);
       this.messageRouter.ensureQueue(scoop.jid);
 
@@ -569,7 +576,7 @@ export class Orchestrator implements ConeApprovalRouter {
    *
    * Cones have no `ScoopConfig` path surface at all; they ignore the version.
    */
-  private migrateScoopConfig(scoop: RegisteredScoop): void {
+  private migrateScoopConfig(scoop: RegisteredScoop, registry: RegisteredScoop[]): void {
     if (scoop.parentJid === null) return;
     const version = scoop.configSchemaVersion ?? 0;
     if (version >= CURRENT_SCOOP_CONFIG_VERSION) return;
@@ -590,6 +597,22 @@ export class Orchestrator implements ConeApprovalRouter {
         ...scoop.config,
         writablePaths: scoop.config?.writablePaths ?? [`/scoops/${scoop.folder}/`, '/shared/'],
       };
+    }
+    if (version < 3) {
+      // Pre-per-cone-workspace era (#2271): an extra cone moved off
+      // `/workspace`, but the scoops it had already spawned kept the historical
+      // read-only default and would keep reading the PRIMARY cone's files.
+      // Re-point exactly that default at the owning cone's workspace; a record
+      // whose list says anything else is a deliberate configuration and is left
+      // alone. Scoops of the primary cone resolve to `/workspace/` and so never
+      // change.
+      const primaryRoot = `${PRIMARY_WORKSPACE.root}/`;
+      const ownerRoots = defaultChildVisibleRoots(ownerWorkspaceFor(registry, scoop));
+      const visible = scoop.config?.visiblePaths;
+      const isHistoricalDefault = visible?.length === 1 && visible[0] === primaryRoot;
+      if (ownerRoots[0] !== primaryRoot && isHistoricalDefault) {
+        scoop.config = { ...scoop.config, visiblePaths: ownerRoots };
+      }
     }
     scoop.configSchemaVersion = CURRENT_SCOOP_CONFIG_VERSION;
   }
@@ -622,21 +645,13 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
-   * Append a block of auto-extracted memory bullets to /workspace/CLAUDE.md.
-   * Used by the compaction memory-extraction pass and by the "New session"
-   * freezer flow. Delegates to {@link ConeMemoryStore} — see that module for
-   * serialization + budget semantics.
+   * Append a block of auto-extracted memory bullets to the calling cone's
+   * `CLAUDE.md` (`meta.memoryPath`; the primary's when absent). Used by the
+   * compaction memory-extraction pass and by the "New session" freezer flow.
+   * Delegates to {@link ConeMemoryStore} — see that module for serialization
+   * + budget semantics.
    */
-  appendConeMemory(
-    bullets: string,
-    meta: {
-      source: string;
-      model?: Model<Api>;
-      apiKey?: string;
-      headers?: Record<string, string>;
-      signal?: AbortSignal;
-    }
-  ): Promise<void> {
+  appendConeMemory(bullets: string, meta: AppendConeMemoryMeta): Promise<void> {
     return this.memoryStore.appendConeMemory(bullets, meta);
   }
 

@@ -9,10 +9,11 @@ import { describe, expect, it, vi } from 'vitest';
 import { createScoopManagementTools } from '../../src/scoops/scoop-management-tools.js';
 import { CURRENT_SCOOP_CONFIG_VERSION, type RegisteredScoop } from '../../src/scoops/types.js';
 
+// The primary cone: folder `cone`, workspace `/workspace` (#2271).
 const cone: RegisteredScoop = {
   jid: 'cone_main_1',
   name: 'Main',
-  folder: 'main',
+  folder: 'cone',
   isCone: true,
   parentJid: null,
   type: 'cone',
@@ -24,7 +25,8 @@ const cone: RegisteredScoop = {
 function findScoopScoopTool(
   resolveModelSelection?: (
     id: string
-  ) => import('../../src/providers/account-store.js').ScoopModelResolution
+  ) => import('../../src/providers/account-store.js').ScoopModelResolution,
+  creator: RegisteredScoop = cone
 ) {
   const onScoopScoop = vi.fn(
     async (scoop: Omit<RegisteredScoop, 'jid'>): Promise<RegisteredScoop> => ({
@@ -34,9 +36,9 @@ function findScoopScoopTool(
   );
 
   const tools = createScoopManagementTools({
-    scoop: cone,
+    scoop: creator,
     onSendMessage: vi.fn(),
-    getScoops: () => [cone],
+    getScoops: () => [creator],
     onScoopScoop,
     ...(resolveModelSelection ? { resolveModelSelection } : {}),
   });
@@ -113,6 +115,29 @@ describe('scoop_scoop tool — config defaults', () => {
     const created = onScoopScoop.mock.calls[0][0];
     expect(created.config?.visiblePaths).toEqual(['/workspace/']);
     expect(created.config?.modelId).toBe('claude-sonnet-4-6');
+  });
+
+  // #2271: an extra cone owns `/cones/<folder>/workspace`, so the scoops it
+  // spawns must read THAT workspace by default — not the primary cone's — plus
+  // the skills library, which lives outside it.
+  it('defaults visiblePaths to the creating cone workspace for an extra cone', async () => {
+    const extraCone: RegisteredScoop = {
+      ...cone,
+      jid: 'cone_beta_1',
+      name: 'Beta',
+      folder: 'cone-beta',
+      assistantLabel: 'Beta',
+    };
+    const { tool, onScoopScoop } = findScoopScoopTool(undefined, extraCone);
+    await tool.execute({ name: 'hero-block' });
+
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.visiblePaths).toEqual([
+      '/cones/cone-beta/workspace/',
+      '/workspace/skills/',
+    ]);
+    // The scoop's own sandbox is unchanged — scoop folders stay float-wide.
+    expect(created.config?.writablePaths).toEqual(['/scoops/hero-block-scoop/', '/shared/']);
   });
 
   // Regression (#1752): an unresolvable model must be rejected, not written

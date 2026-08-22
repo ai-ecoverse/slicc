@@ -97,14 +97,24 @@ Non-obvious rules:
   `find(s => s.isCone)`; chat sessions are keyed `session-<folder>`
   (`chatSessionIdFor`). Cone add/drop lives in `ui/wc/wc-cone-actions.ts`
   behind `<slicc-freezer-new>`'s action row (name / confirm via
-  `<slicc-dialog>`, never inline); the tab strip is the only switcher. See `docs/work-unit.md`.
+  `<slicc-dialog>`, never inline); the tab strip is the only switcher.
+  Directory layout comes from `workspaceFor` ALONE — primary cone
+  `/workspace`, extra cone `/cones/<folder>/workspace` + its own `CLAUDE.md`,
+  scoop `/scoops/<folder>/workspace`; `/shared`, `/tmp` and the skills library
+  (`SKILLS_LIBRARY_DIR`) stay shared. Never hardcode `/workspace` for a unit's
+  root, memory file or spawn default. Memory is per cone on BOTH paths: the
+  compaction sink is bound from the unit's own record, and the agentic curator
+  takes a `cone` (`runAgenticMemoryPass`) — it curates that cone's file, from
+  that cone's workspace, under a per-cone agent name, with `MEMORY.md`'s
+  primary-relative paths rebased onto it. See `docs/work-unit.md`.
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without
   queue/watermark loss; user `web` bypasses the window (immediate/awaited,
   prevents deferral). `transcript-limits.ts` caps bridge/event transcripts at 64 KB
   — never the canonical `agent-sessions` history or compaction input.
 - **Agent bridge defaults** (`agent-bridge.ts`): writable
-  `[cwd, /shared/, <scratch>/, /tmp/]`, visible `[/workspace/, invokingCwd]`;
-  `--read-only` replaces them.
+  `[cwd, /shared/, <scratch>/, /tmp/]`, visible
+  `[...defaultChildVisibleRoots(owning cone), invokingCwd]`; `--read-only`
+  replaces them.
 - **Mount signing is browser-naive**: CLI → `/api/s3-sign-and-forward`,
   extension → SW. Never sign in the browser. See `docs/mounts.md`.
 - **Shell/mount cache**: `script-catalog.ts` caches per `$PATH` root set;

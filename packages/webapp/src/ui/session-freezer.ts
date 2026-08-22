@@ -48,6 +48,7 @@ import {
   SESSIONS_DIR,
   SESSIONS_INDEX_PATH,
 } from '../transcript/frozen-archive-format.js';
+import { workspaceFor } from '../work-unit/descriptor.js';
 import { chatSessionIdFor, PRIMARY_CONE_FOLDER } from '../work-unit/record.js';
 import { formatChatForClipboard } from './chat-clipboard.js';
 import type { ChatMessage, Session } from './types.js';
@@ -103,6 +104,12 @@ export interface FreezerConeRef {
   folder: string;
   /** Chip label of that cone (`assistantLabel`); recorded for extra cones only. */
   label?: string;
+  /**
+   * JID of that root, when the caller has it. Only the curator uses it: the
+   * pass is parented to the cone it curates so escalations reach that cone
+   * (#2271). Every other freezer step is keyed by `folder` alone.
+   */
+  jid?: string;
 }
 
 export interface FreezeConeSessionOptions {
@@ -227,6 +234,9 @@ export async function curateFrozenSessionMemories(
       vfs: opts.vfs,
       sessionArchivePath: frozenSessionPath(frozen),
       sessionCount: await readSessionCount(opts.vfs),
+      // The pass runs per cone (#2271): this archive's cone owns the memory
+      // file the curator rewrites and the workspace it runs in.
+      ...(opts.cone ? { cone: opts.cone } : {}),
     });
   } catch (err) {
     result = {
@@ -333,11 +343,17 @@ async function extractMemoriesBestEffort(
     return;
   }
   try {
-    await appendConeMemoryViaVfs(opts.vfs, bullets.trim(), 'new-session', {
-      model: opts.model,
-      apiKey: opts.apiKey,
-      headers: opts.headers,
-    });
+    await appendConeMemoryViaVfs(
+      opts.vfs,
+      coneMemoryPathFor(coneFolderOf(opts)),
+      bullets.trim(),
+      'new-session',
+      {
+        model: opts.model,
+        apiKey: opts.apiKey,
+        headers: opts.headers,
+      }
+    );
     log.info('Memory extracted and appended on new-session');
   } catch (err) {
     log.warn('Memory append failed', {
@@ -616,6 +632,15 @@ function coneFolderOf(opts: Pick<FreezeConeSessionOptions, 'cone'>): string {
   return opts.cone?.folder || PRIMARY_CONE_FOLDER;
 }
 
+/**
+ * Memory file of the cone a freeze targets (#2271). A freeze is per cone since
+ * #2272 — it archives `session-<folder>` — so its extracted bullets belong in
+ * THAT cone's `CLAUDE.md`, never the primary's.
+ */
+function coneMemoryPathFor(folder: string): string {
+  return workspaceFor({ parentJid: null, folder }).memoryPath;
+}
+
 async function loadSessionSafely(store: SessionStore, folder: string): Promise<Session | null> {
   const sessionId = chatSessionIdFor({ folder });
   try {
@@ -777,7 +802,8 @@ async function ensureDir(vfs: WritableVfsClient, path: string): Promise<void> {
 }
 
 /**
- * Append auto-extracted bullets to `/workspace/CLAUDE.md`, then route through
+ * Append auto-extracted bullets to `memoryPath` — the freezing cone's own
+ * `CLAUDE.md` (#2271) — then route through
  * the logarithmic memory budget (`applyConeMemoryBudget`) so a long-running
  * series of freezer/enrichment appends gets restructured the same way the
  * orchestrator's compaction-driven `appendConeMemory` path does. The budget
@@ -786,6 +812,7 @@ async function ensureDir(vfs: WritableVfsClient, path: string): Promise<void> {
  */
 async function appendConeMemoryViaVfs(
   vfs: WritableVfsClient,
+  memoryPath: string,
   bullets: string,
   source: string,
   budgetOpts?: {
@@ -795,7 +822,7 @@ async function appendConeMemoryViaVfs(
     signal?: AbortSignal;
   }
 ): Promise<void> {
-  const path = '/workspace/CLAUDE.md';
+  const path = memoryPath;
   let current = '';
   try {
     const raw = await vfs.readFile(path, { encoding: 'utf-8' });
@@ -808,7 +835,7 @@ async function appendConeMemoryViaVfs(
     // the ENOENT-only pattern from `readIfPresent` in
     // packages/cloud-core/src/operations/resume.ts (PR #1357).
     if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
-    await ensureDir(vfs, '/workspace');
+    await ensureDir(vfs, path.slice(0, path.lastIndexOf('/')));
   }
   const date = new Date().toISOString().slice(0, 10);
   const heading = `## Auto-extracted (${date}, ${source})`;
@@ -817,13 +844,14 @@ async function appendConeMemoryViaVfs(
   await vfs.writeFile(path, current + block);
 
   // Post-append budget step. Symmetric to the orchestrator path —
-  // bound `/workspace/CLAUDE.md` against the logarithmic budget when
+  // bound this cone's `CLAUDE.md` against the logarithmic budget when
   // credentials are wired through. Failures are swallowed by the sink
   // itself, but wrap in try/catch defensively so a thrown error never
   // escapes the freezer.
   try {
     await applyConeMemoryBudget({
       vfs,
+      memoryPath: path,
       model: budgetOpts?.model,
       apiKey: budgetOpts?.apiKey,
       headers: budgetOpts?.headers,
@@ -1195,11 +1223,19 @@ async function appendEnrichmentMemory(
   const trimmedBullets = bullets.trim();
   if (!trimmedBullets || trimmedBullets === 'NONE') return;
   try {
-    await appendConeMemoryViaVfs(vfs, trimmedBullets, 'pending-enrichment', {
-      model: opts.model,
-      apiKey: opts.apiKey,
-      headers: opts.headers,
-    });
+    await appendConeMemoryViaVfs(
+      vfs,
+      // A pending archive records the cone it came from (#2272); its
+      // catch-up enrichment writes back to that cone's memory (#2271).
+      coneMemoryPathFor(entry.cone || PRIMARY_CONE_FOLDER),
+      trimmedBullets,
+      'pending-enrichment',
+      {
+        model: opts.model,
+        apiKey: opts.apiKey,
+        headers: opts.headers,
+      }
+    );
   } catch (err) {
     log.warn('Enrichment memory append failed (continuing with title rewrite)', {
       filename: entry.filename,

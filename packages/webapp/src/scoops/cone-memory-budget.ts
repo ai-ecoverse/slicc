@@ -1,5 +1,5 @@
 /**
- * Cone memory budget — bound the size of `/workspace/CLAUDE.md` against a
+ * Cone memory budget — bound the size of a cone's `CLAUDE.md` against a
  * logarithmic budget derived from the session count, and run an LLM-driven
  * legacy restructure pass over the auto-extracted tail when an append
  * overshoots.
@@ -13,6 +13,7 @@ import { completeSimple } from '@earendil-works/pi-ai/compat';
 import { createLogger } from '../base/logger.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
+import { PRIMARY_WORKSPACE } from '../work-unit/descriptor.js';
 
 const log = createLogger('cone-memory-budget');
 
@@ -23,7 +24,12 @@ export const MEMORY_PER_LOG_CHARS = 2000;
 /** Ratio over the budget that triggers a restructure pass. */
 export const MEMORY_OVERSHOOT_RATIO = 1.25;
 
-export const CONE_MEMORY_PATH = '/workspace/CLAUDE.md';
+/**
+ * The primary cone's memory file. Extra cones keep their own
+ * (`workspaceFor(unit).memoryPath`, #2271) and pass it explicitly; this stays
+ * the default for the float-wide paths that only ever run for the primary.
+ */
+export const CONE_MEMORY_PATH = PRIMARY_WORKSPACE.memoryPath;
 export const SESSIONS_INDEX_PATH = '/sessions/index.json';
 
 const RESTRUCTURE_MAX_TOKENS = 4096;
@@ -141,6 +147,8 @@ export interface ApplyConeMemoryBudgetOptions {
    * `VirtualFS` satisfies the same shape.
    */
   vfs: WritableVfsClient;
+  /** Cone memory file to bound. Defaults to the primary cone's (#2271). */
+  memoryPath?: string;
   model?: Model<Api>;
   apiKey?: string;
   headers?: Record<string, string>;
@@ -148,7 +156,7 @@ export interface ApplyConeMemoryBudgetOptions {
 }
 
 /**
- * Read `/workspace/CLAUDE.md`, compute the current budget from
+ * Read the cone's `CLAUDE.md`, compute the current budget from
  * `/sessions/index.json`, and if the file is over `budget * overshoot`
  * restructure the auto-extracted tail via {@link restructureConeMemory}
  * and write the result back. No-op when the file is under threshold or
@@ -162,9 +170,10 @@ export async function applyConeMemoryBudget(
   if (!opts.model || !opts.apiKey) {
     return { restructured: false, reason: 'no-llm' };
   }
+  const memoryPath = opts.memoryPath ?? CONE_MEMORY_PATH;
   let current = '';
   try {
-    const raw = await opts.vfs.readFile(CONE_MEMORY_PATH, { encoding: 'utf-8' });
+    const raw = await opts.vfs.readFile(memoryPath, { encoding: 'utf-8' });
     current = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
   } catch {
     return { restructured: false, reason: 'missing-file' };
@@ -193,7 +202,7 @@ export async function applyConeMemoryBudget(
       headers: opts.headers,
       signal: opts.signal,
     });
-    await opts.vfs.writeFile(CONE_MEMORY_PATH, next);
+    await opts.vfs.writeFile(memoryPath, next);
     log.info('Cone memory restructured', { before: current.length, after: next.length });
     return { restructured: true };
   } catch (err) {
