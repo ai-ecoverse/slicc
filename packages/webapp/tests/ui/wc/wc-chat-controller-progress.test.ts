@@ -222,13 +222,81 @@ describe('WcChatController tool_progress handling', () => {
       result: 'output-for-c2',
       toolCallId: 'c2',
     });
+    // Row ids are message-scoped (`<messageId>:<toolCallId>`) so a provider
+    // that reuses an id in a later message cannot collide.
     const byId = (id: string) =>
-      thread.querySelector<HTMLElement>(`slicc-action-row[data-tool-id="${id}"]`);
+      thread.querySelector<HTMLElement>(`slicc-action-row[data-tool-id="m1:${id}"]`);
     expect(byId('c2')?.getAttribute('result')).toBe('done');
     expect(byId('c3')?.getAttribute('result')).toBe('…');
     expect(byId('tc-1')?.getAttribute('result')).toBe('…');
     expect(byId('c2')?.textContent).toContain('output-for-c2');
     expect(byId('c3')?.textContent ?? '').not.toContain('output-for-c2');
+  });
+
+  it('scopes a reused provider call id per message (no cross-message bleed)', () => {
+    // Review finding: a provider that reuses a tool-call id in a LATER message
+    // would produce duplicate `data-tool-id`s, and the thread-wide row lookup
+    // would paint the first (historical) match.
+    agent.emit({
+      type: 'tool_result',
+      messageId: 'm1',
+      toolName: 'bash',
+      result: 'ok',
+      toolCallId: 'tc-1',
+    });
+    agent.emit({ type: 'message_start', messageId: 'm2' });
+    agent.emit({
+      type: 'tool_use_start',
+      messageId: 'm2',
+      toolName: 'bash',
+      toolInput: { command: 'sleep 5' },
+      toolCallId: 'tc-1', // same id as the m1 call
+    });
+
+    const ids = [...thread.querySelectorAll<HTMLElement>('slicc-action-row[data-tool-id]')].map(
+      (r) => r.dataset.toolId
+    );
+    expect(new Set(ids).size).toBe(ids.length); // all distinct
+    expect(ids).toContain('m1:tc-1');
+    expect(ids).toContain('m2:tc-1');
+
+    // Progress for the NEW call must land on the new row, not the old one.
+    agent.emit({
+      type: 'tool_progress',
+      messageId: 'm2',
+      toolName: 'bash',
+      progress: progress({ fraction: 0.5 }),
+      toolCallId: 'tc-1',
+    });
+    const row = (id: string) =>
+      thread.querySelector<HTMLElement>(`slicc-action-row[data-tool-id="${id}"]`);
+    expect(row('m2:tc-1')?.getAttribute('data-progress')).toBe('determinate');
+    expect(row('m1:tc-1')?.hasAttribute('data-progress')).toBe(false);
+  });
+
+  it('does not mark a restored, never-started cluster as running', () => {
+    // Review finding: a transcript restored after an aborted turn keeps
+    // result-less calls whose badge is a permanent `…`. Those are history, not
+    // in-flight work, and must not pin a determinate 0% on the cluster.
+    controller.loadMessages([
+      {
+        id: 'restored',
+        role: 'assistant',
+        content: 'earlier turn',
+        timestamp: Date.now(),
+        toolCalls: [
+          { id: 'old-1', name: 'bash', input: { command: 'a' } },
+          { id: 'old-2', name: 'bash', input: { command: 'b' } },
+          { id: 'old-3', name: 'bash', input: { command: 'c' } },
+        ],
+      },
+    ]);
+    const cluster = thread.querySelector<HTMLElement>('slicc-tool-cluster');
+    expect(cluster).not.toBeNull();
+    expect(cluster?.querySelectorAll('slicc-action-row')).toHaveLength(3);
+    // Every row still reads `…`, but none of them was started this session.
+    expect(cluster?.hasAttribute('data-progress')).toBe(false);
+    expect(cluster?.querySelector('.slicc-cluster__head .wcmsg-dots')).toBeNull();
   });
 
   it('ignores progress for an unknown message or a tool with no in-flight call', () => {
