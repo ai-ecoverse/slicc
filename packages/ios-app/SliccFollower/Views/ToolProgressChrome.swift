@@ -14,6 +14,8 @@ import SwiftUI
 //  3. an EXPANDED row body wears a thin top bar — row-only, never on a cluster
 //     head, because a bar over a summary of N calls reads as noise.
 //
+// Cluster summary heads wear cue (2) only — no icon fill.
+//
 // A phone adds one thing the web leaves to the hover title: the percentage and
 // ETA are always visible, since there is no cursor to hover with.
 
@@ -186,7 +188,9 @@ struct ToolProgressDots: View {
         Circle()
             .fill(color)
             .frame(width: 5, height: 5)
-            .opacity(isDone ? 1 : 0.25)
+            // Active dots start at full opacity so the blink animates 1→0.25,
+            // not 0.25→0.0625 when SwiftUI composes nested opacity modifiers.
+            .opacity(isDone || isActive ? 1 : 0.25)
             .modifier(ToolProgressBlink(active: isActive, delay: Double(index) * 0.2))
     }
 }

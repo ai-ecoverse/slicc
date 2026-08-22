@@ -684,7 +684,7 @@ describe('tool presentation', () => {
     (cluster as HTMLElement).remove();
   });
 
-  it('clusters 3+ tool calls (open while streaming, collapsed when settled)', () => {
+  it('clusters 3+ tool calls collapsed by default (streaming or settled)', () => {
     const stamp = Date.now();
     const calls = [1, 2, 3].map((i) => ({
       id: `tcollapse-${stamp}-${i}`,
@@ -713,7 +713,7 @@ describe('tool presentation', () => {
     const streaming = { ...settled, id: 'm-s', isStreaming: true };
     const liveChildren = buildThreadChildren([streaming]);
     const live = liveChildren.find((c) => c.tagName.toLowerCase() === 'slicc-tool-cluster');
-    expect(live?.hasAttribute('open')).toBe(true);
+    expect(live?.hasAttribute('open')).toBe(false);
 
     // Two calls stay flat — no cluster wrapper.
     const flat: ChatMessage = { ...settled, id: 'm-f', toolCalls: calls.slice(0, 2) };

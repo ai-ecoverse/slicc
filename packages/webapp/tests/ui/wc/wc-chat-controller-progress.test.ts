@@ -140,7 +140,7 @@ describe('WcChatController tool_progress handling', () => {
     expect(ring.at(-1)).toBeCloseTo(0.4);
   });
 
-  it('fills the cluster head as calls complete (k of N), with no progress bar', () => {
+  it('fills the cluster head with dots as calls complete (k of N), with no icon fill', () => {
     // beforeEach already started one bash call; two more collapse into a cluster.
     for (const id of ['c2', 'c3']) {
       agent.emit({
@@ -165,12 +165,12 @@ describe('WcChatController tool_progress handling', () => {
     const head = cluster()?.querySelector('.slicc-cluster__head');
     expect(cluster()?.getAttribute('data-progress')).toBe('determinate');
     expect(head?.querySelectorAll('.wcmsg-dots__dot')).toHaveLength(3);
-    expect(Number(cluster()?.style.getPropertyValue('--slicc-progress'))).toBeCloseTo(0.2);
+    expect(cluster()?.style.getPropertyValue('--slicc-progress')).toBe('');
     expect(cluster()?.getAttribute('title')).toContain('0 of 3 done');
     // The cluster keeps its "3 steps" count alongside the dots.
     expect(cluster()?.querySelector('.slicc-cluster__count')?.textContent).toContain('3');
 
-    // A completed call advances the fill by a whole step.
+    // A completed call advances the dots by a whole step.
     agent.emit({
       type: 'tool_result',
       messageId: 'm1',
@@ -178,12 +178,17 @@ describe('WcChatController tool_progress handling', () => {
       result: 'ok',
       toolCallId: 'c2',
     });
-    expect(Number(cluster()?.style.getPropertyValue('--slicc-progress'))).toBeCloseTo(1 / 3);
+    expect(cluster()?.style.getPropertyValue('--slicc-progress')).toBe('');
     expect(cluster()?.getAttribute('title')).toContain('1 of 3 done');
+    const activeAfter = [...(head?.querySelectorAll('.wcmsg-dots__dot') ?? [])].findIndex((d) =>
+      d.classList.contains('is-active')
+    );
+    expect(activeAfter).toBe(0);
 
-    // A cluster never wears the row's top-border bar — icon + dots only.
+    // A cluster never wears the row's top-border bar or icon fill — dots only.
     const css = document.getElementById('slicc-wcmsg-style')?.textContent ?? '';
     expect(css).toContain('slicc-action-row[data-progress] .slicc-act__body::before');
+    expect(css).not.toContain('slicc-tool-cluster[data-progress] .slicc-cluster__ic');
     expect(css).not.toContain('slicc-tool-cluster[data-progress] .slicc-cluster__body::before');
 
     // Once every call has settled the treatment clears entirely.
