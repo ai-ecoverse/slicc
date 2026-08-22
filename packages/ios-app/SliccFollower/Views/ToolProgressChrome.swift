@@ -188,7 +188,9 @@ struct ToolProgressDots: View {
         Circle()
             .fill(color)
             .frame(width: 5, height: 5)
-            .opacity(isDone ? 1 : 0.25)
+            // Active dots start at full opacity so the blink animates 1→0.25,
+            // not 0.25→0.0625 when SwiftUI composes nested opacity modifiers.
+            .opacity(isDone || isActive ? 1 : 0.25)
             .modifier(ToolProgressBlink(active: isActive, delay: Double(index) * 0.2))
     }
 }
