@@ -169,8 +169,13 @@ per-scoop sudoers.
   resolved from the `cone` provenance the archive already records — and the
   budget pass bounds that same file.
 
-Known limit (unchanged by this phase): the workflow prelude's `agent()` still
-grants sub-agents a read-only `/workspace/` alongside the invoking cwd.
+Every `agent` spawn path now leaves the read-only roots to the command, which
+resolves them from the owning cone: the shell command's own default, the realm
+module (`sliccy:agent`) and the workflow prelude's `agent()` all omit
+`--read-only` unless the caller passes one. The flag is pure-replace, so a
+hardcoded `/workspace/` in a wrapper silently overrode the owner-relative
+roots — an extra cone's sub-agent read the primary cone's files and not its
+own.
 
 ### Per-cone sessions ([#2272](https://github.com/ai-ecoverse/slicc/issues/2272))
 

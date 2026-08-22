@@ -70,7 +70,10 @@ async function agent(prompt, opts) {
     if (opts.model) flags.push('--model', String(opts.model));
     if (opts.thinking) flags.push('--thinking', String(opts.thinking));
     if (opts.schema) flags.push('--schema-b64', __b64(JSON.stringify(opts.schema)));
-    const argv = ['agent'].concat(flags, ['--read-only', '/workspace/', __agentCwd, '*', String(prompt)]);
+    // No --read-only: the flag is pure-replace, so naming '/workspace/' here
+    // would override the command's owner-relative default and hand a workflow
+    // agent running under an extra cone the primary cone's files (#2271).
+    const argv = ['agent'].concat(flags, [__agentCwd, '*', String(prompt)]);
     const r = await __execSpawn(argv);
     if (!r || r.exitCode !== 0) {
       // Surface the subagent's real failure (bad model, 5xx, scoop error) before

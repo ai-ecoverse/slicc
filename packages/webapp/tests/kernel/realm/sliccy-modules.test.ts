@@ -483,16 +483,33 @@ describe("require('sliccy:agent') — callable + non-throwing .spawn", () => {
     const out = await runCode(code, ctx);
     expect(out.exitCode).toBe(0);
     // realm ctx.cwd is '/workspace', so the default positional cwd is '/workspace'.
+    // No `--read-only`: the flag is pure-replace, so emitting a default here
+    // would override the command's owner-relative roots and give JS running
+    // under an extra cone the PRIMARY cone's files (#2271).
+    expect(argvOf(calls[0])).toEqual(['agent', '/workspace', '*', 'hi']);
+    // finalText only strips trailing newlines, not surrounding spaces.
+    expect(out.stdout.trim()).toBe(JSON.stringify('  the answer  '));
+  });
+
+  it('forwards --read-only only when the caller asked for it (#2271)', async () => {
+    const calls: ExecCall[] = [];
+    const ctx = makeAgentCtx({ stdout: 'ok' }, calls);
+    const code = `
+      const agent = require('sliccy:agent');
+      await agent('a', { readOnly: ['/data/', '/etc/'] });
+      await agent('b', { readOnly: '/data/' });
+    `;
+    const out = await runCode(code, ctx);
+    expect(out.exitCode).toBe(0);
     expect(argvOf(calls[0])).toEqual([
       'agent',
       '--read-only',
-      '/workspace/',
+      '/data/,/etc/',
       '/workspace',
       '*',
-      'hi',
+      'a',
     ]);
-    // finalText only strips trailing newlines, not surrounding spaces.
-    expect(out.stdout.trim()).toBe(JSON.stringify('  the answer  '));
+    expect(argvOf(calls[1])).toEqual(['agent', '--read-only', '/data/', '/workspace', '*', 'b']);
   });
 
   it('--model / --thinking / readOnly[] / custom cwd + allowedCommands map to argv', async () => {

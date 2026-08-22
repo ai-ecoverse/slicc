@@ -18,7 +18,12 @@ interface SliccyAgentOptions {
   cwd?: string;
   /** Comma-separated allowed bash commands; defaults to `*`. */
   allowedCommands?: string;
-  /** Read-only VFS paths (array or CSV) forwarded as `--read-only`; defaults to `/workspace/`. */
+  /**
+   * Read-only VFS paths (array or CSV) forwarded as `--read-only`. Omitted,
+   * the flag is not sent at all, so the spawned scoop gets the `agent`
+   * command's owner-relative default — the OWNING cone's workspace plus the
+   * invoking cwd (#2271), not a hardcoded `/workspace/`.
+   */
   readOnly?: string | string[];
 }
 
@@ -50,23 +55,28 @@ function agentSchemaToB64(json: string): string {
 /**
  * Build the `agent` command argv. Mirrors the workflow-DSL `agent()` in
  * `workflow-prelude.ts`: flags (`--model` / `--thinking` / `--schema-b64`)
- * first, then the `--read-only <csv>` flag and the three positionals
+ * first, then an optional `--read-only <csv>` flag and the three positionals
  * `<cwd> <allowedCommands> <prompt>`.
+ *
+ * `--read-only` is emitted ONLY when the caller asked for it. The flag is
+ * pure-replace, so passing a default here would override the command's
+ * owner-relative roots and hand JS running under an extra cone the PRIMARY
+ * cone's files instead of its own (#2271).
  */
 function buildAgentArgv(prompt: string, opts: SliccyAgentOptions, realmCwd: string): string[] {
   const flags: string[] = [];
   if (opts.model) flags.push('--model', String(opts.model));
   if (opts.thinking) flags.push('--thinking', String(opts.thinking));
   if (opts.schema) flags.push('--schema-b64', agentSchemaToB64(JSON.stringify(opts.schema)));
-  const readOnly =
-    opts.readOnly === undefined
-      ? '/workspace/'
-      : Array.isArray(opts.readOnly)
-        ? opts.readOnly.join(',')
-        : String(opts.readOnly);
+  if (opts.readOnly !== undefined) {
+    flags.push(
+      '--read-only',
+      Array.isArray(opts.readOnly) ? opts.readOnly.join(',') : String(opts.readOnly)
+    );
+  }
   const cwd = opts.cwd !== undefined ? String(opts.cwd) : realmCwd || '.';
   const allowed = opts.allowedCommands !== undefined ? String(opts.allowedCommands) : '*';
-  return ['agent', ...flags, '--read-only', readOnly, cwd, allowed, String(prompt)];
+  return ['agent', ...flags, cwd, allowed, String(prompt)];
 }
 
 /**

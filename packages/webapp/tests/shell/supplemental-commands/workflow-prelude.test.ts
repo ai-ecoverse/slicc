@@ -58,7 +58,7 @@ const WF = {
 };
 
 describe('workflow-prelude', () => {
-  it('agent() spawns via exec.spawn with --read-only + agentCwd and trims text', async () => {
+  it('agent() spawns via exec.spawn with agentCwd and trims text', async () => {
     const calls: string[][] = [];
     const exec = {
       spawn: async (a: string[]) => {
@@ -68,7 +68,9 @@ describe('workflow-prelude', () => {
     };
     await run('globalThis.__t = await agent("q");', exec, WF);
     expect((globalThis as any).__t).toBe('answer');
-    expect(calls[0]).toEqual(['agent', '--read-only', '/workspace/', '/s/scratch/', '*', 'q']);
+    // No `--read-only` — pure-replace, so a hardcoded default would override
+    // the owner-relative roots and reach into the primary cone (#2271).
+    expect(calls[0]).toEqual(['agent', '/s/scratch/', '*', 'q']);
   });
   it('agent({schema}) adds --schema-b64 and JSON-parses', async () => {
     const calls: string[][] = [];
