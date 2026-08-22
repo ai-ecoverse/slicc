@@ -5,19 +5,31 @@ export interface CloudStatusEndpointOptions {
   joinFilePath: string;
 }
 
-function isCloudStatusPayload(x: unknown): x is {
+/** Join info accepted by POST /api/cloud-status and persisted to the join file. */
+export interface CloudStatusPayload {
   joinUrl: string;
   trayId?: string;
   controllerUrl?: string;
   webhookUrl?: string;
   runtime?: string;
   sliccVersion?: string;
-} {
+}
+
+/** The optional string fields validated when present but never required. */
+const OPTIONAL_STRING_FIELDS = [
+  'trayId',
+  'controllerUrl',
+  'webhookUrl',
+  'runtime',
+  'sliccVersion',
+] as const satisfies ReadonlyArray<keyof CloudStatusPayload>;
+
+function isCloudStatusPayload(x: unknown): x is CloudStatusPayload {
   if (typeof x !== 'object' || x === null) return false;
-  const p = x as Record<string, unknown>;
+  const p = x as Partial<Record<keyof CloudStatusPayload, unknown>>;
   if (typeof p.joinUrl !== 'string' || p.joinUrl.length === 0) return false;
   // Optional fields: validate type if present, but don't require.
-  for (const key of ['trayId', 'controllerUrl', 'webhookUrl', 'runtime', 'sliccVersion']) {
+  for (const key of OPTIONAL_STRING_FIELDS) {
     if (key in p && typeof p[key] !== 'string') return false;
   }
   return true;
