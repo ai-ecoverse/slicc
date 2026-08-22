@@ -158,6 +158,7 @@ export interface StandalonePanelRpcHandlerOptions {
     env?: Record<string, string>;
     execToken: string;
     timeoutMs?: number;
+    stdin?: string;
   }) => Promise<{ stdout: string; stderr: string; exitCode: number; error?: string }>;
   /** Cancel an in-flight {@link StandalonePanelRpcHandlerOptions.execOnRemote}, keyed by execToken. */
   signalRemoteExec?: (payload: { execToken: string }) => void;

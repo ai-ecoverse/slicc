@@ -51,7 +51,7 @@ extension AppState {
         sessionIdentity: String
     ) {
         switch message {
-        case .execRequest(let requestId, let command, _, _):
+        case .execRequest(let requestId, let command, _, _, _):
             openApprovalController.handle(
                 requestId: requestId,
                 command: command,

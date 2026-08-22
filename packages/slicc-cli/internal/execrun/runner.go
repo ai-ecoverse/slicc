@@ -24,9 +24,11 @@ type Options struct {
 	// Runner is the argv the command is handed to; the command string is appended
 	// as the final argument. e.g. ["bash","-c"], ["sh","-c"],
 	// ["docker","exec","-i","box","sh","-c"]. Required.
-	Runner  []string
-	Cwd     string
-	Env     map[string]string
+	Runner []string
+	Cwd    string
+	Env    map[string]string
+	// Stdin is optional input written to the command before its stdin is closed.
+	Stdin   []byte
 	OnChunk ChunkFunc
 	// Control forwards signal names ("SIGINT"/"SIGTERM"/"SIGKILL") to the running
 	// process. Optional.
@@ -70,8 +72,21 @@ func Run(ctx context.Context, command string, opts Options) Result {
 	if err != nil {
 		return Result{ExitCode: 126, Err: err}
 	}
+	var stdinPipe io.WriteCloser
+	if len(opts.Stdin) > 0 {
+		stdinPipe, err = cmd.StdinPipe()
+		if err != nil {
+			return Result{ExitCode: 126, Err: err}
+		}
+	}
 	if err := cmd.Start(); err != nil {
 		return Result{ExitCode: 127, Err: err}
+	}
+	if stdinPipe != nil {
+		go func() {
+			_, _ = stdinPipe.Write(opts.Stdin)
+			_ = stdinPipe.Close()
+		}()
 	}
 
 	finished := make(chan struct{})

@@ -46,6 +46,19 @@ func (c *capture) err() string {
 	return c.stderr.String()
 }
 
+func TestRunStdin(t *testing.T) {
+	c := &capture{}
+	res := Run(context.Background(), "cat", Options{
+		Runner: testRunner(), OnChunk: c.onChunk, Stdin: []byte("piped\n"),
+	})
+	if res.ExitCode != 0 {
+		t.Fatalf("exit = %d, want 0 (err=%v)", res.ExitCode, res.Err)
+	}
+	if c.out() != "piped\n" {
+		t.Fatalf("stdout = %q, want %q", c.out(), "piped\n")
+	}
+}
+
 func TestRunStdoutAndExitZero(t *testing.T) {
 	c := &capture{}
 	res := Run(context.Background(), "echo hello-follower", Options{Runner: testRunner(), OnChunk: c.onChunk})
