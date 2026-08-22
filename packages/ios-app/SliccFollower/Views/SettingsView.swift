@@ -163,6 +163,18 @@ struct SettingsView: View {
             reachability.probe(appState.sessionStore.sessions)
             reachability.probe(appState.recentJoinStore.recents)
         }
+        // iCloud can push a row in while the sheet is open — the stores'
+        // external-change observers reload themselves, but an unprobed id
+        // counts as presumed-reachable, so it would sort above known-live
+        // rows and render without the "not responding" note until the sheet
+        // was reopened. Probing on change is what closes that window;
+        // `probe` deduplicates by id, so a reload of unchanged rows is cheap.
+        .onChange(of: appState.sessionStore.sessions) { _, sessions in
+            reachability.probe(sessions)
+        }
+        .onChange(of: appState.recentJoinStore.recents) { _, recents in
+            reachability.probe(recents)
+        }
         .onReceive(staleTicker) { now = $0 }
     }
 
