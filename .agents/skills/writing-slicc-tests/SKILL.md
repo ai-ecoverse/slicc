@@ -640,6 +640,10 @@ Three pieces compose the framework:
 - **Playwright harness** (`packages/webapp/tests/e2e/fake-llm-helpers.ts`):
   `seedLocalLlmProvider`, `submitUserMessage`, `waitForTurnComplete`,
   `runUserInputFixture`, and `readCdpPageState`.
+- **Two-instance topology** (`packages/webapp/tests/e2e/two-instance-helpers.ts`):
+  a second SLICC runtime joined to the leader through the real tray hub, plus
+  the cone / freezer-rail / tab-strip / terminal helpers the multi-cone
+  scenarios share. See "Write a Two-Instance Scenario" below.
 
 ### Write a Scenario
 
@@ -750,6 +754,86 @@ If a scenario needs a `/preview/*` page rendered for assertion,
 `seedVFS` continues to work for content the _test page_ itself loads
 — it just doesn't reach CDP-spawned tabs.
 
+### Write a Two-Instance Scenario
+
+Anything that crosses the tray — follower rails, cone mirroring, a follower
+driving leader state — needs **two runtimes**, not two tabs.
+`two-instance-helpers.ts` builds that pair on top of the servers the harness
+already runs; `multiple-cones-follower.test.ts` is the worked example.
+
+```ts
+await bootMultiConeLeader(page, { fixture, tray: true });
+const follower = await joinAsFollower(browser, await leaderJoinUrl(page));
+try {
+  await expect.poll(() => switcherLabels(follower.page)).toEqual(await switcherLabels(page));
+} finally {
+  await follower.close();
+}
+```
+
+Four things make it work, and each is a trap if you rebuild it by hand:
+
+- **The tray hub is real.** The harness's `wrangler dev` IS
+  `packages/cloudflare-worker`, Durable Objects included, so the leader mints a
+  tray against `http://localhost:<wrangler>` and the worker serves the SPA at
+  `/join/<token>`. `bootMultiConeLeader({ tray: true })` appends
+  `?trayWorkerUrl=`, which beats both the stored value and the node-server's
+  `/api/runtime-config` — without it the page points its tray at the PRODUCTION
+  hub and the run means nothing (the origin rule, see
+  `.agents/skills/cdp-smoke-test/tier3-multi-harness.md`).
+- **The follower needs its own browser CONTEXT.** `wc-tray.ts` elects one leader
+  per origin per profile over the Web Locks API; a second page in the leader's
+  context defers instead of following. `joinAsFollower` opens a context, and the
+  caller closes it in a `finally` so a failing assertion cannot leak a runtime
+  into the next test.
+- **Read the join URL from `localStorage`, not from a module global.**
+  `LeaderTrayManager` runs in the page realm; `slicc.leaderTrayStatus` is the
+  shim the page keeps current, and `leaderJoinUrl` polls it for
+  `state === 'leader'`.
+- **This follower has no local CDP surface.** It can render, select and drive
+  leader state; it can never host a teleported tab or advertise targets. Do not
+  write a federated-CDP assertion against it.
+
+Two more rules the cone scenarios paid for:
+
+- **Assert the scripted REPLY, not `[data-processing]`.** A fake-LLM turn can
+  open and close between two polls of the attribute, so
+  `waitForTurnComplete({ mustObserveTurnRise: true })` fails turns that ran
+  perfectly. The `chat()` helper waits for the reply text first, then lets the
+  turn settle.
+- **The workbench terminal is a LAZY mount.** `__slicc_terminal_view` only
+  appears after the term surface is activated — `openTerminal()` (and therefore
+  `execInTerminal()`) fires `dock.selectItem('term')` first. A bare wait on the
+  global just burns its timeout.
+
+Give a two-instance test its own `test.setTimeout` (`TWO_INSTANCE_TEST_TIMEOUT_MS`,
+10 min; single-runtime cone specs use `CONE_TEST_TIMEOUT_MS`, 5). The config's
+30s default covers one turn, not a cone lifecycle plus a tray handshake — a
+healthy CI run of the follower scenario takes ~1.5 min against ~10s locally, so
+size the ceiling for a LOADED runner, not merely a slow one.
+
+**Bound every step, or a hang tells you nothing.** Playwright's default
+`actionTimeout` / `navigationTimeout` is `0` — unbounded, cut off only by the
+test timeout. A `goto` or `.click()` left at the default turns any stall into a
+bare `Test timeout of Nms exceeded` whose stack points at whatever ran last
+(usually your `finally`). This dropped #2328 out of the merge queue three
+attempts in a row before the cause was even visible. Pass an explicit `timeout`
+to every navigation and action.
+
+**A failed turn never renders the reply you are waiting for.** When a turn dies
+— provider error, fixture overflow, retries exhausted — the thread renders a
+`<slicc-error-card>` and the scripted text never arrives, so `toContainText`
+waits out the whole budget. Use `expectReply()`, which races the expected text
+against that card and throws naming the agent error.
+
+Capture both runtimes' console output with `watchBrowserDiagnostics()` and
+re-throw through `diagnostics.annotate(err)`. Without it a CI failure's cause
+lives only in the trace artifact, which for the `e2e` job is ~190 MB.
+
+Tune `retries` per spec when an attempt is expensive: the follower spec sets
+`test.describe.configure({ retries: 1 })` because three attempts at a 10-minute
+ceiling would consume half the `e2e` job's budget and starve the specs after it.
+
 ### Run the E2E Framework
 
 ```bash
@@ -793,6 +877,10 @@ triggers on changes to any runtime the harness drives or bundles —
 `webapp`, `vfs-root`, `assets`, `shared-ts`, `spoon`, `webcomponents`,
 `cloud-core`, `node-server`, `cloudflare-worker` — plus `root-config`
 (dependency bumps, tsconfigs).
+The multi-cone leg (`multiple-cones*.test.ts`, #2313) rides the same job with
+no extra gating: it exercises the `multiple-cones` flag end to end — cone
+create / switch / drop, the rail's session actions and their freezer outcomes,
+lick addressing across cones, and the leader + follower pair above.
 Playwright retries twice in CI (`retries` in the config); locally it
 fails fast. The real-Kokoro speech round-trip rides the same job as a
 conditional leg: when the `speech` path filter matches, the run sets
