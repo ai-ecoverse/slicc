@@ -18,9 +18,11 @@
  * (→ SIGINT on the follower).
  */
 
+import { uint8ToBase64 } from '@slicc/shared-ts';
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
+import { stdinAsLatin1 } from '../just-bash-compat.js';
 import { type ConnectedFollowerInfo, getConnectedFollowersWithFallback } from './host-command.js';
 
 /** Upper bound on how long the page bridge waits for a command (24h). */
@@ -40,7 +42,8 @@ Usage: ssh [--cwd <dir>] [--timeout <seconds>] <runtime-id> <command...>
        ssh --list
 
 Runs <command> on the follower <runtime-id> (from \`host\` / \`ssh --list\`) and
-returns its stdout, stderr, and exit code. A \`slicc … follow\` CLI follower runs
+returns its stdout, stderr, and exit code. Piped shell stdin is forwarded to the
+follower (e.g. \`echo hi | ssh follower-abc123 cat\`). A \`slicc … follow\` CLI follower runs
 commands on its real machine. An iOS follower accepts only
 \`open [--universal|--x-callback] <url>\`, gates it through on-device scoped
 approval, and launches the approved destination. \`--universal\` requires a universal
@@ -78,6 +81,16 @@ function formatTargets(followers: ConnectedFollowerInfo[]): string {
     if (f.motd) lines.push(`      ${f.motd}`);
   }
   return `${lines.join('\n')}\n`;
+}
+
+/** Encode piped stdin for the tray exec.request wire (base64 bytes). */
+function encodeStdin(ctx: CommandContext): string | undefined {
+  if (ctx.stdin === undefined) return undefined;
+  const latin1 = stdinAsLatin1(ctx.stdin);
+  if (latin1.length === 0) return undefined;
+  const bytes = new Uint8Array(latin1.length);
+  for (let i = 0; i < latin1.length; i++) bytes[i] = latin1.charCodeAt(i) & 0xff;
+  return uint8ToBase64(bytes);
 }
 
 interface ParsedSsh {
@@ -166,6 +179,7 @@ export function createSshCommand(): Command {
           cwd: parsed.cwd,
           execToken,
           timeoutMs,
+          stdin: encodeStdin(ctx),
         },
         { timeoutMs: (timeoutMs ?? SSH_MAX_MS) + 5000 }
       );

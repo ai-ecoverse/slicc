@@ -31,7 +31,8 @@ The `<text>`/`<command>` is curl-style — a literal string, `@path` (read a fil
 or `-` / `@-` (read stdin):
 
 ```
-git log --oneline -20 | slicc <url> exec -      # pipe stdin
+git log --oneline -20 | slicc <url> exec cat   # pipe stdin to the leader command
+echo "run this" | slicc <url> exec -           # stdin as the command text
 slicc <url> prompt @brief.md                    # read a file
 ```
 

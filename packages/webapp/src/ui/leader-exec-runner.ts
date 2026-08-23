@@ -15,8 +15,9 @@
  * runs in the leader's virtual shell) a long-running command's output arrives at
  * completion, not incrementally — this surface is streaming-*shaped* but the
  * underlying shell is buffered. The `ssh` direction (a real OS on a Go follower)
- * DOES stream live. True incremental leader-shell output needs a streaming
- * just-bash runtime and is tracked as a follow-up.
+ * DOES stream live. Piped stdin is forwarded bidirectionally on `exec.request`.
+ * True incremental leader-shell output needs a streaming just-bash runtime and is
+ * tracked as a follow-up.
  */
 
 import { TerminalSessionClient } from '../kernel/terminal-session-client.js';
@@ -32,6 +33,8 @@ export interface LeaderExecInShellOptions {
   sessionId: string;
   cwd?: string;
   env?: Record<string, string>;
+  /** base64-encoded stdin bytes; omitted when nothing was piped. */
+  stdin?: string;
   /** Aborting sends SIGINT to the running command. */
   signal: AbortSignal;
   /** Called with each streamed stdout/stderr block as it arrives. */
@@ -67,6 +70,7 @@ export class LeaderExecSessionPool {
       const result = await entry.session.exec(opts.command, {
         cwd: opts.cwd,
         env: opts.env,
+        stdin: opts.stdin,
         discardCapturedOutput: true,
       });
       return { exitCode: result.exitCode };

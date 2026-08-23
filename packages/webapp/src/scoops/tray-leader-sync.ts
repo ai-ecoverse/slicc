@@ -201,6 +201,8 @@ export interface LeaderSyncManagerOptions {
       sessionId: string;
       cwd?: string;
       env?: Record<string, string>;
+      /** base64-encoded stdin bytes; omitted when nothing was piped. */
+      stdin?: string;
       signal: AbortSignal;
       onChunk: (stream: 'stdout' | 'stderr', data: string) => void;
     }
@@ -428,6 +430,7 @@ export class LeaderSyncManager {
     opts: {
       cwd?: string;
       env?: Record<string, string>;
+      stdin?: string;
       signal?: AbortSignal;
       onChunk?: (stream: 'stdout' | 'stderr', data: string) => void;
       timeoutMs?: number;

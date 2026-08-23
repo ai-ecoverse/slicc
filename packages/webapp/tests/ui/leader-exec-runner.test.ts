@@ -121,9 +121,27 @@ describe('LeaderExecSessionPool', () => {
     expect(execSpy).toHaveBeenCalledWith('echo hi', {
       cwd: undefined,
       env: undefined,
+      stdin: undefined,
       discardCapturedOutput: true,
     });
     pool.close('follower-1');
+    execSpy.mockRestore();
+  });
+
+  it('forwards base64 stdin to the terminal session exec', async () => {
+    const execSpy = vi.spyOn(TerminalSessionClient.prototype, 'exec');
+    const client = new FakeOffscreen('auto');
+    const pool = new LeaderExecSessionPool(client as unknown as OffscreenClient);
+    const stdin = Buffer.from('piped\n', 'utf-8').toString('base64');
+    await pool.run({
+      sessionId: 'follower-stdin',
+      command: 'cat',
+      stdin,
+      signal: new AbortController().signal,
+      onChunk: () => {},
+    });
+    expect(execSpy).toHaveBeenCalledWith('cat', expect.objectContaining({ stdin }));
+    pool.close('follower-stdin');
     execSpy.mockRestore();
   });
 

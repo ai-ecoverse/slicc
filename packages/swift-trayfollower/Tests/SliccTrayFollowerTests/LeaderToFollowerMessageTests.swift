@@ -333,8 +333,8 @@ final class LeaderToFollowerMessageTests: XCTestCase {
 
     func testExecRequestRoundTrip() throws {
         guard
-            case .execRequest(let requestId, let command, let cwd, let env) =
-                try roundTrip(.execRequest(requestId: "r1", command: "ls -la", cwd: "/tmp", env: ["A": "B"]))
+            case .execRequest(let requestId, let command, let cwd, let env, let stdin) =
+                try roundTrip(.execRequest(requestId: "r1", command: "ls -la", cwd: "/tmp", env: ["A": "B"], stdin: "aGVsbG8K"))
         else {
             XCTFail("expected execRequest")
             return
@@ -343,6 +343,7 @@ final class LeaderToFollowerMessageTests: XCTestCase {
         XCTAssertEqual(command, "ls -la")
         XCTAssertEqual(cwd, "/tmp")
         XCTAssertEqual(env, ["A": "B"])
+        XCTAssertEqual(stdin, "aGVsbG8K")
     }
 
     func testExecChunkRoundTrip() throws {

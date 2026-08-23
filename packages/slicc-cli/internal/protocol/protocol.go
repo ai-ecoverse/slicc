@@ -60,6 +60,8 @@ type ExecRequest struct {
 	Command   string            `json:"command"`
 	Cwd       string            `json:"cwd,omitempty"`
 	Env       map[string]string `json:"env,omitempty"`
+	// Stdin is optional base64-encoded stdin bytes (mirrors exec.chunk data).
+	Stdin string `json:"stdin,omitempty"`
 }
 
 // ExecChunk is one streamed stdout/stderr block; Data is base64-encoded bytes.

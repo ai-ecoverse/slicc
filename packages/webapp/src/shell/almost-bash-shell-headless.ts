@@ -31,6 +31,7 @@
 
 import type {
   BashExecResult,
+  ByteString,
   Command,
   CommandContext,
   CommandName,
@@ -206,7 +207,8 @@ export interface HeadlessShellLike {
   executeCommand(
     command: string,
     signal?: AbortSignal,
-    shellPid?: number
+    shellPid?: number,
+    stdin?: ByteString
   ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   executeScriptFile(
     scriptPath: string,
@@ -707,7 +709,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   async executeCommand(
     command: string,
     signal?: AbortSignal,
-    shellPid?: number
+    shellPid?: number,
+    stdin: ByteString = EMPTY_BYTES
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const previousShellPid = this.activeShellPid;
     if (shellPid !== undefined) this.activeShellPid = shellPid;
@@ -715,7 +718,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       // `shellPid` also rides this run's env, so a run that outlives the call
       // (the bash tool's detached jobs) still parents its realm children
       // correctly once `activeShellPid` has moved on to a later command.
-      const result = await this.runCommand(command, signal, shellPid);
+      const result = await this.runCommand(command, signal, shellPid, stdin);
       return {
         stdout: result.stdout,
         stderr: result.stderr,
@@ -895,7 +898,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
   protected async runCommand(
     command: string,
     signal?: AbortSignal,
-    runPid?: number
+    runPid?: number,
+    stdin: ByteString = EMPTY_BYTES
   ): Promise<BashExecResult> {
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
     emitShellCommand(commandName);
@@ -931,6 +935,9 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       env: runPid === undefined ? this.lastEnv : { ...this.lastEnv, [RUN_PID_ENV]: String(runPid) },
       cwd: this.cwd,
       signal,
+      ...(stdin !== EMPTY_BYTES
+        ? { stdin: stdin as unknown as string, stdinKind: 'bytes' as const }
+        : {}),
     };
     const pathBeforeExec = this.lastEnv.PATH;
     this.activeRunSignal = signal;
