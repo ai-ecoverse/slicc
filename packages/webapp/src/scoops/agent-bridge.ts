@@ -42,6 +42,7 @@ import type { JsonSchemaObject } from '../tools/types.js';
 import { defaultChildVisibleRoots, PRIMARY_WORKSPACE } from '../work-unit/descriptor.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { modelIdFor, modelProviderFor, thinkingFor } from '../work-unit/record.js';
+import { AGENT_ADJECTIVES, AGENT_FLAVORS } from './agent-names.js';
 import { serializeAgentSessionArchive } from './agent-session-archive.js';
 import type { Orchestrator } from './orchestrator.js';
 import {
@@ -878,98 +879,11 @@ function defaultGenerateUid(): string {
 }
 
 /**
- * Playful adjectives. Keep this list single-word and all-lowercase — the
- * bridge joins with a dash (folder) or underscore (jid), so anything
- * weirder than `[a-z]+` would break the naming predicate assumed by
- * callers (tests regex on `/^agent-[a-z]+-[a-z]+$/`).
- */
-const AGENT_ADJECTIVES: readonly string[] = [
-  'amber',
-  'bouncy',
-  'breezy',
-  'bubbly',
-  'cheeky',
-  'chilly',
-  'cozy',
-  'dapper',
-  'dreamy',
-  'eager',
-  'exuberant',
-  'fluffy',
-  'frosty',
-  'gentle',
-  'giddy',
-  'glossy',
-  'jolly',
-  'lucky',
-  'mellow',
-  'merry',
-  'nimble',
-  'plucky',
-  'quirky',
-  'salty',
-  'sleepy',
-  'snappy',
-  'sparkly',
-  'spiffy',
-  'sunny',
-  'sweet',
-  'toasty',
-  'velvety',
-  'whimsy',
-  'zesty',
-];
-
-/**
- * Ice-cream flavors. Single-word only (see {@link AGENT_ADJECTIVES}); a
- * multi-word flavor like `rocky-road` would produce
- * `agent-adjective-rocky-road` which breaks the two-token regex.
- */
-const AGENT_FLAVORS: readonly string[] = [
-  'blueberry',
-  'butterscotch',
-  'caramel',
-  'cherry',
-  'chocolate',
-  'cinnamon',
-  'coconut',
-  'coffee',
-  'cookies',
-  'custard',
-  'espresso',
-  'fudge',
-  'gelato',
-  'hazelnut',
-  'honeycomb',
-  'lavender',
-  'lemon',
-  'mango',
-  'maple',
-  'marzipan',
-  'matcha',
-  'mint',
-  'mocha',
-  'neapolitan',
-  'nougat',
-  'peach',
-  'pecan',
-  'pistachio',
-  'praline',
-  'raspberry',
-  'sherbet',
-  'sorbet',
-  'stracciatella',
-  'strawberry',
-  'tiramisu',
-  'toffee',
-  'vanilla',
-];
-
-/**
- * Pick a random `<adjective>-<flavor>` pair. Adjective × flavor gives
- * hundreds of combinations (currently 34 × 37 = 1258), so collisions
- * inside a single run are vanishingly unlikely — but the bridge still
- * retries up to eight times and falls back to a hex uid just in case.
+ * Pick a random `<adjective>-<flavor>` pair from the pools in
+ * `agent-names.ts` (`AGENT_NAME_COMBINATIONS`, well over a
+ * million), so collisions inside a single run are vanishingly unlikely —
+ * but the bridge still retries up to eight times and falls back to a hex
+ * uid just in case.
  */
 function defaultGenerateName(): string {
   const adjective = AGENT_ADJECTIVES[Math.floor(Math.random() * AGENT_ADJECTIVES.length)];
