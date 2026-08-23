@@ -133,6 +133,11 @@ export async function bootMultiConeLeader(page: Page, options: BootLeaderOptions
   });
   await seedFeatureFlags(page, { 'multiple-cones': 'on' });
   await seedSkipSwReload(page);
+  // The thin-bridge params are NOT optional, however little a cone scenario
+  // looks like browser automation: the kernel worker routes provider fetches
+  // through node-server's proxy, so without them the first turn dies with
+  // `404 "Fetch proxy not available in worker mode"`. Measured, not assumed —
+  // dropping them failed all four specs in one run.
   const query = new URLSearchParams(leaderBootQuery());
   // `?trayWorkerUrl=` beats the stored value AND the node-server's
   // `/api/runtime-config` (see `resolveTrayRuntimeConfig`), which would
@@ -144,7 +149,7 @@ export async function bootMultiConeLeader(page: Page, options: BootLeaderOptions
   // exceeded" with no indication of where it was — exactly the CI failure this
   // rule exists to prevent.
   await page.goto(`/?${query.toString()}`, { timeout: NAV_TIMEOUT_MS });
-  await page.waitForSelector('slicc-input-card');
+  await page.waitForSelector('slicc-input-card', { timeout: NAV_TIMEOUT_MS });
   await expect(page.locator('slicc-chat-thread')).toContainText('Welcome to SLICC', {
     timeout: 30_000,
   });
@@ -292,7 +297,7 @@ function exact(label: string): RegExp {
  * `setAttribute('open')` would not.
  */
 export async function expandFreezerRail(page: Page): Promise<void> {
-  await page.waitForSelector('slicc-freezer slicc-freezer-new');
+  await page.waitForSelector('slicc-freezer slicc-freezer-new', { timeout: ACTION_TIMEOUT_MS });
   await page.evaluate(() => {
     const freezer = document.querySelector('slicc-freezer') as
       | (HTMLElement & { toggle?: (force?: boolean) => void })
@@ -318,7 +323,7 @@ export function railAction(page: Page, action: RailAction): Locator {
 /** Click a rail action, expanding the rail first if it is still collapsed. */
 export async function clickRailAction(page: Page, action: RailAction): Promise<void> {
   await expandFreezerRail(page);
-  await railAction(page, action).click();
+  await railAction(page, action).click({ timeout: ACTION_TIMEOUT_MS });
 }
 
 /** The `<slicc-dialog>` a cone action opened (New cone / Drop cone). */
@@ -368,7 +373,9 @@ export async function freezerCardTitles(page: Page): Promise<string[]> {
 
 /** Open a frozen chat by card title (the read-only thaw view). */
 export async function openFreezerCard(page: Page, title: string): Promise<void> {
-  await page.locator(`slicc-freezer slicc-freezer-card[title="${title}"]`).click();
+  await page
+    .locator(`slicc-freezer slicc-freezer-card[title="${title}"]`)
+    .click({ timeout: ACTION_TIMEOUT_MS });
 }
 
 /**
@@ -496,7 +503,7 @@ export async function modelPill(page: Page): Promise<string | null> {
  * `model.select` whose id is not in the catalog it advertised.
  */
 export async function followerSelectModel(page: Page, modelId: string): Promise<void> {
-  await page.waitForSelector('slicc-composer-meta');
+  await page.waitForSelector('slicc-composer-meta', { timeout: ACTION_TIMEOUT_MS });
   await page.evaluate((id: string) => {
     const meta = document.querySelector('slicc-composer-meta');
     if (!meta) throw new Error('slicc-composer-meta not mounted');

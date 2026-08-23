@@ -24,6 +24,7 @@ import followerFixture from './fake-llm/fixtures/multiple-cones-follower.json' w
   type: 'json',
 };
 import { resetFakeLlm } from './fake-llm-helpers.js';
+import type { BrowserDiagnostics } from './two-instance-helpers.js';
 import {
   activeTabLabel,
   bootMultiConeLeader,
@@ -60,25 +61,55 @@ test.describe('multiple cones — leader + follower', () => {
   // rather than a silent timeout, so re-rolling it buys nothing.
   test.describe.configure({ retries: 1 });
 
+  /**
+   * Diagnostics for the CURRENT test, dumped by the afterEach below.
+   *
+   * `diagnostics.annotate(err)` only fires for a thrown error; a Playwright
+   * TEST TIMEOUT aborts the body instead, so the catch never runs and the
+   * console tail — the only record of what the two runtimes were doing — is
+   * lost. `afterEach` still runs after a timeout, which makes it the one place
+   * that reports on the failure mode this spec actually suffers in CI.
+   */
+  let current: BrowserDiagnostics | null = null;
+
   test.beforeEach(async () => {
+    current = null;
     await resetFakeLlm();
+  });
+
+  // Playwright REQUIRES the fixtures parameter to be a destructuring pattern
+  // ("First argument must use the object destructuring pattern") and this hook
+  // needs no fixture, so the empty pattern is the only shape that works.
+  // biome-ignore lint/correctness/noEmptyPattern: see above
+  test.afterEach(({}, testInfo) => {
+    if (testInfo.status === 'passed' || testInfo.status === 'skipped') return;
+    const tail = current?.entries.slice(-40).join('\n');
+    console.log(
+      `--- browser diagnostics for "${testInfo.title}" (${testInfo.status}) ---\n${
+        tail || '(nothing captured)'
+      }`
+    );
   });
 
   test('follower mirrors the cone strip and drives one cone’s model', async ({ page, browser }) => {
     test.setTimeout(TWO_INSTANCE_TEST_TIMEOUT_MS);
     const diagnostics = watchBrowserDiagnostics(page, 'leader');
+    current = diagnostics;
     await bootMultiConeLeader(page, { fixture: followerFixture, tray: true });
 
     await createCone(page, { name: 'reviewer', brief: 'review the docs' });
     await expectReply(page, 'Reviewer cone online.');
-    await chat(page, 'spawn a helper scoop', 'Helper scoop is ready.');
 
     const follower = await joinAsFollower(browser, await leaderJoinUrl(page));
     watchBrowserDiagnostics(follower.page, 'follower', diagnostics);
     try {
       // ── The strip mirrors, order and all ────────────────────────────
+      // Two cones, no scoop: the mirror is what this spec is for, and every
+      // extra agent turn is leader work a two-runtime spec pays for twice.
+      // "The selected cone's scoops come next" is asserted leader-side in
+      // `multiple-cones.test.ts`, where it costs one runtime.
       const leaderStrip = await switcherLabels(page);
-      expect(leaderStrip).toEqual([PRIMARY_CONE_LABEL, 'reviewer', 'helper']);
+      expect(leaderStrip).toEqual([PRIMARY_CONE_LABEL, 'reviewer']);
       await expect
         .poll(() => switcherLabels(follower.page), { timeout: 60_000 })
         .toEqual(leaderStrip);
@@ -120,6 +151,7 @@ test.describe('multiple cones — leader + follower', () => {
     test.fixme(!READ_ONLY_SCOOP_VIEW, 'awaiting #2312 — read-only scoop view');
     test.setTimeout(TWO_INSTANCE_TEST_TIMEOUT_MS);
     const diagnostics = watchBrowserDiagnostics(page, 'leader');
+    current = diagnostics;
     await bootMultiConeLeader(page, { fixture: followerFixture, tray: true });
 
     await createCone(page, { name: 'reviewer', brief: 'review the docs' });
