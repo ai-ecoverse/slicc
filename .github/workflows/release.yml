@@ -159,7 +159,9 @@ jobs:
     # apps must be built with the iOS 26 SDK or later." macos-latest
     # still resolves to macos-15 (Xcode 16.x) as of this commit.
     runs-on: macos-26
-    timeout-minutes: 30
+    # File Provider appex packaging pushed publish past 30m (runs 32626876686
+    # onward); v6.84.1 finished in ~24m before that landed.
+    timeout-minutes: 60
     permissions:
       contents: write
       id-token: write
