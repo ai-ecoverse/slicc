@@ -62,6 +62,14 @@ const NAV_TIMEOUT_MS = 60_000;
 /** Budget for a single UI action (a tab click). */
 const ACTION_TIMEOUT_MS = 30_000;
 
+/**
+ * Budget for the follower's model surface to come up. Longer than an ordinary
+ * action: it waits on two tray messages (`model.list`, `model.state`) that the
+ * leader sends after the follower attaches, and on a loaded runner that round
+ * trip is the slowest thing in the scenario.
+ */
+const MODEL_SURFACE_TIMEOUT_MS = 90_000;
+
 /** Model id every multi-cone fixture advertises and every cone runs on. */
 export const CONE_MODEL = 'fake-cone-primary';
 /** Second advertised model, so a follower has something to switch cone B to. */
@@ -503,7 +511,25 @@ export async function modelPill(page: Page): Promise<string | null> {
  * `model.select` whose id is not in the catalog it advertised.
  */
 export async function followerSelectModel(page: Page, modelId: string): Promise<void> {
-  await page.waitForSelector('slicc-composer-meta', { timeout: ACTION_TIMEOUT_MS });
+  // Wait for the pill to be READY, not merely present. `<slicc-composer-meta>`
+  // is in the follower's shell from first paint carrying the placeholder
+  // `model="Preview"`, and `createFollowerModelSurface.apply()` keeps it
+  // `display:none` until BOTH the leader's `model.list` and its `model.state`
+  // have arrived over the tray. Dispatching before then reaches a surface with
+  // no state and silently does nothing; waiting on the default `visible` state
+  // without a budget is what hung this spec for 5-10 minutes in CI.
+  const pill = page.locator('slicc-composer-meta');
+  try {
+    await pill.waitFor({ state: 'visible', timeout: MODEL_SURFACE_TIMEOUT_MS });
+  } catch {
+    throw new Error(
+      `followerSelectModel: the follower's model pill never became visible within ` +
+        `${MODEL_SURFACE_TIMEOUT_MS}ms (model=${JSON.stringify(
+          await pill.getAttribute('model')
+        )}). That means the leader's model catalog / selection state never reached ` +
+        `this follower over the tray — the pick would have been a no-op.`
+    );
+  }
   await page.evaluate((id: string) => {
     const meta = document.querySelector('slicc-composer-meta');
     if (!meta) throw new Error('slicc-composer-meta not mounted');
