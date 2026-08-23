@@ -25,7 +25,10 @@ import type { OffscreenClient } from '../offscreen-client.js';
 import type { GroupedModels } from '../provider-settings.js';
 import type { SyncDialogTabId } from '../sync-dialog-model.js';
 import { computeTrayMenuModel } from '../tray-join-url.js';
-import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
+import {
+  notifyLeaderLocalModelStateChanged,
+  notifyLeaderModelCatalogChanged,
+} from './leader-model-events.js';
 import type { WcShellRefs } from './wc-shell.js';
 import { rootForSelection } from './wc-unit-context.js';
 
@@ -124,17 +127,30 @@ function standardMenuItems(
   return items;
 }
 
+/**
+ * Sync the picker's model list from the account store. The leader resolving its
+ * own catalog is also the moment a follower that attached during provider
+ * warm-up can finally be given one, so the tray hears about it (#2329).
+ */
+function buildRefreshModels(
+  composerMeta: HTMLElement,
+  getAllAvailableModels: () => readonly GroupedModels[]
+): () => void {
+  return () => {
+    (composerMeta as HTMLElement & { models?: unknown }).models = modelListForMeta(
+      getAllAvailableModels()
+    );
+    notifyLeaderModelCatalogChanged();
+  };
+}
+
 export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   const { refs, client, log, onExportTranscript } = deps;
   const { getAllAvailableModels, getAccounts, resolveCurrentModel } = await import(
     '../provider-settings.js'
   );
 
-  const refreshModels = (): void => {
-    (refs.composerMeta as HTMLElement & { models?: unknown }).models = modelListForMeta(
-      getAllAvailableModels()
-    );
-  };
+  const refreshModels = buildRefreshModels(refs.composerMeta, getAllAvailableModels);
   const refreshModelPill = () =>
     applyModelPillFromCurrentModel(refs.composerMeta, resolveCurrentModel);
   refreshModels();

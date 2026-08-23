@@ -14,6 +14,7 @@ import type {
 } from '../tray-sync-protocol.js';
 import { sendSnapshot } from '../tray-sync-protocol.js';
 import type { LeaderSyncContext } from './context.js';
+import type { ConnectedFollower } from './follower-registry.js';
 
 export const SPRINKLE_CHUNK_SIZE = 32 * 1024;
 export const SPRINKLE_CHUNK_THRESHOLD = 64 * 1024;
@@ -161,7 +162,7 @@ export class BroadcastManager {
     if (!follower) return;
     const models = this.buildModelCatalog();
     if (!models) return;
-    follower.sync.send({ type: 'models.list', models });
+    this.publishModelCatalog(follower, models);
     this.sendModelStateToFollower(bootstrapId);
   }
 
@@ -170,9 +171,30 @@ export class BroadcastManager {
     const models = this.buildModelCatalog();
     if (!models) return;
     for (const follower of this.context.followers.followers.values()) {
-      follower.sync.send({ type: 'models.list', models });
+      this.publishModelCatalog(follower, models);
     }
     this.broadcastModelState();
+  }
+
+  /**
+   * Advertise a catalog to one follower. An EMPTY catalog sent BEFORE any real
+   * one is "not ready yet", not "this leader has no models" (#2329): a follower
+   * that attaches during provider warm-up stores `[]`, finds no entry matching
+   * its active model id and hides the picker for the rest of the session, since
+   * nothing re-sent the catalog when it became available. Skip that frame and
+   * let the empty → non-empty re-broadcast deliver the real one. Once a follower
+   * HAS seen a real catalog, an empty one is news worth sending (the last
+   * account was removed).
+   */
+  private publishModelCatalog(follower: ConnectedFollower, models: TrayModelCatalogEntry[]): void {
+    if (models.length === 0 && !follower.modelCatalogSent) {
+      this.context.log.debug('Model catalog empty; deferring models.list', {
+        bootstrapId: follower.bootstrapId,
+      });
+      return;
+    }
+    if (models.length > 0) follower.modelCatalogSent = true;
+    follower.sync.send({ type: 'models.list', models });
   }
 
   broadcastModelState(): void {
@@ -185,7 +207,14 @@ export class BroadcastManager {
   private sendModelStateToFollower(bootstrapId: string): void {
     const follower = this.context.followers.followers.get(bootstrapId);
     const getState = this.context.options.getModelSelectionState;
-    if (!follower || !getState) return;
+    if (!follower) return;
+    // Catch-up: any model-state change is also a chance to deliver a catalog
+    // that was still empty when this follower attached (#2329).
+    if (!follower.modelCatalogSent) {
+      const models = this.buildModelCatalog();
+      if (models && models.length > 0) this.publishModelCatalog(follower, models);
+    }
+    if (!getState) return;
     const scoopJid = follower.selectedScoopJid ?? this.context.options.getScoopJid();
     try {
       follower.sync.send({ type: 'model.state', state: getState(scoopJid) });

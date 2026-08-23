@@ -80,7 +80,10 @@ import {
   requestLeaderLock,
 } from '../tray-leader-lock.js';
 import type { AgentHandle } from '../types.js';
-import { LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT } from './leader-model-events.js';
+import {
+  LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT,
+  LEADER_MODEL_CATALOG_CHANGED_EVENT,
+} from './leader-model-events.js';
 import {
   LEADER_BROADCAST_SNAPSHOT_EVENT,
   LEADER_RUN_NEW_SESSION_EVENT,
@@ -221,6 +224,12 @@ export function installLeaderModelCatalogRefresh(opts: {
   log: BootStageLogger;
   refreshTimeoutMs?: number;
 }): void {
+  // A catalog that only BECAME available (provider warm-up finished, an account
+  // resolved at boot) reaches followers that attached before it (#2329) — the
+  // accounts-changed listener below only covers a user editing accounts.
+  opts.window.addEventListener(LEADER_MODEL_CATALOG_CHANGED_EVENT, () => {
+    opts.getSync()?.broadcastModelCatalog();
+  });
   opts.window.addEventListener('slicc:accounts-changed', () => {
     opts.getSync()?.broadcastModelCatalog();
     void withTimeout(opts.refreshDynamicCatalogs(), opts.refreshTimeoutMs ?? 5000)

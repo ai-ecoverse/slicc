@@ -3,7 +3,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { BootStageLogger } from '../../../src/ui/boot/types.js';
 import type { ChatMessage } from '../../../src/ui/types.js';
-import { LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT } from '../../../src/ui/wc/leader-model-events.js';
+import {
+  LEADER_LOCAL_MODEL_STATE_CHANGED_EVENT,
+  LEADER_MODEL_CATALOG_CHANGED_EVENT,
+} from '../../../src/ui/wc/leader-model-events.js';
 import {
   buildFollowerOptions,
   installLeaderModelCatalogRefresh,
@@ -258,6 +261,20 @@ describe('leader tray model catalog refresh', () => {
 
     windowTarget.dispatchEvent(new Event('slicc:accounts-changed'));
     await Promise.resolve();
+    expect(broadcastModelCatalog).toHaveBeenCalledOnce();
+  });
+
+  it('re-broadcasts when the leader catalog itself becomes available (#2329)', () => {
+    const windowTarget = new EventTarget();
+    const broadcastModelCatalog = vi.fn();
+    installLeaderModelCatalogRefresh({
+      window: windowTarget as never,
+      getSync: () => ({ broadcastModelCatalog }),
+      refreshDynamicCatalogs: async () => false,
+      log: { warn: vi.fn() } as unknown as BootStageLogger,
+    });
+
+    windowTarget.dispatchEvent(new Event(LEADER_MODEL_CATALOG_CHANGED_EVENT));
     expect(broadcastModelCatalog).toHaveBeenCalledOnce();
   });
 
