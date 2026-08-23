@@ -42,7 +42,13 @@ export function metaThinkingForScoop(
 type FollowerModelSync = Pick<
   FollowerSyncManager,
   'selectModel' | 'setThinkingLevel' | 'selectScoop'
->;
+> &
+  Partial<Pick<FollowerSyncManager, 'requestModels'>>;
+
+/** How long to wait before asking the leader for the catalog again (#2329). */
+const CATALOG_RETRY_DELAY_MS = 2000;
+/** Bounded: a leader with genuinely no models must not be polled forever. */
+const CATALOG_RETRY_LIMIT = 3;
 
 type FollowerComposerMeta = HTMLElement & {
   model?: string;
@@ -56,6 +62,8 @@ export function createFollowerModelSurface(opts: {
   modelPickerEnabled?: boolean;
   interceptLocalHandlers?: boolean;
   getLockedEffortLevel?: () => string | null;
+  catalogRetryDelayMs?: number;
+  catalogRetryLimit?: number;
 }): {
   onModelsList(models: TrayModelCatalogEntry[]): void;
   onModelState(state: TrayModelSelectionState): void;
@@ -64,6 +72,26 @@ export function createFollowerModelSurface(opts: {
   let models: TrayModelCatalogEntry[] = [];
   let state: TrayModelSelectionState | null = null;
   const enabled = opts.modelPickerEnabled !== false;
+  const retryDelayMs = opts.catalogRetryDelayMs ?? CATALOG_RETRY_DELAY_MS;
+  let retriesLeft = opts.catalogRetryLimit ?? CATALOG_RETRY_LIMIT;
+  let retryTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * The picker is hidden and we cannot tell whether the leader has no models or
+   * simply had none yet when we attached. Ask again, a bounded number of times
+   * (#2329) — a leader too old to answer `models.request` just ignores it, and
+   * one that really has no models costs three frames.
+   */
+  const scheduleCatalogRetry = (): void => {
+    if (!enabled || retryTimer !== null || retriesLeft <= 0) return;
+    retryTimer = setTimeout(() => {
+      retryTimer = null;
+      const sync = opts.getSync();
+      if (!sync?.requestModels) return;
+      retriesLeft -= 1;
+      sync.requestModels();
+    }, retryDelayMs);
+  };
 
   const apply = (): void => {
     const active = state
@@ -71,6 +99,7 @@ export function createFollowerModelSurface(opts: {
       : undefined;
     if (!enabled || !state || !active) {
       opts.composerMeta.style.display = 'none';
+      scheduleCatalogRetry();
       return;
     }
     opts.composerMeta.model = active.modelName;
@@ -126,6 +155,9 @@ export function createFollowerModelSurface(opts: {
   const reset = (): void => {
     models = [];
     state = null;
+    if (retryTimer !== null) clearTimeout(retryTimer);
+    retryTimer = null;
+    retriesLeft = opts.catalogRetryLimit ?? CATALOG_RETRY_LIMIT;
     opts.composerMeta.models = [];
     opts.composerMeta.style.display = 'none';
   };

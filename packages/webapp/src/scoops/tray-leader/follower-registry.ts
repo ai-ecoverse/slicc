@@ -47,6 +47,12 @@ export interface ConnectedFollower {
   floatType: FloatType;
   hostOrigin?: string;
   selectedScoopJid?: string;
+  /**
+   * Set once a NON-EMPTY `models.list` reached this follower. An empty catalog
+   * before that is provider warm-up, not an answer, and must not be advertised
+   * (#2329) — see `BroadcastManager.publishModelCatalog`.
+   */
+  modelCatalogSent?: boolean;
   peerProtocolVersion?: number;
   legacyPeerLogged?: boolean;
   peerCapabilities?: TraySyncCapabilities;
