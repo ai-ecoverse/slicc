@@ -21,9 +21,18 @@ import { createPortBridgeClient } from '../kernel/port-bridge-client.js';
 /** Per-call timeout; multi-MB downloads aren't on this path, so 10s is ample. */
 const CALL_TIMEOUT_MS = 10_000;
 
+/**
+ * The fields of a `secrets.crud` control message beyond its `type`. Genuinely
+ * untyped at this layer: the shape is whatever the named SW secrets handler
+ * declares, and the bridge relays it without inspecting — mirroring the
+ * `secrets-bridge` payload in `kernel/panel-rpc.ts`.
+ */
+// biome-ignore lint/plugin: the fields are whatever the named SW secrets handler declares; the bridge relays them without inspecting.
+export type SecretsBridgePayload = Record<string, unknown>;
+
 interface SecretsBridgeRequest {
   type: string;
-  payload?: Record<string, unknown>;
+  payload?: SecretsBridgePayload;
 }
 
 const call = createPortBridgeClient<SecretsBridgeRequest, unknown>({
@@ -47,7 +56,7 @@ const call = createPortBridgeClient<SecretsBridgeRequest, unknown>({
  */
 export function callSecretsBridge<T = unknown>(
   type: string,
-  payload?: Record<string, unknown>
+  payload?: SecretsBridgePayload
 ): Promise<T> {
   return call({ type, payload }) as Promise<T>;
 }

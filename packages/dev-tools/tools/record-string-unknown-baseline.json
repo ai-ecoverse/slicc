@@ -39,7 +39,6 @@
   "packages/webapp/src/cdp/types.ts": 4,
   "packages/webapp/src/core/feature-flags-cache.ts": 1,
   "packages/webapp/src/core/feature-flags-remote.ts": 1,
-  "packages/webapp/src/core/secrets-bridge-client.ts": 2,
   "packages/webapp/src/core/types.ts": 2,
   "packages/webapp/src/fs/mount/backend-local.ts": 1,
   "packages/webapp/src/fs/sidecar-merge.ts": 2,
