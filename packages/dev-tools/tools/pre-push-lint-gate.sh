@@ -70,6 +70,7 @@ run_check "custom-lints" bash -c '
   npm run lint:no-ui-in-providers --silent &&
   npm run lint:layer-back-edges --silent &&
   npm run lint:patches --silent &&
+  npm run lint:swift-pins --silent &&
   npm run lint:no-raw-chrome-runtime-id --silent &&
   npm run lint:hosted-origin --silent &&
   npm run lint:duplication --silent

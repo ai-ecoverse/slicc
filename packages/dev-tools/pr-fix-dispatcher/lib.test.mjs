@@ -591,7 +591,7 @@ describe('decidePrAction — Step-4 silent drops', () => {
   });
 
   it('drops the self-healing renovate labels', () => {
-    for (const label of ['patched-dependency', 'formatter-bump']) {
+    for (const label of ['patched-dependency', 'formatter-bump', 'swift-pin']) {
       const out = decidePrAction(candidate({ labels: [{ name: label }] }));
       expect(out.reason).toContain(label);
       expect(out.announce).toBe(false);

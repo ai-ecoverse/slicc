@@ -19,6 +19,7 @@ Developer-tooling surface for `packages/dev-tools/`. Long-form notes: [`docs/dev
 - **Skill lint** (`npm run lint:skills`): `packages/dev-tools/tools/lint-skills.mjs` — `tessl skill lint` via `@tessl/cli`. Warns locally; fails under `--strict`/CI.
 - **Developer-skill sync** (`npm run lint:skill-router`): `packages/dev-tools/tools/check-skill-router-sync.sh` — keeps root router, `.agents/skills/`, `.claude/skills/` aliases in sync.
 - **Patch reconcile** (`npm run lint:patches`): `packages/dev-tools/patch-reconcile/check-patches.mjs` + `reconcile-context.mjs`. See `patches/README.md`.
+- **SPM ↔ xcodegen pin reconcile** (`npm run lint:swift-pins`): `packages/dev-tools/swift-pin-reconcile/`. Dual-pinned GitHub packages (Package.swift + project.yml) must overlap; `renovate-swift-pin-reconcile.yml` raises the stale side on `swift-pin` Renovate PRs. See the folder README.
 - **innerHTML guard** (`npm run lint:no-innerhtml`): `packages/dev-tools/tools/check-no-innerhtml.mjs` bans `.innerHTML =`, `.outerHTML =`, `insertAdjacentHTML()` in `@slicc/webcomponents` (stories/tests exempt).
 - **Providers boundary** (`npm run lint:no-ui-in-providers`): `packages/dev-tools/tools/check-no-ui-imports-in-providers.mjs` bans `from '…ui/…'` in `providers/built-in/`.
 - **Layer back-edge ratchet** (`npm run lint:layer-back-edges`): `packages/dev-tools/tools/check-layer-back-edges.mjs`; baseline `layer-back-edge-baseline.json` (`--update`). Deep ref: [dev-tools-details.md#layer-back-edge-ratchet](../../docs/dev-tools-details.md#layer-back-edge-ratchet).
