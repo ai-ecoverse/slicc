@@ -17,7 +17,10 @@
 
 import type { SecureFetch } from 'just-bash';
 import type { DirEntry, VirtualFS } from '../../fs/index.js';
-import { reconcileGlobalBinDelegators } from './global-bin-delegators.js';
+import {
+  preflightGlobalBinDelegators,
+  reconcileGlobalBinDelegators,
+} from './global-bin-delegators.js';
 import { GLOBAL_NODE_MODULES, GLOBAL_NPM_PREFIX, GLOBAL_PACKAGE_JSON } from './global-prefix.js';
 import { fetchPackument, fetchTarball, type Packument, resolveVersion } from './registry.js';
 import {
@@ -408,6 +411,39 @@ function chooseRootBins(bins: InstalledBin[]): Map<string, InstalledBin> {
   return chosen;
 }
 
+function walkPlanBins(
+  modulesDir: string,
+  node: InstallNode,
+  depth: number,
+  out: InstalledBin[]
+): void {
+  const installDir = packageDirIn(modulesDir, node.name);
+  if (node.bin !== undefined && node.bin !== null) {
+    const bins = normalizeBin(node.bin, node.name);
+    for (const [binName, binPath] of Object.entries(bins)) {
+      if (typeof binName !== 'string' || binName.length === 0) continue;
+      if (typeof binPath !== 'string' || binPath.length === 0) continue;
+      out.push({ binName, pkgName: node.name, installDir, binPath, depth });
+    }
+  }
+  const nestedModulesDir = joinPath(installDir, 'node_modules');
+  for (const child of Object.values(node.dependencies)) {
+    walkPlanBins(nestedModulesDir, child, depth + 1, out);
+  }
+}
+
+function collectBinsFromPlan(plan: InstallPlan, modulesDir: string): InstalledBin[] {
+  const out: InstalledBin[] = [];
+  for (const node of Object.values(plan.root)) {
+    walkPlanBins(modulesDir, node, 0, out);
+  }
+  return out;
+}
+
+function predictGlobalBinNames(plan: InstallPlan, modulesDir: string): Set<string> {
+  return new Set(chooseRootBins(collectBinsFromPlan(plan, modulesDir)).keys());
+}
+
 function shimTargetFor(modulesDir: string, installDir: string, binPath: string): string {
   const rel = installDir.slice(modulesDir.length);
   return `..${rel}/${normalizeBinPath(binPath)}`;
@@ -493,6 +529,10 @@ export async function installPackages(
   });
 
   const modulesDir = globalInstall ? GLOBAL_NODE_MODULES : joinPath(cwd, 'node_modules');
+  if (globalInstall) {
+    await pruneTopLevelPackages(fs, modulesDir, new Set(Object.keys(plan.root)));
+    await preflightGlobalBinDelegators(fs, predictGlobalBinNames(plan, modulesDir));
+  }
   await materializePlan(fs, modulesDir, plan, fetch, timeoutMs);
   await reconcileRootBinShims(fs, modulesDir);
   if (globalInstall) {
@@ -738,6 +778,7 @@ export async function syncGlobalInstallTree(
   });
 
   await pruneTopLevelPackages(fs, GLOBAL_NODE_MODULES, new Set(Object.keys(plan.root)));
+  await preflightGlobalBinDelegators(fs, predictGlobalBinNames(plan, GLOBAL_NODE_MODULES));
   await materializePlan(fs, GLOBAL_NODE_MODULES, plan, fetch, timeoutMs);
   await reconcileRootBinShims(fs, GLOBAL_NODE_MODULES);
   const installed = await collectInstalledBins(fs, GLOBAL_NODE_MODULES);

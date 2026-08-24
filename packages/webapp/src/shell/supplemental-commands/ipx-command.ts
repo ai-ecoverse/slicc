@@ -46,7 +46,7 @@ function usage(name: string): string {
   return `${name} - run an installed package's executable bin
 
 Usage:
-  ${name} [--force] <pkg-or-bin> [args...]
+  ${name} [--force] [--global] <pkg-or-bin> [args...]
 
 Resolves <pkg-or-bin> to a bin (nearest node_modules/.bin/<name>, else the
 package's package.json "bin" field) and runs it through the JS runtime,
@@ -54,6 +54,7 @@ forwarding argv and stdin. Exit codes propagate.
 
 Options:
   --force      Install a package even when a SLICC built-in shadows it
+  --global     Resolve only from the shared global prefix (/shared/lib/node_modules)
   -h, --help   Show this help message
 `;
 }
@@ -80,7 +81,11 @@ async function isDirectory(fs: VirtualFS, path: string): Promise<boolean> {
 }
 
 /** Yield each `<dir>/node_modules` from `cwd` up to the filesystem root, then global. */
-function* nodeModulesDirs(cwd: string): Generator<string> {
+function* nodeModulesDirs(cwd: string, globalOnly = false): Generator<string> {
+  if (globalOnly) {
+    yield GLOBAL_NODE_MODULES;
+    return;
+  }
   let dir = normalizePath(cwd);
   while (true) {
     yield joinPath(dir, 'node_modules');
@@ -94,9 +99,10 @@ function* nodeModulesDirs(cwd: string): Generator<string> {
 async function resolveFromBinShim(
   fs: VirtualFS,
   cwd: string,
-  name: string
+  name: string,
+  globalOnly = false
 ): Promise<ResolvedBin | null> {
-  for (const modulesDir of nodeModulesDirs(cwd)) {
+  for (const modulesDir of nodeModulesDirs(cwd, globalOnly)) {
     const shimPath = joinPath(modulesDir, '.bin', name);
     if (!(await isFile(fs, shimPath))) continue;
     const shim = await readText(fs, shimPath);
@@ -146,9 +152,10 @@ function pickPackageBin(
 async function resolveFromPackageBin(
   fs: VirtualFS,
   cwd: string,
-  name: string
+  name: string,
+  globalOnly = false
 ): Promise<ResolvedBin | null> {
-  for (const modulesDir of nodeModulesDirs(cwd)) {
+  for (const modulesDir of nodeModulesDirs(cwd, globalOnly)) {
     const pkgDir = joinPath(modulesDir, name);
     const manifestPath = joinPath(pkgDir, 'package.json');
     if (!(await isFile(fs, manifestPath))) continue;
@@ -169,8 +176,16 @@ async function resolveFromPackageBin(
   return null;
 }
 
-async function resolveBin(fs: VirtualFS, cwd: string, name: string): Promise<ResolvedBin | null> {
-  return (await resolveFromBinShim(fs, cwd, name)) ?? (await resolveFromPackageBin(fs, cwd, name));
+async function resolveBin(
+  fs: VirtualFS,
+  cwd: string,
+  name: string,
+  globalOnly = false
+): Promise<ResolvedBin | null> {
+  return (
+    (await resolveFromBinShim(fs, cwd, name, globalOnly)) ??
+    (await resolveFromPackageBin(fs, cwd, name, globalOnly))
+  );
 }
 
 /** Whether a package named `name` is already present in a reachable node_modules. */
@@ -285,7 +300,10 @@ export function createIpxCommand(name: string, deps: IpxCommandDeps): Command {
       }
 
       const forceInstall = args[0] === '--force';
-      const invocationArgs = forceInstall ? args.slice(1) : args;
+      let rest = forceInstall ? args.slice(1) : args;
+      const globalOnly = rest[0] === '--global';
+      if (globalOnly) rest = rest.slice(1);
+      const invocationArgs = rest;
       if (invocationArgs.length === 0) {
         return { stdout: usage(name), stderr: '', exitCode: 1 };
       }
@@ -294,7 +312,7 @@ export function createIpxCommand(name: string, deps: IpxCommandDeps): Command {
 
       let resolved: ResolvedBin | null;
       try {
-        resolved = await resolveBin(deps.fs, ctx.cwd, binName);
+        resolved = await resolveBin(deps.fs, ctx.cwd, binName, globalOnly);
       } catch (err) {
         return failure(name, describeError(err));
       }
@@ -303,6 +321,9 @@ export function createIpxCommand(name: string, deps: IpxCommandDeps): Command {
       // reinstall); an absent one is installed (full transitive tree) first.
       let installProgress = '';
       if (!resolved) {
+        if (globalOnly) {
+          return failure(name, `no global bin '${binName}' found in ${GLOBAL_NODE_MODULES}`);
+        }
         const prepared = await resolveMissingBin(name, binName, binArgs, forceInstall, ctx, deps);
         if ('error' in prepared) return prepared.error;
         resolved = prepared.resolved;

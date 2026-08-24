@@ -132,10 +132,20 @@ function buildRegistry(packages: SyntheticPackage[]): Registry {
   for (const [name, versions] of byName) {
     const versionMap: Record<string, unknown> = {};
     for (const p of versions) {
+      let bin: unknown;
+      const manifestText = p.files?.['package.json'];
+      if (manifestText) {
+        try {
+          bin = (JSON.parse(manifestText) as { bin?: unknown }).bin;
+        } catch {
+          bin = undefined;
+        }
+      }
       versionMap[p.version] = {
         name,
         version: p.version,
         ...(p.dependencies ? { dependencies: p.dependencies } : {}),
+        ...(bin !== undefined ? { bin } : {}),
         dist: {
           tarball: `https://registry.npmjs.org/${name}/-/${tarballBasename(name, p.version)}`,
         },
@@ -605,6 +615,59 @@ describe('createIpkCommand', () => {
     expect(depNested.version).toBe('3.0.0');
   });
 
+  it('global upgrade prunes orphaned transitive bins from PATH', async () => {
+    const reg = buildRegistry([
+      {
+        name: 'tool',
+        version: '1.0.0',
+        dependencies: { 'old-cli': '^1.0.0' },
+        files: {
+          'package.json': JSON.stringify({
+            name: 'tool',
+            version: '1.0.0',
+            dependencies: { 'old-cli': '^1.0.0' },
+            bin: { tool: 'tool.js' },
+          }),
+          'tool.js': 'console.log("tool-v1");\n',
+        },
+      },
+      {
+        name: 'tool',
+        version: '2.0.0',
+        files: {
+          'package.json': JSON.stringify({
+            name: 'tool',
+            version: '2.0.0',
+            bin: { tool: 'tool.js' },
+          }),
+          'tool.js': 'console.log("tool-v2");\n',
+        },
+      },
+      {
+        name: 'old-cli',
+        version: '1.0.0',
+        files: {
+          'package.json': JSON.stringify({
+            name: 'old-cli',
+            version: '1.0.0',
+            bin: { 'old-cli': 'cli.js' },
+          }),
+          'cli.js': 'console.log("old");\n',
+        },
+      },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    await cmd.execute(['install', '-g', 'tool@1.0.0'], ctxOf(fs) as never);
+    expect(await fs.exists(`${GLOBAL_BIN_DIR}/old-cli.jsh`)).toBe(true);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/old-cli`)).toBe(true);
+
+    const r = await cmd.execute(['install', '-g', 'tool@2.0.0'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(await fs.exists(`${GLOBAL_BIN_DIR}/old-cli.jsh`)).toBe(false);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/old-cli`)).toBe(false);
+    expect(await fs.exists(`${GLOBAL_BIN_DIR}/tool.jsh`)).toBe(true);
+  });
+
   it('global install refuses to overwrite a user script in /shared/bin', async () => {
     await fs.mkdir(GLOBAL_BIN_DIR, { recursive: true });
     await fs.writeFile(`${GLOBAL_BIN_DIR}/say.jsh`, '// user script\n');
@@ -627,6 +690,7 @@ describe('createIpkCommand', () => {
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toMatch(/refusing to overwrite/i);
     expect((await fs.readFile(`${GLOBAL_BIN_DIR}/say.jsh`)) as string).toBe('// user script\n');
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/say`)).toBe(false);
   });
 
   it('npm root -g prints the global node_modules path', async () => {

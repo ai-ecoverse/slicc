@@ -35,7 +35,7 @@ npm list -g                     # list direct global dependencies
 npm root -g                     # print /shared/lib/node_modules
 ```
 
-Global bins installed with `-g` are on the default `$PATH` via `/shared/bin/<name>.jsh` delegators — invoke them by bare name from any cwd. Local uninstall/list/root work without `-g` against the cwd `package.json`.
+Global bins installed with `-g` are on the default `$PATH` via `/shared/bin/<name>.jsh` delegators — invoke them by bare name from any cwd (delegators run `ipx --global <bin>` so a same-named local package does not shadow the global install). Local uninstall/list/root work without `-g` against the cwd `package.json`.
 
 ## Running package.json scripts
 

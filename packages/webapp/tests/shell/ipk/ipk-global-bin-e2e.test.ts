@@ -90,19 +90,36 @@ interface Registry {
 function buildRegistry(packages: SyntheticPackage[]): Registry {
   const packuments: Record<string, unknown> = {};
   const tarballs: Record<string, Uint8Array> = {};
+  const byName = new Map<string, SyntheticPackage[]>();
   for (const p of packages) {
-    const url = `https://registry.npmjs.org/${p.name}/-/${tarballBasename(p.name, p.version)}`;
-    tarballs[url] = buildTarball(p);
-    packuments[p.name] = {
-      name: p.name,
-      'dist-tags': { latest: p.version },
-      versions: {
-        [p.version]: {
-          name: p.name,
-          version: p.version,
-          dist: { tarball: url },
-        },
-      },
+    if (!byName.has(p.name)) byName.set(p.name, []);
+    byName.get(p.name)!.push(p);
+  }
+  for (const [name, versions] of byName) {
+    const versionMap: Record<string, unknown> = {};
+    for (const p of versions) {
+      let bin: unknown;
+      const manifestText = p.files?.['package.json'];
+      if (manifestText) {
+        try {
+          bin = (JSON.parse(manifestText) as { bin?: unknown }).bin;
+        } catch {
+          bin = undefined;
+        }
+      }
+      const url = `https://registry.npmjs.org/${p.name}/-/${tarballBasename(p.name, p.version)}`;
+      tarballs[url] = buildTarball(p);
+      versionMap[p.version] = {
+        name: p.name,
+        version: p.version,
+        ...(bin !== undefined ? { bin } : {}),
+        dist: { tarball: url },
+      };
+    }
+    packuments[name] = {
+      name,
+      'dist-tags': { latest: versions[versions.length - 1].version },
+      versions: versionMap,
     };
   }
   return { packuments, tarballs };
@@ -195,6 +212,48 @@ describe('global ipk bins via PATH (AlmostBashShellHeadless)', () => {
     const run = await shell.executeCommand('cd /tmp/other && greet');
     expect(run.exitCode).toBe(0);
     expect(run.stdout).toContain('hello-global');
+
+    await fs.dispose();
+  }, 15000);
+
+  it('global bin ignores a same-named local package in cwd', async () => {
+    sharedRegistry.current = buildRegistry([
+      {
+        name: 'greet',
+        version: '1.0.0',
+        files: {
+          'package.json': JSON.stringify({
+            name: 'greet',
+            version: '1.0.0',
+            bin: { greet: 'cli.js' },
+          }),
+          'cli.js': 'console.log("hello-global");\n',
+        },
+      },
+      {
+        name: 'greet',
+        version: '9.9.9',
+        files: {
+          'package.json': JSON.stringify({
+            name: 'greet',
+            version: '9.9.9',
+            bin: { greet: 'local.js' },
+          }),
+          'local.js': 'console.log("hello-local");\n',
+        },
+      },
+    ]);
+    const { shell, fs } = await newShell();
+
+    await shell.executeCommand('ipk install -g greet@1.0.0');
+    const localInstall = await shell.executeCommand(
+      'cd /tmp/other && echo "{}" > package.json && ipk install greet@9.9.9'
+    );
+    expect(localInstall.exitCode).toBe(0);
+    const run = await shell.executeCommand('cd /tmp/other && greet');
+    expect(run.exitCode).toBe(0);
+    expect(run.stdout).toContain('hello-global');
+    expect(run.stdout).not.toContain('hello-local');
 
     await fs.dispose();
   }, 15000);

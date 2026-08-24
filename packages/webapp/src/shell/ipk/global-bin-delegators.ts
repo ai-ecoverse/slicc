@@ -1,8 +1,8 @@
 /**
  * Publish PATH-visible `.jsh` delegators for globally installed package bins.
  *
- * Each delegator forwards to `ipx <bin> …` so execution uses the same jsh
- * runtime, module loader, and provider env seeding as a direct ipx invocation.
+ * Each delegator forwards to `ipx --global <bin> …` so execution uses the
+ * shared global tree regardless of the invoking cwd's local `node_modules`.
  */
 
 import type { DirEntry, VirtualFS } from '../../fs/index.js';
@@ -22,7 +22,7 @@ function buildDelegatorSource(binName: string): string {
     `// ${GLOBAL_BIN_DELEGATOR_MARKER}`,
     "const { start } = require('sliccy:exec');",
     `const __bin = ${escaped};`,
-    "const __argv = ['ipx', __bin, ...process.argv.slice(2)];",
+    "const __argv = ['ipx', '--global', __bin, ...process.argv.slice(2)];",
     "const __stdin = typeof stdin !== 'undefined' ? stdin : undefined;",
     'const __h = start(__argv, __stdin !== undefined ? { stdin: __stdin } : undefined);',
     '__h.stdin.end();',
@@ -42,6 +42,30 @@ export class GlobalBinCollisionError extends Error {
   ) {
     super(`ipk: refusing to overwrite user script at ${path} (bin '${binName}')`);
     this.name = 'GlobalBinCollisionError';
+  }
+}
+
+/**
+ * Fail fast when publishing global bins would overwrite user-authored scripts.
+ * Call before mutating {@link GLOBAL_NODE_MODULES} so failed installs leave no
+ * untracked packages on disk.
+ */
+export async function preflightGlobalBinDelegators(
+  fs: VirtualFS,
+  activeBinNames: ReadonlySet<string>
+): Promise<void> {
+  if (activeBinNames.size === 0) return;
+  if (!(await fs.exists(GLOBAL_BIN_DIR))) {
+    await fs.mkdir(GLOBAL_BIN_DIR, { recursive: true });
+  }
+  for (const binName of activeBinNames) {
+    if (!binName || binName.includes('/')) continue;
+    const path = joinPath(GLOBAL_BIN_DIR, `${binName}.jsh`);
+    if (await fs.exists(path)) {
+      if (!(await readDelegatorMarker(fs, path))) {
+        throw new GlobalBinCollisionError(binName, path);
+      }
+    }
   }
 }
 
