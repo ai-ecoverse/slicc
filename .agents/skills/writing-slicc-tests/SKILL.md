@@ -644,6 +644,11 @@ Three pieces compose the framework:
   a second SLICC runtime joined to the leader through the real tray hub, plus
   the cone / freezer-rail / tab-strip / terminal helpers the multi-cone
   scenarios share. See "Write a Two-Instance Scenario" below.
+- **Terminal-only smokes** (no fake LLM): drive
+  `globalThis.__slicc_terminal_view.executeCommandInTerminal` after
+  `slicc-dock.selectItem('term')` — same seam as the chat panel's "run in
+  terminal". Examples: `git-clone-live.test.ts`, `python-print.test.ts`
+  (browser `ipk add pyodide@<root pin>` then `python3 -c "print(1 + 1)"`).
 
 ### Write a Scenario
 
