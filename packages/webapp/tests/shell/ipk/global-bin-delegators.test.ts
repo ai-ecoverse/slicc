@@ -30,6 +30,7 @@ describe('reconcileGlobalBinDelegators', () => {
     expect(source).toContain("require('sliccy:exec')");
     expect(source).toContain('const { start }');
     expect(source).toContain('await __h.done');
+    expect(source).toContain("'ipx', '--global', __bin");
     expect(source).toContain('process.stdout.write(__r.stdout)');
     expect(source).toContain('process.stderr.write(__r.stderr)');
     expect(source).toContain('process.exit(__r.exitCode)');

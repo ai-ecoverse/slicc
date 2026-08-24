@@ -442,8 +442,6 @@ describe('npm-alias failure-path parity', () => {
   it.each([
     ['ipk bogus', 'ipk'],
     ['npm bogus', 'npm'],
-    ['npm uninstall foo', 'npm'],
-    ['npm remove foo', 'npm'],
   ])('`%s` is rejected as an unsupported subcommand', async (cmd) => {
     sharedRegistry.current = { packuments: {}, tarballs: {}, calls: [] };
     const { shell, fs } = await newShell();

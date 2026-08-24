@@ -15,20 +15,31 @@
 import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
+import { GLOBAL_NODE_MODULES, GLOBAL_NPM_PREFIX } from '../ipk/global-prefix.js';
 import {
   type InstallFromManifestResult,
   installFromManifest,
   installPackages,
+  listGlobalPackages,
+  listLocalPackages,
   ManifestNotFoundError,
+  uninstallPackages,
 } from '../ipk/installer.js';
+import type { ScriptCatalog } from '../script-catalog.js';
 import { LIFECYCLE_SHORTCUTS, RUN_ALIASES, runNpmScript } from './npm-run.js';
 
 export interface IpkCommandDeps {
   fs: VirtualFS;
   fetch: SecureFetch;
+  /** Invalidate `.jsh` discovery after global bin delegator changes. */
+  scriptCatalog?: ScriptCatalog;
+  /** Re-register PATH-visible commands in the active shell session. */
+  syncScriptCommands?: () => void | Promise<void>;
 }
 
 const INSTALL_ALIASES = new Set(['install', 'i', 'add']);
+const UNINSTALL_ALIASES = new Set(['uninstall', 'remove', 'rm', 'un']);
+const LIST_ALIASES = new Set(['list', 'ls']);
 const GLOBAL_INSTALL_FLAGS = new Set(['-g', '--global', '--location=global']);
 
 function usage(name: string): string {
@@ -51,6 +62,14 @@ Global installs:
   ${name} install -g <pkg>   install into /shared/lib/node_modules and publish
                              CLI bins to /shared/bin (on the default $PATH).
                              Records deps in /shared/lib/package.json, not cwd.
+  ${name} uninstall -g <pkg> remove a global package and reconcile the tree
+  ${name} list -g            list globally installed direct dependencies
+  ${name} root -g            print the global node_modules path
+
+Local project (no -g):
+  ${name} uninstall <pkg>    remove from cwd package.json and reconcile node_modules
+  ${name} list               list direct dependencies from cwd package.json
+  ${name} root               print <cwd>/node_modules
 
 Script running:
   ${name} run <script>       run that scripts entry in the directory holding
@@ -95,6 +114,11 @@ export interface ParsedInstallArgs {
 
 /** Split install flags from package specs (supports `-g` anywhere before specs). */
 export function parseInstallArgs(args: string[]): ParsedInstallArgs {
+  return parseGlobalFlagArgs(args);
+}
+
+/** Split global flags from positional args (supports `-g` anywhere before names). */
+export function parseGlobalFlagArgs(args: string[]): ParsedInstallArgs {
   let global = false;
   const specs: string[] = [];
   for (const arg of args) {
@@ -121,6 +145,11 @@ function isHelpRequest(args: string[]): boolean {
 function describeError(err: unknown): string {
   if (err instanceof Error) return err.message;
   return String(err);
+}
+
+async function refreshGlobalBinCommands(deps: IpkCommandDeps): Promise<void> {
+  deps.scriptCatalog?.invalidateJsh();
+  await deps.syncScriptCommands?.();
 }
 
 async function runManifestInstall(
@@ -213,11 +242,118 @@ async function runInstall(
     (e) => `${name}: failed to install ${e.spec}: ${describeError(e.error)}`
   );
 
+  if (global && outcome.results.length > 0) {
+    await refreshGlobalBinCommands(deps);
+  }
+
   return {
     stdout: stdout.length > 0 ? `${stdout.join('\n')}\n` : '',
     stderr: stderr.length > 0 ? `${stderr.join('\n')}\n` : '',
     exitCode: outcome.errors.length === 0 ? 0 : 1,
   };
+}
+
+function formatPackageList(
+  prefix: string,
+  packages: Array<{ name: string; version: string }>
+): string {
+  if (packages.length === 0) {
+    return `${prefix}\n└── (empty)\n`;
+  }
+  const lines = [`${prefix}`];
+  for (let i = 0; i < packages.length; i++) {
+    const branch = i === packages.length - 1 ? '└──' : '├──';
+    lines.push(`${branch} ${packages[i].name}@${packages[i].version}`);
+  }
+  return `${lines.join('\n')}\n`;
+}
+
+async function runUninstall(
+  name: string,
+  args: string[],
+  ctx: CommandContext,
+  deps: IpkCommandDeps
+): Promise<ExecResult> {
+  const { global, specs } = parseGlobalFlagArgs(args);
+  if (specs.length === 0) {
+    return {
+      stdout: '',
+      stderr: `${name}: uninstall requires at least one package name\n`,
+      exitCode: 1,
+    };
+  }
+
+  let outcome: Awaited<ReturnType<typeof uninstallPackages>>;
+  try {
+    outcome = await uninstallPackages(specs, {
+      fs: deps.fs,
+      fetch: deps.fetch,
+      cwd: ctx.cwd,
+      global,
+    });
+  } catch (err) {
+    return {
+      stdout: '',
+      stderr: `${name}: uninstall failed: ${describeError(err)}\n`,
+      exitCode: 1,
+    };
+  }
+
+  const stdout = outcome.results.filter((r) => r.removed).map((r) => `${name}: removed ${r.name}`);
+  const skipped = outcome.results.filter((r) => !r.removed).map((r) => r.name);
+  const stderrParts = outcome.errors.map(
+    (e) => `${name}: failed to uninstall ${e.spec}: ${describeError(e.error)}`
+  );
+  if (skipped.length > 0) {
+    stderrParts.push(`${name}: ${skipped.join(', ')} not installed${global ? ' globally' : ''}`);
+  }
+
+  const hasErrors = outcome.errors.length > 0;
+  if (global) {
+    await refreshGlobalBinCommands(deps);
+  }
+  return {
+    stdout: stdout.length > 0 ? `${stdout.join('\n')}\n` : '',
+    stderr: stderrParts.length > 0 ? `${stderrParts.join('\n')}\n` : '',
+    exitCode: hasErrors ? 1 : 0,
+  };
+}
+
+async function runList(
+  name: string,
+  args: string[],
+  ctx: CommandContext,
+  deps: IpkCommandDeps
+): Promise<ExecResult> {
+  const { global } = parseGlobalFlagArgs(args);
+  try {
+    const packages = global
+      ? await listGlobalPackages(deps.fs)
+      : await listLocalPackages(deps.fs, ctx.cwd);
+    const prefix = global ? GLOBAL_NPM_PREFIX : ctx.cwd;
+    return {
+      stdout: formatPackageList(prefix, packages),
+      stderr: '',
+      exitCode: 0,
+    };
+  } catch (err) {
+    return {
+      stdout: '',
+      stderr: `${name}: list failed: ${describeError(err)}\n`,
+      exitCode: 1,
+    };
+  }
+}
+
+async function runRoot(
+  _name: string,
+  args: string[],
+  ctx: CommandContext,
+  _deps: IpkCommandDeps
+): Promise<ExecResult> {
+  const { global } = parseGlobalFlagArgs(args);
+  const path = global ? GLOBAL_NODE_MODULES : `${ctx.cwd.replace(/\/$/, '')}/node_modules`;
+  return { stdout: `${path}\n`, stderr: '', exitCode: 0 };
 }
 
 export function createIpkCommand(name: string, deps: IpkCommandDeps): Command {
@@ -240,6 +376,15 @@ export function createIpkCommand(name: string, deps: IpkCommandDeps): Command {
     if (INSTALL_ALIASES.has(sub)) {
       return runInstall(name, rest, ctx, deps);
     }
+    if (UNINSTALL_ALIASES.has(sub)) {
+      return runUninstall(name, rest, ctx, deps);
+    }
+    if (LIST_ALIASES.has(sub)) {
+      return runList(name, rest, ctx, deps);
+    }
+    if (sub === 'root') {
+      return runRoot(name, rest, ctx, deps);
+    }
     if (RUN_ALIASES.has(sub)) {
       return runNpmScript(name, rest, ctx, { fs: deps.fs });
     }
@@ -251,7 +396,7 @@ export function createIpkCommand(name: string, deps: IpkCommandDeps): Command {
 
     return {
       stdout: '',
-      stderr: `${name}: unknown subcommand '${sub}' (supported: install, i, run)\n`,
+      stderr: `${name}: unknown subcommand '${sub}' (supported: install, uninstall, list, root, run)\n`,
       exitCode: 1,
     };
   });

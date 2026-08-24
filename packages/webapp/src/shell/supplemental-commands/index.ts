@@ -198,9 +198,24 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createPython3LikeCommand('python', { buildProcessConfig: options.buildProcessConfig }),
     ...(options.fs && options.fetch
       ? [
-          createIpkCommand('ipk', { fs: options.fs, fetch: options.fetch }),
-          createIpkCommand('npm', { fs: options.fs, fetch: options.fetch }),
-          createIpkCommand('i', { fs: options.fs, fetch: options.fetch }),
+          createIpkCommand('ipk', {
+            fs: options.fs,
+            fetch: options.fetch,
+            scriptCatalog: options.scriptCatalog,
+            syncScriptCommands: options.syncScriptCommands,
+          }),
+          createIpkCommand('npm', {
+            fs: options.fs,
+            fetch: options.fetch,
+            scriptCatalog: options.scriptCatalog,
+            syncScriptCommands: options.syncScriptCommands,
+          }),
+          createIpkCommand('i', {
+            fs: options.fs,
+            fetch: options.fetch,
+            scriptCatalog: options.scriptCatalog,
+            syncScriptCommands: options.syncScriptCommands,
+          }),
           createIpxCommand('ipx', { fs: options.fs, fetch: options.fetch }),
           createIpxCommand('npx', { fs: options.fs, fetch: options.fetch }),
           createDiCommand('di', { fs: options.fs, fetch: options.fetch }),

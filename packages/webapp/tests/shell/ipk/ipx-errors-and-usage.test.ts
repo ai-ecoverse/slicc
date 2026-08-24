@@ -204,7 +204,7 @@ describe('ipx error and usage handling', () => {
     const { shell, fs } = await newShell();
     const run = await shell.executeCommand('ipx');
     expect(run.stdout).toContain('Usage:');
-    expect(run.stdout).toContain('ipx [--force] <pkg-or-bin>');
+    expect(run.stdout).toContain('ipx [--force] [--global] <pkg-or-bin>');
     expect(run.exitCode).not.toBe(0);
     // A follow-up command still runs, proving the shell did not crash or hang.
     const after = await shell.executeCommand('echo still-here');
@@ -217,6 +217,7 @@ describe('ipx error and usage handling', () => {
     const run = await shell.executeCommand('ipx --help');
     expect(run.stdout).toContain('Usage:');
     expect(run.stdout).toContain('--force');
+    expect(run.stdout).toContain('--global');
     expect(run.exitCode).toBe(0);
     await fs.dispose();
   });

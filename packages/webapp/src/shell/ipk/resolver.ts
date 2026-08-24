@@ -48,6 +48,8 @@ export interface InstallNode {
   version: string;
   resolved: string;
   integrity?: string;
+  /** From the packument version; used to predict PATH bins before materialization. */
+  bin?: string | Record<string, string>;
   dependencies: Record<string, InstallNode>;
 }
 
@@ -182,6 +184,9 @@ function buildNode(name: string, version: string, entry: PackumentVersion): Inst
   };
   if (typeof entry.dist.integrity === 'string') {
     node.integrity = entry.dist.integrity;
+  }
+  if (entry.bin !== undefined && entry.bin !== null) {
+    node.bin = entry.bin;
   }
   return node;
 }

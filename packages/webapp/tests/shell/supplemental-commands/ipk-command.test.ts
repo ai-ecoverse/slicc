@@ -6,6 +6,7 @@ import { VirtualFS } from '../../../src/fs/index.js';
 import {
   GLOBAL_BIN_DIR,
   GLOBAL_NODE_MODULES,
+  GLOBAL_NPM_PREFIX,
   GLOBAL_PACKAGE_JSON,
 } from '../../../src/shell/ipk/global-prefix.js';
 import {
@@ -131,10 +132,20 @@ function buildRegistry(packages: SyntheticPackage[]): Registry {
   for (const [name, versions] of byName) {
     const versionMap: Record<string, unknown> = {};
     for (const p of versions) {
+      let bin: unknown;
+      const manifestText = p.files?.['package.json'];
+      if (manifestText) {
+        try {
+          bin = (JSON.parse(manifestText) as { bin?: unknown }).bin;
+        } catch {
+          bin = undefined;
+        }
+      }
       versionMap[p.version] = {
         name,
         version: p.version,
         ...(p.dependencies ? { dependencies: p.dependencies } : {}),
+        ...(bin !== undefined ? { bin } : {}),
         dist: {
           tarball: `https://registry.npmjs.org/${name}/-/${tarballBasename(name, p.version)}`,
         },
@@ -400,9 +411,9 @@ describe('createIpkCommand', () => {
 
   it('npm with an unsupported subcommand prints an error and exits non-zero', async () => {
     const cmd = createIpkCommand('npm', { fs, fetch: makeFetch(buildRegistry([])) });
-    const r = await cmd.execute(['remove', 'x'], ctxOf(fs) as never);
+    const r = await cmd.execute(['bogus', 'x'], ctxOf(fs) as never);
     expect(r.exitCode).not.toBe(0);
-    expect(r.stderr).toMatch(/unknown subcommand|remove/);
+    expect(r.stderr).toMatch(/unknown subcommand|bogus/);
   });
 
   it('i with no args reports a clear error', async () => {
@@ -604,6 +615,59 @@ describe('createIpkCommand', () => {
     expect(depNested.version).toBe('3.0.0');
   });
 
+  it('global upgrade prunes orphaned transitive bins from PATH', async () => {
+    const reg = buildRegistry([
+      {
+        name: 'tool',
+        version: '1.0.0',
+        dependencies: { 'old-cli': '^1.0.0' },
+        files: {
+          'package.json': JSON.stringify({
+            name: 'tool',
+            version: '1.0.0',
+            dependencies: { 'old-cli': '^1.0.0' },
+            bin: { tool: 'tool.js' },
+          }),
+          'tool.js': 'console.log("tool-v1");\n',
+        },
+      },
+      {
+        name: 'tool',
+        version: '2.0.0',
+        files: {
+          'package.json': JSON.stringify({
+            name: 'tool',
+            version: '2.0.0',
+            bin: { tool: 'tool.js' },
+          }),
+          'tool.js': 'console.log("tool-v2");\n',
+        },
+      },
+      {
+        name: 'old-cli',
+        version: '1.0.0',
+        files: {
+          'package.json': JSON.stringify({
+            name: 'old-cli',
+            version: '1.0.0',
+            bin: { 'old-cli': 'cli.js' },
+          }),
+          'cli.js': 'console.log("old");\n',
+        },
+      },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    await cmd.execute(['install', '-g', 'tool@1.0.0'], ctxOf(fs) as never);
+    expect(await fs.exists(`${GLOBAL_BIN_DIR}/old-cli.jsh`)).toBe(true);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/old-cli`)).toBe(true);
+
+    const r = await cmd.execute(['install', '-g', 'tool@2.0.0'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(await fs.exists(`${GLOBAL_BIN_DIR}/old-cli.jsh`)).toBe(false);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/old-cli`)).toBe(false);
+    expect(await fs.exists(`${GLOBAL_BIN_DIR}/tool.jsh`)).toBe(true);
+  });
+
   it('global install refuses to overwrite a user script in /shared/bin', async () => {
     await fs.mkdir(GLOBAL_BIN_DIR, { recursive: true });
     await fs.writeFile(`${GLOBAL_BIN_DIR}/say.jsh`, '// user script\n');
@@ -626,5 +690,96 @@ describe('createIpkCommand', () => {
     expect(r.exitCode).toBe(1);
     expect(r.stderr).toMatch(/refusing to overwrite/i);
     expect((await fs.readFile(`${GLOBAL_BIN_DIR}/say.jsh`)) as string).toBe('// user script\n');
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/say`)).toBe(false);
+  });
+
+  it('npm root -g prints the global node_modules path', async () => {
+    const cmd = createIpkCommand('npm', { fs, fetch: makeFetch(buildRegistry([])) });
+    const r = await cmd.execute(['root', '-g'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout.trim()).toBe(GLOBAL_NODE_MODULES);
+  });
+
+  it('npm list -g lists globally installed direct dependencies', async () => {
+    const reg = buildRegistry([{ name: 'is-number', version: '7.0.0' }]);
+    const cmd = createIpkCommand('npm', { fs, fetch: makeFetch(reg) });
+    await cmd.execute(['install', '-g', 'is-number'], ctxOf(fs) as never);
+    const r = await cmd.execute(['list', '-g'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain(GLOBAL_NPM_PREFIX);
+    expect(r.stdout).toContain('is-number@7.0.0');
+  });
+
+  it('ipk uninstall -g removes a global package and reconciles the tree', async () => {
+    const reg = buildRegistry([
+      { name: 'keep', version: '1.0.0' },
+      { name: 'drop', version: '1.0.0' },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    await cmd.execute(['install', '-g', 'keep', 'drop'], ctxOf(fs) as never);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/keep`)).toBe(true);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/drop`)).toBe(true);
+
+    const r = await cmd.execute(['uninstall', '-g', 'drop'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/removed drop/);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/drop`)).toBe(false);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/keep`)).toBe(true);
+    const manifest = JSON.parse((await fs.readFile(GLOBAL_PACKAGE_JSON)) as string);
+    expect(manifest.dependencies.keep).toBeDefined();
+    expect(manifest.dependencies.drop).toBeUndefined();
+  });
+
+  it('local uninstall removes package from cwd manifest and node_modules', async () => {
+    const reg = buildRegistry([
+      { name: 'keep', version: '1.0.0' },
+      { name: 'drop', version: '1.0.0' },
+    ]);
+    const cmd = createIpkCommand('npm', { fs, fetch: makeFetch(reg) });
+    await cmd.execute(['install', 'keep', 'drop'], ctxOf(fs) as never);
+    const r = await cmd.execute(['uninstall', 'drop'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(await fs.exists('/work/node_modules/drop')).toBe(false);
+    expect(await fs.exists('/work/node_modules/keep')).toBe(true);
+    const manifest = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(manifest.dependencies.drop).toBeUndefined();
+  });
+
+  it('local uninstall removes a package listed only in devDependencies', async () => {
+    const reg = buildRegistry([{ name: 'vitest', version: '1.0.0' }]);
+    await fs.writeFile(
+      '/work/package.json',
+      `${JSON.stringify({ name: 'work', devDependencies: { vitest: '^1.0.0' } }, null, 2)}\n`
+    );
+    const cmd = createIpkCommand('npm', { fs, fetch: makeFetch(reg) });
+    await cmd.execute(['install'], ctxOf(fs) as never);
+    expect(await fs.exists('/work/node_modules/vitest')).toBe(true);
+
+    const r = await cmd.execute(['uninstall', 'vitest'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/removed vitest/);
+    const manifest = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(manifest.devDependencies?.vitest).toBeUndefined();
+    expect(await fs.exists('/work/node_modules/vitest')).toBe(false);
+  });
+
+  it('uninstall leaves manifest unchanged when reconciliation fails', async () => {
+    const reg = buildRegistry([
+      { name: 'keep', version: '1.0.0' },
+      { name: 'drop', version: '1.0.0' },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    await cmd.execute(['install', '-g', 'keep', 'drop'], ctxOf(fs) as never);
+
+    const failFetch = (async () => {
+      throw new Error('network down');
+    }) as unknown as SecureFetch;
+    const failCmd = createIpkCommand('ipk', { fs, fetch: failFetch });
+    const r = await failCmd.execute(['uninstall', '-g', 'drop'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(1);
+    const manifest = JSON.parse((await fs.readFile(GLOBAL_PACKAGE_JSON)) as string);
+    expect(manifest.dependencies.keep).toBeDefined();
+    expect(manifest.dependencies.drop).toBeDefined();
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/drop`)).toBe(true);
   });
 });

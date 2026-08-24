@@ -133,16 +133,35 @@ Use `--depth <n>` to request a different history depth.
 `ipk install -g <pkg>` (and `npm install -g`, `npm i -g`) installs into the shared
 global prefix at `/shared/lib/node_modules`, records direct dependencies in
 `/shared/lib/package.json`, and publishes PATH-visible `.jsh` delegators under
-`/shared/bin` for package bins. Local project installs are unchanged: without `-g`,
+`/shared/bin` for package bins (each delegator runs `ipx --global <bin>` so the
+global executable wins even when the invoking cwd has a same-named local package).
+Local project installs are unchanged: without `-g`,
 packages still land in `<cwd>/node_modules` and update the nearest project
 `package.json`. Module resolution and `ipx`/`npx` also search the global tree after
 the cwd-relative `node_modules` walk.
+
+### `ipk uninstall -g` / `npm uninstall -g`
+
+`ipk uninstall -g <pkg>` (aliases: `npm uninstall -g`, `npm remove -g`, `npm rm -g`)
+removes the named package from `/shared/lib/package.json`, prunes orphaned
+top-level entries from `/shared/lib/node_modules`, re-resolves remaining global
+direct dependencies, and refreshes `.bin` shims plus `/shared/bin` delegators.
+Without `-g`, uninstall removes entries from the cwd `package.json` and reconciles
+`<cwd>/node_modules` the same way.
+
+### `ipk list -g` / `npm root -g`
+
+`npm list -g` (and `ipk list -g`) prints direct global dependencies with installed
+versions. `npm root -g` prints `/shared/lib/node_modules`; `npm root` without `-g`
+prints `<cwd>/node_modules`.
 
 ### `ipx` / `npx` built-in redirects
 
 `ipx` runs JavaScript package bins from the nearest installed `node_modules`, then the
 shared global tree at `/shared/lib/node_modules`; `npx` is an
-alias with the same behavior. When no local bin or installed package resolves, the command
+alias with the same behavior. `ipx --global <bin>` (and `npx --global`) resolves only
+from `/shared/lib/node_modules` — use this when a cwd-local package would shadow the
+global install. When no local bin or installed package resolves, the command
 normally installs the requested package and runs its bin. Before that network install,
 `ipx`/`npx` consults `builtin-shadow-map.ts`. A match exits non-zero and prints a stderr hint
 that names the SLICC built-in, suggests an invocation using the user's arguments, and includes
