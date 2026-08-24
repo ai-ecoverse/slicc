@@ -11,6 +11,7 @@ import type { SudoDecision, SudoKind, SudoRequest } from '../sudo/types.js';
 import type { ToolDefinition } from '../tools/types.js';
 import { defaultChildVisibleRoots, workspaceFor } from '../work-unit/descriptor.js';
 import { derivePolicy, isRootUnit, subtreeOf } from '../work-unit/policy.js';
+import { uniqueFolder } from '../work-unit/record.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
   isThinkingLevel,
@@ -143,24 +144,6 @@ function folderFromDisplayName(name: string): string {
       .replace(/^-+|-+$/g, '')
       .slice(0, 50) + '-scoop'
   );
-}
-
-/**
- * The first free variant of `folder` across the whole roster: `helper-scoop`,
- * then `helper-scoop-2`, `helper-scoop-3`… A folder names a real directory
- * under `/scoops/`, so a collision would silently hand a second cone's scoop
- * the first one's sandbox.
- */
-function uniqueFolder(folder: string, all: readonly RegisteredScoop[]): string {
-  const taken = new Set(all.map((s) => s.folder));
-  if (!taken.has(folder)) return folder;
-  // At most one suffix per registered scoop can be taken, so the roster size
-  // plus one always yields a free candidate.
-  for (let n = 2; n <= all.length + 1; n++) {
-    const candidate = `${folder}-${n}`;
-    if (!taken.has(candidate)) return candidate;
-  }
-  return `${folder}-${all.length + 2}`;
 }
 
 /** Validate a thinking level input or return an error result. */
@@ -508,7 +491,10 @@ async function executeScoopScoop(
   // Folder uniqueness is checked against the WHOLE roster, not just the
   // subtree: `/scoops/<folder>/` is one shared VFS path, so two cones each
   // spawning a "helper" must not land in the same sandbox (#2360).
-  const folder = uniqueFolder(wantedFolder, config.getScoops());
+  const folder = uniqueFolder(
+    wantedFolder,
+    config.getScoops().map((s) => s.folder)
+  );
   try {
     const record = buildScoopRecord({
       name,

@@ -233,4 +233,87 @@ describe('ScoopLifecycleManager', () => {
       }),
     ]);
   });
+
+  // #2360 (review follow-up): `scoop_scoop` picks a free folder from the
+  // roster, but two cones creating the same name concurrently would both pass
+  // that check while the first record is still inside `saveScoop`. The claim
+  // therefore happens synchronously inside `register`, before the first await.
+  it('reserves a free folder synchronously so concurrent registrations cannot share a sandbox', async () => {
+    const scoops = new Map<string, RegisteredScoop>([[scoop.jid, scoop]]);
+    let releaseSave: (() => void) | undefined;
+    const saveScoop = vi.fn(
+      () =>
+        new Promise<void>((resolve) => {
+          releaseSave = resolve;
+        })
+    );
+    const manager = new ScoopLifecycleManager({
+      getScoops: () => scoops,
+      getSharedFs: () => ({}),
+      getSessionStore: () => null,
+      getProcessManager: () => null,
+      getSudoManager: () => null,
+      getLickManager: () => null,
+      callbacks: { onStatusChange: vi.fn() },
+      db: { saveScoop, deleteScoop: vi.fn(async () => {}) },
+      idleTimers: { start: vi.fn(), clear: vi.fn() },
+      messageRouter: {
+        ensureQueue: vi.fn(),
+        forgetScoop: vi.fn(),
+        flushOnIdle: vi.fn(async () => {}),
+      },
+      costTracker: { snapshot: vi.fn() },
+      approvalRouter: { failScoop: vi.fn(() => 0) },
+      completionService: { forgetScoop: vi.fn(), clearResponse: vi.fn() },
+    } as unknown as ScoopLifecycleDeps);
+
+    const first: RegisteredScoop = { ...worker, jid: 'scoop_a', folder: 'helper-scoop' };
+    // Cone B's identically named scoop, created while `first` is mid-save.
+    const second: RegisteredScoop = {
+      ...worker,
+      jid: 'scoop_b',
+      parentJid: 'cone_b',
+      folder: 'helper-scoop',
+    };
+
+    void manager.register(first).catch(() => {});
+    void manager.register(second).catch(() => {});
+
+    expect(first.folder).toBe('helper-scoop');
+    expect(second.folder).toBe('helper-scoop-2');
+    expect(second.trigger).toBe('@helper-scoop-2');
+    expect(scoops.get('scoop_b')?.folder).toBe('helper-scoop-2');
+    releaseSave?.();
+  });
+
+  it('releases the claimed registry slot when the record cannot be persisted', async () => {
+    const scoops = new Map<string, RegisteredScoop>([[scoop.jid, scoop]]);
+    const manager = new ScoopLifecycleManager({
+      getScoops: () => scoops,
+      getSharedFs: () => ({}),
+      getSessionStore: () => null,
+      getProcessManager: () => null,
+      getSudoManager: () => null,
+      getLickManager: () => null,
+      callbacks: { onStatusChange: vi.fn() },
+      db: {
+        saveScoop: vi.fn(async () => {
+          throw new Error('quota exceeded');
+        }),
+        deleteScoop: vi.fn(async () => {}),
+      },
+      idleTimers: { start: vi.fn(), clear: vi.fn() },
+      messageRouter: {
+        ensureQueue: vi.fn(),
+        forgetScoop: vi.fn(),
+        flushOnIdle: vi.fn(async () => {}),
+      },
+      costTracker: { snapshot: vi.fn() },
+      approvalRouter: { failScoop: vi.fn(() => 0) },
+      completionService: { forgetScoop: vi.fn(), clearResponse: vi.fn() },
+    } as unknown as ScoopLifecycleDeps);
+
+    await expect(manager.register({ ...worker, jid: 'scoop_c' })).rejects.toThrow(/quota exceeded/);
+    expect(scoops.has('scoop_c')).toBe(false);
+  });
 });
