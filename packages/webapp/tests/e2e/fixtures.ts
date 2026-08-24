@@ -14,6 +14,7 @@ import {
   assertLeaderAlive,
   createLeaderHealthState,
   type LeaderHealthDeps,
+  RESTART_TIMEOUT_MS,
 } from './leader-health.js';
 import { LEADER_ORIGIN, WRANGLER_SUPERVISOR_ORIGIN } from './playwright.config.js';
 
@@ -41,9 +42,15 @@ export const test = base.extend<{ leaderAlive: void }>({
   leaderAlive: [
     async ({ baseURL }, use, testInfo) => {
       const deps = healthDeps(baseURL ?? LEADER_ORIGIN);
-      await assertLeaderAlive(deps, state, testInfo.title, 'before');
+      // A spec's own timeout also bounds its fixtures, and it is far shorter
+      // than a workerd cold start. Extend it only on the slow path, so a real
+      // hang in a healthy run still fails at the configured timeout.
+      const grantRestartBudget = (): void => {
+        testInfo.setTimeout(testInfo.timeout + RESTART_TIMEOUT_MS);
+      };
+      await assertLeaderAlive(deps, state, testInfo.title, 'before', grantRestartBudget);
       await use();
-      await assertLeaderAlive(deps, state, testInfo.title, 'after');
+      await assertLeaderAlive(deps, state, testInfo.title, 'after', grantRestartBudget);
     },
     { auto: true },
   ],

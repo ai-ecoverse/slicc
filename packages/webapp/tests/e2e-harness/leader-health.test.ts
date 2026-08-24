@@ -121,6 +121,33 @@ describe('assertLeaderAlive', () => {
     expect(fetchMock.mock.calls.length).toBe(callsAfterFirst);
   });
 
+  it('signals the slow path once, before any restart is awaited', async () => {
+    const onSlowPath = vi.fn();
+    const healthy = makeDeps(async () => ({ ok: true }));
+
+    await assertLeaderAlive(healthy, createLeaderHealthState(), 'spec', 'before', onSlowPath);
+    // A live origin must not inflate the spec's timeout budget.
+    expect(onSlowPath).not.toHaveBeenCalled();
+
+    const dead = makeDeps(async (url) => ({ ok: url.endsWith('/restart') }));
+    await assertLeaderAlive(dead, createLeaderHealthState(), 'spec', 'before', onSlowPath).catch(
+      () => {}
+    );
+    expect(onSlowPath).toHaveBeenCalledTimes(1);
+  });
+
+  it('latches when the supervisor refuses to restart (its permanent-failure short circuit)', async () => {
+    // The supervisor answers 503 without attempting another cold start once it
+    // has given up; the fixture must treat that as unrecoverable, not retry it.
+    const deps = makeDeps(async () => ({ ok: false }));
+    const state = createLeaderHealthState();
+
+    await expect(assertLeaderAlive(deps, state, 'spec', 'before')).rejects.toThrow(
+      /could not.*bring it back/s
+    );
+    expect(state.aborted).not.toBeNull();
+  });
+
   it('emits a CI warning annotation so a contained crash stays visible', async () => {
     const previous = process.env['CI'];
     process.env['CI'] = 'true';

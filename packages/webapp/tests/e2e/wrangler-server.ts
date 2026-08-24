@@ -80,6 +80,16 @@ let shuttingDown = false;
 let restartInFlight: Promise<void> | null = null;
 let restarts = 0;
 let lastCrash: string | null = null;
+/** Restart attempts since the origin was last healthy. */
+let failedRestarts = 0;
+/** Set once repeated restarts have failed to bring workerd back. The control
+ *  plane then answers `/restart` immediately instead of burning another cold-
+ *  start budget per spec: the abort latch in `leader-health.ts` lives in a
+ *  Playwright worker that is discarded after each failure, so THIS process is
+ *  the only place a permanent failure can be remembered. */
+let permanentFailure = false;
+/** Restart attempts allowed before the origin is declared unrecoverable. */
+const MAX_FAILED_RESTARTS = 2;
 
 /** SIGKILL any process group left behind by a previous run of this harness. */
 function reapStaleGroups(): void {
@@ -249,7 +259,17 @@ async function restart(reason: string): Promise<void> {
     await new Promise((r) => setTimeout(r, 1_000));
     child = spawnWrangler();
     const ready = await waitForLeader(120_000);
-    log(ready ? `wrangler ready again after restart #${restarts}` : 'wrangler did NOT come back');
+    if (ready) {
+      failedRestarts = 0;
+      log(`wrangler ready again after restart #${restarts}`);
+      return;
+    }
+    failedRestarts += 1;
+    if (failedRestarts >= MAX_FAILED_RESTARTS) permanentFailure = true;
+    log(
+      `wrangler did NOT come back (failed restarts: ${failedRestarts}` +
+        `${permanentFailure ? ', giving up — remaining specs abort immediately' : ''})`
+    );
   })().finally(() => {
     restartInFlight = null;
   });
@@ -268,15 +288,23 @@ async function handle(req: IncomingMessage, res: ServerResponse): Promise<void> 
     respond(res, 200, {
       running: child !== null && child.exitCode === null,
       restarts,
+      failedRestarts,
+      permanentFailure,
       lastCrash,
       logDir,
     });
     return;
   }
   if (path === '/restart' && req.method === 'POST') {
+    if (permanentFailure) {
+      // Answer instantly: every remaining spec then fails in milliseconds with
+      // the named error instead of waiting out another doomed cold start.
+      respond(res, 503, { ok: false, permanentFailure, restarts, lastCrash, logDir });
+      return;
+    }
     await restart('requested');
     const alive = await isLeaderUp();
-    respond(res, alive ? 200 : 503, { ok: alive, restarts, lastCrash, logDir });
+    respond(res, alive ? 200 : 503, { ok: alive, permanentFailure, restarts, lastCrash, logDir });
     return;
   }
   respond(res, 404, { error: 'not found' });

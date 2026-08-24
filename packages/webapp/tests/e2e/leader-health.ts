@@ -59,8 +59,11 @@ const PROBE_TIMEOUT_MS = 5_000;
  *  against a single blip on the (far more common) healthy path. */
 const PROBE_ATTEMPTS = 2;
 /** Bound on the supervisor's restart round-trip: workerd's cold start is ~10 s
- *  locally and can exceed a minute on a loaded runner. */
-const RESTART_TIMEOUT_MS = 150_000;
+ *  locally and can exceed a minute on a loaded runner. Exported because a spec's
+ *  own 30 s timeout also covers its fixtures — the fixture must extend the test
+ *  budget by this much before waiting on a restart, or Playwright kills it first
+ *  and reports a generic timeout instead of {@link WRANGLER_CRASHED}. */
+export const RESTART_TIMEOUT_MS = 150_000;
 
 async function probeOnce(deps: LeaderHealthDeps, method: 'HEAD' | 'GET'): Promise<boolean> {
   try {
@@ -124,7 +127,10 @@ export async function assertLeaderAlive(
   deps: LeaderHealthDeps,
   state: LeaderHealthState,
   context: string,
-  phase: 'before' | 'after'
+  phase: 'before' | 'after',
+  /** Called once, before any restart is awaited, so the caller can extend the
+   *  current test's timeout to cover {@link RESTART_TIMEOUT_MS}. */
+  onSlowPath?: () => void
 ): Promise<void> {
   if (state.aborted) {
     throw new WranglerCrashedError(
@@ -133,6 +139,7 @@ export async function assertLeaderAlive(
     );
   }
   if (await probeLeader(deps)) return;
+  onSlowPath?.();
 
   const when = phase === 'before' ? `before "${context}"` : `during "${context}"`;
   warn(deps, `Leader origin ${deps.statusUrl} stopped answering ${when} — restarting wrangler.`);
