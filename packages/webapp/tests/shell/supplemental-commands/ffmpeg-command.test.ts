@@ -34,12 +34,12 @@ vi.mock('../../../src/shell/supplemental-commands/ffmpeg-wasm.js', async () => {
 });
 
 // The page-realm branch of `requestCapturePermission` looks up the
-// leader permissions surface via the kernel seam; mock it so a test
-// can drive the in-tab `surface.prompt(...)` path.
+// leader permissions surface in `base/`; mock it so a test can drive
+// the in-tab `surface.prompt(...)` path.
 const { leaderSurfaceHolder } = vi.hoisted(() => ({
   leaderSurfaceHolder: { value: null as { prompt: (...args: unknown[]) => unknown } | null },
 }));
-vi.mock('../../../src/kernel/leader-permissions-surface.js', () => ({
+vi.mock('../../../src/base/permissions-surface-registry.js', () => ({
   getLeaderPermissionsSurface: () => leaderSurfaceHolder.value,
 }));
 

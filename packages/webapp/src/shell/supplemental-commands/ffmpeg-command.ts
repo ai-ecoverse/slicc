@@ -29,7 +29,7 @@
 
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { getLeaderPermissionsSurface } from '../../kernel/leader-permissions-surface.js';
+import { getLeaderPermissionsSurface } from '../../base/permissions-surface-registry.js';
 import { getPanelRpcClient, hasLocalDom, type PermissionRpcKind } from '../../kernel/panel-rpc.js';
 import type {
   CameraCaptureRequest,
