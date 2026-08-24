@@ -209,14 +209,36 @@ final class BridgeSecurityTests: XCTestCase {
 
     // MARK: - Loopback origin (token-gate exemption)
 
+    func testIsLoopbackHostnameAcceptsCanonicalSet() {
+        XCTAssertTrue(BridgeSecurity.isLoopbackHostname("localhost"))
+        XCTAssertTrue(BridgeSecurity.isLoopbackHostname("127.0.0.1"))
+        XCTAssertTrue(BridgeSecurity.isLoopbackHostname("127.0.0.2"))
+        XCTAssertTrue(BridgeSecurity.isLoopbackHostname("127.255.255.255"))
+        XCTAssertTrue(BridgeSecurity.isLoopbackHostname("::1"))
+        XCTAssertTrue(BridgeSecurity.isLoopbackHostname("[::1]"))
+    }
+
+    func testIsLoopbackHostnameRejectsLookalikes() {
+        XCTAssertFalse(BridgeSecurity.isLoopbackHostname(""))
+        XCTAssertFalse(BridgeSecurity.isLoopbackHostname("www.sliccy.ai"))
+        XCTAssertFalse(BridgeSecurity.isLoopbackHostname("localhost.evil.com"))
+        XCTAssertFalse(BridgeSecurity.isLoopbackHostname("192.168.0.1"))
+        XCTAssertFalse(BridgeSecurity.isLoopbackHostname("10.0.0.5"))
+        XCTAssertFalse(BridgeSecurity.isLoopbackHostname("::2"))
+        XCTAssertFalse(BridgeSecurity.isLoopbackHostname("0.0.0.0"))
+    }
+
     func testIsLoopbackBridgeOriginAcceptsLoopbackHosts() {
         XCTAssertTrue(BridgeSecurity.isLoopbackBridgeOrigin("http://localhost:5710"))
         XCTAssertTrue(BridgeSecurity.isLoopbackBridgeOrigin("http://127.0.0.1:5710"))
+        XCTAssertTrue(BridgeSecurity.isLoopbackBridgeOrigin("http://127.0.0.2:5710"))
         XCTAssertTrue(BridgeSecurity.isLoopbackBridgeOrigin("http://[::1]:5710"))
+        XCTAssertTrue(BridgeSecurity.isLoopbackBridgeOrigin("http://localhost"))
     }
 
     func testIsLoopbackBridgeOriginRejectsRemoteAndMalformed() {
         XCTAssertFalse(BridgeSecurity.isLoopbackBridgeOrigin("https://www.sliccy.ai"))
+        XCTAssertFalse(BridgeSecurity.isLoopbackBridgeOrigin("https://localhost.evil.com"))
         XCTAssertFalse(BridgeSecurity.isLoopbackBridgeOrigin(nil))
         XCTAssertFalse(BridgeSecurity.isLoopbackBridgeOrigin(""))
         XCTAssertFalse(BridgeSecurity.isLoopbackBridgeOrigin("not a url"))
