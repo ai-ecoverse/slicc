@@ -641,3 +641,236 @@ export async function installFromManifest(
 
   return { results, errors, empty: false };
 }
+
+async function removeDirectDependencies(
+  fs: VirtualFS,
+  manifestRoot: string,
+  names: ReadonlySet<string>
+): Promise<string> {
+  const manifestPath = joinPath(manifestRoot, 'package.json');
+  const existing = await readJsonOr<ProjectManifest>(fs, manifestPath, {});
+  const deps = { ...(existing.dependencies ?? {}) };
+  for (const name of names) {
+    delete deps[name];
+  }
+  const next: ProjectManifest = { ...existing, dependencies: deps };
+  await fs.writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`);
+  return manifestPath;
+}
+
+async function pruneTopLevelPackages(
+  fs: VirtualFS,
+  modulesDir: string,
+  keepTopLevel: ReadonlySet<string>
+): Promise<void> {
+  if (!(await fs.exists(modulesDir))) return;
+  let dirEntries: DirEntry[];
+  try {
+    dirEntries = await fs.readDir(modulesDir);
+  } catch {
+    return;
+  }
+  for (const entry of dirEntries) {
+    if (entry.name === '.bin') continue;
+    if (entry.type !== 'directory') continue;
+    if (entry.name.startsWith('@')) {
+      const scopeDir = joinPath(modulesDir, entry.name);
+      let scopeEntries: DirEntry[];
+      try {
+        scopeEntries = await fs.readDir(scopeDir);
+      } catch {
+        continue;
+      }
+      for (const sub of scopeEntries) {
+        if (sub.type !== 'directory') continue;
+        const pkgName = `${entry.name}/${sub.name}`;
+        if (!keepTopLevel.has(pkgName)) {
+          await removeIfExists(fs, joinPath(scopeDir, sub.name));
+        }
+      }
+      continue;
+    }
+    if (!keepTopLevel.has(entry.name)) {
+      await removeIfExists(fs, joinPath(modulesDir, entry.name));
+    }
+  }
+}
+
+/**
+ * Reconcile the global install tree with `/shared/lib/package.json` direct
+ * dependencies: resolve the merged graph, prune orphaned top-level packages,
+ * materialize, and refresh bin shims + PATH delegators.
+ */
+export async function syncGlobalInstallTree(
+  fs: VirtualFS,
+  fetch: SecureFetch,
+  timeoutMs?: number
+): Promise<void> {
+  const manifest = await readJsonOr<ProjectManifest>(fs, GLOBAL_PACKAGE_JSON, {});
+  const entries = collectManifestEntries(manifest);
+
+  if (entries.length === 0) {
+    await removeIfExists(fs, GLOBAL_NODE_MODULES);
+    await reconcileGlobalBinDelegators(fs, new Set());
+    return;
+  }
+
+  const { supplier } = buildPackumentSupplier(fetch, timeoutMs);
+  const rootDependencies: Record<string, string> = {};
+  for (const entry of entries) {
+    rootDependencies[entry.name] = entry.range;
+  }
+
+  const plan = await resolveDependencyTree({
+    rootDependencies,
+    fetchPackument: supplier,
+  });
+
+  await pruneTopLevelPackages(fs, GLOBAL_NODE_MODULES, new Set(Object.keys(plan.root)));
+  await materializePlan(fs, GLOBAL_NODE_MODULES, plan, fetch, timeoutMs);
+  await reconcileRootBinShims(fs, GLOBAL_NODE_MODULES);
+  const installed = await collectInstalledBins(fs, GLOBAL_NODE_MODULES);
+  const chosen = chooseRootBins(installed);
+  await reconcileGlobalBinDelegators(fs, new Set(chosen.keys()));
+}
+
+export interface UninstallResult {
+  name: string;
+  removed: boolean;
+}
+
+export interface UninstallPackagesResult {
+  results: UninstallResult[];
+  errors: InstallFailure[];
+}
+
+export async function uninstallPackages(
+  specs: string[],
+  options: InstallOptions
+): Promise<UninstallPackagesResult> {
+  const { fs, fetch, cwd, timeoutMs, global: globalUninstall = false } = options;
+  if (specs.length === 0) {
+    return { results: [], errors: [] };
+  }
+
+  const names = new Set<string>();
+  const errors: InstallFailure[] = [];
+  for (const spec of specs) {
+    try {
+      names.add(parseInstallSpec(spec).name);
+    } catch (err) {
+      errors.push({ spec, error: toError(err) });
+    }
+  }
+  if (names.size === 0) {
+    return { results: [], errors };
+  }
+
+  const manifestRoot = globalUninstall ? GLOBAL_NPM_PREFIX : cwd;
+  const manifestPath = joinPath(manifestRoot, 'package.json');
+  if (!(await fs.exists(manifestPath))) {
+    for (const spec of specs) {
+      errors.push({
+        spec,
+        error: new ManifestNotFoundError(manifestPath),
+      });
+    }
+    return { results: [], errors };
+  }
+
+  const before = await readJsonOr<ProjectManifest>(fs, manifestPath, {});
+  const beforeDeps = before.dependencies ?? {};
+  const results: UninstallResult[] = [];
+  for (const name of names) {
+    results.push({ name, removed: name in beforeDeps });
+  }
+
+  await removeDirectDependencies(fs, manifestRoot, names);
+
+  if (globalUninstall) {
+    await syncGlobalInstallTree(fs, fetch, timeoutMs);
+  } else {
+    await syncLocalInstallTree(fs, fetch, cwd, timeoutMs);
+  }
+
+  return { results, errors };
+}
+
+async function syncLocalInstallTree(
+  fs: VirtualFS,
+  fetch: SecureFetch,
+  cwd: string,
+  timeoutMs?: number
+): Promise<void> {
+  const manifestPath = joinPath(cwd, 'package.json');
+  const manifest = await readJsonOr<ProjectManifest>(fs, manifestPath, {});
+  const entries = collectManifestEntries(manifest);
+  const modulesDir = joinPath(cwd, 'node_modules');
+
+  if (entries.length === 0) {
+    await removeIfExists(fs, modulesDir);
+    return;
+  }
+
+  const { supplier } = buildPackumentSupplier(fetch, timeoutMs);
+  const rootDependencies: Record<string, string> = {};
+  for (const entry of entries) {
+    rootDependencies[entry.name] = entry.range;
+  }
+
+  const plan = await resolveDependencyTree({
+    rootDependencies,
+    fetchPackument: supplier,
+  });
+
+  await pruneTopLevelPackages(fs, modulesDir, new Set(Object.keys(plan.root)));
+  await materializePlan(fs, modulesDir, plan, fetch, timeoutMs);
+  await reconcileRootBinShims(fs, modulesDir);
+}
+
+export interface GlobalPackageListing {
+  name: string;
+  version: string;
+  range: string;
+}
+
+export async function listGlobalPackages(fs: VirtualFS): Promise<GlobalPackageListing[]> {
+  const manifest = await readJsonOr<ProjectManifest>(fs, GLOBAL_PACKAGE_JSON, {});
+  const deps = manifest.dependencies ?? {};
+  const out: GlobalPackageListing[] = [];
+  for (const [name, range] of Object.entries(deps)) {
+    if (typeof name !== 'string' || typeof range !== 'string') continue;
+    const installedPath = joinPath(packageDirIn(GLOBAL_NODE_MODULES, name), 'package.json');
+    const installed = await readJsonOr<{ version?: string }>(fs, installedPath, {});
+    out.push({
+      name,
+      version: typeof installed.version === 'string' ? installed.version : '?',
+      range,
+    });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
+
+export async function listLocalPackages(
+  fs: VirtualFS,
+  cwd: string
+): Promise<GlobalPackageListing[]> {
+  const manifestPath = joinPath(cwd, 'package.json');
+  if (!(await fs.exists(manifestPath))) return [];
+  const manifest = await readJsonOr<ProjectManifest>(fs, manifestPath, {});
+  const entries = collectManifestEntries(manifest);
+  const modulesDir = joinPath(cwd, 'node_modules');
+  const out: GlobalPackageListing[] = [];
+  for (const entry of entries) {
+    const installedPath = joinPath(packageDirIn(modulesDir, entry.name), 'package.json');
+    const installed = await readJsonOr<{ version?: string }>(fs, installedPath, {});
+    out.push({
+      name: entry.name,
+      version: typeof installed.version === 'string' ? installed.version : '?',
+      range: entry.range,
+    });
+  }
+  out.sort((a, b) => a.name.localeCompare(b.name));
+  return out;
+}
