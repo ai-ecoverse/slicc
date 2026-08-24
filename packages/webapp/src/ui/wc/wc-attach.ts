@@ -26,6 +26,17 @@ interface AddSection {
   entries: { id: string; label: string; sub?: string }[];
 }
 
+/** Payload of the composer `slicc-add` event that `wireWcAttach` handles. */
+interface AddEventDetail {
+  kind?: string;
+  mode?: string;
+  file?: File;
+  id?: string;
+  label?: string;
+  name?: string;
+  size?: number;
+}
+
 const MAX_ROWS_PER_SECTION = 8;
 // The walk must cover what a user would search FOR: deep and wide, skipping
 // only the junk trees. A shallow walk made typed queries look like the menu
@@ -435,6 +446,12 @@ async function captureScreenshot(): Promise<string | null> {
  * unavailable / errored, and `null` when no surface is mounted so callers
  * can decide whether to fall back to direct `navigator.mediaDevices`
  * (the legacy host-less fallback path).
+ *
+ * `skipIfGranted: true` matches the browser's once-per-session camera/mic
+ * prompt: the in-app Allow/Cancel dialog still runs on first use (or after
+ * a revoke), then subsequent captures skip it and acquire the stream
+ * directly. Without the flag the SLICC overlay reappears on every add-menu
+ * photo/video even after the origin grant is already `'granted'`.
  */
 async function probeCaptureKinds(
   kinds: PermissionKind[],
@@ -442,7 +459,7 @@ async function probeCaptureKinds(
 ): Promise<boolean | null> {
   const surface = getLeaderPermissionsSurface();
   if (!surface) return null;
-  const result = await surface.prompt({ kinds, description });
+  const result = await surface.prompt({ kinds, description, skipIfGranted: true });
   // Drop any granted streams immediately — we only wanted the gesture-gate.
   for (const grant of result.grants) {
     if (grant.kind === 'camera' || grant.kind === 'microphone' || grant.kind === 'screenshare') {
@@ -608,7 +625,7 @@ async function stageVideoResult(
  * - `mode:'screen'` (or anything else) → `getDisplayMedia` one-frame grab.
  */
 async function stageCapture(
-  detail: Record<string, unknown>,
+  detail: AddEventDetail,
   deps: WireWcAttachDeps,
   stage: WcAttachmentStage
 ): Promise<void> {
@@ -729,7 +746,7 @@ function isUserCancelledCapture(err: unknown): boolean {
 }
 
 async function handleAdd(
-  detail: Record<string, unknown>,
+  detail: AddEventDetail,
   deps: WireWcAttachDeps,
   stage: WcAttachmentStage
 ): Promise<void> {
@@ -791,7 +808,7 @@ export function wireWcAttach(deps: WireWcAttachDeps): WcAttachmentStage {
   }
 
   inputCard.addEventListener('slicc-add', (event) => {
-    const detail = (event as CustomEvent<Record<string, unknown>>).detail;
+    const detail = (event as CustomEvent<AddEventDetail>).detail;
     if (!detail) return;
     void handleAdd(detail, deps, stage).catch((err) => {
       // Cancelling a capture picker (screenshot's getDisplayMedia dialog, or a

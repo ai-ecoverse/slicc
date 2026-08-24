@@ -155,9 +155,10 @@ export interface PermissionPromptOptions {
    * `'granted'` (queried via {@link SliccPermissions.permissionQuery}). The
    * stream is then acquired directly. Any non-granted state, gesture-bound
    * kind, or query throw falls back to showing the dialog. Opt-in so callers
-   * that genuinely want a confirmation each time keep the dialog. Agent- or
-   * terminal-initiated captures (e.g. the `hear` command) set this so a
-   * persisted grant doesn't re-prompt on every invocation.
+   * that genuinely want a confirmation each time keep the dialog. Composer
+   * photo/video capture and agent- or terminal-initiated captures (e.g. the
+   * `hear` command) set this so a persisted grant doesn't re-prompt on every
+   * invocation.
    */
   skipIfGranted?: boolean;
 }

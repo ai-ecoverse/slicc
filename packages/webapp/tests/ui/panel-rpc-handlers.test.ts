@@ -608,6 +608,9 @@ describe('createStandalonePanelRpcHandlers — permission-request', () => {
       kinds: ['usb'],
       description: 'Pick a USB device',
     });
+    expect(surface.prompt).toHaveBeenCalledWith(
+      expect.objectContaining({ kinds: ['usb'], skipIfGranted: false })
+    );
     expect(result.grants).toHaveLength(1);
     const grant = result.grants[0];
     expect(grant.kind).toBe('usb');
@@ -667,8 +670,49 @@ describe('createStandalonePanelRpcHandlers — permission-request', () => {
       { kind: 'camera', ok: true },
       { kind: 'microphone', ok: true },
     ]);
+    expect(surface.prompt).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kinds: ['camera', 'microphone'],
+        skipIfGranted: true,
+      })
+    );
     expect(camTrack.stop).toHaveBeenCalledTimes(1);
     expect(micTrack.stop).toHaveBeenCalledTimes(1);
+  });
+
+  it('forwards an explicit skipIfGranted=false even for camera/mic payloads', async () => {
+    const surface = {
+      prompt: vi.fn().mockResolvedValue({
+        status: 'granted',
+        grants: [{ kind: 'camera', stream: { getTracks: () => [{ stop: vi.fn() }] } }],
+      }),
+    };
+    const handlers = createStandalonePanelRpcHandlers({
+      getPermissionsSurface: () => surface as never,
+    });
+    await handlers['permission-request']!({
+      kinds: ['camera'],
+      description: 'cam',
+      skipIfGranted: false,
+    });
+    expect(surface.prompt).toHaveBeenCalledWith(expect.objectContaining({ skipIfGranted: false }));
+  });
+
+  it('does not auto-skip gesture-bound kinds such as screenshare', async () => {
+    const surface = {
+      prompt: vi.fn().mockResolvedValue({
+        status: 'granted',
+        grants: [{ kind: 'screenshare', stream: { getTracks: () => [{ stop: vi.fn() }] } }],
+      }),
+    };
+    const handlers = createStandalonePanelRpcHandlers({
+      getPermissionsSurface: () => surface as never,
+    });
+    await handlers['permission-request']!({
+      kinds: ['screenshare'],
+      description: 'share',
+    });
+    expect(surface.prompt).toHaveBeenCalledWith(expect.objectContaining({ skipIfGranted: false }));
   });
 
   it('rejects with the surface reason when the user cancels', async () => {

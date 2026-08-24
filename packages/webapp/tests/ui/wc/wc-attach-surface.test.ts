@@ -137,6 +137,43 @@ describe('Wave 9b — inline photo/video capture routes through <slicc-permissio
     const promptArg = surfaceMock.prompt.mock.calls[0][0];
     expect(promptArg.kinds).toEqual(['camera', 'microphone']);
     expect(typeof promptArg.description).toBe('string');
+    // Once the origin camera/mic grant is `'granted'`, the surface skips its
+    // in-app dialog (browser prompt is already sticky per session).
+    expect(promptArg.skipIfGranted).toBe(true);
+  });
+
+  it('legacy camera-dialog fallback also opts into skipIfGranted', async () => {
+    class CameraDialogStub extends HTMLElement {
+      open(): Promise<string | null> {
+        return Promise.resolve(null);
+      }
+    }
+    if (!customElements.get('slicc-camera-dialog')) {
+      customElements.define('slicc-camera-dialog', CameraDialogStub);
+    }
+    surfaceMock.prompt.mockResolvedValueOnce({
+      status: 'cancelled',
+      grants: [],
+      reason: 'cancelled',
+    });
+    const fs = await seededFs();
+    const inputCard = document.createElement('slicc-input-card') as HTMLElement;
+    const freezer = document.createElement('slicc-freezer');
+    document.body.append(inputCard, freezer);
+    wireWcAttach({
+      inputCard,
+      freezer,
+      openReader: async () => fs,
+      listConversations: async () => [],
+      log,
+    });
+    emitAdd(inputCard, { kind: 'capture', mode: 'photo' });
+    await vi.waitFor(() => {
+      expect(surfaceMock.prompt).toHaveBeenCalledTimes(1);
+    });
+    const promptArg = surfaceMock.prompt.mock.calls[0][0];
+    expect(promptArg.kinds).toEqual(['camera']);
+    expect(promptArg.skipIfGranted).toBe(true);
   });
 
   it('skips the capture element entirely when the surface prompt is cancelled', async () => {

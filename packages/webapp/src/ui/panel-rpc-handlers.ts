@@ -19,7 +19,12 @@ import {
   type HidDevice,
 } from '../kernel/hid-device-registry.js';
 import * as hidOps from '../kernel/hid-operations.js';
-import type { PanelRpcHandlers, PanelRpcResults, PermissionRpcGrant } from '../kernel/panel-rpc.js';
+import type {
+  PanelRpcHandlers,
+  PanelRpcResults,
+  PermissionRpcGrant,
+  PermissionRpcKind,
+} from '../kernel/panel-rpc.js';
 import type {
   CameraCaptureRequest,
   CameraCaptureResult,
@@ -1074,6 +1079,19 @@ function buildRemoteCdpHandlers(options: StandalonePanelRpcHandlerOptions) {
 }
 
 /**
+ * Camera and microphone are the kinds whose origin grant the browser
+ * persists, so an already-`'granted'` state lets `<slicc-permissions>` skip
+ * its in-app dialog. Gesture-bound kinds (screenshare / USB / HID / serial /
+ * filesystem) never skip. Explicit `payload.skipIfGranted` wins; otherwise
+ * camera/mic-only payloads default to skip so ffmpeg / hear-style probes
+ * don't re-prompt every invocation.
+ */
+function skipIfGrantedForPermissionRpc(kinds: PermissionRpcKind[], explicit?: boolean): boolean {
+  if (explicit !== undefined) return explicit;
+  return kinds.length > 0 && kinds.every((kind) => kind === 'camera' || kind === 'microphone');
+}
+
+/**
  * `permission-request`: run the leader surface's multi-kind prompt,
  * register usb/hid/serial grants into the shared page-side registries,
  * stash filesystem grants via `storePendingHandle`, and return only
@@ -1093,6 +1111,7 @@ function buildPermissionRequestHandler(options: StandalonePanelRpcHandlerOptions
         heading: payload.heading,
         grantLabel: payload.grantLabel,
         cancelLabel: payload.cancelLabel,
+        skipIfGranted: skipIfGrantedForPermissionRpc(payload.kinds, payload.skipIfGranted),
       });
       if (result.status !== 'granted') {
         const detail = result.message ? `: ${result.message}` : '';

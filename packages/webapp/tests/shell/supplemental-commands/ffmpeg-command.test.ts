@@ -33,13 +33,13 @@ vi.mock('../../../src/shell/supplemental-commands/ffmpeg-wasm.js', async () => {
   return { ...actual, getFfmpeg: vi.fn() };
 });
 
-// The page-realm branch of `requestCapturePermission` dynamically imports
-// the leader permissions registry; mock it so a test can drive the in-tab
-// `surface.prompt(...)` path (only reached when `window` is defined).
+// The page-realm branch of `requestCapturePermission` looks up the
+// leader permissions surface in `base/`; mock it so a test can drive
+// the in-tab `surface.prompt(...)` path.
 const { leaderSurfaceHolder } = vi.hoisted(() => ({
   leaderSurfaceHolder: { value: null as { prompt: (...args: unknown[]) => unknown } | null },
 }));
-vi.mock('../../../src/ui/wc/wc-permissions-registry.js', () => ({
+vi.mock('../../../src/base/permissions-surface-registry.js', () => ({
   getLeaderPermissionsSurface: () => leaderSurfaceHolder.value,
 }));
 
@@ -557,7 +557,7 @@ describe('requestCapturePermission', () => {
     expect(result.ok).toBe(true);
     expect(call).toHaveBeenCalledWith(
       'permission-request',
-      expect.objectContaining({ kinds: ['camera'] }),
+      expect.objectContaining({ kinds: ['camera'], skipIfGranted: true }),
       expect.objectContaining({ timeoutMs: expect.any(Number) })
     );
   });
@@ -595,6 +595,9 @@ describe('requestCapturePermission', () => {
       const result = await requestCapturePermission(['camera']);
       expect(result.ok).toBe(true);
       expect(camTrack.stop).toHaveBeenCalledTimes(1);
+      expect(leaderSurfaceHolder.value?.prompt).toHaveBeenCalledWith(
+        expect.objectContaining({ kinds: ['camera'], skipIfGranted: true })
+      );
     } finally {
       leaderSurfaceHolder.value = null;
       if (!hadWindow) delete g.window;
@@ -644,7 +647,7 @@ describe('runAvfoundationCapture permission gating', () => {
     );
     expect(result.exitCode).toBe(0);
     expect(calls.map((c) => c.op)).toEqual(['permission-request', 'capture-camera']);
-    expect(calls[0].payload).toMatchObject({ kinds: ['camera'] });
+    expect(calls[0].payload).toMatchObject({ kinds: ['camera'], skipIfGranted: true });
   });
 
   it('aborts with a clean error when the permission gate denies', async () => {

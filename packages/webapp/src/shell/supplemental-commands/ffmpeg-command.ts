@@ -29,6 +29,7 @@
 
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { getLeaderPermissionsSurface } from '../../base/permissions-surface-registry.js';
 import { getPanelRpcClient, hasLocalDom, type PermissionRpcKind } from '../../kernel/panel-rpc.js';
 import type {
   CameraCaptureRequest,
@@ -467,19 +468,17 @@ async function tryPageRealmCapturePermission(
   kinds: PermissionRpcKind[],
   description: string
 ): Promise<{ ok: true } | { ok: false; message: string } | null> {
-  if (typeof window === 'undefined') return null;
+  const surface = getLeaderPermissionsSurface();
+  if (!surface) return null;
   try {
-    const { getLeaderPermissionsSurface } = await import('../../ui/wc/wc-permissions-registry.js');
-    const surface = getLeaderPermissionsSurface();
-    if (!surface) return null;
-    const result = await surface.prompt({ kinds, description });
+    const result = await surface.prompt({ kinds, description, skipIfGranted: true });
     stopProbeStreamTracks(result.grants);
     if (result.status === 'granted') return { ok: true };
     const detail = result.message ? `: ${result.message}` : '';
     return { ok: false, message: `${result.reason ?? result.status}${detail}` };
   } catch {
-    // wc-permissions-registry isn't reachable from this realm — fall
-    // through to the panel-RPC bridge / legacy capture path.
+    // Surface prompt threw — fall through to the panel-RPC bridge /
+    // legacy capture path rather than failing the command outright.
     return null;
   }
 }
@@ -493,10 +492,12 @@ async function tryPageRealmCapturePermission(
  * `permission-request` panel-RPC handler:
  *
  * - Page realm with a mounted surface → call `surface.prompt(...)`
- *   directly. Granted → `{ ok: true }`; cancelled / error → clean
- *   denial message.
- * - Worker realm → round-trip via `panel-rpc('permission-request')`;
- *   the page-side handler forwards to the same surface.
+ *   directly (`skipIfGranted: true` so a persisted camera/mic origin
+ *   grant skips the in-app Allow/Cancel overlay). Granted → `{ ok: true }`;
+ *   cancelled / error → clean denial message.
+ * - Worker realm → round-trip via `panel-rpc('permission-request')`
+ *   with the same `skipIfGranted` flag; the page-side handler forwards
+ *   to the same surface.
  * - No surface mounted (boot race, test environment without a
  *   leader, …) → fall through with `{ ok: true }` so the legacy
  *   capture path can still surface the browser's native prompt
@@ -520,7 +521,11 @@ export async function requestCapturePermission(
   const panelRpc = getPanelRpcClient();
   if (panelRpc) {
     try {
-      await panelRpc.call('permission-request', { kinds, description }, { timeoutMs: 5 * 60_000 });
+      await panelRpc.call(
+        'permission-request',
+        { kinds, description, skipIfGranted: true },
+        { timeoutMs: 5 * 60_000 }
+      );
       return { ok: true };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

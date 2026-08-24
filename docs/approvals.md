@@ -554,8 +554,22 @@ mounted in the leader tab. The element is published via the page-realm accessor
 `getLeaderPermissionsSurface()` in
 `packages/webapp/src/ui/wc/wc-permissions-registry.ts`, so every caller —
 panel-RPC `permission-request` handler, terminal `<cmd> request` keystroke,
-composer mic / PTT, the cone-driven `runDevicePickerApproval` chat card —
-reaches the same host without an ad-hoc DOM query.
+composer mic / PTT, composer photo / video capture, the cone-driven
+`runDevicePickerApproval` chat card — reaches the same host without an ad-hoc
+DOM query.
+
+Camera and microphone are the kinds whose origin grant the browser already
+persists (`navigator.permissions.query` → `'granted'`). Callers that would
+otherwise re-show SLICC's Allow/Cancel overlay on every invocation pass
+`skipIfGranted: true` on `surface.prompt()` so a persisted grant skips the
+in-app dialog and acquires the stream directly. The browser prompt still
+appears once per session (or until revoked). Gesture-bound kinds (screenshare /
+USB / HID / serial / filesystem / popup) are never skipped. Composer
+photo/video capture (`wc-attach.ts`), the `hear` command, and `ffmpeg
+-f avfoundation` opt in. The panel-RPC `permission-request` handler defaults
+the flag to `true` for camera/mic-only payloads so worker-initiated media
+probes match. Callers that genuinely want a confirmation each time omit the
+flag (or pass `skipIfGranted: false`).
 
 The surface accepts injectable `providers` seams so the same contract works
 across runtimes:
@@ -661,20 +675,23 @@ for the API and HTML conventions.
 
 ### Files
 
-| Path                                                                 | Role                                                                                                                           |
-| -------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------ |
-| `packages/webcomponents/src/overlay/slicc-permissions.ts`            | The `<slicc-permissions>` web component (camera/mic/USB/HID/serial/FS)                                                         |
-| `packages/webapp/src/ui/wc/wc-permissions.ts`                        | `installLeaderPermissionsSurface` — mounts the surface in the leader tab                                                       |
-| `packages/webapp/src/ui/wc/wc-permissions-registry.ts`               | `getLeaderPermissionsSurface()` accessor — the single page-realm seam                                                          |
-| `packages/webapp/src/ui/wc/wc-permissions-providers.ts`              | Extension popup-backed providers (filesystem + usb + hid + serial)                                                             |
-| `packages/webapp/src/kernel/remote-terminal-view.ts`                 | Terminal `<cmd> request` keystroke gesture → `surface.request(kind)`                                                           |
-| `packages/webapp/src/speech/composer-speech.ts`                      | Composer mic / PTT → `surface.request('microphone')`                                                                           |
-| `packages/webapp/src/shell/supplemental-commands/ffmpeg-command.ts`  | `ffmpeg -f avfoundation` camera/video capture → `surface.prompt({kinds})` (panel-RPC `permission-request` in the worker realm) |
-| `packages/webapp/src/shell/supplemental-commands/picker-approval.ts` | Cone-driven `runDevicePickerApproval` chat card (`data-picker=…`)                                                              |
-| `packages/webapp/src/ui/dip.ts`                                      | `handleDipPickerAction` — runtime-aware dispatch for picker dip clicks                                                         |
-| `packages/webapp/src/fs/mount-picker-popup.ts`                       | Extension popup helpers for the FS-Access picker                                                                               |
-| `packages/chrome-extension/picker-popup.html`                        | Extension picker popup shell (mount + USB/serial/HID)                                                                          |
-| `packages/webapp/src/ui/panel-rpc-handlers.ts`                       | `permission-request` panel-RPC op (worker → surface → registry handle)                                                         |
+| Path                                                                 | Role                                                                                                                                                |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `packages/webcomponents/src/overlay/slicc-permissions.ts`            | The `<slicc-permissions>` web component (camera/mic/USB/HID/serial/FS)                                                                              |
+| `packages/webapp/src/ui/wc/wc-permissions.ts`                        | `installLeaderPermissionsSurface` — mounts the surface in the leader tab                                                                            |
+| `packages/webapp/src/base/permissions-surface-registry.ts`           | Leader-surface singleton (bottom of the layer stack so `shell/` can look it up)                                                                     |
+| `packages/webapp/src/ui/wc/wc-permissions-registry.ts`               | `getLeaderPermissionsSurface()` accessor — the single page-realm seam                                                                               |
+| `packages/webapp/src/ui/wc/wc-permissions-providers.ts`              | Extension popup-backed providers (filesystem + usb + hid + serial)                                                                                  |
+| `packages/webapp/src/kernel/remote-terminal-view.ts`                 | Terminal `<cmd> request` keystroke gesture → `surface.request(kind)`                                                                                |
+| `packages/webapp/src/speech/composer-speech.ts`                      | Composer mic / PTT → `surface.request('microphone')`                                                                                                |
+| `packages/webapp/src/ui/wc/wc-attach.ts`                             | Composer photo/video capture → `surface.prompt({ kinds: ['camera','microphone'], skipIfGranted: true })`                                            |
+| `packages/webapp/src/speech/hear.ts`                                 | `hear` mic capture → `surface.prompt({ kinds: ['microphone'], skipIfGranted: true })`                                                               |
+| `packages/webapp/src/shell/supplemental-commands/ffmpeg-command.ts`  | `ffmpeg -f avfoundation` camera/mic capture → `surface.prompt({ kinds, skipIfGranted: true })` (panel-RPC `permission-request` in the worker realm) |
+| `packages/webapp/src/shell/supplemental-commands/picker-approval.ts` | Cone-driven `runDevicePickerApproval` chat card (`data-picker=…`)                                                                                   |
+| `packages/webapp/src/ui/dip.ts`                                      | `handleDipPickerAction` — runtime-aware dispatch for picker dip clicks                                                                              |
+| `packages/webapp/src/fs/mount-picker-popup.ts`                       | Extension popup helpers for the FS-Access picker                                                                                                    |
+| `packages/chrome-extension/picker-popup.html`                        | Extension picker popup shell (mount + USB/serial/HID)                                                                                               |
+| `packages/webapp/src/ui/panel-rpc-handlers.ts`                       | `permission-request` panel-RPC op (worker → surface → registry handle)                                                                              |
 
 ### Manual smoke checklist — `:8787` wrangler harness
 
@@ -687,19 +704,21 @@ For each row: launch the harness (see `docs/architecture.md` §thin-bridge
 harness), then run the action in the listed surface and confirm the listed
 outcome. ✅ = pass, ⚠️ = noted asymmetry, ❌ = regression — fix before merge.
 
-| Action                                                                             | Surface              | Expected                                                                                                                                                              |
-| ---------------------------------------------------------------------------------- | -------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `mount /workspace/scratch`                                                         | Panel terminal       | `picker-popup.html?kind=directory` opens → "Select directory" → chooser → mount appears in file tree                                                                  |
-| Drag a folder onto the panel                                                       | Folder drop          | `slicc-mount-pending` fires → mount appears (no popup; drop is the gesture)                                                                                           |
-| `usb request`                                                                      | Panel terminal       | `picker-popup.html?kind=usb-device` opens → chooser → `usb list` shows handle `usb1`                                                                                  |
-| Agent issues `usb request` (cone)                                                  | Cone-driven approval | Chat card "Connect USB device" → click → popup opens → grant → handle returned, no silent no-op                                                                       |
-| `hid request --vid 0x594d`                                                         | Panel terminal       | Popup with filters applied → chooser → multi-interface device registers EVERY matching interface                                                                      |
-| Agent issues `hid request`                                                         | Cone-driven approval | Card click → popup → grant → handle returned                                                                                                                          |
-| `serial request`                                                                   | Panel terminal       | `picker-popup.html?kind=serial-port` opens → chooser → `serial list` shows handle `serial1`                                                                           |
-| Agent issues `serial request`                                                      | Cone-driven approval | Card click → popup → grant → handle returned                                                                                                                          |
-| `esptool flash …` without `--port`                                                 | Panel terminal       | Routes through `serial request` popup; once granted, esptool drives the same handle                                                                                   |
-| Composer mic button (push-to-talk)                                                 | Composer             | `getUserMedia` prompt appears in the hosted leader tab (extension and standalone alike)                                                                               |
-| `ffmpeg -f avfoundation -i 0 -frames:v 1 photo.jpg` (after `ipk add @ffmpeg/core`) | Panel terminal       | `<slicc-permissions>` pre-prompt for `camera` → Allow → browser prompt → photo lands in VFS; denying surfaces a clean `camera permission denied` error and no capture |
+| Action                                                                             | Surface              | Expected                                                                                                                                                                                                               |
+| ---------------------------------------------------------------------------------- | -------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `mount /workspace/scratch`                                                         | Panel terminal       | `picker-popup.html?kind=directory` opens → "Select directory" → chooser → mount appears in file tree                                                                                                                   |
+| Drag a folder onto the panel                                                       | Folder drop          | `slicc-mount-pending` fires → mount appears (no popup; drop is the gesture)                                                                                                                                            |
+| `usb request`                                                                      | Panel terminal       | `picker-popup.html?kind=usb-device` opens → chooser → `usb list` shows handle `usb1`                                                                                                                                   |
+| Agent issues `usb request` (cone)                                                  | Cone-driven approval | Chat card "Connect USB device" → click → popup opens → grant → handle returned, no silent no-op                                                                                                                        |
+| `hid request --vid 0x594d`                                                         | Panel terminal       | Popup with filters applied → chooser → multi-interface device registers EVERY matching interface                                                                                                                       |
+| Agent issues `hid request`                                                         | Cone-driven approval | Card click → popup → grant → handle returned                                                                                                                                                                           |
+| `serial request`                                                                   | Panel terminal       | `picker-popup.html?kind=serial-port` opens → chooser → `serial list` shows handle `serial1`                                                                                                                            |
+| Agent issues `serial request`                                                      | Cone-driven approval | Card click → popup → grant → handle returned                                                                                                                                                                           |
+| `esptool flash …` without `--port`                                                 | Panel terminal       | Routes through `serial request` popup; once granted, esptool drives the same handle                                                                                                                                    |
+| Composer mic button (push-to-talk)                                                 | Composer             | `getUserMedia` prompt appears in the hosted leader tab (extension and standalone alike)                                                                                                                                |
+| Composer "Take a photo" (add-menu)                                                 | Composer             | First capture: SLICC Allow/Cancel then the browser camera/mic prompt; later captures skip the in-app dialog and open the inline capture surface                                                                        |
+| `ffmpeg -f avfoundation -i 0 -frames:v 1 photo.jpg` (after `ipk add @ffmpeg/core`) | Panel terminal       | First capture: `<slicc-permissions>` Allow/Cancel then the browser camera prompt → photo lands in VFS; later captures skip the in-app dialog. Denying surfaces a clean `camera permission denied` error and no capture |
+| `hear` (mic capture)                                                               | Panel terminal       | First capture: SLICC Allow/Cancel then the browser mic prompt; later captures skip the in-app dialog and transcribe                                                                                                    |
 
 Cancel / deny on each row to confirm the surface emits `slicc-permission-deny`
 with `reason: 'cancelled'`; the picker dip should not stay open.
@@ -730,7 +749,22 @@ activation, and the request is routed through the WC `<slicc-permissions>`
 surface mounted in the hosted leader tab so the prompt shows in a context that
 can host it. `packages/webapp/src/speech/hear.ts` shares the same acquisition
 for the `hear` shell command, falling back to a direct `getUserMedia` when no
-permission surface is mounted (early boot / non-WC realms).
+permission surface is mounted (early boot / non-WC realms). `hear` passes
+`skipIfGranted: true` so a persisted origin grant does not re-show SLICC's
+Allow/Cancel overlay on every invocation.
+
+Composer photo/video capture (`packages/webapp/src/ui/wc/wc-attach.ts`) probes
+camera + microphone through the same surface before mounting
+`<slicc-composer-capture>`. It also sets `skipIfGranted: true`: the first
+add-menu capture still shows SLICC's dialog (so Allow can prime both kinds
+under one gesture), then later captures skip the in-app overlay the way the
+browser already skips its own camera/mic prompt.
+
+`ffmpeg -f avfoundation` (`packages/webapp/src/shell/supplemental-commands/ffmpeg-command.ts`)
+gates camera/mic the same way — page-realm `surface.prompt({ skipIfGranted: true })`,
+worker-realm `permission-request` with the same flag. The panel-RPC handler
+also defaults `skipIfGranted` on for camera/mic-only payloads so a forgotten
+flag still skips.
 
 ### Files
 
@@ -738,7 +772,9 @@ permission surface is mounted (early boot / non-WC realms).
 | -------------------------------------------------------------------------- | ------------------------------------------------------ |
 | `packages/webapp/src/shell/supplemental-commands/screencapture-command.ts` | `getDisplayMedia` invocation                           |
 | `packages/webapp/src/speech/composer-speech.ts`                            | push-to-talk `getUserMedia` via the permission surface |
-| `packages/webapp/src/speech/hear.ts`                                       | `hear` command mic acquisition (surface or direct)     |
+| `packages/webapp/src/speech/hear.ts`                                       | `hear` command mic acquisition (`skipIfGranted`)       |
+| `packages/webapp/src/ui/wc/wc-attach.ts`                                   | Composer photo/video capture (`skipIfGranted`)         |
+| `packages/webapp/src/shell/supplemental-commands/ffmpeg-command.ts`        | `ffmpeg -f avfoundation` camera/mic (`skipIfGranted`)  |
 
 ---
 
