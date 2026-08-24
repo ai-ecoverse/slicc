@@ -90,7 +90,6 @@ import {
   type LeaderRunNewSessionDetail,
 } from './leader-session-events.js';
 import type { WcChatController } from './wc-chat-controller.js';
-import { installFloatbarOnline } from './wc-floatbar-online.js';
 import { createFollowerModelSurface } from './wc-follower-model-surface.js';
 import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
 import { getLeaderPermissionsSurface } from './wc-permissions-registry.js';
@@ -114,8 +113,6 @@ export interface WcTrayDeps {
   agentHandle: AgentHandle;
   openFs(): Promise<import('../../kernel/local-vfs-client.js').LocalVfsClient>;
   openWriter(): Promise<import('../../kernel/writable-vfs-client.js').WritableVfsClient>;
-  /** Floatbar label to restore when the last follower leaves. */
-  baseFloatLabel?: string;
   window: Window;
   log: BootStageLogger;
 }
@@ -396,15 +393,8 @@ function applyFollowerPresentation(
     state.persistenceGuard.deactivate();
   }
   // The count used to be smuggled into the label string; it now has its own
-  // hoverable/clickable segment, so the label goes back to naming the float.
-  deps.refs.floatbar.setAttribute(
-    'label',
-    count > 0 ? 'tray · live' : (deps.baseFloatLabel ?? 'standalone · live')
-  );
-  // A peer still handshaking is mirrored to the shim and shown in the Monitor,
-  // but it is NOT counted by the registry — so it must not appear in the pill
-  // either, or the segment would contradict its own count. Anything without an
-  // explicit `connecting` state stays visible.
+  // hoverable/clickable segment — the label names the float kind only
+  // (see installFloatbarStatus in wc-floatbar-online.ts).
   (deps.refs.floatbar as SliccFloatbar).followers = toFollowerHudRows(
     followers.filter((follower) => follower.peerState !== 'connecting')
   );
@@ -1018,11 +1008,6 @@ export async function wireWcTray(deps: WcTrayDeps): Promise<WcTrayHandle> {
   });
 
   startInitialRole(deps, state, leaderOptions, wireLeaderHooks, lockManager);
-
-  // Drive the floatbar's `online` dot from the tray statuses (#1707). This is
-  // the kernel float's install point (covers both roles); the no-kernel
-  // follower mount installs the same helper in `wc-follower.ts`.
-  installFloatbarOnline(deps.refs.floatbar);
 
   subscribeToLeaderTrayRuntimeStatus((status) => {
     win.localStorage.setItem('slicc.leaderTrayStatus', JSON.stringify(status));

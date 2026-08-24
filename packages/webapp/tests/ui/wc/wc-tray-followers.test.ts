@@ -199,7 +199,6 @@ describe('WC tray connected follower mapping', () => {
     const deps = {
       refs: { floatbar },
       client: {},
-      baseFloatLabel: 'standalone · live',
       window: { dispatchEvent },
     } as unknown as Parameters<typeof createLeaderOptionsFactory>[0];
     const state = {
@@ -219,7 +218,7 @@ describe('WC tray connected follower mapping', () => {
 
     options.onFollowerCountChanged?.(0);
 
-    expect(floatbar.setAttribute).toHaveBeenCalledWith('label', 'standalone · live');
+    expect(floatbar.setAttribute).not.toHaveBeenCalledWith('label', expect.anything());
     expect(storage.setItem).toHaveBeenCalledWith(
       'slicc.leaderTrayFollowers',
       expect.stringContaining('"peerState":"connecting"')
@@ -279,8 +278,8 @@ describe('WC tray connected follower mapping', () => {
       {} as Parameters<typeof createLeaderOptionsFactory>[2]
     )('https://tray.example').onFollowerCountChanged?.(1);
 
-    // The count no longer rides in the label string — it has its own segment.
-    expect(floatbar.setAttribute).toHaveBeenCalledWith('label', 'tray · live');
+    // The count lives in the followers segment only — label is not mutated.
+    expect(floatbar.setAttribute).not.toHaveBeenCalledWith('label', expect.anything());
     expect((floatbar as unknown as { followers: unknown[] }).followers).toEqual([
       {
         id: 'follower-cli-1',

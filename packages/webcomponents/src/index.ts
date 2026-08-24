@@ -181,6 +181,20 @@ export {
   panelMetaOf,
   SliccPanel,
 } from './panel/slicc-panel.js';
+export type {
+  FloatbarConnection,
+  FloatbarFloatKind,
+  FloatbarStatus,
+  FloatbarTrayRole,
+} from './primitives/floatbar-status.js';
+export {
+  connectionLabel,
+  defaultFloatLabel,
+  floatKindIcon,
+  floatKindLabel,
+  statusTipFragment,
+  trayRoleLabel,
+} from './primitives/floatbar-status.js';
 export { SliccAvatar } from './primitives/slicc-avatar.js';
 export {
   type CostOverlayModel,

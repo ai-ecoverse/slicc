@@ -1,11 +1,17 @@
 // @vitest-environment jsdom
+import '@slicc/webcomponents';
 import { beforeEach, describe, expect, it } from 'vitest';
 import {
+  getFollowerTrayRuntimeStatus,
   setFollowerStalled,
   setFollowerTrayRuntimeStatus,
 } from '../../../src/scoops/tray-follower-status.js';
 import { setLeaderTrayRuntimeStatus } from '../../../src/scoops/tray-leader.js';
-import { installFloatbarOnline } from '../../../src/ui/wc/wc-floatbar-online.js';
+import {
+  installFloatbarOnline,
+  installFloatbarStatus,
+  mergeTrayStatus,
+} from '../../../src/ui/wc/wc-floatbar-online.js';
 
 const INACTIVE_FOLLOWER = {
   state: 'inactive' as const,
@@ -24,78 +30,105 @@ function followerStatus(state: 'inactive' | 'connecting' | 'connected' | 'reconn
   return { ...INACTIVE_FOLLOWER, state };
 }
 
-describe('installFloatbarOnline (#1707)', () => {
+describe('mergeTrayStatus', () => {
+  it('prefers leader role while leading', () => {
+    expect(
+      mergeTrayStatus({ state: 'leader', session: null, error: null }, followerStatus('inactive'))
+    ).toEqual({ connection: 'live', trayRole: 'leader' });
+  });
+
+  it('maps follower stalled overlay to stalled connection', () => {
+    setFollowerTrayRuntimeStatus(followerStatus('connected'));
+    setFollowerStalled(true);
+    expect(
+      mergeTrayStatus(
+        { state: 'inactive', session: null, error: null },
+        getFollowerTrayRuntimeStatus()
+      )
+    ).toEqual({ connection: 'stalled', trayRole: 'follower' });
+    setFollowerStalled(false);
+  });
+});
+
+describe('installFloatbarStatus', () => {
   let floatbar: HTMLElement;
 
   beforeEach(() => {
-    // Reset both module-global statuses so test order can't leak state.
     setFollowerTrayRuntimeStatus(followerStatus('inactive'));
     setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
-    floatbar = document.createElement('div');
+    floatbar = document.createElement('slicc-floatbar');
   });
 
-  it('seeds the current state on install (already-connected follower lights the dot)', () => {
+  it('sets float kind, label, and status beacon attrs on install', () => {
     setFollowerTrayRuntimeStatus(followerStatus('connected'));
-    const uninstall = installFloatbarOnline(floatbar);
+    const uninstall = installFloatbarStatus(floatbar, { floatKind: 'npx' });
+    expect(floatbar.getAttribute('label')).toBe('npx');
+    expect(floatbar.getAttribute('float-kind')).toBe('npx');
+    expect(floatbar.getAttribute('connection')).toBe('live');
+    expect(floatbar.getAttribute('tray-role')).toBe('follower');
     expect(floatbar.hasAttribute('online')).toBe(true);
     uninstall();
   });
 
-  it('lights the dot when the follower connects and clears it on error/reconnecting', () => {
-    const uninstall = installFloatbarOnline(floatbar);
-    expect(floatbar.hasAttribute('online')).toBe(false);
+  it('updates connection and tray role on leader transitions', () => {
+    const uninstall = installFloatbarStatus(floatbar, { floatKind: 'extension' });
+    expect(floatbar.getAttribute('connection')).toBe('offline');
+    expect(floatbar.hasAttribute('tray-role')).toBe(false);
 
+    setLeaderTrayRuntimeStatus({ state: 'leader', session: null, error: null });
+    expect(floatbar.getAttribute('connection')).toBe('live');
+    expect(floatbar.getAttribute('tray-role')).toBe('leader');
+
+    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
+    expect(floatbar.getAttribute('connection')).toBe('offline');
+    expect(floatbar.hasAttribute('tray-role')).toBe(false);
+    uninstall();
+  });
+
+  it('maps follower error/reconnecting to offline beacon states', () => {
+    const uninstall = installFloatbarStatus(floatbar, { floatKind: 'npx' });
     setFollowerTrayRuntimeStatus(followerStatus('connected'));
-    expect(floatbar.hasAttribute('online')).toBe(true);
+    expect(floatbar.getAttribute('connection')).toBe('live');
 
-    // The exact regression from #1707: a transient drop must read offline…
     setFollowerTrayRuntimeStatus(followerStatus('error'));
-    expect(floatbar.hasAttribute('online')).toBe(false);
-    setFollowerTrayRuntimeStatus(followerStatus('reconnecting'));
+    expect(floatbar.getAttribute('connection')).toBe('error');
     expect(floatbar.hasAttribute('online')).toBe(false);
 
-    // …and recovery must light it again without any manual action.
+    setFollowerTrayRuntimeStatus(followerStatus('reconnecting'));
+    expect(floatbar.getAttribute('connection')).toBe('reconnecting');
+
     setFollowerTrayRuntimeStatus(followerStatus('connected'));
-    expect(floatbar.hasAttribute('online')).toBe(true);
+    expect(floatbar.getAttribute('connection')).toBe('live');
     uninstall();
   });
 
-  it('keeps the dot lit through a leader stall (stalled is still connected)', () => {
-    const uninstall = installFloatbarOnline(floatbar);
+  it('keeps live connection through a follower stall', () => {
+    const uninstall = installFloatbarStatus(floatbar, { floatKind: 'npx' });
     setFollowerTrayRuntimeStatus(followerStatus('connected'));
     setFollowerStalled(true);
+    expect(floatbar.getAttribute('connection')).toBe('stalled');
     expect(floatbar.hasAttribute('online')).toBe(true);
     setFollowerStalled(false);
-    expect(floatbar.hasAttribute('online')).toBe(true);
+    expect(floatbar.getAttribute('connection')).toBe('live');
     uninstall();
   });
 
-  it('lights the dot while leading a tray and clears it when the tray goes inactive', () => {
-    const uninstall = installFloatbarOnline(floatbar);
-    setLeaderTrayRuntimeStatus({ state: 'leader', session: null, error: null });
-    expect(floatbar.hasAttribute('online')).toBe(true);
-    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
-    expect(floatbar.hasAttribute('online')).toBe(false);
-    uninstall();
-  });
-
-  it('either role alone keeps the dot lit (leader OR follower link)', () => {
-    const uninstall = installFloatbarOnline(floatbar);
-    setLeaderTrayRuntimeStatus({ state: 'leader', session: null, error: null });
+  it('uninstall stops driving attrs', () => {
+    const uninstall = installFloatbarStatus(floatbar, { floatKind: 'npx' });
     setFollowerTrayRuntimeStatus(followerStatus('connected'));
-    // Dropping one role while the other is live must not clear the dot.
-    setLeaderTrayRuntimeStatus({ state: 'inactive', session: null, error: null });
-    expect(floatbar.hasAttribute('online')).toBe(true);
-    uninstall();
-  });
-
-  it('uninstall stops driving the attribute', () => {
-    const uninstall = installFloatbarOnline(floatbar);
-    setFollowerTrayRuntimeStatus(followerStatus('connected'));
-    expect(floatbar.hasAttribute('online')).toBe(true);
+    expect(floatbar.getAttribute('connection')).toBe('live');
     uninstall();
     setFollowerTrayRuntimeStatus(followerStatus('error'));
-    // No longer subscribed — attribute stays as-is after uninstall.
+    expect(floatbar.getAttribute('connection')).toBe('live');
+  });
+});
+
+describe('installFloatbarOnline (legacy)', () => {
+  it('defaults float kind to standalone', () => {
+    setFollowerTrayRuntimeStatus(followerStatus('connected'));
+    const floatbar = document.createElement('slicc-floatbar');
+    installFloatbarOnline(floatbar);
+    expect(floatbar.getAttribute('float-kind')).toBe('standalone');
     expect(floatbar.hasAttribute('online')).toBe(true);
   });
 });

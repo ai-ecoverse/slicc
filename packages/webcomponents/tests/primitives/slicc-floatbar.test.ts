@@ -66,21 +66,46 @@ describe('slicc-floatbar', () => {
     expect(label?.textContent).toBe('<script>x</script>');
   });
 
-  describe('the status dot (online state)', () => {
+  describe('the status beacon (explicit connection / float-kind / tray-role)', () => {
     it('is absent by default', () => {
       const el = document.createElement('slicc-floatbar');
       document.body.appendChild(el);
-      expect(el.shadowRoot?.querySelector('.fdot')).toBeNull();
+      expect(el.shadowRoot?.querySelector('.beacon')).toBeNull();
     });
 
-    it('appears when online, exposing a `dot` part, painted green', () => {
+    it('appears with a live green ring when status attrs are set', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.setAttribute('float-kind', 'npx');
+      el.setAttribute('connection', 'live');
+      document.body.appendChild(el);
+      const beacon = el.shadowRoot?.querySelector('.beacon') as HTMLElement;
+      expect(beacon).not.toBeNull();
+      expect(beacon.getAttribute('part')).toContain('dot');
+      expect(beacon.dataset.connection).toBe('live');
+      const ring = el.shadowRoot?.querySelector('.beacon__ring') as HTMLElement;
+      expect(getComputedStyle(ring).backgroundColor).toBe('rgb(34, 197, 94)');
+    });
+
+    it('renders float-kind icon and leader role pip', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.setAttribute('float-kind', 'npx');
+      el.setAttribute('connection', 'live');
+      el.setAttribute('tray-role', 'leader');
+      document.body.appendChild(el);
+      expect(el.shadowRoot?.querySelector('.beacon__icon svg')).not.toBeNull();
+      expect(el.shadowRoot?.querySelector('.beacon__role svg')).not.toBeNull();
+      expect(el.status.trayRole).toBe('leader');
+    });
+  });
+
+  describe('the legacy status dot (online only)', () => {
+    it('uses the plain green fdot when only online is set', () => {
       const el = document.createElement('slicc-floatbar');
       el.online = true;
       document.body.appendChild(el);
       const dot = el.shadowRoot?.querySelector('.fdot') as HTMLElement;
       expect(dot).not.toBeNull();
-      expect(dot.getAttribute('part')).toBe('dot');
-      // #22c55e === rgb(34, 197, 94)
+      expect(el.shadowRoot?.querySelector('.beacon')).toBeNull();
       expect(getComputedStyle(dot).backgroundColor).toBe('rgb(34, 197, 94)');
     });
 
@@ -327,7 +352,7 @@ describe('slicc-floatbar', () => {
       // decorative — the accessible name rides the host title, not the tip node
       expect(tip.getAttribute('aria-hidden')).toBe('true');
       expect(tip.textContent).toBe(
-        'CLI · tray · 1 follower · $2.41/h · recency-weighted session avg · online'
+        'CLI · tray · 1 follower · online · $2.41/h · recency-weighted session avg'
       );
     });
 
@@ -349,7 +374,7 @@ describe('slicc-floatbar', () => {
       const el = document.createElement('slicc-floatbar');
       document.body.appendChild(el);
       expect(el.shadowRoot?.querySelector('.tip')?.textContent).toBe(
-        'CLI float · $0.00/h · recency-weighted session avg · offline'
+        'CLI float · offline · $0.00/h · recency-weighted session avg'
       );
     });
 
@@ -371,7 +396,7 @@ describe('slicc-floatbar', () => {
     it('exposes the tip text as an accessible host title only when collapsed', () => {
       const el = mountAt(640);
       expect(el.getAttribute('title')).toBe(
-        'CLI · tray · 1 follower · $2.41/h · recency-weighted session avg · online'
+        'CLI · tray · 1 follower · online · $2.41/h · recency-weighted session avg'
       );
     });
 
