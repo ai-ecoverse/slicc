@@ -359,6 +359,43 @@ own.
     to talk. `stashQueued` / `restoreQueued` hold it across the round trip
     (re-installed after the returning unit's replay, which clears the pile of
     its own accord); landing on a _different_ cone cancels it as before.
+  - **The held pile is reconciled against the backend on the way home**
+    ([#2354](https://github.com/ai-ecoverse/slicc/issues/2354)). The snapshot
+    the panel is holding is a guess about a queue it stopped watching. The
+    authority is the orchestrator's own pending list, which now rides the
+    `scoop-messages-replaced` envelope as `queuedIds` — the same envelope as
+    the replay, so the two describe one instant of backend state rather than
+    two round trips that can disagree. `Orchestrator.getQueuedMessageIds` →
+    `ScoopMessageRouter.getQueuedMessageIds` reads `messageQueues` in
+    delivery order; ids only, since the panel already owns the content of
+    everything it queued and cannot draw a card for an id it has never seen.
+    `#applyPendingQueueRestore` then runs three passes: drop what the replay
+    already shows **unless the backend still lists it** — presence in the
+    replay does not mean consumed, because `Bridge.handleUserMessage` buffers
+    every prompt the moment it is sent (which is why
+    `handleDeleteQueuedMessage` has to scrub `messageBuffers` too), so a
+    still-pending prompt keeps its card and `loadMessages` drops it from the
+    RENDERED transcript instead, or it would show as both a bubble and a
+    card — re-sort the rest onto the backend's order (a lick or
+    a tray-side prompt that slotted in while the user was reading is no
+    longer rendered behind prompts that run after it), and place what the
+    backend does not list — while a turn is **running** that is the
+    mid-restore consume race, so it flushes into the thread as an ordinary
+    bubble; while idle nothing can be mid-consumption, so it is an unacked
+    local draft and keeps its card, appended last. This is why
+    `selectScoop` publishes `setProcessing` **before** the replay lands: the
+    reconcile needs the turn state to read, and the rising edge itself
+    correctly finds an empty pile — a prompt the backend still lists belongs
+    to the _next_ turn.
+  - **`queuedIds` absent ≠ empty.** A tray follower's local orchestrator is
+    deliberately idle (`handleUserMessage` hands the prompt to
+    `followerSync` and returns), so its empty queue says nothing about what
+    the leader still holds; the bridge omits the field there, and the panel
+    reads the omission as "no authoritative answer" and keeps the held order.
+    An empty array is a real answer. Without one the panel keeps the older
+    replay-wins reading rather than guessing a card into existence — a
+    follower cannot tell a queued prompt from a consumed one, and inventing
+    the difference would re-create the phantom card #2312 removed.
   - `feed_scoop` from the cone stays the only way to send a scoop input, and
     the `scoop:<name>` URL context still opens this read-only view.
   - **iOS is not wired yet.** The wire already carries what it needs

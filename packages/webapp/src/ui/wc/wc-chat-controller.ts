@@ -455,22 +455,95 @@ export class WcChatController {
   }
 
   /**
-   * Re-attach a queue held across a read-only detour, RECONCILED against the
-   * replay that just landed (Codex P2 on #2312). While the user was away the
-   * cone's turn may have consumed some of those prompts; they are already in
-   * `messages`, so re-adding the raw snapshot would show them twice — once as
-   * a real bubble and once as a queue card that never clears. Only prompts
-   * the replay does not know about are still queued. One-shot: a later reload
-   * finds nothing pending and behaves exactly as before.
+   * Held prompts the backend still lists as PENDING (#2354). These are the
+   * ids that must render as queue cards rather than as transcript rows: the
+   * replay carries them because every prompt is buffered on send, but the
+   * orchestrator has not reached them, so they are still the user's to
+   * reorder or cancel.
+   *
+   * Empty without an authoritative `backendQueuedIds` — a tray follower
+   * cannot tell a queued prompt from a consumed one, so it keeps the older
+   * replay-wins reading rather than guessing a card into existence.
+   *
+   * Private-but-not-`#` so {@link loadMessages} can consult it before the
+   * render and {@link #applyPendingQueueRestore} after it, from one rule.
    */
-  #applyPendingQueueRestore(messages: readonly ChatMessage[]): void {
+  private heldBackendPendingIds(backendQueuedIds?: readonly string[]): Set<string> {
+    if (!this.#pendingQueueRestore || !backendQueuedIds?.length) return new Set();
+    const pending = new Set(backendQueuedIds);
+    return new Set(this.#pendingQueueRestore.filter((m) => pending.has(m.id)).map((m) => m.id));
+  }
+
+  /**
+   * Re-attach a queue held across a read-only detour, RECONCILED against the
+   * replay that just landed AND against the backend's own pending queue
+   * (Codex P2 on #2312, #2354).
+   *
+   * Three passes, in order:
+   *
+   * 1. **Replay dedupe, overridden by the backend.** While the user was away
+   *    the cone's turn may have consumed some of those prompts; they are
+   *    already in `messages`, so re-adding the raw snapshot would show them
+   *    twice — once as a real bubble and once as a queue card that never
+   *    clears. But presence in the replay does NOT mean consumed:
+   *    `Bridge.handleUserMessage` pushes every prompt into `messageBuffers`
+   *    the moment it is sent, queued or not, so the replay carries prompts
+   *    the orchestrator has not reached yet (which is exactly why
+   *    `handleDeleteQueuedMessage` has to scrub the buffer too). An id the
+   *    backend still lists as pending therefore survives the dedupe and
+   *    keeps its card — and {@link loadMessages} drops it from the RENDERED
+   *    transcript, or it would show as both a bubble and a card.
+   * 2. **Backend order wins.** `backendQueuedIds` rides the same envelope as
+   *    `messages`, so it is a consistent snapshot of what the orchestrator
+   *    will actually deliver next, in the order it will deliver it. The held
+   *    pile is re-sorted onto that order — a lick or a tray-side prompt that
+   *    slotted in while the user was reading a scoop is no longer rendered
+   *    behind prompts the backend will run after it.
+   * 3. **Leftovers.** A held item the backend does not list is either a local
+   *    draft whose enqueue has not been acked yet, or one the cone dequeued
+   *    into a turn between the replay snapshot and now (the mid-restore
+   *    consume race — it is in neither list). While a turn is RUNNING the
+   *    second reading is the live one, so those flush into the thread as
+   *    ordinary bubbles rather than sitting as cards no rising edge will ever
+   *    clear. While idle nothing can be mid-consumption, so they stay queued,
+   *    appended after the backend-ordered ones.
+   *
+   * `backendQueuedIds` of `undefined` means "no authoritative answer" (a tray
+   * follower, an incidental replace) and skips passes 2 and 3 entirely — the
+   * held order is kept, which is the pre-#2354 behaviour. An EMPTY array is
+   * an answer: the backend queue is genuinely empty.
+   *
+   * One-shot: a later reload finds nothing pending and behaves exactly as
+   * before.
+   */
+  #applyPendingQueueRestore(
+    messages: readonly ChatMessage[],
+    backendQueuedIds?: readonly string[]
+  ): void {
     if (!this.#pendingQueueRestore) return;
+    const stillPending = this.heldBackendPendingIds(backendQueuedIds);
     const replayed = new Set(messages.map((m) => m.id));
-    const stillQueued = this.#pendingQueueRestore.filter((m) => !replayed.has(m.id));
+    const held = this.#pendingQueueRestore.filter(
+      (m) => !replayed.has(m.id) || stillPending.has(m.id)
+    );
     this.#pendingQueueRestore = null;
-    if (stillQueued.length === 0) return;
-    this.#queued = stillQueued;
+    if (held.length === 0) return;
+    if (!backendQueuedIds) {
+      this.#queued = held;
+      this.#fireQueuedChange();
+      return;
+    }
+    const rank = new Map(backendQueuedIds.map((id, index) => [id, index]));
+    const known = held
+      .filter((m) => rank.has(m.id))
+      .sort((a, b) => (rank.get(a.id) ?? 0) - (rank.get(b.id) ?? 0));
+    const unlisted = held.filter((m) => !rank.has(m.id));
+    // Ids the backend still holds but this panel has no content for are
+    // skipped: a queue card cannot be materialised from an id alone, and the
+    // pile the user is owed is by definition the one they were shown.
+    this.#queued = this.#processing ? known : [...known, ...unlisted];
     this.#fireQueuedChange();
+    if (this.#processing) for (const message of unlisted) this.#appendMessage(message);
   }
 
   /**
@@ -529,7 +602,7 @@ export class WcChatController {
   }
 
   /** Replace the whole thread with a scoop's canonical history. */
-  loadMessages(messages: readonly ChatMessage[]): void {
+  loadMessages(messages: readonly ChatMessage[], backendQueuedIds?: readonly string[]): void {
     for (const id of this.#els.keys()) this.#onMessageDisposed?.(id);
     // A scoop switch / session reload also drops any in-flight tool_ui
     // dips — the new thread has no place for the old approval card and
@@ -558,9 +631,15 @@ export class WcChatController {
       this.#queued = [];
     }
     if (hadQueued) this.#fireQueuedChange();
-    this.#applyPendingQueueRestore(messages);
+    // A held prompt the backend still has QUEUED belongs in the pile, not in
+    // the transcript — it is in `messages` only because every prompt is
+    // buffered on send (#2354). Rendering it here as well would show it
+    // twice, as a bubble and as the card the restore is about to install.
+    const heldPending = this.heldBackendPendingIds(backendQueuedIds);
+    const rendered =
+      heldPending.size > 0 ? messages.filter((m) => !heldPending.has(m.id)) : messages;
     // Runs of same-channel licks render as ONE collated card ("×2" pill).
-    this.#messages = collateLickMessages(messages);
+    this.#messages = collateLickMessages(rendered);
     // A canonical replay can land mid-turn (rehydrate after a scoop switch /
     // frozen-session thaw / remount). When a message is still streaming, keep
     // the stream machine pointed at that bubble so the resumed deltas extend
@@ -608,6 +687,13 @@ export class WcChatController {
     // post-(re)connect on the leader; auto-resubmit a cone turn dropped by a
     // stale-asset recovery reload once the thread is in place (consume-once).
     this.#maybeReplayDroppedTurn();
+    // LAST, after the wholesale re-render: a queue held across a read-only
+    // detour can resolve to bubbles as well as cards (see the method), and
+    // `#els`/`#messages` are rebuilt from scratch above, so anything appended
+    // earlier would be discarded. `#maybeReplayDroppedTurn` cannot be
+    // disturbed by it — that path bails while `#processing`, which is exactly
+    // when the restore appends.
+    this.#applyPendingQueueRestore(messages, backendQueuedIds);
   }
 
   /**

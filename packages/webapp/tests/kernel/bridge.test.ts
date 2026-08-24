@@ -2055,6 +2055,7 @@ describe('Bridge request-scoop-transcript', () => {
       ]),
       handleMessage: vi.fn().mockResolvedValue(undefined),
       getScoopContext: vi.fn(() => undefined),
+      getQueuedMessageIds: vi.fn(() => []),
     } as any);
   });
 
@@ -2130,6 +2131,7 @@ describe('Bridge request-scoop-chat-messages', () => {
       ]),
       handleMessage: vi.fn().mockResolvedValue(undefined),
       getScoopContext: vi.fn(() => undefined),
+      getQueuedMessageIds: vi.fn(() => []),
     } as any);
   });
 
@@ -2265,6 +2267,7 @@ describe('Bridge handlePanelMessage dispatch', () => {
       deleteQueuedMessage: vi.fn().mockResolvedValue(undefined),
       clearScoopMessages: vi.fn().mockResolvedValue(undefined),
       getScoopContext: vi.fn(() => undefined),
+      getQueuedMessageIds: vi.fn(() => []),
       createScoopTab: vi.fn(),
     };
     await bridge.bind(mockOrchestrator);
@@ -2808,6 +2811,7 @@ describe('Bridge handleRequestScoopMessages', () => {
       ]),
       handleMessage: vi.fn().mockResolvedValue(undefined),
       getScoopContext: vi.fn(() => undefined),
+      getQueuedMessageIds: vi.fn(() => []),
     };
     await bridge.bind(mockOrchestrator);
   });
@@ -2824,6 +2828,59 @@ describe('Bridge handleRequestScoopMessages', () => {
       | undefined;
     expect(replaced?.payload.messages).toHaveLength(1);
     expect(replaced?.payload.messages[0].id).toBe('u1');
+  });
+
+  it('carries the orchestrator queue snapshot as queuedIds (#2354)', async () => {
+    // The panel reconciles a queue it held across a read-only detour against
+    // this list, so it must ride the SAME envelope as the messages — the two
+    // have to describe one instant of backend state.
+    mockOrchestrator.getQueuedMessageIds = vi.fn(() => ['q2', 'q1']);
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push({ id: 'u1', role: 'user', content: 'hi', timestamp: 100 });
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-messages',
+      scoopJid: 'cone_1',
+    });
+    const replaced = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    ) as any;
+    expect(replaced?.payload.queuedIds).toEqual(['q2', 'q1']);
+    expect(mockOrchestrator.getQueuedMessageIds).toHaveBeenCalledWith('cone_1');
+  });
+
+  it('reports an EMPTY backend queue as [], not as silence', async () => {
+    // `[]` and `undefined` are different answers on the wire: the first says
+    // the backend holds nothing, the second says nobody could say.
+    mockOrchestrator.getQueuedMessageIds = vi.fn(() => []);
+    (bridge as any).sessionStore.load = vi.fn().mockResolvedValue(undefined);
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-messages',
+      scoopJid: 'cone_1',
+    });
+    const replaced = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    ) as any;
+    expect(replaced?.payload.messages).toEqual([]);
+    expect(replaced?.payload.queuedIds).toEqual([]);
+  });
+
+  it('omits queuedIds in follower mode', async () => {
+    // A follower's local orchestrator is deliberately kept out of the way, so
+    // its empty queue says nothing about what the LEADER still holds.
+    mockOrchestrator.getQueuedMessageIds = vi.fn(() => []);
+    (bridge as any).setFollowerSync({ sendMessage: vi.fn() });
+    const buf = (bridge as any).getBuffer('cone_1');
+    buf.push({ id: 'u1', role: 'user', content: 'hi', timestamp: 100 });
+    await (bridge as any).handlePanelMessage({
+      type: 'request-scoop-messages',
+      scoopJid: 'cone_1',
+    });
+    const replaced = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced'
+    ) as any;
+    expect(replaced?.payload.queuedIds).toBeUndefined();
+    expect(mockOrchestrator.getQueuedMessageIds).not.toHaveBeenCalled();
+    (bridge as any).setFollowerSync(null);
   });
 
   it('is a no-op when the orchestrator is not bound', async () => {

@@ -1082,6 +1082,19 @@ export interface ScoopMessagesReplacedMsg {
     model?: string;
     usage?: ChatMessage['usage'];
   }>;
+  /**
+   * Ids of the messages still pending in the orchestrator's queue for this
+   * scoop, in delivery order, snapshotted with `messages` (#2354). Present
+   * only on a `request-scoop-messages` reply served by a LEADER orchestrator;
+   * a follower's snapshot (whose authoritative queue lives on the leader) and
+   * every incidental replace leave it `undefined`, which the panel reads as
+   * "no authoritative answer" and falls back to reconciling against the
+   * replay alone.
+   *
+   * An empty array is therefore meaningful — it says the backend queue is
+   * genuinely empty — and is NOT the same as `undefined`.
+   */
+  queuedIds?: string[];
 }
 
 export interface OffscreenReadyMsg {

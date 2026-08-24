@@ -966,6 +966,22 @@ export class Bridge implements KernelFacade {
    * A scoop with no history anywhere still gets an EMPTY replace — see the
    * tail of the method for why silence is not an option.
    */
+  /**
+   * The orchestrator's pending queue for a scoop, in delivery order, or
+   * `undefined` when this float cannot answer authoritatively (#2354).
+   *
+   * A tray FOLLOWER is the interesting `undefined`: its local orchestrator is
+   * deliberately kept out of the way (`handleUserMessage` hands the prompt to
+   * `followerSync` and returns), so its queue is empty for reasons that have
+   * nothing to do with what the leader still holds. Reporting that empty
+   * array would tell the panel "the backend consumed everything", and a queue
+   * held across a read-only detour would be reordered against a lie.
+   */
+  private queuedIdsFor(scoopJid: string): string[] | undefined {
+    if (this.followerSync || !this.orchestrator) return undefined;
+    return this.orchestrator.getQueuedMessageIds(scoopJid);
+  }
+
   private async handleRequestScoopMessages(scoopJid: string): Promise<void> {
     if (!this.orchestrator) return;
     const scoop = this.orchestrator.getScoops().find((s) => s.jid === scoopJid);
@@ -977,6 +993,7 @@ export class Bridge implements KernelFacade {
         type: 'scoop-messages-replaced',
         scoopJid,
         messages: buffered,
+        queuedIds: this.queuedIdsFor(scoopJid),
       });
       return;
     }
@@ -1003,6 +1020,7 @@ export class Bridge implements KernelFacade {
         type: 'scoop-messages-replaced',
         scoopJid,
         messages: buf,
+        queuedIds: this.queuedIdsFor(scoopJid),
       });
       return;
     }
@@ -1041,6 +1059,7 @@ export class Bridge implements KernelFacade {
             type: 'scoop-messages-replaced',
             scoopJid,
             messages: messages as unknown as BufferedChatMessage[],
+            queuedIds: this.queuedIdsFor(scoopJid),
           });
           return;
         }
@@ -1060,7 +1079,12 @@ export class Bridge implements KernelFacade {
     // accent — and the next real message for this scoop appends onto that
     // foreign transcript. No buffer is seeded: with nothing to restore, a
     // later agent event should start a fresh buffer.
-    this.emit({ type: 'scoop-messages-replaced', scoopJid, messages: [] });
+    this.emit({
+      type: 'scoop-messages-replaced',
+      scoopJid,
+      messages: [],
+      queuedIds: this.queuedIdsFor(scoopJid),
+    });
   }
 
   /**

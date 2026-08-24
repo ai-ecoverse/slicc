@@ -852,6 +852,30 @@ describe('ScoopMessageRouter debounce', () => {
     expect(sends).toEqual([]);
   });
 
+  it('reports the pending queue in delivery order (#2354)', async () => {
+    // The panel asks for this list to reconcile a queue it held across a
+    // read-only detour: the ORDER is the point, and an id that has already
+    // been dequeued into a running turn must be gone from it.
+    const { router } = makeHarness({ immediateIO: true });
+    const messages = [0, 1, 2].map((i) => makeMessage('cone', i, 'webhook'));
+    const { done } = await queueLicks(router, messages);
+
+    expect(router.getQueuedMessageIds('cone')).toEqual(messages.map((m) => m.id));
+
+    await router.deleteQueuedMessage('cone', messages[1].id);
+    expect(router.getQueuedMessageIds('cone')).toEqual([messages[0].id, messages[2].id]);
+
+    await flushDebounce();
+    await done;
+    // The flush drained the queue into the agent — nothing is pending now.
+    expect(router.getQueuedMessageIds('cone')).toEqual([]);
+  });
+
+  it('reports an empty queue for a jid it has never seen', () => {
+    const { router } = makeHarness({ immediateIO: true });
+    expect(router.getQueuedMessageIds('no-such-unit')).toEqual([]);
+  });
+
   it('cancels pending dispatch when the final queued message is deleted', async () => {
     const { router, sends } = makeHarness({ immediateIO: true });
     const message = makeMessage('cone', 0, 'webhook');

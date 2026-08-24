@@ -681,6 +681,21 @@ export class ScoopMessageRouter {
     log.info('All messages cleared');
   }
 
+  /**
+   * Ids of the messages still waiting in a scoop's in-memory queue, in the
+   * order the router will feed them to the agent (#2354). This is the
+   * authoritative pending list: an id that has already been dequeued into a
+   * running turn is gone from it, and a prompt enqueued while the panel was
+   * looking elsewhere is present. The panel reconciles a queue it held across
+   * a read-only detour against this ordering before re-rendering it.
+   *
+   * Ids only — the panel already owns the content of everything it queued,
+   * and a card cannot be materialised for an id it has never seen.
+   */
+  getQueuedMessageIds(jid: string): string[] {
+    return (this.messageQueues.get(jid) ?? []).map((message) => message.id);
+  }
+
   /** Clear all queued messages for a scoop (removes from both IndexedDB and in-memory queue). */
   async clearQueuedMessages(jid: string): Promise<void> {
     this.cancelDebounce(jid);
