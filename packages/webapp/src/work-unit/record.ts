@@ -55,6 +55,26 @@ export function normalizeScoopRecord(scoop: RegisteredScoop): RegisteredScoop {
   return scoop;
 }
 
+/**
+ * The first free variant of `folder` across the whole roster: `helper-scoop`,
+ * then `helper-scoop-2`, `helper-scoop-3`… A folder names a real directory
+ * under `/scoops/`, so a collision would silently hand a second cone's child
+ * the first one's sandbox (#2360). Folder uniqueness is deliberately GLOBAL,
+ * not per-subtree — the VFS path is shared even when the owners are not.
+ */
+export function uniqueFolder(folder: string, taken: Iterable<string>): string {
+  const used = new Set(taken);
+  if (!used.has(folder)) return folder;
+  // At most one suffix per taken folder can itself be taken, so `size + 2`
+  // candidates always contain a free one.
+  for (let n = 2; n <= used.size + 2; n++) {
+    const candidate = `${folder}-${n}`;
+    if (!used.has(candidate)) return candidate;
+  }
+  /* c8 ignore next -- unreachable: the loop above exhausts every taken name */
+  return `${folder}-${used.size + 3}`;
+}
+
 /** Folder of the primary root — the one a fresh profile bootstraps. */
 export const PRIMARY_CONE_FOLDER = 'cone';
 

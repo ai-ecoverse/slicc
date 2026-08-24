@@ -10,7 +10,8 @@ import type { ScoopModelResolution } from '../providers/account-store.js';
 import type { SudoDecision, SudoKind, SudoRequest } from '../sudo/types.js';
 import type { ToolDefinition } from '../tools/types.js';
 import { defaultChildVisibleRoots, workspaceFor } from '../work-unit/descriptor.js';
-import { derivePolicy, isRootUnit } from '../work-unit/policy.js';
+import { derivePolicy, isRootUnit, subtreeOf } from '../work-unit/policy.js';
+import { uniqueFolder } from '../work-unit/record.js';
 import {
   CURRENT_SCOOP_CONFIG_VERSION,
   isThinkingLevel,
@@ -91,19 +92,41 @@ export interface ScoopManagementToolsConfig {
   }>;
 }
 
+/**
+ * The caller's own subtree: the calling unit plus everything it transitively
+ * owns, in registry order. Every name-based child lookup runs against this
+ * list and nothing else — with several cones on one roster a global match let
+ * cone A's `scoop_wait helper` capture cone B's identically named scoop
+ * (#2360). An unmatched name is an error, never a widening fallback.
+ */
+function callerSubtree(config: ScoopManagementToolsConfig): RegisteredScoop[] {
+  return subtreeOf(config.getScoops(), config.scoop.jid);
+}
+
+/** The caller's transitive children — its subtree minus the caller itself. */
+function ownedScoops(config: ScoopManagementToolsConfig): RegisteredScoop[] {
+  return callerSubtree(config).filter((s) => s.jid !== config.scoop.jid && s.parentJid !== null);
+}
+
+/** Match a user-supplied name (folder or display name) against a roster. */
+function byName(name: string) {
+  return (s: RegisteredScoop): boolean => s.folder === name || s.name === name;
+}
+
 /** Resolve a list of user-supplied scoop names (folder or display name) to
- *  registered scoop records. Returns the resolved scoops plus any unknown
- *  names so the tool can surface a helpful error without bailing out on the
- *  first miss. Cones are rejected — they can't be muted / waited on. */
+ *  registered scoop records the caller owns. Returns the resolved scoops plus
+ *  any unknown names so the tool can surface a helpful error without bailing
+ *  out on the first miss. Scoops outside the caller's subtree — including
+ *  another cone's identically named child — never match. */
 function resolveScoopNames(
   names: readonly string[],
-  getScoops: () => RegisteredScoop[]
+  config: ScoopManagementToolsConfig
 ): { resolved: RegisteredScoop[]; unknown: string[] } {
-  const all = getScoops();
+  const owned = ownedScoops(config);
   const resolved: RegisteredScoop[] = [];
   const unknown: string[] = [];
   for (const name of names) {
-    const s = all.find((x) => x.parentJid !== null && (x.folder === name || x.name === name));
+    const s = owned.find(byName(name));
     if (s) resolved.push(s);
     else unknown.push(name);
   }
@@ -190,13 +213,16 @@ function parseModelId(
   };
 }
 
-/** Render a "scoop not found" error including the available list. */
-function notFoundError(name: string, getScoops: () => RegisteredScoop[]) {
-  const available = getScoops()
-    .filter((s) => s.parentJid !== null)
+/** Render a "scoop not found" error naming the caller's own subtree — the
+ *  only place a name is looked up (#2360). */
+function notFoundError(name: string, config: ScoopManagementToolsConfig) {
+  const available = ownedScoops(config)
     .map((s) => s.folder)
     .join(', ');
-  return { content: `Scoop "${name}" not found. Available: ${available}`, isError: true as const };
+  return {
+    content: `Scoop "${name}" not found in your scoops (${config.scoop.folder}). Available: ${available || '(none)'}`,
+    isError: true as const,
+  };
 }
 
 /** Format a single line in the list_scoops output. */
@@ -300,12 +326,15 @@ async function executeFeedScoop(
   config: ScoopManagementToolsConfig
 ): Promise<ToolResult> {
   const { scoop_name, prompt } = input as { scoop_name: string; prompt: string };
-  const target = config.getScoops().find((s) => s.folder === scoop_name || s.name === scoop_name);
-  if (!target) return notFoundError(scoop_name, config.getScoops);
-  if (target.jid === config.scoop.jid) return { content: 'Cannot feed yourself.', isError: true };
-  if (target.parentJid === null) {
-    return { content: 'Cannot feed a cone (root unit).', isError: true };
+  // Subtree-scoped: another cone (or another cone's scoop) simply is not
+  // found, rather than being fed across the ownership boundary (#2360).
+  const target = callerSubtree(config).find(byName(scoop_name));
+  // The caller is the only root in its own subtree, so a cone can never be
+  // the target here — a sibling cone is simply not found.
+  if (target?.jid === config.scoop.jid) {
+    return { content: 'Cannot feed yourself.', isError: true };
   }
+  if (!target) return notFoundError(scoop_name, config);
   try {
     await config.onFeedScoop!(target.jid, prompt);
     log.info('Fed scoop', { target: target.folder, promptLength: prompt.length });
@@ -319,7 +348,10 @@ async function executeFeedScoop(
 }
 
 async function executeListScoops(config: ScoopManagementToolsConfig): Promise<ToolResult> {
-  const scoops = config.getScoops();
+  // Your own subtree only: the names this listing offers are exactly the
+  // names feed_scoop / drop_scoop / scoop_wait can resolve (#2360). Listing
+  // a sibling cone's scoops would advertise targets every tool rejects.
+  const scoops = callerSubtree(config);
   if (scoops.length === 0) return { content: 'No scoops registered.' };
   const formatted = scoops.map((s) => formatScoopLine(s, config.getScoopTabState)).join('\n');
   return { content: `Registered scoops:\n${formatted}` };
@@ -445,7 +477,24 @@ async function executeScoopScoop(
   const parsedModel = parseModelId(model, config.resolveModelSelection);
   if (!parsedModel.ok) return { content: parsedModel.content, isError: parsedModel.isError };
 
-  const folder = folderFromDisplayName(name);
+  const wantedFolder = folderFromDisplayName(name);
+
+  const duplicate = ownedScoops(config).find((s) => s.name === name || s.folder === wantedFolder);
+  if (duplicate) {
+    return {
+      content:
+        `A scoop named "${duplicate.name}" (${duplicate.folder}) already exists in your scoops. ` +
+        `Use feed_scoop to give it another task, or drop_scoop first.`,
+      isError: true,
+    };
+  }
+  // Folder uniqueness is checked against the WHOLE roster, not just the
+  // subtree: `/scoops/<folder>/` is one shared VFS path, so two cones each
+  // spawning a "helper" must not land in the same sandbox (#2360).
+  const folder = uniqueFolder(
+    wantedFolder,
+    config.getScoops().map((s) => s.folder)
+  );
   try {
     const record = buildScoopRecord({
       name,
@@ -479,12 +528,15 @@ async function executeDropScoop(
   config: ScoopManagementToolsConfig
 ): Promise<ToolResult> {
   const { scoop_name } = input as { scoop_name: string };
-  const target = config.getScoops().find((s) => s.folder === scoop_name || s.name === scoop_name);
-  if (!target) return notFoundError(scoop_name, config.getScoops);
-  if (target.jid === config.scoop.jid) return { content: 'Cannot drop yourself.', isError: true };
-  if (target.parentJid === null) {
-    return { content: 'Cannot drop a cone (root unit).', isError: true };
+  // Subtree-scoped for the same reason as feed_scoop: a cone can only drop
+  // what it owns, and a sibling cone's scoop is not found (#2360).
+  const target = callerSubtree(config).find(byName(scoop_name));
+  // The caller is the only root in its own subtree, so a cone can never be
+  // the target here — a sibling cone is simply not found.
+  if (target?.jid === config.scoop.jid) {
+    return { content: 'Cannot drop yourself.', isError: true };
   }
+  if (!target) return notFoundError(scoop_name, config);
   try {
     await config.onDropScoop!(target.jid);
     log.info('Scoop dropped', { name: target.name, folder: target.folder });
@@ -499,9 +551,17 @@ function emptyNamesError(): ToolResult {
   return { content: 'scoop_names must be a non-empty array.', isError: true };
 }
 
-function noMatchingScoopsError(unknownNames: readonly string[]): ToolResult {
+function noMatchingScoopsError(
+  unknownNames: readonly string[],
+  config: ScoopManagementToolsConfig
+): ToolResult {
+  const available = ownedScoops(config)
+    .map((s) => s.folder)
+    .join(', ');
   return {
-    content: `No matching scoops found. Unknown: ${unknownNames.join(', ')}`,
+    content:
+      `No matching scoops found in your scoops (${config.scoop.folder}). ` +
+      `Unknown: ${unknownNames.join(', ')}. Available: ${available || '(none)'}`,
     isError: true,
   };
 }
@@ -512,8 +572,8 @@ async function executeMuteScoops(
 ): Promise<ToolResult> {
   const { scoop_names } = input as { scoop_names: string[] };
   if (!Array.isArray(scoop_names) || scoop_names.length === 0) return emptyNamesError();
-  const { resolved, unknown } = resolveScoopNames(scoop_names, config.getScoops);
-  if (resolved.length === 0) return noMatchingScoopsError(unknown);
+  const { resolved, unknown } = resolveScoopNames(scoop_names, config);
+  if (resolved.length === 0) return noMatchingScoopsError(unknown, config);
   config.onMuteScoops!(resolved.map((s) => s.jid));
   log.info('Scoops muted', { names: resolved.map((s) => s.folder) });
   const muted = resolved.map((s) => s.folder).join(', ');
@@ -550,8 +610,8 @@ async function executeUnmuteScoops(
 ): Promise<ToolResult> {
   const { scoop_names } = input as { scoop_names: string[] };
   if (!Array.isArray(scoop_names) || scoop_names.length === 0) return emptyNamesError();
-  const { resolved, unknown } = resolveScoopNames(scoop_names, config.getScoops);
-  if (resolved.length === 0) return noMatchingScoopsError(unknown);
+  const { resolved, unknown } = resolveScoopNames(scoop_names, config);
+  if (resolved.length === 0) return noMatchingScoopsError(unknown, config);
   const jids = resolved.map((s) => s.jid);
   const jidToFolder = new Map(resolved.map((s) => [s.jid, s.folder]));
   const consumed = await config.onUnmuteScoops!(jids);
@@ -607,8 +667,8 @@ async function executeScoopWait(
   const inputError = validateWaitInput(scoop_names, timeout_ms);
   if (inputError) return inputError;
 
-  const { resolved, unknown } = resolveScoopNames(scoop_names, config.getScoops);
-  if (resolved.length === 0) return noMatchingScoopsError(unknown);
+  const { resolved, unknown } = resolveScoopNames(scoop_names, config);
+  if (resolved.length === 0) return noMatchingScoopsError(unknown, config);
 
   const jids = resolved.map((s) => s.jid);
   // Use the orchestrator's return value to build the acknowledgement: a
@@ -803,7 +863,7 @@ function feedScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
         scoop_name: {
           type: 'string',
           description:
-            'The scoop folder name (e.g., "test-scoop"). Use list_scoops to see available scoops.',
+            'The scoop folder name (e.g., "test-scoop"). Must be a scoop you own — use list_scoops to see them.',
         },
         prompt: {
           type: 'string',
@@ -820,7 +880,8 @@ function feedScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
 function listScoopsTool(config: ScoopManagementToolsConfig): ToolDefinition {
   return {
     name: 'list_scoops',
-    description: 'List all registered scoops.',
+    description:
+      'List the scoops you own (your own subtree). Names from this list are the only ones feed_scoop / drop_scoop / scoop_mute / scoop_unmute / scoop_wait can resolve.',
     inputSchema: { type: 'object', properties: {} },
     execute: () => executeListScoops(config),
   };
@@ -892,7 +953,7 @@ function dropScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
         scoop_name: {
           type: 'string',
           description:
-            'The scoop folder name (e.g., "test-scoop"). Use list_scoops to see available scoops.',
+            'The scoop folder name (e.g., "test-scoop"). Must be a scoop you own — use list_scoops to see them.',
         },
       },
       required: ['scoop_name'],
@@ -954,7 +1015,7 @@ function scoopWaitTool(config: ScoopManagementToolsConfig): ToolDefinition {
           type: 'array',
           items: { type: 'string' },
           description:
-            'Folder or display names of scoops to wait for (e.g., ["writer-scoop", "reviewer-scoop"]).',
+            'Folder or display names of scoops YOU own (e.g., ["writer-scoop", "reviewer-scoop"]). Another cone\'s scoop is not a valid target.',
         },
         timeout_ms: {
           type: 'number',

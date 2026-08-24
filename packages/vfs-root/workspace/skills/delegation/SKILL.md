@@ -213,6 +213,8 @@ These three cone-only tools collapse the fan-out into a single follow-up turn:
 
 ### When to use which
 
+> Every scoop name you pass to `feed_scoop`, `drop_scoop`, `scoop_mute`, `scoop_unmute` or `scoop_wait` is resolved against the scoops YOU own — what `list_scoops` shows you. Another cone's identically named scoop is never matched; the call errors instead (#2360).
+
 - **Fan-out + synthesis** (your next useful step depends on all scoops) → `scoop_wait`.
 - **Background work you'll check later** → `scoop_mute` now, `scoop_unmute` when you want the summaries.
 - **Single delegation, no parallelism** → don't mute. Default `scoop-notify` is fine.

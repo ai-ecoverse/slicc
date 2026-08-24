@@ -108,6 +108,34 @@ export function childrenOf<T extends Pick<RegisteredScoop, 'parentJid'>>(
 }
 
 /**
+ * `rootId`'s unit plus every unit it transitively owns, in registry order.
+ * Empty when the root is no longer registered — the caller decides what an
+ * empty scope means rather than silently widening back to everything.
+ */
+export function subtreeOf<T extends Pick<RegisteredScoop, 'jid' | 'parentJid'>>(
+  units: readonly T[],
+  rootId: WorkUnitId
+): T[] {
+  const owned = new Set<string>([rootId]);
+  // One pass per generation: a child is admitted once its parent is, and the
+  // depth of the ownership tree can never exceed the roster size. Order-
+  // independent by construction — the answer does not depend on where a child
+  // sits in the registry relative to its parent.
+  for (let pass = 0; pass < units.length; pass++) {
+    let grew = false;
+    for (const unit of units) {
+      if (owned.has(unit.jid)) continue;
+      if (unit.parentJid !== null && owned.has(unit.parentJid)) {
+        owned.add(unit.jid);
+        grew = true;
+      }
+    }
+    if (!grew) break;
+  }
+  return units.filter((unit) => owned.has(unit.jid));
+}
+
+/**
  * The root that owns `unit` — the unit itself when it is one. Walks the
  * `parentJid` chain; returns `undefined` when the chain dangles (a parent that
  * is no longer registered) or loops, so callers can fall back deliberately

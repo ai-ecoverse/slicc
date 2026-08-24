@@ -39,6 +39,7 @@ import {
   normalizeScoopRecord,
   setUnitModel,
   setUnitThinking,
+  uniqueFolder,
 } from '../work-unit/record.js';
 import type { AppendConeMemoryMeta } from './cone-memory-store.js';
 import { globalSeedModel } from './model-seed.js';
@@ -602,8 +603,38 @@ export class ScoopLifecycleManager {
     const scoops = this.deps.getScoops();
     normalizeScoopRecord(scoop);
     this.inheritModel(scoop);
-    await this.deps.db.saveScoop(scoop);
+    // Claim the folder and the registry slot synchronously, BEFORE the first
+    // await. `scoop_scoop` already picks a free folder, but two cones creating
+    // the same name concurrently would both pass that check while the first
+    // record is still inside `saveScoop` — and land in one shared
+    // `/scoops/<folder>/` sandbox (#2360). This is the critical section: the
+    // roster read and the insert happen in one synchronous run.
+    if (scoop.parentJid !== null) {
+      const taken: string[] = [];
+      for (const existing of scoops.values()) {
+        if (existing.jid !== scoop.jid) taken.push(existing.folder);
+      }
+      const free = uniqueFolder(scoop.folder, taken);
+      if (free !== scoop.folder) {
+        log.warn('Scoop folder already taken — registering under a free variant', {
+          jid: scoop.jid,
+          requested: scoop.folder,
+          folder: free,
+        });
+        scoop.folder = free;
+        scoop.trigger = `@${free}`;
+        scoop.assistantLabel = free;
+      }
+    }
     scoops.set(scoop.jid, scoop);
+    try {
+      await this.deps.db.saveScoop(scoop);
+    } catch (err) {
+      // Release the claim: a record that could not be persisted must not
+      // linger in the live roster holding its folder.
+      scoops.delete(scoop.jid);
+      throw err;
+    }
     this.deps.messageRouter.ensureQueue(scoop.jid);
     log.info('Scoop registered', { jid: scoop.jid, name: scoop.name });
     try {
