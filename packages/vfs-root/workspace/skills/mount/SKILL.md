@@ -110,6 +110,7 @@ Useful flags:
 
 ```bash
 mount list                         # show all active mounts
+mount --list                       # same as `mount list` (`-l` also works)
 mount unmount /mnt/r2              # tear down (cache stays for next mount within TTL)
 mount unmount --clear-cache /mnt/r2 # tear down + drop cached listings/bodies
 mount refresh /mnt/r2              # re-walk the source and diff against cache

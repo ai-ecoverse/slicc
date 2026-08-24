@@ -11,18 +11,9 @@ import { readFileSync } from 'node:fs';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
-import { localMountIdbKey } from '../../src/kernel/remote-terminal-view.js';
+import { localMountIdbKey, parseLocalMountTarget } from '../../src/kernel/remote-terminal-view.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-
-// `parseLocalMountTarget` is module-internal; re-import via the
-// module's compiled namespace using a back-door eval-style import
-// is not necessary — instead, we test the public IDB-key surface
-// that the worker side depends on, plus a thin wrapper for the
-// parser by re-implementing it here as the spec.
-//
-// (If `parseLocalMountTarget` is ever exported, swap these specs
-// for direct tests.)
 
 describe('localMountIdbKey', () => {
   it('returns `pendingMount:term:<target>` verbatim', () => {
@@ -39,29 +30,7 @@ describe('localMountIdbKey', () => {
   });
 });
 
-// Spec for parseLocalMountTarget — duplicated here as a regression
-// pin since the function is module-private. The tests document the
-// intended matching behavior; if the parser drifts, these tests
-// fail in the integration smoke (the typed mount falls through to
-// the worker's "needs window" error).
-describe('parseLocalMountTarget (spec)', () => {
-  // Local re-implementation matching `kernel/remote-terminal-view.ts`.
-  // Keep in sync when the production parser changes.
-  function parseLocalMountTarget(line: string): string | null {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('mount')) return null;
-    const tokens = trimmed.split(/\s+/);
-    if (tokens[0] !== 'mount') return null;
-    if (tokens.includes('--source') || tokens.includes('--help') || tokens.includes('-h')) {
-      return null;
-    }
-    const target = tokens.slice(1).find((t) => !t.startsWith('-'));
-    if (!target) return null;
-    if (['list', 'unmount', 'refresh', 'recover'].includes(target)) return null;
-    if (!target.startsWith('/')) return null;
-    return target;
-  }
-
+describe('parseLocalMountTarget', () => {
   it('matches `mount /mnt/foo`', () => {
     expect(parseLocalMountTarget('mount /mnt/foo')).toBe('/mnt/foo');
   });
@@ -79,6 +48,13 @@ describe('parseLocalMountTarget (spec)', () => {
     expect(parseLocalMountTarget('mount list')).toBeNull();
     expect(parseLocalMountTarget('mount unmount /mnt/x')).toBeNull();
     expect(parseLocalMountTarget('mount refresh /mnt/x')).toBeNull();
+  });
+
+  it('returns null for `mount --list` / `mount -l` even with a trailing path', () => {
+    expect(parseLocalMountTarget('mount --list')).toBeNull();
+    expect(parseLocalMountTarget('mount -l')).toBeNull();
+    expect(parseLocalMountTarget('mount --list /mnt/x')).toBeNull();
+    expect(parseLocalMountTarget('mount -l /mnt/x')).toBeNull();
   });
 
   it('returns null when --source is present (S3 / DA mounts)', () => {

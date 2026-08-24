@@ -135,6 +135,7 @@ DA mounts reuse the IMS bearer token from the existing Adobe LLM provider. If yo
 mount [--source <url>] [--profile <name>] [--backend <da|aem>] [--no-probe] [--max-body-mb <n>] <target-path>
 mount unmount [--clear-cache] <target-path>
 mount list
+mount --list
 mount refresh [--bodies] <target-path>
 ```
 
