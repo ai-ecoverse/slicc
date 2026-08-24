@@ -75,6 +75,21 @@ export interface FrozenSessionIndexEntry {
    */
   memoryPending?: true;
   /**
+   * ISO timestamp of the curator pass that completed for this archive.
+   * Stamped when `memoryPending` clears — the durable positive record that
+   * curation happened, as opposed to a bare marker-less entry (which could
+   * equally mean the pass was never owed). Cleared together with
+   * `memoryFailed` on a later successful pass.
+   */
+  memoryCuratedAt?: string;
+  /**
+   * Head of the reason the LAST curator attempt for this archive failed
+   * (timeout, spawn error, retry cap). Purely a ledger for humans and UI —
+   * recovery still keys off `memoryPending` / `pendingAttemptCount`.
+   * Removed when a later pass succeeds.
+   */
+  memoryFailed?: string;
+  /**
    * The user chose to freeze this chat WITHOUT any memory extraction — now
    * or later (a dropped cone, #2272). The title/icon catch-up still runs;
    * the memory half of the legacy enrichment is skipped for good.

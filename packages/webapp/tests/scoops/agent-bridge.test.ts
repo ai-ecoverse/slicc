@@ -223,21 +223,36 @@ function makeMockSharedFs(options?: {
   rm?: (path: string) => Promise<void>;
   /** Throw from `writeFile` (receipt-failure tests). */
   writeFile?: (path: string) => Promise<void>;
-}): { fs: VirtualFS; rmCalls: string[]; writes: Array<{ path: string; content: string }> } {
+  /** Initial file contents served by `readFile` (mergeOnSuccess tests). */
+  files?: Record<string, string>;
+}): {
+  fs: VirtualFS;
+  rmCalls: string[];
+  writes: Array<{ path: string; content: string }>;
+  files: Map<string, string>;
+} {
   const rmCalls: string[] = [];
   const writes: Array<{ path: string; content: string }> = [];
+  const files = new Map<string, string>(Object.entries(options?.files ?? {}));
   const mock: Partial<VirtualFS> = {
     rm: vi.fn(async (path: string) => {
       rmCalls.push(path);
       if (options?.rm) await options.rm(path);
+      files.delete(path);
     }) as unknown as VirtualFS['rm'],
     mkdir: vi.fn(async () => {}) as unknown as VirtualFS['mkdir'],
     writeFile: vi.fn(async (path: string, content: string) => {
       if (options?.writeFile) await options.writeFile(path);
       writes.push({ path, content });
+      files.set(path, content);
     }) as unknown as VirtualFS['writeFile'],
+    readFile: vi.fn(async (path: string) => {
+      const content = files.get(path);
+      if (content === undefined) throw new FsError('ENOENT', 'no such file', path);
+      return content;
+    }) as unknown as VirtualFS['readFile'],
   };
-  return { fs: mock as unknown as VirtualFS, rmCalls, writes };
+  return { fs: mock as unknown as VirtualFS, rmCalls, writes, files };
 }
 
 const BASE_OPTS: AgentSpawnOptions = {
@@ -2017,5 +2032,244 @@ describe('createAgentBridge — session archive (persistSession)', () => {
 
     expect(result.exitCode).toBe(0);
     expect(result.finalText).toBe('done');
+  });
+});
+
+describe('createAgentBridge — mergeOnSuccess + outcome receipts', () => {
+  const MERGE = {
+    targetPath: '/workspace/CLAUDE.md',
+    basePath: '/sessions/.curation/a.md/base.md',
+    draftPath: '/sessions/.curation/a.md/draft.md',
+  };
+  const STATUS = '/sessions/.curation/a.md/status.json';
+
+  function mergeBridge(files: Record<string, string>) {
+    const { orchestrator, scripts, registerCalls } = makeMockOrchestrator();
+    const shared = makeMockSharedFs({ files });
+    const bridge = createAgentBridge(orchestrator, shared.fs, null, {
+      generateName: () => 'calm-torte',
+    });
+    scripts.set('agent_calm_torte', (obs) => obs.onSendMessage?.('curated'));
+    return { bridge, shared, scripts, registerCalls };
+  }
+
+  it('fast-forwards the draft onto an unchanged target and drops the staging pair', async () => {
+    const { bridge, shared } = mergeBridge({
+      [MERGE.basePath]: 'old memory\n',
+      [MERGE.draftPath]: 'curated memory\n',
+      [MERGE.targetPath]: 'old memory\n',
+    });
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(shared.files.get(MERGE.targetPath)).toBe('curated memory\n');
+    // Staging is consumed; nothing left to leak into a later pass.
+    expect(shared.files.has(MERGE.basePath)).toBe(false);
+    expect(shared.files.has(MERGE.draftPath)).toBe(false);
+  });
+
+  it('keeps concurrent target edits alongside the draft rewrite (real 3-way)', async () => {
+    const base =
+      '# Memory\n\n## Alpha (2026-01-01)\nstale fact\n\n## Beta (2026-02-02)\nkept fact\n';
+    // The curator rewrote Alpha; someone appended Gamma to the LIVE file
+    // while the curator ran. Both changes must land.
+    const draft =
+      '# Memory\n\n## Alpha (2026-08-24)\nfresh fact\n\n## Beta (2026-02-02)\nkept fact\n';
+    const current =
+      '# Memory\n\n## Alpha (2026-01-01)\nstale fact\n\n## Beta (2026-02-02)\nkept fact\n\n## Gamma (2026-08-24)\nconcurrent fact\n';
+    const { bridge, shared } = mergeBridge({
+      [MERGE.basePath]: base,
+      [MERGE.draftPath]: draft,
+      [MERGE.targetPath]: current,
+    });
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(0);
+    const merged = shared.files.get(MERGE.targetPath) ?? '';
+    expect(merged).toContain('## Alpha (2026-08-24)\nfresh fact');
+    expect(merged).toContain('## Gamma (2026-08-24)\nconcurrent fact');
+    expect(merged).not.toContain('stale fact');
+    const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
+    expect(status).toMatchObject({
+      status: 'ok',
+      exitCode: 0,
+      merge: { applied: true, conflicts: 0 },
+    });
+  });
+
+  it('resolves conflicting regions to the draft (curator of record)', async () => {
+    const { bridge, shared } = mergeBridge({
+      [MERGE.basePath]: 'line\n',
+      [MERGE.draftPath]: 'curator version\n',
+      [MERGE.targetPath]: 'concurrent version\n',
+    });
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(shared.files.get(MERGE.targetPath)).toBe('curator version\n');
+    const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
+    expect(status.merge).toMatchObject({ applied: true, conflicts: 1 });
+  });
+
+  it('leaves the target untouched when the draft never diverged from base', async () => {
+    const { bridge, shared } = mergeBridge({
+      [MERGE.basePath]: 'unchanged\n',
+      [MERGE.draftPath]: 'unchanged\n',
+      [MERGE.targetPath]: 'live got edits meanwhile\n',
+    });
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(0);
+    expect(shared.files.get(MERGE.targetPath)).toBe('live got edits meanwhile\n');
+    const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
+    expect(status.merge).toMatchObject({ applied: false, conflicts: 0 });
+  });
+
+  it('records a failed run in the outcome receipt and keeps the staging pair', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const shared = makeMockSharedFs({
+      files: { [MERGE.basePath]: 'old\n', [MERGE.draftPath]: 'old\n' },
+    });
+    const bridge = createAgentBridge(orchestrator, shared.fs, null, {
+      generateName: () => 'moody-fudge',
+    });
+    scripts.set('agent_moody_fudge', (obs) => obs.onError?.('provider exploded'));
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(1);
+    // No merge on failure — the draft may be half-written.
+    expect(shared.files.has(MERGE.targetPath)).toBe(false);
+    expect(shared.files.has(MERGE.draftPath)).toBe(true);
+    const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
+    expect(status).toMatchObject({ status: 'failed', exitCode: 1 });
+    expect(status.reason).toContain('provider exploded');
+    expect(status.merge).toBeUndefined();
+  });
+
+  it('a merge failure downgrades the spawn to failure and skips the success receipt', async () => {
+    const { orchestrator, scripts } = makeMockOrchestrator();
+    const shared = makeMockSharedFs({
+      files: {
+        [MERGE.basePath]: 'old\n',
+        [MERGE.draftPath]: 'new\n',
+        [MERGE.targetPath]: 'old\n',
+      },
+      writeFile: async (path) => {
+        if (path === MERGE.targetPath) throw new Error('quota exceeded');
+      },
+    });
+    const bridge = createAgentBridge(orchestrator, shared.fs, null, {
+      generateName: () => 'brave-sorbet',
+    });
+    scripts.set('agent_brave_sorbet', (obs) => obs.onSendMessage?.('curated'));
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+      successReceiptPath: '/sessions/.curated/a.md',
+      outcomeReceiptPath: STATUS,
+    });
+
+    // The run itself succeeded, but its rewrite never landed — a success
+    // signal here would clear the caller's pending marker (and satisfy the
+    // #1989 receipt recovery) with the work undone.
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('mergeOnSuccess failed');
+    expect(result.finalText).toContain('quota exceeded');
+    expect(shared.files.has('/sessions/.curated/a.md')).toBe(false);
+    const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
+    expect(status.status).toBe('failed');
+    expect(status.merge.error).toContain('quota exceeded');
+    // Staging survives a failed merge for the post-mortem.
+    expect(shared.files.has(MERGE.draftPath)).toBe(true);
+  });
+
+  it('a missing base snapshot aborts the merge (never treated as an empty original)', async () => {
+    // No base.md: staging was lost. Merging against '' would turn the whole
+    // live file into a conflict the draft wins, silently discarding the
+    // concurrent memories the merge exists to protect.
+    const { bridge, shared } = mergeBridge({
+      [MERGE.draftPath]: 'curated rewrite\n',
+      [MERGE.targetPath]: 'live memory with concurrent edits\n',
+    });
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('base snapshot missing');
+    expect(shared.files.get(MERGE.targetPath)).toBe('live memory with concurrent edits\n');
+    // The draft is kept for the post-mortem.
+    expect(shared.files.has(MERGE.draftPath)).toBe(true);
+    const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
+    expect(status).toMatchObject({ status: 'failed', exitCode: 1 });
+  });
+
+  it('rejects a relative mergeOnSuccess path without spawning', async () => {
+    const { orchestrator, registerCalls } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'terse-parfait',
+    });
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      mergeOnSuccess: { ...MERGE, draftPath: 'relative/draft.md' },
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('mergeOnSuccess.draftPath must be absolute');
+    expect(registerCalls).toHaveLength(0);
+  });
+
+  it('rejects a relative outcomeReceiptPath without spawning', async () => {
+    const { orchestrator, registerCalls } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, {
+      generateName: () => 'plain-taffy',
+    });
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      outcomeReceiptPath: 'sessions/status.json',
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('outcomeReceiptPath must be absolute');
+    expect(registerCalls).toHaveLength(0);
   });
 });

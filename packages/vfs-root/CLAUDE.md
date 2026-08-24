@@ -30,8 +30,17 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
   entries containing commas must be quoted. A bare `/` is rejected from `writablePaths`.
 - Frontmatter `allowedCommands` entries extend the curator's built-in base set; they do not
   replace or remove base commands.
-- The curator may rewrite the entire `/workspace/CLAUDE.md`, and the hard character budget
+- The curator may rewrite the entire memory file, and the hard character budget
   applies to the entire file with no protected region.
+- **The curator edits a staged draft, never the live file.** `{{MEMORY_PATH}}` resolves to
+  `/sessions/.curation/<archive>/draft.md`, seeded (with a `base.md` snapshot) from the live
+  memory when the pass spawns; the agent bridge three-way-merges base→draft onto the live file
+  on exit 0, before the success receipt (`mergeOnSuccess`). Concurrent live edits survive;
+  conflicting regions resolve to the curator. A killed or failed run leaves the live memory
+  untouched. The bridge also writes `/sessions/.curation/<archive>/status.json` on both exit
+  paths (`outcomeReceiptPath`) — the durable ledger of which sessions completed vs failed
+  curation; the index entry mirrors it as `memoryCuratedAt` / `memoryFailed`. Per-archive
+  keying means parallel per-cone curators (#1666) never share staging state.
 - Every `##`/`###` memory section ends with a `YYYY-MM-DD` last-verified date, in UTC to match
   archive timestamps. Each pass re-verifies the oldest sections first; undated sections are
   maximally stale.

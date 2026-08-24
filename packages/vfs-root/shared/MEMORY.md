@@ -37,7 +37,7 @@ thinkingLevel: medium
 
 Curate the durable memory for session {{SESSION_COUNT}}. Today's date is {{TODAY}}.
 
-**Work fast: a full pass should finish in well under 10 minutes.** The run is hard-stopped at 20 minutes, and a kill mid-write can corrupt the memory file or leave it over budget — so mine the three signals, rewrite the file, compact it in the same pass, and stop, rather than exploring the archive exhaustively.
+**Work fast: a full pass should finish in well under 10 minutes.** The run is hard-stopped at 20 minutes, and your rewrite only lands if the pass completes — a killed run is discarded wholesale. So mine the three signals, rewrite the file, compact it in the same pass, and stop, rather than exploring the archive exhaustively.
 
 Read the entire current memory at {{MEMORY_PATH}} if it exists. Then mine the archived session at {{SESSION_ARCHIVE_PATH}} using the reading recipes below. Rewrite the entire {{MEMORY_PATH}} file with the durable information worth carrying into future sessions. Every part of the file is editable and counts toward the budget.
 
@@ -121,6 +121,8 @@ Rules:
 
 <!-- How to customize
 Add curator instructions here, for example: also update the knowledge base at /path following its WIKI.md. Extend visiblePaths or writablePaths above to grant access to extra stores, and adjust timeoutSeconds when needed.
+
+{{MEMORY_PATH}} resolves to a staged per-archive draft under /sessions/.curation/, not the live memory file: the pass snapshots the live file when it spawns, the curator rewrites the draft, and on a successful exit the runtime three-way-merges the rewrite back onto the live file. Edits the cone or the user makes to the live memory while the curator runs survive; where both sides changed the same lines the curator's version wins. An entry in writablePaths naming the memory file is substituted with the draft automatically, so this file keeps working unchanged. A failed or killed run leaves the live memory untouched and its outcome recorded at /sessions/.curation/<archive>/status.json.
 
 writablePaths defaults to the memory file alone rather than /workspace/, because the curator can run upskill and a directory-wide grant would also let it install skills into /workspace/skills. Widen it only as far as a task genuinely needs; a single file is a valid entry, not just a directory.
 
