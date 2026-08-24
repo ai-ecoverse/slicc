@@ -123,6 +123,30 @@ export class SerialPortRegistry {
   list(): Array<{ handle: string; entry: SerialPortEntry }> {
     return [...this.byHandle].map(([handle, entry]) => ({ handle, entry }));
   }
+
+  /**
+   * Drop entries whose port is no longer present in `live`.
+   *
+   * A device that re-enumerates (USB replug, or a board reset that cycles the
+   * port — routine when flashing) gets a BRAND NEW `SerialPort` object from
+   * `navigator.serial.getPorts()`. Without this, the old object lingers under
+   * its old handle forever: every `open` on it fails with an opaque
+   * "Failed to open serial port" and only a page reload clears it.
+   *
+   * Returns the evicted entries. The caller MUST release each one (cancel the
+   * reader, release both locks, close the port) — dropping the map entry alone
+   * would strand an open/locked port with no handle left to close it through,
+   * which is the very wedge this reconciliation exists to prevent.
+   */
+  retainOnly(live: readonly SerialPort[]): Array<{ handle: string; entry: SerialPortEntry }> {
+    const evicted: Array<{ handle: string; entry: SerialPortEntry }> = [];
+    for (const [handle, entry] of [...this.byHandle]) {
+      if (live.includes(entry.port)) continue;
+      this.byHandle.delete(handle);
+      evicted.push({ handle, entry });
+    }
+    return evicted;
+  }
 }
 
 let sharedRegistry: SerialPortRegistry | null = null;

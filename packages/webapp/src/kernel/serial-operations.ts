@@ -54,11 +54,64 @@ function indexOfSub(hay: Uint8Array, needle: Uint8Array, start: number): number 
   return -1;
 }
 
+/**
+ * Cancel the reader and release both stream locks, dropping buffered state.
+ * A port whose streams stay locked cannot be reopened — not even by a freshly
+ * acquired `SerialPort` object for the same device.
+ */
+async function releaseStreams(entry: SerialPortEntry): Promise<void> {
+  if (entry.reader) {
+    try {
+      await entry.reader.cancel();
+    } catch {
+      /* reader may already be closed */
+    }
+    try {
+      entry.reader.releaseLock();
+    } catch {
+      /* lock may already be released */
+    }
+    entry.reader = undefined;
+  }
+  entry.pendingRead = undefined;
+  entry.leftover = undefined;
+  if (entry.writer) {
+    try {
+      entry.writer.releaseLock();
+    } catch {
+      /* lock may already be released */
+    }
+    entry.writer = undefined;
+  }
+}
+
+/**
+ * Fully retire an evicted entry: release its streams and close the underlying
+ * port. Best-effort — the device is already gone, so a failure here must not
+ * break `serial list`.
+ */
+async function retireEvicted(entry: SerialPortEntry): Promise<void> {
+  await releaseStreams(entry);
+  if (!entry.opened) return;
+  try {
+    await entry.port.close();
+  } catch {
+    /* the device is gone; nothing more we can do */
+  }
+  entry.opened = false;
+}
+
 export async function serialList(
   registry: SerialPortRegistry,
   serial: SerialApi
 ): Promise<SerialDeviceInfo[]> {
   const ports = await serial.getPorts();
+  // Reconcile first: a re-enumerated device hands back a new SerialPort object,
+  // and the stale one must not keep answering to its old handle. Evicted
+  // entries are RETIRED, not merely forgotten — see retireEvicted.
+  for (const { entry } of registry.retainOnly(ports)) {
+    await retireEvicted(entry);
+  }
   return ports.map((p) => {
     const handle = registry.register(p);
     return deviceToInfo(handle, registry.get(handle)!);
@@ -85,37 +138,41 @@ export async function serialOpen(
   options: SerialOpenOptions
 ): Promise<void> {
   const entry = resolve(registry, handle);
-  await entry.port.open(options);
+  try {
+    await entry.port.open(options);
+  } catch (err) {
+    // A handle whose device re-enumerated (board reset, replug) can never be
+    // opened again. Say so, instead of passing through Chrome's opaque
+    // "Failed to open serial port", which reads like a hardware fault and sent
+    // us chasing phantom problems for hours.
+    throw new Error(
+      `${err instanceof Error ? err.message : String(err)} ` +
+        `(handle '${handle}' may be stale after a device reset — ` +
+        `re-run 'serial list' to pick up the current handle)`
+    );
+  }
   entry.opened = true;
 }
 
 export async function serialClose(registry: SerialPortRegistry, handle: string): Promise<void> {
   const entry = resolve(registry, handle);
-  if (entry.reader) {
-    try {
-      await entry.reader.cancel();
-    } catch {
-      /* reader may already be closed */
-    }
-    try {
-      entry.reader.releaseLock();
-    } catch {
-      /* lock may already be released */
-    }
-    entry.reader = undefined;
+  await releaseStreams(entry);
+  try {
+    await entry.port.close();
+  } catch (err) {
+    // Only a confirmed already-closed port may be marked closed. For any other
+    // failure the browser port may STILL be open, and lying about it makes
+    // `serial list` wrong and causes esptool's takeOverPort() to skip its own
+    // close (it closes only when `opened`), so the next transport open fails.
+    if (!isAlreadyClosed(err)) throw err;
   }
-  entry.pendingRead = undefined;
-  entry.leftover = undefined;
-  if (entry.writer) {
-    try {
-      entry.writer.releaseLock();
-    } catch {
-      /* lock may already be released */
-    }
-    entry.writer = undefined;
-  }
-  await entry.port.close();
   entry.opened = false;
+}
+
+/** Chrome reports a redundant close as an InvalidStateError; treat it as success. */
+function isAlreadyClosed(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /already closed|not open/i.test(message);
 }
 
 function getReader(entry: SerialPortEntry): ReadableStreamDefaultReader<Uint8Array> {

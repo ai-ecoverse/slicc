@@ -156,4 +156,109 @@ describe('serial-operations', () => {
       /unknown serial handle/
     );
   });
+  // ── Re-enumeration wedge (#serial-stale-handle) ────────────────────────────
+  // A board reset during flashing cycles the USB device, so getPorts() returns
+  // a NEW SerialPort object. Before the fix the old object stayed registered
+  // and its handle failed to open forever, recoverable only by reloading.
+
+  it('serialList evicts entries whose port vanished after re-enumeration', async () => {
+    const reg = new SerialPortRegistry();
+    const before = makePort();
+    const serial = { getPorts: vi.fn(async () => [before]) } as never;
+
+    const first = await serialOps.serialList(reg, serial);
+    expect(first[0]?.handle).toBe('serial1');
+
+    // Device re-enumerates: same vid/pid, different object identity.
+    const after = makePort();
+    (serial as unknown as { getPorts: () => Promise<unknown[]> }).getPorts = async () => [after];
+
+    const second = await serialOps.serialList(reg, serial);
+    expect(second).toHaveLength(1);
+    // The dead handle must be gone, not merely shadowed.
+    expect(reg.get('serial1')).toBeUndefined();
+    expect(reg.get(second[0]!.handle)?.port).toBe(after);
+  });
+
+  it('retainOnly returns evicted entries so the caller can retire them', () => {
+    const reg = new SerialPortRegistry();
+    const gone = makePort();
+    const kept = makePort();
+    const goneHandle = reg.register(gone);
+    const keptHandle = reg.register(kept);
+    reg.get(goneHandle)!.opened = true;
+
+    const evicted = reg.retainOnly([kept]);
+    expect(evicted.map((e) => e.handle)).toEqual([goneHandle]);
+    // The entry is handed back still describing the live port, so the caller
+    // can close it — dropping it silently would strand an open port.
+    expect(evicted[0]!.entry.port).toBe(gone);
+    expect(evicted[0]!.entry.opened).toBe(true);
+    expect(reg.get(goneHandle)).toBeUndefined();
+    expect(reg.get(keptHandle)?.port).toBe(kept);
+  });
+
+  it('opening a stale handle explains that it is stale', async () => {
+    const reg = new SerialPortRegistry();
+    const port = makePort();
+    port.open = vi.fn(async () => {
+      throw new Error('Failed to open serial port.');
+    });
+    const handle = reg.register(port);
+    await expect(serialOps.serialOpen(reg, handle, { baudRate: 9600 })).rejects.toThrow(
+      /may be stale after a device reset/
+    );
+  });
+
+  it('serialClose is idempotent when the port is already closed', async () => {
+    const reg = new SerialPortRegistry();
+    const port = makePort();
+    port.close = vi.fn(async () => {
+      throw new Error('The port is already closed.');
+    });
+    const handle = reg.register(port);
+    reg.get(handle)!.opened = true;
+    await expect(serialOps.serialClose(reg, handle)).resolves.toBeUndefined();
+    expect(reg.get(handle)?.opened).toBe(false);
+  });
+
+  it('serialClose keeps `opened` true when a genuine close fails', async () => {
+    const reg = new SerialPortRegistry();
+    const port = makePort();
+    port.close = vi.fn(async () => {
+      throw new Error('device disconnected mid-transfer');
+    });
+    const handle = reg.register(port);
+    reg.get(handle)!.opened = true;
+    await expect(serialOps.serialClose(reg, handle)).rejects.toThrow(/disconnected/);
+    // The browser port may still be open. Claiming otherwise makes `serial list`
+    // wrong and makes esptool's takeOverPort() skip its close.
+    expect(reg.get(handle)?.opened).toBe(true);
+  });
+
+  it('serialList retires an evicted port that was still open and locked', async () => {
+    const reg = new SerialPortRegistry();
+    const { readable, reader } = makeReadable([]);
+    const { writable, writer } = makeWritable();
+    const stale = makePort(readable, writable);
+    const handle = reg.register(stale);
+
+    // Simulate a port left open with live stream locks (mid read/write).
+    const entry = reg.get(handle)!;
+    entry.opened = true;
+    entry.reader = reader as unknown as ReadableStreamDefaultReader<Uint8Array>;
+    entry.writer = writer as unknown as WritableStreamDefaultWriter<Uint8Array>;
+
+    // Device re-enumerates: getPorts() now reports a different object.
+    const fresh = makePort();
+    const serial = { getPorts: vi.fn(async () => [fresh]) } as never;
+    await serialOps.serialList(reg, serial);
+
+    // Merely forgetting the entry would strand an open, locked port.
+    expect(reader.cancel).toHaveBeenCalled();
+    expect(reader.releaseLock).toHaveBeenCalled();
+    expect(writer.releaseLock).toHaveBeenCalled();
+    expect(stale.close).toHaveBeenCalled();
+    expect(reg.get(handle)).toBeUndefined();
+  });
 });
