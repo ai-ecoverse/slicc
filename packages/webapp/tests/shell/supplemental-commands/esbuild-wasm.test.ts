@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { GLOBAL_NODE_MODULES } from '../../../src/shell/ipk/global-prefix.js';
 import type { ModuleReader } from '../../../src/shell/ipk/resolver.js';
 import {
   ESBUILD_VERSION,
@@ -43,7 +44,7 @@ describe('getEsbuild browser recovery guidance', () => {
     expect(error).toBeInstanceOf(Error);
     expect((error as Error).message).toBe(
       `esbuild-wasm is not installed in node_modules: run \`${bootstrap}\`` +
-        ' (searched from /workspace: /workspace/node_modules, /node_modules)'
+        ` (searched from /workspace: /workspace/node_modules, /node_modules, ${GLOBAL_NODE_MODULES})`
     );
     expect((error as Error).message).not.toContain('ipx esbuild');
   });

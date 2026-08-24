@@ -3,7 +3,15 @@ import { gzipSync } from 'fflate';
 import type { IFileSystem, SecureFetch } from 'just-bash';
 import { beforeEach, describe, expect, it } from 'vitest';
 import { VirtualFS } from '../../../src/fs/index.js';
-import { createIpkCommand } from '../../../src/shell/supplemental-commands/ipk-command.js';
+import {
+  GLOBAL_BIN_DIR,
+  GLOBAL_NODE_MODULES,
+  GLOBAL_PACKAGE_JSON,
+} from '../../../src/shell/ipk/global-prefix.js';
+import {
+  createIpkCommand,
+  parseInstallArgs,
+} from '../../../src/shell/supplemental-commands/ipk-command.js';
 
 /** just-bash does not re-export SecureFetchOptions from its root entry. */
 type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
@@ -85,6 +93,7 @@ function buildTar(entries: TarEntryInput[]): Uint8Array {
 interface SyntheticPackage {
   name: string;
   version: string;
+  dependencies?: Record<string, string>;
   files?: Record<string, string>;
 }
 
@@ -125,6 +134,7 @@ function buildRegistry(packages: SyntheticPackage[]): Registry {
       versionMap[p.version] = {
         name,
         version: p.version,
+        ...(p.dependencies ? { dependencies: p.dependencies } : {}),
         dist: {
           tarball: `https://registry.npmjs.org/${name}/-/${tarballBasename(name, p.version)}`,
         },
@@ -472,5 +482,149 @@ describe('createIpkCommand', () => {
     expect(root.dependencies['is-number']).toBeDefined();
     expect(root.dependencies['is-odd']).toBeDefined();
     expect(root.dependencies['bogus-xyz123']).toBeUndefined();
+  });
+
+  it('parseInstallArgs recognizes -g / --global and collects specs', () => {
+    expect(parseInstallArgs(['-g', 'left-pad'])).toEqual({ global: true, specs: ['left-pad'] });
+    expect(parseInstallArgs(['--global', '@acme/util'])).toEqual({
+      global: true,
+      specs: ['@acme/util'],
+    });
+    expect(parseInstallArgs(['is-number'])).toEqual({ global: false, specs: ['is-number'] });
+  });
+
+  it('ipk install -g installs into /shared/lib/node_modules, not cwd', async () => {
+    const reg = buildRegistry([{ name: 'is-number', version: '7.0.0' }]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install', '-g', 'is-number'], ctxOf(fs, '/tmp/other') as never);
+
+    expect(r.exitCode).toBe(0);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/is-number/package.json`)).toBe(true);
+    expect(await fs.exists('/tmp/other/node_modules/is-number')).toBe(false);
+    expect(await fs.exists('/tmp/other/package.json')).toBe(false);
+    const globalManifest = JSON.parse((await fs.readFile(GLOBAL_PACKAGE_JSON)) as string);
+    expect(globalManifest.dependencies['is-number']).toBeDefined();
+  });
+
+  it('npm install -g behaves identically to ipk install -g', async () => {
+    const reg = buildRegistry([{ name: 'is-number', version: '7.0.0' }]);
+    const cmd = createIpkCommand('npm', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install', '-g', 'is-number'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/is-number/package.json`)).toBe(true);
+  });
+
+  it('global install with no package name fails clearly', async () => {
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(buildRegistry([])) });
+    const r = await cmd.execute(['install', '-g'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(/global install requires/i);
+  });
+
+  it('global install publishes a PATH delegator for package bins', async () => {
+    const reg = buildRegistry([
+      {
+        name: 'say',
+        version: '1.0.0',
+        files: {
+          'package.json': JSON.stringify({
+            name: 'say',
+            version: '1.0.0',
+            bin: { say: 'cli.js' },
+          }),
+          'cli.js': 'console.log("cli");\n',
+        },
+      },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install', '-g', 'say'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    const delegator = `${GLOBAL_BIN_DIR}/say.jsh`;
+    expect(await fs.exists(delegator)).toBe(true);
+    const source = (await fs.readFile(delegator)) as string;
+    expect(source).toMatch(/@ipk-global-delegator/);
+    expect(source).toMatch(/await __h\.done/);
+    expect(source).toMatch(/process\.stdout\.write/);
+    expect(source).toMatch(/ipx/);
+  });
+
+  it('incremental global installs merge prior direct dependencies into resolution', async () => {
+    const reg = buildRegistry([
+      {
+        name: 'cli-a',
+        version: '1.0.0',
+        dependencies: { dep: '^1.0.0' },
+        files: {
+          'package.json': JSON.stringify({
+            name: 'cli-a',
+            version: '1.0.0',
+            dependencies: { dep: '^1.0.0' },
+            bin: { 'cli-a': 'cli.js' },
+          }),
+          'cli.js': 'require("dep");\n',
+        },
+      },
+      {
+        name: 'cli-b',
+        version: '1.0.0',
+        dependencies: { dep: '^3.0.0' },
+        files: {
+          'package.json': JSON.stringify({
+            name: 'cli-b',
+            version: '1.0.0',
+            dependencies: { dep: '^3.0.0' },
+            bin: { 'cli-b': 'cli.js' },
+          }),
+          'cli.js': 'require("dep");\n',
+        },
+      },
+      { name: 'dep', version: '1.0.0' },
+      { name: 'dep', version: '3.0.0' },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r1 = await cmd.execute(['install', '-g', 'cli-a'], ctxOf(fs) as never);
+    expect(r1.exitCode).toBe(0);
+    const depRoot1 = JSON.parse(
+      (await fs.readFile(`${GLOBAL_NODE_MODULES}/dep/package.json`)) as string
+    );
+    expect(depRoot1.version).toBe('1.0.0');
+
+    const r2 = await cmd.execute(['install', '-g', 'cli-b'], ctxOf(fs) as never);
+    expect(r2.exitCode).toBe(0);
+    const depRoot2 = JSON.parse(
+      (await fs.readFile(`${GLOBAL_NODE_MODULES}/dep/package.json`)) as string
+    );
+    expect(depRoot2.version).toBe('1.0.0');
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/cli-b/node_modules/dep/package.json`)).toBe(
+      true
+    );
+    const depNested = JSON.parse(
+      (await fs.readFile(`${GLOBAL_NODE_MODULES}/cli-b/node_modules/dep/package.json`)) as string
+    );
+    expect(depNested.version).toBe('3.0.0');
+  });
+
+  it('global install refuses to overwrite a user script in /shared/bin', async () => {
+    await fs.mkdir(GLOBAL_BIN_DIR, { recursive: true });
+    await fs.writeFile(`${GLOBAL_BIN_DIR}/say.jsh`, '// user script\n');
+    const reg = buildRegistry([
+      {
+        name: 'say',
+        version: '1.0.0',
+        files: {
+          'package.json': JSON.stringify({
+            name: 'say',
+            version: '1.0.0',
+            bin: { say: 'cli.js' },
+          }),
+          'cli.js': 'console.log("cli");\n',
+        },
+      },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install', '-g', 'say'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(/refusing to overwrite/i);
+    expect((await fs.readFile(`${GLOBAL_BIN_DIR}/say.jsh`)) as string).toBe('// user script\n');
   });
 });

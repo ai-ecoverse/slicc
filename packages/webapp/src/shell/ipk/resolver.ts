@@ -38,6 +38,7 @@
 
 import { joinPath, splitPath } from '../../fs/path-utils.js';
 import { NODE_BUILTINS } from '../../kernel/realm/node-builtins.js';
+import { GLOBAL_NODE_MODULES } from './global-prefix.js';
 import type { Packument, PackumentVersion } from './registry.js';
 import { resolveVersion } from './registry.js';
 import { satisfies } from './semver.js';
@@ -509,6 +510,9 @@ export function nodeModulesSearchPath(fromDir: string): string[] {
     dirs.push(joinPath(dir, 'node_modules'));
     if (dir === '/' || dir === '') break;
     dir = dirOf(dir);
+  }
+  if (!dirs.includes(GLOBAL_NODE_MODULES)) {
+    dirs.push(GLOBAL_NODE_MODULES);
   }
   return dirs;
 }

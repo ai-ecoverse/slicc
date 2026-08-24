@@ -29,6 +29,7 @@ export interface IpkCommandDeps {
 }
 
 const INSTALL_ALIASES = new Set(['install', 'i', 'add']);
+const GLOBAL_INSTALL_FLAGS = new Set(['-g', '--global', '--location=global']);
 
 function usage(name: string): string {
   return `${name} - install packages from the npm registry into node_modules
@@ -36,6 +37,7 @@ function usage(name: string): string {
 
 Usage:
   ${name} install [<pkg>[@<spec>] ...]
+  ${name} install -g <pkg>[@<spec>] ...
   ${name} i       [<pkg>[@<spec>] ...]
   ${name} run     [<script> [-- <args>...]]
   ${name} test | start | stop | restart
@@ -44,6 +46,11 @@ No-arg forms:
   ${name} install            read cwd package.json and install every entry
                              from dependencies AND devDependencies
   ${name} run                list the scripts the nearest package.json defines
+
+Global installs:
+  ${name} install -g <pkg>   install into /shared/lib/node_modules and publish
+                             CLI bins to /shared/bin (on the default $PATH).
+                             Records deps in /shared/lib/package.json, not cwd.
 
 Script running:
   ${name} run <script>       run that scripts entry in the directory holding
@@ -70,13 +77,35 @@ Spec forms:
   @scope/name      scoped packages install under node_modules/@scope/name
 
 Options:
+  -g, --global     install packages into the shared global prefix (/shared/lib)
   -h, --help       Show this help message
 
 Installed packages are extracted into <cwd>/node_modules and named installs
-are recorded in <cwd>/package.json under dependencies. Existing fields are
-preserved. Idempotent: re-installing an already-satisfied package is a clean
-no-op.
+are recorded in <cwd>/package.json under dependencies. With -g, packages go
+to /shared/lib/node_modules and deps are recorded in /shared/lib/package.json.
+Existing fields are preserved. Idempotent: re-installing an already-satisfied
+package is a clean no-op.
 `;
+}
+
+export interface ParsedInstallArgs {
+  global: boolean;
+  specs: string[];
+}
+
+/** Split install flags from package specs (supports `-g` anywhere before specs). */
+export function parseInstallArgs(args: string[]): ParsedInstallArgs {
+  let global = false;
+  const specs: string[] = [];
+  for (const arg of args) {
+    if (GLOBAL_INSTALL_FLAGS.has(arg)) {
+      global = true;
+      continue;
+    }
+    if (arg.startsWith('-')) continue;
+    specs.push(arg);
+  }
+  return { global, specs };
 }
 
 /**
@@ -149,7 +178,14 @@ async function runInstall(
   ctx: CommandContext,
   deps: IpkCommandDeps
 ): Promise<ExecResult> {
-  const specs = args.filter((a) => !a.startsWith('-'));
+  const { global, specs } = parseInstallArgs(args);
+  if (global && specs.length === 0) {
+    return {
+      stdout: '',
+      stderr: `${name}: global install requires at least one package name\n`,
+      exitCode: 1,
+    };
+  }
   if (specs.length === 0) {
     return runManifestInstall(name, ctx, deps);
   }
@@ -160,6 +196,7 @@ async function runInstall(
       fs: deps.fs,
       fetch: deps.fetch,
       cwd: ctx.cwd,
+      global,
     });
   } catch (err) {
     return {
