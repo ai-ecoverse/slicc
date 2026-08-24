@@ -45,10 +45,20 @@ type FollowerModelSync = Pick<
 > &
   Partial<Pick<FollowerSyncManager, 'requestModels'>>;
 
-/** How long to wait before asking the leader for the catalog again (#2329). */
+/** First wait before asking the leader for the catalog again (#2329). */
 const CATALOG_RETRY_DELAY_MS = 2000;
-/** Bounded: a leader with genuinely no models must not be polled forever. */
-const CATALOG_RETRY_LIMIT = 3;
+/** Ceiling for the backoff, so a long wait stays responsive when it resolves. */
+const CATALOG_RETRY_MAX_DELAY_MS = 10_000;
+/**
+ * How long to keep asking. Bounded by TIME, not by a try count: three tries at
+ * a flat 2 s gave up after six seconds, and a leader whose provider composition
+ * lands later than that was never asked again — the picker then stayed hidden
+ * for the session. Observed as a ~1-in-7 cold-start failure of the two-instance
+ * e2e even after #2330 (see #2329). A window plus backoff costs a handful of
+ * frames against a leader that genuinely has no models, and stops entirely once
+ * the pill resolves.
+ */
+const CATALOG_RETRY_WINDOW_MS = 120_000;
 
 type FollowerComposerMeta = HTMLElement & {
   model?: string;
@@ -63,7 +73,8 @@ export function createFollowerModelSurface(opts: {
   interceptLocalHandlers?: boolean;
   getLockedEffortLevel?: () => string | null;
   catalogRetryDelayMs?: number;
-  catalogRetryLimit?: number;
+  catalogRetryMaxDelayMs?: number;
+  catalogRetryWindowMs?: number;
 }): {
   onModelsList(models: TrayModelCatalogEntry[]): void;
   onModelState(state: TrayModelSelectionState): void;
@@ -73,24 +84,41 @@ export function createFollowerModelSurface(opts: {
   let state: TrayModelSelectionState | null = null;
   const enabled = opts.modelPickerEnabled !== false;
   const retryDelayMs = opts.catalogRetryDelayMs ?? CATALOG_RETRY_DELAY_MS;
-  let retriesLeft = opts.catalogRetryLimit ?? CATALOG_RETRY_LIMIT;
+  const retryMaxDelayMs = opts.catalogRetryMaxDelayMs ?? CATALOG_RETRY_MAX_DELAY_MS;
+  const retryWindowMs = opts.catalogRetryWindowMs ?? CATALOG_RETRY_WINDOW_MS;
+  let retryAttempt = 0;
+  /** When the current unresolved stretch stops being worth retrying. */
+  let retryDeadline: number | null = null;
   let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * The picker is hidden and we cannot tell whether the leader has no models or
-   * simply had none yet when we attached. Ask again, a bounded number of times
-   * (#2329) — a leader too old to answer `models.request` just ignores it, and
-   * one that really has no models costs three frames.
+   * simply had none yet when we attached. Ask again with backoff for as long as
+   * the window allows (#2329) — a leader too old to answer `models.request`
+   * just ignores it, and one that really has no models pays a handful of
+   * frames spread over a couple of minutes.
    */
   const scheduleCatalogRetry = (): void => {
-    if (!enabled || retryTimer !== null || retriesLeft <= 0) return;
+    if (!enabled || retryTimer !== null) return;
+    const now = Date.now();
+    if (retryDeadline === null) retryDeadline = now + retryWindowMs;
+    if (now >= retryDeadline) return;
+    const delay = Math.min(retryDelayMs * 2 ** retryAttempt, retryMaxDelayMs);
     retryTimer = setTimeout(() => {
       retryTimer = null;
       const sync = opts.getSync();
       if (!sync?.requestModels) return;
-      retriesLeft -= 1;
+      retryAttempt += 1;
       sync.requestModels();
-    }, retryDelayMs);
+    }, delay);
+  };
+
+  /** The pill resolved — stop asking, and re-arm for a future unresolved spell. */
+  const clearCatalogRetry = (): void => {
+    if (retryTimer !== null) clearTimeout(retryTimer);
+    retryTimer = null;
+    retryAttempt = 0;
+    retryDeadline = null;
   };
 
   const apply = (): void => {
@@ -109,6 +137,7 @@ export function createFollowerModelSurface(opts: {
     );
     opts.composerMeta.toggleAttribute('no-thinking', !active.reasoning);
     opts.composerMeta.style.removeProperty('display');
+    clearCatalogRetry();
   };
 
   const intercept = (event: Event): void => {
@@ -155,9 +184,7 @@ export function createFollowerModelSurface(opts: {
   const reset = (): void => {
     models = [];
     state = null;
-    if (retryTimer !== null) clearTimeout(retryTimer);
-    retryTimer = null;
-    retriesLeft = opts.catalogRetryLimit ?? CATALOG_RETRY_LIMIT;
+    clearCatalogRetry();
     opts.composerMeta.models = [];
     opts.composerMeta.style.display = 'none';
   };
