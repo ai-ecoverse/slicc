@@ -15,15 +15,28 @@ Each contribution runs through a **cost-ordered cascade** (`lib.mjs`), stopping
 at the first signal that fires:
 
 1. **Account (cheap)** — GitHub user `type === 'Bot'`, a comment posted through a
-   GitHub App token, or a bot-looking login (`*[bot]`, `*-bot`, `*-ci`, or a
-   known bot in `DEFAULT_BOT_LOGINS`).
-2. **Markdown density (medium)** — count of markdown features (headings, bullets,
-   bold, code, links, tables, …) per word. Heavily formatted prose above
-   `MARKDOWN_DENSITY_THRESHOLD` reads as machine-generated.
-3. **Similarity (expensive)** — max Jaccard similarity of the contribution's word
+   GitHub App token, or a bot-looking login (`*[bot]`, `*-bot`, `*-ci`,
+   `copilot-*`, `chatgpt-*`, or a known bot in `DEFAULT_BOT_LOGINS`).
+2. **Signature (cheap)** — explicit AI-attribution footers and bot-review banners
+   (`🤖 Generated with`, `Co-Authored-By: Claude/Cursor/Codex/…`, Codex / Copilot
+   quota templates). These are authorship claims, not writing-style guesses.
+3. **Agent prose (cheap)** — coding-agent comment shapes posted through a human
+   login: SHA-stamped Follow-up notes, `@codex review` / `@claude review` pings,
+   "Captured live on" + commit SHA, isolated harness writeups, orchestrator-review
+   / rebase headings, automation PR bodies.
+4. **Markdown density / structure (medium)** — count of markdown features
+   (headings, bullets, bold, code, links, tables, …) per word. Heavily formatted
+   prose above `MARKDOWN_DENSITY_THRESHOLD` reads as machine-generated. A filled
+   house PR template dilutes that ratio (more words, same headings), so a second
+   gate flags ≥ `STRUCTURAL_HEADING_THRESHOLD` headings **and** ≥
+   `STRUCTURAL_LIST_THRESHOLD` list items, or ≥ `HOUSE_HEADING_THRESHOLD`
+   named house-template headings (`## Summary` / `## Why` / `## Verification`
+   / …), even when density is just under 0.12. Empty bodies are not human
+   contributions.
+5. **Similarity (expensive)** — max Jaccard similarity of the contribution's word
    set against its sibling contributions. A near-duplicate above
    `SIMILARITY_THRESHOLD` is a templated/boilerplate post.
-4. **Pangram (fallback)** — only when nothing above fired and the text is long
+6. **Pangram (fallback)** — only when nothing above fired and the text is long
    enough, the [Pangram](https://docs.pangram.com) async detection API is asked.
 
 When Pangram is unconfigured, the text is too short, or the call fails, the
@@ -111,5 +124,7 @@ medium heuristics).
 | `PANGRAM_API_KEY`  | _(unset)_                               | Pangram `x-api-key`; skips the fallback tier when unset. |
 | `PANGRAM_BASE_URL` | `https://text.external-api.pangram.com` | Pangram API base URL.                                    |
 
-Thresholds (`MARKDOWN_DENSITY_THRESHOLD`, `SIMILARITY_THRESHOLD`) and the bot
-login set (`DEFAULT_BOT_LOGINS`) live in `lib.mjs`.
+Thresholds (`MARKDOWN_DENSITY_THRESHOLD`, `STRUCTURAL_HEADING_THRESHOLD`,
+`STRUCTURAL_LIST_THRESHOLD`, `SIMILARITY_THRESHOLD`), the bot login set
+(`DEFAULT_BOT_LOGINS`), and the signature / agent-prose pattern lists live in
+`lib.mjs`.

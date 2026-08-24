@@ -6,9 +6,9 @@ name: AI Comment Detection
 #   • human-in-the-loop — at least one human has contributed
 #
 # Each PR body, comment, and review is classified by a cost-ordered cascade
-# (account check → markdown density → similarity → Pangram AI detection); see
-# packages/dev-tools/ai-comment-detection/. Pure logic is unit-tested in the
-# `dev-tools` vitest project; only the driver does network I/O.
+# (account → signature → agent prose → markdown density/structure → similarity
+# → Pangram); see packages/dev-tools/ai-comment-detection/. Pure logic is
+# unit-tested in the `dev-tools` vitest project; only the driver does network I/O.
 #
 # Optional repository secret:
 #   PANGRAM_API_KEY  x-api-key for the Pangram async detection API. When unset
