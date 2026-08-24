@@ -8,6 +8,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { setBridgeToken, setLocalApiBaseUrl } from '../../../src/shell/proxied-fetch.js';
 import {
+  floatKindForRuntimeMode,
   floatLabelForKind,
   resolveStandaloneFloatKind,
   resolveStandaloneFloatLabel,
@@ -41,6 +42,12 @@ describe('resolveStandaloneFloatKind', () => {
     await expect(
       resolveStandaloneFloatKind({ fetchFn: okJson({ status: 'ok', service: 'mystery' }) })
     ).resolves.toBe('standalone');
+  });
+});
+
+describe('floatKindForRuntimeMode', () => {
+  it('maps electron-overlay to electron without server fingerprinting', () => {
+    expect(floatKindForRuntimeMode('electron-overlay')).toBe('electron');
   });
 });
 

@@ -9,7 +9,6 @@ import {
   connectionFill,
   connectionFromLegacyOnline,
   connectionGlow,
-  connectionLabel,
   connectionPulses,
   defaultFloatbarStatus,
   type FloatbarConnection,
@@ -17,7 +16,6 @@ import {
   type FloatbarStatus,
   type FloatbarTrayRole,
   floatKindIcon,
-  floatKindLabel,
   statusTipFragment,
   trayRoleIcon,
 } from './floatbar-status.js';
@@ -257,6 +255,7 @@ const STYLE = `
 
 @media (prefers-reduced-motion: reduce) {
   .tip { transition: none; }
+  .beacon[data-pulse] .beacon__ring { animation: none; }
 }
 `;
 const SHEET = sheet(STYLE);
@@ -564,7 +563,7 @@ export class SliccFloatbar extends HTMLElement {
       part: 'beacon dot',
       'data-connection': connection,
       'data-float-kind': floatKind,
-      'aria-label': `${floatKindLabel(floatKind)}, ${connectionLabel(connection)}`,
+      'aria-label': statusTipFragment({ connection, floatKind, trayRole }),
     };
     if (trayRole !== 'none') attrs['data-tray-role'] = trayRole;
     if (connectionPulses(connection)) attrs['data-pulse'] = '';

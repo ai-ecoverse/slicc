@@ -96,6 +96,41 @@ describe('slicc-floatbar', () => {
       expect(el.shadowRoot?.querySelector('.beacon__role svg')).not.toBeNull();
       expect(el.status.trayRole).toBe('leader');
     });
+
+    it('includes tray role in the beacon aria-label', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.setAttribute('float-kind', 'npx');
+      el.setAttribute('connection', 'live');
+      el.setAttribute('tray-role', 'leader');
+      document.body.appendChild(el);
+      const beacon = el.shadowRoot?.querySelector('.beacon') as HTMLElement;
+      expect(beacon.getAttribute('aria-label')).toBe('npx · leading tray · live');
+    });
+
+    it('disables the connecting pulse under prefers-reduced-motion', () => {
+      const el = document.createElement('slicc-floatbar');
+      document.body.appendChild(el);
+      let guarded = false;
+      for (const s of el.shadowRoot?.adoptedStyleSheets ?? []) {
+        for (const rule of s.cssRules) {
+          if (
+            rule instanceof CSSMediaRule &&
+            rule.conditionText.includes('prefers-reduced-motion')
+          ) {
+            for (const inner of rule.cssRules) {
+              if (
+                inner instanceof CSSStyleRule &&
+                inner.selectorText.includes('.beacon[data-pulse]') &&
+                inner.style.animationName === 'none'
+              ) {
+                guarded = true;
+              }
+            }
+          }
+        }
+      }
+      expect(guarded).toBe(true);
+    });
   });
 
   describe('the legacy status dot (online only)', () => {

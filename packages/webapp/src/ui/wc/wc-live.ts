@@ -1207,7 +1207,7 @@ export async function mountWcUiLive(
   );
   const { installFloatbarStatus } = await import('./wc-floatbar-online.js');
   const floatKind =
-    runtimeMode === 'standalone' || runtimeMode === 'electron-overlay'
+    runtimeMode === 'standalone'
       ? await resolveStandaloneFloatKind()
       : floatKindForRuntimeMode(runtimeMode);
   const floatLabel = floatLabelForKind(floatKind);
