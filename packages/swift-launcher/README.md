@@ -161,3 +161,6 @@ covers `--update-host` / `SLICC_UPDATE_HOST` parsing, and
 `SliccstartTests/UpdateCheckIntegrationTests.swift` hits the real GitHub API
 through `TolerantGithubReleaseProvider` to catch release-naming drift that a
 frozen fixture could not.
+
+Native packaging (signed DMG + update ZIP) runs when files under this package
+change since the previous release tag.
