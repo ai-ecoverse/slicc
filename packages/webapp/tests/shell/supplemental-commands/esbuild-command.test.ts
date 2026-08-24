@@ -21,6 +21,7 @@ const esb = vi.hoisted(() => ({
 }));
 
 vi.mock('../../../src/shell/supplemental-commands/esbuild-wasm.js', () => ({
+  ESBUILD_VERSION: esb.version,
   resetEsbuildForTests: () => {},
   getEsbuild: async () => {
     if (esb.loadError) throw esb.loadError;
@@ -179,7 +180,7 @@ describe('createVfsPlugin bare specifier resolution', () => {
       },
       onLoad: () => {},
     };
-    plugin.setup(build as unknown as Parameters<typeof plugin.setup>[0]);
+    await plugin.setup(build as unknown as Parameters<typeof plugin.setup>[0]);
     if (!resolveCb) throw new Error('onResolve callback not registered');
     const cb: ResolveCb = resolveCb;
     const res = await cb({ path: 'react', importer: '/workspace/entry.ts' });
@@ -204,7 +205,7 @@ describe('createVfsPlugin bare specifier resolution', () => {
       },
       onLoad: () => {},
     };
-    plugin.setup(build as unknown as Parameters<typeof plugin.setup>[0]);
+    await plugin.setup(build as unknown as Parameters<typeof plugin.setup>[0]);
     if (!resolveCb) throw new Error('onResolve callback not registered');
     const cb: ResolveCb = resolveCb;
     const res = await cb({ path: 'node:fs', importer: '/workspace/entry.ts' });
@@ -220,7 +221,7 @@ describe('createVfsPlugin bare specifier resolution', () => {
       external?: boolean;
     }>;
     let resolveCb: ResolveCb | null = null;
-    plugin.setup({
+    await plugin.setup({
       onResolve(_filter: { filter: RegExp }, cb: ResolveCb) {
         resolveCb = cb;
       },
@@ -289,7 +290,7 @@ describe('createVfsPlugin bare specifier resolution', () => {
       kind: string;
     }) => Promise<{ path?: string; errors?: { text: string }[] }>;
     let resolveCb: ResolveCb | null = null;
-    plugin.setup({
+    await plugin.setup({
       onResolve(_filter: { filter: RegExp }, cb: ResolveCb) {
         resolveCb = cb;
       },
@@ -590,7 +591,7 @@ describe('createVfsPlugin VFS resolution + load', () => {
   };
   const pluginCtx = () => createMockCtx({ fs: { resolvePath: normalize } });
 
-  function wirePlugin(ctx: ReturnType<typeof createMockCtx>) {
+  async function wirePlugin(ctx: ReturnType<typeof createMockCtx>) {
     const ipk = createIpkContextFromCtx(ctx);
     const plugin = createVfsPlugin(ctx.fs, ctx.cwd, ipk, [], null);
     let resolveCb: ResolveCb | null = null;
@@ -603,7 +604,7 @@ describe('createVfsPlugin VFS resolution + load', () => {
         loadCb = cb;
       },
     };
-    plugin.setup(build as unknown as Parameters<typeof plugin.setup>[0]);
+    await plugin.setup(build as unknown as Parameters<typeof plugin.setup>[0]);
     if (!resolveCb || !loadCb) throw new Error('plugin callbacks not registered');
     return { resolveCb: resolveCb as ResolveCb, loadCb: loadCb as LoadCb };
   }
@@ -611,7 +612,7 @@ describe('createVfsPlugin VFS resolution + load', () => {
   it('resolves a relative import by appending a known extension', async () => {
     const ctx = pluginCtx();
     await ctx.fs.writeFile('/workspace/mod.ts', 'export default 1;');
-    const { resolveCb } = wirePlugin(ctx);
+    const { resolveCb } = await wirePlugin(ctx);
     const res = await resolveCb({ path: './mod', importer: '/workspace/entry.ts' });
     expect(res.path).toBe('/workspace/mod.ts');
   });
@@ -619,14 +620,14 @@ describe('createVfsPlugin VFS resolution + load', () => {
   it('resolves a directory import to its index file', async () => {
     const ctx = pluginCtx();
     await ctx.fs.writeFile('/workspace/dir/index.ts', 'export default 1;');
-    const { resolveCb } = wirePlugin(ctx);
+    const { resolveCb } = await wirePlugin(ctx);
     const res = await resolveCb({ path: './dir', importer: '/workspace/entry.ts' });
     expect(res.path).toBe('/workspace/dir/index.ts');
   });
 
   it('returns the bare candidate when nothing resolves', async () => {
     const ctx = pluginCtx();
-    const { resolveCb } = wirePlugin(ctx);
+    const { resolveCb } = await wirePlugin(ctx);
     const res = await resolveCb({ path: './nope', importer: '/workspace/entry.ts' });
     expect(res.path).toBe('/workspace/nope');
   });
@@ -634,7 +635,7 @@ describe('createVfsPlugin VFS resolution + load', () => {
   it('loads file contents with the inferred loader', async () => {
     const ctx = pluginCtx();
     await ctx.fs.writeFile('/workspace/mod.tsx', 'export const A = 1;');
-    const { loadCb } = wirePlugin(ctx);
+    const { loadCb } = await wirePlugin(ctx);
     const res = await loadCb({ path: '/workspace/mod.tsx', namespace: 'file' });
     expect(res?.contents).toBe('export const A = 1;');
     expect(res?.loader).toBe('tsx');
@@ -643,7 +644,7 @@ describe('createVfsPlugin VFS resolution + load', () => {
 
   it('skips load for non-file namespaces', async () => {
     const ctx = pluginCtx();
-    const { loadCb } = wirePlugin(ctx);
+    const { loadCb } = await wirePlugin(ctx);
     const res = await loadCb({ path: 'react', namespace: 'ipk' });
     expect(res).toBeNull();
   });
