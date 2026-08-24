@@ -29,9 +29,8 @@
  *     just renders a static `$ ` prompt. A future event can carry
  *     `cwd` updates from the host.
  *
- * Worker safety: this file imports from `../ui/...` (xterm,
- * `OffscreenClient`) and only loads on the page side — never in
- * the worker bundle.
+ * Worker safety: this file dynamically imports xterm and only loads
+ * on the page side — never in the worker bundle.
  */
 
 import type {
@@ -43,6 +42,7 @@ import type {
 import type { FitAddon } from '@xterm/addon-fit';
 import type { Terminal } from '@xterm/xterm';
 import type { Readline } from 'xterm-readline';
+import { getLeaderPermissionsSurface } from '../core/permissions-surface-registry.js';
 import { storePendingHandle } from '../fs/mount-picker-popup.js';
 import { parseEsptoolArgs } from '../shell/supplemental-commands/esptool-command.js';
 import { parseHidArgs, parseHidFilters } from '../shell/supplemental-commands/hid-command.js';
@@ -52,8 +52,6 @@ import {
 } from '../shell/supplemental-commands/serial-command.js';
 import { parseUsbArgs, parseUsbFilters } from '../shell/supplemental-commands/usb-command.js';
 import type { TerminalEventMsg, TerminalSessionId } from '../shell/terminal-protocol.js';
-import type { OffscreenClient } from '../ui/offscreen-client.js';
-import { getLeaderPermissionsSurface } from '../ui/wc/wc-permissions-registry.js';
 import {
   getSharedHidRegistry,
   type HidDevice,
@@ -64,7 +62,11 @@ import {
   type SerialFilter,
   type SerialPort,
 } from './serial-port-registry.js';
-import { type TerminalExecResult, TerminalSessionClient } from './terminal-session-client.js';
+import {
+  type TerminalExecResult,
+  TerminalSessionClient,
+  type TerminalSessionTransport,
+} from './terminal-session-client.js';
 import {
   getSharedUsbRegistry,
   type UsbDevice,
@@ -72,7 +74,7 @@ import {
 } from './usb-device-registry.js';
 
 export interface RemoteTerminalViewOptions {
-  client: OffscreenClient;
+  client: TerminalSessionTransport;
   /** Session id; defaults to `panel-terminal-${Date.now()}`. */
   sid?: TerminalSessionId;
   cwd?: string;
@@ -936,7 +938,7 @@ export class RemoteTerminalView {
  * Parse a typed command line and return the local-mount target
  * path if it looks like `mount /some/path` with no `--source` flag
  * and no recognized subcommand. Returns `null` for anything else
- * (`mount list`, `mount unmount`, `mount /x --source s3://…`,
+ * (`mount list`, `mount --list`, `mount unmount`, `mount /x --source s3://…`,
  * `mount` alone, …).
  *
  * The match is intentionally narrow — false positives would fire
@@ -945,12 +947,18 @@ export class RemoteTerminalView {
  * invocation) reliably matches; everything else falls through to
  * the worker, which produces the right error message itself.
  */
-function parseLocalMountTarget(line: string): string | null {
+export function parseLocalMountTarget(line: string): string | null {
   const trimmed = line.trim();
   if (!trimmed.startsWith('mount')) return null;
   const tokens = trimmed.split(/\s+/);
   if (tokens[0] !== 'mount') return null;
-  if (tokens.includes('--source') || tokens.includes('--help') || tokens.includes('-h')) {
+  if (
+    tokens.includes('--source') ||
+    tokens.includes('--help') ||
+    tokens.includes('-h') ||
+    tokens.includes('--list') ||
+    tokens.includes('-l')
+  ) {
     return null;
   }
   // First non-flag arg.
