@@ -1123,7 +1123,12 @@ describe('OffscreenClient stream-pointer resync on scoop-messages-replaced', () 
         { id: 'buf-stream', role: 'assistant', content: 'before', timestamp: 2, isStreaming: true },
       ],
     });
-    expect(callbacks.onScoopMessagesReplaced).toHaveBeenCalledWith('cone_123', expect.any(Array));
+    expect(callbacks.onScoopMessagesReplaced).toHaveBeenCalledWith(
+      'cone_123',
+      expect.any(Array),
+      // `queuedIds` rides the same envelope (#2354); absent here.
+      undefined
+    );
 
     events.length = 0;
     // The next delta must continue into the replay's bubble (no new

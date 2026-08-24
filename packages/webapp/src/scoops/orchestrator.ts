@@ -1252,6 +1252,14 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.lifecycle.getContext(jid);
   }
 
+  /**
+   * Ids of a scoop's still-pending queued messages, in delivery order
+   * (#2354). See {@link ScoopMessageRouter.getQueuedMessageIds}.
+   */
+  getQueuedMessageIds(jid: string): string[] {
+    return this.messageRouter.getQueuedMessageIds(jid);
+  }
+
   /** Clear all queued messages for a scoop (removes from both IndexedDB and in-memory queue). */
   clearQueuedMessages(jid: string): Promise<void> {
     return this.messageRouter.clearQueuedMessages(jid);

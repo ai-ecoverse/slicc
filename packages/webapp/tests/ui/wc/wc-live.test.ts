@@ -439,7 +439,8 @@ describe('createWcLiveCallbacks', () => {
     callbacks.onScoopMessagesReplaced?.(cone.jid, messages as never);
     callbacks.onScoopMessagesReplaced?.('other', [] as never);
     expect(wiring.controller.loadMessages).toHaveBeenCalledTimes(1);
-    expect(wiring.controller.loadMessages).toHaveBeenCalledWith(messages);
+    // The backend queue snapshot rides the same envelope (#2354).
+    expect(wiring.controller.loadMessages).toHaveBeenCalledWith(messages, undefined);
   });
 
   it('selects the cone when the kernel reports ready', () => {

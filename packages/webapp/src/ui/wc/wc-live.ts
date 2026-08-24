@@ -226,6 +226,8 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     if (!readOnly) refs.inputCard.removeAttribute('disabled');
     void applyThreadContext(refs, scoop, client.getScoops());
     client.requestScoopMessages(scoop.jid);
+    // Ahead of the replay on purpose: the held-queue reconcile that runs when
+    // it lands reads the turn state (see `#applyPendingQueueRestore`, #2354).
     controller?.setProcessing(client.isProcessing(scoop.jid));
     // Boot default for the navbar eyes: until any message/input lands, the
     // first-selected scoop wears them (selection itself is not "activity").

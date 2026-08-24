@@ -201,9 +201,12 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
         wiring.getController()?.updateLickState(update.lickId, update.lickState);
       }
     },
-    onScoopMessagesReplaced: (jid, messages) => {
+    onScoopMessagesReplaced: (jid, messages, queuedIds) => {
       if (wiring.getSelected()?.jid !== jid) return;
-      wiring.getController()?.loadMessages(messages as unknown as ChatMessage[]);
+      // `queuedIds` rides the SAME envelope as `messages`, so the two are a
+      // consistent snapshot of the backend at one instant — which is what a
+      // queue held across a read-only detour is reconciled against (#2354).
+      wiring.getController()?.loadMessages(messages as unknown as ChatMessage[], queuedIds);
     },
     onReady: () => {
       refreshScoops();

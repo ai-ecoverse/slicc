@@ -120,7 +120,13 @@ export interface OffscreenClientCallbacks {
    */
   onScoopMessagesReplaced?: (
     scoopJid: string,
-    messages: ScoopMessagesReplacedMsg['messages']
+    messages: ScoopMessagesReplacedMsg['messages'],
+    /**
+     * Authoritative pending-queue ids for this scoop, in delivery order, or
+     * `undefined` when the sender could not answer (#2354). See
+     * {@link ScoopMessagesReplacedMsg.queuedIds}.
+     */
+    queuedIds?: string[]
   ) => void;
   /** Called when the offscreen engine is ready and state has been received. */
   onReady?: () => void;
@@ -904,7 +910,7 @@ export class OffscreenClient implements KernelClientFacade {
       case 'scoop-messages-replaced': {
         const m = msg as ScoopMessagesReplacedMsg;
         this.resyncStreamPointer(m.scoopJid, m.messages);
-        this.callbacks.onScoopMessagesReplaced?.(m.scoopJid, m.messages);
+        this.callbacks.onScoopMessagesReplaced?.(m.scoopJid, m.messages, m.queuedIds);
         break;
       }
 

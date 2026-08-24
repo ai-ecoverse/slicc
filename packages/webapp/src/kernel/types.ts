@@ -162,7 +162,13 @@ export interface KernelClientCallbacks {
   ) => void;
   onScoopMessagesReplaced?: (
     scoopJid: string,
-    messages: ScoopMessagesReplacedMsg['messages']
+    messages: ScoopMessagesReplacedMsg['messages'],
+    /**
+     * Authoritative pending-queue ids for this scoop, in delivery order, or
+     * `undefined` when the sender could not answer (#2354). See
+     * {@link ScoopMessagesReplacedMsg.queuedIds}.
+     */
+    queuedIds?: string[]
   ) => void;
   onReady?: () => void;
 }
