@@ -76,46 +76,67 @@ struct MountsSettingsView: View {
         Form {
             Section("Auto-mounted folders") {
                 TextField(
-                    "One mapping per line, e.g. ~/Projects/foo:/mnt/foo",
+                    "~/Projects/foo:/mnt/foo",
                     text: $mountTableText, axis: .vertical
                 )
                 .font(.system(.body, design: .monospaced))
                 .lineLimit(3...8)
+                .autocorrectionDisabled()
+                .labelsHidden()
 
                 Text(
-                    "Each folder on the left appears in SLICC at the path on the right, "
-                        + "automatically on every launch and reload — no folder picker, no "
-                        + "permission prompt. Folders you mount from inside SLICC keep asking as "
-                        + "usual. Takes effect on the next browser launch."
+                    "One mapping per line: a folder on your Mac, a colon, and the path it "
+                        + "should have inside SLICC. Mapped folders are available automatically "
+                        + "on every launch and reload — no folder picker, no permission prompt. "
+                        + "Folders you mount from inside SLICC keep asking as usual. Takes "
+                        + "effect on the next browser launch."
                 )
                 .font(.caption)
                 .foregroundStyle(.secondary)
+                .fixedSize(horizontal: false, vertical: true)
 
                 if !invalidLines.isEmpty {
-                    Text(
-                        "Ignored (need <folder>:</slicc-path>, both absolute): "
-                            + invalidLines.joined(separator: ", ")
-                    )
+                    Label {
+                        Text(
+                            "Ignored — each line needs an absolute folder and an absolute "
+                                + "SLICC path: \(invalidLines.joined(separator: ", "))"
+                        )
+                        .fixedSize(horizontal: false, vertical: true)
+                    } icon: {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.yellow)
+                    }
                     .font(.caption)
-                    .foregroundStyle(.red)
                 }
             }
 
             Section("Active table") {
                 if mappings.isEmpty {
                     Text("Empty — no folders are auto-mounted.")
-                        .font(.caption)
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(mappings, id: \.path) { mapping in
-                        Text("\(mapping.hostPath)  →  \(mapping.path)")
-                            .font(.system(.body, design: .monospaced))
+                        HStack(spacing: 8) {
+                            Text(mapping.hostPath)
+                                .font(.system(.body, design: .monospaced))
+                                .truncationMode(.middle)
+                                .lineLimit(1)
+                                .layoutPriority(1)
+                            Image(systemName: "arrow.right")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                            Text(mapping.path)
+                                .font(.system(.body, design: .monospaced))
+                                .lineLimit(1)
+                            Spacer(minLength: 0)
+                        }
                     }
                 }
             }
         }
-        .padding()
-        .frame(width: 520)
+        .formStyle(.grouped)
+        .padding(20)
+        .frame(width: 560)
     }
 }
 
