@@ -36,6 +36,9 @@ function fakeLegacyStore() {
       save: vi.fn(async (session: { id: string; messages: unknown[]; createdAt: number }) => {
         saved.set(session.id, { messages: session.messages, createdAt: session.createdAt });
       }),
+      delete: vi.fn(async (id: string) => {
+        saved.delete(id);
+      }),
       load: vi.fn(async (id: string) => {
         const found = saved.get(id);
         return found
@@ -137,6 +140,34 @@ describe('SessionPersistence with a canonical record', () => {
     persistence.persistNow();
     await vi.waitFor(() => expect(legacy.saved.get('cone_1')?.messages).toEqual(messages));
     expect(await canonicalStore.listKeys()).toEqual([]);
+  });
+
+  it('clear() forgets BOTH representations, so "New chat" stays cleared', async () => {
+    // Deleting only the legacy session left the canonical record standing,
+    // and a restore prefers the record — the next reload resurrected the
+    // conversation the user had just cleared. Codex caught this on #2364.
+    const { persistence, legacy } = build();
+    persistence.persistNow();
+    await vi.waitFor(async () => expect(await canonicalStore.load(identity.key)).not.toBeNull());
+    legacy.saved.set('cone_1', { messages: [{ role: 'user' }], createdAt: 5 });
+
+    await persistence.clear();
+
+    expect(await canonicalStore.load(identity.key)).toBeNull();
+    expect(legacy.saved.has('cone_1')).toBe(false);
+    expect(await persistence.restore()).toEqual([]);
+  });
+
+  it('clear() cancels a pending checkpoint so it cannot write the history back', async () => {
+    const { persistence } = build();
+    persistence.schedule();
+
+    await persistence.clear();
+    await vi.waitFor(() => expect(true).toBe(true));
+    // Give the 1s debounce more than enough time to have fired.
+    await new Promise((resolve) => setTimeout(resolve, 1_100));
+
+    expect(await canonicalStore.load(identity.key)).toBeNull();
   });
 
   it('a canonical write failure never costs the legacy write', async () => {

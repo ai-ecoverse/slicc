@@ -284,6 +284,41 @@ describe('migrateConversations', () => {
     ]);
   });
 
+  it('leaves a newer-schema record untouched on a rollback', async () => {
+    const cone = rootRecord();
+    legacy.agent.set(cone.jid, { messages: legacyAgentMessages() });
+    const future = {
+      key: conversationKeyFor(cone),
+      version: 99,
+      workUnitId: cone.jid,
+      workspaceId: '/workspace',
+      folder: 'cone',
+      origin: 'agent-history' as const,
+      entries: [],
+      createdAt: 1,
+      updatedAt: 1,
+      legacyKeys: { agentSessionId: cone.jid, chatSessionId: 'session-cone' },
+    };
+    await store.save(future);
+
+    const summary = await migrateConversations(depsFor(store, [cone], legacy));
+
+    expect(summary.migrated).toBe(0);
+    expect((await store.read(conversationKeyFor(cone))).status).toBe('incompatible');
+  });
+
+  it('skips — rather than overwrites — a unit whose canonical record cannot be read', async () => {
+    const cone = rootRecord();
+    legacy.agent.set(cone.jid, { messages: legacyAgentMessages() });
+    vi.spyOn(store, 'read').mockResolvedValue({ status: 'error', reason: 'IndexedDB unavailable' });
+
+    const summary = await migrateConversations(depsFor(store, [cone], legacy));
+
+    expect(summary.skipped).toBe(1);
+    const state = await store.getMigrationState(CONVERSATION_MIGRATION_ID);
+    expect(state?.skipped[0]?.reason).toContain('IndexedDB unavailable');
+  });
+
   it('leaves a record it already migrated alone', async () => {
     const cone = rootRecord();
     legacy.agent.set(cone.jid, { messages: legacyAgentMessages() });

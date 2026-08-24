@@ -205,6 +205,33 @@ export class SessionPersistence {
   }
 
   /**
+   * Forget this unit's durable conversation — "New chat" / `clear-chat`.
+   *
+   * BOTH representations go, in one place. Deleting only the legacy session
+   * would leave the canonical record standing, and since a restore prefers
+   * that record the next reload would resurrect the conversation the user
+   * just cleared. Any pending checkpoint is cancelled first so an in-flight
+   * debounce cannot write the history back moments later.
+   */
+  async clear(): Promise<void> {
+    if (this.timer !== null) {
+      clearTimeout(this.timer);
+      this.timer = null;
+    }
+    this.createdAt = 0;
+    const canonical = this.deps.canonical;
+    if (canonical) await canonical.store.delete(canonical.identity.key);
+    try {
+      await this.deps.store?.delete(this.deps.sessionId);
+    } catch (err) {
+      log.warn('Failed to clear the legacy agent session', {
+        folder: this.deps.folder,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+
+  /**
    * Debounced mid-turn checkpoint (#1987). Persistence used to happen only
    * at `agent_end`, so a turn that aborted abnormally — compaction failure,
    * worker death, page reload — lost EVERY message since the previous turn:

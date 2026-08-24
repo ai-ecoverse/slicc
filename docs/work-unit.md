@@ -139,6 +139,21 @@ reconstruction of a rendered transcript to the model is worse than restoring
 from the legacy store, and an empty derivation is exactly what makes that
 fallback happen.
 
+**Clearing goes through the same owner.** "New chat" / `clear-chat` calls
+`ScoopContext.clearSession()` → `SessionPersistence.clear()`, which cancels
+any pending checkpoint and deletes BOTH representations. Deleting only the
+legacy session would leave the canonical record standing, and since a restore
+prefers the record, the next reload would resurrect the conversation the user
+just cleared.
+
+**A write never overwrites a record it did not understand.** `store.read()`
+distinguishes `absent` / `malformed` / `incompatible` / `error`, and only the
+first two may be written over. A record from a NEWER schema (a rollback, where
+that build's history may live in a shape this one cannot express) and a read
+that merely FAILED are both left exactly where they are — the lossy `load()`
+that answers `null` for all four is for READERS, whose `null` means "fall back
+to the legacy store".
+
 #### The read-old/write-new window, and how to roll back
 
 This is not a cutover. While the window is open:

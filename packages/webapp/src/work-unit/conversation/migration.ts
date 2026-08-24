@@ -149,8 +149,25 @@ async function migrateUnit(
   key: string,
   now: number
 ): Promise<'migrated' | 'already' | 'empty'> {
-  const existing = await deps.store.load(key);
-  if (existing && existing.version === CONVERSATION_RECORD_VERSION) return 'already';
+  const current = await deps.store.read(key);
+  if (current.status === 'ok') return 'already';
+  if (current.status === 'incompatible') {
+    // A rollback: this profile has already been through a NEWER build, whose
+    // record may hold history in a representation we cannot express. Leave it
+    // alone and let this build read the (still untouched) legacy stores.
+    log.info('Leaving a newer-schema conversation record untouched', {
+      key,
+      version: current.version,
+    });
+    return 'already';
+  }
+  if (current.status === 'error') {
+    // The canonical read failed, so we cannot know whether a good record is
+    // sitting there. Refuse to write; it is recorded as skipped.
+    throw new Error(`canonical record unreadable: ${current.reason}`);
+  }
+  // `absent` or `malformed` — both are safe to write: the legacy stores are
+  // the source of truth here, and a broken record is a repair, not a loss.
 
   const identity = {
     key,

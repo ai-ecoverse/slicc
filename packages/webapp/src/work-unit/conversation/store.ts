@@ -11,8 +11,17 @@
  *
  * **Reads never throw.** A record this build cannot parse, a database that
  * will not open, a browser with IndexedDB disabled — every one of them
- * answers `null`, and `null` means "fall back to the legacy stores". That is
- * the kill switch: user history is never gated on this database working.
+ * answers `null` from {@link WorkUnitConversationStore.load}, and `null`
+ * means "fall back to the legacy stores". That is the kill switch: user
+ * history is never gated on this database working.
+ *
+ * Writers do NOT use that lossy read. {@link ConversationReadResult}
+ * distinguishes the four ways a read can decline, because two of them must
+ * never be written over: a record from a NEWER schema (a rollback — the
+ * other build's history may only exist in that representation) and a read
+ * that FAILED (the record may be perfectly good and merely unreachable).
+ * Only a record that is absent, or one whose stored shape is provably
+ * broken, may be replaced.
  *
  * **Writes are append-only** in the ordinary case: {@link syncAgentMessages}
  * re-ingests the unit's full message list and stores only the entries beyond
@@ -55,6 +64,24 @@ export interface ConversationMigrationState {
   updatedAt: number;
 }
 
+/**
+ * The four ways a read can answer, for callers that are about to WRITE.
+ *
+ * | status         | meaning                                    | may overwrite |
+ * | -------------- | ------------------------------------------ | ------------- |
+ * | `ok`           | a record this build understands            | yes           |
+ * | `absent`       | no record for this key                     | yes (create)  |
+ * | `malformed`    | a record whose stored shape is broken      | yes (repair)  |
+ * | `incompatible` | a record from a NEWER schema               | **never**     |
+ * | `error`        | the read itself failed                     | **never**     |
+ */
+export type ConversationReadResult =
+  | { status: 'ok'; record: WorkUnitConversationRecord }
+  | { status: 'absent' }
+  | { status: 'malformed'; reason: string }
+  | { status: 'incompatible'; version: number }
+  | { status: 'error'; reason: string };
+
 /** Identity a write supplies so a record created on first append is complete. */
 export interface ConversationIdentity {
   key: string;
@@ -79,12 +106,22 @@ export class WorkUnitConversationStore {
    * same: fall back to the legacy stores.
    */
   async load(key: string): Promise<WorkUnitConversationRecord | null> {
+    const result = await this.read(key);
+    return result.status === 'ok' ? result.record : null;
+  }
+
+  /**
+   * The full read, for callers that need to know WHY a record did not come
+   * back — every write path does, because two of the reasons must never be
+   * overwritten. Still never throws.
+   */
+  async read(key: string): Promise<ConversationReadResult> {
     try {
       const db = await this.getDb();
       const record = await request<WorkUnitConversationRecord | undefined>(
         db.transaction(CONVERSATIONS_STORE, 'readonly').objectStore(CONVERSATIONS_STORE).get(key)
       );
-      if (!record) return null;
+      if (!record) return { status: 'absent' };
       if (!isReadableRecord(record)) {
         // A record from a NEWER build. Leave it exactly where it is — the
         // other build still needs it — and let this one use the legacy path.
@@ -92,16 +129,16 @@ export class WorkUnitConversationStore {
           key,
           version: record.version,
         });
-        return null;
+        return { status: 'incompatible', version: record.version };
       }
       if (!Array.isArray(record.entries)) {
-        log.warn('Ignoring conversation record with no entry list', { key });
-        return null;
+        log.warn('Conversation record has no entry list', { key });
+        return { status: 'malformed', reason: 'entries is not a list' };
       }
-      return record;
+      return { status: 'ok', record };
     } catch (err) {
       log.warn('Conversation record read failed', { key, error: errorText(err) });
-      return null;
+      return { status: 'error', reason: errorText(err) };
     }
   }
 
@@ -157,7 +194,14 @@ export class WorkUnitConversationStore {
     const now = options.now ?? Date.now();
     const next = entriesFromAgentMessages(messages);
     try {
-      const existing = await this.load(identity.key);
+      const current = await this.read(identity.key);
+      if (current.status === 'incompatible' || current.status === 'error') {
+        // Never write over a newer build's record, and never write over one
+        // we merely failed to read — either could destroy history that only
+        // exists there. The legacy store is still written on this same turn.
+        return null;
+      }
+      const existing = current.status === 'ok' ? current.record : null;
       const record = mergeEntries(existing, next, identity, 'agent-history', {
         createdAt: options.createdAt ?? now,
         now,

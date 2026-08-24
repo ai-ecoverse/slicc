@@ -481,6 +481,17 @@ export class ScoopContext {
     }
   }
 
+  /**
+   * Clear the live messages AND every durable representation of this unit's
+   * conversation (#2275) — the canonical record and the legacy agent
+   * session. `clearMessages()` alone only empties the in-memory list, which
+   * a reload would refill from whichever store still held it.
+   */
+  async clearSession(): Promise<void> {
+    this.clearMessages();
+    await this.sessions.clear();
+  }
+
   /** Get the agent's current in-memory messages (for diagnostics). */
   getAgentMessages(): AgentMessage[] {
     return this.agent?.state?.messages ? structuredClone(this.agent.state.messages) : [];

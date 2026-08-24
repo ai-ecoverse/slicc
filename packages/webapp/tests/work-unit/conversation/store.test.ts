@@ -6,7 +6,7 @@
  * never be read by another.
  */
 
-import { beforeEach, describe, expect, it } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
 import type { AgentMessage } from '../../../src/core/index.js';
 import type { ConversationIdentity } from '../../../src/work-unit/conversation/store.js';
@@ -117,6 +117,42 @@ describe('WorkUnitConversationStore', () => {
     const written = await store.syncAgentMessages(identity, legacyAgentMessages());
     await store.save({ ...written!, entries: 'poisoned' as never });
     expect(await store.load(identity.key)).toBeNull();
+  });
+
+  it('never writes over a record from a newer schema', async () => {
+    // A rollback: the newer build's history may only exist in a shape this
+    // one cannot express, so an "absent-looking" read must not become a
+    // create. Codex caught this on #2364.
+    const written = await store.syncAgentMessages(identity, legacyAgentMessages());
+    const future = { ...written!, version: 99, entries: [] };
+    await store.save(future);
+
+    expect(await store.load(identity.key)).toBeNull();
+    expect(await store.syncAgentMessages(identity, legacyAgentMessages())).toBeNull();
+    expect((await store.read(identity.key)).status).toBe('incompatible');
+  });
+
+  it('never writes over a record it merely failed to read', async () => {
+    await store.syncAgentMessages(identity, legacyAgentMessages(), { now: 1000 });
+    const readSpy = vi.spyOn(store, 'read').mockResolvedValue({
+      status: 'error',
+      reason: 'IndexedDB unavailable',
+    });
+
+    expect(await store.syncAgentMessages(identity, [])).toBeNull();
+    readSpy.mockRestore();
+    // The record is exactly as it was.
+    expect((await store.load(identity.key))?.updatedAt).toBe(1000);
+  });
+
+  it('repairs a record whose stored shape is broken', async () => {
+    const written = await store.syncAgentMessages(identity, legacyAgentMessages());
+    await store.save({ ...written!, entries: 'poisoned' as never });
+    expect((await store.read(identity.key)).status).toBe('malformed');
+
+    const repaired = await store.syncAgentMessages(identity, legacyAgentMessages());
+
+    expect(repaired?.entries).toHaveLength(5);
   });
 
   it('round-trips the migration cursor', async () => {
