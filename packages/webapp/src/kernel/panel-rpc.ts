@@ -568,6 +568,15 @@ export type PanelRpcRequest =
         heading?: string;
         grantLabel?: string;
         cancelLabel?: string;
+        /**
+         * Skip the in-app Allow/Cancel overlay when every requested kind is
+         * a camera/mic capture whose origin grant is already `'granted'`.
+         * The page handler defaults this to `true` for camera/mic-only
+         * payloads (ffmpeg, hear-style probes) so a persisted session grant
+         * does not re-prompt; gesture-bound kinds (USB / HID / serial / FS /
+         * screenshare) never skip.
+         */
+        skipIfGranted?: boolean;
       };
     }
   | {

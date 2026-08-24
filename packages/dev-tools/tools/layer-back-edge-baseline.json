@@ -7,7 +7,6 @@
   "packages/webapp/src/shell/bsh-watchdog.ts": 3,
   "packages/webapp/src/shell/supplemental-commands/cherry-emit-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/extension-media-capture.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/ffmpeg-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/hid-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/host-command.ts": 7,
   "packages/webapp/src/shell/supplemental-commands/imgcat-command.ts": 1,

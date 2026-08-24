@@ -166,10 +166,12 @@ describe('hearCapture', () => {
     const call = surface.prompt.mock.calls[0][0] as {
       kinds: ReadonlyArray<string>;
       description?: string;
+      skipIfGranted?: boolean;
       requestOptions?: { microphone?: { constraints?: MediaStreamConstraints } };
     };
     expect(call.kinds).toEqual(['microphone']);
     expect(call.description).toMatch(/microphone/i);
+    expect(call.skipIfGranted).toBe(true);
     // The primed mic is held OPEN across the recognizer and released exactly
     // once when recognition is done (in the `finally`) — see the ordering
     // regression test below for the load-bearing timing guarantee.
