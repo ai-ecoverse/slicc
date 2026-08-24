@@ -102,14 +102,24 @@ export interface WcNavDeps {
    * the export is in-flight and restore it once the export completes.
    */
   onExportTranscript?: () => Promise<void>;
+  /**
+   * Open the keyboard-shortcut help overlay (what `?` does). The menu entry
+   * is the only way a user who never presses `?` finds out the shortcuts
+   * exist, so it is listed whenever the float wires them.
+   */
+  onShowShortcuts?: () => void;
 }
 
 function standardMenuItems(
-  exportInFlight: boolean
+  exportInFlight: boolean,
+  hasShortcuts: boolean
 ): NonNullable<WcShellRefs['avatarMenu']['items']> {
   const items: NonNullable<WcShellRefs['avatarMenu']['items']> = [
     { id: 'settings', label: 'Account settings…', icon: 'settings' },
     { id: 'theme', label: 'Theme settings…', icon: 'palette' },
+    ...(hasShortcuts
+      ? [{ id: 'shortcuts', label: 'Keyboard shortcuts', icon: 'keyboard' } as const]
+      : []),
     {
       id: 'export-transcript',
       label: 'Export transcript',
@@ -252,7 +262,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   let exportInFlight = false;
   const syncMenuItems = (): void => {
     refs.avatarMenu.items = [
-      ...standardMenuItems(exportInFlight),
+      ...standardMenuItems(exportInFlight, !!deps.onShowShortcuts),
       ...popoutItems(),
       ...trayMenuItems(),
     ];
@@ -281,6 +291,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
         .catch((err) => log.error('detached popout request failed', err));
       return;
     }
+    if (id === 'shortcuts') deps.onShowShortcuts?.();
     if (id === 'settings') openSettings();
     if (id === 'theme') openTheme();
     if (id === 'experimental-settings') openExperimental();

@@ -1146,7 +1146,9 @@ export function attachWcClient(
     })();
   };
   void import('./wc-nav.js')
-    .then(({ wireWcNav }) => wireWcNav({ refs, client, log, onExportTranscript }))
+    .then(({ wireWcNav }) =>
+      wireWcNav({ refs, client, log, onExportTranscript, onShowShortcuts: refs.shortcuts.showHelp })
+    )
     .catch((err) => log.error('WC nav wiring failed', err));
 
   // Push-to-talk: arm the composer's hold-to-dictate gesture and inject the

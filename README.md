@@ -183,6 +183,20 @@ Once the product makes sense, the ice-cream language is easier to enjoy: it maps
 
 Why the name? SLICC stands for **Self-Licking Ice Cream Cone**: a recursive system that can help build, extend, and operate itself. A browser agent running inside the browser: that's as self-recursive as tongue-out gelato.
 
+## Keyboard shortcuts
+
+Press <kbd>?</kbd> (or <kbd>/</kbd>) anywhere outside a text field for the full list; it is also in the avatar menu under **Keyboard shortcuts**.
+
+| Keys                                                                                                                           | Action                                                                                      |
+| ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
+| <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>8</kbd> (macOS) · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd>…<kbd>8</kbd> (Windows/Linux) | Switch to that agent in the tab strip — cones first, then the scoops of the cone you are in |
+| <kbd>Ctrl</kbd>(+<kbd>Shift</kbd>)+<kbd>9</kbd>                                                                                | Switch to the last agent in the strip                                                       |
+| <kbd>c</kbd>                                                                                                                   | Focus the composer                                                                          |
+| <kbd>?</kbd> / <kbd>/</kbd>                                                                                                    | Show the shortcut help                                                                      |
+| <kbd>Esc</kbd>                                                                                                                 | Close it                                                                                    |
+
+The switch chord deliberately avoids <kbd>⌘</kbd>+number and, off macOS, plain <kbd>Ctrl</kbd>+number — those are the browser's own tab switcher. Unmodified keys only fire when you are not typing, so <kbd>c</kbd> and <kbd>?</kbd> never steal a keystroke from the composer or the terminal.
+
 ## API Keys and Providers
 
 To use SLICC, you need an LLM provider. SLICC is very much a BYOT (bring your own tokens) affair. We have built-in support for many providers, and these have actually been tested.

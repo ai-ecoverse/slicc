@@ -30,6 +30,7 @@ import { createChatFixture, FIXTURE_SCOOP_NAME } from '../chat-fixture.js';
 import type { ChatMessage } from '../types.js';
 import { buildTrustedLayers, TRUSTED_LAYER_CSS } from './trusted-layer.js';
 import { buildThreadChildren, messageEls } from './wc-message-view.js';
+import { type ShortcutHandles, wireKeyboardShortcuts } from './wc-shortcuts.js';
 
 // Side-effect import registers every element composed below.
 import '@slicc/webcomponents';
@@ -138,6 +139,15 @@ export interface WcShellRefs {
   memoryHost: SliccMemoryPanel;
   monitor: SliccMonitor;
   avatarMenu: SliccAvatarMenu;
+  /**
+   * Global key handling (`?` for the help overlay, Ctrl+digit to switch
+   * units). Installed here rather than in a float's boot because every
+   * float mounts through this function, and because the bindings need
+   * nothing a float owns: they drive `switcher.select()`, which fires the
+   * same `slicc-scoop-select` a click does, so each float's own selection
+   * wiring stays the single implementation of what selecting means.
+   */
+  shortcuts: ShortcutHandles;
   /**
    * Dock surface ids claimed by a full-screen overlay launcher instead of a
    * workbench pane. `wireDockToWorkbench` consults this at click time, so a
@@ -461,6 +471,10 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
 
   const { nav, switcher, floatbar, avatarMenu } = buildNav(options);
   appCol.append(nav, shell);
+  const shortcuts = wireKeyboardShortcuts({
+    switcher,
+    focusComposer: () => inputCard.focus(),
+  });
 
   // H2 — everything layout-owned goes inside `panelHost` (a stacking context,
   // so no descendant can paint above it); `trustedLayer` is a LATER sibling and
@@ -497,6 +511,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     memoryHost,
     monitor,
     avatarMenu,
+    shortcuts,
     overlaySurfaces,
   };
 }
