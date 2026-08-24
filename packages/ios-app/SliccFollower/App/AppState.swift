@@ -284,6 +284,8 @@ class AppState: ObservableObject {
                 scoops = fixtureScoops
                 selectedScoopJid = fixtureScoops.first?.jid
                 leaderActiveScoopJid = fixtureScoops.first?.jid
+            } else {
+                _ = UITestHooks.applyUnitRoleFixture(into: self)
             }
             configureOpenApprovalFixture()
             configureSudoApprovalFixture()
@@ -506,6 +508,10 @@ class AppState: ObservableObject {
         // A pure-attachment message is legal (the web composer sends photos
         // with no caption); only an entirely empty send is dropped.
         guard !trimmed.isEmpty || attached != nil else { return }
+        // Belt and braces for the read-only view (#2367): the composer is
+        // unmounted for a scoop, but dictation and the inbound-action paths
+        // reach this method without one.
+        guard !selectedUnitIsReadOnly else { return }
 
         // The dictation scoop is resolved up front: the mark has to name the
         // scoop the message goes to, and the same value is used to undo it.
@@ -876,7 +882,7 @@ class AppState: ObservableObject {
                 } ?? false
             if selectedScoopJid == nil || !preservedScoopExists {
                 let hadMissingSelection = selectedScoopJid != nil
-                let cone = scoops.first(where: { $0.isCone })
+                let cone = scoops.first(where: { $0.isRootUnit })
                 let initial = hadMissingSelection ? activeScoopJid : (cone?.jid ?? activeScoopJid)
                 if !initial.isEmpty {
                     selectedScoopJid = initial
@@ -1313,7 +1319,7 @@ class AppState: ObservableObject {
         // rather than a silent drop — without charging this dispatcher's
         // complexity budget once per case.
         case .toolUI, .toolUIDone, .screenshot, .terminalOutput, .unknown:
-            handleNonTranscriptAgentEvent(event)
+            handleNonTranscriptAgentEvent(event, scoopJid: scoopJid)
         }
     }
 
@@ -1331,9 +1337,19 @@ class AppState: ObservableObject {
     /// which lives beside the transcript rather than in it. `screenshot` and
     /// `terminal_output` are deliberate no-ops on every follower — the webapp
     /// chat thread names both explicitly for the same reason.
-    private func handleNonTranscriptAgentEvent(_ event: AgentEvent) {
+    private func handleNonTranscriptAgentEvent(_ event: AgentEvent, scoopJid: String) {
         switch event {
         case .toolUI(let messageId, let toolName, let requestId, let html):
+            // A read-only unit (a scoop, #2367) never renders an approval
+            // card: the leader routes every scoop `tool_ui` to the cone that
+            // owns it (#2312), and this is the belt-and-braces half — an
+            // event from an older leader must not resurrect a card here. The
+            // OWNING unit decides, not the selection, so switching tabs can
+            // never surface one either.
+            guard scoops.first(where: { $0.jid == scoopJid })?.isReadOnly != true else {
+                logger.debug("Ignoring tool_ui for read-only unit \(scoopJid)")
+                return
+            }
             logger.debug(
                 "Agent event: tool_ui id=\(messageId) tool=\(toolName) request=\(requestId)"
             )
@@ -1585,20 +1601,9 @@ extension AppState {
     }
 }
 
-// MARK: - Scoop / Model / Thinking Selection
+// MARK: - Scoop selection
 
 extension AppState {
-    /// Snapshot request sent on every fresh data channel, preserving the viewed scoop.
-    /// Re-request the selected scoop's snapshot (transcript export wants
-    /// fresh rows, not the in-memory mirror; #1918).
-    func requestFreshSnapshot() {
-        _ = sendToLeader(snapshotRequestForConnection())
-    }
-
-    func snapshotRequestForConnection() -> FollowerToLeaderMessage {
-        .requestSnapshot(scoopJid: selectedScoopJid)
-    }
-
     /// Select a specific scoop to view. Independent of the leader's selection.
     func selectScoop(jid: String) {
         guard jid != selectedScoopJid else { return }
@@ -1614,87 +1619,6 @@ extension AppState {
         // authority used to validate a later thinking.set.
         sendToLeader(.scoopsSelect(scoopJid: jid))
         refreshModels()
-    }
-
-    /// The summary for the currently-viewed scoop, if any.
-    var selectedScoop: ScoopSummary? {
-        scoops.first(where: { $0.jid == selectedScoopJid })
-    }
-
-    var supportsModelControls: Bool {
-        (leaderProtocolVersion ?? 0) >= 5
-    }
-
-    /// Whether the leader understands `tab.teleport.request` (protocol v6):
-    /// a tray tab opened here carrying its cookies + web storage, rather than
-    /// the bare-URL copy an older leader can offer.
-    var supportsTabTeleport: Bool {
-        (leaderProtocolVersion ?? 0) >= 6
-    }
-
-    /// Ask the leader to teleport a tray tab here. The reply arrives as
-    /// `tab.opened`, which surfaces the new tab through `leaderOpenedTabId`.
-    func requestTabTeleport(targetId: String) -> Bool {
-        sendToLeader(
-            .tabTeleportRequest(
-                requestId: "tab-teleport-\(UUID().uuidString)", targetId: targetId))
-    }
-
-    var activeModel: TrayModelCatalogEntry? {
-        guard let activeModelId = modelSelectionState?.activeModelId else { return nil }
-        return modelCatalog.first(where: { $0.modelId == activeModelId })
-    }
-
-    var displayedThinkingLevel: String {
-        guard modelSelectionState?.scoopJid == selectedScoopJid else { return "off" }
-        if modelSelectionState?.effortOverride == "max" { return "max" }
-        switch modelSelectionState?.thinkingLevel {
-        case .minimal: return "low"
-        case .off, nil: return "off"
-        case .low: return "low"
-        case .medium: return "medium"
-        case .high: return "high"
-        case .xhigh: return "xhigh"
-        }
-    }
-
-    /// Refresh the credential-free catalog and current selection state. Legacy
-    /// leaders never see this additive v5 request.
-    func refreshModels() {
-        guard supportsModelControls else { return }
-        sendToLeader(.modelsRequest)
-    }
-
-    /// Ask the leader to change the model of the cone this follower is
-    /// looking at (#2310) — model selection is per cone, so the selected unit
-    /// travels with the pick. Only advertised catalog ids are accepted,
-    /// preventing arbitrary provider/account data from reaching the wire.
-    func selectModel(_ modelId: String) {
-        guard supportsModelControls,
-            modelCatalog.contains(where: { $0.modelId == modelId })
-        else { return }
-        sendToLeader(.modelSelect(modelId: modelId, scoopJid: selectedScoopJid))
-    }
-
-    /// Map the Settings control's browser-compatible scale onto the wire. The
-    /// UI-only `max` value is encoded as xhigh + effortOverride max.
-    func setThinkingLevel(_ displayLevel: String) {
-        guard supportsModelControls, activeModel?.reasoning == true,
-            let scoopJid = selectedScoopJid,
-            let wireValue = Self.thinkingWireValue(for: displayLevel)
-        else { return }
-        sendToLeader(
-            .thinkingSet(
-                scoopJid: scoopJid, thinkingLevel: wireValue.level,
-                effortOverride: wireValue.effortOverride))
-    }
-
-    static func thinkingWireValue(
-        for displayLevel: String
-    ) -> (level: TrayThinkingLevel, effortOverride: String?)? {
-        if displayLevel == "max" { return (.xhigh, "max") }
-        guard let level = TrayThinkingLevel(rawValue: displayLevel) else { return nil }
-        return (level, nil)
     }
 }
 

@@ -74,6 +74,54 @@ import UIKit
             ]
         }
 
+        /// Seed one cone with one scoop it owns, so the read-only scoop view
+        /// (#2367) is reachable without a leader: the composer belongs to the
+        /// cone and must be gone while the scoop is selected. The scoop
+        /// carries `parentId`, which is what makes it a scoop — `isCone` only
+        /// settles the legacy case (see `ScoopSummary.isRootUnit`).
+        ///
+        /// `-uiTestUnitRoleFixture scoop` starts on the scoop, so the
+        /// read-only screen is reachable in one launch (screenshots, and a
+        /// test that must not depend on the switcher menu); any other
+        /// non-empty value starts on the cone.
+        @MainActor
+        static func applyUnitRoleFixture(into appState: AppState) -> Bool {
+            guard let variant = UserDefaults.standard.string(forKey: "uiTestUnitRoleFixture"),
+                !variant.isEmpty, variant != "NO"
+            else {
+                return false
+            }
+            let cone = ScoopSummary(
+                jid: "fixture-cone", name: "cone", folder: "/workspace", isCone: true,
+                assistantLabel: "sliccy", trigger: nil, state: "idle", fill: 20)
+            let scoop = ScoopSummary(
+                jid: "fixture-owned-scoop", name: "reviewer", folder: "/scoops/reviewer",
+                isCone: false, assistantLabel: "reviewer", trigger: nil, state: "working",
+                fill: 40, parentId: "fixture-cone")
+            appState.scoops = [cone, scoop]
+            appState.messagesByScoop = [
+                cone.jid: [
+                    reply(id: "fixture-cone-reply", text: "Sent the review to a scoop.")
+                ],
+                scoop.jid: [
+                    reply(
+                        id: "fixture-scoop-reply",
+                        text: "Reviewed 14 files. Two findings, both in the follower.")
+                ],
+            ]
+            let selected = variant == "scoop" ? scoop : cone
+            appState.selectedScoopJid = selected.jid
+            appState.leaderActiveScoopJid = cone.jid
+            appState.messages = appState.messagesByScoop[selected.jid] ?? []
+            return true
+        }
+
+        private static func reply(id: String, text: String) -> ChatMessage {
+            ChatMessage(
+                id: id, role: .assistant, content: text,
+                timestamp: 1_756_000_000_000)
+        }
+
         /// Deterministically expose the system Reduce Motion environment to UI
         /// tests without changing a shared simulator's persistent settings.
         /// The `-static` and `-expression` avatar fixtures both need a frozen

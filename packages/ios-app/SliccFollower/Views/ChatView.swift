@@ -899,7 +899,7 @@ struct ConversationView: View {
                 messages: appState.messages,
                 isStreaming: appState.isStreaming,
                 toolProgress: appState.toolProgress,
-                toolUICards: appState.toolUICards,
+                toolUICards: appState.visibleToolUICards,
                 openApprovals: appState.openApprovals,
                 onOpenApprovalDecision: appState.resolveOpenApproval,
                 sudoApprovals: appState.sudoApprovals,
@@ -914,30 +914,38 @@ struct ConversationView: View {
                 state: horizontalScrollGestureState,
                 onAction: handleTranscriptSwipe)
 
-            InputBar(
-                text: $inputText,
-                isStreaming: appState.isStreaming,
-                isConnected: appState.settledConnection.state == .connected,
-                // A message typed during a stall would be accepted into the
-                // composer and lost, so block sending — but say why, rather
-                // than claiming the follower is disconnected.
-                isStalled: appState.settledConnection.isStalled,
-                steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
-                ptt: ptt,
-                onSend: { text, attachments, dictated in
-                    appState.sendMessage(
-                        text, attachments: attachments, dictated: dictated)
-                    inputText = ""
-                },
-                onAbort: {
-                    appState.abort()
-                },
-                onSteer: { text, attachments in
-                    appState.sendMessage(text, steer: true, attachments: attachments)
-                    inputText = ""
-                },
-                stagedAttachments: $stagedAttachments
-            )
+            // A scoop is read-only (#2367): the composer band is not
+            // rendered at all, so nothing is reserved and the transcript
+            // grows into the freed space — read-only means the composer
+            // does not exist, not that it is merely disabled. Send,
+            // dictation and attachment affordances all live inside it and
+            // leave with it.
+            if !appState.selectedUnitIsReadOnly {
+                InputBar(
+                    text: $inputText,
+                    isStreaming: appState.isStreaming,
+                    isConnected: appState.settledConnection.state == .connected,
+                    // A message typed during a stall would be accepted into
+                    // the composer and lost, so block sending — but say why,
+                    // rather than claiming the follower is disconnected.
+                    isStalled: appState.settledConnection.isStalled,
+                    steersActiveScoop: appState.composerTargetsLeaderActiveScoop,
+                    ptt: ptt,
+                    onSend: { text, attachments, dictated in
+                        appState.sendMessage(
+                            text, attachments: attachments, dictated: dictated)
+                        inputText = ""
+                    },
+                    onAbort: {
+                        appState.abort()
+                    },
+                    onSteer: { text, attachments in
+                        appState.sendMessage(text, steer: true, attachments: attachments)
+                        inputText = ""
+                    },
+                    stagedAttachments: $stagedAttachments
+                )
+            }
         }
     }
 
