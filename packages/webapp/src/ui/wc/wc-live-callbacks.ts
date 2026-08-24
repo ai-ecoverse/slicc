@@ -1,22 +1,21 @@
 import { isLickChannel } from '../../base/lick-channels.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
-import { isRootUnit } from '../../work-unit/policy.js';
+import {
+  presentationStateFor,
+  recordToWorkUnitSummary,
+} from '../../work-unit/client/from-record.js';
+import { toTabDescriptors } from '../../work-unit/client/presentation.js';
 import type {
   OffscreenClient,
   OffscreenClientCallbacks,
   ScoopBusyPhase,
 } from '../offscreen-client.js';
 import type { ChatMessage } from '../types.js';
+import { LocalWorkUnitClient } from '../work-unit-client/local.js';
 import type { WcChatController } from './wc-chat-controller.js';
 import { scoopColor } from './wc-scoop-color.js';
 import type { SwitcherScoop, WcShellRefs } from './wc-shell.js';
-import {
-  defaultRootOf,
-  orderForSwitcher,
-  switcherLabelFor,
-  unitForContext,
-  unitSlugFor,
-} from './wc-unit-context.js';
+import { defaultRootOf, unitForContext, unitSlugFor } from './wc-unit-context.js';
 
 /** Scoop runtime status, as broadcast by `onStatusChange`. */
 export type ScoopStatus = 'initializing' | 'ready' | 'processing' | 'error';
@@ -45,31 +44,23 @@ export interface WcLiveWiring {
   notifyScoopStateChanged?(): void;
   refreshScoops?(): void;
   notifyReady?(): void;
+  /**
+   * The kernel-backed {@link WorkUnitClient} (#2274), published here so the
+   * rest of the shell can reach the protocol rather than the transport.
+   * Assigned by {@link createWcLiveCallbacks}, which is where the adapter has
+   * to be built — `OffscreenClient` takes its callback bag in the constructor.
+   */
+  workUnits?: LocalWorkUnitClient;
 }
 
-function eyesFor(status: ScoopStatus | undefined): SwitcherScoop['eyes'] {
-  if (status === 'error') return 'dead';
-  if (status === 'initializing') return 'none';
-  return 'open';
-}
-
-function stateFor(status: ScoopStatus | undefined): NonNullable<SwitcherScoop['state']> {
-  switch (status) {
-    case 'processing':
-      return 'working';
-    case 'error':
-      return 'broken';
-    case 'initializing':
-      return 'initializing';
-    case 'ready':
-    case undefined:
-      return 'idle';
-  }
-  status satisfies never;
-  return 'idle';
-}
-
-/** Map registered scoops onto switcher tab descriptors (cone first). */
+/**
+ * Map registered scoops onto switcher tab descriptors.
+ *
+ * Ordering and rendering live in `work-unit/client/presentation.ts` since
+ * #2274 — the follower builds its strip from the same two functions, so the
+ * leader can no longer render a roster the follower would order differently
+ * (#2317). This is the leader's projection onto the protocol and nothing more.
+ */
 export function toSwitcherScoops(
   scoops: readonly RegisteredScoop[],
   statuses?: ReadonlyMap<string, ScoopStatus>,
@@ -78,39 +69,52 @@ export function toSwitcherScoops(
   awaitingJid?: string | null,
   selectedJid?: string | null
 ): SwitcherScoop[] {
-  return orderForSwitcher(scoops, selectedJid).map((scoop) => {
-    const fill = fills?.get(scoop.jid);
-    const status = statuses?.get(scoop.jid);
-    return {
-      key: scoop.jid,
-      type: isRootUnit(scoop) ? 'cone' : 'scoop',
-      color: scoopColor({ isRoot: isRootUnit(scoop), name: scoop.name }),
-      label: switcherLabelFor(scoop),
-      eyes: eyesFor(status),
-      state: stateFor(status),
-      fill: typeof fill === 'number' ? Math.round(fill * 100) : undefined,
-      phase: status === 'processing' ? phases?.get(scoop.jid) : undefined,
-      awaiting: awaitingJid === scoop.jid || undefined,
-    };
-  });
+  const units = scoops.map((scoop) =>
+    recordToWorkUnitSummary(scoop, {
+      awaiting: awaitingJid === scoop.jid,
+      fill: fills?.get(scoop.jid),
+      phase: phases?.get(scoop.jid),
+      status: statuses?.get(scoop.jid),
+    })
+  );
+  return toTabDescriptors(units, selectedJid, scoopColor);
 }
 
 /** Kernel callbacks for the WC live shell, factored for worker-free tests. */
 export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCallbacks {
-  const refreshScoops = (): void => {
-    const client = wiring.getClient();
-    if (client) {
-      wiring.refs.switcher.scoops = toSwitcherScoops(
-        client.getScoops(),
-        wiring.statuses,
-        wiring.fills,
-        wiring.phases,
-        wiring.awaitingInput,
-        wiring.getSelected()?.jid
-      );
+  // The leader's half of the client protocol (#2274). Built here because
+  // `OffscreenClient` takes its callback bag in the constructor: the adapter
+  // decorates that bag, so it must exist before the client does.
+  const workUnits = new LocalWorkUnitClient({
+    fills: wiring.fills,
+    getAwaiting: () => wiring.awaitingInput,
+    getClient: () => wiring.getClient(),
+    phases: wiring.phases,
+    statuses: wiring.statuses,
+  });
+  wiring.workUnits = workUnits;
+
+  // The strip renders from the protocol's roster, not from `getScoops()` plus
+  // three page-side maps — the same `toTabDescriptors` the follower calls.
+  // The roster is held rather than re-fetched because a selection change
+  // re-orders the SAME units and must repaint synchronously.
+  // The roster is read at repaint time rather than held: `awaitingInput` and
+  // the selection change with no kernel event behind them, so a cached copy
+  // would render the previous instant.
+  const publish = (): void => {
+    if (wiring.getClient()) {
+      wiring.refs.switcher.scoops = toTabDescriptors(
+        workUnits.currentUnits(),
+        wiring.getSelected()?.jid,
+        scoopColor
+      ) as SwitcherScoop[];
     }
     wiring.refreshConeActions?.();
   };
+  // Never unsubscribed: the live shell owns this client for the lifetime of
+  // the page, and the callback bag it decorates dies with it.
+  workUnits.subscribeList(() => publish());
+  const refreshScoops = publish;
   wiring.refreshScoops = refreshScoops;
 
   const viewingFrozen = (): boolean =>
@@ -136,13 +140,16 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
     }
   };
 
-  return {
+  return workUnits.wrapCallbacks({
     onStatusChange: (jid, status) => {
       const previous = wiring.statuses.get(jid);
       const next = status as ScoopStatus;
       wiring.statuses.set(jid, next);
       if (next !== 'ready' && wiring.awaitingInput === jid) wiring.awaitingInput = null;
-      if (eyesFor(previous) !== eyesFor(next) || stateFor(previous) !== stateFor(next)) {
+      // Eyes are a function of the rendered state (`broken` → dead,
+      // `initializing` → none, else open), so one comparison covers what the
+      // two used to: repaint the strip only when the face actually changes.
+      if (presentationStateFor(previous) !== presentationStateFor(next)) {
         refreshScoops();
         wiring.notifyScoopStateChanged?.();
       }
@@ -213,5 +220,5 @@ export function createWcLiveCallbacks(wiring: WcLiveWiring): OffscreenClientCall
       ensureSelection();
       wiring.notifyReady?.();
     },
-  };
+  });
 }

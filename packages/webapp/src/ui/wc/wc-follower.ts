@@ -10,7 +10,8 @@ import {
 } from '../../scoops/tray-follower-status.js';
 import { shouldApplyFollowerStatus } from '../../scoops/tray-follower-sync.js';
 import { resolveFollowerJoinUrl, storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
-import type { ScoopSummary, TrayTargetEntry } from '../../scoops/tray-sync-protocol.js';
+import type { TrayTargetEntry } from '../../scoops/tray-sync-protocol.js';
+import { isReadOnlyUnit, toTabDescriptors } from '../../work-unit/client/presentation.js';
 import { setupStandalonePrelude } from '../boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../boot/types.js';
 import { type DipInstance, disposeDips, hydrateDips } from '../dip.js';
@@ -19,6 +20,7 @@ import { CHERRY_RUNTIME_TAG, startPageFollowerTray } from '../page-follower-tray
 import type { UiRuntimeMode } from '../runtime-mode.js';
 import { applyCherryTheme } from '../theme-engine.js';
 import type { AgentHandle } from '../types.js';
+import { RemoteWorkUnitClient } from '../work-unit-client/remote.js';
 import { wireWcAttach } from './wc-attach.js';
 import { WcChatController } from './wc-chat-controller.js';
 import { floatLabelForKind } from './wc-float-label.js';
@@ -28,7 +30,8 @@ import { createFollowerModelSurface } from './wc-follower-model-surface.js';
 import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
 import { prepareWcShell } from './wc-live.js';
 import { installLeaderPermissionsSurface } from './wc-permissions.js';
-import type { WcShellRefs } from './wc-shell.js';
+import { scoopColor } from './wc-scoop-color.js';
+import type { SwitcherScoop, WcShellRefs } from './wc-shell.js';
 import { applyComposerAvailability, submittedSteer, submittedText } from './wc-shell.js';
 import {
   buildWelcomeHandoffCard,
@@ -36,8 +39,6 @@ import {
   showSignInRedirect,
 } from './wc-signin-redirect.js';
 import { WcSprinkleZone } from './wc-sprinkles.js';
-import { summaryRole, toFollowerSwitcherScoops } from './wc-tray-scoops.js';
-import { isReadOnlyRole } from './wc-unit-context.js';
 
 const log = createLogger('wc-follower');
 
@@ -654,14 +655,18 @@ export async function mountWcUiFollower(
 
   let followerSelectedScoop: string | null = null;
   /**
-   * Last roster the leader sent, kept so a local selection can re-publish the
-   * descriptors. `toFollowerSwitcherScoops` orders the SELECTED cone's scoops
-   * ahead of the rest, so selecting without re-ordering leaves the strip
-   * showing the previously selected cone's scoops first.
+   * The follower's half of the client protocol (#2274). It holds the roster
+   * the leader sent — kept so a local selection can re-publish the descriptors,
+   * since the strip orders the SELECTED cone's scoops ahead of the rest — and
+   * projects it onto the same `toTabDescriptors` the leader renders from.
    */
-  let followerScoops: readonly ScoopSummary[] = [];
+  const workUnits = new RemoteWorkUnitClient({ getSync: () => follower?.currentSync ?? null });
   const publishFollowerScoops = (): void => {
-    boot.refs.switcher.scoops = toFollowerSwitcherScoops(followerScoops, followerSelectedScoop);
+    boot.refs.switcher.scoops = toTabDescriptors(
+      workUnits.currentUnits(),
+      followerSelectedScoop,
+      scoopColor
+    ) as SwitcherScoop[];
   };
   /**
    * Mount or unmount the interactive chrome for the current selection —
@@ -670,8 +675,8 @@ export async function mountWcUiFollower(
    * pre-multiple-cones default, and the next `scoop-list` re-asserts it.
    */
   const applyFollowerSelectionChrome = (): void => {
-    const selected = followerScoops.find((scoop) => scoop.jid === followerSelectedScoop);
-    composerReadOnly = selected ? isReadOnlyRole(summaryRole(selected)) : false;
+    const selected = workUnits.currentUnits().find((unit) => unit.id === followerSelectedScoop);
+    composerReadOnly = selected ? isReadOnlyUnit(selected) : false;
     applyComposerAvailability(boot.refs, composerReadOnly);
     boot.getController()?.setReadOnly(composerReadOnly);
     setComposerState(composerEnabled, composerPlaceholder);
@@ -711,136 +716,140 @@ export async function mountWcUiFollower(
     getLockedEffortLevel: () => localStorage.getItem('slicc_locked_effort_level'),
   });
 
-  follower = startPageFollowerTray({
-    joinUrl,
-    runtime: isCherry ? CHERRY_RUNTIME_TAG : 'slicc-standalone',
-    advertisesCdpTargets: followerAdvertisesCdpTargets(prelude.hasLocalCdpSurface, uiOnly),
-    onTargetsUpdated: (targets) => {
-      trayTargets = targets;
-      followerBrowser.refresh();
-    },
-    // #1915: the leader's kernel can't prompt a human. When the user is
-    // driving from here, the interactive OAuth hop runs here too. Cherry and
-    // the ui-only side panel are excluded — a cross-origin iframe cannot
-    // reliably own a provider popup — and omitting the handler is what keeps
-    // `capabilities.oauthPopup` off for them.
-    ...(isCherry || uiOnly
-      ? {}
-      : {
-          onOAuthPopupRequest: (url: string, signal: AbortSignal) =>
-            openDelegatedOAuthPopup(url, signal, {
-              getPermissionsSurface: ensureFollowerPermissionsSurface,
-              window,
-            }),
-        }),
-    browserAPI: prelude.browser,
-    onSnapshot: (messages, scoopJid) => {
-      followerSelectedScoop = scoopJid;
-      controller.loadMessages(messages);
-      controller.setProcessing(messages.some((message) => message.isStreaming));
-    },
-    // Real signatures: onUserMessage(text, messageId, scoopJid, attachments?)
-    // and WcChatController.addUserMessage(text, attachments?) - match wc-tray.ts:97.
-    onUserMessage: (text, _messageId, _scoopJid, attachments) =>
-      controller.addUserMessage(text, attachments),
-    onStatus: (status, scoopJid) => {
-      if (shouldApplyFollowerStatus(scoopJid, followerSelectedScoop)) {
-        controller.setProcessing(status === 'processing');
-      }
-    },
-    setChatAgent: (agent) => {
-      controller.setAgent(agent);
-      // A failed tool call on the mirrored stream earns the same 2.6s glower
-      // the leader shows. The envelope drops `scoopJid` on the way in, so this
-      // is the selected scoop's stream — which is exactly whose face is on
-      // screen. Per-scoop attribution would need the envelope to keep it.
-      agent.onEvent((event) => {
-        if (event.type === 'tool_result' && event.isError) boot.refs.switcher.glower();
-      });
-    },
-    // The leader decided this follower's human should answer a sudo prompt —
-    // it is headless (hosted / cloud), or the user is driving from here
-    // (#2062). Same dialog the leader would show; "Always" is withheld
-    // because the leader only honours it from biometric-gated followers.
-    onSudoApprovalRequest: async (request) => {
-      const { openSudoApprovalDialog } = await import('./wc-sudo-approval.js');
-      const cherryHostOrigin = isCherry ? prelude.cherryTransport?.hostOrigin : undefined;
-      const decision = await openSudoApprovalDialog(
-        {
-          kind: request.kind,
-          detail: request.detail,
-          ...(request.suggestedPattern ? { suggestedPattern: request.suggestedPattern } : {}),
-        },
-        {
-          allowAlways: false,
-          signal: request.signal,
-          expiresAt: request.expiresAt,
-          requester:
-            request.scoopName ?? (cherryHostOrigin ? `via ${cherryHostOrigin}` : undefined),
+  follower = startPageFollowerTray(
+    workUnits.wrapOptions({
+      joinUrl,
+      runtime: isCherry ? CHERRY_RUNTIME_TAG : 'slicc-standalone',
+      advertisesCdpTargets: followerAdvertisesCdpTargets(prelude.hasLocalCdpSurface, uiOnly),
+      onTargetsUpdated: (targets) => {
+        trayTargets = targets;
+        followerBrowser.refresh();
+      },
+      // #1915: the leader's kernel can't prompt a human. When the user is
+      // driving from here, the interactive OAuth hop runs here too. Cherry and
+      // the ui-only side panel are excluded — a cross-origin iframe cannot
+      // reliably own a provider popup — and omitting the handler is what keeps
+      // `capabilities.oauthPopup` off for them.
+      ...(isCherry || uiOnly
+        ? {}
+        : {
+            onOAuthPopupRequest: (url: string, signal: AbortSignal) =>
+              openDelegatedOAuthPopup(url, signal, {
+                getPermissionsSurface: ensureFollowerPermissionsSurface,
+                window,
+              }),
+          }),
+      browserAPI: prelude.browser,
+      onSnapshot: (messages, scoopJid) => {
+        followerSelectedScoop = scoopJid;
+        controller.loadMessages(messages);
+        controller.setProcessing(messages.some((message) => message.isStreaming));
+      },
+      // Real signatures: onUserMessage(text, messageId, scoopJid, attachments?)
+      // and WcChatController.addUserMessage(text, attachments?) - match wc-tray.ts:97.
+      onUserMessage: (text, _messageId, _scoopJid, attachments) =>
+        controller.addUserMessage(text, attachments),
+      onStatus: (status, scoopJid) => {
+        if (shouldApplyFollowerStatus(scoopJid, followerSelectedScoop)) {
+          controller.setProcessing(status === 'processing');
         }
-      );
-      return { decision: decision.decision, attestation: 'none' };
-    },
-    onConnectionChange: (connected) => {
-      boot.refs.switcher.connection = connected ? 'connected' : 'disconnected';
-      setComposerState(connected, connected ? CONNECTED : CONNECTING);
-      if (!connected) modelSurface.reset();
-      if (isCherry)
-        prelude.cherryTransport?.emitSliccEventToHost(
-          connected ? 'slicc.follower.ready' : 'slicc.follower.disconnected'
-        );
-    },
-    getSelectedScoopJid: () => followerSelectedScoop,
-    // A stall keeps the composer usable-looking but disabled, so a message
-    // typed while the leader is catching up can't be silently dropped. No
-    // cherry host event: the host contract is connected/disconnected, and a
-    // stall is neither.
-    onLeaderStalled: (stalled) => {
-      setComposerState(!stalled, stalled ? LEADER_BUSY : CONNECTED);
-    },
-    onGaveUp: (lastError) => {
-      log.error('follower gave up reaching the leader', { error: lastError });
-      boot.refs.switcher.connection = 'disconnected';
-      setComposerState(false, GAVE_UP);
-      modelSurface.reset();
-      // detachSync suppresses onConnectionChange(false) here - emit terminal.
-      if (isCherry) prelude.cherryTransport?.emitSliccEventToHost('slicc.follower.disconnected');
-    },
-    // Cherry's join token comes from the host page out-of-band (no localStorage
-    // entry to update); only persist for the plain standalone follower, whose
-    // joinUrl is what `resolveFollowerJoinUrl` re-reads from storage on reload.
-    ...(isCherry
-      ? {}
-      : {
-          onJoinUrlChanged: (newJoinUrl: string) => {
-            log.info('follower joinUrl superseded, persisting replacement', { newJoinUrl });
-            storeTrayJoinUrl(window.localStorage, newJoinUrl);
+      },
+      setChatAgent: (agent) => {
+        controller.setAgent(agent);
+        // A failed tool call on the mirrored stream earns the same 2.6s glower
+        // the leader shows. The envelope drops `scoopJid` on the way in, so this
+        // is the selected scoop's stream — which is exactly whose face is on
+        // screen. Per-scoop attribution would need the envelope to keep it.
+        agent.onEvent((event) => {
+          if (event.type === 'tool_result' && event.isError) boot.refs.switcher.glower();
+        });
+      },
+      // The leader decided this follower's human should answer a sudo prompt —
+      // it is headless (hosted / cloud), or the user is driving from here
+      // (#2062). Same dialog the leader would show; "Always" is withheld
+      // because the leader only honours it from biometric-gated followers.
+      onSudoApprovalRequest: async (request) => {
+        const { openSudoApprovalDialog } = await import('./wc-sudo-approval.js');
+        const cherryHostOrigin = isCherry ? prelude.cherryTransport?.hostOrigin : undefined;
+        const decision = await openSudoApprovalDialog(
+          {
+            kind: request.kind,
+            detail: request.detail,
+            ...(request.suggestedPattern ? { suggestedPattern: request.suggestedPattern } : {}),
           },
-        }),
-    addSprinkle: sprinkleCallbacks.addSprinkle,
-    removeSprinkle: sprinkleCallbacks.removeSprinkle,
-    onOpen: (path) => {
-      if (/^https?:\/\//.test(path)) window.open(path, '_blank', 'noopener');
-      else log.warn('follower sprinkle open() of a local path is unavailable', { path });
-    },
-    onScoopsList: (scoops, activeScoopJid) => {
-      if (!followerSelectedScoop || !scoops.some((scoop) => scoop.jid === followerSelectedScoop)) {
-        followerSelectedScoop = activeScoopJid;
-      }
-      followerScoops = scoops;
-      publishFollowerScoops();
-      applyFollowerSelectionChrome();
-      boot.refs.switcher.setAttribute('active', followerSelectedScoop ?? activeScoopJid);
-    },
-    onModelsList: modelSurface.onModelsList,
-    onModelState: modelSurface.onModelState,
-    ...(isCherry
-      ? {
-          onCherrySliccEvent: (name, detail) =>
-            prelude.cherryTransport?.emitSliccEventToHost(name, detail),
+          {
+            allowAlways: false,
+            signal: request.signal,
+            expiresAt: request.expiresAt,
+            requester:
+              request.scoopName ?? (cherryHostOrigin ? `via ${cherryHostOrigin}` : undefined),
+          }
+        );
+        return { decision: decision.decision, attestation: 'none' };
+      },
+      onConnectionChange: (connected) => {
+        boot.refs.switcher.connection = connected ? 'connected' : 'disconnected';
+        setComposerState(connected, connected ? CONNECTED : CONNECTING);
+        if (!connected) modelSurface.reset();
+        if (isCherry)
+          prelude.cherryTransport?.emitSliccEventToHost(
+            connected ? 'slicc.follower.ready' : 'slicc.follower.disconnected'
+          );
+      },
+      getSelectedScoopJid: () => followerSelectedScoop,
+      // A stall keeps the composer usable-looking but disabled, so a message
+      // typed while the leader is catching up can't be silently dropped. No
+      // cherry host event: the host contract is connected/disconnected, and a
+      // stall is neither.
+      onLeaderStalled: (stalled) => {
+        setComposerState(!stalled, stalled ? LEADER_BUSY : CONNECTED);
+      },
+      onGaveUp: (lastError) => {
+        log.error('follower gave up reaching the leader', { error: lastError });
+        boot.refs.switcher.connection = 'disconnected';
+        setComposerState(false, GAVE_UP);
+        modelSurface.reset();
+        // detachSync suppresses onConnectionChange(false) here - emit terminal.
+        if (isCherry) prelude.cherryTransport?.emitSliccEventToHost('slicc.follower.disconnected');
+      },
+      // Cherry's join token comes from the host page out-of-band (no localStorage
+      // entry to update); only persist for the plain standalone follower, whose
+      // joinUrl is what `resolveFollowerJoinUrl` re-reads from storage on reload.
+      ...(isCherry
+        ? {}
+        : {
+            onJoinUrlChanged: (newJoinUrl: string) => {
+              log.info('follower joinUrl superseded, persisting replacement', { newJoinUrl });
+              storeTrayJoinUrl(window.localStorage, newJoinUrl);
+            },
+          }),
+      addSprinkle: sprinkleCallbacks.addSprinkle,
+      removeSprinkle: sprinkleCallbacks.removeSprinkle,
+      onOpen: (path) => {
+        if (/^https?:\/\//.test(path)) window.open(path, '_blank', 'noopener');
+        else log.warn('follower sprinkle open() of a local path is unavailable', { path });
+      },
+      onScoopsList: (scoops, activeScoopJid) => {
+        if (
+          !followerSelectedScoop ||
+          !scoops.some((scoop) => scoop.jid === followerSelectedScoop)
+        ) {
+          followerSelectedScoop = activeScoopJid;
         }
-      : {}),
-  });
+        publishFollowerScoops();
+        applyFollowerSelectionChrome();
+        boot.refs.switcher.setAttribute('active', followerSelectedScoop ?? activeScoopJid);
+      },
+      onModelsList: modelSurface.onModelsList,
+      onModelState: modelSurface.onModelState,
+      ...(isCherry
+        ? {
+            onCherrySliccEvent: (name, detail) =>
+              prelude.cherryTransport?.emitSliccEventToHost(name, detail),
+          }
+        : {}),
+    })
+  );
 
   // Freezer new-chat: the side panel enables `history: true`, so the freezer
   // (including its `slicc-freezer-new` control) renders in the follower shell.
