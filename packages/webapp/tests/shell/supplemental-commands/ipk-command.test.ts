@@ -680,4 +680,42 @@ describe('createIpkCommand', () => {
     const manifest = JSON.parse((await fs.readFile('/work/package.json')) as string);
     expect(manifest.dependencies.drop).toBeUndefined();
   });
+
+  it('local uninstall removes a package listed only in devDependencies', async () => {
+    const reg = buildRegistry([{ name: 'vitest', version: '1.0.0' }]);
+    await fs.writeFile(
+      '/work/package.json',
+      `${JSON.stringify({ name: 'work', devDependencies: { vitest: '^1.0.0' } }, null, 2)}\n`
+    );
+    const cmd = createIpkCommand('npm', { fs, fetch: makeFetch(reg) });
+    await cmd.execute(['install'], ctxOf(fs) as never);
+    expect(await fs.exists('/work/node_modules/vitest')).toBe(true);
+
+    const r = await cmd.execute(['uninstall', 'vitest'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toMatch(/removed vitest/);
+    const manifest = JSON.parse((await fs.readFile('/work/package.json')) as string);
+    expect(manifest.devDependencies?.vitest).toBeUndefined();
+    expect(await fs.exists('/work/node_modules/vitest')).toBe(false);
+  });
+
+  it('uninstall leaves manifest unchanged when reconciliation fails', async () => {
+    const reg = buildRegistry([
+      { name: 'keep', version: '1.0.0' },
+      { name: 'drop', version: '1.0.0' },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    await cmd.execute(['install', '-g', 'keep', 'drop'], ctxOf(fs) as never);
+
+    const failFetch = (async () => {
+      throw new Error('network down');
+    }) as unknown as SecureFetch;
+    const failCmd = createIpkCommand('ipk', { fs, fetch: failFetch });
+    const r = await failCmd.execute(['uninstall', '-g', 'drop'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(1);
+    const manifest = JSON.parse((await fs.readFile(GLOBAL_PACKAGE_JSON)) as string);
+    expect(manifest.dependencies.keep).toBeDefined();
+    expect(manifest.dependencies.drop).toBeDefined();
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/drop`)).toBe(true);
+  });
 });

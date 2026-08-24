@@ -242,7 +242,7 @@ async function runInstall(
     (e) => `${name}: failed to install ${e.spec}: ${describeError(e.error)}`
   );
 
-  if (global && outcome.errors.length === 0 && outcome.results.length > 0) {
+  if (global && outcome.results.length > 0) {
     await refreshGlobalBinCommands(deps);
   }
 
@@ -309,7 +309,7 @@ async function runUninstall(
   }
 
   const hasErrors = outcome.errors.length > 0;
-  if (global && !hasErrors) {
+  if (global) {
     await refreshGlobalBinCommands(deps);
   }
   return {

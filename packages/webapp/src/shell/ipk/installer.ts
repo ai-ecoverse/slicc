@@ -642,20 +642,29 @@ export async function installFromManifest(
   return { results, errors, empty: false };
 }
 
-async function removeDirectDependencies(
-  fs: VirtualFS,
-  manifestRoot: string,
+function packageListedInManifest(manifest: ProjectManifest, name: string): boolean {
+  return name in (manifest.dependencies ?? {}) || name in (manifest.devDependencies ?? {});
+}
+
+function manifestWithoutPackages(
+  manifest: ProjectManifest,
   names: ReadonlySet<string>
-): Promise<string> {
-  const manifestPath = joinPath(manifestRoot, 'package.json');
-  const existing = await readJsonOr<ProjectManifest>(fs, manifestPath, {});
-  const deps = { ...(existing.dependencies ?? {}) };
+): ProjectManifest {
+  const dependencies = { ...(manifest.dependencies ?? {}) };
+  const devDependencies = { ...(manifest.devDependencies ?? {}) };
   for (const name of names) {
-    delete deps[name];
+    delete dependencies[name];
+    delete devDependencies[name];
   }
-  const next: ProjectManifest = { ...existing, dependencies: deps };
-  await fs.writeFile(manifestPath, `${JSON.stringify(next, null, 2)}\n`);
-  return manifestPath;
+  return { ...manifest, dependencies, devDependencies };
+}
+
+async function writeManifest(
+  fs: VirtualFS,
+  manifestPath: string,
+  manifest: ProjectManifest
+): Promise<void> {
+  await fs.writeFile(manifestPath, `${JSON.stringify(manifest, null, 2)}\n`);
 }
 
 async function pruneTopLevelPackages(
@@ -704,9 +713,11 @@ async function pruneTopLevelPackages(
 export async function syncGlobalInstallTree(
   fs: VirtualFS,
   fetch: SecureFetch,
-  timeoutMs?: number
+  timeoutMs?: number,
+  manifestOverride?: ProjectManifest
 ): Promise<void> {
-  const manifest = await readJsonOr<ProjectManifest>(fs, GLOBAL_PACKAGE_JSON, {});
+  const manifest =
+    manifestOverride ?? (await readJsonOr<ProjectManifest>(fs, GLOBAL_PACKAGE_JSON, {}));
   const entries = collectManifestEntries(manifest);
 
   if (entries.length === 0) {
@@ -779,19 +790,25 @@ export async function uninstallPackages(
   }
 
   const before = await readJsonOr<ProjectManifest>(fs, manifestPath, {});
-  const beforeDeps = before.dependencies ?? {};
   const results: UninstallResult[] = [];
   for (const name of names) {
-    results.push({ name, removed: name in beforeDeps });
+    results.push({ name, removed: packageListedInManifest(before, name) });
   }
 
-  await removeDirectDependencies(fs, manifestRoot, names);
+  const nextManifest = manifestWithoutPackages(before, names);
 
-  if (globalUninstall) {
-    await syncGlobalInstallTree(fs, fetch, timeoutMs);
-  } else {
-    await syncLocalInstallTree(fs, fetch, cwd, timeoutMs);
+  try {
+    if (globalUninstall) {
+      await syncGlobalInstallTree(fs, fetch, timeoutMs, nextManifest);
+    } else {
+      await syncLocalInstallTree(fs, fetch, cwd, timeoutMs, nextManifest);
+    }
+  } catch (err) {
+    errors.push({ spec: specs.join(' '), error: toError(err) });
+    return { results, errors };
   }
+
+  await writeManifest(fs, manifestPath, nextManifest);
 
   return { results, errors };
 }
@@ -800,10 +817,11 @@ async function syncLocalInstallTree(
   fs: VirtualFS,
   fetch: SecureFetch,
   cwd: string,
-  timeoutMs?: number
+  timeoutMs?: number,
+  manifestOverride?: ProjectManifest
 ): Promise<void> {
   const manifestPath = joinPath(cwd, 'package.json');
-  const manifest = await readJsonOr<ProjectManifest>(fs, manifestPath, {});
+  const manifest = manifestOverride ?? (await readJsonOr<ProjectManifest>(fs, manifestPath, {}));
   const entries = collectManifestEntries(manifest);
   const modulesDir = joinPath(cwd, 'node_modules');
 

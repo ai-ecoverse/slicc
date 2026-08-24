@@ -23,6 +23,20 @@ ipx --force <package> [args...]
 
 Already-installed packages, locally resolved bins, and unmapped package names keep their normal behavior. Use `commands` to discover available built-ins instead of maintaining a package mapping here.
 
+## Installing and removing packages
+
+`ipk install <pkg>` (also `npm install`, `npm i`, `ipk add`) installs into `<cwd>/node_modules` and records the package in the nearest `package.json`. `ipk install -g <pkg>` installs into the shared global prefix at `/shared/lib/node_modules`, records direct dependencies in `/shared/lib/package.json`, and publishes PATH-visible `.jsh` delegators under `/shared/bin` for package bins.
+
+```bash
+ipk install lodash              # local project install
+ipk install -g typescript       # global install (shared prefix + PATH bin)
+npm uninstall -g typescript     # remove from global manifest and reconcile tree
+npm list -g                     # list direct global dependencies
+npm root -g                     # print /shared/lib/node_modules
+```
+
+Global bins installed with `-g` are on the default `$PATH` via `/shared/bin/<name>.jsh` delegators — invoke them by bare name from any cwd. Local uninstall/list/root work without `-g` against the cwd `package.json`.
+
 ## Running package.json scripts
 
 `npm run <script>` (also `ipk run`, `npm run-script`, and the `npm test` / `start` / `stop` / `restart` shortcuts) runs a `scripts` entry from the nearest `package.json`, in that package's directory. `npm run` with no script name lists what is available — read that list instead of guessing a script name.
