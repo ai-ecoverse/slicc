@@ -73,6 +73,8 @@ fix the layering, never grow `layer-back-edge-baseline.json`),
 baseline-ratcheted; name the shape, or suppress a genuinely untyped payload with
 `// biome-ignore lint/plugin: <reason>`, never grow
 `record-string-unknown-baseline.json`), `lint:patches`,
+`lint:swift-pins` (GitHub SPM packages dual-pinned in `Package.swift` and
+xcodegen `project.yml` must overlap — see `packages/dev-tools/swift-pin-reconcile/`),
 `lint:swift-deps` (SPM unused-dependency gate — see below), and `lint:duplication`.
 
 CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject

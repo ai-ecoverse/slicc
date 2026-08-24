@@ -66,10 +66,10 @@ export const AUTOMATION_BRANCH_PREFIXES = ['automation/', 'renovate/', 'rum-fix/
 
 /**
  * Labels whose PRs this repo already self-heals through
- * `renovate-patch-reconcile.yml` / `renovate-format-reconcile.yml`. Acting on
- * them would race those workflows.
+ * `renovate-patch-reconcile.yml` / `renovate-format-reconcile.yml` /
+ * `renovate-swift-pin-reconcile.yml`. Acting on them would race those workflows.
  */
-export const SELF_HEALING_LABELS = ['patched-dependency', 'formatter-bump'];
+export const SELF_HEALING_LABELS = ['patched-dependency', 'formatter-bump', 'swift-pin'];
 
 /** Check-run conclusions that count as a failure. */
 export const FAILING_CONCLUSIONS = new Set(['failure', 'timed_out', 'cancelled']);

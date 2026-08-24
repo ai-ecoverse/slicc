@@ -129,6 +129,21 @@ node -p "JSON.parse(require('fs').readFileSync('package-lock.json','utf8')).pack
 npm view <dep> version
 ```
 
+### Companion reconcile workflows
+
+The Mend-hosted Renovate app cannot run `postUpgradeTasks`. Three workflows
+clean up after it, pushing as `github-actions[bot]` (listed in
+`renovate.json` `gitIgnoredAuthors` so Renovate does not treat the push as a
+foreign edit):
+
+| Workflow                           | Label                | What it does                                                            |
+| ---------------------------------- | -------------------- | ----------------------------------------------------------------------- |
+| `renovate-format-reconcile.yml`    | `formatter-bump`     | Runs biome + prettier after a formatter bump                            |
+| `renovate-patch-reconcile.yml`     | `patched-dependency` | Regenerates or removes an orphaned `patch-package` patch                |
+| `renovate-swift-pin-reconcile.yml` | `swift-pin`          | Syncs GitHub SPM pins across `Package.swift` and xcodegen `project.yml` |
+
+`npm run lint:patches` and `npm run lint:swift-pins` are the CI backstops.
+
 ### Reviewer expectations
 
 - Do not manually merge a Renovate PR that Renovate is still holding for the cooldown window. Wait for Renovate to mark the PR mergeable.

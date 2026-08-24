@@ -195,8 +195,14 @@ SPM version conflicts (`Could not resolve package dependencies` /
 `pin-sync` code signature: Renovate's swift manager updates `Package.swift` but
 historically missed the sibling xcodegen `project.yml` `exactVersion` pins.
 Syncing those pins is mechanical; inventing a new dependency is still a hard
-skip. `renovate.json`'s regex `customManagers` entry now covers `project.yml`
-so both pins move in the same Renovate PR.
+skip. `renovate.json`'s regex `customManagers` entry covers `project.yml`, and
+each dual-pinned GitHub identity is grouped + labelled `swift-pin` so one PR
+moves both manifests. That still split (PRs #2320 / #2348: one PR on 151, the
+other on 150), so `renovate-swift-pin-reconcile.yml` raises the stale side the
+same way `renovate-format-reconcile.yml` reflows a formatter bump. `npm run
+lint:swift-pins` is the deterministic backstop. The dispatcher skips
+`swift-pin` PRs so it does not race the reconciler; `pin-sync` remains the
+backup for an unlabeled leftover.
 
 ### Running one on demand
 

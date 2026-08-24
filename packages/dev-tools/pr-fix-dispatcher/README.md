@@ -74,7 +74,7 @@ Silent drops (no label, no comment) happen before the rubric: the PR is not
 machine-authored, CI is green or still running, the newest failing conclusion is
 younger than the settling window, a human touched the PR in the last hour, the
 attempt cap is spent, this SHA was already dispatched or already skipped, or the
-PR carries `patched-dependency` / `formatter-bump` (the
+PR carries `patched-dependency` / `formatter-bump` / `swift-pin` (the
 `renovate-*-reconcile.yml` workflows self-heal those and acting would race them).
 
 A PR whose head branch lives in a **fork** (or whose fork has since been

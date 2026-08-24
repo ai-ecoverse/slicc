@@ -3,7 +3,7 @@
   "extends": ["config:recommended"],
   "description": [
     "Dependency updates are intentionally NOT grouped into one 'non-major' PR — each package updates in its own PR so a breaking transitive bump fails in isolation and is trivial to identify (see the e2b 2.33.0 / Cloudflare workerd incident). Keep the purposeful cohesion groups below (semantic-release, xterm, earendil-works, just-bash, patched dependencies); do not re-add a broad catch-all group.",
-    "gitIgnoredAuthors is the github-actions[bot] identity that the renovate-format-reconcile and renovate-patch-reconcile workflows push their reflow/reconcile commits as. Listing it here stops Renovate treating those commits as a 'someone else edited this PR' foreign edit — without it Renovate posts an Edited/Blocked notice and disables auto-rebase on the amended PR (automerge still fires once green; see #1602). Keep in sync with the `git config user.email` in those two workflows."
+    "gitIgnoredAuthors is the github-actions[bot] identity that the renovate-format-reconcile, renovate-patch-reconcile, and renovate-swift-pin-reconcile workflows push their reflow/reconcile commits as. Listing it here stops Renovate treating those commits as a 'someone else edited this PR' foreign edit — without it Renovate posts an Edited/Blocked notice and disables auto-rebase on the amended PR (automerge still fires once green; see #1602). Keep in sync with the `git config user.email` in those three workflows."
   ],
   "rebaseWhen": "conflicted",
   "gitIgnoredAuthors": ["41898282+github-actions[bot]@users.noreply.github.com"],
@@ -20,10 +20,10 @@
   "customManagers": [
     {
       "customType": "regex",
-      "description": "XcodeGen project.yml `exactVersion` pins for GitHub SPM packages. Renovate's swift manager updates Package.swift / Package.resolved but not these sibling pins — missing them left WebRTC at 150 in project.yml while Package.swift required 151 (PR #2320).",
+      "description": "XcodeGen project.yml `exactVersion` / `minorVersion` pins for GitHub SPM packages. Renovate's swift manager updates Package.swift / Package.resolved but not these sibling pins — missing them left WebRTC at 150 in project.yml while Package.swift required 151 (PR #2320). The regex still opens its own PR unless the package is grouped below; renovate-swift-pin-reconcile.yml raises the leftover stale side.",
       "managerFilePatterns": ["/(^|/)project\\.yml$/"],
       "matchStrings": [
-        "url:\\s*https://github\\.com/(?<depName>[^\\s/]+/[^\\s/]+?)(?:\\.git)?\\s*\\n\\s+exactVersion:\\s*(?<currentValue>\\S+)"
+        "url:\\s*https://github\\.com/(?<depName>[^\\s/]+/[^\\s/]+?)(?:\\.git)?\\s*\\n\\s+(?:exactVersion|minorVersion):\\s*(?<currentValue>\\S+)"
       ],
       "datasourceTemplate": "github-releases",
       "versioningTemplate": "semver"
@@ -86,6 +86,27 @@
       "description": "Formatter/linter bumps (biome, prettier) reflow existing source, so `biome check .` / `prettier --check .` in the CI lint gate fail on files the new version would reformat (e.g. biome 2.5.4's curried-call reflow, PR #1602). The Mend-hosted Renovate app can't run postUpgradeTasks, so label these and let the renovate-format-reconcile workflow run the formatter and push the reflow to the PR branch (mirrors the renovate-patch-reconcile pattern). Keep separate PRs (no groupName) per the one-dep-per-PR philosophy above.",
       "matchPackageNames": ["@biomejs/biome", "prettier"],
       "addLabels": ["formatter-bump"]
+    },
+    {
+      "description": "stasel/WebRTC is dual-pinned in Package.swift and xcodegen project.yml. Without a group, the swift manager and the regex customManager open two PRs for the same bump that pin different majors and SPM fails (PRs #2320 / #2348). Group them; label swift-pin so renovate-swift-pin-reconcile.yml can raise a leftover stale side. Keep this list in sync with lint:swift-pins.",
+      "matchManagers": ["swift", "custom.regex"],
+      "matchPackageNames": ["stasel/WebRTC", "WebRTC"],
+      "groupName": "stasel/WebRTC",
+      "addLabels": ["swift-pin"]
+    },
+    {
+      "description": "Lakr233/libghostty-spm is dual-pinned (exact) in Package.swift and project.yml. Same split-PR failure mode as stasel/WebRTC; same group + swift-pin label. Keep in sync with lint:swift-pins.",
+      "matchManagers": ["swift", "custom.regex"],
+      "matchPackageNames": ["Lakr233/libghostty-spm", "libghostty-spm"],
+      "groupName": "Lakr233/libghostty-spm",
+      "addLabels": ["swift-pin"]
+    },
+    {
+      "description": "huggingface/swift-huggingface is dual-pinned (minorVersion / upToNextMinor) in project.yml and Package.swift. Same split-PR failure mode as stasel/WebRTC; same group + swift-pin label. Keep in sync with lint:swift-pins.",
+      "matchManagers": ["swift", "custom.regex"],
+      "matchPackageNames": ["huggingface/swift-huggingface", "swift-huggingface"],
+      "groupName": "huggingface/swift-huggingface",
+      "addLabels": ["swift-pin"]
     },
     {
       "description": "go-optel is a sibling module resolved through a `replace` directive in packages/slicc-cli/go.mod, so it is never published to a proxy and every run reports it under 'Package lookup failures' on the Dependency Dashboard. Disable it so that banner only ever means a real lookup failure.",

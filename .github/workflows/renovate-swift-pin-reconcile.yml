@@ -1,0 +1,96 @@
+name: Renovate Swift Pin Reconcile
+
+# When Renovate bumps a GitHub SPM package that is pinned in BOTH a xcodegen
+# `project.yml` (`exactVersion` / `minorVersion`) and a `Package.swift`, the
+# swift manager and the regex customManager historically opened two PRs for the
+# same bump (PRs #2320 / #2348). One side moved to 151, the other stayed on 150,
+# and SPM failed with a version conflict. The Mend-hosted app cannot run
+# `postUpgradeTasks`, so this companion workflow does the reconcile: on a
+# `swift-pin`-labelled Renovate PR it raises the stale side to the higher
+# version already in the tree (and peels the git tag into Package.resolved for
+# exact pins) and, if that changed anything, commits + pushes to the PR branch.
+#
+# Mirrors renovate-format-reconcile.yml:
+#   - Same trigger gating: Renovate's own branch PRs in THIS repo (head here so
+#     secrets + push work) carrying the `swift-pin` label that renovate.json
+#     adds to dual-pinned GitHub SPM packages.
+#   - Same BOT_PAT push identity: a GITHUB_TOKEN-authored push is suppressed by
+#     GitHub's anti-recursion guard, so CI would NOT re-run on it; pushing with
+#     BOT_PAT fires the PR's `synchronize` event and the full suite re-runs.
+#   - Third-party actions pinned to the same immutable commit SHAs.
+#
+# No `npm ci`: the reconciler is a zero-dep Node script that only reads the
+# manifests. GitHub API calls for tag SHAs use GITHUB_TOKEN (public tags).
+#
+# Required secret (already present, shared with renovate-format-reconcile /
+# renovate-patch-reconcile / coverage-ratchet): BOT_PAT — fine-grained PAT
+# scoped to this repo with contents + pull-requests write.
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled]
+
+concurrency:
+  group: renovate-swift-pin-reconcile-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+permissions:
+  contents: write # push the pin-sync commit to the PR branch
+  pull-requests: write # comment the outcome on the PR
+
+jobs:
+  reconcile:
+    runs-on: ubuntu-latest
+    # Only Renovate's own branch PRs (head in this repo → BOT_PAT push works)
+    # that carry the swift-pin label. Gate on the PR AUTHOR
+    # (pull_request.user.login), NOT github.actor: on a `labeled` event the actor
+    # is the human who added the label, so an actor gate would skip the manual
+    # "label an already-open Renovate PR to unblock it" path.
+    if: >-
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.user.login == 'renovate[bot]' &&
+      contains(github.event.pull_request.labels.*.name, 'swift-pin')
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          ref: ${{ github.event.pull_request.head.ref }}
+          fetch-depth: 0
+          # BOT_PAT (not GITHUB_TOKEN) so the pin-sync push fires the PR's
+          # `synchronize` event and CI re-runs — see the header note.
+          token: ${{ secrets.BOT_PAT }}
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Reconcile SPM / xcodegen pins
+        id: pins
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          if node packages/dev-tools/swift-pin-reconcile/reconcile.mjs --write; then
+            if git diff --quiet; then
+              echo "changed=false" >> "$GITHUB_OUTPUT"
+            else
+              echo "changed=true" >> "$GITHUB_OUTPUT"
+            fi
+          else
+            echo "Reconcile failed."
+            exit 1
+          fi
+
+      - name: Push the pin-sync if anything changed
+        if: steps.pins.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -am "fix(deps): sync SPM and xcodegen pins (renovate-swift-pin-reconcile)"
+          git push
+
+      - name: Comment the outcome
+        if: steps.pins.outputs.changed == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh pr comment "${{ github.event.pull_request.number }}" --body \
+            "🔗 Synced the GitHub SPM pin across \`Package.swift\` / \`project.yml\` / \`Package.resolved\` so SPM can resolve (the swift manager and the xcodegen regex customManager otherwise open split PRs). See \`.github/workflows/renovate-swift-pin-reconcile.yml\`."
