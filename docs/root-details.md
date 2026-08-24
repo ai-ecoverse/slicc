@@ -37,7 +37,7 @@ Numbering matches the root checklist. Full catalog:
 2. **UI state preservation** — capture+restore UI state around DOM rebuilds.
 3. **Cross-runtime parity** — peer runtimes updated or explicitly excluded.
 4. **CDP edge cases** — foreground before screenshots; validate target/port.
-5. **Native/macOS permissions** — entitlements + TCC check + graceful denial.
+5. **Native/macOS permissions** — entitlements + TCC check + graceful denial; File Provider appexes must embed and sign the `@rpath` frameworks they link.
 6. **Model metadata / provider pipeline** — metadata forwarding, version
    predicates, thinking levels, costs; see [`pitfalls.md`](pitfalls.md).
 7. **Test coverage** — mirrored `tests/`; bug fixes ship regression tests.

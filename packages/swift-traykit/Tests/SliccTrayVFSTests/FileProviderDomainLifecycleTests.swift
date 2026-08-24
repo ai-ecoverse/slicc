@@ -49,6 +49,19 @@ final class FileProviderDomainLifecycleTests: XCTestCase {
         XCTAssertEqual(defaults?.string(forKey: "fileProvider.domainStatus"), "register-succeeded")
     }
 
+    func testMakeDomainDisablesTrash() {
+        XCTAssertFalse(FileProviderDomainLifecycle.makeDomain().supportsSyncingTrash)
+        XCTAssertFalse(FileProviderDomainLifecycle.needsReset(nil))
+        let trashOn = NSFileProviderDomain(
+            identifier: FileProviderDomainLifecycle.domainIdentifier,
+            displayName: "Sliccy")
+        trashOn.supportsSyncingTrash = true
+        XCTAssertTrue(FileProviderDomainLifecycle.needsReset(trashOn))
+        XCTAssertTrue(
+            FileProviderDomainLifecycle.needsReset(FileProviderDomainLifecycle.makeDomain()),
+            "Fresh domains report userEnabled=false until the system enables them")
+    }
+
     func testDisabledDomainIsRemovedBeforeReAdd() {
         let registrar = RecordingRegistrar()
         // Fresh NSFileProviderDomain instances report userEnabled=false until
@@ -63,6 +76,23 @@ final class FileProviderDomainLifecycleTests: XCTestCase {
         XCTAssertEqual(registrar.removedDomains.count, 1)
         XCTAssertEqual(registrar.addedDomains.count, 1)
         XCTAssertEqual(defaults?.string(forKey: "fileProvider.domainStatus"), "register-succeeded")
+    }
+
+    func testTrashEnabledDomainIsRemovedBeforeReAdd() {
+        let registrar = RecordingRegistrar()
+        let existing = NSFileProviderDomain(
+            identifier: FileProviderDomainLifecycle.domainIdentifier,
+            displayName: "Sliccy")
+        existing.supportsSyncingTrash = true
+        registrar.knownDomains = [existing]
+        let defaults = UserDefaults(suiteName: "fileprovider.lifecycle.tests.\(UUID().uuidString)")
+        let lifecycle = FileProviderDomainLifecycle(registrar: registrar, defaults: defaults)
+
+        lifecycle.registerIfCredentialsAvailable(true)
+
+        XCTAssertEqual(registrar.removedDomains.count, 1)
+        XCTAssertEqual(registrar.addedDomains.count, 1)
+        XCTAssertFalse(registrar.addedDomains[0].supportsSyncingTrash)
     }
 
     func testDuplicateRegistrationAndAbsentRemovalAreHarmless() {

@@ -30,9 +30,18 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
   codesign --force --options runtime --sign "$IDENTITY" --timestamp \
     "$APP_DIR/Contents/Resources/slicc-server"
   if [ -d "$APP_DIR/Contents/PlugIns/SliccFileProvider.appex" ]; then
+    APPEX="$APP_DIR/Contents/PlugIns/SliccFileProvider.appex"
+    APPEX_WEBRTC="$APPEX/Contents/Frameworks/WebRTC.framework"
+    if [ -d "$APPEX_WEBRTC" ]; then
+      # Nested code must be signed before the appex that contains it.
+      # fileproviderd rejects an unsigned @rpath/WebRTC.framework with
+      # extensionKit error 2 ("connection to the extension could not be made").
+      codesign --force --options runtime --sign "$IDENTITY" --timestamp \
+        "$APPEX_WEBRTC"
+    fi
     codesign --force --options runtime --entitlements "$SCRIPT_DIR/SliccFileProvider.entitlements" \
       --sign "$IDENTITY" --timestamp \
-      "$APP_DIR/Contents/PlugIns/SliccFileProvider.appex"
+      "$APPEX"
   fi
 
   # iCloud key-value sync (cross-device tray sessions) needs an embedded
@@ -102,8 +111,13 @@ else
   codesign --force --sign - "$APP_DIR/Contents/Resources/WebRTC.framework"
   codesign --force --sign - "$APP_DIR/Contents/Resources/slicc-server"
   if [ -d "$APP_DIR/Contents/PlugIns/SliccFileProvider.appex" ]; then
+    APPEX="$APP_DIR/Contents/PlugIns/SliccFileProvider.appex"
+    APPEX_WEBRTC="$APPEX/Contents/Frameworks/WebRTC.framework"
+    if [ -d "$APPEX_WEBRTC" ]; then
+      codesign --force --sign - "$APPEX_WEBRTC"
+    fi
     codesign --force --entitlements "$SCRIPT_DIR/SliccFileProvider.entitlements" --sign - \
-      "$APP_DIR/Contents/PlugIns/SliccFileProvider.appex"
+      "$APPEX"
   fi
   codesign --force --entitlements "$ENTITLEMENTS" --sign - "$APP_DIR"
 fi

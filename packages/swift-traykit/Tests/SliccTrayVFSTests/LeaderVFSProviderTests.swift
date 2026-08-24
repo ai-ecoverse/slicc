@@ -434,10 +434,22 @@ final class LeaderVFSProviderTests: XCTestCase {
         XCTAssertTrue(workingSet.isEmpty)
     }
 
+    func testTrashContainerEnumeratesEmptyWithoutTalkingToTheLeader() async throws {
+        let fs = FakeFS()
+        let provider = LeaderVFSProvider(fs: fs)
+
+        XCTAssertNoThrow(try provider.enumerator(for: .trashContainer))
+        let items = try await provider.items(for: .trashContainer)
+
+        XCTAssertTrue(items.isEmpty)
+        XCTAssertTrue(fs.operations.isEmpty)
+    }
+
     func testEnumeratorValidationAndNativeErrorMappingLiveInTrayKit() throws {
         let provider = LeaderVFSProvider(fs: FakeFS())
         XCTAssertNoThrow(try provider.enumerator(for: .rootContainer))
         XCTAssertNoThrow(try provider.enumerator(for: .workingSet))
+        XCTAssertNoThrow(try provider.enumerator(for: .trashContainer))
 
         XCTAssertThrowsError(
             try provider.enumerator(
