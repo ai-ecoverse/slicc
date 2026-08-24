@@ -56,18 +56,30 @@ struct SliccAgentAvatarView: View {
         return parsed
     }
 
+    /// The only case with a snapshot to paint — and so the only one that grows
+    /// brows: the expression kit driving eyes that are actually open.
+    private var expressionDriven: Bool { expressive && avatar.eyes == .open }
+
     var body: some View {
-        ZStack {
-            RoundedRectangle(cornerRadius: avatar.tileCornerRadius)
-                .fill(agentColor.opacity(0.18))
-            Ellipse()
-                .fill(agentColor)
-                .frame(width: avatar.glyphSize.x, height: avatar.glyphSize.y)
-                .position(x: avatar.glyphCenter.x, y: avatar.glyphCenter.y)
-            eyes
+        Group {
+            if expressionDriven, !reduceMotion {
+                // ONE timeline for the whole avatar. The tile and the brow
+                // layer over it must paint the same frame, and the engine
+                // integrates on every read — a second timeline would step it
+                // twice per frame.
+                TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
+                    layers(snapshot: expression.frame(at: context.date))
+                }
+            } else if expressionDriven {
+                // Reduced motion renders ONE settled frame — no timeline, no
+                // blinks, no saccades — which is also what the screenshot
+                // fixtures capture.
+                layers(snapshot: expression.snapshot)
+            } else {
+                layers(snapshot: nil)
+            }
         }
         .frame(width: avatar.sideLength, height: avatar.sideLength)
-        .clipShape(RoundedRectangle(cornerRadius: avatar.tileCornerRadius))
         .accessibilityHidden(true)
         .onAppear { synchronize() }
         .onDisappear { tiltController.stopAndCenter() }
@@ -75,12 +87,46 @@ struct SliccAgentAvatarView: View {
         .onChange(of: avatar) { _, _ in synchronize() }
     }
 
+    /// The two layers, mirroring the web's `.crop` + `.brow-layer` split.
+    ///
+    /// **Only the tile is cropped.** The roundrect used to clip the entire
+    /// avatar, which is why the brows had to be squeezed into the headroom
+    /// above the eyes to survive it. Now the tint, glyph, sockets, pupils and
+    /// lids still clip at the tile and the brows paint OVER it in band space,
+    /// so they overhang — sideways and at the top, ~3pt at the 26pt rail size.
+    /// Hosts must therefore not clip an avatar; the chat header's 36pt box
+    /// around a 30pt tile is the slack that buys.
+    private func layers(snapshot: AvatarExpressionEngine.Snapshot?) -> some View {
+        ZStack {
+            tile(snapshot: snapshot)
+                .frame(width: avatar.sideLength, height: avatar.sideLength)
+                .clipShape(RoundedRectangle(cornerRadius: avatar.tileCornerRadius))
+            if let snapshot {
+                ExpressiveAvatarBrows(
+                    avatar: avatar, snapshot: snapshot, reduceMotion: reduceMotion)
+            }
+        }
+    }
+
+    /// Everything the roundrect crops.
+    private func tile(snapshot: AvatarExpressionEngine.Snapshot?) -> some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: avatar.tileCornerRadius)
+                .fill(agentColor.opacity(0.18))
+            Ellipse()
+                .fill(agentColor)
+                .frame(width: avatar.glyphSize.x, height: avatar.glyphSize.y)
+                .position(x: avatar.glyphCenter.x, y: avatar.glyphCenter.y)
+            eyes(snapshot: snapshot)
+        }
+    }
+
     @ViewBuilder
-    private var eyes: some View {
+    private func eyes(snapshot: AvatarExpressionEngine.Snapshot?) -> some View {
         switch avatar.eyes {
         case .open:
-            if expressive {
-                expressiveEyes
+            if let snapshot {
+                expressionEyes(snapshot: snapshot)
             } else {
                 ForEach(Array(avatar.eyeCenters.enumerated()), id: \.offset) { index, center in
                     BlinkingAvatarEye(
@@ -110,20 +156,6 @@ struct SliccAgentAvatarView: View {
                     frozenShape: expressive ? expression.snapshot.shape : nil
                 )
                 .position(x: center.x, y: center.y)
-            }
-        }
-    }
-
-    /// The expression kit's eyes. Reduced motion renders ONE settled frame —
-    /// no timeline, no blinks, no saccades — which is also what the screenshot
-    /// fixtures capture.
-    @ViewBuilder
-    private var expressiveEyes: some View {
-        if reduceMotion {
-            expressionEyes(snapshot: expression.snapshot)
-        } else {
-            TimelineView(.animation(minimumInterval: 1.0 / 60.0)) { context in
-                expressionEyes(snapshot: expression.frame(at: context.date))
             }
         }
     }
@@ -182,9 +214,9 @@ struct SliccAgentAvatarView: View {
     }
 }
 
-/// One eye wearing the full expression kit: the socket morph as a corner
-/// radius, chord-cut lids as a rectangular mask plus a closing line, and a
-/// brow capsule with raise + tilt.
+/// One eye wearing the expression kit: the socket morph as a corner radius,
+/// and chord-cut lids as a rectangular mask plus a closing line. The brow is
+/// NOT here — it paints outside the tile crop, in `ExpressiveAvatarBrows`.
 private struct ExpressiveAvatarEye: View {
     let avatar: SliccAgentAvatarGeometry
     let snapshot: AvatarExpressionEngine.Snapshot
@@ -196,7 +228,6 @@ private struct ExpressiveAvatarEye: View {
             socket.mask(lidMask)
             chord(edge: .top)
             chord(edge: .bottom)
-            brow
         }
         .frame(width: avatar.eyeDiameter, height: avatar.eyeDiameter)
         .scaleEffect(y: snapshot.blinkScale)
@@ -256,55 +287,54 @@ private struct ExpressiveAvatarEye: View {
             )
             .opacity(fraction > AvatarExpression.lidLineEpsilon ? 1 : 0)
     }
+}
 
-    // MARK: - Brow placement
-    //
-    // The pose SCALARS are the grammar's (and the shared vectors'); only their
-    // mapping into the tile is adapted here, exactly as the eye centres already
-    // are. The web draws the whole 200x100 band with `overflow: visible`, so a
-    // brow may sit centred over its eye and lift clean off the top. The tile is
-    // a TIGHT CROP — eye centres at 8%/92%, roughly 14pt of headroom above the
-    // eye — so a band-space brow hangs off two edges at once and reads as a
-    // stray mark rather than a brow.
+/// The brows: two capsules painted OUTSIDE the tile's roundrect, the SwiftUI
+/// mirror of the web's `.brow-layer`.
+///
+/// Placement is plain band space — centred over its eye at `browY`, raise in
+/// band units — because nothing crops them any more. The old mapping pulled
+/// each brow inward by `0.9 * browHalfWidth` and budgeted rest and lift out of
+/// the ~14pt of headroom above the eye, which was the only way to keep a brow
+/// inside a tile that clipped everything. Both hacks are gone with the clip.
+///
+/// They also sit outside `ExpressiveAvatarEye` deliberately: its lid squash
+/// (`blinkScale`) used to fold the brows flat onto the eyeball. The crop hid
+/// that; uncropped it reads as a wince twice every few seconds. A blink is a
+/// lid move, so the brows hold their pose across it — which is what turns the
+/// apex re-cock into a visible transition instead of a swap under the squash.
+private struct ExpressiveAvatarBrows: View {
+    let avatar: SliccAgentAvatarGeometry
+    let snapshot: AvatarExpressionEngine.Snapshot
+    let reduceMotion: Bool
 
-    /// Headroom between the tile's top edge and the top of the eye.
-    private var browHeadroom: Double {
-        max(0, avatar.eyeCenters[0].y - avatar.eyeRadius)
-    }
-
-    /// Pulled inward, over the half of the eye the crop actually shows.
-    private var browCenterX: Double {
-        let inward = AvatarExpression.browHalfWidth * avatar.expressionScale * 0.9
-        return avatar.eyeDiameter / 2 + (eyeIndex == 0 ? inward : -inward)
-    }
-
-    /// Rest height and lift, both budgeted out of the headroom so the most
-    /// raised pose the grammar can produce (12 band units) still clears the
-    /// tile's top edge with its stroke intact.
-    private var browRestY: Double {
-        -0.35 * browHeadroom
-    }
-
-    private var browRaiseScale: Double {
-        browHeadroom / 60
+    /// One container measuring the whole tile, for the same reason
+    /// `expressionEyes` needs one: `.position` reads the parent's coordinate
+    /// space, and a bare pair would be laid out as stacked halves.
+    var body: some View {
+        ZStack {
+            brow(pose: snapshot.brows.left, eyeIndex: 0)
+            brow(pose: snapshot.brows.right, eyeIndex: 1)
+        }
+        .frame(width: avatar.sideLength, height: avatar.sideLength)
     }
 
     /// Two scalars, one capsule: raise lifts it off the eye, tilt cocks it.
-    private var brow: some View {
-        let pose = eyeIndex == 0 ? snapshot.brows.left : snapshot.brows.right
-        let scale = avatar.expressionScale
+    /// Pose changes ease over `browTransitionSeconds` — the web's
+    /// `transition: transform` — and, like the web's reduced-motion rule, snap
+    /// when motion is reduced.
+    private func brow(pose: AvatarExpression.BrowPose, eyeIndex: Int) -> some View {
+        let center = avatar.browCenter(eyeIndex: eyeIndex, raise: pose.raise)
+        let transition: Animation? =
+            reduceMotion ? nil : .easeInOut(duration: AvatarExpression.browTransitionSeconds)
         return Capsule()
             .fill(.black)
-            .frame(
-                width: AvatarExpression.browHalfWidth * 2 * scale,
-                height: AvatarExpression.browStroke * scale
-            )
+            .frame(width: avatar.browSize.x, height: avatar.browSize.y)
             .rotationEffect(.degrees(pose.tilt))
-            .position(x: browCenterX, y: browRestY + pose.raise * browRaiseScale)
+            .position(x: center.x, y: center.y)
             .opacity(snapshot.browsVisible ? 1 : 0)
-            .animation(
-                .easeInOut(duration: AvatarExpression.browTransitionSeconds),
-                value: snapshot.browsVisible)
+            .animation(transition, value: pose)
+            .animation(transition, value: snapshot.browsVisible)
     }
 }
 

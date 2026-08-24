@@ -164,6 +164,26 @@ struct SliccAgentAvatarGeometry: Equatable, Sendable {
         max(0, min(1, fraction)) * eyeDiameter
     }
 
+    /// A brow capsule's centre, in tile points.
+    ///
+    /// Band space, exactly like the web's `.brow-layer`: centred on its eye's
+    /// `cx`, sitting at `browY`, with `raise` in band units — no inward pull
+    /// and no headroom budget. The band is bigger than the tile, so a brow
+    /// OVERHANGS the roundrect; the view paints it outside the crop instead of
+    /// squeezing it in (`SliccAgentAvatarView.layers`).
+    func browCenter(eyeIndex: Int, raise: Double) -> Point {
+        let bandX = eyeIndex == 0 ? AvatarExpression.leftEyeX : AvatarExpression.rightEyeX
+        let placed = placement.place(x: bandX, y: AvatarExpression.browY + raise)
+        return Point(x: placed.x * sideLength, y: placed.y * sideLength)
+    }
+
+    /// The brow capsule itself: the band's stroke, laid on its side.
+    var browSize: Point {
+        Point(
+            x: AvatarExpression.browHalfWidth * 2 * bandUnit,
+            y: AvatarExpression.browStroke * bandUnit)
+    }
+
     /// Half-width of the chord line that closes the outline at a lid cut.
     func chordHalfWidth(fraction: Double, shape: Double, edge: LidEdge) -> Double {
         let y =

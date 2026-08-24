@@ -82,6 +82,97 @@ final class SliccAgentAvatarGeometryTests: XCTestCase {
         }
     }
 
+    // MARK: - Brows outside the tile crop
+
+    /// Brow placement is plain band space, like the web's `.brow-layer`: each
+    /// brow rides its own eye's `cx` and sits at `BROW_Y` above the baseline.
+    /// The old mapping pulled it inward by `0.9 * browHalfWidth` because the
+    /// tile clipped everything; the crop no longer reaches the brows, so
+    /// nothing adapts them any more.
+    func testBrowsRideBandSpaceOverTheirOwnEye() {
+        for type in [SliccAgentAvatarGeometry.AvatarType.scoop, .cone] {
+            let geometry = SliccAgentAvatarGeometry(
+                type: type, color: "#8B5CF6", fill: 50, sideLength: 100)
+            let lift =
+                (AvatarExpression.browY - AvatarExpression.eyeCenterY) * geometry.expressionScale
+
+            for index in 0...1 {
+                let brow = geometry.browCenter(eyeIndex: index, raise: 0)
+                XCTAssertEqual(
+                    brow.x, geometry.eyeCenters[index].x, accuracy: accuracy,
+                    "\(type) brow \(index) left its eye's cx")
+                XCTAssertEqual(
+                    brow.y, geometry.eyeCenters[index].y + lift, accuracy: accuracy,
+                    "\(type) brow \(index) off the band's BROW_Y")
+            }
+        }
+    }
+
+    /// `raise` is band units one for one — not a fraction of whatever headroom
+    /// a crop happens to leave above the eye (the old `browHeadroom / 60`).
+    func testBrowRaiseScalesOneBandUnitAtATime() {
+        let geometry = SliccAgentAvatarGeometry(
+            type: .scoop, color: "#8B5CF6", fill: 50, sideLength: 100)
+        let raise = AvatarExpression.baseBrows.left.raise
+        let rest = geometry.browCenter(eyeIndex: 0, raise: 0)
+        let raised = geometry.browCenter(eyeIndex: 0, raise: raise)
+
+        XCTAssertEqual(
+            raised.y - rest.y, raise * geometry.expressionScale, accuracy: accuracy)
+        XCTAssertEqual(
+            geometry.browSize.x, 2 * AvatarExpression.browHalfWidth * geometry.expressionScale,
+            accuracy: accuracy)
+        XCTAssertEqual(
+            geometry.browSize.y, AvatarExpression.browStroke * geometry.expressionScale,
+            accuracy: accuracy)
+    }
+
+    /// The regression this placement exists for. At the 26pt rail size the
+    /// raised thinking brow hangs off the tile on TWO edges — outward past the
+    /// side and up past the top — which is legible only because the view
+    /// paints the brows outside the roundrect. A tile-wide clip shaved one brow
+    /// to a stub and lost the other, which is most of the thinking state.
+    func testRaisedBrowOverhangsTheTileAtRailSize() {
+        for type in [SliccAgentAvatarGeometry.AvatarType.scoop, .cone] {
+            let geometry = SliccAgentAvatarGeometry(
+                type: type, color: "#8B5CF6", fill: 50, sideLength: 26, activity: .thinking)
+            let center = geometry.browCenter(
+                eyeIndex: 0, raise: AvatarExpression.baseBrows.left.raise)
+
+            XCTAssertLessThan(
+                center.x - geometry.browSize.x / 2, 0, "\(type) brow no longer clears the side")
+            XCTAssertLessThan(
+                center.y - geometry.browSize.y / 2, 0, "\(type) brow no longer clears the top")
+        }
+
+        // The scoop's exact rail overhang, so a squeeze cannot creep back in
+        // unnoticed: ~3.2pt sideways and ~1.7pt over the top edge.
+        let scoop = SliccAgentAvatarGeometry(
+            type: .scoop, color: "#8B5CF6", fill: 50, sideLength: 26, activity: .thinking)
+        let center = scoop.browCenter(eyeIndex: 0, raise: AvatarExpression.baseBrows.left.raise)
+
+        XCTAssertEqual(center.x - scoop.browSize.x / 2, -3.157_05, accuracy: 0.000_01)
+        XCTAssertEqual(center.y - scoop.browSize.y / 2, -1.710_15, accuracy: 0.000_01)
+    }
+
+    /// The other end of the same range: a SETTLED brow must still clear the
+    /// socket. Band space puts it close — under a point above the eye at rail
+    /// size — and anything that drops it further reads as a brow resting on the
+    /// eyeball rather than over it.
+    func testSettledBrowStillClearsTheSocket() {
+        let settled = AvatarExpression.baseBrows.right.raise
+
+        for type in [SliccAgentAvatarGeometry.AvatarType.scoop, .cone] {
+            let geometry = SliccAgentAvatarGeometry(
+                type: type, color: "#8B5CF6", fill: 50, sideLength: 26, activity: .thinking)
+            let bottom =
+                geometry.browCenter(eyeIndex: 1, raise: settled).y + geometry.browSize.y / 2
+            let socketTop = geometry.eyeCenters[1].y - geometry.eyeRadius
+
+            XCTAssertLessThan(bottom, socketTop, "\(type) settled brow sits on the eyeball")
+        }
+    }
+
     func testFillScaleMatchesWebBoundariesAndMidpoint() {
         XCTAssertEqual(SliccAgentAvatarGeometry.fillScale(for: 50), 1, accuracy: accuracy)
         XCTAssertEqual(SliccAgentAvatarGeometry.fillScale(for: 67.5), 1.6, accuracy: accuracy)
