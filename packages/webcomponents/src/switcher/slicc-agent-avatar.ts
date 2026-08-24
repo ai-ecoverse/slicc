@@ -96,11 +96,18 @@ const DEFAULT_COLOR = { cone: '#D2691E', scoop: '#FFB6C1' } as const;
 
 const STYLE = `
 :host{display:block;width:26px;height:26px;pointer-events:none;}
-.avatar{position:relative;display:block;width:100%;height:100%;overflow:hidden;border-radius:7px;background:color-mix(in srgb,var(--slicc-agent-tabs-hue) 18%,transparent);}
+/* The tile itself no longer clips: .crop owns the roundrect so the brows can
+   break out of it (see .brow-layer). Everything else still paints inside. */
+.avatar{position:relative;display:block;width:100%;height:100%;overflow:visible;}
+.crop{position:absolute;inset:0;overflow:hidden;border-radius:7px;background:color-mix(in srgb,var(--slicc-agent-tabs-hue) 18%,transparent);}
 .icon-inner{position:absolute;inset:0;transform-origin:0 0;transform:translate(var(--tx),var(--ty)) scale(var(--zoom));}
+/* A second copy of the icon-inner zoom/pan, outside the crop, carrying the
+   brows only: at BROW_Y=2 with a raise of up to -9 in a band zoomed ~2.65x the
+   roundrect would otherwise shave the brows off at the top and outer sides. */
+.brow-layer{pointer-events:none;}
 .glyph{position:absolute;left:50%;top:50%;display:block;width:var(--g);height:var(--g);overflow:visible;transform:translate(-50%,-50%);}
 .eyes{position:absolute;pointer-events:none;}
-.eyes-svg{display:block;overflow:visible;}
+.eyes-svg,.brows-svg{display:block;overflow:visible;}
 .eye-blink,.eye-frozen{transform-box:view-box;}
 @keyframes slicc-agent-avatar-blink{0%,92%,100%{transform:scaleY(1);}96%{transform:scaleY(${BLINK_SQUISH});}}
 :host([blink]) .eye-blink{animation:slicc-agent-avatar-blink 3.4s ease-in-out infinite;}
@@ -322,6 +329,18 @@ function brow(cx: number, side: 'l' | 'r'): SVGLineElement {
   line.style.transformBox = 'fill-box';
   line.style.transformOrigin = 'center';
   return line;
+}
+
+/**
+ * The eye band box — the slice of the (zoomed) tile the 200x100 eye viewBox is
+ * painted into. Built twice: once inside the crop for the eyes, once outside it
+ * for the brows, so both coordinate systems stay identical.
+ */
+function band(config: TypeConfig): HTMLElement {
+  return h('span', {
+    class: 'eyes',
+    style: `top:${config.eyes.top}%;left:${config.eyes.left}%;width:${config.eyes.width}%;height:${config.eyes.height}%`,
+  });
 }
 
 function eyeGroup(cx: number, side: 'l' | 'r', className: string): SVGGElement {
@@ -722,25 +741,25 @@ export class SliccAgentAvatar extends HTMLElement {
       },
       ...this.#buildEyes(expressive)
     );
-    const eyeBand = h('span', {
-      class: 'eyes',
-      style: `top:${config.eyes.top}%;left:${config.eyes.left}%;width:${config.eyes.width}%;height:${config.eyes.height}%`,
-    });
+    const eyeBand = band(config);
     eyeBand.append(this.#eyesSvg);
-    const inner = h(
-      'span',
-      {
-        class: 'icon-inner',
-        style: `--tx:${((0.5 - config.zoom * ((config.eyes.left + config.eyes.width / 2) / 100)) * 100).toFixed(2)}%;--ty:${((0.5 - config.zoom * ((config.eyes.top + config.eyes.height / 2) / 100)) * 100).toFixed(2)}%;--zoom:${config.zoom}`,
-      },
-      glyph,
-      eyeBand
-    );
+    const zoomStyle = `--tx:${((0.5 - config.zoom * ((config.eyes.left + config.eyes.width / 2) / 100)) * 100).toFixed(2)}%;--ty:${((0.5 - config.zoom * ((config.eyes.top + config.eyes.height / 2) / 100)) * 100).toFixed(2)}%;--zoom:${config.zoom}`;
+    const inner = h('span', { class: 'icon-inner', style: zoomStyle }, glyph, eyeBand);
+    // The artwork lives inside the crop; the brows ride a second copy of the
+    // same zoom/pan on top of it, so they overhang the roundrect.
+    const brows = this.#buildBrows(expressive);
+    let browLayer: HTMLElement | null = null;
+    if (brows) {
+      const browBand = band(config);
+      browBand.append(brows);
+      browLayer = h('span', { class: 'icon-inner brow-layer', style: zoomStyle }, browBand);
+    }
     this.#root.replaceChildren(
       h(
         'span',
         { class: 'avatar', 'aria-hidden': 'true', 'data-expressive': expressive || null },
-        inner
+        h('span', { class: 'crop' }, inner),
+        browLayer
       )
     );
     this.#pupilL = this.#root.querySelector('.pupil-l');
@@ -776,7 +795,8 @@ export class SliccAgentAvatar extends HTMLElement {
       group.append(body);
       if (!expressive) return group;
       // Lids clip the eye body only: the chord lines that close the outline at
-      // the cut, and the brows, must stay outside the clip.
+      // the cut must stay outside the clip. (The brows are not here at all —
+      // they paint in the uncropped `.brow-layer`; see #buildBrows.)
       const clipId = `slicc-agent-avatar-lid-${side}`;
       group.append(
         svgEl(
@@ -795,12 +815,41 @@ export class SliccAgentAvatar extends HTMLElement {
           )
         ),
         lidLine(cx, 'top'),
-        lidLine(cx, 'bottom'),
-        brow(cx, side)
+        lidLine(cx, 'bottom')
       );
       body.setAttribute('clip-path', `url(#${clipId})`);
       return group;
     });
+  }
+
+  /**
+   * The brow layer: the same 200x100 band, painted outside the crop, holding
+   * one `.brow-group-<side>` per eye. The group carries the eye's transform
+   * origin so any future brow-level transform pivots on that eye, but the lid
+   * blink deliberately does not reach it (see #eyeGroups). Null whenever the
+   * face has no brows — the legacy face and the dead/eyeless states.
+   */
+  #buildBrows(expressive: boolean): SVGSVGElement | null {
+    const eyes = this.#eyeState();
+    if (!expressive || eyes === 'none' || eyes === 'dead') return null;
+    return svgEl(
+      'svg',
+      {
+        class: 'brows-svg',
+        viewBox: '0 0 200 100',
+        width: '100%',
+        height: '100%',
+        preserveAspectRatio: 'xMidYMid meet',
+      },
+      ...[LEFT_EYE.cx, RIGHT_EYE.cx].map((cx, index) => {
+        const side = index === 0 ? 'l' : 'r';
+        const group = svgEl('g', { class: `brow-group brow-group-${side}` });
+        group.style.transformBox = 'view-box';
+        group.style.transformOrigin = `${cx}px ${EYE_CY}px`;
+        group.append(brow(cx, side));
+        return group;
+      })
+    );
   }
 
   #restingPupilRadius(): number {
@@ -999,6 +1048,13 @@ export class SliccAgentAvatar extends HTMLElement {
     });
   }
 
+  /**
+   * The lid groups, in eye order. The brows are deliberately NOT here: they
+   * paint outside the crop now, and scaling them with the lid folded them flat
+   * onto the eyeball — unnoticeable while the roundrect hid them, a wince once
+   * it does not. A blink moves the lid; the brows hold their pose and re-cock
+   * across it (BROW_TRANSITION_MS), which is what makes the beat readable.
+   */
   #eyeGroups(): SVGGElement[] {
     return [...this.#root.querySelectorAll<SVGGElement>('.eye-blink')];
   }

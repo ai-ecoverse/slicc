@@ -405,6 +405,53 @@ describe('slicc-agent-avatar expression kit', () => {
     expect(brow.getAttribute('opacity')).toBe('0');
   });
 
+  it('paints the brows OUTSIDE the roundrect crop, on a matching zoom layer', () => {
+    const [element] = mountStepped({ activity: 'thinking' });
+    const root = element.shadowRoot as ShadowRoot;
+    const crop = root.querySelector('.crop') as HTMLElement;
+    const layer = root.querySelector('.brow-layer') as HTMLElement;
+
+    // The crop, not the tile, owns the roundrect — that is what the brows escape.
+    expect(getComputedStyle(crop).overflow).toBe('hidden');
+    expect(getComputedStyle(root.querySelector('.avatar') as HTMLElement).overflow).toBe('visible');
+    // Sockets stay inside the crop; brows do not.
+    expect(crop.querySelector('.eyes-svg')).not.toBeNull();
+    expect(crop.querySelector('.brow-l')).toBeNull();
+    expect(layer.querySelector('.brow-l')).not.toBeNull();
+    expect(layer.querySelector('.eyes-svg')).toBeNull();
+    // Both layers ride the identical zoom/pan, or the brows would drift off the eyes.
+    expect(layer.getAttribute('style')).toBe(
+      (crop.querySelector('.icon-inner') as HTMLElement).getAttribute('style')
+    );
+  });
+
+  it('holds the brows still through a blink instead of folding them onto the eye', () => {
+    const [element, clock] = mountStepped({ activity: 'thinking', fill: '0' });
+    const browGroup = element.shadowRoot?.querySelector('.brow-group-l') as SVGGElement;
+    const eyeGroup = element.shadowRoot?.querySelector('.eye-blink.eye-l') as SVGGElement;
+
+    element.wake();
+    clock.advance(16);
+    // The lid squashes; the brows — which now paint outside the crop, where the
+    // squash would fold them flat onto the eyeball — do not follow it.
+    expect(eyeGroup.style.transform).toBe(`scaleY(${BLINK_SQUISH})`);
+    expect(browGroup.style.transform).toBe('');
+
+    clock.advance(BLINK_APEX_MS + 16);
+    expect(browGroup.style.transform).toBe('');
+  });
+
+  it('builds no brow layer for the faces that have no brows', () => {
+    expect(
+      mount({ activity: 'thinking', eyes: 'dead' }).shadowRoot?.querySelector('.brow-layer')
+    ).toBeNull();
+    expect(
+      mount({ activity: 'thinking', eyes: 'none' }).shadowRoot?.querySelector('.brow-layer')
+    ).toBeNull();
+    // The legacy face (no activity) never had brows either.
+    expect(mount().shadowRoot?.querySelector('.brow-layer')).toBeNull();
+  });
+
   it('re-cocks the brows at a blink apex while thinking', () => {
     const [element, clock] = mountStepped({ activity: 'thinking', blink: '' });
     clock.advance(16);

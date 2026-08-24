@@ -200,6 +200,21 @@ Non-obvious rules:
 - **Reduced motion** takes the settle path: activity changes apply instantly, no
   blinks, saccades, wander or pops, brows parked at the base pose, and the drowse
   jumps straight to its settled cut. Transient expiries run on a single timeout.
+- **The brows paint OUTSIDE the tile crop.** `.avatar` no longer clips; `.crop`
+  owns the `overflow:hidden` roundrect around the artwork, and the brows ride a
+  second copy of the icon-inner zoom/pan (`.brow-layer`) painted over it. At
+  `BROW_Y = 2` with a raise of up to -9 in a band zoomed ~2.65x, the roundrect
+  used to shave the top and outer half off both brows. Consequences: the two
+  layers MUST carry the identical transform style (they are built from one
+  `band(config)` helper), the brow `<svg>` needs `display:block` like the eye
+  band — inline layout puts it on a text baseline and drops the brows onto the
+  eyeballs, which is invisible at review size and glaring at 26 px — and hosts
+  must not clip the avatar: at 26 px the brows overhang the tile by ~3 px.
+- **A blink does not move the brows.** The lid squash lives on the eye group; the
+  brows are no longer inside it and are deliberately not driven with it. Scaling
+  them folded them flat onto the eyeball — unnoticeable while the crop hid them,
+  a wince once it does not. The apex re-cock is now a visible 350 ms transition
+  rather than a swap hidden under the squash.
 - **The lid is a clip plus a chord line.** The clip rect covers the eye body only;
   the chord line closes the outline at the cut and tracks the socket's current
   `rx` (true chord on a circle, widening to the flat edge as it squares up).
