@@ -150,9 +150,9 @@ describe('ScoopContext overflow compaction recovery', () => {
     expect(cb.onResponseDone).toHaveBeenCalledTimes(1);
     expect(cb.onFatalError).not.toHaveBeenCalled();
     expect(cb.onError).not.toHaveBeenCalledWith(expect.stringContaining('already processing'));
-    expect(
-      (ctx as unknown as { overflowRecoveryAttempted: boolean }).overflowRecoveryAttempted
-    ).toBe(false);
+    expect((ctx as unknown as { overflow: { hasAttempted: boolean } }).overflow.hasAttempted).toBe(
+      false
+    );
   });
 
   it('escalates exactly once when the resumed run also overflows', async () => {
@@ -219,9 +219,7 @@ describe('ScoopContext overflow compaction recovery', () => {
 
     expect(agent.prompt).not.toHaveBeenCalled();
     expect(cb.onError).toHaveBeenCalledWith('invalid image format');
-    expect((ctx as unknown as { overflowRecoveryActive: boolean }).overflowRecoveryActive).toBe(
-      false
-    );
+    expect((ctx as unknown as { overflow: { isActive: boolean } }).overflow.isActive).toBe(false);
     ctx.dispose();
     await Promise.resolve();
   });
@@ -237,9 +235,7 @@ describe('ScoopContext overflow compaction recovery', () => {
     expect(
       (ctx as unknown as { promptStreamErrorMessage: string | null }).promptStreamErrorMessage
     ).toBeNull();
-    expect((ctx as unknown as { overflowRecoveryActive: boolean }).overflowRecoveryActive).toBe(
-      false
-    );
+    expect((ctx as unknown as { overflow: { isActive: boolean } }).overflow.isActive).toBe(false);
     ctx.dispose();
     await Promise.resolve();
   });

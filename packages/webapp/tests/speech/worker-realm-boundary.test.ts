@@ -69,10 +69,18 @@ describe('kernel-worker realm boundary: speech', () => {
 });
 
 describe('kernel-worker realm boundary: terminal view', () => {
+  // The shell construction moved to `scoop-context/shell-and-skills.ts` (#2334);
+  // the edge that must stay cut is the same one.
   it('scoop-context builds the headless shell, not the xterm view layer', () => {
+    const imports = staticImports(src('scoops/scoop-context/shell-and-skills.ts'));
+
+    expect(imports).toContain('../../shell/almost-bash-shell-headless.js');
+    expect(imports).not.toContain('../../shell/index.js');
+  });
+
+  it('the scoop-context facade reaches no shell module at runtime', () => {
     const imports = staticImports(src('scoops/scoop-context.ts'));
 
-    expect(imports).toContain('../shell/almost-bash-shell-headless.js');
-    expect(imports).not.toContain('../shell/index.js');
+    expect(imports.filter((i) => i.includes('/shell/'))).toEqual([]);
   });
 });

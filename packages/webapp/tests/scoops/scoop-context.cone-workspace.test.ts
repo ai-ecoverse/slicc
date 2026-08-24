@@ -9,6 +9,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { ensureDirectoryStructure } from '../../src/scoops/scoop-context/directory-structure.js';
 import { ScoopContext, type ScoopContextCallbacks } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 
@@ -51,11 +52,10 @@ function callbacks(): ScoopContextCallbacks {
   };
 }
 
-/** `ensureDirectoryStructure` is private; init() would need an LLM + shell. */
+/** Seed the skeleton directly (#2334); init() would need an LLM + shell. */
 function seedDirs(ctx: ScoopContext): Promise<void> {
-  return (ctx as unknown as { ensureDirectoryStructure(): Promise<void> })[
-    'ensureDirectoryStructure'
-  ]();
+  const inner = ctx as unknown as { fs: VirtualFS; scoop: RegisteredScoop; unit: never };
+  return ensureDirectoryStructure(inner.fs, inner.scoop, inner.unit);
 }
 
 async function exists(fs: VirtualFS, path: string): Promise<boolean> {

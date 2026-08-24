@@ -178,5 +178,5 @@ no window).
 (`packages/webapp/src/providers/silent-renew-backoff.ts`): after a failure it
 short-circuits to "session expired — please log in again" without re-hitting
 IMS, then re-probes once the cooldown elapses (recovering if the user re-authed
-elsewhere). That error is classified non-retryable in `scoop-context.ts` so a
+elsewhere). That error is classified non-retryable in `scoop-context/error-classification.ts` so a
 dead-session turn fails fast with one clean error.

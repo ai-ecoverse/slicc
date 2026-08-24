@@ -1065,11 +1065,11 @@ The Anthropic API requires every `tool_result` content block to reference a `too
 
 Any code that modifies `AgentMessage[]` must preserve ToolCall blocks in assistant messages. Three code paths mutate messages:
 
-| Path                     | File                                         | How it handles pairing                                                                 |
-| ------------------------ | -------------------------------------------- | -------------------------------------------------------------------------------------- |
-| **Context compaction**   | `context-compaction.ts`                      | Walks the cut point backward past `toolResult` messages to include their assistant     |
-| **Overflow recovery**    | `scoop-context.ts` `recoverFromOverflow()`   | Drops only the trailing overflow error, then delegates reduction to context compaction |
-| **Image error recovery** | `scoop-context.ts` `recoverFromImageError()` | Filters `type !== 'image'`, which naturally preserves ToolCall blocks                  |
+| Path                     | File                                             | How it handles pairing                                                                 |
+| ------------------------ | ------------------------------------------------ | -------------------------------------------------------------------------------------- |
+| **Context compaction**   | `context-compaction.ts`                          | Walks the cut point backward past `toolResult` messages to include their assistant     |
+| **Overflow recovery**    | `scoop-context/overflow-recovery.ts` `recover()` | Drops only the trailing overflow error, then delegates reduction to context compaction |
+| **Image error recovery** | `scoop-context/image-recovery.ts` `recover()`    | Filters `type !== 'image'`, which naturally preserves ToolCall blocks                  |
 
 **When adding new message mutation code:**
 
@@ -1079,7 +1079,7 @@ Any code that modifies `AgentMessage[]` must preserve ToolCall blocks in assista
 
 **Key files:**
 
-- `scoop-context.ts` (`recoverFromOverflow` and `compactAndResumeOverflow`)
+- `scoop-context/overflow-recovery.ts` (`recover` and `compactAndResume`)
 - `context-compaction.ts` (compaction pair protection)
 - `scoop-context.overflow-recovery.test.ts`
 
@@ -1222,13 +1222,13 @@ after the fact.
 
 **The Enforcement Points**
 
-| Code path                                     | Wiring                                           | Where                                                               |
-| --------------------------------------------- | ------------------------------------------------ | ------------------------------------------------------------------- |
-| Agent loop (cone, scoops, tool turns)         | `streamFn` wrapper passed to `Agent` constructor | `packages/webapp/src/scoops/scoop-context.ts` `streamWithSessionId` |
-| Compaction summaries (Pi packed-conversation) | `headers` config on `createCompactContext`       | `packages/webapp/src/scoops/scoop-context.ts` `compactionHeaders`   |
-| Ad-hoc UI quick-LLM calls                     | Inline `getQuickLlmAdobeSessionId()` header set  | `packages/webapp/src/providers/quick-llm.ts`                        |
-| Session freezer (new-session flow)            | Inline `getDailyAdobeUuid(...)` header set       | `packages/webapp/src/ui/new-session.ts`                             |
-| Provider-level fallback (defense-in-depth)    | `ensureSessionIdHeader` in Adobe stream funcs    | `packages/webapp/providers/adobe.ts`                                |
+| Code path                                     | Wiring                                           | Where                                                                               |
+| --------------------------------------------- | ------------------------------------------------ | ----------------------------------------------------------------------------------- |
+| Agent loop (cone, scoops, tool turns)         | `streamFn` wrapper passed to `Agent` constructor | `packages/webapp/src/scoops/scoop-context/session-helpers.ts` `streamWithSessionId` |
+| Compaction summaries (Pi packed-conversation) | `headers` config on `createCompactContext`       | `packages/webapp/src/scoops/scoop-context/session-helpers.ts` `compactionHeaders`   |
+| Ad-hoc UI quick-LLM calls                     | Inline `getQuickLlmAdobeSessionId()` header set  | `packages/webapp/src/providers/quick-llm.ts`                                        |
+| Session freezer (new-session flow)            | Inline `getDailyAdobeUuid(...)` header set       | `packages/webapp/src/ui/new-session.ts`                                             |
+| Provider-level fallback (defense-in-depth)    | `ensureSessionIdHeader` in Adobe stream funcs    | `packages/webapp/providers/adobe.ts`                                                |
 
 The first four paths attach a meaningful identifier from
 `getAdobeSessionId(scoop, coneJid)` in
@@ -1389,10 +1389,10 @@ older models clamp to `high`.
 Key files in the chain:
 
 - `wc-live.ts` — `PI_FROM_META` / `effortOverrideForAgent` (UI → pi-ai)
-- `scoop-context.ts` — `resolveThinkingLevel` (model-aware clamping)
+- `scoop-context/thinking-level.ts` — `resolveThinkingLevel` (model-aware clamping)
 - `adaptive-thinking.ts` — `thinkingLevelToEffort` / `clampXhighEffort`
   (pi-ai level → API effort string)
-- `scoop-context.ts` — `buildSessionHelpers` stream wrapper (injects
+- `scoop-context/session-helpers.ts` — `buildSessionHelpers` stream wrapper (injects
   `effortOverride` for `max`)
 
 `max` bypasses pi-ai entirely: it's stored as `effortOverride` on
