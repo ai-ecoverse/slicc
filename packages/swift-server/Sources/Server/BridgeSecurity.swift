@@ -187,7 +187,29 @@ enum BridgeSecurity {
         return devAllowedOrigins.contains(normalized)
     }
 
-    /// True iff `origin` is a loopback host (localhost / 127.0.0.1 / ::1).
+    /// True iff `hostname` is a loopback name (no URL parse — host only).
+    /// Canonical set matches `@slicc/shared-ts` `isLoopbackHostname`:
+    /// `localhost`, the full `127.0.0.0/8` block, bracketed/bare `::1`.
+    static func isLoopbackHostname(_ hostname: String) -> Bool {
+        guard !hostname.isEmpty else { return false }
+        // URLComponents keeps brackets on IPv6 hosts (`http://[::1]` → `[::1]`);
+        // socket addresses and some callers pass bare `::1`. Accept both.
+        let host: String
+        if hostname.hasPrefix("["), hostname.hasSuffix("]") {
+            host = String(hostname.dropFirst().dropLast())
+        } else {
+            host = hostname
+        }
+        if host == "localhost" || host == "::1" { return true }
+        // 127.0.0.0/8 — octet shape only (same as `@slicc/shared-ts`).
+        let octets = host.split(separator: ".", omittingEmptySubsequences: false)
+        guard octets.count == 4, octets[0] == "127" else { return false }
+        return octets.allSatisfy { octet in
+            octet.count >= 1 && octet.count <= 3 && octet.allSatisfy(\.isNumber)
+        }
+    }
+
+    /// True iff `origin` is a loopback host.
     /// Loopback allowlisted origins (e.g. the locally-served OAuth callback
     /// page at `http://localhost:5710/auth/callback` posting to
     /// `/api/oauth-result`) are exempt from the bridge-token requirement —
@@ -195,15 +217,14 @@ enum BridgeSecurity {
     /// with a hostile script", not "local server talking to itself". Returns
     /// `false` for nil/empty or anything that does not parse as a URL with a
     /// host; never throws. Mirrors `isLoopbackBridgeOrigin` in
-    /// `packages/node-server/src/bridge-security.ts`.
+    /// `packages/node-server/src/bridge-security.ts` (thin wrapper over
+    /// `@slicc/shared-ts` `isLoopbackOrigin`).
     static func isLoopbackBridgeOrigin(_ origin: String?) -> Bool {
         guard let origin, !origin.isEmpty else { return false }
         guard let components = URLComponents(string: origin), let host = components.host else {
             return false
         }
-        // URLComponents keeps the brackets on IPv6 hosts
-        // (`http://[::1]:5710` → `[::1]`); accept both bracketed and bare.
-        return host == "localhost" || host == "127.0.0.1" || host == "::1" || host == "[::1]"
+        return isLoopbackHostname(host)
     }
 
     /// Constant-time compare for the bridge token. Returns `false` for a nil
