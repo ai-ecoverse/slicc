@@ -21,7 +21,7 @@ extension AppState {
         let currentIndex = scoops.firstIndex(where: { $0.jid == selectedScoopJid }) ?? 0
         if currentIndex > 0 {
             selectScoop(jid: scoops[currentIndex - 1].jid)
-        } else if let cone = scoops.first(where: { $0.isCone }) {
+        } else if let cone = scoops.first(where: { $0.isRootUnit }) {
             selectScoop(jid: cone.jid)
         }
     }

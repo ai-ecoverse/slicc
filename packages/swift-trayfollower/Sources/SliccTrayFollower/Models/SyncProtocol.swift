@@ -179,8 +179,9 @@ public struct ScoopSummary: Codable, Identifiable, Hashable {
     public let isCone: Bool
     /// Ownership edge of the work-unit tree (#1666): `nil` for a cone (root) or
     /// when the leader predates the field; the owning unit's jid for a scoop.
-    /// `isCone` stays the root test for rendering — this field only attributes
-    /// a scoop to its cone, and is never used to promote a scoop to a root.
+    /// This is the root test wherever the leader sends it — see
+    /// `ScoopSummary.isRootUnit` in the app, where `isCone` survives only as
+    /// the fallback for leaders that predate the edge.
     public let parentId: String?
     public let assistantLabel: String
     public let trigger: String?
