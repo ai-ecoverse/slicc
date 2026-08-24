@@ -87,32 +87,31 @@ Non-obvious rules:
 - **Cone and scoop are roles over one `WorkUnit`** (#1666): `RegisteredScoop.parentJid`
   is required — `null` is THE root test (`isRootUnit`). The record carries no role:
   `isCone`/`type` were deleted in #2279, so the **compiler** is the ratchet for every
-  record read — a role branch no longer has a field to read. `isCone` survives only on
-  the follower wire, write-only leader-side (projected from `isRootUnit`). Reading it
-  back is a follower fallback for a pre-`parentId` leader (`summaryIsRoot`,
-  `coneJidFromWire`). New `scoops/` and `kernel/` code asks `orchestrator.getWorkUnits()` (`getParent`, `getChildren`,
+  record read — a role branch no longer has a field to read. `isCone` survives only on the
+  follower wire, write-only leader-side (projected from `isRootUnit`); reading it back
+  is a follower fallback for a pre-`parentId` leader (`summaryIsRoot`, `coneJidFromWire`). New `scoops/` and `kernel/` code asks `orchestrator.getWorkUnits()` (`getParent`, `getChildren`,
   `resolveDefaultRoot`) or the unit's `policy.*`. Every creation path sets `parentJid`
   explicitly; restore backfills and persists it (`legacyRecordIsCone` reads the
   pre-#2279 field once, there, and `normalizeScoopRecord` strips it). Several roots may
   exist: UI code resolves "the cone" via `ui/wc/wc-unit-context.ts` (`defaultRootOf`,
-  `threadContextFor`, `switcherLabelFor`, `orderForSwitcher(scoops, selectedJid)`);
-  chat sessions are keyed `session-<folder>`
+  `threadContextFor`, `switcherLabelFor`); ONE strip ordering, both shells:
+  `work-unit/client/presentation.ts`, over the `WorkUnitClient` protocol (#2274).
+  Chat sessions: `session-<folder>`
   (`chatSessionIdFor`). Cone add/drop lives in `ui/wc/wc-cone-actions.ts`
   behind `<slicc-freezer-new>`'s action row (`<slicc-dialog>`, never inline);
-  the tab strip is the only switcher.
+  the strip is the only switcher.
   Directory layout comes from `workspaceFor` ALONE — primary cone
   `/workspace`, extra cone `/cones/<folder>/workspace` + its own `CLAUDE.md`,
   scoop `/scoops/<folder>/workspace`; `/shared`, `/tmp` and the skills library
   (`SKILLS_LIBRARY_DIR`) stay shared. Never hardcode `/workspace` for a unit's
-  root, memory file or spawn default. Memory is per cone on both paths. A unit's CONVERSATION is one
-  canonical, append-only record too (#2275, `work-unit/conversation/`): Pi
-  history, the UI projection and transcripts are DERIVATIONS, never parallel
-  writes. The legacy stores are still written (a read-old/write-new window),
+  root, memory file or spawn default. Memory is per cone on both paths. A unit's CONVERSATION is one canonical,
+  append-only record too (#2275, `work-unit/conversation/`): Pi history, the UI
+  projection and transcripts are DERIVATIONS, never parallel writes. The legacy stores are still written (a read-old/write-new window),
   so anything deriving to nothing falls back — never make a canonical read
   fatal or delete a legacy record (#2006).
   **Users never talk to a scoop** (#2312): a selected scoop is READ-ONLY
-  (`isReadOnlyRole` — one rule, never a second branch) and anything it needs
-  from a human goes to the OWNING cone, never `defaultRoot()` for a root.
+  (`isReadOnlyUnit` — one rule) and anything it needs from a
+  human goes to the OWNING cone, never `defaultRoot()`.
   See `docs/work-unit.md`.
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without
   queue/watermark loss; user `web` bypasses the window (immediate/awaited,

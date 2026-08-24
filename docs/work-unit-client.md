@@ -2,7 +2,10 @@
 
 Design record for [#2274](https://github.com/ai-ecoverse/slicc/issues/2274),
 phase 5 of [#1666](https://github.com/ai-ecoverse/slicc/issues/1666). Code:
-a new `client/` module under `packages/webapp/src/work-unit/`. The runtime-side decisions live in
+`packages/webapp/src/work-unit/client/` (protocol + presentation) and
+`packages/webapp/src/ui/work-unit-client/` (the two adapters — they wrap
+`ui/`-layer transports, so they live in `ui/`; the layer stack forbids
+`work-unit/` importing up into it). The runtime-side decisions live in
 [`work-unit.md`](work-unit.md); this file is about the **presentation** edge.
 
 ## The problem
@@ -168,12 +171,13 @@ case the two implementations disagreed about.
 leader-side home (`Orchestrator.ownerRootOrDefault`, #2312): the client
 protocol does not settle approvals, it only agrees on who owns whom.
 
-Read-only chrome stays one rule — `isReadOnlyRole` — reached from
-`summary.role` on both sides instead of from two role helpers.
+Read-only chrome stays one rule, and it moved onto the protocol:
+`isReadOnlyUnit(summary)` states it over `role`, and `isReadOnlyRole` (the
+UI's `cone`/`scoop` spelling) delegates there. Both shells reach one answer.
 
 ## Adapters
 
-### `LocalWorkUnitClient` (`client/local.ts`)
+### `LocalWorkUnitClient` (`ui/work-unit-client/local.ts`)
 
 Wraps an `OffscreenClient` plus the page-side state the live shell already
 keeps (`WcLiveWiring.statuses` / `fills` / `phases` / `awaitingInput`).
@@ -191,7 +195,24 @@ The CLI and extension floats both go through this adapter — they already share
 `OffscreenClient` and differ only in transport (`MessageChannel` vs
 `chrome.runtime`), which the protocol never sees.
 
-### `RemoteWorkUnitClient` (`client/remote.ts`)
+**Both adapters decorate a callback bag rather than subscribing to one.**
+`OffscreenClient` and `FollowerSyncManager` take their callbacks in the
+constructor, so an adapter built alongside them cannot attach after the fact:
+`wrapCallbacks` / `wrapOptions` return the same bag with three or four handlers
+wrapped, and every base handler still runs with its original arguments.
+
+The leader's wrapper runs the base handler **first**, because the page-side
+status/fill/phase maps it projects from are mutated by those handlers — emitting
+before them would publish a roster describing the previous instant. The
+follower's roster wrapper runs **before**, because there the frame IS the state
+and the shell's handler publishes the strip from it.
+
+**The strip's repaint reads the roster synchronously** (`currentUnits()`, the
+sync twin of `list()`). A held copy is wrong on the leader: `awaitingInput` and
+the selection change with no kernel event behind them, so a cached roster would
+render one instant late.
+
+### `RemoteWorkUnitClient` (`ui/work-unit-client/remote.ts`)
 
 Wraps a `FollowerSyncManager` and the small state machine in `wc-follower.ts`
 (`followerScoops`, `followerSelectedScoop`).
@@ -237,11 +258,15 @@ drifted:
 This lands in two steps:
 
 1. **This PR** — protocol, both adapters, the shared presentation module, the
-   conformance suite, and the tab strip cut over to it on both sides.
+   conformance suite, and the tab strip cut over to it on both sides. Both
+   shells build their strip from `toTabDescriptors` over the protocol's roster;
    `toSwitcherScoops` / `toFollowerSwitcherScoops` / `orderForSwitcher` /
-   `orderByOwner` become thin wrappers over the shared implementation, so no
-   caller moves and no export disappears.
-2. **A follow-up** — the mount cutover: `mountWcUiLive` / `mountWcUiFollower` /
+   `rootForSelection` / `isReadOnlyRole` survive as thin delegations, so no
+   caller moves and no export disappears. `orderByOwner` and `rootOfSummary`
+   are gone — they were private, and the shared implementation IS them.
+2. **A follow-up** — the mount cutover: the transcript, the queued pile, the
+   composer, selection (`selectScoop` → `client.snapshot`) and the model pill
+   move onto the client too, and `mountWcUiLive` / `mountWcUiFollower` /
    `mountWcUiExtension` collapse onto one mount path that takes a
    `WorkUnitClient`, which is where the transcript, queued pile, composer
    availability and model pill stop having two wirings. That is a large,
