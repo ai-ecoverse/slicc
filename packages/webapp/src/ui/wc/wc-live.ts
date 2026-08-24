@@ -1221,6 +1221,7 @@ export async function mountWcUiLive(
   // a fast boot-time failure.
   if (instanceId) installWorkerStaleAssetReloadListener(instanceId);
   const { syncFsBridgeEnabled, syncFsChannelNonce } = setupSyncFsBootNonce();
+  let stallOverlayShown = false;
   const host = spawnKernelWorker({
     realCdpTransport,
     instanceId,
@@ -1234,6 +1235,24 @@ export async function mountWcUiLive(
     // The worker adopts this float's cached remote flags at boot (#2003).
     flagFloat: runtimeMode,
     onWorkerScriptError: () => {
+      guardedReload();
+    },
+    // Slow-boot tolerance (#2007 follow-up, 2026-08-24 field wedge): each
+    // zero-progress watchdog window short of the stall limit surfaces a
+    // non-destructive overlay instead of bricking to the recovery screen.
+    // The shell above is fully wired before `host.ready`, so a late
+    // `kernel-worker-ready` resumes the normal boot path with no reload.
+    onReadyStall: (info) => {
+      stallOverlayShown = true;
+      void import('../boot/boot-stall-overlay.js').then((m) =>
+        m.showBootStallOverlay(document, info)
+      );
+    },
+    // The worker finished booting AFTER the stall budget ran out and the
+    // recovery screen rendered. One guarded reload enters the now-warm
+    // session; the guard (shared with the stale-asset path) caps it so a
+    // pathological boot can't reload-loop.
+    onLateReady: () => {
       guardedReload();
     },
   });
@@ -1255,7 +1274,16 @@ export async function mountWcUiLive(
   const { setupSudoStandalone } = await import('../boot/setup-sudo.js');
   await setupSudoStandalone({ log });
 
-  await host.ready;
+  try {
+    await host.ready;
+  } finally {
+    // The overlay hangs off document.body, not #app — on a rejection the
+    // recovery screen replaces only #app, so a success-path-only removal
+    // would leave "Still starting" floating over the failure UI.
+    if (stallOverlayShown) {
+      void import('../boot/boot-stall-overlay.js').then((m) => m.removeBootStallOverlay(document));
+    }
+  }
   // `host.ready` resolves on `kernel-worker-ready`, which the worker posts
   // AFTER its VfsRpcHost attaches — unlike the first scoop-list (the
   // callbacks' onReady), which fires mid-boot while VFS RPCs still fan out

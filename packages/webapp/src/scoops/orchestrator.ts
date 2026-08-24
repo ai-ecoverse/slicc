@@ -431,11 +431,13 @@ export class Orchestrator implements ConeApprovalRouter {
     // sidecar and runs the unconditional pre-boot repair (#2146) — O(tree
     // size) with no milestones of its own, 25-30s+ on a COLD boot of a
     // large tree (2026-08-18 restart brick: "did not signal ready" on
-    // every fresh Chrome start, warm reloads passed). The bounded
-    // heartbeat keeps the page's kernel-ready watchdog (#2007) armed
-    // while the mount provably advances.
+    // every fresh Chrome start, warm reloads passed; 2026-08-24: ~8
+    // minutes on an I/O-starved disk). The heartbeat keeps the page's
+    // kernel-ready watchdog (#2007) armed while the mount provably
+    // advances: the repair ticks per sidecar entry probed, so beats flow
+    // for as long as the scan moves and go quiet only when it stalls.
     this.sharedFs = await withMountHeartbeat(
-      () => VirtualFS.create({ dbName: 'slicc-fs' }),
+      (tick) => VirtualFS.create({ dbName: 'slicc-fs', onRepairProgress: tick }),
       onBootProgress
     );
     this.sessionStore = new SessionStore();

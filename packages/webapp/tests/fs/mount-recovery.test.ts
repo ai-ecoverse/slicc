@@ -21,6 +21,7 @@ vi.mock('../../src/fs/mount-table-store.js', async () => {
 import type { MountBackend } from '../../src/fs/mount/backend.js';
 import { LocalMountBackend } from '../../src/fs/mount/backend-local.js';
 import { newMountId } from '../../src/fs/mount/mount-id.js';
+import { RESTORED_MOUNT_INDEX_LIMITS } from '../../src/fs/mount-index.js';
 import {
   formatMountRecoveryPrompt,
   type MountRecoveryEntry,
@@ -449,5 +450,29 @@ describe('mdInlineCode', () => {
   it('collapses CR/LF to a single space', () => {
     expect(mdInlineCode('line1\nline2')).toBe('`line1 line2`');
     expect(mdInlineCode('a\r\nb')).toBe('`a b`');
+  });
+});
+
+describe('boot-time restore index budget', () => {
+  beforeEach(() => {
+    handleByKey.clear();
+  });
+
+  // A boot-time restore runs with no user watching and shares the kernel
+  // worker with the rest of boot: the default interactive walk budget (2M
+  // entries) let an iCloud-backed tree grind boot I/O for minutes
+  // (2026-08-24 `~/Desktop/kb` hazard). Restores must index with the
+  // bounded budget; interactive `mount` keeps the full one.
+  it('restores local mounts with RESTORED_MOUNT_INDEX_LIMITS', async () => {
+    const a = seedLocalEntry('/mnt/kb', mockHandle({ name: 'kb', permission: 'granted' }));
+    const captured: Array<{ path: string; limits: unknown }> = [];
+    const fs: MountRecoveryFS = {
+      mount: (path, _backend, opts) => {
+        captured.push({ path, limits: opts?.limits });
+      },
+    };
+    const result = await recoverMounts([a], fs);
+    expect(result.restored).toHaveLength(1);
+    expect(captured).toEqual([{ path: '/mnt/kb', limits: RESTORED_MOUNT_INDEX_LIMITS }]);
   });
 });

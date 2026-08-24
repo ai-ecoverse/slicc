@@ -317,3 +317,40 @@ describe('resolveWithSidecarRepair', () => {
     expect(resolve).toHaveBeenCalledTimes(2);
   });
 });
+
+describe('repair progress ticks', () => {
+  // The boot mount heartbeat feeds these ticks into the page's
+  // kernel-ready watchdog: an O(tree) repair on a cold or I/O-starved
+  // disk (2026-08-24: ~8 minutes over 22k entries) must read as
+  // advancing, not wedged. One tick per entry SCANNED — probed, healthy,
+  // root, or dropped alike — so the tick rate tracks the loop, not the
+  // damage.
+  it('ticks once per entry scanned, including root and untouched entries', async () => {
+    const doc: SidecarIndexJson = {
+      version: 1,
+      entries: {
+        '/': dir(),
+        '/a': file(1),
+        '/gone': file(2),
+        '/link': symlink(),
+      },
+    };
+    const onEntry = vi.fn();
+    await repairSidecarDocument(
+      doc,
+      probeFrom({ '/a': { kind: 'file', size: 1 } }), // '/gone' is missing → dropped
+      onEntry
+    );
+    expect(onEntry).toHaveBeenCalledTimes(4);
+  });
+
+  it('is optional — omitting the tick leaves the repair result unaffected', async () => {
+    const doc: SidecarIndexJson = { entries: { '/a': file(1) } };
+    const summary = await repairSidecarDocument(
+      doc,
+      probeFrom({ '/a': { kind: 'file', size: 1 } })
+    );
+    expect(summary.dropped).toBe(0);
+    expect(doc.entries?.['/a']).toBeDefined();
+  });
+});

@@ -44,6 +44,7 @@ import {
   RemoteMountCache,
   S3MountBackend,
 } from './mount/index.js';
+import { type MountIndexLimits, RESTORED_MOUNT_INDEX_LIMITS } from './mount-index.js';
 import type { BackendDescriptor, MountTableEntry } from './mount-table-store.js';
 import { loadMountHandle } from './mount-table-store.js';
 
@@ -69,7 +70,11 @@ export interface MountRecoveryResult {
 
 /** Minimal FS surface needed to re-mount a backend — lets tests stub this. */
 export interface MountRecoveryFS {
-  mount(path: string, backend: MountBackend): Promise<void> | void;
+  mount(
+    path: string,
+    backend: MountBackend,
+    opts?: { limits?: MountIndexLimits }
+  ): Promise<void> | void;
 }
 
 /** Logger surface accepted by `recoverMounts`. Everything is optional. */
@@ -132,7 +137,12 @@ async function recoverLocalMount(
 
   try {
     const backend = LocalMountBackend.fromHandle(handle, { mountId: descriptor.mountId });
-    await fs.mount(targetPath, backend);
+    // Boot-time restore runs with no user watching and shares the kernel
+    // worker with the rest of boot: index with the bounded restore budget
+    // so a huge or cloud-backed tree (iCloud dataless files) can't grind
+    // boot I/O for minutes. The mount itself is complete either way; a
+    // later interactive re-mount re-indexes with the full budget.
+    await fs.mount(targetPath, backend, { limits: RESTORED_MOUNT_INDEX_LIMITS });
     log?.info?.('Restored mount from previous session', { path: targetPath, name: dirName });
     return { entry, ok: true };
   } catch (err) {
