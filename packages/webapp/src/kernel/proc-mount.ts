@@ -13,6 +13,7 @@
  *   /proc/<pid>/cmdline     null-separated argv (POSIX-style)
  *   /proc/<pid>/cwd         working directory as plain text
  *   /proc/<pid>/stat        single-line procfs-style record
+ *   /proc/table             the whole table as one JSON document
  *
  * Deliberate divergences from POSIX:
  *   - No `/proc/self`: requires `currentPid()` tracking, which
@@ -22,6 +23,14 @@
  *   - No `environ`, no `fd/`, no `task/`. The full Linux procfs
  *     surface is out of scope; just what `ps` and `kill` need to
  *     drive their views.
+ *   - `/proc/table` has no Linux counterpart. Linux readers walk
+ *     `/proc/<pid>/` per process because a syscall-backed read is
+ *     cheap; here every read crosses the VFS, so a UI refreshing the
+ *     process list paid two reads per pid — ~2,900 VFS reads per tick
+ *     at the table sizes this mount used to grow to. One JSON
+ *     document collapses that to a single read, and carries the
+ *     `ProcessManager` session counters (which no per-pid file can
+ *     express) alongside the rows.
  *   - All writes throw `EACCES` ('read-only filesystem') —
  *     `FsErrorCode` doesn't have `EROFS`, so `EACCES` with the
  *     read-only message is the closest match. The mount-layer
@@ -41,7 +50,7 @@ import type {
   RefreshReport,
 } from '../fs/mount/backend.js';
 import { FsError } from '../fs/types.js';
-import type { Process, ProcessManager } from './process-manager.js';
+import type { Process, ProcessManager, ProcessTableStats } from './process-manager.js';
 
 const KERNEL_PID = 1;
 
@@ -77,9 +86,19 @@ export class ProcMountBackend implements MountBackend {
       if (!procs.some((p) => p.pid === KERNEL_PID)) {
         entries.push({ name: String(KERNEL_PID), kind: 'directory' });
       }
-      return entries.sort((a, b) => Number(a.name) - Number(b.name));
+      entries.sort((a, b) => Number(a.name) - Number(b.name));
+      entries.push({
+        name: TABLE_FILE,
+        kind: 'file',
+        size: this.renderTable().length,
+        lastModified: Date.now(),
+      });
+      return entries;
     }
     if (segments.length === 1) {
+      if (segments[0] === TABLE_FILE) {
+        throw new FsError('ENOTDIR', 'not a directory', path);
+      }
       // /proc/<pid> — fixed file set.
       const pid = parsePid(segments[0]);
       if (pid === null) throw new FsError('ENOENT', 'no such file or directory', path);
@@ -99,6 +118,9 @@ export class ProcMountBackend implements MountBackend {
   async readFile(path: string): Promise<Uint8Array> {
     this.assertOpen(path);
     const segments = splitPath(path);
+    if (segments.length === 1 && segments[0] === TABLE_FILE) {
+      return new TextEncoder().encode(this.renderTable());
+    }
     if (segments.length !== 2) {
       throw new FsError('EISDIR', 'is a directory', path);
     }
@@ -124,6 +146,9 @@ export class ProcMountBackend implements MountBackend {
       return { kind: 'directory', size: 0, mtime: 0 };
     }
     if (segments.length === 1) {
+      if (segments[0] === TABLE_FILE) {
+        return { kind: 'file', size: this.renderTable().length, mtime: Date.now() };
+      }
       const pid = parsePid(segments[0]);
       if (pid === null) throw new FsError('ENOENT', 'no such file or directory', path);
       if (!this.pidExists(pid)) throw new FsError('ENOENT', 'no such file or directory', path);
@@ -191,6 +216,31 @@ export class ProcMountBackend implements MountBackend {
     return proc.finishedAt ?? proc.startedAt;
   }
 
+  /**
+   * The whole retained table as one JSON document. Shape is
+   * {@link ProcTableDocument}; `stats` mirrors `ProcessManager.stats()`
+   * so a reader can report totals that outlive the reaped rows.
+   */
+  private renderTable(): string {
+    const doc: ProcTableDocument = {
+      stats: this.pm.stats(),
+      processes: this.pm.list().map((proc) => ({
+        pid: proc.pid,
+        ppid: proc.ppid,
+        kind: proc.kind,
+        state: stateLetter(proc.status),
+        status: proc.status,
+        argv: proc.argv.join(' '),
+        cwd: proc.cwd,
+        owner: ownerLabel(proc),
+        startedAt: proc.startedAt,
+        finishedAt: proc.finishedAt,
+        exitCode: proc.exitCode,
+      })),
+    };
+    return JSON.stringify(doc) + '\n';
+  }
+
   private renderProcFile(pid: number, name: ProcFile): string {
     if (pid === KERNEL_PID) {
       return renderKernelHost(name);
@@ -215,6 +265,32 @@ export class ProcMountBackend implements MountBackend {
 
 const PROC_FILES = ['status', 'cmdline', 'cwd', 'stat'] as const;
 type ProcFile = (typeof PROC_FILES)[number];
+
+/** Top-level aggregate file — see the divergence note in the module doc. */
+const TABLE_FILE = 'table';
+
+/** One row of {@link ProcTableDocument}. Field names are the wire contract. */
+export interface ProcTableRow {
+  pid: number;
+  ppid: number;
+  kind: Process['kind'];
+  /** procfs state letter — `R` / `S` / `Z` / `K`. */
+  state: string;
+  status: Process['status'];
+  /** argv space-joined, NOT NUL-separated — this is JSON, not `cmdline`. */
+  argv: string;
+  cwd: string;
+  owner: string;
+  startedAt: number;
+  finishedAt: number | null;
+  exitCode: number | null;
+}
+
+/** The parsed contents of `/proc/table`. */
+export interface ProcTableDocument {
+  stats: ProcessTableStats;
+  processes: ProcTableRow[];
+}
 
 function splitPath(path: string): string[] {
   return path.replace(/^\/+/, '').replace(/\/+$/, '').split('/').filter(Boolean);

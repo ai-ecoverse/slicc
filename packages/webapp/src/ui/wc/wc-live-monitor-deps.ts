@@ -13,7 +13,7 @@ import {
 } from '../../scoops/tray-runtime-config.js';
 import { getConnectedFollowers } from '../../shell/supplemental-commands/host-command.js';
 import type { OffscreenClient } from '../offscreen-client.js';
-import type { MonitorDeps, MonitorTrayInfo } from './wc-monitor.js';
+import type { MonitorDeps, MonitorProcessSnapshot, MonitorTrayInfo } from './wc-monitor.js';
 
 const PROC_STATE_LETTER_TO_WORD: Record<string, string> = {
   R: 'running',
@@ -26,6 +26,35 @@ const PROC_STATE_LETTER_TO_WORD: Record<string, string> = {
 export function parseProcStatLine(statLine: string): string {
   const stateLetter = statLine.trim().split(' ')[2] ?? '';
   return PROC_STATE_LETTER_TO_WORD[stateLetter] ?? 'unknown';
+}
+
+/**
+ * Parse the `/proc/table` JSON document into the monitor's snapshot shape,
+ * keeping only live rows. The mount retains a window of terminated
+ * processes so post-mortem `ps` works; the monitor doesn't render them, and
+ * reports `stats.terminated` — the kernel's session total, which keeps
+ * counting past that window — instead.
+ *
+ * Anything malformed degrades to an empty snapshot rather than throwing:
+ * a monitor tick is not worth failing a render over.
+ */
+export function parseProcTable(raw: string): MonitorProcessSnapshot {
+  try {
+    const doc = JSON.parse(raw) as {
+      stats?: { terminated?: number };
+      processes?: { pid?: number; argv?: string; status?: string }[];
+    };
+    const processes = (doc.processes ?? [])
+      .filter((row) => row.status === 'running' || row.status === 'pending')
+      .map((row) => ({
+        pid: Number(row.pid ?? 0),
+        argv: String(row.argv ?? ''),
+        status: String(row.status ?? 'unknown'),
+      }));
+    return { processes, terminated: Number(doc.stats?.terminated ?? 0) };
+  } catch {
+    return { processes: [], terminated: 0 };
+  }
 }
 
 export function getTrayMonitorInfo(storage: Pick<Storage, 'getItem'>): MonitorTrayInfo {
@@ -130,30 +159,17 @@ export function createWcMonitorDeps(deps: {
     },
     getSessionStats: async () => client.getSessionStats?.() ?? null,
     getProcesses: async () => {
+      // One read of the `/proc/table` aggregate, not a readDir plus two
+      // readFiles per pid. The monitor refreshes every 5s, so the per-pid
+      // walk cost ~2N VFS reads a tick — several thousand on a table that
+      // had grown into the low thousands, against the same VFS the boot
+      // path and terminal mount contend for.
       try {
         const fs = await openReader();
-        const entries = await fs.readDir('/proc');
-        const processes = [];
-        for (const entry of entries.filter(
-          (candidate) => candidate.type === 'directory' && /^\d+$/.test(candidate.name)
-        )) {
-          try {
-            const stat = await fs.readFile(`/proc/${entry.name}/stat`, { encoding: 'utf-8' });
-            const cmdline = await fs.readFile(`/proc/${entry.name}/cmdline`, {
-              encoding: 'utf-8',
-            });
-            processes.push({
-              pid: Number.parseInt(entry.name, 10),
-              argv: String(cmdline).trim(),
-              status: parseProcStatLine(String(stat)),
-            });
-          } catch {
-            // Process may have exited between listing and reading.
-          }
-        }
-        return processes;
+        const raw = await fs.readFile('/proc/table', { encoding: 'utf-8' });
+        return parseProcTable(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
       } catch {
-        return [];
+        return { processes: [], terminated: 0 };
       }
     },
     getTrayInfo: () => getTrayMonitorInfo(storage),

@@ -17,7 +17,7 @@ function makeDeps(overrides: Partial<MonitorDeps> = {}): MonitorDeps {
     getMcpServers: async () => ({}),
     getOAuthProviders: () => [],
     getSessionStats: async () => null,
-    getProcesses: async () => [],
+    getProcesses: async () => ({ processes: [], terminated: 0 }),
     getTrayInfo: () => ({ role: 'standalone', state: 'inactive' }),
     getConnectedFollowers: () => [],
     ...overrides,
@@ -351,14 +351,17 @@ describe('fetchMonitorData', () => {
   it('shows processes section with pid and argv', async () => {
     const sections = await fetchMonitorData(
       makeDeps({
-        getProcesses: async () => [
-          { pid: 1024, argv: 'node script.js', status: 'running' },
-          {
-            pid: 1025,
-            argv: 'python3 -c "print(1234567890123456789012345678901234567890)"',
-            status: 'sleeping',
-          },
-        ],
+        getProcesses: async () => ({
+          processes: [
+            { pid: 1024, argv: 'node script.js', status: 'running' },
+            {
+              pid: 1025,
+              argv: 'python3 -c "print(1234567890123456789012345678901234567890)"',
+              status: 'sleeping',
+            },
+          ],
+          terminated: 0,
+        }),
       })
     );
     const processSection = sections.find((s) => s.id === 'processes')!;
@@ -367,5 +370,45 @@ describe('fetchMonitorData', () => {
     expect(processSection.rows[0].meta).toBe('node script.js');
     expect(processSection.rows[0].active).toBe(true);
     expect(processSection.rows[1].meta).toContain('...');
+  });
+
+  it('reports exited processes as a count, never as rows', async () => {
+    const sections = await fetchMonitorData(
+      makeDeps({
+        getProcesses: async () => ({
+          processes: [{ pid: 1024, argv: 'node script.js', status: 'running' }],
+          terminated: 1435,
+        }),
+      })
+    );
+    const processSection = sections.find((s) => s.id === 'processes')!;
+    expect(processSection.rows).toHaveLength(1);
+    expect(processSection.count).toBe(1);
+    expect(processSection.meta).toBe('1 live · 1,435 exited');
+  });
+
+  it('omits the exited count when nothing has exited yet', async () => {
+    const sections = await fetchMonitorData(
+      makeDeps({
+        getProcesses: async () => ({
+          processes: [{ pid: 1024, argv: 'node script.js', status: 'running' }],
+          terminated: 0,
+        }),
+      })
+    );
+    expect(sections.find((s) => s.id === 'processes')!.meta).toBeUndefined();
+  });
+
+  it('degrades to an empty snapshot when the process read fails', async () => {
+    const sections = await fetchMonitorData(
+      makeDeps({
+        getProcesses: async () => {
+          throw new Error('proc mount unavailable');
+        },
+      })
+    );
+    const processSection = sections.find((s) => s.id === 'processes')!;
+    expect(processSection.rows).toEqual([]);
+    expect(processSection.meta).toBeUndefined();
   });
 });

@@ -23,7 +23,7 @@ import {
   toSwitcherScoops,
   type WcLiveWiring,
 } from '../../../src/ui/wc/wc-live-callbacks.js';
-import { parseProcStatLine } from '../../../src/ui/wc/wc-live-monitor-deps.js';
+import { parseProcStatLine, parseProcTable } from '../../../src/ui/wc/wc-live-monitor-deps.js';
 import {
   applyLeaderLocalThinkingChange,
   metaThinkingForScoop,
@@ -857,5 +857,43 @@ describe('wireDockTreePersistence', () => {
     expect(dockTree.setTree).toHaveBeenCalledWith(persisted);
     expect(setItemSpy).not.toHaveBeenCalled();
     setItemSpy.mockRestore();
+  });
+});
+
+describe('parseProcTable', () => {
+  const doc = JSON.stringify({
+    stats: { live: 2, retained: 4, terminated: 1435, spawned: 1437 },
+    processes: [
+      { pid: 1024, argv: 'sleep 9', status: 'running' },
+      { pid: 1025, argv: 'rg --json x', status: 'pending' },
+      { pid: 1026, argv: 'npm run lint', status: 'exited' },
+      { pid: 1027, argv: 'tsc --noEmit', status: 'killed' },
+    ],
+  });
+
+  it('keeps only live rows', () => {
+    const snapshot = parseProcTable(doc);
+    expect(snapshot.processes.map((p) => p.pid)).toEqual([1024, 1025]);
+  });
+
+  it('reports the session total, not the retained count', () => {
+    // The whole point of the counter: 1,435 exited, only 2 dead records are
+    // still resident, and the number the UI shows is the former.
+    expect(parseProcTable(doc).terminated).toBe(1435);
+  });
+
+  it('degrades to an empty snapshot on malformed input', () => {
+    expect(parseProcTable('not json')).toEqual({ processes: [], terminated: 0 });
+    expect(parseProcTable('')).toEqual({ processes: [], terminated: 0 });
+    expect(parseProcTable('{}')).toEqual({ processes: [], terminated: 0 });
+    expect(parseProcTable('null')).toEqual({ processes: [], terminated: 0 });
+  });
+
+  it('tolerates rows missing fields', () => {
+    const snapshot = parseProcTable(
+      JSON.stringify({ stats: {}, processes: [{ status: 'running' }] })
+    );
+    expect(snapshot.processes).toEqual([{ pid: 0, argv: '', status: 'running' }]);
+    expect(snapshot.terminated).toBe(0);
   });
 });

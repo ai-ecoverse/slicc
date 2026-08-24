@@ -33,6 +33,22 @@ interface Process {
 
 Status transitions: `running` → `exited` (clean) or `killed` (any terminating signal recorded). The manager fires `spawn` and `exit` events synchronously inside the corresponding method calls so `/proc` and `ps` see live state without a tick of latency.
 
+### Retention
+
+A terminated process is not dropped the instant it exits — `ps` after a `kill` has to be able to show the exit code — but it is not kept forever either. The manager retains the most recent `TERMINATED_RETENTION` (128) terminated records and reaps older ones oldest-first, so the table stays O(live + 128) instead of accumulating every command the session ever ran. Eviction only ever considers already-terminated pids, so a live process can never be reaped.
+
+`stats()` carries the totals the reaped records used to:
+
+```ts
+{
+  (live, retained, terminated, spawned);
+}
+```
+
+`terminated` and `spawned` are monotonic for the session and keep counting past the retention window; `retained` is how many records are actually resident. Surfaces that want to say how much work ran (the monitor's "1,435 exited this session") read the counter — a number stays true without thousands of records having to stay resident to prove it.
+
+Consequences worth knowing: `get(pid)` and `wait(pid)` on a reaped pid behave exactly like an unknown pid (`null` / reject), and `allocatePid()` may reuse a reaped pid after the uint32 space wraps.
+
 ## Where pids come from
 
 | Kind         | Spawn site                                          | argv                                    |
@@ -84,9 +100,35 @@ Layout:
 /proc/<pid>/cwd         # plain text path
 /proc/<pid>/stat        # single-line: pid (kind) state ppid exit started finished
 /proc/1/                # synthesized kernel-host anchor, ppid=0
+/proc/table             # the whole retained table as one JSON document
 ```
 
 Deliberate omissions: no `/proc/self` (would require `currentPid()` tracking which we don't do), no `environ` (would leak masked secrets), no `fd/` or `task/`. The full Linux procfs surface is out of scope; just what `ps` and `kill` need to drive their views.
+
+One deliberate ADDITION: `/proc/table` has no Linux counterpart. Linux readers walk `/proc/<pid>/` per process because a syscall-backed read is cheap; here every read crosses the VFS, so a UI refreshing the process list paid a `readDir` plus two `readFile`s per pid — thousands of VFS reads per tick against the same VFS the boot path and the terminal mount contend for. `/proc/table` collapses that to one read, and carries the `stats()` counters, which no per-pid file can express:
+
+```jsonc
+{
+  "stats": { "live": 9, "retained": 137, "terminated": 1435, "spawned": 1444 },
+  "processes": [
+    {
+      "pid": 1024,
+      "ppid": 1,
+      "kind": "shell",
+      "state": "R",
+      "status": "running",
+      "argv": "sleep 9",
+      "cwd": "/workspace",
+      "owner": "cone",
+      "startedAt": 1700000000000,
+      "finishedAt": null,
+      "exitCode": null,
+    },
+  ],
+}
+```
+
+`processes` holds every RETAINED process (live plus the retention window), so a reader that only wants live ones filters on `status` — the same choice `ps` makes by default. `argv` is space-joined here, unlike the NUL-separated `cmdline` file: this is JSON, not procfs.
 
 ## `ps` and `kill`
 

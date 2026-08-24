@@ -22,8 +22,9 @@ describe('ProcMountBackend — readDir', () => {
     expect(names).toContain('1024');
     expect(names).toContain('1025');
     expect(names).toContain('1'); // kernel-host anchor
+    expect(names).toContain('table'); // the aggregate, the one non-directory
     for (const e of entries) {
-      expect(e.kind).toBe('directory');
+      expect(e.kind).toBe(e.name === 'table' ? 'file' : 'directory');
     }
   });
 
@@ -217,6 +218,55 @@ describe('ProcMountBackend — lifecycle', () => {
     const proc = new ProcMountBackend(new ProcessManager());
     await proc.close();
     await expect(proc.readDir('/')).rejects.toMatchObject({ code: 'EBADF' });
+  });
+
+  it('reads the whole table in one read, with the session counters', async () => {
+    const pm = new ProcessManager();
+    const live = pm.spawn({ kind: 'shell', argv: ['sleep', '9'], owner: { kind: 'cone' } });
+    const dead = pm.spawn({ kind: 'tool', argv: ['read_file'], owner: { kind: 'system' } });
+    pm.exit(dead.pid, 3);
+    const proc = new ProcMountBackend(pm);
+    const doc = JSON.parse(decode(await proc.readFile('/table')));
+
+    expect(doc.stats).toEqual({ live: 1, retained: 2, terminated: 1, spawned: 2 });
+    const byPid = Object.fromEntries(doc.processes.map((r: { pid: number }) => [r.pid, r]));
+    expect(byPid[live.pid]).toMatchObject({
+      ppid: 1,
+      kind: 'shell',
+      state: 'R',
+      status: 'running',
+      argv: 'sleep 9',
+      owner: 'cone',
+      exitCode: null,
+      finishedAt: null,
+    });
+    expect(byPid[dead.pid]).toMatchObject({ state: 'Z', status: 'exited', exitCode: 3 });
+    expect(byPid[dead.pid].finishedAt).toBeGreaterThan(0);
+  });
+
+  it('treats /table as a file, not a pid', async () => {
+    const proc = new ProcMountBackend(new ProcessManager());
+    expect(await proc.stat('/table')).toMatchObject({ kind: 'file' });
+    await expect(proc.readDir('/table')).rejects.toMatchObject({ code: 'ENOTDIR' });
+    // The size a `stat` advertises has to match what a read returns, or a
+    // caller sizing a buffer from `stat` truncates the document.
+    const stat = await proc.stat('/table');
+    expect(stat.size).toBe(decode(await proc.readFile('/table')).length);
+  });
+
+  it('drops reaped processes out of the table', async () => {
+    const pm = new ProcessManager();
+    for (let i = 0; i < 200; i++) {
+      const p = pm.spawn({ kind: 'shell', argv: [`cmd${i}`], owner: { kind: 'cone' } });
+      pm.exit(p.pid, 0);
+    }
+    const proc = new ProcMountBackend(pm);
+    const doc = JSON.parse(decode(await proc.readFile('/table')));
+    // 200 ran, at most the retention window is still resident, and the
+    // session total survives the eviction.
+    expect(doc.stats.terminated).toBe(200);
+    expect(doc.processes.length).toBeLessThan(200);
+    expect(doc.processes.length).toBe(doc.stats.retained);
   });
 
   it('exited processes still appear in /proc/<pid>/* until reaped', async () => {
