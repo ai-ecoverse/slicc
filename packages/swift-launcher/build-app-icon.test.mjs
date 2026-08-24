@@ -27,6 +27,12 @@ describe('app icon assembly', () => {
       if (cmd === 'iconutil') {
         writeFileSync(args[args.indexOf('-o') + 1], 'icns');
       }
+      if (cmd.endsWith('actool') && overrides.actoolRejectsIcon) {
+        // What an Xcode 16 actool does with an Xcode 26 `.icon` bundle.
+        const err = new Error('Command failed');
+        err.stderr = 'actool: error: Failed to find a suitable compiler for macos-icon.icon\n';
+        throw err;
+      }
       if (cmd.endsWith('actool') && !overrides.actoolProducesNothing) {
         const out = args[args.indexOf('--compile') + 1];
         writeFileSync(resolve(out, 'Assets.car'), 'car');
@@ -143,6 +149,25 @@ describe('app icon assembly', () => {
 
       expect(result.built).toBe(false);
       expect(result.skipped).toMatch(/actool not found/);
+    });
+
+    it('degrades when an older actool cannot compile the .icon at all', () => {
+      // CI's swift-launcher job runs on macos-latest (macOS 15 / Xcode 16.x);
+      // only release.yml pins macos-26. A throw here would fail that required
+      // build instead of falling back to the .icns.
+      const result = buildIconAssetCatalog({
+        iconBundle,
+        resourcesDir,
+        deploymentTarget: '26.0',
+        run: fakeRun({ actoolRejectsIcon: true }),
+      });
+
+      expect(result.built).toBe(false);
+      expect(result.skipped).toMatch(/could not compile macos-icon\.icon/);
+      // The stderr diagnosis has to survive — err.message alone is just
+      // "Command failed", which tells nobody why the icon stopped adapting.
+      expect(result.skipped).toMatch(/Failed to find a suitable compiler/);
+      expect(existsSync(resolve(resourcesDir, 'actool-partial.plist'))).toBe(false);
     });
 
     it('degrades when actool runs but emits no catalog', () => {

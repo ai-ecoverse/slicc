@@ -113,19 +113,30 @@ export function buildIconAssetCatalog({
   // the two from drifting apart if the bundle is ever renamed.
   const iconName = iconBundle.replace(/.*\//, '').replace(/\.icon$/, '');
   const partialPlist = resolve(resourcesDir, 'actool-partial.plist');
-  run(actool, [
-    iconBundle,
-    '--compile',
-    resourcesDir,
-    '--platform',
-    'macosx',
-    '--minimum-deployment-target',
-    deploymentTarget,
-    '--app-icon',
-    iconName,
-    '--output-partial-info-plist',
-    partialPlist,
-  ]);
+  try {
+    run(actool, [
+      iconBundle,
+      '--compile',
+      resourcesDir,
+      '--platform',
+      'macosx',
+      '--minimum-deployment-target',
+      deploymentTarget,
+      '--app-icon',
+      iconName,
+      '--output-partial-info-plist',
+      partialPlist,
+    ]);
+  } catch (err) {
+    // An `actool` that predates the `.icon` format rejects the bundle outright.
+    // That is the common case, not an edge one: CI's swift-launcher job runs on
+    // `macos-latest`, which still resolves to macOS 15 / Xcode 16.x, while only
+    // release.yml pins `macos-26`. Letting this throw would fail the build on
+    // every such machine rather than falling back to the .icns — the exact
+    // outcome the missing-actool branch above exists to avoid.
+    rmSync(partialPlist, { force: true });
+    return { built: false, skipped: `actool could not compile ${iconName}.icon: ${errText(err)}` };
+  }
   rmSync(partialPlist, { force: true });
   if (!existsSync(resolve(resourcesDir, 'Assets.car'))) {
     return { built: false, skipped: 'actool produced no Assets.car' };
@@ -135,6 +146,19 @@ export function buildIconAssetCatalog({
   // named .icns in Resources just invites the wrong one being picked up.
   rmSync(resolve(resourcesDir, `${iconName}.icns`), { force: true });
   return { built: true, iconName };
+}
+
+/**
+ * `execFileSync` puts the useful diagnosis on stderr, not in `err.message`
+ * (which is only "Command failed"), so prefer it when present.
+ *
+ * @param {unknown} err
+ * @returns {string} One-line reason, trimmed to keep the build log readable.
+ */
+function errText(err) {
+  const stderr = /** @type {{ stderr?: unknown }} */ (err)?.stderr;
+  const text = String(stderr || (err instanceof Error ? err.message : err) || 'unknown error');
+  return text.trim().split('\n').slice(0, 3).join(' ').slice(0, 300);
 }
 
 /** @type {(cmd: string, args: string[]) => string} */
