@@ -259,6 +259,8 @@ function createFollowerHarness(overrides: { requestModels?: () => void } = {}) {
     getSync: () => sync,
     getSelectedScoopJid: () => 'cone_1',
     catalogRetryDelayMs: 10,
+    catalogRetryMaxDelayMs: 40,
+    catalogRetryWindowMs: 1000,
   });
   const deliver = (message: LeaderToFollowerMessage): void => {
     if (message.type === 'models.list') surface.onModelsList(message.models);
@@ -341,16 +343,69 @@ describe('an empty model catalog is warm-up, not an answer (#2329)', () => {
     expect(follower.composerMeta.model).toBe('Fake Cone Primary');
   });
 
-  it('bounds the re-request so a leader with no models is not polled forever', () => {
+  it('keeps asking past the old three-try limit while the pill is unresolved', () => {
+    // The regression this replaces: three tries at a flat delay gave up after
+    // six seconds, so a leader whose catalog landed later was never asked
+    // again and the picker stayed hidden for the session (~1 in 7 cold starts
+    // of the two-instance e2e, even after the rest of #2329 was fixed).
     const follower = createFollowerHarness();
     follower.deliver({
       type: 'model.state',
       state: { activeModelId: 'local-llm:fake-cone-primary', scoopJid: 'cone_1' },
     });
-    for (let attempt = 0; attempt < 6; attempt += 1) {
-      vi.advanceTimersByTime(10);
+    for (let attempt = 0; attempt < 8; attempt += 1) {
+      vi.advanceTimersByTime(40);
       follower.deliver({ type: 'models.list', models: [] });
     }
-    expect(follower.requestModels).toHaveBeenCalledTimes(3);
+    expect(follower.requestModels.mock.calls.length).toBeGreaterThan(3);
+  });
+
+  it('backs off rather than polling at a flat interval', () => {
+    const follower = createFollowerHarness();
+    follower.deliver({
+      type: 'model.state',
+      state: { activeModelId: 'local-llm:fake-cone-primary', scoopJid: 'cone_1' },
+    });
+    // First gap is the base delay…
+    vi.advanceTimersByTime(10);
+    expect(follower.requestModels).toHaveBeenCalledTimes(1);
+    follower.deliver({ type: 'models.list', models: [] });
+    // …the second is longer, so the same 10 ms is no longer enough.
+    vi.advanceTimersByTime(10);
+    expect(follower.requestModels).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(10);
+    expect(follower.requestModels).toHaveBeenCalledTimes(2);
+  });
+
+  it('still stops eventually, so a leader with no models is not polled forever', () => {
+    const follower = createFollowerHarness();
+    follower.deliver({
+      type: 'model.state',
+      state: { activeModelId: 'local-llm:fake-cone-primary', scoopJid: 'cone_1' },
+    });
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      vi.advanceTimersByTime(40);
+      follower.deliver({ type: 'models.list', models: [] });
+    }
+    const afterWindow = follower.requestModels.mock.calls.length;
+    for (let attempt = 0; attempt < 10; attempt += 1) {
+      vi.advanceTimersByTime(40);
+      follower.deliver({ type: 'models.list', models: [] });
+    }
+    expect(follower.requestModels.mock.calls.length).toBe(afterWindow);
+  });
+
+  it('stops asking as soon as the catalog resolves', () => {
+    const follower = createFollowerHarness();
+    follower.deliver({
+      type: 'model.state',
+      state: { activeModelId: 'local-llm:fake-cone-primary', scoopJid: 'cone_1' },
+    });
+    vi.advanceTimersByTime(40);
+    follower.deliver({ type: 'models.list', models: CATALOG });
+    expect(follower.composerMeta.style.display).toBe('');
+    const resolved = follower.requestModels.mock.calls.length;
+    vi.advanceTimersByTime(500);
+    expect(follower.requestModels.mock.calls.length).toBe(resolved);
   });
 });
