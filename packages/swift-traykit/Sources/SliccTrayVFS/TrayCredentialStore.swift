@@ -141,14 +141,21 @@ final class AppGroupFileSecretStore: TrayCredentialKeychain {
     }
 
     func write(_ data: Data) -> Bool {
+        let directory = fileURL.deletingLastPathComponent()
+        let tempURL = directory.appendingPathComponent(".join-url.tmp", isDirectory: false)
         do {
-            try fileManager.createDirectory(
-                at: fileURL.deletingLastPathComponent(), withIntermediateDirectories: true)
-            try data.write(to: fileURL, options: .atomic)
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try data.write(to: tempURL, options: .atomic)
             try fileManager.setAttributes(
-                [.posixPermissions: 0o600], ofItemAtPath: fileURL.path)
+                [.posixPermissions: 0o600], ofItemAtPath: tempURL.path)
+            if fileManager.fileExists(atPath: fileURL.path) {
+                _ = try fileManager.replaceItemAt(fileURL, withItemAt: tempURL)
+            } else {
+                try fileManager.moveItem(at: tempURL, to: fileURL)
+            }
             return true
         } catch {
+            try? fileManager.removeItem(at: tempURL)
             return false
         }
     }

@@ -4,6 +4,14 @@ import XCTest
 @testable import SliccTrayVFS
 
 final class TrayCredentialStoreTests: XCTestCase {
+    private final class FailingAttributesFileManager: FileManager {
+        override func setAttributes(
+            _ attributes: [FileAttributeKey: Any], ofItemAtPath path: String
+        ) throws {
+            throw NSError(domain: NSPOSIXErrorDomain, code: Int(EPERM), userInfo: nil)
+        }
+    }
+
     private final class MemoryKeychain: TrayCredentialKeychain {
         var data: Data?
         var writeSucceeds = true
@@ -119,6 +127,23 @@ final class TrayCredentialStoreTests: XCTestCase {
 
         XCTAssertNil(store.read())
         XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
+    func testAppGroupFileStoreWriteCleansTempAndPreservesExistingOnAttributeFailure() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TrayCredentialFileStore.\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileURL = directory.appendingPathComponent("join-url", isDirectory: false)
+        let original = Data("https://tray.example/join/original".utf8)
+        XCTAssertTrue(AppGroupFileSecretStore(directory: directory).write(original))
+
+        let store = AppGroupFileSecretStore(
+            directory: directory, fileManager: FailingAttributesFileManager())
+        XCTAssertFalse(store.write(Data("https://tray.example/join/rejected".utf8)))
+        XCTAssertEqual(try Data(contentsOf: fileURL), original)
+        XCTAssertFalse(
+            FileManager.default.fileExists(
+                atPath: directory.appendingPathComponent(".join-url.tmp", isDirectory: false).path))
     }
 
     func testAppGroupFileStoreReadMissesMissingFile() {
