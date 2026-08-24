@@ -1,6 +1,6 @@
 import { Readable, Transform } from 'node:stream';
 import { StringDecoder } from 'node:string_decoder';
-import { HMAC_SIGN_HEADER, isTextContentType } from '@slicc/shared-ts';
+import { HMAC_SIGN_HEADER, isLoopbackOrigin, isTextContentType } from '@slicc/shared-ts';
 import type { Express, Request, Response } from 'express';
 import {
   FETCH_PROXY_CONTENT_LENGTH_HEADER,
@@ -28,22 +28,6 @@ export interface FetchProxyDeps {
 function firstHeaderValue(value: string | string[] | undefined): string | undefined {
   if (value === undefined) return undefined;
   return Array.isArray(value) ? value[0] : value;
-}
-
-/** True when an origin/referer value points at localhost (any family). */
-function isLocalhostOrigin(origin: string | undefined): boolean {
-  if (!origin) return false;
-  try {
-    const url = new URL(origin);
-    return (
-      url.hostname === 'localhost' ||
-      url.hostname === '127.0.0.1' ||
-      url.hostname === '::1' ||
-      url.hostname === '[::1]'
-    );
-  } catch {
-    return false;
-  }
 }
 
 /** Get the body — either from express.json()'s parsed body or raw chunks. */
@@ -80,7 +64,7 @@ function buildForwardHeaders(req: Request, targetUrl: string): Record<string, st
   const proxyOrigin = firstHeaderValue(req.headers['x-proxy-origin']);
   if (proxyOrigin) {
     headers.origin = proxyOrigin;
-  } else if (isLocalhostOrigin(headers.origin)) {
+  } else if (isLoopbackOrigin(headers.origin)) {
     // Only strip the browser's auto-added localhost origin; preserve legitimate origins.
     delete headers.origin;
   }
@@ -98,7 +82,7 @@ function buildForwardHeaders(req: Request, targetUrl: string): Record<string, st
   const proxyReferer = firstHeaderValue(req.headers['x-proxy-referer']);
   if (proxyReferer) {
     headers.referer = proxyReferer;
-  } else if (isLocalhostOrigin(headers.referer)) {
+  } else if (isLoopbackOrigin(headers.referer)) {
     delete headers.referer;
   }
 

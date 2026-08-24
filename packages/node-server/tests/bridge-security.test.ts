@@ -280,9 +280,10 @@ describe('BRIDGE_TOKEN_HEADER', () => {
 });
 
 describe('isLoopbackBridgeOrigin', () => {
-  it('accepts localhost / 127.0.0.1 / ::1 origins on any port', () => {
+  it('accepts localhost / 127.0.0.0/8 / ::1 origins on any port', () => {
     expect(isLoopbackBridgeOrigin('http://localhost:5710')).toBe(true);
     expect(isLoopbackBridgeOrigin('http://127.0.0.1:5710')).toBe(true);
+    expect(isLoopbackBridgeOrigin('http://127.0.0.2:5710')).toBe(true);
     expect(isLoopbackBridgeOrigin('http://[::1]:5710')).toBe(true);
     // No port — still loopback.
     expect(isLoopbackBridgeOrigin('http://localhost')).toBe(true);

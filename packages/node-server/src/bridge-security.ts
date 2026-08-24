@@ -25,6 +25,7 @@ import {
   BRIDGE_TOKEN_HEADER,
   BRIDGE_TOKEN_QUERY_PARAM,
   BRIDGE_WS_QUERY_PARAM,
+  isLoopbackOrigin,
   SLICC_HOSTED_ORIGIN,
   SLICC_STAGING_HUB_ORIGIN,
 } from '@slicc/shared-ts';
@@ -158,28 +159,18 @@ export function isAllowedBridgeOrigin(origin: string | undefined | null): boolea
 }
 
 /**
- * True iff `origin` is a loopback host (localhost / 127.0.0.1 / ::1).
+ * True iff `origin` is a loopback host.
  * Loopback allowlisted origins (e.g. the locally-served OAuth callback
  * page at `http://localhost:5710/auth/callback` posting to
  * `/api/oauth-result`) are exempt from the bridge-token requirement —
  * the token's threat model is "remote allowlisted origin (sliccy.ai)
  * with a hostile script", not "local server talking to itself".
+ *
+ * Canonical set: `@slicc/shared-ts` `isLoopbackOrigin` (localhost,
+ * 127.0.0.0/8, bracketed/bare ::1).
  */
 export function isLoopbackBridgeOrigin(origin: string | undefined | null): boolean {
-  if (!origin) return false;
-  try {
-    const url = new URL(origin);
-    // Node's WHATWG URL parser keeps the brackets on IPv6 hostnames
-    // (`http://[::1]:5710` → `[::1]`); accept both bracketed and bare.
-    return (
-      url.hostname === 'localhost' ||
-      url.hostname === '127.0.0.1' ||
-      url.hostname === '::1' ||
-      url.hostname === '[::1]'
-    );
-  } catch {
-    return false;
-  }
+  return isLoopbackOrigin(origin);
 }
 
 /**

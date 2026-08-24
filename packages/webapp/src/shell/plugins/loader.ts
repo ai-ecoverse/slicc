@@ -9,6 +9,7 @@
  * §8.1; component failures are isolated per §11.3.
  */
 
+import { isLoopbackHostname } from '@slicc/shared-ts';
 import type { VirtualFS } from '../../fs/index.js';
 import {
   type LoadedPlugin,
@@ -26,6 +27,9 @@ const MANIFEST_FILE = 'plugin.json';
 const SKILLS_DIR = 'skills';
 const MCP_FILE = 'mcp.json';
 const SKILL_FILE = 'SKILL.md';
+
+/** Opaque JSON object mid-parse; fields are narrowed by the validators below. */
+type JsonObject = { [key: string]: unknown };
 
 const MANIFEST_FIELDS = new Set([
   '$schema',
@@ -106,7 +110,7 @@ async function loadManifest(
     diagnostics.push(fatal('manifest', 'plugin.json must contain a top-level object'));
     return null;
   }
-  const obj = raw as Record<string, unknown>;
+  const obj = raw as JsonObject;
 
   // §5.2: unknown top-level fields are reported and ignored (non-fatal).
   for (const key of Object.keys(obj)) {
@@ -144,7 +148,7 @@ async function loadManifest(
  * than a non-object `extensions` is fatal (returns null).
  */
 function validateMetadataFields(
-  obj: Record<string, unknown>,
+  obj: JsonObject,
   diagnostics: PluginDiagnostic[]
 ): PluginManifest | null {
   const typeError = findMetadataTypeError(obj);
@@ -159,7 +163,7 @@ function validateMetadataFields(
       diagnostics.push(warn('manifest', 'field "extensions" is not an object; ignored'));
       delete obj.extensions;
     } else {
-      const nsError = findExtensionsError(ext as Record<string, unknown>);
+      const nsError = findExtensionsError(ext as JsonObject);
       if (nsError) {
         diagnostics.push(fatal('manifest', nsError));
         return null;
@@ -172,7 +176,7 @@ function validateMetadataFields(
 }
 
 /** Returns an error message for the first §5.4 metadata type violation. */
-function findMetadataTypeError(obj: Record<string, unknown>): string | null {
+function findMetadataTypeError(obj: JsonObject): string | null {
   for (const field of ['version', 'description', 'homepage', 'repository', 'license'] as const) {
     if (field in obj && typeof obj[field] !== 'string') {
       return `field "${field}" must be a string`;
@@ -189,7 +193,7 @@ function findMetadataTypeError(obj: Record<string, unknown>): string | null {
     if (typeof author !== 'object' || author === null || Array.isArray(author)) {
       return 'field "author" must be an object';
     }
-    for (const [key, value] of Object.entries(author as Record<string, unknown>)) {
+    for (const [key, value] of Object.entries(author as JsonObject)) {
       if (!AUTHOR_FIELDS.has(key) || typeof value !== 'string') {
         return `invalid "author" field "${key}"`;
       }
@@ -199,7 +203,7 @@ function findMetadataTypeError(obj: Record<string, unknown>): string | null {
 }
 
 /** Returns an error message when an extensions namespace value is not an object. */
-function findExtensionsError(ext: Record<string, unknown>): string | null {
+function findExtensionsError(ext: JsonObject): string | null {
   for (const [ns, value] of Object.entries(ext)) {
     if (typeof value !== 'object' || value === null || Array.isArray(value)) {
       return `extensions namespace "${ns}" must map to an object`;
@@ -343,7 +347,7 @@ async function loadMcpComponent(
     diagnostics.push(warn('mcp', 'mcp.json must contain a top-level object; MCP disabled'));
     return { status: 'invalid', servers: [] };
   }
-  const obj = raw as Record<string, unknown>;
+  const obj = raw as JsonObject;
   const extraKeys = Object.keys(obj).filter((k) => k !== '$schema' && k !== 'mcpServers');
   if (extraKeys.length > 0) {
     diagnostics.push(
@@ -368,7 +372,7 @@ async function loadMcpComponent(
   }
 
   const results: PluginMcpServer[] = [];
-  for (const [name, entry] of Object.entries(servers as Record<string, unknown>)) {
+  for (const [name, entry] of Object.entries(servers as JsonObject)) {
     const server = validateMcpServer(name, entry);
     if (server.status !== 'supported') {
       diagnostics.push(warn('mcp', `server "${name}" skipped: ${server.reason}`));
@@ -386,7 +390,7 @@ function validateMcpServer(name: string, entry: unknown): PluginMcpServer {
   if (typeof entry !== 'object' || entry === null || Array.isArray(entry)) {
     return { name, status: 'invalid', reason: 'server entry must be an object' };
   }
-  const obj = entry as Record<string, unknown>;
+  const obj = entry as JsonObject;
   const type = obj.type;
 
   if (type === 'stdio') {
@@ -451,17 +455,10 @@ function validateRemoteUrl(raw: unknown): string | null {
   }
   if (url.username || url.password) return '"url" must not contain user information';
   if (url.hash) return '"url" must not contain a fragment';
-  if (url.protocol === 'http:' && !isLoopbackHost(url.hostname)) {
+  if (url.protocol === 'http:' && !isLoopbackHostname(url.hostname)) {
     return 'non-loopback endpoints must use HTTPS';
   }
   return null;
-}
-
-function isLoopbackHost(hostname: string): boolean {
-  if (hostname === 'localhost') return true;
-  if (/^127(\.\d{1,3}){3}$/.test(hostname)) return true;
-  if (hostname === '[::1]' || hostname === '::1') return true;
-  return false;
 }
 
 function validateHeaders(raw: unknown): string | null {
@@ -470,7 +467,7 @@ function validateHeaders(raw: unknown): string | null {
     return '"headers" must be an object of strings';
   }
   const seen = new Set<string>();
-  for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
+  for (const [key, value] of Object.entries(raw as JsonObject)) {
     if (typeof value !== 'string') return `header "${key}" must have a string value`;
     if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(key)) return `invalid header name "${key}"`;
     const lower = key.toLowerCase();

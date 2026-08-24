@@ -7,6 +7,7 @@ export * from './cdp-frame-unmask.js';
 export * from './content-type.js';
 export * from './electron-overlay-route.js';
 export * from './fetch-proxy-protocol.js';
+export * from './loopback.js';
 export * from './oauth-extra-domains-storage.js';
 export * from './preview-url.js';
 export * from './runtime-env.js';
