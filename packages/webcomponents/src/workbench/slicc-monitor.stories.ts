@@ -1,383 +1,374 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
-import type { MonitorSection, SliccMonitor } from './slicc-monitor.js';
+import type { MonitorModel, SliccMonitor } from './slicc-monitor.js';
 import './slicc-monitor.js';
 
 interface MonitorArgs {
-  sections?: MonitorSection[];
+  model?: MonitorModel;
 }
 
-const FULLY_POPULATED: MonitorSection[] = [
-  {
-    id: 'followers',
-    label: 'Followers',
-    count: 3,
-    meta: '2 connected · 1 stalled',
-    accent: 'cyan',
-    rows: [
-      {
-        name: 'Lars’s iPhone',
-        sublabel: 'iOS 19 · SliccFollower 1.8',
-        meta: 'connected 8m',
-        icon: 'smartphone',
-        badges: ['browser', 'files', 'camera'],
-        status: 'active',
-      },
-      {
-        name: 'Studio display',
-        sublabel: 'macOS 16 · Slicc CLI',
-        meta: 'connected 42m',
-        icon: 'monitor',
-        badges: ['browser', 'shell', 'clipboard'],
-        status: 'active',
-      },
-      {
-        name: 'QA iPad',
-        sublabel: 'iPadOS 19 · SliccFollower 1.7',
-        meta: 'stalled 2m',
-        icon: 'tablet',
-        badges: ['browser', 'camera'],
-        status: 'warn',
-      },
-    ],
-  },
-  {
-    id: 'scoops',
-    label: 'Scoops',
-    count: 3,
-    meta: '1 working',
-    accent: 'violet',
-    rows: [
-      {
-        name: 'Sliccy',
-        sublabel: 'Cone · primary workspace agent',
-        meta: '12m 18s',
-        icon: 'bot',
-        badges: ['browser', 'shell', 'memory'],
-        status: 'active',
-      },
-      {
-        name: 'Researcher',
-        sublabel: 'Scoop · source gathering',
-        meta: 'idle 4m',
-        icon: 'search',
-        badges: ['web', 'files'],
-        status: 'idle',
-      },
-      {
-        name: 'Verifier',
-        sublabel: 'Scoop · regression review',
-        meta: 'idle 11m',
-        icon: 'shield-check',
-        badges: ['shell', 'tests'],
-        status: 'idle',
-      },
-    ],
-  },
-  {
-    id: 'processes',
-    label: 'Processes',
-    count: 3,
-    meta: '2 running',
-    accent: 'green',
-    rows: [
-      {
-        name: 'Storybook',
-        sublabel: 'storybook dev · port 6006',
-        meta: 'running 18m',
-        icon: 'panels-top-left',
-        badges: ['service'],
-        status: 'active',
-      },
-      {
-        name: 'Browser tests',
-        sublabel: 'vitest · Chromium',
-        meta: 'running 36s',
-        icon: 'flask-conical',
-        badges: ['test'],
-        status: 'active',
-      },
-      {
-        name: 'Build #1842',
-        sublabel: 'webcomponents · completed',
-        meta: '2m ago',
-        icon: 'package-check',
-        badges: ['build'],
-        status: 'idle',
-      },
-    ],
-  },
-  {
-    id: 'automations',
-    label: 'Automations',
-    count: 2,
-    meta: 'next in 3m',
-    accent: 'amber',
-    rows: [
-      {
-        name: 'Health sweep',
-        sublabel: 'Every 5 minutes · cone',
-        meta: 'in 3m',
-        icon: 'heart-pulse',
-        badges: ['cron'],
-        status: 'active',
-      },
-      {
-        name: 'Daily archive',
-        sublabel: 'At 03:00 · workspace',
-        meta: 'in 9h',
-        icon: 'archive',
-        badges: ['cron', 'files'],
-        status: 'idle',
-      },
-    ],
-  },
-  {
-    id: 'integrations',
-    label: 'Integrations',
-    count: 3,
-    meta: '12 capabilities',
-    accent: 'waffle',
-    rows: [
-      {
-        name: 'GitHub',
-        sublabel: 'MCP server · repository access',
-        meta: '6 tools',
-        icon: 'github',
-        badges: ['issues', 'pulls', 'actions'],
-        status: 'active',
-      },
-      {
-        name: 'Workspace',
-        sublabel: 'MCP server · Intent space',
-        meta: '4 tools',
-        icon: 'blocks',
-        badges: ['notes', 'agents'],
-        status: 'active',
-      },
-      {
-        name: 'Cloudflare',
-        sublabel: 'OAuth · tray worker',
-        meta: '2 tools',
-        icon: 'cloud',
-        badges: ['deploy', 'logs'],
-        status: 'idle',
-      },
-    ],
-  },
-  {
-    id: 'cost',
-    label: 'Cost',
-    count: 2,
-    meta: '$1.23 this session',
-    accent: 'rose',
-    rows: [
-      {
-        name: 'claude-opus-4-6',
-        sublabel: '3.8M input · 92K output',
-        meta: '$0.87',
-        icon: 'sparkles',
-        badges: ['reasoning'],
-        status: 'active',
-      },
-      {
-        name: 'claude-sonnet-4-6',
-        sublabel: '1.1M input · 48K output',
-        meta: '$0.36',
-        icon: 'zap',
-        badges: ['fast'],
-        status: 'idle',
-      },
-    ],
-  },
+const BURN = [
+  0.9, 1.1, 0.8, 0.6, 0.7, 1.2, 1.6, 1.5, 1.1, 0.9, 1.0, 1.4, 1.9, 2.1, 1.7, 1.3, 1.1, 1.2, 1.5,
+  1.8, 1.6, 1.3, 1.35, 1.4,
 ];
+const LOAD = [1, 2, 2, 3, 1, 0, 0, 1, 2, 4, 3, 2, 2, 1, 1, 2, 3, 3, 2, 1, 1, 2, 2, 2];
+const PROCS = [4, 7, 9, 6, 3, 2, 8, 12, 15, 11, 9, 6, 5, 9, 14, 18, 16, 12, 9, 7, 11, 13, 14, 9];
 
-const ALL_EMPTY: MonitorSection[] = [
-  {
-    id: 'followers',
-    label: 'Followers',
-    count: 0,
-    rows: [],
-    accent: 'cyan',
-    emptyText: 'Pair a phone, tablet, or CLI follower to lend the cone new capabilities.',
-  },
-  {
-    id: 'scoops',
-    label: 'Scoops',
-    count: 0,
-    rows: [],
-    accent: 'violet',
-    emptyText: 'Delegate a focused task and its scoop will show up here.',
-  },
-  {
-    id: 'processes',
-    label: 'Processes',
-    count: 0,
-    rows: [],
-    accent: 'green',
-    emptyText: 'Commands and background services will appear as they start.',
-  },
-  {
-    id: 'automations',
-    label: 'Automations',
-    count: 0,
-    rows: [],
-    accent: 'amber',
-    emptyText: 'Scheduled tasks and webhook-driven licks will appear here.',
-  },
-  {
-    id: 'integrations',
-    label: 'Integrations',
-    count: 0,
-    rows: [],
-    accent: 'waffle',
-    emptyText: 'Connect an MCP server or account to extend the workspace.',
-  },
-  {
-    id: 'cost',
-    label: 'Cost',
-    count: 0,
-    rows: [],
-    accent: 'rose',
-    emptyText: 'Model usage will be summarized after the first turn.',
-  },
-];
+function vitals(): MonitorModel['vitals'] {
+  return [
+    {
+      id: 'burn',
+      label: 'Burn rate',
+      value: '$1.40',
+      unit: '/hour',
+      hero: true,
+      series: BURN,
+      foot: '$29.06 this session · last 5m',
+    },
+    {
+      id: 'load',
+      label: 'Agent load',
+      value: '2',
+      unit: 'of 4 working',
+      accent: 'violet',
+      series: LOAD,
+      foot: 'last 5m',
+    },
+    {
+      id: 'processes',
+      label: 'Live processes',
+      value: '9',
+      unit: 'processes',
+      accent: 'cyan',
+      series: PROCS,
+      foot: '1,435 exited this session',
+    },
+    {
+      id: 'context',
+      label: 'Context fill',
+      value: '61',
+      unit: '%',
+      ratio: 0.61,
+      accent: 'green',
+      foot: 'fullest of 4 context windows',
+    },
+  ];
+}
 
-const ERROR_HEAVY: MonitorSection[] = [
-  {
-    id: 'followers',
-    label: 'Followers',
-    count: 3,
-    meta: '0 connected · 3 need attention',
-    accent: 'cyan',
+function healthySections(): MonitorModel['sections'] {
+  return [
+    {
+      id: 'tray',
+      label: 'Tray',
+      icon: 'cloud',
+      count: 1,
+      meta: 'leader · connected',
+      accent: 'waffle',
+      status: 'active',
+      rows: [
+        {
+          name: 'Leader',
+          sublabel: 'Session f77471ec · Worker · tray.sliccy.ai',
+          meta: 'connected',
+          badges: ['join URL'],
+          status: 'active',
+        },
+      ],
+    },
+    {
+      id: 'followers',
+      label: 'Followers',
+      icon: 'radio',
+      count: 1,
+      meta: '1 connected',
+      accent: 'cyan',
+      rows: [
+        {
+          name: 'CLI · 2fb161d9',
+          sublabel: 'slicc-cli exec target · trieloff@',
+          meta: 'connected 5h',
+          badges: ['ssh'],
+          status: 'active',
+        },
+      ],
+    },
+    {
+      id: 'scoops',
+      label: 'Scoops',
+      icon: 'bot',
+      count: 4,
+      meta: '4 · 2 working',
+      accent: 'violet',
+      status: 'active',
+      rows: [
+        { name: 'sliccy (cone)', meta: 'working', status: 'active' },
+        { name: 'loose-ends', meta: 'idle', depth: 1 },
+        { name: 'review', meta: 'idle', depth: 1 },
+        { name: 'agent-memory-curator', meta: 'working', status: 'active', depth: 1 },
+      ],
+    },
+    {
+      id: 'mounts',
+      label: 'Mounts',
+      icon: 'hard-drive',
+      count: 2,
+      meta: '2 · all granted',
+      status: 'active',
+      rows: [
+        { name: '/mnt/da-aem', meta: 'da', status: 'idle' },
+        { name: '/mnt/photos', meta: 'local', status: 'active' },
+      ],
+    },
+    {
+      id: 'integrations',
+      label: 'Integrations',
+      icon: 'blocks',
+      count: 6,
+      meta: '3 servers · 12 tools · 3 accounts valid',
+      accent: 'waffle',
+      status: 'active',
+      rows: [
+        { name: 'github', meta: 'MCP · 6 tools', status: 'active' },
+        { name: 'context7', meta: 'MCP · 2 tools', status: 'active' },
+        { name: 'ios-simulator', meta: 'MCP · 4 tools', status: 'active' },
+        { name: 'anthropic', meta: 'account', status: 'active' },
+      ],
+    },
+    {
+      id: 'automations',
+      label: 'Automations',
+      icon: 'calendar-clock',
+      count: 4,
+      meta: '4 webhooks · no cron tasks',
+      accent: 'amber',
+      rows: [
+        { name: 'speck-lick', meta: '→ speck-worker' },
+        { name: 'review-lick', meta: '→ review' },
+      ],
+    },
+    {
+      id: 'cost',
+      label: 'Cost',
+      icon: 'receipt',
+      count: 4,
+      meta: '$29.06 across 4 models',
+      accent: 'rose',
+      rows: [
+        { name: 'claude-opus-5', meta: '$20.3407' },
+        { name: 'grok-4.6', meta: '$1.8534' },
+        { name: 'us.anthropic.claude-opus-4-6', meta: '$1.3633' },
+        { name: 'grok-4.5', meta: '$1.0678' },
+      ],
+    },
+  ];
+}
+
+function processes(): MonitorModel['processes'] {
+  return {
+    terminated: 1435,
     rows: [
       {
-        name: 'Lars’s iPhone',
-        sublabel: 'iOS 19 · heartbeat timed out',
-        meta: 'lost 4m ago',
-        icon: 'smartphone',
-        badges: ['browser', 'camera'],
-        status: 'error',
+        pid: 1,
+        ppid: 0,
+        state: 'R',
+        status: 'running',
+        started: '12:58',
+        elapsed: '5h 15m',
+        scoop: 'system',
+        command: 'kernel',
       },
       {
-        name: 'Studio display',
-        sublabel: 'macOS 16 · reconnecting',
-        meta: 'retry 3 of 5',
-        icon: 'monitor',
-        badges: ['browser', 'shell', 'clipboard'],
-        status: 'warn',
+        pid: 41822,
+        ppid: 1,
+        state: 'R',
+        status: 'running',
+        started: '18:01',
+        elapsed: '12m 18s',
+        scoop: 'cone',
+        command: 'node packages/dev-tools/tools/coverage-ratchet.mjs',
       },
       {
-        name: 'QA iPad',
-        sublabel: 'iPadOS 19 · capability sync stalled',
-        meta: 'stalled 12m',
-        icon: 'tablet',
-        badges: ['browser', 'camera'],
-        status: 'warn',
+        pid: 41830,
+        ppid: 41822,
+        state: 'R',
+        status: 'running',
+        started: '18:01',
+        elapsed: '12m 11s',
+        scoop: 'cone',
+        command: 'vitest run --coverage',
+      },
+      {
+        pid: 41904,
+        ppid: 1,
+        state: 'R',
+        status: 'running',
+        started: '18:09',
+        elapsed: '4m 02s',
+        scoop: '2fb161d9',
+        command: 'slicc-cli exec -- rg --json "MonitorSection"',
+      },
+      {
+        pid: 41911,
+        ppid: 41904,
+        state: 'S',
+        status: 'pending',
+        started: '18:09',
+        elapsed: '4m 01s',
+        scoop: '2fb161d9',
+        command: 'rg --json MonitorSection packages/',
+      },
+      {
+        pid: 42003,
+        ppid: 1,
+        state: 'R',
+        status: 'running',
+        started: '18:11',
+        elapsed: '1m 44s',
+        scoop: 'curator',
+        command: 'python3 -c "import json,sys; …"',
+      },
+      {
+        pid: 42008,
+        ppid: 42003,
+        state: 'S',
+        status: 'pending',
+        started: '18:11',
+        elapsed: '1m 43s',
+        scoop: 'curator',
+        command: 'sleep 120',
+      },
+      {
+        pid: 42044,
+        ppid: 1,
+        state: 'R',
+        status: 'running',
+        started: '18:12',
+        elapsed: '38s',
+        scoop: 'review',
+        command: 'git log --oneline -n 200',
+      },
+      {
+        pid: 42051,
+        ppid: 42044,
+        state: 'R',
+        status: 'running',
+        started: '18:13',
+        elapsed: '6s',
+        scoop: 'review',
+        command: 'gh pr view 2381 --json statusCheckRollup',
       },
     ],
-  },
-  {
-    id: 'processes',
-    label: 'Processes',
-    count: 3,
-    meta: '2 failed · 1 stalled',
-    accent: 'rose',
-    rows: [
-      {
-        name: 'Browser tests',
-        sublabel: 'vitest · Chromium could not launch',
-        meta: 'exit 1',
-        icon: 'flask-conical',
-        badges: ['test'],
-        status: 'error',
-      },
-      {
-        name: 'Tray sync',
-        sublabel: 'worker · request timeout',
-        meta: 'failed 48s ago',
-        icon: 'cloud-off',
-        badges: ['service', 'network'],
-        status: 'error',
-      },
-      {
-        name: 'Storybook',
-        sublabel: 'storybook dev · unresponsive',
-        meta: 'stalled 3m',
-        icon: 'panels-top-left',
-        badges: ['service'],
-        status: 'warn',
-      },
-    ],
-  },
-  {
-    id: 'integrations',
-    label: 'Integrations',
-    count: 2,
-    meta: 'authentication required',
-    accent: 'amber',
-    rows: [
-      {
-        name: 'GitHub',
-        sublabel: 'OAuth session expired',
-        meta: '401',
-        icon: 'github',
-        badges: ['issues', 'pulls'],
-        status: 'error',
-      },
-      {
-        name: 'Cloudflare',
-        sublabel: 'MCP handshake is taking longer than expected',
-        meta: 'retrying',
-        icon: 'cloud',
-        badges: ['deploy', 'logs'],
-        status: 'warn',
-      },
-    ],
-  },
-  {
-    id: 'automations',
-    label: 'Automations',
-    count: 2,
-    meta: 'last sweep incomplete',
-    accent: 'violet',
-    rows: [
-      {
-        name: 'Health sweep',
-        sublabel: 'Last run exceeded its 30 second limit',
-        meta: 'timed out',
-        icon: 'heart-pulse',
-        badges: ['cron'],
-        status: 'error',
-      },
-      {
-        name: 'Daily archive',
-        sublabel: 'Waiting for workspace mount',
-        meta: 'delayed 9m',
-        icon: 'archive',
-        badges: ['cron', 'files'],
-        status: 'warn',
-      },
-    ],
-  },
-];
+  };
+}
+
+const HEALTHY: MonitorModel = {
+  updated: 'Streaming · updated 2s ago',
+  vitals: vitals(),
+  alerts: [],
+  sections: healthySections(),
+  processes: processes(),
+};
+
+function degradedSections(): MonitorModel['sections'] {
+  const sections = healthySections() ?? [];
+  const followers = sections[1];
+  followers.status = 'warn';
+  followers.meta = '1 connected · 1 stalled';
+  followers.rows = [
+    ...followers.rows,
+    {
+      name: 'QA iPad · 9c31f0a2',
+      sublabel: 'iPadOS 19 · SliccFollower 1.7',
+      meta: 'stalled 12m',
+      badges: ['playwright'],
+      status: 'warn',
+    },
+  ];
+
+  const mounts = sections[3];
+  mounts.status = 'warn';
+  mounts.meta = '2 · 1 need re-grant';
+  mounts.rows[1] = { name: '/mnt/photos', meta: 'permission lost', status: 'warn' };
+
+  const integrations = sections[4];
+  integrations.status = 'error';
+  integrations.meta = '3 servers · 12 tools · 1 account expired';
+  integrations.rows[3] = { name: 'github', meta: 'session expired', status: 'error' };
+  return sections;
+}
+
+const DEGRADED: MonitorModel = {
+  updated: 'Streaming · updated 2s ago',
+  vitals: vitals(),
+  alerts: [
+    {
+      id: 'oauth:github',
+      severity: 'error',
+      icon: 'key-round',
+      title: 'github session expired',
+      detail: 'Tool calls through this provider will fail until it is signed in again.',
+    },
+    {
+      id: 'follower:qa-ipad',
+      severity: 'warn',
+      icon: 'radio',
+      title: 'QA iPad stopped answering',
+      detail: 'iPadOS 19 · SliccFollower 1.7',
+      age: 'stalled 12m',
+    },
+    {
+      id: 'mount:/mnt/photos',
+      severity: 'warn',
+      icon: 'folder-lock',
+      title: '/mnt/photos needs re-grant',
+      detail: 'File System Access permission is no longer granted for this handle.',
+    },
+  ],
+  sections: degradedSections(),
+  processes: processes(),
+};
+
+const COLD_START: MonitorModel = {
+  updated: 'Streaming · just started',
+  vitals: [
+    {
+      id: 'burn',
+      label: 'Burn rate',
+      value: '$0.00',
+      unit: '/hour',
+      hero: true,
+      foot: 'no spend yet',
+    },
+    { id: 'load', label: 'Agent load', value: '0', unit: 'of 1 working', accent: 'violet' },
+    { id: 'processes', label: 'Live processes', value: '1', unit: 'process', accent: 'cyan' },
+  ],
+  alerts: [],
+  sections: (healthySections() ?? []).map((section) => ({
+    ...section,
+    count: 0,
+    rows: [],
+    meta: undefined,
+    status: 'idle' as const,
+  })),
+  processes: { rows: [], terminated: 0 },
+};
 
 /**
- * Mount the monitor in a workbench-sized container so the scrollable dashboard
- * reads in its real context (the workbench surface).
+ * Mount the monitor in a workbench-sized container so the panel reads in its
+ * real context. Height is auto: the design's claim is that a healthy system
+ * fits without scrolling, and a fixed frame would hide whether that holds.
  */
-function buildMonitor({ sections = FULLY_POPULATED }: MonitorArgs): HTMLElement {
+function buildMonitor({ model = HEALTHY }: MonitorArgs): HTMLElement {
   const stage = document.createElement('main');
   stage.style.cssText =
     'width:100%;min-height:100vh;padding:24px;box-sizing:border-box;background:var(--bg);';
 
   const container = document.createElement('div');
   container.style.cssText =
-    'width:min(1040px,100%);height:820px;margin:0 auto;border:1px solid var(--line);' +
+    'width:min(1120px,100%);margin:0 auto;border:1px solid var(--line);' +
     'border-radius:16px;overflow:hidden;box-shadow:var(--shadow-pane);box-sizing:border-box;';
 
   const monitor = document.createElement('slicc-monitor') as SliccMonitor;
-  monitor.style.height = '100%';
-  monitor.sections = sections;
+  monitor.model = model;
 
   container.appendChild(monitor);
   stage.appendChild(container);
@@ -396,19 +387,34 @@ export default meta;
 type Story = StoryObj<MonitorArgs>;
 
 /**
- * Review target: a complete two-column dashboard. The Followers card includes
- * connection-age metadata, capability chips, device details, and a stalled row.
+ * A healthy system. Note what is absent: no summed count of unlike things, no
+ * card per resource, no list of dead processes. Attention is one "All clear"
+ * line and every healthy topology group is one line.
  */
-export const FullyPopulated: Story = {
-  args: { sections: FULLY_POPULATED },
+export const Healthy: Story = {
+  args: { model: HEALTHY },
 };
 
-/** Every section uses its own friendly, actionable empty-state message. */
-export const AllEmpty: Story = {
-  args: { sections: ALL_EMPTY },
+/**
+ * Three things wrong. The attention feed leads and names each one; the
+ * topology groups that contain them auto-expand while the healthy ones stay
+ * shut. Every status is carried by glyph shape AND a word — `--amber` is
+ * 2.09:1 on the light surface, so color alone would not clear contrast.
+ */
+export const NeedsAttention: Story = {
+  args: { model: DEGRADED },
 };
 
-/** Dense warning and failure coverage with explicit, readable state labels. */
-export const ErrorHeavy: Story = {
-  args: { sections: ERROR_HEAVY },
+/**
+ * First render of a fresh session: no history to plot, no spend, nothing
+ * mounted. Every tile still reads as a number rather than a blank, and no
+ * sparkline is drawn from a single point.
+ */
+export const ColdStart: Story = {
+  args: { model: COLD_START },
+};
+
+/** Just the process table, at the size a busy session reaches. */
+export const ProcessTable: Story = {
+  args: { model: { updated: 'Streaming', processes: processes() } },
 };

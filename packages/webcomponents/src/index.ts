@@ -245,9 +245,14 @@ export {
 export { SliccFileTree } from './workbench/slicc-file-tree.js';
 export {
   type MonitorAccent,
+  type MonitorAlert,
+  type MonitorModel,
+  type MonitorProcessRow,
+  type MonitorProcessTable,
   type MonitorRow,
   type MonitorSection,
   type MonitorStatus,
+  type MonitorVital,
   SliccMonitor,
 } from './workbench/slicc-monitor.js';
 export { SliccSurface } from './workbench/slicc-surface.js';
