@@ -17,6 +17,8 @@
 
 import type { SecureFetch } from 'just-bash';
 import type { DirEntry, VirtualFS } from '../../fs/index.js';
+import { reconcileGlobalBinDelegators } from './global-bin-delegators.js';
+import { GLOBAL_NODE_MODULES, GLOBAL_NPM_PREFIX } from './global-prefix.js';
 import { fetchPackument, fetchTarball, type Packument, resolveVersion } from './registry.js';
 import {
   type InstallNode,
@@ -31,6 +33,8 @@ export interface InstallOptions {
   fetch: SecureFetch;
   cwd: string;
   timeoutMs?: number;
+  /** Install into `/shared/lib/node_modules` instead of `<cwd>/node_modules`. */
+  global?: boolean;
 }
 
 export interface InstallResult {
@@ -461,7 +465,7 @@ export async function installPackages(
   specs: string[],
   options: InstallOptions
 ): Promise<InstallPackagesResult> {
-  const { fs, fetch, cwd, timeoutMs } = options;
+  const { fs, fetch, cwd, timeoutMs, global: globalInstall = false } = options;
   if (specs.length === 0) {
     return { results: [], errors: [] };
   }
@@ -482,16 +486,22 @@ export async function installPackages(
     fetchPackument: supplier,
   });
 
-  const modulesDir = joinPath(cwd, 'node_modules');
+  const modulesDir = globalInstall ? GLOBAL_NODE_MODULES : joinPath(cwd, 'node_modules');
   await materializePlan(fs, modulesDir, plan, fetch, timeoutMs);
   await reconcileRootBinShims(fs, modulesDir);
+  if (globalInstall) {
+    const installed = await collectInstalledBins(fs, modulesDir);
+    const chosen = chooseRootBins(installed);
+    await reconcileGlobalBinDelegators(fs, new Set(chosen.keys()));
+  }
 
   const records = directs.map((d) => {
     const node = plan.root[d.parsed.name];
     if (!node) throw new Error(`installer: resolved node missing for ${d.parsed.name}`);
     return { name: d.parsed.name, range: chooseSavedRange(d.parsed, node.version) };
   });
-  const manifestPath = await recordDirectDependencies(fs, cwd, records);
+  const manifestRoot = globalInstall ? GLOBAL_NPM_PREFIX : cwd;
+  const manifestPath = await recordDirectDependencies(fs, manifestRoot, records);
 
   const results: InstallResult[] = directs.map((d) => {
     const node = plan.root[d.parsed.name];

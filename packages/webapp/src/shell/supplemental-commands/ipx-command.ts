@@ -22,6 +22,7 @@
 import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { joinPath, normalizePath, splitPath } from '../../fs/path-utils.js';
+import { GLOBAL_NODE_MODULES } from '../ipk/global-prefix.js';
 import { installPackages } from '../ipk/installer.js';
 import { executeJsCode } from '../jsh-executor.js';
 import { stripShebang } from '../strip-shebang.js';
@@ -78,7 +79,7 @@ async function isDirectory(fs: VirtualFS, path: string): Promise<boolean> {
   }
 }
 
-/** Yield each `<dir>/node_modules` from `cwd` up to the filesystem root. */
+/** Yield each `<dir>/node_modules` from `cwd` up to the filesystem root, then global. */
 function* nodeModulesDirs(cwd: string): Generator<string> {
   let dir = normalizePath(cwd);
   while (true) {
@@ -86,6 +87,7 @@ function* nodeModulesDirs(cwd: string): Generator<string> {
     if (dir === '/') break;
     dir = splitPath(dir).dir;
   }
+  yield GLOBAL_NODE_MODULES;
 }
 
 /** Resolve a `node_modules/.bin/<name>` shim to its real bin file, if present. */
@@ -125,14 +127,16 @@ function pickPackageBin(
     return { binName: unscopedName(pkgName), binPath: bin };
   }
   if (bin === null || typeof bin !== 'object') return null;
-  const map = bin as Record<string, unknown>;
   const candidates = [pkgName, unscopedName(pkgName)];
   for (const key of candidates) {
-    if (typeof map[key] === 'string') return { binName: key, binPath: map[key] as string };
+    const value = Object.getOwnPropertyDescriptor(bin, key)?.value;
+    if (typeof value === 'string') return { binName: key, binPath: value };
   }
-  const entries = Object.entries(map).filter(([, v]) => typeof v === 'string');
-  if (entries.length === 1) {
-    const [binName, binPath] = entries[0] as [string, string];
+  const stringEntries = Object.entries(bin as object).filter(
+    (entry): entry is [string, string] => typeof entry[1] === 'string'
+  );
+  if (stringEntries.length === 1) {
+    const [binName, binPath] = stringEntries[0];
     return { binName, binPath };
   }
   return null;

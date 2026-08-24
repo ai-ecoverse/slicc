@@ -11,6 +11,7 @@
  */
 import { describe, expect, it } from 'vitest';
 import { normalizePath, splitPath } from '../../../src/fs/path-utils.js';
+import { GLOBAL_NODE_MODULES } from '../../../src/shell/ipk/global-prefix.js';
 import {
   createVfsModuleReader,
   detectModuleKind,
@@ -653,12 +654,13 @@ describe('nodeModulesSearchPath()', () => {
       '/shared/nodetest/node_modules',
       '/shared/node_modules',
       '/node_modules',
+      GLOBAL_NODE_MODULES,
     ]);
   });
 
   it('terminates at the VFS root for root and empty starting directories', () => {
-    expect(nodeModulesSearchPath('/')).toEqual(['/node_modules']);
-    expect(nodeModulesSearchPath('')).toEqual(['/node_modules']);
+    expect(nodeModulesSearchPath('/')).toEqual(['/node_modules', GLOBAL_NODE_MODULES]);
+    expect(nodeModulesSearchPath('')).toEqual(['/node_modules', GLOBAL_NODE_MODULES]);
   });
 
   it('matches where resolve() actually finds a package (the walk it reports is the walk it did)', async () => {
