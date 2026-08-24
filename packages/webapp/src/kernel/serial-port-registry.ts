@@ -133,19 +133,17 @@ export class SerialPortRegistry {
    * its old handle forever: every `open` on it fails with an opaque
    * "Failed to open serial port" and only a page reload clears it.
    *
-   * Returns the handles that were evicted.
+   * Returns the evicted entries. The caller MUST release each one (cancel the
+   * reader, release both locks, close the port) — dropping the map entry alone
+   * would strand an open/locked port with no handle left to close it through,
+   * which is the very wedge this reconciliation exists to prevent.
    */
-  retainOnly(live: readonly SerialPort[]): string[] {
-    const evicted: string[] = [];
+  retainOnly(live: readonly SerialPort[]): Array<{ handle: string; entry: SerialPortEntry }> {
+    const evicted: Array<{ handle: string; entry: SerialPortEntry }> = [];
     for (const [handle, entry] of [...this.byHandle]) {
       if (live.includes(entry.port)) continue;
-      entry.reader = undefined;
-      entry.writer = undefined;
-      entry.pendingRead = undefined;
-      entry.leftover = undefined;
-      entry.opened = false;
       this.byHandle.delete(handle);
-      evicted.push(handle);
+      evicted.push({ handle, entry });
     }
     return evicted;
   }

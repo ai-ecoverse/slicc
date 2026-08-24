@@ -180,7 +180,7 @@ describe('serial-operations', () => {
     expect(reg.get(second[0]!.handle)?.port).toBe(after);
   });
 
-  it('retainOnly reports evicted handles and clears their stream state', () => {
+  it('retainOnly returns evicted entries so the caller can retire them', () => {
     const reg = new SerialPortRegistry();
     const gone = makePort();
     const kept = makePort();
@@ -188,7 +188,12 @@ describe('serial-operations', () => {
     const keptHandle = reg.register(kept);
     reg.get(goneHandle)!.opened = true;
 
-    expect(reg.retainOnly([kept])).toEqual([goneHandle]);
+    const evicted = reg.retainOnly([kept]);
+    expect(evicted.map((e) => e.handle)).toEqual([goneHandle]);
+    // The entry is handed back still describing the live port, so the caller
+    // can close it — dropping it silently would strand an open port.
+    expect(evicted[0]!.entry.port).toBe(gone);
+    expect(evicted[0]!.entry.opened).toBe(true);
     expect(reg.get(goneHandle)).toBeUndefined();
     expect(reg.get(keptHandle)?.port).toBe(kept);
   });
@@ -217,7 +222,7 @@ describe('serial-operations', () => {
     expect(reg.get(handle)?.opened).toBe(false);
   });
 
-  it('serialClose still surfaces genuine close failures but resets state', async () => {
+  it('serialClose keeps `opened` true when a genuine close fails', async () => {
     const reg = new SerialPortRegistry();
     const port = makePort();
     port.close = vi.fn(async () => {
@@ -226,6 +231,34 @@ describe('serial-operations', () => {
     const handle = reg.register(port);
     reg.get(handle)!.opened = true;
     await expect(serialOps.serialClose(reg, handle)).rejects.toThrow(/disconnected/);
-    expect(reg.get(handle)?.opened).toBe(false);
+    // The browser port may still be open. Claiming otherwise makes `serial list`
+    // wrong and makes esptool's takeOverPort() skip its close.
+    expect(reg.get(handle)?.opened).toBe(true);
+  });
+
+  it('serialList retires an evicted port that was still open and locked', async () => {
+    const reg = new SerialPortRegistry();
+    const { readable, reader } = makeReadable([]);
+    const { writable, writer } = makeWritable();
+    const stale = makePort(readable, writable);
+    const handle = reg.register(stale);
+
+    // Simulate a port left open with live stream locks (mid read/write).
+    const entry = reg.get(handle)!;
+    entry.opened = true;
+    entry.reader = reader as unknown as ReadableStreamDefaultReader<Uint8Array>;
+    entry.writer = writer as unknown as WritableStreamDefaultWriter<Uint8Array>;
+
+    // Device re-enumerates: getPorts() now reports a different object.
+    const fresh = makePort();
+    const serial = { getPorts: vi.fn(async () => [fresh]) } as never;
+    await serialOps.serialList(reg, serial);
+
+    // Merely forgetting the entry would strand an open, locked port.
+    expect(reader.cancel).toHaveBeenCalled();
+    expect(reader.releaseLock).toHaveBeenCalled();
+    expect(writer.releaseLock).toHaveBeenCalled();
+    expect(stale.close).toHaveBeenCalled();
+    expect(reg.get(handle)).toBeUndefined();
   });
 });
