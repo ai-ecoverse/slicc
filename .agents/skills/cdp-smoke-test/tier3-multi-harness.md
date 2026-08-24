@@ -14,11 +14,8 @@ that does not contain the change.
 a leader + follower pair headlessly on every webapp PR: the leader boots against
 the fake LLM, mints a tray on the harness's own `wrangler dev` (a REAL tray hub,
 Durable Objects and all), and a second browser context joins at `/join/<token>`.
-It covers cone-strip mirroring and a follower changing one cone's model —
-**locally**; on CI that spec is `test.skip`-gated, because a follower on a
-GitHub-hosted runner never receives a usable model catalog (#2329, a gap in the
-#2310 wire path). A read-only-scoop spec sits next to them, `test.fixme`-gated
-until #2312 implements the behaviour. Topology helpers:
+It covers cone-strip mirroring, a follower changing one cone's model, and
+read-only scoop views on both sides. Topology helpers:
 `tests/e2e/two-instance-helpers.ts`;
 how to write one: `.agents/skills/writing-slicc-tests/SKILL.md`.
 

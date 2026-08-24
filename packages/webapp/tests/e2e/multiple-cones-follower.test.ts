@@ -45,12 +45,6 @@ import {
   watchBrowserDiagnostics,
 } from './two-instance-helpers.js';
 
-/**
- * Whether the read-only scoop view (#2312) has landed. Flip to `true` in the
- * PR that implements it — the spec below is already written against it.
- */
-const READ_ONLY_SCOOP_VIEW = false;
-
 test.describe('multiple cones — leader + follower', () => {
   // One retry, against the config's CI-wide `retries: 2`. Two runtimes and a
   // real tray make this the most expensive spec in the suite, and its ceiling
@@ -92,19 +86,6 @@ test.describe('multiple cones — leader + follower', () => {
   });
 
   test('follower mirrors the cone strip and drives one cone’s model', async ({ page, browser }) => {
-    // Skipped on CI, live locally — tracked in #2329.
-    //
-    // On GitHub-hosted runners the follower attaches, mirrors the cone strip
-    // and selects a cone, and then its model pill NEVER becomes usable: the
-    // leader ships `models.list` exactly once at attach time
-    // (`sendModelCatalogToFollower`), an empty catalog is sent as a valid
-    // frame, and the only re-broadcast is on `slicc:accounts-changed`. So a
-    // follower that attaches before the leader's provider composition is ready
-    // latches `[]` for the session. Confirmed on CI with a 90 s budget and the
-    // pill still reading its `model="Preview"` placeholder — this is a product
-    // gap in the #2310 wire path, not test flakiness, and no amount of waiting
-    // in the test can fix it. Re-enable in the PR that closes #2329.
-    test.skip(!!process.env['CI'], 'follower model catalog never arrives on CI — tracked in #2329');
     test.setTimeout(TWO_INSTANCE_TEST_TIMEOUT_MS);
     const diagnostics = watchBrowserDiagnostics(page, 'leader');
     current = diagnostics;
@@ -153,15 +134,12 @@ test.describe('multiple cones — leader + follower', () => {
   });
 
   /**
-   * #2312 (read-only scoop view) is not implemented yet: `wc-live.ts` still
-   * enables the composer for whatever unit is selected, scoop included, and
-   * the follower mirrors that. The spec is written against the decided
-   * behaviour and marked `fixme` so it FAILS the day someone flips it on
-   * without meaning to, and turns green — by deleting one line — the day the
-   * feature lands. Flip `READ_ONLY_SCOOP_VIEW` when #2312 merges.
+   * The decided behaviour of #2312: users do not talk to scoops. Both sides
+   * reach it through the same descriptor role (`summaryRole` / `isReadOnlyRole`)
+   * rather than two separate rules, which is exactly why it is worth asserting
+   * on a real leader/follower pair instead of in a unit test.
    */
   test('a scoop is a read-only transcript on both sides', async ({ page, browser }) => {
-    test.fixme(!READ_ONLY_SCOOP_VIEW, 'awaiting #2312 — read-only scoop view');
     test.setTimeout(TWO_INSTANCE_TEST_TIMEOUT_MS);
     const diagnostics = watchBrowserDiagnostics(page, 'leader');
     current = diagnostics;
