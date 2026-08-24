@@ -144,12 +144,15 @@ export interface WorkUnitClientInput {
  * receives a `snapshot` before any incremental event. Today the leader gets a
  * replay and the follower gets `onSnapshot`, and nothing states they must
  * agree — the conformance suite is where that is now pinned.
+ *
+ * There is no `error` variant: neither transport reports a per-unit failure
+ * as anything but a status (`broken` locally, nothing at all remotely), and a
+ * variant no adapter can produce is a promise the protocol cannot keep.
  */
 export type WorkUnitClientEvent =
   | { type: 'status'; state: WorkUnitPresentationState }
   | { type: 'snapshot'; snapshot: WorkUnitSnapshot }
-  | { type: 'message'; message: WorkUnitChatMessage }
-  | { type: 'error'; error: string };
+  | { type: 'message'; message: WorkUnitChatMessage };
 
 /**
  * Signals a client can deliver to a unit.

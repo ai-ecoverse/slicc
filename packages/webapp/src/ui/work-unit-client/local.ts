@@ -97,6 +97,14 @@ export class LocalWorkUnitClient implements WorkUnitClient {
     return (this.deps.getClient()?.getScoops() ?? []).map((scoop) => this.toSummary(scoop));
   }
 
+  /** Forget one pending {@link snapshot} caller, and the set once it is empty. */
+  private forgetWaiter(id: WorkUnitId, resolve: (snapshot: WorkUnitSnapshot) => void): void {
+    const waiters = this.pendingSnapshots.get(id);
+    if (!waiters) return;
+    waiters.delete(resolve);
+    if (waiters.size === 0) this.pendingSnapshots.delete(id);
+  }
+
   private emitList(): void {
     if (this.listListeners.size === 0) return;
     const units = this.currentUnits();
@@ -215,16 +223,18 @@ export class LocalWorkUnitClient implements WorkUnitClient {
     const waiters =
       this.pendingSnapshots.get(id) ?? new Set<(snapshot: WorkUnitSnapshot) => void>();
     this.pendingSnapshots.set(id, waiters);
+    let resolveReplay: (snapshot: WorkUnitSnapshot) => void = () => {};
     const replay = new Promise<WorkUnitSnapshot>((resolve) => {
+      resolveReplay = resolve;
       waiters.add(resolve);
     });
     client.setSelectedScoopJid(id);
     client.requestScoopMessages(id);
     const fallback = new Promise<WorkUnitSnapshot | null>((resolve) => {
       setTimeout(() => {
-        // Drop the waiter with the request (see the remote adapter): a replay
-        // that arrives after the timeout belongs to no pending call.
-        this.pendingSnapshots.delete(id);
+        // Drop THIS caller's waiter (not the set: a concurrent call for the
+        // same unit still has its own pending promise and its own fallback).
+        this.forgetWaiter(id, resolveReplay);
         resolve(this.snapshotFor(id, [], undefined));
       }, SNAPSHOT_TIMEOUT_MS);
     });

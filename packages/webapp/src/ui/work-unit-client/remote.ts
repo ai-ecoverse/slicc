@@ -61,6 +61,14 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     return this.selectedId;
   }
 
+  /** Forget one pending {@link snapshot} caller, and the set once it is empty. */
+  private forgetWaiter(id: WorkUnitId, resolve: (snapshot: WorkUnitSnapshot) => void): void {
+    const waiters = this.pendingSnapshots.get(id);
+    if (!waiters) return;
+    waiters.delete(resolve);
+    if (waiters.size === 0) this.pendingSnapshots.delete(id);
+  }
+
   private emitList(): void {
     for (const listener of this.listListeners) listener(this.units);
   }
@@ -175,16 +183,18 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     const waiters =
       this.pendingSnapshots.get(id) ?? new Set<(snapshot: WorkUnitSnapshot) => void>();
     this.pendingSnapshots.set(id, waiters);
+    let resolveArrival: (snapshot: WorkUnitSnapshot) => void = () => {};
     const arrival = new Promise<WorkUnitSnapshot>((resolve) => {
+      resolveArrival = resolve;
       waiters.add(resolve);
     });
     this.selectedId = id;
     sync.selectScoop(id);
     const fallback = new Promise<WorkUnitSnapshot | null>((resolve) => {
       setTimeout(() => {
-        // Drop the waiter with the request: a snapshot that never arrived must
-        // not resolve a later call's promise when the leader finally answers.
-        this.pendingSnapshots.delete(id);
+        // Drop THIS caller's waiter (not the set: a concurrent call for the
+        // same unit still has its own pending promise and its own fallback).
+        this.forgetWaiter(id, resolveArrival);
         const summary = this.summaryOf(id);
         resolve(summary ? { messages: [], summary } : null);
       }, SNAPSHOT_TIMEOUT_MS);

@@ -119,6 +119,10 @@ type WorkUnitClientEvent =
   | { type: 'error'; error: string };
 ```
 
+There is no `error` variant: neither transport reports a per-unit failure as
+anything but a status, and a variant no adapter can produce is a promise the
+protocol cannot keep — the same rule that trimmed `signal`.
+
 Ordering is part of the contract: **a `snapshot` supersedes every `message`
 delivered before it**, and a subscriber that attaches mid-turn receives a
 `snapshot` before any incremental event. That is what makes
