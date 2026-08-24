@@ -1,5 +1,5 @@
 // packages/webapp/tests/e2e/preview-serve.test.ts
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.js';
 import {
   gotoLeader,
   installVfsFallbackResponder,

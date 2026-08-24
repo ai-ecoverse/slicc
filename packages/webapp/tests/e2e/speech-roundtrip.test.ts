@@ -21,7 +21,7 @@
  * it when the `speech` path filter matches).
  */
 
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 
 const RUN = process.env['RUN_REAL_SPEECH_E2E'] === '1';

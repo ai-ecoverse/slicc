@@ -19,11 +19,11 @@
  * follower can and cannot do (no local CDP surface: never teleport-eligible).
  */
 
-import { expect, test } from '@playwright/test';
 import followerFixture from './fake-llm/fixtures/multiple-cones-follower.json' with {
   type: 'json',
 };
 import { resetFakeLlm } from './fake-llm-helpers.js';
+import { expect, test } from './fixtures.js';
 import type { BrowserDiagnostics } from './two-instance-helpers.js';
 import {
   activeTabLabel,

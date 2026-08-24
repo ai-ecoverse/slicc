@@ -852,6 +852,8 @@ the UI:
 - **wrangler dev on 8787** — serves the built `dist/ui` (the leader / UI
   origin and the Playwright `baseURL`) with SPA fallback, exactly as the
   production worker does. Requires `npm run build -w @slicc/webapp` first.
+  Runs under the supervisor in `wrangler-server.ts` — see "Survive a wrangler
+  crash" below.
 - **node-server `--serve-only --cdp-port=9222` on 5710** — the thin `/cdp`
   bridge + `/api` surface only. `SLICC_BRIDGE_TOKEN` arms the `/cdp` upgrade
   gate + cross-origin `/api` token check, and `BRIDGE_DEV_ALLOWED_ORIGINS`
@@ -892,6 +894,41 @@ conditional leg: when the `speech` path filter matches, the run sets
 `RUN_REAL_SPEECH_E2E=1` (un-skipping `speech-roundtrip.test.ts`) and
 frees runner disk first so Chromium's free-disk-derived storage quota
 can hold the staged weights.
+
+### Survive a wrangler Crash
+
+`wrangler dev` (workerd) dies mid-suite (#2372). Left alone, the first crash
+turns every later spec into a ~200 ms `ERR_CONNECTION_REFUSED` failure — a wall
+of red naming eighteen innocent tests. The likely cause is
+[workers-sdk#15202](https://github.com/cloudflare/workers-sdk/issues/15202):
+workerd exits with `kj/async-io-unix.c++: … Broken pipe` when the consumer of
+its stdout (Playwright's `webServer` capture) stops draining the pipe.
+
+Three pieces contain it, and one rule applies when you write a spec:
+
+- **Import `test` from `./fixtures.js`, never from `@playwright/test`.** That
+  is the whole rule. `fixtures.ts` re-exports `expect` unchanged and adds one
+  auto fixture that probes `HEAD <baseURL>/status` before and after every test.
+- **`wrangler-server.ts`** supervises wrangler instead of Playwright spawning it
+  directly: it owns (and always drains) wrangler's stdout, mirrors it to
+  `.wrangler/e2e-logs/wrangler-output.log`, re-spawns workerd when it exits, and
+  serves `POST /restart` on `SLICC_E2E_WRANGLER_SUPERVISOR_PORT`
+  (default: leader port + 1).
+- **`leader-health.ts`** decides what happens on a dead origin: restart through
+  the supervisor and fail _only_ the current spec with an error named
+  `WRANGLER_CRASHED`. If the restart fails, the remaining specs fail instantly
+  with the same named error instead of burning their timeouts — the job then
+  names its cause. Its logic is dependency-injected and unit-tested in
+  `packages/webapp/tests/e2e-harness/leader-health.test.ts`.
+
+So a crash costs one spec (which CI then retries), not the run. Evidence lands
+in `.wrangler/e2e-logs/`: wrangler's own `wrangler-<ts>.log`, the mirrored
+output, and `crash-report.md` (one section per unexpected workerd exit, with
+the output tail). The CI job prints the crash report and uploads the directory
+as the `wrangler-logs-e2e` artifact.
+
+Grep a red e2e job for `WRANGLER_CRASHED` before believing the failing spec
+names are meaningful.
 
 ### Verify Risks with the Reference Scenario
 

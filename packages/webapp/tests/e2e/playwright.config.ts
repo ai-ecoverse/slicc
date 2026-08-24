@@ -29,6 +29,22 @@ export const BRIDGE_PORT = resolvePort('SLICC_E2E_BRIDGE_PORT', 5710);
 export const CDP_PORT = resolvePort('SLICC_E2E_CDP_PORT', 9222);
 
 /**
+ * Control-plane port of the `wrangler dev` supervisor (`wrangler-server.ts`).
+ * Defaults to {@link WRANGLER_PORT} + 1 so an isolated `SLICC_E2E_WRANGLER_PORT`
+ * moves the supervisor with it. The `leaderAlive` fixture POSTs `/restart` here
+ * when the leader origin stops answering mid-suite (#2372).
+ */
+export const WRANGLER_SUPERVISOR_PORT = resolvePort(
+  'SLICC_E2E_WRANGLER_SUPERVISOR_PORT',
+  WRANGLER_PORT + 1
+);
+
+/** Directory wrangler writes its own `wrangler-<ts>.log` crash logs into, and
+ *  where the supervisor appends `crash-report.md`. Repo-local (rather than
+ *  wrangler's default global config dir) so CI can upload it as an artifact. */
+export const WRANGLER_LOG_DIR = resolve(repoRoot, '.wrangler/e2e-logs');
+
+/**
  * Fixed per-process bridge token shared between node-server (`SLICC_BRIDGE_TOKEN`
  * env) and the webapp boot URL (`?bridgeToken=`, appended by `gotoLeader`). A
  * static value is fine for a loopback-only E2E harness — the token's threat
@@ -41,6 +57,10 @@ export const E2E_BRIDGE_TOKEN = 'e2e-fixed-bridge-token';
 
 /** Leader (UI) origin served by wrangler — the Playwright `baseURL`. */
 export const LEADER_ORIGIN = `http://localhost:${WRANGLER_PORT}`;
+
+/** Supervisor control plane — loopback only, no auth: it can restart the local
+ *  harness's workerd and nothing else. */
+export const WRANGLER_SUPERVISOR_ORIGIN = `http://127.0.0.1:${WRANGLER_SUPERVISOR_PORT}`;
 
 /** Local node-server thin-bridge `/cdp` WebSocket URL the leader dials. */
 export const BRIDGE_WS_URL = `ws://localhost:${BRIDGE_PORT}/cdp`;
@@ -93,11 +113,23 @@ export default defineConfig({
       // reaches the real hub, which has never heard of the tray it just
       // created (`TRAY_NOT_INITIALIZED`, HTTP 500). Pinning the route to the
       // harness origin keeps every URL the worker hands out local.
-      command: `npx wrangler dev --config ${resolve(repoRoot, 'packages/cloudflare-worker/wrangler.jsonc')} --port ${WRANGLER_PORT} --ip 127.0.0.1 --route ${LEADER_ORIGIN}/*`,
+      //
+      // wrangler runs under `wrangler-server.ts`, a supervisor, rather than
+      // being spawned directly: Playwright never revives a `webServer`, and
+      // workerd dies mid-suite often enough (#2372) that the first crash used
+      // to fail every remaining spec with `ERR_CONNECTION_REFUSED`. The
+      // supervisor re-spawns workerd and exposes `POST /restart`, which the
+      // `leaderAlive` fixture in `fixtures.ts` drives.
+      command: `npx tsx ${resolve(repoRoot, 'packages/webapp/tests/e2e/wrangler-server.ts')} -- dev --config ${resolve(repoRoot, 'packages/cloudflare-worker/wrangler.jsonc')} --port ${WRANGLER_PORT} --ip 127.0.0.1 --route ${LEADER_ORIGIN}/*`,
       env: {
         // Wrangler 4.118 enables local observability by default. Its extra
         // collector can disconnect Miniflare during this long-running suite.
         X_LOCAL_OBSERVABILITY: 'false',
+        SLICC_E2E_WRANGLER_PORT: String(WRANGLER_PORT),
+        SLICC_E2E_WRANGLER_SUPERVISOR_PORT: String(WRANGLER_SUPERVISOR_PORT),
+        // Repo-local crash logs (CI uploads them when the job fails); wrangler
+        // otherwise buries them in its global config dir.
+        WRANGLER_LOG_PATH: WRANGLER_LOG_DIR,
       },
       // Gate readiness on a real HTTP 200 from `/status`, NOT a bare TCP probe.
       // workerd's `dev` process binds the listen socket well before the worker
@@ -120,6 +152,12 @@ export default defineConfig({
       // wrangler's first cold start (workerd bring-up) can exceed Playwright's
       // 60s default in CI.
       timeout: 120_000,
+      // Playwright otherwise SIGKILLs the web server's process group, which the
+      // supervisor cannot handle — and its wrangler chain runs in its own group
+      // (so a crashed shim's workerd can still be reaped), so the chain would
+      // survive the run and squat the leader port. SIGTERM gives the supervisor
+      // the moment it needs to take wrangler down with it.
+      gracefulShutdown: { signal: 'SIGTERM', timeout: 5_000 },
     },
     {
       // Thin /cdp bridge + `/api` surface only — no UI. `--cdp-port=9222` pins

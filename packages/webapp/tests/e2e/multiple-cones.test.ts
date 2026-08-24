@@ -13,10 +13,10 @@
  * `two-instance-helpers.ts`.
  */
 
-import { expect, test } from '@playwright/test';
 import multipleConesFixture from './fake-llm/fixtures/multiple-cones.json' with { type: 'json' };
 import railFixture from './fake-llm/fixtures/multiple-cones-rail.json' with { type: 'json' };
 import { resetFakeLlm } from './fake-llm-helpers.js';
+import { expect, test } from './fixtures.js';
 import {
   activeTabLabel,
   bootMultiConeLeader,

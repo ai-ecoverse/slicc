@@ -19,7 +19,6 @@
  */
 
 import { readFileSync } from 'node:fs';
-import { expect, test } from '@playwright/test';
 import {
   loadFakeLlmFixture,
   resetFakeLlm,
@@ -27,6 +26,7 @@ import {
   submitUserMessage,
   waitForTurnComplete,
 } from './fake-llm-helpers.js';
+import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 
 const fixture = (name: string): unknown =>
