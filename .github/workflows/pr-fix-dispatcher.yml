@@ -214,9 +214,11 @@ jobs:
             `npm run typecheck`, `npm test` — run only what is relevant to the
             failing checks), then commit and `git push` to the head branch.
 
-            If the fix turns out to need a dependency change, a schema change, a
+            If the fix turns out to need a *new* dependency, a schema change, a
             CI/deploy config change, or a redesign, stop and report back instead
-            of pushing.
+            of pushing. Syncing a version pin that Renovate already bumped in
+            one manifest but missed in a sibling (e.g. Package.swift vs
+            xcodegen project.yml `exactVersion`) is allowed and expected.
 
             Do not merge the PR. Do not assign reviewers. Report back with the PR
             URL and whether CI went green, and post that as one short

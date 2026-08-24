@@ -28,18 +28,29 @@ schedule (every 2h) ─▶ scan-failing-prs.mjs ─▶ queue (JSON) ─▶ fix j
 
 ## The three paths
 
-| Path         | When                                                                                                                                                              | Side effects                                                       |
-| ------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
-| **re-run**   | The failure never evaluated the code: artifact up/download, DNS/reset/timeout, registry 5xx, runner lost, a bare cancel. Once per SHA.                            | `rerun-failed-jobs` only — no label, no comment.                   |
-| **dispatch** | The failure is in the code and mechanically fixable: the debt boy-scout gate, lint/format, types, a snapshot or coverage floor, lockfile drift, a merge conflict. | `ci-fix-dispatched` + one marker comment, then the `fix` job runs. |
-| **skip**     | Everything else, and always for the hard overrides below.                                                                                                         | `ci-fix-skipped` + one short comment (never two for the same SHA). |
+| Path         | When                                                                                                                                                                                                                                              | Side effects                                                       |
+| ------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------ |
+| **re-run**   | The failure never evaluated the code: artifact up/download, DNS/reset/timeout, registry 5xx, runner lost, a bare cancel. Once per SHA.                                                                                                            | `rerun-failed-jobs` only — no label, no comment.                   |
+| **dispatch** | The failure is in the code and mechanically fixable: the debt boy-scout gate, lint/format, types, a snapshot or coverage floor, lockfile drift, a merge conflict, or an SPM/xcodegen pin Renovate bumped in one manifest but missed in a sibling. | `ci-fix-dispatched` + one marker comment, then the `fix` job runs. |
+| **skip**     | Everything else, and always for the hard overrides below.                                                                                                                                                                                         | `ci-fix-skipped` + one short comment (never two for the same SHA). |
 
 Hard overrides to skip: auth, billing, secrets/credentials, schema migrations,
 release/publish/deploy jobs, an expired token or exhausted quota, an
 infrastructure failure that **recurred after a re-run** (so it is not a flake), a
-fix needing a new dependency / version change / CI-config change, and any failure
-whose cause cannot be named. When in doubt between dispatch and skip, skip; when
-in doubt between re-run and skip, re-run.
+failure needing a _new_ dependency / version change / CI-config change (syncing a
+pin Renovate already bumped in a sibling manifest is dispatch, not this), and any
+failure whose cause cannot be named. When in doubt between dispatch and skip, skip;
+when in doubt between re-run and skip, re-run.
+
+### Network infra must not match Actions `NODE_OPTIONS`
+
+Every job in this repo dumps `NODE_OPTIONS: --dns-result-order=ipv4first`. The
+`CI / ci` aggregator's script-echo puts that line inside the failure excerpt of
+`One or more jobs failed…`. A bare `dns` substring used to classify that as
+network plumbing (PR #2320), burn the one re-run, then skip forever. The network
+signature now requires an explicit DNS-failure phrase (`getaddrinfo`,
+`ENOTFOUND`, `dns resolution`, …), and the aggregator job is forced to
+`unknown` so a sibling that named a real cause can win.
 
 ### The debt boy-scout gate is the likeliest dispatch of all
 

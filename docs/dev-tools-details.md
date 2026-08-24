@@ -179,10 +179,22 @@ Two properties of that output are what the dispatcher has to accommodate:
 
 The `CI / ci` aggregator (`if: always()` over `needs: [everything]`) fails
 alongside whichever job actually broke, and its own log says only "One or more
-jobs failed". It classifies as `unknown` and cannot outrank a sibling: verdicts
-fold in `blocked` → `code` → `infra` order, with `unknown` used only when nothing
-else matched. The flake hunter's `PLUMBING_LINE` guard solves the same problem for
-signatures rather than verdicts.
+jobs failed" (plus the job env dump). It is forced to `unknown` and cannot
+outrank a sibling: verdicts fold in `blocked` → `code` → `infra` order, with
+`unknown` used only when nothing else matched. A bare `dns` substring must never
+appear in the network infra signature — every Actions job dumps
+`NODE_OPTIONS: --dns-result-order=ipv4first`, and matching that classified PR
+#2320's real SPM pin conflict as a network flake. The flake hunter's
+`PLUMBING_LINE` guard solves the same problem for signatures rather than
+verdicts.
+
+SPM version conflicts (`Could not resolve package dependencies` /
+`depends on 'webrtc' 151… and root depends on 'webrtc' 150`) are a
+`pin-sync` code signature: Renovate's swift manager updates `Package.swift` but
+historically missed the sibling xcodegen `project.yml` `exactVersion` pins.
+Syncing those pins is mechanical; inventing a new dependency is still a hard
+skip. `renovate.json`'s regex `customManagers` entry now covers `project.yml`
+so both pins move in the same Renovate PR.
 
 ### Running one on demand
 
