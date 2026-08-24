@@ -30,7 +30,16 @@ const SQLJS_WASM_CDN = 'https://sql.js.org/dist/';
 
 export type TypeScriptModule = typeof import('typescript-js');
 
-export const TYPESCRIPT_VFS_INSTALL_COMMAND = 'ipk add typescript@6.0.3';
+/** Canonical global install prefix for CLI-tool bootstrap hints. */
+export const GLOBAL_IPK_ADD = 'ipk add -g';
+
+export const TYPESCRIPT_PINNED_SPEC = 'typescript@6.0.3';
+
+/** Fresh install when nothing resolves (shadow map, `--help`, not-installed). */
+export const TYPESCRIPT_VFS_INSTALL_COMMAND = `${GLOBAL_IPK_ADD} ${TYPESCRIPT_PINNED_SPEC}`;
+
+/** Replace a cwd-local copy that shadows global installs (wrong major/version). */
+export const TYPESCRIPT_VFS_REPLACE_COMMAND = `run \`ipk uninstall typescript\` then \`ipk add ${TYPESCRIPT_PINNED_SPEC}\``;
 
 export function resolvePinnedPackageVersion(packageName: string, versionSpec: unknown): string {
   if (typeof versionSpec !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(versionSpec)) {
@@ -292,8 +301,8 @@ async function describeTypeScriptMiss(ipk: TypeScriptIpkContext): Promise<string
         : 'which predates the pinned 6.x line this build loads';
     return (
       `TypeScript 6 is required but ${splitPath(manifestPath).dir} holds typescript@${String(version)}, ` +
-      `${why}: run \`${TYPESCRIPT_VFS_INSTALL_COMMAND}\` in a directory this command's cwd resolves from ` +
-      '(no network fallback)'
+      `${why}: ${TYPESCRIPT_VFS_REPLACE_COMMAND} to replace the local copy ` +
+      '(cwd-local node_modules is searched before global; `ipk add -g` will not override it)'
     );
   }
   return TYPESCRIPT_NOT_INSTALLED;

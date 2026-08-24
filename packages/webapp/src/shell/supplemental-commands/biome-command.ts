@@ -52,6 +52,7 @@ import {
   unwrapFormattedJsh,
   wrapJshForBiome,
 } from './jsh-biome-source.js';
+import { GLOBAL_IPK_ADD } from './shared.js';
 
 // The pure jsh/biome wrap/unwrap/span-shift helpers now live in
 // `jsh-biome-source.ts` (the single source of truth shared, byte-aligned,
@@ -195,7 +196,7 @@ export const PINNED_SPEC: Record<string, string> = {
   'esbuild-wasm': `esbuild-wasm@${ESBUILD_WASM_VERSION}`,
 };
 
-const NOT_INSTALLED_HINT = `run: ipk add ${INSTALL_PACKAGES} (no network fallback)`;
+const NOT_INSTALLED_HINT = `run: ${GLOBAL_IPK_ADD} ${INSTALL_PACKAGES} (no network fallback)`;
 
 const HELP_TEXT = `biome - thin wrapper over the ipk-loaded @biomejs/wasm-web
 
@@ -239,7 +240,7 @@ Exit codes:
 
 Install:
   Inert until the backing packages are installed in node_modules:
-    ipk add ${INSTALL_PACKAGES}
+    ${GLOBAL_IPK_ADD} ${INSTALL_PACKAGES}
   All three packages must be present in the VFS \`node_modules\` for
   lint/format to run (loading the wasm-web ESM glue also needs the
   esbuild-wasm transpiler). There is no bundled binary, no CDN
@@ -695,7 +696,7 @@ function rewriteMissingModuleError(stderr: string): string | null {
   const m = stderr.match(/Cannot find module '(@biomejs\/[^']+)'/);
   if (!m) return null;
   const pkg = m[1].split('/').slice(0, 2).join('/');
-  return `biome: ${pkg} is not installed (run: ipk add ${pkg}); ${NOT_INSTALLED_HINT}\n`;
+  return `biome: ${pkg} is not installed (run: ${GLOBAL_IPK_ADD} ${PINNED_SPEC[pkg] ?? pkg}); ${NOT_INSTALLED_HINT}\n`;
 }
 
 interface RunOpsOutcome {
@@ -792,7 +793,7 @@ async function preflight(
   if (!installed.ok) {
     return {
       stdout: '',
-      stderr: `biome: ${installed.missing} is not installed (run: ipk add ${PINNED_SPEC[installed.missing] ?? installed.missing}); ${NOT_INSTALLED_HINT}\n`,
+      stderr: `biome: ${installed.missing} is not installed (run: ${GLOBAL_IPK_ADD} ${PINNED_SPEC[installed.missing] ?? installed.missing}); ${NOT_INSTALLED_HINT}\n`,
       exitCode: 1,
     };
   }
@@ -800,7 +801,7 @@ async function preflight(
   if (!(await ctx.fs.exists(wasmPath))) {
     return {
       stdout: '',
-      stderr: `biome: ${wasmPath} not found (reinstall: ipk add ${PINNED_SPEC['@biomejs/wasm-web']})\n`,
+      stderr: `biome: ${wasmPath} not found (reinstall: ${GLOBAL_IPK_ADD} ${PINNED_SPEC['@biomejs/wasm-web']})\n`,
       exitCode: 1,
     };
   }
@@ -912,7 +913,7 @@ async function handleVersion(ipk: IpkResolutionContext): Promise<ExecResult> {
   if (!version) {
     return {
       stdout: '',
-      stderr: `biome: @biomejs/wasm-web is not installed (run: ipk add @biomejs/wasm-web@${BIOME_WASM_WEB_VERSION}); ${NOT_INSTALLED_HINT}\n`,
+      stderr: `biome: @biomejs/wasm-web is not installed (run: ${GLOBAL_IPK_ADD} @biomejs/wasm-web@${BIOME_WASM_WEB_VERSION}); ${NOT_INSTALLED_HINT}\n`,
       exitCode: 1,
     };
   }

@@ -20,12 +20,12 @@
 import { splitPath } from '../../fs/path-utils.js';
 import { compileWasmModule } from '../../kernel/realm/wasm-compiler.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
-import { isNodeRuntime } from './shared.js';
+import { GLOBAL_IPK_ADD, isNodeRuntime } from './shared.js';
 
 /** The npm `v86` release the command is pinned to. */
 export const V86_PINNED_VERSION = '0.5.424';
 
-export const V86_NOT_INSTALLED = `v86 is not installed in node_modules: run \`ipk add v86@${V86_PINNED_VERSION}\` (no network fallback)`;
+export const V86_NOT_INSTALLED = `v86 is not installed in node_modules: run \`${GLOBAL_IPK_ADD} v86@${V86_PINNED_VERSION}\` (no network fallback)`;
 
 /**
  * Read-only VFS context the loader needs to read an ipk-installed
@@ -113,7 +113,28 @@ export interface V86Emulator {
   };
 }
 
-export type V86Constructor = new (options: Record<string, unknown>) => V86Emulator;
+export interface V86BootOptions {
+  wasm_fn?: (imports: WebAssembly.Imports) => Promise<WebAssembly.Exports>;
+  memory_size?: number;
+  vga_memory_size?: number;
+  autostart?: boolean;
+  disable_speaker?: boolean;
+  fastboot?: boolean;
+  bios?: { buffer: ArrayBuffer };
+  vga_bios?: { buffer: ArrayBuffer };
+  cdrom?: { buffer: ArrayBuffer };
+  hda?: { buffer: ArrayBuffer };
+  fda?: { buffer: ArrayBuffer };
+  bzimage?: { buffer: ArrayBuffer };
+  initrd?: { buffer: ArrayBuffer };
+  initial_state?: { buffer: ArrayBuffer };
+  cmdline?: string;
+  boot_order?: number;
+  filesystem?: { baseurl: string };
+  net_device?: { type: string; relay_url?: string };
+}
+
+export type V86Constructor = new (options: V86BootOptions) => V86Emulator;
 
 export interface V86Module {
   V86: V86Constructor;

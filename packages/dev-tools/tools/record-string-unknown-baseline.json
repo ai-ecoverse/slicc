@@ -92,7 +92,6 @@
   "packages/webapp/src/shell/supplemental-commands/ps-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/secret-backends.ts": 3,
   "packages/webapp/src/shell/supplemental-commands/tsc-command.ts": 4,
-  "packages/webapp/src/shell/supplemental-commands/v86-wasm.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/websocat-command.ts": 1,
   "packages/webapp/src/skills/catalog.ts": 3,
   "packages/webapp/src/speech/hear.ts": 1,

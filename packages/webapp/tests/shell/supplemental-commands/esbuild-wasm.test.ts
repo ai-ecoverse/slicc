@@ -6,8 +6,9 @@ import {
   getEsbuild,
   resetEsbuildForTests,
 } from '../../../src/shell/supplemental-commands/esbuild-wasm.js';
+import { GLOBAL_IPK_ADD } from '../../../src/shell/supplemental-commands/shared.js';
 
-const bootstrap = `ipk add esbuild-wasm@${ESBUILD_VERSION}`;
+const bootstrap = `${GLOBAL_IPK_ADD} esbuild-wasm@${ESBUILD_VERSION}`;
 
 afterEach(() => {
   vi.unstubAllGlobals();
