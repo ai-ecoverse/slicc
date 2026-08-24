@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
-import { h } from '../internal/dom.js';
+import { h, sheet } from '../internal/dom.js';
 import type { AgentActivity } from './avatar-expression.js';
 import type { SliccAgentAvatar } from './slicc-agent-avatar.js';
 import './slicc-agent-avatar.js';
@@ -276,4 +276,79 @@ export const StaticFreeze: Story = {
 
 export const Broken: Story = {
   args: { activity: 'idle', eyes: 'dead', caption: 'eyes="dead" — unchanged' },
+};
+
+// ── The brow crop ──────────────────────────────────────────────────────────
+
+/**
+ * Re-clips the tile the way it painted before the brows were lifted out: one
+ * `overflow:hidden` on `.avatar`, which is enough to shave the brows off at the
+ * top and outer sides. Kept as the reference half of the BrowCrop story.
+ */
+const RECLIP_SHEET = sheet(`.avatar{overflow:hidden;border-radius:7px;}`);
+
+/** One card per crop treatment, at review size and at the shipping 26 px. */
+function cropCard(activity: AgentActivity, cropped: boolean): HTMLElement {
+  const big = avatarEl({ activity }, 148);
+  const small = avatarEl({ activity }, 26);
+  if (cropped) {
+    for (const avatar of [big, small]) {
+      requestAnimationFrame(() => {
+        const root = avatar.shadowRoot;
+        if (root) root.adoptedStyleSheets = [...root.adoptedStyleSheets, RECLIP_SHEET];
+      });
+    }
+  }
+  return h(
+    'div',
+    {
+      style:
+        'display:flex;flex-direction:column;align-items:center;gap:10px;padding:16px;' +
+        'border:1px solid var(--line);border-radius:16px;background:var(--canvas);min-width:200px;',
+    },
+    big,
+    h(
+      'div',
+      { style: 'display:flex;align-items:center;gap:8px;color:var(--muted);font-size:11px;' },
+      small,
+      '26 px'
+    ),
+    h(
+      'div',
+      { style: 'font:600 12px/1.4 system-ui;letter-spacing:.04em;text-align:center;' },
+      `${activity} · ${cropped ? 'clipped at the tile (before)' : 'brows escape the crop'}`
+    )
+  );
+}
+
+function cropRow(activity: AgentActivity): HTMLElement {
+  return h(
+    'div',
+    { style: 'display:flex;flex-wrap:wrap;gap:18px;justify-content:center;' },
+    cropCard(activity, true),
+    cropCard(activity, false)
+  );
+}
+
+export const BrowCrop: Story = {
+  render: () =>
+    h(
+      'div',
+      { style: 'display:flex;flex-direction:column;align-items:center;gap:18px;padding:12px;' },
+      cropRow('thinking'),
+      cropRow('working')
+    ),
+  parameters: {
+    docs: {
+      description: {
+        story:
+          'The brows break out of the tile. `.crop` owns the roundrect and the brows ride a ' +
+          'second copy of the same zoom/pan above it, so the sockets stay clipped while the ' +
+          'brows read as full, cocked strokes overhanging the top edge. The left card re-clips ' +
+          'at `.avatar` to show what that used to look like: at BROW_Y = 2 with a raise of up ' +
+          'to -9 in a band zoomed ~2.65x, the roundrect shaved off the top and outer half of ' +
+          'each brow. `working` is the control — no brows, so both halves match.',
+      },
+    },
+  },
 };
