@@ -11,9 +11,11 @@ contributions and applies `ai-generated` or `human-in-the-loop` labels.
 The classifier is a cost-ordered cascade:
 
 1. Account check
-2. Markdown density
-3. Similarity
-4. Pangram API
+2. AI-attribution signatures (product footers, commit trailers, bot-review banners)
+3. Coding-agent prose markers (SHA-stamped follow-ups, harness-capture notes)
+4. Markdown density, or heading+list structure when a filled template has diluted density
+5. Similarity
+6. Pangram API
 
 The `human-in-the-loop` label is sticky — once applied it is never
 removed. Pure logic lives in `lib.mjs` (vitest `dev-tools` project). See

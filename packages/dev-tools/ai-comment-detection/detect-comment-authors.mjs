@@ -5,8 +5,10 @@
  * Reads the GitHub event, gathers every contribution on the thread — for a PR
  * the body plus issue comments, review comments, and non-empty reviews; for an
  * issue the body plus its comments — classifies each via the cost-ordered
- * cascade in `lib.mjs`, and applies the thread label: `ai-generated` when every
- * contribution is bot/AI, `human-in-the-loop` when at least one is human. Only
+ * cascade in `lib.mjs` (account, signature, agent prose, markdown
+ * density/structure, similarity, Pangram), and applies the thread label:
+ * `ai-generated` when every contribution is bot/AI, `human-in-the-loop` when at
+ * least one is human. Only
  * this file does I/O — `gh` for GitHub, `fetch` for the Pangram async detection
  * API (used solely as the cascade's last resort).
  *
@@ -255,8 +257,9 @@ async function main() {
     const corpus = bodies.filter((_, j) => j !== i);
     const v = await classifyComment({ ...contributions[i], corpus, pangram: pangramDetect });
     verdicts.push(v);
+    const detail = v.reason ? ` (${v.reason})` : '';
     console.log(
-      `   ${v.isHuman ? '🧑 human' : '🤖 ai/bot'} via ${v.method} — @${contributions[i].login}`
+      `   ${v.isHuman ? '🧑 human' : '🤖 ai/bot'} via ${v.method}${detail} — @${contributions[i].login}`
     );
   }
   applyLabels(number, isPr, current, decideLabels(verdicts));
