@@ -41,17 +41,30 @@ public final class TrayCredentialStore {
     private let keychain: TrayCredentialKeychain?
 
     public convenience init() {
-        let hasAppGroup =
-            FileManager.default.containerURL(
-                forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier) != nil
+        let container = FileManager.default.containerURL(
+            forSecurityApplicationGroupIdentifier: Self.appGroupIdentifier)
         self.init(
-            defaults: hasAppGroup
+            defaults: container != nil
                 ? UserDefaults(suiteName: Self.appGroupIdentifier)
                 : nil,
-            keychain: hasAppGroup
-                ? SystemTrayCredentialKeychain(accessGroup: Self.keychainAccessGroup)
-                : nil
+            keychain: Self.makeSecretStore(container: container)
         )
+    }
+
+    /// macOS File Provider cannot claim `keychain-access-groups`: that restricted
+    /// entitlement needs an appex-specific Developer ID profile (the host profile
+    /// provisions `com.slicc.sliccstart` only). AMFI then refuses launch with
+    /// extensionKit error 2. Share the join URL through the app-group container
+    /// instead. iOS already ships a profile, so it keeps using the keychain.
+    private static func makeSecretStore(container: URL?) -> TrayCredentialKeychain? {
+        guard let container else { return nil }
+        #if os(macOS)
+            return AppGroupFileSecretStore(
+                directory: container.appendingPathComponent(
+                    "Library/Application Support/slicc-tray-credentials", isDirectory: true))
+        #else
+            return SystemTrayCredentialKeychain(accessGroup: Self.keychainAccessGroup)
+        #endif
     }
 
     init(defaults: UserDefaults?, keychain: TrayCredentialKeychain?) {
@@ -109,6 +122,46 @@ public final class TrayCredentialStore {
         for key in MetadataKey.all {
             defaults.removeObject(forKey: key)
         }
+    }
+}
+
+/// App-group file used on macOS so the File Provider can read the join URL
+/// without the restricted `keychain-access-groups` entitlement.
+final class AppGroupFileSecretStore: TrayCredentialKeychain {
+    private let fileURL: URL
+    private let fileManager: FileManager
+
+    init(directory: URL, fileManager: FileManager = .default) {
+        fileURL = directory.appendingPathComponent("join-url", isDirectory: false)
+        self.fileManager = fileManager
+    }
+
+    func read() -> Data? {
+        try? Data(contentsOf: fileURL)
+    }
+
+    func write(_ data: Data) -> Bool {
+        let directory = fileURL.deletingLastPathComponent()
+        let tempURL = directory.appendingPathComponent(".join-url.tmp", isDirectory: false)
+        do {
+            try fileManager.createDirectory(at: directory, withIntermediateDirectories: true)
+            try data.write(to: tempURL, options: .atomic)
+            try fileManager.setAttributes(
+                [.posixPermissions: 0o600], ofItemAtPath: tempURL.path)
+            if fileManager.fileExists(atPath: fileURL.path) {
+                _ = try fileManager.replaceItemAt(fileURL, withItemAt: tempURL)
+            } else {
+                try fileManager.moveItem(at: tempURL, to: fileURL)
+            }
+            return true
+        } catch {
+            try? fileManager.removeItem(at: tempURL)
+            return false
+        }
+    }
+
+    func clear() {
+        try? fileManager.removeItem(at: fileURL)
     }
 }
 

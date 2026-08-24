@@ -107,9 +107,15 @@ describe('Sliccstart File Provider packaging', () => {
     expect(entitlements).toContain('S8LB56P782.com.slicc.sliccstart.fileprovider');
   });
 
-  it('uses the team-prefixed keychain access group (codesign does not expand AppIdentifierPrefix)', () => {
-    expect(entitlements).toContain('S8LB56P782.com.slicc.sliccstart.fileprovider.credentials');
+  it('shares Finder credentials through the team-prefixed app group, not keychain-access-groups', () => {
+    // keychain-access-groups is restricted. The host Developer ID profile
+    // provisions com.slicc.sliccstart, not the File Provider, so claiming it
+    // on the appex makes AMFI refuse launch (extensionKit error 2 / POSIX 163).
+    expect(entitlements).toContain('S8LB56P782.com.slicc.sliccstart.fileprovider');
+    expect(entitlements).not.toContain('keychain-access-groups');
+    expect(fileProviderEntitlements).not.toContain('keychain-access-groups');
     expect(entitlements).not.toContain('$(AppIdentifierPrefix)');
+    expect(fileProviderEntitlements).not.toContain('$(AppIdentifierPrefix)');
   });
 
   it('builds and embeds the File Provider appex when project.yml is present', () => {

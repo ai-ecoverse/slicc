@@ -129,6 +129,11 @@ target and port before use; handle disconnects gracefully rather than hanging.
 **Trigger patterns**
 
 - Keychain access without the matching `keychain-access-groups` entitlement.
+- `keychain-access-groups` on a Developer ID File Provider whose embedded profile
+  (or lack of one) does not provision the _appex_ bundle id. AMFI then refuses
+  spawn (`No matching profile found`, POSIX 163) and Finder still shows
+  extensionKit error 2 even when WebRTC is packaged correctly. The host profile
+  for `com.slicc.sliccstart` does not cover `com.slicc.sliccstart.fileprovider`.
 - Camera / microphone / screen-recording use without a TCC (Transparency, Consent, Control)
   check and a graceful path when consent is denied.
 - File-system or network access in `swift-server` / `swift-launcher` / `ios-app` that
@@ -143,13 +148,16 @@ target and port before use; handle disconnects gracefully rather than hanging.
 
 **Historical precedent** — Sliccstart's Finder File Provider shipped the appex without
 an embedded `WebRTC.framework` or network entitlements, so enabling the extension in
-System Settings still left Locations empty. Packaging now lives in
-`stageFileProviderAppex` + `SliccFileProvider.entitlements`.
+System Settings still left Locations empty (#2363). 6.93.0 still failed in Finder
+because the appex also claimed `keychain-access-groups` without an appex-specific
+Developer ID profile. Packaging now lives in `stageFileProviderAppex` +
+`SliccFileProvider.entitlements`; the join URL is an app-group file, not keychain.
 
 **Remediation** — declare the required entitlement / usage-description; check TCC status
 before touching a protected resource; degrade gracefully and tell the user when permission
 is denied. For an appex, embed and sign every `@rpath` framework it links, and give it
-the network entitlements its transport actually uses.
+the network entitlements its transport actually uses. Do not put restricted entitlements
+on a Developer ID appex unless a profile for _that_ bundle id is embedded.
 
 ### 6. Model metadata / provider pipeline gaps
 

@@ -8,7 +8,7 @@ Shared leader VFS / File Provider library in `packages/swift-traykit/` — the S
 
 ## Contents
 
-- `TrayCredentialStore.swift` + `TrayCredentialConfiguration.swift` — app-group defaults + keychain join URL for the appex (team-prefixed group on macOS).
+- `TrayCredentialStore.swift` + `TrayCredentialConfiguration.swift` — app-group defaults + join URL for the appex (macOS: 0600 app-group file, because Developer ID File Provider cannot claim `keychain-access-groups`; iOS: keychain).
 - `Sync/FsClient.swift` — request/response correlator for tray `fs.*` against the leader VFS.
 - `FileProvider/LeaderVFSProvider.swift` — `NSFileProvider` item/enumerator logic.
 - `FileProvider/FileProviderTrayConnection.swift` — pooled WebRTC connection for the appex process.
