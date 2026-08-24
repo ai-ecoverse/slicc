@@ -33,7 +33,6 @@
  * (`{ pattern, flags }`), and multi-target CDP enumeration at 9222.
  */
 
-import { expect, test } from '@playwright/test';
 import {
   closeCdpPageTargets,
   FAKE_LLM_BASE_URL,
@@ -43,6 +42,7 @@ import {
   submitUserMessage,
   waitForTurnComplete,
 } from './fake-llm-helpers.js';
+import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 
 const REFERENCE_MODEL = 'fake-coder-reference';

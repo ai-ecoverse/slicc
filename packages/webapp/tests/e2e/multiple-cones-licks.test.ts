@@ -16,9 +16,9 @@
  * is absent from the primary cone, which is where a regression would send it.
  */
 
-import { expect, test } from '@playwright/test';
 import licksFixture from './fake-llm/fixtures/multiple-cones-licks.json' with { type: 'json' };
 import { resetFakeLlm } from './fake-llm-helpers.js';
+import { expect, test } from './fixtures.js';
 import {
   bootMultiConeLeader,
   CONE_TEST_TIMEOUT_MS,

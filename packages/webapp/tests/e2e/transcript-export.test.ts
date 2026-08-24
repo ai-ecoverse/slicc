@@ -38,7 +38,6 @@
 
 import * as fs from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { expect, test } from '@playwright/test';
 import { unzipSync } from 'fflate';
 import {
   FAKE_LLM_BASE_URL,
@@ -47,6 +46,7 @@ import {
   seedLocalLlmProvider,
   submitUserMessage,
 } from './fake-llm-helpers.js';
+import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 
 /** Read a fixture JSON from the fake-llm fixtures directory. */

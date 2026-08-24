@@ -548,18 +548,36 @@ jobs:
             packages/webapp/test-results/
             packages/webapp/tests/e2e/test-results/
           if-no-files-found: ignore
+      - name: Show wrangler crash report
+        # The supervisor (`packages/webapp/tests/e2e/wrangler-server.ts`) appends
+        # one section per unexpected workerd exit — code, signal, and the tail of
+        # its output. Printing it here means a mid-suite crash (#2372) is visible
+        # in the job log itself, without downloading an artifact, even when the
+        # Playwright retry made the job green.
+        if: always()
+        run: |
+          if [ -f .wrangler/e2e-logs/crash-report.md ]; then
+            echo '::warning title=WRANGLER_CRASHED::wrangler dev crashed during the e2e run - see the crash report below and the wrangler-logs-e2e artifact'
+            cat .wrangler/e2e-logs/crash-report.md
+          else
+            echo 'No wrangler crash recorded.'
+          fi
       - name: Upload wrangler logs
         # wrangler writes structured startup + request logs to
-        # ~/.config/.wrangler/logs/wrangler-YYYY-MM-DD_HH-MM-SS.log even when
-        # its stderr is captured by another process; that file is where the
-        # real workerd bring-up stack ends up when the process crashes during
-        # the tail of `wrangler dev` startup. Uploading it turns an otherwise
-        # empty `X [ERROR]` in the Playwright surface into a full stack.
+        # wrangler-YYYY-MM-DD_HH-MM-SS.log even when its stderr is captured by
+        # another process; that file is where the real workerd bring-up stack
+        # ends up when the process crashes. The Playwright config points
+        # `WRANGLER_LOG_PATH` at `.wrangler/e2e-logs/` so those logs (plus the
+        # supervisor's crash report) land in the workspace and can be uploaded;
+        # the home-directory path stays listed for a wrangler invocation that
+        # does not inherit the override.
         if: always()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: wrangler-logs-e2e
-          path: ~/.config/.wrangler/logs/
+          path: |
+            .wrangler/e2e-logs/
+            ~/.config/.wrangler/logs/
           if-no-files-found: ignore
 
   node-server:

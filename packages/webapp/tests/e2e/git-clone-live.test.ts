@@ -29,7 +29,7 @@
  *   Run: npm run test:e2e -- git-clone-live
  */
 
-import { expect, test } from '@playwright/test';
+import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 
 const CLONE_URL = 'https://github.com/ai-ecoverse/skills.git';

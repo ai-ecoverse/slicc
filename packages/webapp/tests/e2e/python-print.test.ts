@@ -24,10 +24,10 @@
  *   Run: npm run test:e2e -- python-print
  */
 
-import { expect, test } from '@playwright/test';
 import { readFileSync } from 'fs';
 import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
+import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 
 const rootPkg = JSON.parse(

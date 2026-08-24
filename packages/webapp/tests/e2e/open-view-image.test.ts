@@ -32,7 +32,6 @@
  */
 
 import type { Page } from '@playwright/test';
-import { expect, test } from '@playwright/test';
 import fs from 'fs';
 import { fileURLToPath } from 'url';
 import {
@@ -43,6 +42,7 @@ import {
   submitUserMessage,
   waitForTurnComplete,
 } from './fake-llm-helpers.js';
+import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
 
 const VIEWER_MODEL = 'fake-viewer';
