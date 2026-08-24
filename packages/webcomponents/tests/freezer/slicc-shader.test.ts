@@ -179,6 +179,55 @@ describe('slicc-shader', () => {
     expect(() => el.remove()).not.toThrow();
   });
 
+  it('re-acquires a live context when the field is remounted', async () => {
+    // Regression: a tab switch unmounts and re-mounts the panel host. The
+    // teardown ends in an explicit loseContext(), and a canvas holding a lost
+    // context hands that same dead context back from getContext() forever — so
+    // the remounted field used to come back permanently frozen (or blank behind
+    // an unset `no-webgl`). Re-init must swap in a fresh canvas.
+    const el = mount({ mode: 'scoop' });
+    await frame();
+    await frame();
+    if (el.noWebgl) return; // no WebGL in this runner at all
+    const first = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+    expect(first.getContext('webgl')?.isContextLost()).toBe(false);
+
+    el.remove();
+    await frame();
+    expect(first.getContext('webgl')?.isContextLost()).toBe(true);
+
+    document.body.appendChild(el);
+    await frame();
+    await frame();
+
+    const second = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+    expect(second.getContext('webgl')?.isContextLost()).toBe(false);
+    expect(second).not.toBe(first);
+    expect(el.noWebgl).toBe(false);
+    // and the shadow root still holds exactly one canvas, ahead of the fallback
+    expect(el.shadowRoot?.querySelectorAll('canvas')).toHaveLength(1);
+    expect(el.shadowRoot?.firstElementChild).toBe(second);
+  });
+
+  it('reflects no-webgl when the acquired context is already lost', async () => {
+    // A context that comes back dead (and cannot be replaced) must degrade to
+    // the CSS gradient rather than park on unusable handles.
+    const el = mount();
+    await frame();
+    if (el.noWebgl) return;
+    const spy = vi
+      .spyOn(HTMLCanvasElement.prototype, 'getContext')
+      .mockReturnValue({ isContextLost: () => true } as unknown as WebGLRenderingContext);
+    try {
+      el.remove();
+      document.body.appendChild(el);
+      await frame();
+      expect(el.noWebgl).toBe(true);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
   it('releases partial GL resources when initialization fails', () => {
     const createBufferSpy = vi
       .spyOn(WebGLRenderingContext.prototype, 'createBuffer')
@@ -477,6 +526,71 @@ describe('slicc-shader', () => {
       // 60+. Wide bounds for slow CI — do not tighten.
       expect(spy.mock.calls.length).toBeGreaterThanOrEqual(3);
       expect(spy.mock.calls.length).toBeLessThanOrEqual(22);
+    });
+
+    it('draws nothing once unmounted (the disconnect energy win)', async () => {
+      // #2214's teardown must keep working: an unmounted field releases its GL
+      // context and stops drawing outright. The remount fix must not turn the
+      // teardown into a no-op to make re-init easier.
+      const el = mount({ mode: 'scoop' });
+      if (el.noWebgl) return;
+      await wait(100);
+      const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+      el.remove();
+      const spy = spyDraws();
+      await wait(400);
+      expect(spy.mock.calls.length).toBe(0);
+      expect(canvas.getContext('webgl')?.isContextLost()).toBe(true);
+    });
+
+    it('a remounted animated field runs on the ambient budget, not display rate', async () => {
+      // Perf guard on the remount path (#2214): coming back from a tab switch
+      // must return to the 15fps ambient cadence, never the pre-#2214 burn.
+      const el = mount({ mode: 'scoop' });
+      if (el.noWebgl) return;
+      await wait(100);
+      el.remove();
+      document.body.appendChild(el);
+      await wait(1000); // past BURST_MS, so only ambient frames are counted
+      const spy = spyDraws();
+      await wait(1000);
+      // Same bounds as the post-burst ambient test — do not tighten.
+      expect(spy.mock.calls.length).toBeGreaterThanOrEqual(3);
+      expect(spy.mock.calls.length).toBeLessThanOrEqual(22);
+    });
+
+    it('a remounted static field renders once and re-stops', async () => {
+      // The true-static-stop guarantee must survive a remount too: cone at
+      // speed=0 repaints its one frame on connect, then the loop terminates.
+      const el = mount({ speed: '0' });
+      if (el.noWebgl) return;
+      await settle();
+      el.remove();
+      const spy = spyDraws();
+      document.body.appendChild(el);
+      await waitForDraws(spy, 1, 2000); // the one remount frame
+      await expectStopped(spy); // ...and then nothing
+    });
+
+    it('a remounted field keeps the DPR-1 backing-store cap', async () => {
+      // The fresh canvas must inherit the #2214 resolution cap. Measured under a
+      // stubbed ratio of 2 — at the runner's native ratio of 1 the cap is a
+      // no-op and the assertion would pass without proving anything.
+      const original = Object.getOwnPropertyDescriptor(window, 'devicePixelRatio');
+      Object.defineProperty(window, 'devicePixelRatio', { value: 2, configurable: true });
+      try {
+        const el = mount({ mode: 'scoop' });
+        if (el.noWebgl) return;
+        await wait(100);
+        el.remove();
+        document.body.appendChild(el);
+        await wait(300);
+        const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+        expect(canvas.width).toBe(240); // min(cap 1, ratio 2) × 240px — 480 if uncapped
+      } finally {
+        if (original) Object.defineProperty(window, 'devicePixelRatio', original);
+        else delete (window as { devicePixelRatio?: number }).devicePixelRatio;
+      }
     });
 
     it('resumes rendering after the WebGL context is restored (animated)', {

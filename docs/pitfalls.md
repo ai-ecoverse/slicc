@@ -1590,3 +1590,43 @@ Every decorative/ambient animation loop must carry a frame budget:
 - `packages/webcomponents/src/freezer/frame-budget.ts` — shared gating logic
 - `packages/webcomponents/src/freezer/slicc-shader.ts` — reference consumer
 - `docs/webcomponents-details.md` — the companion no-reflow-per-frame rule
+
+## A Lost WebGL Context Poisons Its Canvas Forever
+
+**The Incident**
+
+`<slicc-shader>` died on a tab switch and never came back. The console named the
+culprit: `WebGL: CONTEXT_LOST_WEBGL: loseContext: context lost` — the `loseContext:`
+prefix means the loss was _programmatic_, not a GPU eviction. It was the component's
+own teardown. `disconnectedCallback()` ends in `#dispose()`, which releases GPU
+memory with `getExtension('WEBGL_lose_context').loseContext()`. Switching tabs
+unmounts the panel host, so the field tore itself down correctly — and then
+`connectedCallback()` re-ran `#initGl()` against the **same** `<canvas>` element
+created once in the constructor.
+
+That is the trap: a canvas whose context has been lost returns that same dead
+context from `getContext()` forever. The UA only ever issues a new one after a
+restore _it_ initiates, and it never initiates one for a programmatic loss.
+So the remounted field came back holding invalid handles — every GL call a silent
+no-op, the last painted frame frozen on screen — with no `webglcontextrestored`
+event ever arriving to trigger the existing recovery path. Reproduced live over CDP:
+detach + reattach a healthy field, and `gl.isContextLost()` is `true` on the way back.
+
+**The Rule**
+
+If a component ever calls `loseContext()` (or must survive a context loss across a
+remount), it cannot reuse its canvas element. On re-init, check
+`gl.isContextLost()` and **replace the `<canvas>` node** before acquiring a context;
+a fresh element is the only way back to a live one. Then treat a still-lost context
+as an init failure and reflect the CSS fallback, rather than parking on dead handles
+behind a transparent canvas — a frozen field that claims to be working is worse than
+a visible gradient.
+
+Note the two recovery paths are distinct and both are needed: `webglcontextrestored`
+handles a UA-driven loss on a _live_ canvas (same context object, relink in place),
+while the fresh-canvas swap handles re-init after a teardown-driven loss.
+
+**Related Files**
+
+- `packages/webcomponents/src/freezer/slicc-shader.ts` — `#initGl` / `#replaceCanvas` / `#dispose`
+- `packages/webcomponents/tests/freezer/slicc-shader.test.ts` — remount regression test

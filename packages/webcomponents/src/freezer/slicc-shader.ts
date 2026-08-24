@@ -16,8 +16,10 @@ import { advanceFrameTs, BURST_MS, shouldRender } from './frame-budget.js';
  * synchronously with no burst). A static field — `cone` with `speed=0`, or
  * `prefers-reduced-motion` — renders once per stimulus and stops the loop
  * entirely (a `pulse()` first plays out its glow decay; reduced motion is
- * strictly one frame per wake). Pauses on disconnect and falls back to a
- * per-mode CSS gradient when WebGL is absent.
+ * strictly one frame per wake). Pauses on disconnect — releasing the GL context
+ * — and re-acquires a fresh one (on a fresh canvas) when it is mounted again, so
+ * a field that comes back after a tab switch resumes instead of staying frozen.
+ * Falls back to a per-mode CSS gradient when WebGL is absent.
  *
  * @attr mode - `cone` (default) | `scoop` | `freezer`
  * @attr tint - CSS color washed into the scoop field / event glow (the active accent)
@@ -731,18 +733,50 @@ export class SliccShader extends HTMLElement {
     return true;
   }
 
-  #initGl(): boolean {
-    const cv = this.#canvas;
-    if (!cv) return false;
+  /** Ask a canvas for a WebGL context, tolerating a throwing `getContext`. */
+  #acquireContext(cv: HTMLCanvasElement): WebGLRenderingContext | null {
     const opts: WebGLContextAttributes = { premultipliedAlpha: true, alpha: true, antialias: true };
-    let gl: WebGLRenderingContext | null = null;
     try {
-      gl = (cv.getContext('webgl', opts) ??
+      return (cv.getContext('webgl', opts) ??
         cv.getContext('experimental-webgl', opts)) as WebGLRenderingContext | null;
     } catch {
-      gl = null;
+      return null;
     }
-    if (!gl) return false;
+  }
+
+  /**
+   * Swap in a brand-new `<canvas>`, discarding the old one. A canvas whose
+   * context has been lost hands back that SAME dead context from `getContext()`
+   * forever — a new one is only ever issued after a restore the UA controls, and
+   * an explicit `loseContext()` never gets one. Replacing the element is the only
+   * way to obtain a live context. See #initGl.
+   */
+  #replaceCanvas(old: HTMLCanvasElement): HTMLCanvasElement {
+    this.#removeContextHandlers(old);
+    const fresh = h('canvas', { class: 'canvas', part: 'canvas' }) as HTMLCanvasElement;
+    if (old.parentNode) old.replaceWith(fresh);
+    else this.#root.prepend(fresh);
+    this.#canvas = fresh;
+    return fresh;
+  }
+
+  #initGl(): boolean {
+    let cv = this.#canvas;
+    if (!cv) return false;
+    let gl = this.#acquireContext(cv);
+    // Re-init on a canvas we already tore down: #dispose() ends in an explicit
+    // `loseContext()`, so every remount (a tab switch that unmounts the panel
+    // host, then re-mounts it) came back holding the dead context — GL calls
+    // no-op, nothing ever repaints, and no `webglcontextrestored` is coming
+    // because the UA does not restore a programmatic loss. A fresh canvas does.
+    if (gl?.isContextLost()) {
+      cv = this.#replaceCanvas(cv);
+      gl = this.#acquireContext(cv);
+    }
+    // A context that is still lost cannot be built on: report failure so the
+    // caller reflects `no-webgl` and the CSS gradient shows, rather than
+    // parking on dead handles behind a transparent canvas.
+    if (!gl || gl.isContextLost()) return false;
     this.#gl = gl;
     this.#installContextHandlers(cv);
     if (this.#setupGlResources()) return true;
