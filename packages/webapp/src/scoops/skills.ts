@@ -17,27 +17,31 @@ import { discoverSkills } from '../skills/index.js';
 
 const log = createLogger('skills');
 
-// Load default text files at build time using import.meta.glob
-// The '?raw' query imports file contents as strings
+// Default file CONTENTS load lazily (`eager: false` → per-file dynamic
+// chunks) so the ~400 kB of vfs-root seed text stays out of the
+// kernel-worker's boot-critical eager graph. The glob KEYS are known
+// without loading anything, so the seeding paths below `stat()` each
+// target first and invoke a loader only for a file that is actually
+// missing (or force-refreshed) — on a normal boot with a seeded VFS no
+// seed chunk is ever fetched. The first-load ratchet
+// (`check-first-load-size.mjs`) guards this staying lazy.
+// The '?raw' query imports file contents as strings.
 const defaultTextFiles = import.meta.glob(
   '/packages/vfs-root/**/*.{md,jsh,shtml,json,txt,css,js,ts,html}',
   {
     query: '?raw',
     import: 'default',
-    eager: true,
   }
-) as Record<string, string>;
+) as Record<string, () => Promise<string>>;
 
-// Load default binary files (audio, images, etc.) as base64
-// The '?inline' query gives us a data URL we can decode
+// Binary files (audio, images, etc.) as base64 data URLs via '?inline'.
 const defaultBinaryFiles = import.meta.glob(
   '/packages/vfs-root/**/*.{mp3,wav,ogg,png,jpg,jpeg,gif,webp,ico,pdf}',
   {
     query: '?inline',
     import: 'default',
-    eager: true,
   }
-) as Record<string, string>;
+) as Record<string, () => Promise<string>>;
 
 // Binary file extensions that need special handling
 const BINARY_EXTENSIONS = new Set([
@@ -80,18 +84,18 @@ const devOnlyTextFiles = __DEV__
     }) as Record<string, string>)
   : {};
 
-// Combined view of all default files
-function getDefaultFiles(): Record<string, string | Uint8Array> {
-  const result: Record<string, string | Uint8Array> = {};
+// Combined view of all default files as LOADERS keyed by import path.
+// A loader is invoked only when the seeding paths below decide the
+// target actually needs writing, so an already-seeded VFS fetches no
+// seed chunks at all.
+function getDefaultFileLoaders(): Record<string, () => Promise<string | Uint8Array>> {
+  const result: Record<string, () => Promise<string | Uint8Array>> = {};
 
-  // Add text files as-is
-  for (const [path, content] of Object.entries(defaultTextFiles)) {
-    result[path] = content;
+  for (const [path, load] of Object.entries(defaultTextFiles)) {
+    result[path] = load;
   }
-
-  // Add binary files decoded from data URLs
-  for (const [path, dataUrl] of Object.entries(defaultBinaryFiles)) {
-    result[path] = decodeDataUrl(dataUrl);
+  for (const [path, load] of Object.entries(defaultBinaryFiles)) {
+    result[path] = async () => decodeDataUrl(await load());
   }
 
   // Merge dev-only skills, remapping to the VFS-root namespace so
@@ -101,7 +105,7 @@ function getDefaultFiles(): Record<string, string | Uint8Array> {
       '/packages/dev-tools/vfs-dev-skills/',
       '/packages/vfs-root/workspace/skills/'
     );
-    result[remapped] = content;
+    result[remapped] = () => Promise.resolve(content);
   }
 
   return result;
@@ -347,9 +351,9 @@ export async function createDefaultSkills(
   skillsDir: string = '/workspace/skills'
 ): Promise<void> {
   const prefix = '/packages/vfs-root';
-  const defaultFiles = getDefaultFiles();
+  const defaultFiles = getDefaultFileLoaders();
 
-  for (const [importPath, content] of Object.entries(defaultFiles)) {
+  for (const [importPath, load] of Object.entries(defaultFiles)) {
     // Convert import path like '/packages/vfs-root/workspace/skills/browser/SKILL.md'
     // to VFS path like '/workspace/skills/browser/SKILL.md'
     const vfsPath = importPath.slice(prefix.length);
@@ -375,14 +379,14 @@ export async function createDefaultSkills(
       await fs.stat(targetPath);
       // File exists, skip
     } catch {
-      // File doesn't exist, create it
+      // File doesn't exist — only now fetch the seed chunk and create it
       const parentDir = targetPath.substring(0, targetPath.lastIndexOf('/'));
       try {
         await fs.mkdir(parentDir, { recursive: true });
       } catch {
         // Directory exists
       }
-      await fs.writeFile(targetPath, content);
+      await fs.writeFile(targetPath, await load());
       log.info('Created default file', { path: targetPath });
     }
   }
@@ -406,9 +410,9 @@ const ALWAYS_OVERWRITE_SHARED = new Set<string>([
  */
 export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
   const prefix = '/packages/vfs-root';
-  const defaultFiles = getDefaultFiles();
+  const defaultFiles = getDefaultFileLoaders();
 
-  for (const [importPath, content] of Object.entries(defaultFiles)) {
+  for (const [importPath, load] of Object.entries(defaultFiles)) {
     const vfsPath = importPath.slice(prefix.length);
 
     // Only copy files that belong under /shared/
@@ -423,7 +427,7 @@ export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
         // File exists, skip
         continue;
       } catch {
-        // File doesn't exist — fall through to create it.
+        // File doesn't exist — fall through to fetch the chunk + create it.
       }
     }
 
@@ -433,7 +437,7 @@ export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
     } catch {
       // Directory exists
     }
-    await fs.writeFile(vfsPath, content);
+    await fs.writeFile(vfsPath, await load());
     log.info(alwaysOverwrite ? 'Refreshed bundled shared file' : 'Created default shared file', {
       path: vfsPath,
     });

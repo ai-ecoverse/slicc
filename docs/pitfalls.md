@@ -885,7 +885,12 @@ between them, so a single import edge can duplicate megabytes:
   landed eagerly in one file — a second copy of chunks the app already had.
 
 Lazy `import()` bounds what a user DOWNLOADS at boot; it does not bound what a
-build SHIPS. The total-JS-payload budget counts every emitted file.
+build SHIPS. The total-JS-payload budget counts every emitted file. The inverse
+also holds: a static import of an existing lazy chunk grows no file and moves no
+total, but regresses the cold boot — `check-first-load-size.mjs` (part of
+`npm run size -w @slicc/webapp`) gates that by measuring the eager import
+closures of the page and kernel-worker entries against
+`packages/webapp/first-load-budget.json`.
 
 **The Solution**
 

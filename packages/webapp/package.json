@@ -4,23 +4,11 @@
   "type": "module",
   "scripts": {
     "build": "vite build --config vite.config.ts",
-    "size": "size-limit",
+    "size": "size-limit && node ../dev-tools/tools/check-first-load-size.mjs",
     "test": "vitest run --root ../.. --config vitest.config.ts --project webapp",
     "typecheck": "tsc --noEmit -p ../../tsconfig.json"
   },
   "size-limit": [
-    {
-      "name": "webapp: main entry chunk",
-      "path": "../../dist/ui/assets/main-*.js",
-      "brotli": false,
-      "limit": "24 kB"
-    },
-    {
-      "name": "webapp: kernel worker",
-      "path": "../../dist/ui/assets/kernel-worker-*.js",
-      "brotli": false,
-      "limit": "1965 kB"
-    },
     {
       "name": "webapp: total JS payload",
       "path": "../../dist/ui/**/*.js",

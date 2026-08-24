@@ -361,7 +361,6 @@
       "includes": [
         "packages/webapp/providers/adobe.ts",
         "packages/webapp/src/kernel/cdp-worker-proxy.ts",
-        "packages/webapp/src/providers/index.ts",
         "packages/webapp/src/shell/supplemental-commands/playwright/handlers/routing.ts",
         "packages/webapp/tests/kernel/realm/js-realm-drain.test.ts",
         "packages/webapp/tests/providers/adobe-provider.test.ts"

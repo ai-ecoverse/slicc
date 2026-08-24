@@ -96,19 +96,24 @@ let registerPromise: Promise<void> | null = null;
  * first call completes.
  */
 export function registerProviders(): Promise<void> {
-  if (registerPromise) return registerPromise;
+  if (registerPromise !== null) return registerPromise;
   registerPromise = (async () => {
+    // Fetch every provider chunk in parallel, then register in glob
+    // order — a serial `await importer()` loop waterfalls ~30 lazy
+    // chunks one round-trip at a time during boot. Registration order
+    // (registry insertion order = UI listing order) is preserved by
+    // iterating the settled array, not the fetch completion order.
+    const builtIn = await Promise.all(Object.values(builtInModules).map((load) => load()));
     // Built-in extensions (filtered by build config)
-    for (const [_path, importer] of Object.entries(builtInModules)) {
-      const mod = await importer();
+    for (const mod of builtIn) {
       if (!mod.config) continue;
       if (!shouldIncludeProvider(mod.config.id)) continue;
       providerConfigRegistry.set(mod.config.id, mod.config);
       mod.register?.();
     }
+    const external = await Promise.all(Object.values(externalModules).map((load) => load()));
     // External providers (always included, never filtered)
-    for (const [_path, importer] of Object.entries(externalModules)) {
-      const mod = await importer();
+    for (const mod of external) {
       if (!mod.config) continue;
       providerConfigRegistry.set(mod.config.id, mod.config);
       mod.register?.();

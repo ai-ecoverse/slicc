@@ -1,0 +1,5 @@
+{
+  "//": "First-load (cold-cache) eager-import-closure budgets in raw kB, checked by packages/dev-tools/tools/check-first-load-size.mjs after a webapp build. pageEagerKb = static import graph of index.html; workerEagerKb = static import graph of the kernel-worker entry. These are ratchets: tighten as the eager graphs shrink; raising one needs a reason in the PR body.",
+  "pageEagerKb": 740,
+  "workerEagerKb": 4160
+}
