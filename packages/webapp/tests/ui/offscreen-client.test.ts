@@ -188,6 +188,57 @@ describe('OffscreenClient', () => {
     expect(events.length).toBe(0);
   });
 
+  it('renders a scoop’s ROUTED tool_ui in the owning cone without touching its stream (#2312, Codex P1)', () => {
+    // The card is displayed in the cone, but the event still belongs to the
+    // scoop that raised it. Rewriting `scoopJid` would key the cone's
+    // `currentMessageId` off it, opening a synthetic assistant stream the
+    // cone never closes (the real `response_done` arrives under the scoop),
+    // and the cone's own completion could clear the pointer before
+    // `tool_ui_done`, stranding the mounted card.
+    client.setSelectedScoopJid('cone_123');
+    const handle = client.createAgentHandle();
+    const events: Array<{ type: string; messageId?: string }> = [];
+    handle.onEvent((e) => events.push(e as { type: string; messageId?: string }));
+
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'scoop_worker',
+      displayScoopJid: 'cone_123',
+      eventType: 'tool_ui',
+      toolName: 'mount',
+      requestId: 'req-1',
+      html: '<i/>',
+    });
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'scoop_worker',
+      displayScoopJid: 'cone_123',
+      eventType: 'tool_ui_done',
+      requestId: 'req-1',
+    });
+
+    // The card reaches the selected cone…
+    expect(events.map((e) => e.type)).toEqual(['tool_ui', 'tool_ui_done']);
+    // …anchored on a stable synthetic id (the dip is disposed by requestId),
+    // and with NO message_start manufactured on the cone.
+    expect(events.every((e) => e.messageId === 'tool-ui-req-1')).toBe(true);
+
+    // The cone's own next reply opens its OWN stream, unpolluted: a fresh
+    // message_start, not a continuation of a phantom one.
+    simulateMessage('offscreen', {
+      type: 'agent-event',
+      scoopJid: 'cone_123',
+      eventType: 'text_delta',
+      text: 'hello',
+    });
+    expect(events.map((e) => e.type)).toEqual([
+      'tool_ui',
+      'tool_ui_done',
+      'message_start',
+      'content_delta',
+    ]);
+  });
+
   it('does not fire onScoopActivity for tool_end / response_done', () => {
     // Activity ping is restricted to the four "loud" event types so the
     // attention attribute doesn't flap on every micro-event.

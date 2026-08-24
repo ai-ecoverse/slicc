@@ -1068,6 +1068,34 @@ export class OffscreenClient implements KernelClientFacade {
    * `handleAgentEvent` to keep that switch under the complexity cap.
    */
   private handleToolUiAgentEvent(msg: AgentEventMsg): void {
+    // A card ROUTED to another unit (a scoop's approval shown in its owning
+    // cone, #2312) must not touch that unit's streaming bookkeeping: the
+    // originating scoop still owns this `scoopJid`, and its own
+    // `response_done` / `turn_end` will arrive under it. Opening a
+    // `message_start` on the cone here would leave a synthetic, never-closed
+    // assistant stream — and the cone's own completion could clear the
+    // pointer before `tool_ui_done`, stranding the mounted card. The dip is
+    // appended to the thread column and disposed by `requestId`, so it needs
+    // no real message anchor: a stable synthetic id is enough.
+    if (msg.displayScoopJid) {
+      const routedId = `tool-ui-${msg.requestId ?? ''}`;
+      if (msg.eventType === 'tool_ui') {
+        this.emitToUI({
+          type: 'tool_ui',
+          messageId: routedId,
+          toolName: msg.toolName ?? '',
+          requestId: msg.requestId ?? '',
+          html: msg.html ?? '',
+        });
+      } else if (msg.eventType === 'tool_ui_done') {
+        this.emitToUI({
+          type: 'tool_ui_done',
+          messageId: routedId,
+          requestId: msg.requestId ?? '',
+        });
+      }
+      return;
+    }
     if (msg.eventType === 'tool_ui') {
       let msgId = this.currentMessageId.get(msg.scoopJid);
       if (!msgId) {
@@ -1129,7 +1157,11 @@ export class OffscreenClient implements KernelClientFacade {
         break;
     }
 
-    if (msg.scoopJid !== this.selectedScoopJid) return;
+    // An interactive card can be ROUTED away from its origin (#2312): the
+    // gate follows where it is DISPLAYED, not where it came from. Every other
+    // event type leaves `displayScoopJid` unset, so this is a no-op for them.
+    const displayJid = msg.displayScoopJid ?? msg.scoopJid;
+    if (displayJid !== this.selectedScoopJid) return;
 
     switch (msg.eventType) {
       case 'text_delta': {

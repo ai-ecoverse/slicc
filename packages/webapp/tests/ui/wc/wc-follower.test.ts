@@ -592,6 +592,99 @@ describe('mountWcUiFollower', () => {
     expect(orderFor()).toEqual(['cone-a', 'cone-b', 'scoop-b', 'scoop-a']);
   });
 
+  it('unmounts the composer when the follower views a scoop, and restores it on the cone (#2312)', async () => {
+    // Same rule, same descriptor role as the leader: users never talk to a
+    // scoop, on either side of the tray.
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    const switcher = app.querySelector('slicc-agent-tabs')!;
+    const composer = app.querySelector('slicc-composer')!;
+    const inputCard = app.querySelector('slicc-input-card')!;
+
+    opts.onScoopsList?.(
+      [
+        { jid: 'cone-a', name: 'cone', isCone: true, parentId: null },
+        { jid: 'scoop-a', name: 'helper', isCone: false, parentId: 'cone-a' },
+      ] as never,
+      'cone-a'
+    );
+    // Connected: the cone's composer is live.
+    opts.onConnectionChange?.(true);
+    expect(composer.hasAttribute('hidden')).toBe(false);
+    expect(inputCard.hasAttribute('disabled')).toBe(false);
+
+    switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'scoop-a' } }));
+    expect(composer.hasAttribute('hidden')).toBe(true);
+    expect(inputCard.hasAttribute('disabled')).toBe(true);
+
+    switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'cone-a' } }));
+    expect(composer.hasAttribute('hidden')).toBe(false);
+    expect(inputCard.hasAttribute('disabled')).toBe(false);
+  });
+
+  it('unmounts the follower composer for a scoop with the multiple-cones flag OFF (#2312)', async () => {
+    // The read-only view is the one part of the multi-cones stack that ships
+    // unflagged — the follower reaches it through `summaryRole`, which reads
+    // no flag. Pins that against a future gate on the selection wiring.
+    const { FEATURE_FLAG_STORAGE_KEY } = await import('../../../src/core/feature-flags.js');
+    window.localStorage.setItem(
+      FEATURE_FLAG_STORAGE_KEY,
+      JSON.stringify({ 'multiple-cones': 'off' })
+    );
+    try {
+      const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+      const app = document.getElementById('app')!;
+      await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+      const opts = startFollowerSpy.mock.calls[0]![0];
+      const switcher = app.querySelector('slicc-agent-tabs')!;
+      const composer = app.querySelector('slicc-composer')!;
+
+      opts.onScoopsList?.(
+        [
+          { jid: 'cone-a', name: 'cone', isCone: true, parentId: null },
+          { jid: 'scoop-a', name: 'helper', isCone: false, parentId: 'cone-a' },
+        ] as never,
+        'cone-a'
+      );
+      opts.onConnectionChange?.(true);
+      expect(composer.hasAttribute('hidden')).toBe(false);
+
+      switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'scoop-a' } }));
+      expect(composer.hasAttribute('hidden')).toBe(true);
+    } finally {
+      window.localStorage.removeItem(FEATURE_FLAG_STORAGE_KEY);
+    }
+  });
+
+  it('keeps a scoop’s composer unmounted across a reconnect (#2312)', async () => {
+    // The connection state must never outrank the read-only rule: a
+    // reconnect while a scoop is viewed used to be the one place that would
+    // re-enable the input.
+    const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
+    const app = document.getElementById('app')!;
+    await mountWcUiFollower(app, { stage: () => {} } as never, 'follower');
+    const opts = startFollowerSpy.mock.calls[0]![0];
+    const switcher = app.querySelector('slicc-agent-tabs')!;
+    const composer = app.querySelector('slicc-composer')!;
+    const inputCard = app.querySelector('slicc-input-card')!;
+
+    opts.onScoopsList?.(
+      [
+        { jid: 'cone-a', name: 'cone', isCone: true, parentId: null },
+        { jid: 'scoop-a', name: 'helper', isCone: false, parentId: 'cone-a' },
+      ] as never,
+      'cone-a'
+    );
+    switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'scoop-a' } }));
+    opts.onConnectionChange?.(false);
+    opts.onConnectionChange?.(true);
+
+    expect(composer.hasAttribute('hidden')).toBe(true);
+    expect(inputCard.hasAttribute('disabled')).toBe(true);
+  });
+
   it('applies status only for the viewed scoop while accepting legacy unscoped status', async () => {
     const { WcChatController } = await import('../../../src/ui/wc/wc-chat-controller.js');
     const setProcessing = vi.spyOn(WcChatController.prototype, 'setProcessing');

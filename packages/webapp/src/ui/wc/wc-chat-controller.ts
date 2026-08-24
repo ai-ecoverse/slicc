@@ -293,6 +293,19 @@ export class WcChatController {
    */
   readonly #sessionToolCalls = new Set<string>();
 
+  /**
+   * The selected unit is one the user cannot address — a scoop (#2312).
+   * The transcript still renders in full; every affordance that would act on
+   * the unit is dropped: error-card CTAs and agent-driven `tool_ui` dips.
+   * (The composer band itself is unmounted by the host, see
+   * `applyComposerAvailability`.) Set by the host on every selection change,
+   * BEFORE the messages for the new selection arrive.
+   */
+  #readOnly = false;
+
+  /** Queue handed back by the host after a read-only detour; see {@link restoreQueued}. */
+  #pendingQueueRestore: ChatMessage[] | null = null;
+
   constructor(options: WcChatControllerOptions) {
     this.#thread = options.thread;
     this.#agent = options.agent;
@@ -324,6 +337,25 @@ export class WcChatController {
     this.#toolProgress.clear();
     this.#sessionToolCalls.clear();
     this.#publishToolProgress();
+  }
+
+  /**
+   * Mark the thread as belonging to a unit the user cannot address (#2312).
+   * Applies to messages rendered from here on — the host sets it as part of
+   * the selection change, so the `loadMessages` that follows renders under
+   * the new mode — and disposes any dip left over from the previous unit.
+   */
+  setReadOnly(readOnly: boolean): void {
+    if (this.#readOnly === readOnly) return;
+    this.#readOnly = readOnly;
+    if (readOnly) {
+      for (const id of [...this.#toolUiDips.keys()]) this.#disposeToolUiDip(id);
+    }
+  }
+
+  /** Whether this thread is currently rendering a read-only unit. */
+  get readOnly(): boolean {
+    return this.#readOnly;
   }
 
   get processing(): boolean {
@@ -392,6 +424,52 @@ export class WcChatController {
     const next = this.#queued.filter((m) => m.id !== id);
     if (next.length === this.#queued.length) return;
     this.#queued = next;
+    this.#fireQueuedChange();
+  }
+
+  /**
+   * Detach the live queue WITHOUT cancelling it (#2312). Selecting a scoop is
+   * a read-only detour, not the user dropping a prompt by going somewhere
+   * else to talk — there is nowhere else. The host holds the items for the
+   * return trip and hands them back through {@link restoreQueued}; the
+   * ordinary `loadMessages` cancel path is bypassed because the queue is
+   * already gone by the time the scoop's replay lands.
+   */
+  stashQueued(): ChatMessage[] {
+    const items = this.#queued;
+    if (items.length === 0) return [];
+    this.#queued = [];
+    this.#fireQueuedChange();
+    return items;
+  }
+
+  /**
+   * Re-attach a queue taken by {@link stashQueued}. Applied AFTER the next
+   * {@link loadMessages} — the replay for the returning unit arrives
+   * asynchronously and clears the pile, so restoring eagerly would lose it
+   * again. A second `loadMessages` (a real session reload) finds no pending
+   * restore and behaves exactly as before.
+   */
+  restoreQueued(items: readonly ChatMessage[]): void {
+    this.#pendingQueueRestore = items.length > 0 ? [...items] : null;
+  }
+
+  /**
+   * Re-attach a queue held across a read-only detour, RECONCILED against the
+   * replay that just landed (Codex P2 on #2312). While the user was away the
+   * cone's turn may have consumed some of those prompts; they are already in
+   * `messages`, so re-adding the raw snapshot would show them twice — once as
+   * a real bubble and once as a queue card that never clears. Only prompts
+   * the replay does not know about are still queued. One-shot: a later reload
+   * finds nothing pending and behaves exactly as before.
+   */
+  #applyPendingQueueRestore(messages: readonly ChatMessage[]): void {
+    if (!this.#pendingQueueRestore) return;
+    const replayed = new Set(messages.map((m) => m.id));
+    const stillQueued = this.#pendingQueueRestore.filter((m) => !replayed.has(m.id));
+    this.#pendingQueueRestore = null;
+    if (stillQueued.length === 0) return;
+    this.#queued = stillQueued;
     this.#fireQueuedChange();
   }
 
@@ -480,6 +558,7 @@ export class WcChatController {
       this.#queued = [];
     }
     if (hadQueued) this.#fireQueuedChange();
+    this.#applyPendingQueueRestore(messages);
     // Runs of same-channel licks render as ONE collated card ("×2" pill).
     this.#messages = collateLickMessages(messages);
     // A canonical replay can land mid-turn (rehydrate after a scoop switch /
@@ -1080,6 +1159,11 @@ export class WcChatController {
    * what the worker-side mount backend is waiting on).
    */
   #handleToolUI(_messageId: string, requestId: string, html: string): void {
+    // A read-only unit (a scoop, #2312) never renders an approval card: the
+    // leader routes every scoop `tool_ui` to the cone that owns it, and this
+    // is the belt-and-braces half — an event from an older leader, or one
+    // racing a selection change, must not resurrect a card here.
+    if (this.#readOnly) return;
     // Defensive: a re-entrant tool_ui for the same id replaces the
     // prior card (avoids stacking duplicates after an agent retry).
     this.#disposeToolUiDip(requestId);
@@ -1270,7 +1354,7 @@ export class WcChatController {
    */
   #safeMessageEls(message: ChatMessage): HTMLElement[] {
     try {
-      return messageEls(message);
+      return messageEls(message, { readOnly: this.#readOnly });
     } catch (err) {
       console.error('[wc-chat] message render failed — degrading to plain bubble', err);
       const fallback = document.createElement(

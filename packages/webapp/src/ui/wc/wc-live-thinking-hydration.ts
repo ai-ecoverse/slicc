@@ -6,8 +6,14 @@ import type { OffscreenClient } from '../offscreen-client.js';
 import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
 import { metaThinkingForScoop } from './wc-follower-model-surface.js';
 import { scoopColor } from './wc-scoop-color.js';
-import { applyShellContext, type WcShellRefs } from './wc-shell.js';
-import { rootFolderForContext, rootForSelection, threadContextFor } from './wc-unit-context.js';
+import { applyComposerAvailability, applyShellContext, type WcShellRefs } from './wc-shell.js';
+import {
+  isReadOnlyRole,
+  rootFolderForContext,
+  rootForSelection,
+  threadContextFor,
+  unitRoleFor,
+} from './wc-unit-context.js';
 
 export {
   effortOverrideForAgent,
@@ -46,23 +52,33 @@ export function shouldSkipSessionHydration(
 /**
  * Point the thread chrome at a scoop (context label + accent hue + model).
  *
- * `roster` lets the model pill follow the unit the PICKER edits: a selected
- * scoop shows the model of the cone that owns it (#2310), because a pick made
- * while a scoop is selected lands on that cone and scoops are never
- * retargeted. Thinking stays per selected unit. Without a roster (older
- * callers) the selected unit answers for itself.
+ * A scoop is a READ-ONLY transcript (#2312): the whole composer band is
+ * hidden, so its model and thinking pills are not shown. They are still kept
+ * CORRECT rather than skipped — the band is hidden, not torn down, and
+ * leaving a stale pill inside it would surface the moment any future path
+ * shows the band without a fresh `applyThreadContext`.
+ *
+ * `roster` lets the model pill follow the unit the PICKER edits (#2310): a
+ * pick made while a scoop is selected lands on the cone that owns it, and
+ * scoops are never retargeted. Thinking stays per selected unit. Without a
+ * roster (older callers) the selected unit answers for itself.
  */
 export async function applyThreadContext(
   refs: WcShellRefs,
   scoop: RegisteredScoop,
   roster: readonly RegisteredScoop[] = []
 ): Promise<void> {
+  const role = unitRoleFor(scoop);
+  const readOnly = isReadOnlyRole(role);
   refs.thread.setAttribute('context', threadContextFor(scoop));
   const isRoot = isRootUnit(scoop);
   const accent = scoopColor({ isRoot, name: scoop.name });
   refs.thread.setAttribute('accent', accent);
   refs.switcher.setAttribute('active', scoop.jid);
+  // The 'scoop' shell mood (shader + accent) is unchanged — only the
+  // interactive chrome goes away.
   applyShellContext(refs, isRoot ? { kind: 'cone' } : { kind: 'scoop', accent });
+  applyComposerAvailability(refs, readOnly);
   const lockedEffort = localStorage.getItem('slicc_locked_effort_level');
   const thinking = thinkingFor(scoop);
   refs.composerMeta.setAttribute(

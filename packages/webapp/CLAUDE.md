@@ -110,7 +110,11 @@ Non-obvious rules:
   compaction sink is bound from the unit's own record, and the agentic curator
   takes a `cone` (`runAgenticMemoryPass`) — it curates that cone's file, from
   that cone's workspace, under a per-cone agent name, with `MEMORY.md`'s
-  primary-relative paths rebased onto it. See `docs/work-unit.md`.
+  primary-relative paths rebased onto it.
+  **Users never talk to a scoop** (#2312): a selected scoop is READ-ONLY
+  (`isReadOnlyRole` — one rule, never a second branch) and anything it needs
+  from a human goes to the OWNING cone, never `defaultRoot()` for a root.
+  See `docs/work-unit.md`.
 - **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without
   queue/watermark loss; user `web` bypasses the window (immediate/awaited,
   prevents deferral). `transcript-limits.ts` caps bridge/event transcripts at 64 KB

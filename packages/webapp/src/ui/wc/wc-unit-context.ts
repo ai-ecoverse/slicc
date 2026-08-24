@@ -124,3 +124,29 @@ export function rootForConeFolder(
   if (!folder) return defaultRootOf(scoops);
   return scoops.find((s) => isRootUnit(s) && s.folder === folder) ?? defaultRootOf(scoops);
 }
+
+/**
+ * Presentation role of a unit — the `type` the switcher descriptors already
+ * carry (`SwitcherScoop.type`, `ScoopSummary` via `summaryIsRoot`). Derived
+ * from the ownership edge, never from the legacy `isCone` flag.
+ */
+export type UnitRole = 'cone' | 'scoop';
+
+/** The role of a registered unit: a root is a cone, anything owned is a scoop. */
+export function unitRoleFor(unit: Pick<RegisteredScoop, 'parentJid'>): UnitRole {
+  return isRootUnit(unit) ? 'cone' : 'scoop';
+}
+
+/**
+ * Users never talk to a scoop (#2312). Selecting one opens a READ-ONLY
+ * transcript: no composer, no queued pile, no model picker or thinking pill,
+ * no error-card CTAs and no approval cards — every scoop request that needs
+ * a human is routed to the cone that owns it instead.
+ *
+ * This is the ONE place that rule is stated. Leader and follower both reach
+ * it through the role on their switcher descriptor, so neither grows a second
+ * code path.
+ */
+export function isReadOnlyRole(role: UnitRole): boolean {
+  return role === 'scoop';
+}
