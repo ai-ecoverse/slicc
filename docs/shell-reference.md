@@ -138,6 +138,21 @@ packages still land in `<cwd>/node_modules` and update the nearest project
 `package.json`. Module resolution and `ipx`/`npx` also search the global tree after
 the cwd-relative `node_modules` walk.
 
+### `ipk uninstall -g` / `npm uninstall -g`
+
+`ipk uninstall -g <pkg>` (aliases: `npm uninstall -g`, `npm remove -g`, `npm rm -g`)
+removes the named package from `/shared/lib/package.json`, prunes orphaned
+top-level entries from `/shared/lib/node_modules`, re-resolves remaining global
+direct dependencies, and refreshes `.bin` shims plus `/shared/bin` delegators.
+Without `-g`, uninstall removes entries from the cwd `package.json` and reconciles
+`<cwd>/node_modules` the same way.
+
+### `ipk list -g` / `npm root -g`
+
+`npm list -g` (and `ipk list -g`) prints direct global dependencies with installed
+versions. `npm root -g` prints `/shared/lib/node_modules`; `npm root` without `-g`
+prints `<cwd>/node_modules`.
+
 ### `ipx` / `npx` built-in redirects
 
 `ipx` runs JavaScript package bins from the nearest installed `node_modules`, then the
