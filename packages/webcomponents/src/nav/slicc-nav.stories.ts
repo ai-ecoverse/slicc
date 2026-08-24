@@ -162,7 +162,9 @@ function makeNav(
   floatbar.setAttribute('label', 'CLI · tray · 1 follower');
   floatbar.setAttribute('spent', '$2.41');
   floatbar.setAttribute('linked', '');
-  floatbar.setAttribute('online', '');
+  floatbar.setAttribute('float-kind', 'npx');
+  floatbar.setAttribute('connection', 'live');
+  floatbar.setAttribute('tray-role', 'leader');
 
   const toggle = document.createElement('slicc-theme-toggle');
 
@@ -279,7 +281,9 @@ export const MinimalAutoSpacer: Story = {
     const floatbar = document.createElement('slicc-floatbar');
     floatbar.setAttribute('label', 'cloud · hosted leader');
     floatbar.setAttribute('spent', '$0.18');
-    floatbar.setAttribute('online', '');
+    floatbar.setAttribute('float-kind', 'hosted');
+    floatbar.setAttribute('connection', 'live');
+    floatbar.setAttribute('tray-role', 'leader');
     const avatar = document.createElement('slicc-avatar');
     avatar.setAttribute('name', 'Lars Trieloff');
     nav.append(floatbar, avatar);

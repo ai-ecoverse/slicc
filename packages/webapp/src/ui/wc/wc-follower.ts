@@ -21,7 +21,8 @@ import { applyCherryTheme } from '../theme-engine.js';
 import type { AgentHandle } from '../types.js';
 import { wireWcAttach } from './wc-attach.js';
 import { WcChatController } from './wc-chat-controller.js';
-import { installFloatbarOnline } from './wc-floatbar-online.js';
+import { floatLabelForKind } from './wc-float-label.js';
+import { installFloatbarStatus } from './wc-floatbar-online.js';
 import { wireWcFollowerBrowser } from './wc-follower-browser.js';
 import { createFollowerModelSurface } from './wc-follower-model-surface.js';
 import { openDelegatedOAuthPopup } from './wc-follower-oauth.js';
@@ -343,7 +344,8 @@ export async function mountWcUiFollower(
 
   // Reuse the WC shell frame WITHOUT a client (never call boot.setClient /
   // attachWcClient - those require an OffscreenClient + spawn the worker).
-  const boot = prepareWcShell(app, isCherry ? 'cherry · follower' : 'follower');
+  const floatKind = isCherry ? 'cherry' : isExtensionSidePanel ? 'extension' : 'standalone';
+  const boot = prepareWcShell(app, floatLabelForKind(floatKind));
 
   // Apply host-supplied theme AFTER the shell mounts — mountWcShell's
   // ensureSystemTheme() sets body data-theme from OS preference, so we must
@@ -568,11 +570,8 @@ export async function mountWcUiFollower(
   };
   setComposerState(false, CONNECTING);
 
-  // Drive the floatbar's `online` dot from the tray statuses (#1707) — the
-  // no-kernel follower's install point; the kernel float installs the same
-  // helper in `wc-tray.ts`. Before this, the API existed but had no producer:
-  // the dot never lit and the pill tooltip read "offline" mid-stream.
-  installFloatbarOnline(boot.refs.floatbar);
+  // Drive the floatbar status beacon from tray runtime statuses.
+  installFloatbarStatus(boot.refs.floatbar, { floatKind });
 
   // Mirror the follower tray status into `localStorage`, matching what
   // `wc-tray.ts` does for the kernel-backed floats. Without this the

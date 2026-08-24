@@ -27,7 +27,7 @@ function makeNav(accent?: string): SliccNav {
   el.innerHTML = `
     <div data-testid="nav-leading"></div>
     <slicc-agent-tabs active="cone"></slicc-agent-tabs>
-    <slicc-floatbar label="CLI · tray · 1 follower" linked online></slicc-floatbar>
+    <slicc-floatbar label="CLI · tray · 1 follower" linked float-kind="npx" connection="live" tray-role="leader"></slicc-floatbar>
     <slicc-theme-toggle></slicc-theme-toggle>
     <slicc-avatar initials="PM"></slicc-avatar>`;
   return el;

@@ -5,6 +5,19 @@ import type { CostOverlayModel, CostOverlayScoop, SliccCostOverlay } from './sli
 import './slicc-cost-overlay.js';
 import type { FollowerHudRow, SliccFollowerHud } from './slicc-follower-hud.js';
 import './slicc-follower-hud.js';
+import {
+  connectionFill,
+  connectionGlow,
+  connectionPulses,
+  defaultFloatbarStatus,
+  type FloatbarConnection,
+  type FloatbarFloatKind,
+  type FloatbarStatus,
+  type FloatbarTrayRole,
+  floatKindIcon,
+  statusTipFragment,
+  trayRoleIcon,
+} from './floatbar-status.js';
 
 const DEFAULT_LABEL = 'CLI float';
 
@@ -58,13 +71,62 @@ const STYLE = `
   border-color: color-mix(in srgb, var(--rose) 40%, var(--line));
 }
 
-.fdot {
-  width: 7px;
-  height: 7px;
+/* Status beacon — connection color, float-kind icon, tray-role pip. */
+.beacon {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 15px;
+  height: 15px;
   flex: 0 0 auto;
+}
+.beacon__ring {
+  position: absolute;
+  inset: 0;
   border-radius: 50%;
-  background: #22c55e;
-  box-shadow: 0 0 0 3px color-mix(in srgb, #22c55e 22%, transparent);
+  background: var(--beacon-fill, #94a3b8);
+  box-shadow: 0 0 0 2.5px var(--beacon-glow, color-mix(in srgb, #94a3b8 18%, transparent));
+}
+.beacon__icon {
+  position: relative;
+  z-index: 1;
+  display: inline-flex;
+  color: var(--canvas, #fff);
+  line-height: 0;
+}
+.beacon__icon svg {
+  display: block;
+  width: 9px;
+  height: 9px;
+}
+.beacon__role {
+  position: absolute;
+  right: -3px;
+  bottom: -2px;
+  z-index: 2;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 1px solid var(--canvas, #fff);
+  background: var(--ink, #111);
+  color: var(--canvas, #fff);
+  line-height: 0;
+}
+.beacon__role svg {
+  display: block;
+  width: 5px;
+  height: 5px;
+}
+.beacon[data-pulse] .beacon__ring {
+  animation: beacon-pulse 1.4s ease-in-out infinite;
+}
+@keyframes beacon-pulse {
+  0%, 100% { transform: scale(1); opacity: 1; }
+  50% { transform: scale(1.08); opacity: 0.82; }
 }
 
 .label { white-space: nowrap; }
@@ -181,21 +243,25 @@ const STYLE = `
 
 @media (prefers-reduced-motion: reduce) {
   .tip { transition: none; }
+  .beacon[data-pulse] .beacon__ring { animation: none; }
 }
 `;
 const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-floatbar>` — the Runtime Float Pill from the prototype nav
- * (`.floatbar`). An inline-flex rounded pill carrying a status dot (`.fdot`)
- * and a runtime label such as `CLI · tray · 1 follower`. Self-contained shadow
- * DOM; themes via inherited tokens (--canvas, --line, --txt-2, --rose, --ui,
- * --ctl-h). The green status dot and the linked rose tint are fixed across
- * light/dark.
+ * (`.floatbar`). An inline-flex rounded pill carrying a status beacon and a
+ * runtime label such as `npx` or `extension`. Self-contained shadow DOM;
+ * themes via inherited tokens (--canvas, --line, --txt-2, --rose, --ui,
+ * --ctl-h). The linked rose tint is fixed across light/dark.
  *
  * @attr label - the runtime label text (defaults to "CLI float")
  * @attr linked - boolean; rose-tints the border to signal a linked runtime
- * @attr online - boolean; shows the green status dot
+ * @attr connection - tray link health: offline | connecting | live | stalled |
+ *   reconnecting | error (colors the beacon ring)
+ * @attr float-kind - serving float: npx | sliccstart | extension | standalone |
+ *   cherry | electron | hosted (beacon center icon)
+ * @attr tray-role - none | leader | follower (corner pip on the beacon)
  * @attr rate - hourly cost, a number or numeric string (e.g. `23.1`); renders a
  *   coin-icon + formatted `$23.10/h` cost segment after a thin divider
  * @attr spent - cumulative cost shown in the cost overlay's total row
@@ -204,7 +270,11 @@ const SHEET = sheet(STYLE);
  *   and feeds `<slicc-follower-hud>` on hover/focus
  * @fires slicc-followers-click - the followers segment was activated (open the
  *   sync dialog on its Status tab)
- * @csspart dot - the green status dot (present only when `online`)
+ * @csspart beacon - the status beacon wrapper (connection + float kind + role)
+ * @csspart beacon-ring - the colored health ring
+ * @csspart beacon-icon - the float-kind icon
+ * @csspart beacon-role - the leader/follower pip (when tray-role ≠ none)
+ * @csspart dot - alias for {@link csspart beacon}
  * @csspart label - the runtime label span
  * @csspart sep - the thin dividers before the followers and cost segments
  * @csspart followers - the followers segment button
@@ -214,7 +284,15 @@ const SHEET = sheet(STYLE);
  * @slot - default slot overrides the label text
  */
 export class SliccFloatbar extends HTMLElement {
-  static readonly observedAttributes = ['label', 'linked', 'online', 'rate', 'spent'];
+  static readonly observedAttributes = [
+    'label',
+    'linked',
+    'connection',
+    'float-kind',
+    'tray-role',
+    'rate',
+    'spent',
+  ];
 
   readonly #root: ShadowRoot;
   #resizeObserver: ResizeObserver | null = null;
@@ -272,13 +350,70 @@ export class SliccFloatbar extends HTMLElement {
     this.toggleAttribute('linked', !!value);
   }
 
-  /** Whether the status dot is shown (online/green). */
-  get online(): boolean {
-    return this.hasAttribute('online');
+  get connection(): FloatbarConnection {
+    const raw = this.getAttribute('connection');
+    if (
+      raw === 'connecting' ||
+      raw === 'live' ||
+      raw === 'stalled' ||
+      raw === 'reconnecting' ||
+      raw === 'error'
+    ) {
+      return raw;
+    }
+    return 'offline';
   }
 
-  set online(value: boolean) {
-    this.toggleAttribute('online', !!value);
+  set connection(value: FloatbarConnection | null) {
+    if (value == null) this.removeAttribute('connection');
+    else this.setAttribute('connection', value);
+  }
+
+  get floatKind(): FloatbarFloatKind {
+    const raw = this.getAttribute('float-kind');
+    if (
+      raw === 'npx' ||
+      raw === 'sliccstart' ||
+      raw === 'extension' ||
+      raw === 'standalone' ||
+      raw === 'cherry' ||
+      raw === 'electron' ||
+      raw === 'hosted'
+    ) {
+      return raw;
+    }
+    return defaultFloatbarStatus().floatKind;
+  }
+
+  set floatKind(value: FloatbarFloatKind | null) {
+    if (value == null) this.removeAttribute('float-kind');
+    else this.setAttribute('float-kind', value);
+  }
+
+  get trayRole(): FloatbarTrayRole {
+    const raw = this.getAttribute('tray-role');
+    if (raw === 'leader' || raw === 'follower') return raw;
+    return 'none';
+  }
+
+  set trayRole(value: FloatbarTrayRole | null) {
+    if (value == null || value === 'none') this.removeAttribute('tray-role');
+    else this.setAttribute('tray-role', value);
+  }
+
+  /** Resolved status tuple for hosts/tests. */
+  get status(): FloatbarStatus {
+    return {
+      connection: this.connection,
+      floatKind: this.floatKind,
+      trayRole: this.trayRole,
+    };
+  }
+
+  set status(value: FloatbarStatus) {
+    this.connection = value.connection;
+    this.floatKind = value.floatKind;
+    this.trayRole = value.trayRole;
   }
 
   /** Raw `spent` attribute value (number/string), or `null` when unset. */
@@ -346,15 +481,49 @@ export class SliccFloatbar extends HTMLElement {
    * separator the verbose label uses, so the collapsed badge stays legible.
    */
   #tipText(): string {
-    const parts: string[] = [this.label];
+    const parts: string[] = [this.label, statusTipFragment(this.status)];
     const followers = this.#followers.length;
     if (followers > 0) {
       parts.push(`${followers} ${followers === 1 ? 'follower' : 'followers'}`);
     }
     parts.push(formatRate(this.rate));
     parts.push('recency-weighted session avg');
-    parts.push(this.online ? 'online' : 'offline');
     return parts.join(' · ');
+  }
+
+  #beaconEl(status: FloatbarStatus): HTMLElement {
+    const { connection, floatKind, trayRole } = status;
+    const ring = h('span', {
+      class: 'beacon__ring',
+      part: 'beacon-ring',
+      style: `--beacon-fill:${connectionFill(connection)};--beacon-glow:${connectionGlow(connection)}`,
+    });
+    const icon = h(
+      'span',
+      { class: 'beacon__icon', part: 'beacon-icon' },
+      iconEl(floatKindIcon(floatKind), { size: 9, strokeWidth: 2.25 })
+    );
+    const attrs: Record<string, string> = {
+      class: 'beacon',
+      part: 'beacon dot',
+      'data-connection': connection,
+      'data-float-kind': floatKind,
+      'aria-label': statusTipFragment({ connection, floatKind, trayRole }),
+    };
+    if (trayRole !== 'none') attrs['data-tray-role'] = trayRole;
+    if (connectionPulses(connection)) attrs['data-pulse'] = '';
+    const nodes: Node[] = [ring, icon];
+    const roleIcon = trayRoleIcon(trayRole);
+    if (roleIcon) {
+      nodes.push(
+        h(
+          'span',
+          { class: 'beacon__role', part: 'beacon-role', 'aria-hidden': 'true' },
+          iconEl(roleIcon, { size: 5, strokeWidth: 2.5 })
+        )
+      );
+    }
+    return h('span', attrs, ...nodes);
   }
 
   /** Mirror the full tip onto `title` whenever any detail has been collapsed. */
@@ -373,7 +542,7 @@ export class SliccFloatbar extends HTMLElement {
   #render(): void {
     const nodes: Node[] = [];
 
-    if (this.online) nodes.push(h('span', { class: 'fdot', part: 'dot' }));
+    nodes.push(this.#beaconEl(this.status));
 
     const [runtime, ...detail] = this.label.split(' · ');
     const fallback = [h('span', { class: 'runtime' }, runtime)];

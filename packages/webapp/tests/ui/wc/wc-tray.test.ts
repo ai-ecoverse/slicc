@@ -74,9 +74,6 @@ vi.mock('../../../src/ui/tray-leader-lock.js', () => ({
   getDefaultLockManager: () => null,
   requestLeaderLock: vi.fn(),
 }));
-vi.mock('../../../src/ui/wc/wc-floatbar-online.js', () => ({
-  installFloatbarOnline: vi.fn(),
-}));
 vi.mock('../../../src/shell/supplemental-commands/host-command.js', () => ({
   getConnectedFollowers: () => [],
   setConnectedFollowersGetter: vi.fn(),

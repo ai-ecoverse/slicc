@@ -61,8 +61,9 @@ export const FloatbarWithOverlay: Story = {
     wrapper.style.padding = '16px 24px';
 
     const fb = document.createElement('slicc-floatbar') as SliccFloatbar;
-    fb.label = 'npx · live';
-    fb.online = true;
+    fb.label = 'npx';
+    fb.connection = 'live';
+    fb.floatKind = 'npx';
     fb.spent = '3.96';
     fb.costModels = [
       { model: 'claude-opus-4-6', cost: 3.5, turns: 8, tokens: 1_200_000 },

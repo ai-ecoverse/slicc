@@ -1,25 +1,45 @@
 /**
- * Standalone float fingerprinting for the floatbar label: "standalone" hides
- * which runtime actually serves the page, so ask the server. Both local
- * servers expose `/api/status` whose `service` field names them —
- * `slicc-server` is the native Hummingbird server Sliccstart (mac) launches,
- * `slicc-node-server` is the Node CLI (`npx slicc` / `npm run dev`).
- * Unknown/unreachable keeps the generic label (cherry iframes, old servers).
+ * Float fingerprinting for the floatbar: which runtime serves this page.
+ * Standalone hides the answer behind `/api/status` (`slicc-server` →
+ * sliccstart, `slicc-node-server` → npx). Unknown/unreachable → standalone.
  */
 
+import type { FloatbarFloatKind } from '@slicc/webcomponents';
+import { floatKindLabel } from '@slicc/webcomponents';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
+import type { UiRuntimeMode } from '../runtime-mode.js';
 
-const FLOAT_BY_SERVICE: Record<string, string> = {
+const FLOAT_KIND_BY_SERVICE: Record<string, FloatbarFloatKind> = {
   'slicc-server': 'sliccstart',
   'slicc-node-server': 'npx',
 };
 
-export const DEFAULT_STANDALONE_LABEL = 'standalone · live';
+export function floatLabelForKind(kind: FloatbarFloatKind): string {
+  return floatKindLabel(kind);
+}
 
-export async function resolveStandaloneFloatLabel(opts?: {
+export function floatKindForRuntimeMode(mode: UiRuntimeMode): FloatbarFloatKind {
+  switch (mode) {
+    case 'extension':
+    case 'extension-detached':
+      return 'extension';
+    case 'cherry':
+      return 'cherry';
+    case 'hosted-leader':
+      return 'hosted';
+    case 'electron-overlay':
+      return 'electron';
+    case 'follower':
+      return 'standalone';
+    default:
+      return 'standalone';
+  }
+}
+
+export async function resolveStandaloneFloatKind(opts?: {
   fetchFn?: typeof fetch;
   timeoutMs?: number;
-}): Promise<string> {
+}): Promise<FloatbarFloatKind> {
   const fetchFn = opts?.fetchFn ?? fetch;
   const timeoutMs = opts?.timeoutMs ?? 1500;
   try {
@@ -30,11 +50,11 @@ export async function resolveStandaloneFloatLabel(opts?: {
       signal: ctrl.signal,
       headers: apiHeaders(),
     }).finally(() => clearTimeout(timer));
-    if (!res.ok) return DEFAULT_STANDALONE_LABEL;
+    if (!res.ok) return 'standalone';
     const body = (await res.json()) as { service?: string };
-    const float = body.service ? FLOAT_BY_SERVICE[body.service] : undefined;
-    return float ? `${float} · live` : DEFAULT_STANDALONE_LABEL;
+    const kind = body.service ? FLOAT_KIND_BY_SERVICE[body.service] : undefined;
+    return kind ?? 'standalone';
   } catch {
-    return DEFAULT_STANDALONE_LABEL;
+    return 'standalone';
   }
 }

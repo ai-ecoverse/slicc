@@ -49,14 +49,6 @@ describe('slicc-floatbar', () => {
     expect(el.hasAttribute('linked')).toBe(false);
   });
 
-  it('reflects the online boolean attribute to the property', () => {
-    const el = document.createElement('slicc-floatbar');
-    document.body.appendChild(el);
-    expect(el.online).toBe(false);
-    el.online = true;
-    expect(el.hasAttribute('online')).toBe(true);
-  });
-
   it('escapes label text', () => {
     const el = document.createElement('slicc-floatbar');
     el.label = '<script>x</script>';
@@ -66,30 +58,73 @@ describe('slicc-floatbar', () => {
     expect(label?.textContent).toBe('<script>x</script>');
   });
 
-  describe('the status dot (online state)', () => {
-    it('is absent by default', () => {
+  describe('the status beacon (connection / float-kind / tray-role)', () => {
+    it('renders a default offline beacon when unset', () => {
       const el = document.createElement('slicc-floatbar');
       document.body.appendChild(el);
-      expect(el.shadowRoot?.querySelector('.fdot')).toBeNull();
+      const beacon = el.shadowRoot?.querySelector('.beacon') as HTMLElement;
+      expect(beacon).not.toBeNull();
+      expect(beacon.dataset.connection).toBe('offline');
+      expect(beacon.dataset.floatKind).toBe('standalone');
     });
 
-    it('appears when online, exposing a `dot` part, painted green', () => {
+    it('appears with a live green ring when status attrs are set', () => {
       const el = document.createElement('slicc-floatbar');
-      el.online = true;
+      el.setAttribute('float-kind', 'npx');
+      el.setAttribute('connection', 'live');
       document.body.appendChild(el);
-      const dot = el.shadowRoot?.querySelector('.fdot') as HTMLElement;
-      expect(dot).not.toBeNull();
-      expect(dot.getAttribute('part')).toBe('dot');
-      // #22c55e === rgb(34, 197, 94)
-      expect(getComputedStyle(dot).backgroundColor).toBe('rgb(34, 197, 94)');
+      const beacon = el.shadowRoot?.querySelector('.beacon') as HTMLElement;
+      expect(beacon).not.toBeNull();
+      expect(beacon.getAttribute('part')).toContain('dot');
+      expect(beacon.dataset.connection).toBe('live');
+      const ring = el.shadowRoot?.querySelector('.beacon__ring') as HTMLElement;
+      expect(getComputedStyle(ring).backgroundColor).toBe('rgb(34, 197, 94)');
     });
 
-    it('toggles back off when online is cleared', () => {
+    it('renders float-kind icon and leader role pip', () => {
       const el = document.createElement('slicc-floatbar');
-      el.online = true;
+      el.setAttribute('float-kind', 'npx');
+      el.setAttribute('connection', 'live');
+      el.setAttribute('tray-role', 'leader');
       document.body.appendChild(el);
-      el.online = false;
-      expect(el.shadowRoot?.querySelector('.fdot')).toBeNull();
+      expect(el.shadowRoot?.querySelector('.beacon__icon svg')).not.toBeNull();
+      expect(el.shadowRoot?.querySelector('.beacon__role svg')).not.toBeNull();
+      expect(el.status.trayRole).toBe('leader');
+    });
+
+    it('includes tray role in the beacon aria-label', () => {
+      const el = document.createElement('slicc-floatbar');
+      el.setAttribute('float-kind', 'npx');
+      el.setAttribute('connection', 'live');
+      el.setAttribute('tray-role', 'leader');
+      document.body.appendChild(el);
+      const beacon = el.shadowRoot?.querySelector('.beacon') as HTMLElement;
+      expect(beacon.getAttribute('aria-label')).toBe('npx · leading tray · live');
+    });
+
+    it('disables the connecting pulse under prefers-reduced-motion', () => {
+      const el = document.createElement('slicc-floatbar');
+      document.body.appendChild(el);
+      let guarded = false;
+      for (const s of el.shadowRoot?.adoptedStyleSheets ?? []) {
+        for (const rule of s.cssRules) {
+          if (
+            rule instanceof CSSMediaRule &&
+            rule.conditionText.includes('prefers-reduced-motion')
+          ) {
+            for (const inner of rule.cssRules) {
+              if (
+                inner instanceof CSSStyleRule &&
+                inner.selectorText.includes('.beacon[data-pulse]') &&
+                inner.style.animationName === 'none'
+              ) {
+                guarded = true;
+              }
+            }
+          }
+        }
+      }
+      expect(guarded).toBe(true);
     });
   });
 
@@ -219,12 +254,13 @@ describe('slicc-floatbar', () => {
       expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$0.00/h');
     });
 
-    it('coexists with the online status dot and the label', () => {
+    it('coexists with the status beacon and the label', () => {
       const el = document.createElement('slicc-floatbar');
-      el.online = true;
+      el.connection = 'live';
+      el.floatKind = 'standalone';
       el.rate = '12.07';
       document.body.appendChild(el);
-      expect(el.shadowRoot?.querySelector('.fdot')).not.toBeNull();
+      expect(el.shadowRoot?.querySelector('.beacon')).not.toBeNull();
       expect(el.shadowRoot?.querySelector('.label')?.textContent).toContain('CLI float');
       expect(el.shadowRoot?.querySelector('.amount')?.textContent).toBe('$12.07/h');
       expect(el.shadowRoot?.querySelector('.spent svg')).not.toBeNull();
@@ -232,11 +268,12 @@ describe('slicc-floatbar', () => {
   });
 
   describe('dark mode', () => {
-    it('flips the canvas/line/text tokens but keeps the dot green', () => {
+    it('flips the canvas/line/text tokens but keeps the live beacon green', () => {
       const wrap = document.createElement('div');
       wrap.className = 'dark';
       const el = document.createElement('slicc-floatbar');
-      el.online = true;
+      el.connection = 'live';
+      el.floatKind = 'standalone';
       wrap.appendChild(el);
       document.body.appendChild(wrap);
 
@@ -245,8 +282,8 @@ describe('slicc-floatbar', () => {
       expect(cs.backgroundColor).toBe(rgb('#161618'));
       expect(cs.borderTopColor).toBe(rgb('#2a2a2e'));
 
-      const dot = el.shadowRoot?.querySelector('.fdot') as HTMLElement;
-      expect(getComputedStyle(dot).backgroundColor).toBe('rgb(34, 197, 94)');
+      const ring = el.shadowRoot?.querySelector('.beacon__ring') as HTMLElement;
+      expect(getComputedStyle(ring).backgroundColor).toBe('rgb(34, 197, 94)');
     });
   });
 
@@ -256,7 +293,8 @@ describe('slicc-floatbar', () => {
       nav.style.width = `${width}px`;
       const el = document.createElement('slicc-floatbar') as SliccFloatbar;
       el.label = 'CLI · tray · 1 follower';
-      el.online = true;
+      el.connection = 'live';
+      el.floatKind = 'standalone';
       el.rate = '2.41';
       nav.appendChild(el);
       document.body.appendChild(nav);
@@ -327,7 +365,7 @@ describe('slicc-floatbar', () => {
       // decorative — the accessible name rides the host title, not the tip node
       expect(tip.getAttribute('aria-hidden')).toBe('true');
       expect(tip.textContent).toBe(
-        'CLI · tray · 1 follower · $2.41/h · recency-weighted session avg · online'
+        'CLI · tray · 1 follower · standalone · local · live · $2.41/h · recency-weighted session avg'
       );
     });
 
@@ -349,7 +387,7 @@ describe('slicc-floatbar', () => {
       const el = document.createElement('slicc-floatbar');
       document.body.appendChild(el);
       expect(el.shadowRoot?.querySelector('.tip')?.textContent).toBe(
-        'CLI float · $0.00/h · recency-weighted session avg · offline'
+        'CLI float · standalone · local · offline · $0.00/h · recency-weighted session avg'
       );
     });
 
@@ -371,7 +409,7 @@ describe('slicc-floatbar', () => {
     it('exposes the tip text as an accessible host title only when collapsed', () => {
       const el = mountAt(640);
       expect(el.getAttribute('title')).toBe(
-        'CLI · tray · 1 follower · $2.41/h · recency-weighted session avg · online'
+        'CLI · tray · 1 follower · standalone · local · live · $2.41/h · recency-weighted session avg'
       );
     });
 

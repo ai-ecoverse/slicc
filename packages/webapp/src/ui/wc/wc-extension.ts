@@ -9,6 +9,8 @@
 import type { BootStageLogger } from '../boot/types.js';
 import { OffscreenClient } from '../offscreen-client.js';
 import { wireWcDetached } from './wc-detached.js';
+import { floatLabelForKind } from './wc-float-label.js';
+import { installFloatbarStatus } from './wc-floatbar-online.js';
 import { attachWcClient, prepareWcShell } from './wc-live.js';
 import { createWcLiveCallbacks } from './wc-live-callbacks.js';
 
@@ -17,7 +19,9 @@ export async function mountWcUiExtension(
   log: BootStageLogger,
   isDetached = false
 ): Promise<void> {
-  const boot = prepareWcShell(app, 'extension · wc');
+  const floatKind = 'extension';
+  const boot = prepareWcShell(app, floatLabelForKind(floatKind));
+  installFloatbarStatus(boot.refs.floatbar, { floatKind });
   const client = new OffscreenClient(createWcLiveCallbacks(boot.wiring));
   // Shared attach wiring applies session stats (rate + scoped costs) in this float too.
   attachWcClient(boot, client, log);

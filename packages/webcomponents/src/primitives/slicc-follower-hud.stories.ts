@@ -99,8 +99,10 @@ export const FloatbarWithFollowers: Story = {
     wrapper.style.cssText =
       'display: flex; justify-content: flex-end; padding: 16px; margin-bottom: 280px;';
     const floatbar = document.createElement('slicc-floatbar') as SliccFloatbar;
-    floatbar.label = 'tray · live';
-    floatbar.online = true;
+    floatbar.label = 'npx';
+    floatbar.floatKind = 'npx';
+    floatbar.connection = 'live';
+    floatbar.trayRole = 'leader';
     floatbar.rate = '23.10';
     floatbar.followers = allKinds();
     wrapper.appendChild(floatbar);

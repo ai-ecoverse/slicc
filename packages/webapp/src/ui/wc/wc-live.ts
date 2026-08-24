@@ -357,8 +357,7 @@ export interface AttachWcClientOptions {
     browser: BrowserAPI;
     realCdpTransport: CDPTransport;
     runtimeMode: UiRuntimeMode;
-    /** Resolved floatbar base label (`sliccstart · live` / `npx · live`). */
-    baseFloatLabel?: string;
+    floatKind: import('@slicc/webcomponents').FloatbarFloatKind;
   };
 }
 
@@ -1057,7 +1056,6 @@ export function attachWcClient(
           agentHandle,
           openFs: openReader,
           openWriter: async () => (await openVfs()).writer,
-          baseFloatLabel: options.standalone.baseFloatLabel,
           window,
           log,
         });
@@ -1203,17 +1201,19 @@ export async function mountWcUiLive(
     log,
   });
 
-  // The floatbar names the serving runtime, not just "standalone": the
-  // native Sliccstart server vs the Node CLI, fingerprinted via /api/status.
-  const { resolveStandaloneFloatLabel, DEFAULT_STANDALONE_LABEL } = await import(
+  // Floatbar names the serving runtime (npx / sliccstart / hosted / …).
+  const { floatKindForRuntimeMode, floatLabelForKind, resolveStandaloneFloatKind } = await import(
     './wc-float-label.js'
   );
-  const floatLabel =
-    runtimeMode === 'standalone' || runtimeMode === 'electron-overlay'
-      ? await resolveStandaloneFloatLabel()
-      : DEFAULT_STANDALONE_LABEL;
+  const { installFloatbarStatus } = await import('./wc-floatbar-online.js');
+  const floatKind =
+    runtimeMode === 'standalone'
+      ? await resolveStandaloneFloatKind()
+      : floatKindForRuntimeMode(runtimeMode);
+  const floatLabel = floatLabelForKind(floatKind);
 
   const boot = prepareWcShell(app, floatLabel);
+  installFloatbarStatus(boot.refs.floatbar, { floatKind, label: floatLabel });
   // #1330: install the reload listener BEFORE spawning — BroadcastChannel doesn't
   // buffer and the worker posts init synchronously, so a late listener would miss
   // a fast boot-time failure.
@@ -1246,7 +1246,7 @@ export async function mountWcUiLive(
       browser,
       realCdpTransport,
       runtimeMode,
-      baseFloatLabel: floatLabel,
+      floatKind,
     },
   });
 
