@@ -266,6 +266,24 @@ describe('migrateConversations', () => {
     expect(summary.migrated).toBe(1);
   });
 
+  it('heartbeats after every unit so a long pass cannot trip the boot watchdog', async () => {
+    // #2007: this pass runs before any context spawns, so a profile with many
+    // large histories would otherwise sit silent through the page's
+    // kernel-ready timeout on a boot that is provably advancing.
+    const cone = rootRecord();
+    const scoop = childRecord(cone.jid);
+    legacy.agent.set(cone.jid, { messages: legacyAgentMessages() });
+    const onProgress = vi.fn();
+
+    await migrateConversations(depsFor(store, [cone, scoop], legacy, { onProgress }));
+
+    // Both units, including the one with nothing to migrate.
+    expect(onProgress.mock.calls.map((c) => c[0])).toEqual([
+      `conversation-migrated:${cone.jid}`,
+      `conversation-migrated:${scoop.jid}`,
+    ]);
+  });
+
   it('leaves a record it already migrated alone', async () => {
     const cone = rootRecord();
     legacy.agent.set(cone.jid, { messages: legacyAgentMessages() });

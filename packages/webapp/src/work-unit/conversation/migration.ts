@@ -54,6 +54,14 @@ export interface ConversationMigrationDeps {
   /** `browser-coding-agent` read, by `session-<folder>`. */
   loadChatSession: (id: string) => Promise<{ messages: ChatMessage[]; createdAt?: number } | null>;
   now?: () => number;
+  /**
+   * Fired after every unit (migrated, empty or skipped). This pass runs at
+   * boot, BEFORE any context spawns, and a profile with many large histories
+   * can spend real time in it — long enough for the page's kernel-ready
+   * watchdog (#2007) to fire on a boot that is provably advancing. The
+   * heartbeat re-arms it, exactly as the scoop-restore loop does.
+   */
+  onProgress?: (stage: string) => void;
 }
 
 export interface ConversationMigrationSummary {
@@ -125,6 +133,7 @@ export async function migrateConversations(
     state.completedKeys = [...completed];
     state.updatedAt = now();
     await deps.store.putMigrationState(state);
+    deps.onProgress?.(`conversation-migrated:${unit.jid}`);
   }
 
   state.done = true;

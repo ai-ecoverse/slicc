@@ -181,6 +181,10 @@ one migration + rollback cycle.
 - **The cursor advances past a skipped unit** on purpose: retrying an
   unreadable record every boot would re-spend the boot budget that made it
   unreadable. A schema bump is the sanctioned retry.
+- **It heartbeats.** The pass runs at boot BEFORE any context spawns, so it
+  fires `onBootProgress` after every unit — a profile with many large
+  histories would otherwise sit silent through the page's kernel-ready
+  watchdog (#2007) on a boot that is provably advancing.
 - **Pre-`parentJid` records** (#1666) are backfilled by `Orchestrator.init`
   before the pass runs; the pass coerces a missing edge to `null` anyway, so a
   legacy primary cone can never be keyed as a child under `/scoops/`.

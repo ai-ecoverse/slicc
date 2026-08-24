@@ -496,7 +496,7 @@ export class Orchestrator implements ConeApprovalRouter {
     // stores are written, dropping the canonical database is a full rollback.
     // Failure here is non-fatal by construction — every reader falls back to
     // the legacy stores when a unit has no canonical record.
-    await this.migrateConversations();
+    await this.migrateConversations(onBootProgress);
 
     // Initialize global memory
     await this.memoryStore.ensureGlobalMemory();
@@ -582,7 +582,7 @@ export class Orchestrator implements ConeApprovalRouter {
    * live `SessionStore` and `browser-coding-agent` through a lazily created
    * UI store — the same two stores every reader falls back to.
    */
-  private async migrateConversations(): Promise<void> {
+  private async migrateConversations(onBootProgress?: (stage: string) => void): Promise<void> {
     const store = this.conversationStore;
     if (!store) return;
     const uiSessionStore = new UiSessionStore();
@@ -598,6 +598,7 @@ export class Orchestrator implements ConeApprovalRouter {
           const saved = await uiSessionStore.load(id);
           return saved ? { messages: saved.messages, createdAt: saved.createdAt } : null;
         },
+        onProgress: onBootProgress,
       });
     } catch (err) {
       // A migration that cannot run at all must not stop the boot: the legacy
