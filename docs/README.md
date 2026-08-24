@@ -48,7 +48,7 @@ Browser automation and search for agents run through shell commands via `bash` (
 
 SLICC uses ice cream terminology to describe its multi-agent system:
 
-- **Cone**: The main agent ("sliccy"). Human's point of interaction. Full filesystem and tool access. Orchestrates scoops. Type: `RegisteredScoop` with `isCone: true`.
+- **Cone**: The main agent ("sliccy"). Human's point of interaction. Full filesystem and tool access. Orchestrates scoops. Type: `RegisteredScoop` with `parentJid: null` (`isRootUnit`).
 - **Scoops**: Isolated sub-agents. Each has sandboxed filesystem (`/scoops/{name}/` + `/shared/`), own shell, own conversation. Created via `scoop_scoop`, fed via `feed_scoop`, removed via `drop_scoop`.
 - **Licks**: External events (webhooks, cron tasks) that trigger scoops. Unified under `LickManager` and `LickEvent`. Shell commands: `webhook`, `crontask`. A lick arrives, the scoop reacts — no human in the loop.
 - **Floats**: Runtime environments. Four are tracked:

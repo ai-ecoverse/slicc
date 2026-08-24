@@ -1,20 +1,13 @@
 import type { ScoopSummary } from '../../scoops/tray-sync-protocol.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
+import { isRootUnit } from '../../work-unit/policy.js';
 import { modelFor } from '../../work-unit/record.js';
 import { scoopColor } from './wc-scoop-color.js';
 import type { SwitcherScoop } from './wc-shell.js';
 
 type SummarySource = Pick<
   RegisteredScoop,
-  | 'jid'
-  | 'name'
-  | 'folder'
-  | 'isCone'
-  | 'parentJid'
-  | 'assistantLabel'
-  | 'trigger'
-  | 'model'
-  | 'config'
+  'jid' | 'name' | 'folder' | 'parentJid' | 'assistantLabel' | 'trigger' | 'model' | 'config'
 >;
 type RenderedState = Pick<SwitcherScoop, 'key' | 'state' | 'fill' | 'phase' | 'awaiting'>;
 type WireActivity = NonNullable<ScoopSummary['activity']>;
@@ -86,7 +79,9 @@ export function toScoopSummaries(
       jid: scoop.jid,
       name: scoop.name,
       folder: scoop.folder,
-      isCone: scoop.isCone,
+      // The wire keeps `isCone` for older followers; it is projected from the
+      // ownership edge, never read off the record (#2279).
+      isCone: isRootUnit(scoop),
       parentId: scoop.parentJid,
       assistantLabel: scoop.assistantLabel,
       trigger: scoop.trigger,
@@ -120,7 +115,7 @@ export function toFollowerSwitcherScoops(
     return {
       key: scoop.jid,
       type: summaryIsRoot(scoop) ? 'cone' : 'scoop',
-      color: scoopColor({ isCone: summaryIsRoot(scoop), name: scoop.name }),
+      color: scoopColor({ isRoot: summaryIsRoot(scoop), name: scoop.name }),
       label: summaryIsRoot(scoop) ? scoop.assistantLabel : scoop.name,
       eyes:
         expanded.state === 'broken' ? 'dead' : expanded.state === 'initializing' ? 'none' : 'open',

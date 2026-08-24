@@ -9,15 +9,19 @@ import {
   isRootUnit,
   rootsOf,
 } from '../../src/work-unit/policy.js';
-import { childRecord, rootRecord } from './fixtures.js';
+import { childRecord, rootRecord, withLegacyRoleFields } from './fixtures.js';
 
 describe('work-unit policy', () => {
   it('a root is defined by parentJid === null and nothing else', () => {
     expect(isRootUnit(rootRecord())).toBe(true);
     expect(isRootUnit(childRecord('cone_1'))).toBe(false);
-    // `isCone` is presentation; the edge decides.
-    expect(isRootUnit(rootRecord({ isCone: false, type: 'scoop' }))).toBe(true);
-    expect(isRootUnit(childRecord('cone_1', { isCone: true, type: 'cone' }))).toBe(false);
+    // A legacy record may still carry the deleted role fields; the edge decides.
+    expect(isRootUnit(withLegacyRoleFields(rootRecord(), { isCone: false, type: 'scoop' }))).toBe(
+      true
+    );
+    expect(
+      isRootUnit(withLegacyRoleFields(childRecord('cone_1'), { isCone: true, type: 'cone' }))
+    ).toBe(false);
   });
 
   it('derives the interactive root preset for a root', () => {

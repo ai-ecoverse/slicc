@@ -14,7 +14,7 @@ import { workspaceFor } from '../../src/work-unit/descriptor.js';
 import { WorkUnitManager } from '../../src/work-unit/manager.js';
 import { rootsOf } from '../../src/work-unit/policy.js';
 import { normalizeScoopRecord } from '../../src/work-unit/record.js';
-import { childRecord, makeFakeHost, rootRecord } from './fixtures.js';
+import { childRecord, makeFakeHost, rootRecord, withLegacyRoleFields } from './fixtures.js';
 
 const rootA = rootRecord({ jid: 'cone_a', name: 'A', addedAt: '2026-01-01T00:00:00.000Z' });
 // An extra cone as `coneFolderFor` allocates it: `cone-<slug>`, not `cone`.
@@ -221,17 +221,24 @@ describe('multiple roots', () => {
     expect(manager.resolveDefaultRoot()?.descriptor.id).toBe(rootB.jid);
   });
 
-  it('normalizeScoopRecord derives the presentation fields from the edge', () => {
+  it('normalizeScoopRecord sanitizes a root and strips the legacy role fields', () => {
+    // A pre-#2279 record that also lies about its role: the edge decides, and
+    // the deleted fields never survive the restore that reads them.
     const lyingRoot = normalizeScoopRecord(
-      rootRecord({ isCone: false, type: 'scoop', trigger: '@x', requiresTrigger: true })
+      withLegacyRoleFields(rootRecord({ trigger: '@x', requiresTrigger: true }), {
+        isCone: false,
+        type: 'scoop',
+      })
     );
-    expect(lyingRoot).toMatchObject({
-      isCone: true,
-      type: 'cone',
-      trigger: undefined,
-      requiresTrigger: false,
-    });
-    const lyingChild = normalizeScoopRecord(childRecord(rootA.jid, { isCone: true, type: 'cone' }));
-    expect(lyingChild).toMatchObject({ isCone: false, type: 'scoop', trigger: '@worker-scoop' });
+    expect(lyingRoot).toMatchObject({ trigger: undefined, requiresTrigger: false });
+    expect(lyingRoot).not.toHaveProperty('isCone');
+    expect(lyingRoot).not.toHaveProperty('type');
+
+    const lyingChild = normalizeScoopRecord(
+      withLegacyRoleFields(childRecord(rootA.jid), { isCone: true, type: 'cone' })
+    );
+    expect(lyingChild).toMatchObject({ trigger: '@worker-scoop', requiresTrigger: true });
+    expect(lyingChild).not.toHaveProperty('isCone');
+    expect(lyingChild).not.toHaveProperty('type');
   });
 });

@@ -95,10 +95,6 @@ export interface RegisteredScoop {
   name: string;
   /** Storage folder name (sanitized, e.g. "andy-scoop") */
   folder: string;
-  /** Whether this is the cone (main context) */
-  isCone: boolean;
-  /** Type discriminator */
-  type: 'cone' | 'scoop';
   /** Trigger pattern (e.g., "@andy-scoop") */
   trigger?: string;
   /** Whether trigger is required */
@@ -122,9 +118,8 @@ export interface RegisteredScoop {
    * (a cone); a child unit (a scoop) carries the JID of the unit that owns
    * it — the cone or scoop that created it. Always explicit: creation paths
    * set it and {@link Orchestrator.init} backfills legacy records on
-   * restore, so `parentJid === null` is THE root test and `isCone` is
-   * derived presentation. Also read by the transcript export to
-   * reconstruct delegation chains.
+   * restore, so `parentJid === null` is THE root test (`isRootUnit`).
+   * Also read by the transcript export to reconstruct delegation chains.
    */
   parentJid: string | null;
   /**

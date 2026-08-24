@@ -26,7 +26,7 @@ Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). Th
 ### Decisions taken (2026-08-21)
 
 1. **Name**: `WorkUnit`. Neutral and architecture-facing; `AgentContext` collided with `ScoopContext`.
-2. **Root test**: `parentJid === null`, nothing else. `isCone` / `type` on `RegisteredScoop` are presentation fields kept on the wire for followers and will be derived from the edge, then deleted in the final phase.
+2. **Root test**: `parentJid === null`, nothing else. `isCone` / `type` were deleted from `RegisteredScoop` in #2279 — the compiler now enforces the rule, because a role branch has no field to read. `isCone` survives only on the follower wire (`ScoopSummary`), projected from `isRootUnit`.
 3. **Field name**: the edge stays `parentJid` (jid is this codebase's id vocabulary) but is **required** `string | null`. `WorkUnitDescriptor.parentId` maps to it.
 4. **Ordering**: structural cleanup first. Multiple concurrent roots are the payoff of Phases 1–3, not a UI deliverable of them.
 5. **Default root**: the oldest root (`WorkUnitManager.resolveDefaultRoot()`) receives unaddressed events. A UI-selected root comes with the client protocol phase.
@@ -43,15 +43,15 @@ Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). Th
 
 ## Module map
 
-| File            | Purpose                                                                                                                                                                           |
-| --------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `types.ts`      | `WorkUnitDescriptor`, `WorkUnitPolicy`, `CompletionPolicy`, `WorkUnitStatus` (`creating → ready ⇄ running`, `* → failed`, `* → closed`), events, `statusFromTab`                  |
-| `policy.ts`     | `interactiveRootPolicy`, `delegatedChildPolicy`, `derivePolicy`, `deriveCompletion`, `isRootUnit`, `isPolicySubset`, `childrenOf`, `rootsOf`                                      |
-| `descriptor.ts` | `toDescriptor(scoop, tab?)`, `workspaceFor`, `PRIMARY_WORKSPACE`, `SKILLS_LIBRARY_DIR` — pure projections; the ONE place the per-unit directory layout is decided                 |
-| `runtime.ts`    | `WorkUnitRuntime` contract + `ScoopContextWorkUnit`, the Phase 1 adapter over `ScoopContext` / `ScoopLifecycleManager`                                                            |
-| `live-unit.ts`  | `LiveWorkUnit` — the owning runtime: holds the `ScoopContext`, tab record and observer set; `transition()` enforces `LEGAL_TRANSITIONS`; `close()` is the single teardown         |
-| `record.ts`     | `normalizeScoopRecord` (derives `isCone`/`type` from the edge on register/restore), `chatSessionIdFor`, `isPrimaryRoot`, `coneFolderFor`, `processOwnerKindFor`, `sourceLabelFor` |
-| `manager.ts`    | `WorkUnitManager` — `create / list / get / getParent / getChildren / roots / rootOf / resolveDefaultRoot / abort / close`; exposed as `Orchestrator.getWorkUnits()`               |
+| File            | Purpose                                                                                                                                                                                              |
+| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `types.ts`      | `WorkUnitDescriptor`, `WorkUnitPolicy`, `CompletionPolicy`, `WorkUnitStatus` (`creating → ready ⇄ running`, `* → failed`, `* → closed`), events, `statusFromTab`                                     |
+| `policy.ts`     | `interactiveRootPolicy`, `delegatedChildPolicy`, `derivePolicy`, `deriveCompletion`, `isRootUnit`, `isPolicySubset`, `childrenOf`, `rootsOf`                                                         |
+| `descriptor.ts` | `toDescriptor(scoop, tab?)`, `workspaceFor`, `PRIMARY_WORKSPACE`, `SKILLS_LIBRARY_DIR` — pure projections; the ONE place the per-unit directory layout is decided                                    |
+| `runtime.ts`    | `WorkUnitRuntime` contract + the `WorkUnitHost` slice (`getScoop`, `ensureLiveUnit`) a manager resolves units through                                                                                |
+| `live-unit.ts`  | `LiveWorkUnit` — the owning runtime: holds the `ScoopContext`, tab record and observer set; `transition()` enforces `LEGAL_TRANSITIONS`; `close()` is the single teardown                            |
+| `record.ts`     | `normalizeScoopRecord` (strips the pre-#2279 `isCone`/`type`, sanitizes a root), `legacyRecordIsCone`, `chatSessionIdFor`, `isPrimaryRoot`, `coneFolderFor`, `processOwnerKindFor`, `sourceLabelFor` |
+| `manager.ts`    | `WorkUnitManager` — `create / list / get / getParent / getChildren / roots / rootOf / resolveDefaultRoot / abort / close`; exposed as `Orchestrator.getWorkUnits()`                                  |
 
 Tests: `packages/webapp/tests/work-unit/`. `conformance.ts` is a reusable suite any `WorkUnitRuntime` implementation must pass.
 
@@ -69,13 +69,14 @@ Topology helpers live in `tests/e2e/two-instance-helpers.ts`.
 
 A strangler migration, each phase a separate PR with deletion criteria:
 
-| Phase | Scope                                                                                                                                                                                                                                                                                                         | Status                    |
-| ----- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| 1     | Types, required `parentJid` + restore backfill, adapter, manager facade, conformance tests. No behaviour change.                                                                                                                                                                                              | done                      |
-| 2     | Lifecycle ownership: `ScoopLifecycleManager` hosts one `LiveWorkUnit` per scoop (its context, tab, observers); `getContexts()` / `getTabsMap()` are derived views; `close()` is the single teardown; transitions tested as one state machine.                                                                 | done                      |
-| 3     | `isCone` replaced by hierarchy and policy in `scoops/` and `kernel/` (filesystem, approvals, child tools, shared memory, completion, default-target routing, presentation); `check-iscone-ratchet.mjs` forbids new reads outside `ui/`; two independent roots proven in `tests/work-unit/multi-root.test.ts`. | done                      |
-| 4     | Add / switch / drop cones in the UI: new-cone / drop-cone in the freezer rail's action row, the tab strip as the only switcher, `cone-create` allocates `cone-<slug>` folders and per-folder chat sessions, `scoop-drop` of a root cascades and refuses the last root, `cone:<folder>` URL contexts.          | done                      |
-| 5–9   | `WorkUnitClient` for local/remote UI, one persistence store, `CapabilityBroker`, explicit workspace sharing modes, generic parallel APIs, deletion of legacy paths.                                                                                                                                           | deferred; separate issues |
+| Phase | Scope                                                                                                                                                                                                                                                                                                | Status                    |
+| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| 1     | Types, required `parentJid` + restore backfill, adapter, manager facade, conformance tests. No behaviour change.                                                                                                                                                                                     | done                      |
+| 2     | Lifecycle ownership: `ScoopLifecycleManager` hosts one `LiveWorkUnit` per scoop (its context, tab, observers); `getContexts()` / `getTabsMap()` are derived views; `close()` is the single teardown; transitions tested as one state machine.                                                        | done                      |
+| 3     | `isCone` replaced by hierarchy and policy in `scoops/` and `kernel/` (filesystem, approvals, child tools, shared memory, completion, default-target routing, presentation); two independent roots proven in `tests/work-unit/multi-root.test.ts`.                                                    | done                      |
+| 9a    | Deletion (#2279): `RegisteredScoop.isCone` / `type` gone, the `ui/` reads migrated to `isRootUnit` / `summaryIsRoot`, the `isCone` ratchet retired (the type is the gate), the Phase 1 `ScoopContextWorkUnit` adapter removed.                                                                       | done                      |
+| 4     | Add / switch / drop cones in the UI: new-cone / drop-cone in the freezer rail's action row, the tab strip as the only switcher, `cone-create` allocates `cone-<slug>` folders and per-folder chat sessions, `scoop-drop` of a root cascades and refuses the last root, `cone:<folder>` URL contexts. | done                      |
+| 5–9   | `WorkUnitClient` for local/remote UI, one persistence store, `CapabilityBroker`, explicit workspace sharing modes, generic parallel APIs, deletion of legacy paths.                                                                                                                                  | deferred; separate issues |
 
 ### Phase 4 detail
 
@@ -283,7 +284,7 @@ the kernel host, for every float.
 - `ScoopLifecycleManager` picks `VirtualFS` vs `RestrictedFS` from `policy.filesystem`, gates every privileged callback on the policy (`canCreateChildren`, `canManageChildren`, `canWriteSharedMemory`, `canResolveApprovals`, `approvalAuthority`), and routes fatal errors to the unit's parent.
 - Completion, idle notices and sudo requests take a `findParent` / `findApprover` dependency: the child's parent, falling back to the default (oldest) root when the parent is gone, so a delegated result always lands somewhere a user can see it.
 - Unaddressed events (licks, sprinkles, workflow completions, follower snapshots) resolve the default root through `rootsOf(...)[0]` / `WorkUnitManager.resolveDefaultRoot()`; `bootstrapCone` only seeds a root when none exists.
-- `normalizeScoopRecord` rewrites `isCone` / `type` from `parentJid` on register and restore; `ScoopPresentation` projects `isCone` for the wire from `isRootUnit`. UI code (`packages/webapp/src/ui/`) may still read the derived flag; `npm run lint:iscone-ratchet` fails on any new read elsewhere.
+- `normalizeScoopRecord` sanitizes a root's trigger fields on register and restore; `ScoopPresentation` projects the wire's `isCone` from `isRootUnit`. Since #2279 the record has no role field at all, so nothing — `ui/` included — can branch on one.
 - `WorkUnitManager.close(id)` cascades to the unit's children first; closing root A leaves root B's subtree untouched.
 
 ### Phase 2 detail
@@ -292,7 +293,7 @@ the kernel host, for every float.
 - `transition(next)` applies `LEGAL_TRANSITIONS` (`initializing → ready|error`, `ready → processing|error|initializing`, `processing → ready|error`, `error → initializing|ready|processing`); illegal moves and anything on a closed unit are logged and ignored, so a stale callback from a disposed context cannot resurrect a unit.
 - `teardown()` runs in a fixed order — idle timer, stop turn, dispose context (realm workers + shell processes), drop observers, release `scoop_wait` callers — and is idempotent. `destroyTab` and `unregister` both end in it. `close()` (the `WorkUnitRuntime` contract) unregisters through the host, so the active-licks guard and record deletion apply exactly as for `drop_scoop`.
 - `detachContext()` (filesystem reset) stops without disposing and keeps observers; `disposeContext()` (re-spawn after a failed init) disposes and keeps observers.
-- `WorkUnitManager.get()` returns the live unit when the host has one (`Orchestrator.getLiveUnit`), else the Phase 1 read-through adapter.
+- `WorkUnitManager.get()` returns the owning live unit for any registered record (`Orchestrator.ensureLiveUnit`, creating one on first reach). The Phase 1 read-through adapter is gone (#2279).
 
 ### Phase 1 detail
 

@@ -9,6 +9,7 @@ import type { MountTableEntry } from '../../fs/mount-table-store.js';
 import type { CronTaskEntry, WebhookEntry } from '../../scoops/lick-manager.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 import type { ConnectedFollowerInfo } from '../../shell/supplemental-commands/host-command.js';
+import { isRootUnit } from '../../work-unit/policy.js';
 import {
   followerIcon,
   followerMeta,
@@ -178,7 +179,7 @@ export async function fetchMonitorData(deps: MonitorDeps): Promise<MonitorSectio
       label: 'Scoops',
       count: scoops.length,
       rows: scoops.map((scoop) => {
-        const label = scoop.isCone ? `${scoop.name || 'sliccy'} (cone)` : scoop.name;
+        const label = isRootUnit(scoop) ? `${scoop.name || 'sliccy'} (cone)` : scoop.name;
         const processing = deps.isProcessing(scoop.jid);
         return { name: label, meta: processing ? 'processing' : 'idle', active: processing };
       }),

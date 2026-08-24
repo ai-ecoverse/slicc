@@ -48,8 +48,6 @@ function cone(jid: string, folder: string, model?: RegisteredScoop['model']): Re
     jid,
     name: folder,
     folder,
-    isCone: true,
-    type: 'cone',
     parentJid: null,
     requiresTrigger: false,
     assistantLabel: folder,
@@ -138,8 +136,6 @@ describe('follower model selection is per cone (#2310)', () => {
   it('applies a pick made while viewing a scoop to the cone that owns it', async () => {
     const scoop: RegisteredScoop = {
       ...cone('scoop_1', 'worker'),
-      isCone: false,
-      type: 'scoop',
       parentJid: coneB.jid,
     };
     const { options, setScoopModel } = makeOptions([coneA, coneB, scoop], coneA.jid);

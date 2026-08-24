@@ -83,9 +83,7 @@ const testScoop: RegisteredScoop = {
   jid: 'scoop_test_1',
   name: 'test',
   folder: 'test-scoop',
-  isCone: false,
   parentJid: 'cone',
-  type: 'scoop',
   requiresTrigger: false,
   assistantLabel: 'test-scoop',
   addedAt: new Date().toISOString(),
@@ -241,8 +239,8 @@ describe('ScoopContext active tool surface', () => {
     });
   });
 
-  it('owns the bash-tool shell as the cone when isCone', async () => {
-    const cone: RegisteredScoop = { ...testScoop, isCone: true, parentJid: null, folder: '' };
+  it('owns the bash-tool shell as the cone when it is a root unit', async () => {
+    const cone: RegisteredScoop = { ...testScoop, parentJid: null, folder: '' };
     const ctx = new ScoopContext(cone, createMockCallbacks(), createMockFs() as any);
 
     await ctx.init();
@@ -300,7 +298,7 @@ describe('ScoopContext active tool surface', () => {
         `AVAILABLE SKILLS\n${skills.map((skill) => `Path: ${skill.path}`).join('\n')}`) as any
     );
 
-    const cone: RegisteredScoop = { ...testScoop, isCone: true, parentJid: null, folder: '' };
+    const cone: RegisteredScoop = { ...testScoop, parentJid: null, folder: '' };
     const ctx = new ScoopContext(cone, createMockCallbacks(), createMockFs() as any);
     await ctx.init();
 

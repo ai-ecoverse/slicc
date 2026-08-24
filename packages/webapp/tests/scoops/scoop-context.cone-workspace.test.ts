@@ -30,8 +30,6 @@ function coneRecord(overrides: Partial<RegisteredScoop> = {}): RegisteredScoop {
     jid: 'cone_1',
     name: 'Cone',
     folder: 'cone',
-    isCone: true,
-    type: 'cone',
     parentJid: null,
     requiresTrigger: false,
     assistantLabel: 'sliccy',

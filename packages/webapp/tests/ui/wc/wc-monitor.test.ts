@@ -143,8 +143,8 @@ describe('fetchMonitorData', () => {
     const sections = await fetchMonitorData(
       makeDeps({
         getScoops: () => [
-          { jid: 'cone-1', name: 'sliccy', isCone: true } as any,
-          { jid: 's-1', name: 'researcher', isCone: false } as any,
+          { jid: 'cone-1', name: 'sliccy', parentJid: null } as any,
+          { jid: 's-1', name: 'researcher', parentJid: 'cone-1' } as any,
         ],
         isProcessing: (jid) => jid === 'cone-1',
       })

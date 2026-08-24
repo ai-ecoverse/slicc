@@ -119,6 +119,7 @@ import type { Orchestrator, ScoopObserver } from '../../src/scoops/orchestrator.
 import type { ScoopContext } from '../../src/scoops/scoop-context.js';
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 import { CURRENT_SCOOP_CONFIG_VERSION } from '../../src/scoops/types.js';
+import { LiveWorkUnit } from '../../src/work-unit/live-unit.js';
 import { WorkUnitManager } from '../../src/work-unit/manager.js';
 
 /**
@@ -205,13 +206,15 @@ function makeWorkUnits(scoops: RegisteredScoop[]): WorkUnitManager {
   return new WorkUnitManager({
     getScoop: (jid) => scoops.find((s) => s.jid === jid),
     getScoops: () => scoops,
-    getScoopTabState: () => undefined,
-    sendPrompt: async () => {},
-    observeScoop: () => () => {},
-    stopScoop: () => {},
-    unregisterScoop: async () => {},
     registerScoop: async () => {},
-    getScoopContext: () => undefined,
+    ensureLiveUnit: (jid) =>
+      new LiveWorkUnit(jid, {
+        getScoop: (j) => scoops.find((s) => s.jid === j),
+        sendPrompt: async () => {},
+        clearIdleTimer: () => {},
+        forgetCompletion: () => {},
+        unregister: async () => {},
+      }),
   });
 }
 
@@ -263,7 +266,6 @@ describe('createAgentBridge — config construction', () => {
     expect(scoop.folder).toBe('agent-exuberant-lavender');
     expect(scoop.folder).toMatch(/^agent-[a-z]+-[a-z]+$/);
     expect(scoop.jid).toMatch(/^agent_[a-z]+_[a-z]+$/);
-    expect(scoop.isCone).toBe(false);
     expect(scoop.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
     // Ephemeral agent scoops must opt out of the orchestrator's cone-notify
     // side effect; the bridge drains responses via `observeScoop` instead.
@@ -379,8 +381,6 @@ describe('createAgentBridge — config construction', () => {
       jid: 'cone_beta',
       name: 'Beta',
       folder: 'cone-beta',
-      isCone: true,
-      type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'Beta',
       addedAt: new Date().toISOString(),
@@ -391,8 +391,6 @@ describe('createAgentBridge — config construction', () => {
       jid: 'scoop_beta_worker',
       name: 'worker',
       folder: 'beta-worker',
-      isCone: false,
-      type: 'scoop',
       assistantLabel: 'beta-worker',
       parentJid: extraCone.jid,
     };
@@ -630,9 +628,7 @@ describe('createAgentBridge — name generation', () => {
       jid: 'agent_cozy_vanilla',
       name: 'agent-cozy-vanilla',
       folder: 'agent-cozy-vanilla',
-      isCone: false,
       parentJid: 'cone_1',
-      type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'agent-cozy-vanilla',
       addedAt: '2026-04-19T00:00:00Z',
@@ -660,9 +656,7 @@ describe('createAgentBridge — name generation', () => {
       jid: 'agent_cozy_vanilla',
       name: 'agent-cozy-vanilla',
       folder: 'agent-cozy-vanilla',
-      isCone: false,
       parentJid: 'cone_1',
-      type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'agent-cozy-vanilla',
       addedAt: '2026-04-19T00:00:00Z',
@@ -743,9 +737,7 @@ describe('createAgentBridge — model resolution', () => {
       jid: 'scoop_parent',
       name: 'parent',
       folder: 'parent',
-      isCone: false,
       parentJid: 'cone_1',
-      type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'parent',
       addedAt: '2026-04-19T00:00:00Z',
@@ -773,9 +765,7 @@ describe('createAgentBridge — model resolution', () => {
       jid: 'cone_1',
       name: 'Cone',
       folder: 'cone',
-      isCone: true,
       parentJid: null,
-      type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
       addedAt: '2026-04-19T00:00:00Z',
@@ -799,9 +789,7 @@ describe('createAgentBridge — model resolution', () => {
       jid: 'cone_1',
       name: 'Cone',
       folder: 'cone',
-      isCone: true,
       parentJid: null,
-      type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
       addedAt: '2026-04-19T00:00:00Z',
@@ -832,9 +820,7 @@ describe('createAgentBridge — model resolution', () => {
       jid: 'cone_1',
       name: 'Cone',
       folder: 'cone',
-      isCone: true,
       parentJid: null,
-      type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
       addedAt: '2026-04-19T00:00:00Z',
@@ -906,9 +892,7 @@ describe('createAgentBridge — model resolution', () => {
       jid: 'cone_1',
       name: 'Cone',
       folder: 'cone',
-      isCone: true,
       parentJid: null,
-      type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
       addedAt: '2026-04-19T00:00:00Z',
@@ -937,9 +921,7 @@ describe('createAgentBridge — model resolution', () => {
       jid: 'scoop_parent',
       name: 'parent',
       folder: 'parent',
-      isCone: false,
       parentJid: 'cone_1',
-      type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'parent',
       addedAt: '2026-04-19T00:00:00Z',
@@ -1010,9 +992,7 @@ describe('createAgentBridge — thinking level resolution', () => {
       jid: 'scoop_parent',
       name: 'parent',
       folder: 'parent',
-      isCone: false,
       parentJid: 'cone_1',
-      type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'parent',
       addedAt: '2026-04-19T00:00:00Z',
@@ -1036,9 +1016,7 @@ describe('createAgentBridge — thinking level resolution', () => {
       jid: 'scoop_parent',
       name: 'parent',
       folder: 'parent',
-      isCone: false,
       parentJid: 'cone_1',
-      type: 'scoop',
       requiresTrigger: false,
       assistantLabel: 'parent',
       addedAt: '2026-04-19T00:00:00Z',
@@ -1610,9 +1588,7 @@ describe('createAgentBridge — parentJid propagation', () => {
       jid: 'cone_main_1',
       name: 'Cone',
       folder: 'cone',
-      isCone: true,
       parentJid: null,
-      type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
       addedAt: '2026-04-19T00:00:00Z',
@@ -1634,9 +1610,7 @@ describe('createAgentBridge — parentJid propagation', () => {
       jid: 'cone_main_1',
       name: 'Cone',
       folder: 'cone',
-      isCone: true,
       parentJid: null,
-      type: 'cone',
       requiresTrigger: false,
       assistantLabel: 'sliccy',
       addedAt: '2026-04-19T00:00:00Z',
@@ -1673,9 +1647,7 @@ describe('createAgentBridge — parentJid propagation', () => {
       jid: 'scoop_worker_1',
       name: 'worker',
       folder: 'worker',
-      isCone: false,
       parentJid: 'cone_1',
-      type: 'scoop',
       requiresTrigger: true,
       assistantLabel: 'worker',
       addedAt: '2026-04-19T00:00:00Z',

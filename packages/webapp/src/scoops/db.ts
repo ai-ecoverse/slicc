@@ -68,8 +68,6 @@ function mapLegacyGroupToScoop(
     folder: g.folder,
     trigger: isCone ? undefined : g.trigger || `@${g.folder}`,
     requiresTrigger: !isCone && (g.requiresTrigger ?? true),
-    isCone,
-    type: isCone ? 'cone' : 'scoop',
     // Legacy groups predate the work-unit tree; a non-main group belonged to
     // the single main group every legacy store had. Without one (should not
     // happen) the record can only become a root.

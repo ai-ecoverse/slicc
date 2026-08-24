@@ -45,8 +45,6 @@ const cone: RegisteredScoop = {
   jid: 'cone_1',
   name: 'Cone',
   folder: 'cone',
-  isCone: true,
-  type: 'cone',
   parentJid: null,
   requiresTrigger: false,
   assistantLabel: 'sliccy',
@@ -59,8 +57,6 @@ const scoop: RegisteredScoop = {
   jid: 'scoop_1',
   name: 'worker',
   folder: 'worker',
-  isCone: false,
-  type: 'scoop',
   parentJid: cone.jid,
   // Copied at creation, kept after the cone moved on — the picker must not
   // pretend this is what it edits.

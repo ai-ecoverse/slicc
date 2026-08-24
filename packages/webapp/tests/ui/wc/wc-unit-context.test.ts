@@ -17,8 +17,6 @@ function unit(over: Partial<RegisteredScoop>): RegisteredScoop {
     jid: over.jid ?? 'jid',
     name: 'Name',
     folder: 'folder',
-    isCone: over.parentJid === null,
-    type: over.parentJid === null ? 'cone' : 'scoop',
     requiresTrigger: false,
     assistantLabel: 'label',
     addedAt: '2026-01-01T00:00:00.000Z',

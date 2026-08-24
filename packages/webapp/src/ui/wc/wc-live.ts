@@ -20,6 +20,7 @@ import { DefaultTranscriptExportService } from '../../transcript/export-service.
 import { readSnapshot, writeSnapshot } from '../../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../../transcript/strict-secret-client.js';
 import { ownerWorkspaceFor } from '../../work-unit/descriptor.js';
+import { isRootUnit } from '../../work-unit/policy.js';
 import {
   guardedReload,
   installWorkerStaleAssetReloadListener,
@@ -43,7 +44,7 @@ import { createWcMonitorDeps } from './wc-live-monitor-deps.js';
 import { setupSyncFsBootNonce } from './wc-live-sync-fs.js';
 import { applyThreadContext } from './wc-live-thinking-hydration.js';
 import { mountWcShell, type WcShellRefs } from './wc-shell.js';
-import { switcherLabelFor, unitForContext, unitSlugFor } from './wc-unit-context.js';
+import { defaultRootOf, switcherLabelFor, unitForContext, unitSlugFor } from './wc-unit-context.js';
 import { createWorkbenchActivator, type WorkbenchActivator } from './wc-workbench.js';
 import { wireFileMentions } from './wire-file-mentions.js';
 
@@ -438,7 +439,7 @@ export function wireWcChipTips(deps: {
             'no quotes, no trailing period.',
           prompt:
             `Summarize what this agent has been doing.\n` +
-            `Agent: ${scoop.isCone ? `${switcherLabelFor(scoop)} (a main agent)` : scoop.name}\n` +
+            `Agent: ${isRootUnit(scoop) ? `${switcherLabelFor(scoop)} (a main agent)` : scoop.name}\n` +
             `Most recent activity:\n${activity}`,
           maxTokens: 40,
         });
@@ -1027,7 +1028,7 @@ export function attachWcClient(
         stat: async (path) => (await openVfs()).reader.stat(path),
       },
       getActiveSessionInfo: () => {
-        const cone = client.getScoops().find((s) => s.isCone);
+        const cone = defaultRootOf(client.getScoops());
         return { id: cone?.jid ?? `session-${Date.now()}`, title: cone?.name ?? 'Active Session' };
       },
       version: __SLICC_VERSION__,

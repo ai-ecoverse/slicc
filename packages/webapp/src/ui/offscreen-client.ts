@@ -359,7 +359,7 @@ export class OffscreenClient implements KernelClientFacade {
     scoop: RegisteredScoop,
     options: { description?: string; prompt?: string } = {}
   ): Promise<void> {
-    if (!scoop.isCone) {
+    if (!isRootUnit(scoop)) {
       throw new Error(
         'OffscreenClient.registerScoop is cone-only; use scoop_scoop for non-cone scoops'
       );
@@ -1246,7 +1246,7 @@ export class OffscreenClient implements KernelClientFacade {
   }
 
   private handleScoopCreated(msg: ScoopCreatedMsg): void {
-    const scoop = this.msgScoopToRegistered(msg.scoop, this.coneJidFromList(this.scoops));
+    const scoop = this.msgScoopToRegistered(msg.scoop, this.coneJidFromRecords(this.scoops));
     // Remove optimistic entry (same name, different JID) and add the real one
     this.scoops = this.scoops.filter((s) => s.name !== scoop.name || s.jid === scoop.jid);
     if (!this.scoops.find((s) => s.jid === scoop.jid)) {
@@ -1285,7 +1285,7 @@ export class OffscreenClient implements KernelClientFacade {
 
   private handleScoopList(msg: ScoopListMsg): void {
     this.scoops = msg.scoops.map((s) =>
-      this.msgScoopToRegistered(s, this.coneJidFromList(msg.scoops))
+      this.msgScoopToRegistered(s, this.coneJidFromWire(msg.scoops))
     );
     for (const s of msg.scoops) {
       this.scoopStatuses.set(s.jid, s.status);
@@ -1297,7 +1297,7 @@ export class OffscreenClient implements KernelClientFacade {
     log.info('Received state snapshot', { scoopCount: msg.scoops.length });
 
     this.scoops = msg.scoops.map((s) =>
-      this.msgScoopToRegistered(s, this.coneJidFromList(msg.scoops))
+      this.msgScoopToRegistered(s, this.coneJidFromWire(msg.scoops))
     );
     for (const s of msg.scoops) {
       this.scoopStatuses.set(s.jid, s.status);
@@ -1341,8 +1341,20 @@ export class OffscreenClient implements KernelClientFacade {
     });
   }
 
-  private coneJidFromList(scoops: ReadonlyArray<{ jid: string; isCone: boolean }>): string | null {
-    return scoops.find((s) => s.isCone)?.jid ?? null;
+  /** Owning cone of the records already known locally (the ownership edge). */
+  private coneJidFromRecords(scoops: readonly RegisteredScoop[]): string | null {
+    return scoops.find((s) => isRootUnit(s))?.jid ?? null;
+  }
+
+  /**
+   * Owning cone of a wire list: the edge when the leader sends one, the
+   * legacy `isCone` flag when it does not. The wire keeps `isCone` for older
+   * leaders/followers even though the record no longer carries it (#2279).
+   */
+  private coneJidFromWire(scoops: ScoopListMsg['scoops']): string | null {
+    return (
+      scoops.find((s) => (s.parentId !== undefined ? s.parentId === null : s.isCone))?.jid ?? null
+    );
   }
 
   private msgScoopToRegistered(
@@ -1356,8 +1368,6 @@ export class OffscreenClient implements KernelClientFacade {
       jid: s.jid,
       name: s.name,
       folder: s.folder,
-      isCone: s.isCone,
-      type: s.isCone ? 'cone' : 'scoop',
       // Ownership edge straight from the wire (#1666). A legacy leader that
       // predates `parentId` gets the old inference: a scoop belongs to the
       // list's cone, and a list without a cone must still not turn a scoop

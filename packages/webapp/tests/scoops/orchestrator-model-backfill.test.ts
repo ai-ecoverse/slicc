@@ -26,8 +26,6 @@ function record(overrides: Partial<RegisteredScoop>): RegisteredScoop {
     jid: 'cone_1',
     name: 'Cone',
     folder: 'cone',
-    isCone: true,
-    type: 'cone',
     parentJid: null,
     requiresTrigger: false,
     assistantLabel: 'sliccy',
@@ -93,8 +91,6 @@ describe('Orchestrator model backfill on restore (#2310)', () => {
         jid: 'scoop_1',
         name: 'worker',
         folder: 'worker',
-        isCone: false,
-        type: 'scoop',
         parentJid: 'cone_1',
       })
     );
@@ -131,8 +127,6 @@ describe('Orchestrator model backfill on restore (#2310)', () => {
         jid: 'scoop_1',
         name: 'worker',
         folder: 'worker',
-        isCone: false,
-        type: 'scoop',
         parentJid: 'cone_1',
       })
     );

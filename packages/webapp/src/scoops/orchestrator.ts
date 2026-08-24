@@ -44,7 +44,13 @@ import {
 import type { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { WorkUnitManager } from '../work-unit/manager.js';
 import { rootsOf } from '../work-unit/policy.js';
-import { modelFor, modelIdFor, normalizeScoopRecord, setUnitModel } from '../work-unit/record.js';
+import {
+  legacyRecordIsCone,
+  modelFor,
+  modelIdFor,
+  normalizeScoopRecord,
+  setUnitModel,
+} from '../work-unit/record.js';
 import { SessionStore as UiSessionStore } from './chat-session-store.js';
 import { type AppendConeMemoryMeta, ConeMemoryStore } from './cone-memory-store.js';
 import * as db from './db.js';
@@ -439,9 +445,10 @@ export class Orchestrator implements ConeApprovalRouter {
     await this.modelPolicyFile.init();
 
     const savedScoops = await db.getAllScoops();
-    // Legacy records predate the ownership edge; `isCone` is the only root
-    // signal they carry, so it anchors the backfill once, here.
-    const restoredRootJid = Object.values(savedScoops).find((s) => s.isCone)?.jid;
+    // Legacy records predate the ownership edge; the deleted `isCone` field
+    // is the only root signal they carry, so it anchors the backfill once,
+    // here — through `legacyRecordIsCone`, the one sanctioned read.
+    const restoredRootJid = Object.values(savedScoops).find((s) => legacyRecordIsCone(s))?.jid;
 
     for (const scoop of Object.values(savedScoops)) {
       await this.backfillParent(scoop, restoredRootJid);
@@ -553,7 +560,7 @@ export class Orchestrator implements ConeApprovalRouter {
     restoredRootJid: string | undefined
   ): Promise<void> {
     if (scoop.parentJid !== undefined) return;
-    scoop.parentJid = scoop.isCone ? null : (restoredRootJid ?? null);
+    scoop.parentJid = legacyRecordIsCone(scoop) ? null : (restoredRootJid ?? null);
     try {
       await db.saveScoop(scoop);
     } catch (err) {
@@ -1061,6 +1068,16 @@ export class Orchestrator implements ConeApprovalRouter {
   /** The owning live runtime of a scoop, once spawned or observed. */
   getLiveUnit(jid: string): LiveWorkUnit | undefined {
     return this.lifecycle.getUnit(jid);
+  }
+
+  /**
+   * The owning live runtime of a scoop, created if it has none yet — the
+   * `WorkUnitHost` hook `WorkUnitManager` resolves every registered record
+   * through (#2279). Callers that only want an already-live unit ask
+   * {@link getLiveUnit}.
+   */
+  ensureLiveUnit(jid: string): LiveWorkUnit {
+    return this.lifecycle.ensureUnit(jid);
   }
 
   /** Wipe the virtual filesystem and re-seed default files (skills, shared CLAUDE.md). */

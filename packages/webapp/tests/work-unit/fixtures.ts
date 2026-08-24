@@ -1,12 +1,14 @@
 /**
  * Shared fixtures for the work-unit suites: record builders and an in-memory
- * {@link WorkUnitManagerHost} that records every call so adapter/manager
- * behaviour can be asserted without a real orchestrator.
+ * {@link WorkUnitManagerHost} that records every call so manager behaviour can
+ * be asserted without a real orchestrator. Its `ensureLiveUnit` hands out real
+ * {@link LiveWorkUnit}s — since #2279 that is the only runtime there is.
  */
 
 import { vi } from 'vitest';
 import type { ScoopObserver } from '../../src/scoops/scoop-lifecycle-manager.js';
 import type { RegisteredScoop, ScoopTabState } from '../../src/scoops/types.js';
+import { LiveWorkUnit, type UnitContext } from '../../src/work-unit/live-unit.js';
 import type { WorkUnitManagerHost } from '../../src/work-unit/manager.js';
 
 export function rootRecord(overrides: Partial<RegisteredScoop> = {}): RegisteredScoop {
@@ -14,8 +16,6 @@ export function rootRecord(overrides: Partial<RegisteredScoop> = {}): Registered
     jid: 'cone_1',
     name: 'Cone',
     folder: 'cone',
-    isCone: true,
-    type: 'cone',
     requiresTrigger: false,
     assistantLabel: 'sliccy',
     addedAt: '2026-08-21T00:00:00.000Z',
@@ -34,8 +34,6 @@ export function childRecord(
     name: folder,
     folder,
     trigger: `@${folder}`,
-    isCone: false,
-    type: 'scoop',
     requiresTrigger: true,
     assistantLabel: folder,
     addedAt: '2026-08-21T00:00:01.000Z',
@@ -48,70 +46,110 @@ export function childRecord(
   };
 }
 
+/**
+ * A record as persisted BEFORE #2279 deleted the derived role fields: the
+ * restore path must still read (`legacyRecordIsCone`) and strip them, and
+ * nothing may believe them over `parentJid`. Mutates and returns `scoop`.
+ */
+export function withLegacyRoleFields<T extends RegisteredScoop>(
+  scoop: T,
+  role: { isCone: boolean; type: 'cone' | 'scoop' }
+): T {
+  return Object.assign(scoop, role);
+}
+
 export interface FakeHost extends WorkUnitManagerHost {
   scoops: Map<string, RegisteredScoop>;
-  tabs: Map<string, ScoopTabState>;
-  observers: Map<string, Set<ScoopObserver>>;
-  contexts: Map<string, { getAgentMessages(): unknown[]; getContextFill(): number }>;
-  /** Fire an observer event for `jid`. */
+  units: Map<string, LiveWorkUnit>;
+  /** Fire an observer event for `jid` through its owning unit. */
   emit<K extends keyof ScoopObserver>(
     jid: string,
     event: K,
     ...args: Parameters<NonNullable<ScoopObserver[K]>>
   ): void;
-  sendPrompt: ReturnType<typeof vi.fn<WorkUnitManagerHost['sendPrompt']>>;
-  stopScoop: ReturnType<typeof vi.fn<WorkUnitManagerHost['stopScoop']>>;
+  /** Drive `jid`'s tab as the lifecycle manager would. */
+  setStatus(jid: string, status: ScoopTabState['status']): void;
+  /** Replace `jid`'s context stub (snapshot / abort drive it). */
+  setContext(jid: string, context: Partial<UnitContext>): void;
+  /** Narrower than the interface: the suites drive the live unit directly. */
+  ensureLiveUnit(jid: string): LiveWorkUnit;
+  sendPrompt: ReturnType<
+    typeof vi.fn<
+      (
+        jid: string,
+        text: string,
+        senderId: string,
+        senderName: string,
+        options?: { steer?: boolean }
+      ) => Promise<void>
+    >
+  >;
+  stopScoop: ReturnType<typeof vi.fn<(jid: string) => void>>;
   registerScoop: ReturnType<typeof vi.fn<WorkUnitManagerHost['registerScoop']>>;
-  unregisterScoop: ReturnType<typeof vi.fn<WorkUnitManagerHost['unregisterScoop']>>;
+  unregisterScoop: ReturnType<typeof vi.fn<(jid: string) => Promise<void>>>;
 }
 
 export function makeFakeHost(initial: RegisteredScoop[] = []): FakeHost {
   const scoops = new Map(initial.map((s) => [s.jid, s]));
-  const tabs = new Map<string, ScoopTabState>();
-  const observers = new Map<string, Set<ScoopObserver>>();
-  const contexts = new Map<string, { getAgentMessages(): unknown[]; getContextFill(): number }>();
+  const units = new Map<string, LiveWorkUnit>();
   const host: FakeHost = {
     scoops,
-    tabs,
-    observers,
-    contexts,
+    units,
     emit(jid, event, ...args) {
-      for (const o of observers.get(jid) ?? []) {
-        (o[event] as ((...a: unknown[]) => void) | undefined)?.(...args);
-      }
+      units.get(jid)?.dispatch(event, ...args);
+    },
+    setStatus(jid, status) {
+      host.ensureLiveUnit(jid).transition(status);
+    },
+    setContext(jid, context) {
+      host.ensureLiveUnit(jid).context = stubContext(jid, host, context);
     },
     getScoops: () => Array.from(scoops.values()),
     getScoop: (jid) => scoops.get(jid),
-    getScoopTabState: (jid) => tabs.get(jid),
-    getScoopContext: (jid) => contexts.get(jid),
+    ensureLiveUnit(jid: string): LiveWorkUnit {
+      let unit = units.get(jid);
+      if (!unit || unit.isClosed) {
+        unit = new LiveWorkUnit(jid, {
+          getScoop: (j) => scoops.get(j),
+          sendPrompt: (j, text, senderId, senderName, options) =>
+            host.sendPrompt(j, text, senderId, senderName, options),
+          clearIdleTimer: () => {},
+          forgetCompletion: () => {},
+          unregister: (j) => host.unregisterScoop(j),
+        });
+        // Every spawned unit owns a context; `abort()` stops it, which is what
+        // `stopScoop` does in the real host.
+        unit.context = stubContext(jid, host);
+        units.set(jid, unit);
+      }
+      return unit;
+    },
     sendPrompt: vi.fn(async () => {}),
     stopScoop: vi.fn(),
     registerScoop: vi.fn(async (scoop: RegisteredScoop) => {
       scoops.set(scoop.jid, scoop);
-      tabs.set(scoop.jid, {
-        jid: scoop.jid,
-        contextId: `ctx-${scoop.jid}`,
-        status: 'ready',
-        lastActivity: scoop.addedAt,
-      });
+      host.ensureLiveUnit(scoop.jid).transition('ready');
     }),
     unregisterScoop: vi.fn(async (jid: string) => {
       scoops.delete(jid);
-      tabs.delete(jid);
-      observers.delete(jid);
-      contexts.delete(jid);
+      await units.get(jid)?.teardown();
+      units.delete(jid);
     }),
-    observeScoop: (jid, observer) => {
-      let set = observers.get(jid);
-      if (!set) {
-        set = new Set();
-        observers.set(jid, set);
-      }
-      set.add(observer);
-      return () => {
-        set?.delete(observer);
-      };
-    },
   };
   return host;
+}
+
+function stubContext(
+  jid: string,
+  host: FakeHost,
+  overrides: Partial<UnitContext> = {}
+): UnitContext {
+  return {
+    init: async () => {},
+    stop: () => host.stopScoop(jid),
+    dispose: () => {},
+    getAgentMessages: () => [],
+    getContextFill: () => 0,
+    ...overrides,
+  };
 }

@@ -55,8 +55,6 @@ const cone = scoop({
   jid: 'cone-1',
   name: 'sliccy',
   folder: 'cone',
-  isCone: true,
-  type: 'cone',
   parentJid: null,
   assistantLabel: 'sliccy',
 });
@@ -107,12 +105,12 @@ describe('leader-local thinking bridge', () => {
 
 describe('scoopColor / toSwitcherScoops', () => {
   it('gives the cone its fixed waffle color', () => {
-    expect(scoopColor(cone)).toBe('#b07823');
+    expect(scoopColor({ isRoot: true, name: cone.name })).toBe('#b07823');
   });
 
   it('assigns scoops a stable palette color by name', () => {
-    const a = scoopColor(scoop({ name: 'researcher' }));
-    expect(scoopColor(scoop({ name: 'researcher' }))).toBe(a);
+    const a = scoopColor({ isRoot: false, name: 'researcher' });
+    expect(scoopColor({ isRoot: false, name: 'researcher' })).toBe(a);
     expect(a).toMatch(/^#/);
   });
 
@@ -479,7 +477,7 @@ describe('prepareWcShell scoop selection', () => {
 
     expect(writes).toEqual([
       `switcher.active=${selected.jid}`,
-      `shader.tint=${scoopColor(selected)}`,
+      `shader.tint=${scoopColor({ isRoot: selected.parentJid === null, name: selected.name })}`,
       'shader.mode=scoop',
     ]);
   });

@@ -36,9 +36,7 @@ describe('Scoops Database', () => {
       folder: 'test-scoop',
       trigger: '@test-scoop',
       requiresTrigger: true,
-      isCone: false,
       parentJid: 'cone',
-      type: 'scoop',
       assistantLabel: 'test-scoop',
       addedAt: new Date().toISOString(),
     };
