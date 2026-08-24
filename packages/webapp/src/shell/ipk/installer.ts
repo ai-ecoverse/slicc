@@ -18,7 +18,7 @@
 import type { SecureFetch } from 'just-bash';
 import type { DirEntry, VirtualFS } from '../../fs/index.js';
 import { reconcileGlobalBinDelegators } from './global-bin-delegators.js';
-import { GLOBAL_NODE_MODULES, GLOBAL_NPM_PREFIX } from './global-prefix.js';
+import { GLOBAL_NODE_MODULES, GLOBAL_NPM_PREFIX, GLOBAL_PACKAGE_JSON } from './global-prefix.js';
 import { fetchPackument, fetchTarball, type Packument, resolveVersion } from './registry.js';
 import {
   type InstallNode,
@@ -477,6 +477,12 @@ export async function installPackages(
   }
 
   const rootDependencies: Record<string, string> = {};
+  if (globalInstall) {
+    const existingGlobal = await readJsonOr<ProjectManifest>(fs, GLOBAL_PACKAGE_JSON, {});
+    for (const [name, range] of Object.entries(existingGlobal.dependencies ?? {})) {
+      rootDependencies[name] = range;
+    }
+  }
   for (const direct of directs) {
     rootDependencies[direct.parsed.name] = direct.parsed.range;
   }

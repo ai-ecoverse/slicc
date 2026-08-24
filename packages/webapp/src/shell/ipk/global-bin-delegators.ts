@@ -20,12 +20,29 @@ function buildDelegatorSource(binName: string): string {
   const escaped = JSON.stringify(binName);
   return [
     `// ${GLOBAL_BIN_DELEGATOR_MARKER}`,
-    "const { spawn } = require('sliccy:exec');",
+    "const { start } = require('sliccy:exec');",
     `const __bin = ${escaped};`,
-    "spawn(['ipx', __bin, ...process.argv.slice(2)])",
-    '  .then((r) => process.exit(r.exitCode), () => process.exit(1));',
+    "const __argv = ['ipx', __bin, ...process.argv.slice(2)];",
+    "const __stdin = typeof stdin !== 'undefined' ? stdin : undefined;",
+    'const __h = start(__argv, __stdin !== undefined ? { stdin: __stdin } : undefined);',
+    '__h.stdin.end();',
+    'const __r = await __h.done;',
+    'if (__r.stdout) process.stdout.write(__r.stdout);',
+    'if (__r.stderr) process.stderr.write(__r.stderr);',
+    'process.exit(__r.exitCode);',
     '',
   ].join('\n');
+}
+
+/** Thrown when a global bin name would overwrite a user-authored `/shared/bin` script. */
+export class GlobalBinCollisionError extends Error {
+  constructor(
+    public readonly binName: string,
+    public readonly path: string
+  ) {
+    super(`ipk: refusing to overwrite user script at ${path} (bin '${binName}')`);
+    this.name = 'GlobalBinCollisionError';
+  }
 }
 
 async function readDelegatorMarker(fs: VirtualFS, path: string): Promise<boolean> {
@@ -72,6 +89,11 @@ export async function reconcileGlobalBinDelegators(
   for (const binName of activeBinNames) {
     if (!binName || binName.includes('/')) continue;
     const path = joinPath(GLOBAL_BIN_DIR, `${binName}.jsh`);
+    if (await fs.exists(path)) {
+      if (!(await readDelegatorMarker(fs, path))) {
+        throw new GlobalBinCollisionError(binName, path);
+      }
+    }
     await fs.writeFile(path, buildDelegatorSource(binName));
   }
 }

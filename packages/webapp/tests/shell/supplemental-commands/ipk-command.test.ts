@@ -93,6 +93,7 @@ function buildTar(entries: TarEntryInput[]): Uint8Array {
 interface SyntheticPackage {
   name: string;
   version: string;
+  dependencies?: Record<string, string>;
   files?: Record<string, string>;
 }
 
@@ -133,6 +134,7 @@ function buildRegistry(packages: SyntheticPackage[]): Registry {
       versionMap[p.version] = {
         name,
         version: p.version,
+        ...(p.dependencies ? { dependencies: p.dependencies } : {}),
         dist: {
           tarball: `https://registry.npmjs.org/${name}/-/${tarballBasename(name, p.version)}`,
         },
@@ -541,6 +543,88 @@ describe('createIpkCommand', () => {
     expect(await fs.exists(delegator)).toBe(true);
     const source = (await fs.readFile(delegator)) as string;
     expect(source).toMatch(/@ipk-global-delegator/);
+    expect(source).toMatch(/await __h\.done/);
+    expect(source).toMatch(/process\.stdout\.write/);
     expect(source).toMatch(/ipx/);
+  });
+
+  it('incremental global installs merge prior direct dependencies into resolution', async () => {
+    const reg = buildRegistry([
+      {
+        name: 'cli-a',
+        version: '1.0.0',
+        dependencies: { dep: '^1.0.0' },
+        files: {
+          'package.json': JSON.stringify({
+            name: 'cli-a',
+            version: '1.0.0',
+            dependencies: { dep: '^1.0.0' },
+            bin: { 'cli-a': 'cli.js' },
+          }),
+          'cli.js': 'require("dep");\n',
+        },
+      },
+      {
+        name: 'cli-b',
+        version: '1.0.0',
+        dependencies: { dep: '^3.0.0' },
+        files: {
+          'package.json': JSON.stringify({
+            name: 'cli-b',
+            version: '1.0.0',
+            dependencies: { dep: '^3.0.0' },
+            bin: { 'cli-b': 'cli.js' },
+          }),
+          'cli.js': 'require("dep");\n',
+        },
+      },
+      { name: 'dep', version: '1.0.0' },
+      { name: 'dep', version: '3.0.0' },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r1 = await cmd.execute(['install', '-g', 'cli-a'], ctxOf(fs) as never);
+    expect(r1.exitCode).toBe(0);
+    const depRoot1 = JSON.parse(
+      (await fs.readFile(`${GLOBAL_NODE_MODULES}/dep/package.json`)) as string
+    );
+    expect(depRoot1.version).toBe('1.0.0');
+
+    const r2 = await cmd.execute(['install', '-g', 'cli-b'], ctxOf(fs) as never);
+    expect(r2.exitCode).toBe(0);
+    const depRoot2 = JSON.parse(
+      (await fs.readFile(`${GLOBAL_NODE_MODULES}/dep/package.json`)) as string
+    );
+    expect(depRoot2.version).toBe('1.0.0');
+    expect(await fs.exists(`${GLOBAL_NODE_MODULES}/cli-b/node_modules/dep/package.json`)).toBe(
+      true
+    );
+    const depNested = JSON.parse(
+      (await fs.readFile(`${GLOBAL_NODE_MODULES}/cli-b/node_modules/dep/package.json`)) as string
+    );
+    expect(depNested.version).toBe('3.0.0');
+  });
+
+  it('global install refuses to overwrite a user script in /shared/bin', async () => {
+    await fs.mkdir(GLOBAL_BIN_DIR, { recursive: true });
+    await fs.writeFile(`${GLOBAL_BIN_DIR}/say.jsh`, '// user script\n');
+    const reg = buildRegistry([
+      {
+        name: 'say',
+        version: '1.0.0',
+        files: {
+          'package.json': JSON.stringify({
+            name: 'say',
+            version: '1.0.0',
+            bin: { say: 'cli.js' },
+          }),
+          'cli.js': 'console.log("cli");\n',
+        },
+      },
+    ]);
+    const cmd = createIpkCommand('ipk', { fs, fetch: makeFetch(reg) });
+    const r = await cmd.execute(['install', '-g', 'say'], ctxOf(fs) as never);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toMatch(/refusing to overwrite/i);
+    expect((await fs.readFile(`${GLOBAL_BIN_DIR}/say.jsh`)) as string).toBe('// user script\n');
   });
 });
