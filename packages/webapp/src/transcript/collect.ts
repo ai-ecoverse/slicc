@@ -15,7 +15,7 @@ import { TranscriptExportError } from '@slicc/shared-ts';
 import type { SessionData } from '../core/types.js';
 import type { ChatMessage, Session } from '../scoops/chat-types.js';
 import type { RegisteredScoop } from '../scoops/types.js';
-import { isRootUnit } from '../work-unit/policy.js';
+import { isRootUnit, subtreeOf } from '../work-unit/policy.js';
 import { chatSessionIdFor } from '../work-unit/record.js';
 import type { TranscriptConversationSource } from './normalize.js';
 
@@ -63,28 +63,9 @@ function uiSessionId(scoop: RegisteredScoop): string {
   return chatSessionIdFor(scoop);
 }
 
-/**
- * `rootJid`'s unit plus every unit it transitively owns, in registry order.
- * Empty when the root is no longer registered — the caller decides what an
- * empty scope means rather than silently widening back to everything.
- */
-export function subtreeOf(scoops: readonly RegisteredScoop[], rootJid: string): RegisteredScoop[] {
-  const owned = new Set<string>([rootJid]);
-  // One pass per generation: a child is admitted once its parent is, and the
-  // depth of the ownership tree can never exceed the roster size.
-  for (let pass = 0; pass < scoops.length; pass++) {
-    let grew = false;
-    for (const scoop of scoops) {
-      if (owned.has(scoop.jid)) continue;
-      if (scoop.parentJid !== null && owned.has(scoop.parentJid)) {
-        owned.add(scoop.jid);
-        grew = true;
-      }
-    }
-    if (!grew) break;
-  }
-  return scoops.filter((scoop) => owned.has(scoop.jid));
-}
+// `subtreeOf` lives in `work-unit/policy.ts` (the ownership-tree helpers) and
+// is re-exported here for the transcript callers that already import it.
+export { subtreeOf } from '../work-unit/policy.js';
 
 /**
  * Compute a stable string signature of the current scoop list, processing

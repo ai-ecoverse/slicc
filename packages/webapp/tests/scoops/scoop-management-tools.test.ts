@@ -956,3 +956,225 @@ describe('scoop_scoop — parentJid propagation from cone', () => {
     expect(created.originToolCallId).toBeUndefined();
   });
 });
+
+// ---------------------------------------------------------------------------
+// Subtree-scoped name resolution (#2360)
+//
+// With several cones on one roster, name-based child resolution used to match
+// globally: cone A's `scoop_wait helper` could capture cone B's identically
+// named scoop. Every name lookup now runs against the caller's own subtree —
+// the calling unit plus what it transitively owns — and an unmatched name is
+// an error naming that subtree, never a global match.
+// ---------------------------------------------------------------------------
+
+describe('name resolution is scoped to the caller subtree (#2360)', () => {
+  const coneA: RegisteredScoop = {
+    jid: 'cone_a',
+    name: 'Cone A',
+    folder: 'cone',
+    parentJid: null,
+    requiresTrigger: false,
+    assistantLabel: 'sliccy',
+    addedAt: '2026-01-01T00:00:00.000Z',
+  };
+  const coneB: RegisteredScoop = {
+    ...coneA,
+    jid: 'cone_b',
+    name: 'Cone B',
+    folder: 'cone-b',
+    assistantLabel: 'cone-b',
+    addedAt: '2026-01-02T00:00:00.000Z',
+  };
+  const helperA: RegisteredScoop = {
+    jid: 'scoop_helper_a',
+    name: 'helper',
+    folder: 'helper-scoop',
+    parentJid: coneA.jid,
+    requiresTrigger: true,
+    assistantLabel: 'helper-scoop',
+    addedAt: '2026-01-03T00:00:00.000Z',
+  };
+  // Cone B's own `helper`: same display name, distinct folder (folders are
+  // globally unique because they name a real /scoops/<folder>/ directory).
+  const helperB: RegisteredScoop = {
+    ...helperA,
+    jid: 'scoop_helper_b',
+    folder: 'helper-scoop-2',
+    assistantLabel: 'helper-scoop-2',
+    parentJid: coneB.jid,
+  };
+  // A grandchild of cone A — reachable through the transitive parentJid walk.
+  const grandchildA: RegisteredScoop = {
+    ...helperA,
+    jid: 'scoop_deep_a',
+    name: 'deep',
+    folder: 'deep-scoop',
+    assistantLabel: 'deep-scoop',
+    parentJid: helperA.jid,
+  };
+
+  const ROSTER = [coneA, coneB, helperA, helperB, grandchildA];
+  /** Same units, reversed — resolution must not depend on registry order. */
+  const REVERSED = [...ROSTER].reverse();
+
+  function toolsFor(caller: RegisteredScoop, roster: readonly RegisteredScoop[] = ROSTER) {
+    const onScheduleScoopWait = vi.fn((jids: readonly string[]) => ({
+      scheduled: [...jids],
+      unknown: [],
+    }));
+    const onFeedScoop = vi.fn(async () => {});
+    const onDropScoop = vi.fn(async () => {});
+    const onScoopScoop = vi.fn(
+      async (scoop: Omit<RegisteredScoop, 'jid'>): Promise<RegisteredScoop> => ({
+        ...scoop,
+        jid: `scoop_${scoop.folder}_1`,
+      })
+    );
+    const tools = createScoopManagementTools({
+      scoop: caller,
+      onSendMessage: vi.fn(),
+      getScoops: () => [...roster],
+      onScheduleScoopWait,
+      onFeedScoop,
+      onDropScoop,
+      onScoopScoop,
+      onMuteScoops: vi.fn(),
+    });
+    const pick = (name: string) => tools.find((t) => t.name === name)!;
+    return { pick, onScheduleScoopWait, onFeedScoop, onDropScoop, onScoopScoop };
+  }
+
+  it('scoop_wait resolves each cone to its OWN same-named scoop', async () => {
+    const a = toolsFor(coneA);
+    await a.pick('scoop_wait').execute({ scoop_names: ['helper'] });
+    expect(a.onScheduleScoopWait).toHaveBeenCalledWith([helperA.jid], undefined);
+
+    const b = toolsFor(coneB);
+    await b.pick('scoop_wait').execute({ scoop_names: ['helper'] });
+    expect(b.onScheduleScoopWait).toHaveBeenCalledWith([helperB.jid], undefined);
+  });
+
+  it('scoop_wait resolution is registry-order independent', async () => {
+    for (const roster of [ROSTER, REVERSED]) {
+      const b = toolsFor(coneB, roster);
+      await b.pick('scoop_wait').execute({ scoop_names: ['helper'] });
+      expect(b.onScheduleScoopWait).toHaveBeenCalledWith([helperB.jid], undefined);
+    }
+  });
+
+  it('scoop_wait errors on another cone’s scoop folder instead of crossing', async () => {
+    const b = toolsFor(coneB);
+    const result = await b.pick('scoop_wait').execute({ scoop_names: [helperA.folder] });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('cone-b');
+    expect(result.content).toContain(helperA.folder);
+    expect(b.onScheduleScoopWait).not.toHaveBeenCalled();
+  });
+
+  it('scoop_wait reaches a grandchild through the transitive walk', async () => {
+    const a = toolsFor(coneA);
+    await a.pick('scoop_wait').execute({ scoop_names: ['deep-scoop'] });
+    expect(a.onScheduleScoopWait).toHaveBeenCalledWith([grandchildA.jid], undefined);
+
+    const b = toolsFor(coneB);
+    const crossed = await b.pick('scoop_wait').execute({ scoop_names: ['deep-scoop'] });
+    expect(crossed.isError).toBe(true);
+  });
+
+  it('scoop_mute only resolves the caller’s own children', async () => {
+    const onMuteScoops = vi.fn();
+    const tools = createScoopManagementTools({
+      scoop: coneB,
+      onSendMessage: vi.fn(),
+      getScoops: () => [...ROSTER],
+      onMuteScoops,
+    });
+    const result = await tools
+      .find((t) => t.name === 'scoop_mute')!
+      .execute({ scoop_names: [helperA.folder] });
+    expect(result.isError).toBe(true);
+    expect(onMuteScoops).not.toHaveBeenCalled();
+  });
+
+  it('feed_scoop refuses another cone’s scoop and its sibling cone', async () => {
+    const b = toolsFor(coneB);
+    const foreignScoop = await b
+      .pick('feed_scoop')
+      .execute({ scoop_name: helperA.folder, prompt: 'go' });
+    expect(foreignScoop.isError).toBe(true);
+    expect(foreignScoop.content).toContain('not found in your scoops (cone-b)');
+
+    const foreignCone = await b
+      .pick('feed_scoop')
+      .execute({ scoop_name: coneA.folder, prompt: 'go' });
+    expect(foreignCone.isError).toBe(true);
+    expect(b.onFeedScoop).not.toHaveBeenCalled();
+
+    const own = await b.pick('feed_scoop').execute({ scoop_name: 'helper', prompt: 'go' });
+    expect(own.isError).toBeUndefined();
+    expect(b.onFeedScoop).toHaveBeenCalledWith(helperB.jid, 'go');
+  });
+
+  it('feed_scoop still reports self-feeding rather than "not found"', async () => {
+    const a = toolsFor(coneA);
+    const result = await a.pick('feed_scoop').execute({ scoop_name: coneA.folder, prompt: 'go' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Cannot feed yourself.');
+  });
+
+  it('drop_scoop refuses another cone’s scoop and its sibling cone', async () => {
+    const b = toolsFor(coneB);
+    const foreignScoop = await b.pick('drop_scoop').execute({ scoop_name: helperA.folder });
+    expect(foreignScoop.isError).toBe(true);
+    expect(foreignScoop.content).toContain('not found in your scoops (cone-b)');
+
+    const foreignCone = await b.pick('drop_scoop').execute({ scoop_name: coneA.folder });
+    expect(foreignCone.isError).toBe(true);
+    expect(b.onDropScoop).not.toHaveBeenCalled();
+
+    const own = await b.pick('drop_scoop').execute({ scoop_name: helperB.folder });
+    expect(own.isError).toBeUndefined();
+    expect(b.onDropScoop).toHaveBeenCalledWith(helperB.jid);
+  });
+
+  it('drop_scoop still reports self-dropping rather than "not found"', async () => {
+    const a = toolsFor(coneA);
+    const result = await a.pick('drop_scoop').execute({ scoop_name: coneA.folder });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('Cannot drop yourself.');
+  });
+
+  it('list_scoops lists only the caller’s subtree', async () => {
+    const b = toolsFor(coneB);
+    const listed = await b.pick('list_scoops').execute({});
+    expect(listed.content).toContain(`(${helperB.folder})`);
+    expect(listed.content).not.toContain(`(${helperA.folder})`);
+    expect(listed.content).not.toContain('deep-scoop');
+
+    const a = toolsFor(coneA);
+    const listedA = await a.pick('list_scoops').execute({});
+    expect(listedA.content).toContain(helperA.folder);
+    expect(listedA.content).toContain('deep-scoop');
+    expect(listedA.content).not.toContain('cone-b');
+  });
+
+  it('scoop_scoop rejects a duplicate name inside the caller’s own subtree', async () => {
+    const a = toolsFor(coneA);
+    const result = await a.pick('scoop_scoop').execute({ name: 'helper' });
+    expect(result.isError).toBe(true);
+    expect(result.content).toContain('already exists in your scoops');
+    expect(a.onScoopScoop).not.toHaveBeenCalled();
+  });
+
+  it('scoop_scoop allows the same name in another subtree but keeps folders unique', async () => {
+    const roster = [coneA, coneB, helperA];
+    const b = toolsFor(coneB, roster);
+    const result = await b.pick('scoop_scoop').execute({ name: 'helper' });
+    expect(result.isError).toBeUndefined();
+    const created = b.onScoopScoop.mock.calls[0][0] as Omit<RegisteredScoop, 'jid'>;
+    expect(created.name).toBe('helper');
+    expect(created.folder).toBe('helper-scoop-2');
+    expect(created.parentJid).toBe(coneB.jid);
+    expect(result.content).toContain('helper-scoop-2');
+  });
+});

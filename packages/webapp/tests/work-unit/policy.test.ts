@@ -8,6 +8,7 @@ import {
   isPolicySubset,
   isRootUnit,
   rootsOf,
+  subtreeOf,
 } from '../../src/work-unit/policy.js';
 import { childRecord, rootRecord, withLegacyRoleFields } from './fixtures.js';
 
@@ -113,5 +114,36 @@ describe('work-unit policy', () => {
     expect(childrenOf(all, a1.jid)).toEqual([]);
     // oldest root first
     expect(rootsOf(all).map((s) => s.jid)).toEqual(['cone_b', 'cone_a']);
+  });
+});
+
+describe('subtreeOf', () => {
+  const coneA = rootRecord({ jid: 'cone_a', folder: 'cone' });
+  const coneB = rootRecord({ jid: 'cone_b', folder: 'cone-b' });
+  const child = childRecord(coneA.jid, { folder: 'helper-scoop' });
+  const grandchild = childRecord(child.jid, { folder: 'deep-scoop' });
+  const sibling = childRecord(coneB.jid, { folder: 'helper-scoop-2' });
+
+  it('returns the unit plus everything it transitively owns', () => {
+    const all = [coneA, coneB, child, grandchild, sibling];
+    expect(subtreeOf(all, coneA.jid).map((u) => u.jid)).toEqual([
+      coneA.jid,
+      child.jid,
+      grandchild.jid,
+    ]);
+    expect(subtreeOf(all, coneB.jid).map((u) => u.jid)).toEqual([coneB.jid, sibling.jid]);
+    expect(subtreeOf(all, child.jid).map((u) => u.jid)).toEqual([child.jid, grandchild.jid]);
+  });
+
+  it('is registry-order independent', () => {
+    const forward = [coneA, coneB, child, grandchild, sibling];
+    const reversed = [...forward].reverse();
+    expect(new Set(subtreeOf(reversed, coneA.jid).map((u) => u.jid))).toEqual(
+      new Set(subtreeOf(forward, coneA.jid).map((u) => u.jid))
+    );
+  });
+
+  it('is empty for an unregistered root rather than widening to everything', () => {
+    expect(subtreeOf([coneA, child], 'gone')).toEqual([]);
   });
 });

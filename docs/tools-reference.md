@@ -363,7 +363,10 @@ Scoop-only (not registered for the cone — it has no parent to message; its ass
 
 ### list_scoops
 
-Cone-only. List all registered scoops.
+Cone-only. List the scoops you own — your own subtree, not another cone's
+(#2360). Every name-based scoop tool (`feed_scoop`, `drop_scoop`, `scoop_mute`,
+`scoop_unmute`, `scoop_wait`) resolves names against exactly this list, so a
+name that is not here is an error, never a cross-cone match.
 
 | Property   | Value                                            |
 | ---------- | ------------------------------------------------ |
@@ -385,7 +388,12 @@ Cone-only. Create a new scoop.
 
 **Behavior**:
 
-- Folder is auto-derived from name (lowercase, slugified)
+- Folder is auto-derived from name (lowercase, slugified), and suffixed
+  (`helper-scoop-2`) when that folder is already taken anywhere on the roster —
+  `/scoops/<folder>/` is one shared VFS path, so two cones' scoops must not
+  collide there
+- A name already used inside your own subtree is rejected; the same name under a
+  different cone is fine
 - Scoop is registered but not activated
 - Use `feed_scoop` to give it a task
 
@@ -403,6 +411,8 @@ Cone-only. Delegate a task to a scoop.
 
 **Requirements**:
 
+- The scoop must be one you own (your subtree); another cone's scoop resolves as
+  "not found"
 - `prompt` must be complete and self-contained
 - Scoop has NO access to cone's conversation history
 - Include all context: file paths, URLs, instructions, expected output format
@@ -418,6 +428,8 @@ Cone-only. Remove a scoop.
 | **Name**   | `drop_scoop`                   |
 | **Input**  | `{ scoop_name: string }`       |
 | **Output** | `{ content: "Scoop removed" }` |
+
+Scoped to your own subtree — a cone cannot drop a sibling cone's scoop.
 
 ---
 

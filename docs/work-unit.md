@@ -326,6 +326,7 @@ the kernel host, for every float.
 - Unaddressed events (licks, sprinkles, workflow completions, follower snapshots) resolve the default root through `rootsOf(...)[0]` / `WorkUnitManager.resolveDefaultRoot()`; `bootstrapCone` only seeds a root when none exists.
 - `normalizeScoopRecord` sanitizes a root's trigger fields on register and restore; `ScoopPresentation` projects the wire's `isCone` from `isRootUnit`. Since #2279 the record has no role field at all, so nothing — `ui/` included — can branch on one.
 - `WorkUnitManager.close(id)` cascades to the unit's children first; closing root A leaves root B's subtree untouched.
+- Name-based child resolution in the scoop-management tools (`feed_scoop`, `drop_scoop`, `scoop_mute`, `scoop_unmute`, `scoop_wait`, `list_scoops`, `scoop_scoop`'s duplicate check) runs against `subtreeOf(roster, caller.jid)` — the caller plus what it transitively owns. An unmatched name is an error naming the caller's subtree; it never widens to a global match, so cone A's `scoop_wait helper` cannot capture cone B's `helper` (#2360). Scoop _folders_ stay globally unique (suffixed on collision) because `/scoops/<folder>/` is one shared VFS path. Cross-subtree operations wait on #2278's supervisor APIs.
 
 ### Phase 2 detail
 
