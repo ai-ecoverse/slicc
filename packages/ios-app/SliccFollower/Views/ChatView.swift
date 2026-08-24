@@ -899,7 +899,7 @@ struct ConversationView: View {
                 messages: appState.messages,
                 isStreaming: appState.isStreaming,
                 toolProgress: appState.toolProgress,
-                toolUICards: appState.toolUICards,
+                toolUICards: appState.visibleToolUICards,
                 openApprovals: appState.openApprovals,
                 onOpenApprovalDecision: appState.resolveOpenApproval,
                 sudoApprovals: appState.sudoApprovals,

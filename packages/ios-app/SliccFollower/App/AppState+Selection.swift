@@ -33,6 +33,15 @@ extension AppState {
         selectedScoop?.isReadOnly ?? false
     }
 
+    /// The approval cards this view may render. Cards are held globally —
+    /// the leader retracts each one by `tool_ui_done`, not per scoop — so a
+    /// card the CONE raised while you were reading it must not follow you
+    /// into a read-only scoop transcript (#2367). Hidden, not dropped: the
+    /// card is still the cone's to answer, and reappears on switching back.
+    var visibleToolUICards: [ToolUIPlaceholder] {
+        selectedUnitIsReadOnly ? [] : toolUICards
+    }
+
     var supportsModelControls: Bool {
         (leaderProtocolVersion ?? 0) >= 5
     }

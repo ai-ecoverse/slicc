@@ -143,6 +143,29 @@ final class ReadOnlyScoopTests: XCTestCase {
         XCTAssertTrue(state.toolUICards.isEmpty)
     }
 
+    /// A card the cone raised is held globally until the leader retracts it,
+    /// so switching to a scoop must hide it — and switching back must not
+    /// have lost it.
+    @MainActor
+    func testAConesPendingCardIsHiddenWhileAScoopIsSelected() throws {
+        let state = AppState()
+        state.scoops = [cone(), scoop()]
+        state.selectedScoopJid = "cone"
+        try send(
+            .toolUI(
+                messageId: "m1", toolName: "approve", requestId: "r1",
+                html: "<button>ok</button>"),
+            scoopJid: "cone", to: state)
+        XCTAssertEqual(state.visibleToolUICards.map(\.id), ["r1"])
+
+        state.selectScoop(jid: "reviewer")
+        XCTAssertTrue(state.visibleToolUICards.isEmpty)
+        XCTAssertEqual(state.toolUICards.map(\.id), ["r1"], "The cone's card is hidden, not dropped")
+
+        state.selectScoop(jid: "cone")
+        XCTAssertEqual(state.visibleToolUICards.map(\.id), ["r1"])
+    }
+
     @MainActor
     func testToolUiForAConeStillMountsACard() throws {
         let state = AppState()
