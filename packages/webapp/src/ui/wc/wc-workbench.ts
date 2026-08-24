@@ -13,6 +13,7 @@ import { toPreviewUrl } from '../../shell/supplemental-commands/shared.js';
 import { PRIMARY_WORKSPACE } from '../../work-unit/descriptor.js';
 import type { WorkUnitWorkspace } from '../../work-unit/types.js';
 import { wireFileActions } from './file-actions.js';
+import { MonitorHistory } from './monitor-history.js';
 import { buildMemoryRows } from './wc-memory.js';
 import { fetchMonitorData, type MonitorDeps } from './wc-monitor.js';
 
@@ -161,6 +162,10 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActiva
   let memorySeq = 0;
   let filesRefreshTimer: ReturnType<typeof setInterval> | null = null;
   let monitorRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  // Sparkline history for the vitals tiles. Fed by the refresh below, so it
+  // only accumulates while the panel is open — `windowLabel()` reports the
+  // span it actually covers rather than claiming more.
+  const monitorHistory = new MonitorHistory();
   let filesRefreshPending = false;
   let fileActionsWired = false;
 
@@ -219,8 +224,7 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActiva
   const refreshMonitor = (): void => {
     void (async () => {
       try {
-        const sections = await fetchMonitorData(deps.getMonitorDeps());
-        deps.monitor.sections = sections;
+        deps.monitor.model = await fetchMonitorData(deps.getMonitorDeps(), monitorHistory);
       } catch (err) {
         deps.log.error('WC monitor refresh failed', err);
       }
