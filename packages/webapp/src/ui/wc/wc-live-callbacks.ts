@@ -1,6 +1,6 @@
+import { isLickChannel } from '../../base/lick-channels.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
 import { isRootUnit } from '../../work-unit/policy.js';
-import { isLickChannel } from '../lick-channels.js';
 import type {
   OffscreenClient,
   OffscreenClientCallbacks,

@@ -2330,6 +2330,70 @@ describe('Bridge handlePanelMessage dispatch', () => {
     expect(sentMessages.some((m: any) => m.payload?.type === 'scoop-list')).toBe(true);
   });
 
+  it('request-scoop-messages derives from the canonical record when no context is live', async () => {
+    // #2275: the record answers for a unit whose context has not spawned —
+    // the one case neither the buffer nor the live-agent translation covers.
+    mockOrchestrator.getScoops.mockReturnValue([
+      { jid: 'cone_2', name: 'Two', folder: 'cone-two', parentJid: null, addedAt: '2' },
+    ]);
+    mockOrchestrator.getScoopContext.mockReturnValue(undefined);
+    mockOrchestrator.getConversationStore = vi.fn(() => ({
+      load: vi.fn(async () => ({
+        key: '/cones/cone-two/workspace::cone_2',
+        version: 1,
+        workUnitId: 'cone_2',
+        workspaceId: '/cones/cone-two/workspace',
+        folder: 'cone-two',
+        origin: 'agent-history',
+        entries: [
+          {
+            id: 'e0',
+            seq: 0,
+            kind: 'user',
+            timestamp: 1,
+            text: 'restore me',
+            message: { role: 'user', content: [{ type: 'text', text: 'restore me' }] },
+          },
+        ],
+        createdAt: 1,
+        updatedAt: 1,
+        legacyKeys: { agentSessionId: 'cone_2', chatSessionId: 'session-cone-two' },
+      })),
+    }));
+    const uiLoad = vi.fn().mockResolvedValue(undefined);
+    (bridge as any).sessionStore.load = uiLoad;
+
+    await (bridge as any).handleRequestScoopMessages('cone_2');
+
+    const replaced = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced' && m.payload.scoopJid === 'cone_2'
+    ) as any;
+    expect(replaced?.payload.messages.map((m: any) => m.content)).toEqual(['restore me']);
+    // The legacy UI store is never consulted once the record answered.
+    expect(uiLoad).not.toHaveBeenCalled();
+  });
+
+  it('request-scoop-messages falls back to the legacy UI store when there is no canonical record', async () => {
+    mockOrchestrator.getScoops.mockReturnValue([
+      { jid: 'cone_2', name: 'Two', folder: 'cone-two', parentJid: null, addedAt: '2' },
+    ]);
+    mockOrchestrator.getScoopContext.mockReturnValue(undefined);
+    mockOrchestrator.getConversationStore = vi.fn(() => ({ load: vi.fn(async () => null) }));
+    (bridge as any).sessionStore.load = vi.fn().mockResolvedValue({
+      id: 'session-cone-two',
+      messages: [{ id: 'm1', role: 'user', content: 'from the legacy store' }],
+    });
+
+    await (bridge as any).handleRequestScoopMessages('cone_2');
+
+    const replaced = sentMessages.find(
+      (m: any) => m.payload?.type === 'scoop-messages-replaced' && m.payload.scoopJid === 'cone_2'
+    ) as any;
+    expect(replaced?.payload.messages.map((m: any) => m.content)).toEqual([
+      'from the legacy store',
+    ]);
+  });
+
   it('request-scoop-messages replies with an empty list when a unit has no history anywhere', async () => {
     mockOrchestrator.getScoops.mockReturnValue([
       {

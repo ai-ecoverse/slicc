@@ -36,6 +36,8 @@ import { registerTranscriptExportService } from '../transcript/export-provider.j
 import { DefaultTranscriptExportService } from '../transcript/export-service.js';
 import { readSnapshot, writeSnapshot } from '../transcript/snapshot-store.js';
 import { getStrictKnownSecretRedactor } from '../transcript/strict-secret-client.js';
+import { migrateConversations } from '../work-unit/conversation/migration.js';
+import { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import {
   defaultChildVisibleRoots,
   ownerWorkspaceFor,
@@ -209,6 +211,12 @@ export class Orchestrator implements ConeApprovalRouter {
   });
   private lickManager: LickManager | null = null;
   private sessionStore: SessionStore | null = null;
+  /**
+   * The canonical conversation store (#2275). Created in {@link init}
+   * alongside `sessionStore`; every `ScoopContext` writes both while the
+   * read-old/write-new window is open.
+   */
+  private conversationStore: WorkUnitConversationStore | null = null;
   private fsWatcher: FsWatcher | null = null;
   /** Owns the live sudoers policy + shared approval broker for this float. */
   private sudoManager: SudoManager | null = null;
@@ -351,6 +359,7 @@ export class Orchestrator implements ConeApprovalRouter {
       approverFor: (jid) => this.ownerRootOrDefault(jid),
       getSharedFs: () => this.sharedFs,
       getSessionStore: () => this.sessionStore,
+      getConversationStore: () => this.conversationStore,
       getProcessManager: () => this.processManager,
       getSudoManager: () => this.sudoManager,
       callbacks: this.callbacks,
@@ -430,6 +439,7 @@ export class Orchestrator implements ConeApprovalRouter {
       onBootProgress
     );
     this.sessionStore = new SessionStore();
+    this.conversationStore = new WorkUnitConversationStore();
 
     // Create and attach file system watcher
     this.fsWatcher = new FsWatcher();
@@ -480,6 +490,13 @@ export class Orchestrator implements ConeApprovalRouter {
 
     // Records saved before per-cone model selection (#2310) carry no `model`.
     await this.backfillModels();
+
+    // One canonical conversation record per work unit (#2275). Resumable and
+    // versioned, and it never deletes a legacy record: for as long as both
+    // stores are written, dropping the canonical database is a full rollback.
+    // Failure here is non-fatal by construction — every reader falls back to
+    // the legacy stores when a unit has no canonical record.
+    await this.migrateConversations(onBootProgress);
 
     // Initialize global memory
     await this.memoryStore.ensureGlobalMemory();
@@ -557,6 +574,39 @@ export class Orchestrator implements ConeApprovalRouter {
 
     // Start polling for pending messages
     this.messageRouter.startMessageLoop();
+  }
+
+  /**
+   * Run (or resume) the migration of the legacy conversation stores into the
+   * canonical work-unit store (#2275). Reads `agent-sessions` through the
+   * live `SessionStore` and `browser-coding-agent` through a lazily created
+   * UI store — the same two stores every reader falls back to.
+   */
+  private async migrateConversations(onBootProgress?: (stage: string) => void): Promise<void> {
+    const store = this.conversationStore;
+    if (!store) return;
+    const uiSessionStore = new UiSessionStore();
+    try {
+      await migrateConversations({
+        store,
+        units: [...this.scoops.values()],
+        loadAgentSession: async (id) => {
+          const saved = await this.sessionStore?.load(id);
+          return saved ? { messages: saved.messages, createdAt: saved.createdAt } : null;
+        },
+        loadChatSession: async (id) => {
+          const saved = await uiSessionStore.load(id);
+          return saved ? { messages: saved.messages, createdAt: saved.createdAt } : null;
+        },
+        onProgress: onBootProgress,
+      });
+    } catch (err) {
+      // A migration that cannot run at all must not stop the boot: the legacy
+      // stores are untouched and every read falls back to them.
+      log.warn('Canonical conversation migration failed; staying on the legacy stores', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   /**
@@ -731,6 +781,15 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   getSessionStore(): SessionStore | null {
     return this.sessionStore;
+  }
+
+  /**
+   * The canonical conversation store (#2275), or null before {@link init}.
+   * Read by the kernel bridge so a UI history rebuild can derive from the
+   * canonical record instead of repairing across the legacy stores.
+   */
+  getConversationStore(): WorkUnitConversationStore | null {
+    return this.conversationStore;
   }
 
   /**

@@ -52,6 +52,7 @@ Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). Th
 | `live-unit.ts`  | `LiveWorkUnit` — the owning runtime: holds the `ScoopContext`, tab record and observer set; `transition()` enforces `LEGAL_TRANSITIONS`; `close()` is the single teardown                            |
 | `record.ts`     | `normalizeScoopRecord` (strips the pre-#2279 `isCone`/`type`, sanitizes a root), `legacyRecordIsCone`, `chatSessionIdFor`, `isPrimaryRoot`, `coneFolderFor`, `processOwnerKindFor`, `sourceLabelFor` |
 | `manager.ts`    | `WorkUnitManager` — `create / list / get / getParent / getChildren / roots / rootOf / resolveDefaultRoot / abort / close`; exposed as `Orchestrator.getWorkUnits()`                                  |
+| `conversation/` | The canonical conversation record (#2275): entry types, identity, ingest, the four derivations, the `slicc-work-units` store and its resumable migration — see below                                 |
 
 Tests: `packages/webapp/tests/work-unit/`. `conformance.ts` is a reusable suite any `WorkUnitRuntime` implementation must pass.
 
@@ -76,7 +77,8 @@ A strangler migration, each phase a separate PR with deletion criteria:
 | 3     | `isCone` replaced by hierarchy and policy in `scoops/` and `kernel/` (filesystem, approvals, child tools, shared memory, completion, default-target routing, presentation); two independent roots proven in `tests/work-unit/multi-root.test.ts`.                                                    | done                      |
 | 9a    | Deletion (#2279): `RegisteredScoop.isCone` / `type` gone, the `ui/` reads migrated to `isRootUnit` / `summaryIsRoot`, the `isCone` ratchet retired (the type is the gate), the Phase 1 `ScoopContextWorkUnit` adapter removed.                                                                       | done                      |
 | 4     | Add / switch / drop cones in the UI: new-cone / drop-cone in the freezer rail's action row, the tab strip as the only switcher, `cone-create` allocates `cone-<slug>` folders and per-folder chat sessions, `scoop-drop` of a root cascades and refuses the last root, `cone:<folder>` URL contexts. | done                      |
-| 5–9   | `WorkUnitClient` for local/remote UI, one persistence store, `CapabilityBroker`, explicit workspace sharing modes, generic parallel APIs, deletion of legacy paths.                                                                                                                                  | deferred; separate issues |
+| 5a    | One canonical conversation record per work unit (#2275): `ConversationEntry`, the `slicc-work-units` store, the four derivations, and a resumable migration behind a read-old/write-new window. Legacy stores still written; their deletion is a follow-up.                                          | done                      |
+| 5–9   | `WorkUnitClient` for local/remote UI, `CapabilityBroker`, explicit workspace sharing modes, generic parallel APIs, deletion of legacy paths.                                                                                                                                                         | deferred; separate issues |
 
 ### Phase 4 detail
 
@@ -89,6 +91,128 @@ A strangler migration, each phase a separate PR with deletion criteria:
 - The tray wire carries the edge: `ScoopSummary.parentId` / `ScoopListMsg.scoops[].parentId` (`null` for a cone; absent from leaders older than this). Browser followers group each cone with its own scoops (`toFollowerSwitcherScoops`), the extension panel takes ownership from the wire (`OffscreenClient`) and only infers it for legacy leaders; iOS decodes the field and keeps `isCone` as its root test.
 - Presentation lives in `ui/wc/wc-unit-context.ts`: chip label = `assistantLabel` for roots, thread/URL context `cone` (primary) / `cone:<folder>` (extra) / `scoop:<name>`, default root = primary else oldest. Followers render every cone from the unchanged wire.
 - Per-cone workspaces landed separately (#2271) — see below.
+
+### One conversation record per work unit ([#2275](https://github.com/ai-ecoverse/slicc/issues/2275))
+
+Before this, one conversation lived in three durable places, none of them
+authoritative, and every reader repaired against the others:
+
+| Store                  | Key                | Held                        |
+| ---------------------- | ------------------ | --------------------------- |
+| `agent-sessions`       | `<jid>`            | Pi's `AgentMessage[]`       |
+| `browser-coding-agent` | `session-<folder>` | the chat panel's projection |
+| `slicc-groups`         | `chatJid`          | routed messages / licks     |
+
+The canonical record (`work-unit/conversation/`) is the single durable
+representation of settled conversation state for one unit. Everything else is
+a **derivation**, never a parallel write.
+
+| Module         | Owns                                                                                                                                  |
+| -------------- | ------------------------------------------------------------------------------------------------------------------------------------- |
+| `types.ts`     | `ConversationEntry` (`user` / `assistant` / `tool-call` / `tool-result` / `external-event` / `child-result`), the record, its version |
+| `key.ts`       | identity — `<workspaceId>::<workUnitId>`, workspace root × jid                                                                        |
+| `entries.ts`   | ingest from Pi messages (live path) and from a chat transcript (migration only)                                                       |
+| `derive.ts`    | `toAgentMessages` (Pi), `toChatMessages` (UI), `toTranscriptText` (tray / archives), `toChildResultSummary`                           |
+| `store.ts`     | the `slicc-work-units` IndexedDB store + the migration cursor                                                                         |
+| `migration.ts` | the versioned, resumable pass over the legacy stores                                                                                  |
+
+Tests: `packages/webapp/tests/work-unit/conversation/`.
+
+**A `tool-call` entry carries no arguments.** Pi keeps tool calls inside the
+assistant message that issued them, so the entry is an addressable handle
+(`toolCallId`, `name`, `assistantEntryId`) and the Pi derivation skips it.
+Copying a `write_file` payload onto it would double the record for nothing.
+
+**The record is append-only, with exactly one exception.** A turn adds
+entries with ascending `seq` and never edits one. Compaction (and
+`clear-chat`) replaces Pi's history wholesale — that shows up as a prefix
+divergence, is applied as a replace, and is counted on `rewrites`.
+Interleaving the two would splice a pre-compaction conversation into a
+post-compaction one.
+
+**Two origins, because you cannot invent Pi messages.** A record built from
+`agent-sessions` (`origin: 'agent-history'`) derives faithfully to both Pi
+history and the UI projection. A record built from `browser-coding-agent`
+(`origin: 'ui-projection'`) — a unit whose Pi history was lost — derives to
+the UI projection and to **no Pi history at all**, deliberately: replaying a
+reconstruction of a rendered transcript to the model is worse than restoring
+from the legacy store, and an empty derivation is exactly what makes that
+fallback happen.
+
+**Clearing goes through the same owner.** "New chat" / `clear-chat` calls
+`ScoopContext.clearSession()` → `SessionPersistence.clear()`, which cancels
+any pending checkpoint and deletes BOTH representations. Deleting only the
+legacy session would leave the canonical record standing, and since a restore
+prefers the record, the next reload would resurrect the conversation the user
+just cleared.
+
+**A write never overwrites a record it did not understand.** `store.read()`
+distinguishes `absent` / `malformed` / `incompatible` / `error`, and only the
+first two may be written over. A record from a NEWER schema (a rollback, where
+that build's history may live in a shape this one cannot express) and a read
+that merely FAILED are both left exactly where they are — the lossy `load()`
+that answers `null` for all four is for READERS, whose `null` means "fall back
+to the legacy store".
+
+#### The read-old/write-new window, and how to roll back
+
+This is not a cutover. While the window is open:
+
+- **Every write goes to both.** `SessionPersistence.persistNow` writes the
+  canonical record AND `agent-sessions`; the bridge still writes
+  `browser-coding-agent`.
+- **Every read prefers the canonical record and falls back on absence.** The
+  kill switch is DATA, not a flag: no record, an unreadable one, a record from
+  a newer schema, a `ui-projection` record, or an IndexedDB that will not open
+  — each derives to nothing, and nothing means "use the legacy store". A unit
+  that was never migrated behaves exactly as it did before #2275.
+- **The migration deletes nothing.** It reads the legacy stores and writes the
+  canonical one. `agent-sessions` and `browser-coding-agent` are left
+  byte-for-byte as they were.
+
+**Rollback** is therefore complete and cheap, in two forms:
+
+1. _Reverting the code_ — the legacy stores hold every conversation up to the
+   moment of the revert, because they were written on every turn.
+2. _Clearing the canonical database_ (`WorkUnitConversationStore.clearAll()`,
+   or deleting `slicc-work-units` in devtools) — every read falls back, and
+   the next boot re-runs the migration from the untouched legacy data.
+
+The follow-up that deletes the legacy writes is what closes this window; it
+must not land until the canonical store has been dogfooded through at least
+one migration + rollback cycle.
+
+#### Migration behaviour
+
+- **Versioned.** `CONVERSATION_RECORD_VERSION` is part of the cursor; bumping
+  the schema re-runs the pass over every unit.
+- **Resumable.** The cursor is persisted after every unit, so a boot that dies
+  mid-pass — a poisoned record, a killed tab, the #2007 ready-timeout —
+  continues where it stopped.
+- **One unit cannot break the boot.** A legacy read that throws, or a payload
+  whose `messages` is not a list (the #2006 lesson: a half-written record is a
+  repair job, not a delete), is recorded in the cursor's `skipped` list with
+  its reason and left in place. That unit keeps reading the legacy stores.
+- **The cursor advances past a skipped unit** on purpose: retrying an
+  unreadable record every boot would re-spend the boot budget that made it
+  unreadable. A schema bump is the sanctioned retry.
+- **It heartbeats.** The pass runs at boot BEFORE any context spawns, so it
+  fires `onBootProgress` after every unit — a profile with many large
+  histories would otherwise sit silent through the page's kernel-ready
+  watchdog (#2007) on a boot that is provably advancing.
+- **Pre-`parentJid` records** (#1666) are backfilled by `Orchestrator.init`
+  before the pass runs; the pass coerces a missing edge to `null` anyway, so a
+  legacy primary cone can never be keyed as a child under `/scoops/`.
+
+#### What this PR did NOT make dead
+
+The repair chain in `Bridge.handleRequestScoopMessages` stays. The canonical
+record is inserted as a new step — the only one that answers for a unit whose
+context has not spawned — but the buffer, the live-agent translation and the
+legacy UI-store fallback are still the UI's sources until the client protocol
+consolidates them in
+[#2274](https://github.com/ai-ecoverse/slicc/issues/2274). Removing them now
+would be removing paths this PR has not yet replaced.
 
 ### Per-cone workspace and memory (#2271)
 

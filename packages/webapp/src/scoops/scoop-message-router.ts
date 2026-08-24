@@ -628,17 +628,16 @@ export class ScoopMessageRouter {
   async clearScoopMessages(jid: string, context: ScoopContext | undefined): Promise<void> {
     this.cancelDebounce(jid);
     if (context) {
-      context.clearMessages();
-      const sessionStore = this.deps.getSessionStore();
-      if (sessionStore) {
-        const sessionId = context.getSessionId();
-        await sessionStore.delete(sessionId).catch((err) => {
-          log.warn('Failed to clear agent session for scoop', {
-            jid,
-            error: err instanceof Error ? err.message : String(err),
-          });
+      // Clears the live list AND both durable representations — the canonical
+      // work-unit record and the legacy agent session (#2275). Deleting only
+      // the legacy one would leave the record standing, and a restore prefers
+      // the record: "New chat" would come back on the next reload.
+      await context.clearSession().catch((err) => {
+        log.warn('Failed to clear the durable conversation for scoop', {
+          jid,
+          error: err instanceof Error ? err.message : String(err),
         });
-      }
+      });
     }
     await this.deps.db.clearMessagesForScoop(jid).catch((err) => {
       log.warn('Failed to clear persisted channel history for scoop', {
@@ -664,9 +663,15 @@ export class ScoopMessageRouter {
         });
       });
     }
-    for (const ctx of this.deps.getContexts().values()) {
-      ctx.clearMessages();
-    }
+    await Promise.all(
+      [...this.deps.getContexts().values()].map((ctx) =>
+        ctx.clearSession().catch((err) => {
+          log.warn('Failed to clear a durable conversation', {
+            error: err instanceof Error ? err.message : String(err),
+          });
+        })
+      )
+    );
     this.lastAgentTimestamp.clear();
     for (const jid of this.busyDeferrals.keys()) this.clearBusyDeferral(jid);
     for (const jid of this.deps.getScoops().keys()) {

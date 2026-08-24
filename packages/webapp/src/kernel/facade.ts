@@ -886,25 +886,33 @@ export class Bridge implements KernelFacade {
     const chatMessages = agentMessagesToChatMessages(agentMessages, {
       source: sourceLabelFor(scoop),
     });
-    return chatMessages.map((m) => ({
-      id: m.id,
-      role: m.role,
-      content: m.content,
-      attachments: m.attachments,
-      timestamp: m.timestamp,
-      source: m.source,
-      channel: m.channel,
-      toolCalls: m.toolCalls?.map((tc) => ({
-        id: tc.id,
-        name: tc.name,
-        input: tc.input,
-        result: tc.result,
-        isError: tc.isError,
-      })),
-      model: m.model,
-      usage: m.usage,
-      isStreaming: false,
-    }));
+    return toBufferedChatMessages(chatMessages);
+  }
+
+  /**
+   * Translate a unit's canonical conversation record (#2275) into the
+   * buffered chat shape, or `null` when it has none. The derivation runs the
+   * SAME `agentMessagesToChatMessages` translator the live path uses, so a
+   * rebuild from the record and a rebuild from live agent state produce the
+   * same transcript — which is what makes the record's projection
+   * deterministic rather than a fourth opinion.
+   */
+  private async buildBufferFromCanonicalRecord(
+    scoop: RegisteredScoop
+  ): Promise<BufferedChatMessage[] | null> {
+    // Optional call: a test double (and a leader-tray adapter built against
+    // an older shape) binds an orchestrator without this accessor, and a
+    // missing canonical store is exactly the fall-through this method already
+    // handles.
+    const store = this.orchestrator?.getConversationStore?.();
+    if (!store) return null;
+    const { conversationKeyFor } = await import('../work-unit/conversation/key.js');
+    const record = await store.load(conversationKeyFor(scoop));
+    if (!record) return null;
+    const { toChatMessages } = await import('../work-unit/conversation/derive.js');
+    const chatMessages = await toChatMessages(record, { source: sourceLabelFor(scoop) });
+    if (chatMessages.length === 0) return null;
+    return toBufferedChatMessages(chatMessages);
   }
 
   /**
@@ -946,7 +954,14 @@ export class Bridge implements KernelFacade {
    *   1. In-flight `messageBuffers` (current session, possibly with
    *      a streaming tail).
    *   2. Translate the scoop's `AgentMessage[]` into the chat shape.
-   *   3. Fall back to whatever the UI `sessionStore` has on disk.
+   *   3. Derive the projection from the canonical work-unit conversation
+   *      record (#2275) — the only source that answers for a unit with no
+   *      live context yet (restored but not spawned, or spawning).
+   *   4. Fall back to whatever the UI `sessionStore` has on disk.
+   *
+   * Steps 1-2 and 4 are the pre-#2275 repair chain and stay until the UI
+   * path is consolidated in #2274: this PR adds a deterministic source, it
+   * does not yet make any of the existing ones dead.
    *
    * A scoop with no history anywhere still gets an EMPTY replace — see the
    * tail of the method for why silence is not an option.
@@ -989,6 +1004,21 @@ export class Bridge implements KernelFacade {
         scoopJid,
         messages: buf,
       });
+      return;
+    }
+
+    // Derive from the canonical conversation record. Unlike step 2 this
+    // needs no live `ScoopContext`, so it answers for a unit whose context
+    // has not been spawned (or failed to). Hydrating the buffer here has the
+    // same reason as everywhere else in this method: a later agent event
+    // must extend the restored history, not overwrite it.
+    const derived = await this.buildBufferFromCanonicalRecord(scoop);
+    if (derived) {
+      this.messageBuffers.set(scoopJid, derived);
+      this.currentMessageId.delete(scoopJid);
+      this.agentEventStream.clear(scoopJid);
+      this.persistScoop(scoopJid);
+      this.emit({ type: 'scoop-messages-replaced', scoopJid, messages: derived });
       return;
     }
 
@@ -1985,4 +2015,33 @@ function formatTranscript(messages: ReadonlyArray<{ role: string; content: strin
     lines.push(`${m.role}: ${text}`);
   }
   return lines.join('\n');
+}
+
+/**
+ * Project rendered `ChatMessage`s onto the bridge's buffered shape. Shared by
+ * the live-agent rebuild and the canonical-record derivation (#2275) so both
+ * hand the panel identically-shaped rows — the field list is explicit on
+ * purpose, so a new `ChatMessage` field is a compile-time decision here
+ * rather than silently riding into the buffer.
+ */
+function toBufferedChatMessages(chatMessages: readonly ChatMessage[]): BufferedChatMessage[] {
+  return chatMessages.map((m) => ({
+    id: m.id,
+    role: m.role,
+    content: m.content,
+    attachments: m.attachments,
+    timestamp: m.timestamp,
+    source: m.source,
+    channel: m.channel,
+    toolCalls: m.toolCalls?.map((tc) => ({
+      id: tc.id,
+      name: tc.name,
+      input: tc.input,
+      result: tc.result,
+      isError: tc.isError,
+    })),
+    model: m.model,
+    usage: m.usage,
+    isStreaming: false,
+  }));
 }

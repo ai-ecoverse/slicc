@@ -93,6 +93,7 @@ function makeHarness(opts?: {
               return opts?.busy?.value ?? false;
             },
             clearMessages() {},
+            async clearSession() {},
           } as ScoopContext,
         ])
       ),
