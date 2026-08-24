@@ -153,20 +153,10 @@ export class LocalWorkUnitClient implements WorkUnitClient {
         base.onIncomingMessage(jid, message);
         this.emit(jid, { message: message as unknown as WorkUnitChatMessage, type: 'message' });
       },
-      // `queuedIds` is the third argument since #2362; the rest signature
-      // keeps this assignable to a callback bag that predates it, and passes
-      // whatever arrived straight through to the shell.
-      onScoopMessagesReplaced: (
-        jid: string,
-        messages: Parameters<NonNullable<OffscreenClientCallbacks['onScoopMessagesReplaced']>>[1],
-        ...rest: unknown[]
-      ) => {
-        const queuedIds = rest[0] as readonly string[] | undefined;
-        (
-          base.onScoopMessagesReplaced as
-            | ((jid: string, messages: unknown, queuedIds?: unknown) => void)
-            | undefined
-        )?.(jid, messages, queuedIds);
+      // `queuedIds` rides the SAME envelope as the replay (#2354/#2362), so
+      // the snapshot this publishes describes one instant of backend state.
+      onScoopMessagesReplaced: (jid, messages, queuedIds) => {
+        base.onScoopMessagesReplaced?.(jid, messages, queuedIds);
         const snapshot = this.snapshotFor(
           jid,
           messages as unknown as readonly WorkUnitChatMessage[],
