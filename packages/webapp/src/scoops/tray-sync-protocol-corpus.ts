@@ -1067,6 +1067,10 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     isCone: 'mirrored',
     parentId: 'mirrored',
     assistantLabel: 'mirrored',
+    // Strip-ordering input for the web follower (#2274). iOS builds its own
+    // list order and has no Swift field for it, so the leader sends it and the
+    // app drops it — which is exactly what an optional wire field is for.
+    addedAt: 'dropped',
     trigger: 'mirrored',
     state: 'mirrored',
     activity: 'mirrored',
@@ -1077,6 +1081,7 @@ const SCOOP_SUMMARY: NestedPayloadEntry<ScoopSummary> = {
     jid: 'reviewer',
     name: 'reviewer',
     folder: '/scoops/reviewer',
+    addedAt: '2026-08-24T10:00:00.000Z',
     isCone: false,
     parentId: 'cone',
     assistantLabel: 'Reviewer',

@@ -1,5 +1,7 @@
 import type { ScoopSummary } from '../../scoops/tray-sync-protocol.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
+import { toTabDescriptors } from '../../work-unit/client/presentation.js';
+import type { WorkUnitSummary } from '../../work-unit/client/types.js';
 import { isRootUnit } from '../../work-unit/policy.js';
 import { modelFor } from '../../work-unit/record.js';
 import { scoopColor } from './wc-scoop-color.js';
@@ -9,7 +11,8 @@ import type { UnitRole } from './wc-unit-context.js';
 type SummarySource = Pick<
   RegisteredScoop,
   'jid' | 'name' | 'folder' | 'parentJid' | 'assistantLabel' | 'trigger' | 'model' | 'config'
->;
+> &
+  Partial<Pick<RegisteredScoop, 'addedAt'>>;
 type RenderedState = Pick<SwitcherScoop, 'key' | 'state' | 'fill' | 'phase' | 'awaiting'>;
 type WireActivity = NonNullable<ScoopSummary['activity']>;
 type ExpandedState = Pick<SwitcherScoop, 'state' | 'phase' | 'awaiting'>;
@@ -51,6 +54,9 @@ function toWire(descriptor: RenderedState | undefined): Pick<ScoopSummary, 'stat
 
 /**
  * Expand the wire back into the descriptor fields the tabs render from.
+ * Exported because `RemoteWorkUnitClient` projects the same expansion onto
+ * the client protocol (#2274) — the pair with {@link toWire} stays here so
+ * the two halves of the grammar remain auditable together.
  *
  * An `activity` this build does not recognise is IGNORED and the state alone
  * decides — the escape hatch the refinement field exists to provide, so the
@@ -59,7 +65,7 @@ function toWire(descriptor: RenderedState | undefined): Pick<ScoopSummary, 'stat
  * in LLM-wait) and precisely what an older leader's bare `working` used to
  * render as.
  */
-function fromWire(scoop: ScoopSummary): ExpandedState {
+export function expandWireState(scoop: ScoopSummary): ExpandedState {
   const state = scoop.state ?? 'idle';
   const activity = WIRE_ACTIVITIES.has(scoop.activity ?? '') ? scoop.activity : undefined;
   if (state === 'working') return { state, phase: activity === 'tool' ? 'tool' : 'thinking' };
@@ -85,6 +91,9 @@ export function toScoopSummaries(
       isCone: isRootUnit(scoop),
       parentId: scoop.parentJid,
       assistantLabel: scoop.assistantLabel,
+      // Strip ordering input, so a follower orders cones the way the leader
+      // does rather than by wire position (#2274).
+      ...(scoop.addedAt ? { addedAt: scoop.addedAt } : {}),
       trigger: scoop.trigger,
       // Per-unit model (#2310) — a follower shows the model of the cone it is
       // looking at, not one global setting. Omitted for a record that has
@@ -107,74 +116,45 @@ export function summaryRole(scoop: Pick<ScoopSummary, 'isCone' | 'parentId'>): U
 }
 
 /**
+ * Project one wire summary onto the client protocol (#2274).
+ *
+ * `parentId` stays possibly-`undefined` on purpose: a leader too old to send
+ * the edge leaves the owner UNKNOWN, and inventing one would turn a scoop
+ * into a root. `role` still answers what the unit is, from the legacy
+ * `isCone` flag that same leader does send.
+ */
+export function summaryToWorkUnit(scoop: ScoopSummary): WorkUnitSummary {
+  const expanded = expandWireState(scoop);
+  return {
+    id: scoop.jid,
+    parentId: scoop.parentId,
+    role: summaryIsRoot(scoop) ? 'primary' : 'child',
+    name: scoop.name,
+    folder: scoop.folder,
+    assistantLabel: scoop.assistantLabel,
+    state: expanded.state ?? 'idle',
+    ...(expanded.phase ? { phase: expanded.phase } : {}),
+    ...(expanded.awaiting ? { awaiting: true as const } : {}),
+    fill: typeof scoop.fill === 'number' ? scoop.fill : 0,
+    // Absent means "not known yet", never "the global selection": an empty
+    // catalog is warm-up, not an answer (#2329), so a reader must not latch.
+    ...(scoop.model ? { model: scoop.model } : {}),
+    ...(scoop.trigger ? { trigger: scoop.trigger } : {}),
+    ...(scoop.addedAt ? { addedAt: scoop.addedAt } : {}),
+  };
+}
+
+/**
  * Map tray summaries onto the descriptors shared by follower and Cherry tabs.
- * Cones first (in leader order), then each cone's scoops right after it so a
- * follower with several cones reads as "cone, its scoops, next cone, …";
- * scoops whose owner is unknown (older leader) keep the leader's order.
+ *
+ * Ordering and rendering both live in `work-unit/client/presentation.ts`
+ * since #2274 — this is the wire's half of the projection and nothing more.
+ * The leader's strip goes through the same two functions from its own
+ * records, which is what stops the two from drifting again (#2317).
  */
 export function toFollowerSwitcherScoops(
   scoops: readonly ScoopSummary[],
   selectedJid?: string | null
 ): SwitcherScoop[] {
-  return orderByOwner(scoops, selectedJid).map((scoop) => {
-    const expanded = fromWire(scoop);
-    return {
-      key: scoop.jid,
-      type: summaryRole(scoop),
-      color: scoopColor({ isRoot: summaryIsRoot(scoop), name: scoop.name }),
-      label: summaryIsRoot(scoop) ? scoop.assistantLabel : scoop.name,
-      eyes:
-        expanded.state === 'broken' ? 'dead' : expanded.state === 'initializing' ? 'none' : 'open',
-      fill: typeof scoop.fill === 'number' ? scoop.fill : 0,
-      ...expanded,
-    };
-  });
-}
-
-/**
- * Every root first, then the selected cone's scoops (depth-first, so a
- * nested scoop still sits with its cone), then every other cone's scoops in
- * the same owner order — the leader's strip order (#2272). Units whose owner
- * is unknown or missing keep leader order at the tail. A leader that sends no
- * edges at all keeps the legacy cone-first order.
- */
-function orderByOwner(
-  scoops: readonly ScoopSummary[],
-  selectedJid?: string | null
-): ScoopSummary[] {
-  if (!scoops.some((s) => s.parentId !== undefined)) {
-    return [...scoops].sort((a, b) => Number(b.isCone) - Number(a.isCone));
-  }
-  const placed = new Set<string>();
-  const descendants = (owner: ScoopSummary, out: ScoopSummary[]): ScoopSummary[] => {
-    for (const s of scoops) {
-      if (s.parentId === owner.jid && !placed.has(s.jid)) {
-        placed.add(s.jid);
-        out.push(s);
-        descendants(s, out);
-      }
-    }
-    return out;
-  };
-  const roots = scoops.filter(summaryIsRoot);
-  for (const root of roots) placed.add(root.jid);
-  const selectedRoot = rootOfSummary(scoops, selectedJid);
-  const mine = selectedRoot ? descendants(selectedRoot, []) : [];
-  const others = roots.flatMap((root) => descendants(root, []));
-  const tail = scoops.filter((s) => !placed.has(s.jid));
-  return [...roots, ...mine, ...others, ...tail];
-}
-
-/** The root that owns `jid` (itself when it is a root); `undefined` when unknown. */
-function rootOfSummary(
-  scoops: readonly ScoopSummary[],
-  jid: string | null | undefined
-): ScoopSummary | undefined {
-  let current = jid ? scoops.find((s) => s.jid === jid) : undefined;
-  for (let hops = 0; current && hops <= scoops.length; hops++) {
-    if (summaryIsRoot(current)) return current;
-    const parentId = current.parentId;
-    current = scoops.find((s) => s.jid === parentId);
-  }
-  return undefined;
+  return toTabDescriptors(scoops.map(summaryToWorkUnit), selectedJid, scoopColor);
 }

@@ -751,6 +751,17 @@ export interface ScoopSummary {
    */
   parentId?: string | null;
   assistantLabel: string;
+  /**
+   * When the unit was registered (the record's ISO `addedAt`). Absent from
+   * older leaders, ignored by older followers.
+   *
+   * It exists because it is the one strip-ordering input the two sides did not
+   * share: a leader sorts its cones oldest-first while a follower took them in
+   * wire (registry) order, so two cones registered out of order rendered in a
+   * different order on the two screens (#2274). A follower that does not
+   * receive it keeps leader order, exactly as before.
+   */
+  addedAt?: string;
   trigger?: string;
   /**
    * Rendered lifecycle state for follower agent tabs. Absent from older
