@@ -445,6 +445,26 @@ final class LeaderVFSProviderTests: XCTestCase {
         XCTAssertTrue(fs.operations.isEmpty)
     }
 
+    func testTrashEnumeratorChangeSyncStaysSilent() async throws {
+        let fs = FakeFS()
+        fs.directories["/"] = [TrayFsDirEntry(name: "hello.txt", type: .file)]
+        fs.stats["/hello.txt"] = TrayFsStat(type: .file, size: 5, mtime: 2, ctime: 1)
+        let provider = LeaderVFSProvider(fs: fs)
+        _ = try await provider.items(for: .rootContainer)
+        let operationCount = fs.operations.count
+        let enumerator = try provider.enumerator(for: .trashContainer)
+        let observer = RecordingChangeObserver()
+
+        enumerator.enumerateChanges(for: observer, from: provider.currentSyncAnchor())
+        for _ in 0..<100 where !observer.finished { await Task.yield() }
+
+        XCTAssertTrue(observer.finished)
+        XCTAssertNil(observer.error)
+        XCTAssertTrue(observer.updated.isEmpty)
+        XCTAssertTrue(observer.deleted.isEmpty)
+        XCTAssertEqual(fs.operations.count, operationCount)
+    }
+
     func testEnumeratorValidationAndNativeErrorMappingLiveInTrayKit() throws {
         let provider = LeaderVFSProvider(fs: FakeFS())
         XCTAssertNoThrow(try provider.enumerator(for: .rootContainer))
@@ -552,7 +572,12 @@ final class LeaderVFSProviderTests: XCTestCase {
         let entries = try await pool.readDir("/")
         XCTAssertEqual(entries, [])
         _ = try await pool.stat("/file")
-        try await Task.sleep(nanoseconds: 100_000_000)
+        // The idle Task hops back onto the main actor after `idleTimeout`.
+        // A single sleep can resume before that hop on a loaded CI runner,
+        // so poll until disconnect (or a bounded budget) instead.
+        for _ in 0..<40 where !connection.disconnected {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
 
         XCTAssertEqual(buildCount, 1)
         XCTAssertTrue(connection.disconnected)
@@ -668,5 +693,24 @@ final class LeaderVFSProviderTests: XCTestCase {
         } catch {
             XCTFail("unexpected error \(error)", file: file, line: line)
         }
+    }
+}
+
+private final class RecordingChangeObserver: NSObject, NSFileProviderChangeObserver {
+    private(set) var updated: [any NSFileProviderItem] = []
+    private(set) var deleted: [NSFileProviderItemIdentifier] = []
+    private(set) var error: Error?
+    private(set) var finished = false
+
+    func didUpdate(_ updatedItems: [any NSFileProviderItem]) { updated = updatedItems }
+    func didDeleteItems(withIdentifiers deletedItemIdentifiers: [NSFileProviderItemIdentifier]) {
+        deleted = deletedItemIdentifiers
+    }
+    func finishEnumeratingChanges(upTo _: NSFileProviderSyncAnchor, moreComing _: Bool) {
+        finished = true
+    }
+    func finishEnumeratingWithError(_ error: any Error) {
+        self.error = error
+        finished = true
     }
 }

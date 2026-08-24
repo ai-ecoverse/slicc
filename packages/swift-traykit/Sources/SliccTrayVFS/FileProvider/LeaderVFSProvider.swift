@@ -541,6 +541,13 @@ public final class LeaderVFSEnumerator: NSObject, NSFileProviderEnumerator {
     ) {
         Task { @MainActor in
             do {
+                if container == .trashContainer {
+                    observer.didUpdate([])
+                    observer.didDeleteItems(withIdentifiers: [])
+                    observer.finishEnumeratingChanges(
+                        upTo: provider.currentSyncAnchor(), moreComing: false)
+                    return
+                }
                 let changes = try await provider.changes(from: syncAnchor)
                 observer.didUpdate(changes.updated)
                 observer.didDeleteItems(withIdentifiers: changes.deleted)
