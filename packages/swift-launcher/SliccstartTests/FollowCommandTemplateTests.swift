@@ -77,4 +77,9 @@ final class FollowCommandTemplateTests: XCTestCase {
         XCTAssertFalse(preview.contains(secret))
         XCTAssertFalse(preview.contains("super-secret-value"))
     }
+
+    @MainActor
+    func testTerminalsSettingsViewBodyBuilds() {
+        _ = TerminalsSettingsView().body
+    }
 }
