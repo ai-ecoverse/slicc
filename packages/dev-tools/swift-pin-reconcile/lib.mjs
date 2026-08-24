@@ -51,6 +51,9 @@ export function maxVersion(a, b) {
 /**
  * Does `version` satisfy a Package.swift requirement?
  * `kind` is `upToNextMajor` | `upToNextMinor` | `exact` | `from`.
+ *
+ * SwiftPM's `from: "1.0.0"` shorthand is `1.0.0..<2.0.0` (same as
+ * `.upToNextMajor(from:)`), not an open `>=` range.
  */
 export function rangeContains(requirement, version) {
   if (!requirement) return false;
@@ -62,7 +65,6 @@ export function rangeContains(requirement, version) {
     case 'exact':
       return cmp === 0;
     case 'from':
-      return cmp >= 0;
     case 'upToNextMajor':
       return cmp >= 0 && v.major < floor.major + 1;
     case 'upToNextMinor':

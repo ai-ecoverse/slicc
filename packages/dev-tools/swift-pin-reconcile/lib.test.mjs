@@ -105,10 +105,18 @@ describe('rangeContains', () => {
     expect(rangeContains(req, '1.0.0')).toBe(false);
   });
 
-  it('matches exact and open-from ranges', () => {
+  it('matches exact ranges', () => {
     expect(rangeContains({ kind: 'exact', version: '1.3.2' }, '1.3.2')).toBe(true);
     expect(rangeContains({ kind: 'exact', version: '1.3.2' }, '1.3.1')).toBe(false);
+  });
+
+  it('treats from: as upToNextMajor (SwiftPM 1.0.0..<2.0.0), not an open >= range', () => {
+    const req = { kind: 'from', version: '1.0.0' };
+    expect(rangeContains(req, '1.0.0')).toBe(true);
+    expect(rangeContains(req, '1.9.9')).toBe(true);
+    expect(rangeContains(req, '2.0.0')).toBe(false);
     expect(rangeContains({ kind: 'from', version: '2.26.0' }, '2.30.0')).toBe(true);
+    expect(rangeContains({ kind: 'from', version: '2.26.0' }, '3.0.0')).toBe(false);
   });
 });
 
@@ -213,6 +221,22 @@ describe('findMismatches', () => {
     expect(out[0].swiftEdits).toEqual([]);
     expect(out[0].resolvedEdits.map((e) => e.version)).toEqual(['150.0.0']);
     expect(out[0].needsRevision).toBe(true);
+  });
+
+  it('flags project.yml exactVersion 2 vs Package.swift from: 1 (Codex review)', () => {
+    const project = parseProjectYmlPins(`packages:
+  Demo:
+    url: https://github.com/example/demo.git
+    exactVersion: 2.0.0
+`);
+    const swift = parsePackageSwiftPins(
+      '.package(url: "https://github.com/example/demo.git", from: "1.0.0")'
+    );
+    const out = findMismatches({ projectPins: project, swiftPins: swift, resolvedPins: [] });
+    expect(out).toHaveLength(1);
+    expect(out[0]).toMatchObject({ key: 'example/demo', targetVersion: '2.0.0' });
+    expect(out[0].swiftEdits.map((e) => e.kind)).toEqual(['from']);
+    expect(out[0].projectEdits).toEqual([]);
   });
 
   it('ignores a Package.swift-only pin (hummingbird)', () => {

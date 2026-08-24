@@ -20,4 +20,5 @@ failed with `depends on 'webrtc' 151 and root depends on 'webrtc' 150`.
 The reconcile never invents a version and never lowers a pin. Range-style pins
 (`minorVersion` / `upToNextMinor`) are left to resolve anywhere inside the
 range; only `exactVersion` / `exact` pins force `Package.resolved` onto the
-exact tag.
+exact tag. Package.swift `from: "1.0.0"` is SwiftPM's `1.0.0..<2.0.0`
+shorthand (same upper bound as `.upToNextMajor(from:)`), not an open `>=`.
