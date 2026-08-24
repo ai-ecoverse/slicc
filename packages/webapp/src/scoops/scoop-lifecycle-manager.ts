@@ -208,10 +208,13 @@ export class ScoopLifecycleManager {
 
   /**
    * Get-or-create the unit record for `jid`. A unit can exist before its
-   * context (an observer subscribed ahead of spawn, or a boot-time error
-   * tab) — it simply has no `context` / `tab` yet.
+   * context (an observer subscribed ahead of spawn, a boot-time error tab,
+   * or a restored record nobody has fed yet) — it simply has no `context` /
+   * `tab` yet. Public since #2279: `WorkUnitManager` reaches every
+   * registered record through it, there being no adapter left to stand in
+   * for a unit that has not spawned.
    */
-  private ensureUnit(jid: string): LiveWorkUnit {
+  ensureUnit(jid: string): LiveWorkUnit {
     let unit = this.units.get(jid);
     if (!unit || unit.isClosed) {
       unit = new LiveWorkUnit(jid, {

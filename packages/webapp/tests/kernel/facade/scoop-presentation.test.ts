@@ -23,9 +23,7 @@ function scoop(overrides: Partial<RegisteredScoop> = {}): RegisteredScoop {
     jid: 'cone-1',
     name: 'Cone',
     folder: 'cone',
-    isCone: true,
     parentJid: null,
-    type: 'cone',
     requiresTrigger: false,
     assistantLabel: 'sliccy',
     addedAt: '2026-01-01T00:00:00.000Z',
@@ -80,8 +78,6 @@ describe('ScoopPresentation parentId projection (#2270)', () => {
     const child = scoop({
       jid: 'scoop-9',
       folder: 'nine',
-      isCone: false,
-      type: 'scoop',
       parentJid: 'cone-1',
     });
     expect(presentation.projectScoop(root)).toMatchObject({ isCone: true, parentId: null });

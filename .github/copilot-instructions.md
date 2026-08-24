@@ -56,9 +56,9 @@ even types or pure helpers; move helpers down. Never grow the back-edge baseline
 
 Flag new `Record<string, unknown>` in source when the shape is known. Require a named type,
 boundary validation, or a justified Biome suppression; never grow the frozen baseline.
-Same for `scoop.isCone` reads outside `ui/`: cone and scoop are roles over one `WorkUnit`
-(#1666) — route on the unit's policy / `isRootUnit` / `getWorkUnits()`, never grow
-`iscone-baseline.json`.
+Cone and scoop are roles over one `WorkUnit` (#1666) and the record carries no role
+field — route on the unit's policy / `isRootUnit` / `getWorkUnits()`. `isCone` exists
+only on the follower wire, projected from `isRootUnit`.
 
 ## 12. Agent skill freshness
 

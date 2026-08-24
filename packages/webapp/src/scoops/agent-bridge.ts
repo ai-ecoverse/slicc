@@ -798,8 +798,6 @@ export function createAgentBridge(
       jid,
       name: folder,
       folder,
-      isCone: false,
-      type: 'scoop',
       requiresTrigger: false,
       assistantLabel: folder,
       addedAt: new Date().toISOString(),

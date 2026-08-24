@@ -1,8 +1,8 @@
 /**
  * Reusable conformance suite for any {@link WorkUnitRuntime} implementation.
- * Phase 1 runs it against the `ScoopContext` adapter; Phase 2 runs the same
- * suite against the native runtime so the contract — not the class — is what
- * stays stable.
+ * `LiveWorkUnit` is the only implementation since the Phase 1 adapter was
+ * deleted (#2279); the suite stays keyed to the contract, not the class, so a
+ * second runtime (a remote/follower unit) can be held to the same bar.
  */
 
 import { describe, expect, it } from 'vitest';

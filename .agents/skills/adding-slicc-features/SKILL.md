@@ -430,8 +430,9 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
 
   // ... existing tools (send_message, feed_scoop, etc.) ...
 
-  // Cone only: my_special_tool
-  if (scoop.isCone && config.onMySpecialCallback) {
+  // Root-unit only: my_special_tool. `derivePolicy(config.scoop)` turns the
+  // ownership edge into capabilities — the record carries no role field.
+  if (policy.canManageChildren && config.onMySpecialCallback) {
     tools.push({
       name: 'my_special_tool',
       description: 'Description of what this tool does.',
@@ -481,14 +482,14 @@ interface RegisteredScoop {
   jid: string; // Unique ID
   name: string;
   folder: string;
-  isCone: boolean;
+  parentJid: string | null; // `null` = root unit (a cone); the ONLY role signal
   assistantLabel: string;
 }
 ```
 
 **Cone vs Universal**:
 
-- **Cone-only**: Guarded by `if (scoop.isCone && callback)` — e.g., `feed_scoop`, `scoop_scoop`, `drop_scoop`
+- **Cone-only**: Guarded by the unit's policy (`derivePolicy(scoop).canManageChildren`, or `isRootUnit(scoop)`) — e.g., `feed_scoop`, `scoop_scoop`, `drop_scoop`
 - **Universal**: Available to all scoops — e.g., `send_message`
 
 **Add callback to ScoopContextCallbacks**:
@@ -524,7 +525,7 @@ describe('my_special_tool', () => {
   it('should execute correctly', async () => {
     const mockCallback = vi.fn().mockResolvedValue('result');
     const tools = createScoopManagementTools({
-      scoop: { isCone: true, folder: 'test' },
+      scoop: { parentJid: null, folder: 'test' },
       onMySpecialCallback: mockCallback,
       // ... other config ...
     });

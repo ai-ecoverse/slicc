@@ -18,9 +18,7 @@ function makeScoop(jid: string): RegisteredScoop {
     jid,
     name: jid,
     folder: jid,
-    isCone: true,
     parentJid: null,
-    type: 'cone',
     requiresTrigger: false,
     assistantLabel: 'sliccy',
     addedAt: new Date().toISOString(),
@@ -265,7 +263,6 @@ describe('ScoopMessageRouter same-millisecond high-water mark', () => {
 
 describe('ScoopMessageRouter trigger gate', () => {
   const triggerScoop: Partial<RegisteredScoop> = {
-    isCone: false,
     parentJid: 'cone',
     requiresTrigger: true,
     trigger: '@scoop',

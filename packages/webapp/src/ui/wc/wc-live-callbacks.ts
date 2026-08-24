@@ -1,4 +1,5 @@
 import type { RegisteredScoop } from '../../scoops/types.js';
+import { isRootUnit } from '../../work-unit/policy.js';
 import { isLickChannel } from '../lick-channels.js';
 import type {
   OffscreenClient,
@@ -82,8 +83,8 @@ export function toSwitcherScoops(
     const status = statuses?.get(scoop.jid);
     return {
       key: scoop.jid,
-      type: scoop.isCone ? 'cone' : 'scoop',
-      color: scoopColor(scoop),
+      type: isRootUnit(scoop) ? 'cone' : 'scoop',
+      color: scoopColor({ isRoot: isRootUnit(scoop), name: scoop.name }),
       label: switcherLabelFor(scoop),
       eyes: eyesFor(status),
       state: stateFor(status),

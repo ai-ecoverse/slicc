@@ -29,8 +29,6 @@ function cone(jid: string): RegisteredScoop {
     jid,
     folder: 'cone',
     name: 'sliccy',
-    isCone: true,
-    type: 'cone',
     parentJid: null,
   };
 }
@@ -41,8 +39,6 @@ function scoop(folder: string, jid = `scoop_${folder}_1`): RegisteredScoop {
     jid,
     folder,
     name: folder,
-    isCone: false,
-    type: 'scoop',
     parentJid: 'cone_1',
   };
 }

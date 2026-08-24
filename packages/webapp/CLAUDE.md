@@ -85,16 +85,17 @@ Non-obvious rules:
   own port) — only for `Realm.isolatedThread` realms; the in-process factory must
   never get a SAB (self-deadlock). Deep reference: `docs/kernel/process-model.md`.
 - **Cone and scoop are roles over one `WorkUnit`** (#1666): `RegisteredScoop.parentJid`
-  is required — `null` is THE root test (`isRootUnit`), `isCone`/`type` are derived
-  presentation kept for the wire. New `scoops/` and `kernel/` code asks
-  `orchestrator.getWorkUnits()` (`getParent`, `getChildren`, `resolveDefaultRoot`) or
-  the unit's `policy.*`; never add a `scoops.find((s) => s.isCone)` or an
-  `isCone` branch — `npm run lint:iscone-ratchet` fails on new reads outside
-  `ui/`. Every creation path sets `parentJid` explicitly; restore backfills
-  and persists it. Several roots may exist: UI code resolves "the cone" via
-  `ui/wc/wc-unit-context.ts` (`defaultRootOf`, `threadContextFor`,
-  `switcherLabelFor`, `orderForSwitcher(scoops, selectedJid)`), never
-  `find(s => s.isCone)`; chat sessions are keyed `session-<folder>`
+  is required — `null` is THE root test (`isRootUnit`). The record carries no role:
+  `isCone`/`type` were deleted in #2279, so the **compiler** is the ratchet — a role
+  branch no longer has a field to read. `isCone` survives only on the follower wire
+  (`ScoopSummary`), projected from `isRootUnit` by `ScoopPresentation`. New `scoops/`
+  and `kernel/` code asks `orchestrator.getWorkUnits()` (`getParent`, `getChildren`,
+  `resolveDefaultRoot`) or the unit's `policy.*`. Every creation path sets `parentJid`
+  explicitly; restore backfills and persists it (`legacyRecordIsCone` reads the
+  pre-#2279 field once, there, and `normalizeScoopRecord` strips it). Several roots may
+  exist: UI code resolves "the cone" via `ui/wc/wc-unit-context.ts` (`defaultRootOf`,
+  `threadContextFor`, `switcherLabelFor`, `orderForSwitcher(scoops, selectedJid)`);
+  chat sessions are keyed `session-<folder>`
   (`chatSessionIdFor`). Cone add/drop lives in `ui/wc/wc-cone-actions.ts`
   behind `<slicc-freezer-new>`'s action row (name / confirm via
   `<slicc-dialog>`, never inline); the tab strip is the only switcher.

@@ -1,26 +1,22 @@
 /**
  * `WorkUnitRuntime` — the behavioural contract of one live unit — and the
- * Phase 1 adapter that satisfies it over the existing `ScoopContext` /
- * `ScoopLifecycleManager` machinery without changing behaviour.
+ * host slice a {@link import('./manager.js').WorkUnitManager} needs to reach
+ * them.
  *
- * The adapter does not own anything yet: every call delegates to the host
- * (the orchestrator) that still owns contexts, tabs and observers. Phase 2
- * inverts that so the runtime owns its context, tab state, observer set and
- * timers, and `close()` becomes the single teardown path.
+ * Since #1666 Phase 2 the only implementation is `LiveWorkUnit`, which owns
+ * its context, tab state, observer set and timers; `close()` is the single
+ * teardown path. The Phase 1 read-through adapter over the orchestrator is
+ * gone (#2279).
  */
 
-import type { ImageContent } from '../core/types.js';
-import type { ScoopObserver } from '../scoops/scoop-lifecycle-manager.js';
-import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
-import { toDescriptor } from './descriptor.js';
-import {
-  statusFromTab,
-  type Unsubscribe,
-  type WorkUnitDescriptor,
-  type WorkUnitEventListener,
-  type WorkUnitId,
-  type WorkUnitInput,
-  type WorkUnitSnapshot,
+import type { RegisteredScoop } from '../scoops/types.js';
+import type {
+  Unsubscribe,
+  WorkUnitDescriptor,
+  WorkUnitEventListener,
+  WorkUnitId,
+  WorkUnitInput,
+  WorkUnitSnapshot,
 } from './types.js';
 
 /** Behavioural contract of one live unit. */
@@ -40,85 +36,16 @@ export interface WorkUnitRuntime {
 }
 
 /**
- * The slice of the orchestrator a unit adapter needs. Structural so tests
- * can hand in a fake and the real `Orchestrator` satisfies it unchanged.
+ * The slice of the orchestrator a work-unit manager needs. Structural so
+ * tests can hand in a fake and the real `Orchestrator` satisfies it
+ * unchanged.
  */
 export interface WorkUnitHost {
   getScoop(jid: WorkUnitId): RegisteredScoop | undefined;
-  getScoopTabState(jid: WorkUnitId): ScoopTabState | undefined;
-  sendPrompt(
-    jid: WorkUnitId,
-    text: string,
-    senderId: string,
-    senderName: string,
-    images?: ImageContent[],
-    options?: { steer?: boolean }
-  ): Promise<void>;
-  observeScoop(jid: WorkUnitId, observer: ScoopObserver): () => void;
-  stopScoop(jid: WorkUnitId): void;
-  unregisterScoop(jid: WorkUnitId): Promise<void>;
-  getScoopContext(jid: WorkUnitId):
-    | {
-        getAgentMessages(): unknown[];
-        getContextFill(): number;
-      }
-    | undefined;
-  /** The owning live runtime for `jid` when one exists (Phase 2 hosts). */
-  getLiveUnit?(jid: WorkUnitId): WorkUnitRuntime | undefined;
-}
-
-/** Phase 1 adapter: a `WorkUnitRuntime` view over a registered scoop. */
-export class ScoopContextWorkUnit implements WorkUnitRuntime {
-  constructor(
-    readonly id: WorkUnitId,
-    private readonly host: WorkUnitHost
-  ) {}
-
-  private record(): RegisteredScoop {
-    const scoop = this.host.getScoop(this.id);
-    if (!scoop) throw new Error(`Work unit not found: ${this.id}`);
-    return scoop;
-  }
-
-  get descriptor(): WorkUnitDescriptor {
-    return toDescriptor(this.record(), this.host.getScoopTabState(this.id));
-  }
-
-  send(input: WorkUnitInput): Promise<void> {
-    const scoop = this.record();
-    return this.host.sendPrompt(
-      this.id,
-      input.text,
-      input.senderId ?? 'user',
-      input.senderName ?? scoop.assistantLabel,
-      [],
-      input.steer === undefined ? undefined : { steer: input.steer }
-    );
-  }
-
-  subscribe(listener: WorkUnitEventListener): Unsubscribe {
-    return this.host.observeScoop(this.id, {
-      onStatusChange: (status) => listener({ type: 'status', status: statusFromTab(status) }),
-      onResponse: (text, isPartial) => listener({ type: 'response', text, isPartial }),
-      onSendMessage: (text) => listener({ type: 'send-message', text }),
-      onError: (error) => listener({ type: 'error', error }),
-    });
-  }
-
-  async abort(_reason?: string): Promise<void> {
-    this.host.stopScoop(this.id);
-  }
-
-  close(): Promise<void> {
-    return this.host.unregisterScoop(this.id);
-  }
-
-  async snapshot(): Promise<WorkUnitSnapshot> {
-    const context = this.host.getScoopContext(this.id);
-    return {
-      descriptor: this.descriptor,
-      messages: context ? context.getAgentMessages() : [],
-      contextFill: context ? context.getContextFill() : 0,
-    };
-  }
+  /**
+   * The owning live runtime for `jid`, created if this is the first caller.
+   * A unit may exist before its context (an observer subscribed ahead of
+   * spawn, a boot-time error tab, a record restored but never fed).
+   */
+  ensureLiveUnit(jid: WorkUnitId): WorkUnitRuntime;
 }

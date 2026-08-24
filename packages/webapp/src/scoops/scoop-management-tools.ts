@@ -366,8 +366,6 @@ function buildScoopRecord({
     name,
     folder,
     trigger: `@${folder}`,
-    isCone: false,
-    type: 'scoop',
     requiresTrigger: true,
     assistantLabel: folder,
     addedAt: new Date().toISOString(),

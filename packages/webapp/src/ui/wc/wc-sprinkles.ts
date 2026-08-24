@@ -14,6 +14,7 @@ import type { BootStageLogger } from '../boot/types.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import type { SprinkleAddOptions, SprinkleManagerCallbacks } from '../sprinkle-manager.js';
 import type { WcShellRefs } from './wc-shell.js';
+import { defaultRootOf } from './wc-unit-context.js';
 
 const SPRINKLE_PREFIX = 'sprinkle:';
 
@@ -586,7 +587,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     },
     zone.callbacks(),
     () => {
-      const cone = client.getScoops().find((s) => s.isCone);
+      const cone = defaultRootOf(client.getScoops());
       if (cone) client.stopScoop(cone.jid);
     },
     {

@@ -6,7 +6,7 @@ import {
   workspaceFor,
 } from '../../src/work-unit/descriptor.js';
 import { statusFromTab } from '../../src/work-unit/types.js';
-import { childRecord, rootRecord } from './fixtures.js';
+import { childRecord, rootRecord, withLegacyRoleFields } from './fixtures.js';
 
 describe('work-unit descriptor', () => {
   it('maps tab status onto the unit lifecycle', () => {
@@ -76,8 +76,10 @@ describe('work-unit descriptor', () => {
     expect(d.policy.approvalAuthority).toBe('user');
   });
 
-  it('projects a child record and derives role from the edge, not isCone', () => {
-    const d = toDescriptor(childRecord('cone_1', { isCone: true, type: 'cone' }));
+  it('projects a child record and derives role from the edge, not a legacy role field', () => {
+    const d = toDescriptor(
+      withLegacyRoleFields(childRecord('cone_1'), { isCone: true, type: 'cone' })
+    );
     expect(d.parentId).toBe('cone_1');
     expect(d.display.role).toBe('child');
     expect(d.status).toBe('creating');

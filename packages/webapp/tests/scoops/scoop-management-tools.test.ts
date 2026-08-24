@@ -14,9 +14,7 @@ const cone: RegisteredScoop = {
   jid: 'cone_main_1',
   name: 'Main',
   folder: 'cone',
-  isCone: true,
   parentJid: null,
-  type: 'cone',
   requiresTrigger: false,
   assistantLabel: 'sliccy',
   addedAt: new Date().toISOString(),
@@ -56,9 +54,7 @@ describe('send_message tool — registration gating', () => {
     jid: 'scoop_alpha_1',
     name: 'alpha',
     folder: 'alpha-scoop',
-    isCone: false,
     parentJid: 'cone_main_1',
-    type: 'scoop',
     requiresTrigger: true,
     assistantLabel: 'alpha-scoop',
     addedAt: new Date().toISOString(),
@@ -214,12 +210,12 @@ describe('scoop_scoop tool — config defaults', () => {
     expect(created.config?.writablePaths).toEqual([`/scoops/${created.folder}/`, '/shared/']);
   });
 
-  it('passes an isCone=false scoop with a sanitized folder', async () => {
+  it('passes a child (non-root) scoop with a sanitized folder', async () => {
     const { tool, onScoopScoop } = findScoopScoopTool();
     await tool.execute({ name: 'Hero Block #1' });
 
     const created = onScoopScoop.mock.calls[0][0];
-    expect(created.isCone).toBe(false);
+    expect(created.parentJid).not.toBeNull();
     expect(created.folder).toBe('hero-block-1-scoop');
   });
 
@@ -412,9 +408,7 @@ describe('scoop_mute / scoop_unmute / scoop_wait tools', () => {
     jid: 'scoop_alpha_1',
     name: 'alpha',
     folder: 'alpha-scoop',
-    isCone: false,
     parentJid: 'cone_main_1',
-    type: 'scoop',
     requiresTrigger: true,
     assistantLabel: 'alpha-scoop',
     addedAt: new Date().toISOString(),
@@ -614,7 +608,7 @@ describe('scoop_mute / scoop_unmute / scoop_wait tools', () => {
   });
 
   it('mute/unmute/wait tools are absent on non-cone scoops', async () => {
-    const nonCone: RegisteredScoop = { ...targetScoop, isCone: false, type: 'scoop' };
+    const nonCone: RegisteredScoop = { ...targetScoop };
     const tools = createScoopManagementTools({
       scoop: nonCone,
       onSendMessage: vi.fn(),
@@ -634,9 +628,7 @@ describe('sudo_request / lick_confirm / lick_dismiss / list_sudo_requests tools'
     jid: 'scoop_alpha_1',
     name: 'alpha',
     folder: 'alpha-scoop',
-    isCone: false,
     parentJid: 'cone_main_1',
-    type: 'scoop',
     requiresTrigger: true,
     assistantLabel: 'alpha-scoop',
     addedAt: new Date().toISOString(),

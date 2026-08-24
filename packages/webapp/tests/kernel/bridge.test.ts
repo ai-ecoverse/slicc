@@ -957,7 +957,6 @@ describe('Bridge handlePanelMessage', () => {
     // labelled by its name (#1666 phase 4).
     expect(mockOrchestrator.registerScoop).toHaveBeenCalledWith(
       expect.objectContaining({
-        isCone: true,
         parentJid: null,
         name: 'sliccy',
         folder: 'cone-sliccy',
@@ -2275,7 +2274,6 @@ describe('Bridge handlePanelMessage dispatch', () => {
     await (bridge as any).handlePanelMessage({ type: 'cone-create', name: 'NewCone' });
     expect(mockOrchestrator.registerScoop).toHaveBeenCalledTimes(1);
     const registered = mockOrchestrator.registerScoop.mock.calls[0][0];
-    expect(registered.isCone).toBe(true);
     expect(registered.parentJid).toBeNull();
     expect(registered.name).toBe('NewCone');
     // the primary `cone` folder is taken by cone_1 → `cone-<slug>`
@@ -2293,7 +2291,6 @@ describe('Bridge handlePanelMessage dispatch', () => {
     await (bridge as any).handlePanelMessage({ type: 'cone-create', name: 'Cone' });
     const registered = mockOrchestrator.registerScoop.mock.calls[0][0];
     expect(registered).toMatchObject({
-      isCone: true,
       parentJid: null,
       folder: 'cone',
       assistantLabel: 'sliccy',

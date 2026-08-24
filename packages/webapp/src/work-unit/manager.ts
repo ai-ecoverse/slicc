@@ -5,13 +5,13 @@
  * It answers the questions the RFC says nobody can answer today — "who is
  * my parent?", "which units do I own?", "which root should an unaddressed
  * event go to?" — from the explicit `parentJid` edge instead of a global
- * `scoops.find(s => s.isCone)`. Creation and teardown delegate to the
- * existing register/unregister paths so Phase 1 changes no behaviour.
+ * role lookup. Creation and teardown delegate to the existing
+ * register/unregister paths.
  */
 
 import { CURRENT_SCOOP_CONFIG_VERSION, type RegisteredScoop } from '../scoops/types.js';
 import { childrenOf, rootsOf } from './policy.js';
-import { ScoopContextWorkUnit, type WorkUnitHost, type WorkUnitRuntime } from './runtime.js';
+import type { WorkUnitHost, WorkUnitRuntime } from './runtime.js';
 import type { CreateWorkUnitOptions, WorkUnitDescriptor, WorkUnitId } from './types.js';
 
 /** What the manager needs beyond a {@link WorkUnitHost}. */
@@ -31,8 +31,6 @@ export function buildWorkUnitRecord(
     jid: options.id ?? (root ? `cone_${now()}` : `scoop_${folder}_${now()}`),
     name: options.name,
     folder,
-    isCone: root,
-    type: root ? 'cone' : 'scoop',
     requiresTrigger: !root,
     assistantLabel: root ? 'sliccy' : folder,
     addedAt: new Date(now()).toISOString(),
@@ -47,8 +45,6 @@ export function buildWorkUnitRecord(
 }
 
 export class WorkUnitManager {
-  private readonly runtimes = new Map<WorkUnitId, WorkUnitRuntime>();
-
   constructor(private readonly host: WorkUnitManagerHost) {}
 
   /** Register a unit. A child's parent must exist. */
@@ -66,24 +62,16 @@ export class WorkUnitManager {
     return this.host.getScoops().map((scoop) => this.get(scoop.jid)!.descriptor);
   }
 
-  /** Runtime view of one unit, or `null` when unknown. */
+  /**
+   * Runtime view of one unit, or `null` when unknown. Every registered
+   * record has exactly one owning `LiveWorkUnit`, created on first reach —
+   * the runtime is deliberately NOT cached here, so a unit the host has
+   * dropped (e.g. `destroyScoopTab` without unregister) is replaced rather
+   * than kept alive as a closed shell.
+   */
   get(id: WorkUnitId): WorkUnitRuntime | null {
-    if (!this.host.getScoop(id)) {
-      this.runtimes.delete(id);
-      return null;
-    }
-    // Prefer the owning live runtime; fall back to the read-through adapter
-    // for a record whose runtime has not been spawned yet. The live unit is
-    // deliberately NOT cached: once the host drops it (e.g. `destroyScoopTab`
-    // without unregister) a fresh adapter must take over, not a closed unit.
-    const live = this.host.getLiveUnit?.(id);
-    if (live) return live;
-    let runtime = this.runtimes.get(id);
-    if (!runtime) {
-      runtime = new ScoopContextWorkUnit(id, this.host);
-      this.runtimes.set(id, runtime);
-    }
-    return runtime;
+    if (!this.host.getScoop(id)) return null;
+    return this.host.ensureLiveUnit(id);
   }
 
   /** The unit that owns `id`, or `null` for a root / unknown id. */
@@ -143,6 +131,5 @@ export class WorkUnitManager {
       await this.close(child.descriptor.id);
     }
     await runtime.close();
-    this.runtimes.delete(id);
   }
 }

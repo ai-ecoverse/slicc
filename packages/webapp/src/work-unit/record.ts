@@ -1,25 +1,51 @@
 /**
- * Record-level helpers that keep `RegisteredScoop`'s presentation fields
- * consistent with the ownership edge (#1666, Phase 3).
+ * Record-level helpers that keep `RegisteredScoop` consistent with the
+ * ownership edge (#1666).
  *
- * `isCone` / `type` stay on the record and on the wire for followers, but
- * they are *derived* — written here from `parentJid`, never branched on by
- * kernel or scoop lifecycle code. The final phase deletes them.
+ * The record no longer carries a role: `parentJid === null` (`isRootUnit`)
+ * IS the root test and the compiler enforces it, because the field a branch
+ * would read is gone. `isCone` survives only on the follower wire
+ * (`ScoopSummary`), projected from `isRootUnit` by `ScoopPresentation`.
+ * Records persisted before #2279 still carry `isCone` / `type` on disk;
+ * {@link normalizeScoopRecord} tolerates and strips them on restore.
  */
 
 import type { RegisteredScoop, WorkUnitModel, WorkUnitThinking } from '../scoops/types.js';
 import { isRootUnit } from './policy.js';
 
 /**
- * Rewrite the derived presentation fields from the ownership edge. Applied
- * on register and on restore so a record can never say `isCone: true` while
- * naming a parent (or vice versa). Mutates and returns `scoop`.
+ * Role fields a record persisted before #2279 still carries on disk. Only
+ * the restore path may look at them — see {@link legacyRecordIsCone} — and
+ * {@link normalizeScoopRecord} drops them once the edge is backfilled.
+ */
+interface LegacyRoleFields {
+  isCone?: boolean;
+  type?: 'cone' | 'scoop';
+}
+
+/**
+ * `true` when a record saved before the ownership edge existed claimed to be
+ * the cone. THE only sanctioned read of the deleted field, used once by
+ * `Orchestrator.backfillParent` to anchor the migration; every other caller
+ * asks {@link isRootUnit}.
+ */
+export function legacyRecordIsCone(scoop: RegisteredScoop): boolean {
+  return (scoop as RegisteredScoop & LegacyRoleFields).isCone === true;
+}
+
+/**
+ * Bring a record in line with the ownership edge. Applied on register and on
+ * restore: it lifts legacy model/thinking config, drops the pre-#2279 role
+ * fields (`isCone` / `type`, now derived from `parentJid` wherever they are
+ * needed) and sanitizes the fields a root may not carry. Mutates and returns
+ * `scoop`.
  */
 export function normalizeScoopRecord(scoop: RegisteredScoop): RegisteredScoop {
   liftLegacyModelConfig(scoop);
+  const legacy = scoop as RegisteredScoop & LegacyRoleFields;
+  delete legacy.isCone;
+  delete legacy.type;
   const root = isRootUnit(scoop);
-  scoop.isCone = root;
-  scoop.type = root ? 'cone' : 'scoop';
   if (root) {
     // A root is addressed directly; trigger patterns are a child concept.
     scoop.trigger = undefined;

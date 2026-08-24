@@ -1162,7 +1162,7 @@ function lickCardEl(message: ChatMessage): HTMLElement {
     collapsible: '',
     collapsed: '',
   });
-  if (scoopName) card.setAttribute('hue', scoopColor({ isCone: false, name: scoopName }));
+  if (scoopName) card.setAttribute('hue', scoopColor({ isRoot: false, name: scoopName }));
   if (count > 1) card.setAttribute('count', String(count));
   // Actionable licks (sudo-request) flip to a result glyph once settled; a
   // pending/unset state leaves the card in its default amber form.

@@ -72,9 +72,7 @@ fix the layering, never grow `layer-back-edge-baseline.json`),
 `lint:record-string-unknown` (no new `Record<string, unknown>` in non-test source —
 baseline-ratcheted; name the shape, or suppress a genuinely untyped payload with
 `// biome-ignore lint/plugin: <reason>`, never grow
-`record-string-unknown-baseline.json`), `lint:iscone-ratchet` (no new `.isCone` reads
-outside `packages/webapp/src/ui/` — cone and scoop are roles over one `WorkUnit`; branch
-on the unit's policy or `isRootUnit`, never grow `iscone-baseline.json`), `lint:patches`,
+`record-string-unknown-baseline.json`), `lint:patches`,
 `lint:swift-deps` (SPM unused-dependency gate — see below), and `lint:duplication`.
 
 CI runs the check-only/strict equivalents (`npm run lint:ci`) as a hard gate and will reject

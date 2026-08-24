@@ -1,5 +1,6 @@
 import { hasStoredTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { RegisteredScoop, ThinkingLevel } from '../../scoops/types.js';
+import { isRootUnit } from '../../work-unit/policy.js';
 import { chatSessionIdFor, modelFor, thinkingFor } from '../../work-unit/record.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import { notifyLeaderLocalModelStateChanged } from './leader-model-events.js';
@@ -57,12 +58,11 @@ export async function applyThreadContext(
   roster: readonly RegisteredScoop[] = []
 ): Promise<void> {
   refs.thread.setAttribute('context', threadContextFor(scoop));
-  refs.thread.setAttribute('accent', scoopColor(scoop));
+  const isRoot = isRootUnit(scoop);
+  const accent = scoopColor({ isRoot, name: scoop.name });
+  refs.thread.setAttribute('accent', accent);
   refs.switcher.setAttribute('active', scoop.jid);
-  applyShellContext(
-    refs,
-    scoop.isCone ? { kind: 'cone' } : { kind: 'scoop', accent: scoopColor(scoop) }
-  );
+  applyShellContext(refs, isRoot ? { kind: 'cone' } : { kind: 'scoop', accent });
   const lockedEffort = localStorage.getItem('slicc_locked_effort_level');
   const thinking = thinkingFor(scoop);
   refs.composerMeta.setAttribute(

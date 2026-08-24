@@ -3,12 +3,14 @@ import {
   chatSessionIdFor,
   coneFolderFor,
   isPrimaryRoot,
+  legacyRecordIsCone,
+  normalizeScoopRecord,
   PRIMARY_CONE_FOLDER,
   processOwnerKindFor,
   slugifyUnitName,
   sourceLabelFor,
 } from '../../src/work-unit/record.js';
-import { childRecord, rootRecord } from './fixtures.js';
+import { childRecord, rootRecord, withLegacyRoleFields } from './fixtures.js';
 
 describe('work-unit record helpers', () => {
   it('keys chat sessions by folder so the primary cone keeps session-cone', () => {
@@ -56,5 +58,42 @@ describe('work-unit record helpers', () => {
     expect(processOwnerKindFor(childRecord('cone_1'))).toBe('scoop');
     expect(sourceLabelFor(rootRecord({ folder: 'cone-two', name: 'Two' }))).toBe('cone');
     expect(sourceLabelFor(childRecord('cone_1', { folder: 'w' }))).toBe('w');
+  });
+
+  // #2279: `isCone` / `type` are gone from the record, but a profile written
+  // before that still has them on disk. Restore must read them once (to
+  // anchor the `parentJid` backfill) and then leave nothing behind.
+  describe('legacy persisted records', () => {
+    it('reads the pre-#2279 cone flag for the restore backfill', () => {
+      expect(
+        legacyRecordIsCone(withLegacyRoleFields(rootRecord(), { isCone: true, type: 'cone' }))
+      ).toBe(true);
+      expect(
+        legacyRecordIsCone(
+          withLegacyRoleFields(childRecord('cone_1'), { isCone: false, type: 'scoop' })
+        )
+      ).toBe(false);
+      // A record already migrated carries neither field.
+      expect(legacyRecordIsCone(rootRecord())).toBe(false);
+    });
+
+    it('normalizeScoopRecord tolerates and strips them, keeping everything else', () => {
+      const legacy = withLegacyRoleFields(
+        childRecord('cone_1', { folder: 'worker-scoop', assistantLabel: 'worker-scoop' }),
+        { isCone: false, type: 'scoop' }
+      );
+      const normalized = normalizeScoopRecord(legacy);
+      expect(normalized).toBe(legacy);
+      expect(normalized).not.toHaveProperty('isCone');
+      expect(normalized).not.toHaveProperty('type');
+      expect(normalized).toMatchObject({
+        jid: legacy.jid,
+        parentJid: 'cone_1',
+        folder: 'worker-scoop',
+        trigger: '@worker-scoop',
+        requiresTrigger: true,
+        assistantLabel: 'worker-scoop',
+      });
+    });
   });
 });
