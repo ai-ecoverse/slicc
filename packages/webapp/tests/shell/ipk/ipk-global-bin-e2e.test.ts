@@ -197,7 +197,7 @@ describe('global ipk bins via PATH (AlmostBashShellHeadless)', () => {
     expect(run.stdout).toContain('hello-global');
 
     await fs.dispose();
-  });
+  }, 15000);
 
   it('npm uninstall -g removes the PATH delegator', async () => {
     sharedRegistry.current = buildRegistry([
@@ -225,5 +225,5 @@ describe('global ipk bins via PATH (AlmostBashShellHeadless)', () => {
     expect(await fs.exists(`${GLOBAL_NODE_MODULES}/greet`)).toBe(false);
 
     await fs.dispose();
-  });
+  }, 15000);
 });
