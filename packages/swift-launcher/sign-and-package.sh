@@ -39,6 +39,10 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
       codesign --force --options runtime --sign "$IDENTITY" --timestamp \
         "$APPEX_WEBRTC"
     fi
+    # Do not add keychain-access-groups to the appex entitlements. That
+    # restricted entitlement requires an appex-specific Developer ID profile
+    # (this host profile is com.slicc.sliccstart). Without it AMFI blocks
+    # spawn: "No matching profile found" / POSIX 163 / extensionKit error 2.
     codesign --force --options runtime --entitlements "$SCRIPT_DIR/SliccFileProvider.entitlements" \
       --sign "$IDENTITY" --timestamp \
       "$APPEX"

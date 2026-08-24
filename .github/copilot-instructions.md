@@ -27,6 +27,9 @@ capture. Validate the CDP target and port before trusting them; handle disconnec
 Native protected-resource access needs entitlements/usage descriptions, TCC checks, and
 graceful denial. A File Provider appex must embed and sign every `@rpath` framework it
 links (host `Resources/` is not visible) and declare network entitlements its transport uses.
+Do not put `keychain-access-groups` on the macOS File Provider — that restricted
+entitlement needs an appex-specific Developer ID profile, and AMFI otherwise refuses
+launch (extensionKit error 2).
 
 ## 6. Model metadata / provider pipeline
 

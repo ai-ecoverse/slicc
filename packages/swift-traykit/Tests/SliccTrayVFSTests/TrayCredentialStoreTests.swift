@@ -101,6 +101,58 @@ final class TrayCredentialStoreTests: XCTestCase {
         XCTAssertTrue(credentialMetadata.isEmpty)
     }
 
+    func testAppGroupFileStoreRoundTripAndClear() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TrayCredentialFileStore.\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AppGroupFileSecretStore(directory: directory)
+        let payload = Data("https://tray.example/join/file-secret".utf8)
+        let fileURL = directory.appendingPathComponent("join-url", isDirectory: false)
+
+        XCTAssertTrue(store.write(payload))
+        XCTAssertEqual(store.read(), payload)
+        XCTAssertEqual(try Data(contentsOf: fileURL), payload)
+        let mode = try FileManager.default.attributesOfItem(atPath: fileURL.path)[.posixPermissions] as? NSNumber
+        XCTAssertEqual(mode?.uint16Value, 0o600)
+
+        store.clear()
+
+        XCTAssertNil(store.read())
+        XCTAssertFalse(FileManager.default.fileExists(atPath: fileURL.path))
+    }
+
+    func testAppGroupFileStoreReadMissesMissingFile() {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TrayCredentialFileStore.\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let store = AppGroupFileSecretStore(directory: directory)
+
+        XCTAssertNil(store.read())
+        XCTAssertTrue(store.write(Data("secret".utf8)))
+        store.clear()
+        XCTAssertNil(store.read())
+    }
+
+    func testFileBackedStoreKeepsSecretOutOfDefaults() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("TrayCredentialFileStore.\(UUID().uuidString)", isDirectory: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let fileStore = AppGroupFileSecretStore(directory: directory)
+        let store = TrayCredentialStore(defaults: defaults, keychain: fileStore)
+        let joinURL = try XCTUnwrap(URL(string: "https://tray.example/join/file-backed-secret"))
+
+        XCTAssertTrue(
+            store.save(joinURL: joinURL, trayID: "tray-file", displayName: nil))
+        XCTAssertEqual(store.load()?.joinURL, joinURL)
+        XCTAssertFalse(
+            defaults.dictionaryRepresentation().values.contains { value in
+                String(describing: value).contains("file-backed-secret")
+            })
+
+        store.clear()
+        XCTAssertNil(store.load())
+    }
+
     func testKeychainUpdateFailurePreservesPreviousCredential() throws {
         let keychain = MemoryKeychain()
         let store = TrayCredentialStore(defaults: defaults, keychain: keychain)

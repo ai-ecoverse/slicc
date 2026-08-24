@@ -1,8 +1,10 @@
 import Foundation
 
 /// Platform-specific app-group and keychain identifiers for the File Provider
-/// credential store. macOS 15+ authorizes team-prefixed groups by signature alone;
-/// iOS uses the follower app-group the appex already declares.
+/// credential store. macOS 15+ authorizes team-prefixed groups by signature alone
+/// and stores the join URL in the app-group container (the File Provider cannot
+/// claim `keychain-access-groups` without its own Developer ID profile). iOS uses
+/// the follower app-group plus keychain the appex already declares.
 public enum TrayCredentialConfiguration {
     public static var appGroupIdentifier: String {
         #if os(macOS)
