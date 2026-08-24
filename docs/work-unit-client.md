@@ -125,7 +125,19 @@ protocol cannot keep — the same rule that trimmed `signal`.
 
 Ordering is part of the contract: **a `snapshot` supersedes every `message`
 delivered before it**, and a subscriber that attaches mid-turn receives a
-`snapshot` before any incremental event. That is what makes
+`snapshot` before any incremental event — the adapters make that true rather
+than assuming it. Each caches the last snapshot it published and seeds a new
+subscriber with it; when it holds none the LOCAL adapter asks the kernel for a
+replay (side-effect-free: the panel applies one only for the unit it shows),
+while the remote one does not — a follower receives only the SELECTED unit's
+transcript, so asking would change what the leader mirrors, and a subscription
+must not do that. `snapshot(id)` is that call.
+
+**A snapshot can arrive before the roster does.** `LeaderSyncManager.addFollower()`
+sends the initial transcript ahead of `scoops.list`, and the kernel can answer
+for a unit the page has not listed yet. Both adapters HOLD such a snapshot and
+publish it as soon as the roster names the unit; dropping it would leave a
+subscriber with no transcript until some later selection asked for one. That is what makes
 subscribe-during-turn testable on both sides — today the leader gets a replay
 and the follower gets `onSnapshot`, and nothing states they must agree.
 
@@ -210,6 +222,12 @@ status/fill/phase maps it projects from are mutated by those handlers — emitti
 before them would publish a roster describing the previous instant. The
 follower's roster wrapper runs **before**, because there the frame IS the state
 and the shell's handler publishes the strip from it.
+
+**A status frame updates the roster too.** `subscribeList` promises a push for
+a status change on both transports; the remote adapter folds the frame into
+its held roster (clearing the `phase` / `awaiting` refinements the new state
+does not describe) so `list()` cannot lag the face until the next
+`scoops.list`.
 
 **The strip's repaint reads the roster synchronously** (`currentUnits()`, the
 sync twin of `list()`). A held copy is wrong on the leader: `awaitingInput` and

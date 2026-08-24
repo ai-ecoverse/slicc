@@ -49,6 +49,20 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
   private selectedId: WorkUnitId | null = null;
   private readonly listListeners = new Set<(units: readonly WorkUnitSummary[]) => void>();
   private readonly unitListeners = new Map<WorkUnitId, Set<(event: WorkUnitClientEvent) => void>>();
+  /**
+   * The last snapshot published per unit — seeds a subscriber attaching
+   * mid-turn, so a `message` never reaches a listener that has not seen one.
+   */
+  private readonly lastSnapshots = new Map<WorkUnitId, WorkUnitSnapshot>();
+  /**
+   * A leader snapshot that arrived BEFORE the roster it belongs to.
+   * `LeaderSyncManager.addFollower()` sends the initial snapshot ahead of
+   * `scoops.list`, so on every fresh join the first transcript lands with no
+   * summary to attach it to. Held here and published as soon as the roster
+   * names the unit; dropping it would leave a subscriber with no transcript
+   * until some later selection asked for one.
+   */
+  private readonly earlySnapshots = new Map<WorkUnitId, readonly WorkUnitChatMessage[]>();
   private readonly pendingSnapshots = new Map<
     WorkUnitId,
     Set<(snapshot: WorkUnitSnapshot) => void>
@@ -83,6 +97,26 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     return this.units.find((unit) => unit.id === id);
   }
 
+  /** Emit a snapshot to this unit's subscribers and settle anyone awaiting it. */
+  private publishSnapshot(id: WorkUnitId, snapshot: WorkUnitSnapshot): void {
+    this.lastSnapshots.set(id, snapshot);
+    this.emit(id, { snapshot, type: 'snapshot' });
+    const waiters = this.pendingSnapshots.get(id);
+    if (!waiters) return;
+    this.pendingSnapshots.delete(id);
+    for (const resolve of waiters) resolve(snapshot);
+  }
+
+  /** Publish any snapshot that arrived before the roster named its unit. */
+  private drainEarlySnapshots(): void {
+    for (const [id, messages] of this.earlySnapshots) {
+      const summary = this.summaryOf(id);
+      if (!summary) continue;
+      this.earlySnapshots.delete(id);
+      this.publishSnapshot(id, { messages, summary });
+    }
+  }
+
   /**
    * Wrap the follower's options bag so leader frames reach this adapter
    * before they reach `wc-follower.ts`. Same decoration as the local
@@ -105,28 +139,19 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
           this.selectedId = activeScoopJid;
         }
         // Before the shell's handler: it publishes the strip from this roster.
+        this.drainEarlySnapshots();
         this.emitList();
         base.onScoopsList?.(scoops, activeScoopJid);
       },
       onSnapshot: (messages: ChatMessage[], scoopJid: string) => {
         this.selectedId = scoopJid;
+        const transcript = messages as unknown as readonly WorkUnitChatMessage[];
         const summary = this.summaryOf(scoopJid);
-        if (summary) {
-          const snapshot: WorkUnitSnapshot = {
-            messages: messages as unknown as readonly WorkUnitChatMessage[],
-            summary,
-            // A follower never reports a queue: its leader does not send one
-            // and its own orchestrator is deliberately idle, so `[]` would
-            // reorder the pile against a lie. `undefined` says "nobody could
-            // answer", which is the truth.
-          };
-          this.emit(scoopJid, { snapshot, type: 'snapshot' });
-          const waiters = this.pendingSnapshots.get(scoopJid);
-          if (waiters) {
-            this.pendingSnapshots.delete(scoopJid);
-            for (const resolve of waiters) resolve(snapshot);
-          }
-        }
+        // A follower never reports a queue: its leader does not send one and
+        // its own orchestrator is deliberately idle, so `[]` would reorder the
+        // pile against a lie. `undefined` says "nobody could answer".
+        if (summary) this.publishSnapshot(scoopJid, { messages: transcript, summary });
+        else this.earlySnapshots.set(scoopJid, transcript);
         base.onSnapshot?.(messages, scoopJid);
       },
       onStatus: (scoopStatus: string, scoopJid?: string) => {
@@ -134,14 +159,31 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
         // is the existing rule for whether it describes what we are showing.
         const target = scoopJid ?? this.selectedId;
         if (target && shouldApplyFollowerStatus(scoopJid, this.selectedId)) {
-          this.emit(target, {
-            state: scoopStatus === 'processing' ? 'working' : 'idle',
-            type: 'status',
-          });
+          const state = scoopStatus === 'processing' ? 'working' : 'idle';
+          this.emit(target, { state, type: 'status' });
+          // The roster carries the same fact, and `subscribeList` promises a
+          // push for it: without this, `list()` reports the previous state
+          // until the leader's next `scoops.list` frame.
+          this.applyState(target, state);
         }
         base.onStatus?.(scoopStatus, scoopJid);
       },
     } as T;
+  }
+
+  /** Fold a status frame into the held roster and push it. */
+  private applyState(id: WorkUnitId, state: WorkUnitSummary['state']): void {
+    const current = this.summaryOf(id);
+    if (!current || current.state === state) return;
+    this.units = this.units.map((unit) =>
+      unit.id === id
+        ? // A status frame refines nothing else: `phase` and `awaiting` only
+          // ever arrive on a roster frame, so a stale one must not survive a
+          // state change it does not describe.
+          { ...unit, state, phase: undefined, awaiting: undefined }
+        : unit
+    );
+    this.emitList();
   }
 
   /** The last roster the leader sent. {@link list} is the protocol's async form. */
@@ -162,10 +204,21 @@ export class RemoteWorkUnitClient implements WorkUnitClient {
     };
   }
 
+  /**
+   * Subscribe to one unit, SEEDED with the last snapshot this client
+   * published (the protocol's mid-turn ordering guarantee).
+   *
+   * Unlike the local adapter there is no request to make when none is held: a
+   * follower only ever receives the SELECTED unit's transcript, so asking for
+   * another unit's would mean changing what the leader mirrors — a side
+   * effect a subscription must not have. {@link snapshot} is that call.
+   */
   subscribe(id: WorkUnitId, listener: (event: WorkUnitClientEvent) => void): Unsubscribe {
     const listeners = this.unitListeners.get(id) ?? new Set<(event: WorkUnitClientEvent) => void>();
     listeners.add(listener);
     this.unitListeners.set(id, listeners);
+    const known = this.lastSnapshots.get(id);
+    if (known) listener({ snapshot: known, type: 'snapshot' });
     return () => {
       listeners.delete(listener);
       if (listeners.size === 0) this.unitListeners.delete(id);

@@ -138,6 +138,46 @@ export function runWorkUnitClientConformance(name: string, make: () => ClientHar
       expect(seen.map((event) => event.type)).toEqual(kinds);
     });
 
+    it('seeds a late subscriber with the snapshot it missed', () => {
+      const harness = make();
+      harness.setRoster(ROSTER);
+      harness.emitSnapshot('cone_1', [{ content: 'a', id: 'm1', role: 'user', timestamp: 1 }]);
+      const seen: WorkUnitClientEvent[] = [];
+      harness.client.subscribe('cone_1', (event) => seen.push(event));
+      // Attaching after the replay must not mean attaching without one.
+      const first = seen[0];
+      expect(first?.type).toBe('snapshot');
+      expect(first?.type === 'snapshot' && first.snapshot.messages).toHaveLength(1);
+    });
+
+    it('replays a snapshot that arrived before the roster named its unit', () => {
+      const harness = make();
+      const seen: WorkUnitClientEvent[] = [];
+      harness.client.subscribe('cone_1', (event) => seen.push(event));
+      // A leader sends the first transcript BEFORE its scoop list on a fresh
+      // join; the kernel can answer for a unit the page has not listed yet.
+      harness.emitSnapshot('cone_1', [{ content: 'a', id: 'm1', role: 'user', timestamp: 1 }]);
+      harness.setRoster(ROSTER);
+      const snapshots = seen.filter((event) => event.type === 'snapshot');
+      expect(snapshots).toHaveLength(1);
+      const only = snapshots[0];
+      expect(only?.type === 'snapshot' && only.snapshot.summary.id).toBe('cone_1');
+      expect(only?.type === 'snapshot' && only.snapshot.messages).toHaveLength(1);
+    });
+
+    it('pushes the roster when a unit changes state', () => {
+      const harness = make();
+      harness.setRoster(ROSTER);
+      const seen: string[] = [];
+      harness.client.subscribeList((units) => {
+        seen.push(units.find((unit) => unit.id === 'cone_1')?.state ?? '?');
+      });
+      harness.emitStatus('cone_1', 'processing');
+      // `subscribeList` promises a push for a status change, on both
+      // transports — a roster that lags the face is how the two drifted.
+      expect(seen.at(-1)).toBe('working');
+    });
+
     it('sends a prompt to the unit it names', async () => {
       const harness = make();
       harness.setRoster(ROSTER, 'cone_1');

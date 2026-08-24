@@ -53,6 +53,22 @@ export interface LocalWorkUnitClientDeps {
 export class LocalWorkUnitClient implements WorkUnitClient {
   private readonly listListeners = new Set<(units: readonly WorkUnitSummary[]) => void>();
   private readonly unitListeners = new Map<WorkUnitId, Set<(event: WorkUnitClientEvent) => void>>();
+  /**
+   * The last snapshot published per unit. Kept so a subscriber attaching
+   * mid-turn can be seeded with it — the protocol's ordering guarantee is
+   * that a `message` never reaches a listener that has not seen a snapshot.
+   */
+  private readonly lastSnapshots = new Map<WorkUnitId, WorkUnitSnapshot>();
+  /**
+   * A replay that arrived before its unit was in the roster. The kernel can
+   * answer for a unit the page has not listed yet (a boot-time replay racing
+   * the first `scoop-list`), and a dropped snapshot would leave a subscriber
+   * with no transcript until something else asked for one.
+   */
+  private readonly orphanedReplays = new Map<
+    WorkUnitId,
+    { messages: readonly WorkUnitChatMessage[]; queuedIds: readonly string[] | undefined }
+  >();
   /** Replays awaited by {@link snapshot}, keyed by unit. */
   private readonly pendingSnapshots = new Map<
     WorkUnitId,
@@ -97,6 +113,26 @@ export class LocalWorkUnitClient implements WorkUnitClient {
     return (this.deps.getClient()?.getScoops() ?? []).map((scoop) => this.toSummary(scoop));
   }
 
+  /** Emit a snapshot to this unit's subscribers and settle anyone awaiting it. */
+  private publishSnapshot(id: WorkUnitId, snapshot: WorkUnitSnapshot): void {
+    this.lastSnapshots.set(id, snapshot);
+    this.emit(id, { snapshot, type: 'snapshot' });
+    const waiters = this.pendingSnapshots.get(id);
+    if (!waiters) return;
+    this.pendingSnapshots.delete(id);
+    for (const resolve of waiters) resolve(snapshot);
+  }
+
+  /** Publish any replay that arrived before its unit was in the roster. */
+  private drainOrphanedReplays(): void {
+    for (const [id, replay] of this.orphanedReplays) {
+      const snapshot = this.snapshotFor(id, replay.messages, replay.queuedIds);
+      if (!snapshot) continue;
+      this.orphanedReplays.delete(id);
+      this.publishSnapshot(id, snapshot);
+    }
+  }
+
   /** Forget one pending {@link snapshot} caller, and the set once it is empty. */
   private forgetWaiter(id: WorkUnitId, resolve: (snapshot: WorkUnitSnapshot) => void): void {
     const waiters = this.pendingSnapshots.get(id);
@@ -106,6 +142,7 @@ export class LocalWorkUnitClient implements WorkUnitClient {
   }
 
   private emitList(): void {
+    this.drainOrphanedReplays();
     if (this.listListeners.size === 0) return;
     const units = this.currentUnits();
     for (const listener of this.listListeners) listener(units);
@@ -157,19 +194,12 @@ export class LocalWorkUnitClient implements WorkUnitClient {
       // the snapshot this publishes describes one instant of backend state.
       onScoopMessagesReplaced: (jid, messages, queuedIds) => {
         base.onScoopMessagesReplaced?.(jid, messages, queuedIds);
-        const snapshot = this.snapshotFor(
-          jid,
-          messages as unknown as readonly WorkUnitChatMessage[],
-          queuedIds
-        );
-        if (snapshot) {
-          this.emit(jid, { snapshot, type: 'snapshot' });
-          const waiters = this.pendingSnapshots.get(jid);
-          if (waiters) {
-            this.pendingSnapshots.delete(jid);
-            for (const resolve of waiters) resolve(snapshot);
-          }
-        }
+        const replayed = messages as unknown as readonly WorkUnitChatMessage[];
+        const snapshot = this.snapshotFor(jid, replayed, queuedIds);
+        if (snapshot) this.publishSnapshot(jid, snapshot);
+        // Not in the roster yet — hold it for the next list update rather than
+        // dropping a transcript the kernel already answered for.
+        else this.orphanedReplays.set(jid, { messages: replayed, queuedIds });
       },
     };
   }
@@ -187,10 +217,23 @@ export class LocalWorkUnitClient implements WorkUnitClient {
     };
   }
 
+  /**
+   * Subscribe to one unit. The listener is SEEDED with the last snapshot this
+   * client published, and when there is none the kernel is asked for a replay
+   * — that is what makes the protocol's "a snapshot before any incremental
+   * event" hold for a subscriber attaching mid-turn, instead of leaving it to
+   * whoever calls {@link snapshot}.
+   *
+   * The request is side-effect-free for the shell: the panel's own handler
+   * applies a replay only for the unit it is showing.
+   */
   subscribe(id: WorkUnitId, listener: (event: WorkUnitClientEvent) => void): Unsubscribe {
     const listeners = this.unitListeners.get(id) ?? new Set<(event: WorkUnitClientEvent) => void>();
     listeners.add(listener);
     this.unitListeners.set(id, listeners);
+    const known = this.lastSnapshots.get(id);
+    if (known) listener({ snapshot: known, type: 'snapshot' });
+    else this.deps.getClient()?.requestScoopMessages(id);
     return () => {
       listeners.delete(listener);
       if (listeners.size === 0) this.unitListeners.delete(id);
