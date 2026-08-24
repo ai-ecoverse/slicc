@@ -1861,23 +1861,43 @@ jobs:
 
   # Wait for any in-progress release before allowing merge queue to land.
   # Only runs on merge_group events; skipped (= passing) for PRs.
+  #
+  # The timeout must clear a whole release, because the `ci` aggregate below
+  # treats `cancelled` exactly like `failure` — so a gate killed by its own
+  # timeout dequeues every PR in the batch for a reason that has nothing to do
+  # with their contents. Over the 330 releases in the month to 2026-08-24:
+  # p50 20m, p90 28m, p95 31m, p99 44m, max 60m. The former 35m sat between p95
+  # and p99 and fired on 9 of them; #2380 was dequeued after entering the queue
+  # two minutes into a 60-minute release. 90m clears the observed max with 50%
+  # headroom. Raise it if a release ever legitimately exceeds it — do NOT trim
+  # it back toward the median, and note that idle wait costs one sleeping runner
+  # while a dequeue costs a full batch re-run.
   release-gate:
     if: github.event_name == 'merge_group'
     runs-on: ubuntu-latest
-    timeout-minutes: 35
+    timeout-minutes: 90
     permissions:
       actions: read
     steps:
       - name: Wait for active release
         env:
           GH_TOKEN: ${{ github.token }}
+          # Below `timeout-minutes` so the loop reports WHY it gave up. A job
+          # killed by the runner timeout can emit nothing, and the aggregate
+          # gate then prints only its generic "failed or were cancelled" line.
+          DEADLINE_MINUTES: '85'
         run: |
+          deadline=$(( $(date +%s) + DEADLINE_MINUTES * 60 ))
           while true; do
             ACTIVE=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs?status=in_progress&per_page=1" --jq '.total_count')
             QUEUED=$(gh api "repos/${{ github.repository }}/actions/workflows/release.yml/runs?status=queued&per_page=1" --jq '.total_count')
             if [ "$ACTIVE" = "0" ] && [ "$QUEUED" = "0" ]; then
               echo "No release in progress, proceeding"
               break
+            fi
+            if [ "$(date +%s)" -ge "$deadline" ]; then
+              echo "::error::Release still running (active=$ACTIVE queued=$QUEUED) after ${DEADLINE_MINUTES}m; giving up so this batch does not merge mid-release. Re-enqueue once the release completes."
+              exit 1
             fi
             echo "Release running (active=$ACTIVE queued=$QUEUED), waiting 30s..."
             sleep 30
