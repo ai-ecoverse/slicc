@@ -220,6 +220,7 @@ describe('classifyFailure', () => {
     const cases = [
       ['upload artifacts', 'Failed to upload artifact: 500'],
       ['test', 'getaddrinfo ENOTFOUND registry.example.com'],
+      ['test', 'DNS resolution failed for registry.example.com'],
       ['install', 'npm ERR! network request to https://registry.npmjs.org failed'],
       ['test', 'The runner has received a shutdown signal.'],
       ['test', 'The operation was canceled.'],
@@ -229,6 +230,35 @@ describe('classifyFailure', () => {
         'infra'
       );
     }
+  });
+
+  // PR #2320: the CI aggregator's script-echo + env dump put
+  // `NODE_OPTIONS: --dns-result-order=ipv4first` inside the failure excerpt.
+  // A bare `dns` substring must never classify that as network plumbing.
+  it('does not treat Actions NODE_OPTIONS --dns-result-order as a network failure (PR #2320)', () => {
+    const excerpt = [
+      'echo "::error::One or more jobs failed or were cancelled"',
+      'exit 1',
+      'fi',
+      'shell: /usr/bin/bash -e {0}',
+      'env:',
+      '  NODE_OPTIONS: --dns-result-order=ipv4first',
+      '##[endgroup]',
+      '##[error]One or more jobs failed or were cancelled',
+      '##[error]Process completed with exit code 1.',
+    ].join('\n');
+    const out = classifyFailure({ jobName: 'ci', logExcerpt: excerpt });
+    expect(out.kind).toBe('unknown');
+    expect(out.reason).toMatch(/aggregator/i);
+  });
+
+  it('classifies SPM version pin conflicts as a fixable pin-sync (PR #2320)', () => {
+    const excerpt =
+      'xcodebuild: error: Could not resolve package dependencies:\n' +
+      '  Failed to resolve dependencies Dependencies could not be resolved because ' +
+      "'swift-trayfollower' depends on 'webrtc' 151.0.0..<152.0.0 and root depends on 'webrtc' 150.0.0.";
+    const out = classifyFailure({ jobName: 'ios-app', logExcerpt: excerpt });
+    expect(out).toMatchObject({ kind: 'code', category: 'pin-sync' });
   });
 
   it('classifies lint/type/test/snapshot/lockfile/conflict failures as code', () => {
@@ -354,6 +384,26 @@ describe('classifyFailures', () => {
     ]) {
       expect(classifyFailures(failures)).toMatchObject({ kind: 'code', category: 'debt-gate' });
     }
+  });
+
+  // PR #2320 regression: aggregator excerpt used to match bare `dns` via
+  // NODE_OPTIONS and win as infra over an SPM pin-sync sibling (unknown then).
+  it('lets an SPM pin-sync sibling beat a dns-contaminated aggregator excerpt (PR #2320)', () => {
+    const aggregatorWithDns = [
+      'echo "::error::One or more jobs failed or were cancelled"',
+      'env:',
+      '  NODE_OPTIONS: --dns-result-order=ipv4first',
+      '##[error]One or more jobs failed or were cancelled',
+    ].join('\n');
+    const spm =
+      "Could not resolve package dependencies: 'swift-trayfollower' depends on " +
+      "'webrtc' 151.0.0..<152.0.0 and root depends on 'webrtc' 150.0.0.";
+    expect(
+      classifyFailures([
+        { name: 'ci', logExcerpt: aggregatorWithDns },
+        { name: 'ios-app', logExcerpt: spm },
+      ])
+    ).toMatchObject({ kind: 'code', category: 'pin-sync' });
   });
 
   it('reports unknown for an empty list', () => {

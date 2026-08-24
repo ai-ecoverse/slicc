@@ -17,6 +17,18 @@
     "minimumReleaseAge": "0 days",
     "enabled": true
   },
+  "customManagers": [
+    {
+      "customType": "regex",
+      "description": "XcodeGen project.yml `exactVersion` pins for GitHub SPM packages. Renovate's swift manager updates Package.swift / Package.resolved but not these sibling pins — missing them left WebRTC at 150 in project.yml while Package.swift required 151 (PR #2320).",
+      "managerFilePatterns": ["/(^|/)project\\.yml$/"],
+      "matchStrings": [
+        "url:\\s*https://github\\.com/(?<depName>[^\\s/]+/[^\\s/]+?)(?:\\.git)?\\s*\\n\\s+exactVersion:\\s*(?<currentValue>\\S+)"
+      ],
+      "datasourceTemplate": "github-releases",
+      "versioningTemplate": "semver"
+    }
+  ],
   "packageRules": [
     {
       "description": "Pin every npm dependency to an exact version. Renovate cannot see the locked version of a dep declared in a workspace package.json: npm hoists everything into the root `node_modules/`, but since renovatebot/renovate#37407 Renovate looks the dep up under `packages/<pkg>/node_modules/<dep>` and gives up when that never-written key is missing. With `lockedVersion: null` it can only offer updates that change the range, so caret-ranged workspace deps silently froze at whatever the lockfile happened to hold — `@earendil-works/pi-ai` sat on 0.84.0 under `^0.84.0` for a week, which is why Grok 4.6 never reached the model dropdown (PR #2293). Exact pins make every version change a visible package.json diff in its own PR, which is what the one-dep-per-PR philosophy above wants anyway. Scoped to dependencies/devDependencies so `engines` and `peerDependencies` keep their ranges.",

@@ -142,6 +142,15 @@ export const HARD_SKIP_JOB_PATTERN =
 /**
  * Failures that did not evaluate the code — CI plumbing. These take the re-run
  * path (once per head SHA).
+ *
+ * Network patterns deliberately omit a bare `dns` substring: every Actions job
+ * in this repo dumps `NODE_OPTIONS: --dns-result-order=ipv4first` into its log,
+ * and the `CI / ci` aggregator's script-echo + env dump puts that line inside
+ * the log excerpt of `##[error]One or more jobs failed…`. Matching bare `dns`
+ * classified PR #2320's real SPM pin conflict as a network flake (re-run once,
+ * then skip) and never dispatched a fixer. Real DNS failures still match via
+ * `getaddrinfo`, `ENOTFOUND`, `EAI_AGAIN`, or an explicit "dns resolution /
+ * lookup / error" phrase.
  */
 export const INFRA_SIGNATURES = [
   {
@@ -152,7 +161,7 @@ export const INFRA_SIGNATURES = [
   {
     category: 'network',
     pattern:
-      /ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|getaddrinfo|connection reset by peer|tls handshake|dns/i,
+      /ENOTFOUND|EAI_AGAIN|ECONNRESET|ECONNREFUSED|ETIMEDOUT|EPIPE|socket hang up|getaddrinfo|connection reset by peer|tls handshake|dns (resolution|lookup|error)|name resolution/i,
   },
   {
     category: 'registry',
@@ -220,6 +229,15 @@ export const CODE_SIGNATURES = [
     category: 'generated-artifact',
     pattern:
       /package-lock\.json|lock ?file (is )?out of (sync|date)|npm ci can only install|git diff --exit-code|generated file .* out of date|working tree is dirty/i,
+  },
+  // Renovate updates Package.swift / Package.resolved but historically missed
+  // the sibling xcodegen `project.yml` `exactVersion:` pins (PR #2320). SPM
+  // then fails with a version conflict that is a mechanical pin sync, not a
+  // design decision and not CI plumbing.
+  {
+    category: 'pin-sync',
+    pattern:
+      /could not resolve package dependencies|dependencies could not be resolved because|depends on ['"]?[\w.-]+['"]? [\d.]+(?:\.\.<[\d.]+)? and .+ depends on ['"]?[\w.-]+['"]? [\d.]+/i,
   },
   {
     category: 'merge-conflict',
@@ -326,6 +344,20 @@ function matchSignature(table, text) {
 }
 
 /**
+ * The `CI / ci` aggregator (`if: always()` over `needs: [*]`) always fails
+ * whenever any child does; its own log only echoes that fact (plus the job
+ * env dump). Classifying it from its log would let boilerplate — or a false
+ * infra hit inside that dump — dominate a sibling that named the real cause.
+ * @param {string} jobName
+ * @param {string} logExcerpt
+ * @returns {boolean}
+ */
+function isCiAggregatorNoise(jobName, logExcerpt) {
+  if (String(jobName).toLowerCase() !== 'ci') return false;
+  return /one or more jobs failed or were cancelled/i.test(String(logExcerpt));
+}
+
+/**
  * Classify a single failure as infrastructure, code, blocked (hard skip), or
  * unknown, from its job name plus a log excerpt.
  * @param {{jobName?: string, logExcerpt?: string}} failure
@@ -334,6 +366,16 @@ function matchSignature(table, text) {
 export function classifyFailure({ jobName = '', logExcerpt = '' } = {}) {
   const name = String(jobName);
   const text = `${name}\n${String(logExcerpt)}`;
+
+  // Aggregator boilerplate never names a cause — treat as unknown so a sibling
+  // with a real signature can win in {@link classifyFailures}.
+  if (isCiAggregatorNoise(name, logExcerpt)) {
+    return {
+      kind: 'unknown',
+      category: null,
+      reason: `"${name}" is the CI aggregator and does not name a failure cause.`,
+    };
+  }
 
   if (HARD_SKIP_JOB_PATTERN.test(name)) {
     return {
