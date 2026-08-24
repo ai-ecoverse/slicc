@@ -70,10 +70,10 @@
       ]
     },
     "webapp": {
-      "lines": 82,
-      "statements": 79,
-      "functions": 80,
-      "branches": 71,
+      "lines": 83,
+      "statements": 81,
+      "functions": 81,
+      "branches": 72,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -132,7 +132,7 @@
   },
   "swift": {
     "swift-server": {
-      "lines": 63,
+      "lines": 64,
       "functions": 62,
       "regions": 61
     },
@@ -147,14 +147,14 @@
       "regions": 79
     },
     "swift-traysession": {
-      "lines": 88,
-      "functions": 84,
-      "regions": 83
+      "lines": 91,
+      "functions": 87,
+      "regions": 85
     },
     "swift-trayfollower": {
-      "lines": 64,
+      "lines": 65,
       "functions": 48,
-      "regions": 74
+      "regions": 75
     },
     "swift-traykit": {
       "lines": 60,
