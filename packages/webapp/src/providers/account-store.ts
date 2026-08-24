@@ -21,7 +21,13 @@ import { resolveSecretTopology } from '../core/secret-topology.js';
 import { callSecretsBridge } from '../core/secrets-bridge-client.js';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
-import { bedrockCampRegionFromBaseUrl, isBedrockCampCompatible } from './built-in/bedrock-camp.js';
+// Import from the dependency-free compat module, NOT `bedrock-camp.js` —
+// the full provider statically drags pi-ai's compat layer (~400 kB) into
+// this eagerly-loaded module's graph in both realms (#first-load ratchet).
+import {
+  bedrockCampRegionFromBaseUrl,
+  isBedrockCampCompatible,
+} from './built-in/bedrock-camp-compat.js';
 import { findFamilyCost } from './family-cost.js';
 import {
   getRegisteredProviderConfig,

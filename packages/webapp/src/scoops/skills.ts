@@ -17,27 +17,30 @@ import { discoverSkills } from '../skills/index.js';
 
 const log = createLogger('skills');
 
-// Load default text files at build time using import.meta.glob
-// The '?raw' query imports file contents as strings
+// Default file CONTENTS load lazily (`eager: false` → per-file dynamic
+// chunks) so the ~400 kB of vfs-root seed text stays out of the
+// kernel-worker's boot-critical eager graph. Seeding only runs when a
+// default file is missing from the user's VFS (fresh install / upgrade),
+// so on a normal boot none of these chunks is ever fetched. The
+// first-load ratchet (`check-first-load-size.mjs`) guards this staying
+// lazy.
+// The '?raw' query imports file contents as strings.
 const defaultTextFiles = import.meta.glob(
   '/packages/vfs-root/**/*.{md,jsh,shtml,json,txt,css,js,ts,html}',
   {
     query: '?raw',
     import: 'default',
-    eager: true,
   }
-) as Record<string, string>;
+) as Record<string, () => Promise<string>>;
 
-// Load default binary files (audio, images, etc.) as base64
-// The '?inline' query gives us a data URL we can decode
+// Binary files (audio, images, etc.) as base64 data URLs via '?inline'.
 const defaultBinaryFiles = import.meta.glob(
   '/packages/vfs-root/**/*.{mp3,wav,ogg,png,jpg,jpeg,gif,webp,ico,pdf}',
   {
     query: '?inline',
     import: 'default',
-    eager: true,
   }
-) as Record<string, string>;
+) as Record<string, () => Promise<string>>;
 
 // Binary file extensions that need special handling
 const BINARY_EXTENSIONS = new Set([
@@ -80,19 +83,20 @@ const devOnlyTextFiles = __DEV__
     }) as Record<string, string>)
   : {};
 
-// Combined view of all default files
-function getDefaultFiles(): Record<string, string | Uint8Array> {
+// Combined view of all default files. Loader invocations run in
+// parallel — each resolves a tiny per-file chunk emitted by the
+// non-eager glob above.
+async function getDefaultFiles(): Promise<Record<string, string | Uint8Array>> {
   const result: Record<string, string | Uint8Array> = {};
 
-  // Add text files as-is
-  for (const [path, content] of Object.entries(defaultTextFiles)) {
-    result[path] = content;
-  }
-
-  // Add binary files decoded from data URLs
-  for (const [path, dataUrl] of Object.entries(defaultBinaryFiles)) {
-    result[path] = decodeDataUrl(dataUrl);
-  }
+  await Promise.all([
+    ...Object.entries(defaultTextFiles).map(async ([path, load]) => {
+      result[path] = await load();
+    }),
+    ...Object.entries(defaultBinaryFiles).map(async ([path, load]) => {
+      result[path] = decodeDataUrl(await load());
+    }),
+  ]);
 
   // Merge dev-only skills, remapping to the VFS-root namespace so
   // createDefaultSkills installs them under /workspace/skills/.
@@ -347,7 +351,7 @@ export async function createDefaultSkills(
   skillsDir: string = '/workspace/skills'
 ): Promise<void> {
   const prefix = '/packages/vfs-root';
-  const defaultFiles = getDefaultFiles();
+  const defaultFiles = await getDefaultFiles();
 
   for (const [importPath, content] of Object.entries(defaultFiles)) {
     // Convert import path like '/packages/vfs-root/workspace/skills/browser/SKILL.md'
@@ -406,7 +410,7 @@ const ALWAYS_OVERWRITE_SHARED = new Set<string>([
  */
 export async function createDefaultSharedFiles(fs: VirtualFS): Promise<void> {
   const prefix = '/packages/vfs-root';
-  const defaultFiles = getDefaultFiles();
+  const defaultFiles = await getDefaultFiles();
 
   for (const [importPath, content] of Object.entries(defaultFiles)) {
     const vfsPath = importPath.slice(prefix.length);

@@ -144,6 +144,14 @@ the `size-limit` block of [`packages/webapp/package.json`](../../../packages/web
 and [`packages/chrome-extension/package.json`](../../../packages/chrome-extension/package.json),
 next to the code they guard, and are measured on raw (non-brotli) bytes.
 
+The webapp `size` script additionally runs
+`packages/dev-tools/tools/check-first-load-size.mjs`, which measures the EAGER import
+closures fetched on a cold-cache boot (the page entry graph and the kernel-worker graph)
+against [`packages/webapp/first-load-budget.json`](../../../packages/webapp/first-load-budget.json).
+A static import that hoists an existing lazy chunk into the boot graph fails this gate even
+though no single file grew — make the import dynamic, or raise the budget with a reason in
+the PR body. Both gates are ratchets: tighten as payloads shrink.
+
 It reads built output, so run `npm run build` and
 `npm run build -w @slicc/chrome-extension` first. CI enforces it in the `bundle-size` job,
 which builds both apps itself.

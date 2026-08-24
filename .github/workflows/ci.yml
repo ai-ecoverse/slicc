@@ -1871,7 +1871,11 @@ jobs:
   # webapp and extension growth was invisible until someone noticed a slow
   # cold load. Budgets live next to the code they guard, in each package's
   # `size-limit` block, and are measured on raw (non-brotli) bytes to match
-  # the asset-cap framing of the worker gate. They are ratchets: tighten them
+  # the asset-cap framing of the worker gate. The webapp additionally gates
+  # first-load performance: check-first-load-size.mjs measures the EAGER
+  # import closures of the page and kernel-worker entries (what a cold-cache
+  # boot actually downloads) against packages/webapp/first-load-budget.json.
+  # They are ratchets: tighten them
   # as payloads shrink; raising one needs a reason in the PR body.
   #
   # `dev-tools` is in the filter list because the webapp inlines
