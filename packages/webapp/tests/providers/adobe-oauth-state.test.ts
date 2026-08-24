@@ -22,6 +22,8 @@ describe('isWorkerServedSpa', () => {
 
   it('returns false on a classic CLI URL (no bridge param)', () => {
     expect(isWorkerServedSpa('http://localhost:5710/')).toBe(false);
+    expect(isWorkerServedSpa('http://127.0.0.1:5710/')).toBe(false);
+    expect(isWorkerServedSpa('http://[::1]:5710/')).toBe(false);
   });
 
   it('returns false for a malformed URL rather than throwing', () => {

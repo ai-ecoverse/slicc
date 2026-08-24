@@ -1,4 +1,5 @@
 import { promises as fs } from 'node:fs';
+import { isLoopbackHostname } from '@slicc/shared-ts';
 import express, { type Express, type NextFunction, type Request, type Response } from 'express';
 
 export interface CloudStatusEndpointOptions {
@@ -39,12 +40,14 @@ function isCloudStatusPayload(x: unknown): x is CloudStatusPayload {
  * Reject non-loopback requests. The sandbox is a private execution boundary,
  * but defense in depth: someone might wire a port-forward and we want this
  * endpoint to be unreachable from the outside.
+ *
+ * Socket addresses may be IPv4-mapped IPv6 (`::ffff:127.0.0.1`); strip that
+ * prefix then use the shared loopback hostname check.
  */
 export function requireLoopback(req: Request, res: Response, next: NextFunction): void {
   const addr = req.socket.remoteAddress ?? '';
-  const isLoopback =
-    addr === '127.0.0.1' || addr === '::1' || addr === '::ffff:127.0.0.1' || addr === 'localhost';
-  if (!isLoopback) {
+  const normalized = addr.toLowerCase().startsWith('::ffff:') ? addr.slice('::ffff:'.length) : addr;
+  if (!isLoopbackHostname(normalized)) {
     res.status(403).json({ error: 'localhost only' });
     return;
   }

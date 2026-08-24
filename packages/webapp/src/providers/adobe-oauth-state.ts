@@ -39,7 +39,7 @@
  * importing `adobe.ts` (which uses `import.meta.glob`).
  */
 
-import { BRIDGE_WS_QUERY_PARAM } from '../ui/boot/bridge-launch-params.js';
+import { BRIDGE_WS_QUERY_PARAM, isLoopbackHostname } from '@slicc/shared-ts';
 
 export interface BuildAdobeOAuthStateInput {
   /** The page's full URL (`window.location.href` or the panel-RPC equivalent). */
@@ -71,8 +71,7 @@ export function isWorkerServedSpa(pageHref: string): boolean {
   try {
     const url = new URL(pageHref);
     if (url.searchParams.has(BRIDGE_WS_QUERY_PARAM)) return true;
-    const host = url.hostname;
-    return host !== 'localhost' && host !== '127.0.0.1';
+    return !isLoopbackHostname(url.hostname);
   } catch {
     return false;
   }
@@ -120,7 +119,7 @@ export function buildAdobeOAuthState(
       const isLocalhostWithPort =
         pageUrl !== null &&
         pageUrl.protocol === 'http:' &&
-        (pageUrl.hostname === 'localhost' || pageUrl.hostname === '127.0.0.1') &&
+        isLoopbackHostname(pageUrl.hostname) &&
         pageUrl.port !== '';
       if (isLocalhostWithPort && pageUrl) {
         const port = parseInt(pageUrl.port, 10);

@@ -118,7 +118,7 @@ describe('POST /api/cloud-status', () => {
   });
 
   it('requireLoopback accepts each known loopback shape', () => {
-    const loopbackAddresses = ['127.0.0.1', '::1', '::ffff:127.0.0.1'];
+    const loopbackAddresses = ['127.0.0.1', '127.0.0.2', '::1', '::ffff:127.0.0.1', 'localhost'];
 
     for (const addr of loopbackAddresses) {
       let nextCalled = false;
