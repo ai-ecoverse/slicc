@@ -17,6 +17,7 @@ targets:
       path: SliccFileProvider/Info.plist
       properties:
         CFBundleDisplayName: Sliccy
+        CFBundleIconFile: AppIcon
         NSExtension:
           NSExtensionPointIdentifier: com.apple.fileprovider-nonui
           NSExtensionPrincipalClass: $(PRODUCT_MODULE_NAME).FileProviderExtension

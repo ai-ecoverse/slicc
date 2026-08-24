@@ -8,6 +8,7 @@ import { cpSync, existsSync, mkdirSync, rmSync, writeFileSync, chmodSync } from 
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { copyElectronOverlayEntry } from './copy-overlay-entry.mjs';
+import { stageFileProviderAppex } from './stage-file-provider-appex.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const sliccRoot = resolve(__dirname, '../..');
@@ -157,14 +158,17 @@ if (existsSync(resolve(__dirname, 'project.yml'))) {
     ].join(' '),
     { cwd: __dirname, stdio: 'inherit' }
   );
-  if (!existsSync(fileProviderAppex)) {
-    console.error(`ERROR: SliccFileProvider.appex not found at ${fileProviderAppex}`);
-    process.exit(1);
-  }
   const plugIns = resolve(contents, 'PlugIns');
-  mkdirSync(plugIns, { recursive: true });
-  cpSync(fileProviderAppex, resolve(plugIns, 'SliccFileProvider.appex'), { recursive: true });
-  console.log('Copied SliccFileProvider.appex into Contents/PlugIns/');
+  // Embed WebRTC + AppIcon inside the appex. fileproviderd cannot launch
+  // the extension if @rpath/WebRTC.framework is missing, and Finder
+  // Locations uses the appex icon (not the host's) for the sidebar.
+  stageFileProviderAppex({
+    appexSource: fileProviderAppex,
+    plugInsDir: plugIns,
+    webrtcFramework: resolve(resources, 'WebRTC.framework'),
+    appIconIcns: resolve(resources, 'AppIcon.icns'),
+  });
+  console.log('Copied SliccFileProvider.appex into Contents/PlugIns/ (WebRTC + AppIcon embedded)');
 } else {
   console.warn('WARN: project.yml missing — skipping File Provider appex');
 }

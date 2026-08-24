@@ -31,3 +31,4 @@ CI: `swift-traykit` job (lint, format, macOS + iOS Simulator build, coverage gat
 
 - `readBinaryFile` holds full base64 + decoded `Data` in memory — large Finder drags may need streaming later.
 - The mount is only useful while a leader is running; outages map to `NSFileProviderError.serverUnreachable`.
+- The leader VFS has no trash. `FileProviderDomainLifecycle.makeDomain()` sets `supportsSyncingTrash=false`; `LeaderVFSProvider` enumerates `.trashContainer` as empty so an older domain that still has trash on does not fail Finder's first browse.

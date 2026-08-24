@@ -44,9 +44,22 @@ public final class FileProviderDomainLifecycle {
     static let domainDisplayName = "Sliccy"
 
     static func makeDomain() -> NSFileProviderDomain {
-        NSFileProviderDomain(
+        let domain = NSFileProviderDomain(
             identifier: domainIdentifier,
             displayName: domainDisplayName)
+        // FPFS defaults this on and then asks the appex to materialize a
+        // trash item. The leader VFS has no trash, so leave it off — otherwise
+        // Finder's first browse dies on create-item for trash.
+        domain.supportsSyncingTrash = false
+        return domain
+    }
+
+    /// Re-add when Files hid the domain (`userEnabled=false`, typically from
+    /// a missing `NSExtensionFileProviderSupportsEnumeration`) or when an
+    /// older registration still has the default `supportsSyncingTrash=true`.
+    static func needsReset(_ existing: NSFileProviderDomain?) -> Bool {
+        guard let existing else { return false }
+        return !existing.userEnabled || existing.supportsSyncingTrash
     }
 
     private static let logger = Logger(
@@ -75,12 +88,11 @@ public final class FileProviderDomainLifecycle {
         record(status: "registering", error: nil)
         Self.logger.info("Registering File Provider domain slicc-vfs")
         let domain = Self.makeDomain()
-        // Domains registered before SupportsEnumeration was set can stick at
-        // userEnabled=false and never appear in Files Locations. Re-add those.
+        // Re-add domains that Files hid (userEnabled=false) or that still
+        // have the default supportsSyncingTrash=true from an older install.
         registrar.getDomains { [weak self] domains, _ in
             let existing = domains.first { $0.identifier == Self.domainIdentifier }
-            let needsReset = existing.map { !$0.userEnabled } ?? false
-            if needsReset {
+            if Self.needsReset(existing) {
                 Self.logger.info("Re-adding disabled File Provider domain slicc-vfs")
                 self?.registrar.remove(domain) { _ in
                     self?.addDomain(domain)

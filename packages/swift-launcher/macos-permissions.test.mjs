@@ -3,6 +3,14 @@ import { describe, expect, it } from 'vitest';
 
 const assemblySource = readFileSync(new URL('./assemble-app.mjs', import.meta.url), 'utf8');
 const entitlements = readFileSync(new URL('./Sliccstart.entitlements', import.meta.url), 'utf8');
+const fileProviderEntitlements = readFileSync(
+  new URL('./SliccFileProvider.entitlements', import.meta.url),
+  'utf8'
+);
+const fileProviderInfo = readFileSync(
+  new URL('./SliccFileProvider/Info.plist', import.meta.url),
+  'utf8'
+);
 const signingScript = readFileSync(new URL('./sign-and-package.sh', import.meta.url), 'utf8');
 
 describe('Sliccstart Apple Events packaging', () => {
@@ -107,12 +115,33 @@ describe('Sliccstart File Provider packaging', () => {
   it('builds and embeds the File Provider appex when project.yml is present', () => {
     expect(assemblySource).toContain('SliccFileProvider.appex');
     expect(assemblySource).toContain('Contents/PlugIns/');
+    expect(assemblySource).toContain('stageFileProviderAppex');
+  });
+
+  it('lets the sandboxed appex open a WebRTC connection to the leader', () => {
+    expect(fileProviderEntitlements).toContain('com.apple.security.app-sandbox');
+    expect(fileProviderEntitlements).toContain('com.apple.security.network.client');
+    expect(fileProviderEntitlements).toContain('com.apple.security.network.server');
+  });
+
+  it('declares an AppIcon so Finder Locations is not a generic document glyph', () => {
+    expect(fileProviderInfo).toMatch(
+      /<key>CFBundleIconFile<\/key>\s*<string>AppIcon<\/string>/
+    );
   });
 
   it('signs the embedded appex with sandbox entitlements in both signing paths', () => {
     expect(signingScript).toContain('SliccFileProvider.entitlements');
     expect(signingScript.match(/SliccFileProvider\.entitlements/g)).toHaveLength(2);
     expect(signingScript.match(/PlugIns\/SliccFileProvider\.appex/g)?.length).toBeGreaterThanOrEqual(2);
+  });
+
+  it('signs the appex-embedded WebRTC.framework before the appex itself', () => {
+    expect(signingScript).toContain('APPEX_WEBRTC="$APPEX/Contents/Frameworks/WebRTC.framework"');
+    const nested = signingScript.indexOf('"$APPEX_WEBRTC"');
+    const appexEntitlements = signingScript.indexOf('SliccFileProvider.entitlements');
+    expect(nested).toBeGreaterThanOrEqual(0);
+    expect(nested).toBeLessThan(appexEntitlements);
   });
 
   it('signs the appex innermost-first, before the outer app', () => {

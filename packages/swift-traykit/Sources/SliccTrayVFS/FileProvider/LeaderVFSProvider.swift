@@ -220,6 +220,7 @@ public final class LeaderVFSProvider {
     }
 
     public func items(for container: NSFileProviderItemIdentifier) async throws -> [LeaderVFSItem] {
+        if container == .trashContainer { return [] }
         if container == .workingSet {
             if childrenByDirectory["/"] == nil { _ = try await refreshDirectory("/") }
             return itemsByPath.values.filter { $0.path != "/" }.sorted { $0.path < $1.path }
@@ -229,7 +230,9 @@ public final class LeaderVFSProvider {
 
     public func enumerator(for container: NSFileProviderItemIdentifier) throws -> LeaderVFSEnumerator {
         do {
-            if container != .workingSet { _ = try allowedPath(for: container) }
+            if container != .workingSet && container != .trashContainer {
+                _ = try allowedPath(for: container)
+            }
             return LeaderVFSEnumerator(provider: self, container: container)
         } catch {
             throw VFSProviderErrorMapper.map(error)
@@ -538,6 +541,13 @@ public final class LeaderVFSEnumerator: NSObject, NSFileProviderEnumerator {
     ) {
         Task { @MainActor in
             do {
+                if container == .trashContainer {
+                    observer.didUpdate([])
+                    observer.didDeleteItems(withIdentifiers: [])
+                    observer.finishEnumeratingChanges(
+                        upTo: provider.currentSyncAnchor(), moreComing: false)
+                    return
+                }
                 let changes = try await provider.changes(from: syncAnchor)
                 observer.didUpdate(changes.updated)
                 observer.didDeleteItems(withIdentifiers: changes.deleted)

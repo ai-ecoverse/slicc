@@ -25,7 +25,8 @@ capture. Validate the CDP target and port before trusting them; handle disconnec
 ## 5. Native / macOS permissions
 
 Native protected-resource access needs entitlements/usage descriptions, TCC checks, and
-graceful denial.
+graceful denial. A File Provider appex must embed and sign every `@rpath` framework it
+links (host `Resources/` is not visible) and declare network entitlements its transport uses.
 
 ## 6. Model metadata / provider pipeline
 

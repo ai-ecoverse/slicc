@@ -133,15 +133,23 @@ target and port before use; handle disconnects gracefully rather than hanging.
   check and a graceful path when consent is denied.
 - File-system or network access in `swift-server` / `swift-launcher` / `ios-app` that
   assumes a permission the bundle's entitlements / `Info.plist` don't grant.
+- A File Provider / app-extension target that links a non-system framework (`WebRTC`,
+  …) without embedding it in the appex's own `Contents/Frameworks` and signing that
+  nested copy innermost-first. Sandboxed appexes cannot load the host `Resources/`
+  copy; fileproviderd then fails with `extensionKit error 2` and Finder shows
+  "encountered an error. Items may be out of date."
+- A sandboxed appex that opens sockets (WebRTC ICE, tray hub) without
+  `com.apple.security.network.client` (and usually `network.server`).
 
-**Historical precedent** — none confirmed yet; this is a _forward-looking_ category for the
-native targets. (Earlier drafts cited PR #453, but that PR is about port-conflict handling,
-not permissions — do not cite it here.) Add a real precedent the first time a permissions
-gap causes an incident.
+**Historical precedent** — Sliccstart's Finder File Provider shipped the appex without
+an embedded `WebRTC.framework` or network entitlements, so enabling the extension in
+System Settings still left Locations empty. Packaging now lives in
+`stageFileProviderAppex` + `SliccFileProvider.entitlements`.
 
 **Remediation** — declare the required entitlement / usage-description; check TCC status
 before touching a protected resource; degrade gracefully and tell the user when permission
-is denied.
+is denied. For an appex, embed and sign every `@rpath` framework it links, and give it
+the network entitlements its transport actually uses.
 
 ### 6. Model metadata / provider pipeline gaps
 
