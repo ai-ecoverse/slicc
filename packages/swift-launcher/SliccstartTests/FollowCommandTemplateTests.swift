@@ -80,8 +80,6 @@ final class FollowCommandTemplateTests: XCTestCase {
 
     @MainActor
     func testTerminalsSettingsViewBodyBuilds() {
-        // Walks the SwiftUI body so the pane's template → preview path is
-        // covered; the view itself is not otherwise exercised by `swift test`.
         _ = TerminalsSettingsView().body
     }
 }

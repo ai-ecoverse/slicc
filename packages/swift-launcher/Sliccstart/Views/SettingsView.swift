@@ -189,12 +189,18 @@ struct TerminalsSettingsView: View {
                         .gridColumnAlignment(.trailing)
                         .padding(.top, 5)
                     VStack(alignment: .leading, spacing: 8) {
-                        TextField(FollowCommandTemplate.defaultTemplate, text: $followCommand, axis: .vertical)
-                            .font(.system(.body, design: .monospaced))
-                            .textFieldStyle(.roundedBorder)
-                            .lineLimit(2...4)
-                            .disableAutocorrection(true)
-                            .accessibilityIdentifier("follow-command-template")
+                        TextField(
+                            "Command",
+                            text: $followCommand,
+                            prompt: Text(FollowCommandTemplate.defaultTemplate),
+                            axis: .vertical
+                        )
+                        .font(.system(.body, design: .monospaced))
+                        .textFieldStyle(.roundedBorder)
+                        .lineLimit(2...4)
+                        .disableAutocorrection(true)
+                        .accessibilityLabel("Command")
+                        .accessibilityIdentifier("follow-command-template")
                         placeholderLegend
                     }
                 }
