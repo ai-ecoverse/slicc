@@ -1280,11 +1280,14 @@
         "state",
         "trigger"
       ],
-      "dropped": [],
+      "dropped": [
+        "addedAt"
+      ],
       "sample": {
         "jid": "reviewer",
         "name": "reviewer",
         "folder": "/scoops/reviewer",
+        "addedAt": "2026-08-24T10:00:00.000Z",
         "isCone": false,
         "parentId": "cone",
         "assistantLabel": "Reviewer",

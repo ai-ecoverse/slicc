@@ -176,11 +176,15 @@ function makeWiring(options: {
 }
 
 describe('toSwitcherScoops context fill', () => {
-  it('maps 0..1 fills onto the pill 0-100 scale, omitting unknown scoops', () => {
+  it('maps 0..1 fills onto the pill 0-100 scale, reporting an unknown fill as 0', () => {
     const fills = new Map([[cone.jid, 0.42]]);
     const chips = toSwitcherScoops([cone, scoop({})], undefined, fills);
     expect(chips.find((c) => c.key === cone.jid)?.fill).toBe(42);
-    expect(chips.find((c) => c.key === 'scoop-1')?.fill).toBeUndefined();
+    // A unit with no measured fill reads as 0 rather than absent (#2274): the
+    // wire has always sent 0 for it, the tabs clamp `undefined` to 0
+    // (`boundedFill`), and one answer for both transports is the point of the
+    // shared projection.
+    expect(chips.find((c) => c.key === 'scoop-1')?.fill).toBe(0);
   });
 });
 

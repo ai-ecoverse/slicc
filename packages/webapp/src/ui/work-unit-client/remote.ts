@@ -1,0 +1,297 @@
+/**
+ * `RemoteWorkUnitClient` — the {@link WorkUnitClient} over a tray
+ * `FollowerSyncManager` (#2274).
+ *
+ * An ADAPTER over the follower path exactly as `LocalWorkUnitClient` is one
+ * over the kernel path: `FollowerSyncManager` keeps every method it has, and
+ * the small state machine `wc-follower.ts` runs (the last roster, the
+ * selected unit) moves behind the protocol. Cherry and hosted followers ride
+ * this unchanged — they are the same follower path — and no wire field
+ * changes, so iOS is untouched.
+ */
+
+import type { FollowerSyncManager } from '../../scoops/tray-follower-sync.js';
+import { shouldApplyFollowerStatus } from '../../scoops/tray-follower-sync.js';
+import type { ScoopSummary } from '../../scoops/tray-sync-protocol.js';
+import type {
+  Unsubscribe,
+  WorkUnitChatMessage,
+  WorkUnitClient,
+  WorkUnitClientEvent,
+  WorkUnitClientInput,
+  WorkUnitId,
+  WorkUnitSignal,
+  WorkUnitSnapshot,
+  WorkUnitSummary,
+} from '../../work-unit/client/types.js';
+import type { ChatMessage } from '../types.js';
+import { summaryToWorkUnit } from '../wc/wc-tray-scoops.js';
+
+/** How long to wait for the leader's snapshot before answering with what we have. */
+const SNAPSHOT_TIMEOUT_MS = 10000;
+
+export interface RemoteWorkUnitClientDeps {
+  getSync(): FollowerSyncManager | null;
+}
+
+/**
+ * The three leader frames this adapter observes. Declared structurally so
+ * both the sync manager's option bag and the page tray's superset satisfy it.
+ */
+export interface FollowerCallbackSlice {
+  onScoopsList?: (scoops: ScoopSummary[], activeScoopJid: string) => void;
+  onSnapshot?: (messages: ChatMessage[], scoopJid: string) => void;
+  onStatus?: (scoopStatus: string, scoopJid?: string) => void;
+}
+
+export class RemoteWorkUnitClient implements WorkUnitClient {
+  private units: readonly WorkUnitSummary[] = [];
+  private selectedId: WorkUnitId | null = null;
+  private readonly listListeners = new Set<(units: readonly WorkUnitSummary[]) => void>();
+  private readonly unitListeners = new Map<WorkUnitId, Set<(event: WorkUnitClientEvent) => void>>();
+  /**
+   * The last snapshot published per unit — seeds a subscriber attaching
+   * mid-turn, so a `message` never reaches a listener that has not seen one.
+   */
+  private readonly lastSnapshots = new Map<WorkUnitId, WorkUnitSnapshot>();
+  /**
+   * A leader snapshot that arrived BEFORE the roster it belongs to.
+   * `LeaderSyncManager.addFollower()` sends the initial snapshot ahead of
+   * `scoops.list`, so on every fresh join the first transcript lands with no
+   * summary to attach it to. Held here and published as soon as the roster
+   * names the unit; dropping it would leave a subscriber with no transcript
+   * until some later selection asked for one.
+   */
+  private readonly earlySnapshots = new Map<WorkUnitId, readonly WorkUnitChatMessage[]>();
+  private readonly pendingSnapshots = new Map<
+    WorkUnitId,
+    Set<(snapshot: WorkUnitSnapshot) => void>
+  >();
+
+  constructor(private readonly deps: RemoteWorkUnitClientDeps) {}
+
+  /** The unit the leader is currently mirroring to this follower. */
+  get selectedUnitId(): WorkUnitId | null {
+    return this.selectedId;
+  }
+
+  /** Forget one pending {@link snapshot} caller, and the set once it is empty. */
+  private forgetWaiter(id: WorkUnitId, resolve: (snapshot: WorkUnitSnapshot) => void): void {
+    const waiters = this.pendingSnapshots.get(id);
+    if (!waiters) return;
+    waiters.delete(resolve);
+    if (waiters.size === 0) this.pendingSnapshots.delete(id);
+  }
+
+  private emitList(): void {
+    for (const listener of this.listListeners) listener(this.units);
+  }
+
+  private emit(id: WorkUnitId, event: WorkUnitClientEvent): void {
+    const listeners = this.unitListeners.get(id);
+    if (!listeners) return;
+    for (const listener of listeners) listener(event);
+  }
+
+  private summaryOf(id: WorkUnitId): WorkUnitSummary | undefined {
+    return this.units.find((unit) => unit.id === id);
+  }
+
+  /** Emit a snapshot to this unit's subscribers and settle anyone awaiting it. */
+  private publishSnapshot(id: WorkUnitId, snapshot: WorkUnitSnapshot): void {
+    this.lastSnapshots.set(id, snapshot);
+    this.emit(id, { snapshot, type: 'snapshot' });
+    const waiters = this.pendingSnapshots.get(id);
+    if (!waiters) return;
+    this.pendingSnapshots.delete(id);
+    for (const resolve of waiters) resolve(snapshot);
+  }
+
+  /** Publish any snapshot that arrived before the roster named its unit. */
+  private drainEarlySnapshots(): void {
+    for (const [id, messages] of this.earlySnapshots) {
+      const summary = this.summaryOf(id);
+      if (!summary) continue;
+      this.earlySnapshots.delete(id);
+      this.publishSnapshot(id, { messages, summary });
+    }
+  }
+
+  /**
+   * Wrap the follower's options bag so leader frames reach this adapter
+   * before they reach `wc-follower.ts`. Same decoration as the local
+   * adapter's `wrapCallbacks`, for the same reason: the manager takes its
+   * callbacks in the constructor.
+   *
+   * Generic over the bag because the page-tray options are a SUPERSET of the
+   * sync manager's — the shell hands the whole thing to
+   * `startPageFollowerTray`, which forwards these three through.
+   *
+   * The base handler runs first on every frame, so the shell still sees each
+   * event exactly when and as it did before.
+   */
+  wrapOptions<T extends FollowerCallbackSlice>(base: T): T {
+    return {
+      ...base,
+      onScoopsList: (scoops: ScoopSummary[], activeScoopJid: string) => {
+        this.units = scoops.map(summaryToWorkUnit);
+        if (!this.selectedId || !this.units.some((unit) => unit.id === this.selectedId)) {
+          this.selectedId = activeScoopJid;
+        }
+        // Before the shell's handler: it publishes the strip from this roster.
+        this.drainEarlySnapshots();
+        this.emitList();
+        base.onScoopsList?.(scoops, activeScoopJid);
+      },
+      onSnapshot: (messages: ChatMessage[], scoopJid: string) => {
+        this.selectedId = scoopJid;
+        const transcript = messages as unknown as readonly WorkUnitChatMessage[];
+        const summary = this.summaryOf(scoopJid);
+        // A follower never reports a queue: its leader does not send one and
+        // its own orchestrator is deliberately idle, so `[]` would reorder the
+        // pile against a lie. `undefined` says "nobody could answer".
+        if (summary) this.publishSnapshot(scoopJid, { messages: transcript, summary });
+        else this.earlySnapshots.set(scoopJid, transcript);
+        base.onSnapshot?.(messages, scoopJid);
+      },
+      onStatus: (scoopStatus: string, scoopJid?: string) => {
+        // The leader's status frame may omit the unit; `shouldApplyFollowerStatus`
+        // is the existing rule for whether it describes what we are showing.
+        const target = scoopJid ?? this.selectedId;
+        if (target && shouldApplyFollowerStatus(scoopJid, this.selectedId)) {
+          const state = scoopStatus === 'processing' ? 'working' : 'idle';
+          this.emit(target, { state, type: 'status' });
+          // The roster carries the same fact, and `subscribeList` promises a
+          // push for it: without this, `list()` reports the previous state
+          // until the leader's next `scoops.list` frame.
+          this.applyState(target, state);
+        }
+        base.onStatus?.(scoopStatus, scoopJid);
+      },
+    } as T;
+  }
+
+  /** Fold a status frame into the held roster and push it. */
+  private applyState(id: WorkUnitId, state: WorkUnitSummary['state']): void {
+    const current = this.summaryOf(id);
+    if (!current || current.state === state) return;
+    this.units = this.units.map((unit) =>
+      unit.id === id
+        ? // A status frame refines nothing else: `phase` and `awaiting` only
+          // ever arrive on a roster frame, so a stale one must not survive a
+          // state change it does not describe.
+          { ...unit, state, phase: undefined, awaiting: undefined }
+        : unit
+    );
+    this.emitList();
+  }
+
+  /** The last roster the leader sent. {@link list} is the protocol's async form. */
+  currentUnits(): readonly WorkUnitSummary[] {
+    return this.units;
+  }
+
+  list(): Promise<readonly WorkUnitSummary[]> {
+    return Promise.resolve(this.units);
+  }
+
+  subscribeList(listener: (units: readonly WorkUnitSummary[]) => void): Unsubscribe {
+    this.listListeners.add(listener);
+    // Seed the subscriber with what we already know (protocol contract).
+    listener(this.units);
+    return () => {
+      this.listListeners.delete(listener);
+    };
+  }
+
+  /**
+   * Subscribe to one unit, SEEDED with the last snapshot this client
+   * published (the protocol's mid-turn ordering guarantee).
+   *
+   * Unlike the local adapter there is no request to make when none is held: a
+   * follower only ever receives the SELECTED unit's transcript, so asking for
+   * another unit's would mean changing what the leader mirrors — a side
+   * effect a subscription must not have. {@link snapshot} is that call.
+   */
+  subscribe(id: WorkUnitId, listener: (event: WorkUnitClientEvent) => void): Unsubscribe {
+    const listeners = this.unitListeners.get(id) ?? new Set<(event: WorkUnitClientEvent) => void>();
+    listeners.add(listener);
+    this.unitListeners.set(id, listeners);
+    const known = this.lastSnapshots.get(id);
+    if (known) listener({ snapshot: known, type: 'snapshot' });
+    return () => {
+      listeners.delete(listener);
+      if (listeners.size === 0) this.unitListeners.delete(id);
+    };
+  }
+
+  /**
+   * Ask the leader to mirror `id` and resolve with the snapshot it sends
+   * back. Selection is part of the call on this transport too — a follower
+   * only ever receives the selected unit's transcript.
+   */
+  snapshot(id: WorkUnitId): Promise<WorkUnitSnapshot> {
+    const sync = this.deps.getSync();
+    if (!sync) return Promise.reject(new Error('not connected to a leader'));
+    const waiters =
+      this.pendingSnapshots.get(id) ?? new Set<(snapshot: WorkUnitSnapshot) => void>();
+    this.pendingSnapshots.set(id, waiters);
+    let resolveArrival: (snapshot: WorkUnitSnapshot) => void = () => {};
+    const arrival = new Promise<WorkUnitSnapshot>((resolve) => {
+      resolveArrival = resolve;
+      waiters.add(resolve);
+    });
+    this.selectedId = id;
+    sync.selectScoop(id);
+    const fallback = new Promise<WorkUnitSnapshot | null>((resolve) => {
+      setTimeout(() => {
+        // Drop THIS caller's waiter (not the set: a concurrent call for the
+        // same unit still has its own pending promise and its own fallback).
+        this.forgetWaiter(id, resolveArrival);
+        const summary = this.summaryOf(id);
+        resolve(summary ? { messages: [], summary } : null);
+      }, SNAPSHOT_TIMEOUT_MS);
+    });
+    return Promise.race([arrival, fallback]).then((snapshot) => {
+      if (!snapshot) throw new Error(`unknown work unit: ${id}`);
+      return snapshot;
+    });
+  }
+
+  /**
+   * Deliver a prompt to `id`. The tray's `user_message` frame carries no
+   * unit — the leader routes it to whatever this follower last selected — so
+   * a send to a unit we are not showing selects it first. That is the same
+   * round trip the shell performs on a tab click; naming the unit in the
+   * protocol only makes the dependency explicit.
+   */
+  send(id: WorkUnitId, input: WorkUnitClientInput): Promise<void> {
+    const sync = this.deps.getSync();
+    if (!sync) return Promise.reject(new Error('not connected to a leader'));
+    if (this.selectedId !== id) {
+      this.selectedId = id;
+      sync.selectScoop(id);
+    }
+    sync.sendMessage(
+      input.text,
+      undefined,
+      input.attachments as Parameters<FollowerSyncManager['sendMessage']>[2],
+      input.steer ? { steer: true } : undefined
+    );
+    return Promise.resolve();
+  }
+
+  signal(id: WorkUnitId, signal: WorkUnitSignal): Promise<void> {
+    if (signal !== 'stop') return Promise.resolve();
+    const sync = this.deps.getSync();
+    if (!sync) return Promise.resolve();
+    // The tray's `abort` frame carries no unit either: it aborts whatever the
+    // leader is running for this follower, which is the selected unit.
+    if (this.selectedId !== id) {
+      this.selectedId = id;
+      sync.selectScoop(id);
+    }
+    sync.stop();
+    return Promise.resolve();
+  }
+}

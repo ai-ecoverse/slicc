@@ -97,12 +97,17 @@ describe('wc-unit-context', () => {
     expect(defaultRootOf([worker])).toBeUndefined();
   });
 
-  it('orders roots (oldest first) ahead of children in registry order', () => {
+  it('orders roots (oldest first) ahead of children, grouped by owner', () => {
+    // With nothing selected the children follow their cones in cone order
+    // (#2274): `scoop_1` belongs to the primary cone, `scoop_2` to the second.
+    // Before the leader and the follower shared one ordering the leader kept
+    // registry order here and the follower grouped by owner — the same roster
+    // rendered two ways on two screens.
     expect(orderForSwitcher([helper, research, worker, primary]).map((s) => s.jid)).toEqual([
       'cone_1',
       'cone_2',
-      'scoop_2',
       'scoop_1',
+      'scoop_2',
     ]);
   });
 

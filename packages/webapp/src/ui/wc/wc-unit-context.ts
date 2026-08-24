@@ -9,7 +9,8 @@
  */
 
 import type { RegisteredScoop } from '../../scoops/types.js';
-import { subtreeOf } from '../../transcript/collect.js';
+import { recordToWorkUnitSummary } from '../../work-unit/client/from-record.js';
+import { isReadOnlyUnit, orderUnits, ownerRootOf } from '../../work-unit/client/presentation.js';
 import { isRootUnit, rootsOf } from '../../work-unit/policy.js';
 import { isPrimaryRoot, PRIMARY_CONE_FOLDER } from '../../work-unit/record.js';
 
@@ -61,25 +62,27 @@ export function defaultRootOf(scoops: readonly RegisteredScoop[]): RegisteredSco
   return scoops.find((s) => isPrimaryRoot(s)) ?? rootsOf(scoops)[0];
 }
 
-/** Roots first (oldest first), then children in registry order. */
+/**
+ * Strip order for a roster of records — cones first (oldest first), then the
+ * selected cone's scoops, then everything else.
+ *
+ * The rule itself lives in `work-unit/client/presentation.ts` since #2274, so
+ * the follower orders the same roster the same way (#2317). This is the
+ * record-side entry point: project, order, project back.
+ */
 export function orderForSwitcher(
   scoops: readonly RegisteredScoop[],
   selectedJid?: string | null
 ): RegisteredScoop[] {
-  const roots = rootsOf(scoops);
-  const rootIds = new Set(roots.map((s) => s.jid));
-  const rest = scoops.filter((s) => !rootIds.has(s.jid));
-  // The selected cone's scoops come first (#2272): the strip reads
-  // "cones, then what I am working in, then everything else".
-  const selected = selectedJid ? scoops.find((s) => s.jid === selectedJid) : undefined;
-  const selectedRoot = selected ? rootForSelection(scoops, selected) : undefined;
-  if (!selectedRoot) return [...roots, ...rest];
-  const mine = new Set(subtreeOf(scoops, selectedRoot.jid).map((s) => s.jid));
-  return [
-    ...roots,
-    ...rest.filter((s) => mine.has(s.jid)),
-    ...rest.filter((s) => !mine.has(s.jid)),
-  ];
+  const byId = new Map(scoops.map((scoop) => [scoop.jid, scoop]));
+  const ordered = orderUnits(
+    scoops.map((scoop) => recordToWorkUnitSummary(scoop)),
+    selectedJid
+  );
+  return ordered.flatMap((unit) => {
+    const scoop = byId.get(unit.id);
+    return scoop ? [scoop] : [];
+  });
 }
 
 /**
@@ -94,15 +97,11 @@ export function rootForSelection(
   scoops: readonly RegisteredScoop[],
   selected: Pick<RegisteredScoop, 'jid' | 'parentJid'> | null | undefined
 ): RegisteredScoop | undefined {
-  let current = selected ? scoops.find((s) => s.jid === selected.jid) : undefined;
-  // Bounded by the roster size: a cycle introduced by a corrupt record must
-  // not spin here.
-  for (let hops = 0; current && hops <= scoops.length; hops++) {
-    if (isRootUnit(current)) return current;
-    const parentJid = current.parentJid;
-    current = scoops.find((s) => s.jid === parentJid);
-  }
-  return defaultRootOf(scoops);
+  const owner = ownerRootOf(
+    scoops.map((scoop) => recordToWorkUnitSummary(scoop)),
+    selected?.jid
+  );
+  return (owner && scoops.find((scoop) => scoop.jid === owner.id)) ?? defaultRootOf(scoops);
 }
 
 /**
@@ -143,10 +142,10 @@ export function unitRoleFor(unit: Pick<RegisteredScoop, 'parentJid'>): UnitRole 
  * no error-card CTAs and no approval cards — every scoop request that needs
  * a human is routed to the cone that owns it instead.
  *
- * This is the ONE place that rule is stated. Leader and follower both reach
- * it through the role on their switcher descriptor, so neither grows a second
- * code path.
+ * The rule itself lives on the protocol (`isReadOnlyUnit`); this is its
+ * spelling in the UI's `cone`/`scoop` vocabulary. Leader and follower both
+ * reach one answer, so neither grows a second code path.
  */
 export function isReadOnlyRole(role: UnitRole): boolean {
-  return role === 'scoop';
+  return isReadOnlyUnit({ role: role === 'cone' ? 'primary' : 'child' });
 }
