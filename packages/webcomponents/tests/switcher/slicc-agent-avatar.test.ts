@@ -423,6 +423,14 @@ describe('slicc-agent-avatar expression kit', () => {
     expect(layer.getAttribute('style')).toBe(
       (crop.querySelector('.icon-inner') as HTMLElement).getAttribute('style')
     );
+    // An inline <svg> sits on a text baseline, which drops the brows a few px —
+    // unnoticeable at review size, straight onto the eyeballs at 26 px.
+    const browsSvg = layer.querySelector('.brows-svg') as SVGElement;
+    expect(getComputedStyle(browsSvg).display).toBe('block');
+    expect(browsSvg.getBoundingClientRect().top).toBeCloseTo(
+      (crop.querySelector('.eyes-svg') as SVGElement).getBoundingClientRect().top,
+      1
+    );
   });
 
   it('holds the brows still through a blink instead of folding them onto the eye', () => {
