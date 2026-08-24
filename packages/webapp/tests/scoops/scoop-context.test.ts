@@ -13,6 +13,7 @@ import {
 } from '../../src/core/stale-asset-channel.js';
 import type { AgentErrorTelemetrySink } from '../../src/core/telemetry-hook.js';
 import type { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { buildSudoWiring } from '../../src/scoops/scoop-context/sudo-wiring.js';
 import {
   abortableSleep,
   isImageProcessingError,
@@ -96,15 +97,15 @@ describe('ScoopContext session persistence', () => {
   it('accepts a sessionStore parameter', () => {
     const mockStore = { load: vi.fn(), save: vi.fn(), delete: vi.fn() } as any;
     ctx = new ScoopContext(testScoop, callbacks, {} as any, mockStore, undefined, 'cone_1');
-    expect((ctx as any).sessionStore).toBe(mockStore);
+    expect((ctx as any).sessions.store).toBe(mockStore);
     // Internal persistence key is the scoop's JID — stable across days so
     // `SessionStore.load` can restore saved conversations.
-    expect((ctx as any).sessionId).toBe(testScoop.jid);
+    expect((ctx as any).sessions.sessionId).toBe(testScoop.jid);
   });
 
   it('works without sessionStore (backwards compatible)', () => {
     ctx = new ScoopContext(testScoop, callbacks, {} as any);
-    expect((ctx as any).sessionStore).toBeNull();
+    expect((ctx as any).sessions.store).toBeNull();
   });
 
   it('saves session on agent_end with messages', () => {
@@ -166,7 +167,7 @@ describe('ScoopContext session persistence', () => {
     injectMockAgent(ctx, async () => {});
 
     // Simulate having restored a session with a known createdAt
-    (ctx as any).sessionCreatedAt = originalCreatedAt;
+    (ctx as any).sessions.createdAt = originalCreatedAt;
 
     const handler = (ctx as any).handleAgentEvent.bind(ctx);
     handler({
@@ -1257,7 +1258,7 @@ describe('ScoopContext image error recovery', () => {
       ],
     });
 
-    expect((ctx as any).imageRecoveryActive).toBe(false);
+    expect((ctx as any).imageRecovery.isActive).toBe(false);
     expect(callbacks.onError).not.toHaveBeenCalled();
   });
 });
@@ -1670,6 +1671,25 @@ describe('ScoopContext — spinner cleanup on early-return paths (regression fix
   });
 });
 
+/**
+ * `buildSudoWiring` moved to `scoop-context/sudo-wiring.ts` (#2334); feed it
+ * the same inputs the context would.
+ */
+function sudoWiringOf(ctx: ScoopContext) {
+  const inner = ctx as unknown as {
+    sudoManager: never;
+    unit: never;
+    scoop: { folder: string };
+    callbacks: { onSudoRequest?: never };
+  };
+  return buildSudoWiring({
+    sudoManager: inner.sudoManager,
+    unit: inner.unit,
+    folder: inner.scoop.folder,
+    onSudoRequest: inner.callbacks.onSudoRequest,
+  });
+}
+
 describe('ScoopContext buildSudoWiring (per-scoop command grant isolation)', () => {
   it('non-cone scoop: persistCommandGrant is overridden to a no-op (no global leak)', async () => {
     const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
@@ -1705,9 +1725,9 @@ describe('ScoopContext buildSudoWiring (per-scoop command grant isolation)', () 
       mgr
     );
 
-    // Hit the private `buildSudoWiring` so we don't need a full init() with
+    // Hit `buildSudoWiring` directly so we don't need a full init() with
     // shell/skills/agent — the wiring contract is what matters here.
-    const wiring = (ctx as any).buildSudoWiring() as {
+    const wiring = sudoWiringOf(ctx) as {
       shellConfig: { persistCommandGrant?: (p: string) => Promise<void> };
     };
     expect(wiring).not.toBeNull();
@@ -1765,7 +1785,7 @@ describe('ScoopContext buildSudoWiring (per-scoop command grant isolation)', () 
       mgr
     );
 
-    const wiring = (ctx as any).buildSudoWiring() as {
+    const wiring = sudoWiringOf(ctx) as {
       shellConfig: { persistCommandGrant?: (p: string) => Promise<void> };
     };
     expect(wiring).not.toBeNull();
@@ -1947,7 +1967,7 @@ describe('ScoopContext stale-asset error handling', () => {
     vi.mocked(broadcastStaleAssetReload).mockClear();
     const callbacks = createMockCallbacks();
     const ctx = new ScoopContext(testScoop, callbacks, {} as any);
-    const handled = (ctx as any).handleStaleAssetError(STALE) as boolean;
+    const handled = (ctx as any).turnRunner.handleStaleAssetError(STALE) as boolean;
     expect(handled).toBe(true);
     expect(broadcastStaleAssetReload).toHaveBeenCalledTimes(1);
     expect(callbacks.onFatalError).toHaveBeenCalledTimes(1);
@@ -1957,7 +1977,7 @@ describe('ScoopContext stale-asset error handling', () => {
     vi.mocked(broadcastStaleAssetReload).mockClear();
     const callbacks = createMockCallbacks();
     const ctx = new ScoopContext(testScoop, callbacks, {} as any);
-    expect((ctx as any).handleStaleAssetError('401 Unauthorized')).toBe(false);
+    expect((ctx as any).turnRunner.handleStaleAssetError('401 Unauthorized')).toBe(false);
     expect(broadcastStaleAssetReload).not.toHaveBeenCalled();
   });
 });
