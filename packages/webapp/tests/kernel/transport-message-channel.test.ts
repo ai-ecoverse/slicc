@@ -189,7 +189,11 @@ describe('createBridgeMessageChannelTransport / createPanelMessageChannelTranspo
     );
     const result = await runAgenticMemoryPass({
       spawn: (options) => client.spawnAgent(options),
-      vfs: { readFile: async () => Promise.reject(new Error('MEMORY.md absent')) },
+      vfs: {
+        readFile: async () => Promise.reject(new Error('MEMORY.md absent')),
+        writeFile: async () => {},
+        mkdir: async () => {},
+      },
       sessionArchivePath: '/sessions/frozen.md',
       sessionCount: 1,
     });
@@ -199,8 +203,10 @@ describe('createBridgeMessageChannelTransport / createPanelMessageChannelTranspo
     expect(spawn).toHaveBeenCalledWith(
       expect.objectContaining({
         cwd: '/workspace',
-        writablePaths: ['/workspace/CLAUDE.md'],
-        visiblePaths: ['/sessions/', '/shared/', '/workspace/'],
+        // The curator writes a staged per-archive draft; the bridge merges
+        // it onto /workspace/CLAUDE.md on exit 0 (mergeOnSuccess).
+        writablePaths: ['/sessions/.curation/frozen.md/draft.md'],
+        visiblePaths: ['/sessions/', '/shared/', '/workspace/', '/sessions/.curation/frozen.md/'],
         notifyOnComplete: true,
       })
     );

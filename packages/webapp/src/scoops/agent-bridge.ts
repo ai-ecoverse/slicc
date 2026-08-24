@@ -33,6 +33,8 @@ import { createLogger } from '../base/logger.js';
 import type { SessionStore } from '../core/session.js';
 import type { VirtualFS } from '../fs/index.js';
 import { normalizePath } from '../fs/path-utils.js';
+// Legal down-edge (`scoops/` → `git/`) for the staged-rewrite merge.
+import { threeWayMerge } from '../git/merge-file-core.js';
 import {
   resolveModelSelectionForScoop,
   type ScoopModelResolution,
@@ -54,6 +56,16 @@ import {
 } from './types.js';
 
 const log = createLogger('agent-bridge');
+
+/** Staged-rewrite spec for {@link AgentSpawnOptions.mergeOnSuccess}. */
+export interface AgentMergeOnSuccess {
+  /** Live file the merged result is written to. */
+  targetPath: string;
+  /** Snapshot of the target taken by the caller at spawn time. */
+  basePath: string;
+  /** The staged copy the spawned scoop actually edited. */
+  draftPath: string;
+}
 
 /** Arguments accepted by {@link AgentBridge.spawn}. */
 export interface AgentSpawnOptions {
@@ -157,6 +169,34 @@ export interface AgentSpawnOptions {
    * Best-effort: a receipt write failure is logged, never fails the spawn.
    */
   successReceiptPath?: string;
+  /**
+   * Fold a staged rewrite back onto a live file when the run exits 0,
+   * BEFORE `successReceiptPath` is written and the spawn resolves. The
+   * bridge three-way-merges (diff3) the scoop's `draftPath` edits — diffed
+   * against the `basePath` snapshot the caller took at spawn time — onto
+   * whatever `targetPath` holds NOW, so edits that landed on the target
+   * during the run survive instead of being clobbered by a whole-file
+   * rewrite. Conflicting regions resolve to the draft (the spawned agent
+   * is the curator of record for the file). All three paths are absolute
+   * VFS paths; the scoop itself only ever sees `draftPath`. On a merge
+   * the bridge removes `basePath` + `draftPath`; a failed run keeps them
+   * for a retry or a human post-mortem. Runs in the worker realm with the
+   * bridge's full shared-VFS handle, so a page death after spawn cannot
+   * lose the completed rewrite (#1989 companion). Best-effort: a merge
+   * failure is logged and recorded in the outcome receipt, never fails
+   * the spawn.
+   */
+  mergeOnSuccess?: AgentMergeOnSuccess;
+  /**
+   * Absolute VFS path of a JSON outcome record the bridge writes on BOTH
+   * exit paths, after any `mergeOnSuccess` and before the spawn resolves:
+   * `{ status: 'ok'|'failed', exitCode, finishedAt, reason?, merge? }`.
+   * Unlike `successReceiptPath` (success-only existence signal) this is a
+   * durable per-spawn ledger entry — it answers "did this detached run
+   * fail, and why" even when the caller's realm died mid-run. Best-effort:
+   * a write failure is logged, never fails the spawn.
+   */
+  outcomeReceiptPath?: string;
   /**
    * Persist the spawned agent's full session transcript to disk when the run
    * completes — written on BOTH success and failure, BEFORE the scoop's IDB
@@ -416,15 +456,8 @@ function validateSpawnOptions(
     };
   }
 
-  const receiptPath = options.successReceiptPath;
-  if (receiptPath !== undefined && !receiptPath.startsWith('/')) {
-    return {
-      error: {
-        finalText: `agent: successReceiptPath must be absolute: ${receiptPath}`,
-        exitCode: 1,
-      },
-    };
-  }
+  const pathError = validateBookkeepingPaths(options);
+  if (pathError) return pathError;
 
   const requestedName = options.name;
   if (requestedName !== undefined && !isValidAgentName(requestedName)) {
@@ -458,6 +491,160 @@ function validateSpawnOptions(
  * {@link AgentSpawnOptions.successReceiptPath}). Best-effort — a failure
  * is logged and the successful spawn result stands.
  */
+/**
+ * The bridge-side bookkeeping paths (`successReceiptPath`,
+ * `outcomeReceiptPath`, `mergeOnSuccess.*`) must all be absolute VFS
+ * paths — they are written with the bridge's full shared-VFS handle, so a
+ * relative one would silently land somewhere cwd-dependent. Returns the
+ * spawn error to surface, or `null` when everything checks out.
+ */
+function validateBookkeepingPaths(
+  options: AgentSpawnOptions
+): { error: { finalText: string; exitCode: number } } | null {
+  const merge = options.mergeOnSuccess;
+  const entries: Array<[string, string | undefined]> = [
+    ['successReceiptPath', options.successReceiptPath],
+    ['outcomeReceiptPath', options.outcomeReceiptPath],
+    ['mergeOnSuccess.targetPath', merge?.targetPath],
+    ['mergeOnSuccess.basePath', merge?.basePath],
+    ['mergeOnSuccess.draftPath', merge?.draftPath],
+  ];
+  // A merge spec present at all must carry three absolute paths.
+  const requiredWhenMerge = merge === undefined ? undefined : '';
+  for (const [field, value] of entries) {
+    const effective = value ?? (field.startsWith('mergeOnSuccess') ? requiredWhenMerge : undefined);
+    if (effective !== undefined && !effective.startsWith('/')) {
+      return {
+        error: {
+          finalText: `agent: ${field} must be absolute: ${String(value)}`,
+          exitCode: 1,
+        },
+      };
+    }
+  }
+  return null;
+}
+
+/** Merge summary recorded in the outcome receipt. */
+interface MergeOutcome {
+  /** Whether the target file was rewritten. False when the draft never diverged. */
+  applied: boolean;
+  /** Conflicting regions (resolved to the draft), when a real 3-way ran. */
+  conflicts: number;
+  /** Present instead of a result when the merge itself failed. */
+  error?: string;
+}
+
+/**
+ * Fold the scoop's staged rewrite onto the live target (see
+ * {@link AgentSpawnOptions.mergeOnSuccess}). Never throws — an error is
+ * returned for the outcome receipt and logged.
+ */
+async function applyMergeOnSuccess(
+  sharedFs: VirtualFS,
+  spec: AgentMergeOnSuccess
+): Promise<MergeOutcome> {
+  const read = async (path: string): Promise<string> => {
+    try {
+      const raw = await sharedFs.readFile(path, { encoding: 'utf-8' });
+      return typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    } catch (err) {
+      if (isFsErrorCode(err, 'ENOENT')) return '';
+      throw err;
+    }
+  };
+  const cleanup = async (): Promise<void> => {
+    for (const path of [spec.basePath, spec.draftPath]) {
+      try {
+        await sharedFs.rm(path);
+      } catch {
+        /* already gone — the artifacts are only staging state */
+      }
+    }
+  };
+  const readOrNull = async (path: string): Promise<string | null> => {
+    try {
+      const raw = await sharedFs.readFile(path, { encoding: 'utf-8' });
+      return typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+    } catch (err) {
+      if (isFsErrorCode(err, 'ENOENT')) return null;
+      throw err;
+    }
+  };
+  try {
+    // A MISSING draft is not an empty draft: the caller seeded it, so its
+    // absence means the staging was lost — merging '' would read as "the
+    // scoop deleted everything". Leave the target alone instead.
+    const draft = await readOrNull(spec.draftPath);
+    if (draft === null) {
+      await cleanup();
+      return { applied: false, conflicts: 0 };
+    }
+    const [base, current] = await Promise.all([read(spec.basePath), read(spec.targetPath)]);
+    if (draft === base || draft === current) {
+      // The scoop left the draft untouched (or wrote directly to the
+      // target under a custom grant) — nothing to fold in.
+      await cleanup();
+      return { applied: false, conflicts: 0 };
+    }
+    if (current === base) {
+      // No concurrent edits — the rewrite lands verbatim.
+      await sharedFs.writeFile(spec.targetPath, draft);
+      await cleanup();
+      return { applied: true, conflicts: 0 };
+    }
+    // Concurrent edits on the target: keep both sides where they touch
+    // different regions; where they collide, the spawned agent's rewrite
+    // wins — it is the curator of record and its deletions are deliberate.
+    const merged = threeWayMerge(current, base, draft, { favor: 'theirs' });
+    await sharedFs.writeFile(spec.targetPath, merged.content);
+    await cleanup();
+    return { applied: true, conflicts: merged.conflicts };
+  } catch (err) {
+    const error = errText(err);
+    log.warn('mergeOnSuccess failed; target left as-is, staging kept', {
+      target: spec.targetPath,
+      error,
+    });
+    return { applied: false, conflicts: 0, error };
+  }
+}
+
+/**
+ * Write the caller's durable per-spawn outcome record (see
+ * {@link AgentSpawnOptions.outcomeReceiptPath}). Best-effort — a failure
+ * is logged and the spawn result stands.
+ */
+async function writeOutcomeReceipt(
+  sharedFs: VirtualFS,
+  path: string,
+  result: AgentSpawnResult,
+  merge?: MergeOutcome
+): Promise<void> {
+  try {
+    const dir = path.slice(0, path.lastIndexOf('/'));
+    if (dir) await sharedFs.mkdir(dir, { recursive: true });
+    await sharedFs.writeFile(
+      path,
+      JSON.stringify(
+        {
+          status: result.exitCode === 0 ? 'ok' : 'failed',
+          exitCode: result.exitCode,
+          finishedAt: new Date().toISOString(),
+          // The head of the final text identifies a failure (bound note,
+          // spawn error) without archiving a whole report here.
+          ...(result.exitCode === 0 ? {} : { reason: result.finalText.slice(0, 500) }),
+          ...(merge ? { merge } : {}),
+        },
+        null,
+        2
+      )
+    );
+  } catch (err) {
+    log.warn('outcome receipt write failed', { path, error: errText(err) });
+  }
+}
+
 async function writeSuccessReceipt(sharedFs: VirtualFS, path: string): Promise<void> {
   try {
     const dir = path.slice(0, path.lastIndexOf('/'));
@@ -696,6 +883,33 @@ async function runScoopToOutcome(
   jid: string,
   observerHandle: ReturnType<typeof registerScoopObserver>
 ): Promise<AgentSpawnResult> {
+  const outcome = await runScoopToOutcomeInner(ctx, options, scoop, jid, observerHandle);
+  // Durable bookkeeping in run order, all written BEFORE the spawn resolves
+  // so they land strictly earlier than any caller-side bookkeeping: fold a
+  // staged rewrite onto its live target (success only), then the
+  // success-only receipt, then the both-ways outcome record that carries
+  // the merge summary.
+  let merge: MergeOutcome | undefined;
+  if (outcome.exitCode === 0 && options.mergeOnSuccess) {
+    merge = await applyMergeOnSuccess(ctx.sharedFs, options.mergeOnSuccess);
+  }
+  if (outcome.exitCode === 0 && options.successReceiptPath) {
+    await writeSuccessReceipt(ctx.sharedFs, options.successReceiptPath);
+  }
+  if (options.outcomeReceiptPath) {
+    await writeOutcomeReceipt(ctx.sharedFs, options.outcomeReceiptPath, outcome, merge);
+  }
+  return outcome;
+}
+
+/** The run itself; every failure path returns an exit-1 result. */
+async function runScoopToOutcomeInner(
+  ctx: BridgeContext,
+  options: AgentSpawnOptions,
+  scoop: RegisteredScoop,
+  jid: string,
+  observerHandle: ReturnType<typeof registerScoopObserver>
+): Promise<AgentSpawnResult> {
   try {
     await ctx.orchestrator.registerScoop(scoop);
   } catch (err) {
@@ -714,11 +928,6 @@ async function runScoopToOutcome(
       return { finalText: 'agent: aborted', exitCode: 1 };
     }
     if (result) {
-      // Durable completion signal, written before the spawn resolves so
-      // it lands strictly earlier than any caller-side bookkeeping.
-      if (result.exitCode === 0 && options.successReceiptPath) {
-        await writeSuccessReceipt(ctx.sharedFs, options.successReceiptPath);
-      }
       return result;
     }
     return { finalText: observerHandle.scoopError ?? '', exitCode: 1 };

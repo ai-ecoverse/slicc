@@ -132,9 +132,20 @@ interface MemoryConfig {
   promptTemplate: string;
 }
 
+/**
+ * VFS surface the pass needs: reads for `MEMORY.md` and the live memory
+ * file, writes to seed the per-archive base snapshot + draft the curator
+ * edits instead of the live file (see {@link curationDirPath}).
+ */
+export interface CuratorVfs {
+  readFile: LocalVfsClient['readFile'];
+  writeFile(path: string, content: string): Promise<void>;
+  mkdir(path: string, options?: { recursive?: boolean }): Promise<void>;
+}
+
 export interface RunAgenticMemoryPassOptions {
   spawn: AgentBridge['spawn'];
-  vfs: Pick<LocalVfsClient, 'readFile'>;
+  vfs: CuratorVfs;
   sessionArchivePath: string;
   sessionCount: number;
   /**
@@ -274,9 +285,17 @@ export async function runAgenticMemoryPass(
     const workspace = curatorWorkspaceFor(opts.cone);
     const scratchDir = curatorScratchDir(opts.cone?.folder ?? PRIMARY_CONE_FOLDER);
     const config = await loadMemoryConfig(opts.vfs, workspace);
+    const draftPath = curationDraftPath(opts.sessionArchivePath);
+    try {
+      await seedCurationSnapshot(opts.vfs, workspace.memoryPath, opts.sessionArchivePath);
+    } catch (error) {
+      // Nothing spawned yet, so the legacy single-call append cannot race a
+      // curator — falling back is safe.
+      return { ok: false, reason: `snapshot: ${errorText(error)}`, legacyFallbackSafe: true };
+    }
     const prompt = rebaseScratchMentions(
       substitutePlaceholders(config.promptTemplate, {
-        MEMORY_PATH: workspace.memoryPath,
+        MEMORY_PATH: draftPath,
         SESSION_ARCHIVE_PATH: opts.sessionArchivePath,
         SESSION_COUNT: String(opts.sessionCount),
         BUDGET_CHARS: String(computeBudget(opts.sessionCount)),
@@ -531,6 +550,76 @@ export function curatorReceiptPath(sessionArchivePath: string): string {
   return `/sessions/.curated/${base}`;
 }
 
+/**
+ * Per-archive curation state folder. The curator never rewrites the live
+ * memory file directly any more: the pass snapshots the live file here as
+ * `base.md`, hands the curator an identical `draft.md` to rewrite, and the
+ * agent bridge three-way-merges base→draft back onto the live file when the
+ * run exits 0. Keyed by the archive basename — the same attribution
+ * guarantee as {@link curatorReceiptPath} — so parallel curators for
+ * different cones (#1666/#2271) never share state, and a run killed
+ * mid-write corrupts only its own draft, never the live memory.
+ */
+export function curationDirPath(sessionArchivePath: string): string {
+  const base = sessionArchivePath.slice(sessionArchivePath.lastIndexOf('/') + 1);
+  return `/sessions/.curation/${base}`;
+}
+
+/** Snapshot of the live memory file taken when the pass spawned. */
+export function curationBasePath(sessionArchivePath: string): string {
+  return `${curationDirPath(sessionArchivePath)}/base.md`;
+}
+
+/** The file the curator actually edits; seeded from the live memory file. */
+export function curationDraftPath(sessionArchivePath: string): string {
+  return `${curationDirPath(sessionArchivePath)}/draft.md`;
+}
+
+/**
+ * Durable per-archive run outcome the agent bridge writes (worker realm)
+ * on BOTH exit paths — success and failure. Unlike the success-only
+ * receipt this answers "which sessions caused failed curation" even when
+ * the page died before the caller could record the failure.
+ */
+export function curationStatusPath(sessionArchivePath: string): string {
+  return `${curationDirPath(sessionArchivePath)}/status.json`;
+}
+
+/**
+ * Snapshot the live memory file into the per-archive curation folder: the
+ * `base.md` the completion merge diffs against, and the `draft.md` the
+ * curator rewrites in place of the live file. A missing live file seeds
+ * both as empty — a first-ever pass merges onto whatever exists then.
+ */
+async function seedCurationSnapshot(
+  vfs: CuratorVfs,
+  memoryPath: string,
+  sessionArchivePath: string
+): Promise<void> {
+  let live = '';
+  try {
+    const raw = await vfs.readFile(memoryPath, { encoding: 'utf-8' });
+    live = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+  } catch {
+    // No live memory yet — snapshot the empty state.
+  }
+  await vfs.mkdir(curationDirPath(sessionArchivePath), { recursive: true });
+  await vfs.writeFile(curationBasePath(sessionArchivePath), live);
+  await vfs.writeFile(curationDraftPath(sessionArchivePath), live);
+}
+
+/**
+ * Point the configured write policy at the draft instead of the live
+ * memory file. An entry naming the memory file itself is substituted; any
+ * other entry (a knowledge base, a whole-workspace grant) is kept, and the
+ * draft is appended when no entry named the memory file — the prompt's
+ * `{{MEMORY_PATH}}` writes must always land somewhere granted.
+ */
+function redirectWritesToDraft(paths: string[], memoryPath: string, draftPath: string): string[] {
+  const redirected = paths.map((path) => (path === memoryPath ? draftPath : path));
+  return redirected.includes(draftPath) ? redirected : [...redirected, draftPath];
+}
+
 function buildSpawnOptions(
   config: MemoryConfig,
   prompt: string,
@@ -539,11 +628,16 @@ function buildSpawnOptions(
   cone: CuratorConeRef | undefined
 ): AgentSpawnOptions {
   const inheritedModel = config.model === 'parent' || config.model === 'cone';
+  const basePath = curationBasePath(sessionArchivePath);
+  const draftPath = curationDraftPath(sessionArchivePath);
   return {
     // Directory the curator starts in; `writablePaths` may be a bare file.
     cwd: workspace.root,
-    writablePaths: config.writablePaths,
-    visiblePaths: config.visiblePaths,
+    writablePaths: redirectWritesToDraft(config.writablePaths, workspace.memoryPath, draftPath),
+    // A Write grant does not imply Read; the curator must re-read the draft
+    // it measures with `wc -c`, so the curation folder is made visible even
+    // under a custom config that dropped `/sessions/`.
+    visiblePaths: [...config.visiblePaths, `${curationDirPath(sessionArchivePath)}/`],
     allowedCommands: config.allowedCommands,
     prompt,
     thinkingLevel: config.thinkingLevel,
@@ -559,6 +653,19 @@ function buildSpawnOptions(
     // and the cone never learns the pass happened at all.
     notifyOnComplete: true,
     successReceiptPath: curatorReceiptPath(sessionArchivePath),
+    // On exit 0 the bridge folds the curator's base→draft rewrite onto the
+    // live memory file with a three-way merge (worker realm, before the
+    // receipt) — concurrent live edits during the up-to-20-minute run merge
+    // instead of being clobbered by a whole-file rewrite, and a run killed
+    // mid-write never leaves a half-written live file.
+    mergeOnSuccess: {
+      targetPath: workspace.memoryPath,
+      basePath,
+      draftPath,
+    },
+    // Durable success/failure record for THIS archive, written on both exit
+    // paths — the ledger of which sessions completed vs failed curation.
+    outcomeReceiptPath: curationStatusPath(sessionArchivePath),
     // What `timeoutSeconds` always claimed to mean: the RUN stops at the
     // bound (#1972), instead of only the caller's wait resolving while
     // the agent kept taking turns.

@@ -78,7 +78,7 @@ One roster, three renderings, one vocabulary — `ui/follower-presentation.ts` o
 
 ## Frozen Sessions ("New session" flow)
 
-- Path: `ui/session-freezer.ts`, `ui/new-session.ts`. **Save**, **Skip memory**, and **Erase** clear cone chat and non-mount `/tmp`, not scoops. Archives in `/sessions/<timestamp>-<slug>.md` + `index.json`. Idle boot recovers pending markers serially (≤3 times) through the **bounded** legacy enrichment call — never the unbounded curator (`timeoutSeconds` cannot stop it). Agentic Save: quick snapshot then clear; title (`skipMemory`) + curator in background. Cone-only `OffscreenClient.clearAllMessages()` awaits `clear-chat-ack` before panel reload.
+- Path: `ui/session-freezer.ts`, `ui/new-session.ts`. **Save**, **Skip memory**, and **Erase** clear cone chat and non-mount `/tmp`, not scoops. Archives in `/sessions/<timestamp>-<slug>.md` + `index.json`. Idle boot recovers pending markers serially (≤3 times) through the **bounded** legacy enrichment call — never the unbounded curator (`timeoutSeconds` cannot stop it). Agentic Save: quick snapshot then clear; title (`skipMemory`) + curator in background. The curator edits a staged draft under `/sessions/.curation/<archive>/` that the agent bridge three-way-merges onto the live memory file on exit 0 (`mergeOnSuccess`; concurrent live edits survive, conflicts resolve to the curator); the bridge also writes `status.json` there on both exit paths (`outcomeReceiptPath`), and the index entry records `memoryCuratedAt` on success / `memoryFailed` on failure or retry exhaustion — the durable which-sessions-curated ledger. Cone-only `OffscreenClient.clearAllMessages()` awaits `clear-chat-ack` before panel reload.
 
 ## UI
 

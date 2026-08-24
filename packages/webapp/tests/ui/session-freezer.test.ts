@@ -21,6 +21,12 @@ vi.mock('../../src/scoops/agentic-memory.js', () => ({
   // this exact path against the fake VFS.
   curatorReceiptPath: (sessionArchivePath: string) =>
     `/sessions/.curated/${sessionArchivePath.slice(sessionArchivePath.lastIndexOf('/') + 1)}`,
+  // Real staging-path derivation too — the receipt-recovery path removes the
+  // leftover base/draft pair against the fake VFS.
+  curationBasePath: (sessionArchivePath: string) =>
+    `/sessions/.curation/${sessionArchivePath.slice(sessionArchivePath.lastIndexOf('/') + 1)}/base.md`,
+  curationDraftPath: (sessionArchivePath: string) =>
+    `/sessions/.curation/${sessionArchivePath.slice(sessionArchivePath.lastIndexOf('/') + 1)}/draft.md`,
 }));
 
 // Mock the budget sink so tests can assert the freezer routes through it
@@ -353,7 +359,12 @@ describe('freezeConeSession', () => {
 
     expect(updated?.memoryPending).toBeUndefined();
     expect(frozen?.memoryPending).toBeUndefined();
-    expect((await readSessionsIndex(vfs as never))[0].memoryPending).toBeUndefined();
+    const [entry] = await readSessionsIndex(vfs as never);
+    expect(entry.memoryPending).toBeUndefined();
+    // The durable positive record: without it, "curated" and "never owed a
+    // pass" are indistinguishable in the index.
+    expect(entry.memoryCuratedAt).toMatch(/^\d{4}-\d{2}-\d{2}T/);
+    expect(updated?.memoryCuratedAt).toBe(entry.memoryCuratedAt);
     expect(mockRunAgenticMemoryPass).toHaveBeenCalledOnce();
     expect(spawn).toHaveBeenCalledOnce();
     expect(mockRunOneOffCompactionCall).toHaveBeenCalledOnce();
@@ -478,7 +489,11 @@ describe('freezeConeSession', () => {
     expect(vfs.files.get('/workspace/CLAUDE.md')).toContain('durable fallback memory');
     expect(mockApplyConeMemoryBudget).toHaveBeenCalledOnce();
     expect(frozen?.memoryPending).toBe(true);
-    expect((await readSessionsIndex(vfs as never))[0].memoryPending).toBe(true);
+    const [failedEntry] = await readSessionsIndex(vfs as never);
+    expect(failedEntry.memoryPending).toBe(true);
+    // The failure ledger: the reason the curator did not finish is durable.
+    expect(failedEntry.memoryFailed).toBe('spawn failed');
+    expect(failedEntry.memoryCuratedAt).toBeUndefined();
   });
 
   it('retains persisted memoryPending when reload interrupts before curation', async () => {
@@ -544,7 +559,9 @@ describe('freezeConeSession', () => {
 
     expect(frozen).not.toBeNull();
     expect(frozen?.memoryPending).toBe(true);
-    expect((await readSessionsIndex(vfs as never))[0].memoryPending).toBe(true);
+    const [timedOutEntry] = await readSessionsIndex(vfs as never);
+    expect(timedOutEntry.memoryPending).toBe(true);
+    expect(timedOutEntry.memoryFailed).toBe('timeout');
     expect(mockRunOneOffCompactionCall).toHaveBeenCalledOnce();
     expect(vfs.files.get('/workspace/CLAUDE.md')).toBeUndefined();
     expect(mockApplyConeMemoryBudget).not.toHaveBeenCalled();
@@ -1846,6 +1863,9 @@ describe('processPendingSessions', () => {
     expect(mockRunAgenticMemoryPass).not.toHaveBeenCalled();
     const [failed] = await readSessionsIndex(vfs as never);
     expect(failed).toMatchObject({ memoryPending: true, pendingAttemptCount: 3 });
+    // The capped entry is no longer silently abandoned — the terminal state
+    // is stamped so "gave up" is visible in the ledger.
+    expect(failed.memoryFailed).toBe('catch-up retries exhausted (3)');
     expect(await listPendingEnrichments(vfs as never)).toEqual([]);
   });
 });

@@ -1,12 +1,15 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { resetLoggerDedupForTests } from '../../src/base/logger.js';
-import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
 import {
   AGENT_NAME_IN_USE_PREFIX,
   type AgentSpawnOptions,
   type AgentSpawnResult,
 } from '../../src/scoops/agent-bridge.js';
 import {
+  type CuratorVfs,
+  curationBasePath,
+  curationDraftPath,
+  curationStatusPath,
   curatorAgentName,
   curatorScratchDir,
   DEFAULT_MEMORY_MD,
@@ -15,6 +18,10 @@ import {
 import { CONE_MEMORY_PATH, computeBudget } from '../../src/scoops/cone-memory-budget.js';
 
 const ARCHIVE_PATH = '/sessions/2026-08-05-memory.md';
+// The staged copy the curator edits instead of the live memory file; the
+// bridge merges it back on exit 0 (mergeOnSuccess).
+const DRAFT_PATH = curationDraftPath(ARCHIVE_PATH);
+const CURATION_DIR = '/sessions/.curation/2026-08-05-memory.md';
 const BASE_ALLOWED_COMMANDS = [
   'awk',
   'cat',
@@ -49,12 +56,34 @@ const BASE_ALLOWED_COMMANDS = [
   'xxd',
 ];
 
-function fakeVfs(content: string | Error): Pick<LocalVfsClient, 'readFile'> {
+interface FakeVfs extends CuratorVfs {
+  /** Path → content of every `writeFile` the pass performed. */
+  writes: Map<string, string>;
+}
+
+/**
+ * Path-aware fake: `/shared/MEMORY.md` serves `content` (or throws it);
+ * any other read serves what the pass wrote there, or the optional
+ * `liveMemory`, or ENOENT — the snapshot-seeding path tolerates all three.
+ */
+function fakeVfs(content: string | Error, liveMemory?: string): FakeVfs {
+  const writes = new Map<string, string>();
   return {
-    readFile: vi.fn(async () => {
-      if (content instanceof Error) throw content;
-      return content;
+    writes,
+    readFile: vi.fn(async (path: string) => {
+      if (path === '/shared/MEMORY.md') {
+        if (content instanceof Error) throw content;
+        return content;
+      }
+      const written = writes.get(path);
+      if (written !== undefined) return written;
+      if (liveMemory !== undefined) return liveMemory;
+      throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
     }),
+    writeFile: vi.fn(async (path: string, body: string) => {
+      writes.set(path, body);
+    }),
+    mkdir: vi.fn(async () => {}),
   };
 }
 
@@ -98,19 +127,29 @@ Memory={{MEMORY_PATH}} archive={{SESSION_ARCHIVE_PATH}} count={{SESSION_COUNT}} 
     const options = spawn.mock.calls[0][0];
     expect(options).toMatchObject({
       cwd: '/workspace',
-      writablePaths: ['/workspace/', '/knowledge/'],
-      visiblePaths: ['/sessions/', '/shared/', '/knowledge/'],
+      // Directory grants are kept as-is; the staged draft is appended so
+      // the prompt's {{MEMORY_PATH}} writes always land somewhere granted.
+      writablePaths: ['/workspace/', '/knowledge/', DRAFT_PATH],
+      visiblePaths: ['/sessions/', '/shared/', '/knowledge/', `${CURATION_DIR}/`],
       allowedCommands: [...BASE_ALLOWED_COMMANDS, 'custom-text'],
       modelId: 'claude-sonnet-4-6',
       // Per-archive completion receipt the bridge writes on exit 0 —
       // the boot catch-up's crash-safe curator-finished signal (#1989).
       successReceiptPath: '/sessions/.curated/2026-08-05-memory.md',
+      // Staged rewrite folded onto the live file by the bridge on exit 0,
+      // plus the durable both-ways outcome record.
+      mergeOnSuccess: {
+        targetPath: CONE_MEMORY_PATH,
+        basePath: curationBasePath(ARCHIVE_PATH),
+        draftPath: DRAFT_PATH,
+      },
+      outcomeReceiptPath: curationStatusPath(ARCHIVE_PATH),
       // timeoutSeconds becomes a REAL in-run wall-clock bound (#1972);
       // this fixture sets timeoutSeconds: 45.
       maxWallClockMs: 45_000,
     });
     expect(options.prompt).toBe(
-      `Memory=${CONE_MEMORY_PATH} archive=${ARCHIVE_PATH} count=30 budget=${computeBudget(30)} today=2026-08-06 unknown={{KEEP_ME}}`
+      `Memory=${DRAFT_PATH} archive=${ARCHIVE_PATH} count=30 budget=${computeBudget(30)} today=2026-08-06 unknown={{KEEP_ME}}`
     );
   });
 
@@ -182,7 +221,7 @@ Curate {{MEMORY_PATH}} on {{TODAY}}.`;
 
     expect(result).toEqual({ ok: true, report: 'done' });
     expect(spawn.mock.calls[0][0].prompt).toContain('## Existing instructions');
-    expect(spawn.mock.calls[0][0].prompt).toContain('Curate /workspace/CLAUDE.md on 2026-08-06.');
+    expect(spawn.mock.calls[0][0].prompt).toContain(`Curate ${DRAFT_PATH} on 2026-08-06.`);
   });
 
   it('strips block-array comments and preserves quoted inline commas', async () => {
@@ -206,8 +245,8 @@ Curate {{MEMORY_PATH}}.`;
 
     expect(result).toEqual({ ok: true, report: 'done' });
     expect(spawn.mock.calls[0][0]).toMatchObject({
-      writablePaths: ['/workspace/', '/knowledge/lars,rebecca/'],
-      visiblePaths: ['/sessions/', '/shared/#reference'],
+      writablePaths: ['/workspace/', '/knowledge/lars,rebecca/', DRAFT_PATH],
+      visiblePaths: ['/sessions/', '/shared/#reference', `${CURATION_DIR}/`],
       allowedCommands: BASE_ALLOWED_COMMANDS,
     });
   });
@@ -326,7 +365,8 @@ Curate {{MEMORY_PATH}}.`;
 
     expect(result).toEqual({ ok: true, report: 'done' });
     expect(warn).toHaveBeenCalled();
-    expect(spawn.mock.calls[0][0].writablePaths).toEqual(['/workspace/CLAUDE.md']);
+    expect(spawn.mock.calls[0][0].writablePaths).toEqual([DRAFT_PATH]);
+    expect(spawn.mock.calls[0][0].mergeOnSuccess?.targetPath).toBe(CONE_MEMORY_PATH);
   });
 
   it('uses the built-in default and warns when MEMORY.md is missing', async () => {
@@ -347,9 +387,14 @@ Curate {{MEMORY_PATH}}.`;
     // `/workspace/skills/`. `/workspace/` stays readable so it can orient.
     expect(spawn.mock.calls[0][0]).toMatchObject({
       cwd: '/workspace',
-      writablePaths: ['/workspace/CLAUDE.md'],
-      visiblePaths: ['/sessions/', '/shared/', '/workspace/'],
+      writablePaths: [DRAFT_PATH],
+      visiblePaths: ['/sessions/', '/shared/', '/workspace/', `${CURATION_DIR}/`],
       notifyOnComplete: true,
+      mergeOnSuccess: {
+        targetPath: CONE_MEMORY_PATH,
+        basePath: curationBasePath(ARCHIVE_PATH),
+        draftPath: DRAFT_PATH,
+      },
     });
     expect(spawn.mock.calls[0][0].prompt).toContain(
       'Organize retained information into concise per-topic'
@@ -372,7 +417,65 @@ Curate {{MEMORY_PATH}}.`;
 
     expect(result.ok).toBe(true);
     expect(warn).toHaveBeenCalled();
-    expect(spawn.mock.calls[0][0].prompt).toContain(CONE_MEMORY_PATH);
+    expect(spawn.mock.calls[0][0].prompt).toContain(DRAFT_PATH);
+  });
+
+  it('seeds the base snapshot and the draft from the live memory file', async () => {
+    const spawn = successSpawn();
+    const vfs = fakeVfs(DEFAULT_MEMORY_MD, '# Memory\n\n## Facts (2026-08-01)\n');
+
+    const result = await runAgenticMemoryPass({
+      spawn,
+      vfs,
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    expect(result).toEqual({ ok: true, report: 'done' });
+    // Both files carry the SAME live content: the base is what the
+    // completion merge diffs against, the draft is what the curator edits.
+    expect(vfs.writes.get(curationBasePath(ARCHIVE_PATH))).toBe(
+      '# Memory\n\n## Facts (2026-08-01)\n'
+    );
+    expect(vfs.writes.get(DRAFT_PATH)).toBe('# Memory\n\n## Facts (2026-08-01)\n');
+  });
+
+  it('seeds empty base and draft when no live memory exists yet', async () => {
+    const spawn = successSpawn();
+    const vfs = fakeVfs(DEFAULT_MEMORY_MD);
+
+    await runAgenticMemoryPass({
+      spawn,
+      vfs,
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    expect(vfs.writes.get(curationBasePath(ARCHIVE_PATH))).toBe('');
+    expect(vfs.writes.get(DRAFT_PATH)).toBe('');
+  });
+
+  it('falls back safely (nothing spawned) when snapshot seeding fails', async () => {
+    const spawn = successSpawn();
+    const vfs = fakeVfs(DEFAULT_MEMORY_MD);
+    vfs.writeFile = vi.fn(async () => {
+      throw new Error('disk full');
+    });
+
+    const result = await runAgenticMemoryPass({
+      spawn,
+      vfs,
+      sessionArchivePath: ARCHIVE_PATH,
+      sessionCount: 1,
+    });
+
+    // No curator ran, so the legacy single-call append cannot be clobbered.
+    expect(result).toEqual({
+      ok: false,
+      reason: 'snapshot: disk full',
+      legacyFallbackSafe: true,
+    });
+    expect(spawn).not.toHaveBeenCalled();
   });
 
   it('returns ok:false when spawn throws', async () => {
@@ -505,8 +608,15 @@ Curate {{MEMORY_PATH}}.`;
       expect(options).toMatchObject({
         cwd: '/cones/cone-beta/workspace',
         // The shipped MEMORY.md names the PRIMARY memory file; the pass
-        // applies that same policy to this cone's own file instead.
-        writablePaths: ['/cones/cone-beta/CLAUDE.md'],
+        // applies that policy to this cone's own file — which is then
+        // staged: the curator writes the per-archive draft and the bridge
+        // merges it onto this cone's live file on exit 0.
+        writablePaths: [DRAFT_PATH],
+        mergeOnSuccess: {
+          targetPath: '/cones/cone-beta/CLAUDE.md',
+          basePath: curationBasePath(ARCHIVE_PATH),
+          draftPath: DRAFT_PATH,
+        },
         // Parented to the cone it curates, so an escalation reaches that
         // cone's approval router.
         parentJid: 'cone_beta',
@@ -521,8 +631,9 @@ Curate {{MEMORY_PATH}}.`;
         '/shared/',
         '/cones/cone-beta/workspace/',
         '/workspace/skills/',
+        `${CURATION_DIR}/`,
       ]);
-      expect(options.prompt).toContain('/cones/cone-beta/CLAUDE.md');
+      expect(options.prompt).toContain(DRAFT_PATH);
       expect(options.prompt).not.toContain('/workspace/CLAUDE.md');
     });
 
@@ -560,7 +671,7 @@ Curate {{MEMORY_PATH}}.`;
       });
 
       expect(spawn.mock.calls[0][0].prompt).toBe(
-        'Draft in `/scoops/agent-memory-curator-cone-beta/draft.md`, then write /cones/cone-beta/CLAUDE.md.'
+        `Draft in \`/scoops/agent-memory-curator-cone-beta/draft.md\`, then write ${DRAFT_PATH}.`
       );
     });
 
@@ -580,10 +691,20 @@ Curate {{MEMORY_PATH}}.`;
       expect(curatorAgentName('cone')).toBe('memory-curator');
       expect(options).toMatchObject({
         cwd: '/workspace',
-        writablePaths: [CONE_MEMORY_PATH],
+        writablePaths: [DRAFT_PATH],
         name: 'memory-curator',
+        mergeOnSuccess: {
+          targetPath: CONE_MEMORY_PATH,
+          basePath: curationBasePath(ARCHIVE_PATH),
+          draftPath: DRAFT_PATH,
+        },
       });
-      expect(options.visiblePaths).toEqual(['/sessions/', '/shared/', '/workspace/']);
+      expect(options.visiblePaths).toEqual([
+        '/sessions/',
+        '/shared/',
+        '/workspace/',
+        `${CURATION_DIR}/`,
+      ]);
       expect(options.parentJid).toBeUndefined();
       expect(options.prompt).toContain('/scoops/agent-memory-curator/');
     });
@@ -606,7 +727,8 @@ Curate {{MEMORY_PATH}}.`;
       const options = spawn.mock.calls[0][0];
       expect(options.name).toBe('memory-curator-cone-beta-2');
       expect(options.name).toMatch(/^[a-z][a-z0-9]*(?:-[a-z0-9]+)*$/);
-      expect(options.writablePaths).toEqual(['/cones/cone-beta-2/CLAUDE.md']);
+      expect(options.writablePaths).toEqual([DRAFT_PATH]);
+      expect(options.mergeOnSuccess?.targetPath).toBe('/cones/cone-beta-2/CLAUDE.md');
     });
 
     it('falls back to the primary curator name for an unusable folder', async () => {
@@ -626,7 +748,8 @@ Curate {{MEMORY_PATH}}.`;
 
       const options = spawn.mock.calls[0][0];
       expect(options.name).toBe('memory-curator');
-      expect(options.writablePaths).toEqual(['/cones/Cone_Weird!/CLAUDE.md']);
+      expect(options.writablePaths).toEqual([DRAFT_PATH]);
+      expect(options.mergeOnSuccess?.targetPath).toBe('/cones/Cone_Weird!/CLAUDE.md');
     });
 
     it('keeps an explicitly configured non-workspace path unrebased', async () => {
@@ -649,8 +772,8 @@ Curate {{MEMORY_PATH}}.`;
       // configuration is left exactly as written, and the skills library is
       // NOT added because the original list never covered it either.
       expect(spawn.mock.calls[0][0]).toMatchObject({
-        writablePaths: ['/knowledge/notes.md'],
-        visiblePaths: ['/sessions/', '/knowledge/'],
+        writablePaths: ['/knowledge/notes.md', DRAFT_PATH],
+        visiblePaths: ['/sessions/', '/knowledge/', `${CURATION_DIR}/`],
       });
     });
   });

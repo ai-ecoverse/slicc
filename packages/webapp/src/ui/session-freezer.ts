@@ -32,7 +32,12 @@ import { FsError } from '../fs/types.js';
 import type { LocalVfsClient } from '../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../kernel/writable-vfs-client.js';
 import type { AgentBridge } from '../scoops/agent-bridge.js';
-import { curatorReceiptPath, runAgenticMemoryPass } from '../scoops/agentic-memory.js';
+import {
+  curationBasePath,
+  curationDraftPath,
+  curatorReceiptPath,
+  runAgenticMemoryPass,
+} from '../scoops/agentic-memory.js';
 import type { SessionStore } from '../scoops/chat-session-store.js';
 import { applyConeMemoryBudget, readSessionCount } from '../scoops/cone-memory-budget.js';
 import type {
@@ -263,6 +268,9 @@ export async function curateFrozenSessionMemories(
     log.info('Agentic memory pass completed', { filename: frozen.filename });
     return updated;
   }
+  // Either failure branch leaves a durable note on the index entry — the
+  // other half of the ledger `memoryCuratedAt` provides on success.
+  await stampMemoryFailure(opts.vfs, frozen.filename, result.reason);
   if (!result.legacyFallbackSafe) {
     log.warn('Agentic memory pass unfinished — entry stays pending for boot catch-up', {
       filename: frozen.filename,
@@ -928,6 +936,22 @@ export async function processPendingSessions(
   const result = { attempted: 0, completed: 0 };
   if (!opts.model || !opts.apiKey) return result;
   try {
+    // Entries at the retry cap are silently skipped by the filter below —
+    // record that terminal state once so "gave up" is visible in the
+    // ledger instead of looking identical to "still retrying".
+    for (const capped of await readSessionsIndex(opts.vfs)) {
+      if (
+        capped.memoryPending === true &&
+        capped.memoryFailed === undefined &&
+        pendingAttemptCount(capped) >= PENDING_SESSION_ATTEMPT_LIMIT
+      ) {
+        await stampMemoryFailure(
+          opts.vfs,
+          capped.filename,
+          `catch-up retries exhausted (${PENDING_SESSION_ATTEMPT_LIMIT})`
+        );
+      }
+    }
     const entries = await listPendingEnrichments(opts.vfs);
     for (const listedEntry of entries) {
       try {
@@ -1049,8 +1073,35 @@ export async function enrichPendingSession(
     icon,
     opts.skipMemory === true
   );
-  if (committed && curatorAlreadyRan) await removeCuratorReceipt(vfs, entry.filename);
+  if (committed && curatorAlreadyRan) {
+    await removeCuratorReceipt(vfs, entry.filename);
+    // The curator DID finish (receipt proved it) — record that under the
+    // committed (possibly renamed) filename, and drop the staging snapshot
+    // its interrupted caller never cleaned up.
+    await stampMemoryCurated(vfs, committed.filename);
+    await removeCurationStaging(vfs, entry.filename);
+  }
   return committed;
+}
+
+/**
+ * Best-effort removal of the per-archive base/draft staging pair once the
+ * pass is definitively resolved. The bridge removes them after a merged
+ * run; this covers passes whose caller realm died in between. The
+ * `status.json` beside them is deliberately kept — it is the durable
+ * outcome ledger, not staging state.
+ */
+async function removeCurationStaging(vfs: WritableVfsClient, filename: string): Promise<void> {
+  for (const path of [
+    curationBasePath(`/sessions/${filename}`),
+    curationDraftPath(`/sessions/${filename}`),
+  ]) {
+    try {
+      await vfs.rm(path);
+    } catch {
+      /* already gone */
+    }
+  }
 }
 
 /**
@@ -1391,7 +1442,13 @@ function rewriteArchiveTitle(content: string, newTitle: string): string {
  */
 let indexWriteChain: Promise<void> = Promise.resolve();
 
-/** Clear every catch-up marker and its attempt counter after successful work. */
+/**
+ * Clear every catch-up marker and its attempt counter after successful
+ * work, and stamp the durable positive record that curation completed
+ * (`memoryCuratedAt`; any earlier failure note is superseded). Without the
+ * stamp, "curated" and "never owed a pass" are indistinguishable in the
+ * index — the gap that made failed-vs-finished curation unauditable.
+ */
 async function clearPendingMarkers(
   vfs: WritableVfsClient,
   filename: string
@@ -1405,8 +1462,13 @@ async function clearPendingMarkers(
       memoryPending: _memoryPending,
       pendingEnrichment: _pendingEnrichment,
       pendingAttemptCount: _pendingAttemptCount,
-      ...updatedEntry
+      memoryFailed: _memoryFailed,
+      ...rest
     } = existing[index];
+    const updatedEntry: FrozenSessionIndexEntry = {
+      ...rest,
+      memoryCuratedAt: new Date().toISOString(),
+    };
     const updated = existing.slice();
     updated[index] = updatedEntry;
     await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
@@ -1456,6 +1518,73 @@ async function recordPendingAttempt(
   );
   await next;
   return attempted;
+}
+
+/**
+ * Record why the last curator attempt for `filename` failed — a ledger
+ * note for humans and UI, serialized with every other index mutation.
+ * Recovery semantics are untouched: `memoryPending` (when still set)
+ * keeps driving the boot catch-up. Best-effort: never throws.
+ */
+async function stampMemoryFailure(
+  vfs: WritableVfsClient,
+  filename: string,
+  reason: string
+): Promise<void> {
+  const run = async (): Promise<void> => {
+    const existing = await readSessionsIndex(vfs);
+    const index = existing.findIndex((entry) => entry.filename === filename);
+    if (index === -1) return;
+    const updated = existing.slice();
+    updated[index] = { ...existing[index], memoryFailed: reason.slice(0, 300) };
+    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    await vfs.flush();
+  };
+  const next = indexWriteChain.then(run, run);
+  indexWriteChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  try {
+    await next;
+  } catch (err) {
+    log.warn('Failed to record curator failure in sessions index', {
+      filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
+}
+
+/**
+ * Stamp `memoryCuratedAt` (superseding any failure note) on an entry whose
+ * markers were already handled elsewhere — the #1989 receipt-recovery path,
+ * where `commitEnrichedArchive` drops the pending marker itself. Serialized
+ * with every other index mutation; best-effort.
+ */
+async function stampMemoryCurated(vfs: WritableVfsClient, filename: string): Promise<void> {
+  const run = async (): Promise<void> => {
+    const existing = await readSessionsIndex(vfs);
+    const index = existing.findIndex((entry) => entry.filename === filename);
+    if (index === -1) return;
+    const { memoryFailed: _memoryFailed, ...rest } = existing[index];
+    const updated = existing.slice();
+    updated[index] = { ...rest, memoryCuratedAt: new Date().toISOString() };
+    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
+    await vfs.flush();
+  };
+  const next = indexWriteChain.then(run, run);
+  indexWriteChain = next.then(
+    () => undefined,
+    () => undefined
+  );
+  try {
+    await next;
+  } catch (err) {
+    log.warn('Failed to record curator completion in sessions index', {
+      filename,
+      error: err instanceof Error ? err.message : String(err),
+    });
+  }
 }
 
 /**

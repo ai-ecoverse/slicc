@@ -14,6 +14,15 @@ afterEach(async () => {
   vfs = undefined;
 });
 
+const stubVfs = (memoryMd: string) => ({
+  readFile: async (path: string) => {
+    if (path === '/shared/MEMORY.md') return memoryMd;
+    throw Object.assign(new Error(`ENOENT: ${path}`), { code: 'ENOENT' });
+  },
+  writeFile: async () => {},
+  mkdir: async () => {},
+});
+
 describe('bundled MEMORY.md', () => {
   it('parses as the runner fallback', async () => {
     const spawn = vi.fn(async () => ({ finalText: 'done', exitCode: 0 }));
@@ -21,7 +30,7 @@ describe('bundled MEMORY.md', () => {
     await expect(
       runAgenticMemoryPass({
         spawn,
-        vfs: { readFile: async () => DEFAULT_MEMORY_MD },
+        vfs: stubVfs(DEFAULT_MEMORY_MD),
         sessionArchivePath: '/sessions/frozen.md',
         sessionCount: 1,
       })
@@ -45,12 +54,12 @@ describe('bundled MEMORY.md', () => {
     );
     await runAgenticMemoryPass({
       spawn,
-      vfs: { readFile: async () => DEFAULT_MEMORY_MD },
+      vfs: stubVfs(DEFAULT_MEMORY_MD),
       sessionArchivePath: '/sessions/frozen.md',
       sessionCount: 1,
     });
     const { writablePaths = [], name, prompt } = spawn.mock.calls[0][0];
-    expect(writablePaths).toEqual(['/workspace/CLAUDE.md']);
+    expect(writablePaths).toEqual(['/sessions/.curation/frozen.md/draft.md']);
     const scratchFolder = `/scoops/agent-${name}`;
     // The document names the scratch folder as `{{SCRATCH_DIR}}` — the folder
     // follows the per-cone agent name (#2271) — so the assertion is against
