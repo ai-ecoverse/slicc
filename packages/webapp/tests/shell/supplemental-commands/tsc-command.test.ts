@@ -292,7 +292,9 @@ describe('install-required guidance (browser branch)', () => {
       expect(result.stderr).toContain('typescript@7.0.2');
       expect(result.stderr).toContain('/workspace/node_modules/typescript');
       expect(result.stderr).toContain('no JS compiler API');
-      expect(result.stderr).toContain('ipk add -g typescript@6.0.3');
+      expect(result.stderr).toContain('ipk uninstall typescript');
+      expect(result.stderr).toContain('ipk add typescript@6.0.3');
+      expect(result.stderr).not.toContain('ipk add -g typescript@6.0.3');
     } finally {
       vi.unstubAllGlobals();
       resetTypeScriptForTests();
@@ -315,7 +317,9 @@ describe('install-required guidance (browser branch)', () => {
       expect(result.stderr).toContain('typescript@5.9.2');
       expect(result.stderr).toContain('predates the pinned 6.x line');
       expect(result.stderr).not.toContain('no JS compiler API');
-      expect(result.stderr).toContain('ipk add -g typescript@6.0.3');
+      expect(result.stderr).toContain('ipk uninstall typescript');
+      expect(result.stderr).toContain('ipk add typescript@6.0.3');
+      expect(result.stderr).not.toContain('ipk add -g typescript@6.0.3');
     } finally {
       vi.unstubAllGlobals();
       resetTypeScriptForTests();
