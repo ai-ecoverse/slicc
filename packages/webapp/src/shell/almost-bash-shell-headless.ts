@@ -448,6 +448,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       PATH: DEFAULT_SHELL_PATH,
       USER: 'user',
       SHELL: '/bin/bash',
+      // The cone's scratch root (#2267). Scoops pin their own via
+      // `options.env` (`buildScoopShellEnv`), which spreads last, so a
+      // sandboxed shell never inherits a `/tmp` it may not write.
+      TMPDIR: '/tmp',
       PWD: initialCwd,
       ...options.env,
     };
