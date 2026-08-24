@@ -81,6 +81,11 @@ describe('parseLocalMountTarget (spec)', () => {
     expect(parseLocalMountTarget('mount refresh /mnt/x')).toBeNull();
   });
 
+  it('returns null for `mount --list` / `mount -l` (list aliases)', () => {
+    expect(parseLocalMountTarget('mount --list')).toBeNull();
+    expect(parseLocalMountTarget('mount -l')).toBeNull();
+  });
+
   it('returns null when --source is present (S3 / DA mounts)', () => {
     expect(parseLocalMountTarget('mount /mnt/x --source s3://bucket')).toBeNull();
     expect(parseLocalMountTarget('mount --source da://repo /mnt/x')).toBeNull();

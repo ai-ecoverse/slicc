@@ -75,6 +75,18 @@ describe('MountCommands', () => {
       const cmd = new MountCommands({ fs: makeFs({ listMounts: vi.fn(() => []) }) });
       const result = await cmd.execute(['-l'], '/workspace');
       expect(result.exitCode).toBe(0);
+      expect(result.stdout).toBe('No active mounts\n');
+    });
+
+    it('--list alias matches `mount list`', async () => {
+      const mounts = ['/workspace/myapp'];
+      const fs = makeFs({ listMounts: vi.fn(() => mounts) });
+      const cmd = new MountCommands({ fs });
+      const listed = await cmd.execute(['list'], '/workspace');
+      const aliased = await cmd.execute(['--list'], '/workspace');
+      expect(aliased.exitCode).toBe(0);
+      expect(aliased.stdout).toBe(listed.stdout);
+      expect(aliased.stderr).toBe(listed.stderr);
     });
 
     async function runListWithErrorState(
@@ -308,6 +320,13 @@ describe('MountCommands', () => {
       const cmd = new MountCommands({ fs: makeFs() });
       const result = await cmd.execute(['--help'], '/workspace');
       expect(result.stdout).toContain('Usage: mount [OPTIONS] <target-path>');
+    });
+
+    it('documents --list as an alias of list', async () => {
+      const cmd = new MountCommands({ fs: makeFs() });
+      const result = await cmd.execute(['--help'], '/workspace');
+      expect(result.stdout).toContain('mount --list');
+      expect(result.stdout).toMatch(/list, --list, -l/);
     });
   });
 

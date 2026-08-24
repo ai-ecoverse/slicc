@@ -150,7 +150,7 @@ export class MountCommands {
       return this.handleUnmount(args.slice(1), cwd);
     }
 
-    if (sub === 'list' || sub === '-l') {
+    if (sub === 'list' || sub === '-l' || sub === '--list') {
       return this.handleList();
     }
 
@@ -539,6 +539,7 @@ export class MountCommands {
           'Usage: mount [OPTIONS] <target-path>',
           '       mount unmount [--clear-cache] <path>',
           '       mount list',
+          '       mount --list',
           '       mount refresh [--bodies] <path>',
           '',
           'Mount a local directory, S3 bucket, or AEM authoring source into the',
@@ -561,7 +562,7 @@ export class MountCommands {
           '',
           'Sub-commands:',
           '  unmount [--clear-cache] <path>  Remove a mount point',
-          '  list                            Show active mount points',
+          '  list, --list, -l                Show active mount points',
           '  refresh [--bodies] <path>       Re-index or revalidate a mount',
           '',
           'Examples:',
