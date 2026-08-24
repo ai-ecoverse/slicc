@@ -7,11 +7,7 @@ import {
   setFollowerTrayRuntimeStatus,
 } from '../../../src/scoops/tray-follower-status.js';
 import { setLeaderTrayRuntimeStatus } from '../../../src/scoops/tray-leader.js';
-import {
-  installFloatbarOnline,
-  installFloatbarStatus,
-  mergeTrayStatus,
-} from '../../../src/ui/wc/wc-floatbar-online.js';
+import { installFloatbarStatus, mergeTrayStatus } from '../../../src/ui/wc/wc-floatbar-online.js';
 
 const INACTIVE_FOLLOWER = {
   state: 'inactive' as const,
@@ -66,7 +62,6 @@ describe('installFloatbarStatus', () => {
     expect(floatbar.getAttribute('float-kind')).toBe('npx');
     expect(floatbar.getAttribute('connection')).toBe('live');
     expect(floatbar.getAttribute('tray-role')).toBe('follower');
-    expect(floatbar.hasAttribute('online')).toBe(true);
     uninstall();
   });
 
@@ -92,7 +87,6 @@ describe('installFloatbarStatus', () => {
 
     setFollowerTrayRuntimeStatus(followerStatus('error'));
     expect(floatbar.getAttribute('connection')).toBe('error');
-    expect(floatbar.hasAttribute('online')).toBe(false);
 
     setFollowerTrayRuntimeStatus(followerStatus('reconnecting'));
     expect(floatbar.getAttribute('connection')).toBe('reconnecting');
@@ -107,7 +101,6 @@ describe('installFloatbarStatus', () => {
     setFollowerTrayRuntimeStatus(followerStatus('connected'));
     setFollowerStalled(true);
     expect(floatbar.getAttribute('connection')).toBe('stalled');
-    expect(floatbar.hasAttribute('online')).toBe(true);
     setFollowerStalled(false);
     expect(floatbar.getAttribute('connection')).toBe('live');
     uninstall();
@@ -120,15 +113,5 @@ describe('installFloatbarStatus', () => {
     uninstall();
     setFollowerTrayRuntimeStatus(followerStatus('error'));
     expect(floatbar.getAttribute('connection')).toBe('live');
-  });
-});
-
-describe('installFloatbarOnline (legacy)', () => {
-  it('defaults float kind to standalone', () => {
-    setFollowerTrayRuntimeStatus(followerStatus('connected'));
-    const floatbar = document.createElement('slicc-floatbar');
-    installFloatbarOnline(floatbar);
-    expect(floatbar.getAttribute('float-kind')).toBe('standalone');
-    expect(floatbar.hasAttribute('online')).toBe(true);
   });
 });

@@ -50,11 +50,6 @@ export function installFloatbarStatus(
     floatbar.setAttribute('connection', merged.connection);
     if (merged.trayRole === 'none') floatbar.removeAttribute('tray-role');
     else floatbar.setAttribute('tray-role', merged.trayRole);
-    // Legacy boolean for callers/tests that still read `online`.
-    floatbar.toggleAttribute(
-      'online',
-      merged.connection === 'live' || merged.connection === 'stalled'
-    );
   };
 
   const unsubscribeLeader = subscribeToLeaderTrayRuntimeStatus((status) => {
@@ -70,11 +65,6 @@ export function installFloatbarStatus(
     unsubscribeLeader();
     unsubscribeFollower();
   };
-}
-
-/** @deprecated Prefer {@link installFloatbarStatus} with an explicit float kind. */
-export function installFloatbarOnline(floatbar: HTMLElement): () => void {
-  return installFloatbarStatus(floatbar, { floatKind: 'standalone' });
 }
 
 export function mergeTrayStatus(

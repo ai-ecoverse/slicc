@@ -11,7 +11,6 @@ import {
   floatKindForRuntimeMode,
   floatLabelForKind,
   resolveStandaloneFloatKind,
-  resolveStandaloneFloatLabel,
 } from '../../../src/ui/wc/wc-float-label.js';
 
 function okJson(body: unknown): typeof fetch {
@@ -55,15 +54,5 @@ describe('floatLabelForKind', () => {
   it('returns the float kind name without tray suffixes', () => {
     expect(floatLabelForKind('npx')).toBe('npx');
     expect(floatLabelForKind('extension')).toBe('extension');
-  });
-});
-
-describe('resolveStandaloneFloatLabel (deprecated)', () => {
-  it('returns the float kind label', async () => {
-    await expect(
-      resolveStandaloneFloatLabel({
-        fetchFn: okJson({ status: 'ok', service: 'slicc-node-server' }),
-      })
-    ).resolves.toBe('npx');
   });
 });

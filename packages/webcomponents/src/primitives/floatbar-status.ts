@@ -145,14 +145,6 @@ export function defaultFloatbarStatus(): FloatbarStatus {
   return { connection: 'offline', floatKind: 'standalone', trayRole: 'none' };
 }
 
-/**
- * Legacy bridge: the old `online` boolean meant "tray link is up". Map it to
- * `live` vs `offline` when the new `connection` attribute is unset.
- */
-export function connectionFromLegacyOnline(online: boolean): FloatbarConnection {
-  return online ? 'live' : 'offline';
-}
-
 /** Human-readable beacon tooltip fragment. */
 export function statusTipFragment(status: FloatbarStatus): string {
   return [

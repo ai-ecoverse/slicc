@@ -14,9 +14,6 @@ const FLOAT_KIND_BY_SERVICE: Record<string, FloatbarFloatKind> = {
   'slicc-node-server': 'npx',
 };
 
-/** @deprecated Use {@link resolveStandaloneFloatKind} + {@link floatLabelForKind}. */
-export const DEFAULT_STANDALONE_LABEL = 'standalone';
-
 export function floatLabelForKind(kind: FloatbarFloatKind): string {
   return floatKindLabel(kind);
 }
@@ -60,13 +57,4 @@ export async function resolveStandaloneFloatKind(opts?: {
   } catch {
     return 'standalone';
   }
-}
-
-/** @deprecated Use {@link resolveStandaloneFloatKind} + {@link floatLabelForKind}. */
-export async function resolveStandaloneFloatLabel(opts?: {
-  fetchFn?: typeof fetch;
-  timeoutMs?: number;
-}): Promise<string> {
-  const kind = await resolveStandaloneFloatKind(opts);
-  return floatLabelForKind(kind);
 }

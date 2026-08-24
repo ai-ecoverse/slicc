@@ -18,7 +18,6 @@ import '../nav/slicc-nav.js';
 interface FloatbarArgs {
   label?: string;
   linked?: boolean;
-  online?: boolean;
   connection?: FloatbarConnection;
   floatKind?: FloatbarFloatKind;
   trayRole?: FloatbarTrayRole;
@@ -66,7 +65,6 @@ function mountFloatbar(args: FloatbarArgs): SliccFloatbar {
   if (args.connection != null) el.connection = args.connection;
   if (args.floatKind != null) el.floatKind = args.floatKind;
   if (args.trayRole != null) el.trayRole = args.trayRole;
-  if (args.online) el.online = true;
   if (args.rate != null && args.rate !== '') el.rate = args.rate;
   if (args.spent != null && args.spent !== '') el.spent = args.spent;
   if (args.followerCount != null && args.followerCount > 0) {
@@ -105,10 +103,6 @@ const meta: Meta<FloatbarArgs> = {
   argTypes: {
     label: { control: 'text', description: 'Float name only (no tray/follower encoding)' },
     linked: { control: 'boolean', description: 'Rose-tinted border (legacy linked runtime)' },
-    online: {
-      control: 'boolean',
-      description: 'Legacy: maps to live/offline when connection unset',
-    },
     connection: {
       control: 'select',
       options: FLOATBAR_CONNECTIONS,
@@ -140,11 +134,6 @@ type Story = StoryObj<FloatbarArgs>;
 /** Local float — offline, no tray role. */
 export const Default: Story = {
   args: { label: 'standalone', floatKind: 'standalone', connection: 'offline' },
-};
-
-/** Legacy `online` still lights the beacon (live + standalone icon). */
-export const LegacyOnline: Story = {
-  args: { label: 'npx', online: true },
 };
 
 /** Leader on npx with two followers — label stays float kind; count is in the middle. */
@@ -368,13 +357,11 @@ export const CleanupBeforeAfter: Story = {
 
     const before = mountFloatbar({
       label: 'tray · live',
-      online: true,
+      floatKind: 'npx',
+      connection: 'live',
       followerCount: 2,
       rate: '23.10',
     });
-    before.removeAttribute('float-kind');
-    before.removeAttribute('connection');
-    before.removeAttribute('tray-role');
 
     const after = mountFloatbar({
       label: 'npx',
@@ -389,7 +376,7 @@ export const CleanupBeforeAfter: Story = {
       mk(
         'Before (today)',
         before,
-        'Green dot + label switches to "tray · live" when followers connect — duplicates the middle segment.'
+        'Label switches to "tray · live" when followers connect — duplicates the middle segment.'
       ),
       mk(
         'After (proposed)',

@@ -1,6 +1,5 @@
 import { describe, expect, it } from 'vitest';
 import {
-  connectionFromLegacyOnline,
   defaultFloatLabel,
   floatKindLabel,
   statusTipFragment,
@@ -8,11 +7,6 @@ import {
 } from '../../src/primitives/floatbar-status.js';
 
 describe('floatbar-status', () => {
-  it('maps legacy online to live/offline', () => {
-    expect(connectionFromLegacyOnline(true)).toBe('live');
-    expect(connectionFromLegacyOnline(false)).toBe('offline');
-  });
-
   it('keeps float labels free of tray/follower encoding', () => {
     expect(defaultFloatLabel('npx')).toBe('npx');
     expect(defaultFloatLabel('extension')).toBe('extension');

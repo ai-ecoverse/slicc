@@ -7,7 +7,6 @@ import type { FollowerHudRow, SliccFollowerHud } from './slicc-follower-hud.js';
 import './slicc-follower-hud.js';
 import {
   connectionFill,
-  connectionFromLegacyOnline,
   connectionGlow,
   connectionPulses,
   defaultFloatbarStatus,
@@ -72,8 +71,7 @@ const STYLE = `
   border-color: color-mix(in srgb, var(--rose) 40%, var(--line));
 }
 
-/* Status beacon — connection color, float-kind icon, tray-role pip. Replaces
-   the legacy plain green status dot. */
+/* Status beacon — connection color, float-kind icon, tray-role pip. */
 .beacon {
   position: relative;
   display: inline-flex;
@@ -129,16 +127,6 @@ const STYLE = `
 @keyframes beacon-pulse {
   0%, 100% { transform: scale(1); opacity: 1; }
   50% { transform: scale(1.08); opacity: 0.82; }
-}
-
-/* Legacy alias — tests and older ::part(dot) hooks still resolve. */
-.fdot {
-  width: 7px;
-  height: 7px;
-  flex: 0 0 auto;
-  border-radius: 50%;
-  background: #22c55e;
-  box-shadow: 0 0 0 3px color-mix(in srgb, #22c55e 22%, transparent);
 }
 
 .label { white-space: nowrap; }
@@ -262,11 +250,10 @@ const SHEET = sheet(STYLE);
 
 /**
  * `<slicc-floatbar>` — the Runtime Float Pill from the prototype nav
- * (`.floatbar`). An inline-flex rounded pill carrying a status dot (`.fdot`)
- * and a runtime label such as `CLI · tray · 1 follower`. Self-contained shadow
- * DOM; themes via inherited tokens (--canvas, --line, --txt-2, --rose, --ui,
- * --ctl-h). The green status dot and the linked rose tint are fixed across
- * light/dark.
+ * (`.floatbar`). An inline-flex rounded pill carrying a status beacon and a
+ * runtime label such as `npx` or `extension`. Self-contained shadow DOM;
+ * themes via inherited tokens (--canvas, --line, --txt-2, --rose, --ui,
+ * --ctl-h). The linked rose tint is fixed across light/dark.
  *
  * @attr label - the runtime label text (defaults to "CLI float")
  * @attr linked - boolean; rose-tints the border to signal a linked runtime
@@ -275,7 +262,6 @@ const SHEET = sheet(STYLE);
  * @attr float-kind - serving float: npx | sliccstart | extension | standalone |
  *   cherry | electron | hosted (beacon center icon)
  * @attr tray-role - none | leader | follower (corner pip on the beacon)
- * @attr online - legacy boolean; when `connection` is unset, maps to live/offline
  * @attr rate - hourly cost, a number or numeric string (e.g. `23.1`); renders a
  *   coin-icon + formatted `$23.10/h` cost segment after a thin divider
  * @attr spent - cumulative cost shown in the cost overlay's total row
@@ -301,7 +287,6 @@ export class SliccFloatbar extends HTMLElement {
   static readonly observedAttributes = [
     'label',
     'linked',
-    'online',
     'connection',
     'float-kind',
     'tray-role',
@@ -365,15 +350,6 @@ export class SliccFloatbar extends HTMLElement {
     this.toggleAttribute('linked', !!value);
   }
 
-  /** Whether the status dot is shown (online/green). */
-  get online(): boolean {
-    return this.hasAttribute('online');
-  }
-
-  set online(value: boolean) {
-    this.toggleAttribute('online', !!value);
-  }
-
   get connection(): FloatbarConnection {
     const raw = this.getAttribute('connection');
     if (
@@ -385,7 +361,6 @@ export class SliccFloatbar extends HTMLElement {
     ) {
       return raw;
     }
-    if (this.hasAttribute('online')) return connectionFromLegacyOnline(true);
     return 'offline';
   }
 
@@ -439,8 +414,6 @@ export class SliccFloatbar extends HTMLElement {
     this.connection = value.connection;
     this.floatKind = value.floatKind;
     this.trayRole = value.trayRole;
-    if (value.connection === 'live') this.online = true;
-    else if (value.connection === 'offline') this.online = false;
   }
 
   /** Raw `spent` attribute value (number/string), or `null` when unset. */
@@ -508,16 +481,7 @@ export class SliccFloatbar extends HTMLElement {
    * separator the verbose label uses, so the collapsed badge stays legible.
    */
   #tipText(): string {
-    const parts: string[] = [this.label];
-    if (
-      this.hasAttribute('connection') ||
-      this.hasAttribute('float-kind') ||
-      this.hasAttribute('tray-role')
-    ) {
-      parts.push(statusTipFragment(this.status));
-    } else {
-      parts.push(this.online ? 'online' : 'offline');
-    }
+    const parts: string[] = [this.label, statusTipFragment(this.status)];
     const followers = this.#followers.length;
     if (followers > 0) {
       parts.push(`${followers} ${followers === 1 ? 'follower' : 'followers'}`);
@@ -525,25 +489,6 @@ export class SliccFloatbar extends HTMLElement {
     parts.push(formatRate(this.rate));
     parts.push('recency-weighted session avg');
     return parts.join(' · ');
-  }
-
-  /** Explicit status model — beacon replaces the legacy dot. */
-  #usesStatusBeacon(): boolean {
-    return (
-      this.hasAttribute('connection') ||
-      this.hasAttribute('float-kind') ||
-      this.hasAttribute('tray-role')
-    );
-  }
-
-  /** Whether the new status beacon renders. */
-  #showsBeacon(): boolean {
-    return this.#usesStatusBeacon();
-  }
-
-  /** Legacy plain green dot when only `online` is set. */
-  #showsLegacyDot(): boolean {
-    return this.online && !this.#usesStatusBeacon();
   }
 
   #beaconEl(status: FloatbarStatus): HTMLElement {
@@ -597,8 +542,7 @@ export class SliccFloatbar extends HTMLElement {
   #render(): void {
     const nodes: Node[] = [];
 
-    if (this.#showsBeacon()) nodes.push(this.#beaconEl(this.status));
-    else if (this.#showsLegacyDot()) nodes.push(h('span', { class: 'fdot', part: 'dot' }));
+    nodes.push(this.#beaconEl(this.status));
 
     const [runtime, ...detail] = this.label.split(' · ');
     const fallback = [h('span', { class: 'runtime' }, runtime)];
