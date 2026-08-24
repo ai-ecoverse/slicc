@@ -45,11 +45,40 @@ export interface HostMountMapping {
 export const DEFAULT_CLI_CDP_PORT = 9222;
 export const DEFAULT_ELECTRON_ATTACH_CDP_PORT = 9223;
 
+/** `.`/`..` segments or empty (`//`) segments make raw != canonical. */
+function hasDotOrEmptySegments(path: string): boolean {
+  return path
+    .split(/[/\\]/)
+    .slice(1)
+    .some((segment) => segment === '' || segment === '.' || segment === '..');
+}
+
+/**
+ * Normalize an absolute POSIX path. Dot/empty segments are rejected rather
+ * than resolved so the accepted value IS its canonical form — the webapp,
+ * the /api/hostfs mount key, and VirtualFS.normalizePath all agree on it.
+ */
 function normalizeAbsolutePath(value: string): string | null {
   const trimmed = value.trim();
   if (!trimmed.startsWith('/')) return null;
   const stripped = trimmed.length > 1 ? trimmed.replace(/\/+$/, '') : trimmed;
-  return stripped || null;
+  if (!stripped || (stripped.length > 1 && hasDotOrEmptySegments(stripped))) return null;
+  return stripped;
+}
+
+/**
+ * Normalize the OS side of a mapping: POSIX absolute, or a Windows drive
+ * path (`C:\…` / `C:/…`) — node-server ships on Windows too.
+ */
+function normalizeHostPath(value: string): string | null {
+  const trimmed = value.trim();
+  if (/^[A-Za-z]:[/\\]/.test(trimmed)) {
+    const stripped = trimmed.replace(/[/\\]+$/, '');
+    // Keep the root slash on a bare drive (`C:\`).
+    if (/^[A-Za-z]:$/.test(stripped)) return trimmed.slice(0, 3);
+    return hasDotOrEmptySegments(stripped.slice(2)) ? null : stripped;
+  }
+  return normalizeAbsolutePath(trimmed);
 }
 
 /**
@@ -72,7 +101,7 @@ export function parseMountTableMapping(
     if (!homeDir) return null;
     hostRaw = homeDir + hostRaw.slice(1);
   }
-  const hostPath = normalizeAbsolutePath(hostRaw);
+  const hostPath = normalizeHostPath(hostRaw);
   const path = normalizeAbsolutePath(targetRaw);
   if (!hostPath || !path || path === '/') return null;
   return { hostPath, path };

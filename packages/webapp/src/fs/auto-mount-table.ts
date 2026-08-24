@@ -24,6 +24,20 @@ interface RuntimeConfigAutoMounts {
   autoMounts?: unknown;
 }
 
+/**
+ * Accept only targets that are already canonical (`/mnt/foo` — absolute,
+ * not `/`, no `.`/`..`/empty segments, no trailing slash). The backend keys
+ * its /api/hostfs requests and the VFS mount point on the SAME string, and
+ * `VirtualFS.mount()` normalizes its argument — a non-canonical target would
+ * make those three disagree. The servers reject such mappings at parse time
+ * too; this guards a hand-crafted runtime-config.
+ */
+export function isCanonicalAbsoluteTarget(path: string): boolean {
+  if (!path.startsWith('/') || path === '/') return false;
+  const segments = path.split('/').slice(1);
+  return segments.every((s) => s !== '' && s !== '.' && s !== '..');
+}
+
 /** Minimal FS surface needed to mount — lets tests stub VirtualFS. */
 export interface AutoMountFS {
   listMounts(): string[];
@@ -54,7 +68,7 @@ export async function fetchAutoMounts(
     const mappings: AutoMountMapping[] = [];
     for (const raw of body.autoMounts) {
       const m = raw as { path?: unknown; hostPath?: unknown };
-      if (typeof m.path !== 'string' || !m.path.startsWith('/') || m.path === '/') continue;
+      if (typeof m.path !== 'string' || !isCanonicalAbsoluteTarget(m.path)) continue;
       if (typeof m.hostPath !== 'string' || m.hostPath.length === 0) continue;
       mappings.push({ path: m.path, hostPath: m.hostPath });
     }
@@ -62,6 +76,22 @@ export async function fetchAutoMounts(
   } catch {
     return [];
   }
+}
+
+/**
+ * Drop persisted mount-table-store entries whose target is now owned by a
+ * configured host mount. When a user converts a picker/S3 mount into a
+ * mount-table entry at the same target, the stale IDB row would otherwise be
+ * recovered into the already-mounted path and fail with EEXIST (or surface a
+ * bogus "please re-mount" prompt).
+ */
+export function withoutHostMountedTargets<T extends { targetPath: string }>(
+  entries: T[],
+  mounted: readonly AutoMountMapping[]
+): T[] {
+  if (mounted.length === 0) return entries;
+  const owned = new Set(mounted.map((m) => m.path));
+  return entries.filter((entry) => !owned.has(entry.targetPath.replace(/\/+$/, '') || '/'));
 }
 
 /**

@@ -2176,6 +2176,27 @@ export class VirtualFS {
     } catch {
       /* best effort */
     }
+    // Same-mount rename on a backend that supports it natively (hostfs).
+    // Mount subtrees live in the backend, not LightningFS, so the generic
+    // lfs.rename below cannot see them; backends without a native rename
+    // keep the historical behavior.
+    const oldMount = this.findMount(normalizedOld);
+    if (oldMount?.backend.rename) {
+      const newMount = this.findMount(normalizedNew);
+      if (newMount && newMount.backend === oldMount.backend) {
+        try {
+          await oldMount.backend.rename(oldMount.relParts.join('/'), newMount.relParts.join('/'));
+        } catch (err) {
+          rebrandFsError(err, normalizedOld);
+        }
+        this.watcher?.notify([
+          { type: 'delete', path: normalizedOld, entryType },
+          { type: 'create', path: normalizedNew, entryType },
+        ]);
+        this.mountIndex.notifyRename(normalizedOld, normalizedNew);
+        return;
+      }
+    }
     try {
       // Mutation, prefix marks, and eager persist share ONE critical
       // section, matching rm/symlink: marking after an unlocked rename

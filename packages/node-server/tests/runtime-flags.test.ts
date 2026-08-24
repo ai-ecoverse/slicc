@@ -424,6 +424,25 @@ describe('parseMountTableMapping', () => {
     expect(parseMountTableMapping('~/proj:/mnt/p', '')).toBeNull();
   });
 
+  it('accepts Windows drive-letter host paths', () => {
+    expect(parseMountTableMapping('C:\\Users\\me\\proj:/mnt/proj')).toEqual({
+      hostPath: 'C:\\Users\\me\\proj',
+      path: '/mnt/proj',
+    });
+    expect(parseMountTableMapping('D:/data/:/mnt/data')).toEqual({
+      hostPath: 'D:/data',
+      path: '/mnt/data',
+    });
+    expect(parseMountTableMapping('C:\\:/mnt/c')).toEqual({ hostPath: 'C:\\', path: '/mnt/c' });
+  });
+
+  it('rejects non-canonical targets instead of resolving them', () => {
+    expect(parseMountTableMapping('/a:/mnt/a/../b')).toBeNull();
+    expect(parseMountTableMapping('/a:/mnt//b')).toBeNull();
+    expect(parseMountTableMapping('/a:/mnt/./b')).toBeNull();
+    expect(parseMountTableMapping('/a/../x:/mnt/b')).toBeNull();
+  });
+
   it('rejects one-sided, relative, and root-target mappings', () => {
     expect(parseMountTableMapping('/mnt/only-target')).toBeNull();
     expect(parseMountTableMapping('rel:/mnt/x')).toBeNull();

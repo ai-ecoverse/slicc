@@ -535,7 +535,10 @@ struct ServerConfig: Sendable, Equatable {
     }
 
     /// Normalize one absolute path: trim, require a leading `/`, strip
-    /// trailing slashes (keeping `/`). Returns nil otherwise.
+    /// trailing slashes (keeping `/`). `.`/`..`/empty segments are rejected
+    /// rather than resolved so the accepted value IS its canonical form —
+    /// the webapp keys /api/hostfs requests and the VFS mount point on the
+    /// same string. Returns nil otherwise.
     private static func normalizedAbsolutePath(_ value: String) -> String? {
         let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
         guard trimmed.hasPrefix("/") else { return nil }
@@ -543,7 +546,14 @@ struct ServerConfig: Sendable, Equatable {
         while path.count > 1, path.hasSuffix("/") {
             path.removeLast()
         }
-        return path.isEmpty ? nil : path
+        guard !path.isEmpty else { return nil }
+        if path != "/" {
+            let segments = path.dropFirst().split(separator: "/", omittingEmptySubsequences: false)
+            guard segments.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+                return nil
+            }
+        }
+        return path
     }
 
     /// Parse one `--mount` value of the form `<os-path>:<slicc-path>`,

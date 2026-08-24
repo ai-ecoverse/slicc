@@ -27,7 +27,16 @@ enum MountTablePreference {
         while path.count > 1, path.hasSuffix("/") {
             path.removeLast()
         }
-        return path.isEmpty ? nil : path
+        guard !path.isEmpty else { return nil }
+        // Reject `.`/`..`/empty segments — mirrors ServerConfig, so the UI
+        // never accepts a line the server drops.
+        if path != "/" {
+            let segments = path.dropFirst().split(separator: "/", omittingEmptySubsequences: false)
+            guard segments.allSatisfy({ !$0.isEmpty && $0 != "." && $0 != ".." }) else {
+                return nil
+            }
+        }
+        return path
     }
 
     /// Parse one `<os-path>:<slicc-path>` line. Splits on the LAST `:` so OS
@@ -86,5 +95,63 @@ enum MountTablePreference {
 
     static func serverArgs(defaults: UserDefaults) -> [String] {
         serverArgs(mappings: mappings(defaults: defaults))
+    }
+
+    // MARK: - Editor-table helpers (Settings → Mounts)
+
+    static let mountRoot = "/mnt/"
+    private static let generatedBase = mountRoot + "folder"
+
+    /// Folder name → SLICC path segment: lowercased, spaces/colons dashed.
+    static func sanitizedFolderName(_ name: String) -> String {
+        let cleaned = name.lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        return cleaned.isEmpty ? "folder" : cleaned
+    }
+
+    /// `/mnt/<folder-name>` (or `…-2`, `…-3`) unique among `existing` targets.
+    static func defaultTarget(forFolderNamed name: String?, existing: [String]) -> String {
+        let base = mountRoot + (name.map(sanitizedFolderName) ?? "folder")
+        var candidate = base
+        var counter = 2
+        while existing.contains(candidate) {
+            candidate = "\(base)-\(counter)"
+            counter += 1
+        }
+        return candidate
+    }
+
+    /// True for placeholder targets we minted ourselves (`/mnt/folder`,
+    /// `/mnt/folder-2`, …) — safe to replace once a real folder is chosen.
+    static func isGeneratedDefault(_ path: String) -> Bool {
+        guard path.hasPrefix(generatedBase) else { return false }
+        let suffix = path.dropFirst(generatedBase.count)
+        return suffix.isEmpty || suffix.hasPrefix("-")
+    }
+
+    /// A row's SLICC path is valid when the parser accepts it and no other
+    /// row claims the same target.
+    static func isValidTarget(_ path: String, among targets: [String]) -> Bool {
+        guard mapping(fromLine: "/x:\(path)") != nil else { return false }
+        return targets.filter { $0 == path }.count == 1
+    }
+
+    /// `~`-abbreviate a host path for display.
+    static func displayPath(_ path: String, homeDirectory: String = NSHomeDirectory()) -> String {
+        guard !homeDirectory.isEmpty else { return path }
+        if path == homeDirectory { return "~" }
+        if path.hasPrefix(homeDirectory + "/") {
+            return "~" + path.dropFirst(homeDirectory.count)
+        }
+        return path
+    }
+
+    /// Serialize editor rows back to the persisted newline format. Rows
+    /// without a folder are UI-only drafts and are skipped.
+    static func serialized(rows: [(hostPath: String, path: String)]) -> String {
+        rows.compactMap { row in
+            row.hostPath.isEmpty ? nil : "\(row.hostPath):\(row.path)"
+        }.joined(separator: "\n")
     }
 }

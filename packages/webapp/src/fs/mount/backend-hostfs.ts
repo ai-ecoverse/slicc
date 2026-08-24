@@ -180,6 +180,13 @@ export class HostFsMountBackend implements MountBackend {
     await this.request('mkdir', path, { method: 'POST' });
   }
 
+  async rename(fromPath: string, toPath: string): Promise<void> {
+    await this.request('rename', fromPath, {
+      method: 'POST',
+      extra: { to: toPath.replace(/^\/+/, '') },
+    });
+  }
+
   async remove(path: string, opts?: { recursive?: boolean }): Promise<void> {
     await this.request('remove', path, {
       method: 'DELETE',

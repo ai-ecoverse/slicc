@@ -623,5 +623,9 @@ final class ServerCommandTests: XCTestCase {
         XCTAssertNil(ServerConfig.parseMountMapping("rel:/mnt/x"))
         XCTAssertNil(ServerConfig.parseMountMapping("/a:rel"))
         XCTAssertNil(ServerConfig.parseMountMapping("/mnt/only-target"))
+        // Non-canonical targets (dot/empty segments) are rejected, not resolved.
+        XCTAssertNil(ServerConfig.parseMountMapping("/a:/mnt/a/../b"))
+        XCTAssertNil(ServerConfig.parseMountMapping("/a:/mnt//b"))
+        XCTAssertNil(ServerConfig.parseMountMapping("/a:/mnt/./b"))
     }
 }

@@ -76,6 +76,14 @@ export interface MountBackend {
   remove(path: string, opts?: { recursive?: boolean }): Promise<void>;
 
   /**
+   * Optional native rename within this mount. VirtualFS.rename() routes a
+   * same-mount rename here when present (currently hostfs only); backends
+   * without it keep the historical behavior (rename inside a mount fails —
+   * callers fall back to copy+delete).
+   */
+  rename?(fromPath: string, toPath: string): Promise<void>;
+
+  /**
    * Re-walk the source and reconcile cache. With opts.bodies, also
    * conditional-GET each changed file's body to refresh the body cache.
    */

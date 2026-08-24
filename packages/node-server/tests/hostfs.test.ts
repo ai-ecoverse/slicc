@@ -53,6 +53,9 @@ describe('hostfs routes', () => {
     expect(names).toEqual(['escape-link', 'hello.txt', 'inside-link', 'sub']);
     const hello = entries.find((e) => e.name === 'hello.txt') as { size?: number };
     expect(hello.size).toBe(10);
+    // A symlink to a directory classifies as a directory (stat-following),
+    // matching what any subsequent access sees.
+    expect(entries.find((e) => e.name === 'inside-link')?.kind).toBe('directory');
   });
 
   it('stats and reads a file', async () => {

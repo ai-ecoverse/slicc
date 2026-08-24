@@ -1,7 +1,12 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AutoMountFS } from '../../src/fs/auto-mount-table.js';
-import { fetchAutoMounts, mountConfiguredHostMounts } from '../../src/fs/auto-mount-table.js';
+import {
+  fetchAutoMounts,
+  isCanonicalAbsoluteTarget,
+  mountConfiguredHostMounts,
+  withoutHostMountedTargets,
+} from '../../src/fs/auto-mount-table.js';
 import { HostFsMountBackend } from '../../src/fs/mount/backend-hostfs.js';
 
 function fakeFetch(body: unknown, ok = true): typeof fetch {
@@ -27,11 +32,13 @@ describe('fetchAutoMounts', () => {
     await expect(fetchAutoMounts(fakeFetch({ autoMounts: table }))).resolves.toEqual(table);
   });
 
-  it('drops malformed, relative, and root-target entries', async () => {
+  it('drops malformed, relative, root, and non-canonical entries', async () => {
     const table = [
       { path: '/mnt/a', hostPath: '/h/a' },
       { path: 'rel', hostPath: '/h/b' },
       { path: '/', hostPath: '/h/c' },
+      { path: '/mnt/x/../y', hostPath: '/h/e' },
+      { path: '/mnt//y', hostPath: '/h/f' },
       { path: '/mnt/d' },
       'nope',
     ];
@@ -101,5 +108,31 @@ describe('mountConfiguredHostMounts', () => {
     );
     expect(mounted.map((m) => m.path)).toEqual(['/mnt/ok']);
     expect(warn).toHaveBeenCalledOnce();
+  });
+});
+
+describe('isCanonicalAbsoluteTarget', () => {
+  it('accepts only canonical absolute non-root paths', () => {
+    expect(isCanonicalAbsoluteTarget('/mnt/a')).toBe(true);
+    expect(isCanonicalAbsoluteTarget('/')).toBe(false);
+    expect(isCanonicalAbsoluteTarget('rel')).toBe(false);
+    expect(isCanonicalAbsoluteTarget('/mnt/a/../b')).toBe(false);
+    expect(isCanonicalAbsoluteTarget('/mnt/./b')).toBe(false);
+    expect(isCanonicalAbsoluteTarget('/mnt//b')).toBe(false);
+    expect(isCanonicalAbsoluteTarget('/mnt/a/')).toBe(false);
+  });
+});
+
+describe('withoutHostMountedTargets', () => {
+  it('drops persisted entries whose target is config-owned, keeping the rest', () => {
+    const entries = [
+      { targetPath: '/mnt/kb' },
+      { targetPath: '/mnt/kb/' },
+      { targetPath: '/mnt/other' },
+    ];
+    expect(withoutHostMountedTargets(entries, [{ path: '/mnt/kb', hostPath: '/h/kb' }])).toEqual([
+      { targetPath: '/mnt/other' },
+    ]);
+    expect(withoutHostMountedTargets(entries, [])).toEqual(entries);
   });
 });

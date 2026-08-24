@@ -205,14 +205,23 @@ export function registerHostFsRoutes(app: Express, roots: readonly HostMountRoot
       const dirents = await readdir(target, { withFileTypes: true });
       const entries = await Promise.all(
         dirents.map(async (d) => {
-          const kind = d.isDirectory() ? 'directory' : 'file';
-          if (kind === 'directory') return { name: d.name, kind };
+          if (d.isDirectory()) return { name: d.name, kind: 'directory' };
           try {
+            // stat() follows symlinks, so a link to a directory classifies as
+            // a directory — matching what every subsequent access sees (and
+            // the swift server, whose fileExists follows links). Escaping
+            // links are still refused at access time by resolveWithinRoot.
             const s = await stat(resolve(target, d.name));
-            return { name: d.name, kind, size: s.size, lastModified: Math.round(s.mtimeMs) };
+            if (s.isDirectory()) return { name: d.name, kind: 'directory' };
+            return {
+              name: d.name,
+              kind: 'file',
+              size: s.size,
+              lastModified: Math.round(s.mtimeMs),
+            };
           } catch {
-            // Raced deletion / unreadable entry: report the name only.
-            return { name: d.name, kind };
+            // Raced deletion / dangling link / unreadable: name only.
+            return { name: d.name, kind: 'file' };
           }
         })
       );

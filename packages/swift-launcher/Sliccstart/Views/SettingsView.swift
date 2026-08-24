@@ -234,43 +234,21 @@ struct MountsSettingsView: View {
 
     // MARK: - Targets
 
-    private static let mountRoot = "/mnt/"
-
-    private func sanitizedFolderName(_ url: URL) -> String {
-        let name = url.lastPathComponent.lowercased()
-            .replacingOccurrences(of: " ", with: "-")
-            .replacingOccurrences(of: ":", with: "-")
-        return name.isEmpty ? "folder" : name
-    }
-
-    /// `/mnt/<folder-name>` (or `/mnt/folder-2`…), unique among current rows.
     private func defaultTarget(for folder: URL? = nil) -> String {
-        let base = Self.mountRoot + (folder.map(sanitizedFolderName) ?? "folder")
-        var candidate = base
-        var counter = 2
-        while rows.contains(where: { $0.path == candidate }) {
-            candidate = "\(base)-\(counter)"
-            counter += 1
-        }
-        return candidate
+        MountTablePreference.defaultTarget(
+            forFolderNamed: folder?.lastPathComponent, existing: rows.map(\.path))
     }
 
     private func isGeneratedDefault(_ path: String) -> Bool {
-        guard path.hasPrefix(Self.mountRoot + "folder") else { return false }
-        let suffix = path.dropFirst((Self.mountRoot + "folder").count)
-        return suffix.isEmpty || suffix.hasPrefix("-")
+        MountTablePreference.isGeneratedDefault(path)
     }
 
     private func isValidTarget(_ row: Row) -> Bool {
-        guard MountTablePreference.mapping(fromLine: "/x:\(row.path)") != nil else { return false }
-        return rows.filter { $0.path == row.path }.count == 1
+        MountTablePreference.isValidTarget(row.path, among: rows.map(\.path))
     }
 
     private func displayHostPath(_ path: String) -> String {
-        let home = NSHomeDirectory()
-        if path == home { return "~" }
-        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
-        return path
+        MountTablePreference.displayPath(path)
     }
 
     // MARK: - Persistence
@@ -282,11 +260,9 @@ struct MountsSettingsView: View {
     }
 
     private func persist() {
-        let lines = rows.compactMap { row -> String? in
-            guard !row.hostPath.isEmpty else { return nil }
-            return "\(row.hostPath):\(row.path)"
-        }
-        UserDefaults.standard.set(lines.joined(separator: "\n"), forKey: MountTablePreference.key)
+        UserDefaults.standard.set(
+            MountTablePreference.serialized(rows: rows.map { ($0.hostPath, $0.path) }),
+            forKey: MountTablePreference.key)
     }
 }
 
