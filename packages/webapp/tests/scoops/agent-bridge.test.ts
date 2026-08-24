@@ -2175,7 +2175,7 @@ describe('createAgentBridge — mergeOnSuccess + outcome receipts', () => {
     expect(status.merge).toBeUndefined();
   });
 
-  it('a merge failure is recorded but never fails the successful spawn', async () => {
+  it('a merge failure downgrades the spawn to failure and skips the success receipt', async () => {
     const { orchestrator, scripts } = makeMockOrchestrator();
     const shared = makeMockSharedFs({
       files: {
@@ -2196,15 +2196,47 @@ describe('createAgentBridge — mergeOnSuccess + outcome receipts', () => {
       ...BASE_OPTS,
       persistSession: false,
       mergeOnSuccess: MERGE,
+      successReceiptPath: '/sessions/.curated/a.md',
       outcomeReceiptPath: STATUS,
     });
 
-    expect(result.exitCode).toBe(0);
+    // The run itself succeeded, but its rewrite never landed — a success
+    // signal here would clear the caller's pending marker (and satisfy the
+    // #1989 receipt recovery) with the work undone.
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('mergeOnSuccess failed');
+    expect(result.finalText).toContain('quota exceeded');
+    expect(shared.files.has('/sessions/.curated/a.md')).toBe(false);
     const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
-    expect(status.status).toBe('ok');
+    expect(status.status).toBe('failed');
     expect(status.merge.error).toContain('quota exceeded');
     // Staging survives a failed merge for the post-mortem.
     expect(shared.files.has(MERGE.draftPath)).toBe(true);
+  });
+
+  it('a missing base snapshot aborts the merge (never treated as an empty original)', async () => {
+    // No base.md: staging was lost. Merging against '' would turn the whole
+    // live file into a conflict the draft wins, silently discarding the
+    // concurrent memories the merge exists to protect.
+    const { bridge, shared } = mergeBridge({
+      [MERGE.draftPath]: 'curated rewrite\n',
+      [MERGE.targetPath]: 'live memory with concurrent edits\n',
+    });
+
+    const result = await bridge.spawn({
+      ...BASE_OPTS,
+      persistSession: false,
+      mergeOnSuccess: MERGE,
+      outcomeReceiptPath: STATUS,
+    });
+
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('base snapshot missing');
+    expect(shared.files.get(MERGE.targetPath)).toBe('live memory with concurrent edits\n');
+    // The draft is kept for the post-mortem.
+    expect(shared.files.has(MERGE.draftPath)).toBe(true);
+    const status = JSON.parse(shared.files.get(STATUS) ?? '{}');
+    expect(status).toMatchObject({ status: 'failed', exitCode: 1 });
   });
 
   it('rejects a relative mergeOnSuccess path without spawning', async () => {

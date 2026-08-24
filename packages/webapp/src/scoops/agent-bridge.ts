@@ -182,9 +182,12 @@ export interface AgentSpawnOptions {
    * the bridge removes `basePath` + `draftPath`; a failed run keeps them
    * for a retry or a human post-mortem. Runs in the worker realm with the
    * bridge's full shared-VFS handle, so a page death after spawn cannot
-   * lose the completed rewrite (#1989 companion). Best-effort: a merge
-   * failure is logged and recorded in the outcome receipt, never fails
-   * the spawn.
+   * lose the completed rewrite (#1989 companion). A merge failure (I/O
+   * error, missing base snapshot) DOWNGRADES the spawn to a non-zero
+   * exit: the run succeeded but its rewrite never landed, and a success
+   * signal would let callers clear their pending bookkeeping with the
+   * work undone. The error is logged and recorded in the outcome
+   * receipt; the success receipt is not written.
    */
   mergeOnSuccess?: AgentMergeOnSuccess;
   /**
@@ -580,10 +583,25 @@ async function applyMergeOnSuccess(
       await cleanup();
       return { applied: false, conflicts: 0 };
     }
-    const [base, current] = await Promise.all([read(spec.basePath), read(spec.targetPath)]);
-    if (draft === base || draft === current) {
-      // The scoop left the draft untouched (or wrote directly to the
-      // target under a custom grant) — nothing to fold in.
+    // A missing target is a legitimately empty original (first-ever pass);
+    // read() maps its ENOENT to ''.
+    const current = await read(spec.targetPath);
+    if (draft === current) {
+      // The scoop wrote directly to the target under a custom grant —
+      // nothing left to fold in, and no base needed to know that.
+      await cleanup();
+      return { applied: false, conflicts: 0 };
+    }
+    // The caller always seeds the base, so its absence is lost staging
+    // too — treating it as an empty original would turn the whole live
+    // file into a conflict the draft wins, silently discarding concurrent
+    // memories. Surface an error (which fails the run) instead.
+    const base = await readOrNull(spec.basePath);
+    if (base === null) {
+      return { applied: false, conflicts: 0, error: 'base snapshot missing; target left as-is' };
+    }
+    if (draft === base) {
+      // The scoop left the draft untouched — nothing to fold in.
       await cleanup();
       return { applied: false, conflicts: 0 };
     }
@@ -883,7 +901,7 @@ async function runScoopToOutcome(
   jid: string,
   observerHandle: ReturnType<typeof registerScoopObserver>
 ): Promise<AgentSpawnResult> {
-  const outcome = await runScoopToOutcomeInner(ctx, options, scoop, jid, observerHandle);
+  let outcome = await runScoopToOutcomeInner(ctx, options, scoop, jid, observerHandle);
   // Durable bookkeeping in run order, all written BEFORE the spawn resolves
   // so they land strictly earlier than any caller-side bookkeeping: fold a
   // staged rewrite onto its live target (success only), then the
@@ -892,6 +910,17 @@ async function runScoopToOutcome(
   let merge: MergeOutcome | undefined;
   if (outcome.exitCode === 0 && options.mergeOnSuccess) {
     merge = await applyMergeOnSuccess(ctx.sharedFs, options.mergeOnSuccess);
+    if (merge.error !== undefined) {
+      // The scoop ran fine but its rewrite never reached the target — a
+      // success signal here would clear the caller's pending marker (and
+      // the receipt would satisfy crash recovery) with the work undone.
+      // Fail the spawn instead; the staging survives for a post-mortem
+      // and the caller's failure path recovers the memory another way.
+      outcome = {
+        finalText: `agent: mergeOnSuccess failed: ${merge.error}`,
+        exitCode: 1,
+      };
+    }
   }
   if (outcome.exitCode === 0 && options.successReceiptPath) {
     await writeSuccessReceipt(ctx.sharedFs, options.successReceiptPath);
