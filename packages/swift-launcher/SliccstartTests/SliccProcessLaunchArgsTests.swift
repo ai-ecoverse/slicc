@@ -15,6 +15,27 @@ final class SliccProcessLaunchArgsTests: XCTestCase {
         XCTAssertEqual(args, ["--cdp-port=9222", "--lead"])
     }
 
+    func testStandaloneBrowserArgsAppendOneMountFlagPerTableEntry() {
+        let args = SliccProcess.standaloneBrowserArgs(
+            cdpPort: 9222,
+            mounts: [
+                .init(hostPath: "/h/a", path: "/mnt/a"), .init(hostPath: "/h/b", path: "/mnt/b"),
+            ])
+        XCTAssertEqual(
+            args, ["--cdp-port=9222", "--lead", "--mount=/h/a:/mnt/a", "--mount=/h/b:/mnt/b"])
+    }
+
+    func testReattachArgsCarryTheMountTableForBrowsersOnly() {
+        let browser = SliccProcess.reattachArgs(
+            targetType: .chromiumBrowser, electronAppPath: nil, cdpPort: 9222, joinUrl: nil,
+            mounts: [.init(hostPath: "/h/a", path: "/mnt/a")])
+        XCTAssertEqual(browser, ["--serve-only", "--cdp-port=9222", "--mount=/h/a:/mnt/a"])
+        let electron = SliccProcess.reattachArgs(
+            targetType: .electronApp, electronAppPath: "/Apps/X.app", cdpPort: 9223, joinUrl: nil,
+            mounts: [.init(hostPath: "/h/a", path: "/mnt/a")])
+        XCTAssertFalse(electron.contains("--mount=/h/a:/mnt/a"))
+    }
+
     func testBrowserFollowerArgsJoinInsteadOfLead() {
         let args = SliccProcess.browserFollowerArgs(
             cdpPort: 9222,

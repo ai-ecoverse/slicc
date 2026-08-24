@@ -148,6 +148,24 @@ Flags:
 - `--clear-cache` (on `unmount`) — drop the `RemoteMountCache` listings + bodies for that mount.
 - `--bodies` (on `refresh`) — also conditionally re-fetch bodies whose ETag changed; without it, only listings are diffed.
 
+## Auto-mounted host folders: the mount table
+
+A picker (`mount /mnt/foo`) mount dies on every full reload: Chrome drops the File System Access permission and the cone has to ask you to pick the folder again. For folders you _always_ want available, skip the picker entirely with the **mount table** — OS-folder → SLICC-path mappings owned by the launcher:
+
+- **node-server**: repeatable `--mount=<os-path>:<slicc-path>` (e.g. `npx slicc --mount=~/Projects/foo:/mnt/foo --mount /data/docs:/mnt/docs`).
+- **Sliccstart.app**: Settings → Mounts, one `os-path:slicc-path` mapping per line. Applies on the next browser launch.
+
+The server serves each mapped folder over its local `/api/hostfs` bridge (loopback / bridge-token gated like every other `/api` route), and the webapp mounts them automatically at every kernel boot — no picker, no Chrome permission prompt, no user gesture. Properties:
+
+- **Live view**: reads/writes go straight to the host filesystem, so external edits are visible immediately — no `mount refresh` needed (it's a no-op on these mounts).
+- **Containment**: only paths under a mapped folder are reachable; `..` traversal and symlinks pointing outside the folder are refused, and the mount root itself cannot be removed.
+- **Config-owned**: the table is the single source of truth. Entries are not persisted in the browser; edit the table and relaunch to change them. `mount unmount` removes one for the session only.
+- **Missing folders are skipped** at server start (with a warning) rather than failing the launch.
+- **Webapp-initiated mounts are untouched**: `mount <path>` still opens the picker and still asks for permission on each reload — the table never widens what a picker grant allowed.
+- Not available in the extension float or hosted/cloud mode: there is no local launcher to serve the folders.
+
+`mount list` shows them with a `hostfs://<os-path>` source. The `:` split is on the last colon, so OS paths containing `:` work; `~` expands on the OS side.
+
 ## Common error patterns
 
 | Error                                                                                    | What it means                                                                                 | Fix                                                                                              |

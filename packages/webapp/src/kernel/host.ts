@@ -812,7 +812,14 @@ function scheduleMountRecovery(
     try {
       const { getAllMountEntries } = await import('../fs/mount-table-store.js');
       const { recoverMounts } = await import('../fs/mount-recovery.js');
-      const entries = await getAllMountEntries();
+      // Config-owned host mounts first (mount table via /api/hostfs): fully
+      // automatic, no picker, no permission prompt, never persisted to IDB.
+      const { mountConfiguredHostMounts, withoutHostMountedTargets } = await import(
+        '../fs/auto-mount-table.js'
+      );
+      const hostMounted = await mountConfiguredHostMounts(sharedFs, log);
+      // Stale persisted rows at a now-config-owned target would only EEXIST.
+      const entries = withoutHostMountedTargets(await getAllMountEntries(), hostMounted);
       if (entries.length === 0) return;
       const { needsRecovery } = await recoverMounts(entries, sharedFs, log);
       if (needsRecovery.length === 0) return;

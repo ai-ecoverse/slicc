@@ -125,7 +125,8 @@ export interface RealmInitMsg {
  */
 export interface RealmMountPoint {
   path: string;
-  kind: 'local' | 's3' | 'da' | 'aem';
+  /** 'hostfs' (launcher bridge) syncs like 'local': loopback-fast, no size cap. */
+  kind: 'local' | 'hostfs' | 's3' | 'da' | 'aem';
 }
 
 /** Posted by the realm after a clean exit (incl. user-code throw → exit 1). */

@@ -102,7 +102,11 @@ final class APIRoutesTests: XCTestCase {
                 lickSystem: LickSystem(),
                 config: self.makeConfig(
                     leadWorkerBaseUrl: "https://worker.example",
-                    joinUrl: "https://join.example/session"
+                    joinUrl: "https://join.example/session",
+                    mounts: [
+                        ServerConfig.MountMapping(
+                            hostPath: NSTemporaryDirectory(), path: "/mnt/project")
+                    ]
                 ),
                 httpClient: httpClient
             )
@@ -116,6 +120,14 @@ final class APIRoutesTests: XCTestCase {
                         [
                             "trayWorkerBaseUrl": .string("https://worker.example"),
                             "trayJoinUrl": .string("https://join.example/session"),
+                            "autoMounts": .array([
+                                .object([
+                                    "path": .string("/mnt/project"),
+                                    "hostPath": .string(
+                                        URL(fileURLWithPath: NSTemporaryDirectory())
+                                            .resolvingSymlinksInPath().path),
+                                ])
+                            ]),
                         ]
                     )
                 }
@@ -150,6 +162,7 @@ final class APIRoutesTests: XCTestCase {
                     let body = try self.decodeJSONObject(from: response.body)
                     XCTAssertEqual(body["trayWorkerBaseUrl"], .string("https://www.sliccy.ai"))
                     XCTAssertEqual(body["trayJoinUrl"], .null)
+                    XCTAssertEqual(body["autoMounts"], .array([]))
                 }
             }
         }
@@ -783,7 +796,8 @@ final class APIRoutesTests: XCTestCase {
 
     private func makeConfig(
         leadWorkerBaseUrl: String? = nil,
-        joinUrl: String? = nil
+        joinUrl: String? = nil,
+        mounts: [ServerConfig.MountMapping] = []
     ) -> ServerConfig {
         .init(
             serveOnly: false,
@@ -805,7 +819,8 @@ final class APIRoutesTests: XCTestCase {
             logDirectoryURL: nil,
             prompt: nil,
             envFile: nil,
-            envFileURL: nil
+            envFileURL: nil,
+            mounts: mounts
         )
     }
 

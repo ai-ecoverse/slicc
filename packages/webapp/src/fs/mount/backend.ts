@@ -11,7 +11,7 @@
  * design rationale; this file only declares the shapes.
  */
 
-export type MountKind = 'local' | 's3' | 'da' | 'aem' | 'proc';
+export type MountKind = 'local' | 'hostfs' | 's3' | 'da' | 'aem' | 'proc';
 
 /** A single entry returned by readDir() — file or synthesized directory. */
 export interface MountDirEntry {
@@ -74,6 +74,14 @@ export interface MountBackend {
   /** Always a no-op on S3 / DA / AEM — all three materialize paths on first write. */
   mkdir(path: string): Promise<void>;
   remove(path: string, opts?: { recursive?: boolean }): Promise<void>;
+
+  /**
+   * Optional native rename within this mount. VirtualFS.rename() routes a
+   * same-mount rename here when present (currently hostfs only); backends
+   * without it keep the historical behavior (rename inside a mount fails —
+   * callers fall back to copy+delete).
+   */
+  rename?(fromPath: string, toPath: string): Promise<void>;
 
   /**
    * Re-walk the source and reconcile cache. With opts.bodies, also

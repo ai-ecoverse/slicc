@@ -60,6 +60,7 @@ import { getElectronAppPorts } from './electron-runtime.js';
 import { ElectronTrayFollower } from './electron-tray-follower.js';
 import { FileLogger } from './file-logger.js';
 import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
+import { registerHostFsRoutes, resolveHostMountRoots } from './hostfs.js';
 import { runInstallCli } from './install-cli.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
@@ -249,6 +250,8 @@ interface ServerState {
   electronFollower: ElectronTrayFollower | null;
   shuttingDown: boolean;
   discoveredTrayJoinUrl: string | null;
+  /** Mount-table roots that existed at startup (served via /api/hostfs). */
+  hostMountRoots: { path: string; root: string }[];
   /**
    * Per-process subprotocol token for the thin /cdp bridge. Always
    * minted (node-server is a thin /cdp bridge in every mode); inherited
@@ -277,6 +280,7 @@ function createServerState(): ServerState {
     electronFollower: null,
     shuttingDown: false,
     discoveredTrayJoinUrl: RUNTIME_FLAGS.joinUrl ?? null,
+    hostMountRoots: [],
     bridgeToken: resolveServerBridgeToken(process.env, { thinBridgeMode: THIN_BRIDGE_MODE }),
     cdpUrl: null,
     chromeWs: null,
@@ -1320,6 +1324,10 @@ async function main() {
       // after `server.listen()`, so this endpoint must NOT close over a
       // pre-launch snapshot or it would always return null.
       trayJoinUrl: state.discoveredTrayJoinUrl ?? null,
+      // Mount table (--mount=<os-path>:<slicc-path>): served over
+      // /api/hostfs and auto-mounted by the webapp at boot. Only mappings
+      // whose OS folder existed at startup are advertised.
+      autoMounts: state.hostMountRoots.map(({ path, root }) => ({ path, hostPath: root })),
     });
   });
 
@@ -1364,6 +1372,11 @@ async function main() {
     registerHostedBootstrapEndpoint(app, { secretStore });
     registerSecretsReloadEndpoint(app, { secretProxy, secretStore, oauthStore });
   }
+
+  // Host-FS bridge for the mount table (--mount=<os>:<vfs>), every mode.
+  // Roots are resolved once at startup; a folder created later needs a restart.
+  state.hostMountRoots = await resolveHostMountRoots(RUNTIME_FLAGS.mounts);
+  registerHostFsRoutes(app, state.hostMountRoots);
 
   // Sudo approval endpoint — raises a native OS dialog / TTY prompt from this
   // trusted process so the in-browser agent can request, but never fabricate,

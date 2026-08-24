@@ -22,6 +22,10 @@
  *   surface the list to the cone and ask it to walk the user through
  *   re-mounting.
  *
+ * Mount-table (`hostfs`) mounts never appear here: they are config-owned
+ * and re-mounted from `/api/runtime-config` on every boot
+ * (`mountConfiguredHostMounts` in kernel/host.ts), not persisted to IDB.
+ *
  * For REMOTE backends (S3, DA):
  * The browser-side backend is signing-naive — it never holds creds. Recovery
  * just rebuilds the backend with a fresh `signedFetch` factory; profile
@@ -183,6 +187,12 @@ export async function recoverMounts(
   const needsRecovery: MountRecoveryEntry[] = [];
 
   for (const { targetPath, descriptor } of entries) {
+    if (descriptor.kind === 'hostfs') {
+      // Config-owned mounts are re-mounted from the launcher's mount table
+      // at boot (mountConfiguredHostMounts), never from IDB. A row can only
+      // exist here as legacy debris; skip it silently.
+      continue;
+    }
     const outcome =
       descriptor.kind === 'local'
         ? await recoverLocalMount(targetPath, descriptor, fs, log)
