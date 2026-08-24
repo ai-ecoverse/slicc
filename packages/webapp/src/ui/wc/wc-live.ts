@@ -1274,9 +1274,15 @@ export async function mountWcUiLive(
   const { setupSudoStandalone } = await import('../boot/setup-sudo.js');
   await setupSudoStandalone({ log });
 
-  await host.ready;
-  if (stallOverlayShown) {
-    void import('../boot/boot-stall-overlay.js').then((m) => m.removeBootStallOverlay(document));
+  try {
+    await host.ready;
+  } finally {
+    // The overlay hangs off document.body, not #app — on a rejection the
+    // recovery screen replaces only #app, so a success-path-only removal
+    // would leave "Still starting" floating over the failure UI.
+    if (stallOverlayShown) {
+      void import('../boot/boot-stall-overlay.js').then((m) => m.removeBootStallOverlay(document));
+    }
   }
   // `host.ready` resolves on `kernel-worker-ready`, which the worker posts
   // AFTER its VfsRpcHost attaches — unlike the first scoop-list (the
