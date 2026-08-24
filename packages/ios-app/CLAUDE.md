@@ -16,6 +16,19 @@ iOS follower app in `packages/ios-app/` — native iOS 26 SwiftUI SPM project (`
 
 Plain SPM commands do nothing on a macOS host; build/test go through XcodeGen. **Xcode project generated from `project.yml`, not committed** — run `xcodegen generate` after clone and whenever sources change.
 
+## App Icon
+
+`Assets.xcassets/AppIcon.appiconset` carries three 1024s: `Icon-Default`, `Icon-Dark` and `Icon-Tinted`.
+
+`Icon-Tinted` is **hand-authored, not a desaturation of the colour icon** — master at `packages/assets/logos/slicc-icon-tinted-master-1024.png`. iOS tinted mode maps the asset's _luminance_ onto the user's tint, so an asset confined to the top of the range can only render as a flat blob. The previous `Icon-Tinted` was byte-identical to the Icon Composer `TintedLight` export and never dropped below 39% grey (min 100/255, σ 39); the current one spans the full range (min 0, σ 81) by seating a bright swirl in a near-black tub. Re-check `min`/`stddev` before replacing it:
+
+```bash
+magick Icon-Tinted.png -alpha remove -colorspace Gray \
+  -format "min=%[fx:minima*255] sd=%[fx:standard_deviation*255]\n" info:
+```
+
+It is full-bleed square (iOS applies its own superellipse mask), unlike `Icon-Dark`, which still carries pre-rounded transparent corners. The macOS side does **not** consume this PNG — Sliccstart derives its tinted appearance from `macos-icon.icon`; see [swift-launcher](../swift-launcher/CLAUDE.md#app-icon).
+
 ## Protocol Mirror Invariant
 
 `SliccTrayFollower/Models/SyncProtocol.swift` mirrors a **subset** of `packages/shared-ts/src/tray-sync-protocol.ts`; the matrix in `docs/architecture.md` is source of truth. iOS-local:

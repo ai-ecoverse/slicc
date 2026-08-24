@@ -25,7 +25,7 @@ npm run format -w @slicc/swift-launcher        # swift format --in-place
 
 ## Layout
 
-`Sliccstart/` — SwiftUI app (`SliccstartApp.swift` boots UI; `Models/AppScanner.swift` finds Chromium/CDP apps; `Models/SliccBootstrapper.swift` + `Models/SliccProcess.swift` handle launch/lifecycle; `Views/`). `SliccstartTests/` — tests. `assemble-app.mjs` — assembles `.app` bundle. `sign-and-package.sh` — signing/packaging.
+`Sliccstart/` — SwiftUI app (`SliccstartApp.swift` boots UI; `Models/AppScanner.swift` finds Chromium/CDP apps; `Models/SliccBootstrapper.swift` + `Models/SliccProcess.swift` handle launch/lifecycle; `Views/`). `SliccstartTests/` — tests. `assemble-app.mjs` — assembles `.app` bundle; `build-app-icon.mjs` — app-icon artefacts. `sign-and-package.sh` — signing/packaging.
 
 ## Runtime Refresh Budget
 
@@ -82,6 +82,23 @@ Sync needs an iCloud KVS entitlement backed by an _embedded_ provisioning profil
 ## Debug Build Creation
 
 `Models/DebugBuildCreator.swift` creates Electron debug builds by: (1) copying into `~/Applications/<Name> Debug.app`, (2) patching Electron fuses for remote debugging, (3) unpacking/patching `app.asar` JS checks that block CDP, (4) ad-hoc signing, (5) removing quarantine attributes. Use when an Electron app disables remote debugging in production.
+
+## App Icon
+
+Two artefacts, both written by `build-app-icon.mjs`:
+
+- **`AppIcon.icns`** — one flat image from `packages/assets/logos/macos-icon-iOS-Default-1024x1024@1x.png`, via `sips` + `iconutil` (both ship with macOS). `CFBundleIconFile`.
+- **`Assets.car`** — `actool`-compiled from `packages/assets/logos/macos-icon.icon` (Icon Composer). Adds the `NSAppearanceNameAqua` / `NSAppearanceNameDarkAqua` / `ISAppearanceTintable` icon stacks macOS 26 picks between. `CFBundleIconName`, emitted into `Info.plist` only when the compile succeeds.
+
+`buildIconAssetCatalog` **degrades instead of throwing** on all three failure modes — the bundle still gets its `.icns`, just with no Dark/Tinted appearance:
+
+1. `actool` absent (it lives in Xcode, not the Command Line Tools);
+2. `actool` present but too old to compile the `.icon` — **this is the common case in CI**, whose `swift-launcher` job runs on `macos-latest` (still macOS 15 / Xcode 16.x); only `release.yml` pins `macos-26`;
+3. `actool` exits 0 but writes no `Assets.car`.
+
+So a green `swift-launcher` CI build is **not** proof the appearance variants shipped — only the `macos-26` release job produces them. Watch for the `WARNING: appearance-keyed app icon skipped` line if a build's icon stops adapting, and confirm what actually shipped with `xcrun assetutil --info <app>/Contents/Resources/Assets.car`.
+
+A classic `AppIcon.appiconset` cannot replace the `.icon` here: `actool` honours the `appearances` key on iOS idioms only and reports macOS ones as "unassigned children", dropping them without failing the build. Per-appearance _custom artwork_ (`image-name-specializations`) exists in the `.icon` format but is authored in Icon Composer — hand-written variants of that key are silently ignored, so the macOS Tinted icon is **system-derived** from the layer artwork. Its contrast is therefore a property of `macos-icon.icon`'s layer, not something a separate PNG can override. Tests: `build-app-icon.test.mjs`.
 
 ## Packaging Notes
 
