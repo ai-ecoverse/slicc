@@ -8,8 +8,9 @@
  * rebuilds the prompt from re-read memories.
  */
 
+import type { Api } from '@earendil-works/pi-ai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import type { Agent } from '../../src/core/index.js';
+import type { Agent, Model } from '../../src/core/index.js';
 import type { VirtualFS } from '../../src/fs/index.js';
 import {
   applyModelUpdate,
@@ -19,9 +20,16 @@ import {
 import type { RegisteredScoop } from '../../src/scoops/types.js';
 import { toDescriptor } from '../../src/work-unit/descriptor.js';
 
-const REASONING = { id: 'm-reasoning', provider: 'p', reasoning: true, contextWindow: 1000 };
-const REASONING_XHIGH = { ...REASONING, id: 'm-xhigh', thinkingLevelMap: { xhigh: 'xhigh' } };
-const PLAIN = { id: 'm-plain', provider: 'p', reasoning: false, contextWindow: 1000 };
+/** Only the fields the resolver reads; the rest of `Model` is irrelevant here. */
+const model = (fields: Record<string, unknown>) => fields as unknown as Model<Api>;
+
+const REASONING = model({ id: 'm-reasoning', provider: 'p', reasoning: true, contextWindow: 1000 });
+const REASONING_XHIGH = model({
+  ...REASONING,
+  id: 'm-xhigh',
+  thinkingLevelMap: { xhigh: 'xhigh' },
+});
+const PLAIN = model({ id: 'm-plain', provider: 'p', reasoning: false, contextWindow: 1000 });
 
 let resolved: unknown = REASONING;
 

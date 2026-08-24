@@ -80,7 +80,8 @@ describe('estimateContextFill', () => {
   });
 
   it('skips assistant messages that reported no usage', () => {
-    const messages = [assistant(100, 0, 100), { role: 'assistant', content: [] } as AgentMessage];
+    const noUsage = { role: 'assistant', content: [] } as unknown as AgentMessage;
+    const messages = [assistant(100, 0, 100), noUsage];
     expect(estimateContextFill(messages, unit())).toBeCloseTo(0.2);
   });
 
