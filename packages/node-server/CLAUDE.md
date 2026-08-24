@@ -40,6 +40,10 @@ npm run dev -- --prompt "ls /workspace"
 
 Use it for repeatable dev and QA flows without manual typing.
 
+## Mount table (`--mount`)
+
+Repeatable `--mount=<os-path>:<slicc-path>` / `--mount <v>` (`runtime-flags.ts` → `mounts`, parsed by `parseMountTableMapping`: last-colon split, `~` expansion, dedup by target). `src/hostfs.ts` serves the mapped folders over `/api/hostfs` (list/stat/read/write/mkdir/rename/remove; `{ code, message }` errno JSON; `resolveWithinRoot` blocks traversal + symlink escapes; roots resolved once at startup, missing folders skipped with a warning). Advertised as `autoMounts` (`{ path, hostPath }[]`) on `GET /api/runtime-config`; the webapp auto-mounts them at kernel boot via `HostFsMountBackend` — no picker, no Chrome permission. Picker mounts are unaffected. Parity: swift-server `HostFSRoutes.swift`. Docs: [`docs/mounts.md`](../../docs/mounts.md#auto-mounted-host-folders-the-mount-table).
+
 ## Ports
 
 - `5710` — default bridge + `/api` port (`PORT` overrides it)

@@ -11,7 +11,7 @@
  * design rationale; this file only declares the shapes.
  */
 
-export type MountKind = 'local' | 's3' | 'da' | 'aem' | 'proc';
+export type MountKind = 'local' | 'hostfs' | 's3' | 'da' | 'aem' | 'proc';
 
 /** A single entry returned by readDir() — file or synthesized directory. */
 export interface MountDirEntry {

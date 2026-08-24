@@ -19,6 +19,7 @@ import { convertError, rebrandFsError } from './error-rebrand.js';
 import type { FsWatcher } from './fs-watcher.js';
 import { findDirtyKindFlips, memoryKindOfMode, shouldReconcileKind } from './kind-reconcile.js';
 import type { MountBackend, RefreshReport } from './mount/backend.js';
+import type { HostFsMountBackend } from './mount/backend-hostfs.js';
 import { LocalMountBackend } from './mount/backend-local.js';
 import { MountIndex, type MountIndexEnv, resolveMountIndexLimits } from './mount-index.js';
 import type { BackendDescriptor, MountTableEntry } from './mount-table-store.js';
@@ -123,6 +124,33 @@ interface FsSyncLike {
   statSync?(path: string): FsStatsLike;
   lstatSync?(path: string): FsStatsLike;
   readlinkSync?(path: string): string;
+}
+
+/**
+ * Build the persistence/peer-sync descriptor for a mounted backend. The kind
+ * decides which class `reconstructBackendFromDescriptor` rebuilds on a peer.
+ */
+function buildBackendDescriptor(backend: MountBackend, normalizedPath: string): BackendDescriptor {
+  switch (backend.kind) {
+    case 'local':
+    case 'proc':
+      return { kind: 'local', mountId: backend.mountId, idbHandleKey: normalizedPath };
+    case 'hostfs':
+      return {
+        kind: 'hostfs',
+        mountId: backend.mountId,
+        hostPath: (backend as HostFsMountBackend).getHostPath(),
+      };
+    default:
+      // Every remote backend persists the same shape; the kind decides
+      // which class `reconstructBackendFromDescriptor` rebuilds.
+      return {
+        kind: backend.kind === 's3' ? 's3' : backend.kind === 'aem' ? 'aem' : 'da',
+        mountId: backend.mountId,
+        source: backend.source!,
+        profile: backend.profile ?? 'default',
+      };
+  }
 }
 
 export class VirtualFS {
@@ -260,7 +288,7 @@ export class VirtualFS {
         this.mountSyncChannel.onmessage = (event: MessageEvent) => {
           const { type, path, descriptor } = event.data ?? {};
           if (type === 'mount' && typeof path === 'string' && descriptor) {
-            void this.reconstructBackendFromDescriptor(descriptor as BackendDescriptor)
+            void this.reconstructBackendFromDescriptor(descriptor as BackendDescriptor, path)
               .then((backend) => {
                 this.mountPoints.set(path, backend);
                 if (backend.kind === 'local') {
@@ -1291,25 +1319,18 @@ export class VirtualFS {
       const limits = resolveMountIndexLimits(opts?.env ?? {});
       this.mountIndex.registerMount(normalized, (backend as LocalMountBackend).getHandle(), limits);
     }
-    // Build the persistence descriptor.
-    const descriptor: BackendDescriptor =
-      backend.kind === 'local'
-        ? { kind: 'local', mountId: backend.mountId, idbHandleKey: normalized }
-        : {
-            // Every remote backend persists the same shape; the kind decides
-            // which class `reconstructBackendFromDescriptor` rebuilds.
-            kind: backend.kind === 's3' ? 's3' : backend.kind === 'aem' ? 'aem' : 'da',
-            mountId: backend.mountId,
-            source: backend.source!,
-            profile: backend.profile ?? 'default',
-          };
+    // Build the persistence/sync descriptor.
+    const descriptor = buildBackendDescriptor(backend, normalized);
     try {
       this.mountSyncChannel?.postMessage({ type: 'mount', path: normalized, descriptor });
     } catch {
       /* Best-effort sync: local mount is already registered */
     }
     this.watcher?.notify([{ type: 'modify', path: normalized, entryType: 'directory' }]);
-    // Persist to IndexedDB (best-effort)
+    // Persist to IndexedDB (best-effort). Hostfs mounts are config-owned:
+    // the launcher's mount table re-mounts them on every boot, so an IDB
+    // row would only fight the config (stale entries after a table edit).
+    if (backend.kind === 'hostfs') return;
     try {
       const entry: MountTableEntry = {
         targetPath: normalized,
@@ -1354,13 +1375,22 @@ export class VirtualFS {
    * BroadcastChannel peer sync.
    */
   private async reconstructBackendFromDescriptor(
-    descriptor: BackendDescriptor
+    descriptor: BackendDescriptor,
+    path: string
   ): Promise<MountBackend> {
     switch (descriptor.kind) {
       case 'local': {
         const handle = await loadMountHandle(descriptor.idbHandleKey);
         if (!handle) throw new Error(`no handle stored for ${descriptor.idbHandleKey}`);
         return LocalMountBackend.fromHandle(handle, { mountId: descriptor.mountId });
+      }
+      case 'hostfs': {
+        const { HostFsMountBackend } = await import('./mount/backend-hostfs.js');
+        return new HostFsMountBackend({
+          targetPath: path,
+          hostPath: descriptor.hostPath,
+          mountId: descriptor.mountId,
+        });
       }
       case 's3': {
         const { S3MountBackend, RemoteMountCache, makeSignedFetchS3 } = await import(
@@ -1428,7 +1458,7 @@ export class VirtualFS {
 
   /**
    * Like {@link listMounts}, but also returns each mount's backend
-   * `kind` ('local' | 's3' | 'da' | 'aem' | 'proc'). Used by the `python`
+   * `kind` ('local' | 'hostfs' | 's3' | 'da' | 'aem' | 'proc'). Used by the `python`
    * command to compute the overlap of user mounts with the realm sync
    * dirs and tag remote ones for the remote-mount size cap. Internal
    * mounts are excluded for the same reason `listMounts()` hides them.

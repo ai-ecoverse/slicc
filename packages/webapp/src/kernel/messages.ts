@@ -722,7 +722,7 @@ export interface VfsListMountPointsRequestMsg {
 /** Wire mirror of a user-visible `VirtualFS.listMountPoints()` entry. */
 export interface VfsMountPointEnvelope {
   path: string;
-  kind: 'local' | 's3' | 'da' | 'aem' | 'proc';
+  kind: 'local' | 'hostfs' | 's3' | 'da' | 'aem' | 'proc';
 }
 
 export type VfsWriteRequestMsg =

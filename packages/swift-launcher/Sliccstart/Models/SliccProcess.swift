@@ -312,7 +312,8 @@ final class SliccProcess {
             try spawn(
                 target: browser,
                 extraArgs: Self.standaloneBrowserArgs(
-                    cdpPort: Self.browserCdpPort
+                    cdpPort: Self.browserCdpPort,
+                    mounts: MountTablePreference.mappings(defaults: .standard)
                 ),
                 env: Self.standaloneBrowserEnv(
                     executablePath: browser.executablePath,
@@ -483,8 +484,10 @@ final class SliccProcess {
     /// a tray; the worker base URL is sourced from the environment in
     /// `standaloneBrowserEnv` so we don't have to duplicate the
     /// scheme/host shape on the CLI.
-    static func standaloneBrowserArgs(cdpPort: UInt16) -> [String] {
-        ["--cdp-port=\(cdpPort)", "--lead"]
+    static func standaloneBrowserArgs(
+        cdpPort: UInt16, mounts: [MountTablePreference.Mapping] = []
+    ) -> [String] {
+        ["--cdp-port=\(cdpPort)", "--lead"] + MountTablePreference.serverArgs(mappings: mounts)
     }
 
     /// Browser-follower extra args: `--join=<url>` instead of `--lead`, so
@@ -939,12 +942,18 @@ final class SliccProcess {
         targetType: AppTargetType,
         electronAppPath: String?,
         cdpPort: UInt16,
-        joinUrl: String?
+        joinUrl: String?,
+        mounts: [MountTablePreference.Mapping] = []
     ) -> [String] {
         var args: [String] = [
             "--serve-only",
             "--cdp-port=\(cdpPort)",
         ]
+        // The reattached server still answers /api/runtime-config, so the
+        // mount table must ride along or reloads stop auto-restoring.
+        if targetType == .chromiumBrowser {
+            args.append(contentsOf: MountTablePreference.serverArgs(mappings: mounts))
+        }
         if targetType == .electronApp {
             if let electronAppPath {
                 args.append("--electron-app=\(electronAppPath)")
@@ -968,7 +977,8 @@ final class SliccProcess {
             targetType: target.type,
             electronAppPath: target.type == .electronApp ? target.path : nil,
             cdpPort: record.cdpPort,
-            joinUrl: record.joinUrl
+            joinUrl: record.joinUrl,
+            mounts: MountTablePreference.mappings(defaults: .standard)
         )
         // Prefer the token the runtime was ORIGINALLY launched with
         // (persisted in the record); the surviving browser tab still

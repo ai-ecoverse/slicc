@@ -33,6 +33,8 @@ const ENTRY_STORE = 'mount-entries';
  */
 export type BackendDescriptor =
   | { kind: 'local'; mountId: string; idbHandleKey: string }
+  /** Host-bridge mount (mount table). Synced to peers, never persisted to IDB. */
+  | { kind: 'hostfs'; mountId: string; hostPath: string }
   | { kind: 's3'; mountId: string; source: string; profile: string }
   | { kind: 'da'; mountId: string; source: string; profile: string }
   | { kind: 'aem'; mountId: string; source: string; profile: string };

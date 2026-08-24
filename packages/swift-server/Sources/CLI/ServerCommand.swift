@@ -67,6 +67,18 @@ struct ServerCommand: AsyncParsableCommand {
     @Option(name: .long, help: "Path to secrets .env file")
     var envFile: String?
 
+    // Mount table: repeatable `--mount <os-path>:<slicc-path>` (also
+    // `--mount=<v>`). Each mapped OS folder is served over /api/hostfs and
+    // auto-mounted by the webapp at boot — no picker, no Chrome permission
+    // prompt. Picker-initiated mounts are unaffected. Parity with
+    // node-server's `runtime-flags.ts`.
+    @Option(
+        name: .customLong("mount"),
+        help:
+            "Host folder to auto-mount, as <os-path>:<slicc-path> (repeatable, e.g. --mount ~/proj:/mnt/proj)"
+    )
+    var mount: [String] = []
+
     mutating func run() async throws {
         let config = ServerConfig.resolve(from: self)
         let logLevel = Self.loggerLevel(from: config.logLevel)
@@ -462,6 +474,14 @@ struct ServerConfig: Sendable, Equatable {
     let prompt: String?
     let envFile: String?
     let envFileURL: URL?
+    /// One `--mount` entry: an absolute OS folder mapped to a VFS target.
+    struct MountMapping: Sendable, Equatable {
+        let hostPath: String
+        let path: String
+    }
+
+    /// Mount table (`--mount`), normalized and deduplicated; see `normalizedMountTable`.
+    var mounts: [MountMapping] = []
 
     static func resolve(from command: ServerCommand) -> ServerConfig {
         resolve(from: command, arguments: ProcessInfo.processInfo.arguments)
@@ -509,8 +529,58 @@ struct ServerConfig: Sendable, Equatable {
             logDirectoryURL: resolvedFileURL(from: normalizedLogDir),
             prompt: normalizedPrompt,
             envFile: normalizedEnvFile,
-            envFileURL: resolvedFileURL(from: normalizedEnvFile)
+            envFileURL: resolvedFileURL(from: normalizedEnvFile),
+            mounts: normalizedMountTable(command.mount)
         )
+    }
+
+    /// Normalize one absolute path: trim, require a leading `/`, strip
+    /// trailing slashes (keeping `/`). Returns nil otherwise.
+    private static func normalizedAbsolutePath(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard trimmed.hasPrefix("/") else { return nil }
+        var path = trimmed
+        while path.count > 1, path.hasSuffix("/") {
+            path.removeLast()
+        }
+        return path.isEmpty ? nil : path
+    }
+
+    /// Parse one `--mount` value of the form `<os-path>:<slicc-path>`,
+    /// splitting on the LAST `:` so OS paths containing `:` still parse. A
+    /// leading `~` on the OS side expands to the home directory. Mirrors
+    /// node-server's `parseMountTableMapping`.
+    static func parseMountMapping(
+        _ value: String,
+        homeDirectory: String = NSHomeDirectory()
+    ) -> MountMapping? {
+        let trimmed = value.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let sep = trimmed.lastIndex(of: ":"), sep != trimmed.startIndex else { return nil }
+        var hostRaw = String(trimmed[trimmed.startIndex..<sep])
+            .trimmingCharacters(in: .whitespaces)
+        let targetRaw = String(trimmed[trimmed.index(after: sep)...])
+            .trimmingCharacters(in: .whitespaces)
+        if hostRaw == "~" || hostRaw.hasPrefix("~/") {
+            guard !homeDirectory.isEmpty else { return nil }
+            hostRaw = homeDirectory + hostRaw.dropFirst()
+        }
+        guard let hostPath = normalizedAbsolutePath(hostRaw),
+            let path = normalizedAbsolutePath(targetRaw),
+            path != "/"
+        else { return nil }
+        return MountMapping(hostPath: hostPath, path: path)
+    }
+
+    /// Parse and deduplicate (by target) the `--mount` values, in order.
+    static func normalizedMountTable(_ values: [String]) -> [MountMapping] {
+        var seen = Set<String>()
+        var result: [MountMapping] = []
+        for raw in values {
+            guard let mapping = parseMountMapping(raw) else { continue }
+            guard seen.insert(mapping.path).inserted else { continue }
+            result.append(mapping)
+        }
+        return result
     }
 
     private static func normalizedText(_ value: String?) -> String? {

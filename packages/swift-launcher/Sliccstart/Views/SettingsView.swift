@@ -54,9 +54,68 @@ struct SettingsView: View {
                 .tabItem { Label("Startup", systemImage: "power") }
             TerminalsSettingsView()
                 .tabItem { Label("Terminals", systemImage: "terminal") }
+            MountsSettingsView()
+                .tabItem { Label("Mounts", systemImage: "externaldrive") }
             SecretsSettingsView()
                 .tabItem { Label("Secrets", systemImage: "key.fill") }
         }
+    }
+}
+
+// MARK: - Mounts tab
+
+struct MountsSettingsView: View {
+    @AppStorage(MountTablePreference.key) private var mountTableText = ""
+
+    private var mappings: [MountTablePreference.Mapping] {
+        MountTablePreference.mappings(from: mountTableText)
+    }
+    private var invalidLines: [String] { MountTablePreference.invalidLines(in: mountTableText) }
+
+    var body: some View {
+        Form {
+            Section("Auto-mounted folders") {
+                TextField(
+                    "One mapping per line, e.g. ~/Projects/foo:/mnt/foo",
+                    text: $mountTableText, axis: .vertical
+                )
+                .font(.system(.body, design: .monospaced))
+                .lineLimit(3...8)
+
+                Text(
+                    "Each folder on the left appears in SLICC at the path on the right, "
+                        + "automatically on every launch and reload — no folder picker, no "
+                        + "permission prompt. Folders you mount from inside SLICC keep asking as "
+                        + "usual. Takes effect on the next browser launch."
+                )
+                .font(.caption)
+                .foregroundStyle(.secondary)
+
+                if !invalidLines.isEmpty {
+                    Text(
+                        "Ignored (need <folder>:</slicc-path>, both absolute): "
+                            + invalidLines.joined(separator: ", ")
+                    )
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                }
+            }
+
+            Section("Active table") {
+                if mappings.isEmpty {
+                    Text("Empty — no folders are auto-mounted.")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                } else {
+                    ForEach(mappings, id: \.path) { mapping in
+                        Text("\(mapping.hostPath)  →  \(mapping.path)")
+                            .font(.system(.body, design: .monospaced))
+                    }
+                }
+            }
+        }
+        .padding()
+        .frame(width: 520)
     }
 }
 

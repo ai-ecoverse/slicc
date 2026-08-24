@@ -178,6 +178,19 @@ describe('recoverMounts', () => {
     );
   });
 
+  it('skips legacy hostfs rows — config-owned mounts never recover from IDB', async () => {
+    const hostfs: MountTableEntry = {
+      targetPath: '/mnt/conf',
+      descriptor: { kind: 'hostfs', mountId: newMountId(), hostPath: '/Users/me/proj' },
+      createdAt: 0,
+    } as unknown as MountTableEntry;
+    const { fs, mounts } = mockFs();
+    const result = await recoverMounts([hostfs], fs);
+    expect(result.restored).toEqual([]);
+    expect(result.needsRecovery).toEqual([]);
+    expect(mounts).toEqual([]);
+  });
+
   it('returns empty arrays when there are no entries', async () => {
     const { fs } = mockFs();
     const result = await recoverMounts([], fs);

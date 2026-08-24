@@ -4,6 +4,7 @@ import {
   DEFAULT_CLI_CDP_PORT,
   DEFAULT_ELECTRON_ATTACH_CDP_PORT,
   parseCliRuntimeFlags,
+  parseMountTableMapping,
 } from '../src/runtime-flags.js';
 
 describe('parseCliRuntimeFlags', () => {
@@ -28,6 +29,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      mounts: [],
     });
   });
 
@@ -52,6 +54,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      mounts: [],
     });
   });
 
@@ -84,6 +87,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      mounts: [],
     });
   });
 
@@ -110,6 +114,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      mounts: [],
     });
   });
 
@@ -134,6 +139,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      mounts: [],
     });
   });
 
@@ -158,6 +164,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      mounts: [],
     });
   });
 
@@ -182,6 +189,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      mounts: [],
     });
   });
 
@@ -206,6 +214,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      mounts: [],
     });
   });
 
@@ -255,6 +264,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      mounts: [],
     });
   });
 
@@ -279,6 +289,7 @@ describe('parseCliRuntimeFlags', () => {
       hosted: false,
       installCli: false,
       installDir: null,
+      mounts: [],
     });
   });
 
@@ -350,6 +361,7 @@ describe('parseCliRuntimeFlags', () => {
     expect(parseCliRuntimeFlags(['--install-cli'])).toMatchObject({
       installCli: true,
       installDir: null,
+      mounts: [],
     });
   });
 
@@ -368,6 +380,55 @@ describe('parseCliRuntimeFlags', () => {
     expect(parseCliRuntimeFlags(['--install-dir', '--install-cli'])).toMatchObject({
       installCli: true,
       installDir: null,
+      mounts: [],
     });
+  });
+
+  it('collects repeatable --mount os:vfs mappings in both forms, deduplicated per target', () => {
+    const flags = parseCliRuntimeFlags([
+      '--mount=/Users/me/proj/:/mnt/project/',
+      '--mount',
+      '/Users/me/docs:/mnt/docs',
+      '--mount=/Users/me/other:/mnt/project',
+      '--mount=relative:/mnt/x',
+      '--mount=/mnt/one-sided',
+      '--mount=',
+    ]);
+    expect(flags.mounts).toEqual([
+      { hostPath: '/Users/me/proj', path: '/mnt/project' },
+      { hostPath: '/Users/me/docs', path: '/mnt/docs' },
+    ]);
+  });
+
+  it('does not consume another flag token as a mount mapping', () => {
+    const flags = parseCliRuntimeFlags(['--mount', '--serve-only']);
+    expect(flags.mounts).toEqual([]);
+    expect(flags.serveOnly).toBe(true);
+  });
+});
+
+describe('parseMountTableMapping', () => {
+  it('splits on the last colon and normalizes both sides', () => {
+    expect(parseMountTableMapping('/a/b/:/mnt/x//')).toEqual({ hostPath: '/a/b', path: '/mnt/x' });
+    expect(parseMountTableMapping('/we:ird/dir:/mnt/x')).toEqual({
+      hostPath: '/we:ird/dir',
+      path: '/mnt/x',
+    });
+  });
+
+  it('expands ~ against the provided home dir', () => {
+    expect(parseMountTableMapping('~/proj:/mnt/p', '/Users/me')).toEqual({
+      hostPath: '/Users/me/proj',
+      path: '/mnt/p',
+    });
+    expect(parseMountTableMapping('~/proj:/mnt/p', '')).toBeNull();
+  });
+
+  it('rejects one-sided, relative, and root-target mappings', () => {
+    expect(parseMountTableMapping('/mnt/only-target')).toBeNull();
+    expect(parseMountTableMapping('rel:/mnt/x')).toBeNull();
+    expect(parseMountTableMapping('/a:rel')).toBeNull();
+    expect(parseMountTableMapping('/a:/')).toBeNull();
+    expect(parseMountTableMapping('')).toBeNull();
   });
 });

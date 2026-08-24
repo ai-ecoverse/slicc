@@ -25,10 +25,65 @@ export interface CliRuntimeFlags {
   installCli: boolean;
   /** Target directory for --install-cli (default: OS-idiomatic, see install-cli.ts) */
   installDir: string | null;
+  /**
+   * Mount table: OS-folder → SLICC-target mappings served over the local
+   * host-FS bridge (`/api/hostfs`) and auto-mounted by the webapp at boot,
+   * with no picker and no Chrome permission prompt. Filled by repeatable
+   * `--mount=<os-path>:<slicc-path>` / `--mount <os-path>:<slicc-path>`
+   * flags. Picker-initiated (`mount <path>`) FS-Access mounts are
+   * unaffected and keep asking for permission.
+   */
+  mounts: HostMountMapping[];
+}
+
+/** One `--mount` entry: an absolute OS folder mapped to a VFS target. */
+export interface HostMountMapping {
+  hostPath: string;
+  path: string;
 }
 
 export const DEFAULT_CLI_CDP_PORT = 9222;
 export const DEFAULT_ELECTRON_ATTACH_CDP_PORT = 9223;
+
+function normalizeAbsolutePath(value: string): string | null {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('/')) return null;
+  const stripped = trimmed.length > 1 ? trimmed.replace(/\/+$/, '') : trimmed;
+  return stripped || null;
+}
+
+/**
+ * Parse a `--mount` value of the form `<os-path>:<slicc-path>`. The split is
+ * on the LAST `:` whose remainder is an absolute path, so OS paths containing
+ * `:` still parse. A leading `~/` on the OS side expands against `homeDir`.
+ * Returns null (never a partial mapping) for anything else, so a stray
+ * `--mount=` or a one-sided value never lands in the table.
+ */
+export function parseMountTableMapping(
+  value: string,
+  homeDir: string = process.env['HOME'] ?? ''
+): HostMountMapping | null {
+  const trimmed = value.trim();
+  const sep = trimmed.lastIndexOf(':');
+  if (sep <= 0) return null;
+  let hostRaw = trimmed.slice(0, sep).trim();
+  const targetRaw = trimmed.slice(sep + 1).trim();
+  if (hostRaw === '~' || hostRaw.startsWith('~/')) {
+    if (!homeDir) return null;
+    hostRaw = homeDir + hostRaw.slice(1);
+  }
+  const hostPath = normalizeAbsolutePath(hostRaw);
+  const path = normalizeAbsolutePath(targetRaw);
+  if (!hostPath || !path || path === '/') return null;
+  return { hostPath, path };
+}
+
+function addMountTablePath(flags: CliRuntimeFlags, value: string): void {
+  const mapping = parseMountTableMapping(value);
+  if (mapping && !flags.mounts.some((m) => m.path === mapping.path)) {
+    flags.mounts.push(mapping);
+  }
+}
 
 function looksLikeUrl(value: string): boolean {
   return /^[a-z][a-z0-9+.-]*:\/\//i.test(value.trim());
@@ -57,6 +112,7 @@ function createDefaultFlags(): CliRuntimeFlags {
     hosted: false,
     installCli: false,
     installDir: null,
+    mounts: [],
   };
 }
 
@@ -138,6 +194,10 @@ function applyEqualsFlag(flags: CliRuntimeFlags, arg: string): boolean {
     flags.joinUrl = arg.slice('--join='.length).trim() || null;
     return true;
   }
+  if (arg.startsWith('--mount=')) {
+    addMountTablePath(flags, arg.slice('--mount='.length));
+    return true;
+  }
   if (arg.startsWith('--electron-app=')) {
     flags.electron = true;
     flags.electronApp = arg.slice('--electron-app='.length).trim() || null;
@@ -146,7 +206,7 @@ function applyEqualsFlag(flags: CliRuntimeFlags, arg: string): boolean {
   return false;
 }
 
-/** `--prompt`/`--env-file`/`--profile`/`--install-dir` followed by a value token. Returns tokens consumed. */
+/** `--prompt`/`--env-file`/`--profile`/`--install-dir`/`--mount` followed by a value token. Returns tokens consumed. */
 function applyPlainValueFlag(
   flags: CliRuntimeFlags,
   argv: string[],
@@ -163,6 +223,8 @@ function applyPlainValueFlag(
     flags.envFile = next;
   } else if (arg === '--install-dir') {
     flags.installDir = next.trim() || null;
+  } else if (arg === '--mount') {
+    addMountTablePath(flags, next);
   } else {
     flags.profile = next.trim() || null;
   }
@@ -227,7 +289,8 @@ function applyValueFlag(
     arg === '--prompt' ||
     arg === '--env-file' ||
     arg === '--profile' ||
-    arg === '--install-dir'
+    arg === '--install-dir' ||
+    arg === '--mount'
   ) {
     return applyPlainValueFlag(flags, argv, index, arg);
   }

@@ -81,6 +81,10 @@ WebSocket routes install separately for CDP and lick. `LickSystem` (actor) track
 
 Chrome reopens previous session tabs minus the SLICC tab (dead token; `clearChromeSessionRestore` prevents `/cdp` eviction wars). URL-only snapshot in `Sources/Browser/TabSessionStore.swift` — sanitized on save **and** load (each entry is a Chrome argv slot) — fed by `TabSessionRecorder.swift`, replayed via `ChromeLaunchConfig.restoreUrls`. Not wired for `--serve-only` / `--electron`; no node-server equivalent. See [`docs/sliccstart-browser.md`](../../docs/sliccstart-browser.md).
 
+## Mount table (`--mount`)
+
+Repeatable `--mount <os-path>:<slicc-path>` (`ServerCommand.mount` → `ServerConfig.mounts`, parsed by `ServerConfig.parseMountMapping`; parity with node-server's `parseMountTableMapping`). `Sources/Server/HostFSRoutes.swift` serves the mapped folders over `/api/hostfs`, mirroring node-server's `hostfs.ts` byte-for-byte (routes, `{ code, message }` errno JSON, traversal/symlink containment, mount-root delete refusal, 100 MiB body cap). Advertised as `autoMounts` (`{ path, hostPath }[]`) on `GET /api/runtime-config`; the webapp auto-mounts at boot, no picker/permission. Sliccstart feeds the flags from Settings → Mounts (`MountTablePreference`). Docs: [`docs/mounts.md`](../../docs/mounts.md#auto-mounted-host-folders-the-mount-table).
+
 ## Secrets Architecture
 
 `OAuthSecretStore.swift` handles OAuth replicas via `POST /api/secrets/oauth-update` and `DELETE /api/secrets/oauth/:providerId`. `SessionSecretStore.swift` owns process-memory session records for the session/list/peek/scope/delete APIs. Pipeline `Sources/Keychain/SecretInjector.swift` layers sessions after persisted/env/OAuth data without letting a session collision shadow those sources. Masks match `@slicc/shared-ts` byte-for-byte via `Tests/CrossImplementationTests.swift`. `SecretStore.swift` reads `ai.sliccy.slicc / __envfile__` at startup via `SecItemCopyMatching`.

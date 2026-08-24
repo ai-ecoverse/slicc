@@ -72,6 +72,11 @@ func registerAPIRoutes(
     secretInjector: SecretInjector = SecretInjector(secrets: []),
     oauthStore: OAuthSecretStore? = nil
 ) {
+    // Host-FS bridge for the mount table. Roots are resolved once at
+    // registration; a folder created later needs a restart.
+    let hostMountRoots = HostFSRoutes.resolveRoots(mounts: config.mounts)
+    HostFSRoutes.registerRoutes(router: router, roots: hostMountRoots)
+
     router.get("/api/runtime-config") { _, _ in
         let envWorkerBaseUrl: String? = {
             guard let raw = ProcessInfo.processInfo.environment["WORKER_BASE_URL"]?.trimmingCharacters(in: .whitespacesAndNewlines),
@@ -88,6 +93,13 @@ func registerAPIRoutes(
             .object([
                 "trayWorkerBaseUrl": jsonStringOrNull(trayWorkerBaseUrl),
                 "trayJoinUrl": jsonStringOrNull(config.joinUrl),
+                // Mount table (--mount=<os>:<vfs>): served over /api/hostfs
+                // and auto-mounted by the webapp at boot. Only mappings whose
+                // OS folder existed at startup are advertised.
+                "autoMounts": .array(
+                    hostMountRoots.map {
+                        .object(["path": .string($0.path), "hostPath": .string($0.root)])
+                    }),
             ])
         )
     }

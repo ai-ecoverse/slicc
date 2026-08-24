@@ -587,4 +587,41 @@ final class ServerCommandTests: XCTestCase {
                 bridgeToken: nil
             ))
     }
+
+    func testParsesRepeatableMountMappingsIntoANormalizedMountTable() throws {
+        let parsed = try ServerCommand.parseAsRoot([
+            "--mount", "/Users/me/proj/:/mnt/project/", "--mount=/Users/me/docs:/mnt/docs",
+            "--mount", "/Users/me/other:/mnt/project",
+            "--mount", "relative:/mnt/x", "--mount", "/mnt/one-sided", "--mount", " ",
+        ])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(from: command, arguments: ["slicc-server"])
+        XCTAssertEqual(
+            config.mounts,
+            [
+                ServerConfig.MountMapping(hostPath: "/Users/me/proj", path: "/mnt/project"),
+                ServerConfig.MountMapping(hostPath: "/Users/me/docs", path: "/mnt/docs"),
+            ])
+    }
+
+    func testMountMappingParsingRules() throws {
+        let parsed = try ServerCommand.parseAsRoot([])
+        let command = try XCTUnwrap(parsed as? ServerCommand)
+        let config = ServerConfig.resolve(from: command, arguments: ["slicc-server"])
+        XCTAssertEqual(config.mounts, [])
+        // Last-colon split keeps OS paths containing ':' intact.
+        XCTAssertEqual(
+            ServerConfig.parseMountMapping("/we:ird/dir:/mnt/x"),
+            ServerConfig.MountMapping(hostPath: "/we:ird/dir", path: "/mnt/x"))
+        // Tilde expansion against the provided home.
+        XCTAssertEqual(
+            ServerConfig.parseMountMapping("~/proj:/mnt/p", homeDirectory: "/Users/me"),
+            ServerConfig.MountMapping(hostPath: "/Users/me/proj", path: "/mnt/p"))
+        XCTAssertNil(ServerConfig.parseMountMapping("~/proj:/mnt/p", homeDirectory: ""))
+        // Root target, relative sides, and one-sided values are rejected.
+        XCTAssertNil(ServerConfig.parseMountMapping("/a:/"))
+        XCTAssertNil(ServerConfig.parseMountMapping("rel:/mnt/x"))
+        XCTAssertNil(ServerConfig.parseMountMapping("/a:rel"))
+        XCTAssertNil(ServerConfig.parseMountMapping("/mnt/only-target"))
+    }
 }
