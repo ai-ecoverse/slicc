@@ -230,6 +230,15 @@ describe('slicc-shader', () => {
       }
     };
     /**
+     * Shared restore-event + follow-up poll budget. Independent helper
+     * timeouts (3s + 3s) can exceed Vitest's 5s default and abort the test
+     * before either reports. Stays below RESTORE_TEST_TIMEOUT_MS so the
+     * helper's error surfaces first.
+     */
+    const RESTORE_WAIT_BUDGET_MS = 8_000;
+    /** Covers restore budget + expectStopped (20×250ms) + setup sleeps. */
+    const RESTORE_TEST_TIMEOUT_MS = 15_000;
+    /**
      * Await `webglcontextrestored` after `restoreContext()`. A fixed sleep is
      * not enough under CI throttling: the browser delivers the event (and the
      * subsequent #wake rAF) on its own schedule — merge-queue flake that kicked
@@ -238,7 +247,7 @@ describe('slicc-shader', () => {
     const restoreContext = async (
       lose: { restoreContext: () => void },
       canvas: HTMLCanvasElement,
-      timeoutMs = 3000
+      timeoutMs = RESTORE_WAIT_BUDGET_MS
     ): Promise<void> => {
       const done = new Promise<void>((resolve, reject) => {
         const t = setTimeout(
@@ -261,12 +270,26 @@ describe('slicc-shader', () => {
     const waitForDraws = async (
       spy: { mock: { calls: unknown[] } },
       min = 1,
-      timeoutMs = 3000
+      timeoutMs = RESTORE_WAIT_BUDGET_MS
     ): Promise<void> => {
       await vi.waitFor(() => expect(spy.mock.calls.length).toBeGreaterThanOrEqual(min), {
         timeout: timeoutMs,
         interval: 50,
       });
+    };
+    /**
+     * Restore the context, then run `after` against the leftover budget so
+     * the event wait and the follow-up poll share one deadline.
+     */
+    const restoreThen = async <T>(
+      lose: { restoreContext: () => void },
+      canvas: HTMLCanvasElement,
+      after: (remainingMs: number) => Promise<T>,
+      budgetMs = RESTORE_WAIT_BUDGET_MS
+    ): Promise<T> => {
+      const deadline = Date.now() + budgetMs;
+      await restoreContext(lose, canvas, budgetMs);
+      return after(Math.max(500, deadline - Date.now()));
     };
     /** Poll until the draw count is stable across a quiet window, then confirm. */
     const expectStopped = async (
@@ -456,7 +479,9 @@ describe('slicc-shader', () => {
       expect(spy.mock.calls.length).toBeLessThanOrEqual(22);
     });
 
-    it('resumes rendering after the WebGL context is restored (animated)', async () => {
+    it('resumes rendering after the WebGL context is restored (animated)', {
+      timeout: RESTORE_TEST_TIMEOUT_MS,
+    }, async () => {
       const el = mount({ mode: 'scoop' });
       if (el.noWebgl) return;
       await wait(100);
@@ -467,11 +492,12 @@ describe('slicc-shader', () => {
       lose.loseContext();
       await wait(100); // let webglcontextlost land
       const spy = spyDraws();
-      await restoreContext(lose, canvas);
-      await waitForDraws(spy); // #wake schedules an rAF after relink
+      await restoreThen(lose, canvas, (ms) => waitForDraws(spy, 1, ms)); // #wake rAF after relink
     });
 
-    it('re-renders and re-stops a static field after context restore', async () => {
+    it('re-renders and re-stops a static field after context restore', {
+      timeout: RESTORE_TEST_TIMEOUT_MS,
+    }, async () => {
       const el = mount({ speed: '0' });
       if (el.noWebgl) return;
       await wait(150);
@@ -482,12 +508,13 @@ describe('slicc-shader', () => {
       lose.loseContext();
       await wait(100);
       const spy = spyDraws();
-      await restoreContext(lose, canvas);
-      await waitForDraws(spy); // repainted on restore (event + rAF, not a fixed sleep)
+      await restoreThen(lose, canvas, (ms) => waitForDraws(spy, 1, ms)); // event + rAF, not a sleep
       await expectStopped(spy); // and re-stopped
     });
 
-    it('degrades to the CSS fallback when a restored context cannot rebuild GL', async () => {
+    it('degrades to the CSS fallback when a restored context cannot rebuild GL', {
+      timeout: RESTORE_TEST_TIMEOUT_MS,
+    }, async () => {
       const el = mount({ mode: 'scoop' });
       if (el.noWebgl) return;
       await wait(100);
@@ -503,8 +530,9 @@ describe('slicc-shader', () => {
       );
       const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
       const spy = spyDraws();
-      await restoreContext(lose, canvas);
-      await vi.waitFor(() => expect(el.noWebgl).toBe(true), { timeout: 3000, interval: 50 });
+      await restoreThen(lose, canvas, (ms) =>
+        vi.waitFor(() => expect(el.noWebgl).toBe(true), { timeout: ms, interval: 50 })
+      );
       expect(spy.mock.calls.length).toBe(0);
       expect(errSpy).toHaveBeenCalled(); // emitted a diagnostic, not silent
     });
