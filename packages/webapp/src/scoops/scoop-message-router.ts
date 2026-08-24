@@ -48,7 +48,7 @@ interface BusyDeferralState {
 }
 
 export interface ScoopMessageRouterDeps {
-  /** Live snapshot of registered scoops; the router reads `isCone`, `assistantLabel`, `folder`, `name`, `trigger`, `requiresTrigger`. */
+  /** Live snapshot of registered scoops; the router reads `parentJid`, `assistantLabel`, `folder`, `name`, `trigger`, `requiresTrigger`. */
   getScoops(): Map<string, RegisteredScoop>;
   /** Live snapshot of tab state by jid. */
   getTabs(): Map<string, ScoopTabState>;

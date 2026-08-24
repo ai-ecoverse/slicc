@@ -86,9 +86,12 @@ Non-obvious rules:
   never get a SAB (self-deadlock). Deep reference: `docs/kernel/process-model.md`.
 - **Cone and scoop are roles over one `WorkUnit`** (#1666): `RegisteredScoop.parentJid`
   is required — `null` is THE root test (`isRootUnit`). The record carries no role:
-  `isCone`/`type` were deleted in #2279, so the **compiler** is the ratchet — a role
-  branch no longer has a field to read. `isCone` survives only on the follower wire
-  (`ScoopSummary`), projected from `isRootUnit` by `ScoopPresentation`. New `scoops/`
+  `isCone`/`type` were deleted in #2279, so the **compiler** is the ratchet for every
+  record read — a role branch no longer has a field to read. `isCone` survives only on
+  the follower wire, write-only leader-side (projected from `isRootUnit`). Reading it
+  back is a follower fallback for a pre-`parentId` leader (`summaryIsRoot`,
+  `coneJidFromWire`); a wire read in `scoops/`/`kernel/` is the singleton cone
+  returning. New `scoops/`
   and `kernel/` code asks `orchestrator.getWorkUnits()` (`getParent`, `getChildren`,
   `resolveDefaultRoot`) or the unit's `policy.*`. Every creation path sets `parentJid`
   explicitly; restore backfills and persists it (`legacyRecordIsCone` reads the
