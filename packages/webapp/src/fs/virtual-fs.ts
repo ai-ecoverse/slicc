@@ -21,7 +21,12 @@ import { findDirtyKindFlips, memoryKindOfMode, shouldReconcileKind } from './kin
 import type { MountBackend, RefreshReport } from './mount/backend.js';
 import type { HostFsMountBackend } from './mount/backend-hostfs.js';
 import { LocalMountBackend } from './mount/backend-local.js';
-import { MountIndex, type MountIndexEnv, resolveMountIndexLimits } from './mount-index.js';
+import {
+  MountIndex,
+  type MountIndexEnv,
+  type MountIndexLimits,
+  resolveMountIndexLimits,
+} from './mount-index.js';
 import type { BackendDescriptor, MountTableEntry } from './mount-table-store.js';
 import {
   clearMountEntries,
@@ -92,6 +97,15 @@ export interface VirtualFsOptions {
    * `backend` overrides resolution.
    */
   backend?: VfsBackend;
+  /**
+   * Liveness tick fired once per sidecar entry scanned by the pre-boot
+   * repair (#2146) — the O(tree) phase with no milestones of its own.
+   * The boot mount heartbeat (`scoops/mount-heartbeat.ts`) feeds these
+   * ticks into the page's kernel-ready watchdog so a multi-minute repair
+   * on a cold or I/O-starved disk is treated as advancing, not wedged
+   * (2026-08-24 field incident). OPFS backend only; memory ignores it.
+   */
+  onRepairProgress?: () => void;
 }
 
 /**
@@ -247,13 +261,19 @@ export class VirtualFS {
    */
   private static writeChains = new Map<string, Promise<void>>();
 
+  /** See {@link VirtualFsOptions.onRepairProgress}. */
+  private readonly onRepairProgress: (() => void) | undefined;
+
   private constructor(
     dbName: string,
     wipe?: boolean,
     backend?: VfsBackend,
-    opfsHandle?: FileSystemDirectoryHandle
+    opfsHandle?: FileSystemDirectoryHandle,
+    onRepairProgress?: () => void
   ) {
     this.dbName = dbName;
+    // Assigned before `_ready` kicks off `initOpfsBackend`, which reads it.
+    this.onRepairProgress = onRepairProgress;
     // Default to InMemory for any non-'opfs' value (including `undefined`)
     // so callers that bypass `VirtualFS.create` and reach the constructor
     // directly (a handful of test fixtures) come up on the Node-safe
@@ -398,7 +418,9 @@ export class VirtualFS {
       // up BEFORE ZenFS parses it costs one metadata-only probe per entry per
       // cold boot and heals sidecars already poisoned in the field.
       try {
-        const preboot = await vfs.withWriteLock(() => repairOpfsMetadataSidecar(handle));
+        const preboot = await vfs.withWriteLock(() =>
+          repairOpfsMetadataSidecar(handle, vfs.onRepairProgress)
+        );
         if (preboot?.changed) {
           console.warn('[virtual-fs] repaired metadata sidecar before mount (#2146)', {
             dbName: vfs.dbName,
@@ -419,7 +441,7 @@ export class VirtualFS {
         // context of the origin: run it under the same cross-context Web
         // Lock as `writeOpfsMetadataSidecarUnlocked`, so a realm that is
         // already booted and flushing cannot be clobbered mid-repair.
-        () => vfs.withWriteLock(() => repairOpfsMetadataSidecar(handle)),
+        () => vfs.withWriteLock(() => repairOpfsMetadataSidecar(handle, vfs.onRepairProgress)),
         (summary) =>
           console.warn('[virtual-fs] repaired poisoned metadata sidecar; retrying mount', {
             dbName: vfs.dbName,
@@ -751,7 +773,7 @@ export class VirtualFS {
     const dbName = options?.dbName ?? 'browser-fs';
     const wipe = options?.wipe === true;
     const backend: VfsBackend = options?.backend ?? resolveVfsBackendFromEnv();
-    const vfs = new VirtualFS(dbName, wipe, backend);
+    const vfs = new VirtualFS(dbName, wipe, backend, undefined, options?.onRepairProgress);
     await vfs._ready;
     if (wipe) {
       await clearMountEntries().catch(() => {});
@@ -1274,7 +1296,7 @@ export class VirtualFS {
   async mount(
     absolutePath: string,
     backend: MountBackend,
-    opts?: { env?: MountIndexEnv }
+    opts?: { env?: MountIndexEnv; limits?: MountIndexLimits }
   ): Promise<void> {
     const normalized = normalizePath(absolutePath);
     if (this.mountPoints.has(normalized)) {
@@ -1313,10 +1335,12 @@ export class VirtualFS {
     // so fast directory walks work. Remote backends have their own
     // listing cache (RemoteMountCache); MountIndex stays local-only.
     if (backend.kind === 'local') {
-      // Resolve the index walk bounds from the shell env threaded down by the
-      // `mount` command (SLICC_MOUNT_INDEX_MAX_DEPTH / _MAX_ENTRIES via `export`);
-      // non-shell callers (peer sync, reload/restore) get the defaults.
-      const limits = resolveMountIndexLimits(opts?.env ?? {});
+      // Resolve the index walk bounds: explicit `limits` win (boot-time
+      // session restore passes RESTORED_MOUNT_INDEX_LIMITS so a huge or
+      // cloud-backed tree can't grind boot-time I/O), else the shell env
+      // threaded down by the `mount` command (SLICC_MOUNT_INDEX_MAX_DEPTH /
+      // _MAX_ENTRIES via `export`); non-shell callers get the defaults.
+      const limits = opts?.limits ?? resolveMountIndexLimits(opts?.env ?? {});
       this.mountIndex.registerMount(normalized, (backend as LocalMountBackend).getHandle(), limits);
     }
     // Build the persistence/sync descriptor.

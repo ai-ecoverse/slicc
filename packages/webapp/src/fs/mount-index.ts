@@ -119,6 +119,22 @@ export interface MountIndexLimits {
 }
 
 /**
+ * Walk bounds for mounts restored WITHOUT a user gesture (boot-time session
+ * restore in `mount-recovery.ts`). The interactive defaults (400 deep, 2M
+ * entries) suit a folder the user just picked and is waiting on; at boot the
+ * same budget lets a huge or cloud-backed tree (an iCloud folder full of
+ * dataless files — the 2026-08-24 `~/Desktop/kb` hazard) grind the kernel
+ * worker's I/O for minutes while the kernel-ready watchdog runs. A restored
+ * mount stays fully usable past the bound — only the fast-discovery index is
+ * truncated (`abortCause: 'entries-exceeded'`), and a later interactive re-mount
+ * re-indexes with the full budget.
+ */
+export const RESTORED_MOUNT_INDEX_LIMITS: MountIndexLimits = {
+  maxDepth: 100,
+  maxEntries: 100_000,
+};
+
+/**
  * The env shapes `resolveMountIndexLimits` accepts. The shell threads just-bash's
  * `CommandContext.env` (a `Map`, populated by `export`); plain records are still
  * accepted for non-shell callers and tests.

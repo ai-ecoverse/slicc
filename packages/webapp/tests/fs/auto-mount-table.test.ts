@@ -3,6 +3,7 @@ import { describe, expect, it, vi } from 'vitest';
 import type { AutoMountFS } from '../../src/fs/auto-mount-table.js';
 import {
   fetchAutoMounts,
+  hostShadowedEntries,
   isCanonicalAbsoluteTarget,
   mountConfiguredHostMounts,
   withoutHostMountedTargets,
@@ -134,5 +135,27 @@ describe('withoutHostMountedTargets', () => {
       { targetPath: '/mnt/other' },
     ]);
     expect(withoutHostMountedTargets(entries, [])).toEqual(entries);
+  });
+});
+
+describe('hostShadowedEntries', () => {
+  it('returns exactly the rows a configured host mount shadows', () => {
+    const entries = [
+      { targetPath: '/mnt/kb' },
+      { targetPath: '/mnt/kb/' }, // trailing slash still matches the target
+      { targetPath: '/mnt/other' },
+    ];
+    const mounted = [{ path: '/mnt/kb', hostPath: '/Users/me/Desktop/kb' }];
+    // Complement invariant: shadowed + kept === all, with no overlap — the
+    // purge must delete precisely what withoutHostMountedTargets filters.
+    expect(hostShadowedEntries(entries, mounted)).toEqual([
+      { targetPath: '/mnt/kb' },
+      { targetPath: '/mnt/kb/' },
+    ]);
+    expect(withoutHostMountedTargets(entries, mounted)).toEqual([{ targetPath: '/mnt/other' }]);
+  });
+
+  it('returns [] with no configured host mounts', () => {
+    expect(hostShadowedEntries([{ targetPath: '/mnt/kb' }], [])).toEqual([]);
   });
 });

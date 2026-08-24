@@ -76,4 +76,71 @@ describe('withMountHeartbeat', () => {
     await expect(withMountHeartbeat(async () => 42)).resolves.toBe(42);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('hands the work a callable no-op tick even with no callback', async () => {
+    // The orchestrator always threads the tick into VirtualFS.create; it
+    // must be safe to call when there is no onProgress consumer.
+    await expect(
+      withMountHeartbeat(async (tick) => {
+        tick();
+        tick();
+        return 'ok';
+      })
+    ).resolves.toBe('ok');
+  });
+
+  // 2026-08-24 field wedge: the same repair took ~8 minutes on an
+  // I/O-starved disk — far past the old TIME cap — while provably
+  // advancing entry by entry. Ticks must keep the beats flowing.
+  it('beats past the cap for as long as ticks keep advancing', async () => {
+    const stages: string[] = [];
+    let tick: () => void = () => {};
+    const never = new Promise<never>(() => {});
+    void withMountHeartbeat(
+      (t) => {
+        tick = t;
+        return never;
+      },
+      (s) => stages.push(s)
+    );
+    const rounds = MOUNT_HEARTBEAT_MAX_BEATS * 3;
+    for (let i = 0; i < rounds; i += 1) {
+      tick(); // at least one unit of progress per interval
+      await vi.advanceTimersByTimeAsync(MOUNT_HEARTBEAT_INTERVAL_MS);
+    }
+    // start + one beat per advancing interval — no cap applied.
+    expect(stages).toHaveLength(1 + rounds);
+    expect(stages.at(-1)).toBe(`shared-fs-mount:${rounds}`);
+  });
+
+  it('a tick resets the quiet run, then the cap counts silence only', async () => {
+    const stages: string[] = [];
+    let tick: () => void = () => {};
+    const never = new Promise<never>(() => {});
+    void withMountHeartbeat(
+      (t) => {
+        tick = t;
+        return never;
+      },
+      (s) => stages.push(s)
+    );
+    // Nearly exhaust the quiet budget…
+    await vi.advanceTimersByTimeAsync(
+      MOUNT_HEARTBEAT_INTERVAL_MS * (MOUNT_HEARTBEAT_MAX_BEATS - 1)
+    );
+    expect(stages).toHaveLength(1 + (MOUNT_HEARTBEAT_MAX_BEATS - 1));
+    // …then one unit of progress restores the full quiet budget: one
+    // reset beat + MAX quiet beats before silence…
+    tick();
+    await vi.advanceTimersByTimeAsync(
+      MOUNT_HEARTBEAT_INTERVAL_MS * (MOUNT_HEARTBEAT_MAX_BEATS + 1)
+    );
+    const expected = 1 + (MOUNT_HEARTBEAT_MAX_BEATS - 1) + (MOUNT_HEARTBEAT_MAX_BEATS + 1);
+    expect(stages).toHaveLength(expected);
+    // …and once the budget is spent with no further ticks, the beat stays
+    // quiet: the watchdog regains authority.
+    await vi.advanceTimersByTimeAsync(MOUNT_HEARTBEAT_INTERVAL_MS * 10);
+    expect(stages).toHaveLength(expected);
+    expect(vi.getTimerCount()).toBe(0);
+  });
 });

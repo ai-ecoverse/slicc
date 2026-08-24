@@ -94,7 +94,8 @@ interface MutableEntry {
  */
 export async function repairSidecarDocument(
   doc: SidecarIndexJson,
-  probe: SidecarProbe
+  probe: SidecarProbe,
+  onEntry?: () => void
 ): Promise<SidecarRepairSummary> {
   const summary: SidecarRepairSummary = {
     kindFixed: [],
@@ -107,6 +108,11 @@ export async function repairSidecarDocument(
   };
   const entries = doc.entries ?? {};
   for (const [path, raw] of Object.entries(entries)) {
+    // Liveness tick per entry scanned (probed or skipped) — the boot
+    // heartbeat uses it to prove the O(tree) repair is advancing, so a
+    // multi-minute pass on a cold or I/O-starved disk is not mistaken for
+    // a wedge (2026-08-24 field incident: ~8 minutes over 22k entries).
+    onEntry?.();
     if (path === '/' || typeof raw !== 'object' || raw === null) continue;
     // A sidecar must never track itself: writing it changes its own size, so
     // any recorded `/.metadata.json` size is stale on the retry mount and the
@@ -297,7 +303,8 @@ export async function resolveWithSidecarRepair<T>(
  * absent sidecar itself, and `initOpfsBackend` seeds an empty one).
  */
 export async function repairOpfsMetadataSidecar(
-  handle: FileSystemDirectoryHandle
+  handle: FileSystemDirectoryHandle,
+  onEntry?: () => void
 ): Promise<SidecarRepairSummary | null> {
   let doc: SidecarIndexJson;
   try {
@@ -310,7 +317,7 @@ export async function repairOpfsMetadataSidecar(
   } catch {
     return null;
   }
-  const summary = await repairSidecarDocument(doc, makeOpfsProbe(handle));
+  const summary = await repairSidecarDocument(doc, makeOpfsProbe(handle), onEntry);
   if (!summary.changed) return summary;
   const fh = await handle.getFileHandle('.metadata.json', { create: true });
   const writable = await fh.createWritable();

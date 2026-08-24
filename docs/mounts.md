@@ -160,7 +160,7 @@ The server serves each mapped folder over its local `/api/hostfs` bridge (loopba
 
 - **Live view**: reads/writes go straight to the host filesystem, so external edits are visible immediately — no `mount refresh` needed (it's a no-op on these mounts).
 - **Containment**: only paths under a mapped folder are reachable; `..` traversal and symlinks pointing outside the folder are refused, and the mount root itself cannot be removed.
-- **Config-owned**: the table is the single source of truth. Entries are not persisted in the browser; edit the table and relaunch to change them. `mount unmount` removes one for the session only.
+- **Config-owned**: the table is the single source of truth. Entries are not persisted in the browser; edit the table and relaunch to change them. `mount unmount` removes one for the session only. A persisted picker/S3 row at the same target is not just skipped for the boot — it is **purged from the store**, so a later launch without the table entry can't silently fall back to a stale FS-Access handle and walk a tree you thought was config-owned.
 - **Missing folders are skipped** at server start (with a warning) rather than failing the launch.
 - **Webapp-initiated mounts are untouched**: `mount <path>` still opens the picker and still asks for permission on each reload — the table never widens what a picker grant allowed.
 - Not available in the extension float or hosted/cloud mode: there is no local launcher to serve the folders.
@@ -206,6 +206,8 @@ Two environment variables override the defaults. Each must parse to a positive i
 | `SLICC_MOUNT_INDEX_MAX_ENTRIES` | max total entries   | `2,000,000` |
 
 (The worker / browser float has no OS env, so the defaults always apply there; the overrides are read once at construction in CLI / Electron mode.)
+
+**Boot-time session restore uses a smaller budget** (`RESTORED_MOUNT_INDEX_LIMITS`: depth 100, 100,000 entries). The interactive defaults suit a folder the user just picked and is waiting on; at boot the same budget let a huge or cloud-backed tree (an iCloud folder full of dataless files) grind the kernel worker's I/O for minutes while the kernel-ready watchdog ran (2026-08-24 incident). A restored mount that hits the bound stays fully usable — only the fast-discovery index is truncated (`entries-exceeded`), and re-mounting interactively re-indexes with the full budget.
 
 `mount list` renders a distinct, actionable line per skip cause:
 

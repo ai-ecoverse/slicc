@@ -150,6 +150,20 @@ export interface KernelWorkerSpawnOptions<TClient> {
    *  load-failure ErrorEvent is often opaque, and the shared guarded reload makes
    *  even an unrelated worker error reload at most once. (#1330) */
   onWorkerScriptError?: () => void;
+  /** See {@link KernelWorkerBootstrapOptions.onReadyStall}. */
+  onReadyStall?: (info: ReadyStallInfo) => void;
+  /** See {@link KernelWorkerBootstrapOptions.readyStallLimit}. */
+  readyStallLimit?: number;
+  /** See {@link KernelWorkerBootstrapOptions.onLateReady}. */
+  onLateReady?: () => void;
+}
+
+/** Passed to {@link KernelWorkerBootstrapOptions.onReadyStall} per watchdog fire. */
+export interface ReadyStallInfo {
+  /** Wall-clock ms since the worker was handed its init message. */
+  elapsedMs: number;
+  /** Consecutive watchdog fires with zero boot progress (1-based). */
+  stalls: number;
 }
 
 export interface KernelWorkerBootstrapOptions<TClient> {
@@ -185,6 +199,32 @@ export interface KernelWorkerBootstrapOptions<TClient> {
    *  load-failure ErrorEvent is often opaque, and the shared guarded reload makes
    *  even an unrelated worker error reload at most once. (#1330) */
   onWorkerScriptError?: () => void;
+  /**
+   * Fired when the ready watchdog expires but the boot is given another
+   * window instead of failing (see {@link readyStallLimit}). The page uses
+   * this to surface a non-destructive "still starting" state over the
+   * already-wired shell — everything except the final `ready` await is set
+   * up before the worker replies, so a late `kernel-worker-ready` resumes
+   * the normal boot path with no reload (2026-08-24 field wedge: an 8-minute
+   * sidecar repair finished AFTER the page had already bricked itself).
+   */
+  onReadyStall?: (info: ReadyStallInfo) => void;
+  /**
+   * Consecutive zero-progress watchdog windows tolerated before `ready`
+   * rejects for real. Any `kernel-worker-boot-progress` resets the count —
+   * the limit bounds SILENCE, not boot time. Defaults to 3 when
+   * {@link onReadyStall} is provided (stall UI exists, so waiting is safe)
+   * and 1 otherwise (legacy single-window behavior).
+   */
+  readyStallLimit?: number;
+  /**
+   * Fired if `kernel-worker-ready` arrives AFTER `ready` already rejected.
+   * When set, the rejection path keeps the ready listener attached instead
+   * of tearing it down, so a worker that finishes booting behind a recovery
+   * screen is heard rather than discarded. The listener is removed once
+   * this fires (or on `dispose()`).
+   */
+  onLateReady?: () => void;
 }
 
 /**
@@ -224,6 +264,123 @@ export interface SpawnedKernelHost<TClient> {
 // ---------------------------------------------------------------------------
 
 /**
+ * Watch the kernel port for the boot handshake and arm the ready watchdog.
+ *
+ * Single cleanup path: `cleanup()` removes the listener AND clears whichever
+ * timer is armed. Called from the success branch, the hard-timeout branch,
+ * the late-ready branch, AND from the host's `dispose()` so a caller that
+ * disposes before the worker replies doesn't leave the listener attached for
+ * the worker's lifetime.
+ */
+function watchKernelReady(
+  port: MessagePort,
+  options: Pick<
+    KernelWorkerBootstrapOptions<unknown>,
+    'onReadyStall' | 'readyStallLimit' | 'onLateReady'
+  >,
+  readyTimeoutMs: number
+): { ready: Promise<void>; cleanup: () => void } {
+  let cleanupReady: () => void = () => {};
+  const ready = new Promise<void>((resolve, reject) => {
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    let listener: ((event: MessageEvent) => void) | null = null;
+
+    const clearTimer = (): void => {
+      if (timeoutId !== null) {
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      }
+    };
+    // Stall accounting: the watchdog bounds SILENCE, not total boot time.
+    // Each zero-progress window is one stall; boot progress resets the
+    // count. Only after `readyStallLimit` consecutive stalls does `ready`
+    // reject — and with `onLateReady` set, even that keeps the listener
+    // attached so a worker that finishes booting late is still heard.
+    const readyStallLimit = Math.max(1, options.readyStallLimit ?? (options.onReadyStall ? 3 : 1));
+    const startedAt = Date.now();
+    let stalls = 0;
+    let timedOut = false;
+    // Arm the boot-ready clock.
+    const armReadyTimeout = (): void => {
+      clearTimer();
+      timeoutId = setTimeout(() => {
+        stalls += 1;
+        if (stalls < readyStallLimit) {
+          options.onReadyStall?.({ elapsedMs: Date.now() - startedAt, stalls });
+          armReadyTimeout();
+          return;
+        }
+        if (options.onLateReady) {
+          // Keep the listener attached for a late `kernel-worker-ready`;
+          // only the timer dies here.
+          clearTimer();
+        } else {
+          cleanupReady();
+        }
+        timedOut = true;
+        reject(
+          new Error(
+            `Kernel worker did not signal ready within ${readyTimeoutMs * readyStallLimit}ms`
+          )
+        );
+      }, readyTimeoutMs);
+    };
+
+    cleanupReady = (): void => {
+      if (listener !== null) {
+        port.removeEventListener('message', listener as EventListener);
+        listener = null;
+      }
+      clearTimer();
+    };
+    listener = (event: MessageEvent): void => {
+      const data = event.data as
+        | Partial<KernelWorkerReadyMsg>
+        | Partial<KernelWorkerBootErrorMsg>
+        | Partial<KernelWorkerBootProgressMsg>
+        | null;
+      // #2007: a boot-progress heartbeat means the worker is still
+      // advancing (orchestrator up, a scoop restored, cone bootstrapped,
+      // …) — re-arm the clock so the timeout is a stall watchdog, not a
+      // hard cap on a slow-but-healthy boot.
+      if (data?.type === 'kernel-worker-boot-progress') {
+        stalls = 0;
+        armReadyTimeout();
+        return;
+      }
+      if (data?.type === 'kernel-worker-ready') {
+        cleanupReady();
+        if (timedOut) {
+          // `ready` already rejected — the page moved on (recovery screen /
+          // stall UI). Report the late arrival instead of resolving into a
+          // settled promise nobody is awaiting.
+          options.onLateReady?.();
+          return;
+        }
+        resolve();
+        return;
+      }
+      // Boot failed with a known cause: reject NOW with the real error
+      // instead of letting the 30s timeout produce a generic message next
+      // to the recovery screen's data-wipe button (#1984). `.code` rides
+      // along so future recovery UI can special-case storage-shaped
+      // failures.
+      if (data?.type === 'kernel-worker-boot-error') {
+        cleanupReady();
+        const detail = (data as Partial<KernelWorkerBootErrorMsg>).message ?? 'unknown error';
+        const code = (data as Partial<KernelWorkerBootErrorMsg>).code;
+        const error = new Error(`Kernel worker boot failed: ${detail}`);
+        if (code) (error as Error & { code?: string }).code = code;
+        reject(error);
+      }
+    };
+    port.addEventListener('message', listener as EventListener);
+    armReadyTimeout();
+  });
+  return { ready, cleanup: () => cleanupReady() };
+}
+
+/**
  * Wire up an existing Worker-like instance to a kernel host. Used by
  * `spawnKernelWorker` and by tests with a mock worker.
  */
@@ -254,77 +411,13 @@ export function bootstrapKernelWorker<TClient>(
   const stopForwarder = startPageCdpForwarder(cdpChannel.port1, realCdpTransport);
 
   // Wait for `kernel-worker-ready` on the kernel port. The OffscreenClient
-  // already started this port via its onMessage subscription; we just add
-  // a second listener that resolves on the boot signal.
-  //
-  // Single cleanup path: `cleanupReady()` removes the listener AND clears
-  // whichever timer is armed. Called from the success branch, the timeout
-  // branch, AND from `dispose()` so a caller that disposes before the
-  // worker replies doesn't leave the listener attached for the worker's
-  // lifetime.
-  let cleanupReady: (() => void) | null = null;
-  const ready = new Promise<void>((resolve, reject) => {
-    let timeoutId: ReturnType<typeof setTimeout> | null = null;
-    let listener: ((event: MessageEvent) => void) | null = null;
-
-    const clearTimer = (): void => {
-      if (timeoutId !== null) {
-        clearTimeout(timeoutId);
-        timeoutId = null;
-      }
-    };
-    // Arm the boot-ready clock.
-    const armReadyTimeout = (): void => {
-      clearTimer();
-      timeoutId = setTimeout(() => {
-        cleanupReady?.();
-        reject(new Error(`Kernel worker did not signal ready within ${readyTimeoutMs}ms`));
-      }, readyTimeoutMs);
-    };
-
-    cleanupReady = (): void => {
-      if (listener !== null) {
-        kernelChannel.port1.removeEventListener('message', listener as EventListener);
-        listener = null;
-      }
-      clearTimer();
-    };
-    listener = (event: MessageEvent): void => {
-      const data = event.data as
-        | Partial<KernelWorkerReadyMsg>
-        | Partial<KernelWorkerBootErrorMsg>
-        | Partial<KernelWorkerBootProgressMsg>
-        | null;
-      // #2007: a boot-progress heartbeat means the worker is still
-      // advancing (orchestrator up, a scoop restored, cone bootstrapped,
-      // …) — re-arm the clock so the timeout is a stall watchdog, not a
-      // hard cap on a slow-but-healthy boot.
-      if (data?.type === 'kernel-worker-boot-progress') {
-        armReadyTimeout();
-        return;
-      }
-      if (data?.type === 'kernel-worker-ready') {
-        cleanupReady?.();
-        resolve();
-        return;
-      }
-      // Boot failed with a known cause: reject NOW with the real error
-      // instead of letting the 30s timeout produce a generic message next
-      // to the recovery screen's data-wipe button (#1984). `.code` rides
-      // along so future recovery UI can special-case storage-shaped
-      // failures.
-      if (data?.type === 'kernel-worker-boot-error') {
-        cleanupReady?.();
-        const detail = (data as Partial<KernelWorkerBootErrorMsg>).message ?? 'unknown error';
-        const code = (data as Partial<KernelWorkerBootErrorMsg>).code;
-        const error = new Error(`Kernel worker boot failed: ${detail}`);
-        if (code) (error as Error & { code?: string }).code = code;
-        reject(error);
-      }
-    };
-    kernelChannel.port1.addEventListener('message', listener as EventListener);
-    armReadyTimeout();
-  });
+  // already started this port via its onMessage subscription; the watcher
+  // adds a second listener that resolves on the boot signal.
+  const { ready, cleanup: cleanupReady } = watchKernelReady(
+    kernelChannel.port1,
+    options,
+    readyTimeoutMs
+  );
 
   // Hand the worker its ports. After `postMessage` with a transferable
   // list, the page can no longer use port2 of either channel — that's
@@ -360,7 +453,7 @@ export function bootstrapKernelWorker<TClient>(
       // callback racing in flight gets removed, not orphaned. The
       // timeout fires the rejection if `ready` is still pending; we
       // don't resolve it here.
-      cleanupReady?.();
+      cleanupReady();
       stopForwarder();
       try {
         worker.postMessage({ type: 'kernel-worker-shutdown' });
@@ -422,5 +515,8 @@ export function spawnKernelWorker<TClient>(
     extensionDelegateId: options.extensionDelegateId,
     flagFloat: options.flagFloat,
     onWorkerScriptError: options.onWorkerScriptError,
+    onReadyStall: options.onReadyStall,
+    readyStallLimit: options.readyStallLimit,
+    onLateReady: options.onLateReady,
   });
 }

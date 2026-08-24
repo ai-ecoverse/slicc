@@ -347,3 +347,109 @@ describe('bootstrapKernelWorker', () => {
     });
   });
 });
+
+describe('slow-boot stall tolerance (2026-08-24 field wedge)', () => {
+  /** Post init and expose the worker-side kernel port for manual driving. */
+  function makeManualWorker(): { worker: WorkerLike; port: () => MessagePort } {
+    let kernelPort: MessagePort | null = null;
+    const worker: WorkerLike = {
+      postMessage: (message: unknown) => {
+        const data = message as { type?: string; kernelPort?: MessagePort };
+        if (data?.type !== 'kernel-worker-init' || !data.kernelPort) return;
+        kernelPort = data.kernelPort;
+        kernelPort.start();
+      },
+      terminate: () => {},
+    };
+    return { worker, port: () => kernelPort! };
+  }
+
+  function bootstrap(
+    worker: WorkerLike,
+    opts: {
+      readyTimeoutMs: number;
+      onReadyStall?: (info: { elapsedMs: number; stalls: number }) => void;
+      readyStallLimit?: number;
+      onLateReady?: () => void;
+    }
+  ) {
+    return bootstrapKernelWorker({
+      worker,
+      realCdpTransport: makeStubCdpTransport(),
+      makeClient: (transport) => new OffscreenClient(makeStubCallbacks(), transport),
+      ...opts,
+    });
+  }
+
+  it('onReadyStall fires per quiet window and a late ready still resolves', async () => {
+    const { worker, port } = makeManualWorker();
+    const stalls: number[] = [];
+    const host = bootstrap(worker, {
+      readyTimeoutMs: 60,
+      onReadyStall: (info) => stalls.push(info.stalls),
+      readyStallLimit: 5,
+    });
+    // Two quiet windows pass; the boot is stalled but not dead.
+    await new Promise((r) => setTimeout(r, 150));
+    expect(stalls.length).toBeGreaterThanOrEqual(2);
+    // The worker comes up late — well past the base window — and ready
+    // resolves normally: no reload, no recovery screen.
+    port().postMessage({ type: 'kernel-worker-ready' });
+    await expect(host.ready).resolves.toBeUndefined();
+    host.dispose();
+  });
+
+  it('boot progress resets the stall count', async () => {
+    const { worker, port } = makeManualWorker();
+    const stalls: number[] = [];
+    const host = bootstrap(worker, {
+      readyTimeoutMs: 60,
+      onReadyStall: (info) => stalls.push(info.stalls),
+      readyStallLimit: 3,
+    });
+    // One stall accrues…
+    await new Promise((r) => setTimeout(r, 90));
+    expect(stalls).toEqual([1]);
+    // …then progress lands: the count restarts from 1 on the next stall
+    // instead of marching to the limit.
+    port().postMessage({ type: 'kernel-worker-boot-progress', stage: 'shared-fs-mount:9' });
+    await new Promise((r) => setTimeout(r, 90));
+    expect(stalls).toEqual([1, 1]);
+    port().postMessage({ type: 'kernel-worker-ready' });
+    await expect(host.ready).resolves.toBeUndefined();
+    host.dispose();
+  });
+
+  it('rejects after the stall limit, then a late ready fires onLateReady exactly once', async () => {
+    const { worker, port } = makeManualWorker();
+    const onLateReady = vi.fn();
+    const host = bootstrap(worker, {
+      readyTimeoutMs: 40,
+      onReadyStall: () => {},
+      readyStallLimit: 2,
+      onLateReady,
+    });
+    await expect(host.ready).rejects.toThrow(/did not signal ready within 80ms/);
+    expect(onLateReady).not.toHaveBeenCalled();
+    // The worker finishes booting behind the recovery screen: the listener
+    // must still be attached and report the late arrival.
+    port().postMessage({ type: 'kernel-worker-ready' });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(onLateReady).toHaveBeenCalledTimes(1);
+    // Cleanup ran when the late ready fired — a duplicate ready is inert.
+    port().postMessage({ type: 'kernel-worker-ready' });
+    await new Promise((r) => setTimeout(r, 20));
+    expect(onLateReady).toHaveBeenCalledTimes(1);
+    host.dispose();
+  });
+
+  it('without the new options the first quiet window still rejects (legacy)', async () => {
+    const { worker } = makeManualWorker();
+    const started = Date.now();
+    const host = bootstrap(worker, { readyTimeoutMs: 50 });
+    await expect(host.ready).rejects.toThrow(/did not signal ready within 50ms/);
+    // One window, not three: no onReadyStall means no silent extra waiting.
+    expect(Date.now() - started).toBeLessThan(140);
+    host.dispose();
+  });
+});

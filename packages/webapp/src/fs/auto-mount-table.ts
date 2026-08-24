@@ -95,6 +95,24 @@ export function withoutHostMountedTargets<T extends { targetPath: string }>(
 }
 
 /**
+ * The complement of {@link withoutHostMountedTargets}: the persisted rows a
+ * configured host mount now shadows. The caller purges these from the store
+ * for good, not just for this boot — a shadowed row left armed means the
+ * first boot where the launcher stops advertising the target silently falls
+ * back to the persisted FS-Access handle, and a boot-time index walk of a
+ * tree the user thought was config-owned (2026-08-24: an iCloud
+ * `~/Desktop/kb` behind a hostfs mapping).
+ */
+export function hostShadowedEntries<T extends { targetPath: string }>(
+  entries: T[],
+  mounted: readonly AutoMountMapping[]
+): T[] {
+  if (mounted.length === 0) return [];
+  const owned = new Set(mounted.map((m) => m.path));
+  return entries.filter((entry) => owned.has(entry.targetPath.replace(/\/+$/, '') || '/'));
+}
+
+/**
  * Mount every table entry that is not already mounted. Failures are
  * per-entry (one bad mapping must not block the rest) and logged, never
  * thrown — boot continues without the mount, exactly like a missing
