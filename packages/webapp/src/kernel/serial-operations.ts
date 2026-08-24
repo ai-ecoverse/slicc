@@ -59,6 +59,9 @@ export async function serialList(
   serial: SerialApi
 ): Promise<SerialDeviceInfo[]> {
   const ports = await serial.getPorts();
+  // Reconcile first: a re-enumerated device hands back a new SerialPort object,
+  // and the stale one must not keep answering to its old handle.
+  registry.retainOnly(ports);
   return ports.map((p) => {
     const handle = registry.register(p);
     return deviceToInfo(handle, registry.get(handle)!);
@@ -85,7 +88,19 @@ export async function serialOpen(
   options: SerialOpenOptions
 ): Promise<void> {
   const entry = resolve(registry, handle);
-  await entry.port.open(options);
+  try {
+    await entry.port.open(options);
+  } catch (err) {
+    // A handle whose device re-enumerated (board reset, replug) can never be
+    // opened again. Say so, instead of passing through Chrome's opaque
+    // "Failed to open serial port", which reads like a hardware fault and sent
+    // us chasing phantom problems for hours.
+    throw new Error(
+      `${err instanceof Error ? err.message : String(err)} ` +
+        `(handle '${handle}' may be stale after a device reset — ` +
+        `re-run 'serial list' to pick up the current handle)`
+    );
+  }
   entry.opened = true;
 }
 
@@ -114,8 +129,22 @@ export async function serialClose(registry: SerialPortRegistry, handle: string):
     }
     entry.writer = undefined;
   }
-  await entry.port.close();
-  entry.opened = false;
+  // Idempotent: closing an already-closed port is a no-op, not an error. The
+  // state reset must happen even if close() rejects, otherwise a failed close
+  // leaves the entry permanently marked open and every later op is refused.
+  try {
+    await entry.port.close();
+  } catch (err) {
+    if (!isAlreadyClosed(err)) throw err;
+  } finally {
+    entry.opened = false;
+  }
+}
+
+/** Chrome reports a redundant close as an InvalidStateError; treat it as success. */
+function isAlreadyClosed(err: unknown): boolean {
+  const message = err instanceof Error ? err.message : String(err);
+  return /already closed|not open/i.test(message);
 }
 
 function getReader(entry: SerialPortEntry): ReadableStreamDefaultReader<Uint8Array> {

@@ -156,4 +156,76 @@ describe('serial-operations', () => {
       /unknown serial handle/
     );
   });
+  // ── Re-enumeration wedge (#serial-stale-handle) ────────────────────────────
+  // A board reset during flashing cycles the USB device, so getPorts() returns
+  // a NEW SerialPort object. Before the fix the old object stayed registered
+  // and its handle failed to open forever, recoverable only by reloading.
+
+  it('serialList evicts entries whose port vanished after re-enumeration', async () => {
+    const reg = new SerialPortRegistry();
+    const before = makePort();
+    const serial = { getPorts: vi.fn(async () => [before]) } as never;
+
+    const first = await serialOps.serialList(reg, serial);
+    expect(first[0]?.handle).toBe('serial1');
+
+    // Device re-enumerates: same vid/pid, different object identity.
+    const after = makePort();
+    (serial as unknown as { getPorts: () => Promise<unknown[]> }).getPorts = async () => [after];
+
+    const second = await serialOps.serialList(reg, serial);
+    expect(second).toHaveLength(1);
+    // The dead handle must be gone, not merely shadowed.
+    expect(reg.get('serial1')).toBeUndefined();
+    expect(reg.get(second[0]!.handle)?.port).toBe(after);
+  });
+
+  it('retainOnly reports evicted handles and clears their stream state', () => {
+    const reg = new SerialPortRegistry();
+    const gone = makePort();
+    const kept = makePort();
+    const goneHandle = reg.register(gone);
+    const keptHandle = reg.register(kept);
+    reg.get(goneHandle)!.opened = true;
+
+    expect(reg.retainOnly([kept])).toEqual([goneHandle]);
+    expect(reg.get(goneHandle)).toBeUndefined();
+    expect(reg.get(keptHandle)?.port).toBe(kept);
+  });
+
+  it('opening a stale handle explains that it is stale', async () => {
+    const reg = new SerialPortRegistry();
+    const port = makePort();
+    port.open = vi.fn(async () => {
+      throw new Error('Failed to open serial port.');
+    });
+    const handle = reg.register(port);
+    await expect(serialOps.serialOpen(reg, handle, { baudRate: 9600 })).rejects.toThrow(
+      /may be stale after a device reset/
+    );
+  });
+
+  it('serialClose is idempotent when the port is already closed', async () => {
+    const reg = new SerialPortRegistry();
+    const port = makePort();
+    port.close = vi.fn(async () => {
+      throw new Error('The port is already closed.');
+    });
+    const handle = reg.register(port);
+    reg.get(handle)!.opened = true;
+    await expect(serialOps.serialClose(reg, handle)).resolves.toBeUndefined();
+    expect(reg.get(handle)?.opened).toBe(false);
+  });
+
+  it('serialClose still surfaces genuine close failures but resets state', async () => {
+    const reg = new SerialPortRegistry();
+    const port = makePort();
+    port.close = vi.fn(async () => {
+      throw new Error('device disconnected mid-transfer');
+    });
+    const handle = reg.register(port);
+    reg.get(handle)!.opened = true;
+    await expect(serialOps.serialClose(reg, handle)).rejects.toThrow(/disconnected/);
+    expect(reg.get(handle)?.opened).toBe(false);
+  });
 });

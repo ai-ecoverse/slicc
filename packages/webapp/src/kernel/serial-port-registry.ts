@@ -123,6 +123,32 @@ export class SerialPortRegistry {
   list(): Array<{ handle: string; entry: SerialPortEntry }> {
     return [...this.byHandle].map(([handle, entry]) => ({ handle, entry }));
   }
+
+  /**
+   * Drop entries whose port is no longer present in `live`.
+   *
+   * A device that re-enumerates (USB replug, or a board reset that cycles the
+   * port — routine when flashing) gets a BRAND NEW `SerialPort` object from
+   * `navigator.serial.getPorts()`. Without this, the old object lingers under
+   * its old handle forever: every `open` on it fails with an opaque
+   * "Failed to open serial port" and only a page reload clears it.
+   *
+   * Returns the handles that were evicted.
+   */
+  retainOnly(live: readonly SerialPort[]): string[] {
+    const evicted: string[] = [];
+    for (const [handle, entry] of [...this.byHandle]) {
+      if (live.includes(entry.port)) continue;
+      entry.reader = undefined;
+      entry.writer = undefined;
+      entry.pendingRead = undefined;
+      entry.leftover = undefined;
+      entry.opened = false;
+      this.byHandle.delete(handle);
+      evicted.push(handle);
+    }
+    return evicted;
+  }
 }
 
 let sharedRegistry: SerialPortRegistry | null = null;

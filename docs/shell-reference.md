@@ -909,6 +909,21 @@ Web Serial access from the shell (`packages/webapp/src/shell/supplemental-comman
 
 The `serial request` chooser requires a real user gesture (see [Gesture bridge](#gesture-bridge-usb--serial--hid)). `read` emits raw bytes by default; `--hex` hex-dumps. Reads/writes are capped at 4 MiB.
 
+**Handles are invalidated by re-enumeration.** A board that resets — every
+`esptool` flash does this — cycles its USB device, and Chrome hands back a
+_new_ `SerialPort` object. `serial list` reconciles on each call: ports that
+disappeared are evicted and their handles stop resolving, so a script must
+re-read the handle rather than cache `serial1`:
+
+```bash
+H=$(serial list | head -1 | cut -f1)
+serial open "$H" --baud 115200
+```
+
+Opening a handle whose device went away reports that the handle may be stale
+and tells you to re-run `serial list`, instead of surfacing the browser's bare
+`Failed to open serial port`.
+
 ### Subcommands
 
 | Form                                      | Behavior                                                                |
@@ -916,7 +931,7 @@ The `serial request` chooser requires a real user gesture (see [Gesture bridge](
 | `serial list`                             | List currently-granted ports as `handle  vid:pid [open]`.               |
 | `serial request [--vid 0x.. --pid 0x..]`  | Open the port picker (needs a user gesture); prints the granted handle. |
 | `serial open <handle> [open flags]`       | Open a port with the given line settings.                               |
-| `serial close <handle>`                   | Close a port.                                                           |
+| `serial close <handle>`                   | Close a port. Idempotent — closing an already-closed port succeeds.     |
 | `serial read <handle> [read flags]`       | Read bytes (raw by default, `--hex` to dump).                           |
 | `serial write <handle>`                   | Write stdin bytes to the port; prints `<n> bytes written`.              |
 | `serial signals <handle> get`             | Print control input signals (`cts dcd dsr ri`).                         |
