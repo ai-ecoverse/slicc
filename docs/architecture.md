@@ -405,8 +405,9 @@ The Chrome extension is a CDP pass-through + bootstrapper — no bundled UI, no 
 
 **IndexedDB persistence (in the hosted origin):**
 
-- `browser-coding-agent` DB: Chat display messages (single source of truth, written by the page-side `Bridge`)
-- `agent-sessions` DB: Agent LLM conversation history (restored by ScoopContext on restart)
+- `slicc-work-units` DB: the CANONICAL conversation record per work unit (#2275), keyed `<workspaceRoot>::<jid>`, plus the migration cursor. Pi history, the chat projection, transcripts and child summaries are derived from it (`work-unit/conversation/derive.ts`)
+- `browser-coding-agent` DB: Chat display messages, written by the page-side `Bridge`. Still written and still the read fallback while the #2275 read-old/write-new window is open
+- `agent-sessions` DB: Agent LLM conversation history (restored by ScoopContext on restart; canonical record first, this store as the fallback)
 - `slicc-groups` DB: Orchestrator routing data (scoops, tasks, webhooks, crontasks)
 
 The legacy `chrome-extension://<id>` origin no longer holds chat or VFS state; only `chrome.storage.local` secrets and OAuth replicas live there.

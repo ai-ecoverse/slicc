@@ -45,9 +45,11 @@ import type { RestrictedFS } from '../fs/restricted-fs.js';
 import type { Process, ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
 import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
+import { conversationKeyFor, workspaceIdFor } from '../work-unit/conversation/key.js';
+import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { toDescriptor } from '../work-unit/descriptor.js';
 import { rootsOf } from '../work-unit/policy.js';
-import { processOwnerKindFor } from '../work-unit/record.js';
+import { chatSessionIdFor, processOwnerKindFor } from '../work-unit/record.js';
 import type { WorkUnitDescriptor } from '../work-unit/types.js';
 import { handleAgentEnd } from './scoop-context/agent-end-dispatch.js';
 import { type AgentEventSink, routeAgentEvent } from './scoop-context/agent-event-router.js';
@@ -172,7 +174,8 @@ export class ScoopContext {
     skillsFs?: VirtualFS,
     coneJid?: string,
     processManager?: ProcessManager,
-    sudoManager?: SudoManager | null
+    sudoManager?: SudoManager | null,
+    conversationStore?: WorkUnitConversationStore | null
   ) {
     this.scoop = scoop;
     this.unit = toDescriptor(scoop);
@@ -186,6 +189,24 @@ export class ScoopContext {
 
     this.sessions = new SessionPersistence({
       store: sessionStore ?? null,
+      // The canonical conversation record (#2275). Absent — no store wired,
+      // or a float that persists nothing — leaves the legacy `agent-sessions`
+      // path exactly as it was.
+      canonical: conversationStore
+        ? {
+            store: conversationStore,
+            identity: {
+              key: conversationKeyFor(scoop),
+              workUnitId: scoop.jid,
+              workspaceId: workspaceIdFor(scoop),
+              folder: scoop.folder,
+              legacyKeys: {
+                agentSessionId: scoop.jid,
+                chatSessionId: chatSessionIdFor(scoop),
+              },
+            },
+          }
+        : null,
       // Internal persistence key — stable across days/restarts so saved
       // conversations can be restored by `SessionStore.load`. The outgoing
       // Adobe `X-Session-Id` is computed separately in `init()`.

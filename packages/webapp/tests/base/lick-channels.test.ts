@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { isLickChannel, LICK_CHANNELS } from '../../src/ui/lick-channels.js';
+import { isLickChannel, LICK_CHANNELS } from '../../src/base/lick-channels.js';
 
 describe('isLickChannel', () => {
   it('recognizes the SP2 workflow completion channel as a lick', () => {

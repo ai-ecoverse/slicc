@@ -51,6 +51,7 @@ function makeManager(
     getScoops: () => scoops,
     getSharedFs: () => ({}),
     getSessionStore: () => null,
+    getConversationStore: () => null,
     getProcessManager: () => null,
     getSudoManager: () => null,
     getLickManager: () => null,

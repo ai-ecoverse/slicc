@@ -28,6 +28,8 @@ import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
 import type { SudoDecision, SudoRequest } from '../sudo/index.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
+import { conversationKeyFor } from '../work-unit/conversation/key.js';
+import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { toDescriptor, workspaceFor } from '../work-unit/descriptor.js';
 import { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { rootOwnerOf, rootsOf } from '../work-unit/policy.js';
@@ -138,6 +140,13 @@ export interface ScoopLifecycleDeps {
   getSharedFs(): VirtualFS | null;
   /** Live SessionStore (or null before init). Threaded into every new `ScoopContext`. */
   getSessionStore(): SessionStore | null;
+  /**
+   * Canonical conversation store (#2275), or null before init / on a float
+   * that persists nothing. Threaded into every new `ScoopContext` beside the
+   * legacy session store — both are written while the migration window is
+   * open.
+   */
+  getConversationStore(): WorkUnitConversationStore | null;
   /** Live ProcessManager (or null when unwired). Threaded into every new `ScoopContext`. */
   getProcessManager(): ProcessManager | null;
   /** Live SudoManager — used for sudoers seeding and threaded into every new `ScoopContext`. */
@@ -421,7 +430,8 @@ export class ScoopLifecycleManager {
       sharedFs ?? undefined,
       coneJid,
       this.deps.getProcessManager() ?? undefined,
-      this.deps.getSudoManager()
+      this.deps.getSudoManager(),
+      this.deps.getConversationStore()
     );
 
     unit.attachContext(context, contextId);
@@ -692,6 +702,9 @@ export class ScoopLifecycleManager {
     }
 
     this.destroyTab(jid);
+    // Forget the canonical record too — a dropped unit's conversation is
+    // gone from every store, not just the legacy one (#2275).
+    if (scoop) void this.deps.getConversationStore()?.delete(conversationKeyFor(scoop));
     this.deps
       .getSessionStore()
       ?.delete(jid)

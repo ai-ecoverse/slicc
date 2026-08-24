@@ -90,9 +90,7 @@ Non-obvious rules:
   record read — a role branch no longer has a field to read. `isCone` survives only on
   the follower wire, write-only leader-side (projected from `isRootUnit`). Reading it
   back is a follower fallback for a pre-`parentId` leader (`summaryIsRoot`,
-  `coneJidFromWire`); a wire read in `scoops/`/`kernel/` is the singleton cone
-  returning. New `scoops/`
-  and `kernel/` code asks `orchestrator.getWorkUnits()` (`getParent`, `getChildren`,
+  `coneJidFromWire`). New `scoops/` and `kernel/` code asks `orchestrator.getWorkUnits()` (`getParent`, `getChildren`,
   `resolveDefaultRoot`) or the unit's `policy.*`. Every creation path sets `parentJid`
   explicitly; restore backfills and persists it (`legacyRecordIsCone` reads the
   pre-#2279 field once, there, and `normalizeScoopRecord` strips it). Several roots may
@@ -100,17 +98,18 @@ Non-obvious rules:
   `threadContextFor`, `switcherLabelFor`, `orderForSwitcher(scoops, selectedJid)`);
   chat sessions are keyed `session-<folder>`
   (`chatSessionIdFor`). Cone add/drop lives in `ui/wc/wc-cone-actions.ts`
-  behind `<slicc-freezer-new>`'s action row (name / confirm via
-  `<slicc-dialog>`, never inline); the tab strip is the only switcher.
+  behind `<slicc-freezer-new>`'s action row (`<slicc-dialog>`, never inline);
+  the tab strip is the only switcher.
   Directory layout comes from `workspaceFor` ALONE — primary cone
   `/workspace`, extra cone `/cones/<folder>/workspace` + its own `CLAUDE.md`,
   scoop `/scoops/<folder>/workspace`; `/shared`, `/tmp` and the skills library
   (`SKILLS_LIBRARY_DIR`) stay shared. Never hardcode `/workspace` for a unit's
-  root, memory file or spawn default. Memory is per cone on BOTH paths: the
-  compaction sink is bound from the unit's own record, and the agentic curator
-  takes a `cone` (`runAgenticMemoryPass`) — it curates that cone's file, from
-  that cone's workspace, under a per-cone agent name, with `MEMORY.md`'s
-  primary-relative paths rebased onto it.
+  root, memory file or spawn default. Memory is per cone on both paths. A unit's CONVERSATION is one
+  canonical, append-only record too (#2275, `work-unit/conversation/`): Pi
+  history, the UI projection and transcripts are DERIVATIONS, never parallel
+  writes. The legacy stores are still written (a read-old/write-new window),
+  so anything deriving to nothing falls back — never make a canonical read
+  fatal or delete a legacy record (#2006).
   **Users never talk to a scoop** (#2312): a selected scoop is READ-ONLY
   (`isReadOnlyRole` — one rule, never a second branch) and anything it needs
   from a human goes to the OWNING cone, never `defaultRoot()` for a root.
