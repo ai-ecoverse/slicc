@@ -30,7 +30,10 @@ const SQLJS_WASM_CDN = 'https://sql.js.org/dist/';
 
 export type TypeScriptModule = typeof import('typescript-js');
 
-export const TYPESCRIPT_VFS_INSTALL_COMMAND = 'ipk add typescript@6.0.3';
+/** Canonical global install prefix for CLI-tool bootstrap hints. */
+export const GLOBAL_IPK_ADD = 'ipk add -g';
+
+export const TYPESCRIPT_VFS_INSTALL_COMMAND = `${GLOBAL_IPK_ADD} typescript@6.0.3`;
 
 export function resolvePinnedPackageVersion(packageName: string, versionSpec: unknown): string {
   if (typeof versionSpec !== 'string' || !/^\d+\.\d+\.\d+(?:-[0-9A-Za-z.-]+)?$/.test(versionSpec)) {

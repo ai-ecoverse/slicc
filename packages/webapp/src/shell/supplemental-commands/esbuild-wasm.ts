@@ -31,7 +31,7 @@ import * as esbuild from 'esbuild-wasm';
 import { splitPath } from '../../fs/path-utils.js';
 import { compileWasmModule } from '../../kernel/realm/wasm-compiler.js';
 import { type ModuleReader, nodeModulesSearchPath, resolve } from '../ipk/resolver.js';
-import { isNodeRuntime } from './shared.js';
+import { GLOBAL_IPK_ADD, isNodeRuntime } from './shared.js';
 
 /** Version string read off the installed `esbuild-wasm` package. */
 export const ESBUILD_VERSION = esbuild.version;
@@ -214,7 +214,7 @@ async function loadEsbuild(
   // out to the network.
   if (!ipk) {
     throw new Error(
-      `esbuild-wasm is not available: install via \`ipk add esbuild-wasm@${ESBUILD_VERSION}\``
+      `esbuild-wasm is not available: install via \`${GLOBAL_IPK_ADD} esbuild-wasm@${ESBUILD_VERSION}\``
     );
   }
   const binary = await tryLoadEsbuildWasmFromNodeModules(ipk);
@@ -224,7 +224,7 @@ async function loadEsbuild(
     // from `/shared`, and the bare "not installed" claim reads as a lie
     // there (#2200).
     throw new Error(
-      `esbuild-wasm is not installed in node_modules: run \`ipk add esbuild-wasm@${ESBUILD_VERSION}\`` +
+      `esbuild-wasm is not installed in node_modules: run \`${GLOBAL_IPK_ADD} esbuild-wasm@${ESBUILD_VERSION}\`` +
         ` (searched from ${ipk.fromDir}: ${nodeModulesSearchPath(ipk.fromDir).join(', ')})`
     );
   }

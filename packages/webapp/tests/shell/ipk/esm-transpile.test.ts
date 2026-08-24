@@ -222,7 +222,7 @@ describe('createEsmTranspile() — typescript fallback path', () => {
         ipk: { reader: makeReader({}), readBytes: async () => new Uint8Array(), fromDir: '/app' },
       });
       await expect(transpile({ source: ESM_SRC, path: PATH, kind: 'esm' })).rejects.toThrow(
-        /ipk add typescript@6\.0\.3/
+        /ipk add -g typescript@6\.0\.3/
       );
     } finally {
       vi.unstubAllGlobals();

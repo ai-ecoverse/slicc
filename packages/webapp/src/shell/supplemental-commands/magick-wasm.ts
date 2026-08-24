@@ -33,7 +33,7 @@ import * as magickModule from '@imagemagick/magick-wasm';
 import { splitPath } from '../../fs/path-utils.js';
 import { compileWasmModule } from '../../kernel/realm/wasm-compiler.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
-import { isNodeRuntime } from './shared.js';
+import { GLOBAL_IPK_ADD, isNodeRuntime } from './shared.js';
 
 export interface ImageMagickModule {
   initializeImageMagick: (wasmLocation: URL | Uint8Array | WebAssembly.Module) => Promise<void>;
@@ -177,7 +177,7 @@ export interface IpkResolutionContext {
  */
 export const BUNDLED_MAGICK_VERSION = __MAGICK_WASM_VERSION__;
 
-const MAGICK_NOT_INSTALLED = `@imagemagick/magick-wasm is not installed in node_modules: run \`ipk add @imagemagick/magick-wasm@${BUNDLED_MAGICK_VERSION}\` (no network fallback)`;
+const MAGICK_NOT_INSTALLED = `@imagemagick/magick-wasm is not installed in node_modules: run \`${GLOBAL_IPK_ADD} @imagemagick/magick-wasm@${BUNDLED_MAGICK_VERSION}\` (no network fallback)`;
 
 /**
  * Build the actionable error surfaced when the ipk-installed
@@ -191,7 +191,7 @@ function magickVersionMismatchError(installed: string): Error {
       `${BUNDLED_MAGICK_VERSION} but ${installed} is installed in node_modules. ` +
       `The Emscripten glue and magick.wasm must be the same version or ` +
       `initializeImageMagick hangs in the kernel worker. Run ` +
-      `\`ipk add @imagemagick/magick-wasm@${BUNDLED_MAGICK_VERSION}\` to install the matching version.`
+      `\`${GLOBAL_IPK_ADD} @imagemagick/magick-wasm@${BUNDLED_MAGICK_VERSION}\` to install the matching version.`
   );
 }
 

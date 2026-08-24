@@ -32,8 +32,8 @@ import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { resolve as ipkResolve } from '../ipk/resolver.js';
 import { stdinAsText } from '../just-bash-compat.js';
-import { getEsbuild, type IpkResolutionContext } from './esbuild-wasm.js';
-import { basename, dirname, joinPath } from './shared.js';
+import { ESBUILD_VERSION, getEsbuild, type IpkResolutionContext } from './esbuild-wasm.js';
+import { basename, dirname, GLOBAL_IPK_ADD, joinPath } from './shared.js';
 
 /**
  * Build an {@link IpkResolutionContext} from a command's `ctx` so
@@ -100,7 +100,7 @@ Module resolution:
 
 Install:
   Inert until the backing package is installed:
-    ipk add esbuild-wasm
+    ${GLOBAL_IPK_ADD} esbuild-wasm@${ESBUILD_VERSION}
   Then \`esbuild --version\` and the bundle/transform commands above.
 `;
 

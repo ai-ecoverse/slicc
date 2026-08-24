@@ -631,7 +631,7 @@ describe('install-required guidance', () => {
     const ctx = createMockCtx();
     const res = await cmd.execute(['--version'], ctx);
     expect(res.exitCode).toBe(1);
-    expect(res.stderr).toMatch(/ipk add @biomejs\/wasm-web/);
+    expect(res.stderr).toMatch(/ipk add -g @biomejs\/wasm-web/);
     expect(res.stderr).not.toMatch(/https?:\/\//);
   });
 
@@ -641,7 +641,7 @@ describe('install-required guidance', () => {
     await ctx.fs.writeFile('/workspace/a.ts', 'const x=1;');
     const res = await cmd.execute(['check', 'a.ts'], ctx);
     expect(res.exitCode).toBe(1);
-    expect(res.stderr).toMatch(/ipk add @biomejs\/wasm-web/);
+    expect(res.stderr).toMatch(/ipk add -g @biomejs\/wasm-web/);
     expect(res.stderr).not.toMatch(/unpkg|jsdelivr|esm\.sh/);
 
     const json = await cmd.execute(['check', '--json', 'a.ts'], ctx);
@@ -652,7 +652,7 @@ describe('install-required guidance', () => {
         expect.objectContaining({
           severity: 'error',
           category: 'runtime',
-          message: expect.stringMatching(/ipk add @biomejs\/wasm-web/),
+          message: expect.stringMatching(/ipk add -g @biomejs\/wasm-web/),
           filePath: '/workspace/a.ts',
           line: null,
           column: null,
@@ -670,7 +670,7 @@ describe('biome --help / argument errors', () => {
     const res = await cmd.execute([], ctx);
     expect(res.exitCode).toBe(0);
     expect(res.stdout).toMatch(/biome - thin wrapper/);
-    expect(res.stdout).toMatch(/ipk add @biomejs\/wasm-web/);
+    expect(res.stdout).toMatch(/ipk add -g @biomejs\/wasm-web/);
     expect(res.stdout).toMatch(/lint\s+Lint only/);
     expect(res.stdout).toContain('--check');
     expect(res.stdout).toContain('--config-path <file>       Use this config instead of automatic');

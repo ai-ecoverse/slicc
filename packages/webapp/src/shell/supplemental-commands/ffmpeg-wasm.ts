@@ -22,7 +22,7 @@
 import { FFmpeg } from '@ffmpeg/ffmpeg';
 import { splitPath } from '../../fs/path-utils.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
-import { isNodeRuntime } from './shared.js';
+import { GLOBAL_IPK_ADD, isNodeRuntime } from './shared.js';
 
 /**
  * The `@ffmpeg/core` release whose `ffmpeg-core.{js,wasm}` artifacts pair
@@ -35,7 +35,7 @@ import { isNodeRuntime } from './shared.js';
  */
 export const BUNDLED_FFMPEG_CORE_VERSION = __FFMPEG_CORE_VERSION__;
 
-export const FFMPEG_CORE_NOT_INSTALLED = `@ffmpeg/core is not installed in node_modules: run \`ipk add @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}\` (no network fallback)`;
+export const FFMPEG_CORE_NOT_INSTALLED = `@ffmpeg/core is not installed in node_modules: run \`${GLOBAL_IPK_ADD} @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}\` (no network fallback)`;
 
 /**
  * The multi-threaded core (pthreads over SharedArrayBuffer). Preferred

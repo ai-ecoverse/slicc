@@ -293,7 +293,7 @@ test('uses local add', ({ is }) => {
       await ctx.fs.writeFile('/workspace/example.test.ts', 'export {};');
       const result = await createTestCommand().execute([], ctx);
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('ipk add typescript@6.0.3');
+      expect(result.stderr).toContain('ipk add -g typescript@6.0.3');
     } finally {
       vi.unstubAllGlobals();
       resetTypeScriptForTests();

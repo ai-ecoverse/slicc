@@ -8,6 +8,7 @@ import {
 import { ESBUILD_VERSION } from '../../../src/shell/supplemental-commands/esbuild-wasm.js';
 import { BUNDLED_FFMPEG_CORE_VERSION } from '../../../src/shell/supplemental-commands/ffmpeg-wasm.js';
 import { BUNDLED_MAGICK_VERSION } from '../../../src/shell/supplemental-commands/magick-wasm.js';
+import { GLOBAL_IPK_ADD } from '../../../src/shell/supplemental-commands/shared.js';
 import { V86_PINNED_VERSION } from '../../../src/shell/supplemental-commands/v86-wasm.js';
 
 describe('built-in shadow map', () => {
@@ -28,15 +29,17 @@ describe('built-in shadow map', () => {
   });
 
   it('keeps bootstrap versions tied to the command version constants', () => {
-    expect(BUILTIN_SHADOW_MAP.biome.bootstrap).toBe(`ipk add ${INSTALL_PACKAGES}`);
-    expect(BUILTIN_SHADOW_MAP.esbuild.bootstrap).toBe(`ipk add esbuild-wasm@${ESBUILD_VERSION}`);
+    expect(BUILTIN_SHADOW_MAP.biome.bootstrap).toBe(`${GLOBAL_IPK_ADD} ${INSTALL_PACKAGES}`);
+    expect(BUILTIN_SHADOW_MAP.esbuild.bootstrap).toBe(
+      `${GLOBAL_IPK_ADD} esbuild-wasm@${ESBUILD_VERSION}`
+    );
     expect(BUILTIN_SHADOW_MAP.ffmpeg.bootstrap).toBe(
-      `ipk add @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}`
+      `${GLOBAL_IPK_ADD} @ffmpeg/core@${BUNDLED_FFMPEG_CORE_VERSION}`
     );
     expect(BUILTIN_SHADOW_MAP.imagemagick.bootstrap).toBe(
-      `ipk add @imagemagick/magick-wasm@${BUNDLED_MAGICK_VERSION}`
+      `${GLOBAL_IPK_ADD} @imagemagick/magick-wasm@${BUNDLED_MAGICK_VERSION}`
     );
-    expect(BUILTIN_SHADOW_MAP.v86.bootstrap).toBe(`ipk add v86@${V86_PINNED_VERSION}`);
+    expect(BUILTIN_SHADOW_MAP.v86.bootstrap).toBe(`${GLOBAL_IPK_ADD} v86@${V86_PINNED_VERSION}`);
   });
 });
 
@@ -47,7 +50,7 @@ describe('formatBuiltinShadowHint', () => {
 
     expect(hint).toMatch(/^npx:/);
     expect(hint).toContain('try: biome check foo.js');
-    expect(hint).toContain(`first run: ipk add ${INSTALL_PACKAGES}`);
+    expect(hint).toContain(`first run: ${GLOBAL_IPK_ADD} ${INSTALL_PACKAGES}`);
     expect(hint).toContain('npx --force @biomejs/biome check foo.js');
   });
 

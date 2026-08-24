@@ -23,6 +23,7 @@ import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { ProcessManager } from '../../kernel/process-manager.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
+import { GLOBAL_IPK_ADD } from './shared.js';
 import { isHelpRequest, stripOptionTerminator, subcommandHelpText } from './subcommand-help.js';
 import {
   captureFrame,
@@ -61,7 +62,7 @@ export const MAX_VGA_MEMORY_MIB = 64;
 
 const HELP = `v86 - run an x86 virtual machine (v86 wasm engine)
 
-Requires: ipk add v86@${V86_PINNED_VERSION}
+Requires: ${GLOBAL_IPK_ADD} v86@${V86_PINNED_VERSION}
 
 Usage:
   v86 start [boot options]                Boot a VM in the background (prints pid)

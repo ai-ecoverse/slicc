@@ -16,7 +16,7 @@ Use the `biome` shell command for Biome checks inside the VFS. It is a thin wrap
 Install all three backing packages before linting or formatting:
 
 ```bash
-ipk add @biomejs/wasm-web @biomejs/js-api esbuild-wasm
+ipk add -g @biomejs/wasm-web @biomejs/js-api esbuild-wasm
 ```
 
 There is no CDN fallback. If a package is missing, follow the pinned `ipk add` command printed by `biome --help` or the error message.

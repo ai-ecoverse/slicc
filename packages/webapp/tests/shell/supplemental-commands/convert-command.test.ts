@@ -10,6 +10,7 @@ import {
   createIpkContextFromCtx,
 } from '../../../src/shell/supplemental-commands/convert-command.js';
 import * as magickWasm from '../../../src/shell/supplemental-commands/magick-wasm.js';
+import { GLOBAL_IPK_ADD } from '../../../src/shell/supplemental-commands/shared.js';
 import { mockCommandContext } from '../helpers/mock-command-context.js';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -865,7 +866,9 @@ describe('glue/wasm version guard (F-C04 hang root cause)', () => {
   it('throws actionable, version-pinned guidance on a mismatch', () => {
     expect(() => magickWasm.assertMagickVersionMatch('0.0.40')).toThrow(/version mismatch/);
     expect(() => magickWasm.assertMagickVersionMatch('0.0.40')).toThrow(
-      new RegExp(`ipk add @imagemagick/magick-wasm@${magickWasm.BUNDLED_MAGICK_VERSION}`)
+      new RegExp(
+        `${GLOBAL_IPK_ADD.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} @imagemagick/magick-wasm@${magickWasm.BUNDLED_MAGICK_VERSION}`
+      )
     );
     // The mismatch message names both versions so the fix is unambiguous.
     expect(() => magickWasm.assertMagickVersionMatch('0.0.40')).toThrow(/0\.0\.40/);

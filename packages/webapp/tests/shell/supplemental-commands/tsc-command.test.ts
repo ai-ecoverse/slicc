@@ -163,7 +163,7 @@ describe('createTscCommand', () => {
     const result = await cmd.execute(['--help'], createMockCtx());
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('tsc - thin wrapper');
-    expect(result.stdout).toContain('ipk add typescript@6.0.3');
+    expect(result.stdout).toContain('ipk add -g typescript@6.0.3');
   });
 
   it('transpiles a single .ts file to a sibling .js', async () => {
@@ -249,7 +249,7 @@ describe('install-required guidance (browser branch)', () => {
     try {
       const result = await createTscCommand().execute(['--version'], createMockCtx());
       expect(result.exitCode).toBe(1);
-      expect(result.stderr).toContain('ipk add typescript@6.0.3');
+      expect(result.stderr).toContain('ipk add -g typescript@6.0.3');
     } finally {
       vi.unstubAllGlobals();
       resetTypeScriptForTests();
@@ -292,7 +292,7 @@ describe('install-required guidance (browser branch)', () => {
       expect(result.stderr).toContain('typescript@7.0.2');
       expect(result.stderr).toContain('/workspace/node_modules/typescript');
       expect(result.stderr).toContain('no JS compiler API');
-      expect(result.stderr).toContain('ipk add typescript@6.0.3');
+      expect(result.stderr).toContain('ipk add -g typescript@6.0.3');
     } finally {
       vi.unstubAllGlobals();
       resetTypeScriptForTests();
@@ -315,7 +315,7 @@ describe('install-required guidance (browser branch)', () => {
       expect(result.stderr).toContain('typescript@5.9.2');
       expect(result.stderr).toContain('predates the pinned 6.x line');
       expect(result.stderr).not.toContain('no JS compiler API');
-      expect(result.stderr).toContain('ipk add typescript@6.0.3');
+      expect(result.stderr).toContain('ipk add -g typescript@6.0.3');
     } finally {
       vi.unstubAllGlobals();
       resetTypeScriptForTests();
@@ -328,7 +328,7 @@ describe('install-required guidance (browser branch)', () => {
     // typescript is absent.
     const cmd = createTscCommand();
     return cmd.execute(['--help'], createMockCtx()).then((res) => {
-      expect(res.stdout).toContain('ipk add typescript@6.0.3');
+      expect(res.stdout).toContain('ipk add -g typescript@6.0.3');
       expect(res.stdout).not.toMatch(/unpkg|jsdelivr|esm\.sh|https?:\/\//);
     });
   });

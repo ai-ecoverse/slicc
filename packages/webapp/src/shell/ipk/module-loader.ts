@@ -26,6 +26,7 @@ import { splitPath } from '../../fs/path-utils.js';
 import { NODE_BUILTINS } from '../../kernel/realm/node-builtins.js';
 import { NODE_NATIVE_PACKAGES } from '../../kernel/realm/require-guards.js';
 import { stripShebang } from '../strip-shebang.js';
+import { GLOBAL_IPK_ADD } from '../supplemental-commands/shared.js';
 import {
   hasDynamicImport,
   hasEsmSyntax,
@@ -194,7 +195,7 @@ async function toCjsSource(
   if (kind === 'esm') {
     if (!transpile) {
       throw new Error(
-        `Cannot load ESM module '${path}': no transpile hook configured (run: ipk install esbuild-wasm)`
+        `Cannot load ESM module '${path}': no transpile hook configured (run: ${GLOBAL_IPK_ADD} esbuild-wasm)`
       );
     }
     return await transpile({ source: stripped, path, kind });
