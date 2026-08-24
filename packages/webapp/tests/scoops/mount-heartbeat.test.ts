@@ -143,4 +143,21 @@ describe('withMountHeartbeat', () => {
     expect(stages).toHaveLength(expected);
     expect(vi.getTimerCount()).toBe(0);
   });
+
+  it('names the beats after the stagePrefix option', async () => {
+    const stages: string[] = [];
+    let resolveWork: (v: string) => void = () => {};
+    const work = new Promise<string>((r) => {
+      resolveWork = r;
+    });
+    const p = withMountHeartbeat(
+      () => work,
+      (s) => stages.push(s),
+      { stagePrefix: 'orchestrator-init' }
+    );
+    await vi.advanceTimersByTimeAsync(MOUNT_HEARTBEAT_INTERVAL_MS);
+    expect(stages).toEqual(['orchestrator-init:start', 'orchestrator-init:1']);
+    resolveWork('done');
+    await expect(p).resolves.toBe('done');
+  });
 });
