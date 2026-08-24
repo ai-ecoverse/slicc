@@ -302,7 +302,7 @@ CHROME_PATH="$CHROME_BIN" \
 	BRIDGE_DEV_ALLOWED_ORIGINS="http://localhost:${WRANGLER_PORT}" \
 	SLICC_USER_DATA_DIR="$FRESH_PROFILE" \
 	PORT="$BRIDGE_PORT" \
-	node "${REPO_ROOT}/dist/node-server/index.js" &
+	node "${REPO_ROOT}/dist/node-server/index.js" "$@" &
 NODE_PID=$!
 
 wait "$NODE_PID"
