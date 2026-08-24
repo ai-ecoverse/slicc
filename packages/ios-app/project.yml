@@ -226,7 +226,7 @@ packages:
     minorVersion: 0.9.0
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
-    exactVersion: 150.0.0
+    exactVersion: 151.0.0
   SliccTraySession:
     path: ../swift-traysession
   SliccTrayFollower:
