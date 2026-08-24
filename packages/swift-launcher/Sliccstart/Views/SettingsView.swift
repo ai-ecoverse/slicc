@@ -167,6 +167,12 @@ struct TerminalsSettingsView: View {
     @AppStorage(terminalFollowCommandKey) private var followCommand = FollowCommandTemplate.defaultTemplate
     @AppStorage(suppressTerminalWarningKey) private var suppressTerminalWarning = false
 
+    private static let placeholders: [(token: String, help: String)] = [
+        ("{slicc}", "Path to the slicc CLI"),
+        ("{joinUrl}", "Session join URL"),
+        ("{shell}", "Login shell"),
+    ]
+
     private var preview: String {
         FollowCommandTemplate.preview(
             template: followCommand,
@@ -176,42 +182,99 @@ struct TerminalsSettingsView: View {
     }
 
     var body: some View {
-        Form {
-            Section("Follow command") {
-                TextField("Command template", text: $followCommand, axis: .vertical)
-                    .font(.system(.body, design: .monospaced))
-                    .lineLimit(2...5)
+        VStack(spacing: 0) {
+            Grid(alignment: .leadingFirstTextBaseline, horizontalSpacing: 12, verticalSpacing: 16) {
+                GridRow(alignment: .top) {
+                    Text("Command")
+                        .gridColumnAlignment(.trailing)
+                        .padding(.top, 5)
+                    VStack(alignment: .leading, spacing: 8) {
+                        TextField(FollowCommandTemplate.defaultTemplate, text: $followCommand, axis: .vertical)
+                            .font(.system(.body, design: .monospaced))
+                            .textFieldStyle(.roundedBorder)
+                            .lineLimit(2...4)
+                            .disableAutocorrection(true)
+                            .accessibilityIdentifier("follow-command-template")
+                        placeholderLegend
+                    }
+                }
+                GridRow(alignment: .top) {
+                    Text("Preview")
+                        .gridColumnAlignment(.trailing)
+                        .padding(.top, 6)
+                    previewWell
+                }
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-                Text("Available placeholders: {slicc}, {joinUrl}, and {shell}.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
+            Divider()
 
-                Button("Restore default") {
+            HStack(spacing: 6) {
+                Button("Restore Default") {
                     followCommand = FollowCommandTemplate.defaultTemplate
                 }
                 .disabled(followCommand == FollowCommandTemplate.defaultTemplate)
-            }
+                .help("Reset the command to the default template")
+                .accessibilityIdentifier("restore-follow-command")
 
-            Section("Preview") {
-                Text(preview)
-                    .font(.system(.body, design: .monospaced))
-                    .textSelection(.enabled)
-                Text("The session join URL is always redacted in this preview.")
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            }
+                Spacer()
 
-            Section("Terminal access warning") {
-                Button("Show warning again") {
+                Button("Show Warning Again") {
                     suppressTerminalWarning = false
                 }
                 .disabled(!suppressTerminalWarning)
+                .help("Show the terminal access warning the next time you follow a session")
+                .accessibilityIdentifier("show-terminal-warning-again")
             }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.bar)
         }
-        .formStyle(.grouped)
-        .padding(20)
-        .frame(width: 560)
-        .fixedSize(horizontal: false, vertical: true)
+        .frame(width: 620, height: 420)
+    }
+
+    private var placeholderLegend: some View {
+        HStack(spacing: 6) {
+            ForEach(Self.placeholders, id: \.token) { item in
+                FollowCommandPlaceholderChip(token: item.token, help: item.help)
+            }
+            Spacer(minLength: 0)
+        }
+    }
+
+    private var previewWell: some View {
+        ScrollView {
+            Text(preview)
+                .font(.system(.callout, design: .monospaced))
+                .textSelection(.enabled)
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .frame(maxWidth: .infinity, minHeight: 160, maxHeight: .infinity, alignment: .topLeading)
+        .padding(10)
+        .background(Color(nsColor: .textBackgroundColor), in: RoundedRectangle(cornerRadius: 6, style: .continuous))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .strokeBorder(.separator, lineWidth: 0.5)
+        )
+        .accessibilityIdentifier("follow-command-preview")
+    }
+}
+
+private struct FollowCommandPlaceholderChip: View {
+    let token: String
+    let help: String
+
+    var body: some View {
+        Text(token)
+            .font(.system(.caption, design: .monospaced))
+            .padding(.horizontal, 8)
+            .padding(.vertical, 3)
+            .background(.quaternary, in: RoundedRectangle(cornerRadius: 4, style: .continuous))
+            .help(help)
+            .accessibilityLabel(help)
+            .accessibilityValue(token)
     }
 }
 
