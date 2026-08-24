@@ -65,78 +65,228 @@ struct SettingsView: View {
 // MARK: - Mounts tab
 
 struct MountsSettingsView: View {
-    @AppStorage(MountTablePreference.key) private var mountTableText = ""
-
-    private var mappings: [MountTablePreference.Mapping] {
-        MountTablePreference.mappings(from: mountTableText)
+    /// One editable table row. `hostPath` is empty until a folder has been
+    /// chosen or dropped; such rows live only in the UI and are not persisted.
+    struct Row: Identifiable, Equatable {
+        let id = UUID()
+        var path: String
+        var hostPath: String
     }
-    private var invalidLines: [String] { MountTablePreference.invalidLines(in: mountTableText) }
+
+    @State private var rows: [Row] = []
+    @State private var selection: Row.ID?
 
     var body: some View {
-        Form {
-            Section("Auto-mounted folders") {
-                TextField(
-                    "~/Projects/foo:/mnt/foo",
-                    text: $mountTableText, axis: .vertical
-                )
-                .font(.system(.body, design: .monospaced))
-                .lineLimit(3...8)
-                .autocorrectionDisabled()
-                .labelsHidden()
+        VStack(spacing: 0) {
+            table
 
-                Text(
-                    "One mapping per line: a folder on your Mac, a colon, and the path it "
-                        + "should have inside SLICC. Mapped folders are available automatically "
-                        + "on every launch and reload — no folder picker, no permission prompt. "
-                        + "Folders you mount from inside SLICC keep asking as usual. Takes "
-                        + "effect on the next browser launch."
-                )
-                .font(.caption)
-                .foregroundStyle(.secondary)
-                .fixedSize(horizontal: false, vertical: true)
+            Divider()
 
-                if !invalidLines.isEmpty {
-                    Label {
-                        Text(
-                            "Ignored — each line needs an absolute folder and an absolute "
-                                + "SLICC path: \(invalidLines.joined(separator: ", "))"
-                        )
-                        .fixedSize(horizontal: false, vertical: true)
-                    } icon: {
+            HStack(spacing: 6) {
+                Button {
+                    addRow()
+                } label: {
+                    Image(systemName: "plus")
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.borderless)
+                .help("Add folder")
+
+                Button {
+                    removeSelectedRow()
+                } label: {
+                    Image(systemName: "minus")
+                        .frame(width: 22, height: 22)
+                }
+                .buttonStyle(.borderless)
+                .disabled(selection == nil)
+                .help("Remove")
+
+                Spacer()
+
+                Text("Mapped folders are available in SLICC on the next launch — no prompts.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 8)
+            .background(.bar)
+        }
+        .frame(width: 620, height: 360)
+        .onAppear(perform: load)
+        .onChange(of: rows) { persist() }
+    }
+
+    private var table: some View {
+        Table($rows, selection: $selection) {
+            TableColumn("In SLICC") { $row in
+                HStack(spacing: 4) {
+                    TextField("/mnt/…", text: $row.path)
+                        .font(.system(.body, design: .monospaced))
+                        .textFieldStyle(.plain)
+                        .autocorrectionDisabled()
+                    if !isValidTarget(row) {
                         Image(systemName: "exclamationmark.triangle.fill")
                             .foregroundStyle(.yellow)
+                            .help("Needs an absolute path like /mnt/foo, unique per row")
                     }
-                    .font(.caption)
                 }
             }
+            .width(min: 150, ideal: 180)
 
-            Section("Active table") {
-                if mappings.isEmpty {
-                    Text("Empty — no folders are auto-mounted.")
-                        .foregroundStyle(.secondary)
-                } else {
-                    ForEach(mappings, id: \.path) { mapping in
-                        HStack(spacing: 8) {
-                            Text(mapping.hostPath)
-                                .font(.system(.body, design: .monospaced))
-                                .truncationMode(.middle)
-                                .lineLimit(1)
-                                .layoutPriority(1)
-                            Image(systemName: "arrow.right")
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
-                            Text(mapping.path)
-                                .font(.system(.body, design: .monospaced))
-                                .lineLimit(1)
-                            Spacer(minLength: 0)
-                        }
+            TableColumn("Folder") { $row in
+                HStack(spacing: 6) {
+                    if row.hostPath.isEmpty {
+                        Text("Choose or drop a folder")
+                            .foregroundStyle(.tertiary)
+                    } else {
+                        Text(displayHostPath(row.hostPath))
+                            .font(.system(.body, design: .monospaced))
+                            .lineLimit(1)
+                            .truncationMode(.middle)
+                            .help(row.hostPath)
                     }
+                    Spacer(minLength: 4)
+                    Button("Choose…") { chooseFolder(for: row.id) }
+                        .buttonStyle(.borderless)
+                        .font(.caption)
+                }
+                .contentShape(Rectangle())
+                .onTapGesture { if row.hostPath.isEmpty { chooseFolder(for: row.id) } }
+                .dropDestination(for: URL.self) { urls, _ in
+                    acceptDrop(urls: urls, rowId: row.id)
                 }
             }
         }
-        .formStyle(.grouped)
-        .padding(20)
-        .frame(width: 560)
+        .tableStyle(.inset)
+        .dropDestination(for: URL.self) { urls, _ in
+            acceptDrop(urls: urls, rowId: nil)
+        }
+        .overlay {
+            if rows.isEmpty {
+                VStack(spacing: 8) {
+                    Image(systemName: "externaldrive.badge.plus")
+                        .font(.system(size: 28))
+                        .foregroundStyle(.secondary)
+                    Text("Drop a folder here, or click +")
+                        .font(.callout)
+                        .foregroundStyle(.secondary)
+                }
+                .allowsHitTesting(false)
+            }
+        }
+    }
+
+    // MARK: - Actions
+
+    private func addRow() {
+        let row = Row(path: defaultTarget(), hostPath: "")
+        rows.append(row)
+        selection = row.id
+        chooseFolder(for: row.id)
+    }
+
+    private func removeSelectedRow() {
+        guard let id = selection else { return }
+        rows.removeAll { $0.id == id }
+        selection = nil
+    }
+
+    private func chooseFolder(for rowId: Row.ID) {
+        let panel = NSOpenPanel()
+        panel.canChooseDirectories = true
+        panel.canChooseFiles = false
+        panel.allowsMultipleSelection = false
+        panel.prompt = "Mount"
+        guard panel.runModal() == .OK, let url = panel.url else { return }
+        assign(folder: url, to: rowId)
+    }
+
+    private func acceptDrop(urls: [URL], rowId: Row.ID?) -> Bool {
+        let folders = urls.filter { url in
+            var isDirectory: ObjCBool = false
+            return FileManager.default.fileExists(atPath: url.path, isDirectory: &isDirectory)
+                && isDirectory.boolValue
+        }
+        guard !folders.isEmpty else { return false }
+        if let rowId, folders.count == 1 {
+            assign(folder: folders[0], to: rowId)
+            return true
+        }
+        for folder in folders {
+            let row = Row(path: defaultTarget(for: folder), hostPath: folder.path)
+            rows.append(row)
+            selection = row.id
+        }
+        return true
+    }
+
+    /// Attach a chosen/dropped folder to a row; if the row's SLICC path is
+    /// still a placeholder, derive it from the folder name.
+    private func assign(folder: URL, to rowId: Row.ID) {
+        guard let index = rows.firstIndex(where: { $0.id == rowId }) else { return }
+        rows[index].hostPath = folder.path
+        let current = rows[index].path
+        if current.isEmpty || current == "/mnt/" || isGeneratedDefault(current) {
+            rows[index].path = defaultTarget(for: folder)
+        }
+    }
+
+    // MARK: - Targets
+
+    private static let mountRoot = "/mnt/"
+
+    private func sanitizedFolderName(_ url: URL) -> String {
+        let name = url.lastPathComponent.lowercased()
+            .replacingOccurrences(of: " ", with: "-")
+            .replacingOccurrences(of: ":", with: "-")
+        return name.isEmpty ? "folder" : name
+    }
+
+    /// `/mnt/<folder-name>` (or `/mnt/folder-2`…), unique among current rows.
+    private func defaultTarget(for folder: URL? = nil) -> String {
+        let base = Self.mountRoot + (folder.map(sanitizedFolderName) ?? "folder")
+        var candidate = base
+        var counter = 2
+        while rows.contains(where: { $0.path == candidate }) {
+            candidate = "\(base)-\(counter)"
+            counter += 1
+        }
+        return candidate
+    }
+
+    private func isGeneratedDefault(_ path: String) -> Bool {
+        guard path.hasPrefix(Self.mountRoot + "folder") else { return false }
+        let suffix = path.dropFirst((Self.mountRoot + "folder").count)
+        return suffix.isEmpty || suffix.hasPrefix("-")
+    }
+
+    private func isValidTarget(_ row: Row) -> Bool {
+        guard MountTablePreference.mapping(fromLine: "/x:\(row.path)") != nil else { return false }
+        return rows.filter { $0.path == row.path }.count == 1
+    }
+
+    private func displayHostPath(_ path: String) -> String {
+        let home = NSHomeDirectory()
+        if path == home { return "~" }
+        if path.hasPrefix(home + "/") { return "~" + path.dropFirst(home.count) }
+        return path
+    }
+
+    // MARK: - Persistence
+
+    private func load() {
+        rows = MountTablePreference.mappings(defaults: .standard).map {
+            Row(path: $0.path, hostPath: $0.hostPath)
+        }
+    }
+
+    private func persist() {
+        let lines = rows.compactMap { row -> String? in
+            guard !row.hostPath.isEmpty else { return nil }
+            return "\(row.hostPath):\(row.path)"
+        }
+        UserDefaults.standard.set(lines.joined(separator: "\n"), forKey: MountTablePreference.key)
     }
 }
 
