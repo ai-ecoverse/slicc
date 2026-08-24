@@ -417,6 +417,57 @@ export class Orchestrator implements ConeApprovalRouter {
     return this.processManager;
   }
 
+  /**
+   * The init tail is the boot's OTHER silent stretch (2026-08-24 x-ray:
+   * ~50s of OPFS-stat I/O-wait between the mount finishing and the first
+   * scoop restore, with zero progress messages — enough to blow the
+   * kernel-ready watchdog on its own). Root-structure seeding, the sudo
+   * policy, the /etc caches, and the scoop-record load all do per-entry
+   * VFS I/O with no milestones of their own, so they get the same
+   * heartbeat under their own stage prefix: interval beats keep the
+   * watchdog armed through one slow step, ticks between steps reset the
+   * quiet budget, and a genuinely wedged step still goes quiet and times
+   * out.
+   */
+  private async initPolicyLayerAndLoadRecords(
+    sharedFs: VirtualFS,
+    fsWatcher: FsWatcher,
+    onBootProgress?: (stage: string) => void
+  ): Promise<Record<string, RegisteredScoop>> {
+    return withMountHeartbeat(
+      async (tick) => {
+        await this.ensureRootStructure();
+        tick();
+
+        // Stand up the sudo policy manager: seeds the default /etc/sudoers
+        // template, loads + merges the live policy, and watches for changes
+        // so edits (and "Always" grants) take effect with no restart. The
+        // same manager is threaded into every ScoopContext below.
+        this.sudoManager = new SudoManager({
+          fs: sharedFs,
+          watcher: fsWatcher,
+          onPolicyReload: (folder) => this.lifecycle.syncReadGrants(folder),
+        });
+        await this.sudoManager.init();
+        tick();
+        this.llmsTxtIgnorePolicy = new LlmsTxtIgnorePolicy(sharedFs, fsWatcher);
+        await this.llmsTxtIgnorePolicy.init();
+        tick();
+        // Seed + load `/etc/models` BEFORE any scoop is restored: the policy
+        // gates which provider a scoop may be spawned against, and an
+        // unloaded policy is closed (own catalogue only), so loading late
+        // would reject valid spawns.
+        this.modelPolicyFile = new ModelPolicyFile(sharedFs, fsWatcher);
+        await this.modelPolicyFile.init();
+        tick();
+
+        return db.getAllScoops();
+      },
+      onBootProgress,
+      { stagePrefix: 'orchestrator-init' }
+    );
+  }
+
   /** Initialize orchestrator and load saved scoops */
   /**
    * @param onBootProgress Optional heartbeat fired after each restored
@@ -447,27 +498,12 @@ export class Orchestrator implements ConeApprovalRouter {
     this.fsWatcher = new FsWatcher();
     this.sharedFs.setWatcher(this.fsWatcher);
     (globalThis as SliccGlobalHooks).__slicc_fs_watcher = this.fsWatcher;
-    await this.ensureRootStructure();
 
-    // Stand up the sudo policy manager: seeds the default /etc/sudoers
-    // template, loads + merges the live policy, and watches for changes so
-    // edits (and "Always" grants) take effect with no restart. The same
-    // manager is threaded into every ScoopContext below.
-    this.sudoManager = new SudoManager({
-      fs: this.sharedFs,
-      watcher: this.fsWatcher,
-      onPolicyReload: (folder) => this.lifecycle.syncReadGrants(folder),
-    });
-    await this.sudoManager.init();
-    this.llmsTxtIgnorePolicy = new LlmsTxtIgnorePolicy(this.sharedFs, this.fsWatcher);
-    await this.llmsTxtIgnorePolicy.init();
-    // Seed + load `/etc/models` BEFORE any scoop is restored: the policy gates
-    // which provider a scoop may be spawned against, and an unloaded policy is
-    // closed (own catalogue only), so loading late would reject valid spawns.
-    this.modelPolicyFile = new ModelPolicyFile(this.sharedFs, this.fsWatcher);
-    await this.modelPolicyFile.init();
-
-    const savedScoops = await db.getAllScoops();
+    const savedScoops = await this.initPolicyLayerAndLoadRecords(
+      this.sharedFs,
+      this.fsWatcher,
+      onBootProgress
+    );
     // Legacy records predate the ownership edge; the deleted `isCone` field
     // is the only root signal they carry, so it anchors the backfill once,
     // here — through `legacyRecordIsCone`, the one sanctioned read.
