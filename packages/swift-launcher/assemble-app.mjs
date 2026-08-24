@@ -9,6 +9,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { copyElectronOverlayEntry } from './copy-overlay-entry.mjs';
 import { stageFileProviderAppex } from './stage-file-provider-appex.mjs';
+import { buildIcns, buildIconAssetCatalog } from './build-app-icon.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const sliccRoot = resolve(__dirname, '../..');
@@ -21,6 +22,11 @@ const macOS = resolve(contents, 'MacOS');
 const resources = resolve(contents, 'Resources');
 
 const SLICCSTART_VERSION = process.env.SLICCSTART_VERSION || '0.1.0';
+
+// Appearance-keyed app icons are a macOS 26 feature. This only gates how
+// `actool` compiles the catalog; LSMinimumSystemVersion stays at 14.0 and
+// older systems fall back to the .icns.
+const MACOS_ICON_DEPLOYMENT_TARGET = '26.0';
 
 // ---------------------------------------------------------------------------
 // 1. Assemble .app structure
@@ -79,40 +85,31 @@ console.log('Copied WebRTC.framework into Resources/');
 // ---------------------------------------------------------------------------
 // 2. Icon
 // ---------------------------------------------------------------------------
+// `.icns` first (works with only the macOS base tools), then the Icon Composer
+// catalog on top when Xcode is present. The catalog is what gives Sliccstart
+// Dark and Tinted appearances — the `.icns` alone has a single image, which is
+// why the app used to keep its Default artwork in every appearance.
 const iconSrc = resolve(
   __dirname,
   '../../packages/assets/logos/macos-icon-iOS-Default-1024x1024@1x.png'
 );
-if (!existsSync(iconSrc)) {
-  console.error(`ERROR: Icon source not found: ${iconSrc}`);
-  process.exit(1);
-}
-const iconset = resolve(resources, 'AppIcon.iconset');
-mkdirSync(iconset, { recursive: true });
+buildIcns({ iconSrc, resourcesDir: resources });
+console.log('Built AppIcon.icns');
 
-const sizes = [
-  [1024, 'icon_512x512@2x.png'],
-  [512, 'icon_512x512.png'],
-  [512, 'icon_256x256@2x.png'],
-  [256, 'icon_256x256.png'],
-  [256, 'icon_128x128@2x.png'],
-  [128, 'icon_128x128.png'],
-  [64, 'icon_32x32@2x.png'],
-  [32, 'icon_32x32.png'],
-  [32, 'icon_16x16@2x.png'],
-  [16, 'icon_16x16.png'],
-];
-
-for (const [size, name] of sizes) {
-  execSync(`sips -z ${size} ${size} "${iconSrc}" --out "${resolve(iconset, name)}"`, {
-    stdio: 'ignore',
-  });
-}
-
-execSync(`iconutil -c icns "${iconset}" -o "${resolve(resources, 'AppIcon.icns')}"`, {
-  stdio: 'ignore',
+const iconBundle = resolve(__dirname, '../../packages/assets/logos/macos-icon.icon');
+const iconCatalog = buildIconAssetCatalog({
+  iconBundle,
+  resourcesDir: resources,
+  deploymentTarget: MACOS_ICON_DEPLOYMENT_TARGET,
 });
-rmSync(iconset, { recursive: true, force: true });
+if (iconCatalog.built) {
+  console.log(`Compiled ${iconBundle.replace(/.*\//, '')} -> Assets.car (Dark/Tinted appearances)`);
+} else {
+  console.warn(
+    `WARNING: appearance-keyed app icon skipped - ${iconCatalog.skipped}. ` +
+      'The bundle falls back to the single-appearance AppIcon.icns.'
+  );
+}
 
 // ---------------------------------------------------------------------------
 // 3. SLICC runtime marker directory
@@ -197,7 +194,11 @@ const infoPlist = `<?xml version="1.0" encoding="UTF-8"?>
     <string>Sliccstart</string>
     <key>CFBundleIconFile</key>
     <string>AppIcon</string>
-    <key>CFBundleIdentifier</key>
+${
+      iconCatalog.built
+        ? `    <key>CFBundleIconName</key>\n    <string>${iconCatalog.iconName}</string>\n`
+        : ''
+    }    <key>CFBundleIdentifier</key>
     <string>com.slicc.sliccstart</string>
     <key>CFBundleInfoDictionaryVersion</key>
     <string>6.0</string>
