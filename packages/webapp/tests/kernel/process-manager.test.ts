@@ -60,10 +60,10 @@ describe('ProcessManager — pid allocation', () => {
     const a = pm.spawn({ kind: 'shell', argv: ['a'], owner: { kind: 'cone' } });
     const b = pm.spawn({ kind: 'shell', argv: ['b'], owner: { kind: 'cone' } });
     pm.exit(a.pid, 0);
-    // Even though a exited, the next pid is still monotonic (we don't
-    // reap exited entries). The probe only kicks in if `nextPid` lands
-    // on a still-live entry, which we can't reproduce without
-    // exhausting the space — covered structurally by the dedicated
+    // Even though a exited, the next pid is still monotonic: reaping frees
+    // table slots but never rewinds `nextPid`. The probe only kicks in if
+    // `nextPid` lands on a still-live entry, which we can't reproduce
+    // without exhausting the space — covered structurally by the dedicated
     // wraparound test below.
     const c = pm.spawn({ kind: 'shell', argv: ['c'], owner: { kind: 'cone' } });
     expect(c.pid).toBe(1026);
@@ -646,5 +646,96 @@ describe('runAsProcess', () => {
     });
     expect(received).not.toBeNull();
     expect(received!.kind).toBe('tool');
+  });
+});
+
+describe('ProcessManager — retention', () => {
+  it('keeps a terminated process readable for post-mortem ps', () => {
+    const pm = makeManager();
+    const proc = pm.spawn({ kind: 'shell', argv: ['boom'], owner: { kind: 'cone' } });
+    pm.exit(proc.pid, 42);
+    expect(pm.get(proc.pid)).toMatchObject({ status: 'exited', exitCode: 42 });
+  });
+
+  it('bounds the table so a long session does not grow without limit', () => {
+    const pm = makeManager();
+    for (let i = 0; i < 1500; i++) {
+      const p = pm.spawn({ kind: 'shell', argv: [`cmd${i}`], owner: { kind: 'cone' } });
+      pm.exit(p.pid, 0);
+    }
+    // The bug this replaces: 1,500 spawn/exit pairs left 1,500 resident
+    // records. The exact window is an implementation detail; that it is
+    // bounded well below the number of processes that ran is not.
+    expect(pm.list().length).toBeLessThan(200);
+    expect(pm.stats().terminated).toBe(1500);
+    expect(pm.stats().spawned).toBe(1500);
+    expect(pm.stats().live).toBe(0);
+    expect(pm.stats().retained).toBe(pm.list().length);
+  });
+
+  it('never reaps a live process, however many others terminate', () => {
+    const pm = makeManager();
+    const survivor = pm.spawn({ kind: 'shell', argv: ['sleep'], owner: { kind: 'cone' } });
+    for (let i = 0; i < 1000; i++) {
+      const p = pm.spawn({ kind: 'tool', argv: [`t${i}`], owner: { kind: 'cone' } });
+      pm.exit(p.pid, 0);
+    }
+    expect(pm.get(survivor.pid)).not.toBeNull();
+    expect(pm.listLive()).toEqual([survivor]);
+    expect(pm.stats().live).toBe(1);
+  });
+
+  it('reaps oldest-first, so the most recent deaths stay inspectable', () => {
+    const pm = makeManager();
+    const pids: number[] = [];
+    for (let i = 0; i < 300; i++) {
+      const p = pm.spawn({ kind: 'shell', argv: [`cmd${i}`], owner: { kind: 'cone' } });
+      pm.exit(p.pid, 0);
+      pids.push(p.pid);
+    }
+    expect(pm.get(pids[0])).toBeNull();
+    expect(pm.get(pids[pids.length - 1])).not.toBeNull();
+  });
+
+  it('fires the exit listener with a full record even when that exit evicts one', () => {
+    const pm = makeManager();
+    for (let i = 0; i < 400; i++) {
+      const p = pm.spawn({ kind: 'shell', argv: [`cmd${i}`], owner: { kind: 'cone' } });
+      pm.exit(p.pid, 0);
+    }
+    const seen: Process[] = [];
+    pm.on('exit', (p) => seen.push(p));
+    const last = pm.spawn({ kind: 'shell', argv: ['last'], owner: { kind: 'cone' } });
+    pm.exit(last.pid, 7);
+    expect(seen).toHaveLength(1);
+    expect(seen[0]).toMatchObject({ pid: last.pid, exitCode: 7, status: 'exited' });
+  });
+
+  it('listLive() excludes terminated processes', () => {
+    const pm = makeManager();
+    const a = pm.spawn({ kind: 'shell', argv: ['a'], owner: { kind: 'cone' } });
+    const b = pm.spawn({ kind: 'shell', argv: ['b'], owner: { kind: 'cone' } });
+    pm.signal(b.pid, 'SIGKILL');
+    pm.exit(b.pid, null);
+    expect(pm.listLive().map((p) => p.pid)).toEqual([a.pid]);
+    expect(pm.list()).toHaveLength(2);
+  });
+
+  it('counts a killed process as terminated', () => {
+    const pm = makeManager();
+    const p = pm.spawn({ kind: 'shell', argv: ['x'], owner: { kind: 'cone' } });
+    pm.signal(p.pid, 'SIGKILL');
+    pm.exit(p.pid, null);
+    expect(pm.get(p.pid)?.status).toBe('killed');
+    expect(pm.stats().terminated).toBe(1);
+  });
+
+  it('does not double-count a repeated exit()', () => {
+    const pm = makeManager();
+    const p = pm.spawn({ kind: 'shell', argv: ['x'], owner: { kind: 'cone' } });
+    pm.exit(p.pid, 0);
+    pm.exit(p.pid, 0);
+    expect(pm.stats().terminated).toBe(1);
+    expect(pm.list()).toHaveLength(1);
   });
 });

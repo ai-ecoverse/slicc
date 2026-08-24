@@ -49,6 +49,26 @@ export interface OAuthProviderEntry {
   valid?: boolean;
 }
 
+/** One live process row, already narrowed to what the monitor renders. */
+export interface MonitorProcess {
+  pid: number;
+  argv: string;
+  status: string;
+}
+
+/**
+ * What the monitor knows about the process table.
+ *
+ * `processes` is LIVE processes only. `terminated` is the session total of
+ * everything that has already exited — a number the kernel keeps counting
+ * past its own retention window, so it stays true without the dead rows
+ * having to stay resident (or rendered) to prove it.
+ */
+export interface MonitorProcessSnapshot {
+  processes: MonitorProcess[];
+  terminated: number;
+}
+
 export interface MonitorTrayInfo {
   role: 'leader' | 'follower' | 'standalone';
   state: 'inactive' | 'connecting' | 'connected' | 'leader' | 'reconnecting' | 'error';
@@ -71,7 +91,7 @@ export interface MonitorDeps {
     models: { model: string; cost: number }[];
     scoops: { name: string; cost: number }[];
   } | null>;
-  getProcesses(): Promise<{ pid: number; argv: string; status: string }[]>;
+  getProcesses(): Promise<MonitorProcessSnapshot>;
   getTrayInfo(): MonitorTrayInfo;
   getConnectedFollowers(): ConnectedFollowerInfo[];
 }
@@ -149,14 +169,15 @@ export async function fetchMonitorData(deps: MonitorDeps): Promise<MonitorSectio
   const scoops = deps.getScoops();
   const tray = deps.getTrayInfo();
   const followers = deps.getConnectedFollowers();
-  const [cronTasks, webhooks, mounts, mcpServers, sessionStats, processes] = await Promise.all([
+  const [cronTasks, webhooks, mounts, mcpServers, sessionStats, procSnapshot] = await Promise.all([
     deps.getCronTasks().catch(() => [] as CronTaskEntry[]),
     deps.getWebhooks().catch(() => [] as WebhookEntry[]),
     deps.getMounts().catch(() => [] as MountMonitorRow[]),
     deps.getMcpServers().catch(() => ({}) as Record<string, { url: string; tools?: unknown[] }>),
     deps.getSessionStats().catch(() => null),
-    deps.getProcesses().catch(() => []),
+    deps.getProcesses().catch(() => ({ processes: [], terminated: 0 })),
   ]);
+  const { processes, terminated } = procSnapshot;
   const oauthProviders = deps.getOAuthProviders();
   const mcpEntries = Object.entries(mcpServers);
 
@@ -186,8 +207,18 @@ export async function fetchMonitorData(deps: MonitorDeps): Promise<MonitorSectio
     },
     {
       id: 'processes',
+      // Live processes only — the same default `ps` has ("listing them by
+      // default is noisy", ps-command.ts). Exited processes are reported as
+      // a count in `meta`, never as rows: a long session terminates
+      // thousands of them, and a list of dead pids is not something anyone
+      // reads. The count comes from the kernel's session total, so it stays
+      // right even after those records are reaped.
       label: 'Processes',
       count: processes.length,
+      meta:
+        terminated > 0
+          ? `${processes.length} live · ${terminated.toLocaleString()} exited`
+          : undefined,
       rows: processes.map((proc) => {
         const shortArgv = proc.argv.length > 40 ? proc.argv.slice(0, 37) + '...' : proc.argv;
         const statusDot = proc.status === 'running';

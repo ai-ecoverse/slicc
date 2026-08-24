@@ -45,6 +45,14 @@
  *     (`kernel/realm/realm-runner.ts`) subscribes to SIGKILL via
  *     `onSignal` and calls `realm.terminate()` synchronously so
  *     `node`/`.jsh`/`python` runaways are uncatchable.
+ *   - **Bounded post-mortem retention.** Terminated processes are NOT
+ *     dropped the instant they exit — `ps` after a `kill` has to be able
+ *     to show the exit code — but they are no longer kept forever either.
+ *     The last `TERMINATED_RETENTION` of them stay readable and older ones
+ *     are reaped, so a long session's table stays O(live + 128) instead of
+ *     growing with every command ever run. `stats()` keeps the totals the
+ *     reaped entries used to carry, so "1,435 commands ran this session"
+ *     survives as a number without surviving as 1,435 records.
  */
 
 // ---------------------------------------------------------------------------
@@ -198,6 +206,18 @@ export interface Process {
 
 export type ProcessEvent = 'spawn' | 'exit';
 
+/**
+ * Session-wide process counts. `terminated` / `spawned` are monotonic and
+ * include reaped entries; `retained` is how many records are actually
+ * resident (live + up to `TERMINATED_RETENTION` dead).
+ */
+export interface ProcessTableStats {
+  live: number;
+  retained: number;
+  terminated: number;
+  spawned: number;
+}
+
 export type ProcessEventListener = (proc: Process) => void;
 
 /**
@@ -216,6 +236,18 @@ export type ProcessSignalListener = (proc: Process, sig: Signal) => void;
 
 const PID_FLOOR = 1024;
 const PID_CEIL = 0xffffffff;
+
+/**
+ * How many terminated processes stay readable after they exit.
+ *
+ * Post-mortem inspection only ever looks at the recent past — the process
+ * you just killed, the command that just failed — so a window is enough,
+ * and an unbounded table is a slow leak: every shell command, tool call and
+ * scoop turn in the session accumulates a `Process` record (with its
+ * `AbortController`, `Gate`, argv and env) that nothing will ever read
+ * again. A five-hour session had 1,444 records for 9 live processes.
+ */
+const TERMINATED_RETENTION = 128;
 
 /**
  * Conventional Unix exit codes for signals — used as the default
@@ -239,6 +271,10 @@ export class ProcessManager {
     exit: new Set(),
   };
   private readonly signalListeners = new Set<ProcessSignalListener>();
+  /** Pids of terminated-but-still-retained processes, oldest first. */
+  private readonly terminatedPids: number[] = [];
+  private spawnedTotal = 0;
+  private terminatedTotal = 0;
 
   // -------------------------------------------------------------------------
   // Lifecycle
@@ -271,6 +307,7 @@ export class ProcessManager {
       finishedAt: null,
     };
     this.processes.set(pid, proc);
+    this.spawnedTotal++;
     this.fire('spawn', proc);
     return proc;
   }
@@ -301,7 +338,12 @@ export class ProcessManager {
     // `abort.signal.aborted` after their `wait()` resolves can then
     // bail out cleanly.
     proc.gate.release();
+    this.terminatedTotal++;
+    // Fire BEFORE reaping: an `exit` listener (and `wait()`'s internal
+    // handler) is handed the `Process` object directly, so it sees a full
+    // record even if this exit is the one that evicts an older entry.
     this.fire('exit', proc);
+    this.retire(proc.pid);
   }
 
   /**
@@ -429,15 +471,46 @@ export class ProcessManager {
     return result;
   }
 
-  /** Return a snapshot of all processes. The returned array is a copy. */
+  /**
+   * Return a snapshot of every RETAINED process — live plus the most
+   * recent `TERMINATED_RETENTION` terminated ones. The returned array is
+   * a copy. Callers that only want live processes should use
+   * {@link listLive}; `ps` filters here itself because `ps -e` still
+   * wants the retained dead.
+   */
   list(): Process[] {
     return Array.from(this.processes.values());
   }
 
+  /** Only the processes that are still `pending` or `running`. */
+  listLive(): Process[] {
+    return this.list().filter((p) => p.status === 'pending' || p.status === 'running');
+  }
+
   /**
-   * Return `proc` for `pid`, or `null` if the pid was never allocated.
-   * No reaping today — terminated entries persist so `ps` after `kill`
-   * still shows the exit code.
+   * Session totals, including the processes that have already been reaped.
+   *
+   * This is what a caller should render instead of a list when it wants to
+   * say how much work ran: `terminated` keeps counting past
+   * `TERMINATED_RETENTION`, so "1,435 exited this session" stays true
+   * without 1,435 records having to stay resident to prove it.
+   */
+  stats(): ProcessTableStats {
+    const live = this.listLive().length;
+    return {
+      live,
+      retained: this.processes.size,
+      terminated: this.terminatedTotal,
+      spawned: this.spawnedTotal,
+    };
+  }
+
+  /**
+   * Return `proc` for `pid`, or `null` if the pid was never allocated —
+   * or has since been reaped. A terminated process stays readable until
+   * `TERMINATED_RETENTION` further processes terminate after it, which is
+   * ample for the post-`kill` `ps` this exists for; anything wanting a
+   * durable record should hold the `Process` handle it was given.
    */
   get(pid: number): Process | null {
     return this.processes.get(pid) ?? null;
@@ -446,7 +519,11 @@ export class ProcessManager {
   /**
    * Resolve when the process exits. If the pid is unknown, rejects
    * synchronously — there's no "wait for a future spawn of this pid"
-   * semantic; callers wait on a `Process` they were handed.
+   * semantic; callers wait on a `Process` they were handed. A pid that
+   * was reaped (see {@link get}) is indistinguishable from one that never
+   * existed, so it rejects too — waiting on a process that terminated
+   * more than `TERMINATED_RETENTION` terminations ago is a bug in the
+   * caller, not a state worth modelling.
    */
   wait(pid: number): Promise<Process> {
     const proc = this.processes.get(pid);
@@ -494,11 +571,26 @@ export class ProcessManager {
   // Internal
   // -------------------------------------------------------------------------
 
+  /**
+   * Record `pid` as terminated and evict whatever fell out of the
+   * retention window. Eviction only ever touches entries in
+   * `terminatedPids`, so a live process can never be reaped no matter how
+   * the table is ordered.
+   */
+  private retire(pid: number): void {
+    this.terminatedPids.push(pid);
+    while (this.terminatedPids.length > TERMINATED_RETENTION) {
+      const oldest = this.terminatedPids.shift() as number;
+      this.processes.delete(oldest);
+    }
+  }
+
   private allocatePid(): number {
-    // Linear probe for a free pid. The table size IS the live-process
-    // count (no reaping yet), so the probe is bounded by
-    // `processes.size`: starting from `nextPid`, we can hit at most
-    // `size` collisions before finding a hole. Anything beyond
+    // Linear probe for a free pid. Every occupied pid is a key in
+    // `processes`, so the probe is bounded by `processes.size`: starting
+    // from `nextPid`, we can hit at most `size` collisions before finding
+    // a hole. Reaping only shrinks the table, which tightens this bound
+    // and frees pids for reuse after a wrap. Anything beyond
     // that means our bookkeeping is corrupt; fail loudly. Without
     // this bound, a corrupt table could spin a multi-billion-step
     // linear probe across the uint32 space and freeze the kernel
