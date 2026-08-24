@@ -21,15 +21,18 @@ at the first signal that fires:
    (`🤖 Generated with`, `Co-Authored-By: Claude/Cursor/Codex/…`, Codex / Copilot
    quota templates). These are authorship claims, not writing-style guesses.
 3. **Agent prose (cheap)** — coding-agent comment shapes posted through a human
-   login: SHA-stamped Follow-up notes, "Captured live on" + commit SHA, isolated
-   harness writeups, orchestrator-review / rebase headings.
+   login: SHA-stamped Follow-up notes, `@codex review` / `@claude review` pings,
+   "Captured live on" + commit SHA, isolated harness writeups, orchestrator-review
+   / rebase headings, automation PR bodies.
 4. **Markdown density / structure (medium)** — count of markdown features
    (headings, bullets, bold, code, links, tables, …) per word. Heavily formatted
    prose above `MARKDOWN_DENSITY_THRESHOLD` reads as machine-generated. A filled
    house PR template dilutes that ratio (more words, same headings), so a second
    gate flags ≥ `STRUCTURAL_HEADING_THRESHOLD` headings **and** ≥
-   `STRUCTURAL_LIST_THRESHOLD` list items even when density is just under 0.12.
-   Empty bodies are not human contributions.
+   `STRUCTURAL_LIST_THRESHOLD` list items, or ≥ `HOUSE_HEADING_THRESHOLD`
+   named house-template headings (`## Summary` / `## Why` / `## Verification`
+   / …), even when density is just under 0.12. Empty bodies are not human
+   contributions.
 5. **Similarity (expensive)** — max Jaccard similarity of the contribution's word
    set against its sibling contributions. A near-duplicate above
    `SIMILARITY_THRESHOLD` is a templated/boilerplate post.

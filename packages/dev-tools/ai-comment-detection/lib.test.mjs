@@ -5,6 +5,7 @@ import {
   decideLabels,
   findAgentProse,
   findAiSignature,
+  HOUSE_HEADING_THRESHOLD,
   HUMAN_IN_THE_LOOP_LABEL,
   interpretPangram,
   isBotAccount,
@@ -165,12 +166,29 @@ describe('findAgentProse', () => {
       findAgentProse(
         '@codex review — the three findings above are addressed in 1aa432644 (ack-ordered broadcast).'
       )
-    ).toBe('codex-review-addressed');
+    ).toBe('bot-review-mention');
+    expect(findAgentProse('@codex review')).toBe('bot-review-mention');
+    expect(
+      findAgentProse('Fixed in 36075bdfe — you are right, and the reason it matters is the same.')
+    ).toBe('fixed-in-sha');
+    expect(findAgentProse('Implemented in `7f35e4a` (branch rebased onto `main`).')).toBe(
+      'implemented-in-sha'
+    );
+    expect(findAgentProse('Live proof, now that this is on main.')).toBe('live-proof');
   });
   it('does not flag a human review note', () => {
     expect(findAgentProse('Please extract this into a helper.')).toBeNull();
     expect(findAgentProse('lgtm thanks for the fix')).toBeNull();
-    expect(findAgentProse('@codex review')).toBeNull();
+    expect(
+      findAgentProse(
+        'please provide screenshots of the file listing side rail in a narrow and wide side rail, so that we can evaluate the responsive design'
+      )
+    ).toBeNull();
+    expect(
+      findAgentProse(
+        'There is an important caveat and it means a scope extension: switching model providers can have a cost impact.'
+      )
+    ).toBeNull();
   });
 });
 
@@ -244,6 +262,23 @@ The finding is low severity because the fragment sources are hardcoded and compi
     expect(counts.density).toBeLessThan(MARKDOWN_DENSITY_THRESHOLD);
     expect(counts.headings).toBeGreaterThanOrEqual(STRUCTURAL_HEADING_THRESHOLD);
     expect(counts.lists).toBeGreaterThanOrEqual(STRUCTURAL_LIST_THRESHOLD);
+    expect(machineFormatting(body)).toMatchObject({ flagged: true, method: 'markdown-structure' });
+  });
+  it('flags a house-template body with three named headings even without four lists', () => {
+    const body = `## Summary
+
+Adds a probe_extra_ids input to the model scout's manual dispatch, so the invalid path can be exercised against real Bedrock on demand. The extra IDs are probed and logged but never enter the results.
+
+## Why
+
+The scout's first live run worked: both reachable IDs returned 200. That verifies the ok path. It verifies none of the behaviour anyone depends on. The invalid path is the only one that ever alerts a human.
+
+## Verification
+
+npm run verify 7/7. I will dispatch the self-test once this is on main and post what real Bedrock returns.`;
+    const counts = markdownCounts(body);
+    expect(counts.lists).toBeLessThan(STRUCTURAL_LIST_THRESHOLD);
+    expect(counts.houseHeadings).toBeGreaterThanOrEqual(HOUSE_HEADING_THRESHOLD);
     expect(machineFormatting(body)).toMatchObject({ flagged: true, method: 'markdown-structure' });
   });
   it('does not flag a short human reply', () => {

@@ -13,7 +13,7 @@ The classifier is a cost-ordered cascade:
 1. Account check
 2. AI-attribution signatures (product footers, commit trailers, bot-review banners)
 3. Coding-agent prose markers (SHA-stamped follow-ups, harness-capture notes)
-4. Markdown density, or heading+list structure when a filled template has diluted density
+4. Markdown density, heading+list structure, or house-template headings when a filled template has diluted density
 5. Similarity
 6. Pangram API
 

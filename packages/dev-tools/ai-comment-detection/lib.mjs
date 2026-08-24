@@ -58,6 +58,9 @@ const MARKDOWN_PATTERNS = [
 const HEADING_PATTERN = /^\s{0,3}#{1,6}\s/gm;
 const UNORDERED_LIST_PATTERN = /^\s*[-*+]\s+/gm;
 const ORDERED_LIST_PATTERN = /^\s*\d+\.\s+/gm;
+/** House-template H2s. Three of these is a filled SLICC PR body even without a long checklist. */
+const HOUSE_HEADING_PATTERN =
+  /^\s{0,3}#{1,6}\s+(Summary|Why|Approach|Cross-cutting impact|Test plan|Documentation|Risk|Checklist|Verification|What changed|What)\b/gim;
 
 /**
  * Product footers, commit trailers, and bot-review banners that are themselves
@@ -113,7 +116,11 @@ export const AGENT_PROSE_PATTERNS = [
   [/\bP[123] findings addressed in\s+`?[0-9a-f]{7,40}`?/i, 'p-findings-addressed-sha'],
   [/Addressed all .{0,30}review findings/i, 'addressed-all-findings'],
   [/^Follow-up for the last P[123]\b/im, 'follow-up-last-p'],
-  [/^@codex review\b[\s\S]{0,160}\baddressed in\b/i, 'codex-review-addressed'],
+  [/^@(?:codex|claude|copilot) review\b/im, 'bot-review-mention'],
+  [/^Fixed in\s+`?[0-9a-f]{7,40}`?/im, 'fixed-in-sha'],
+  [/^Implemented in\s+`[0-9a-f]{7,40}`/im, 'implemented-in-sha'],
+  [/\bPushed as\s+`[0-9a-f]{7,40}`/i, 'pushed-as-sha'],
+  [/^Live proof\b/im, 'live-proof'],
 ];
 
 /**
@@ -144,7 +151,7 @@ export function isBotAccount({ login, type, viaApp } = {}, knownBots = DEFAULT_B
 /**
  * Count markdown features used by the density and structure heuristics.
  * @param {string|null|undefined} text
- * @returns {{words: number, features: number, headings: number, lists: number, density: number}}
+ * @returns {{words: number, features: number, headings: number, lists: number, houseHeadings: number, density: number}}
  */
 export function markdownCounts(text) {
   const body = String(text ?? '');
@@ -158,7 +165,15 @@ export function markdownCounts(text) {
   const lists =
     (body.match(UNORDERED_LIST_PATTERN) || []).length +
     (body.match(ORDERED_LIST_PATTERN) || []).length;
-  return { words, features, headings, lists, density: words === 0 ? 0 : features / words };
+  const houseHeadings = (body.match(HOUSE_HEADING_PATTERN) || []).length;
+  return {
+    words,
+    features,
+    headings,
+    lists,
+    houseHeadings,
+    density: words === 0 ? 0 : features / words,
+  };
 }
 
 /**
@@ -280,6 +295,8 @@ export const MARKDOWN_DENSITY_THRESHOLD = 0.12;
  */
 export const STRUCTURAL_HEADING_THRESHOLD = 3;
 export const STRUCTURAL_LIST_THRESHOLD = 4;
+/** Count of house-template headings at which a body is treated as machine-formatted. */
+export const HOUSE_HEADING_THRESHOLD = 3;
 /** Jaccard similarity above which a comment is treated as a templated dupe. */
 export const SIMILARITY_THRESHOLD = 0.8;
 
@@ -298,6 +315,9 @@ export function machineFormatting(text) {
     counts.lists >= STRUCTURAL_LIST_THRESHOLD
   ) {
     return { flagged: true, method: 'markdown-structure', score: counts.headings };
+  }
+  if (counts.houseHeadings >= HOUSE_HEADING_THRESHOLD) {
+    return { flagged: true, method: 'markdown-structure', score: counts.houseHeadings };
   }
   return { flagged: false, method: null, score: counts.density };
 }
