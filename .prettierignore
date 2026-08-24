@@ -7,6 +7,9 @@ artifacts/
 # Swift package build artifacts (gitignored in each swift-* package; exclude
 # from prettier so a local `swift build` doesn't pollute prettier --check)
 **/.build/
+# xcodebuild output from `npm run build` (swift-launcher packaging) — same
+# reason: DerivedData yaml/yml files would fail a local prettier --check.
+packages/swift-launcher/build/
 
 # Owned by Biome — keep Prettier on docs/config-text formats only.
 # JS/TS/JSX/JSON/JSONC/CSS are formatted and linted by Biome (biome.json).

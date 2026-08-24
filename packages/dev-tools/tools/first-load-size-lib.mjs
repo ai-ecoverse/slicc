@@ -46,10 +46,13 @@ export function parseStaticImports(source) {
 
 /**
  * Walk the page graph: transitive closure of `imports` in a Vite
- * manifest, starting from `entryKey`. Returns emitted file names
- * (manifest `file` values), entry included.
+ * manifest, starting from `entryKey`. Returns emitted file names —
+ * each visited chunk's `file` plus its `css` outputs (stylesheets a
+ * statically imported chunk forces the page to fetch at boot are
+ * recorded in the chunk's `css` array, not as a manifest key of their
+ * own). Entry included; deduped.
  *
- * @param {Record<string, {file: string, imports?: string[]}>} manifest
+ * @param {Record<string, {file: string, css?: string[], imports?: string[]}>} manifest
  * @param {string} entryKey
  * @returns {string[]}
  */
@@ -67,7 +70,13 @@ export function manifestEagerClosure(manifest, entryKey) {
     if (!chunk) continue;
     for (const imp of chunk.imports ?? []) stack.push(imp);
   }
-  return [...seenKeys].map((key) => manifest[key]?.file).filter(Boolean);
+  const files = new Set();
+  for (const key of seenKeys) {
+    const chunk = manifest[key];
+    if (chunk?.file) files.add(chunk.file);
+    for (const css of chunk?.css ?? []) files.add(css);
+  }
+  return [...files];
 }
 
 /**

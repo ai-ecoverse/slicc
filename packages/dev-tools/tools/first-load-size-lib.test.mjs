@@ -39,17 +39,27 @@ describe('parseStaticImports', () => {
 describe('manifestEagerClosure', () => {
   const manifest = {
     'index.html': { file: 'assets/main.js', imports: ['_a.js', '_b.js'] },
-    '_a.js': { file: 'assets/a.js', imports: ['_b.js'], dynamicImports: ['_lazy.js'] },
+    '_a.js': {
+      file: 'assets/a.js',
+      css: ['assets/a.css'],
+      imports: ['_b.js'],
+      dynamicImports: ['_lazy.js'],
+    },
     '_b.js': { file: 'assets/b.js' },
-    '_lazy.js': { file: 'assets/lazy.js' },
+    '_lazy.js': { file: 'assets/lazy.js', css: ['assets/lazy.css'] },
   };
 
   it('walks static imports transitively, excluding dynamic imports', () => {
     expect(manifestEagerClosure(manifest, 'index.html').sort()).toEqual([
+      'assets/a.css',
       'assets/a.js',
       'assets/b.js',
       'assets/main.js',
     ]);
+  });
+
+  it('counts css only for chunks in the eager closure, not lazy ones', () => {
+    expect(manifestEagerClosure(manifest, 'index.html')).not.toContain('assets/lazy.css');
   });
 
   it('throws on a missing entry so a renamed entry cannot silently pass', () => {
