@@ -111,9 +111,29 @@ advertised the capability, is not evidence.
   token is a capability. As a manual last resort during an interactive
   debugging session, it can be recovered from the ephemeral profile's
   history (`sqlite3 <profile>/Default/History "select url from urls where
-url like '%bridgeToken%'"`) and the URL reopened via `location.href` or
-  `/json/new`; prefer restarting the harness when nothing valuable would be
-  lost. Never print the token into transcripts or scripts.
+url like '%bridgeToken%'"`) and the tab reopened via CDP `Page.navigate`
+  (see below). **Do not use `/json/new?URL`** — Chrome parses everything
+  after the first `&` as a separate query parameter on the outer
+  `/json/new` request, silently dropping `&bridgeToken=...` from the
+  loaded URL; `parseBridgeLaunchParams` requires the token and returns
+  `null` without it, so `setLocalApiBaseUrl` is never set and every
+  `/api/fetch-proxy` call lands on wrangler (404). Use `Page.navigate`
+  instead:
+
+  ```bash
+  node --input-type=module << 'EOF'
+  const ws = new WebSocket('ws://localhost:<CDP_PORT>/devtools/page/<PAGE_ID>');
+  ws.addEventListener('open', () => {
+    ws.send(JSON.stringify({ id: 1, method: 'Page.navigate',
+      params: { url: '<FULL_SLICC_URL_WITH_BRIDGE_TOKEN>' } }));
+  });
+  ws.addEventListener('message', (e) => { console.log(e.data); ws.close(); });
+  EOF
+  ```
+
+  Prefer restarting the harness when nothing valuable would be lost.
+  Never print the token into transcripts or scripts.
+
 - Additional instance alongside: choose another unused bridge port, for
   example `PORT=5716 WRANGLER_PORT=8787 npm run dev:standalone:fresh`.
   Profiles and Chrome CDP ports auto-isolate; an occupied bridge fails fast.
