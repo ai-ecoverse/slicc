@@ -21,9 +21,9 @@
     },
     "node-server": {
       "lines": 82,
-      "statements": 80,
+      "statements": 81,
       "functions": 84,
-      "branches": 70,
+      "branches": 71,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -132,14 +132,14 @@
   },
   "swift": {
     "swift-server": {
-      "lines": 64,
-      "functions": 62,
-      "regions": 61
+      "lines": 65,
+      "functions": 63,
+      "regions": 62
     },
     "swift-launcher": {
-      "lines": 41,
-      "functions": 45,
-      "regions": 52
+      "lines": 43,
+      "functions": 46,
+      "regions": 53
     },
     "swift-optel": {
       "lines": 75,
