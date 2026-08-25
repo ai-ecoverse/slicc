@@ -37,12 +37,13 @@ Commands:
   click <ref> [--modifiers=Alt,Control,...] Click element by ref (e.g. e5)
   type <text> [--submit] Type text into focused element
   fill <ref> <text> [--submit] Fill an input by ref with text
-  snapshot [target] [--frame=<frameId>] [--no-iframes] [--depth=N] [--boxes]
+  snapshot [--frame=<frameId>] [--no-iframes] [--filename=path]
                          Print the tab tree, or only the selected frame subtree
   frames                 List frame IDs for --frame (frame IDs are not valid --tab IDs)
-  screenshot [--filename=path] [--max-width=N] [--fullPage=true] [--full-page]
-                         Take screenshot. --max-width downscales the image
-                         if wider than N pixels (e.g. --max-width=1024).
+  screenshot [ref] [--filename=path] [--max-width=N] [--fullPage=true] [--full-page]
+                         Take screenshot. The positional is an ELEMENT REF (e5, f1e5) to clip
+                         to; the output path is --filename=path. --max-width downscales the
+                         image if wider than N pixels (e.g. --max-width=1024).
   eval <expression> [--frame=<frameId>] [--filename=path]
                          Evaluate JavaScript in tab or frame (accepts top-level await/return)
   dblclick <ref> [btn] [--modifiers=Alt,Control,...] Double-click element by ref
@@ -54,7 +55,8 @@ Commands:
   eval-file <path> [--frame=<frameId>] [--output=<path>]
                          Evaluate a JS file in tab or frame. Reads the file from
                          VFS, evaluates in browser context (accepts top-level
-                         await/return). With --output, saves the result to file
+                         await/return). --frame evaluates in that frame instead
+                         of the main one. With --output, saves the result to file
                          instead of printing to stdout.
   press <key>            Press a keyboard key (e.g. Enter, Tab)
   resize <w> <h>         Resize viewport to width x height

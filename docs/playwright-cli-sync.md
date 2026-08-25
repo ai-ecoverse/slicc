@@ -45,6 +45,22 @@ mirrors `help.json`'s shape: one entry per registered command, with its args and
 **Keep this file in sync with `handlers/index.ts`.** When you add, remove, or rename
 a handler, update the manifest too. The sync script validates this.
 
+The manifest is not documentation — it is **enforced at runtime**.
+`playwright/validate-args.ts` reads it on every invocation and rejects a flag or an
+extra positional the subcommand does not declare (issue #2405: `screenshot /tmp/x.png`
+used to exit 0 having written somewhere else entirely, and `eval-file --frame=<id>`
+used to evaluate in the main frame). A missing entry means that verb is unvalidated,
+and a missing flag means a working invocation now fails — so the manifest has to
+describe what the handler actually reads. `packages/webapp/tests/shell/supplemental-commands/playwright/validate-args.test.ts`
+asserts every registered subcommand has an entry.
+
+Two keys beyond `help.json`'s shape carry runtime meaning:
+
+| Key        | Purpose                                                                                           |
+| ---------- | ------------------------------------------------------------------------------------------------- |
+| `args`     | Positional names, in order. Their count is the maximum accepted.                                  |
+| `variadic` | The last positional soaks up the remaining tokens (`eval <expression…>`, `upload <ref> <file…>`). |
+
 ### Control keys
 
 | Key                    | Purpose                                                                                                                    |
@@ -131,7 +147,9 @@ When implementing one of the gaps reported by the sync script:
 
 1. Add the handler in `packages/webapp/src/shell/supplemental-commands/playwright/handlers/`
 2. Register it in `handlers/index.ts`
-3. Add the entry to `slicc-commands.json` with the correct args and flags
+3. Add the entry to `slicc-commands.json` with the correct args and flags (plus
+   `"variadic": true` if the last positional soaks up the rest) — argv validation
+   reads it, so a flag the handler honours but the manifest omits will be rejected
 4. Add it to `AUTO_SNAPSHOT_COMMANDS` in `state.ts` if it mutates page state
 5. Update `packages/webapp/src/shell/supplemental-commands/playwright/help.ts`
 6. **Update `packages/vfs-root/workspace/skills/playwright-cli/SKILL.md`** — this is

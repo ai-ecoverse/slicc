@@ -1,5 +1,5 @@
 {
-  "_comment": "Slicc playwright-cli command manifest — mirrors the shape of playwright-core help.json. Keep in sync with handlers/index.ts. The sync script (packages/dev-tools/tools/playwright-cli-sync.mjs) diffs this against the official help.json to detect gaps.",
+  "_comment": "Slicc playwright-cli command manifest \u2014 mirrors the shape of playwright-core help.json. Keep in sync with handlers/index.ts. The sync script (packages/dev-tools/tools/playwright-cli-sync.mjs) diffs this against the official help.json to detect gaps.",
   "_slicc_only": [
     "teleport",
     "navigate",
@@ -70,7 +70,8 @@
       "flags": {
         "tab": "string",
         "submit": "boolean"
-      }
+      },
+      "variadic": true
     },
     "click": {
       "args": ["ref", "button"],
@@ -91,7 +92,8 @@
       "flags": {
         "tab": "string",
         "submit": "boolean"
-      }
+      },
+      "variadic": true
     },
     "drag": {
       "args": ["startRef", "endRef"],
@@ -109,7 +111,8 @@
       "args": ["ref", "val"],
       "flags": {
         "tab": "string"
-      }
+      },
+      "variadic": true
     },
     "check": {
       "args": ["ref"],
@@ -124,14 +127,12 @@
       }
     },
     "snapshot": {
-      "args": ["target"],
+      "args": [],
       "flags": {
         "tab": "string",
         "frame": "string",
         "filename": "string",
-        "no-iframes": "boolean",
-        "depth": "string",
-        "boxes": "boolean"
+        "no-iframes": "boolean"
       }
     },
     "eval": {
@@ -141,13 +142,15 @@
         "frame": "string",
         "output": "string",
         "filename": "string"
-      }
+      },
+      "variadic": true
     },
     "dialog-accept": {
       "args": ["prompt"],
       "flags": {
         "tab": "string"
-      }
+      },
+      "variadic": true
     },
     "dialog-dismiss": {
       "args": [],
@@ -273,7 +276,8 @@
       "args": ["key", "value"],
       "flags": {
         "tab": "string"
-      }
+      },
+      "variadic": true
     },
     "localstorage-delete": {
       "args": ["key"],
@@ -303,7 +307,8 @@
       "args": ["key", "value"],
       "flags": {
         "tab": "string"
-      }
+      },
+      "variadic": true
     },
     "sessionstorage-delete": {
       "args": ["key"],
@@ -335,7 +340,8 @@
       }
     },
     "upload": {
-      "args": ["file"],
+      "args": ["ref", "file"],
+      "variadic": true,
       "flags": {
         "tab": "string"
       }
@@ -470,6 +476,66 @@
         "tab": "string",
         "hide": "boolean",
         "style": "string"
+      }
+    },
+    "eval-file": {
+      "args": ["path"],
+      "flags": {
+        "tab": "string",
+        "frame": "string",
+        "output": "string"
+      }
+    },
+    "navigate": {
+      "args": ["url"],
+      "flags": {
+        "tab": "string",
+        "discover": "boolean",
+        "teleport-start": "string",
+        "teleport-return": "string",
+        "timeout": "string",
+        "teleport-runtime": "string"
+      }
+    },
+    "teleport": {
+      "args": [],
+      "flags": {
+        "tab": "string",
+        "start": "string",
+        "return": "string",
+        "teleport-start": "string",
+        "teleport-return": "string",
+        "timeout": "string",
+        "runtime": "string",
+        "off": "boolean",
+        "list": "boolean"
+      }
+    },
+    "fetch": {
+      "args": ["url"],
+      "flags": {
+        "tab": "string",
+        "method": "string",
+        "discover": "boolean"
+      }
+    },
+    "frames": {
+      "args": [],
+      "flags": {
+        "tab": "string"
+      }
+    },
+    "record": {
+      "args": ["url"],
+      "flags": {
+        "tab": "string",
+        "filter": "string"
+      }
+    },
+    "stop-recording": {
+      "args": ["recordingId"],
+      "flags": {
+        "tab": "string"
       }
     }
   }
