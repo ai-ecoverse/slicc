@@ -107,6 +107,12 @@ enum BridgeSecurity {
     /// (`isProxyError` reads `X-Proxy-Error`) and the forbidden-response
     /// bridge (`decodeForbiddenResponseHeaders` reads `X-Proxy-Set-Cookie`). MCP
     /// clients also read protocol negotiation/session headers from proxy responses.
+    ///
+    /// `/api/fetch-proxy` overrides this per-response with the union of this
+    /// base set and every forwarded upstream header name (see
+    /// `makeStreamingProxyResponse`) so agents can inspect non-CORS-safelisted
+    /// headers such as Content-Security-Policy. Other `/api/*` routes keep
+    /// this static list.
     static let corsExposeHeaders =
         "Link, X-Proxy-Error, X-Proxy-Set-Cookie, Mcp-Session-Id, MCP-Protocol-Version"
 

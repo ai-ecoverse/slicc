@@ -509,12 +509,24 @@ final class APIRoutesTests: XCTestCase {
                             "proxy must not forward upstream Access-Control-Allow-Credentials"
                         )
                         XCTAssertNil(
-                            response.headers[HTTPField.Name("Access-Control-Expose-Headers")!],
-                            "proxy must not forward upstream Access-Control-Expose-Headers"
-                        )
-                        XCTAssertNil(
                             response.headers[HTTPField.Name("Access-Control-Max-Age")!],
                             "proxy must not forward upstream Access-Control-Max-Age"
+                        )
+                        // Upstream's expose list must not win; the proxy sets its
+                        // own Access-Control-Expose-Headers listing forwarded names.
+                        let expose = response.headers[HTTPField.Name("Access-Control-Expose-Headers")!] ?? ""
+                        XCTAssertFalse(
+                            expose.lowercased() == "x-evil",
+                            "proxy must not forward upstream Access-Control-Expose-Headers verbatim"
+                        )
+                        XCTAssertTrue(
+                            expose.lowercased().contains("content-type"),
+                            "proxy must expose forwarded Content-Type"
+                        )
+                        XCTAssertTrue(
+                            expose.lowercased().contains("x-proxy-set-cookie")
+                                || expose.lowercased().contains("cache-control"),
+                            "proxy must expose its own marker headers"
                         )
                     }
                 }

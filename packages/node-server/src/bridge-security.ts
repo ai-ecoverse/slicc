@@ -125,6 +125,12 @@ const CORS_BASE_ALLOW_HEADERS = [
  * (`isProxyError` reads `X-Proxy-Error`) and the forbidden-response
  * bridge (`decodeForbiddenResponseHeaders` reads `X-Proxy-Set-Cookie`). MCP
  * clients also read protocol negotiation/session headers from proxy responses.
+ *
+ * `/api/fetch-proxy` overrides this per-response with the union of this base
+ * set and every forwarded upstream header name (see
+ * `buildFetchProxyExposeHeaders`) so agents can inspect non-CORS-safelisted
+ * headers such as Content-Security-Policy. Other `/api/*` routes keep this
+ * static list.
  */
 const CORS_EXPOSE_HEADERS =
   'Link, X-Proxy-Error, X-Proxy-Set-Cookie, X-Proxy-Content-Length, Mcp-Session-Id, MCP-Protocol-Version';

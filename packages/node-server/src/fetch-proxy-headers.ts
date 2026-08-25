@@ -67,15 +67,51 @@ export const FETCH_PROXY_SKIP_RESPONSE_HEADERS: ReadonlySet<string> = new Set([
  * middleware remains the sole CORS authority. `x-proxy-` is the proxy's
  * own response-marker namespace — never echo an upstream value.
  */
-/**
- * Proxy-set response header carrying the upstream `content-length` when it is
- * exact (identity encoding). Read by the webapp's `proxied-fetch.ts` to drive
- * determinate download progress; never copied from upstream (the `x-proxy-`
- * prefix below guarantees that).
- */
-export const FETCH_PROXY_CONTENT_LENGTH_HEADER = 'X-Proxy-Content-Length';
-
 export const FETCH_PROXY_SKIP_RESPONSE_PREFIXES: readonly string[] = [
   'access-control-',
   'x-proxy-',
 ];
+
+/**
+ * Proxy-set response header carrying the upstream `content-length` when it is
+ * exact (identity encoding). Read by the webapp's `proxied-fetch.ts` to drive
+ * determinate download progress; never copied from upstream (the `x-proxy-`
+ * prefix above guarantees that).
+ */
+export const FETCH_PROXY_CONTENT_LENGTH_HEADER = 'X-Proxy-Content-Length';
+
+/**
+ * Response headers the browser must always be allowed to read on the
+ * `/api/fetch-proxy` hop, even when the upstream response carries none of
+ * them. Kept in sync with `CORS_EXPOSE_HEADERS` in `bridge-security.ts` and
+ * `BridgeSecurity.corsExposeHeaders` in the Swift server. The route appends
+ * every forwarded upstream header name on top of this base so agents can
+ * inspect CSP / HSTS / ETag / etc. — browsers only surface non-CORS-safelisted
+ * response headers when they appear here (credentials mode forbids `*`).
+ */
+export const FETCH_PROXY_BASE_EXPOSE_HEADERS: readonly string[] = [
+  'Link',
+  'X-Proxy-Error',
+  'X-Proxy-Set-Cookie',
+  FETCH_PROXY_CONTENT_LENGTH_HEADER,
+  'Mcp-Session-Id',
+  'MCP-Protocol-Version',
+  'Cache-Control',
+];
+
+/**
+ * Build the `Access-Control-Expose-Headers` value for a proxied response:
+ * the static proxy markers plus every header name we actually forwarded.
+ * Dedupes case-insensitively while preserving the first-seen spelling.
+ */
+export function buildFetchProxyExposeHeaders(forwardedHeaderNames: Iterable<string>): string {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const name of [...FETCH_PROXY_BASE_EXPOSE_HEADERS, ...forwardedHeaderNames]) {
+    const lower = name.toLowerCase();
+    if (seen.has(lower)) continue;
+    seen.add(lower);
+    out.push(name);
+  }
+  return out.join(', ');
+}

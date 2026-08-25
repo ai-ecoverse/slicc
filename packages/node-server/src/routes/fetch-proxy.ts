@@ -3,6 +3,7 @@ import { StringDecoder } from 'node:string_decoder';
 import { HMAC_SIGN_HEADER, isLoopbackOrigin, isTextContentType } from '@slicc/shared-ts';
 import type { Express, Request, Response } from 'express';
 import {
+  buildFetchProxyExposeHeaders,
   FETCH_PROXY_CONTENT_LENGTH_HEADER,
   FETCH_PROXY_SKIP_HEADERS,
   FETCH_PROXY_SKIP_RESPONSE_HEADERS,
@@ -184,6 +185,12 @@ function unmaskRequestBody(
  * middleware remains the sole authority on the browser→bridge hop —
  * see `FETCH_PROXY_SKIP_RESPONSE_HEADERS` / `..._PREFIXES`. All header
  * values are secret-scrubbed.
+ *
+ * After forwarding, set `Access-Control-Expose-Headers` to the union of the
+ * proxy markers and every forwarded header name. Cross-origin thin-bridge
+ * callers (sliccy.ai → localhost) run under credentials mode, so the
+ * browser otherwise only surfaces CORS-safelisted headers and agents
+ * silently miss CSP / HSTS / X-Frame-Options / ETag / etc.
  */
 function forwardUpstreamHeaders(
   res: Response,
@@ -193,6 +200,7 @@ function forwardUpstreamHeaders(
   res.status(upstream.status);
   res.setHeader('Cache-Control', 'no-store, no-cache');
 
+  const forwardedNames: string[] = [];
   const setCookieValues = upstream.headers.getSetCookie();
   upstream.headers.forEach((v, k) => {
     const lower = k.toLowerCase();
@@ -200,6 +208,7 @@ function forwardUpstreamHeaders(
     if (FETCH_PROXY_SKIP_RESPONSE_PREFIXES.some((p) => lower.startsWith(p))) return;
     // Headers are small — one-shot scrub, no per-chunk semantics.
     res.setHeader(k, secretProxy.scrubResponse(v));
+    forwardedNames.push(k);
   });
   if (setCookieValues.length > 0) {
     res.setHeader('X-Proxy-Set-Cookie', secretProxy.scrubResponse(JSON.stringify(setCookieValues)));
@@ -221,6 +230,9 @@ function forwardUpstreamHeaders(
   if (upstreamLength && !upstream.headers.get('content-encoding') && /^\d+$/.test(upstreamLength)) {
     res.setHeader(FETCH_PROXY_CONTENT_LENGTH_HEADER, upstreamLength);
   }
+  // Override the thin-bridge middleware's static expose list with the
+  // full set for this response. Credentials mode forbids `*`.
+  res.setHeader('Access-Control-Expose-Headers', buildFetchProxyExposeHeaders(forwardedNames));
 }
 
 /**
