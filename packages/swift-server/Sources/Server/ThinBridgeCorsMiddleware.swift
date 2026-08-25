@@ -81,7 +81,20 @@ struct ThinBridgeCorsMiddleware<Context: RequestContext>: RouterMiddleware {
 
         var response = try await next(request, context)
         if let corsHeaders {
+            // `/api/fetch-proxy` (and any future route that needs to surface
+            // non-CORS-safelisted upstream headers) sets its own
+            // Access-Control-Expose-Headers after forwarding. Preserve that
+            // value — overwriting with the static BridgeSecurity list would
+            // hide CSP / HSTS / X-Frame-Options from thin-bridge browsers
+            // (credentials mode forbids `*`). Other CORS fields still come
+            // from BridgeSecurity so the bridge remains the sole ACAO/ACAC
+            // authority.
+            let exposeHeader = HTTPField.Name("Access-Control-Expose-Headers")!
+            let routeExpose = response.headers[exposeHeader]
             for field in corsHeaders {
+                if field.name == exposeHeader, routeExpose != nil {
+                    continue
+                }
                 response.headers[field.name] = field.value
             }
         }
