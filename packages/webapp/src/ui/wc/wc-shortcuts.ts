@@ -161,13 +161,19 @@ export function deepTarget(event: Event): EventTarget | null {
 /**
  * Is a modal surface open that owns Escape? Only `<slicc-quick-look>` really
  * needs asking — the other overlays either stop propagation before this
- * module's listener or mark the event handled — but the check is written over
- * all of them so a future overlay that forgets to do either is still
- * respected.
+ * module's listener (`<slicc-dialog>`, `<slicc-tab-overlay>`) or mark the
+ * event handled (`<slicc-permissions>`) — but the check is written over all of
+ * them so a future overlay that forgets to do either is still respected.
+ *
+ * Every selector here MUST test open-ness, not mere presence: the shell mounts
+ * `<slicc-permissions>` and `<slicc-tab-overlay>` once at boot and leaves them
+ * in the DOM for the session, so a bare tag selector matches forever and eats
+ * every Escape. Quick Look is the exception that has no open state to test —
+ * it is created when it opens and removed when it closes.
  */
 export function hasOpenOverlay(doc: Document): boolean {
   return !!doc.querySelector(
-    'slicc-quick-look, slicc-permissions, slicc-dialog[open], slicc-tab-overlay[open]'
+    'slicc-quick-look, slicc-dialog[open], slicc-tab-overlay[open], .slicc-permissions__prompt[data-open]'
   );
 }
 

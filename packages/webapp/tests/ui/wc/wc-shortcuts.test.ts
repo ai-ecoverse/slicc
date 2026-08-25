@@ -201,6 +201,25 @@ describe('hasOpenOverlay', () => {
     document.body.append(document.createElement('slicc-quick-look'));
     expect(hasOpenOverlay(document)).toBe(true);
   });
+
+  /**
+   * The shell mounts `<slicc-permissions>` and `<slicc-tab-overlay>` once at
+   * boot and leaves them there for the session. A selector that matched the
+   * bare tag swallowed EVERY Escape, so the mode could never be entered —
+   * which is exactly what happened the first time this shipped.
+   */
+  it('does not mistake the always-mounted overlay hosts for open ones', () => {
+    document.body.append(
+      document.createElement('slicc-permissions'),
+      document.createElement('slicc-tab-overlay')
+    );
+    expect(hasOpenOverlay(document)).toBe(false);
+    const prompt = document.createElement('div');
+    prompt.className = 'slicc-permissions__prompt';
+    prompt.setAttribute('data-open', '');
+    document.body.append(prompt);
+    expect(hasOpenOverlay(document)).toBe(true);
+  });
 });
 
 describe('shortcutRows', () => {
