@@ -4,8 +4,8 @@ import { mkdir, readFile, writeFile } from 'node:fs/promises';
  * agent-merch — render a hash-stable grid of scoop avatars for merch.
  *
  *   node packages/dev-tools/tools/agent-merch.mjs [--seed <str>] [--grid 10]
- *        [--color 3] [--cell 300] [--sparse 0.25] [--tagline "<text>"] [--theme light,dark]
- *        [--out dist/merch]
+ *        [--color 3] [--cell 300] [--scale 2] [--sparse 0.25]
+ *        [--tagline "<text>"] [--theme light,dark] [--out dist/merch]
  *
  * Every output is a pure function of `--seed` (default: "slicc"): the seed
  * hashes to a 32-bit generation id that drives an xorshift32 stream, which
@@ -23,6 +23,7 @@ import { createServer } from 'node:http';
 import { extname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
+import { binaryAlphaPng, outputPixelWidth, PRINT_DENSITY } from './agent-merch-lib.mjs';
 
 const ROOT = resolve(fileURLToPath(import.meta.url), '../../../..');
 const WC_DIST = resolve(ROOT, 'packages/webcomponents/dist');
@@ -40,6 +41,7 @@ const SEED = args.seed ?? 'slicc';
 const GRID = Number(args.grid ?? 10);
 const COLORED = Number(args.color ?? 3);
 const CELL = Number(args.cell ?? 300);
+const SCALE = Number(args.scale ?? 2);
 const OUT = resolve(ROOT, args.out ?? 'dist/merch');
 const THEMES = (args.theme ?? 'light,dark').split(',');
 const SPARSE = Number(args.sparse ?? 0.25); // fraction of grid cells left empty
@@ -214,14 +216,14 @@ function pageHtml({ cells: grid, headline, featured }, theme) {
   html,body{margin:0;background:transparent;}
   body{width:${w}px;padding:${fs * 1.6}px 0 ${fs * 1.4}px;box-sizing:border-box;font-family:"Adobe Clean",sans-serif;color:${ink};text-align:center;}
   .head{font-size:${fs * 1.05}px;white-space:nowrap;font-weight:800;letter-spacing:-0.025em;line-height:1.1;padding:0 ${fs}px;}
-  .names{font-size:${fs * 0.7}px;font-weight:700;letter-spacing:-0.01em;line-height:1.3;margin:${fs * 0.5}px 0 ${fs * 1.1}px;opacity:.85;}
+  .names{font-size:${fs * 0.7}px;font-weight:700;letter-spacing:-0.01em;line-height:1.3;margin:${fs * 0.5}px 0 ${fs * 1.1}px;}
   .names span{white-space:nowrap;}
   .foot{font-size:${fs * 1.05}px;font-weight:800;letter-spacing:-0.025em;line-height:1.1;margin-top:${fs * 1.1}px;}
   .grid{display:grid;grid-template-columns:repeat(${GRID},${CELL}px);justify-content:center;}
-  .cell{width:${CELL}px;height:${CELL}px;padding:${CELL * 0.1}px;box-sizing:border-box;filter:grayscale(1) contrast(.9);opacity:${dark ? 0.6 : 0.55};}
-  .cell.colored{filter:none;opacity:1;}
-  .cell.yours{filter:none;opacity:1;position:relative;}
-  .cell.yours .q{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${CELL * 0.5}px;font-weight:800;opacity:.45;}
+  .cell{width:${CELL}px;height:${CELL}px;padding:${CELL * 0.1}px;box-sizing:border-box;filter:grayscale(1) contrast(${dark ? 0.6 : 0.55}) brightness(${dark ? 0.7 : 1.3});}
+  .cell.colored{filter:none;}
+  .cell.yours{filter:none;position:relative;color:#888;}
+  .cell.yours .q{position:absolute;inset:0;display:flex;align-items:center;justify-content:center;font-size:${CELL * 0.5}px;font-weight:800;}
   slicc-agent-avatar{display:block;width:100%;height:100%;}
 </style></head><body>
 <div class="head">${headline}</div>
@@ -263,7 +265,19 @@ async function main() {
   await mkdir(OUT, { recursive: true });
   await writeFile(
     resolve(OUT, `agent-grid-${g.gen}.json`),
-    JSON.stringify({ seed: SEED, grid: GRID, ...g }, null, 2)
+    JSON.stringify(
+      {
+        seed: SEED,
+        grid: GRID,
+        cell: CELL,
+        scale: SCALE,
+        dpi: PRINT_DENSITY,
+        pixelWidth: outputPixelWidth(GRID, CELL, SCALE),
+        ...g,
+      },
+      null,
+      2
+    )
   );
   const browser = await chromium.launch();
   try {
@@ -284,7 +298,7 @@ async function render(browser, g, theme) {
   try {
     const page = await browser.newPage({
       viewport: { width: GRID * CELL, height: 800 },
-      deviceScaleFactor: 1,
+      deviceScaleFactor: SCALE,
       reducedMotion: 'reduce',
     });
     await page.goto(`http://127.0.0.1:${port}/`);
@@ -300,13 +314,13 @@ async function render(browser, g, theme) {
             path.setAttribute('fill', 'none');
           avatar.style.boxSizing = 'border-box';
           avatar.style.border = `${Math.max(2, cell * 0.02)}px dashed currentColor`;
-          avatar.style.opacity = '0.45';
         }
       }
     }, CELL * 0.8);
     await page.evaluate(() => document.fonts.ready);
     await page.waitForTimeout(600);
-    await page.screenshot({ path: `${base}.png`, fullPage: true, omitBackground: true });
+    const screenshot = await page.screenshot({ fullPage: true, omitBackground: true });
+    await writeFile(`${base}.png`, await binaryAlphaPng(screenshot));
     await page.close();
     console.log(`${base}.png`);
   } finally {
