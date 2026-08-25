@@ -45,7 +45,7 @@ playwright-cli snapshot --tab=E9A3F
 ## Frame IDs
 
 - `frames --tab=<targetId>` lists frame IDs. A frame ID is not a tab target ID; never pass it to `--tab`.
-- Use `--tab=<targetId> --frame=<frameId>` with `eval` or `snapshot` to target a child frame, including cross-origin frames.
+- Use `--tab=<targetId> --frame=<frameId>` with `eval`, `eval-file`, or `snapshot` to target a child frame, including cross-origin frames.
 - A frame-scoped `snapshot` prints only that frame's accessibility subtree. Its frame-prefixed refs work with `click`, `fill`, `dblclick`, `hover`, `select`, `check`, and `uncheck`; do not pass `--frame` to those commands. Other ref commands require refs from a top-level snapshot.
 
 ## Common Failure Modes
@@ -75,7 +75,7 @@ playwright-cli goto --tab=<id> <url>                              # Navigate tab
 playwright-cli navigate --tab=<id> <url>                          # Alias for goto
 playwright-cli snapshot --tab=<id> [--frame=<frameId>] [--no-iframes] [--filename=path] [--depth=N] [--boxes]  # Tab tree or one frame subtree
 playwright-cli eval --tab=<id> [--frame=<frameId>] <expression> [--filename=path]  # Evaluate JS in a tab/frame, incl. top-level await/return
-playwright-cli eval-file --tab=<id> <vfs-path>                    # Evaluate JS from a VFS file (top-level await/return supported)
+playwright-cli eval-file --tab=<id> [--frame=<frameId>] <vfs-path>  # Evaluate JS from a VFS file in a tab/frame (top-level await/return supported)
 playwright-cli frames --tab=<id>                                  # List frame IDs for --frame (not --tab)
 playwright-cli resize --tab=<id> <width> <height>                 # Resize viewport
 ```

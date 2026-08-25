@@ -943,6 +943,51 @@ describe('playwright-cli eval-file', () => {
       '(async () => {\nconst r = await fetch(url); return r.status\n})()'
     );
   });
+
+  it('honours --frame by evaluating in the requested child frame', async () => {
+    fs._files.set('/workspace/script.js', 'location.href');
+    browser = createMockBrowser({
+      getFrameTree: vi.fn().mockResolvedValue([
+        { frameId: 'tab-1', url: 'https://example.com', name: '' },
+        {
+          frameId: 'frame-1',
+          parentFrameId: 'tab-1',
+          url: 'https://example.com/frame',
+          name: '',
+        },
+      ]),
+      evaluateInFrame: vi.fn().mockResolvedValue('https://example.com/frame'),
+    });
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['eval-file', '/workspace/script.js', '--tab=tab-1', '--frame=frame-1'],
+      mockCtx
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('https://example.com/frame');
+    expect(browser.evaluateInFrame).toHaveBeenCalledWith('frame-1', 'location.href', {
+      world: 'main',
+    });
+    expect(browser.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown --frame instead of falling back to the main frame', async () => {
+    fs._files.set('/workspace/script.js', 'location.href');
+    browser = createMockBrowser({
+      getFrameTree: vi
+        .fn()
+        .mockResolvedValue([{ frameId: 'tab-1', url: 'https://example.com', name: '' }]),
+      evaluateInFrame: vi.fn().mockResolvedValue(undefined),
+    });
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['eval-file', '/workspace/script.js', '--tab=tab-1', '--frame=DEADBEEF'],
+      mockCtx
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Unknown frame ID "DEADBEEF"');
+    expect(browser.evaluate).not.toHaveBeenCalled();
+  });
 });
 
 describe('playwright-cli tab management', () => {

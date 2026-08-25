@@ -51,8 +51,8 @@ Commands:
   check <ref>            Check a checkbox/radio
   uncheck <ref>          Uncheck a checkbox/radio
   drag <start> <end>     Drag from one element to another
-  eval-file <path> [--output=<path>]
-                         Evaluate a JS file in the page. Reads the file from
+  eval-file <path> [--frame=<frameId>] [--output=<path>]
+                         Evaluate a JS file in tab or frame. Reads the file from
                          VFS, evaluates in browser context (accepts top-level
                          await/return). With --output, saves the result to file
                          instead of printing to stdout.
