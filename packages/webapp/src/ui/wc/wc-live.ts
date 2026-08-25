@@ -1147,7 +1147,7 @@ export function attachWcClient(
   };
   void import('./wc-nav.js')
     .then(({ wireWcNav }) =>
-      wireWcNav({ refs, client, log, onExportTranscript, onShowShortcuts: refs.shortcuts.showHelp })
+      wireWcNav({ refs, client, log, onExportTranscript, shortcuts: refs.shortcuts })
     )
     .catch((err) => log.error('WC nav wiring failed', err));
 

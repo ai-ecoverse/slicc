@@ -183,19 +183,27 @@ Once the product makes sense, the ice-cream language is easier to enjoy: it maps
 
 Why the name? SLICC stands for **Self-Licking Ice Cream Cone**: a recursive system that can help build, extend, and operate itself. A browser agent running inside the browser: that's as self-recursive as tongue-out gelato.
 
-## Keyboard shortcuts
+## Keyboard mode
 
-Press <kbd>?</kbd> (or <kbd>/</kbd>) anywhere outside a text field for the full list; it is also in the avatar menu under **Keyboard shortcuts**.
+SLICC's main control is a text field, so it has no always-on shortcuts to collide with your typing. Instead it has a **mode**, like vim: press <kbd>Esc</kbd> to leave the composer and enter keyboard mode, and every key below is a bare letter. Press <kbd>Esc</kbd> again to leave (a second press is also what exits full screen — the first one belongs to the mode). While the mode is on, a pill above the composer says so.
 
-| Keys                                                                                                                           | Action                                                                                      |
-| ------------------------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------- |
-| <kbd>Ctrl</kbd>+<kbd>1</kbd>…<kbd>8</kbd> (macOS) · <kbd>Ctrl</kbd>+<kbd>Shift</kbd>+<kbd>1</kbd>…<kbd>8</kbd> (Windows/Linux) | Switch to that agent in the tab strip — cones first, then the scoops of the cone you are in |
-| <kbd>Ctrl</kbd>(+<kbd>Shift</kbd>)+<kbd>9</kbd>                                                                                | Switch to the last agent in the strip                                                       |
-| <kbd>c</kbd>                                                                                                                   | Focus the composer                                                                          |
-| <kbd>?</kbd> / <kbd>/</kbd>                                                                                                    | Show the shortcut help                                                                      |
-| <kbd>Esc</kbd>                                                                                                                 | Close it                                                                                    |
+| Key                                        | Action                                                      |
+| ------------------------------------------ | ----------------------------------------------------------- |
+| <kbd>Esc</kbd>                             | Enter keyboard mode — press again to leave                  |
+| <kbd>1</kbd>…<kbd>9</kbd>                  | Switch to that agent in the tab strip (<kbd>9</kbd> = last) |
+| <kbd>d</kbd>                               | Next agent, looping                                         |
+| <kbd>c</kbd> or <kbd>⏎</kbd>               | Back to the composer                                        |
+| <kbd>n</kbd>                               | New conversation                                            |
+| <kbd>b</kbd>                               | Toggle the left rail                                        |
+| <kbd>f</kbd>                               | File browser                                                |
+| <kbd>t</kbd>                               | Browser tabs                                                |
+| <kbd>e</kbd>                               | Terminal                                                    |
+| <kbd>m</kbd>                               | Memory                                                      |
+| <kbd>s</kbd>                               | Sprinkles, looping                                          |
+| <kbd>a</kbd>                               | Accounts                                                    |
+| <kbd>h</kbd>, <kbd>?</kbd> or <kbd>/</kbd> | This list, in an overlay                                    |
 
-The switch chord deliberately avoids <kbd>⌘</kbd>+number and, off macOS, plain <kbd>Ctrl</kbd>+number — those are the browser's own tab switcher. Unmodified keys only fire when you are not typing, so <kbd>c</kbd> and <kbd>?</kbd> never steal a keystroke from the composer or the terminal.
+Keys that navigate (digits, <kbd>d</kbd>, <kbd>b</kbd>, <kbd>s</kbd>, help) keep the mode on; anything that hands focus to a surface leaves it, as does clicking into any text field. Outside the mode nothing is intercepted at all. The overlay is also in the avatar menu, under **Keyboard mode**.
 
 ## API Keys and Providers
 

@@ -17,8 +17,10 @@ import {
   followSystemTheme,
   type SliccAgentTabs,
   type SliccAvatarMenu,
+  type SliccDock,
   type SliccDockTree,
   type SliccFileTree,
+  type SliccFreezer,
   type SliccMemoryPanel,
   type SliccMonitor,
   type SliccQueuedStack,
@@ -140,12 +142,13 @@ export interface WcShellRefs {
   monitor: SliccMonitor;
   avatarMenu: SliccAvatarMenu;
   /**
-   * Global key handling (`?` for the help overlay, Ctrl+digit to switch
-   * units). Installed here rather than in a float's boot because every
-   * float mounts through this function, and because the bindings need
-   * nothing a float owns: they drive `switcher.select()`, which fires the
-   * same `slicc-scoop-select` a click does, so each float's own selection
-   * wiring stays the single implementation of what selecting means.
+   * Modal keyboard mode (Esc to enter, then bare letters). Installed here
+   * rather than in a float's boot because every float mounts through this
+   * function, and because the bindings need nothing a float owns: each one
+   * drives its surface's OWN event — `switcher.select()`, `dock.selectItem()`,
+   * `freezer.toggle()` — so every float's existing wiring stays the single
+   * implementation of what selecting or opening means. Actions no shell
+   * element can reach (account settings) are late-bound via `setAction`.
    */
   shortcuts: ShortcutHandles;
   /**
@@ -472,7 +475,12 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   const { nav, switcher, floatbar, avatarMenu } = buildNav(options);
   appCol.append(nav, shell);
   const shortcuts = wireKeyboardShortcuts({
+    // `WcShellRefs` types both rails as bare `HTMLElement` (they carry no
+    // shell-specific API); the mode needs their component surface, and the
+    // custom elements are registered by the side-effect import above.
     switcher,
+    dock: dock as unknown as SliccDock,
+    freezer: freezer as unknown as SliccFreezer,
     focusComposer: () => inputCard.focus(),
   });
 
