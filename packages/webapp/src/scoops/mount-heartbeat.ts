@@ -50,12 +50,16 @@ export const MOUNT_HEARTBEAT_MAX_BEATS = 24;
 export async function withMountHeartbeat<T>(
   work: (tick: () => void) => Promise<T>,
   onProgress?: (stage: string) => void,
-  options: { intervalMs?: number; maxBeats?: number } = {}
+  options: { intervalMs?: number; maxBeats?: number; stagePrefix?: string } = {}
 ): Promise<T> {
   if (!onProgress) return work(() => {});
   const intervalMs = options.intervalMs ?? MOUNT_HEARTBEAT_INTERVAL_MS;
   const maxBeats = options.maxBeats ?? MOUNT_HEARTBEAT_MAX_BEATS;
-  onProgress('shared-fs-mount:start');
+  // The prefix names the covered boot phase in the beat stream (visible to
+  // the page-side watchdog and in boot traces). Default preserved for the
+  // original consumer, the shared-FS mount.
+  const stagePrefix = options.stagePrefix ?? 'shared-fs-mount';
+  onProgress(`${stagePrefix}:start`);
   let beats = 0;
   let quietBeats = 0;
   let ticks = 0;
@@ -75,7 +79,7 @@ export async function withMountHeartbeat<T>(
       }
     }
     beats += 1;
-    onProgress(`shared-fs-mount:${beats}`);
+    onProgress(`${stagePrefix}:${beats}`);
   }, intervalMs);
   try {
     return await work(tick);

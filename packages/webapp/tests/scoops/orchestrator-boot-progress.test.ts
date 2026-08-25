@@ -89,6 +89,11 @@ describe('orchestrator boot-progress heartbeat (#2007)', () => {
     // The mount phase is the boot's silent O(tree) stretch — the heartbeat
     // must announce it so the kernel-ready watchdog re-arms (#2007).
     expect(stages).toContain('shared-fs-mount:start');
+    // The init tail (root structure, sudo policy, /etc caches, scoop-record
+    // load) was the boot's OTHER silent stretch — ~50s of OPFS-stat I/O with
+    // no progress messages in the 2026-08-24 field wedge. Its heartbeat must
+    // announce itself under its own prefix.
+    expect(stages).toContain('orchestrator-init:start');
   });
 
   it('is optional — init() with no callback still boots', async () => {
