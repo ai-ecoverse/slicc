@@ -7,6 +7,7 @@
 
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import 'fake-indexeddb/auto';
+import { FsError } from '../../src/fs/index.js';
 import {
   clearAllMessages,
   getAllScoops,
@@ -2822,6 +2823,59 @@ describe('Orchestrator legacy cone-memory migration', () => {
     expect(await readUtf8(fs, '/cones/cone-beta/CLAUDE.md')).not.toContain(
       '- primary learned something'
     );
+  });
+
+  // #2400: a transient/non-ENOENT read fault on /workspace/CLAUDE.md must NOT
+  // be swallowed as "empty base" — otherwise the unconditional merge-write
+  // would clobber existing durable cone memory, and the sentinel written
+  // afterwards would make that loss permanent. The fault must propagate so the
+  // migration retries next boot with the file intact.
+  it('does not clobber /workspace/CLAUDE.md (or drop the sentinel) on a non-ENOENT read fault', async () => {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, noopCallbacks());
+    await orch.init();
+
+    const fs = orch.getSharedFS()!;
+
+    // Durable, user-curated cone memory that MUST survive a failed migration.
+    const durable = '# My cone notes\n\nImportant stuff I wrote.\n';
+    await fs.writeFile('/workspace/CLAUDE.md', durable);
+
+    // A shared file with an auto-block so the migration reaches the
+    // read-modify-write of /workspace/CLAUDE.md, and re-run the migration.
+    await fs.writeFile(
+      '/shared/CLAUDE.md',
+      '## Auto-extracted (2024-01-01, compaction)\n\n- legacy bullet\n'
+    );
+    await fs.rm('/workspace/.cone-memory-migrated').catch(() => {});
+
+    // Make ONLY the /workspace/CLAUDE.md read fail with a transient (non-ENOENT)
+    // fault; every other read passes through to the real VFS.
+    const realReadFile = fs.readFile.bind(fs);
+    const readSpy = vi
+      .spyOn(fs, 'readFile')
+      .mockImplementation((path: string, ...rest: unknown[]) => {
+        if (path === '/workspace/CLAUDE.md') {
+          throw new FsError('EIO', 'transient VFS fault', path);
+        }
+        return (realReadFile as (...args: unknown[]) => unknown)(path, ...rest) as ReturnType<
+          typeof fs.readFile
+        >;
+      });
+
+    await expect(
+      (orch as unknown as MigrationPrivate).memoryStore.migrateLegacyConeMemory()
+    ).rejects.toBeInstanceOf(FsError);
+
+    readSpy.mockRestore();
+
+    // The durable file is intact — it was NOT overwritten with just the block.
+    expect(await readUtf8(fs, '/workspace/CLAUDE.md')).toBe(durable);
+    // The sentinel was NOT dropped, so the migration retries next boot.
+    await expect(fs.stat('/workspace/.cone-memory-migrated')).rejects.toBeDefined();
   });
 });
 
