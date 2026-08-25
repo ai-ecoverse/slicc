@@ -1,9 +1,45 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
-import type { MonitorModel, SliccMonitor } from './slicc-monitor.js';
+import type { MonitorModel, MonitorSeries, SliccMonitor } from './slicc-monitor.js';
 import './slicc-monitor.js';
 
 interface MonitorArgs {
   model?: MonitorModel;
+}
+
+/** The sparkline window the live panel uses. Stories mirror it. */
+const WINDOW_MS = 60 * 60 * 1000;
+/** The panel's own refresh cadence. */
+const STEP_MS = 5_000;
+/** A fixed anchor so story screenshots are byte-stable across runs. */
+const NOW = 1_800_000_000_000;
+
+/**
+ * Space values at the panel's 5s cadence, ending "now" — the shape the live
+ * buffer produces. Values are spaced by TIME, so a story that wants to show a
+ * sampling gap just widens one step.
+ */
+function series(values: number[], step = STEP_MS): MonitorSeries {
+  const last = values.length - 1;
+  return {
+    points: values.map((value, i) => ({ at: NOW - (last - i) * step, value })),
+    windowMs: WINDOW_MS,
+  };
+}
+
+/**
+ * The same values, but with the tab backgrounded for 80 seconds in the
+ * middle — the sampling gap a throttled timer leaves behind.
+ */
+function gappedSeries(values: number[]): MonitorSeries {
+  const half = Math.floor(values.length / 2);
+  const last = values.length - 1;
+  return {
+    points: values.map((value, i) => ({
+      at: NOW - (last - i) * STEP_MS - (i < half ? 80_000 : 0),
+      value,
+    })),
+    windowMs: WINDOW_MS,
+  };
 }
 
 const BURN = [
@@ -21,7 +57,7 @@ function vitals(): MonitorModel['vitals'] {
       value: '$1.40',
       unit: '/hour',
       hero: true,
-      series: BURN,
+      series: series(BURN),
       foot: '$29.06 this session · last 5m',
     },
     {
@@ -30,7 +66,7 @@ function vitals(): MonitorModel['vitals'] {
       value: '2',
       unit: 'of 4 working',
       accent: 'violet',
-      series: LOAD,
+      series: series(LOAD),
       foot: 'last 5m',
     },
     {
@@ -39,7 +75,7 @@ function vitals(): MonitorModel['vitals'] {
       value: '9',
       unit: 'processes',
       accent: 'cyan',
-      series: PROCS,
+      series: series(PROCS),
       foot: '1,435 exited this session',
     },
     {
@@ -412,6 +448,54 @@ export const NeedsAttention: Story = {
  */
 export const ColdStart: Story = {
   args: { model: COLD_START },
+};
+
+/**
+ * A panel opened two minutes ago, with a gap where the tab was backgrounded
+ * and its timers were throttled.
+ *
+ * The traces hug the RIGHT edge and cover only the slice of the hour they
+ * actually hold — a short history draws a short trace instead of stretching
+ * two minutes across the tile — and the throttled stretch shows as a long
+ * flat run between two samples rather than being drawn as if it never
+ * happened.
+ */
+export const PartialWindow: Story = {
+  args: {
+    model: {
+      updated: 'Streaming · updated just now',
+      vitals: [
+        {
+          id: 'burn',
+          label: 'Burn rate',
+          value: '$1.40',
+          unit: '/hour',
+          hero: true,
+          series: gappedSeries(BURN.slice(0, 12)),
+          foot: '$2.71 this session · last 2m',
+        },
+        {
+          id: 'load',
+          label: 'Agent load',
+          value: '2',
+          unit: 'of 4 working',
+          accent: 'violet',
+          series: gappedSeries(LOAD.slice(0, 12)),
+          foot: 'last 2m',
+        },
+        {
+          id: 'processes',
+          label: 'Live processes',
+          value: '9',
+          unit: 'processes',
+          accent: 'cyan',
+          series: gappedSeries(PROCS.slice(0, 12)),
+          foot: 'last 2m',
+        },
+      ],
+      alerts: [],
+    },
+  },
 };
 
 /** Just the process table, at the size a busy session reaches. */

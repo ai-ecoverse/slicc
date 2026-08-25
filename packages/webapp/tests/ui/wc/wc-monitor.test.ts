@@ -510,7 +510,10 @@ describe('buildVitals', () => {
     history.push({ at: 1_000, burnRate: 1, workingUnits: 0, liveProcesses: 2 });
     expect(buildVitals({ ...base, history })[0].series).toBeUndefined();
     history.push({ at: 6_000, burnRate: 2, workingUnits: 1, liveProcesses: 3 });
-    expect(buildVitals({ ...base, history })[0].series).toEqual([1, 2]);
+    expect(buildVitals({ ...base, history })[0].series?.points).toEqual([
+      { at: 1_000, value: 1 },
+      { at: 6_000, value: 2 },
+    ]);
   });
 });
 

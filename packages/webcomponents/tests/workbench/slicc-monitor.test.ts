@@ -3,8 +3,39 @@ import { ensureGlobalTokens, setTheme } from '../../src/theme/tokens.js';
 import {
   type MonitorModel,
   type MonitorSection,
+  type MonitorSeries,
   SliccMonitor,
 } from '../../src/workbench/slicc-monitor.js';
+
+/** A one-hour window, the span the live panel plots into. */
+const HOUR_MS = 60 * 60 * 1000;
+const NOW = 1_800_000_000_000;
+
+/** Values at a fixed cadence, ending at `NOW` — the live buffer's shape. */
+function evenSeries(values: number[], stepMs = 5_000, windowMs = HOUR_MS): MonitorSeries {
+  const last = values.length - 1;
+  return {
+    points: values.map((value, i) => ({ at: NOW - (last - i) * stepMs, value })),
+    windowMs,
+  };
+}
+
+/** Values at explicit ages (ms before `NOW`), oldest first. */
+function agedSeries(pairs: [ageMs: number, value: number][], windowMs = HOUR_MS): MonitorSeries {
+  return { points: pairs.map(([age, value]) => ({ at: NOW - age, value })), windowMs };
+}
+
+const BURN = [0.9, 1.1, 0.8, 0.6, 0.7, 1.2, 1.6, 1.5, 1.1, 0.9, 1.0, 1.4];
+
+function polylinePoints(svg: Element): { x: number; y: number }[] {
+  return (svg.querySelector('polyline')?.getAttribute('points') ?? '')
+    .split(' ')
+    .filter(Boolean)
+    .map((pair) => {
+      const [x, y] = pair.split(',').map(Number);
+      return { x, y };
+    });
+}
 
 function mount(model?: MonitorModel): SliccMonitor {
   const el = document.createElement('slicc-monitor') as SliccMonitor;
@@ -122,7 +153,7 @@ describe('slicc-monitor — vitals', () => {
 
   it('plots a sparkline for a series', () => {
     const el = mount({
-      vitals: [{ id: 'burn', label: 'Burn', value: '$1.40', series: [1, 2, 1.5, 3] }],
+      vitals: [{ id: 'burn', label: 'Burn', value: '$1.40', series: evenSeries([1, 2, 1.5, 3]) }],
     });
     const svg = el.querySelector('.monitor-tile__plot svg');
     expect(svg).not.toBeNull();
@@ -132,7 +163,9 @@ describe('slicc-monitor — vitals', () => {
   });
 
   it('plots no sparkline below two points — one point is not a trend', () => {
-    const el = mount({ vitals: [{ id: 'burn', label: 'Burn', value: '$1.40', series: [1] }] });
+    const el = mount({
+      vitals: [{ id: 'burn', label: 'Burn', value: '$1.40', series: evenSeries([1]) }],
+    });
     expect(el.querySelector('.monitor-tile__plot')).toBeNull();
   });
 
@@ -152,10 +185,161 @@ describe('slicc-monitor — vitals', () => {
 
   it('prefers the sparkline when a vital carries both a series and a ratio', () => {
     const el = mount({
-      vitals: [{ id: 'a', label: 'A', value: '1', series: [1, 2], ratio: 0.5 }],
+      vitals: [{ id: 'a', label: 'A', value: '1', series: evenSeries([1, 2]), ratio: 0.5 }],
     });
     expect(el.querySelector('.monitor-tile__plot svg')).not.toBeNull();
     expect(el.querySelector('.monitor-meter')).toBeNull();
+  });
+
+  it("draws the sparkline at the tile's full content width, not a fixed 300px", async () => {
+    // The panel is wider than the old hard-coded 300px hero plot, so a chart
+    // that ignores its box leaves a dead strip exactly where "now" lives.
+    const el = mount({
+      vitals: [{ id: 'burn', label: 'Burn', value: '$1.40', hero: true, series: evenSeries(BURN) }],
+    });
+    const plot = el.querySelector('.monitor-tile__plot') as HTMLElement;
+    expect(plot.clientWidth).toBeGreaterThan(300);
+    await vi.waitFor(() => {
+      const svg = plot.querySelector('svg') as SVGElement;
+      expect(svg.getBoundingClientRect().width).toBeCloseTo(plot.clientWidth, 0);
+    });
+  });
+
+  it('redraws at the new width when the tile resizes', async () => {
+    const host = document.createElement('div');
+    host.style.width = '900px';
+    document.body.appendChild(host);
+    const el = document.createElement('slicc-monitor') as SliccMonitor;
+    el.model = {
+      vitals: [{ id: 'burn', label: 'Burn', value: '$1.40', hero: true, series: evenSeries(BURN) }],
+    };
+    host.appendChild(el);
+    const plot = el.querySelector('.monitor-tile__plot') as HTMLElement;
+    await vi.waitFor(() => {
+      expect(plot.querySelector('svg')?.getBoundingClientRect().width).toBeCloseTo(
+        plot.clientWidth,
+        0
+      );
+    });
+    host.style.width = '480px';
+    await vi.waitFor(() => {
+      expect(plot.querySelector('svg')?.getBoundingClientRect().width).toBeCloseTo(
+        plot.clientWidth,
+        0
+      );
+    });
+    host.remove();
+  });
+
+  it('lands the newest sample on the right edge, with line, wash and marker agreeing', () => {
+    const el = mount({
+      vitals: [{ id: 'burn', label: 'Burn', value: '$1.40', series: evenSeries([1, 2, 1.5, 3]) }],
+    });
+    const svg = el.querySelector('.monitor-tile__plot svg') as SVGElement;
+    const width = Number(svg.getAttribute('width'));
+    const pts = polylinePoints(svg);
+    const marker = svg.querySelector('circle') as SVGElement;
+    const strokeHalf = Number(marker.getAttribute('stroke-width')) / 2;
+
+    // The end marker's CENTRE is at the right edge, inset only by the stroke's
+    // half width — not at an independently chosen `w - 3`.
+    expect(pts[pts.length - 1].x).toBeCloseTo(width - strokeHalf, 5);
+    expect(Number(marker.getAttribute('cx'))).toBeCloseTo(width - strokeHalf, 1);
+    // ...and the wash closes on the same x the line ends at.
+    const wash = (svg.querySelector('polygon')?.getAttribute('points') ?? '').split(' ');
+    expect(Number(wash[wash.length - 2].split(',')[0])).toBeCloseTo(width - strokeHalf, 1);
+    expect(Number(wash[wash.length - 1].split(',')[0])).toBeCloseTo(pts[0].x, 1);
+  });
+
+  it('spaces points by elapsed time, so a sampling gap reads as a gap', () => {
+    // 5s, 90s, 5s apart in a 100s window: the middle gap must be eighteen
+    // times the others, not one uniform step like an index-spaced chart. The
+    // window is short so the gaps are tens of pixels — at an hour they'd be
+    // fractions of one, and the 0.1px coordinate rounding would dominate.
+    const el = mount({
+      vitals: [
+        {
+          id: 'burn',
+          label: 'Burn',
+          value: '$1.40',
+          series: agedSeries(
+            [
+              [100_000, 1],
+              [95_000, 2],
+              [5_000, 1.5],
+              [0, 3],
+            ],
+            100_000
+          ),
+        },
+      ],
+    });
+    const pts = polylinePoints(el.querySelector('.monitor-tile__plot svg') as SVGElement);
+    const gaps = [pts[1].x - pts[0].x, pts[2].x - pts[1].x, pts[3].x - pts[2].x];
+    expect(gaps[1] / gaps[0]).toBeCloseTo(18, 1);
+    expect(gaps[1] / gaps[2]).toBeCloseTo(18, 1);
+  });
+
+  it('renders a short history as a short trace on the right, not a full-width one', () => {
+    // 40 seconds inside a one-hour window is ~1% of the axis. The old
+    // index-spaced chart stretched it across the whole tile.
+    const el = mount({
+      vitals: [
+        {
+          id: 'burn',
+          label: 'Burn',
+          value: '$1.40',
+          series: agedSeries([
+            [40_000, 1],
+            [20_000, 2],
+            [0, 3],
+          ]),
+        },
+      ],
+    });
+    const svg = el.querySelector('.monitor-tile__plot svg') as SVGElement;
+    const width = Number(svg.getAttribute('width'));
+    const pts = polylinePoints(svg);
+    const covered = pts[pts.length - 1].x - pts[0].x;
+    expect(covered / width).toBeGreaterThan(0);
+    expect(covered / width).toBeLessThan(0.03);
+    // Still anchored at the right edge — "now" never floats.
+    expect(pts[pts.length - 1].x).toBeCloseTo(width - 1, 5);
+  });
+
+  it('drops the plot resize observers when the panel is removed', () => {
+    const observed: Element[] = [];
+    const disconnected: ResizeObserver[] = [];
+    const Native = globalThis.ResizeObserver;
+    class SpyObserver extends Native {
+      observe(target: Element, options?: ResizeObserverOptions): void {
+        observed.push(target);
+        super.observe(target, options);
+      }
+      disconnect(): void {
+        disconnected.push(this);
+        super.disconnect();
+      }
+    }
+    globalThis.ResizeObserver = SpyObserver as unknown as typeof ResizeObserver;
+    try {
+      const el = mount({
+        vitals: [
+          { id: 'burn', label: 'Burn', value: '$1', series: evenSeries([1, 2]) },
+          { id: 'load', label: 'Load', value: '2', series: evenSeries([2, 3]) },
+        ],
+      });
+      expect(observed).toHaveLength(2);
+      // A re-render (the panel refreshes every 5s) drops the previous batch.
+      el.model = {
+        vitals: [{ id: 'burn', label: 'Burn', value: '$1', series: evenSeries([1, 3]) }],
+      };
+      expect(disconnected).toHaveLength(2);
+      el.remove();
+      expect(disconnected).toHaveLength(3);
+    } finally {
+      globalThis.ResizeObserver = Native;
+    }
   });
 });
 
