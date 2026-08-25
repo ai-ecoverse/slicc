@@ -396,6 +396,26 @@ describe('RemoteVfsClient — watch', () => {
     ctx.stop();
   });
 
+  // Codex review on #2423: a dispose mid-subscribe used to abandon the ack
+  // promise, leaving the caller hanging for the full 10 s ack timeout AFTER
+  // teardown and then rejecting into a dead panel.
+  it('rejects an in-flight subscribe when the client is disposed', async () => {
+    const channel = new MessageChannel();
+    // No host on the far end: the ack never arrives, so the only thing that
+    // can settle this promise is the dispose.
+    const panel = createPanelMessageChannelTransport(channel.port1);
+    const client = createRemoteVfsClient({
+      transport: panel,
+      logger: { warn: vi.fn(), debug: vi.fn() },
+    });
+    const pending = client.watch(['/workspace'], () => undefined);
+    const settled = expect(pending).rejects.toMatchObject({ code: 'EBADF' });
+    client.dispose();
+    await settled;
+    channel.port1.close();
+    channel.port2.close();
+  });
+
   it('dispose drops host-side subscriptions too', async () => {
     const watcher = new FsWatcher();
     const ctx = setupRoundTrip(() => watcher);

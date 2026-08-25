@@ -148,6 +148,13 @@ interface PendingWatch {
   callback: (events: FsChangeEvent[]) => void;
 }
 
+interface PendingWatchAck {
+  settle: (result: VfsWatchResultMsg) => void;
+  /** Rejects the caller on dispose, so a teardown mid-subscribe fails fast. */
+  fail: (err: unknown) => void;
+  timer: ReturnType<typeof setTimeout>;
+}
+
 class RemoteVfsClient implements RemoteVfsClientHandle {
   private readonly transport: KernelTransport<ExtensionMessage, PanelToOffscreenMessage>;
   private readonly log: NonNullable<RemoteVfsClientOptions['logger']>;
@@ -156,8 +163,8 @@ class RemoteVfsClient implements RemoteVfsClientHandle {
   private readonly pending = new Map<string, PendingRequest>();
   /** Live `watch` subscriptions, keyed by subscription id. */
   private readonly watches = new Map<string, PendingWatch>();
-  /** Resolvers for `vfs-watch` acks still in flight, keyed the same way. */
-  private readonly watchAcks = new Map<string, (result: VfsWatchResultMsg) => void>();
+  /** Acks still in flight, keyed the same way. Settled on dispose. */
+  private readonly watchAcks = new Map<string, PendingWatchAck>();
   private unsubscribe: (() => void) | null = null;
   private counter = 0;
   private watchCounter = 0;
@@ -242,10 +249,18 @@ class RemoteVfsClient implements RemoteVfsClientHandle {
         this.watchAcks.delete(subscriptionId);
         reject(new FsError('EIO', `vfs-watch ack timed out after ${WATCH_ACK_TIMEOUT_MS}ms`));
       }, WATCH_ACK_TIMEOUT_MS);
-      this.watchAcks.set(subscriptionId, (result) => {
-        clearTimeout(timer);
-        this.watchAcks.delete(subscriptionId);
-        resolve(result);
+      this.watchAcks.set(subscriptionId, {
+        settle: (result) => {
+          clearTimeout(timer);
+          this.watchAcks.delete(subscriptionId);
+          resolve(result);
+        },
+        fail: (err) => {
+          clearTimeout(timer);
+          this.watchAcks.delete(subscriptionId);
+          reject(err);
+        },
+        timer,
       });
     });
     const req: VfsWatchRequestMsg = {
@@ -289,6 +304,12 @@ class RemoteVfsClient implements RemoteVfsClientHandle {
       }
     }
     this.watches.clear();
+    // Settle in-flight subscribes rather than dropping their resolvers: an
+    // abandoned ack promise would leave the caller hanging for the full
+    // 10 s ack timeout AFTER teardown, and then reject into a dead panel.
+    for (const [, ack] of [...this.watchAcks]) {
+      ack.fail(new FsError('EBADF', 'RemoteVfsClient disposed'));
+    }
     this.watchAcks.clear();
     // Reject any in-flight requests so callers don't hang forever after
     // teardown (e.g. panel-detach mid-readDir refresh).
@@ -345,7 +366,7 @@ class RemoteVfsClient implements RemoteVfsClientHandle {
 
   private handleWatchPush(msg: VfsWatchResultMsg | VfsWatchEventMsg): void {
     if (msg.type === 'vfs-watch-result') {
-      this.watchAcks.get(msg.subscriptionId)?.(msg);
+      this.watchAcks.get(msg.subscriptionId)?.settle(msg);
       return;
     }
     const sub = this.watches.get(msg.subscriptionId);

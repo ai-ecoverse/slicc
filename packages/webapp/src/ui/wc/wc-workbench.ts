@@ -194,6 +194,12 @@ interface FileTreeController {
  * state (#2408). The 3 s poll survives only as the fallback for a reader that
  * cannot watch (no `FsWatcher` behind it) — without it such a panel would go
  * permanently stale.
+ *
+ * There is deliberately NO slow reconciliation sweep behind the subscription:
+ * a path that can change without reaching `watcher.notify` is a gap in the
+ * NOTIFICATION, and the fix belongs there. `mkdir -p` and `refreshMount` were
+ * two such gaps and now emit events; a future one should be fixed the same
+ * way rather than papered over by re-reading the tree on a timer.
  */
 function createFileTreeController(deps: WcWorkbenchDeps): FileTreeController {
   let pollTimer: ReturnType<typeof setInterval> | null = null;

@@ -38,6 +38,31 @@ describe('VirtualFS mount interactions with script discovery', () => {
     });
   });
 
+  // Codex review on #2423: a `mount refresh` exists BECAUSE the remote side
+  // changed outside the VFS — the one mutation no per-write notify announces.
+  // Without an event, an event-driven consumer (the workbench file tree,
+  // #2409) would sit on the pre-refresh listing indefinitely.
+  it('refreshMount notifies watchers that the mount subtree changed', async () => {
+    const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
+    await vfs.mkdir('/mnt', { recursive: true });
+    await vfs.mount('/mnt', backendOf(createDirectoryHandle({ 'a.txt': 'a' })));
+    await waitForTerminalState(vfs, '/mnt', 2000);
+
+    const watcher = new FsWatcher();
+    vfs.setWatcher(watcher);
+    const events: { type: string; path: string }[] = [];
+    watcher.watch(
+      '/mnt',
+      () => true,
+      (batch) => events.push(...batch)
+    );
+
+    await vfs.refreshMount('/mnt');
+
+    expect(events).toEqual([{ type: 'modify', path: '/mnt', entryType: 'directory' }]);
+    vfs.setWatcher(null);
+  });
+
   it('rejects mounting over a non-empty directory so existing scripts stay visible', async () => {
     await vfs.writeFile('/workspace/skills/test-skill/run.jsh', 'console.log("run");');
 

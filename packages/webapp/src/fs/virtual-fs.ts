@@ -1598,6 +1598,11 @@ export class VirtualFS {
     if (backend.kind === 'local') {
       await this.mountIndex.refreshMount(normalized, resolveMountIndexLimits(opts?.env ?? {}));
     }
+    // A refresh exists BECAUSE the remote side changed outside the VFS — the
+    // one mutation no per-write notify can announce. Report it as a change to
+    // the mount root: watchers rebuild that subtree, which is the only honest
+    // granularity available (the refresh does not enumerate what moved).
+    this.watcher?.notify([{ type: 'modify', path: normalized, entryType: 'directory' }]);
     return report;
   }
 
@@ -1967,13 +1972,16 @@ export class VirtualFS {
    * writeFile}, and {@link symlink} so parent-ensure-then-write is one
    * critical section (and so re-entrant lock acquisition can't deadlock).
    */
-  private async mkdirRecursiveUnlocked(normalized: string): Promise<void> {
+  /** @returns the paths this call actually created, parents first. */
+  private async mkdirRecursiveUnlocked(normalized: string): Promise<string[]> {
     const parts = normalized.split('/').filter(Boolean);
+    const created: string[] = [];
     let current = '';
     for (const part of parts) {
       current += '/' + part;
       try {
         await this.lfs.mkdir(current);
+        created.push(current);
       } catch (err: unknown) {
         if (err instanceof Error && !err.message.includes('EEXIST')) {
           throw convertError(err, current);
@@ -1995,6 +2003,7 @@ export class VirtualFS {
         }
       }
     }
+    return created;
   }
 
   /**
@@ -2025,10 +2034,23 @@ export class VirtualFS {
     if (options?.recursive) {
       // Create all parent directories under the write lock so a concurrent
       // writeFile/symlink can't observe a half-materialized path.
-      await this.withWriteLock(() => {
+      const created = await this.withWriteLock(() => {
         this.markSidecarDirty(normalized);
         return this.mkdirRecursiveUnlocked(normalized);
       });
+      // One event per directory this call actually created — an already
+      // existing component is not a change. Without this, `mkdir -p` was
+      // invisible to watchers, so an event-driven consumer (the workbench
+      // file tree, #2409) never saw a new empty directory appear.
+      if (created.length > 0) {
+        this.watcher?.notify(
+          created.map((path) => ({
+            type: 'create' as const,
+            path,
+            entryType: 'directory' as const,
+          }))
+        );
+      }
     } else {
       await this.withWriteLock(async () => {
         this.markSidecarDirty(normalized);
