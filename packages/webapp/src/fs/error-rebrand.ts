@@ -34,6 +34,7 @@ const KNOWN_CODES: FsErrorCode[] = [
   'EBUSY',
   'EFBIG',
   'EBADF',
+  'ENOSYS',
   'EIO',
 ];
 

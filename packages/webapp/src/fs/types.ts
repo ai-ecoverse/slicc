@@ -55,6 +55,23 @@ export interface ReadFileOptions {
 }
 
 /** Filesystem error codes, mirroring common POSIX errno values. */
+/** What happened to a path. Consumed by `FsWatcher` and its subscribers. */
+export type FsChangeType = 'create' | 'modify' | 'delete';
+
+/**
+ * One filesystem change, as `VirtualFS` reports it to a watcher.
+ *
+ * Lives here rather than in `fs-watcher.ts` because consumers as far out as
+ * the kernel's `LocalVfsClient` name it, and `fs-watcher.ts` has a value
+ * import of the logger — which drags the `__DEV__` global into tsconfigs that
+ * do not declare it (`packages/webcomponents`). `types.ts` imports nothing.
+ */
+export interface FsChangeEvent {
+  type: FsChangeType;
+  path: string;
+  entryType?: EntryType;
+}
+
 export type FsErrorCode =
   | 'ENOENT' // No such file or directory
   | 'EEXIST' // File/dir already exists
@@ -67,6 +84,7 @@ export type FsErrorCode =
   | 'EBUSY' // Resource busy — used for 412 concurrent-write conflicts on remote mounts
   | 'EFBIG' // File too large — used when remote-mount body exceeds maxBodyBytes
   | 'EBADF' // Bad file descriptor — used when an op runs against a closed/unmounted backend
+  | 'ENOSYS' // Not implemented — the backend genuinely lacks the capability (e.g. no FsWatcher)
   | 'EIO'; // I/O error — used for transient network failures, 5xx, AbortError-from-timeout
 
 /**

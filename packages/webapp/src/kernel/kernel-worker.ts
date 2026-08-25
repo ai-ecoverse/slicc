@@ -48,12 +48,13 @@ import {
   setExtensionDelegateId,
   setLocalApiBaseUrl,
 } from '../shell/proxied-fetch.js';
+import type { SprinkleManagerProxySurface } from '../shell/sprinkle-manager-handle.js';
 import { WorkerCdpProxy } from './cdp-worker-proxy.js';
 import { Bridge } from './facade.js';
 import { createKernelHost, type KernelHost } from './host.js';
 import { makeSameOriginBypassFetch } from './kernel-worker-fetch-bypass.js';
 import { makeKernelWorkerInitGuard } from './kernel-worker-init-guard.js';
-import { getPanelRpcClient } from './panel-rpc.js';
+import { getPanelRpcClient, type PanelRpcClient } from './panel-rpc.js';
 import { createPanelTerminalHost } from './panel-terminal-host.js';
 import { setSyncFsBridgeEnabled } from './realm/sync-fs-enabled.js';
 import type { SyncFsNonce } from './realm/sync-fs-wire.js';
@@ -289,7 +290,19 @@ let host: KernelHost | null = null;
 let stopTerminalHost: (() => void) | null = null;
 let stopVfsRpcHost: (() => void) | null = null;
 let stopSpeechAssetsResponder: (() => void) | null = null;
-let panelRpcClient: { dispose: () => void } | null = null;
+let panelRpcClient: PanelRpcClient | null = null;
+
+/**
+ * Globals the worker publishes for shell commands to discover.
+ *
+ * Named rather than a `Record<string, unknown>` bag: these two keys are the
+ * whole contract, and the consumers (`panel-rpc.ts` callers, the `sprinkle` /
+ * `open` / `upskill` commands) read them back expecting exactly these shapes.
+ */
+interface KernelWorkerGlobals {
+  __slicc_sprinkleManager?: SprinkleManagerProxySurface;
+  __slicc_panelRpc?: PanelRpcClient;
+}
 
 /**
  * Wire the init listener using a double-init guard. Exported via
@@ -444,7 +457,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
       '../scoops/sprinkle-bridge-channel.js'
     );
     const sprinkleProxy = createSprinkleManagerProxyOverChannel({ instanceId: init.instanceId });
-    (globalThis as Record<string, unknown>).__slicc_sprinkleManager = sprinkleProxy;
+    (globalThis as KernelWorkerGlobals).__slicc_sprinkleManager = sprinkleProxy;
 
     // Auto-reload open sprinkles when their .shtml file changes in the VFS.
     const watcher = host.sharedFs?.getWatcher();
@@ -486,7 +499,7 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     // and the panel AlmostBashShell renders the preview locally.
     const { createPanelRpcClient } = await import('./panel-rpc.js');
     panelRpcClient = createPanelRpcClient({ instanceId: init.instanceId });
-    (globalThis as Record<string, unknown>).__slicc_panelRpc = panelRpcClient;
+    (globalThis as KernelWorkerGlobals).__slicc_panelRpc = panelRpcClient;
 
     // Give the worker BrowserAPI a tray target provider so the cone can
     // *drive* federated tray/cherry targets, not just list them. The
@@ -593,6 +606,11 @@ async function startSharedFsSurfaces(deps: {
     transport: deps.transport,
     client: sharedFs,
     writableClient: sharedFs,
+    // Read per subscription, not captured here: the orchestrator attaches the
+    // watcher during its own init, which can land after this surface starts.
+    // Every VFS mutation already notifies it, which is what lets the panel's
+    // file tree drop its 3 s poll (#2409).
+    getWatcher: () => sharedFs.getWatcher(),
     logger: console,
   });
   const stopSpeechAssetsResponder = await startSpeechAssetsResponder(sharedFs, deps.instanceId);

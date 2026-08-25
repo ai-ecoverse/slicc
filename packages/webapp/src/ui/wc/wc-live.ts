@@ -240,10 +240,10 @@ export function prepareWcShell(app: HTMLElement, floatLabel: string): WcShellBoo
     // roster/status event or the 15s stats poll would, which is long enough to
     // read as the strip ignoring the click.
     wiring.refreshScoops?.();
-    // The memory panel shows the memory of the cone that owns the selection
-    // (#2271) and reads once per activation, so an open panel has to be told
-    // the selection moved. The file tree re-points itself on its next poll.
+    // Both panels show the cone that owns the selection (#2271) and neither
+    // polls (#2409) — a selection change is not a change to their content.
     workbench?.refreshMemory();
+    workbench?.refreshFiles();
   };
 
   const wiring: WcLiveWiring = {

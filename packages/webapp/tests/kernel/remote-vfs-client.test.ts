@@ -17,6 +17,8 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import type { FsChangeEvent } from '../../src/fs/fs-watcher.js';
+import { FsWatcher } from '../../src/fs/fs-watcher.js';
 import type { DirEntry, ReadFileOptions, Stats } from '../../src/fs/types.js';
 import { FsError } from '../../src/fs/types.js';
 import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
@@ -59,13 +61,14 @@ interface RoundTripCtx {
   stop: () => void;
 }
 
-function setupRoundTrip(): RoundTripCtx {
+function setupRoundTrip(getWatcher?: () => FsWatcher | null): RoundTripCtx {
   const channel = new MessageChannel();
   const bridge = createBridgeMessageChannelTransport(channel.port2);
   const vfs = makeStubVfs();
   const hostHandle = startVfsRpcHost({
     transport: bridge,
     client: vfs.client,
+    ...(getWatcher ? { getWatcher } : {}),
     logger: { warn: vi.fn(), debug: vi.fn() },
   });
   const panel = createPanelMessageChannelTransport(channel.port1);
@@ -340,5 +343,67 @@ describe('RemoteVfsClient — dispose semantics', () => {
     await tick(0);
     client.dispose();
     await expect(p).rejects.toMatchObject({ name: 'FsError', code: 'EBADF' });
+  });
+});
+
+/**
+ * `watch()` (#2409) — the subscription the file panel uses instead of a
+ * poll. End-to-end against a real host + `FsWatcher`, because the value
+ * of the feature is precisely that a VFS mutation reaches the page.
+ */
+describe('RemoteVfsClient — watch', () => {
+  it('delivers change batches for the subscribed roots', async () => {
+    const watcher = new FsWatcher();
+    const ctx = setupRoundTrip(() => watcher);
+    const seen: FsChangeEvent[][] = [];
+    const unwatch = await ctx.client.watch(['/workspace', '/shared'], (events) =>
+      seen.push(events)
+    );
+
+    watcher.notify([{ type: 'create', path: '/workspace/new.txt', entryType: 'file' }]);
+    await tick(10);
+    expect(seen).toEqual([[{ type: 'create', path: '/workspace/new.txt', entryType: 'file' }]]);
+
+    // A path under neither root never reaches the page.
+    watcher.notify([{ type: 'create', path: '/etc/hosts', entryType: 'file' }]);
+    await tick(10);
+    expect(seen).toHaveLength(1);
+
+    unwatch();
+    ctx.stop();
+  });
+
+  it('unsubscribe releases the host-side registration (no listener leak)', async () => {
+    const watcher = new FsWatcher();
+    const ctx = setupRoundTrip(() => watcher);
+    // Ten open/close cycles — the panel being opened and closed repeatedly is
+    // exactly the shape that leaks registrations if unwatch is page-only.
+    for (let i = 0; i < 10; i++) {
+      const unwatch = await ctx.client.watch(['/workspace'], () => undefined);
+      expect(watcher.size).toBe(1);
+      unwatch();
+      await tick(5);
+      expect(watcher.size).toBe(0);
+    }
+    ctx.stop();
+  });
+
+  it('rejects with ENOSYS when the host has no watcher wired', async () => {
+    const ctx = setupRoundTrip();
+    await expect(ctx.client.watch(['/workspace'], () => undefined)).rejects.toMatchObject({
+      code: 'ENOSYS',
+    });
+    ctx.stop();
+  });
+
+  it('dispose drops host-side subscriptions too', async () => {
+    const watcher = new FsWatcher();
+    const ctx = setupRoundTrip(() => watcher);
+    await ctx.client.watch(['/workspace'], () => undefined);
+    expect(watcher.size).toBe(1);
+    ctx.client.dispose();
+    await tick(10);
+    expect(watcher.size).toBe(0);
+    ctx.stop();
   });
 });

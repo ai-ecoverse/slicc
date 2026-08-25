@@ -30,6 +30,14 @@
  *   `vfs-flush`      → `writableClient.flush()`           → `vfs-flush-result`
  *   `vfs-list-mount-points` → `writableClient.listMountPoints()`
  *
+ * Plus one long-lived subscription (#2409):
+ *   `vfs-watch`   → `watcher.watch(basePath, …)` per base path
+ *                   → `vfs-watch-result` ack, then a `vfs-watch-event`
+ *                     push per notified batch until `vfs-unwatch`.
+ *   `vfs-unwatch` → drops the registrations for that subscription id.
+ * This is what lets the panel's file tree react to writes instead of
+ * re-reading the whole tree on a timer.
+ *
  * Errors thrown by the underlying VFS backend are serialised onto the
  * failure branch of the discriminated response. `FsError` (POSIX
  * `code` + `message` + `path`) round-trips with the `code` preserved;
@@ -44,6 +52,7 @@
  * types fan out into nobody — existing behavior is unchanged.
  */
 
+import type { FsWatcher } from '../fs/fs-watcher.js';
 import { FsError } from '../fs/types.js';
 import type { LocalVfsClient } from './local-vfs-client.js';
 import type {
@@ -68,6 +77,11 @@ import type {
   VfsStatRequestMsg,
   VfsStatResultMsg,
   VfsStatsEnvelope,
+  VfsUnwatchRequestMsg,
+  VfsWatchControlMsg,
+  VfsWatchEventMsg,
+  VfsWatchRequestMsg,
+  VfsWatchResultMsg,
   VfsWriteFileRequestMsg,
   VfsWriteFileResultMsg,
   VfsWriteRequestMsg,
@@ -106,6 +120,18 @@ export interface VfsRpcHostOptions {
    */
   writableClient?: WritableVfsBackend;
   /**
+   * Resolves the VFS change watcher, or `null` when none is attached.
+   *
+   * A CALLBACK rather than a value because the host starts before the
+   * orchestrator has finished wiring `sharedFs.setWatcher(...)` — resolving
+   * per subscription means the first panel to open its file tree gets the
+   * live watcher instead of a `null` captured at boot. When it resolves
+   * `null`, `vfs-watch` is answered with an `ENOSYS` failure ack so the
+   * panel falls back to polling instead of waiting on events that will
+   * never arrive.
+   */
+  getWatcher?: () => FsWatcher | null;
+  /**
    * Optional logger. Defaults to `console`. Override in tests to
    * silence expected warnings.
    */
@@ -138,13 +164,17 @@ class VfsRpcHost {
   private readonly transport: KernelTransport<ExtensionMessage, OffscreenToPanelMessage>;
   private readonly client: LocalVfsClient;
   private readonly writableClient: WritableVfsBackend | null;
+  private readonly getWatcher: (() => FsWatcher | null) | null;
   private readonly log: NonNullable<VfsRpcHostOptions['logger']>;
   private unsubscribe: (() => void) | null = null;
+  /** Live watch subscriptions, keyed by the panel's subscription id. */
+  private readonly watches = new Map<string, Array<() => void>>();
 
   constructor(options: VfsRpcHostOptions) {
     this.transport = options.transport;
     this.client = options.client;
     this.writableClient = options.writableClient ?? null;
+    this.getWatcher = options.getWatcher ?? null;
     this.log = options.logger ?? console;
   }
 
@@ -169,12 +199,86 @@ class VfsRpcHost {
         });
         return;
       }
+      if (isVfsWatchControl(payload)) {
+        this.handleWatchControl(payload);
+        return;
+      }
     });
   }
 
   dispose(): void {
     this.unsubscribe?.();
     this.unsubscribe = null;
+    for (const [, unsubs] of this.watches) for (const off of unsubs) off();
+    this.watches.clear();
+  }
+
+  // -------------------------------------------------------------------------
+  // Watch subscriptions (#2409)
+  // -------------------------------------------------------------------------
+
+  private handleWatchControl(req: VfsWatchControlMsg): void {
+    if (req.type === 'vfs-watch') this.handleWatch(req);
+    else this.handleUnwatch(req);
+  }
+
+  private handleWatch(req: VfsWatchRequestMsg): void {
+    // Re-subscribing under a live id replaces it (the panel re-points its
+    // roots when the selected cone changes) — otherwise the old roots would
+    // keep pushing events forever.
+    this.dropWatch(req.subscriptionId);
+    const watcher = this.getWatcher?.() ?? null;
+    if (!watcher) {
+      this.sendWatchAck({
+        type: 'vfs-watch-result',
+        subscriptionId: req.subscriptionId,
+        ok: false,
+        error: { code: 'ENOSYS', message: 'vfs-rpc-host has no watcher wired' },
+      });
+      return;
+    }
+    const unsubs = req.basePaths.map((basePath) =>
+      watcher.watch(
+        basePath,
+        () => true,
+        (events) => {
+          // The subscription may have been dropped between the watcher's
+          // `notify` loop starting and this callback running.
+          if (!this.watches.has(req.subscriptionId)) return;
+          const msg: VfsWatchEventMsg = {
+            type: 'vfs-watch-event',
+            subscriptionId: req.subscriptionId,
+            events: events.map((e) => ({
+              type: e.type,
+              path: e.path,
+              ...(e.entryType ? { entryType: e.entryType } : {}),
+            })),
+          };
+          this.transport.send(msg);
+        }
+      )
+    );
+    this.watches.set(req.subscriptionId, unsubs);
+    this.sendWatchAck({
+      type: 'vfs-watch-result',
+      subscriptionId: req.subscriptionId,
+      ok: true,
+    });
+  }
+
+  private handleUnwatch(req: VfsUnwatchRequestMsg): void {
+    this.dropWatch(req.subscriptionId);
+  }
+
+  private dropWatch(subscriptionId: string): void {
+    const unsubs = this.watches.get(subscriptionId);
+    if (!unsubs) return;
+    this.watches.delete(subscriptionId);
+    for (const off of unsubs) off();
+  }
+
+  private sendWatchAck(msg: VfsWatchResultMsg): void {
+    this.transport.send(msg);
   }
 
   // -------------------------------------------------------------------------
@@ -578,6 +682,12 @@ function isVfsWriteRequest(payload: unknown): payload is VfsWriteRequestMsg {
     t === 'vfs-flush' ||
     t === 'vfs-list-mount-points'
   );
+}
+
+function isVfsWatchControl(payload: unknown): payload is VfsWatchControlMsg {
+  if (typeof payload !== 'object' || payload === null) return false;
+  const t = (payload as { type?: unknown }).type;
+  return t === 'vfs-watch' || t === 'vfs-unwatch';
 }
 
 function writeResultTypeFor(

@@ -509,6 +509,37 @@ describe('VirtualFS', () => {
 
       vfs.setWatcher(null as any);
     });
+
+    // #2409: the `LocalVfsClient.watch` contract, so an in-process reader
+    // (no kernel RPC in between) gets the same event-driven refresh the
+    // panel does.
+    it('watch() subscribes to every base path and unsubscribes them all', async () => {
+      const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
+      const watcher = new FsWatcher();
+      vfs.setWatcher(watcher);
+      const callback = vi.fn();
+
+      const off = await vfs.watch(['/a', '/b'], callback);
+      expect(watcher.size).toBe(2);
+      await vfs.mkdir('/a', { recursive: true });
+      await vfs.writeFile('/a/file.txt', 'x');
+      expect(callback).toHaveBeenCalled();
+
+      callback.mockClear();
+      off();
+      expect(watcher.size).toBe(0);
+      await vfs.writeFile('/a/after.txt', 'y');
+      expect(callback).not.toHaveBeenCalled();
+
+      vfs.setWatcher(null as any);
+    });
+
+    it('watch() rejects with ENOSYS when no watcher is attached', async () => {
+      vfs.setWatcher(null as any);
+      // A silently dead subscription would leave the caller waiting on
+      // events that cannot arrive; the throw is what tells it to poll.
+      await expect(vfs.watch(['/'], vi.fn())).rejects.toMatchObject({ code: 'ENOSYS' });
+    });
   });
 
   describe('canWrite', () => {

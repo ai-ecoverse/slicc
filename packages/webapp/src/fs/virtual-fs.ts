@@ -16,7 +16,7 @@
  */
 
 import { convertError, rebrandFsError } from './error-rebrand.js';
-import type { FsWatcher } from './fs-watcher.js';
+import type { FsChangeEvent, FsWatcher } from './fs-watcher.js';
 import { findDirtyKindFlips, memoryKindOfMode, shouldReconcileKind } from './kind-reconcile.js';
 import type { MountBackend, RefreshReport } from './mount/backend.js';
 import type { HostFsMountBackend } from './mount/backend-hostfs.js';
@@ -1103,6 +1103,27 @@ export class VirtualFS {
   /** Get the attached watcher, or null. */
   getWatcher(): FsWatcher | null {
     return this.watcher;
+  }
+
+  /**
+   * Subscribe to changes under each of `basePaths` — the `LocalVfsClient`
+   * watch contract, so an in-process reader (no kernel RPC in between) gets
+   * the same event-driven refresh the panel does (#2409).
+   *
+   * Rejects when no watcher is attached: a silently dead subscription would
+   * leave the caller waiting on events that cannot arrive, where a rejection
+   * tells it to fall back to polling.
+   */
+  async watch(
+    basePaths: readonly string[],
+    callback: (events: FsChangeEvent[]) => void
+  ): Promise<() => void> {
+    const watcher = this.watcher;
+    if (!watcher) throw new FsError('ENOSYS', 'no FsWatcher attached to this VirtualFS');
+    const unsubs = basePaths.map((basePath) => watcher.watch(basePath, () => true, callback));
+    return () => {
+      for (const off of unsubs) off();
+    };
   }
 
   /**

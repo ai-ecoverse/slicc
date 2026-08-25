@@ -55,6 +55,25 @@ describe('LocalVfsClient', () => {
     expect(s.size).toBe(42);
   });
 
+  // #2409: `watch` is the one optional method, and the facade must not
+  // invent one — a caller branches on its ABSENCE to fall back to polling.
+  it('omits watch when the source cannot watch', () => {
+    const stub = makeStubVfs();
+    const client = createLocalVfsClient(stub.vfs);
+    expect(client.watch).toBeUndefined();
+  });
+
+  it('forwards watch (bound to the source) when the source has one', async () => {
+    const stub = makeStubVfs();
+    const unwatch = vi.fn();
+    const watch = vi.fn(async () => unwatch);
+    const client = createLocalVfsClient({ ...stub.vfs, watch });
+    const cb = vi.fn();
+    const off = await client.watch?.(['/workspace'], cb);
+    expect(watch).toHaveBeenCalledWith(['/workspace'], cb);
+    expect(off).toBe(unwatch);
+  });
+
   it('the facade has no write methods (compile-time check)', () => {
     const stub = makeStubVfs();
     const client = createLocalVfsClient(stub.vfs);
