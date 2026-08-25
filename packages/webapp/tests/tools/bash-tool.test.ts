@@ -360,12 +360,20 @@ describe('Bash Tool', () => {
 function pendingShell() {
   const signals: (AbortSignal | undefined)[] = [];
   const shellPids: (number | undefined)[] = [];
+  const outputCallbacks: (((chunk: string) => void) | undefined)[] = [];
   let settle!: (result: { stdout: string; stderr: string; exitCode: number }) => void;
   let fail!: (err: Error) => void;
   const shell = {
-    executeCommand: (_command: string, signal?: AbortSignal, shellPid?: number) => {
+    executeCommand: (
+      _command: string,
+      signal?: AbortSignal,
+      shellPid?: number,
+      _stdin?: unknown,
+      options?: { onOutput?: (chunk: string) => void }
+    ) => {
       signals.push(signal);
       shellPids.push(shellPid);
+      outputCallbacks.push(options?.onOutput);
       return new Promise<{ stdout: string; stderr: string; exitCode: number }>((res, rej) => {
         settle = res;
         fail = rej;
@@ -376,6 +384,11 @@ function pendingShell() {
     shell: shell as unknown as AlmostBashShellHeadless,
     signals,
     shellPids,
+    /** Emit a chunk through the most recent run's `onOutput` tee (if any). */
+    emitOutput: (chunk: string) => {
+      const onOutput = outputCallbacks[outputCallbacks.length - 1];
+      onOutput?.(chunk);
+    },
     settle: (result: { stdout: string; stderr: string; exitCode: number }) => settle(result),
     fail: (err: Error) => fail(err),
   };
@@ -659,6 +672,106 @@ describe('Bash Tool background_after / timeout', () => {
     controller.abort();
 
     expect(signals[0]?.aborted).toBe(false);
+  });
+
+  // #2415: just-bash settles a timeout kill as exit 124 with empty stdout and
+  // "bash: execution aborted". Without an incremental tee the durable file and
+  // lick preview would only carry that error string.
+  it('keeps pre-kill teed output when a detached job is killed by timeout (#2415)', async () => {
+    const { shell, emitOutput, settle } = pendingShell();
+    const fireLick = vi.fn();
+    const bash = createBashTool(shell, fs, '/tmp', { fireLick });
+
+    await bash.execute({ command: 'echo pre-kill; sleep 999', timeout: 0.05, background_after: 0 });
+    emitOutput('pre-kill-line\n');
+    // Simulate just-bash's abort settlement (empty stdout, exit 124).
+    settle({ stdout: '', stderr: 'bash: execution aborted\n', exitCode: 124 });
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+
+    const event = fireLick.mock.calls[0][0];
+    expect(event.bashExitCode).toBe(124);
+    expect(event.preview).toContain('pre-kill-line');
+    expect(event.preview).toMatch(/killed after 0\.05s \(exit 124\)/);
+    expect(event.preview).not.toMatch(/^Shell error:/);
+    const file = await fs.readFile('/tmp/bash-bg-1.txt', { encoding: 'utf-8' });
+    expect(file).toContain('pre-kill-line');
+    expect(file).toMatch(/killed after 0\.05s \(exit 124\)/);
+  });
+
+  it('scrubs secrets in the partial-output path of a killed job (#2415 / #2210)', async () => {
+    const { shell, emitOutput, settle } = pendingShell();
+    const fireLick = vi.fn();
+    const scrubOutput = vi.fn(async (text: string) => text.replaceAll('sk-live-secret', '***'));
+    const bash = createBashTool(shell, fs, '/tmp', { fireLick, scrubOutput });
+
+    await bash.execute({
+      command: 'printenv TOKEN; sleep 999',
+      timeout: 0.05,
+      background_after: 0,
+    });
+    emitOutput('TOKEN=sk-live-secret\n');
+    settle({ stdout: '', stderr: 'bash: execution aborted\n', exitCode: 124 });
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+
+    expect(fireLick.mock.calls[0][0].preview).not.toContain('sk-live-secret');
+    expect(fireLick.mock.calls[0][0].preview).toContain('TOKEN=***');
+    expect(await fs.readFile('/tmp/bash-bg-1.txt', { encoding: 'utf-8' })).not.toContain(
+      'sk-live-secret'
+    );
+    expect(await fs.readFile('/tmp/bash-bg-1.txt', { encoding: 'utf-8' })).toContain('TOKEN=***');
+  });
+
+  // Bare exit 124 (e.g. GNU `timeout`) must not be treated as an execution abort.
+  it('does not invent a kill trailer for a clean exit 124 (#2415)', async () => {
+    const { shell, settle } = pendingShell();
+    const fireLick = vi.fn();
+    const bash = createBashTool(shell, fs, '/tmp', { fireLick });
+
+    await bash.execute({ command: 'timeout 1 sleep 10', background_after: 0 });
+    settle({ stdout: 'timed out cleanly\n', stderr: '', exitCode: 124 });
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+
+    const event = fireLick.mock.calls[0][0];
+    expect(event.bashExitCode).toBe(124);
+    expect(event.preview).toContain('timed out cleanly');
+    expect(event.preview).not.toMatch(/killed after/);
+    expect(await fs.readFile('/tmp/bash-bg-1.txt', { encoding: 'utf-8' })).toBe(
+      'timed out cleanly\n'
+    );
+  });
+});
+
+describe('Bash Tool timeout-kill e2e (real shell tee)', () => {
+  let fs: VirtualFS;
+  let dbCounter = 0;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({ dbName: `test-bash-tee-e2e-${dbCounter++}`, wipe: true });
+  });
+
+  it('leaves pre-kill output + trailer at resultPath when timeout kills a detached job', async () => {
+    const fireLick = vi.fn();
+    const bash = createBashTool(new AlmostBashShellHeadless({ fs }), fs, '/tmp', { fireLick });
+
+    // Produce output, then sleep past the ceiling. Detach immediately so the
+    // kill lands on the background path (not the foreground timeoutResult).
+    await bash.execute({
+      command: 'echo pre-kill-line; sleep 30',
+      background_after: 0,
+      timeout: 0.3,
+    });
+
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1), { timeout: 5000 });
+
+    const event = fireLick.mock.calls[0][0];
+    expect(event.bashExitCode).toBe(124);
+    expect(event.resultPath).toBe('/tmp/bash-bg-1.txt');
+    expect(event.preview).toContain('pre-kill-line');
+    expect(event.preview).toMatch(/killed after 0\.3s \(exit 124\)/);
+
+    const file = await fs.readFile('/tmp/bash-bg-1.txt', { encoding: 'utf-8' });
+    expect(file).toContain('pre-kill-line');
+    expect(file).toMatch(/killed after 0\.3s \(exit 124\)/);
   });
 });
 

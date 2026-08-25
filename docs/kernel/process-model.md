@@ -153,6 +153,7 @@ Every `bash` tool call registers a `kind:'shell'` job (`ScoopContext.spawnBashJo
 | `timeout` reached                     | SIGKILL the job pid (fan-out terminates realm descendants) + cooperative abort; record reaped with the derived signal exit code |
 | `background_after` reached            | The agent stops waiting; the job record stays `running`, so `ps` lists it and `kill <pid>` reaches it                           |
 | Detached job finishes                 | Record reaped with the command's exit code; a `bash` lick carries the code, a preview, `resultPath`, and the pid                |
+| Detached job killed by `timeout`      | Same reaping; `resultPath` keeps pre-kill teed output plus a `--- killed after <N>s (exit 124) ---` trailer (#2415)             |
 | Normal turn end (`pm.exit(turnPid)`)  | No cascade — a detached job survives to deliver its lick                                                                        |
 | Turn cancel / `stop()` / `drop_scoop` | Those SIGNAL the turn pid, so the fan-out reaps the job and its realm descendants                                               |
 | `ScoopContext.dispose()`              | SIGKILLs every pid still in `liveBashJobPids` (see below), then tears the context down                                          |
