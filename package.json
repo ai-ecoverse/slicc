@@ -117,9 +117,9 @@
     "@size-limit/file": "13.0.3",
     "@tessl/cli": "0.97.0",
     "@types/node": "24.13.3",
-    "@vitest/browser": "4.1.10",
-    "@vitest/browser-playwright": "4.1.10",
-    "@vitest/coverage-v8": "4.1.10",
+    "@vitest/browser": "4.1.11",
+    "@vitest/browser-playwright": "4.1.11",
+    "@vitest/coverage-v8": "4.1.11",
     "esbuild": "0.28.2",
     "husky": "9.1.7",
     "jscpd": "5.0.16",
@@ -134,7 +134,7 @@
     "typescript": "7.0.2",
     "typescript-js": "npm:typescript@6.0.3",
     "vite": "8.2.1",
-    "vitest": "4.1.10"
+    "vitest": "4.1.11"
   },
   "lint-staged": {
     "**/*.{ts,tsx,js,jsx,mjs,cjs,json,jsonc,css}": [
