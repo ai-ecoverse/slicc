@@ -105,10 +105,11 @@ export const evalFileHandler: PlaywrightHandler = async ({ browser, fs, position
   }
 
   const fileOutput = await browser.withTab(tab.targetId, async () => {
-    const fileEvalResult = await evaluateWithTopLevelAwait(
-      (source) => browser.evaluate(source),
-      scriptContent
-    );
+    const frame = await resolveFrame(browser, flags);
+    const evaluate = frame
+      ? (source: string) => browser.evaluateInFrame(frame.frameId, source, { world: 'main' })
+      : (source: string) => browser.evaluate(source);
+    const fileEvalResult = await evaluateWithTopLevelAwait(evaluate, scriptContent);
     return typeof fileEvalResult === 'string'
       ? fileEvalResult
       : JSON.stringify(fileEvalResult, null, 2);
