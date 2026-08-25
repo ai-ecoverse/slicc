@@ -236,8 +236,18 @@ browser.fetch(tab: TabHandle | string, url: string, opts?: {
   headers?: Record<string, string>;
   body?: unknown;                   // object → JSON-stringified
   credentials?: 'include' | 'omit'; // defaults to 'include'
-}): Promise<{ ok: boolean; status: number; headers: Record<string, string>; body: unknown }>
+  responseType?: 'text' | 'json' | 'binary';
+  timeoutMs?: number;               // page-side AbortSignal.timeout()
+}): Promise<{
+  ok: boolean; status: number; statusText: string;
+  url: string; redirected: boolean; // final URL after redirects
+  headers: Record<string, string>;
+  body: unknown; bodyEncoding?: 'base64';
+}>
 ```
+
+From the shell, `curlwright` is the same capability with curl's flags — reach for it while
+exploring an API, and for `browser.fetch` once the call is settled into a `.jsh`.
 
 ```javascript
 const browser = require('sliccy:browser');

@@ -348,6 +348,65 @@ describe('buildBrowserFetchScript — page-context script shape', () => {
     )) as BrowserFetchResult;
     expect(result.body).toEqual({ n: 42 });
   });
+
+  it('carries statusText, the final url and redirected on BOTH body paths', async () => {
+    // Regression guard: the response metadata is assembled once, above
+    // the binary/text branch. Building it inside the binary branch made
+    // every text response throw `__meta is not defined`.
+    // A real `Response` exposes `url`/`redirected` as getters, so the
+    // redirected case is stubbed rather than constructed.
+    const make = (body: string, contentType: string) => async (): Promise<Response> => {
+      const headers = new Headers({ 'content-type': contentType });
+      return {
+        ok: true,
+        status: 200,
+        statusText: 'OK',
+        url: 'https://a.example/final',
+        redirected: true,
+        headers,
+        text: async () => body,
+        arrayBuffer: async () => new TextEncoder().encode(body).buffer,
+      } as unknown as Response;
+    };
+
+    for (const [body, contentType] of [
+      ['hello', 'text/plain'],
+      ['{"a":1}', 'application/json'],
+      ['bytes', 'image/png'],
+    ]) {
+      const script = await buildBrowserFetchScript('https://a.example/start');
+      const result = (await new Function('fetch', `return ${script};`)(
+        make(body, contentType)
+      )) as BrowserFetchResult;
+      expect(result.statusText).toBe('OK');
+      expect(result.url).toBe('https://a.example/final');
+      expect(result.redirected).toBe(true);
+    }
+  });
+
+  it('mints a page-side AbortSignal for timeoutMs and omits it otherwise', async () => {
+    const script = await buildBrowserFetchScript('/slow', { timeoutMs: 1500 });
+    expect(script).toContain('__init.signal = AbortSignal.timeout(1500);');
+    expect(await buildBrowserFetchScript('/slow')).not.toContain('AbortSignal');
+    // Non-positive / non-finite values never reach the page.
+    expect(await buildBrowserFetchScript('/slow', { timeoutMs: 0 })).not.toContain('AbortSignal');
+    expect(await buildBrowserFetchScript('/slow', { timeoutMs: Number.NaN })).not.toContain(
+      'AbortSignal'
+    );
+  });
+
+  it('aborts the page fetch once the timeout elapses', async () => {
+    const script = await buildBrowserFetchScript('/slow', { timeoutMs: 20 });
+    const hangingFetch = (_url: string, init: RequestInit) =>
+      new Promise<Response>((_resolve, reject) => {
+        init.signal?.addEventListener('abort', () =>
+          reject(new DOMException('signal timed out', 'TimeoutError'))
+        );
+      });
+    await expect(
+      new Function('fetch', `return ${script};`)(hangingFetch) as Promise<unknown>
+    ).rejects.toThrow(/timed out/);
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -421,6 +480,9 @@ describe('realm RPC: browser.fetch — round-trip through evalAsync', () => {
     const cannedResponse: BrowserFetchResult = {
       ok: true,
       status: 201,
+      statusText: 'Created',
+      url: 'https://slack.example/api/chat.postMessage',
+      redirected: false,
       headers: { 'content-type': 'application/json', 'x-trace': 'abc' },
       body: { ok: true, channel: 'C123' },
     };

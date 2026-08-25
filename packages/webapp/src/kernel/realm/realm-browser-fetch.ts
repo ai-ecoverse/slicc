@@ -21,6 +21,14 @@
  *   `application/json` Content-Type (caller wins).
  * `AbortSignal` / `ReadableStream` bodies are still out of scope.
  */
+/**
+ * An arbitrary JSON-encodable object body. The shape is genuinely the
+ * caller's — it is `JSON.stringify`d verbatim with a default
+ * `application/json` Content-Type — so this names the contract rather
+ * than pretending to know the keys.
+ */
+export type JsonEncodableObject = { [key: string]: unknown };
+
 export interface BrowserFetchOptions {
   method?: string;
   headers?: Record<string, string>;
@@ -31,7 +39,7 @@ export interface BrowserFetchOptions {
     | ArrayBufferView
     | Blob
     | FormData
-    | Record<string, unknown>
+    | JsonEncodableObject
     | unknown[]
     | number
     | boolean
@@ -54,6 +62,14 @@ export interface BrowserFetchOptions {
    *   a conservative binary Content-Type allowlist → base64, else text.
    */
   responseType?: 'text' | 'json' | 'binary';
+  /**
+   * Abort the request after this many milliseconds, via a page-side
+   * `AbortSignal.timeout()`. The rejection surfaces as a `TimeoutError`
+   * from the injected script, which callers (e.g. `curlwright --max-time`)
+   * map onto their own timeout exit code. Omitted / non-positive → no
+   * timeout, matching plain `fetch`.
+   */
+  timeoutMs?: number;
 }
 
 /**
@@ -66,6 +82,12 @@ export interface BrowserFetchOptions {
 export interface BrowserFetchResult {
   ok: boolean;
   status: number;
+  /** HTTP reason phrase (`Response.statusText`); often `''` over HTTP/2+. */
+  statusText: string;
+  /** Final URL after any redirects (`Response.url`) — curl's `url_effective`. */
+  url: string;
+  /** Whether the page-side `fetch` followed at least one redirect. */
+  redirected: boolean;
   headers: Record<string, string>;
   body: unknown;
   /** Set to `'base64'` when `body` is a base64-encoded binary payload. */
@@ -213,20 +235,42 @@ function buildResponseHandlingScript(responseType: BrowserFetchOptions['response
     "const __isXml = __ctl.indexOf('+xml') !== -1 || __ctl.indexOf('application/xml') === 0 || __ctl.indexOf('text/xml') === 0;" +
     "const __isBinary = __rt === 'binary' || (__rt !== 'text' && __rt !== 'json' && !__isXml && " +
     '__binPrefixes.some((p) => __ctl.indexOf(p) === 0));' +
+    'const __meta = { ok: r.ok, status: r.status, statusText: r.statusText, ' +
+    'url: r.url, redirected: !!r.redirected, headers: h };' +
     'if (__isBinary) {' +
     'const __u = new Uint8Array(await r.arrayBuffer());' +
     "let __s = ''; const __cs = 0x8000;" +
     'for (let __i = 0; __i < __u.length; __i += __cs) { ' +
     '__s += String.fromCharCode.apply(null, __u.subarray(__i, __i + __cs)); }' +
-    "return { ok: r.ok, status: r.status, headers: h, body: btoa(__s), bodyEncoding: 'base64' };" +
+    "return Object.assign(__meta, { body: btoa(__s), bodyEncoding: 'base64' });" +
     '}' +
     'const t = await r.text();' +
     'let b;' +
     "const __jsonWanted = __rt === 'json' || (__rt !== 'text' && ct.indexOf('application/json') !== -1);" +
     'if (__jsonWanted) { if (!t) { b = null; } else { try { b = JSON.parse(t); } catch (e) { b = t; } } }' +
     'else { b = t; }' +
-    'return { ok: r.ok, status: r.status, headers: h, body: b };'
+    'return Object.assign(__meta, { body: b });'
   );
+}
+
+/**
+ * The `RequestInit` subset baked into the injected script as JSON. Only
+ * structured-clone-safe fields live here: a binary/FormData body is
+ * rebuilt page-side and `signal` is minted page-side, because neither
+ * survives `JSON.stringify`.
+ */
+interface InjectedRequestInit {
+  method: string;
+  credentials: string;
+  headers: Record<string, string>;
+  body?: string;
+  mode?: string;
+  cache?: string;
+  redirect?: string;
+  referrer?: string;
+  referrerPolicy?: string;
+  integrity?: string;
+  keepalive?: boolean;
 }
 
 /**
@@ -274,23 +318,25 @@ export async function buildBrowserFetchScript(
   const raw = opts.body;
   const { body, descriptor } =
     raw === undefined || raw === null ? {} : await serializeBrowserFetchBody(raw, headers);
-  const init: Record<string, unknown> = { method, credentials, headers };
+  const init: InjectedRequestInit = { method, credentials, headers };
   if (body !== undefined) init.body = body;
-  const passthrough = [
-    'mode',
-    'cache',
-    'redirect',
-    'referrer',
-    'referrerPolicy',
-    'integrity',
-    'keepalive',
-  ] as const;
-  for (const k of passthrough) {
-    const v = opts[k];
-    if (v !== undefined) init[k] = v;
-  }
+  if (opts.mode !== undefined) init.mode = opts.mode;
+  if (opts.cache !== undefined) init.cache = opts.cache;
+  if (opts.redirect !== undefined) init.redirect = opts.redirect;
+  if (opts.referrer !== undefined) init.referrer = opts.referrer;
+  if (opts.referrerPolicy !== undefined) init.referrerPolicy = opts.referrerPolicy;
+  if (opts.integrity !== undefined) init.integrity = opts.integrity;
+  if (opts.keepalive !== undefined) init.keepalive = opts.keepalive;
   const reconstruct = buildBodyReconstructionScript(descriptor);
   const responseHandling = buildResponseHandlingScript(opts.responseType);
+  // `AbortSignal` cannot ride the JSON init, so the timeout is minted
+  // page-side. The value is rounded to an integer before interpolation,
+  // which is what keeps this the one non-JSON.stringify substitution.
+  const timeoutMs =
+    typeof opts.timeoutMs === 'number' && Number.isFinite(opts.timeoutMs) && opts.timeoutMs > 0
+      ? Math.round(opts.timeoutMs)
+      : 0;
+  const timeoutScript = timeoutMs > 0 ? `__init.signal = AbortSignal.timeout(${timeoutMs});` : '';
   // Single self-contained async IIFE — runs entirely in the page,
   // returns a structured-cloneable object that CDP returnByValue
   // round-trips back to the realm host as-is. Keep this stringly
@@ -301,6 +347,7 @@ export async function buildBrowserFetchScript(
     'const __init = ' +
     JSON.stringify(init) +
     ';' +
+    timeoutScript +
     reconstruct +
     'const r = await fetch(' +
     JSON.stringify(url) +

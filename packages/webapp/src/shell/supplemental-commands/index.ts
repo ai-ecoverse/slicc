@@ -17,6 +17,7 @@ import { createCmpCommand } from './cmp-command.js';
 import { createConvertCommand } from './convert-command.js';
 import { createCostCommand } from './cost-command.js';
 import { createCrontaskCommand } from './crontask-command.js';
+import { createCurlwrightCommand } from './curlwright-command.js';
 import { createDfCommand, createDiskutilCommand } from './df-command.js';
 import { createDiCommand } from './di-command.js';
 import { createDigCommand } from './dig-command.js';
@@ -178,6 +179,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createSshCommand(),
     createServeCommand(options.browserAPI, options.fs),
     createOpenCommand(options.browserAPI),
+    createCurlwrightCommand(options.browserAPI),
     createImgcatCommand(options),
     createZipCommand(),
     createUnzipCommand(),
