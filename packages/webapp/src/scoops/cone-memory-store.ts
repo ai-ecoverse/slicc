@@ -226,12 +226,16 @@ export class ConeMemoryStore {
     try {
       const raw = await fs.readFile('/workspace/CLAUDE.md', { encoding: 'utf-8' });
       coneContent = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-    } catch {
-      try {
-        await fs.mkdir('/workspace', { recursive: true });
-      } catch {
-        // Already exists
-      }
+    } catch (err) {
+      // Only treat "file doesn't exist yet" as empty. Anything else (transient
+      // OPFS fault, RestrictedFS EACCES, mount-backed I/O error) MUST propagate
+      // — otherwise the unconditional writeFile below would clobber the existing
+      // durable /workspace/CLAUDE.md with just the freshly-migrated blocks, and
+      // the sentinel written afterwards would make that loss permanent. Letting
+      // a genuine fault throw leaves the sentinel unwritten so the migration
+      // retries next boot with the file intact. Mirrors `appendConeMemory`.
+      if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
+      await fs.mkdir('/workspace', { recursive: true });
     }
     const separator = coneContent.length === 0 || coneContent.endsWith('\n') ? '' : '\n';
     const merged = coneContent + separator + '\n' + blocks.join('\n\n') + '\n';
