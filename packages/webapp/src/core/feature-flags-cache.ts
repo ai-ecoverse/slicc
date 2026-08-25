@@ -2,6 +2,7 @@ import {
   type FeatureFlagFloat,
   type FeatureFlagValues,
   initFeatureFlags,
+  type UntrustedFlagValues,
 } from './feature-flags.js';
 
 export const FEATURE_FLAGS_REMOTE_STORAGE_KEY = 'slicc_feature_flags_remote';
@@ -72,6 +73,6 @@ function readFlagsRecord(value: unknown): FeatureFlagValues | null {
   return value as FeatureFlagValues;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isRecord(value: unknown): value is UntrustedFlagValues {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
