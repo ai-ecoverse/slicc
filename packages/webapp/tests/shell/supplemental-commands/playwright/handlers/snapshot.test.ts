@@ -257,14 +257,37 @@ describe('screenshotHandler', () => {
     );
   });
 
-  it('warns when the element clip cannot be resolved', async () => {
-    const { browser } = makeBrowser({ evaluateResult: null });
+  it('fails loudly when the element clip cannot be resolved — never a silent viewport frame', async () => {
+    const { browser, screenshot } = makeBrowser({ evaluateResult: null });
     const state = createPlaywrightState();
     state.snapshots.set(TAB, makeSnapshot({ refToSelector: new Map([['e5', '#a']]) }));
     const r = await screenshotHandler(
       createHandlerCtx({ browser, state, positional: ['e5'], flags: { tab: TAB }, fs: okFs() })
     );
-    expect(r.stderr).toContain('could not clip to element e5');
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('could not resolve element e5');
+    expect(r.stderr).toContain('snapshot');
+    expect(screenshot).not.toHaveBeenCalled();
+  });
+
+  it('fails loudly when the resolved element box has zero size', async () => {
+    const { browser, screenshot } = makeBrowser({
+      sendImpl: (m) => {
+        if (m === 'DOM.resolveNode') return { object: { objectId: 'o1' } };
+        if (m === 'Runtime.callFunctionOn') {
+          return { result: { value: { x: 1, y: 2, width: 0, height: 0 } } };
+        }
+        return {};
+      },
+    });
+    const state = createPlaywrightState();
+    state.snapshots.set(TAB, makeSnapshot({ refToBackendNodeId: new Map([['e5', 9]]) }));
+    const r = await screenshotHandler(
+      createHandlerCtx({ browser, state, positional: ['e5'], flags: { tab: TAB }, fs: okFs() })
+    );
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('could not resolve element e5');
+    expect(screenshot).not.toHaveBeenCalled();
   });
 
   it('throws when a ref screenshot has no snapshot', async () => {

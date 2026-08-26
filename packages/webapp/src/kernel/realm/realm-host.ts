@@ -1131,13 +1131,10 @@ async function dispatchBrowser(
       const targetId = args[0] as string;
       const width = args[1] as number;
       const height = args[2] as number;
+      // Recorded per target so BrowserAPI re-applies it on every fresh attach —
+      // parity with the playwright-cli `resize` handler.
       return browser.withTab(targetId, async () => {
-        await browser.sendCDP('Emulation.setDeviceMetricsOverride', {
-          width,
-          height,
-          deviceScaleFactor: 1,
-          mobile: false,
-        });
+        await browser.setViewportOverride(targetId, width, height);
       });
     }
     case 'navigateTab': {

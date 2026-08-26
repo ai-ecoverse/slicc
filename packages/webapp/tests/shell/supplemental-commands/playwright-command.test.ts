@@ -106,6 +106,17 @@ function createMockBrowser(overrides: Partial<BrowserAPI> = {}): BrowserAPI {
     // overrides apply).
     createHarRecorder: vi.fn((fs: VirtualFS) => new HarRecorder(browser.getTransport(), fs)),
     getSessionId: vi.fn().mockReturnValue('session-1'),
+    // Mirror the real BrowserAPI.setViewportOverride: send the emulation
+    // override on the tab's session and record it per target.
+    setViewportOverride: vi.fn(async (_targetId: string, width: number, height: number) => {
+      await browser
+        .getTransport()
+        .send(
+          'Emulation.setDeviceMetricsOverride',
+          { width, height, deviceScaleFactor: 1, mobile: false },
+          'session-1'
+        );
+    }),
     withTab: vi
       .fn()
       .mockImplementation(async (_targetId: string, fn: (s: string) => Promise<unknown>) => {
@@ -1056,6 +1067,42 @@ describe('playwright-cli tab management', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('Test Page');
     expect(result.stdout).toContain('https://example.com');
+  });
+
+  it('appends a contention note when tab-lock waits accumulate during a command', async () => {
+    const stats = [
+      { queueDepth: 5, totalWaitMs: 0, acquisitions: 0 },
+      { queueDepth: 5, totalWaitMs: 7000, acquisitions: 3 },
+    ];
+    const contendedBrowser = createMockBrowser({
+      getTabLockStats: vi.fn(
+        () => stats.shift() ?? { queueDepth: 0, totalWaitMs: 7000, acquisitions: 3 }
+      ),
+    } as unknown as Partial<BrowserAPI>);
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      contendedBrowser as BrowserAPI,
+      fs as VirtualFS
+    );
+    const result = await cmd.execute(['tab-list'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toContain('browser bridge contended');
+    expect(result.stderr).toContain('7.0s');
+    expect(result.stderr).toContain('queue depth 5');
+  });
+
+  it('stays quiet when tab-lock waits are negligible', async () => {
+    const uncontendedBrowser = createMockBrowser({
+      getTabLockStats: vi.fn(() => ({ queueDepth: 1, totalWaitMs: 10, acquisitions: 1 })),
+    } as unknown as Partial<BrowserAPI>);
+    const cmd = createPlaywrightCommand(
+      'playwright-cli',
+      uncontendedBrowser as BrowserAPI,
+      fs as VirtualFS
+    );
+    const result = await cmd.execute(['tab-list'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain('contended');
   });
 
   it('tab-list filters Chrome internal UI targets and keeps only actionable tabs', async () => {
@@ -4788,8 +4835,9 @@ describe('playwright-cli flag additions (Task 5)', () => {
     expect(browser.screenshot).toHaveBeenCalledWith(expect.objectContaining({ fullPage: true }));
   });
 
-  // 10. screenshot with unresolvable element ref warns on stderr
-  it('screenshot with unresolvable element ref emits warning on stderr and still succeeds', async () => {
+  // 10. screenshot with unresolvable element ref fails loudly — a silent
+  // full-viewport substitute corrupts downstream visual comparisons
+  it('screenshot with unresolvable element ref fails instead of capturing the viewport', async () => {
     // Make DOM.resolveNode return no objectId so clipFromBackendNode returns undefined
     const mockTransport = {
       send: vi.fn().mockImplementation((method: string) => {
@@ -4804,10 +4852,9 @@ describe('playwright-cli flag additions (Task 5)', () => {
     await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
 
     const result = await cmd.execute(['screenshot', 'e1', '--tab=tab-1'], mockCtx);
-    expect(result.exitCode).toBe(0);
-    expect(result.stdout).toContain('Screenshot saved to');
-    expect(result.stderr).toContain('Warning: could not clip to element e1');
-    expect(result.stderr).toContain('capturing full viewport');
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('could not resolve element e1');
+    expect(browser.screenshot).not.toHaveBeenCalled();
   });
 });
 
@@ -5847,9 +5894,14 @@ describe('playwright-cli argv validation (#2405)', () => {
   });
 
   it('screenshot still accepts a real ref', async () => {
+    // The transport must return a real objectId so resolveElementClip can
+    // measure the element's bounding box.  A missing objectId now causes an
+    // explicit error (no silent viewport fallback) — see screenshotHandler.
     const mockTransport = {
       send: vi.fn().mockImplementation((method: string) => {
-        if (method === 'DOM.resolveNode') return { object: {} };
+        if (method === 'DOM.resolveNode') return { object: { objectId: 'obj-1' } };
+        if (method === 'Runtime.callFunctionOn')
+          return { result: { value: { x: 10, y: 10, width: 100, height: 50 } } };
         return {};
       }),
     };

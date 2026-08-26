@@ -136,6 +136,14 @@ function makeMockBrowser(state: MockBrowserState): BrowserAPI {
       state.viewportCalls.push({ method, params });
       return {};
     },
+    // Mirror the real BrowserAPI.setViewportOverride: send the emulation
+    // override and record it per target.
+    async setViewportOverride(_targetId: string, width: number, height: number): Promise<void> {
+      state.viewportCalls.push({
+        method: 'Emulation.setDeviceMetricsOverride',
+        params: { width, height, deviceScaleFactor: 1, mobile: false },
+      });
+    },
   };
   return api as unknown as BrowserAPI;
 }

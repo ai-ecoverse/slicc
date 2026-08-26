@@ -214,19 +214,10 @@ export const resizeHandler: PlaywrightHandler = async ({ browser, state, positio
       exitCode: 1,
     };
   }
+  // Recorded per target so BrowserAPI re-applies it on every fresh attach —
+  // a sibling driver switching tabs must not reset this tab's viewport.
   await browser.withTab(tab.targetId, async () => {
-    const transport = browser.getTransport();
-    const sessionId = browser.getSessionId();
-    await transport.send(
-      'Emulation.setDeviceMetricsOverride',
-      {
-        width: w,
-        height: h,
-        deviceScaleFactor: 1,
-        mobile: false,
-      },
-      sessionId!
-    );
+    await browser.setViewportOverride(tab.targetId, w, h);
   });
   state.snapshots.delete(tab.targetId);
   return { stdout: `Resized viewport to ${w}x${h}\n`, stderr: '', exitCode: 0 };

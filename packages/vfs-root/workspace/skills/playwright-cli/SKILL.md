@@ -168,6 +168,21 @@ playwright-cli screenshot --tab=<id> --fullPage                  # Full scrollab
 playwright-cli screenshot --tab=<id> --max-width=800             # Downscale to a max width
 ```
 
+An element screenshot (`screenshot e5`) returns **that element's crop or fails**
+(exit 1) — typically because the snapshot went stale after a navigation or
+layout change. Re-run `snapshot` and retry with a fresh ref; it never silently
+substitutes a full-viewport frame.
+
+A `resize` sticks to its tab: the viewport override is re-applied automatically
+whenever the tab is re-attached, so another driver switching tabs cannot reset
+it.
+
+All playwright-cli commands share one browser and run **serialized**. When
+concurrent callers (e.g. parallel scoops) queue up, commands may emit a
+`note: browser bridge contended — ...` line on stderr with the total lock wait
+and queue depth — treat it as a signal to stagger callers or reduce fan-out
+rather than re-running commands.
+
 ### Save As
 
 ```bash
