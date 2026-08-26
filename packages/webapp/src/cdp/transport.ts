@@ -8,6 +8,8 @@
  * (federated tray targets driven from the kernel worker).
  */
 
+import type { CDPPayload } from '@slicc/shared-ts';
+
 import type { CDPConnectOptions, CDPEventListener, ConnectionState } from './types.js';
 
 export interface CDPTransport {
@@ -20,10 +22,10 @@ export interface CDPTransport {
   /** Send a CDP command and wait for the response. */
   send(
     method: string,
-    params?: Record<string, unknown>,
+    params?: CDPPayload,
     sessionId?: string,
     timeout?: number
-  ): Promise<Record<string, unknown>>;
+  ): Promise<CDPPayload>;
 
   /** Subscribe to a CDP event. */
   on(event: string, listener: CDPEventListener): void;
@@ -32,7 +34,7 @@ export interface CDPTransport {
   off(event: string, listener: CDPEventListener): void;
 
   /** Wait for a specific CDP event to fire once. */
-  once(event: string, timeout?: number): Promise<Record<string, unknown>>;
+  once(event: string, timeout?: number): Promise<CDPPayload>;
 
   /** Current connection state. */
   readonly state: ConnectionState;
