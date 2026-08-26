@@ -3,8 +3,136 @@ import { defineCommand } from 'just-bash';
 import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
 import { captureViaPopup, isExtensionFloat } from './extension-media-capture.js';
 import { basename } from './shared.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
 
-function screencaptureHelp(): { stdout: string; stderr: string; exitCode: number } {
+const SCREENCAPTURE_BOOL_FLAGS = ['--clipboard', '-c', '--view', '-v'] as const;
+
+type ScreencaptureResult = { stdout: string; stderr: string; exitCode: number };
+
+function scFail(message: string): ScreencaptureResult {
+  return { stdout: '', stderr: `screencapture: ${message}\n`, exitCode: 1 };
+}
+
+function checkScreencaptureEnv(
+  local: boolean,
+  panelRpc: ReturnType<typeof getPanelRpcClient>
+): ScreencaptureResult | null {
+  if (!local && !panelRpc) {
+    return scFail('browser APIs are unavailable in this environment');
+  }
+  if (local && !isExtensionFloat() && !navigator.mediaDevices?.getDisplayMedia) {
+    return scFail('screen capture is not supported in this browser');
+  }
+  return null;
+}
+
+async function captureScreenBytes(
+  local: boolean,
+  panelRpc: NonNullable<ReturnType<typeof getPanelRpcClient>>,
+  mimeType: string,
+  quality: number
+): Promise<{ bytes: Uint8Array } | { error: ScreencaptureResult }> {
+  try {
+    if (isExtensionFloat()) {
+      const popup = await captureViaPopup({ kind: 'screen', mimeType, quality });
+      return { bytes: popup.bytes };
+    }
+    if (local) {
+      const r = await captureLocally(mimeType, quality);
+      return { bytes: r.bytes };
+    }
+    const r = await panelRpc.call(
+      'screencapture',
+      { mimeType, quality },
+      { timeoutMs: 5 * 60_000 }
+    );
+    return { bytes: new Uint8Array(r.bytes) };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    if (message.includes('Permission denied') || message.includes('NotAllowedError')) {
+      return { error: scFail('user cancelled or permission denied') };
+    }
+    return { error: scFail(message) };
+  }
+}
+
+async function writeClipboardOutput(
+  bytes: Uint8Array,
+  mimeType: string,
+  local: boolean,
+  panelRpc: NonNullable<ReturnType<typeof getPanelRpcClient>>
+): Promise<ScreencaptureResult> {
+  try {
+    if (
+      isExtensionFloat() &&
+      typeof document !== 'undefined' &&
+      typeof document.hasFocus === 'function' &&
+      !document.hasFocus()
+    ) {
+      return scFail('clipboard capture needs a focused window; save to a file instead');
+    }
+    if (local) {
+      const pngBytes = await ensurePngBytes(bytes, mimeType);
+      const pngBuffer = new ArrayBuffer(pngBytes.byteLength);
+      new Uint8Array(pngBuffer).set(pngBytes);
+      const pngBlob = new Blob([pngBuffer], { type: 'image/png' });
+      await whenDocumentFocused();
+      await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
+      const sizeKB = Math.round(pngBlob.size / 1024);
+      return { stdout: `captured ${sizeKB} KB to clipboard\n`, stderr: '', exitCode: 0 };
+    }
+    await panelRpc.call(
+      'clipboard-write-image',
+      {
+        bytes: bytes.buffer.slice(
+          bytes.byteOffset,
+          bytes.byteOffset + bytes.byteLength
+        ) as ArrayBuffer,
+        mimeType,
+      },
+      { timeoutMs: 5 * 60_000 }
+    );
+    const sizeKB = Math.round(bytes.byteLength / 1024);
+    return { stdout: `captured ${sizeKB} KB to clipboard\n`, stderr: '', exitCode: 0 };
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return scFail(`failed to copy to clipboard: ${message}`);
+  }
+}
+
+async function writeFileOutput(
+  bytes: Uint8Array,
+  filename: string,
+  mimeType: string,
+  view: boolean,
+  ctx: Parameters<Command['execute']>[1]
+): Promise<ScreencaptureResult> {
+  const fullPath = ctx.fs.resolvePath(ctx.cwd, filename);
+  try {
+    await ctx.fs.writeFile(fullPath, bytes);
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    return scFail(`failed to write file: ${message}`);
+  }
+
+  const sizeKB = Math.round(bytes.length / 1024);
+  if (view) {
+    const base64 = toBase64(bytes);
+    return {
+      stdout: `${fullPath} (${sizeKB} KB)\n<img:data:${mimeType};base64,${base64}>`,
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+  return {
+    stdout: `captured ${sizeKB} KB to ${basename(fullPath)}\n`,
+    stderr: '',
+    exitCode: 0,
+  };
+}
+
+function screencaptureHelp(): ScreencaptureResult {
   return {
     stdout: `screencapture - capture screen, window, or tab using browser screen sharing
 
@@ -102,176 +230,40 @@ async function captureLocally(
 
 export function createScreencaptureCommand(): Command {
   return defineCommand('screencapture', async (args, ctx) => {
-    if (args.includes('--help') || args.includes('-h')) {
+    if (isHelpRequest(args)) {
       return screencaptureHelp();
+    }
+
+    const parsed = parseKnownFlags(args, { bool: SCREENCAPTURE_BOOL_FLAGS });
+    if ('error' in parsed) {
+      return scFail(parsed.error);
     }
 
     const local = hasLocalDom();
     const panelRpc = getPanelRpcClient();
-    if (!local && !panelRpc) {
-      return {
-        stdout: '',
-        stderr: 'screencapture: browser APIs are unavailable in this environment\n',
-        exitCode: 1,
-      };
-    }
-    if (local && !isExtensionFloat() && !navigator.mediaDevices?.getDisplayMedia) {
-      return {
-        stdout: '',
-        stderr: 'screencapture: screen capture is not supported in this browser\n',
-        exitCode: 1,
-      };
-    }
+    const envError = checkScreencaptureEnv(local, panelRpc);
+    if (envError) return envError;
 
-    const toClipboard = args.includes('--clipboard') || args.includes('-c');
-    const view = args.includes('--view') || args.includes('-v');
-    const knownFlags = ['--clipboard', '-c', '--view', '-v', '--help', '-h'];
-    const dashDashIndex = args.indexOf('--');
-    const filteredArgs =
-      dashDashIndex >= 0
-        ? args.slice(dashDashIndex + 1)
-        : args.filter((a) => !knownFlags.includes(a));
-    const outputFile = filteredArgs[0];
+    const toClipboard = parsed.bools.has('--clipboard') || parsed.bools.has('-c');
+    const view = parsed.bools.has('--view') || parsed.bools.has('-v');
+    const outputFile = parsed.positionals[0];
 
     if (!toClipboard && !outputFile) {
-      return {
-        stdout: '',
-        stderr: 'screencapture: output file required (or use -c for clipboard)\n',
-        exitCode: 1,
-      };
+      return scFail('output file required (or use -c for clipboard)');
     }
 
     const filename = outputFile || 'screenshot.png';
     const mimeType = getMimeTypeForExtension(filename);
     const quality = mimeType === 'image/png' ? 1.0 : 0.92;
 
-    let bytes: Uint8Array;
-    try {
-      if (isExtensionFloat()) {
-        // Extension mode: capture in a visible popup window so Chrome can
-        // show its screen picker — the offscreen document (where this
-        // shell command usually runs) has no surface to show it.
-        const popup = await captureViaPopup({ kind: 'screen', mimeType, quality });
-        bytes = popup.bytes;
-      } else if (local) {
-        const r = await captureLocally(mimeType, quality);
-        bytes = r.bytes;
-      } else {
-        // Worker context: round-trip via the page. The bridge timeout
-        // is generous because the user has to pick a target in the
-        // OS-level capture picker, which may take many seconds.
-        const r = await panelRpc!.call(
-          'screencapture',
-          { mimeType, quality },
-          { timeoutMs: 5 * 60_000 }
-        );
-        bytes = new Uint8Array(r.bytes);
-      }
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      if (message.includes('Permission denied') || message.includes('NotAllowedError')) {
-        return {
-          stdout: '',
-          stderr: 'screencapture: user cancelled or permission denied\n',
-          exitCode: 1,
-        };
-      }
-      return {
-        stdout: '',
-        stderr: `screencapture: ${message}\n`,
-        exitCode: 1,
-      };
-    }
+    const captured = await captureScreenBytes(local, panelRpc!, mimeType, quality);
+    if ('error' in captured) return captured.error;
 
     if (toClipboard) {
-      try {
-        if (
-          isExtensionFloat() &&
-          typeof document !== 'undefined' &&
-          typeof document.hasFocus === 'function' &&
-          !document.hasFocus()
-        ) {
-          // Offscreen agent shell: there is no focused surface to write the
-          // system clipboard from, and the capture popup has already closed.
-          // Fail fast instead of hanging on a focus event that never fires —
-          // run `-c` from the focusable side-panel terminal, or save to a file.
-          return {
-            stdout: '',
-            stderr:
-              'screencapture: clipboard capture needs a focused window; save to a file instead\n',
-            exitCode: 1,
-          };
-        }
-        if (local) {
-          // Stay on the page: convert to PNG if needed and write to
-          // navigator.clipboard directly. Wait for the document to
-          // regain focus first — after a full-screen / window capture
-          // through the OS-level `getDisplayMedia` picker the SLICC
-          // tab is no longer focused, and `clipboard.write` rejects
-          // with "Document is not focused".
-          const pngBytes = await ensurePngBytes(bytes, mimeType);
-          const pngBuffer = new ArrayBuffer(pngBytes.byteLength);
-          new Uint8Array(pngBuffer).set(pngBytes);
-          const pngBlob = new Blob([pngBuffer], { type: 'image/png' });
-          await whenDocumentFocused();
-          await navigator.clipboard.write([new ClipboardItem({ 'image/png': pngBlob })]);
-          const sizeKB = Math.round(pngBlob.size / 1024);
-          return { stdout: `captured ${sizeKB} KB to clipboard\n`, stderr: '', exitCode: 0 };
-        }
-        // Worker: bridge the clipboard write too — navigator.clipboard
-        // doesn't exist on WorkerNavigator. The page-side handler does
-        // its own focus wait, so we just need a generous bridge timeout
-        // in case the user takes a while to refocus the tab.
-        await panelRpc!.call(
-          'clipboard-write-image',
-          {
-            bytes: bytes.buffer.slice(
-              bytes.byteOffset,
-              bytes.byteOffset + bytes.byteLength
-            ) as ArrayBuffer,
-            mimeType,
-          },
-          { timeoutMs: 5 * 60_000 }
-        );
-        const sizeKB = Math.round(bytes.byteLength / 1024);
-        return { stdout: `captured ${sizeKB} KB to clipboard\n`, stderr: '', exitCode: 0 };
-      } catch (err) {
-        return {
-          stdout: '',
-          stderr: `screencapture: failed to copy to clipboard: ${err instanceof Error ? err.message : String(err)}\n`,
-          exitCode: 1,
-        };
-      }
+      return writeClipboardOutput(captured.bytes, mimeType, local, panelRpc!);
     }
 
-    // Save to file
-    const fullPath = ctx.fs.resolvePath(ctx.cwd, filename);
-    try {
-      await ctx.fs.writeFile(fullPath, bytes);
-    } catch (err) {
-      return {
-        stdout: '',
-        stderr: `screencapture: failed to write file: ${err instanceof Error ? err.message : String(err)}\n`,
-        exitCode: 1,
-      };
-    }
-
-    const sizeKB = Math.round(bytes.length / 1024);
-
-    if (view) {
-      const base64 = toBase64(bytes);
-      return {
-        stdout: `${fullPath} (${sizeKB} KB)\n<img:data:${mimeType};base64,${base64}>`,
-        stderr: '',
-        exitCode: 0,
-      };
-    }
-
-    return {
-      stdout: `captured ${sizeKB} KB to ${basename(fullPath)}\n`,
-      stderr: '',
-      exitCode: 0,
-    };
+    return writeFileOutput(captured.bytes, filename, mimeType, view, ctx);
   });
 }
 
