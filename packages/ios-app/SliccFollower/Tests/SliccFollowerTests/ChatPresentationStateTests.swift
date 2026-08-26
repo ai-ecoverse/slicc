@@ -51,7 +51,6 @@ final class ChatPresentationStateTests: XCTestCase {
                 id: "staged-1", name: "photo.jpg", mimeType: "image/jpeg", size: 1_024,
                 kind: .image, data: "AAAA")
         ]
-        owner.transcriptPosition.scrollTo(id: "message-42", anchor: .center)
 
         for (index, step) in steps.enumerated() {
             XCTAssertEqual(
@@ -79,10 +78,15 @@ final class ChatPresentationStateTests: XCTestCase {
                 owner.stagedAttachments.map(\.id),
                 ["staged-1"],
                 "\(step.name) discarded a photo the user had already picked")
-            XCTAssertEqual(
-                owner.transcriptPosition.viewID as? String,
-                "message-42",
-                "\(step.name) lost the transcript position")
+            // The transcript's scroll position is deliberately NOT part of
+            // this preserved state any more. It used to ride on a
+            // `ScrollPosition` bound to the transcript's `ScrollView`, and
+            // restoring that binding's estimated offset across a container
+            // resize is what threw a reader backwards through the history
+            // (#2072). The transcript now uses `defaultScrollAnchor(.bottom)`,
+            // which has nothing to hand across a subtree swap, so a
+            // compact/regular transition re-opens at the newest message.
+            // Follow-up: restore the reading position by message id instead.
         }
     }
 

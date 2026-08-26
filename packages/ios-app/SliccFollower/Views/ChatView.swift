@@ -108,6 +108,11 @@ struct ChatView: View {
                 }
                 if let forced = UITestHooks.forcedConnectionState {
                     applyForcedConnectionState(forced)
+                    // After the forced state, so the transcript lands on a
+                    // surface that already believes it has a leader — the
+                    // composer is only composable once the connection settles.
+                    UITestHooks.seedTranscriptFixture(into: appState)
+                    UITestHooks.scheduleTranscriptAppend(into: appState)
                     return
                 }
                 if UITestHooks.routesToFixture {
@@ -452,15 +457,13 @@ struct ChatView: View {
             NavigationStack {
                 ZStack {
                     if fixtureMode {
-                        FixtureConversationView(
-                            transcriptPosition: $presentation.transcriptPosition)
+                        FixtureConversationView()
                     } else {
                         ConversationView(
                             showSettings: $showSettings,
                             showFrozenSessions: $showFrozenSessions,
                             inputText: $presentation.composerDraft,
                             stagedAttachments: $presentation.stagedAttachments,
-                            transcriptPosition: $presentation.transcriptPosition,
                             ptt: ptt,
                             // The overlay covers the conversation but not
                             // the shared navigation bar, so the chat's
@@ -562,15 +565,13 @@ struct ChatView: View {
     private var conversation: some View {
         NavigationStack {
             if fixtureMode {
-                FixtureConversationView(
-                    transcriptPosition: $presentation.transcriptPosition)
+                FixtureConversationView()
             } else {
                 ConversationView(
                     showSettings: $showSettings,
                     showFrozenSessions: $showFrozenSessions,
                     inputText: $presentation.composerDraft,
                     stagedAttachments: $presentation.stagedAttachments,
-                    transcriptPosition: $presentation.transcriptPosition,
                     ptt: ptt
                 )
                 .environment(\.openURL, transcriptLinkAction)
@@ -695,7 +696,6 @@ struct ConversationView: View {
     @Binding var showFrozenSessions: Bool
     @Binding var inputText: String
     @Binding var stagedAttachments: [MessageAttachment]
-    @Binding var transcriptPosition: ScrollPosition
     @ObservedObject var ptt: PttController
     /// True while a compact workbench overlay covers this conversation.
     /// The regular split never sets it: there the conversation stays
@@ -717,8 +717,7 @@ struct ConversationView: View {
                     messages: frozen.archive.messages,
                     isStreaming: false,
                     toolUICards: [],
-                    onInlineSprinkleLick: { _, _ in },
-                    scrollPosition: $transcriptPosition
+                    onInlineSprinkleLick: { _, _ in }
                 )
                 .transcriptSwipeGesture(
                     state: horizontalScrollGestureState,
@@ -907,8 +906,7 @@ struct ConversationView: View {
                 onSudoApprovalDecision: appState.resolveSudoApproval,
                 onInlineSprinkleLick: { body, target in
                     appState.sendSprinkleLick("inline", body: body, targetScoop: target)
-                },
-                scrollPosition: $transcriptPosition
+                }
             )
             .transcriptSwipeGesture(
                 state: horizontalScrollGestureState,
@@ -973,7 +971,6 @@ struct ConversationView: View {
 /// log to the console — there's no scoop on the other end of the bridge.
 struct FixtureConversationView: View {
     @Environment(\.palette) private var palette
-    @Binding var transcriptPosition: ScrollPosition
     @State private var messages: [ChatMessage] = ChatFixture.makeMessages()
     @State private var lastLick: String?
     @State private var selectedFixtureScoop = 1
@@ -1029,8 +1026,7 @@ struct FixtureConversationView: View {
                     let summary = describeLick(body: body, target: target)
                     Self.log.info("sprinkle lick: \(summary)")
                     lastLick = summary
-                },
-                scrollPosition: $transcriptPosition
+                }
             )
             .transcriptSwipeGesture(
                 state: horizontalScrollGestureState,
