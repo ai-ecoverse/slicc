@@ -62,6 +62,7 @@ describe('webhook command — help and argument validation', () => {
 
   afterEach(() => {
     vi.unstubAllGlobals();
+    delete (globalThis as Record<string, unknown>).__slicc_lickManager;
   });
 
   it('shows help with --help', async () => {
@@ -90,6 +91,92 @@ describe('webhook command — help and argument validation', () => {
     const result = await command.execute(['delete'], {} as never);
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('delete: requires an ID');
+  });
+
+  it('rejects an unknown flag on create (#2255)', async () => {
+    const { command } = await loadCommandAndTrayLeader();
+    const result = await command.execute(
+      ['create', '--scoop', 'pr', '--name', 'github', '--bogus'],
+      {} as never
+    );
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('unknown flag');
+    expect(result.stderr).toContain('--bogus');
+  });
+
+  it('rejects an unknown flag on list (#2255)', async () => {
+    const { command } = await loadCommandAndTrayLeader();
+    const result = await command.execute(['list', '--json'], {} as never);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('unknown flag');
+    expect(result.stderr).toContain('--json');
+  });
+
+  it('rejects an unknown flag on delete (#2255)', async () => {
+    const { command } = await loadCommandAndTrayLeader();
+    const result = await command.execute(['delete', 'abc123', '--force'], {} as never);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('unknown flag');
+    expect(result.stderr).toContain('--force');
+  });
+
+  it('accepts create flags in any position (#2255)', async () => {
+    const entry: WebhookEntry = {
+      id: 'wh-any',
+      name: 'any-pos',
+      scoop: 'pr',
+      createdAt: new Date().toISOString(),
+    };
+    const lm = buildLickManagerMock({
+      createWebhook: vi.fn().mockResolvedValue(entry),
+    });
+    (globalThis as Record<string, unknown>).__slicc_lickManager = lm;
+
+    const { command } = await loadCommandAndTrayLeader();
+    const result = await command.execute(
+      ['create', '--name', 'any-pos', '--scoop', 'pr'],
+      {} as never
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(lm.createWebhook).toHaveBeenCalledWith('any-pos', 'pr', undefined);
+  });
+
+  it('honours -- so a dash-leading delete id stays reachable (#2255)', async () => {
+    const lm = buildLickManagerMock({
+      deleteWebhook: vi.fn().mockResolvedValue(true),
+    });
+    (globalThis as Record<string, unknown>).__slicc_lickManager = lm;
+
+    const { command } = await loadCommandAndTrayLeader();
+    const result = await command.execute(['delete', '--', '-weird-id'], {} as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Deleted webhook "-weird-id"');
+    expect(lm.deleteWebhook).toHaveBeenCalledWith('-weird-id');
+  });
+
+  it('does not treat a create flag value of --help as a help request', async () => {
+    const entry: WebhookEntry = {
+      id: 'wh-help-name',
+      name: '--help',
+      scoop: 'pr',
+      createdAt: new Date().toISOString(),
+    };
+    const lm = buildLickManagerMock({
+      createWebhook: vi.fn().mockResolvedValue(entry),
+    });
+    (globalThis as Record<string, unknown>).__slicc_lickManager = lm;
+
+    const { command } = await loadCommandAndTrayLeader();
+    const result = await command.execute(
+      ['create', '--name', '--help', '--scoop', 'pr'],
+      {} as never
+    );
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).not.toContain('usage: webhook');
+    expect(lm.createWebhook).toHaveBeenCalledWith('--help', 'pr', undefined);
   });
 });
 

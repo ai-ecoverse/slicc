@@ -3,6 +3,11 @@ import { defineCommand } from 'just-bash';
 import { getTrayWebhookUrl, getWebhookUrl } from '../../base/lick-urls.js';
 import { defaultLickTarget, type LickTargetEnv } from '../lick-target-env.js';
 import { getLickManagerSurface } from './lick-surface.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
+
+/** Value-taking flags for `webhook create` — shared with {@link isHelpRequest}. */
+const CREATE_VALUE_FLAGS = ['--name', '--filter', '--scoop'] as const;
 
 interface WebhookLeaderStatus {
   state: string;
@@ -99,30 +104,18 @@ async function handleCreate(
   options: Required<WebhookCommandOptions>,
   env: LickTargetEnv
 ): Promise<CommandResult> {
-  let name = 'default';
-  let filter: string | undefined;
-  let scoop: string | undefined;
-
-  const nameIdx = args.indexOf('--name');
-  if (nameIdx !== -1 && args[nameIdx + 1]) {
-    name = args[nameIdx + 1];
+  const parsed = parseKnownFlags(args.slice(1), { value: CREATE_VALUE_FLAGS });
+  if ('error' in parsed) {
+    return { stdout: '', stderr: `webhook create: ${parsed.error}\n`, exitCode: 1 };
   }
 
-  const filterIdx = args.indexOf('--filter');
-  if (filterIdx !== -1 && args[filterIdx + 1]) {
-    filter = args[filterIdx + 1];
-  }
-
-  const scoopIdx = args.indexOf('--scoop');
-  if (scoopIdx !== -1 && args[scoopIdx + 1]) {
-    scoop = args[scoopIdx + 1];
-  }
-
+  const name = parsed.values.get('--name') ?? 'default';
+  const filter = parsed.values.get('--filter');
   // No `--scoop`: a non-primary cone's shell names itself (SLICC_LICK_TARGET),
   // so `webhook create` inside an extra cone routes back to that cone (#2311).
   // The default root carries no such variable, so it still has to say where
   // the callbacks go — the pre-#2311 rule, unchanged for it.
-  scoop = defaultLickTarget(scoop, env);
+  const scoop = defaultLickTarget(parsed.values.get('--scoop'), env);
 
   if (!scoop) {
     return {
@@ -166,7 +159,15 @@ async function handleCreate(
   return { stdout: output, stderr: '', exitCode: 0 };
 }
 
-async function handleList(options: Required<WebhookCommandOptions>): Promise<CommandResult> {
+async function handleList(
+  args: string[],
+  options: Required<WebhookCommandOptions>
+): Promise<CommandResult> {
+  const parsed = parseKnownFlags(args.slice(1), {});
+  if ('error' in parsed) {
+    return { stdout: '', stderr: `webhook list: ${parsed.error}\n`, exitCode: 1 };
+  }
+
   const lm = await getLickManagerSurface();
   if (!lm) return notInitializedError('list');
   const entries = await lm.listWebhooks();
@@ -202,7 +203,11 @@ async function handleList(options: Required<WebhookCommandOptions>): Promise<Com
 }
 
 async function handleDelete(args: string[]): Promise<CommandResult> {
-  const id = args[1];
+  const parsed = parseKnownFlags(args.slice(1), {});
+  if ('error' in parsed) {
+    return { stdout: '', stderr: `webhook delete: ${parsed.error}\n`, exitCode: 1 };
+  }
+  const id = parsed.positionals[0];
   if (!id) {
     return {
       stdout: '',
@@ -299,7 +304,7 @@ export function createWebhookCommand(commandOptions: WebhookCommandOptions = {})
     getLeaderStatus: commandOptions.getLeaderStatus ?? (() => DEFAULT_LEADER_STATUS),
   };
   return defineCommand('webhook', async (args, ctx) => {
-    if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+    if (args.length === 0 || isHelpRequest(args, { valueFlags: CREATE_VALUE_FLAGS })) {
       return webhookHelp();
     }
 
@@ -310,7 +315,7 @@ export function createWebhookCommand(commandOptions: WebhookCommandOptions = {})
         case 'create':
           return await handleCreate(args, options, ctx.env);
         case 'list':
-          return await handleList(options);
+          return await handleList(args, options);
         case 'delete':
           return await handleDelete(args);
         default:
