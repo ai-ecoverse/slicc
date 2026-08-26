@@ -96,10 +96,12 @@ export type {
 
 /**
  * Browser automation backend accepted by the serve/open/playwright command
- * factories. Derived from a same-layer factory signature instead of importing
- * `BrowserAPI` from `cdp/`, which would be a shell → cdp layer back-edge.
+ * factories. Derived from `createServeCommand`'s parameter instead of importing
+ * `BrowserAPI` from `cdp/` (a shell → cdp layer back-edge). `open` only needs
+ * `createPage` (see its local duck type); the config still carries the fuller
+ * surface other factories require.
  */
-type BrowserAPI = NonNullable<Parameters<typeof createOpenCommand>[0]>;
+type BrowserAPI = NonNullable<Parameters<typeof createServeCommand>[0]>;
 
 export interface SupplementalCommandsConfig extends ImgcatCommandOptions {
   /** Function that returns discovered .jsh command names (for `commands` listing). */
