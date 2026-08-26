@@ -16,7 +16,7 @@
  * `panel.someWrite(...)` call fail at compile time.
  */
 
-import type { DirEntry, ReadFileOptions, Stats } from '../fs/types.js';
+import type { DirEntry, FsChangeEvent, ReadFileOptions, Stats } from '../fs/types.js';
 
 export interface LocalVfsClient {
   /**
@@ -35,6 +35,19 @@ export interface LocalVfsClient {
    * Stat a path. Throws `FsError(ENOENT)` if missing.
    */
   stat(path: string): Promise<Stats>;
+
+  /**
+   * Subscribe to changes under each of `basePaths`; resolves to an
+   * unsubscribe. OPTIONAL because it is the one method a reader may
+   * genuinely not have — a client whose backend exposes no `FsWatcher`
+   * (an unwired `VirtualFS`, a read-only host) cannot honestly offer
+   * one, and a caller that gets `undefined` here knows to fall back to
+   * polling rather than wait on events that will never arrive (#2409).
+   */
+  watch?(
+    basePaths: readonly string[],
+    callback: (events: FsChangeEvent[]) => void
+  ): Promise<() => void>;
 }
 
 /**
@@ -46,9 +59,13 @@ export interface LocalVfsClient {
  * you want the type system to catch accidental writes.
  */
 export function createLocalVfsClient(source: LocalVfsClient): LocalVfsClient {
+  const watch = source.watch?.bind(source);
   return {
     readDir: (path) => source.readDir(path),
     readFile: (path, options) => source.readFile(path, options),
     stat: (path) => source.stat(path),
+    // Forwarded only when the source actually has it: leaving the key off
+    // is the signal callers branch on.
+    ...(watch ? { watch } : {}),
   };
 }

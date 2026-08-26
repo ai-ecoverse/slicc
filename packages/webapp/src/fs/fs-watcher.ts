@@ -1,15 +1,11 @@
 import { createLogger } from '../base/logger.js';
-import type { EntryType } from './types.js';
+import type { FsChangeEvent } from './types.js';
 
 const log = createLogger('fs-watcher');
 
-export type FsChangeType = 'create' | 'modify' | 'delete';
-
-export interface FsChangeEvent {
-  type: FsChangeType;
-  path: string;
-  entryType?: EntryType;
-}
+// Defined in `types.ts` (see the note there) and re-exported here, where
+// every existing consumer already imports them from.
+export type { FsChangeEvent, FsChangeType } from './types.js';
 
 export type FsWatchFilter = (path: string) => boolean;
 export type FsWatchCallback = (events: FsChangeEvent[]) => void;

@@ -11,7 +11,9 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 installWcDomStubs();
 
 import type { SliccFileTree } from '@slicc/webcomponents';
+import { FsWatcher } from '../../../src/fs/fs-watcher.js';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
+import type { LocalVfsClient } from '../../../src/kernel/local-vfs-client.js';
 import {
   buildVfsTreeItems,
   createWorkbenchActivator,
@@ -116,6 +118,23 @@ describe('buildVfsTreeItems', () => {
   });
 });
 
+/**
+ * A watch-capable reader: the seeded VFS plus the `LocalVfsClient.watch`
+ * contract, driven by a real `FsWatcher`. Mirrors what the page gets from
+ * `RemoteVfsClient` — the panel cannot tell the two apart.
+ */
+async function watchableFs(): Promise<{
+  fs: LocalVfsClient;
+  watcher: FsWatcher;
+  base: VirtualFS;
+}> {
+  const base = await seededFs();
+  const watcher = new FsWatcher();
+  base.setWatcher(watcher);
+  const fs = Object.create(base) as VirtualFS & LocalVfsClient;
+  return { fs, watcher, base };
+}
+
 describe('createWorkbenchActivator', () => {
   function makeDeps() {
     const fileTree = document.createElement('slicc-file-tree') as SliccFileTree;
@@ -150,8 +169,12 @@ describe('createWorkbenchActivator', () => {
     await vi.waitFor(() => {
       expect(deps.fileTree.items?.length).toBeGreaterThan(0);
     });
+    // Re-activation rebuilds and re-subscribes; `openFs` is memoized in
+    // production, so the exact call count is not the contract — being asked
+    // again at all is.
+    const beforeReactivate = deps.openFs.mock.calls.length;
     activator.activate('files');
-    expect(deps.openFs).toHaveBeenCalledTimes(2);
+    expect(deps.openFs.mock.calls.length).toBeGreaterThan(beforeReactivate);
     expect(deps.mountTerminal).not.toHaveBeenCalled();
   });
 
@@ -282,7 +305,10 @@ describe('createWorkbenchActivator', () => {
     await vi.waitFor(() => expect(deps.log.error).toHaveBeenCalled());
   });
 
-  it('polls the file tree every 3 s while files surface is active', async () => {
+  // #2409: a reader with no watcher behind it (an unwired `VirtualFS`, a
+  // read-only host) keeps the 3 s poll — it is the only thing standing
+  // between that panel and permanent staleness.
+  it('falls back to polling every 3 s when the reader cannot watch', async () => {
     vi.useFakeTimers();
     const deps = makeDeps();
     const activator = createWorkbenchActivator(deps);
@@ -293,7 +319,7 @@ describe('createWorkbenchActivator', () => {
     vi.useRealTimers();
   });
 
-  it('activating a second independent panel does not stop the first panel poller (both are permanent leaves now)', async () => {
+  it('activating a second independent panel does not stop the first panel refresh (both are permanent leaves now)', async () => {
     vi.useFakeTimers();
     const deps = makeDeps();
     const activator = createWorkbenchActivator(deps);
@@ -307,7 +333,7 @@ describe('createWorkbenchActivator', () => {
     vi.useRealTimers();
   });
 
-  it('deactivate stops the files poller (leaf closed)', async () => {
+  it('deactivate stops the files fallback poller (leaf closed)', async () => {
     vi.useFakeTimers();
     const deps = makeDeps();
     const activator = createWorkbenchActivator(deps);
@@ -318,5 +344,137 @@ describe('createWorkbenchActivator', () => {
     await vi.advanceTimersByTimeAsync(6000);
     expect(deps.openFs.mock.calls.length).toBe(callsAfterFirst);
     vi.useRealTimers();
+  });
+});
+
+/**
+ * #2409 — the file tree reacts to VFS change events instead of rebuilding
+ * every 3 s. The poll was both a per-minute cost paid to learn nothing and
+ * the mechanism behind the scroll reset in #2408.
+ */
+describe('createWorkbenchActivator — event-driven file tree (#2409)', () => {
+  function makeWatchDeps(fs: LocalVfsClient) {
+    const fileTree = document.createElement('slicc-file-tree') as SliccFileTree;
+    const deps = {
+      fileTree,
+      termSurface: document.createElement('div'),
+      memoryHost: Object.assign(document.createElement('div'), { setRows: vi.fn() }),
+      monitor: document.createElement('slicc-monitor'),
+      openFs: vi.fn(async () => fs),
+      openWriter: vi.fn(async () => fs),
+      mountTerminal: vi.fn(async () => undefined),
+      onKernelReady: vi.fn((fn: () => void) => fn()),
+      insertReference: vi.fn(),
+      getWorkspace: vi.fn(() => PRIMARY_WORKSPACE),
+      log: { error: vi.fn() },
+    };
+    return deps as unknown as WcWorkbenchDeps & typeof deps;
+  }
+
+  it('rebuilds on a change event and issues no timer traffic while idle', async () => {
+    const { fs, watcher, base } = await watchableFs();
+    const deps = makeWatchDeps(fs);
+    const activator = createWorkbenchActivator(deps);
+
+    activator.activate('files');
+    await vi.waitFor(() => expect(deps.fileTree.items?.length).toBeGreaterThan(0));
+    await vi.waitFor(() => expect(watcher.size).toBe(2)); // workspace + /shared
+    const afterFirstBuild = deps.openFs.mock.calls.length;
+
+    // Idle: nothing wakes the panel. The old 3 s poll would have rebuilt
+    // twenty times over this window.
+    await new Promise((r) => setTimeout(r, 400));
+    expect(deps.openFs.mock.calls.length).toBe(afterFirstBuild);
+
+    await base.writeFile('/workspace/appeared.txt', 'x');
+    await vi.waitFor(() => {
+      const root = deps.fileTree.items?.find((i) => 'id' in i && i.id === '/workspace');
+      expect(
+        root?.kind === 'dir' &&
+          root.children.some((c) => 'id' in c && c.id === '/workspace/appeared.txt')
+      ).toBe(true);
+    });
+  });
+
+  it('coalesces a burst of writes into a small number of rebuilds', async () => {
+    const { fs, watcher } = await watchableFs();
+    const deps = makeWatchDeps(fs);
+    const activator = createWorkbenchActivator(deps);
+    activator.activate('files');
+    await vi.waitFor(() => expect(watcher.size).toBe(2));
+    const afterFirstBuild = deps.openFs.mock.calls.length;
+
+    for (let i = 0; i < 500; i++) {
+      watcher.notify([{ type: 'create', path: `/workspace/f${i}.txt`, entryType: 'file' }]);
+    }
+    await vi.waitFor(() => expect(deps.openFs.mock.calls.length).toBeGreaterThan(afterFirstBuild));
+    await new Promise((r) => setTimeout(r, 300));
+    // 500 events, a handful of rebuilds — not 500.
+    expect(deps.openFs.mock.calls.length - afterFirstBuild).toBeLessThan(5);
+  });
+
+  it('never lets the debounce defer a rebuild indefinitely under a write loop', async () => {
+    const { fs, watcher } = await watchableFs();
+    const deps = makeWatchDeps(fs);
+    const activator = createWorkbenchActivator(deps);
+    activator.activate('files');
+    await vi.waitFor(() => expect(watcher.size).toBe(2));
+    const afterFirstBuild = deps.openFs.mock.calls.length;
+
+    // A write every 50 ms — faster than the 200 ms debounce, so a pure
+    // trailing debounce would never fire while the loop runs.
+    const stopAt = Date.now() + 1400;
+    while (Date.now() < stopAt) {
+      watcher.notify([{ type: 'modify', path: '/workspace/busy.txt', entryType: 'file' }]);
+      await new Promise((r) => setTimeout(r, 50));
+    }
+    expect(deps.openFs.mock.calls.length).toBeGreaterThan(afterFirstBuild);
+  });
+
+  it('unsubscribes on deactivate and leaks nothing across 10 open/close cycles', async () => {
+    const { fs, watcher } = await watchableFs();
+    const deps = makeWatchDeps(fs);
+    const activator = createWorkbenchActivator(deps);
+
+    for (let i = 0; i < 10; i++) {
+      activator.activate('files');
+      await vi.waitFor(() => expect(watcher.size).toBe(2));
+      activator.deactivate('files');
+      expect(watcher.size).toBe(0);
+    }
+
+    // A change after the last close touches nothing.
+    const calls = deps.openFs.mock.calls.length;
+    watcher.notify([{ type: 'create', path: '/workspace/late.txt', entryType: 'file' }]);
+    await new Promise((r) => setTimeout(r, 300));
+    expect(deps.openFs.mock.calls.length).toBe(calls);
+  });
+
+  it('re-points the tree and the subscription when the selection moves (#2271)', async () => {
+    const { fs, watcher } = await watchableFs();
+    const deps = makeWatchDeps(fs);
+    const activator = createWorkbenchActivator(deps);
+    activator.activate('files');
+    await vi.waitFor(() => expect(watcher.size).toBe(2));
+
+    deps.getWorkspace.mockReturnValue(workspaceFor({ parentJid: null, folder: 'cone-beta' }));
+    activator.refreshFiles();
+    await vi.waitFor(() => {
+      expect(deps.fileTree.items?.map((i) => ('id' in i ? i.id : ''))).toEqual([
+        '/cones/cone-beta/workspace',
+        '/shared',
+      ]);
+    });
+    // Re-aimed, not accumulated: the previous cone's roots are gone.
+    await vi.waitFor(() => expect(watcher.size).toBe(2));
+  });
+
+  it('ignores a selection change while the files panel is closed', async () => {
+    const { fs } = await watchableFs();
+    const deps = makeWatchDeps(fs);
+    const activator = createWorkbenchActivator(deps);
+    activator.refreshFiles();
+    await new Promise((r) => setTimeout(r, 50));
+    expect(deps.openFs).not.toHaveBeenCalled();
   });
 });

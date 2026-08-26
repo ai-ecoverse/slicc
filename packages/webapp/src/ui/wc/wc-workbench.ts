@@ -121,8 +121,9 @@ export interface WcWorkbenchDeps {
   insertReference(path: string): void;
   /**
    * Filesystem coordinates of the cone whose files the workbench shows — the
-   * root that owns the current selection (#2271). Read per refresh, so
-   * switching cones re-points the tree on the next poll.
+   * root that owns the current selection (#2271). Read per refresh; switching
+   * cones re-points the tree via `refreshFiles()`, which also re-aims the
+   * change subscription at the new roots.
    */
   getWorkspace(): WorkUnitWorkspace;
   log: { error(message: string, ...data: unknown[]): void };
@@ -130,52 +131,102 @@ export interface WcWorkbenchDeps {
 
 /** Per-panel lifecycle handle returned by {@link createWorkbenchActivator}. */
 export interface WorkbenchActivator {
-  /** Open (or re-open) a panel — starts its poller / mounts its content. */
+  /** Open (or re-open) a panel — starts its subscription / poller / content. */
   activate(surfaceId: string): void;
-  /** Panel left the tree (closed/removed) — stops its poller, if any. */
+  /** Panel left the tree (closed/removed) — stops its subscription / poller. */
   deactivate(surfaceId: string): void;
   /**
    * Re-read the memory panel because the SELECTION moved (#2271). The panel's
-   * rows come from the cone that owns the selection, and — unlike the file
-   * tree, which its 3 s poller re-points on its own — memory reads once per
+   * rows come from the cone that owns the selection and memory reads once per
    * activation, so an open panel would otherwise keep showing the previous
    * cone's memory indefinitely. No-op while the panel is closed.
    */
   refreshMemory(): void;
+  /**
+   * Re-point the file tree because the SELECTION moved (#2271). Rebuilds from
+   * the newly selected cone's roots and re-aims the change subscription at
+   * them — a selection change is not a filesystem change, so no event will
+   * announce it. No-op while the panel is closed.
+   */
+  refreshFiles(): void;
 }
 
 /**
- * Independent workbench panel lifecycle: since every tool panel is now its
- * own permanently-mounted, independently open/closeable dock-tree leaf (no
- * more show-one swapping), each panel's poller runs only while THAT panel is
- * open — activating one panel never stops another's. The file tree
- * auto-refreshes every 3 s and the monitor every 5 s while open; the terminal
- * mounts once on first `term` activation and is never torn down (matches the
- * old show-one behavior — the worker-shell session persists regardless of
- * panel visibility). Memory has no poller: it refreshes once per activation
- * and once per selection change (`refreshMemory`), which is every moment its
- * content can actually differ.
+ * Coalescing window for filesystem change events (ms).
+ *
+ * A single `upskill` install or `git checkout` produces hundreds of change
+ * events; each one alone would rebuild the whole tree. Trailing-edge debounce
+ * turns a burst into one rebuild, and 200 ms is below the threshold where a
+ * panel stops reading as live.
  */
-export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActivator {
-  let terminalMounted = false;
-  let memoryOpen = false;
-  let memorySeq = 0;
-  let filesRefreshTimer: ReturnType<typeof setInterval> | null = null;
-  let monitorRefreshTimer: ReturnType<typeof setInterval> | null = null;
-  // Sparkline history for the vitals tiles. Fed by the refresh below, so it
-  // only accumulates while the panel is open — `windowLabel()` reports the
-  // span it actually covers rather than claiming more.
-  const monitorHistory = new MonitorHistory();
-  let filesRefreshPending = false;
-  let fileActionsWired = false;
+const FILES_DEBOUNCE_MS = 200;
 
-  const refreshFileTree = (): void => {
+/**
+ * Hard ceiling on how long the debounce may defer a rebuild (ms).
+ *
+ * A write loop that keeps ticking faster than {@link FILES_DEBOUNCE_MS} would
+ * otherwise reset the timer forever and the tree would never repaint while the
+ * agent is busy — which is exactly when the user is watching it.
+ */
+const FILES_DEBOUNCE_MAX_WAIT_MS = 1000;
+
+/** Fallback poll interval for a reader that cannot watch (ms). */
+const FILES_FALLBACK_POLL_MS = 3000;
+
+/** File-tree panel lifecycle, owned by {@link createFileTreeController}. */
+interface FileTreeController {
+  /** Panel opened: build once, then subscribe to the roots it renders. */
+  open(): void;
+  /** Panel closed: drop the subscription (and any fallback poller). */
+  close(): void;
+  /** Selection moved: rebuild from the new roots and re-aim the watch. */
+  repoint(): void;
+}
+
+/**
+ * The file tree's refresh lifecycle — EVENT-DRIVEN (#2409).
+ *
+ * SLICC owns the filesystem and every `VirtualFS` mutation notifies the
+ * kernel's `FsWatcher`, so the panel subscribes to the roots it renders and
+ * rebuilds on a debounced change instead of re-reading an unchanged tree
+ * every 3 s. An idle filesystem costs nothing and touches no DOM, which is
+ * also what stops the periodic rebuild from resetting scroll and expansion
+ * state (#2408). The 3 s poll survives only as the fallback for a reader that
+ * cannot watch (no `FsWatcher` behind it) — without it such a panel would go
+ * permanently stale.
+ *
+ * There is deliberately NO slow reconciliation sweep behind the subscription:
+ * a path that can change without reaching `watcher.notify` is a gap in the
+ * NOTIFICATION, and the fix belongs there. `mkdir -p` and `refreshMount` were
+ * two such gaps and now emit events; a future one should be fixed the same
+ * way rather than papered over by re-reading the tree on a timer.
+ */
+function createFileTreeController(deps: WcWorkbenchDeps): FileTreeController {
+  let pollTimer: ReturnType<typeof setInterval> | null = null;
+  let kernelReadyPending = false;
+  let actionsWired = false;
+  let open = false;
+  /** Bumped on every open/close, so a late subscribe from a closed panel dies. */
+  let watchSeq = 0;
+  /** Same guard for rebuilds — an older tree must never repaint over a newer. */
+  let buildSeq = 0;
+  let unwatch: (() => void) | null = null;
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+  /** When the currently deferred burst started, for the max-wait ceiling. */
+  let debounceStartedAt = 0;
+
+  const rebuild = (): void => {
+    const seq = ++buildSeq;
     void deps
       .openFs()
       .then(async (fs) => {
-        deps.fileTree.items = await buildVfsTreeItems(fs, deps.getWorkspace().root);
-        if (!fileActionsWired) {
-          fileActionsWired = true;
+        const items = await buildVfsTreeItems(fs, deps.getWorkspace().root);
+        // Two rebuilds can overlap (a change landing mid-read); the later one
+        // owns the tree regardless of which read finishes first.
+        if (seq !== buildSeq) return;
+        deps.fileTree.items = items;
+        if (!actionsWired) {
+          actionsWired = true;
           wireFileActions({
             fileTree: deps.fileTree,
             openFs: deps.openFs,
@@ -189,13 +240,130 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActiva
       .catch((err) => deps.log.error('WC file tree refresh failed', err));
   };
 
-  const stopFilesRefresh = (): void => {
-    filesRefreshPending = false;
-    if (filesRefreshTimer != null) {
-      clearInterval(filesRefreshTimer);
-      filesRefreshTimer = null;
+  /** Debounced rebuild — the only thing a change event triggers. */
+  const scheduleRebuild = (): void => {
+    if (!open) return;
+    const now = Date.now();
+    if (debounceTimer == null) debounceStartedAt = now;
+    else if (now - debounceStartedAt >= FILES_DEBOUNCE_MAX_WAIT_MS) {
+      // The burst has outrun the ceiling — repaint now and start a new window
+      // rather than deferring again behind a write loop that may not stop.
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+      rebuild();
+      return;
+    }
+    if (debounceTimer != null) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      debounceTimer = null;
+      rebuild();
+    }, FILES_DEBOUNCE_MS);
+  };
+
+  /** Last resort for a reader with no watcher behind it (see above). */
+  const startPoll = (): void => {
+    if (pollTimer != null) return;
+    pollTimer = setInterval(rebuild, FILES_FALLBACK_POLL_MS);
+  };
+
+  /**
+   * Subscribe to the roots the tree currently renders. Re-callable: an
+   * existing subscription is dropped first, which is how a cone switch
+   * re-aims the watch without leaking the previous cone's registration.
+   */
+  const startWatch = (): void => {
+    const seq = ++watchSeq;
+    unwatch?.();
+    unwatch = null;
+    const roots = [deps.getWorkspace().root, SHARED_TREE_ROOT];
+    void deps
+      .openFs()
+      .then(async (fs) => {
+        if (!fs.watch) {
+          if (seq === watchSeq && open) startPoll();
+          return;
+        }
+        const off = await fs.watch(roots, scheduleRebuild);
+        // The panel may have closed (or re-pointed) while the ack was in
+        // flight — drop the subscription we just took rather than keep a
+        // registration nobody reads.
+        if (seq !== watchSeq || !open) {
+          off();
+          return;
+        }
+        unwatch = off;
+      })
+      .catch((err) => {
+        deps.log.error('WC file tree watch failed — falling back to polling', err);
+        if (seq === watchSeq && open) startPoll();
+      });
+  };
+
+  const close = (): void => {
+    kernelReadyPending = false;
+    open = false;
+    watchSeq++;
+    unwatch?.();
+    unwatch = null;
+    if (debounceTimer != null) {
+      clearTimeout(debounceTimer);
+      debounceTimer = null;
+    }
+    if (pollTimer != null) {
+      clearInterval(pollTimer);
+      pollTimer = null;
     }
   };
+
+  return {
+    open(): void {
+      close();
+      open = true;
+      kernelReadyPending = true;
+      // VFS reads are worker RPCs — nothing may go out before the kernel is up.
+      deps.onKernelReady(() => {
+        if (!kernelReadyPending) return;
+        kernelReadyPending = false;
+        rebuild();
+        startWatch();
+      });
+    },
+    close,
+    repoint(): void {
+      // Still waiting on the kernel: the pending first build will read the new
+      // roots itself, and rebuilding now would only race it.
+      if (!open || kernelReadyPending) return;
+      rebuild();
+      startWatch();
+    },
+  };
+}
+
+/**
+ * Independent workbench panel lifecycle: since every tool panel is now its
+ * own permanently-mounted, independently open/closeable dock-tree leaf (no
+ * more show-one swapping), each panel's refresh runs only while THAT panel is
+ * open — activating one panel never stops another's.
+ *
+ * The file tree refreshes on VFS change events (see
+ * {@link createFileTreeController}). The monitor genuinely polls (5 s): it
+ * samples "right now" metrics with no event source. The terminal mounts once
+ * on first `term` activation and is never torn down (matches the old show-one
+ * behavior — the worker-shell session persists regardless of panel
+ * visibility). Memory refreshes once per activation and once per selection
+ * change (`refreshMemory`), which is every moment its content can actually
+ * differ.
+ */
+export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActivator {
+  let terminalMounted = false;
+  let memoryOpen = false;
+  let memorySeq = 0;
+  let monitorRefreshTimer: ReturnType<typeof setInterval> | null = null;
+  // Sparkline history for the vitals tiles. Fed by the refresh below, so it
+  // only accumulates while the panel is open — `windowLabel()` reports the
+  // span it actually covers rather than claiming more.
+  const monitorHistory = new MonitorHistory();
+  const fileTree = createFileTreeController(deps);
 
   const stopMonitorRefresh = (): void => {
     if (monitorRefreshTimer != null) {
@@ -208,7 +376,7 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActiva
     // Last-write-wins by SEQUENCE, not by completion order: switching cones
     // while a read is in flight starts a second one, and the two files differ
     // in size, so cone A's slower read could land after cone B's and leave the
-    // panel showing A indefinitely (no poller corrects it).
+    // panel showing A indefinitely (nothing else corrects it).
     const seq = ++memorySeq;
     void deps
       .openFs()
@@ -235,14 +403,7 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActiva
   return {
     activate(surfaceId: string): void {
       if (surfaceId === 'files') {
-        stopFilesRefresh();
-        filesRefreshPending = true;
-        deps.onKernelReady(() => {
-          if (!filesRefreshPending) return;
-          filesRefreshPending = false;
-          refreshFileTree();
-          filesRefreshTimer = setInterval(refreshFileTree, 3000);
-        });
+        fileTree.open();
         return;
       }
       if (surfaceId === 'memory') {
@@ -265,12 +426,15 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActiva
       }
     },
     deactivate(surfaceId: string): void {
-      if (surfaceId === 'files') stopFilesRefresh();
+      if (surfaceId === 'files') fileTree.close();
       else if (surfaceId === 'monitor') stopMonitorRefresh();
       else if (surfaceId === 'memory') memoryOpen = false;
     },
     refreshMemory(): void {
       if (memoryOpen) refreshMemory();
+    },
+    refreshFiles(): void {
+      fileTree.repoint();
     },
   };
 }

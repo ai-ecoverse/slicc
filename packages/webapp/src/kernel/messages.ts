@@ -778,6 +778,61 @@ export type VfsWriteResultMsg =
   | VfsFlushResultMsg
   | VfsListMountPointsResultMsg;
 
+// ---------------------------------------------------------------------------
+// VFS watch subscription
+// ---------------------------------------------------------------------------
+// Push channel that replaces the panel's 3 s file-tree poll (#2409). The
+// worker owns the VFS and its `FsWatcher` already sees every mutation, so
+// the panel subscribes to the roots it renders and rebuilds on change
+// instead of re-reading an unchanged tree twice a minute.
+//
+// Unlike the request/response RPCs above, a `vfs-watch` acknowledges once
+// and then pushes `vfs-watch-event` envelopes carrying the SAME
+// `subscriptionId` until the panel sends `vfs-unwatch` (or the host is
+// disposed). Mirrored, not imported, for the same tsconfig reason as the
+// read envelopes.
+
+/** Wire mirror of `FsChangeEvent` from `webapp/src/fs/fs-watcher.ts`. */
+export interface VfsChangeEventEnvelope {
+  type: 'create' | 'modify' | 'delete';
+  path: string;
+  entryType?: 'file' | 'directory' | 'symlink';
+}
+
+/** Panel → worker: subscribe to changes under each of `basePaths`. */
+export interface VfsWatchRequestMsg {
+  type: 'vfs-watch';
+  /** Subscription id — echoed on the ack AND on every pushed event. */
+  subscriptionId: string;
+  basePaths: string[];
+}
+
+/** Panel → worker: drop the subscription. Unknown ids are a no-op. */
+export interface VfsUnwatchRequestMsg {
+  type: 'vfs-unwatch';
+  subscriptionId: string;
+}
+
+export type VfsWatchControlMsg = VfsWatchRequestMsg | VfsUnwatchRequestMsg;
+
+/**
+ * Worker → panel: ack for `vfs-watch`. The failure branch (no watcher
+ * wired on the host) is what tells the panel to fall back to polling
+ * rather than sit on a subscription that will never fire.
+ */
+export type VfsWatchResultMsg =
+  | { type: 'vfs-watch-result'; subscriptionId: string; ok: true }
+  | { type: 'vfs-watch-result'; subscriptionId: string; ok: false; error: VfsErrorEnvelope };
+
+/** Worker → panel: a batch of changes matching a live subscription. */
+export interface VfsWatchEventMsg {
+  type: 'vfs-watch-event';
+  subscriptionId: string;
+  events: VfsChangeEventEnvelope[];
+}
+
+export type VfsWatchPushMsg = VfsWatchResultMsg | VfsWatchEventMsg;
+
 // Detached popout messages — panel ↔ SW coordination.
 // See docs/superpowers/specs/2026-05-13-extension-detached-popout-design.md.
 
@@ -871,6 +926,10 @@ export type PanelToOffscreenMessage =
   // host replies with an EACCES failure envelope. Ignored by
   // `Bridge`.
   | VfsWriteRequestMsg
+  // Panel-driven VFS watch subscription control. Routed by the worker's
+  // `VfsRpcHost` when a watcher is wired; otherwise `vfs-watch` is
+  // answered with an ENOSYS failure ack. Ignored by `Bridge`.
+  | VfsWatchControlMsg
   | DetachedPopoutRequestMsg
   | DetachedClaimMsg;
 
@@ -1281,7 +1340,10 @@ export type OffscreenToPanelMessage =
   | VfsReadResultMsg
   // VFS write RPC responses emitted by the worker's `VfsRpcHost`.
   // Defined above as `VfsWriteResultMsg`.
-  | VfsWriteResultMsg;
+  | VfsWriteResultMsg
+  // VFS watch acks and pushed change batches emitted by the worker's
+  // `VfsRpcHost`. Defined above as `VfsWatchPushMsg`.
+  | VfsWatchPushMsg;
 
 // ---------------------------------------------------------------------------
 // Offscreen ↔ Service Worker (CDP proxy)

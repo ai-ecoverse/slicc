@@ -14,6 +14,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { FsWatcher } from '../../src/fs/fs-watcher.js';
 import type { DirEntry, ReadFileOptions, Stats } from '../../src/fs/types.js';
 import { FsError } from '../../src/fs/types.js';
 import type { LocalVfsClient } from '../../src/kernel/local-vfs-client.js';
@@ -24,6 +25,8 @@ import type {
   VfsReadFileResultMsg,
   VfsReadRequestMsg,
   VfsStatResultMsg,
+  VfsWatchEventMsg,
+  VfsWatchResultMsg,
 } from '../../src/kernel/messages.js';
 import type { KernelTransport } from '../../src/kernel/transport.js';
 import {
@@ -93,13 +96,17 @@ function noop(): unknown {
   return null;
 }
 
-function setupRoundTrip(client?: LocalVfsClient): RoundTripCtx {
+function setupRoundTrip(
+  client?: LocalVfsClient,
+  getWatcher?: () => FsWatcher | null
+): RoundTripCtx {
   const channel = new MessageChannel();
   const bridgeTransport = createBridgeMessageChannelTransport(channel.port2);
   const vfs = client ? { ...makeStubVfs(), client } : makeStubVfs();
   const handle = startVfsRpcHost({
     transport: bridgeTransport,
     client: vfs.client,
+    ...(getWatcher ? { getWatcher } : {}),
     logger: { warn: vi.fn(), debug: vi.fn() },
   });
   const panelTransport = createPanelMessageChannelTransport(channel.port1);
@@ -499,5 +506,100 @@ describe('VfsRpcHost — transfer list', () => {
     expect(sends).toHaveLength(1);
     expect(sends[0].transfer).toBeUndefined();
     handle.stop();
+  });
+});
+
+/**
+ * Watch subscriptions (#2409) — the push channel that replaced the file
+ * panel's 3 s poll. What matters here is that the panel can subscribe,
+ * that unsubscribing actually releases the worker-side registration, and
+ * that a host with no watcher says so instead of going quiet.
+ */
+describe('VfsRpcHost watch subscriptions', () => {
+  it('acks vfs-watch and pushes matching change batches', async () => {
+    const watcher = new FsWatcher();
+    const ctx = setupRoundTrip(undefined, () => watcher);
+    ctx.panelTransport.send({
+      type: 'vfs-watch',
+      subscriptionId: 's1',
+      basePaths: ['/workspace', '/shared'],
+    });
+    await waitForResponses(ctx, 1);
+    const ack = ctx.responses[0] as VfsWatchResultMsg;
+    expect(ack.type).toBe('vfs-watch-result');
+    expect(ack.ok).toBe(true);
+    expect(watcher.size).toBe(2);
+
+    watcher.notify([{ type: 'create', path: '/workspace/new.txt', entryType: 'file' }]);
+    await waitForResponses(ctx, 2);
+    const push = ctx.responses[1] as VfsWatchEventMsg;
+    expect(push.type).toBe('vfs-watch-event');
+    expect(push.subscriptionId).toBe('s1');
+    expect(push.events).toEqual([
+      { type: 'create', path: '/workspace/new.txt', entryType: 'file' },
+    ]);
+
+    // Outside every subscribed base path — the watcher itself filters it.
+    watcher.notify([{ type: 'create', path: '/elsewhere/x', entryType: 'file' }]);
+    await tick(10);
+    expect(ctx.responses).toHaveLength(2);
+    ctx.stop();
+  });
+
+  it('vfs-unwatch releases the worker-side registrations', async () => {
+    const watcher = new FsWatcher();
+    const ctx = setupRoundTrip(undefined, () => watcher);
+    ctx.panelTransport.send({ type: 'vfs-watch', subscriptionId: 's2', basePaths: ['/workspace'] });
+    await waitForResponses(ctx, 1);
+    expect(watcher.size).toBe(1);
+
+    ctx.panelTransport.send({ type: 'vfs-unwatch', subscriptionId: 's2' });
+    await tick(10);
+    expect(watcher.size).toBe(0);
+    watcher.notify([{ type: 'modify', path: '/workspace/a.txt' }]);
+    await tick(10);
+    // Only the original ack — no pushes after the unsubscribe.
+    expect(ctx.responses).toHaveLength(1);
+    ctx.stop();
+  });
+
+  it('re-subscribing under a live id replaces its roots (cone switch)', async () => {
+    const watcher = new FsWatcher();
+    const ctx = setupRoundTrip(undefined, () => watcher);
+    ctx.panelTransport.send({ type: 'vfs-watch', subscriptionId: 's3', basePaths: ['/workspace'] });
+    await waitForResponses(ctx, 1);
+    ctx.panelTransport.send({
+      type: 'vfs-watch',
+      subscriptionId: 's3',
+      basePaths: ['/cones/beta/workspace'],
+    });
+    await waitForResponses(ctx, 2);
+    // Replaced, not accumulated — the old root must stop pushing.
+    expect(watcher.size).toBe(1);
+    watcher.notify([{ type: 'modify', path: '/workspace/a.txt' }]);
+    await tick(10);
+    expect(ctx.responses).toHaveLength(2);
+    ctx.stop();
+  });
+
+  it('fails the ack with ENOSYS when no watcher is wired', async () => {
+    const ctx = setupRoundTrip();
+    ctx.panelTransport.send({ type: 'vfs-watch', subscriptionId: 's4', basePaths: ['/workspace'] });
+    await waitForResponses(ctx, 1);
+    const ack = ctx.responses[0] as VfsWatchResultMsg;
+    expect(ack.ok).toBe(false);
+    if (!ack.ok) expect(ack.error.code).toBe('ENOSYS');
+    ctx.stop();
+  });
+
+  it('dispose drops every live subscription', async () => {
+    const watcher = new FsWatcher();
+    const ctx = setupRoundTrip(undefined, () => watcher);
+    ctx.panelTransport.send({ type: 'vfs-watch', subscriptionId: 's5', basePaths: ['/workspace'] });
+    ctx.panelTransport.send({ type: 'vfs-watch', subscriptionId: 's6', basePaths: ['/shared'] });
+    await waitForResponses(ctx, 2);
+    expect(watcher.size).toBe(2);
+    ctx.stop();
+    expect(watcher.size).toBe(0);
   });
 });
