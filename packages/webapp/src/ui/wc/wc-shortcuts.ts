@@ -60,6 +60,16 @@ export interface ShortcutDock {
   readonly active: string | null;
   /** Select by id — dispatches `slicc-dock-select`, exactly like a click. */
   selectItem(id: string): void;
+  /** Close the active item's panel — what clicking the ACTIVE item does. */
+  collapse(): void;
+}
+
+/** The bit of `<slicc-composer-meta>` the mode drives. */
+export interface ShortcutComposerMeta {
+  /** Empty exactly when no account is connected — the pill's "Add AI" state. */
+  readonly models: readonly unknown[];
+  /** Open the model dropdown, as clicking the pill does. */
+  openMenu(): void;
 }
 
 /** The bit of `<slicc-freezer>` the mode drives. */
@@ -74,6 +84,8 @@ export interface ShortcutDeps {
   dock?: ShortcutDock;
   /** The left rail, toggled by `b` and the target of the new-conversation event. */
   freezer?: ShortcutFreezer;
+  /** The model pill; `openMenu()` is its own programmatic click. */
+  composerMeta?: ShortcutComposerMeta;
   /** Put the caret in the composer (`c` / Enter). */
   focusComposer?: () => void;
   /** Injected for tests; defaults to the switcher's own document. */
@@ -101,6 +113,14 @@ export interface ShortcutHandles {
   setActive(on: boolean): void;
   /** Late-bind an action the shell itself cannot reach (see {@link ShortcutActions}). */
   setAction<K extends keyof ShortcutActions>(name: K, fn: ShortcutActions[K]): void;
+  /**
+   * Replace the key → command mapping (what `/etc/slicc/keys.json` does).
+   * Applied whole, not merged: the config loader owns merging over
+   * {@link DEFAULT_KEYMAP}, so what arrives here is the final answer.
+   */
+  setKeymap(keymap: Readonly<Record<string, CommandId>>): void;
+  /** The mapping in force, for the help sheet and for tests. */
+  keymap(): Readonly<Record<string, CommandId>>;
 }
 
 type ModalElement = HTMLElement & { show?: () => void; hide?: () => void };
@@ -228,38 +248,72 @@ export function sprinkleIds(dock: ShortcutDock): string[] {
 interface CommandContext {
   deps: ShortcutDeps;
   actions: ShortcutActions;
+  state: ModeState;
   toggleHelp(): void;
+}
+
+/** Mutable per-wiring state a command may read or advance. */
+interface ModeState {
+  /** The dock surface `rightRail` reopens after it has closed one. */
+  lastDockSurface: string;
 }
 
 /**
  * One binding. `holdsMode` is the whole modal grammar in a boolean: a command
- * that navigates keeps keyboard mode, a command that hands focus to a surface
- * gives it up (the mode is dropped BEFORE the command runs, so a surface that
- * autofocuses is not immediately undone by it).
+ * that navigates — or that toggles chrome, like the two rails — keeps keyboard
+ * mode; a command that hands focus to a surface gives it up (the mode is
+ * dropped BEFORE the command runs, so a surface that autofocuses is not
+ * immediately undone by it).
  */
 interface Command {
   holdsMode: boolean;
   description: string;
-  /** Extra keys that run the same command, for the help sheet. */
-  aliases?: string[];
   run(ctx: CommandContext): void;
 }
 
-/** Open a dock surface — the same event the rail item's click emits. */
+/**
+ * What a command IS, independent of the key that runs it. The keymap maps keys
+ * onto these ids, which is what makes `/etc/slicc/keys.json` possible: a user
+ * rebinds `t` to `terminal` without knowing anything about the code, and a
+ * default key can change without invalidating a config.
+ */
+export type CommandId =
+  | 'nextAgent'
+  | 'composer'
+  | 'newConversation'
+  | 'leftRail'
+  | 'rightRail'
+  | 'files'
+  | 'tabs'
+  | 'terminal'
+  | 'memory'
+  | 'sprinkles'
+  | 'model'
+  | 'accounts'
+  | 'help';
+
+/** Go to a dock surface — the same event the rail item's click emits. */
 function surfaceCommand(id: string, description: string): Command {
-  return { holdsMode: false, description, run: (ctx) => ctx.deps.dock?.selectItem(id) };
+  return {
+    holdsMode: false,
+    description,
+    run: ({ deps, state }) => {
+      state.lastDockSurface = id;
+      deps.dock?.selectItem(id);
+    },
+  };
 }
 
 /**
  * The keyboard-mode command table. Insertion order is help order.
  *
  * Every entry reaches its surface through the surface's OWN event — the
- * strip's `select`, the dock's `selectItem`, the rail's `toggle`, the action
- * row's `new-chat-save` — so a shortcut is indistinguishable from a click and
- * cannot drift from one.
+ * strip's `select`, the dock's `selectItem`/`collapse`, the rail's `toggle`,
+ * the action row's `new-chat-save`, the model pill's `openMenu` — so a
+ * shortcut is indistinguishable from a click and cannot drift from one.
  */
-const COMMANDS: Readonly<Record<string, Command>> = {
-  d: {
+const COMMANDS: Readonly<Record<CommandId, Command>> = {
+  nextAgent: {
     holdsMode: true,
     description: 'Next agent, looping',
     run: ({ deps }) => {
@@ -270,13 +324,12 @@ const COMMANDS: Readonly<Record<string, Command>> = {
       if (next) deps.switcher.select(next);
     },
   },
-  c: {
+  composer: {
     holdsMode: false,
     description: 'Back to the composer',
-    aliases: ['Enter'],
     run: ({ deps }) => deps.focusComposer?.(),
   },
-  n: {
+  newConversation: {
     holdsMode: false,
     description: 'New conversation',
     // The event the rail's action row fires on a single click: save the
@@ -284,16 +337,36 @@ const COMMANDS: Readonly<Record<string, Command>> = {
     run: ({ deps }) =>
       deps.freezer?.dispatchEvent(new CustomEvent('new-chat-save', { bubbles: true })),
   },
-  b: {
+  leftRail: {
     holdsMode: true,
     description: 'Toggle the left rail',
     run: ({ deps }) => deps.freezer?.toggle(),
   },
-  f: surfaceCommand('files', 'File browser'),
-  t: surfaceCommand('browser', 'Browser tabs'),
-  e: surfaceCommand('term', 'Terminal'),
-  m: surfaceCommand('memory', 'Memory'),
-  s: {
+  rightRail: {
+    holdsMode: true,
+    description: 'Toggle the right panel',
+    /**
+     * The dock's own toggle: clicking the ACTIVE rail item collapses its
+     * panel, and clicking it again reopens it. So this closes whatever is
+     * open — remembering it — and otherwise reopens the last one, falling
+     * back to Files on a shell that has never opened anything.
+     */
+    run: ({ deps, state }) => {
+      const dock = deps.dock;
+      if (!dock) return;
+      if (dock.active) {
+        state.lastDockSurface = dock.active;
+        dock.collapse();
+        return;
+      }
+      dock.selectItem(state.lastDockSurface);
+    },
+  },
+  files: surfaceCommand('files', 'File browser'),
+  tabs: surfaceCommand('browser', 'Browser tabs'),
+  terminal: surfaceCommand('term', 'Terminal'),
+  memory: surfaceCommand('memory', 'Memory'),
+  sprinkles: {
     holdsMode: true,
     description: 'Sprinkles, looping',
     run: ({ deps }) => {
@@ -310,44 +383,110 @@ const COMMANDS: Readonly<Record<string, Command>> = {
       if (next) dock.selectItem(next);
     },
   },
-  a: {
+  model: {
+    holdsMode: false,
+    description: 'Model picker',
+    /**
+     * `openMenu()` is the pill's own programmatic click — and, exactly like a
+     * click, it has nothing to offer with no accounts connected (the pill
+     * reads "Add AI" and emits `add-ai` instead). Route that case to accounts,
+     * which is where the click would have taken the user too.
+     */
+    run: ({ deps, actions }) => {
+      const meta = deps.composerMeta;
+      if (!meta) return;
+      if (meta.models.length === 0) {
+        actions.accounts?.();
+        return;
+      }
+      meta.openMenu();
+    },
+  },
+  accounts: {
     holdsMode: false,
     description: 'Accounts',
     run: ({ actions }) => actions.accounts?.(),
   },
-  h: {
+  help: {
     holdsMode: true,
     description: 'This help',
-    aliases: ['?', '/'],
     run: (ctx) => ctx.toggleHelp(),
   },
 };
 
-/** The one command allowed to run while a modal is open — it closes the help. */
-const HELP_COMMAND = COMMANDS.h;
+/** Every command id, for validating a user keymap. */
+export const COMMAND_IDS = Object.keys(COMMANDS) as CommandId[];
 
-/** Key → command, aliases folded in. */
-const COMMAND_FOR_KEY: ReadonlyMap<string, Command> = new Map(
-  Object.entries(COMMANDS).flatMap(([key, command]) => [
-    [key, command] as const,
-    ...(command.aliases ?? []).map((alias) => [alias, command] as const),
-  ])
-);
+/** Is `value` a command a keymap may point at? */
+export function isCommandId(value: unknown): value is CommandId {
+  return typeof value === 'string' && Object.hasOwn(COMMANDS, value);
+}
 
-/** The documented bindings, in help order. */
-export function shortcutRows(): ShortcutRow[] {
+/**
+ * Keys the keymap may not touch, because they are the mode itself rather than
+ * a command: Escape enters and leaves it, and the digits address the tab strip
+ * positionally (`9` is "the last one", not "the ninth command").
+ */
+export const RESERVED_KEYS: readonly string[] = [
+  'Escape',
+  '1',
+  '2',
+  '3',
+  '4',
+  '5',
+  '6',
+  '7',
+  '8',
+  '9',
+];
+
+/** The shipped key → command mapping, which `/etc/slicc/keys.json` overrides. */
+export const DEFAULT_KEYMAP: Readonly<Record<string, CommandId>> = {
+  d: 'nextAgent',
+  c: 'composer',
+  Enter: 'composer',
+  n: 'newConversation',
+  b: 'leftRail',
+  x: 'rightRail',
+  f: 'files',
+  t: 'tabs',
+  e: 'terminal',
+  m: 'memory',
+  s: 'sprinkles',
+  l: 'model',
+  a: 'accounts',
+  h: 'help',
+  '?': 'help',
+  '/': 'help',
+};
+
+/** How a key prints in the help sheet. */
+function keyLabel(key: string): string {
+  return key === 'Enter' ? '⏎' : key;
+}
+
+/**
+ * The documented bindings for a keymap, in command order. Derived rather than
+ * written out, so a rebind in `/etc/slicc/keys.json` shows up in the help
+ * sheet — a printed list that disagreed with the live keymap would be worse
+ * than no list. A command nobody has a key for is dropped.
+ */
+export function shortcutRows(
+  keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP
+): ShortcutRow[] {
+  const byCommand = new Map<CommandId, string[]>();
+  for (const [key, id] of Object.entries(keymap)) {
+    byCommand.set(id, [...(byCommand.get(id) ?? []), keyLabel(key)]);
+  }
   return [
     {
       keys: ['Esc'],
       description: 'Enter keyboard mode — press again to leave (and exit full screen)',
     },
     { keys: ['1 – 9'], description: 'Switch to that agent in the tab strip (9 = last)' },
-    ...Object.entries(COMMANDS).map(([key, command]) => ({
-      keys: [
-        key === 'Enter' ? '⏎' : key,
-        ...(command.aliases ?? []).map((a) => (a === 'Enter' ? '⏎' : a)),
-      ],
-      description: command.description,
+    ...COMMAND_IDS.filter((id) => byCommand.has(id)).map((id) => ({
+      keys: byCommand.get(id) ?? [],
+      description: COMMANDS[id].description,
     })),
   ];
 }
@@ -509,7 +648,10 @@ function createBadge(doc: Document): {
 }
 
 /** The help overlay's lifecycle, kept apart from the mode's. */
-function createHelp(doc: Document): {
+function createHelp(
+  doc: Document,
+  readKeymap: () => Readonly<Record<string, CommandId>>
+): {
   show(): void;
   hide(): void;
   toggle(): void;
@@ -530,7 +672,7 @@ function createHelp(doc: Document): {
     dialog.className = 'wcsc-dialog';
     dialog.setAttribute('heading', 'Keyboard mode');
     dialog.dataset.wcShortcuts = 'help';
-    dialog.append(buildHelpBody(doc, shortcutRows()));
+    dialog.append(buildHelpBody(doc, shortcutRows(readKeymap())));
     // The dialog dismisses itself on Escape / ✕ / backdrop; drop our handle
     // so the next `h` builds a fresh one instead of toggling a dead node.
     dialog.addEventListener('slicc-dialog-close', () => {
@@ -621,9 +763,15 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
   if (!doc) throw new Error('wireKeyboardShortcuts: no document');
   INSTALLED.get(doc)?.dispose();
   const actions: ShortcutActions = {};
-  const help = createHelp(doc);
+  const help = createHelp(doc, () => keymap);
   const mode = createMode(doc);
-  const ctx: CommandContext = { deps, actions, toggleHelp: help.toggle };
+  const state: ModeState = { lastDockSurface: 'files' };
+  let keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP;
+  const ctx: CommandContext = { deps, actions, state, toggleHelp: help.toggle };
+  const commandFor = (key: string): Command | undefined => {
+    const id = keymap[key];
+    return id ? COMMANDS[id] : undefined;
+  };
 
   /** The Escape contract; see the module header. */
   const handleEscape = (event: KeyboardEvent): void => {
@@ -664,14 +812,14 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     // belt to that suspenders.
     if (isTypingTarget(deepTarget(event))) return;
 
-    const command = COMMAND_FOR_KEY.get(event.key);
+    const command = commandFor(event.key);
     // A modal owns the screen. Acting behind it — focusing the composer under
     // an open dialog, switching the agent the dialog belongs to — leaves the
     // user typing into obscured UI, so every command is suspended while one is
     // up. The single exception is closing the help overlay we opened
     // ourselves, which is how `h` stays a toggle. Escape is handled earlier
     // and separately, so a modal can always be dismissed.
-    if (hasOpenOverlay(doc) && !(command === HELP_COMMAND && help.element())) {
+    if (hasOpenOverlay(doc) && !(command === COMMANDS.help && help.element())) {
       // Suspended, not ignored: the cap lands dimmed, so a key pressed at a
       // dialog reads as "not now" rather than as a dead keyboard.
       mode.record(describeKey(event), false);
@@ -737,6 +885,10 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     setAction: (name, fn) => {
       actions[name] = fn;
     },
+    setKeymap: (next) => {
+      keymap = { ...next };
+    },
+    keymap: () => keymap,
   };
   INSTALLED.set(doc, handles);
   return handles;

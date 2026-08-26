@@ -195,17 +195,21 @@ SLICC's main control is a text field, so it has no always-on shortcuts to collid
 | <kbd>c</kbd> or <kbd>⏎</kbd>               | Back to the composer                                        |
 | <kbd>n</kbd>                               | New conversation                                            |
 | <kbd>b</kbd>                               | Toggle the left rail                                        |
+| <kbd>x</kbd>                               | Toggle the right panel                                      |
 | <kbd>f</kbd>                               | File browser                                                |
 | <kbd>t</kbd>                               | Browser tabs                                                |
 | <kbd>e</kbd>                               | Terminal                                                    |
 | <kbd>m</kbd>                               | Memory                                                      |
 | <kbd>s</kbd>                               | Sprinkles, looping                                          |
+| <kbd>l</kbd>                               | Model picker                                                |
 | <kbd>a</kbd>                               | Accounts                                                    |
 | <kbd>h</kbd>, <kbd>?</kbd> or <kbd>/</kbd> | This list, in an overlay                                    |
 
 Every key you press shows up as a cap on the pill — dimmed if it was not bound to anything, so a mistyped key reads as "that did nothing" rather than as a dead keyboard. The strip clears after a moment of quiet.
 
-Keys that navigate (digits, <kbd>d</kbd>, <kbd>b</kbd>, <kbd>s</kbd>, help) keep the mode on; anything that hands focus to a surface leaves it, as does clicking into any text field. Outside the mode nothing is intercepted at all. The overlay is also in the avatar menu, under **Keyboard mode**.
+Keys that navigate, or toggle chrome (digits, <kbd>d</kbd>, <kbd>b</kbd>, <kbd>x</kbd>, <kbd>s</kbd>, help), keep the mode on; anything that hands focus to a surface leaves it, as does clicking into any text field. Outside the mode nothing is intercepted at all. The overlay is also in the avatar menu, under **Keyboard mode**.
+
+**Rebinding.** The keys live in `/etc/slicc/keys.json` in the VFS, written the first time SLICC starts and never touched again — edit it and reload the tab. Each entry maps a key to a command (`"q": "terminal"`), several keys can share one command, and `null` unbinds. The file lists every command it accepts. <kbd>Esc</kbd> and the digits are reserved. A bad line is skipped with a warning rather than costing you the rest of the file, and the help overlay always shows what is actually bound.
 
 ## API Keys and Providers
 

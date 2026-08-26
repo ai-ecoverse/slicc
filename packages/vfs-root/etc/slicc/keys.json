@@ -1,0 +1,37 @@
+{
+  "//": [
+    "Keyboard-mode shortcuts. Press Esc anywhere in SLICC to enter keyboard mode;",
+    "the keys below then work on their own, with no modifier. Edit this file and",
+    "reload the tab to change them — it is read once at startup.",
+    "",
+    "Each entry is \"key\": \"command\". A key is a single character (\"x\") or a named",
+    "key (\"Enter\"). Several keys may share one command. Set a key to null to unbind",
+    "it. A command with no key left is simply unreachable from the keyboard.",
+    "",
+    "Commands: nextAgent, composer, newConversation, leftRail, rightRail, files,",
+    "tabs, terminal, memory, sprinkles, model, accounts, help.",
+    "",
+    "Esc and the digits 1-9 are reserved: Esc is the mode itself, and the digits",
+    "address the tab strip by position (9 is always the last agent).",
+    "",
+    "This file is yours — SLICC only writes it once, when it is missing."
+  ],
+  "bindings": {
+    "d": "nextAgent",
+    "c": "composer",
+    "Enter": "composer",
+    "n": "newConversation",
+    "b": "leftRail",
+    "x": "rightRail",
+    "f": "files",
+    "t": "tabs",
+    "e": "terminal",
+    "m": "memory",
+    "s": "sprinkles",
+    "l": "model",
+    "a": "accounts",
+    "h": "help",
+    "?": "help",
+    "/": "help"
+  }
+}

@@ -6,6 +6,8 @@
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
+  COMMAND_IDS,
+  DEFAULT_KEYMAP,
   deepTarget,
   describeKey,
   digitFor,
@@ -28,6 +30,7 @@ function harness(
     activeTab?: string | null;
     dockItems?: Array<{ id: string; kind?: 'sprinkle' | 'tool' }>;
     activeDock?: string | null;
+    models?: string[];
     noComposer?: boolean;
     noDock?: boolean;
     noFreezer?: boolean;
@@ -44,20 +47,30 @@ function harness(
     active: options.activeTab === undefined ? (keys[0] ?? null) : options.activeTab,
     select,
   };
-  const dock = {
+  const collapse = vi.fn();
+  const dock: {
+    items: Array<{ id: string; kind?: 'sprinkle' | 'tool' }>;
+    active: string | null;
+    selectItem: typeof selectItem;
+    collapse: typeof collapse;
+  } = {
     items: options.dockItems ?? [
       { id: 'files', kind: 'tool' as const },
       { id: 'new', kind: 'sprinkle' as const },
     ],
     active: options.activeDock ?? null,
     selectItem,
+    collapse,
   };
+  const openMenu = vi.fn();
+  const composerMeta = { models: options.models ?? ['claude-opus-4-6'], openMenu };
   const freezer = Object.assign(document.createElement('div'), { toggle });
   document.body.append(freezer);
   const newChat = vi.fn();
   freezer.addEventListener('new-chat-save', newChat);
   const handles = wireKeyboardShortcuts({
     switcher,
+    composerMeta,
     ...(options.noDock ? {} : { dock }),
     ...(options.noFreezer ? {} : { freezer }),
     ...(options.noComposer ? {} : { focusComposer }),
@@ -65,7 +78,19 @@ function harness(
   });
   handles.setAction('accounts', accounts);
   wired.push(handles);
-  return { handles, select, selectItem, focusComposer, toggle, newChat, accounts, freezer };
+  return {
+    handles,
+    dock,
+    select,
+    selectItem,
+    collapse,
+    openMenu,
+    focusComposer,
+    toggle,
+    newChat,
+    accounts,
+    freezer,
+  };
 }
 
 /** Dispatch a keydown on `target` (bubbling, so the document listener sees it). */
@@ -146,6 +171,7 @@ describe('sprinkleIds', () => {
       ],
       active: null,
       selectItem: vi.fn(),
+      collapse: vi.fn(),
     };
     expect(sprinkleIds(dock)).toEqual(['sprinkle:b', 'sprinkle:a']);
   });
@@ -307,7 +333,7 @@ describe('the Escape contract', () => {
 describe('outside keyboard mode', () => {
   it('binds nothing at all', () => {
     const h = harness();
-    for (const key of ['1', 'c', 'd', 'n', 'b', 'f', 't', 'e', 'm', 's', 'a', 'h', '?', '/']) {
+    for (const key of ['1', 'c', 'd', 'n', 'b', 'x', 'f', 't', 'e', 'm', 's', 'l', 'a', 'h']) {
       expect(press({ key, code: key === '1' ? 'Digit1' : `Key${key.toUpperCase()}` })).toBe(false);
     }
     expect(h.select).not.toHaveBeenCalled();
@@ -405,6 +431,54 @@ describe('inside keyboard mode', () => {
     expect(selectItem).toHaveBeenCalledWith('new');
     // A cycle key holds the mode, so a second press can reach the next one.
     expect(handles.active()).toBe(true);
+  });
+
+  it('x closes the open right-hand panel, and reopens the last one', () => {
+    const h = harness({ activeDock: 'memory' });
+    // The real `<slicc-dock>` clears `active` when it collapses; the stub has
+    // to be told, or the second press would just collapse again.
+    h.collapse.mockImplementation(() => {
+      h.dock.active = null;
+    });
+    escape();
+    press({ key: 'x', code: 'KeyX' });
+    expect(h.collapse).toHaveBeenCalledTimes(1);
+    // A chrome toggle is navigation, so the mode survives it — as with `b`.
+    expect(h.handles.active()).toBe(true);
+    press({ key: 'x', code: 'KeyX' });
+    expect(h.selectItem).toHaveBeenCalledWith('memory');
+  });
+
+  it('x falls back to Files on a shell that has never opened a panel', () => {
+    const { selectItem } = harness({ activeDock: null });
+    escape();
+    press({ key: 'x', code: 'KeyX' });
+    expect(selectItem).toHaveBeenCalledWith('files');
+  });
+
+  it('x reopens the surface a letter key last went to', () => {
+    const { selectItem } = harness({ activeDock: null });
+    escape();
+    press({ key: 'e', code: 'KeyE' }); // terminal
+    escape();
+    press({ key: 'x', code: 'KeyX' });
+    expect(selectItem).toHaveBeenLastCalledWith('term');
+  });
+
+  it('l opens the model picker', () => {
+    const { openMenu, handles } = harness();
+    escape();
+    press({ key: 'l', code: 'KeyL' });
+    expect(openMenu).toHaveBeenCalledTimes(1);
+    expect(handles.active()).toBe(false);
+  });
+
+  it('l routes to accounts when no account is connected, like clicking the pill', () => {
+    const { openMenu, accounts } = harness({ models: [] });
+    escape();
+    press({ key: 'l', code: 'KeyL' });
+    expect(openMenu).not.toHaveBeenCalled();
+    expect(accounts).toHaveBeenCalledTimes(1);
   });
 
   it('a opens accounts through the registered action', () => {
@@ -606,6 +680,55 @@ describe('describeKey', () => {
   it('leaves Shift off a printed character, which already carries it', () => {
     expect(describeKey(ev({ key: '?', shiftKey: true }))).toEqual(['?']);
     expect(describeKey(ev({ key: 'Tab', shiftKey: true }))).toEqual(['⇧', '⇥']);
+  });
+});
+
+describe('the keymap', () => {
+  it('every command has at least one default key', () => {
+    const bound = new Set(Object.values(DEFAULT_KEYMAP));
+    expect([...COMMAND_IDS].filter((id) => !bound.has(id))).toEqual([]);
+  });
+
+  it('a rebind moves the command to the new key and frees the old one', () => {
+    const { handles, toggle, selectItem } = harness();
+    handles.setKeymap({ q: 'leftRail' });
+    escape();
+    press({ key: 'q', code: 'KeyQ' });
+    expect(toggle).toHaveBeenCalledTimes(1);
+    // `b` was not in the new map at all, so it now does nothing.
+    press({ key: 'b', code: 'KeyB' });
+    expect(toggle).toHaveBeenCalledTimes(1);
+    // …and neither does a command the map dropped entirely.
+    press({ key: 'f', code: 'KeyF' });
+    expect(selectItem).not.toHaveBeenCalled();
+  });
+
+  it('is applied whole, not merged — the loader owns merging', () => {
+    const { handles } = harness();
+    handles.setKeymap({ q: 'help' });
+    expect(handles.keymap()).toEqual({ q: 'help' });
+  });
+
+  it('the help sheet follows the live keymap', () => {
+    const { handles } = harness();
+    handles.setKeymap({ q: 'help', z: 'help', w: 'terminal' });
+    handles.showHelp();
+    const rows = [...(handles.helpOverlay()?.querySelectorAll('.wcsc__row') ?? [])].map(
+      (r) => r.textContent
+    );
+    expect(rows.some((t) => t?.includes('This help') && t.includes('q') && t.includes('z'))).toBe(
+      true
+    );
+    expect(rows.some((t) => t?.includes('Terminal') && t.includes('w'))).toBe(true);
+    // A command nobody has a key for is not printed as if it were reachable.
+    expect(rows.some((t) => t?.includes('File browser'))).toBe(false);
+  });
+
+  it('shortcutRows keeps Esc and the digits, whatever the keymap says', () => {
+    const rows = shortcutRows({ q: 'help' });
+    expect(rows[0].keys).toEqual(['Esc']);
+    expect(rows[1].keys).toEqual(['1 – 9']);
+    expect(rows).toHaveLength(3);
   });
 });
 

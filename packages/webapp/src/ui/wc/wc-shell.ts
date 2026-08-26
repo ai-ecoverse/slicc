@@ -17,6 +17,7 @@ import {
   followSystemTheme,
   type SliccAgentTabs,
   type SliccAvatarMenu,
+  type SliccComposerMeta,
   type SliccDock,
   type SliccDockTree,
   type SliccFileTree,
@@ -475,12 +476,14 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   const { nav, switcher, floatbar, avatarMenu } = buildNav(options);
   appCol.append(nav, shell);
   const shortcuts = wireKeyboardShortcuts({
-    // `WcShellRefs` types both rails as bare `HTMLElement` (they carry no
-    // shell-specific API); the mode needs their component surface, and the
-    // custom elements are registered by the side-effect import above.
+    // `WcShellRefs` types the rails and the model pill as bare `HTMLElement`
+    // (they carry no shell-specific API); the mode needs their component
+    // surface, and the custom elements are registered by the side-effect
+    // import above.
     switcher,
     dock: dock as unknown as SliccDock,
     freezer: freezer as unknown as SliccFreezer,
+    composerMeta: composerMeta as unknown as SliccComposerMeta,
     focusComposer: () => inputCard.focus(),
   });
 
