@@ -239,11 +239,18 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
     private func waitForSeededTranscript(_ app: XCUIApplication) {
         let composer = app.textViews.firstMatch
         XCTAssertTrue(composer.waitForExistence(timeout: 30), "composer should render")
-        let newest = app.descendants(matching: .any)
-            .matching(identifier: "message-fx-assistant-streaming").firstMatch
+        // ANY fixture row, not a specific one. Which rows are materialized at
+        // launch is device-dependent — an iPad renders the transcript wider, so
+        // rows are shorter and the lazy stack materializes a different set than
+        // an iPhone does. Naming one row here made this a device-specific
+        // precondition rather than a check that the fixture seeded at all; the
+        // tests scroll to the row they actually measure.
+        let anyRow = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "message-fx-"))
+            .firstMatch
         XCTAssertTrue(
-            newest.waitForExistence(timeout: 30),
-            "the seeded transcript should open on its newest message")
+            anyRow.waitForExistence(timeout: 30),
+            "the fixture transcript should have seeded")
     }
 
     /// Seeds the fixture conversation into the REAL chat surface.

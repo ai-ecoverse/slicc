@@ -1751,6 +1751,21 @@ jobs:
             --device iPad \
             --result-bundle .build/transcript-column-ui.xcresult \
             --only-testing SliccFollowerUITests/TranscriptColumnUITests
+      # #2072: the transcript threw a reader backwards through the history
+      # when the keyboard's inset landed. The gate asserts the MEASURED drift
+      # of an anchor row across a keyboard transition, so it catches a
+      # reintroduction that a rendering assertion would sail past.
+      #
+      # Both destinations, deliberately. The iPad is not redundant: it renders
+      # a wider transcript with more rows per screen and carries the
+      # readable-column cap, and #2048 was an iPad-only transcript regression.
+      # The iOS 27 leg is `continue-on-error` like the rest of the matrix.
+      - name: Test transcript scroll anchoring (#2072)
+        run: |
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device ${{ matrix.device }} \
+            --result-bundle .build/transcript-anchor-ui.xcresult \
+            --only-testing SliccFollowerUITests/TranscriptComposerGrowthUITests
       - name: Upload coverage report
         if: always() && matrix.device == 'iPhone' && matrix.ios == '26'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
