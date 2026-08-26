@@ -4,6 +4,8 @@ import { hasLocalNodeServer } from '../float-topology.js';
 import { defaultLickTarget, type LickTargetEnv } from '../lick-target-env.js';
 import { apiHeaders, resolveApiUrl } from '../proxied-fetch.js';
 import { getLickManagerSurface } from './lick-surface.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
 
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
 
@@ -86,31 +88,21 @@ async function apiCall(
   return { ok: resp.ok, status: resp.status, data };
 }
 
+/** `create`'s flags all take a value — same names for `isHelpRequest`. */
+const CREATE_VALUE_FLAGS = ['--name', '--cron', '--filter', '--scoop'] as const;
+
+function flagError(message: string): CommandResult {
+  return { stdout: '', stderr: `crontask: ${message}\n`, exitCode: 1 };
+}
+
 async function handleCreate(args: string[], env: LickTargetEnv): Promise<CommandResult> {
-  let name: string | undefined;
-  let cron: string | undefined;
-  let filter: string | undefined;
-  let scoop: string | undefined;
+  const parsed = parseKnownFlags(args.slice(1), { value: CREATE_VALUE_FLAGS });
+  if ('error' in parsed) return flagError(parsed.error);
 
-  const nameIdx = args.indexOf('--name');
-  if (nameIdx !== -1 && args[nameIdx + 1]) {
-    name = args[nameIdx + 1];
-  }
-
-  const cronIdx = args.indexOf('--cron');
-  if (cronIdx !== -1 && args[cronIdx + 1]) {
-    cron = args[cronIdx + 1];
-  }
-
-  const filterIdx = args.indexOf('--filter');
-  if (filterIdx !== -1 && args[filterIdx + 1]) {
-    filter = args[filterIdx + 1];
-  }
-
-  const scoopIdx = args.indexOf('--scoop');
-  if (scoopIdx !== -1 && args[scoopIdx + 1]) {
-    scoop = args[scoopIdx + 1];
-  }
+  const name = parsed.values.get('--name');
+  const cron = parsed.values.get('--cron');
+  const filter = parsed.values.get('--filter');
+  let scoop = parsed.values.get('--scoop');
   // No `--scoop`: a non-primary cone's shell names itself (SLICC_LICK_TARGET),
   // exactly as `fswatch` does, so its ticks come back to its own chat (#2311).
   scoop = defaultLickTarget(scoop, env);
@@ -182,7 +174,10 @@ function formatTaskList(tasks: CronTaskInfo[]): string {
   return output;
 }
 
-async function handleList(): Promise<CommandResult> {
+async function handleList(args: string[]): Promise<CommandResult> {
+  const parsed = parseKnownFlags(args.slice(1), {});
+  if ('error' in parsed) return flagError(parsed.error);
+
   if (!hasLocalNodeServer()) {
     const lm = await getLickManagerSurface();
     if (!lm) return notInitializedError('list');
@@ -211,7 +206,10 @@ async function handleList(): Promise<CommandResult> {
 
 async function handleDelete(args: string[]): Promise<CommandResult> {
   const subcommand = args[0];
-  const id = args[1];
+  const parsed = parseKnownFlags(args.slice(1), {});
+  if ('error' in parsed) return flagError(parsed.error);
+
+  const id = parsed.positionals[0];
   if (!id) {
     return { stdout: '', stderr: `crontask: ${subcommand} requires an ID\n`, exitCode: 1 };
   }
@@ -244,18 +242,17 @@ async function handleDelete(args: string[]): Promise<CommandResult> {
 
 export function createCrontaskCommand(): Command {
   return defineCommand('crontask', async (args, ctx) => {
-    if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+    const subcommand = args[0];
+    if (!subcommand || isHelpRequest(args, { valueFlags: CREATE_VALUE_FLAGS })) {
       return crontaskHelp();
     }
-
-    const subcommand = args[0];
 
     try {
       switch (subcommand) {
         case 'create':
           return await handleCreate(args, ctx.env);
         case 'list':
-          return await handleList();
+          return await handleList(args);
         case 'delete':
         case 'kill':
           return await handleDelete(args);
