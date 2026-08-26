@@ -112,29 +112,25 @@ final class TranscriptInvalidationTests: XCTestCase {
 
     /// The formatters are shared instances now. A `DateFormatter()` per call
     /// meant one allocation per message per render pass.
-    func testTimestampFormattersAreSharedAndStillCorrect() {
+    func testTimestampFormattersAreSharedAndStillCorrect() throws {
         let calendar = Calendar.current
         let now = Date()
         XCTAssertTrue(
             MessageListView.timestampLabel(for: now, calendar: calendar).hasPrefix("Today "),
             "today's messages keep the Today prefix")
 
-        let yesterday = try? XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: now))
-        if let yesterday = yesterday{
-            XCTAssertTrue(
-                MessageListView.timestampLabel(for: yesterday, calendar: calendar)
-                    .hasPrefix("Yesterday "),
-                "yesterday's messages keep the Yesterday prefix")
-        }
+        let yesterday = try XCTUnwrap(calendar.date(byAdding: .day, value: -1, to: now))
+        XCTAssertTrue(
+            MessageListView.timestampLabel(for: yesterday, calendar: calendar)
+                .hasPrefix("Yesterday "),
+            "yesterday's messages keep the Yesterday prefix")
 
         // The bug a shared formatter could reintroduce: the old code mutated
         // ONE formatter's `dateStyle` for the older-than-yesterday branch, so
-        // hoisting it naively would leak that style into every later Today
-        // label. Interleave the two branches to catch that.
-        let longAgo = calendar.date(byAdding: .day, value: -30, to: now)
-        if let longAgo {
-            _ = MessageListView.timestampLabel(for: longAgo, calendar: calendar)
-        }
+        // hoisting it naively would leak that style into every later "Today"
+        // label. Format an older message BETWEEN two Today labels to catch it.
+        let longAgo = try XCTUnwrap(calendar.date(byAdding: .day, value: -30, to: now))
+        _ = MessageListView.timestampLabel(for: longAgo, calendar: calendar)
         XCTAssertTrue(
             MessageListView.timestampLabel(for: now, calendar: calendar).hasPrefix("Today "),
             "formatting an older message must not leak its date style into later labels")
