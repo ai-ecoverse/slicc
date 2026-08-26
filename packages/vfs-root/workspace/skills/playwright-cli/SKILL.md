@@ -55,6 +55,8 @@ playwright-cli snapshot --tab=E9A3F
 - `No snapshot available` — run `snapshot --tab=<id>` before using refs.
 - `unknown flag "--x"` / `unexpected argument "y"` — every subcommand rejects arguments it does not
   support, so an exit code of 0 means everything you passed was honoured. Check `<verb> --help`.
+- For free-text payloads that start with `-` (e.g. `fill`/`type`/`eval`), put `--` before the text:
+  `fill --tab=<id> e1 -- --dash-looking`.
 - `is not an element ref` — a screenshot's positional is a main-frame element ref (`e5`); the output
   path is `--filename=<path>`. Frame-prefixed refs (`f1e5`) clip only with `click`-family commands.
 - Refs are tied to **one tab + one snapshot**. They do not carry across tabs, navigations, or reloads.
@@ -78,7 +80,7 @@ playwright-cli tab-close --tab=<id>                               # Close tab
 playwright-cli goto --tab=<id> <url>                              # Navigate tab
 playwright-cli navigate --tab=<id> <url>                          # Alias for goto
 playwright-cli snapshot --tab=<id> [--frame=<frameId>] [--no-iframes] [--filename=path]  # Tab tree or one frame subtree
-playwright-cli eval --tab=<id> [--frame=<frameId>] <expression> [--filename=path]  # Evaluate JS in a tab/frame, incl. top-level await/return
+playwright-cli eval --tab=<id> [--frame=<frameId>] <expression> [--filename=path]  # Evaluate JS in a tab/frame, incl. top-level await/return; use `--` before an expression that starts with `-`
 playwright-cli eval-file --tab=<id> [--frame=<frameId>] <vfs-path>  # Evaluate JS from a VFS file in a tab/frame (top-level await/return supported)
 playwright-cli frames --tab=<id>                                  # List frame IDs for --frame (not --tab)
 playwright-cli resize --tab=<id> <width> <height>                 # Resize viewport
@@ -104,8 +106,8 @@ fall back to `window.focus()`.
 ```bash
 playwright-cli click --tab=<id> <ref> [--modifiers=Shift,Control,Alt,Meta]  # Click element
 playwright-cli dblclick --tab=<id> <ref> [button] [--modifiers=...]          # Double-click
-playwright-cli fill --tab=<id> <ref> <text> [--submit]           # Clear input + type text (--submit presses Enter)
-playwright-cli type --tab=<id> <text> [--submit]                 # Type into focused element (--submit presses Enter)
+playwright-cli fill --tab=<id> <ref> <text> [--submit]           # Clear input + type text (--submit presses Enter); use `--` before text that starts with `-`
+playwright-cli type --tab=<id> <text> [--submit]                 # Type into focused element (--submit presses Enter); use `--` before text that starts with `-`
 playwright-cli hover --tab=<id> <ref>                            # Hover over element
 playwright-cli select --tab=<id> <ref> <value>                   # Select dropdown value
 playwright-cli check --tab=<id> <ref>                            # Check checkbox/radio
@@ -128,10 +130,10 @@ playwright-cli keyup --tab=<id> <key>    # Release held key (no paired keyDown)
 ### Mouse
 
 ```bash
-playwright-cli mousemove --tab=<id> <x> <y>    # Move mouse to coordinates
+playwright-cli mousemove --tab=<id> <x> <y>    # Move mouse to coordinates (negative coords ok, e.g. -10 20)
 playwright-cli mousedown --tab=<id> [button]   # Press mouse button (left/right/middle, default: left)
 playwright-cli mouseup --tab=<id> [button]     # Release mouse button
-playwright-cli mousewheel --tab=<id> <dx> <dy> # Scroll mouse wheel
+playwright-cli mousewheel --tab=<id> <dx> <dy> # Scroll mouse wheel (negative deltas ok, e.g. 0 -300)
 ```
 
 ### Navigation
@@ -311,7 +313,8 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
 - Unexpected JavaScript dialogs are auto-dismissed on attached pages.
 - Use `eval --tab=<id>` for DOM operations not covered by built-in commands; save results with `--filename=path`.
 - The SLICC app tab and Chrome internal UI tabs are automatically excluded from `tab-list`.
-- `fill` clears and types into regular inputs, textareas, and `contenteditable` elements. Use `--submit` to press Enter after.
+- `fill` clears and types into regular inputs, textareas, and `contenteditable` elements. Use `--submit` to press Enter after. If the text or an `eval` expression starts with `-`, put `--` before it so it is not parsed as a flag.
+- Negative numbers for `mousewheel` / `mousemove` are positionals (no `--` needed): `mousewheel --tab=<id> 0 -300`.
 - Screenshots default to `/tmp/screenshot-<timestamp>.png`. Use `--filename=path` to save elsewhere —
   `screenshot <path>` is an error, because that slot is the element ref.
 - Unsupported flags and extra positionals are rejected per subcommand, so a probe that exits 0 means

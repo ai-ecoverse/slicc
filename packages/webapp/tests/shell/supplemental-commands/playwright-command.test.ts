@@ -267,6 +267,57 @@ describe('playwright-cli help', () => {
     expect(browser.createPage).not.toHaveBeenCalled();
   });
 
+  // ── issue #2255: unknown flags must fail loudly ──────────────────────────
+
+  describe('unknown flags', () => {
+    it('rejects an unrecognised flag instead of ignoring it', async () => {
+      const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+      const result = await cmd.execute(['tab-list', '--bogus'], mockCtx);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('unknown flag: --bogus');
+    });
+
+    it('rejects an unknown flag in any position', async () => {
+      const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+      const result = await cmd.execute(
+        ['goto', 'https://example.com', '--tab=tab-1', '--nope'],
+        mockCtx
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('unknown flag: --nope');
+      expect(browser.navigate).not.toHaveBeenCalled();
+    });
+
+    it('still accepts known flags and --help on a verb', async () => {
+      const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+      const help = await cmd.execute(['record', '--help'], mockCtx);
+      expect(help.exitCode).toBe(0);
+      expect(help.stdout).toMatch(/record/);
+    });
+
+    it('honours -- so a dash-prefixed positional is not a flag', async () => {
+      const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+      const result = await cmd.execute(
+        ['fill', 'e1', '--tab=tab-1', '--', '--not-a-flag'],
+        mockCtx
+      );
+      expect(result.stderr).not.toContain('unknown flag');
+    });
+
+    it('accepts negative numeric positionals for mousewheel', async () => {
+      const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+      const result = await cmd.execute(['mousewheel', '--tab=tab-1', '0', '-300'], mockCtx);
+      expect(result.stderr).not.toContain('unknown flag');
+      expect(result.exitCode).toBe(0);
+      const transport = browser.getTransport();
+      expect(transport.send as ReturnType<typeof vi.fn>).toHaveBeenCalledWith(
+        'Input.dispatchMouseEvent',
+        expect.objectContaining({ type: 'mouseWheel', deltaX: 0, deltaY: -300 }),
+        'session-1'
+      );
+    });
+  });
+
   it('shows alias-specific help when invoked through an alias', async () => {
     const cmd = createPlaywrightCommand('playwright', browser as BrowserAPI, fs as VirtualFS);
     const result = await cmd.execute(['--help'], mockCtx);

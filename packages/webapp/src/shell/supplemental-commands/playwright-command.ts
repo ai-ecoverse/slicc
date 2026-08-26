@@ -21,9 +21,11 @@ import {
   AUTO_SNAPSHOT_COMMANDS,
   frameIdUsedAsTabError,
   getSharedState,
+  PLAYWRIGHT_FLAG_SPEC,
   parseFlags,
 } from './playwright/state.js';
 import type { CmdResult, PlaywrightHandlerCtx } from './playwright/types.js';
+import { type KnownFlagSpec, parseKnownFlags } from './subcommand-flags.js';
 
 export { asWebFetch } from './playwright/discover.js';
 export { getSharedState, PLAYWRIGHT_COMMAND_NAMES } from './playwright/state.js';
@@ -44,6 +46,44 @@ export type {
  * the CDP type, so the dispatcher stays inside the shell layer.
  */
 type PlaywrightBrowser = PlaywrightHandlerCtx['browser'];
+
+/**
+ * Dash-prefixed vocabulary for {@link parseKnownFlags}, derived from the
+ * mri `ArgSpec` plus the help / `--no-iframes` tokens the dispatcher accepts.
+ * Rejecting unknowns here closes the silent-swallow hole in `mri` (#2255)
+ * without replacing the value-shadowing parse that handlers already rely on.
+ */
+function playwrightKnownFlagSpec(): KnownFlagSpec {
+  const value = (PLAYWRIGHT_FLAG_SPEC.string ?? []).map((n) => `--${n}`);
+  const boolNames = new Set(PLAYWRIGHT_FLAG_SPEC.boolean ?? []);
+  for (const [key, val] of Object.entries(PLAYWRIGHT_FLAG_SPEC.alias ?? {})) {
+    const group = [key, ...(Array.isArray(val) ? val : [val])];
+    if (group.some((n) => boolNames.has(n))) {
+      for (const n of group) boolNames.add(n);
+    }
+  }
+  return {
+    value,
+    bool: [...[...boolNames].map((n) => `--${n}`), '--help', '-h', '--no-iframes'],
+  };
+}
+
+/** Same opaque rewrite as {@link parseFlags} so `--no-iframes=true` is not unknown. */
+function argsForKnownFlagWalk(subArgs: readonly string[]): string[] {
+  return subArgs.map((a) =>
+    a === '--no-iframes' || a.startsWith('--no-iframes=')
+      ? a.replace('--no-iframes', '--_noiframes')
+      : a
+  );
+}
+
+function knownFlagSpecForWalk(spec: KnownFlagSpec): KnownFlagSpec {
+  return {
+    ...spec,
+    bool: [...(spec.bool ?? []), '--_noiframes'],
+    value: [...(spec.value ?? []), '--_noiframes'],
+  };
+}
 
 async function commandErrorResult(
   browser: PlaywrightBrowser,
@@ -69,12 +109,26 @@ async function commandErrorResult(
 async function parseSubcommandArgs(
   name: string,
   subcommand: string,
-  subArgs: string[]
+  subArgs: string[],
+  knownFlagSpec: KnownFlagSpec
 ): Promise<{ positional: string[]; flags: Record<string, string> } | { answer: CmdResult }> {
-  let positional: string[];
+  // Reject unknown dash tokens before the mri-backed parse. `mri` otherwise
+  // stores unrecognised flags as `true` and handlers ignore them — exit 0
+  // with false confidence (issue #2255). Same valueFlags contract as
+  // `isHelpRequest` / value-shadowing: `--body --help` is a body, not help.
+  const known = parseKnownFlags(argsForKnownFlagWalk(subArgs), knownFlagSpecForWalk(knownFlagSpec));
+  if ('error' in known) {
+    return {
+      answer: { stdout: '', stderr: `${name} ${subcommand}: ${known.error}\n`, exitCode: 1 },
+    };
+  }
+
   let flags: Record<string, string>;
   try {
-    ({ positional, flags } = parseFlags(subArgs));
+    // Keep mri for aliases + value-shadowing, but take positionals from the
+    // known-flag walk: mri clusters `-300` into short options (`-3`, `-0`)
+    // and drops them from `_`, breaking mousewheel / mousemove negatives.
+    ({ flags } = parseFlags(subArgs));
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     return { answer: { stdout: '', stderr: `${name} ${subcommand}: ${msg}\n`, exitCode: 1 } };
@@ -96,13 +150,13 @@ async function parseSubcommandArgs(
   let argError: string | null = null;
   try {
     const { validateSubcommandArgs } = await import('./playwright/validate-args.js');
-    argError = validateSubcommandArgs(name, subcommand, subArgs, positional);
+    argError = validateSubcommandArgs(name, subcommand, subArgs, known.positionals);
   } catch {
     argError = null;
   }
   if (argError) return { answer: { stdout: '', stderr: argError, exitCode: 1 } };
 
-  return { positional, flags };
+  return { positional: known.positionals, flags };
 }
 
 export function createPlaywrightCommand(
@@ -112,6 +166,7 @@ export function createPlaywrightCommand(
 ): Command {
   const helpText = formatHelp(name);
   const state = browser ? getSharedState(browser, fs) : null;
+  const knownFlagSpec = playwrightKnownFlagSpec();
 
   return defineCommand(name, async (args): Promise<CmdResult> => {
     if (args.length === 0 || args[0] === 'help' || args[0] === '--help' || args[0] === '-h') {
@@ -121,7 +176,7 @@ export function createPlaywrightCommand(
     const subcommand = args[0];
     const subArgs = args.slice(1);
 
-    const parsed = await parseSubcommandArgs(name, subcommand, subArgs);
+    const parsed = await parseSubcommandArgs(name, subcommand, subArgs, knownFlagSpec);
     if ('answer' in parsed) return parsed.answer;
     const { positional, flags } = parsed;
 
