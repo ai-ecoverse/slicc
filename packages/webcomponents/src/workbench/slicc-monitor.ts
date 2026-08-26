@@ -45,6 +45,33 @@ export interface MonitorSection {
   status?: MonitorStatus;
 }
 
+/** One reading of a metric, with the wall-clock instant it was taken. */
+export interface MonitorSeriesPoint {
+  /** `Date.now()` when the sample was taken. */
+  at: number;
+  value: number;
+}
+
+/**
+ * A time series for a sparkline: samples plus the width of the window they
+ * are drawn in.
+ *
+ * The window is what makes the chart readable across two glances. `points`
+ * are placed by TIMESTAMP inside a fixed `windowMs` span whose right edge is
+ * the newest sample, so a buffer covering forty seconds of a one-hour window
+ * draws a short trace hugging the right edge rather than stretching forty
+ * seconds across the whole tile. The alternative — spacing points evenly by
+ * index — silently rescales the x axis as the buffer fills, so the same event
+ * looks steeper or shallower depending on how long the panel has been open,
+ * and a gap in the sampling cadence is drawn as if it never happened.
+ */
+export interface MonitorSeries {
+  /** Samples, oldest first. Needs at least two points to render. */
+  points: MonitorSeriesPoint[];
+  /** The span the x axis covers, in ms. The right edge is the newest point. */
+  windowMs: number;
+}
+
 /**
  * A vitals tile: a rate, a ratio, or a headline figure.
  *
@@ -64,7 +91,7 @@ export interface MonitorVital {
   /** The single ≥48px figure the panel leads with. At most one. */
   hero?: boolean;
   /** Time series for a sparkline. Needs at least two points to render. */
-  series?: number[];
+  series?: MonitorSeries;
   /** 0..1 fill for a meter. Use for a share of a limit, never for a rate. */
   ratio?: number;
   accent?: MonitorAccent;
@@ -274,8 +301,12 @@ slicc-monitor {
   margin: 6px 0 2px;
 }
 .monitor-tile__plot svg {
-  max-width: 100%;
-  height: auto;
+  display: block;
+  /*
+   * The end marker sits ON the right edge (see projectSeries), so its ring
+   * would be sliced by the SVG box. The tile's 14px padding absorbs it.
+   */
+  overflow: visible;
 }
 .monitor-tile__foot {
   font-size: 10.5px;
@@ -780,15 +811,46 @@ function svgEl(tag: string, attrs: Record<string, string | number>): SVGElement 
   return el;
 }
 
-/** Project a series into `x`/`y` pairs inside a `w × h` box with a 3px inset. */
-function projectSeries(series: number[], w: number, h: number): { x: number; y: number }[] {
-  const min = Math.min(...series);
-  const max = Math.max(...series);
+/** Stroke width of the sparkline, and half of it — the horizontal edge inset. */
+const SPARK_STROKE = 2;
+const SPARK_EDGE_INSET = SPARK_STROKE / 2;
+/**
+ * Vertical inset: the end marker's radius plus its ring, so a sample at the
+ * top or bottom of its range is not sliced by the box.
+ */
+const SPARK_MARKER_RADIUS = 4;
+const SPARK_VERTICAL_INSET = SPARK_MARKER_RADIUS + SPARK_STROKE / 2;
+
+/**
+ * Project a series into `x`/`y` pairs inside a `w × h` box.
+ *
+ * `x` comes from the sample's TIMESTAMP: the newest point lands at
+ * `w - SPARK_EDGE_INSET` — the right edge, inset only by the stroke's half
+ * width so the line is not clipped — and everything else is placed by how far
+ * back it is inside `series.windowMs`. Uneven sampling therefore reads as
+ * uneven spacing, which is the truth. Points older than the window are
+ * clamped to the left edge rather than drawn off-box.
+ *
+ * The one exception is a series whose samples all carry the same instant:
+ * there is no time information to place them by, so they fall back to even
+ * index spacing rather than collapsing into a single column.
+ */
+function projectSeries(series: MonitorSeries, w: number, h: number): { x: number; y: number }[] {
+  const points = series.points;
+  const values = points.map((p) => p.value);
+  const min = Math.min(...values);
+  const max = Math.max(...values);
   const span = max - min || 1;
-  const pad = 3;
-  return series.map((v, i) => ({
-    x: pad + (i / (series.length - 1)) * (w - pad * 2),
-    y: h - pad - ((v - min) / span) * (h - pad * 2),
+  const right = w - SPARK_EDGE_INSET;
+  const usable = Math.max(0, w - SPARK_EDGE_INSET * 2);
+  const newest = points[points.length - 1].at;
+  const windowMs = series.windowMs > 0 ? series.windowMs : 1;
+  const timed = newest - points[0].at > 0;
+  return points.map((p, i) => ({
+    x: timed
+      ? Math.max(SPARK_EDGE_INSET, right - Math.min(1, (newest - p.at) / windowMs) * usable)
+      : SPARK_EDGE_INSET + (i / (points.length - 1)) * usable,
+    y: h - SPARK_VERTICAL_INSET - ((p.value - min) / span) * (h - SPARK_VERTICAL_INSET * 2),
   }));
 }
 
@@ -796,11 +858,16 @@ function projectSeries(series: number[], w: number, h: number): { x: number; y: 
  * A sparkline: a 2px line, a 10%-opacity area wash, and an end marker
  * carrying a 2px surface ring so it stays legible where it crosses the line.
  * No axes, no gridlines, no per-point labels.
+ *
+ * The wash closes on the FIRST and LAST projected x rather than on constants,
+ * so line, wash and marker all terminate at the same place no matter how wide
+ * the tile is or how much of the window the samples cover.
  */
-function sparkline(series: number[], hue: string, w: number, h: number): SVGElement {
+function sparkline(series: MonitorSeries, hue: string, w: number, h: number): SVGElement {
   const pts = projectSeries(series, w, h);
   const line = pts.map((p) => `${p.x.toFixed(1)},${p.y.toFixed(1)}`).join(' ');
   const last = pts[pts.length - 1];
+  const first = pts[0];
   const svg = svgEl('svg', {
     width: w,
     height: h,
@@ -809,7 +876,7 @@ function sparkline(series: number[], hue: string, w: number, h: number): SVGElem
   });
   svg.append(
     svgEl('polygon', {
-      points: `${line} ${w - 3},${h} 3,${h}`,
+      points: `${line} ${last.x.toFixed(1)},${h} ${first.x.toFixed(1)},${h}`,
       fill: hue,
       'fill-opacity': '0.1',
     }),
@@ -817,28 +884,80 @@ function sparkline(series: number[], hue: string, w: number, h: number): SVGElem
       points: line,
       fill: 'none',
       stroke: hue,
-      'stroke-width': '2',
+      'stroke-width': String(SPARK_STROKE),
       'stroke-linejoin': 'round',
       'stroke-linecap': 'round',
     }),
     svgEl('circle', {
-      cx: last.x,
-      cy: last.y,
-      r: '4',
+      cx: last.x.toFixed(1),
+      cy: last.y.toFixed(1),
+      r: String(SPARK_MARKER_RADIUS),
       fill: hue,
       stroke: 'var(--canvas)',
-      'stroke-width': '2',
+      'stroke-width': String(SPARK_STROKE),
     })
   );
   return svg;
 }
 
+/**
+ * Plot height, and the width used until the box has been measured.
+ *
+ * The width is a FALLBACK, not the design: the chart is drawn at whatever
+ * width its container actually has (see {@link createSparklinePlot}), because
+ * a fixed 300px in a 700px tile leaves the newest — and only still-true —
+ * sample stranded two thirds of the way across.
+ */
+const SPARK_SIZE = {
+  hero: { w: 300, h: 56 },
+  tile: { w: 132, h: 34 },
+} as const;
+
+/**
+ * A sparkline that fills its container and redraws when that container
+ * resizes.
+ *
+ * The SVG is re-projected at the measured width rather than scaled to it: a
+ * `viewBox` stretch would distort the 2px stroke and turn the round end
+ * marker into an ellipse. The observer is handed back to the element so it
+ * can be disconnected on the next render — otherwise every 5s refresh leaves
+ * one behind.
+ */
+function createSparklinePlot(
+  series: MonitorSeries,
+  hue: string,
+  size: { w: number; h: number },
+  observers: ResizeObserver[]
+): HTMLElement {
+  const host = h('div', { class: 'monitor-tile__plot' });
+  let drawn = 0;
+  const draw = (width: number): void => {
+    const w = Math.round(width);
+    if (w <= 0 || w === drawn) return;
+    drawn = w;
+    host.replaceChildren(sparkline(series, hue, w, size.h));
+  };
+  draw(size.w);
+  if (typeof ResizeObserver === 'function') {
+    const observer = new ResizeObserver((entries) => {
+      for (const entry of entries) draw(entry.contentRect.width);
+    });
+    observer.observe(host);
+    observers.push(observer);
+  }
+  return host;
+}
+
 /** The mark for a tile: a sparkline for a rate, a meter for a share. */
-function createVitalPlot(vital: MonitorVital): HTMLElement | null {
+function createVitalPlot(vital: MonitorVital, observers: ResizeObserver[]): HTMLElement | null {
   const hue = accentHue(vital.accent);
-  if (vital.series && vital.series.length > 1) {
-    const size = vital.hero ? { w: 300, h: 56 } : { w: 132, h: 34 };
-    return h('div', { class: 'monitor-tile__plot' }, sparkline(vital.series, hue, size.w, size.h));
+  if (vital.series && vital.series.points.length > 1) {
+    return createSparklinePlot(
+      vital.series,
+      hue,
+      vital.hero ? SPARK_SIZE.hero : SPARK_SIZE.tile,
+      observers
+    );
   }
   if (typeof vital.ratio === 'number') {
     const pct = Math.max(0, Math.min(1, vital.ratio)) * 100;
@@ -855,7 +974,7 @@ function createVitalPlot(vital: MonitorVital): HTMLElement | null {
   return null;
 }
 
-function createVitalTile(vital: MonitorVital): HTMLElement {
+function createVitalTile(vital: MonitorVital, observers: ResizeObserver[]): HTMLElement {
   const tile = h('section', {
     class: `monitor-tile${vital.hero ? ' monitor-tile--hero' : ''}`,
     'data-vital': vital.id,
@@ -869,14 +988,18 @@ function createVitalTile(vital: MonitorVital): HTMLElement {
       vital.unit ? h('span', { class: 'monitor-tile__unit' }, vital.unit) : null
     ),
     vital.delta ? h('span', { class: 'monitor-tile__delta' }, vital.delta) : null,
-    createVitalPlot(vital),
+    createVitalPlot(vital, observers),
     vital.foot ? h('span', { class: 'monitor-tile__foot' }, vital.foot) : null,
   ]);
   return tile;
 }
 
-function createVitals(vitals: MonitorVital[]): HTMLElement {
-  return h('div', { class: 'monitor-vitals' }, ...vitals.map(createVitalTile));
+function createVitals(vitals: MonitorVital[], observers: ResizeObserver[]): HTMLElement {
+  return h(
+    'div',
+    { class: 'monitor-vitals' },
+    ...vitals.map((vital) => createVitalTile(vital, observers))
+  );
 }
 
 // ---------------------------------------------------------------------------
@@ -1220,7 +1343,10 @@ let monitorInstance = 0;
  *
  *  1. **Vitals** — rates and ratios over time (hero figure, stat tiles with
  *     sparklines, a meter). The only tier with a time axis, and the only
- *     honest answer to "how hard is this thing working".
+ *     honest answer to "how hard is this thing working". That axis is a
+ *     FIXED window anchored at the newest sample and drawn at the tile's real
+ *     width (`MonitorSeries`), so two glances a minute apart are comparable
+ *     and "now" is always flush against the right edge.
  *  2. **Attention** — what is degraded, newest first. A count of problems is
  *     a dead end; this is the list it should have expanded into. Healthy
  *     state is a single "All clear" line.
@@ -1246,6 +1372,13 @@ export class SliccMonitor extends HTMLElement {
   #expanded = new Set<string>();
   #initialized = false;
   readonly #instanceId = ++monitorInstance;
+  /**
+   * One `ResizeObserver` per sparkline, so each plot can redraw at its
+   * container's real width. Dropped on every re-render and on disconnect —
+   * the panel re-renders every 5s, so leaking them would accumulate an
+   * observer per tile per refresh.
+   */
+  #plotObservers: ResizeObserver[] = [];
 
   connectedCallback(): void {
     ensureMonitorStyle(this.ownerDocument);
@@ -1256,11 +1389,25 @@ export class SliccMonitor extends HTMLElement {
     this.#render();
   }
 
+  disconnectedCallback(): void {
+    this.#disconnectPlots();
+  }
+
+  #disconnectPlots(): void {
+    for (const observer of this.#plotObservers) observer.disconnect();
+    this.#plotObservers = [];
+  }
+
   /** The full panel model (returns a copy). */
   get model(): MonitorModel {
     return {
       ...this.#model,
-      vitals: this.#model.vitals?.map((v) => ({ ...v, series: v.series?.slice() })),
+      vitals: this.#model.vitals?.map((v) => ({
+        ...v,
+        series: v.series
+          ? { ...v.series, points: v.series.points.map((p) => ({ ...p })) }
+          : v.series,
+      })),
       alerts: this.#model.alerts?.map((a) => ({ ...a })),
       sections: this.#model.sections?.map(cloneSection),
       processes: this.#model.processes
@@ -1365,10 +1512,11 @@ export class SliccMonitor extends HTMLElement {
 
   #render(): void {
     const { vitals = [], alerts, sections = [], processes } = this.#model;
+    this.#disconnectPlots();
     const panel = h('div', { class: 'monitor' });
     append(panel, [
       this.#createHeader(),
-      vitals.length > 0 ? createVitals(vitals) : null,
+      vitals.length > 0 ? createVitals(vitals, this.#plotObservers) : null,
       alerts ? createAttention(alerts) : null,
       sections.length > 0 ? this.#createTopology(sections) : null,
       processes ? createProcesses(processes) : null,

@@ -251,6 +251,8 @@ export {
   type MonitorProcessTable,
   type MonitorRow,
   type MonitorSection,
+  type MonitorSeries,
+  type MonitorSeriesPoint,
   type MonitorStatus,
   type MonitorVital,
   SliccMonitor,
