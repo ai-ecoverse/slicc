@@ -41,7 +41,9 @@ export interface KnownFlagSpec {
  *
  * Everything after a `--` terminator is positional, so a payload that
  * genuinely starts with a dash stays reachable. A bare `-` (stdin
- * placeholder) is positional, not a flag.
+ * placeholder) is positional, not a flag. Purely numeric tokens with a
+ * leading minus (`-300`, `-0.5`) are positionals too — mousewheel /
+ * mousemove deltas and coordinates must not be mistaken for flags.
  *
  * On success returns positionals plus the collected values/bools; on
  * failure returns `{ error }` with a message suitable for stderr
@@ -83,7 +85,7 @@ export function parseKnownFlags(
       positionals.push(...args.slice(i + 1));
       break;
     }
-    if (!arg.startsWith('-') || arg === '-') {
+    if (!arg.startsWith('-') || arg === '-' || isNumericLiteral(arg)) {
       positionals.push(arg);
       continue;
     }
@@ -103,4 +105,10 @@ export function parseKnownFlags(
     return { error: `unknown flag: ${name}` };
   }
   return { positionals, values, bools };
+}
+
+/** True for finite numeric tokens such as `-300` or `-0.5` (not `--300`). */
+function isNumericLiteral(arg: string): boolean {
+  if (arg.startsWith('--')) return false;
+  return Number.isFinite(Number(arg));
 }

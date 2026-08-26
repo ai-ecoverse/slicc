@@ -107,4 +107,17 @@ describe('parseKnownFlags', () => {
       error: 'unknown flag: --help',
     });
   });
+
+  it('treats negative numeric tokens as positionals', () => {
+    const r = parseKnownFlags(['--tab=id', '0', '-300'], { value: ['--tab'] });
+    expect('error' in r).toBe(false);
+    if ('error' in r) return;
+    expect(r.positionals).toEqual(['0', '-300']);
+    expect(r.values.get('--tab')).toBe('id');
+  });
+
+  it('still rejects non-numeric dash tokens', () => {
+    const r = parseKnownFlags(['-bogus'], { bool: ['--json'] });
+    expect(r).toEqual({ error: 'unknown flag: -bogus' });
+  });
 });
