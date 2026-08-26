@@ -42,6 +42,8 @@ struct MessageListView: View {
     var sudoAllowAlways = false
     var onSudoApprovalDecision: ((String, SudoApprovalDecision) -> Void)?
     /// Forwarded to inline sprinkle bubbles for `sprinkle.lick` events.
+    /// Injected into the environment rather than handed to each row — see
+    /// `MessageBubble`'s `Equatable` conformance.
     var onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)?
     /// Owned above ChatView's compact/regular branch so subtree replacement
     /// restores the same viewport instead of jumping to the newest message.
@@ -86,6 +88,7 @@ struct MessageListView: View {
             }
         }
         .background(palette.canvas)
+        .environment(\.inlineSprinkleLick, onInlineSprinkleLick ?? { _, _ in })
     }
 
     // MARK: - Empty State
@@ -119,9 +122,13 @@ struct MessageListView: View {
                     ForEach(group.messages) { message in
                         MessageBubble(
                             message: message,
-                            onInlineSprinkleLick: onInlineSprinkleLick,
-                            toolProgress: toolProgress
+                            toolProgress: progressSlice(for: message)
                         )
+                        // Load-bearing: the `Equatable` conformance only takes
+                        // effect through this modifier. Without it SwiftUI
+                        // falls back to its own reflection-based comparison,
+                        // which the environment-read properties defeat.
+                        .equatable()
                         .id(message.id)
                         .padding(.horizontal, 12)
                         // SwiftUI pushes an identifier down onto the row's
@@ -199,6 +206,32 @@ struct MessageListView: View {
         }
     }
 
+    /// The progress units belonging to ONE message's tool rows.
+    ///
+    /// Every row used to receive the entire `AppState.toolProgress`
+    /// dictionary, so a single tick on a single tool changed every bubble's
+    /// value and invalidated the whole transcript. Slicing it per row means an
+    /// unchanged row keeps an equal value and SwiftUI can skip it. Rows with
+    /// no tool calls get an empty dictionary, which is free.
+    private func progressSlice(for message: ChatMessage) -> [String: ToolProgressEvent] {
+        guard !toolProgress.isEmpty, let calls = message.toolCalls, !calls.isEmpty else {
+            return [:]
+        }
+        var slice: [String: ToolProgressEvent] = [:]
+        for call in calls {
+            if let unit = toolProgress[call.id] { slice[call.id] = unit }
+        }
+        return slice
+    }
+
+    #if DEBUG
+        /// Test seam for the per-row slice, which is otherwise private to the
+        /// body-building path.
+        func progressSliceForTesting(_ message: ChatMessage) -> [String: ToolProgressEvent] {
+            progressSlice(for: message)
+        }
+    #endif
+
     // MARK: - Timestamp Grouping
 
     private var groupedMessages: [MessageGroup] {
@@ -231,20 +264,39 @@ struct MessageListView: View {
         return groups
     }
 
-    private static func timestampLabel(for date: Date, calendar: Calendar) -> String {
+    /// Two shared formatters, built once.
+    ///
+    /// `groupedMessages` is recomputed on every body evaluation and calls this
+    /// once per message, so a `DateFormatter()` per call meant N allocations
+    /// per render — measured at 44 regroupings while scrolling back two
+    /// screens, and 38 more while typing a single sentence. Constructing a
+    /// `DateFormatter` is one of the more expensive things in Foundation.
+    ///
+    /// Safe to share: both are only read, never reconfigured, and the
+    /// transcript renders on the main actor. The old code mutated one
+    /// formatter's `dateStyle` mid-function, which is exactly why it could not
+    /// be hoisted as-is.
+    private static let timeOnlyFormatter: DateFormatter = {
         let formatter = DateFormatter()
         formatter.timeStyle = .short
-        let timeStr = formatter.string(from: date)
+        return formatter
+    }()
 
+    private static let dateAndTimeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.dateStyle = .medium
+        formatter.timeStyle = .short
+        return formatter
+    }()
+
+    static func timestampLabel(for date: Date, calendar: Calendar) -> String {
         if calendar.isDateInToday(date) {
-            return "Today \(timeStr)"
-        } else if calendar.isDateInYesterday(date) {
-            return "Yesterday \(timeStr)"
-        } else {
-            formatter.dateStyle = .medium
-            formatter.timeStyle = .short
-            return formatter.string(from: date)
+            return "Today \(timeOnlyFormatter.string(from: date))"
         }
+        if calendar.isDateInYesterday(date) {
+            return "Yesterday \(timeOnlyFormatter.string(from: date))"
+        }
+        return dateAndTimeFormatter.string(from: date)
     }
 }
 

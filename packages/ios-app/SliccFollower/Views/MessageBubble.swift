@@ -6,16 +6,33 @@ import SwiftUI
 /// Renders a single chat message — user bubbles on the right, lick rows
 /// as compact pills (no avatar/bubble), assistant text flowing on the
 /// dark background like the web UI.
-struct MessageBubble: View {
+/// `Equatable` on purpose. The transcript re-evaluates this view constantly
+/// (measured: 871 body evaluations to scroll back two screens over 18
+/// messages), and SwiftUI can only skip an unchanged row if the row's VALUE
+/// compares equal. That requires two things, both load-bearing:
+///
+/// - no stored closures — `onInlineSprinkleLick` moved to
+///   `@Environment(\.inlineSprinkleLick)`, because a closure never compares
+///   equal and one stored property is enough to defeat the whole comparison;
+/// - only THIS row's progress units, not the entire `AppState.toolProgress`
+///   dictionary, or one tick on one tool invalidates every row on screen.
+struct MessageBubble: View, Equatable {
     let message: ChatMessage
-    /// Optional callback for inline sprinkle licks (forwarded to AppState).
-    var onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)?
-    /// Live progress units for the tool rows in this message, keyed by row id
-    /// (`AppState.toolProgress`). Empty for history and for every fixture that
-    /// does not stage a run.
+    /// Live progress units for the tool rows in THIS message, keyed by row id.
+    /// Sliced by `MessageListView`; empty for history and for every fixture
+    /// that does not stage a run.
     var toolProgress: [String: ToolProgressEvent] = [:]
 
     @Environment(\.palette) private var palette
+    @Environment(\.inlineSprinkleLick) private var onInlineSprinkleLick
+
+    /// Environment values are not part of a view's value, so they are
+    /// deliberately absent here: the palette changes for the whole transcript
+    /// at once (a theme switch re-renders everything anyway), and the lick
+    /// handler is identity-stable.
+    static func == (lhs: MessageBubble, rhs: MessageBubble) -> Bool {
+        lhs.message == rhs.message && lhs.toolProgress == rhs.toolProgress
+    }
 
     /// True when this message should render as a compact lick pill.
     /// Mirrors the web UI rule: source == "lick" or known lick channel.
@@ -166,7 +183,7 @@ struct MessageBubble: View {
                         id: "\(message.id)-\(frameId)",
                         html: fragment,
                         onLick: { body, target in
-                            onInlineSprinkleLick?(body, target)
+                            onInlineSprinkleLick(body, target)
                         }
                     )
                 }

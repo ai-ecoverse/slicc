@@ -58,7 +58,54 @@ struct MarkdownTable: Equatable {
 /// how comparison tables arrived as raw `| … | … |` rows.
 enum MarkdownBlockParser {
 
+    /// Memoized block grammar for a message body.
+    ///
+    /// `MarkdownText.blocks` is a computed property on a `View`, so it re-parses
+    /// on **every body evaluation** — and the transcript re-evaluates its rows
+    /// constantly (measured: 227 full re-parses just to scroll back two
+    /// screens, on an 18-message fixture). Message bodies are immutable once a
+    /// turn settles, so the same string parses to the same blocks forever;
+    /// nothing but the streaming tail is ever a genuine miss.
+    ///
+    /// `NSCache` rather than a dictionary: it is thread-safe and evicts under
+    /// memory pressure on its own, which matters because a streaming reply
+    /// mints a new key per token and would otherwise grow without bound.
+    private static let cache: NSCache<NSString, CachedBlocks> = {
+        let cache = NSCache<NSString, CachedBlocks>()
+        cache.countLimit = 256
+        return cache
+    }()
+
+    /// Box, because `NSCache` holds objects and `[MarkdownBlock]` is a value.
+    private final class CachedBlocks {
+        let blocks: [MarkdownBlock]
+        init(_ blocks: [MarkdownBlock]) { self.blocks = blocks }
+    }
+
+    /// Test seam: how many times the real parser actually ran. Only a cache
+    /// MISS increments it, so a test can assert the memoization rather than
+    /// just the output.
+    #if DEBUG
+        private(set) nonisolated(unsafe) static var parseCount = 0
+
+        static func resetParseCountForTesting() {
+            parseCount = 0
+            cache.removeAllObjects()
+        }
+    #endif
+
     static func parse(_ content: String) -> [MarkdownBlock] {
+        let key = content as NSString
+        if let hit = cache.object(forKey: key) { return hit.blocks }
+        let blocks = parseUncached(content)
+        cache.setObject(CachedBlocks(blocks), forKey: key)
+        return blocks
+    }
+
+    private static func parseUncached(_ content: String) -> [MarkdownBlock] {
+        #if DEBUG
+            parseCount += 1
+        #endif
         var blocks: [MarkdownBlock] = []
         let lines = content.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
 

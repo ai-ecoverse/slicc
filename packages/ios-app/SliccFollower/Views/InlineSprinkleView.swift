@@ -541,6 +541,26 @@ struct InlineSprinkleView: UIViewRepresentable {
         """
 }
 
+// MARK: - Inline sprinkle lick handler
+
+/// The inline-sprinkle lick callback, carried in the environment rather than
+/// in each row's value.
+///
+/// A closure stored on a `View` never compares equal, so SwiftUI can never
+/// skip that view's body — which defeated every attempt to memoize the
+/// transcript's rows. Moving it into the environment lets `MessageBubble` be a
+/// plain-data, `Equatable` struct. Same pattern as `horizontalScrollAction`.
+private struct InlineSprinkleLickKey: EnvironmentKey {
+    static let defaultValue: (AnyCodable?, String?) -> Void = { _, _ in }
+}
+
+extension EnvironmentValues {
+    var inlineSprinkleLick: (AnyCodable?, String?) -> Void {
+        get { self[InlineSprinkleLickKey.self] }
+        set { self[InlineSprinkleLickKey.self] = newValue }
+    }
+}
+
 // MARK: - Helpers
 
 /// Detect ` ```shtml ` fenced code blocks AND bare top-level
