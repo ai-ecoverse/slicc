@@ -34,6 +34,8 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { Process, ProcessManager, ProcessStatus } from '../../kernel/process-manager.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
 
 export interface PsCommandOptions {
   /**
@@ -58,9 +60,19 @@ const STAT_MAP: Record<ProcessStatus, string> = {
 
 const COMMAND_MAX = 80;
 
+/** Boolean flags (exact token only). */
+const PS_BOOL_FLAGS = ['-a', '-A', '-e', '--all', '-T', '--tree'] as const;
+/** Value-taking flags — same names for `isHelpRequest`. */
+const PS_VALUE_FLAGS = ['-o', '--columns'] as const;
+
+/** Globals the kernel host publishes for commands that need the live PM. */
+interface KernelGlobals {
+  __slicc_pm?: unknown;
+}
+
 export function createPsCommand(options: PsCommandOptions = {}): Command {
   return defineCommand('ps', async (args) => {
-    if (args.includes('--help') || args.includes('-h')) {
+    if (isHelpRequest(args, { valueFlags: PS_VALUE_FLAGS })) {
       return psHelp();
     }
 
@@ -73,41 +85,42 @@ export function createPsCommand(options: PsCommandOptions = {}): Command {
       };
     }
 
+    const flagParse = parseKnownFlags(args, { bool: PS_BOOL_FLAGS, value: PS_VALUE_FLAGS });
+    if ('error' in flagParse) {
+      return {
+        stdout: '',
+        stderr: `ps: ${flagParse.error}\n`,
+        exitCode: flagParse.error.startsWith('unknown flag:') ? 1 : 2,
+      };
+    }
+
+    if (flagParse.positionals.length > 0) {
+      return {
+        stdout: '',
+        stderr: `ps: unrecognized argument '${flagParse.positionals[0]}'\n`,
+        exitCode: 2,
+      };
+    }
+
     let columns: Column[] = DEFAULT_COLUMNS;
-    let tree = false;
+    const tree = flagParse.bools.has('-T') || flagParse.bools.has('--tree');
     // By default `ps` shows only live processes (running / pending).
     // Exited/killed entries aren't reaped — they linger so
     // post-mortem `ps` after `kill` can still show the exit code —
     // but listing them by default is noisy. `-a`/`-A`/`-e` includes
     // them.
-    let showAll = false;
-    for (let i = 0; i < args.length; i++) {
-      const a = args[i];
-      if (a === '-a' || a === '-A' || a === '-e' || a === '--all') {
-        showAll = true;
-        continue;
+    const showAll =
+      flagParse.bools.has('-a') ||
+      flagParse.bools.has('-A') ||
+      flagParse.bools.has('-e') ||
+      flagParse.bools.has('--all');
+    const rawColumns = flagParse.values.get('-o') ?? flagParse.values.get('--columns');
+    if (rawColumns !== undefined) {
+      const parsed = parseColumns(rawColumns);
+      if (parsed instanceof Error) {
+        return { stdout: '', stderr: `ps: ${parsed.message}\n`, exitCode: 2 };
       }
-      if (a === '-T' || a === '--tree') {
-        tree = true;
-        continue;
-      }
-      if (a === '-o' || a.startsWith('--columns=') || a.startsWith('-o=')) {
-        const raw = a.startsWith('-o=')
-          ? a.slice(3)
-          : a.startsWith('--columns=')
-            ? a.slice('--columns='.length)
-            : args[++i];
-        if (typeof raw !== 'string') {
-          return { stdout: '', stderr: `ps: -o requires an argument\n`, exitCode: 2 };
-        }
-        const parsed = parseColumns(raw);
-        if (parsed instanceof Error) {
-          return { stdout: '', stderr: `ps: ${parsed.message}\n`, exitCode: 2 };
-        }
-        columns = parsed;
-        continue;
-      }
-      return { stdout: '', stderr: `ps: unrecognized argument '${a}'\n`, exitCode: 2 };
+      columns = parsed;
     }
 
     const all = pm.list().sort((a, b) => a.pid - b.pid);
@@ -130,8 +143,7 @@ export function createPsCommand(options: PsCommandOptions = {}): Command {
 // ---------------------------------------------------------------------------
 
 function lookupGlobalPm(): ProcessManager | null {
-  const g = globalThis as Record<string, unknown>;
-  const pm = g.__slicc_pm;
+  const pm = (globalThis as KernelGlobals).__slicc_pm;
   return pm instanceof Object && typeof (pm as ProcessManager).list === 'function'
     ? (pm as ProcessManager)
     : null;

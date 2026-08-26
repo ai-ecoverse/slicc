@@ -128,6 +128,14 @@ describe('ps command', () => {
     expect(result.stderr).toContain('unknown column');
   });
 
+  it('rejects unknown flags with exit 1 (#2255)', async () => {
+    const pm = new ProcessManager();
+    const cmd = createPsCommand({ processManager: pm });
+    const result = await cmd.execute(['--bogus'], mockCtx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('ps: unknown flag: --bogus');
+  });
+
   it('falls back to globalThis.__slicc_pm when no DI is provided', async () => {
     const pm = new ProcessManager();
     pm.spawn({ kind: 'shell', argv: ['hello'], owner: { kind: 'system' } });
