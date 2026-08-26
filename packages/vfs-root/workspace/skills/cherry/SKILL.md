@@ -90,6 +90,9 @@ Notes:
 
 - The event `name` is required. `--detail` must be valid JSON or the command
   errors.
+- Known flags (`--detail`, `--runtime`) are accepted in any position. Unknown
+  dash-prefixed flags exit non-zero (`cherry-emit: unknown flag: --x`). Use
+  `--` before a name that itself starts with `-`.
 - If no cherry follower runtime is connected, the command exits non-zero with
   `cherry-emit: no cherry follower runtime is connected`.
 - When more than one runtime is connected you MUST pass `--runtime <id>`; the
