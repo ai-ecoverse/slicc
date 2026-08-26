@@ -1,0 +1,895 @@
+/**
+ * Modal keyboard mode for the WC shell — vim's idea, applied to a UI whose
+ * primary control is a text field.
+ *
+ * SLICC is keyboard-heavy: the composer has focus most of the time, so any
+ * unmodified single-letter shortcut would fight the thing the user is
+ * actually doing, and every modified one collides with the browser (⌘+digit
+ * and, off macOS, Ctrl+digit are its tab switcher). A MODE resolves both at
+ * once: <kbd>Esc</kbd> leaves the text field and enters keyboard mode, and
+ * inside it every binding is a bare letter.
+ *
+ * ## The Escape contract
+ *
+ * One press enters the mode and is swallowed; a second press exits it AND
+ * leaves fullscreen. That is why the first press calls `preventDefault()` and
+ * the second deliberately does not, and why the second also calls
+ * `exitFullscreen()` explicitly: under Keyboard Lock (which this module
+ * requests while the document is fullscreen — the only mechanism that can
+ * hold Escape there) the browser would otherwise never see an Escape at all,
+ * so the exit has to be performed rather than merely permitted.
+ *
+ * An Escape belonging to an open overlay is never taken: `<slicc-dialog>` and
+ * `<slicc-tab-overlay>` stop propagation in the capture phase and so never
+ * reach this listener at all, `<slicc-permissions>` calls `preventDefault()`,
+ * and `<slicc-quick-look>` does neither — hence {@link hasOpenOverlay}, which
+ * exists for that last one.
+ *
+ * ## Everything routes through the surface's own event
+ *
+ * A digit calls `switcher.select()`, a panel calls `dock.selectItem()`, the
+ * rail calls `freezer.toggle()`, a new conversation dispatches the same
+ * `new-chat-save` the rail's action row fires. Each is the exact event a
+ * click produces, so every float's existing wiring — selection semantics,
+ * queue stashing, read-only locks, sprinkle activation, tray round trips —
+ * stays the single implementation, and a shortcut can never drift from what
+ * the mouse does.
+ *
+ * ## Leaving the mode
+ *
+ * Navigation keys (digits, `d`, `b`, `s`, help) keep the mode: you are still
+ * driving from the keyboard. Anything that hands focus to a surface (`c`,
+ * Enter, `n`, `f`, `e`, `m`, `t`, `a`) leaves it. Focus entering a text field
+ * by ANY route exits it too — otherwise the mode would silently eat what the
+ * user types into the field they just clicked.
+ */
+
+/** The bit of `<slicc-agent-tabs>` the mode drives. */
+export interface ShortcutSwitcher {
+  /** Tab descriptors in rendered order; `key` is the unit's jid. */
+  readonly scoops: ReadonlyArray<{ key: string; label?: string }>;
+  /** The selected tab's key, used to find "the next one". */
+  readonly active: string | null;
+  /** Select by key — dispatches `slicc-scoop-select`, exactly like a click. */
+  select(key: string): void;
+}
+
+/** The bit of `<slicc-dock>` the mode drives. */
+export interface ShortcutDock {
+  readonly items: ReadonlyArray<{ id: string; kind?: 'sprinkle' | 'tool' }>;
+  readonly active: string | null;
+  /** Select by id — dispatches `slicc-dock-select`, exactly like a click. */
+  selectItem(id: string): void;
+  /** Close the active item's panel — what clicking the ACTIVE item does. */
+  collapse(): void;
+}
+
+/** The bit of `<slicc-composer-meta>` the mode drives. */
+export interface ShortcutComposerMeta {
+  /** Empty exactly when no account is connected — the pill's "Add AI" state. */
+  readonly models: readonly unknown[];
+  /** Open the model dropdown, as clicking the pill does. */
+  openMenu(): void;
+}
+
+/** The bit of `<slicc-freezer>` the mode drives. */
+export interface ShortcutFreezer extends EventTarget {
+  /** Expand/collapse the left rail; emits `freezer-toggle`. */
+  toggle(force?: boolean): void;
+}
+
+export interface ShortcutDeps {
+  switcher: ShortcutSwitcher;
+  /** The right-hand dock rail (files / terminal / memory / browser / sprinkles). */
+  dock?: ShortcutDock;
+  /** The left rail, toggled by `b` and the target of the new-conversation event. */
+  freezer?: ShortcutFreezer;
+  /** The model pill; `openMenu()` is its own programmatic click. */
+  composerMeta?: ShortcutComposerMeta;
+  /** Put the caret in the composer (`c` / Enter). */
+  focusComposer?: () => void;
+  /** Injected for tests; defaults to the switcher's own document. */
+  doc?: Document;
+}
+
+/** Actions the shell cannot reach on its own, registered by later wiring. */
+export interface ShortcutActions {
+  /** Open account settings (`a`) — wired by `wc-nav.ts`, leader-only. */
+  accounts?: () => void;
+}
+
+export interface ShortcutHandles {
+  /** Remove every listener, leave the mode, drop any open overlay. */
+  dispose(): void;
+  /** Open the help overlay (what `h` does). */
+  showHelp(): void;
+  /** Close it, if open. */
+  hideHelp(): void;
+  /** The mounted overlay element, or `null` when closed (for tests). */
+  helpOverlay(): HTMLElement | null;
+  /** Whether keyboard mode is on. */
+  active(): boolean;
+  /** Enter / leave keyboard mode programmatically. */
+  setActive(on: boolean): void;
+  /** Late-bind an action the shell itself cannot reach (see {@link ShortcutActions}). */
+  setAction<K extends keyof ShortcutActions>(name: K, fn: ShortcutActions[K]): void;
+  /**
+   * Replace the key → command mapping (what `/etc/slicc/keys.json` does).
+   * Applied whole, not merged: the config loader owns merging over
+   * {@link DEFAULT_KEYMAP}, so what arrives here is the final answer.
+   */
+  setKeymap(keymap: Readonly<Record<string, CommandId>>): void;
+  /** The mapping in force, for the help sheet and for tests. */
+  keymap(): Readonly<Record<string, CommandId>>;
+}
+
+type ModalElement = HTMLElement & { show?: () => void; hide?: () => void };
+
+/** One documented binding: the keys, what it does, and whether it holds the mode. */
+export interface ShortcutRow {
+  keys: string[];
+  description: string;
+}
+
+const STYLE_ID = 'slicc-shortcuts-style';
+const CSS = `
+slicc-dialog.wcsc-dialog::part(dialog){width:min(440px,92vw);}
+.wcsc{display:flex;flex-direction:column;gap:2px;font-family:var(--ui);color:var(--ink);}
+.wcsc__note{font-size:12px;color:var(--txt-3);padding:0 2px 8px;line-height:1.5;}
+.wcsc__row{display:flex;align-items:center;gap:12px;padding:7px 2px;border-bottom:1px solid var(--line);}
+.wcsc__row:last-child{border-bottom:0;}
+.wcsc__desc{flex:1;min-width:0;font-size:12.5px;}
+.wcsc__keys{display:flex;align-items:center;gap:4px;flex:0 0 auto;}
+.wcsc__key{font:600 11px/1 var(--mono,ui-monospace,monospace);color:var(--txt-2);background:var(--ghost);border:1px solid var(--line);border-bottom-width:2px;border-radius:5px;padding:4px 6px;white-space:nowrap;}
+.wcsc__sep{font-size:11px;color:var(--txt-3);}
+.wcsc-badge{position:fixed;left:50%;bottom:18px;z-index:90;transform:translateX(-50%);display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;pointer-events:none;font:600 11.5px/1 var(--ui);color:var(--ink);background:color-mix(in srgb,var(--canvas) 88%,transparent);border:1px solid var(--line);box-shadow:0 6px 20px -8px rgba(10,10,10,.45);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
+.wcsc-badge__dot{width:7px;height:7px;border-radius:50%;background:var(--ctx,var(--waffle,#e6a03c));box-shadow:0 0 0 3px color-mix(in srgb,var(--ctx,#e6a03c) 22%,transparent);}
+.wcsc-badge__hint{color:var(--txt-3);font-weight:500;}
+.wcsc-badge__hint[hidden]{display:none;}
+.wcsc-badge__keys{display:none;align-items:center;gap:5px;}
+.wcsc-badge__keys:not(:empty){display:flex;}
+.wcsc-badge__press{display:flex;align-items:center;gap:2px;}
+.wcsc-badge__cap{min-width:20px;padding:3px 6px;border-radius:5px;text-align:center;font:600 12px/1 var(--mono,ui-monospace,monospace);color:var(--ink);background:var(--ghost);border:1px solid var(--line);border-bottom-width:2px;}
+.wcsc-badge__press[data-bound='false'] .wcsc-badge__cap{color:var(--txt-3);opacity:.55;border-bottom-width:1px;}
+.wcsc-badge__press[data-age='stale'] .wcsc-badge__cap{opacity:.4;}
+.wcsc-badge__press[data-age='stale'][data-bound='false'] .wcsc-badge__cap{opacity:.25;}
+@media (prefers-reduced-motion:no-preference){.wcsc-badge__press{animation:wcsc-press-in .12s ease-out;}}
+@keyframes wcsc-press-in{from{opacity:0;transform:translateY(2px) scale(.94);}to{opacity:1;transform:none;}}
+@media (prefers-reduced-motion:no-preference){.wcsc-badge{animation:wcsc-badge-in .14s ease-out;}}
+@keyframes wcsc-badge-in{from{opacity:0;transform:translateX(-50%) translateY(4px);}to{opacity:1;transform:translateX(-50%);}}
+`;
+
+/**
+ * Is the event headed somewhere the user is typing? Read from
+ * `composedPath()` so a `<textarea>` inside a shadow root (the composer, the
+ * terminal's helper input) is seen for what it is — `event.target` would be
+ * retargeted to the host element and read as "not typing".
+ */
+export function isTypingTarget(target: EventTarget | null | undefined): boolean {
+  if (!target || typeof target !== 'object') return false;
+  // Duck-typed, not `instanceof HTMLElement`: an element from another realm
+  // (an iframe, jsdom) fails the identity check while being exactly the thing
+  // we must not steal keystrokes from.
+  const el = target as Partial<HTMLElement> & { tagName?: unknown };
+  const tag = typeof el.tagName === 'string' ? el.tagName.toUpperCase() : '';
+  if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return true;
+  if (el.isContentEditable === true) return true;
+  // `isContentEditable` is a computed property some DOM implementations
+  // (jsdom) never define, and it is the only one that sees inheritance —
+  // hence the walk to the nearest declaring ancestor rather than a lookup on
+  // the target alone.
+  const editable = (el as Partial<Element>).closest?.('[contenteditable]');
+  return !!editable && editable.getAttribute('contenteditable') !== 'false';
+}
+
+/** The deepest node an event was dispatched at, piercing shadow roots. */
+export function deepTarget(event: Event): EventTarget | null {
+  const path = typeof event.composedPath === 'function' ? event.composedPath() : [];
+  return (path[0] as EventTarget | undefined) ?? event.target;
+}
+
+/**
+ * Is a modal surface open that owns Escape? Only `<slicc-quick-look>` really
+ * needs asking — the other overlays either stop propagation before this
+ * module's listener (`<slicc-dialog>`, `<slicc-tab-overlay>`) or mark the
+ * event handled (`<slicc-permissions>`) — but the check is written over all of
+ * them so a future overlay that forgets to do either is still respected.
+ *
+ * Every selector here MUST test open-ness, not mere presence: the shell mounts
+ * `<slicc-permissions>` and `<slicc-tab-overlay>` once at boot and leaves them
+ * in the DOM for the session, so a bare tag selector matches forever and eats
+ * every Escape. Quick Look is the exception that has no open state to test —
+ * it is created when it opens and removed when it closes.
+ */
+export function hasOpenOverlay(doc: Document): boolean {
+  return !!doc.querySelector(
+    'slicc-quick-look, slicc-dialog[open], slicc-tab-overlay[open], .slicc-permissions__prompt[data-open]'
+  );
+}
+
+/** The digit 1–9 a key event names, or `null`. */
+export function digitFor(event: KeyboardEvent): number | null {
+  // `code` first: the physical key is the stable reading of "the 3 key"
+  // across layouts and modifier states.
+  const byCode = /^Digit([1-9])$/.exec(event.code ?? '');
+  if (byCode) return Number(byCode[1]);
+  return /^[1-9]$/.test(event.key) ? Number(event.key) : null;
+}
+
+/**
+ * The unit a digit selects: `1`–`8` index the strip, `9` is always the last
+ * tab (the browser-tab convention). `null` when the strip is shorter.
+ */
+export function unitKeyForDigit(
+  scoops: ReadonlyArray<{ key: string }>,
+  digit: number
+): string | null {
+  if (scoops.length === 0) return null;
+  if (digit === 9) return scoops[scoops.length - 1].key;
+  return scoops[digit - 1]?.key ?? null;
+}
+
+/**
+ * The entry after `current`, wrapping — and the first entry when `current` is
+ * unknown, so a cycle key always goes somewhere. `null` only for an empty list.
+ */
+export function nextInCycle(keys: readonly string[], current: string | null): string | null {
+  if (keys.length === 0) return null;
+  const index = current === null ? -1 : keys.indexOf(current);
+  return keys[(index + 1) % keys.length] ?? null;
+}
+
+/** Sprinkle launchers in the dock rail, in rail order. */
+export function sprinkleIds(dock: ShortcutDock): string[] {
+  return dock.items.filter((i) => i.kind === 'sprinkle' && i.id !== 'new').map((i) => i.id);
+}
+
+/** What a command needs to do its work. */
+interface CommandContext {
+  deps: ShortcutDeps;
+  actions: ShortcutActions;
+  state: ModeState;
+  toggleHelp(): void;
+}
+
+/** Mutable per-wiring state a command may read or advance. */
+interface ModeState {
+  /** The dock surface `rightRail` reopens after it has closed one. */
+  lastDockSurface: string;
+}
+
+/**
+ * One binding. `holdsMode` is the whole modal grammar in a boolean: a command
+ * that navigates — or that toggles chrome, like the two rails — keeps keyboard
+ * mode; a command that hands focus to a surface gives it up (the mode is
+ * dropped BEFORE the command runs, so a surface that autofocuses is not
+ * immediately undone by it).
+ */
+interface Command {
+  holdsMode: boolean;
+  description: string;
+  run(ctx: CommandContext): void;
+}
+
+/**
+ * What a command IS, independent of the key that runs it. The keymap maps keys
+ * onto these ids, which is what makes `/etc/slicc/keys.json` possible: a user
+ * rebinds `t` to `terminal` without knowing anything about the code, and a
+ * default key can change without invalidating a config.
+ */
+export type CommandId =
+  | 'nextAgent'
+  | 'composer'
+  | 'newConversation'
+  | 'leftRail'
+  | 'rightRail'
+  | 'files'
+  | 'tabs'
+  | 'terminal'
+  | 'memory'
+  | 'sprinkles'
+  | 'model'
+  | 'accounts'
+  | 'help';
+
+/** Go to a dock surface — the same event the rail item's click emits. */
+function surfaceCommand(id: string, description: string): Command {
+  return {
+    holdsMode: false,
+    description,
+    run: ({ deps, state }) => {
+      state.lastDockSurface = id;
+      deps.dock?.selectItem(id);
+    },
+  };
+}
+
+/**
+ * The keyboard-mode command table. Insertion order is help order.
+ *
+ * Every entry reaches its surface through the surface's OWN event — the
+ * strip's `select`, the dock's `selectItem`/`collapse`, the rail's `toggle`,
+ * the action row's `new-chat-save`, the model pill's `openMenu` — so a
+ * shortcut is indistinguishable from a click and cannot drift from one.
+ */
+const COMMANDS: Readonly<Record<CommandId, Command>> = {
+  nextAgent: {
+    holdsMode: true,
+    description: 'Next agent, looping',
+    run: ({ deps }) => {
+      const next = nextInCycle(
+        deps.switcher.scoops.map((s) => s.key),
+        deps.switcher.active
+      );
+      if (next) deps.switcher.select(next);
+    },
+  },
+  composer: {
+    holdsMode: false,
+    description: 'Back to the composer',
+    run: ({ deps }) => deps.focusComposer?.(),
+  },
+  newConversation: {
+    holdsMode: false,
+    description: 'New conversation',
+    // The event the rail's action row fires on a single click: save the
+    // chat, extract memories, start a new one.
+    run: ({ deps }) =>
+      deps.freezer?.dispatchEvent(new CustomEvent('new-chat-save', { bubbles: true })),
+  },
+  leftRail: {
+    holdsMode: true,
+    description: 'Toggle the left rail',
+    run: ({ deps }) => deps.freezer?.toggle(),
+  },
+  rightRail: {
+    holdsMode: true,
+    description: 'Toggle the right panel',
+    /**
+     * The dock's own toggle: clicking the ACTIVE rail item collapses its
+     * panel, and clicking it again reopens it. So this closes whatever is
+     * open — remembering it — and otherwise reopens the last one, falling
+     * back to Files on a shell that has never opened anything.
+     */
+    run: ({ deps, state }) => {
+      const dock = deps.dock;
+      if (!dock) return;
+      if (dock.active) {
+        state.lastDockSurface = dock.active;
+        dock.collapse();
+        return;
+      }
+      dock.selectItem(state.lastDockSurface);
+    },
+  },
+  files: surfaceCommand('files', 'File browser'),
+  tabs: surfaceCommand('browser', 'Browser tabs'),
+  terminal: surfaceCommand('term', 'Terminal'),
+  memory: surfaceCommand('memory', 'Memory'),
+  sprinkles: {
+    holdsMode: true,
+    description: 'Sprinkles, looping',
+    run: ({ deps }) => {
+      const dock = deps.dock;
+      if (!dock) return;
+      const ids = sprinkleIds(dock);
+      // With no sprinkles installed, the `new` launcher is what the rail's
+      // only sprinkle affordance would open.
+      if (ids.length === 0) {
+        dock.selectItem('new');
+        return;
+      }
+      const next = nextInCycle(ids, dock.active);
+      if (next) dock.selectItem(next);
+    },
+  },
+  model: {
+    holdsMode: false,
+    description: 'Model picker',
+    /**
+     * `openMenu()` is the pill's own programmatic click — and, exactly like a
+     * click, it has nothing to offer with no accounts connected (the pill
+     * reads "Add AI" and emits `add-ai` instead). Route that case to accounts,
+     * which is where the click would have taken the user too.
+     */
+    run: ({ deps, actions }) => {
+      const meta = deps.composerMeta;
+      if (!meta) return;
+      if (meta.models.length === 0) {
+        actions.accounts?.();
+        return;
+      }
+      meta.openMenu();
+    },
+  },
+  accounts: {
+    holdsMode: false,
+    description: 'Accounts',
+    run: ({ actions }) => actions.accounts?.(),
+  },
+  help: {
+    holdsMode: true,
+    description: 'This help',
+    run: (ctx) => ctx.toggleHelp(),
+  },
+};
+
+/** Every command id, for validating a user keymap. */
+export const COMMAND_IDS = Object.keys(COMMANDS) as CommandId[];
+
+/** Is `value` a command a keymap may point at? */
+export function isCommandId(value: unknown): value is CommandId {
+  return typeof value === 'string' && Object.hasOwn(COMMANDS, value);
+}
+
+/**
+ * Keys the keymap may not touch, because they are the mode itself rather than
+ * a command: Escape enters and leaves it, and the digits address the tab strip
+ * positionally (`9` is "the last one", not "the ninth command").
+ */
+export const RESERVED_KEYS: readonly string[] = [
+  'Escape',
+  '1',
+  '2',
+  '3',
+  '4',
+  '5',
+  '6',
+  '7',
+  '8',
+  '9',
+];
+
+/** The shipped key → command mapping, which `/etc/slicc/keys.json` overrides. */
+export const DEFAULT_KEYMAP: Readonly<Record<string, CommandId>> = {
+  d: 'nextAgent',
+  c: 'composer',
+  Enter: 'composer',
+  n: 'newConversation',
+  b: 'leftRail',
+  x: 'rightRail',
+  f: 'files',
+  t: 'tabs',
+  e: 'terminal',
+  m: 'memory',
+  s: 'sprinkles',
+  l: 'model',
+  a: 'accounts',
+  h: 'help',
+  '?': 'help',
+  '/': 'help',
+};
+
+/** How a key prints in the help sheet. */
+function keyLabel(key: string): string {
+  return key === 'Enter' ? '⏎' : key;
+}
+
+/**
+ * The documented bindings for a keymap, in command order. Derived rather than
+ * written out, so a rebind in `/etc/slicc/keys.json` shows up in the help
+ * sheet — a printed list that disagreed with the live keymap would be worse
+ * than no list. A command nobody has a key for is dropped.
+ */
+export function shortcutRows(
+  keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP
+): ShortcutRow[] {
+  const byCommand = new Map<CommandId, string[]>();
+  for (const [key, id] of Object.entries(keymap)) {
+    byCommand.set(id, [...(byCommand.get(id) ?? []), keyLabel(key)]);
+  }
+  return [
+    {
+      keys: ['Esc'],
+      description: 'Enter keyboard mode — press again to leave (and exit full screen)',
+    },
+    { keys: ['1 – 9'], description: 'Switch to that agent in the tab strip (9 = last)' },
+    ...COMMAND_IDS.filter((id) => byCommand.has(id)).map((id) => ({
+      keys: byCommand.get(id) ?? [],
+      description: COMMANDS[id].description,
+    })),
+  ];
+}
+
+function ensureStyle(doc: Document): void {
+  if (doc.getElementById(STYLE_ID)) return;
+  const style = doc.createElement('style');
+  style.id = STYLE_ID;
+  style.textContent = CSS;
+  (doc.head ?? doc.documentElement)?.append(style);
+}
+
+/** The overlay body: a lead line, then one row per binding. */
+function buildHelpBody(doc: Document, rows: readonly ShortcutRow[]): HTMLElement {
+  const list = doc.createElement('div');
+  list.className = 'wcsc';
+  const note = doc.createElement('div');
+  note.className = 'wcsc__note';
+  note.textContent =
+    'These keys work while keyboard mode is on. Press Esc from anywhere to enter it — ' +
+    'outside it, typing is never intercepted.';
+  list.append(note);
+  for (const row of rows) {
+    const line = doc.createElement('div');
+    line.className = 'wcsc__row';
+    const desc = doc.createElement('div');
+    desc.className = 'wcsc__desc';
+    desc.textContent = row.description;
+    const keys = doc.createElement('div');
+    keys.className = 'wcsc__keys';
+    for (const key of row.keys) {
+      const kbd = doc.createElement('kbd');
+      kbd.className = 'wcsc__key';
+      kbd.textContent = key;
+      keys.append(kbd);
+    }
+    line.append(desc, keys);
+    list.append(line);
+  }
+  return list;
+}
+
+/** How long a pressed key stays on the HUD before the strip clears. */
+const HUD_LINGER_MS = 1600;
+/** How many presses the HUD keeps before dropping the oldest. */
+const HUD_DEPTH = 4;
+
+/** How a key prints on a cap. Anything unlisted prints as itself. */
+const KEY_CAPS: Readonly<Record<string, string>> = {
+  Escape: 'Esc',
+  Enter: '⏎',
+  ' ': 'Space',
+  Tab: '⇥',
+  Backspace: '⌫',
+  ArrowUp: '↑',
+  ArrowDown: '↓',
+  ArrowLeft: '←',
+  ArrowRight: '→',
+};
+
+/**
+ * A key event as the HUD prints it: the modifiers, then the key.
+ *
+ * Returned as an ARRAY rather than a string because a press is not always one
+ * cap — `⇧` + `a` today, and a future chord (`g` then `t`) is the same shape
+ * with the parts coming from two events instead of one.
+ */
+export function describeKey(
+  event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>
+): string[] {
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push('⌃');
+  if (event.altKey) parts.push('⌥');
+  if (event.metaKey) parts.push('⌘');
+  // Shift is implicit in a printed character (`?` is already Shift+/), so it
+  // is only worth a cap when the key alone does not say so.
+  if (event.shiftKey && event.key.length > 1) parts.push('⇧');
+  parts.push(KEY_CAPS[event.key] ?? event.key);
+  return parts;
+}
+
+/**
+ * The mode indicator and key HUD: one non-interactive pill above the composer.
+ *
+ * It has two states rather than two elements. Idle, it explains the mode
+ * ("h for help · Esc to leave"); the moment a key is pressed the hint gives
+ * way to a strip of key caps, which is both the "did that register?" feedback
+ * and — because presses accumulate left to right — the readout a multi-key
+ * chord will need when one exists. The strip clears itself after
+ * {@link HUD_LINGER_MS} of quiet and the hint comes back.
+ *
+ * A press that ran nothing is still shown, dimmed: "that key did nothing" is
+ * exactly what someone learning the mode needs to see, and silence would read
+ * as a dropped keystroke.
+ */
+function createBadge(doc: Document): {
+  element: HTMLElement;
+  record(parts: readonly string[], bound: boolean): void;
+  destroy(): void;
+} {
+  const badge = doc.createElement('div');
+  badge.className = 'wcsc-badge';
+  badge.dataset.wcShortcuts = 'badge';
+  badge.setAttribute('role', 'status');
+  badge.setAttribute('aria-live', 'polite');
+  const dot = doc.createElement('span');
+  dot.className = 'wcsc-badge__dot';
+  const label = doc.createElement('span');
+  label.textContent = 'Keyboard mode';
+  const hint = doc.createElement('span');
+  hint.className = 'wcsc-badge__hint';
+  hint.textContent = 'h for help · Esc to leave';
+  const keys = doc.createElement('div');
+  keys.className = 'wcsc-badge__keys';
+  keys.dataset.wcShortcuts = 'keys';
+  // The live region announces the MODE, not the typing: a cap per keystroke
+  // would turn a screen reader into a telegraph.
+  keys.setAttribute('aria-hidden', 'true');
+  badge.append(dot, label, hint, keys);
+
+  const view = doc.defaultView;
+  const setTimer = view?.setTimeout.bind(view) ?? setTimeout;
+  const clearTimer = view?.clearTimeout.bind(view) ?? clearTimeout;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const clear = (): void => {
+    keys.replaceChildren();
+    hint.hidden = false;
+  };
+
+  return {
+    element: badge,
+    record: (parts, bound) => {
+      const press = doc.createElement('span');
+      press.className = 'wcsc-badge__press';
+      press.dataset.bound = String(bound);
+      for (const part of parts) {
+        const cap = doc.createElement('kbd');
+        cap.className = 'wcsc-badge__cap';
+        cap.textContent = part;
+        press.append(cap);
+      }
+      // Everything already on the strip is history the moment a new press
+      // lands, so it dims — the newest cap is the one being answered.
+      for (const previous of keys.children) {
+        (previous as HTMLElement).dataset.age = 'stale';
+      }
+      keys.append(press);
+      while (keys.children.length > HUD_DEPTH) keys.firstElementChild?.remove();
+      hint.hidden = true;
+      if (timer !== undefined) clearTimer(timer);
+      timer = setTimer(clear, HUD_LINGER_MS);
+    },
+    destroy: () => {
+      if (timer !== undefined) clearTimer(timer);
+      badge.remove();
+    },
+  };
+}
+
+/** The help overlay's lifecycle, kept apart from the mode's. */
+function createHelp(
+  doc: Document,
+  readKeymap: () => Readonly<Record<string, CommandId>>
+): {
+  show(): void;
+  hide(): void;
+  toggle(): void;
+  element(): HTMLElement | null;
+} {
+  let overlay: ModalElement | null = null;
+  const hide = (): void => {
+    if (!overlay) return;
+    const open = overlay;
+    overlay = null;
+    open.hide?.();
+    open.remove();
+  };
+  const show = (): void => {
+    if (overlay) return;
+    ensureStyle(doc);
+    const dialog = doc.createElement('slicc-dialog') as ModalElement;
+    dialog.className = 'wcsc-dialog';
+    dialog.setAttribute('heading', 'Keyboard mode');
+    dialog.dataset.wcShortcuts = 'help';
+    dialog.append(buildHelpBody(doc, shortcutRows(readKeymap())));
+    // The dialog dismisses itself on Escape / ✕ / backdrop; drop our handle
+    // so the next `h` builds a fresh one instead of toggling a dead node.
+    dialog.addEventListener('slicc-dialog-close', () => {
+      overlay = null;
+      dialog.remove();
+    });
+    // On `document.body`, never inside the shell: the overlay must not
+    // reflow a panel it happens to be mounted under.
+    doc.body.append(dialog);
+    overlay = dialog;
+    dialog.show?.();
+  };
+  return {
+    show,
+    hide,
+    toggle: () => (overlay ? hide() : show()),
+    element: () => overlay,
+  };
+}
+
+/**
+ * Hold Escape while the document is fullscreen. Keyboard Lock is the only API
+ * that stops the browser from spending Escape on leaving fullscreen, which is
+ * what makes the two-press contract hold there too. Chromium-only and
+ * permission-gated: where it is unavailable the first press still enters the
+ * mode, it just also drops out of fullscreen.
+ */
+function syncKeyboardLock(doc: Document): void {
+  const keyboard = (
+    doc.defaultView?.navigator as Navigator & {
+      keyboard?: { lock(keys: string[]): Promise<void>; unlock(): void };
+    }
+  )?.keyboard;
+  if (!keyboard) return;
+  if (doc.fullscreenElement) void keyboard.lock(['Escape']).catch(() => undefined);
+  else keyboard.unlock();
+}
+
+/** The mode flag plus the badge that makes it visible. */
+function createMode(doc: Document): {
+  on(): boolean;
+  set(next: boolean): void;
+  record(parts: readonly string[], bound: boolean): void;
+} {
+  let modeOn = false;
+  let badge: ReturnType<typeof createBadge> | null = null;
+  return {
+    on: () => modeOn,
+    // Only while the mode is on: the badge IS the HUD, so there is nowhere to
+    // draw a key otherwise (and nothing outside the mode to draw).
+    record: (parts, bound) => badge?.record(parts, bound),
+    set: (next: boolean) => {
+      if (next === modeOn) return;
+      modeOn = next;
+      doc.documentElement.toggleAttribute('data-slicc-keyboard-mode', next);
+      if (!next) {
+        badge?.destroy();
+        badge = null;
+        return;
+      }
+      ensureStyle(doc);
+      badge = createBadge(doc);
+      doc.body.append(badge.element);
+      // The caret would otherwise keep blinking in a composer that no longer
+      // receives what is typed.
+      const focused = doc.activeElement as HTMLElement | null;
+      if (isTypingTarget(focused)) focused?.blur();
+    },
+  };
+}
+
+/**
+ * The live installation per document. `mountWcShell` is idempotent — a
+ * remount replaces the shell in place — and the listeners here live on the
+ * DOCUMENT, not on anything `root.replaceChildren()` tears down. Without this,
+ * a second mount would leave the first wiring installed and running FIRST,
+ * driving the detached shell (and holding it alive through the closure).
+ */
+const INSTALLED = new WeakMap<Document, ShortcutHandles>();
+
+/**
+ * Install the shell's modal key handling, replacing any previous installation
+ * on the same document. Safe on any float: only the switcher is required, and
+ * every other surface degrades to a no-op binding.
+ */
+export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
+  const doc = deps.doc ?? (deps.switcher as unknown as { ownerDocument?: Document })?.ownerDocument;
+  if (!doc) throw new Error('wireKeyboardShortcuts: no document');
+  INSTALLED.get(doc)?.dispose();
+  const actions: ShortcutActions = {};
+  const help = createHelp(doc, () => keymap);
+  const mode = createMode(doc);
+  const state: ModeState = { lastDockSurface: 'files' };
+  let keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP;
+  const ctx: CommandContext = { deps, actions, state, toggleHelp: help.toggle };
+  const commandFor = (key: string): Command | undefined => {
+    const id = keymap[key];
+    return id ? COMMANDS[id] : undefined;
+  };
+
+  /** The Escape contract; see the module header. */
+  const handleEscape = (event: KeyboardEvent): void => {
+    // An open overlay owns its own Escape; entering the mode underneath it
+    // would leave the user pressing Escape twice for one dismissal.
+    if (hasOpenOverlay(doc)) return;
+    if (!mode.on()) {
+      // Swallowed on purpose: one press means "leave the text field", not
+      // "leave fullscreen".
+      event.preventDefault();
+      mode.set(true);
+      // The press that opened the mode is the mode's first HUD entry — the
+      // badge appearing and the cap landing are one gesture's feedback.
+      mode.record(describeKey(event), true);
+      return;
+    }
+    mode.set(false);
+    // The second press is the one that means fullscreen. Performed rather
+    // than merely allowed, because under Keyboard Lock the browser never acts
+    // on Escape itself.
+    if (doc.fullscreenElement) void doc.exitFullscreen?.().catch(() => undefined);
+  };
+
+  const onKeyDown = (event: KeyboardEvent): void => {
+    // Something closer to the key already claimed it (a component's own
+    // handler, an overlay's Escape).
+    if (event.defaultPrevented || event.isComposing) return;
+    if (event.key === 'Escape') {
+      handleEscape(event);
+      return;
+    }
+    if (!mode.on()) return;
+    // A chord in keyboard mode belongs to the browser or the OS (⌘C, Ctrl+R).
+    // Shift passes through, for `?`.
+    if (event.ctrlKey || event.metaKey || event.altKey) return;
+    // Focus can still land in a text field while the mode is on (a surface
+    // that autofocuses, a click `focusin` has not processed yet). This is the
+    // belt to that suspenders.
+    if (isTypingTarget(deepTarget(event))) return;
+
+    const command = commandFor(event.key);
+    // A modal owns the screen. Acting behind it — focusing the composer under
+    // an open dialog, switching the agent the dialog belongs to — leaves the
+    // user typing into obscured UI, so every command is suspended while one is
+    // up. The single exception is closing the help overlay we opened
+    // ourselves, which is how `h` stays a toggle. Escape is handled earlier
+    // and separately, so a modal can always be dismissed.
+    if (hasOpenOverlay(doc) && !(command === COMMANDS.help && help.element())) {
+      // Suspended, not ignored: the cap lands dimmed, so a key pressed at a
+      // dialog reads as "not now" rather than as a dead keyboard.
+      mode.record(describeKey(event), false);
+      return;
+    }
+
+    const digit = digitFor(event);
+    if (digit !== null) {
+      const key = unitKeyForDigit(deps.switcher.scoops, digit);
+      // Shown either way: a digit past the end of the strip did nothing, and
+      // a HUD that stays blank for it reads as a dropped keystroke.
+      mode.record(describeKey(event), key !== null);
+      if (key === null) return;
+      event.preventDefault();
+      deps.switcher.select(key);
+      return;
+    }
+
+    mode.record(describeKey(event), !!command);
+    // An unbound key is not an exit: the mode is sticky, like vim's.
+    if (!command) return;
+    event.preventDefault();
+    // Dropped BEFORE the command runs, so a surface that takes focus is not
+    // immediately fighting a mode that is still on. (The HUD goes with the
+    // badge when it does — the mode ending is its own feedback.)
+    if (!command.holdsMode) mode.set(false);
+    command.run(ctx);
+  };
+
+  /**
+   * Focus reaching a text field ends the mode. Without this, clicking into
+   * the composer while the mode is on would leave every keystroke being read
+   * as a command instead of as text.
+   */
+  const onFocusIn = (event: FocusEvent): void => {
+    if (mode.on() && isTypingTarget(deepTarget(event))) mode.set(false);
+  };
+  const onFullscreenChange = (): void => syncKeyboardLock(doc);
+
+  doc.addEventListener('keydown', onKeyDown);
+  doc.addEventListener('focusin', onFocusIn);
+  doc.addEventListener('fullscreenchange', onFullscreenChange);
+  syncKeyboardLock(doc);
+
+  const handles: ShortcutHandles = {
+    dispose: () => {
+      doc.removeEventListener('keydown', onKeyDown);
+      doc.removeEventListener('focusin', onFocusIn);
+      doc.removeEventListener('fullscreenchange', onFullscreenChange);
+      mode.set(false);
+      help.hide();
+      // Only if we are still the live one: a remount disposes the old handle
+      // AFTER installing itself would be wrong, so `wireKeyboardShortcuts`
+      // disposes first — but a caller disposing an already-replaced handle
+      // must not evict its successor.
+      if (INSTALLED.get(doc) === handles) INSTALLED.delete(doc);
+    },
+    showHelp: help.show,
+    hideHelp: help.hide,
+    helpOverlay: help.element,
+    active: mode.on,
+    setActive: mode.set,
+    setAction: (name, fn) => {
+      actions[name] = fn;
+    },
+    setKeymap: (next) => {
+      keymap = { ...next };
+    },
+    keymap: () => keymap,
+  };
+  INSTALLED.set(doc, handles);
+  return handles;
+}

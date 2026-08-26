@@ -17,8 +17,11 @@ import {
   followSystemTheme,
   type SliccAgentTabs,
   type SliccAvatarMenu,
+  type SliccComposerMeta,
+  type SliccDock,
   type SliccDockTree,
   type SliccFileTree,
+  type SliccFreezer,
   type SliccMemoryPanel,
   type SliccMonitor,
   type SliccQueuedStack,
@@ -30,6 +33,7 @@ import { createChatFixture, FIXTURE_SCOOP_NAME } from '../chat-fixture.js';
 import type { ChatMessage } from '../types.js';
 import { buildTrustedLayers, TRUSTED_LAYER_CSS } from './trusted-layer.js';
 import { buildThreadChildren, messageEls } from './wc-message-view.js';
+import { type ShortcutHandles, wireKeyboardShortcuts } from './wc-shortcuts.js';
 
 // Side-effect import registers every element composed below.
 import '@slicc/webcomponents';
@@ -138,6 +142,16 @@ export interface WcShellRefs {
   memoryHost: SliccMemoryPanel;
   monitor: SliccMonitor;
   avatarMenu: SliccAvatarMenu;
+  /**
+   * Modal keyboard mode (Esc to enter, then bare letters). Installed here
+   * rather than in a float's boot because every float mounts through this
+   * function, and because the bindings need nothing a float owns: each one
+   * drives its surface's OWN event — `switcher.select()`, `dock.selectItem()`,
+   * `freezer.toggle()` — so every float's existing wiring stays the single
+   * implementation of what selecting or opening means. Actions no shell
+   * element can reach (account settings) are late-bound via `setAction`.
+   */
+  shortcuts: ShortcutHandles;
   /**
    * Dock surface ids claimed by a full-screen overlay launcher instead of a
    * workbench pane. `wireDockToWorkbench` consults this at click time, so a
@@ -461,6 +475,17 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
 
   const { nav, switcher, floatbar, avatarMenu } = buildNav(options);
   appCol.append(nav, shell);
+  const shortcuts = wireKeyboardShortcuts({
+    // `WcShellRefs` types the rails and the model pill as bare `HTMLElement`
+    // (they carry no shell-specific API); the mode needs their component
+    // surface, and the custom elements are registered by the side-effect
+    // import above.
+    switcher,
+    dock: dock as unknown as SliccDock,
+    freezer: freezer as unknown as SliccFreezer,
+    composerMeta: composerMeta as unknown as SliccComposerMeta,
+    focusComposer: () => inputCard.focus(),
+  });
 
   // H2 — everything layout-owned goes inside `panelHost` (a stacking context,
   // so no descendant can paint above it); `trustedLayer` is a LATER sibling and
@@ -497,6 +522,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     memoryHost,
     monitor,
     avatarMenu,
+    shortcuts,
     overlaySurfaces,
   };
 }

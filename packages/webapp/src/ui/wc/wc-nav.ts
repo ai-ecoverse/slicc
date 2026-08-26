@@ -30,6 +30,7 @@ import {
   notifyLeaderModelCatalogChanged,
 } from './leader-model-events.js';
 import type { WcShellRefs } from './wc-shell.js';
+import type { ShortcutHandles } from './wc-shortcuts.js';
 import { rootForSelection } from './wc-unit-context.js';
 
 export interface MetaModel {
@@ -102,14 +103,25 @@ export interface WcNavDeps {
    * the export is in-flight and restore it once the export completes.
    */
   onExportTranscript?: () => Promise<void>;
+  /**
+   * Keyboard mode's handles. Two-way: the menu entry opens the help overlay
+   * (the only way a user who never presses Esc discovers the mode exists),
+   * and `a` inside the mode needs the account dialog this module owns —
+   * registered here because nothing below `ui/wc/` can reach it.
+   */
+  shortcuts?: Pick<ShortcutHandles, 'showHelp' | 'setAction'>;
 }
 
 function standardMenuItems(
-  exportInFlight: boolean
+  exportInFlight: boolean,
+  hasShortcuts: boolean
 ): NonNullable<WcShellRefs['avatarMenu']['items']> {
   const items: NonNullable<WcShellRefs['avatarMenu']['items']> = [
     { id: 'settings', label: 'Account settings…', icon: 'settings' },
     { id: 'theme', label: 'Theme settings…', icon: 'palette' },
+    ...(hasShortcuts
+      ? [{ id: 'shortcuts', label: 'Keyboard mode', icon: 'keyboard' } as const]
+      : []),
     {
       id: 'export-transcript',
       label: 'Export transcript',
@@ -252,7 +264,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   let exportInFlight = false;
   const syncMenuItems = (): void => {
     refs.avatarMenu.items = [
-      ...standardMenuItems(exportInFlight),
+      ...standardMenuItems(exportInFlight, !!deps.shortcuts),
       ...popoutItems(),
       ...trayMenuItems(),
     ];
@@ -265,6 +277,8 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
   const openSettings = buildOpenSettings(log, refreshModels, applyIdentity, () =>
     client.updateModel()
   );
+  // Registered, not reimplemented: `a` opens the very dialog the menu does.
+  deps.shortcuts?.setAction('accounts', openSettings);
   const openTheme = buildOpenTheme(log);
   const openExperimental = buildOpenExperimental(log);
   wireFollowersSegment(refs, log);
@@ -281,6 +295,7 @@ export async function wireWcNav(deps: WcNavDeps): Promise<void> {
         .catch((err) => log.error('detached popout request failed', err));
       return;
     }
+    if (id === 'shortcuts') deps.shortcuts?.showHelp();
     if (id === 'settings') openSettings();
     if (id === 'theme') openTheme();
     if (id === 'experimental-settings') openExperimental();

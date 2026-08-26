@@ -968,6 +968,21 @@ export function attachWcClient(
 
   wireWcUrlContext(boot, client, openFrozen);
 
+  // The user's keymap (`/etc/slicc/keys.json`), applied over the shipped
+  // defaults the shell already wired synchronously. Deliberately off the boot
+  // critical path: a VFS read from boot starves the terminal's lazy mount, and
+  // a keymap that lands a beat late costs nothing. Gated on kernel-ready
+  // because an RPC sent before the worker's VfsRpcHost attaches is LOST — and
+  // a lost read used to look exactly like "no config yet".
+  boot.onClientReady(() => {
+    void openVfs()
+      .then(async ({ reader, writer }) => {
+        const { loadShortcutConfig } = await import('./wc-shortcut-config.js');
+        await loadShortcutConfig({ reader, writer, apply: refs.shortcuts.setKeymap });
+      })
+      .catch((err) => log.warn('WC shortcut config load failed', err));
+  });
+
   // Page-side preview-vfs fallback responder (the worker's responder is
   // canonical; this covers pre-boot requests). Mount recovery is the
   // worker's job — its kernel host replays the mount table itself.
@@ -1146,7 +1161,9 @@ export function attachWcClient(
     })();
   };
   void import('./wc-nav.js')
-    .then(({ wireWcNav }) => wireWcNav({ refs, client, log, onExportTranscript }))
+    .then(({ wireWcNav }) =>
+      wireWcNav({ refs, client, log, onExportTranscript, shortcuts: refs.shortcuts })
+    )
     .catch((err) => log.error('WC nav wiring failed', err));
 
   // Push-to-talk: arm the composer's hold-to-dictate gesture and inject the
