@@ -739,6 +739,29 @@ describe('Bash Tool background_after / timeout', () => {
       'timed out cleanly\n'
     );
   });
+
+  // A command that merely prints "execution aborted" while exiting 0 must keep
+  // its real exit code — require exit 124 + abort message together.
+  it('does not invent a kill trailer when stderr only mentions execution aborted (#2415)', async () => {
+    const { shell, settle } = pendingShell();
+    const fireLick = vi.fn();
+    const bash = createBashTool(shell, fs, '/tmp', { fireLick });
+
+    await bash.execute({ command: 'grep -n "execution aborted" log.txt', background_after: 0 });
+    settle({
+      stdout: 'match\n',
+      stderr: 'note: saw "bash: execution aborted" in a fixture\n',
+      exitCode: 0,
+    });
+    await vi.waitFor(() => expect(fireLick).toHaveBeenCalledTimes(1));
+
+    const event = fireLick.mock.calls[0][0];
+    expect(event.bashExitCode).toBe(0);
+    expect(event.preview).toContain('match');
+    expect(event.preview).toContain('execution aborted');
+    expect(event.preview).not.toMatch(/killed after/);
+    expect(await fs.readFile('/tmp/bash-bg-1.txt', { encoding: 'utf-8' })).toContain('match\n');
+  });
 });
 
 describe('Bash Tool timeout-kill e2e (real shell tee)', () => {

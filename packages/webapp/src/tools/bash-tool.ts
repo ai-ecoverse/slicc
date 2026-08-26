@@ -495,6 +495,9 @@ function startRun(
   let persistJobId: string | undefined;
   let persistChain: Promise<void> = Promise.resolve();
 
+  // Full rewrite (not append): scrubbers may match secrets that span chunk
+  // boundaries, so each persist re-scrubs the whole buffer. Background path
+  // only — chatty jobs pay O(n²) across chunk count × output size.
   const persistTeed = (): void => {
     if (persistPath === undefined || persistJobId === undefined) return;
     const path = persistPath;
@@ -672,14 +675,17 @@ async function scrubJobOutput(ctx: BashRunContext, jobId: string, output: string
  * `{ exitCode: 124, stderr: "bash: execution aborted\n", stdout: "" }` and
  * drops any prior output — the tee is what recovers it.
  *
- * Match the abort *message*, not bare exit 124: a successful `timeout(1)` /
- * other command that exits 124 must keep its real output and must not get a
- * kill trailer. A generic thrown `"aborted"` (external `kill <pid>`) is NOT
- * this path — that is handled below with optional teed prefix.
+ * Require BOTH exit 124 and the abort message on the settled-ok path:
+ * - bare exit 124 (e.g. GNU `timeout`) must keep its real output / no trailer
+ * - a command that merely *prints* "execution aborted" on stderr while exiting
+ *   0 must not be reclassified as a kill
+ *
+ * A generic thrown `"aborted"` (external `kill <pid>`) is NOT this path —
+ * that is handled below with optional teed prefix.
  */
 function isJustBashExecutionAbort(settled: SettledRun): boolean {
   if (!settled.ok) return /execution aborted/i.test(settled.error);
-  return /execution aborted/i.test(settled.result.stderr);
+  return settled.result.exitCode === 124 && /execution aborted/i.test(settled.result.stderr);
 }
 
 /** Trailer appended to a killed detached job's durable output (#2415). */
