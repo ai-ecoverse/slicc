@@ -1,6 +1,11 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { FrozenSessionIndexEntry } from '../../transcript/frozen-archive-format.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
+
+/** Boolean flags accepted by `cost` (any position). */
+const COST_BOOL_FLAGS = ['--all', '--json'] as const;
 
 export type SessionCostScope = 'live' | 'all';
 
@@ -209,22 +214,27 @@ function formatTable(data: ScoopCostData[]): string {
 
 export function createCostCommand(): Command {
   return defineCommand('cost', async (args) => {
-    if (args.includes('--help') || args.includes('-h')) {
+    if (isHelpRequest(args)) {
       return { stdout: helpText(), stderr: '', exitCode: 0 };
+    }
+
+    const parsed = parseKnownFlags(args, { bool: COST_BOOL_FLAGS });
+    if ('error' in parsed) {
+      return { stdout: '', stderr: `cost: ${parsed.error}\n`, exitCode: 1 };
     }
 
     if (!sessionCostsProvider) {
       return { stdout: '', stderr: 'Cost data not available.\n', exitCode: 1 };
     }
 
-    const scope: SessionCostScope = args.includes('--all') ? 'all' : 'live';
+    const scope: SessionCostScope = parsed.bools.has('--all') ? 'all' : 'live';
     const data = await sessionCostsProvider(scope);
 
     if (data.length === 0) {
       return { stdout: 'No session cost data yet.\n', stderr: '', exitCode: 0 };
     }
 
-    if (args.includes('--json')) {
+    if (parsed.bools.has('--json')) {
       return { stdout: JSON.stringify(data, null, 2) + '\n', stderr: '', exitCode: 0 };
     }
 
