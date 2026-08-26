@@ -79,6 +79,7 @@ import {
 import { createProxiedFetch } from '../shell/proxied-fetch.js';
 import { makeSentinel, splitSentinel } from '../shell/supplemental-commands/workflow-script.js';
 import { rootsOf } from '../work-unit/policy.js';
+import { matchDiscoveryRouteCandidate } from './discovery-lick-routing.js';
 import { ProcMountBackend } from './proc-mount.js';
 import { ProcessManager } from './process-manager.js';
 import { installSyncFsResponder } from './realm/sync-fs-responder.js';
@@ -324,14 +325,25 @@ function routeFormattedLickToCone(
   { orchestrator, log }: LickRoutingContext
 ): void {
   const scoops = orchestrator.getScoops();
+  const roots = rootsOf(scoops);
   // Two dispositions for a target that resolves to nothing, deliberately
   // different (docs/work-unit.md § Addressing licks): an UNTARGETED lick falls
-  // back to the default root — `rootsOf(scoops)[0]`, the oldest surviving one —
-  // while a TARGETED lick naming a unit that is gone (or never existed) is
-  // warned about and dropped, never silently redirected into someone else's chat.
+  // back to the default root — the oldest surviving one — while a TARGETED lick
+  // naming a unit that is gone (or never existed) is warned about and dropped,
+  // never silently redirected into someone else's chat. Discovery gets one
+  // additional ownership signal: a unique URL/domain match in a browsing root's
+  // recent agent history. No match or a tie preserves the stable fallback.
+  const contextualDiscoveryTarget =
+    event.type === 'discovery' && !event.targetScoop
+      ? matchDiscoveryRouteCandidate(
+          event,
+          roots.filter(scoopCanBrowse),
+          (root) => orchestrator.getScoopContext?.(root.jid)?.getAgentMessages() ?? []
+        )
+      : undefined;
   const resolvedTarget: RegisteredScoop | undefined = event.targetScoop
     ? matchLickTargetAlias(scoops, event.targetScoop)
-    : rootsOf(scoops)[0];
+    : (contextualDiscoveryTarget ?? roots[0]);
 
   if (!resolvedTarget) {
     log.warn('Lick target scoop not found', event.targetScoop);

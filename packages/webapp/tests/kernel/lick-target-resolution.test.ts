@@ -53,11 +53,22 @@ function cronLick(targetScoop?: string) {
   };
 }
 
-function routingCtx(scoops: readonly unknown[], handleMessage: ReturnType<typeof vi.fn>) {
+function routingCtx(
+  scoops: readonly unknown[],
+  handleMessage: ReturnType<typeof vi.fn>,
+  messages: ReadonlyMap<string, readonly unknown[]> = new Map()
+) {
   const log = { info: vi.fn(), warn: vi.fn(), debug: vi.fn() };
   return {
     ctx: {
-      orchestrator: { getScoops: () => scoops, handleMessage } as never,
+      orchestrator: {
+        getScoops: () => scoops,
+        getScoopContext: (jid: string) => ({
+          getAgentMessages: () => messages.get(jid) ?? [],
+        }),
+        registerDiscoveryLick: () => 'discovery-lick-id',
+        handleMessage,
+      } as never,
       lickManager: {} as never,
       log,
     },
@@ -105,6 +116,44 @@ describe('routeFormattedLickToCone target resolution', () => {
 
     expect(handleMessage).toHaveBeenCalledWith(
       expect.objectContaining({ chatJid: 'cone-jid', channel: 'cron' })
+    );
+  });
+
+  it('routes an untargeted discovery lick to the cone with matching recent context', () => {
+    const handleMessage = vi.fn(async () => undefined);
+    const messages = new Map<string, readonly unknown[]>([
+      [primary.jid, [{ role: 'user', content: 'Investigate the local build' }]],
+      [
+        extraCone.jid,
+        [
+          {
+            role: 'assistant',
+            content: [
+              {
+                type: 'toolCall',
+                name: 'browser',
+                arguments: { url: 'https://example.com/products' },
+              },
+            ],
+          },
+        ],
+      ],
+    ]);
+    const { ctx } = routingCtx([primary, extraCone], handleMessage, messages);
+    defaultLickEventHandler(
+      {
+        type: 'discovery',
+        discoveryUrl: 'https://example.com/llms.txt',
+        discoveryOrigin: 'https://example.com',
+        discoveryKind: 'llms-txt',
+        timestamp: 't',
+        body: {},
+      } as never,
+      ctx
+    );
+
+    expect(handleMessage).toHaveBeenCalledWith(
+      expect.objectContaining({ chatJid: 'cone-reviewer-jid', channel: 'discovery' })
     );
   });
 

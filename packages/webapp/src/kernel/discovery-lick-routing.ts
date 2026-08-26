@@ -1,0 +1,129 @@
+/**
+ * Contextual routing for untargeted discovery licks.
+ *
+ * Discovery is observed outside any work-unit conversation, so its wire event
+ * has no `targetScoop`. With multiple cones, recent conversation context is the
+ * best available ownership signal: a cone that just mentioned the discovered
+ * host or URL is more likely to be driving that browsing session.
+ */
+
+const RECENT_MESSAGE_LIMIT = 8;
+const GENERIC_URL_PARTS = new Set([
+  'com',
+  'html',
+  'http',
+  'https',
+  'json',
+  'net',
+  'org',
+  'txt',
+  'well',
+  'www',
+]);
+
+export interface DiscoveryRoute {
+  discoveryOrigin?: string;
+  discoveryUrl?: string;
+}
+
+export interface DiscoveryRouteCandidate {
+  jid: string;
+}
+
+interface WeightedNeedle {
+  text: string;
+  weight: number;
+}
+
+/**
+ * Pick the sole highest-scoring candidate from recent agent history.
+ *
+ * Returns `undefined` when no candidate mentions the discovery URL, or when
+ * the best score is tied. The caller then retains its stable default-root
+ * fallback rather than making an arbitrary routing choice.
+ */
+export function matchDiscoveryRouteCandidate<T extends DiscoveryRouteCandidate>(
+  event: DiscoveryRoute,
+  candidates: readonly T[],
+  getMessages: (candidate: T) => readonly unknown[]
+): T | undefined {
+  const needles = discoveryNeedles(event);
+  if (needles.length === 0) return undefined;
+
+  let best: T | undefined;
+  let bestScore = 0;
+  let tied = false;
+
+  for (const candidate of candidates) {
+    const score = scoreRecentMessages(getMessages(candidate), needles);
+    if (score > bestScore) {
+      best = candidate;
+      bestScore = score;
+      tied = false;
+    } else if (score > 0 && score === bestScore) {
+      tied = true;
+    }
+  }
+
+  return tied ? undefined : best;
+}
+
+function discoveryNeedles(event: DiscoveryRoute): WeightedNeedle[] {
+  const needles = new Map<string, number>();
+  addUrlNeedles(needles, event.discoveryOrigin);
+  addUrlNeedles(needles, event.discoveryUrl);
+  return [...needles].map(([text, weight]) => ({ text, weight }));
+}
+
+function addUrlNeedles(needles: Map<string, number>, value: string | undefined): void {
+  if (!value) return;
+  const normalized = value.toLowerCase().replace(/\/$/, '');
+  addNeedle(needles, normalized, 12);
+
+  try {
+    const url = new URL(value);
+    const hostname = url.hostname.toLowerCase().replace(/^www\./, '');
+    addNeedle(needles, hostname, 8);
+    for (const part of `${hostname}${url.pathname}${url.search}`
+      .split(/[^a-z0-9]+/)
+      .filter((part) => part.length >= 4 && !GENERIC_URL_PARTS.has(part))) {
+      addNeedle(needles, part, 1);
+    }
+  } catch {
+    // A malformed producer value can still match verbatim; it simply yields no
+    // hostname/path clues.
+  }
+}
+
+function addNeedle(needles: Map<string, number>, text: string, weight: number): void {
+  if (text.length === 0) return;
+  needles.set(text, Math.max(needles.get(text) ?? 0, weight));
+}
+
+function scoreRecentMessages(
+  messages: readonly unknown[],
+  needles: readonly WeightedNeedle[]
+): number {
+  const recent = messages.slice(-RECENT_MESSAGE_LIMIT);
+  let score = 0;
+  for (const [index, message] of recent.entries()) {
+    const haystack = serializeMessage(message);
+    if (haystack.length === 0) continue;
+    // A match in the newest message is up to 8x more useful than one at the
+    // edge of the window. JSON serialization deliberately includes assistant
+    // tool calls and tool results, not just visible user/assistant prose.
+    const recency = index + 1;
+    for (const needle of needles) {
+      if (haystack.includes(needle.text)) score += needle.weight * recency;
+    }
+  }
+  return score;
+}
+
+function serializeMessage(message: unknown): string {
+  try {
+    return JSON.stringify(message)?.toLowerCase() ?? '';
+  } catch {
+    return '';
+  }
+}
