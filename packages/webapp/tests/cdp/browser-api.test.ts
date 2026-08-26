@@ -1109,7 +1109,93 @@ describe('BrowserAPI', () => {
     });
   });
 
+  describe('viewport override persistence', () => {
+    function attachCounting() {
+      let sessCount = 0;
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async (method: string) =>
+        method === 'Target.attachToTarget' ? { sessionId: `sess-${++sessCount}` } : {}
+      );
+    }
+
+    function emulationCalls() {
+      return (mockClient.send as ReturnType<typeof vi.fn>).mock.calls.filter(
+        ([method]) => method === 'Emulation.setDeviceMetricsOverride'
+      );
+    }
+
+    it('sets and records a viewport override for a tab', async () => {
+      attachCounting();
+      await api.withTab('t1', async () => {
+        await api.setViewportOverride('t1', 1440, 900);
+      });
+      expect(emulationCalls()).toEqual([
+        [
+          'Emulation.setDeviceMetricsOverride',
+          { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false },
+          'sess-1',
+        ],
+      ]);
+    });
+
+    it('re-applies the override when re-attaching to the tab after a sibling switched away', async () => {
+      attachCounting();
+      await api.withTab('t1', async () => {
+        await api.setViewportOverride('t1', 1440, 900);
+      });
+      await api.withTab('t2', async () => {});
+      await api.withTab('t1', async () => {});
+      const calls = emulationCalls();
+      // Initial set on sess-1, then re-applied on the fresh re-attach session
+      expect(calls).toHaveLength(2);
+      expect(calls[1]).toEqual([
+        'Emulation.setDeviceMetricsOverride',
+        { width: 1440, height: 900, deviceScaleFactor: 1, mobile: false },
+        'sess-3',
+      ]);
+    });
+
+    it('drops the override when the tab is closed', async () => {
+      attachCounting();
+      await api.withTab('t1', async () => {
+        await api.setViewportOverride('t1', 1440, 900);
+      });
+      await api.closePage('t1');
+      await api.withTab('t2', async () => {});
+      await api.withTab('t1', async () => {});
+      expect(emulationCalls()).toHaveLength(1);
+    });
+  });
+
   describe('withTab mutex', () => {
+    it('tracks queue depth and cumulative wait in getTabLockStats', async () => {
+      (mockClient.send as ReturnType<typeof vi.fn>).mockImplementation(async () => ({
+        sessionId: 'sess-x',
+      }));
+
+      let releaseFirst: () => void;
+      const gate = new Promise<void>((r) => {
+        releaseFirst = r;
+      });
+      const p1 = api.withTab('target-1', async () => {
+        await gate;
+        return 1;
+      });
+      await new Promise((r) => setTimeout(r, 5));
+      const p2 = api.withTab('target-2', async () => 2);
+      await new Promise((r) => setTimeout(r, 20));
+
+      // p1 holds the lock, p2 queued behind it
+      expect(api.getTabLockStats().queueDepth).toBe(2);
+
+      releaseFirst!();
+      await Promise.all([p1, p2]);
+
+      const stats = api.getTabLockStats();
+      expect(stats.queueDepth).toBe(0);
+      expect(stats.acquisitions).toBe(2);
+      expect(stats.totalWaitMs).toBeGreaterThanOrEqual(10);
+    });
+
     it('serializes two concurrent withTab calls with different targetIds', async () => {
       const order: string[] = [];
 

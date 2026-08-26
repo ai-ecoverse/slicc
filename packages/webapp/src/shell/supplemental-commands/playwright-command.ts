@@ -85,6 +85,36 @@ function knownFlagSpecForWalk(spec: KnownFlagSpec): KnownFlagSpec {
   };
 }
 
+/**
+ * Tab-lock wait accumulated across the bridge while one command ran before the
+ * command's stderr carries a contention note. All `playwright-cli` callers
+ * share one serialized browser, so the note is bridge-wide: it tells a fanned-
+ * out agent that siblings are queuing, and to back off deliberately instead of
+ * guessing why calls are slow (or detached past `background_after`).
+ */
+const CONTENTION_NOTE_THRESHOLD_MS = 2000;
+
+function tabLockStatsSnapshot(browser: PlaywrightBrowser): { totalWaitMs: number } | undefined {
+  return typeof browser.getTabLockStats === 'function' ? browser.getTabLockStats() : undefined;
+}
+
+function withContentionNote(
+  browser: PlaywrightBrowser,
+  before: { totalWaitMs: number } | undefined,
+  result: CmdResult
+): CmdResult {
+  if (!before || typeof browser.getTabLockStats !== 'function') return result;
+  const after = browser.getTabLockStats();
+  const waitedMs = after.totalWaitMs - before.totalWaitMs;
+  if (waitedMs < CONTENTION_NOTE_THRESHOLD_MS) return result;
+  const waited = (waitedMs / 1000).toFixed(1);
+  const note =
+    `note: browser bridge contended — tab-lock waits totaled ${waited}s while this command ran ` +
+    `(queue depth ${after.queueDepth}). playwright-cli commands share one browser and run ` +
+    'serialized; stagger concurrent callers or reduce fan-out.\n';
+  return { ...result, stderr: result.stderr + note };
+}
+
 async function commandErrorResult(
   browser: PlaywrightBrowser,
   flags: Record<string, string>,
@@ -191,6 +221,8 @@ export function createPlaywrightCommand(
     // Note: Per-tab teleport blocking is now handled within command handlers
     // via requireTab() -> browser.withTab() serialization
 
+    const lockStatsBefore = tabLockStatsSnapshot(browser);
+
     let result: CmdResult;
     const handler = playwrightHandlers.get(subcommand);
     if (!handler) {
@@ -227,6 +259,6 @@ export function createPlaywrightCommand(
       // Session logging is best-effort — never fail the command
     }
 
-    return result;
+    return withContentionNote(browser, lockStatsBefore, result);
   });
 }

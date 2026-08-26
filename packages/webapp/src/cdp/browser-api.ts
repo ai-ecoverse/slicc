@@ -83,6 +83,10 @@ export class BrowserAPI {
   private _frameContextCache = new Map<string, number>();
   private _mainWorldContextCache = new Map<string, number>();
   private _tabLock: Promise<void> = Promise.resolve();
+  private _viewportOverrides = new Map<string, { width: number; height: number }>();
+  private _tabLockQueueDepth = 0;
+  private _tabLockTotalWaitMs = 0;
+  private _tabLockAcquisitions = 0;
   private _onSessionChange?: ((sessionId: string, transport: CDPTransport) => void) | undefined;
   /**
    * Last-used connect options (url + protocols) captured on the first
@@ -221,12 +225,75 @@ export class BrowserAPI {
     });
     const prev = this._tabLock;
     this._tabLock = next;
+    this._tabLockQueueDepth += 1;
+    const waitStart = Date.now();
     await prev;
+    this._tabLockTotalWaitMs += Date.now() - waitStart;
+    this._tabLockAcquisitions += 1;
     try {
       const sessionId = await this.attachToPage(targetId);
       return await fn(sessionId);
     } finally {
+      this._tabLockQueueDepth -= 1;
       release!();
+    }
+  }
+
+  /**
+   * Contention metrics for the tab lock that serializes all `withTab` work.
+   *
+   * `queueDepth` counts callers currently holding or waiting for the lock,
+   * `totalWaitMs` accumulates time spent queued across all callers, and
+   * `acquisitions` counts completed lock grants. Callers snapshot the stats
+   * before and after an operation to attribute contention observed while it
+   * ran (e.g. `playwright-cli` surfaces it on stderr so concurrent agents can
+   * back off deliberately instead of guessing).
+   */
+  getTabLockStats(): { queueDepth: number; totalWaitMs: number; acquisitions: number } {
+    return {
+      queueDepth: this._tabLockQueueDepth,
+      totalWaitMs: this._tabLockTotalWaitMs,
+      acquisitions: this._tabLockAcquisitions,
+    };
+  }
+
+  /**
+   * Apply a viewport emulation override to a tab and remember it per target.
+   *
+   * CDP device-metrics overrides live on the CDP *session*, but `attachToPage`
+   * creates a fresh session whenever a caller re-attaches after another tab was
+   * attached in between — so with concurrent drivers, a plain
+   * `Emulation.setDeviceMetricsOverride` silently evaporates and screenshots
+   * get captured at whatever width the window happens to have. Recording the
+   * override per target lets {@link attachToPage} re-apply it on every fresh
+   * session, making a tab's viewport stable no matter which driver measured it
+   * last. Cleared by {@link closePage}.
+   */
+  async setViewportOverride(targetId: string, width: number, height: number): Promise<void> {
+    const sessionId = await this.attachToPage(targetId);
+    await this.client.send(
+      'Emulation.setDeviceMetricsOverride',
+      { width, height, deviceScaleFactor: 1, mobile: false },
+      sessionId
+    );
+    this._viewportOverrides.set(targetId, { width, height });
+  }
+
+  /** Re-apply a recorded viewport override after a fresh attach (best-effort). */
+  private async reapplyViewportOverride(targetId: string, sessionId: string): Promise<void> {
+    const vp = this._viewportOverrides.get(targetId);
+    if (!vp) return;
+    try {
+      await this.client.send(
+        'Emulation.setDeviceMetricsOverride',
+        { width: vp.width, height: vp.height, deviceScaleFactor: 1, mobile: false },
+        sessionId
+      );
+    } catch (err) {
+      log.warn('Failed to re-apply viewport override on re-attach', {
+        targetId,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
@@ -359,6 +426,7 @@ export class BrowserAPI {
    */
   async closePage(targetId: string): Promise<void> {
     await this.ensureConnected();
+    this._viewportOverrides.delete(targetId);
 
     // Check if this is a remote tray target (format: "runtimeId:localTargetId")
     if (this.trayTargetProvider?.createRemoteTransport && targetId.includes(':')) {
@@ -475,6 +543,7 @@ export class BrowserAPI {
         this.sessionId = result['sessionId'] as string;
         this.attachedTargetId = targetId;
         await this.client.send('Page.enable', {}, this.sessionId);
+        await this.reapplyViewportOverride(targetId, this.sessionId);
         this._onSessionChange?.(this.sessionId, this.client);
         return this.sessionId;
       }
@@ -502,6 +571,7 @@ export class BrowserAPI {
     // Keep Page events available so unexpected dialogs can be auto-dismissed
     // before they stall the current CDP command.
     await this.localClient.send('Page.enable', {}, this.sessionId);
+    await this.reapplyViewportOverride(targetId, this.sessionId);
     this._onSessionChange?.(this.sessionId, this.localClient);
     return this.sessionId;
   }

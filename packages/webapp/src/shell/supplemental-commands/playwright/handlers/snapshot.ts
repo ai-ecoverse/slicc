@@ -2,13 +2,21 @@
  * Page inspection subcommands: snapshot, frames, screenshot.
  */
 
-import type { BrowserAPI } from '../../../../cdp/index.js';
-import type { FrameInfo } from '../../../../cdp/types.js';
-import { isExtensionRealm } from '../../../../core/runtime-env.js';
+import { isExtensionRealm } from '../../../../base/runtime-env.js';
 import { ensureSessionDirs } from '../session-log.js';
 import { renderNode, takeSnapshot } from '../snapshot.js';
 import { base64ToBytes, filenameSafeTimestamp, requireTab, resolveFrame } from '../state.js';
-import type { PlaywrightHandler, PlaywrightState, TabSnapshot } from '../types.js';
+import type {
+  PlaywrightHandler,
+  PlaywrightHandlerCtx,
+  PlaywrightState,
+  TabSnapshot,
+} from '../types.js';
+
+// Named via the handler context rather than imported from `cdp/` so this
+// module stays inside the shell layer (see layer-stack import direction).
+type BrowserAPI = PlaywrightHandlerCtx['browser'];
+type FrameInfo = Awaited<ReturnType<BrowserAPI['getFrameTree']>>[number];
 
 type ScreenshotClip = { x: number; y: number; width: number; height: number };
 
@@ -194,9 +202,10 @@ export const screenshotHandler: PlaywrightHandler = async ({
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  let screenshotStderr = '';
   const output = await browser.withTab(tab.targetId, async () => {
-    // Ref-based screenshot
+    // Ref-based screenshot: the requested element's crop or a loud failure.
+    // Silently substituting the full viewport corrupts downstream visual
+    // comparisons with a 0 exit code — worse than any error.
     let clip: ScreenshotClip | undefined;
     if (positional[0]?.startsWith('e')) {
       const snapshot = state.snapshots.get(tab.targetId);
@@ -204,8 +213,13 @@ export const screenshotHandler: PlaywrightHandler = async ({
         throw new Error('No snapshot available. Run "snapshot" first.');
       }
       clip = await resolveElementClip(browser, snapshot, positional[0]);
-      if (!clip) {
-        screenshotStderr += `Warning: could not clip to element ${positional[0]}, capturing full viewport\n`;
+      if (!clip || clip.width <= 0 || clip.height <= 0) {
+        return {
+          error:
+            `could not resolve element ${positional[0]} to a visible box — the snapshot is ` +
+            'likely stale (navigation, reload, or layout change). Re-run "snapshot" and retry ' +
+            'with a fresh ref, or omit the ref to capture the viewport deliberately.',
+        };
       }
     }
 
@@ -227,7 +241,10 @@ export const screenshotHandler: PlaywrightHandler = async ({
       // Best-effort
     }
     const sizeKB = Math.round(bytes.length / 1024);
-    return `Screenshot saved to ${savePath} (${sizeKB} KB)`;
+    return { message: `Screenshot saved to ${savePath} (${sizeKB} KB)` };
   });
-  return { stdout: output + '\n', stderr: screenshotStderr, exitCode: 0 };
+  if ('error' in output) {
+    return { stdout: '', stderr: `screenshot: ${output.error}\n`, exitCode: 1 };
+  }
+  return { stdout: output.message + '\n', stderr: '', exitCode: 0 };
 };
