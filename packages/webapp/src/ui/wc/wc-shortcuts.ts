@@ -313,6 +313,9 @@ const COMMANDS: Readonly<Record<string, Command>> = {
   },
 };
 
+/** The one command allowed to run while a modal is open — it closes the help. */
+const HELP_COMMAND = COMMANDS.h;
+
 /** Key → command, aliases folded in. */
 const COMMAND_FOR_KEY: ReadonlyMap<string, Command> = new Map(
   Object.entries(COMMANDS).flatMap(([key, command]) => [
@@ -483,12 +486,23 @@ function createMode(doc: Document): { on(): boolean; set(next: boolean): void } 
 }
 
 /**
- * Install the shell's modal key handling. Safe on any float: only the
- * switcher is required, and every other surface degrades to a no-op binding.
+ * The live installation per document. `mountWcShell` is idempotent — a
+ * remount replaces the shell in place — and the listeners here live on the
+ * DOCUMENT, not on anything `root.replaceChildren()` tears down. Without this,
+ * a second mount would leave the first wiring installed and running FIRST,
+ * driving the detached shell (and holding it alive through the closure).
+ */
+const INSTALLED = new WeakMap<Document, ShortcutHandles>();
+
+/**
+ * Install the shell's modal key handling, replacing any previous installation
+ * on the same document. Safe on any float: only the switcher is required, and
+ * every other surface degrades to a no-op binding.
  */
 export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
   const doc = deps.doc ?? (deps.switcher as unknown as { ownerDocument?: Document })?.ownerDocument;
   if (!doc) throw new Error('wireKeyboardShortcuts: no document');
+  INSTALLED.get(doc)?.dispose();
   const actions: ShortcutActions = {};
   const help = createHelp(doc);
   const mode = createMode(doc);
@@ -530,6 +544,15 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     // belt to that suspenders.
     if (isTypingTarget(deepTarget(event))) return;
 
+    const command = COMMAND_FOR_KEY.get(event.key);
+    // A modal owns the screen. Acting behind it — focusing the composer under
+    // an open dialog, switching the agent the dialog belongs to — leaves the
+    // user typing into obscured UI, so every command is suspended while one is
+    // up. The single exception is closing the help overlay we opened
+    // ourselves, which is how `h` stays a toggle. Escape is handled earlier
+    // and separately, so a modal can always be dismissed.
+    if (hasOpenOverlay(doc) && !(command === HELP_COMMAND && help.element())) return;
+
     const digit = digitFor(event);
     if (digit !== null) {
       const key = unitKeyForDigit(deps.switcher.scoops, digit);
@@ -539,7 +562,6 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
       return;
     }
 
-    const command = COMMAND_FOR_KEY.get(event.key);
     // An unbound key is not an exit: the mode is sticky, like vim's.
     if (!command) return;
     event.preventDefault();
@@ -564,13 +586,18 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
   doc.addEventListener('fullscreenchange', onFullscreenChange);
   syncKeyboardLock(doc);
 
-  return {
+  const handles: ShortcutHandles = {
     dispose: () => {
       doc.removeEventListener('keydown', onKeyDown);
       doc.removeEventListener('focusin', onFocusIn);
       doc.removeEventListener('fullscreenchange', onFullscreenChange);
       mode.set(false);
       help.hide();
+      // Only if we are still the live one: a remount disposes the old handle
+      // AFTER installing itself would be wrong, so `wireKeyboardShortcuts`
+      // disposes first — but a caller disposing an already-replaced handle
+      // must not evict its successor.
+      if (INSTALLED.get(doc) === handles) INSTALLED.delete(doc);
     },
     showHelp: help.show,
     hideHelp: help.hide,
@@ -581,4 +608,6 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
       actions[name] = fn;
     },
   };
+  INSTALLED.set(doc, handles);
+  return handles;
 }

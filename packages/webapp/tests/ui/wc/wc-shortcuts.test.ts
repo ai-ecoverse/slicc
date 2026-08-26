@@ -478,6 +478,77 @@ describe('inside keyboard mode', () => {
   });
 });
 
+describe('while a modal is open', () => {
+  /**
+   * Codex P2: `c` reached the composer BEHIND an open dialog, leaving the
+   * modal up and the caret in obscured UI.
+   */
+  it('suspends the commands that would act behind it', () => {
+    const { handles, focusComposer, select, selectItem } = harness();
+    escape();
+    const dialog = document.createElement('slicc-dialog');
+    dialog.setAttribute('open', '');
+    document.body.append(dialog);
+    expect(press({ key: 'c', code: 'KeyC' })).toBe(false);
+    expect(press({ key: '2', code: 'Digit2' })).toBe(false);
+    expect(press({ key: 'f', code: 'KeyF' })).toBe(false);
+    expect(focusComposer).not.toHaveBeenCalled();
+    expect(select).not.toHaveBeenCalled();
+    expect(selectItem).not.toHaveBeenCalled();
+    // The mode survives — the modal is a suspension, not an exit.
+    expect(handles.active()).toBe(true);
+  });
+
+  it('still lets h close the help overlay it opened', () => {
+    const { handles } = harness();
+    escape();
+    press({ key: 'h', code: 'KeyH' });
+    const overlay = handles.helpOverlay();
+    expect(overlay).not.toBeNull();
+    // jsdom never upgrades `<slicc-dialog>`, so `show()` cannot set `open`;
+    // mark it the way the real component would, to prove the gate lets the
+    // toggle through the very overlay it is guarding.
+    overlay?.setAttribute('open', '');
+    press({ key: 'h', code: 'KeyH' });
+    expect(handles.helpOverlay()).toBeNull();
+  });
+
+  it('does not let h stack a second overlay on someone else’s modal', () => {
+    const { handles } = harness();
+    escape();
+    const dialog = document.createElement('slicc-dialog');
+    dialog.setAttribute('open', '');
+    document.body.append(dialog);
+    press({ key: 'h', code: 'KeyH' });
+    expect(handles.helpOverlay()).toBeNull();
+  });
+});
+
+describe('one installation per document', () => {
+  /**
+   * Codex P2: `mountWcShell` is idempotent, but these listeners are on the
+   * DOCUMENT — a remount used to leave the first wiring installed, running
+   * first, and driving the detached shell.
+   */
+  it('a second wiring replaces the first', () => {
+    const first = harness();
+    const second = harness();
+    escape();
+    press({ key: '2', code: 'Digit2' });
+    expect(second.select).toHaveBeenCalledWith('cone_2');
+    expect(first.select).not.toHaveBeenCalled();
+  });
+
+  it('disposing a superseded handle does not evict its successor', () => {
+    const first = harness();
+    const second = harness();
+    first.handles.dispose();
+    escape();
+    press({ key: '2', code: 'Digit2' });
+    expect(second.select).toHaveBeenCalledWith('cone_2');
+  });
+});
+
 describe('dispose', () => {
   it('removes the listeners, the badge and any overlay', () => {
     const { handles, select } = harness();
