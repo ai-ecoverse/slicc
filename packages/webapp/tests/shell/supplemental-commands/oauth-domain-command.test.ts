@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-// Mock the provider-settings module so the command exercises its
+// Mock the account-store module so the command exercises its
 // public surface (getExtraOAuthDomains / setExtraOAuthDomainsAsync /
 // getAllExtraOAuthDomains) without touching real localStorage. This
 // is the layer that issue #701 broke: the command was calling the
@@ -8,18 +8,18 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 // disappeared. Locking the command-level call shape to the async
 // setter prevents a future refactor from dropping the `await` and
 // re-introducing the same bug silently.
-vi.mock('../../../src/ui/provider-settings.js', () => ({
+vi.mock('../../../src/providers/account-store.js', () => ({
   getExtraOAuthDomains: vi.fn(),
   setExtraOAuthDomainsAsync: vi.fn(),
   getAllExtraOAuthDomains: vi.fn(),
 }));
 
-import { createOAuthDomainCommand } from '../../../src/shell/supplemental-commands/oauth-domain-command.js';
 import {
   getAllExtraOAuthDomains,
   getExtraOAuthDomains,
   setExtraOAuthDomainsAsync,
-} from '../../../src/ui/provider-settings.js';
+} from '../../../src/providers/account-store.js';
+import { createOAuthDomainCommand } from '../../../src/shell/supplemental-commands/oauth-domain-command.js';
 import { mockCommandContext } from '../helpers/mock-command-context.js';
 
 const mockGetExtraOAuthDomains = vi.mocked(getExtraOAuthDomains);
@@ -191,5 +191,27 @@ describe('oauth-domain command', () => {
     const result = await createOAuthDomainCommand().execute(['frobnicate'], createMockCtx());
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('unknown subcommand');
+  });
+
+  it('rejects an unknown flag instead of silently ignoring it', async () => {
+    const result = await createOAuthDomainCommand().execute(
+      ['list', 'adobe', '--bogus'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unknown flag: --bogus');
+    expect(result.stdout).toBe('');
+    expect(mockGetExtraOAuthDomains).not.toHaveBeenCalled();
+  });
+
+  it('treats tokens after -- as positional, not flags', async () => {
+    mockGetExtraOAuthDomains.mockReturnValue([]);
+    const result = await createOAuthDomainCommand().execute(
+      ['add', 'adobe', '--', '--evil.example'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Added --evil.example');
+    expect(mockSetExtraOAuthDomainsAsync).toHaveBeenCalledWith('adobe', ['--evil.example']);
   });
 });
