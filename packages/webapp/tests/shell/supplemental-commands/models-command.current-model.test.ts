@@ -18,6 +18,11 @@ vi.mock('../../../src/providers/account-store.js', () => ({
   resolveCurrentModel: vi.fn(),
 }));
 
+const mockProxiedFetch = vi.fn();
+vi.mock('../../../src/shell/proxied-fetch.js', () => ({
+  createProxiedFetch: () => mockProxiedFetch,
+}));
+
 import {
   getAccounts,
   getAvailableProviders,
@@ -50,6 +55,7 @@ function ctx() {
 describe('models command reports the resolved model (no guessing)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockProxiedFetch.mockReset();
     vi.mocked(getAccounts).mockReturnValue([{ providerId: 'adobe' }] as never);
     vi.mocked(getAvailableProviders).mockReturnValue(['adobe'] as never);
     vi.mocked(getProviderConfig).mockReturnValue({ id: 'adobe', name: 'Adobe' } as never);
@@ -175,5 +181,23 @@ describe('models command reports the resolved model (no guessing)', () => {
     const res = await createModelsCommand().execute(['--provider'], ctx() as never);
     expect(res.exitCode).not.toBe(0);
     expect(res.stderr).toMatch(/--provider requires a value/);
+  });
+
+  it('treats a null benchmark JSON body as empty enrichment (non-fatal)', async () => {
+    mockProxiedFetch.mockResolvedValue({
+      status: 200,
+      body: new TextEncoder().encode('null'),
+    });
+    vi.mocked(getProviderModels).mockReturnValue([mk('claude-opus-4-6', 5, 25)] as never);
+    vi.mocked(resolveCurrentModel).mockReturnValue({
+      id: 'claude-opus-4-6',
+      provider: 'adobe',
+    } as never);
+
+    const res = await createModelsCommand().execute(['--json'], ctx() as never);
+    expect(res.exitCode).toBe(0);
+    const models = JSON.parse(res.stdout) as Array<{ id: string }>;
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('claude-opus-4-6');
   });
 });
