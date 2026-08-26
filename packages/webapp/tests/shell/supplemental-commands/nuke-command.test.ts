@@ -102,6 +102,27 @@ describe('nuke command', () => {
     expect(result.stdout).toContain('Usage: nuke');
   });
 
+  it('rejects unknown flags with a non-zero exit', async () => {
+    // Silent-swallow regression for #2255: `nuke 1234 --force` used to
+    // wipe and exit 0 because the launch-code join ignored dash tokens.
+    const cmd = createNukeCommand();
+    const result = await cmd.execute(['1234', '--force'], createMockCtx());
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toContain('unknown flag');
+    expect(result.stderr).toContain('--force');
+  });
+
+  it('honours -- so a dash-prefixed launch-code fragment stays positional', async () => {
+    // Without `--`, `-12` would be an unknown flag; with the terminator
+    // it concatenates with `34` into the launch code.
+    const dispose = installNukeReloadListener(() => {});
+    const cmd = createNukeCommand();
+    const result = await cmd.execute(['--', '-12', '34'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Nuking');
+    dispose();
+  });
+
   it('refuses without the launch code', async () => {
     const cmd = createNukeCommand();
     const result = await cmd.execute([], createMockCtx());
