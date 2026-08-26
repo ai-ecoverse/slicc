@@ -112,6 +112,15 @@ describe('nuke command', () => {
     expect(result.stderr).toContain('--force');
   });
 
+  it('accepts documented --yes alongside the launch code', async () => {
+    const dispose = installNukeReloadListener(() => {});
+    const cmd = createNukeCommand();
+    const result = await cmd.execute(['1234', '--yes'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Nuking');
+    dispose();
+  });
+
   it('honours -- so a dash-prefixed launch-code fragment stays positional', async () => {
     // Without `--`, `-12` would be an unknown flag; with the terminator
     // it concatenates with `34` into the launch code.

@@ -22,6 +22,8 @@ export {
 
 /** Nuke accepts no value-taking flags; keep in sync with `parseKnownFlags` below. */
 const NUKE_VALUE_FLAGS: readonly string[] = [];
+/** Documented no-op: confirmation is the launch code, not an interactive prompt. */
+const NUKE_BOOL_FLAGS = ['--yes'] as const;
 
 export function createNukeCommand(): Command {
   return defineCommand('nuke', async (args) => {
@@ -40,11 +42,11 @@ export function createNukeCommand(): Command {
       };
     }
 
-    // Reject unknown dash-prefixed tokens (issue #2255). Nuke has no
-    // known flags of its own — only the launch-code positionals — so any
-    // `--foo` must fail loudly rather than being joined into the code
-    // check (e.g. `nuke 1234 --force` used to wipe and exit 0).
-    const parsed = parseKnownFlags(args, { value: NUKE_VALUE_FLAGS });
+    // Reject unknown dash-prefixed tokens (issue #2255). Only `--yes`
+    // (documented no-op) and the launch-code positionals are known — any
+    // other `--foo` must fail loudly rather than being joined into the
+    // code check (e.g. `nuke 1234 --force` used to wipe and exit 0).
+    const parsed = parseKnownFlags(args, { value: NUKE_VALUE_FLAGS, bool: NUKE_BOOL_FLAGS });
     if ('error' in parsed) {
       return { stdout: '', stderr: `nuke: ${parsed.error}\n`, exitCode: 1 };
     }
