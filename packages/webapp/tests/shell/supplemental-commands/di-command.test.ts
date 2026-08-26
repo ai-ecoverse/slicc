@@ -105,6 +105,32 @@ describe('di-command argv surface', () => {
     expect(r.stderr).toMatch(/requires at least one package/);
   });
 
+  it('rejects an unknown flag instead of silently ignoring it', async () => {
+    const { fs, fetch } = await fixtureFs([{ name: 'micropip', version: '0.6.0' }]);
+    const cmd = createDiCommand('di', { fs, fetch });
+    const add = await cmd.execute(['add', 'micropip', '--bogus'], ctx());
+    expect(add.exitCode).toBe(1);
+    expect(add.stderr).toContain('unknown flag: --bogus');
+    expect(add.stdout).toBe('');
+    const list = await cmd.execute(['list', '--json'], ctx());
+    expect(list.exitCode).toBe(1);
+    expect(list.stderr).toContain('unknown flag: --json');
+  });
+
+  it('treats tokens after -- as package specs, not flags', async () => {
+    const { fs, fetch } = await fixtureFs([{ name: 'micropip', version: '0.6.0' }]);
+    const cmd = createDiCommand('di', { fs, fetch });
+    // Without `--`, a dash-prefixed token is an unknown flag; with `--` it is a spec.
+    const rejected = await cmd.execute(['add', '--micropip'], ctx());
+    expect(rejected.exitCode).toBe(1);
+    expect(rejected.stderr).toContain('unknown flag: --micropip');
+    // Real package names do not start with `-`; the terminator still keeps
+    // dash-looking tokens reachable for callers that need them.
+    const viaTerminator = await cmd.execute(['add', '--', 'micropip'], ctx());
+    expect(viaTerminator.exitCode).toBe(0);
+    expect(viaTerminator.stdout).toMatch(/micropip==0.6.0/);
+  });
+
   it('di list prints recorded packages', async () => {
     const { fs, fetch } = await fixtureFs([{ name: 'micropip', version: '0.6.0' }]);
     const cmd = createDiCommand('di', { fs, fetch });
