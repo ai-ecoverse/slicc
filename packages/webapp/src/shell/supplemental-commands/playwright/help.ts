@@ -41,9 +41,9 @@ Commands:
                          Print the tab tree, or only the selected frame subtree
   frames                 List frame IDs for --frame (frame IDs are not valid --tab IDs)
   screenshot [ref] [--filename=path] [--max-width=N] [--fullPage=true] [--full-page]
-                         Take screenshot. The positional is an ELEMENT REF (e5, f1e5) to clip
-                         to; the output path is --filename=path. --max-width downscales the
-                         image if wider than N pixels (e.g. --max-width=1024).
+                         Take screenshot. The positional is a MAIN-FRAME ELEMENT REF (e5) to
+                         clip to, not a path — the output path is --filename=path. --max-width
+                         downscales the image if wider than N pixels (e.g. --max-width=1024).
   eval <expression> [--frame=<frameId>] [--filename=path]
                          Evaluate JavaScript in tab or frame (accepts top-level await/return)
   dblclick <ref> [btn] [--modifiers=Alt,Control,...] Double-click element by ref

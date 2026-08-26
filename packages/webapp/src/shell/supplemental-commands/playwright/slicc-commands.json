@@ -37,7 +37,6 @@
     "open": {
       "args": ["url"],
       "flags": {
-        "tab": "string",
         "foreground": "boolean",
         "fg": "boolean",
         "runtime": "string",

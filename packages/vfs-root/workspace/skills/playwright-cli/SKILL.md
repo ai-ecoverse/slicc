@@ -55,8 +55,8 @@ playwright-cli snapshot --tab=E9A3F
 - `No snapshot available` — run `snapshot --tab=<id>` before using refs.
 - `unknown flag "--x"` / `unexpected argument "y"` — every subcommand rejects arguments it does not
   support, so an exit code of 0 means everything you passed was honoured. Check `<verb> --help`.
-- `is not an element ref` — a screenshot's positional is an element ref (`e5`); the output path is
-  `--filename=<path>`.
+- `is not an element ref` — a screenshot's positional is a main-frame element ref (`e5`); the output
+  path is `--filename=<path>`. Frame-prefixed refs (`f1e5`) clip only with `click`-family commands.
 - Refs are tied to **one tab + one snapshot**. They do not carry across tabs, navigations, or reloads.
 
 ## Element Refs
@@ -161,7 +161,7 @@ Teleport is for leader/follower tray auth handoffs. Scoped to a specific tab —
 ```bash
 playwright-cli screenshot --tab=<id>                             # Save to /tmp/screenshot-<ts>.png
 playwright-cli screenshot --tab=<id> --filename=page.png         # Save to custom path
-playwright-cli screenshot --tab=<id> e5                          # Screenshot specific element (positional = REF, not a path)
+playwright-cli screenshot --tab=<id> e5                          # Clip to an element (positional = MAIN-FRAME ref, not a path)
 playwright-cli screenshot --tab=<id> --fullPage                  # Full scrollable page (alias: --full-page)
 playwright-cli screenshot --tab=<id> --max-width=800             # Downscale to a max width
 ```

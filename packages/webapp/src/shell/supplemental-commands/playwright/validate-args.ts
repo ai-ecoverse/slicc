@@ -48,14 +48,6 @@ function loadCommandSpecs(): Promise<CommandSpecs> {
   return specsPromise;
 }
 
-/**
- * Verbs the dispatcher accepts as aliases of a manifest entry. `close` and
- * `tab-close` both have entries; these are the ones that do not.
- */
-const SPEC_ALIASES: Record<string, string> = {
-  'tab-new': 'open',
-};
-
 /** Flags every verb accepts, whatever the manifest says. */
 const UNIVERSAL_FLAGS = new Set(['help', 'h']);
 
@@ -71,6 +63,18 @@ const ELEMENT_REF_RE = /^(f[0-9]+)?e[0-9]+$/;
  * the image landed at the default path instead.
  */
 const REF_ARG_NAMES = new Set(['ref', 'startRef', 'endRef']);
+
+/**
+ * Verbs whose ref must come from a MAIN-FRAME snapshot. `screenshot` resolves
+ * its clip through a backendNodeId in the page session, which cannot reach a
+ * node inside a child frame — a frame-prefixed ref there silently captured the
+ * full viewport and exited 0. Interaction verbs (`click`, `fill`, …) route
+ * through `evaluateInFrame` and do take `f1e5`.
+ */
+const MAIN_FRAME_REF_COMMANDS = new Set(['screenshot']);
+
+/** A main-frame ref (`e5`) — no frame prefix. */
+const MAIN_FRAME_REF_RE = /^e[0-9]+$/;
 
 /**
  * A negative number (`mousewheel 0 -300`). `mri` already swallows these as
@@ -121,12 +125,16 @@ function unknownFlag(rawArgs: readonly string[], spec: CommandSpec): string | nu
  * Skipped for a variadic spec: `upload <ref> <file…>` accepts a bare file list
  * with no ref at all, so its first positional is not reliably a ref.
  */
-function malformedRef(positional: readonly string[], spec: CommandSpec): string | null {
+function malformedRef(
+  positional: readonly string[],
+  spec: CommandSpec,
+  refPattern: RegExp
+): string | null {
   if (spec.variadic) return null;
   for (const [index, name] of (spec.args ?? []).entries()) {
     const value = positional[index];
     if (!REF_ARG_NAMES.has(name) || value === undefined) continue;
-    if (!ELEMENT_REF_RE.test(value)) return value;
+    if (!refPattern.test(value)) return value;
   }
   return null;
 }
@@ -145,7 +153,7 @@ export async function validateSubcommandArgs(
   rawArgs: readonly string[],
   positional: readonly string[]
 ): Promise<string | null> {
-  const spec = (await loadCommandSpecs())[SPEC_ALIASES[sub] ?? sub];
+  const spec = (await loadCommandSpecs())[sub];
   if (!spec) return null;
 
   const usage = `Run "${commandName} ${sub} --help" for usage.\n`;
@@ -153,7 +161,8 @@ export async function validateSubcommandArgs(
   const flag = unknownFlag(rawArgs, spec);
   if (flag) return `${commandName} ${sub}: unknown flag "--${flag}"\n${usage}`;
 
-  const badRef = malformedRef(positional, spec);
+  const mainFrameOnly = MAIN_FRAME_REF_COMMANDS.has(sub);
+  const badRef = malformedRef(positional, spec, mainFrameOnly ? MAIN_FRAME_REF_RE : ELEMENT_REF_RE);
   if (badRef !== null) {
     // `screenshot /tmp/shot.png` is the reflex that started #2405: the path
     // slot is `--filename`, so point at it rather than only rejecting.
@@ -161,10 +170,10 @@ export async function validateSubcommandArgs(
       spec.flags?.['filename'] && /[/.]/.test(badRef)
         ? ` Use --filename=${badRef} to choose where the output is saved.`
         : '';
-    return (
-      `${commandName} ${sub}: "${badRef}" is not an element ref ` +
-      `(expected e5 or f1e5).${filenameHint}\n${usage}`
-    );
+    const expected = mainFrameOnly
+      ? 'expected a main-frame ref like e5; take a snapshot without --frame'
+      : 'expected e5 or f1e5';
+    return `${commandName} ${sub}: "${badRef}" is not an element ref (${expected}).${filenameHint}\n${usage}`;
   }
 
   const maxPositional = spec.args?.length ?? 0;

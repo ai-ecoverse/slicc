@@ -48,8 +48,8 @@ describe('validateSubcommandArgs', () => {
   });
 
   it('accepts main-frame and child-frame refs in a ref slot', async () => {
-    expect(await check('screenshot', ['e5', '--tab=t1'])).toBeNull();
-    expect(await check('screenshot', ['f1e5', '--tab=t1'])).toBeNull();
+    expect(await check('hover', ['e5', '--tab=t1'])).toBeNull();
+    expect(await check('hover', ['f1e5', '--tab=t1'])).toBeNull();
     expect(await check('drag', ['e1', 'f2e7', '--tab=t1'])).toBeNull();
   });
 
@@ -105,16 +105,36 @@ describe('validateSubcommandArgs', () => {
   });
 
   it('validates the alias verbs the dispatcher registers', async () => {
-    expect(await check('tab-new', ['https://x', '--fg'])).toBeNull();
     expect(await check('navigate', ['https://x', '--tab=t1'])).toBeNull();
     expect(await check('close', ['--tab=t1'])).toBeNull();
   });
 
+  it('rejects --tab on the verbs that always create a new tab', async () => {
+    // `openHandler` serves both and never reads `flags.tab`; borrowing `open`'s
+    // entry for `tab-new` would have let the ignored flag through.
+    expect(await check('tab-new', ['https://x', '--fg'])).toBeNull();
+    expect(await check('tab-new', ['https://x', '--tab=t1'])).toContain('unknown flag "--tab"');
+    expect(await check('open', ['https://x', '--tab=t1'])).toContain('unknown flag "--tab"');
+  });
+
+  it('takes only main-frame refs for screenshot', async () => {
+    // `screenshot` clips via a page-session backendNodeId, which cannot reach a
+    // node inside a child frame; `click` routes through evaluateInFrame and can.
+    expect(await check('screenshot', ['e5', '--tab=t1'])).toBeNull();
+    const err = await check('screenshot', ['f1e5', '--tab=t1']);
+    expect(err).toContain('"f1e5" is not an element ref');
+    expect(err).toContain('main-frame ref');
+    expect(await check('click', ['f1e5', '--tab=t1'])).toBeNull();
+  });
+
   it('has a spec for every registered subcommand', async () => {
     // A verb with no spec is silently unvalidated — the exact hole #2405 filed.
-    const unspecified = [...playwrightHandlers.keys()].filter(
-      (sub) => check(sub, ['--definitely-not-a-flag']) === null
+    const checked = await Promise.all(
+      [...playwrightHandlers.keys()].map(async (sub) => ({
+        sub,
+        error: await check(sub, ['--definitely-not-a-flag']),
+      }))
     );
-    expect(unspecified).toEqual([]);
+    expect(checked.filter((c) => c.error === null).map((c) => c.sub)).toEqual([]);
   });
 });
