@@ -304,11 +304,20 @@ export function createWebhookCommand(commandOptions: WebhookCommandOptions = {})
     getLeaderStatus: commandOptions.getLeaderStatus ?? (() => DEFAULT_LEADER_STATUS),
   };
   return defineCommand('webhook', async (args, ctx) => {
-    if (args.length === 0 || isHelpRequest(args, { valueFlags: CREATE_VALUE_FLAGS })) {
+    if (args.length === 0) {
       return webhookHelp();
     }
 
+    // Resolve the verb before help so create-only valueFlags do not shadow
+    // `--help` on other subcommands (`webhook list --name --help`).
     const subcommand = args[0];
+    if (
+      isHelpRequest(args, {
+        valueFlags: subcommand === 'create' ? CREATE_VALUE_FLAGS : undefined,
+      })
+    ) {
+      return webhookHelp();
+    }
 
     try {
       switch (subcommand) {

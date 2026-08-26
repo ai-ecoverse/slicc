@@ -178,6 +178,14 @@ describe('webhook command — help and argument validation', () => {
     expect(result.stdout).not.toContain('usage: webhook');
     expect(lm.createWebhook).toHaveBeenCalledWith('--help', 'pr', undefined);
   });
+
+  it('shows help for list --name --help (create valueFlags stay create-scoped)', async () => {
+    const { command } = await loadCommandAndTrayLeader();
+    const result = await command.execute(['list', '--name', '--help'], {} as never);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('webhook <command>');
+    expect(result.stderr).not.toContain('unknown flag');
+  });
 });
 
 describe('webhook command — standalone mode (direct LickManager)', () => {
