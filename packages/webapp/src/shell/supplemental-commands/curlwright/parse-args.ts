@@ -12,6 +12,19 @@
  * quietly dropped, because the whole point of the command is that the
  * request goes out *exactly* as written.
  *
+ * The same reasoning excludes the shared `parseKnownFlags` walk added for
+ * issue #2255, and this command is NOT part of that sweep: it already
+ * rejects unknown flags by name, which is what #2255 is trying to
+ * achieve. That helper collects values into a `Map`, so a repeated flag
+ * overwrites — `-H` and `-d` here are repeatable AND order-sensitive —
+ * and it has no notion of bundled short booleans, attached short values,
+ * or a `-X`/`--request` alias pair, so `-sS` and `-XPOST` would both come
+ * back as unknown flags. Its single `unknown flag: --x` message also
+ * cannot carry the per-option reason (`--cert` vs `-x` vs `--compressed`)
+ * that makes a rejection here actionable. The enforcement is not this
+ * comment: `curlwright-args.test.ts` pins `-sS`, `-XPOST` and the ordered
+ * repeat of `-H`/`-d`, so a migration to the helper fails there first.
+ *
  * Parsing is pure: `@file` references are recorded, never read. The
  * command resolves them against the VFS afterwards (see `body.ts`), so
  * this module stays trivially testable.
