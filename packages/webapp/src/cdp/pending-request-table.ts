@@ -18,10 +18,8 @@ interface PendingEntry<Result> {
   timer: ReturnType<typeof setTimeout>;
 }
 
-/** Default result shape for CDP transport pending requests (wire JSON object). */
-export type CdpWireResult = { [key: string]: unknown };
-
-export class PendingRequestTable<Id, Result = CdpWireResult> {
+// biome-ignore lint/plugin: opaque CDP wire result; callers specialize via the Result type arg.
+export class PendingRequestTable<Id, Result = Record<string, unknown>> {
   private readonly pending = new Map<Id, PendingEntry<Result>>();
 
   /**
