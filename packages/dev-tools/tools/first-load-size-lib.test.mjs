@@ -158,6 +158,44 @@ describe('checkFirstLoad', () => {
     expect(failures[0]).toMatch(/ceiling/);
   });
 
+  it('uses a caller-supplied note when the baseline does not apply', () => {
+    // A merge-queue batch is cumulative, so the per-change delta is the SUM
+    // of the batch. The caller opts out of the delta and says why; the
+    // ceilings still gate, so the run is not silently green.
+    const { failures, notes } = checkFirstLoad(limits, base, null, {
+      baselineNote: 'merge_group: a queue batch is cumulative',
+    });
+    expect(notes).toEqual(['merge_group: a queue batch is cumulative']);
+    expect(notes[0]).not.toMatch(/unavailable|SKIPPED/);
+    expect(failures).toEqual([]);
+  });
+
+  it('still enforces the ceilings when the delta does not apply', () => {
+    const overCeiling = { page: base.page, worker: kb(4400) };
+    const { failures } = checkFirstLoad(limits, overCeiling, null, {
+      baselineNote: 'merge_group: a queue batch is cumulative',
+    });
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatch(/workerEagerCeilingKb/);
+  });
+
+  it('keeps the degraded wording when no note is supplied', () => {
+    const { notes } = checkFirstLoad(limits, base, null);
+    expect(notes[0]).toMatch(/unavailable/);
+    expect(notes[0]).toMatch(/SKIPPED/);
+  });
+
+  it('would fail a queue-depth batch if the per-change delta were applied', () => {
+    // Regression guard for the defect this option exists to fix: observed
+    // batches reached +3.8 kB while their individual PRs measured 0.1-1.9 kB.
+    // Applied as a delta that trips the gate; opted out, it does not.
+    const batch = { page: base.page, worker: base.worker + 5.2 * 1024 };
+    expect(checkFirstLoad(limits, batch, base).failures).toHaveLength(1);
+    expect(checkFirstLoad(limits, batch, null, { baselineNote: 'merge_group' }).failures).toEqual(
+      []
+    );
+  });
+
   it('fails when the limits file is missing maxDeltaKb', () => {
     const { failures } = checkFirstLoad({ ...limits, maxDeltaKb: undefined }, base, base);
     expect(failures).toHaveLength(1);

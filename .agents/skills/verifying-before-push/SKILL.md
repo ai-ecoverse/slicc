@@ -167,8 +167,17 @@ node packages/dev-tools/tools/check-first-load-size.mjs --baseline=none    # cei
 node packages/dev-tools/tools/check-first-load-size.mjs --json             # just measure
 ```
 
-If the merge-base cannot be built (shallow clone, unknown ref), the delta check is reported
-as SKIPPED and only the ceilings are enforced — read the log rather than assuming green.
+If the merge-base cannot be built (shallow clone, unknown ref) the delta is reported as
+SKIPPED and only the ceilings are enforced, so you are not blocked locally. **In CI on a
+pull request that same condition is a hard failure** — the merge queue deliberately does not
+re-check the delta, so a PR whose baseline could not be built must not be waved through with
+its growth unmeasured. Re-run if it looks transient.
+
+**On `merge_group` the delta is deliberately not applied.** A queue branch is cumulative — it
+carries every PR up to its position — so its delta is the SUM of the batch, not one change's
+growth, and a per-change allowance would fail on queue depth (observed batches hit +3.8 kB
+while their individual PRs measured 0.1-1.9 kB). The ceilings are the right check there, and
+every PR in the batch was already delta-gated against its own merge-base.
 
 The `*EagerCeilingKb` values in the same file are the absolute backstop, since a delta gate
 alone would let many small under-threshold changes creep upward forever. They are a
