@@ -23,16 +23,21 @@ export interface ParsedKnownFlags {
 export interface KnownFlagSpec {
   /** Flags that consume `--flag=value` or `--flag value`. */
   value?: readonly string[];
-  /** Flags that stand alone (no following token). */
+  /**
+   * Flags that stand alone (exact token only). An attached value such as
+   * `--persist=false` is rejected — boolean presence must not be inferred
+   * from a stripped name, or an intended opt-out becomes an opt-in.
+   */
   bool?: readonly string[];
 }
 
 /**
  * Walk every token: known value flags consume `--flag=value` or
- * `--flag value`, known boolean flags stand alone, and any other
- * dash-prefixed token is an error. Unlike the leading-flag walks elsewhere
- * in this directory, flags are accepted in any position — the repro in
- * issue #2166 put `--runtime` both before and after the JSON payload.
+ * `--flag value`, known boolean flags match only as the exact token
+ * (`eq === -1`), and any other dash-prefixed token is an error. Unlike the
+ * leading-flag walks elsewhere in this directory, flags are accepted in any
+ * position — the repro in issue #2166 put `--runtime` both before and after
+ * the JSON payload.
  *
  * Everything after a `--` terminator is positional, so a payload that
  * genuinely starts with a dash stays reachable. A bare `-` (stdin
@@ -70,7 +75,8 @@ export function parseKnownFlags(
       values.set(name, value);
       continue;
     }
-    if (boolFlags.has(name)) {
+    // Boolean flags must be the exact token — `--flag=value` is unknown.
+    if (eq === -1 && boolFlags.has(name)) {
       bools.add(name);
       continue;
     }

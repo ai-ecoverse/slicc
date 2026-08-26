@@ -9,6 +9,13 @@ import type { SudoBroker, SudoDecision } from '../../sudo/types.js';
 import { resolveFloatTopology } from '../float-topology.js';
 import { type ByteString, stdinAsText } from '../just-bash-compat.js';
 import { createDefaultSecretBackend, type SecretBackend } from './secret-backends.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
+
+/** Value-taking flags shared by `set` / `scope` (and by `isHelpRequest`). */
+const SECRET_VALUE_FLAGS = ['--domain'] as const;
+/** Boolean flags accepted by `set`. */
+const SECRET_SET_BOOL_FLAGS = ['--persist'] as const;
 
 function helpText(): string {
   return `secret — manage secrets for the fetch proxy and mount backends
@@ -51,13 +58,23 @@ Examples:
 `;
 }
 
-function parseDomainFlag(args: string[]): string[] | null {
-  const idx = args.indexOf('--domain');
-  if (idx === -1 || !args[idx + 1] || args[idx + 1].startsWith('-')) return null;
-  return args[idx + 1]
+/**
+ * Split a `--domain` value into non-empty patterns. Returns `null` when the
+ * flag is missing, empty after trimming, or still looks like a flag (so
+ * `secret set … --domain --persist` keeps failing as "requires --domain"
+ * rather than treating `--persist` as a host pattern).
+ */
+function domainsFromFlag(raw: string | undefined): string[] | null {
+  if (raw === undefined || raw.startsWith('-')) return null;
+  const domains = raw
     .split(',')
     .map((d) => d.trim())
     .filter((d) => d.length > 0);
+  return domains.length === 0 ? null : domains;
+}
+
+function flagError(message: string): ExecResult {
+  return { stdout: '', stderr: `secret: ${message}\n`, exitCode: 1 };
 }
 
 /** Operations gated behind an intrinsic sudo prompt. */
@@ -248,11 +265,17 @@ async function handleSet(
   ctx: CommandContext,
   env: SecretCmdEnv
 ): Promise<ExecResult> {
-  const name = args[1];
+  const parsed = parseKnownFlags(args.slice(1), {
+    value: SECRET_VALUE_FLAGS,
+    bool: SECRET_SET_BOOL_FLAGS,
+  });
+  if ('error' in parsed) return flagError(parsed.error);
+
+  const name = parsed.positionals[0];
   if (!name || name.startsWith('-')) {
     return { stdout: '', stderr: 'secret: set requires a <name>\n', exitCode: 1 };
   }
-  const argValue = args[2] && !args[2].startsWith('-') ? args[2] : undefined;
+  const argValue = parsed.positionals[1];
   const stdinValue = readStdinValue(ctx.stdin);
 
   if (argValue !== undefined && stdinValue !== undefined) {
@@ -274,21 +297,23 @@ async function handleSet(
       exitCode: 1,
     };
   }
-  const domains = parseDomainFlag(args) ?? [];
-  if (domains.length === 0) {
+  const domains = domainsFromFlag(parsed.values.get('--domain'));
+  if (!domains) {
     return {
       stdout: '',
       stderr: 'secret: set requires --domain <patterns>\n',
       exitCode: 1,
     };
   }
-  return args.includes('--persist')
+  return parsed.bools.has('--persist')
     ? handleSetPersisted(name, value, domains, env)
     : handleSetSession(name, value, domains, env);
 }
 
 async function handleGet(args: string[], env: SecretCmdEnv): Promise<ExecResult> {
-  const name = args[1];
+  const parsed = parseKnownFlags(args.slice(1), {});
+  if ('error' in parsed) return flagError(parsed.error);
+  const name = parsed.positionals[0];
   if (!name) {
     return { stdout: '', stderr: 'secret: get requires a <name>\n', exitCode: 1 };
   }
@@ -304,7 +329,9 @@ async function handleGet(args: string[], env: SecretCmdEnv): Promise<ExecResult>
 }
 
 async function handlePeek(args: string[], env: SecretCmdEnv): Promise<ExecResult> {
-  const name = args[1];
+  const parsed = parseKnownFlags(args.slice(1), {});
+  if ('error' in parsed) return flagError(parsed.error);
+  const name = parsed.positionals[0];
   if (!name) {
     return { stdout: '', stderr: 'secret: peek requires a <name>\n', exitCode: 1 };
   }
@@ -320,12 +347,14 @@ async function handlePeek(args: string[], env: SecretCmdEnv): Promise<ExecResult
 }
 
 async function handleScope(args: string[], env: SecretCmdEnv): Promise<ExecResult> {
-  const name = args[1];
+  const parsed = parseKnownFlags(args.slice(1), { value: SECRET_VALUE_FLAGS });
+  if ('error' in parsed) return flagError(parsed.error);
+  const name = parsed.positionals[0];
   if (!name || name.startsWith('-')) {
     return { stdout: '', stderr: 'secret: scope requires a <name>\n', exitCode: 1 };
   }
-  const domains = parseDomainFlag(args) ?? [];
-  if (domains.length === 0) {
+  const domains = domainsFromFlag(parsed.values.get('--domain'));
+  if (!domains) {
     return {
       stdout: '',
       stderr: 'secret: scope requires --domain <patterns>\n',
@@ -342,7 +371,9 @@ async function handleScope(args: string[], env: SecretCmdEnv): Promise<ExecResul
   };
 }
 
-async function handleList(env: SecretCmdEnv): Promise<ExecResult> {
+async function handleList(args: string[], env: SecretCmdEnv): Promise<ExecResult> {
+  const parsed = parseKnownFlags(args.slice(1), {});
+  if ('error' in parsed) return flagError(parsed.error);
   const entries = await env.backend.list();
   if (entries.length === 0) {
     return { stdout: 'No secrets stored\n', stderr: '', exitCode: 0 };
@@ -361,7 +392,9 @@ async function handleDelete(
   subcommand: string,
   env: SecretCmdEnv
 ): Promise<ExecResult> {
-  const name = args[1];
+  const parsed = parseKnownFlags(args.slice(1), {});
+  if ('error' in parsed) return flagError(parsed.error);
+  const name = parsed.positionals[0];
   if (!name) {
     return {
       stdout: '',
@@ -378,8 +411,10 @@ async function handleDelete(
 }
 
 async function handleTest(args: string[], env: SecretCmdEnv): Promise<ExecResult> {
-  const name = args[1];
-  const url = args[2];
+  const parsed = parseKnownFlags(args.slice(1), {});
+  if ('error' in parsed) return flagError(parsed.error);
+  const name = parsed.positionals[0];
+  const url = parsed.positionals[1];
   if (!name || !url) {
     return { stdout: '', stderr: 'secret: test requires <name> <url>\n', exitCode: 1 };
   }
@@ -408,7 +443,9 @@ async function handleTest(args: string[], env: SecretCmdEnv): Promise<ExecResult
   };
 }
 
-async function handleEdit(env: SecretCmdEnv): Promise<ExecResult> {
+async function handleEdit(args: string[], env: SecretCmdEnv): Promise<ExecResult> {
+  const parsed = parseKnownFlags(args.slice(1), {});
+  if ('error' in parsed) return flagError(parsed.error);
   if (!env.inExtension) {
     return {
       stdout:
@@ -454,14 +491,14 @@ async function dispatch(
     case 'scope':
       return handleScope(args, env);
     case 'list':
-      return handleList(env);
+      return handleList(args, env);
     case 'delete':
     case 'rm':
       return handleDelete(args, subcommand, env);
     case 'test':
       return handleTest(args, env);
     case 'edit':
-      return handleEdit(env);
+      return handleEdit(args, env);
     default:
       return {
         stdout: '',
@@ -474,7 +511,7 @@ async function dispatch(
 export function createSecretCommand(deps: SecretCommandDeps = {}): Command {
   const env = buildEnv(deps);
   return defineCommand('secret', async (args, ctx) => {
-    if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+    if (args.length === 0 || isHelpRequest(args, { valueFlags: SECRET_VALUE_FLAGS })) {
       return { stdout: helpText(), stderr: '', exitCode: 0 };
     }
     try {
