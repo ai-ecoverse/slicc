@@ -109,6 +109,7 @@ describe('oauth-token command', () => {
         providerId: 'github',
         accessToken: 'tok',
         tokenExpiresAt: Date.now() + 3600000,
+        apiKey: '',
       },
     ]);
     mockGetRegisteredProviderIds.mockReturnValue(['github']);
