@@ -1,8 +1,10 @@
+import { CHERRY_RUNTIME_TAG } from '@slicc/shared-ts';
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getPanelRpcClient, type PanelRpcClient } from '../../kernel/panel-rpc.js';
-import { CHERRY_RUNTIME_TAG } from '../../scoops/tray-sync-protocol.js';
 import { type ConnectedFollowerInfo, getConnectedFollowersWithFallback } from './host-command.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
 
 /**
  * Outcome of an `emitSliccEvent` attempt. `delivered` is true once the event
@@ -144,6 +146,9 @@ Usage: cherry-emit <name> [--detail <json>] [--runtime <id>]
 
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
 
+/** Value-taking flags — shared with `isHelpRequest` so a flag VALUE of `--help` is not help. */
+const CHERRY_EMIT_VALUE_FLAGS = ['--detail', '--runtime'] as const;
+
 function errResult(message: string): CommandResult {
   return { stdout: '', stderr: `cherry-emit: ${message}\n`, exitCode: 1 };
 }
@@ -156,26 +161,19 @@ interface ParsedArgs {
 
 /**
  * Parse `cherry-emit` argv into positionals plus the two flag values.
+ * Rejects unknown dash-prefixed flags (issue #2255); accepts known flags in
+ * any position and honours a `--` terminator for names that start with `-`.
  * Returns a `CommandResult` instead of `ParsedArgs` on a flag-arg error so
  * the caller can surface it without branching on multiple shapes here.
  */
 function parseArgs(args: string[]): ParsedArgs | CommandResult {
-  const parsed: ParsedArgs = { positionals: [] };
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg !== '--detail' && arg !== '--runtime') {
-      parsed.positionals.push(arg!);
-      continue;
-    }
-    const next = args[i + 1];
-    if (next === undefined || next.startsWith('--')) {
-      return errResult(`${arg} requires a value`);
-    }
-    if (arg === '--detail') parsed.detailJson = next;
-    else parsed.runtime = next;
-    i++;
-  }
-  return parsed;
+  const parsed = parseKnownFlags(args, { value: CHERRY_EMIT_VALUE_FLAGS });
+  if ('error' in parsed) return errResult(parsed.error);
+  return {
+    positionals: parsed.positionals,
+    detailJson: parsed.values.get('--detail'),
+    runtime: parsed.values.get('--runtime'),
+  };
 }
 
 /**
@@ -212,7 +210,7 @@ function parseDetail(detailJson: string | undefined): { detail: unknown } | Comm
 export function createCherryEmitCommand(options: CherryEmitCommandOptions = {}): Command {
   const registry = options.registry ?? buildDefaultCherryRegistry();
   return defineCommand('cherry-emit', async (args) => {
-    if (args.includes('--help') || args.includes('-h')) {
+    if (isHelpRequest(args, { valueFlags: CHERRY_EMIT_VALUE_FLAGS })) {
       return { stdout: HELP_TEXT, stderr: '', exitCode: 0 };
     }
 

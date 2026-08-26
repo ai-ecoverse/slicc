@@ -1,6 +1,6 @@
+import { CHERRY_RUNTIME_TAG } from '@slicc/shared-ts';
 import { describe, expect, it, type Mock, vi } from 'vitest';
 import type { PanelRpcClient } from '../../../src/kernel/panel-rpc.js';
-import { CHERRY_RUNTIME_TAG } from '../../../src/scoops/tray-sync-protocol.js';
 import {
   buildDefaultCherryRegistry,
   type CherryEmitResult,
@@ -122,6 +122,27 @@ describe('cherry-emit command', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toMatch(/follower-a, follower-b/);
     expect(reg.emitSliccEvent).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown flag instead of silently ignoring it', async () => {
+    const reg = runtimeRegistry(['follower-a']);
+    const result = await createCherryEmitCommand({ registry: reg }).execute(
+      ['ping', '--bogus'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unknown flag: --bogus');
+    expect(reg.emitSliccEvent).not.toHaveBeenCalled();
+  });
+
+  it('accepts known flags in any position and honours -- for dash-prefixed names', async () => {
+    const reg = runtimeRegistry(['follower-a']);
+    const result = await createCherryEmitCommand({ registry: reg }).execute(
+      ['--detail', '{"x":1}', '--', '--weird'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(reg.emitSliccEvent).toHaveBeenCalledWith('follower-a', '--weird', { x: 1 });
   });
 });
 
