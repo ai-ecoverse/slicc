@@ -55,6 +55,14 @@ describe('isExpectedNoMatchSearch', () => {
     );
   });
 
+  it('does not exempt a negated search pipeline (exit 1 means a match was found)', () => {
+    // `! grep needle file` exits 1 when grep DID match — a genuine signal the
+    // exemption must not suppress. The command is still named `grep`.
+    expect(ok('! grep foo file')).toBe(false);
+    expect(ok('! rg foo')).toBe(false);
+    expect(ok('echo hi && ! grep foo file')).toBe(false);
+  });
+
   it('stays conservative when the command line does not parse', () => {
     expect(ok('grep foo "unterminated')).toBe(false);
   });

@@ -249,11 +249,17 @@ function literalWordText(word: WordNode): string | null {
  * rather than a hand-rolled tokenizer: assignment prefixes (`VAR=1 grep`) live
  * in `assignments` and never reach the name, and the one `command` builtin
  * prefix the heuristic honours (`command rg …`) is unwrapped to its target.
+ *
+ * A negated pipeline (`! grep needle file`) is disqualified: there exit 1 means
+ * the search *found* a match (grep's 0 flipped by `!`), the exact opposite of
+ * the no-match signal this exemption suppresses — so we return `null` rather
+ * than let the command name alone earn the exemption.
  */
 function lastCommandName(ast: ScriptNode): string | null {
   const stmt = ast.statements[ast.statements.length - 1];
   const pipeline = stmt?.pipelines[stmt.pipelines.length - 1];
-  const cmd = pipeline?.commands[pipeline.commands.length - 1];
+  if (!pipeline || pipeline.negated) return null;
+  const cmd = pipeline.commands[pipeline.commands.length - 1];
   if (cmd?.type !== 'SimpleCommand' || !cmd.name) return null;
   const name = literalWordText(cmd.name);
   if (name !== 'command') return name;
