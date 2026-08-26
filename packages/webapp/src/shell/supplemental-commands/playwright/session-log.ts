@@ -3,11 +3,14 @@
  * playwright-cli command family.
  */
 
-import type { BrowserAPI } from '../../../cdp/index.js';
 import type { VirtualFS } from '../../../fs/index.js';
 import { buildSnapshot } from './snapshot.js';
 import { filenameSafeTimestamp, isAlreadyExistsError } from './state.js';
-import type { CmdResult, PlaywrightState, TabSnapshot } from './types.js';
+import type { CmdResult, PlaywrightHandlerCtx, PlaywrightState, TabSnapshot } from './types.js';
+
+// Named via the handler context rather than imported from `cdp/` so this
+// module stays inside the shell layer (see layer-stack import direction).
+type BrowserAPI = PlaywrightHandlerCtx['browser'];
 
 /** Ensure /.playwright/ directories exist. */
 export async function ensureSessionDirs(vfs: VirtualFS, state: PlaywrightState): Promise<void> {
