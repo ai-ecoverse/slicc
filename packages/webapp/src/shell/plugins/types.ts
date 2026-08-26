@@ -13,6 +13,17 @@ export const PLUGIN_MANIFEST_SCHEMA_ID =
 /** Canonical `$schema` identifier for mcp.json (Agent Plugins 1.0.0). */
 export const PLUGIN_MCP_SCHEMA_ID = 'https://agent-plugins.org/schemas/1.0.0/mcp.schema.json';
 
+/**
+ * Opaque payload inside one extensions namespace (§8.1).
+ * SLICC preserves unimplemented namespaces without validating their contents.
+ */
+export interface PluginExtensionNamespacePayload {
+  [field: string]: unknown;
+}
+
+/** Client-extension namespaces keyed by namespace id (§8.1). */
+export type PluginManifestExtensions = Record<string, PluginExtensionNamespacePayload>;
+
 /** Validated plugin.json manifest (closed schema, §5). */
 export interface PluginManifest {
   $schema: string;
@@ -25,7 +36,7 @@ export interface PluginManifest {
   license?: string;
   keywords?: string[];
   /** Client-extension namespaces we do not implement are preserved opaquely. */
-  extensions?: Record<string, Record<string, unknown>>;
+  extensions?: PluginManifestExtensions;
 }
 
 /** One diagnostic emitted while loading a plugin (§11.3 reporting). */
