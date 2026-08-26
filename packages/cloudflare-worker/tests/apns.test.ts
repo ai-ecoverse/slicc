@@ -81,7 +81,7 @@ function stubSource(
       asked.push(staleToken);
       const value = tokens[Math.min(i, tokens.length - 1)];
       i += 1;
-      return { value, mintedAt: 0 };
+      return { value, mintedAt: 0, identity: 'TEAM1234.KEY5678' };
     },
   };
 }

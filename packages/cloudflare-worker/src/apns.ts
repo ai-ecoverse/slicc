@@ -72,6 +72,14 @@ export interface ApnsPushResult {
 export interface ApnsProviderToken {
   value: string;
   mintedAt: number;
+  /**
+   * `teamId.keyId` of the credentials that signed it. Apple's 20-minute floor
+   * is per key pair, so a token from *different* credentials is not merely
+   * stale — it must be discarded and re-minted at once, or a key rotation
+   * would disable pushes for the length of the floor (a revoked key answers
+   * `InvalidProviderToken`, which the floor otherwise refuses to act on).
+   */
+  identity: string;
 }
 
 /**
@@ -226,6 +234,7 @@ export class LocalProviderTokenMinter implements ApnsProviderTokenSource {
   private mintInFlight: Promise<ApnsProviderToken> | null = null;
   private readonly now: () => number;
   private readonly store: ProviderTokenStore | undefined;
+  private readonly identity: string;
 
   constructor(
     private readonly config: ApnsConfig,
@@ -233,6 +242,7 @@ export class LocalProviderTokenMinter implements ApnsProviderTokenSource {
   ) {
     this.now = deps.now ?? (() => Date.now());
     this.store = deps.store;
+    this.identity = providerTokenIdentity(config);
   }
 
   async getToken(staleToken?: string): Promise<ApnsProviderToken> {
@@ -253,7 +263,12 @@ export class LocalProviderTokenMinter implements ApnsProviderTokenSource {
 
   private async loadCached(): Promise<ApnsProviderToken | null> {
     if (this.cached) return this.cached;
-    this.cached = (await this.store?.load()) ?? null;
+    const stored = (await this.store?.load()) ?? null;
+    // Signed by credentials we no longer hold (rotated key id / team id, or a
+    // record predating this field): unusable, and holding it would stall the
+    // first mint under the floor. Drop it and sign fresh — the new key pair
+    // has its own budget with Apple.
+    this.cached = stored && stored.identity === this.identity ? stored : null;
     return this.cached;
   }
 
@@ -299,8 +314,14 @@ export class LocalProviderTokenMinter implements ApnsProviderTokenSource {
     return {
       value: `${signingInput}.${base64UrlEncode(new Uint8Array(signature))}`,
       mintedAt: now,
+      identity: this.identity,
     };
   }
+}
+
+/** Which credentials signed a token — see {@link ApnsProviderToken.identity}. */
+export function providerTokenIdentity(config: Pick<ApnsConfig, 'teamId' | 'keyId'>): string {
+  return `${config.teamId}.${config.keyId}`;
 }
 
 /** Blips worth one retry. A timeout is excluded: it already cost the full budget. */

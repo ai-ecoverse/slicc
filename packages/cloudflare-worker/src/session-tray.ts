@@ -203,7 +203,7 @@ export class SessionTrayDurableObject {
       // Borrow the JWT from the single minting instance so mint rate stops
       // scaling with tray count × hibernation cycles (issue #2432).
       const tokenSource = typedEnv.TRAY_HUB
-        ? new SharedProviderTokenSource(typedEnv.TRAY_HUB, this.apnsTokenMinter, this.now)
+        ? new SharedProviderTokenSource(typedEnv.TRAY_HUB, this.now)
         : this.apnsTokenMinter;
       this.apns = new WebCryptoApnsSender(apnsConfig, {
         fetchImpl: this.fetchImpl,

@@ -41,6 +41,11 @@ export const APNS_TOKEN_STORAGE_KEY = 'apns:provider-token';
  * minute 49 is not held past Apple's 60-minute expiry.
  */
 const BORROWED_TOKEN_TTL_MS = 50 * 60 * 1000;
+/**
+ * Absolute age past which a borrowed token is never reused, even to ride out an
+ * outage of the minting instance. Apple expires provider tokens at 60 minutes.
+ */
+const BORROWED_TOKEN_MAX_AGE_MS = 55 * 60 * 1000;
 
 /** Any URL works for a DO stub fetch; only the path is routed. */
 const INTERNAL_ORIGIN = 'https://tray-hub.internal';
@@ -92,19 +97,22 @@ export async function handleProviderTokenRequest(
 }
 
 /**
- * Borrows the provider JWT from the singleton instead of minting locally.
+ * Borrows the provider JWT from the minting instance.
  *
- * Falls back to `fallbackMinter` when the singleton cannot be reached: one DO
- * minting for itself is bounded by its own 20-minute floor, which is a far
- * better failure mode than every push dying because a single object is
- * unavailable. The fallback is loud so the condition is not silent.
+ * When that instance cannot be reached this deliberately does **not** mint
+ * locally. Doing so would put every waking tray back to signing its own JWT —
+ * precisely the behaviour this module exists to remove — converting a brief,
+ * local outage into account-wide `429 TooManyProviderTokenUpdates` that outlasts
+ * it and fails the pushes anyway. A still-valid borrowed token is reused if this
+ * instance happens to hold one; otherwise the push fails loudly. Pushes are
+ * best-effort wake-ups — the request itself travels over the data channel — so
+ * losing one costs far less than throttling the whole key.
  */
 export class SharedProviderTokenSource implements ApnsProviderTokenSource {
   private memo: ApnsProviderToken | null = null;
 
   constructor(
     private readonly namespace: DurableObjectNamespaceLike,
-    private readonly fallbackMinter: ApnsProviderTokenSource,
     private readonly now: () => number
   ) {}
 
@@ -118,10 +126,21 @@ export class SharedProviderTokenSource implements ApnsProviderTokenSource {
       this.memo = token;
       return token;
     } catch (err) {
-      console.warn('[push] shared APNs provider token unavailable — minting locally', {
-        error: err instanceof Error ? err.message : String(err),
-      });
-      return this.fallbackMinter.getToken(staleToken);
+      const error = err instanceof Error ? err.message : String(err);
+      // Only worth riding out with a token the gateway has not rejected and
+      // that Apple will still accept.
+      if (
+        memo &&
+        memo.value !== staleToken &&
+        this.now() - memo.mintedAt < BORROWED_TOKEN_MAX_AGE_MS
+      ) {
+        console.warn('[push] APNs provider-token instance unreachable — reusing borrowed token', {
+          error,
+        });
+        return memo;
+      }
+      console.warn('[push] APNs provider-token instance unreachable — dropping push', { error });
+      throw err;
     }
   }
 

@@ -58,12 +58,44 @@ describe('durableObjectProviderTokenStore', () => {
     const store = durableObjectProviderTokenStore(storage);
     expect(await store.load()).toBeNull();
 
-    await store.save({ value: 'jwt', mintedAt: 42 });
-    expect(await store.load()).toEqual({ value: 'jwt', mintedAt: 42 });
+    await store.save({ value: 'jwt', mintedAt: 42, identity: 'TEAM1234.KEY5678' });
+    expect(await store.load()).toEqual({
+      value: 'jwt',
+      mintedAt: 42,
+      identity: 'TEAM1234.KEY5678',
+    });
 
     // A half-written or older-shaped record must not be handed to APNs.
     await storage.put(APNS_TOKEN_STORAGE_KEY, { value: '', mintedAt: 'nope' });
     expect(await store.load()).toBeNull();
+  });
+});
+
+describe('credential rotation', () => {
+  it('discards a stored token signed by different credentials and mints at once', async () => {
+    // Rotating the key id must not be mistaken for staleness: the floor would
+    // pin the dead token for 20 minutes even though the new pair has its own
+    // budget with Apple.
+    const state = new FakeDurableObjectState();
+    const store = durableObjectProviderTokenStore(state.storage);
+    const now = () => 1_750_000_000_000;
+    const before = await new LocalProviderTokenMinter(CONFIG(), { now, store }).getToken();
+    expect(before.identity).toBe('TEAM1234.KEY5678');
+
+    const rotated = new LocalProviderTokenMinter({ ...CONFIG(), keyId: 'KEY9999' }, { now, store });
+    const after = await rotated.getToken();
+    expect(after.identity).toBe('TEAM1234.KEY9999');
+    expect(after.value).not.toBe(before.value);
+  });
+
+  it('discards a stored record predating the identity field', async () => {
+    const state = new FakeDurableObjectState();
+    await state.storage.put(APNS_TOKEN_STORAGE_KEY, { value: 'legacy', mintedAt: 1 });
+    const minter = new LocalProviderTokenMinter(CONFIG(), {
+      now: () => 1_000,
+      store: durableObjectProviderTokenStore(state.storage),
+    });
+    expect((await minter.getToken()).value).not.toBe('legacy');
   });
 });
 
@@ -73,7 +105,7 @@ describe('handleProviderTokenRequest', () => {
     const minter: ApnsProviderTokenSource = {
       async getToken(staleToken?: string): Promise<ApnsProviderToken> {
         asked.push(staleToken);
-        return { value: staleToken ? 'jwt-2' : 'jwt-1', mintedAt: 7 };
+        return { value: staleToken ? 'jwt-2' : 'jwt-1', mintedAt: 7, identity: 'i' };
       },
     };
 
@@ -81,7 +113,7 @@ describe('handleProviderTokenRequest', () => {
       new Request(`${HOST}${APNS_TOKEN_PATH}`, { method: 'POST', body: '{}' }),
       minter
     );
-    expect(await plain.json()).toEqual({ value: 'jwt-1', mintedAt: 7 });
+    expect(await plain.json()).toEqual({ value: 'jwt-1', mintedAt: 7, identity: 'i' });
 
     const rotate = await handleProviderTokenRequest(
       new Request(`${HOST}${APNS_TOKEN_PATH}`, {
@@ -90,7 +122,7 @@ describe('handleProviderTokenRequest', () => {
       }),
       minter
     );
-    expect(await rotate.json()).toEqual({ value: 'jwt-2', mintedAt: 7 });
+    expect(await rotate.json()).toEqual({ value: 'jwt-2', mintedAt: 7, identity: 'i' });
     expect(asked).toEqual([undefined, 'jwt-1']);
   });
 
@@ -127,16 +159,16 @@ describe('SharedProviderTokenSource', () => {
     const stub: DurableObjectStubLike = {
       fetch: async () => {
         served += 1;
-        return Response.json({ value: 'shared-jwt', mintedAt: 1_000 });
+        return Response.json({
+          value: 'shared-jwt',
+          mintedAt: 1_000,
+          identity: 'TEAM1234.KEY5678',
+        });
       },
     };
     const ns = fakeNamespace(stub);
     let now = 1_000;
-    const source = new SharedProviderTokenSource(
-      ns,
-      new LocalProviderTokenMinter(CONFIG(), { now: () => now }),
-      () => now
-    );
+    const source = new SharedProviderTokenSource(ns, () => now);
 
     expect((await source.getToken()).value).toBe('shared-jwt');
     expect(ns.names).toEqual([APNS_TOKEN_DO_NAME]);
@@ -157,56 +189,106 @@ describe('SharedProviderTokenSource', () => {
     const stub: DurableObjectStubLike = {
       fetch: async (input) => {
         bodies.push(await (input as Request).text());
-        return Response.json({ value: 'shared-jwt', mintedAt: 1_000 });
+        return Response.json({
+          value: 'shared-jwt',
+          mintedAt: 1_000,
+          identity: 'TEAM1234.KEY5678',
+        });
       },
     };
-    const source = new SharedProviderTokenSource(
-      fakeNamespace(stub),
-      new LocalProviderTokenMinter(CONFIG()),
-      () => 1_000
-    );
+    const source = new SharedProviderTokenSource(fakeNamespace(stub), () => 1_000);
     await source.getToken();
     await source.getToken('shared-jwt');
     expect(bodies).toEqual(['{}', JSON.stringify({ staleToken: 'shared-jwt' })]);
   });
 
-  it('falls back to local minting when the shared instance is unreachable', async () => {
-    // A single object being down must not take every push with it; the local
-    // minter carries its own 20-minute floor, so the blast radius is bounded.
+  it('never mints locally when the shared instance is unreachable', async () => {
+    // Falling back to per-tray minting would restore the very behaviour this
+    // module removes, turning a brief local outage into account-wide 429
+    // throttling that outlasts it. Fail the push instead.
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-    const stub: DurableObjectStubLike = {
-      fetch: async () => {
-        throw new Error('DO unavailable');
-      },
-    };
+    const signSpy = vi.spyOn(crypto.subtle, 'sign');
+    const before = signSpy.mock.calls.length;
     const source = new SharedProviderTokenSource(
-      fakeNamespace(stub),
-      new LocalProviderTokenMinter(CONFIG(), { now: () => 5_000 }),
+      fakeNamespace({
+        fetch: async () => {
+          throw new Error('DO unavailable');
+        },
+      }),
       () => 5_000
     );
-    await expect(source.getToken()).resolves.toMatchObject({ mintedAt: 5_000 });
-    expect(warn).toHaveBeenCalledWith(
-      expect.stringContaining('shared APNs provider token unavailable'),
-      expect.anything()
-    );
+    await expect(source.getToken()).rejects.toThrow('DO unavailable');
+    expect(signSpy.mock.calls.length - before).toBe(0);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining('dropping push'), expect.anything());
+    signSpy.mockRestore();
     warn.mockRestore();
   });
 
-  it('falls back when the shared instance answers with an error or junk', async () => {
+  it('rides out an outage on a borrowed token that Apple will still accept', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let fail = false;
+    let now = 1_000;
+    const source = new SharedProviderTokenSource(
+      fakeNamespace({
+        fetch: async () => {
+          if (fail) throw new Error('DO unavailable');
+          return Response.json({
+            value: 'shared-jwt',
+            mintedAt: 1_000,
+            identity: 'TEAM1234.KEY5678',
+          });
+        },
+      }),
+      () => now
+    );
+    await source.getToken();
+    fail = true;
+
+    // Past the re-ask point but inside Apple's expiry: reuse rather than drop.
+    now = 1_000 + 52 * 60 * 1000;
+    await expect(source.getToken()).resolves.toMatchObject({ value: 'shared-jwt' });
+
+    // Past the hard age limit: the token is no good to Apple either, so fail.
+    now = 1_000 + 56 * 60 * 1000;
+    await expect(source.getToken()).rejects.toThrow('DO unavailable');
+    warn.mockRestore();
+  });
+
+  it('does not reuse a borrowed token the gateway just rejected', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    let fail = false;
+    const source = new SharedProviderTokenSource(
+      fakeNamespace({
+        fetch: async () => {
+          if (fail) throw new Error('DO unavailable');
+          return Response.json({
+            value: 'shared-jwt',
+            mintedAt: 1_000,
+            identity: 'TEAM1234.KEY5678',
+          });
+        },
+      }),
+      () => 1_000
+    );
+    await source.getToken();
+    fail = true;
+    await expect(source.getToken('shared-jwt')).rejects.toThrow('DO unavailable');
+    warn.mockRestore();
+  });
+
+  it('rejects an error status or a malformed payload from the shared instance', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const erroring = new SharedProviderTokenSource(
       fakeNamespace({ fetch: async () => new Response('nope', { status: 503 }) }),
-      new LocalProviderTokenMinter(CONFIG(), { now: () => 1 }),
       () => 1
     );
-    await expect(erroring.getToken()).resolves.toMatchObject({ mintedAt: 1 });
+    await expect(erroring.getToken()).rejects.toThrow('responded 503');
 
     const junk = new SharedProviderTokenSource(
       fakeNamespace({ fetch: async () => Response.json({ nope: true }) }),
-      new LocalProviderTokenMinter(CONFIG(), { now: () => 2 }),
       () => 2
     );
-    await expect(junk.getToken()).resolves.toMatchObject({ mintedAt: 2 });
+    await expect(junk.getToken()).rejects.toThrow('malformed token');
     warn.mockRestore();
   });
 });
