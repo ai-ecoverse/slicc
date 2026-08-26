@@ -55,7 +55,6 @@
   "packages/webapp/src/kernel/realm/skill-global.ts": 7,
   "packages/webapp/src/kernel/realm/ws-router-page.ts": 7,
   "packages/webapp/src/kernel/telemetry.ts": 1,
-  "packages/webapp/src/kernel/transport-binary-codec.ts": 5,
   "packages/webapp/src/net/discovery-link.ts": 1,
   "packages/webapp/src/net/handoff-link.ts": 1,
   "packages/webapp/src/net/link-header.ts": 1,

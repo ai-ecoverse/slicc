@@ -5,7 +5,7 @@
  * clone) between extension contexts in practice, so a raw `Uint8Array`
  * on a message — e.g. the `data` field of a binary `vfs-write-file` /
  * `vfs-read-file-result` — arrives at the receiver as a plain object
- * (`{0: 0x65, 1: 0x66, …, length}`) which fails the host's
+ * (`{0: 0x65, 1: 0xef, …, length}`) which fails the host's
  * `instanceof Uint8Array` guard, and the OPFS binary read path collapses
  * the bytes to `[object Object]`. The `MessageChannel` adapter
  * structured-clones natively (and supports zero-copy transfer), so it
@@ -33,10 +33,53 @@ interface EncodedBinary {
   data: string;
 }
 
+/** Envelope tree before binary encoding (may contain `Uint8Array`). */
+type TransportInput =
+  | null
+  | boolean
+  | number
+  | string
+  | Uint8Array
+  | TransportInput[]
+  | TransportInputObject;
+
+type TransportInputObject = { [key: string]: TransportInput };
+
+/** Envelope tree after binary encoding (bytes replaced by sentinels). */
+type TransportWire =
+  | null
+  | boolean
+  | number
+  | string
+  | EncodedBinary
+  | TransportWire[]
+  | TransportWireObject;
+
+type TransportWireObject = { [key: string]: TransportWire };
+
 function isEncodedBinary(value: unknown): value is EncodedBinary {
   if (!value || typeof value !== 'object') return false;
-  const obj = value as Record<string, unknown>;
-  return obj[BINARY_MARKER] === BINARY_KIND_B64 && typeof obj.data === 'string';
+  const candidate = value as EncodedBinary;
+  return candidate[BINARY_MARKER] === BINARY_KIND_B64 && typeof candidate.data === 'string';
+}
+
+function isTransportInputObject(value: unknown): value is TransportInputObject {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    !(value instanceof Uint8Array)
+  );
+}
+
+function isTransportWireObject(value: unknown): value is TransportWireObject {
+  return (
+    value !== null &&
+    typeof value === 'object' &&
+    !Array.isArray(value) &&
+    !(value instanceof Uint8Array) &&
+    !isEncodedBinary(value)
+  );
 }
 
 /**
@@ -50,16 +93,16 @@ export function encodeBinaryForTransport(value: unknown): unknown {
     return encoded;
   }
   if (Array.isArray(value)) {
-    return value.map(encodeBinaryForTransport);
+    return value.map(encodeBinaryForTransport) as TransportWire[];
   }
-  if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = encodeBinaryForTransport(v);
+  if (isTransportInputObject(value)) {
+    const out: TransportWireObject = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = encodeBinaryForTransport(v) as TransportWire;
     }
     return out;
   }
-  return value;
+  return value as TransportWire;
 }
 
 /**
@@ -70,13 +113,13 @@ export function encodeBinaryForTransport(value: unknown): unknown {
  */
 export function decodeBinaryForTransport(value: unknown): unknown {
   if (isEncodedBinary(value)) return base64ToUint8(value.data);
-  if (Array.isArray(value)) return value.map(decodeBinaryForTransport);
-  if (value && typeof value === 'object') {
-    const out: Record<string, unknown> = {};
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
-      out[k] = decodeBinaryForTransport(v);
+  if (Array.isArray(value)) return value.map(decodeBinaryForTransport) as TransportInput[];
+  if (isTransportWireObject(value)) {
+    const out: TransportInputObject = {};
+    for (const [k, v] of Object.entries(value)) {
+      out[k] = decodeBinaryForTransport(v) as TransportInput;
     }
     return out;
   }
-  return value;
+  return value as TransportInput;
 }
