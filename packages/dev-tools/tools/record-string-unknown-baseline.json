@@ -16,7 +16,6 @@
   "packages/node-server/src/electron-runtime.ts": 1,
   "packages/node-server/src/electron-tray-follower.ts": 16,
   "packages/node-server/src/file-logger.ts": 1,
-  "packages/node-server/src/routes/oauth-callback.ts": 1,
   "packages/node-server/src/sudo/electron-backend.ts": 1,
   "packages/shared-ts/src/transcript-export.ts": 18,
   "packages/webapp/providers/adobe.ts": 1,
