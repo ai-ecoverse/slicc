@@ -22,6 +22,10 @@ theme reset                   # Reset to default theme
 theme export <id> <path>      # Export a preset to a VFS path
 ```
 
+Unrecognized flags (for example `theme list --json`) exit non-zero with
+`theme <sub>: unknown flag: …` — do not treat exit 0 as proof a flag was
+honoured.
+
 ### Agent workflow
 
 1. Write a theme JSON file to the VFS

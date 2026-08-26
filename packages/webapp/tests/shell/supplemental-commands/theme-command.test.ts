@@ -61,6 +61,43 @@ describe('theme command', () => {
     expect(result.stderr).toContain('unknown subcommand "bogus"');
   });
 
+  it('rejects an unknown flag with a non-zero exit', async () => {
+    const result = await createThemeCommand().execute(['list', '--json'], mockCommandContext());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unknown flag: --json');
+  });
+
+  it('rejects an unknown flag in any position on apply', async () => {
+    withClient();
+    const result = await createThemeCommand().execute(
+      ['apply', 'vanilla', '--force'],
+      mockCommandContext()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unknown flag: --force');
+  });
+
+  it('honours -- so a dash-leading path is positional', async () => {
+    withClient();
+    const ctx = mockCommandContext({
+      fs: {
+        readFile: (async () => {
+          throw new Error('ENOENT');
+        }) as IFileSystem['readFile'],
+      },
+    });
+    const result = await createThemeCommand().execute(['apply', '--', '--not-a-flag.json'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('not a known preset id and file not found');
+    expect(result.stderr).not.toContain('unknown flag');
+  });
+
+  it('shows subcommand help without treating --help as a theme id', async () => {
+    const result = await createThemeCommand().execute(['apply', '--help'], mockCommandContext());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('usage: theme apply');
+  });
+
   describe('reset', () => {
     it('errors without a panel-RPC connection', async () => {
       const result = await createThemeCommand().execute(['reset'], mockCommandContext());
