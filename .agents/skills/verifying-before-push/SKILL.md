@@ -156,7 +156,10 @@ when _your change_ grows a graph by more than `maxDeltaKb` in
 [`packages/webapp/first-load-budget.json`](../../../packages/webapp/first-load-budget.json).
 You will not inherit someone else's regression, and the number reproduces locally: both
 sides are built on the same machine in the same run, which cancels the ~1 kB difference
-between a Linux CI build and a macOS one. The baseline build costs ~2 s.
+between a Linux CI build and a macOS one. The baseline costs ~4 s: the worktree gets a
+dependency tree whose workspace packages point at its OWN source (never the caller's, or a
+webcomponents change would measure as 0 kB), then the same prerequisite workspace builds the
+root `postinstall` runs, then the webapp build.
 
 ```bash
 node packages/dev-tools/tools/check-first-load-size.mjs                    # vs origin/main
