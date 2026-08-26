@@ -256,7 +256,7 @@ public enum LickState: String, Codable {
 
 // MARK: - ToolCall
 
-public struct ToolCall: Codable, Identifiable {
+public struct ToolCall: Codable, Identifiable, Equatable {
     public let id: String
     public let name: String
     public let input: AnyCodable?
@@ -276,7 +276,12 @@ public struct ToolCall: Codable, Identifiable {
 
 // MARK: - ChatMessage
 
-public struct ChatMessage: Codable, Identifiable {
+/// `Equatable` so the transcript can skip rows that did not change.
+/// `MessageBubble` compares its whole value; without this the comparison
+/// cannot be synthesized and every row re-renders on every pass. Every stored
+/// property is already `Equatable` (`AnyCodable` conforms, as do the attachment
+/// and usage types), so the conformance is synthesized.
+public struct ChatMessage: Codable, Identifiable, Equatable {
     public let id: String
     public let role: MessageRole
     public var content: String
