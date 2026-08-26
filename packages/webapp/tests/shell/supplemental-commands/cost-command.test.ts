@@ -101,6 +101,32 @@ describe('cost command', () => {
     expect(result.stdout).toContain('cost');
   });
 
+  it('rejects an unknown flag instead of silently ignoring it', async () => {
+    registerSessionCostsProvider(() => mockCosts);
+    const result = await createCostCommand().execute(['--bogus'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unknown flag: --bogus');
+    expect(result.stdout).toBe('');
+  });
+
+  it('accepts known flags in any order', async () => {
+    const scopes: SessionCostScope[] = [];
+    registerScopedProvider(scopes);
+    const result = await createCostCommand().execute(['--json', '--all'], ctx);
+    expect(result.exitCode).toBe(0);
+    const parsed = JSON.parse(result.stdout);
+    expect(parsed).toHaveLength(4);
+    expect(scopes).toEqual(['all']);
+  });
+
+  it('treats tokens after -- as positional, not flags', async () => {
+    registerSessionCostsProvider(() => mockCosts);
+    const result = await createCostCommand().execute(['--', '--json'], ctx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Session Cost Breakdown');
+    expect(result.stdout).not.toContain('"name"');
+  });
+
   it('returns error when no provider registered', async () => {
     const result = await createCostCommand().execute([], ctx);
     expect(result.exitCode).toBe(1);
