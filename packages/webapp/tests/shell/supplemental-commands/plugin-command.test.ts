@@ -84,6 +84,37 @@ describe('plugin command', () => {
     expect(bogus.stderr).toContain('unknown subcommand');
   });
 
+  it('rejects unknown flags instead of silently ignoring them (#2255)', async () => {
+    // The pre-fix install path filtered any `--*` token out of positionals
+    // and still exited 0 when a path remained — indistinguishable from honouring
+    // the flag. list ignored unknowns entirely.
+    const install = await runCmd(['install', '--json', 'reports-plugin']);
+    expect(install.exitCode).toBe(1);
+    expect(install.stderr).toContain('unknown flag: --json');
+
+    const list = await runCmd(['list', '--all']);
+    expect(list.exitCode).toBe(1);
+    expect(list.stderr).toContain('unknown flag: --all');
+
+    const info = await runCmd(['info', 'reports-plugin', '--bogus']);
+    expect(info.exitCode).toBe(1);
+    expect(info.stderr).toContain('unknown flag: --bogus');
+
+    // `--` still lets a dash-prefixed path through as positional.
+    await fs.mkdir('/workspace/-dash-plugin', { recursive: true });
+    await fs.writeFile(
+      '/workspace/-dash-plugin/plugin.json',
+      JSON.stringify({
+        $schema: PLUGIN_MANIFEST_SCHEMA_ID,
+        name: 'dash-plugin',
+        version: '1.0.0',
+      })
+    );
+    const viaTerminator = await runCmd(['validate', '--', '-dash-plugin']);
+    expect(viaTerminator.exitCode).toBe(0);
+    expect(viaTerminator.stdout).toContain('OK');
+  });
+
   it('install: registers a valid plugin and surfaces its skills via discovery', async () => {
     await writeFixturePlugin();
     const r = await runCmd(['install', 'reports-plugin']);

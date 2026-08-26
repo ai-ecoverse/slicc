@@ -27,6 +27,7 @@ import type { Command, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import type { LoadedPlugin, PluginDiagnostic, PluginLoadResult } from '../plugins/types.js';
+import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest } from './subcommand-help.js';
 
 /** Managed extraction root for GitHub-sourced plugins. */
@@ -52,6 +53,21 @@ function ok(stdout: string): ExecResult {
 
 function err(message: string, code = 1): ExecResult {
   return { stdout: '', stderr: `${message}\n`, exitCode: code };
+}
+
+/**
+ * `plugin` owns no value/bool flags today — only positionals. Still run the
+ * shared known-flag walk so a stray `--json` / `--runtime=…` fails loudly
+ * instead of being filtered as "not a path" and exiting 0 (issue #2255).
+ * Callers answer `isHelpRequest` before this so `--help` never reaches here.
+ */
+function parsePluginArgs(
+  sub: string,
+  args: readonly string[]
+): { ok: true; positionals: string[] } | ExecResult {
+  const parsed = parseKnownFlags(args, {});
+  if ('error' in parsed) return err(`plugin ${sub}: ${parsed.error}`);
+  return { ok: true, positionals: parsed.positionals };
 }
 
 function helpText(): string {
@@ -237,7 +253,7 @@ async function cmdInstall(
   cwd: string,
   deps: PluginCommandDeps
 ): Promise<ExecResult> {
-  if (args.includes('--help') || args.includes('-h')) {
+  if (isHelpRequest(args)) {
     return ok(`usage: plugin install <path|repo>
 
 Loads the Agent Plugins package at <path>, or downloads it from a GitHub
@@ -251,11 +267,12 @@ standard skills discovery, and each supported streamable-http MCP server
 is registered in the MCP store as "<plugin>:<server>".
 `);
   }
-  const positional = args.filter((a) => !a.startsWith('--'));
-  if (positional.length < 1) return err('plugin install: expected <path|repo>');
+  const parsed = parsePluginArgs('install', args);
+  if (!('ok' in parsed)) return parsed;
+  if (parsed.positionals.length < 1) return err('plugin install: expected <path|repo>');
 
   const fs = await openVfs(deps);
-  const source = await resolveSource(positional[0], cwd, fs);
+  const source = await resolveSource(parsed.positionals[0], cwd, fs);
   if (source.kind === 'error') return err(`plugin install: ${source.message}`);
 
   let root: string;
@@ -434,9 +451,11 @@ async function bridgeMcpServers(
 // ── list ────────────────────────────────────────────────────────────
 
 async function cmdList(args: string[], deps: PluginCommandDeps): Promise<ExecResult> {
-  if (args.includes('--help') || args.includes('-h')) {
+  if (isHelpRequest(args)) {
     return ok('usage: plugin list\n');
   }
+  const parsed = parsePluginArgs('list', args);
+  if (!('ok' in parsed)) return parsed;
   const { listInstalledPlugins } = await import('../plugins/store.js');
   const plugins = await listInstalledPlugins(deps.fs);
   const names = Object.keys(plugins).sort();
@@ -456,12 +475,13 @@ async function cmdList(args: string[], deps: PluginCommandDeps): Promise<ExecRes
 // ── info ────────────────────────────────────────────────────────────
 
 async function cmdInfo(args: string[], deps: PluginCommandDeps): Promise<ExecResult> {
-  if (args.length === 0 || isHelpRequest(args)) {
-    return args.length === 0
-      ? err('plugin info: expected <name>')
-      : ok('usage: plugin info <name>\n');
+  if (isHelpRequest(args)) {
+    return ok('usage: plugin info <name>\n');
   }
-  const name = args[0];
+  const parsed = parsePluginArgs('info', args);
+  if (!('ok' in parsed)) return parsed;
+  if (parsed.positionals.length < 1) return err('plugin info: expected <name>');
+  const name = parsed.positionals[0];
   const { getInstalledPlugin } = await import('../plugins/store.js');
   const entry = await getInstalledPlugin(name, deps.fs);
   if (!entry) return err(`plugin info: no installed plugin named "${name}"`);
@@ -506,13 +526,14 @@ async function cmdValidate(
   cwd: string,
   deps: PluginCommandDeps
 ): Promise<ExecResult> {
-  if (args.length === 0 || isHelpRequest(args)) {
-    return args.length === 0
-      ? err('plugin validate: expected <path|repo>')
-      : ok('usage: plugin validate <path|repo>\n');
+  if (isHelpRequest(args)) {
+    return ok('usage: plugin validate <path|repo>\n');
   }
+  const parsed = parsePluginArgs('validate', args);
+  if (!('ok' in parsed)) return parsed;
+  if (parsed.positionals.length < 1) return err('plugin validate: expected <path|repo>');
   const fs = await openVfs(deps);
-  const source = await resolveSource(args[0], cwd, fs);
+  const source = await resolveSource(parsed.positionals[0], cwd, fs);
   if (source.kind === 'error') return err(`plugin validate: ${source.message}`);
 
   let root: string;
@@ -562,12 +583,13 @@ async function cmdValidate(
 // ── remove ──────────────────────────────────────────────────────────
 
 async function cmdRemove(args: string[], deps: PluginCommandDeps): Promise<ExecResult> {
-  if (args.length === 0 || isHelpRequest(args)) {
-    return args.length === 0
-      ? err('plugin remove: expected <name>')
-      : ok('usage: plugin remove <name>\n');
+  if (isHelpRequest(args)) {
+    return ok('usage: plugin remove <name>\n');
   }
-  const name = args[0];
+  const parsed = parsePluginArgs('remove', args);
+  if (!('ok' in parsed)) return parsed;
+  if (parsed.positionals.length < 1) return err('plugin remove: expected <name>');
+  const name = parsed.positionals[0];
   const { getInstalledPlugin, deleteInstalledPlugin } = await import('../plugins/store.js');
   const entry = await getInstalledPlugin(name, deps.fs);
   if (!entry) return err(`plugin remove: no installed plugin named "${name}"`);
