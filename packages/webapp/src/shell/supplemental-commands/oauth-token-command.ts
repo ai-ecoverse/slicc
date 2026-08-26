@@ -1,12 +1,34 @@
 import type { Command, CommandContext } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { scopesSatisfied } from '../../providers/oauth-scopes.js';
+import { type ParsedKnownFlags, parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
 
 type CommandResult = { stdout: string; stderr: string; exitCode: number };
 type ProviderRegistry = typeof import('../../providers/index.js');
 type ProviderSettings = typeof import('../../providers/account-store.js');
 type ProviderConfig = NonNullable<ReturnType<ProviderRegistry['getRegisteredProviderConfig']>>;
 type ValueResult<T> = { ok: true; value: T } | { ok: false; result: CommandResult };
+
+/** Value-taking flags — same list passed to {@link isHelpRequest} as `valueFlags`. */
+const OAUTH_TOKEN_VALUE_FLAGS = [
+  '--provider',
+  '--scope',
+  '--from-file',
+  '--authorize-url',
+  '--redirect-pattern',
+  '--rewrite',
+] as const;
+
+/** Standalone flags accepted in any position. */
+const OAUTH_TOKEN_BOOL_FLAGS = [
+  '--list',
+  '--expire',
+  '--renew',
+  '--intercept',
+  '--force-login',
+  '--leave-tab',
+] as const;
 
 function helpText(): string {
   return `oauth-token — get an OAuth access token for a provider, or run an
@@ -86,10 +108,19 @@ async function executeOAuthTokenCommand(
 ): Promise<CommandResult> {
   const settings = await import('../../providers/account-store.js');
   const registry = await import('../../providers/index.js');
-  if (args.includes('--help') || args.includes('-h')) {
+  if (isHelpRequest(args, { valueFlags: OAUTH_TOKEN_VALUE_FLAGS })) {
     return { stdout: helpText(), stderr: '', exitCode: 0 };
   }
-  if (args.includes('--list')) {
+
+  const parsed = parseKnownFlags(args, {
+    value: OAUTH_TOKEN_VALUE_FLAGS,
+    bool: OAUTH_TOKEN_BOOL_FLAGS,
+  });
+  if ('error' in parsed) {
+    return errResult(`oauth-token: ${parsed.error}`);
+  }
+
+  if (parsed.bools.has('--list')) {
     return listProviders(
       settings.getAccounts,
       registry.getRegisteredProviderIds,
@@ -97,16 +128,16 @@ async function executeOAuthTokenCommand(
       settings.getOAuthAccountInfo
     );
   }
-  if (args.includes('--expire')) return runExpire(args);
-  if (args.includes('--renew')) return runSilentRenew(args);
-  if (args.includes('--from-file') || args.includes('--intercept')) {
-    return runDeclarativeIntercept(args, ctx);
+  if (parsed.bools.has('--expire')) return runExpire(parsed.positionals);
+  if (parsed.bools.has('--renew')) return runSilentRenew(parsed.positionals);
+  if (parsed.values.has('--from-file') || parsed.bools.has('--intercept')) {
+    return runDeclarativeIntercept(parsed, args, ctx);
   }
 
-  const scope = parseScopeOverride(args);
+  const scope = readScopeOverride(parsed);
   if (!scope.ok) return scope.result;
-  const forceLogin = parseForceLogin(args);
-  const provider = resolveProviderId(args, settings, registry);
+  const forceLogin = parsed.bools.has('--force-login');
+  const provider = resolveProviderId(parsed, settings, registry);
   if (!provider.ok) return provider.result;
   const config = resolveOAuthProviderConfig(provider.value, registry.getRegisteredProviderConfig);
   if (!config.ok) return config.result;
@@ -128,36 +159,29 @@ async function executeOAuthTokenCommand(
   );
 }
 
-function parseScopeOverride(args: string[]): ValueResult<string | undefined> {
-  const index = args.indexOf('--scope');
-  if (index < 0) return { ok: true, value: undefined };
-  const scope = args[index + 1]?.trim();
+function readScopeOverride(parsed: ParsedKnownFlags): ValueResult<string | undefined> {
+  if (!parsed.values.has('--scope')) return { ok: true, value: undefined };
+  const scope = parsed.values.get('--scope')?.trim();
+  // A dash-leading token was consumed as the value; treat it as missing so
+  // `oauth-token --scope --force-login` still errors instead of requesting
+  // the literal scope "--force-login".
   if (!scope || scope.startsWith('-')) {
     return { ok: false, result: errResult('oauth-token: --scope requires a value') };
   }
-  args.splice(index, 2);
   return { ok: true, value: scope };
 }
 
-function parseForceLogin(args: string[]): boolean {
-  const index = args.indexOf('--force-login');
-  if (index < 0) return false;
-  args.splice(index, 1);
-  return true;
-}
-
 function resolveProviderId(
-  args: string[],
+  parsed: ParsedKnownFlags,
   settings: ProviderSettings,
   registry: ProviderRegistry
 ): ValueResult<string> {
-  const providerFlagIdx = args.indexOf('--provider');
-  if (providerFlagIdx >= 0) {
-    const providerId = args[providerFlagIdx + 1];
+  if (parsed.values.has('--provider')) {
+    const providerId = parsed.values.get('--provider');
     if (providerId) return { ok: true, value: providerId };
     return { ok: false, result: errResult('oauth-token: --provider requires a value') };
   }
-  if (args.length > 0) return { ok: true, value: args[0] };
+  if (parsed.positionals.length > 0) return { ok: true, value: parsed.positionals[0] };
 
   const selected = settings.getSelectedProvider();
   if (isOAuthLoginProvider(registry.getRegisteredProviderConfig(selected))) {
@@ -324,13 +348,12 @@ async function trySilentRenew(onSilentRenew: () => Promise<string | null>): Prom
 }
 
 function resolveSilentRenewProviderId(
-  args: string[],
+  positionals: readonly string[],
   getSelectedProvider: ProviderSettings['getSelectedProvider'],
   getRegisteredProviderConfig: ProviderRegistry['getRegisteredProviderConfig'],
   getRegisteredProviderIds: ProviderRegistry['getRegisteredProviderIds']
 ): string | undefined {
-  const positional = args.filter((arg) => !arg.startsWith('-'));
-  const explicit = positional[0];
+  const explicit = positionals[0];
   if (explicit) return explicit;
 
   const selected = getSelectedProvider();
@@ -339,7 +362,7 @@ function resolveSilentRenewProviderId(
 }
 
 /** Debug aid: back-date only the locally stored expiry so the next network op renews. */
-async function runExpire(args: string[]): Promise<CommandResult> {
+async function runExpire(positionals: readonly string[]): Promise<CommandResult> {
   const { getAccounts, getSelectedProvider, saveOAuthAccount } = await import(
     '../../providers/account-store.js'
   );
@@ -347,7 +370,7 @@ async function runExpire(args: string[]): Promise<CommandResult> {
     '../../providers/index.js'
   );
   const providerId = resolveSilentRenewProviderId(
-    args,
+    positionals,
     getSelectedProvider,
     getRegisteredProviderConfig,
     getRegisteredProviderIds
@@ -390,7 +413,7 @@ async function runExpire(args: string[]): Promise<CommandResult> {
  * new expiry — useful for verifying renewal without waiting for natural expiry.
  */
 async function runSilentRenew(
-  args: string[]
+  positionals: readonly string[]
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   const { getSelectedProvider, getOAuthAccountInfo } = await import(
     '../../providers/account-store.js'
@@ -400,7 +423,7 @@ async function runSilentRenew(
   );
 
   const providerId = resolveSilentRenewProviderId(
-    args,
+    positionals,
     getSelectedProvider,
     getRegisteredProviderConfig,
     getRegisteredProviderIds
@@ -473,7 +496,8 @@ function describeAccount(
  * inspecting / testing OAuth flows without writing a provider module.
  */
 async function runDeclarativeIntercept(
-  args: string[],
+  parsed: ParsedKnownFlags,
+  rawArgs: readonly string[],
   ctx: CommandContext
 ): Promise<CommandResult> {
   const { parseInterceptOAuthConfig } = await import('../../providers/intercepted-oauth.js');
@@ -481,11 +505,11 @@ async function runDeclarativeIntercept(
     '../../providers/oauth-service.js'
   );
 
-  const rawConfig = await resolveRawInterceptConfig(args, ctx);
+  const rawConfig = await resolveRawInterceptConfig(parsed, rawArgs, ctx);
   if (!rawConfig.ok) return rawConfig.result;
-  const parsed = parseInterceptOAuthConfig(rawConfig.value);
-  if (!parsed.ok) {
-    return errResult(`oauth-token: invalid intercept config: ${parsed.error}`);
+  const configParsed = parseInterceptOAuthConfig(rawConfig.value);
+  if (!configParsed.ok) {
+    return errResult(`oauth-token: invalid intercept config: ${configParsed.error}`);
   }
 
   const launcher = await createInterceptingOAuthLauncherForCurrentRuntime();
@@ -495,7 +519,7 @@ async function runDeclarativeIntercept(
     );
   }
 
-  const captured = await launcher(parsed.config);
+  const captured = await launcher(configParsed.config);
   if (!captured) {
     return errResult('oauth-token: intercept timed out or was cancelled');
   }
@@ -503,12 +527,14 @@ async function runDeclarativeIntercept(
 }
 
 function resolveRawInterceptConfig(
-  args: string[],
+  parsed: ParsedKnownFlags,
+  rawArgs: readonly string[],
   ctx: CommandContext
 ): Promise<ValueResult<unknown>> | ValueResult<unknown> {
-  const fromFileIdx = args.indexOf('--from-file');
-  if (fromFileIdx >= 0) return readInterceptConfigFile(args[fromFileIdx + 1], ctx);
-  return buildInterceptConfigFromFlags(args);
+  if (parsed.values.has('--from-file')) {
+    return readInterceptConfigFile(parsed.values.get('--from-file'), ctx);
+  }
+  return buildInterceptConfigFromFlags(parsed, rawArgs);
 }
 
 async function readInterceptConfigFile(
@@ -529,35 +555,40 @@ async function readInterceptConfigFile(
   }
 }
 
-function buildInterceptConfigFromFlags(args: string[]): ValueResult<unknown> {
-  const authorizeUrl = pickFlagValue(args, '--authorize-url');
-  const redirectUriPattern = pickFlagValue(args, '--redirect-pattern');
+function buildInterceptConfigFromFlags(
+  parsed: ParsedKnownFlags,
+  rawArgs: readonly string[]
+): ValueResult<unknown> {
+  const authorizeUrl = parsed.values.get('--authorize-url');
+  const redirectUriPattern = parsed.values.get('--redirect-pattern');
   if (!authorizeUrl) {
     return { ok: false, result: errResult('oauth-token: --authorize-url is required') };
   }
   if (!redirectUriPattern) {
     return { ok: false, result: errResult('oauth-token: --redirect-pattern is required') };
   }
-  const rewrites = parseInterceptRewrites(args);
+  const rewrites = parseInterceptRewrites(rawArgs);
   if (!rewrites.ok) return rewrites;
   return {
     ok: true,
     value: {
       authorizeUrl,
       redirectUriPattern,
-      onCapture: args.includes('--leave-tab') ? 'leave' : 'close',
+      onCapture: parsed.bools.has('--leave-tab') ? 'leave' : 'close',
       ...(rewrites.value.length > 0 ? { rewrite: rewrites.value } : {}),
     },
   };
 }
 
 function parseInterceptRewrites(
-  args: string[]
+  args: readonly string[]
 ): ValueResult<Array<{ match: string; appendParams: Record<string, string> }>> {
   const rewrites: Array<{ match: string; appendParams: Record<string, string> }> = [];
   for (let i = 0; i < args.length; i++) {
-    if (args[i] !== '--rewrite') continue;
-    const spec = args[i + 1];
+    const arg = args[i];
+    if (arg === '--') break;
+    if (arg !== '--rewrite' && !arg.startsWith('--rewrite=')) continue;
+    const spec = arg === '--rewrite' ? args[++i] : arg.slice('--rewrite='.length);
     if (!spec) {
       return { ok: false, result: errResult('oauth-token: --rewrite requires a value') };
     }
@@ -572,14 +603,6 @@ function parseInterceptRewrites(
     rewrites.push({ match, appendParams: { [key]: rest.join('=') } });
   }
   return { ok: true, value: rewrites };
-}
-
-function pickFlagValue(args: string[], flag: string): string | undefined {
-  const idx = args.indexOf(flag);
-  if (idx < 0) return undefined;
-  const v = args[idx + 1];
-  if (!v || v.startsWith('--')) return undefined;
-  return v;
 }
 
 function errResult(message: string): { stdout: string; stderr: string; exitCode: number } {
