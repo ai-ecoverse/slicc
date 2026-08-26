@@ -28,11 +28,31 @@
 import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import type { Command, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import type { DiscoveryResult } from '../../net/discover-links.js';
 import { discoverLinks } from '../../net/discover-links.js';
+import type { HandoffMatch } from '../../net/handoff-link.js';
 import { extractHandoff } from '../../net/handoff-link.js';
+import type { ParsedLink } from '../../net/link-header.js';
 import { parseLinkHeader } from '../../net/link-header.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
 import { normalizeHeadersInit } from '../proxy-headers.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
+
+/** JSON payload printed by `discover` (always pretty-printed). */
+interface DiscoverOutput {
+  url: string;
+  status: number;
+  links: ParsedLink[];
+  handoff: HandoffMatch | null;
+  discovery?: Pick<
+    DiscoveryResult,
+    'catalog' | 'serviceDesc' | 'serviceMeta' | 'status' | 'llmsTxt' | 'failures'
+  >;
+}
+
+/** Boolean flags `discover` accepts (no value-taking flags today). */
+const DISCOVER_BOOL_FLAGS = ['--follow'] as const;
 
 /**
  * Wrap a `SecureFetch` so it can stand in for the Web Fetch API. Used to
@@ -86,20 +106,28 @@ Examples:
 
 export function createDiscoverCommand(): Command {
   return defineCommand('discover', async (args) => {
-    if (args.includes('--help') || args.includes('-h') || args.length === 0) {
+    if (args.length === 0 || isHelpRequest(args)) {
       return { stdout: helpText(), stderr: '', exitCode: 0 };
     }
 
-    const follow = args.includes('--follow');
-    const positional = args.filter((a) => !a.startsWith('-'));
-    if (positional.length !== 1) {
+    const parsed = parseKnownFlags(args, { bool: DISCOVER_BOOL_FLAGS });
+    if ('error' in parsed) {
+      return {
+        stdout: '',
+        stderr: `discover: ${parsed.error}\n`,
+        exitCode: 1,
+      };
+    }
+
+    const follow = parsed.bools.has('--follow');
+    if (parsed.positionals.length !== 1) {
       return {
         stdout: '',
         stderr: 'discover: expected exactly one URL argument\n',
         exitCode: 2,
       };
     }
-    const url = positional[0];
+    const url = parsed.positionals[0];
 
     const fetchProxied = createProxiedFetch();
     let response: Awaited<ReturnType<typeof fetchProxied>>;
@@ -122,7 +150,7 @@ export function createDiscoverCommand(): Command {
     const links = parseLinkHeader(linkValues, url);
     const handoff = extractHandoff(links);
 
-    const result: Record<string, unknown> = {
+    const result: DiscoverOutput = {
       url,
       status: response.status,
       links,
