@@ -138,16 +138,17 @@ final class TranscriptInvalidationTests: XCTestCase {
 
     // MARK: - Fixtures
 
-    /// The transcript still carries a `scrollPosition` binding on `main`; this
-    /// PR does not touch it (the #2072 fix removes it separately).
+    /// No `scrollPosition` binding any more: #2072 replaced it with
+    /// `defaultScrollAnchor(.bottom)` plus a gated one-shot `scrollTo`,
+    /// because restoring a bound position across a keyboard resize is what
+    /// threw the reader backwards through the history.
     private static func list(
         messages: [ChatMessage], toolProgress: [String: ToolProgressEvent]
     ) -> MessageListView {
         MessageListView(
             messages: messages,
             isStreaming: false,
-            toolProgress: toolProgress,
-            scrollPosition: .constant(ScrollPosition(idType: String.self, edge: .bottom)))
+            toolProgress: toolProgress)
     }
 
     private static func message(
