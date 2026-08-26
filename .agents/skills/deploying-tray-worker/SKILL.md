@@ -481,3 +481,40 @@ or transport are broken. Do **not** infer from `wallTime` on the first push alon
 8-second reading used to be the uncleared `AbortSignal.timeout`, not a hang.
 
 This is deliberately not a CI gate — it would put Apple's availability in the deploy path.
+
+### Settle the gateway before reading any rejection (two-tray probe)
+
+A device token is valid on **one** gateway only, decided by the build's
+`aps-environment` entitlement: a development-signed build gets a sandbox token, a
+TestFlight/App Store build a production one. Send it to the wrong gateway and Apple answers
+`BadDeviceToken` — indistinguishable, at a glance, from a wrong topic or a bad key. Never
+interpret a rejection before establishing which gateway the token belongs to.
+
+Do not infer the gateway from the build. `currentApnsEnvironment()` reports what the app
+_claims_ — derived from `#if DEBUG`, not from the entitlement it actually holds — and a
+dev-signed **Release** build claims `production` while carrying a sandbox token. Reading
+Xcode settings or `builtByDeveloper` only tells you what _should_ be true.
+
+Ask Apple instead. With one real device token, register it on **two throwaway trays** and
+push once from each — the DO stores `environment` per token, so the same token can be
+driven at both gateways:
+
+```
+tray A: {"type":"push.register", …, "environment":"sandbox"}    → push.send
+tray B: {"type":"push.register", …, "environment":"production"} → push.send
+```
+
+Read the verdict from a **second** push on each tray (the eviction signal above):
+
+| tray A (sandbox) | tray B (production) | meaning                                                |
+| ---------------- | ------------------- | ------------------------------------------------------ |
+| token evicted    | token evicted       | wrong on both — topic or key is wrong, not the gateway |
+| token survives   | token evicted       | sandbox is correct; it is a development build          |
+| token evicted    | token survives      | production is correct; TestFlight / App Store build    |
+
+A token that **survives** was accepted (`200`) — that gateway is the right one. Once the
+gateway is known, a rejection there is finally meaningful: `DeviceTokenNotForTopic` means
+`APNS_TOPIC` does not match the app's bundle id, whereas `BadDeviceToken` on the _correct_
+gateway means the token itself is stale. That distinction is the only way to verify
+`APNS_TOPIC`, because Apple rejects a malformed token before it ever checks the topic — so
+no fabricated-token probe can reach it.
