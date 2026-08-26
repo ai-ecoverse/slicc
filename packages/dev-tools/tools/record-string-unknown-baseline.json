@@ -10,7 +10,6 @@
   "packages/cloudflare-worker/src/oauth-exchange.ts": 1,
   "packages/dev-tools/tools/extension-smoke-test.ts": 6,
   "packages/node-server/src/cdp-proxy/session-url-tracker.ts": 3,
-  "packages/node-server/src/cloud/registry-file.ts": 1,
   "packages/node-server/src/electron-controller.ts": 13,
   "packages/node-server/src/electron-federated-cdp.ts": 5,
   "packages/node-server/src/electron-runtime.ts": 1,
