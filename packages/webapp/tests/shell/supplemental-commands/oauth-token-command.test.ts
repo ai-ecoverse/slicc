@@ -70,6 +70,122 @@ describe('oauth-token command', () => {
     expect(result.stdout).toContain('Does not revoke anything upstream');
   });
 
+  it('rejects an unknown flag instead of silently ignoring it', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'adobe',
+      name: 'Adobe',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: vi.fn(),
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'valid-access-token',
+      maskedValue: 'masked-valid-access-token',
+      expiresAt: Date.now() + 3600000,
+      expired: false,
+    });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['adobe', '--bogus'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unknown flag: --bogus');
+    expect(result.stdout).toBe('');
+  });
+
+  it('rejects boolean flags with attached values', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: vi.fn(),
+    });
+    mockGetAccounts.mockReturnValue([
+      {
+        providerId: 'github',
+        accessToken: 'tok',
+        tokenExpiresAt: Date.now() + 3600000,
+        apiKey: '',
+      },
+    ]);
+    mockGetRegisteredProviderIds.mockReturnValue(['github']);
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) =>
+      id === 'github'
+        ? {
+            id: 'github',
+            name: 'GitHub',
+            description: '',
+            requiresApiKey: false,
+            requiresBaseUrl: false,
+            isOAuth: true,
+            onSilentRenew: vi.fn(),
+            onOAuthLogin: vi.fn(),
+          }
+        : undefined
+    );
+
+    const cmd = createOAuthTokenCommand();
+    const expire = await cmd.execute(['github', '--expire=false'], createMockCtx());
+    expect(expire.exitCode).toBe(1);
+    expect(expire.stderr).toContain('unknown flag: --expire');
+    expect(mockSaveOAuthAccount).not.toHaveBeenCalled();
+
+    const list = await cmd.execute(['--list=garbage'], createMockCtx());
+    expect(list.exitCode).toBe(1);
+    expect(list.stderr).toContain('unknown flag: --list');
+  });
+
+  it('accepts known flags after the provider positional', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: vi.fn(),
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'tok',
+      maskedValue: 'masked-tok',
+      scopes: 'repo',
+      expiresAt: Date.now() + 3600000,
+      expired: false,
+    });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['github', '--scope', 'repo'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('masked-tok\n');
+  });
+
+  it('treats tokens after -- as positional, not flags', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: '--weird',
+      name: 'Weird',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: vi.fn(),
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'tok',
+      maskedValue: 'masked-weird',
+      expiresAt: Date.now() + 3600000,
+      expired: false,
+    });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--', '--weird'], createMockCtx());
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('masked-weird\n');
+  });
+
   it('returns stored valid token immediately', async () => {
     mockGetRegisteredProviderConfig.mockReturnValue({
       id: 'adobe',
@@ -1058,6 +1174,6 @@ describe('oauth-token command', () => {
     const cmd = createOAuthTokenCommand();
     const result = await cmd.execute(['--from-file'], createMockCtx());
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('--from-file requires a path');
+    expect(result.stderr).toContain('--from-file requires a value');
   });
 });
