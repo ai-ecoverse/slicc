@@ -101,7 +101,12 @@ describe('parseKeymapDocument', () => {
   });
 });
 
-function harness(options: { file?: string; readFails?: boolean; writeFails?: boolean } = {}) {
+/** The VFS RPC rejects with an `FsError`-shaped error carrying a code. */
+function fsError(code: string): Error & { code: string } {
+  return Object.assign(new Error(`${code}: /etc/slicc/keys.json`), { code });
+}
+
+function harness(options: { file?: string; readError?: string; writeFails?: boolean } = {}) {
   const apply = vi.fn();
   const warn = vi.fn();
   const info = vi.fn();
@@ -110,7 +115,8 @@ function harness(options: { file?: string; readFails?: boolean; writeFails?: boo
   });
   const reader = {
     readFile: vi.fn(async () => {
-      if (options.file === undefined || options.readFails) throw new Error('ENOENT');
+      if (options.readError) throw fsError(options.readError);
+      if (options.file === undefined) throw fsError('ENOENT');
       return options.file;
     }),
   };
@@ -157,6 +163,31 @@ describe('loadShortcutConfig', () => {
     expect(h.warn).toHaveBeenCalledWith(expect.stringContaining('not a known command'));
     // Still applied: the rest of the file is good.
     expect(h.apply).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * The bug this exists to prevent: an early read (before the worker's VFS
+   * host attaches) fails with EIO, and an earlier version treated ANY read
+   * failure as "no file yet" and re-seeded — silently reverting the user's
+   * edits on the next boot.
+   */
+  it('never overwrites a config it merely failed to read', async () => {
+    for (const code of ['EIO', 'EBADF', 'EACCES']) {
+      const h = harness({ readError: code });
+      await h.run();
+      expect(h.writer.writeFile).not.toHaveBeenCalled();
+      expect(h.apply).not.toHaveBeenCalled();
+      expect(h.warn).toHaveBeenCalledWith(
+        'Could not read the shortcut config; keeping the defaults',
+        expect.anything()
+      );
+    }
+  });
+
+  it('seeds only on ENOENT', async () => {
+    const h = harness({ readError: 'ENOENT' });
+    await h.run();
+    expect(h.writer.writeFile).toHaveBeenCalledTimes(1);
   });
 
   it('a filesystem that will not take the seed is not an error the user sees', async () => {

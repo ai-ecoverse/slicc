@@ -8,15 +8,16 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 
 ## Directory Structure
 
-| Path                                  | Purpose                                                            |
-| ------------------------------------- | ------------------------------------------------------------------ |
-| `packages/vfs-root/shared/`           | Shared content that becomes `/shared/` in the VFS                  |
-| `packages/vfs-root/workspace/`        | Default workspace content that becomes `/workspace/` in the VFS    |
-| `packages/vfs-root/shared/CLAUDE.md`  | Agent-facing runtime instructions bundled into `/shared/CLAUDE.md` |
-| `packages/vfs-root/shared/MEMORY.md`  | User-editable memory curator config bundled as `/shared/MEMORY.md` |
-| `packages/vfs-root/shared/sprinkles/` | Built-in sprinkle UIs                                              |
-| `packages/vfs-root/shared/sounds/`    | Shared notification sounds                                         |
-| `packages/vfs-root/workspace/skills/` | Default installable workspace skills                               |
+| Path                                  | Purpose                                                                    |
+| ------------------------------------- | -------------------------------------------------------------------------- |
+| `packages/vfs-root/shared/`           | Shared content that becomes `/shared/` in the VFS                          |
+| `packages/vfs-root/workspace/`        | Default workspace content that becomes `/workspace/` in the VFS            |
+| `packages/vfs-root/shared/CLAUDE.md`  | Agent-facing runtime instructions bundled into `/shared/CLAUDE.md`         |
+| `packages/vfs-root/shared/MEMORY.md`  | User-editable memory curator config bundled as `/shared/MEMORY.md`         |
+| `packages/vfs-root/shared/sprinkles/` | Built-in sprinkle UIs                                                      |
+| `packages/vfs-root/shared/sounds/`    | Shared notification sounds                                                 |
+| `packages/vfs-root/workspace/skills/` | Default installable workspace skills                                       |
+| `packages/vfs-root/etc/`              | System config seeded into `/etc/` (`models`, `sudoers`, `slicc/keys.json`) |
 
 ## Adding Default Content
 
@@ -61,6 +62,15 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 
 - Add new built-in workspace skills under `packages/vfs-root/workspace/skills/<skill-name>/`.
 - Include `SKILL.md` and any companion assets or `.jsh` scripts the skill needs.
+
+### Keyboard shortcuts
+
+- `etc/slicc/keys.json` is the shipped keymap for the UI's keyboard mode, seeded on first boot
+  by `ui/wc/wc-shortcut-config.ts` and never rewritten — an edited config must survive later boots.
+- It is applied OVER the in-code `DEFAULT_KEYMAP`, so deleting an entry restores its default and
+  `null` is what removes a binding. Keeping it a superset means users inherit new bindings for free.
+- The file and `DEFAULT_KEYMAP` are two statements of one thing; a test asserts they agree, so
+  change both or neither.
 
 ### Sprinkles
 

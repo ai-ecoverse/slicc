@@ -130,10 +130,28 @@ export interface LoadShortcutConfigDeps {
 }
 
 /**
- * Read the user's keymap and apply it, seeding the shipped default when the
- * file is missing. Never throws and never rejects: a float with no VFS, a
- * worker that went away mid-read, a read-only filesystem — all of them leave
- * the defaults in force, which is a working keyboard.
+ * Does this failure mean the file is not there — as opposed to "I could not
+ * ask"? The VFS RPC rejects with an `FsError`-shaped error carrying a code;
+ * duck-typed rather than imported so this module keeps no dependency on which
+ * side of the worker boundary produced it.
+ */
+function isMissing(err: unknown): boolean {
+  return (err as { code?: unknown } | null)?.code === 'ENOENT';
+}
+
+/**
+ * Read the user's keymap and apply it, seeding the shipped default the FIRST
+ * time — and only then.
+ *
+ * Never throws and never rejects: a float with no VFS, a worker that went away
+ * mid-read, a read-only filesystem all leave the defaults in force, which is a
+ * working keyboard.
+ *
+ * The seed is gated on `ENOENT` specifically, and that is not fussiness. An
+ * earlier version seeded on ANY read failure, so a read that failed because
+ * the worker's VFS host was not attached yet (an RPC sent too early is lost,
+ * not queued) rewrote the file — silently reverting the user's edits on the
+ * next boot. A config that can eat your config is worse than no config.
  */
 export async function loadShortcutConfig(deps: LoadShortcutConfigDeps): Promise<void> {
   const logger = deps.logger ?? log;
@@ -141,17 +159,25 @@ export async function loadShortcutConfig(deps: LoadShortcutConfigDeps): Promise<
   try {
     const raw = await deps.reader.readFile(SHORTCUT_KEYS_PATH, { encoding: 'utf-8' });
     text = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
-  } catch {
-    // Missing (the common case, on a fresh VFS) or unreadable. Seed the
-    // shipped file so the user has something to edit, and stay on defaults —
-    // the seed IS the defaults, so there is nothing to apply.
+  } catch (err) {
+    if (!isMissing(err)) {
+      // Present but unreadable, or unreachable. Either way this is not our
+      // file to replace.
+      logger.warn('Could not read the shortcut config; keeping the defaults', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+      return;
+    }
+    // A fresh VFS. Seed the shipped file so the user has something to edit,
+    // and stay on defaults — the seed IS the defaults, so there is nothing to
+    // apply.
     try {
       await deps.writer.mkdir('/etc/slicc', { recursive: true });
       await deps.writer.writeFile(SHORTCUT_KEYS_PATH, defaultKeysDoc);
       logger.info(`Seeded ${SHORTCUT_KEYS_PATH}`);
-    } catch (err) {
+    } catch (seedErr) {
       logger.warn('Could not seed the shortcut config', {
-        error: err instanceof Error ? err.message : String(err),
+        error: seedErr instanceof Error ? seedErr.message : String(seedErr),
       });
     }
     return;

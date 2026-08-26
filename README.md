@@ -209,7 +209,7 @@ Every key you press shows up as a cap on the pill — dimmed if it was not bound
 
 Keys that navigate, or toggle chrome (digits, <kbd>d</kbd>, <kbd>b</kbd>, <kbd>x</kbd>, <kbd>s</kbd>, help), keep the mode on; anything that hands focus to a surface leaves it, as does clicking into any text field. Outside the mode nothing is intercepted at all. The overlay is also in the avatar menu, under **Keyboard mode**.
 
-**Rebinding.** The keys live in `/etc/slicc/keys.json` in the VFS, written the first time SLICC starts and never touched again — edit it and reload the tab. Each entry maps a key to a command (`"q": "terminal"`), several keys can share one command, and `null` unbinds. The file lists every command it accepts. <kbd>Esc</kbd> and the digits are reserved. A bad line is skipped with a warning rather than costing you the rest of the file, and the help overlay always shows what is actually bound.
+**Rebinding.** The keys live in `/etc/slicc/keys.json` in the VFS, written the first time SLICC starts and never touched again — edit it and reload the tab. Each entry maps a key to a command (`"q": "terminal"`) and several keys can share one command. The file is applied _over_ the built-in keymap, so `null` removes a binding while deleting the line just restores its default — which is also how you inherit any keys a later version adds. The file lists every command it accepts. <kbd>Esc</kbd> and the digits are reserved. A bad line is skipped with a warning rather than costing you the rest of the file, and the help overlay always shows what is actually bound.
 
 ## API Keys and Providers
 
