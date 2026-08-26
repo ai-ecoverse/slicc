@@ -171,6 +171,46 @@ import UIKit
             return (dropAfter, parts.count > 1 ? parts[1] : nil)
         }
 
+        /// Fill the REAL chat surface with a transcript taller than any
+        /// viewport (`-uiTestTranscriptFixture YES`), reusing the same fixture
+        /// conversation the leaderless fixture route renders.
+        ///
+        /// `-uiTestFixtureRoute` cannot stand in for this: that route has no
+        /// composer, and anything about how the transcript and the composer
+        /// share the screen — which is the whole of #2072 — needs both of them
+        /// on screen at once.
+        @MainActor
+        static func seedTranscriptFixture(into appState: AppState) {
+            guard UserDefaults.standard.bool(forKey: "uiTestTranscriptFixture") else { return }
+            let scoopJid = "ui-test-cone"
+            appState.selectedScoopJid = scoopJid
+            let messages = ChatFixture.makeMessages()
+            appState.messagesByScoop[scoopJid] = messages
+            appState.messages = messages
+        }
+
+        /// Deliver one CONE message into the seeded transcript after a delay
+        /// (`-uiTestTranscriptAppendAfter <seconds>`), so a test can prove that
+        /// incoming content does not yank a reader out of the history. A send
+        /// cannot stand in: the user's own message deliberately always wins.
+        @MainActor
+        static func scheduleTranscriptAppend(into appState: AppState) {
+            let delay = UserDefaults.standard.double(forKey: "uiTestTranscriptAppendAfter")
+            guard delay > 0 else { return }
+            Task { @MainActor in
+                try? await Task.sleep(for: .seconds(delay))
+                let message = ChatMessage(
+                    id: "fx-appended-while-reading",
+                    role: .assistant,
+                    content: "An incoming message that arrived while you were reading back.",
+                    timestamp: Date().timeIntervalSince1970 * 1000)
+                appState.messages.append(message)
+                if let jid = appState.selectedScoopJid {
+                    appState.messagesByScoop[jid, default: []].append(message)
+                }
+            }
+        }
+
         /// Stage a completed visible turn without a leader
         /// (`-uiTestCompletedTurn YES`). All messages enter through the real
         /// data-channel decoder; status: ready settles the turn because the

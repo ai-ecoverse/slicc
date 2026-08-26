@@ -96,6 +96,27 @@ Push-to-talk therefore arms on `text.isEmpty` alone. Dictating with no usable le
 
 The regular-width cap (`MessageListLayout.maximumReadableWidth`) is applied **per row** via `readableTranscriptColumn()`, never as a frame around the transcript's `LazyVStack`. That stack carries `scrollTargetLayout()`, so the scroll view anchors on it and cancels any centering offset wrapped around it with an equal content offset — which is how the capped column ended up flush against the leading edge. Rows are centered by the stack's own `.center` alignment, which needs the stack to stay full-width (the invisible bottom anchor's greedy width is what guarantees that). Covered by `SliccFollowerUITests/TranscriptColumnUITests` on the iPad CI leg.
 
+## Transcript scroll anchoring (#2072)
+
+The transcript pins its bottom with `.defaultScrollAnchor(.bottom)` and nothing else. It must **not** carry a `.scrollPosition($binding)`, and it must not hand-roll bottom-pinning with `onChange` + `scrollTo(edge:)`.
+
+That combination is what [#2072](https://github.com/ai-ecoverse/slicc/issues/2072) was: a reader who had scrolled back through the history was thrown ~258pt further back the moment the keyboard's inset landed. A `LazyVStack` only _estimates_ the height of rows it has not materialized, so the scroll view's content offset is an estimate too ([WWDC26 "Dive into lazy stacks and scrolling with SwiftUI"](https://developer.apple.com/videos/play/wwdc2026/321/) — "avoid using the absolute content size or content offset with lazy stacks, since these are estimated and unstable"). Restoring a bound `ScrollPosition` across a container resize restores that estimate, and it resolves against the end of the _measured_ content — mid-history rather than where the reader was.
+
+`defaultScrollAnchor(.bottom)` is a layout rule resolved **after** the resize rather than a value restored **across** it, so no estimate is in the loop. Measured on an iPhone 17e simulator, iOS 26.5: **258pt of drift before, 0pt after**.
+
+It also subsumes the five `onChange` handlers it replaced, and improves on them. Content that grows while the reader is at the bottom keeps the bottom pinned; a reader who has scrolled away is left alone. The old handlers force-scrolled unconditionally, so any streamed token yanked a reader out of the history.
+
+Two things this cost, both deliberate:
+
+- **The compact/regular shell switch re-opens at the newest message.** `ChatPresentationState.transcriptPosition` existed so a rotation or Split View resize kept the reader's place; it rode on the very binding that caused the bug. Restoring it by message id instead is a follow-up.
+- **`.scrollPosition(id:anchor:)` is not a drop-in replacement.** It was measured: with an id binding installed the transcript cannot be dragged back at all (the anchor row never reaches the viewport within 14 drags). Do not reach for it without re-measuring.
+
+`SliccFollowerUITests/TranscriptComposerGrowthUITests` is the gate, and it asserts the **measured drift** across a keyboard transition rather than mere rendering — only the measurement catches a reintroduction. It runs on the real chat surface via `-uiTestTranscriptFixture YES` (`UITestHooks.seedTranscriptFixture`), because `-uiTestFixtureRoute` has no composer and this needs a transcript and a composer on screen together.
+
+Two gotchas if you touch that test: the anchor row is offscreen at launch, so `element.swipeDown()` fails with "visible frame is empty"; and `app.scrollViews.firstMatch` resolves to one of `HorizontalScrollGuard`'s zero-width horizontal scrollers, not the transcript. Use coordinate drags.
+
+Full measurement write-up, including the rejected UIKit port: [`docs/research/ios-transcript-uikit.md`](research/ios-transcript-uikit.md).
+
 ## Transcript per-render cost
 
 The transcript re-evaluates its rows constantly, so everything a row does per body evaluation is paid many times over. Measured on an 18-message fixture: **871 `MessageBubble` body evaluations and 227 full markdown re-parses just to scroll back two screens**, and 360 body evaluations to type one sentence.
@@ -107,7 +128,7 @@ Four rules keep it down. `SliccFollowerTests/TranscriptInvalidationTests` gates 
 - **A row receives only its OWN tool progress**, sliced by `progressSlice(for:)`. Handing every row the whole `AppState.toolProgress` meant one tick on one tool changed every bubble's value and invalidated the entire transcript.
 - **No closures on a row's value.** `MessageBubble` is `Equatable` and reads its sprinkle-lick callback from `@Environment(\.inlineSprinkleLick)`. A stored closure never compares equal, and one is enough to defeat the whole comparison — which is what made every other memoization attempt pointless. `ChatMessage` and `ToolCall` conform to `Equatable` so the comparison can be synthesized.
 
-**Still open**: `AppState` is one `ObservableObject` with ~45 `@Published` properties, so any of them invalidates every observer. `ChatPresentationState.composerDraft` has the same shape, which is why a keystroke re-evaluates the whole shell. Migrating either to `@Observable` is the remaining win and is NOT done — `@State` has no autoclosure initializer, unlike `@StateObject`, so a naive swap constructs a fresh model on every `ChatView.init` and trips `ChatPresentationStateTests`. Tracked in [#2072](https://github.com/ai-ecoverse/slicc/issues/2072); the measurement write-up lands with the scroll-anchoring fix.
+**Still open**: `AppState` is one `ObservableObject` with ~45 `@Published` properties, so any of them invalidates every observer. `ChatPresentationState.composerDraft` has the same shape, which is why a keystroke re-evaluates the whole shell. Migrating either to `@Observable` is the remaining win and is NOT done — `@State` has no autoclosure initializer, unlike `@StateObject`, so a naive swap constructs a fresh model on every `ChatView.init` and trips `ChatPresentationStateTests`. Tracked in [#2072](https://github.com/ai-ecoverse/slicc/issues/2072); full measurements in [`docs/research/ios-transcript-uikit.md`](research/ios-transcript-uikit.md).
 
 ## Read-only scoop view
 

@@ -45,10 +45,6 @@ struct MessageListView: View {
     /// Injected into the environment rather than handed to each row — see
     /// `MessageBubble`'s `Equatable` conformance.
     var onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)?
-    /// Owned above ChatView's compact/regular branch so subtree replacement
-    /// restores the same viewport instead of jumping to the newest message.
-    @Binding var scrollPosition: ScrollPosition
-
     init(
         messages: [ChatMessage],
         isStreaming: Bool,
@@ -59,8 +55,7 @@ struct MessageListView: View {
         sudoApprovals: [SudoApprovalRequest] = [],
         sudoAllowAlways: Bool = false,
         onSudoApprovalDecision: ((String, SudoApprovalDecision) -> Void)? = nil,
-        onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)? = nil,
-        scrollPosition: Binding<ScrollPosition>
+        onInlineSprinkleLick: ((AnyCodable?, String?) -> Void)? = nil
     ) {
         self.messages = messages
         self.isStreaming = isStreaming
@@ -72,10 +67,15 @@ struct MessageListView: View {
         self.sudoAllowAlways = sudoAllowAlways
         self.onSudoApprovalDecision = onSudoApprovalDecision
         self.onInlineSprinkleLick = onInlineSprinkleLick
-        _scrollPosition = scrollPosition
     }
 
     @Environment(\.palette) private var palette
+
+    /// Whether the transcript's bottom anchor is on screen — i.e. whether the
+    /// reader is following the conversation rather than reading back through
+    /// it. Derived from `onScrollTargetVisibilityChange`, which WWDC26 names as
+    /// the stable alternative to reading a lazy stack's (estimated) offset.
+    @State private var isAtBottom = true
 
     var body: some View {
         Group {
@@ -108,6 +108,12 @@ struct MessageListView: View {
     // MARK: - Message List
 
     private var messageList: some View {
+        ScrollViewReader { proxy in
+            transcriptScrollView(proxy: proxy)
+        }
+    }
+
+    private func transcriptScrollView(proxy: ScrollViewProxy) -> some View {
         ScrollView {
             LazyVStack(spacing: 8) {
                 ForEach(groupedMessages) { group in
@@ -172,7 +178,7 @@ struct MessageListView: View {
                 // whole viewport rather than hugging the capped rows.
                 Color.clear
                     .frame(maxWidth: .infinity, minHeight: 1, maxHeight: 1)
-                    .id("bottom")
+                    .id(Self.bottomAnchorId)
             }
             // Stays directly on the stack so every message remains its own
             // scroll target for `scrollTo(id:)`. Nothing may wrap it in a
@@ -180,29 +186,74 @@ struct MessageListView: View {
             .scrollTargetLayout()
             .padding(.vertical, 8)
         }
-        .scrollPosition($scrollPosition)
+        // Follow the conversation, but only for a reader who is already at the
+        // bottom. This replaces five unconditional `onChange` handlers that
+        // force-scrolled on ANY content change and yanked a reader out of the
+        // history mid-sentence.
+        //
+        // `onScrollTargetVisibilityChange` rather than a position binding:
+        // WWDC26 names it as the stable way to ask a lazy stack what is on
+        // screen, because the absolute offset is only an estimate. The bottom
+        // anchor is inside `scrollTargetLayout()`, so it reports itself here.
+        .onScrollTargetVisibilityChange(idType: String.self) { visible in
+            // The NEWEST MESSAGE, not the 1pt bottom anchor: a hairline
+            // `Color.clear` is not reliably reported as visible, and the last
+            // row is what "following the conversation" actually means.
+            //
+            // Evaluated only when visibility changes, so at append time this
+            // still holds the answer for the PREVIOUS last message — which is
+            // the question we want: was the reader following before this
+            // arrived?
+            isAtBottom = messages.last.map { visible.contains($0.id) } ?? true
+        }
+        // Sending is an explicit request to be at the bottom — every chat app
+        // takes you to your own message — so a user row always wins, even from
+        // deep in the history. Everything the CONE produces defers to where the
+        // reader actually is.
         .onChange(of: messages.count) { _, _ in
-            scrollToBottom()
+            followBottom(proxy, force: messages.last?.role == .user)
         }
-        .onChange(of: toolUICards.count) { _, _ in
-            scrollToBottom()
-        }
-        .onChange(of: openApprovals.count) { _, _ in
-            scrollToBottom()
-        }
-        .onChange(of: sudoApprovals.count) { _, _ in
-            scrollToBottom()
-        }
-        .onChange(of: messages.last?.content) { _, _ in
-            scrollToBottom()
-        }
+        .onChange(of: messages.last?.content) { _, _ in followBottom(proxy) }
+        .onChange(of: toolUICards.count) { _, _ in followBottom(proxy) }
+        .onChange(of: openApprovals.count) { _, _ in followBottom(proxy) }
+        .onChange(of: sudoApprovals.count) { _, _ in followBottom(proxy) }
+        // A layout rule, NOT a stored offset — this is the whole of #2072.
+        //
+        // The transcript used to carry `.scrollPosition($binding)` plus five
+        // `.onChange` handlers that called `scrollTo(edge: .bottom)`. A
+        // `LazyVStack` only *estimates* the height of the rows it has not
+        // materialized, so the scroll view's content offset is an estimate
+        // too (WWDC26 "Dive into lazy stacks and scrolling with SwiftUI").
+        // Restoring a bound `ScrollPosition` across a container resize means
+        // restoring that estimate — and when the keyboard's inset shrank the
+        // viewport, it resolved against the end of the *measured* content and
+        // threw a reader who had scrolled back ~258pt further into the
+        // history.
+        //
+        // `defaultScrollAnchor(.bottom)` is resolved after the resize instead
+        // of restored across it, so there is no estimate in the loop. It also
+        // subsumes every one of the five handlers: content that grows while
+        // the reader is at the bottom keeps the bottom pinned, and a reader
+        // who has scrolled away is left alone — which the unconditional
+        // `scrollToBottom()` never did.
+        //
+        // Measured, iPhone 17e / iOS 26.5: 258pt of drift before, 0pt after.
+        // `TranscriptComposerGrowthUITests` asserts that drift directly.
+        .defaultScrollAnchor(.bottom)
     }
 
-    // MARK: - Scroll Helper
-
-    private func scrollToBottom() {
+    /// Scroll to the newest content, but never over a reader who has moved
+    /// away. `scrollTo(id:)` is a one-shot imperative scroll, not a stored
+    /// position: nothing is restored across a later resize, so it cannot
+    /// reintroduce #2072.
+    /// - Parameter force: bypass the "is the reader following?" test. Used for
+    ///   the user's own message: `isAtBottom` is derived from what is on
+    ///   screen, and the keyboard opening pushes the newest row out of the
+    ///   visible set, so an un-forced send would refuse to follow itself.
+    private func followBottom(_ proxy: ScrollViewProxy, force: Bool = false) {
+        guard force || isAtBottom else { return }
         withAnimation(.easeOut(duration: 0.2)) {
-            scrollPosition.scrollTo(edge: .bottom)
+            proxy.scrollTo(Self.bottomAnchorId, anchor: .bottom)
         }
     }
 
@@ -264,6 +315,10 @@ struct MessageListView: View {
         return groups
     }
 
+    /// The invisible bottom row's id. It is both the `scrollTo` target and the
+    /// "is the reader at the bottom" probe.
+    private static let bottomAnchorId = "bottom"
+
     /// Two shared formatters, built once.
     ///
     /// `groupedMessages` is recomputed on every body evaluation and calls this
@@ -320,7 +375,6 @@ private struct MessageGroup: Identifiable {
                 id: "2", role: .assistant, content: "Hi there! How can I help?",
                 timestamp: Date().timeIntervalSince1970 * 1000),
         ],
-        isStreaming: false,
-        scrollPosition: .constant(ScrollPosition(idType: String.self, edge: .bottom))
+        isStreaming: false
     )
 }

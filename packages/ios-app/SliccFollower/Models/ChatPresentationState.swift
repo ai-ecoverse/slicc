@@ -13,7 +13,6 @@ final class ChatPresentationState: ObservableObject {
     /// View resize would otherwise take the surface down with the subtree.
     @Published var terminalWasOpened: Bool
     @Published var composerDraft: String
-    @Published var transcriptPosition: ScrollPosition
     /// Photos staged but not yet sent. Local `@State` in `InputBar` would be
     /// discarded along with the composer when the layout switches, and an
     /// in-flight `PhotosPicker` load would then complete into a view that is
@@ -36,7 +35,6 @@ final class ChatPresentationState: ObservableObject {
         self.activeSurface = activeSurface
         self.terminalWasOpened = terminalWasOpened
         self.composerDraft = composerDraft
-        transcriptPosition = ScrollPosition(idType: String.self, edge: .bottom)
     }
 
     /// Built on first use because the client only becomes reachable once the
