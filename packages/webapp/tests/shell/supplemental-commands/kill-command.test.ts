@@ -133,6 +133,17 @@ describe('kill command', () => {
     expect(result.stderr).toContain('invalid pid');
   });
 
+  // issue #2255: dash-prefixed unknowns must exit non-zero (not silent-swallow)
+  it('rejects an unknown flag instead of treating it as a pid', async () => {
+    const pm = new ProcessManager();
+    const proc = pm.spawn({ kind: 'shell', argv: ['s'], owner: { kind: 'cone' } });
+    const cmd = createKillCommand({ processManager: pm });
+    const result = await cmd.execute(['--bogus', String(proc.pid)], mockCtx);
+    expect(result.exitCode).not.toBe(0);
+    expect(result.stderr).toMatch(/unknown/i);
+    expect(proc.terminatedBy).toBeFalsy();
+  });
+
   it('--help prints usage', async () => {
     const cmd = createKillCommand({ processManager: new ProcessManager() });
     const result = await cmd.execute(['--help'], mockCtx);

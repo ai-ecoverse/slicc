@@ -80,9 +80,13 @@ export function createKillCommand(options: KillCommandOptions = {}): Command {
 // Internal
 // ---------------------------------------------------------------------------
 
+/** Globals the kernel host publishes for commands that need the live PM. */
+interface KernelGlobals {
+  __slicc_pm?: unknown;
+}
+
 function lookupGlobalPm(): ProcessManager | null {
-  const g = globalThis as Record<string, unknown>;
-  const pm = g.__slicc_pm;
+  const pm = (globalThis as KernelGlobals).__slicc_pm;
   return pm instanceof Object && typeof (pm as ProcessManager).signal === 'function'
     ? (pm as ProcessManager)
     : null;
