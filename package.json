@@ -103,7 +103,7 @@
     "verify": "bash packages/dev-tools/tools/pre-push-lint-gate.sh"
   },
   "dependencies": {
-    "e2b": "2.40.0",
+    "e2b": "2.41.0",
     "express": "5.2.1",
     "pyodide": "314.0.5",
     "werift": "0.24.4",
