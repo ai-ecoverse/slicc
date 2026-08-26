@@ -89,6 +89,37 @@ describe('probeWellKnown', () => {
     expect(fetchImpl).not.toHaveBeenCalled();
   });
 
+  it('sends cookieless, non-redirect-following requests (SSO-hijack guard)', async () => {
+    // A credentialed probe that follows redirects joins the user's own SSO
+    // flow mid-login and can overwrite the IdP's cookie-keyed return-URL slot
+    // (tabs then land on <origin>/llms.txt after Okta auth). The probe must
+    // never carry profile cookies and never follow a redirect.
+    // Assert OUTSIDE the stub: probeOne catches everything a fetchImpl throws,
+    // so an expect() inside the stub would be swallowed and pass vacuously.
+    const seen: Array<{ redirect?: string; credentials?: string }> = [];
+    const fetchImpl: ProbeFetch = vi.fn(async (_url, init) => {
+      seen.push({ redirect: init?.redirect, credentials: init?.credentials });
+      return res(404, null);
+    });
+    await probeWellKnown('https://example.com', fetchImpl);
+    expect(seen).toEqual([
+      { redirect: 'manual', credentials: 'omit' },
+      { redirect: 'manual', credentials: 'omit' },
+    ]);
+  });
+
+  it('treats a redirect answer as no match (302 and opaqueredirect status 0)', async () => {
+    // With redirect:'manual' a redirected probe surfaces as either a literal
+    // 302 (proxied adapters) or an opaqueredirect (status 0, browser fetch).
+    // An artifact behind a redirect is not an anonymously published one.
+    expect(
+      await probeWellKnown('https://example.com', stubFetch({ '/llms.txt': res(302, null) }))
+    ).toEqual([]);
+    expect(
+      await probeWellKnown('https://example.com', stubFetch({ '/llms.txt': res(0, null) }))
+    ).toEqual([]);
+  });
+
   it('passes an abort signal to fetch', async () => {
     const fetchImpl = vi.fn(async (_url: string, init?: { signal?: AbortSignal }) => {
       expect(init?.signal).toBeInstanceOf(AbortSignal);

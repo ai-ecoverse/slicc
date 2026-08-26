@@ -13,6 +13,13 @@
  * implementation is injected and every network failure / timeout is caught and
  * treated as "no match" (never thrown). No float wiring lives here.
  *
+ * Probes are credential-free (`credentials: 'omit'`) and never follow
+ * redirects (`redirect: 'manual'`): the extension float runs them through the
+ * SW's `host_permissions`-privileged fetch while the user's tab may be in the
+ * middle of an SSO login on the very same origin — a credentialed probe that
+ * chases the auth-bounce chain poisons the IdP's pending return-URL state and
+ * hijacks the tab to `<origin>/llms.txt` (see probeOne).
+ *
  * Content-type is lenient by design — a missing header is accepted (some static
  * hosts omit it), but an HTML response is always rejected: a manifest / digest
  * served as HTML is a misconfiguration, not the artifact.
@@ -30,7 +37,7 @@ export interface ProbeResponse {
 /** Injected fetch. Compatible with the global `fetch`. */
 export type ProbeFetch = (
   url: string,
-  init?: { method?: string; signal?: AbortSignal; redirect?: string }
+  init?: { method?: string; signal?: AbortSignal; redirect?: string; credentials?: string }
 ) => Promise<ProbeResponse>;
 
 export interface DiscoveryProbeMatch {
@@ -90,7 +97,22 @@ async function probeOne(
   const ctrl = new AbortController();
   const timer = setTimeout(() => ctrl.abort(new Error('timeout')), timeoutMs);
   try {
-    const res = await fetchImpl(url, { method: 'GET', signal: ctrl.signal });
+    // The probe fires while the user's tab may be mid-SSO on the same origin.
+    // It must be side-effect-free on auth state: `credentials: 'omit'` keeps
+    // profile cookies out of the request AND ignores Set-Cookie on the
+    // response, and `redirect: 'manual'` refuses to chase an auth-bounce
+    // chain. A credentialed, redirect-following probe joins the in-flight
+    // login and can overwrite the IdP's cookie-keyed return-URL slot — the
+    // user's tab then lands on `<origin>/llms.txt` after completing Okta/SSO.
+    // An artifact that doesn't answer 200 anonymously at its canonical
+    // location is not a published advertisement, so a redirect is "no match"
+    // (browser fetch surfaces it as an opaqueredirect, status 0).
+    const res = await fetchImpl(url, {
+      method: 'GET',
+      signal: ctrl.signal,
+      redirect: 'manual',
+      credentials: 'omit',
+    });
     // Require an exact 200. `res.ok` also accepts 204 No Content / 206 Partial
     // Content, which would surface a discovery lick for an empty / no-body
     // artifact (especially when the server omits a content-type).
