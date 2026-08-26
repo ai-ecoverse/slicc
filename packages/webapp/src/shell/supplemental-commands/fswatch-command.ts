@@ -3,11 +3,15 @@
  *
  * The dispatcher is a thin verb switch; each verb is its own function so the
  * command stays under the cognitive-complexity cap.
+ *
+ * Unknown dash-prefixed flags exit non-zero (issue #2255) — a silent exit 0
+ * is indistinguishable from honouring the flag.
  */
 
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { defaultLickTarget, type LickTargetEnv } from '../lick-target-env.js';
+import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest } from './subcommand-help.js';
 
 // Keep a module-level registry of active fswatches
@@ -76,7 +80,13 @@ const fail = (message: string): Result => ({
   exitCode: 1,
 });
 
-function handleList(): Result {
+/** `create`'s flags all take a value — same names for `isHelpRequest`. */
+const CREATE_VALUE_FLAGS = ['--path', '--pattern', '--scoop', '--name'] as const;
+
+function handleList(args: readonly string[]): Result {
+  const parsed = parseKnownFlags(args.slice(1), {});
+  if ('error' in parsed) return fail(parsed.error);
+
   if (activeWatches.size === 0) return ok('No active file watchers.\n');
   let output = '';
   for (const [, entry] of activeWatches) {
@@ -90,7 +100,11 @@ function handleList(): Result {
   return ok(output);
 }
 
-function handleDelete(id: string | undefined): Result {
+function handleDelete(args: readonly string[]): Result {
+  const parsed = parseKnownFlags(args.slice(1), {});
+  if ('error' in parsed) return fail(parsed.error);
+
+  const id = parsed.positionals[0];
   if (!id) return fail('delete requires an ID');
   const entry = activeWatches.get(id);
   if (!entry) return fail(`watcher not found: ${id}`);
@@ -106,23 +120,19 @@ interface CreateOptions {
   name: string;
 }
 
-/** `create`'s flags all take a value — see `isHelpRequest`. */
-const CREATE_VALUE_FLAGS = ['--path', '--pattern', '--scoop', '--name'];
-
-/** Parse `--path`/`--pattern`/`--scoop`/`--name` out of `create`'s argv. */
-function parseCreateOptions(args: string[]): CreateOptions {
-  const opts: CreateOptions = { basePath: '', pattern: '', scoop: '', name: '' };
-  const keys: Record<string, keyof CreateOptions> = {
-    '--path': 'basePath',
-    '--pattern': 'pattern',
-    '--scoop': 'scoop',
-    '--name': 'name',
+/**
+ * Parse `--path`/`--pattern`/`--scoop`/`--name` out of `create`'s argv.
+ * Flags are accepted in any position; unknown dash tokens fail loudly.
+ */
+function parseCreateOptions(args: readonly string[]): CreateOptions | { error: string } {
+  const parsed = parseKnownFlags(args.slice(1), { value: CREATE_VALUE_FLAGS });
+  if ('error' in parsed) return parsed;
+  return {
+    basePath: parsed.values.get('--path') ?? '',
+    pattern: parsed.values.get('--pattern') ?? '',
+    scoop: parsed.values.get('--scoop') ?? '',
+    name: parsed.values.get('--name') ?? '',
   };
-  for (let i = 1; i < args.length; i++) {
-    const key = keys[args[i]];
-    if (key && args[i + 1]) opts[key] = args[++i];
-  }
-  return opts;
 }
 
 /** Compile a `*`-glob over the filename into a path filter. */
@@ -131,8 +141,11 @@ function globFilter(pattern: string): (path: string) => boolean {
   return (path: string) => globRegex.test(path.split('/').pop() ?? '');
 }
 
-function handleCreate(args: string[], env: LickTargetEnv): Result {
-  const opts = parseCreateOptions(args);
+function handleCreate(args: readonly string[], env: LickTargetEnv): Result {
+  const parsed = parseCreateOptions(args);
+  if ('error' in parsed) return fail(parsed.error);
+
+  const opts = parsed;
   // No `--scoop`: a non-primary cone's shell names itself (SLICC_LICK_TARGET).
   opts.scoop = defaultLickTarget(opts.scoop, env) ?? '';
   if (!opts.basePath || !opts.pattern) return fail('--path and --pattern are required');
@@ -190,9 +203,9 @@ export function createFsWatchCommand(): Command {
 
     switch (subcommand) {
       case 'list':
-        return handleList();
+        return handleList(args);
       case 'delete':
-        return handleDelete(args[1]);
+        return handleDelete(args);
       case 'create':
         return handleCreate(args, ctx.env);
       default:
