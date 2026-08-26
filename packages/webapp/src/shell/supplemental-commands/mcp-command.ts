@@ -26,7 +26,11 @@ import type { FetchLike } from '../mcp/oauth.js';
 import { resolveMcpRedirectUri } from '../mcp/redirect-uri.js';
 import type { McpAppDef, McpFetchLike, McpServerEntry, McpToolDef } from '../mcp/types.js';
 import type { ScriptCatalog } from '../script-catalog.js';
+import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest } from './subcommand-help.js';
+
+/** Boolean flags accepted by `mcp auth`. */
+const MCP_AUTH_BOOL_FLAGS = ['--silent', '-s', '--interactive', '-i'] as const;
 
 const log = createLogger('mcp-command');
 
@@ -69,6 +73,10 @@ function ok(stdout: string): ExecResult {
 
 function err(message: string, code = 1): ExecResult {
   return { stdout: '', stderr: `${message}\n`, exitCode: code };
+}
+
+function flagError(message: string): ExecResult {
+  return err(`mcp: ${message}`);
 }
 
 function helpText(): string {
@@ -137,7 +145,7 @@ export function createMcpCommand(deps: McpCommandDeps = {}): Command {
 // ── add ─────────────────────────────────────────────────────────────
 
 async function cmdAdd(args: string[], deps: McpCommandDeps): Promise<ExecResult> {
-  if (args.includes('--help') || args.includes('-h')) {
+  if (isHelpRequest(args)) {
     return ok(`usage: mcp add <url> <name>
 
 Probes <url> with an unauthenticated MCP \`initialize\`. If the server
@@ -149,11 +157,12 @@ an alias shim is written to /workspace/.mcp/aliases/<name>.jsh so the
 short name resolves on the PATH.
 `);
   }
-  const positional = args.filter((a) => !a.startsWith('--'));
-  if (positional.length < 2) {
+  const parsed = parseKnownFlags(args, {});
+  if ('error' in parsed) return flagError(parsed.error);
+  if (parsed.positionals.length < 2) {
     return err('mcp add: expected <url> <name>');
   }
-  const [url, name] = positional;
+  const [url, name] = parsed.positionals;
   if (!/^https?:\/\//i.test(url)) {
     return err(`mcp add: invalid URL "${url}" (must start with http:// or https://)`);
   }
@@ -286,9 +295,11 @@ async function runOAuthForAdd(
 // ── list ────────────────────────────────────────────────────────────
 
 async function cmdList(args: string[], deps: McpCommandDeps): Promise<ExecResult> {
-  if (args.includes('--help') || args.includes('-h')) {
+  if (isHelpRequest(args)) {
     return ok('usage: mcp list\n');
   }
+  const parsed = parseKnownFlags(args, {});
+  if ('error' in parsed) return flagError(parsed.error);
   const { ensureAllMcpProvidersRegistered } = await import('../mcp/provider.js');
   await ensureAllMcpProvidersRegistered();
   const { listServers } = await import('../mcp/store.js');
@@ -339,10 +350,12 @@ registered MCP server. Matches tool name OR description and prints a
 table of (server, tool, description, match-field) rows.
 `);
   }
-  if (args.length === 0) {
+  const parsed = parseKnownFlags(args, {});
+  if ('error' in parsed) return flagError(parsed.error);
+  if (parsed.positionals.length === 0) {
     return err('mcp search: expected <query>');
   }
-  const query = args[0];
+  const query = parsed.positionals[0];
   const needle = query.toLowerCase();
 
   const { ensureAllMcpProvidersRegistered } = await import('../mcp/provider.js');
@@ -402,7 +415,12 @@ async function cmdDelete(args: string[], deps: McpCommandDeps): Promise<ExecResu
       ? err('mcp delete: expected <name>')
       : ok('usage: mcp delete <name>\n');
   }
-  const name = args[0];
+  const parsed = parseKnownFlags(args, {});
+  if ('error' in parsed) return flagError(parsed.error);
+  const name = parsed.positionals[0];
+  if (!name) {
+    return err('mcp delete: expected <name>');
+  }
   const { ensureMcpProviderRegistered, removeMcpProvider } = await import('../mcp/provider.js');
   await ensureMcpProviderRegistered(name);
   const { deleteServer } = await import('../mcp/store.js');
@@ -449,10 +467,18 @@ async function cmdDelete(args: string[], deps: McpCommandDeps): Promise<ExecResu
 // ── invoke ──────────────────────────────────────────────────────────
 
 async function cmdInvoke(args: string[], deps: McpCommandDeps): Promise<ExecResult> {
-  if (args.length === 0 || args[0] === '--help' || args[0] === '-h') {
-    return args.length === 0 ? err('mcp invoke: expected <name>') : ok(invokeHelpText());
+  if (args.length === 0) {
+    return err('mcp invoke: expected <name>');
   }
-  const name = args[0];
+  if (isHelpRequest(args.slice(0, 1))) {
+    return ok(invokeHelpText());
+  }
+  const head = parseKnownFlags([args[0]], {});
+  if ('error' in head) return flagError(head.error);
+  const name = head.positionals[0];
+  if (!name) {
+    return err('mcp invoke: expected <name>');
+  }
   const rest = args.slice(1);
 
   const { ensureMcpProviderRegistered } = await import('../mcp/provider.js');
@@ -466,12 +492,18 @@ async function cmdInvoke(args: string[], deps: McpCommandDeps): Promise<ExecResu
 
   const tools = entry.tools ?? [];
 
-  // No tool → server-level help (list tools).
-  if (rest.length === 0 || rest[0] === '--help' || rest[0] === '-h') {
+  // No tool → server-level help (list tools). Only the first rest token
+  // counts — `demo weather --help` is tool help, not server help.
+  if (rest.length === 0 || isHelpRequest(rest.slice(0, 1))) {
     return ok(formatServerHelp(name, entry, tools));
   }
 
-  const toolName = rest[0];
+  const toolHead = parseKnownFlags([rest[0]], {});
+  if ('error' in toolHead) return flagError(toolHead.error);
+  const toolName = toolHead.positionals[0];
+  if (!toolName) {
+    return err('mcp invoke: expected <tool>');
+  }
   const tool = tools.find((t) => t.name === toolName);
   if (!tool) {
     return err(
@@ -485,7 +517,7 @@ async function cmdInvoke(args: string[], deps: McpCommandDeps): Promise<ExecResu
   // on stderr and fall back to the McpClient default rather than erroring.
   const { timeoutMs, remaining: filteredArgs, warnings } = extractTimeoutFlag(toolArgs);
 
-  if (filteredArgs.includes('--help') || filteredArgs.includes('-h')) {
+  if (isHelpRequest(filteredArgs)) {
     return ok(formatToolHelp(name, tool));
   }
 
@@ -840,7 +872,12 @@ OAuth tokens — for OAuth token refresh use \`mcp auth <name>\`.
 `
         );
   }
-  const name = args[0];
+  const parsed = parseKnownFlags(args, {});
+  if ('error' in parsed) return flagError(parsed.error);
+  const name = parsed.positionals[0];
+  if (!name) {
+    return err('mcp refresh: expected <name>');
+  }
   const { ensureMcpProviderRegistered } = await import('../mcp/provider.js');
   await ensureMcpProviderRegistered(name);
 
@@ -884,7 +921,7 @@ OAuth tokens — for OAuth token refresh use \`mcp auth <name>\`.
 // ── auth ────────────────────────────────────────────────────────────
 
 async function cmdAuth(args: string[], deps: McpCommandDeps): Promise<ExecResult> {
-  if (args.includes('--help') || args.includes('-h')) {
+  if (isHelpRequest(args)) {
     return ok(`usage: mcp auth <name> [--silent | --interactive]
 
 Re-authenticate an existing MCP server. By default, attempts a silent
@@ -899,13 +936,14 @@ Options:
                       when the AS no longer accepts the cached one.
 `);
   }
-  const positional = args.filter((a) => !a.startsWith('-'));
-  if (positional.length === 0) {
+  const parsed = parseKnownFlags(args, { bool: MCP_AUTH_BOOL_FLAGS });
+  if ('error' in parsed) return flagError(parsed.error);
+  const name = parsed.positionals[0];
+  if (!name) {
     return err('mcp auth: expected <name>');
   }
-  const name = positional[0];
-  const silent = args.includes('--silent') || args.includes('-s');
-  const interactive = args.includes('--interactive') || args.includes('-i');
+  const silent = parsed.bools.has('--silent') || parsed.bools.has('-s');
+  const interactive = parsed.bools.has('--interactive') || parsed.bools.has('-i');
   if (silent && interactive) {
     return err('mcp auth: --silent and --interactive are mutually exclusive');
   }
