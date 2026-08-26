@@ -16,7 +16,8 @@
  *    export-from specifiers out of the emitted ES chunks and walk those.
  *
  * Pure functions only — the CLI wrapper (`check-first-load-size.mjs`)
- * owns filesystem access and process exit codes.
+ * owns filesystem access and process exit codes, and
+ * `first-load-baseline.mjs` owns the merge-base worktree build.
  */
 
 /**
@@ -108,36 +109,99 @@ export function chunkEagerClosure(entryFile, readChunk) {
   return [...seen];
 }
 
+/** The two eager graphs the gate measures, in report order. */
+export const EAGER_GRAPHS = ['page', 'worker'];
+
+/** `page` -> `pageEagerCeilingKb`. */
+export function ceilingKeyFor(graph) {
+  return `${graph}EagerCeilingKb`;
+}
+
+/** Whole kB, rounded — the unit every limit and report is expressed in. */
+export function bytesToKb(bytes) {
+  return Math.round(bytes / 1024);
+}
+
 /**
- * Compare measured eager sizes against budgets.
+ * Gate a measured build against its merge-base and against the ceilings.
  *
- * @param {{pageEagerKb: number, workerEagerKb: number}} budgets
- * @param {{pageEagerKb: number, workerEagerKb: number}} measured
- * @param {number} [ratchetSlackPct] headroom percentage above which the
- *   budget should be tightened (default 5)
- * @returns {{failures: string[], ratchetHints: string[]}}
+ * Two independent checks, deliberately different in kind:
+ *
+ *  - **Delta** (primary): `measured - baseline` per graph, computed in
+ *    bytes, must not exceed `limits.maxDeltaKb`. Both sides are built on
+ *    the same machine in the same run, so this is platform-independent and
+ *    has a zero noise floor (the webapp build is byte-for-byte
+ *    deterministic for a given tree). It fails exactly the changes that
+ *    regress cold boot, and never fires on inherited state.
+ *  - **Ceiling** (secondary): an absolute cap per graph. A delta gate alone
+ *    would let many small under-threshold changes creep the graph upward
+ *    forever; the ceiling bounds the total and forces a deliberate decision
+ *    once it is reached.
+ *
+ * `baselineBytes` may be null when the merge-base could not be built
+ * (shallow clone, unresolvable ref, broken base). The delta check is then
+ * skipped and reported as skipped, while the ceilings still apply — a
+ * degraded run rather than a silently green one.
+ *
+ * @param {{maxDeltaKb: number, pageEagerCeilingKb: number, workerEagerCeilingKb: number}} limits
+ * @param {{page: number, worker: number}} measuredBytes eager closure sizes in BYTES
+ * @param {{page: number, worker: number} | null} baselineBytes merge-base sizes in BYTES
+ * @returns {{failures: string[], notes: string[], rows: Array<object>}}
  */
-export function checkBudgets(budgets, measured, ratchetSlackPct = 5) {
+export function checkFirstLoad(limits, measuredBytes, baselineBytes) {
   const failures = [];
-  const ratchetHints = [];
-  for (const key of ['pageEagerKb', 'workerEagerKb']) {
-    const limit = budgets[key];
-    const actual = measured[key];
-    if (typeof limit !== 'number') {
-      failures.push(`budget file is missing a numeric "${key}"`);
-      continue;
-    }
-    if (actual > limit) {
-      failures.push(
-        `${key}: eager first-load payload is ${actual} kB, over the ${limit} kB budget. ` +
-          `A static import is hoisting a chunk into the boot-critical graph — make it lazy, ` +
-          `or (with a reason in the PR body) raise the budget.`
-      );
-    } else if (actual < limit * (1 - ratchetSlackPct / 100)) {
-      ratchetHints.push(
-        `${key}: measured ${actual} kB vs ${limit} kB budget — tighten the budget (ratchet).`
-      );
-    }
+  const notes = [];
+  const rows = [];
+  const { maxDeltaKb } = limits;
+  if (typeof maxDeltaKb !== 'number') {
+    failures.push('limits file is missing a numeric "maxDeltaKb"');
   }
-  return { failures, ratchetHints };
+  if (!baselineBytes) {
+    notes.push(
+      'baseline unavailable — the merge-base could not be measured, so the per-change delta ' +
+        'check was SKIPPED and only the absolute ceilings were enforced.'
+    );
+  }
+  for (const graph of EAGER_GRAPHS) {
+    const row = gradeGraph(graph, limits, measuredBytes, baselineBytes);
+    rows.push(row);
+    failures.push(...row.failures);
+  }
+  return { failures, notes, rows };
+}
+
+/**
+ * Grade one graph against its delta allowance and its ceiling. Split out of
+ * `checkFirstLoad` so both stay small and under the complexity gate.
+ */
+function gradeGraph(graph, limits, measuredBytes, baselineBytes) {
+  const ceilingKey = ceilingKeyFor(graph);
+  const ceiling = limits[ceilingKey];
+  const bytes = measuredBytes[graph];
+  const kb = bytesToKb(bytes);
+  const baseBytes = baselineBytes?.[graph] ?? null;
+  const deltaKb = baseBytes === null ? null : (bytes - baseBytes) / 1024;
+  const failures = [];
+
+  if (typeof ceiling !== 'number') {
+    failures.push(`limits file is missing a numeric "${ceilingKey}"`);
+    return { graph, kb, deltaKb, ceiling: null, headroomKb: null, failures };
+  }
+  if (deltaKb !== null && typeof limits.maxDeltaKb === 'number' && deltaKb > limits.maxDeltaKb) {
+    failures.push(
+      `${graph} graph: this change adds ${deltaKb.toFixed(1)} kB to the eager first-load ` +
+        `closure (merge-base ${bytesToKb(baseBytes)} kB -> ${kb} kB), over the ` +
+        `${limits.maxDeltaKb} kB per-change allowance. A static import is hoisting a chunk ` +
+        `into the boot-critical graph — make it lazy. If the growth is genuinely required, ` +
+        `justify it in the PR body.`
+    );
+  }
+  if (kb > ceiling) {
+    failures.push(
+      `${graph} graph: eager first-load payload is ${kb} kB, over the ${ceiling} kB ceiling ` +
+        `("${ceilingKey}"). The ceiling is a deliberate cold-boot limit, not a number to nudge ` +
+        `when a build goes red: pay down the eager graph, or raise it with a reason in the PR body.`
+    );
+  }
+  return { graph, kb, deltaKb, ceiling, headroomKb: ceiling - kb, failures };
 }
