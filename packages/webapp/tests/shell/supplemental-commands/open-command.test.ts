@@ -671,4 +671,76 @@ describe('open command', () => {
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toContain('usage: open');
   });
+
+  it('rejects an unknown flag with a non-zero exit', async () => {
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx();
+    const result = await cmd.execute(['--totally-fake', 'https://example.com'], ctx as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unknown flag');
+    expect(result.stderr).toContain('--totally-fake');
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it('accepts known flags after positionals', async () => {
+    const fileBytes = new Uint8Array([0x48, 0x65]);
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx({ files: { '/workspace/file.txt': fileBytes } });
+
+    const origCreateObjectURL = globalThis.URL?.createObjectURL;
+    const origRevokeObjectURL = globalThis.URL?.revokeObjectURL;
+    (globalThis as any).URL.createObjectURL = vi.fn().mockReturnValue('blob:mock');
+    (globalThis as any).URL.revokeObjectURL = vi.fn();
+
+    const result = await cmd.execute(['/workspace/file.txt', '--download'], ctx as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('downloaded /workspace/file.txt');
+    expect(openSpy).not.toHaveBeenCalled();
+
+    if (origCreateObjectURL) (globalThis as any).URL.createObjectURL = origCreateObjectURL;
+    if (origRevokeObjectURL) (globalThis as any).URL.revokeObjectURL = origRevokeObjectURL;
+  });
+
+  it('treats tokens after -- as positionals even when dash-prefixed', async () => {
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx();
+    const result = await cmd.execute(['--', '--not-a-flag'], ctx as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(openSpy).toHaveBeenCalled();
+    expect(result.stdout).toContain('--not-a-flag');
+  });
+
+  it('rejects an unknown flag used as a --size value', async () => {
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx();
+    const result = await cmd.execute(['--size', '--totally-fake', 'file'], ctx as any);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unknown flag');
+    expect(result.stderr).toContain('--totally-fake');
+    expect(openSpy).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a boolean flag as a --size value', async () => {
+    const fileBytes = new Uint8Array([0x48, 0x65]);
+    const cmd = createOpenCommand();
+    const ctx = createMockCtx({ files: { '/workspace/file.txt': fileBytes } });
+
+    const origCreateObjectURL = globalThis.URL?.createObjectURL;
+    const origRevokeObjectURL = globalThis.URL?.revokeObjectURL;
+    (globalThis as any).URL.createObjectURL = vi.fn().mockReturnValue('blob:mock');
+    (globalThis as any).URL.revokeObjectURL = vi.fn();
+
+    const result = await cmd.execute(['--size', '--download', '/workspace/file.txt'], ctx as any);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('downloaded /workspace/file.txt');
+    expect(openSpy).not.toHaveBeenCalled();
+
+    if (origCreateObjectURL) (globalThis as any).URL.createObjectURL = origCreateObjectURL;
+    if (origRevokeObjectURL) (globalThis as any).URL.revokeObjectURL = origRevokeObjectURL;
+  });
 });

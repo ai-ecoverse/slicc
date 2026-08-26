@@ -51,6 +51,17 @@ describe('parseKnownFlags', () => {
     });
   });
 
+  it('does not consume a known boolean as a value-flag argument', () => {
+    const parsed = parseKnownFlags(['--size', '--download', 'file'], {
+      value: ['--size'],
+      bool: ['--download'],
+    });
+    if ('error' in parsed) throw new Error(parsed.error);
+    expect(parsed.values.has('--size')).toBe(false);
+    expect(parsed.bools.has('--download')).toBe(true);
+    expect(parsed.positionals).toEqual(['file']);
+  });
+
   it('accepts boolean flags in any position as exact tokens only', () => {
     const cleared = parseKnownFlags(['dash', '--clear'], { bool: ['--clear'] });
     if ('error' in cleared) throw new Error(cleared.error);

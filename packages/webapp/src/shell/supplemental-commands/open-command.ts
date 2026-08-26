@@ -1,8 +1,7 @@
 import type { Command, CommandContext, ExecResult } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import type { BrowserAPI } from '../../cdp/index.js';
 import { getPanelRpcClient, type PanelRpcClient } from '../../kernel/panel-rpc.js';
-import type { SprinkleManager } from '../../ui/sprinkle-manager.js';
+import type { SprinkleManagerHandle } from '../sprinkle-manager-handle.js';
 import {
   basename,
   detectMimeType,
@@ -11,8 +10,20 @@ import {
   isLikelyUrl,
   toPreviewUrl,
 } from './shared.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
 
-const FLAG_SET = new Set(['--download', '-d', '--view', '-v']);
+/** Duck type for the CDP surface `open` needs — avoids a shell → cdp back-edge. */
+interface OpenBrowserAPI {
+  createPage(url: string): Promise<string | undefined>;
+}
+
+const OPEN_BOOL_FLAGS = ['--download', '-d', '--view', '-v'] as const;
+const OPEN_VALUE_FLAGS = ['--size'] as const;
+
+interface OpenGlobals {
+  __slicc_sprinkleManager?: SprinkleManagerHandle;
+}
 
 const SIZE_PRESETS = { low: 256, medium: 768, high: 1536 } as const;
 type SizePreset = keyof typeof SIZE_PRESETS;
@@ -181,47 +192,29 @@ async function decodeAndResize(
   }
 }
 
-interface ParsedArgs {
+interface ParsedOpenArgs {
   download: boolean;
   view: boolean;
   sizeSpec: string | undefined;
   targets: string[];
-  error?: string;
 }
 
-function parseArgs(args: readonly string[]): ParsedArgs {
-  const out: ParsedArgs = {
-    download: false,
-    view: false,
-    sizeSpec: undefined,
-    targets: [],
-  };
-  for (let i = 0; i < args.length; i++) {
-    const a = args[i];
-    if (a === '--download' || a === '-d') {
-      out.download = true;
-    } else if (a === '--view' || a === '-v') {
-      out.view = true;
-    } else if (a === '--size') {
-      const next = args[i + 1];
-      if (
-        next === undefined ||
-        FLAG_SET.has(next) ||
-        next === '--size' ||
-        next.startsWith('--size=')
-      ) {
-        out.error = 'open: --size requires a value (low|medium|high|WxH)';
-        return out;
-      }
-      out.sizeSpec = next;
-      i++;
-    } else if (a.startsWith('--size=')) {
-      out.sizeSpec = a.slice('--size='.length);
-    } else {
-      out.targets.push(a);
-    }
+function parseOpenArgs(args: readonly string[]): ParsedOpenArgs | { error: string } {
+  const parsed = parseKnownFlags(args, {
+    bool: OPEN_BOOL_FLAGS,
+    value: OPEN_VALUE_FLAGS,
+  });
+  if ('error' in parsed) return { error: `open: ${parsed.error}` };
+  const sizeSpec = parsed.values.get('--size');
+  if (sizeSpec?.startsWith('-') && sizeSpec !== '-') {
+    return { error: `open: unknown flag: ${sizeSpec}` };
   }
-  return out;
+  return {
+    download: parsed.bools.has('--download') || parsed.bools.has('-d'),
+    view: parsed.bools.has('--view') || parsed.bools.has('-v'),
+    sizeSpec,
+    targets: parsed.positionals,
+  };
 }
 
 // A per-target handler either produces the stdout line to add for that
@@ -252,7 +245,7 @@ type OpenExternal = (url: string) => Promise<string | undefined>;
  * timeout — would otherwise bubble as raw `panel-rpc: …` strings).
  */
 function createOpenExternal(
-  browserAPI: BrowserAPI | undefined,
+  browserAPI: OpenBrowserAPI | undefined,
   hasDom: boolean,
   panelRpc: PanelRpcClient | null
 ): OpenExternal {
@@ -287,7 +280,7 @@ function createOpenExternal(
 async function handleShtmlTarget(
   target: string,
   ctx: CommandContext,
-  sprinkleManager: SprinkleManager | undefined,
+  sprinkleManager: SprinkleManagerHandle | undefined,
   canOpenWindow: boolean,
   openExternal: OpenExternal
 ): Promise<TargetOutcome> {
@@ -501,7 +494,7 @@ interface TargetModeFlags {
 interface DispatchTargetDeps {
   canOpenWindow: boolean;
   hasDom: boolean;
-  sprinkleManager: SprinkleManager | undefined;
+  sprinkleManager: SprinkleManagerHandle | undefined;
   openExternal: OpenExternal;
 }
 
@@ -535,14 +528,14 @@ async function dispatchTarget(
   return handleDefaultTarget(path, ctx, deps.canOpenWindow, deps.openExternal);
 }
 
-export function createOpenCommand(browserAPI?: BrowserAPI): Command {
+export function createOpenCommand(browserAPI?: OpenBrowserAPI): Command {
   return defineCommand('open', async (args, ctx) => {
-    if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+    if (args.length === 0 || isHelpRequest(args, { valueFlags: OPEN_VALUE_FLAGS })) {
       return openHelp();
     }
 
-    const parsed = parseArgs(args);
-    if (parsed.error) {
+    const parsed = parseOpenArgs(args);
+    if ('error' in parsed) {
       return { stdout: '', stderr: `${parsed.error}\n`, exitCode: 1 };
     }
     const { download, view, sizeSpec, targets } = parsed;
@@ -554,9 +547,7 @@ export function createOpenCommand(browserAPI?: BrowserAPI): Command {
     // Published on `globalThis.__slicc_sprinkleManager` in BOTH realms —
     // the kernel-worker (a BroadcastChannel-backed proxy) and the page
     // (the real `SprinkleManager`).
-    const sprinkleManager = (globalThis as Record<string, unknown>).__slicc_sprinkleManager as
-      | SprinkleManager
-      | undefined;
+    const sprinkleManager = (globalThis as OpenGlobals).__slicc_sprinkleManager;
     const hasDom = typeof window !== 'undefined' && typeof document !== 'undefined';
     const panelRpc = !hasDom ? getPanelRpcClient() : null;
     const canOpenWindow = !!browserAPI || hasDom || !!panelRpc;

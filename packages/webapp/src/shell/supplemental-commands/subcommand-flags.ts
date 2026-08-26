@@ -47,6 +47,26 @@ export interface KnownFlagSpec {
  * failure returns `{ error }` with a message suitable for stderr
  * (`unknown flag: --x` or `--flag requires a value`).
  */
+function consumeValueFlag(
+  arg: string,
+  i: number,
+  args: readonly string[],
+  name: string,
+  boolFlags: Set<string>,
+  values: Map<string, string>
+): { nextIndex: number } | { error: string } {
+  const eq = arg.indexOf('=');
+  const value = eq === -1 ? args[i + 1] : arg.slice(eq + 1);
+  if (value === undefined) return { error: `${name} requires a value` };
+  // A value flag must not swallow a known boolean — e.g. `open --size
+  // --download file` should honour `--download`, not treat it as a size.
+  if (eq === -1 && boolFlags.has(value)) {
+    return { nextIndex: i };
+  }
+  values.set(name, value);
+  return { nextIndex: eq === -1 ? i + 1 : i };
+}
+
 export function parseKnownFlags(
   args: readonly string[],
   spec: KnownFlagSpec = {}
@@ -70,9 +90,9 @@ export function parseKnownFlags(
     const eq = arg.indexOf('=');
     const name = eq === -1 ? arg : arg.slice(0, eq);
     if (valueFlags.has(name)) {
-      const value = eq === -1 ? args[++i] : arg.slice(eq + 1);
-      if (value === undefined) return { error: `${name} requires a value` };
-      values.set(name, value);
+      const consumed = consumeValueFlag(arg, i, args, name, boolFlags, values);
+      if ('error' in consumed) return consumed;
+      i = consumed.nextIndex;
       continue;
     }
     // Boolean flags must be the exact token — `--flag=value` is unknown.
