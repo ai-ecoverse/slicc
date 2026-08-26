@@ -46,6 +46,20 @@ describe('which command', () => {
     expect(result.stderr).toContain('missing argument');
   });
 
+  it('rejects unknown flags with a non-zero exit (#2255)', async () => {
+    const cmd = createWhichCommand();
+    const result = await cmd.execute(['--bogus', 'node'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toBe('which: unknown flag: --bogus\n');
+  });
+
+  it('honours -- so a dash-prefixed command name is not treated as a flag', async () => {
+    const cmd = createWhichCommand();
+    const result = await cmd.execute(['--', '--help'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toBe('');
+  });
+
   it('resolves built-in command to /usr/bin/<name>', async () => {
     const cmd = createWhichCommand();
     const result = await cmd.execute(['node'], createMockCtx());
