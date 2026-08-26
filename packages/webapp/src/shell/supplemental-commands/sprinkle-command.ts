@@ -34,6 +34,7 @@ import {
 } from '../sprinkle-routes.js';
 import { showToolUIFromContext } from '../tool-ui.js';
 import { getConnectedFollowersWithFallback } from './host-command.js';
+import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest, stripOptionTerminator, subcommandHelpText } from './subcommand-help.js';
 
 type Result = { stdout: string; stderr: string; exitCode: number };
@@ -73,61 +74,6 @@ interface SprinkleGlobals {
 
 function getSprinkleManager(): SprinkleManagerHandle | null {
   return (globalThis as SprinkleGlobals).__slicc_sprinkleManager ?? null;
-}
-
-// ── Flag parsing ────────────────────────────────────────────────────────────
-
-interface ParsedFlags {
-  positionals: string[];
-  values: Map<string, string>;
-  bools: Set<string>;
-}
-
-/**
- * Walk every token: known value flags consume `--flag=value` or
- * `--flag value`, known boolean flags stand alone, and any other
- * dash-prefixed token is an error. Unlike the leading-flag walks elsewhere
- * in this directory, flags are accepted in any position — the repro in
- * issue #2166 put `--runtime` both before and after the JSON payload.
- *
- * Everything after a `--` terminator is positional, so a payload that
- * genuinely starts with a dash stays reachable.
- */
-function parseFlags(
-  args: readonly string[],
-  spec: { value?: readonly string[]; bool?: readonly string[] }
-): ParsedFlags | { error: string } {
-  const valueFlags = new Set(spec.value ?? []);
-  const boolFlags = new Set(spec.bool ?? []);
-  const positionals: string[] = [];
-  const values = new Map<string, string>();
-  const bools = new Set<string>();
-
-  for (let i = 0; i < args.length; i++) {
-    const arg = args[i];
-    if (arg === '--') {
-      positionals.push(...args.slice(i + 1));
-      break;
-    }
-    if (!arg.startsWith('-') || arg === '-') {
-      positionals.push(arg);
-      continue;
-    }
-    const eq = arg.indexOf('=');
-    const name = eq === -1 ? arg : arg.slice(0, eq);
-    if (valueFlags.has(name)) {
-      const value = eq === -1 ? args[++i] : arg.slice(eq + 1);
-      if (value === undefined) return { error: `${name} requires a value` };
-      values.set(name, value);
-      continue;
-    }
-    if (boolFlags.has(name)) {
-      bools.add(name);
-      continue;
-    }
-    return { error: `unknown flag: ${name}` };
-  }
-  return { positionals, values, bools };
 }
 
 /** `sprinkle <sub>: <message>` on stderr, exit 1. */
@@ -198,7 +144,7 @@ function collectInstances(opened: readonly string[]): SprinkleInstance[] {
 }
 
 async function handleList(mgr: SprinkleManagerHandle, args: string[]): Promise<Result> {
-  const parsed = parseFlags(args.slice(1), { value: ['--runtime'] });
+  const parsed = parseKnownFlags(args.slice(1), { value: ['--runtime'] });
   if ('error' in parsed) return fail('list', parsed.error);
   const runtime = parsed.values.get('--runtime');
   if (runtime !== undefined && !knownRuntimeIds().includes(runtime)) {
@@ -265,7 +211,7 @@ async function handleOpen(
   args: string[],
   env: LickTargetEnv
 ): Promise<Result> {
-  const parsed = parseFlags(args.slice(1), {});
+  const parsed = parseKnownFlags(args.slice(1), {});
   if ('error' in parsed) return fail('open', parsed.error);
   const name = parsed.positionals[0];
   if (!name) return fail('open', 'name required');
@@ -283,7 +229,7 @@ async function handleOpen(
 }
 
 function handleClose(mgr: SprinkleManagerHandle, args: string[]): Result {
-  const parsed = parseFlags(args.slice(1), {});
+  const parsed = parseKnownFlags(args.slice(1), {});
   if ('error' in parsed) return fail('close', parsed.error);
   const name = parsed.positionals[0];
   if (!name) return fail('close', 'name required');
@@ -292,7 +238,7 @@ function handleClose(mgr: SprinkleManagerHandle, args: string[]): Result {
 }
 
 async function handleReload(mgr: SprinkleManagerHandle, args: string[]): Promise<Result> {
-  const parsed = parseFlags(args.slice(1), {});
+  const parsed = parseKnownFlags(args.slice(1), {});
   if ('error' in parsed) return fail('reload', parsed.error);
   const name = parsed.positionals[0];
   if (!name) return fail('reload', 'name required');
@@ -305,7 +251,7 @@ async function handleReload(mgr: SprinkleManagerHandle, args: string[]): Promise
 }
 
 async function handleRefresh(mgr: SprinkleManagerHandle, args: string[]): Promise<Result> {
-  const parsed = parseFlags(args.slice(1), {});
+  const parsed = parseKnownFlags(args.slice(1), {});
   if ('error' in parsed) return fail('refresh', parsed.error);
   await mgr.refresh();
   const count = mgr.available().length;
@@ -317,7 +263,7 @@ async function handleRefresh(mgr: SprinkleManagerHandle, args: string[]): Promis
 }
 
 function handleRoute(args: string[]): Result {
-  const parsed = parseFlags(args.slice(1), { value: ['--scoop'], bool: ['--clear'] });
+  const parsed = parseKnownFlags(args.slice(1), { value: ['--scoop'], bool: ['--clear'] });
   if ('error' in parsed) return fail('route', parsed.error);
   const name = parsed.positionals[0];
   if (!name) {
@@ -372,7 +318,7 @@ function describeReach(report: SprinkleSendReport): string {
 }
 
 async function handleSend(mgr: SprinkleManagerHandle, args: string[]): Promise<Result> {
-  const parsed = parseFlags(args.slice(1), { value: ['--runtime'] });
+  const parsed = parseKnownFlags(args.slice(1), { value: ['--runtime'] });
   if ('error' in parsed) return fail('send', parsed.error);
   const name = parsed.positionals[0];
   if (!name) return fail('send', 'name required');
