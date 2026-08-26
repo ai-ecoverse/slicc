@@ -8,7 +8,7 @@ interface RegistryFile {
 
 function isConeEntry(x: unknown): x is ConeEntry {
   if (typeof x !== 'object' || x === null) return false;
-  const e = x as Record<string, unknown>;
+  const e = x as Partial<Record<keyof ConeEntry, unknown>>;
   return (
     typeof e.substrate === 'string' &&
     typeof e.sandboxId === 'string' &&

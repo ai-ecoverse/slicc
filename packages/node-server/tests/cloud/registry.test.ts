@@ -74,6 +74,36 @@ describe('FileRegistry', () => {
     await expect(reg.remove('missing-id')).resolves.toBeUndefined();
   });
 
+  it('skips malformed entries and returns only valid sessions', async () => {
+    await fs.writeFile(
+      file,
+      JSON.stringify({
+        sessions: [
+          {
+            substrate: 'e2b',
+            sandboxId: 'good',
+            createdAt: '2026-05-22T00:00:00Z',
+            joinUrl: 'https://w/join/good',
+            lastSeen: '2026-05-22T00:00:00Z',
+            state: 'running',
+          },
+          { substrate: 'e2b', sandboxId: 'bad' },
+          'not-an-object',
+        ],
+      })
+    );
+    const reg = new FileRegistry(file);
+    const sessions = await reg.list();
+    expect(sessions).toHaveLength(1);
+    expect(sessions[0]?.sandboxId).toBe('good');
+  });
+
+  it('treats a malformed registry file as empty', async () => {
+    await fs.writeFile(file, JSON.stringify({ notSessions: [] }));
+    const reg = new FileRegistry(file);
+    expect(await reg.list()).toEqual([]);
+  });
+
   it('findByNameOrId resolves both name and sandboxId', async () => {
     const reg = new FileRegistry(file);
     await reg.append({
