@@ -406,7 +406,10 @@ describe('my_tool', () => {
 When adding a new `playwright-cli` subcommand, also update
 `packages/webapp/src/shell/supplemental-commands/playwright/slicc-commands.json`
 and run `node packages/dev-tools/tools/playwright-cli-sync.mjs` to confirm the gap
-is closed. If you're implementing a command that the official CLI already has, cross-
+is closed. That manifest is ENFORCED at runtime by `playwright/validate-args.ts`:
+a flag or extra positional it does not declare is rejected with a usage line
+(#2405), so list every flag your handler actually reads (and `"variadic": true`
+when the last positional soaks up the rest) or working invocations will fail. If you're implementing a command that the official CLI already has, cross-
 reference its args and flags in `help.json` first. Full workflow: [`docs/playwright-cli-sync.md`](../../../docs/playwright-cli-sync.md).
 
 **Reference files**: `packages/webapp/src/shell/supplemental-commands/playwright-command.ts` (dispatcher) and `packages/webapp/src/shell/supplemental-commands/playwright/` (handlers + helpers), `packages/webapp/src/shell/supplemental-commands/serve-command.ts`, `packages/webapp/src/shell/supplemental-commands/sprinkle-command.ts`

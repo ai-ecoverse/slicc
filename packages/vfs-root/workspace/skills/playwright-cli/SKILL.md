@@ -53,6 +53,10 @@ playwright-cli snapshot --tab=E9A3F
 - `--tab <targetId> is required` — you forgot `--tab=<id>`. Run `tab-list` to get IDs.
 - `is a frame ID, not a tab target ID` — keep the owning tab's targetId in `--tab` and pass the frame ID with `--frame`.
 - `No snapshot available` — run `snapshot --tab=<id>` before using refs.
+- `unknown flag "--x"` / `unexpected argument "y"` — every subcommand rejects arguments it does not
+  support, so an exit code of 0 means everything you passed was honoured. Check `<verb> --help`.
+- `is not an element ref` — a screenshot's positional is a main-frame element ref (`e5`); the output
+  path is `--filename=<path>`. Frame-prefixed refs (`f1e5`) clip only with `click`-family commands.
 - Refs are tied to **one tab + one snapshot**. They do not carry across tabs, navigations, or reloads.
 
 ## Element Refs
@@ -73,7 +77,7 @@ playwright-cli tab-new [url] [--foreground]                       # Same as open
 playwright-cli tab-close --tab=<id>                               # Close tab
 playwright-cli goto --tab=<id> <url>                              # Navigate tab
 playwright-cli navigate --tab=<id> <url>                          # Alias for goto
-playwright-cli snapshot --tab=<id> [--frame=<frameId>] [--no-iframes] [--filename=path] [--depth=N] [--boxes]  # Tab tree or one frame subtree
+playwright-cli snapshot --tab=<id> [--frame=<frameId>] [--no-iframes] [--filename=path]  # Tab tree or one frame subtree
 playwright-cli eval --tab=<id> [--frame=<frameId>] <expression> [--filename=path]  # Evaluate JS in a tab/frame, incl. top-level await/return
 playwright-cli eval-file --tab=<id> [--frame=<frameId>] <vfs-path>  # Evaluate JS from a VFS file in a tab/frame (top-level await/return supported)
 playwright-cli frames --tab=<id>                                  # List frame IDs for --frame (not --tab)
@@ -157,7 +161,7 @@ Teleport is for leader/follower tray auth handoffs. Scoped to a specific tab —
 ```bash
 playwright-cli screenshot --tab=<id>                             # Save to /tmp/screenshot-<ts>.png
 playwright-cli screenshot --tab=<id> --filename=page.png         # Save to custom path
-playwright-cli screenshot --tab=<id> e5                          # Screenshot specific element
+playwright-cli screenshot --tab=<id> e5                          # Clip to an element (positional = MAIN-FRAME ref, not a path)
 playwright-cli screenshot --tab=<id> --fullPage                  # Full scrollable page (alias: --full-page)
 playwright-cli screenshot --tab=<id> --max-width=800             # Downscale to a max width
 ```
@@ -308,7 +312,10 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
 - Use `eval --tab=<id>` for DOM operations not covered by built-in commands; save results with `--filename=path`.
 - The SLICC app tab and Chrome internal UI tabs are automatically excluded from `tab-list`.
 - `fill` clears and types into regular inputs, textareas, and `contenteditable` elements. Use `--submit` to press Enter after.
-- Screenshots default to `/tmp/screenshot-<timestamp>.png`. Use `--filename=path` to save elsewhere.
+- Screenshots default to `/tmp/screenshot-<timestamp>.png`. Use `--filename=path` to save elsewhere —
+  `screenshot <path>` is an error, because that slot is the element ref.
+- Unsupported flags and extra positionals are rejected per subcommand, so a probe that exits 0 means
+  the flag was honoured — nothing is silently dropped.
 - Use `keydown`/`keyup` for holding modifier keys (e.g. Shift+click: `keydown Shift`, `click`, `keyup Shift`).
 - Use `requests` + `response-body` to inspect XHR/fetch responses; `route` to mock or block them.
 - **Calling the app's own backend? Use `curlwright`, not `eval-file`.** It is curl's flags run by a `fetch()` inside the tab, so cookies, origin and session come along: `curlwright -s -X POST https://app.example.com/api/items -H 'X-CSRF-Token: abc' -d '{"name":"x"}' --tab=<id>`. `-o <file>` writes a **byte-exact** body, which `eval-file` cannot do at all — that is the only way to pull a binary response out of a page. Without `--tab` it uses the tab already on that origin. `curlwright --help` for the flag list.

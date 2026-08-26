@@ -55,6 +55,56 @@ async function commandErrorResult(
   return { stdout: '', stderr: `Error: ${frameHint ?? message}\n`, exitCode: 1 };
 }
 
+/**
+ * Parse a subcommand's argv, answering `--help` and rejecting arguments the
+ * subcommand does not support before any handler runs.
+ *
+ * Parsing comes first because it is what decides whether a `--help` token is a
+ * help request or the VALUE of a value-taking flag (`route --body --help` mocks
+ * a "--help" body; the shared parser shadows the value onto the flag, so
+ * `flags.help` stays unset). Help is answered next, because `record` and `open`
+ * default a missing URL to about:blank — asking for help used to open a tab.
+ * Validation is last, so `<verb> --help` still explains a malformed call.
+ */
+async function parseSubcommandArgs(
+  name: string,
+  subcommand: string,
+  subArgs: string[]
+): Promise<{ positional: string[]; flags: Record<string, string> } | { answer: CmdResult }> {
+  let positional: string[];
+  let flags: Record<string, string>;
+  try {
+    ({ positional, flags } = parseFlags(subArgs));
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { answer: { stdout: '', stderr: `${name} ${subcommand}: ${msg}\n`, exitCode: 1 } };
+  }
+
+  if (flags['help'] === 'true' || flags['h'] === 'true') {
+    return {
+      answer: { stdout: formatSubcommandHelp(name, subcommand), stderr: '', exitCode: 0 },
+    };
+  }
+
+  // Unsupported flags/positionals are a caller bug: reject them here rather
+  // than letting a handler silently ignore what it does not read (#2405).
+  //
+  // Loaded lazily — the validator and its ~9 kB manifest are dead weight in the
+  // kernel worker's boot graph until a playwright-cli command runs. A failed
+  // chunk load skips validation rather than failing the command: a validator
+  // that cannot load must never be what stops a working call.
+  let argError: string | null = null;
+  try {
+    const { validateSubcommandArgs } = await import('./playwright/validate-args.js');
+    argError = validateSubcommandArgs(name, subcommand, subArgs, positional);
+  } catch {
+    argError = null;
+  }
+  if (argError) return { answer: { stdout: '', stderr: argError, exitCode: 1 } };
+
+  return { positional, flags };
+}
+
 export function createPlaywrightCommand(
   name: string,
   browser: PlaywrightBrowser | null | undefined,
@@ -71,26 +121,9 @@ export function createPlaywrightCommand(
     const subcommand = args[0];
     const subArgs = args.slice(1);
 
-    // Parse first — parsing has no side effects, and it is what decides
-    // whether a `--help` token is a help request or the VALUE of a
-    // value-taking flag (`route --body --help` mocks a "--help" body; the
-    // shared parser shadows the value onto the flag, so `flags.help` stays
-    // unset).
-    let positional: string[];
-    let flags: Record<string, string>;
-    try {
-      ({ positional, flags } = parseFlags(subArgs));
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return { stdout: '', stderr: `${name} ${subcommand}: ${msg}\n`, exitCode: 1 };
-    }
-
-    // `<cmd> <verb> --help` answers BEFORE the handler runs — `record` and
-    // `open` default a missing URL to about:blank, so help used to open a
-    // tab.
-    if (flags['help'] === 'true' || flags['h'] === 'true') {
-      return { stdout: formatSubcommandHelp(name, subcommand), stderr: '', exitCode: 0 };
-    }
+    const parsed = await parseSubcommandArgs(name, subcommand, subArgs);
+    if ('answer' in parsed) return parsed.answer;
+    const { positional, flags } = parsed;
 
     if (!browser || !state) {
       return {

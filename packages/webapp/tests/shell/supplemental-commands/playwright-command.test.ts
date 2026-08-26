@@ -5760,3 +5760,107 @@ describe('playwright-cli highlight', () => {
     expect(result.stderr).toContain('No snapshot available');
   });
 });
+
+/** Give a mock browser a frame tree, for the `--frame` cases below. */
+function withFrames(browser: BrowserAPI, frameIds: string[]): void {
+  (browser as unknown as { getFrameTree: unknown }).getFrameTree = vi
+    .fn()
+    .mockResolvedValue(
+      frameIds.map((frameId) => ({ frameId, url: 'https://example.com', name: '' }))
+    );
+}
+
+describe('playwright-cli argv validation (#2405)', () => {
+  let browser: ReturnType<typeof createMockBrowser>;
+  let fs: ReturnType<typeof createMockFS>;
+
+  beforeEach(() => {
+    browser = createMockBrowser({
+      evaluateInFrame: vi.fn().mockResolvedValue('from-frame'),
+    } as unknown as Partial<BrowserAPI>);
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockResolvedValue(
+      JSON.stringify({ url: 'https://example.com', title: 'Test Page' })
+    );
+    fs = createMockFS();
+  });
+
+  it('screenshot rejects an output path in the ref slot instead of writing elsewhere', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['screenshot', '/tmp/kn1.png', '--tab=tab-1'], mockCtx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('is not an element ref');
+    expect(result.stderr).toContain('--filename=/tmp/kn1.png');
+    expect(browser.screenshot).not.toHaveBeenCalled();
+    // Nothing but the session log — no stray PNG at a path nobody asked for.
+    expect([...fs._files.keys()].filter((k) => k.endsWith('.png'))).toEqual([]);
+  });
+
+  it('screenshot still accepts a real ref', async () => {
+    const mockTransport = {
+      send: vi.fn().mockImplementation((method: string) => {
+        if (method === 'DOM.resolveNode') return { object: {} };
+        return {};
+      }),
+    };
+    (browser.getTransport as ReturnType<typeof vi.fn>).mockReturnValue(mockTransport);
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    await cmd.execute(['snapshot', '--tab=tab-1'], mockCtx);
+    const result = await cmd.execute(['screenshot', 'e1', '--tab=tab-1'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Screenshot saved to');
+  });
+
+  it('rejects a flag the subcommand does not read', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['screenshot', '--tab=tab-1', '--frame=F1'], mockCtx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unknown flag "--frame"');
+    expect(browser.screenshot).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unexpected positional', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['reload', '--tab=tab-1', 'oops'], mockCtx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unexpected argument "oops"');
+    expect(browser.sendCDP).not.toHaveBeenCalled();
+  });
+
+  it('validation runs after --help, so help still answers', async () => {
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(['screenshot', '--help'], mockCtx);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('screenshot');
+  });
+
+  it('eval-file evaluates in the frame named by --frame', async () => {
+    withFrames(browser, ['main-frame', 'child-frame']);
+    fs._files.set('/tmp/script.js', 'document.title');
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockClear();
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['eval-file', '/tmp/script.js', '--frame=child-frame', '--tab=tab-1'],
+      mockCtx
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('from-frame');
+    expect(browser.evaluateInFrame).toHaveBeenCalledWith('child-frame', 'document.title', {
+      world: 'main',
+    });
+    expect(browser.evaluate).not.toHaveBeenCalled();
+  });
+
+  it('eval-file reports an unknown --frame instead of falling back to the main frame', async () => {
+    withFrames(browser, ['main-frame']);
+    fs._files.set('/tmp/script.js', 'document.title');
+    (browser.evaluate as ReturnType<typeof vi.fn>).mockClear();
+    const cmd = createPlaywrightCommand('playwright-cli', browser as BrowserAPI, fs as VirtualFS);
+    const result = await cmd.execute(
+      ['eval-file', '/tmp/script.js', '--frame=nope', '--tab=tab-1'],
+      mockCtx
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Unknown frame ID "nope"');
+    expect(browser.evaluate).not.toHaveBeenCalled();
+  });
+});
