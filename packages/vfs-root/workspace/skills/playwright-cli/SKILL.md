@@ -311,6 +311,7 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
 - Screenshots default to `/tmp/screenshot-<timestamp>.png`. Use `--filename=path` to save elsewhere.
 - Use `keydown`/`keyup` for holding modifier keys (e.g. Shift+click: `keydown Shift`, `click`, `keyup Shift`).
 - Use `requests` + `response-body` to inspect XHR/fetch responses; `route` to mock or block them.
+- **Calling the app's own backend? Use `curlwright`, not `eval-file`.** It is curl's flags run by a `fetch()` inside the tab, so cookies, origin and session come along: `curlwright -s -X POST https://app.example.com/api/items -H 'X-CSRF-Token: abc' -d '{"name":"x"}' --tab=<id>`. `-o <file>` writes a **byte-exact** body, which `eval-file` cannot do at all — that is the only way to pull a binary response out of a page. Without `--tab` it uses the tab already on that origin. `curlwright --help` for the flag list.
 - `state-save` / `state-load` persist auth state (cookies + localStorage) across sessions.
 - `pdf` saves a print-layout PDF; not available in extension mode.
 
