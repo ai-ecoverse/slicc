@@ -138,17 +138,22 @@ export function bytesToKb(bytes) {
  *    forever; the ceiling bounds the total and forces a deliberate decision
  *    once it is reached.
  *
- * `baselineBytes` may be null when the merge-base could not be built
- * (shallow clone, unresolvable ref, broken base). The delta check is then
- * skipped and reported as skipped, while the ceilings still apply — a
- * degraded run rather than a silently green one.
+ * `baselineBytes` may be null for two very different reasons, so the caller
+ * supplies the wording via `options.baselineNote`:
+ *  - the merge-base could not be built (shallow clone, unresolvable ref,
+ *    broken base) — a DEGRADED run, and the default note says so; or
+ *  - the delta check does not apply, as on a merge-queue batch, where the
+ *    ceilings are the right check and each constituent PR was already
+ *    delta-gated against its own merge-base.
+ * Either way the ceilings still apply, so the run is never silently green.
  *
  * @param {{maxDeltaKb: number, pageEagerCeilingKb: number, workerEagerCeilingKb: number}} limits
  * @param {{page: number, worker: number}} measuredBytes eager closure sizes in BYTES
  * @param {{page: number, worker: number} | null} baselineBytes merge-base sizes in BYTES
+ * @param {{baselineNote?: string}} [options] wording for the no-baseline note
  * @returns {{failures: string[], notes: string[], rows: Array<object>}}
  */
-export function checkFirstLoad(limits, measuredBytes, baselineBytes) {
+export function checkFirstLoad(limits, measuredBytes, baselineBytes, options = {}) {
   const failures = [];
   const notes = [];
   const rows = [];
@@ -158,8 +163,9 @@ export function checkFirstLoad(limits, measuredBytes, baselineBytes) {
   }
   if (!baselineBytes) {
     notes.push(
-      'baseline unavailable — the merge-base could not be measured, so the per-change delta ' +
-        'check was SKIPPED and only the absolute ceilings were enforced.'
+      options.baselineNote ??
+        'baseline unavailable — the merge-base could not be measured, so the per-change delta ' +
+          'check was SKIPPED and only the absolute ceilings were enforced.'
     );
   }
   for (const graph of EAGER_GRAPHS) {

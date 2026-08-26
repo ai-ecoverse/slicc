@@ -15,6 +15,16 @@
  * `packages/webapp/first-load-budget.json` backs it up so many small
  * under-threshold changes cannot creep the graph upward forever.
  *
+ * The delta is a PER-PULL-REQUEST check and is deliberately not applied to a
+ * merge-queue batch. A `merge_group` branch is cumulative — it carries every
+ * PR up to its position in the queue, so its delta is the SUM of the batch,
+ * not one change's growth. Applying a per-change allowance to it fails on
+ * queue depth: observed batches reached +3.8 kB against a 4 kB allowance
+ * while the individual PRs measured 0.1-1.9 kB, and a merge_group failure
+ * DEQUEUES green PRs. On `merge_group` the ceilings are the right check —
+ * they are exactly the guard against accumulated growth — and every PR in
+ * the batch was already delta-gated against its own merge-base.
+ *
  * It used to be an absolute ratchet, and that shape failed: the number was
  * set to main's exact measurement, main measured 1 kB larger on Linux CI
  * than on the macOS machines developers verify on, and so every webapp PR
@@ -29,6 +39,8 @@
  *     --baseline=<ref>  compare against the merge-base with <ref>
  *                       (default: origin/main; `--baseline=none` disables)
  *     --json            print measured bytes as JSON and exit 0, no gating
+ *
+ * `GITHUB_EVENT_NAME=merge_group` forces ceilings-only, as above.
  */
 
 import { readdirSync, readFileSync, statSync } from 'node:fs';
@@ -53,6 +65,12 @@ const jsonOnly = args.includes('--json');
 const baselineRef = (
   args.find((a) => a.startsWith('--baseline=')) ?? '--baseline=origin/main'
 ).slice('--baseline='.length);
+// A merge-queue batch is not "a change" — see the header. Ceilings only.
+const isMergeGroup = process.env.GITHUB_EVENT_NAME === 'merge_group';
+const MERGE_GROUP_NOTE =
+  'merge_group: a queue batch is cumulative (every PR up to its position), so the per-change ' +
+  'delta does not apply. The absolute ceilings are enforced, and each PR in the batch was ' +
+  'already delta-gated against its own merge-base.';
 
 function fail(message) {
   console.error(`check-first-load-size: ${message}`);
@@ -116,7 +134,7 @@ if (jsonOnly) {
 const limits = JSON.parse(readFileSync(limitsPath, 'utf8'));
 
 let baseline = null;
-if (baselineRef !== 'none') {
+if (baselineRef !== 'none' && !isMergeGroup) {
   console.log(`Measuring the merge-base with ${baselineRef} for comparison…`);
   baseline = measureMergeBase({
     repoRoot,
@@ -129,7 +147,9 @@ if (baselineRef !== 'none') {
   });
 }
 
-const { failures, notes, rows } = checkFirstLoad(limits, head, baseline?.bytes ?? null);
+const { failures, notes, rows } = checkFirstLoad(limits, head, baseline?.bytes ?? null, {
+  baselineNote: isMergeGroup ? MERGE_GROUP_NOTE : undefined,
+});
 
 console.log(
   `First-load eager payload${baseline ? ` (vs merge-base ${baseline.sha.slice(0, 8)})` : ''}:`
@@ -150,7 +170,9 @@ if (failures.length > 0) {
   for (const failure of failures) console.error(`  FAIL: ${failure}`);
   process.exit(1);
 }
+const allowance = isMergeGroup
+  ? 'ceilings only on a queue batch'
+  : `allowance ${limits.maxDeltaKb} kB per change`;
 console.log(
-  `First-load OK (allowance ${limits.maxDeltaKb} kB per change; ` +
-    `total ${bytesToKb(head.page + head.worker)} kB across both graphs).`
+  `First-load OK (${allowance}; total ${bytesToKb(head.page + head.worker)} kB across both graphs).`
 );
