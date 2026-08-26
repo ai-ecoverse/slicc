@@ -7,7 +7,11 @@
  * bridge.cdp.request messages.
  */
 
-import type { LeaderToWorkerControlMessage } from '@slicc/shared-ts';
+import type {
+  CDPPayload,
+  LeaderToWorkerControlMessage,
+  WorkerBridgeCdpResponse,
+} from '@slicc/shared-ts';
 import { PendingRequestTable } from './pending-request-table.js';
 import type { SyntheticCdpTransportOptions } from './synthetic-cdp-transport.js';
 import { SyntheticCdpTransport } from './synthetic-cdp-transport.js';
@@ -70,10 +74,10 @@ export class PreviewBridgeCdpTransport extends SyntheticCdpTransport {
    */
   protected async forward(
     method: string,
-    params?: Record<string, unknown>,
+    params?: CDPPayload,
     sessionId?: string,
     timeout = DEFAULT_TIMEOUT
-  ): Promise<Record<string, unknown>> {
+  ): Promise<CDPPayload> {
     const id = this.nextId++;
 
     const response = this.pending.issue(
@@ -100,10 +104,7 @@ export class PreviewBridgeCdpTransport extends SyntheticCdpTransport {
    * the UNWRAPPED result (payload.result ?? {}), matching CherryHostTransport
    * and the shape BrowserAPI expects.
    */
-  deliverResponse(
-    id: number,
-    payload: { result?: Record<string, unknown>; error?: { code: number; message: string } }
-  ): void {
+  deliverResponse(id: number, payload: Pick<WorkerBridgeCdpResponse, 'result' | 'error'>): void {
     if (payload.error) {
       this.pending.reject(
         id,
