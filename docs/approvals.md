@@ -133,9 +133,9 @@ Two consequences worth knowing:
   (`getPolicy()`) still honours it.
 - The grant lives in code (`builtinScoopGrants()` in
   `packages/webapp/src/base/sudoers.ts`), merged in by `getPolicyForScoop`, not
-  in the generated `/scoops/<folder>/etc/sudoers`. That file is written only
-  when absent — so a file-based grant would never reach an already-created
-  scoop. The matching ACL exemption is `ALWAYS_WRITABLE_PREFIXES` in
+  in the per-scoop config grants — those are compiled from each scoop's own
+  `ScoopConfig`, while `/tmp` applies to every scoop unconditionally. The
+  matching ACL exemption is `ALWAYS_WRITABLE_PREFIXES` in
   `packages/webapp/src/fs/restricted-fs.ts`; `SudoFS` and `RestrictedFS` gate
   independently, so both layers must agree or the write is walled underneath
   the grant.
@@ -243,9 +243,9 @@ Orchestrator.init()
 
 Orchestrator.createScoopTab(jid)
   ├─ if non-cone: RestrictedFS(..., 'sudo-delegated')   // writes pass through to SudoFS
-  ├─ if non-cone: registerScoopConfig(folder, config)   // always — config grants in memory (#2416)
-  ├─ if non-cone: seedScoopSudoers(folder, config) ...  // first boot only
-  ├─                              ... or reloadScoopPolicyByFolder()  // existing file
+  ├─ if non-cone: initScoopPolicy(folder, config)  // config grants registered in memory (#2416)
+  │                                                // + load the on-disk Always-grants file
+  │                                                //   (legacy generated files are discarded)
   └─ new ScoopContext(scoop, callbacks, fs, ..., sudoManager)
 
 ScoopContext.init() — non-cone scoop
@@ -396,8 +396,12 @@ told to wait for a user who was never prompted.
 
 "Always" grants for `kind: 'command' | 'read' | 'write'` are persisted via
 `SudoManager.appendScoopRule(folder, kind, pattern)` (raw-VFS write, same trusted
-sink that powers `seedScoopSudoers`, so it bypasses the per-scoop self-protection
-on `/scoops/<folder>/etc/sudoers`). The append is idempotent — a rule that is
+sink that powers `initScoopPolicy`, so it bypasses the per-scoop self-protection
+on `/scoops/<folder>/etc/sudoers`). Since #2416 that file holds ONLY these
+approved "Always" grants — the `ScoopConfig` sandbox is registered in memory
+and never persisted, so replacing a scoop's config genuinely revokes the old
+authority instead of unioning with a stale file (a legacy generated file found
+on load is discarded fail-closed; its grants re-prompt once). The append is idempotent — a rule that is
 already in the file is never duplicated (#2416) — and it is the ONLY persistence
 path for a scoop's grant: the scoop's `SudoFS` gate gets a no-op `onGrant` sink,
 so an `always` decision never leaks into the global `/etc/sudoers.d/granted`

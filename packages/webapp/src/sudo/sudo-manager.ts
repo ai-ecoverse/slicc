@@ -80,10 +80,39 @@ function trimTrailingSlash(s: string): string {
 }
 
 /**
- * Generate a sudoers file body from a {@link ScoopConfig}. The scoop sandbox
- * is expressed as NOPASSWD grants — explicit allow-lists that suppress the
- * `require-approval` default disposition non-cone contexts apply for
- * unmatched actions:
+ * First line of the LEGACY generated per-scoop sudoers format (pre-#2416).
+ * Those files persisted the ScoopConfig sandbox rules to disk, mixed
+ * indistinguishably with appended "Always" grants — which meant a stale file
+ * from a previous scoop generation silently retained authority a narrower
+ * replacement config had revoked. Files carrying this header are discarded on
+ * {@link SudoManager.initScoopPolicy} (fail-closed: ambiguous rules are
+ * dropped rather than retained; an "Always" grant re-prompts once).
+ */
+const LEGACY_GENERATED_HEADER =
+  '# Per-scoop sudoers — generated from ScoopConfig (sandbox surface).';
+
+/**
+ * Header for the current per-scoop sudoers format: the file holds ONLY
+ * approved "Always" grants. Sandbox grants come from `ScoopConfig` and are
+ * registered in memory ({@link SudoManager.registerScoopConfig}), never
+ * persisted here — so replacing a scoop's config genuinely revokes the old
+ * authority instead of unioning with it.
+ */
+const SCOOP_SUDOERS_HEADER = [
+  '# Per-scoop sudoers — approved "Always" grants for this scoop.',
+  '# Sandbox grants come from ScoopConfig and are registered in memory, not here.',
+  '# Writes to this file always require approval (self-protected).',
+  '',
+].join('\n');
+
+/**
+ * Generate a sudoers policy body from a {@link ScoopConfig}. Since #2416 the
+ * output is compiled straight into the in-memory per-scoop policy
+ * ({@link SudoManager.registerScoopConfig}) and is never written to disk —
+ * persisting it let stale config rules survive a narrower replacement config.
+ * The scoop sandbox is expressed as NOPASSWD grants — explicit allow-lists
+ * that suppress the `require-approval` default disposition non-cone contexts
+ * apply for unmatched actions:
  *
  *   - `allowedCommands` → two token-anchored rules per entry: `NOPASSWD Cmnd <c>`
  *     (the bare command) and `NOPASSWD Cmnd <c> *` (the command with any
@@ -93,9 +122,8 @@ function trimTrailingSlash(s: string): string {
  *   - `writablePaths`   → `NOPASSWD Write <p>/**` per entry.
  *   - `visiblePaths`    → `NOPASSWD Read  <p>/**` per entry.
  *
- * The always-on `/tmp` grant is deliberately NOT emitted here — this file is
- * only written when one does not already exist, so a scoop created before the
- * grant landed would never pick it up. It lives in `builtinScoopGrants()`
+ * The always-on `/tmp` grant is deliberately NOT emitted here — it applies to
+ * every scoop regardless of config, so it lives in `builtinScoopGrants()`
  * (`base/sudoers.ts`) and is merged in by {@link SudoManager.getPolicyForScoop}.
  *
  * Each pattern is run through {@link sanitizeGrantPattern} so a value carrying
@@ -103,11 +131,7 @@ function trimTrailingSlash(s: string): string {
  * encoded here — it lives in `matchPath` and applies even with these grants.
  */
 export function generateScoopSudoers(config?: ScoopConfig | null): string {
-  const lines: string[] = [
-    '# Per-scoop sudoers — generated from ScoopConfig (sandbox surface).',
-    '# Writes to this file always require approval (self-protected).',
-    '',
-  ];
+  const lines: string[] = [];
 
   const allowed = config?.allowedCommands;
   if (allowed === undefined || allowed.includes('*')) {
@@ -264,24 +288,41 @@ export class SudoManager {
   }
 
   /**
-   * Generate + write a scoop's `/scoops/<folder>/etc/sudoers` from its config,
-   * then load the resulting policy into the per-scoop cache. Overwrites any
-   * existing file — the config is authoritative when this is called. The
-   * write goes through the raw VFS handle, so the self-protection invariant
-   * (which lives in the {@link createSudoFs} proxy) is not in play here.
+   * Initialize a scoop's sudo policy: register the config-derived grants in
+   * memory (authoritative — replacing a config revokes the old authority) and
+   * load the on-disk `/scoops/<folder>/etc/sudoers`, which holds ONLY
+   * approved "Always" grants. A file in the legacy generated format (config
+   * rules persisted to disk, pre-#2416) is discarded and rewritten as an
+   * empty Always-only file — its config rules and appended grants are
+   * indistinguishable, and retaining them would let a stale broad sandbox
+   * survive a narrower replacement config. Hand-written files (no legacy
+   * header) are deliberate user policy and load as-is. Writes go through the
+   * raw VFS handle, so the self-protection invariant (which lives in the
+   * {@link createSudoFs} proxy) is not in play here.
    */
-  async seedScoopSudoers(folder: string, config?: ScoopConfig | null): Promise<void> {
-    const path = scoopSudoersPath(folder);
-    const body = generateScoopSudoers(config ?? undefined);
+  async initScoopPolicy(folder: string, config?: ScoopConfig | null): Promise<void> {
     this.registerScoopConfig(folder, config);
+    const path = scoopSudoersPath(folder);
+    let existing: string | null = null;
     try {
-      await this.fs.mkdir(`/scoops/${folder}/etc`, { recursive: true });
-    } catch {
-      /* already exists */
+      if (await this.fs.exists(path)) {
+        const raw = await this.fs.readFile(path, { encoding: 'utf-8' });
+        existing = typeof raw === 'string' ? raw : new TextDecoder().decode(raw);
+      }
+    } catch (err) {
+      log.warn('Failed to read per-scoop sudoers during init; treating as absent', {
+        folder,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
-    await this.fs.writeFile(path, body);
+    if (existing !== null && existing.split('\n', 1)[0]?.trim() === LEGACY_GENERATED_HEADER) {
+      await this.fs.writeFile(path, SCOOP_SUDOERS_HEADER);
+      log.info('Discarded legacy generated per-scoop sudoers (ambiguous rules, fail-closed)', {
+        folder,
+        path,
+      });
+    }
     await this.reloadScoopPolicy(folder);
-    log.info('Seeded per-scoop sudoers', { folder, path });
   }
 
   /**
@@ -298,7 +339,7 @@ export class SudoManager {
    *
    * The write goes through the raw VFS handle (this manager owns the
    * untrusted-realm gate), so it bypasses the self-protection invariant on
-   * `/scoops/<folder>/etc/sudoers` writes the same way {@link seedScoopSudoers}
+   * `/scoops/<folder>/etc/sudoers` writes the same way {@link initScoopPolicy}
    * does.
    */
   async appendScoopRule(
@@ -337,7 +378,11 @@ export class SudoManager {
     } catch {
       /* already exists */
     }
-    const prefix = existing && !existing.endsWith('\n') ? `${existing}\n` : existing;
+    const prefix = existing
+      ? existing.endsWith('\n')
+        ? existing
+        : `${existing}\n`
+      : SCOOP_SUDOERS_HEADER;
     await this.fs.writeFile(path, `${prefix}${line}\n`);
     await this.reloadScoopPolicy(folder);
     log.info('Appended per-scoop sudoers rule', { folder, kind, pattern: safe });
@@ -365,6 +410,21 @@ export class SudoManager {
   reload(): Promise<void> {
     this.reloadChain = this.reloadChain.then(() => this.doReload());
     return this.reloadChain;
+  }
+
+  /**
+   * Evict every cached policy artifact for `folder`: the config-derived
+   * grants, the loaded Always-grants file policy, and the per-folder reload
+   * chain. Called when a scoop is unregistered — without it, repeated
+   * one-shot agents (random `agent-<name>` folders) grow these maps for the
+   * lifetime of the orchestrator. The on-disk file is untouched; a reused
+   * folder re-initializes via {@link initScoopPolicy}.
+   */
+  forgetScoopPolicies(folder: string): void {
+    this.scoopConfigPolicies.delete(folder);
+    this.scoopPolicies.delete(folder);
+    this.scoopReloadChains.delete(folder);
+    this.onPolicyReload(folder);
   }
 
   /**

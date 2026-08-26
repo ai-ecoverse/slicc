@@ -87,11 +87,13 @@ export interface ConeRequestRegistryOptions {
   /**
    * Notified whenever a request is settled fail-closed WITHOUT a cone
    * decision — timeout, scoop drop, or shutdown. The owner uses it to flip
-   * the persisted lick card off `pending`. Never fired for a normal
+   * the persisted lick card off `pending`; `scoopJid` identifies the
+   * requester (the entry is already deleted when this fires, so the owner
+   * cannot look it up). Never fired for a normal
    * {@link ConeRequestRegistry.resolve} (the cone already knows). Best-effort:
    * any error thrown by the callback is swallowed so it can't wedge teardown.
    */
-  onAutoSettle?: (id: string, reason: SudoSettleReason) => void;
+  onAutoSettle?: (id: string, reason: SudoSettleReason, scoopJid: string) => void;
 }
 
 interface RegistryEntry {
@@ -126,7 +128,7 @@ export class ConeRequestRegistry {
   private readonly newId: () => string;
   private readonly setTimer: (cb: () => void, ms: number) => unknown;
   private readonly clearTimer: (handle: unknown) => void;
-  private readonly onAutoSettle: (id: string, reason: SudoSettleReason) => void;
+  private readonly onAutoSettle: (id: string, reason: SudoSettleReason, scoopJid: string) => void;
 
   constructor(opts: ConeRequestRegistryOptions = {}) {
     this.timeoutMs = opts.timeoutMs ?? CONE_SUDO_TIMEOUT_MS;
@@ -137,9 +139,9 @@ export class ConeRequestRegistry {
   }
 
   /** Fire the auto-settle hook, isolating a throwing callback from teardown. */
-  private notifyAutoSettle(id: string, reason: SudoSettleReason): void {
+  private notifyAutoSettle(id: string, reason: SudoSettleReason, scoopJid: string): void {
     try {
-      this.onAutoSettle(id, reason);
+      this.onAutoSettle(id, reason, scoopJid);
     } catch {
       // Best-effort: a broken card-flip must never wedge timeout / drop / shutdown.
     }
@@ -165,7 +167,7 @@ export class ConeRequestRegistry {
           // this leg, so the scoop's gate must not tell it to wait for the
           // user — the cone is the approver that never answered.
           entry.resolve(timedOutDecision('cone-timeout'));
-          this.notifyAutoSettle(id, 'expired');
+          this.notifyAutoSettle(id, 'expired', entry.scoopJid);
         }, this.timeoutMs);
       }
       this.pending.set(id, { scoopJid, request, resolve, timerHandle });
@@ -199,7 +201,7 @@ export class ConeRequestRegistry {
       this.pending.delete(id);
       if (entry.timerHandle != null) this.clearTimer(entry.timerHandle);
       entry.resolve({ decision: 'deny' });
-      this.notifyAutoSettle(id, 'scoop-dropped');
+      this.notifyAutoSettle(id, 'scoop-dropped', entry.scoopJid);
       count++;
     }
     return count;
@@ -211,7 +213,7 @@ export class ConeRequestRegistry {
     for (const [id, entry] of this.pending) {
       if (entry.timerHandle != null) this.clearTimer(entry.timerHandle);
       entry.resolve({ decision: 'deny' });
-      this.notifyAutoSettle(id, 'shutdown');
+      this.notifyAutoSettle(id, 'shutdown', entry.scoopJid);
       count++;
     }
     this.pending.clear();

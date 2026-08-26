@@ -255,9 +255,9 @@ export function parseSudoers(text: string): SudoersPolicy {
  * other's scratch files and the cone sees all of them, so nothing secret or
  * trust-bearing belongs here.
  *
- * These live in code rather than in the generated `/scoops/<folder>/etc/sudoers`
- * because that file is written only when absent (it carries persisted "Always"
- * grants), so a file-based grant would never reach an already-created scoop.
+ * These live in code rather than in `/scoops/<folder>/etc/sudoers` because
+ * that file carries only persisted "Always" grants (#2416) — a file-based
+ * grant would never reach a scoop that was not explicitly granted it.
  *
  * Self-protection is unaffected: it lives in `matchPath` and no `NOPASSWD`
  * rule — including these — can override it.
