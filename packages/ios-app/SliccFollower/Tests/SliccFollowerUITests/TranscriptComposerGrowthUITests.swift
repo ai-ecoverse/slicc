@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// Regression cover for #2072: the transcript threw the reader backwards
@@ -34,7 +35,23 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
     // MARK: - #2072
 
     func testHistoryStaysPutWhenTheComposerAndKeyboardClaimSpace() throws {
+        try assertHistoryStaysPut(orientation: .portrait)
+    }
+
+    /// Landscape is not redundant on an iPad: the transcript is wider (so rows
+    /// are shorter and the lazy stack materializes a different set) and the
+    /// keyboard claims a much larger fraction of the viewport, which is the
+    /// resize that #2072 mishandled.
+    func testHistoryStaysPutInLandscape() throws {
+        try assertHistoryStaysPut(orientation: .landscapeLeft)
+    }
+
+    private func assertHistoryStaysPut(orientation: UIDeviceOrientation) throws {
         let app = launchWithTranscript()
+        XCUIDevice.shared.orientation = orientation
+        defer { XCUIDevice.shared.orientation = .portrait }
+        Thread.sleep(forTimeInterval: 1.5)
+
         let anchor = app.descendants(matching: .any)
             .matching(identifier: anchorId).firstMatch
         waitForSeededTranscript(app)
@@ -43,10 +60,10 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
         // transcript is still pinned to the bottom by its own anchor, and a
         // viewport that shrinks against a bottom pin is re-pinned for free.
         // Only once the position is the *reader's* does the resize have to
-        // preserve it, and that is the path #2072 broke. Four earlier
-        // reproduction attempts came back clean for exactly this reason.
+        // preserve it, and that is the path #2072 broke.
         scrollBackUntilAnchorIsCentred(app: app, anchor: anchor)
         let afterScroll = anchor.frame.midY
+        attach(app, name: "1-after-reader-scroll-\(orientation.rawValue)")
 
         let composer = focusedComposer(app)
         // The inset can land a render pass after the keyboard reports itself
@@ -54,14 +71,17 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
         // "focus changes nothing", which is what killed two earlier
         // hypotheses.
         Thread.sleep(forTimeInterval: 1.5)
-
+        let afterKeyboard = anchor.frame.midY
+        attach(app, name: "2-keyboard-up-\(orientation.rawValue)")
+        report("keyboard", orientation: orientation, drift: afterKeyboard - afterScroll)
         XCTAssertLessThan(
-            abs(anchor.frame.midY - afterScroll), allowedDrift,
+            abs(afterKeyboard - afterScroll), allowedDrift,
             "the keyboard's inset threw the reader through the history "
-                + "(moved \(anchor.frame.midY - afterScroll)pt)")
+                + "(moved \(afterKeyboard - afterScroll)pt)")
 
         type("x", into: composer, app: app)
         Thread.sleep(forTimeInterval: 0.5)
+        report("first keystroke", orientation: orientation, drift: anchor.frame.midY - afterScroll)
         XCTAssertLessThan(
             abs(anchor.frame.midY - afterScroll), allowedDrift,
             "the first keystroke threw the reader through the history "
@@ -71,6 +91,8 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
             " and now a great deal more text that wraps onto four separate lines",
             into: composer, app: app)
         Thread.sleep(forTimeInterval: 0.5)
+        attach(app, name: "3-composer-grown-\(orientation.rawValue)")
+        report("composer growth", orientation: orientation, drift: anchor.frame.midY - afterScroll)
         XCTAssertLessThan(
             abs(anchor.frame.midY - afterScroll), allowedDrift,
             "growing the composer threw the reader through the history "
@@ -148,6 +170,22 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
     }
 
     // MARK: - Helpers
+
+    /// Prints the measured drift so a run reports the NUMBER, not just a
+    /// verdict. The whole point of #2072 was a quantity; a green tick that
+    /// hides it is how the regression got mis-attributed for weeks.
+    private func report(_ step: String, orientation: UIDeviceOrientation, drift: CGFloat) {
+        let side = orientation == .portrait ? "portrait" : "landscape"
+        print("DRIFT \(side) after \(step): \(drift)pt")
+    }
+
+    /// Screenshot attachment, kept only when the test fails.
+    private func attach(_ app: XCUIApplication, name: String) {
+        let shot = XCTAttachment(screenshot: app.screenshot())
+        shot.name = name
+        shot.lifetime = .deleteOnSuccess
+        add(shot)
+    }
 
     /// Drags the transcript back until the anchor row sits in the middle of
     /// the viewport, so the measurement always starts from a comparable
