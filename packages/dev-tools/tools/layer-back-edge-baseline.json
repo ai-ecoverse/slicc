@@ -8,7 +8,6 @@
   "packages/webapp/src/shell/supplemental-commands/hid-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/host-command.ts": 7,
   "packages/webapp/src/shell/supplemental-commands/local-llm-command.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/models-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/oauth-domain-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/open-command.ts": 2,
   "packages/webapp/src/shell/supplemental-commands/picker-popup.ts": 1,
