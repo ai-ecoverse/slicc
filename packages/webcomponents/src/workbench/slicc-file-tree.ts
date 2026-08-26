@@ -260,6 +260,14 @@ export class SliccFileTree extends HTMLElement {
   #selecting = false;
   /** Expanded paths survive a refresh, so a background poll can't re-open dirs. */
   #expanded: string[] | null = null;
+  /**
+   * The container `#wireActivation` last bound to.
+   *
+   * An in-place update keeps the library's container element, so re-wiring it
+   * unconditionally would stack a second dblclick/keydown listener on every
+   * refresh and open the previewer twice per activation.
+   */
+  #wiredContainer: HTMLElement | null = null;
 
   static get observedAttributes(): string[] {
     return ['selected'];
@@ -278,6 +286,7 @@ export class SliccFileTree extends HTMLElement {
   disconnectedCallback(): void {
     this.#tree?.unmount();
     this.#tree = null;
+    this.#wiredContainer = null;
   }
 
   attributeChangedCallback(name: string, _old: string | null, value: string | null): void {
@@ -409,8 +418,29 @@ export class SliccFileTree extends HTMLElement {
     this.#captureExpansion();
     const expanded = this.#expanded ?? initiallyOpen;
 
+    // Update the MOUNTED tree in place when there is one. Tearing it down and
+    // building a new one throws away the scroll offset with the scroller —
+    // which is what made a refresh yank a scrolled-down user back to the top
+    // (#2408). `resetPaths` swaps the path set inside the live instance, so
+    // the scroll container, focus, selection and search session all survive;
+    // expansion is re-seeded from the snapshot above. Now that the workbench
+    // refreshes on VFS change events rather than a 3 s timer (#2409), the
+    // refreshes that remain are exactly the ones a user is watching happen.
+    if (this.#tree && paths.length > 0) {
+      this.#tree.resetPaths({
+        preparedInput: prepareFileTreeInput(paths),
+        initialExpandedPaths: expanded,
+      });
+      // Decorations read `#meta` live, but git lanes are the library's own
+      // state — it no-ops when the list is unchanged.
+      this.#tree.setGitStatus(this.#gitStatus);
+      this.#wireActivation();
+      return;
+    }
+
     this.#tree?.unmount();
     this.#mount.replaceChildren();
+    this.#wiredContainer = null;
 
     if (paths.length === 0) {
       this.#tree = null;
@@ -490,7 +520,8 @@ export class SliccFileTree extends HTMLElement {
    */
   #wireActivation(): void {
     const container = this.#tree?.getFileTreeContainer();
-    if (!container) return;
+    if (!container || container === this.#wiredContainer) return;
+    this.#wiredContainer = container;
 
     const activateFocused = (): void => {
       // Keyboard activation acts on the focused row; a double-click acts on the

@@ -433,6 +433,130 @@ describe('slicc-file-tree', () => {
     });
   });
 
+  /**
+   * #2408: a refresh used to unmount the tree and build a new one, which threw
+   * away the scroll offset along with the scroller. Now that the workbench
+   * refreshes on VFS change events rather than a 3 s timer (#2409), the
+   * refreshes that remain are the ones a user is actively watching — landing
+   * them back at the top of the tree is exactly when it is most disruptive.
+   */
+  describe('refresh preserves the view', () => {
+    /** Enough rows to overflow the fixed-height mount and make scrolling real. */
+    function tallTree(extra = 0): FileTreeItem[] {
+      return [
+        {
+          kind: 'dir',
+          id: '/workspace',
+          label: 'workspace',
+          open: true,
+          children: Array.from({ length: 120 + extra }, (_, i) => ({
+            kind: 'file' as const,
+            id: `/workspace/f${String(i).padStart(3, '0')}.txt`,
+            label: `f${String(i).padStart(3, '0')}.txt`,
+            path: `/workspace/f${String(i).padStart(3, '0')}.txt`,
+          })),
+        },
+      ];
+    }
+
+    /** The library's scrolling element, whatever it decided to call it. */
+    function scroller(tree: SliccFileTree): HTMLElement | null {
+      const root = tree.querySelector('file-tree-container')?.shadowRoot;
+      const candidates = [...(root?.querySelectorAll('*') ?? [])] as HTMLElement[];
+      return candidates.find((el) => el.scrollHeight > el.clientHeight + 1) ?? null;
+    }
+
+    it('keeps the scroll position across a refresh', async () => {
+      const tree = await mount(tallTree());
+      const el = scroller(tree);
+      expect(el).not.toBeNull();
+      if (!el) return;
+
+      el.scrollTop = 600;
+      el.dispatchEvent(new Event('scroll', { bubbles: true }));
+      await settle();
+      const before = el.scrollTop;
+      expect(before).toBeGreaterThan(0);
+
+      // A change lands: one more file, everything else identical.
+      tree.items = tallTree(1);
+      await settle();
+
+      // The SAME scroller is still there — an in-place update, not a rebuild.
+      expect(scroller(tree)).toBe(el);
+      expect(el.scrollTop).toBe(before);
+    });
+
+    it('keeps a user-expanded directory expanded across a refresh', async () => {
+      const items: FileTreeItem[] = [
+        {
+          kind: 'dir',
+          id: '/workspace',
+          label: 'workspace',
+          open: true,
+          children: [
+            {
+              kind: 'dir',
+              id: '/workspace/deep',
+              label: 'deep',
+              children: [
+                {
+                  kind: 'file',
+                  id: '/workspace/deep/a.txt',
+                  label: 'a.txt',
+                  path: '/workspace/deep/a.txt',
+                },
+              ],
+            },
+          ],
+        },
+      ];
+      const tree = await mount(items);
+      tree.toggleDir('/workspace/deep');
+      await settle();
+      expect(tree.isDirOpen('/workspace/deep')).toBe(true);
+
+      tree.items = items;
+      await settle();
+      // The seed says collapsed; the user says otherwise, and the user wins.
+      expect(tree.isDirOpen('/workspace/deep')).toBe(true);
+      expect(renderedText(tree)).toContain('a.txt');
+    });
+
+    it('does not stack row listeners across refreshes', async () => {
+      const tree = await mount(SAMPLE);
+      // The in-place update keeps the library's container, so re-wiring it per
+      // refresh would open the previewer once per refresh that had happened.
+      for (let i = 0; i < 3; i++) {
+        tree.items = SAMPLE;
+        await settle();
+      }
+      const seen: string[] = [];
+      tree.addEventListener('file-preview', (e) => {
+        seen.push((e as CustomEvent<{ path: string }>).detail.path);
+      });
+
+      const root = tree.querySelector('file-tree-container')?.shadowRoot;
+      const target = [...(root?.querySelectorAll('button') ?? [])].find(
+        (b) => b.getAttribute('aria-label') === 'bb.jsh'
+      );
+      target?.dispatchEvent(new MouseEvent('click', { bubbles: true, composed: true }));
+      await settle();
+      target?.dispatchEvent(new MouseEvent('dblclick', { bubbles: true, composed: true }));
+      await settle();
+
+      expect(seen).toEqual(['/workspace/bb.jsh']);
+    });
+
+    it('still tears down when a refresh empties the tree', async () => {
+      const tree = await mount(SAMPLE);
+      expect(renderedText(tree)).toContain('bb.jsh');
+      tree.items = [];
+      await settle();
+      expect(renderedText(tree)).not.toContain('bb.jsh');
+    });
+  });
+
   describe('lifecycle', () => {
     it('tears the tree down on disconnect', async () => {
       const tree = await mount(SAMPLE);
