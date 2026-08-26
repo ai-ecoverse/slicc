@@ -304,11 +304,19 @@ async function render(browser, g, theme) {
     await page.goto(`http://127.0.0.1:${port}/`);
     await page.waitForFunction(() => customElements.get('slicc-agent-avatar') !== undefined);
     // Same crop as the UI tab icon (zoom + 7px radius at 26px), radius scaled to the cell.
+    // The element that clips is `.crop`; `.avatar` went `overflow:visible` so brows can
+    // escape the tile in the UI. Merch wants one clean silhouette per cell, so we clip
+    // the outer box too — otherwise brows paint outside the round rect (and widen the
+    // page, pushing the whole composition off-centre on a transparent canvas).
     await page.evaluate((cell) => {
+      const radius = `${(7 / 26) * cell}px`;
       for (const el of document.querySelectorAll('slicc-agent-avatar')) {
         const avatar = el.shadowRoot?.querySelector('.avatar');
         if (!(avatar instanceof HTMLElement)) continue;
-        avatar.style.borderRadius = `${(7 / 26) * cell}px`;
+        for (const box of el.shadowRoot.querySelectorAll('.avatar, .crop')) {
+          box.style.borderRadius = radius;
+          box.style.overflow = 'hidden';
+        }
         if (el.closest('.yours')) {
           for (const path of el.shadowRoot.querySelectorAll('.glyph path'))
             path.setAttribute('fill', 'none');
