@@ -7,6 +7,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   deepTarget,
+  describeKey,
   digitFor,
   hasOpenOverlay,
   isTypingTarget,
@@ -475,6 +476,136 @@ describe('inside keyboard mode', () => {
       expect(() => press({ key, code: `Key${key.toUpperCase()}` })).not.toThrow();
     }
     expect(handles.helpOverlay()).toBeNull();
+  });
+});
+
+describe('the key HUD', () => {
+  const caps = () =>
+    [...document.querySelectorAll('[data-wc-shortcuts="keys"] .wcsc-badge__press')].map((p) => ({
+      keys: [...p.querySelectorAll('kbd')].map((k) => k.textContent).join(''),
+      bound: (p as HTMLElement).dataset.bound,
+      age: (p as HTMLElement).dataset.age,
+    }));
+  const hint = () => document.querySelector<HTMLElement>('.wcsc-badge__hint');
+
+  it('prints the press that opened the mode', () => {
+    harness();
+    escape();
+    expect(caps()).toEqual([{ keys: 'Esc', bound: 'true', age: undefined }]);
+    // The hint gives way to the strip; they never share the pill.
+    expect(hint()?.hidden).toBe(true);
+  });
+
+  it('accumulates presses left to right, staling everything but the newest', () => {
+    harness();
+    escape();
+    press({ key: 'b', code: 'KeyB' });
+    press({ key: '2', code: 'Digit2' });
+    expect(caps()).toEqual([
+      { keys: 'Esc', bound: 'true', age: 'stale' },
+      { keys: 'b', bound: 'true', age: 'stale' },
+      { keys: '2', bound: 'true', age: undefined },
+    ]);
+  });
+
+  it('shows an unbound key dimmed rather than not at all', () => {
+    harness();
+    escape();
+    press({ key: 'z', code: 'KeyZ' });
+    expect(caps().at(-1)).toEqual({ keys: 'z', bound: 'false', age: undefined });
+  });
+
+  it('shows a digit past the end of the strip as unbound', () => {
+    harness({ tabs: ['only'] });
+    escape();
+    press({ key: '4', code: 'Digit4' });
+    expect(caps().at(-1)).toEqual({ keys: '4', bound: 'false', age: undefined });
+  });
+
+  it('marks a press suspended behind a modal as unbound', () => {
+    harness();
+    escape();
+    const dialog = document.createElement('slicc-dialog');
+    dialog.setAttribute('open', '');
+    document.body.append(dialog);
+    press({ key: 'f', code: 'KeyF' });
+    expect(caps().at(-1)).toEqual({ keys: 'f', bound: 'false', age: undefined });
+  });
+
+  it('keeps only the last few presses', () => {
+    harness();
+    escape();
+    for (const key of ['b', 'z', 'b', 'z', 'b']) press({ key, code: `Key${key.toUpperCase()}` });
+    expect(caps()).toHaveLength(4);
+    expect(caps().at(-1)?.keys).toBe('b');
+  });
+
+  it('clears itself after a quiet spell and the hint returns', () => {
+    vi.useFakeTimers();
+    try {
+      harness();
+      escape();
+      press({ key: 'b', code: 'KeyB' });
+      expect(caps()).toHaveLength(2);
+      vi.advanceTimersByTime(1000);
+      // Still within the linger window, and a new press restarts it.
+      press({ key: 'b', code: 'KeyB' });
+      vi.advanceTimersByTime(1000);
+      expect(caps()).toHaveLength(3);
+      vi.advanceTimersByTime(1000);
+      expect(caps()).toHaveLength(0);
+      expect(hint()?.hidden).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('goes away with the mode', () => {
+    harness();
+    escape();
+    press({ key: 'b', code: 'KeyB' });
+    escape();
+    expect(document.querySelector('[data-wc-shortcuts="keys"]')).toBeNull();
+  });
+
+  it('never announces the typing — only the mode is a live region', () => {
+    harness();
+    escape();
+    expect(document.querySelector('[data-wc-shortcuts="badge"]')?.getAttribute('aria-live')).toBe(
+      'polite'
+    );
+    expect(document.querySelector('[data-wc-shortcuts="keys"]')?.getAttribute('aria-hidden')).toBe(
+      'true'
+    );
+  });
+});
+
+describe('describeKey', () => {
+  const ev = (init: Partial<KeyboardEvent>) =>
+    ({ key: 'a', ctrlKey: false, metaKey: false, altKey: false, shiftKey: false, ...init }) as Pick<
+      KeyboardEvent,
+      'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'
+    >;
+
+  it('prints a plain key as itself', () => {
+    expect(describeKey(ev({ key: 'b' }))).toEqual(['b']);
+  });
+
+  it('names the keys that have no glyph', () => {
+    expect(describeKey(ev({ key: 'Escape' }))).toEqual(['Esc']);
+    expect(describeKey(ev({ key: 'Enter' }))).toEqual(['⏎']);
+    expect(describeKey(ev({ key: ' ' }))).toEqual(['Space']);
+    expect(describeKey(ev({ key: 'ArrowLeft' }))).toEqual(['←']);
+  });
+
+  it('spells modifiers as caps, in one press', () => {
+    expect(describeKey(ev({ key: 'k', ctrlKey: true }))).toEqual(['⌃', 'k']);
+    expect(describeKey(ev({ key: 'k', metaKey: true, altKey: true }))).toEqual(['⌥', '⌘', 'k']);
+  });
+
+  it('leaves Shift off a printed character, which already carries it', () => {
+    expect(describeKey(ev({ key: '?', shiftKey: true }))).toEqual(['?']);
+    expect(describeKey(ev({ key: 'Tab', shiftKey: true }))).toEqual(['⇧', '⇥']);
   });
 });
 

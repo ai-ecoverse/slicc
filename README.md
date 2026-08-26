@@ -203,6 +203,8 @@ SLICC's main control is a text field, so it has no always-on shortcuts to collid
 | <kbd>a</kbd>                               | Accounts                                                    |
 | <kbd>h</kbd>, <kbd>?</kbd> or <kbd>/</kbd> | This list, in an overlay                                    |
 
+Every key you press shows up as a cap on the pill — dimmed if it was not bound to anything, so a mistyped key reads as "that did nothing" rather than as a dead keyboard. The strip clears after a moment of quiet.
+
 Keys that navigate (digits, <kbd>d</kbd>, <kbd>b</kbd>, <kbd>s</kbd>, help) keep the mode on; anything that hands focus to a surface leaves it, as does clicking into any text field. Outside the mode nothing is intercepted at all. The overlay is also in the avatar menu, under **Keyboard mode**.
 
 ## API Keys and Providers

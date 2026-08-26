@@ -125,6 +125,16 @@ slicc-dialog.wcsc-dialog::part(dialog){width:min(440px,92vw);}
 .wcsc-badge{position:fixed;left:50%;bottom:18px;z-index:90;transform:translateX(-50%);display:flex;align-items:center;gap:8px;padding:6px 12px;border-radius:999px;pointer-events:none;font:600 11.5px/1 var(--ui);color:var(--ink);background:color-mix(in srgb,var(--canvas) 88%,transparent);border:1px solid var(--line);box-shadow:0 6px 20px -8px rgba(10,10,10,.45);backdrop-filter:blur(6px);-webkit-backdrop-filter:blur(6px);}
 .wcsc-badge__dot{width:7px;height:7px;border-radius:50%;background:var(--ctx,var(--waffle,#e6a03c));box-shadow:0 0 0 3px color-mix(in srgb,var(--ctx,#e6a03c) 22%,transparent);}
 .wcsc-badge__hint{color:var(--txt-3);font-weight:500;}
+.wcsc-badge__hint[hidden]{display:none;}
+.wcsc-badge__keys{display:none;align-items:center;gap:5px;}
+.wcsc-badge__keys:not(:empty){display:flex;}
+.wcsc-badge__press{display:flex;align-items:center;gap:2px;}
+.wcsc-badge__cap{min-width:20px;padding:3px 6px;border-radius:5px;text-align:center;font:600 12px/1 var(--mono,ui-monospace,monospace);color:var(--ink);background:var(--ghost);border:1px solid var(--line);border-bottom-width:2px;}
+.wcsc-badge__press[data-bound='false'] .wcsc-badge__cap{color:var(--txt-3);opacity:.55;border-bottom-width:1px;}
+.wcsc-badge__press[data-age='stale'] .wcsc-badge__cap{opacity:.4;}
+.wcsc-badge__press[data-age='stale'][data-bound='false'] .wcsc-badge__cap{opacity:.25;}
+@media (prefers-reduced-motion:no-preference){.wcsc-badge__press{animation:wcsc-press-in .12s ease-out;}}
+@keyframes wcsc-press-in{from{opacity:0;transform:translateY(2px) scale(.94);}to{opacity:1;transform:none;}}
 @media (prefers-reduced-motion:no-preference){.wcsc-badge{animation:wcsc-badge-in .14s ease-out;}}
 @keyframes wcsc-badge-in{from{opacity:0;transform:translateX(-50%) translateY(4px);}to{opacity:1;transform:translateX(-50%);}}
 `;
@@ -380,8 +390,64 @@ function buildHelpBody(doc: Document, rows: readonly ShortcutRow[]): HTMLElement
   return list;
 }
 
-/** The mode indicator: a non-interactive pill pinned above the composer. */
-function buildBadge(doc: Document): HTMLElement {
+/** How long a pressed key stays on the HUD before the strip clears. */
+const HUD_LINGER_MS = 1600;
+/** How many presses the HUD keeps before dropping the oldest. */
+const HUD_DEPTH = 4;
+
+/** How a key prints on a cap. Anything unlisted prints as itself. */
+const KEY_CAPS: Readonly<Record<string, string>> = {
+  Escape: 'Esc',
+  Enter: '⏎',
+  ' ': 'Space',
+  Tab: '⇥',
+  Backspace: '⌫',
+  ArrowUp: '↑',
+  ArrowDown: '↓',
+  ArrowLeft: '←',
+  ArrowRight: '→',
+};
+
+/**
+ * A key event as the HUD prints it: the modifiers, then the key.
+ *
+ * Returned as an ARRAY rather than a string because a press is not always one
+ * cap — `⇧` + `a` today, and a future chord (`g` then `t`) is the same shape
+ * with the parts coming from two events instead of one.
+ */
+export function describeKey(
+  event: Pick<KeyboardEvent, 'key' | 'ctrlKey' | 'metaKey' | 'altKey' | 'shiftKey'>
+): string[] {
+  const parts: string[] = [];
+  if (event.ctrlKey) parts.push('⌃');
+  if (event.altKey) parts.push('⌥');
+  if (event.metaKey) parts.push('⌘');
+  // Shift is implicit in a printed character (`?` is already Shift+/), so it
+  // is only worth a cap when the key alone does not say so.
+  if (event.shiftKey && event.key.length > 1) parts.push('⇧');
+  parts.push(KEY_CAPS[event.key] ?? event.key);
+  return parts;
+}
+
+/**
+ * The mode indicator and key HUD: one non-interactive pill above the composer.
+ *
+ * It has two states rather than two elements. Idle, it explains the mode
+ * ("h for help · Esc to leave"); the moment a key is pressed the hint gives
+ * way to a strip of key caps, which is both the "did that register?" feedback
+ * and — because presses accumulate left to right — the readout a multi-key
+ * chord will need when one exists. The strip clears itself after
+ * {@link HUD_LINGER_MS} of quiet and the hint comes back.
+ *
+ * A press that ran nothing is still shown, dimmed: "that key did nothing" is
+ * exactly what someone learning the mode needs to see, and silence would read
+ * as a dropped keystroke.
+ */
+function createBadge(doc: Document): {
+  element: HTMLElement;
+  record(parts: readonly string[], bound: boolean): void;
+  destroy(): void;
+} {
   const badge = doc.createElement('div');
   badge.className = 'wcsc-badge';
   badge.dataset.wcShortcuts = 'badge';
@@ -394,8 +460,52 @@ function buildBadge(doc: Document): HTMLElement {
   const hint = doc.createElement('span');
   hint.className = 'wcsc-badge__hint';
   hint.textContent = 'h for help · Esc to leave';
-  badge.append(dot, label, hint);
-  return badge;
+  const keys = doc.createElement('div');
+  keys.className = 'wcsc-badge__keys';
+  keys.dataset.wcShortcuts = 'keys';
+  // The live region announces the MODE, not the typing: a cap per keystroke
+  // would turn a screen reader into a telegraph.
+  keys.setAttribute('aria-hidden', 'true');
+  badge.append(dot, label, hint, keys);
+
+  const view = doc.defaultView;
+  const setTimer = view?.setTimeout.bind(view) ?? setTimeout;
+  const clearTimer = view?.clearTimeout.bind(view) ?? clearTimeout;
+  let timer: ReturnType<typeof setTimeout> | undefined;
+
+  const clear = (): void => {
+    keys.replaceChildren();
+    hint.hidden = false;
+  };
+
+  return {
+    element: badge,
+    record: (parts, bound) => {
+      const press = doc.createElement('span');
+      press.className = 'wcsc-badge__press';
+      press.dataset.bound = String(bound);
+      for (const part of parts) {
+        const cap = doc.createElement('kbd');
+        cap.className = 'wcsc-badge__cap';
+        cap.textContent = part;
+        press.append(cap);
+      }
+      // Everything already on the strip is history the moment a new press
+      // lands, so it dims — the newest cap is the one being answered.
+      for (const previous of keys.children) {
+        (previous as HTMLElement).dataset.age = 'stale';
+      }
+      keys.append(press);
+      while (keys.children.length > HUD_DEPTH) keys.firstElementChild?.remove();
+      hint.hidden = true;
+      if (timer !== undefined) clearTimer(timer);
+      timer = setTimer(clear, HUD_LINGER_MS);
+    },
+    destroy: () => {
+      if (timer !== undefined) clearTimer(timer);
+      badge.remove();
+    },
+  };
 }
 
 /** The help overlay's lifecycle, kept apart from the mode's. */
@@ -460,23 +570,30 @@ function syncKeyboardLock(doc: Document): void {
 }
 
 /** The mode flag plus the badge that makes it visible. */
-function createMode(doc: Document): { on(): boolean; set(next: boolean): void } {
+function createMode(doc: Document): {
+  on(): boolean;
+  set(next: boolean): void;
+  record(parts: readonly string[], bound: boolean): void;
+} {
   let modeOn = false;
-  let badge: HTMLElement | null = null;
+  let badge: ReturnType<typeof createBadge> | null = null;
   return {
     on: () => modeOn,
+    // Only while the mode is on: the badge IS the HUD, so there is nowhere to
+    // draw a key otherwise (and nothing outside the mode to draw).
+    record: (parts, bound) => badge?.record(parts, bound),
     set: (next: boolean) => {
       if (next === modeOn) return;
       modeOn = next;
       doc.documentElement.toggleAttribute('data-slicc-keyboard-mode', next);
       if (!next) {
-        badge?.remove();
+        badge?.destroy();
         badge = null;
         return;
       }
       ensureStyle(doc);
-      badge = buildBadge(doc);
-      doc.body.append(badge);
+      badge = createBadge(doc);
+      doc.body.append(badge.element);
       // The caret would otherwise keep blinking in a composer that no longer
       // receives what is typed.
       const focused = doc.activeElement as HTMLElement | null;
@@ -518,6 +635,9 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
       // "leave fullscreen".
       event.preventDefault();
       mode.set(true);
+      // The press that opened the mode is the mode's first HUD entry — the
+      // badge appearing and the cap landing are one gesture's feedback.
+      mode.record(describeKey(event), true);
       return;
     }
     mode.set(false);
@@ -551,22 +671,32 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     // up. The single exception is closing the help overlay we opened
     // ourselves, which is how `h` stays a toggle. Escape is handled earlier
     // and separately, so a modal can always be dismissed.
-    if (hasOpenOverlay(doc) && !(command === HELP_COMMAND && help.element())) return;
+    if (hasOpenOverlay(doc) && !(command === HELP_COMMAND && help.element())) {
+      // Suspended, not ignored: the cap lands dimmed, so a key pressed at a
+      // dialog reads as "not now" rather than as a dead keyboard.
+      mode.record(describeKey(event), false);
+      return;
+    }
 
     const digit = digitFor(event);
     if (digit !== null) {
       const key = unitKeyForDigit(deps.switcher.scoops, digit);
+      // Shown either way: a digit past the end of the strip did nothing, and
+      // a HUD that stays blank for it reads as a dropped keystroke.
+      mode.record(describeKey(event), key !== null);
       if (key === null) return;
       event.preventDefault();
       deps.switcher.select(key);
       return;
     }
 
+    mode.record(describeKey(event), !!command);
     // An unbound key is not an exit: the mode is sticky, like vim's.
     if (!command) return;
     event.preventDefault();
     // Dropped BEFORE the command runs, so a surface that takes focus is not
-    // immediately fighting a mode that is still on.
+    // immediately fighting a mode that is still on. (The HUD goes with the
+    // badge when it does — the mode ending is its own feedback.)
     if (!command.holdsMode) mode.set(false);
     command.run(ctx);
   };
