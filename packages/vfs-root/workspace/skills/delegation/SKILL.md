@@ -293,15 +293,19 @@ Browser-tab handling rules (track your IDs, never close tabs you didn't open, ha
 All scoops share ONE browser, and every `playwright-cli` command runs
 **serialized** on a single global tab lock. Parallel browser-driving scoops do
 not run in parallel at the browser — they queue. An 8-way browser fan-out
-roughly doubles wall-clock time versus a capped one and adds retry overhead as
-queued commands blow past `background_after` and get killed.
+roughly doubles wall-clock time versus a capped one and adds overhead as
+queued commands blow past `background_after` and get detached — their results
+arrive later as `bash` licks, so the scoop's turn moves on before the browser
+work lands.
 
 - **Cap concurrent browser-driving scoops at 3–4.** For larger workloads, feed
   scoops in waves: feed 3–4, `scoop_wait` for them, feed the next wave.
 - When a command emits `note: browser bridge contended — ...` on stderr (total
-  lock wait + queue depth), that is back-off guidance: instruct scoops to
-  stagger or wait, never to re-run the command — it already ran; it was just
-  slow to get the lock.
+  lock wait + queue depth; ships with the bridge hardening in PR #2411 —
+  runtimes without it stay silent, but slowness under fan-out still means
+  contention), that is back-off guidance: instruct scoops to stagger or wait,
+  never to re-run the command — it already ran; it was just slow to get the
+  lock.
 - This cap applies only to scoops actively driving the browser. Scoops doing
   CPU/VFS/network work (curl, file edits, analysis) fan out freely.
 
