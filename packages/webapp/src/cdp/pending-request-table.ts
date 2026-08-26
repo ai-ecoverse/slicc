@@ -12,13 +12,15 @@
  * Worker safety: timers, `Map` and `Promise` only — no DOM, no chrome.*.
  */
 
+import type { CDPPayload } from '@slicc/shared-ts';
+
 interface PendingEntry<Result> {
   resolve: (result: Result) => void;
   reject: (error: Error) => void;
   timer: ReturnType<typeof setTimeout>;
 }
 
-export class PendingRequestTable<Id, Result = Record<string, unknown>> {
+export class PendingRequestTable<Id, Result = CDPPayload> {
   private readonly pending = new Map<Id, PendingEntry<Result>>();
 
   /**
