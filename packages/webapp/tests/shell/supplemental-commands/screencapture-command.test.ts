@@ -165,7 +165,7 @@ describe('screencapture command', () => {
     expect(result.stderr).toContain('test');
   });
 
-  it('filters only known flags', async () => {
+  it('rejects unknown flags with a non-zero exit (#2255)', async () => {
     (globalThis as any).window = {};
     (globalThis as any).document = {};
     (globalThis as any).navigator = {
@@ -174,11 +174,11 @@ describe('screencapture command', () => {
 
     const cmd = createScreencaptureCommand();
     const ctx = createMockCtx();
-    // Unknown flag should be treated as filename
     const result = await cmd.execute(['--unknown', 'screenshot.png'], ctx as any);
 
     expect(result.exitCode).toBe(1);
-    // The capture was attempted (mock rejects)
+    expect(result.stderr).toContain('unknown flag: --unknown');
+    expect((globalThis as any).navigator.mediaDevices.getDisplayMedia).not.toHaveBeenCalled();
   });
 
   describe('successful capture', () => {
