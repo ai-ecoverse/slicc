@@ -454,3 +454,30 @@ loopback; the `.localhost` host is dev-only.
 ## Follower push (APNs, #2062)
 
 Four secrets, all or nothing: `APNS_TEAM_ID`, `APNS_KEY_ID`, `APNS_PRIVATE_KEY` (the `.p8` PEM, newlines intact — `npx wrangler secret put APNS_PRIVATE_KEY < AuthKey_XXXX.p8`), `APNS_TOPIC` (`com.sliccy.follower`). Missing → the DO logs `push.send ignored` once and nothing else changes. Staging talks to whatever gateway the registering phone asked for (`environment` on `push.register`: debug builds = sandbox, TestFlight/App Store = production), so a TestFlight build against staging needs the production key. Verify with a time-sensitive test: run a headless leader, background the phone, `sudo` something — the banner must arrive within seconds; a 403 `InvalidProviderToken` in `wrangler tail` means the key id / team id pair is wrong.
+
+**Provider JWTs come from one DO, not per tray.** Apple throttles token creation per
+(team id, key id) — not per connection — and answers `429 TooManyProviderTokenUpdates`
+above one mint per 20 minutes. Every tray DO borrows from
+`idFromName('__apns_provider_token')` via `POST /internal/apns-token`, which persists the
+JWT to its own storage so hibernation costs nothing (#2432). Never reintroduce per-DO
+minting: the tray DO hibernates between messages, so mint rate would scale with
+`active trays × wake cycles`, not with time.
+
+**Probe the worker→Apple leg without a phone.** Register a syntactically valid but
+fabricated device token and push; APNs authenticates the JWT _before_ it validates the
+token, so a dead-token verdict proves the credentials are good:
+
+```bash
+# 1. mint a throwaway tray, 2. attach as leader, 3. open the leader WS, then send:
+#    {"type":"push.register","platform":"ios","token":"<64 hex>","environment":"sandbox"}
+#    {"type":"push.send","category":"turn_end","label":"probe"}
+# Push again on the SAME tray ~30s later.
+```
+
+Read the result from the second push, not from logs: if the token was evicted the second
+`push.send` early-returns in ~10 ms (Apple answered `BadDeviceToken`/410 — credentials
+good). If it takes ~8 s again the token survived, meaning a timeout or a 403 — credentials
+or transport are broken. Do **not** infer from `wallTime` on the first push alone: an
+8-second reading used to be the uncleared `AbortSignal.timeout`, not a hang.
+
+This is deliberately not a CI gate — it would put Apple's availability in the deploy path.

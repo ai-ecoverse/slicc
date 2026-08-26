@@ -5,6 +5,19 @@
   "compatibility_date": "2026-03-11",
   "compatibility_flags": ["nodejs_compat"],
   "workers_dev": true,
+  // Workers Logs (#2432). Without this, a `console.warn` from the tray DO —
+  // e.g. an APNs delivery failure — goes nowhere, which is exactly why the
+  // push path shipped unverified. `invocation_logs: false` keeps the volume
+  // (and cost) sane: this Worker also serves every UI asset, and we only care
+  // about the explicit logs, not a record of each request.
+  // Not inherited by named environments — env.staging repeats it below.
+  "observability": {
+    "enabled": true,
+    "head_sampling_rate": 1,
+    "logs": {
+      "invocation_logs": false
+    }
+  },
   "assets": {
     "directory": "../../dist/ui/",
     "binding": "ASSETS",
@@ -94,6 +107,13 @@
     "staging": {
       "name": "slicc-tray-hub-staging",
       "workers_dev": true,
+      "observability": {
+        "enabled": true,
+        "head_sampling_rate": 1,
+        "logs": {
+          "invocation_logs": false
+        }
+      },
       "assets": {
         "directory": "../../dist/ui/",
         "binding": "ASSETS",

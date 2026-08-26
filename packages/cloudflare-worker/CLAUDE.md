@@ -76,7 +76,7 @@ keyed by `connId`, replays `bridge.connected` on leader (re)connect, hibernates 
 ### TURN Credentials
 
 Fetched with `CLOUDFLARE_TURN_KEY_ID` (in `wrangler.jsonc`) and
-`CLOUDFLARE_TURN_API_TOKEN` (Wrangler secret). Follower push (#2062): `src/apns.ts` signs an ES256 JWT from `APNS_TEAM_ID` / `APNS_KEY_ID` / `APNS_PRIVATE_KEY` (`.p8` PEM) and posts to `api(.sandbox).push.apple.com` with `APNS_TOPIC`; the tray DO stores ≤16 `push.register` tokens per tray and fans out leader `push.send` (`turn_end`, time-sensitive `sudo_request`, metadata only), dropping tokens APNs reports dead. All four secrets or pushing is silently off. `session-tray.ts` caches ICE servers
+`CLOUDFLARE_TURN_API_TOKEN` (Wrangler secret). Follower push (#2062): `src/apns.ts` signs an ES256 JWT from `APNS_TEAM_ID` / `APNS_KEY_ID` / `APNS_PRIVATE_KEY` (`.p8` PEM) and posts to `api(.sandbox).push.apple.com` with `APNS_TOPIC`; the tray DO stores ≤16 `push.register` tokens per tray and fans out leader `push.send` (`turn_end`, time-sensitive `sudo_request`, metadata only), dropping tokens APNs reports dead. All four secrets or pushing is silently off. **Provider JWTs are minted by exactly one DO** (`src/apns-provider-token.ts`, `idFromName('__apns_provider_token')`, storage-backed): Apple throttles token creation per team+key, so per-tray minting broke Apple's 20-minute floor once a few trays hibernated (#2432). `session-tray.ts` caches ICE servers
 and refreshes before TTL expiry.
 
 ### Tray Kind (desktop / hosted)
