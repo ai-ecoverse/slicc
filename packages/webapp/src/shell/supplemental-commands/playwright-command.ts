@@ -24,7 +24,6 @@ import {
   parseFlags,
 } from './playwright/state.js';
 import type { CmdResult, PlaywrightHandlerCtx } from './playwright/types.js';
-import { validateSubcommandArgs } from './playwright/validate-args.js';
 
 export { asWebFetch } from './playwright/discover.js';
 export { getSharedState, PLAYWRIGHT_COMMAND_NAMES } from './playwright/state.js';
@@ -89,7 +88,18 @@ async function parseSubcommandArgs(
 
   // Unsupported flags/positionals are a caller bug: reject them here rather
   // than letting a handler silently ignore what it does not read (#2405).
-  const argError = await validateSubcommandArgs(name, subcommand, subArgs, positional);
+  //
+  // Loaded lazily — the validator and its ~9 kB manifest are dead weight in the
+  // kernel worker's boot graph until a playwright-cli command runs. A failed
+  // chunk load skips validation rather than failing the command: a validator
+  // that cannot load must never be what stops a working call.
+  let argError: string | null = null;
+  try {
+    const { validateSubcommandArgs } = await import('./playwright/validate-args.js');
+    argError = validateSubcommandArgs(name, subcommand, subArgs, positional);
+  } catch {
+    argError = null;
+  }
   if (argError) return { answer: { stdout: '', stderr: argError, exitCode: 1 } };
 
   return { positional, flags };

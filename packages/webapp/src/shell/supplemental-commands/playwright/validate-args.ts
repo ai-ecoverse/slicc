@@ -13,10 +13,13 @@
  * manifest entry is not validated — an unknown spec must never reject a working
  * invocation.
  *
- * The manifest is imported DYNAMICALLY: it is ~9 kB of table that only a
- * playwright-cli invocation needs, and a static import hoists it into the
- * kernel worker's boot-critical graph (`first-load-budget.json`).
+ * THE WHOLE MODULE is loaded lazily by the dispatcher: the manifest is ~9 kB
+ * of table, and neither it nor this code is needed until a playwright-cli
+ * command actually runs. Statically imported, both land in the kernel worker's
+ * boot-critical graph, which `first-load-budget.json` holds to a ratchet.
  */
+
+import manifest from './slicc-commands.json';
 
 /** One command's argv contract: positional names plus the flags it reads. */
 interface CommandSpec {
@@ -26,27 +29,7 @@ interface CommandSpec {
   flags?: Record<string, string>;
 }
 
-type CommandSpecs = Record<string, CommandSpec>;
-
-let specsPromise: Promise<CommandSpecs> | null = null;
-
-/**
- * Load (once) the per-command manifest.
- *
- * A failed chunk fetch degrades to an empty table — no spec means no
- * validation, which is the same permissive path an unknown verb takes. A
- * validator that cannot load its table must never be what stops a command from
- * running. The cache is cleared on failure so a later invocation retries.
- */
-function loadCommandSpecs(): Promise<CommandSpecs> {
-  specsPromise ??= import('./slicc-commands.json')
-    .then((mod) => (mod.default ?? mod).commands as unknown as CommandSpecs)
-    .catch(() => {
-      specsPromise = null;
-      return {};
-    });
-  return specsPromise;
-}
+const COMMAND_SPECS = manifest.commands as unknown as Record<string, CommandSpec>;
 
 /** Flags every verb accepts, whatever the manifest says. */
 const UNIVERSAL_FLAGS = new Set(['help', 'h']);
@@ -147,13 +130,13 @@ function malformedRef(
  * positional list, which already accounts for value-taking flags consuming
  * their next token.
  */
-export async function validateSubcommandArgs(
+export function validateSubcommandArgs(
   commandName: string,
   sub: string,
   rawArgs: readonly string[],
   positional: readonly string[]
-): Promise<string | null> {
-  const spec = (await loadCommandSpecs())[sub];
+): string | null {
+  const spec = COMMAND_SPECS[sub];
   if (!spec) return null;
 
   const usage = `Run "${commandName} ${sub} --help" for usage.\n`;
