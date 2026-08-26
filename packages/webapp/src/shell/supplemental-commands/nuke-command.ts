@@ -5,6 +5,8 @@ import {
   NUKE_LOCAL_STORAGE_KEYS,
   type NukeReloadMsg,
 } from './nuke-channel.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
 import { wipeLocalStorageState } from './wipe-local-storage-state.js';
 
 // Re-export the channel-layer symbols so existing consumers (including
@@ -18,10 +20,17 @@ export {
   type NukeReloadMsg,
 } from './nuke-channel.js';
 
+/** Nuke accepts no value-taking flags; keep in sync with `parseKnownFlags` below. */
+const NUKE_VALUE_FLAGS: readonly string[] = [];
+/** Documented no-op: confirmation is the launch code, not an interactive prompt. */
+const NUKE_BOOL_FLAGS = ['--yes'] as const;
+
 export function createNukeCommand(): Command {
   return defineCommand('nuke', async (args) => {
-    // Help flag
-    if (args.includes('--help') || args.includes('-h')) {
+    // Help before flag parsing so `nuke --help` stays exit 0; same
+    // valueFlags list as parseKnownFlags so a future value flag's
+    // VALUE of `--help` is never mistaken for a help request.
+    if (isHelpRequest(args, { valueFlags: NUKE_VALUE_FLAGS })) {
       return {
         stdout:
           'Usage: nuke <launch-code>\n\n' +
@@ -33,8 +42,19 @@ export function createNukeCommand(): Command {
       };
     }
 
-    // Check for the secret launch code: args must contain '1234' when concatenated
-    if (args.join('').includes('1234')) {
+    // Reject unknown dash-prefixed tokens (issue #2255). Only `--yes`
+    // (documented no-op) and the launch-code positionals are known — any
+    // other `--foo` must fail loudly rather than being joined into the
+    // code check (e.g. `nuke 1234 --force` used to wipe and exit 0).
+    const parsed = parseKnownFlags(args, { value: NUKE_VALUE_FLAGS, bool: NUKE_BOOL_FLAGS });
+    if ('error' in parsed) {
+      return { stdout: '', stderr: `nuke: ${parsed.error}\n`, exitCode: 1 };
+    }
+
+    // Check for the secret launch code: positionals must contain '1234'
+    // when concatenated. Everything after `--` is positional so a
+    // launch-code fragment that starts with a dash stays reachable.
+    if (parsed.positionals.join('').includes('1234')) {
       // Wipe all local state (SW + IDB + OPFS) via the shared helper,
       // then forward the localStorage key list to the page-side listener
       // before reloading. The wipe awaits every delete BEFORE reloading:
