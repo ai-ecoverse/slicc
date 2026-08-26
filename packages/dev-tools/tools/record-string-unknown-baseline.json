@@ -78,7 +78,6 @@
   "packages/webapp/src/shell/plugins/types.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/biome-configuration.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/jsh-biome-source.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/kill-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/picker-popup.ts": 3,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/console.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/cookies.ts": 4,
