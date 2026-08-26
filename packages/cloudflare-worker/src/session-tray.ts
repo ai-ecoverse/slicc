@@ -17,7 +17,20 @@ import {
   type TurnIceServer,
   type WorkerToLeaderControlMessage,
 } from '@slicc/shared-ts';
-import { type ApnsSender, apnsConfigFromEnv, WebCryptoApnsSender } from './apns.js';
+import {
+  type ApnsProviderTokenSource,
+  type ApnsPushResult,
+  type ApnsSender,
+  apnsConfigFromEnv,
+  LocalProviderTokenMinter,
+  WebCryptoApnsSender,
+} from './apns.js';
+import {
+  APNS_TOKEN_PATH,
+  durableObjectProviderTokenStore,
+  handleProviderTokenRequest,
+  SharedProviderTokenSource,
+} from './apns-provider-token.js';
 import { deletePreviewArchivePrefix } from './persistent-preview-storage.js';
 import { previewTokenFromHost } from './preview-host.js';
 import {
@@ -37,6 +50,7 @@ import {
 } from './session-tray-preview.js';
 import {
   type CreateTrayRequest,
+  type DurableObjectNamespaceLike,
   type DurableObjectStateLike,
   FOLLOWER_ATTACH_RETRY_AFTER_MS,
   jsonResponse,
@@ -72,6 +86,12 @@ export interface SessionTrayEnv {
   APNS_KEY_ID?: string;
   APNS_PRIVATE_KEY?: string;
   APNS_TOPIC?: string;
+  /**
+   * This DO's own namespace, used to reach the one instance that mints the
+   * APNs provider JWT (see `apns-provider-token.ts`). Absent in unit tests,
+   * which fall back to minting locally.
+   */
+  TRAY_HUB?: DurableObjectNamespaceLike;
 }
 
 interface SessionTrayOptions {
@@ -137,6 +157,11 @@ export class SessionTrayDurableObject {
   private readonly turnApiToken: string | undefined;
   private readonly previewStorage: R2Bucket | undefined;
   private readonly apns: ApnsSender | null;
+  /**
+   * Local minter, used only when *this* instance is the one serving
+   * `APNS_TOKEN_PATH`. Also the fallback if the shared instance is unreachable.
+   */
+  private readonly apnsTokenMinter: ApnsProviderTokenSource | null;
   private apnsDisabledLogged = false;
   private tray: TrayRecord | null = null;
   private leaderSocket: TrayWebSocketLike | null = null;
@@ -165,13 +190,28 @@ export class SessionTrayDurableObject {
     this.turnKeyId = typedEnv.CLOUDFLARE_TURN_KEY_ID;
     this.turnApiToken = typedEnv.CLOUDFLARE_TURN_API_TOKEN;
     this.previewStorage = typedEnv.PREVIEW_STORAGE;
+    const apnsConfig = apnsConfigFromEnv(typedEnv);
+    this.apnsTokenMinter = apnsConfig
+      ? new LocalProviderTokenMinter(apnsConfig, {
+          now: this.now,
+          store: durableObjectProviderTokenStore(this.state.storage),
+        })
+      : null;
     if (options.apnsSender !== undefined) {
       this.apns = options.apnsSender;
+    } else if (apnsConfig && this.apnsTokenMinter) {
+      // Borrow the JWT from the single minting instance so mint rate stops
+      // scaling with tray count × hibernation cycles (issue #2432).
+      const tokenSource = typedEnv.TRAY_HUB
+        ? new SharedProviderTokenSource(typedEnv.TRAY_HUB, this.now)
+        : this.apnsTokenMinter;
+      this.apns = new WebCryptoApnsSender(apnsConfig, {
+        fetchImpl: this.fetchImpl,
+        now: this.now,
+        tokenSource,
+      });
     } else {
-      const apnsConfig = apnsConfigFromEnv(typedEnv);
-      this.apns = apnsConfig
-        ? new WebCryptoApnsSender(apnsConfig, { fetchImpl: this.fetchImpl, now: this.now })
-        : null;
+      this.apns = null;
     }
     this.webSocketPairFactory =
       options.webSocketPairFactory ??
@@ -194,6 +234,12 @@ export class SessionTrayDurableObject {
 
     if (url.pathname === '/internal/create' && request.method === 'POST') {
       return this.handleCreate(request);
+    }
+
+    // Served by the one well-known instance every other tray DO borrows from.
+    // Handled before loadTray(): that instance owns no tray record.
+    if (url.pathname === APNS_TOKEN_PATH) {
+      return this.handleApnsTokenRequest(request);
     }
 
     // Preview routes below dispatch before the general loadTray()/restoreLeaderSocket()
@@ -1977,28 +2023,63 @@ export class SessionTrayDurableObject {
           label,
           trayId: tray.trayId,
           ...(requestId ? { requestId } : {}),
-        }).catch((err) => ({
-          token,
-          status: 0,
-          reason: err instanceof Error ? err.message : String(err),
-          dropToken: false,
-        }))
+        }).catch(
+          (err): ApnsPushResult => ({
+            token,
+            status: 0,
+            reason: err instanceof Error ? err.message : String(err),
+            dropToken: false,
+          })
+        )
       )
     );
     let mutated = false;
     for (const result of results) {
-      if (result.dropToken) {
+      if (result.dropToken && this.forgetsPushToken(tray, result)) {
         delete tray.pushTokens?.[result.token];
         mutated = true;
-      } else if (result.status !== 200) {
+        continue;
+      }
+      if (result.status !== 200) {
         console.warn('[push] APNs delivery failed', {
           trayId: tray.trayId,
           status: result.status,
           reason: result.reason,
+          // Apple asks for this id when investigating a push that never landed.
+          ...(result.uniqueId ? { uniqueId: result.uniqueId } : {}),
         });
       }
     }
     if (mutated) await this.persistTray();
+  }
+
+  /** Mint-or-serve the shared APNs provider JWT. See `apns-provider-token.ts`. */
+  private handleApnsTokenRequest(request: Request): Promise<Response> {
+    if (request.method !== 'POST') {
+      return Promise.resolve(jsonResponse({ error: 'Method not allowed' }, 405));
+    }
+    if (!this.apnsTokenMinter) {
+      return Promise.resolve(
+        jsonResponse({ error: 'APNs is not configured', code: 'APNS_NOT_CONFIGURED' }, 503)
+      );
+    }
+    return handleProviderTokenRequest(request, this.apnsTokenMinter);
+  }
+
+  /**
+   * Should a dead-token verdict actually evict the registration? Apple's 410
+   * body carries the instant the token stopped being valid; a device that
+   * re-registered after that instant has a live token again and must be kept,
+   * or a reconnect race silently unsubscribes a phone that is right there.
+   * A 400 `BadDeviceToken` carries no timestamp and is unconditionally final.
+   */
+  private forgetsPushToken(tray: TrayRecord, result: ApnsPushResult): boolean {
+    if (result.invalidatedAtMs === undefined) return true;
+    const record = tray.pushTokens?.[result.token];
+    if (!record) return true;
+    const registeredAtMs = Date.parse(record.registeredAt);
+    if (!Number.isFinite(registeredAtMs)) return true;
+    return registeredAtMs < result.invalidatedAtMs;
   }
 
   private async persistTray(): Promise<void> {

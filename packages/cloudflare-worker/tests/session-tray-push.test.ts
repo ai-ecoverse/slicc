@@ -215,6 +215,46 @@ describe('push.send', () => {
     await tick();
     expect(Object.keys((await readTray(t)).pushTokens ?? {})).toEqual([TOKEN_B]);
   });
+
+  it('keeps a token that was re-registered after Apple’s 410 timestamp', async () => {
+    // A phone that reconnects while an old push is still in flight re-registers
+    // the same token. Honouring a 410 that predates that registration would
+    // silently unsubscribe a device that is right there (#2432).
+    const t = await createTestTray(
+      new FakeApns(() => ({
+        status: 410,
+        reason: 'Unregistered',
+        dropToken: true,
+        // Long before the registration this test performs.
+        invalidatedAtMs: Date.parse('2020-01-01T00:00:00.000Z'),
+      }))
+    );
+    const socket = await attachLeader(t);
+    register(socket, TOKEN_A);
+    await tick();
+    socket.send(JSON.stringify({ type: 'push.send', category: 'turn_end', label: 'SLICC' }));
+    await tick();
+    await tick();
+    expect(Object.keys((await readTray(t)).pushTokens ?? {})).toEqual([TOKEN_A]);
+  });
+
+  it('forgets a token whose registration predates Apple’s 410 timestamp', async () => {
+    const t = await createTestTray(
+      new FakeApns(() => ({
+        status: 410,
+        reason: 'Unregistered',
+        dropToken: true,
+        invalidatedAtMs: Date.parse('2999-01-01T00:00:00.000Z'),
+      }))
+    );
+    const socket = await attachLeader(t);
+    register(socket, TOKEN_A);
+    await tick();
+    socket.send(JSON.stringify({ type: 'push.send', category: 'turn_end', label: 'SLICC' }));
+    await tick();
+    await tick();
+    expect(Object.keys((await readTray(t)).pushTokens ?? {})).toEqual([]);
+  });
 });
 
 describe('buildApnsPayload', () => {
