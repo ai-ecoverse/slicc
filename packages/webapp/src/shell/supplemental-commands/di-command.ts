@@ -4,7 +4,8 @@
  * Thin argv + dispatch + error-formatting wrapper; all business logic lives in
  * `../di/`. Supported verbs are `add` and `list`; every other verb (including
  * real-uv subcommands like `pip` / `venv` / `tool` / `run`) exits non-zero with
- * a "not implemented in SLICC's di/uv subset" pointer to `di --help`.
+ * a "not implemented in SLICC's di/uv subset" pointer to `di --help`. Unknown
+ * dash-prefixed flags are rejected (issue #2255) rather than silently dropped.
  *
  * Registered twice (`di` and `uv`) with the same handler so `uv add numpy`
  * behaves identically to `di add numpy`.
@@ -14,12 +15,16 @@ import type { Command, CommandContext, ExecResult, SecureFetch } from 'just-bash
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { diAdd, diList, type ListRow } from '../di/index.js';
+import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest } from './subcommand-help.js';
 
 export interface DiCommandDeps {
   fs: VirtualFS;
   fetch: SecureFetch;
 }
+
+/** di owns no value-taking flags; keep in sync with `parseKnownFlags` / `isHelpRequest`. */
+const DI_VALUE_FLAGS: readonly string[] = [];
 
 function usage(name: string): string {
   return `${name} - minimal Python package manager (pure-Python + Pyodide wheels)
@@ -66,7 +71,11 @@ async function runAdd(
   ctx: CommandContext,
   deps: DiCommandDeps
 ): Promise<ExecResult> {
-  const specs = args.filter((a) => !a.startsWith('-'));
+  const parsed = parseKnownFlags(args, { value: DI_VALUE_FLAGS });
+  if ('error' in parsed) {
+    return { stdout: '', stderr: `${name}: ${parsed.error}\n`, exitCode: 1 };
+  }
+  const specs = parsed.positionals;
   if (specs.length === 0) {
     return { stdout: '', stderr: `${name}: add requires at least one package\n`, exitCode: 1 };
   }
@@ -96,9 +105,15 @@ async function runAdd(
 
 async function runList(
   name: string,
+  args: string[],
   ctx: CommandContext,
   deps: DiCommandDeps
 ): Promise<ExecResult> {
+  const parsed = parseKnownFlags(args, { value: DI_VALUE_FLAGS });
+  if ('error' in parsed) {
+    return { stdout: '', stderr: `${name}: ${parsed.error}\n`, exitCode: 1 };
+  }
+
   const rows = await diList(deps.fs, ctx.cwd);
   if (rows === null) {
     return {
@@ -118,14 +133,15 @@ export function createDiCommand(name: string, deps: DiCommandDeps): Command {
     if (args.length === 0) {
       return { stdout: usage(name), stderr: `${name}: missing verb\n`, exitCode: 1 };
     }
-    if (isHelpRequest(args)) {
+    // Answer help before parseKnownFlags so `--help` is not reported as unknown.
+    if (isHelpRequest(args, { valueFlags: DI_VALUE_FLAGS })) {
       return { stdout: usage(name), stderr: '', exitCode: 0 };
     }
 
     const verb = args[0];
     const rest = args.slice(1);
     if (verb === 'add') return runAdd(name, rest, ctx, deps);
-    if (verb === 'list') return runList(name, ctx, deps);
+    if (verb === 'list') return runList(name, rest, ctx, deps);
     return notImplemented(name, verb);
   });
 }
