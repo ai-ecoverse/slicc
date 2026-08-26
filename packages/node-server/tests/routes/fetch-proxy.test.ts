@@ -337,7 +337,9 @@ describe('registerFetchProxyRoute', () => {
     // hub returning `access-control-allow-origin: *`) would
     // `res.setHeader`-clobber the bridge middleware's authoritative
     // ACAO, leaving the browser with an opaque `TypeError: Failed to
-    // fetch`. The route must drop the whole access-control-* family.
+    // fetch`. The route must drop the whole access-control-* family
+    // from upstream, then set its *own* Access-Control-Expose-Headers
+    // listing every forwarded header (credentials mode forbids `*`).
     await setup((_req, res) => {
       res.setHeader('access-control-allow-origin', '*');
       res.setHeader('access-control-allow-credentials', 'true');
@@ -345,6 +347,8 @@ describe('registerFetchProxyRoute', () => {
       res.setHeader('access-control-expose-headers', 'X-Custom');
       res.setHeader('access-control-max-age', '600');
       res.setHeader('content-type', 'text/plain');
+      res.setHeader('content-security-policy', "default-src 'none'");
+      res.setHeader('x-frame-options', 'DENY');
       res.end('ok');
     });
     const res = await fetch(`${proxyBase}/api/fetch-proxy`, {
@@ -354,8 +358,16 @@ describe('registerFetchProxyRoute', () => {
     expect(res.headers.get('access-control-allow-origin')).toBeNull();
     expect(res.headers.get('access-control-allow-credentials')).toBeNull();
     expect(res.headers.get('access-control-allow-methods')).toBeNull();
-    expect(res.headers.get('access-control-expose-headers')).toBeNull();
     expect(res.headers.get('access-control-max-age')).toBeNull();
+    // Upstream's expose list must not win; ours lists forwarded headers.
+    const expose = res.headers.get('access-control-expose-headers') ?? '';
+    expect(expose.toLowerCase()).not.toBe('x-custom');
+    expect(expose.toLowerCase()).toContain('content-type');
+    expect(expose.toLowerCase()).toContain('content-security-policy');
+    expect(expose.toLowerCase()).toContain('x-frame-options');
+    expect(expose.toLowerCase()).toContain('x-proxy-set-cookie');
+    expect(res.headers.get('content-security-policy')).toBe("default-src 'none'");
+    expect(res.headers.get('x-frame-options')).toBe('DENY');
   });
 
   it('strips the thin-bridge auth header before forwarding upstream', async () => {

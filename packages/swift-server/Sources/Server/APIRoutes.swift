@@ -1000,6 +1000,28 @@ private func makeStreamingProxyResponse(
 
     headers[cacheControlHeader] = "no-store, no-cache"
 
+    // Expose every forwarded header plus the proxy markers so cross-origin
+    // thin-bridge browsers (credentials mode) can read non-CORS-safelisted
+    // names like Content-Security-Policy. Mirrors node-server's
+    // `buildFetchProxyExposeHeaders`. Upstream Access-Control-* was already
+    // stripped above so we own this value.
+    var exposeNames: [String] = [
+        "Link",
+        "X-Proxy-Error",
+        "X-Proxy-Set-Cookie",
+        "Mcp-Session-Id",
+        "MCP-Protocol-Version",
+        "Cache-Control",
+    ]
+    var exposeSeen = Set(exposeNames.map { $0.lowercased() })
+    for field in headers {
+        let lower = field.name.canonicalName.lowercased()
+        if exposeSeen.contains(lower) { continue }
+        exposeSeen.insert(lower)
+        exposeNames.append(field.name.canonicalName)
+    }
+    headers[HTTPField.Name("Access-Control-Expose-Headers")!] = exposeNames.joined(separator: ", ")
+
     let contentType = (headers[HTTPField.Name.contentType] ?? "").lowercased()
     let isText =
         contentType.hasPrefix("text/")
