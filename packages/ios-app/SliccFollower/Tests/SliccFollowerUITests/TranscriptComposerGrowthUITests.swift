@@ -32,6 +32,16 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
         continueAfterFailure = false
     }
 
+    /// `XCUIDevice.orientation` persists across test cases in a run, and a
+    /// `defer` inside a test does not reliably fire when `continueAfterFailure
+    /// = false` raises. Without this, a landscape test leaves every later case
+    /// rotated — which is how an unrelated portrait test started failing at the
+    /// same line as the landscape one.
+    override func tearDown() {
+        XCUIDevice.shared.orientation = .portrait
+        super.tearDown()
+    }
+
     // MARK: - #2072
 
     func testHistoryStaysPutWhenTheComposerAndKeyboardClaimSpace() throws {
@@ -43,13 +53,22 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
     /// keyboard claims a much larger fraction of the viewport, which is the
     /// resize that #2072 mishandled.
     func testHistoryStaysPutInLandscape() throws {
+        // iPad only, and said out loud rather than quietly skipped. A phone in
+        // landscape with the keyboard up leaves a transcript viewport barely
+        // taller than one fixture row, so there is no reading position to
+        // centre the anchor in and the precondition — not the fix — is what
+        // fails. The drift gate still runs on a phone in portrait, which is
+        // the case #2072 was reported against.
+        try XCTSkipUnless(
+            UIDevice.current.userInterfaceIdiom == .pad,
+            "landscape drift is measured on iPad; a phone's landscape "
+                + "transcript is too short to hold a centred reading position")
         try assertHistoryStaysPut(orientation: .landscapeLeft)
     }
 
     private func assertHistoryStaysPut(orientation: UIDeviceOrientation) throws {
         let app = launchWithTranscript()
         XCUIDevice.shared.orientation = orientation
-        defer { XCUIDevice.shared.orientation = .portrait }
         Thread.sleep(forTimeInterval: 1.5)
 
         let anchor = app.descendants(matching: .any)
@@ -119,6 +138,9 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
         XCTAssertTrue(
             sentBubble.waitForExistence(timeout: 10),
             "the sent message should be in the transcript")
+        // `isHittable` is fine HERE and not in `scrollBackUntilAnchorIsCentred`:
+        // this is an assertion, where a raise is an acceptable way to fail, not
+        // a loop guard whose job is to decide whether to keep scrolling.
         XCTAssertTrue(
             sentBubble.isHittable,
             "the transcript must scroll to a newly sent message, not leave it below the fold")
@@ -174,6 +196,71 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
     /// Prints the measured drift so a run reports the NUMBER, not just a
     /// verdict. The whole point of #2072 was a quantity; a green tick that
     /// hides it is how the regression got mis-attributed for weeks.
+    /// Types into the focused composer and proves the text landed.
+    ///
+    /// Uses `app.typeText`, not `composer.typeText`: the element form re-taps
+    /// to focus, and an empty composer hit-disables its editor underneath
+    /// `PttPressSurface` (hold-to-talk), so that tap can arm dictation instead
+    /// of placing a caret and the keystrokes go nowhere. Asserting the value
+    /// afterwards is what stops a test passing on input it never delivered.
+    private func type(_ text: String, into composer: XCUIElement, app: XCUIApplication) {
+        let before = (composer.value as? String) ?? ""
+        app.typeText(text)
+        let after = (composer.value as? String) ?? ""
+        XCTAssertTrue(
+            after.contains(text.trimmingCharacters(in: .whitespaces)),
+            "typing should reach the composer (before: '\(before)', after: '\(after)')")
+    }
+
+    /// Taps send once it is actually enabled.
+    ///
+    /// `canSend` only flips a render pass after the composer's text changes,
+    /// and tapping a DISABLED `XCUIElement` is a silent no-op — the tap is
+    /// swallowed, the test sails on, and the missing message surfaces as a
+    /// confusing assertion much later. Wait for `isEnabled` first.
+    private func tapSend(_ app: XCUIApplication) {
+        let send = app.buttons["composer-send"]
+        XCTAssertTrue(send.waitForExistence(timeout: 5), "send button should exist")
+        let enabled = expectation(
+            for: NSPredicate(format: "isEnabled == true"), evaluatedWith: send)
+        wait(for: [enabled], timeout: 10)
+        send.tap()
+    }
+
+    /// Taps the composer and waits for the keyboard before returning it.
+    ///
+    /// An empty composer mounts `PttPressSurface` **over** the editor and
+    /// hit-disables it (hold-to-talk), so the tap reaches the press surface and
+    /// focus arrives a beat later through its `quickTap` event.
+    private func focusedComposer(_ app: XCUIApplication) -> XCUIElement {
+        let composer = app.textViews.firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 10), "composer should exist")
+        composer.tap()
+        XCTAssertTrue(
+            app.keyboards.firstMatch.waitForExistence(timeout: 10),
+            "tapping the composer should raise the keyboard")
+        return composer
+    }
+
+    /// Waits for the fixture to have seeded.
+    ///
+    /// ANY fixture row, not a specific one. Which rows are materialized at
+    /// launch is device-dependent — an iPad renders the transcript wider, so
+    /// rows are shorter and the lazy stack materializes a different set than an
+    /// iPhone does. Naming one row made this a device-specific precondition
+    /// rather than a check that the fixture seeded at all; the tests scroll to
+    /// the row they actually measure.
+    private func waitForSeededTranscript(_ app: XCUIApplication) {
+        let composer = app.textViews.firstMatch
+        XCTAssertTrue(composer.waitForExistence(timeout: 30), "composer should render")
+        let anyRow = app.descendants(matching: .any)
+            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "message-fx-"))
+            .firstMatch
+        XCTAssertTrue(
+            anyRow.waitForExistence(timeout: 30),
+            "the fixture transcript should have seeded")
+    }
+
     private func report(_ step: String, orientation: UIDeviceOrientation, drift: CGFloat) {
         let side = orientation == .portrait ? "portrait" : "landscape"
         print("DRIFT \(side) after \(step): \(drift)pt")
@@ -199,18 +286,31 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
     private func scrollBackUntilAnchorIsCentred(app: XCUIApplication, anchor: XCUIElement) {
         // Both ends stay in the upper half: with the keyboard up, 0.78 of the
         // screen is inside it and the drag never reaches the transcript.
+        // Normalized, so the proportions survive a rotation.
         let top = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.20))
         let bottom = app.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.55))
+
+        // The acceptance window is a FRACTION of the viewport, not a fixed
+        // point range. `y > 150 && y < 650` was tuned on a portrait iPad and
+        // cannot be satisfied on a phone in landscape at all — the screen is
+        // ~390pt tall, so most of that window is off-screen and the loop can
+        // never converge.
+        let viewport = app.windows.firstMatch.frame
+        let lowerBound = viewport.height * 0.20
+        let upperBound = viewport.height * 0.72
+
         for _ in 0..<20 {
-            // `.frame` on an unmaterialized row throws "failed to get matching
-            // snapshot". This row IS materialized at launch but sits far above
-            // the viewport (measured y = -630), so gate on `isHittable`, not
-            // just `exists`.
-            if anchor.exists, anchor.isHittable {
-                let y = anchor.frame.midY
-                if y > 150 && y < 650 { break }
+            // Deliberately NOT `isHittable`. It raises "Failed to determine
+            // hittability … activation point invalid" when a row has a
+            // degenerate frame, which is precisely the state this loop exists
+            // to scroll out of — the guard added to dodge one throw introduced
+            // another. `exists` plus a non-degenerate frame answers the same
+            // question without asking XCUITest to compute an activation point.
+            if anchor.exists {
+                let frame = anchor.frame
+                if frame.height > 0, frame.midY > lowerBound, frame.midY < upperBound { break }
             }
-            // `.slow` matters: a flung drag travels 300-800pt unpredictably and
+            // `.slow` matters: a flung drag travels unpredictably and
             // oscillates past the window, so a fast drag can miss 20 times.
             top.press(
                 forDuration: 0.1, thenDragTo: bottom, withVelocity: .slow,
@@ -218,77 +318,8 @@ final class TranscriptComposerGrowthUITests: XCTestCase {
         }
         Thread.sleep(forTimeInterval: 1.0)
         XCTAssertTrue(
-            anchor.exists && anchor.isHittable,
+            anchor.exists && anchor.frame.height > 0,
             "anchor row should be on screen to measure against")
-    }
-
-    /// Taps send once it is actually enabled.
-    ///
-    /// `canSend` only flips a render pass after the composer's text changes,
-    /// and tapping a DISABLED `XCUIElement` is a silent no-op — the tap is
-    /// swallowed, the test sails on, and the missing message surfaces as a
-    /// confusing assertion much later. Wait for `isEnabled` first.
-    private func tapSend(_ app: XCUIApplication) {
-        let send = app.buttons["composer-send"]
-        XCTAssertTrue(send.waitForExistence(timeout: 5), "send button should exist")
-        let enabled = expectation(
-            for: NSPredicate(format: "isEnabled == true"), evaluatedWith: send)
-        wait(for: [enabled], timeout: 10)
-        send.tap()
-    }
-
-    /// Types into the focused composer and proves the text landed.
-    ///
-    /// Uses `app.typeText`, not `composer.typeText`: the element form re-taps
-    /// to focus, and an empty composer hit-disables its editor underneath
-    /// `PttPressSurface` (hold-to-talk), so that tap can arm dictation instead
-    /// of placing a caret and the keystrokes go nowhere. Asserting the value
-    /// afterwards is what stops a test passing on input it never delivered.
-    private func type(_ text: String, into composer: XCUIElement, app: XCUIApplication) {
-        let before = (composer.value as? String) ?? ""
-        app.typeText(text)
-        let after = (composer.value as? String) ?? ""
-        XCTAssertTrue(
-            after.contains(text.trimmingCharacters(in: .whitespaces)),
-            "typing should reach the composer (before: '\(before)', after: '\(after)')")
-    }
-
-    /// Taps the composer and waits for the keyboard before returning it.
-    ///
-    /// An empty composer mounts `PttPressSurface` **over** the editor and
-    /// hit-disables it (hold-to-talk), so the tap reaches the press surface and
-    /// focus arrives a beat later through its `quickTap` event. Typing without
-    /// waiting drops the text on the floor, `canSend` stays false, and the send
-    /// silently does nothing.
-    private func focusedComposer(_ app: XCUIApplication) -> XCUIElement {
-        let composer = app.textViews.firstMatch
-        XCTAssertTrue(composer.waitForExistence(timeout: 10), "composer should exist")
-        composer.tap()
-        XCTAssertTrue(
-            app.keyboards.firstMatch.waitForExistence(timeout: 10),
-            "tapping the composer should raise the keyboard")
-        return composer
-    }
-
-    /// The transcript opens pinned to its bottom, so no *particular* row is
-    /// guaranteed to be materialized at launch. Gate on the composer and on
-    /// the newest fixture row instead, which is what "the seeded surface
-    /// rendered" actually means.
-    private func waitForSeededTranscript(_ app: XCUIApplication) {
-        let composer = app.textViews.firstMatch
-        XCTAssertTrue(composer.waitForExistence(timeout: 30), "composer should render")
-        // ANY fixture row, not a specific one. Which rows are materialized at
-        // launch is device-dependent — an iPad renders the transcript wider, so
-        // rows are shorter and the lazy stack materializes a different set than
-        // an iPhone does. Naming one row here made this a device-specific
-        // precondition rather than a check that the fixture seeded at all; the
-        // tests scroll to the row they actually measure.
-        let anyRow = app.descendants(matching: .any)
-            .matching(NSPredicate(format: "identifier BEGINSWITH %@", "message-fx-"))
-            .firstMatch
-        XCTAssertTrue(
-            anyRow.waitForExistence(timeout: 30),
-            "the fixture transcript should have seeded")
     }
 
     /// Seeds the fixture conversation into the REAL chat surface.
