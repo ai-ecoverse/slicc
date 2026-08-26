@@ -8,7 +8,7 @@
 import type { IFileSystem } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('../../../src/ui/provider-settings.js', () => ({
+vi.mock('../../../src/providers/account-store.js', () => ({
   getAccounts: vi.fn(),
   getAvailableProviders: vi.fn(),
   getProviderConfig: vi.fn(),
@@ -18,7 +18,11 @@ vi.mock('../../../src/ui/provider-settings.js', () => ({
   resolveCurrentModel: vi.fn(),
 }));
 
-import { createModelsCommand } from '../../../src/shell/supplemental-commands/models-command.js';
+const mockProxiedFetch = vi.fn();
+vi.mock('../../../src/shell/proxied-fetch.js', () => ({
+  createProxiedFetch: () => mockProxiedFetch,
+}));
+
 import {
   getAccounts,
   getAvailableProviders,
@@ -27,7 +31,8 @@ import {
   getSelectedModelId,
   getSelectedProvider,
   resolveCurrentModel,
-} from '../../../src/ui/provider-settings.js';
+} from '../../../src/providers/account-store.js';
+import { createModelsCommand } from '../../../src/shell/supplemental-commands/models-command.js';
 
 const mk = (id: string, costIn: number, costOut: number, ctx = 1_000_000, provider = 'adobe') => ({
   id,
@@ -50,6 +55,7 @@ function ctx() {
 describe('models command reports the resolved model (no guessing)', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mockProxiedFetch.mockReset();
     vi.mocked(getAccounts).mockReturnValue([{ providerId: 'adobe' }] as never);
     vi.mocked(getAvailableProviders).mockReturnValue(['adobe'] as never);
     vi.mocked(getProviderConfig).mockReturnValue({ id: 'adobe', name: 'Adobe' } as never);
@@ -145,5 +151,53 @@ describe('models command reports the resolved model (no guessing)', () => {
     const usingLines = res.stdout.split('\n').filter((l) => l.includes('Currently using:'));
     expect(usingLines).toHaveLength(1);
     expect(usingLines[0]).toContain('adobe:claude-opus-4-8');
+  });
+
+  it('rejects an unknown flag with a non-zero exit (issue #2255)', async () => {
+    vi.mocked(getProviderModels).mockReturnValue([mk('claude-opus-4-6', 5, 25)] as never);
+    vi.mocked(resolveCurrentModel).mockReturnValue({
+      id: 'claude-opus-4-6',
+      provider: 'adobe',
+    } as never);
+
+    const res = await createModelsCommand().execute(['--bogus'], ctx() as never);
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stderr).toContain('unknown flag: --bogus');
+  });
+
+  it('accepts known flags in any position', async () => {
+    vi.mocked(getProviderModels).mockReturnValue([mk('claude-opus-4-6', 5, 25)] as never);
+    vi.mocked(resolveCurrentModel).mockReturnValue({
+      id: 'claude-opus-4-6',
+      provider: 'adobe',
+    } as never);
+
+    const res = await createModelsCommand().execute(['--no-benchmarks', '--json'], ctx() as never);
+    expect(res.exitCode).toBe(0);
+    expect(() => JSON.parse(res.stdout)).not.toThrow();
+  });
+
+  it('requires a value for --provider', async () => {
+    const res = await createModelsCommand().execute(['--provider'], ctx() as never);
+    expect(res.exitCode).not.toBe(0);
+    expect(res.stderr).toMatch(/--provider requires a value/);
+  });
+
+  it('treats a null benchmark JSON body as empty enrichment (non-fatal)', async () => {
+    mockProxiedFetch.mockResolvedValue({
+      status: 200,
+      body: new TextEncoder().encode('null'),
+    });
+    vi.mocked(getProviderModels).mockReturnValue([mk('claude-opus-4-6', 5, 25)] as never);
+    vi.mocked(resolveCurrentModel).mockReturnValue({
+      id: 'claude-opus-4-6',
+      provider: 'adobe',
+    } as never);
+
+    const res = await createModelsCommand().execute(['--json'], ctx() as never);
+    expect(res.exitCode).toBe(0);
+    const models = JSON.parse(res.stdout) as Array<{ id: string }>;
+    expect(models).toHaveLength(1);
+    expect(models[0].id).toBe('claude-opus-4-6');
   });
 });

@@ -2,10 +2,29 @@ import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
+
+/** Account/model accessors — providers/ sits outside the ranked stack (not ui/). */
+type AccountStore = typeof import('../../providers/account-store.js');
 
 const AA_CACHE_PATH = '/.cache/artificial-analysis.json';
 const AA_CACHE_TTL_MS = 24 * 60 * 60 * 1000; // 24 hours
 const AA_API_URL = 'https://artificialanalysis.ai/api/v2/data/llms/models';
+
+/** Boolean flags accepted by `models` (any position). */
+const MODELS_BOOL_FLAGS = [
+  '--all',
+  '--all-versions',
+  '--json',
+  '--refresh',
+  '--no-benchmarks',
+  '--help',
+  '-h',
+] as const;
+
+/** Value-taking flags — keep in sync with `isHelpRequest({ valueFlags })`. */
+const MODELS_VALUE_FLAGS = ['--provider'] as const;
 
 interface AAModelData {
   slug: string;
@@ -21,29 +40,96 @@ interface AACacheData {
   models: AAModelData[];
 }
 
-async function fetchAAData(vfs?: VirtualFS, forceRefresh = false): Promise<AAModelData[]> {
-  // Try reading from cache first
-  if (vfs && !forceRefresh) {
-    try {
-      const raw = (await vfs.readFile(AA_CACHE_PATH)) as string;
-      const cached: AACacheData = JSON.parse(raw);
-      if (Date.now() - cached.fetchedAt < AA_CACHE_TTL_MS) {
-        return cached.models;
-      }
-    } catch {
-      // Cache miss or invalid — fetch fresh
-    }
-  }
+interface ModelInfo {
+  id: string;
+  name: string;
+  provider: string;
+  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
+  contextWindow: number;
+  maxTokens: number;
+  reasoning: boolean;
+  input: string[];
+  selected: boolean;
+  intelligence?: number;
+  codingScore?: number;
+  speed?: number;
+}
 
-  // Determine API key
-  let apiKey: string | null = null;
+interface ModelsOptions {
+  jsonMode: boolean;
+  allMode: boolean;
+  allVersions: boolean;
+  forceRefresh: boolean;
+  noBenchmarks: boolean;
+  explicitProvider: string | undefined;
+}
+
+type CommandResult = { stdout: string; stderr: string; exitCode: number };
+
+function fail(message: string): CommandResult {
+  return { stdout: '', stderr: message.endsWith('\n') ? message : `${message}\n`, exitCode: 1 };
+}
+
+async function readAACache(vfs: VirtualFS): Promise<AAModelData[] | null> {
   try {
-    apiKey = localStorage.getItem('aa_api_key');
+    const raw = (await vfs.readFile(AA_CACHE_PATH)) as string;
+    const cached: AACacheData = JSON.parse(raw);
+    if (Date.now() - cached.fetchedAt < AA_CACHE_TTL_MS) return cached.models;
   } catch {
-    // localStorage may not be available
+    // Cache miss or invalid — fetch fresh
+  }
+  return null;
+}
+
+function aaApiKey(): string | null {
+  try {
+    return localStorage.getItem('aa_api_key');
+  } catch {
+    return null;
+  }
+}
+
+function mapAAItems(items: unknown[]): AAModelData[] {
+  return items.map((raw) => {
+    const m = raw as {
+      slug?: string;
+      name?: string;
+      model_creator?: { slug?: string };
+      evaluations?: {
+        artificial_analysis_intelligence_index?: number | null;
+        artificial_analysis_coding_index?: number | null;
+      };
+      median_output_tokens_per_second?: number | null;
+    };
+    return {
+      slug: m.slug ?? '',
+      name: m.name ?? '',
+      creator_slug: m.model_creator?.slug ?? '',
+      intelligence_index: m.evaluations?.artificial_analysis_intelligence_index ?? null,
+      coding_index: m.evaluations?.artificial_analysis_coding_index ?? null,
+      speed_tps: m.median_output_tokens_per_second ?? null,
+    };
+  });
+}
+
+async function writeAACache(vfs: VirtualFS, models: AAModelData[]): Promise<void> {
+  const cacheData: AACacheData = { fetchedAt: Date.now(), models };
+  try {
+    await vfs.mkdir('/.cache', { recursive: true });
+    await vfs.writeFile(AA_CACHE_PATH, JSON.stringify(cacheData));
+  } catch {
+    // Cache write failure is non-fatal
+  }
+}
+
+async function fetchAAData(vfs?: VirtualFS, forceRefresh = false): Promise<AAModelData[]> {
+  if (vfs && !forceRefresh) {
+    const cached = await readAACache(vfs);
+    if (cached) return cached;
   }
 
   const headers: Record<string, string> = { Accept: 'application/json' };
+  const apiKey = aaApiKey();
   if (apiKey) headers['x-api-key'] = apiKey;
 
   const proxiedFetch = createProxiedFetch();
@@ -51,44 +137,24 @@ async function fetchAAData(vfs?: VirtualFS, forceRefresh = false): Promise<AAMod
   try {
     result = await proxiedFetch(AA_API_URL, { method: 'GET', headers });
   } catch {
-    return []; // Network error — silently degrade
-  }
-
-  if (result.status === 401) {
-    // Needs API key
     return [];
   }
-  if (result.status < 200 || result.status >= 300) return [];
 
-  let body: any;
+  if (result.status === 401 || result.status < 200 || result.status >= 300) return [];
+
+  let body: unknown;
   try {
-    const bodyText = new TextDecoder().decode(result.body);
-    body = JSON.parse(bodyText);
+    body = JSON.parse(new TextDecoder().decode(result.body));
   } catch {
     return [];
   }
 
-  const items: any[] = Array.isArray(body) ? body : (body?.data ?? body?.models ?? []);
-  const models: AAModelData[] = items.map((m: any) => ({
-    slug: m.slug ?? '',
-    name: m.name ?? '',
-    creator_slug: m.model_creator?.slug ?? '',
-    intelligence_index: m.evaluations?.artificial_analysis_intelligence_index ?? null,
-    coding_index: m.evaluations?.artificial_analysis_coding_index ?? null,
-    speed_tps: m.median_output_tokens_per_second ?? null,
-  }));
+  if (body == null || typeof body !== 'object') return [];
+  const record = body as { data?: unknown[]; models?: unknown[] } | unknown[];
+  const items: unknown[] = Array.isArray(record) ? record : (record.data ?? record.models ?? []);
+  const models = mapAAItems(items);
 
-  // Save to cache
-  if (vfs && models.length > 0) {
-    const cacheData: AACacheData = { fetchedAt: Date.now(), models };
-    try {
-      await vfs.mkdir('/.cache', { recursive: true });
-      await vfs.writeFile(AA_CACHE_PATH, JSON.stringify(cacheData));
-    } catch {
-      // Cache write failure is non-fatal
-    }
-  }
-
+  if (vfs && models.length > 0) await writeAACache(vfs, models);
   return models;
 }
 
@@ -103,23 +169,17 @@ function normalizeForMatch(id: string): string {
 function matchAAModel(piModelId: string, aaModels: AAModelData[]): AAModelData | undefined {
   const lower = piModelId.toLowerCase();
 
-  // 1. Exact slug match
   const exact = aaModels.find((m) => m.slug === lower);
   if (exact) return exact;
 
-  // 2. Normalized match
   const norm = normalizeForMatch(piModelId);
   const normMatch = aaModels.find((m) => normalizeForMatch(m.slug) === norm);
   if (normMatch) return normMatch;
 
-  // 3. Substring match — prefer longer slugs (more specific)
   const substringMatches = aaModels.filter((m) => lower.includes(m.slug) || m.slug.includes(lower));
-  if (substringMatches.length > 0) {
-    substringMatches.sort((a, b) => b.slug.length - a.slug.length);
-    return substringMatches[0];
-  }
-
-  return undefined;
+  if (substringMatches.length === 0) return undefined;
+  substringMatches.sort((a, b) => b.slug.length - a.slug.length);
+  return substringMatches[0];
 }
 
 function helpText(): string {
@@ -164,41 +224,36 @@ function isAgentModel(m: { id: string; name?: string }): boolean {
  *  2. Remove -preview, -latest
  *  3. Collapse version numbers to get a base family name
  */
-function extractFamily(id: string): string {
-  let f = id.toLowerCase();
-  // Strip date suffixes (YYYYMMDD, YYMM, MMDD patterns at end)
-  f = f.replace(/-\d{8}$/, '');
-  f = f.replace(/-\d{4}$/, '');
-  // Strip -preview, -latest
-  f = f.replace(/-(preview|latest)$/, '');
-
-  // Claude: claude-{tier}-{major}-{minor}... → claude-{tier}
+function familyFromKnownVendor(f: string): string | undefined {
   const claudeMatch = f.match(/^(claude-(?:opus|sonnet|haiku))/);
   if (claudeMatch) return claudeMatch[1];
 
-  // GPT: gpt-{major}.{minor} or gpt-{major} → keep gpt-{major} plus any suffix like -mini
   const gptMatch = f.match(/^(gpt-\d+)(?:\.\d+)?(-[a-z][-a-z]*)?$/);
   if (gptMatch) return gptMatch[1] + (gptMatch[2] ?? '');
 
-  // Gemini: gemini-{major}.{minor}-{variant} → gemini-{variant}
   const geminiMatch = f.match(/^gemini-[\d.]+-(.+)$/);
   if (geminiMatch) return `gemini-${geminiMatch[1]}`;
   const geminiMatch2 = f.match(/^gemini-(\d+)-(.+)$/);
   if (geminiMatch2) return `gemini-${geminiMatch2[2]}`;
 
-  // Grok: grok-{major}(.{minor})?-{variant} → grok-{variant}
   const grokMatch = f.match(/^grok-[\d.]+-([\w-]+)$/);
   if (grokMatch) return `grok-${grokMatch[1]}`;
-  // Plain grok-{version}
   const grokPlain = f.match(/^(grok)-[\d.]+$/);
   if (grokPlain) return 'grok';
 
-  // o-series: o1, o3, o4-mini etc — strip version-like trailing numbers
   const oMatch = f.match(/^(o\d+(?:-[a-z]+)?)(?:-\d.*)?$/);
   if (oMatch) return oMatch[1];
 
-  // Fallback: strip trailing version-like segments (digits, dots, dashes at end)
-  return f.replace(/-[\d.]+$/, '');
+  return undefined;
+}
+
+function extractFamily(id: string): string {
+  let f = id.toLowerCase();
+  f = f.replace(/-\d{8}$/, '');
+  f = f.replace(/-\d{4}$/, '');
+  f = f.replace(/-(preview|latest)$/, '');
+
+  return familyFromKnownVendor(f) ?? f.replace(/-[\d.]+$/, '');
 }
 
 function deduplicateByFamily(models: ModelInfo[]): ModelInfo[] {
@@ -217,23 +272,16 @@ function deduplicateByFamily(models: ModelInfo[]): ModelInfo[] {
   return [...familyMap.values()];
 }
 
-interface ModelInfo {
-  id: string;
-  name: string;
-  provider: string;
-  cost: { input: number; output: number; cacheRead: number; cacheWrite: number };
-  contextWindow: number;
-  maxTokens: number;
-  reasoning: boolean;
-  input: string[];
-  selected: boolean;
-  intelligence?: number;
-  codingScore?: number;
-  speed?: number;
-}
-
 function toModelInfo(
-  m: any,
+  m: {
+    id: string;
+    name: string;
+    cost?: ModelInfo['cost'];
+    contextWindow?: number;
+    maxTokens?: number;
+    reasoning?: boolean;
+    input?: string[];
+  },
   providerId: string,
   activeModelId: string,
   activeProvider: string,
@@ -288,120 +336,144 @@ function formatHumanReadable(
   return lines.join('\n') + '\n';
 }
 
-export function createModelsCommand(vfs?: VirtualFS): Command {
-  return defineCommand('models', async (args) => {
-    const {
-      getAccounts,
-      getAvailableProviders,
-      getProviderConfig,
-      getProviderModels,
-      getSelectedProvider,
-      getSelectedModelId,
-      resolveCurrentModel,
-    } = await import('../../ui/provider-settings.js');
-
-    if (args.includes('--help') || args.includes('-h')) {
-      return { stdout: helpText(), stderr: '', exitCode: 0 };
-    }
-
-    const jsonMode = args.includes('--json');
-    const allMode = args.includes('--all');
-    const allVersions = args.includes('--all-versions');
-    const forceRefresh = args.includes('--refresh');
-    const noBenchmarks = args.includes('--no-benchmarks');
-    const providerIdx = args.indexOf('--provider');
-    const explicitProvider = providerIdx >= 0 ? args[providerIdx + 1] : undefined;
-
-    const selectedProvider = getSelectedProvider();
-    const selectedModelId = getSelectedModelId();
-    const accounts = getAccounts();
-
-    if (accounts.length === 0) {
-      const msg = 'No provider accounts configured. Run the provider settings to add one.\n';
-      return { stdout: '', stderr: msg, exitCode: 1 };
-    }
-
-    // The model the agent ACTUALLY resolves and streams with — not the raw
-    // selected id. resolveCurrentModel() falls back deterministically (and runs
-    // identically in every float: standalone worker, panel terminal, and the
-    // extension offscreen/panel shells — it only reads localStorage + the pi-ai
-    // registry), so this reflects reality even when the selection can't be
-    // honored (cold model list, id unknown to pi-ai). The ► marker, JSON
-    // `selected` flag, and the "Currently using" line below all key off this.
-    const activeModel = resolveCurrentModel();
-    const activeId = activeModel.id;
-    const activeProvider = activeModel.provider;
-
-    // Fetch AA benchmark data unless skipped
-    let aaModels: AAModelData[] | undefined;
-    if (!noBenchmarks) {
-      aaModels = await fetchAAData(vfs, forceRefresh);
-      if (aaModels.length === 0) aaModels = undefined;
-    }
-
-    // Determine which providers to list
-    let providerIds: string[];
-    if (explicitProvider) {
-      const available = getAvailableProviders();
-      if (!available.includes(explicitProvider)) {
-        return {
-          stdout: '',
-          stderr: `Unknown provider: ${explicitProvider}. Available: ${available.join(', ')}\n`,
-          exitCode: 1,
-        };
-      }
-      providerIds = [explicitProvider];
-    } else if (allMode) {
-      providerIds = [...new Set(accounts.map((a: any) => a.providerId))];
-    } else {
-      providerIds = [selectedProvider];
-    }
-
-    const allModels: ModelInfo[] = [];
-    const outputParts: string[] = [];
-
-    for (const pid of providerIds) {
-      const rawModels = getProviderModels(pid).filter(isAgentModel);
-      if (rawModels.length === 0) {
-        if (!allMode) {
-          return { stdout: '', stderr: `No models available for provider ${pid}.\n`, exitCode: 1 };
-        }
-        continue;
-      }
-      let models = rawModels
-        .map((m: any) => toModelInfo(m, pid, activeId, activeProvider, aaModels))
-        .sort((a: ModelInfo, b: ModelInfo) => b.cost.input - a.cost.input);
-
-      if (!allVersions) {
-        models = deduplicateByFamily(models);
-      }
-
-      allModels.push(...models);
-      if (!jsonMode) {
-        const config = getProviderConfig(pid);
-        outputParts.push(formatHumanReadable(config.name, pid, models, !!aaModels));
-      }
-    }
-
-    if (jsonMode) {
-      return { stdout: JSON.stringify(allModels, null, 2) + '\n', stderr: '', exitCode: 0 };
-    }
-
-    if (!allVersions && !jsonMode) {
-      outputParts.push('Showing latest versions only. Use --all-versions to see all.\n');
-    }
-
-    // One authoritative line: the model the agent actually resolves to. If that
-    // differs from the selection (the selected id couldn't be honored — cold
-    // list, unknown id, or a fallback), surface both so there's no guessing.
-    const activeRef = `${activeProvider}:${activeId}`;
-    const selectedRef = `${selectedProvider}:${selectedModelId}`;
-    outputParts.push(
-      activeRef === selectedRef
-        ? `Currently using: ${activeRef}\n`
-        : `Currently using: ${activeRef}  (selected ${selectedRef} — resolved to a different model)\n`
-    );
-
-    return { stdout: outputParts.join('\n'), stderr: '', exitCode: 0 };
+function parseModelsOptions(args: readonly string[]): ModelsOptions | { error: string } {
+  const parsed = parseKnownFlags(args, {
+    bool: MODELS_BOOL_FLAGS,
+    value: MODELS_VALUE_FLAGS,
   });
+  if ('error' in parsed) return parsed;
+  return {
+    jsonMode: parsed.bools.has('--json'),
+    allMode: parsed.bools.has('--all'),
+    allVersions: parsed.bools.has('--all-versions'),
+    forceRefresh: parsed.bools.has('--refresh'),
+    noBenchmarks: parsed.bools.has('--no-benchmarks'),
+    explicitProvider: parsed.values.get('--provider'),
+  };
+}
+
+function resolveProviderIds(
+  store: AccountStore,
+  opts: ModelsOptions,
+  selectedProvider: string
+): string[] | { error: string } {
+  if (opts.explicitProvider) {
+    const available = store.getAvailableProviders();
+    if (!available.includes(opts.explicitProvider)) {
+      return {
+        error: `Unknown provider: ${opts.explicitProvider}. Available: ${available.join(', ')}\n`,
+      };
+    }
+    return [opts.explicitProvider];
+  }
+  if (opts.allMode) {
+    return [...new Set(store.getAccounts().map((a) => a.providerId))];
+  }
+  return [selectedProvider];
+}
+
+function modelsForProvider(
+  store: AccountStore,
+  pid: string,
+  activeId: string,
+  activeProvider: string,
+  aaModels: AAModelData[] | undefined,
+  allVersions: boolean
+): ModelInfo[] {
+  const rawModels = store.getProviderModels(pid).filter(isAgentModel);
+  if (rawModels.length === 0) return [];
+  let models = rawModels
+    .map((m) => toModelInfo(m, pid, activeId, activeProvider, aaModels))
+    .sort((a, b) => b.cost.input - a.cost.input);
+  if (!allVersions) models = deduplicateByFamily(models);
+  return models;
+}
+
+function currentlyUsingLine(
+  activeProvider: string,
+  activeId: string,
+  selectedProvider: string,
+  selectedModelId: string
+): string {
+  const activeRef = `${activeProvider}:${activeId}`;
+  const selectedRef = `${selectedProvider}:${selectedModelId}`;
+  return activeRef === selectedRef
+    ? `Currently using: ${activeRef}\n`
+    : `Currently using: ${activeRef}  (selected ${selectedRef} — resolved to a different model)\n`;
+}
+
+async function runModels(args: readonly string[], vfs?: VirtualFS): Promise<CommandResult> {
+  if (isHelpRequest(args, { valueFlags: MODELS_VALUE_FLAGS })) {
+    return { stdout: helpText(), stderr: '', exitCode: 0 };
+  }
+
+  const opts = parseModelsOptions(args);
+  if ('error' in opts) return fail(`models: ${opts.error}`);
+
+  // providers/ is outside the ranked layer stack — not a shell→ui back-edge.
+  const store = await import('../../providers/account-store.js');
+
+  if (store.getAccounts().length === 0) {
+    return fail('No provider accounts configured. Run the provider settings to add one.\n');
+  }
+
+  // The model the agent ACTUALLY resolves and streams with — not the raw
+  // selected id. resolveCurrentModel() falls back deterministically (and runs
+  // identically in every float: standalone worker, panel terminal, and the
+  // extension offscreen/panel shells — it only reads localStorage + the pi-ai
+  // registry), so this reflects reality even when the selection can't be
+  // honored (cold model list, id unknown to pi-ai). The ► marker, JSON
+  // `selected` flag, and the "Currently using" line below all key off this.
+  const activeModel = store.resolveCurrentModel();
+  const activeId = activeModel.id;
+  const activeProvider = activeModel.provider;
+  const selectedProvider = store.getSelectedProvider();
+  const selectedModelId = store.getSelectedModelId();
+
+  let aaModels: AAModelData[] | undefined;
+  if (!opts.noBenchmarks) {
+    const fetched = await fetchAAData(vfs, opts.forceRefresh);
+    if (fetched.length > 0) aaModels = fetched;
+  }
+
+  const providerIds = resolveProviderIds(store, opts, selectedProvider);
+  if ('error' in providerIds) return fail(providerIds.error);
+
+  const allModels: ModelInfo[] = [];
+  const outputParts: string[] = [];
+
+  for (const pid of providerIds) {
+    const models = modelsForProvider(
+      store,
+      pid,
+      activeId,
+      activeProvider,
+      aaModels,
+      opts.allVersions
+    );
+    if (models.length === 0) {
+      if (!opts.allMode) return fail(`No models available for provider ${pid}.\n`);
+      continue;
+    }
+    allModels.push(...models);
+    if (!opts.jsonMode) {
+      const config = store.getProviderConfig(pid);
+      outputParts.push(formatHumanReadable(config.name, pid, models, !!aaModels));
+    }
+  }
+
+  if (opts.jsonMode) {
+    return { stdout: JSON.stringify(allModels, null, 2) + '\n', stderr: '', exitCode: 0 };
+  }
+
+  if (!opts.allVersions) {
+    outputParts.push('Showing latest versions only. Use --all-versions to see all.\n');
+  }
+
+  outputParts.push(currentlyUsingLine(activeProvider, activeId, selectedProvider, selectedModelId));
+  return { stdout: outputParts.join('\n'), stderr: '', exitCode: 0 };
+}
+
+export function createModelsCommand(vfs?: VirtualFS): Command {
+  return defineCommand('models', async (args) => runModels(args, vfs));
 }
