@@ -78,6 +78,62 @@ describe('crontask command - CLI mode', () => {
   });
 
   describe('create subcommand', () => {
+    it('rejects unknown flags with a non-zero exit (#2255)', async () => {
+      const result = await run(['create', '--name', 'my-task', '--cron', '0 * * * *', '--bogus']);
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('unknown flag: --bogus');
+      expect(mockFetch).not.toHaveBeenCalled();
+    });
+
+    it('honours -- when delete id starts with a dash', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({}),
+      });
+
+      const result = await run(['delete', '--', '-task123']);
+
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Deleted cron task "-task123"');
+      expect(mockFetch).toHaveBeenCalledWith('/api/crontasks/-task123', expect.any(Object));
+    });
+
+    it('accepts --filter values that start with a dash via --flag=value', async () => {
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: async () => ({
+          id: 'task-dash',
+          name: 'dash-filter',
+          cron: '0 * * * *',
+          filter: '--not-a-flag',
+          status: 'active',
+          createdAt: '2026-03-16T00:00:00Z',
+        }),
+      });
+
+      const result = await run([
+        'create',
+        '--name',
+        'dash-filter',
+        '--cron',
+        '0 * * * *',
+        '--filter=--not-a-flag',
+      ]);
+
+      expect(result.exitCode).toBe(0);
+      expect(mockFetch).toHaveBeenCalledWith(
+        '/api/crontasks',
+        expect.objectContaining({
+          body: JSON.stringify({
+            name: 'dash-filter',
+            cron: '0 * * * *',
+            filter: '--not-a-flag',
+            scoop: undefined,
+          }),
+        })
+      );
+    });
+
     it('requires --name argument', async () => {
       mockFetch.mockResolvedValueOnce({
         ok: true,
@@ -482,6 +538,12 @@ describe('crontask command - Extension mode', () => {
   };
 
   describe('help output', () => {
+    it('shows help with create --help', async () => {
+      const result = await run(['create', '--help']);
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('usage: crontask');
+    });
+
     it('shows help with no args in extension mode', async () => {
       const result = await run([]);
       expect(result.exitCode).toBe(0);
