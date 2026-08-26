@@ -16,6 +16,7 @@
  */
 
 import { createLogger } from '../base/logger.js';
+import { matchCommand, matchPath } from '../base/sudoers.js';
 import {
   type ConeApprovalRouter,
   ConeRequestRegistry,
@@ -77,7 +78,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     // shutdown) must still retire the persisted `pending` lick card, or the
     // chat keeps showing a request `list_sudo_requests` no longer knows about.
     this.registry = new ConeRequestRegistry({
-      onAutoSettle: (id, reason) => this.handleAutoSettle(id, reason),
+      onAutoSettle: (id, reason, scoopJid) => this.handleAutoSettle(id, reason, scoopJid),
     });
   }
 
@@ -88,9 +89,9 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
    * stored card. Fire-and-forget: settling is synchronous, persistence is
    * best-effort.
    */
-  private handleAutoSettle(id: string, reason: SudoSettleReason): void {
+  private handleAutoSettle(id: string, reason: SudoSettleReason, scoopJid?: string): void {
     log.info('Sudo request auto-settled fail-closed; retiring lick card', { id, reason });
-    void this.persistLickDecision(id, 'deny').catch((err) => {
+    void this.persistLickDecision(id, 'deny', scoopJid).catch((err) => {
       log.warn('Failed to persist auto-settled lick decision', {
         id,
         reason,
@@ -117,6 +118,55 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
   /** Fail-closed every pending request. Used by `shutdown`. */
   failAll(): number {
     return this.registry.failAll();
+  }
+
+  /**
+   * Resolve every pending request that the (re)loaded policy now covers with
+   * a `NOPASSWD` grant (#2416). Called after a per-scoop policy reload — an
+   * "Always" approval, a config (re)registration, or a sudoers-file edit — so
+   * concurrent gated operations for a freshly granted path/command unblock
+   * immediately instead of stalling until each is individually approved
+   * (which also appended duplicate rules). Scoped to `folder` when given;
+   * `undefined` (a global policy reload) re-evaluates every pending request.
+   * Returns the number of requests settled.
+   */
+  settleGrantedRequests(folder?: string): number {
+    const sudoManager = this.deps.getSudoManager();
+    if (!sudoManager) return 0;
+    const scoops = this.deps.getScoops();
+    let settled = 0;
+    for (const pending of this.registry.list()) {
+      const scoop = scoops.get(pending.scoopJid);
+      if (!scoop) continue;
+      if (folder !== undefined && scoop.folder !== folder) continue;
+      const policy = sudoManager.getPolicyForScoop(scoop.folder);
+      const { kind, detail } = pending.request;
+      const granted =
+        kind === 'command'
+          ? matchCommand(policy, detail) === 'nopasswd-allow'
+          : kind === 'read' || kind === 'write'
+            ? matchPath(policy, kind, detail) === 'nopasswd-allow'
+            : false;
+      if (!granted) continue;
+      // `resolve()` deletes the registry entry, so the requester's identity
+      // (and with it the owning cone) must travel with the persistence call.
+      if (this.registry.resolve(pending.id, { decision: 'allow' })) {
+        settled++;
+        log.info('Sudo request auto-settled: policy now grants it', {
+          id: pending.id,
+          folder: scoop.folder,
+          kind,
+          detail: detail.slice(0, 80),
+        });
+        void this.persistLickDecision(pending.id, 'allow', pending.scoopJid).catch((err) => {
+          log.warn('Failed to persist auto-granted lick decision', {
+            id: pending.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+    }
+    return settled;
   }
 
   async enqueueSudoRequest(scoopJid: string, request: SudoRequest): Promise<SudoDecision> {
@@ -221,6 +271,10 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       return { settled: false, persisted: false };
     }
 
+    // Capture ownership BEFORE settling — resolve() deletes the registry
+    // entry, and the card flip below must land under the requesting scoop's
+    // owning cone, not the default root.
+    const requesterJid = pending.scoopJid;
     // Claim the request synchronously before any persistence await. This
     // cancels its fail-closed timer, so an expired request can never gain a
     // durable rule after the registry has already denied it.
@@ -266,7 +320,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       }
     }
 
-    await this.persistLickDecision(id, decision.decision);
+    await this.persistLickDecision(id, decision.decision, requesterJid);
     return { settled, persisted, persistedPattern, persistError, scoopFolder, kind };
   }
 
@@ -274,10 +328,21 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
    * Flip the rendered + persisted state of an actionable lick once its
    * decision settles. Best-effort — a missing message or store error is
    * logged, not thrown.
+   *
+   * `scoopJid` names the requesting scoop so the card is looked up under its
+   * OWNING cone. Callers that settle through the registry must pass it
+   * explicitly — the registry entry is already deleted by the time this runs,
+   * so the fallback lookup would resolve to the DEFAULT root and, in a
+   * multi-cone session, flip nothing while the owning cone's card stayed
+   * pending (#2455 review).
    */
-  async persistLickDecision(lickId: string, decision: SudoDecision['decision']): Promise<void> {
+  async persistLickDecision(
+    lickId: string,
+    decision: SudoDecision['decision'],
+    scoopJid?: string
+  ): Promise<void> {
     const lickState = decision === 'deny' ? 'dismissed' : 'confirmed';
-    const cone = this.deps.findApprover(this.registry.get(lickId)?.scoopJid);
+    const cone = this.deps.findApprover(scoopJid ?? this.registry.get(lickId)?.scoopJid);
     if (!cone) return;
     try {
       const messages = await this.deps.getMessagesForScoop(cone.jid);

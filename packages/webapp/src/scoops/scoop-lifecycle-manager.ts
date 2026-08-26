@@ -336,25 +336,21 @@ export class ScoopLifecycleManager {
   }
 
   /**
-   * Seed (or reload) the per-scoop sudoers file from `ScoopConfig`. Missing
-   * file: seed from config. Existing file: reload into the in-memory cache
-   * (overwriting on every boot would wipe any "Always" grants added
-   * mid-session). Best-effort: a failed seed is logged and the scoop boots
-   * with whatever policy is already on disk.
+   * Initialize the scoop's sudo policy (#2416): config-derived grants are
+   * registered synchronously in memory (authoritative — a stale on-disk file,
+   * folder reuse, or a reload race can neither withhold a configured
+   * `writablePaths` entry nor retain authority a replacement config revoked),
+   * and the on-disk Always-grants file is loaded (legacy generated files are
+   * discarded fail-closed). Best-effort: a failure is logged and the scoop
+   * boots with whatever policy is already cached.
    */
   private async ensureSudoersLoaded(scoop: RegisteredScoop): Promise<void> {
     const sudoManager = this.deps.getSudoManager();
-    const sharedFs = this.deps.getSharedFs();
-    if (!sudoManager || !sharedFs) return;
+    if (!sudoManager) return;
     try {
-      const path = `/scoops/${scoop.folder}/etc/sudoers`;
-      if (await sharedFs.exists(path)) {
-        await sudoManager.reloadScoopPolicyByFolder(scoop.folder);
-      } else {
-        await sudoManager.seedScoopSudoers(scoop.folder, scoop.config);
-      }
+      await sudoManager.initScoopPolicy(scoop.folder, scoop.config);
     } catch (err) {
-      log.warn('Failed to seed per-scoop sudoers; continuing with existing policy', {
+      log.warn('Failed to initialize per-scoop sudo policy; continuing with existing policy', {
         folder: scoop.folder,
         error: err instanceof Error ? err.message : String(err),
       });
@@ -756,6 +752,10 @@ export class ScoopLifecycleManager {
         count: sudoFailed,
       });
     }
+    // Evict the folder's cached sudo policies AFTER pending requests are
+    // failed closed — repeated one-shot agents would otherwise grow the
+    // per-folder maps for the orchestrator's lifetime (#2455 review).
+    if (scoop) this.deps.getSudoManager()?.forgetScoopPolicies(scoop.folder);
     log.info('Scoop unregistered', { jid });
     if (scoop) {
       try {

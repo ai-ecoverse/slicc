@@ -8,7 +8,9 @@
  * must NOT be re-prompted (no second `handleMessage` delivery).
  */
 
+import 'fake-indexeddb/auto';
 import { describe, expect, it, vi } from 'vitest';
+import { parseSudoers } from '../../src/base/sudoers.js';
 import {
   ScoopApprovalRouter,
   type ScoopApprovalRouterDeps,
@@ -98,6 +100,197 @@ describe('ScoopApprovalRouter persistence settlement', () => {
     await expect(resultPromise).resolves.toEqual(
       expect.objectContaining({ settled: true, persisted: true })
     );
+  });
+});
+
+// #2416: after an 'always' approval widens a scoop's policy (or its config is
+// re-registered), other requests from that scoop that the new policy already
+// covers must resolve as allow instead of stalling until individually approved
+// (which also appended duplicate rules).
+describe('ScoopApprovalRouter settleGrantedRequests (issue #2416)', () => {
+  function managerGranting(rules: string): SudoManager {
+    return {
+      getPolicyForScoop: () => parseSudoers(rules),
+    } as unknown as SudoManager;
+  }
+
+  it('resolves pending path requests now covered by a NOPASSWD grant', async () => {
+    const h = makeHarness(managerGranting('NOPASSWD Write /.playwright/**'));
+    const covered = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.playwright/screenshots/x.png',
+    });
+    const uncovered = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.migration/crop.png',
+    });
+    await flush();
+    expect(h.router.listPendingSudoRequests()).toHaveLength(2);
+
+    const settled = h.router.settleGrantedRequests('scoop_a-folder');
+    await flush();
+
+    expect(settled).toBe(1);
+    await expect(covered).resolves.toEqual({ decision: 'allow' });
+    expect(h.router.listPendingSudoRequests()).toHaveLength(1);
+    // The covered request's card flips to confirmed; the uncovered one stays pending.
+    expect(h.store.find((m) => m.content.includes('/.playwright'))?.lickState).toBe('confirmed');
+    expect(h.store.find((m) => m.content.includes('/.migration'))?.lickState).toBe('pending');
+    // Cleanup so the uncovered request doesn't dangle.
+    h.router.failAll();
+    await expect(uncovered).resolves.toEqual({ decision: 'deny' });
+  });
+
+  it('resolves pending command requests now covered by a NOPASSWD Cmnd grant', async () => {
+    const h = makeHarness(managerGranting('NOPASSWD Cmnd git *'));
+    const covered = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'command',
+      detail: 'git status',
+    });
+    await flush();
+
+    expect(h.router.settleGrantedRequests('scoop_a-folder')).toBe(1);
+    await expect(covered).resolves.toEqual({ decision: 'allow' });
+  });
+
+  it('only settles requests from the scoop whose policy reloaded', async () => {
+    const h = makeHarness(managerGranting('NOPASSWD Write /.playwright/**'));
+    const other = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.playwright/x.png',
+    });
+    await flush();
+
+    expect(h.router.settleGrantedRequests('some-other-folder')).toBe(0);
+    expect(h.router.listPendingSudoRequests()).toHaveLength(1);
+    h.router.failAll();
+    await expect(other).resolves.toEqual({ decision: 'deny' });
+  });
+
+  // #2455 review: `registry.resolve()` deletes the entry, so ownership must be
+  // captured BEFORE settling — otherwise the card flip searches the DEFAULT
+  // root's messages and the owning cone's card stays pending forever.
+  it('flips the card under the OWNING cone in a multi-cone session', async () => {
+    const coneA = scoop('cone_a', true);
+    const coneB = scoop('cone_b', true);
+    const requester = { ...scoop('scoop_b_child', false), parentJid: 'cone_b' };
+    const scoops = new Map<string, RegisteredScoop>([
+      [coneA.jid, coneA],
+      [coneB.jid, coneB],
+      [requester.jid, requester],
+    ]);
+    const store: ChannelMessage[] = [];
+    const deps: ScoopApprovalRouterDeps = {
+      getScoops: () => scoops,
+      // Real approver semantics: the requesting scoop's parent; the DEFAULT
+      // root (cone_a) for undefined/unknown jids — the exact fallback the
+      // ownership bug used to hit after the registry entry was deleted.
+      findApprover: (jid) => (jid === requester.jid ? coneB : coneA),
+      getSudoManager: () =>
+        ({
+          getPolicyForScoop: () => parseSudoers('NOPASSWD Write /.playwright/**'),
+        }) as unknown as SudoManager,
+      getLickManager: () => null,
+      handleMessage: async (msg) => {
+        store.push(msg);
+      },
+      onMessageUpdate: vi.fn(),
+      getMessagesForScoop: async (jid) => store.filter((m) => m.chatJid === jid),
+      saveMessage: async (msg) => {
+        const i = store.findIndex((m) => m.id === msg.id);
+        if (i >= 0) store[i] = msg;
+        else store.push(msg);
+      },
+    };
+    const router = new ScoopApprovalRouter(deps);
+
+    const covered = router.enqueueSudoRequest(requester.jid, {
+      kind: 'write',
+      detail: '/.playwright/x.png',
+    });
+    await flush();
+    const card = store.find((m) => m.chatJid === coneB.jid);
+    expect(card?.lickState).toBe('pending');
+
+    expect(router.settleGrantedRequests(requester.folder)).toBe(1);
+    await flush();
+
+    await expect(covered).resolves.toEqual({ decision: 'allow' });
+    // The card lives under cone B and must flip there — not under cone A.
+    expect(card?.lickState).toBe('confirmed');
+  });
+
+  it('is a no-op without a SudoManager', async () => {
+    const h = makeHarness(null);
+    const pending = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.playwright/x.png',
+    });
+    await flush();
+
+    expect(h.router.settleGrantedRequests('scoop_a-folder')).toBe(0);
+    h.router.failAll();
+    await expect(pending).resolves.toEqual({ decision: 'deny' });
+  });
+
+  // End-to-end through the real reload seam (#2455 review): a real SudoManager
+  // whose `onPolicyReload` is wired to the router (mirroring the orchestrator's
+  // wiring), driven by `appendScoopRule` — exactly what `lick_confirm` with
+  // `always: true` does. The second pending request for the granted subtree
+  // must auto-resolve without a second approval.
+  it("an 'always' persist via appendScoopRule auto-settles the scoop's other covered request", async () => {
+    const { VirtualFS } = await import('../../src/fs/index.js');
+    const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
+    const { SudoManager } = await import('../../src/sudo/sudo-manager.js');
+
+    const vfs = await VirtualFS.create({
+      dbName: `test-router-e2e-settle-${Date.now()}`,
+      wipe: true,
+    });
+    const watcher = new FsWatcher();
+    vfs.setWatcher(watcher);
+
+    // Two-phase init — the orchestrator builds the manager with a callback
+    // that closes over the router it constructs alongside; mirror that.
+    // (In production the orchestrator field-initializes the router before
+    // `init()`; here it is created after, so guard the boot-time reload.)
+    let router: ScoopApprovalRouter | undefined;
+    const mgr = new SudoManager({
+      fs: vfs,
+      watcher,
+      broker: { requestApproval: vi.fn(async () => ({ decision: 'deny' as const })) },
+      onPolicyReload: (folder) => void router?.settleGrantedRequests(folder),
+    });
+    await mgr.init();
+    const h = makeHarness(mgr);
+    router = h.router;
+    await mgr.initScoopPolicy('scoop_a-folder', { writablePaths: ['/scoops/scoop_a-folder/'] });
+
+    const first = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.playwright/screenshots/one.png',
+    });
+    const second = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.playwright/session.md',
+    });
+    await flush();
+    const [{ id: firstId }] = h.router.listPendingSudoRequests();
+
+    // The cone approves the FIRST request with always + a subtree pattern.
+    const result = await h.router.resolveSudoRequestAndPersist(firstId, {
+      decision: 'always',
+      pattern: '/.playwright/**',
+    });
+
+    expect(result).toEqual(expect.objectContaining({ settled: true, persisted: true }));
+    await expect(first).resolves.toEqual({ decision: 'always', pattern: '/.playwright/**' });
+    // The SECOND request is auto-settled by the reload — no second approval.
+    await expect(second).resolves.toEqual({ decision: 'allow' });
+    expect(h.router.listPendingSudoRequests()).toHaveLength(0);
+
+    mgr.dispose();
+    await vfs.dispose?.();
   });
 });
 

@@ -218,7 +218,9 @@ describe('ConeRequestRegistry onAutoSettle', () => {
     const { registry, onAutoSettle, fireAllTimers } = makeRegistryWithSettle(['sudo-1']);
     registry.register('scoop_a', REQ);
     fireAllTimers();
-    expect(onAutoSettle).toHaveBeenCalledExactlyOnceWith('sudo-1', 'expired');
+    // The requester's jid rides along — the entry is already deleted when the
+    // hook fires, so the owner needs it to flip the card under the right cone.
+    expect(onAutoSettle).toHaveBeenCalledExactlyOnceWith('sudo-1', 'expired', 'scoop_a');
   });
 
   it('fires with reason "scoop-dropped" for each request failScoop drains', () => {
@@ -228,8 +230,8 @@ describe('ConeRequestRegistry onAutoSettle', () => {
     registry.register('scoop_b', REQ);
     registry.failScoop('scoop_a');
     expect(onAutoSettle.mock.calls).toEqual([
-      ['a1', 'scoop-dropped'],
-      ['a2', 'scoop-dropped'],
+      ['a1', 'scoop-dropped', 'scoop_a'],
+      ['a2', 'scoop-dropped', 'scoop_a'],
     ]);
   });
 
@@ -239,8 +241,8 @@ describe('ConeRequestRegistry onAutoSettle', () => {
     registry.register('scoop_b', REQ);
     registry.failAll();
     expect(onAutoSettle.mock.calls).toEqual([
-      ['x1', 'shutdown'],
-      ['x2', 'shutdown'],
+      ['x1', 'shutdown', 'scoop_a'],
+      ['x2', 'shutdown', 'scoop_b'],
     ]);
   });
 

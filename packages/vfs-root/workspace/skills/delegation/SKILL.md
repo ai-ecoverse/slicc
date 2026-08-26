@@ -126,6 +126,7 @@ Subtleties:
 - **`writablePaths` are always readable too.** A true read-nothing sandbox needs both `visiblePaths: []` AND `writablePaths: []`.
 - **Mounts remain readable regardless** of `visiblePaths`. `mount` overlays are always visible — that's how scoops can work against a mounted S3 bucket or DA repo without you naming the path explicitly.
 - **`allowedCommands` applies recursively** — pipelines, command substitutions, and network commands are all gated. Pass `["*"]` for explicit unrestricted.
+- **List every absolute root the scoop's tools write to.** Some tool families write outside the scratch dir — `playwright-cli` logs sessions and screenshots to `/.playwright/` — so include those roots in `writablePaths` (any spelling works: `/x`, `/x/`, `/x/**`), or every such write escalates to you for approval. Prefer pointing skills at `/scoops/<folder>/`, `/shared/`, or `/tmp/` over inventing new VFS roots.
 
 ### How to choose
 

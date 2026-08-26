@@ -446,7 +446,14 @@ export class Orchestrator implements ConeApprovalRouter {
         this.sudoManager = new SudoManager({
           fs: sharedFs,
           watcher: fsWatcher,
-          onPolicyReload: (folder) => this.lifecycle.syncReadGrants(folder),
+          onPolicyReload: (folder) => {
+            this.lifecycle.syncReadGrants(folder);
+            // Unblock any pending sudo requests the reloaded policy now
+            // grants (#2416) — e.g. after an "Always" approval widened the
+            // scoop's sandbox, its other queued requests for the same
+            // subtree must not stall until individually approved.
+            this.approvalRouter.settleGrantedRequests(folder);
+          },
         });
         await this.sudoManager.init();
         tick();
@@ -1222,7 +1229,14 @@ export class Orchestrator implements ConeApprovalRouter {
     this.sudoManager = new SudoManager({
       fs: this.sharedFs,
       watcher: this.fsWatcher,
-      onPolicyReload: (folder) => this.lifecycle.syncReadGrants(folder),
+      onPolicyReload: (folder) => {
+        this.lifecycle.syncReadGrants(folder);
+        // Unblock any pending sudo requests the reloaded policy now
+        // grants (#2416) — e.g. after an "Always" approval widened the
+        // scoop's sandbox, its other queued requests for the same
+        // subtree must not stall until individually approved.
+        this.approvalRouter.settleGrantedRequests(folder);
+      },
     });
     await this.sudoManager.init();
     this.llmsTxtIgnorePolicy?.dispose();
@@ -1477,11 +1491,19 @@ export class Orchestrator implements ConeApprovalRouter {
         wait: (ms) => new Promise((res) => setTimeout(res, ms)),
       },
       knownSecrets: getStrictKnownSecretRedactor(),
+      // SAFETY: `VirtualFS` structurally implements the read/write surface of
+      // `LocalVfsClient` / `WritableVfsClient` (readFile/writeFile/exists/
+      // readDir); the client types are narrower views declared in a package
+      // that cannot import VirtualFS, so the bridge is asserted here.
       snapshotStore: {
         read: (sessionId) => readSnapshot(fs as unknown as LocalVfsClient, sessionId),
         write: (sessionId, snapshot) =>
+          // SAFETY: same structural bridge as above — VirtualFS satisfies the
+          // WritableVfsClient write surface.
           writeSnapshot(fs as unknown as WritableVfsClient, sessionId, snapshot),
       },
+      // SAFETY: same structural bridge as above — VirtualFS satisfies the
+      // LocalVfsClient read surface.
       vfs: fs as unknown as LocalVfsClient,
       getActiveSessionInfo: () => {
         const cone = this.defaultRoot();

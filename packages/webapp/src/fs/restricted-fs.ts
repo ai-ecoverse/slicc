@@ -75,9 +75,9 @@ const VIRTUAL_DEVICES: Record<string, VirtualDevice> = {
  * `SudoManager.getPolicyForScoop`. Changing one without the other either
  * re-introduces the approval prompt or walls the write underneath it.
  *
- * They are deliberately NOT in the generated `/scoops/<folder>/etc/sudoers`
- * — that file is written only when absent, so a rule there would never
- * reach an already-created scoop.
+ * They are deliberately NOT part of the per-scoop config grants — those are
+ * compiled from each scoop's own `ScoopConfig`, while `/tmp` applies to every
+ * scoop unconditionally.
  */
 const ALWAYS_WRITABLE_PREFIXES = ['/tmp/'];
 

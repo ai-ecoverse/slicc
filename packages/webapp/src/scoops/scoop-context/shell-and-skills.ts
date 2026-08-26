@@ -89,6 +89,9 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
           broker: sudoWiring.broker,
           getPolicy: sudoWiring.getPolicy,
           defaultDisposition: sudoWiring.defaultDisposition,
+          // Non-cone scoops get a no-op sink (#2416): their `always` grants
+          // are persisted scoped by the approval router, not globally.
+          ...(sudoWiring.onGrant ? { onGrant: sudoWiring.onGrant } : {}),
         })
       : fs
   ) as VirtualFS;

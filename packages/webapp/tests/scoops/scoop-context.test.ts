@@ -1799,6 +1799,105 @@ describe('ScoopContext buildSudoWiring (per-scoop command grant isolation)', () 
     mgr.dispose();
     vfs.dispose?.();
   });
+
+  // #2416: the FS-level analog of the command-grant isolation above. A
+  // non-cone scoop's `always` decision is already persisted SCOPED by the
+  // approval router (`SudoManager.appendScoopRule`); the SudoFS gate must not
+  // ALSO write it to the global `/etc/sudoers.d/granted` drop-in, which would
+  // leak a scoop-A grant into every other unit and accumulate duplicates.
+  it("non-cone scoop: onGrant is a no-op (an 'always' path grant does not leak globally)", async () => {
+    const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
+    const { VirtualFS } = await import('../../src/fs/index.js');
+    const { SudoManager } = await import('../../src/sudo/sudo-manager.js');
+    const { matchPath } = await import('../../src/base/sudoers.js');
+
+    const vfs = await VirtualFS.create({
+      dbName: `test-scoop-ctx-fs-grant-isolation-${Date.now()}`,
+      wipe: true,
+    });
+    const watcher = new FsWatcher();
+    vfs.setWatcher(watcher);
+    const mgr = new SudoManager({
+      fs: vfs,
+      watcher,
+      broker: { requestApproval: vi.fn(async () => ({ decision: 'deny' as const })) },
+    });
+    await mgr.init();
+
+    const callbacks: ScoopContextCallbacks = {
+      ...createMockCallbacks(),
+      onSudoRequest: vi.fn(async () => ({ decision: 'always' as const, pattern: '/x/**' })),
+    };
+    const ctx = new ScoopContext(
+      testScoop,
+      callbacks,
+      vfs,
+      undefined,
+      undefined,
+      'cone_main_1',
+      undefined,
+      mgr
+    );
+
+    const wiring = sudoWiringOf(ctx) as unknown as {
+      onGrant?: (op: 'read' | 'write', pattern: string) => void | Promise<void>;
+    };
+    expect(wiring).not.toBeNull();
+    expect(wiring.onGrant).toBeTypeOf('function');
+
+    await wiring.onGrant?.('write', '/x/**');
+    expect(await vfs.exists('/etc/sudoers.d/granted')).toBe(false);
+    expect(matchPath(mgr.getPolicy(), 'write', '/x/file')).toBe('no-match');
+
+    mgr.dispose();
+    vfs.dispose?.();
+  });
+
+  it('cone scoop: onGrant stays undefined (default global persistence unchanged)', async () => {
+    const { FsWatcher } = await import('../../src/fs/fs-watcher.js');
+    const { VirtualFS } = await import('../../src/fs/index.js');
+    const { SudoManager } = await import('../../src/sudo/sudo-manager.js');
+
+    const vfs = await VirtualFS.create({
+      dbName: `test-scoop-ctx-fs-grant-cone-${Date.now()}`,
+      wipe: true,
+    });
+    const watcher = new FsWatcher();
+    vfs.setWatcher(watcher);
+    const mgr = new SudoManager({
+      fs: vfs,
+      watcher,
+      broker: { requestApproval: vi.fn(async () => ({ decision: 'deny' as const })) },
+    });
+    await mgr.init();
+
+    const coneScoop: RegisteredScoop = {
+      jid: 'cone_main_1',
+      name: 'Main',
+      folder: 'main',
+      parentJid: null,
+      requiresTrigger: false,
+      assistantLabel: 'sliccy',
+      addedAt: new Date().toISOString(),
+    };
+    const ctx = new ScoopContext(
+      coneScoop,
+      createMockCallbacks(),
+      vfs,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      mgr
+    );
+
+    const wiring = sudoWiringOf(ctx) as unknown as { onGrant?: unknown };
+    expect(wiring).not.toBeNull();
+    expect(wiring.onGrant).toBeUndefined();
+
+    mgr.dispose();
+    vfs.dispose?.();
+  });
 });
 
 describe('ScoopContext typed-source error telemetry', () => {

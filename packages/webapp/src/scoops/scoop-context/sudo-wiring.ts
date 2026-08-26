@@ -10,7 +10,7 @@
  * readable in one screen instead of woven through shell construction.
  */
 
-import type { DefaultDisposition, SudoersPolicy } from '../../base/sudoers.js';
+import type { DefaultDisposition, PathOp, SudoersPolicy } from '../../base/sudoers.js';
 import type { ShellSudoConfig } from '../../shell/almost-bash-shell-headless.js';
 import type { SudoManager } from '../../sudo/sudo-manager.js';
 import type { SudoBroker, SudoDecision, SudoRequest } from '../../sudo/types.js';
@@ -21,6 +21,15 @@ export interface SudoWiring {
   getPolicy: () => SudoersPolicy;
   defaultDisposition: DefaultDisposition;
   shellConfig: ShellSudoConfig;
+  /**
+   * `SudoFS` grant sink for `always` decisions. `undefined` for a cone (the
+   * gate's default persists to the global `/etc/sudoers.d/granted`); a no-op
+   * for non-cone scoops — their `always` decision is already persisted SCOPED
+   * to `/scoops/<folder>/etc/sudoers` by the approval router
+   * (`SudoManager.appendScoopRule`), so the default sink would leak the grant
+   * into every unit's policy and accumulate duplicate rules (#2416).
+   */
+  onGrant?: (op: PathOp, pattern: string) => void | Promise<void>;
 }
 
 export interface SudoWiringDeps {
@@ -81,5 +90,10 @@ export function buildSudoWiring({
     defaultDisposition,
     persistCommandGrant,
   };
-  return { broker, getPolicy, defaultDisposition, shellConfig };
+  // Same isolation for FS-level path grants (#2416): non-cone scoops must not
+  // write `always` grants to the global granted file — the router already
+  // persisted them scoped to the scoop's own sudoers.
+  const wiring: SudoWiring = { broker, getPolicy, defaultDisposition, shellConfig };
+  if (!policy.persistCommandGrants) wiring.onGrant = async () => {};
+  return wiring;
 }
