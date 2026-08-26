@@ -4,6 +4,8 @@ import type { VirtualFS } from '../../fs/index.js';
 import { discoverJshCommands, pathToScanRoots } from '../jsh-discovery.js';
 import type { ScriptCatalog } from '../script-catalog.js';
 import { discoverWorkflowCommands, type WorkflowCommandEntry } from '../workflow-discovery.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
 
 export interface WhichCommandOptions {
   fs?: VirtualFS;
@@ -82,10 +84,7 @@ export function createWhichCommand(options: WhichCommandOptions | VirtualFS = {}
         ? ({ fs: options as VirtualFS } satisfies WhichCommandOptions)
         : {};
 
-  return defineCommand('which', async (args, ctx) => {
-    if (args.includes('--help') || args.includes('-h')) {
-      return {
-        stdout: `which - locate a command
+  const HELP = `which - locate a command
 
 Usage: which <command> [command...]
 
@@ -94,13 +93,19 @@ Prints the path of the given command(s).
   - .jsh scripts resolve to their actual VFS path
 
 Exit code 0 if all commands found, 1 if any not found.
-`,
-        stderr: '',
-        exitCode: 0,
-      };
+`;
+
+  return defineCommand('which', async (args, ctx) => {
+    if (isHelpRequest(args)) {
+      return { stdout: HELP, stderr: '', exitCode: 0 };
     }
 
-    if (args.length === 0) {
+    const parsed = parseKnownFlags(args, {});
+    if ('error' in parsed) {
+      return { stdout: '', stderr: `which: ${parsed.error}\n`, exitCode: 1 };
+    }
+
+    if (parsed.positionals.length === 0) {
       return {
         stdout: '',
         stderr: 'which: missing argument\n',
@@ -126,7 +131,7 @@ Exit code 0 if all commands found, 1 if any not found.
     const stdoutLines: string[] = [];
     let allFound = true;
 
-    for (const name of args) {
+    for (const name of parsed.positionals) {
       const jshPath = jshCommands.get(name);
       const wf = workflowCommands.get(name);
       const result = resolveCommandPath(
