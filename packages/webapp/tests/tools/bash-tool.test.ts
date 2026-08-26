@@ -5,39 +5,58 @@ import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headl
 import {
   createBashTool,
   DEFAULT_BASH_BACKGROUND_AFTER_SECONDS,
-  splitCommandSegments,
+  isExpectedNoMatchSearch,
 } from '../../src/tools/bash-tool.js';
 import type { BashJobHost, ToolDefinition } from '../../src/tools/types.js';
 
-describe('splitCommandSegments', () => {
-  it('splits on ;, |, && and ||', () => {
-    const segments = splitCommandSegments('a | b && c || d ; e')
-      .map((s) => s.trim())
-      .filter(Boolean);
-    expect(segments).toEqual(['a', 'b', 'c', 'd', 'e']);
+describe('isExpectedNoMatchSearch', () => {
+  let fs: VirtualFS;
+  let shell: AlmostBashShellHeadless;
+  let counter = 0;
+
+  beforeEach(async () => {
+    fs = await VirtualFS.create({ dbName: `test-nomatch-${counter++}`, wipe: true });
+    shell = new AlmostBashShellHeadless({ fs });
   });
 
-  it('splits "a || b" into two segments with no spurious empty segment', () => {
-    expect(splitCommandSegments('a || b').map((s) => s.trim())).toEqual(['a', 'b']);
+  const ok = (command: string) => isExpectedNoMatchSearch(shell, command, 1, '');
+
+  it('treats a grep/rg family exit 1 with empty stderr as a no-match, not an error', () => {
+    expect(ok('grep foo file')).toBe(true);
+    expect(ok('egrep foo file')).toBe(true);
+    expect(ok('fgrep foo file')).toBe(true);
+    expect(ok('rg foo')).toBe(true);
   });
 
-  it('does not split a lone & (background)', () => {
-    expect(splitCommandSegments('git push & echo done').map((s) => s.trim())).toEqual([
-      'git push & echo done',
-    ]);
+  it('honours the last top-level command in a chain or pipeline', () => {
+    expect(ok('echo hi && grep foo file')).toBe(true);
+    expect(ok('cat file | rg foo')).toBe(true);
+    expect(ok('ls; grep foo file')).toBe(true);
+    // The search is NOT the last command: exit 1 is a real error.
+    expect(ok('grep foo file | wc -l')).toBe(false);
   });
 
-  it('ignores separators inside quotes and after escapes', () => {
-    expect(splitCommandSegments('echo "a | b" ; ls').map((s) => s.trim())).toEqual([
-      'echo "a | b"',
-      'ls',
-    ]);
-    expect(splitCommandSegments('echo a\\|b').map((s) => s.trim())).toEqual(['echo a\\|b']);
+  it('sees through assignment prefixes and the `command` builtin', () => {
+    expect(ok('GREP_COLOR=1 grep foo file')).toBe(true);
+    expect(ok('command rg foo')).toBe(true);
   });
 
-  it('returns a trailing empty segment after a final separator', () => {
-    const segs = splitCommandSegments('ls |');
-    expect((segs[segs.length - 1] ?? '').trim()).toBe('');
+  it('does not treat a non-search command as a no-match', () => {
+    expect(ok('cat missing')).toBe(false);
+    expect(ok('false')).toBe(false);
+    // `grep` reached via an expansion is not a static search invocation.
+    expect(ok('$tool foo')).toBe(false);
+  });
+
+  it('only fires on exit 1 with empty stderr', () => {
+    expect(isExpectedNoMatchSearch(shell, 'grep foo file', 2, '')).toBe(false);
+    expect(isExpectedNoMatchSearch(shell, 'grep foo file', 1, 'grep: file: No such file')).toBe(
+      false
+    );
+  });
+
+  it('stays conservative when the command line does not parse', () => {
+    expect(ok('grep foo "unterminated')).toBe(false);
   });
 });
 

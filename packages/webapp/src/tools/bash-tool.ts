@@ -11,6 +11,7 @@ import {
   truncateTail,
 } from '@earendil-works/pi-coding-agent/dist/core/tools/truncate.js';
 import type { LickEvent } from '@slicc/shared-ts';
+import type { ScriptNode, WordNode } from 'just-bash';
 import { classifyImageMarkers } from '../base/image-markers.js';
 import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
@@ -210,83 +211,73 @@ async function boundBashOutput(
   }
 }
 
-const SEARCH_COMMAND_PREFIX =
-  /^(?:[A-Za-z_][A-Za-z0-9_]*=[^\s]+\s+)*(?:command\s+)?(?:grep|egrep|fgrep|rg)\b/;
+/** Search commands whose exit 1 means "no match", not "error". */
+const SEARCH_COMMANDS = new Set(['grep', 'egrep', 'fgrep', 'rg']);
 
 /**
- * Split a command line into its top-level segments, honoring quotes and
- * escapes. Segments are separated by `;`, `|`, `&&`, and `||`; a lone `&`
- * (background) is not treated as a separator. Raw (untrimmed) segments are
- * returned, including any empty trailing segment after a final separator.
- *
- * Shared by `getLastCommandSegment` (search-output heuristic) and the
- * command-level sudo guard, which matches each non-empty segment against the
- * `Cmnd` policy.
+ * Literal text of a word built only from literal/quoted/escaped parts, else
+ * `null`. A command name carrying an expansion (`$grep`, `` `echo grep` ``)
+ * is not a static search invocation, so it fails the heuristic — which is the
+ * conservative answer.
  */
-export function splitCommandSegments(command: string): string[] {
-  const segments: string[] = [];
-  let current = '';
-  let quote: '"' | "'" | null = null;
-  let escaped = false;
-
-  const flush = () => {
-    segments.push(current);
-    current = '';
-  };
-
-  for (let i = 0; i < command.length; i++) {
-    const char = command[i];
-
-    if (escaped) {
-      current += char;
-      escaped = false;
-      continue;
+function literalWordText(word: WordNode): string | null {
+  let out = '';
+  for (const part of word.parts) {
+    switch (part.type) {
+      case 'Literal':
+      case 'SingleQuoted':
+      case 'Escaped':
+        out += part.value;
+        break;
+      case 'DoubleQuoted': {
+        for (const p of part.parts) {
+          if (p.type !== 'Literal' && p.type !== 'Escaped') return null;
+          out += p.value;
+        }
+        break;
+      }
+      default:
+        return null;
     }
-
-    if (char === '\\') {
-      current += char;
-      escaped = true;
-      continue;
-    }
-
-    if (quote) {
-      current += char;
-      if (char === quote) quote = null;
-      continue;
-    }
-
-    if (char === '"' || char === "'") {
-      current += char;
-      quote = char;
-      continue;
-    }
-
-    if ((char === '&' || char === '|') && command[i + 1] === char) {
-      flush();
-      i++;
-      continue;
-    }
-
-    if (char === ';' || char === '|') {
-      flush();
-      continue;
-    }
-
-    current += char;
   }
-
-  flush();
-  return segments;
+  return out;
 }
 
-function getLastCommandSegment(command: string): string {
-  const segments = splitCommandSegments(command);
-  return (segments[segments.length - 1] ?? '').trim();
+/**
+ * Name of the last top-level command a line runs, or `null` when it is not a
+ * static simple command. Uses just-bash's own AST (already parsed for `exec`)
+ * rather than a hand-rolled tokenizer: assignment prefixes (`VAR=1 grep`) live
+ * in `assignments` and never reach the name, and the one `command` builtin
+ * prefix the heuristic honours (`command rg …`) is unwrapped to its target.
+ */
+function lastCommandName(ast: ScriptNode): string | null {
+  const stmt = ast.statements[ast.statements.length - 1];
+  const pipeline = stmt?.pipelines[stmt.pipelines.length - 1];
+  const cmd = pipeline?.commands[pipeline.commands.length - 1];
+  if (cmd?.type !== 'SimpleCommand' || !cmd.name) return null;
+  const name = literalWordText(cmd.name);
+  if (name !== 'command') return name;
+  const target = cmd.args[0];
+  return target ? literalWordText(target) : null;
 }
 
-function isExpectedNoMatchSearch(command: string, exitCode: number, stderr: string): boolean {
+export function isExpectedNoMatchSearch(
+  shell: AlmostBashShellHeadless,
+  command: string,
+  exitCode: number,
+  stderr: string
+): boolean {
   if (exitCode !== 1 || stderr.trim()) return false;
-  return SEARCH_COMMAND_PREFIX.test(getLastCommandSegment(command));
+  let name: string | null;
+  try {
+    // `transform()` re-parses (cheap), same access pattern as `script-progress`.
+    // A parse error just means "not a recognised search" — the conservative
+    // answer keeps the non-zero exit flagged as an error.
+    name = lastCommandName(shell.getBash().transform(command).ast);
+  } catch {
+    return false;
+  }
+  return name !== null && SEARCH_COMMANDS.has(name);
 }
 
 /**
@@ -845,7 +836,8 @@ async function foregroundResult(
   return {
     content: await boundBashOutput(output, ctx.fs, ctx.tempDir, ctx.nextOutputSeq),
     isError:
-      result.exitCode !== 0 && !isExpectedNoMatchSearch(command, result.exitCode, result.stderr),
+      result.exitCode !== 0 &&
+      !isExpectedNoMatchSearch(ctx.shell, command, result.exitCode, result.stderr),
   };
 }
 
