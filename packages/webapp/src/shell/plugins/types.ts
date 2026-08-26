@@ -24,7 +24,12 @@ export interface PluginManifest {
   repository?: string;
   license?: string;
   keywords?: string[];
-  /** Client-extension namespaces we do not implement are preserved opaquely. */
+  /**
+   * Client-extension namespaces (§8.1) we do not implement are preserved
+   * opaquely: SLICC round-trips them without validating their contents, so
+   * there is no shape to model here.
+   */
+  // biome-ignore lint/plugin: §8.1 extension namespaces are intentionally opaque — preserved without validation, no accepted shape to name.
   extensions?: Record<string, Record<string, unknown>>;
 }
 
