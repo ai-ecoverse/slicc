@@ -146,13 +146,19 @@ default.
   that started it (`targetScoop`; unset for the cone, which is the default lick
   target) carrying the exit code and a 2 KB tail preview. A dropped scoop's job
   lick is logged and discarded.
-- Output is only available at completion — `just-bash` has no incremental stream
-  — so a detach result carries no partial output.
+- Output is teed to that path as each registry-dispatched command settles, so a
+  job killed by `timeout` (or otherwise aborted) still leaves its pre-kill
+  output readable, followed by a trailer like
+  `--- killed after <N>s (exit 124) ---`. The lick preview shows that same tail
+  (not just `bash: execution aborted`). Mid-command output from a single
+  long-running realm command that is SIGKILLed before it returns is still lost —
+  the tee is per command boundary (#2415).
 - A detached job's output is secret-scrubbed by the tool itself (`scrubOutput`,
-  wired from `getToolResultScrubber()`) before the file is written and the preview
-  is cut: it never crosses the `adaptTools` tool-result boundary that scrubs a
-  normal `bash` result. A scrub failure withholds the output rather than passing
-  it through; the lick still reports the exit code.
+  wired from `getToolResultScrubber()`) before every file write (including
+  partial tees) and before the preview is cut: it never crosses the `adaptTools`
+  tool-result boundary that scrubs a normal `bash` result. A scrub failure
+  withholds the output rather than passing it through; the lick still reports
+  the exit code.
 - A still-running job is SIGKILLed when its scoop context is disposed
   (`drop_scoop`, one-shot `agent` teardown, shutdown), since the scoop directory
   its output would land in goes away with it.

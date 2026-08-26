@@ -208,12 +208,24 @@ export interface HeadlessShellLike {
     command: string,
     signal?: AbortSignal,
     shellPid?: number,
-    stdin?: ByteString
+    stdin?: ByteString,
+    options?: ExecuteCommandOptions
   ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
   executeScriptFile(
     scriptPath: string,
     args?: string[]
   ): Promise<{ stdout: string; stderr: string; exitCode: number }>;
+}
+
+/** Optional knobs for {@link HeadlessShellLike.executeCommand}. */
+export interface ExecuteCommandOptions {
+  /**
+   * Called with each registry-dispatched command's stdout+stderr as that
+   * command settles — the incremental tee used by the agent `bash` tool so a
+   * detached job killed by `timeout` still has its pre-kill output on disk
+   * (#2415). Concurrent runs on one shell are demuxed via an internal env tag.
+   */
+  onOutput?: (chunk: string) => void;
 }
 
 export type { BashExecResult };
@@ -265,6 +277,14 @@ const log = createLogger('almost-bash-shell');
  */
 const RUN_PID_ENV = '__SLICC_RUN_PID';
 
+/**
+ * Env var demuxing an incremental output tee across concurrent `executeCommand`
+ * runs on one shell (#2415). Same channel as {@link RUN_PID_ENV}: just-bash
+ * still passes `env` through per-exec, and a nested exec inherits it. Stripped
+ * from the env written back onto the shell so it never outlives its run.
+ */
+const OUTPUT_TEE_ENV = '__SLICC_OUTPUT_TEE__';
+
 /** Read the run's parent pid back out of a command's environment. */
 function runPidFromEnv(runEnv?: ReadonlyMap<string, string>): number | undefined {
   const raw = runEnv?.get(RUN_PID_ENV);
@@ -273,10 +293,10 @@ function runPidFromEnv(runEnv?: ReadonlyMap<string, string>): number | undefined
   return Number.isSafeInteger(pid) && pid > 0 ? pid : undefined;
 }
 
-/** Copy of `env` without the internal per-run tag. */
+/** Copy of `env` without the internal per-run tags. */
 function stripRunPid(env: Record<string, string>): Record<string, string> {
-  if (!(RUN_PID_ENV in env)) return { ...env };
-  const { [RUN_PID_ENV]: _runPid, ...rest } = env;
+  if (!(RUN_PID_ENV in env) && !(OUTPUT_TEE_ENV in env)) return { ...env };
+  const { [RUN_PID_ENV]: _runPid, [OUTPUT_TEE_ENV]: _tee, ...rest } = env;
   return rest;
 }
 
@@ -372,6 +392,13 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
 
   /** Registry command names, for the script planner's "is this a dispatch" test. */
   private registryNames: ReadonlySet<string> = new Set();
+
+  /**
+   * Incremental stdout/stderr tees keyed by {@link OUTPUT_TEE_ENV} (#2415).
+   * Populated for the duration of an `executeCommand` that requested `onOutput`.
+   */
+  private readonly outputTees = new Map<string, (chunk: string) => void>();
+  private nextOutputTeeId = 0;
 
   /**
    * Per-run parent pid, carried to realm-backed commands through the run's
@@ -710,15 +737,18 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     command: string,
     signal?: AbortSignal,
     shellPid?: number,
-    stdin: ByteString = EMPTY_BYTES
+    stdin: ByteString = EMPTY_BYTES,
+    options?: ExecuteCommandOptions
   ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
     const previousShellPid = this.activeShellPid;
     if (shellPid !== undefined) this.activeShellPid = shellPid;
+    const teeId = options?.onOutput ? `tee-${(this.nextOutputTeeId += 1)}` : undefined;
+    if (teeId && options?.onOutput) this.outputTees.set(teeId, options.onOutput);
     try {
       // `shellPid` also rides this run's env, so a run that outlives the call
       // (the bash tool's detached jobs) still parents its realm children
       // correctly once `activeShellPid` has moved on to a later command.
-      const result = await this.runCommand(command, signal, shellPid, stdin);
+      const result = await this.runCommand(command, signal, shellPid, stdin, teeId);
       return {
         stdout: result.stdout,
         stderr: result.stderr,
@@ -726,6 +756,7 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       };
     } finally {
       this.activeShellPid = previousShellPid;
+      if (teeId) this.outputTees.delete(teeId);
     }
   }
 
@@ -899,7 +930,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     command: string,
     signal?: AbortSignal,
     runPid?: number,
-    stdin: ByteString = EMPTY_BYTES
+    stdin: ByteString = EMPTY_BYTES,
+    outputTeeId?: string
   ): Promise<BashExecResult> {
     const commandName = command.trim().split(/\s+/)[0] || 'unknown';
     emitShellCommand(commandName);
@@ -929,10 +961,15 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     // just-bash's published ExecOptions type does not yet expose
     // AbortSignal, but we still forward it so external callers and
     // terminal Ctrl+C keep a consistent cancellation path.
+    const taggedEnv: Record<string, string> = {
+      ...this.lastEnv,
+      ...(runPid === undefined ? {} : { [RUN_PID_ENV]: String(runPid) }),
+      ...(outputTeeId === undefined ? {} : { [OUTPUT_TEE_ENV]: outputTeeId }),
+    };
     const execOptions: BashExecOptionsWithSignal = {
       // Tagged per run so realm-backed commands can recover THIS run's parent
       // pid from their own `ctx.env` under concurrency (see `RUN_PID_ENV`).
-      env: runPid === undefined ? this.lastEnv : { ...this.lastEnv, [RUN_PID_ENV]: String(runPid) },
+      env: taggedEnv,
       cwd: this.cwd,
       signal,
       ...(stdin !== EMPTY_BYTES
@@ -1024,6 +1061,8 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         ? wrapTimeoutForProgress(inner, this.progress)
         : wrapCommandForProgress(inner, this.progress);
     const onSettled = () => this.scriptRun?.stepDone();
+    const teeOutput = (env: ReadonlyMap<string, string> | undefined, result: ExecResult) =>
+      this.teeCommandOutput(env, result);
     return {
       ...wrapped,
       async execute(args, ctx) {
@@ -1032,12 +1071,33 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
         // the script bar advances when a step finishes, not when it starts.
         // O(1) when no script unit is active.
         try {
-          return await wrapped.execute(args, ctx);
+          const result = await wrapped.execute(args, ctx);
+          // Incremental tee for the agent bash tool (#2415): emit each
+          // command's output as it settles so a later timeout kill still has
+          // the pre-kill payload on disk.
+          teeOutput(ctx.env, result);
+          return result;
         } finally {
           onSettled();
         }
       },
     };
+  }
+
+  /**
+   * Forward a settled command's stdout+stderr to the run's optional output tee.
+   * No-op when the run did not request one (human terminal, most tool calls).
+   */
+  private teeCommandOutput(
+    env: ReadonlyMap<string, string> | undefined,
+    result: { stdout?: string; stderr?: string }
+  ): void {
+    const teeId = env?.get(OUTPUT_TEE_ENV);
+    if (!teeId) return;
+    const tee = this.outputTees.get(teeId);
+    if (!tee) return;
+    const chunk = [result.stdout, result.stderr].filter(Boolean).join('');
+    if (chunk) tee(chunk);
   }
 
   /** Open the script-level progress unit for a script about to run. */

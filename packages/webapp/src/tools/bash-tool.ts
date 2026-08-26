@@ -376,6 +376,21 @@ interface StartedRun {
   settled: Promise<SettledRun>;
   /** Drops the TURN's abort listener (kept out of `finally` on the detach path). */
   releaseTurnSignal: () => void;
+  /**
+   * Raw stdout/stderr accumulated from each registry-dispatched command as it
+   * settles (#2415). Survives a timeout kill that just-bash reports as an
+   * empty abort result.
+   */
+  getTeedOutput: () => string;
+  /**
+   * Begin rewriting the durable output path with scrubbed teed content on each
+   * new chunk. Called once from {@link detachRun}.
+   */
+  startPersisting: (outputPath: string, jobId: string) => void;
+  /** Wait for any in-flight persist writes before a final settle write. */
+  flushPersist: () => Promise<void>;
+  /** Set when {@link hardKill} fires for a detached job's timeout ceiling. */
+  killedByTimeout: boolean;
 }
 
 /** Read an optional non-negative number argument; invalid values are ignored. */
@@ -471,6 +486,37 @@ function startRun(
     else job.signal.addEventListener('abort', () => controller.abort(), { once: true });
   }
 
+  // Incremental tee (#2415): each registry-dispatched command's stdout/stderr
+  // is appended here as it settles. just-bash's abort settlement discards
+  // accumulated output (exit 124 + "bash: execution aborted"), so this buffer
+  // is what a killed detached job still has to show.
+  const teedChunks: string[] = [];
+  let persistPath: string | undefined;
+  let persistJobId: string | undefined;
+  let persistChain: Promise<void> = Promise.resolve();
+
+  // Full rewrite (not append): scrubbers may match secrets that span chunk
+  // boundaries, so each persist re-scrubs the whole buffer. Background path
+  // only — chatty jobs pay O(n²) across chunk count × output size.
+  const persistTeed = (): void => {
+    if (persistPath === undefined || persistJobId === undefined) return;
+    const path = persistPath;
+    const jobId = persistJobId;
+    const raw = teedChunks.join('');
+    persistChain = persistChain
+      .then(async () => {
+        const scrubbed = await scrubJobOutput(ctx, jobId, raw);
+        await ctx.fs.writeFile(path, scrubbed);
+      })
+      .catch((err) =>
+        log.warn('Failed to tee background bash output', {
+          jobId,
+          outputPath: path,
+          error: err instanceof Error ? err.message : String(err),
+        })
+      );
+  };
+
   // Never rejects: both branches of the race read this, and an unobserved
   // rejection from a detached run would surface as an unhandled rejection in
   // the kernel worker.
@@ -480,7 +526,12 @@ function startRun(
   // a descendant of THIS job rather than of the whole turn. That is what makes
   // the SIGKILL below reach it.
   const settled: Promise<SettledRun> = ctx.shell
-    .executeCommand(command, controller.signal, job?.pid)
+    .executeCommand(command, controller.signal, job?.pid, undefined, {
+      onOutput: (chunk) => {
+        teedChunks.push(chunk);
+        persistTeed();
+      },
+    })
     .then(
       (result) => ({ ok: true, result }) as SettledRun,
       (err) =>
@@ -492,6 +543,14 @@ function startRun(
     controller,
     settled,
     releaseTurnSignal: () => turnSignal?.removeEventListener('abort', onTurnAbort),
+    getTeedOutput: () => teedChunks.join(''),
+    startPersisting: (outputPath, jobId) => {
+      persistPath = outputPath;
+      persistJobId = jobId;
+      persistTeed();
+    },
+    flushPersist: () => persistChain,
+    killedByTimeout: false,
   };
 }
 
@@ -502,7 +561,8 @@ function startRun(
  * abort is still raised for the in-worker just-bash path, which has no worker to
  * terminate and can only stop at a statement boundary.
  */
-function hardKill(run: StartedRun): void {
+function hardKill(run: StartedRun, reason?: 'timeout'): void {
+  if (reason === 'timeout') run.killedByTimeout = true;
   run.job?.kill();
   run.controller.abort();
   run.job?.exit(null);
@@ -543,8 +603,7 @@ function detachedResult(
       `Still running after ${waitSeconds}s — detached as background job ${jobId}. ` +
       'This turn is NOT blocked on it: continue with other work, and do not re-run the command. ' +
       'A "Background Command" lick will arrive with the exit code and a preview once it finishes, ' +
-      `and its full output will be written to ${outputPath}.${pidNote}${killNote} ` +
-      'No output is available before it completes.',
+      `and its full output is being written to ${outputPath} as it runs.${pidNote}${killNote}`,
   };
 }
 
@@ -610,19 +669,72 @@ async function scrubJobOutput(ctx: BashRunContext, jobId: string, output: string
   }
 }
 
+/**
+ * True when just-bash settled as a cooperatively aborted run (timeout / signal
+ * abort inside the interpreter). just-bash 3.4.x returns
+ * `{ exitCode: 124, stderr: "bash: execution aborted\n", stdout: "" }` and
+ * drops any prior output — the tee is what recovers it.
+ *
+ * Require BOTH exit 124 and the abort message on the settled-ok path:
+ * - bare exit 124 (e.g. GNU `timeout`) must keep its real output / no trailer
+ * - a command that merely *prints* "execution aborted" on stderr while exiting
+ *   0 must not be reclassified as a kill
+ *
+ * A generic thrown `"aborted"` (external `kill <pid>`) is NOT this path —
+ * that is handled below with optional teed prefix.
+ */
+function isJustBashExecutionAbort(settled: SettledRun): boolean {
+  if (!settled.ok) return /execution aborted/i.test(settled.error);
+  return settled.result.exitCode === 124 && /execution aborted/i.test(settled.result.stderr);
+}
+
+/** Trailer appended to a killed detached job's durable output (#2415). */
+function killTrailer(timeoutSeconds: number | undefined, exitCode: number): string {
+  if (timeoutSeconds === undefined) {
+    return `--- killed (exit ${exitCode}) ---\n`;
+  }
+  return `--- killed after ${timeoutSeconds}s (exit ${exitCode}) ---\n`;
+}
+
 async function deliverBackgroundJob(
   ctx: BashRunContext,
   jobId: string,
   pid: number | undefined,
   command: string,
   outputPath: string,
-  settled: SettledRun
+  settled: SettledRun,
+  run: StartedRun,
+  timeoutSeconds: number | undefined
 ): Promise<void> {
-  const raw = settled.ok
-    ? [settled.result.stdout, settled.result.stderr].filter(Boolean).join('') ||
-      `(exit code: ${settled.result.exitCode})`
-    : `Shell error: ${settled.error}`;
-  const exitCode = settled.ok ? settled.result.exitCode : 1;
+  await run.flushPersist();
+
+  const timeoutAbort = run.killedByTimeout || isJustBashExecutionAbort(settled);
+  let raw: string;
+  let exitCode: number;
+  if (timeoutAbort) {
+    // Prefer the incremental tee over just-bash's empty abort settlement —
+    // that is the whole point of #2415.
+    const teed = run.getTeedOutput();
+    exitCode = 124;
+    const body = teed.endsWith('\n') || teed.length === 0 ? teed : `${teed}\n`;
+    raw = `${body}${killTrailer(timeoutSeconds, exitCode)}`;
+  } else if (settled.ok) {
+    raw =
+      [settled.result.stdout, settled.result.stderr].filter(Boolean).join('') ||
+      `(exit code: ${settled.result.exitCode})`;
+    exitCode = settled.result.exitCode;
+  } else {
+    // Thrown error (e.g. external `kill <pid>` → "aborted"): keep any teed
+    // output ahead of the error string so a mid-flight kill is not silent.
+    const teed = run.getTeedOutput();
+    exitCode = 1;
+    if (teed) {
+      const body = teed.endsWith('\n') ? teed : `${teed}\n`;
+      raw = `${body}Shell error: ${settled.error}`;
+    } else {
+      raw = `Shell error: ${settled.error}`;
+    }
+  }
   // Scrub BEFORE the write, so the persisted file the agent is told to `cat` is
   // masked too — a `preview`-only scrub would just move the leak to disk.
   const output = await scrubJobOutput(ctx, jobId, raw);
@@ -682,15 +794,30 @@ function detachRun(
   const jobId = ctx.nextJobId();
   const pid = run.job?.pid;
   const outputPath = `${ctx.tempDir}/bash-${jobId}.txt`;
+  // Start teeing to disk immediately so a kill before the next command settles
+  // still leaves whatever already landed in the buffer.
+  run.startPersisting(outputPath, jobId);
   const killAfter = timeoutSeconds === undefined ? undefined : timeoutSeconds - backgroundAfter;
   const killTimer =
-    killAfter === undefined ? undefined : setTimeout(() => hardKill(run), killAfter * 1000);
+    killAfter === undefined
+      ? undefined
+      : setTimeout(() => hardKill(run, 'timeout'), killAfter * 1000);
 
   void run.settled
     .then((settled) => {
       if (killTimer !== undefined) clearTimeout(killTimer);
-      finishJob(run, settled.ok ? settled.result.exitCode : 1);
-      return deliverBackgroundJob(ctx, jobId, pid, command, outputPath, settled);
+      const exitCode = run.killedByTimeout ? 124 : settled.ok ? settled.result.exitCode : 1;
+      finishJob(run, exitCode);
+      return deliverBackgroundJob(
+        ctx,
+        jobId,
+        pid,
+        command,
+        outputPath,
+        settled,
+        run,
+        timeoutSeconds
+      );
     })
     .catch((err) => log.error('Background bash delivery failed', { jobId, error: err }));
 
@@ -753,7 +880,7 @@ async function runBashCommand(
     const outcome = await Promise.race([run.settled, elapsed]);
 
     if (outcome === 'elapsed' && timeoutFirst) {
-      hardKill(run);
+      hardKill(run, 'timeout');
       log.warn('Bash command timed out', {
         command,
         timeoutSeconds: waitSeconds,
