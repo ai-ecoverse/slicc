@@ -2,6 +2,7 @@ import {
   type FeatureFlagFloat,
   type FeatureFlagValues,
   initFeatureFlags,
+  type UntrustedFlagValues,
 } from './feature-flags.js';
 import {
   type FeatureFlagsRemoteStorage,
@@ -93,11 +94,13 @@ async function fetchFlags(
 }
 
 function readFlagsPayload(value: unknown): FeatureFlagValues | null {
-  if (!isRecord(value) || !isRecord(value.flags)) return null;
-  if (Object.values(value.flags).some((flagValue) => typeof flagValue !== 'string')) return null;
-  return value.flags as FeatureFlagValues;
+  if (!isPlainObject(value)) return null;
+  const flags = value.flags;
+  if (!isPlainObject(flags)) return null;
+  if (Object.values(flags).some((flagValue) => typeof flagValue !== 'string')) return null;
+  return flags as FeatureFlagValues;
 }
 
-function isRecord(value: unknown): value is Record<string, unknown> {
+function isPlainObject(value: unknown): value is UntrustedFlagValues {
   return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
