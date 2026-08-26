@@ -53,6 +53,41 @@ describe('imgcat command', () => {
     }
   });
 
+  it('rejects an unknown flag instead of treating it as a path', async () => {
+    const onMediaPreview = vi.fn();
+    const result = await createImgcatCommand({ onMediaPreview }).execute(
+      ['--bogus', 'photo.png'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unknown flag: --bogus');
+    expect(result.stdout).toBe('');
+    expect(onMediaPreview).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unknown flag in any position', async () => {
+    const result = await createImgcatCommand().execute(
+      ['photo.png', '--bogus'],
+      createMockCtx()
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('unknown flag: --bogus');
+  });
+
+  it('treats tokens after -- as paths, not flags', async () => {
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('document', {});
+
+    const onMediaPreview = vi.fn().mockResolvedValue(undefined);
+    const result = await createImgcatCommand({ onMediaPreview }).execute(
+      ['--', '--bogus.png'],
+      createMockCtx()
+    );
+    expect(result.stderr).not.toContain('unknown flag');
+    expect(result.exitCode).toBe(0);
+    expect(onMediaPreview).toHaveBeenCalledOnce();
+  });
+
   it('errors when browser APIs are unavailable', async () => {
     vi.stubGlobal('window', undefined);
     vi.stubGlobal('document', undefined);

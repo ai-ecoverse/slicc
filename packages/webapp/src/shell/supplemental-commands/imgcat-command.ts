@@ -1,6 +1,8 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { getMimeType, isTerminalPreviewableMimeType } from '../../base/mime-types.js';
+import { parseKnownFlags } from './subcommand-flags.js';
+import { isHelpRequest } from './subcommand-help.js';
 
 export interface MediaPreviewItem {
   path: string;
@@ -28,9 +30,22 @@ Options:
 
 export function createImgcatCommand(options: ImgcatCommandOptions = {}): Command {
   return defineCommand('imgcat', async (args, ctx) => {
-    if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+    if (args.length === 0 || isHelpRequest(args)) {
       return imgcatHelp();
     }
+
+    const parsed = parseKnownFlags(args);
+    if ('error' in parsed) {
+      return {
+        stdout: '',
+        stderr: `imgcat: ${parsed.error}\n`,
+        exitCode: 1,
+      };
+    }
+    if (parsed.positionals.length === 0) {
+      return imgcatHelp();
+    }
+
     if (typeof window === 'undefined' || typeof document === 'undefined') {
       return {
         stdout: '',
@@ -48,7 +63,7 @@ export function createImgcatCommand(options: ImgcatCommandOptions = {}): Command
 
     const previewItems: MediaPreviewItem[] = [];
 
-    for (const target of args) {
+    for (const target of parsed.positionals) {
       const fullPath = ctx.fs.resolvePath(ctx.cwd, target);
       const stat = await ctx.fs.stat(fullPath);
       if (!stat.isFile) {
