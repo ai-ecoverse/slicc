@@ -237,6 +237,19 @@ scoop_unmute({ scoop_names: ["scraper"] })
 # Tool result has the stashed summary or "No stashed completions".
 ```
 
+### Liveness: a quiet fan-out is not a finished fan-out
+
+"Files look stable and the scoops are still processing" does NOT mean the work
+is done or progressing. A common stall mode: one or more scoops are blocked on
+a pending approval (`sudo_request`) that never reached you, and the whole
+fan-out sits idle while you wait for a `scoop-wait` lick that can't arrive.
+
+When a fan-out goes quiet — no completions, no file changes, no progress
+messages — run `list_sudo_requests` before concluding anything. Resolve or
+deny each pending request, then keep waiting. Only treat a fan-out as
+complete when every scoop has actually reported completion (via `scoop_wait`
+lick or `scoop_unmute` summaries), not because output files stopped changing.
+
 ### Notes
 
 - Full response is always persisted to `/shared/scoop-notifications/<timestamp>-<folder>-<id>.md` (bounded to the 200 most recent). The summary string in the tool result is truncated at 20 000 characters; read the VFS path when you need the full output.
@@ -274,6 +287,27 @@ scoop_scoop({ name: "architect", model: "claude-opus-4-6", prompt: "Design the n
 ## Browser tabs
 
 Browser-tab handling rules (track your IDs, never close tabs you didn't open, handle "tab not found" gracefully) live in `/workspace/skills/playwright-cli/SKILL.md` under "Multi-Agent Tab Behavior". Read that skill before delegating browser work.
+
+### Browser-driving scoops serialize on one bridge
+
+All scoops share ONE browser, and every `playwright-cli` command runs
+**serialized** on a single global tab lock. Parallel browser-driving scoops do
+not run in parallel at the browser — they queue. An 8-way browser fan-out
+roughly doubles wall-clock time versus a capped one and adds overhead as
+queued commands blow past `background_after` and get detached — their results
+arrive later as `bash` licks, so the scoop's turn moves on before the browser
+work lands.
+
+- **Cap concurrent browser-driving scoops at 3–4.** For larger workloads, feed
+  scoops in waves: feed 3–4, `scoop_wait` for them, feed the next wave.
+- When a command emits `note: browser bridge contended — ...` on stderr (total
+  lock wait + queue depth; ships with the bridge hardening in PR #2411 —
+  runtimes without it stay silent, but slowness under fan-out still means
+  contention), that is back-off guidance: instruct scoops to stagger or wait,
+  never to re-run the command — it already ran; it was just slow to get the
+  lock.
+- This cap applies only to scoops actively driving the browser. Scoops doing
+  CPU/VFS/network work (curl, file edits, analysis) fan out freely.
 
 ## Model access policy
 
