@@ -1,5 +1,8 @@
 {
-  "//": "First-load (cold-cache) eager-import-closure budgets in raw kB, checked by packages/dev-tools/tools/check-first-load-size.mjs after a webapp build. pageEagerKb = static import graph of index.html; workerEagerKb = static import graph of the kernel-worker entry. These are ratchets: tighten as the eager graphs shrink; raising one needs a reason in the PR body.",
-  "pageEagerKb": 740,
-  "workerEagerKb": 4164
+  "//": "First-load (cold-cache) eager-import-closure limits for the webapp, checked by packages/dev-tools/tools/check-first-load-size.mjs after a webapp build. pageEagerKb = static import graph of index.html; workerEagerKb = static import graph of the kernel-worker entry.",
+  "//delta": "maxDeltaKb is the PRIMARY gate: a PR may not grow either eager graph by more than this much versus its own merge-base, which the checker builds and measures on the same machine in the same run. Relative, so it fails only PRs that actually regress and never drifts with the platform. 4 kB was calibrated against real traffic, not guessed: eight in-flight PRs measured 0.00-1.54 kB, while a deliberately staged regression (a static `unpdf` import in the boot-critical supplemental-commands index) measured +7.0 kB. 4 kB sits in that gap.",
+  "//ceiling": "The ceilings are the SECONDARY gate and the human-owned line in the sand. A delta gate alone lets many small under-threshold PRs creep the graph upward forever; these bound the total. They are NOT ratchets to nudge when a build goes red — raising one is a deliberate decision about cold-boot payload and needs a reason in the PR body. Tighten them freely as the graphs shrink.",
+  "maxDeltaKb": 4,
+  "pageEagerCeilingKb": 768,
+  "workerEagerCeilingKb": 4288
 }

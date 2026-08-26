@@ -1909,12 +1909,20 @@ jobs:
   # webapp and extension growth was invisible until someone noticed a slow
   # cold load. Budgets live next to the code they guard, in each package's
   # `size-limit` block, and are measured on raw (non-brotli) bytes to match
-  # the asset-cap framing of the worker gate. The webapp additionally gates
-  # first-load performance: check-first-load-size.mjs measures the EAGER
-  # import closures of the page and kernel-worker entries (what a cold-cache
-  # boot actually downloads) against packages/webapp/first-load-budget.json.
-  # They are ratchets: tighten them
-  # as payloads shrink; raising one needs a reason in the PR body.
+  # the asset-cap framing of the worker gate.
+  #
+  # The webapp additionally gates first-load performance:
+  # check-first-load-size.mjs measures the EAGER import closures of the page
+  # and kernel-worker entries (what a cold-cache boot actually downloads).
+  # That check is RELATIVE — it builds this change's merge-base in a
+  # throwaway worktree and fails only when the change itself grows a graph by
+  # more than `maxDeltaKb`. It used to be an absolute number, which failed:
+  # the budget was set to main's exact measurement, main measures ~1 kB
+  # larger here than on the macOS machines developers verify on, and so every
+  # webapp PR inherited a red gate it had not caused (#2422, #2436, #2438 all
+  # measured exactly main's number and all patched the same line). The
+  # absolute ceilings in packages/webapp/first-load-budget.json remain as the
+  # backstop against many small under-threshold changes creeping upward.
   #
   # `dev-tools` is in the filter list because the webapp inlines
   # `packages/dev-tools/providers.build.json` at build time to decide which
@@ -1935,6 +1943,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          # The first-load check builds this change's merge-base to measure
+          # the delta, so it needs history and an `origin/main` ref.
+          fetch-depth: 0
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24

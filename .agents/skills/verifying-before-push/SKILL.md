@@ -146,18 +146,38 @@ next to the code they guard, and are measured on raw (non-brotli) bytes.
 
 The webapp `size` script additionally runs
 `packages/dev-tools/tools/check-first-load-size.mjs`, which measures the EAGER import
-closures fetched on a cold-cache boot (the page entry graph and the kernel-worker graph)
-against [`packages/webapp/first-load-budget.json`](../../../packages/webapp/first-load-budget.json).
+closures fetched on a cold-cache boot (the page entry graph and the kernel-worker graph).
 A static import that hoists an existing lazy chunk into the boot graph fails this gate even
-though no single file grew — make the import dynamic, or raise the budget with a reason in
-the PR body. Both gates are ratchets: tighten as payloads shrink.
+though no single file grew — make the import dynamic.
+
+**This check is relative, not an absolute budget.** It builds your change's merge-base in a
+throwaway git worktree (your working tree is never touched) and compares, so it fails only
+when _your change_ grows a graph by more than `maxDeltaKb` in
+[`packages/webapp/first-load-budget.json`](../../../packages/webapp/first-load-budget.json).
+You will not inherit someone else's regression, and the number reproduces locally: both
+sides are built on the same machine in the same run, which cancels the ~1 kB difference
+between a Linux CI build and a macOS one. The baseline build costs ~2 s.
+
+```bash
+node packages/dev-tools/tools/check-first-load-size.mjs                    # vs origin/main
+node packages/dev-tools/tools/check-first-load-size.mjs --baseline=none    # ceilings only
+node packages/dev-tools/tools/check-first-load-size.mjs --json             # just measure
+```
+
+If the merge-base cannot be built (shallow clone, unknown ref), the delta check is reported
+as SKIPPED and only the ceilings are enforced — read the log rather than assuming green.
+
+The `*EagerCeilingKb` values in the same file are the absolute backstop, since a delta gate
+alone would let many small under-threshold changes creep upward forever. They are a
+deliberate cold-boot limit, **not** a number to nudge when a build goes red: tighten them
+freely as payloads shrink, and raise one only with a reason in the PR body.
 
 It reads built output, so run `npm run build` and
 `npm run build -w @slicc/chrome-extension` first. CI enforces it in the `bundle-size` job,
 which builds both apps itself.
 
-Budgets are ratchets like the duplication threshold: tighten them as payloads shrink. Raising
-one needs a justification in the PR body.
+The size-limit budgets are ratchets like the duplication threshold: tighten them as payloads
+shrink. Raising one needs a justification in the PR body.
 
 ## Boy-scout debt gate (`check-touched-exemptions.mjs`)
 

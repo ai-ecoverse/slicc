@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
-  checkBudgets,
+  bytesToKb,
+  ceilingKeyFor,
+  checkFirstLoad,
   chunkEagerClosure,
   manifestEagerClosure,
   parseStaticImports,
@@ -79,37 +81,112 @@ describe('chunkEagerClosure', () => {
   });
 });
 
-describe('checkBudgets', () => {
-  const budgets = { pageEagerKb: 100, workerEagerKb: 1000 };
+describe('checkFirstLoad', () => {
+  const limits = { maxDeltaKb: 4, pageEagerCeilingKb: 768, workerEagerCeilingKb: 4288 };
+  const kb = (n) => n * 1024;
+  // Roughly main's real shape at the time the delta gate replaced the
+  // absolute ratchet: page 731 kB, worker 4160 kB.
+  const base = { page: kb(731), worker: kb(4160) };
 
-  it('passes within budget without ratchet hints inside the slack band', () => {
-    const { failures, ratchetHints } = checkBudgets(budgets, {
-      pageEagerKb: 98,
-      workerEagerKb: 990,
-    });
+  it('passes a change that adds nothing', () => {
+    const { failures, notes } = checkFirstLoad(limits, base, base);
     expect(failures).toEqual([]);
-    expect(ratchetHints).toEqual([]);
+    expect(notes).toEqual([]);
   });
 
-  it('fails when a graph exceeds its budget', () => {
-    const { failures } = checkBudgets(budgets, { pageEagerKb: 101, workerEagerKb: 1 });
+  it('passes the real in-flight PR deltas that the absolute ratchet failed', () => {
+    // Measured against their own merge-bases: #2422 +1.09 kB, #2436 +0.78 kB,
+    // #2438 +0.64 kB. All three had to patch the old absolute budget anyway.
+    for (const addedKb of [1.09, 0.78, 0.64, 1.54]) {
+      const measured = { page: base.page, worker: base.worker + addedKb * 1024 };
+      expect(checkFirstLoad(limits, measured, base).failures).toEqual([]);
+    }
+  });
+
+  it('fails a hoist of a lazy chunk into the boot graph', () => {
+    // A static `unpdf` import in the boot-critical supplemental-commands
+    // index measured +7.0 kB on the real bundle.
+    const measured = { page: base.page, worker: base.worker + 7.02 * 1024 };
+    const { failures } = checkFirstLoad(limits, measured, base);
     expect(failures).toHaveLength(1);
-    expect(failures[0]).toMatch(/pageEagerKb/);
+    expect(failures[0]).toMatch(/worker graph/);
+    expect(failures[0]).toMatch(/adds 7\.0 kB/);
+    expect(failures[0]).toMatch(/4 kB per-change allowance/);
   });
 
-  it('hints to tighten when headroom exceeds the slack percentage', () => {
-    const { failures, ratchetHints } = checkBudgets(budgets, {
-      pageEagerKb: 50,
-      workerEagerKb: 999,
-    });
+  it('never fails a change for growth it inherited from the merge-base', () => {
+    // The bug this gate shape replaced: main itself sat over the absolute
+    // budget, so every webapp PR went red without having added anything.
+    const overCeiling = { page: kb(800), worker: kb(4400) };
+    const { failures } = checkFirstLoad(limits, overCeiling, overCeiling);
+    // Both ceilings are breached, but neither failure blames a delta.
+    expect(failures).toHaveLength(2);
+    for (const f of failures) expect(f).toMatch(/ceiling/);
+    expect(failures.join(' ')).not.toMatch(/allowance/);
+  });
+
+  it('reports a shrink as a negative delta without failing', () => {
+    const measured = { page: base.page, worker: base.worker - kb(50) };
+    const { failures, rows } = checkFirstLoad(limits, measured, base);
     expect(failures).toEqual([]);
-    expect(ratchetHints).toHaveLength(1);
-    expect(ratchetHints[0]).toMatch(/pageEagerKb/);
+    expect(rows.find((r) => r.graph === 'worker').deltaKb).toBe(-50);
   });
 
-  it('fails when the budget file is missing a key', () => {
-    const { failures } = checkBudgets({ pageEagerKb: 100 }, { pageEagerKb: 1, workerEagerKb: 1 });
+  it('fails when a graph exceeds its absolute ceiling', () => {
+    const measured = { page: base.page, worker: kb(4289) };
+    const { failures } = checkFirstLoad(limits, measured, measured);
     expect(failures).toHaveLength(1);
-    expect(failures[0]).toMatch(/workerEagerKb/);
+    expect(failures[0]).toMatch(/workerEagerCeilingKb/);
+  });
+
+  it('enforces both graphs independently', () => {
+    const measured = { page: base.page + kb(9), worker: base.worker + kb(9) };
+    const { failures } = checkFirstLoad(limits, measured, base);
+    expect(failures).toHaveLength(2);
+    expect(failures[0]).toMatch(/page graph/);
+    expect(failures[1]).toMatch(/worker graph/);
+  });
+
+  it('skips the delta check but keeps the ceilings when the baseline is missing', () => {
+    const measured = { page: base.page, worker: kb(4400) };
+    const { failures, notes, rows } = checkFirstLoad(limits, measured, null);
+    expect(notes).toHaveLength(1);
+    expect(notes[0]).toMatch(/SKIPPED/);
+    expect(rows.every((r) => r.deltaKb === null)).toBe(true);
+    // Degraded, not silently green.
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatch(/ceiling/);
+  });
+
+  it('fails when the limits file is missing maxDeltaKb', () => {
+    const { failures } = checkFirstLoad({ ...limits, maxDeltaKb: undefined }, base, base);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatch(/maxDeltaKb/);
+  });
+
+  it('fails when the limits file is missing a ceiling', () => {
+    const { failures } = checkFirstLoad({ ...limits, workerEagerCeilingKb: undefined }, base, base);
+    expect(failures).toHaveLength(1);
+    expect(failures[0]).toMatch(/workerEagerCeilingKb/);
+  });
+
+  it('reports headroom to the ceiling for each graph', () => {
+    const { rows } = checkFirstLoad(limits, base, base);
+    expect(rows.map((r) => [r.graph, r.kb, r.headroomKb])).toEqual([
+      ['page', 731, 37],
+      ['worker', 4160, 128],
+    ]);
+  });
+});
+
+describe('ceilingKeyFor / bytesToKb', () => {
+  it('maps a graph name to its ceiling key', () => {
+    expect(ceilingKeyFor('page')).toBe('pageEagerCeilingKb');
+    expect(ceilingKeyFor('worker')).toBe('workerEagerCeilingKb');
+  });
+
+  it('rounds bytes to whole kB', () => {
+    expect(bytesToKb(4259702)).toBe(4160);
+    expect(bytesToKb(0)).toBe(0);
   });
 });
