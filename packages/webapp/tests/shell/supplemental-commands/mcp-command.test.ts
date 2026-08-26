@@ -315,6 +315,55 @@ describe('mcp command — top level', () => {
   });
 });
 
+describe('mcp command — unknown flags (#2255)', () => {
+  beforeEach(async () => {
+    _testOnly_resetStoreCache();
+    _testOnly_resetMcpProviderState();
+    await wipeGlobalFs();
+    localStorage.clear();
+  });
+
+  afterEach(async () => {
+    await new Promise((r) => setTimeout(r, 600));
+    _testOnly_resetStoreCache();
+  });
+
+  it('rejects an unknown flag with a non-zero exit instead of swallowing it', async () => {
+    const r = await runCmd(['list', '--totally-fake']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('unknown flag: --totally-fake');
+  });
+
+  it('rejects unknown flags on verbs that take no flags', async () => {
+    const r = await runCmd(['search', '--json', 'forecast']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('unknown flag: --json');
+  });
+
+  it('honours -- so a dash-prefixed query stays positional', async () => {
+    await setServer('demo', {
+      url: 'https://server.test/sse',
+      tools: [{ name: '-leading', description: 'dash name tool' }],
+    });
+    const r = await runCmd(['search', '--', '-leading']);
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('-leading');
+  });
+
+  it('rejects unknown flags before the server name on invoke', async () => {
+    const r = await runCmd(['invoke', '--bogus', 'demo']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('unknown flag: --bogus');
+  });
+
+  it('rejects unknown flags between server and tool on invoke', async () => {
+    await setServer('demo', { url: 'https://server.test/sse', tools: [] });
+    const r = await runCmd(['invoke', 'demo', '--bogus']);
+    expect(r.exitCode).toBe(1);
+    expect(r.stderr).toContain('unknown flag: --bogus');
+  });
+});
+
 describe('coerceArgsBySchema', () => {
   const schema = {
     type: 'object',
