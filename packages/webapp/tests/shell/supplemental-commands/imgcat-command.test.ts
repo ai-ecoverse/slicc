@@ -66,10 +66,7 @@ describe('imgcat command', () => {
   });
 
   it('rejects an unknown flag in any position', async () => {
-    const result = await createImgcatCommand().execute(
-      ['photo.png', '--bogus'],
-      createMockCtx()
-    );
+    const result = await createImgcatCommand().execute(['photo.png', '--bogus'], createMockCtx());
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('unknown flag: --bogus');
   });
