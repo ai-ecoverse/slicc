@@ -131,6 +131,54 @@ describe('fswatch command', () => {
     expect(result.stderr).toBe('fswatch: --path and --pattern are required\n');
   });
 
+  it('rejects unknown flags with a non-zero exit (#2255)', async () => {
+    installWatcher();
+    const cmd = await freshCommand();
+
+    const create = await cmd.execute(
+      ['create', '--path', '/workspace', '--pattern', '*.md', '--bogus'],
+      mockCommandContext()
+    );
+    expect(create.exitCode).toBe(1);
+    expect(create.stderr).toContain('unknown flag: --bogus');
+
+    // Flags accepted in any position — trailing known flags still parse;
+    // an unknown still fails before the watcher is registered.
+    const mid = await cmd.execute(
+      ['create', '--path', '/workspace', '--nope', '--pattern', '*.md'],
+      mockCommandContext()
+    );
+    expect(mid.exitCode).toBe(1);
+    expect(mid.stderr).toContain('unknown flag: --nope');
+
+    const listed = await cmd.execute(['list', '--json'], mockCommandContext());
+    expect(listed.exitCode).toBe(1);
+    expect(listed.stderr).toContain('unknown flag: --json');
+
+    const deleted = await cmd.execute(['delete', 'fsw-1', '--force'], mockCommandContext());
+    expect(deleted.exitCode).toBe(1);
+    expect(deleted.stderr).toContain('unknown flag: --force');
+  });
+
+  it('accepts create flags in any position and honours --', async () => {
+    installWatcher();
+    const cmd = await freshCommand();
+    const result = await cmd.execute(
+      ['create', '--name', 'docs', '--path', '/workspace', '--pattern', '*.md'],
+      mockCommandContext()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Created file watcher "docs"');
+
+    // After `--`, a dash-prefixed token is not a flag (payload / id escape).
+    const eq = await cmd.execute(
+      ['create', '--path=/tmp', '--pattern=*', '--name=dashy'],
+      mockCommandContext()
+    );
+    expect(eq.exitCode).toBe(0);
+    expect(eq.stdout).toContain('Created file watcher "dashy"');
+  });
+
   it('errors when the VFS watcher hook is unavailable', async () => {
     const cmd = await freshCommand();
     const result = await cmd.execute(
