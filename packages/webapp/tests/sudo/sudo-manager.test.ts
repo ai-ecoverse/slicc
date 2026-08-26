@@ -428,16 +428,22 @@ describe('SudoManager per-scoop policy view', () => {
     mgr.dispose();
   });
 
-  it('drops a scoop policy from the cache when its sudoers file is removed', async () => {
+  it('drops file-based grants when the sudoers file is removed, but keeps config grants (#2416)', async () => {
     const mgr = new SudoManager({ fs: vfs, watcher, broker });
     await mgr.init();
 
     await mgr.seedScoopSudoers('andy', { allowedCommands: ['git'] });
+    // A file-only "Always" grant on top of the config-derived ones.
+    await mgr.appendScoopRule('andy', 'command', 'ls*');
     expect(matchCommand(mgr.getPolicyForScoop('andy'), 'git status')).toBe('nopasswd-allow');
+    expect(matchCommand(mgr.getPolicyForScoop('andy'), 'ls -la')).toBe('nopasswd-allow');
 
     await vfs.rm(scoopSudoersPath('andy'), { recursive: false });
-    await flush(() => matchCommand(mgr.getPolicyForScoop('andy'), 'git status') === 'no-match');
-    expect(matchCommand(mgr.getPolicyForScoop('andy'), 'git status')).toBe('no-match');
+    await flush(() => matchCommand(mgr.getPolicyForScoop('andy'), 'ls -la') === 'no-match');
+    // The file-only grant is gone…
+    expect(matchCommand(mgr.getPolicyForScoop('andy'), 'ls -la')).toBe('no-match');
+    // …but the config-derived sandbox grants stay authoritative in memory.
+    expect(matchCommand(mgr.getPolicyForScoop('andy'), 'git status')).toBe('nopasswd-allow');
     mgr.dispose();
   });
 
@@ -571,5 +577,113 @@ describe('SudoManager per-scoop policy view', () => {
     // No reload happened — the cached policy still reflects the original `git` grant.
     expect(matchCommand(mgr.getPolicyForScoop('andy'), 'git status')).toBe('nopasswd-allow');
     expect(matchCommand(mgr.getPolicyForScoop('andy'), 'rm -rf /tmp')).toBe('no-match');
+  });
+});
+
+// Issue #2416: a write inside a scoop's `writablePaths` must never raise an
+// approval prompt, and an "Always" approval must never append a rule that is
+// already present.
+describe('SudoManager scoop config grants (issue #2416)', () => {
+  let vfs: VirtualFS;
+  let watcher: FsWatcher;
+  let dbCounter = 0;
+
+  beforeEach(async () => {
+    vfs = await VirtualFS.create({ dbName: `test-sudo-cfg-${dbCounter++}`, wipe: true });
+    watcher = new FsWatcher();
+    vfs.setWatcher(watcher);
+  });
+  afterEach(async () => {
+    await vfs.dispose?.();
+  });
+
+  it('registerScoopConfig makes writablePaths grants effective even when a stale sudoers file exists', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+
+    // A sudoers file from a previous scoop generation with the same folder —
+    // it predates the current config and lacks the /.playwright grant.
+    await vfs.mkdir('/scoops/location-finder/etc', { recursive: true });
+    await vfs.writeFile(scoopSudoersPath('location-finder'), 'NOPASSWD Write /shared/**\n');
+    await mgr.reloadScoopPolicyByFolder('location-finder');
+
+    // Without the config registered, the stale file wins and the write escalates.
+    expect(
+      matchPath(mgr.getPolicyForScoop('location-finder'), 'write', '/.playwright/screenshots/x.png')
+    ).toBe('no-match');
+
+    mgr.registerScoopConfig('location-finder', {
+      writablePaths: ['/shared/', '/.playwright/', '/tmp/'],
+    });
+
+    const policy = mgr.getPolicyForScoop('location-finder');
+    expect(matchPath(policy, 'write', '/.playwright/screenshots/x.png')).toBe('nopasswd-allow');
+    expect(matchPath(policy, 'write', '/.playwright')).toBe('nopasswd-allow');
+    // The file's own grants are still honoured alongside the config's.
+    expect(matchPath(policy, 'write', '/shared/report.md')).toBe('nopasswd-allow');
+    mgr.dispose();
+  });
+
+  it('config grants match regardless of trailing-slash / glob spelling', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+
+    for (const spelling of ['/.playwright', '/.playwright/', '/.playwright/**']) {
+      mgr.registerScoopConfig('speller', { writablePaths: [spelling] });
+      const policy = mgr.getPolicyForScoop('speller');
+      expect(matchPath(policy, 'write', '/.playwright/screenshots/x.png')).toBe('nopasswd-allow');
+      expect(matchPath(policy, 'write', '/.playwright')).toBe('nopasswd-allow');
+    }
+    mgr.dispose();
+  });
+
+  it('registerScoopConfig notifies onPolicyReload for the folder', async () => {
+    const reloads: Array<string | undefined> = [];
+    const mgr = new SudoManager({
+      fs: vfs,
+      watcher,
+      broker,
+      onPolicyReload: (folder) => reloads.push(folder),
+    });
+    await mgr.init();
+    reloads.length = 0;
+
+    mgr.registerScoopConfig('finder', { writablePaths: ['/shared/'] });
+
+    expect(reloads).toContain('finder');
+    mgr.dispose();
+  });
+
+  it('seedScoopSudoers also registers the config-derived grants in memory', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    await mgr.seedScoopSudoers('seeded', { writablePaths: ['/.playwright/'] });
+
+    // Even if the on-disk file is later clobbered, the config grants hold.
+    await vfs.writeFile(scoopSudoersPath('seeded'), '# wiped\n');
+    await mgr.reloadScoopPolicyByFolder('seeded');
+
+    expect(matchPath(mgr.getPolicyForScoop('seeded'), 'write', '/.playwright/a.png')).toBe(
+      'nopasswd-allow'
+    );
+    mgr.dispose();
+  });
+
+  it('appendScoopRule does not append a rule that already exists (no duplicates)', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+    await mgr.seedScoopSudoers('deduper', { writablePaths: ['/.playwright/'] });
+
+    const saved = await mgr.appendScoopRule('deduper', 'write', '/.playwright/**');
+
+    expect(saved).toBe('/.playwright/**');
+    const body = (await vfs.readFile(scoopSudoersPath('deduper'), {
+      encoding: 'utf-8',
+    })) as string;
+    const occurrences = body
+      .split('\n')
+      .filter((line) => line.trim() === 'NOPASSWD Write /.playwright/**').length;
+    expect(occurrences).toBe(1);
+    mgr.dispose();
   });
 });

@@ -164,6 +164,14 @@ export class SudoManager {
   private reloadChain: Promise<void> = Promise.resolve();
   /** Per-scoop drop-in policies keyed by scoop folder. */
   private scoopPolicies: Map<string, SudoersPolicy> = new Map();
+  /**
+   * Per-scoop config-derived policies keyed by scoop folder (#2416). The
+   * `ScoopConfig` sandbox (writablePaths / visiblePaths / allowedCommands) is
+   * authoritative: it is registered synchronously in memory so a configured
+   * path can never escalate, even when the on-disk sudoers file predates the
+   * config (folder reuse, restores) or a reload races the first gated op.
+   */
+  private scoopConfigPolicies: Map<string, SudoersPolicy> = new Map();
   /** Per-scoop reload chains keyed by scoop folder (serialized like {@link reload}). */
   private scoopReloadChains: Map<string, Promise<void>> = new Map();
 
@@ -233,9 +241,26 @@ export class SudoManager {
    */
   getPolicyForScoop(folder: string): SudoersPolicy {
     const local = this.scoopPolicies.get(folder);
+    const config = this.scoopConfigPolicies.get(folder);
     const policies = [builtinScoopGrants(), this.policy];
+    if (config) policies.push(config);
     if (local) policies.push(local);
     return mergePolicies(...policies);
+  }
+
+  /**
+   * Register a scoop's config-derived sandbox grants directly in memory
+   * (#2416). Synchronous — no filesystem round-trip — so the grants are
+   * effective before the scoop's first gated operation. This is what makes
+   * `ScoopConfig` authoritative: the on-disk `/scoops/<folder>/etc/sudoers`
+   * file only ADDS persisted "Always" grants on top; a stale file (folder
+   * reuse across scoop generations, restored sessions with changed config)
+   * can no longer withhold a configured `writablePaths` entry and raise an
+   * approval prompt for a pre-granted path.
+   */
+  registerScoopConfig(folder: string, config?: ScoopConfig | null): void {
+    this.scoopConfigPolicies.set(folder, parseSudoers(generateScoopSudoers(config ?? undefined)));
+    this.onPolicyReload(folder);
   }
 
   /**
@@ -248,6 +273,7 @@ export class SudoManager {
   async seedScoopSudoers(folder: string, config?: ScoopConfig | null): Promise<void> {
     const path = scoopSudoersPath(folder);
     const body = generateScoopSudoers(config ?? undefined);
+    this.registerScoopConfig(folder, config);
     try {
       await this.fs.mkdir(`/scoops/${folder}/etc`, { recursive: true });
     } catch {
@@ -294,13 +320,25 @@ export class SudoManager {
     } catch (err) {
       if (!(err instanceof FsError && err.code === 'ENOENT')) throw err;
     }
+    // Idempotent (#2416): an "Always" approval for a rule that is already in
+    // the file (e.g. a request that was pending while the same grant landed)
+    // must not append a duplicate line.
+    const line = `NOPASSWD ${directive} ${safe}`;
+    if (existing.split('\n').some((l) => l.trim() === line)) {
+      log.info('Per-scoop sudoers rule already present; skipping duplicate append', {
+        folder,
+        kind,
+        pattern: safe,
+      });
+      return safe;
+    }
     try {
       await this.fs.mkdir(`/scoops/${folder}/etc`, { recursive: true });
     } catch {
       /* already exists */
     }
     const prefix = existing && !existing.endsWith('\n') ? `${existing}\n` : existing;
-    await this.fs.writeFile(path, `${prefix}NOPASSWD ${directive} ${safe}\n`);
+    await this.fs.writeFile(path, `${prefix}${line}\n`);
     await this.reloadScoopPolicy(folder);
     log.info('Appended per-scoop sudoers rule', { folder, kind, pattern: safe });
     return safe;

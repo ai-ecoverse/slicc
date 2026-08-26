@@ -16,6 +16,7 @@
  */
 
 import { createLogger } from '../base/logger.js';
+import { matchCommand, matchPath } from '../base/sudoers.js';
 import {
   type ConeApprovalRouter,
   ConeRequestRegistry,
@@ -117,6 +118,53 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
   /** Fail-closed every pending request. Used by `shutdown`. */
   failAll(): number {
     return this.registry.failAll();
+  }
+
+  /**
+   * Resolve every pending request that the (re)loaded policy now covers with
+   * a `NOPASSWD` grant (#2416). Called after a per-scoop policy reload — an
+   * "Always" approval, a config (re)registration, or a sudoers-file edit — so
+   * concurrent gated operations for a freshly granted path/command unblock
+   * immediately instead of stalling until each is individually approved
+   * (which also appended duplicate rules). Scoped to `folder` when given;
+   * `undefined` (a global policy reload) re-evaluates every pending request.
+   * Returns the number of requests settled.
+   */
+  settleGrantedRequests(folder?: string): number {
+    const sudoManager = this.deps.getSudoManager();
+    if (!sudoManager) return 0;
+    const scoops = this.deps.getScoops();
+    let settled = 0;
+    for (const pending of this.registry.list()) {
+      const scoop = scoops.get(pending.scoopJid);
+      if (!scoop) continue;
+      if (folder !== undefined && scoop.folder !== folder) continue;
+      const policy = sudoManager.getPolicyForScoop(scoop.folder);
+      const { kind, detail } = pending.request;
+      const granted =
+        kind === 'command'
+          ? matchCommand(policy, detail) === 'nopasswd-allow'
+          : kind === 'read' || kind === 'write'
+            ? matchPath(policy, kind, detail) === 'nopasswd-allow'
+            : false;
+      if (!granted) continue;
+      if (this.registry.resolve(pending.id, { decision: 'allow' })) {
+        settled++;
+        log.info('Sudo request auto-settled: policy now grants it', {
+          id: pending.id,
+          folder: scoop.folder,
+          kind,
+          detail: detail.slice(0, 80),
+        });
+        void this.persistLickDecision(pending.id, 'allow').catch((err) => {
+          log.warn('Failed to persist auto-granted lick decision', {
+            id: pending.id,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+    }
+    return settled;
   }
 
   async enqueueSudoRequest(scoopJid: string, request: SudoRequest): Promise<SudoDecision> {

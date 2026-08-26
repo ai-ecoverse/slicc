@@ -238,11 +238,12 @@ Orchestrator.init()
   └─ new SudoManager({ fs: sharedFs, watcher })  // seed + load + watch
        ├─ getBroker()         → createSudoBroker()         // user broker (cone)
        ├─ getPolicy()         → live merged global SudoersPolicy
-       ├─ getPolicyForScoop() → builtin /tmp grants ∪ global ∪ /scoops/<folder>/etc/sudoers
+       ├─ getPolicyForScoop() → builtin /tmp grants ∪ global ∪ config grants ∪ /scoops/<folder>/etc/sudoers
        └─ getShellConfig()    → { getPolicy, broker, persistCommandGrant }
 
 Orchestrator.createScoopTab(jid)
   ├─ if non-cone: RestrictedFS(..., 'sudo-delegated')   // writes pass through to SudoFS
+  ├─ if non-cone: registerScoopConfig(folder, config)   // always — config grants in memory (#2416)
   ├─ if non-cone: seedScoopSudoers(folder, config) ...  // first boot only
   ├─                              ... or reloadScoopPolicyByFolder()  // existing file
   └─ new ScoopContext(scoop, callbacks, fs, ..., sudoManager)
@@ -378,7 +379,17 @@ The pending-request registry lives on the `Orchestrator` (`enqueueSudoRequest`,
 FS/shell sees a regular `SudoBroker` built by `createConeApprovalBroker` whose
 `requestApproval` enqueues into the same registry as the explicit tool. Both
 paths resolve fail-closed (`deny`) on transport error, scoop drop, orchestrator
-shutdown, or the per-request timeout (`CONE_SUDO_TIMEOUT_MS`). The timeout path
+shutdown, or the per-request timeout (`CONE_SUDO_TIMEOUT_MS`). Requests are
+independent: a pending approval blocks only the gated operation that raised it,
+never another scoop's (or the same scoop's other granted) operations. The cone
+does review requests serially — it is a single agent processing its message
+queue one turn at a time — which is intended: one approver, ordered decisions.
+After any per-scoop policy reload (an "Always" grant, a config registration, a
+sudoers-file edit), the orchestrator re-evaluates that scoop's pending requests
+and auto-resolves as `allow` those the policy now covers with a `NOPASSWD`
+grant (`ScoopApprovalRouter.settleGrantedRequests`, #2416), so one "Always"
+approval unblocks the scoop's other queued requests for the same subtree
+instead of stalling them until each is individually approved. The timeout path
 tags its decision `reason: 'cone-timeout'` so the scoop is told its escalation
 went unanswered rather than refused — and, unlike the cone → user leg, is not
 told to wait for a user who was never prompted.
@@ -386,7 +397,11 @@ told to wait for a user who was never prompted.
 "Always" grants for `kind: 'command' | 'read' | 'write'` are persisted via
 `SudoManager.appendScoopRule(folder, kind, pattern)` (raw-VFS write, same trusted
 sink that powers `seedScoopSudoers`, so it bypasses the per-scoop self-protection
-on `/scoops/<folder>/etc/sudoers`). Persisted `Read` globs also widen the live
+on `/scoops/<folder>/etc/sudoers`). The append is idempotent — a rule that is
+already in the file is never duplicated (#2416) — and it is the ONLY persistence
+path for a scoop's grant: the scoop's `SudoFS` gate gets a no-op `onGrant` sink,
+so an `always` decision never leaks into the global `/etc/sudoers.d/granted`
+drop-in (which would silently widen every other unit's policy). Persisted `Read` globs also widen the live
 `RestrictedFS` ACL, and are reapplied from the scoop policy whenever its context
 is recreated. Live sudoers reloads replace those dynamic grants, so manually
 adding or revoking a rule updates the running scoop too; non-matching sibling
@@ -415,9 +430,19 @@ actions escalate to the cone instead of dying with a hard wall:
   outside the scoop's `writablePaths` no longer throws `EACCES` here; it
   passes through to the outer `SudoFS`, whose `defaultDisposition:
 'require-approval'` upgrades the unmatched `no-match` to an escalation. The
-  per-scoop sudoers file (seeded from `ScoopConfig.writablePaths` as
-  `NOPASSWD Write <p>/**` rules) keeps in-sandbox writes prompt-free, and the
-  built-in `/tmp` grant does the same for shared scratch space.
+  `ScoopConfig` sandbox keeps in-sandbox writes prompt-free: its grants
+  (`NOPASSWD Write <p>` + `<p>/**` per `writablePaths` entry, regardless of
+  trailing-slash spelling) are registered **synchronously in memory**
+  (`SudoManager.registerScoopConfig`, #2416) on every context creation, so a
+  stale `/scoops/<folder>/etc/sudoers` file — folder reuse across scoop
+  generations, a restore with changed config — or a reload race can never
+  withhold a configured path and prompt for it. The on-disk file only ADDS
+  persisted "Always" grants on top. The built-in `/tmp` grant does the same
+  for shared scratch space. Note the grant covers exactly the configured
+  roots: a tool family that writes to another absolute root (e.g. a skill
+  writing crops to `/.migration/`) still escalates unless that root is listed
+  in `writablePaths` — point skills at the scoop scratch dir, `/shared/`, or
+  `/tmp/` instead of inventing new VFS roots.
   - **Reads stay silently filtered.** `SudoFS` only applies the
     `'require-approval'` default to **writes** — `RestrictedFS` keeps
     returning `ENOENT`/`[]` for out-of-sandbox reads. This is intentional:

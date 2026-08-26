@@ -347,6 +347,11 @@ export class ScoopLifecycleManager {
     const sharedFs = this.deps.getSharedFs();
     if (!sudoManager || !sharedFs) return;
     try {
+      // Config grants are authoritative and registered synchronously in
+      // memory (#2416) — a stale on-disk file (folder reuse, restores) or a
+      // reload race can never withhold a configured writablePaths entry and
+      // prompt for a pre-granted path.
+      sudoManager.registerScoopConfig(scoop.folder, scoop.config);
       const path = `/scoops/${scoop.folder}/etc/sudoers`;
       if (await sharedFs.exists(path)) {
         await sudoManager.reloadScoopPolicyByFolder(scoop.folder);

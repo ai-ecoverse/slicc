@@ -9,6 +9,7 @@
  */
 
 import { describe, expect, it, vi } from 'vitest';
+import { parseSudoers } from '../../src/base/sudoers.js';
 import {
   ScoopApprovalRouter,
   type ScoopApprovalRouterDeps,
@@ -98,6 +99,84 @@ describe('ScoopApprovalRouter persistence settlement', () => {
     await expect(resultPromise).resolves.toEqual(
       expect.objectContaining({ settled: true, persisted: true })
     );
+  });
+});
+
+// #2416: after an 'always' approval widens a scoop's policy (or its config is
+// re-registered), other requests from that scoop that the new policy already
+// covers must resolve as allow instead of stalling until individually approved
+// (which also appended duplicate rules).
+describe('ScoopApprovalRouter settleGrantedRequests (issue #2416)', () => {
+  function managerGranting(rules: string): SudoManager {
+    return {
+      getPolicyForScoop: () => parseSudoers(rules),
+    } as unknown as SudoManager;
+  }
+
+  it('resolves pending path requests now covered by a NOPASSWD grant', async () => {
+    const h = makeHarness(managerGranting('NOPASSWD Write /.playwright/**'));
+    const covered = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.playwright/screenshots/x.png',
+    });
+    const uncovered = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.migration/crop.png',
+    });
+    await flush();
+    expect(h.router.listPendingSudoRequests()).toHaveLength(2);
+
+    const settled = h.router.settleGrantedRequests('scoop_a-folder');
+    await flush();
+
+    expect(settled).toBe(1);
+    await expect(covered).resolves.toEqual({ decision: 'allow' });
+    expect(h.router.listPendingSudoRequests()).toHaveLength(1);
+    // The covered request's card flips to confirmed; the uncovered one stays pending.
+    expect(h.store.find((m) => m.content.includes('/.playwright'))?.lickState).toBe('confirmed');
+    expect(h.store.find((m) => m.content.includes('/.migration'))?.lickState).toBe('pending');
+    // Cleanup so the uncovered request doesn't dangle.
+    h.router.failAll();
+    await expect(uncovered).resolves.toEqual({ decision: 'deny' });
+  });
+
+  it('resolves pending command requests now covered by a NOPASSWD Cmnd grant', async () => {
+    const h = makeHarness(managerGranting('NOPASSWD Cmnd git *'));
+    const covered = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'command',
+      detail: 'git status',
+    });
+    await flush();
+
+    expect(h.router.settleGrantedRequests('scoop_a-folder')).toBe(1);
+    await expect(covered).resolves.toEqual({ decision: 'allow' });
+  });
+
+  it('only settles requests from the scoop whose policy reloaded', async () => {
+    const h = makeHarness(managerGranting('NOPASSWD Write /.playwright/**'));
+    const other = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.playwright/x.png',
+    });
+    await flush();
+
+    expect(h.router.settleGrantedRequests('some-other-folder')).toBe(0);
+    expect(h.router.listPendingSudoRequests()).toHaveLength(1);
+    h.router.failAll();
+    await expect(other).resolves.toEqual({ decision: 'deny' });
+  });
+
+  it('is a no-op without a SudoManager', async () => {
+    const h = makeHarness(null);
+    const pending = h.router.enqueueSudoRequest('scoop_a', {
+      kind: 'write',
+      detail: '/.playwright/x.png',
+    });
+    await flush();
+
+    expect(h.router.settleGrantedRequests('scoop_a-folder')).toBe(0);
+    h.router.failAll();
+    await expect(pending).resolves.toEqual({ decision: 'deny' });
   });
 });
 
