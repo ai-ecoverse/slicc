@@ -1,5 +1,16 @@
 import express, { type Express, type Request, type Response } from 'express';
 
+/** Inbound JSON from the OAuth callback page POST to `/api/oauth-result`. */
+export interface OAuthResultPostBody {
+  redirectUrl?: unknown;
+  error?: unknown;
+}
+
+export interface PendingOAuthResult {
+  redirectUrl: string;
+  error?: string;
+}
+
 /**
  * Generic OAuth redirect target for OAuth providers (implicit + PKCE).
  *
@@ -18,7 +29,7 @@ import express, { type Express, type Request, type Response } from 'express';
  */
 export function registerOAuthCallbackRoutes(app: Express): void {
   // Pending OAuth result for server-side relay (Electron overlay can't use window.opener)
-  let pendingOAuthResult: { redirectUrl: string; error?: string } | null = null;
+  let pendingOAuthResult: PendingOAuthResult | null = null;
 
   app.get('/auth/callback', (_req: Request, res: Response) => {
     res.send(`<!DOCTYPE html><html><body><script>
@@ -58,7 +69,7 @@ export function registerOAuthCallbackRoutes(app: Express): void {
   });
 
   app.post('/api/oauth-result', express.json(), (req: Request, res: Response) => {
-    const body = req.body as Record<string, unknown>;
+    const body = req.body as OAuthResultPostBody;
     const redirectUrl = typeof body.redirectUrl === 'string' ? body.redirectUrl : '';
     if (!redirectUrl) {
       console.warn('[oauth-result] Received callback with empty redirectUrl');
