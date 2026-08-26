@@ -51,16 +51,19 @@ describe('parseKnownFlags', () => {
     });
   });
 
-  it('accepts boolean flags in any position', () => {
+  it('accepts boolean flags in any position as exact tokens only', () => {
     const cleared = parseKnownFlags(['dash', '--clear'], { bool: ['--clear'] });
     if ('error' in cleared) throw new Error(cleared.error);
     expect(cleared.bools.has('--clear')).toBe(true);
     expect(cleared.positionals).toEqual(['dash']);
 
-    // `=value` form still matches by name (same walk as sprinkle's original).
-    const withEq = parseKnownFlags(['--clear=1'], { bool: ['--clear'] });
-    if ('error' in withEq) throw new Error(withEq.error);
-    expect(withEq.bools.has('--clear')).toBe(true);
+    // Attached values must not enable a boolean (e.g. `--persist=false`).
+    expect(parseKnownFlags(['--clear=1'], { bool: ['--clear'] })).toEqual({
+      error: 'unknown flag: --clear',
+    });
+    expect(parseKnownFlags(['--persist=false'], { bool: ['--persist'] })).toEqual({
+      error: 'unknown flag: --persist',
+    });
   });
 
   it('treats everything after `--` as positional, including dash tokens', () => {

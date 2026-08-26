@@ -543,6 +543,20 @@ describe('secret command — unknown flags (#2255)', () => {
     expect(backend.setPersisted).not.toHaveBeenCalled();
   });
 
+  it('rejects --persist=false instead of treating it as --persist', async () => {
+    const backend = makeBackend();
+    const broker = makeBroker({ decision: 'allow' });
+    const res = await run(['set', 'TOKEN', 'value', '--domain', 'api.x.com', '--persist=false'], {
+      backend,
+      broker: broker.broker,
+    });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('unknown flag: --persist');
+    expect(backend.setSession).not.toHaveBeenCalled();
+    expect(backend.setPersisted).not.toHaveBeenCalled();
+    expect(broker.calls()).toBe(0);
+  });
+
   it('honours -- so a dash-prefixed value is positional', async () => {
     const backend = makeBackend();
     const broker = makeBroker({ decision: 'deny' });
