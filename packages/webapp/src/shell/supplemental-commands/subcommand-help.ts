@@ -25,9 +25,12 @@
  * `valueFlags` names the flags that consume the following token, so their
  * VALUE is never mistaken for a help request: with
  * `valueFlags: ['-append']`, `v86 start -append --help` boots with that
- * kernel cmdline instead of printing usage. Commands parsed by the shared
- * `arg-parser` do not need this — parse first and read `flags.help`, which
- * already applies the parser's value-shadowing rules.
+ * kernel cmdline instead of printing usage. When the command also rejects
+ * unknown flags via `parseKnownFlags` from `subcommand-flags.ts`, pass the
+ * same names as that helper's `spec.value` so help-shadowing and flag
+ * parsing stay in agreement. Commands parsed by the shared `arg-parser` do
+ * not need this — parse first and read `flags.help`, which already applies
+ * the parser's value-shadowing rules.
  */
 export function isHelpRequest(
   args: readonly string[],
