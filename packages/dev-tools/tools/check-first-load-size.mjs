@@ -22,8 +22,14 @@
  * queue depth: observed batches reached +3.8 kB against a 4 kB allowance
  * while the individual PRs measured 0.1-1.9 kB, and a merge_group failure
  * DEQUEUES green PRs. On `merge_group` the ceilings are the right check —
- * they are exactly the guard against accumulated growth — and every PR in
- * the batch was already delta-gated against its own merge-base.
+ * they are exactly the guard against accumulated growth.
+ *
+ * That split only holds if the per-PR delta is actually enforced upstream of
+ * the queue, so a `pull_request` run in CI treats an unmeasurable baseline as
+ * a FAILURE rather than degrading to ceilings-only. Otherwise a PR whose
+ * baseline build broke would sail through both stages with its delta never
+ * checked. Outside CI the graceful degradation stays: a developer on a
+ * shallow clone should get the ceilings and a clear note, not a hard stop.
  *
  * It used to be an absolute ratchet, and that shape failed: the number was
  * set to main's exact measurement, main measured 1 kB larger on Linux CI
@@ -67,10 +73,11 @@ const baselineRef = (
 ).slice('--baseline='.length);
 // A merge-queue batch is not "a change" — see the header. Ceilings only.
 const isMergeGroup = process.env.GITHUB_EVENT_NAME === 'merge_group';
+const isCiPullRequest = process.env.GITHUB_EVENT_NAME === 'pull_request';
 const MERGE_GROUP_NOTE =
   'merge_group: a queue batch is cumulative (every PR up to its position), so the per-change ' +
-  'delta does not apply. The absolute ceilings are enforced, and each PR in the batch was ' +
-  'already delta-gated against its own merge-base.';
+  'delta does not apply here — the absolute ceilings are the queue-stage check. The per-change ' +
+  'delta is enforced on the pull_request run, which fails outright if it cannot measure.';
 
 function fail(message) {
   console.error(`check-first-load-size: ${message}`);
@@ -145,6 +152,17 @@ if (baselineRef !== 'none' && !isMergeGroup) {
     },
     log: (m) => console.log(`  baseline: ${m}`),
   });
+}
+
+// In CI on a pull request the baseline is not optional: degrading to
+// ceilings-only there would let the change reach the merge queue, which
+// deliberately does not re-check the delta, with its growth never measured.
+if (!isMergeGroup && baselineRef !== 'none' && !baseline && isCiPullRequest) {
+  fail(
+    `could not measure the merge-base with "${baselineRef}", so the per-change delta could ` +
+      `not be checked. The merge queue does not re-check it, so this cannot be waved through. ` +
+      `See the baseline log above; re-run if it was transient.`
+  );
 }
 
 const { failures, notes, rows } = checkFirstLoad(limits, head, baseline?.bytes ?? null, {

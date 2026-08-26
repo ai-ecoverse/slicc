@@ -167,8 +167,11 @@ node packages/dev-tools/tools/check-first-load-size.mjs --baseline=none    # cei
 node packages/dev-tools/tools/check-first-load-size.mjs --json             # just measure
 ```
 
-If the merge-base cannot be built (shallow clone, unknown ref), the delta check is reported
-as SKIPPED and only the ceilings are enforced — read the log rather than assuming green.
+If the merge-base cannot be built (shallow clone, unknown ref) the delta is reported as
+SKIPPED and only the ceilings are enforced, so you are not blocked locally. **In CI on a
+pull request that same condition is a hard failure** — the merge queue deliberately does not
+re-check the delta, so a PR whose baseline could not be built must not be waved through with
+its growth unmeasured. Re-run if it looks transient.
 
 **On `merge_group` the delta is deliberately not applied.** A queue branch is cumulative — it
 carries every PR up to its position — so its delta is the SUM of the batch, not one change's
