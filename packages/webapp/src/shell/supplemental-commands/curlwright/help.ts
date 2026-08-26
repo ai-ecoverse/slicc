@@ -10,7 +10,8 @@ Usage: curlwright [options] <url>
 
 Request:
   -X, --request <method>     HTTP method (default GET, or POST with a body)
-  -H, --header <line>        Add a header; repeatable. "Name;" sends it empty
+  -H, --header <line>        Add a header; repeatable. "Name;" sends it empty,
+                             "Name:" suppresses a default curlwright would add
   -d, --data <data>          Request body; @file reads from the VFS
       --data-raw <data>      Body, with no @file expansion
       --data-binary <data>   Body; @file keeps newlines and raw bytes
@@ -21,12 +22,13 @@ Request:
   -G, --get                  Send --data as a query string
   -u, --user <user:pass>     Basic auth (an Authorization header)
   -e, --referer <url>        Set the request referrer
-  -r, --range <range>        Add a Range header
+  -r, --range <range>        Add a Range header ("0-499" becomes "bytes=0-499")
       --no-credentials       Do not send cookies (they are sent by default)
 
 Tab selection:
-      --tab <targetId>       Tab to run in; defaults to the tab already on
-                             the URL's origin, or the only open tab
+      --tab <targetId>       Tab to run in. Without it: the tab on the URL's
+                             origin when EXACTLY ONE matches, else the only
+                             open tab. Two candidates is an error listing them
       --frame <frameId>      Run in a child frame of that tab
 
 Output:
@@ -51,6 +53,10 @@ Exit codes: 0 ok, 2 bad usage, 7 the fetch failed, 22 with --fail on HTTP >= 400
 23 write error, 26 cannot read an input file, 28 --max-time expired.
 
 Notes:
+  - A body on GET or HEAD is rejected as bad usage (exit 2), because a page
+    fetch() cannot send one. Use -G to put the data in the query string.
+  - --write-out is rendered even when the transfer fails, so %{exitcode} and
+    %{errormsg} still reach stdout on a timeout or a network error.
   - Redirects are ALWAYS followed: a page fetch cannot surface the intermediate
     3xx, so -L is accepted and is already the behavior. %{num_redirects} is 0 or
     1 — "at least one hop" — because the page context cannot count them.

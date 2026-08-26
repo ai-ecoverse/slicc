@@ -243,6 +243,65 @@ describe('curlwright — request shaping', () => {
     expect(new Uint8Array(await file.arrayBuffer())).toEqual(bytes);
   });
 
+  it('prefixes a bare -r range with the bytes= unit, and leaves an explicit one', async () => {
+    const { fs } = fsStub();
+    const bare = harness(() => jsonResponse({}));
+    await createCurlwrightCommand(bare.browser).execute(
+      ['-s', '-r', '0-499', 'https://app.example.com/big.bin'],
+      mockCommandContext({ fs })
+    );
+    expect((bare.captured.init?.headers as Record<string, string>)['Range']).toBe('bytes=0-499');
+
+    const explicit = harness(() => jsonResponse({}));
+    await createCurlwrightCommand(explicit.browser).execute(
+      ['-s', '-r', 'items=0-9', 'https://app.example.com/big.bin'],
+      mockCommandContext({ fs })
+    );
+    expect((explicit.captured.init?.headers as Record<string, string>)['Range']).toBe('items=0-9');
+  });
+
+  it("honors curl's bare-colon -H as a suppression of the derived default", async () => {
+    const { fs } = fsStub();
+    const suppressed = harness(() => jsonResponse({}));
+    await createCurlwrightCommand(suppressed.browser).execute(
+      ['-s', '-H', 'Content-Type:', '-d', 'x=1', 'https://app.example.com/a'],
+      mockCommandContext({ fs })
+    );
+    const headers = suppressed.captured.init?.headers as Record<string, string>;
+    expect(Object.keys(headers)).toEqual([]);
+
+    // Same for the Accept that --json would otherwise derive.
+    const noAccept = harness(() => jsonResponse({}));
+    await createCurlwrightCommand(noAccept.browser).execute(
+      ['-s', '-H', 'Accept:', '--json', '{"a":1}', 'https://app.example.com/a'],
+      mockCommandContext({ fs })
+    );
+    const jsonHeaders = noAccept.captured.init?.headers as Record<string, string>;
+    expect(jsonHeaders['Content-Type']).toBe('application/json');
+    expect(jsonHeaders['Accept']).toBeUndefined();
+  });
+
+  it('rejects a body on a bodiless method instead of failing at fetch time', async () => {
+    const { browser } = harness(() => {
+      throw new Error('should never reach fetch');
+    });
+    const { fs } = fsStub();
+    const cmd = createCurlwrightCommand(browser);
+    for (const args of [
+      ['-I', '-d', 'x=1'],
+      ['-X', 'GET', '-d', 'x=1'],
+      ['-I', '-F', 'f=v'],
+    ]) {
+      const result = await cmd.execute(
+        [...args, 'https://app.example.com/a'],
+        mockCommandContext({ fs })
+      );
+      expect(result.exitCode).toBe(2);
+      expect(result.stderr).toContain('cannot carry a request body');
+      expect(result.stderr).toContain('-G');
+    }
+  });
+
   it('runs in a child frame when --frame is given', async () => {
     const { browser, captured } = harness(() => jsonResponse({}));
     const { fs } = fsStub();
@@ -536,6 +595,54 @@ describe('curlwright — failure modes', () => {
     expect(result.stderr).toContain('cannot read missing.json');
   });
 
+  it('exits 23 when -D cannot be written, even though the body arrived', async () => {
+    const { browser } = harness(() => new Response('ok', { status: 200 }));
+    const { fs } = fsStub();
+    const failingFs = {
+      ...fs,
+      writeFile: (async (path: string) => {
+        if (path === '/nope/h.txt') throw new Error('EACCES');
+      }) as unknown as IFileSystem['writeFile'],
+    };
+    const result = await createCurlwrightCommand(browser).execute(
+      ['-s', '-D', '/nope/h.txt', 'https://app.example.com/a'],
+      mockCommandContext({ fs: failingFs })
+    );
+    expect(result.exitCode).toBe(23);
+    // -s hides the message, so the exit code is the only signal left.
+    expect(result.stdout).toBe('ok');
+  });
+
+  it('still renders --write-out when the transfer never completed', async () => {
+    const { browser } = harness(() => {
+      throw new TypeError('Failed to fetch');
+    });
+    const { fs } = fsStub();
+    const result = await createCurlwrightCommand(browser).execute(
+      ['-s', '-w', '%{exitcode} %{http_code} %{errormsg}', 'https://app.example.com/a'],
+      mockCommandContext({ fs })
+    );
+    expect(result.exitCode).toBe(7);
+    expect(result.stdout).toBe('7 0 Failed to fetch — Failed to fetch');
+  });
+
+  it('renders --write-out with exit 28 after --max-time', async () => {
+    const { browser } = harness(
+      (_url, init) =>
+        new Promise<Response>((_resolve, reject) => {
+          init.signal?.addEventListener('abort', () =>
+            reject(new DOMException('signal timed out', 'TimeoutError'))
+          );
+        })
+    );
+    const { fs } = fsStub();
+    const result = await createCurlwrightCommand(browser).execute(
+      ['-s', '-m', '0.05', '-w', '%{exitcode}:%{errormsg}', 'https://app.example.com/slow'],
+      mockCommandContext({ fs })
+    );
+    expect(result.stdout).toBe('28:Operation timed out');
+  });
+
   it('reports a missing URL and a second URL', async () => {
     const { browser } = harness(() => jsonResponse({}));
     const { fs } = fsStub();
@@ -588,6 +695,24 @@ describe('curlwright — tab selection', () => {
       mockCommandContext({ fs })
     );
     expect(captured.targetId).toBe('tab-docs');
+  });
+
+  it('refuses to guess between two tabs on the same origin', async () => {
+    const twins: PageStub[] = [
+      { targetId: 'tab-work', title: 'App (work)', url: 'https://app.example.com/a' },
+      { targetId: 'tab-personal', title: 'App (personal)', url: 'https://app.example.com/b' },
+    ];
+    const { browser, captured } = harness(() => jsonResponse({}), twins);
+    const { fs } = fsStub();
+    const result = await createCurlwrightCommand(browser).execute(
+      ['-X', 'DELETE', 'https://app.example.com/api/items/1'],
+      mockCommandContext({ fs })
+    );
+    expect(result.exitCode).toBe(2);
+    expect(captured.url).toBeUndefined();
+    expect(result.stderr).toContain('2 open tabs are on https://app.example.com');
+    expect(result.stderr).toContain('--tab=tab-work');
+    expect(result.stderr).toContain('--tab=tab-personal');
   });
 
   it('honors an explicit --tab over the origin match', async () => {

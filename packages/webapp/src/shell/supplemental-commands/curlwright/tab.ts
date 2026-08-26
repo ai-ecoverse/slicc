@@ -1,13 +1,14 @@
 /**
  * Which tab does `curlwright` run in?
  *
- * `--tab` is explicit and always wins. Without it the command picks the
- * tab whose ORIGIN matches the request URL, which is almost always what
- * was meant: you are calling an app's own backend, and the tab that is
- * logged into that app is the one holding the cookies. Anything
- * ambiguous is an error listing the candidates rather than a guess —
- * running a request against the wrong session is worse than not running
- * it.
+ * `--tab` is explicit and always wins. Without it the command uses the
+ * tab whose ORIGIN matches the request URL — you are calling an app's own
+ * backend, and the tab logged into that app is the one holding the
+ * cookies — but only when EXACTLY ONE tab matches. Two tabs on the same
+ * origin may be two different accounts (the roster spans tray
+ * followers), so that is an error listing the candidates, as is having
+ * no match with several tabs open. Running a mutating request against
+ * the wrong session is worse than not running it.
  */
 
 import { listAllTargetsWithRemote } from '../playwright/state.js';
@@ -53,9 +54,18 @@ export async function resolveCurlwrightTab(
   }
 
   const wanted = originOf(url);
-  if (wanted) {
-    const sameOrigin = pages.filter((page) => originOf(page.url) === wanted);
-    if (sameOrigin.length > 0) return { targetId: sameOrigin[0].targetId };
+  const sameOrigin = wanted ? pages.filter((page) => originOf(page.url) === wanted) : [];
+  if (sameOrigin.length === 1) return { targetId: sameOrigin[0].targetId };
+  // Two tabs on one origin are not interchangeable: `listAllTargetsWithRemote`
+  // spans tray followers, so they can be different browser profiles signed in
+  // as different accounts. Picking the first would run a mutating request
+  // against whichever one happened to sort first.
+  if (sameOrigin.length > 1) {
+    return {
+      message:
+        `curlwright: ${sameOrigin.length} open tabs are on ${wanted} — pass --tab to pick one.\n` +
+        `${formatCandidates(sameOrigin)}\n`,
+    };
   }
   if (pages.length === 1) return { targetId: pages[0].targetId };
 

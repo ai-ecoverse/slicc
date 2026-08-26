@@ -41,6 +41,7 @@ import {
   statusLine,
 } from './response.js';
 import { resolveCurlwrightTab } from './tab.js';
+import type { WriteOutContext } from './write-out.js';
 import { formatWriteOut } from './write-out.js';
 
 /** The CDP-backed browser port `curlwright` drives, named for the stub. */
@@ -64,16 +65,26 @@ function fail(message: string, exitCode: number): CmdResult {
   return { stdout: '', stderr: `${message}\n`, exitCode };
 }
 
-/** Map a thrown page-side error onto curl's exit-code vocabulary. */
-function classifyFetchError(err: unknown): { message: string; exitCode: number } {
+/**
+ * Map a thrown page-side error onto curl's exit-code vocabulary.
+ * `errorMsg` is the bare reason, without the `curlwright: (N) ` prefix,
+ * because that is what curl's `%{errormsg}` expands to.
+ */
+function classifyFetchError(err: unknown): {
+  message: string;
+  errorMsg: string;
+  exitCode: number;
+} {
   const raw = err instanceof Error ? err.message : String(err);
   if (/TimeoutError|signal timed out|aborted/i.test(raw)) {
-    return { message: 'curlwright: (28) Operation timed out', exitCode: 28 };
+    const errorMsg = 'Operation timed out';
+    return { message: `curlwright: (28) ${errorMsg}`, errorMsg, exitCode: 28 };
   }
   if (/Failed to fetch|NetworkError|TypeError/i.test(raw)) {
-    return { message: `curlwright: (7) Failed to fetch — ${raw}`, exitCode: 7 };
+    const errorMsg = `Failed to fetch — ${raw}`;
+    return { message: `curlwright: (7) ${errorMsg}`, errorMsg, exitCode: 7 };
   }
-  return { message: `curlwright: ${raw}`, exitCode: 1 };
+  return { message: `curlwright: ${raw}`, errorMsg: raw, exitCode: 1 };
 }
 
 /** Run the injected script in the chosen tab (optionally a child frame). */
@@ -143,18 +154,26 @@ async function emitBody(
   return 0;
 }
 
-/** Append `-w` output, after the exit code is known (`%{exitcode}`). */
-function appendWriteOut(
-  opts: CurlwrightOptions,
-  streams: Streams,
+/**
+ * Append `-w` output. Called after the exit code is known, because
+ * `%{exitcode}` and `%{errormsg}` are the two variables that most need
+ * to be right — including on a transfer that never completed.
+ */
+function appendWriteOut(opts: CurlwrightOptions, streams: Streams, ctx: WriteOutContext): void {
+  if (opts.writeOut === null) return;
+  const rendered = formatWriteOut(opts.writeOut, ctx);
+  streams.stdout += rendered.text;
+  for (const warning of rendered.warnings) streams.messages += `${warning}\n`;
+}
+
+function completedWriteOutContext(
   request: PreparedRequest,
   result: BrowserFetchResult,
   bytes: Uint8Array,
   elapsedMs: number,
   exitCode: number
-): void {
-  if (opts.writeOut === null) return;
-  const rendered = formatWriteOut(opts.writeOut, {
+): WriteOutContext {
+  return {
     urlEffective: result.url || request.url,
     httpCode: result.status,
     contentType: result.headers['content-type'] ?? '',
@@ -167,9 +186,35 @@ function appendWriteOut(
     exitCode,
     errorMsg: '',
     responseHeaders: result.headers,
-  });
-  streams.stdout += rendered.text;
-  for (const warning of rendered.warnings) streams.messages += `${warning}\n`;
+  };
+}
+
+/**
+ * The `-w` context for a transfer that never produced a response. curl
+ * still renders the format string here — `%{exitcode}` and
+ * `%{errormsg}` exist precisely for this case — so a script parsing `-w`
+ * output gets its machine-readable result instead of empty stdout.
+ */
+function failedWriteOutContext(
+  request: PreparedRequest,
+  elapsedMs: number,
+  exitCode: number,
+  errorMsg: string
+): WriteOutContext {
+  return {
+    urlEffective: request.url,
+    httpCode: 0,
+    contentType: '',
+    sizeDownload: 0,
+    sizeHeader: 0,
+    sizeUpload: request.uploadSize,
+    method: request.method,
+    numRedirects: 0,
+    timeTotalSeconds: elapsedMs / 1000,
+    exitCode,
+    errorMsg,
+    responseHeaders: {},
+  };
 }
 
 async function renderOutcome(
@@ -185,10 +230,17 @@ async function renderOutcome(
   if (opts.include || opts.head) {
     streams.stdout += formatHeaderBlock(result.status, result.statusText, result.headers);
   }
+  // A failed header dump is a failed transfer as far as a script is
+  // concerned: under -s the message is hidden, so the exit code is the
+  // only signal that /tmp/h.txt was never written.
+  let dumpExitCode = 0;
   if (opts.dumpHeader !== null) {
     const block = formatHeaderBlock(result.status, result.statusText, result.headers);
     const error = await writeBodyFile(ctx, opts.dumpHeader, new TextEncoder().encode(block));
-    if (error) streams.messages += `${error}\n`;
+    if (error) {
+      streams.messages += `${error}\n`;
+      dumpExitCode = CURL_WRITE_ERROR;
+    }
   }
 
   const bytes = decodeBody(result.body, result.bodyEncoding);
@@ -199,8 +251,13 @@ async function renderOutcome(
   } else if (!opts.head) {
     exitCode = await emitBody(ctx, opts, streams, bytes, request.url);
   }
+  if (exitCode === 0) exitCode = dumpExitCode;
 
-  appendWriteOut(opts, streams, request, result, bytes, elapsedMs, exitCode);
+  appendWriteOut(
+    opts,
+    streams,
+    completedWriteOutContext(request, result, bytes, elapsedMs, exitCode)
+  );
   const quiet = opts.silent && !opts.showError;
   return {
     stdout: streams.stdout,
@@ -265,10 +322,21 @@ export async function runCurlwright(
     );
   } catch (err) {
     const classified = classifyFetchError(err);
+    const streams: Streams = { stdout: '', trace, messages: `${classified.message}\n` };
+    appendWriteOut(
+      opts,
+      streams,
+      failedWriteOutContext(
+        request,
+        Date.now() - startedAt,
+        classified.exitCode,
+        classified.errorMsg
+      )
+    );
     const quiet = opts.silent && !opts.showError;
     return {
-      stdout: '',
-      stderr: trace + (quiet ? '' : `${classified.message}\n`),
+      stdout: streams.stdout,
+      stderr: streams.trace + (quiet ? '' : streams.messages),
       exitCode: classified.exitCode,
     };
   }
