@@ -505,3 +505,52 @@ describe('secret command — delete / rm', () => {
     expect(res.stdout).not.toMatch(/ghp_|sk-|=/);
   });
 });
+
+describe('secret command — unknown flags (#2255)', () => {
+  it('rejects an unknown flag with a non-zero exit instead of swallowing it', async () => {
+    const backend = makeBackend();
+    const broker = makeBroker({ decision: 'allow' });
+    const res = await run(['set', 'TOKEN', 'value', '--domain', 'api.x.com', '--totally-fake'], {
+      backend,
+      broker: broker.broker,
+    });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('unknown flag: --totally-fake');
+    expect(backend.setSession).not.toHaveBeenCalled();
+    expect(broker.calls()).toBe(0);
+  });
+
+  it('rejects unknown flags on verbs that take no flags', async () => {
+    const backend = makeBackend({
+      list: vi.fn(async () => [{ name: 'K', domains: ['x'], persisted: false }]),
+    });
+    const res = await run(['list', '--json'], { backend });
+    expect(res.exitCode).toBe(1);
+    expect(res.stderr).toContain('unknown flag: --json');
+    expect(backend.list).not.toHaveBeenCalled();
+  });
+
+  it('accepts --domain / --persist in any position', async () => {
+    const backend = makeBackend();
+    const broker = makeBroker({ decision: 'deny' });
+    const res = await run(['set', '--persist', '--domain', 'api.x.com', 'TOKEN', 'value'], {
+      backend,
+      broker: broker.broker,
+    });
+    // --persist gates; deny blocks before mutation.
+    expect(broker.calls()).toBe(1);
+    expect(res.exitCode).toBe(1);
+    expect(backend.setPersisted).not.toHaveBeenCalled();
+  });
+
+  it('honours -- so a dash-prefixed value is positional', async () => {
+    const backend = makeBackend();
+    const broker = makeBroker({ decision: 'deny' });
+    const res = await run(['set', 'TOKEN', '--domain', 'api.x.com', '--', '-sk-leading-dash'], {
+      backend,
+      broker: broker.broker,
+    });
+    expect(res.exitCode).toBe(0);
+    expect(backend.setSession).toHaveBeenCalledWith('TOKEN', '-sk-leading-dash', ['api.x.com']);
+  });
+});
