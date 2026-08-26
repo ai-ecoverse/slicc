@@ -3,7 +3,7 @@
  * to a remote runtime that owns the target browser tab.
  */
 
-import { reassembleCDPResponse } from '@slicc/shared-ts';
+import { type CDPPayload, reassembleCDPResponse } from '@slicc/shared-ts';
 import { PendingRequestTable, waitForEvent } from './pending-request-table.js';
 import type { CDPTransport } from './transport.js';
 import type { CDPEventListener, ConnectionState } from './types.js';
@@ -13,12 +13,7 @@ import type { CDPEventListener, ConnectionState } from './types.js';
  * Implemented by FollowerSyncManager and LeaderSyncManager.
  */
 export interface RemoteCDPSender {
-  sendCDPRequest(
-    requestId: string,
-    method: string,
-    params?: Record<string, unknown>,
-    sessionId?: string
-  ): void;
+  sendCDPRequest(requestId: string, method: string, params?: CDPPayload, sessionId?: string): void;
 }
 
 export class RemoteCDPTransport implements CDPTransport {
@@ -51,10 +46,10 @@ export class RemoteCDPTransport implements CDPTransport {
 
   async send(
     method: string,
-    params?: Record<string, unknown>,
+    params?: CDPPayload,
     sessionId?: string,
     timeout?: number
-  ): Promise<Record<string, unknown>> {
+  ): Promise<CDPPayload> {
     if (this._state === 'disconnected') {
       throw new Error('Transport disconnected');
     }
@@ -82,8 +77,8 @@ export class RemoteCDPTransport implements CDPTransport {
     this.eventListeners.get(event)?.delete(listener);
   }
 
-  once(event: string, timeout?: number): Promise<Record<string, unknown>> {
-    return waitForEvent<Record<string, unknown>>(
+  once(event: string, timeout?: number): Promise<CDPPayload> {
+    return waitForEvent<CDPPayload>(
       (handler) => {
         this.on(event, handler);
         return () => this.off(event, handler);
@@ -96,7 +91,7 @@ export class RemoteCDPTransport implements CDPTransport {
   /** Called by the sync manager when a cdp.response arrives for this transport. */
   handleResponse(
     requestId: string,
-    result?: Record<string, unknown>,
+    result?: CDPPayload,
     error?: string,
     chunkData?: string,
     chunkIndex?: number,
@@ -122,7 +117,7 @@ export class RemoteCDPTransport implements CDPTransport {
   }
 
   /** Called by the sync manager when a CDP event arrives for this transport. */
-  handleEvent(method: string, params: Record<string, unknown>): void {
+  handleEvent(method: string, params: CDPPayload): void {
     const listeners = this.eventListeners.get(method);
     if (listeners) {
       for (const cb of listeners) cb(params);
