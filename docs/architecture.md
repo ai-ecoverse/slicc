@@ -215,7 +215,8 @@ The extension is a thin CDP pass-through + bootstrapper. The webapp UI and agent
 | `imgcat-command.ts`      | `imgcat` — display images inline in terminal                                                                                                                                |
 | `node-command.ts`        | `node -e` — execute JavaScript (CLI: AsyncFunction, extension: sandbox iframe)                                                                                              |
 | `open-command.ts`        | `open <path\|url>` — serve VFS files via preview SW or open URLs in browser tab; `--download` / `-d` forces download; `--view` / `-v` returns image inline for agent vision |
-| `pdftk-command.ts`       | `pdftk` — PDF manipulation (concat, split, rotate, burst, etc.)                                                                                                             |
+| `pdftk-command.ts`       | `pdftk` — PDF manipulation (concat, split, rotate, burst, uncompress/compress)                                                                                              |
+| `pdftotext-command.ts`   | `pdftotext` — extract a PDF's text layer, with poppler's `-layout` / page-range flags (pdf.js)                                                                              |
 | `pdftoppm-command.ts`    | `pdftoppm` / `pdftocairo` — rasterize PDF pages to PNG/JPEG (pdf.js + OffscreenCanvas)                                                                                      |
 | `python-command.ts`      | `python3/python -c` — execute Python via Pyodide (~13MB bundled, loaded from `chrome.runtime.getURL('pyodide/')`)                                                           |
 | `shared.ts`              | Shared utilities: `toPreviewUrl()` (dual-mode preview SW URL), `isLikelyUrl()`, `basename()`, `dirname()`, NodeExitError, nodeRuntimeState, formatConsoleArg                |

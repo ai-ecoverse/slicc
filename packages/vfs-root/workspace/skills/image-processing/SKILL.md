@@ -3,8 +3,9 @@ name: image-processing
 description: |
   Use this when converting, resizing, cropping, stitching, or annotating images;
   building a filmstrip, contact sheet, or grid; correcting orientation or color;
-  turning a PDF into PNG or JPEG images; or applying common ImageMagick-style
-  effects with SLICC's `convert` / `magick` and `pdftoppm` shell commands.
+  turning a PDF into PNG or JPEG images; reading a PDF's text layer; or applying
+  common ImageMagick-style effects with SLICC's `convert` / `magick`,
+  `pdftoppm`, and `pdftotext` shell commands.
 allowed-tools: bash
 ---
 
@@ -91,8 +92,23 @@ convert doc.pdf[2] -resize 800x page3.jpg  # third page, resized
 Prefer `pdftoppm` for whole documents: it parses the PDF once, while repeated
 `convert` calls re-parse it per page.
 
-`pdftk` handles page-level PDF work (merge, split, rotate, text extraction)
-without rendering, which is cheaper when you do not need an image.
+## Read a PDF's text
+
+When you need the words rather than the picture, skip rasterizing: `pdftotext`
+reads the text layer directly, with no image and no vision tokens.
+
+```bash
+pdftotext report.pdf -            # text to stdout
+pdftotext -layout invoice.pdf -   # keep table columns aligned
+pdftotext -f 2 -l 5 book.pdf part.txt
+```
+
+Near-empty output means a scanned PDF with no text layer: rasterize with
+`pdftoppm -png` and read the pages as images instead. There is no OCR.
+
+`pdftk` handles the rest of the page-level work (merge, split, rotate, burst)
+without rendering, and `pdftk in.pdf output plain.pdf uncompress` inflates the
+streams when you need to grep the raw page operators.
 
 ## Verify and inspect
 
@@ -101,6 +117,7 @@ file /tmp/grid.jpg
 open --view --size high /tmp/grid.jpg
 convert --help
 pdftoppm --help
+pdftotext --help
 ```
 
 Keep the output path last. Multiple inputs must be reduced with `+append` or `-append`; escape group parentheses as `\(` and `\)` so the shell passes them to `convert`.

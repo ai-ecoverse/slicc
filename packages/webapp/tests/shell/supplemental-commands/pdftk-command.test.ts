@@ -1,5 +1,9 @@
 import type { IFileSystem } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  formatBurstName,
+  parsePdftkArgs,
+} from '../../../src/shell/supplemental-commands/pdftk/run.js';
 import { createPdftkCommand } from '../../../src/shell/supplemental-commands/pdftk-command.js';
 import { mockCommandContext } from '../helpers/mock-command-context.js';
 
@@ -12,7 +16,8 @@ const pdf = vi.hoisted(() => ({
   author: '',
   creator: '',
   producer: '',
-  text: '',
+  /** One entry per page; the mocked unpdf turns each into a single text item. */
+  textPages: [] as string[],
   addPage: vi.fn(),
   setRotation: vi.fn(),
   // Records each copyPages(src, indices) call so tests can assert which source
@@ -51,7 +56,22 @@ vi.mock('@cantoo/pdf-lib', () => {
 });
 
 vi.mock('unpdf', () => ({
-  extractText: async () => ({ text: pdf.text }),
+  extractTextItems: async () => ({
+    totalPages: pdf.textPages.length,
+    items: pdf.textPages.map((str) => [
+      {
+        str,
+        x: 0,
+        y: 0,
+        width: str.length * 5,
+        height: 10,
+        fontSize: 10,
+        fontFamily: '',
+        dir: 'ltr',
+        hasEOL: false,
+      },
+    ]),
+  }),
 }));
 
 const createMockCtx = (overrides: Partial<{ fs: Partial<IFileSystem>; cwd: string }> = {}) =>
@@ -244,12 +264,20 @@ describe('pdftk rotate', () => {
     expect(result.stderr).toContain('file not found');
   });
 
-  it('errors when input file does not exist (no output keyword)', async () => {
+  it('errors when the output keyword is missing', async () => {
     const cmd = createPdftkCommand();
-    // Without a real file, the file-not-found error fires before output check
+    // Argument validation runs before the input is read, so the actionable
+    // message wins over "file not found".
     const result = await cmd.execute(['input.pdf', 'rotate', '1-endright'], createMockCtx());
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('file not found');
+    expect(result.stderr).toContain("rotate operation requires 'output <filename>'");
+  });
+
+  it('errors when no page range is given', async () => {
+    const cmd = createPdftkCommand();
+    const result = await cmd.execute(['input.pdf', 'rotate', 'output', 'out.pdf'], createMockCtx());
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('rotate requires at least one page range');
   });
 });
 
@@ -282,7 +310,7 @@ describe('pdftk operation bodies (mocked pdf libs)', () => {
     pdf.author = '';
     pdf.creator = '';
     pdf.producer = '';
-    pdf.text = '';
+    pdf.textPages = [];
     pdf.addPage.mockClear();
     pdf.setRotation.mockClear();
     pdf.copyPagesCalls = [];
@@ -310,10 +338,29 @@ describe('pdftk operation bodies (mocked pdf libs)', () => {
   });
 
   it('dump_data_utf8 emits the extracted text', async () => {
-    pdf.text = 'hello world';
+    pdf.textPages = ['hello world'];
     const result = await createPdftkCommand().execute(['in.pdf', 'dump_data_utf8'], okCtx());
     expect(result.exitCode).toBe(0);
     expect(result.stdout).toBe('hello world\n');
+  });
+
+  it('dump_data_utf8 separates pages with a newline, not a comma', async () => {
+    // The array returned by unpdf used to be string-concatenated, which glued
+    // the last word of a page to the first word of the next with a comma.
+    pdf.textPages = ['page one', 'page two'];
+    const result = await createPdftkCommand().execute(['in.pdf', 'dump_data_utf8'], okCtx());
+    expect(result.stdout).toBe('page one\npage two\n');
+  });
+
+  it('dump_data_utf8 writes to an output file when asked', async () => {
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    pdf.textPages = ['page one'];
+    const result = await createPdftkCommand().execute(
+      ['in.pdf', 'dump_data_utf8', 'output', 'text.txt'],
+      okCtx({ writeFile: writeFile as unknown as IFileSystem['writeFile'] })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(writeFile).toHaveBeenCalledWith('/home/text.txt', 'page one\n');
   });
 
   it('cat copies a page range and writes the output', async () => {
@@ -439,5 +486,138 @@ describe('pdftk operation bodies (mocked pdf libs)', () => {
     const result = await createPdftkCommand().execute(['in.pdf', 'cat', 'output'], okCtx());
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('output filename not specified');
+  });
+});
+
+describe('parsePdftkArgs', () => {
+  it('reads the no-operation form pdftk documents for output options', () => {
+    expect(parsePdftkArgs(['in.pdf', 'output', 'out.pdf', 'uncompress'])).toEqual({
+      inputs: [{ handle: '', path: 'in.pdf' }],
+      operation: 'identity',
+      operationArgs: [],
+      outputPath: 'out.pdf',
+      streamMode: 'uncompress',
+    });
+  });
+
+  it('accepts an output option before the output keyword', () => {
+    expect(parsePdftkArgs(['in.pdf', 'compress', 'output', 'out.pdf'])).toMatchObject({
+      operation: 'identity',
+      streamMode: 'compress',
+    });
+  });
+
+  it('keeps cat ranges and handles apart', () => {
+    expect(
+      parsePdftkArgs(['A=a.pdf', 'B=b.pdf', 'cat', 'A', '1-2', 'output', 'm.pdf'])
+    ).toMatchObject({
+      inputs: [
+        { handle: 'A', path: 'a.pdf' },
+        { handle: 'B', path: 'b.pdf' },
+      ],
+      operation: 'cat',
+      operationArgs: ['A', '1-2'],
+      outputPath: 'm.pdf',
+    });
+  });
+
+  it('names a real pdftk operation it cannot run instead of eating it as a filename', () => {
+    // Swallowing the keyword is what made `pdftk in.pdf output out.pdf uncompress`
+    // die with a misleading "no operation specified" and write nothing.
+    expect(() => parsePdftkArgs(['in.pdf', 'fill_form', 'data.fdf', 'output', 'out.pdf'])).toThrow(
+      "unsupported operation 'fill_form'"
+    );
+  });
+
+  it('rejects an unknown trailing option', () => {
+    expect(() => parsePdftkArgs(['in.pdf', 'output', 'out.pdf', 'flatten'])).toThrow(
+      "unsupported option 'flatten'"
+    );
+  });
+
+  it('rejects a dash flag wherever it appears', () => {
+    // pdftk's grammar is positional. An unrecognised flag must not be read as
+    // a page range, or silently ignored as one more trailing token.
+    expect(() => parsePdftkArgs(['in.pdf', '-x', 'output', 'out.pdf'])).toThrow(
+      "unsupported option '-x'"
+    );
+    expect(() => parsePdftkArgs(['in.pdf', 'cat', '--verbose', 'output', 'out.pdf'])).toThrow(
+      "unsupported option '--verbose'"
+    );
+    expect(() => parsePdftkArgs(['in.pdf', 'output', 'out.pdf', '--flatten'])).toThrow(
+      "unsupported option '--flatten'"
+    );
+  });
+
+  it('still accepts the stdout sentinel after output', () => {
+    expect(parsePdftkArgs(['in.pdf', 'output', '-']).outputPath).toBe('-');
+  });
+
+  it('rejects an argument an operation does not take', () => {
+    expect(() => parsePdftkArgs(['in.pdf', 'dump_data', 'extra'])).toThrow(
+      "unexpected argument 'extra'"
+    );
+  });
+});
+
+describe('formatBurstName', () => {
+  it('expands %d and its zero-padded form', () => {
+    expect(formatBurstName('pg_%04d.pdf', 7)).toBe('pg_0007.pdf');
+    expect(formatBurstName('page%d.pdf', 12)).toBe('page12.pdf');
+  });
+
+  it('requires a %d in the pattern', () => {
+    expect(() => formatBurstName('page.pdf', 1)).toThrow('burst pattern must contain %d');
+  });
+});
+
+describe('pdftk burst (mocked pdf libs)', () => {
+  beforeEach(() => {
+    pdf.pageCount = 2;
+    pdf.addPage.mockClear();
+    pdf.copyPagesCalls = [];
+    pdf.loadCount = 0;
+  });
+
+  it('writes one file per page plus doc_data.txt', async () => {
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    const result = await createPdftkCommand().execute(
+      ['in.pdf', 'burst'],
+      okCtx({ writeFile: writeFile as unknown as IFileSystem['writeFile'] })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe('pg_0001.pdf\npg_0002.pdf\ndoc_data.txt\n');
+    expect(writeFile).toHaveBeenCalledWith('/home/pg_0001.pdf', expect.any(Uint8Array));
+    expect(writeFile).toHaveBeenCalledWith('/home/doc_data.txt', 'NumberOfPages: 2\n');
+  });
+
+  it('honours an output filename pattern', async () => {
+    const writeFile = vi.fn().mockResolvedValue(undefined);
+    await createPdftkCommand().execute(
+      ['in.pdf', 'burst', 'output', 'page_%02d.pdf'],
+      okCtx({ writeFile: writeFile as unknown as IFileSystem['writeFile'] })
+    );
+    expect(writeFile).toHaveBeenCalledWith('/home/page_01.pdf', expect.any(Uint8Array));
+  });
+});
+
+describe('pdftk cat without ranges (mocked pdf libs)', () => {
+  beforeEach(() => {
+    pdf.pageCount = 2;
+    pdf.addPage.mockClear();
+    pdf.copyPagesCalls = [];
+    pdf.loadCount = 0;
+  });
+
+  it('concatenates every input in order', async () => {
+    const result = await createPdftkCommand().execute(
+      ['A=one.pdf', 'B=two.pdf', 'cat', 'output', 'merged.pdf'],
+      okCtx()
+    );
+    expect(result.exitCode).toBe(0);
+    expect(pdf.copyPagesCalls).toEqual([
+      { docId: 'in1', indices: [0, 1] },
+      { docId: 'in2', indices: [0, 1] },
+    ]);
   });
 });
