@@ -8,6 +8,18 @@ on:
       - 'packages/cloud-core/**'
       - 'packages/webapp/src/providers/**'
       - 'packages/webapp/providers/**'
+      # This workflow is the ONLY place staging's APNs secrets are uploaded
+      # (ci.yml's staging deploy pushes just TURN/GitHub/E2B). Without this
+      # path a change to the secret wiring below never takes effect until some
+      # unrelated worker PR happens to trigger a run — so staging would keep
+      # signing with whatever key was last uploaded.
+      - '.github/workflows/worker-staging.yml'
+  # Deliberately no `workflow_dispatch`: every deploy step here is gated on
+  # `github.event.pull_request.head.repo` (fork guard) and the deployment
+  # record reads `context.payload.pull_request.head.sha`, so a manual run
+  # would skip the deploy and report success having uploaded nothing. Rotating
+  # a secret therefore goes through a PR that touches this file — which the
+  # path above now guarantees runs.
 
 # Serialize across ALL PRs: this job mutates two shared singletons — the
 # `slicc-staging` e2b template alias (build overwrites it) and the
