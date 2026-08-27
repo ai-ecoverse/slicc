@@ -31,6 +31,7 @@ import {
   handleProviderTokenRequest,
   SharedProviderTokenSource,
 } from './apns-provider-token.js';
+import { supersededLinkHeaders } from './links.js';
 import { deletePreviewArchivePrefix } from './persistent-preview-storage.js';
 import { previewTokenFromHost } from './preview-host.js';
 import {
@@ -630,11 +631,18 @@ export class SessionTrayDurableObject {
     if (tray.supersededByJoinUrl) {
       const joinUrl = tray.supersededByJoinUrl;
       const error = 'This session moved to a new tray after the leader reconnected';
+      // Step 1 of #1957: the status and body stay exactly as shipped clients
+      // parse them; the RFC 5829 `successor-version` link is the additive
+      // machine-readable form of the same redirect. Clients that don't know
+      // the rel ignore the header.
+      const linkHeaders = supersededLinkHeaders(joinUrl);
       if (joinRequest) {
         return await this.buildFollowerAttachResponse(
           this.getJoinRequestControllerId(joinRequest),
           { action: 'fail', code: 'TRAY_SUPERSEDED', error, joinUrl },
-          409
+          409,
+          undefined,
+          linkHeaders
         );
       }
       return jsonResponse(
@@ -645,7 +653,8 @@ export class SessionTrayDurableObject {
           code: 'TRAY_SUPERSEDED',
           joinUrl,
         },
-        409
+        409,
+        linkHeaders
       );
     }
 
@@ -1803,7 +1812,8 @@ export class SessionTrayDurableObject {
     controllerId: string,
     result: FollowerAttachResult,
     status = 200,
-    iceServers?: TurnIceServer[]
+    iceServers?: TurnIceServer[],
+    headers?: HeadersInit
   ): Promise<Response> {
     const tray = this.requireTray();
     const payload: FollowerAttachResponse = {
@@ -1817,7 +1827,7 @@ export class SessionTrayDurableObject {
     if (iceServers) {
       payload.iceServers = iceServers;
     }
-    return jsonResponse(payload, status);
+    return jsonResponse(payload, status, headers);
   }
 
   private async ensureTrayIsActive(): Promise<Response | null> {

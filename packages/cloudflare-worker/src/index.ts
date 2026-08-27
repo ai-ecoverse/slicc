@@ -474,6 +474,10 @@ export function capabilityCorsHeaders(request: Request, env: WorkerEnv): Record<
     headers['Access-Control-Allow-Origin'] = origin;
     headers['Access-Control-Allow-Methods'] = 'GET, POST, OPTIONS';
     headers['Access-Control-Allow-Headers'] = 'content-type';
+    // Without this a cross-origin follower can't read the RFC 8288 `Link`
+    // header at all — including the `successor-version` link a superseded
+    // tray answers with (#1957).
+    headers['Access-Control-Expose-Headers'] = 'Link';
   }
   return headers;
 }
