@@ -57,7 +57,10 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Search', ['find', 'rg']],
   ['Navigation & paths', ['pwd', 'basename', 'dirname', 'tree', 'du', 'cd']],
   ['Archives', ['zip', 'unzip', 'pdftk', 'pdf', 'gunzip', 'gzip', 'zcat']],
-  ['Media', ['convert', 'magick', 'pdftoppm', 'pdftocairo', 'ffmpeg', 'screencapture']],
+  [
+    'Media',
+    ['convert', 'magick', 'pdftoppm', 'pdftocairo', 'pdftotext', 'ffmpeg', 'screencapture'],
+  ],
   ['Audio', ['say', 'afplay', 'chime']],
   [
     'Environment & shell',
