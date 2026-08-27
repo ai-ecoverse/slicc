@@ -158,7 +158,7 @@ struct MarkdownText: View {
     /// before a capped cell has wrapped, which clips the last row away.
     private func tableView(_ table: MarkdownTable) -> some View {
         let widths = MarkdownTableLayout.columnWidths(for: table)
-        let totalWidth = widths.reduce(0, +)
+        let totalWidth = MarkdownTableLayout.totalWidth(for: table)
         return VStack(spacing: 0) {
             tableRow(table.header, table: table, widths: widths, isHeader: true)
             ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
@@ -174,7 +174,13 @@ struct MarkdownText: View {
                 .stroke(palette.line, lineWidth: 1)
         )
         .horizontalScrollGuard()
-        .frame(maxWidth: .infinity, alignment: .leading)
+        // Cap the scroller to the card. A `ScrollView` is greedy, so without
+        // this it stays row-wide and registers a gesture region over the
+        // blank space beside a hugged table -- and on iOS 18+ that space is
+        // dead: `SwipeArbiter.outerAction` defers every guarded origin to the
+        // inner recognizer, which is attached to the content and so is not
+        // there. Scoop swipes beside a narrow table would be dropped.
+        .frame(maxWidth: MarkdownTableLayout.totalWidth(for: table), alignment: .leading)
     }
 
     private func tableRow(

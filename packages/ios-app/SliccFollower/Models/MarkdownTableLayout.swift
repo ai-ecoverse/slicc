@@ -67,6 +67,17 @@ enum MarkdownTableLayout {
         return widths
     }
 
+    /// Width of the whole card: the sum of its column widths.
+    ///
+    /// This is also what the table's scroll guard is capped to, so the
+    /// guard's gesture region never claims the blank space beside a hugged
+    /// card — space where, on iOS 18+, a scoop swipe would be dropped
+    /// (`SwipeArbiter.outerAction` defers guarded origins to an inner
+    /// recognizer that only covers the content).
+    static func totalWidth(for table: MarkdownTable) -> CGFloat {
+        columnWidths(for: table).reduce(0, +)
+    }
+
     /// Single-line width of one cell's rendered text.
     ///
     /// Measured run by run off the same inline parse the view renders, so a

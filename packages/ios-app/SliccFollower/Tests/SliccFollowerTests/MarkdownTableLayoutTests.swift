@@ -122,6 +122,30 @@ final class MarkdownTableLayoutTests: XCTestCase {
         XCTAssertEqual(MarkdownTableLayout.textWidth("", isHeader: false), 0)
     }
 
+    // MARK: - Card width
+
+    /// The card width is what the scroll guard is capped to, so a stale sum
+    /// here means the guard reclaims the blank space beside a hugged table
+    /// and swallows the scoop swipes that start in it.
+    func testTotalWidthIsTheSumOfTheColumnWidths() {
+        let subject = table(
+            header: ["Float", "Runtime"],
+            rows: [["CLI", "Express"], ["Cherry", "iframe"]])
+
+        XCTAssertEqual(
+            MarkdownTableLayout.totalWidth(for: subject),
+            MarkdownTableLayout.columnWidths(for: subject).reduce(0, +))
+    }
+
+    func testTotalWidthGrowsWithAWiderCell() {
+        let narrow = table(header: ["Float"], rows: [["CLI"]])
+        let wide = table(header: ["Float"], rows: [["a much longer float name"]])
+
+        XCTAssertGreaterThan(
+            MarkdownTableLayout.totalWidth(for: wide),
+            MarkdownTableLayout.totalWidth(for: narrow))
+    }
+
     // MARK: - Memoized entry point
 
     func testMemoizedWidthsMatchTheMeasuredRule() {
