@@ -26,14 +26,41 @@ export interface CdpSessionUrlTracker {
   clear(): void;
 }
 
+/** Subset of CDP TargetInfo fields read by the session URL tracker. */
+interface CdpTargetInfoSlice {
+  targetId?: string;
+  url?: string;
+  type?: string;
+}
+
+/** Subset of CDP Frame fields read by Page.frameNavigated handling. */
+interface CdpFrameSlice {
+  id?: string;
+  parentId?: string;
+  url?: string;
+}
+
+/** Params bag for the CDP events this tracker observes (narrowed per handler). */
+interface SessionUrlTrackerFrameParams {
+  sessionId?: string;
+  targetInfo?: unknown;
+  frame?: unknown;
+}
+
 interface ParsedFrame {
   method?: string;
   sessionId?: string;
-  params?: Record<string, unknown>;
+  params?: SessionUrlTrackerFrameParams;
 }
 
-function asObject(v: unknown): Record<string, unknown> | null {
-  return v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null;
+function asTargetInfo(v: unknown): CdpTargetInfoSlice | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  return v as CdpTargetInfoSlice;
+}
+
+function asFrameInfo(v: unknown): CdpFrameSlice | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null;
+  return v as CdpFrameSlice;
 }
 
 function parseHostname(url: string | undefined | null): string | null {
@@ -65,12 +92,12 @@ export function createCdpSessionUrlTracker(): CdpSessionUrlTracker {
   function handleAttached(frame: ParsedFrame): void {
     const params = frame.params;
     if (!params) return;
-    const sessionId = params['sessionId'];
+    const sessionId = params.sessionId;
     if (typeof sessionId !== 'string') return;
-    const info = asObject(params['targetInfo']);
+    const info = asTargetInfo(params.targetInfo);
     if (!info) return;
-    const targetId = info['targetId'];
-    const url = info['url'];
+    const targetId = info.targetId;
+    const url = info.url;
     if (typeof targetId === 'string') {
       sessionToTarget.set(sessionId, targetId);
       if (typeof url === 'string') targetToUrl.set(targetId, url);
@@ -79,17 +106,17 @@ export function createCdpSessionUrlTracker(): CdpSessionUrlTracker {
   }
 
   function handleDetached(frame: ParsedFrame): void {
-    const sessionId = frame.params?.['sessionId'];
+    const sessionId = frame.params?.sessionId;
     if (typeof sessionId !== 'string') return;
     sessionToUrl.delete(sessionId);
     sessionToTarget.delete(sessionId);
   }
 
   function handleTargetInfoChanged(frame: ParsedFrame): void {
-    const info = asObject(frame.params?.['targetInfo']);
+    const info = asTargetInfo(frame.params?.targetInfo);
     if (!info) return;
-    const targetId = info['targetId'];
-    const url = info['url'];
+    const targetId = info.targetId;
+    const url = info.url;
     if (typeof targetId !== 'string' || typeof url !== 'string') return;
     targetToUrl.set(targetId, url);
     for (const [sid, tid] of sessionToTarget.entries()) {
@@ -101,11 +128,11 @@ export function createCdpSessionUrlTracker(): CdpSessionUrlTracker {
     // sessionId is at the wire-frame top level for routed events.
     const sessionId = frame.sessionId;
     if (typeof sessionId !== 'string') return;
-    const inner = asObject(frame.params?.['frame']);
+    const inner = asFrameInfo(frame.params?.frame);
     if (!inner) return;
     // Only the root frame (no parentId) drives the per-tab URL.
-    if (typeof inner['parentId'] === 'string') return;
-    const url = inner['url'];
+    if (typeof inner.parentId === 'string') return;
+    const url = inner.url;
     if (typeof url === 'string') setSessionUrl(sessionId, url);
   }
 
