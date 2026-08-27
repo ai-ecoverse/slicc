@@ -98,6 +98,19 @@ Push-to-talk therefore arms on `text.isEmpty` alone. Dictating with no usable le
 
 The regular-width cap (`MessageListLayout.maximumReadableWidth`) is applied **per row** via `readableTranscriptColumn()`, never as a frame around the transcript's `LazyVStack`. That stack carries `scrollTargetLayout()`, so the scroll view anchors on it and cancels any centering offset wrapped around it with an equal content offset — which is how the capped column ended up flush against the leading edge. Rows are centered by the stack's own `.center` alignment, which needs the stack to stay full-width (the invisible bottom anchor's greedy width is what guarantees that). Covered by `SliccFollowerUITests/TranscriptColumnUITests` on the iPad CI leg.
 
+## Markdown tables
+
+`MarkdownText.tableView` mirrors the web contract for `slicc-agent-message .body table`: a rounded, hairline-ruled card with a `--ghost` header, `padding: 6px 11px` cells, `border-collapse: collapse` rules — and, critically, `width: fit-content` with `max-width: 100%`. The card is sized from its own cells; it must never stretch to the viewport, which on an iPad turned every three-column comparison into a full-width band of empty space.
+
+SwiftUI cannot express that shape declaratively, which is why `Models/MarkdownTableLayout.swift` resolves the column widths up front (widest cell + padding, floored at 56pt, capped at 260pt) and the view stacks fixed-width cells:
+
+- **Inside a horizontal `ScrollView` the content is proposed the viewport width.** A `Grid` of flexible cells therefore stretches AND squeezes its columns — that combination is what truncated header labels that had room to render in full.
+- **Pinning it with `fixedSize` alone hugs the content but never wraps**, so a long cell renders at its full single-line width and any cap clips it. Truncated text in a table is unreachable: the scroller pans the card, it cannot reveal an ellipsis. Capped cells wrap instead, via `.fixedSize(horizontal: false, vertical: true)` on the cell text.
+- **`Grid` reserves a row's height before a capped cell has wrapped**, clipping the last row away. Rows are plain `HStack`s in a `VStack` for that reason; the widths are already known, so nothing is lost.
+- **Cells are measured off the inline parse, not the raw source** (`MarkdownTableLayout.textWidth`) — a `code` chip in its monospace face, a **bold** span in its heavier one — or a column would be sized to its own markdown syntax. Memoized in an `NSCache` for the same reason `MarkdownBlockParser.parse` is (see "Transcript per-render cost").
+
+`HorizontalScrollGuard` widens its scroller by `horizontalTouchSlop` on each side so a finger landing just outside a table still arbitrates against it. `measuredContent` re-inserts that inset, because without it every guarded block — table cells and fenced code alike — renders 8pt left of the surrounding paragraphs and loses that much of its own padding. The rule covered by `SliccFollowerTests/MarkdownTableLayoutTests`; the fixture transcript carries a four-column table with one wrapping cell.
+
 ## Transcript scroll anchoring (#2072)
 
 The transcript pins its bottom with `.defaultScrollAnchor(.bottom)` and nothing else. It must **not** carry a `.scrollPosition($binding)`, and it must not hand-roll bottom-pinning with `onChange` + `scrollTo(edge:)`.

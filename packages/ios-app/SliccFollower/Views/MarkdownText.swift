@@ -146,52 +146,84 @@ struct MarkdownText: View {
 
     // MARK: - Table Rendering
 
-    /// Pipe tables scroll horizontally rather than compressing: a 4-column
-    /// comparison squeezed into a phone's width is unreadable, and the
-    /// leader emits those routinely.
+    /// Pipe tables follow the web contract for
+    /// `slicc-agent-message .body table`: a rounded, hairline-ruled card
+    /// that **hugs its content** (`width: fit-content`) and scrolls inside
+    /// itself when a comparison is wider than the transcript column. The
+    /// card must not stretch — a three-column table spread across an iPad
+    /// reads as a layout bug, and the leader emits narrow tables routinely.
+    ///
+    /// Rows are stacked rather than gridded: `MarkdownTableLayout` already
+    /// resolves the column widths, and `Grid` reserves each row's height
+    /// before a capped cell has wrapped, which clips the last row away.
     private func tableView(_ table: MarkdownTable) -> some View {
-        Grid(alignment: .topLeading, horizontalSpacing: 0, verticalSpacing: 0) {
-            GridRow {
-                ForEach(Array(table.header.enumerated()), id: \.offset) { column, cell in
-                    tableCell(
-                        cell, alignment: table.alignments[safe: column] ?? .leading,
-                        isHeader: true, zebra: false)
-                }
-            }
-            Rectangle()
-                .fill(palette.line)
-                .frame(height: 1)
-                .gridCellColumns(max(table.columnCount, 1))
-            ForEach(Array(table.rows.enumerated()), id: \.offset) { rowIndex, row in
-                GridRow {
-                    ForEach(Array(row.enumerated()), id: \.offset) { column, cell in
-                        tableCell(
-                            cell, alignment: table.alignments[safe: column] ?? .leading,
-                            isHeader: false, zebra: !rowIndex.isMultiple(of: 2))
-                    }
-                }
+        let widths = MarkdownTableLayout.columnWidths(for: table)
+        let totalWidth = widths.reduce(0, +)
+        return VStack(spacing: 0) {
+            tableRow(table.header, table: table, widths: widths, isHeader: true)
+            ForEach(Array(table.rows.enumerated()), id: \.offset) { _, row in
+                Rectangle()
+                    .fill(palette.line)
+                    .frame(width: totalWidth, height: 1)
+                tableRow(row, table: table, widths: widths, isHeader: false)
             }
         }
-        .horizontalScrollGuard()
-        .background(palette.field)
         .clipShape(RoundedRectangle(cornerRadius: 8))
         .overlay(
             RoundedRectangle(cornerRadius: 8)
                 .stroke(palette.line, lineWidth: 1)
         )
+        .horizontalScrollGuard()
+        .frame(maxWidth: .infinity, alignment: .leading)
     }
 
+    private func tableRow(
+        _ cells: [String], table: MarkdownTable, widths: [CGFloat], isHeader: Bool
+    ) -> some View {
+        HStack(alignment: .top, spacing: 0) {
+            ForEach(Array(widths.enumerated()), id: \.offset) { column, width in
+                tableCell(
+                    cells[safe: column] ?? "",
+                    alignment: table.alignments[safe: column] ?? .leading,
+                    isHeader: isHeader, column: column, width: width)
+            }
+        }
+        .fixedSize(horizontal: false, vertical: true)
+    }
+
+    /// One cell. `border-collapse: collapse` is emulated by drawing only the
+    /// leading rule, and only for columns after the first — the outer stroke
+    /// supplies the frame and the row rules the horizontal lines, so no edge
+    /// is ever painted twice.
     private func tableCell(
-        _ text: String, alignment: MarkdownTable.Alignment, isHeader: Bool, zebra: Bool
+        _ text: String, alignment: MarkdownTable.Alignment, isHeader: Bool,
+        column: Int, width: CGFloat
     ) -> some View {
         inlineText(text)
-            .font(.system(size: 13, weight: isHeader ? .semibold : .regular))
+            .font(
+                .system(
+                    size: MarkdownTableLayout.bodyFontSize,
+                    weight: isHeader ? .semibold : .regular)
+            )
             .foregroundStyle(palette.ink.opacity(isHeader ? 1.0 : 0.85))
             .multilineTextAlignment(alignment.textAlignment)
-            .padding(.horizontal, 10)
-            .padding(.vertical, 6)
-            .frame(minWidth: 56, maxWidth: 220, alignment: alignment.frameAlignment)
-            .background(zebra ? palette.ink.opacity(0.04) : .clear)
+            // A capped column wraps; without this the cell keeps its
+            // single-line ideal height and truncates the overflow away,
+            // which puts the text out of reach — the scroller only pans
+            // the card, it cannot reveal an ellipsis.
+            .fixedSize(horizontal: false, vertical: true)
+            .padding(.horizontal, MarkdownTableLayout.cellHorizontalPadding)
+            .padding(.vertical, MarkdownTableLayout.cellVerticalPadding)
+            .frame(width: width, alignment: alignment.frameAlignment)
+            // Ghost header fill and the column rule have to span the whole
+            // row, not just this cell's own text height.
+            .frame(maxHeight: .infinity, alignment: .top)
+            .background(isHeader ? palette.field : Color.clear)
+            .overlay(alignment: .leading) {
+                if column > 0 {
+                    Rectangle().fill(palette.line).frame(width: 1)
+                }
+            }
     }
 
     // MARK: - Code Block Rendering

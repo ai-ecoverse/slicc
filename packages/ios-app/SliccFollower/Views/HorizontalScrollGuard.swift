@@ -199,17 +199,25 @@ private struct HorizontalScrollGuardModifier: ViewModifier {
         }
     }
 
+    /// The scroller itself is widened by the touch slop (negative padding
+    /// below) so a finger landing just outside a table still arbitrates
+    /// against it. That widening must not move the content: without this
+    /// matching inset every guarded block — table cells, code — renders
+    /// `horizontalTouchSlop` points left of the surrounding paragraphs and
+    /// loses that much of its own padding.
     private func measuredContent(_ content: Content) -> some View {
-        content.background {
-            GeometryReader { proxy in
-                Color.clear.preference(
-                    key: HorizontalScrollMetricsKey.self,
-                    value: HorizontalScrollMetrics(
-                        contentWidth: proxy.size.width,
-                        offset: -proxy.frame(in: .named(scrollCoordinateSpaceName)).minX
-                    ))
+        content
+            .padding(.horizontal, HorizontalScrollGestureState.horizontalTouchSlop)
+            .background {
+                GeometryReader { proxy in
+                    Color.clear.preference(
+                        key: HorizontalScrollMetricsKey.self,
+                        value: HorizontalScrollMetrics(
+                            contentWidth: proxy.size.width,
+                            offset: -proxy.frame(in: .named(scrollCoordinateSpaceName)).minX
+                        ))
+                }
             }
-        }
     }
 
     private var touchDownGesture: some Gesture {

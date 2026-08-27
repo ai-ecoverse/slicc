@@ -37,6 +37,10 @@ final class FixtureConversationUITests: XCTestCase {
         "fx-user-attachments",
         "fx-user-attachment-only",
         "fx-assistant-error",
+        // Bash-progress overlay rows (#2282, #2316) — a single call and a
+        // parallel cluster.
+        "fx-assistant-progress",
+        "fx-assistant-progress-cluster",
         "fx-queued-1",
         "fx-assistant-streaming",
     ]
@@ -70,6 +74,7 @@ final class FixtureConversationUITests: XCTestCase {
         "Allow npm publish?",  // tool_ui title, badge and meta stripped
         "Waiting for approval on the leader",  // tool_ui read-only body
         "SWIPE_ARBITRATION_CODE_BLOCK_TRAILING_EDGE_MARKER",  // overflowing code block
+        "embedded follower garnish",  // pipe-table cell (the Grid-free table card)
     ]
 
     override func setUp() {
