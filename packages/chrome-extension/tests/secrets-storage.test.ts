@@ -14,6 +14,7 @@ import {
   listSecrets,
   listSecretsWithValues,
   PROFILE_RE,
+  type SecretsStorageItems,
   type StorageArea,
   saveCustomSecret,
   saveS3Profile,
@@ -25,21 +26,21 @@ import {
 class MemStorage implements StorageArea {
   private map = new Map<string, unknown>();
 
-  async get(keys?: null | string | string[]): Promise<Record<string, unknown>> {
+  async get(keys?: null | string | string[]): Promise<SecretsStorageItems> {
     if (keys == null) {
-      const out: Record<string, unknown> = {};
+      const out: SecretsStorageItems = {};
       for (const [k, v] of this.map.entries()) out[k] = v;
       return out;
     }
     const list = typeof keys === 'string' ? [keys] : keys;
-    const out: Record<string, unknown> = {};
+    const out: SecretsStorageItems = {};
     for (const k of list) {
       if (this.map.has(k)) out[k] = this.map.get(k);
     }
     return out;
   }
 
-  async set(items: Record<string, unknown>): Promise<void> {
+  async set(items: SecretsStorageItems): Promise<void> {
     for (const [k, v] of Object.entries(items)) this.map.set(k, v);
   }
 
