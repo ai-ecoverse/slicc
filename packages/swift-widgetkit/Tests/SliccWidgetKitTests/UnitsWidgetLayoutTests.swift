@@ -9,51 +9,84 @@ import XCTest
 /// runs out of room. A unit nobody can see is the widget lying about the
 /// session.
 final class UnitsWidgetLayoutTests: XCTestCase {
-    func testAttentionRanksAheadOfEverythingElse() {
-        let ranked = UnitRanking.ranked(.fixtureBusy).map(\.name)
-        XCTAssertEqual(ranked.first, "flaky-test-triage", "broken wants a human first")
+    private func unit(
+        _ id: String, _ role: WidgetUnit.Role, minutesAgo: Double?,
+        lifecycle: WidgetUnit.Lifecycle = .idle
+    ) -> WidgetUnit {
+        WidgetUnit(
+            id: id, name: id, role: role, lifecycle: lifecycle,
+            lastActivityAt: minutesAgo.map { WidgetSnapshot.fixtureCaptureDate.addingTimeInterval(-$0 * 60) })
+    }
+
+    private func snapshot(_ units: [WidgetUnit]) -> WidgetSnapshot {
+        WidgetSnapshot(
+            instanceLabel: "x", connection: .connected,
+            capturedAt: WidgetSnapshot.fixtureCaptureDate, units: units)
+    }
+
+    /// Cones first, always. Then scoops, if any. Each group by recency.
+    func testConesComeFirstEvenWhenAScoopIsMoreRecent() {
+        let ranked = UnitRanking.ranked(
+            snapshot([
+                unit("scoop-fresh", .scoop, minutesAgo: 0),
+                unit("cone-stale", .cone, minutesAgo: 600),
+                unit("scoop-old", .scoop, minutesAgo: 5),
+                unit("cone-fresh", .cone, minutesAgo: 1),
+            ]))
+        XCTAssertEqual(ranked.map(\.id), ["cone-fresh", "cone-stale", "scoop-fresh", "scoop-old"])
+    }
+
+    /// Urgency no longer outranks structure — but breaking IS a change, so a
+    /// unit that just broke carries a fresh stamp and rises inside its group.
+    func testABrokenScoopDoesNotJumpAheadOfTheConeThatOwnsIt() {
+        let ranked = UnitRanking.ranked(
+            snapshot([
+                unit("cone", .cone, minutesAgo: 30),
+                unit("broken", .scoop, minutesAgo: 0, lifecycle: .broken),
+                unit("quiet", .scoop, minutesAgo: 20),
+            ]))
+        XCTAssertEqual(ranked.map(\.id), ["cone", "broken", "quiet"])
+    }
+
+    /// "We have never seen this move" is not a claim to recency.
+    func testAStampedUnitOutranksAnUnstampedOne() {
+        let ranked = UnitRanking.ranked(
+            snapshot([
+                unit("never-seen", .scoop, minutesAgo: nil),
+                unit("ancient", .scoop, minutesAgo: 10_000),
+            ]))
+        XCTAssertEqual(ranked.map(\.id), ["ancient", "never-seen"])
+    }
+
+    /// Wire order breaks the last tie, so units with no stamp at all hold a
+    /// stable position instead of shuffling on every refresh.
+    func testWireOrderBreaksTheLastTie() {
+        let ranked = UnitRanking.ranked(
+            snapshot([
+                unit("a", .scoop, minutesAgo: nil),
+                unit("b", .scoop, minutesAgo: nil),
+                unit("c", .scoop, minutesAgo: nil),
+            ]))
+        XCTAssertEqual(ranked.map(\.id), ["a", "b", "c"])
+    }
+
+    func testTheFixtureRanksBothConesAheadOfEveryScoop() {
+        let ranked = UnitRanking.ranked(.fixtureCrowded)
+        XCTAssertEqual(Array(ranked.prefix(2)).map(\.name), ["Sliccy", "Nightly"])
+        XCTAssertTrue(ranked.dropFirst(2).allSatisfy { $0.role == .scoop })
         XCTAssertEqual(
-            ranked,
+            ranked.dropFirst(2).map(\.name),
             [
-                "flaky-test-triage",  // broken
-                "Sliccy",  // working, and a cone
-                "boy-scout",  // working
-                "release-notes-drafter",  // working
-                "coverage-ratchet",  // your turn
+                "debt-triage", "packages-webapp-src-fs-sidecar-merge", "esp32-toolchain",
+                "ios-transcript", "tray-hub-deploy", "memory-curator",
             ])
     }
 
-    /// A cone outranks a scoop in the same band: it is the unit you can
-    /// actually talk to.
-    func testConesOutrankScoopsWithinABand() {
-        let snapshot = WidgetSnapshot(
-            instanceLabel: "x", connection: .connected, capturedAt: .distantPast,
-            units: [
-                WidgetUnit(id: "s", name: "scoop", role: .scoop, lifecycle: .working),
-                WidgetUnit(id: "c", name: "cone", role: .cone, lifecycle: .working),
-            ])
-        XCTAssertEqual(UnitRanking.ranked(snapshot).map(\.id), ["c", "s"])
-    }
-
-    /// Wire order breaks the last tie, so the grid does not reshuffle on every
-    /// refresh — a face that moves cell every 15 minutes is unreadable.
-    func testRankingIsStableWithinABand() {
-        let ranked = UnitRanking.ranked(.fixtureCrowded).map(\.id)
-        XCTAssertLessThan(ranked.firstIndex(of: "s1")!, ranked.firstIndex(of: "s3")!)
-        XCTAssertLessThan(ranked.firstIndex(of: "s3")!, ranked.firstIndex(of: "s6")!)
-    }
-
-    func testAwaitingOutranksIdleButNotBusy() {
-        let snapshot = WidgetSnapshot(
-            instanceLabel: "x", connection: .connected, capturedAt: .distantPast,
-            units: [
-                WidgetUnit(id: "idle", name: "i", role: .scoop, lifecycle: .idle),
-                WidgetUnit(
-                    id: "await", name: "a", role: .scoop, lifecycle: .idle, activity: .awaiting),
-                WidgetUnit(id: "busy", name: "b", role: .scoop, lifecycle: .working),
-                WidgetUnit(id: "boot", name: "s", role: .scoop, lifecycle: .initializing),
-            ])
-        XCTAssertEqual(UnitRanking.ranked(snapshot).map(\.id), ["busy", "boot", "await", "idle"])
+    /// A session with no cone at all still ranks — scoops by recency.
+    func testAConelessSessionFallsBackToRecencyAlone() {
+        let ranked = UnitRanking.ranked(
+            snapshot([unit("old", .scoop, minutesAgo: 9), unit("new", .scoop, minutesAgo: 1)]))
+        XCTAssertEqual(ranked.map(\.id), ["new", "old"])
     }
 
     func testSmallTakesFourAndTheStripTakesTheRest() {
@@ -88,7 +121,7 @@ final class UnitsWidgetLayoutTests: XCTestCase {
     /// below each of them.
     func testMediumLeadsWithASingleFocus() {
         let split = UnitRanking.split(.fixtureBusy, count: 1)
-        XCTAssertEqual(split.head.map(\.name), ["flaky-test-triage"])
+        XCTAssertEqual(split.head.map(\.name), ["Sliccy"], "the focus is the cone, not the loudest scoop")
         XCTAssertEqual(split.tail.count, 4)
     }
 

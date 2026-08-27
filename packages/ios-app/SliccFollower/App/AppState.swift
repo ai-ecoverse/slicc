@@ -264,6 +264,9 @@ class AppState: ObservableObject {
     /// Home-screen widget capture (#2500). Nothing else in the app knows the
     /// widget exists; see `AppState+WidgetSnapshot.swift`.
     let widgetPublisher: WidgetSnapshotPublisher
+    /// Per-unit recency, which the wire does not carry — the widget orders by
+    /// it, so the capture side has to observe change itself.
+    var widgetRecency = UnitRecencyLedger()
     let sessionStore: TraySessionSyncStore
     /// Join URLs that actually connected — from this device or any other on
     /// the same Apple ID. Publishing them is the only way a hand-pasted URL

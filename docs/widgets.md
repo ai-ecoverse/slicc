@@ -130,11 +130,25 @@ medium at 3x. The sentence is the thing you would have opened the app for.
 | Face, one unit     | 64pt           | 100pt             | 125pt                         |
 | Caps               | 4 + strip of 5 | 1 + 6             | 1 + 6, message at 5 lines     |
 
-**Which units earn the scarce cells** (`UnitRanking`): broken first (they want a
-human), then busy, then a turn handed back to you, then the quiet ones. Cones
-outrank scoops inside a band — they are the units you can actually talk to —
-and wire order breaks the last tie, so a face does not change cell on every
-refresh. Every cap is stated: `+N` in a grid's last slot and on the strip.
+**Which units earn the scarce cells** (`UnitRanking`): **cones first, always;
+then scoops, if any; each group by recency.** Not by urgency — sorting the
+whole list by attention floated a broken scoop above the cone that owns it,
+which reads as though the scoop were the session, and with several cones coming
+"which cone" is the first question a glance asks. A cone is a thing you talk
+to; a scoop is a thing you watch. Urgency is not lost, it just stops outranking
+structure: breaking IS a change, so a unit that just broke carries a fresh
+stamp and rises to the top of its own group. Every cap is stated: `+N` in a
+grid's last slot and on the strip.
+
+**Recency is observed, not read.** `ScoopSummary` carries no timestamp — the
+leader never sends one — so `UnitRecencyLedger` keeps the last state it saw per
+unit and stamps the moment lifecycle, activity or context fill moves. A rename
+is not activity; neither is a model swap. Fill is watched at whole-percent
+resolution so a context window creeping by fractions is not a fresh event every
+refresh. A unit that leaves the session is forgotten, so a scoop that comes
+back does not inherit a position it did not earn. Both capture sides own a
+ledger, and it lives in the shared package because a widget whose order
+differed by platform would be a bug nobody could see.
 
 **Fewer units get bigger faces.** A session with one cone is the common case on
 day one and no family may look broken there, so rather than parking a 34pt

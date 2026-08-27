@@ -57,6 +57,14 @@ public struct WidgetUnit: Codable, Identifiable, Hashable, Sendable {
     public let detail: String?
     /// Whether this is the unit the leader currently has focused.
     public let isActive: Bool
+    /// When this unit was last observed to CHANGE — its lifecycle, activity or
+    /// context fill moving, or the unit first appearing.
+    ///
+    /// Not on the wire: `ScoopSummary` carries no timestamp, so there is
+    /// nothing to read. The capture side watches for change instead
+    /// (``UnitRecencyLedger``), which is both what "recency" means here and
+    /// the only thing either host can honestly know.
+    public let lastActivityAt: Date?
 
     public init(
         id: String,
@@ -68,7 +76,8 @@ public struct WidgetUnit: Codable, Identifiable, Hashable, Sendable {
         fill: Double? = nil,
         model: String? = nil,
         detail: String? = nil,
-        isActive: Bool = false
+        isActive: Bool = false,
+        lastActivityAt: Date? = nil
     ) {
         self.id = id
         self.name = name
@@ -80,6 +89,7 @@ public struct WidgetUnit: Codable, Identifiable, Hashable, Sendable {
         self.model = model
         self.detail = detail
         self.isActive = isActive
+        self.lastActivityAt = lastActivityAt
     }
 
     /// Unknown enum values must not throw away the whole snapshot: a leader
@@ -100,6 +110,7 @@ public struct WidgetUnit: Codable, Identifiable, Hashable, Sendable {
         model = try container.decodeIfPresent(String.self, forKey: .model)
         detail = try container.decodeIfPresent(String.self, forKey: .detail)
         isActive = try container.decodeIfPresent(Bool.self, forKey: .isActive) ?? false
+        lastActivityAt = try container.decodeIfPresent(Date.self, forKey: .lastActivityAt)
     }
 }
 
@@ -146,6 +157,12 @@ extension WidgetUnit {
     /// cannot teach different things.
     public var shortStatusWord: String {
         lifecycle == .working && activity == .tool ? "tool" : statusWord
+    }
+
+    /// What `UnitRecencyLedger` watches. Name and model are excluded: a
+    /// rename is not activity, and a model swap is a setting, not work.
+    var activityFingerprint: String {
+        "\(lifecycle.rawValue)|\(activity?.rawValue ?? "-")|\(fill.map { String(Int($0)) } ?? "-")"
     }
 
     /// The unit's IDENTITY hue, the colour its avatar tile is painted in.

@@ -45,6 +45,9 @@ final class WidgetTrayObserver: NSObject {
     private var activeScoopJid: String?
     private var lastMessage: WidgetMessage?
     private var connected = false
+    /// Per-unit recency, which the wire does not carry — the widget orders by
+    /// it, so the capture side has to observe change itself.
+    private var recency = UnitRecencyLedger()
 
     /// App-level snapshot chunking (`snapshot_chunk`), which is distinct from
     /// the transport framing the reassembler handles.
@@ -116,6 +119,9 @@ final class WidgetTrayObserver: NSObject {
         lastMessage = nil
         snapshotChunks.removeAll()
         reassembler = TrayChunkReassembler()
+        // A fresh leader is a fresh session: carrying stamps across would let
+        // a unit from the old one keep a position it did not earn.
+        recency = UnitRecencyLedger()
     }
 
     private func startIfWidgetInstalled() async {
@@ -138,13 +144,15 @@ final class WidgetTrayObserver: NSObject {
     // MARK: - Snapshot
 
     private func publish() {
+        let now = Date()
+        let units = scoops.map { $0.widgetUnit(isActive: $0.jid == activeScoopJid) }
         publisher.publish(
             WidgetSnapshot(
                 instanceLabel: instanceLabel,
                 runtime: nil,
                 connection: connected ? .connected : .disconnected,
-                capturedAt: Date(),
-                units: scoops.map { $0.widgetUnit(isActive: $0.jid == activeScoopJid) },
+                capturedAt: now,
+                units: recency.stamp(units, now: now),
                 lastMessage: lastMessage))
     }
 

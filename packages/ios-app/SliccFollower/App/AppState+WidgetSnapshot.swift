@@ -10,13 +10,17 @@ import SliccWidgetKit
 /// widget exists.
 extension AppState {
     /// Snapshot the session as it stands.
-    func widgetSnapshot() -> WidgetSnapshot {
-        WidgetSnapshot(
+    ///
+    /// `now` is a parameter so a test can pin the recency stamps the ledger
+    /// writes; production passes the wall clock.
+    func widgetSnapshot(now: Date = Date()) -> WidgetSnapshot {
+        let units = scoops.map { $0.widgetUnit(isActive: $0.jid == leaderActiveScoopJid) }
+        return WidgetSnapshot(
             instanceLabel: widgetInstanceLabel,
             runtime: nil,
             connection: widgetConnection,
-            capturedAt: Date(),
-            units: scoops.map { $0.widgetUnit(isActive: $0.jid == leaderActiveScoopJid) },
+            capturedAt: now,
+            units: widgetRecency.stamp(units, now: now),
             lastMessage: widgetLastMessage
         )
     }

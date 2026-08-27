@@ -46,26 +46,37 @@ public enum UnitsWidgetCapacity {
 
 /// Which units earn the scarce cells, and in what order.
 ///
-/// Attention first: anything broken wants a human, then whatever is busy, then
-/// a turn that has been handed back, then the quiet ones. Cones outrank scoops
-/// inside a band — they are the units you can actually talk to — and wire
-/// order breaks the last tie, so the grid does not reshuffle on every refresh.
+/// **Cones first, always. Then scoops, if any. Each group by recency.**
+///
+/// Not by urgency. Sorting the whole list by attention floated a broken scoop
+/// above the cone that owns it, which reads as though the scoop were the
+/// session — and with several cones coming, "which cone" is the first question
+/// a glance asks, not "what is on fire". A cone is a thing you talk to; a
+/// scoop is a thing you watch.
+///
+/// Urgency is not lost, it just stops outranking structure: breaking IS a
+/// change, so a unit that just broke carries a fresh stamp from
+/// ``UnitRecencyLedger`` and rises to the top of its own group.
+///
+/// Wire order breaks the last tie, so units the capture side has never seen
+/// move (no stamp at all) hold a stable position instead of shuffling.
 public enum UnitRanking {
-    static func band(_ unit: WidgetUnit) -> Int {
-        switch (unit.lifecycle, unit.activity) {
-        case (.broken, _): 0
-        case (.working, _), (.initializing, _): 1
-        case (.idle, .awaiting): 2
-        case (.idle, _), (.unknown, _): 3
-        }
-    }
-
     public static func ranked(_ snapshot: WidgetSnapshot) -> [WidgetUnit] {
         snapshot.units.enumerated()
             .sorted { lhs, rhs in
-                let left = (band(lhs.element), lhs.element.role == .cone ? 0 : 1, lhs.offset)
-                let right = (band(rhs.element), rhs.element.role == .cone ? 0 : 1, rhs.offset)
-                return left < right
+                let leftIsCone = lhs.element.role == .cone
+                let rightIsCone = rhs.element.role == .cone
+                if leftIsCone != rightIsCone { return leftIsCone }
+                let leftAt = lhs.element.lastActivityAt
+                let rightAt = rhs.element.lastActivityAt
+                if leftAt != rightAt {
+                    // A stamped unit outranks an unstamped one: "we have never
+                    // seen this move" is not a claim to recency.
+                    guard let leftAt else { return false }
+                    guard let rightAt else { return true }
+                    return leftAt > rightAt
+                }
+                return lhs.offset < rhs.offset
             }
             .map(\.element)
     }

@@ -13,6 +13,11 @@ extension WidgetSnapshot {
     /// moves under you cannot be compared across screenshots.
     public static let fixtureCaptureDate = Date(timeIntervalSince1970: 1_787_000_000)
 
+    /// Minutes before the capture, as a recency stamp.
+    static func ago(_ minutes: Double) -> Date {
+        fixtureCaptureDate.addingTimeInterval(-minutes * 60)
+    }
+
     /// The everyday case: one cone with four scoops under it, mid-turn.
     public static var fixtureBusy: WidgetSnapshot {
         WidgetSnapshot(
@@ -24,23 +29,24 @@ extension WidgetSnapshot {
                 WidgetUnit(
                     id: "cone", name: "Sliccy", role: .cone,
                     lifecycle: .working, activity: .thinking, fill: 41,
-                    model: "claude-opus-4-6", isActive: true),
+                    model: "claude-opus-4-6", isActive: true, lastActivityAt: ago(0.5)),
                 WidgetUnit(
                     id: "s1", name: "boy-scout", role: .scoop, parentId: "cone",
                     lifecycle: .working, activity: .tool, fill: 18,
-                    model: "claude-sonnet-4-5", detail: "pay down boy-scout debt in sidecar-merge.ts"),
+                    model: "claude-sonnet-4-5", detail: "pay down boy-scout debt in sidecar-merge.ts",
+                    lastActivityAt: ago(1)),
                 WidgetUnit(
                     id: "s2", name: "coverage-ratchet", role: .scoop, parentId: "cone",
                     lifecycle: .idle, activity: .awaiting, fill: 63,
-                    detail: "raise the node-server floor to 82"),
+                    detail: "raise the node-server floor to 82", lastActivityAt: ago(9)),
                 WidgetUnit(
                     id: "s3", name: "release-notes-drafter", role: .scoop, parentId: "cone",
                     lifecycle: .working, activity: .thinking, fill: 88,
-                    detail: "draft What to Test notes for 6.99.8"),
+                    detail: "draft What to Test notes for 6.99.8", lastActivityAt: ago(2)),
                 WidgetUnit(
                     id: "s4", name: "flaky-test-triage", role: .scoop, parentId: "cone",
                     lifecycle: .broken, fill: 12,
-                    detail: "playwright-iframe dequeued PR #2015 again"),
+                    detail: "playwright-iframe dequeued PR #2015 again", lastActivityAt: ago(4)),
             ],
             lastMessage: WidgetMessage(
                 author: .agent, unitId: "cone",
@@ -61,7 +67,7 @@ extension WidgetSnapshot {
                 WidgetUnit(
                     id: "cone", name: "Sliccy", role: .cone,
                     lifecycle: .idle, activity: .awaiting, fill: 22,
-                    model: "claude-opus-4-6", isActive: true)
+                    model: "claude-opus-4-6", isActive: true, lastActivityAt: ago(0.7))
             ],
             lastMessage: WidgetMessage(
                 author: .agent, unitId: "cone",
@@ -78,7 +84,9 @@ extension WidgetSnapshot {
             connection: .connected,
             capturedAt: fixtureCaptureDate,
             units: [
-                WidgetUnit(id: "cone", name: "Sliccy", role: .cone, lifecycle: .initializing, isActive: true)
+                WidgetUnit(
+                    id: "cone", name: "Sliccy", role: .cone, lifecycle: .initializing,
+                    isActive: true, lastActivityAt: ago(0.1))
             ],
             // Deliberately none: a booting cone has said nothing, and the
             // large family has to survive that without an empty frame.
@@ -119,28 +127,29 @@ extension WidgetSnapshot {
             units: [
                 WidgetUnit(
                     id: "cone", name: "Sliccy", role: .cone,
-                    lifecycle: .working, activity: .tool, fill: 76, isActive: true),
+                    lifecycle: .working, activity: .tool, fill: 76, isActive: true, lastActivityAt: ago(0.2)),
                 WidgetUnit(
                     id: "s1", name: "packages-webapp-src-fs-sidecar-merge", role: .scoop,
-                    parentId: "cone", lifecycle: .working, activity: .thinking, fill: 91),
+                    parentId: "cone", lifecycle: .working, activity: .thinking, fill: 91,
+                    lastActivityAt: ago(1)),
                 WidgetUnit(
                     id: "s2", name: "memory-curator", role: .scoop, parentId: "cone",
-                    lifecycle: .idle, fill: 34),
+                    lifecycle: .idle, fill: 34, lastActivityAt: ago(22)),
                 WidgetUnit(
                     id: "s3", name: "esp32-toolchain", role: .scoop, parentId: "cone",
-                    lifecycle: .working, activity: .tool, fill: 55),
+                    lifecycle: .working, activity: .tool, fill: 55, lastActivityAt: ago(3)),
                 WidgetUnit(
                     id: "s4", name: "ios-transcript", role: .scoop, parentId: "cone",
-                    lifecycle: .broken, fill: 70),
+                    lifecycle: .broken, fill: 70, lastActivityAt: ago(6)),
                 WidgetUnit(
                     id: "s5", name: "tray-hub-deploy", role: .scoop, parentId: "cone",
-                    lifecycle: .idle, activity: .awaiting, fill: 8),
+                    lifecycle: .idle, activity: .awaiting, fill: 8, lastActivityAt: ago(11)),
                 WidgetUnit(
                     id: "cone2", name: "Nightly", role: .cone, lifecycle: .working,
-                    activity: .thinking, fill: 29),
+                    activity: .thinking, fill: 29, lastActivityAt: ago(1.5)),
                 WidgetUnit(
                     id: "s6", name: "debt-triage", role: .scoop, parentId: "cone2",
-                    lifecycle: .working, activity: .tool, fill: 44),
+                    lifecycle: .working, activity: .tool, fill: 44, lastActivityAt: ago(0.7)),
             ],
             // A user turn, so the preview's other attribution gets drawn too.
             lastMessage: WidgetMessage(
