@@ -1030,12 +1030,27 @@ function createVitalPlot(vital: MonitorVital, observers: ResizeObserver[]): HTML
   return null;
 }
 
+function clampRatio(ratio: number): number {
+  return Math.max(0, Math.min(1, ratio));
+}
+
 function meterPercent(ratio: number): string {
-  return `${(Math.max(0, Math.min(1, ratio)) * 100).toFixed(1)}%`;
+  return `${(clampRatio(ratio) * 100).toFixed(1)}%`;
 }
 
 function meterFill(ratio: number): HTMLElement {
   return h('span', { class: 'monitor-meter__fill', style: `width:${meterPercent(ratio)}` });
+}
+
+/**
+ * What a marker is called when the caller gave it no label.
+ *
+ * Rounded to a whole percent, NOT `meterPercent`: that one's decimal is
+ * there to place a dot precisely, and "40.0 percent" is a worse thing to
+ * hear than "40 percent".
+ */
+function markerText(marker: MonitorMeterMarker): string {
+  return marker.label ?? `${Math.round(clampRatio(marker.ratio) * 100)}%`;
 }
 
 /**
@@ -1044,19 +1059,33 @@ function meterFill(ratio: number): HTMLElement {
  * Drawn lowest-first so that when the high end is crowded the fullest
  * marker paints on top — that is the one the tile's own figure is already
  * reporting, so it must not end up buried under a quieter neighbour.
+ *
+ * The rail is ONE `role="img"` carrying the whole distribution as its
+ * accessible name, not a dot each. Hue and position are the only things the
+ * dots say, so a reader who cannot see them needs the readings as a
+ * sentence, and the sighted-mouse `title` tooltips would otherwise be the
+ * sole carrier — unreachable by keyboard or screen reader. Making the dots
+ * focusable instead was rejected: these are non-interactive graphics, and
+ * the panel re-renders every 5s, so N tab stops per meter would drop focus
+ * on every refresh. The individual dots are `aria-hidden`; they are strokes
+ * of the one image, and announcing them twice helps nobody.
  */
 function createMeterMarks(markers: MonitorMeterMarker[] | undefined): HTMLElement | null {
   if (!markers || markers.length === 0) return null;
   const ordered = [...markers].sort((a, b) => a.ratio - b.ratio);
+  // Highest first in the announcement — the fullest is what the reader is
+  // listening for — which is the reverse of the paint order.
+  const label = [...ordered].reverse().map(markerText).join(', ');
   return h(
     'span',
-    { class: 'monitor-meter__marks' },
+    { class: 'monitor-meter__marks', role: 'img', 'aria-label': label },
     ...ordered.map((marker) =>
       h('span', {
         class: 'monitor-meter__mark',
         'data-mark': marker.id,
         style: `left:${meterPercent(marker.ratio)};--mark-color:${marker.color}`,
         title: marker.label ?? null,
+        'aria-hidden': 'true',
       })
     )
   );
@@ -1499,6 +1528,10 @@ export class SliccMonitor extends HTMLElement {
         series: v.series
           ? { ...v.series, points: v.series.points.map((p) => ({ ...p })) }
           : v.series,
+        // Same reason `series.points` is copied: a spread leaves the nested
+        // array shared, so a caller splicing `monitor.model` markers would
+        // silently edit our state and see it on the next re-render.
+        markers: v.markers ? v.markers.map((m) => ({ ...m })) : v.markers,
       })),
       alerts: this.#model.alerts?.map((a) => ({ ...a })),
       sections: this.#model.sections?.map(cloneSection),

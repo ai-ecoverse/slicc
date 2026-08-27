@@ -238,6 +238,48 @@ describe('slicc-monitor — vitals', () => {
     }
   });
 
+  it('names the whole distribution on one image, fullest first', () => {
+    // Hue and position are all the dots say, so a reader who cannot see them
+    // needs the readings as a sentence. The `title` tooltips are mouse-only.
+    const el = mount({
+      vitals: [
+        {
+          id: 'context',
+          label: 'Context fill',
+          value: '70',
+          ratio: 0.7,
+          markers: [
+            { id: 'cone', ratio: 0.7, color: '#b07823', label: 'sliccy (cone) — 70% full' },
+            { id: 'review', ratio: 0.2, color: '#3b82f6', label: 'review — 20% full' },
+          ],
+        },
+      ],
+    });
+    const rail = el.querySelector('.monitor-meter__marks') as HTMLElement;
+    expect(rail.getAttribute('role')).toBe('img');
+    expect(rail.getAttribute('aria-label')).toBe('sliccy (cone) — 70% full, review — 20% full');
+    // One image, not N — the dots are strokes of it, so announcing each again
+    // would only read the same distribution twice.
+    for (const mark of el.querySelectorAll('.monitor-meter__mark')) {
+      expect(mark.getAttribute('aria-hidden')).toBe('true');
+    }
+  });
+
+  it('falls back to the reading when a marker carries no label', () => {
+    const el = mount({
+      vitals: [
+        {
+          id: 'context',
+          label: 'Context fill',
+          value: '40',
+          ratio: 0.4,
+          markers: [{ id: 'a', ratio: 0.4, color: '#06b6d4' }],
+        },
+      ],
+    });
+    expect(el.querySelector('.monitor-meter__marks')?.getAttribute('aria-label')).toBe('40%');
+  });
+
   it('draws no marker rail when a meter has no markers to place', () => {
     const el = mount({ vitals: [{ id: 'a', label: 'A', value: '61', ratio: 0.61, markers: [] }] });
     expect(el.querySelector('.monitor-meter')).not.toBeNull();
@@ -762,6 +804,25 @@ describe('slicc-monitor — shell', () => {
     const model = el.model;
     model.processes!.terminated = 999;
     expect(el.model.processes?.terminated).toBe(3);
+  });
+
+  it('model getter copies markers too, not just series points', () => {
+    const el = mount({
+      vitals: [
+        {
+          id: 'context',
+          label: 'Context fill',
+          value: '70',
+          ratio: 0.7,
+          markers: [{ id: 'cone', ratio: 0.7, color: '#b07823', label: 'sliccy (cone)' }],
+        },
+      ],
+    });
+    const markers = el.model.vitals?.[0].markers ?? [];
+    markers[0].ratio = 0.01;
+    markers.splice(0, 1);
+    expect(el.model.vitals?.[0].markers).toHaveLength(1);
+    expect(el.model.vitals?.[0].markers?.[0].ratio).toBe(0.7);
   });
 
   it('re-steps the status hues for dark rather than reusing the light ones', () => {
