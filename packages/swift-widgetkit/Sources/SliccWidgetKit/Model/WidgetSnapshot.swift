@@ -173,6 +173,49 @@ public struct WidgetMessage: Codable, Hashable, Sendable {
     }
 }
 
+extension WidgetMessage {
+    /// Flatten a markdown turn into the one line of plain text a widget can
+    /// print, and cap it.
+    ///
+    /// Lives here, not in either app, because BOTH capture sides need exactly
+    /// this and a widget that renders half-stripped markdown on one platform
+    /// is the kind of drift nobody notices until a screenshot.
+    ///
+    /// Deliberately crude — it is a preview, not a renderer. Fenced code
+    /// blocks go entirely (a widget printing three lines of a diff says
+    /// nothing); inline formatting loses its markers; links keep their text;
+    /// every run of whitespace becomes one space.
+    public static func flatten(markdown: String) -> String {
+        var text = markdown
+
+        // Fenced code first: everything inside is dropped, so its contents
+        // cannot be mistaken for prose by the passes below.
+        text = text.replacingOccurrences(
+            of: "```[\\s\\S]*?```", with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(
+            of: "`([^`]*)`", with: "$1", options: .regularExpression)
+        // Images before links: an image's alt text is not worth printing.
+        text = text.replacingOccurrences(
+            of: "!\\[[^\\]]*\\]\\([^)]*\\)", with: " ", options: .regularExpression)
+        text = text.replacingOccurrences(
+            of: "\\[([^\\]]*)\\]\\([^)]*\\)", with: "$1", options: .regularExpression)
+        // Leading block markers: headings, quotes, list bullets, rules.
+        text = text.replacingOccurrences(
+            of: "(?m)^\\s{0,3}(#{1,6}\\s+|>\\s?|[-*+]\\s+|\\d+\\.\\s+)", with: "",
+            options: .regularExpression)
+        text = text.replacingOccurrences(
+            of: "(?m)^\\s*([-*_])\\s*\\1\\s*\\1[-*_\\s]*$", with: " ",
+            options: .regularExpression)
+        // Emphasis markers, keeping the words between them.
+        text = text.replacingOccurrences(
+            of: "(\\*\\*|__|\\*|_|~~)", with: "", options: .regularExpression)
+        text = text.replacingOccurrences(
+            of: "\\s+", with: " ", options: .regularExpression)
+
+        return String(text.trimmingCharacters(in: .whitespacesAndNewlines).prefix(previewLimit))
+    }
+}
+
 extension WidgetSnapshot {
     /// The unit the last message came from, when it is still in the snapshot.
     public var lastMessageUnit: WidgetUnit? {

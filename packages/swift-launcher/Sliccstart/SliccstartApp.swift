@@ -19,6 +19,10 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
     let sliccProcess = SliccProcess()
     let sessionStore = TraySessionSyncStore()
     let fileProviderCoordinator = FileProviderCoordinator()
+    /// Feeds the Cones & Scoops widget. Dials the leader only when a widget is
+    /// actually installed — see `WidgetTrayObserver`. `@MainActor` and lazy so
+    /// the delegate's own (nonisolated) init does not have to build it.
+    @MainActor lazy var widgetTrayObserver = WidgetTrayObserver()
     /// Created on the first incoming link (only reachable while Sliccstart is
     /// the default web browser, or the handler for an HTML document) and kept
     /// afterwards, so its queue survives a burst of clicks.
@@ -51,6 +55,7 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
         // The leader is going away, so stop advertising it to other devices.
         sessionStore.withdrawLocalSessions()
         fileProviderCoordinator.withdrawOnQuit()
+        MainActor.assumeIsolated { widgetTrayObserver.stop() }
     }
 }
 
@@ -94,6 +99,7 @@ struct SliccstartApp: App {
     private var sliccProcess: SliccProcess { appDelegate.sliccProcess }
     private var sessionStore: TraySessionSyncStore { appDelegate.sessionStore }
     private var fileProviderCoordinator: FileProviderCoordinator { appDelegate.fileProviderCoordinator }
+    private var widgetTrayObserver: WidgetTrayObserver { appDelegate.widgetTrayObserver }
     private var isUpdateDownloaded: Bool {
         if case .downloaded = appUpdater.state { return true }
         return false
@@ -211,9 +217,11 @@ struct SliccstartApp: App {
                     let label = sliccProcess.leaderTargetName ?? "SLICC"
                     sessionStore.publish(joinUrl: joinUrl, label: label)
                     fileProviderCoordinator.leaderJoinUrlChanged(joinUrl, label: label)
+                    widgetTrayObserver.leaderChanged(joinUrl: joinUrl, label: label)
                 } else {
                     sessionStore.withdrawLocalSessions()
                     fileProviderCoordinator.leaderJoinUrlChanged(nil, label: nil)
+                    widgetTrayObserver.leaderChanged(joinUrl: nil, label: nil)
                 }
             }
             .onReceive(sessionRepublishTimer) { _ in
@@ -221,6 +229,9 @@ struct SliccstartApp: App {
                 // the sync store's TTL while it is still running.
                 guard isReady, let joinUrl = sliccProcess.leaderJoinUrl, !joinUrl.isEmpty else { return }
                 sessionStore.publish(joinUrl: joinUrl, label: sliccProcess.leaderTargetName ?? "SLICC")
+                // Same beat: pick up a widget the user added since the leader
+                // started, without a notification WidgetKit does not send.
+                widgetTrayObserver.refresh()
             }
             .onChange(of: appManagementPermission.isGranted) {
                 // Re-scan when permission is granted so Electron apps appear

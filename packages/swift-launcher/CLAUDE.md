@@ -59,7 +59,7 @@ Shared provider logic in **`packages/swift-traykit`** (`SliccTrayVFS`). `SliccFi
 
 `SliccstartWidgets.appex` (`com.slicc.sliccstart.widgets`) shows the connected instance's cones and scoops in Notification Centre / on the desktop. Views live in **`packages/swift-widgetkit`**; this package owns only the `@main` bundle and the build wiring — XcodeGen (`project.yml`, `SliccstartWidgets` scheme) → `stageWidgetAppex` into `Contents/PlugIns/` → `sign-and-package.sh` signs it with `SliccstartWidgets.entitlements` (sandbox + app group, no framework to embed, unlike the File Provider appex).
 
-**Not wired yet**: Sliccstart holds no cone/scoop state (it is a launcher; state is client-side in the leader tab), so nothing writes `widget-snapshot.json` and the target carries `SLICC_WIDGET_DESIGN_FIXTURES`. The capture side is a small tray follower over the join URL it already knows — never the local server, which is a stateless relay. Plan: [`docs/widgets.md`](../../docs/widgets.md).
+Capture is `Models/WidgetTrayObserver.swift`: Sliccstart holds no cone/scoop state of its own (it is a launcher; state is client-side in the leader tab and the local server is a stateless relay that cannot answer either), so it runs a small **read-only tray follower** off `leaderJoinUrl`, listens for `scoops.list`, and asks for a transcript snapshot at most every 30 s. It is **gated on the widget actually being installed** (`WidgetInstallationQuery`) — a launcher holding a WebRTC participant slot open forever to feed a tile nobody added is a bad citizen in someone else's session. Wired from `SliccstartApp`'s `leaderJoinUrl` observer, next to `FileProviderCoordinator`. Details: [`docs/widgets.md`](../../docs/widgets.md#capture).
 
 ## iCloud Sync (Tray Sessions)
 

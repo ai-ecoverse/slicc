@@ -1551,6 +1551,7 @@ jobs:
       needs.changes.outputs.swift-optel == 'true' ||
       needs.changes.outputs.swift-traysession == 'true' ||
       needs.changes.outputs.swift-traykit == 'true' ||
+      needs.changes.outputs.swift-trayfollower == 'true' ||
       needs.changes.outputs.swift-widgetkit == 'true' ||
       needs.changes.outputs.swift-config == 'true' ||
       needs.changes.outputs.spoon == 'true' ||

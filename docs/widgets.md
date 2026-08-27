@@ -24,20 +24,16 @@ Everything drawn lives in `packages/swift-widgetkit`
 ([CLAUDE.md](../packages/swift-widgetkit/CLAUDE.md)); each extension is the
 four lines WidgetKit insists on owning.
 
-## Status: design only, not wired
-
-Nothing writes the snapshot yet. Both extensions build with
-`SLICC_WIDGET_DESIGN_FIXTURES` (set in each `project.yml`), which makes
-`UnitsTimelineProvider.currentSnapshot()` fall back to
-`WidgetSnapshot.fixtureBusy` when the app-group file is absent. The read path
-is already the real one.
-
-To review the design without installing anything:
+## Reviewing the design without a device
 
 ```bash
 cd packages/swift-widgetkit
-swift run slicc-widget-gallery ./out    # PNG per family x fixture x scheme + two contact sheets
+swift run slicc-widget-gallery ./out    # PNG per family x fixture x scheme, plus a sheet per family
 ```
+
+The fixtures in `WidgetSnapshotFixtures.swift` are also what WidgetKit shows in
+the widget gallery, so the states nobody remembers to check — disconnected,
+crowded, no-cone, nothing-said-yet — get drawn on every run.
 
 ## Why a snapshot file
 
@@ -57,46 +53,56 @@ rejected outright (`WidgetSnapshotStoreError.futureSchema`) rather than
 half-decoded; unknown enum values inside a unit degrade that unit to `unknown`
 and leave the rest of the snapshot intact.
 
-## Wiring plan
+## Capture
 
-### iOS
+Both hosts share `WidgetSnapshotPublisher`, because the rate-limiting rule is a
+property of WidgetKit rather than of either app: one write immediately, then at
+most one per 15 seconds, with a trailing write so the last state in a burst is
+never the one that gets dropped. `scoops.list` arrives on every turn boundary
+and every tool bracket, and a reload per arrival spends the daily refresh
+budget by mid-morning and then leaves the tile frozen at the moment that
+mattered.
 
-`AppState.handleDataChannelMessage`'s `.scoopsList` case already holds
-everything the snapshot needs. The capture side is:
+Transitions a person would want to see **now** bypass the limit
+(`WidgetSnapshotPublisher.isUrgent`): something broke, something handed the
+turn back, the unit list changed shape, or the link died. All four are rare by
+nature, which is exactly why they can afford to.
 
-1. On `scoops.list`, on `connectionState` changes, and on disconnect, build a
-   `WidgetSnapshot` from `scoops` + `leaderActiveScoopJid` + the tray session
-   label, write it through `WidgetHost.follower.store`, then call
-   `WidgetCenter.shared.reloadAllTimelines()`.
-   The last turn comes from `AppState.messages.last` — flatten its markdown,
-   truncate to `WidgetMessage.previewLimit`, and attribute it to the unit whose
-   transcript it came from.
-2. Debounce it. `scoops.list` arrives on every turn boundary; WidgetKit's
-   reload budget is small and a reload per token is how a widget ends up
-   frozen at the moment it mattered. Coalesce to at most one write every few
-   seconds, and force one on the transitions that matter (broken, turn end).
-3. Truncate `WidgetUnit.detail` at the capture site. A scoop's `trigger` can be
-   an entire user turn; a home screen is not a place to park a paragraph.
-4. `clear()` the store on disconnect-and-forget, so a widget cannot keep naming
-   an instance the user has detached from.
-5. Drop `SLICC_WIDGET_DESIGN_FIXTURES` from `packages/ios-app/project.yml`.
+### iOS — `AppState+WidgetSnapshot.swift`
 
-Freshness while the app is not running is bounded by iOS, not by us: the
-widget only changes when something reloads its timeline. The existing APNs
-path (#2062) is the obvious lever — a `turn_end` push already wakes the app,
-and waking it is what lets it write a snapshot.
+`AppState` already holds everything. It publishes on `scoops.list`, on
+`connectionState` and stall flips, and on `turn_end`; it clears the store when
+the user detaches (`clearTrayCredentials`), so a widget cannot keep naming a
+session that is no longer theirs.
 
-### macOS
+The connection field reads the **settled** health, not the raw state: the app
+deliberately holds a blip for `ConnectionSettler.holdDuration` before showing
+trouble, and a widget that flapped to "not connected" during a reconnect the
+user never saw would be worse than one that lags a second. The instance label
+is the session's display name, else the join URL's host — **never** the join
+URL, which is a secret.
 
-Sliccstart has no cones or scoops of its own — state is client-side in the
-leader tab. It does already know `leaderJoinUrl`, and `SliccTrayVFS` already
-opens a tray connection from the File Provider appex, so the honest source is
-the same wire: a small tray follower in Sliccstart that consumes `scoops.list`
-and writes the snapshot. That is the one piece of genuinely new plumbing in
-the whole feature.
+Freshness while the app is not running is bounded by iOS, not by us: the widget
+only changes when something reloads its timeline. The existing APNs path
+(#2062) is the lever — a `turn_end` push already wakes the app, and waking it
+is what lets it write a snapshot.
 
-Do **not** reach for the local server instead: SLICC is browser-first and the
-server is a stateless relay — it does not know what the cones are doing.
+### macOS — `WidgetTrayObserver.swift`
+
+Sliccstart holds no cone or scoop state of its own: SLICC is browser-first and
+the local server is a stateless relay, so it does not know what the agents are
+doing either. (Do **not** reach for `/api` here — it cannot answer.) The only
+honest source is the same wire every other follower uses, so the launcher runs
+a small read-only tray follower off the `leaderJoinUrl` it already knows. It
+sends `hello` with runtime `sliccstart-widget`, listens for `scoops.list`, and
+asks for a transcript snapshot when the active unit changes or a turn ends — at
+most once every 30 seconds, because a snapshot is the whole transcript.
+
+It is **gated on the widget actually being installed**
+(`WidgetInstallationQuery`, via `WidgetCenter.getCurrentConfigurations`). A
+launcher that quietly held a WebRTC participant slot open forever — showing up
+in the tray's participant count and burning battery — to feed a tile nobody
+added would be a bad citizen in someone else's session. No widget, no dial.
 
 ## Layout
 

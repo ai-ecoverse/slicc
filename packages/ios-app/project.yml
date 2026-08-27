@@ -81,6 +81,7 @@ targets:
         CODE_SIGN_ENTITLEMENTS: SliccFollower/SliccFollower.entitlements
     dependencies:
       - package: GhosttyTerminal
+      - package: SliccWidgetKit
       - target: SliccTrayKit
       - target: SliccFileProvider
       - target: SliccShareExtension
@@ -181,10 +182,6 @@ targets:
         INFOPLIST_KEY_CFBundleDisplayName: Sliccy
         CODE_SIGN_ENTITLEMENTS: SliccWidgets.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
-        # NOT WIRED YET (see docs/widgets.md): nothing writes the app-group
-        # snapshot, so without this the widget would only ever draw its empty
-        # state. Drop this flag in the same commit that lands the capture side.
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) SLICC_WIDGET_DESIGN_FIXTURES
     dependencies:
       - package: SliccWidgetKit
       - sdk: WidgetKit.framework

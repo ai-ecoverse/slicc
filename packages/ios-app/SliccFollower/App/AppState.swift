@@ -1,6 +1,7 @@
 import Foundation
 import SliccTrayKit
 import SliccTraySession
+import SliccWidgetKit
 import SwiftUI
 import WebKit
 import WebRTC
@@ -59,7 +60,10 @@ class AppState: ObservableObject {
     // MARK: - Published UI State
 
     @Published var connectionState: ConnectionState = .disconnected {
-        didSet { ingestConnectionHealth() }
+        didSet {
+            ingestConnectionHealth()
+            publishWidgetSnapshot()
+        }
     }
     @Published var joinUrl: String = ""
     @Published var trayId: String?
@@ -204,7 +208,10 @@ class AppState: ObservableObject {
     /// Sending is blocked so a message typed now cannot be lost — the composer
     /// stays typable regardless (see `InputBar`).
     @Published var isLeaderStalled: Bool = false {
-        didSet { ingestConnectionHealth() }
+        didSet {
+            ingestConnectionHealth()
+            publishWidgetSnapshot()
+        }
     }
 
     /// Which reconnect attempt is in flight, 1-based. Zero when not reconnecting.
@@ -254,6 +261,9 @@ class AppState: ObservableObject {
     /// it never publishes one. `@Observable`, so SwiftUI views track it
     /// directly; without iCloud provisioning it degrades to a local cache
     /// and simply stays empty.
+    /// Home-screen widget capture (#2500). Nothing else in the app knows the
+    /// widget exists; see `AppState+WidgetSnapshot.swift`.
+    let widgetPublisher: WidgetSnapshotPublisher
     let sessionStore: TraySessionSyncStore
     /// Join URLs that actually connected — from this device or any other on
     /// the same Apple ID. Publishing them is the only way a hand-pasted URL
@@ -268,6 +278,7 @@ class AppState: ObservableObject {
         fileProviderDomainLifecycle: FileProviderDomainLifecycle = FileProviderDomainLifecycle(),
         openGrantStore: OpenGrantStore = OpenGrantStore()
     ) {
+        widgetPublisher = WidgetSnapshotPublisher(store: WidgetHost.follower.store)
         sessionStore = AppState.makeSessionStore()
         recentJoinStore = AppState.makeRecentJoinStore()
         self.credentialStore = credentialStore
@@ -875,6 +886,7 @@ class AppState: ObservableObject {
             logger.info("Scoops list received: \(scoops.count) scoops, active=\(activeScoopJid)")
             self.scoops = scoops
             self.leaderActiveScoopJid = activeScoopJid
+            publishWidgetSnapshot()
             // Select initially, or fall back when a preserved scoop disappeared.
             let preservedScoopExists =
                 selectedScoopJid.map { selected in
@@ -1254,6 +1266,7 @@ class AppState: ObservableObject {
                 speakIfDictated(buffer[idx], scoopJid: scoopJid, isVisible: isVisible)
                 inboundPrompt.settle(with: buffer[idx].content, scoopJid: scoopJid)
                 notifyTurnEndIfBackgrounded(scoopJid: scoopJid)
+                publishWidgetSnapshot()
             }
 
         case .toolUseStart(let messageId, let toolName, let toolInput, let toolCallId):
@@ -1598,6 +1611,8 @@ extension AppState {
         credentialStore.clear()
         activeJoinUrl = ""
         activeDisplayName = nil
+        // Detaching forgets the instance everywhere, the home screen included.
+        clearWidgetSnapshot()
     }
 }
 

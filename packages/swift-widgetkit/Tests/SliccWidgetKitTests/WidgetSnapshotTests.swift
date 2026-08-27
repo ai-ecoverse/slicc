@@ -100,3 +100,57 @@ final class WidgetSnapshotTests: XCTestCase {
         }
     }
 }
+
+/// The preview flattener runs on BOTH capture sides, so it is tested once here
+/// rather than twice badly.
+final class WidgetMessageFlattenTests: XCTestCase {
+    func testFencedCodeGoesEntirely() {
+        let text = WidgetMessage.flatten(
+            markdown: "Fixed it:\n\n```swift\nlet x = 1\nprint(x)\n```\n\nShip?")
+        XCTAssertEqual(text, "Fixed it: Ship?")
+        XCTAssertFalse(text.contains("print"))
+    }
+
+    func testInlineFormattingLosesItsMarkersButKeepsTheWords() {
+        XCTAssertEqual(
+            WidgetMessage.flatten(markdown: "**bold** and _italic_ and `code` and ~~gone~~"),
+            "bold and italic and code and gone")
+    }
+
+    func testLinksKeepTheirTextAndImagesGoAway() {
+        XCTAssertEqual(
+            WidgetMessage.flatten(markdown: "see [the PR](https://example.com/1) now"),
+            "see the PR now")
+        XCTAssertEqual(
+            WidgetMessage.flatten(markdown: "before ![a screenshot](x.png) after"),
+            "before after")
+    }
+
+    func testBlockMarkersAreStripped() {
+        XCTAssertEqual(
+            WidgetMessage.flatten(markdown: "# Heading\n\n- one\n- two\n\n> quoted\n\n1. first"),
+            "Heading one two quoted first")
+    }
+
+    func testHorizontalRulesDoNotSurviveAsPunctuation() {
+        XCTAssertEqual(WidgetMessage.flatten(markdown: "a\n\n---\n\nb"), "a b")
+    }
+
+    func testEveryRunOfWhitespaceBecomesOneSpace() {
+        XCTAssertEqual(WidgetMessage.flatten(markdown: "  a \n\n\n  b\t\tc  "), "a b c")
+    }
+
+    /// The cap is enforced by the flattener too, not only by the initializer —
+    /// a capture side that builds the text by hand still cannot overrun it.
+    func testTheResultIsCapped() {
+        let long = String(repeating: "word ", count: 500)
+        XCTAssertEqual(
+            WidgetMessage.flatten(markdown: long).count, WidgetMessage.previewLimit)
+    }
+
+    func testEmptyAndWhitespaceOnlyTurnsFlattenToNothing() {
+        XCTAssertEqual(WidgetMessage.flatten(markdown: ""), "")
+        XCTAssertEqual(WidgetMessage.flatten(markdown: "\n\n   \n"), "")
+        XCTAssertEqual(WidgetMessage.flatten(markdown: "```\nonly code\n```"), "")
+    }
+}

@@ -14,15 +14,16 @@ Supports `.macOS(.v14)` and `.iOS("18.0")`.
 - `Model/WidgetSnapshot.swift` — instance identity, connection, capture time, units, and the last turn (`WidgetMessage`). `isStale(asOf:)` and `isUnavailable` are the two state questions every family asks.
 - `Model/WidgetSnapshotStore.swift` — the app-group JSON drop box (atomic write, tolerant read). Imports no WidgetKit so it is testable from a plain target; callers follow `write` with `WidgetCenter.shared.reloadAllTimelines()`.
 - `Model/WidgetHost.swift` — the three per-app differences: app name, app group, tap-route scheme.
+- `Model/WidgetSnapshotPublisher.swift` — the shared, rate-limited writer (see **Capture**).
 - `Model/WidgetSnapshotFixtures.swift` — the six states the design is drawn against, shipped in the library because WidgetKit asks for a placeholder before any data exists.
 - `View/UnitAvatar.swift` — the roundrect googly-eye tile and `UnitAvatarFace`, the widget's whole status channel. A **static** port of `SliccAgentAvatarGeometry` / `SliccAgentAvatarView` / `AvatarExpression`: same ratios, same grammar, no integrator. Each phase renders at the pose the app's own reduced-motion `settle` lands on, with the gaze aimed where the engine would have hopped. Parity pinned by `UnitAvatarGeometryTests` against the values the app's `SliccAgentAvatarGeometryTests` asserts.
 - `View/UnitCell.swift` — `UnitCell` (avatar + name, nothing else), `UnitGrid` (fixed columns + a stated `+N`), `UnitOverflowStrip`, `InstanceHeader`, `LastMessageView`, `UnavailableView`.
 - `View/` — `WidgetPalette` (deliberately tiny: no activity palette, because phase lives in the face), `UnitMarks` (outline cone/scoop marks, used ONLY by the monochrome lock-screen accessories, where `.widgetAccentable()` would flatten a filled tile to a blob), `UnitsWidgetViews` (`UnitRanking`, the shared `FocusAndFieldRow`, the three family layouts, the iOS accessories and the family switch).
 - `Widget/UnitsWidget.swift` — `UnitsTimelineProvider` and `unitsWidgetConfiguration(host:families:)`. `Widget` requires an `init()`, so each extension owns its own four-line `Widget` struct and everything else is shared.
 
-## Not Wired
+## Capture
 
-Nothing writes `widget-snapshot.json` yet. Both extension targets compile with `SLICC_WIDGET_DESIGN_FIXTURES`, which makes `UnitsTimelineProvider.currentSnapshot()` fall back to `WidgetSnapshot.fixtureBusy` instead of the empty state. **Drop that flag from both `project.yml` files in the same commit that lands the capture side** — the read path is already the real one. Capture plan and the Developer-portal prerequisites: [`docs/widgets.md`](../../docs/widgets.md).
+`Model/WidgetSnapshotPublisher.swift` is shared by both capture sides — the iOS follower's `AppState+WidgetSnapshot.swift` and Sliccstart's `WidgetTrayObserver.swift` — because the rate-limiting rule is a property of WidgetKit, not of either app: one write immediately, then at most one per 15 s, with a trailing write so the last state in a burst is never the one dropped. Urgent transitions (`isUrgent`: broke, handed back, unit list changed shape, link died) bypass the limit. Both ends, and the macOS widget-installation gate: [`docs/widgets.md`](../../docs/widgets.md#capture).
 
 ## Design Rules
 

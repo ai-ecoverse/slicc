@@ -9,6 +9,8 @@ let package = Package(
         .package(path: "../swift-optel"),
         .package(path: "../swift-traysession"),
         .package(path: "../swift-traykit"),
+        .package(path: "../swift-trayfollower"),
+        .package(path: "../swift-widgetkit"),
     ],
     targets: [
         // Keep slicc-server as a separate Swift package; build-app.sh bundles its binary.
@@ -19,6 +21,8 @@ let package = Package(
                 .product(name: "SwiftOptel", package: "swift-optel"),
                 .product(name: "SliccTraySession", package: "swift-traysession"),
                 .product(name: "SliccTrayVFS", package: "swift-traykit"),
+                .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
+                .product(name: "SliccWidgetKit", package: "swift-widgetkit"),
             ],
             path: "Sliccstart",
             resources: [.process("Resources")]
@@ -35,6 +39,8 @@ let package = Package(
                 .product(name: "SwiftOptel", package: "swift-optel"),
                 .product(name: "SliccTraySession", package: "swift-traysession"),
                 .product(name: "SliccTrayVFS", package: "swift-traykit"),
+                .product(name: "SliccTrayFollower", package: "swift-trayfollower"),
+                .product(name: "SliccWidgetKit", package: "swift-widgetkit"),
             ],
             path: "SliccstartTests"
         ),

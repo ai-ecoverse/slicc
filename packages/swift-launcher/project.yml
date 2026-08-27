@@ -55,10 +55,6 @@ targets:
         CODE_SIGN_ENTITLEMENTS: SliccstartWidgets.entitlements
         APPLICATION_EXTENSION_API_ONLY: YES
         SKIP_INSTALL: NO
-        # NOT WIRED YET (see docs/widgets.md): Sliccstart does not capture a
-        # snapshot yet, so without this the widget only ever draws its empty
-        # state. Drop this flag in the same commit that lands the capture side.
-        SWIFT_ACTIVE_COMPILATION_CONDITIONS: $(inherited) SLICC_WIDGET_DESIGN_FIXTURES
     dependencies:
       - package: SliccWidgetKit
       - sdk: WidgetKit.framework
