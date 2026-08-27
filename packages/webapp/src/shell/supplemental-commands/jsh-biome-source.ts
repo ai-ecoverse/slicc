@@ -18,6 +18,9 @@
  * two in sync when either changes.
  */
 
+/** Biome diagnostic JSON node — tree-walked and mutated in place by {@link shiftBiomeSpans}. */
+type BiomeDiagnosticJsonNode = { [key: string]: unknown };
+
 const LINTABLE_EXTENSIONS = new Set([
   'js',
   'mjs',
@@ -116,7 +119,7 @@ export function shiftBiomeSpans(root: unknown, delta: number): void {
       for (const item of node) stack.push(item);
       continue;
     }
-    const obj = node as Record<string, unknown>;
+    const obj = node as BiomeDiagnosticJsonNode;
     const span = obj.span;
     if (
       Array.isArray(span) &&
