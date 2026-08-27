@@ -8,7 +8,14 @@
  * and the chat row renders them inline. A marker that only *looks* like one
  * (prose quoting the syntax, a marker sliced in half by an upstream `head`)
  * must stay inert text everywhere rather than become a bogus image.
+ *
+ * The base64 grammar itself is NOT here: `normalizeBase64` in
+ * `@slicc/shared-ts` is the one implementation, shared with the transcript's
+ * base64 preview (`core/base64-mentions.ts`), so a payload one of them
+ * decodes is a payload the other recognizes.
  */
+
+import { normalizeBase64 } from '@slicc/shared-ts';
 
 /** MIME types the vision APIs accept. */
 export const SUPPORTED_IMAGE_MIMES = new Set([
@@ -62,18 +69,6 @@ export function parseImageMarker(marker: string): ParsedImageMarker | null {
   return { dataUrl, mimeType, data };
 }
 
-function normalizedBase64(data: string): string | null {
-  const compact = data.replace(/[\t\n\f\r ]/g, '');
-  if (!/^[A-Za-z0-9+/]+={0,2}$/.test(compact)) return null;
-  const firstPadding = compact.indexOf('=');
-  if (firstPadding >= 0 && firstPadding < compact.length - (compact.endsWith('==') ? 2 : 1)) {
-    return null;
-  }
-  const unpaddedLength = firstPadding < 0 ? compact.length : firstPadding;
-  if (unpaddedLength % 4 === 1 || (firstPadding >= 0 && compact.length % 4 !== 0)) return null;
-  return compact;
-}
-
 /**
  * What a `<img:…>`-shaped match actually is:
  *
@@ -103,7 +98,7 @@ export function classifyImageMarkers(text: string): ClassifiedImageMarker[] {
     const marker = match[0];
     const index = match.index ?? 0;
     const parsed = parseImageMarker(marker);
-    const data = parsed ? normalizedBase64(parsed.data) : null;
+    const data = parsed ? normalizeBase64(parsed.data) : null;
     if (!parsed || !data) {
       found.push({ kind: 'inert', marker, index, parsed: null });
       continue;

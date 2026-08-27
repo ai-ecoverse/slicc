@@ -49,6 +49,7 @@
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
+import { shortMimeLabel } from '../internal/mime-label.js';
 
 export interface QuickLookOptions {
   path: string;
@@ -443,7 +444,7 @@ export class SliccQuickLook extends HTMLElement {
 
     // A type chip earns its space because the whole point of sniffing is that
     // the extension may not tell you what a file is.
-    header.appendChild(h('span', { class: 'chip' }, shortType(opts)));
+    header.appendChild(h('span', { class: 'chip' }, shortMimeLabel(opts.mimeType)));
     if (opts.gitStatus) {
       header.appendChild(h('span', { class: 'chip chip--git' }, opts.gitStatus));
     }
@@ -684,13 +685,6 @@ export class SliccQuickLook extends HTMLElement {
 }
 
 /** A compact type label for the header chip: `text/typescript` → `typescript`. */
-function shortType(opts: QuickLookOptions): string {
-  const base = opts.mimeType.split(';', 1)[0]?.trim() ?? opts.mimeType;
-  if (base === 'application/octet-stream') return 'binary';
-  const subtype = base.slice(base.indexOf('/') + 1);
-  return subtype.replace(/^x-/, '').replace(/\+.*$/, '');
-}
-
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;

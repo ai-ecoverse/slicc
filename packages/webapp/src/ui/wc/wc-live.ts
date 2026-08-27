@@ -55,6 +55,7 @@ import {
   unitSlugFor,
 } from './wc-unit-context.js';
 import { createWorkbenchActivator, type WorkbenchActivator } from './wc-workbench.js';
+import { wireBase64Previews } from './wire-base64-previews.js';
 import { wireFileMentions } from './wire-file-mentions.js';
 
 export {
@@ -919,6 +920,16 @@ export function attachWcClient(
   // and lazy mounts — including the terminal's. Ordering it last means it can
   // neither delay that work nor, if it throws, prevent it.
   wireFileMentions({ thread: refs.thread, openFs: openReader, log });
+
+  // Base64 previews: a pasted payload — a screenshot as a `data:` URL, the
+  // output of `base64 < key.pem` — is thousands of unbroken characters. Each
+  // one that DECODES to something recognizable collapses to a chip that opens
+  // it in Quick Look; anything unrecognizable stays exactly as it was typed.
+  //
+  // Wired here for the same reason as the line above, minus the caveat: this
+  // one never touches the VFS, so it cannot compete with the lazy mounts at
+  // all.
+  wireBase64Previews({ thread: refs.thread, log });
 
   // Floatbar click toggles the monitor panel.
   refs.floatbar.addEventListener('click', () => {

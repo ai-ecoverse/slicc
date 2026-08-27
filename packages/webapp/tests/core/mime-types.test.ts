@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  extensionForMimeType,
   getMimeType,
   isImageMimeType,
   isTerminalPreviewableMediaPath,
@@ -75,5 +76,40 @@ describe('getMimeType', () => {
     expect(isTerminalPreviewableMediaPath('/workspace/assets/photo.jpg')).toBe(true);
     expect(isTerminalPreviewableMediaPath('/workspace/assets/clip.webm')).toBe(true);
     expect(isTerminalPreviewableMediaPath('/workspace/README.md')).toBe(false);
+  });
+});
+
+describe('extensionForMimeType', () => {
+  it('names a type from the same table getMimeType reads', () => {
+    expect(extensionForMimeType('image/png')).toBe('png');
+    expect(extensionForMimeType('application/pdf')).toBe('pdf');
+    expect(extensionForMimeType('text/plain')).toBe('txt');
+    expect(extensionForMimeType('application/wasm')).toBe('wasm');
+  });
+
+  it('picks the FIRST extension registered for a type', () => {
+    // `jpg` precedes `jpeg` and `html` precedes `htm` in the table, so the
+    // conventional spelling wins rather than whichever happened to be last.
+    expect(extensionForMimeType('image/jpeg')).toBe('jpg');
+    expect(extensionForMimeType('text/html')).toBe('html');
+    expect(extensionForMimeType('application/javascript')).toBe('js');
+  });
+
+  it('ignores parameters and case', () => {
+    expect(extensionForMimeType('text/plain;charset=utf-8')).toBe('txt');
+    expect(extensionForMimeType('IMAGE/PNG')).toBe('png');
+  });
+
+  it('returns null for a type nothing in the table claims', () => {
+    expect(extensionForMimeType('application/zip')).toBeNull();
+    expect(extensionForMimeType('application/octet-stream')).toBeNull();
+  });
+
+  it('round-trips with getMimeType', () => {
+    for (const mime of ['image/png', 'text/html', 'application/json', 'audio/wav']) {
+      const ext = extensionForMimeType(mime);
+      expect(ext).not.toBeNull();
+      expect(getMimeType(`file.${ext}`)).toBe(mime);
+    }
   });
 });
