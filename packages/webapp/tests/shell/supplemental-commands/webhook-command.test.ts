@@ -72,11 +72,39 @@ describe('webhook command — help and argument validation', () => {
     expect(result.stdout).toContain('webhook <command>');
   });
 
-  it('rejects create without --scoop', async () => {
+  it('help documents the omitted --scoop, matching crontask (#2525)', async () => {
+    // The help text is what a skill author reads before hardcoding a target,
+    // so it has to state the same rule the code now follows. `crontask` is the
+    // reference wording; a divergence here is how #2525 stayed invisible.
+    const { command } = await loadCommandAndTrayLeader();
+    const { createCrontaskCommand } = await import(
+      '../../../src/shell/supplemental-commands/crontask-command.js'
+    );
+    const webhookHelp = await command.execute(['--help'], {} as never);
+    const crontaskHelp = await createCrontaskCommand().execute(['--help'], {} as never);
+    const rule = '--scoop <target>  Scoop name, cone name, or folder. Omit for your own cone.';
+    expect(webhookHelp.stdout).toContain(rule);
+    expect(crontaskHelp.stdout).toContain(rule);
+    expect(webhookHelp.stdout).not.toContain('Required outside a cone');
+  });
+
+  it('accepts create without --scoop, leaving the webhook untargeted (#2525)', async () => {
+    // The pre-#2525 rule was `--scoop is required`, inherited from a time when
+    // an untargeted lick had nowhere to go. It has had a destination since
+    // #2311, so an omitted flag is a routable answer, not an error.
+    const createWebhook = vi.fn().mockResolvedValue({
+      id: 'wh-2525',
+      name: 'test',
+      createdAt: new Date().toISOString(),
+    } satisfies WebhookEntry);
+    (globalThis as Record<string, unknown>).__slicc_lickManager = buildLickManagerMock({
+      createWebhook,
+    });
     const { command } = await loadCommandAndTrayLeader();
     const result = await command.execute(['create', '--name', 'test'], {} as never);
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('--scoop is required');
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).not.toContain('--scoop is required');
+    expect(createWebhook).toHaveBeenCalledWith('test', undefined, undefined);
   });
 
   it('rejects unknown subcommand', async () => {
@@ -900,10 +928,32 @@ describe('webhook create — default lick target (#2311)', () => {
     expect(createWebhook).toHaveBeenCalledWith('inbox', 'pr-reviewer', undefined);
   });
 
-  it('still requires --scoop in a shell that carries no target', async () => {
+  it('passes undefined through in a shell that carries no target (#2525)', async () => {
+    // The default root's shell and a scoop's shell both carry no
+    // SLICC_LICK_TARGET by design, so this is the "route to whoever I am"
+    // gesture — `routeFormattedLickToCone` resolves it to `rootsOf(scoops)[0]`.
+    // Matches `crontask create` / `fswatch create`, which never rejected it.
+    const { result, createWebhook } = await createWithEnv(['create', '--name', 'inbox'], {});
+    expect(result.exitCode).toBe(0);
+    expect(createWebhook).toHaveBeenCalledWith('inbox', undefined, undefined);
+  });
+
+  it('omits the Scoop: line for an untargeted webhook (#2525)', async () => {
+    // `entry.scoop` is undefined, so the receipt must not print a routing line
+    // it cannot name — the same shape `crontask create` prints.
     const { result } = await createWithEnv(['create', '--name', 'inbox'], {});
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('--scoop is required');
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('Created webhook "inbox"');
+    expect(result.stdout).not.toContain('Scoop:');
+  });
+
+  it('an empty --scoop falls through to the shell default rather than erroring', async () => {
+    const { result, createWebhook } = await createWithEnv(
+      ['create', '--name', 'inbox', '--scoop', ''],
+      { SLICC_LICK_TARGET: 'cone-research' }
+    );
+    expect(result.exitCode).toBe(0);
+    expect(createWebhook).toHaveBeenCalledWith('inbox', 'cone-research', undefined);
   });
 
   it('accepts a cone name as --scoop', async () => {

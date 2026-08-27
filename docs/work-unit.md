@@ -460,19 +460,35 @@ entry.
 **Every producer a cone's shell can start follows the invoking unit**, so an
 extra cone's events come back to it rather than to the oldest root:
 
-| Producer            | How it picks a target                                                                   |
-| ------------------- | --------------------------------------------------------------------------------------- |
-| background `bash`   | `ownLickTargetFor` stamps `targetScoop` (#2272)                                         |
-| `fswatch create`    | `--scoop`, else `defaultLickTarget(…, ctx.env)` (#2272)                                 |
-| `crontask create`   | `--scoop`, else `defaultLickTarget(…, ctx.env)`                                         |
-| `webhook create`    | `--scoop`, else `defaultLickTarget(…, ctx.env)`; still required when neither is present |
-| workflow completion | `getStartingRoot(parentJid)` in `kernel/host.ts` stamps the starting root's folder      |
-| `sprinkle open`     | claims an **unrouted** sprinkle for the opening cone; an existing route always wins     |
+| Producer            | How it picks a target                                                               |
+| ------------------- | ----------------------------------------------------------------------------------- |
+| background `bash`   | `ownLickTargetFor` stamps `targetScoop` (#2272)                                     |
+| `fswatch create`    | `--scoop`, else `defaultLickTarget(…, ctx.env)` (#2272)                             |
+| `crontask create`   | `--scoop`, else `defaultLickTarget(…, ctx.env)`                                     |
+| `webhook create`    | `--scoop`, else `defaultLickTarget(…, ctx.env)` (#2525)                             |
+| workflow completion | `getStartingRoot(parentJid)` in `kernel/host.ts` stamps the starting root's folder  |
+| `sprinkle open`     | claims an **unrouted** sprinkle for the opening cone; an existing route always wins |
+
+**All three lick-producing commands treat an omitted `--scoop` the same way**,
+and that uniformity is the contract callers write against. `webhook create`
+alone used to reject it (`--scoop is required`), a rule inherited from a time
+when an untargeted lick had nowhere to go and would have been silently dropped;
+#2311 gave untargeted licks a destination and left the rejection behind
+(#2525). Its only remaining effect was to make the one gesture that is correct
+in a multi-cone workspace — name no target, let the runtime route the lick back
+to whoever asked — inexpressible for webhooks, which pushed skills into
+hardcoding the literal folder `cone` and delivering another cone's callbacks
+into the default root's chat.
 
 `SLICC_LICK_TARGET` is absent from the default root's shell on purpose — its
 folder is not worth spending as an alias when an untargeted lick already lands
 there, and reading it from a folder test rather than from the live roster is
-the bug described in the bullet above.
+the bug described in the bullet above. So a caller with no target at all (the
+default root, or a scoop, whose licks are the cone's business) omits `--scoop`,
+gets `undefined`, and `routeFormattedLickToCone` delivers to
+`rootsOf(scoops)[0]`. Skills should never hardcode `cone`: that folder is
+reassigned to the next new cone once the original primary is dropped, so the
+literal names the wrong unit in exactly the workspaces where naming matters.
 
 **From outside the cone's shell**, the same handles work as an explicit flag:
 `webhook create --scoop <cone>`, `crontask create --scoop <cone>`,
