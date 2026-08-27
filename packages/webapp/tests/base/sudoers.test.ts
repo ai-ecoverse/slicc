@@ -322,6 +322,55 @@ describe('no-op virtual-device write invariant', () => {
   }
 });
 
+describe('ephemeral shell descriptor invariant', () => {
+  // Rules that would otherwise gate the descriptor: a require-approval Write
+  // covering it, plus a require-approval Read (an fd number varies per
+  // invocation, so no grant can pre-empt either prompt).
+  const withRules = parseSudoers('Write /dev/**\nRead /dev/**\nWrite /workspace/**');
+
+  for (const fdPath of ['/dev/fd/63', '/dev/fd/62', '/dev/fd/10']) {
+    it(`never gates a write to ${fdPath}, empty policy or not`, () => {
+      expect(matchPath(emptyPolicy(), 'write', fdPath)).toBe('nopasswd-allow');
+      expect(matchPath(withRules, 'write', fdPath)).toBe('nopasswd-allow');
+      expect(matchPath(withRules, 'write', fdPath, { isContentWrite: true })).toBe(
+        'nopasswd-allow'
+      );
+    });
+
+    it(`never gates a read of ${fdPath}, empty policy or not`, () => {
+      expect(matchPath(emptyPolicy(), 'read', fdPath)).toBe('nopasswd-allow');
+      expect(matchPath(withRules, 'read', fdPath)).toBe('nopasswd-allow');
+    });
+
+    it(`survives the default-disposition upgrade for ${fdPath}`, () => {
+      // The sandbox path a scoop actually takes: an unmatched write would be
+      // upgraded to a cone approval, which is what stalled the scoop (#2502).
+      expect(
+        applyDefaultDisposition(
+          matchPath(emptyPolicy(), 'write', fdPath, { isContentWrite: true }),
+          'require-approval'
+        )
+      ).toBe('nopasswd-allow');
+    });
+  }
+
+  it('normalizes before exempting', () => {
+    expect(matchPath(emptyPolicy(), 'write', '/dev/fd/./63')).toBe('nopasswd-allow');
+  });
+
+  it('exempts only numbered descriptors, not the directory or a named child', () => {
+    for (const path of ['/dev/fd', '/dev/fd/', '/dev/fd/name', '/dev/fd/63/x', '/dev/fdx/63']) {
+      expect(matchPath(emptyPolicy(), 'write', path)).toBe('no-match');
+    }
+  });
+
+  it('cannot override self-protection', () => {
+    // Belt-and-braces: the sudoers files are not under /dev/fd, but the
+    // self-protection check must stay ordered first regardless.
+    expect(matchPath(emptyPolicy(), 'write', SUDOERS_FILE)).toBe('require-approval');
+  });
+});
+
 describe('applyDefaultDisposition', () => {
   it('upgrades no-match to require-approval when default is require-approval', () => {
     expect(applyDefaultDisposition('no-match', 'require-approval')).toBe('require-approval');

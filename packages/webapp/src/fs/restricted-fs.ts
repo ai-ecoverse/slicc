@@ -18,6 +18,7 @@
  *     in place either way.
  */
 
+import { EphemeralFdStore } from './ephemeral-fd-store.js';
 import type { FsWatchCallback, FsWatchFilter } from './fs-watcher.js';
 import type { MountBackend, RefreshReport } from './mount/backend.js';
 import type { MountIndexEnv } from './mount-index.js';
@@ -78,10 +79,37 @@ const VIRTUAL_DEVICES: Record<string, VirtualDevice> = {
  * They are deliberately NOT part of the per-scoop config grants — those are
  * compiled from each scoop's own `ScoopConfig`, while `/tmp` applies to every
  * scoop unconditionally.
+ *
+ * This list is for TREE locations only. The shell's `/dev/fd/<n>` descriptors
+ * are also writable in every sandbox, but they are not here and must not be:
+ * see {@link RestrictedFS.ephemeralFds} for why they are answered beside the
+ * tree instead, and why widening this list to `/dev/` would be the wrong fix.
  */
 const ALWAYS_WRITABLE_PREFIXES = ['/tmp/'];
 
 export class RestrictedFS {
+  /**
+   * Private backing for the shell's `/dev/fd/<n>` process-substitution
+   * descriptors. They are answered here — beside the tree, never in it —
+   * rather than through the ACL, because a descriptor is minted by the shell
+   * for one command and its bytes are read straight back by the consuming
+   * command in the same pipeline (#2502).
+   *
+   * Deliberately NOT an `ALWAYS_WRITABLE_PREFIXES` entry: widening that list
+   * to `/dev/` would permit writes to every future device path, including ones
+   * with observable effects, and would resolve them against the SHARED tree,
+   * where a scoop's descriptor is visible to the cone and to sibling scoops.
+   * Deliberately not a `VIRTUAL_DEVICES` entry either — a no-op write would
+   * discard a payload that is about to be read back.
+   *
+   * The matching sudoers exemption is `isEphemeralFdPath` in `matchPath`
+   * (`base/sudoers.ts`). Both layers gate independently, so both have to agree:
+   * granting only here leaves a scoop write escalating to a cone approval
+   * prompt no "Always" grant can pre-empt (the fd number changes per
+   * invocation); exempting only there leaves the consumer's open walled to
+   * `ENOENT` while the write silently lands outside the sandbox.
+   */
+  private readonly ephemeralFds = new EphemeralFdStore();
   private vfs: VirtualFS;
   private allowedPrefixes: string[];
   private readOnlyPrefixes: string[];
@@ -206,7 +234,10 @@ export class RestrictedFS {
    * the resolved cwd as a writable prefix anyway.
    */
   canWrite(path: string): boolean {
-    return this.isWritable(path);
+    // Ephemeral descriptors are writable without being part of the ACL — see
+    // {@link ephemeralFds}. Reporting them as writable keeps this predicate
+    // honest about what `writeFile` will actually accept.
+    return EphemeralFdStore.handles(path) || this.isWritable(path);
   }
 
   /**
@@ -326,6 +357,7 @@ export class RestrictedFS {
   async readFile(path: string, options?: ReadFileOptions): Promise<FileContent> {
     const devRead = VIRTUAL_DEVICES[normalizePath(path)];
     if (devRead) return devRead.read(options);
+    if (EphemeralFdStore.handles(path)) return this.ephemeralFds.read(path, options);
     if (!this.isAllowedStrict(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
@@ -360,6 +392,7 @@ export class RestrictedFS {
   async stat(path: string): Promise<Stats> {
     const dev = VIRTUAL_DEVICES[normalizePath(path)];
     if (dev) return dev.stat();
+    if (EphemeralFdStore.handles(path)) return this.ephemeralFds.stat(path);
     if (!this.isAllowed(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
@@ -435,6 +468,12 @@ export class RestrictedFS {
   statSync(path: string): Stats | null {
     const dev = VIRTUAL_DEVICES[normalizePath(path)];
     if (dev) return dev.stat();
+    // An ephemeral descriptor lives outside the tree, so the sync fast path can
+    // answer for it directly; `null` for one that was never written falls back
+    // to the async `stat`, which raises the ENOENT the caller expects.
+    if (EphemeralFdStore.handles(path)) {
+      return this.ephemeralFds.has(path) ? this.ephemeralFds.stat(path) : null;
+    }
     if (!this.isAllowedStrict(path)) return null;
     // Scan ancestors AND leaf: `statSync` follows symlinks (via
     // `resolveSymlinksSync`), so a symlink anywhere in the path can
@@ -456,6 +495,9 @@ export class RestrictedFS {
   lstatSync(path: string): Stats | null {
     const dev = VIRTUAL_DEVICES[normalizePath(path)];
     if (dev) return dev.stat();
+    if (EphemeralFdStore.handles(path)) {
+      return this.ephemeralFds.has(path) ? this.ephemeralFds.stat(path) : null;
+    }
     if (!this.isAllowed(path)) return null;
     const scan = this.scanPathForSymlinks(path, false);
     if (scan !== false) return null;
@@ -503,6 +545,15 @@ export class RestrictedFS {
    * VAL-FS-019 symlink-escape semantics).
    */
   async realpath(path: string): Promise<string> {
+    // A descriptor is its own canonical path — it is not a tree entry, so there
+    // is no symlink to resolve and no ACL scope to escape.
+    if (EphemeralFdStore.handles(path)) {
+      const normalized = normalizePath(path);
+      if (!this.ephemeralFds.has(normalized)) {
+        throw new FsError('ENOENT', 'no such file or directory', normalized);
+      }
+      return normalized;
+    }
     let resolved: string;
     try {
       resolved = await this.vfs.realpath(path);
@@ -518,6 +569,7 @@ export class RestrictedFS {
 
   async exists(path: string): Promise<boolean> {
     if (VIRTUAL_DEVICES[normalizePath(path)]) return true;
+    if (EphemeralFdStore.handles(path)) return this.ephemeralFds.has(path);
     if (!this.isAllowed(path)) return false;
     if (this.isAllowedStrict(path)) {
       try {
@@ -532,6 +584,7 @@ export class RestrictedFS {
   async readTextFile(path: string): Promise<string> {
     const devText = VIRTUAL_DEVICES[normalizePath(path)];
     if (devText) return devText.readText();
+    if (EphemeralFdStore.handles(path)) return this.ephemeralFds.readText(path);
     if (!this.isAllowedStrict(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
@@ -568,6 +621,12 @@ export class RestrictedFS {
       devWrite.write(content);
       return;
     }
+    // Ephemeral descriptor: keep the payload (it is read back by the consuming
+    // command) but keep it out of the shared tree.
+    if (EphemeralFdStore.handles(path)) {
+      this.ephemeralFds.write(path, content);
+      return;
+    }
     this.checkWrite(path);
     await this.checkParentRealpathEscape(path);
     // Also check if destination itself is a symlink pointing outside sandbox
@@ -583,13 +642,50 @@ export class RestrictedFS {
     return this.vfs.writeFile(path, content, options);
   }
 
+  /**
+   * Refuse a TREE-SHAPE op on a descriptor path.
+   *
+   * The descriptor exemption covers exactly the two things process substitution
+   * needs — a content write and the read back — plus the release (`rm`). Every
+   * other op names a tree node, and a descriptor is not one: it has no parent
+   * directory, no siblings and no inode to relink. This is not merely
+   * meaningless, it is load-bearing. Under `sudo-delegated` enforcement
+   * `checkWrite` is a no-op, so without this refusal a `mkdir /dev/fd/63` or
+   * `mv x /dev/fd/63` would fall through to the SHARED VirtualFS and
+   * materialize the very cone-visible, cross-scoop `/dev/fd` entry the private
+   * store exists to prevent — and the sudoers layer cannot stop it, because it
+   * deliberately answers `nopasswd-allow` for these paths rather than raising
+   * a prompt no "Always" grant could pre-empt.
+   *
+   * `EACCES` (not `ENOENT`) because the op is refused, not the path missing:
+   * the shell owns these paths, the sandbox does not.
+   */
+  private refuseDescriptorTreeOp(path: string): void {
+    if (EphemeralFdStore.handles(path)) {
+      throw new FsError('EACCES', 'permission denied', normalizePath(path));
+    }
+  }
+
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
+    this.refuseDescriptorTreeOp(path);
     this.checkWrite(path);
     await this.checkParentRealpathEscape(path);
     return this.vfs.mkdir(path, options);
   }
 
   async rm(path: string, options?: RmOptions): Promise<void> {
+    // Releasing a descriptor is how the shell ends a process substitution, so
+    // it has to reach the store rather than the tree. A descriptor that was
+    // never written raises ENOENT, exactly as the VFS does for a missing file:
+    // the interpreter's own release swallows that, and `rm -f` is resolved by
+    // the shell's `rm` command before it reaches this layer (the VFS `RmOptions`
+    // carries no `force` flag).
+    if (EphemeralFdStore.handles(path)) {
+      if (!this.ephemeralFds.remove(path)) {
+        throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
+      }
+      return;
+    }
     this.checkWrite(path);
     // For symlinks, check only the link path (not target) — we're removing the link node
     try {
@@ -608,6 +704,8 @@ export class RestrictedFS {
   }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
+    this.refuseDescriptorTreeOp(oldPath);
+    this.refuseDescriptorTreeOp(newPath);
     this.checkWrite(oldPath);
     this.checkWrite(newPath);
     // Resolve symlinks in both paths to prevent escape
@@ -617,6 +715,27 @@ export class RestrictedFS {
   }
 
   async copyFile(src: string, dest: string): Promise<void> {
+    // A descriptor is a legitimate end of a copy — `cp <(echo hi) out` reaches
+    // here through `VfsAdapter.cp`, and `cp in >(consumer)` has to land in the
+    // store so the writer body sees the bytes. Each end is resolved
+    // independently: the descriptor end through the store (no ACL, it is not a
+    // tree path), the tree end through the ordinary checks below.
+    if (EphemeralFdStore.handles(src)) {
+      const content = this.ephemeralFds.read(src, { encoding: 'binary' });
+      await this.writeFile(dest, content);
+      return;
+    }
+    if (EphemeralFdStore.handles(dest)) {
+      if (!this.isAllowed(src)) {
+        throw new FsError('ENOENT', 'no such file or directory', normalizePath(src));
+      }
+      const resolvedSource = await this.resolveAndCheckRead(src);
+      this.ephemeralFds.write(
+        dest,
+        await this.vfs.readFile(resolvedSource, { encoding: 'binary' })
+      );
+      return;
+    }
     // Read from anywhere allowed, write only to allowed
     if (!this.isAllowed(src)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(src));
@@ -641,6 +760,7 @@ export class RestrictedFS {
   // ── Symlink operations ───────────────────────────────────────────────
 
   async symlink(target: string, linkPath: string): Promise<void> {
+    this.refuseDescriptorTreeOp(linkPath);
     this.checkWrite(linkPath);
     await this.checkParentRealpathEscape(linkPath);
     return this.vfs.symlink(target, linkPath);
@@ -668,6 +788,8 @@ export class RestrictedFS {
   async lstat(path: string): Promise<Stats> {
     const dev = VIRTUAL_DEVICES[normalizePath(path)];
     if (dev) return dev.stat();
+    // A descriptor can never be a symlink, so `lstat` answers exactly as `stat`.
+    if (EphemeralFdStore.handles(path)) return this.ephemeralFds.stat(path);
     if (!this.isAllowed(path)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(path));
     }
@@ -733,12 +855,14 @@ export class RestrictedFS {
     backend: MountBackend,
     opts?: { env?: MountIndexEnv }
   ): Promise<void> {
+    this.refuseDescriptorTreeOp(absolutePath);
     this.checkWrite(absolutePath);
     await this.checkParentRealpathEscape(absolutePath);
     return this.vfs.mount(absolutePath, backend, opts);
   }
 
   async unmount(absolutePath: string): Promise<void> {
+    this.refuseDescriptorTreeOp(absolutePath);
     this.checkWrite(absolutePath);
     await this.checkParentRealpathEscape(absolutePath);
     return this.vfs.unmount(absolutePath);
@@ -756,6 +880,7 @@ export class RestrictedFS {
     absolutePath: string,
     opts?: { bodies?: boolean; env?: MountIndexEnv }
   ): Promise<RefreshReport> {
+    this.refuseDescriptorTreeOp(absolutePath);
     this.checkWrite(absolutePath);
     return this.vfs.refreshMount(absolutePath, opts);
   }

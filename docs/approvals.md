@@ -140,6 +140,57 @@ Two consequences worth knowing:
   independently, so both layers must agree or the write is walled underneath
   the grant.
 
+### Ephemeral shell descriptors — `/dev/fd/<n>` (never gated)
+
+Process substitution (`<(cmd)` / `>(cmd)`) is modelled on a backing file at
+`/dev/fd/<n>`, numbered downward from 63 exactly as bash numbers it: the body's
+stdout is written there during word expansion, the outer command reads the path
+back, and the descriptor is released when that command ends.
+
+Those paths are **never a policy subject**. `matchPath` resolves them to
+`nopasswd-allow` for both reads and writes (`isEphemeralFdPath` in
+`packages/webapp/src/fs/virtual-device-paths.ts`), before any rule is consulted —
+self-protection is still checked first and stays absolute. The reason is that
+there is nothing for a prompt to be _about_: the path is minted by the shell for
+the duration of one command, the fd number changes every invocation (so no
+"Always" grant could ever pre-empt the prompt), and the only reader is the
+consuming command in the same pipeline. A sandboxed scoop that hit such a prompt
+stalled indefinitely, because only the cone can clear it (#2502).
+
+The matching ACL exemption is the private `EphemeralFdStore` held by each
+`RestrictedFS` (`packages/webapp/src/fs/ephemeral-fd-store.ts`). As with `/tmp`,
+`SudoFS` and `RestrictedFS` gate independently, so both layers have to agree:
+granting only in the policy leaves the consumer's open walled to `ENOENT` while
+the write lands _outside_ the sandbox, and exempting only in the ACL leaves the
+approval prompt in place.
+
+Unlike `/tmp`, this space is **private per sandbox and never enters the tree**:
+
+- descriptors are not addressable across scoops, commands or turns, and nothing
+  is written to `/dev/fd` in the shared VFS;
+- `/dev` and `/dev/fd` remain non-existent in a scoop's view — no listing, no
+  `stat`, no `readDir` entry;
+- a descriptor that was never written raises `ENOENT` on read, the same loud
+  failure the cone gives for an unopened fd.
+
+The exemption covers exactly what process substitution needs — a content write,
+the read back (including as either end of a `copyFile`, which is how `cp <(…)`
+arrives), and the release (`rm`). Every **tree-shape** op on a descriptor path is
+refused with `EACCES` by `RestrictedFS.refuseDescriptorTreeOp`: `mkdir`,
+`symlink`, `rename` and `mount`/`unmount`/`refreshMount`. That refusal is the
+containment for those ops, and it has to live in the ACL layer, because the
+policy layer deliberately answers `nopasswd-allow` rather than raising a prompt.
+Without it, a `mkdir /dev/fd/63` in a `sudo-delegated` sandbox would fall through
+to the shared `VirtualFS` and create exactly the cone-visible, cross-scoop
+`/dev/fd` entry the private store exists to prevent.
+
+This is not a widening of the sandbox: a scoop can already express the same data
+flow with a temp file under `/tmp`, which is unconditionally writable, so gating
+`<(...)` bought no containment — it only broke the ergonomic spelling. It is
+also deliberately **not** modelled as a no-op device write like `/dev/null`: a
+descriptor's payload is read back, so discarding it would turn `cat <(echo hi)`
+from an error into silently empty output.
+
 ### Live reload
 
 `SudoManager` watches `/etc` via the shared `FsWatcher` and re-reads + re-merges
