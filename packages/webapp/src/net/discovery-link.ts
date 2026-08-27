@@ -29,6 +29,12 @@ import {
 /** The bare ARD relation token that advertises an `ai-catalog.json` manifest. */
 export const AI_CATALOG_REL = 'ai-catalog';
 
+/**
+ * CDP `Network.Response.headers` bag. Header names map to string values;
+ * same-name headers are joined with `\n`.
+ */
+export type CdpResponseHeaders = Record<string, string>;
+
 export interface CatalogMatch {
   /** Always `'ai-catalog'` for a `Link`-header match. */
   kind: DiscoveryKind;
@@ -77,7 +83,7 @@ export function discoveryFingerprint(input: {
 /* ────────── header-shape adapters that go straight to a catalog match ────────── */
 
 export function extractCatalogFromCdpHeaders(
-  headers: Record<string, unknown> | undefined,
+  headers: CdpResponseHeaders | undefined,
   baseUrl?: string
 ): { match: CatalogMatch | null; links: ParsedLink[] } {
   const values = getLinkHeaderValuesFromCdp(headers);
