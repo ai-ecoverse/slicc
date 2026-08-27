@@ -1232,6 +1232,7 @@ export class VirtualFS {
           size: s.size,
           mtime: s.mtimeMs,
           ctime: s.ctimeMs,
+          ino: s.ino,
         };
       } catch {
         return null;
@@ -1256,6 +1257,7 @@ export class VirtualFS {
           size: s.size,
           mtime: s.mtimeMs,
           ctime: s.ctimeMs,
+          ino: s.ino,
         };
       }
       let target: string;
@@ -1290,6 +1292,7 @@ export class VirtualFS {
           ctime: s.ctimeMs,
           isSymlink: true,
           symlinkTarget: target,
+          ino: s.ino,
         };
       }
       return {
@@ -1297,6 +1300,7 @@ export class VirtualFS {
         size: s.size,
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
+        ino: s.ino,
       };
     } catch {
       return null;
@@ -2187,6 +2191,7 @@ export class VirtualFS {
         size: s.size,
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
+        ino: s.ino,
       };
     } catch (err) {
       throw convertError(err, normalized);
@@ -2457,6 +2462,7 @@ export class VirtualFS {
           ctime: s.ctimeMs,
           isSymlink: true,
           symlinkTarget: target,
+          ino: s.ino,
         };
       }
       return {
@@ -2464,6 +2470,7 @@ export class VirtualFS {
         size: s.size,
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
+        ino: s.ino,
       };
     } catch (err) {
       throw convertError(err, normalized);

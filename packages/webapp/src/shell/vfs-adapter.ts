@@ -48,6 +48,35 @@ interface DirentEntry {
   isSymbolicLink: boolean;
 }
 
+/**
+ * Map a VFS inode onto just-bash's optional `FsStat.identity` — the token it
+ * uses to decide whether two stats name the same file rather than the same path.
+ *
+ * Commands that mutate through a staging file re-identify their inputs and
+ * outputs before committing, and `identitiesMatch()` fails closed for an
+ * EXISTING entry whose identity is `undefined`:
+ *
+ *     e.existence === "existing"
+ *       ? e.stableIdentity !== undefined && e.stableIdentity === t.stableIdentity
+ *       : ...
+ *
+ * With no identity that comparison is `undefined !== undefined` → `false`, so
+ * `split FILE PREFIX` threw `input identity changed during split` against a
+ * file nothing had touched, rolled its staged chunks back, and reported the
+ * generic `split: failed to write output`. It could never succeed in SLICC.
+ * (`split - PREFIX` reading stdin was unaffected: no input file to re-identify.)
+ *
+ * `identity` rather than `dev`/`ino`: just-bash only accepts the inode pair
+ * when BOTH halves are present, and one VfsAdapter can span several backends
+ * whose inode spaces are unrelated — there is no honest single `dev`. Only
+ * positive inodes qualify: ZenFS pins `/` to 0, and a sidecar poisoned the way
+ * #2146 describes can hand out 0 for many entries before the pre-boot repair
+ * re-numbers them. A collided identity is worse than none, so 0 stays absent.
+ */
+function toIdentity(ino: number | undefined): string | undefined {
+  return typeof ino === 'number' && Number.isInteger(ino) && ino > 0 ? `vfs-ino:${ino}` : undefined;
+}
+
 export class VfsAdapter implements IFileSystem {
   private registeredCommandsFn: (() => string[]) | null = null;
 
@@ -315,6 +344,7 @@ export class VfsAdapter implements IFileSystem {
           mode: fast.type === 'directory' ? 0o755 : 0o644,
           size: fast.size,
           mtime: new Date(fast.mtime),
+          identity: toIdentity(fast.ino),
         };
       }
       const s = await this.vfs.stat(normalized);
@@ -325,6 +355,7 @@ export class VfsAdapter implements IFileSystem {
         mode: s.type === 'directory' ? 0o755 : 0o644,
         size: s.size,
         mtime: new Date(s.mtime),
+        identity: toIdentity(s.ino),
       };
     });
   }
@@ -347,6 +378,7 @@ export class VfsAdapter implements IFileSystem {
           mode: fast.type === 'directory' ? 0o755 : fast.type === 'symlink' ? 0o777 : 0o644,
           size: fast.size,
           mtime: new Date(fast.mtime),
+          identity: toIdentity(fast.ino),
         };
       }
       const s = await this.vfs.lstat(normalized);
@@ -357,6 +389,7 @@ export class VfsAdapter implements IFileSystem {
         mode: s.type === 'directory' ? 0o755 : s.type === 'symlink' ? 0o777 : 0o644,
         size: s.size,
         mtime: new Date(s.mtime),
+        identity: toIdentity(s.ino),
       };
     });
   }
