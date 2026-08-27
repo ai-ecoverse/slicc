@@ -4,10 +4,16 @@ import {
   type SidecarDirtyState,
   type SidecarEntries,
   type SidecarIndexJson,
+  type SidecarInodeJson,
   stripSidecarSelfEntry,
 } from '../../src/fs/sidecar-merge.js';
 
-const entry = (tag: string) => ({ tag });
+/** Test stub: distinct tag plus the numeric fields consumers actually read. */
+const entry = (tag: string): SidecarInodeJson & { tag: string } => ({
+  tag,
+  mode: 0o100644,
+  size: 0,
+});
 
 const dirty = (paths: string[] = [], prefixes: string[] = []): SidecarDirtyState => ({
   paths: new Set(paths),

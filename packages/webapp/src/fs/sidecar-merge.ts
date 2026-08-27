@@ -22,21 +22,33 @@
  */
 
 /**
- * Opaque ZenFS inode JSON (`Inode.toJSON()`). This module never inspects
- * entries beyond identity; callers that need fields (e.g. `mode`) narrow
- * at their own boundary.
+ * Serialized ZenFS inode (`Inode.toJSON()` / `InodeLike`). Merge copies
+ * entries by identity only; sidecar-repair and kind-reconcile read/mutate
+ * the numeric fields below.
  */
-export type SidecarInodeJson = object;
+export interface SidecarInodeJson {
+  mode?: number;
+  size?: number;
+  ino?: number;
+  data?: number;
+  nlink?: number;
+  atimeMs?: number;
+  mtimeMs?: number;
+  ctimeMs?: number;
+  birthtimeMs?: number;
+  uid?: number;
+  gid?: number;
+}
 
 /**
- * Path → opaque inode map from ZenFS `Index.toJSON().entries`.
+ * Path → inode map from ZenFS `Index.toJSON().entries`.
  */
 export type SidecarEntries = { [path: string]: SidecarInodeJson };
 
 /**
  * Parsed shape of the sidecar document — `Index.toJSON()` from
  * `@zenfs/core` (`{ version, maxSize, entries }`). Entry values are
- * opaque inode records; this module never inspects them beyond identity.
+ * {@link SidecarInodeJson}; this module never inspects them beyond identity.
  */
 export interface SidecarIndexJson {
   version?: number;
