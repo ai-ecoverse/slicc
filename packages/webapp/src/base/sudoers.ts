@@ -379,6 +379,14 @@ export function matchPath(
   // the write is the one that escalates today, but an explicit `Read` rule
   // must not be able to gate the consumer's open either. Self-protection is
   // checked first and stays absolute.
+  //
+  // Unlike the `/dev/null` exemption above, this one is deliberately NOT
+  // limited to content writes: a prompt is the wrong answer for a descriptor
+  // whatever the op is. Containment for the STRUCTURAL ops (`mkdir`, `symlink`,
+  // `rename`, `mount`) lives in the other layer instead, where it belongs —
+  // `RestrictedFS.refuseDescriptorTreeOp` rejects them outright, so the two
+  // layers still agree that no op on a descriptor path may create a shared-tree
+  // entry.
   if (isEphemeralFdPath(normalized)) return 'nopasswd-allow';
   return resolve(op === 'read' ? policy.read : policy.write, normalized);
 }

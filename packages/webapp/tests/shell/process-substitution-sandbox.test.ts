@@ -19,11 +19,12 @@
 
 import 'fake-indexeddb/auto';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { emptyPolicy, mergePolicies, parseSudoers } from '../../src/base/sudoers.js';
+import { builtinScoopGrants, mergePolicies, parseSudoers } from '../../src/base/sudoers.js';
 import { VirtualFS } from '../../src/fs/index.js';
 import { RestrictedFS } from '../../src/fs/restricted-fs.js';
 import { createSudoFs } from '../../src/fs/sudo-fs.js';
 import { AlmostBashShellHeadless } from '../../src/shell/almost-bash-shell-headless.js';
+import { generateScoopSudoers } from '../../src/sudo/sudo-manager.js';
 import type { SudoBroker } from '../../src/sudo/types.js';
 
 interface Harness {
@@ -55,10 +56,21 @@ async function harness(): Promise<Harness> {
   await sharedFs.mkdir('/shared', { recursive: true });
 
   const requestApproval = vi.fn(async () => ({ decision: 'allow' as const }));
-  const restricted = new RestrictedFS(sharedFs, ['/scoops/probe/'], ['/shared/'], 'sudo-delegated');
+  const config = { writablePaths: ['/scoops/probe/'], visiblePaths: ['/shared/'] };
+  const restricted = new RestrictedFS(
+    sharedFs,
+    [...config.writablePaths],
+    [...config.visiblePaths],
+    'sudo-delegated'
+  );
+  // Mirror `SudoManager.getPolicyForScoop`: the built-in `/tmp` grants plus the
+  // config-derived sandbox grants. Compiling the REAL grants matters — under a
+  // bare policy every in-sandbox write prompts as well, which would mask which
+  // operation a descriptor case is actually responsible for.
+  const policy = mergePolicies(builtinScoopGrants(), parseSudoers(generateScoopSudoers(config)));
   const gated = createSudoFs(restricted, {
     broker: { requestApproval } as unknown as SudoBroker,
-    getPolicy: () => mergePolicies(emptyPolicy(), parseSudoers('')),
+    getPolicy: () => policy,
     defaultDisposition: 'require-approval',
   }) as unknown as VirtualFS;
 
@@ -153,6 +165,35 @@ describe('process substitution: cone/scoop equivalence', () => {
       const scoop = await h.scoop.executeCommand(command);
       expect(scoop.exitCode).toBe(cone.exitCode);
       expect(scoop.stdout).toBe(cone.stdout);
+      expect(h.requestApproval).not.toHaveBeenCalled();
+    }
+  );
+
+  it('cp consumes a substitution as its source, like the cone', async () => {
+    // `cp` reaches `copyFile`, a different consumer path from the `cat`/`diff`
+    // open — a descriptor has to work as either end of a copy.
+    const command = 'cp <(echo copied-payload) ./out.txt && cat ./out.txt';
+    const cone = await h.cone.executeCommand(command);
+    const scoop = await h.scoop.executeCommand(command);
+    expect(scoop.stdout).toBe(cone.stdout);
+    expect(scoop.stdout).toBe('copied-payload\n');
+    expect(scoop.exitCode).toBe(0);
+    expect(h.requestApproval).not.toHaveBeenCalled();
+  });
+
+  it.each([['mkdir -p /dev/fd/63'], ['mv ./src.txt /dev/fd/63'], ['ln -s ./src.txt /dev/fd/63']])(
+    '%s cannot materialize a shared-tree entry, and never prompts',
+    async (command) => {
+      // The exemption covers a content write and the read back, not tree shape.
+      // Under `sudo-delegated` enforcement these would otherwise fall through to
+      // the SHARED VirtualFS and create the cone-visible `/dev/fd` the private
+      // store exists to prevent.
+      await h.scoop.executeCommand('echo x > ./src.txt');
+      const result = await h.scoop.executeCommand(command);
+
+      expect(result.exitCode).not.toBe(0);
+      expect(await h.sharedFs.exists('/dev/fd/63')).toBe(false);
+      expect(await h.sharedFs.exists('/dev')).toBe(false);
       expect(h.requestApproval).not.toHaveBeenCalled();
     }
   );

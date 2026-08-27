@@ -642,7 +642,32 @@ export class RestrictedFS {
     return this.vfs.writeFile(path, content, options);
   }
 
+  /**
+   * Refuse a TREE-SHAPE op on a descriptor path.
+   *
+   * The descriptor exemption covers exactly the two things process substitution
+   * needs — a content write and the read back — plus the release (`rm`). Every
+   * other op names a tree node, and a descriptor is not one: it has no parent
+   * directory, no siblings and no inode to relink. This is not merely
+   * meaningless, it is load-bearing. Under `sudo-delegated` enforcement
+   * `checkWrite` is a no-op, so without this refusal a `mkdir /dev/fd/63` or
+   * `mv x /dev/fd/63` would fall through to the SHARED VirtualFS and
+   * materialize the very cone-visible, cross-scoop `/dev/fd` entry the private
+   * store exists to prevent — and the sudoers layer cannot stop it, because it
+   * deliberately answers `nopasswd-allow` for these paths rather than raising
+   * a prompt no "Always" grant could pre-empt.
+   *
+   * `EACCES` (not `ENOENT`) because the op is refused, not the path missing:
+   * the shell owns these paths, the sandbox does not.
+   */
+  private refuseDescriptorTreeOp(path: string): void {
+    if (EphemeralFdStore.handles(path)) {
+      throw new FsError('EACCES', 'permission denied', normalizePath(path));
+    }
+  }
+
   async mkdir(path: string, options?: MkdirOptions): Promise<void> {
+    this.refuseDescriptorTreeOp(path);
     this.checkWrite(path);
     await this.checkParentRealpathEscape(path);
     return this.vfs.mkdir(path, options);
@@ -679,6 +704,8 @@ export class RestrictedFS {
   }
 
   async rename(oldPath: string, newPath: string): Promise<void> {
+    this.refuseDescriptorTreeOp(oldPath);
+    this.refuseDescriptorTreeOp(newPath);
     this.checkWrite(oldPath);
     this.checkWrite(newPath);
     // Resolve symlinks in both paths to prevent escape
@@ -688,6 +715,27 @@ export class RestrictedFS {
   }
 
   async copyFile(src: string, dest: string): Promise<void> {
+    // A descriptor is a legitimate end of a copy — `cp <(echo hi) out` reaches
+    // here through `VfsAdapter.cp`, and `cp in >(consumer)` has to land in the
+    // store so the writer body sees the bytes. Each end is resolved
+    // independently: the descriptor end through the store (no ACL, it is not a
+    // tree path), the tree end through the ordinary checks below.
+    if (EphemeralFdStore.handles(src)) {
+      const content = this.ephemeralFds.read(src, { encoding: 'binary' });
+      await this.writeFile(dest, content);
+      return;
+    }
+    if (EphemeralFdStore.handles(dest)) {
+      if (!this.isAllowed(src)) {
+        throw new FsError('ENOENT', 'no such file or directory', normalizePath(src));
+      }
+      const resolvedSource = await this.resolveAndCheckRead(src);
+      this.ephemeralFds.write(
+        dest,
+        await this.vfs.readFile(resolvedSource, { encoding: 'binary' })
+      );
+      return;
+    }
     // Read from anywhere allowed, write only to allowed
     if (!this.isAllowed(src)) {
       throw new FsError('ENOENT', 'no such file or directory', normalizePath(src));
@@ -712,6 +760,7 @@ export class RestrictedFS {
   // ── Symlink operations ───────────────────────────────────────────────
 
   async symlink(target: string, linkPath: string): Promise<void> {
+    this.refuseDescriptorTreeOp(linkPath);
     this.checkWrite(linkPath);
     await this.checkParentRealpathEscape(linkPath);
     return this.vfs.symlink(target, linkPath);
@@ -806,12 +855,14 @@ export class RestrictedFS {
     backend: MountBackend,
     opts?: { env?: MountIndexEnv }
   ): Promise<void> {
+    this.refuseDescriptorTreeOp(absolutePath);
     this.checkWrite(absolutePath);
     await this.checkParentRealpathEscape(absolutePath);
     return this.vfs.mount(absolutePath, backend, opts);
   }
 
   async unmount(absolutePath: string): Promise<void> {
+    this.refuseDescriptorTreeOp(absolutePath);
     this.checkWrite(absolutePath);
     await this.checkParentRealpathEscape(absolutePath);
     return this.vfs.unmount(absolutePath);
@@ -829,6 +880,7 @@ export class RestrictedFS {
     absolutePath: string,
     opts?: { bodies?: boolean; env?: MountIndexEnv }
   ): Promise<RefreshReport> {
+    this.refuseDescriptorTreeOp(absolutePath);
     this.checkWrite(absolutePath);
     return this.vfs.refreshMount(absolutePath, opts);
   }

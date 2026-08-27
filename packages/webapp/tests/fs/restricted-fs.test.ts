@@ -690,6 +690,9 @@ describe('RestrictedFS ephemeral shell descriptors', () => {
   beforeEach(async () => {
     vfs = await VirtualFS.create({ dbName: `test-restricted-fs-fd-${fdDbCounter++}`, wipe: true });
     await vfs.mkdir('/scoops/fd-scoop', { recursive: true });
+    // A real out-of-sandbox file, so an ENOENT below is the ACL filtering it
+    // rather than the path simply not existing.
+    await vfs.writeFile('/scoops/other-scoop/secret.txt', 'secret', { recursive: true });
     restricted = new RestrictedFS(vfs, ['/scoops/fd-scoop/']);
   });
 
@@ -750,6 +753,59 @@ describe('RestrictedFS ephemeral shell descriptors', () => {
 
   it('reports a descriptor as writable', () => {
     expect(restricted.canWrite('/dev/fd/63')).toBe(true);
+  });
+
+  it('copies a descriptor into the tree and a tree file into a descriptor', async () => {
+    // `cp <(echo hi) out` and `cp in >(consumer)` both land here via
+    // `VfsAdapter.cp`, so each end has to be resolved independently.
+    await restricted.writeFile('/dev/fd/63', 'from-descriptor');
+    await restricted.copyFile('/dev/fd/63', '/scoops/fd-scoop/out.txt');
+    expect(await restricted.readTextFile('/scoops/fd-scoop/out.txt')).toBe('from-descriptor');
+
+    await restricted.writeFile('/scoops/fd-scoop/in.txt', 'from-tree');
+    await restricted.copyFile('/scoops/fd-scoop/in.txt', '/dev/fd/62');
+    expect(await restricted.readTextFile('/dev/fd/62')).toBe('from-tree');
+    // The descriptor end never becomes a tree entry, in either direction.
+    expect(await vfs.exists('/dev/fd/62')).toBe(false);
+  });
+
+  it('keeps the ACL on the tree end of a descriptor copy', async () => {
+    await restricted.writeFile('/dev/fd/63', 'payload');
+    await expect(restricted.copyFile('/dev/fd/63', '/elsewhere/out.txt')).rejects.toThrow(
+      /permission denied/
+    );
+    await expect(
+      restricted.copyFile('/scoops/other-scoop/secret.txt', '/dev/fd/62')
+    ).rejects.toThrow(/no such file/);
+    expect(await restricted.exists('/dev/fd/62')).toBe(false);
+  });
+
+  it('refuses tree-shape ops on a descriptor path', async () => {
+    // The exemption covers a content write, the read back and the release —
+    // not tree shape. Under `sudo-delegated` enforcement these would otherwise
+    // fall through to the shared VFS, which is what the private store prevents.
+    await restricted.writeFile('/scoops/fd-scoop/src.txt', 'x');
+    await expect(restricted.mkdir('/dev/fd/63')).rejects.toThrow(/permission denied/);
+    await expect(restricted.symlink('/scoops/fd-scoop/src.txt', '/dev/fd/63')).rejects.toThrow(
+      /permission denied/
+    );
+    await expect(restricted.rename('/scoops/fd-scoop/src.txt', '/dev/fd/63')).rejects.toThrow(
+      /permission denied/
+    );
+    await expect(restricted.rename('/dev/fd/63', '/scoops/fd-scoop/moved.txt')).rejects.toThrow(
+      /permission denied/
+    );
+    expect(await vfs.exists('/dev')).toBe(false);
+    expect(await vfs.exists('/dev/fd/63')).toBe(false);
+  });
+
+  it('refuses a mount at a descriptor path', async () => {
+    await expect(restricted.mount('/dev/fd/63', fakeMountBackend())).rejects.toThrow(
+      /permission denied/
+    );
+    await expect(restricted.unmount('/dev/fd/63')).rejects.toThrow(/permission denied/);
+    await expect(restricted.refreshMount('/dev/fd/63')).rejects.toThrow(/permission denied/);
+    expect(await vfs.exists('/dev')).toBe(false);
   });
 
   it('does not expose the descriptors as a directory', async () => {

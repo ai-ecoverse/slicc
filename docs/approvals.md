@@ -173,6 +173,17 @@ Unlike `/tmp`, this space is **private per sandbox and never enters the tree**:
 - a descriptor that was never written raises `ENOENT` on read, the same loud
   failure the cone gives for an unopened fd.
 
+The exemption covers exactly what process substitution needs — a content write,
+the read back (including as either end of a `copyFile`, which is how `cp <(…)`
+arrives), and the release (`rm`). Every **tree-shape** op on a descriptor path is
+refused with `EACCES` by `RestrictedFS.refuseDescriptorTreeOp`: `mkdir`,
+`symlink`, `rename` and `mount`/`unmount`/`refreshMount`. That refusal is the
+containment for those ops, and it has to live in the ACL layer, because the
+policy layer deliberately answers `nopasswd-allow` rather than raising a prompt.
+Without it, a `mkdir /dev/fd/63` in a `sudo-delegated` sandbox would fall through
+to the shared `VirtualFS` and create exactly the cone-visible, cross-scoop
+`/dev/fd` entry the private store exists to prevent.
+
 This is not a widening of the sandbox: a scoop can already express the same data
 flow with a temp file under `/tmp`, which is unconditionally writable, so gating
 `<(...)` bought no containment — it only broke the ergonomic spelling. It is
