@@ -15,7 +15,7 @@
  */
 
 import { normalizePath, pathGlobToRegExp } from '../fs/path-utils.js';
-import { isNoOpWriteDevicePath } from '../fs/virtual-device-paths.js';
+import { isEphemeralFdPath, isNoOpWriteDevicePath } from '../fs/virtual-device-paths.js';
 import { createLogger } from './logger.js';
 
 export { pathGlobToRegExp } from '../fs/path-utils.js';
@@ -371,5 +371,14 @@ export function matchPath(
     if (isSelfProtectedWrite(normalized)) return 'require-approval';
     if (opts?.isContentWrite && isNoOpWriteDevicePath(normalized)) return 'nopasswd-allow';
   }
+  // The shell's ephemeral descriptors (`/dev/fd/<n>`, minted per command by
+  // process substitution) are never a policy subject: the fd number changes
+  // every invocation, so no "Always" grant could pre-empt the prompt, and an
+  // unattended scoop would stall forever on a cone approval for a path its
+  // own next command would read straight back (#2502). Exempt for BOTH ops —
+  // the write is the one that escalates today, but an explicit `Read` rule
+  // must not be able to gate the consumer's open either. Self-protection is
+  // checked first and stays absolute.
+  if (isEphemeralFdPath(normalized)) return 'nopasswd-allow';
   return resolve(op === 'read' ? policy.read : policy.write, normalized);
 }
