@@ -111,70 +111,112 @@ export interface ValidateBearerEnv {
   REQUIRE_OWNER_ORG: string;
 }
 
-export async function validateBearer(token: string, env: ValidateBearerEnv): Promise<AuthResult> {
-  const proxyConfig = await getProxyConfig(env);
-  const environment = proxyConfig.imsEnvironment || 'prod';
-  const expectedIssuer = getImsHost(environment);
-  const jwks = getJWKS(environment);
+function isJwksUpstreamError(err: unknown): boolean {
+  return (
+    err instanceof errors.JWKSTimeout ||
+    err instanceof errors.JWKSNoMatchingKey ||
+    err instanceof errors.JWKSInvalid ||
+    err instanceof errors.JWKSMultipleMatchingKeys
+  );
+}
 
-  let payload: JWTPayload;
-  try {
-    const { payload: p } = await jwtVerify(token, jwks);
-    payload = p as JWTPayload;
-  } catch (err) {
-    // Discriminate upstream failures (JWKS fetch issues) from token validity issues.
-    // JWKS errors → 503 UPSTREAM_UNAVAILABLE (transient, retry later).
-    // Token errors → 401 INVALID_TOKEN (client must re-authenticate).
-    if (
-      err instanceof errors.JWKSTimeout ||
-      err instanceof errors.JWKSNoMatchingKey ||
-      err instanceof errors.JWKSInvalid ||
-      err instanceof errors.JWKSMultipleMatchingKeys
-    ) {
-      throw new AuthError(
-        'UPSTREAM_UNAVAILABLE',
-        `JWKS service unavailable: ${err instanceof Error ? err.message : String(err)}`
-      );
-    }
-    // Check for fetch errors from jose's createRemoteJWKSet (network issues).
-    const msg = err instanceof Error ? err.message : String(err);
-    if (/fetch failed|network|ECONNREFUSED|ETIMEDOUT/i.test(msg)) {
-      throw new AuthError('UPSTREAM_UNAVAILABLE', `IMS JWKS unreachable: ${msg}`);
-    }
-    // Token validity errors → INVALID_TOKEN.
-    throw new AuthError('INVALID_TOKEN', `JWT verification failed: ${msg}`);
+function isNetworkFetchError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err);
+  return /fetch failed|network|ECONNREFUSED|ETIMEDOUT/i.test(msg);
+}
+
+function mapJwtVerifyError(err: unknown): AuthError {
+  if (isJwksUpstreamError(err)) {
+    return new AuthError(
+      'UPSTREAM_UNAVAILABLE',
+      `JWKS service unavailable: ${err instanceof Error ? err.message : String(err)}`
+    );
   }
+  if (isNetworkFetchError(err)) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return new AuthError('UPSTREAM_UNAVAILABLE', `IMS JWKS unreachable: ${msg}`);
+  }
+  const msg = err instanceof Error ? err.message : String(err);
+  return new AuthError('INVALID_TOKEN', `JWT verification failed: ${msg}`);
+}
 
+async function verifyJwtPayload(
+  token: string,
+  jwks: ReturnType<typeof createRemoteJWKSet>
+): Promise<JWTPayload> {
+  try {
+    const { payload } = await jwtVerify(token, jwks);
+    return payload as JWTPayload;
+  } catch (err) {
+    throw mapJwtVerifyError(err);
+  }
+}
+
+function validatePayloadClaims(
+  payload: JWTPayload,
+  expectedIssuer: string,
+  clientId: string
+): void {
   if (payload.iss && payload.iss !== expectedIssuer) {
     throw new AuthError('INVALID_TOKEN', `issuer mismatch: ${payload.iss}`);
   }
-  if (payload.client_id !== proxyConfig.clientId) {
+  if (payload.client_id !== clientId) {
     throw new AuthError('INVALID_TOKEN', `client_id mismatch: ${payload.client_id}`);
   }
   if (payload.type !== 'access_token') {
     throw new AuthError('INVALID_TOKEN', `token type is not access_token: ${payload.type}`);
   }
+}
 
+function needsImsProfile(
+  email: string | undefined,
+  ownerOrg: string | undefined,
+  env: ValidateBearerEnv
+): boolean {
+  return !email || (env.REQUIRE_OWNER_ORG === 'true' && !ownerOrg);
+}
+
+async function resolveIdentityFromPayload(
+  payload: JWTPayload,
+  token: string,
+  environment: string,
+  env: ValidateBearerEnv
+): Promise<{ email: string; ownerOrg?: string; userName: string }> {
   let email = payload.email;
   let ownerOrg = payload.ownerOrg;
   let userName = '';
-  if (!email || (env.REQUIRE_OWNER_ORG === 'true' && !ownerOrg)) {
+
+  if (needsImsProfile(email, ownerOrg, env)) {
     const profile = await fetchImsProfile(token, environment);
     email = email || profile.email;
     ownerOrg = ownerOrg || profile.ownerOrg;
     userName = profile.displayName || profile.name || '';
   }
-  if (!email) throw new AuthError('INVALID_TOKEN', 'no email in token or profile');
+
+  if (!email) {
+    throw new AuthError('INVALID_TOKEN', 'no email in token or profile');
+  }
   if (env.REQUIRE_OWNER_ORG === 'true' && !ownerOrg) {
     throw new AuthError('NOT_ALLOWED', `no ownerOrg for ${email}`);
   }
 
+  if (!userName) {
+    const given = payload.given_name ?? '';
+    const family = payload.family_name ?? '';
+    userName = [given, family].filter(Boolean).join(' ') || email;
+  }
+
+  return { email, ownerOrg, userName };
+}
+
+function assertEmailAllowed(email: string, env: ValidateBearerEnv): void {
   const allowedDomains = (env.ALLOWED_EMAIL_DOMAIN || 'adobe.com').split(',').map((d) => d.trim());
-  if (!allowedDomains.includes('*')) {
-    const emailDomain = email.split('@')[1]?.toLowerCase();
-    if (!emailDomain || !allowedDomains.includes(emailDomain)) {
-      throw new AuthError('NOT_ALLOWED', `email domain not allowed: ${email}`);
-    }
+  if (allowedDomains.includes('*')) {
+    return;
+  }
+  const emailDomain = email.split('@')[1]?.toLowerCase();
+  if (!emailDomain || !allowedDomains.includes(emailDomain)) {
+    throw new AuthError('NOT_ALLOWED', `email domain not allowed: ${email}`);
   }
 
   const blocked = (env.BLOCKED_EMAILS || '')
@@ -184,12 +226,24 @@ export async function validateBearer(token: string, env: ValidateBearerEnv): Pro
   if (blocked.includes(email.toLowerCase())) {
     throw new AuthError('NOT_ALLOWED', `email access denied: ${email}`);
   }
+}
 
-  if (!userName) {
-    const given = payload.given_name ?? '';
-    const family = payload.family_name ?? '';
-    userName = [given, family].filter(Boolean).join(' ') || email;
-  }
+export async function validateBearer(token: string, env: ValidateBearerEnv): Promise<AuthResult> {
+  const proxyConfig = await getProxyConfig(env);
+  const environment = proxyConfig.imsEnvironment || 'prod';
+  const expectedIssuer = getImsHost(environment);
+  const jwks = getJWKS(environment);
+
+  const payload = await verifyJwtPayload(token, jwks);
+  validatePayloadClaims(payload, expectedIssuer, proxyConfig.clientId);
+
+  const { email, ownerOrg, userName } = await resolveIdentityFromPayload(
+    payload,
+    token,
+    environment,
+    env
+  );
+  assertEmailAllowed(email, env);
 
   return {
     userId: (payload.sub ?? payload.user_id ?? email) as string,
