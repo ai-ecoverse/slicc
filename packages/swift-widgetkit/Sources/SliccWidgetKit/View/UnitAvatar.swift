@@ -191,6 +191,10 @@ public struct UnitAvatarGeometry: Equatable, Sendable {
     public var lidInset: Double { max(0, min(1, face.lidTop)) * eyeDiameter }
 
     public var lidIsVisible: Bool { face.lidTop > Self.lidOpenEpsilon }
+
+    /// How far the lid mask reaches past the eye on the sides it does not cut,
+    /// so the socket's stroke — which straddles the path — survives it.
+    public var lidMaskBleed: Double { eyeOutlineWidth * 2 }
     public var lidLineIsVisible: Bool { face.lidTop > Self.lidLineEpsilon }
 
     /// Half-width of the line that closes the socket outline at the lid cut.
@@ -449,7 +453,9 @@ public struct UnitAvatarView: View {
                 }
                 socket.stroke(.black, lineWidth: geometry.eyeOutlineWidth)
             }
-            .mask(lidMask)
+            // Masked ONLY when a lid is actually down. An always-on mask is
+            // an always-on clip, and there is nothing for it to do here.
+            .modifier(LidCut(mask: geometry.lidIsVisible ? lidMask : nil))
             lidLine
         }
         .frame(width: geometry.eyeDiameter, height: geometry.eyeDiameter)
@@ -471,17 +477,22 @@ public struct UnitAvatarView: View {
 
     /// The lid: one rectangular mask offset from the top — the SwiftUI mirror
     /// of the web's clip rect.
-    @ViewBuilder
+    ///
+    /// It bleeds past the eye on the three sides it does not cut. A mask the
+    /// exact size of the eye box slices the outer half of the socket's stroke,
+    /// because `.stroke` straddles the path rather than sitting inside it —
+    /// which showed up on device as a few points of outline missing from the
+    /// left, right and bottom of every eye. The lid cuts the top. Nothing else
+    /// may cut anything.
     private var lidMask: some View {
-        if geometry.lidIsVisible {
-            VStack(spacing: 0) {
-                Color.clear.frame(height: geometry.lidInset)
-                Rectangle().fill(.black)
-            }
-            .frame(width: geometry.eyeDiameter, height: geometry.eyeDiameter)
-        } else {
+        let bleed = geometry.lidMaskBleed
+        return VStack(spacing: 0) {
+            Color.clear.frame(height: geometry.lidInset + bleed)
             Rectangle().fill(.black)
         }
+        .frame(
+            width: geometry.eyeDiameter + bleed * 2,
+            height: geometry.eyeDiameter + bleed * 2)
     }
 
     /// The straight line that closes the socket outline at the lid cut.
@@ -526,6 +537,22 @@ public struct UnitAvatarView: View {
     static func noiseSeed(eyeIndex: Int) -> UInt32 {
         UnitAvatarGeometry.frozenNoiseSeed
             ^ (UInt32(truncatingIfNeeded: eyeIndex) &* UnitAvatarGeometry.noiseEyeSalt)
+    }
+}
+
+/// Applies a lid mask, or none at all.
+///
+/// `.mask(nil)` is not a thing, and a `@ViewBuilder` branch around the whole
+/// eye duplicates it, so the conditional lives here instead.
+private struct LidCut<Mask: View>: ViewModifier {
+    let mask: Mask?
+
+    func body(content: Content) -> some View {
+        if let mask {
+            content.mask(mask)
+        } else {
+            content
+        }
     }
 }
 

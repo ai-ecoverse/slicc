@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 import SwiftUI
 import XCTest
@@ -175,6 +176,55 @@ final class WidgetRenderSmokeTests: XCTestCase {
                     geometry: UnitAvatarGeometry(type: .cone, eyes: .static, sideLength: 56),
                     hue: WidgetPalette.dark.inkTertiary),
                 size: CGSize(width: 56, height: 56), scheme: .dark))
+    }
+
+    /// The socket's outline must survive the lid mask.
+    ///
+    /// `.stroke` straddles its path, so a mask the exact size of the eye box
+    /// shaves the outer half off every side — a few points of missing outline
+    /// on the left, right and bottom of every eye. It shipped to a device and
+    /// took a human looking at glass to spot.
+    ///
+    /// Asserted against the GEOMETRY, not against a second render. The first
+    /// attempt compared a lidded face to an open one and passed happily while
+    /// the bug was still in: the mask was unconditional, so both renders were
+    /// shaved by the same amount and agreed with each other perfectly.
+    func testTheLidMaskDoesNotShaveTheSocketOutline() throws {
+        let side = 200.0
+        let geometry = UnitAvatarGeometry(type: .scoop, face: .awaiting, fill: 10, sideLength: side)
+        let renderer = ImageRenderer(
+            content: UnitAvatarView(geometry: geometry, hue: .gray)
+                .frame(width: side, height: side))
+        renderer.scale = 1
+        let image = try XCTUnwrap(renderer.cgImage)
+
+        var pixels = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let context = try XCTUnwrap(
+            CGContext(
+                data: &pixels, width: image.width, height: image.height, bitsPerComponent: 8,
+                bytesPerRow: image.width * 4, space: CGColorSpaceCreateDeviceRGB(),
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue))
+        context.draw(image, in: CGRect(x: 0, y: 0, width: image.width, height: image.height))
+
+        // The eyes' vertical centre, far below the lid: the socket is at its
+        // widest and nothing else is dark out here.
+        let row = image.height / 2
+        func isInk(_ column: Int) -> Bool {
+            let offset = (row * image.width + column) * 4
+            return pixels[offset] < 40 && pixels[offset + 1] < 40 && pixels[offset + 2] < 40
+        }
+
+        // Each eye's INNER edge — the one the tile does not crop. The outline
+        // is centred on the path, so it must reach half a stroke beyond it.
+        let reach = geometry.eyeRadius + geometry.eyeOutlineWidth / 2 - 1
+        let left = geometry.eyeCenters[0]
+        let right = geometry.eyeCenters[1]
+        XCTAssertTrue(
+            isInk(Int((left.x + reach).rounded())),
+            "the left eye's outline is shaved back inside its path")
+        XCTAssertTrue(
+            isInk(Int((right.x - reach).rounded())),
+            "the right eye's outline is shaved back inside its path")
     }
 
     func testBothMarksProduceANonEmptyPath() {
