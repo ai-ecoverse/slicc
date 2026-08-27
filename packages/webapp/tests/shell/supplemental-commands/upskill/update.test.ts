@@ -359,6 +359,62 @@ describe('upskill update', () => {
     expect(provenance?.files).not.toContain('scripts/gone.sh');
   });
 
+  it('reports the skills a bare sweep skipped, and still exits 0', async () => {
+    await installAlpha(fs, V1);
+    // Two unattributed skills — a runtime-bundled one and a hand-installed one.
+    for (const name of ['zeta', 'bundled']) {
+      await fs.mkdir(`/workspace/skills/${name}`, { recursive: true });
+      await fs.writeFile(`/workspace/skills/${name}/SKILL.md`, `# ${name}\n`);
+    }
+
+    const cmd = createUpskillCommand(fs, repoFetch(V1) as unknown as SecureFetch);
+    const result = await cmd.execute(['update', '--dry-run'], createMockCtx() as never);
+
+    // Not a failure: nothing on stderr, exit 0.
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain('alpha: already current');
+    expect(result.stdout).toContain('Skipped 2 skills with no install provenance');
+    // Name-sorted and deterministic.
+    expect(result.stdout).toContain('bundled, zeta');
+    expect(result.stdout).toContain('upgrade apply');
+    expect(result.stdout).toContain('--from <owner>/<repo>');
+    // The closing line no longer claims more than it checked.
+    expect(result.stdout).toContain('All 1 skill with provenance is current.');
+    expect(result.stdout).not.toContain('All skills are current');
+  });
+
+  it('says nothing was checked when no installed skill has provenance', async () => {
+    await fs.mkdir('/workspace/skills/legacy', { recursive: true });
+    await fs.writeFile('/workspace/skills/legacy/SKILL.md', '# Legacy\n');
+
+    const fetchMock = repoFetch(V1);
+    const cmd = createUpskillCommand(fs, fetchMock as unknown as SecureFetch);
+    const result = await cmd.execute(['update', '--dry-run'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stderr).toBe('');
+    expect(result.stdout).toContain('Skipped 1 skill with no install provenance');
+    expect(result.stdout).toContain('legacy');
+    // Nothing was checked, so there is no all-clear of any scope.
+    expect(result.stdout).not.toMatch(/skills are current|with provenance is current/);
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('adds no skipped noise when every installed skill has provenance', async () => {
+    await installAlpha(fs, V1);
+
+    const cmd = createUpskillCommand(fs, repoFetch(V1) as unknown as SecureFetch);
+    const result = await cmd.execute(['update', '--dry-run'], createMockCtx() as never);
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toBe(
+      'Skill update (dry run — nothing written):\n' +
+        `  alpha: already current (github:octo/skills)\n` +
+        '\nAll skills are current.\n'
+    );
+  });
+
   it('--json emits the classification for scripted callers', async () => {
     await installAlpha(fs, V1);
 
@@ -384,6 +440,30 @@ describe('upskill update', () => {
     expect(parsed.results[0].changes).toContainEqual({ path: 'SKILL.md', status: 'updated' });
     // An existing dotfile is reported, never rewritten.
     expect(parsed.results[0].changes).toContainEqual({ path: '.gitignore', status: 'kept-local' });
+  });
+
+  it('--json keeps its existing keys and adds the skipped names', async () => {
+    await installAlpha(fs, V1);
+    await fs.mkdir('/workspace/skills/legacy', { recursive: true });
+    await fs.writeFile('/workspace/skills/legacy/SKILL.md', '# Legacy\n');
+
+    const cmd = createUpskillCommand(fs, repoFetch(V1) as unknown as SecureFetch);
+    const result = await cmd.execute(['update', '--dry-run', '--json'], createMockCtx() as never);
+
+    const parsed = JSON.parse(result.stdout) as {
+      ok: boolean;
+      dryRun: boolean;
+      results: Array<{ skill: string; outcome: string }>;
+      skipped: string[];
+    };
+    expect(result.exitCode).toBe(0);
+    // Pre-existing keys keep their meaning: an unattributed skill is not a failure.
+    expect(parsed.ok).toBe(true);
+    expect(parsed.dryRun).toBe(true);
+    expect(parsed.results).toEqual([
+      expect.objectContaining({ skill: 'alpha', outcome: 'current' }),
+    ]);
+    expect(parsed.skipped).toEqual(['legacy']);
   });
 
   it('honors --branch as a one-off override of the recorded ref', async () => {
