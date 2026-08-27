@@ -121,6 +121,15 @@ async function writeTray(t: TestTray, tray: TrayRecord): Promise<void> {
   await t.state.storage.put('tray', tray);
 }
 
+/** Update leader.lastSeenAt to current clock time to simulate an active leader. */
+async function touchLeader(t: TestTray, clockRef: { now: number }): Promise<void> {
+  const tray = await readTray(t);
+  if (tray.leader) {
+    tray.leader.lastSeenAt = new Date(clockRef.now).toISOString();
+    await writeTray(t, tray);
+  }
+}
+
 /* ------------------------------------------------------------------ */
 /*  Tests                                                             */
 /* ------------------------------------------------------------------ */
@@ -142,6 +151,8 @@ describe('session-tray state pruning', () => {
 
       // Advance past grace window (expiresAt + 5min + 1s)
       clock.now += 30_000 + 5 * 60 * 1000 + 1000;
+      // Keep leader "alive" so follower attach succeeds
+      await touchLeader(t, clock);
 
       // Join follower 2 — triggers pruning via ensureBootstrap
       await joinFollower(t, 'follower-2');
@@ -173,6 +184,8 @@ describe('session-tray state pruning', () => {
 
       // Advance well past grace window
       clock.now += 30_000 + 5 * 60 * 1000 + 60_000;
+      // Keep leader "alive" so follower attach succeeds
+      await touchLeader(t, clock);
 
       // Trigger pruning via new follower
       await joinFollower(t, 'follower-2');
@@ -205,6 +218,8 @@ describe('session-tray state pruning', () => {
 
       // Advance past grace window
       clock.now += 30_000 + 5 * 60 * 1000 + 1000;
+      // Keep leader "alive" so follower attach succeeds
+      await touchLeader(t, clock);
 
       // Trigger pruning
       await joinFollower(t, 'follower-2');

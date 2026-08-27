@@ -351,6 +351,8 @@ export interface TrayLeaderSummary {
   controllerId: string;
   connected: boolean;
   reconnectDeadline: string | null;
+  /** ISO timestamp of the leader's last application-level message. */
+  lastSeenAt?: string;
 }
 
 export interface FollowerJoinRequest {

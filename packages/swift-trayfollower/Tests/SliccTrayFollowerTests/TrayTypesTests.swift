@@ -105,15 +105,17 @@ final class TrayTypesTests: XCTestCase {
 
     func testLeaderSummaryRoundTrip() throws {
         let decoded = try WireCodec.roundTrip(
-            TrayLeaderSummary(controllerId: "c1", connected: true, reconnectDeadline: "2026-08-08T02:00:00Z"))
+            TrayLeaderSummary(controllerId: "c1", connected: true, reconnectDeadline: "2026-08-08T02:00:00Z", lastSeenAt: "2026-08-08T01:00:00Z"))
         XCTAssertEqual(decoded.controllerId, "c1")
         XCTAssertTrue(decoded.connected)
         XCTAssertEqual(decoded.reconnectDeadline, "2026-08-08T02:00:00Z")
+        XCTAssertEqual(decoded.lastSeenAt, "2026-08-08T01:00:00Z")
     }
 
     func testLeaderSummaryWithoutDeadline() throws {
-        let decoded = try WireCodec.roundTrip(TrayLeaderSummary(controllerId: "c1", connected: false, reconnectDeadline: nil))
+        let decoded = try WireCodec.roundTrip(TrayLeaderSummary(controllerId: "c1", connected: false, reconnectDeadline: nil, lastSeenAt: nil))
         XCTAssertNil(decoded.reconnectDeadline)
+        XCTAssertNil(decoded.lastSeenAt)
     }
 
     // MARK: - TrayBootstrapEvent union

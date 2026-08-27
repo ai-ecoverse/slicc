@@ -103,6 +103,8 @@ public struct TrayLeaderSummary: Codable, Sendable {
     public let controllerId: String
     public let connected: Bool
     public let reconnectDeadline: String?
+    /// ISO timestamp of the leader's last application-level message.
+    public let lastSeenAt: String?
 }
 
 // MARK: - TrayBootstrapEvent
