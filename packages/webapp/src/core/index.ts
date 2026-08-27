@@ -65,9 +65,11 @@ export {
 } from './secret-scrub.js';
 // Local utilities
 export { SessionStore } from './session.js';
+export type { ToolAdapterGateConfig, ToolCallGate } from './tool-adapter.js';
 export {
   adaptTool,
   adaptTools,
+  extractToolArg,
   type ToolAdapterProcessConfig,
   type ToolAdapterSecretsConfig,
 } from './tool-adapter.js';

@@ -45,6 +45,7 @@ import type { RestrictedFS } from '../fs/restricted-fs.js';
 import type { Process, ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
 import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
+import type { TurnGuestGate } from '../sudo/types.js';
 import { conversationKeyFor, workspaceIdFor } from '../work-unit/conversation/key.js';
 import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { toDescriptor } from '../work-unit/descriptor.js';
@@ -305,6 +306,7 @@ export class ScoopContext {
         processOwner: this.owner,
         coneJid: this.coneJid,
         getTurnPid: () => this.currentTurnProcess?.pid,
+        getTurnGuestGate: () => this.currentTurnGuestGate,
         getLickTarget: () => this.ownLickTarget(),
         getEffortOverride: () => this.activeEffortOverride,
         isDisposed: () => this.disposed,
@@ -364,6 +366,11 @@ export class ScoopContext {
     lastError: Error | null,
     abortSignal: AbortSignal
   ): void {
+    // The turn is over — the gate must not outlive it. A leaked gate would make
+    // the OWNER's next turn behave as if a guest had caused it, prompting for
+    // approval on the owner's own tool calls. Cleared first so nothing below
+    // can throw past it.
+    this.currentTurnGuestGate = undefined;
     this.runBounds.disarm();
     // A bound-terminated run must not read as a clean completion: surface
     // the ceiling through onError so observers (the agent bridge) report a
@@ -400,12 +407,28 @@ export class ScoopContext {
    * via `steer()` when `options.steer` is set (interrupt the running turn),
    * otherwise via `followUp()`.
    */
+  /**
+   * Gate for the turn currently running, when a biscotto caused it.
+   *
+   * Not on the agent and not captured into the tool set: tools are built once
+   * per scoop while turns come and go, so the adapter reads this LIVE on every
+   * tool call. Cleared when the turn settles — a later owner-initiated turn
+   * must not inherit a guest's gate, and a guest's turn must not escape one.
+   */
+  private currentTurnGuestGate: TurnGuestGate | undefined;
+
   async prompt(
     text: string,
     images: ImageContent[] = [],
-    options?: { steer?: boolean }
+    options?: { steer?: boolean; guestGate?: TurnGuestGate }
   ): Promise<void> {
     if (!(await this.ensureAgentReady())) return;
+    // Turn-scoped: set BEFORE the agent runs and cleared when the turn ends, so
+    // every tool call the agent makes downstream of a guest's message is gated,
+    // and nothing after the turn is. Read live by the tool adapter rather than
+    // captured at tool-build time — tools are built once per scoop, turns come
+    // and go.
+    this.currentTurnGuestGate = options?.guestGate;
     if (
       queuePromptIfBusy(this.agent!, text, images, {
         steer: options?.steer ?? false,

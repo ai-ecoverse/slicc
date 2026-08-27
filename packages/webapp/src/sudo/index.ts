@@ -72,6 +72,7 @@ export type {
   SudoDecision,
   SudoKind,
   SudoRequest,
+  TurnGuestGate,
 } from './types.js';
 export { SUDO_APPROVE_PATH, SUDO_REQUEST_TYPE } from './types.js';
 

@@ -14,6 +14,7 @@
 import { createLogger } from '../base/logger.js';
 import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
 import type { SessionStore } from '../core/session.js';
+import type { TurnGuestGate } from '../sudo/types.js';
 import { advanceMessageWatermark, parseMessageWatermark, serializeMessageWatermark } from './db.js';
 import type { ScoopContext } from './scoop-context.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
@@ -63,7 +64,7 @@ export interface ScoopMessageRouterDeps {
     senderId: string,
     senderName: string,
     images?: ReturnType<typeof imageContentFromAttachments>,
-    options?: { steer?: boolean }
+    options?: { steer?: boolean; guestGate?: TurnGuestGate }
   ): Promise<void>;
   /** Notify the UI about a new incoming message (delegation / external lick chip). */
   notifyIncomingMessage(scoopJid: string, message: ChannelMessage): void;
@@ -575,9 +576,15 @@ export class ScoopMessageRouter {
     // batch is delivered as a single prompt, so it cannot be split into a
     // steered and a queued half.
     const steer = eligibleMessages.some((m) => m.steer);
+    // Same reasoning as `steer`: the batch is delivered as ONE prompt, so it
+    // cannot be split into a gated and an ungated half. Any guest-caused
+    // message in the batch gates the whole turn — the conservative reading, and
+    // the only one that is sound when the agent sees the messages merged.
+    const guestGate = eligibleMessages.find((m) => m.guestGate)?.guestGate;
 
     await this.deps.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName, images, {
       steer,
+      ...(guestGate ? { guestGate } : {}),
     });
   }
 

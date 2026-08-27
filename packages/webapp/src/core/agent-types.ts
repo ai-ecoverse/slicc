@@ -9,6 +9,7 @@
  */
 
 import type { AgentEvent, MessageAttachment } from '@slicc/shared-ts';
+import type { TurnGuestGate } from '../sudo/types.js';
 
 // AgentEvent is tray-sync wire format — canonical copy in @slicc/shared-ts;
 // re-exported here so core/-layer importers keep their local import site.
@@ -29,7 +30,7 @@ export interface AgentHandle {
     text: string,
     messageId?: string,
     attachments?: MessageAttachment[],
-    options?: { steer?: boolean }
+    options?: { steer?: boolean; guestGate?: TurnGuestGate }
   ): void;
   /** Subscribe to agent events. Returns an unsubscribe function. */
   onEvent(callback: (event: AgentEvent) => void): () => void;

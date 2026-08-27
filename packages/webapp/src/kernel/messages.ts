@@ -14,7 +14,7 @@ import type { AgentSpawnOptions, AgentSpawnResult } from '../scoops/agent-bridge
 import type { ChatMessage } from '../scoops/chat-types.js';
 import type { ScoopTabState } from '../scoops/types.js';
 import type { TerminalControlMsg, TerminalEventMsg } from '../shell/terminal-protocol.js';
-import type { SudoDecision, SudoRequest } from '../sudo/types.js';
+import type { SudoDecision, SudoRequest, TurnGuestGate } from '../sudo/types.js';
 
 /**
  * Local mirror of `SprinkleSummary` from
@@ -70,6 +70,12 @@ export interface UserMessageMsg {
    * agent is idle — there is nothing to interrupt.
    */
   steer?: boolean;
+  /**
+   * Set when a biscotto (guest seat) caused this message and its tool calls
+   * must be reviewed. Resolved leader-side, where the seat record lives; the
+   * kernel only sees the already-decided gate.
+   */
+  guestGate?: TurnGuestGate;
 }
 
 /**

@@ -536,7 +536,14 @@ export function createLeaderOptionsFactory(
       const source = seat ? `biscotto:${seat.id}` : undefined;
       const forAgent = seat ? attributeGuestMessage(text, seat.label) : text;
       deps.getController()?.addUserMessage(forAgent, attachments, source);
-      deps.agentHandle.sendMessage(forAgent, messageId, attachments, options);
+      deps.agentHandle.sendMessage(forAgent, messageId, attachments, {
+        ...options,
+        // Approving the MESSAGE is not approving the actions it provokes, so a
+        // guest-caused turn carries its own tool gate. Resolved by the review
+        // gate, which knows the seat record and the shared unit; the kernel
+        // never sees the `off` case.
+        ...(options?.guestGate ? { guestGate: options.guestGate } : {}),
+      });
       state.leader?.sync.broadcastUserMessage(forAgent, messageId, attachments);
       // The message bumped the sender's lastActivity — mirror it into the
       // worker-realm shim so kernel-side follower selection sees fresh recency

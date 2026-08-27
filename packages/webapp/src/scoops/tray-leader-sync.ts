@@ -26,7 +26,12 @@ import type {
   SprinkleInstance,
   SprinkleSendTarget,
 } from '../shell/sprinkle-manager-handle.js';
-import type { SudoApproverDirective, SudoDecision, SudoRequest } from '../sudo/types.js';
+import type {
+  SudoApproverDirective,
+  SudoDecision,
+  SudoRequest,
+  TurnGuestGate,
+} from '../sudo/types.js';
 import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';
 import type { LickEvent } from './lick-manager.js';
@@ -131,7 +136,12 @@ export interface LeaderSyncManagerOptions {
     text: string,
     messageId: string,
     attachments?: MessageAttachment[],
-    options?: { steer?: boolean; biscotto?: FollowerBiscottoIdentity }
+    options?: {
+      steer?: boolean;
+      biscotto?: FollowerBiscottoIdentity;
+      /** Tool gate for the turn this message starts; absent = ungated. */
+      guestGate?: TurnGuestGate;
+    }
   ) => void;
   /** Handle an abort request from a follower. */
   onFollowerAbort: () => void;
@@ -320,6 +330,7 @@ export class LeaderSyncManager {
         this.options.onFollowerMessage(pending.text, pending.messageId, pending.attachments, {
           ...(pending.steer ? { steer: true } : {}),
           biscotto: pending.biscotto,
+          ...(pending.toolGate ? { guestGate: pending.toolGate } : {}),
         });
       },
       notify: (bootstrapId, messageId, state) => {

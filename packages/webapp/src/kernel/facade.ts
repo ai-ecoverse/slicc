@@ -1807,6 +1807,7 @@ export class Bridge implements KernelFacade {
       timestamp: new Date().toISOString(),
       fromAssistant: false,
       channel: 'web',
+      ...(msg.guestGate ? { guestGate: msg.guestGate } : {}),
       ...(msg.steer ? { steer: true as const } : {}),
     };
     await this.orchestrator?.handleMessage(channelMsg);

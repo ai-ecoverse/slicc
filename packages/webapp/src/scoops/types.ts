@@ -8,6 +8,7 @@
 
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
 import type { MessageAttachment } from '../core/attachments.js';
+import type { TurnGuestGate } from '../sudo/types.js';
 // Legal down-edge (`scoops/` → `tools/`): the JSON Schema shape a scoop's
 // structured-output contract is expressed in is owned by the tool layer.
 import type { JsonSchemaObject } from '../tools/types.js';
@@ -292,6 +293,12 @@ export interface ChannelMessage {
    * the turn. Carried through the router batch down to `ScoopContext.prompt`.
    */
   steer?: boolean;
+  /**
+   * Guest-caused turn marker. Rides the same route as {@link steer} — router
+   * batch → `ScoopContext.prompt` — because it has the same lifetime: it
+   * describes the TURN this message starts, not the message itself.
+   */
+  guestGate?: TurnGuestGate;
 }
 
 /** Scheduled task */

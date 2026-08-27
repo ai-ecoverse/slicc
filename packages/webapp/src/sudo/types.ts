@@ -31,6 +31,25 @@ export type SudoApproverDirective =
   /** A scoop the cone delegated to decides. Unknown name fails CLOSED. */
   | { kind: 'scoop'; scoopName: string; unitJid: string };
 
+/**
+ * Marks a turn as caused by a guest and says how to gate the tool calls it
+ * makes.
+ *
+ * Turn-scoped rather than message-scoped on purpose: a guest's message causes
+ * one turn, and everything the agent does in that turn is downstream of guest
+ * input — approving the MESSAGE is not approving the actions it provokes.
+ *
+ * Presence means "gate every tool call in this turn". A seat whose tool gate is
+ * `off` produces no value at all, so the kernel never has to know about the
+ * `off` case and cannot get it wrong.
+ */
+export interface TurnGuestGate {
+  /** Seat identity for the prompt, as the leader authenticated it. */
+  requester: string;
+  /** Routing; absent means the owner's own broker (the `user` tier). */
+  approver?: SudoApproverDirective;
+}
+
 /** A request for native human approval. */
 export interface SudoRequest {
   kind: SudoKind;

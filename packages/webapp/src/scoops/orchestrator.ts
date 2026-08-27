@@ -31,6 +31,7 @@ import type {
   SudoBroker,
   SudoDecision,
   SudoRequest,
+  TurnGuestGate,
 } from '../sudo/index.js';
 import { SudoManager } from '../sudo/sudo-manager.js';
 import { registerTranscriptExportService } from '../transcript/export-provider.js';
@@ -394,6 +395,7 @@ export class Orchestrator implements ConeApprovalRouter {
         appendConeMemory: (bullets, meta) => this.appendConeMemory(bullets, meta),
         enqueueSudoRequest: (jid, request) => this.enqueueSudoRequest(jid, request),
         resolveActionableLick: (id, decision) => this.resolveActionableLick(id, decision),
+        approveDirectedOrUser: (request) => this.approveDirectedOrUser(request),
         listPendingSudoRequests: () => this.listPendingSudoRequests(),
       },
       handleMessage: (msg) => this.handleMessage(msg),
@@ -1014,6 +1016,24 @@ export class Orchestrator implements ConeApprovalRouter {
    * `ownerRootOrDefault` (not `parentOrDefaultRoot`) resolves the cone tier so
    * a card raised on cone B renders in B rather than the oldest cone.
    */
+  /**
+   * Single approval entry point for the guest tool gate: honour the request's
+   * approver directive when it has one, otherwise fall back to the owner's own
+   * broker via {@link SudoManager.approve} — which is also what applies the
+   * never-persist guard for the guest kinds.
+   */
+  async approveDirectedOrUser(request: SudoRequest): Promise<SudoDecision> {
+    if (request.approver && request.approver.kind !== 'user') {
+      return this.enqueueDirectedApproval(request.approver, request);
+    }
+    const manager = this.sudoManager;
+    if (!manager) {
+      log.warn('Guest tool approval before SudoManager init — failing closed');
+      return { decision: 'deny' };
+    }
+    return manager.approve(request);
+  }
+
   async enqueueDirectedApproval(
     directive: SudoApproverDirective,
     request: SudoRequest
@@ -1414,7 +1434,7 @@ export class Orchestrator implements ConeApprovalRouter {
     senderId: string,
     senderName: string,
     images: ImageContent[] = [],
-    options?: { steer?: boolean }
+    options?: { steer?: boolean; guestGate?: TurnGuestGate }
   ): Promise<void> {
     return this.lifecycle.sendPrompt(jid, text, senderId, senderName, images, options);
   }

@@ -170,7 +170,14 @@ export interface TraySyncCapabilities {
  * passwordless approval to every future shell command. `SudoManager.approve`
  * downgrades `always` to a one-shot `allow` for this kind.
  */
-export type TraySudoKind = 'command' | 'read' | 'write' | 'secret' | 'export' | 'guest-message';
+export type TraySudoKind =
+  | 'command'
+  | 'read'
+  | 'write'
+  | 'secret'
+  | 'export'
+  | 'guest-message'
+  | 'guest-tool';
 
 /** The human's verdict on a delegated sudo prompt. */
 export type TraySudoDecision = 'allow' | 'deny' | 'always';

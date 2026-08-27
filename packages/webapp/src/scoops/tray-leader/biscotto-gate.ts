@@ -38,7 +38,8 @@
  *    notifications.
  */
 
-import type { FollowerToLeaderMessage } from '@slicc/shared-ts';
+import type { FollowerBiscottoIdentity, FollowerToLeaderMessage } from '@slicc/shared-ts';
+import type { TurnGuestGate } from '../../sudo/types.js';
 
 /**
  * Whether each wire message is accepted from a `trust: 'biscotto'` peer.
@@ -156,4 +157,45 @@ export function attributeGuestMessage(text: string, label: string): string {
     '',
     text,
   ].join('\n');
+}
+
+/**
+ * The tool gate for a seat's turn, or `undefined` when its tool calls run
+ * ungated.
+ *
+ * Resolved HERE, on the leader, because this is where the seat record lives.
+ * The kernel receives an already-decided gate and never has to reason about
+ * the `off` case — a tier it cannot see is a tier it cannot get wrong.
+ *
+ * An approver this build does not recognise resolves to the `user` tier rather
+ * than to `undefined`: an unknown tier must never read as "no gate". That is
+ * strictly more restrictive than the seat asked for, which is the safe
+ * direction to be wrong in.
+ */
+export function toolGateForSeat(
+  seat: FollowerBiscottoIdentity,
+  unitJid: string
+): TurnGuestGate | undefined {
+  const gate = seat.gates?.tool;
+  if (!gate || gate.approver === 'off') return undefined;
+  const requester = describeSeatLabel(seat.label);
+  switch (gate.approver) {
+    case 'cone':
+      return { requester, approver: { kind: 'cone', unitJid } };
+    case 'scoop':
+      return gate.scoop
+        ? {
+            requester,
+            approver: { kind: 'scoop', scoopName: gate.scoop, unitJid },
+          }
+        : { requester };
+    default:
+      return { requester };
+  }
+}
+
+/** Seat label for a prompt, with a usable fallback for an unlabelled seat. */
+function describeSeatLabel(label: string): string {
+  const trimmed = label.trim();
+  return trimmed ? `biscotto \u201C${trimmed}\u201D` : 'an unnamed biscotto';
 }

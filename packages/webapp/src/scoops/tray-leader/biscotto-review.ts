@@ -34,8 +34,9 @@
  */
 
 import type { MessageAttachment } from '../../core/attachments.js';
-import type { SudoApproverDirective, SudoDecision } from '../../sudo/types.js';
+import type { SudoApproverDirective, SudoDecision, TurnGuestGate } from '../../sudo/types.js';
 import type { FollowerBiscottoGate, FollowerBiscottoIdentity } from '../tray-sync-protocol.js';
+import { toolGateForSeat } from './biscotto-gate.js';
 import type { LeaderSyncContext } from './context.js';
 
 /**
@@ -59,6 +60,11 @@ export interface PendingGuestMessage {
   attachments?: MessageAttachment[];
   steer?: boolean;
   biscotto: FollowerBiscottoIdentity;
+  /**
+   * Tool gate for the turn this message starts, resolved at DELIVERY time from
+   * the seat record. Absent when the seat's tool gate is `off`.
+   */
+  toolGate?: TurnGuestGate;
 }
 
 export interface BiscottoReviewDeps {
@@ -123,6 +129,9 @@ export class BiscottoReview {
     const queued: PendingGuestMessage = { ...message, steer: false };
 
     if (queued.biscotto.gates.message.approver === 'off') {
+      // An ungated MESSAGE still gets a gated TURN when the seat says so — the
+      // two gates are independent by design.
+      queued.toolGate = toolGateForSeat(queued.biscotto, this.context.options.getScoopJid());
       this.deps.deliver(queued);
       this.deps.notify(bootstrapId, queued.messageId, 'approved');
       return;
@@ -164,6 +173,7 @@ export class BiscottoReview {
         if (queue?.length === 0) this.queues.delete(bootstrapId);
         const epoch = this.epochs.get(bootstrapId) ?? 0;
         const outcome = await this.review(bootstrapId, next);
+        next.toolGate = toolGateForSeat(next.biscotto, this.context.options.getScoopJid());
         // The seat may have been REVOKED, expired or disconnected while the
         // prompt sat on screen. Delivering now would let a revoked guest still
         // reach the cone minutes later — the exact thing revocation exists to

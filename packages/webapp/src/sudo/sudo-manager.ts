@@ -237,7 +237,7 @@ export class SudoManager {
     }
     const decision = await this.broker.requestApproval(req);
     if (decision.decision === 'always') {
-      if (req.kind === 'guest-message') {
+      if (req.kind === 'guest-message' || req.kind === 'guest-tool') {
         // NEVER persist a guest message as a grant. `detail` here is
         // attacker-chosen prose and `directiveForKind` files everything it
         // does not recognise under `Cmnd`, so "Always" on a guest message of

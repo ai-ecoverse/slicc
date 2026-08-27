@@ -18,6 +18,7 @@ import type { RestrictedFS } from '../../fs/restricted-fs.js';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
 import type { AlmostBashShellHeadless } from '../../shell/almost-bash-shell-headless.js';
 import type { SudoManager } from '../../sudo/sudo-manager.js';
+import type { TurnGuestGate } from '../../sudo/types.js';
 import type { BashJobProcess } from '../../tools/types.js';
 import { thinkingFor } from '../../work-unit/record.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
@@ -49,6 +50,8 @@ export interface RuntimeInitDeps {
   processOwner: ProcessOwner;
   coneJid: string | undefined;
   getTurnPid: () => number | undefined;
+  /** Live lookup for the guest gate on the turn in flight (see `tools.ts`). */
+  getTurnGuestGate: () => TurnGuestGate | undefined;
   /** Live, because the roster it derives from changes as roots come and go. */
   getLickTarget: () => string | undefined;
   /** Live, because the stream wrapper reads it per request. */
@@ -99,6 +102,7 @@ export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRun
   deps.onShellReady(shell);
 
   const tools = await buildScoopTools({
+    getTurnGuestGate: deps.getTurnGuestGate,
     scoop,
     unit,
     callbacks,
