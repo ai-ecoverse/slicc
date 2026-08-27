@@ -130,6 +130,14 @@ export interface FollowerJoinRequestedMessage {
 export interface FollowerBiscottoIdentity {
   /** `BiscottoRecord.id` — stable handle for revocation and attribution. */
   id: string;
+  /**
+   * ISO deadline after which this seat must be dropped, when it has one.
+   *
+   * The leader enforces it locally with a timer rather than trusting the hub
+   * to push: a WebRTC data channel is peer-to-peer, so once signaling is done
+   * the hub is not in the path and cannot cut a connection it no longer sees.
+   */
+  expiresAt?: string;
   /** Human label the owner gave this guest; rendered as message attribution. */
   label: string;
   /** Approver for each gate, resolved by the hub from the stored seat. */
@@ -253,7 +261,23 @@ export type WorkerToLeaderControlMessage =
   | WorkerPreviewState
   | WorkerBridgeConnected
   | WorkerBridgeDisconnected
-  | WorkerBridgeCdpResponse;
+  | WorkerBridgeCdpResponse
+  | BiscottoRevokedMessage;
+
+/**
+ * A guest seat was revoked. The leader MUST drop every peer holding it.
+ *
+ * Needed because revocation is otherwise unenforceable mid-session: unlike a
+ * preview bridge socket (which the DO owns and can simply close), a biscotto
+ * rides a direct leader↔guest `RTCPeerConnection` that the hub leaves the path
+ * of after signaling. Tombstoning the token alone would only prevent FUTURE
+ * joins, leaving `biscotto revoke` a promise the product does not keep.
+ */
+export interface BiscottoRevokedMessage {
+  type: 'biscotto.revoked';
+  trayId: string;
+  biscottoId: string;
+}
 
 // ---------------------------------------------------------------------------
 // Leader → worker control messages

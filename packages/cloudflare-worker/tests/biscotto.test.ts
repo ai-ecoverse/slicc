@@ -350,3 +350,30 @@ describe('listBiscotti', () => {
     );
   });
 });
+
+describe('review follow-ups: worker hardening', () => {
+  it('does not leak tray existence through the auth error', async () => {
+    // A missing tray and a bad bearer must be indistinguishable, or the three
+    // public routes become an oracle for which tray IDs exist.
+    const missing: BiscottoDeps = {
+      loadTray: async () => {},
+      getTray: () => null,
+      persistTray: async () => {},
+      isoNow: () => new Date(NOW).toISOString(),
+      now: () => NOW,
+      matchesToken: () => false,
+    };
+    const present = createDeps(createTray());
+
+    const errors: BiscottoRouteError[] = [];
+    for (const deps of [missing, present]) {
+      await listBiscotti({ controllerToken: 'tray-1.wrong' }, deps).catch((err) => {
+        errors.push(err as BiscottoRouteError);
+      });
+    }
+    expect(errors).toHaveLength(2);
+    expect(errors[0].status).toBe(errors[1].status);
+    expect(errors[0].message).toBe(errors[1].message);
+    expect(errors[0].status).toBe(403);
+  });
+});

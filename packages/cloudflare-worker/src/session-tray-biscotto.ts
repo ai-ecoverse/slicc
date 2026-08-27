@@ -86,9 +86,17 @@ export const MAX_BISCOTTO_TTL_MS = 30 * 24 * 60 * 60 * 1000;
 /** Labels ride into chat attribution, so keep them short and single-line. */
 const MAX_LABEL_LENGTH = 64;
 
+/**
+ * The tray, or a 403 that is INDISTINGUISHABLE from a bad bearer.
+ *
+ * A missing tray is really a 500-ish internal condition, but answering
+ * differently for "no such tray" and "wrong token" hands an unauthenticated
+ * caller an oracle for which tray IDs exist. Both answer
+ * `403 Invalid controller capability`; the caller learns nothing either way.
+ */
 function requireTray(deps: BiscottoDeps): TrayRecord {
   const tray = deps.getTray();
-  if (!tray) throw new BiscottoRouteError('Tray not loaded', 500);
+  if (!tray) throw new BiscottoRouteError('Invalid controller capability', 403);
   return tray;
 }
 

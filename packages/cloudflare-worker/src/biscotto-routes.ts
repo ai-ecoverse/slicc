@@ -26,6 +26,25 @@ function extractBearer(request: Request): string | null {
   return token.length > 0 ? token : null;
 }
 
+/**
+ * Parse a JSON request body, returning `null` for anything that is not a JSON
+ * OBJECT.
+ *
+ * `request.json()` resolves successfully for the literal body `null` (and for
+ * `[]`, `1`, `"x"`), so reading a field off the result then throws a
+ * TypeError outside the try — surfacing as an uncaught 500 on a request that
+ * is simply malformed. Every caller wants "object or 400".
+ */
+async function readJsonObject<T>(request: Request): Promise<T | null> {
+  try {
+    const parsed: unknown = await request.json();
+    if (!parsed || typeof parsed !== 'object' || Array.isArray(parsed)) return null;
+    return parsed as T;
+  } catch {
+    return null;
+  }
+}
+
 function forward(path: string, payload: unknown, trayStub: TrayStub): Promise<Response> {
   return trayStub.fetch(
     new Request(`https://internal${path}`, {
@@ -40,12 +59,8 @@ export async function handleBiscottoMint(request: Request, trayStub: TrayStub): 
   const controllerToken = extractBearer(request);
   if (!controllerToken) return jsonResponse({ error: 'unauthorized' }, 401);
 
-  let body: { label?: string; ttlMs?: number; gates?: unknown };
-  try {
-    body = (await request.json()) as { label?: string; ttlMs?: number; gates?: unknown };
-  } catch {
-    return jsonResponse({ error: 'invalid body' }, 400);
-  }
+  const body = await readJsonObject<{ label?: string; ttlMs?: number; gates?: unknown }>(request);
+  if (!body) return jsonResponse({ error: 'invalid body' }, 400);
   if (typeof body.label !== 'string') {
     return jsonResponse({ error: 'label is required' }, 400);
   }
@@ -68,12 +83,8 @@ export async function handleBiscottoStop(request: Request, trayStub: TrayStub): 
   const controllerToken = extractBearer(request);
   if (!controllerToken) return jsonResponse({ error: 'unauthorized' }, 401);
 
-  let body: { id?: string };
-  try {
-    body = (await request.json()) as { id?: string };
-  } catch {
-    return jsonResponse({ error: 'invalid body' }, 400);
-  }
+  const body = await readJsonObject<{ id?: string }>(request);
+  if (!body) return jsonResponse({ error: 'invalid body' }, 400);
   if (typeof body.id !== 'string' || body.id.length === 0) {
     return jsonResponse({ error: 'id is required' }, 400);
   }

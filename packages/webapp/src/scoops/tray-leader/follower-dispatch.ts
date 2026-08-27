@@ -271,11 +271,15 @@ export class FollowerDispatch {
     const safeAttachments = message.attachments?.length
       ? stripLocalPathsForRemote(message.attachments)
       : message.attachments;
-    // Only a steering send carries the options argument, so the ordinary
-    // hand-off stays a three-argument call.
-    if (message.steer) {
+    // A guest's text must never reach the cone looking like the owner's, so a
+    // biscotto's seat identity rides along and the consumer attributes the
+    // message to it. A full follower IS the owner on another device and keeps
+    // the historical three-argument hand-off.
+    const biscotto = follower?.trust === 'biscotto' ? follower.biscotto : undefined;
+    if (message.steer || biscotto) {
       this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments, {
-        steer: true,
+        ...(message.steer ? { steer: true } : {}),
+        ...(biscotto ? { biscotto } : {}),
       });
     } else {
       this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments);

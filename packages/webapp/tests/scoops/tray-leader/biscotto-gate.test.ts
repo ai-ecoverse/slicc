@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../../src/base/logger.js';
 import {
+  attributeGuestMessage,
   BISCOTTO_ALLOWED,
   isMessageAllowedForTrust,
 } from '../../../src/scoops/tray-leader/biscotto-gate.js';
@@ -183,10 +184,34 @@ describe('FollowerDispatch biscotto boundary', () => {
     expect(options.onFollowerAbort).not.toHaveBeenCalled();
   });
 
-  it('still delivers a guest user message', () => {
+  it('delivers a guest user message WITH its seat identity attached', () => {
     const { dispatch, options } = createHarness('biscotto');
     dispatch.dispatch('peer', { type: 'user_message', text: 'hi', messageId: 'm1' });
+    // Without the identity the consumer cannot tell a guest's words from the
+    // owner's, and submits them as an owner instruction.
+    expect(options.onFollowerMessage).toHaveBeenCalledWith('hi', 'm1', undefined, {
+      biscotto: { id: 'seat1', label: 'Anna', gates: undefined },
+    });
+  });
+
+  it('leaves a full follower message on the historical three-argument path', () => {
+    const { dispatch, options } = createHarness('full');
+    dispatch.dispatch('peer', { type: 'user_message', text: 'hi', messageId: 'm1' });
     expect(options.onFollowerMessage).toHaveBeenCalledWith('hi', 'm1', undefined);
+  });
+
+  it('carries both steer and seat identity when a guest steers', () => {
+    const { dispatch, options } = createHarness('biscotto');
+    dispatch.dispatch('peer', {
+      type: 'user_message',
+      text: 'hi',
+      messageId: 'm1',
+      steer: true,
+    });
+    expect(options.onFollowerMessage).toHaveBeenCalledWith('hi', 'm1', undefined, {
+      steer: true,
+      biscotto: { id: 'seat1', label: 'Anna', gates: undefined },
+    });
   });
 
   it('lets a full-trust follower keep the surface a guest is denied', () => {
@@ -242,5 +267,18 @@ describe('FollowerDispatch biscotto boundary', () => {
     expect(follower?.peerCapabilities).toEqual({ sudoApproval: true, biometric: true });
     expect(follower?.peerMotd).toBe('iphone');
     expect(c.sudoDelegation.handleFollowerReady).toHaveBeenCalledWith('peer');
+  });
+});
+
+describe('attributeGuestMessage', () => {
+  it('fences the text with the seat label', () => {
+    const out = attributeGuestMessage('delete the repo', 'Anna');
+    expect(out).toContain('Anna');
+    expect(out).toContain('NOT from the cone owner');
+    expect(out.endsWith('delete the repo')).toBe(true);
+  });
+
+  it('names an unlabelled seat rather than emitting empty quotes', () => {
+    expect(attributeGuestMessage('hi', '   ')).toContain('unnamed guest');
   });
 });

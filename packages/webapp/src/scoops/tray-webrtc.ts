@@ -197,10 +197,15 @@ interface ActiveFollowerPeer {
   openError: string | null;
 }
 
+/** `setTimeout` clamps above this and would fire instantly. */
+const MAX_TIMEOUT_MS = 2_147_483_647;
+
 export class LeaderTrayPeerManager {
   private readonly peerConnectionFactory: TrayPeerConnectionFactory;
   private readonly dataChannelLabel: string;
   private readonly peers = new Map<string, ActiveLeaderPeer>();
+  /** Per-peer biscotto expiry deadlines, cancelled when the peer goes away. */
+  private readonly expiryTimers = new Map<string, { cancel: () => void }>();
   private iceServers: TrayIceServerConfig[] | undefined;
 
   constructor(private readonly options: LeaderTrayPeerManagerOptions) {
@@ -224,6 +229,8 @@ export class LeaderTrayPeerManager {
       await this.peers.get(message.bootstrapId)?.peer.setRemoteDescription(message.answer);
     } else if (message.type === 'bootstrap.ice_candidate') {
       await this.peers.get(message.bootstrapId)?.peer.addIceCandidate(message.candidate);
+    } else if (message.type === 'biscotto.revoked') {
+      this.closeBiscottoPeers(message.biscottoId, 'Biscotto revoked');
     }
   }
 
@@ -239,6 +246,8 @@ export class LeaderTrayPeerManager {
     for (const active of this.peers.values()) {
       active.peer.close();
     }
+    for (const timer of this.expiryTimers.values()) timer.cancel();
+    this.expiryTimers.clear();
     this.peers.clear();
     this.options.onPeersChanged?.();
   }
@@ -298,6 +307,7 @@ export class LeaderTrayPeerManager {
       if (!active || active.state.state === 'connected') return;
       active.state.state = 'connected';
       active.state.connectedAt = new Date().toISOString();
+      this.armBiscottoExpiry(message.bootstrapId, active.state);
       this.options.onPeerConnected?.({ ...active.state }, active.channel);
       this.options.onPeersChanged?.();
     });
@@ -335,6 +345,59 @@ export class LeaderTrayPeerManager {
     } catch (error) {
       this.failPeer(message, error instanceof Error ? error.message : String(error));
     }
+  }
+
+  /**
+   * Drop every peer holding a given guest seat.
+   *
+   * Mirrors {@link closeControllerPeers}: fire the disconnect callbacks (which
+   * is what reaches `LeaderSyncManager.removeFollower`, retiring the registry
+   * entry and its keepalive) BEFORE closing, then close the connection so the
+   * guest cannot keep using an already-open channel.
+   */
+  closeBiscottoPeers(biscottoId: string, reason: string): void {
+    for (const [bootstrapId, active] of this.peers.entries()) {
+      if (active.state.biscotto?.id !== biscottoId) continue;
+      if (active.state.state === 'connected') {
+        this.options.onPeerDisconnected?.(bootstrapId, reason);
+        this.options.onPeerTransportClosed?.(bootstrapId, reason);
+      }
+      active.peer.close();
+      this.peers.delete(bootstrapId);
+      this.expiryTimers.get(bootstrapId)?.cancel();
+      this.expiryTimers.delete(bootstrapId);
+    }
+    this.options.onPeersChanged?.();
+  }
+
+  /**
+   * Arm a local deadline for a seat that carries `expiresAt`.
+   *
+   * Enforced leader-side ON PURPOSE. The hub cannot cut a live guest — the
+   * data channel is peer-to-peer and the hub is out of the path after
+   * signaling — so an expiry the hub merely records would never actually end a
+   * session already in progress. A seat already past its deadline is dropped
+   * on the next tick rather than admitted.
+   */
+  private armBiscottoExpiry(bootstrapId: string, state: LeaderTrayPeerState): void {
+    const expiresAt = state.biscotto?.expiresAt;
+    const biscottoId = state.biscotto?.id;
+    if (!expiresAt || !biscottoId) return;
+    const parsed = Date.parse(expiresAt);
+    if (Number.isNaN(parsed)) return;
+    // `setTimeout` saturates past ~24.9 days (2^31-1 ms) and would fire
+    // IMMEDIATELY, evicting a seat that is still valid. Clamp and re-arm.
+    const remaining = Math.max(0, parsed - Date.now());
+    const delay = Math.min(remaining, MAX_TIMEOUT_MS);
+    const handle = setTimeout(() => {
+      this.expiryTimers.delete(bootstrapId);
+      if (Date.now() >= parsed) {
+        this.closeBiscottoPeers(biscottoId, 'Biscotto expired');
+      } else if (this.peers.has(bootstrapId)) {
+        this.armBiscottoExpiry(bootstrapId, state);
+      }
+    }, delay);
+    this.expiryTimers.set(bootstrapId, { cancel: () => clearTimeout(handle) });
   }
 
   private closeControllerPeers(controllerId: string): void {

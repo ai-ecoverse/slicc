@@ -130,7 +130,7 @@ export interface LeaderSyncManagerOptions {
     text: string,
     messageId: string,
     attachments?: MessageAttachment[],
-    options?: { steer?: boolean }
+    options?: { steer?: boolean; biscotto?: FollowerBiscottoIdentity }
   ) => void;
   /** Handle an abort request from a follower. */
   onFollowerAbort: () => void;

@@ -1701,7 +1701,14 @@ export class SessionTrayDurableObject {
   ): Promise<TrayBootstrapRecord> {
     this.pruneTerminalBootstraps();
     const existing = this.findBootstrap(controllerId);
-    if (existing) {
+    // Reuse ONLY within the same capability. `controllerId` is client-supplied
+    // and a non-terminal bootstrap outlives its controller record
+    // (`pruneStaleControllers` prunes controllers, `pruneTerminalBootstraps`
+    // only reaps terminal bootstraps), so a guest presenting a pruned full
+    // follower's controllerId would otherwise adopt that follower's
+    // `biscottoId: undefined` bootstrap and be announced as `trust: 'full'` —
+    // straight past the allowlist. Mismatched capability ⇒ mint a fresh one.
+    if (existing && existing.biscottoId === biscottoId) {
       this.refreshBootstrapState(existing);
       return existing;
     }
@@ -1790,6 +1797,7 @@ export class SessionTrayDurableObject {
       biscotto: {
         id: bootstrap.biscottoId,
         label: record?.label ?? '',
+        expiresAt: record?.expiresAt,
         gates: {
           message: normalizeBiscottoGate(record?.gates.message),
           tool: normalizeBiscottoGate(record?.gates.tool),
@@ -2501,10 +2509,21 @@ export class SessionTrayDurableObject {
               this.biscottoDeps()
             )
           );
-        case '/internal/biscotto/stop':
-          return jsonResponse(
-            await revokeBiscottoImpl({ controllerToken, id: body.id ?? '' }, this.biscottoDeps())
+        case '/internal/biscotto/stop': {
+          const revoked = await revokeBiscottoImpl(
+            { controllerToken, id: body.id ?? '' },
+            this.biscottoDeps()
           );
+          // Tombstoning the token only stops future joins. A live guest holds a
+          // direct data channel to the leader that this DO cannot reach, so the
+          // eviction has to be delegated to the one process that can.
+          this.sendToLeader({
+            type: 'biscotto.revoked',
+            trayId: this.requireTray().trayId,
+            biscottoId: revoked.id,
+          });
+          return jsonResponse(revoked);
+        }
         case '/internal/biscotto/list':
           return jsonResponse({
             biscotti: await listBiscottiImpl({ controllerToken }, this.biscottoDeps()),

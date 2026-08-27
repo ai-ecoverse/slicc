@@ -18,6 +18,7 @@ import {
   subscribeToFollowerTrayRuntimeStatus,
 } from '../../scoops/tray-follower-status.js';
 import { shouldApplyFollowerStatus } from '../../scoops/tray-follower-sync.js';
+import { attributeGuestMessage } from '../../scoops/tray-leader/biscotto-gate.js';
 import {
   getLeaderTrayRuntimeStatus,
   subscribeToLeaderTrayRuntimeStatus,
@@ -524,9 +525,18 @@ export function createLeaderOptionsFactory(
       client.sendSprinkleLick(name, body, targetScoop, originLabel),
     onSprinkleInstancesChanged: () => mirrorSprinkleInstances(state),
     onFollowerMessage: (text, messageId, attachments, options) => {
-      deps.getController()?.addUserMessage(text, attachments);
-      deps.agentHandle.sendMessage(text, messageId, attachments, options);
-      state.leader?.sync.broadcastUserMessage(text, messageId, attachments);
+      // A guest's words are not the owner's. `source` carries the provenance
+      // into the transcript record, and the model-visible text is fenced with
+      // the seat label so the cone cannot read a guest instruction as an owner
+      // instruction. The fence is provenance, NOT a security control — a guest
+      // can write anything inside its own message, including a convincing
+      // forgery of this frame. The real control is the message-review gate.
+      const seat = options?.biscotto;
+      const source = seat ? `biscotto:${seat.id}` : undefined;
+      const forAgent = seat ? attributeGuestMessage(text, seat.label) : text;
+      deps.getController()?.addUserMessage(forAgent, attachments, source);
+      deps.agentHandle.sendMessage(forAgent, messageId, attachments, options);
+      state.leader?.sync.broadcastUserMessage(forAgent, messageId, attachments);
       // The message bumped the sender's lastActivity — mirror it into the
       // worker-realm shim so kernel-side follower selection sees fresh recency
       // (the shim otherwise only refreshes on follower-count changes).
