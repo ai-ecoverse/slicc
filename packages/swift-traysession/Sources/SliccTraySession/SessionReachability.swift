@@ -80,17 +80,19 @@ public final class SessionReachability {
             else { return .unreachable }
             let payload = try? JSONDecoder().decode(ProbePayload.self, from: data)
 
-            if http.statusCode == 200, let payload {
+            // #1957: the hub names the replacement twice — as an RFC 5829
+            // `successor-version` link, and in the body it has always used. The
+            // link wins, stands alone (a body this build cannot decode is not a
+            // dead end), and outranks the terminal 200 below: a tray that has
+            // moved is not the tray to report on, whatever else it answered.
+            let linkSuccessor = SupersedeLink.successor(in: http)
+
+            if http.statusCode == 200, let payload, linkSuccessor == nil {
                 return payload.leader?.connected == true ? .reachable : .unreachable
             }
 
-            // #1957: the hub names the replacement twice — as an RFC 5829
-            // `successor-version` link, and in the body it has always used. The
-            // link wins and stands alone, so a body this build cannot decode
-            // (or a status other than 409) is not a dead end.
             let next =
-                SupersedeLink.successor(in: http)
-                ?? Self.supersededURL(from: payload, statusCode: http.statusCode)
+                linkSuccessor ?? Self.supersededURL(from: payload, statusCode: http.statusCode)
             guard let next, redirectsFollowed < maxSupersedeRedirects else { return .unreachable }
 
             redirectsFollowed += 1

@@ -252,14 +252,12 @@ export class ElectronTrayFollower {
         FOLLOWER_RUNTIME_TAG
       );
       const result = body['result'];
-      const bootstrap = result?.['bootstrap'] as { bootstrapId?: string } | undefined;
-      if (bootstrap?.bootstrapId) {
-        this.bootstrapId = bootstrap.bootstrapId;
-        return normalizeIceServers(body['iceServers']);
-      }
-      // The `successor-version` link takes precedence over the body's
-      // `joinUrl`, and stands on its own when the body carries neither the
-      // code nor the URL.
+      // A named replacement is resolved before anything else in the body,
+      // including a bootstrap: a tray that has moved cannot also be the one to
+      // bootstrap against, and the other four followers all give the
+      // replacement precedence over every action. The `successor-version` link
+      // takes precedence over the body's `joinUrl`, and stands on its own when
+      // the body carries neither the code nor the URL (#1957).
       const bodyJoinUrl = result?.['joinUrl'];
       const supersededUrl =
         supersededByJoinUrl ??
@@ -274,6 +272,11 @@ export class ElectronTrayFollower {
         this.log(`[electron-follower] tray superseded → following ${supersededUrl}`);
         this.signaling = new TrayFollowerSignaling(supersededUrl, this.fetchImpl);
         continue;
+      }
+      const bootstrap = result?.['bootstrap'] as { bootstrapId?: string } | undefined;
+      if (bootstrap?.bootstrapId) {
+        this.bootstrapId = bootstrap.bootstrapId;
+        return normalizeIceServers(body['iceServers']);
       }
       if (result?.['action'] === 'wait') {
         if (++waits > maxWaits) {

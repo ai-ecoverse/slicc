@@ -225,6 +225,30 @@ final class SessionReachabilityTests: XCTestCase {
         XCTAssertEqual(requests[1].url?.path, "/link")
     }
 
+    /// A named replacement outranks even a 200 that reads live: the tray moved,
+    /// so this one is not the tray to report on (Codex review, #2505).
+    func testLinkHeaderOutranksATerminal200() async {
+        let transport = RecordingTransport { request, index in
+            index == 0
+                ? self.response(
+                    to: request, status: 200, json: #"{"leader":{"connected":true}}"#,
+                    headers: ["Link": #"<https://example.invalid/moved>; rel="successor-version""#])
+                : self.response(to: request, status: 200, json: #"{"leader":{"connected":false}}"#)
+        }
+        let reachability = SessionReachability(
+            maxSupersedeRedirects: 5, transport: transport.call)
+        let tray = makeSession(path: "original")
+
+        reachability.probe([tray])
+        await waitForVerdict(tray.id, in: reachability)
+
+        // The verdict is the replacement's, not the abandoned tray's.
+        XCTAssertEqual(reachability.verdicts[tray.id], .unreachable)
+        let requests = await transport.requests()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[1].url?.path, "/moved")
+    }
+
     /// A `successor-version` link is still bounded by the hop cap — the
     /// platform's redirect policy never gets a say.
     func testLinkHeaderChaseIsBounded() async {

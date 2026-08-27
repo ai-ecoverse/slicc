@@ -187,6 +187,27 @@ describe('ElectronTrayFollower.attachWithRedirects', () => {
     expect(urls[1]).toBe('https://tray.example/join/new');
   });
 
+  it('follows the link even when the same body also offers a bootstrap', async () => {
+    // A tray that has moved cannot also be the one to bootstrap against. The
+    // other four followers resolve the replacement before any action, and this
+    // one used to accept the bootstrap first (Codex review, #2505).
+    const { fetch, urls } = scriptedFetch([
+      {
+        status: 409,
+        body: { result: { bootstrap: { bootstrapId: 'stale-bs' } }, iceServers: [] },
+        headers: { Link: '<https://tray.example/join/new>; rel="successor-version"' },
+      },
+      {
+        status: 200,
+        body: { result: { bootstrap: { bootstrapId: 'bs-1' } }, iceServers: [{ urls: 'stun:s' }] },
+      },
+    ]);
+    expect(await makeFollower(fetch).attachWithRedirects()).toEqual([
+      { urls: 'stun:s', username: undefined, credential: undefined },
+    ]);
+    expect(urls[1]).toBe('https://tray.example/join/new');
+  });
+
   it('prefers the successor-version link over a stale body joinUrl', async () => {
     const { fetch, urls } = scriptedFetch([
       {
