@@ -958,6 +958,91 @@ describe('crontask create - default lick target (#2311)', () => {
   });
 });
 
+/**
+ * #2524 — a cron task pointed at a unit that does not exist ticked forever into
+ * nothing, and `LickManager.init` deleted it on the next boot anyway. It is
+ * refused at create time now; the omitted-`--scoop` path stays as it was (#2525).
+ */
+describe('crontask create — unresolvable --scoop (#2524)', () => {
+  let command: ReturnType<typeof createCrontaskCommand>;
+  let mockLm: {
+    createCronTask: ReturnType<typeof vi.fn>;
+    resolveLickTarget: ReturnType<typeof vi.fn>;
+  };
+
+  beforeEach(async () => {
+    vi.stubGlobal('chrome', { runtime: { id: 'real-ext-id' } });
+    vi.stubGlobal('fetch', vi.fn());
+    vi.resetModules();
+    mockLm = {
+      createCronTask: vi.fn().mockResolvedValue({ id: 'c1', name: 'digest', cron: '0 9 * * *' }),
+      resolveLickTarget: vi.fn((target: string) =>
+        target === 'cone' ? { status: 'resolved' } : { status: 'unresolved', candidates: ['cone'] }
+      ),
+    };
+    (globalThis as Record<string, unknown>).__slicc_lickManager = mockLm;
+    const { createCrontaskCommand } = await import(
+      '../../../src/shell/supplemental-commands/crontask-command.js'
+    );
+    command = createCrontaskCommand();
+  });
+
+  afterEach(() => {
+    delete (globalThis as Record<string, unknown>).__slicc_lickManager;
+    vi.clearAllMocks();
+  });
+
+  const run = (args: string[], env: unknown = {}) =>
+    (command as any).execute(args, { cwd: '/', env, fs: {} as any });
+
+  it('refuses a target that matches no live unit and creates nothing', async () => {
+    const result = await run([
+      'create',
+      '--name',
+      'ghost-target-probe',
+      '--scoop',
+      'ghost-cone-does-not-exist',
+      '--cron',
+      '5 4 1 1 *',
+    ]);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('crontask create: --scoop "ghost-cone-does-not-exist"');
+    expect(result.stderr).toContain('valid targets: cone');
+    expect(mockLm.createCronTask).not.toHaveBeenCalled();
+  });
+
+  it('accepts a target that resolves', async () => {
+    const result = await run([
+      'create',
+      '--name',
+      'digest',
+      '--scoop',
+      'cone',
+      '--cron',
+      '0 9 * * *',
+    ]);
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.createCronTask).toHaveBeenCalledWith('digest', '0 9 * * *', 'cone');
+  });
+
+  it('validates --scoop only after --name and --cron are satisfied', async () => {
+    const result = await run(['create', '--scoop', 'ghost-cone-does-not-exist']);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('--name is required');
+    expect(mockLm.resolveLickTarget).not.toHaveBeenCalled();
+  });
+
+  // #2525 owns the omitted-`--scoop` path; this change must not touch it.
+  it('does not validate the shell default when --scoop is omitted', async () => {
+    const result = await run(['create', '--name', 'digest', '--cron', '0 9 * * *'], {
+      SLICC_LICK_TARGET: 'cone-research',
+    });
+    expect(result.exitCode).toBe(0);
+    expect(mockLm.resolveLickTarget).not.toHaveBeenCalled();
+    expect(mockLm.createCronTask).toHaveBeenCalledWith('digest', '0 9 * * *', 'cone-research');
+  });
+});
+
 // ─── Proxy-path parity for cone addressing (#2311) ────────────────────────
 //
 // The side-panel terminal reaches the LickManager over BroadcastChannel. A
@@ -1057,6 +1142,26 @@ describe('lick registration — cone targets round-trip through the proxy', () =
       'cone-research',
       undefined
     );
+  });
+
+  // #2524 parity: the proxy hop must carry the REJECTION too, otherwise the
+  // side-panel terminal keeps registering black holes the standalone shell refuses.
+  it('refuses an unresolvable --scoop through the proxy', async () => {
+    const lm = await hostedManager();
+    (lm as unknown as { resolveLickTarget: unknown }).resolveLickTarget = vi.fn(() => ({
+      status: 'unresolved',
+      candidates: ['cone'],
+    }));
+    const { createCrontaskCommand } = await import(
+      '../../../src/shell/supplemental-commands/crontask-command.js'
+    );
+    const result = await (createCrontaskCommand() as any).execute(
+      ['create', '--name', 'digest', '--cron', '0 9 * * *', '--scoop', 'ghost-cone'],
+      { cwd: '/', env: {}, fs: {} as any }
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('matches no live cone or scoop');
+    expect(lm.createCronTask).not.toHaveBeenCalled();
   });
 
   it('lists cron tasks through the proxy (no direct manager present)', async () => {

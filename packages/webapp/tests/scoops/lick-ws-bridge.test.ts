@@ -295,6 +295,74 @@ describe('startLickWsBridge', () => {
     handle.stop();
   });
 
+  // #2524 — a request-shaped `webhook_event` carries the disposition back so the
+  // node-server can answer the caller instead of always reporting success.
+  it('answers a webhook_event WITH requestId with the delivery disposition', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const handleWebhookEvent = vi.fn().mockReturnValue('unresolved-target');
+    const lm = buildLickManagerMock({ handleWebhookEvent });
+
+    const handle = startLickWsBridge(lm, {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({
+      type: 'webhook_event',
+      requestId: 'r-wh',
+      webhookId: 'wh-1',
+      headers: { 'x-test': '1' },
+      body: { hello: 'world' },
+    });
+
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+    expect(JSON.parse(ws.sent[0])).toEqual({
+      type: 'response',
+      requestId: 'r-wh',
+      data: { disposition: 'unresolved-target' },
+    });
+    handle.stop();
+  });
+
+  it('reports `malformed` for a request-shaped webhook_event with no webhookId', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const lm = buildLickManagerMock({ handleWebhookEvent: vi.fn() });
+
+    const handle = startLickWsBridge(lm, {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({ type: 'webhook_event', requestId: 'r-bad', headers: {}, body: {} });
+
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+    expect(JSON.parse(ws.sent[0]).data).toEqual({ disposition: 'malformed' });
+    handle.stop();
+  });
+
+  it('reports `failed` when the LickManager throws on a request-shaped delivery', async () => {
+    const { startLickWsBridge } = await loadBridge();
+    const lm = buildLickManagerMock({
+      handleWebhookEvent: vi.fn(() => {
+        throw new Error('Filter compile failed');
+      }),
+    });
+
+    const handle = startLickWsBridge(lm, {
+      locationHref: LOCATION,
+      webSocketFactory: (url) => new FakeWebSocket(url),
+    });
+    const ws = FakeWebSocket.instances[0];
+
+    ws.emit({ type: 'webhook_event', requestId: 'r-throw', webhookId: 'wh-1', body: {} });
+
+    await vi.waitFor(() => expect(ws.sent.length).toBeGreaterThan(0));
+    expect(JSON.parse(ws.sent[0]).data).toEqual({ disposition: 'failed' });
+    handle.stop();
+  });
+
   it('forwards navigate_event payloads as navigate licks using the {verb, target, url} shape', async () => {
     // Wire shape matches node-server's `POST /api/handoff` payload
     // (RFC 8288 Link fields, not the older sliccHeader envelope).

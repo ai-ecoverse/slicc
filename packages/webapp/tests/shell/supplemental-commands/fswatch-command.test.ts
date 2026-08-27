@@ -268,4 +268,62 @@ describe('fswatch command', () => {
     const afterDelete = await cmd.execute(['list'], mockCommandContext());
     expect(afterDelete.stdout).toBe('No active file watchers.\n');
   });
+
+  // #2524 — `fswatch` had the same hole as `webhook`/`crontask`: an explicit
+  // `--scoop` naming nothing registered a watcher whose events were all dropped.
+  describe('unresolvable --scoop (#2524)', () => {
+    afterEach(() => {
+      delete (globalThis as Record<string, unknown>).__slicc_lickManager;
+    });
+
+    /** Direct manager surface: only `cone` resolves. */
+    function installRoster(): void {
+      (globalThis as Record<string, unknown>).__slicc_lickManager = {
+        resolveLickTarget: (target: string) =>
+          target === 'cone'
+            ? { status: 'resolved' }
+            : { status: 'unresolved', candidates: ['cone'] },
+      };
+    }
+
+    it('refuses the target and registers no watcher', async () => {
+      installRoster();
+      const watcher = installWatcher();
+      const cmd = await freshCommand();
+      const result = await cmd.execute(
+        ['create', '--path', '/workspace', '--pattern', '*.md', '--scoop', 'ghost-cone'],
+        mockCommandContext()
+      );
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('fswatch create: --scoop "ghost-cone"');
+      expect(watcher.watch).not.toHaveBeenCalled();
+      const listed = await cmd.execute(['list'], mockCommandContext());
+      expect(listed.stdout).toBe('No active file watchers.\n');
+    });
+
+    it('accepts a target that resolves', async () => {
+      installRoster();
+      installWatcher();
+      const cmd = await freshCommand();
+      const result = await cmd.execute(
+        ['create', '--path', '/workspace', '--pattern', '*.md', '--scoop', 'cone'],
+        mockCommandContext()
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Scoop:   cone');
+    });
+
+    // #2525 owns the omitted-`--scoop` path.
+    it('does not validate the shell default when --scoop is omitted', async () => {
+      installRoster();
+      installWatcher();
+      const cmd = await freshCommand();
+      const result = await cmd.execute(
+        ['create', '--path', '/workspace', '--pattern', '*.md'],
+        mockCommandContext({ env: new Map([['SLICC_LICK_TARGET', 'cone-research']]) })
+      );
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Scoop:   cone-research');
+    });
+  });
 });

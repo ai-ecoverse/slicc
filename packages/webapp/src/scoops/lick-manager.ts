@@ -38,9 +38,26 @@ export interface CronTaskEntry {
 // LickEvent is tray-sync wire format (follower `lick` forwarding) — canonical
 // copy in @slicc/shared-ts; re-exported here so scoops/-layer importers keep
 // their local import site.
-import type { LickEvent } from '@slicc/shared-ts';
+import type { LickEvent, WebhookDeliveryDisposition } from '@slicc/shared-ts';
 
-export type { LickEvent } from '@slicc/shared-ts';
+export type { LickEvent, WebhookDeliveryDisposition } from '@slicc/shared-ts';
+
+/** The fields of a live work unit a lick target is matched against. */
+export interface LickTargetUnit {
+  name: string;
+  folder: string;
+}
+
+/**
+ * What a `--scoop` value means against the live roster (issue #2524).
+ * `unverifiable` is not "invalid": it says no roster was injected (early boot,
+ * a float whose orchestrator never wired one), so a caller must accept the
+ * target rather than reject a name it cannot check.
+ */
+export type LickTargetResolution =
+  | { status: 'resolved' }
+  | { status: 'unresolved'; candidates: string[] }
+  | { status: 'unverifiable' };
 
 export type LickEventHandler = (event: LickEvent) => void;
 
@@ -135,14 +152,16 @@ export class LickManager {
    */
   private seenDiscoveryFingerprints = new Set<string>();
   /**
-   * Resolver injected by the orchestrator: given a lick's `scoop` field,
-   * returns whether a matching scoop is still registered (using the same
-   * alias matching as {@link getLicksForScoop}). Used to detect orphaned
-   * licks at boot ({@link init}) and on every scheduler tick
-   * ({@link runCronScheduler}). `null` until wired — every orphan check is a
-   * no-op while unset, preserving pre-injection behavior (tests / early boot).
+   * The live work-unit roster, injected by the orchestrator. Answers two
+   * questions with one source: whether a lick's `scoop` field still matches a
+   * registered unit (the same alias matching as {@link getLicksForScoop}), and
+   * — for {@link resolveLickTarget} — what the valid targets are so a rejected
+   * `--scoop` can name them. Used to detect orphaned licks at boot
+   * ({@link init}) and on every scheduler tick ({@link runCronScheduler}).
+   * `null` until wired — every orphan check is a no-op while unset, preserving
+   * pre-injection behavior (tests / early boot).
    */
-  private scoopResolver: ((scoopField: string) => boolean) | null = null;
+  private unitRoster: (() => readonly LickTargetUnit[]) | null = null;
   /** Upstream policy gate for persistent llms.txt hostname suppression. */
   private discoveryIgnore: ((event: LickEvent) => boolean) | null = null;
 
@@ -176,13 +195,28 @@ export class LickManager {
   }
 
   /**
-   * Inject the scoop-existence resolver (or clear it with `null`). The
-   * orchestrator wires this in `setLickManager` using the shared alias
-   * matching so orphaned-lick detection follows the same name / folder /
-   * `<scoop>-scoop` rules as {@link getLicksForScoop}.
+   * Inject the work-unit roster provider (or clear it with `null`). The
+   * orchestrator wires this in `setLickManager`; matching stays here so
+   * orphaned-lick detection and create-time target validation follow the same
+   * name / folder / `<scoop>-scoop` rules as {@link getLicksForScoop}.
    */
-  setScoopExistenceResolver(resolver: ((scoopField: string) => boolean) | null): void {
-    this.scoopResolver = resolver;
+  setUnitRosterProvider(provider: (() => readonly LickTargetUnit[]) | null): void {
+    this.unitRoster = provider;
+  }
+
+  /**
+   * Resolve a `--scoop` value against the live roster so a lick producer can
+   * refuse an unresolvable target at CREATE time instead of persisting an entry
+   * whose deliveries are dropped (issue #2524). Reports `unverifiable` — never
+   * `unresolved` — when no roster is wired: a target that cannot be checked
+   * must not be rejected.
+   */
+  resolveLickTarget(target: string): LickTargetResolution {
+    const units = this.unitRoster?.();
+    if (!units) return { status: 'unverifiable' };
+    if (units.some((u) => lickScoopMatches(target, u.name, u.folder)))
+      return { status: 'resolved' };
+    return { status: 'unresolved', candidates: lickTargetCandidates(units) };
   }
 
   /** Install or clear the live discovery-ignore policy. */
@@ -192,8 +226,8 @@ export class LickManager {
 
   /** True when `scoopField` is set but resolves to no registered scoop. */
   private isOrphanedLick(scoopField: string | undefined): boolean {
-    if (!this.scoopResolver || !scoopField) return false;
-    return !this.scoopResolver(scoopField);
+    if (!scoopField) return false;
+    return this.resolveLickTarget(scoopField).status === 'unresolved';
   }
 
   /**
@@ -203,7 +237,7 @@ export class LickManager {
    * leave a firing crontask or a live webhook behind.
    */
   private async reconcileOrphans(): Promise<void> {
-    if (!this.scoopResolver) return;
+    if (!this.unitRoster) return;
     for (const wh of Array.from(this.webhooks.values())) {
       if (!this.isOrphanedLick(wh.scoop)) continue;
       log.warn('Removing orphaned webhook at init; target scoop no longer exists', {
@@ -391,12 +425,32 @@ export class LickManager {
     return this.webhooks.get(id);
   }
 
-  /** Handle incoming webhook event from server */
-  handleWebhookEvent(webhookId: string, headers: Record<string, string>, body: unknown): void {
+  /**
+   * Handle an incoming webhook event from a receiver (tray worker, node-server
+   * bridge). The returned disposition is what the receiver answers the HTTP
+   * caller with: before #2524 every outcome — including "no unit was woken" —
+   * looked like a success to whoever POSTed.
+   */
+  handleWebhookEvent(
+    webhookId: string,
+    headers: Record<string, string>,
+    body: unknown
+  ): WebhookDeliveryDisposition {
     const webhook = this.webhooks.get(webhookId);
     if (!webhook) {
       log.warn('Webhook not found', { webhookId });
-      return;
+      return 'unknown-webhook';
+    }
+    // A targeted webhook whose unit is gone (or was never there) is dropped by
+    // the routing handler anyway; deciding it HERE is what lets the receiver
+    // stop answering `202 accepted` for an event nobody will ever see.
+    if (this.isOrphanedLick(webhook.scoop)) {
+      log.warn('Webhook target scoop not found — dropping delivery', {
+        webhookId,
+        name: webhook.name,
+        scoop: webhook.scoop,
+      });
+      return 'unresolved-target';
     }
 
     let event: LickEvent = {
@@ -416,7 +470,7 @@ export class LickManager {
         const result = filterFn(event);
         if (result === false) {
           log.debug('Webhook event dropped by filter', { webhookId, name: webhook.name });
-          return;
+          return 'filtered';
         }
         if (typeof result === 'object' && result !== null) {
           event = result as LickEvent;
@@ -436,6 +490,7 @@ export class LickManager {
       targetScoop: webhook.scoop,
     });
     this.dispatch(event);
+    return 'delivered';
   }
 
   // ─── Cron Tasks ───────────────────────────────────────────────────────────
@@ -689,6 +744,21 @@ export function lickScoopMatches(
 ): boolean {
   if (!scoopField) return false;
   return scoopField === name || scoopField === folder || `${scoopField}-scoop` === folder;
+}
+
+/**
+ * The `--scoop` values that WOULD resolve against `units`, for the error a
+ * rejected target prints. Folders come first because they are unambiguous; a
+ * display name is listed only when it differs from the folder, so the list
+ * reads as one entry per unit rather than two spellings of each.
+ */
+export function lickTargetCandidates(units: readonly LickTargetUnit[]): string[] {
+  const seen = new Set<string>();
+  for (const unit of units) {
+    seen.add(unit.folder);
+    if (unit.name && unit.name !== unit.folder) seen.add(unit.name);
+  }
+  return Array.from(seen);
 }
 
 /** Build the error thrown when trying to remove a scoop with active licks.

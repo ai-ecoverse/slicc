@@ -202,7 +202,7 @@ describe('LickManager orphan self-heal + persistence-authoritative guard', () =>
   it('runCronScheduler deletes a task whose target scoop no longer exists', async () => {
     const manager = new LickManager();
     // Only 'sched-live-scoop' still exists; the orphan targets a gone scoop.
-    manager.setScoopExistenceResolver((f) => f === 'sched-live-scoop');
+    manager.setUnitRosterProvider(() => [{ name: 'sched-live', folder: 'sched-live-scoop' }]);
     const orphan = await manager.createCronTask('sched-orphan', '*/5 * * * *', 'sched-gone-scoop');
 
     let dispatched = 0;
@@ -226,10 +226,15 @@ describe('LickManager orphan self-heal + persistence-authoritative guard', () =>
     const ct = await seeder.createCronTask('init-orphan-cron', '*/5 * * * *', 'init-gone-scoop');
     const liveWh = await seeder.createWebhook('init-live-wh', 'init-live-scoop');
 
-    // Fresh manager loads them from IndexedDB. Resolver treats only
-    // 'init-gone-scoop' as missing, so unrelated rows from other tests survive.
+    // Fresh manager loads them from IndexedDB. The roster holds the live scoop
+    // and, defensively, the folders other tests in this file target, so the only
+    // orphan `init()` sees is 'init-gone-scoop'.
     const manager = new LickManager();
-    manager.setScoopExistenceResolver((f) => f !== 'init-gone-scoop');
+    manager.setUnitRosterProvider(() => [
+      { name: 'init-live', folder: 'init-live-scoop' },
+      { name: 'test', folder: 'test-scoop' },
+      { name: 'sched-live', folder: 'sched-live-scoop' },
+    ]);
     await manager.init();
 
     try {

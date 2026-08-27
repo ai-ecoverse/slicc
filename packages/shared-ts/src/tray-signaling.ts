@@ -121,7 +121,27 @@ export interface WebhookEventMessage {
   headers: Record<string, string>;
   body: unknown;
   timestamp: string;
+  /**
+   * Set when the sender is holding an HTTP request open for this delivery and
+   * wants the leader's disposition back as {@link LeaderWebhookDelivery}
+   * (issue #2524). Absent on fire-and-forget forwards (the preview-emit path),
+   * which the leader must not acknowledge.
+   */
+  deliveryId?: string;
 }
+
+/**
+ * What became of one webhook delivery once it reached the leader's
+ * `LickManager`. Only the two failure values mean "no unit was woken":
+ * `filtered` is the webhook's own `--filter` doing its job, so it counts as
+ * accepted. Mirrored by `packages/webapp/src/scoops/lick-manager.ts`, which
+ * imports this type rather than restating it.
+ */
+export type WebhookDeliveryDisposition =
+  | 'delivered'
+  | 'filtered'
+  | 'unknown-webhook'
+  | 'unresolved-target';
 
 export interface WorkerPreviewRequest {
   type: 'preview.request';
@@ -291,8 +311,22 @@ export interface LeaderPushSend {
   requestId?: string;
 }
 
+/**
+ * Leader → worker: the disposition of a `webhook.event` that carried a
+ * `deliveryId`. The worker is holding the webhook POST open on it, so a
+ * non-delivering disposition turns the HTTP receipt from `202 accepted` into an
+ * error the caller can act on (issue #2524). A leader too old to send this at
+ * all leaves the worker on its pre-#2524 `202` after a short budget.
+ */
+export interface LeaderWebhookDelivery {
+  type: 'webhook.delivery';
+  deliveryId: string;
+  disposition: WebhookDeliveryDisposition;
+}
+
 export type LeaderToWorkerControlMessage =
   | { type: 'ping' }
+  | LeaderWebhookDelivery
   | LeaderPushRegister
   | LeaderPushSend
   | LeaderBootstrapOfferMessage

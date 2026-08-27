@@ -8,11 +8,16 @@
  *   - Request/response (each carries a `requestId`):
  *     `list_webhooks`, `create_webhook`, `delete_webhook`,
  *     `list_crontasks`, `create_crontask`, `delete_crontask`,
- *     `tray_status`. Reply envelope: `{ type: 'response',
+ *     `tray_status`, `webhook_event`. Reply envelope: `{ type: 'response',
  *     requestId, data?, error? }`.
  *   - Push events (no `requestId`, no reply): `webhook_event` →
- *     `LickManager.handleWebhookEvent`; `navigate_event` →
+ *     `LickManager.handleWebhookEvent` (the pre-#2524 shape, still accepted
+ *     from an older node-server); `navigate_event` →
  *     `lickManager.emitEvent({ type: 'navigate', ... })`.
+ *
+ * `webhook_event` is the one type spoken on BOTH shapes on purpose: the
+ * request shape carries the delivery disposition back so the node-server can
+ * stop answering a dropped delivery with a success receipt (#2524).
  *
  * Standalone-only: the extension offscreen kernel-host gates this out
  * because there is no node-server in extension mode (webhooks land at
@@ -27,7 +32,7 @@
  */
 import { getLickWebSocketUrl, getTrayWebhookUrl, getWebhookUrl } from '../base/lick-urls.js';
 import { createLogger } from '../core/logger.js';
-import type { LickEvent, LickManager } from './lick-manager.js';
+import type { LickEvent, LickManager, WebhookDeliveryDisposition } from './lick-manager.js';
 import { getLeaderStatusWithFallback, getLeaderTrayRuntimeStatus } from './tray-leader.js';
 
 const log = createLogger('lick-ws-bridge');
@@ -328,6 +333,9 @@ async function processLickMessage(
   }
 
   if (data.type === 'webhook_event') {
+    // Legacy push shape (no `requestId`): a node-server older than #2524
+    // broadcasts the delivery and answers the caller itself, so there is
+    // nowhere to report the disposition to.
     dispatchWebhookEvent(rt.lickManager, data);
     return;
   }
@@ -337,20 +345,28 @@ async function processLickMessage(
   }
 }
 
-function dispatchWebhookEvent(lickManager: LickManager, data: RequestMessage): void {
+/**
+ * Dispatch one inbound webhook delivery into the LickManager and report what
+ * became of it. `'malformed'` / `'failed'` are transport-level outcomes the
+ * receiver turns into a 4xx/5xx instead of the pre-#2524 success receipt.
+ */
+function dispatchWebhookEvent(
+  lickManager: LickManager,
+  data: RequestMessage
+): WebhookDeliveryDisposition | 'malformed' | 'failed' {
   const webhookId = typeof data.webhookId === 'string' ? data.webhookId : null;
   if (!webhookId) {
     log.error('Malformed webhook_event from lick-ws', {
       receivedKeys: Object.keys(data),
     });
-    return;
+    return 'malformed';
   }
   const headers =
     data.headers && typeof data.headers === 'object'
       ? (data.headers as Record<string, string>)
       : {};
   try {
-    lickManager.handleWebhookEvent(webhookId, headers, data.body);
+    return lickManager.handleWebhookEvent(webhookId, headers, data.body);
   } catch (err) {
     // Filter compile errors, IndexedDB write errors, scoop-dispatch
     // failures all manifest here. Surface them with the diagnostic
@@ -360,6 +376,7 @@ function dispatchWebhookEvent(lickManager: LickManager, data: RequestMessage): v
       webhookId,
       error: err instanceof Error ? err.message : String(err),
     });
+    return 'failed';
   }
 }
 
@@ -464,6 +481,15 @@ async function handleLickRequest(
           type: 'response',
           requestId,
           data: { ...wh, url: resolveLickWebhookUrl(rt, wh.id) },
+        };
+      }
+      case 'webhook_event': {
+        // Request-shaped delivery (#2524): the node-server is holding the
+        // webhook POST open, so it needs the disposition — not a bare "sent".
+        return {
+          type: 'response',
+          requestId,
+          data: { disposition: dispatchWebhookEvent(lickManager, data) },
         };
       }
       case 'delete_webhook': {

@@ -3,6 +3,7 @@ import { defineCommand } from 'just-bash';
 import { getTrayWebhookUrl, getWebhookUrl } from '../../base/lick-urls.js';
 import { defaultLickTarget, type LickTargetEnv } from '../lick-target-env.js';
 import { getLickManagerSurface } from './lick-surface.js';
+import { explicitLickTargetError } from './lick-target-check.js';
 import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest } from './subcommand-help.js';
 
@@ -143,6 +144,17 @@ async function handleCreate(
 
   const lm = await getLickManagerSurface();
   if (!lm) return notInitializedError('create');
+
+  // An explicit `--scoop` that names no live unit is refused HERE rather than
+  // persisted and dropped at every delivery (#2524). The omitted-`--scoop` path
+  // above is untouched (#2525).
+  const targetError = await explicitLickTargetError(
+    lm,
+    'webhook create',
+    parsed.values.get('--scoop')
+  );
+  if (targetError) return { stdout: '', stderr: targetError, exitCode: 1 };
+
   const entry = await lm.createWebhook(name, scoop, filter);
 
   // Resolve URL after creation; if URL resolution fails, still

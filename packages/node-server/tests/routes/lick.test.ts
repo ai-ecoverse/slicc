@@ -249,14 +249,76 @@ describe('registerLickApiRoutes', () => {
     expect(res.headers.get('access-control-allow-methods')).toContain('POST');
   });
 
-  it('broadcasts a webhook_event for an inbound webhook POST', async () => {
-    const broadcastLickEvent = vi.fn();
-    server = await startServer(stubBridge({ broadcastLickEvent }));
-    const res = await fetch(`http://localhost:${server.port}/webhooks/hook-1`, {
+  /** POST a delivery to `/webhooks/hook-1` against a bridge with `sendLickRequest`. */
+  async function postWebhook(sendLickRequest: LickBridge['sendLickRequest'], extra = {}) {
+    server = await startServer(stubBridge({ sendLickRequest, ...extra }));
+    return fetch(`http://localhost:${server.port}/webhooks/hook-1`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ hello: 'world' }),
     });
+  }
+
+  it('asks the browser about an inbound webhook POST and keeps the receipt on delivery', async () => {
+    const sendLickRequest = vi.fn().mockResolvedValue({ disposition: 'delivered' });
+    const res = await postWebhook(sendLickRequest);
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, received: true });
+    expect(sendLickRequest).toHaveBeenCalledTimes(1);
+    expect(sendLickRequest.mock.calls[0][0]).toBe('webhook_event');
+    expect(sendLickRequest.mock.calls[0][1]).toMatchObject({
+      type: 'webhook_event',
+      webhookId: 'hook-1',
+      body: { hello: 'world' },
+    });
+  });
+
+  // A `--filter` dropping an event is the filter working as configured, so the
+  // caller still gets the success receipt — only structural non-delivery changes.
+  it('keeps the success receipt when the webhook filter dropped the event', async () => {
+    const res = await postWebhook(vi.fn().mockResolvedValue({ disposition: 'filtered' }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, received: true });
+  });
+
+  // #2524: the delivery is discarded, so the caller must not be told it worked.
+  it('reports 422 for a webhook whose target scoop does not resolve', async () => {
+    const res = await postWebhook(vi.fn().mockResolvedValue({ disposition: 'unresolved-target' }));
+    expect(res.status).toBe(422);
+    expect(await res.json()).toMatchObject({
+      ok: false,
+      received: false,
+      code: 'WEBHOOK_TARGET_UNRESOLVED',
+    });
+  });
+
+  it('reports 404 for a webhook the browser has never registered', async () => {
+    const res = await postWebhook(vi.fn().mockResolvedValue({ disposition: 'unknown-webhook' }));
+    expect(res.status).toBe(404);
+    expect(await res.json()).toMatchObject({ ok: false, code: 'WEBHOOK_NOT_REGISTERED' });
+  });
+
+  it('reports 500 when the browser could not dispatch the delivery', async () => {
+    const res = await postWebhook(vi.fn().mockResolvedValue({ disposition: 'failed' }));
+    expect(res.status).toBe(500);
+    expect(await res.json()).toMatchObject({ ok: false, code: 'WEBHOOK_DISPATCH_FAILED' });
+  });
+
+  it('reports 503 when no browser is connected to take the delivery', async () => {
+    const res = await postWebhook(vi.fn().mockRejectedValue(new Error('No browser connected')));
+    expect(res.status).toBe(503);
+    expect(await res.json()).toMatchObject({ ok: false, code: 'BROWSER_UNAVAILABLE' });
+  });
+
+  // Compat: a browser older than #2524 does not know the request shape. Fall
+  // back to the legacy broadcast + legacy receipt rather than failing a delivery
+  // the leader would have handled.
+  it('falls back to the legacy broadcast when the browser rejects the request shape', async () => {
+    const broadcastLickEvent = vi.fn();
+    const res = await postWebhook(
+      vi.fn().mockRejectedValue(new Error('Unknown request type: webhook_event')),
+      { broadcastLickEvent }
+    );
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true, received: true });
     expect(broadcastLickEvent).toHaveBeenCalledTimes(1);
@@ -265,5 +327,12 @@ describe('registerLickApiRoutes', () => {
       webhookId: 'hook-1',
       body: { hello: 'world' },
     });
+  });
+
+  // An unrecognised reply shape is not evidence of a drop.
+  it('keeps the legacy receipt when the browser reply has no disposition', async () => {
+    const res = await postWebhook(vi.fn().mockResolvedValue({ ok: true }));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toEqual({ ok: true, received: true });
   });
 });

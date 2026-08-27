@@ -22,12 +22,16 @@
  * keeps the helper's import graph small.
  */
 
-import { isSliccAppUrl } from '@slicc/shared-ts';
+import {
+  isSliccAppUrl,
+  type LeaderWebhookDelivery,
+  type WebhookEventMessage,
+} from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import type { BrowserAPI } from '../cdp/browser-api.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import type { VirtualFS } from '../fs/virtual-fs.js';
-import type { LickEvent } from '../scoops/lick-manager.js';
+import type { LickEvent, WebhookDeliveryDisposition } from '../scoops/lick-manager.js';
 import { handlePreviewRequest } from '../scoops/preview-request-handler.js';
 import { ThrottledErrorTracker } from '../scoops/throttled-error-tracker.js';
 import type {
@@ -53,6 +57,31 @@ import { LeaderTrayPeerManager, type TrayPeerConnectionFactory } from '../scoops
 import type { AgentEvent } from './types.js';
 
 const log = createLogger('page-leader-tray');
+
+/**
+ * Relay one tray `webhook.event` into the worker's `LickManager` and, when the
+ * worker names a disposition, report it back over the control socket (#2524).
+ * Staying silent is the compatible answer for a delivery the worker did not
+ * answer in time: the tray worker then falls back to its pre-#2524 receipt
+ * rather than reporting a failure it has no evidence for.
+ */
+function relayWebhookEvent(
+  message: WebhookEventMessage,
+  sendWebhookEvent: StartPageLeaderTrayOptions['sendWebhookEvent'],
+  sendAck: (ack: LeaderWebhookDelivery) => void
+): void {
+  void sendWebhookEvent(message.webhookId, message.headers, message.body)
+    .then((disposition: WebhookDeliveryDisposition | null) => {
+      if (!message.deliveryId || !disposition) return;
+      sendAck({ type: 'webhook.delivery', deliveryId: message.deliveryId, disposition });
+    })
+    .catch((err: unknown) => {
+      log.warn('webhook.event relay failed', {
+        webhookId: message.webhookId,
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
+}
 
 /**
  * Page-side dependency surface for {@link startPageLeaderTray}. Mirrors
@@ -102,10 +131,16 @@ export interface StartPageLeaderTrayOptions {
   // --- Bridge hop to worker LickManager (replaces the pre-regression direct call) ---
   /**
    * Forward a tray `webhook.event` control message to the worker's
-   * `LickManager`. Wired to `OffscreenClient.sendWebhookEvent` by the
-   * caller. Fire-and-forget; no ack expected.
+   * `LickManager`. Wired to `OffscreenClient.sendWebhookEvent` by the caller.
+   * Resolves with the delivery's disposition, or `null` when the worker did not
+   * answer in time — the tray worker is waiting on it to decide the webhook
+   * POST's receipt (#2524).
    */
-  sendWebhookEvent: (webhookId: string, headers: Record<string, string>, body: unknown) => void;
+  sendWebhookEvent: (
+    webhookId: string,
+    headers: Record<string, string>,
+    body: unknown
+  ) => Promise<WebhookDeliveryDisposition | null>;
 
   /**
    * Forward an inbound `cherry.host_event` (from a follower's embedded cherry
@@ -345,7 +380,9 @@ function buildLeaderManager(
     ...(options._webSocketFactory ? { webSocketFactory: options._webSocketFactory } : {}),
     onControlMessage: (message) => {
       if (message.type === 'webhook.event') {
-        options.sendWebhookEvent(message.webhookId, message.headers, message.body);
+        relayWebhookEvent(message, options.sendWebhookEvent, (ack) =>
+          getLeader().sendControlMessage(ack)
+        );
         return;
       }
       if (message.type === 'preview.request') {

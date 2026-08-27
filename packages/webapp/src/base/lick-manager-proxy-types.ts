@@ -33,7 +33,22 @@ export interface WebhookEntry {
   scoop?: string;
 }
 
+/**
+ * Mirror of `LickTargetResolution` (`../scoops/lick-manager.ts`) — see the
+ * note above on why the entry shapes are restated rather than imported.
+ */
+export type LickTargetResolution =
+  | { status: 'resolved' }
+  | { status: 'unresolved'; candidates: string[] }
+  | { status: 'unverifiable' };
+
 export interface LickManager {
+  /**
+   * Resolve a `--scoop` value against the live roster (#2524). Optional on the
+   * proxied surface: a kernel host older than #2524 does not implement the op,
+   * and a caller that cannot ask must accept the target rather than reject it.
+   */
+  resolveLickTarget?(target: string): LickTargetResolution;
   createCronTask(
     name: string,
     cron: string,

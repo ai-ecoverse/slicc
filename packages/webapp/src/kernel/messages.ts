@@ -8,7 +8,7 @@
  * to its primary consumers.
  */
 
-import type { CDPPayload, ToolProgressEvent } from '@slicc/shared-ts';
+import type { CDPPayload, ToolProgressEvent, WebhookDeliveryDisposition } from '@slicc/shared-ts';
 import type { MessageAttachment } from '../core/attachments.js';
 import type { AgentSpawnOptions, AgentSpawnResult } from '../scoops/agent-bridge.js';
 import type { ChatMessage } from '../scoops/chat-types.js';
@@ -448,6 +448,23 @@ export interface WebhookEventMsg {
   webhookId: string;
   headers: Record<string, string>;
   body: unknown;
+  /**
+   * Set when the sender wants the delivery disposition back as a
+   * {@link WebhookDeliveryMsg} — the tray worker is holding the webhook POST
+   * open on it (#2524). Absent on fire-and-forget relays.
+   */
+  requestId?: string;
+}
+
+/**
+ * Worker → page reply to a {@link WebhookEventMsg} that carried a `requestId`:
+ * what became of the delivery, so the leader can tell the tray worker whether
+ * a unit was actually woken (#2524).
+ */
+export interface WebhookDeliveryMsg {
+  type: 'lick-webhook-delivery';
+  requestId: string;
+  disposition: WebhookDeliveryDisposition;
 }
 
 /** Page→worker (standalone follower): toggle the worker LickManager's forwarder. */
@@ -1325,6 +1342,7 @@ export type OffscreenToPanelMessage =
   | OAuthResultMsg
   | TrayRuntimeStatusMsg
   | ClearChatAckMsg
+  | WebhookDeliveryMsg
   | AgentSpawnResultMsg
   | SetScoopModelAckMsg
   | SetThinkingLevelAckMsg

@@ -59,7 +59,14 @@ class FakeNamespace {
       instance = new SessionTrayDurableObject(
         state,
         {},
-        { now: this.now, webSocketPairFactory: createFakeWebSocketPair }
+        {
+          now: this.now,
+          webSocketPairFactory: createFakeWebSocketPair,
+          // Most fake leaders here never send `webhook.delivery`; keep the ack
+          // budget (#2524) short so those tests don't sit out the real one, but
+          // long enough for a test that DOES ack to win the race.
+          webhookDeliveryWaitMs: 500,
+        }
       );
       state.instance = instance;
       this.instances.set(key, instance);
@@ -1018,6 +1025,107 @@ describe('tray worker skeleton', () => {
     expect(forwarded.body).toEqual({ action: 'opened', repo: 'test/repo' });
     expect(forwarded.timestamp).toBeDefined();
     expect(forwarded.headers['content-type']).toBe('application/json');
+  });
+
+  /**
+   * #2524 — the receipt has to follow the leader's disposition. Before this, a
+   * delivery nobody could receive still answered `202 {"ok":true,"accepted":true}`,
+   * so a black-holed webhook was indistinguishable from a healthy one.
+   */
+  describe('webhook receipt follows the leader disposition (#2524)', () => {
+    /** Attach a leader + control socket and return the webhook capability URL. */
+    async function connectLeader(env: ReturnType<typeof makeEnv>) {
+      const created = await handleWorkerRequest(
+        new Request('https://tray.test/tray', { method: 'POST' }),
+        env
+      );
+      const session = (await created.json()) as {
+        capabilities: { controller: { url: string }; webhook: { url: string } };
+      };
+      const attach = await handleWorkerRequest(
+        new Request(session.capabilities.controller.url, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ controllerId: 'lead-1' }),
+        }),
+        env
+      );
+      const leader = (await attach.json()) as { websocket: { url: string } };
+      const wsResponse = await handleWorkerRequest(
+        new Request(leader.websocket.url, { headers: { Upgrade: 'websocket' } }),
+        env
+      );
+      return {
+        socket: (wsResponse as unknown as { webSocket: FakeWebSocket }).webSocket,
+        webhookUrl: session.capabilities.webhook.url,
+      };
+    }
+
+    /** POST a delivery, then answer it as the leader with `disposition`. */
+    async function postAndAck(disposition: string): Promise<Response> {
+      const { env } = createTestHarness();
+      const { socket, webhookUrl } = await connectLeader(env);
+      const pending = handleWorkerRequest(
+        new Request(`${webhookUrl}/wh-ack`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ probe: 1 }),
+        }),
+        env
+      );
+      await vi.waitFor(() => {
+        expect(
+          socket.received.map((raw) => JSON.parse(raw) as { type: string; deliveryId?: string })
+        ).toContainEqual(expect.objectContaining({ type: 'webhook.event' }));
+      });
+      const event = socket.received
+        .map((raw) => JSON.parse(raw) as { type: string; deliveryId?: string })
+        .find((m) => m.type === 'webhook.event');
+      expect(event?.deliveryId).toBeTruthy();
+      socket.send(
+        JSON.stringify({ type: 'webhook.delivery', deliveryId: event?.deliveryId, disposition })
+      );
+      return pending;
+    }
+
+    it('answers 422 when the leader reports an unresolvable target', async () => {
+      const response = await postAndAck('unresolved-target');
+      expect(response.status).toBe(422);
+      expect(await response.json()).toMatchObject({
+        ok: false,
+        accepted: false,
+        code: 'WEBHOOK_TARGET_UNRESOLVED',
+      });
+    });
+
+    it('answers 404 when the leader has no such webhook registered', async () => {
+      const response = await postAndAck('unknown-webhook');
+      expect(response.status).toBe(404);
+      expect(await response.json()).toMatchObject({ ok: false, code: 'WEBHOOK_NOT_REGISTERED' });
+    });
+
+    it.each(['delivered', 'filtered'])('keeps 202 for a %s delivery', async (disposition) => {
+      const response = await postAndAck(disposition);
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({ ok: true, accepted: true });
+    });
+
+    // A leader older than #2524 never acks. Silence is not evidence of a drop, so
+    // the receipt stays exactly what it was before this change.
+    it('falls back to 202 when the leader never reports a disposition', async () => {
+      const { env } = createTestHarness();
+      const { webhookUrl } = await connectLeader(env);
+      const response = await handleWorkerRequest(
+        new Request(`${webhookUrl}/wh-silent`, {
+          method: 'POST',
+          headers: { 'content-type': 'application/json' },
+          body: JSON.stringify({ probe: 1 }),
+        }),
+        env
+      );
+      expect(response.status).toBe(202);
+      expect(await response.json()).toEqual({ ok: true, accepted: true });
+    });
   });
 
   it('strips forged x-slicc-preview-* headers from a webhook POST (attribution cannot be spoofed)', async () => {
