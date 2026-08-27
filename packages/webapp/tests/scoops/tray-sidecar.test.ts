@@ -20,6 +20,8 @@ const hoisted = vi.hoisted(() => ({
     statusSink: { get(): unknown; set(status: unknown): void };
     channel: FakeDataChannel;
     connect(): void;
+    /** A transparent reconnect: a NEW channel for the same attachment. */
+    reconnect(): FakeDataChannel;
     giveUp(reason: string): void;
     cancelled: boolean;
   }>,
@@ -103,6 +105,18 @@ vi.mock('../../src/scoops/tray-webrtc.js', async (importOriginal) => {
             bootstrapId: 'bootstrap-1',
             channel,
           });
+        },
+        reconnect() {
+          // `startFollowerWithAutoReconnect` re-invokes `onConnected` with a
+          // fresh channel; the old one is gone and so is anything sent on it.
+          const next = new FakeDataChannel();
+          dial.channel = next;
+          reconnectOptions.onConnected({
+            trayId: 'tray-remote',
+            bootstrapId: 'bootstrap-2',
+            channel: next,
+          });
+          return next;
         },
         giveUp(reason: string) {
           reconnectOptions.onGaveUp?.(reason);
@@ -679,6 +693,48 @@ describe('tray sidecar', () => {
       } finally {
         vi.useRealTimers();
       }
+    });
+  });
+
+  describe('reconnect', () => {
+    // The request died with the old data channel — the leader dropped it and
+    // no reply is coming. Without this the verb waits out its timeout, which
+    // for `slicc exec` with no `--timeout` is 24 HOURS.
+    it('fails an in-flight verb instead of hanging it forever', async () => {
+      const { info, dial } = await attach(registry);
+      const run = registry.exec(info.name, 'sleep 100');
+      await Promise.resolve();
+      expect(dial.channel.framesOfType('exec.request')).toHaveLength(1);
+
+      dial.reconnect();
+
+      const result = await run;
+      expect(result.exitCode).toBe(1);
+      expect(result.error).toMatch(/connection/i);
+    });
+
+    // It must not silently re-issue: a re-sent `user_message` costs a second
+    // turn and a re-sent `exec.request` runs the command twice.
+    it('does not re-issue the request on the new channel', async () => {
+      const { info, dial } = await attach(registry);
+      const run = registry.exec(info.name, 'rm -rf /important');
+      await Promise.resolve();
+      const next = dial.reconnect();
+      await run;
+      expect(next.framesOfType('exec.request')).toHaveLength(0);
+    });
+
+    it('re-sends hello on the new channel and stays usable', async () => {
+      const { info, dial } = await attach(registry);
+      const next = dial.reconnect();
+      expect(next.framesOfType('hello')).toHaveLength(1);
+
+      // The attachment survives the drop — a NEW verb works on the new channel.
+      const run = registry.exec(info.name, 'echo ok');
+      await Promise.resolve();
+      const requestId = next.framesOfType('exec.request')[0].requestId as string;
+      next.deliver({ type: 'exec.response', requestId, exitCode: 0 });
+      expect(await run).toMatchObject({ exitCode: 0 });
     });
   });
 

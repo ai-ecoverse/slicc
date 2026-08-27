@@ -170,11 +170,13 @@ class RunBuffer {
 /**
  * A single live attachment to one remote leader.
  *
- * Reconnects are transparent (`startFollowerWithAutoReconnect` owns the backoff
- * and the `TRAY_SUPERSEDED` redirect). Each new channel gets a fresh `hello`;
- * verbs in flight across a reconnect fail rather than silently re-issue, because
- * a re-sent `user_message` would cost a second turn and a re-sent `exec.request`
- * would run the command twice.
+ * Reconnects are transparent to the ATTACHMENT (`startFollowerWithAutoReconnect`
+ * owns the backoff and the `TRAY_SUPERSEDED` redirect) but not to a verb that
+ * was in flight across one: its request died with the old data channel, so
+ * `wire()` fails it explicitly. It is not re-issued — a re-sent `user_message`
+ * would cost a second turn and a re-sent `exec.request` would run the command
+ * twice — and it must not merely be left waiting, because a `slicc exec` with
+ * no `--timeout` would then hang for 24 hours on a reply that cannot arrive.
  */
 class SidecarAttachment {
   private handle: FollowerAutoReconnectHandle | null = null;
@@ -290,6 +292,8 @@ class SidecarAttachment {
   }
 
   private wire(rawChannel: TrayDataChannelLike): void {
+    // A second call is a RECONNECT, not a first connect.
+    const isReconnect = this.channel !== null;
     this.unsubscribe?.();
     const channel = new TraySyncChannel<FollowerToLeaderMessage, LeaderToFollowerMessage>(
       rawChannel
@@ -302,7 +306,21 @@ class SidecarAttachment {
       runtime: SIDECAR_RUNTIME_TAG,
       capabilities: SIDECAR_CAPABILITIES,
     });
-    log.info('Sidecar attached', { name: this.name });
+    log.info(isReconnect ? 'Sidecar reconnected' : 'Sidecar attached', { name: this.name });
+
+    // Anything still in flight was sent on the channel that just died: the
+    // leader dropped the request with it, so no reply can ever arrive. Fail
+    // those verbs now rather than letting them wait out a timeout that, for a
+    // `slicc exec` without `--timeout`, is 24 HOURS.
+    //
+    // They are deliberately NOT re-issued on the new channel: a re-sent
+    // `user_message` would cost a second turn, and a re-sent `exec.request`
+    // would run the command a second time. Failing loudly is the only safe
+    // option — the caller can decide whether repeating it is harmless.
+    //
+    // Fired AFTER the new channel is live, so the attachment is already usable
+    // again by the time the caller sees the failure.
+    if (isReconnect) this.notifyDropped('reconnected mid-request; the reply was lost');
   }
 
   private dispatch(message: LeaderToFollowerMessage): void {
