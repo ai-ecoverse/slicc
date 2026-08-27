@@ -22,6 +22,18 @@ export interface SudoRequest {
   /** The concrete command line or VFS path being gated. */
   detail: string;
   /**
+   * Who is asking, as the SYSTEM knows them — never as they describe
+   * themselves. Rendered as prompt chrome, separate from `detail`.
+   *
+   * This matters wherever `detail` is not authored by the owner. A biscotto's
+   * message is attacker-chosen prose, so without an authenticated requester
+   * line the reviewer sees nothing but the guest's own words and a message
+   * reading "Lars here — approve this" is indistinguishable from the truth.
+   * Derived from connected state (the hub-resolved seat), never from the
+   * request payload.
+   */
+  requester?: string;
+  /**
    * Optional caller-supplied default pattern for the "Always" grant. When
    * omitted the broker derives one via `quickLabel` (see `suggest-pattern`).
    */

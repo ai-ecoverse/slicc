@@ -71,11 +71,26 @@ export interface BiscottoReviewDeps {
   notify(bootstrapId: string, messageId: string, state: BiscottoMessageState): void;
 }
 
+/**
+ * Most messages one seat may have waiting on a human at once.
+ *
+ * A guest sends as fast as it likes while reviews serialize behind prompts that
+ * can sit for minutes, and a single wire message may approach
+ * `TRAY_MAX_MESSAGE_BYTES`. Unbounded, one guest exhausts the leader TAB's
+ * memory — taking down the owner's session, not just its own.
+ */
+export const MAX_QUEUED_PER_SEAT = 8;
+
 export class BiscottoReview {
   /** One serialized queue per seat, keyed by bootstrapId. */
   private readonly queues = new Map<string, PendingGuestMessage[]>();
   /** Seats with a review currently on screen. */
   private readonly inFlight = new Set<string>();
+  /**
+   * Bumped whenever a seat goes away. A review that resolves against a stale
+   * epoch is discarded rather than delivered — see {@link handleFollowerRemoved}.
+   */
+  private readonly epochs = new Map<string, number>();
 
   constructor(
     private readonly context: LeaderSyncContext,
@@ -101,15 +116,33 @@ export class BiscottoReview {
    * scoped to the seat rather than to the sudoers table.
    */
   submit(bootstrapId: string, message: PendingGuestMessage): void {
-    if (message.biscotto.gates.message.approver === 'off') {
-      this.deps.deliver(message);
-      this.deps.notify(bootstrapId, message.messageId, 'approved');
+    // A guest never interrupts the owner's running turn. `steer` aborts work in
+    // progress, and a reviewer approving the TEXT is not thereby approving an
+    // interruption — the two are not visible as one decision. Stripped here so
+    // no downstream caller can honour it; the message queues normally instead.
+    const queued: PendingGuestMessage = { ...message, steer: false };
+
+    if (queued.biscotto.gates.message.approver === 'off') {
+      this.deps.deliver(queued);
+      this.deps.notify(bootstrapId, queued.messageId, 'approved');
       return;
     }
     const queue = this.queues.get(bootstrapId) ?? [];
-    queue.push(message);
+    if (queue.length >= MAX_QUEUED_PER_SEAT) {
+      // Reported as `unanswered` rather than `rejected`: nobody refused this,
+      // it was never put in front of anyone. Truthful, and it tells the guest
+      // that retrying later may work.
+      this.context.log.warn('Guest review queue full — dropping message', {
+        bootstrapId,
+        biscottoId: queued.biscotto.id,
+        queued: queue.length,
+      });
+      this.deps.notify(bootstrapId, queued.messageId, 'unanswered');
+      return;
+    }
+    queue.push(queued);
     this.queues.set(bootstrapId, queue);
-    this.deps.notify(bootstrapId, message.messageId, 'pending');
+    this.deps.notify(bootstrapId, queued.messageId, 'pending');
     void this.drain(bootstrapId);
   }
 
@@ -129,7 +162,20 @@ export class BiscottoReview {
         const next = queue?.shift();
         if (!next) break;
         if (queue?.length === 0) this.queues.delete(bootstrapId);
+        const epoch = this.epochs.get(bootstrapId) ?? 0;
         const outcome = await this.review(bootstrapId, next);
+        // The seat may have been REVOKED, expired or disconnected while the
+        // prompt sat on screen. Delivering now would let a revoked guest still
+        // reach the cone minutes later — the exact thing revocation exists to
+        // stop — so a stale epoch discards the verdict, allow or not.
+        if ((this.epochs.get(bootstrapId) ?? 0) !== epoch) {
+          this.context.log.info('Discarding a review that outlived its seat', {
+            bootstrapId,
+            messageId: next.messageId,
+            outcome,
+          });
+          break;
+        }
         if (outcome === 'approved') this.deps.deliver(next);
         this.deps.notify(bootstrapId, next.messageId, outcome);
       }
@@ -160,7 +206,7 @@ export class BiscottoReview {
     try {
       decision = await requestSudoApproval({
         kind: 'guest-message',
-        detail: message.text,
+        detail: describeGuestSubmission(message),
         followerLabel: describeSeat(message.biscotto),
       });
     } catch (err) {
@@ -182,9 +228,13 @@ export class BiscottoReview {
   }
 
   /**
-   * Drop everything queued for a seat that went away. Anything already in
-   * flight is settled by its own broker timeout; this only clears the backlog
-   * so a reconnecting guest does not find old messages replayed at the cone.
+   * A seat went away — revoked, expired, disconnected, or the leader stopping.
+   *
+   * Clears the backlog AND bumps the epoch, which invalidates any review still
+   * on screen. Clearing the queue alone was not enough: an `allow` arriving
+   * after a revocation would still have delivered, so `biscotto revoke` would
+   * have had a minutes-long tail during which the guest could still reach the
+   * cone.
    */
   private handleFollowerRemoved(bootstrapId: string): void {
     const dropped = this.queues.get(bootstrapId)?.length ?? 0;
@@ -195,7 +245,47 @@ export class BiscottoReview {
       });
     }
     this.queues.delete(bootstrapId);
+    this.epochs.set(bootstrapId, (this.epochs.get(bootstrapId) ?? 0) + 1);
   }
+}
+
+/**
+ * Everything about a guest submission a reviewer must see to decide.
+ *
+ * Showing `text` alone was not enough: approval also delivers ATTACHMENTS,
+ * whose content the reviewer never saw, so innocuous prose could carry a
+ * hostile file past a human who believed they were approving one sentence.
+ * Attachments are summarised by name and size — the reviewer at least knows
+ * what is riding along, and how much of it.
+ *
+ * The attachment summary goes ABOVE the text and is the only part of this
+ * string the guest does not control. The text is fenced so guest prose cannot
+ * pass itself off as that summary.
+ */
+export function describeGuestSubmission(message: PendingGuestMessage): string {
+  const attachments = message.attachments ?? [];
+  if (attachments.length === 0) return message.text;
+  const summary = attachments
+    .map((attachment, index) => `  ${index + 1}. ${describeAttachment(attachment)}`)
+    .join('\n');
+  return [
+    `Attachments delivered with this message (${attachments.length}):`,
+    summary,
+    '',
+    '--- message text ---',
+    message.text,
+  ].join('\n');
+}
+
+function describeAttachment(attachment: MessageAttachment): string {
+  // Names are guest-chosen; flatten so one cannot forge extra summary rows or
+  // a fake "--- message text ---" divider.
+  const flat = (attachment.name || 'unnamed')
+    // biome-ignore lint/suspicious/noControlCharactersInRegex: flattening is the point.
+    .replace(/[\u0000-\u001f\u007f]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  return `${flat.slice(0, 120) || 'unnamed'} (${attachment.kind}, ${attachment.mimeType}, ${attachment.size} bytes)`;
 }
 
 /** How the seat is named on the approval prompt the owner sees. */

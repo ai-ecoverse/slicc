@@ -575,6 +575,9 @@ export function createLeaderOptionsFactory(
       client.requestSudoApproval({
         kind: request.kind,
         detail: request.detail,
+        // Authenticated identity, derived from connected tray state — without
+        // it a guest-authored `detail` is the only thing the reviewer sees.
+        ...(request.followerLabel ? { requester: request.followerLabel } : {}),
         ...(request.suggestedPattern ? { suggestedPattern: request.suggestedPattern } : {}),
       }),
     createTranscriptExport: async (selector, signal) => {

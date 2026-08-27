@@ -84,7 +84,11 @@ export function resolveSudoRequest(req: SudoRequest, deps: PanelResponderDeps = 
     return { decision: 'deny' };
   }
 
-  const label = `Approve ${req.kind}:\n\n${req.detail}\n\nOK = allow · Cancel = deny`;
+  // The requester line comes FIRST and is system-derived. `detail` may be
+  // attacker-chosen prose (a guest message), so a reviewer needs the
+  // authenticated identity before they read a word the requester wrote.
+  const who = req.requester ? `Requested by: ${req.requester}\n\n` : '';
+  const label = `Approve ${req.kind}:\n\n${who}${req.detail}\n\nOK = allow · Cancel = deny`;
   if (!confirmFn(label)) return { decision: 'deny' };
 
   const suggested = req.suggestedPattern?.trim() || req.detail.trim();
