@@ -59,3 +59,8 @@ it from here. Output is returned once the command completes (buffered, like
 - Treat an exec target like SSH access to someone's box: run only what you'd run
   there directly, prefer the narrowest command, and never pipe untrusted input
   into it.
+
+## The other direction
+
+`ssh` goes _down_ the tray, to a follower of yours. To go _up_ — into another
+SLICC leader's virtual shell, given its join URL — use the `slicc` skill.

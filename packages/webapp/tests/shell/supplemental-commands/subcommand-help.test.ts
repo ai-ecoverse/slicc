@@ -102,6 +102,16 @@ const DISPATCHERS: readonly Dispatcher[] = [
   { command: 'upgrade', source: 'upgrade-command.ts', verbs: 'source' },
   { command: 'usb', source: 'usb-command.ts', verbs: 'source' },
   { command: 'webhook', source: 'webhook-command.ts', verbs: 'source' },
+  // `slicc`'s grammar is `slicc <target> <verb>`, so a verb in first position
+  // is not yet a verb — `slicc prompt --help` prints top-level help. The
+  // verb-specific pages (`slicc <url> prompt --help`) are covered in
+  // `slicc-command.test.ts`; what matters here is that neither form ever
+  // dispatches, notably `slicc detach --help`.
+  {
+    command: 'slicc',
+    source: 'slicc/run.ts',
+    verbs: ['prompt', 'exec', 'watch', 'list', 'detach'],
+  },
   { command: 'skill', source: 'upskill/skill-command.ts', verbs: 'source' },
   { command: 'upskill', source: 'upskill/upskill-command.ts', verbs: 'source' },
 ];

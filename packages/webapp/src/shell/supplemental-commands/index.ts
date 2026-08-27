@@ -62,6 +62,7 @@ import { createSecretCommand } from './secret-command.js';
 import { createSerialCommand } from './serial-command.js';
 import { createServeCommand } from './serve-command.js';
 import { createSessionCommand } from './session-command.js';
+import { createSliccCommand } from './slicc-command.js';
 import { createSliccFsCleanupCommand } from './slicc-fs-cleanup-command.js';
 import { createSprinkleCommand } from './sprinkle-command.js';
 import { createSqliteCommand } from './sqlite-command.js';
@@ -180,6 +181,7 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     }),
     createHostCommand(),
     createSshCommand(),
+    createSliccCommand(),
     createServeCommand(options.browserAPI, options.fs),
     createOpenCommand(options.browserAPI),
     createCurlwrightCommand(options.browserAPI),
