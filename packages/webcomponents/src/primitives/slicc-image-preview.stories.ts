@@ -113,9 +113,13 @@ export const StaticHelper: Story = {
 
     btn.addEventListener('click', () => {
       // Lazily import the class only here to mirror the runtime helper path.
-      import('./slicc-image-preview.js').then(({ SliccImagePreview }) => {
-        SliccImagePreview.show(SAMPLE_SRC, btn);
-      });
+      import('./slicc-image-preview.js')
+        .then(({ SliccImagePreview }) => {
+          SliccImagePreview.show(SAMPLE_SRC, btn);
+        })
+        .catch((err: unknown) => {
+          console.error('Failed to load SliccImagePreview for StaticHelper story', err);
+        });
     });
 
     return wrap;
