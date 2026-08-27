@@ -180,6 +180,88 @@ describe('tray-follower', () => {
     ).rejects.toThrow(/invalid response/);
   });
 
+  it('follows the successor-version link when the body is unreadable (#1957)', async () => {
+    // The redirect the hub actually sent, in a body shape this client does not
+    // know how to validate — the #1956 dead-end, now survivable.
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ result: { action: 'redirect', code: 'TRAY_SUPERSEDED' } }), {
+        status: 409,
+        headers: {
+          'content-type': 'application/json',
+          Link: '<https://tray.example.com/join/fresh-tray.deadbeef>; rel="successor-version"',
+        },
+      })
+    );
+
+    await expect(
+      attachTrayFollower({
+        joinUrl: 'https://tray.example.com/join/token',
+        controllerId: 'follower-1',
+        runtime: 'electron',
+        fetchImpl,
+      })
+    ).resolves.toMatchObject({
+      code: 'TRAY_SUPERSEDED',
+      supersededByJoinUrl: 'https://tray.example.com/join/fresh-tray.deadbeef',
+    });
+  });
+
+  it('still rejects an unreadable body with no successor-version link', async () => {
+    const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
+      new Response(JSON.stringify({ result: { action: 'redirect' } }), {
+        status: 409,
+        headers: {
+          'content-type': 'application/json',
+          Link: '<https://tray.example.com/status>; rel="status"',
+        },
+      })
+    );
+
+    await expect(
+      attachTrayFollower({
+        joinUrl: 'https://tray.example.com/join/token',
+        fetchImpl,
+      })
+    ).rejects.toThrow(/invalid response/);
+  });
+
+  it('prefers the successor-version link over the body joinUrl', () => {
+    expect(
+      normalizeFollowerAttachResponse(
+        {
+          trayId: 'stale-tray',
+          controllerId: 'follower-2',
+          role: 'follower',
+          leader: null,
+          participantCount: 1,
+          result: {
+            action: 'fail',
+            code: 'TRAY_SUPERSEDED',
+            error: 'moved',
+            joinUrl: 'https://tray.example.com/join/from-body.beef',
+          },
+        },
+        'https://tray.example.com/join/from-link.beef'
+      ).supersededByJoinUrl
+    ).toBe('https://tray.example.com/join/from-link.beef');
+  });
+
+  it('carries a successor-version link through a non-fail action', () => {
+    expect(
+      normalizeFollowerAttachResponse(
+        {
+          trayId: 'stale-tray',
+          controllerId: 'follower-2',
+          role: 'follower',
+          leader: null,
+          participantCount: 1,
+          result: { action: 'wait', code: 'LEADER_NOT_ELECTED', retryAfterMs: 1000 },
+        },
+        'https://tray.example.com/join/from-link.beef'
+      ).supersededByJoinUrl
+    ).toBe('https://tray.example.com/join/from-link.beef');
+  });
+
   it('rejects malformed worker responses', async () => {
     const fetchImpl = vi.fn<typeof fetch>().mockResolvedValue(
       new Response(JSON.stringify({ ok: true }), {

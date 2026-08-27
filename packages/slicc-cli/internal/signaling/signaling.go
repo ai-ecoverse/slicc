@@ -85,8 +85,11 @@ type AttachPlan struct {
 	Error        string
 	Bootstrap    *BootstrapStatus
 	IceServers   []TurnIceServer
-	JoinURL      string // set on TRAY_SUPERSEDED — follow it
-	TrayID       string
+	// JoinURL is the replacement tray to follow — from the `successor-version`
+	// Link header, or the body's TRAY_SUPERSEDED joinUrl. Non-empty means the
+	// tray moved, whatever Action/Code say.
+	JoinURL string
+	TrayID  string
 }
 
 // BootstrapPlan is the normalized poll/answer/ice/retry outcome.
@@ -136,15 +139,27 @@ type rawBootstrapResponse struct {
 // Attach performs the first join call.
 func (c *Client) Attach(ctx context.Context, controllerID, runtime string) (*AttachPlan, error) {
 	body := map[string]any{"controllerId": controllerID, "runtime": runtime}
-	data, err := c.post(ctx, body)
+	data, header, err := c.postWithHeader(ctx, body)
 	if err != nil {
 		return nil, err
 	}
+	// #1957: a superseded tray states the replacement twice — in the body, and
+	// as an RFC 5829 `successor-version` link. The header is the channel that
+	// survives a body-shape change, so it wins when both are present, and it
+	// alone is enough to follow the hop: a body this build cannot decode is
+	// not a dead end when the hub told us where the tray went.
+	successor := SuccessorVersionFromLinkHeader(header)
 	var raw rawAttachResponse
 	if err := json.Unmarshal(data, &raw); err != nil {
+		if successor != "" {
+			return &AttachPlan{Action: "fail", Code: "TRAY_SUPERSEDED", JoinURL: successor}, nil
+		}
 		return nil, fmt.Errorf("tray attach: invalid response: %w (body: %s)", err, truncate(data))
 	}
 	if raw.Role != "follower" {
+		if successor != "" {
+			return &AttachPlan{Action: "fail", Code: "TRAY_SUPERSEDED", JoinURL: successor}, nil
+		}
 		return nil, fmt.Errorf("tray attach: unexpected role %q (body: %s)", raw.Role, truncate(data))
 	}
 	retry := 1000
@@ -158,7 +173,7 @@ func (c *Client) Attach(ctx context.Context, controllerID, runtime string) (*Att
 		Error:        raw.Result.Error,
 		Bootstrap:    raw.Result.Bootstrap,
 		IceServers:   raw.IceServers,
-		JoinURL:      raw.Result.JoinURL,
+		JoinURL:      firstNonEmpty(successor, raw.Result.JoinURL),
 		TrayID:       raw.TrayID,
 	}, nil
 }
@@ -229,25 +244,32 @@ func (c *Client) postBootstrap(ctx context.Context, body map[string]any) (*Boots
 }
 
 func (c *Client) post(ctx context.Context, body map[string]any) ([]byte, error) {
+	data, _, err := c.postWithHeader(ctx, body)
+	return data, err
+}
+
+// postWithHeader is post plus the response headers, for the callers that read
+// the RFC 8288 Link header (the `successor-version` supersede hop, #1957).
+func (c *Client) postWithHeader(ctx context.Context, body map[string]any) ([]byte, http.Header, error) {
 	payload, err := json.Marshal(body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, c.joinURL, bytes.NewReader(payload))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	req.Header.Set("Content-Type", "application/json")
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("tray signaling network error: %w", err)
+		return nil, nil, fmt.Errorf("tray signaling network error: %w", err)
 	}
 	defer resp.Body.Close()
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return data, nil
+	return data, resp.Header, nil
 }
 
 func truncate(b []byte) string {

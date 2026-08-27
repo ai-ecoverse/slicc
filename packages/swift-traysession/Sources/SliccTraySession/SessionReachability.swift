@@ -76,26 +76,36 @@ public final class SessionReachability {
             guard let request = Self.request(for: currentURL) else { return .unreachable }
             guard
                 let (data, response) = try? await transport(request),
-                let http = response as? HTTPURLResponse,
-                let payload = try? JSONDecoder().decode(ProbePayload.self, from: data)
+                let http = response as? HTTPURLResponse
             else { return .unreachable }
+            let payload = try? JSONDecoder().decode(ProbePayload.self, from: data)
 
-            if http.statusCode == 200 {
+            if http.statusCode == 200, let payload {
                 return payload.leader?.connected == true ? .reachable : .unreachable
             }
 
-            guard
-                http.statusCode == 409,
-                payload.code == "TRAY_SUPERSEDED",
-                redirectsFollowed < maxSupersedeRedirects,
-                let next = payload.joinUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
-                !next.isEmpty,
-                let nextURL = URL(string: next)
-            else { return .unreachable }
+            // #1957: the hub names the replacement twice — as an RFC 5829
+            // `successor-version` link, and in the body it has always used. The
+            // link wins and stands alone, so a body this build cannot decode
+            // (or a status other than 409) is not a dead end.
+            let next =
+                SupersedeLink.successor(in: http)
+                ?? Self.supersededURL(from: payload, statusCode: http.statusCode)
+            guard let next, redirectsFollowed < maxSupersedeRedirects else { return .unreachable }
 
             redirectsFollowed += 1
-            currentURL = nextURL
+            currentURL = next
         }
+    }
+
+    /// The pre-#1957 reading: a 409 whose body says `TRAY_SUPERSEDED` and
+    /// carries the replacement. Kept for hubs that predate the link header.
+    private static func supersededURL(from payload: ProbePayload?, statusCode: Int) -> URL? {
+        guard statusCode == 409, payload?.code == "TRAY_SUPERSEDED",
+            let next = payload?.joinUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+            !next.isEmpty, let url = URL(string: next), url.scheme != nil, url.host != nil
+        else { return nil }
+        return url
     }
 
     private static func request(for url: URL) -> URLRequest? {

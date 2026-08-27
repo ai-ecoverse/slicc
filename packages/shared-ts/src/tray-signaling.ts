@@ -403,3 +403,94 @@ export interface FollowerBootstrapResponse {
   events: TrayBootstrapEvent[];
   iceServers?: TurnIceServer[];
 }
+
+/**
+ * RFC 5829 relation the tray hub stamps on a superseded tray's response,
+ * pointing at the replacement tray's join URL. See the worker's
+ * `supersededLinkHeaders` (`packages/cloudflare-worker/src/links.ts`) and
+ * `https://www.sliccy.ai/rel/successor-version`.
+ */
+export const SUCCESSOR_VERSION_REL = 'successor-version';
+
+/**
+ * Pull the `successor-version` target out of an RFC 8288 `Link` header.
+ *
+ * Deliberately narrow: the tray hub emits one well-formed link plus its
+ * standard rel set, so this handles the shapes that actually arrive —
+ * comma-separated link-values (commas inside quoted strings preserved),
+ * `rel=token` and `rel="quoted token-list"`, and multiple header instances
+ * joined by `,` or `\n` — rather than reimplementing the full grammar. The
+ * webapp's `src/net/link-header.ts` is the complete parser; it can't live here
+ * because shared-ts must not depend on webapp, and this contract's home is
+ * next to the response type it annotates.
+ *
+ * Returns the first matching absolute URL, or null. Relative references are
+ * rejected: a replacement tray is always absolute, and resolving one against
+ * the wrong base would dial an unusable address.
+ */
+export function successorVersionFromLinkHeader(
+  header: string | string[] | null | undefined
+): string | null {
+  if (header == null) return null;
+  const raw = (Array.isArray(header) ? header.join(', ') : header).replace(/\n/g, ', ');
+  for (const value of splitOutsideQuotes(raw, ',')) {
+    const uriEnd = value.indexOf('>');
+    if (!value.startsWith('<') || uriEnd === -1) continue;
+    const target = value.slice(1, uriEnd).trim();
+    if (!hasSuccessorVersionRel(value.slice(uriEnd + 1))) continue;
+    try {
+      // Absolute-only: `new URL` throws on a bare relative reference.
+      return new URL(target).toString();
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/**
+ * Split on `sep` at the top level — commas/semicolons inside a quoted-string
+ * or an angle-bracketed URI-reference belong to the value, not the grammar.
+ * (A `Link` target may legitimately contain both: `<https://a/b;c?d,e>`.)
+ */
+function splitOutsideQuotes(input: string, sep: string): string[] {
+  const out: string[] = [];
+  let start = 0;
+  let inQuotes = false;
+  let inAngle = false;
+  for (let i = 0; i < input.length; i++) {
+    const ch = input[i];
+    if (inQuotes) {
+      if (ch === '\\') i++;
+      else if (ch === '"') inQuotes = false;
+      continue;
+    }
+    if (ch === '"') inQuotes = true;
+    else if (ch === '<') inAngle = true;
+    else if (ch === '>') inAngle = false;
+    else if (ch === sep && !inAngle) {
+      out.push(input.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+  out.push(input.slice(start).trim());
+  return out.filter(Boolean);
+}
+
+/** True when a link-value's parameter list declares `rel=successor-version`. */
+function hasSuccessorVersionRel(params: string): boolean {
+  for (const param of splitOutsideQuotes(params, ';')) {
+    const eq = param.indexOf('=');
+    if (eq === -1) continue;
+    if (param.slice(0, eq).trim().toLowerCase() !== 'rel') continue;
+    const value = param
+      .slice(eq + 1)
+      .trim()
+      .replace(/^"(.*)"$/s, '$1');
+    // `rel` is a space-separated list of relation types, matched case-insensitively.
+    if (value.split(/\s+/).some((tok) => tok.toLowerCase() === SUCCESSOR_VERSION_REL)) {
+      return true;
+    }
+  }
+  return false;
+}

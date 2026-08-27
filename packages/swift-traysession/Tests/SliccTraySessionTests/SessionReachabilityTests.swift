@@ -162,6 +162,89 @@ final class SessionReachabilityTests: XCTestCase {
         XCTAssertEqual(finalCount, 1)
     }
 
+    /// #1957: the probe hops on the `successor-version` link alone. The body
+    /// here says nothing this build recognizes — and on the second hop is not
+    /// even JSON — which is the shape that dead-ended the follower in #1956.
+    func testFollowsSupersededChainFromTheLinkHeaderAlone() async {
+        let transport = RecordingTransport { request, index in
+            switch index {
+            case 0:
+                return self.response(
+                    to: request, status: 409, json: #"{"action":"redirect"}"#,
+                    headers: [
+                        "Link":
+                            #"<https://example.invalid/next>; rel="successor-version", "#
+                            + #"<https://example.invalid/status>; rel="status""#
+                    ])
+            case 1:
+                return self.response(
+                    to: request, status: 409, json: "<html>gateway error</html>",
+                    headers: ["Link": #"<https://example.invalid/final>; rel="successor-version""#])
+            default:
+                return self.response(
+                    to: request, status: 200, json: #"{"leader":{"connected":true}}"#)
+            }
+        }
+        let reachability = SessionReachability(
+            maxSupersedeRedirects: 5, transport: transport.call)
+        let tray = makeSession(path: "original")
+
+        reachability.probe([tray])
+        await waitForVerdict(tray.id, in: reachability)
+
+        XCTAssertEqual(reachability.verdicts, [tray.id: .reachable])
+        let requests = await transport.requests()
+        XCTAssertEqual(requests.count, 3)
+        XCTAssertEqual(requests[1].url?.path, "/next")
+        XCTAssertEqual(requests[2].url?.path, "/final")
+        // Every hop still asks for JSON — a bare GET hits the SPA fallback.
+        for request in requests {
+            XCTAssertEqual(request.url?.query?.contains("json=true"), true)
+        }
+    }
+
+    /// The link outranks a stale `joinUrl` still sitting in the body.
+    func testLinkHeaderWinsOverTheBodyJoinUrl() async {
+        let transport = RecordingTransport { request, index in
+            index == 0
+                ? self.response(
+                    to: request, status: 409,
+                    json: #"{"code":"TRAY_SUPERSEDED","joinUrl":"https://example.invalid/body"}"#,
+                    headers: ["Link": #"<https://example.invalid/link>; rel="successor-version""#])
+                : self.response(to: request, status: 200, json: #"{"leader":{"connected":true}}"#)
+        }
+        let reachability = SessionReachability(
+            maxSupersedeRedirects: 5, transport: transport.call)
+        let tray = makeSession(path: "original")
+
+        reachability.probe([tray])
+        await waitForVerdict(tray.id, in: reachability)
+
+        let requests = await transport.requests()
+        XCTAssertEqual(requests.count, 2)
+        XCTAssertEqual(requests[1].url?.path, "/link")
+    }
+
+    /// A `successor-version` link is still bounded by the hop cap — the
+    /// platform's redirect policy never gets a say.
+    func testLinkHeaderChaseIsBounded() async {
+        let transport = RecordingTransport { request, _ in
+            self.response(
+                to: request, status: 409, json: "{}",
+                headers: ["Link": #"<https://example.invalid/loop>; rel="successor-version""#])
+        }
+        let reachability = SessionReachability(
+            maxSupersedeRedirects: 2, transport: transport.call)
+        let tray = makeSession(path: "original")
+
+        reachability.probe([tray])
+        await waitForVerdict(tray.id, in: reachability)
+
+        XCTAssertEqual(reachability.verdicts[tray.id], .unreachable)
+        let requests = await transport.requests()
+        XCTAssertEqual(requests.count, 3)  // initial + 2 hops, then the cap
+    }
+
     private func makeReachability(
         transport: @escaping SessionReachability.Transport
     ) -> SessionReachability {
@@ -179,10 +262,11 @@ final class SessionReachabilityTests: XCTestCase {
     }
 
     private func response(
-        to request: URLRequest, status: Int, json: String
+        to request: URLRequest, status: Int, json: String,
+        headers: [String: String]? = nil
     ) -> (Data, URLResponse) {
         let response = HTTPURLResponse(
-            url: request.url!, statusCode: status, httpVersion: nil, headerFields: nil)!
+            url: request.url!, statusCode: status, httpVersion: nil, headerFields: headers)!
         return (Data(json.utf8), response)
     }
 
