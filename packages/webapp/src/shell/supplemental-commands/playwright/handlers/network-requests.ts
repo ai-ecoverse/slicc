@@ -8,9 +8,52 @@
  *           response-headers, response-body
  */
 
-import type { CDPTransport } from '../../../../cdp/transport.js';
 import { requireTab } from '../state.js';
-import type { NetworkEntry, PlaywrightHandler, PlaywrightState } from '../types.js';
+import type {
+  NetworkEntry,
+  PlaywrightHandler,
+  PlaywrightHandlerCtx,
+  PlaywrightState,
+} from '../types.js';
+
+// Derived from the handler context rather than imported from `cdp/` so this
+// module stays inside the shell layer (see layer-stack import direction).
+type CDPTransport = ReturnType<PlaywrightHandlerCtx['browser']['getTransport']>;
+
+/** Fields read off a `Network.requestWillBeSent` CDP event. */
+interface NetworkRequestWillBeSentEvent {
+  sessionId?: string;
+  requestId?: string;
+  request?: {
+    url?: string;
+    method?: string;
+    headers?: Record<string, string>;
+    postData?: string;
+  };
+}
+
+/** Fields read off a `Network.responseReceived` CDP event. */
+interface NetworkResponseReceivedEvent {
+  sessionId?: string;
+  requestId?: string;
+  response?: {
+    status?: number;
+    headers?: Record<string, string>;
+    mimeType?: string;
+  };
+}
+
+/** Fields read off a `Network.loadingFinished` CDP event. */
+interface NetworkLoadingFinishedEvent {
+  sessionId?: string;
+  requestId?: string;
+}
+
+/** Fields read off a `Network.getResponseBody` CDP result. */
+interface NetworkGetResponseBodyResult {
+  body?: string;
+  base64Encoded?: boolean;
+}
 
 const RING_BUFFER_SIZE = 500;
 
@@ -39,25 +82,25 @@ function ensureCapturing(
   state.networkRequestIndex.set(targetId, new Map());
   let nextIndex = 1;
 
-  const onRequest = (params: Record<string, unknown>) => {
-    if ((params['sessionId'] as string | undefined) !== sessionId) return;
-    const requestId = params['requestId'] as string;
-    const request = params['request'] as Record<string, unknown> | undefined;
-    if (!request) return;
+  const onRequest = (rawParams: Parameters<Parameters<CDPTransport['on']>[1]>[0]) => {
+    const params = rawParams as NetworkRequestWillBeSentEvent;
+    if (params.sessionId !== sessionId) return;
+    const requestId = params.requestId;
+    const request = params.request;
+    if (!requestId || !request) return;
 
     const entries = state.networkRequests.get(targetId);
     const index = state.networkRequestIndex.get(targetId);
     if (!entries || !index) return;
 
-    const url = (request['url'] as string | undefined) ?? '';
+    const url = request.url ?? '';
     const entry: NetworkEntry = {
       index: nextIndex++,
       requestId,
-      method: (request['method'] as string | undefined) ?? 'GET',
+      method: request.method ?? 'GET',
       url,
-      requestHeaders: (request['headers'] as Record<string, string> | undefined) ?? {},
-      requestBody:
-        (request['postData'] as string | undefined) != null ? String(request['postData']) : null,
+      requestHeaders: request.headers ?? {},
+      requestBody: request.postData != null ? String(request.postData) : null,
       status: null,
       responseHeaders: null,
       responseBody: null,
@@ -74,24 +117,27 @@ function ensureCapturing(
     }
   };
 
-  const onResponse = (params: Record<string, unknown>) => {
-    if ((params['sessionId'] as string | undefined) !== sessionId) return;
-    const requestId = params['requestId'] as string;
-    const response = params['response'] as Record<string, unknown> | undefined;
-    if (!response) return;
+  const onResponse = (rawParams: Parameters<Parameters<CDPTransport['on']>[1]>[0]) => {
+    const params = rawParams as NetworkResponseReceivedEvent;
+    if (params.sessionId !== sessionId) return;
+    const requestId = params.requestId;
+    const response = params.response;
+    if (!requestId || !response) return;
 
     const entry = state.networkRequestIndex.get(targetId)?.get(requestId);
     if (!entry) return;
 
-    entry.status = (response['status'] as number | undefined) ?? null;
-    entry.responseHeaders = (response['headers'] as Record<string, string> | undefined) ?? null;
-    entry.mimeType = (response['mimeType'] as string | undefined) ?? null;
+    entry.status = response.status ?? null;
+    entry.responseHeaders = response.headers ?? null;
+    entry.mimeType = response.mimeType ?? null;
     entry.isStatic = isStaticResource(entry.mimeType, entry.url);
   };
 
-  const onLoadingFinished = (params: Record<string, unknown>) => {
-    if ((params['sessionId'] as string | undefined) !== sessionId) return;
-    const requestId = params['requestId'] as string;
+  const onLoadingFinished = (rawParams: Parameters<Parameters<CDPTransport['on']>[1]>[0]) => {
+    const params = rawParams as NetworkLoadingFinishedEvent;
+    if (params.sessionId !== sessionId) return;
+    const requestId = params.requestId;
+    if (!requestId) return;
 
     const entry = state.networkRequestIndex.get(targetId)?.get(requestId);
     if (!entry || entry.isStatic || entry.responseBody !== null) return;
@@ -99,7 +145,7 @@ function ensureCapturing(
     transport
       .send('Network.getResponseBody', { requestId }, sessionId)
       .then((result) => {
-        const r = result as { body?: string; base64Encoded?: boolean } | undefined;
+        const r = result as NetworkGetResponseBodyResult | undefined;
         if (!r) return;
         entry.responseBody = r.body ?? null;
       })
