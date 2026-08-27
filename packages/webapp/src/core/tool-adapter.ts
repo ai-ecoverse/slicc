@@ -221,18 +221,6 @@ export interface ToolCallGate {
 }
 
 /**
- * True when the turn was stopped while the gate was waiting on a human.
- *
- * Approval can sit for minutes. If the user hits Stop in that window, a verdict
- * that arrives afterwards must NOT start the tool: the abort signal is passed
- * to `tool.execute`, but several tools (the file tools among them) never read
- * it, so they would run to completion after the turn was stopped.
- */
-function abortedDuringApproval(signal: AbortSignal | undefined): boolean {
-  return signal?.aborted === true;
-}
-
-/**
  * Run the gate for one call. Fails CLOSED: a throwing gate refuses, because a
  * gate that errored has not approved anything.
  */
@@ -244,20 +232,15 @@ async function passesGate(
 ): Promise<boolean> {
   const gate = config?.currentGate();
   if (!gate) return true;
-  // Already stopped before we even asked — do not raise a prompt for work the
-  // caller has abandoned.
-  if (abortedDuringApproval(signal)) return false;
+  // Checked twice against the abort signal: once so we never raise a prompt for
+  // work the caller already abandoned, and once AFTER the await — the window a
+  // human spends deciding. `tool.execute` receives the signal, but several tools
+  // (the file tools among them) never read it, so a late `allow` would run them
+  // to completion after the turn was stopped.
+  if (signal?.aborted) return false;
   try {
     const allowed = await gate.approve(tool.name, params);
-    if (!allowed) return false;
-    // Re-check AFTER the await: this is the window a human spends deciding.
-    if (abortedDuringApproval(signal)) {
-      log.info('Turn was stopped while a tool call awaited approval — not running it', {
-        tool: tool.name,
-      });
-      return false;
-    }
-    return true;
+    return allowed && signal?.aborted !== true;
   } catch (err) {
     log.warn('Tool-call gate threw — refusing the call', {
       tool: tool.name,
@@ -298,15 +281,7 @@ export function adaptTool(
       if (!(await passesGate(tool, params, gateConfig, signal))) {
         if (ctx) popToolExecutionContext(ctx);
         return {
-          content: [
-            {
-              type: 'text',
-              text:
-                `The \`${tool.name}\` call was not approved. This turn was started by a guest, ` +
-                'so its tool calls are reviewed. Explain what you were trying to do and ask ' +
-                'the owner to run it, or choose another approach.',
-            },
-          ],
+          content: [{ type: 'text', text: `${tool.name}: not approved (guest-caused turn).` }],
           details: { isError: true },
         };
       }

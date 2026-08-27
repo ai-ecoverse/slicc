@@ -124,8 +124,7 @@ function buildGuestToolGate(deps: ScoopToolsDeps): ToolAdapterGateConfig {
 function describeToolCall(toolName: string, params: unknown): string {
   const [principal] = extractToolArg(params);
   if (!principal) return toolName;
-  const flat = principal.replace(/\s+/g, ' ').trim();
-  return `${toolName}: ${flat.slice(0, 300)}${flat.length > 300 ? '…' : ''}`;
+  return `${toolName}: ${principal.replace(/\s+/g, ' ').trim().slice(0, 300)}`;
 }
 
 /** Build tools for the agent. */

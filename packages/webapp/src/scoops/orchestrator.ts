@@ -91,6 +91,21 @@ import {
 export type { ScoopObserver };
 
 const log = createLogger('orchestrator');
+
+/** What a directed-approval denial can name; every field is optional context. */
+interface DirectedDenyContext {
+  requesterJid?: string;
+  coneJid?: string;
+  scoopName?: string;
+  approverJid?: string;
+}
+
+/** Every fail-closed exit from a directed approval, logged the same way. */
+const DENY: SudoDecision = { decision: 'deny' };
+function denyDirected(reason: string, context: DirectedDenyContext): SudoDecision {
+  log.warn(`Directed approval failing closed: ${reason}`, context);
+  return DENY;
+}
 type SliccGlobalHooks = typeof globalThis & {
   __slicc_fs_watcher?: FsWatcher;
   __slicc_lick_handler?: (event: LickEvent) => void;
@@ -1038,56 +1053,36 @@ export class Orchestrator implements ConeApprovalRouter {
     directive: SudoApproverDirective,
     request: SudoRequest
   ): Promise<SudoDecision> {
-    if (directive.kind === 'user') return { decision: 'deny' };
+    if (directive.kind === 'user') return DENY;
     const requesterJid = directive.unitJid;
-    if (!this.scoops.has(requesterJid)) {
-      log.warn('Directed approval for an unknown unit — failing closed', { requesterJid });
-      return { decision: 'deny' };
-    }
-    const owner = this.ownerRootOrDefault(requesterJid);
-    if (!owner) {
-      log.warn('No owning cone for directed approval — failing closed', { requesterJid });
-      return { decision: 'deny' };
-    }
+    const owner = this.scoops.has(requesterJid) ? this.ownerRootOrDefault(requesterJid) : undefined;
+    if (!owner) return denyDirected('no owning cone for the requesting unit', { requesterJid });
 
-    let approver: RegisteredScoop | undefined;
-    if (directive.kind === 'cone') {
-      approver = owner;
-    } else {
-      // Scoped to THIS cone's own children, and never to a root. A bare name
-      // search over the whole roster can match a different cone's scoop —
-      // names are not unique across cones — and would hand a guest's text to
-      // an approval principal in someone else's thread.
-      approver = [...this.scoops.values()].find(
-        (scoop) =>
-          scoop.parentJid === owner.jid &&
-          (scoop.name === directive.scoopName || scoop.folder === directive.scoopName)
-      );
-      if (!approver) {
-        // Dropped, renamed, or never belonged to this cone. Denying is the only
-        // safe reading — the alternative is asking the wrong principal.
-        log.warn('Delegated approver scoop not found under this cone — failing closed', {
-          scoopName: directive.scoopName,
-          coneJid: owner.jid,
-        });
-        return { decision: 'deny' };
-      }
-    }
-
-    // An approver that cannot actually settle would leave the request to time
-    // out five minutes later and deny — indistinguishable, to the owner, from
-    // a reviewer who ignored it. `canResolveApprovals` is false for delegated
-    // children today (`delegatedChildPolicy`), so a scoop-tier seat lands here
-    // until a policy seam exists to designate an approver scoop.
-    if (!derivePolicy(approver).canResolveApprovals) {
-      log.warn('Directed approver cannot resolve approvals — failing closed', {
-        approverJid: approver.jid,
-        approverName: approver.name,
-        kind: directive.kind,
+    // A named approver is scoped to THIS cone's own children, and never to a
+    // root. A bare name search over the whole roster can match a different
+    // cone's scoop — names are not unique across cones — and would hand a
+    // guest's text to an approval principal in someone else's thread.
+    const approver =
+      directive.kind === 'cone'
+        ? owner
+        : [...this.scoops.values()].find(
+            (scoop) =>
+              scoop.parentJid === owner.jid &&
+              (scoop.name === directive.scoopName || scoop.folder === directive.scoopName)
+          );
+    if (!approver) {
+      // Dropped, renamed, or never belonged to this cone.
+      return denyDirected('delegated approver not found under this cone', {
+        scoopName: directive.kind === 'scoop' ? directive.scoopName : undefined,
+        coneJid: owner.jid,
       });
-      return { decision: 'deny' };
     }
-
+    // An approver that cannot settle would leave the request to time out five
+    // minutes later and deny — indistinguishable, to the owner, from a reviewer
+    // who ignored it. Only a scoop marked `approvesGuestRequests` can.
+    if (!derivePolicy(approver).canResolveApprovals) {
+      return denyDirected('approver cannot resolve approvals', { approverJid: approver.jid });
+    }
     return this.approvalRouter.enqueueSudoRequest(requesterJid, request, { approver });
   }
 
