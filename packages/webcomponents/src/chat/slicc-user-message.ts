@@ -33,7 +33,14 @@ const STYLE = `
 .msg{display:flex;justify-content:flex-end;}
 .stack{display:flex;flex-direction:column;align-items:flex-end;gap:6px;max-width:80%;}
 .ts{font-size:10px;color:var(--txt-3);opacity:.7;margin-bottom:2px;font-variant-numeric:tabular-nums;}
-.b{background:var(--deep);color:#fff;padding:10px 14px;border-radius:16px 16px 4px 16px;font-size:14px;max-width:100%;}
+/* An unbroken run with no break opportunity — a pasted base64 payload, a long
+   token — has no width the bubble can honour, so max-width alone does not
+   contain it: the run overflows and drags the whole chat column sideways.
+   overflow-wrap:anywhere is what gives the line breaker permission mid-token
+   AND shrinks the bubble's intrinsic min-width, so the 80% cap becomes real.
+   Set on .b so every markdown surface inherits it; fenced code opts back OUT
+   below, where scrolling inside the block beats mangling the source. */
+.b{background:var(--deep);color:#fff;padding:10px 14px;border-radius:16px 16px 4px 16px;font-size:14px;max-width:100%;overflow-wrap:anywhere;word-break:break-word;}
 :host-context(body.dark) .b,
 :host-context(.dark) .b,
 :host-context([data-theme="dark"]) .b{color:#0a0a0a;}

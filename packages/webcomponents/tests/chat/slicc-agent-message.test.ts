@@ -478,4 +478,42 @@ describe('slicc-agent-message', () => {
       expect(kids.indexOf('msg-ts')).toBeLessThan(kids.indexOf('body'));
     });
   });
+
+  // The same containment the user bubble needs: a base64 payload in UNFENCED
+  // prose is one token with no break opportunity, and without a wrap rule it
+  // spills out of the (already capped) prose box and scrolls the transcript.
+
+  /** By how much the content of `el` overflows its own box. */
+  function overflowOf(el: HTMLElement): number {
+    return el.scrollWidth - el.clientWidth;
+  }
+
+  function inColumn(html: string): SliccAgentMessage {
+    const column = document.createElement('div');
+    column.style.width = '320px';
+    document.body.appendChild(column);
+    const el = document.createElement('slicc-agent-message') as SliccAgentMessage;
+    el.setBodyHtml(html);
+    column.appendChild(el);
+    return el;
+  }
+
+  it('breaks an unbroken run in prose instead of letting it spill', () => {
+    const el = inColumn(`<p>${'A'.repeat(600)}</p>`);
+    const body = el.querySelector('.body') as HTMLElement;
+    expect(overflowOf(body)).toBeLessThanOrEqual(1);
+    expect(overflowOf(body.querySelector('p') as HTMLElement)).toBeLessThanOrEqual(1);
+  });
+
+  it('does not scroll its column sideways', () => {
+    const el = inColumn(`<p>${'A'.repeat(600)}</p>`);
+    expect(overflowOf(el.parentElement as HTMLElement)).toBeLessThanOrEqual(1);
+  });
+
+  it('still lets fenced code scroll inside itself rather than breaking it', () => {
+    const el = inColumn(`<pre><code>${'A'.repeat(600)}</code></pre>`);
+    const code = el.querySelector('pre code') as HTMLElement;
+    expect(getComputedStyle(code).overflowWrap).toBe('normal');
+    expect(overflowOf(el.querySelector('.body') as HTMLElement)).toBeLessThanOrEqual(1);
+  });
 });

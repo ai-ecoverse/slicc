@@ -288,4 +288,56 @@ describe('timestamp', () => {
     expect(kids[0]).toBe('ts');
     expect(kids[1]).toBe('b');
   });
+
+  // -- long-string containment --
+  //
+  // A pasted base64 payload is one token with no break opportunity. The BOXES
+  // were always capped (`max-width`, the 80% stack), so the bug never showed
+  // up as a wide element — the text simply spilled out of them and scrolled
+  // the chat column. `scrollWidth` vs `clientWidth` is what measures that
+  // spill, and these tests run in a real browser that can.
+
+  /** By how much the content of `el` overflows its own box. */
+  function overflow(el: HTMLElement): number {
+    return el.scrollWidth - el.clientWidth;
+  }
+
+  function inColumn(width: string, html: string): SliccUserMessage {
+    const column = document.createElement('div');
+    column.style.width = width;
+    document.body.appendChild(column);
+    const el = document.createElement('slicc-user-message') as SliccUserMessage;
+    el.setBodyHtml(html);
+    column.appendChild(el);
+    return el;
+  }
+
+  it('breaks an unbroken run instead of letting it spill out of the bubble', () => {
+    const el = inColumn('320px', `<p>${'A'.repeat(600)}</p>`);
+    const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
+    expect(overflow(bubble)).toBeLessThanOrEqual(1);
+    expect(overflow(bubble.querySelector('p') as HTMLElement)).toBeLessThanOrEqual(1);
+  });
+
+  it('does not scroll its column sideways', () => {
+    const el = inColumn('320px', `<p>${'A'.repeat(600)}</p>`);
+    const column = el.parentElement as HTMLElement;
+    expect(overflow(column)).toBeLessThanOrEqual(1);
+  });
+
+  it('wraps a long run in inline code too', () => {
+    const el = inColumn('320px', `<p><code>${'A'.repeat(600)}</code></p>`);
+    const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
+    expect(overflow(bubble)).toBeLessThanOrEqual(1);
+  });
+
+  it('still lets fenced code scroll inside itself rather than breaking it', () => {
+    // Source in a code block must stay readable as SOURCE. The block is its
+    // own scroll container, so it never drags the transcript with it.
+    const el = inColumn('320px', `<pre><code>${'A'.repeat(600)}</code></pre>`);
+    const code = el.shadowRoot?.querySelector('pre code') as HTMLElement;
+    expect(getComputedStyle(code).overflowWrap).toBe('normal');
+    const bubble = el.shadowRoot?.querySelector('.b') as HTMLElement;
+    expect(overflow(bubble)).toBeLessThanOrEqual(1);
+  });
 });
