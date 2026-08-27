@@ -28,15 +28,32 @@ interface SymbolicRefFlags {
 /** Opaque parseArgs flag bag before unknown-flag validation. */
 type SymbolicRefParsedFlags = ParsedArgs['flags'];
 
+/**
+ * A boolean flag's effective value. `mri` stores a repeated boolean as an array
+ * (`--short --short` → `[true, true]`), so mirror the parser's last-wins
+ * semantics and collapse to the final element before narrowing — otherwise a
+ * repeated `--short`/`--quiet` would silently drop to `undefined`.
+ */
+function effectiveBool(value: unknown): boolean | undefined {
+  const effective = Array.isArray(value) ? value[value.length - 1] : value;
+  return typeof effective === 'boolean' ? effective : undefined;
+}
+
 function symbolicRefFlagsFromParsed(flags: SymbolicRefParsedFlags): SymbolicRefFlags {
   const out: SymbolicRefFlags = {};
   if (typeof flags.m === 'string') out.m = flags.m;
-  if (flags.delete === true || flags.delete === false) out.delete = flags.delete;
-  if (flags.d === true || flags.d === false) out.d = flags.d;
-  if (flags.quiet === true || flags.quiet === false) out.quiet = flags.quiet;
-  if (flags.q === true || flags.q === false) out.q = flags.q;
-  if (flags.short === true || flags.short === false) out.short = flags.short;
-  if (flags.recurse === true || flags.recurse === false) out.recurse = flags.recurse;
+  const deleteFlag = effectiveBool(flags.delete);
+  if (deleteFlag !== undefined) out.delete = deleteFlag;
+  const d = effectiveBool(flags.d);
+  if (d !== undefined) out.d = d;
+  const quiet = effectiveBool(flags.quiet);
+  if (quiet !== undefined) out.quiet = quiet;
+  const q = effectiveBool(flags.q);
+  if (q !== undefined) out.q = q;
+  const short = effectiveBool(flags.short);
+  if (short !== undefined) out.short = short;
+  const recurse = effectiveBool(flags.recurse);
+  if (recurse !== undefined) out.recurse = recurse;
   return out;
 }
 
