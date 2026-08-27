@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  CONTEXT_RESTORE_TIMEOUT_MS,
   SHADER_FRAGMENTS,
   SliccShader,
   SUGAR_GLASS_PRESETS,
@@ -429,6 +430,7 @@ describe('slicc-shader', () => {
       const gl = canvas.getContext('webgl') as WebGLRenderingContext;
       const lose = gl.getExtension('WEBGL_lose_context');
       if (!lose) return; // extension unavailable: nothing to exercise
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
       lose.loseContext();
       await wait(100); // let the webglcontextlost event land
       const spy = spyDraws();
@@ -603,6 +605,7 @@ describe('slicc-shader', () => {
       const gl = canvas.getContext('webgl') as WebGLRenderingContext;
       const lose = gl.getExtension('WEBGL_lose_context');
       if (!lose) return;
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
       lose.loseContext();
       await wait(100); // let webglcontextlost land
       const spy = spyDraws();
@@ -619,6 +622,7 @@ describe('slicc-shader', () => {
       const gl = canvas.getContext('webgl') as WebGLRenderingContext;
       const lose = gl.getExtension('WEBGL_lose_context');
       if (!lose) return;
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
       lose.loseContext();
       await wait(100);
       const spy = spyDraws();
@@ -636,6 +640,7 @@ describe('slicc-shader', () => {
       const gl = canvas.getContext('webgl') as WebGLRenderingContext;
       const lose = gl.getExtension('WEBGL_lose_context');
       if (!lose) return;
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
       lose.loseContext();
       await wait(100);
       // Force #setupGlResources() to fail on restore (Fix e001cb5b4 degrade path).
@@ -649,6 +654,47 @@ describe('slicc-shader', () => {
       );
       expect(spy.mock.calls.length).toBe(0);
       expect(errSpy).toHaveBeenCalled(); // emitted a diagnostic, not silent
+    });
+
+    it('warns on context loss so a blank field is attributable', async () => {
+      const el = mount({ mode: 'scoop' });
+      if (el.noWebgl) return;
+      await wait(100);
+      const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+      const gl = canvas.getContext('webgl') as WebGLRenderingContext;
+      const lose = gl.getExtension('WEBGL_lose_context');
+      if (!lose) return;
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      lose.loseContext();
+      await wait(100);
+      expect(warnSpy).toHaveBeenCalledWith(expect.stringContaining('WebGL context lost'));
+      // Restore promptly so the never-restored watchdog does not fire in this test.
+      await restoreThen(lose, canvas, async () => {});
+    });
+
+    it('degrades to the CSS fallback when a lost context is never restored', {
+      // Watchdog + quiet settle; keep above CONTEXT_RESTORE_TIMEOUT_MS.
+      timeout: CONTEXT_RESTORE_TIMEOUT_MS + 5_000,
+    }, async () => {
+      const el = mount({ mode: 'scoop' });
+      if (el.noWebgl) return;
+      await wait(100);
+      const canvas = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+      const gl = canvas.getContext('webgl') as WebGLRenderingContext;
+      const lose = gl.getExtension('WEBGL_lose_context');
+      if (!lose) return;
+      const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+      const errSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+      // preventDefault was already called by the handler; do not restore.
+      lose.loseContext();
+      await wait(100);
+      expect(warnSpy).toHaveBeenCalled();
+      expect(el.noWebgl).toBe(false); // still waiting
+      await vi.waitFor(() => expect(el.noWebgl).toBe(true), {
+        timeout: CONTEXT_RESTORE_TIMEOUT_MS + 2_000,
+        interval: 50,
+      });
+      expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('not restored'));
     });
 
     it('reduced motion renders one frame per wake and stops', async () => {

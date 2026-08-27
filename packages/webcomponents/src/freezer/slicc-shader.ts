@@ -19,7 +19,9 @@ import { advanceFrameTs, BURST_MS, shouldRender } from './frame-budget.js';
  * strictly one frame per wake). Pauses on disconnect — releasing the GL context
  * — and re-acquires a fresh one (on a fresh canvas) when it is mounted again, so
  * a field that comes back after a tab switch resumes instead of staying frozen.
- * Falls back to a per-mode CSS gradient when WebGL is absent.
+ * Falls back to a per-mode CSS gradient when WebGL is absent, when a restored
+ * context cannot rebuild, or when a lost context is never restored (UA may
+ * omit `webglcontextrestored`).
  *
  * @attr mode - `cone` (default) | `scoop` | `freezer`
  * @attr tint - CSS color washed into the scoop field / event glow (the active accent)
@@ -300,6 +302,14 @@ const MAX_DPR_CAP = 2;
 
 /** Fraction of the chat scroll the field pans by (1 = attached, 0 = static). */
 const SCROLL_PARALLAX = 0.35;
+
+/**
+ * How long to wait for `webglcontextrestored` after a UA-driven loss before
+ * degrading to the CSS gradient. Spec permits never restoring; without a
+ * watchdog the field stays blank indefinitely. One-shot only — not a frame
+ * scheduler (those stay on rAF; see docs/webcomponents-details.md).
+ */
+export const CONTEXT_RESTORE_TIMEOUT_MS = 3_000;
 const UNIFORMS = [
   'u_res',
   'u_scroll',
@@ -379,6 +389,8 @@ export class SliccShader extends HTMLElement {
   #lastFrameTs = Number.NEGATIVE_INFINITY;
   #burstUntil = 0;
   #contextLost = false;
+  /** One-shot watchdog after context loss; 0 when idle. */
+  #restoreTimeout = 0;
   #ro: ResizeObserver | null = null;
   #reduced = false;
   // Cached CSS-derived uniforms. Resolved on connect / `tint` change / theme
@@ -434,6 +446,7 @@ export class SliccShader extends HTMLElement {
     this.#start = performance.now() / 1000;
     this.#lastFrameTs = Number.NEGATIVE_INFINITY;
     this.#contextLost = false;
+    this.#clearRestoreTimeout();
     this.#wake();
   }
 
@@ -803,7 +816,9 @@ export class SliccShader extends HTMLElement {
   /**
    * On context loss the cached programs/shaders/buffer are invalid GPU handles,
    * so drop the whole cache; on restore the same context is reusable, so relink
-   * (rebuilding the cache lazily) and resume the loop.
+   * (rebuilding the cache lazily) and resume the loop. If the UA never restores
+   * (permitted), a one-shot watchdog degrades to the CSS gradient so the field
+   * does not stay blank indefinitely.
    */
   #installContextHandlers(cv: HTMLCanvasElement): void {
     this.#removeContextHandlers(cv);
@@ -816,8 +831,13 @@ export class SliccShader extends HTMLElement {
       this.#builtMode = null;
       this.#loc = {};
       this.#buffer = null;
+      // Single diagnostic so a never-restored blank field is attributable
+      // (issue #2233). The restore watchdog below is the permanent degrade.
+      console.warn('[slicc-shader] WebGL context lost; waiting for restore');
+      this.#armRestoreWatchdog();
     };
     this.#onContextRestored = () => {
+      this.#clearRestoreTimeout();
       if (!this.isConnected || !this.#gl) return;
       this.#programs = {};
       if (!this.#setupGlResources()) {
@@ -825,10 +845,7 @@ export class SliccShader extends HTMLElement {
         // buffers) must degrade to the CSS gradient exactly like the initial
         // #initGl failure path — never leave the field parked and blank with
         // #contextLost stuck true and no signal.
-        this.#contextLost = false;
-        console.error('[slicc-shader] GL restore failed; falling back to CSS gradient');
-        this.setAttribute('no-webgl', '');
-        this.#dispose();
+        this.#degradeToCssFallback('GL restore failed; falling back to CSS gradient');
         return;
       }
       this.#contextLost = false;
@@ -846,6 +863,35 @@ export class SliccShader extends HTMLElement {
       cv.removeEventListener('webglcontextrestored', this.#onContextRestored);
     this.#onContextLost = null;
     this.#onContextRestored = null;
+  }
+
+  /** Park a one-shot timer that degrades if restore never arrives. */
+  #armRestoreWatchdog(): void {
+    this.#clearRestoreTimeout();
+    this.#restoreTimeout = window.setTimeout(() => {
+      this.#restoreTimeout = 0;
+      if (!this.isConnected || !this.#contextLost) return;
+      this.#degradeToCssFallback('WebGL context not restored; falling back to CSS gradient');
+    }, CONTEXT_RESTORE_TIMEOUT_MS);
+  }
+
+  #clearRestoreTimeout(): void {
+    if (this.#restoreTimeout) {
+      clearTimeout(this.#restoreTimeout);
+      this.#restoreTimeout = 0;
+    }
+  }
+
+  /**
+   * Permanent degrade: reflect `no-webgl`, dispose GL, leave the CSS gradient.
+   * Shared by failed-restore and never-restored watchdog paths.
+   */
+  #degradeToCssFallback(reason: string): void {
+    this.#clearRestoreTimeout();
+    this.#contextLost = false;
+    console.error(`[slicc-shader] ${reason}`);
+    this.setAttribute('no-webgl', '');
+    this.#dispose();
   }
 
   #resize(): void {
@@ -968,6 +1014,7 @@ export class SliccShader extends HTMLElement {
   }
 
   #dispose(): void {
+    this.#clearRestoreTimeout();
     const gl = this.#gl;
     const cv = this.#canvas;
     if (cv) this.#removeContextHandlers(cv);
