@@ -106,6 +106,24 @@ describe('exchangeOAuthCode', () => {
     ).rejects.toThrow('Not configured');
   });
 
+  it('falls back to error code when error_description is absent', async () => {
+    mockFetch.mockResolvedValueOnce(
+      new Response(JSON.stringify({ error: 'invalid_grant' }), { status: 200 })
+    );
+
+    await expect(
+      exchangeOAuthCode({ provider: 'github', code: 'c', redirectUri: 'r' })
+    ).rejects.toThrow('invalid_grant');
+  });
+
+  it('throws a generic message when an HTTP error body has no error fields', async () => {
+    mockFetch.mockResolvedValueOnce(new Response(JSON.stringify({}), { status: 503 }));
+
+    await expect(
+      exchangeOAuthCode({ provider: 'github', code: 'c', redirectUri: 'r' })
+    ).rejects.toThrow('Token exchange failed (HTTP 503)');
+  });
+
   it('throws with useful message on non-JSON response', async () => {
     mockFetch.mockResolvedValueOnce(
       new Response('<html>Bad Gateway</html>', {

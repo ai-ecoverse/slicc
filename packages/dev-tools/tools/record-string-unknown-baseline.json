@@ -53,7 +53,6 @@
   "packages/webapp/src/providers/built-in/bedrock-camp.ts": 31,
   "packages/webapp/src/providers/built-in/local-llm.ts": 2,
   "packages/webapp/src/providers/intercepted-oauth.ts": 4,
-  "packages/webapp/src/providers/oauth-code-exchange.ts": 2,
   "packages/webapp/src/scoops/onboarding-orchestrator.ts": 1,
   "packages/webapp/src/scoops/tray-follower.ts": 5,
   "packages/webapp/src/scoops/tray-leader/cdp-router.ts": 5,
