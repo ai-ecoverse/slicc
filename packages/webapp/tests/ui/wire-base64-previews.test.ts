@@ -169,6 +169,31 @@ describe('wireBase64Previews', () => {
     expect(bodyOf(message).innerHTML).toBe(before);
   });
 
+  it('elides a COLUMN-WRAPPED payload inside a user bubble', async () => {
+    // The two halves of the wrapped fix meet only here: the heuristic has to
+    // reassemble the lines, and the linker has to see across the `<br>`s the
+    // markdown renderer produced — inside a shadow root, on the surface a
+    // paste actually lands on.
+    const thread = freshThread();
+    wireBase64Previews({ thread, log: silentLog });
+
+    const payload = uint8ToBase64(new TextEncoder().encode('wrapped paste '.repeat(30)));
+    const lines: string[] = [];
+    for (let i = 0; i < payload.length; i += 76) lines.push(payload.slice(i, i + 76));
+    expect(lines.length).toBeGreaterThan(2);
+
+    const message = userMessage(`<p>here it is:<br>${lines.join('<br>')}<br>done</p>`);
+    thread.append(message);
+    await flush();
+
+    expect(chipCount(message)).toBe(1);
+    const bubble = bodyOf(message);
+    expect(bubble.textContent).toContain('here it is:');
+    expect(bubble.textContent).toContain('done');
+    // Only the two <br>s bracketing the block survive.
+    expect(bubble.querySelectorAll('br')).toHaveLength(2);
+  });
+
   // -- opening the preview --
   //
   // The chip is only worth having because clicking it lands in the SAME
