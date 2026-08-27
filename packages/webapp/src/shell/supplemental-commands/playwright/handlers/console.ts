@@ -5,9 +5,31 @@
  * accumulates messages in a ring buffer, and filters/returns them on demand.
  */
 
-import type { CDPTransport } from '../../../../cdp/transport.js';
 import { requireTab } from '../state.js';
-import type { ConsoleMessage, PlaywrightHandler, PlaywrightState } from '../types.js';
+import type {
+  ConsoleMessage,
+  PlaywrightHandler,
+  PlaywrightHandlerCtx,
+  PlaywrightState,
+} from '../types.js';
+
+// Derived from the handler context rather than imported from `cdp/` so this
+// module stays inside the shell layer (see layer-stack import direction).
+type CDPTransport = ReturnType<PlaywrightHandlerCtx['browser']['getTransport']>;
+
+/**
+ * The fields this handler reads off a `Runtime.consoleAPICalled` event.
+ *
+ * The transport's listener signature is untyped (`CDPPayload`, an alias for
+ * `Record<string, unknown>`), so we narrow the raw payload into this named
+ * shape once at the boundary — that makes every field access below a checked
+ * property read rather than an ad-hoc per-field cast.
+ */
+interface ConsoleApiCalledEvent {
+  sessionId?: string;
+  type?: string;
+  args?: Array<{ value?: unknown; description?: string }>;
+}
 
 const LEVELS = ['debug', 'log', 'info', 'warning', 'error'] as const;
 const RING_BUFFER_SIZE = 1000;
@@ -40,12 +62,12 @@ function ensureCapturing(
 
   state.consoleMessages.set(targetId, []);
 
-  const handler = (params: Record<string, unknown>) => {
-    if ((params['sessionId'] as string | undefined) !== sessionId) return;
-    const type = (params['type'] as string | undefined) ?? 'log';
+  const handler = (rawParams: Parameters<Parameters<CDPTransport['on']>[1]>[0]) => {
+    const params = rawParams as ConsoleApiCalledEvent;
+    if (params.sessionId !== sessionId) return;
+    const type = params.type ?? 'log';
     const level = CDP_TYPE_NORMALIZATION[type] ?? type;
-    const args =
-      (params['args'] as Array<{ value?: unknown; description?: string }> | undefined) ?? [];
+    const args = params.args ?? [];
     const text = args.map((a) => String(a.value ?? a.description ?? '')).join(' ');
     const msgs = state.consoleMessages.get(targetId);
     if (!msgs) return;
