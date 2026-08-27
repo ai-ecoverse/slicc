@@ -168,9 +168,15 @@ jobs:
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
+          # APNs: staging signs with its OWN key (#2452). Apple throttles
+          # provider-token creation per (team id, key id) — not per worker or
+          # environment — so sharing production's key would let the two
+          # singleton minters (#2448) collide inside Apple's 20-minute floor and
+          # silently drop a push. TEAM_ID and TOPIC stay shared: same Apple team,
+          # same bundle id. Key: "SLICC APNs Staging" (96Y3MN5LY9).
           APNS_TEAM_ID: ${{ secrets.APNS_TEAM_ID }}
-          APNS_KEY_ID: ${{ secrets.APNS_KEY_ID }}
-          APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
+          APNS_KEY_ID: ${{ secrets.APNS_KEY_ID_STAGING }}
+          APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY_STAGING }}
           APNS_TOPIC: ${{ secrets.APNS_TOPIC }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
 
@@ -212,9 +218,15 @@ jobs:
         env:
           CLOUDFLARE_TURN_API_TOKEN: ${{ secrets.CLOUDFLARE_TURN_API_TOKEN }}
           GITHUB_CLIENT_SECRET: ${{ secrets.OAUTH_GITHUB_SECRET_STAGING }}
+          # APNs: staging signs with its OWN key (#2452). Apple throttles
+          # provider-token creation per (team id, key id) — not per worker or
+          # environment — so sharing production's key would let the two
+          # singleton minters (#2448) collide inside Apple's 20-minute floor and
+          # silently drop a push. TEAM_ID and TOPIC stay shared: same Apple team,
+          # same bundle id. Key: "SLICC APNs Staging" (96Y3MN5LY9).
           APNS_TEAM_ID: ${{ secrets.APNS_TEAM_ID }}
-          APNS_KEY_ID: ${{ secrets.APNS_KEY_ID }}
-          APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY }}
+          APNS_KEY_ID: ${{ secrets.APNS_KEY_ID_STAGING }}
+          APNS_PRIVATE_KEY: ${{ secrets.APNS_PRIVATE_KEY_STAGING }}
           APNS_TOPIC: ${{ secrets.APNS_TOPIC }}
           E2B_API_KEY: ${{ secrets.E2B_API_KEY }}
 
