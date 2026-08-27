@@ -36,7 +36,16 @@ export function interactiveRootPolicy(): WorkUnitPolicy {
  */
 export function delegatedChildPolicy(
   parentId: WorkUnitId,
-  paths: { writablePaths?: readonly string[]; visiblePaths?: readonly string[] } = {}
+  paths: {
+    writablePaths?: readonly string[];
+    visiblePaths?: readonly string[];
+    /**
+     * Grant the approval-settling capability — the `scoop` approver tier. Only
+     * ever true for a record explicitly marked `approvesGuestRequests`, and the
+     * parent (a root) already holds it, so the subset invariant is preserved.
+     */
+    approvesGuestRequests?: boolean;
+  } = {}
 ): WorkUnitPolicy {
   return {
     filesystem: {
@@ -47,7 +56,7 @@ export function delegatedChildPolicy(
     canCreateChildren: false,
     canManageChildren: false,
     canWriteSharedMemory: false,
-    canResolveApprovals: false,
+    canResolveApprovals: paths.approvesGuestRequests === true,
     approvalAuthority: { parentId },
     sudoDefaultDisposition: 'require-approval',
     persistCommandGrants: false,
@@ -60,6 +69,7 @@ export function derivePolicy(scoop: RegisteredScoop): WorkUnitPolicy {
   return delegatedChildPolicy(scoop.parentJid, {
     writablePaths: scoop.config?.writablePaths,
     visiblePaths: scoop.config?.visiblePaths,
+    approvesGuestRequests: scoop.approvesGuestRequests === true,
   });
 }
 

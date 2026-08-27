@@ -147,3 +147,48 @@ describe('subtreeOf', () => {
     expect(subtreeOf([coneA, child], 'gone')).toEqual([]);
   });
 });
+
+describe('delegated approver scoops', () => {
+  it('grants approval settling only to a scoop explicitly marked for it', () => {
+    const plain = derivePolicy({
+      jid: 'scoop_a',
+      name: 'a',
+      folder: 'a',
+      requiresTrigger: false,
+      assistantLabel: 'a',
+      addedAt: '2026-08-27T00:00:00.000Z',
+      parentJid: 'cone_1',
+    } as never);
+    expect(plain.canResolveApprovals).toBe(false);
+
+    const approver = derivePolicy({
+      jid: 'scoop_b',
+      name: 'reviewer',
+      folder: 'reviewer',
+      requiresTrigger: false,
+      assistantLabel: 'reviewer',
+      addedAt: '2026-08-27T00:00:00.000Z',
+      parentJid: 'cone_1',
+      approvesGuestRequests: true,
+    } as never);
+    // Without this the scoop tier cannot work at all: the scoop receives the
+    // request with no way to answer, and it times out denied.
+    expect(approver.canResolveApprovals).toBe(true);
+  });
+
+  it('keeps the subset invariant — the capability comes from a parent that has it', () => {
+    const root = interactiveRootPolicy();
+    const approver = delegatedChildPolicy('cone_1', { approvesGuestRequests: true });
+    expect(isPolicySubset(approver, root)).toBe(true);
+  });
+
+  it('does not widen anything else', () => {
+    const approver = delegatedChildPolicy('cone_1', { approvesGuestRequests: true });
+    expect(approver.canCreateChildren).toBe(false);
+    expect(approver.canManageChildren).toBe(false);
+    expect(approver.canWriteSharedMemory).toBe(false);
+    expect(approver.persistCommandGrants).toBe(false);
+    expect(approver.sudoDefaultDisposition).toBe('require-approval');
+    expect(approver.filesystem.kind).toBe('restricted');
+  });
+});

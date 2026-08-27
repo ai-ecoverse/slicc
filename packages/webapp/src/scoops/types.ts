@@ -107,6 +107,21 @@ export interface RegisteredScoop {
   /** Scoop-specific config */
   config?: ScoopConfig;
   /**
+   * This scoop may SETTLE approvals delegated to it — the `scoop` approver tier
+   * for biscotto guest seats.
+   *
+   * A delegated child normally cannot (`delegatedChildPolicy` sets
+   * `canResolveApprovals: false`), which is why a seat naming an ordinary scoop
+   * as its approver fails closed: the scoop would receive the request with no
+   * `lick_confirm` / `lick_dismiss` to answer it, and the request would time out
+   * denied five minutes later — indistinguishable, to the owner, from a
+   * reviewer who ignored it.
+   *
+   * Opt-in per record, never derived, and it only ever grants a capability the
+   * parent already holds (a root has it), so `isPolicySubset` still holds.
+   */
+  approvesGuestRequests?: boolean;
+  /**
    * Generation of `ScoopConfig` that produced this record. `undefined` means
    * "truly legacy" — a record saved before any of the path-config fields
    * existed. The orchestrator migrates up to {@link CURRENT_SCOOP_CONFIG_VERSION}
