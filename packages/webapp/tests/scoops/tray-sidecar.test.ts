@@ -22,6 +22,8 @@ const hoisted = vi.hoisted(() => ({
     connect(): void;
     /** A transparent reconnect: a NEW channel for the same attachment. */
     reconnect(): FakeDataChannel;
+    /** The reconnect loop starting — fires before any new channel exists. */
+    reconnecting(): void;
     giveUp(reason: string): void;
     cancelled: boolean;
   }>,
@@ -75,6 +77,7 @@ vi.mock('../../src/scoops/tray-webrtc.js', async (importOriginal) => {
       },
       reconnectOptions: {
         onConnected(connection: { trayId: string; bootstrapId: string; channel: unknown }): void;
+        onReconnecting?(attempt: number): void;
         onGaveUp?(lastError: string): void;
       }
     ) => {
@@ -118,7 +121,36 @@ vi.mock('../../src/scoops/tray-webrtc.js', async (importOriginal) => {
           });
           return next;
         },
+        reconnecting() {
+          managerOptions.statusSink.set({
+            state: 'reconnecting',
+            joinUrl: managerOptions.joinUrl,
+            trayId: 'tray-remote',
+            error: null,
+            lastPingTime: null,
+            reconnectAttempts: 1,
+            attachAttempts: 1,
+            lastAttachCode: null,
+            connectingSince: null,
+            lastError: null,
+          });
+          reconnectOptions.onReconnecting?.(1);
+        },
         giveUp(reason: string) {
+          // Mirrors the real loop: give-up leaves the manager's status at
+          // `error` (the attachment stays in the registry).
+          managerOptions.statusSink.set({
+            state: 'error',
+            joinUrl: managerOptions.joinUrl,
+            trayId: null,
+            error: reason,
+            lastPingTime: null,
+            reconnectAttempts: 10,
+            attachAttempts: 1,
+            lastAttachCode: null,
+            connectingSince: null,
+            lastError: reason,
+          });
           reconnectOptions.onGaveUp?.(reason);
         },
       };
@@ -706,11 +738,30 @@ describe('tray sidecar', () => {
       await Promise.resolve();
       expect(dial.channel.framesOfType('exec.request')).toHaveLength(1);
 
-      dial.reconnect();
+      // The reconnect loop only STARTS here — the new channel is a backoff
+      // away. The verb must fail now, not minutes later.
+      dial.reconnecting();
 
       const result = await run;
       expect(result.exitCode).toBe(1);
       expect(result.error).toMatch(/connection/i);
+    });
+
+    // Failing only once the new channel lands leaves the caller waiting out the
+    // whole backoff (1s doubling to 30s, up to 10 attempts).
+    it('fails on the reconnect ATTEMPT, before any new channel exists', async () => {
+      const { info, dial } = await attach(registry);
+      const run = registry.exec(info.name, 'sleep 100');
+      await Promise.resolve();
+      const dialsBefore = hoisted.dials.length;
+
+      dial.reconnecting();
+      const result = await run;
+
+      expect(result.exitCode).toBe(1);
+      // No new channel was created — the failure did not wait for one.
+      expect(hoisted.dials).toHaveLength(dialsBefore);
+      expect(dial.channel.framesOfType('hello')).toHaveLength(1);
     });
 
     // It must not silently re-issue: a re-sent `user_message` costs a second
@@ -735,6 +786,35 @@ describe('tray sidecar', () => {
       const requestId = next.framesOfType('exec.request')[0].requestId as string;
       next.deliver({ type: 'exec.response', requestId, exitCode: 0 });
       expect(await run).toMatchObject({ exitCode: 0 });
+    });
+  });
+
+  describe('recovery from a dead attachment', () => {
+    // After the reconnect loop gives up, the entry stays in the registry at
+    // `error`. Handing it back means the next verb fails `not connected` even
+    // though the leader may have recovered, and the only way out is an
+    // undocumented manual `detach`.
+    it('redials instead of handing back an attachment whose reconnects expired', async () => {
+      const { info, dial } = await attach(registry);
+      dial.giveUp('ICE failed');
+      expect(registry.list()).toEqual([expect.objectContaining({ state: 'error' })]);
+
+      // A fresh attach for the same URL dials again rather than reusing it.
+      const promise = registry.attach({ joinUrl: REMOTE });
+      await Promise.resolve();
+      expect(hoisted.dials).toHaveLength(2);
+      hoisted.dials[1].connect();
+      const revived = await promise;
+      expect(revived.state).toBe('connected');
+      expect(registry.list()).toHaveLength(1);
+      expect(info.name).toBeTruthy();
+    });
+
+    it('still reuses a healthy attachment', async () => {
+      const first = await attach(registry);
+      const second = await registry.attach({ joinUrl: REMOTE });
+      expect(hoisted.dials).toHaveLength(1);
+      expect(second.name).toBe(first.info.name);
     });
   });
 

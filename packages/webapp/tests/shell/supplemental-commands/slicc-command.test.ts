@@ -34,7 +34,10 @@ function ctx(
 ): ResolvedCommandContext {
   return {
     signal: opts.signal,
-    stdin: opts.stdin,
+    // `CommandContext.stdin` is a `ByteString`: at runtime a latin1 string with
+    // one char per BYTE. Encoding here rather than passing the JS string
+    // through is what makes a UTF-8 round-trip observable at all.
+    stdin: opts.stdin === undefined ? undefined : latin1Bytes(opts.stdin),
     fs: {
       readFile: async (path: string) => {
         const content = opts.files?.[path];
@@ -43,6 +46,23 @@ function ctx(
       },
     },
   } as unknown as ResolvedCommandContext;
+}
+
+/**
+ * UTF-8 encode, then present as latin1 — how real piped stdin arrives.
+ *
+ * Chunked rather than a single spread: `String.fromCharCode(...bytes)` on a
+ * large array throws `RangeError: Maximum call stack size exceeded`, which is
+ * the very defect the large-stdin test below exists to pin. (It blew up here
+ * first, at 400 KB, which is a fair demonstration that the limit is real.)
+ */
+function latin1Bytes(text: string): string {
+  const bytes = new TextEncoder().encode(text);
+  let out = '';
+  for (let i = 0; i < bytes.length; i += 8192) {
+    out += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  }
+  return out;
 }
 
 /** Payload of the first call to `op`. */
@@ -215,6 +235,17 @@ describe('slicc command', () => {
       expect(payloadOf(call, 'slicc-prompt').text).toBe('here is a diff');
     });
 
+    // `stdinAsLatin1` is a raw cast, so using it for TEXT ships mojibake: a
+    // piped `café` reaches the remote agent as `cafÃ©`.
+    it('decodes piped prompt text as UTF-8, not latin1', async () => {
+      const call = fakeRpc();
+      await createSliccCommand().execute(
+        [JOIN_URL, 'prompt', '-'],
+        ctx({ stdin: 'café — naïve 日本語' })
+      );
+      expect(payloadOf(call, 'slicc-prompt').text).toBe('café — naïve 日本語');
+    });
+
     it('errors when - is given but nothing was piped', async () => {
       fakeRpc();
       const r = await createSliccCommand().execute([JOIN_URL, 'prompt', '-'], ctx());
@@ -239,6 +270,26 @@ describe('slicc command', () => {
       const call = fakeRpc();
       await createSliccCommand().execute([JOIN_URL, 'exec', 'cat'], ctx({ stdin: 'hello' }));
       expect(payloadOf(call, 'slicc-exec').stdin).toBe(btoa('hello'));
+    });
+
+    // Spreading a Uint8Array into `String.fromCharCode` throws `RangeError`
+    // past V8's ~100 KB argument limit, so piping a file of any moderate size
+    // used to fail before the request was even sent.
+    it('encodes large piped stdin without blowing the argument limit', async () => {
+      const call = fakeRpc();
+      const big = 'x'.repeat(400_000);
+      const r = await createSliccCommand().execute([JOIN_URL, 'exec', 'cat'], ctx({ stdin: big }));
+      expect(r.exitCode).toBe(0);
+      expect(payloadOf(call, 'slicc-exec').stdin).toBe(btoa(big));
+    });
+
+    // Byte fidelity, not text: the remote command's stdin must survive
+    // verbatim, including bytes that are not valid UTF-8.
+    it('forwards piped exec stdin byte-for-byte', async () => {
+      const call = fakeRpc();
+      await createSliccCommand().execute([JOIN_URL, 'exec', 'cat'], ctx({ stdin: 'café' }));
+      const expected = btoa(latin1Bytes('café'));
+      expect(payloadOf(call, 'slicc-exec').stdin).toBe(expected);
     });
 
     // `exec -` already consumed stdin as the COMMAND; sending the same bytes on

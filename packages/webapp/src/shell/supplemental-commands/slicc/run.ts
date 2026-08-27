@@ -35,9 +35,10 @@
  * text alone is several kB (see `packages/webapp/first-load-budget.json`).
  */
 
+import { uint8ToBase64 } from '@slicc/shared-ts';
 import type { CommandContext } from 'just-bash';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
-import { stdinAsLatin1 } from '../../just-bash-compat.js';
+import { stdinAsLatin1, stdinAsText } from '../../just-bash-compat.js';
 
 /** Upper bound on how long the page bridge waits for a verb (24h). */
 const SLICC_MAX_MS = 24 * 60 * 60 * 1000;
@@ -356,20 +357,37 @@ function unknownVerbMessage(verb: string | undefined): string {
   return `${head}\nExpected one of ${VERBS.join(', ')}. \`slicc --help\` for usage.${hint}`;
 }
 
-/** Piped shell stdin as a string, or undefined when nothing was piped. */
-function readStdin(ctx: CommandContext): string | undefined {
+/**
+ * Piped stdin as TEXT — decoded UTF-8, for anything that travels as a string.
+ *
+ * Not `stdinAsLatin1`: that one is a raw cast (a `ByteString` already IS a
+ * latin1 string), so a piped `café` would reach the remote agent mojibaked as
+ * `cafÃ©`. The byte-preserving path belongs to {@link encodeStdin} alone.
+ */
+function readStdinText(ctx: CommandContext): string | undefined {
   if (ctx.stdin === undefined) return undefined;
-  const text = stdinAsLatin1(ctx.stdin);
+  const text = stdinAsText(ctx.stdin);
   return text.length > 0 ? text : undefined;
 }
 
-/** Piped stdin as base64 bytes for the `exec.request` wire. */
+/**
+ * Piped stdin as base64 bytes for the `exec.request` wire.
+ *
+ * Latin-1 here is correct and deliberate: the remote command's stdin must be
+ * byte-for-byte, including binary input, so this path must NOT decode.
+ *
+ * The shared `uint8ToBase64` does the encoding rather than a `btoa` of a
+ * spread char-code array — spreading a Uint8Array into an argument list throws
+ * `RangeError` past V8's ~100 KB limit, so piping a file of any moderate size
+ * would fail before the request was even sent. `ssh` already uses this helper.
+ */
 function encodeStdin(ctx: CommandContext): string | undefined {
-  const text = readStdin(ctx);
-  if (text === undefined) return undefined;
-  const bytes = new Uint8Array(text.length);
-  for (let i = 0; i < text.length; i++) bytes[i] = text.charCodeAt(i) & 0xff;
-  return btoa(String.fromCharCode(...bytes));
+  if (ctx.stdin === undefined) return undefined;
+  const latin1 = stdinAsLatin1(ctx.stdin);
+  if (latin1.length === 0) return undefined;
+  const bytes = new Uint8Array(latin1.length);
+  for (let i = 0; i < latin1.length; i++) bytes[i] = latin1.charCodeAt(i) & 0xff;
+  return uint8ToBase64(bytes);
 }
 
 /**
@@ -388,7 +406,7 @@ async function resolveTextArg(
   if (rest.length !== 1) return rest.join(' ');
   const only = rest[0];
   if (only === '-' || only === '@-') {
-    const piped = readStdin(ctx);
+    const piped = readStdinText(ctx);
     if (piped === undefined) return { error: 'slicc: no piped stdin to read' };
     return piped;
   }

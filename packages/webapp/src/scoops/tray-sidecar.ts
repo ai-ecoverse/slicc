@@ -246,6 +246,15 @@ class SidecarAttachment {
   }
 
   /**
+   * The reconnect loop has given up: this attachment will never recover on its
+   * own. Distinct from merely not-connected, which also covers `connecting` and
+   * `reconnecting` — both of which a caller should WAIT for, not discard.
+   */
+  get dead(): boolean {
+    return this.statusSink.get().state === 'error';
+  }
+
+  /**
    * Resolve once this attachment's first connect has settled — immediately if
    * it already has. Rejects with the same error `start()` rejected with, so a
    * caller that joined a doomed dial fails for the real reason.
@@ -285,6 +294,15 @@ class SidecarAttachment {
             clearTimeout(timer);
             resolve();
           },
+          onReconnecting: () => {
+            // The EARLIEST signal that the channel died. `wire()` also fires
+            // this on a successful reconnect, but that can be a backoff away
+            // (1s doubling to 30s, up to 10 attempts), and the caller should
+            // not sit on a request the leader has already discarded for
+            // minutes before hearing so. Idempotent: `runVerb` settles once,
+            // and a verb started after this point subscribes fresh.
+            this.notifyDropped('connection dropped; reconnecting');
+          },
           onGaveUp: (lastError) => {
             this.notifyDropped(`reconnect gave up: ${lastError}`);
             if (settled) return;
@@ -316,10 +334,12 @@ class SidecarAttachment {
     });
     log.info(isReconnect ? 'Sidecar reconnected' : 'Sidecar attached', { name: this.name });
 
-    // Anything still in flight was sent on the channel that just died: the
-    // leader dropped the request with it, so no reply can ever arrive. Fail
-    // those verbs now rather than letting them wait out a timeout that, for a
-    // `slicc exec` without `--timeout`, is 24 HOURS.
+    // Backstop. `onReconnecting` above is the primary signal and normally has
+    // already failed these; this covers any path that swaps the channel without
+    // going through the reconnect loop. Anything still in flight was sent on
+    // the channel that just died, so no reply can ever arrive — and leaving it
+    // subscribed is worse than a hang: a `prompt` would go on to consume an
+    // UNRELATED later turn's `agent_event`s and report them as its own.
     //
     // They are deliberately NOT re-issued on the new channel: a re-sent
     // `user_message` would cost a second turn, and a re-sent `exec.request`
@@ -555,7 +575,14 @@ export class SidecarRegistry {
       );
     }
     const existing = this.findByJoinUrl(url);
-    if (existing) {
+    if (existing?.dead) {
+      // Its reconnect loop is exhausted, so it will never recover — but the
+      // leader or the network may well have. Reusing it would fail the verb
+      // with `not connected` and leave recovery to an undocumented manual
+      // `slicc detach`. Drop it and dial again.
+      log.info('Replacing a dead sidecar attachment', { name: existing.name });
+      this.detach(existing.name);
+    } else if (existing) {
       // The map is populated BEFORE the dial's first await, so a concurrent
       // `attach` for the same tray lands here rather than dialing a second
       // time. Await the in-flight connect: returning a still-`connecting`
@@ -564,7 +591,10 @@ export class SidecarRegistry {
       // two `slicc <same-url> exec …` in one turn is the ORDINARY case, not a
       // pathological one.
       await existing.ready();
-      return existing.info;
+      // `ready()` resolving does not mean still-alive: this caller may have
+      // waited through a connect that succeeded and then failed.
+      if (!existing.dead) return existing.info;
+      this.detach(existing.name);
     }
     if (this.attachments.size >= MAX_SIDECAR_ATTACHMENTS) {
       throw new Error(
