@@ -9,11 +9,14 @@
 
 const RECENT_MESSAGE_LIMIT = 8;
 const GENERIC_URL_PARTS = new Set([
+  'catalog',
   'com',
   'html',
   'http',
   'https',
   'json',
+  'known',
+  'llms',
   'net',
   'org',
   'txt',
@@ -33,6 +36,7 @@ export interface DiscoveryRouteCandidate {
 interface WeightedNeedle {
   text: string;
   weight: number;
+  match: 'substring' | 'hostname';
 }
 
 /**
@@ -69,25 +73,25 @@ export function matchDiscoveryRouteCandidate<T extends DiscoveryRouteCandidate>(
 }
 
 function discoveryNeedles(event: DiscoveryRoute): WeightedNeedle[] {
-  const needles = new Map<string, number>();
+  const needles = new Map<string, WeightedNeedle>();
   addUrlNeedles(needles, event.discoveryOrigin);
   addUrlNeedles(needles, event.discoveryUrl);
-  return [...needles].map(([text, weight]) => ({ text, weight }));
+  return [...needles.values()];
 }
 
-function addUrlNeedles(needles: Map<string, number>, value: string | undefined): void {
+function addUrlNeedles(needles: Map<string, WeightedNeedle>, value: string | undefined): void {
   if (!value) return;
   const normalized = value.toLowerCase().replace(/\/$/, '');
-  addNeedle(needles, normalized, 12);
+  addNeedle(needles, normalized, 12, 'substring');
 
   try {
     const url = new URL(value);
     const hostname = url.hostname.toLowerCase().replace(/^www\./, '');
-    addNeedle(needles, hostname, 8);
+    addNeedle(needles, hostname, 8, 'hostname');
     for (const part of `${hostname}${url.pathname}${url.search}`
       .split(/[^a-z0-9]+/)
       .filter((part) => part.length >= 4 && !GENERIC_URL_PARTS.has(part))) {
-      addNeedle(needles, part, 1);
+      addNeedle(needles, part, 1, 'substring');
     }
   } catch {
     // A malformed producer value can still match verbatim; it simply yields no
@@ -95,9 +99,16 @@ function addUrlNeedles(needles: Map<string, number>, value: string | undefined):
   }
 }
 
-function addNeedle(needles: Map<string, number>, text: string, weight: number): void {
+function addNeedle(
+  needles: Map<string, WeightedNeedle>,
+  text: string,
+  weight: number,
+  match: WeightedNeedle['match']
+): void {
   if (text.length === 0) return;
-  needles.set(text, Math.max(needles.get(text) ?? 0, weight));
+  const key = `${match}:${text}`;
+  const existing = needles.get(key);
+  if (!existing || weight > existing.weight) needles.set(key, { text, weight, match });
 }
 
 function scoreRecentMessages(
@@ -112,12 +123,20 @@ function scoreRecentMessages(
     // A match in the newest message is up to 8x more useful than one at the
     // edge of the window. JSON serialization deliberately includes assistant
     // tool calls and tool results, not just visible user/assistant prose.
-    const recency = index + 1;
+    const recency = RECENT_MESSAGE_LIMIT - (recent.length - 1 - index);
     for (const needle of needles) {
-      if (haystack.includes(needle.text)) score += needle.weight * recency;
+      if (matchesNeedle(haystack, needle)) score += needle.weight * recency;
     }
   }
   return score;
+}
+
+function matchesNeedle(haystack: string, needle: WeightedNeedle): boolean {
+  if (needle.match === 'substring') return haystack.includes(needle.text);
+  const escaped = needle.text.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  // Hostnames must stand alone (with an optional common `www.` prefix).
+  // Otherwise `ai.com` would falsely match the unrelated host `openai.com`.
+  return new RegExp(`(^|[^a-z0-9.-])(?:www\\.)?${escaped}($|[^a-z0-9.-])`).test(haystack);
 }
 
 function serializeMessage(message: unknown): string {

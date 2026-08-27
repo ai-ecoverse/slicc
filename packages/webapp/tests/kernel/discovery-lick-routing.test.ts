@@ -119,4 +119,63 @@ describe('matchDiscoveryRouteCandidate', () => {
       )
     ).toBe(beta);
   });
+
+  it('anchors the newest message at the same recency weight for short and full histories', () => {
+    const messages = new Map<string, unknown[]>([
+      [alpha.jid, [{ role: 'user', content: 'I am opening example.com now' }]],
+      [
+        beta.jid,
+        [
+          ...Array.from({ length: 6 }, (_, index) => ({
+            role: 'user',
+            content: `Unrelated message ${index}`,
+          })),
+          { role: 'assistant', content: 'Earlier I visited example.com' },
+          { role: 'assistant', content: 'Now working elsewhere' },
+        ],
+      ],
+    ]);
+
+    expect(
+      matchDiscoveryRouteCandidate(
+        { discoveryOrigin: 'https://example.com' },
+        [alpha, beta],
+        (candidate) => messages.get(candidate.jid) ?? []
+      )
+    ).toBe(alpha);
+  });
+
+  it('does not match a hostname embedded inside an unrelated hostname', () => {
+    expect(
+      matchDiscoveryRouteCandidate(
+        { discoveryOrigin: 'https://ai.com' },
+        [alpha, beta],
+        (candidate) =>
+          candidate === beta
+            ? [{ role: 'assistant', content: 'I opened https://openai.com/docs' }]
+            : []
+      )
+    ).toBeUndefined();
+  });
+
+  it('does not use fixed discovery artifact names as contextual clues', () => {
+    expect(
+      matchDiscoveryRouteCandidate(
+        {
+          discoveryOrigin: 'https://unrelated.example',
+          discoveryUrl: 'https://unrelated.example/.well-known/ai-catalog.json',
+        },
+        [alpha, beta],
+        (candidate) =>
+          candidate === beta
+            ? [
+                {
+                  role: 'user',
+                  content: 'A previous discovery mentioned llms.txt and an AI catalog',
+                },
+              ]
+            : []
+      )
+    ).toBeUndefined();
+  });
 });
