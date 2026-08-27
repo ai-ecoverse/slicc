@@ -26,16 +26,6 @@ interface UntrustedFeatureFlagsConfig {
   readonly floats?: unknown;
 }
 
-/** Untrusted flag map: keys are flag ids, values not yet validated as strings. */
-interface UntrustedFlagMap {
-  readonly [flagId: string]: unknown;
-}
-
-/** Untrusted float overlay bag: keys are float names, values not yet validated. */
-interface UntrustedFloatOverlays {
-  readonly [floatName: string]: unknown;
-}
-
 const FALLBACK_BASE_FLAGS: FlagStringMap = {
   'experimental-settings': 'on',
 };
@@ -53,27 +43,27 @@ function asUntrustedConfig(value: unknown): UntrustedFeatureFlagsConfig | null {
   return isPlainObject(value) ? (value as UntrustedFeatureFlagsConfig) : null;
 }
 
-function asUntrustedFloatOverlays(value: unknown): UntrustedFloatOverlays | null {
-  return isPlainObject(value) ? (value as UntrustedFloatOverlays) : null;
-}
-
+/** Copy a plain object into a string map, or null if any value is non-string. */
 function stringRecord(value: unknown): FlagStringMap | null {
   if (!isPlainObject(value)) return null;
-  const record = value as UntrustedFlagMap;
-  if (Object.values(record).some((entry) => typeof entry !== 'string')) return null;
-  return record as FlagStringMap;
+  const out: FlagStringMap = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== 'string') return null;
+    out[key] = entry;
+  }
+  return out;
 }
 
 /** Resolve a requested float, falling back to the base profile on any invalid config. */
 export function resolveFlags(config: unknown, requestedFloat: string | null): ResolvedFlags {
   const root = asUntrustedConfig(config);
   const base = stringRecord(root?.base) ?? FALLBACK_BASE_FLAGS;
-  const floats = asUntrustedFloatOverlays(root?.floats);
-  if (!requestedFloat || !floats || !Object.hasOwn(floats, requestedFloat)) {
+  const floats = root?.floats;
+  if (!requestedFloat || !isPlainObject(floats) || !Object.hasOwn(floats, requestedFloat)) {
     return { float: DEFAULT_FLOAT, flags: { ...base } };
   }
 
-  const overlay = stringRecord(floats[requestedFloat]);
+  const overlay = stringRecord(Reflect.get(floats, requestedFloat));
   if (!overlay) return { float: DEFAULT_FLOAT, flags: { ...base } };
   return { float: requestedFloat, flags: { ...base, ...overlay } };
 }
