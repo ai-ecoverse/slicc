@@ -8,7 +8,7 @@ interface ZlibOptions {
   memLevel?: number;
   strategy?: number;
 }
-type PakoFn = (data: Uint8Array, opts?: Record<string, unknown>) => Uint8Array;
+type PakoFn = (data: Uint8Array, opts?: ZlibOptions) => Uint8Array;
 type ZlibCallback = (error: Error | null, result?: Buffer) => void;
 
 function zlibToBytes(data: ZlibInput): Uint8Array {
@@ -18,8 +18,8 @@ function zlibToBytes(data: ZlibInput): Uint8Array {
     : new Uint8Array(data);
 }
 
-function zlibPakoOpts(opts?: ZlibOptions): Record<string, unknown> {
-  const out: Record<string, unknown> = {};
+function zlibPakoOpts(opts?: ZlibOptions): ZlibOptions {
+  const out: ZlibOptions = {};
   if (opts) {
     if (typeof opts.level === 'number') out['level'] = opts.level;
     if (typeof opts.windowBits === 'number') out['windowBits'] = opts.windowBits;
