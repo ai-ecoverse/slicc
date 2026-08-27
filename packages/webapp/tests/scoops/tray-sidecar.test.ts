@@ -207,6 +207,42 @@ describe('tray sidecar', () => {
       expect(hoisted.dials).toHaveLength(1);
     });
 
+    // The agent loop runs one message's bash tool calls with `Promise.all`, so
+    // two `slicc <same-url> …` commands in a turn arrive concurrently. Before
+    // the fix, the second caller got a still-`connecting` handle back and its
+    // verb failed `not connected`.
+    it('concurrent attaches to the same tray share one dial and both wait for it', async () => {
+      const first = registry.attach({ joinUrl: REMOTE });
+      const second = registry.attach({ joinUrl: REMOTE });
+      await Promise.resolve();
+      expect(hoisted.dials).toHaveLength(1); // one dial, not two
+      hoisted.dials[0].connect();
+
+      const [a, b] = await Promise.all([first, second]);
+      expect(b.name).toBe(a.name);
+      // Both callers see a CONNECTED attachment...
+      expect(b.state).toBe('connected');
+
+      // ...so the verb that follows reaches the wire instead of throwing
+      // `not connected`, which is the symptom this guards.
+      const run = registry.exec(b.name, 'true');
+      await Promise.resolve();
+      const dial = hoisted.dials[0];
+      const requestId = dial.channel.framesOfType('exec.request')[0].requestId as string;
+      dial.channel.deliver({ type: 'exec.response', requestId, exitCode: 0 });
+      await expect(run).resolves.toMatchObject({ exitCode: 0 });
+    });
+
+    it('propagates a failed dial to a caller that joined it mid-flight', async () => {
+      const first = registry.attach({ joinUrl: REMOTE });
+      const second = registry.attach({ joinUrl: REMOTE });
+      await Promise.resolve();
+      hoisted.dials[0].giveUp('TRAY_LEADER_NOT_ELECTED');
+      await expect(first).rejects.toThrow('TRAY_LEADER_NOT_ELECTED');
+      await expect(second).rejects.toThrow('TRAY_LEADER_NOT_ELECTED');
+      expect(registry.list()).toEqual([]);
+    });
+
     it('lists attachments with their live state', async () => {
       await attach(registry);
       expect(registry.list()).toEqual([

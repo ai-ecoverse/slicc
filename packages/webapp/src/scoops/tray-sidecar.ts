@@ -185,6 +185,12 @@ class SidecarAttachment {
   private status: FollowerTrayRuntimeStatus | null = null;
   readonly attachedAt = Date.now();
   private currentJoinUrl: string;
+  /**
+   * The in-flight (or settled) first connect. A second caller that finds this
+   * attachment mid-dial awaits it instead of receiving a `connecting` handle —
+   * see {@link SidecarRegistry.attach}.
+   */
+  private startPromise: Promise<void> | null = null;
 
   constructor(
     readonly name: string,
@@ -229,9 +235,18 @@ class SidecarAttachment {
     return this.channel !== null && this.statusSink.get().state === 'connected';
   }
 
+  /**
+   * Resolve once this attachment's first connect has settled — immediately if
+   * it already has. Rejects with the same error `start()` rejected with, so a
+   * caller that joined a doomed dial fails for the real reason.
+   */
+  async ready(): Promise<void> {
+    await (this.startPromise ?? Promise.resolve());
+  }
+
   /** Dial, and resolve once the first channel is open and `hello` is sent. */
   async start(timeoutMs: number): Promise<void> {
-    return await new Promise<void>((resolve, reject) => {
+    this.startPromise = new Promise<void>((resolve, reject) => {
       let settled = false;
       const timer = setTimeout(() => {
         if (settled) return;
@@ -271,6 +286,7 @@ class SidecarAttachment {
         }
       );
     });
+    return await this.startPromise;
   }
 
   private wire(rawChannel: TrayDataChannelLike): void {
@@ -513,7 +529,17 @@ export class SidecarRegistry {
       );
     }
     const existing = this.findByJoinUrl(url);
-    if (existing) return existing.info;
+    if (existing) {
+      // The map is populated BEFORE the dial's first await, so a concurrent
+      // `attach` for the same tray lands here rather than dialing a second
+      // time. Await the in-flight connect: returning a still-`connecting`
+      // handle would make the caller's very next verb fail `not connected` —
+      // and the agent loop runs a message's bash calls with `Promise.all`, so
+      // two `slicc <same-url> exec …` in one turn is the ORDINARY case, not a
+      // pathological one.
+      await existing.ready();
+      return existing.info;
+    }
     if (this.attachments.size >= MAX_SIDECAR_ATTACHMENTS) {
       throw new Error(
         `too many sidecar attachments (${MAX_SIDECAR_ATTACHMENTS}); detach one first`
