@@ -331,7 +331,6 @@
         "packages/webapp/src/cdp/har-recorder.ts",
         "packages/webapp/src/providers/built-in/bedrock-camp.ts",
         "packages/webapp/src/providers/intercepted-oauth.ts",
-        "packages/webapp/src/scoops/scheduler.ts",
         "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts",
         "packages/webapp/tests/cdp/cdp-client.test.ts",
         "packages/webapp/tests/cdp/preview-bridge-cdp-transport.test.ts",
