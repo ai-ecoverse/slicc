@@ -29,16 +29,26 @@ import type { RegisteredScoop } from '../types.js';
  * The cone pins nothing — its shell resolves onboarding's `/home/<slug>`.
  * Secrets spread FIRST: a user-created secret can carry any POSIX name —
  * including PATH/HOME/USER — and must not override the isolation pins
- * (Codex P2 on #2143). Exported for tests.
+ * (Codex P2 on #2143), nor the lick target. Exported for tests.
+ *
+ * **Every unit that has a target carries it, scoops included** (Codex P1 on
+ * #2525). `ownLickTargetFor` already answers `scoop.folder` for a child and
+ * `tools.ts` already stamps that answer on the licks background `bash`
+ * produces — but this function used to drop it for a non-cone unit, so the
+ * env-driven producers (`fswatch`, `crontask`, `webhook`) in the SAME shell
+ * disagreed with `bash` in it: they fell through to `rootsOf(scoops)[0]` and
+ * delivered a scoop's own callbacks into an unrelated cone's chat. Whoever
+ * set the watcher up is who hears about it.
  */
 export function buildScoopShellEnv(
   isCone: boolean,
   folder: string,
   secretEnv: Record<string, string>,
-  /** Folder a non-primary cone's untargeted licks default to (`SLICC_LICK_TARGET`). */
+  /** Folder this unit's untargeted licks default to (`SLICC_LICK_TARGET`). */
   lickTarget?: string
 ): Record<string, string> {
-  if (isCone) return { ...secretEnv, ...(lickTarget ? { [LICK_TARGET_ENV]: lickTarget } : {}) };
+  const lickTargetEnv: Record<string, string> = lickTarget ? { [LICK_TARGET_ENV]: lickTarget } : {};
+  if (isCone) return { ...secretEnv, ...lickTargetEnv };
   return {
     ...secretEnv,
     HOME: `/scoops/${folder}/home`,
@@ -49,6 +59,7 @@ export function buildScoopShellEnv(
       `/scoops/${folder}/workspace/bin`,
       ...DEFAULT_JSH_SEARCH_ROOTS,
     ].join(':'),
+    ...lickTargetEnv,
   };
 }
 

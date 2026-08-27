@@ -31,11 +31,12 @@ Commands:
   delete <id>                                                  Delete a webhook by ID
 
 Options:
-  --scoop <target>  Scoop name, cone name, or folder. Required outside a cone.
+  --scoop <target>  Scoop name, cone name, or folder. Omit for your own cone.
   --filter <code>   JS filter function: (event) => false (drop), true (keep), or object (transform)
                     The event has: type, webhookId, webhookName, timestamp, headers, body
 
 Examples:
+  webhook create --name inbox
   webhook create --scoop click-handler --name clicks
   webhook create --scoop pr-reviewer --name github --filter "(e) => e.body.action === 'opened'"
   webhook create --scoop slack-relay --name slack --filter "(e) => ({ text: e.body.text, user: e.body.user })"
@@ -112,19 +113,15 @@ async function handleCreate(
   const name = parsed.values.get('--name') ?? 'default';
   const filter = parsed.values.get('--filter');
   // No `--scoop`: a non-primary cone's shell names itself (SLICC_LICK_TARGET),
-  // so `webhook create` inside an extra cone routes back to that cone (#2311).
-  // The default root carries no such variable, so it still has to say where
-  // the callbacks go — the pre-#2311 rule, unchanged for it.
+  // exactly as `crontask` and `fswatch` do, so an extra cone's callbacks come
+  // back to its own chat (#2311). A shell with no target at all (the default
+  // root, a scoop) leaves this `undefined` and the event routes to the default
+  // root in `routeFormattedLickToCone` — omitting the flag is how a caller says
+  // "whoever I am" without having to know the answer (#2525). `webhook create`
+  // used to reject that, from a time before untargeted licks had a
+  // destination; they have had one since #2311, so the rejection only blocked
+  // the one spelling that is correct in a multi-cone workspace.
   const scoop = defaultLickTarget(parsed.values.get('--scoop'), env);
-
-  if (!scoop) {
-    return {
-      stdout: '',
-      stderr:
-        "webhook create: --scoop is required (name a scoop or a cone; an extra cone's shell supplies its own)\n",
-      exitCode: 1,
-    };
-  }
 
   // Filter compilation requires dynamic JS evaluation; Chrome
   // extension CSP forbids it. crontask has the same gate. Users

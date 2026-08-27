@@ -322,7 +322,7 @@ own.
 - `wc-live-freezer.ts` resolves the target once, up front, with `rootForSelection(scoops, selected)` (`ui/wc/wc-unit-context.ts`): a selected root is itself, a selected scoop walks `parentJid` up to the root that owns it, nothing selected falls back to `defaultRootOf`. The resolution happens BEFORE the freeze's awaits, so a roster refresh mid-freeze cannot move the target between archive and clear, and the same root is re-selected afterwards.
 - `freezeConeSession` / `runNewSessionFreeze` take a `cone: { folder, label? }` (`FreezerConeRef`). Omitted, they target the primary cone — every pre-#2272 caller is unchanged.
 - The rail's expanded action row (`<slicc-freezer-new>`, `expanded`) is one fixed-height line of icon buttons with tooltips: **New chat** (freeze + extract memories, same cone), **New chat, fast** (freeze, memories extracted later), **Discard** (no freezer, no memories, same cone), then **New cone** / **Drop cone** under the flag. Collapsed, the single badge keeps its click / double-click / long-press gesture. Under `agentic-memory` the fast action is hidden (`no-skip`).
-- Licks a cone produces come back to it: every root except the untargeted default carries `SLICC_LICK_TARGET=<folder>` in its shell (`buildScoopShellEnv`), and every producer a cone's shell can start falls back to it — see "Addressing licks to a cone" below. That default is `rootsOf(scoops)[0]` — the **oldest** root, which is what `routeFormattedLickToCone` falls back to — resolved by jid against the live roster, _not_ by asking who holds the reserved `cone` folder: after the original primary is dropped, `coneFolderFor` hands that freed folder to the next new cone, which would then look primary while an older root is still the untargeted destination.
+- Licks a cone produces come back to it: every unit except the untargeted default carries `SLICC_LICK_TARGET=<folder>` in its shell (`buildScoopShellEnv`), and every producer a unit's shell can start falls back to it — see "Addressing licks to a cone" below. That default is `rootsOf(scoops)[0]` — the **oldest** root, which is what `routeFormattedLickToCone` falls back to — resolved by jid against the live roster, _not_ by asking who holds the reserved `cone` folder: after the original primary is dropped, `coneFolderFor` hands that freed folder to the next new cone, which would then look primary while an older root is still the untargeted destination.
 - `clear-chat` carries an optional `scoopJid`; `Bridge.handleClearChat` clears that root's live context and deletes `chatSessionIdFor(target)`. An unknown or absent jid falls back to the default root and `session-cone`.
 - Archives record their provenance: `cone` (the folder) plus `coneLabel` for extra cones only, in both the index entry and the archive frontmatter — so a rebuild from `/sessions/*.md` recovers it and the enrichment rename preserves it. `memorySkipped` rides the frontmatter for the same reason: `pendingEnrichment` comes back from the `pending-` filename, so an index-only marker would be dropped by a rebuild and the next catch-up would mine a chat that opted out. There is **one Freezer for all cones**: the rail card never names the cone; the thawed chat log opens with a `Frozen chat · from cone Research` caption (`frozenProvenanceEl`, a `<slicc-day-separator>` prepended to the thread column). The primary cone and legacy archives with no `cone` field read `Frozen chat` and are treated as the primary cone's.
 - Thawing stays read-only, so it can never overwrite another cone's view; when a thaw fails, the fallback selection goes to the cone the archive named (`rootForConeFolder`), not blindly to the primary one.
@@ -457,22 +457,49 @@ where it came from. The `discovery` guard sits after resolution and before the
 lick id is minted, so a non-browsing scoop never leaves a dangling registry
 entry.
 
-**Every producer a cone's shell can start follows the invoking unit**, so an
-extra cone's events come back to it rather than to the oldest root:
+**Every producer a unit's shell can start follows the invoking unit**, so an
+extra cone's (or a scoop's) events come back to it rather than to the oldest
+root:
 
-| Producer            | How it picks a target                                                                   |
-| ------------------- | --------------------------------------------------------------------------------------- |
-| background `bash`   | `ownLickTargetFor` stamps `targetScoop` (#2272)                                         |
-| `fswatch create`    | `--scoop`, else `defaultLickTarget(…, ctx.env)` (#2272)                                 |
-| `crontask create`   | `--scoop`, else `defaultLickTarget(…, ctx.env)`                                         |
-| `webhook create`    | `--scoop`, else `defaultLickTarget(…, ctx.env)`; still required when neither is present |
-| workflow completion | `getStartingRoot(parentJid)` in `kernel/host.ts` stamps the starting root's folder      |
-| `sprinkle open`     | claims an **unrouted** sprinkle for the opening cone; an existing route always wins     |
+| Producer            | How it picks a target                                                               |
+| ------------------- | ----------------------------------------------------------------------------------- |
+| background `bash`   | `ownLickTargetFor` stamps `targetScoop` (#2272)                                     |
+| `fswatch create`    | `--scoop`, else `defaultLickTarget(…, ctx.env)` (#2272)                             |
+| `crontask create`   | `--scoop`, else `defaultLickTarget(…, ctx.env)`                                     |
+| `webhook create`    | `--scoop`, else `defaultLickTarget(…, ctx.env)` (#2525)                             |
+| workflow completion | `getStartingRoot(parentJid)` in `kernel/host.ts` stamps the starting root's folder  |
+| `sprinkle open`     | claims an **unrouted** sprinkle for the opening unit; an existing route always wins |
 
-`SLICC_LICK_TARGET` is absent from the default root's shell on purpose — its
-folder is not worth spending as an alias when an untargeted lick already lands
-there, and reading it from a folder test rather than from the live roster is
-the bug described in the bullet above.
+**All three lick-producing commands treat an omitted `--scoop` the same way**,
+and that uniformity is the contract callers write against. `webhook create`
+alone used to reject it (`--scoop is required`), a rule inherited from a time
+when an untargeted lick had nowhere to go and would have been silently dropped;
+#2311 gave untargeted licks a destination and left the rejection behind
+(#2525). Its only remaining effect was to make the one gesture that is correct
+in a multi-cone workspace — name no target, let the runtime route the lick back
+to whoever asked — inexpressible for webhooks, which pushed skills into
+hardcoding the literal folder `cone` and delivering another cone's callbacks
+into the default root's chat.
+
+`SLICC_LICK_TARGET` is absent from **exactly one** shell, the default root's —
+its folder is not worth spending as an alias when an untargeted lick already
+lands there, and reading it from a folder test rather than from the live roster
+is the bug described in the bullet above. Only that shell omits `--scoop` and
+gets `undefined`, whereupon `routeFormattedLickToCone` delivers to
+`rootsOf(scoops)[0]`. Skills should never hardcode `cone`: that folder is
+reassigned to the next new cone once the original primary is dropped, so the
+literal names the wrong unit in exactly the workspaces where naming matters.
+
+**Scoops carry it too** (Codex P1 on #2525). `ownLickTargetFor` has always
+answered `scoop.folder` for a child, and `tools.ts` has always stamped that on
+the licks background `bash` produces — but `buildScoopShellEnv` used to drop it
+for a non-cone unit, so the env-driven producers in the SAME shell disagreed
+with `bash` in it: `fswatch`/`crontask`/`webhook` fell through to the default
+root and delivered a scoop's own callbacks into an unrelated cone's chat,
+payload included. Whoever set the watcher up is who hears about it. This is
+distinct from "users never talk to a scoop" (#2312), which governs what a scoop
+needs from a **human** — that still escalates to the owning cone; an automation
+event is work for the scoop that registered it, not a question for anyone.
 
 **From outside the cone's shell**, the same handles work as an explicit flag:
 `webhook create --scoop <cone>`, `crontask create --scoop <cone>`,
