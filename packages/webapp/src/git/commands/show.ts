@@ -3,7 +3,7 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { diffCommits, diffInitialCommit } from './diff.js';
-import { flagString, GIT_FLAG_SPECS } from './shared.js';
+import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function show(
@@ -11,7 +11,8 @@ export async function show(
   cwd: string,
   args: string[]
 ): Promise<GitCommandResult> {
-  const { flags, positionals } = parseArgs(args, GIT_FLAG_SPECS.show);
+  const { flags: rawFlags, positionals } = parseArgs(args, GIT_FLAG_SPECS.show);
+  const flags = rawFlags as GitParsedFlags;
   const stat = flags.stat === true;
   const format = flagString(flags, 'format');
   const ref = positionals[0];

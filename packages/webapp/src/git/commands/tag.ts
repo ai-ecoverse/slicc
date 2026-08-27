@@ -2,7 +2,7 @@
 
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
-import { flagString, GIT_FLAG_SPECS } from './shared.js';
+import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function tag(
@@ -10,7 +10,8 @@ export async function tag(
   cwd: string,
   args: string[]
 ): Promise<GitCommandResult> {
-  const { flags, positionals: positional } = parseArgs(args, GIT_FLAG_SPECS.tag);
+  const { flags: rawFlags, positionals: positional } = parseArgs(args, GIT_FLAG_SPECS.tag);
+  const flags = rawFlags as GitParsedFlags;
   const deleteFlag = flags.delete === true;
   const listPattern = flagString(flags, 'list');
   const annotate = flags.annotate === true;

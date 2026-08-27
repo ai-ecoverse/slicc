@@ -4,7 +4,7 @@ import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { diffCommits, diffInitialCommit } from './diff.js';
 import { matchesPathspec } from './revision.js';
-import { flagString, GIT_FLAG_SPECS } from './shared.js';
+import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function log(
@@ -12,7 +12,8 @@ export async function log(
   cwd: string,
   args: string[]
 ): Promise<GitCommandResult> {
-  const { flags, positionals, doubleDashRest } = parseArgs(args, GIT_FLAG_SPECS.log);
+  const { flags: rawFlags, positionals, doubleDashRest } = parseArgs(args, GIT_FLAG_SPECS.log);
+  const flags = rawFlags as GitParsedFlags;
   const depth = flagString(flags, 'max-count');
   const oneline = flags.oneline === true;
   const showStat = flags.stat === true;

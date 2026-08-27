@@ -137,11 +137,14 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
 export type GitFlagScalar = string | number | boolean;
 
 /**
- * Parsed git subcommand flags from `parseArgs` / mri. Values are typically
- * {@link GitFlagScalar} or a repeated array; {@link flagString} narrows at read time.
+ * Parsed git subcommand flags from `parseArgs` / mri. Each flag is a
+ * {@link GitFlagScalar}, a repeated array of them, or absent (`undefined`).
+ * This is the explicit boundary type callers cast the opaque
+ * `Record<string, unknown>` from `parseArgs` to; {@link flagString} narrows a
+ * single value at read time.
  */
 export interface GitParsedFlags {
-  readonly [flag: string]: unknown;
+  readonly [flag: string]: GitFlagScalar | readonly GitFlagScalar[] | undefined;
 }
 
 /** Read a value-flag as a string, treating empty (`--flag` with no value) as undefined. */
