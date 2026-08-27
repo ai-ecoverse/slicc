@@ -78,8 +78,15 @@ export const SIDECAR_RUNTIME_TAG = 'slicc-sidecar';
 /** Hard cap on concurrent sidecars — a runaway agent must not exhaust ICE. */
 export const MAX_SIDECAR_ATTACHMENTS = 8;
 
-/** Cap on buffered output bytes per verb run, mirroring `MAX_REMOTE_EXEC_BYTES`. */
-const MAX_RUN_BYTES = 4 * 1024 * 1024;
+/**
+ * Cap on buffered output per verb run, in UTF-16 code units — i.e. `.length` of
+ * the accumulated string, which is what actually bounds retained memory (a JS
+ * string is 2 bytes per unit). Sized to mirror `MAX_REMOTE_EXEC_BYTES`.
+ *
+ * NOT a UTF-8 byte count: the decoded string is what we hold, and re-encoding
+ * every chunk to measure it would cost more than the bound is worth.
+ */
+const MAX_RUN_UNITS = 4 * 1024 * 1024;
 
 /** A sidecar advertises nothing: it serves no inbound request of any kind. */
 const SIDECAR_CAPABILITIES: TraySyncCapabilities = { exec: false };
@@ -105,7 +112,7 @@ export interface SidecarRunResult {
   exitCode: number;
   /** Set when the run could not complete (not when the remote command failed). */
   error?: string;
-  /** True when output hit {@link MAX_RUN_BYTES} and the tail was dropped. */
+  /** True when output hit {@link MAX_RUN_UNITS} and the tail was dropped. */
   truncated?: boolean;
 }
 
@@ -132,22 +139,23 @@ export interface SidecarWatchOptions extends SidecarRunOptions {
 /**
  * Output accumulator shared by the three verbs.
  *
- * Byte-capped rather than character-capped so a burst of multi-byte output
- * can't blow past the budget, and truncation is sticky: once tripped, later
- * chunks are dropped instead of interleaving a partial tail.
+ * Capped on the accumulated string's length (see {@link MAX_RUN_UNITS}), which
+ * is the quantity that bounds retained memory. Truncation is sticky: once
+ * tripped, later chunks are dropped rather than interleaving a partial tail
+ * with a later, smaller one.
  */
 class RunBuffer {
   stdout = '';
   stderr = '';
   truncated = false;
-  private bytes = 0;
+  private units = 0;
 
   constructor(private readonly onChunk?: (chunk: SidecarChunk) => void) {}
 
   push(stream: 'stdout' | 'stderr', text: string): void {
     if (this.truncated || text.length === 0) return;
-    this.bytes += text.length;
-    if (this.bytes > MAX_RUN_BYTES) {
+    this.units += text.length;
+    if (this.units > MAX_RUN_UNITS) {
       this.truncated = true;
       return;
     }
