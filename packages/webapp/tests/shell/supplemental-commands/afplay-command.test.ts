@@ -111,6 +111,17 @@ describe('afplay command', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toBe('afplay: only one file can be specified\n');
   });
+
+  it('treats prototype property names as file paths, not flags', async () => {
+    vi.stubGlobal('window', {});
+    vi.stubGlobal('AudioContext', undefined);
+
+    const cmd = createAfplayCommand();
+    const result = await cmd.execute(['toString'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('Web Audio API unavailable');
+  });
 });
 
 describe('chime command', () => {

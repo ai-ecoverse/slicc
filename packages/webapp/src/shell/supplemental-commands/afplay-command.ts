@@ -18,6 +18,80 @@ function afplayHelp(): CommandResult {
   };
 }
 
+function fail(message: string): CommandResult {
+  return { stdout: '', stderr: `afplay: ${message}\n`, exitCode: 1 };
+}
+
+function errText(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+interface AfplayArgs {
+  volume: number;
+  rate: number;
+  filePath: string | null;
+}
+
+/** Value-taking flags → the "requires …" wording for a missing value. */
+const VALUE_FLAG_HINTS: Record<string, string> = {
+  '-v': 'a volume value',
+  '-r': 'a rate value',
+};
+
+function parseVolume(value: string): string | null {
+  const volume = Number.parseFloat(value);
+  if (Number.isNaN(volume) || volume < 0 || volume > 1) {
+    return 'volume must be between 0 and 1';
+  }
+  return null;
+}
+
+function parseRate(value: string): string | null {
+  const rate = Number.parseFloat(value);
+  if (Number.isNaN(rate) || rate < 0.25 || rate > 4) {
+    return 'rate must be between 0.25 and 4';
+  }
+  return null;
+}
+
+/** Apply one value flag onto the parse state; returns an error message or null. */
+function applyValueFlag(parsed: AfplayArgs, flag: string, value: string): string | null {
+  switch (flag) {
+    case '-v': {
+      const error = parseVolume(value);
+      if (error) return error;
+      parsed.volume = Number.parseFloat(value);
+      return null;
+    }
+    case '-r': {
+      const error = parseRate(value);
+      if (error) return error;
+      parsed.rate = Number.parseFloat(value);
+      return null;
+    }
+    default:
+      return `unknown option: ${flag}`;
+  }
+}
+
+function parseAfplayArgs(args: string[]): AfplayArgs | CommandResult {
+  const parsed: AfplayArgs = { volume: 1, rate: 1, filePath: null };
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (Object.hasOwn(VALUE_FLAG_HINTS, arg)) {
+      const value = i + 1 < args.length && !args[i + 1].startsWith('-') ? args[++i] : null;
+      if (value == null) return fail(`${arg} requires ${VALUE_FLAG_HINTS[arg]}`);
+      const error = applyValueFlag(parsed, arg, value);
+      if (error) return fail(error);
+      continue;
+    }
+    if (arg.startsWith('-')) return fail(`unknown option: ${arg}`);
+    if (parsed.filePath !== null) return fail('only one file can be specified');
+    parsed.filePath = arg;
+  }
+  return parsed;
+}
+
 let audioContext: AudioContext | null = null;
 
 function getAudioContext(): AudioContext {
@@ -27,78 +101,69 @@ function getAudioContext(): AudioContext {
   return audioContext;
 }
 
-async function playAudioFile(
+function copyToArrayBuffer(bytes: Uint8Array): ArrayBuffer {
+  const arrayBuffer = new ArrayBuffer(bytes.byteLength);
+  new Uint8Array(arrayBuffer).set(bytes);
+  return arrayBuffer;
+}
+
+async function readAudioBytes(
   filePath: string,
-  volume: number,
-  rate: number,
   ctx: CommandContext
-): Promise<CommandResult> {
-  const local = hasLocalDom() && typeof AudioContext !== 'undefined';
-  const panelRpc = getPanelRpcClient();
-  if (!local && !panelRpc) {
-    return {
-      stdout: '',
-      stderr: 'afplay: Web Audio API unavailable in this environment\n',
-      exitCode: 1,
-    };
-  }
-
+): Promise<{ bytes: Uint8Array; fullPath: string } | CommandResult> {
   const fullPath = ctx.fs.resolvePath(ctx.cwd, filePath);
-
-  let bytes: Uint8Array;
   try {
-    bytes = new Uint8Array(await ctx.fs.readFileBuffer(fullPath));
+    return { bytes: new Uint8Array(await ctx.fs.readFileBuffer(fullPath)), fullPath };
   } catch {
-    return {
-      stdout: '',
-      stderr: `afplay: cannot open ${filePath}: No such file\n`,
-      exitCode: 1,
-    };
+    return fail(`cannot open ${filePath}: No such file`);
   }
+}
 
+function validateAudioMime(fullPath: string, filePath: string): CommandResult | null {
   const mimeType = detectMimeType(fullPath);
   if (!mimeType.startsWith('audio/')) {
-    return {
-      stdout: '',
-      stderr: `afplay: ${filePath} is not an audio file\n`,
-      exitCode: 1,
-    };
+    return fail(`${filePath} is not an audio file`);
   }
+  return null;
+}
 
-  if (!local) {
-    // Worker context: send the bytes to the page via panel-RPC.
-    // `rate` is dropped on this path (the bridge plays at native rate)
-    // — almost no callers use `-r` and supporting it would mean
-    // building the BufferSource graph on the page side too.
-    try {
-      const buf = new ArrayBuffer(bytes.byteLength);
-      new Uint8Array(buf).set(bytes);
-      await panelRpc!.call(
-        'play-audio',
-        { bytes: buf, mimeType, volume },
-        { timeoutMs: 5 * 60_000 }
-      );
-      return { stdout: '', stderr: '', exitCode: 0 };
-    } catch (err) {
-      return {
-        stdout: '',
-        stderr: `afplay: failed to play ${filePath}: ${err instanceof Error ? err.message : String(err)}\n`,
-        exitCode: 1,
-      };
-    }
+async function playViaPanelRpc(
+  bytes: Uint8Array,
+  fullPath: string,
+  filePath: string,
+  volume: number,
+  panelRpc: NonNullable<ReturnType<typeof getPanelRpcClient>>
+): Promise<CommandResult> {
+  // Worker context: send the bytes to the page via panel-RPC.
+  // `rate` is dropped on this path (the bridge plays at native rate)
+  // — almost no callers use `-r` and supporting it would mean
+  // building the BufferSource graph on the page side too.
+  try {
+    const mimeType = detectMimeType(fullPath);
+    await panelRpc.call(
+      'play-audio',
+      { bytes: copyToArrayBuffer(bytes), mimeType, volume },
+      { timeoutMs: 5 * 60_000 }
+    );
+    return { stdout: '', stderr: '', exitCode: 0 };
+  } catch (err) {
+    return fail(`failed to play ${filePath}: ${errText(err)}`);
   }
+}
 
+async function playViaWebAudio(
+  bytes: Uint8Array,
+  filePath: string,
+  volume: number,
+  rate: number
+): Promise<CommandResult> {
   try {
     const audioCtx = getAudioContext();
-
     if (audioCtx.state === 'suspended') {
       await audioCtx.resume();
     }
 
-    // Copy to a new ArrayBuffer to avoid SharedArrayBuffer type issues
-    const arrayBuffer = new ArrayBuffer(bytes.byteLength);
-    new Uint8Array(arrayBuffer).set(bytes);
-    const audioBuffer = await audioCtx.decodeAudioData(arrayBuffer);
+    const audioBuffer = await audioCtx.decodeAudioData(copyToArrayBuffer(bytes));
     const source = audioCtx.createBufferSource();
     source.buffer = audioBuffer;
     source.playbackRate.value = rate;
@@ -116,12 +181,33 @@ async function playAudioFile(
       source.start();
     });
   } catch (err) {
-    return {
-      stdout: '',
-      stderr: `afplay: failed to play ${filePath}: ${err instanceof Error ? err.message : String(err)}\n`,
-      exitCode: 1,
-    };
+    return fail(`failed to play ${filePath}: ${errText(err)}`);
   }
+}
+
+async function playAudioFile(
+  filePath: string,
+  volume: number,
+  rate: number,
+  ctx: CommandContext
+): Promise<CommandResult> {
+  const local = hasLocalDom() && typeof AudioContext !== 'undefined';
+  const panelRpc = getPanelRpcClient();
+  if (!local && !panelRpc) {
+    return fail('Web Audio API unavailable in this environment');
+  }
+
+  const read = await readAudioBytes(filePath, ctx);
+  if ('exitCode' in read) return read;
+
+  const mimeError = validateAudioMime(read.fullPath, filePath);
+  if (mimeError) return mimeError;
+
+  if (!local) {
+    return playViaPanelRpc(read.bytes, read.fullPath, filePath, volume, panelRpc!);
+  }
+
+  return playViaWebAudio(read.bytes, filePath, volume, rate);
 }
 
 export function createAfplayCommand(): Command {
@@ -130,43 +216,11 @@ export function createAfplayCommand(): Command {
       return afplayHelp();
     }
 
-    let volume = 1;
-    let rate = 1;
-    let filePath: string | null = null;
+    const parsed = parseAfplayArgs(args);
+    if ('exitCode' in parsed) return parsed;
+    if (!parsed.filePath) return afplayHelp();
 
-    for (let i = 0; i < args.length; i++) {
-      const arg = args[i];
-      if (arg === '-v') {
-        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
-          return { stdout: '', stderr: 'afplay: -v requires a volume value\n', exitCode: 1 };
-        }
-        volume = parseFloat(args[++i]);
-        if (isNaN(volume) || volume < 0 || volume > 1) {
-          return { stdout: '', stderr: 'afplay: volume must be between 0 and 1\n', exitCode: 1 };
-        }
-      } else if (arg === '-r') {
-        if (i + 1 >= args.length || args[i + 1].startsWith('-')) {
-          return { stdout: '', stderr: 'afplay: -r requires a rate value\n', exitCode: 1 };
-        }
-        rate = parseFloat(args[++i]);
-        if (isNaN(rate) || rate < 0.25 || rate > 4) {
-          return { stdout: '', stderr: 'afplay: rate must be between 0.25 and 4\n', exitCode: 1 };
-        }
-      } else if (arg.startsWith('-')) {
-        return { stdout: '', stderr: `afplay: unknown option: ${arg}\n`, exitCode: 1 };
-      } else {
-        if (filePath !== null) {
-          return { stdout: '', stderr: 'afplay: only one file can be specified\n', exitCode: 1 };
-        }
-        filePath = arg;
-      }
-    }
-
-    if (!filePath) {
-      return afplayHelp();
-    }
-
-    return playAudioFile(filePath, volume, rate, ctx);
+    return playAudioFile(parsed.filePath, parsed.volume, parsed.rate, ctx);
   });
 }
 
