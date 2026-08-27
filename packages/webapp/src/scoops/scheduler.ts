@@ -39,10 +39,10 @@ export class TaskScheduler {
     // `setInterval` (no `window.` prefix) so this works in both page
     // and DedicatedWorker contexts. The standalone runtime runs the
     // scheduler in a worker; `window` is undefined there.
-    this.pollInterval = setInterval(() => this.checkTasks(), 60000);
+    this.pollInterval = setInterval(() => this.pollTasks(), 60000);
 
     // Also check immediately
-    this.checkTasks();
+    this.pollTasks();
 
     log.info('Scheduler started');
   }
@@ -140,6 +140,15 @@ export class TaskScheduler {
   /** Get all tasks */
   async getAllTasks(): Promise<ScheduledTask[]> {
     return db.getAllTasks();
+  }
+
+  /** Fire-and-forget poll wrapper — scheduler tick must not block the interval. */
+  private pollTasks(): void {
+    this.checkTasks().catch((err) => {
+      log.error('Task poll failed', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    });
   }
 
   /** Check and run due tasks */
