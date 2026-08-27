@@ -17,6 +17,10 @@ import type { KnownSecretBatchRedactor } from './redact.js';
 
 type RedactExportResponse = { texts: string[]; redactionCount: number };
 
+function responseHasError(resp: object): boolean {
+  return 'error' in resp;
+}
+
 function fail(): never {
   throw new TranscriptExportError('redaction-unavailable');
 }
@@ -78,11 +82,7 @@ function extensionMessageRedactor(): KnownSecretBatchRedactor {
       } catch {
         fail();
       }
-      if (
-        typeof resp === 'object' &&
-        resp !== null &&
-        'error' in (resp as Record<string, unknown>)
-      ) {
+      if (typeof resp === 'object' && resp !== null && responseHasError(resp)) {
         fail();
       }
       return validateResponse(resp, texts.length);
@@ -100,7 +100,7 @@ function extensionBridgeRedactor(): KnownSecretBatchRedactor {
         fail();
       }
       if (resp === undefined || resp === null) fail();
-      if (typeof resp === 'object' && 'error' in (resp as Record<string, unknown>)) {
+      if (typeof resp === 'object' && resp !== null && responseHasError(resp)) {
         fail();
       }
       return validateResponse(resp, texts.length);
