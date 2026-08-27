@@ -50,6 +50,88 @@ function joinPath(parent: string, name: string): string {
   return parent === '/' ? `/${name}` : `${parent}/${name}`;
 }
 
+/** `stat` then true; any error (ENOENT or otherwise) → false. */
+async function pathExists(reader: LocalVfsClient, path: string): Promise<boolean> {
+  try {
+    await reader.stat(path);
+    return true;
+  } catch (err) {
+    if (err instanceof FsError && err.code === 'ENOENT') return false;
+    return false;
+  }
+}
+
+/** `readDir` that returns null on any rejection (walk skips that dir). */
+async function safeReadDir(reader: LocalVfsClient, dir: string): Promise<DirEntry[] | null> {
+  try {
+    return await reader.readDir(dir);
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Follow a symlink during walk: yield the path if it resolves to a
+ * file, enqueue if directory, skip if dangling.
+ */
+async function* walkSymlink(
+  reader: LocalVfsClient,
+  child: string,
+  stack: string[]
+): AsyncGenerator<string> {
+  try {
+    const s = await reader.stat(child);
+    if (s.type === 'file') {
+      yield child;
+      return;
+    }
+    if (s.type === 'directory') stack.push(child);
+  } catch {
+    /* dangling symlink — skip, matches VirtualFS.walk */
+  }
+}
+
+/** Yield or enqueue a single `DirEntry` during an iterative walk. */
+async function* walkEntry(
+  reader: LocalVfsClient,
+  entry: DirEntry,
+  child: string,
+  stack: string[]
+): AsyncGenerator<string> {
+  if (entry.type === 'file') {
+    yield child;
+    return;
+  }
+  if (entry.type === 'directory') {
+    stack.push(child);
+    return;
+  }
+  if (entry.type === 'symlink') {
+    yield* walkSymlink(reader, child, stack);
+  }
+}
+
+/**
+ * Iterative `walk` over a remote reader — same yield semantics as
+ * `VirtualFS.walk` (files + file-symlinks; directories / dir-symlinks
+ * recursed; broken symlinks and unreadable dirs skipped).
+ */
+async function* walkRemote(reader: LocalVfsClient, path: string): AsyncGenerator<string> {
+  const stack: string[] = [path];
+  const visited = new Set<string>();
+  while (stack.length > 0) {
+    const dir = stack.pop();
+    if (dir === undefined) break;
+    if (visited.has(dir)) continue;
+    visited.add(dir);
+    const entries = await safeReadDir(reader, dir);
+    if (!entries) continue;
+    for (const entry of entries) {
+      yield* walkEntry(reader, entry, joinPath(dir, entry.name), stack);
+    }
+  }
+}
+
 export function createRemoteSprinkleVfs(opts: RemoteSprinkleVfsOptions): VirtualFS {
   const { reader, writer } = opts;
 
@@ -67,46 +149,8 @@ export function createRemoteSprinkleVfs(opts: RemoteSprinkleVfsOptions): Virtual
     rm: (path: string, options?: Parameters<WritableVfsBackend['rm']>[1]) =>
       writer.rm(path, options),
     flush: () => writer.flush(),
-    exists: async (path: string): Promise<boolean> => {
-      try {
-        await reader.stat(path);
-        return true;
-      } catch (err) {
-        if (err instanceof FsError && err.code === 'ENOENT') return false;
-        return false;
-      }
-    },
-    walk: async function* (path: string): AsyncGenerator<string> {
-      const stack: string[] = [path];
-      const visited = new Set<string>();
-      while (stack.length > 0) {
-        const dir = stack.pop() as string;
-        if (visited.has(dir)) continue;
-        visited.add(dir);
-        let entries: DirEntry[];
-        try {
-          entries = await reader.readDir(dir);
-        } catch {
-          continue;
-        }
-        for (const entry of entries) {
-          const child = joinPath(dir, entry.name);
-          if (entry.type === 'file') {
-            yield child;
-          } else if (entry.type === 'directory') {
-            stack.push(child);
-          } else if (entry.type === 'symlink') {
-            try {
-              const s = await reader.stat(child);
-              if (s.type === 'file') yield child;
-              else if (s.type === 'directory') stack.push(child);
-            } catch {
-              /* dangling symlink — skip, matches VirtualFS.walk */
-            }
-          }
-        }
-      }
-    },
+    exists: (path: string) => pathExists(reader, path),
+    walk: (path: string) => walkRemote(reader, path),
   };
 
   return adapter as unknown as VirtualFS;
