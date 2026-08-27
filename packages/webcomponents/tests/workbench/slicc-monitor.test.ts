@@ -183,6 +183,67 @@ describe('slicc-monitor — vitals', () => {
     expect(fills[2].style.width).toBe('0%');
   });
 
+  it("draws one dot per marker, in the marker's own color", () => {
+    const el = mount({
+      vitals: [
+        {
+          id: 'context',
+          label: 'Context fill',
+          value: '70',
+          ratio: 0.7,
+          markers: [
+            { id: 'cone', ratio: 0.7, color: '#b07823', label: 'sliccy (cone) — 70% full' },
+            { id: 'review', ratio: 0.2, color: '#3b82f6', label: 'review — 20% full' },
+          ],
+        },
+      ],
+    });
+    const marks = el.querySelectorAll<HTMLElement>('.monitor-meter__mark');
+    expect(marks).toHaveLength(2);
+    // Lowest first, so the peak dot paints ON TOP of a crowded neighbour —
+    // it is the reading the tile's own figure is already reporting.
+    expect([...marks].map((m) => m.dataset.mark)).toEqual(['review', 'cone']);
+    expect(marks[0].style.left).toBe('20%');
+    expect(marks[1].style.left).toBe('70%');
+    expect(getComputedStyle(marks[1]).backgroundColor).toBe('rgb(176, 120, 35)');
+    expect(marks[1].title).toBe('sliccy (cone) — 70% full');
+  });
+
+  it('clamps a marker to the track and keeps the end dots over the bar', () => {
+    const el = mount({
+      vitals: [
+        {
+          id: 'context',
+          label: 'Context fill',
+          value: '100',
+          ratio: 1,
+          markers: [
+            { id: 'over', ratio: 2, color: '#ef4444' },
+            { id: 'under', ratio: -0.5, color: '#06b6d4' },
+          ],
+        },
+      ],
+    });
+    const marks = el.querySelectorAll<HTMLElement>('.monitor-meter__mark');
+    expect(marks[0].style.left).toBe('0%');
+    expect(marks[1].style.left).toBe('100%');
+    // The rail is inset by a radius at each end, so neither dot hangs off the
+    // track it is supposed to be marking.
+    const track = el.querySelector('.monitor-meter__track') as HTMLElement;
+    const bar = track.getBoundingClientRect();
+    for (const mark of marks) {
+      const box = mark.getBoundingClientRect();
+      expect(box.left).toBeGreaterThanOrEqual(bar.left - 0.5);
+      expect(box.right).toBeLessThanOrEqual(bar.right + 0.5);
+    }
+  });
+
+  it('draws no marker rail when a meter has no markers to place', () => {
+    const el = mount({ vitals: [{ id: 'a', label: 'A', value: '61', ratio: 0.61, markers: [] }] });
+    expect(el.querySelector('.monitor-meter')).not.toBeNull();
+    expect(el.querySelector('.monitor-meter__marks')).toBeNull();
+  });
+
   it('prefers the sparkline when a vital carries both a series and a ratio', () => {
     const el = mount({
       vitals: [{ id: 'a', label: 'A', value: '1', series: evenSeries([1, 2]), ratio: 0.5 }],

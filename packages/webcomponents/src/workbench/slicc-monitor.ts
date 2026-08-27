@@ -73,6 +73,31 @@ export interface MonitorSeries {
 }
 
 /**
+ * One contributor's own reading on a meter that reports an aggregate.
+ *
+ * A meter's bar is a single number. When that number is the peak of many —
+ * "70%, fullest of 5 context windows" — the bar answers "how close to the
+ * limit is the worst one" and hides everything behind it: five windows all
+ * at 70% and four near-empty ones draw the identical tile. Each marker is
+ * one contributor's own ratio at its own position, in its own color, so the
+ * distribution is readable off the same bar.
+ */
+export interface MonitorMeterMarker {
+  /** Stable identity — the unit's JID, not its index. */
+  id: string;
+  /** 0..1 position along the track. Clamped like {@link MonitorVital.ratio}. */
+  ratio: number;
+  /**
+   * The contributor's hue as a resolved CSS color. Callers own the mapping:
+   * this library has no idea which scoop is which color, and a token name
+   * would tie a generic meter to one host's accent vocabulary.
+   */
+  color: string;
+  /** Hover text — the contributor's name and its reading. */
+  label?: string;
+}
+
+/**
  * A vitals tile: a rate, a ratio, or a headline figure.
  *
  * `series` (a sparkline) and `ratio` (a meter) are mutually exclusive —
@@ -94,6 +119,11 @@ export interface MonitorVital {
   series?: MonitorSeries;
   /** 0..1 fill for a meter. Use for a share of a limit, never for a rate. */
   ratio?: number;
+  /**
+   * Per-contributor dots along the meter track. Only rendered alongside
+   * `ratio` — a marker rail with no bar under it has nothing to mark.
+   */
+  markers?: MonitorMeterMarker[];
   accent?: MonitorAccent;
 }
 
@@ -314,7 +344,12 @@ slicc-monitor {
 }
 .monitor-meter {
   display: block;
+  position: relative;
   height: 10px;
+}
+.monitor-meter__track {
+  display: block;
+  height: 100%;
   border-radius: 5px;
   background: color-mix(in srgb, var(--monitor-hue) 16%, var(--canvas));
   overflow: hidden;
@@ -324,6 +359,27 @@ slicc-monitor {
   height: 100%;
   border-radius: 5px;
   background: var(--monitor-hue);
+}
+/* The dot rail is inset by one radius at each end so a 0% and a 100% marker
+   sit fully over the track instead of hanging off it. */
+.monitor-meter__marks {
+  position: absolute;
+  inset: 0 7px;
+  pointer-events: none;
+}
+.monitor-meter__mark {
+  position: absolute;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  margin-block-start: -7px;
+  margin-inline-start: -7px;
+  border-radius: 50%;
+  background: var(--mark-color);
+  /* A surface ring keeps a dot legible over the filled part of the bar and
+     keeps two crowded dots from reading as one blob. */
+  box-shadow: 0 0 0 2px var(--canvas);
+  pointer-events: auto;
 }
 
 /* blocks */
@@ -960,18 +1016,50 @@ function createVitalPlot(vital: MonitorVital, observers: ResizeObserver[]): HTML
     );
   }
   if (typeof vital.ratio === 'number') {
-    const pct = Math.max(0, Math.min(1, vital.ratio)) * 100;
     return h(
       'div',
       { class: 'monitor-tile__plot' },
       h(
         'span',
         { class: 'monitor-meter', style: `--monitor-hue:${hue}` },
-        h('span', { class: 'monitor-meter__fill', style: `width:${pct.toFixed(1)}%` })
+        h('span', { class: 'monitor-meter__track' }, meterFill(vital.ratio)),
+        createMeterMarks(vital.markers)
       )
     );
   }
   return null;
+}
+
+function meterPercent(ratio: number): string {
+  return `${(Math.max(0, Math.min(1, ratio)) * 100).toFixed(1)}%`;
+}
+
+function meterFill(ratio: number): HTMLElement {
+  return h('span', { class: 'monitor-meter__fill', style: `width:${meterPercent(ratio)}` });
+}
+
+/**
+ * The per-contributor dot rail over a meter's track.
+ *
+ * Drawn lowest-first so that when the high end is crowded the fullest
+ * marker paints on top — that is the one the tile's own figure is already
+ * reporting, so it must not end up buried under a quieter neighbour.
+ */
+function createMeterMarks(markers: MonitorMeterMarker[] | undefined): HTMLElement | null {
+  if (!markers || markers.length === 0) return null;
+  const ordered = [...markers].sort((a, b) => a.ratio - b.ratio);
+  return h(
+    'span',
+    { class: 'monitor-meter__marks' },
+    ...ordered.map((marker) =>
+      h('span', {
+        class: 'monitor-meter__mark',
+        'data-mark': marker.id,
+        style: `left:${meterPercent(marker.ratio)};--mark-color:${marker.color}`,
+        title: marker.label ?? null,
+      })
+    )
+  );
 }
 
 function createVitalTile(vital: MonitorVital, observers: ResizeObserver[]): HTMLElement {
@@ -1346,7 +1434,11 @@ let monitorInstance = 0;
  *     honest answer to "how hard is this thing working". That axis is a
  *     FIXED window anchored at the newest sample and drawn at the tile's real
  *     width (`MonitorSeries`), so two glances a minute apart are comparable
- *     and "now" is always flush against the right edge.
+ *     and "now" is always flush against the right edge. A meter whose ratio
+ *     summarises many contributors also carries their individual readings
+ *     (`MonitorMeterMarker`) as color-coded dots along the same track — the
+ *     aggregate says how close the worst one is to the limit, the dots say
+ *     whether that is one straggler or everybody.
  *  2. **Attention** — what is degraded, newest first. A count of problems is
  *     a dead end; this is the list it should have expanded into. Healthy
  *     state is a single "All clear" line.
