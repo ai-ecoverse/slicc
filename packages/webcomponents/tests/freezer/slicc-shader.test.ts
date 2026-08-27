@@ -695,6 +695,12 @@ describe('slicc-shader', () => {
         interval: 50,
       });
       expect(errSpy).toHaveBeenCalledWith(expect.stringContaining('not restored'));
+      // Poisoned canvas was swapped out so a late UA restore cannot leave a live
+      // GPU context on a CSS-hidden element (#gl already nulled).
+      const after = el.shadowRoot?.querySelector('canvas') as HTMLCanvasElement;
+      expect(after).not.toBe(canvas);
+      expect(after.isConnected).toBe(true);
+      expect(canvas.isConnected).toBe(false);
     });
 
     it('reduced motion renders one frame per wake and stops', async () => {

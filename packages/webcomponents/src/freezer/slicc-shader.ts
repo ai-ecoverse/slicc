@@ -885,12 +885,23 @@ export class SliccShader extends HTMLElement {
   /**
    * Permanent degrade: reflect `no-webgl`, dispose GL, leave the CSS gradient.
    * Shared by failed-restore and never-restored watchdog paths.
+   *
+   * Swap out the canvas *before* disposing so a late UA `webglcontextrestored`
+   * (after we remove listeners and null `#gl`) cannot leave a live GPU context
+   * on a DOM-retained, CSS-hidden canvas this component can neither use nor
+   * release. Detaching the poisoned element cancels that pending restore.
    */
   #degradeToCssFallback(reason: string): void {
     this.#clearRestoreTimeout();
     this.#contextLost = false;
     console.error(`[slicc-shader] ${reason}`);
     this.setAttribute('no-webgl', '');
+    const poisoned = this.#canvas;
+    if (poisoned) {
+      // #replaceCanvas removes handlers and installs a fresh element; we never
+      // acquire GL on the placeholder — #dispose below only frees #gl.
+      this.#replaceCanvas(poisoned);
+    }
     this.#dispose();
   }
 
