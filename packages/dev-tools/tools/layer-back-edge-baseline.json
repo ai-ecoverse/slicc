@@ -12,7 +12,6 @@
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/interaction.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/network-requests.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/routing.ts": 2,
-  "packages/webapp/src/shell/supplemental-commands/playwright/handlers/teleport.ts": 2,
   "packages/webapp/src/shell/supplemental-commands/playwright/snapshot.ts": 3,
   "packages/webapp/src/shell/supplemental-commands/playwright/state.ts": 4,
   "packages/webapp/src/shell/supplemental-commands/playwright/teleport-storage.ts": 2,

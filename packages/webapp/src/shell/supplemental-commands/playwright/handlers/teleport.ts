@@ -3,8 +3,8 @@
  * state machine itself lives in `../teleport.ts`.
  */
 
-import { createLogger } from '../../../../core/logger.js';
-import { CHERRY_RUNTIME_TAG } from '../../../../scoops/tray-sync-protocol.js';
+import { CHERRY_RUNTIME_TAG } from '@slicc/shared-ts';
+import { createLogger } from '../../../../base/logger.js';
 import { requireTab } from '../state.js';
 import {
   armTeleportWatcher,
