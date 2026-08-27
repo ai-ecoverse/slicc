@@ -1,0 +1,1111 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>iOS vs Web icon inventory</title>
+<script src="https://unpkg.com/lucide@0.469.0/dist/umd/lucide.min.js"></script>
+<style>
+  :root {
+    --bg: #f6f4ef;
+    --ink: #1a1814;
+    --muted: #6b6458;
+    --card: #fffdf8;
+    --line: #e4ddd0;
+    --ok: #2f6b3a;
+    --ok-bg: #e5f3e8;
+    --drift: #8a5a12;
+    --drift-bg: #f8edd6;
+    --weird: #9b1c1c;
+    --weird-bg: #f8e0e0;
+    --stale: #5a4a8a;
+    --stale-bg: #ece6f8;
+    --ios-only: #355a7a;
+    --ios-only-bg: #e2eef6;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; font-family: "Iowan Old Style", "Palatino Linotype", Palatino, Georgia, serif;
+    background:
+      radial-gradient(1200px 600px at 10% -10%, #ffe8c8 0%, transparent 55%),
+      radial-gradient(900px 500px at 100% 0%, #d9ecff 0%, transparent 50%),
+      var(--bg);
+    color: var(--ink); line-height: 1.45; padding: 28px 20px 80px;
+  }
+  header {
+    max-width: 980px; margin: 0 auto 28px;
+  }
+  h1 {
+    font-size: 2rem; font-weight: 700; letter-spacing: -0.02em; margin: 0 0 8px;
+  }
+  .lede { color: var(--muted); max-width: 62ch; font-size: 1.05rem; }
+  .stats {
+    display: flex; flex-wrap: wrap; gap: 8px; margin-top: 16px;
+  }
+  .pill {
+    display: inline-block; font-family: ui-sans-serif, system-ui, sans-serif;
+    font-size: 11px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase;
+    padding: 3px 8px; border-radius: 999px;
+  }
+  .pill.ok { background: var(--ok-bg); color: var(--ok); }
+  .pill.drift { background: var(--drift-bg); color: var(--drift); }
+  .pill.weird { background: var(--weird-bg); color: var(--weird); }
+  .pill.stale { background: var(--stale-bg); color: var(--stale); }
+  .pill.ios-only { background: var(--ios-only-bg); color: var(--ios-only); }
+  section {
+    max-width: 980px; margin: 0 auto 28px; background: var(--card);
+    border: 1px solid var(--line); border-radius: 14px; padding: 18px 18px 8px;
+    box-shadow: 0 1px 0 rgba(26,24,20,0.04);
+  }
+  h2 { margin: 0 0 4px; font-size: 1.25rem; }
+  .sub { margin: 0 0 14px; color: var(--muted); font-size: 0.95rem; }
+  table { width: 100%; border-collapse: collapse; font-family: ui-sans-serif, system-ui, sans-serif; font-size: 13px; }
+  th { text-align: left; font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+       color: var(--muted); padding: 8px 10px; border-bottom: 1px solid var(--line); }
+  td { padding: 12px 10px; border-bottom: 1px solid var(--line); vertical-align: middle; }
+  tr:last-child td { border-bottom: none; }
+  tr.weird { background: color-mix(in srgb, var(--weird-bg) 55%, transparent); }
+  tr.drift { background: color-mix(in srgb, var(--drift-bg) 40%, transparent); }
+  tr.stale { background: color-mix(in srgb, var(--stale-bg) 45%, transparent); }
+  .label code { font-size: 13px; }
+  .note { color: var(--muted); font-size: 12px; margin-top: 4px; max-width: 36ch; }
+  .icon-cell { width: 140px; }
+  .glyph {
+    width: 52px; height: 52px; display: grid; place-items: center;
+    background: #fff; border: 1px solid var(--line); border-radius: 12px;
+  }
+  .glyph svg, .glyph img.sf { width: 28px; height: 28px; }
+  .glyph svg { stroke: var(--ink); }
+  .meta { margin-top: 6px; font-size: 11px; color: var(--muted); word-break: break-all; max-width: 130px; }
+  .sev { width: 88px; }
+  .callout {
+    max-width: 980px; margin: 0 auto 24px; padding: 16px 18px;
+    background: var(--weird-bg); border: 1px solid color-mix(in srgb, var(--weird) 25%, white);
+    border-radius: 14px; font-family: ui-sans-serif, system-ui, sans-serif;
+  }
+  .callout h2 { margin: 0 0 8px; font-size: 1rem; color: var(--weird); font-family: Georgia, serif; }
+  .callout ul { margin: 0; padding-left: 1.2rem; }
+  .callout li { margin: 4px 0; }
+  footer { max-width: 980px; margin: 24px auto 0; color: var(--muted); font-size: 12px;
+            font-family: ui-sans-serif, system-ui, sans-serif; }
+  .filters { max-width: 980px; margin: 0 auto 16px; display:flex; gap:8px; flex-wrap:wrap;
+              font-family: ui-sans-serif, system-ui, sans-serif; }
+  .filters button {
+    border: 1px solid var(--line); background: var(--card); padding: 6px 12px;
+    border-radius: 999px; cursor: pointer; font-size: 12px; font-weight: 600;
+  }
+  .filters button.active { background: var(--ink); color: #fff; border-color: var(--ink); }
+  body.hide-ok tr.ok { display: none; }
+</style>
+</head>
+<body>
+<header>
+  <h1>iOS vs web icon inventory</h1>
+  <p class="lede">
+    Side-by-side of every intentional icon mapping in the iOS follower
+    (<code>SliccIcons.swift</code>, <code>DockModel</code>, <code>LucideIcon</code>)
+    against the web equivalents (<code>TOOL_ICONS</code> / <code>BASH_ICONS</code> in
+    <code>wc-message-view.ts</code>, lick <code>KIND_ICON</code>, dock rail).
+    SF Symbols are rendered from the local macOS symbol set; Lucide icons hydrate from CDN.
+  </p>
+  <div class="stats">
+    <span class="pill weird">13 weird</span>
+    <span class="pill drift">16 drift</span>
+    <span class="pill stale">stale iOS leftovers</span>
+    <span class="pill ok">matched</span>
+  </div>
+</header>
+
+<div class="callout">
+  <h2>The weird ones (why this feels off)</h2>
+  <ul>
+    <li><strong>Tea cup for ice cream</strong> — <code>scoop_scoop</code>, <code>scoop-notify</code>, and the unused cone <code>messageSource</code> map to <code>cup.and.saucer.fill</code> because SF Symbols has no cone. The dock/monitor already use the ported Lucide cone/bowl.</li>
+    <li><strong>Mute = speaker, not bell</strong> — web mutes scoop <em>notifications</em> (<code>bell-off</code>); iOS shows an audio speaker slash.</li>
+    <li><strong>list_scoops</strong> — web shows an ice-cream cone; iOS shows a bullet list.</li>
+    <li><strong>Lick channel drift</strong> — <code>fswatch</code>, <code>scoop-idle</code>, <code>scoop-wait</code> pick different metaphors than the web lick card.</li>
+  </ul>
+</div>
+
+<div class="filters">
+  <button type="button" class="active" data-filter="all">Show all</button>
+  <button type="button" data-filter="problems">Problems only</button>
+</div>
+
+
+    <section>
+      <h2>Dock rail</h2>
+      <p class="sub">Pinned tools at the bottom of the rail (slicc-dock.ts vs DockModel.toolItems).</p>
+      <table>
+        <thead><tr><th>Use</th><th>Web (Lucide)</th><th>iOS (SF Symbol / port)</th><th></th></tr></thead>
+        <tbody>
+    <tr class="ok">
+      <td class="label"><code>browser</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="globe" width="40" height="40"></i></div>
+        <div class="meta">globe</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="globe" title="globe"></div>
+        <div class="meta">globe</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>files</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="folder" width="40" height="40"></i></div>
+        <div class="meta">folder</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAADOklEQVR4Ae2ayWsUQRTGo8ZdcV+QGBXB5SAoxoNBFFFyVQ/izZsn/wC95RwRQfHkQdGTiHrTmxDUYwRRXMANQ1ARF3A3avT3TapgmKluJ5WZpHv6ffCbmt7f++pN9cxUt7SYzAFzwBwwB8wBc8AcMAfMgUI6MGEEWbey7zzHlMBxf1n3Hd7Bp8D23K5qI/Kj8Bh+gxJN4xvbb8IBmAm51gaivwR/IC3p0LbPHHMS2iGXmkPUPTAIoQRrWaeKuQqbIJPS5zpJHWzYCpPdDqqCe3ADBkDLXhN5Mxs2wzZYBNIk2Adr4QJcg1cgY+opxfIT6nreQ5xQiaqnh+AcrIQ0aVDthOugoGqpknrt84vrvYDz0AXTYFQ6wtEa0BTgczgItWo1O56BH1CvBEdyHt2FjsMySJVKNEm72SDUq09AvfoUatFHdroNH2A9aDwZS03lYhrAdVvuA1VHUK3BtcMrlbiQVM7ln/nSyv+8yIQTcBE0lsiIuZB2TTZHSedcDhq3fK9rTNoFt6AXgmpEMJUX0qB3pXJlg5Y3ct5u2OvOv45Wxve65apGo3cz6S7J6Lb7zCW1mHYpJOY5mgrQxyPxxC6ARjflA6O/Vj9vhAZixTjd8ZW2SjEJ6B6vMnsNGlx07x1P9NujB9pA0veBwdK74Rd1cuJgH2NAJyfcA0vAD5K8HRfp+vNBX7a2x0QQY8AsLiSypOiYYsYAfR0+BXI+K/pCIH0xwcQYcJ8LiaZQzEegKRL3SZgB3omitlYBRe15n7dVgHeiqK1VQFF73udtFeCdKGprFVDUnvd5WwV4J4raWgUUted93lYB3olAq7+6/XSY5tpEHlQZq//LPhh7WgVoZlhI7Y7SQsZfVhCfkDRxohw0Sx1UmgFvOEKTH9JC2A87tZBhbSE2PZu0ysX4llZ5DLnlqibtX+GH7P0I1rijdtBqkvMBvITEKWe2jbU086PZYU2JLyi7uB7sElHSSQ+DHFQp5Q3NFXTDDEhU4pwZRyhhPRihQUTOZm02iJASpQcjzsJpeJ+4V40bZFIHHIM7oKc+ZErWKkKTov1wGTR3mftnFMnBZA6YA+aAOWAOmAPmgDlgDjTKgX/Ju0OW6ET4JgAAAABJRU5ErkJggg==" width="40" height="40" alt="folder" title="folder"></div>
+        <div class="meta">folder</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>term</code><div class="note">Web uses square-terminal; iOS plain terminal</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="square-terminal" width="40" height="40"></i></div>
+        <div class="meta">square-terminal</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAADmUlEQVR4Ae2a24tNURzHx6VBdBpySTEyjVuZNC6JlymePEjReJIX12Si3P4DKfMg9wclD4gMEg9TSs2LovCAkQczinELaQZhGJ+v1qrdmb05s8+cfdbK+tZn9jp7r73n9/vuddv7nIqKoOBAcCA4EBwIDgQHggPBgeDAf+nAkAKzrqLebKiBHAwH1/STgLqhA9rhAxQtJXwAuqDPI94Q62HQTUutes68Ar/Ap+SjsbYS+xIYsNTkD0IvRC/oW1nd4jhMglgl9eVF1JZzw8xZX9jehPPQCT/ANSmXamiEFTAGhsJiwzW2BWszNV+C7rhcPAoTwQeNJchm+A6KX4PhDoiVHIqTLjLOHHjG9ja8NZ9d33w08T4xgao7K5/YGS/JgJGcMMJcQA4OypRirpfF5n0kZiWuXCrj/nHSGKCTrGPqApoJ8jWZHbPgHcht1XNFijcaj3KJvdmxOwvIQs1qN2hgvAX7YSp4p7QGqDmNAs0SE2APtMBqsF2HovtKa4AGxFNwEb6BmpimztNwBIpagXF+ZkprgAK8BxtgCzwEKQeb4DLomOZip1WMAUqsB87AKjgEGn2lOaDPu2A0OKtiDbCJaa2gcUALqAdmp+7+PKg1n53cDJYBmk4bYBvURTLV+sG2ishud4pJ64CBRFhD5SZYD3b1qGXodTgBL8BZFWOAmvga0HpgbiTDp5TV/8/Bp8h+J4tpDdAaYCfsAzvSf6Z8CZrBzgoU3VbaMUBNvRps8vcpb4StEE1e118HahV2Sa1laj46dgdWQqZK2wK6iLIFtOpTcmehE/JVxQ4tkGbkH8j7rIXUQlgAN0AGZaK0Bug5u9Xwt0D1aKpnhflQC0o0TkpYragNMktegaQ1QOcWIhl11VBI/czrpB0DMg+0VP8wGFAqZ325bmgBvtypUsUZWkCpnPXluqEF+HKnShVnaAGlctaX64YWkHCnetlvv1rSI6/wSfkxKx/RT0kt4Cs19ZsAqRqm/Sn580fx2piVuPKJ/U1DkgGvOEFI40Hv/pZB0vM8h5zRUiJphCkmIuXx2pT7bZLeBzymZjvMNGc0sNX7vkfwHGLdZH85pVz0BW0d2LfTikd5iAFJX3puBznX5zH6XmIvVEKslGiclLTe9an/yFH78pOiN1Lyx+AkdCdF/a8+LYPqYS0sh+mQgyTjOFQ2adbqgQ5ogwtwF1zsroQVFBwIDgQHggPBgeBAcCA4EBwoqwO/AR55SmqFAjbMAAAAAElFTkSuQmCC" width="40" height="40" alt="terminal" title="terminal"></div>
+        <div class="meta">terminal</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>memory</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="brain" width="40" height="40"></i></div>
+        <div class="meta">brain</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAHp0lEQVR4Ae2YC6zXYxjHU6eiRBcnummo0ApjSayEkBpzac2taV00Imw0JROr0cW0ZohKViSlucxsrRyqaeUWoYvLOYoSS1FRKXy+Z+dtz3n/7+/y/59Ldfyf7fP/vZfned73fX7v7fevVSsv+QjkI5CPQD4C+Qj8byNwVDWPvD3t9YYu0ALqwXZYC0ugCA5AjZNejOhD+DeBjdQPhep+MTSZmzTHrAf0g2vhImgETuqTmAlJA/frF2HT2Dk53J4N6NA98Dn8A37n91O2Cu6E5YF66UtnM6yH38H3ofxHoJkzGAbBlVAIh1Quo3V1PNThNGVaBjeAnSWa7ueCZkoooNav6ldAf6j2ZXIbjWqDsh1Km/4buxGQJHrLuyCN34/ROyPJYWXV98SRBmE7tpf8K6BNqw9cA/fBO2D1lB4GaeUmFH37qPwOdK9I6zhXvQIMvwbbiSLyrSMcdvN0FZBs5SEMtIdoyWlj1bKZDCVg+6H0bjgHqky0u9tGtY6PjmltoqevgFSW1MWRAqNB2z6VkG8AVSKz8WobS4r2UqO/hXRVbFZn43ebaUf9exCqROz035CiBV1mXMAWp9DPVeUSDO2p8Rv5uJkZbKd2sLR84QkmW2zSUUmd8U7SBMzpaqYc7zIpnkXovGr0mpDubfIVTjbEw1xwb1PPFSm8DkBnJ3wPHVPoS6UZuJk2I6WN1HqA7Z/2J12cCqFC0hhrObPOld4Dad5Stuv+Dq+tNuTTiGZw6N6wj/L50CmNE19Hx94S8Afv8pN8g0rIj/XaSxsANb3es3X91FN3lwmgMaWW8WhaJ3vJK6K2bDT5OlBZ8hKOnH9tbNkcaV8YW+fDf+ouoiWdKJoy9sanDa0vTAXf6XeUTYQh0B2ipBUVIko0jTeB8683mo1sRdnZvke6K0wDOw7VvwGJS3MeSs6ZnmNAUh+Wg63z0+Ok6MlI8k5PG2roLQw0OtJ9DtJKaxSdfz01k5zoA8sGVvW6qkdKS2oOgHOoN6GblxNNyzng6v2npqIvSymweu+Stz4vJa8Tw+qcRz6t3IWitR3mGXYgbz+3t5OP3MSHe85u95y57IUkFsAOsI2PcgrmqeVhdZQeC/IxC2zAVacApxXNyo3g/MvXKQFjf1wPBHRKi+bz65xp/ehiESfaBNuDBtM5RlGB1MbmfEc916DTNMaPX/W05/MtX6Esr0DZa7NmZVA2UOo6tzqokXvh48a3a8M+tXk1z8K93qK130c+7iXYvU0vV0HJELtWXs+orViB1p0uUbbTSuv2NwgSd2d0JAXwFPh+tNnGySNUWpuTQ8p2PWazFkO+QmXLTCd+IX0+pB24/OkNrwQ7EKWnQpLcjYK1O7jR1jaWf5m0/QAyxRVK/mSstSesAnUqSfSFNw4+AQXNiXyMhjR/tfk7v5ZBhnxDiYvSlxm1FS/Qbcz51/mcRnqipOPY2blnMWUXQ1qZiaKz1bMwZPi2UVJ0TwwpVaBM9wTXiU8T/BxHvd9p2e6FJ0B3krSiZbYFXNu6OQZF/6g4JT2HBbVyK9SNTUF1/l+OcaPr+LdG19nomGsXYxdVdbPna26U4pmeYjH5elHKWZY/7PkeGmHfhXL9s+MGrWcJXAW5SEuMtPdYf33iHNmdWkbj45RT1rVFbze4TmgaNwvYnkTZZqMnfV3OtBxyEc0WHbOuXT0/g9iTp5dnIKOBkKvoNPkKbCeejXA2y9ObQT62sxF+2lL+GNigq/39oBmWKFqftsNKT4K6iZblFbqRtSeL/PwKheXVSnMt+LX3EG2YaZbfcPTmgNb1m6D27F5jxyH/9tgnG5ZGFNsd2znZSLm+vpqHzUpLC/jtCfpYUsSdrZ46ey+HkAym0OoOCCl5ZVd7NtY+Kt3U8xGZ1XrU90DIkSKsAGl9PgNTYDYUwS4I2eiS1Q+iZCIV1k4zIkmGoGBt/LRewCZPp22SU1t/LJkXPQd+I2nyCmRH6ziQnu61o5mUJMegMA92gDZWPdfBQhgBrWAk2D7qpMtaumOxGKyjbNLPY9shodUJnv82Cfppq7VkbV/P8g3TRHoZRr2gHVwHCkhnaA3OXo38DD+Cv9MOpUxo2bwPumZLT7u0jjidFAc/TkhL+sOTpamK/Wi5WsnlVLH25dJypitpQ7C76y3kt4ONfLZp7SVdoaJyPw5s23qJ1SK6gU2DfWA7kE16D7aT4XTIVcZhaNvM+L6p1CkR6KVOk1tBR9YFEHe26w8ZLQsFzxctrw2wDXSiaMZthXshTnQ/uLFMQRulZuuBsnzpo6oDYNuqT0ZT8FTQ2lcw/gQNpBh+AL2h16AHJMlOFOQnTtZQ2alMQXuP9q7DXvR2tWmuBTt9Q+m4AGhztbfCOeQzpCCj5NAXqNMvlKHjsxtoKTUCTf8xoH+JJDo9ikpTmT/XU2Rn+KJMlSOzZCXddrNhSsQQNHB9+Tm9/aS1vGqEPMoo3MC0cYYGNsToSHcB1BjRRqo36oLwAenGZnR9Se8x9dLTMqpRMovRuADoqeNxIRR55aqbDjVOmjCiErBBCKXXoRN3UlB95MppdF2Xo9DAVbYKQpcqimuO6FtkFKwG3SL/gKWgTbAO5CUfgXwE8hHIRyAfgXwEoiPwHyRVU9BVstv9AAAAAElFTkSuQmCC" width="40" height="40" alt="brain" title="brain"></div>
+        <div class="meta">brain</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>monitor</code><div class="note">Correct SF mapping of lucide activity</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="activity" width="40" height="40"></i></div>
+        <div class="meta">activity</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEcUlEQVR4Ae2ZOW/VQBSFwxK2gACxLxEpCAUVDYtA9PwDJERBRYNERYsQNRIVPwIh0UHHD0BCbAUgJCTCvu8JWxLgfA/f6GLe83OIZ2zx5kgnHttjz9wz587Mc/r6EpICSYGkQFIgKZAUSAr0qAJzIsQ9pDYOiTvF5+IHsWcwS5EeE0fFt+JRsVGYHbg3K/T+TeKAuFxcK84TG4PQAmxQpNCwUoVVdtKEY2wBCL7nBcAFjUFIB7DCYH/y3tBTKUDgCOCX2p5KgfwEiAtYCXDBXE6agJAp4AX4mQXLvgAXsDw2ArEEeKBoIZjOPNCv+kH3DaEEWKCO4wAb6RsqQ4ADyqwE21XvvDgiHhH9XKLTahBKAG//9+rqTfF+1uWyE+Ee1d8rrhP5HTEkVo4YAjxRr2+Lr8VxsUwKLFY9RFwmgkFxY6tU8Z9YAjxSv1+JiEBaIEJR2wRL0Ib8uV2f8bGoEzN5uU8BHAARAJLLpAFLYicQsB/x/Hmn56Z9PYQAS9WL9SI2/iES/DPRBFCxaxrkA2ZS5VqZyZP3l0YIARh9G72XKiMAuY/9EQEUTYT0iXcgogfv9Gnh7/1zOZQABAAI/nGr9KcDEKDTaK7WPQLtFycy6hBmIgyxJSV4LwAigHciDpgUi1YCRtocdDervzW7VrkDqhaArS7Bs3YDRt8EYD4gDd6IRQIQpAnA6sHzrBykBNfni9/ESlB1CmBtBGD7+l2k85b3Kk5NhNxHBCbMPLwDnurmFZEj4nLP3KXizFG1AL6DdBoB7IcQvUUME6SdCxbqPiPNiOMY3nE9O+rQEqDSNCibAkvU+A5xm1j0zHBWR4dW8Ajg0W4luOcqIKAFaCsIP6JYRgFzwWFxFydtMKlrt8TLInNOVxQF4x8+qJMT4hp/sUvZ579V9Q5otxIgAASIB3mG44RI+wcy6tAWn3T1pHha9O5rW7lsCgzoaTY2ZYF9R8SHuQeYAHEB9xEAengBLIWoiwvy7/LP+TJpRF9LxVbWAfws5YW7xW7PYMNr4jlxTPTgHiOKPfNzAJMcE1zeAbrUd1HsF/eJi8RO4P1XxbMi5UZiv3p1R8Sep0TcBXDDGZHrrCDHxVKjqHr/jOANtOkZDoCAoCFg5Adbpd//QyTvsX9Q1C2ATwOf/wQPg6MOAfJLISKAvABMgsFRpwDkuqUA21sEsHT4rx0wrkBxAd8KLQXY/SEAK8EXkY0P/04PjjocQFBMgojADhMRNosIALA+m6goqFMAvxKwxTYBsH+U/Efhbpsa6oRAfilkc2MC2A4wRLt/vbMuAfxKsCXrle3wok2AtFuXADYH0IdhkckPfBRxwCgnMVDXHMAXHUQgYD6TWz+ijr7anWqYcmx4F1jbUfOfRk1560DMo58Ird2ecwAiGNgZ4gAYDU1yAB9LcEBlX3zLqFinAH4ppK/R859G6xTgs9pHhDE6IjD6Ue1Po3UKQPs+5/nuN8LFmKhrI2QxXlDhq8g2+JL4QkxICiQFkgJJgaRAUiApEEWBX9sq3av4IUt7AAAAAElFTkSuQmCC" width="40" height="40" alt="waveform.path.ecg" title="waveform.path.ecg"></div>
+        <div class="meta">waveform.path.ecg</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Cone / scoop identity</h2>
+      <p class="sub">LucideIcon.swift ports ice-cream-cone / ice-cream-bowl because SF Symbols has no cone. SliccIcons still has teacup leftovers.</p>
+      <table>
+        <thead><tr><th>Use</th><th>Web (Lucide)</th><th>iOS</th><th></th></tr></thead>
+        <tbody>
+            <tr class="ok">
+              <td class="label"><code>Cone (agent identity)</code><div class="note">iOS uses LucideIcon path data (ported) via ConeScoopGlyph — NOT an SF Symbol</div></td>
+              <td class="icon-cell"><div class="glyph"><i data-lucide="ice-cream-cone" width="40" height="40"></i></div><div class="meta">ice-cream-cone</div></td>
+              <td class="icon-cell"><div class="glyph"><i data-lucide="ice-cream-cone" width="40" height="40"></i></div><div class="meta">LucideIcon port of ice-cream-cone</div></td>
+              <td class="sev"><span class="pill ok">ok</span></td>
+            </tr>
+            <tr class="ok">
+              <td class="label"><code>Scoop (sub-agent)</code><div class="note">Same — ConeScoopGlyph / LucideIcon</div></td>
+              <td class="icon-cell"><div class="glyph"><i data-lucide="ice-cream-bowl" width="40" height="40"></i></div><div class="meta">ice-cream-bowl</div></td>
+              <td class="icon-cell"><div class="glyph"><i data-lucide="ice-cream-bowl" width="40" height="40"></i></div><div class="meta">LucideIcon port of ice-cream-bowl</div></td>
+              <td class="sev"><span class="pill ok">ok</span></td>
+            </tr>
+    <tr class="weird">
+      <td class="label"><code>SliccIcons.messageSource(.cone)</code><div class="note">Dead-ish path: cone messages hide the source row, but the mapping still says teacup</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="ice-cream-cone" width="40" height="40"></i></div>
+        <div class="meta">ice-cream-cone</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="cup.and.saucer.fill" title="cup.and.saucer.fill"></div>
+        <div class="meta">cup.and.saucer.fill</div>
+      </td>
+      <td class="sev"><span class="pill weird">weird</span></td>
+    </tr>
+    <tr class="weird">
+      <td class="label"><code>SliccIcons.messageSource(scoop fallback)</code><div class="note">Superseded by ConeScoopGlyph in MessageBubble for non-channel sources</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="ice-cream-bowl" width="40" height="40"></i></div>
+        <div class="meta">ice-cream-bowl</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="circle.grid.2x2" title="circle.grid.2x2"></div>
+        <div class="meta">circle.grid.2x2</div>
+      </td>
+      <td class="sev"><span class="pill weird">weird</span></td>
+    </tr></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Tool-call icons</h2>
+      <p class="sub">SliccIcons.tool(_:) vs TOOL_ICONS in wc-message-view.ts. Bash per-command icons exist only on web.</p>
+      <table>
+        <thead><tr><th>Use</th><th>Web (Lucide)</th><th>iOS (SF Symbol / port)</th><th></th></tr></thead>
+        <tbody>
+    <tr class="ok">
+      <td class="label"><code>read_file</code><div class="note">Same metaphor</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="file-text" width="40" height="40"></i></div>
+        <div class="meta">file-text</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAFCElEQVR4Ae2a24tVVRzH7WKWWk3e0CnN9MHCsJEgUzPDSskLiqGI4IMPEkT5v2QR1Usg+GCUgg+CvRiFXa2pscy7o46SOZaXNDVvn89wNhxGO3P22nudfQb3Fz6z9+HsvfZvffe6/NY6M2BAqdKB0oHSgdKB0oE71oG7cqq55QyGoTAI6in3Btddg3NwAa5Dw1VPoLWCeoAvn4Jn4Ql4BAbC3VCPrnLRWTgKP8Au0Ix+oRaiXA6boAusjG81LbaCU7AVVsEIaHr5lhfDNxBa8d5GaUQ7rIHh0BDdG/iUsdy3CGz694D99yQchL8rnzn8rxwrJsFjVVfYbZ6BN0FTN8MZiKpQAyYTVRvYEnyTHfAJfA/1GDCO696AxIATnKtWmAKa8B9sAQfJaAo1wBZgJZRvyUA/ACtfj/7houprv+TzH7ACRsNUeAs0wbHhPERRqAEPE81DlYi6OP4C1RWqfFX3YT9XbgS7gSaMArvX26AJ2yDK7OADQ3QfN4myiebxhvZSzkfwGXSDL+c5WAuvgFNu7gptAeYPSQ7hAChZ5ViyGz4EzV0K5hXTwVZwBbbDJchNoQbkFkCvgjRhF7wPxrYE7G6zwJnhGnwBmpGLms0AK2VrckzRBFvCQngQZoMmyFdgq8isZjTASvmmf4T3wBjnwxCYA1ZcE76uHDmEq1kNsEaaYF6hCeYbc2EwvApJS/iOc68LVjMbYKWs6LfwLmjCy2AWOQ8SE3ZyHjwIN7sB1K1nwNvB0Vg1wbHAHOQ1cDBcB+3gAJpa/cEAK3UZzBY1wJhnQQssAhOkd2AfpFaRBlS/MUd7K1erPzv/bwdjdgE2E4bBYjgAJ8AUO5WKMsCmWz2NTePzGjCdrjaGj7fI2cD9g4tgV3gUZoPm/AypVJQBLqBOgib45p8Hl8f15vumxd6XaAInE6HfGODawSnuV2iD+2EMhMquYNqcWkW1AJv5DnDwMtMbDzbtZH3BaZ8yOxwJjh8Jfd7U+4KiDDCOP+FT+AnGQVoDXCQtg1ZwVSupVaQBBmufd/EjIZrLTRoQrCDXgp/WhDeWBjThS2loSDHHALO1QeAxVC5yeidNoWXd9r5YBrTwtJfADM8pKlQaYJr7ORwOLaTWfbEMGMtDV8LrkHWc6aAMp8x+ZYCLkv3g1lbWFvAbZXRDFMVqAceIdj24Y5PFADPGo7AHoiiWAe7W7K0QJfC8Cs3aP/OKo7By7ngDYnUB36g7uE6HWceAM5RxDhwPclcsA0YQqZuW7t1lMcA8wAFwS+XIIV/FMsBtqqWwJIdw/b2wE6LMBLEM+IuA3c8fCllbwO+U0QlRFMuA40S7Adz1GZghcruA/zhxJEMZNW+NZYCBd1WoGUDRX+YxDabZxyu6vrc8P9QA37Aol7tZlrw9hQT8qX6uP6gk8aQqKtQAf6oSNaxCz4cG/TFun5tshVfHkyqEUAMc5f0VRznlzYDH/dAAGfOTMB0SA4wliYfT+hU6CHbyCNfnreBUtwBskjvhLAQ1R+7rSz5jOLwAcyCJ31gOQWolBaS90TW6v+y0gfv5E2A1LAQNqPUjJ18HKzHATDPJL7o5N5YgA0IjsRm+CKao7u2bpxeBXfFj8EUESUdDZGXdpjoG/4KfTXhsUZYZa2q0a10Cn90Om2A9dIDfpVbWQG0JjgNPw3hwUNKIrOVSxG1lJa/AaTgIdkXNKFU6UDpQOlA6UDpQOpDegZvc+DNH35mQwAAAAABJRU5ErkJggg==" width="40" height="40" alt="doc.text" title="doc.text"></div>
+        <div class="meta">doc.text</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>write_file</code><div class="note">Same metaphor</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="file-plus" width="40" height="40"></i></div>
+        <div class="meta">file-plus</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="doc.badge.plus" title="doc.badge.plus"></div>
+        <div class="meta">doc.badge.plus</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>edit_file</code><div class="note">Web is file-with-pen; iOS is a bare pencil</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="file-pen" width="40" height="40"></i></div>
+        <div class="meta">file-pen</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAACM0lEQVR4Ae2azUtUYRjFp9LaNG6yMnDVQgMLXES7NrUyXJQg+AeIX7V17TrKjUv/hdq0ahG0iaiVpS1qEYpCKYSKX4hG5e8sXrgMMY0XobnPPQd+OMN4mXvO89xn7rzvVCqWE3ACTsAJOAEn4AScgBNwAk7ACZQvgTMFtFzlnG/CbTgPm/ATcqloAVzAZT88ggHogT1YgUMILZkfhg/wG/6AKv8a7kBoncLdPXgHybwCELswCbl0OtdR/+cgGV2Hg5q33+C55kAuNfsMaMfVJfgFus7X4DJ0Qiv8gGfwHBTOsdXMAcj8AxgCnecSLMIqdMBZeAGz8AVCSeZH4CNour+BQdDH3jm4C6NwHTQfQimZn8dVGnia9tkQ1P7qgHD6m/k07RWCrvfek3TdTJ8CMq+bm4dwA2pbWwNPc2AHwqle5dUB32EausM5x5DMa6Blr/nU9jZPMGErf/Eflf9m80GveVee1l6AdJOTHXjh236szObHbb5+23cRUDhp4DVSeZuPVvpU+U8YqzftQ1ZeS1hq+3rmn/K6zRNCKLnylLO0bT9RVvOa9qU1r/XE+zAH2S806bG+2DyBkNMeX5UrMANat0+m09/w5vFc6YP3ZTXfhvEp2M4EoDs+7d89hsK0fQsnm0fXOOgWVGEfFkHbWG/hFXyFQihvAFrK1o7tS5BxDUItay9DoX6pUbv7wvk3pKv8lzYptC//GbbAcgJOwAk4ASfgBJyAE3ACTsAJOIGiJHAEmNz3daJejhMAAAAASUVORK5CYII=" width="40" height="40" alt="pencil" title="pencil"></div>
+        <div class="meta">pencil</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>bash</code><div class="note">Web bash rows often pick a per-command icon; fallback is terminal</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="terminal" width="40" height="40"></i></div>
+        <div class="meta">terminal</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAADmUlEQVR4Ae2a24tNURzHx6VBdBpySTEyjVuZNC6JlymePEjReJIX12Si3P4DKfMg9wclD4gMEg9TSs2LovCAkQczinELaQZhGJ+v1qrdmb05s8+cfdbK+tZn9jp7r73n9/vuddv7nIqKoOBAcCA4EBwIDgQHggPBgeDAf+nAkAKzrqLebKiBHAwH1/STgLqhA9rhAxQtJXwAuqDPI94Q62HQTUutes68Ar/Ap+SjsbYS+xIYsNTkD0IvRC/oW1nd4jhMglgl9eVF1JZzw8xZX9jehPPQCT/ANSmXamiEFTAGhsJiwzW2BWszNV+C7rhcPAoTwQeNJchm+A6KX4PhDoiVHIqTLjLOHHjG9ja8NZ9d33w08T4xgao7K5/YGS/JgJGcMMJcQA4OypRirpfF5n0kZiWuXCrj/nHSGKCTrGPqApoJ8jWZHbPgHcht1XNFijcaj3KJvdmxOwvIQs1qN2hgvAX7YSp4p7QGqDmNAs0SE2APtMBqsF2HovtKa4AGxFNwEb6BmpimztNwBIpagXF+ZkprgAK8BxtgCzwEKQeb4DLomOZip1WMAUqsB87AKjgEGn2lOaDPu2A0OKtiDbCJaa2gcUALqAdmp+7+PKg1n53cDJYBmk4bYBvURTLV+sG2ishud4pJ64CBRFhD5SZYD3b1qGXodTgBL8BZFWOAmvga0HpgbiTDp5TV/8/Bp8h+J4tpDdAaYCfsAzvSf6Z8CZrBzgoU3VbaMUBNvRps8vcpb4StEE1e118HahV2Sa1laj46dgdWQqZK2wK6iLIFtOpTcmehE/JVxQ4tkGbkH8j7rIXUQlgAN0AGZaK0Bug5u9Xwt0D1aKpnhflQC0o0TkpYragNMktegaQ1QOcWIhl11VBI/czrpB0DMg+0VP8wGFAqZ325bmgBvtypUsUZWkCpnPXluqEF+HKnShVnaAGlctaX64YWkHCnetlvv1rSI6/wSfkxKx/RT0kt4Cs19ZsAqRqm/Sn580fx2piVuPKJ/U1DkgGvOEFI40Hv/pZB0vM8h5zRUiJphCkmIuXx2pT7bZLeBzymZjvMNGc0sNX7vkfwHGLdZH85pVz0BW0d2LfTikd5iAFJX3puBznX5zH6XmIvVEKslGiclLTe9an/yFH78pOiN1Lyx+AkdCdF/a8+LYPqYS0sh+mQgyTjOFQ2adbqgQ5ogwtwF1zsroQVFBwIDgQHggPBgeBAcCA4EBwoqwO/AR55SmqFAjbMAAAAAElFTkSuQmCC" width="40" height="40" alt="terminal" title="terminal"></div>
+        <div class="meta">terminal</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="stale">
+      <td class="label"><code>browser</code><div class="note">iOS still maps browser→globe; web TOOL_ICONS has no browser entry (bash/CDP now)</div></td>
+      <td class="icon-cell">
+        <div class="glyph">—</div>
+        <div class="meta">n/a</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="globe" title="globe"></div>
+        <div class="meta">globe</div>
+      </td>
+      <td class="sev"><span class="pill stale">stale</span></td>
+    </tr>
+
+    <tr class="stale">
+      <td class="label"><code>javascript</code><div class="note">iOS-only leftover; not in web TOOL_ICONS</div></td>
+      <td class="icon-cell">
+        <div class="glyph">—</div>
+        <div class="meta">n/a</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="chevron.left.forwardslash.chevron.right" title="chevron.left.forwardslash.chevron.right"></div>
+        <div class="meta">chevron.left.forwardslash.chevron.right</div>
+      </td>
+      <td class="sev"><span class="pill stale">stale</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>send_message</code><div class="note">Filled vs outline</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="message-circle" width="40" height="40"></i></div>
+        <div class="meta">message-circle</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAD2klEQVR4Ae2aSWsUURSF4zzFKQ6RqKAYjYJjnCNKNroTf4GIG12IILpw69ph4UJQNwmK6ELQjYE4QECNERdxAMUp0caAc9RoNM7fgQ6Etu5LJ13dXdW+Ax+drnrDvae6q+57naIiL++Ad8A74B3wDngHvAPegf/TgQE5TFtzFcMUGA8jYQj8gE5oh1fQAX8gJ8qWARp3GqyBVbAE5kEJDAJLvzghIx5AMzRBIyQgZ6YwV7+kpGfCblDQuqoKOlM0jozYA7MgchpMRCvhJLyHTBN29den4xSsBs2bdy0gghr4BK7Awz6n+U7AIsiLxjLrTmiBsJPry3jPmH8XjIOcaTYzHYewvuN9STio7VdiqYEKyLoqmeE8/IagYPJ1TPFcgOWQNa1g5DrIV5LpzFtPfFXZcEDP8DMQtSufaoriOwu6OYemCYx0CL5D6oRRfK/K8jBMhow1kBG2QRtEMVkrppfEuwNcVSene2+wlDbbQa9xktYcSv4xvHAFritsSQuV9VBtNYj48XXEtwGGueJ0GbCQjio5R7kGiPC5Ecn4F7tidBmwjI5Zfa66AgvpXK85WAaotJwLWrvHWRMJXnnoNVCWAeW0VslbCHLmYhkwlczLCiF7clAuIlCWAZNoHUohEThrbg8qD+UTKMsALXdFIWgMSZi5WAbo2el8fsbIGWculgEqgiKx5RSC0dqrVC6BZbFlwE86iEKQdpq1kNPrP7IM0C6LKAR1kcQ3KxHLgI90EIWgdySh3epAWQboF5rXgT3id/CNKxfLgASdRCHoOUmIQFkGPKH1I9AWU5ylDRPl8tRKwjKgkw53k52tvnE43kKQ9+CLFaxlgNrfgCarY0yO3yJOYcplQCu9GiBh9o72Cd3Ir8JDV5guA9TvMlx0DRDhc5eSses+YCqwPOzRWj9CDgX9LlDa43jU/9T96yhcDyNQ7Q4dAJXG1jZ0lI6r6NkLoS7mNjFgcwwM0NPrIJhbYJzrl2bQqxaidKVTY9Ha5QhMh7SV7pJXZXGUS+PPxHcMdPX1q1DaStcAtUu3bdqTh9RQZa5+u6yFDsiKKhj1NKR+7PL5Xmv8OlgL2vTIqrYweivkM+HuubWxcRu2grnXx7nQVM1IDdAdQOqr6uxzsB9UdurKpLYJ471uctdgM5RATuT66OvGUw8bYXgyGj17q0Bm6LGpoDNJXo+1m7AP9M+Wod+HehtQW0lv4QPoo6c77H1QjX0FVGfreLe6+KMxib6XZVAJ82EOlEMpjIZikGEqsJRoO7SB1h6aQwbeAdX0MtHLO+Ad8A54B7wD3gHvgHfAOxCiA38Bj6zQfNS9BDQAAAAASUVORK5CYII=" width="40" height="40" alt="message.fill" title="message.fill"></div>
+        <div class="meta">message.fill</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="weird">
+      <td class="label"><code>list_scoops</code><div class="note">Web uses the cone (product metaphor); iOS uses a generic list</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="ice-cream-cone" width="40" height="40"></i></div>
+        <div class="meta">ice-cream-cone</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAADJUlEQVR4Ae2ZSWsUURRG4zwPUTQOQVQC2RgHEESjKyEKKhi3LrLUlf6eoKCI26AgURfiRowLFRUcUbAdcIpKFBwiQT0HU1I0Mf1C2i4b7wcnVa+r+r163xv63lRDQygcCAfCgXAgHAgHwoFwIBwIB8KBcCAc+O8cmJTY44nctxI6YAvMggEYhLrW5MSnX819XdAJjXAHuqEXvkJeKyhshCUwIX+hBuc/aOMNXIMSVFSqAe3UtB9WDdfYxNGGbsOD4c88zIZdcBCWQq0N+E6b/XAUjsEHGFWpBtgZyeTScYQXQ96AGZTXwFooSj5TG8yFqhnwjMqeQwuoIbD8ykJOnzi/AVehyCVwnfYrdp57GlJnwGXuPQ57YT7chR54Anl9pnAOXoLLxM2zlsr2AAfhY0rDY1mjy6lwA8yDh+D6t8OhcCAcCAfCgXCgTh1ITYbsnr/p/gSKIafBUN0rNQ6YSU83w3ZoBAMhA55HUC6NMgyVIgIhAyCjQAepolIjQQOgQ2A6PB0Mg02Jj8A7yOSM2gQmROYOqQZza1WURYJnqa0PKs7SVANMb7eBnVfNsBUuQN4AR303HAZnTRH6QqNTwSTtdaUHSJ2iGlVu1kifWZ+NT6nU8F+8btvTIKlv5Z3603Pd5IIZlqPudxx1y48hL9feeXD0i8gGXfdv4QzkZybFkZW6Rt353QB3gudugqfhFpTLGbAIFkLSKJRXMI6ye8B7cOp/S6kn1QDrsmOOqpufDdhQKBwIB8KBcCAcqGMHxpINLqCf66EN/H036UhKOLjvn1VqHLCMHnTCHvDf4vfgBFyCIchLo1qhCVLrz39/POcGQv1wH5IiwdRQ2FT4ADj6ah0MgqFwCTKZLO2ALigqFNaAk9ADvqgZVakGtFCLZLKjlpuhBJnmcNIOHVDr0c+eweNTuAhVM8CwV3w5orKYe+BX8fdfZ0UJXkARM8Dn8qVtCZJe2qTOgD4qPAX7wD3AZKgXXAJ5uTGaiZkVugcUkQxpgHtTUq6SOk01qhWc3maDbjJXwNQzFA6EA+FAOBAOhAPhQDgQDoQD4UA4EA6EA/XlwE9ivomhctyUpQAAAABJRU5ErkJggg==" width="40" height="40" alt="list.bullet" title="list.bullet"></div>
+        <div class="meta">list.bullet</div>
+      </td>
+      <td class="sev"><span class="pill weird">weird</span></td>
+    </tr>
+
+    <tr class="weird">
+      <td class="label"><code>scoop_scoop</code><div class="note">Tea cup for ice cream — the classic weird one. LucideIcon already ports the cone for other surfaces.</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="ice-cream-cone" width="40" height="40"></i></div>
+        <div class="meta">ice-cream-cone</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="cup.and.saucer.fill" title="cup.and.saucer.fill"></div>
+        <div class="meta">cup.and.saucer.fill</div>
+      </td>
+      <td class="sev"><span class="pill weird">weird</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>feed_scoop</code><div class="note">Close; web comment historically said UtensilsCrossed</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="utensils" width="40" height="40"></i></div>
+        <div class="meta">utensils</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAFT0lEQVR4Ae2avc9VRRDGQcVPFBU0CILoKwoSIaCJJlQEKsXO0Mg/QEtiwT9ga2w0FiYWJoTY2BAKjIVUJnYYUFFDYkQUiBL8BBSeH+87ZLLZvfd8zF5zr2eS5z17ZndnZ56d3XvOnnfRokEGBgYGBgb+xwzcWjn2u2T/duFq0DiLZQebS4R/ImxGEIBTTwm7hBXCBeGyMCe8KuwU/hDOCLcJmwV0EHNe+FdoIvR9XtgrvCD8JpwV/nNZKg/2CyeFD4RtArJHOCFcEg4IzNoq4Q3ha+FN4QmhqWxSw/eEi8IvwusCNnvJLb16z3d+UBec2yA8IzwqIOgBBHG9QyBDnhbWC1sEa6viSLlfta8ILwn3Cdw/LJBFvSSCAAK7c8ELlgNAWF4A4cpYvp4+rOcm8pwavSysdI2x1dv/3gbkBLNgM3FNZYBg2+xb2deTvk1S+AG12yGQMeFiDvYx7ANhQ7NNzYLGtpV9vSdu1PhsmtuFe0c16loXQYAPxM+wBY1vVvb1vl/Jf5YJOz4kVJEIArpmgO9XCu4xVWwV2ESrSAQBfib9DNus47iVfb3vVwruWVWAahJBgJ9JH6AFjfNW9vUQQN+S8AvBz+rjpQYR+mgC/CZnQeOnlX09wUNCSXhoWi/cXWoQoY8gwKeyn2ELGj+t7Ot9v1wsT0oJqkoEAX4J+Bm2oAnAyr7e98sFuU5KUFUiCPAz6WfYgiYAK/t6WwI80aXC+ucxeXlaEX0fQYCfSZthgvK2jQCrJw509OUtLxWe81cL1FcV72TXgcgAc5RggM8K7Nq91aNDPHnzmvm/j+gCqkuO/baDQqK99KxReZdA+vIAY8Ib4G7hb2GjKXW1lySnulHkrfGhVFnjPoKAq3LsyoJzELBX+F0ghU14Vd4ncIoDOQj7Af3onwprv/r6Z9AIAjicAARMNliAKt4UlsC6m3fzBUiiH1mRCsFXe/z1g0XsAadkkBMeZrSNfKPGXwlpP5YFhx73CNUlggACOSJAQlP5WQ0PC59nOvAGSPC2r2SaxKkilgCpDAGk+WsCBxel2WPNkzEfCQeFH4RUOEIr9U/b9r6PIAAnCISACM7O7uZU9nJON58IBP+pcEbICRkAJiJRBOAsG9pR4UuB3/e1C1ddbgjp/pbwmcADUUnwif4TkYg9IHX0eym+FS4nFd/pnv1iVPB0gYDIicFmUWoQwGDs7LlA0x0/5xib30Q2QAavRQB2U9s5HT6kUiIvbRdynzoZYlRGsJvOYlMCLqovmIjUJCC13ZSAC4qcT2o/TYKB1MmoMXPBokuzIjcej8b8mhwSfsw1iNRNmoCm4/FT+o7wtvCFkNtQpe4vTR1qM5IdhqS2mf1UV7JLwJDwrvC+cFqoIk0dajO4EZD2Yay24/H0eEyAjCrS1qEmTpQCLenH2fxTDUAVmTQBTTbBNFD6VHsynDQBXcaDgC7EpURm77s4lDXklNjM2SWInN51zRarvht0cSjrpVNiMzdj6LuMNzMZ0JWAqcyA3Ex3JWCmMiC3NNzqyRZnJgMIPpcZ2aidcuoyoBRo1yUwMxnQlYCpy4BSoCW9y/ZscaYygNlsK0MGiDGyoIqQltFSSvXS5jhu/KnMgFyql4gZR8DU7QEElDv/z+nGBT+qPuT4vMYS4Eibk90riffndQ/aCp/cgJdLumGM3P8W+HZjy7lUHdtpTAM+iWF3pcA/OfBfIRxzc8p7TPhLaCPY44vxKoGPpr8KHwsfCqeFXsL5XQ1ZJqNbhS0CHzr5JshH0S7H3GTpnPCiAKl8judD63Gh2lGZbA8yMDAwMDAw+wxcB22Mttl8RncRAAAAAElFTkSuQmCC" width="40" height="40" alt="fork.knife" title="fork.knife"></div>
+        <div class="meta">fork.knife</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>drop_scoop</code><div class="note">Same</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="trash-2" width="40" height="40"></i></div>
+        <div class="meta">trash-2</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="trash" title="trash"></div>
+        <div class="meta">trash</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="weird">
+      <td class="label"><code>scoop_mute</code><div class="note">Web: mute notifications (bell); iOS: mute audio (speaker)</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="bell-off" width="40" height="40"></i></div>
+        <div class="meta">bell-off</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="speaker.slash" title="speaker.slash"></div>
+        <div class="meta">speaker.slash</div>
+      </td>
+      <td class="sev"><span class="pill weird">weird</span></td>
+    </tr>
+
+    <tr class="weird">
+      <td class="label"><code>scoop_unmute</code><div class="note">Same bell-vs-speaker mismatch</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="bell-ring" width="40" height="40"></i></div>
+        <div class="meta">bell-ring</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="speaker.wave.2" title="speaker.wave.2"></div>
+        <div class="meta">speaker.wave.2</div>
+      </td>
+      <td class="sev"><span class="pill weird">weird</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>scoop_wait</code><div class="note">Match</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="hourglass" width="40" height="40"></i></div>
+        <div class="meta">hourglass</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAADbklEQVR4Ae1Zz4tPURQfDGI1ISllZomSsLBQxoLF5OdOjbIkC4riL2Atko3dlMiULO1MmRqJJLJAE4X8KlN+JL8/n7xT1+u+933vfc993/uec+rMve/cc887n8/3vvvuO9PXZ2IMGAPGgDFgDBgDxoAxYAz8lwzMCoB6DmJugg5C2deQGQSZhL7XCBYyxjIEvw/9HUC/IOZeaNQyhuxCgJeYnxF/UcwMvAtMAInYrUnAbM1giLVYOZ4v3BKfsapNm4BPVRMpMU/1HtoEPCkBpKqr6j20CZioiqrgvA/w41tGTbQJuKSWmT/QOMw//UPxWG8gFXltabYEvjIemNmZDAci4GL2LauPhDgKM5vLUPfUdhjXbzlQUPhonoCuS/w/ol0NfZFcR98sRYY8t/MR4MZVheiDyXzGOARtnGxHxr+gBHCmZPZ81jmPeq3k3KjcTyUgCOQ0tMhKIPjvybynaAegjRUCvgqVX/MC+nkkrMc4d3v689FpxK6PPHNlIUanoEICl7SvTjDi+HxFfwu0NcJP2IdQIeEW+nMddAecsR/o73HGWtNlseQxVEg4myAbcmxc/qOJvZXNEFDx2SYJr6AUd+kf/2tq99+TgEcCWDyh7IDy+g3UtzfAHE60P4aKZPo8w+kl7LV/6PSCgJ0ZBKyBfUXGWGvMPNLKJph+BGhn6XtBa9CmgOzDtRxyfHuAEHMdfvNScxt/ye8COd4KUN8KkLFx+Pfi8QxC9EZE5T81BJy0eQTQ51yQbGoOOoj7vYYKaLftRAB9j9Scr+rt5iPaXagL2u0XIYDH4mHVrGoMdj4HPInwnQRdgqRPPxZYGiXbkK0AyGo3JIi443f6hyo3xcYI3+PT0CzgtAt4AUUS7nWYs0ucY2+PdQAihc40DpJwJ2fuI4xF/2rkr5+16/OXXwvNE9YIbkOzVo9bac6L07MxnvZ8yfMEyLN+ESEJLJj44kwUCdBLnyuexAmeNf0y0g9nt4wmZDAWq0vRyjNkJsmyZcKroFWEJNyEuvHY31olWF1zvqUSHunyxtwY098Q+7uM+c90sqwp6ZI3KzxpW5n7cT5/dVeifhO4Rc/00tW63uyyEVv/KBLSAuqL8wDxo14BXO6s7PIkyA3QB6KKbQaxeBxeDjUxBowBY8AYMAaMAWPAGDAGjIHuGfgDNNnFtPo85mwAAAAASUVORK5CYII=" width="40" height="40" alt="hourglass" title="hourglass"></div>
+        <div class="meta">hourglass</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="stale">
+      <td class="label"><code>list_tasks</code><div class="note">iOS-only; not in web TOOL_ICONS</div></td>
+      <td class="icon-cell">
+        <div class="glyph">—</div>
+        <div class="meta">n/a</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEK0lEQVR4Ae2a24tNURzHx/0641ZGjJSYFyFRMyiXYpDkP6DUyBBCSB7mAS8KeVA8eSAxMiTCA8aLBzTu8uCaSybMuOZ++Xw5q1Zr9jl7nzlndPa2fvWdtdZv/X5rr993rb3WOmtPUZEXz4BnwDPgGfAMeAY8A/8pAx3aGLf8xoPRoAS8BzfBFfALJFZ6EVkteAoUqAvpVS+7xEkFEaULPIiIyiQxUEUwn4AbaKay7GcngYSRBNGSZfCGmDf4lcedhFNZBH8D2x3gs+VzhnxsZSI9N6MZlmqWlKYiPeD4TU7pY5dsdwLJRMLSVHQ9SZ84fjtTdQWXdA7p0cyQelOt/X93qlBLWmYqUqkW0SAZgnIhKA6qzFH3A//z4Gwu7XzE2R316+i+WHo9aAKQ6GD0Dbg+sg+Suyhd23yXJwU9OKruu9NBvduSGcDU7fqjKSrS6fAiCArgJ3r31NkFnWkjyCdfumqe02Z5gafdkaNWS+vJN4G+Kd0SUtvWzr9M2bjJZhQix7bNZ/4abfdzH2qX3VGx65Q/AeY6ykWU9wL5jgONYBDQdO4DguQ0yjlBFeh6g/Y4OuvVfJXmmZHVmj7uiHxGV+m0cDDAzvarcexjU9TqrOlrB6P8c6AVXKKRdevt8mvq080M+Re8LKOHdkAm/xj9HvA2Tb2xW0l97KWOCExA2aRH8AtbZ2JBTg96eThLEuqx16kwMaKR1HRuBplmQQv1q0AiRp44Won2Ve35+pX4DHwAWhS11Wm17w+8eAY8A54Bz4BnIAYM5LJXjyK+MaAEvAP6MnQLJFq6Ed1acA8EHYbuo9c9QXeQOBlLRA9AUOCu7iF2uitIjEwlEn0AdQPV3YA+lyl163RCnA5iL8OIwL0T0DF4GugIJEqngJPAJkJ3AcNBrOUYvTdB6f5uRUg0uj+w7/l0rRZbGU/PTfBKN0WMpNbxq4joV3BmW61AHpHvGrGHuvLWjmDI2x7R75+bhX0ZmmX1aB/5r1Y5U1YfR2SvmSCp+pu0+jsYzQKgu8d8i26Fz4GGXBrWSm5GcV6WDdmXpdolguQOStN+e6RaiyqDHmx0ZhU3ZTe1DzTaBrMR216vjnvq1GtSnk2DbbDVM0dn8gsjQNuYkTKTiZgOtex0TaYRtkWvyTZb0Q7527RZn6ndsDXgKs5mHdCU3p+pMadO9kYaTcZJdWzeAvR1KN+iNaAp10ZraMC8m1oAR0RsUIcf+wvy8oh+BWemC9BmYEjQ/wGEXXWr/pLlo/8TGgBiK2vouSFAqUhIt3iNpO6yY7+OcqxFK+lxYJOg16EOLAbzQTU4BKS37fTbIGyhxaTwRYuUzvR2cGF5/WAqLvzQovdQI7kB6PYnU/Da/zeCTiCRMpCo9OmrAWiB1L+5KL0AVoNS4MUz4BnwDHgGPAOeAc+AZ6DQGfgNMcPwurzSrcUAAAAASUVORK5CYII=" width="40" height="40" alt="checklist" title="checklist"></div>
+        <div class="meta">checklist</div>
+      </td>
+      <td class="sev"><span class="pill stale">stale</span></td>
+    </tr>
+
+    <tr class="stale">
+      <td class="label"><code>register_scoop</code><div class="note">iOS-only leftover</div></td>
+      <td class="icon-cell">
+        <div class="glyph">—</div>
+        <div class="meta">n/a</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="person.badge.plus" title="person.badge.plus"></div>
+        <div class="meta">person.badge.plus</div>
+      </td>
+      <td class="sev"><span class="pill stale">stale</span></td>
+    </tr>
+
+    <tr class="stale">
+      <td class="label"><code>schedule_task</code><div class="note">iOS-only leftover</div></td>
+      <td class="icon-cell">
+        <div class="glyph">—</div>
+        <div class="meta">n/a</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAFPUlEQVR4Ae2aTahVVRTHtdK+yaTAkhr1ImvQIEGiyEcl0SQcJDXQHvQxcCLVIIMILgRRClHDoOBGkIMgiCIJ1FSsBmVgUa+kwcWQwlSy7+/6/anFWy3PvXfvc8+59zw6C/7svfbZ62Ovs/fae99zFyxoqY1AG4E2Am0E2gi0EWgj8D+NwMIxjfs07KwE14MrwBRYCs4Ff4HvwFFwEMyCveAA+BPMW1Jw14AXwbdAA83BMfo/C64D84pOxdv14BOQM+BBfd9D11rQeFqFh/vBoMHYM01vzYzvgerWPqjcTb8rQeNIb/0x8AcoGsCvtL8JNoNpcBHw+ecU+EvAzeBRsAf00/ULz+4HjaHz8GQXKBr4Idrl7AUgl5Yj8Ag4Aop0v0z7GWCitAzrytbRwRO0bQKLwKh0Fgo0K34C0Y5mil7ARGgJVj8C0amdtGmKD6NL6fA62AZSBnEZ/d4H0Z6CMPaZoH1dhqMzW2nTek6hZ+hk8g+kCNBnMXjByZm8lsNYaQvWzLiVSnA51KWzyXYyBBfS92knazrGlhinMR63rSdoy6UuAuZ8J1NYQYgzQbtD7VukktrHwBxXuR3IoVzqImB6OrnC9NdyiDlhd66e1PVqeu+j4qOs4+pdQAMZN+lscSf42RleTX2t44dWcwKgt/9Q0Pgw/NehbZzs5xh7PBjU2aEWWodWm7IqPwU5AYxOdWkwfZ34MIPXOeEIMF0qky9QOQPQVPe0BUbJcNL0Iw5oS/UUffXPStV1b/8NWJR1fz+7lKY5oS5V09eZay5VW46UvzsoNyW93KROKLsB6PBjpBPcD8Y0oDyMD/ucH/qx5WrH963mBMAr2eGZhtSjT3ppQyk1ACuCpncD3wQ2+hR9LvQxNQCXO2mtNW0/TaPPgkPe5/Bojk0NgL/Pa9/XIaRppDygpGrkfba2k0qf2E566BrOcXXtAEWk47AuJNeAlKPxtUVKRmjTlqzEbL5q5xpKqQHwM8VH2Ru4FeYp3zCBuvct5SWk7ZUMxL91i3Ac3zexIYPXBWtU0oC9b97nvrpTZ8BxNGhvFV0IJPe7GEfvUL8FrHRtKVUdqV9J6TikzzKe+7cunyujN9BkpzaVSRm2Mutpiqbp5n18LkXMr+1B/WfDw1WBbwIbfdLMGkqpAXg7aLop8E1gbwxO7Av8SKzWv79saH2dPpLGaoW15+tsYktAX5yS8lvqDNCA3wJG51PJ+uXFBGsqN6BXP9gYvUolJml7VrqcQdIirPKD0pqqFdTADwHv25pqTfyj7UyKr4KhdXUYytS5Kfikr9J+O8xUN7i7fhP0kf4CPunIOVht6af6AnUCeJ/Wl9aWIKjf33rAG3wpQa6OLspfO4Mv++H1pbpWug3tPgCqP1irxWLlW4Mf2qXiWaBYsoLW54Nx3cRmKtCbqmJzsK+XoP8njI2UEA8APxMUhLpngpKbPsN5u6rvArVPfWz8hy6G64HojHJCHYlRl7DtBfb0IlI+r9OteppCZQ/EIGh3uB1UQUp294KjINr5kDbdAidKmglxOZijOizdAcocm/Xd4W6gS43p8+Ue2peARpByQkyM3tnjPO+CDUBX6aJz+mLarwL3gG1AP2h4HVZXrnkSFOmgebKkLbIHzNl+pS4uh4He7kHwJdDZvV9/a9cvR6tBo0mHJZ0Y47HZBlGm7KFvI1gE5g1pWcyAHUCHlNyB61vka0D3jdoGXtulAac9LYWZBvpsvQJMAbVpu9Sa1no/BrQcZsHef5H0wyZ9W2oj0EagjUAbgTYCbQTaCLQRyI3A3+K+yGqsessnAAAAAElFTkSuQmCC" width="40" height="40" alt="clock" title="clock"></div>
+        <div class="meta">clock</div>
+      </td>
+      <td class="sev"><span class="pill stale">stale</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>update_global_memory</code><div class="note">iOS comment says BrainCog but both use brain</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="brain" width="40" height="40"></i></div>
+        <div class="meta">brain</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="brain" title="brain"></div>
+        <div class="meta">brain</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="stale">
+      <td class="label"><code>delegate_to_scoop</code><div class="note">iOS-only; web uses delegation-line arrow-right, not a tool icon</div></td>
+      <td class="icon-cell">
+        <div class="glyph">—</div>
+        <div class="meta">n/a</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAE7ElEQVR4Ae2ZeagVVRzHTcvSLCKRFMpES8JKipCwSKJCIVp5VFTSRn/0R38YZVgQJoIERVG0QRQWrVhgC0EKkkirYsvLNItUbLfU1LZnWp8PvAOX4c7cmftmufc5X/gwc8+cc+Z3vu+s84YMqVU7UDtQO1A7UDtQO3CgOjBskDT8INoxCkbCXvgPBr2G0sLJMA/WwN/wL7wO02DQajQtuwLeht3gX7sRTbgXUvXug8nYDRpOkKfBbLgUxkOjevmxDE6FmXA4jIA9kKhON+A4orfBNvx00IioPiZhIRwGNv4f2A4tG0+ejpST2Sx4CX6Fxu4dvV/J8/PgQvioP+/nXHugq+R4nQILYD3sg2hjo7/fIc90OBfehfD8Be5PhK7QGKK8Fhy/dtnQiKTrfvItBYfEmeBkGPLv4n4uuCx2rA4lsrPgcdgKIfg0V2f4F8HeMhVeg8Zyq/h9PnSc/ItMgDmwGvqgMfA095Z5BibBZHgeokPlEdJcJjtGRxLJRbAEnJnTNLRZnr8o+yi4KhwPT0HY8YX8W0i7ESrXMCKwey6CjeCYDUG2c3Wz8wAcA+PgYXDXF63LecG9QmUay5tvgBXwJ0QDbOf3TupZCEeDXfs++AOidbn2z4fhUKrcbZ0DdskfIBrYQH5vo767wGEkNlBDmtW5lvRLoBQ5oU0El5tPIDoWmwWYNU0zb4OR/dzJVUPi6nmaZ84Pheooar8MlkLcXyIuwCzpm6n/FnC5lFvhe4irw92ieQrTCdS8AL6BuCDySnfSvB48o8hNsAmS6l/O87Mhdx1CjdfAOkgKIK9nvbznShjaz9VcN0BS/ft4fj+MgtzlpOLkkhRAXs9W856LwflFHGqfQqv6vyKPRhWiu6m1D1oFMdDnq3jHBQ0tmMX9Bynf+zL5Tmoom+vtHdSW9oDSrgnR8TuDd7qPSFOfsc0Dh0whcmJZBmmCyZrH3eEbcAYETePmLUhb1/vknRkKF3U9hYofg58gbWCt8nmiewWsO8hPWUtAY1qVD8+NawyUIl/UA8/BVghBZL06pyyGxg8W3j8Lzuhp6/uOvDdDJXLJcay6/HwBeyFN4B5gnoDxEOT9k5B1sn2TMo3DJ9RX+tW9wskwF1bCbmhmhhPWgzAOgsZy8xB41G1WJi5NszwguUvsKLl+HwvXgeP5Z7AR22A+jIYgT3eLQGPiGhqX/hllLoeOl0NlIviX1pygI7i5B3ZAXCOT0hdTbgJ0pTw+3w6/QFIj455tp9wc6FrNJvKBHKpWUH5Gnq0vbBfVJEjP9lNhUpNnaZLsFX5/cA7ITWUa4HLpUri/zei/pZwG/N5m+abFyjZgC1H4tacd2XjJVWUaYOAbwSNsVrlX8Hi8IWvBVvnLNsDGa0JW9VLAbxNul3NV2Qa4/GnAzoytKKT7G0PZBvjOrL3Ak6gGeM1dVRiQdR4o7K+vm1UYsJn3akIftJLfDjTAOaAQVWGAE5kGuCNsJYeLBrgKFKIqDLAhaeeBQru/gVRlwNe8217g9jZOu3igAe4AC1NVBvjfY3uBn9fi5MZHA5JMiiubOr0qAwwwaRiEg48mFKoqDXBbuz6mdZtId+e3I+Z5bslVGvAbrVgHPzZpzXukyaDXFFro/wjs8oEvub8KDhhNp6Wvgj3iQ+gBvzbXqh2oHagdqB2oHagdqB0o1IH/AatV+a3FwbZmAAAAAElFTkSuQmCC" width="40" height="40" alt="paperplane.fill" title="paperplane.fill"></div>
+        <div class="meta">paperplane.fill</div>
+      </td>
+      <td class="sev"><span class="pill stale">stale</span></td>
+    </tr>
+
+    <tr class="ios-only">
+      <td class="label"><code>lick_confirm</code><div class="note">Web-only tool icon</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="shield-check" width="40" height="40"></i></div>
+        <div class="meta">shield-check</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph">—</div>
+        <div class="meta">n/a</div>
+      </td>
+      <td class="sev"><span class="pill ios-only">ios-only</span></td>
+    </tr>
+
+    <tr class="ios-only">
+      <td class="label"><code>lick_dismiss</code><div class="note">Web-only</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="shield-x" width="40" height="40"></i></div>
+        <div class="meta">shield-x</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph">—</div>
+        <div class="meta">n/a</div>
+      </td>
+      <td class="sev"><span class="pill ios-only">ios-only</span></td>
+    </tr>
+
+    <tr class="ios-only">
+      <td class="label"><code>sudo_request</code><div class="note">Web-only (iOS sudo card uses key.fill)</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="shield-question" width="40" height="40"></i></div>
+        <div class="meta">shield-question</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph">—</div>
+        <div class="meta">n/a</div>
+      </td>
+      <td class="sev"><span class="pill ios-only">ios-only</span></td>
+    </tr>
+
+    <tr class="ios-only">
+      <td class="label"><code>list_sudo_requests</code><div class="note">Web-only</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="list-checks" width="40" height="40"></i></div>
+        <div class="meta">list-checks</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph">—</div>
+        <div class="meta">n/a</div>
+      </td>
+      <td class="sev"><span class="pill ios-only">ios-only</span></td>
+    </tr></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Lick channel icons</h2>
+      <p class="sub">SliccIcons.lick(_:) vs KIND_ICON in slicc-lick-card.ts.</p>
+      <table>
+        <thead><tr><th>Use</th><th>Web (Lucide)</th><th>iOS (SF Symbol / port)</th><th></th></tr></thead>
+        <tbody>
+    <tr class="drift">
+      <td class="label"><code>webhook</code><div class="note">Web uses lucide webhook glyph; iOS approximates with a bolt</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="webhook" width="40" height="40"></i></div>
+        <div class="meta">webhook</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAADLUlEQVR4Ae2YW4hNURjHZ+R+iZRyi5G8TbwqtwxFQp6keDMPZEouNaV5NC+SJFGSa0pJpuRBkRJKIvIg5W3knojI3e//cGq3rd1Z+1t7jlPzffXr7LPOd1v/s/bea++WFjdXwBVwBVwBV8AVcAVcAVfAFXAFXAFXwBVwBVwBV8CqwHAC98AtuAI7YRwMChvBLK/Dnxxv+b4LRkIz2HSa2AG7YUqVDZ0gWX7y2e/9/N4JQ6ssWiKXVmIvfIVaX885Hg/Jto0MtaT1Pp/iux5ak6vGJRiC22Z4CaHe1salKfZazE/fC5KHCtbGHhCzsjhtJb90kOUh1GqGPuemVNL59LpOgVDR7NhN4hekNBGIncNYH2TrhI7PBGKjh3RRuxdRJFQ4NHaZXEn/BvET4ADErEitjNFgttNEhiaSMvabnOdgdsmudGHtgncQU19+bWC27UTGFLL6/CD/UZga0eEqfJ5AbK2f+C6LyFvospRf1GBswRS/L9TZBxMhb+0MXIWy+bUHMNtMIrWxKVs01f8DNXtgDEwCrQ79k2XzniXGbKOI1K2rbNEq/XXH+Wjs4T5xSbtRXZyqnEwjc72h9xlgNu3lG9lwlbV0vVpinjmBy8FyvlU5iZRcuj2abRaRsffWlCYHKvakeeYEapf0CCzNNcOKuUvvekQ323kiLZO/SJx2cnpIum3MYambjXlF3Wlgtm4iswljjvVcsChQcQ1j1pUUUzfvo+eAhYE+oodW4PkL8omLvvfjuwlaocj0TL4RnkFRnqrGtxQ1ETOupfs+sslP+PWANkixNgzHrfACqppwNs+x2EZCfmMZfBzRmFbHcZgMVtMFVqdZrNjZSRYd3yGfXsqa7QKRRclr49fwmWeu8G+gnt974TPUalg+taKSXnCuq9OAHjdXw0CZVtNhiHmRkRfoG3HzUxs7RIJ8Yn3XJqgLGvUmVxsvvaYqcxHuxD/ZNpAhK4BU3Q9aov/D2inaB9meQsdHqmxOIpyCvdAGzWBa2jcgNHldj3RXGRTWwSwvgW69Oi0Pgu4kbq6AK+AKuAKugCvgCrgCroAr4Aq4Aq6AK+AKuAKugEGBv3arTypKgvzNAAAAAElFTkSuQmCC" width="40" height="40" alt="bolt.horizontal.fill" title="bolt.horizontal.fill"></div>
+        <div class="meta">bolt.horizontal.fill</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>cron</code><div class="note">Web: simple clock; iOS: calendar+clock</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="clock" width="40" height="40"></i></div>
+        <div class="meta">clock</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="calendar.badge.clock" title="calendar.badge.clock"></div>
+        <div class="meta">calendar.badge.clock</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>sprinkle</code><div class="note">Match</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="sparkles" width="40" height="40"></i></div>
+        <div class="meta">sparkles</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEvElEQVR4Ae2aW4hVVRjHLe1mot200hxvE0GZZnZzSiVEFFFEH/RVCKKHegxinnrwJYIiEAQfeinoIaOgh4oeijEYsTEUGy9IqYPkXTOwi6b1+51mw+JwLvvk2nufc9x/+M1a+3LOWt+3vv2ttfaZMWNKlR4oPVB6oPTAjeuBsQWZfgft3ge2/1dBfag0W5QDnqX1l2AcHKz0pKA/NxfU7oO0+yRYFqoiHHATFs+Ep0bLOylvGGn8i/At/AP7YCP4KBQiO5S1bqGBhbAKFoOhPxES/U5lGAbgC9gJlyAX5eH527FkAayFh8EZINR4DubDXXABDkBuDqCt3GS0TYV+OAo+AmfhXeiFIvIRzeYvI2AzXIFtoFMKU2yvT8ISaaQ/uHgIfgTXAL9AYYrpgB6seAcc3XubWKTRQ3CiyX2ZX46ZBKfQ2/vBBGZ5DuppPxc+gJP1bsjrfEwH3EOnxaxv2UiOfOGjbwdjOsBRNwqc1y07QrEccCvW9oJ5wN3dbHDac6pra8VKgn1YuRRc9U2A52AudL0Mdbe1u8HRTjAKPoXnQac0k057Gh6DPJbnzfpT9/oDXFkPTnffwa+QGF2rvMx15/yPoB9WgC9CqrWBE8PwGbhsblu9Qc9cyNQyNs25M3z21RrWvca5szAIK2tcz+xUq0lwKz0ZAMP1CfBZnwP1wlynuOjZNYpRsxdCGfJ3g5shp0/rHSOzv1vcz8G1fRIFV6l/A2vA57uRNPg98LNGgdGQm1qNgOqO+YzvAOd+tfq/orKvf5P60Ohxo2IyF0XpDOtjQSdmrljT4B56uhP+BJ2hU36ANDKxirI/yYKqciLrP9cbAUn/HK0jMAJGxU9wDdJoKjdJIuvTIJelcqwIsPOnwSx/ahSKpjIBzoQZwZ3Vx8Gl+NVYEWDPLsB5cJo0maXRQ9zkazI3UIlmU/Gcg5M2ipLPtlzGjABDNsEoSKN53CShfEf4OPSGJzulfhsdlTTy94DNYM5wCgwxn2yCrtY6rNsLoeFh/WOuze1WD/Rh2FcNjNcRbqi2QDhDcNjZ8vFwM/U9hKNdr64TtoM/rHS03AG643PUXSjVM7jeeZPq+7AYfK0eTbH33n7fRJgFj4IZfhHMh2avy7mlqXRQ8kbZDdY+OAjHwem3MC2hZUPVxdDfUG8kszrvEvwYvAU6P7VirQMW0OIySDYyqTsQ6UZzSw84EI+08p2GbAxN4Ut8/WV2dxVn+E+HcIXHYVQZaS69D4N7DxkAE6wRkUqxHFCrMV9w6AgdsxyegevJA1f4vM/7l6Chu8HkeA3aXjp6BvSDI9ZKLrjE/Z+A4e0LmI6XUfEhXIZmjviZe16B8dBV6sGabdBoxhjh+svg26Gu1AtY9TXUigKj420wj3StHNnX4TeodsIg51ZA5oq1Dvg/Hb3Kh3aB2bxaTmWSuYp0gMYNg/8pEsqpbT+cD09mVS/aAb46cwFzMTDQzC+5qGgHaOQIHAus9VhyUTs4wN2dJLJ+IjnIumwHB5zESJ975QuQ0xA+Ep7PTO3ggDNYJ8qcILmpHRzgWv8cuIOzzCX7005F7eAAO6LR4o8rkpvG5dZS44ZcDwzBUTgEpUoPlB4oPVB6oPRADh74F5aiSiEs0GE2AAAAAElFTkSuQmCC" width="40" height="40" alt="sparkles" title="sparkles"></div>
+        <div class="meta">sparkles</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="weird">
+      <td class="label"><code>fswatch</code><div class="note">Web watches; iOS says &#x27;folder sync/settings&#x27;</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="eye" width="40" height="40"></i></div>
+        <div class="meta">eye</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="folder.badge.gearshape" title="folder.badge.gearshape"></div>
+        <div class="meta">folder.badge.gearshape</div>
+      </td>
+      <td class="sev"><span class="pill weird">weird</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>navigate</code><div class="note">Safari glyph ≈ compass — intentional SF stand-in</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="compass" width="40" height="40"></i></div>
+        <div class="meta">compass</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="safari" title="safari"></div>
+        <div class="meta">safari</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>session-reload</code><div class="note">Match</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="rotate-ccw" width="40" height="40"></i></div>
+        <div class="meta">rotate-ccw</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="arrow.counterclockwise" title="arrow.counterclockwise"></div>
+        <div class="meta">arrow.counterclockwise</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>upgrade</code><div class="note">Match</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="circle-arrow-up" width="40" height="40"></i></div>
+        <div class="meta">circle-arrow-up</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEB0lEQVR4Ae2aOWgVQRzGjUaIYCLGwgv0oQYPtBCPxhAt7GxS2AXBUistBAUbUyixUFsFbdKplRY2ijyjYGGUeEa8noKoYOKVRsXr90EGJks2mZ093gbnDx8zuzPzP743O+ebNi1IYCAwEBgIDAQGAgOBgf+UgYaC4m7EzgbQDlaDNtAKmsFfMAKGwDMwCPrAffAHTFkRudtBL/gKFGgSDFP/DNgCppRMx9su8BgkCXiiunfQ1QlKL5vwsB9MFEyasiq614DSyQw86ga/QZoAXdr+wMZ+UBppwZNrwMX5LOtcxGZTvVmYjwMDdQjeEHkD23PqRYIMa6oyztQrFQmF9wTN69USBG9I1+dQqPRgzRgvS1rYwNhB8FqhlSVw44dmh9ynyJkYeZRR8Fr6HgCHwJeMdFbRk6vsRbthPE36Dj3aExhZT0aEpNFp2nYapVmnGvhqGTj5Bh0rxnFuLe8+ZKBfy+ZcZCdaDcu+6Ut0LJ3Au5WUvc3ATi4bqMspHXtK+8VgMllOhdfAl2S10y4yU9G+/SfwdeoBbbVqNDKLjP28kGcNsEaWkHkBfO1pK61daWayA02+ztyl7TzLEwV6BWy03m0lfwFoU2VkERn1Gl+7GlgzE9+Fz208sNfq+lXOAwWlQc/IZjJ6dw40mJek6iUPgQ8J+yw9qbM+37+6/eyI5bM8m2DsmWCd9f5UpI16jwZP0841PR3Rk+rRpysejlg8GQmiYpWvipQdscqUPQ5cAzf1rkd0pHr86OGA2aWpSx8dp32Fd0aiBCiIg6OF6kUaR0xgrql6YGbyHU2uhu16Q7SLm9crlnfjESA9WjT5LpNrlv7YbGNsydgC3ynFHv3HanR70nToK/ZgGqvDNbCRWA3lLXDy2ZWAT+WNM9YzJ59dCXgea6a8BU4+uxIwWN44Yz1z8tmVgFuxZspb4OSzKwFV4tQx2FSRbziqtcOk4krAZzRlurKa1LN0FS7R/JeLClcCpKvXRWFJ6uTiaxPBvQf2Si9NvmKRpfPBNLrstrqVdloEyX6SHqDl8Ak1ykjaLD123nrtlT1GKxGSi+gk5xWwGffN19DTBXaDuP1CUt396Eryo1I9uaQ5HUoaUJL6uprX/xMKER06JnGuiLrdhUQ+akQD4r0SkaD/J9jniaNu5pssQH1W40GaHjKAHy35hhqvfVmdSdD/E3RwWldRT6jH51DFrn3iXFcSNCYUNTBqT9IDXE+zCiVGU2Se44Ku5jsKjcjDmBZLuvfPctlcQ98eoFulKSP6LHaBq0CLlKQjve4idSGjW+ncurvzpgEn0shcGm8D7UAbH639W0Ez0DetA8xhoD9LPwE3QR9wOtikXpDAQGAgMBAYCAwEBgIDgYGkDPwDZt9cq8aZ3nYAAAAASUVORK5CYII=" width="40" height="40" alt="arrow.up.circle.fill" title="arrow.up.circle.fill"></div>
+        <div class="meta">arrow.up.circle.fill</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="weird">
+      <td class="label"><code>scoop-notify</code><div class="note">Tea cup again instead of a scoop/bell</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="bell-ring" width="40" height="40"></i></div>
+        <div class="meta">bell-ring</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="cup.and.saucer.fill" title="cup.and.saucer.fill"></div>
+        <div class="meta">cup.and.saucer.fill</div>
+      </td>
+      <td class="sev"><span class="pill weird">weird</span></td>
+    </tr>
+
+    <tr class="weird">
+      <td class="label"><code>scoop-idle</code><div class="note">Web: idle/asleep; iOS: waiting</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="moon" width="40" height="40"></i></div>
+        <div class="meta">moon</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAADbklEQVR4Ae1Zz4tPURQfDGI1ISllZomSsLBQxoLF5OdOjbIkC4riL2Atko3dlMiULO1MmRqJJLJAE4X8KlN+JL8/n7xT1+u+933vfc993/uec+rMve/cc887n8/3vvvuO9PXZ2IMGAPGgDFgDBgDxoAxYAz8lwzMCoB6DmJugg5C2deQGQSZhL7XCBYyxjIEvw/9HUC/IOZeaNQyhuxCgJeYnxF/UcwMvAtMAInYrUnAbM1giLVYOZ4v3BKfsapNm4BPVRMpMU/1HtoEPCkBpKqr6j20CZioiqrgvA/w41tGTbQJuKSWmT/QOMw//UPxWG8gFXltabYEvjIemNmZDAci4GL2LauPhDgKM5vLUPfUdhjXbzlQUPhonoCuS/w/ol0NfZFcR98sRYY8t/MR4MZVheiDyXzGOARtnGxHxr+gBHCmZPZ81jmPeq3k3KjcTyUgCOQ0tMhKIPjvybynaAegjRUCvgqVX/MC+nkkrMc4d3v689FpxK6PPHNlIUanoEICl7SvTjDi+HxFfwu0NcJP2IdQIeEW+nMddAecsR/o73HGWtNlseQxVEg4myAbcmxc/qOJvZXNEFDx2SYJr6AUd+kf/2tq99+TgEcCWDyh7IDy+g3UtzfAHE60P4aKZPo8w+kl7LV/6PSCgJ0ZBKyBfUXGWGvMPNLKJph+BGhn6XtBa9CmgOzDtRxyfHuAEHMdfvNScxt/ye8COd4KUN8KkLFx+Pfi8QxC9EZE5T81BJy0eQTQ51yQbGoOOoj7vYYKaLftRAB9j9Scr+rt5iPaXagL2u0XIYDH4mHVrGoMdj4HPInwnQRdgqRPPxZYGiXbkK0AyGo3JIi443f6hyo3xcYI3+PT0CzgtAt4AUUS7nWYs0ucY2+PdQAihc40DpJwJ2fuI4xF/2rkr5+16/OXXwvNE9YIbkOzVo9bac6L07MxnvZ8yfMEyLN+ESEJLJj44kwUCdBLnyuexAmeNf0y0g9nt4wmZDAWq0vRyjNkJsmyZcKroFWEJNyEuvHY31olWF1zvqUSHunyxtwY098Q+7uM+c90sqwp6ZI3KzxpW5n7cT5/dVeifhO4Rc/00tW63uyyEVv/KBLSAuqL8wDxo14BXO6s7PIkyA3QB6KKbQaxeBxeDjUxBowBY8AYMAaMAWPAGDAGjIHuGfgDNNnFtPo85mwAAAAASUVORK5CYII=" width="40" height="40" alt="hourglass" title="hourglass"></div>
+        <div class="meta">hourglass</div>
+      </td>
+      <td class="sev"><span class="pill weird">weird</span></td>
+    </tr>
+
+    <tr class="weird">
+      <td class="label"><code>scoop-wait</code><div class="note">Web: wait; iOS: tasks checklist</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="hourglass" width="40" height="40"></i></div>
+        <div class="meta">hourglass</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEK0lEQVR4Ae2a24tNURzHx/0641ZGjJSYFyFRMyiXYpDkP6DUyBBCSB7mAS8KeVA8eSAxMiTCA8aLBzTu8uCaSybMuOZ++Xw5q1Zr9jl7nzlndPa2fvWdtdZv/X5rr993rb3WOmtPUZEXz4BnwDPgGfAMeAY8A/8pAx3aGLf8xoPRoAS8BzfBFfALJFZ6EVkteAoUqAvpVS+7xEkFEaULPIiIyiQxUEUwn4AbaKay7GcngYSRBNGSZfCGmDf4lcedhFNZBH8D2x3gs+VzhnxsZSI9N6MZlmqWlKYiPeD4TU7pY5dsdwLJRMLSVHQ9SZ84fjtTdQWXdA7p0cyQelOt/X93qlBLWmYqUqkW0SAZgnIhKA6qzFH3A//z4Gwu7XzE2R316+i+WHo9aAKQ6GD0Dbg+sg+Suyhd23yXJwU9OKruu9NBvduSGcDU7fqjKSrS6fAiCArgJ3r31NkFnWkjyCdfumqe02Z5gafdkaNWS+vJN4G+Kd0SUtvWzr9M2bjJZhQix7bNZ/4abfdzH2qX3VGx65Q/AeY6ykWU9wL5jgONYBDQdO4DguQ0yjlBFeh6g/Y4OuvVfJXmmZHVmj7uiHxGV+m0cDDAzvarcexjU9TqrOlrB6P8c6AVXKKRdevt8mvq080M+Re8LKOHdkAm/xj9HvA2Tb2xW0l97KWOCExA2aRH8AtbZ2JBTg96eThLEuqx16kwMaKR1HRuBplmQQv1q0AiRp44Won2Ve35+pX4DHwAWhS11Wm17w+8eAY8A54Bz4BnIAYM5LJXjyK+MaAEvAP6MnQLJFq6Ed1acA8EHYbuo9c9QXeQOBlLRA9AUOCu7iF2uitIjEwlEn0AdQPV3YA+lyl163RCnA5iL8OIwL0T0DF4GugIJEqngJPAJkJ3AcNBrOUYvTdB6f5uRUg0uj+w7/l0rRZbGU/PTfBKN0WMpNbxq4joV3BmW61AHpHvGrGHuvLWjmDI2x7R75+bhX0ZmmX1aB/5r1Y5U1YfR2SvmSCp+pu0+jsYzQKgu8d8i26Fz4GGXBrWSm5GcV6WDdmXpdolguQOStN+e6RaiyqDHmx0ZhU3ZTe1DzTaBrMR216vjnvq1GtSnk2DbbDVM0dn8gsjQNuYkTKTiZgOtex0TaYRtkWvyTZb0Q7527RZn6ndsDXgKs5mHdCU3p+pMadO9kYaTcZJdWzeAvR1KN+iNaAp10ZraMC8m1oAR0RsUIcf+wvy8oh+BWemC9BmYEjQ/wGEXXWr/pLlo/8TGgBiK2vouSFAqUhIt3iNpO6yY7+OcqxFK+lxYJOg16EOLAbzQTU4BKS37fTbIGyhxaTwRYuUzvR2cGF5/WAqLvzQovdQI7kB6PYnU/Da/zeCTiCRMpCo9OmrAWiB1L+5KL0AVoNS4MUz4BnwDHgGPAOeAc+AZ6DQGfgNMcPwurzSrcUAAAAASUVORK5CYII=" width="40" height="40" alt="checklist" title="checklist"></div>
+        <div class="meta">checklist</div>
+      </td>
+      <td class="sev"><span class="pill weird">weird</span></td>
+    </tr>
+
+    <tr class="ios-only">
+      <td class="label"><code>workflow</code><div class="note">Web-only kind</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="workflow" width="40" height="40"></i></div>
+        <div class="meta">workflow</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph">—</div>
+        <div class="meta">n/a</div>
+      </td>
+      <td class="sev"><span class="pill ios-only">ios-only</span></td>
+    </tr>
+
+    <tr class="ios-only">
+      <td class="label"><code>discovery</code><div class="note">Web-only</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="radar" width="40" height="40"></i></div>
+        <div class="meta">radar</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph">—</div>
+        <div class="meta">n/a</div>
+      </td>
+      <td class="sev"><span class="pill ios-only">ios-only</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>sudo-request</code><div class="note">iOS sudo card uses key.fill (not via SliccIcons.lick)</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="key-round" width="40" height="40"></i></div>
+        <div class="meta">key-round</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAADaklEQVR4Ae1bO2gVQRSNioo/ohG/heIHBI0QC0EbSeUHC41gYWMhgmCZRsROTGOIGiWIhY1goSA2olgJEUQUP6DiH/yi4AcULeL/nGJCGN7O3hlvdncme+Gwb2fuvXPPebuzb2f3NTXVVitQKzCSFRhVMPlxGG81sApYDDQDv4GPwCOgH7gHJGfzwOgY8Bn4m4Mn6O8EJgLR21gw2A8MAHnE7f63iOkAorWZqPwaYBPz3T+CHKNjU2EWCn6sQN6IdTomEcaj2JuK5I0IB5EzCjuEKk3RWVvO+BsAijUV2AV8BbL82f4HWAdU2pajul+Ai8g79M9owGIN2kjSFfsM/byUVtbOojIXAfbtdVR/SRC/0xFfahcnvrxvnwKsd1TZhb48AW874r27NC8vvGaPEVTQ4vBx9ZmwFfjAX5EqpilAu7CibRl+/OW3KaPPbm63G6qwfx9F5B2+pn+PVfAE7J/ziD9qxVdi94sHAQpxB+gG+oA3gBFHsj0P/8qZZAKUkJP4XNZirzkHfNMqSpBHbSxNAT4JCtdy4fqBimkK8EClIlkStUUTTQGuy2pX8bqqkkU5SSvySSaw//V5inGKXsoTSzUct8G2YJ3iakpw3IIx7YI1918j/+QSeHkN2T+MImz2qqQk5wUYV7L663tkHC6JT9CwXLkZAHxJZvlznUHzihVEyjdoLQK+A1mkpO29yBEdeSPWUnzgAoaU7FA/nkbbTaKYt3w4sht4CQwlmPWZN1WnAK4wJWVzwSaLtGm/CJ9FRbIu8tziQ9A843JXkTXl1aPaz0PafNOu7Sv4zVcduSLJpAJQnOcAT5mkzEcAivAQ4APWZMxXAIpwF5iWigIhAlCEG8CkFESYDRIkFIIdKQgQegS8APk5I1UAPi9YmAJ5cvA9At4jZkkq5H0F+ICAZSmR9xGAd4FtqZGXCsDniytTJC8VgC9IJGuSSZB3jFnvD0QvjEQA/kjigsjW6Nk2ICAVgCL8BDoa5Ii6yUcAivAD2Bg1Y6v4kHsBtafAVi2Du0UuP/Fb9bUTvgFV9vc9BfZVmUxIbVMQxKNAggMhA8QQc0YgQE8MREJr5PuAVxwi9IUmjimOz/cb/ZPkJNor++aHtsDNSHgLMPNBVP8I0RJjOhJdAI4Dkpestcat89QK1ArUCgwq8A8o6r6sKPK3fgAAAABJRU5ErkJggg==" width="40" height="40" alt="key.fill" title="key.fill"></div>
+        <div class="meta">key.fill</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>welcome sprinkle override</code><div class="note">iOS maps sprinkle name welcome→door; web SPRINKLE_ICON_BY_NAME may differ</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="door-open?" width="40" height="40"></i></div>
+        <div class="meta">door-open?</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAB4klEQVR4Ae1aLUsEURRdP0A3axBEVtmgQTCazBYx+BMEo9GwdsHmHxA2iVnsosGuxWTYJoioiIIY1HNXB04QZOfNe/PgnguHOTPse/fec88MG16joZACUkAKSAEpIAW8KjBUUeNr2GcDmAFGKtrzr22+8PAJuAC6wCtQawwj+zFghaXGLXK2gFpjG9lTN875zkK7D30FrlDAEhXxAP5G91VTe72mAa57Dvc9oJZ4R9ZiIqfgXFisgrYop+VeDUlk73BIjNHia3ArKHaY6zjG+WZQHirAoPnK/H4Ki3aByTKL/1uTswALKP4Q6AF7wDxQeYxWvmP4hivYYgew/xbRvyk5CbCOhs3qy0CyyEWAFjo+SdY1JcrlG9CkmpLSXARI2jQnkwCshkcuB3icOvcsB7AaHrkc4HHq3LMcwGp45HKAx6lzz3IAq+GRywEep849ywGshkcuB3icOvcsB7AaHrkc4HHq3LMcwGp45HKAx6lzz3IAq+GR5+KAe4j/WMcAchHAmm8DHeAupRC5CGA9PwP7wCywCdwA0SNUACu6CObFszLXDyzqAouAnRQ7Byw+fy790+K/tH+x0+O1hU3KCrgEJiJWYWcG+UDXAe5fgCMgdIjYQiEFpIAUkAJSQAp4VOAbeIVq4rFCcmcAAAAASUVORK5CYII=" width="40" height="40" alt="door.right.hand.open" title="door.right.hand.open"></div>
+        <div class="meta">door.right.hand.open</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Attachments</h2>
+      <p class="sub">SliccIcons.attachment vs ATTACHMENT_ICON in slicc-user-message.ts.</p>
+      <table>
+        <thead><tr><th>Use</th><th>Web (Lucide)</th><th>iOS (SF Symbol / port)</th><th></th></tr></thead>
+        <tbody>
+    <tr class="ok">
+      <td class="label"><code>image</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="image" width="40" height="40"></i></div>
+        <div class="meta">image</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEkklEQVR4Ae2ZW6gVVRyHLbtJZtn9oQ6UFBVZGUhYb0VBEFSUQYUFGQaVadGFCuwhCCWL6P7Sc/TSjQgiQ4ogIgXpghGhEmSeKM3sAqnZ98EMjNtZe9bes05ntmf94GP2zKxZ8///Zt1m9rRpWdmB7EB2IDuQHcgOZAeyA9mBKenAIZFZH0e5c+BMmAWHQde0l4B2wWbYCNuhtUx4JWyFfSPEOLE+Dz60oTWPK9+Cf2GUkq/G+gGxL4CBZZN/GvZAtcJR+223eBlOgVqF+vJ8Suvc9OKqv9iugddhC+yGrslcxmAhXA0z4VC4pOBdttFaQskfwSeuiy/CyTAKmk2Qq+EfMH4Hw2VQKx2qk5UcX5zYxPYz+LnY7/pmRxHvt0WgdmfzqZ3xQgYcxQVHFhXoYJIppajv/9j8WonZxM3liLobhwzwotIxu4AzwSjJeI27lLnU5lp7sLxqKmxDs0Cb3J05HIF9Cn8WWzbdVMoW4FzraPsVOGbYD9fBYnAg6qRStYA5ZPcY3AZlnZrravIFOB9WwTbolFK0gBlktAhugTL5apKe15ibIcX9qnW3/p0ioIuJ4lJw6gzJNYVlzg0VmKzjKQw4neDHIhKILRdRVboiKQw4nHDqmn5vlLHleq+b0P0UBvxChI74TYot11RP0vMpDPiSiKSfXJVZ5pt+hSbjXAoDfGt8G5zzQ1rLiXdgZ6hAz3G7i2uHmVAuyXuKpNlNYYCRvA+uAz4GV4Cl/G7wHqyAT8uDfbYncW45fA12K99A/Q5xDWhKcsUMXjE39b37Q/gcXPxcCDb79WDT94NKk86mwOPgeqFM1jXE5XAePAOvgMvrZEplQBnQ7/ywFcgguojCtpJroa5VnsrxR8BXWj/OeJ8kSm3AMEFdxkVPwJUNF5/I+QdBE56D36C16txuXWlkBQ5uV4EfX5uSL6uczY/74WE4oTzYZtu2BZiE/f0GOAu+hzdhA1QHQ3b3k8ZfDzb7C/Y707wziyL3gePEahiHodXGANf+i+BROKMSwe389qm+BnUDloHfCs4amjaMjuaie8DusAq2wlAa1gDn57vAPukAVdVp7PhkjwVfhat91VHd7wMOaJZrI+syBg1dCT/AwBrGAPvhUlgO/q6T/fMh8Ek9C87nNl2fmn3Y+T6F/Nh5J9gSnoJNMJAGNcCvPg/A3WAr6KdjOGlftZzd4Ua4FzQipWwBdjvNeBK+g2gNYsAYtdp074B+7/7Vm9tMl4BjhYG6PxEyj3IBpQnRijXAwcobOHjFXlMGYeIy0ZrODRaC3WFt7M1ikplDZS5R/WtsMtcNMTkZ33WwAJyiGxVjgImPkky8d2YKxt/1JxoMPNWJkAF7uMHeVDfpQD3mIwcoZMDflIx5hT2gwg4eMHHz2V0XW8iAnygsB4PMY1sokZABG7lADgb1zSVkgF9x1sD4iDuwg/g/gnWhPFw81GkfB11S2n/mQtOylyKd03YieglehV2h6JoWCxo0D26CK8DXXtfyIeM4NWly1voDNsMn8AZ8AbWDH8ezsgPZgexAdiA7kB3IDmQHsgNT2YH/AAC8MWCy4BhWAAAAAElFTkSuQmCC" width="40" height="40" alt="photo" title="photo"></div>
+        <div class="meta">photo</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>text</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="file-text" width="40" height="40"></i></div>
+        <div class="meta">file-text</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAFCElEQVR4Ae2a24tVVRzH7WKWWk3e0CnN9MHCsJEgUzPDSskLiqGI4IMPEkT5v2QR1Usg+GCUgg+CvRiFXa2pscy7o46SOZaXNDVvn89wNhxGO3P22nudfQb3Fz6z9+HsvfZvffe6/NY6M2BAqdKB0oHSgdKB0oE71oG7cqq55QyGoTAI6in3Btddg3NwAa5Dw1VPoLWCeoAvn4Jn4Ql4BAbC3VCPrnLRWTgKP8Au0Ix+oRaiXA6boAusjG81LbaCU7AVVsEIaHr5lhfDNxBa8d5GaUQ7rIHh0BDdG/iUsdy3CGz694D99yQchL8rnzn8rxwrJsFjVVfYbZ6BN0FTN8MZiKpQAyYTVRvYEnyTHfAJfA/1GDCO696AxIATnKtWmAKa8B9sAQfJaAo1wBZgJZRvyUA/ACtfj/7houprv+TzH7ACRsNUeAs0wbHhPERRqAEPE81DlYi6OP4C1RWqfFX3YT9XbgS7gSaMArvX26AJ2yDK7OADQ3QfN4myiebxhvZSzkfwGXSDL+c5WAuvgFNu7gptAeYPSQ7hAChZ5ViyGz4EzV0K5hXTwVZwBbbDJchNoQbkFkCvgjRhF7wPxrYE7G6zwJnhGnwBmpGLms0AK2VrckzRBFvCQngQZoMmyFdgq8isZjTASvmmf4T3wBjnwxCYA1ZcE76uHDmEq1kNsEaaYF6hCeYbc2EwvApJS/iOc68LVjMbYKWs6LfwLmjCy2AWOQ8SE3ZyHjwIN7sB1K1nwNvB0Vg1wbHAHOQ1cDBcB+3gAJpa/cEAK3UZzBY1wJhnQQssAhOkd2AfpFaRBlS/MUd7K1erPzv/bwdjdgE2E4bBYjgAJ8AUO5WKMsCmWz2NTePzGjCdrjaGj7fI2cD9g4tgV3gUZoPm/AypVJQBLqBOgib45p8Hl8f15vumxd6XaAInE6HfGODawSnuV2iD+2EMhMquYNqcWkW1AJv5DnDwMtMbDzbtZH3BaZ8yOxwJjh8Jfd7U+4KiDDCOP+FT+AnGQVoDXCQtg1ZwVSupVaQBBmufd/EjIZrLTRoQrCDXgp/WhDeWBjThS2loSDHHALO1QeAxVC5yeidNoWXd9r5YBrTwtJfADM8pKlQaYJr7ORwOLaTWfbEMGMtDV8LrkHWc6aAMp8x+ZYCLkv3g1lbWFvAbZXRDFMVqAceIdj24Y5PFADPGo7AHoiiWAe7W7K0QJfC8Cs3aP/OKo7By7ngDYnUB36g7uE6HWceAM5RxDhwPclcsA0YQqZuW7t1lMcA8wAFwS+XIIV/FMsBtqqWwJIdw/b2wE6LMBLEM+IuA3c8fCllbwO+U0QlRFMuA40S7Adz1GZghcruA/zhxJEMZNW+NZYCBd1WoGUDRX+YxDabZxyu6vrc8P9QA37Aol7tZlrw9hQT8qX6uP6gk8aQqKtQAf6oSNaxCz4cG/TFun5tshVfHkyqEUAMc5f0VRznlzYDH/dAAGfOTMB0SA4wliYfT+hU6CHbyCNfnreBUtwBskjvhLAQ1R+7rSz5jOLwAcyCJ31gOQWolBaS90TW6v+y0gfv5E2A1LAQNqPUjJ18HKzHATDPJL7o5N5YgA0IjsRm+CKao7u2bpxeBXfFj8EUESUdDZGXdpjoG/4KfTXhsUZYZa2q0a10Cn90Om2A9dIDfpVbWQG0JjgNPw3hwUNKIrOVSxG1lJa/AaTgIdkXNKFU6UDpQOlA6UDpQOpDegZvc+DNH35mQwAAAAABJRU5ErkJggg==" width="40" height="40" alt="doc.text" title="doc.text"></div>
+        <div class="meta">doc.text</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>file</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="file" width="40" height="40"></i></div>
+        <div class="meta">file</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEVElEQVR4Ae2Z228WRRiHkbMFpEIlUrRguVACwRoTwUNpAlrCoSkhkXDjhReNCQH/F4EY9caEO42UpBckXNVoqnLQIhUSDkUCTSMCKniugD6P6SabIu23833ffts4v+TJ7mYP885v3pmd3ZkyJSo6EB2IDkQHogP/WwceqFDNfU4dzIVZUMpz/+a6O3ALfoW7kLtKCXS8oB7k5Ap4Fp6Ah2EGTIVSdJuLbsJlOA4DoBmTQvVEuQO6YQisjK2aFbPgGhyG16ABCi9buRM+h9CKjzVKI/qhCxZCLpoeWMrj3NcBpv40sP9ehUH4cfSYzX3lWPEkPJa6wm7zNOwCTT0EP0FVFWrASqJqATPBljwFH8IxKMWAJq57AxIDhtlXjbAaNOEv6AEHyaop1AAzwEooW8lA3wErX4p+4aL0tZ9w/B3shEfhGdgNmuDY8DNURaEGzCeah0YjGmL7NaQrNHqq5M15rvwA7AaasAjsXntAE45AVd4OFhiimdwkyhStRAud5TnvwUG4DjbOc/AmvAy+ciuu0Axw/pDMIRwApVw5lpyBd0Fzt4PziufBLBiBXvgDKqZQAyoWwJgHacIAvA3Gtg3sbq3gm+EOfAyaUREVzQArZTY5pmiCmbAV5kEbaIJ8CmZF2SqiAVbKlv4S9oMxboY5sB6suCZ8NrplE66iGmCNNMF5hSY432iHOngFkkw4yr7XBavIBlgpK/oF7ANN2ADOIjdCYsIJ9oMH4aIbQN3+HfD62BqrJjgWOAfZBA6Ge6EfHEAzazIYYKX+BGeLGmDMrVAPHeAE6S04B5lVSwPSLeZob+XG68++/3vBmP0AexEWQCdcgGFwip1JtTLA1E2/xtZw3AVOp9PGcHiPfBv4/+A3sCssgTbQnJOQSbUywA+oq6AJtvxa8PO41Pm+02LvS9TMznKYNAb47eAr7htogdmwGEJlV3DanFm1ygDTvA8cvJzpLQNTO/m+YHdCOTt8BBw/Eia8aewFtTLAOL6Hj+AraIKsBviR9Co0gl+1klm1NMBg7fN+/EiI2rlJA4IV5FpwaQW8MRpQwEbJNaSYAbnaXcDCYgYUsFFyDSlmQK52F7CwmAEFbJRcQ4oZkKvdBSwsZkABGyXXkGIG5Gp3AQurRAZk+Y9XOAtCDXAtLlmPc5FC8la6XBdUkngyxRFqgEtVovwlLXnKuNO/wtPxZIoj1IAfKMVVHOXKzAuw1IMcZMxPgX+Fk7UAY0niYbd0hf4VvkQR34J/ZF2u3gKmpEvVNyEoHblvIlnGQngJ1kMSv7FchMxKHpD1xtPc4MqOqzr+z2+G18FFDg0Yb5GT08FKDGjgCS6GqOtgLEEG+IAQmYbroAf8t+9KTy2wK74PNkSQdDREVtaVnSvwO3jsYqUZ5TOr9Wq0a7lMbtn90A0H4BR4LrPKDdRMcBxYBcvAQUkjyn0uj/hPWckRuAGDYFfUjKjoQHQgOhAdiA5EB7I78A8iugP/1NlSZwAAAABJRU5ErkJggg==" width="40" height="40" alt="doc" title="doc"></div>
+        <div class="meta">doc</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Lick result state</h2>
+      <p class="sub">SliccIcons.lickState vs STATE_ICON.</p>
+      <table>
+        <thead><tr><th>Use</th><th>Web (Lucide)</th><th>iOS (SF Symbol / port)</th><th></th></tr></thead>
+        <tbody>
+    <tr class="ok">
+      <td class="label"><code>confirmed</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="circle-check" width="40" height="40"></i></div>
+        <div class="meta">circle-check</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="checkmark.circle" title="checkmark.circle"></div>
+        <div class="meta">checkmark.circle</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>dismissed</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="circle-x" width="40" height="40"></i></div>
+        <div class="meta">circle-x</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="xmark.circle" title="xmark.circle"></div>
+        <div class="meta">xmark.circle</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Composer / chrome (sampled)</h2>
+      <p class="sub">Hardcoded SF Symbols in InputBar / ChatView vs nearest web lucide.</p>
+      <table>
+        <thead><tr><th>Use</th><th>Web (Lucide)</th><th>iOS (SF Symbol / port)</th><th></th></tr></thead>
+        <tbody>
+    <tr class="drift">
+      <td class="label"><code>Composer send</code><div class="note">Web send-button uses lucide arrow-up</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="arrow-up" width="40" height="40"></i></div>
+        <div class="meta">arrow-up</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEB0lEQVR4Ae2aOWgVQRzGjUaIYCLGwgv0oQYPtBCPxhAt7GxS2AXBUistBAUbUyixUFsFbdKplRY2ijyjYGGUeEa8noKoYOKVRsXr90EGJks2mZ093gbnDx8zuzPzP743O+ebNi1IYCAwEBgIDAQGAgOBgf+UgYaC4m7EzgbQDlaDNtAKmsFfMAKGwDMwCPrAffAHTFkRudtBL/gKFGgSDFP/DNgCppRMx9su8BgkCXiiunfQ1QlKL5vwsB9MFEyasiq614DSyQw86ga/QZoAXdr+wMZ+UBppwZNrwMX5LOtcxGZTvVmYjwMDdQjeEHkD23PqRYIMa6oyztQrFQmF9wTN69USBG9I1+dQqPRgzRgvS1rYwNhB8FqhlSVw44dmh9ynyJkYeZRR8Fr6HgCHwJeMdFbRk6vsRbthPE36Dj3aExhZT0aEpNFp2nYapVmnGvhqGTj5Bh0rxnFuLe8+ZKBfy+ZcZCdaDcu+6Ut0LJ3Au5WUvc3ATi4bqMspHXtK+8VgMllOhdfAl2S10y4yU9G+/SfwdeoBbbVqNDKLjP28kGcNsEaWkHkBfO1pK61daWayA02+ztyl7TzLEwV6BWy03m0lfwFoU2VkERn1Gl+7GlgzE9+Fz208sNfq+lXOAwWlQc/IZjJ6dw40mJek6iUPgQ8J+yw9qbM+37+6/eyI5bM8m2DsmWCd9f5UpI16jwZP0841PR3Rk+rRpysejlg8GQmiYpWvipQdscqUPQ5cAzf1rkd0pHr86OGA2aWpSx8dp32Fd0aiBCiIg6OF6kUaR0xgrql6YGbyHU2uhu16Q7SLm9crlnfjESA9WjT5LpNrlv7YbGNsydgC3ynFHv3HanR70nToK/ZgGqvDNbCRWA3lLXDy2ZWAT+WNM9YzJ59dCXgea6a8BU4+uxIwWN44Yz1z8tmVgFuxZspb4OSzKwFV4tQx2FSRbziqtcOk4krAZzRlurKa1LN0FS7R/JeLClcCpKvXRWFJ6uTiaxPBvQf2Si9NvmKRpfPBNLrstrqVdloEyX6SHqDl8Ak1ykjaLD123nrtlT1GKxGSi+gk5xWwGffN19DTBXaDuP1CUt396Eryo1I9uaQ5HUoaUJL6uprX/xMKER06JnGuiLrdhUQ+akQD4r0SkaD/J9jniaNu5pssQH1W40GaHjKAHy35hhqvfVmdSdD/E3RwWldRT6jH51DFrn3iXFcSNCYUNTBqT9IDXE+zCiVGU2Se44Ku5jsKjcjDmBZLuvfPctlcQ98eoFulKSP6LHaBq0CLlKQjve4idSGjW+ncurvzpgEn0shcGm8D7UAbH639W0Ez0DetA8xhoD9LPwE3QR9wOtikXpDAQGAgMBAYCAwEBgIDgYGkDPwDZt9cq8aZ3nYAAAAASUVORK5CYII=" width="40" height="40" alt="arrow.up.circle.fill" title="arrow.up.circle.fill"></div>
+        <div class="meta">arrow.up.circle.fill</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>Composer stop</code><div class="note">Approximate</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="square" width="40" height="40"></i></div>
+        <div class="meta">square</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAADTElEQVR4Ae2auWtVQRTGExdQQUWNaKeICtpYqJUxCAYbGws7sddOwX8gnb2VbVqxCVgp+IxauRDFBRRMYSGIca0Ut98H75JH1HfPucvMXJwPPl7y3pmzfPfeWe7MyEhGViArkBXICmQFsgJZgf9UgdFAda8gzn44DvfAXXAjXAt/wS/wHXwBn8NZ+Aj+hJ2FxJ2E0/ATVKEeLmB/GR6CncIysj0Fn0JPwcNs7+HrBEweB8nwPhxWTJ3fevjeC5PDcjKagj9gnQItbb8S4xxMBuvI5Aa0JN+kzRViroqtwhYSmItQfCHkLWKvjyWCAmuoKpKJ9SkRgt8JGtd7CRRfiK7HISguEq0InspnsI5xguI1Q0ul8CIPjQ6tD5ErCfIkweILEXrk1irO4r0IlupnazNGdXzzHRBA02YzVJQVUna71XjATqu8m/DzwHeWP7VaPAo10fLgAMZaQN31NLLYzmDkve1f02aTxfk/bLbx/UfojatVZKPQuv0b9CZyqYEsrlaIq6W0VqWlMBnhRUOfRgAvdPXq4kMFB3p89lnaWQU4bHGWmI0uWimsArQ+wSjN1G+gV2+lsAqwu9RTegamnK0C1OnJY0kzZglsFUCjQNdgytkqgNUuJZFGLclYC9N7+67BlLNVgPddq558TTlbBXjZQQFMOVsF0HZV12DK2SrAna5VT76mnK0C9HCo12BemIaiEqdVfGjp/aDEr/vn67Twrgb1HK5xR1psoAnYW+iNO73oYvhfnhcicjo53N0fv+7km8fwGtRV8WADxnoJs9nTqG9rFsDjW5sPb6D3aoS21660aRKk4rWpacV3DOX4mLVBJLvzxNVd1wpW4/UVDH1VrfG0NW/t2CsLdDxRAbQ1r/MJQaCXjtarEspuKkjl/SDqEB8mJILOJ3j6s34Z9T620jyF/mCOPLx7B/UqH2i9I7IIOp+gQxpRoTshxuPQI2600yFLFVefEKpj1JpE5xM8s9il+bb2v4bINvsFbc1PtJZ9Q441WboAm5w2z+PvDKyyO0WzONBjcRpqFVnl/KD2ImfgSdja7W5eNJBEHWhldwT+7bC0nmm9wFyAOiz9DN6Gs9D0YhO7jKxAViArkBXICmQFsgJZAa8CvwF/LZFju9vwQgAAAABJRU5ErkJggg==" width="40" height="40" alt="stop.circle.fill" title="stop.circle.fill"></div>
+        <div class="meta">stop.circle.fill</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>Attach / plus</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="plus" width="40" height="40"></i></div>
+        <div class="meta">plus</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAADY0lEQVR4Ae2au2sVQRTGEx/gAyM+INpYCCoqaCFioV4UxEYUi2AT1MJGOwv/gXT+C+kkrZW2ilyjnSKKL1QwWAmiiNio+Pp94sjNJcmeuTszO4tz4GMvd8+e8823O+8ZGipWFCgKFAWKAkWBokBR4D9VYDhRuZeQZw84ALaDLWAtWAV+gc/gPXgJnoNp8Aj8BK01iXsETIFPQAX1wQf8J8F+0CpbBNtx8BT4FHgh33vEOgmyt70wvA8WKkyde11i7wDZ2WIYTYAfoE4BLc9+JcdFkI2NwOQmsJAP6XOVnMuaVmEUAg8bKLwT8ja5VzclghKrq3JkmrpKhORfgvr1bgaFd6KrOiS1y2RzyXO5JmsYOxReI7RcCu54qHeI3kUuJcmTDAvvROjCLapdILpLVvf6mFinwFnwJmDcaCNGNXwzAYnuJJazo/yoK6h7XsPmKDZGVJek7rV/lrcxYGxxM0+gNHGx2hmr4wB+/YIMEGLWI8G5at7+DdR98+75/gJrROnuhbhqKm16uSYngnWAeoC2mBZbdlvIWgU4aAmWmY9eWqVZBYg+wKhk6u+gpbdKswqwtTJSfg4mzurbLbbO4tTjo4XNc+AFUKNWZe9wUL2dy/SSdoErYBOw2nqro8XvC04+rfMJS1BPHwnqw2HGEt9aBax+Lqe6zNDmG3M4JAH1qz7qP8Bf3dAKsHwe8Pcsm89vJV77gPYMfDhorhHMXhHJJ3mVb+yBkPJrpajSrJ+2BGibmThbBVCr3jYzcbYKcLdtpYdvUM5rCBhy0yN2G6C9SNMYx/oFfCTgLdAWuwbR7xayVgEUa8oScECfoH12LK7afHgLqro46/1tPWIdDhhXu9KhBf1H9VJAohosHQdaGA05zhgnXjTTaO01sL7l1H7amvep1gMJdSxTAdRL6XxCEpskS+q3W5VvIknJ/yZRg6g6XEUq1X2dT9AhjaS2gWw5tAc6nzCStOQ9yTY3LILOJ4z28Gnkp76EJqpDl7w6pJGFqU1I1TBqHqHzCaaxfmp11EXGbBe0Nd9JXSjffBosacQYctg8Q7zzoE27U38OLp2G9A0wyFRai6DXwRiI9rlHmzRAute0nnAIzHVYWnVah6W18KqFz2fgDpgG+r9YUaAoUBQoChQFigJFgaJADAV+AzSBKPB0fdtrAAAAAElFTkSuQmCC" width="40" height="40" alt="plus.circle.fill" title="plus.circle.fill"></div>
+        <div class="meta">plus.circle.fill</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>Settings</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="settings" width="40" height="40"></i></div>
+        <div class="meta">settings</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="gearshape" title="gearshape"></div>
+        <div class="meta">gearshape</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>Frozen sessions</code><div class="note">Match if web freezer uses snowflake</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="snowflake" width="40" height="40"></i></div>
+        <div class="meta">snowflake</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="snowflake" title="snowflake"></div>
+        <div class="meta">snowflake</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>PTT mic</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="mic" width="40" height="40"></i></div>
+        <div class="meta">mic</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEV0lEQVR4Ae2ZWahNURjHzzXda4pwZbqGwpXhZsyDIR6EEGV4Q5LywrPhRSnyQul6EUnKAylDUuKFF0RkLsO9ROaxax5//2st7bZz7j17Oncfd/3rd/be315rfd/69tpr771OJuPkMuAy4DLgMuAy4DLQXDNQUuCOt8ffBFgEo6Er1ME1OAyn4CX8lxpFrw7AF/iVhR/YzsA0KPSFwWWyGk/zJyBbx/22K5Sbl2w4hW29B+6qQVfY39lcx4coWwWJq0XiHjKZyfiYCkF8TaG8SPxWCBIU8QRWa2oMh8qANbuYer0C1gtcPOkE9CaiCmgZOLJMpq+pG6Jq/lWSTkBHQhFhFKVu3v6STkApkYgwilI3b39JJyDvQHIULPpJMEe/0mNO+whIPFMuAYmnOOUO3AhI+QVKPLxmPwJaRUxxOfWng1559bl7FZLWABzMAL0jyGcNNJlW4VkrOPqs3QP9wKuxHBwDnQ/KRerMAa/acbAJvhm0L1toRb0FtKQlJO/+H0v8v52NH41coa/GThBaURMQ2nFaKroEpOVKNFUccY4Azcr+rzetA/4M2TnVFX75fWhyDa2oCdBs/N1416SkJTCvPnIgwihbXbXv9eH1H8ZHoIXKbA4+YxRSB0P9gfl5wfa51xBgP1td+dCfK1Ze/9YWaBt1BLzBm5C6gX0k1hv4eQ33wJax9sa2GvqqV+srKB9C0tV/B3U6CKuoCXiG46fGeR+2Wsj06zyGc35jI8fXTB3/7VOBXUjy/aR+L8JP1ATU4vuB8a/hWQk2QGPO6I3uCDy2hka2H0z5075yZRyr/QHGLr/WtzEF30RNwF1c3gI7EY5jf6wvjB8c74ft0Nh8oM7vgp3gH9ojsal9u8R+k335bnLpf7zLoMeROlsN5eBXGwwz4SRo8vJ+GyiBl2AJaDncr1IM60BJUT3ddishFVJndXXVeRucPpK8jysO/0pXUMN4NiyF+TAUlKBcWsCJ62CTdpD9YbkKN4V9Bk7PgQ1Qk9hCKIGomkgDp8C2Xcv+MkiVdLVXg2ZmG+gd9pdDGYSR5ifdMt7EfuJ4M+irMHVSUBvhPdgk6D1gBwyGIOpJ4fXwEGxbeu7vhv6QWun7fAOo4zZwbZ/CPpgL3SGblMApsA3ug7e+Jk09GTR3pF5tiXAx3ABvJ+z+V+x6J9CsfxbOQw1oeNsy3u0j7GtAyS0qDSTaLaDOejuU775en/fCGCiBolUFka+A4/ASGkqA5g+NCl3xIVDUHSf+f6TbYxCshbugZGi+2AojINtLEObkpG/4Qkr3uR6Peql5axzLdhv07lBwRf0WKHjAcTt0CYg7o8XWXhJzQH+SoEdXQ8/tKs6Xg6R/diaBJsRc+sCJK3ALGiqXq37B7KPxdNQE2dDjLsy5C7Q7K+6exD0H9CbAXnEHadpT2yJWtYy1tT+LlF1pczjomR+XtDZ4GLSy9CquRl07LgMuAy4DLgMuAy4DzTsDvwHIMhh1qLmtDAAAAABJRU5ErkJggg==" width="40" height="40" alt="mic.fill" title="mic.fill"></div>
+        <div class="meta">mic.fill</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>PTT muted</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="mic-off" width="40" height="40"></i></div>
+        <div class="meta">mic-off</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEhklEQVR4Ae1ZW4hOURSekUsyuTx4EGrc4sG45PLgGkpybyQ1aFLGC0ryoHgnDI3xqEkRL5pxvyVJjVKkoXjwNJGE8WMGMQzfp7OzZnfO7P3/5z+3sVd9nX1Ze+21vn/tyzl/SYkTx4BjwDHgGHAMOAb+VwZKEwi8AnNWAwuAEcB3oBW4DjQAH4BeKX0RVT3wC/gdgBzaq4BeJ8y0RiAocNneBb2tWWBgOJwcYOnodujJIE3lb9CfaGk7EbX9XkBv8Zxn8IAkvfb0TYHL/lMGu4l2vxQBtaM8twdvlgpdGaCpTLvcNyKVPgVavy3GlaF8AwgiwZQhwlS3Iu1O69aSogrTmseW/BWDMuGkpifHmMqro4650Azg2b0W4C+vJCgTCp2Ddgcr42l92mTCGDjfBph+bb/+TWkNXPpFEq5pAXI5yLU/HfVCSMgEAYjt730gChIyQ0BUJGSKAFsSeLTZLofMEaBIuIqC3NT0PcGWhEwSkA8J7zWiJGksZ5aAYpGQCQKWIdrjgN9VmEekaTlMhU5QJgQRwNflY8BYIFEZhdk7AaZrB8DboC4k4Qog01vfE4JI8CNgubD1SJ8s7vp84QwDnBTgQH+0F0KCHwG7xJxfAuazbg5zT7eeBIo/gEqAy0EJs4UvVCSR0gIsAXhExiZxELDZi0aRwExQQhJ4g0yMhDgIWIUAD3sRk4R1gImExdCJJRPCEsB1L8XvMzs3yT3AEU/RhoQn0CUJHd4Y+ZA+6/NLvVjKMzCL3N1Z16UODUpHkUAdboyXRR912gG1HFD0PVX2oV3Ze0elJGUcJlfO8MkjSpdtaJA6OgmXtH6dBN1evdB/oXfGXe+HCX8Kh3b7OFCONn7rlyTUCj1mgk4CU19mglAvuYWKsnVTdiRVfiocOh/gRJPQUc4XQgK/En8Stg4FzBdr8wnhENN3oM/s/Cz2UegpEo4KXZtMKIM+170av0KMT6zI3Vo5xGdNgCf8MzSn6VJfJ+GipsPlwLFKKlAgCcwEXrMTFx5L3IwUCa0o+2UBHS0HzgE8CpU+n3yxUcJMsCHhoBqQhiffzmRADQanhqCfb5FbgI3AHECe7zYkUCc1QucfApKEnSG94wljyoSQUxR3ON8EuV4lCQdQl79svjOShAuaTX1PyNdmpPrclTs1h++gzo0rHykVypkjYSWc53u6zIQu1Pk3WjXAjyh+wkyZAuwFngN1gJLMkTAZnrcAkgRZbkPfY+Ae0Aw8A74CUodlnYQmTSfVy4G3th3AK81pPcie6vcxdgKghJmQKRLoOImoBM4Cb4CeAuZSYTbUArMAPwkiYaGfchrbRsOpRYDMDB53s4GhgI34kfAZA0faDE6LDjc6lQ3yOmzrH0loFDZoi5ervCTMGZ3XRBEo87jdAJzxbD/A865XzsQjbAbIIAfJSj7lLGeAjLPg/we4QxdbuDbXAMMMhuWGx5tijUGfp0OzQScV3afhhdrciv1cX+wIo1gCM4vtpLAXpW0xTbhiFYbngGL/+lwC48O55kY7BhwDjgHHgGPAMeAY+MfAH3jPTwJSXI42AAAAAElFTkSuQmCC" width="40" height="40" alt="mic.slash.fill" title="mic.slash.fill"></div>
+        <div class="meta">mic.slash.fill</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>Empty chat</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="messages-square" width="40" height="40"></i></div>
+        <div class="meta">messages-square</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAFIElEQVR4Ae2ZW6hVRRzGT966kmmEGRF1uhBSpGGcTOhQ9FAPUb6IFFIo9CQUCFLv0gW6EPTQBbEHoXshBEXRPQ1EQhOVbnAoLYksK8vu9ft25w+fw977nH32mrVW56wPvj3/mbXW/P/zrZlZM7MHBho0CjQKNAo0CkxdBY7p0vSZXFsMB+Gp8CRYJv7B2Y/wINwLP4Iqy45L8PA0PAzlsC6UEI/As2AWTKPWu2FdGtwpjl+JcXUOBTb+DxrvoqwtQoSYA1ZR2Yakwv3kJcoWeABqSJQJxXYyVJe/Ct4ymidp4U9+h+HW/7IT/9Vktw+6uo+SnzXxKrM8qYn4NehxvlGEp+VJpZuLqDRTHSdQ754k3gX9+nqs6Ar7DWiM59MXtmaM+8e8vIM7olvpe1t3HE+Af8CIeVM/AevTd7pVsNPsuppHCOwTC26e2T2bEmCOPfWd2XU2Pc65/QQ6g4d9tlfXKhv61M2G8Ukej38J8NXojT+TpqtDDQ+VH4J/w66IsaT04a53FnNRS2350dzjY9njKMr+Cx+fw43wOtgW7iynAKfg/Xno/sq2t+P/wlQFDyKXAJqoPq248dHOH4hjSYigOSA3NNFqd3le4kjj+D04ArXtVYBF4kQqmw+vgGfDgOac5+BC+K0KQxmlOXrAssTHb+TvgMfCMqDJ9Xqo/Yy39b5w7oU5BHgrcbwiHJecauz7Gcch8q2XkFMArdp+h+FDO8sqobcesShdqvGZE4uoXLvNwAthVJRq7DuGcguQLlN1rlcldiXO5+UWYE7i8PskX3ZWE/Av5nRubgF8mS2/VSy1rb0t02OYmVuA1Hnt8o0AtXslJQfU9ICSBa+dO/UAfRoCZa3Pw1/lqQTQriygs/cpBQkQR0tq+KVTqvU0VgJ8YI0exF5s+UlvSoDXk1Y+QH56UjZpsxLgZfiZtfBKbO3aJut8cNTps47EdGy8Dr4IAzdgXAN1iBn/DuuYWXtoQfPGxy2r84960XHJZf23VzV0RhHwjdHAvZT6YcFYto66OuF8LuyF26DXI2GrhP5E8XjWawgE7sRYA31dENfapZ0mywu4+R2oI6h0OzzUrqISyy5PfI0k+Vb2DH7vh/pDwdVKbfWYFHrz+2Hcq+Gls7fIf4ld5WLrJYtFMekldcWZXNWkqO6+ErooqQA69vbGy4F602YYAih9AnrPI1sKVuPF49AQ7Rk+pl0ANX4fdAc6678aXgzVE/yahsi10CcksoVDE7GG6pPQ/cteBXtGOwHOpRZ1bXdwgPwiq319cj3u1emMhNsDd3fgTso3wPmwG4a5uBVGPSPYmuXDl6evUj6hXpgKMEhFXyROtKaQKA69icehB9GrLZEXeKWJvX2c9av36WswIbgAz1BD2vgPKUtPgt3RTWS0fui18XH/QZ5d4hWanfbCeCbSb7j3LjjDnunpP3k9JwEu8wrMfhP7RviTlbUz1fWWwmF4EdTb0P91R63QyAdOwzgnMqRH4HKoFaxDAmjSFvRiNGFrp6v0Xaj49GxfeJunQ1FPn6V8Vl81d35Yn82noPvT3HErdHgPuN0vFGlro+SByH4I6q3mhHrHPTD1vc6cliKAuuP7o4HI4c0WQBnmbTjR23chHiQvgUoRAD8t6L/3qqD1g+YZF2ET+a+tLNsQwEctsJAo0lWnCzJuAXKP3Vxq7aDiIbirg4PDHconXbE+n69Af/tadmv5PWUwnZZqK685QDvPtbBBo0CjQKNAo0CjwDgU+BeRoG8U+TCYwAAAAABJRU5ErkJggg==" width="40" height="40" alt="bubble.left.and.bubble.right" title="bubble.left.and.bubble.right"></div>
+        <div class="meta">bubble.left.and.bubble.right</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>New session</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="square-pen" width="40" height="40"></i></div>
+        <div class="meta">square-pen</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAE0UlEQVR4Ae2aS4wURRyHQVTAVRFBBAUEVyNGRD1gFIGoRy8ao4mJcCBwIhy8evDClYQTieiBkHghamIiPk4YXxggPhJ8BXEJQniIPEJ4CIjK941dSe9mZmdqe7p7XOqXfNvds9NV9f911b+qu2fMmKTkQHIgOZAcSA4kB5IDyYHkwFXpwLhRGPUkYpoDE+A8/AstNdoMuItIX4TlsABOw2FoacK1/HO0aCaBvAyrYC6cBS/wITgATXVN00//nx9OpNn9cEfW/BvZ2iOmZMdNN6NhCEwmshvgJFyEGWBvOA5b4RM4B01VdAiMpdRbwC43G24Fr0TRcilikBzDl+BH+BZCQLPYfw764D3YBsrgj8I7cAxaqkhDdX4hLIUHIW/AdRx3U5cpbBcczBVq8MtgJdgDpsGb4BV3zF+AX6AU2cXWwHYw2XiFyiIEb2Z3ilMG/yr8CqHeI+yvhZAD2G2vkfQAk8rzoAH35qr4h33NOAM22oYVlWXugbfgY3Bay1/5fo6DTOjRST3WAMf847AMQvB2tZ9hB+wDG/kXdEMa4FXeDZrbKnjHueN9Czjvl6bbKXk9/AleYVdaH8ILMB00qCw16/a24XfYAPPLqjhf7hIOtkEYdzvZfxa6nfQocpDaBf/AoG+XeLCcsgdAA+z668Cpr0x1Gvx4GnF9bENik4YJUJQLj73Z1uMyZPDmG6e6fMILY/51Pndt4DT4KCyAKMUa0EfpVqZOZTQOSvjTKnjHvAkvBO/C6ylYDQ9DlGINcNYI491M361sP7TRwwX/Ll8Owdvtn4RXsm24OBx2plgD8lk+JMLOaur8W50Gb4kmvxWwFDQj3z4O2yvWgPYlFvtGTPDWdD88AtHJz5NVLxkQG7ztdziGIelxtGJXgtEVdHjCcMGb8DaC2b7r6oUeUFvwulm3AbUGX7cBtQevAXXlgOGCf5t2vQGljHmDzquOIdAzwWtE1QZ4y/wSDF3bu7yt9MpTX0NVDgHNXgTe3ORvbELwTnU/QaWqsgfMIDJvWu7LRVhr8Lajqh7gGt3b1cXgmv0yHARvbDZD5VeeOhuqyoDbqO0JmA0/wE74Cj6DAahNVRngm9pDsAl8ePoN2AP+hlpVlQF/EKVZ/iIcrzXiIZVXZYBPke0BPacqZ4GeC94GJQMiL4uPwXpJ0Y/AhjY+tgeYtZ3Dlfmj0NOYRinF/uTbYLuiH9LGGnCeSkxoyt8FhLe1jQ8q/mPbrf+mrF7bFdqWfdR+E2uA7wJ8IaJ8QXI33OxBDZpGnXOhL6vbdoW2ZR+138QacIAiRU0EV3cLIbYcTikkh551PwahbhdWEqVxUd/+b4x5M+MbGM+1F9gDdN4FziUoW76LfBpWgQaYB87B+/ARXICO5ckxOsKXP4UlMB8cf8+Ad3pfwj7w9wEhUbLbFZntbavB94MvQh4Cb6ycmXbD5+AQjVKsAc4CX4DL2slwJ2iCDXIonIBgQLenTF9+mHinQngRYh0D4A8jdkFluoeaXoPvwW5vQ6rGjP81+F5wJoxIsTkgVOKY3wv7wX3HnQZYnklppOVyalNZtsPqDByG78Dxvhk+AB+sjEhFV1IGOh3mwSxwjDo7xA4tThlWwQCvusn2N9gDx8D/JSUHkgPJgeRAciA5EO/AFceSO/3vrq1TAAAAAElFTkSuQmCC" width="40" height="40" alt="square.and.pencil" title="square.and.pencil"></div>
+        <div class="meta">square.and.pencil</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>Theme brush</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="paintbrush" width="40" height="40"></i></div>
+        <div class="meta">paintbrush</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEqElEQVR4Ae2ZW4hVVRjH1dTS0szEytEY1Eh9KCmUMoMeuildQHvoLYQiJfRByKAnU4uwB8MIKil9KiKCIisFQR8y7aLRBaWcqLxPN0PN0rHL71dzYLE5x7Nmn5kzex32H35z9mWtvb/vW7dvrxkwoFQZgTICZQTKCJQRKCNQRqA1IjAQNyRaPSoc/dTmF7yIV94K02AI7If34Si0vKbg4RPwGZyBv+F7eA7aoGU1FM/ugdfgd/gnw1nOV0FLypZdCrsg63h43sn9EdAycs66GV6AXyB0ttbxOMq1hEbixQLYAn9BLYfD60co1xI94GocWQnfRTpuEJwMn4akdR7W3wmvwikIW7fe8XbKt0OyugTLF8EOqOds9r7r/1xIVlOxfDUcgqxz9c67qLMc7D3JaRAW3wGvw59Qz9lq9zdSbywkJ2f5h+BDqOZYzLV91L0BktOVWGw6aw4f42i1Miep+zAkpxlYvA5OQDXHYq655L0IF0IycpIyl38XYhObWsFw2EyGZDQcSx+E3VDLqdjrB3nGHEhGo7H0MfgBYp2sVe4PnrEMXD1yKXfFXG/7v5LvbAe7faN6gwe8BM4BudTMZGEYFvqNfho6wCXrOPi1lmfy+oh6j8IByK1mBeAqLFwM18Io0HlT3M+hE0x7x0OsHPd2fSe/wssWXg9d8Bt8DGthPtjyNoLZ3zsQsxq4++NmSH8MX17bMw2m+JNwBrIT2RdcWwGTQF0Pb0G2XHhugNwMMWtMQjOx8icInQiPT3FvAzg01HXwAYRlwuPN3JsIyeh5LA0dqHZsq74JzhPK4XAYsmW/5NosSEqvYO0RyDqTPXcZexns2o7tlRCW8Rn3Q6+rr1cBNy73wK9wBdRa7gZybxo4u38K38BcGAN+5KwGg5l7vadu02RQdSiU49ZlcAeELZs9/pr7baAeByfPNdBnk15v9QDXcMfu3XAbzAZb1H9ZOQn+CLvgAIyFSVBNl3LRFNkk5xDo+FPwMxRStrSbluvgK3BWt1XPgvtyW2EVzICKbuRgO2Rbv3LuEHAeUO3//S3wn9uxbSdUjK/2e5r7G2EOVGRvsYVrlXe+KLzGYeG51uysc3brWd1e2cLLIVvG823gMCm8HsHCag6c69p71HGcKwPYAZXyTnhvwy1QeDn263X9imPhr3PDwsC7Zzl23nDcPwNmgkloPFa6GRE6F3vsN8Cwbi9n8uvmyF3gF2EyegBLYx3OlrMXTO/2tDLb95vjeQy4DGsNQF6Ze1zTXbnfM7vBkV4ModzFMBXmw03QiPoss+upUfUCMIEH3gdjwABMgdkwFBrRsUYqN7PuEl7mLk52HDdy7nJnmlwI1ZsDRmClLd+b+oSH7evNB/bls2wp1+hGWjyse5JnOaSS0r1Y69odOpLnuItnrIXhkJTM+ubBJnD7Ko/z7uT6xWgCVSjF7gfsxeoOMIkxl+9J1vYt5d3uWgPuBxRKsQHQ6IPgpoa/nWCXvgDs0vaSUI71PeDHzwZYD9YpnLKGxxp4OQXN5iZDG4yC88Ehchx01h6zG/ZDYZU3AKFDZolhAE5wbg8oVUagjEAZgTICZQTKCJQRKHQE/gV9v0DVkn21gwAAAABJRU5ErkJggg==" width="40" height="40" alt="paintbrush.pointed.fill" title="paintbrush.pointed.fill"></div>
+        <div class="meta">paintbrush.pointed.fill</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr></tbody>
+      </table>
+    </section>
+
+    <section>
+      <h2>Sprinkle lucide→SF map (notable)</h2>
+      <p class="sub">Subset of SliccIcons.lucideToSFSymbol where the stand-in is surprising.</p>
+      <table>
+        <thead><tr><th>Use</th><th>Web (Lucide)</th><th>iOS (SF Symbol / port)</th><th></th></tr></thead>
+        <tbody>
+    <tr class="weird">
+      <td class="label"><code>bot</code><div class="note">Robot → CPU chip</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="bot" width="40" height="40"></i></div>
+        <div class="meta">bot</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEzElEQVR4Ae2ZW6xdQxjHN0XruBQhNEVOVLVaKi7xhARNUMEzEc8Nkb7QJ6WVeGzSePTWEx4oqRc8aISkaEQvD+quTbWlWm2KulQv/H6yJ5munL3XrLXX6tlH55/8zp5Z8803s741M2tmnU4nK0cgRyBHIEcgRyBHIEfgFI3AlJbvewb+r4AjcLjQ1gXkR+FMOASxppEZhelg2XGYdLqXHm+AY7AaroYg02Ng2cegbdAIiWXwG+yFJ6G1B3U6ztvSfByLbcyDORA0l8S1YFmwC2WOGO3PhUu66Yv5bUVtBsCnFp6cv2dEdxDnvR7sNCnmY9vIRTPJuFNVPfqEfDJTe1T06Z3WLZvG70wIo8B0qKeNtqFslPR5EOQ6MAtsryin0H44CP8UC9vML8T5+m6jNjyR7KL9xRCPIrJpqjsFbsH9zWlNtG7laLIvvnEqq24AnDq+voZF9qVWf7yRQbUPB+/BlkEdVah/ObYLIawbFaqeaNpEALbh0vf8Oye6bjU3G+9upAYOQN0p0OrdnUznOQAnM9rD2FYTa8B49+X8fAAWwch4BonXjmK3EdbAN4l1WjG7Hq8vwQ74ETyohM3PBtL3QawHyWyCYDPI7+/4eTp2TtpF8GUIfv8i7W5wL3wABj9JqSPAG3wUzk7y2umcg500IUdQ2Siaio0ot9VfgQ9gN/RVagA8y0tqAOJG15EZg13xxZK0/XoYDHrVDY6jwhEhpUoNwOt48tByJ5wFHk4chin6FqN3YU+KcWRzHek/wMNQmXZi8DX8Cl/Aq7AfSpUaAIfSqi46fQaWQ60DCPWaljvRFbC9quO8D6gasf+bfeoU8IOGR+CbwNX2Nhim0bOA/jwOznvfAB/BT1Cq1AA8gqfn4MpSjxNjcCPNijoCK+EFOAR9lfoUL8PLjL6ehqfQ1+alcFFKl1IDsBlnMhnkTvVT+CGls6lTwLP+h+AuyzXAb3BPQGoAMW1Va/H+InwPB+AXcENUqtQA6MhNhij33EkN/Gfd/h/7tQPyPqBqrIdlCFftd9HebbpUvp/UCrfi/A3waHoUnodh2QbTlc5j8B34CvwMPEgZkFKlrgF34el+CEfOUseRwR2knwXXjVT5Krsdzk+t0LXzgc6Hu2E9eEjqq9QA+AFEUgPgAhkWyXmkpa6Cn9T6xzF0UbS/pUoNwGt40qFPxSC49ZRew+xnymQODCq3t9JPfi5zn+Lr73N4C/xCVKrUAOzD01gXnS4Dz+u91oH3KVsCnh9GoK5cb76ET0ocuPdfAZVfg6kBKLZfNizt+MYuxbpDlXfROKWVA9DA43ch7LUYNuB+XBeNtVl3DYh7dQOZlfAUlK0Ncb1B0v7j5apBHIS6TQTA1+LcLsHvpPmtuwb8yR36yXpYZF9q9afuCHibBkfhHnAEjCe3sdPB+fo3uDsLnfQfLA5jt7xOGzcw4ajtNeuF/YOftSzz1VrUMS5shbWQ9A2w6KDN/FKce8Pe4CZ4CIJMbwbLtNE2yL28O0/LxP9JzoRWVHcKtNKZiXDaZgAOc0Oi/I3/VxeXeT3YaVvMF+tq05h67eWbaMCF0q+zzvU18CZ4TR2EC2EWrINXIMxh57trxDWwHVbDFsjKEcgRyBHIEcgRyBHIEcgRaDIC/wLJCfpQFUCtHgAAAABJRU5ErkJggg==" width="40" height="40" alt="cpu" title="cpu"></div>
+        <div class="meta">cpu</div>
+      </td>
+      <td class="sev"><span class="pill weird">weird</span></td>
+    </tr>
+
+    <tr class="weird">
+      <td class="label"><code>rocket</code><div class="note">Rocket → paper plane</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="rocket" width="40" height="40"></i></div>
+        <div class="meta">rocket</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="paperplane" title="paperplane"></div>
+        <div class="meta">paperplane</div>
+      </td>
+      <td class="sev"><span class="pill weird">weird</span></td>
+    </tr>
+
+    <tr class="weird">
+      <td class="label"><code>github</code><div class="note">GitHub mark → code brackets</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="github" width="40" height="40"></i></div>
+        <div class="meta">github</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAGjklEQVR4Ae2YC2wVRRSGwbZYBQSVR7VAK1DEWBTR+khEaxBFo+JbJEHxgUEQwURQLCXRaEDxrSGNim8TlQiiaDS+UFBCfIICAqVJH2ARjUUUUEH9/uYeMmzvpXfv7tIm7J98nbOzM+fMnpmdnds2bWLFGYgzEGcgzkCcgTgDcQbiDMQZ2C8zkNXKnrqE8ZTDDfA3VMEu2C/UnaecDf8lWEI5FCLVAZF69+e8mObC1B7jYLuIqmxNCejLQxY5D1qNXeNcR2K2lgR04OmUgDznKSuxRaTKDui9Lf37wQDQYFfAv+BXmnl39uu5XgdbPY4Urz8cC2tgJWQSj27B1Q4Xo0ED1cb1A1wOmegKOulhbAP8DHtIEkfDqFuaaFdLeStEvk8Qo4kUdALUgQ16J/Y08Cu9hnfBdjBfc7B7gVe3UdEA1m4zdhl0goyUyR6gYBNhOuQ7UbVpCb/qSQe9/7mJjjso9TopuV7VUCFMXTCmwB3Q1SqjLBXwPtgCNgsqN8Fk0GbmV2fTYTGYv729SkrSeNDyt/Yqt8Hj0AMik2b7MVAwN7hm5BawGcT0pbG0rgfzOR974F485HDvOrC9x/rp5PgsaDWFrj541HupIBZQpQYxGjSoTNSRTg+B+dSOPguaW0lZtNHG+T1YX5Xah14HfZVCUzGeXgOdyd1g+uRdCZnsI3Rr1CD+LgDzuxH7psY7zf/RJ/F8WAbWX6WS+C6cAoF1Mh4Wgpy6QRRUwYNKCVwF5vtT7LN8Oi2l/SdgPqzMxNceoTWQRUkcK1gpBJVWThlo17dBP4Otr4JfldAh2UR9Rf2F0NaPQzW+AL4EG5hKrYJ3QKsiDBXi5DmwGNuw7wRfg6W9Sa/qq+B9VVdSNxK0bzQrNRoB6mQDU2mbi4KEpaE4WgIWRxvaZQGd6wuQbLOuon4M6PSaUrp5I6wHG5TKqD4vN+N7kxNrHvZxEFQ6CzwBWlHuc2zkWifJ9tBEOtpOgg3gdpKTJ0FOw9QhOHsYLJZerwcg6eCo96uudJgBv4PFUPkLlENn2C0NZiropttYnWdCNwhbJ+LwLbB4ddhaomFKDzkNkj2XktPFgo3CqAQbjMpfYTrskSmuw9JVOFoNFnMRdimELa0orWwtf4ulUifPsdB4iNHy7qkLR29iPw8NTl1YpjZabVa9HYc6UYqw9ScOX4K5oNfM1B0jH7L1Ldbse4NrhvSLLw/CVi8cFoHtyNpnFF+zFLYOw+EEuAb0rKZqDG32O1WRC1oOqnSXiQ4oFVAAYeocnH0OFms59qVhBkj40uTNgj/AYqnUl2cKdIDdysHSXqB/M7mN/+FaS+hoCEvjcPQzWJw3sAeE5Tzhp4ByNmgSLY7KGhgPmvQm0hLRTHwHbqddXM+DgRBU+mfKI2D+9V7OBH2Gw5Im6wXQ5FkclWvhWsiGlNIxVEv0C3A7a6Dvw2kQRCfR+W0w37XYOnyFpeNxpBWlSbMYKvWa6ZTp7gNcptbp3PoAXCeyF8MQyFQj6PgjmN+Psc/M1JmnnybnPTDfVi6lbpinbVqXJ9BqPmj2zZnKr2E4aLX4URaNy+EvMH9PYR8JQaVJ0eSYXys/pG5wEOf96fwyeN+nVdSNBD1UuupNQ72bNjjtztqNg0hL+iLQpJhflXoFFsAgCKxCPFTADnCDVHE9BtpBOjqXRu7eos32knQ6pmijzexq0GS449JkvQLHQGjKw9OD4P2mbqBuIqSzi+vzsxlssHOxiyETHUgnJV+TYP5UapL0WhVC6NKp6m74Ddygeqgy6ASp1Jkbj4L10xKdAQeBXynZk0DJN38qNTn6hXkERKaOeJ4M9eAG38L1vaAkJVMJlQvB+tRgX5+sYTN1ij8VvL/wNCn3QKr43ApPubgaB9VgD6SyDrQsk0kb5hqw9h9hn5GsYTN18rMWzI9KO9oqOb6ljcSv9J49DVpyWvr9QNIvLOGVYvSBo5wb67CFX3WjgzDVYtwPc0Dj2qfSJ+hi+AY0E8vgPPBKD/8i2Kxtxb7d2yjN68G007ddvlbDKMiBFpU2nVOhIMUodArTacwS8C328BRt06nOp5Hi9UincXNtMnkFvD5/okKkUl9uFDk3tfQrnWu/pnZ/EYq0jKPUoTjXwx+eCKJjtR5+feK6xYuoE6BlqiVrqsPQCtjnG5YNwFtGnQBtePpamJZjrLCL1lD6+TGTyXgb6LQRtoM2vwrQ1yJWnIE4A3EG4gzEGYgzEGcgzkCcgRbOwP+2bvXhXP3+/gAAAABJRU5ErkJggg==" width="40" height="40" alt="chevron.left.forwardslash.chevron.right" title="chevron.left.forwardslash.chevron.right"></div>
+        <div class="meta">chevron.left.forwardslash.chevron.right</div>
+      </td>
+      <td class="sev"><span class="pill weird">weird</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>database</code><div class="note">Odd cylinder split</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="database" width="40" height="40"></i></div>
+        <div class="meta">database</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAFHElEQVR4Ae2aa49eUxSAS1VD1a3RIHTGuIegERLSiqQIERIpCUKChB+AEJEgEuGDivBJJCo+9IOoiLhE0klHGip6cSdN2kHbaeklQg2KwfPUe5o1pzPv5cw+Z960ZyXPnL3PZa211977nL32O1Om1FJHoI5AHYE6AnUE6ggcqBE4qMKGz8LWHDgGZgRGKA83+JXjNtjUqHMoV8oKwFG4fQXMg4vgHDgaOpHN3PwFfATvwwfwN3StTMWzm+Bd+Av+TcxP6HsRDGjXya14NAitGu1w3wLr4FNYCR+DPb0edkIrHV7vh7kw6eK8fhvGctrGvA4PwgLohWnQSnw/nA03wFOwHHZD3obT4VEoaxqjurnM5vI3EB2zh1+DK8EpkUqORNGdsBaiPcuvQOVBOBijK3LOrKZ+HpQtN2NgB8RAPFy20bz+23MOvEN9ev6mEuunonsIsiD8QfmEEu3to3p5MO5c7/QTt4/CAieuDj4YiPsL6Cj8yM/B+OLCWib+4I/BjyVF1DmXi4gvpUx+yQqTcNwVbEafwunmxaIBiFp946fQE3W2Uz6dm/rCjYW+BCkc95v9WHCkiuJhGHkJCjU6hYPZ2zceXaYWGoYdOmTAV0G0bdkFWWWSN57Vt+PBI3ByCZ5cjM6XYbw8o1AAig4hG9xMvO7CaADsrTWwEdrN5g7n3jPAxMeG+57pgWbiWuTaZjeMde2QsU52eM7Pz0y4LjxnYHVeMvmHwlYYAvP+3xu4ZHZOi+sJR8+x0EzMDZ6BhWCgKpdsyHt8smH9Uo5L4U+I11OWXQIvgmyKfR5sFZoCKUYAPuyRD/krZojXwzUwDyayRDV4JlwDYAOXgQFOJikDkDm1k8LiBp47Ec4F1+/2nFtiR8CMBiMcnRLDDdwS832xDr6CUhdaZQQAn0fJFmrSlZJiIdSVDWvXqToA7UZqf72vHgH7a8+2264UI+ByjPW1azDhfVeh66SE+jpSlV/duSf3LPR2pKXYzZfxmIuivA+eq0zyxrO6yc6bcAu42EklLqDug08gs5U/FgpAWdmgDTdt9Xe9AVgL/hK0EUyKmsmhXDwLzgczwQXgHkArmbRs8FU8Mzuz1+PKchr1+Q047BGDYjb4AwyDGaHvIdPfmeCcng2tOsbl9vNwG5wGlUscflk22IMXj8MgxOupyo6cFXAPmEcoE84G/1fT+d/YqCwAUcuFVB6Cfohb6PG5dsqbed4RdjfMgbxMOABxyOaVT6S+hofF4Dic/UyaEdoIX2jHgcPeTRB79jdwSmyFTfAtfAbboVQpKwDRaXt6Q4N4vivKvoAOaKkDULD7R8JzVUyjYG5UMdp2EdaxFB0B24KlM0O5yuJ0jPUEg9GncLp5sWgAVga1/kztfl/VchcG/ZJkEn3KzpV29AeI+B1fRd2VXFUyF0NulmY+WK7iZ7lR7VsWHNARv9vtrNlHKSlQuZFn8ourewvomfAjx6Phe8h6waM5wXPQC6llPgrfg2jP8lJolTtwSznSi9qvIe+UX4l+sGdcFk+FTsV02k2PJyD/32iZvSVcM+kqLCkip6OLwPX6ePpc5q6HDfAdOGc9JwbH5EZmQR/4Uj0F4meO6l7x+Qfghb1nuqDgi+kNsPezHkp9dO4/DabMXSs9eGYm6JchRTAcJW/BHeBoSyrjDdlURvy5+xK4ANzlcVj78nSo+w1398dRsht2wQ4YgkH4EtxJWg1upNRSR6COQB2BOgJ1BOoI1BFIGoH/AGHgyhxoEf0fAAAAAElFTkSuQmCC" width="40" height="40" alt="cylinder.split.1x2" title="cylinder.split.1x2"></div>
+        <div class="meta">cylinder.split.1x2</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>chef-hat</code><div class="note">Hat → utensils</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="chef-hat" width="40" height="40"></i></div>
+        <div class="meta">chef-hat</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAFT0lEQVR4Ae2avc9VRRDGQcVPFBU0CILoKwoSIaCJJlQEKsXO0Mg/QEtiwT9ga2w0FiYWJoTY2BAKjIVUJnYYUFFDYkQUiBL8BBSeH+87ZLLZvfd8zF5zr2eS5z17ZndnZ56d3XvOnnfRokEGBgYGBgb+xwzcWjn2u2T/duFq0DiLZQebS4R/ImxGEIBTTwm7hBXCBeGyMCe8KuwU/hDOCLcJmwV0EHNe+FdoIvR9XtgrvCD8JpwV/nNZKg/2CyeFD4RtArJHOCFcEg4IzNoq4Q3ha+FN4QmhqWxSw/eEi8IvwusCNnvJLb16z3d+UBec2yA8IzwqIOgBBHG9QyBDnhbWC1sEa6viSLlfta8ILwn3Cdw/LJBFvSSCAAK7c8ELlgNAWF4A4cpYvp4+rOcm8pwavSysdI2x1dv/3gbkBLNgM3FNZYBg2+xb2deTvk1S+AG12yGQMeFiDvYx7ANhQ7NNzYLGtpV9vSdu1PhsmtuFe0c16loXQYAPxM+wBY1vVvb1vl/Jf5YJOz4kVJEIArpmgO9XCu4xVWwV2ESrSAQBfib9DNus47iVfb3vVwruWVWAahJBgJ9JH6AFjfNW9vUQQN+S8AvBz+rjpQYR+mgC/CZnQeOnlX09wUNCSXhoWi/cXWoQoY8gwKeyn2ELGj+t7Ot9v1wsT0oJqkoEAX4J+Bm2oAnAyr7e98sFuU5KUFUiCPAz6WfYgiYAK/t6WwI80aXC+ucxeXlaEX0fQYCfSZthgvK2jQCrJw509OUtLxWe81cL1FcV72TXgcgAc5RggM8K7Nq91aNDPHnzmvm/j+gCqkuO/baDQqK99KxReZdA+vIAY8Ib4G7hb2GjKXW1lySnulHkrfGhVFnjPoKAq3LsyoJzELBX+F0ghU14Vd4ncIoDOQj7Af3onwprv/r6Z9AIAjicAARMNliAKt4UlsC6m3fzBUiiH1mRCsFXe/z1g0XsAadkkBMeZrSNfKPGXwlpP5YFhx73CNUlggACOSJAQlP5WQ0PC59nOvAGSPC2r2SaxKkilgCpDAGk+WsCBxel2WPNkzEfCQeFH4RUOEIr9U/b9r6PIAAnCISACM7O7uZU9nJON58IBP+pcEbICRkAJiJRBOAsG9pR4UuB3/e1C1ddbgjp/pbwmcADUUnwif4TkYg9IHX0eym+FS4nFd/pnv1iVPB0gYDIicFmUWoQwGDs7LlA0x0/5xib30Q2QAavRQB2U9s5HT6kUiIvbRdynzoZYlRGsJvOYlMCLqovmIjUJCC13ZSAC4qcT2o/TYKB1MmoMXPBokuzIjcej8b8mhwSfsw1iNRNmoCm4/FT+o7wtvCFkNtQpe4vTR1qM5IdhqS2mf1UV7JLwJDwrvC+cFqoIk0dajO4EZD2Yay24/H0eEyAjCrS1qEmTpQCLenH2fxTDUAVmTQBTTbBNFD6VHsynDQBXcaDgC7EpURm77s4lDXklNjM2SWInN51zRarvht0cSjrpVNiMzdj6LuMNzMZ0JWAqcyA3Ex3JWCmMiC3NNzqyRZnJgMIPpcZ2aidcuoyoBRo1yUwMxnQlYCpy4BSoCW9y/ZscaYygNlsK0MGiDGyoIqQltFSSvXS5jhu/KnMgFyql4gZR8DU7QEElDv/z+nGBT+qPuT4vMYS4Eibk90riffndQ/aCp/cgJdLumGM3P8W+HZjy7lUHdtpTAM+iWF3pcA/OfBfIRxzc8p7TPhLaCPY44vxKoGPpr8KHwsfCqeFXsL5XQ1ZJqNbhS0CHzr5JshH0S7H3GTpnPCiAKl8judD63Gh2lGZbA8yMDAwMDAw+wxcB22Mttl8RncRAAAAAElFTkSuQmCC" width="40" height="40" alt="fork.knife" title="fork.knife"></div>
+        <div class="meta">fork.knife</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>coffee</code><div class="note">Coffee → teacup (related but not coffee)</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="coffee" width="40" height="40"></i></div>
+        <div class="meta">coffee</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,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" width="40" height="40" alt="cup.and.saucer" title="cup.and.saucer"></div>
+        <div class="meta">cup.and.saucer</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="drift">
+      <td class="label"><code>webhook</code><div class="note">Same as lick mapping</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="webhook" width="40" height="40"></i></div>
+        <div class="meta">webhook</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAADLUlEQVR4Ae2YW4hNURjHZ+R+iZRyi5G8TbwqtwxFQp6keDMPZEouNaV5NC+SJFGSa0pJpuRBkRJKIvIg5W3knojI3e//cGq3rd1Z+1t7jlPzffXr7LPOd1v/s/bea++WFjdXwBVwBVwBV8AVcAVcAVfAFXAFXAFXwBVwBVwBV8CqwHAC98AtuAI7YRwMChvBLK/Dnxxv+b4LRkIz2HSa2AG7YUqVDZ0gWX7y2e/9/N4JQ6ssWiKXVmIvfIVaX885Hg/Jto0MtaT1Pp/iux5ak6vGJRiC22Z4CaHe1salKfZazE/fC5KHCtbGHhCzsjhtJb90kOUh1GqGPuemVNL59LpOgVDR7NhN4hekNBGIncNYH2TrhI7PBGKjh3RRuxdRJFQ4NHaZXEn/BvET4ADErEitjNFgttNEhiaSMvabnOdgdsmudGHtgncQU19+bWC27UTGFLL6/CD/UZga0eEqfJ5AbK2f+C6LyFvospRf1GBswRS/L9TZBxMhb+0MXIWy+bUHMNtMIrWxKVs01f8DNXtgDEwCrQ79k2XzniXGbKOI1K2rbNEq/XXH+Wjs4T5xSbtRXZyqnEwjc72h9xlgNu3lG9lwlbV0vVpinjmBy8FyvlU5iZRcuj2abRaRsffWlCYHKvakeeYEapf0CCzNNcOKuUvvekQ323kiLZO/SJx2cnpIum3MYambjXlF3Wlgtm4iswljjvVcsChQcQ1j1pUUUzfvo+eAhYE+oodW4PkL8omLvvfjuwlaocj0TL4RnkFRnqrGtxQ1ETOupfs+sslP+PWANkixNgzHrfACqppwNs+x2EZCfmMZfBzRmFbHcZgMVtMFVqdZrNjZSRYd3yGfXsqa7QKRRclr49fwmWeu8G+gnt974TPUalg+taKSXnCuq9OAHjdXw0CZVtNhiHmRkRfoG3HzUxs7RIJ8Yn3XJqgLGvUmVxsvvaYqcxHuxD/ZNpAhK4BU3Q9aov/D2inaB9meQsdHqmxOIpyCvdAGzWBa2jcgNHldj3RXGRTWwSwvgW69Oi0Pgu4kbq6AK+AKuAKugCvgCrgCroAr4Aq4Aq6AK+AKuAKugEGBv3arTypKgvzNAAAAAElFTkSuQmCC" width="40" height="40" alt="bolt.horizontal.fill" title="bolt.horizontal.fill"></div>
+        <div class="meta">bolt.horizontal.fill</div>
+      </td>
+      <td class="sev"><span class="pill drift">drift</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>activity</code><div class="note">Good mapping (dock monitor)</div></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="activity" width="40" height="40"></i></div>
+        <div class="meta">activity</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEcUlEQVR4Ae2ZOW/VQBSFwxK2gACxLxEpCAUVDYtA9PwDJERBRYNERYsQNRIVPwIh0UHHD0BCbAUgJCTCvu8JWxLgfA/f6GLe83OIZ2zx5kgnHttjz9wz587Mc/r6EpICSYGkQFIgKZAUSAr0qAJzIsQ9pDYOiTvF5+IHsWcwS5EeE0fFt+JRsVGYHbg3K/T+TeKAuFxcK84TG4PQAmxQpNCwUoVVdtKEY2wBCL7nBcAFjUFIB7DCYH/y3tBTKUDgCOCX2p5KgfwEiAtYCXDBXE6agJAp4AX4mQXLvgAXsDw2ArEEeKBoIZjOPNCv+kH3DaEEWKCO4wAb6RsqQ4ADyqwE21XvvDgiHhH9XKLTahBKAG//9+rqTfF+1uWyE+Ee1d8rrhP5HTEkVo4YAjxRr2+Lr8VxsUwKLFY9RFwmgkFxY6tU8Z9YAjxSv1+JiEBaIEJR2wRL0Ib8uV2f8bGoEzN5uU8BHAARAJLLpAFLYicQsB/x/Hmn56Z9PYQAS9WL9SI2/iES/DPRBFCxaxrkA2ZS5VqZyZP3l0YIARh9G72XKiMAuY/9EQEUTYT0iXcgogfv9Gnh7/1zOZQABAAI/nGr9KcDEKDTaK7WPQLtFycy6hBmIgyxJSV4LwAigHciDpgUi1YCRtocdDervzW7VrkDqhaArS7Bs3YDRt8EYD4gDd6IRQIQpAnA6sHzrBykBNfni9/ESlB1CmBtBGD7+l2k85b3Kk5NhNxHBCbMPLwDnurmFZEj4nLP3KXizFG1AL6DdBoB7IcQvUUME6SdCxbqPiPNiOMY3nE9O+rQEqDSNCibAkvU+A5xm1j0zHBWR4dW8Ajg0W4luOcqIKAFaCsIP6JYRgFzwWFxFydtMKlrt8TLInNOVxQF4x8+qJMT4hp/sUvZ579V9Q5otxIgAASIB3mG44RI+wcy6tAWn3T1pHha9O5rW7lsCgzoaTY2ZYF9R8SHuQeYAHEB9xEAengBLIWoiwvy7/LP+TJpRF9LxVbWAfws5YW7xW7PYMNr4jlxTPTgHiOKPfNzAJMcE1zeAbrUd1HsF/eJi8RO4P1XxbMi5UZiv3p1R8Sep0TcBXDDGZHrrCDHxVKjqHr/jOANtOkZDoCAoCFg5Adbpd//QyTvsX9Q1C2ATwOf/wQPg6MOAfJLISKAvABMgsFRpwDkuqUA21sEsHT4rx0wrkBxAd8KLQXY/SEAK8EXkY0P/04PjjocQFBMgojADhMRNosIALA+m6goqFMAvxKwxTYBsH+U/Efhbpsa6oRAfilkc2MC2A4wRLt/vbMuAfxKsCXrle3wok2AtFuXADYH0IdhkckPfBRxwCgnMVDXHMAXHUQgYD6TWz+ijr7anWqYcmx4F1jbUfOfRk1560DMo58Ird2ecwAiGNgZ4gAYDU1yAB9LcEBlX3zLqFinAH4ppK/R859G6xTgs9pHhDE6IjD6Ue1Po3UKQPs+5/nuN8LFmKhrI2QxXlDhq8g2+JL4QkxICiQFkgJJgaRAUiApEEWBX9sq3av4IUt7AAAAAElFTkSuQmCC" width="40" height="40" alt="waveform.path.ecg" title="waveform.path.ecg"></div>
+        <div class="meta">waveform.path.ecg</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr>
+
+    <tr class="ok">
+      <td class="label"><code>sparkles</code></td>
+      <td class="icon-cell">
+        <div class="glyph"><i data-lucide="sparkles" width="40" height="40"></i></div>
+        <div class="meta">sparkles</div>
+      </td>
+      <td class="icon-cell">
+        <div class="glyph"><img class="sf" src="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAEAAAABACAYAAACqaXHeAAAAAXNSR0IArs4c6QAAADhlWElmTU0AKgAAAAgAAYdpAAQAAAABAAAAGgAAAAAAAqACAAQAAAABAAAAQKADAAQAAAABAAAAQAAAAABlmWCKAAAEvElEQVR4Ae2aW4hVVRjHLe1mot200hxvE0GZZnZzSiVEFFFEH/RVCKKHegxinnrwJYIiEAQfeinoIaOgh4oeijEYsTEUGy9IqYPkXTOwi6b1+51mw+JwLvvk2nufc9x/+M1a+3LOWt+3vv2ttfaZMWNKlR4oPVB6oPTAjeuBsQWZfgft3ge2/1dBfag0W5QDnqX1l2AcHKz0pKA/NxfU7oO0+yRYFqoiHHATFs+Ep0bLOylvGGn8i/At/AP7YCP4KBQiO5S1bqGBhbAKFoOhPxES/U5lGAbgC9gJlyAX5eH527FkAayFh8EZINR4DubDXXABDkBuDqCt3GS0TYV+OAo+AmfhXeiFIvIRzeYvI2AzXIFtoFMKU2yvT8ISaaQ/uHgIfgTXAL9AYYrpgB6seAcc3XubWKTRQ3CiyX2ZX46ZBKfQ2/vBBGZ5DuppPxc+gJP1bsjrfEwH3EOnxaxv2UiOfOGjbwdjOsBRNwqc1y07QrEccCvW9oJ5wN3dbHDac6pra8VKgn1YuRRc9U2A52AudL0Mdbe1u8HRTjAKPoXnQac0k057Gh6DPJbnzfpT9/oDXFkPTnffwa+QGF2rvMx15/yPoB9WgC9CqrWBE8PwGbhsblu9Qc9cyNQyNs25M3z21RrWvca5szAIK2tcz+xUq0lwKz0ZAMP1CfBZnwP1wlynuOjZNYpRsxdCGfJ3g5shp0/rHSOzv1vcz8G1fRIFV6l/A2vA57uRNPg98LNGgdGQm1qNgOqO+YzvAOd+tfq/orKvf5P60Ohxo2IyF0XpDOtjQSdmrljT4B56uhP+BJ2hU36ANDKxirI/yYKqciLrP9cbAUn/HK0jMAJGxU9wDdJoKjdJIuvTIJelcqwIsPOnwSx/ahSKpjIBzoQZwZ3Vx8Gl+NVYEWDPLsB5cJo0maXRQ9zkazI3UIlmU/Gcg5M2ipLPtlzGjABDNsEoSKN53CShfEf4OPSGJzulfhsdlTTy94DNYM5wCgwxn2yCrtY6rNsLoeFh/WOuze1WD/Rh2FcNjNcRbqi2QDhDcNjZ8vFwM/U9hKNdr64TtoM/rHS03AG643PUXSjVM7jeeZPq+7AYfK0eTbH33n7fRJgFj4IZfhHMh2avy7mlqXRQ8kbZDdY+OAjHwem3MC2hZUPVxdDfUG8kszrvEvwYvAU6P7VirQMW0OIySDYyqTsQ6UZzSw84EI+08p2GbAxN4Ut8/WV2dxVn+E+HcIXHYVQZaS69D4N7DxkAE6wRkUqxHFCrMV9w6AgdsxyegevJA1f4vM/7l6Chu8HkeA3aXjp6BvSDI9ZKLrjE/Z+A4e0LmI6XUfEhXIZmjviZe16B8dBV6sGabdBoxhjh+svg26Gu1AtY9TXUigKj420wj3StHNnX4TeodsIg51ZA5oq1Dvg/Hb3Kh3aB2bxaTmWSuYp0gMYNg/8pEsqpbT+cD09mVS/aAb46cwFzMTDQzC+5qGgHaOQIHAus9VhyUTs4wN2dJLJ+IjnIumwHB5zESJ975QuQ0xA+Ep7PTO3ggDNYJ8qcILmpHRzgWv8cuIOzzCX7005F7eAAO6LR4o8rkpvG5dZS44ZcDwzBUTgEpUoPlB4oPVB6oPRADh74F5aiSiEs0GE2AAAAAElFTkSuQmCC" width="40" height="40" alt="sparkles" title="sparkles"></div>
+        <div class="meta">sparkles</div>
+      </td>
+      <td class="sev"><span class="pill ok">ok</span></td>
+    </tr></tbody>
+      </table>
+    </section>
+
+<footer>
+  Generated from packages/ios-app/SliccFollower/Views/SliccIcons.swift + DockModel.swift + LucideIcon.swift
+  and packages/webapp/src/ui/wc/wc-message-view.ts + packages/webcomponents dock/lick sources.
+  SF Symbol PNGs exported via AppKit on this Mac. Not a committed asset pipeline.
+</footer>
+
+<script>
+  lucide.createIcons({ attrs: { "stroke-width": 2 } });
+  document.querySelectorAll(".filters button").forEach(btn => {
+    btn.addEventListener("click", () => {
+      document.querySelectorAll(".filters button").forEach(b => b.classList.remove("active"));
+      btn.classList.add("active");
+      document.body.classList.toggle("hide-ok", btn.dataset.filter === "problems");
+    });
+  });
+</script>
+</body>
+</html>

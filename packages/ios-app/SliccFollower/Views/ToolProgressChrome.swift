@@ -110,7 +110,7 @@ func aggregateToolProgress(
 /// `linear-gradient(to top, accent calc(var(--slicc-progress)*100%), dim 0)`.
 /// Without a unit it is exactly the icon the row rendered before.
 struct ToolProgressIcon: View {
-    let systemName: String
+    let glyph: SliccGlyph
     let size: CGFloat
     let unit: ToolProgressEvent?
     let base: Color
@@ -119,9 +119,30 @@ struct ToolProgressIcon: View {
     @Environment(\.accessibilityReduceMotion) private var reduceMotion
     @State private var breathing = false
 
+    init(
+        glyph: SliccGlyph, size: CGFloat, unit: ToolProgressEvent?,
+        base: Color, accent: Color
+    ) {
+        self.glyph = glyph
+        self.size = size
+        self.unit = unit
+        self.base = base
+        self.accent = accent
+    }
+
+    /// Convenience for the handful of call sites that still hard-code an SF
+    /// Symbol (e.g. the Working cluster head).
+    init(
+        systemName: String, size: CGFloat, unit: ToolProgressEvent?,
+        base: Color, accent: Color
+    ) {
+        self.init(
+            glyph: .system(systemName), size: size, unit: unit, base: base,
+            accent: accent)
+    }
+
     var body: some View {
-        Image(systemName: systemName)
-            .font(.system(size: size))
+        SliccGlyphView(glyph: glyph, size: size)
             .foregroundStyle(fill)
             // An indeterminate unit has no level to show, so the whole glyph
             // breathes instead — the web's `wcmsg-progress-breathe`.

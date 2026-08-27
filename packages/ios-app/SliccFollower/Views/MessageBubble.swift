@@ -87,8 +87,8 @@ struct MessageBubble: View, Equatable {
                         // attributed to a non-cone source is a scoop, which
                         // gets the lucide bowl the web rail uses.
                         if message.channel?.isEmpty == false {
-                            Image(systemName: SliccIcons.messageSource(message))
-                                .font(.system(size: 10))
+                            SliccGlyphView(
+                                glyph: SliccIcons.messageSource(message), size: 10)
                         } else {
                             ConeScoopGlyph(isCone: false, size: 11)
                         }
@@ -291,7 +291,7 @@ struct MessageBubble: View, Equatable {
                     .fill(SliccIcons.toolStatusColor(tc))
                     .frame(width: 6, height: 6)
                 ToolProgressIcon(
-                    systemName: SliccIcons.tool(tc.name), size: 11, unit: unit,
+                    glyph: SliccIcons.tool(tc.name), size: 11, unit: unit,
                     base: palette.ink.opacity(0.55), accent: palette.accent)
                 Text(SliccIcons.toolTitle(tc.name))
                     .font(.system(.caption, design: .monospaced))
@@ -527,7 +527,7 @@ struct LickRow: View {
 
     private var channel: String { message.channel ?? "" }
     private var label: String { SliccIcons.lickLabel(channel) }
-    private var iconName: String {
+    private var icon: SliccGlyph {
         SliccIcons.lick(channel, sprinkleName: parseSprinkleName())
     }
 
@@ -608,8 +608,7 @@ struct LickRow: View {
                             .foregroundStyle(stateColor(state))
                             .accessibilityIdentifier("lick-state-\(state.rawValue)")
                     }
-                    Image(systemName: iconName)
-                        .font(.system(size: 13))
+                    SliccGlyphView(glyph: icon, size: 13)
                         .foregroundStyle(palette.ink.opacity(0.5))
                 }
                 .padding(.horizontal, 12)

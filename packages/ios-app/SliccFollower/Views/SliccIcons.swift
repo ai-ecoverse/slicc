@@ -6,35 +6,36 @@ import SwiftUI
 /// tools or lick channels are added to the leader.
 enum SliccIcons {
 
-    // MARK: - Tool Icons (mirror tool-call-view.ts DESCRIPTORS)
+    // MARK: - Tool Icons (mirror TOOL_ICONS in wc-message-view.ts)
 
-    /// SF Symbol name for a tool call by its tool name. Falls back to a generic
-    /// wrench when no specific mapping exists.
-    static func tool(_ toolName: String) -> String {
+    /// Glyph for a tool call by its tool name. Falls back to a generic wrench
+    /// when no specific mapping exists. Ice-cream tools use the ported Lucide
+    /// cone — SF Symbols has no cone, and a teacup was the previous stand-in.
+    static func tool(_ toolName: String) -> SliccGlyph {
         switch toolName {
         // File tools
-        case "read_file": return "doc.text"  // FileText
-        case "write_file": return "doc.badge.plus"  // FilePlus
-        case "edit_file": return "pencil"  // FilePen
+        case "read_file": return .system("doc.text")  // FileText
+        case "write_file": return .system("doc.badge.plus")  // FilePlus
+        case "edit_file": return .system("pencil")  // FilePen
         // Shell / scripting
-        case "bash": return "terminal"  // Terminal
-        case "browser": return "globe"  // Globe
-        case "javascript": return "chevron.left.forwardslash.chevron.right"  // Code2
+        case "bash": return .system("terminal")  // Terminal
+        case "browser": return .system("globe")  // Globe
+        case "javascript": return .system("chevron.left.forwardslash.chevron.right")  // Code2
         // Messaging / scoops
-        case "send_message": return "message.fill"  // MessageCircle
-        case "feed_scoop": return "fork.knife"  // UtensilsCrossed
-        case "scoop_scoop": return "cup.and.saucer.fill"  // IceCreamCone (no SF cone)
-        case "drop_scoop": return "trash"  // Trash2
-        case "scoop_mute": return "speaker.slash"  // VolumeX
-        case "scoop_unmute": return "speaker.wave.2"  // Volume2
-        case "scoop_wait": return "hourglass"  // Hourglass
-        case "list_scoops": return "list.bullet"  // List
-        case "list_tasks": return "checklist"  // ListChecks
-        case "register_scoop": return "person.badge.plus"  // UserRoundPlus
-        case "schedule_task": return "clock"  // Clock
-        case "update_global_memory": return "brain"  // BrainCog
-        case "delegate_to_scoop": return "paperplane.fill"  // Send
-        default: return "wrench.and.screwdriver"
+        case "send_message": return .system("message.fill")  // MessageCircle
+        case "feed_scoop": return .system("fork.knife")  // Utensils
+        case "scoop_scoop": return .lucide(.iceCreamCone)  // IceCreamCone
+        case "drop_scoop": return .system("trash")  // Trash2
+        case "scoop_mute": return .system("bell.slash")  // BellOff
+        case "scoop_unmute": return .system("bell.and.waves.left.and.right")  // BellRing
+        case "scoop_wait": return .system("hourglass")  // Hourglass
+        case "list_scoops": return .lucide(.iceCreamCone)  // IceCreamCone
+        case "list_tasks": return .system("checklist")  // ListChecks
+        case "register_scoop": return .system("person.badge.plus")  // UserRoundPlus
+        case "schedule_task": return .system("clock")  // Clock
+        case "update_global_memory": return .system("brain")  // Brain
+        case "delegate_to_scoop": return .system("paperplane.fill")  // Send
+        default: return .system("wrench.and.screwdriver")
         }
     }
 
@@ -66,26 +67,26 @@ enum SliccIcons {
 
     // MARK: - Lick Channel Icons & Labels
 
-    /// Icon for a lick channel (mirrors `packages/webapp/src/ui/lick-view.ts`).
+    /// Icon for a lick channel (mirrors `KIND_ICON` in slicc-lick-card.ts).
     /// `sprinkleName` allows per-sprinkle overrides (e.g. "welcome" → door icon).
-    static func lick(_ channel: String, sprinkleName: String? = nil) -> String {
+    static func lick(_ channel: String, sprinkleName: String? = nil) -> SliccGlyph {
         if channel == "sprinkle", let name = sprinkleName,
             let override = sprinkleIconOverrides[name]
         {
-            return override
+            return .system(override)
         }
         switch channel {
-        case "webhook": return "bolt.horizontal.fill"  // Webhook
-        case "cron": return "calendar.badge.clock"  // CalendarClock
-        case "sprinkle": return "sparkles"  // Sparkles
-        case "fswatch": return "folder.badge.gearshape"  // FolderSync
-        case "navigate": return "safari"  // Compass
-        case "session-reload": return "arrow.counterclockwise"  // RotateCcw
-        case "upgrade": return "arrow.up.circle.fill"  // ArrowUpCircle
-        case "scoop-notify": return "cup.and.saucer.fill"  // IceCream
-        case "scoop-idle": return "hourglass"  // Hourglass
-        case "scoop-wait": return "checklist"  // ListChecks
-        default: return "bell"  // Bell
+        case "webhook": return .system("bolt.horizontal.fill")  // Webhook
+        case "cron": return .system("calendar.badge.clock")  // CalendarClock
+        case "sprinkle": return .system("sparkles")  // Sparkles
+        case "fswatch": return .system("eye")  // Eye
+        case "navigate": return .system("safari")  // Compass
+        case "session-reload": return .system("arrow.counterclockwise")  // RotateCcw
+        case "upgrade": return .system("arrow.up.circle.fill")  // CircleArrowUp
+        case "scoop-notify": return .system("bell.and.waves.left.and.right")  // BellRing
+        case "scoop-idle": return .system("moon")  // Moon
+        case "scoop-wait": return .system("hourglass")  // Hourglass
+        default: return .system("bell")  // Bell
         }
     }
 
@@ -304,13 +305,15 @@ enum SliccIcons {
 
     // MARK: - Source Icons (cone vs scoop vs lick)
 
-    static func messageSource(_ message: ChatMessage) -> String {
-        if message.role == .user { return "person.crop.circle" }
+    static func messageSource(_ message: ChatMessage) -> SliccGlyph {
+        if message.role == .user { return .system("person.crop.circle") }
         if let channel = message.channel, !channel.isEmpty {
             return lick(channel)
         }
-        if message.source == "cone" { return "cup.and.saucer.fill" }
-        return "circle.grid.2x2"
+        // Match ConeScoopGlyph / the web rail: cone and scoop are ice cream,
+        // never a teacup or a 2×2 grid.
+        if message.source == "cone" { return .lucide(.iceCreamCone) }
+        return .lucide(.iceCreamBowl)
     }
 
     // MARK: - Attachments (mirror ATTACHMENT_ICON in slicc-user-message.ts)
