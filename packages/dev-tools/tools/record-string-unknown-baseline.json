@@ -44,7 +44,6 @@
   "packages/webapp/src/kernel/telemetry.ts": 1,
   "packages/webapp/src/net/handoff-link.ts": 1,
   "packages/webapp/src/net/link-header.ts": 1,
-  "packages/webapp/src/providers/adaptive-thinking.ts": 1,
   "packages/webapp/src/providers/built-in/azure-openai.ts": 2,
   "packages/webapp/src/providers/built-in/bedrock-camp.ts": 31,
   "packages/webapp/src/providers/built-in/local-llm.ts": 2,

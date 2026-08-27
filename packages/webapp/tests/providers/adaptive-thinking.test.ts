@@ -1,22 +1,23 @@
 import { describe, expect, it } from 'vitest';
 
+import {
+  type AdaptiveThinkingPayload,
+  adaptiveThinkingPayloadHook,
+  modelNeedsAdaptiveThinkingShim,
+  thinkingLevelToEffort,
+  withAdaptiveThinkingShim,
+} from '../../src/providers/adaptive-thinking.js';
+
 /** Option bag whose type carries the onPayload the shim may attach. */
 type ShimOptions = {
   reasoning?: string;
   effort?: string;
   apiKey?: string;
   onPayload?: (
-    payload: Record<string, unknown>,
+    payload: AdaptiveThinkingPayload,
     model: never
-  ) => Record<string, unknown> | Promise<Record<string, unknown>>;
+  ) => AdaptiveThinkingPayload | Promise<AdaptiveThinkingPayload>;
 };
-
-import {
-  adaptiveThinkingPayloadHook,
-  modelNeedsAdaptiveThinkingShim,
-  thinkingLevelToEffort,
-  withAdaptiveThinkingShim,
-} from '../../src/providers/adaptive-thinking.js';
 
 describe('modelNeedsAdaptiveThinkingShim', () => {
   it.each([
@@ -158,7 +159,7 @@ describe('adaptiveThinkingPayloadHook', () => {
   });
 
   it('composes with a prior onPayload (prior runs first)', async () => {
-    const prior = (p: Record<string, unknown>) => ({ ...p, tagged: true });
+    const prior = (p: AdaptiveThinkingPayload) => ({ ...p, tagged: true });
     const hook = adaptiveThinkingPayloadHook('medium', prior);
     const out = await hook({ thinking: { type: 'enabled', budget_tokens: 1024 } }, {} as never);
     expect(out.tagged).toBe(true);

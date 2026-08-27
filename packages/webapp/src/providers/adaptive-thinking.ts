@@ -100,8 +100,31 @@ export function thinkingLevelToEffort(
   return clampXhighEffort(base, model?.id, model?.name);
 }
 
-type Params = Record<string, unknown>;
-type PayloadHook = (params: Params, model: unknown) => Params | Promise<Params>;
+/** Thinking block while inspecting or rewriting an Anthropic stream body. */
+interface AdaptiveThinkingBlock {
+  type?: string;
+  display?: string;
+  budget_tokens?: number;
+}
+
+/** Bedrock adaptive-thinking effort on the stream body. */
+interface AdaptiveOutputConfig {
+  effort?: string;
+}
+
+/** Fields this shim reads or rewrites; other Anthropic body keys pass through unchanged. */
+export interface AdaptiveThinkingPayload {
+  thinking?: AdaptiveThinkingBlock;
+  output_config?: AdaptiveOutputConfig;
+  model?: string;
+  max_tokens?: number;
+  tagged?: boolean;
+}
+
+type PayloadHook = (
+  params: AdaptiveThinkingPayload,
+  model: unknown
+) => AdaptiveThinkingPayload | Promise<AdaptiveThinkingPayload>;
 
 /**
  * Build an `onPayload` hook that converts pi-ai's legacy enabled-thinking body
@@ -114,13 +137,13 @@ type PayloadHook = (params: Params, model: unknown) => Params | Promise<Params>;
 export function adaptiveThinkingPayloadHook(effort: string, prior?: PayloadHook): PayloadHook {
   return async (params, model) => {
     const base = prior ? ((await prior(params, model)) ?? params) : params;
-    const thinking = base.thinking as { type?: string; display?: string } | undefined;
+    const thinking = base.thinking;
     if (thinking && thinking.type === 'enabled') {
       base.thinking = {
         type: 'adaptive',
         ...(thinking.display !== undefined ? { display: thinking.display } : {}),
       };
-      base.output_config = { ...((base.output_config as object) ?? {}), effort };
+      base.output_config = { ...(base.output_config ?? {}), effort };
     }
     return base;
   };
