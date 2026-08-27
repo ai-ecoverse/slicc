@@ -1,7 +1,7 @@
 /** `git symbolic-ref` — read, update, and delete symbolic refs. */
 
 import * as git from 'isomorphic-git';
-import { parseArgs } from '../../shell/arg-parser.js';
+import { type ParsedArgs, parseArgs } from '../../shell/arg-parser.js';
 import { GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
@@ -13,6 +13,32 @@ type RefInspection =
   | { kind: 'symbolic'; target: string }
   | { kind: 'direct' }
   | { kind: 'missing' };
+
+/** Parsed flags for `git symbolic-ref` (see GIT_FLAG_SPECS['symbolic-ref']). */
+interface SymbolicRefFlags {
+  m?: string;
+  delete?: boolean;
+  d?: boolean;
+  quiet?: boolean;
+  q?: boolean;
+  short?: boolean;
+  recurse?: boolean;
+}
+
+/** Opaque parseArgs flag bag before unknown-flag validation. */
+type SymbolicRefParsedFlags = ParsedArgs['flags'];
+
+function symbolicRefFlagsFromParsed(flags: SymbolicRefParsedFlags): SymbolicRefFlags {
+  const out: SymbolicRefFlags = {};
+  if (typeof flags.m === 'string') out.m = flags.m;
+  if (flags.delete === true || flags.delete === false) out.delete = flags.delete;
+  if (flags.d === true || flags.d === false) out.d = flags.d;
+  if (flags.quiet === true || flags.quiet === false) out.quiet = flags.quiet;
+  if (flags.q === true || flags.q === false) out.q = flags.q;
+  if (flags.short === true || flags.short === false) out.short = flags.short;
+  if (flags.recurse === true || flags.recurse === false) out.recurse = flags.recurse;
+  return out;
+}
 
 function usage(): GitCommandResult {
   return { stdout: '', stderr: `${USAGE}\n`, exitCode: 129 };
@@ -89,7 +115,7 @@ function shortenRef(ref: string): string {
 }
 
 function validateFlags(
-  flags: Record<string, unknown>,
+  flags: SymbolicRefParsedFlags,
   deleting: boolean
 ): GitCommandResult | undefined {
   const knownFlags = new Set(['m', 'delete', 'd', 'quiet', 'q', 'short', 'recurse']);
@@ -162,7 +188,7 @@ async function printSymbolicRef(
   ctx: GitCommandContext,
   cwd: string,
   name: string,
-  flags: Record<string, unknown>
+  flags: SymbolicRefFlags
 ): Promise<GitCommandResult> {
   const target = await readSymbolicTarget(ctx, cwd, name, flags.recurse !== false);
   if (typeof target !== 'string') {
@@ -194,5 +220,5 @@ export async function symbolicRef(
   }
 
   if (positionals.length !== 1) return usage();
-  return printSymbolicRef(ctx, cwd, positionals[0], flags);
+  return printSymbolicRef(ctx, cwd, positionals[0], symbolicRefFlagsFromParsed(flags));
 }
