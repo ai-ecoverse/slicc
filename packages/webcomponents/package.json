@@ -22,9 +22,10 @@
       "types": "./src/internal/html.ts",
       "default": "./src/internal/html.ts"
     },
-    "./internal/mime-label": {
-      "types": "./src/internal/mime-label.ts",
-      "default": "./src/internal/mime-label.ts"
+
+    "./quick-look/mime-label": {
+      "types": "./src/quick-look/mime-label.ts",
+      "default": "./src/quick-look/mime-label.ts"
     },
     "./panel/center-ops": {
       "types": "./src/panel/center-ops.ts",

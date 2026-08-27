@@ -33,7 +33,7 @@
  */
 
 import { hasIcon } from '@slicc/webcomponents';
-import { shortMimeLabel } from '@slicc/webcomponents/internal/mime-label';
+import { shortMimeLabel } from '@slicc/webcomponents/quick-look/mime-label';
 import { formatAttachmentSize } from '../core/attachments.js';
 import { findBase64Mentions } from '../core/base64-mentions.js';
 import { type Base64Payload, identifyBase64 } from '../core/base64-payload.js';
