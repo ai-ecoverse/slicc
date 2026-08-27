@@ -105,6 +105,32 @@ struct LucideIcon: View {
     }
 }
 
+// MARK: - Shared glyph (SF Symbol or ported Lucide)
+
+/// A transcript / rail glyph that is either an SF Symbol or a ported Lucide
+/// path. Ice-cream metaphors have no SF Symbol, so those land on `.lucide`.
+enum SliccGlyph: Equatable {
+    case system(String)
+    case lucide(LucideGlyph)
+}
+
+/// Renders a `SliccGlyph` at `size`, tinted by the surrounding
+/// `foregroundStyle` like an SF Symbol.
+struct SliccGlyphView: View {
+    let glyph: SliccGlyph
+    var size: CGFloat = 16
+
+    var body: some View {
+        switch glyph {
+        case .system(let name):
+            Image(systemName: name)
+                .font(.system(size: size))
+        case .lucide(let lucide):
+            LucideIcon(glyph: lucide, size: size)
+        }
+    }
+}
+
 // MARK: - Cone / scoop identity
 
 /// The cone-vs-scoop glyph, in one place so the switcher, the transcript and
