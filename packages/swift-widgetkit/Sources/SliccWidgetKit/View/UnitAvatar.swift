@@ -229,36 +229,50 @@ public struct UnitAvatarGeometry: Equatable, Sendable {
 
     var browHalfHeight: Double { Self.browStroke * bandUnit / 2 }
 
-    /// How much of the pose's `raise` survives.
+    /// A brow capsule's centre, in tile points.
     ///
-    /// The app spends raise in full band units and lets the brow overhang the
-    /// tile, because nothing crops an avatar there. A widget grid cannot give
-    /// 15% slack on every side without shrinking every face to pay for it, so
-    /// the brows move INSIDE the crop: they rest in the headroom between the
-    /// tile's top edge and the top of the socket, and the raise is damped to
-    /// what that headroom can hold. The DIFFERENTIAL — one brow cocked, one
-    /// settled — is what reads as quizzical, and it survives the damping; the
-    /// absolute travel never mattered.
-    static let browRaiseDamping = 0.2
-    /// Keeps the raised brow's edge off the tile's top edge.
-    static let browTopInsetFraction = 0.008
-
-    /// A brow capsule's centre, in tile points: over the VISIBLE part of its
-    /// eye, floating in the headroom above the socket, lifted by the damped
-    /// raise.
+    /// Plain band space for the y, exactly as the app places it — which puts
+    /// the brow ABOVE the tile's top edge. It is painted over the crop rather
+    /// than inside it, so hosts must leave ``browOverhang`` of slack.
     ///
-    /// The x is clamped so the capsule stays inside the tile. Centred on the
-    /// eye's true `cx` — which sits a couple of percent from the tile edge —
-    /// a brow is half outside, and the half that survives the crop lands in
-    /// the rounded corner as a black wedge rather than reading as a brow.
+    /// Squeezing them into the headroom between the tile edge and the socket
+    /// was the first attempt, and it failed on glass: at a 0.269 corner radius
+    /// the tile has no straight edge that high, so the clamped capsule ran
+    /// into the rounded corner and came out as a black wedge sliced off at an
+    /// angle. There is no room up there — the answer is not to need any.
+    ///
+    /// The x IS still clamped, and that is a widget-only departure: the app
+    /// lets a brow hang off the side because nothing sits next to an avatar
+    /// there, whereas here the next cell is a few points away.
     public func browCenter(eyeIndex: Int, raise: Double) -> Point {
-        let eye = eyeCenters[eyeIndex]
+        let bandX = eyeIndex == 0 ? Self.bandLeftEyeX : Self.bandRightEyeX
+        let placed = placement.place(x: bandX, y: Self.browY + raise)
         let halfWidth = browSize.x / 2
-        let x = min(max(eye.x, halfWidth), sideLength - halfWidth)
-        let headroom = max(0, eye.y - eyeRadius)
-        let rest = max(browHalfHeight, headroom / 2)
-        let floor = browHalfHeight + Self.browTopInsetFraction * sideLength
-        return Point(x: x, y: max(floor, rest + raise * bandUnit * Self.browRaiseDamping))
+        return Point(
+            x: min(max(placed.x * sideLength, halfWidth), sideLength - halfWidth),
+            y: placed.y * sideLength)
+    }
+
+    /// How far this face's brows reach above the tile, in points.
+    public var browOverhang: Double {
+        guard let brows = face.brows else { return 0 }
+        let highest = min(
+            browCenter(eyeIndex: 0, raise: brows.left.raise).y,
+            browCenter(eyeIndex: 1, raise: brows.right.raise).y)
+        return max(0, browHalfHeight - highest)
+    }
+
+    /// The overhang of the tallest brow ANY face can grow at a given size.
+    ///
+    /// Hosts reserve this rather than the current face's own overhang, so a
+    /// thinking unit does not sit a few points lower than the idle one beside
+    /// it just because it grew eyebrows.
+    public static func maximumBrowOverhang(sideLength: Double) -> Double {
+        [AvatarType.cone, .scoop]
+            .map {
+                UnitAvatarGeometry(type: $0, face: .thinking, sideLength: sideLength).browOverhang
+            }
+            .max() ?? 0
     }
 
     public var browSize: Point {
@@ -366,14 +380,15 @@ public struct UnitAvatarView: View {
 
     public var body: some View {
         ZStack {
-            tile
+            // ONLY the tile clips. The brows ride over it in band space and
+            // overhang the top, exactly as they do in the app — hosts pad by
+            // `geometry.browOverhang` rather than slicing them off.
+            tile.clipShape(RoundedRectangle(cornerRadius: geometry.tileCornerRadius))
             if let brows = geometry.face.brows, geometry.eyes == .open {
                 browLayer(brows)
             }
         }
         .frame(width: geometry.sideLength, height: geometry.sideLength)
-        // Everything clips, brows included — see `browRaiseDamping`.
-        .clipShape(RoundedRectangle(cornerRadius: geometry.tileCornerRadius))
         .opacity(muted ? 0.55 : 1)
         .accessibilityHidden(true)
     }
@@ -421,7 +436,16 @@ public struct UnitAvatarView: View {
                     // Masked to the socket: a nearly-full context window grows
                     // the pupil past the white, and a pupil spilling onto the
                     // tile reads as a rendering fault rather than as alarm.
-                    pupil(index: index).mask(socket)
+                    //
+                    // The mask has to be laid out in the EYE's box. Masking
+                    // `pupil` directly sizes the mask to the PUPIL and centres
+                    // it on the un-offset position, so a gazing pupil gets
+                    // intersected with a same-size circle beside it — two
+                    // overlapping circles, i.e. a cat's eye. Visible on a real
+                    // device long before any test noticed.
+                    pupil(index: index)
+                        .frame(width: geometry.eyeDiameter, height: geometry.eyeDiameter)
+                        .mask(socket)
                 }
                 socket.stroke(.black, lineWidth: geometry.eyeOutlineWidth)
             }

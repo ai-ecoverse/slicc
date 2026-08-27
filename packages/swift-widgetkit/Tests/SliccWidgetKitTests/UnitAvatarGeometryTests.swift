@@ -258,31 +258,49 @@ final class UnitAvatarFaceTests: XCTestCase {
         XCTAssertEqual(lidded.lidInset, 0.1 * lidded.eyeDiameter, accuracy: 0.001)
     }
 
-    /// The brows move INSIDE the crop in a widget — a grid cell cannot give
-    /// the app's 15% slack on every side. They must clear the tile's top edge
-    /// and still sit above the eye.
-    func testBrowsStayInsideTheTileAndAboveTheEye() {
+    /// The brows overhang the tile's top edge, exactly as they do in the app —
+    /// the host pads by `maximumBrowOverhang` instead of clipping them.
+    ///
+    /// The first attempt squeezed them into the headroom between the tile edge
+    /// and the socket. On glass that failed: at a 0.269 corner radius there is
+    /// no straight edge that high, so the capsule ran into the rounded corner
+    /// and came out as a black wedge sliced off at an angle.
+    func testBrowsOverhangTheTileRatherThanBeingSqueezedInside() {
         for type in [UnitAvatarGeometry.AvatarType.cone, .scoop] {
             let geometry = UnitAvatarGeometry(type: type, face: .thinking, sideLength: 100)
             let pose = try? XCTUnwrap(geometry.face.brows)
+            XCTAssertGreaterThan(geometry.browOverhang, 0, "\(type) brows do not overhang")
             for index in 0...1 {
                 let raise = index == 0 ? pose!.left.raise : pose!.right.raise
                 let center = geometry.browCenter(eyeIndex: index, raise: raise)
-                XCTAssertGreaterThanOrEqual(
-                    center.y - geometry.browHalfHeight, 0, "\(type) brow \(index) clips the top")
                 XCTAssertLessThan(
                     center.y + geometry.browHalfHeight,
                     geometry.eyeCenters[index].y - geometry.eyeRadius + geometry.eyeOutlineWidth,
                     "\(type) brow \(index) sits on the eyeball")
-                // Clamped inward: centred on the eye's true `cx` — a couple
-                // of percent from the tile edge — half the capsule falls
-                // outside and the surviving half lands in the rounded corner
-                // as a black wedge instead of reading as a brow.
+                // The x IS clamped: unlike the app, the next cell is a few
+                // points away, so a brow may not hang off the side.
                 XCTAssertGreaterThanOrEqual(center.x - geometry.browSize.x / 2, -0.001)
                 XCTAssertLessThanOrEqual(
                     center.x + geometry.browSize.x / 2, geometry.sideLength + 0.001)
             }
         }
+    }
+
+    /// A face with no brows reserves nothing; a host still pads every cell by
+    /// the maximum so a thinking unit does not sit lower than the idle one
+    /// beside it.
+    func testOnlyABrowedFaceOverhangsButHostsReserveTheMaximum() {
+        let idle = UnitAvatarGeometry(type: .cone, face: .idle, sideLength: 100)
+        XCTAssertEqual(idle.browOverhang, 0)
+        let maximum = UnitAvatarGeometry.maximumBrowOverhang(sideLength: 100)
+        XCTAssertGreaterThan(maximum, 0)
+        for type in [UnitAvatarGeometry.AvatarType.cone, .scoop] {
+            XCTAssertLessThanOrEqual(
+                UnitAvatarGeometry(type: type, face: .thinking, sideLength: 100).browOverhang,
+                maximum)
+        }
+        XCTAssertEqual(
+            UnitAvatarGeometry.maximumBrowOverhang(sideLength: 200), maximum * 2, accuracy: 0.001)
     }
 
     /// A brow still belongs to ITS eye: the left one stays left of centre.

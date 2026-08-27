@@ -21,11 +21,17 @@ public struct UnitCell: View {
     }
 
     public var body: some View {
-        VStack(spacing: nameSize * 0.35) {
+        // Reserved for every cell, not only the ones whose face has brows:
+        // a thinking unit must not sit a few points lower than the idle one
+        // beside it just because it grew eyebrows.
+        let overhang = UnitAvatarGeometry.maximumBrowOverhang(sideLength: avatarSize)
+        return VStack(spacing: nameSize * 0.35) {
             UnitAvatarView(
                 geometry: unit.avatarGeometry(sideLength: avatarSize),
                 hue: palette.avatarHue(for: unit),
-                muted: unit.isDormant)
+                muted: unit.isDormant
+            )
+            .padding(.top, overhang)
             Text(unit.name)
                 .font(.system(size: nameSize, weight: unit.role == .cone ? .semibold : .regular))
                 .foregroundStyle(unit.isDormant ? palette.inkSecondary : palette.ink)
