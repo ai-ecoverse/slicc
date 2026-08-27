@@ -30,7 +30,6 @@
   "packages/webapp/src/cdp/synthetic-cdp-transport.ts": 10,
   "packages/webapp/src/core/types.ts": 2,
   "packages/webapp/src/fs/mount/backend-local.ts": 1,
-  "packages/webapp/src/fs/sidecar-merge.ts": 2,
   "packages/webapp/src/git/commands/rebase.ts": 1,
   "packages/webapp/src/git/commands/shared.ts": 1,
   "packages/webapp/src/git/commands/symbolic-ref.ts": 2,

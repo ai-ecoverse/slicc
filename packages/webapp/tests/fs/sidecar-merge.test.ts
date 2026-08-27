@@ -2,18 +2,25 @@ import { describe, expect, it } from 'vitest';
 import {
   mergeSidecarEntries,
   type SidecarDirtyState,
+  type SidecarEntries,
   type SidecarIndexJson,
+  type SidecarInodeJson,
   stripSidecarSelfEntry,
 } from '../../src/fs/sidecar-merge.js';
 
-const entry = (tag: string) => ({ tag });
+/** Test stub: distinct tag plus the numeric fields consumers actually read. */
+const entry = (tag: string): SidecarInodeJson & { tag: string } => ({
+  tag,
+  mode: 0o100644,
+  size: 0,
+});
 
 const dirty = (paths: string[] = [], prefixes: string[] = []): SidecarDirtyState => ({
   paths: new Set(paths),
   prefixes: new Set(prefixes),
 });
 
-const doc = (entries: Record<string, unknown>, rest: Partial<SidecarIndexJson> = {}) => ({
+const doc = (entries: SidecarEntries, rest: Partial<SidecarIndexJson> = {}) => ({
   version: 1,
   maxSize: 100,
   ...rest,
