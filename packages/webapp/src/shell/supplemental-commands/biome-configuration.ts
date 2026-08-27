@@ -1,6 +1,16 @@
 import { joinPath, normalizePath, splitPath } from '../../fs/path-utils.js';
 
-export type BiomeConfiguration = Record<string, unknown>;
+/** Scalar JSON values in biome configuration files. */
+type BiomeJsonScalar = string | number | boolean | null;
+
+/** Recursive JSON nodes accepted anywhere in a biome configuration document. */
+export type BiomeJsonValue = BiomeJsonScalar | BiomeJsonValue[] | { [key: string]: BiomeJsonValue };
+
+/** Path-based or inline plugin reference from biome.json `plugins`. */
+export type BiomePluginEntry = string | { path: string; [key: string]: BiomeJsonValue };
+
+/** Parsed biome.json / biome.jsonc root object for `@biomejs/js-api` `applyConfiguration`. */
+export type BiomeConfiguration = { [key: string]: BiomeJsonValue };
 
 const BIOME_JS_API_VERSION = __BIOME_JS_API_VERSION__;
 
@@ -115,26 +125,32 @@ function stripTrailingCommas(source: string): string {
   return output;
 }
 
+function isBiomeConfiguration(value: unknown): value is BiomeConfiguration {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 export function parseBiomeJsonc(source: string): BiomeConfiguration {
   const withoutBom = source.charCodeAt(0) === 0xfeff ? source.slice(1) : source;
-  const parsed = JSON.parse(stripTrailingCommas(stripJsonComments(withoutBom))) as unknown;
-  if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+  const parsed: unknown = JSON.parse(stripTrailingCommas(stripJsonComments(withoutBom)));
+  if (!isBiomeConfiguration(parsed)) {
     throw new Error('configuration must contain a JSON object');
   }
-  return parsed as BiomeConfiguration;
+  return parsed;
+}
+
+function pluginPath(plugin: BiomeJsonValue): string | null {
+  if (typeof plugin === 'string') return plugin;
+  if (plugin === null || typeof plugin !== 'object' || Array.isArray(plugin)) return null;
+  const path = plugin.path;
+  return typeof path === 'string' ? path : null;
 }
 
 function firstPathPlugin(configuration: BiomeConfiguration): string | null {
-  if (!Array.isArray(configuration.plugins)) return null;
-  for (const plugin of configuration.plugins) {
-    if (typeof plugin === 'string') return plugin;
-    if (
-      plugin !== null &&
-      typeof plugin === 'object' &&
-      typeof (plugin as { path?: unknown }).path === 'string'
-    ) {
-      return (plugin as { path: string }).path;
-    }
+  const plugins = configuration.plugins;
+  if (!Array.isArray(plugins)) return null;
+  for (const plugin of plugins) {
+    const path = pluginPath(plugin);
+    if (path !== null) return path;
   }
   return null;
 }
