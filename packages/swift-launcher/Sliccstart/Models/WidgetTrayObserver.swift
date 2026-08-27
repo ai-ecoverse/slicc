@@ -28,10 +28,18 @@ final class WidgetTrayObserver: NSObject {
     private let makeConnector: (URL) -> WidgetTrayConnecting
 
     private var connector: WidgetTrayConnecting?
-    /// The in-flight attach. Held so a second `refresh()` cannot start a
-    /// parallel dial while the first is still asking WidgetKit whether a
-    /// widget exists — and so a test can wait for it without sleeping.
+    /// Dedupe handle: a second `refresh()` must not start a parallel dial
+    /// while the first is still asking WidgetKit whether a widget exists.
+    /// Cleared by `stop()`, so a new leader is never blocked by a sync that
+    /// has already been abandoned.
     private var startTask: Task<Void, Never>?
+    /// The most recent sync, retained until it actually FINISHES.
+    ///
+    /// Cancelling a sync cannot make it return: it may be suspended inside
+    /// `getCurrentConfigurations`, and a cancelled `withCheckedContinuation`
+    /// stays parked until whoever holds it resumes. So "has everything
+    /// settled" cannot mean `startTask`, which `stop()` drops on the floor.
+    private var lastSync: Task<Void, Never>?
     private var sendData: ((Data) -> Bool)?
     private var reassembler = TrayChunkReassembler()
 
@@ -92,24 +100,34 @@ final class WidgetTrayObserver: NSObject {
         refresh()
     }
 
-    /// Re-check installation and connect if a widget has appeared since the
-    /// last look. Cheap enough to call on a timer or on activation.
+    /// Re-check installation and connect or disconnect accordingly. Cheap
+    /// enough to call on a timer or on activation.
     func refresh() {
         guard startTask == nil else { return }
-        startTask = Task { @MainActor [weak self] in
-            await self?.startIfWidgetInstalled()
+        let task = Task { @MainActor [weak self] in
+            await self?.syncWithInstallation()
             self?.startTask = nil
         }
+        startTask = task
+        lastSync = task
     }
 
-    /// Test hook: wait out the in-flight attach instead of yielding and hoping.
+    /// Test hook: wait out the in-flight sync instead of yielding and hoping.
+    /// Awaits `lastSync`, not `startTask` — see the note on both.
     func _testing_settle() async {
-        await startTask?.value
+        await lastSync?.value
     }
 
     func stop() {
         startTask?.cancel()
         startTask = nil
+        teardownConnection()
+    }
+
+    /// Drop the connection and everything read over it, WITHOUT touching
+    /// `startTask` — `syncWithInstallation` runs inside that task and cannot
+    /// cancel itself out from under its own remaining work.
+    private func teardownConnection() {
         connector?.stop()
         connector = nil
         sendData = nil
@@ -118,18 +136,45 @@ final class WidgetTrayObserver: NSObject {
         activeScoopJid = nil
         lastMessage = nil
         snapshotChunks.removeAll()
+        lastSnapshotRequest = nil
         reassembler = TrayChunkReassembler()
         // A fresh leader is a fresh session: carrying stamps across would let
         // a unit from the old one keep a position it did not earn.
         recency = UnitRecencyLedger()
     }
 
-    private func startIfWidgetInstalled() async {
-        guard connector == nil, let url = joinUrl else { return }
-        guard await installation.isInstalled() else {
-            log.debug("No Cones & Scoops widget installed — not dialing the leader")
+    /// Bring the connection in line with whether a widget is installed —
+    /// in BOTH directions.
+    ///
+    /// Connecting when one appears was the easy half. The other half is that
+    /// removing the widget has to drop the connection: an early `guard
+    /// connector == nil` meant every later refresh returned before it ever
+    /// asked WidgetKit again, so a launcher kept a tray participant slot and a
+    /// WebRTC link alive for a tile that no longer existed — the exact cost
+    /// the installation gate is there to avoid.
+    private func syncWithInstallation() async {
+        guard let url = joinUrl else {
+            teardownConnection()
             return
         }
+        let installed = await installation.isInstalled()
+
+        // `getCurrentConfigurations` is a round trip, and the world can move
+        // under it: cancelling `startTask` does not cancel a checked
+        // continuation already in flight, so without this an in-flight query
+        // could come back and attach to a leader the user has since left —
+        // or race the attach to the new one.
+        guard !Task.isCancelled, joinUrl?.absoluteString == url.absoluteString else { return }
+
+        guard installed else {
+            if connector != nil {
+                log.debug("Cones & Scoops widget removed — dropping the tray connection")
+                teardownConnection()
+            }
+            return
+        }
+        guard connector == nil else { return }
+
         let connector = makeConnector(url)
         connector.delegate = self
         self.connector = connector
@@ -137,7 +182,7 @@ final class WidgetTrayObserver: NSObject {
             try await connector.start()
         } catch {
             log.error("Widget tray observer could not attach: \(String(describing: error))")
-            self.connector = nil
+            if self.connector === connector { self.connector = nil }
         }
     }
 

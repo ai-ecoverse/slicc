@@ -25,6 +25,46 @@ private final class StubConnector: WidgetTrayConnecting {
 
 private struct StubError: Error {}
 
+/// A flag the installation query reads, flippable from a test.
+private actor Installed {
+    var value: Bool
+    init(value: Bool) { self.value = value }
+    func set(_ next: Bool) { value = next }
+}
+
+/// Holds an installation query open until the test lets it answer, and tells
+/// the test when the query has actually STARTED.
+///
+/// Both halves matter. Without `waitUntilEntered` the test changes the leader
+/// before the sync task has begun running, so the sync returns at its very
+/// first guard and the race it claims to stage never happens — which is
+/// exactly how the first version of this passed against the bug.
+private actor Gate {
+    private var answer: CheckedContinuation<Void, Never>?
+    private var entryWaiters: [CheckedContinuation<Void, Never>] = []
+    private var opened = false
+    private var entered = false
+
+    func wait() async {
+        entered = true
+        for waiter in entryWaiters { waiter.resume() }
+        entryWaiters.removeAll()
+        if opened { return }
+        await withCheckedContinuation { answer = $0 }
+    }
+
+    func waitUntilEntered() async {
+        if entered { return }
+        await withCheckedContinuation { entryWaiters.append($0) }
+    }
+
+    func open() {
+        opened = true
+        answer?.resume()
+        answer = nil
+    }
+}
+
 @MainActor
 final class WidgetTrayObserverTests: XCTestCase {
     private var container: URL!
@@ -44,9 +84,13 @@ final class WidgetTrayObserverTests: XCTestCase {
     }
 
     private func makeObserver(widgetInstalled: Bool = true) -> WidgetTrayObserver {
+        makeObserver(installation: WidgetInstallationQuery { widgetInstalled })
+    }
+
+    private func makeObserver(installation: WidgetInstallationQuery) -> WidgetTrayObserver {
         WidgetTrayObserver(
             publisher: WidgetSnapshotPublisher(store: store, minimumInterval: 0),
-            installation: WidgetInstallationQuery { widgetInstalled },
+            installation: installation,
             makeConnector: { [unowned self] _ in
                 let connector = StubConnector()
                 connectors.append(connector)
@@ -129,6 +173,58 @@ final class WidgetTrayObserverTests: XCTestCase {
         observer.refresh()
         await observer._testing_settle()
         XCTAssertEqual(connectors.count, 2)
+    }
+
+    /// The gate has to work in BOTH directions. An early `guard connector ==
+    /// nil` meant a later refresh never asked WidgetKit again, so removing the
+    /// widget left the tray participant and the WebRTC link alive for a tile
+    /// that no longer existed.
+    func testRemovingTheWidgetDropsTheConnection() async {
+        let installed = Installed(value: true)
+        let observer = makeObserver(
+            installation: WidgetInstallationQuery { await installed.value })
+        observer.leaderChanged(joinUrl: "https://tray.test/join/x", label: "Chrome")
+        await observer._testing_settle()
+        XCTAssertEqual(connectors.count, 1)
+
+        await installed.set(false)
+        observer.refresh()
+        await observer._testing_settle()
+
+        XCTAssertEqual(connectors.first?.stopped, 1, "the connection outlived the widget")
+    }
+
+    func testAStillInstalledWidgetIsNotRedialedOnEveryRefresh() async {
+        let observer = makeObserver()
+        observer.leaderChanged(joinUrl: "https://tray.test/join/x", label: "Chrome")
+        await observer._testing_settle()
+        observer.refresh()
+        await observer._testing_settle()
+
+        XCTAssertEqual(connectors.count, 1)
+        XCTAssertEqual(connectors.first?.stopped, 0)
+    }
+
+    /// Cancelling `startTask` does not cancel a checked continuation already
+    /// in flight, so the installation query can come back after the user has
+    /// left — and must not attach to the leader it captured.
+    func testAnInFlightQueryCannotAttachToAnAbandonedLeader() async {
+        let gate = Gate()
+        let observer = makeObserver(
+            installation: WidgetInstallationQuery {
+                await gate.wait()
+                return true
+            })
+        observer.leaderChanged(joinUrl: "https://tray.test/join/old", label: "Old")
+        // Only once the query has genuinely started is there a race to stage.
+        await gate.waitUntilEntered()
+        // The user detaches before it answers.
+        observer.leaderChanged(joinUrl: nil, label: nil)
+        await gate.open()
+        await observer._testing_settle()
+
+        XCTAssertTrue(connectors.isEmpty, "attached to a leader that had already been left")
+        XCTAssertNil(store.read())
     }
 
     // MARK: Wire → snapshot

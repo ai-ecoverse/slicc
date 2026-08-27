@@ -183,4 +183,50 @@ final class AppStateWidgetSnapshotTests: XCTestCase {
     func testAnEmptyTranscriptCarriesNoMessage() {
         XCTAssertNil(makeState().widgetSnapshot().lastMessage)
     }
+
+    // MARK: Connection
+
+    /// The widget reads the SETTLED health, so a blip the user never saw
+    /// cannot flap the tile — and a stall that outlives the hold must reach it.
+    func testTheSnapshotFollowsTheSettledHealthNotTheRawState() {
+        let state = makeState()
+        state.activeDisplayName = "Chrome"
+        state.connectionState = .connected
+        XCTAssertEqual(state.widgetSnapshot().connection, .connected)
+
+        // A stall starts the hold; the settled value has not moved yet.
+        state.isLeaderStalled = true
+        XCTAssertEqual(
+            state.widgetSnapshot().connection, .connected,
+            "the settle hold exists so a blip does not reach the tile")
+
+        // Once it settles, the widget has to see it — this is the state that
+        // used to stick at `connected` forever, because the observers
+        // published before the hold and the hold published nothing.
+        state.settleConnectionImmediately()
+        XCTAssertEqual(state.widgetSnapshot().connection, .stalled)
+    }
+
+    /// Detach clears the store LAST. Clearing it early let the connection
+    /// observers republish off units and credentials still in memory, leaving
+    /// a session the user walked away from named on the home screen.
+    func testDetachLeavesNothingBehind() {
+        let state = makeState()
+        state.activeDisplayName = "Chrome"
+        state.connectionState = .connected
+        state.disconnect()
+
+        XCTAssertTrue(state.scoops.isEmpty)
+        let snapshot = state.widgetSnapshot()
+        XCTAssertTrue(snapshot.units.isEmpty, "a detached session left its units behind")
+        XCTAssertEqual(snapshot.instanceLabel, "SLICC", "the old instance is still named")
+
+        // The connection field lags by the settle hold even here: a
+        // user-initiated disconnect goes through the same window as a blip, so
+        // for two seconds the app still reads `connected`. That is the app's
+        // rule, not the widget's, and the store has been cleared regardless.
+        XCTAssertEqual(snapshot.connection, .connected)
+        state.settleConnectionImmediately()
+        XCTAssertTrue(state.widgetSnapshot().isUnavailable)
+    }
 }

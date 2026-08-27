@@ -60,10 +60,7 @@ class AppState: ObservableObject {
     // MARK: - Published UI State
 
     @Published var connectionState: ConnectionState = .disconnected {
-        didSet {
-            ingestConnectionHealth()
-            publishWidgetSnapshot()
-        }
+        didSet { ingestConnectionHealth() }
     }
     @Published var joinUrl: String = ""
     @Published var trayId: String?
@@ -208,10 +205,7 @@ class AppState: ObservableObject {
     /// Sending is blocked so a message typed now cannot be lost — the composer
     /// stays typable regardless (see `InputBar`).
     @Published var isLeaderStalled: Bool = false {
-        didSet {
-            ingestConnectionHealth()
-            publishWidgetSnapshot()
-        }
+        didSet { ingestConnectionHealth() }
     }
 
     /// Which reconnect attempt is in flight, 1-based. Zero when not reconnecting.
@@ -290,6 +284,15 @@ class AppState: ObservableObject {
         openGrants = openGrantStore.grants
         connectionSettler.onChange = { [weak self] health in
             self?.settledConnection = health
+            // The widget's connection field derives from the SETTLED health
+            // and nothing else, so this is the only moment it can change.
+            // Publishing from the raw `connectionState` / `isLeaderStalled`
+            // observers instead was both too early — the settle hold has not
+            // run yet, so the snapshot still says `connected` — and too late
+            // to ever be corrected, because the hold expiring lands here and
+            // nowhere else. A leader that stalled and stayed stalled kept a
+            // `connected` widget indefinitely.
+            self?.publishWidgetSnapshot()
         }
         Self.purgeLegacyJoinURLDefaults()
         fileProviderDomainLifecycle.registerIfCredentialsAvailable(credentialStore.load() != nil)
@@ -496,6 +499,12 @@ class AppState: ObservableObject {
         // Same contract for fs waiters: fail them rather than let the deadline
         // run out on a channel that is already gone.
         fsClient.cancelAll()
+        // LAST, after every piece of session state is gone. Clearing it up by
+        // `clearTrayCredentials()` looked tidier and was wrong: the connection
+        // observers fire in between, publish a snapshot off the units and
+        // credentials that are still in memory, and leave a detached session
+        // named on the home screen.
+        clearWidgetSnapshot()
     }
 
     /// Drop all hosted CDP tabs (called on user-initiated disconnect).
@@ -1619,8 +1628,6 @@ extension AppState {
         credentialStore.clear()
         activeJoinUrl = ""
         activeDisplayName = nil
-        // Detaching forgets the instance everywhere, the home screen included.
-        clearWidgetSnapshot()
     }
 }
 
