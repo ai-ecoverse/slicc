@@ -78,7 +78,7 @@ function parseAfplayArgs(args: string[]): AfplayArgs | CommandResult {
   const parsed: AfplayArgs = { volume: 1, rate: 1, filePath: null };
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
-    if (arg in VALUE_FLAG_HINTS) {
+    if (Object.hasOwn(VALUE_FLAG_HINTS, arg)) {
       const value = i + 1 < args.length && !args[i + 1].startsWith('-') ? args[++i] : null;
       if (value == null) return fail(`${arg} requires ${VALUE_FLAG_HINTS[arg]}`);
       const error = applyValueFlag(parsed, arg, value);
