@@ -133,7 +133,7 @@
     "tsx": "4.23.12",
     "typescript": "7.0.2",
     "typescript-js": "npm:typescript@6.0.3",
-    "vite": "8.2.1",
+    "vite": "8.2.2",
     "vitest": "4.1.11"
   },
   "lint-staged": {
