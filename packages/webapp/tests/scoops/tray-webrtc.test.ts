@@ -755,6 +755,83 @@ describe('FollowerTrayManager — TRAY_SUPERSEDED redirect', () => {
     );
   });
 
+  it('follows a header-only redirect whose body never says TRAY_SUPERSEDED (#1957)', async () => {
+    // Step 2 of #1957 turns this body into `action: "redirect"`; a follower
+    // that keys off the fail code would strand here, one that reads the
+    // `successor-version` link hops.
+    const linkOnlyRedirect = () =>
+      new Response(
+        JSON.stringify({
+          trayId: 'stale-tray',
+          controllerId: 'follower-1',
+          role: 'follower',
+          leader: null,
+          participantCount: 1,
+          result: { action: 'wait', code: 'LEADER_NOT_ELECTED', retryAfterMs: 1000 },
+        }),
+        {
+          status: 409,
+          headers: {
+            'content-type': 'application/json',
+            Link:
+              '<https://tray.example.com/join/fresh-tray.secret>; rel="successor-version", ' +
+              '<https://tray.example.com/status>; rel="status"',
+          },
+        }
+      );
+
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(async () => linkOnlyRedirect())
+      .mockImplementationOnce(async () => terminalFailResponse('fresh-tray'));
+    const onJoinUrlChanged = vi.fn();
+
+    const manager = new FollowerTrayManager({
+      joinUrl: 'https://tray.example.com/join/stale-tray.secret',
+      runtime: 'slicc-standalone',
+      fetchImpl,
+      controllerIdFactory: () => 'follower-1',
+      sleep: async () => {},
+      onJoinUrlChanged,
+    });
+
+    await expect(manager.start()).rejects.toThrow('Tray expired');
+    expect(onJoinUrlChanged).toHaveBeenCalledExactlyOnceWith(
+      'https://tray.example.com/join/fresh-tray.secret'
+    );
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe(
+      'https://tray.example.com/join/fresh-tray.secret?json=true'
+    );
+  });
+
+  it('follows the link even when the body is unreadable', async () => {
+    const fetchImpl = vi
+      .fn<typeof fetch>()
+      .mockImplementationOnce(
+        async () =>
+          new Response('<html>gateway error</html>', {
+            status: 409,
+            headers: {
+              Link: '<https://tray.example.com/join/fresh-tray.secret>; rel="successor-version"',
+            },
+          })
+      )
+      .mockImplementationOnce(async () => terminalFailResponse('fresh-tray'));
+
+    const manager = new FollowerTrayManager({
+      joinUrl: 'https://tray.example.com/join/stale-tray.secret',
+      runtime: 'slicc-standalone',
+      fetchImpl,
+      controllerIdFactory: () => 'follower-1',
+      sleep: async () => {},
+    });
+
+    await expect(manager.start()).rejects.toThrow('Tray expired');
+    expect(fetchImpl.mock.calls[1]?.[0]).toBe(
+      'https://tray.example.com/join/fresh-tray.secret?json=true'
+    );
+  });
+
   it('throws instead of looping forever on a redirect cycle', async () => {
     const fetchImpl = vi
       .fn<typeof fetch>()

@@ -1874,6 +1874,26 @@ extension AppState {
 
             let plan = try await client.attach(controllerId: controllerId)
 
+            // A named replacement outranks `action` — the plan only carries one
+            // when the hub said the tray moved, in the body or the
+            // `successor-version` link (#1957). A redirect is a different tray,
+            // not another try at this one, so it spends the supersede bound
+            // instead of the wait budget; `SupersedeRedirect` caps the chase.
+            if plan.supersededByJoinUrl != nil {
+                let outcome = SupersedeRedirect.outcome(
+                    for: plan, redirectsFollowed: redirectsFollowed)
+                guard case .follow(let replacement) = outcome else {
+                    throw AppStateError.attachFailed(
+                        SupersedeRedirect.failureMessage(for: outcome)
+                            ?? plan.error ?? plan.code)
+                }
+                redirectsFollowed += 1
+                client = followSuperseded(to: replacement)
+                try await Task.sleep(
+                    nanoseconds: UInt64(SupersedeRedirect.delaySeconds * 1_000_000_000))
+                continue
+            }
+
             switch plan.action {
             case .signal:
                 return (plan, client)
@@ -1882,20 +1902,7 @@ extension AppState {
                 let delay = plan.retryAfterMs ?? 2000
                 try await Task.sleep(nanoseconds: UInt64(delay) * 1_000_000)
             case .fail:
-                let outcome = SupersedeRedirect.outcome(
-                    for: plan, redirectsFollowed: redirectsFollowed)
-                guard case .follow(let replacement) = outcome else {
-                    throw AppStateError.attachFailed(
-                        SupersedeRedirect.failureMessage(for: outcome)
-                            ?? plan.error ?? plan.code)
-                }
-                // A redirect is a different tray, not another try at this one,
-                // so it spends the supersede bound instead of the wait budget.
-                // `SupersedeRedirect` caps the chase, so this cannot spin.
-                redirectsFollowed += 1
-                client = followSuperseded(to: replacement)
-                try await Task.sleep(
-                    nanoseconds: UInt64(SupersedeRedirect.delaySeconds * 1_000_000_000))
+                throw AppStateError.attachFailed(plan.error ?? plan.code)
             }
         }
         throw AppStateError.attachFailed("Max attach retries exceeded")

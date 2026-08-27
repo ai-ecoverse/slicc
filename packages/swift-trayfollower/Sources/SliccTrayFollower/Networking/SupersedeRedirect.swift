@@ -4,7 +4,9 @@ import Foundation
 ///
 /// When a leader's tab reconnects it mints a fresh tray and tells the old one it
 /// has been superseded, so every later attach on the old join URL answers HTTP
-/// 409 `{ action: "fail", code: "TRAY_SUPERSEDED", joinUrl: <replacement> }`.
+/// 409 `{ action: "fail", code: "TRAY_SUPERSEDED", joinUrl: <replacement> }`,
+/// and stamps the same address as an RFC 5829 `successor-version` link
+/// (`SupersedeLink`) that outlives any change to that body shape.
 /// That is a redirect, not a dead end: the follower re-attaches to `joinUrl`
 /// with a fresh controller id (the old id belongs to the old tray's roster).
 ///
@@ -28,13 +30,18 @@ public enum SupersedeRedirect {
         case invalidJoinUrl
     }
 
-    /// Decide what a `fail` attach plan means. Only ever called for
-    /// `plan.action == .fail`; any other code is terminal.
+    /// Decide what an attach plan means for the chase.
+    ///
+    /// Gated on the replacement address alone, not on `plan.code`: the plan
+    /// only carries one when the hub said the tray moved — through the body's
+    /// `TRAY_SUPERSEDED` or the `successor-version` link (#1957) — and keying
+    /// off the failure code instead is what let #1956 read a redirect as a
+    /// malformed reply. A future body that calls this `redirect` rather than
+    /// `fail` keeps working here unchanged.
     public static func outcome(
         for plan: FollowerAttachPlan, redirectsFollowed: Int
     ) -> Outcome {
-        guard plan.code == "TRAY_SUPERSEDED",
-            let raw = plan.supersededByJoinUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
+        guard let raw = plan.supersededByJoinUrl?.trimmingCharacters(in: .whitespacesAndNewlines),
             !raw.isEmpty
         else { return .terminal }
 

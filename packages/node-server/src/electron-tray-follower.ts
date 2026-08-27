@@ -11,12 +11,15 @@
 // label), reusing the shared wire types.
 import { randomUUID } from 'node:crypto';
 import {
+  type FollowerBootstrapRequest,
   type FollowerToLeaderMessage,
   isTrayChunkFrame,
   type LeaderToFollowerMessage,
+  successorVersionFromLinkHeader,
   TRAY_MAX_PENDING_REASSEMBLIES,
   TRAY_SYNC_PROTOCOL_VERSION,
   type TrayChunkFrame,
+  type TrayIceCandidate,
 } from '@slicc/shared-ts';
 // werift is a pure-TS WebRTC stack (no native build) that interops with the
 // browser leader's RTCPeerConnection.
@@ -55,6 +58,44 @@ interface IceServerConfig {
   credential?: string;
 }
 
+/**
+ * What the worker answers a signalling POST with, as far as this follower
+ * reads it. The full shapes are `FollowerAttachResponse` /
+ * `FollowerBootstrapResponse` in `@slicc/shared-ts`; this follower only
+ * narrows the handful of fields below, and must tolerate the rest (including
+ * an error body that carries none of them), so they stay `unknown` until a
+ * check proves otherwise.
+ */
+interface TraySignalingReply {
+  result?: TrayAttachResultReply;
+  iceServers?: unknown;
+  events?: unknown;
+}
+
+/** The attach outcome, before any field has been verified. */
+interface TrayAttachResultReply {
+  action?: unknown;
+  code?: unknown;
+  retryAfterMs?: unknown;
+  joinUrl?: unknown;
+  bootstrap?: { bootstrapId?: string };
+}
+
+/** One cursor-ordered bootstrap event, before any field has been verified. */
+interface BootstrapEventReply {
+  type?: unknown;
+  offer?: { type: string; sdp: string };
+  candidate?: TrayIceCandidate;
+}
+
+/** An entry of the worker's ICE server list, before validation. */
+interface UnverifiedIceServer {
+  urls?: unknown;
+  url?: unknown;
+  username?: unknown;
+  credential?: unknown;
+}
+
 /** Minimal tray follower-bootstrap signalling client (mirrors slicc-cli's
  *  `internal/signaling`): POSTs join/poll/answer/ice to the join URL. */
 export class TrayFollowerSignaling {
@@ -63,7 +104,7 @@ export class TrayFollowerSignaling {
     private readonly fetchImpl: typeof fetch = fetch
   ) {}
 
-  private async post(body: Record<string, unknown>): Promise<Record<string, unknown>> {
+  private async post(body: FollowerBootstrapRequest): Promise<TraySignalingReply> {
     const res = await this.fetchImpl(this.joinUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
@@ -71,7 +112,7 @@ export class TrayFollowerSignaling {
       signal: AbortSignal.timeout(SIGNALLING_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`tray signalling ${res.status} ${res.statusText}`);
-    return (await res.json()) as Record<string, unknown>;
+    return (await res.json()) as TraySignalingReply;
   }
 
   /**
@@ -85,34 +126,36 @@ export class TrayFollowerSignaling {
   async attach(
     controllerId: string,
     runtime: string
-  ): Promise<{ status: number; body: Record<string, unknown> }> {
+  ): Promise<{
+    status: number;
+    body: TraySignalingReply;
+    supersededByJoinUrl: string | null;
+  }> {
     const res = await this.fetchImpl(this.joinUrl, {
       method: 'POST',
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ controllerId, runtime }),
       signal: AbortSignal.timeout(SIGNALLING_TIMEOUT_MS),
     });
-    let body: Record<string, unknown> = {};
+    let body: TraySignalingReply = {};
     try {
-      body = (await res.json()) as Record<string, unknown>;
+      body = (await res.json()) as TraySignalingReply;
     } catch {
       // Non-JSON error body (e.g. a bare 5xx) — leave it empty; a bootstrap-less,
       // code-less result is treated as a terminal attach failure by the caller.
+      // A `successor-version` link still redeems this case: the hub can say
+      // where the tray went in a header the body never has to carry (#1957).
     }
-    return { status: res.status, body };
+    return {
+      status: res.status,
+      body,
+      supersededByJoinUrl: successorVersionFromLinkHeader(res.headers.get('Link')),
+    };
   }
-  poll(
-    controllerId: string,
-    bootstrapId: string,
-    cursor: number
-  ): Promise<Record<string, unknown>> {
+  poll(controllerId: string, bootstrapId: string, cursor: number): Promise<TraySignalingReply> {
     return this.post({ action: 'poll', controllerId, bootstrapId, cursor });
   }
-  sendAnswer(
-    controllerId: string,
-    bootstrapId: string,
-    sdp: string
-  ): Promise<Record<string, unknown>> {
+  sendAnswer(controllerId: string, bootstrapId: string, sdp: string): Promise<TraySignalingReply> {
     return this.post({
       action: 'answer',
       controllerId,
@@ -123,8 +166,8 @@ export class TrayFollowerSignaling {
   sendIceCandidate(
     controllerId: string,
     bootstrapId: string,
-    candidate: Record<string, unknown>
-  ): Promise<Record<string, unknown>> {
+    candidate: TrayIceCandidate
+  ): Promise<TraySignalingReply> {
     return this.post({ action: 'ice-candidate', controllerId, bootstrapId, candidate });
   }
 }
@@ -187,8 +230,10 @@ export class ElectronTrayFollower {
   /**
    * Attach to the tray, resolving the non-terminal attach outcomes the worker
    * returns before a bootstrap is available:
-   *  - `TRAY_SUPERSEDED` (HTTP 409 + `joinUrl`): the leader reconnected onto a
-   *    fresh tray — follow the redirect (bounded hops).
+   *  - superseded (HTTP 409 + `joinUrl`, and/or a `successor-version` `Link`
+   *    header): the leader reconnected onto a fresh tray — follow the redirect
+   *    (bounded hops). The link alone is enough, so a body shape this client
+   *    does not recognize is not a dead end (#1957).
    *  - `wait` (leader not yet elected/connected, carries `retryAfterMs`): sleep
    *    then re-attach (bounded), as the shared Swift/Go followers do — otherwise
    *    a follower that raced leader election resolves "started" but is never
@@ -202,15 +247,24 @@ export class ElectronTrayFollower {
     let hops = 0;
     let waits = 0;
     while (!this.stopped) {
-      const { body } = await this.signaling.attach(this.controllerId, FOLLOWER_RUNTIME_TAG);
-      const result = body['result'] as Record<string, unknown> | undefined;
-      const bootstrap = result?.['bootstrap'] as { bootstrapId?: string } | undefined;
-      if (bootstrap?.bootstrapId) {
-        this.bootstrapId = bootstrap.bootstrapId;
-        return normalizeIceServers(body['iceServers']);
-      }
-      const supersededUrl = result?.['joinUrl'];
-      if (result?.['code'] === 'TRAY_SUPERSEDED' && typeof supersededUrl === 'string') {
+      const { body, supersededByJoinUrl } = await this.signaling.attach(
+        this.controllerId,
+        FOLLOWER_RUNTIME_TAG
+      );
+      const result = body['result'];
+      // A named replacement is resolved before anything else in the body,
+      // including a bootstrap: a tray that has moved cannot also be the one to
+      // bootstrap against, and the other four followers all give the
+      // replacement precedence over every action. The `successor-version` link
+      // takes precedence over the body's `joinUrl`, and stands on its own when
+      // the body carries neither the code nor the URL (#1957).
+      const bodyJoinUrl = result?.['joinUrl'];
+      const supersededUrl =
+        supersededByJoinUrl ??
+        (result?.['code'] === 'TRAY_SUPERSEDED' && typeof bodyJoinUrl === 'string'
+          ? bodyJoinUrl
+          : undefined);
+      if (typeof supersededUrl === 'string') {
         if (++hops > maxHops) {
           this.log('[electron-follower] too many supersede hops — giving up');
           return null;
@@ -218,6 +272,11 @@ export class ElectronTrayFollower {
         this.log(`[electron-follower] tray superseded → following ${supersededUrl}`);
         this.signaling = new TrayFollowerSignaling(supersededUrl, this.fetchImpl);
         continue;
+      }
+      const bootstrap = result?.['bootstrap'] as { bootstrapId?: string } | undefined;
+      if (bootstrap?.bootstrapId) {
+        this.bootstrapId = bootstrap.bootstrapId;
+        return normalizeIceServers(body['iceServers']);
       }
       if (result?.['action'] === 'wait') {
         if (++waits > maxWaits) {
@@ -257,11 +316,7 @@ export class ElectronTrayFollower {
     pc.onIceCandidate.subscribe((cand: RTCIceCandidate | undefined) => {
       if (!cand || !this.bootstrapId) return;
       void this.signaling
-        .sendIceCandidate(
-          this.controllerId,
-          this.bootstrapId,
-          cand.toJSON() as Record<string, unknown>
-        )
+        .sendIceCandidate(this.controllerId, this.bootstrapId, cand.toJSON() as TrayIceCandidate)
         .catch((e) => this.log(`[electron-follower] sendIce failed: ${String(e)}`));
     });
     pc.onDataChannel.subscribe((ch: RTCDataChannel) => {
@@ -433,9 +488,7 @@ export class ElectronTrayFollower {
     }
     try {
       const res = await this.signaling.poll(this.controllerId, this.bootstrapId, this.cursor);
-      const events = Array.isArray(res['events'])
-        ? (res['events'] as Array<Record<string, unknown>>)
-        : [];
+      const events = Array.isArray(res['events']) ? (res['events'] as BootstrapEventReply[]) : [];
       for (const event of events) await this.handleBootstrapEvent(event);
       this.cursor += events.length;
     } catch (e) {
@@ -444,7 +497,7 @@ export class ElectronTrayFollower {
     this.schedulePoll();
   }
 
-  private async handleBootstrapEvent(event: Record<string, unknown>): Promise<void> {
+  private async handleBootstrapEvent(event: BootstrapEventReply): Promise<void> {
     const pc = this.pc;
     if (!pc) return;
     const key = JSON.stringify(event);
@@ -467,7 +520,7 @@ export class ElectronTrayFollower {
       );
       this.log('[electron-follower] answered leader offer');
     } else if (event['type'] === 'bootstrap.ice_candidate') {
-      const candidate = event['candidate'] as Record<string, unknown> | undefined;
+      const candidate = event['candidate'];
       if (candidate) {
         try {
           await pc.addIceCandidate(candidate as RTCIceCandidateInit);
@@ -518,7 +571,7 @@ export function normalizeIceServers(raw: unknown): IceServerConfig[] {
   const servers: IceServerConfig[] = [];
   for (const entry of raw) {
     if (entry && typeof entry === 'object') {
-      const e = entry as Record<string, unknown>;
+      const e = entry as UnverifiedIceServer;
       const urls = e['urls'] ?? e['url'];
       if (typeof urls === 'string' || Array.isArray(urls)) {
         servers.push({

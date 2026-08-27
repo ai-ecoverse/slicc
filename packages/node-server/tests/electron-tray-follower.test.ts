@@ -8,7 +8,9 @@ import {
 } from '../src/electron-tray-follower.js';
 
 /** Queue of scripted signalling responses, capturing the URL each hit. */
-function scriptedFetch(responses: Array<{ status?: number; body: unknown }>): {
+function scriptedFetch(
+  responses: Array<{ status?: number; body: unknown; headers?: Record<string, string> }>
+): {
   fetch: typeof fetch;
   urls: string[];
 } {
@@ -20,7 +22,7 @@ function scriptedFetch(responses: Array<{ status?: number; body: unknown }>): {
     i++;
     return new Response(JSON.stringify(r.body), {
       status: r.status ?? 200,
-      headers: { 'content-type': 'application/json' },
+      headers: { 'content-type': 'application/json', ...r.headers },
     });
   }) as typeof fetch;
   return { fetch: impl, urls };
@@ -132,6 +134,18 @@ describe('TrayFollowerSignaling', () => {
     expect(status).toBe(409);
     expect((body['result'] as Record<string, unknown>)['code']).toBe('TRAY_SUPERSEDED');
   });
+
+  it('attach surfaces the successor-version link even when the body is not JSON', async () => {
+    const failing = (async () =>
+      new Response('<html>gateway error</html>', {
+        status: 409,
+        headers: { Link: '<https://tray.example/join/new>; rel="successor-version"' },
+      })) as typeof fetch;
+    const sig = new TrayFollowerSignaling('https://tray.example/join/abc', failing);
+    const { body, supersededByJoinUrl } = await sig.attach('c', 'r');
+    expect(body).toEqual({});
+    expect(supersededByJoinUrl).toBe('https://tray.example/join/new');
+  });
 });
 
 describe('ElectronTrayFollower.attachWithRedirects', () => {
@@ -149,6 +163,64 @@ describe('ElectronTrayFollower.attachWithRedirects', () => {
     const ice = await makeFollower(fetch).attachWithRedirects();
     expect(ice).toEqual([{ urls: 'stun:s', username: undefined, credential: undefined }]);
     expect(urls[1]).toBe('https://tray.example/join/new');
+  });
+
+  it('follows a successor-version link whose body never says TRAY_SUPERSEDED (#1957)', async () => {
+    const { fetch, urls } = scriptedFetch([
+      {
+        status: 409,
+        body: { result: { action: 'redirect', error: 'moved' } },
+        headers: {
+          Link:
+            '<https://tray.example/join/new>; rel="successor-version", ' +
+            '<https://tray.example/status>; rel="status"',
+        },
+      },
+      {
+        status: 200,
+        body: { result: { bootstrap: { bootstrapId: 'bs-1' } }, iceServers: [{ urls: 'stun:s' }] },
+      },
+    ]);
+    expect(await makeFollower(fetch).attachWithRedirects()).toEqual([
+      { urls: 'stun:s', username: undefined, credential: undefined },
+    ]);
+    expect(urls[1]).toBe('https://tray.example/join/new');
+  });
+
+  it('follows the link even when the same body also offers a bootstrap', async () => {
+    // A tray that has moved cannot also be the one to bootstrap against. The
+    // other four followers resolve the replacement before any action, and this
+    // one used to accept the bootstrap first (Codex review, #2505).
+    const { fetch, urls } = scriptedFetch([
+      {
+        status: 409,
+        body: { result: { bootstrap: { bootstrapId: 'stale-bs' } }, iceServers: [] },
+        headers: { Link: '<https://tray.example/join/new>; rel="successor-version"' },
+      },
+      {
+        status: 200,
+        body: { result: { bootstrap: { bootstrapId: 'bs-1' } }, iceServers: [{ urls: 'stun:s' }] },
+      },
+    ]);
+    expect(await makeFollower(fetch).attachWithRedirects()).toEqual([
+      { urls: 'stun:s', username: undefined, credential: undefined },
+    ]);
+    expect(urls[1]).toBe('https://tray.example/join/new');
+  });
+
+  it('prefers the successor-version link over a stale body joinUrl', async () => {
+    const { fetch, urls } = scriptedFetch([
+      {
+        status: 409,
+        body: {
+          result: { code: 'TRAY_SUPERSEDED', joinUrl: 'https://tray.example/join/from-body' },
+        },
+        headers: { Link: '<https://tray.example/join/from-link>; rel="successor-version"' },
+      },
+      { status: 200, body: { result: { bootstrap: { bootstrapId: 'bs' } }, iceServers: [] } },
+    ]);
+    expect(await makeFollower(fetch).attachWithRedirects()).toEqual([]);
+    expect(urls[1]).toBe('https://tray.example/join/from-link');
   });
 
   it('retries a `wait` attach plan until the leader is ready', async () => {

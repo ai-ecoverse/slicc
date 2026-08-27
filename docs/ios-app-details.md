@@ -26,7 +26,9 @@ Nested horizontal content keeps a drag while it can scroll that way; scoop navig
 
 ## iCloud tray supersede chain
 
-iCloud keeps advertising the **old** tray after a leader reconnects. `SessionReachability` and both attach loops must follow the `TRAY_SUPERSEDED` chain (`SupersedeRedirect`, which also moves the tray the connection owns) or a row reads live but cannot connect.
+iCloud keeps advertising the **old** tray after a leader reconnects. `SessionReachability` and both attach loops must follow the supersede chain (`SupersedeRedirect`, which also moves the tray the connection owns) or a row reads live but cannot connect.
+
+The hop is named twice: in the 409 body (`code: "TRAY_SUPERSEDED"`, `joinUrl`) and as an RFC 5829 `Link: <replacement>; rel="successor-version"` header (`SupersedeLink`, #1957). **The link wins and stands alone** — the chase is gated on having a replacement address, never on the failure code, so a body shape this build does not model (or cannot decode) is not a dead end. Reading the code instead is what stranded the follower in #1956. Bounds stay ours: 5 hops, 1s apart, redirects never auto-followed by `URLSession`.
 
 ## Recent joins
 

@@ -125,12 +125,11 @@ public class TrayFollowerConnector: NSObject {
 
             delegate?.connector(self, didReceiveInfo: plan.trayId, participantCount: plan.participantCount)
 
-            switch plan.action {
-            case .wait:
-                let retryMs = plan.retryAfterMs ?? 1000
-                try await Task.sleep(nanoseconds: UInt64(retryMs) * 1_000_000)
-                continue
-            case .fail:
+            // A named replacement outranks `action`: the plan only carries one
+            // when the hub said the tray moved, through the body or the
+            // `successor-version` link (#1957). Waiting on — or failing at — a
+            // tray that already moved never resolves.
+            if plan.supersededByJoinUrl != nil {
                 let outcome = SupersedeRedirect.outcome(
                     for: plan, redirectsFollowed: redirectsFollowed)
                 guard case .follow(let replacement) = outcome else {
@@ -150,6 +149,16 @@ public class TrayFollowerConnector: NSObject {
                 try await Task.sleep(
                     nanoseconds: UInt64(SupersedeRedirect.delaySeconds * 1_000_000_000))
                 continue
+            }
+
+            switch plan.action {
+            case .wait:
+                let retryMs = plan.retryAfterMs ?? 1000
+                try await Task.sleep(nanoseconds: UInt64(retryMs) * 1_000_000)
+                continue
+            case .fail:
+                throw TrayFollowerConnectorError.attachFailed(
+                    code: plan.code, message: plan.error ?? "Attach failed (\(plan.code))")
             case .signal:
                 attachPlan = plan
             }

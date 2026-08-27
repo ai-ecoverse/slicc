@@ -116,12 +116,44 @@ public actor TraySignalingClient {
         let (data, response) = try await post(body: body)
         let rawText = String(data: data, encoding: .utf8) ?? "(empty)"
 
+        // #1957: a superseded tray states the replacement twice — in the body,
+        // and as an RFC 5829 `successor-version` link. The link alone is enough
+        // to follow the hop, so an unreadable or unrecognized body is no longer
+        // a dead end (that was #1956).
+        let successor = SupersedeLink.successor(in: response)?.absoluteString
+
         guard let raw = try? JSONDecoder().decode(RawFollowerAttachResponse.self, from: data) else {
+            if let successor {
+                return Self.supersededPlan(controllerId: controllerId, joinUrl: successor)
+            }
             throw TraySignalingError.invalidAttachResponse(
                 statusCode: response.statusCode, body: rawText)
         }
-        try validateAttachResponse(raw, statusCode: response.statusCode, rawText: rawText)
-        return normalizeAttachResponse(raw)
+        do {
+            try validateAttachResponse(raw, statusCode: response.statusCode, rawText: rawText)
+        } catch {
+            guard let successor else { throw error }
+            return Self.supersededPlan(controllerId: controllerId, joinUrl: successor)
+        }
+        return normalizeAttachResponse(raw, successorFromLink: successor)
+    }
+
+    /// The plan for a redirect the hub named in the header alone — the body
+    /// told us nothing this build could use.
+    private static func supersededPlan(controllerId: String, joinUrl: String) -> FollowerAttachPlan {
+        FollowerAttachPlan(
+            trayId: "",
+            controllerId: controllerId,
+            participantCount: 0,
+            leader: nil,
+            action: .fail,
+            code: "TRAY_SUPERSEDED",
+            retryAfterMs: nil,
+            error: nil,
+            bootstrap: nil,
+            iceServers: nil,
+            supersededByJoinUrl: joinUrl
+        )
     }
 
     // MARK: - 2. Poll
@@ -272,7 +304,9 @@ public actor TraySignalingClient {
     }
 
     /// Converts the raw attach response into the flattened FollowerAttachPlan.
-    private func normalizeAttachResponse(_ raw: RawFollowerAttachResponse) -> FollowerAttachPlan {
+    private func normalizeAttachResponse(
+        _ raw: RawFollowerAttachResponse, successorFromLink: String? = nil
+    ) -> FollowerAttachPlan {
         let action = AttachAction(rawValue: raw.result.action) ?? .fail
         return FollowerAttachPlan(
             trayId: raw.trayId,
@@ -285,7 +319,11 @@ public actor TraySignalingClient {
             error: raw.result.error,
             bootstrap: raw.result.bootstrap,
             iceServers: raw.iceServers,
-            supersededByJoinUrl: raw.result.code == "TRAY_SUPERSEDED" ? raw.result.joinUrl : nil
+            // The link wins over the body — it is the channel that survives a
+            // body-shape change — and it rides on every action, not just the
+            // `fail` the current contract happens to use.
+            supersededByJoinUrl: successorFromLink
+                ?? (raw.result.code == "TRAY_SUPERSEDED" ? raw.result.joinUrl : nil)
         )
     }
 }

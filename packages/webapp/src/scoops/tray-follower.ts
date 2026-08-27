@@ -1,5 +1,6 @@
 import type {
   FollowerAttachResponse,
+  FollowerBootstrapRequest,
   FollowerBootstrapResponse,
   FollowerJoinRequest,
   TrayBootstrapEvent,
@@ -9,6 +10,7 @@ import type {
   TraySessionDescription,
   TurnIceServer,
 } from '@slicc/shared-ts';
+import { successorVersionFromLinkHeader } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 
 const log = createLogger('tray-follower');
@@ -70,18 +72,46 @@ export async function attachTrayFollower(
     }),
   });
 
-  const body = await readFollowerAttachResponse(response);
+  // #1957: a superseded tray states the replacement twice — in the body, and
+  // as an RFC 5829 `successor-version` link. The header is the channel that
+  // survives a body-shape change, so it wins when both are present and it
+  // alone is enough to follow the hop.
+  const successorFromLink = successorVersionFromLinkHeader(response.headers.get('Link'));
+
+  let body: FollowerAttachResponse;
+  try {
+    body = await readFollowerAttachResponse(response);
+  } catch (error) {
+    if (!successorFromLink) throw error;
+    // The body didn't validate but the hub told us where the tray went. That
+    // is a redirect, not a dead end — dead-ending on an unrecognized body is
+    // exactly how #1956 stranded the iOS follower.
+    log.info('Follower tray attach: unreadable body with a successor-version link, following it');
+    return {
+      trayId: '',
+      controllerId: options.controllerId ?? '',
+      participantCount: 0,
+      leader: null,
+      action: 'fail',
+      code: 'TRAY_SUPERSEDED',
+      supersededByJoinUrl: successorFromLink,
+    };
+  }
+
   log.info('Follower tray attach response', {
     trayId: body.trayId,
     action: body.result.action,
     code: body.result.code,
     participantCount: body.participantCount,
+    supersededByLink: Boolean(successorFromLink),
   });
-  return normalizeFollowerAttachResponse(body);
+  return normalizeFollowerAttachResponse(body, successorFromLink);
 }
 
 export function normalizeFollowerAttachResponse(
-  response: FollowerAttachResponse
+  response: FollowerAttachResponse,
+  /** Replacement join URL read from the response's `successor-version` link. */
+  successorFromLink?: string | null
 ): FollowerAttachPlan {
   const base = {
     trayId: response.trayId,
@@ -93,6 +123,26 @@ export function normalizeFollowerAttachResponse(
     iceServers: response.iceServers,
   } as const;
 
+  // A named replacement is normalized to the supersede plan whatever the body
+  // called it: the link wins over the body's `joinUrl` (it is the channel that
+  // survives a body-shape change, #1957) and rides on every action, so a hub
+  // that stops saying `fail` / `TRAY_SUPERSEDED` still redirects every caller
+  // that reads this plan.
+  const supersededByJoinUrl =
+    successorFromLink ??
+    (response.result.action === 'fail' && response.result.code === 'TRAY_SUPERSEDED'
+      ? response.result.joinUrl
+      : undefined);
+  if (supersededByJoinUrl) {
+    return {
+      ...base,
+      action: 'fail',
+      code: 'TRAY_SUPERSEDED',
+      error: 'error' in response.result ? response.result.error : undefined,
+      supersededByJoinUrl,
+    };
+  }
+
   if (response.result.action === 'wait') {
     return { ...base, retryAfterMs: response.result.retryAfterMs };
   }
@@ -100,13 +150,7 @@ export function normalizeFollowerAttachResponse(
     return { ...base, bootstrap: response.result.bootstrap };
   }
   if (response.result.action === 'fail') {
-    return {
-      ...base,
-      error: response.result.error,
-      ...(response.result.code === 'TRAY_SUPERSEDED'
-        ? { supersededByJoinUrl: response.result.joinUrl }
-        : {}),
-    };
+    return { ...base, error: response.result.error };
   }
   return base;
 }
@@ -200,7 +244,7 @@ async function readFollowerAttachResponse(response: Response): Promise<FollowerA
 
 async function postFollowerBootstrapRequest(
   options: FollowerBootstrapOptions,
-  body: Record<string, unknown>
+  body: FollowerBootstrapRequest
 ): Promise<FollowerBootstrapResponse> {
   const fetchUrl = appendJsonParam(options.joinUrl);
   const response = await (options.fetchImpl ?? fetch)(fetchUrl, {
@@ -216,12 +260,54 @@ async function postFollowerBootstrapRequest(
   return payload;
 }
 
+/**
+ * The wire shapes as they arrive: the fields these validators read, each still
+ * unverified. Naming them keeps the guards honest about what they accept —
+ * a typo in a key is a type error rather than a silently `undefined` bag slot.
+ */
+interface UnverifiedAttachResponse {
+  trayId?: unknown;
+  controllerId?: unknown;
+  role?: unknown;
+  participantCount?: unknown;
+  result?: unknown;
+}
+
+interface UnverifiedAttachResult {
+  action?: unknown;
+  code?: unknown;
+  retryAfterMs?: unknown;
+  bootstrap?: unknown;
+  error?: unknown;
+  joinUrl?: unknown;
+}
+
+interface UnverifiedBootstrapResponse {
+  trayId?: unknown;
+  controllerId?: unknown;
+  role?: unknown;
+  participantCount?: unknown;
+  bootstrap?: unknown;
+  events?: unknown;
+}
+
+interface UnverifiedBootstrapStatus {
+  controllerId?: unknown;
+  bootstrapId?: unknown;
+  attempt?: unknown;
+  state?: unknown;
+  expiresAt?: unknown;
+  cursor?: unknown;
+  maxRetries?: unknown;
+  retriesRemaining?: unknown;
+}
+
 function isFollowerAttachResponse(value: unknown): value is FollowerAttachResponse {
   if (!value || typeof value !== 'object') {
     return false;
   }
 
-  const response = value as Record<string, unknown>;
+  const response = value as UnverifiedAttachResponse;
   if (
     typeof response['trayId'] !== 'string' ||
     typeof response['controllerId'] !== 'string' ||
@@ -236,7 +322,7 @@ function isFollowerAttachResponse(value: unknown): value is FollowerAttachRespon
     return false;
   }
 
-  const attachResult = result as Record<string, unknown>;
+  const attachResult = result as UnverifiedAttachResult;
   if (attachResult['action'] === 'wait') {
     return (
       (attachResult['code'] === 'LEADER_NOT_ELECTED' ||
@@ -271,7 +357,7 @@ function isFollowerBootstrapResponse(value: unknown): value is FollowerBootstrap
     return false;
   }
 
-  const response = value as Record<string, unknown>;
+  const response = value as UnverifiedBootstrapResponse;
   return (
     typeof response['trayId'] === 'string' &&
     typeof response['controllerId'] === 'string' &&
@@ -287,7 +373,7 @@ function isTrayBootstrapStatus(value: unknown): value is TrayBootstrapStatus {
     return false;
   }
 
-  const status = value as Record<string, unknown>;
+  const status = value as UnverifiedBootstrapStatus;
   return (
     typeof status['controllerId'] === 'string' &&
     typeof status['bootstrapId'] === 'string' &&

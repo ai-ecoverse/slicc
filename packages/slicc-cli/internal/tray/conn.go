@@ -152,6 +152,20 @@ func Dial(ctx context.Context, joinURL string, opts Options) (*Conn, error) {
 		if err != nil {
 			return nil, err
 		}
+		// A replacement join URL is checked before Action: the hub sets it from
+		// the `successor-version` link or the body's TRAY_SUPERSEDED, and either
+		// way the tray moved. Keying off the failure code instead is what let
+		// #1956 read a redirect as a malformed reply (#1957).
+		if plan.JoinURL != "" {
+			nextURL, err := followSupersede(plan, redirects, opts)
+			if err != nil {
+				return nil, err
+			}
+			redirects++
+			currentURL = nextURL
+			controllerID = newUUID()
+			continue
+		}
 		switch plan.Action {
 		case "signal":
 			if plan.Bootstrap == nil {
@@ -159,15 +173,8 @@ func Dial(ctx context.Context, joinURL string, opts Options) (*Conn, error) {
 			}
 			return dialBootstrap(ctx, sig, controllerID, plan, opts)
 		case "fail":
-			nextURL, retry, err := handleAttachFail(plan, redirects, opts)
-			if err != nil {
+			if err := handleAttachFail(plan); err != nil {
 				return nil, err
-			}
-			if retry {
-				redirects++
-				currentURL = nextURL
-				controllerID = newUUID()
-				continue
 			}
 		default:
 			return nil, fmt.Errorf("tray attach: unexpected action %q", plan.Action)
@@ -175,30 +182,37 @@ func Dial(ctx context.Context, joinURL string, opts Options) (*Conn, error) {
 	}
 }
 
-// handleAttachFail normalizes attach failures. When retry is true, the caller
-// should re-attach at nextURL with a fresh controller id.
-func handleAttachFail(plan *signaling.AttachPlan, redirects int, opts Options) (nextURL string, retry bool, err error) {
-	if plan.Code != "TRAY_SUPERSEDED" {
-		return "", false, &AttachError{Code: plan.Code, Message: plan.Error}
-	}
-	if plan.JoinURL != "" && redirects < maxSupersedeRetries {
-		if opts.OnJoinURLChanged != nil {
-			opts.OnJoinURLChanged(plan.JoinURL)
+// followSupersede accepts a redirect the hub already named (plan.JoinURL is
+// non-empty) and returns the URL to re-attach at with a fresh controller id.
+// The bound is ours, deliberately tighter than any HTTP client's: the
+// replacement can itself be superseded, and a mis-set replacement could point
+// back at its own tray.
+func followSupersede(plan *signaling.AttachPlan, redirects int, opts Options) (nextURL string, err error) {
+	if redirects >= maxSupersedeRetries {
+		return "", &AttachError{
+			Code:    AttachCodeSupersededChainExhausted,
+			Message: supersedeChainExhaustedMessage(),
 		}
-		opts.logf("tray attach superseded; following redirect (%d/%d)", redirects+1, maxSupersedeRetries)
-		return plan.JoinURL, true, nil
 	}
-	if plan.JoinURL == "" {
+	if opts.OnJoinURLChanged != nil {
+		opts.OnJoinURLChanged(plan.JoinURL)
+	}
+	opts.logf("tray attach superseded; following redirect (%d/%d)", redirects+1, maxSupersedeRetries)
+	return plan.JoinURL, nil
+}
+
+// handleAttachFail turns a terminal `fail` plan into an error. A supersede
+// that reaches here carried no replacement address at all — the caller already
+// followed every plan that named one.
+func handleAttachFail(plan *signaling.AttachPlan) error {
+	if plan.Code == "TRAY_SUPERSEDED" {
 		msg := plan.Error
 		if msg == "" {
 			msg = "replacement join URL missing"
 		}
-		return "", false, &AttachError{Code: AttachCodeSupersededMissingJoin, Message: msg}
+		return &AttachError{Code: AttachCodeSupersededMissingJoin, Message: msg}
 	}
-	return "", false, &AttachError{
-		Code:    AttachCodeSupersededChainExhausted,
-		Message: supersedeChainExhaustedMessage(),
-	}
+	return &AttachError{Code: plan.Code, Message: plan.Error}
 }
 
 func attachWait(ctx context.Context, sig *signaling.Client, controllerID, runtime string, logf func(string, ...any)) (*signaling.AttachPlan, error) {
@@ -210,7 +224,9 @@ func attachWait(ctx context.Context, sig *signaling.Client, controllerID, runtim
 		if err != nil {
 			return nil, err
 		}
-		if plan.Action != "wait" {
+		// A named replacement outranks a `wait`: sleeping against a tray that
+		// already moved never resolves.
+		if plan.Action != "wait" || plan.JoinURL != "" {
 			return plan, nil
 		}
 		logf("tray attach: waiting for leader (%s), retrying in %dms", plan.Code, plan.RetryAfterMs)

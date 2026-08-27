@@ -32,9 +32,21 @@ final class SupersedeRedirectTests: XCTestCase {
 
     // MARK: - Terminal outcomes
 
-    func testNonSupersededCodeIsTerminal() {
-        let plan = failPlan(code: "TRAY_EXPIRED", joinUrl: "https://hub.example/join")
+    func testPlanWithoutAReplacementIsTerminal() {
+        let plan = failPlan(code: "TRAY_EXPIRED", joinUrl: nil)
         XCTAssertEqual(SupersedeRedirect.outcome(for: plan, redirectsFollowed: 0), .terminal)
+    }
+
+    /// #1957: the chase is gated on the replacement address, not the failure
+    /// code. A plan only carries one when the hub said the tray moved — in the
+    /// body or in the `successor-version` link — so the code it happens to
+    /// wear does not get a vote. Reading the code instead is what let #1956
+    /// treat a redirect as a malformed reply.
+    func testAnyPlanCarryingAReplacementIsFollowed() {
+        let plan = failPlan(code: "SOME_FUTURE_CODE", joinUrl: "https://hub.example/join/b")
+        XCTAssertEqual(
+            SupersedeRedirect.outcome(for: plan, redirectsFollowed: 0),
+            .follow(URL(string: "https://hub.example/join/b")!))
     }
 
     func testSupersededWithoutJoinUrlIsTerminal() {
