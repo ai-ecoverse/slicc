@@ -265,3 +265,28 @@ export const LongUnbreakableStrings: Story = {
     return el;
   },
 };
+
+/**
+ * A pasted base64 payload in a PLAIN paragraph — the gap the story above
+ * leaves. Every long string in `LongUnbreakableStrings` sits inside `<a>`,
+ * `<code>` or `<pre>`, all of which already carried a wrap rule, which is
+ * precisely why unfenced prose could overflow unnoticed: the boxes stayed
+ * capped and the text spilled out of them, scrolling the whole chat column.
+ *
+ * The webapp collapses a payload it can DECODE into a `<slicc-blob-chip>`
+ * (see Primitives/BlobChip); this is what the bubble has to do for everything
+ * it cannot — an unrecognized blob, a long opaque token — on its own.
+ */
+export const PastedBase64Payload: Story = {
+  render: () => {
+    const el = document.createElement('slicc-user-message') as SliccUserMessage;
+    el.style.display = 'block';
+    el.style.maxWidth = '420px';
+    const payload =
+      'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk' +
+      'YPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==aGVsbG8gd29ybGQgdGhpcyBpcy' +
+      'BhIHBhc3RlZCBwYXlsb2FkIHRoYXQga2VlcHMgb24gZ29pbmc';
+    el.setBodyHtml(`<p>here is the screenshot: ${payload}</p>`);
+    return el;
+  },
+};

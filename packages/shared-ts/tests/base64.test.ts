@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { base64ToUint8, uint8ToBase64 } from '../src/base64.js';
+import { base64ToUint8, normalizeBase64, uint8ToBase64 } from '../src/base64.js';
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -189,5 +189,64 @@ describe('base64 codec — fast-path parity', () => {
     const fast = base64ToUint8(b64);
     const fallback = withoutBuffer(() => base64ToUint8(b64));
     expect(asPlain(fallback)).toEqual(asPlain(fast));
+  });
+});
+
+describe('normalizeBase64', () => {
+  it('accepts a padded payload unchanged', () => {
+    expect(normalizeBase64('YWJj')).toBe('YWJj');
+    expect(normalizeBase64('YWI=')).toBe('YWI=');
+    expect(normalizeBase64('YQ==')).toBe('YQ==');
+  });
+
+  it('strips the whitespace a wrapped payload carries', () => {
+    // `base64`(1) wraps at 76 columns by default, and `atob` ignores the
+    // newlines it inserts.
+    expect(normalizeBase64('YW\nJ j')).toBe('YWJj');
+    expect(normalizeBase64('YWJ\tj\r\n')).toBe('YWJj');
+  });
+
+  it('accepts an unpadded tail and leaves it unpadded', () => {
+    // Padding is restored inside the decoder, not here: `classifyImageMarkers`
+    // feeds the normalized string straight back into a `data:` URL, and
+    // rewriting a payload it was only asked to validate would be a surprise.
+    expect(normalizeBase64('YWJjZA')).toBe('YWJjZA');
+    expect(normalizeBase64('YWJjZGU')).toBe('YWJjZGU');
+  });
+
+  it('returns a string every decoder accepts', () => {
+    const normalized = normalizeBase64('YWJjZA');
+    expect(normalized).not.toBeNull();
+    expect(() => base64ToUint8(normalized!)).not.toThrow();
+    expect(new TextDecoder().decode(base64ToUint8(normalized!))).toBe('abcd');
+  });
+
+  it('decodes an unpadded payload identically on both paths', () => {
+    // The Node fast-path used to reject what `atob` happily infers, so the
+    // same string decoded in the browser and threw under Node.
+    const fast = base64ToUint8('YWJjZA');
+    const fallback = withoutBuffer(() => base64ToUint8('YWJjZA'));
+    expect(new TextDecoder().decode(fast)).toBe('abcd');
+    expect(Array.from(fallback)).toEqual(Array.from(fast));
+  });
+
+  it('accepts the empty string', () => {
+    expect(normalizeBase64('')).toBe('');
+  });
+
+  it('rejects a remainder of one character', () => {
+    expect(normalizeBase64('abcde')).toBeNull();
+  });
+
+  it('rejects misplaced or excessive padding', () => {
+    expect(normalizeBase64('abcd=')).toBeNull();
+    expect(normalizeBase64('a===')).toBeNull();
+    expect(normalizeBase64('ab==cd')).toBeNull();
+  });
+
+  it('rejects characters outside the standard alphabet', () => {
+    expect(normalizeBase64('!@#$')).toBeNull();
+    // base64url — `atob` does not accept it, so neither does this.
+    expect(normalizeBase64('ab-_')).toBeNull();
   });
 });

@@ -10,7 +10,9 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
 
-import { mountWcUiPreview } from '../../../src/ui/wc/wc-shell.js';
+import { uint8ToBase64 } from '@slicc/shared-ts';
+import { BLOB_CHIP_TAG } from '../../../src/ui/base64-preview-linker.js';
+import { mountWcShell, mountWcUiPreview } from '../../../src/ui/wc/wc-shell.js';
 
 function mount(): HTMLElement {
   const root = document.createElement('div');
@@ -538,5 +540,55 @@ describe('mountWcUiPreview', () => {
 
     card.dispatchEvent(new CustomEvent('submit', { bubbles: true, detail: { value: '   ' } }));
     expect(thread.querySelectorAll('slicc-user-message').length).toBe(before + 1);
+  });
+});
+
+/**
+ * Base64 previews are wired at the MOUNT, not in `attachWcClient`.
+ *
+ * That is what puts them on the surfaces which deliberately never attach a
+ * client — Cherry, the tray follower, the extension side panel all call
+ * `prepareWcShell` and stop (`wc-follower.ts`). Wiring them in the client
+ * phase, next to file mentions, left every one of those rendering raw payload
+ * text. File mentions genuinely belong there; they need a VFS reader a
+ * follower has no worker for, and a decode needs nothing.
+ */
+describe('mountWcShell — base64 previews', () => {
+  beforeEach(() => {
+    document.body.replaceChildren();
+    document.getElementById('slicc-tokens')?.remove();
+  });
+
+  function mountWith(content: string): HTMLElement {
+    const root = document.createElement('div');
+    document.body.appendChild(root);
+    mountWcShell(root, {
+      messages: [{ id: 'm1', role: 'user', content, timestamp: 0 }],
+      scoops: [],
+      floatLabel: 'test',
+      placeholder: '',
+    });
+    return root;
+  }
+
+  const flush = (): Promise<void> => new Promise((resolve) => setTimeout(resolve, 0));
+
+  it('elides a payload in a transcript mounted with no client', async () => {
+    const png = new Uint8Array(200);
+    png.set([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
+    const root = mountWith(`here it is: ${uint8ToBase64(png)}`);
+    await flush();
+
+    const bubble = root.querySelector('slicc-user-message');
+    expect(bubble).not.toBeNull();
+    expect(bubble?.shadowRoot?.querySelectorAll(BLOB_CHIP_TAG)).toHaveLength(1);
+  });
+
+  it('leaves a transcript with no payload untouched', async () => {
+    const root = mountWith('Rewrote the watcher in check.js.');
+    await flush();
+
+    const bubble = root.querySelector('slicc-user-message');
+    expect(bubble?.shadowRoot?.querySelectorAll(BLOB_CHIP_TAG)).toHaveLength(0);
   });
 });

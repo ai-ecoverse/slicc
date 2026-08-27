@@ -196,6 +196,7 @@ export {
   trayRoleLabel,
 } from './primitives/floatbar-status.js';
 export { SliccAvatar } from './primitives/slicc-avatar.js';
+export { SliccBlobChip } from './primitives/slicc-blob-chip.js';
 export {
   type CostOverlayModel,
   type CostOverlayScoop,

@@ -60,8 +60,13 @@ const RENDERED_PREVIEW_MAX_BYTES = 512 * 1024;
  * `inline` payload as trusted markup. HTML is NOT sanitized and is never
  * mounted inline; it goes into a sandboxed iframe, which is the only honest way
  * to show a file that may contain anything.
+ *
+ * Exported because a decoded base64 payload gets the same treatment
+ * (`ui/wc/wire-base64-previews.ts`): the size cap and the inline-vs-sandbox
+ * rule are safety decisions, and a second copy of them is a second place to
+ * get them wrong.
  */
-function buildRenderedView(
+export function buildRenderedView(
   path: string,
   mime: string,
   contents: string

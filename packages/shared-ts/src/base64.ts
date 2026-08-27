@@ -33,19 +33,54 @@ function nodeBuffer(): NodeBufferCtor | undefined {
   return (globalThis as { Buffer?: NodeBufferCtor }).Buffer;
 }
 
-// Strict base64 grammar (no URL-safe variants — matches `atob`). Used to
-// gate Node's lenient `Buffer.from('base64')` so a malformed input throws
-// here instead of being silently stripped: the signed-fetch transport
-// surfaces a malformed reply as a clean "decode failed" EIO and relies
-// on the decoder being strict.
+// `atob`-compatible base64 grammar: padding OPTIONAL, a trailing group of
+// 2 or 3 alphabet characters accepted unpadded, a remainder of 1 rejected.
+// No URL-safe variants — `atob` does not accept them either.
+//
+// Used to gate Node's lenient `Buffer.from('base64')` so a malformed input
+// throws here instead of being silently stripped: the signed-fetch transport
+// surfaces a malformed reply as a clean "decode failed" EIO and relies on the
+// decoder rejecting it.
 //
 // Alphabet alone is not enough — `Buffer.from('abcde', 'base64')` and
 // `Buffer.from('abcd=', 'base64')` both decode successfully (and silently
-// drop or pad the trailing junk), while `atob` throws. Enforce the full
-// shape: a run of 4-char groups, optionally followed by one final group
-// of 2+`==`, 3+`=`, or 4 alphabet chars. Empty string is valid.
-const STRICT_BASE64_RE =
-  /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=|[A-Za-z0-9+/]{4})?$/;
+// drop or pad the trailing junk), while `atob` throws. So the full shape is
+// enforced: a run of 4-char groups, optionally followed by a final group of
+// 2 (+`==`), 3 (+`=`), or 4 alphabet characters. Empty string is valid.
+//
+// The grammar describes what `atob` ACCEPTS rather than the padded form,
+// because the two paths must agree: `atob` infers missing padding, so a
+// stricter Node path would make the same string decode in the browser and
+// throw under Node.
+const ATOB_BASE64_RE = /^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}(?:==)?|[A-Za-z0-9+/]{3}=?)?$/;
+
+// The whitespace `atob` ignores, and that base64 producers insert to wrap
+// long payloads at a column limit (`base64`(1) wraps at 76 by default).
+const BASE64_WHITESPACE_RE = /[\t\n\f\r ]/g;
+
+/**
+ * Strip the whitespace out of `b64` and confirm the rest is decodable
+ * base64, returning the compacted string — or `null` if it is not base64.
+ *
+ * The single place that answers "is this string a base64 payload?". The
+ * `<img:data:…>` marker classifier and the transcript's base64 preview both
+ * gate on it, so a payload one of them decodes is a payload the other
+ * recognizes. The result is safe to hand to {@link base64ToUint8} in any
+ * runtime; padding is left exactly as the caller wrote it, since restoring
+ * it would rewrite payloads that are round-tripped back into `data:` URLs.
+ *
+ * URL-safe base64 (`-` / `_`) is not accepted, matching `atob`.
+ */
+export function normalizeBase64(b64: string): string | null {
+  const compact = b64.replace(BASE64_WHITESPACE_RE, '');
+  return ATOB_BASE64_RE.test(compact) ? compact : null;
+}
+
+/** Restore the padding `atob` would have inferred, for decoders that will not. */
+function padded(b64: string): string {
+  const remainder = b64.length % 4;
+  return remainder === 0 ? b64 : b64 + '='.repeat(4 - remainder);
+}
 
 /**
  * Decode a base64 string to `Uint8Array`.
@@ -63,18 +98,22 @@ const STRICT_BASE64_RE =
  *     (not Node's slab pool, which `Buffer.from` draws from for small
  *     inputs) — callers that read `.buffer` downstream and tests that
  *     deep-equal the bytes both need this;
- *   - the Node path validates against {@link STRICT_BASE64_RE} first and
- *     throws on invalid input. `atob` already throws; `Buffer.from`
- *     silently strips invalid characters, which would let bad payloads
- *     through callers that rely on the decoder rejecting them.
+ *   - the Node path validates against the same grammar `atob` implements
+ *     ({@link normalizeBase64}) and throws on invalid input, then restores
+ *     the padding `atob` would have inferred. `atob` already throws;
+ *     `Buffer.from` silently strips invalid characters and silently refuses
+ *     an unpadded tail, either of which would make the same payload behave
+ *     differently depending on the runtime it landed in.
  */
 export function base64ToUint8(b64: string): Uint8Array<ArrayBuffer> {
   const B = nodeBuffer();
   if (B) {
-    if (!STRICT_BASE64_RE.test(b64)) {
-      throw new Error('Invalid base64 string');
-    }
-    return new Uint8Array(B.from(b64, 'base64'));
+    const normalized = normalizeBase64(b64);
+    if (normalized === null) throw new Error('Invalid base64 string');
+    // `Buffer.from` will not infer the padding `atob` infers, so it is
+    // restored here rather than being demanded of the caller — otherwise the
+    // same unpadded payload decodes in the browser and throws under Node.
+    return new Uint8Array(B.from(padded(normalized), 'base64'));
   }
   const binary = atob(b64);
   const bytes = new Uint8Array(binary.length);

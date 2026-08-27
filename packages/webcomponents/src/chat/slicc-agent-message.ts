@@ -22,7 +22,11 @@ import { h } from '../internal/dom.js';
 const STYLE = `
 slicc-agent-message { display: block; margin-bottom: 18px; font-size: 15px; line-height: 1.5; --accent: color-mix(in srgb, var(--ctx) 55%, var(--ink)); }
 slicc-agent-message .msg-ts { font-family: var(--ui); font-size: 10px; color: var(--txt-3); opacity: .7; margin-bottom: 2px; font-variant-numeric: tabular-nums; }
-slicc-agent-message .body { font-family: var(--ui); font-size: 14px; }
+/* Same containment the user bubble needs, for the same reason: an unbroken run
+   (a base64 payload in unfenced prose) has no break opportunity, so it
+   overflows the chat column and scrolls the transcript sideways. Inherited by
+   every prose surface; fenced code opts back out below. */
+slicc-agent-message .body { font-family: var(--ui); font-size: 14px; overflow-wrap: anywhere; word-break: break-word; }
 slicc-agent-message .body p { margin: 0 0 8px; }
 slicc-agent-message strong { font-weight: 600; color: var(--accent); }
 /* Inline code carries the active context accent (--ctx flips per
