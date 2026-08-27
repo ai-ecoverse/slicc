@@ -52,6 +52,29 @@ describe('renderReadingOrder', () => {
   it('skips empty runs', () => {
     expect(renderReadingOrder([item(''), item('kept')])).toBe('kept');
   });
+
+  it('keeps the line break an empty run carries', () => {
+    // pdf.js often reports a break as its own `{ str: '', hasEOL: true }` run.
+    // Dropping it glued the two lines together.
+    const rendered = renderReadingOrder([
+      item('line one', { x: 0 }),
+      item('', { hasEOL: true, width: 0, x: 40 }),
+      item('line two', { x: 0 }),
+    ]);
+    expect(rendered).toBe('line one\nline two');
+  });
+
+  it('does not let an empty run defeat the gap test for the next run', () => {
+    // The marker's zero width must not become `previous`, or the space
+    // between two visibly separated runs disappears.
+    const first = item('Total', { x: 0 });
+    const rendered = renderReadingOrder([
+      first,
+      item('', { width: 0, x: 500 }),
+      item('Due', { x: first.width + 8 }),
+    ]);
+    expect(rendered).toBe('Total Due');
+  });
 });
 
 describe('renderLayout', () => {
@@ -114,6 +137,8 @@ describe('clampPageRange', () => {
   });
 
   it('clamps both ends into the document', () => {
+    // The upper clamp on the first page is defensive only — `extractPdfText`
+    // rejects a first page past the end before it gets here.
     expect(clampPageRange(3, 9, 99)).toEqual({ firstPage: 3, lastPage: 3 });
     expect(clampPageRange(3, 0, 2)).toEqual({ firstPage: 1, lastPage: 2 });
   });
@@ -129,6 +154,12 @@ describe('extractPdfText', () => {
     expect(result.totalPages).toBe(2);
     expect(result.firstPage).toBe(2);
     expect(result.pages).toEqual(['PAGE TWO']);
+  });
+
+  it('rejects a first page past the end instead of handing back the last one', async () => {
+    await expect(extractPdfText(tinyPdfBytes(), { firstPage: 99 })).rejects.toThrow(
+      'first page 99 is past the end of the document (2 pages)'
+    );
   });
 
   it('leaves the input buffer intact for a second read', async () => {

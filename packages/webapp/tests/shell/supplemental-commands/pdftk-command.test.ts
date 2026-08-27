@@ -56,21 +56,27 @@ vi.mock('@cantoo/pdf-lib', () => {
 });
 
 vi.mock('unpdf', () => ({
-  extractTextItems: async () => ({
-    totalPages: pdf.textPages.length,
-    items: pdf.textPages.map((str) => [
-      {
-        str,
-        x: 0,
-        y: 0,
-        width: str.length * 5,
-        height: 10,
-        fontSize: 10,
-        fontFamily: '',
-        dir: 'ltr',
-        hasEOL: false,
-      },
-    ]),
+  // Mirrors the pdf.js document proxy `pdf-text.ts` drives directly: one text
+  // run per page, positioned at the origin with a 10pt font.
+  getDocumentProxy: async () => ({
+    numPages: pdf.textPages.length,
+    getPage: async (pageNumber: number) => ({
+      getTextContent: async () => ({
+        items: [
+          {
+            str: pdf.textPages[pageNumber - 1],
+            transform: [10, 0, 0, 10, 0, 0],
+            width: pdf.textPages[pageNumber - 1].length * 5,
+            height: 10,
+            dir: 'ltr',
+            hasEOL: false,
+          },
+        ],
+        styles: {},
+      }),
+      cleanup: () => {},
+    }),
+    loadingTask: { destroy: async () => {} },
   }),
 }));
 

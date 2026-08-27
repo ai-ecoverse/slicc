@@ -121,6 +121,20 @@ describe('pdftotext --help', () => {
     }
   });
 
+  it('treats --help as a flag VALUE, not a help request', async () => {
+    // docs/shell-reference.md's value-shadowing contract: `-enc --help` is an
+    // invalid encoding, and printing usage there would exit 0 on a typo.
+    const { ctx } = pdfHarness();
+    for (const args of [
+      ['-f', '--help', 'doc.pdf'],
+      ['-enc', '--help', 'doc.pdf'],
+    ]) {
+      const result = await createPdftotextCommand().execute(args, ctx);
+      expect(result.exitCode).toBe(1);
+      expect(result.stdout).toBe('');
+    }
+  });
+
   it('points at pdftoppm for scanned PDFs, which have no text layer', async () => {
     const result = await createPdftotextCommand().execute(['-h'], mockCommandContext());
     expect(result.stdout).toContain('pdftoppm');
@@ -157,6 +171,13 @@ describe('pdftotext extraction (real pdf.js)', () => {
     const { ctx } = pdfHarness();
     const result = await createPdftotextCommand().execute(['-f', '2', 'doc.pdf', '-'], ctx);
     expect(result.stdout).toBe('PAGE TWO\n');
+  });
+
+  it('fails on a first page beyond the end of the document', async () => {
+    const { ctx } = pdfHarness();
+    const result = await createPdftotextCommand().execute(['-f', '99', 'doc.pdf', '-'], ctx);
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('first page 99 is past the end of the document');
   });
 
   it('clamps a last page beyond the end of the document', async () => {

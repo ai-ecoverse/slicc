@@ -2,12 +2,17 @@
  * PDF text extraction shared by `pdftotext` and `pdftk dump_data_utf8`.
  *
  * Sits next to `pdf-raster.ts` (the rendering half) and wraps the pdf.js build
- * `unpdf` bundles. We go through `extractTextItems` rather than `extractText`
- * for both modes: pdf.js emits one item per text run, and the inter-run space
- * is usually implied by the run's position rather than present in its string,
- * so a plain join glues words together ("TotalDue" for "Total  Due"). Working
- * from the positioned items lets us re-insert those spaces — and lets
+ * `unpdf` bundles. Both modes work from POSITIONED text runs rather than
+ * unpdf's joined `extractText`: pdf.js emits one item per text run, and the
+ * inter-run space is usually implied by the run's position rather than present
+ * in its string, so a plain join glues words together ("TotalDue" for
+ * "Total  Due"). The positions let us re-insert those spaces — and let
  * `-layout` rebuild columns, which a joined string can no longer recover.
+ *
+ * The document proxy is driven directly rather than through unpdf's
+ * `extractTextItems` helper, which only ever runs the WHOLE document and
+ * retains every page's runs: a narrow `-f`/`-l` range would otherwise still
+ * build the lot inside the kernel worker.
  */
 
 import type { StructuredTextItem } from 'unpdf';
@@ -21,7 +26,7 @@ export type PdfTextMode =
 
 export interface PdfTextOptions {
   mode?: PdfTextMode;
-  /** 1-based first page to extract. Defaults to 1. */
+  /** 1-based first page to extract. Defaults to 1; past the end is an error. */
   firstPage?: number;
   /** 1-based last page to extract. Clamped to the page count. Defaults to the last page. */
   lastPage?: number;
@@ -32,7 +37,7 @@ export interface PdfTextResult {
   pages: string[];
   /** Page count of the whole document, not of the requested range. */
   totalPages: number;
-  /** 1-based number of `pages[0]`, after clamping. */
+  /** 1-based number of `pages[0]`. */
   firstPage: number;
 }
 
@@ -68,12 +73,22 @@ function needsSpace(previous: StructuredTextItem, item: StructuredTextItem): boo
 export function renderReadingOrder(items: StructuredTextItem[]): string {
   let out = '';
   let previous: StructuredTextItem | undefined;
+  // pdf.js often reports a line break as its own empty `{ str: '', hasEOL:
+  // true }` run. Skipping empty runs outright would throw that break away and
+  // silently join the two lines, so the signal is carried forward instead of
+  // letting the marker become `previous` (its zero width would also defeat the
+  // gap test for the next run).
+  let pendingLineBreak = false;
   for (const item of items) {
-    if (item.str === '') continue;
+    if (item.str === '') {
+      pendingLineBreak ||= item.hasEOL;
+      continue;
+    }
     if (previous) {
-      if (previous.hasEOL) out += '\n';
+      if (pendingLineBreak || previous.hasEOL) out += '\n';
       else if (needsSpace(previous, item)) out += ' ';
     }
+    pendingLineBreak = false;
     out += item.str;
     previous = item;
   }
@@ -92,16 +107,22 @@ interface LayoutLine {
   items: StructuredTextItem[];
 }
 
-/** Cluster items into visual lines by baseline, tallest-first down the page. */
+/**
+ * Cluster items into visual lines by baseline, top-to-bottom.
+ *
+ * Sort first and sweep, rather than scanning the open lines per item: a
+ * `find` per run is quadratic in run count, and a page dense enough to matter
+ * would hang the kernel worker rather than fail in a bounded way.
+ */
 function groupIntoLines(items: StructuredTextItem[], tolerance: number): LayoutLine[] {
+  // PDF user space grows upward, so descending y is top-to-bottom.
+  const sorted = [...items].sort((a, b) => b.y - a.y);
   const lines: LayoutLine[] = [];
-  for (const item of items) {
-    const line = lines.find((candidate) => Math.abs(candidate.y - item.y) <= tolerance);
-    if (line) line.items.push(item);
+  for (const item of sorted) {
+    const line = lines[lines.length - 1];
+    if (line && Math.abs(line.y - item.y) <= tolerance) line.items.push(item);
     else lines.push({ y: item.y, items: [item] });
   }
-  // PDF user space grows upward, so descending y is top-to-bottom.
-  lines.sort((a, b) => b.y - a.y);
   for (const line of lines) line.items.sort((a, b) => a.x - b.x);
   return lines;
 }
@@ -143,7 +164,13 @@ export function renderLayout(items: StructuredTextItem[]): string {
     .join('\n');
 }
 
-/** Clamp a 1-based, possibly-undefined page range onto a document's page count. */
+/**
+ * Clamp a 1-based, possibly-undefined page range onto a document's page count.
+ *
+ * Only the LAST page is clamped in practice — `extractPdfText` rejects a first
+ * page past the end before calling this, the same split `renderPdfPageRange`
+ * makes: silently handing back the final page is not what `-f 99` asked for.
+ */
 export function clampPageRange(
   totalPages: number,
   firstPage: number | undefined,
@@ -152,6 +179,50 @@ export function clampPageRange(
   const first = Math.max(1, Math.min(firstPage ?? 1, totalPages));
   const last = Math.max(first, Math.min(lastPage ?? totalPages, totalPages));
   return { firstPage: first, lastPage: last };
+}
+
+/** The pdf.js text run shape, before it is mapped onto `StructuredTextItem`. */
+interface PdfJsTextItem {
+  str?: string;
+  transform: number[];
+  width: number;
+  height: number;
+  fontName?: string;
+  dir?: string;
+  hasEOL?: boolean;
+}
+
+/**
+ * Map a page's raw pdf.js text content onto positioned items.
+ *
+ * Same projection `unpdf`'s `extractTextItems` performs; we do it here because
+ * that helper only ever runs the WHOLE document (`Promise.all` over every
+ * page, every page's items retained), so `-f 1 -l 1` on a thousand-page scan
+ * would still build the lot in the kernel worker.
+ */
+function toStructuredItems(content: {
+  items: unknown[];
+  styles?: Record<string, { fontFamily?: string }>;
+}): StructuredTextItem[] {
+  const items: StructuredTextItem[] = [];
+  for (const raw of content.items) {
+    const item = raw as PdfJsTextItem;
+    // Marked-content entries carry no `str` and are not text.
+    if (item.str == null) continue;
+    const [, , c, d, e, f] = item.transform;
+    items.push({
+      str: item.str,
+      x: e,
+      y: f,
+      width: item.width,
+      height: item.height,
+      fontSize: Math.hypot(c, d),
+      fontFamily: (item.fontName && content.styles?.[item.fontName]?.fontFamily) || '',
+      dir: item.dir ?? 'ltr',
+      hasEOL: item.hasEOL ?? false,
+    });
+  }
+  return items;
 }
 
 /** Extract per-page text from PDF bytes. */
@@ -165,13 +236,32 @@ export async function extractPdfText(
   const owned = new Uint8Array(data.byteLength);
   owned.set(data);
 
-  const { totalPages, items } = await unpdf.extractTextItems(owned);
-  const range = clampPageRange(totalPages, options.firstPage, options.lastPage);
-  const render = options.mode === 'layout' ? renderLayout : renderReadingOrder;
+  const pdf = await unpdf.getDocumentProxy(owned);
+  try {
+    const totalPages = pdf.numPages;
+    if (options.firstPage !== undefined && options.firstPage > totalPages) {
+      throw new Error(
+        `first page ${options.firstPage} is past the end of the document (${totalPages} pages)`
+      );
+    }
+    const range = clampPageRange(totalPages, options.firstPage, options.lastPage);
+    const render = options.mode === 'layout' ? renderLayout : renderReadingOrder;
 
-  return {
-    pages: items.slice(range.firstPage - 1, range.lastPage).map(render),
-    totalPages,
-    firstPage: range.firstPage,
-  };
+    // Sequential, releasing each page as we go: a wide range on a large scan
+    // otherwise holds every page's runs at once, and this runs in the kernel
+    // worker (same reason `pdf-raster.ts` streams its pages out).
+    const pages: string[] = [];
+    for (let pageNumber = range.firstPage; pageNumber <= range.lastPage; pageNumber++) {
+      const page = await pdf.getPage(pageNumber);
+      const content = await page.getTextContent();
+      pages.push(render(toStructuredItems(content)));
+      page.cleanup?.();
+    }
+
+    return { pages, totalPages, firstPage: range.firstPage };
+  } finally {
+    // pdf.js tears the document down through its loading task, which also
+    // terminates the backing worker (`PDFDocumentProxy.destroy()` is gone).
+    await pdf.loadingTask.destroy();
+  }
 }

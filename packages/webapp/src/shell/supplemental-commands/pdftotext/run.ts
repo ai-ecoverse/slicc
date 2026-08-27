@@ -6,10 +6,14 @@
 import type { CommandContext, ResolvedCommandContext } from 'just-bash';
 import { isPdfBytes } from '../pdf-raster.js';
 import { extractPdfText, type PdfTextMode } from '../pdf-text.js';
+import { isHelpRequest } from '../subcommand-help.js';
 
 type CmdResult = { stdout: string; stderr: string; exitCode: number };
 
 type EolStyle = 'unix' | 'dos' | 'mac';
+
+/** Flags that consume the next token, so a `--help` there stays a value. */
+const VALUE_FLAGS = ['-f', '-l', '-enc', '-eol'] as const;
 
 export interface ParsedPdftotextArgs {
   inputPath: string;
@@ -168,7 +172,10 @@ export async function runPdftotext(
   args: string[],
   ctx: ResolvedCommandContext
 ): Promise<CmdResult> {
-  if (args.length === 0 || args.includes('--help') || args.includes('-h')) {
+  // `isHelpRequest` rather than a scan for the token: `-enc --help` is an
+  // invalid encoding, not a help request (docs/shell-reference.md's
+  // value-shadowing contract).
+  if (args.length === 0 || isHelpRequest(args, { valueFlags: VALUE_FLAGS })) {
     return help();
   }
 
