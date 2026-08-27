@@ -149,3 +149,65 @@ describe('elideBase64Payloads', () => {
     root.remove();
   });
 });
+
+describe('elideBase64Payloads — column-wrapped payloads', () => {
+  /**
+   * What a wrapped paste actually reaches the DOM as. The markdown renderer
+   * runs with `breaks: true`, so each newline becomes a `<br>` and each line
+   * its own text node — every one of them far below the length bar.
+   */
+  function wrappedHtml(text: string, cols = 76): string {
+    const payload = uint8ToBase64(new TextEncoder().encode(text.repeat(30)));
+    const lines: string[] = [];
+    for (let i = 0; i < payload.length; i += cols) lines.push(payload.slice(i, i + cols));
+    return lines.join('<br>');
+  }
+
+  it('sees a payload split across <br> boundaries', () => {
+    const root = body(`<p>here it is:<br>${wrappedHtml('wrapped ')}<br>done</p>`);
+    elideBase64Payloads(root);
+    expect(chips(root)).toHaveLength(1);
+  });
+
+  it('removes the <br>s that were inside the payload', () => {
+    // Otherwise a collapsed block leaves a stack of blank lines behind where
+    // its wrapping used to be.
+    const root = body(`<p>here it is:<br>${wrappedHtml('wrapped ')}<br>done</p>`);
+    const before = root.querySelectorAll('br').length;
+    elideBase64Payloads(root);
+    // The two <br>s bracketing the block survive; every one inside it goes.
+    expect(root.querySelectorAll('br')).toHaveLength(2);
+    expect(before).toBeGreaterThan(2);
+  });
+
+  it('keeps the text either side of a wrapped payload', () => {
+    const root = body(`<p>here it is:<br>${wrappedHtml('wrapped ')}<br>done</p>`);
+    elideBase64Payloads(root);
+    expect(root.textContent).toContain('here it is:');
+    expect(root.textContent).toContain('done');
+  });
+
+  it('does not join text across a real element boundary', () => {
+    // Across a `<strong>` the text was never contiguous, so the two halves
+    // must not be spliced into one payload.
+    const payload = uint8ToBase64(new TextEncoder().encode('split '.repeat(30)));
+    const half = Math.ceil(payload.length / 2);
+    const root = body(`<p>${payload.slice(0, half)}<strong>x</strong>${payload.slice(half)}</p>`);
+    elideBase64Payloads(root);
+    expect(chips(root)).toHaveLength(0);
+  });
+
+  it('leaves a wrapped block inside a code fence alone', () => {
+    const root = body(`<pre><code>${wrappedHtml('wrapped ')}</code></pre>`);
+    elideBase64Payloads(root);
+    expect(chips(root)).toHaveLength(0);
+  });
+
+  it('is idempotent over a wrapped payload', () => {
+    const root = body(`<p>x<br>${wrappedHtml('wrapped ')}<br>y</p>`);
+    elideBase64Payloads(root);
+    const after = root.innerHTML;
+    elideBase64Payloads(root);
+    expect(root.innerHTML).toBe(after);
+  });
+});

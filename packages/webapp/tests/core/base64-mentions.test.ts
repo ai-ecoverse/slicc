@@ -113,9 +113,9 @@ describe('findBase64Mentions', () => {
     expect(findBase64Mentions(`x_${segment}_y`)).toEqual([]);
   });
 
-  it('does not cross whitespace', () => {
+  it('does not join two runs across a space', () => {
     const half = 'A'.repeat(MIN_PAYLOAD_CHARS);
-    const found = findBase64Mentions(`${half}\n${half}`);
+    const found = findBase64Mentions(`${half} ${half}`);
     expect(found).toHaveLength(2);
     expect(found[0]?.raw).toBe(half);
   });
@@ -129,5 +129,110 @@ describe('findBase64Mentions', () => {
     const text = `x ${payload} y`;
     expect(findBase64Mentions(text)).toHaveLength(1);
     expect(findBase64Mentions(text)).toHaveLength(1);
+  });
+});
+
+describe('findBase64Mentions — column-wrapped output', () => {
+  /** What `base64 --wrap=<cols>` writes: fixed-width lines, then a remainder. */
+  function wrapped(text: string, cols: number): string {
+    const payload = encoded(text);
+    const lines: string[] = [];
+    for (let i = 0; i < payload.length; i += cols) lines.push(payload.slice(i, i + cols));
+    return lines.join('\n');
+  }
+
+  it('reassembles the default 76-column shape', () => {
+    // The advertised `base64 < report.pdf` scenario: every individual line is
+    // 76 characters, well under the length bar, so line-at-a-time matching
+    // finds nothing at all.
+    const block = wrapped('wrapped payload ', 76);
+    expect(block.split('\n').length).toBeGreaterThan(2);
+    expect(block.split('\n').every((l) => l.length <= 76)).toBe(true);
+
+    const found = findBase64Mentions(`here it is:\n${block}\ndone`);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.data).toBe(encoded('wrapped payload '));
+  });
+
+  it('reassembles the 64-column PEM shape', () => {
+    const found = findBase64Mentions(wrapped('pem body ', 64));
+    expect(found).toHaveLength(1);
+    expect(found[0]?.data).toBe(encoded('pem body '));
+  });
+
+  it('reports a span covering the whole block but no surrounding newlines', () => {
+    const block = wrapped('span check ', 76);
+    const text = `before\n${block}\nafter`;
+    const [found] = findBase64Mentions(text);
+    expect(found).toBeDefined();
+    expect(text.slice(found!.start, found!.end)).toBe(block);
+  });
+
+  it('handles CRLF line endings', () => {
+    const block = wrapped('crlf payload ', 76).split('\n').join('\r\n');
+    const found = findBase64Mentions(block);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.data).toBe(encoded('crlf payload '));
+  });
+
+  it('reports the block once, not also as bare runs', () => {
+    // A wide wrap column clears the bare-run threshold on its own, so the
+    // block has to claim its lines before the bare-run pass sees them.
+    const found = findBase64Mentions(wrapped('wide columns ', 200));
+    expect(found).toHaveLength(1);
+  });
+
+  // -- what it refuses --
+
+  it('ignores lines of differing width', () => {
+    // Real encoders wrap on a fixed column. Ragged lines are prose.
+    const lines = ['A'.repeat(76), 'B'.repeat(72), 'C'.repeat(76), 'D'.repeat(80)];
+    expect(findBase64Mentions(lines.join('\n'))).toEqual([]);
+  });
+
+  it('ignores a block whose width is not a whole number of quanta', () => {
+    const lines = ['A'.repeat(75), 'B'.repeat(75), 'C'.repeat(75)];
+    expect(findBase64Mentions(lines.join('\n'))).toEqual([]);
+  });
+
+  it('ignores narrow equal-width columns', () => {
+    // Below MIN_WRAP_COLUMNS a coincidental column of short tokens is far more
+    // likely than an encoder that chose to wrap there.
+    const lines = Array.from({ length: 40 }, () => 'ABCD');
+    expect(findBase64Mentions(lines.join('\n'))).toEqual([]);
+  });
+
+  it('ignores a block that is too short overall', () => {
+    const lines = ['A'.repeat(32), 'B'.repeat(32)];
+    expect(findBase64Mentions(lines.join('\n'))).toEqual([]);
+  });
+
+  it('ignores wrapped prose', () => {
+    const prose = [
+      'The quick brown fox jumps over the lazy dog and then it keeps going on',
+      'and on until the line is long enough to look a little bit like a block.',
+    ];
+    expect(findBase64Mentions(prose.join('\n'))).toEqual([]);
+  });
+
+  it("claims a block whose first line carries the user's own words", () => {
+    // `here it is: <paste>` — the encoder still wrapped on the same column, it
+    // just did not get the whole first line to itself. Claiming from the
+    // SECOND line instead would elide most of the payload and strand its first
+    // 76 characters as text beside the chip.
+    const block = wrapped('mid line ', 76);
+    const found = findBase64Mentions(`here it is: ${block}`);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.data).toBe(encoded('mid line '));
+    expect(found[0]?.start).toBe('here it is: '.length);
+  });
+
+  it('does not glue on a preceding run that is not wrap-aligned', () => {
+    // A trailing run WIDER than the wrap column means the line was never
+    // wrapped at that column, so joining it would be a guess.
+    const block = wrapped('unaligned ', 76);
+    const found = findBase64Mentions(`${'Z'.repeat(90)} ${block}`);
+    expect(found).toHaveLength(1);
+    expect(found[0]?.start).toBe(91);
   });
 });

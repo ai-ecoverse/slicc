@@ -84,6 +84,32 @@ function iconFor(mime: string): string {
   return 'file';
 }
 
+/** A payload that decoded, positioned in the segment text it was found in. */
+interface ConfirmedPayload {
+  start: number;
+  end: number;
+  payload: Base64Payload;
+}
+
+/**
+ * A maximal run of adjacent `Text` / `<br>` siblings, and the text they read as.
+ *
+ * The unit is a run rather than a single text node because of how a WRAPPED
+ * payload arrives. `base64`(1) wraps at 76 columns, and the markdown renderer
+ * runs with `breaks: true`, so a pasted block reaches the DOM as
+ * `text <br> text <br> text` — one 76-character node per line, every one of
+ * them far below the length bar. Walking text nodes individually cannot see
+ * the payload at all; joining a run with `\n` for each `<br>` reconstructs
+ * exactly the string the user pasted.
+ *
+ * Any other element (a `<strong>`, a `<code>`, a link) ENDS the run, because
+ * across one of those the text was never contiguous to begin with.
+ */
+interface Segment {
+  text: string;
+  parts: Array<{ node: ChildNode; start: number; end: number }>;
+}
+
 /**
  * Replace every confirmed base64 payload inside `root` with a chip.
  *
@@ -93,21 +119,18 @@ export function elideBase64Payloads(root: HTMLElement): void {
   const fingerprint = contentFingerprint(root);
   if (root.getAttribute(PROCESSED_ATTR) === fingerprint) return;
 
-  for (const node of collectTextNodes(root)) {
-    const candidates = findBase64Mentions(node.data);
-    if (candidates.length === 0) continue;
-
-    // Decode first, keep only what identified. A node whose candidates all
+  for (const segment of collectSegments(root)) {
+    // Decode first, keep only what identified. A segment whose candidates all
     // turn out to be unrecognizable bytes is left untouched — no split, no
     // marker, nothing the user can see.
-    const confirmed: Array<{ start: number; end: number; payload: Base64Payload }> = [];
-    for (const candidate of candidates) {
+    const confirmed: ConfirmedPayload[] = [];
+    for (const candidate of findBase64Mentions(segment.text)) {
       const payload = identifyBase64(candidate.data, candidate.declaredMime);
       if (payload) confirmed.push({ start: candidate.start, end: candidate.end, payload });
     }
     if (confirmed.length === 0) continue;
 
-    replaceWithChips(node, confirmed);
+    replaceWithChips(segment, confirmed);
   }
 
   // Fingerprint the POST-replacement content: swapping in chips changes the
@@ -116,44 +139,93 @@ export function elideBase64Payloads(root: HTMLElement): void {
   root.setAttribute(PROCESSED_ATTR, contentFingerprint(root));
 }
 
-/** Every text node under `root` that is eligible to contain a payload. */
-function collectTextNodes(root: HTMLElement): Text[] {
-  const doc = root.ownerDocument;
-  const walker = doc.createTreeWalker(root, NodeFilter.SHOW_TEXT, {
-    acceptNode(node: Node): number {
-      if (!node.nodeValue || node.nodeValue.length === 0) return NodeFilter.FILTER_REJECT;
-      for (let el = node.parentElement; el && el !== root; el = el.parentElement) {
-        if (SKIPPED_ANCESTORS.has(el.tagName)) return NodeFilter.FILTER_REJECT;
-      }
-      return NodeFilter.FILTER_ACCEPT;
-    },
-  });
-
-  const nodes: Text[] = [];
-  for (let node = walker.nextNode(); node !== null; node = walker.nextNode()) {
-    nodes.push(node as Text);
+/** Whether `el` sits inside something whose text is never a payload. */
+function isSkipped(el: Element, root: HTMLElement): boolean {
+  for (let cur: Element | null = el; cur; cur = cur.parentElement) {
+    if (SKIPPED_ANCESTORS.has(cur.tagName)) return true;
+    if (cur === root) return false;
   }
-  return nodes;
+  return false;
 }
 
-/** Split one text node into text + chip fragments and swap it into the DOM. */
-function replaceWithChips(
-  node: Text,
-  confirmed: ReadonlyArray<{ start: number; end: number; payload: Base64Payload }>
-): void {
-  const doc = node.ownerDocument;
-  const text = node.data;
-  const fragment = doc.createDocumentFragment();
-  let cursor = 0;
+/** Every segment under `root` that is eligible to contain a payload. */
+function collectSegments(root: HTMLElement): Segment[] {
+  const segments: Segment[] = [];
+  // Every text node has exactly one parent, so visiting each element's DIRECT
+  // children covers each of them exactly once.
+  for (const el of [root, ...root.querySelectorAll('*')]) {
+    if (isSkipped(el, root)) continue;
+    let current: Segment | null = null;
+    for (const child of el.childNodes) {
+      const piece = segmentPiece(child);
+      if (piece === null) {
+        current = null;
+        continue;
+      }
+      if (!current) {
+        current = { text: '', parts: [] };
+        segments.push(current);
+      }
+      const start = current.text.length;
+      current.text += piece;
+      current.parts.push({ node: child, start, end: current.text.length });
+    }
+  }
+  return segments.filter((segment) => segment.text.length > 0);
+}
 
-  for (const { start, end, payload } of confirmed) {
-    if (start > cursor) fragment.appendChild(doc.createTextNode(text.slice(cursor, start)));
-    fragment.appendChild(createChip(doc, payload));
-    cursor = end;
+/** What a child node contributes to its segment's text, or `null` if it breaks it. */
+function segmentPiece(node: ChildNode): string | null {
+  if (node.nodeType === Node.TEXT_NODE) return node.nodeValue ?? '';
+  // A `<br>` IS the newline the user typed — it reads as one, and it is the
+  // only element a payload is allowed to span.
+  if (node.nodeType === Node.ELEMENT_NODE && (node as Element).tagName === 'BR') return '\n';
+  return null;
+}
+
+/**
+ * Rebuild a segment with its confirmed payloads swapped for chips.
+ *
+ * The whole run is replaced at once rather than node by node, because a single
+ * payload can cover several nodes and the `<br>`s between them: those `<br>`s
+ * are INSIDE the elided span and must disappear with it, or a collapsed block
+ * would leave a stack of blank lines where its wrapping used to be.
+ */
+function replaceWithChips(segment: Segment, confirmed: readonly ConfirmedPayload[]): void {
+  const anchor = segment.parts[0]?.node;
+  const parent = anchor?.parentNode;
+  if (!anchor || !parent) return;
+  const doc = anchor.ownerDocument;
+  if (!doc) return;
+
+  const fragment = doc.createDocumentFragment();
+  const emitted = new Set<number>();
+
+  for (const part of segment.parts) {
+    if (segmentPiece(part.node) === '\n' && part.node.nodeType === Node.ELEMENT_NODE) {
+      const swallowed = confirmed.some((c) => c.start <= part.start && part.end <= c.end);
+      if (!swallowed) fragment.appendChild(doc.createElement('br'));
+      continue;
+    }
+
+    let cursor = part.start;
+    for (const [index, span] of confirmed.entries()) {
+      if (span.end <= part.start || span.start >= part.end) continue;
+      const upTo = Math.min(Math.max(span.start, part.start), part.end);
+      if (upTo > cursor) fragment.appendChild(doc.createTextNode(segment.text.slice(cursor, upTo)));
+      if (!emitted.has(index)) {
+        fragment.appendChild(createChip(doc, span.payload));
+        emitted.add(index);
+      }
+      cursor = Math.max(cursor, Math.min(span.end, part.end));
+    }
+    if (cursor < part.end) {
+      fragment.appendChild(doc.createTextNode(segment.text.slice(cursor, part.end)));
+    }
   }
 
-  if (cursor < text.length) fragment.appendChild(doc.createTextNode(text.slice(cursor)));
-  node.parentNode?.replaceChild(fragment, node);
+  parent.insertBefore(fragment, anchor);
+  for (const part of segment.parts) part.node.remove();
 }
 
 function createChip(doc: Document, payload: Base64Payload): HTMLElement {

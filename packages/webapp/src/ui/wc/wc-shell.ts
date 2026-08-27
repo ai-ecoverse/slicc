@@ -29,11 +29,13 @@ import {
 // Adobe Clean @font-face — the library tokens reference the family but the
 // declarations lived only in the (never-loaded) legacy stylesheet.
 import '../styles/fonts.css';
+import { createLogger } from '../../base/logger.js';
 import { createChatFixture, FIXTURE_SCOOP_NAME } from '../chat-fixture.js';
 import type { ChatMessage } from '../types.js';
 import { buildTrustedLayers, TRUSTED_LAYER_CSS } from './trusted-layer.js';
 import { buildThreadChildren, messageEls } from './wc-message-view.js';
 import { type ShortcutHandles, wireKeyboardShortcuts } from './wc-shortcuts.js';
+import { wireBase64Previews } from './wire-base64-previews.js';
 
 // Side-effect import registers every element composed below.
 import '@slicc/webcomponents';
@@ -498,6 +500,17 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
   panelHost.append(shader, freezer, appCol);
   frame.append(panelHost, trustedLayer);
   root.replaceChildren(frame);
+
+  // Base64 payload previews: a pasted blob — a screenshot as a `data:` URL,
+  // the output of `base64 < report.pdf` — collapses to a chip that opens it in
+  // Quick Look. Wired HERE, at the mount, rather than in `wc-live`'s
+  // `attachWcClient`, because it needs no VFS and this is the one seam every
+  // surface that renders a transcript passes through: the live float, the
+  // extension popout, and the three that deliberately never attach a client
+  // (Cherry, the tray follower, the extension side panel — see
+  // `wc-follower.ts`). File mentions genuinely belong in the client phase;
+  // they need a VFS reader a follower has no worker for.
+  wireBase64Previews({ thread, log: createLogger('base64-preview') });
 
   return {
     frame,

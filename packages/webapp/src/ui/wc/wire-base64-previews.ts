@@ -13,7 +13,12 @@
  *
  *  - **It needs no VFS.** Verification here is a decode, not a lookup, so
  *    there is no resolver to build, nothing to await and no filesystem work on
- *    the boot path (#2242).
+ *    the boot path (#2242). That is also why it is wired from `mountWcShell`
+ *    rather than from `attachWcClient`: Cherry, the tray follower and the
+ *    extension side panel mount the shell and deliberately never attach a
+ *    client, so client-phase wiring never reaches them. File mentions belong
+ *    in the client phase — they need a VFS reader a follower has no worker
+ *    for — but a decode needs nothing.
  *  - **It covers USER messages too.** A pasted blob is overwhelmingly
  *    something the user pasted; file mentions are prose the agent wrote.
  *

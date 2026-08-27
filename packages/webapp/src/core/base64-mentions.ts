@@ -30,8 +30,10 @@
  *
  * And then the caller still has to decode it and recognize the bytes.
  *
- * Two shapes are recognized: a `data:<mime>;base64,<payload>` URL, whose
- * declared MIME type is carried out as a hint, and a bare run of base64.
+ * Three shapes are recognized: a `data:<mime>;base64,<payload>` URL, whose
+ * declared MIME type is carried out as a hint; a bare single-line run; and the
+ * COLUMN-WRAPPED block that `base64`(1) emits by default, whose individual
+ * lines are each too short to clear the length bar on their own.
  */
 
 import { normalizeBase64 } from '@slicc/shared-ts';
@@ -101,10 +103,8 @@ const RUN_CLOSERS = '\\s"\'`)\\]}>,;:.!?';
  * trailing boundary is a lookahead, so two blobs separated by a single
  * character still both match.
  *
- * Whitespace is not crossed. A `base64`(1) payload wrapped at 76 columns is
- * therefore matched one line at a time; each line still has to clear the length
- * bar on its own, and gluing lines back together would mean deciding which
- * surrounding newlines are part of the blob — a guess with no upside.
+ * A newline is a closer like any other, so a bare run never spans lines. The
+ * WRAPPED shape that `base64`(1) actually emits is matched separately, below.
  */
 const BARE_RUN_RE = new RegExp(
   `(?:^|[${RUN_OPENERS}])([A-Za-z0-9+/]{${MIN_PAYLOAD_CHARS},}={0,2})(?=$|[${RUN_CLOSERS}])`,
@@ -112,12 +112,166 @@ const BARE_RUN_RE = new RegExp(
 );
 
 /**
+ * The narrowest wrap column a block is believed at.
+ *
+ * The widths that actually occur are 64 (PEM), 72 and 76 (`base64`(1) and
+ * MIME). A floor well below all of them still admits every real encoder, while
+ * refusing the shape a low floor would really buy: a column of short,
+ * coincidentally equal-width alphanumeric tokens.
+ */
+const MIN_WRAP_COLUMNS = 16;
+
+/** A line of `text`, with the span it occupies (the newline excluded). */
+interface SourceLine {
+  start: number;
+  end: number;
+  text: string;
+}
+
+function scanLines(text: string): SourceLine[] {
+  const lines: SourceLine[] = [];
+  let start = 0;
+  for (;;) {
+    const br = text.indexOf('\n', start);
+    const end = br < 0 ? text.length : br;
+    // A CRLF file puts the `\r` inside the line; it belongs to the separator.
+    const trimmed = text[end - 1] === '\r' ? end - 1 : end;
+    lines.push({ start, end: trimmed, text: text.slice(start, trimmed) });
+    if (br < 0) return lines;
+    start = br + 1;
+  }
+}
+
+const PURE_ALPHABET_RE = /^[A-Za-z0-9+/]+$/;
+const PADDED_TAIL_RE = /^[A-Za-z0-9+/]+={0,2}$/;
+
+/**
+ * Column-wrapped base64: what `base64`(1) writes by default.
+ *
+ * `base64 < report.pdf` wraps at 76 columns, PEM at 64, MIME at 76 — so the
+ * shape a user actually pastes is a stack of lines each far below
+ * {@link MIN_PAYLOAD_CHARS}. Matched one line at a time it is invisible to the
+ * bare-run pattern, which is the whole advertised scenario missed.
+ *
+ * Reassembly is deliberately narrow, because gluing lines together is where a
+ * heuristic could start eating prose. A block is believed only when it has the
+ * exact shape an encoder produces:
+ *
+ *  - Two or more WHOLE lines — a line must start where a line starts, so a
+ *    block can never begin mid-sentence.
+ *  - Every line but the last is pure alphabet, of the SAME width, and that
+ *    width is a whole number of base64 quanta. Real encoders wrap on a fixed
+ *    column; prose does not.
+ *  - The last line is no wider, and is the only one allowed to carry padding.
+ *  - The lines together clear {@link MIN_PAYLOAD_CHARS} and decode.
+ *
+ * A stanza of English text fails on the second rule almost immediately: two
+ * consecutive lines of identical length, containing no space or punctuation,
+ * is not what writing looks like.
+ */
+function findWrappedBlocks(text: string): Base64Candidate[] {
+  const lines = scanLines(text);
+  const blocks: Base64Candidate[] = [];
+
+  for (let i = 0; i < lines.length; i += 1) {
+    const width = wrapWidthAt(lines, i);
+    if (width === null) continue;
+    const tail = blockEnd(lines, i, width);
+    if (tail === i) continue; // a single line is the bare-run pattern's job
+    const pieces = lines.slice(i, tail + 1);
+    const lead = precedingFragment(lines, i, width);
+    if (lead) pieces.unshift(lead);
+    const block = claimBlock(text, pieces);
+    if (block) blocks.push(block);
+    i = tail; // never re-enter a block we already walked
+  }
+
+  return blocks;
+}
+
+/** The wrap column a block starting at `i` would have, or `null` if none. */
+function wrapWidthAt(lines: readonly SourceLine[], i: number): number | null {
+  const first = lines[i];
+  if (!first) return null;
+  const width = first.text.length;
+  if (width < MIN_WRAP_COLUMNS || width % 4 !== 0) return null;
+  return PURE_ALPHABET_RE.test(first.text) ? width : null;
+}
+
+/**
+ * Index of the last line belonging to the block that starts at `i`: every
+ * following line of exactly `width`, then optionally one narrower final line.
+ *
+ * That final line is the payload's remainder and the only one allowed to carry
+ * padding — but it is a remainder only if nothing MORE of the block follows it.
+ * Without that check a ragged pair of prose lines (76 then 72) reads as a
+ * complete block, which is exactly the shape a wrapped-text paragraph has.
+ */
+function blockEnd(lines: readonly SourceLine[], i: number, width: number): number {
+  let last = i;
+  for (let j = i + 1; j < lines.length; j += 1) {
+    const line = lines[j];
+    if (!line || line.text.length !== width || !PURE_ALPHABET_RE.test(line.text)) break;
+    last = j;
+  }
+  const next = lines[last + 1];
+  if (!next || next.text.length === 0 || next.text.length >= width) return last;
+  if (!PADDED_TAIL_RE.test(next.text)) return last;
+  const after = lines[last + 2];
+  const blockContinues =
+    after !== undefined && after.text.length === width && PURE_ALPHABET_RE.test(after.text);
+  return blockContinues ? last : last + 1;
+}
+
+/**
+ * The tail of the line BEFORE a block, when the payload plainly started there.
+ *
+ * `here it is: <76 chars>` followed by more full-width lines is one paste with
+ * the user's own words in front of it — the encoder still wrapped on the same
+ * column, it just did not get the whole first line to itself. Without this the
+ * block would be claimed from its SECOND line, eliding most of the payload and
+ * leaving the first 76 characters stranded as text beside the chip: the
+ * clipped-out-of-the-middle failure this module exists to avoid.
+ *
+ * The run has to be exactly one wrap column wide and start on a boundary. A
+ * longer run means the line is not wrap-aligned, so gluing it on would be a
+ * guess rather than a reconstruction.
+ */
+function precedingFragment(
+  lines: readonly SourceLine[],
+  i: number,
+  width: number
+): SourceLine | null {
+  const prev = lines[i - 1];
+  if (!prev || prev.text.length <= width) return null;
+  const cut = prev.text.length - width;
+  const suffix = prev.text.slice(cut);
+  if (!PURE_ALPHABET_RE.test(suffix)) return null;
+  if (PURE_ALPHABET_RE.test(prev.text[cut - 1] ?? ' ')) return null;
+  return { start: prev.start + cut, end: prev.end, text: suffix };
+}
+
+/** Turn a run of lines into a candidate, or `null` if it does not decode. */
+function claimBlock(text: string, block: readonly SourceLine[]): Base64Candidate | null {
+  const joined = block.map((line) => line.text).join('');
+  if (joined.replace(/=+$/, '').length < MIN_PAYLOAD_CHARS) return null;
+  if (joined.length % 4 !== 0) return null;
+  const data = normalizeBase64(joined);
+  if (!data) return null;
+  const start = block[0]?.start ?? 0;
+  const end = block[block.length - 1]?.end ?? start;
+  return { raw: text.slice(start, end), data, start, end };
+}
+
+/**
  * Extract every plausible base64 payload from `text`, in order and without
  * overlaps.
  *
- * `data:` URLs are collected first and claim their spans, so the payload inside
- * one is never also reported as a bare run — the URL carries a declared MIME
- * type, and reporting the same bytes twice would lose it.
+ * Collected most-specific first, each shape claiming its spans: `data:` URLs
+ * (which carry a declared MIME type that reporting the bytes twice would lose),
+ * then column-wrapped blocks, then bare single-line runs. A wide wrap column
+ * can exceed the bare-run threshold on its own, so the block has to claim its
+ * lines before the bare-run pass sees them.
  */
 export function findBase64Mentions(text: string): Base64Candidate[] {
   const found: Base64Candidate[] = [];
@@ -136,6 +290,12 @@ export function findBase64Mentions(text: string): Base64Candidate[] {
     const end = start + match[0].length;
     found.push({ raw: match[0], data, declaredMime: match[1] ?? '', start, end });
     claimed.push([start, end]);
+  }
+
+  for (const block of findWrappedBlocks(text)) {
+    if (overlaps(block.start, block.end)) continue;
+    found.push(block);
+    claimed.push([block.start, block.end]);
   }
 
   BARE_RUN_RE.lastIndex = 0;
