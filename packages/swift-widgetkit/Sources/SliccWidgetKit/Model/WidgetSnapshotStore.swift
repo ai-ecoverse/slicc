@@ -39,11 +39,23 @@ public struct WidgetSnapshotStore {
         self.containerURL = containerURL
     }
 
+    /// Subdirectory the snapshot lives in, inside the group container.
+    ///
+    /// `Library/`, not the container root, and the reason is purely
+    /// operational: `devicectl device copy from` refuses anything outside
+    /// `Library`, `Documents` and `tmp`, so a snapshot at the root cannot be
+    /// read off a real device at all — it does not even appear in a file
+    /// listing. Debugging "why is the widget empty on my iPad" without being
+    /// able to look at the one file involved is not a position worth being in.
+    static let subdirectory = "Library"
+
     /// Absolute location of the snapshot file, or `nil` when the process holds
     /// no entitlement for the group (an unsigned dev build, a simulator build
     /// without the capability, a unit test).
     public var url: URL? {
-        containerURL(appGroup)?.appendingPathComponent(fileName)
+        containerURL(appGroup)?
+            .appendingPathComponent(Self.subdirectory)
+            .appendingPathComponent(fileName)
     }
 
     private static var encoder: JSONEncoder {
@@ -80,6 +92,12 @@ public struct WidgetSnapshotStore {
     @discardableResult
     public func write(_ snapshot: WidgetSnapshot) throws -> URL {
         guard let url else { throw WidgetSnapshotStoreError.noContainer(appGroup) }
+        // `Library/` exists in a real group container, but not in the temp
+        // directory a test points this at — and an atomic write into a missing
+        // directory fails on the rename, not the open, which is a confusing
+        // way to find that out.
+        try FileManager.default.createDirectory(
+            at: url.deletingLastPathComponent(), withIntermediateDirectories: true)
         try Self.encode(snapshot).write(to: url, options: .atomic)
         return url
     }

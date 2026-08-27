@@ -114,10 +114,17 @@ extension WidgetSnapshot {
     /// worth interrupting someone for.
     public var brokenCount: Int { units.filter { $0.lifecycle == .broken }.count }
 
-    /// True when the app has never captured anything, or captured a snapshot
-    /// with no instance behind it.
+    /// True when there is nothing to draw and no live link to draw it from.
+    ///
+    /// Units win over the connection field. In production `.none` implies an
+    /// empty unit list — units only ever arrive over a connection — but the
+    /// two are captured independently, and a snapshot that HAS work units
+    /// must never answer "No instance". Showing a stale cone dimmed is honest;
+    /// hiding it behind an empty state because a second field disagrees is
+    /// not. A connected instance with no cone yet is a real state and gets its
+    /// own copy from the layouts, so it is excluded here.
     public var isUnavailable: Bool {
-        connection == .none || (units.isEmpty && connection == .disconnected)
+        units.isEmpty && connection != .connected
     }
 
     /// Past this the widget dims itself and prints the capture time. A tray

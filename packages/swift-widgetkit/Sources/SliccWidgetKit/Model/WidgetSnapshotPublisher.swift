@@ -95,10 +95,15 @@ public final class WidgetSnapshotPublisher {
             lastWrite = date
             reload()
         } catch {
-            // An unentitled container is the normal case on an unsigned dev or
-            // simulator build. There is nothing to recover and nothing the
-            // user can do, so it is a log line, not an error path.
-            logger.debug("Widget snapshot not written: \(String(describing: error))")
+            // Non-fatal, but NOT invisible. A write that fails silently is a
+            // widget that never updates and a bug with no thread to pull: the
+            // tile just keeps showing whatever it last had. `.error` so it
+            // survives into the persisted log on a real device, where a
+            // `.debug` line is dropped before anyone can read it.
+            let group = store.appGroup
+            let reason = String(describing: error)
+            logger.error(
+                "Widget snapshot not written to \(group, privacy: .public) — \(reason, privacy: .public)")
         }
     }
 

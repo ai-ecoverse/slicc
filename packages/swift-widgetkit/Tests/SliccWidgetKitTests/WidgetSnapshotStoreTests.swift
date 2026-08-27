@@ -59,6 +59,13 @@ final class WidgetSnapshotStoreTests: XCTestCase {
         }
     }
 
+    /// `devicectl` refuses to read anything outside Library/Documents/tmp, so
+    /// a snapshot at the container root cannot be inspected on a real device.
+    func testTheSnapshotLivesSomewhereADeviceCanBeAskedAbout() {
+        let store = WidgetSnapshotStore(appGroup: "g") { _ in URL(fileURLWithPath: "/tmp/c") }
+        XCTAssertEqual(store.url?.path, "/tmp/c/Library/widget-snapshot.json")
+    }
+
     func testWriteThenReadIsTheWholeContract() throws {
         let container = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("slicc-widget-\(UUID().uuidString)")
@@ -84,7 +91,9 @@ final class WidgetSnapshotStoreTests: XCTestCase {
             .appendingPathComponent("slicc-widget-\(UUID().uuidString)")
         try FileManager.default.createDirectory(at: container, withIntermediateDirectories: true)
         defer { try? FileManager.default.removeItem(at: container) }
-        try Data("not json".utf8).write(to: container.appendingPathComponent("widget-snapshot.json"))
+        let library = container.appendingPathComponent(WidgetSnapshotStore.subdirectory)
+        try FileManager.default.createDirectory(at: library, withIntermediateDirectories: true)
+        try Data("not json".utf8).write(to: library.appendingPathComponent("widget-snapshot.json"))
 
         XCTAssertNil(WidgetSnapshotStore(appGroup: "test") { _ in container }.read())
     }

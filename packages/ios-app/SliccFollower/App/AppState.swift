@@ -302,6 +302,11 @@ class AppState: ObservableObject {
             configureSudoApprovalFixture()
         #endif
         wireNotificationActions()
+        // Seed the widget on launch, not only on the first `scoops.list`. A
+        // reinstall, or a snapshot the OS evicted, would otherwise leave the
+        // home screen empty until the app next reached a leader — and the
+        // widget's honest "no instance" state is itself something to publish.
+        publishWidgetSnapshot()
     }
 
     // MARK: - Private Networking / Sync

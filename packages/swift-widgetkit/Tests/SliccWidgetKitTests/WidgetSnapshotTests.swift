@@ -50,6 +50,19 @@ final class WidgetSnapshotTests: XCTestCase {
         XCTAssertTrue(stalled.isStale(asOf: now), "a stalled leader is stale the moment it stalls")
     }
 
+    /// Units win over the connection field: a snapshot that HAS work units
+    /// must never answer "No instance", however the two fields disagree.
+    func testASnapshotWithUnitsIsNeverUnavailable() {
+        for connection in [
+            WidgetSnapshot.Connection.none, .disconnected, .stalled, .connected,
+        ] {
+            let snapshot = WidgetSnapshot(
+                instanceLabel: "x", connection: connection, capturedAt: .distantPast,
+                units: [WidgetUnit(id: "c", name: "C", role: .cone)])
+            XCTAssertFalse(snapshot.isUnavailable, "\(connection) hid a unit it had")
+        }
+    }
+
     func testUnavailableIsNotJustAnEmptyUnitList() {
         let connectedButEmpty = WidgetSnapshot(
             instanceLabel: "x", connection: .connected, capturedAt: .distantPast, units: [])
