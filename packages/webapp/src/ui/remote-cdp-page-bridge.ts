@@ -11,6 +11,8 @@
  * and `docs/superpowers/specs/2026-06-03-standalone-remote-cdp-bridge-design.md`.
  */
 
+import type { CDPPayload } from '@slicc/shared-ts';
+
 import type { CDPTransport } from '../cdp/transport.js';
 import type { CDPEventListener } from '../cdp/types.js';
 
@@ -33,10 +35,10 @@ export interface RemoteCdpPageBridge {
     runtimeId: string;
     localTargetId: string;
     method: string;
-    params?: Record<string, unknown>;
+    params?: CDPPayload;
     sessionId?: string;
     timeout?: number;
-  }): Promise<Record<string, unknown>>;
+  }): Promise<CDPPayload>;
   subscribe(p: { runtimeId: string; localTargetId: string; event: string }): Promise<{
     ok: true;
   }>;
