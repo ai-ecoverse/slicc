@@ -2,11 +2,12 @@ import type { FollowerJoinRequestedMessage } from '@slicc/shared-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   LeaderTrayPeerManager,
-  type TrayDataChannelLike,
   type TrayPeerConnectionLike,
 } from '../../../src/scoops/tray-webrtc.js';
 
-class FakeChannel implements TrayDataChannelLike {
+/** Structural stand-in; cast at the factory rather than `implements`, so the
+ *  fake carries only what these tests exercise. */
+class FakeChannel {
   readyState = 'connecting';
   private readonly listeners = new Map<string, Array<() => void>>();
   addEventListener(type: string, listener: () => void): void {
@@ -22,12 +23,12 @@ class FakeChannel implements TrayDataChannelLike {
   }
 }
 
-class FakePeer implements TrayPeerConnectionLike {
+class FakePeer {
   connectionState = 'new';
   closed = false;
   readonly channel = new FakeChannel();
   addEventListener(): void {}
-  createDataChannel(): TrayDataChannelLike {
+  createDataChannel(): FakeChannel {
     return this.channel;
   }
   async createOffer() {
@@ -44,6 +45,11 @@ class FakePeer implements TrayPeerConnectionLike {
   }
 }
 
+const GATES = {
+  message: { approver: 'user' as const },
+  tool: { approver: 'user' as const },
+};
+
 function joinMessage(overrides: Partial<FollowerJoinRequestedMessage> = {}) {
   return {
     type: 'follower.join_requested',
@@ -53,7 +59,7 @@ function joinMessage(overrides: Partial<FollowerJoinRequestedMessage> = {}) {
     attempt: 1,
     expiresAt: '2026-08-27T13:00:00.000Z',
     trust: 'biscotto',
-    biscotto: { id: 'seat1', label: 'Anna' },
+    biscotto: { id: 'seat1', label: 'Anna', gates: GATES },
     ...overrides,
   } as FollowerJoinRequestedMessage;
 }
@@ -75,7 +81,7 @@ describe('biscotto eviction', () => {
     const peer = new FakePeer();
     const closed: string[] = [];
     const manager = new LeaderTrayPeerManager({
-      peerConnectionFactory: () => peer,
+      peerConnectionFactory: () => peer as unknown as TrayPeerConnectionLike,
       sendControlMessage: vi.fn(),
       onPeerTransportClosed: (bootstrapId) => closed.push(bootstrapId),
     });
@@ -100,7 +106,7 @@ describe('biscotto eviction', () => {
     const owner = new FakePeer();
     let next: FakePeer = guest;
     const manager = new LeaderTrayPeerManager({
-      peerConnectionFactory: () => next,
+      peerConnectionFactory: () => next as unknown as TrayPeerConnectionLike,
       sendControlMessage: vi.fn(),
     });
     await connectPeer(manager, guest, joinMessage());
@@ -131,14 +137,19 @@ describe('biscotto eviction', () => {
     vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
     const peer = new FakePeer();
     const manager = new LeaderTrayPeerManager({
-      peerConnectionFactory: () => peer,
+      peerConnectionFactory: () => peer as unknown as TrayPeerConnectionLike,
       sendControlMessage: vi.fn(),
     });
     await connectPeer(
       manager,
       peer,
       joinMessage({
-        biscotto: { id: 'seat1', label: 'Anna', expiresAt: '2026-08-27T12:10:00.000Z' },
+        biscotto: {
+          id: 'seat1',
+          label: 'Anna',
+          gates: GATES,
+          expiresAt: '2026-08-27T12:10:00.000Z',
+        },
       })
     );
     expect(manager.getPeers()).toHaveLength(1);
@@ -153,7 +164,7 @@ describe('biscotto eviction', () => {
     vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
     const peer = new FakePeer();
     const manager = new LeaderTrayPeerManager({
-      peerConnectionFactory: () => peer,
+      peerConnectionFactory: () => peer as unknown as TrayPeerConnectionLike,
       sendControlMessage: vi.fn(),
     });
     // 30 days is past 2^31-1 ms; an unclamped setTimeout fires immediately and
@@ -162,7 +173,12 @@ describe('biscotto eviction', () => {
       manager,
       peer,
       joinMessage({
-        biscotto: { id: 'seat1', label: 'Anna', expiresAt: '2026-09-26T12:00:00.000Z' },
+        biscotto: {
+          id: 'seat1',
+          label: 'Anna',
+          gates: GATES,
+          expiresAt: '2026-09-26T12:00:00.000Z',
+        },
       })
     );
 
@@ -176,7 +192,7 @@ describe('biscotto eviction', () => {
     vi.setSystemTime(new Date('2026-08-27T12:00:00.000Z'));
     const peer = new FakePeer();
     const manager = new LeaderTrayPeerManager({
-      peerConnectionFactory: () => peer,
+      peerConnectionFactory: () => peer as unknown as TrayPeerConnectionLike,
       sendControlMessage: vi.fn(),
     });
     await connectPeer(manager, peer, joinMessage({ trust: 'full', biscotto: undefined }));
