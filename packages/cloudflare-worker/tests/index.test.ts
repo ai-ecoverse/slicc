@@ -418,8 +418,9 @@ describe('tray worker skeleton', () => {
         )
       );
 
+    const doState = new FakeDurableObjectState();
     const durableObject = new SessionTrayDurableObject(
-      new FakeDurableObjectState(),
+      doState,
       {
         CLOUDFLARE_TURN_KEY_ID: 'turn-key-id',
         CLOUDFLARE_TURN_API_TOKEN: 'turn-api-token',
@@ -494,6 +495,12 @@ describe('tray worker skeleton', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
 
     now += TURN_CREDENTIAL_TTL_MS;
+    // Update leader.lastSeenAt so the leader is still considered "live" after the clock advance
+    const tray = await doState.storage.get<{ leader?: { lastSeenAt: string } }>('tray');
+    if (tray?.leader) {
+      tray.leader.lastSeenAt = new Date(now).toISOString();
+      await doState.storage.put('tray', tray);
+    }
     const refreshedFollowerAttach = await durableObject.fetch(
       new Request('https://tray.test/join/join-token', {
         method: 'POST',
