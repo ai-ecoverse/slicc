@@ -33,7 +33,7 @@ import { conversationKeyFor } from '../work-unit/conversation/key.js';
 import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { toDescriptor, workspaceFor } from '../work-unit/descriptor.js';
 import { LiveWorkUnit } from '../work-unit/live-unit.js';
-import { rootOwnerOf, rootsOf } from '../work-unit/policy.js';
+import { isRootUnit, rootOwnerOf, rootsOf } from '../work-unit/policy.js';
 import {
   modelFor,
   modelIdFor,
@@ -207,7 +207,8 @@ export interface ScoopLifecycleDeps {
     enqueueSudoRequest(scoopJid: string, request: SudoRequest): Promise<SudoDecision>;
     resolveActionableLick(
       id: string,
-      decision: SudoDecision
+      decision: SudoDecision,
+      approverJid?: string
     ): Promise<{
       settled: boolean;
       persisted: boolean;
@@ -220,7 +221,9 @@ export interface ScoopLifecycleDeps {
     approveDirectedOrUser(
       request: import('../sudo/types.js').SudoRequest
     ): Promise<import('../sudo/types.js').SudoDecision>;
-    listPendingSudoRequests(): ReturnType<NonNullable<ScoopContextCallbacks['onListSudoRequests']>>;
+    listPendingSudoRequests(
+      approverJid?: string
+    ): ReturnType<NonNullable<ScoopContextCallbacks['onListSudoRequests']>>;
   };
   /** Routes the synthesized cone-facing fatal-error notification through the message router. */
   handleMessage(msg: ChannelMessage): Promise<void>;
@@ -556,7 +559,7 @@ export class ScoopLifecycleManager {
     _senderId: string,
     _senderName: string,
     images: ImageContent[] = [],
-    options?: { steer?: boolean; guestGate?: TurnGuestGate }
+    options?: { steer?: boolean; guestGates?: TurnGuestGate[] }
   ): Promise<void> {
     let context = this.getContext(jid);
 
@@ -1031,11 +1034,16 @@ export class ScoopLifecycleManager {
       // the approval registry, everything else to the owner's own broker (which
       // is also where the never-persist guard for guest kinds lives).
       approveGuestToolCall: (request) => cone.approveDirectedOrUser(request),
+      // A DELEGATED approver is scoped to what was routed to it; a root stays
+      // unrestricted (`undefined` = no filter), which is the behaviour cones
+      // have always had. Without the scope, marking a scoop as an approver
+      // handed it every cone's pending requests to read and settle.
       onSudoResolve: policy.canResolveApprovals
-        ? (id, decision) => cone.resolveActionableLick(id, decision)
+        ? (id, decision) =>
+            cone.resolveActionableLick(id, decision, isRootUnit(scoop) ? undefined : jid)
         : undefined,
       onListSudoRequests: policy.canResolveApprovals
-        ? () => cone.listPendingSudoRequests()
+        ? () => cone.listPendingSudoRequests(isRootUnit(scoop) ? undefined : jid)
         : undefined,
       getBrowserAPI: () => callbacks.getBrowserAPI(),
     };

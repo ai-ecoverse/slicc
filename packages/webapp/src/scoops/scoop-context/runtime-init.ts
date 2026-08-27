@@ -50,8 +50,8 @@ export interface RuntimeInitDeps {
   processOwner: ProcessOwner;
   coneJid: string | undefined;
   getTurnPid: () => number | undefined;
-  /** Live lookup for the guest gate on the turn in flight (see `tools.ts`). */
-  getTurnGuestGate: () => TurnGuestGate | undefined;
+  /** Live lookup for the guest gates on the turn in flight (see `tools.ts`). */
+  getTurnGuestGates: () => readonly TurnGuestGate[];
   /** Live, because the roster it derives from changes as roots come and go. */
   getLickTarget: () => string | undefined;
   /** Live, because the stream wrapper reads it per request. */
@@ -102,7 +102,7 @@ export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRun
   deps.onShellReady(shell);
 
   const tools = await buildScoopTools({
-    getTurnGuestGate: deps.getTurnGuestGate,
+    getTurnGuestGates: deps.getTurnGuestGates,
     scoop,
     unit,
     callbacks,

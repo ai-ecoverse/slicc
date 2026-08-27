@@ -1122,7 +1122,8 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   async resolveSudoRequestAndPersist(
     id: string,
-    decision: SudoDecision
+    decision: SudoDecision,
+    approverJid?: string
   ): Promise<{
     settled: boolean;
     persisted: boolean;
@@ -1131,7 +1132,7 @@ export class Orchestrator implements ConeApprovalRouter {
     scoopFolder?: string;
     kind?: SudoRequest['kind'];
   }> {
-    return this.approvalRouter.resolveSudoRequestAndPersist(id, decision);
+    return this.approvalRouter.resolveSudoRequestAndPersist(id, decision, approverJid);
   }
 
   /**
@@ -1192,7 +1193,8 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   async resolveActionableLick(
     id: string,
-    decision: SudoDecision
+    decision: SudoDecision,
+    approverJid?: string
   ): Promise<{
     settled: boolean;
     persisted: boolean;
@@ -1204,7 +1206,7 @@ export class Orchestrator implements ConeApprovalRouter {
   }> {
     const resolved = await this.lickRegistry.resolve(id, decision);
     if (resolved) return resolved;
-    return this.resolveSudoRequestAndPersist(id, decision);
+    return this.resolveSudoRequestAndPersist(id, decision, approverJid);
   }
 
   /**
@@ -1230,8 +1232,8 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /** Snapshot all pending cone-mediated sudo requests (cone-side listing). */
-  listPendingSudoRequests(): PendingSudoRequest[] {
-    return this.approvalRouter.listPendingSudoRequests();
+  listPendingSudoRequests(approverJid?: string): PendingSudoRequest[] {
+    return this.approvalRouter.listPendingSudoRequests(approverJid);
   }
 
   /** Register a new scoop. Delegates to {@link ScoopLifecycleManager}. */
@@ -1434,7 +1436,7 @@ export class Orchestrator implements ConeApprovalRouter {
     senderId: string,
     senderName: string,
     images: ImageContent[] = [],
-    options?: { steer?: boolean; guestGate?: TurnGuestGate }
+    options?: { steer?: boolean; guestGates?: TurnGuestGate[] }
   ): Promise<void> {
     return this.lifecycle.sendPrompt(jid, text, senderId, senderName, images, options);
   }

@@ -67,7 +67,7 @@ export interface ScoopToolsDeps {
    * built once per scoop; whether the current turn was caused by a guest is
    * not, so this must be a lookup and never a captured value.
    */
-  getTurnGuestGate: () => TurnGuestGate | undefined;
+  getTurnGuestGates: () => readonly TurnGuestGate[];
 }
 
 /**
@@ -82,8 +82,8 @@ export interface ScoopToolsDeps {
 function buildGuestToolGate(deps: ScoopToolsDeps): ToolAdapterGateConfig {
   return {
     currentGate() {
-      const gate = deps.getTurnGuestGate();
-      if (!gate) return undefined;
+      const gates = deps.getTurnGuestGates();
+      if (gates.length === 0) return undefined;
       const approve = deps.callbacks.approveGuestToolCall;
       return {
         async approve(toolName: string, params: unknown): Promise<boolean> {
@@ -93,13 +93,21 @@ function buildGuestToolGate(deps: ScoopToolsDeps): ToolAdapterGateConfig {
             });
             return false;
           }
-          const decision = await approve({
-            kind: 'guest-tool',
-            detail: describeToolCall(toolName, params),
-            requester: gate.requester,
-            ...(gate.approver ? { approver: gate.approver } : {}),
-          });
-          return decision.decision !== 'deny';
+          const detail = describeToolCall(toolName, params);
+          // EVERY gate must clear. When a batch merged messages from several
+          // seats, each seat's approver gets a say — one seat's approval is not
+          // consent from the others. Sequential and short-circuiting: the first
+          // refusal ends it, so a denied call does not go on to bother the rest.
+          for (const gate of gates) {
+            const decision = await approve({
+              kind: 'guest-tool',
+              detail,
+              requester: gate.requester,
+              ...(gate.approver ? { approver: gate.approver } : {}),
+            });
+            if (decision.decision === 'deny') return false;
+          }
+          return true;
         },
       };
     },

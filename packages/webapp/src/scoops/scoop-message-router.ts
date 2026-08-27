@@ -64,7 +64,7 @@ export interface ScoopMessageRouterDeps {
     senderId: string,
     senderName: string,
     images?: ReturnType<typeof imageContentFromAttachments>,
-    options?: { steer?: boolean; guestGate?: TurnGuestGate }
+    options?: { steer?: boolean; guestGates?: TurnGuestGate[] }
   ): Promise<void>;
   /** Notify the UI about a new incoming message (delegation / external lick chip). */
   notifyIncomingMessage(scoopJid: string, message: ChannelMessage): void;
@@ -580,11 +580,22 @@ export class ScoopMessageRouter {
     // cannot be split into a gated and an ungated half. Any guest-caused
     // message in the batch gates the whole turn — the conservative reading, and
     // the only one that is sound when the agent sees the messages merged.
-    const guestGate = eligibleMessages.find((m) => m.guestGate)?.guestGate;
+    // EVERY distinct gate in the batch, not the first: messages from several
+    // seats merge into one prompt, and keeping only one would submit the other
+    // guests' actions to an approver they never named.
+    const seen = new Set<string>();
+    const guestGates = [];
+    for (const message of eligibleMessages) {
+      if (!message.guestGate) continue;
+      const key = JSON.stringify(message.guestGate);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      guestGates.push(message.guestGate);
+    }
 
     await this.deps.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName, images, {
       steer,
-      ...(guestGate ? { guestGate } : {}),
+      ...(guestGates.length > 0 ? { guestGates } : {}),
     });
   }
 

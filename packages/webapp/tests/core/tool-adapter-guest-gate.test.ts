@@ -107,3 +107,48 @@ describe('adaptTool guest gate', () => {
     expect(approve).toHaveBeenCalledWith('bash', { command: 'git push --force' });
   });
 });
+
+describe('adaptTool guest gate — round-4 findings', () => {
+  it('does not run a tool whose turn was stopped while approval was pending', async () => {
+    // Approval can sit for minutes. Several tools (the file tools among them)
+    // never read the abort signal, so a late `allow` would run them to
+    // completion after the user pressed Stop.
+    const exec = vi.fn(async () => ({ content: 'ran', isError: false }));
+    const controller = new AbortController();
+    const gate: ToolAdapterGateConfig = {
+      currentGate: () => ({
+        approve: async () => {
+          controller.abort();
+          return true;
+        },
+      }),
+    };
+    const adapted = adaptTool(tool(exec), undefined, undefined, gate);
+
+    const out = await adapted.execute('c1', { path: '/workspace/x' }, controller.signal);
+    expect(exec).not.toHaveBeenCalled();
+    expect((out as { details?: { isError?: boolean } }).details?.isError).toBe(true);
+  });
+
+  it('does not even raise a prompt for work already abandoned', async () => {
+    const approve = vi.fn(async () => true);
+    const controller = new AbortController();
+    controller.abort();
+    const gate: ToolAdapterGateConfig = { currentGate: () => ({ approve }) };
+    const adapted = adaptTool(tool(), undefined, undefined, gate);
+
+    await adapted.execute('c1', { command: 'ls' }, controller.signal);
+    expect(approve).not.toHaveBeenCalled();
+  });
+
+  it('runs normally when the signal stays live through approval', async () => {
+    const exec = vi.fn(async () => ({ content: 'ran', isError: false }));
+    const controller = new AbortController();
+    const gate: ToolAdapterGateConfig = {
+      currentGate: () => ({ approve: async () => true }),
+    };
+    const adapted = adaptTool(tool(exec), undefined, undefined, gate);
+    await adapted.execute('c1', { command: 'ls' }, controller.signal);
+    expect(exec).toHaveBeenCalledTimes(1);
+  });
+});

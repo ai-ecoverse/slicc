@@ -221,18 +221,43 @@ export interface ToolCallGate {
 }
 
 /**
+ * True when the turn was stopped while the gate was waiting on a human.
+ *
+ * Approval can sit for minutes. If the user hits Stop in that window, a verdict
+ * that arrives afterwards must NOT start the tool: the abort signal is passed
+ * to `tool.execute`, but several tools (the file tools among them) never read
+ * it, so they would run to completion after the turn was stopped.
+ */
+function abortedDuringApproval(signal: AbortSignal | undefined): boolean {
+  return signal?.aborted === true;
+}
+
+/**
  * Run the gate for one call. Fails CLOSED: a throwing gate refuses, because a
  * gate that errored has not approved anything.
  */
 async function passesGate(
   tool: ToolDefinition,
   params: unknown,
-  config: ToolAdapterGateConfig | undefined
+  config: ToolAdapterGateConfig | undefined,
+  signal: AbortSignal | undefined
 ): Promise<boolean> {
   const gate = config?.currentGate();
   if (!gate) return true;
+  // Already stopped before we even asked — do not raise a prompt for work the
+  // caller has abandoned.
+  if (abortedDuringApproval(signal)) return false;
   try {
-    return await gate.approve(tool.name, params);
+    const allowed = await gate.approve(tool.name, params);
+    if (!allowed) return false;
+    // Re-check AFTER the await: this is the window a human spends deciding.
+    if (abortedDuringApproval(signal)) {
+      log.info('Turn was stopped while a tool call awaited approval — not running it', {
+        tool: tool.name,
+      });
+      return false;
+    }
+    return true;
   } catch (err) {
     log.warn('Tool-call gate threw — refusing the call', {
       tool: tool.name,
@@ -270,7 +295,7 @@ export function adaptTool(
 
       // Gate BEFORE the process is spawned: a refused call should leave no
       // trace in `ps` and must not be able to run for even an instant.
-      if (!(await passesGate(tool, params, gateConfig))) {
+      if (!(await passesGate(tool, params, gateConfig, signal))) {
         if (ctx) popToolExecutionContext(ctx);
         return {
           content: [

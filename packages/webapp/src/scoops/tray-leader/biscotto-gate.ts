@@ -39,7 +39,10 @@
  */
 
 import type { FollowerBiscottoIdentity, FollowerToLeaderMessage } from '@slicc/shared-ts';
+import { createLogger } from '../../base/logger.js';
 import type { TurnGuestGate } from '../../sudo/types.js';
+
+const log = createLogger('biscotto-gate');
 
 /**
  * Whether each wire message is accepted from a `trust: 'biscotto'` peer.
@@ -181,7 +184,20 @@ export function toolGateForSeat(
   const requester = describeSeatLabel(seat.label);
   switch (gate.approver) {
     case 'cone':
-      return { requester, approver: { kind: 'cone', unitJid } };
+      // NOT routed to the cone. For a TOOL call the cone is the thing executing
+      // it: asking the cone to approve would queue an actionable message to an
+      // agent that is blocked awaiting the very tool result, so it could not
+      // answer until the tool returned and every request would time out denied.
+      // The tier is incoherent for tool calls specifically — the approver and
+      // the actor are the same unit — so it resolves to the owner's own
+      // broker. Stated here, once per turn and in the log, rather than
+      // discovered as a five-minute stall.
+      //
+      // The MESSAGE gate is unaffected: no turn is running when it asks.
+      log.info('Cone-gated seat: tool calls route to the owner, not the cone', {
+        reason: 'the cone cannot approve a tool call it is itself blocked on',
+      });
+      return { requester };
     case 'scoop':
       return gate.scoop
         ? {

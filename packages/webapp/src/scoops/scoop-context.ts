@@ -306,7 +306,7 @@ export class ScoopContext {
         processOwner: this.owner,
         coneJid: this.coneJid,
         getTurnPid: () => this.currentTurnProcess?.pid,
-        getTurnGuestGate: () => this.currentTurnGuestGate,
+        getTurnGuestGates: () => this.turnGuestGates,
         getLickTarget: () => this.ownLickTarget(),
         getEffortOverride: () => this.activeEffortOverride,
         isDisposed: () => this.disposed,
@@ -366,11 +366,12 @@ export class ScoopContext {
     lastError: Error | null,
     abortSignal: AbortSignal
   ): void {
-    // The turn is over — the gate must not outlive it. A leaked gate would make
-    // the OWNER's next turn behave as if a guest had caused it, prompting for
-    // approval on the owner's own tool calls. Cleared first so nothing below
-    // can throw past it.
-    this.currentTurnGuestGate = undefined;
+    // Deliberately NOT clearing `turnGuestGates` here. The agent can begin a
+    // follow-up turn internally without re-entering `prompt()`, and that turn is
+    // still downstream of the guest's message; clearing here let it run
+    // ungated. The set is replaced when the next turn genuinely starts, so the
+    // worst case is over-gating the owner inside one busy window — the safe
+    // direction to be wrong in.
     this.runBounds.disarm();
     // A bound-terminated run must not read as a clean completion: surface
     // the ceiling through onError so observers (the agent bridge) report a
@@ -408,27 +409,33 @@ export class ScoopContext {
    * otherwise via `followUp()`.
    */
   /**
-   * Gate for the turn currently running, when a biscotto caused it.
+   * Every guest gate that applies to the turn currently running.
    *
-   * Not on the agent and not captured into the tool set: tools are built once
-   * per scoop while turns come and go, so the adapter reads this LIVE on every
-   * tool call. Cleared when the turn settles — a later owner-initiated turn
-   * must not inherit a guest's gate, and a guest's turn must not escape one.
+   * A SET, not one gate: a router batch can merge messages from several seats
+   * into one prompt, and honouring only the first would submit the others'
+   * actions to an approver they never named. A tool call must clear ALL of
+   * them.
+   *
+   * Lifetime is deliberately conservative. The set is replaced only when a turn
+   * genuinely BEGINS (`queuePromptIfBusy` declined to queue); a prompt that
+   * queues instead ADDS to it, because the running turn will consume that
+   * content. It is not cleared when a turn ends: the agent can start a
+   * follow-up turn internally without re-entering `prompt()`, and that turn is
+   * still downstream of the guest's message. An owner's next explicit prompt
+   * resets it to empty, which is the only transition that may un-gate.
+   *
+   * Read LIVE by the tool adapter rather than captured at tool-build time —
+   * tools are built once per scoop while turns come and go.
    */
-  private currentTurnGuestGate: TurnGuestGate | undefined;
+  private turnGuestGates: TurnGuestGate[] = [];
 
   async prompt(
     text: string,
     images: ImageContent[] = [],
-    options?: { steer?: boolean; guestGate?: TurnGuestGate }
+    options?: { steer?: boolean; guestGates?: TurnGuestGate[] }
   ): Promise<void> {
     if (!(await this.ensureAgentReady())) return;
-    // Turn-scoped: set BEFORE the agent runs and cleared when the turn ends, so
-    // every tool call the agent makes downstream of a guest's message is gated,
-    // and nothing after the turn is. Read live by the tool adapter rather than
-    // captured at tool-build time — tools are built once per scoop, turns come
-    // and go.
-    this.currentTurnGuestGate = options?.guestGate;
+    const incoming = options?.guestGates ?? [];
     if (
       queuePromptIfBusy(this.agent!, text, images, {
         steer: options?.steer ?? false,
@@ -436,8 +443,15 @@ export class ScoopContext {
         folder: this.scoop.folder,
       })
     ) {
+      // Queued INTO the running turn, so its gates join that turn's set. Never
+      // replaces: an owner message arriving mid-guest-turn used to reset this
+      // to empty and un-gate the guest's remaining tool calls.
+      for (const gate of incoming) this.addTurnGuestGate(gate);
       return;
     }
+    // A turn is genuinely starting: this prompt's gates ARE the turn's gates.
+    // The only transition that may un-gate.
+    this.turnGuestGates = [...incoming];
 
     const agent = this.agent!;
 
@@ -478,6 +492,16 @@ export class ScoopContext {
     } finally {
       this.cleanupPromptState(abortController, turnProcess, lastError, abortSignal);
     }
+  }
+
+  /**
+   * Add one gate to the running turn, ignoring an exact duplicate so a chatty
+   * seat cannot make every tool call prompt N times.
+   */
+  private addTurnGuestGate(gate: TurnGuestGate): void {
+    const key = JSON.stringify(gate);
+    if (this.turnGuestGates.some((existing) => JSON.stringify(existing) === key)) return;
+    this.turnGuestGates.push(gate);
   }
 
   /** Stop the current agent operation and clear any queued prompts */

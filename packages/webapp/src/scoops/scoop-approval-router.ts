@@ -72,6 +72,18 @@ export interface ResolveSudoRequestAndPersistResult {
 
 export class ScoopApprovalRouter implements ConeApprovalRouter {
   private registry: ConeRequestRegistry;
+  /**
+   * Who was asked to settle each pending request.
+   *
+   * A DELEGATED approver (a scoop marked `approvesGuestRequests`) must only see
+   * and settle what was routed to it. Without this it holds the same global
+   * `list` / `resolve` surface a cone does, so it could read other cones'
+   * pending requests and settle them — including persisting `always` grants on
+   * behalf of requesters it has nothing to do with.
+   *
+   * A root approver is unrestricted, as before.
+   */
+  private readonly approverByRequest = new Map<string, string>();
 
   constructor(private deps: ScoopApprovalRouterDeps) {
     // Fail-closed settles that bypass the cone (timeout / scoop drop /
@@ -106,8 +118,20 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
   }
 
   /** Snapshot all pending cone-mediated sudo requests (cone-side listing). */
-  listPendingSudoRequests(): PendingSudoRequest[] {
-    return this.registry.list();
+  listPendingSudoRequests(approverJid?: string): PendingSudoRequest[] {
+    const all = this.registry.list();
+    if (approverJid === undefined) return all;
+    return all.filter((entry) => this.approverByRequest.get(entry.id) === approverJid);
+  }
+
+  /**
+   * Whether `approverJid` is allowed to settle `id`. An undefined approver is
+   * an unrestricted caller (a root); a delegated one may only settle what was
+   * routed to it.
+   */
+  private maySettle(id: string, approverJid: string | undefined): boolean {
+    if (approverJid === undefined) return true;
+    return this.approverByRequest.get(id) === approverJid;
   }
 
   /** Fail-closed every pending request for the given scoop. Used by `unregisterScoop`. */
@@ -195,6 +219,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     }
 
     const { id, pending } = this.registry.register(scoopJid, request);
+    this.approverByRequest.set(id, cone.jid);
     log.info('Sudo request enqueued for cone', {
       id,
       scoopJid,
@@ -255,7 +280,15 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
    * timed-out ids so the caller can surface that as "this request expired"
    * to the cone.
    */
-  resolveSudoRequest(id: string, decision: SudoDecision): boolean {
+  resolveSudoRequest(id: string, decision: SudoDecision, approverJid?: string): boolean {
+    if (!this.maySettle(id, approverJid)) {
+      log.warn('Refusing a settle from a unit the request was not routed to', {
+        id,
+        approverJid,
+      });
+      return false;
+    }
+    this.approverByRequest.delete(id);
     const settled = this.registry.resolve(id, decision);
     if (settled) {
       log.info('Sudo request resolved by cone', { id, decision: decision.decision });
@@ -276,10 +309,21 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
    */
   async resolveSudoRequestAndPersist(
     id: string,
-    decision: SudoDecision
+    decision: SudoDecision,
+    approverJid?: string
   ): Promise<ResolveSudoRequestAndPersistResult> {
     const pending = this.registry.get(id);
     if (!pending) {
+      return { settled: false, persisted: false };
+    }
+    // Checked before ANY side effect, including the persistence below: a
+    // delegated approver must not be able to write a durable grant for a
+    // request that was never routed to it.
+    if (!this.maySettle(id, approverJid)) {
+      log.warn('Refusing a settle+persist from a unit the request was not routed to', {
+        id,
+        approverJid,
+      });
       return { settled: false, persisted: false };
     }
 
@@ -290,7 +334,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     // Claim the request synchronously before any persistence await. This
     // cancels its fail-closed timer, so an expired request can never gain a
     // durable rule after the registry has already denied it.
-    const settled = this.resolveSudoRequest(id, decision);
+    const settled = this.resolveSudoRequest(id, decision, approverJid);
     if (!settled) {
       return { settled: false, persisted: false };
     }
