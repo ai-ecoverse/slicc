@@ -339,8 +339,7 @@
         "packages/webapp/tests/fs/internal-mount.test.ts",
         "packages/webapp/tests/kernel/realm/realm-runner.test.ts",
         "packages/webapp/tests/shell/di/di.test.ts",
-        "packages/webapp/tests/ui/provider-settings.test.ts",
-        "packages/webcomponents/src/primitives/slicc-image-preview.stories.ts"
+        "packages/webapp/tests/ui/provider-settings.test.ts"
       ],
       "linter": {
         "rules": {
