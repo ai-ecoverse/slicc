@@ -19,6 +19,14 @@ interface MessageBoxResult {
   response: number;
 }
 
+/** Options for the transient offscreen `BrowserWindow` used by {@link defaultPromptInput}. */
+interface OffscreenPromptWindowOptions {
+  show: boolean;
+  width: number;
+  height: number;
+  webPreferences: { offscreen: boolean };
+}
+
 /** Injection seams. */
 export interface ElectronBackendDeps {
   /** Raise a modal message box; resolves the clicked button index. */
@@ -96,7 +104,7 @@ async function defaultShowMessageBox(options: {
 async function defaultPromptInput(message: string, defaultValue: string): Promise<string | null> {
   const electron = (await import('electron')) as unknown as {
     BrowserWindow: new (
-      opts: Record<string, unknown>
+      opts: OffscreenPromptWindowOptions
     ) => {
       loadURL(url: string): Promise<void>;
       webContents: { executeJavaScript(code: string): Promise<unknown> };
