@@ -13,37 +13,57 @@ import { jsonResponse } from './shared.js';
 
 const FLAGS_CACHE_TTL_SECONDS = 300;
 const DEFAULT_FLOAT = 'default';
-const FALLBACK_BASE_FLAGS: Record<string, string> = {
+
+/** Validated string-keyed flag map (base profile or float overlay). */
+export type FlagStringMap = Record<string, string>;
+
+/**
+ * Untrusted FEATURE_FLAGS root before validation.
+ * Wrangler may inject any JSON; only `base` / `floats` are read.
+ */
+interface UntrustedFeatureFlagsConfig {
+  readonly base?: unknown;
+  readonly floats?: unknown;
+}
+
+const FALLBACK_BASE_FLAGS: FlagStringMap = {
   'experimental-settings': 'on',
 };
 
 export interface ResolvedFlags {
   float: string;
-  flags: Record<string, string>;
+  flags: FlagStringMap;
 }
 
-function objectRecord(value: unknown): Record<string, unknown> | null {
-  return value !== null && typeof value === 'object' && !Array.isArray(value)
-    ? (value as Record<string, unknown>)
-    : null;
+function isPlainObject(value: unknown): value is object {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
 }
 
-function stringRecord(value: unknown): Record<string, string> | null {
-  const record = objectRecord(value);
-  if (!record || Object.values(record).some((entry) => typeof entry !== 'string')) return null;
-  return record as Record<string, string>;
+function asUntrustedConfig(value: unknown): UntrustedFeatureFlagsConfig | null {
+  return isPlainObject(value) ? (value as UntrustedFeatureFlagsConfig) : null;
+}
+
+/** Copy a plain object into a string map, or null if any value is non-string. */
+function stringRecord(value: unknown): FlagStringMap | null {
+  if (!isPlainObject(value)) return null;
+  const out: FlagStringMap = {};
+  for (const [key, entry] of Object.entries(value)) {
+    if (typeof entry !== 'string') return null;
+    out[key] = entry;
+  }
+  return out;
 }
 
 /** Resolve a requested float, falling back to the base profile on any invalid config. */
 export function resolveFlags(config: unknown, requestedFloat: string | null): ResolvedFlags {
-  const root = objectRecord(config);
+  const root = asUntrustedConfig(config);
   const base = stringRecord(root?.base) ?? FALLBACK_BASE_FLAGS;
-  const floats = objectRecord(root?.floats);
-  if (!requestedFloat || !floats || !Object.hasOwn(floats, requestedFloat)) {
+  const floats = root?.floats;
+  if (!requestedFloat || !isPlainObject(floats) || !Object.hasOwn(floats, requestedFloat)) {
     return { float: DEFAULT_FLOAT, flags: { ...base } };
   }
 
-  const overlay = stringRecord(floats[requestedFloat]);
+  const overlay = stringRecord(Reflect.get(floats, requestedFloat));
   if (!overlay) return { float: DEFAULT_FLOAT, flags: { ...base } };
   return { float: requestedFloat, flags: { ...base, ...overlay } };
 }
