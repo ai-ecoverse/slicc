@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from '@storybook/web-components-vite';
-import type { MonitorModel, MonitorSeries, SliccMonitor } from './slicc-monitor.js';
+import type { MonitorModel, MonitorSeries, MonitorVital, SliccMonitor } from './slicc-monitor.js';
 import './slicc-monitor.js';
 
 interface MonitorArgs {
@@ -49,6 +49,24 @@ const BURN = [
 const LOAD = [1, 2, 2, 3, 1, 0, 0, 1, 2, 4, 3, 2, 2, 1, 1, 2, 3, 3, 2, 1, 1, 2, 2, 2];
 const PROCS = [4, 7, 9, 6, 3, 2, 8, 12, 15, 11, 9, 6, 5, 9, 14, 18, 16, 12, 9, 7, 11, 13, 14, 9];
 
+/**
+ * One dot per context window, in the same chip colors the switcher paints —
+ * the cone's `--waffle`-ish brown plus the hashed scoop palette. The peak
+ * (0.61) is the curator's; the tile's own figure reports that one, and the
+ * three quieter windows behind it are exactly what the bar alone cannot say.
+ */
+const CONTEXT_MARKERS: NonNullable<MonitorVital['markers']> = [
+  { id: 'cone', ratio: 0.44, color: '#b07823', label: 'sliccy (cone) — 44% full' },
+  { id: 'loose-ends', ratio: 0.12, color: '#8b5cf6', label: 'loose-ends — 12% full' },
+  { id: 'review', ratio: 0.28, color: '#3b82f6', label: 'review — 28% full' },
+  {
+    id: 'agent-memory-curator',
+    ratio: 0.61,
+    color: '#06b6d4',
+    label: 'agent-memory-curator — 61% full',
+  },
+];
+
 function vitals(): MonitorModel['vitals'] {
   return [
     {
@@ -84,6 +102,7 @@ function vitals(): MonitorModel['vitals'] {
       value: '61',
       unit: '%',
       ratio: 0.61,
+      markers: CONTEXT_MARKERS,
       accent: 'green',
       foot: 'fullest of 4 context windows',
     },
@@ -491,6 +510,75 @@ export const PartialWindow: Story = {
           accent: 'cyan',
           series: gappedSeries(PROCS.slice(0, 12)),
           foot: 'last 2m',
+        },
+      ],
+      alerts: [],
+    },
+  },
+};
+
+/**
+ * The context meter alone, in the three shapes that make the dots worth
+ * drawing.
+ *
+ * Top: one window is about to compact and five others are nearly empty — the
+ * bar says "91%", the dots say only the curator is in trouble. Middle: the
+ * same 91% peak, but everything is crowded up against it, which is a very
+ * different thing to be told. Bottom: the ends, where a 0% and a 100% dot
+ * still sit fully over the track instead of hanging off it.
+ */
+export const ContextDistribution: Story = {
+  args: {
+    model: {
+      updated: 'Streaming · updated just now',
+      vitals: [
+        {
+          id: 'context-spread',
+          label: 'Context fill',
+          value: '91',
+          unit: '%',
+          ratio: 0.91,
+          accent: 'rose',
+          markers: [
+            { id: 'a', ratio: 0.91, color: '#06b6d4', label: 'agent-memory-curator — 91% full' },
+            { id: 'b', ratio: 0.09, color: '#b07823', label: 'sliccy (cone) — 9% full' },
+            { id: 'c', ratio: 0.14, color: '#8b5cf6', label: 'loose-ends — 14% full' },
+            { id: 'd', ratio: 0.11, color: '#3b82f6', label: 'review — 11% full' },
+            { id: 'e', ratio: 0.06, color: '#10b981', label: 'docs-sweep — 6% full' },
+            { id: 'f', ratio: 0.17, color: '#f59e0b', label: 'speck-worker — 17% full' },
+          ],
+          foot: 'fullest of 6 context windows',
+        },
+        {
+          id: 'context-crowded',
+          label: 'Context fill',
+          value: '91',
+          unit: '%',
+          ratio: 0.91,
+          accent: 'rose',
+          markers: [
+            { id: 'a', ratio: 0.91, color: '#06b6d4', label: 'agent-memory-curator — 91% full' },
+            { id: 'b', ratio: 0.86, color: '#b07823', label: 'sliccy (cone) — 86% full' },
+            { id: 'c', ratio: 0.88, color: '#8b5cf6', label: 'loose-ends — 88% full' },
+            { id: 'd', ratio: 0.83, color: '#3b82f6', label: 'review — 83% full' },
+            { id: 'e', ratio: 0.79, color: '#10b981', label: 'docs-sweep — 79% full' },
+            { id: 'f', ratio: 0.9, color: '#f59e0b', label: 'speck-worker — 90% full' },
+          ],
+          foot: 'fullest of 6 context windows',
+        },
+        {
+          id: 'context-ends',
+          label: 'Context fill',
+          value: '100',
+          unit: '%',
+          ratio: 1,
+          accent: 'rose',
+          markers: [
+            { id: 'a', ratio: 1, color: '#ef4444', label: 'overflowing — 100% full' },
+            { id: 'b', ratio: 0, color: '#b07823', label: 'sliccy (cone) — 0% full' },
+            { id: 'c', ratio: 0.5, color: '#10b981', label: 'docs-sweep — 50% full' },
+          ],
+          foot: 'fullest of 3 context windows',
         },
       ],
       alerts: [],

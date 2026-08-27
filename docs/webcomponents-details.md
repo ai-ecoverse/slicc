@@ -233,6 +233,45 @@ Non-obvious rules:
   (`tests/switcher/manual-clock.ts`) instead of racing real timers. Timestamps
   use `null`, never `0`, for "not started": a clock may legitimately read 0.
 
+## Monitor meter markers
+
+A `MonitorVital` with a `ratio` renders a meter. When that ratio is an
+aggregate of many contributors — the Context fill tile reports the FULLEST
+of N context windows — the bar alone answers only "how close to the limit is
+the worst one". Five windows all at 70% and one window at 70% beside four
+near-empty ones draw the identical tile, and those want different reactions.
+
+`MonitorVital.markers` (`MonitorMeterMarker[]`) adds one dot per contributor
+along the same track: `{ id, ratio, color, label? }`. The bar keeps reporting
+the aggregate; the dots report the spread.
+
+Non-obvious rules:
+
+- **`color` is a resolved CSS color, supplied by the caller.** This library
+  does not know which scoop is which hue, and taking a token name would tie a
+  generic meter to one host's accent vocabulary. The webapp passes
+  `scoopColor()` (`ui/wc/wc-scoop-color.ts`) — the SAME hash the switcher
+  chips and the thread context tint use, so a unit is one hue everywhere and
+  the reader learns the cone/scoop → color mapping once.
+- **Dots paint lowest-ratio first**, so a crowded high end puts the fullest
+  dot on top. That is the reading the tile's own figure is already showing;
+  burying it under a quieter neighbour would contradict the number above it.
+- **The rail is inset by one dot radius at each end** (`inset: 0 7px`), so a
+  0% and a 100% marker sit fully over the track instead of overhanging it.
+- **The rail is ONE `role="img"`** whose `aria-label` lists every reading,
+  fullest first; the dots themselves are `aria-hidden` and carry `title` only
+  for the pointer. Hue and position are all a dot says, so a non-sighted
+  reader needs the distribution as a sentence, and a hover tooltip is not
+  reachable by keyboard or AT. The dots are deliberately NOT focusable: they
+  are non-interactive graphics, and the panel re-renders every 5s, so N tab
+  stops per meter would drop focus on each refresh.
+- **`markers` is additive.** A meter without them renders exactly as before,
+  and a vital carrying both a `series` and a `ratio` still draws the
+  sparkline — markers do not change that precedence.
+- **The `model` getter deep-copies `markers`**, like `series.points`. A
+  spread alone leaves the nested array shared, so a caller splicing
+  `monitor.model` markers would mutate component state.
+
 ## Animation loops: no forced reflow, and a frame budget
 
 A `requestAnimationFrame` loop must never call `getComputedStyle` or read

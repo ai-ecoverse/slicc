@@ -58,6 +58,28 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 
 Modules in `scoops/`: `tray-leader-sync.ts` (façade + lifecycle), `context.ts`, `follower-registry.ts`, `follower-dispatch.ts`, `broadcast.ts`, `cdp-router.ts`, `fs-router.ts`, `tab-router.ts`, `remote-exec.ts`, `transcript-export.ts` (streaming), `preview-bridge.ts`, `cherry-router.ts`, `teleport-pool.ts`. Follower model/thinking pills share `ui/wc/wc-follower-model-surface.ts`; `wc-follower.ts` mount and `wc-tray.ts`'s `slicc:tray-join` role switch both consume it. Cherry gated by `CherryFeatureSet.modelPicker`. See `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture".
 
+### Monitor context-fill distribution
+
+`buildVitals` (`ui/wc/wc-monitor.ts`) meters the FULLEST context window and
+labels it "fullest of N context windows" — a peak, which is the number that
+answers "am I about to compact" but hides who is carrying it.
+`buildContextMarkers` joins the kernel's `fills` (`{ jid, fill }`, from each
+context's `getContextFill()`) against the live roster and emits one
+`MonitorMeterMarker` per window, so the tile shows the distribution on the
+same bar.
+
+- Colors come from **`scoopColor`** (`ui/wc/wc-scoop-color.ts`), the switcher
+  chip hash — cone in `CONE_COLOR`, scoops from the shared palette. A private
+  palette here would make the reader learn the unit → hue mapping twice.
+- `isRootUnit` decides cone vs scoop, per #2279 — the role is never read off
+  the record. Cone labels match the Scoops section's `<name> (cone)` form.
+- **A fill whose JID has left the roster still gets a dot**, hashed off the
+  JID. Those tokens are real; dropping the marker would make the meter
+  under-report the distribution it exists to show.
+
+Component-side rules (paint order, the inset rail, the `role="img"` label,
+the `model` getter's deep copy): `docs/webcomponents-details.md`.
+
 ### Session sharing surfaces (join link + followers)
 
 One roster, three renderings, one vocabulary — `ui/follower-presentation.ts` owns what a follower is called, its icon, its capability chips (`exec` → "can run commands", `cdp` → "hosts tabs") and its `connected 4m` state string. Consumers: the Monitor panel's Followers section (`wc/wc-monitor.ts`), the floatbar hover HUD, and the sync dialog's Status tab. `ssh --list` / `host` keep their own terser text output.

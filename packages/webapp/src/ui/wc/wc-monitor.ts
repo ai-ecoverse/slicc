@@ -10,6 +10,7 @@
 
 import type {
   MonitorAlert,
+  MonitorMeterMarker,
   MonitorModel,
   MonitorProcessRow,
   MonitorSection,
@@ -29,6 +30,7 @@ import {
   shortFollowerId,
 } from '../follower-presentation.js';
 import type { MonitorHistory } from './monitor-history.js';
+import { scoopColor } from './wc-scoop-color.js';
 
 /**
  * A persisted mount entry, augmented with the permission state as of the
@@ -464,6 +466,12 @@ export function buildVitals(input: {
   liveProcesses: number;
   terminated: number;
   history?: MonitorHistory;
+  /**
+   * The live roster, used only to name and color the context-fill markers.
+   * Optional: a fill whose unit isn't here still gets a dot (see
+   * {@link buildContextMarkers}), so the meter never under-reports.
+   */
+  units?: readonly RegisteredScoop[];
 }): MonitorVital[] {
   const { stats, workingUnits, totalUnits, liveProcesses, terminated, history } = input;
   const window = history?.windowLabel();
@@ -515,12 +523,45 @@ export function buildVitals(input: {
       value: String(Math.round(peakFill * 100)),
       unit: '%',
       ratio: peakFill,
+      markers: buildContextMarkers(fills, input.units ?? []),
       accent: peakFill >= 0.9 ? 'rose' : peakFill >= 0.7 ? 'amber' : 'green',
       foot: `fullest of ${fills.length} context window${fills.length === 1 ? '' : 's'}`,
     });
   }
 
   return vitals;
+}
+
+/**
+ * One dot per context window, positioned at its own fill and painted in its
+ * own unit's chip color.
+ *
+ * The bar itself reports the PEAK, which is the number that matters for "am I
+ * about to compact" but says nothing about who is carrying the weight — five
+ * windows at 70% and one at 70% next to four empty ones are the same bar. The
+ * dots put the distribution back, and reuse {@link scoopColor} so a unit is
+ * the same hue here as on its switcher chip; a private palette would make the
+ * reader learn the mapping twice.
+ */
+export function buildContextMarkers(
+  fills: readonly { jid: string; fill: number }[],
+  units: readonly RegisteredScoop[]
+): MonitorMeterMarker[] {
+  const byJid = new Map(units.map((unit) => [unit.jid, unit]));
+  return fills.map(({ jid, fill }) => {
+    const unit = byJid.get(jid);
+    // A fill for a unit that has already left the roster is still a real
+    // context window holding real tokens, so it keeps its dot. Hashing the
+    // JID gives it a stable palette color and an honest, if terse, label.
+    const isRoot = unit ? isRootUnit(unit) : false;
+    const name = unit?.name || (unit ? 'sliccy' : jid);
+    return {
+      id: jid,
+      ratio: fill,
+      color: scoopColor({ isRoot, name }),
+      label: `${isRoot ? `${name} (cone)` : name} — ${Math.round(fill * 100)}% full`,
+    };
+  });
 }
 
 // ---------------------------------------------------------------------------
@@ -603,6 +644,7 @@ export async function fetchMonitorData(
       liveProcesses: processes.length,
       terminated,
       history,
+      units: scoops,
     }),
     alerts: buildAlerts({ tray, followers, mounts, oauthProviders }),
     sections: [

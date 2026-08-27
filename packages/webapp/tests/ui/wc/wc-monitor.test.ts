@@ -6,6 +6,7 @@ import { installWcDomStubs } from './wc-dom-stubs.js';
 installWcDomStubs();
 
 import type { MonitorSection } from '@slicc/webcomponents';
+import type { RegisteredScoop } from '../../../src/scoops/types.js';
 import { MonitorHistory } from '../../../src/ui/wc/monitor-history.js';
 import {
   buildAlerts,
@@ -13,6 +14,7 @@ import {
   fetchMonitorData,
   type MonitorDeps,
 } from '../../../src/ui/wc/wc-monitor.js';
+import { CONE_COLOR, scoopColor } from '../../../src/ui/wc/wc-scoop-color.js';
 
 /** The topology groups alone — most assertions here are about those. */
 async function fetchSections(deps: MonitorDeps): Promise<MonitorSection[]> {
@@ -502,6 +504,53 @@ describe('buildVitals', () => {
     expect(withFills(0.42)).toMatchObject({ value: '42', ratio: 0.42, accent: 'green' });
     expect(withFills(0.75)?.accent).toBe('amber');
     expect(withFills(0.95)?.accent).toBe('rose');
+  });
+
+  it("marks every context window on the bar, in its own unit's chip color", () => {
+    const context = buildVitals({
+      ...base,
+      units: [
+        { jid: 'cone-1', name: 'sliccy', parentJid: null },
+        { jid: 's-1', name: 'review', parentJid: 'cone-1' },
+      ] as RegisteredScoop[],
+      stats: {
+        totalCost: 0,
+        models: [],
+        scoops: [],
+        fills: [
+          { jid: 'cone-1', fill: 0.7 },
+          { jid: 's-1', fill: 0.2 },
+        ],
+      },
+    }).find((vital) => vital.id === 'context');
+
+    // The cone's own hue, and the SAME hash the switcher chip uses for the
+    // scoop — one mapping, learned once.
+    expect(context?.markers).toEqual([
+      { id: 'cone-1', ratio: 0.7, color: CONE_COLOR, label: 'sliccy (cone) — 70% full' },
+      {
+        id: 's-1',
+        ratio: 0.2,
+        color: scoopColor({ isRoot: false, name: 'review' }),
+        label: 'review — 20% full',
+      },
+    ]);
+    // The bar still reports the peak; the dots are what say who is carrying it.
+    expect(context?.ratio).toBe(0.7);
+  });
+
+  it('still marks a context window whose unit has left the roster', () => {
+    // The window is gone from the switcher but its tokens are real, so
+    // dropping the dot would make the meter under-report the distribution.
+    const context = buildVitals({
+      ...base,
+      units: [],
+      stats: { totalCost: 0, models: [], scoops: [], fills: [{ jid: 'ghost-1', fill: 0.5 }] },
+    }).find((vital) => vital.id === 'context');
+
+    expect(context?.markers).toHaveLength(1);
+    expect(context?.markers?.[0]).toMatchObject({ id: 'ghost-1', ratio: 0.5 });
+    expect(context?.markers?.[0].color).toBeTruthy();
   });
 
   it('carries no series until the history has two points to plot', () => {

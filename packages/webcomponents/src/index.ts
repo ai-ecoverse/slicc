@@ -246,6 +246,7 @@ export { SliccFileTree } from './workbench/slicc-file-tree.js';
 export {
   type MonitorAccent,
   type MonitorAlert,
+  type MonitorMeterMarker,
   type MonitorModel,
   type MonitorProcessRow,
   type MonitorProcessTable,
