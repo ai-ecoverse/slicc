@@ -15,6 +15,38 @@ import type { VirtualFS } from '../fs/index.js';
 
 export const GLOBAL_GITCONFIG_PATH = '/workspace/.gitconfig';
 
+const SECTION_HEADER_RE = /^\[(\w+)(?:\s+"([^"]*)")?\]$/;
+const KEY_EQUALS_RE = /^(\w+)\s*=/;
+const KEY_VALUE_RE = /^(\w+)\s*=\s*(.*)$/;
+
+/** Split a dotted `section.key` (or `section.subsection.key`) into parts. */
+function parseConfigKey(key: string): { section: string; configKey: string } {
+  const parts = key.split('.');
+  const configKey = parts.pop() ?? '';
+  return { section: parts.join('.'), configKey };
+}
+
+/** Parse a `[section]` / `[section "sub"]` line into the dotted section name. */
+function sectionNameFromHeader(trimmed: string): string | undefined {
+  const sectionMatch = trimmed.match(SECTION_HEADER_RE);
+  if (!sectionMatch) return undefined;
+  const sec = sectionMatch[1].toLowerCase();
+  const sub = sectionMatch[2] ?? '';
+  return sub ? `${sec}.${sub}` : sec;
+}
+
+function formatSectionHeader(section: string): string {
+  const sectionParts = section.split('.');
+  if (sectionParts.length > 1) {
+    return `[${sectionParts[0]} "${sectionParts.slice(1).join('.')}"]`;
+  }
+  return `[${section}]`;
+}
+
+function formatKeyLine(configKey: string, value: string): string {
+  return `\t${configKey} = ${value}`;
+}
+
 /** Look up a `section.key` (or `section.subsection.key`) value. */
 export async function readGlobalGitConfigValue(
   fs: VirtualFS,
@@ -27,28 +59,86 @@ export async function readGlobalGitConfigValue(
     return undefined;
   }
 
-  const parts = key.split('.');
-  const configKey = parts.pop()!;
-  const section = parts.join('.');
-
+  const { section, configKey } = parseConfigKey(key);
   let currentSection = '';
   for (const rawLine of content.split('\n')) {
     const line = rawLine.trim();
-    const sectionMatch = line.match(/^\[(\w+)(?:\s+"([^"]*)")?\]$/);
-    if (sectionMatch) {
-      const sec = sectionMatch[1].toLowerCase();
-      const sub = sectionMatch[2] ?? '';
-      currentSection = sub ? `${sec}.${sub}` : sec;
+    const header = sectionNameFromHeader(line);
+    if (header !== undefined) {
+      currentSection = header;
       continue;
     }
-    if (currentSection === section) {
-      const kvMatch = line.match(/^(\w+)\s*=\s*(.*)$/);
-      if (kvMatch && kvMatch[1] === configKey) {
-        return kvMatch[2].trim();
-      }
+    if (currentSection !== section) continue;
+    const kvMatch = line.match(KEY_VALUE_RE);
+    if (kvMatch && kvMatch[1] === configKey) {
+      return kvMatch[2].trim();
     }
   }
   return undefined;
+}
+
+/** Replace an existing key in-place. Returns true when a line was updated. */
+function updateExistingKey(
+  lines: string[],
+  section: string,
+  configKey: string,
+  value: string
+): boolean {
+  let currentSection = '';
+  for (let i = 0; i < lines.length; i++) {
+    const trimmed = lines[i].trim();
+    const header = sectionNameFromHeader(trimmed);
+    if (header !== undefined) {
+      currentSection = header;
+      continue;
+    }
+    if (currentSection !== section) continue;
+    const kvMatch = trimmed.match(KEY_EQUALS_RE);
+    if (kvMatch && kvMatch[1] === configKey) {
+      lines[i] = formatKeyLine(configKey, value);
+      return true;
+    }
+  }
+  return false;
+}
+
+/** Whether any `[section]` / `[section "sub"]` header for `section` exists. */
+function sectionExistsIn(lines: string[], section: string): boolean {
+  for (const line of lines) {
+    if (sectionNameFromHeader(line.trim()) === section) return true;
+  }
+  return false;
+}
+
+/**
+ * Insert a key immediately under the matching section header.
+ * Caller must ensure the section exists.
+ */
+function insertKeyUnderSection(
+  lines: string[],
+  section: string,
+  configKey: string,
+  value: string
+): void {
+  for (let i = lines.length - 1; i >= 0; i--) {
+    if (sectionNameFromHeader(lines[i].trim()) !== section) continue;
+    lines.splice(i + 1, 0, formatKeyLine(configKey, value));
+    return;
+  }
+}
+
+function appendNewSection(
+  content: string,
+  section: string,
+  configKey: string,
+  value: string
+): string {
+  const sectionHeader = formatSectionHeader(section);
+  const keyLine = formatKeyLine(configKey, value);
+  if (content) {
+    return content.trimEnd() + `\n${sectionHeader}\n${keyLine}\n`;
+  }
+  return `${sectionHeader}\n${keyLine}\n`;
 }
 
 /** Set a `section.key` (or `section.subsection.key`) value, creating sections as needed. */
@@ -64,87 +154,41 @@ export async function writeGlobalGitConfigValue(
     /* file doesn't exist yet */
   }
 
-  const parts = key.split('.');
-  const configKey = parts.pop()!;
-  const section = parts.join('.');
-
+  const { section, configKey } = parseConfigKey(key);
   const lines = content.split('\n');
-  let currentSection = '';
-  let sectionExists = false;
 
-  for (let i = 0; i < lines.length; i++) {
-    const trimmed = lines[i].trim();
-    const sectionMatch = trimmed.match(/^\[(\w+)(?:\s+"([^"]*)")?\]$/);
-    if (sectionMatch) {
-      const sec = sectionMatch[1].toLowerCase();
-      const sub = sectionMatch[2] ?? '';
-      currentSection = sub ? `${sec}.${sub}` : sec;
-      if (currentSection === section) sectionExists = true;
-      continue;
-    }
-
-    if (currentSection === section) {
-      const kvMatch = trimmed.match(/^(\w+)\s*=/);
-      if (kvMatch && kvMatch[1] === configKey) {
-        lines[i] = `\t${configKey} = ${value}`;
-        await fs.writeFile(GLOBAL_GITCONFIG_PATH, lines.join('\n'));
-        return;
-      }
-    }
-  }
-
-  if (sectionExists) {
-    for (let i = lines.length - 1; i >= 0; i--) {
-      const trimmed = lines[i].trim();
-      const sectionMatch = trimmed.match(/^\[(\w+)(?:\s+"([^"]*)")?\]$/);
-      if (sectionMatch) {
-        const sec = sectionMatch[1].toLowerCase();
-        const sub = sectionMatch[2] ?? '';
-        const cs = sub ? `${sec}.${sub}` : sec;
-        if (cs === section) {
-          lines.splice(i + 1, 0, `\t${configKey} = ${value}`);
-          break;
-        }
-      }
-    }
+  if (updateExistingKey(lines, section, configKey, value)) {
     await fs.writeFile(GLOBAL_GITCONFIG_PATH, lines.join('\n'));
     return;
   }
 
-  const sectionParts = section.split('.');
-  const sectionHeader =
-    sectionParts.length > 1
-      ? `[${sectionParts[0]} "${sectionParts.slice(1).join('.')}"]`
-      : `[${section}]`;
-  const newContent = content
-    ? content.trimEnd() + `\n${sectionHeader}\n\t${configKey} = ${value}\n`
-    : `${sectionHeader}\n\t${configKey} = ${value}\n`;
-  await fs.writeFile(GLOBAL_GITCONFIG_PATH, newContent);
+  if (sectionExistsIn(lines, section)) {
+    insertKeyUnderSection(lines, section, configKey, value);
+    await fs.writeFile(GLOBAL_GITCONFIG_PATH, lines.join('\n'));
+    return;
+  }
+
+  await fs.writeFile(GLOBAL_GITCONFIG_PATH, appendNewSection(content, section, configKey, value));
 }
 
 /** Remove a key from a parsed git config INI string. */
 export function removeGitConfigKey(content: string, key: string): string {
-  const parts = key.split('.');
-  const targetKey = parts.pop()!;
-  const targetSection = parts.join('.');
-
+  const { section: targetSection, configKey: targetKey } = parseConfigKey(key);
   const lines = content.split('\n');
   const result: string[] = [];
   let currentSection = '';
 
   for (const line of lines) {
     const trimmed = line.trim();
-    const sectionMatch = trimmed.match(/^\[(\w+)(?:\s+"([^"]*)")?\]$/);
-    if (sectionMatch) {
-      const sec = sectionMatch[1].toLowerCase();
-      const sub = sectionMatch[2] ?? '';
-      currentSection = sub ? `${sec}.${sub}` : sec;
+    const header = sectionNameFromHeader(trimmed);
+    if (header !== undefined) {
+      currentSection = header;
       result.push(line);
       continue;
     }
 
     if (currentSection === targetSection) {
-      const kvMatch = trimmed.match(/^(\w+)\s*=/);
+      const kvMatch = trimmed.match(KEY_EQUALS_RE);
       if (kvMatch && kvMatch[1] === targetKey) {
         continue;
       }
