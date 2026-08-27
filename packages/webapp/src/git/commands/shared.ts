@@ -133,8 +133,19 @@ export const GIT_FLAG_SPECS: Record<string, ArgSpec> = {
   },
 };
 
+/** Scalar value mri may store for a parsed CLI flag. */
+export type GitFlagScalar = string | number | boolean;
+
+/**
+ * Parsed git subcommand flags from `parseArgs` / mri. Values are typically
+ * {@link GitFlagScalar} or a repeated array; {@link flagString} narrows at read time.
+ */
+export interface GitParsedFlags {
+  readonly [flag: string]: unknown;
+}
+
 /** Read a value-flag as a string, treating empty (`--flag` with no value) as undefined. */
-export function flagString(flags: Record<string, unknown>, name: string): string | undefined {
+export function flagString(flags: GitParsedFlags, name: string): string | undefined {
   const value = flags[name];
   if (value === undefined) return undefined;
   const str = Array.isArray(value) ? String(value[value.length - 1]) : String(value);
