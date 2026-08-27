@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   mergeSidecarEntries,
   type SidecarDirtyState,
+  type SidecarEntries,
   type SidecarIndexJson,
   stripSidecarSelfEntry,
 } from '../../src/fs/sidecar-merge.js';
@@ -13,7 +14,7 @@ const dirty = (paths: string[] = [], prefixes: string[] = []): SidecarDirtyState
   prefixes: new Set(prefixes),
 });
 
-const doc = (entries: Record<string, unknown>, rest: Partial<SidecarIndexJson> = {}) => ({
+const doc = (entries: SidecarEntries, rest: Partial<SidecarIndexJson> = {}) => ({
   version: 1,
   maxSize: 100,
   ...rest,

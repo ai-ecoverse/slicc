@@ -22,6 +22,18 @@
  */
 
 /**
+ * Opaque ZenFS inode JSON (`Inode.toJSON()`). This module never inspects
+ * entries beyond identity; callers that need fields (e.g. `mode`) narrow
+ * at their own boundary.
+ */
+export type SidecarInodeJson = object;
+
+/**
+ * Path → opaque inode map from ZenFS `Index.toJSON().entries`.
+ */
+export type SidecarEntries = { [path: string]: SidecarInodeJson };
+
+/**
  * Parsed shape of the sidecar document — `Index.toJSON()` from
  * `@zenfs/core` (`{ version, maxSize, entries }`). Entry values are
  * opaque inode records; this module never inspects them beyond identity.
@@ -29,7 +41,7 @@
 export interface SidecarIndexJson {
   version?: number;
   maxSize?: number;
-  entries?: Record<string, unknown>;
+  entries?: SidecarEntries;
 }
 
 /**
@@ -87,7 +99,7 @@ export function mergeSidecarEntries(
   dirty: SidecarDirtyState
 ): SidecarIndexJson {
   const ownEntries = own.entries ?? {};
-  const entries: Record<string, unknown> = { ...(onDisk.entries ?? {}) };
+  const entries: SidecarEntries = { ...(onDisk.entries ?? {}) };
 
   if ('/' in ownEntries) entries['/'] = ownEntries['/'];
 
