@@ -2960,6 +2960,13 @@ describe('GitCommands', () => {
       expect(short).toEqual({ stdout: 'main\n', stderr: '', exitCode: 0 });
     });
 
+    it('honors a repeated boolean flag (mri stores it as an array)', async () => {
+      await git.execute(['init'], '/project');
+
+      const short = await git.execute(['symbolic-ref', '--short', '--short', 'HEAD'], '/project');
+      expect(short).toEqual({ stdout: 'main\n', stderr: '', exitCode: 0 });
+    });
+
     it('creates, updates, reads, and deletes a symbolic ref', async () => {
       await git.execute(['init'], '/project');
 
@@ -3038,6 +3045,9 @@ describe('GitCommands', () => {
       const quiet = await git.execute(['symbolic-ref', '--quiet', 'HEAD'], '/project');
       expect(quiet).toEqual({ stdout: '', stderr: '', exitCode: 1 });
       expect(await git.execute(['symbolic-ref', '-q', 'HEAD'], '/project')).toEqual(quiet);
+      expect(await git.execute(['symbolic-ref', '--quiet', '--quiet', 'HEAD'], '/project')).toEqual(
+        quiet
+      );
     });
 
     it('does not delete a direct ref', async () => {

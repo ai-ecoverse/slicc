@@ -1,7 +1,7 @@
 /** `git symbolic-ref` — read, update, and delete symbolic refs. */
 
 import * as git from 'isomorphic-git';
-import { parseArgs } from '../../shell/arg-parser.js';
+import { type ParsedArgs, parseArgs } from '../../shell/arg-parser.js';
 import { GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
@@ -13,6 +13,49 @@ type RefInspection =
   | { kind: 'symbolic'; target: string }
   | { kind: 'direct' }
   | { kind: 'missing' };
+
+/** Parsed flags for `git symbolic-ref` (see GIT_FLAG_SPECS['symbolic-ref']). */
+interface SymbolicRefFlags {
+  m?: string;
+  delete?: boolean;
+  d?: boolean;
+  quiet?: boolean;
+  q?: boolean;
+  short?: boolean;
+  recurse?: boolean;
+}
+
+/** Opaque parseArgs flag bag before unknown-flag validation. */
+type SymbolicRefParsedFlags = ParsedArgs['flags'];
+
+/**
+ * A boolean flag's effective value. `mri` stores a repeated boolean as an array
+ * (`--short --short` → `[true, true]`), so mirror the parser's last-wins
+ * semantics and collapse to the final element before narrowing — otherwise a
+ * repeated `--short`/`--quiet` would silently drop to `undefined`.
+ */
+function effectiveBool(value: unknown): boolean | undefined {
+  const effective = Array.isArray(value) ? value[value.length - 1] : value;
+  return typeof effective === 'boolean' ? effective : undefined;
+}
+
+function symbolicRefFlagsFromParsed(flags: SymbolicRefParsedFlags): SymbolicRefFlags {
+  const out: SymbolicRefFlags = {};
+  if (typeof flags.m === 'string') out.m = flags.m;
+  const deleteFlag = effectiveBool(flags.delete);
+  if (deleteFlag !== undefined) out.delete = deleteFlag;
+  const d = effectiveBool(flags.d);
+  if (d !== undefined) out.d = d;
+  const quiet = effectiveBool(flags.quiet);
+  if (quiet !== undefined) out.quiet = quiet;
+  const q = effectiveBool(flags.q);
+  if (q !== undefined) out.q = q;
+  const short = effectiveBool(flags.short);
+  if (short !== undefined) out.short = short;
+  const recurse = effectiveBool(flags.recurse);
+  if (recurse !== undefined) out.recurse = recurse;
+  return out;
+}
 
 function usage(): GitCommandResult {
   return { stdout: '', stderr: `${USAGE}\n`, exitCode: 129 };
@@ -89,7 +132,7 @@ function shortenRef(ref: string): string {
 }
 
 function validateFlags(
-  flags: Record<string, unknown>,
+  flags: SymbolicRefParsedFlags,
   deleting: boolean
 ): GitCommandResult | undefined {
   const knownFlags = new Set(['m', 'delete', 'd', 'quiet', 'q', 'short', 'recurse']);
@@ -162,7 +205,7 @@ async function printSymbolicRef(
   ctx: GitCommandContext,
   cwd: string,
   name: string,
-  flags: Record<string, unknown>
+  flags: SymbolicRefFlags
 ): Promise<GitCommandResult> {
   const target = await readSymbolicTarget(ctx, cwd, name, flags.recurse !== false);
   if (typeof target !== 'string') {
@@ -194,5 +237,5 @@ export async function symbolicRef(
   }
 
   if (positionals.length !== 1) return usage();
-  return printSymbolicRef(ctx, cwd, positionals[0], flags);
+  return printSymbolicRef(ctx, cwd, positionals[0], symbolicRefFlagsFromParsed(flags));
 }
