@@ -81,9 +81,11 @@ targets:
         CODE_SIGN_ENTITLEMENTS: SliccFollower/SliccFollower.entitlements
     dependencies:
       - package: GhosttyTerminal
+      - package: SliccWidgetKit
       - target: SliccTrayKit
       - target: SliccFileProvider
       - target: SliccShareExtension
+      - target: SliccWidgets
       - package: HuggingFace
       - package: WebRTC
       - package: SliccTraySession
@@ -160,6 +162,30 @@ targets:
         APPLICATION_EXTENSION_API_ONLY: YES
     dependencies:
       - sdk: UniformTypeIdentifiers.framework
+  SliccWidgets:
+    type: app-extension
+    supportedDestinations: [iOS]
+    sources:
+      - path: SliccWidgets
+    info:
+      path: SliccWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Sliccy
+        NSExtension:
+          # SwiftUI widgets have no principal class — `@main` on the
+          # WidgetBundle is the entry point.
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.sliccy.follower.widgets
+        PRODUCT_NAME: SliccWidgets
+        INFOPLIST_KEY_CFBundleDisplayName: Sliccy
+        CODE_SIGN_ENTITLEMENTS: SliccWidgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+    dependencies:
+      - package: SliccWidgetKit
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
   SliccFollowerTests:
     type: bundle.unit-test
     supportedDestinations: [iOS]
@@ -194,6 +220,7 @@ schemes:
         SliccFileProvider: all
         SliccFollower: all
         SliccShareExtension: all
+        SliccWidgets: all
         SliccFollowerTests: [test]
         SliccFollowerUITests: [test]
     test:
@@ -233,3 +260,5 @@ packages:
     path: ../swift-trayfollower
   SliccTrayVFS:
     path: ../swift-traykit
+  SliccWidgetKit:
+    path: ../swift-widgetkit

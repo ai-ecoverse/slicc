@@ -9,6 +9,7 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { copyElectronOverlayEntry } from './copy-overlay-entry.mjs';
 import { stageFileProviderAppex } from './stage-file-provider-appex.mjs';
+import { stageWidgetAppex } from './stage-widget-appex.mjs';
 import { buildIcns, buildIconAssetCatalog } from './build-app-icon.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
@@ -166,8 +167,31 @@ if (existsSync(resolve(__dirname, 'project.yml'))) {
     appIconIcns: resolve(resources, 'AppIcon.icns'),
   });
   console.log('Copied SliccFileProvider.appex into Contents/PlugIns/ (WebRTC + AppIcon embedded)');
+
+  // 3d. Widget extension (Notification Centre / desktop widgets)
+  console.log('Building SliccstartWidgets appex...');
+  execSync(
+    [
+      'xcodebuild build',
+      `-project "${fileProviderProject}"`,
+      '-scheme SliccstartWidgets',
+      '-configuration Release',
+      `-derivedDataPath "${resolve(__dirname, 'build/DerivedData')}"`,
+      'CODE_SIGNING_ALLOWED=NO',
+      'ONLY_ACTIVE_ARCH=NO',
+    ].join(' '),
+    { cwd: __dirname, stdio: 'inherit' }
+  );
+  stageWidgetAppex({
+    appexSource: resolve(
+      __dirname,
+      'build/DerivedData/Build/Products/Release/SliccstartWidgets.appex'
+    ),
+    plugInsDir: plugIns,
+  });
+  console.log('Copied SliccstartWidgets.appex into Contents/PlugIns/');
 } else {
-  console.warn('WARN: project.yml missing — skipping File Provider appex');
+  console.warn('WARN: project.yml missing — skipping File Provider and widget appexes');
 }
 
 // ---------------------------------------------------------------------------

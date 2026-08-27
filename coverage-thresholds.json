@@ -161,6 +161,11 @@
       "functions": 55,
       "regions": 58
     },
+    "swift-widgetkit": {
+      "lines": 94,
+      "functions": 90,
+      "regions": 91
+    },
     "ios-app": {
       "lines": 73,
       "functions": 72,

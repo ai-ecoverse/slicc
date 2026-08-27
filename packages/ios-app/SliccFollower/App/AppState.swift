@@ -1,6 +1,7 @@
 import Foundation
 import SliccTrayKit
 import SliccTraySession
+import SliccWidgetKit
 import SwiftUI
 import WebKit
 import WebRTC
@@ -254,6 +255,12 @@ class AppState: ObservableObject {
     /// it never publishes one. `@Observable`, so SwiftUI views track it
     /// directly; without iCloud provisioning it degrades to a local cache
     /// and simply stays empty.
+    /// Home-screen widget capture (#2500). Nothing else in the app knows the
+    /// widget exists; see `AppState+WidgetSnapshot.swift`.
+    let widgetPublisher: WidgetSnapshotPublisher
+    /// Per-unit recency, which the wire does not carry — the widget orders by
+    /// it, so the capture side has to observe change itself.
+    var widgetRecency = UnitRecencyLedger()
     let sessionStore: TraySessionSyncStore
     /// Join URLs that actually connected — from this device or any other on
     /// the same Apple ID. Publishing them is the only way a hand-pasted URL
@@ -268,6 +275,7 @@ class AppState: ObservableObject {
         fileProviderDomainLifecycle: FileProviderDomainLifecycle = FileProviderDomainLifecycle(),
         openGrantStore: OpenGrantStore = OpenGrantStore()
     ) {
+        widgetPublisher = WidgetSnapshotPublisher(store: WidgetHost.follower.store)
         sessionStore = AppState.makeSessionStore()
         recentJoinStore = AppState.makeRecentJoinStore()
         self.credentialStore = credentialStore
@@ -276,6 +284,15 @@ class AppState: ObservableObject {
         openGrants = openGrantStore.grants
         connectionSettler.onChange = { [weak self] health in
             self?.settledConnection = health
+            // The widget's connection field derives from the SETTLED health
+            // and nothing else, so this is the only moment it can change.
+            // Publishing from the raw `connectionState` / `isLeaderStalled`
+            // observers instead was both too early — the settle hold has not
+            // run yet, so the snapshot still says `connected` — and too late
+            // to ever be corrected, because the hold expiring lands here and
+            // nowhere else. A leader that stalled and stayed stalled kept a
+            // `connected` widget indefinitely.
+            self?.publishWidgetSnapshot()
         }
         Self.purgeLegacyJoinURLDefaults()
         fileProviderDomainLifecycle.registerIfCredentialsAvailable(credentialStore.load() != nil)
@@ -291,6 +308,11 @@ class AppState: ObservableObject {
             configureSudoApprovalFixture()
         #endif
         wireNotificationActions()
+        // Seed the widget on launch, not only on the first `scoops.list`. A
+        // reinstall, or a snapshot the OS evicted, would otherwise leave the
+        // home screen empty until the app next reached a leader — and the
+        // widget's honest "no instance" state is itself something to publish.
+        publishWidgetSnapshot()
     }
 
     // MARK: - Private Networking / Sync
@@ -477,6 +499,12 @@ class AppState: ObservableObject {
         // Same contract for fs waiters: fail them rather than let the deadline
         // run out on a channel that is already gone.
         fsClient.cancelAll()
+        // LAST, after every piece of session state is gone. Clearing it up by
+        // `clearTrayCredentials()` looked tidier and was wrong: the connection
+        // observers fire in between, publish a snapshot off the units and
+        // credentials that are still in memory, and leave a detached session
+        // named on the home screen.
+        clearWidgetSnapshot()
     }
 
     /// Drop all hosted CDP tabs (called on user-initiated disconnect).
@@ -875,6 +903,7 @@ class AppState: ObservableObject {
             logger.info("Scoops list received: \(scoops.count) scoops, active=\(activeScoopJid)")
             self.scoops = scoops
             self.leaderActiveScoopJid = activeScoopJid
+            publishWidgetSnapshot()
             // Select initially, or fall back when a preserved scoop disappeared.
             let preservedScoopExists =
                 selectedScoopJid.map { selected in
@@ -1254,6 +1283,7 @@ class AppState: ObservableObject {
                 speakIfDictated(buffer[idx], scoopJid: scoopJid, isVisible: isVisible)
                 inboundPrompt.settle(with: buffer[idx].content, scoopJid: scoopJid)
                 notifyTurnEndIfBackgrounded(scoopJid: scoopJid)
+                publishWidgetSnapshot()
             }
 
         case .toolUseStart(let messageId, let toolName, let toolInput, let toolCallId):

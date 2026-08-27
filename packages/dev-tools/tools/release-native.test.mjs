@@ -134,6 +134,16 @@ describe('matchesAnyPrefix', () => {
       )
     ).toBe(true);
     expect(matchesAnyPrefix('packages/ios-app/scripts/x.sh', IOS_PATH_PREFIXES)).toBe(true);
+    // Everything that compiles into the .app / .ipa gates its release, or the
+    // fix ships silently only when an unrelated file next changes.
+    for (const shared of [
+      'packages/swift-widgetkit/Sources/SliccWidgetKit/View/UnitAvatar.swift',
+      'packages/swift-traykit/Sources/SliccTrayVFS/x.swift',
+      'packages/swift-trayfollower/Sources/SliccTrayFollower/x.swift',
+    ]) {
+      expect(matchesAnyPrefix(shared, MACOS_PATH_PREFIXES)).toBe(true);
+      expect(matchesAnyPrefix(shared, IOS_PATH_PREFIXES)).toBe(true);
+    }
     expect(matchesAnyPrefix('packages/swift-traysession/Package.swift', IOS_PATH_PREFIXES)).toBe(
       true
     );

@@ -47,6 +47,14 @@ if [ -n "${APPLE_TEAM_ID:-}" ]; then
       --sign "$IDENTITY" --timestamp \
       "$APPEX"
   fi
+  # The widget appex embeds nothing, so it is a single signature. Its
+  # entitlements are sandbox + app group only — see SliccstartWidgets.entitlements.
+  if [ -d "$APP_DIR/Contents/PlugIns/SliccstartWidgets.appex" ]; then
+    codesign --force --options runtime \
+      --entitlements "$SCRIPT_DIR/SliccstartWidgets.entitlements" \
+      --sign "$IDENTITY" --timestamp \
+      "$APP_DIR/Contents/PlugIns/SliccstartWidgets.appex"
+  fi
 
   # iCloud key-value sync (cross-device tray sessions) needs an embedded
   # Developer ID provisioning profile that authorizes the ubiquity-kvstore
@@ -122,6 +130,10 @@ else
     fi
     codesign --force --entitlements "$SCRIPT_DIR/SliccFileProvider.entitlements" --sign - \
       "$APPEX"
+  fi
+  if [ -d "$APP_DIR/Contents/PlugIns/SliccstartWidgets.appex" ]; then
+    codesign --force --entitlements "$SCRIPT_DIR/SliccstartWidgets.entitlements" --sign - \
+      "$APP_DIR/Contents/PlugIns/SliccstartWidgets.appex"
   fi
   codesign --force --entitlements "$ENTITLEMENTS" --sign - "$APP_DIR"
 fi

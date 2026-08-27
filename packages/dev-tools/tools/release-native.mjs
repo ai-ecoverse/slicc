@@ -19,11 +19,21 @@ import { fileURLToPath } from 'node:url';
 // builds the only web artifact embedded into the macOS .app, and packages/assets/
 // because assemble-app.mjs consumes packages/assets/logos/macos-icon for the
 // .app bundle icon.
+//
+// Everything that COMPILES INTO Sliccstart.app has to be here, or a fix in it
+// ships silently only when an unrelated launcher file next changes — the same
+// trap the iOS list below already documents. That now includes
+// packages/swift-widgetkit/ (SliccWidgetKit, in both the host and the widget
+// appex), packages/swift-trayfollower/ (the widget observer's tray transport)
+// and packages/swift-traykit/ (SliccTrayVFS, in the File Provider appex).
 export const MACOS_PATH_PREFIXES = [
   'packages/swift-launcher/',
   'packages/swift-server/',
   'packages/swift-optel/',
   'packages/swift-traysession/',
+  'packages/swift-trayfollower/',
+  'packages/swift-traykit/',
+  'packages/swift-widgetkit/',
   'packages/spoon/',
   'packages/assets/',
 ];
@@ -35,6 +45,8 @@ export const IOS_PATH_PREFIXES = [
   'packages/ios-app/',
   'packages/swift-traysession/',
   'packages/swift-trayfollower/',
+  'packages/swift-traykit/',
+  'packages/swift-widgetkit/',
 ];
 
 // APPROVED relevant path set for the `slicc` Go CLI binaries. The CLI vendors

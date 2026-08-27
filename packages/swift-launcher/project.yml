@@ -35,14 +35,44 @@ targets:
       - package: WebRTC
       - sdk: FileProvider.framework
       - sdk: UniformTypeIdentifiers.framework
+  SliccstartWidgets:
+    type: app-extension
+    platform: macOS
+    sources:
+      - path: SliccstartWidgets
+    info:
+      path: SliccstartWidgets/Info.plist
+      properties:
+        CFBundleDisplayName: Sliccstart
+        NSExtension:
+          # SwiftUI widgets have no principal class — `@main` on the
+          # WidgetBundle is the entry point.
+          NSExtensionPointIdentifier: com.apple.widgetkit-extension
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.slicc.sliccstart.widgets
+        PRODUCT_NAME: SliccstartWidgets
+        CODE_SIGN_ENTITLEMENTS: SliccstartWidgets.entitlements
+        APPLICATION_EXTENSION_API_ONLY: YES
+        SKIP_INSTALL: NO
+    dependencies:
+      - package: SliccWidgetKit
+      - sdk: WidgetKit.framework
+      - sdk: SwiftUI.framework
 schemes:
   SliccFileProvider:
     build:
       targets:
         SliccFileProvider: all
+  SliccstartWidgets:
+    build:
+      targets:
+        SliccstartWidgets: all
 packages:
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
     exactVersion: 151.0.0
   SliccTrayVFS:
     path: ../swift-traykit
+  SliccWidgetKit:
+    path: ../swift-widgetkit

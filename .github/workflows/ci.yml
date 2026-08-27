@@ -41,6 +41,7 @@ jobs:
       swift-traysession: ${{ steps.filter.outputs.swift-traysession }}
       swift-trayfollower: ${{ steps.filter.outputs.swift-trayfollower }}
       swift-traykit: ${{ steps.filter.outputs.swift-traykit }}
+      swift-widgetkit: ${{ steps.filter.outputs.swift-widgetkit }}
       swift-launcher: ${{ steps.filter.outputs.swift-launcher }}
       ios-app: ${{ steps.filter.outputs.ios-app }}
       go-optel: ${{ steps.filter.outputs.go-optel }}
@@ -90,6 +91,8 @@ jobs:
               - 'packages/swift-trayfollower/**'
             swift-traykit:
               - 'packages/swift-traykit/**'
+            swift-widgetkit:
+              - 'packages/swift-widgetkit/**'
             swift-launcher:
               - 'packages/swift-launcher/**'
             ios-app:
@@ -1416,6 +1419,65 @@ jobs:
           # blocking PRs while existing findings get cleaned up incrementally.
           cd packages/swift-trayfollower && periphery scan --disable-update-check || true
 
+  swift-widgetkit:
+    needs: [changes, lint]
+    if: >-
+      needs.lint.result == 'success' &&
+      needs.changes.outputs.is-queue-leader == 'true' &&
+      (needs.changes.outputs.swift-widgetkit == 'true' ||
+      needs.changes.outputs.swift-config == 'true')
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+      # swift-coverage-check.sh reads its floors from coverage-thresholds.json
+      # via node, so pin Node (matches the other jobs).
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Install SwiftLint
+        run: brew install swiftlint
+      - name: Lint (SwiftLint)
+        run: cd packages/swift-widgetkit && swiftlint lint --reporter github-actions-logging
+      # swift-format ships with the toolchain; config is the root .swift-format.
+      - name: Lint (swift-format)
+        run: cd packages/swift-widgetkit && swift format lint --strict --parallel --recursive Sources Tests Package.swift
+      - name: Build
+        run: cd packages/swift-widgetkit && swift build -c release
+      # Both widget extensions build against this package; a macOS-only build
+      # would let an AppKit import or a macOS-only WidgetKit family through and
+      # only fail later in the (much slower) ios-app job.
+      - name: Build (iOS Simulator)
+        run: |
+          cd packages/swift-widgetkit
+          xcodebuild build -scheme SliccWidgetKit \
+            -destination 'generic/platform=iOS Simulator' \
+            -derivedDataPath .build/xcodebuild-ios
+      - name: Test (with coverage threshold gate)
+        run: |
+          ./packages/dev-tools/tools/swift-coverage-check.sh \
+            packages/swift-widgetkit SliccWidgetKitPackageTests
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-swift-widgetkit
+          path: packages/swift-widgetkit/.build/coverage/
+          if-no-files-found: ignore
+      - name: Upload test timings
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: test-timings-swift-widgetkit
+          path: packages/swift-widgetkit/.build/coverage/test-timings*
+          if-no-files-found: ignore
+      - name: Install Periphery
+        run: brew install peripheryapp/periphery/periphery
+      - name: Dead code detection (Periphery)
+        run: |
+          # Informational scan; surfaces unused Swift declarations without
+          # blocking PRs while existing findings get cleaned up incrementally.
+          cd packages/swift-widgetkit && periphery scan --disable-update-check || true
+
   swift-traykit:
     needs: [changes, lint]
     if: >-
@@ -1489,6 +1551,8 @@ jobs:
       needs.changes.outputs.swift-optel == 'true' ||
       needs.changes.outputs.swift-traysession == 'true' ||
       needs.changes.outputs.swift-traykit == 'true' ||
+      needs.changes.outputs.swift-trayfollower == 'true' ||
+      needs.changes.outputs.swift-widgetkit == 'true' ||
       needs.changes.outputs.swift-config == 'true' ||
       needs.changes.outputs.spoon == 'true' ||
       needs.changes.outputs.assets == 'true' ||
@@ -1594,6 +1658,7 @@ jobs:
       needs.changes.outputs.swift-traysession == 'true' ||
       needs.changes.outputs.swift-trayfollower == 'true' ||
       needs.changes.outputs.swift-traykit == 'true' ||
+      needs.changes.outputs.swift-widgetkit == 'true' ||
       needs.changes.outputs.swift-config == 'true')
     # The iOS 26 deployment target requires the Xcode 26 SDK.
     runs-on: macos-26
@@ -1674,6 +1739,7 @@ jobs:
       needs.changes.outputs.swift-traysession == 'true' ||
       needs.changes.outputs.swift-trayfollower == 'true' ||
       needs.changes.outputs.swift-traykit == 'true' ||
+      needs.changes.outputs.swift-widgetkit == 'true' ||
       needs.changes.outputs.swift-config == 'true')
     strategy:
       fail-fast: false
@@ -2003,6 +2069,7 @@ jobs:
         swift-traysession,
         swift-trayfollower,
         swift-traykit,
+        swift-widgetkit,
         ios-app,
         ios-app-tests,
         go-optel,

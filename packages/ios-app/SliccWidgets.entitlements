@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<!-- Same group as the app, the share extension and the File Provider: the
+	     app parks a widget snapshot there and the widget reads it. This is the
+	     ONLY entitlement the widget needs — it holds no keychain items, dials
+	     nothing, and must never be given a capability that would let it. -->
+	<key>com.apple.security.application-groups</key>
+	<array>
+		<string>group.ai.sliccy.follower</string>
+	</array>
+</dict>
+</plist>

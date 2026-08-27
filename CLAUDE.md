@@ -8,7 +8,7 @@ Purposes per package: [`docs/root-details.md`](docs/root-details.md). Per-packag
 
 - **Web / TS**: `packages/webapp/`, `packages/webcomponents/`, `packages/chrome-extension/`, `packages/cherry/`, `packages/spoon/`
 - **Node / cloud**: `packages/node-server/`, `packages/cloudflare-worker/`, `packages/cloud-core/`, `packages/shared-ts/`, `packages/vfs-root/`, `packages/dev-tools/`, `packages/assets/`
-- **Native (Swift / iOS / Go)**: `packages/swift-launcher/`, `packages/swift-server/`, `packages/swift-optel/`, `packages/swift-traysession/`, `packages/swift-trayfollower/`, `packages/swift-traykit/`, `packages/ios-app/`, `packages/slicc-cli/`, `packages/go-optel/`
+- **Native (Swift / iOS / Go)**: `packages/swift-launcher/`, `packages/swift-server/`, `packages/swift-optel/`, `packages/swift-traysession/`, `packages/swift-trayfollower/`, `packages/swift-traykit/`, `packages/swift-widgetkit/`, `packages/ios-app/`, `packages/slicc-cli/`, `packages/go-optel/`
 
 Other top-level: `docs/` (long-form docs + screenshots), `packages/*/tests/` (Vitest suites), `dist/` (generated; do not hand-edit).
 
@@ -25,7 +25,7 @@ npm run dev                              # Thin /cdp bridge + Chrome (UI from ho
 ```
 
 Runtime-specific guides:
-[webapp](packages/webapp/CLAUDE.md) · [cherry](packages/cherry/CLAUDE.md) · [chrome-extension](packages/chrome-extension/CLAUDE.md) · [cloudflare-worker](packages/cloudflare-worker/CLAUDE.md) · [node-server](packages/node-server/CLAUDE.md) · [cloud-core](packages/cloud-core/CLAUDE.md) · [shared-ts](packages/shared-ts/CLAUDE.md) · [webcomponents](packages/webcomponents/CLAUDE.md) · [spoon](packages/spoon/CLAUDE.md) · [vfs-root](packages/vfs-root/CLAUDE.md) · [go-optel](packages/go-optel/CLAUDE.md) · [swift-launcher](packages/swift-launcher/CLAUDE.md) · [swift-optel](packages/swift-optel/CLAUDE.md) · [swift-server](packages/swift-server/CLAUDE.md) · [swift-traysession](packages/swift-traysession/CLAUDE.md) · [swift-trayfollower](packages/swift-trayfollower/CLAUDE.md) · [swift-traykit](packages/swift-traykit/CLAUDE.md) · [ios-app](packages/ios-app/CLAUDE.md) · [slicc-cli](packages/slicc-cli/CLAUDE.md) · [dev-tools](packages/dev-tools/CLAUDE.md) · [docs](docs/CLAUDE.md)
+[webapp](packages/webapp/CLAUDE.md) · [cherry](packages/cherry/CLAUDE.md) · [chrome-extension](packages/chrome-extension/CLAUDE.md) · [cloudflare-worker](packages/cloudflare-worker/CLAUDE.md) · [node-server](packages/node-server/CLAUDE.md) · [cloud-core](packages/cloud-core/CLAUDE.md) · [shared-ts](packages/shared-ts/CLAUDE.md) · [webcomponents](packages/webcomponents/CLAUDE.md) · [spoon](packages/spoon/CLAUDE.md) · [vfs-root](packages/vfs-root/CLAUDE.md) · [go-optel](packages/go-optel/CLAUDE.md) · [swift-launcher](packages/swift-launcher/CLAUDE.md) · [swift-optel](packages/swift-optel/CLAUDE.md) · [swift-server](packages/swift-server/CLAUDE.md) · [swift-traysession](packages/swift-traysession/CLAUDE.md) · [swift-trayfollower](packages/swift-trayfollower/CLAUDE.md) · [swift-traykit](packages/swift-traykit/CLAUDE.md) · [swift-widgetkit](packages/swift-widgetkit/CLAUDE.md) · [ios-app](packages/ios-app/CLAUDE.md) · [slicc-cli](packages/slicc-cli/CLAUDE.md) · [dev-tools](packages/dev-tools/CLAUDE.md) · [docs](docs/CLAUDE.md)
 
 ## External Handoffs
 
