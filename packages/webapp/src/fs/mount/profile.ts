@@ -12,7 +12,7 @@
  * Profile name is accepted for symmetry but only `default` has meaning.
  */
 
-import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
+import { apiHeaders, resolveApiUrl } from '../../base/api-endpoint.js';
 
 /**
  * The minimal SecretStore surface this module needs. Any concrete store
