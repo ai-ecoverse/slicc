@@ -605,7 +605,7 @@ export class SessionTrayDurableObject {
     const joinRequest = request.method === 'POST' ? await this.readJoinRequest(request, url) : null;
     if (!this.matchesToken(token, tray.joinToken)) {
       if (joinRequest) {
-        return this.buildFollowerAttachResponse(
+        return await this.buildFollowerAttachResponse(
           this.getJoinRequestControllerId(joinRequest),
           {
             action: 'fail',
@@ -631,7 +631,7 @@ export class SessionTrayDurableObject {
       const joinUrl = tray.supersededByJoinUrl;
       const error = 'This session moved to a new tray after the leader reconnected';
       if (joinRequest) {
-        return this.buildFollowerAttachResponse(
+        return await this.buildFollowerAttachResponse(
           this.getJoinRequestControllerId(joinRequest),
           { action: 'fail', code: 'TRAY_SUPERSEDED', error, joinUrl },
           409
@@ -652,7 +652,7 @@ export class SessionTrayDurableObject {
     const expiration = await this.ensureTrayIsActive();
     if (expiration) {
       if (joinRequest) {
-        return this.buildFollowerAttachResponse(
+        return await this.buildFollowerAttachResponse(
           this.getJoinRequestControllerId(joinRequest),
           {
             action: 'fail',
@@ -675,7 +675,7 @@ export class SessionTrayDurableObject {
     const payload = {
       trayId: tray.trayId,
       capability: 'join',
-      leader: this.leaderSummary(),
+      leader: await this.leaderSummary(),
       participantCount: Object.keys(tray.controllers).length,
     };
 
@@ -745,7 +745,7 @@ export class SessionTrayDurableObject {
 
       await this.persistTray();
 
-      return this.buildFollowerAttachResponse(controllerId, result, 200, iceServers);
+      return await this.buildFollowerAttachResponse(controllerId, result, 200, iceServers);
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
       return jsonResponse(
@@ -867,7 +867,7 @@ export class SessionTrayDurableObject {
       controllerId,
       role,
       leaderKey,
-      leader: this.leaderSummary(),
+      leader: await this.leaderSummary(),
       websocket:
         role === 'leader' && leaderKey
           ? {
@@ -1339,11 +1339,43 @@ export class SessionTrayDurableObject {
     return this.now() - lastSeenMs < LEADER_STALE_MS;
   }
 
-  private leaderSummary(): TrayLeaderSummary | null {
+  /**
+   * Detects a stale leader (socket exists but no messages in >LEADER_STALE_MS)
+   * and transitions it to the disconnected state, starting the reclaim TTL.
+   * This ensures followers don't receive LEADER_NOT_CONNECTED indefinitely.
+   */
+  private async evictStaleLeaderIfNeeded(): Promise<void> {
+    if (!this.tray?.leader?.connected || !this.leaderSocket) {
+      return;
+    }
+    const lastSeenMs = Date.parse(this.tray.leader.lastSeenAt);
+    if (this.now() - lastSeenMs < LEADER_STALE_MS) {
+      return;
+    }
+    // Leader is stale — close the ghost socket and mark disconnected so the
+    // reclaim TTL starts. The rightful leader can still reconnect via
+    // last-key-holder-wins.
+    const staleSocket = this.leaderSocket;
+    this.leaderSocket = null;
+    this.tray.leader.connected = false;
+    this.tray.leader.disconnectedAt = this.isoNow();
+    failAllPendingPreviews(this.pendingPreviews);
+    await this.persistTray();
+    try {
+      staleSocket.close(1000, 'leader stale — no messages in >2 min');
+    } catch {
+      // Best-effort — the socket may already be dead.
+    }
+  }
+
+  private async leaderSummary(): Promise<TrayLeaderSummary | null> {
     const leader = this.requireTray().leader;
     if (!leader) {
       return null;
     }
+
+    // Evict stale leaders before computing the summary so the reclaim TTL starts.
+    await this.evictStaleLeaderIfNeeded();
 
     return {
       controllerId: leader.controllerId,
@@ -1717,7 +1749,7 @@ export class SessionTrayDurableObject {
       trayId: tray.trayId,
       controllerId: bootstrap.controllerId,
       role: 'follower',
-      leader: this.leaderSummary(),
+      leader: await this.leaderSummary(),
       participantCount: Object.keys(tray.controllers).length,
       bootstrap: this.buildBootstrapStatus(bootstrap),
       events,
@@ -1767,18 +1799,18 @@ export class SessionTrayDurableObject {
     }
   }
 
-  private buildFollowerAttachResponse(
+  private async buildFollowerAttachResponse(
     controllerId: string,
     result: FollowerAttachResult,
     status = 200,
     iceServers?: TurnIceServer[]
-  ): Response {
+  ): Promise<Response> {
     const tray = this.requireTray();
     const payload: FollowerAttachResponse = {
       trayId: tray.trayId,
       controllerId,
       role: 'follower',
-      leader: this.leaderSummary(),
+      leader: await this.leaderSummary(),
       participantCount: Object.keys(tray.controllers).length,
       result,
     };
