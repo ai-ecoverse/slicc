@@ -5,9 +5,19 @@
  * accumulates messages in a ring buffer, and filters/returns them on demand.
  */
 
-import type { CDPTransport } from '../../../../cdp/transport.js';
 import { requireTab } from '../state.js';
-import type { ConsoleMessage, PlaywrightHandler, PlaywrightState } from '../types.js';
+import type {
+  ConsoleMessage,
+  PlaywrightHandler,
+  PlaywrightHandlerCtx,
+  PlaywrightState,
+} from '../types.js';
+
+// Derived from the handler context rather than imported from `cdp/` so this
+// module stays inside the shell layer (see layer-stack import direction).
+type CDPTransport = ReturnType<PlaywrightHandlerCtx['browser']['getTransport']>;
+/** The payload shape the transport hands a CDP event listener. */
+type CDPEventParams = Parameters<Parameters<CDPTransport['on']>[1]>[0];
 
 const LEVELS = ['debug', 'log', 'info', 'warning', 'error'] as const;
 const RING_BUFFER_SIZE = 1000;
@@ -40,7 +50,7 @@ function ensureCapturing(
 
   state.consoleMessages.set(targetId, []);
 
-  const handler = (params: Record<string, unknown>) => {
+  const handler = (params: CDPEventParams) => {
     if ((params['sessionId'] as string | undefined) !== sessionId) return;
     const type = (params['type'] as string | undefined) ?? 'log';
     const level = CDP_TYPE_NORMALIZATION[type] ?? type;

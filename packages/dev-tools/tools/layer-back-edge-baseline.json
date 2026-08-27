@@ -8,7 +8,6 @@
   "packages/webapp/src/shell/supplemental-commands/host-command.ts": 7,
   "packages/webapp/src/shell/supplemental-commands/local-llm-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/picker-popup.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/playwright/handlers/console.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/interaction.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/network-requests.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/routing.ts": 2,
