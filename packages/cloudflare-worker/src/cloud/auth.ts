@@ -211,12 +211,12 @@ async function resolveIdentityFromPayload(
 
 function assertEmailAllowed(email: string, env: ValidateBearerEnv): void {
   const allowedDomains = (env.ALLOWED_EMAIL_DOMAIN || 'adobe.com').split(',').map((d) => d.trim());
-  if (allowedDomains.includes('*')) {
-    return;
-  }
-  const emailDomain = email.split('@')[1]?.toLowerCase();
-  if (!emailDomain || !allowedDomains.includes(emailDomain)) {
-    throw new AuthError('NOT_ALLOWED', `email domain not allowed: ${email}`);
+  // Wildcard bypasses only the domain check; the email blocklist below still runs.
+  if (!allowedDomains.includes('*')) {
+    const emailDomain = email.split('@')[1]?.toLowerCase();
+    if (!emailDomain || !allowedDomains.includes(emailDomain)) {
+      throw new AuthError('NOT_ALLOWED', `email domain not allowed: ${email}`);
+    }
   }
 
   const blocked = (env.BLOCKED_EMAILS || '')

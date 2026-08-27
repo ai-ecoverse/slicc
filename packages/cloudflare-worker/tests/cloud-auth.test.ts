@@ -116,6 +116,23 @@ describe('validateBearer', () => {
     ).rejects.toMatchObject({ code: 'NOT_ALLOWED' });
   });
 
+  it('rejects a denylisted email even when domain is wildcarded', async () => {
+    const token = await makeToken({
+      iss: 'https://ims-na1.adobelogin.com',
+      sub: 'usr-3b',
+      client_id: 'test-client',
+      type: 'access_token',
+      email: 'banned@example.com',
+    });
+    await expect(
+      validateBearer(token, {
+        ...ENV,
+        ALLOWED_EMAIL_DOMAIN: '*',
+        BLOCKED_EMAILS: 'banned@example.com',
+      })
+    ).rejects.toMatchObject({ code: 'NOT_ALLOWED' });
+  });
+
   it('rejects a token without ownerOrg when REQUIRE_OWNER_ORG=true', async () => {
     const token = await makeToken({
       iss: 'https://ims-na1.adobelogin.com',
