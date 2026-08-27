@@ -24,8 +24,10 @@ describe('mountInternal', () => {
     indexedDB.deleteDatabase('test-internal-mount');
     vfs = await VirtualFS.create({ dbName: 'test-internal-mount', wipe: true });
   });
-  afterEach(() => {
-    vfs.dispose?.();
+  afterEach(async () => {
+    // Awaited so the IDB handle is closed before the next test's `wipe: true`
+    // create — a floating dispose races the delete and flakes the suite.
+    await vfs.dispose?.();
   });
 
   it('listMounts() excludes internal mounts', async () => {
