@@ -371,6 +371,49 @@ All paths in VirtualFS must follow these rules:
 
 **Normalization**: Use `normalizePath(path)` from `packages/webapp/src/fs/path-utils.ts` before any VFS operation.
 
+## Stat Identity: A File Is Not Its Path
+
+**Files**: `packages/webapp/src/fs/types.ts` (`Stats.ino`),
+`packages/webapp/src/fs/virtual-fs.ts`, `packages/webapp/src/shell/vfs-adapter.ts`
+(`toIdentity`).
+
+`Stats` carries an optional **`ino`**, and `VfsAdapter` forwards it to just-bash
+as `FsStat.identity`. It is not decoration: several just-bash commands run as
+transactions — stage every output, re-identify the input and the outputs, then
+commit — and `identitiesMatch()` **fails closed** for an existing entry with no
+identity:
+
+```js
+e.existence === 'existing'
+  ? e.stableIdentity !== undefined && e.stableIdentity === t.stableIdentity
+  : ...
+```
+
+`undefined !== undefined` is `false`, so a missing identity does not degrade to a
+path comparison — it reads as "this file changed under me". While the adapter
+returned no `dev`/`ino`/`identity`, `split FILE PREFIX` therefore threw
+`input identity changed during split` against a file nothing had touched, rolled
+its staged chunks back, and printed only the generic `split: failed to write
+output`. Every size, every path, every time; the stdin form (`split -b N -
+PREFIX`) worked, because there is no input file to re-identify.
+
+Consequences for anyone touching this layer:
+
+- **Never drop `ino` when reshaping a `Stats`.** All four VFS surfaces
+  (`stat`, `lstat`, `statSync`, `lstatSync`) carry it, and `RestrictedFS` passes
+  `Stats` through untouched — a new wrapper that rebuilds the object by hand is
+  how this silently comes back.
+- **Inode 0 is deliberately unnamed.** ZenFS pins `/` to 0, and a sidecar
+  poisoned the way #2146 describes hands out 0 for many entries until the
+  pre-boot repair renumbers them. A collided identity is worse than none.
+- **Mount-backed subtrees have no identity.** hostfs and the remote backends
+  expose `{kind, size, mtime}` and nothing inode-shaped, so `split` on a path
+  under a mount still fails this way. Synthesizing a token from the path would
+  claim a guarantee the backend cannot keep; the fix belongs in the backends.
+- `identity` rather than `dev` + `ino`: just-bash accepts the inode pair only
+  when both halves are present, and one adapter can span backends whose inode
+  spaces are unrelated — there is no honest single `dev`.
+
 ## OPFS Writes: Serialize Per Mount, Across Contexts
 
 **Files**: `packages/webapp/src/fs/virtual-fs.ts` (`withWriteLock`),

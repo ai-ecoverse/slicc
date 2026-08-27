@@ -23,6 +23,19 @@ export interface Stats {
   isSymlink?: boolean;
   /** Raw symlink target path (only set when isSymlink is true). */
   symlinkTarget?: string;
+  /**
+   * Backing inode number, when the backend can name one. ZenFS allocates a
+   * unique `ino` per entry that survives rewrites, so it is the one field
+   * that distinguishes "the same file" from "the same path" — which is what
+   * TOCTOU-hardened commands need (`split` refuses to commit unless the
+   * input it read is still the file it identified; without an inode it
+   * cannot tell and fails closed — see `shell/vfs-adapter.ts#toIdentity`).
+   *
+   * Absent for mount-backed subtrees (hostfs and the remote backends expose
+   * only `{kind, size, mtime}`) and for the synthetic `/dev` entries, so
+   * consumers must treat it as best-effort, never as a required key.
+   */
+  ino?: number;
 }
 
 /** A single entry returned by readDir. */
@@ -97,6 +110,8 @@ export interface FsStatsLike {
   mode: number;
   mtimeMs: number;
   ctimeMs: number;
+  /** Inode number. Optional: LightningFS' legacy shape omits it, ZenFS sets it. */
+  ino?: number;
   isFile(): boolean;
   isDirectory(): boolean;
   isSymbolicLink(): boolean;
