@@ -40,7 +40,9 @@ Route inventory: `POST /tray`, `GET /handoff`, `GET /install-cli`,
 `GET|HEAD /status`, `GET /rel/:name`, `GET|POST /join/:token`,
 `GET|POST /controller/:token`, `POST /webhook/:token/:webhookId`,
 `POST /api/tray/:trayId/preview`, `POST /api/tray/:trayId/preview/stop`,
-`GET /api/tray/:trayId/previews`, `GET <token>.sliccy.now/*`,
+`GET /api/tray/:trayId/previews`, `POST /api/tray/:trayId/biscotto`,
+`POST /api/tray/:trayId/biscotto/stop`, `GET /api/tray/:trayId/biscotti`,
+`GET <token>.sliccy.now/*`,
 `GET __slicc/preview-bridge.js`, `WS __slicc/bridge`, `POST __slicc/emit`,
 `GET /auth/callback`, `GET /auth/mcp-callback`, `GET /api/flags`. Per-route semantics:
 [docs/cloudflare-worker-details.md § Public Routes](../../docs/cloudflare-worker-details.md#public-routes).
@@ -72,6 +74,25 @@ keyed by `connId`, replays `bridge.connected` on leader (re)connect, hibernates 
 `setWebSocketAutoResponse`. Ghost-leader analysis + full protocol:
 [docs/cloudflare-worker-details.md § Signaling](../../docs/cloudflare-worker-details.md#signaling),
 [deploying-tray-worker skill](../../.agents/skills/deploying-tray-worker/SKILL.md).
+
+### Biscotti (guest seats)
+
+`TrayRecord.biscotti` holds revocable guest seats. `resolveJoinCapability`
+(`src/shared.ts`) is the **single default-deny point** for `/join/:token`: it
+returns `{ trust: 'full' }` for the tray join token, `{ trust: 'biscotto' }` for
+a live seat, and `null` for anything else (including revoked/expired seats,
+which are compared before being filtered so their existence does not leak by
+timing). Mint/revoke/list live in `src/session-tray-biscotto.ts` and are gated on
+the **controller** token — a seat is never an issuing authority.
+
+**Trust travels on the controller socket, never on the peer's `hello`.** The DO
+stamps `trust` + `biscotto` onto `follower.join_requested`, which only the leader
+can receive. `controllerId` is client-supplied, so trust is re-derived from the
+presented token on every request and a mismatch against the stored
+`ControllerRecord.biscottoId` is a 409 `JOIN_CAPABILITY_MISMATCH` — in both
+directions, so a guest cannot inherit a full follower's id and a full follower
+cannot be shadowed by a guessed one. Enforcement of what a seat may _send_ is
+leader-side (`packages/webapp/src/scoops/tray-leader/biscotto-gate.ts`).
 
 ### TURN Credentials
 

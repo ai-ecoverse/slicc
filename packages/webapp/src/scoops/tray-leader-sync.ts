@@ -4,6 +4,8 @@
  */
 
 import type {
+  FollowerBiscottoIdentity,
+  FollowerTrust,
   LeaderToWorkerControlMessage,
   TranscriptExportSelector,
   TraySudoKind,
@@ -338,7 +340,12 @@ export class LeaderSyncManager {
   addFollower(
     bootstrapId: string,
     channel: TrayDataChannelLike,
-    meta?: { runtime?: string; connectedAt?: string }
+    meta?: {
+      runtime?: string;
+      connectedAt?: string;
+      trust?: FollowerTrust;
+      biscotto?: FollowerBiscottoIdentity;
+    }
   ): void {
     const { sync } = this.followerRegistry.addFollower(bootstrapId, channel, meta);
 

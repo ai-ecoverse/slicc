@@ -1,5 +1,7 @@
 import type {
+  FollowerBiscottoIdentity,
   FollowerJoinRequestedMessage,
+  FollowerTrust,
   LeaderToWorkerControlMessage,
   TrayBootstrapEvent,
   TrayBootstrapStatus,
@@ -91,6 +93,19 @@ export interface LeaderTrayPeerState {
   state: 'connecting' | 'connected';
   connectedAt: string | null;
   runtime?: string;
+  /**
+   * Trust as the tray hub resolved it, delivered on the leader's controller
+   * WebSocket — a channel the peer cannot write to. This is the ONLY
+   * trustworthy source: the peer's own `hello`/`capabilities` are
+   * self-reported and are never read as trust.
+   *
+   * An older hub omits `trust` on `follower.join_requested`; that is read as
+   * `full`, which is exactly the pre-biscotto behaviour (a hub that cannot
+   * mint seats cannot have admitted one).
+   */
+  trust: FollowerTrust;
+  /** Guest seat identity when `trust === 'biscotto'`. */
+  biscotto?: FollowerBiscottoIdentity;
 }
 
 export interface LeaderTrayPeerManagerOptions {
@@ -238,6 +253,8 @@ export class LeaderTrayPeerManager {
       state: 'connecting',
       connectedAt: null,
       runtime: message.runtime,
+      trust: message.trust ?? 'full',
+      biscotto: message.biscotto,
     };
     const channel = bindSctpLimit(peer.createDataChannel(this.dataChannelLabel), peer);
     this.peers.set(message.bootstrapId, { state, peer, channel });

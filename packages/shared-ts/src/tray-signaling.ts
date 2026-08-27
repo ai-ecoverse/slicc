@@ -88,6 +88,22 @@ export interface TurnIceServer {
 // Worker → leader control messages
 // ---------------------------------------------------------------------------
 
+/**
+ * How far a joining peer is trusted, as resolved by the tray hub from the
+ * capability token it presented.
+ *
+ *  - `full` — presented the tray's join token. Gets the entire
+ *    `FollowerToLeaderMessage` surface, as every follower always has.
+ *  - `biscotto` — presented a guest seat token. The leader allowlists a small
+ *    subset (see `follower-dispatch.ts`) and gates what survives it.
+ *
+ * This value is authoritative ONLY when it arrives on the leader's controller
+ * WebSocket (`follower.join_requested`), which the peer cannot write to. The
+ * same field on a follower-facing response is UX, not a control: a peer's own
+ * `hello`/`capabilities` are self-reported and must never be read as trust.
+ */
+export type FollowerTrust = 'full' | 'biscotto';
+
 export interface FollowerJoinRequestedMessage {
   type: 'follower.join_requested';
   trayId: string;
@@ -97,6 +113,37 @@ export interface FollowerJoinRequestedMessage {
   attempt: number;
   expiresAt: string;
   iceServers?: TurnIceServer[];
+  /**
+   * Absent from pre-biscotto hubs. A leader MUST read `undefined` as `full` to
+   * stay compatible with an older worker — but see the inverse invariant: a
+   * hub that knows about biscotti always stamps this, so an older LEADER
+   * talking to a newer hub would ignore it and over-trust a guest. That pairing
+   * is prevented by gating seat minting on the leader's own build (the
+   * `biscotto` command lives in the leader), not by the wire.
+   */
+  trust?: FollowerTrust;
+  /** Identifies the guest seat when `trust === 'biscotto'`. */
+  biscotto?: FollowerBiscottoIdentity;
+}
+
+/** The guest seat behind a `trust: 'biscotto'` join, as the hub knows it. */
+export interface FollowerBiscottoIdentity {
+  /** `BiscottoRecord.id` — stable handle for revocation and attribution. */
+  id: string;
+  /** Human label the owner gave this guest; rendered as message attribution. */
+  label: string;
+  /** Approver for each gate, resolved by the hub from the stored seat. */
+  gates: FollowerBiscottoGates;
+}
+
+export interface FollowerBiscottoGates {
+  message: FollowerBiscottoGate;
+  tool: FollowerBiscottoGate;
+}
+
+export interface FollowerBiscottoGate {
+  approver: 'off' | 'user' | 'cone' | 'scoop';
+  scoop?: string;
 }
 
 export interface BootstrapAnswerMessage {
@@ -421,6 +468,12 @@ export interface FollowerAttachResponse {
   trayId: string;
   controllerId: string;
   role: 'follower';
+  /**
+   * What the hub resolved the presented capability to. UX only — it lets a
+   * guest page render itself honestly (review-pending composer, no panels)
+   * without a round-trip. Enforcement is entirely leader-side.
+   */
+  trust?: FollowerTrust;
   leader: TrayLeaderSummary | null;
   participantCount: number;
   result: FollowerAttachResult;
@@ -431,6 +484,12 @@ export interface FollowerBootstrapResponse {
   trayId: string;
   controllerId: string;
   role: 'follower';
+  /**
+   * What the hub resolved the presented capability to. UX only — it lets a
+   * guest page render itself honestly (review-pending composer, no panels)
+   * without a round-trip. Enforcement is entirely leader-side.
+   */
+  trust?: FollowerTrust;
   leader: TrayLeaderSummary | null;
   participantCount: number;
   bootstrap: TrayBootstrapStatus;

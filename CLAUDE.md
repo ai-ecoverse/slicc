@@ -37,6 +37,7 @@ Runtime-specific guides:
 - **Scoops**: isolated sub-agents; sandboxed filesystems (`/scoops/{name}/` + `/shared/`). Tools: `scoop_scoop`, `feed_scoop`, `drop_scoop`.
 - **Licks**: external events — webhooks, cron, workflow completions.
 - **Floats**: runtime envs — CLI, extension, Electron, cloud (hosted-leader), Cherry (embedded follower garnish; `?cherry=1` in a host page's iframe).
+- **Biscotto** (pl. **biscotti**): a revocable guest seat on a cone. Holder gets a private `*.sliccy.now` URL showing the live transcript; its messages are untrusted by default and pass a message/tool gate. Restricted at the wire by `scoops/tray-leader/biscotto-gate.ts`.
 
 Use ice cream terms in review comments and docs when they match the domain (e.g., `feed_scoop` not `delegate_to_scoop`).
 
