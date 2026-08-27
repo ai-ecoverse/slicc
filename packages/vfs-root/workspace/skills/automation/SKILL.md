@@ -19,9 +19,9 @@ SLICC's automation primitives turn external or VFS-internal events into **licks*
 | `crontask` | Cron schedule                | Recurring background work         |
 | `fswatch`  | VFS create / modify / delete | React to authored content changes |
 
-All three take `--scoop <target>`, which names **a unit, not a species**: a scoop name, a cone name, or a folder (`cone-<slug>`, `<name>-scoop`). Omit it and events come back to the cone you are in. A target naming no live unit is dropped, never re-routed.
+All three take `--scoop <target>`, which names **a unit, not a species**: a scoop name, a cone name, or a folder (`cone-<slug>`, `<name>-scoop`). Omit it and events come back to whichever unit you are — the cone you are in, or the scoop itself if you are one. A target naming no live unit is dropped, never re-routed.
 
-**If you want your own events, omit `--scoop` — never hardcode `cone`.** All three commands behave identically here, so omitting the flag is always available. The literal folder `cone` is not a synonym for "me": it belongs to whichever cone currently holds it, and it is handed to the next new cone after the original one is dropped. A skill that hardcodes it delivers its callbacks into another cone's chat in exactly the multi-cone workspaces where the target matters.
+**If you want your own events, omit `--scoop` — never hardcode `cone`.** All three commands behave identically here, so omitting the flag is always available, and it works the same whether you are a cone or a scoop. The literal folder `cone` is not a synonym for "me": it belongs to whichever cone currently holds it, and it is handed to the next new cone after the original one is dropped. A skill that hardcodes it delivers its callbacks into another cone's chat in exactly the multi-cone workspaces where the target matters.
 
 ## `webhook`
 

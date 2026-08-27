@@ -23,6 +23,31 @@ describe('buildScoopShellEnv', () => {
     );
   });
 
+  it('a scoop carries SLICC_LICK_TARGET too, so its own licks come back to it (Codex P1 on #2525)', () => {
+    // `ownLickTargetFor` answers `scoop.folder` for a child and `tools.ts`
+    // already stamps it on background-`bash` licks. Dropping it here made the
+    // env-driven producers (`fswatch`/`crontask`/`webhook`) in the SAME shell
+    // fall through to `rootsOf(scoops)[0]` and deliver a scoop's callbacks
+    // into an unrelated cone's chat.
+    const env = buildScoopShellEnv(false, 'helper-scoop', {}, 'helper-scoop');
+    expect(env[LICK_TARGET_ENV]).toBe('helper-scoop');
+    // The isolation pins still hold alongside it.
+    expect(env.HOME).toBe('/scoops/helper-scoop/home');
+    expect(env.USER).toBe('helper-scoop');
+  });
+
+  it('a secret cannot spoof a scoop lick target either', () => {
+    expect(
+      buildScoopShellEnv(false, 'helper-scoop', { [LICK_TARGET_ENV]: 'cone' }, 'helper-scoop')[
+        LICK_TARGET_ENV
+      ]
+    ).toBe('helper-scoop');
+  });
+
+  it('a scoop with no target stays untargeted rather than inventing one', () => {
+    expect(buildScoopShellEnv(false, 'research', {})[LICK_TARGET_ENV]).toBeUndefined();
+  });
+
   it('the cone pins nothing — only secrets pass through', () => {
     const env = buildScoopShellEnv(true, 'main', { API_KEY: 'masked' });
     expect(env).toEqual({ API_KEY: 'masked' });
