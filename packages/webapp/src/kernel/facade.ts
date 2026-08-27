@@ -1171,6 +1171,25 @@ export class Bridge implements KernelFacade {
     request: import('../sudo/types.js').SudoRequest
   ): Promise<void> {
     let decision: import('../sudo/types.js').SudoDecision = { decision: 'deny' };
+    // A request that names a non-human approver (a biscotto seat gated on the
+    // cone, or on a scoop the cone delegated to) never reaches the human
+    // broker — routing it there would silently ignore the configured approver
+    // and pester the owner instead.
+    const directive = request.approver;
+    if (directive && directive.kind !== 'user') {
+      const orchestrator = this.orchestrator;
+      if (!orchestrator) {
+        console.warn('[kernel-bridge] directed approval before orchestrator init — denying');
+      } else {
+        try {
+          decision = await orchestrator.enqueueDirectedApproval(directive, request);
+        } catch (err) {
+          console.warn('[kernel-bridge] directed approval threw — denying', err);
+        }
+      }
+      this.emit({ type: 'sudo-approval', requestId, decision });
+      return;
+    }
     const manager = this.orchestrator?.getSudoManager() ?? null;
     if (!manager) {
       console.warn('[kernel-bridge] request-sudo-approval before SudoManager init — denying');

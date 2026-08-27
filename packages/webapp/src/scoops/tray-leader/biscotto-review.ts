@@ -34,8 +34,8 @@
  */
 
 import type { MessageAttachment } from '../../core/attachments.js';
-import type { SudoDecision } from '../../sudo/types.js';
-import type { FollowerBiscottoIdentity } from '../tray-sync-protocol.js';
+import type { SudoApproverDirective, SudoDecision } from '../../sudo/types.js';
+import type { FollowerBiscottoGate, FollowerBiscottoIdentity } from '../tray-sync-protocol.js';
 import type { LeaderSyncContext } from './context.js';
 
 /**
@@ -202,12 +202,27 @@ export class BiscottoReview {
     // the human would be answering for a participant who is no longer there.
     if (!this.context.followers.followers.has(bootstrapId)) return 'unanswered';
 
+    const directive = this.approverDirective(message.biscotto.gates.message);
+    if (directive === null) {
+      // The seat names an approver this leader cannot route to. Denying is the
+      // only safe reading — the alternative is quietly downgrading to a
+      // different approver than the owner configured.
+      this.context.log.warn('Unroutable approver on a guest seat — denying', {
+        bootstrapId,
+        approver: message.biscotto.gates.message.approver,
+      });
+      return 'unanswered';
+    }
+
     let decision: SudoDecision;
     try {
       decision = await requestSudoApproval({
         kind: 'guest-message',
         detail: describeGuestSubmission(message),
         followerLabel: describeSeat(message.biscotto),
+        // From the seat record the hub stamped — never from anything the guest
+        // sent. A guest that could name its own approver would name itself.
+        ...(directive ? { approver: directive } : {}),
       });
     } catch (err) {
       this.context.log.warn('Guest message approval threw — denying', {
@@ -225,6 +240,31 @@ export class BiscottoReview {
       return decision.reason ? 'unanswered' : 'rejected';
     }
     return 'approved';
+  }
+
+  /**
+   * Translate a seat's configured gate into a routing directive.
+   *
+   * `undefined` means "the owner's own broker" (the `user` tier, and the
+   * historical path). `null` means the tier cannot be routed from here and the
+   * caller must DENY — never silently fall back to a different approver than
+   * the owner chose, which is exactly what routing `cone` to the human broker
+   * was doing.
+   */
+  private approverDirective(gate: FollowerBiscottoGate): SudoApproverDirective | undefined | null {
+    const unitJid = this.context.options.getScoopJid();
+    switch (gate.approver) {
+      case 'user':
+        return undefined;
+      case 'cone':
+        return { kind: 'cone', unitJid };
+      case 'scoop':
+        return gate.scoop ? { kind: 'scoop', scoopName: gate.scoop, unitJid } : null;
+      default:
+        // `off` never reaches a review; anything else is a seat written by a
+        // newer build than this leader speaks.
+        return null;
+    }
   }
 
   /**

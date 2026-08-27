@@ -37,6 +37,7 @@ export type {
   CherryHostEventMessage,
   CherrySliccEventMessage,
   CookieTeleportCookie,
+  FollowerBiscottoGate,
   FollowerBiscottoIdentity,
   FollowerToLeaderMessage,
   LeaderToFollowerMessage,

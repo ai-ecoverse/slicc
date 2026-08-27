@@ -27,6 +27,7 @@ import {
 import type {
   ConeApprovalRouter,
   PendingSudoRequest,
+  SudoApproverDirective,
   SudoBroker,
   SudoDecision,
   SudoRequest,
@@ -998,6 +999,52 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   async enqueueSudoRequest(scoopJid: string, request: SudoRequest): Promise<SudoDecision> {
     return this.approvalRouter.enqueueSudoRequest(scoopJid, request);
+  }
+
+  /**
+   * Settle a request through a NON-human approver named by the caller — the
+   * cone that owns a thread, or a scoop the cone delegated to.
+   *
+   * Used by the biscotto message gate: the seat record says who reviews a
+   * guest's messages, and that is not derivable from the requester the way a
+   * scoop's parent is. Fails CLOSED on every unresolvable case (unknown unit,
+   * unknown scoop name, no orchestrator state) — an approver that cannot be
+   * found must never degrade into "nobody has to approve".
+   *
+   * `ownerRootOrDefault` (not `parentOrDefaultRoot`) resolves the cone tier so
+   * a card raised on cone B renders in B rather than the oldest cone.
+   */
+  async enqueueDirectedApproval(
+    directive: SudoApproverDirective,
+    request: SudoRequest
+  ): Promise<SudoDecision> {
+    if (directive.kind === 'user') return { decision: 'deny' };
+    const requesterJid = directive.unitJid;
+    if (!this.scoops.has(requesterJid)) {
+      log.warn('Directed approval for an unknown unit — failing closed', { requesterJid });
+      return { decision: 'deny' };
+    }
+    let approver: RegisteredScoop | undefined;
+    if (directive.kind === 'cone') {
+      approver = this.ownerRootOrDefault(requesterJid);
+    } else {
+      approver = [...this.scoops.values()].find(
+        (scoop) => scoop.name === directive.scoopName || scoop.folder === directive.scoopName
+      );
+      if (!approver) {
+        // A delegated approver that has been dropped or renamed leaves nobody
+        // reviewing. Denying is the only safe reading.
+        log.warn('Delegated approver scoop not found — failing closed', {
+          scoopName: directive.scoopName,
+        });
+        return { decision: 'deny' };
+      }
+    }
+    if (!approver) {
+      log.warn('No approver resolved for directed approval — failing closed', { requesterJid });
+      return { decision: 'deny' };
+    }
+    return this.approvalRouter.enqueueSudoRequest(requesterJid, request, { approver });
   }
 
   /**

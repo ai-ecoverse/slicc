@@ -169,9 +169,16 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     return settled;
   }
 
-  async enqueueSudoRequest(scoopJid: string, request: SudoRequest): Promise<SudoDecision> {
+  async enqueueSudoRequest(
+    scoopJid: string,
+    request: SudoRequest,
+    opts: { approver?: RegisteredScoop } = {}
+  ): Promise<SudoDecision> {
     const scoops = this.deps.getScoops();
-    const cone = this.deps.findApprover(scoopJid);
+    // An explicit approver overrides the parent lookup. Used when the DECIDER
+    // is not derivable from the requester — a biscotto's message is asked on
+    // behalf of the shared thread, but the seat names who reviews it.
+    const cone = opts.approver ?? this.deps.findApprover(scoopJid);
     if (!cone) {
       log.warn('Sudo request received but no approver is registered — failing closed', {
         scoopJid,

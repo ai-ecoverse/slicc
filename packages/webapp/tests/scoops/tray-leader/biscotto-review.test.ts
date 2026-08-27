@@ -308,3 +308,68 @@ describe('BiscottoReview — review-round hardening', () => {
     expect(describeGuestSubmission(guestMessage({ text: 'hello' }))).toBe('hello');
   });
 });
+
+describe('BiscottoReview — approver tiers', () => {
+  function seatWith(approver: string, scoop?: string) {
+    return {
+      ...SEAT,
+      gates: {
+        message: { approver, ...(scoop ? { scoop } : {}) },
+        tool: { approver: 'user' as const },
+      },
+    } as typeof SEAT;
+  }
+
+  it('routes a cone-gated seat to the cone, not the human', async () => {
+    const approve = vi.fn(async () => allow);
+    const { review, delivered } = createHarness(approve);
+    review.submit('peer', guestMessage({ biscotto: seatWith('cone') }));
+    await vi.waitFor(() => expect(delivered).toHaveLength(1));
+    expect(approve).toHaveBeenCalledWith(
+      expect.objectContaining({ approver: { kind: 'cone', unitJid: 'cone' } })
+    );
+  });
+
+  it('routes a scoop-gated seat to the named scoop', async () => {
+    const approve = vi.fn(async () => allow);
+    const { review, delivered } = createHarness(approve);
+    review.submit('peer', guestMessage({ biscotto: seatWith('scoop', 'reviewer') }));
+    await vi.waitFor(() => expect(delivered).toHaveLength(1));
+    expect(approve).toHaveBeenCalledWith(
+      expect.objectContaining({
+        approver: { kind: 'scoop', scoopName: 'reviewer', unitJid: 'cone' },
+      })
+    );
+  });
+
+  it('sends no directive at all for the user tier', async () => {
+    const approve = vi.fn(async () => allow);
+    const { review, delivered } = createHarness(approve);
+    review.submit('peer', guestMessage());
+    await vi.waitFor(() => expect(delivered).toHaveLength(1));
+    expect(approve).toHaveBeenCalledTimes(1);
+    const [request] = approve.mock.calls[0] as unknown as [Record<string, unknown>];
+    expect(request).not.toHaveProperty('approver');
+  });
+
+  it('denies a scoop tier with no scoop named rather than falling back', async () => {
+    // Falling back to the human would quietly approve through a different
+    // approver than the owner configured.
+    const approve = vi.fn(async () => allow);
+    const { review, delivered, states } = createHarness(approve);
+    review.submit('peer', guestMessage({ biscotto: seatWith('scoop') }));
+    await vi.waitFor(() => expect(states).toHaveLength(2));
+    expect(approve).not.toHaveBeenCalled();
+    expect(delivered).toHaveLength(0);
+    expect(states[1]).toEqual(['m1', 'unanswered']);
+  });
+
+  it('denies an approver tier this build does not understand', async () => {
+    const approve = vi.fn(async () => allow);
+    const { review, delivered } = createHarness(approve);
+    review.submit('peer', guestMessage({ biscotto: seatWith('quorum-of-elders') }));
+    await vi.waitFor(() => expect(review.pendingCount).toBe(0));
+    expect(approve).not.toHaveBeenCalled();
+    expect(delivered).toHaveLength(0);
+  });
+});

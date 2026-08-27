@@ -16,6 +16,21 @@ import type { TraySudoKind } from '@slicc/shared-ts';
  */
 export type SudoKind = TraySudoKind;
 
+/**
+ * Who should settle a request, when it is NOT the owner's own prompt.
+ *
+ * Carried on the request because it crosses the panel bridge whole, and
+ * because "who decides" is part of what is being asked. Set from
+ * trusted state only — for a biscotto it comes from the seat record the tray
+ * hub stamped, never from anything the guest sent.
+ */
+export type SudoApproverDirective =
+  | { kind: 'user' }
+  /** The cone that owns `unitJid` decides, via its `lick_confirm` tools. */
+  | { kind: 'cone'; unitJid: string }
+  /** A scoop the cone delegated to decides. Unknown name fails CLOSED. */
+  | { kind: 'scoop'; scoopName: string; unitJid: string };
+
 /** A request for native human approval. */
 export interface SudoRequest {
   kind: SudoKind;
@@ -33,6 +48,11 @@ export interface SudoRequest {
    * request payload.
    */
   requester?: string;
+  /**
+   * Route this request to a non-human approver. Absent (or `user`) keeps the
+   * historical behaviour: the owner's own broker chain.
+   */
+  approver?: SudoApproverDirective;
   /**
    * Optional caller-supplied default pattern for the "Always" grant. When
    * omitted the broker derives one via `quickLabel` (see `suggest-pattern`).
