@@ -45,20 +45,45 @@ function emptyFile(): PluginsFile {
   return { version: CURRENT_VERSION, plugins: {} };
 }
 
+/** Untrusted `plugins.json` root before validation. */
+interface UntrustedPluginsFile {
+  readonly version?: unknown;
+  readonly plugins?: unknown;
+}
+
+/** Untrusted plugin-name map before per-entry validation. */
+interface UntrustedPluginsMap {
+  readonly [pluginName: string]: unknown;
+}
+
+/** Untrusted installed-plugin entry before validation. */
+interface UntrustedInstalledPluginEntry {
+  readonly root?: unknown;
+  readonly version?: unknown;
+  readonly description?: unknown;
+  readonly installedAt?: unknown;
+  readonly mcpServerNames?: unknown;
+  readonly source?: unknown;
+}
+
+function isPlainObject(value: unknown): value is object {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function normalizeEntry(raw: unknown): InstalledPluginEntry | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const entry = raw as Record<string, unknown>;
+  if (!isPlainObject(raw)) return null;
+  const entry = raw as UntrustedInstalledPluginEntry;
   if (typeof entry.root !== 'string') return null;
   return entry as unknown as InstalledPluginEntry;
 }
 
 function normalize(raw: unknown): PluginsFile {
-  if (!raw || typeof raw !== 'object') return emptyFile();
-  const obj = raw as Partial<PluginsFile> & { plugins?: unknown };
+  if (!isPlainObject(raw)) return emptyFile();
+  const obj = raw as UntrustedPluginsFile;
   const version = typeof obj.version === 'number' ? obj.version : CURRENT_VERSION;
   const plugins: Record<string, InstalledPluginEntry> = {};
-  if (obj.plugins && typeof obj.plugins === 'object') {
-    for (const [name, entry] of Object.entries(obj.plugins as Record<string, unknown>)) {
+  if (isPlainObject(obj.plugins)) {
+    for (const [name, entry] of Object.entries(obj.plugins as UntrustedPluginsMap)) {
       const normalized = normalizeEntry(entry);
       if (normalized) plugins[name] = normalized;
     }
