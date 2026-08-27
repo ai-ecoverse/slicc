@@ -44,3 +44,37 @@ export function applySliccLinks(response: Response, request: Request): Response 
     headers,
   });
 }
+
+/**
+ * RFC 8288 `Link` header value pointing at the tray that replaced a
+ * superseded one, using the `successor-version` relation registered by
+ * RFC 5829 §3.4 ("points to a resource containing the successor version in
+ * the version history").
+ *
+ * Emitted alongside the existing 409 + JSON body on supersede responses
+ * (issue #1957) so a follower can read one header instead of pattern-matching
+ * a `fail` code out of the body. Purely additive — clients that don't know the
+ * rel ignore it.
+ *
+ * The target is normalized through `URL` before it is embedded so a stored
+ * join URL can never smuggle a header delimiter (`>`, CR/LF) into the field
+ * value. Returns `null` when the stored value doesn't parse as a URL, in which
+ * case the caller emits no header at all.
+ */
+export function successorVersionLink(joinUrl: string): string | null {
+  try {
+    return `<${new URL(joinUrl).href}>; rel="successor-version"`;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Headers to merge into a tray-supersede response: the `successor-version`
+ * link, or nothing when the replacement URL is unusable. Status and body are
+ * the caller's business and stay untouched.
+ */
+export function supersededLinkHeaders(joinUrl: string): Record<string, string> {
+  const link = successorVersionLink(joinUrl);
+  return link ? { Link: link } : {};
+}

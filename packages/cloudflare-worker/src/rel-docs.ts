@@ -26,6 +26,12 @@ const RELS: Record<string, RelInfo> = {
       'Used by SLICC to install a skill from a public GitHub repository. The link target is the GitHub repo URL.',
     example: `Link: &lt;https://github.com/slicc/skills-extra&gt;; rel="${SLICC_HOSTED_ORIGIN}/rel/upskill"`,
   },
+  'successor-version': {
+    title: 'rel: successor-version',
+    summary:
+      'Emitted by the tray hub when a tray has been superseded — the leader reconnected, minted a fresh tray, and abandoned this one. The link target is the replacement tray\'s join URL: followers should re-attach there instead of retrying this tray. Unlike <code>handoff</code> and <code>upskill</code>, this is not a SLICC extension rel — <code>successor-version</code> is registered by RFC 5829 §3.4 and appears as the bare token; this page documents how SLICC uses it. The response also keeps its existing <code>409</code> status and JSON body (<code>code: "TRAY_SUPERSEDED"</code>, <code>joinUrl</code>) for clients that predate the header.',
+    example: `Link: &lt;${SLICC_HOSTED_ORIGIN}/join/fresh-tray.deadbeef&gt;; rel="successor-version"`,
+  },
 };
 
 function pageHtml(name: string, info: RelInfo): string {
@@ -57,7 +63,7 @@ function pageHtml(name: string, info: RelInfo): string {
     <p>${info.summary}</p>
     <p>Example header value:</p>
     <pre>${info.example}</pre>
-    <p>Spec context: <a href="https://www.rfc-editor.org/rfc/rfc8288">RFC 8288</a> (Web Linking) and <a href="https://www.rfc-editor.org/rfc/rfc8187">RFC 8187</a> (parameter ext-value).</p>
+    <p>Spec context: <a href="https://www.rfc-editor.org/rfc/rfc8288">RFC 8288</a> (Web Linking), <a href="https://www.rfc-editor.org/rfc/rfc8187">RFC 8187</a> (parameter ext-value), and <a href="https://www.rfc-editor.org/rfc/rfc5829">RFC 5829</a> (version-history relations).</p>
     <p>SLICC overview: <a href="https://github.com/ai-ecoverse/slicc/blob/main/docs/slicc-handoff.md">docs/slicc-handoff.md</a>.</p>
   </main>
 </body>

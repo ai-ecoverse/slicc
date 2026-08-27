@@ -1462,9 +1462,9 @@ describe('tray worker skeleton', () => {
     expect(body).toContain('/rel/handoff');
   });
 
-  it('serves dereferenceable rel docs at /rel/handoff and /rel/upskill', async () => {
+  it('serves dereferenceable rel docs at /rel/handoff, /rel/upskill and /rel/successor-version', async () => {
     const { env } = createTestHarness();
-    for (const name of ['handoff', 'upskill']) {
+    for (const name of ['handoff', 'upskill', 'successor-version']) {
       const response = await handleWorkerRequest(
         new Request(`https://www.sliccy.ai/rel/${name}`),
         env
@@ -1941,6 +1941,7 @@ describe('POST /api/tray/:trayId/supersede', () => {
     );
 
     expect(followerAttach.status).toBe(409);
+    expect(followerAttach.headers.get('Link')).toBe(`<${freshJoinUrl}>; rel="successor-version"`);
     await expect(followerAttach.json()).resolves.toMatchObject({
       trayId,
       controllerId: 'follow-1',
@@ -1975,12 +1976,77 @@ describe('POST /api/tray/:trayId/supersede', () => {
     const probe = await handleWorkerRequest(new Request(probeUrl), env);
 
     expect(probe.status).toBe(409);
+    expect(probe.headers.get('Link')).toBe(`<${freshJoinUrl}>; rel="successor-version"`);
     await expect(probe.json()).resolves.toMatchObject({
       trayId,
       capability: 'join',
       code: 'TRAY_SUPERSEDED',
       joinUrl: freshJoinUrl,
     });
+  });
+
+  it('normalizes the successor-version target so a join URL cannot inject a header', async () => {
+    const { env } = createTestHarness();
+    const { trayId, controllerToken, joinUrl } = await setupTrayWithLeader(env);
+    // `>` would close the RFC 8288 URI-Reference early if it were emitted raw.
+    const hostileJoinUrl = 'https://www.sliccy.ai/join/fresh>evil.deadbeef';
+
+    await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({ joinUrl: hostileJoinUrl }),
+      }),
+      env
+    );
+
+    const followerAttach = await handleWorkerRequest(
+      new Request(joinUrl, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ controllerId: 'follow-1', runtime: 'electron' }),
+      }),
+      env
+    );
+
+    expect(followerAttach.status).toBe(409);
+    expect(followerAttach.headers.get('Link')).toBe(
+      '<https://www.sliccy.ai/join/fresh%3Eevil.deadbeef>; rel="successor-version"'
+    );
+    // The body keeps the value verbatim — only the header target is normalized.
+    await expect(followerAttach.json()).resolves.toMatchObject({
+      result: { code: 'TRAY_SUPERSEDED', joinUrl: hostileJoinUrl },
+    });
+  });
+
+  it('keeps the successor-version link alongside the standard rel set through worker.fetch', async () => {
+    const { env } = createTestHarness();
+    const { trayId, controllerToken, joinUrl } = await setupTrayWithLeader(env);
+    const freshJoinUrl = 'https://www.sliccy.ai/join/fresh-tray.deadbeef';
+
+    await handleWorkerRequest(
+      new Request(`https://www.sliccy.ai/api/tray/${trayId}/supersede`, {
+        method: 'POST',
+        headers: {
+          'content-type': 'application/json',
+          authorization: `Bearer ${controllerToken}`,
+        },
+        body: JSON.stringify({ joinUrl: freshJoinUrl }),
+      }),
+      env
+    );
+
+    const probeUrl = new URL(joinUrl);
+    probeUrl.searchParams.set('json', 'true');
+    const probe = await worker.fetch(new Request(probeUrl), env);
+
+    expect(probe.status).toBe(409);
+    const link = probe.headers.get('Link') ?? '';
+    expect(link).toContain(`<${freshJoinUrl}>; rel="successor-version"`);
+    expect(link).toContain('rel="api-catalog"');
   });
 });
 
@@ -2009,6 +2075,17 @@ describe('standard Link header set', () => {
     expect(applySliccLinks(redirect, req).headers.get('Link')).toBeNull();
     const ok = new Response('hi', { status: 200 });
     expect(applySliccLinks(ok, req).headers.get('Link')).toContain('rel="api-catalog"');
+  });
+
+  it('successorVersionLink emits no header for a target that is not a URL', async () => {
+    const { successorVersionLink, supersededLinkHeaders } = await import('../src/links.js');
+    expect(successorVersionLink('https://www.sliccy.ai/join/t.secret')).toBe(
+      '<https://www.sliccy.ai/join/t.secret>; rel="successor-version"'
+    );
+    // A tray persisted before the absolute-URL guard (or by a future writer)
+    // must degrade to "no header", never to a malformed one.
+    expect(successorVersionLink('not-a-url')).toBeNull();
+    expect(supersededLinkHeaders('not-a-url')).toEqual({});
   });
 });
 
@@ -3259,6 +3336,9 @@ describe('capability-route CORS', () => {
     expect(allowed['Access-Control-Allow-Origin']).toBe(ALLOWED_ORIGIN);
     expect(allowed['Access-Control-Allow-Headers']).toBe('content-type');
     expect(allowed['Access-Control-Allow-Methods']).toContain('OPTIONS');
+    // A cross-origin follower must be able to read the `successor-version`
+    // link a superseded tray answers with (#1957).
+    expect(allowed['Access-Control-Expose-Headers']).toBe('Link');
     expect(allowed.Vary).toBe('Origin');
 
     const blocked = capabilityCorsHeaders(
@@ -3266,6 +3346,7 @@ describe('capability-route CORS', () => {
       env
     );
     expect(blocked['Access-Control-Allow-Origin']).toBeUndefined();
+    expect(blocked['Access-Control-Expose-Headers']).toBeUndefined();
     expect(blocked.Vary).toBe('Origin');
   });
 

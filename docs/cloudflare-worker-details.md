@@ -21,7 +21,7 @@ Every route below must also appear in `src/index.ts`, `tests/index.test.ts`, and
 | `GET /llms.txt`                       | LLM markdown digest                                                                                                                        |
 | `GET\|HEAD /privacy`                  | 301 to www.sliccy.com/privacy (App Store Connect link)                                                                                     |
 | `GET\|HEAD /status`                   | Public health document (`{ status, service, timestamp, version }`); no auth, `Cache-Control: no-store`                                     |
-| `GET /rel/:name`                      | Dereferenceable docs for SLICC custom rel URIs                                                                                             |
+| `GET /rel/:name`                      | Dereferenceable docs for SLICC rel URIs (`handoff`, `upskill`, `successor-version`)                                                        |
 | `GET\|POST /join/:token`              | Follower join and bootstrap polling (HTTP poll/answer/ice-candidate/retry actions)                                                         |
 | `GET\|POST /controller/:token`        | Leader attach and WS upgrade                                                                                                               |
 | `POST /webhook/:token/:webhookId`     | Forward webhook events into the live leader                                                                                                |
@@ -65,6 +65,16 @@ start/resume flows:
   [`deploying-tray-worker` skill](../.agents/skills/deploying-tray-worker/SKILL.md).
 - Followers attach via the join capability; bootstrap over HTTP poll
   (poll/answer/ice-candidate/retry actions).
+- **Superseded tray** (`POST /api/tray/:trayId/supersede`, leader-only): once a tray is
+  marked superseded, both `/join/:token` shapes answer `409` +
+  `code: "TRAY_SUPERSEDED"` with the replacement's `joinUrl` in the body, plus an
+  RFC 8288 `Link: <joinUrl>; rel="successor-version"` header (RFC 5829) carrying the
+  same redirect in machine-readable form (issue #1957, step 1 — additive; the status
+  and body are unchanged for shipped followers). The header target is normalized
+  through `URL` so a stored join URL can't inject a header delimiter, and
+  `Access-Control-Expose-Headers: Link` is set on the capability CORS surface so a
+  cross-origin follower can read it. Step 2 (flip to `308` + `Location`) is gated on
+  a client capability opt-in.
 - Preview bridge tabs (`serve --bridge`) attach via `/__slicc/bridge` WS. DO relays
   `bridge.cdp.request`/`bridge.cdp.response` between leader and each bridge socket,
   keyed by `connId`. On leader (re)connect the DO replays `bridge.connected` for every
