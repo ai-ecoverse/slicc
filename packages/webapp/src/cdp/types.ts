@@ -2,18 +2,22 @@
  * Chrome DevTools Protocol message types.
  */
 
+import type { CDPPayload } from '@slicc/shared-ts';
+
 /** Outgoing CDP command message. */
 export interface CDPCommand {
   id: number;
   method: string;
-  params?: Record<string, unknown>;
+  /** Per-method CDP params; shape is known only to the caller that issued the method. */
+  params?: CDPPayload;
   sessionId?: string;
 }
 
 /** Incoming CDP response for a command. */
 export interface CDPResponse {
   id: number;
-  result?: Record<string, unknown>;
+  /** Per-method CDP result; shape is known only to the caller that issued the method. */
+  result?: CDPPayload;
   error?: {
     code: number;
     message: string;
@@ -25,7 +29,8 @@ export interface CDPResponse {
 /** Incoming CDP event notification. */
 export interface CDPEvent {
   method: string;
-  params?: Record<string, unknown>;
+  /** Per-method CDP event params; shape depends on `method`. */
+  params?: CDPPayload;
   sessionId?: string;
 }
 
@@ -36,7 +41,7 @@ export type CDPMessage = CDPResponse | CDPEvent;
 export type ConnectionState = 'disconnected' | 'connecting' | 'connected';
 
 /** Listener callback for CDP events. */
-export type CDPEventListener = (params: Record<string, unknown>) => void;
+export type CDPEventListener = (params: CDPPayload) => void;
 
 /** Target info returned by Target.getTargets. */
 export interface TargetInfo {
