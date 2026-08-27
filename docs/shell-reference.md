@@ -690,7 +690,9 @@ Every path is classified with the vocabulary `upgrade apply` uses for bundled wo
 | `removed`    | Upstream dropped a file **this command installed** (tracked in `.upskill`). |
 | `kept-local` | A dotfile, or a file upskill never installed — left untouched.              |
 
-`--dry-run` reports the classification and writes nothing. `--json` emits `{ ok, dryRun, results[] }` for scripted callers.
+**The no-argument sweep names what it could not check.** An installed skill with no `.upskill` record cannot be updated, so the sweep lists it under `Skipped <n> skills with no install provenance` and scopes its closing line to the skills it actually checked (`All 13 skills with provenance are current.`). This is informational, not a failure: it stays off stderr and the exit code stays 0, because runtime-bundled skills legitimately have no record (`upgrade apply` keeps those current) and the rest only need a source recorded once with `upskill update <skill> --from <owner>/<repo>`. With nothing skipped, the closing line is the unqualified `All skills are current.`
+
+`--dry-run` reports the classification and writes nothing. `--json` emits `{ ok, dryRun, results[], skipped[] }` for scripted callers — `skipped` is the name-sorted list of unattributed skills and does not affect `ok`.
 
 ### What upskill never touches
 

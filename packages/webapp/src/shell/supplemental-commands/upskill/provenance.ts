@@ -86,23 +86,41 @@ export async function writeProvenance(
   }
 }
 
-/** Every installed skill that carries a provenance record, name-sorted. */
-export async function listProvenancedSkills(
-  fs: VirtualFS
-): Promise<Array<{ name: string; provenance: UpskillProvenance }>> {
+export interface SkillProvenanceScan {
+  /** Installed skills carrying a provenance record, name-sorted. */
+  provenanced: Array<{ name: string; provenance: UpskillProvenance }>;
+  /**
+   * Installed skills with no readable record, name-sorted. Runtime-bundled
+   * skills legitimately land here; so does anything hand-installed. Reported
+   * rather than dropped, so a no-argument `upskill update` cannot claim to have
+   * checked a skill it never looked at.
+   */
+  unattributed: string[];
+}
+
+/** Partition the installed skills by whether they carry a provenance record. */
+export async function scanSkillProvenance(fs: VirtualFS): Promise<SkillProvenanceScan> {
   let entries: Array<{ name: string; type: 'file' | 'directory' }>;
   try {
     entries = (await fs.readDir(SKILLS_DIR)) as Array<{ name: string; type: 'file' | 'directory' }>;
   } catch {
-    return [];
+    return { provenanced: [], unattributed: [] };
   }
-  const found: Array<{ name: string; provenance: UpskillProvenance }> = [];
+  const scan: SkillProvenanceScan = { provenanced: [], unattributed: [] };
   for (const entry of entries.sort((a, b) => a.name.localeCompare(b.name))) {
     if (entry.type !== 'directory') continue;
     const provenance = await readProvenance(fs, entry.name);
-    if (provenance) found.push({ name: entry.name, provenance });
+    if (provenance) scan.provenanced.push({ name: entry.name, provenance });
+    else scan.unattributed.push(entry.name);
   }
-  return found;
+  return scan;
+}
+
+/** Every installed skill that carries a provenance record, name-sorted. */
+export async function listProvenancedSkills(
+  fs: VirtualFS
+): Promise<Array<{ name: string; provenance: UpskillProvenance }>> {
+  return (await scanSkillProvenance(fs)).provenanced;
 }
 
 /**

@@ -21,9 +21,9 @@ import { fetchGitHubDirFiles, fetchRepoZip, stripZipPrefix } from './github/gith
 import { runPostInstallHooks } from './install-pipeline.js';
 import type { UpskillProvenance } from './provenance.js';
 import {
-  listProvenancedSkills,
   readProvenance,
   resolveCommitSha,
+  scanSkillProvenance,
   writeProvenance,
 } from './provenance.js';
 import { prepareBrowseShSkill, stripBrowseShPreamble } from './registries/browse-sh.js';
@@ -491,6 +491,12 @@ function provenanceFromFlag(
  *
  * `missing` distinguishes its two causes so the error can point at the actual
  * problem — a typo'd name is not the same as an installed-but-unrecorded skill.
+ *
+ * `skipped` is the no-argument sweep's own category, deliberately separate from
+ * `missing`: a skill nobody asked for by name and that carries no record is not
+ * a failed request, so it must not reach stderr or the exit code. It is still
+ * reported, because the alternative — dropping it silently — is what let the
+ * sweep close with "All skills are current" over an unchecked majority.
  */
 async function resolveTargets(
   fs: VirtualFS,
@@ -499,9 +505,11 @@ async function resolveTargets(
 ): Promise<{
   targets: Array<{ name: string; provenance: UpskillProvenance }>;
   missing: Array<{ name: string; reason: 'not-installed' | 'no-provenance' }>;
+  skipped: string[];
 }> {
   if (names.length === 0) {
-    return { targets: await listProvenancedSkills(fs), missing: [] };
+    const scan = await scanSkillProvenance(fs);
+    return { targets: scan.provenanced, missing: [], skipped: scan.unattributed };
   }
   const targets: Array<{ name: string; provenance: UpskillProvenance }> = [];
   const missing: Array<{ name: string; reason: 'not-installed' | 'no-provenance' }> = [];
@@ -523,7 +531,7 @@ async function resolveTargets(
     if (supplied) targets.push({ name, provenance: supplied });
     else missing.push({ name, reason: 'no-provenance' });
   }
-  return { targets, missing };
+  return { targets, missing, skipped: [] };
 }
 
 /** The stderr line for a skill that could not be resolved to a source. */
@@ -536,23 +544,56 @@ function missingMessage(entry: { name: string; reason: string }): string {
 `;
 }
 
+function plural(count: number, noun: string): string {
+  return `${count} ${noun}${count === 1 ? '' : 's'}`;
+}
+
+/**
+ * The informational block for skills the sweep could not attribute. Not an
+ * error: the bundled half legitimately has no record, and the rest only needs a
+ * source recorded once. Names are name-sorted by the scan, so the block diffs.
+ *
+ * The bundled skills are described in prose rather than classified, because
+ * there is no offline manifest of them — `upgrade` discovers them from the
+ * release tree over the network, which a dry run must not have to do.
+ */
+function formatSkipped(skipped: string[]): string {
+  return (
+    `\nSkipped ${plural(skipped.length, 'skill')} with no install provenance — not checked:\n` +
+    `  ${skipped.join(', ')}\n` +
+    '  Runtime-bundled skills have no record by design; `upgrade apply` keeps those current.\n' +
+    '  For the rest, record a source once with `upskill update <skill> --from <owner>/<repo> --dry-run`,\n' +
+    '  after which a bare `upskill update` sweeps them too.\n'
+  );
+}
+
 /**
  * `clean` gates the closing line: with a failed or unresolvable skill in the
  * batch, "all skills are current" would contradict the errors on stderr and
  * the non-zero exit.
+ *
+ * `skipped` scopes it. An unattributable skill is not a failure, so it leaves
+ * `clean` alone — but an unqualified "all skills are current" over a batch that
+ * never contained it is a false all-clear, so the count says what was checked.
  */
 function formatReport(
   results: SkillUpdateResult[],
   dryRun: boolean,
   applied: boolean,
-  clean: boolean
+  clean: boolean,
+  skipped: string[]
 ): string {
   let stdout = dryRun ? 'Skill update (dry run — nothing written):\n' : 'Skill update:\n';
   for (const result of results) stdout += formatResult(result, dryRun);
-  if (!applied && clean) {
+  if (skipped.length > 0) stdout += formatSkipped(skipped);
+  if (!applied && clean && results.length > 0) {
+    const scope =
+      skipped.length > 0
+        ? `all ${plural(results.length, 'skill')} with provenance ${results.length === 1 ? 'is' : 'are'}`
+        : 'all skills are';
     stdout += dryRun
-      ? '\nAll skills are current.\n'
-      : '\nNothing to update — all skills are current.\n';
+      ? `\n${scope.charAt(0).toUpperCase()}${scope.slice(1)} current.\n`
+      : `\nNothing to update — ${scope} current.\n`;
   }
   return stdout;
 }
@@ -570,9 +611,21 @@ export async function handleUpskillUpdate(
     return { stdout: '', stderr: `${parsed.error}\n`, exitCode: 1 };
   }
 
-  const { targets, missing } = await resolveTargets(fs, parsed.skills, parsed);
+  const { targets, missing, skipped } = await resolveTargets(fs, parsed.skills, parsed);
 
   if (targets.length === 0) {
+    // A sweep that found skills but could attribute none of them has nothing to
+    // check and nothing to blame: report what it skipped and exit 0, the same
+    // way it would with one attributable skill alongside them.
+    if (missing.length === 0 && skipped.length > 0) {
+      return {
+        stdout: parsed.json
+          ? `${JSON.stringify({ ok: true, dryRun: parsed.dryRun, results: [], skipped })}\n`
+          : formatReport([], parsed.dryRun, false, true, skipped),
+        stderr: '',
+        exitCode: 0,
+      };
+    }
     const stderr = missing.length
       ? missing.map(missingMessage).join('')
       : 'upskill: no skill has install provenance yet — reinstall a skill, or run `upskill update <skill> --from <owner>/<repo>`, to record its source\n';
@@ -605,17 +658,19 @@ export async function handleUpskillUpdate(
     missing.map(missingMessage).join('') +
     failures.map((r) => `upskill: ${r.skill}: ${r.error}\n`).join('');
 
+  // `skipped` stays out of `clean` on purpose: it drives no stderr line and no
+  // exit code, so an agent volunteering `--dry-run` still sees a 0.
   const clean = failures.length === 0 && missing.length === 0;
   if (parsed.json) {
     return {
-      stdout: `${JSON.stringify({ ok: clean, dryRun: parsed.dryRun, results })}\n`,
+      stdout: `${JSON.stringify({ ok: clean, dryRun: parsed.dryRun, results, skipped })}\n`,
       stderr,
       exitCode: clean ? 0 : 1,
     };
   }
 
   return {
-    stdout: formatReport(results, parsed.dryRun, applied, clean),
+    stdout: formatReport(results, parsed.dryRun, applied, clean, skipped),
     stderr,
     exitCode: clean ? 0 : 1,
   };

@@ -95,6 +95,7 @@ Notes worth knowing:
 - **Dotfiles are never touched.** `upskill` will not modify or delete a dotfile in a skill directory, so credentials (`scripts/.config`) and the `.upskill` record survive updates and `--force` reinstalls. Never hand-copy a credential file "to be safe" — it is already safe, and moving it can break the skill.
 - **`kept-local` is not a failure.** It marks dotfiles and files the user added themselves; leaving them is the correct outcome.
 - A skill installed before provenance tracking reports `no install provenance`. If the user knows where it came from, record it in place — `upskill update <skill> --from <owner>/<repo> --dry-run` first, then without `--dry-run`. That first update never deletes anything, because nothing is attributable to a previous install yet.
+- **The sweep tells you what it did not check.** Skills with no `.upskill` record are listed under `Skipped <n> skills with no install provenance` and the closing line is scoped to the ones it checked (`All 13 skills with provenance are current.`). That is not a failure and the exit code stays 0: the runtime-bundled skills legitimately have no record and `upgrade apply` keeps those current. Pass the rest on to the user — one `--from` per skill is all it takes for the sweep to cover them from then on. Do not read an unqualified `All skills are current.` into a run that printed a skipped list.
 
 ## Do not
 
