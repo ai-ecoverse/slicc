@@ -48,52 +48,60 @@ function makePortPair(): { realm: PortLike; host: PortLike } {
   return { realm, host };
 }
 
+async function handleFakeHostMessage(
+  host: PortLike,
+  event: MessageEvent,
+  opts: { delayMs?: number; hangPaths?: Set<string> }
+): Promise<void> {
+  const data = event.data as { type?: string };
+  if (data?.type !== 'realm-rpc-req') return;
+  const req = data as {
+    type: 'realm-rpc-req';
+    id: number;
+    channel: string;
+    op: string;
+    args: unknown[];
+  };
+  if (req.channel === 'vfs' && req.op === 'readFile') {
+    const path = req.args[0] as string;
+    if (opts.hangPaths?.has(path)) {
+      // Never respond — the drain ceiling must cut this off.
+      return;
+    }
+    if (opts.delayMs && opts.delayMs > 0) {
+      await new Promise((r) => setTimeout(r, opts.delayMs));
+    }
+    host.postMessage({
+      type: 'realm-rpc-res',
+      id: req.id,
+      result: 'hello-' + path,
+    });
+    return;
+  }
+  if (req.channel === 'module' && req.op === 'buildGraph') {
+    // These scripts only `require('fs')` (a builtin the realm shim serves),
+    // so the real host would return an empty graph; mirror that here.
+    host.postMessage({
+      type: 'realm-rpc-res',
+      id: req.id,
+      result: { files: [], entryMap: {}, edges: {}, errors: {} },
+    });
+    return;
+  }
+  // Unknown ops — just echo an error so the realm doesn't hang.
+  host.postMessage({
+    type: 'realm-rpc-res',
+    id: req.id,
+    error: `unknown op ${req.channel}.${req.op}`,
+  });
+}
+
 function attachFakeHost(
   host: PortLike,
   opts: { delayMs?: number; hangPaths?: Set<string> } = {}
 ): void {
-  host.addEventListener('message', async (event: MessageEvent) => {
-    const data = event.data as { type?: string };
-    if (data?.type !== 'realm-rpc-req') return;
-    const req = data as {
-      type: 'realm-rpc-req';
-      id: number;
-      channel: string;
-      op: string;
-      args: unknown[];
-    };
-    if (req.channel === 'vfs' && req.op === 'readFile') {
-      const path = req.args[0] as string;
-      if (opts.hangPaths?.has(path)) {
-        // Never respond — the drain ceiling must cut this off.
-        return;
-      }
-      if (opts.delayMs && opts.delayMs > 0) {
-        await new Promise((r) => setTimeout(r, opts.delayMs));
-      }
-      host.postMessage({
-        type: 'realm-rpc-res',
-        id: req.id,
-        result: 'hello-' + path,
-      });
-      return;
-    }
-    if (req.channel === 'module' && req.op === 'buildGraph') {
-      // These scripts only `require('fs')` (a builtin the realm shim serves),
-      // so the real host would return an empty graph; mirror that here.
-      host.postMessage({
-        type: 'realm-rpc-res',
-        id: req.id,
-        result: { files: [], entryMap: {}, edges: {}, errors: {} },
-      });
-      return;
-    }
-    // Unknown ops — just echo an error so the realm doesn't hang.
-    host.postMessage({
-      type: 'realm-rpc-res',
-      id: req.id,
-      error: `unknown op ${req.channel}.${req.op}`,
-    });
+  host.addEventListener('message', (event: MessageEvent) => {
+    void handleFakeHostMessage(host, event, opts);
   });
 }
 
