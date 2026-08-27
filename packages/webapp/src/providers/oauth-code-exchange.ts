@@ -33,29 +33,53 @@ export interface TokenResponse {
   expires_in?: number;
 }
 
+/**
+ * JSON body from the worker `/oauth/token` broker — success fields and/or
+ * RFC 6749 error fields (GitHub also returns errors with HTTP 200).
+ */
+interface OAuthTokenEndpointBody {
+  access_token?: string;
+  token_type?: string;
+  scope?: string;
+  refresh_token?: string;
+  expires_in?: number;
+  error?: string;
+  error_description?: string;
+}
+
+function toTokenResponse(body: OAuthTokenEndpointBody): TokenResponse {
+  // Callers historically received the parsed body via cast; keep the same
+  // field set (including a missing access_token) after the error checks above.
+  return {
+    access_token: body.access_token as string,
+    token_type: body.token_type,
+    scope: body.scope,
+    refresh_token: body.refresh_token,
+    expires_in: body.expires_in,
+  };
+}
+
 async function parseTokenResponse(res: Response): Promise<TokenResponse> {
-  let body: Record<string, unknown>;
+  let body: OAuthTokenEndpointBody;
   try {
-    body = (await res.json()) as Record<string, unknown>;
+    body = (await res.json()) as OAuthTokenEndpointBody;
   } catch {
     throw new Error(`Token exchange failed (HTTP ${res.status}): non-JSON response`);
   }
 
   if (!res.ok && res.status !== 200) {
     const msg =
-      (body.error_description as string) ??
-      (body.error as string) ??
-      `Token exchange failed (HTTP ${res.status})`;
+      body.error_description ?? body.error ?? `Token exchange failed (HTTP ${res.status})`;
     throw new Error(msg);
   }
 
   // GitHub returns 200 even for errors — check for error field
   if (body.error) {
-    const msg = (body.error_description as string) ?? (body.error as string);
+    const msg = body.error_description ?? body.error;
     throw new Error(msg);
   }
 
-  return body as unknown as TokenResponse;
+  return toTokenResponse(body);
 }
 
 /**
