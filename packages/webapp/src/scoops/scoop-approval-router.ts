@@ -215,7 +215,12 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       lickId: id,
       sudoKind: request.kind,
       sudoDetail: request.detail,
-      sudoScoopName: scoopForLick?.assistantLabel ?? scoopForLick?.name ?? scoopJid,
+      // `request.requester` wins: for a directed approval the asker is not the
+      // unit the request was filed under. A biscotto's message filed against
+      // the shared thread would otherwise be presented to the approver as a
+      // request from the CONE ITSELF, which is the opposite of what it is.
+      sudoScoopName:
+        request.requester ?? scoopForLick?.assistantLabel ?? scoopForLick?.name ?? scoopJid,
       sudoSuggestedPattern: request.suggestedPattern,
       targetScoop: cone.name,
       timestamp: new Date().toISOString(),

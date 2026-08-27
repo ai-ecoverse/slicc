@@ -49,6 +49,9 @@ export function registerSudoApproveEndpoint(app: Express, options: SudoEndpointO
     const request: SudoApproveRequest = {
       kind: req.body.kind,
       detail: req.body.detail,
+      ...(typeof req.body.requester === 'string' && req.body.requester
+        ? { requester: req.body.requester }
+        : {}),
       suggestedPattern: req.body.suggestedPattern ?? req.body.detail,
     };
 

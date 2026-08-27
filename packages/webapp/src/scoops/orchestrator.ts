@@ -46,7 +46,7 @@ import {
 } from '../work-unit/descriptor.js';
 import type { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { WorkUnitManager } from '../work-unit/manager.js';
-import { rootOwnerOf, rootsOf } from '../work-unit/policy.js';
+import { derivePolicy, rootOwnerOf, rootsOf } from '../work-unit/policy.js';
 import {
   legacyRecordIsCone,
   modelFor,
@@ -1024,26 +1024,50 @@ export class Orchestrator implements ConeApprovalRouter {
       log.warn('Directed approval for an unknown unit — failing closed', { requesterJid });
       return { decision: 'deny' };
     }
+    const owner = this.ownerRootOrDefault(requesterJid);
+    if (!owner) {
+      log.warn('No owning cone for directed approval — failing closed', { requesterJid });
+      return { decision: 'deny' };
+    }
+
     let approver: RegisteredScoop | undefined;
     if (directive.kind === 'cone') {
-      approver = this.ownerRootOrDefault(requesterJid);
+      approver = owner;
     } else {
+      // Scoped to THIS cone's own children, and never to a root. A bare name
+      // search over the whole roster can match a different cone's scoop —
+      // names are not unique across cones — and would hand a guest's text to
+      // an approval principal in someone else's thread.
       approver = [...this.scoops.values()].find(
-        (scoop) => scoop.name === directive.scoopName || scoop.folder === directive.scoopName
+        (scoop) =>
+          scoop.parentJid === owner.jid &&
+          (scoop.name === directive.scoopName || scoop.folder === directive.scoopName)
       );
       if (!approver) {
-        // A delegated approver that has been dropped or renamed leaves nobody
-        // reviewing. Denying is the only safe reading.
-        log.warn('Delegated approver scoop not found — failing closed', {
+        // Dropped, renamed, or never belonged to this cone. Denying is the only
+        // safe reading — the alternative is asking the wrong principal.
+        log.warn('Delegated approver scoop not found under this cone — failing closed', {
           scoopName: directive.scoopName,
+          coneJid: owner.jid,
         });
         return { decision: 'deny' };
       }
     }
-    if (!approver) {
-      log.warn('No approver resolved for directed approval — failing closed', { requesterJid });
+
+    // An approver that cannot actually settle would leave the request to time
+    // out five minutes later and deny — indistinguishable, to the owner, from
+    // a reviewer who ignored it. `canResolveApprovals` is false for delegated
+    // children today (`delegatedChildPolicy`), so a scoop-tier seat lands here
+    // until a policy seam exists to designate an approver scoop.
+    if (!derivePolicy(approver).canResolveApprovals) {
+      log.warn('Directed approver cannot resolve approvals — failing closed', {
+        approverJid: approver.jid,
+        approverName: approver.name,
+        kind: directive.kind,
+      });
       return { decision: 'deny' };
     }
+
     return this.approvalRouter.enqueueSudoRequest(requesterJid, request, { approver });
   }
 

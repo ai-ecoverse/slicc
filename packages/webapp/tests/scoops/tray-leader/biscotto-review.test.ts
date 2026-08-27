@@ -373,3 +373,38 @@ describe('BiscottoReview — approver tiers', () => {
     expect(delivered).toHaveLength(0);
   });
 });
+
+describe('BiscottoReview — round-3 findings', () => {
+  it('keeps draining after discarding a verdict that outlived its seat', async () => {
+    // The stale-epoch guard used to `break`, which cleared `inFlight` with a
+    // non-empty queue — a seat reconnecting on the same bootstrapId then had
+    // its new messages sit pending forever.
+    const settlers: Array<(d: SudoDecision) => void> = [];
+    const approve = vi.fn(() => new Promise<SudoDecision>((r) => settlers.push(r)));
+    const { review, delivered, followers, states } = createHarness(approve);
+
+    review.submit('peer', guestMessage({ messageId: 'old' }));
+    await vi.waitFor(() => expect(settlers).toHaveLength(1));
+
+    // Seat drops and immediately reconnects on the same id, then speaks again.
+    followers.removeFollower('peer');
+    followers.followers.set('peer', {
+      bootstrapId: 'peer',
+      trust: 'biscotto',
+      biscotto: SEAT,
+      sync: { send: vi.fn(), close: vi.fn() },
+      keepalive: { stop: vi.fn() },
+      unsubscribe: vi.fn(),
+    } as never);
+    review.submit('peer', guestMessage({ messageId: 'new' }));
+
+    settlers[0](allow);
+
+    // The stale one is discarded; the fresh one still gets reviewed.
+    await vi.waitFor(() => expect(settlers).toHaveLength(2));
+    settlers[1](allow);
+    await vi.waitFor(() => expect(delivered).toHaveLength(1));
+    expect(delivered[0].messageId).toBe('new');
+    expect(states.some(([id, state]) => id === 'old' && state === 'approved')).toBe(false);
+  });
+});

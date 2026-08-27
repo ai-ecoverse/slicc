@@ -17,6 +17,13 @@ export interface SudoApproveRequest {
   kind: SudoKind;
   /** The concrete command line or VFS path being gated. */
   detail: string;
+  /**
+   * Who is asking, as the browser side authenticated them. Optional — older
+   * clients omit it. Rendered as chrome, never mixed into `detail`, because
+   * `detail` can be prose the requester wrote about themselves (a biscotto
+   * guest message).
+   */
+  requester?: string;
   /** Editable default pattern for an "Always" grant (LLM-suggested upstream). */
   suggestedPattern: string;
 }

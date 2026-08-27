@@ -174,7 +174,12 @@ export class BiscottoReview {
             messageId: next.messageId,
             outcome,
           });
-          break;
+          // Do NOT stop draining. A seat that reconnects on the same
+          // `bootstrapId` may already have queued fresh messages behind this
+          // discarded one; breaking here cleared `inFlight` with a non-empty
+          // queue, so those sat pending forever unless a later submit happened
+          // to restart the loop. Skip the stale verdict and keep going.
+          continue;
         }
         if (outcome === 'approved') this.deps.deliver(next);
         this.deps.notify(bootstrapId, next.messageId, outcome);

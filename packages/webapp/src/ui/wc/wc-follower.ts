@@ -807,8 +807,13 @@ export async function mountWcUiFollower(
             allowAlways: false,
             signal: request.signal,
             expiresAt: request.expiresAt,
+            // Leader-derived identity first: `scoopName` names the requesting
+            // unit, but a directed request (a biscotto's message) is asked on
+            // behalf of a thread by someone who is not that thread.
             requester:
-              request.scoopName ?? (cherryHostOrigin ? `via ${cherryHostOrigin}` : undefined),
+              request.requester ??
+              request.scoopName ??
+              (cherryHostOrigin ? `via ${cherryHostOrigin}` : undefined),
           }
         );
         return { decision: decision.decision, attestation: 'none' };

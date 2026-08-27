@@ -181,6 +181,8 @@ export interface FollowerSyncManagerOptions {
     requestId: string;
     kind: TraySudoKind;
     detail: string;
+    /** Leader-derived identity of the asker; chrome, not part of `detail`. */
+    requester?: string;
     suggestedPattern?: string;
     scoopName?: string;
     expiresAt: number;
@@ -1780,6 +1782,7 @@ export class FollowerSyncManager implements AgentHandle {
         detail: message.detail,
         ...(message.suggestedPattern ? { suggestedPattern: message.suggestedPattern } : {}),
         ...(message.scoopName ? { scoopName: message.scoopName } : {}),
+        ...(message.requester ? { requester: message.requester } : {}),
         expiresAt: message.expiresAt,
         signal: abort.signal,
       });

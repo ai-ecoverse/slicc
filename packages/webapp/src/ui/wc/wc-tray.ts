@@ -50,6 +50,7 @@ import {
   setPlaywrightTeleportConnectedFollowers,
 } from '../../shell/supplemental-commands/playwright/teleport.js';
 import type { TeleportFollowerInfo } from '../../shell/supplemental-commands/playwright/teleport-follower-shim.js';
+import { toKernelSudoRequest } from '../../sudo/leader-request.js';
 import { modelFor, thinkingFor } from '../../work-unit/record.js';
 import { setupStandalonePanelRpc } from '../boot/setup-standalone-panel-rpc.js';
 import { runHostedBootstrap } from '../boot/setup-standalone-tray-init-hosted.js';
@@ -571,15 +572,10 @@ export function createLeaderOptionsFactory(
     // the kernel checks `NOPASSWD Export` grants, routes the prompt to the
     // human — possibly straight back here as a tray delegation — and persists
     // "Always". `followerLabel`/`hostOrigin` are informational.
-    requestSudoApproval: (request) =>
-      client.requestSudoApproval({
-        kind: request.kind,
-        detail: request.detail,
-        // Authenticated identity, derived from connected tray state — without
-        // it a guest-authored `detail` is the only thing the reviewer sees.
-        ...(request.followerLabel ? { requester: request.followerLabel } : {}),
-        ...(request.suggestedPattern ? { suggestedPattern: request.suggestedPattern } : {}),
-      }),
+    // Mapped by a named, tested function on purpose: the inline literal that
+    // used to live here silently dropped `approver`, which made the whole
+    // approver-tier feature inert in production while unit tests stayed green.
+    requestSudoApproval: (request) => client.requestSudoApproval(toKernelSudoRequest(request)),
     createTranscriptExport: async (selector, signal) => {
       const { runTranscriptExportForFollower } = await import('./wc-transcript-export.js');
       return runTranscriptExportForFollower(selector, signal, client);

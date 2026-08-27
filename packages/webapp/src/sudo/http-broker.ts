@@ -72,6 +72,10 @@ export function createHttpSudoBroker(deps: HttpSudoBrokerDeps = {}): SudoBroker 
             kind: req.kind,
             detail: req.detail,
             suggestedPattern,
+            // Authenticated identity. Dropping it leaves the OS / TTY prompt
+            // showing nothing but `detail`, which for a guest message is prose
+            // the requester wrote about themselves.
+            ...(req.requester ? { requester: req.requester } : {}),
           }),
           signal,
         });

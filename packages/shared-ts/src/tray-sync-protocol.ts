@@ -331,6 +331,15 @@ export type LeaderToFollowerMessage =
       requestId: string;
       kind: TraySudoKind;
       detail: string;
+      /**
+       * Who is asking, as the LEADER knows them — never as they describe
+       * themselves. Rendered as prompt chrome above `detail`.
+       *
+       * Load-bearing when `detail` is not owner-authored: a biscotto's message
+       * is guest-written prose, so a delegated reviewer with no authenticated
+       * requester line sees only the guest's own account of who they are.
+       */
+      requester?: string;
       suggestedPattern?: string;
       /** Requesting scoop's label when the action came from a scoop, else absent. */
       scoopName?: string;

@@ -36,6 +36,7 @@ export function createTtyBackend(deps: TtyDeps = {}): SudoBackend {
       const suggested = req.suggestedPattern?.trim() || req.detail.trim();
       const rl = makeRl();
       try {
+        if (req.requester) out.write(`\nRequested by: ${req.requester}`);
         out.write(`\nSLICC sudo — approve ${req.kind}: ${req.detail}\n`);
         const choice = (await ask(rl, '[a]llow once / [d]eny / [A]lways (edit pattern): ')).trim();
         if (choice === 'a') return { decision: 'allow' };

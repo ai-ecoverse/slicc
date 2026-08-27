@@ -26,7 +26,7 @@ import type {
   SprinkleInstance,
   SprinkleSendTarget,
 } from '../shell/sprinkle-manager-handle.js';
-import type { SudoDecision, SudoRequest } from '../sudo/types.js';
+import type { SudoApproverDirective, SudoDecision, SudoRequest } from '../sudo/types.js';
 import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';
 import type { LickEvent } from './lick-manager.js';
@@ -226,6 +226,15 @@ export interface LeaderSyncManagerOptions {
     suggestedPattern?: string;
     followerLabel: string;
     hostOrigin?: string;
+    /**
+     * Route to a non-human approver. MUST be declared here and forwarded by
+     * every adapter: an earlier build set it on the call and relied on the
+     * object literal carrying it, but a spread suppresses TypeScript's
+     * excess-property check, so it compiled, tests (which mock this function)
+     * passed, and production silently dropped it — every `cone`/`scoop` seat
+     * fell back to the human broker.
+     */
+    approver?: SudoApproverDirective;
   }) => Promise<SudoDecision>;
   /**
    * True when this leader tab has no interactive human of its own. The approval
