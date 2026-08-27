@@ -1623,11 +1623,17 @@ as an init failure and reflect the CSS fallback, rather than parking on dead han
 behind a transparent canvas — a frozen field that claims to be working is worse than
 a visible gradient.
 
-Note the two recovery paths are distinct and both are needed: `webglcontextrestored`
-handles a UA-driven loss on a _live_ canvas (same context object, relink in place),
-while the fresh-canvas swap handles re-init after a teardown-driven loss.
+Note the recovery paths are distinct and all are needed:
+
+- `webglcontextrestored` handles a UA-driven loss on a _live_ canvas (same
+  context object, relink in place).
+- A fresh-canvas swap handles re-init after a teardown-driven loss.
+- A one-shot restore watchdog (`CONTEXT_RESTORE_TIMEOUT_MS`) degrades to the
+  CSS gradient if the UA never dispatches `webglcontextrestored` — permitted
+  by the spec, and otherwise leaves a blank field with no signal beyond the
+  loss-time `console.warn`.
 
 **Related Files**
 
-- `packages/webcomponents/src/freezer/slicc-shader.ts` — `#initGl` / `#replaceCanvas` / `#dispose`
-- `packages/webcomponents/tests/freezer/slicc-shader.test.ts` — remount regression test
+- `packages/webcomponents/src/freezer/slicc-shader.ts` — `#initGl` / `#replaceCanvas` / `#dispose` / restore watchdog
+- `packages/webcomponents/tests/freezer/slicc-shader.test.ts` — remount + never-restored regression tests
