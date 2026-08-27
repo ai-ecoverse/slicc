@@ -473,11 +473,15 @@ check.
 (`delivered` | `filtered` | `unknown-webhook` | `unresolved-target`), which
 travels back to whoever is holding the HTTP request open: the tray worker asks
 for it with a `deliveryId` on `webhook.event` and reads the leader's
-`webhook.delivery` (`404 WEBHOOK_NOT_REGISTERED`, `422
-WEBHOOK_TARGET_UNRESOLVED`, else the unchanged `202`), and the node-server sends
-`webhook_event` as a lick-bridge REQUEST instead of a broadcast. `filtered` keeps
-the success receipt — a `--filter` dropping an event is the filter working — and
-so does silence, because a leader too old to answer is not evidence of a drop.
+`webhook.delivery`, and the node-server sends `webhook_event` as a lick-bridge
+REQUEST instead of a broadcast. Only the failure receipts are new — `404
+WEBHOOK_NOT_REGISTERED`, `422 WEBHOOK_TARGET_UNRESOLVED`, `500
+WEBHOOK_DISPATCH_FAILED` — and each leg keeps its own pre-#2524 success receipt
+(the tray worker's `202 {"ok":true,"accepted":true}`, the node-server's `200
+{"ok":true,"received":true}`), so no healthy caller has to be re-taught. That
+success receipt also still covers `filtered` — a `--filter` dropping an event is
+the filter working — and silence, because a leader too old to answer is not
+evidence of a drop.
 
 **Every producer a unit's shell can start follows the invoking unit**, so an
 extra cone's (or a scoop's) events come back to it rather than to the oldest
