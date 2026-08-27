@@ -233,6 +233,12 @@ export interface StartPageFollowerTrayOptions {
    */
   onSudoApprovalRequest?: FollowerSyncManagerOptions['onSudoApprovalRequest'];
 
+  /**
+   * A message this follower sent moved through the leader's biscotto review
+   * gate. Only ever fires on a guest seat.
+   */
+  onBiscottoMessageState?: FollowerSyncManagerOptions['onBiscottoMessageState'];
+
   // --- Page-side wiring callbacks ---
   /**
    * Install the freshly-constructed `FollowerSyncManager` as the chat
@@ -430,6 +436,7 @@ export function startPageFollowerTray(
       onModelState: options.onModelState,
       onThemeApply: applyFollowerLeaderTheme,
       onSudoApprovalRequest: options.onSudoApprovalRequest,
+      onBiscottoMessageState: options.onBiscottoMessageState,
       selfRuntimeId: runtimeId,
       onTargetsChanged: () => void refreshTargets(),
       onSprinklesList: (sprinkles) => {

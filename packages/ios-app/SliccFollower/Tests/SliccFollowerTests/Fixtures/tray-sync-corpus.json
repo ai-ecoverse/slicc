@@ -1,6 +1,6 @@
 {
   "traySyncProtocolVersion": 7,
-  "leaderVariantCount": 41,
+  "leaderVariantCount": 42,
   "followerVariantCount": 37,
   "agentEventVariantCount": 12,
   "leaderToFollower": [
@@ -15,6 +15,15 @@
           "text": "partial"
         },
         "scoopJid": "cone"
+      }
+    },
+    {
+      "type": "biscotto.message.state",
+      "ios": "unknown",
+      "message": {
+        "type": "biscotto.message.state",
+        "messageId": "gm-1",
+        "state": "pending"
       }
     },
     {

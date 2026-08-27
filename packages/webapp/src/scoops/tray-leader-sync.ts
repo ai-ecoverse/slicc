@@ -30,6 +30,7 @@ import type { SudoDecision, SudoRequest } from '../sudo/types.js';
 import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';
 import type { LickEvent } from './lick-manager.js';
+import { BiscottoReview } from './tray-leader/biscotto-review.js';
 import { BroadcastManager } from './tray-leader/broadcast.js';
 import { CDPRouter } from './tray-leader/cdp-router.js';
 import { CherryRouter } from './tray-leader/cherry-router.js';
@@ -258,6 +259,7 @@ export class LeaderSyncManager {
   private readonly tabTeleportRouter: TabTeleportRouter;
   private readonly oauthPopupDelegation: OAuthPopupDelegation;
   private readonly sudoDelegation: SudoDelegation;
+  private readonly biscottoReview: BiscottoReview;
   /** Follower bootstrap ids that registered a push token this session. */
   private readonly pushRegistered = new Set<string>();
   private get followers(): Map<string, ConnectedFollower> {
@@ -301,7 +303,24 @@ export class LeaderSyncManager {
     });
     this.oauthPopupDelegation = new OAuthPopupDelegation(context);
     this.sudoDelegation = new SudoDelegation(context);
+    this.biscottoReview = new BiscottoReview(context, {
+      deliver: (pending) => {
+        // Only NOW is the guest the interaction origin: the message survived
+        // review and is really entering the cone.
+        this.followerDispatch.noteInteractionOrigin(pending.bootstrapId);
+        this.options.onFollowerMessage(pending.text, pending.messageId, pending.attachments, {
+          ...(pending.steer ? { steer: true } : {}),
+          biscotto: pending.biscotto,
+        });
+      },
+      notify: (bootstrapId, messageId, state) => {
+        this.followerRegistry.followers
+          .get(bootstrapId)
+          ?.sync.send({ type: 'biscotto.message.state', messageId, state });
+      },
+    });
     this.followerDispatch = new FollowerDispatch(context, {
+      biscottoReview: this.biscottoReview,
       broadcast: this.broadcast,
       cdpRouter: this.cdpRouter,
       remoteExec: this.remoteExec,

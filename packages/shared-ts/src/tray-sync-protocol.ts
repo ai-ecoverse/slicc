@@ -159,7 +159,18 @@ export interface TraySyncCapabilities {
  * transcript-export gate, folded into sudo in v7 (previously its own
  * `transcript.export.approve.*` pair).
  */
-export type TraySudoKind = 'command' | 'read' | 'write' | 'secret' | 'export';
+/**
+ * What a sudo prompt is gating.
+ *
+ * `guest-message` is the odd one out: it gates a message a BISCOTTO sent
+ * before that text is allowed to reach the cone at all. Unlike every other
+ * kind it must never be persisted as a NOPASSWD rule — its `detail` is
+ * attacker-chosen prose, and `directiveForKind` would file it under `Cmnd`,
+ * so an owner clicking "Always" on a guest message of `*` would grant
+ * passwordless approval to every future shell command. `SudoManager.approve`
+ * downgrades `always` to a one-shot `allow` for this kind.
+ */
+export type TraySudoKind = 'command' | 'read' | 'write' | 'secret' | 'export' | 'guest-message';
 
 /** The human's verdict on a delegated sudo prompt. */
 export type TraySudoDecision = 'allow' | 'deny' | 'always';
@@ -291,6 +302,19 @@ export function isTrayChunkFrame(value: unknown): value is TrayChunkFrame {
 export type LeaderToFollowerMessage =
   // Transcript export (leader → follower)
   | { type: 'transcript.export.pending'; requestId: string }
+  /**
+   * Where a biscotto's message got to. Sent to the guest that authored it and
+   * to nobody else — a seat learns about its OWN messages only.
+   *
+   * `rejected` (a human refused) and `unanswered` (nobody ever looked) are
+   * distinct on purpose: a guest told "refused" when the truth is "the owner
+   * is asleep" will keep rephrasing at a wall.
+   */
+  | {
+      type: 'biscotto.message.state';
+      messageId: string;
+      state: 'pending' | 'approved' | 'rejected' | 'unanswered';
+    }
   | { type: 'transcript.export.denied'; requestId: string }
   /**
    * Delegated sudo prompt (v7, issue #2062). The leader has decided this

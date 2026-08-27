@@ -6,6 +6,7 @@ import {
   unhandledProtocolMessage,
 } from '../tray-sync-protocol.js';
 import { isMessageAllowedForTrust } from './biscotto-gate.js';
+import type { BiscottoReview } from './biscotto-review.js';
 import type { BroadcastManager } from './broadcast.js';
 import type { CDPRouter } from './cdp-router.js';
 import type { CherryRouter } from './cherry-router.js';
@@ -47,6 +48,8 @@ export interface FollowerDispatchCollaborators {
   sudoDelegation: Pick<SudoDelegation, 'handleResponse' | 'handleFollowerReady'>;
   cherryRouter: Pick<CherryRouter, 'routeCherryHostEvent'>;
   requesterTracker: Pick<RequesterTracker, 'noteFollowerUserMessage'>;
+  /** Holds a guest's message until its seat's approver says yes. */
+  biscottoReview: Pick<BiscottoReview, 'submit'>;
   /** Forward a follower's push-token registration to the tray hub (issue #2062). */
   registerPushToken?: (
     bootstrapId: string,
@@ -259,31 +262,54 @@ export class FollowerDispatch {
       bootstrapId,
       messageId: message.messageId,
     });
-    // A user message is real human activity — unlike ping/pong keepalives —
-    // so it both marks this follower as the interaction origin and makes
-    // lastActivity a meaningful recency signal for follower selection.
+    // A user message is real human activity — unlike ping/pong keepalives — so
+    // it makes lastActivity a meaningful recency signal for follower selection.
     const follower = this.context.followers.followers.get(bootstrapId);
     if (follower) follower.lastActivity = Date.now();
-    this.collaborators.requesterTracker.noteFollowerUserMessage(
-      bootstrapId,
-      this.context.followers.runtimeIdForBootstrap(bootstrapId)
-    );
     const safeAttachments = message.attachments?.length
       ? stripLocalPathsForRemote(message.attachments)
       : message.attachments;
-    // A guest's text must never reach the cone looking like the owner's, so a
-    // biscotto's seat identity rides along and the consumer attributes the
-    // message to it. A full follower IS the owner on another device and keeps
-    // the historical three-argument hand-off.
+    // A guest's text is REVIEWED before it reaches the cone, and never arrives
+    // looking like the owner's. A full follower IS the owner on another device:
+    // it is not reviewed and keeps the historical three-argument hand-off.
     const biscotto = follower?.trust === 'biscotto' ? follower.biscotto : undefined;
-    if (message.steer || biscotto) {
+    if (biscotto) {
+      // NOT marked as the interaction origin here. A reviewed message may never
+      // be delivered, and `RequesterTracker` decides where interactive prompts
+      // (OAuth popups, teleport pickers) get routed — pointing those at a guest
+      // whose message is still pending, or was refused outright, would hand the
+      // owner's interactions to someone whose input was rejected. The review
+      // path notes the origin only once the message is actually delivered.
+      this.collaborators.biscottoReview.submit(bootstrapId, {
+        bootstrapId,
+        messageId: message.messageId,
+        text: message.text,
+        attachments: safeAttachments,
+        steer: message.steer,
+        biscotto,
+      });
+      return;
+    }
+    this.noteInteractionOrigin(bootstrapId);
+    if (message.steer) {
       this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments, {
-        ...(message.steer ? { steer: true } : {}),
-        ...(biscotto ? { biscotto } : {}),
+        steer: true,
       });
     } else {
       this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments);
     }
+  }
+
+  /**
+   * Mark this follower as where the current interaction came from, so a
+   * delegated OAuth popup or teleport picker opens on the browser its human is
+   * actually looking at.
+   */
+  noteInteractionOrigin(bootstrapId: string): void {
+    this.collaborators.requesterTracker.noteFollowerUserMessage(
+      bootstrapId,
+      this.context.followers.runtimeIdForBootstrap(bootstrapId)
+    );
   }
 
   private handleFollowerNewSession(bootstrapId: string, action: 'save' | 'skip' | 'erase'): void {

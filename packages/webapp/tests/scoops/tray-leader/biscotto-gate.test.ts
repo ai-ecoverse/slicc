@@ -59,6 +59,7 @@ function createCollaborators(): FollowerDispatchCollaborators {
     sudoDelegation: { handleResponse: vi.fn(), handleFollowerReady: vi.fn() },
     cherryRouter: { routeCherryHostEvent: vi.fn() },
     requesterTracker: { noteFollowerUserMessage: vi.fn() },
+    biscottoReview: { submit: vi.fn() },
     tabTeleportRouter: { handleTeleportRequest: vi.fn(async () => {}) },
     oauthPopupDelegation: { handlePopupResponse: vi.fn() },
   };
@@ -184,14 +185,35 @@ describe('FollowerDispatch biscotto boundary', () => {
     expect(options.onFollowerAbort).not.toHaveBeenCalled();
   });
 
-  it('delivers a guest user message WITH its seat identity attached', () => {
-    const { dispatch, options } = createHarness('biscotto');
+  it('routes a guest user message into review instead of straight to the cone', () => {
+    const { collaborators: c, dispatch, options } = createHarness('biscotto');
     dispatch.dispatch('peer', { type: 'user_message', text: 'hi', messageId: 'm1' });
-    // Without the identity the consumer cannot tell a guest's words from the
-    // owner's, and submits them as an owner instruction.
-    expect(options.onFollowerMessage).toHaveBeenCalledWith('hi', 'm1', undefined, {
+
+    // The whole point of the gate: nothing reaches the cone until a human says so.
+    expect(options.onFollowerMessage).not.toHaveBeenCalled();
+    expect(c.biscottoReview.submit).toHaveBeenCalledWith('peer', {
+      bootstrapId: 'peer',
+      messageId: 'm1',
+      text: 'hi',
+      attachments: undefined,
+      steer: undefined,
       biscotto: { id: 'seat1', label: 'Anna', gates: undefined },
     });
+  });
+
+  it('does not mark a guest as the interaction origin before review', () => {
+    const { collaborators: c, dispatch } = createHarness('biscotto');
+    dispatch.dispatch('peer', { type: 'user_message', text: 'hi', messageId: 'm1' });
+    // `RequesterTracker` decides where an OAuth popup or teleport picker opens.
+    // Pointing those at a guest whose message may yet be refused would hand the
+    // owner's interactions to someone whose input was rejected.
+    expect(c.requesterTracker.noteFollowerUserMessage).not.toHaveBeenCalled();
+  });
+
+  it('marks a full follower as the interaction origin immediately', () => {
+    const { collaborators: c, dispatch } = createHarness('full');
+    dispatch.dispatch('peer', { type: 'user_message', text: 'hi', messageId: 'm1' });
+    expect(c.requesterTracker.noteFollowerUserMessage).toHaveBeenCalledWith('peer', undefined);
   });
 
   it('leaves a full follower message on the historical three-argument path', () => {
@@ -200,18 +222,21 @@ describe('FollowerDispatch biscotto boundary', () => {
     expect(options.onFollowerMessage).toHaveBeenCalledWith('hi', 'm1', undefined);
   });
 
-  it('carries both steer and seat identity when a guest steers', () => {
-    const { dispatch, options } = createHarness('biscotto');
+  it('reviews a steering send too, rather than letting it interrupt the cone', () => {
+    const { collaborators: c, dispatch, options } = createHarness('biscotto');
     dispatch.dispatch('peer', {
       type: 'user_message',
       text: 'hi',
       messageId: 'm1',
       steer: true,
     });
-    expect(options.onFollowerMessage).toHaveBeenCalledWith('hi', 'm1', undefined, {
-      steer: true,
-      biscotto: { id: 'seat1', label: 'Anna', gates: undefined },
-    });
+    // A steer interrupts the owner's running turn — the last thing that should
+    // bypass review.
+    expect(options.onFollowerMessage).not.toHaveBeenCalled();
+    expect(c.biscottoReview.submit).toHaveBeenCalledWith(
+      'peer',
+      expect.objectContaining({ steer: true, messageId: 'm1' })
+    );
   });
 
   it('lets a full-trust follower keep the surface a guest is denied', () => {

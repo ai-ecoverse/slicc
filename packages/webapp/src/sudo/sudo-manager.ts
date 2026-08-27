@@ -237,6 +237,19 @@ export class SudoManager {
     }
     const decision = await this.broker.requestApproval(req);
     if (decision.decision === 'always') {
+      if (req.kind === 'guest-message') {
+        // NEVER persist a guest message as a grant. `detail` here is
+        // attacker-chosen prose and `directiveForKind` files everything it
+        // does not recognise under `Cmnd`, so "Always" on a guest message of
+        // `*` would write `Cmnd *` NOPASSWD — passwordless approval for every
+        // future shell command. Honour the gesture once and forget it. An
+        // owner who wants a standing exemption sets the seat's message gate to
+        // `off`, which is scoped to that seat rather than the sudoers table.
+        // (Keeping this INSIDE the `always` branch is also what narrows
+        // `req.kind` for `directiveForKind` below.)
+        log.info('Downgrading "Always" on a guest message to a one-shot allow');
+        return { decision: 'allow', attestation: decision.attestation };
+      }
       const pattern = decision.pattern?.trim() || req.suggestedPattern?.trim() || req.detail;
       try {
         await this.persistGrant(directiveForKind(req.kind), pattern);

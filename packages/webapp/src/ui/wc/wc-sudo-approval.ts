@@ -23,6 +23,7 @@ const KIND_HEADING: Record<SudoRequest['kind'], string> = {
   write: 'Allow write?',
   secret: 'Allow secret access?',
   export: 'Export transcript?',
+  'guest-message': 'Send guest message to the cone?',
 };
 
 /** What the detail row is labelled per kind. */
@@ -32,6 +33,7 @@ const KIND_LABEL: Record<SudoRequest['kind'], string> = {
   write: 'Path',
   secret: 'Secret',
   export: 'Transcript',
+  'guest-message': 'Message',
 };
 
 export interface SudoApprovalDialogOptions {
