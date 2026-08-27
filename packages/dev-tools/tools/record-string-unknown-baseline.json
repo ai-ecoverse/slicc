@@ -3,7 +3,6 @@
   "packages/cherry/src/preview-bootstrap.ts": 2,
   "packages/cherry/src/protocol.ts": 5,
   "packages/chrome-extension/src/bridge-sw.ts": 17,
-  "packages/chrome-extension/src/secrets-storage.ts": 3,
   "packages/cloud-core/src/cone-config/index.ts": 6,
   "packages/cloudflare-worker/src/cloud/handlers.ts": 1,
   "packages/cloudflare-worker/src/oauth-exchange.ts": 1,

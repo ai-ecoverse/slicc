@@ -33,13 +33,21 @@ export {
 };
 
 /**
+ * Opaque bag from `chrome.storage.local`: string keys chosen by the
+ * extension, values narrowed when pairing secrets (non-strings skipped).
+ * Mirrors `ChromeStorageItems` in `chrome.d.ts` without coupling this
+ * module to the ambient Chrome typings.
+ */
+export type SecretsStorageItems = { [key: string]: unknown };
+
+/**
  * Minimal interface for `chrome.storage.local` that we actually use.
  * Both the production `chrome.storage.local` and a test in-memory mock
  * satisfy this shape.
  */
 export interface StorageArea {
-  get(keys?: null | string | string[]): Promise<Record<string, unknown>>;
-  set(items: Record<string, unknown>): Promise<void>;
+  get(keys?: null | string | string[]): Promise<SecretsStorageItems>;
+  set(items: SecretsStorageItems): Promise<void>;
   remove(keys: string | string[]): Promise<void>;
 }
 
@@ -144,7 +152,7 @@ export async function listSecretsWithValues(storage: StorageArea): Promise<Secre
   return pairStorageEntries(all);
 }
 
-function pairStorageEntries(all: Record<string, unknown>): SecretEntryWithValue[] {
+function pairStorageEntries(all: SecretsStorageItems): SecretEntryWithValue[] {
   return pairEnvEntriesToSecrets(
     Object.entries(all).flatMap(([key, value]) =>
       typeof value === 'string' ? [{ key, value }] : []
