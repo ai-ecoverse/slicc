@@ -377,6 +377,12 @@ jobs:
           APPLE_SHARE_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_SHARE_PROVISIONING_PROFILE_BASE64 }}
           APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME: ${{ secrets.APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME }}
           APPLE_FILEPROVIDER_BUNDLE_ID: ${{ secrets.APPLE_FILEPROVIDER_BUNDLE_ID }}
+          # Widget appex, same deal — it ships inside the .ipa, so a missing
+          # profile soft-skips the whole TestFlight upload rather than shipping
+          # a build without the widget.
+          APPLE_WIDGETS_PROVISIONING_PROFILE_BASE64: ${{ secrets.APPLE_WIDGETS_PROVISIONING_PROFILE_BASE64 }}
+          APPLE_WIDGETS_PROVISIONING_PROFILE_NAME: ${{ secrets.APPLE_WIDGETS_PROVISIONING_PROFILE_NAME }}
+          APPLE_WIDGETS_BUNDLE_ID: ${{ secrets.APPLE_WIDGETS_BUNDLE_ID }}
           # Repo variable, not a secret: set to 1 to archive the iOS build
           # WITHOUT the iCloud KVS entitlement while the App Store profile
           # lacks the iCloud capability (see package-and-upload-testflight.sh).

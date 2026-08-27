@@ -55,6 +55,12 @@ Terminal.app and iTerm2 launch through Apple Events; `sign-and-package.sh` signs
 
 Shared provider logic in **`packages/swift-traykit`** (`SliccTrayVFS`). `SliccFileProvider.appex` is built via XcodeGen (`project.yml`) + `xcodebuild`, then `stageFileProviderAppex` copies it into `Contents/PlugIns/` **with its own `WebRTC.framework` and `AppIcon.icns`** — a sandboxed appex cannot load the host `Resources/` copy, and Finder Locations uses the appex icon. `FileProviderCoordinator` saves the join URL to an app-group file (not keychain) when `leaderJoinUrl` is set; Settings → Startup toggles Finder integration. Clean quit withdraws the domain (update/detach does not). The appex is App Sandbox + network client/server, notarized alongside the main app; enable once in System Settings → Login Items & Extensions → File Provider. Coverage: `FileProviderCoordinatorTests`, `stage-file-provider-appex.test.mjs`, `packages/swift-traykit` provider tests.
 
+## Widget Extension (Cones & Scoops)
+
+`SliccstartWidgets.appex` (`com.slicc.sliccstart.widgets`) shows the connected instance's cones and scoops in Notification Centre / on the desktop. Views live in **`packages/swift-widgetkit`**; this package owns only the `@main` bundle and the build wiring — XcodeGen (`project.yml`, `SliccstartWidgets` scheme) → `stageWidgetAppex` into `Contents/PlugIns/` → `sign-and-package.sh` signs it with `SliccstartWidgets.entitlements` (sandbox + app group, no framework to embed, unlike the File Provider appex).
+
+**Not wired yet**: Sliccstart holds no cone/scoop state (it is a launcher; state is client-side in the leader tab), so nothing writes `widget-snapshot.json` and the target carries `SLICC_WIDGET_DESIGN_FIXTURES`. The capture side is a small tray follower over the join URL it already knows — never the local server, which is a stateless relay. Plan: [`docs/widgets.md`](../../docs/widgets.md).
+
 ## iCloud Sync (Tray Sessions)
 
 Shared models in **`packages/swift-traysession`**. **Secret-bearing join URLs sync only through same-Apple-ID, encrypted iCloud KVS.** `SessionReachability` follows bounded `TRAY_SUPERSEDED` chains; only HTTP 200 with `leader.connected == true` is live. `SliccstartApp` publishes non-nil `leaderJoinUrl` (refreshes every 4 h); clean quit withdraws, update/detach does not. Coverage: `TraySessionLauncherTests`.

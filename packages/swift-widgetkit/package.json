@@ -1,0 +1,13 @@
+{
+  "name": "@slicc/swift-widgetkit",
+  "private": true,
+  "scripts": {
+    "build": "swift build -c release",
+    "test": "swift test",
+    "lint": "swiftlint lint",
+    "lint:fix": "swiftlint --fix",
+    "format": "swift format --in-place --parallel --recursive Sources Tests Package.swift",
+    "lint:format": "swift format lint --strict --parallel --recursive Sources Tests Package.swift",
+    "deadcode": "periphery scan"
+  }
+}

@@ -23,6 +23,9 @@
 #   APPLE_SHARE_PROVISIONING_PROFILE_BASE64        # Share extension appex App Store profile
 #   APPLE_SHARE_PROVISIONING_PROFILE_NAME          # optional plain text
 #   APPLE_SHARE_BUNDLE_ID                          # optional plain text
+#   APPLE_WIDGETS_PROVISIONING_PROFILE_BASE64      # Widget extension appex App Store profile
+#   APPLE_WIDGETS_PROVISIONING_PROFILE_NAME        # optional plain text
+#   APPLE_WIDGETS_BUNDLE_ID                        # optional plain text
 #
 # Usage:
 #   packages/ios-app/scripts/setup-testflight-secrets.sh \
@@ -73,6 +76,9 @@ FILEPROVIDER_BUNDLE_ID="${APPLE_FILEPROVIDER_BUNDLE_ID:-com.sliccy.follower.file
 SHARE_PROFILE_PATH="${APPLE_SHARE_PROVISIONING_PROFILE_PATH:-}"
 SHARE_PROFILE_NAME="${APPLE_SHARE_PROVISIONING_PROFILE_NAME:-Slicc Follower Share App Store}"
 SHARE_BUNDLE_ID="${APPLE_SHARE_BUNDLE_ID:-com.sliccy.follower.share}"
+WIDGETS_PROFILE_PATH="${APPLE_WIDGETS_PROVISIONING_PROFILE_PATH:-}"
+WIDGETS_PROFILE_NAME="${APPLE_WIDGETS_PROVISIONING_PROFILE_NAME:-Slicc Follower Widgets App Store}"
+WIDGETS_BUNDLE_ID="${APPLE_WIDGETS_BUNDLE_ID:-com.sliccy.follower.widgets}"
 CERT_P12_PATH="${APPLE_DISTRIBUTION_CERT_P12:-}"
 CERT_PASSWORD="${APPLE_DISTRIBUTION_CERT_PASSWORD:-}"
 
@@ -89,6 +95,9 @@ while [ $# -gt 0 ]; do
     --share-profile) SHARE_PROFILE_PATH="$2"; shift 2;;
     --share-profile-name) SHARE_PROFILE_NAME="$2"; shift 2;;
     --share-bundle-id) SHARE_BUNDLE_ID="$2"; shift 2;;
+    --widgets-profile) WIDGETS_PROFILE_PATH="$2"; shift 2;;
+    --widgets-profile-name) WIDGETS_PROFILE_NAME="$2"; shift 2;;
+    --widgets-bundle-id) WIDGETS_BUNDLE_ID="$2"; shift 2;;
     --cert-p12) CERT_P12_PATH="$2"; shift 2;;
     --cert-password) CERT_PASSWORD="$2"; shift 2;;
     --repo) REPO="$2"; shift 2;;
@@ -126,6 +135,7 @@ missing=()
 [ -z "$PROFILE_PATH" ]  && missing+=("--profile / APPLE_PROVISIONING_PROFILE_PATH")
 [ -z "$FILEPROVIDER_PROFILE_PATH" ] && missing+=("--fileprovider-profile / APPLE_FILEPROVIDER_PROVISIONING_PROFILE_PATH")
 [ -z "$SHARE_PROFILE_PATH" ] && missing+=("--share-profile / APPLE_SHARE_PROVISIONING_PROFILE_PATH")
+[ -z "$WIDGETS_PROFILE_PATH" ] && missing+=("--widgets-profile / APPLE_WIDGETS_PROVISIONING_PROFILE_PATH")
 [ -z "$CERT_P12_PATH" ] && missing+=("--cert-p12 / APPLE_DISTRIBUTION_CERT_P12")
 [ -z "$CERT_PASSWORD" ] && missing+=("--cert-password / APPLE_DISTRIBUTION_CERT_PASSWORD")
 if [ ${#missing[@]} -ne 0 ]; then
@@ -178,8 +188,11 @@ set_secret APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME "$FILEPROVIDER_PROFILE_N
 set_secret APPLE_FILEPROVIDER_BUNDLE_ID "$FILEPROVIDER_BUNDLE_ID"
 set_secret APPLE_SHARE_PROVISIONING_PROFILE_BASE64 "$(base64 < "$SHARE_PROFILE_PATH")"
 set_secret APPLE_SHARE_PROVISIONING_PROFILE_NAME "$SHARE_PROFILE_NAME"
+set_secret APPLE_WIDGETS_PROVISIONING_PROFILE_BASE64 "$(base64 < "$WIDGETS_PROFILE_PATH")"
+set_secret APPLE_WIDGETS_PROVISIONING_PROFILE_NAME "$WIDGETS_PROFILE_NAME"
 set_secret APPLE_SHARE_BUNDLE_ID "$SHARE_BUNDLE_ID"
+set_secret APPLE_WIDGETS_BUNDLE_ID "$WIDGETS_BUNDLE_ID"
 
 echo
 echo "Done. Verify with:"
-echo "  $GH_BIN secret list -R $REPO | grep -E 'APPLE_API_KEY|APPLE_DISTRIBUTION|APPLE_PROVISIONING|APPLE_FILEPROVIDER|APPLE_SHARE'"
+echo "  $GH_BIN secret list -R $REPO | grep -E 'APPLE_API_KEY|APPLE_DISTRIBUTION|APPLE_PROVISIONING|APPLE_FILEPROVIDER|APPLE_SHARE|APPLE_WIDGETS'"

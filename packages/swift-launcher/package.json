@@ -6,8 +6,8 @@
     "test": "swift test",
     "lint": "swiftlint lint",
     "lint:fix": "swiftlint --fix",
-    "format": "swift format --in-place --parallel --recursive Sliccstart SliccstartTests Package.swift",
-    "lint:format": "swift format lint --strict --parallel --recursive Sliccstart SliccstartTests Package.swift",
+    "format": "swift format --in-place --parallel --recursive Sliccstart SliccstartTests SliccstartWidgets Package.swift",
+    "lint:format": "swift format lint --strict --parallel --recursive Sliccstart SliccstartTests SliccstartWidgets Package.swift",
     "deadcode": "periphery scan"
   }
 }

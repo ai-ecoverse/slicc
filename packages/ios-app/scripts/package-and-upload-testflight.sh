@@ -26,6 +26,13 @@
 #   APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME
 #                                      defaults to "Slicc Follower File Provider App Store"
 #   APPLE_FILEPROVIDER_BUNDLE_ID       defaults to com.sliccy.follower.fileprovider
+#   APPLE_WIDGETS_PROVISIONING_PROFILE_BASE64
+#                                      base64 of the widget extension's App
+#                                      Store .mobileprovision (its App ID needs
+#                                      the App Groups capability)
+#   APPLE_WIDGETS_PROVISIONING_PROFILE_NAME
+#                                      defaults to "Slicc Follower Widgets App Store"
+#   APPLE_WIDGETS_BUNDLE_ID            defaults to com.sliccy.follower.widgets
 #   APPLE_SHARE_PROVISIONING_PROFILE_BASE64
 #                                      Share extension appex App Store profile
 #   APPLE_SHARE_PROVISIONING_PROFILE_NAME
@@ -95,7 +102,8 @@ for var in APPLE_DISTRIBUTION_CERT_BASE64 APPLE_DISTRIBUTION_CERT_PASSWORD \
            APPLE_API_KEY_P8_BASE64 APPLE_API_KEY_ID APPLE_API_KEY_ISSUER_ID \
            APPLE_PROVISIONING_PROFILE_BASE64 \
            APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64 \
-           APPLE_SHARE_PROVISIONING_PROFILE_BASE64; do
+           APPLE_SHARE_PROVISIONING_PROFILE_BASE64 \
+           APPLE_WIDGETS_PROVISIONING_PROFILE_BASE64; do
   if secret_unusable "$var"; then
     msg="TestFlight secret \$$var is missing or set to \"-\" — skipping iOS upload."
     if [ -n "${GITHUB_RUN_NUMBER:-}" ]; then
@@ -120,6 +128,8 @@ FILEPROVIDER_BUNDLE_ID="${APPLE_FILEPROVIDER_BUNDLE_ID:-com.sliccy.follower.file
 FILEPROVIDER_PROFILE_NAME="${APPLE_FILEPROVIDER_PROVISIONING_PROFILE_NAME:-Slicc Follower File Provider App Store}"
 SHARE_BUNDLE_ID="${APPLE_SHARE_BUNDLE_ID:-com.sliccy.follower.share}"
 SHARE_PROFILE_NAME="${APPLE_SHARE_PROVISIONING_PROFILE_NAME:-Slicc Follower Share App Store}"
+WIDGETS_BUNDLE_ID="${APPLE_WIDGETS_BUNDLE_ID:-com.sliccy.follower.widgets}"
+WIDGETS_PROFILE_NAME="${APPLE_WIDGETS_PROVISIONING_PROFILE_NAME:-Slicc Follower Widgets App Store}"
 
 echo "=== SliccFollower TestFlight v${VERSION} (build ${BUILD_NUMBER}) ==="
 
@@ -259,6 +269,7 @@ install_profile_b64() {
 install_profile_b64 "$APPLE_PROVISIONING_PROFILE_BASE64" "app"
 install_profile_b64 "$APPLE_FILEPROVIDER_PROVISIONING_PROFILE_BASE64" "fileprovider"
 install_profile_b64 "$APPLE_SHARE_PROVISIONING_PROFILE_BASE64" "share"
+install_profile_b64 "$APPLE_WIDGETS_PROVISIONING_PROFILE_BASE64" "widgets"
 
 # --- API key: locate the .p8 so altool / xcodebuild can find it -----------
 if [ -z "${APPLE_API_KEY_ID:-}" ] || [ -z "${APPLE_API_KEY_ISSUER_ID:-}" ]; then
@@ -319,6 +330,8 @@ cat > "$EXPORT_OPTS" <<EOF
         <string>${FILEPROVIDER_PROFILE_NAME}</string>
         <key>${SHARE_BUNDLE_ID}</key>
         <string>${SHARE_PROFILE_NAME}</string>
+        <key>${WIDGETS_BUNDLE_ID}</key>
+        <string>${WIDGETS_PROFILE_NAME}</string>
     </dict>
     <key>uploadSymbols</key>
     <true/>
@@ -350,10 +363,12 @@ python3 - "$IOS_PROJECT_DIR/SliccFollower.xcodeproj/project.pbxproj" \
   "$BUNDLE_ID" "$PROFILE_NAME" \
   "$FILEPROVIDER_BUNDLE_ID" "$FILEPROVIDER_PROFILE_NAME" \
   "$SHARE_BUNDLE_ID" "$SHARE_PROFILE_NAME" \
+  "$WIDGETS_BUNDLE_ID" "$WIDGETS_PROFILE_NAME" \
   "$TEAM_ID" <<'PY'
 import sys
 from pathlib import Path
-path, app_id, app_prof, fp_id, fp_prof, share_id, share_prof, team = sys.argv[1:9]
+(path, app_id, app_prof, fp_id, fp_prof, share_id, share_prof,
+ widgets_id, widgets_prof, team) = sys.argv[1:11]
 text = Path(path).read_text()
 lines = text.splitlines(keepends=True)
 out = []
@@ -362,6 +377,7 @@ targets = {
     app_id: (app_prof, "Manual"),
     fp_id: (fp_prof, "Manual"),
     share_id: (share_prof, "Manual"),
+    widgets_id: (widgets_prof, "Manual"),
 }
 while i < len(lines):
     out.append(lines[i])
@@ -419,7 +435,7 @@ while i < len(lines):
         i += 1
         continue
 Path(path).write_text("".join(out))
-print(f"  patched pbxproj signing for {app_id} + {fp_id}")
+print(f"  patched pbxproj signing for {app_id} + {fp_id} + {share_id} + {widgets_id}")
 PY
 
 xcodebuild \

@@ -23,6 +23,7 @@ this file when a category grows; keep the root file to bare titles.
 | `packages/swift-server/`       | macOS Hummingbird server (`slicc-server`)                                                |
 | `packages/swift-traysession/`  | Foundation-only iCloud tray-session sync (launcher + iOS)                                |
 | `packages/swift-trayfollower/` | `SliccTrayFollower` — shared tray-follower transport (WebRTC + tray-sync)                |
+| `packages/swift-widgetkit/`    | `SliccWidgetKit` — the Cones & Scoops home-screen widget (iOS + macOS)                   |
 | `packages/ios-app/`            | iOS SwiftUI follower (`SliccFollower`) — WebRTC join (SPM, not npm)                      |
 | `packages/slicc-cli/`          | `slicc` — headless Go (pion) follower CLI (`prompt`/`exec`/`follow`; Go module, not npm) |
 | `packages/dev-tools/`          | Repo tooling: build helpers, QA, providers filter, e2b template                          |
