@@ -13,6 +13,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   createSkillGlobal,
+  type SkillConfig,
   type SkillExecBridge,
   type SkillFsBridge,
 } from '../../../src/kernel/realm/skill-global.js';
@@ -189,12 +190,8 @@ describe('skill.config() — error paths', () => {
       fs: makeFs(),
       exec: makeExec(() => ({ stdout: '', stderr: '', exitCode: 0 })),
     });
-    await expect(skill.config([1, 2] as unknown as Record<string, unknown>)).rejects.toThrow(
-      TypeError
-    );
-    await expect(skill.config(null as unknown as Record<string, unknown>)).rejects.toThrow(
-      TypeError
-    );
+    await expect(skill.config([1, 2] as unknown as SkillConfig)).rejects.toThrow(TypeError);
+    await expect(skill.config(null as unknown as SkillConfig)).rejects.toThrow(TypeError);
   });
 
   it('treats empty file content as no config', async () => {

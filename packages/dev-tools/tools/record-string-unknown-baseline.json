@@ -40,7 +40,6 @@
   "packages/webapp/src/kernel/realm/http-global.ts": 2,
   "packages/webapp/src/kernel/realm/mount-bomb-fs.ts": 2,
   "packages/webapp/src/kernel/realm/py-realm-shared.ts": 1,
-  "packages/webapp/src/kernel/realm/skill-global.ts": 7,
   "packages/webapp/src/kernel/realm/ws-router-page.ts": 7,
   "packages/webapp/src/kernel/telemetry.ts": 1,
   "packages/webapp/src/net/handoff-link.ts": 1,

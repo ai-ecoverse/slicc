@@ -37,11 +37,17 @@ export interface SkillGlobalDeps {
   exec: SkillExecBridge;
 }
 
+/**
+ * Parsed skill `.config` JSON object. Skills own their keys; the kernel
+ * only requires a plain object and shallow-merges updates.
+ */
+export type SkillConfig = { [key: string]: unknown };
+
 export interface SkillGlobal {
   readonly dir: string;
   readonly refs: string;
   readonly assets: string;
-  config(updates?: Record<string, unknown>): Promise<Record<string, unknown> | null>;
+  config(updates?: SkillConfig): Promise<SkillConfig | null>;
   token(providerId: string): Promise<string>;
 }
 
@@ -77,7 +83,7 @@ export function createSkillGlobal(deps: SkillGlobalDeps): SkillGlobal {
   const assets = joinChild(dir, 'assets');
   const configPath = joinChild(dir, '.config');
 
-  async function readConfig(): Promise<Record<string, unknown> | null> {
+  async function readConfig(): Promise<SkillConfig | null> {
     let exists: boolean;
     try {
       exists = await deps.fs.exists(configPath);
@@ -101,20 +107,18 @@ export function createSkillGlobal(deps: SkillGlobalDeps): SkillGlobal {
       throw new Error(`skill.config(): failed to parse ${configPath}: ${msg}`);
     }
     if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
-      return parsed as Record<string, unknown>;
+      return parsed as SkillConfig;
     }
     throw new Error(`skill.config(): ${configPath} must contain a JSON object`);
   }
 
-  async function config(
-    updates?: Record<string, unknown>
-  ): Promise<Record<string, unknown> | null> {
+  async function config(updates?: SkillConfig): Promise<SkillConfig | null> {
     const existing = await readConfig();
     if (updates === undefined) return existing;
     if (updates === null || typeof updates !== 'object' || Array.isArray(updates)) {
       throw new TypeError('skill.config(updates): updates must be a plain object');
     }
-    const merged: Record<string, unknown> = { ...(existing ?? {}), ...updates };
+    const merged: SkillConfig = { ...(existing ?? {}), ...updates };
     await deps.fs.writeFile(configPath, JSON.stringify(merged, null, 2) + '\n');
     return merged;
   }
