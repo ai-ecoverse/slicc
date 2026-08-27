@@ -18,7 +18,7 @@
  * unchanged.
  */
 
-import { isExtensionRealm } from '../../core/runtime-env.js';
+import { isExtensionRealm } from '../../base/runtime-env.js';
 
 /** Camera / mic capture request forwarded to the popup. */
 export interface PopupCameraCaptureRequest {
