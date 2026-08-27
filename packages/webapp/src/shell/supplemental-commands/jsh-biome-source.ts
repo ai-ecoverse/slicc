@@ -18,8 +18,21 @@
  * two in sync when either changes.
  */
 
-/** Biome diagnostic JSON node — tree-walked and mutated in place by {@link shiftBiomeSpans}. */
-type BiomeDiagnosticJsonNode = { [key: string]: unknown };
+/**
+ * Biome diagnostic JSON node — tree-walked and mutated in place by
+ * {@link shiftBiomeSpans}. The walker only ever reads two fields on a node:
+ * `span` (a byte-offset pair it shifts) and `sourceCode` (an embedded source
+ * snapshot it nulls); both stay `unknown` because they arrive from Biome's
+ * untrusted JSON and are runtime-checked before use. Every other property is
+ * an arbitrary child node the walker recurses into, hence the open index
+ * signature. Declaring the two meaningful fields keeps this from being a bare
+ * `Record<string, unknown>` bag.
+ */
+type BiomeDiagnosticJsonNode = {
+  span?: unknown;
+  sourceCode?: unknown;
+  [key: string]: unknown;
+};
 
 const LINTABLE_EXTENSIONS = new Set([
   'js',
