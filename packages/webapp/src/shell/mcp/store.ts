@@ -58,21 +58,54 @@ function emptyFile(): McpServersFile {
   return { version: CURRENT_VERSION, servers: {} };
 }
 
+/** Untrusted `servers.json` root before validation. */
+interface UntrustedMcpServersFile {
+  readonly version?: unknown;
+  readonly servers?: unknown;
+}
+
+/** Untrusted server-name map before per-entry validation. */
+interface UntrustedMcpServersMap {
+  readonly [serverName: string]: unknown;
+}
+
+/**
+ * Untrusted server entry before URL validation. Extra keys (and legacy
+ * `sessionId`) may be present; normalize strips sessionId and keeps the rest.
+ */
+interface UntrustedMcpServerEntry {
+  url?: unknown;
+  sessionId?: unknown;
+  protocolVersion?: unknown;
+  headers?: unknown;
+  tools?: unknown;
+  apps?: unknown;
+  addedAt?: unknown;
+  lastRefreshedAt?: unknown;
+  auth?: unknown;
+  pluginOrigin?: unknown;
+}
+
+function isPlainObject(value: unknown): value is object {
+  return value !== null && typeof value === 'object' && !Array.isArray(value);
+}
+
 function normalizeEntry(raw: unknown): McpServerEntry | null {
-  if (!raw || typeof raw !== 'object') return null;
-  const entry = { ...(raw as Record<string, unknown>) };
+  if (!isPlainObject(raw)) return null;
+  // Copy so we can drop legacy `sessionId` without mutating the caller's object.
+  const entry: UntrustedMcpServerEntry = { ...(raw as UntrustedMcpServerEntry) };
   if (typeof entry.url !== 'string') return null;
   delete entry.sessionId;
   return entry as unknown as McpServerEntry;
 }
 
 function normalize(raw: unknown): McpServersFile {
-  if (!raw || typeof raw !== 'object') return emptyFile();
-  const obj = raw as Partial<McpServersFile> & { servers?: unknown };
+  if (!isPlainObject(raw)) return emptyFile();
+  const obj = raw as UntrustedMcpServersFile;
   const version = typeof obj.version === 'number' ? obj.version : CURRENT_VERSION;
   const servers: Record<string, McpServerEntry> = {};
-  if (obj.servers && typeof obj.servers === 'object') {
-    for (const [name, entry] of Object.entries(obj.servers as Record<string, unknown>)) {
+  if (isPlainObject(obj.servers)) {
+    for (const [name, entry] of Object.entries(obj.servers as UntrustedMcpServersMap)) {
       const normalized = normalizeEntry(entry);
       if (normalized) servers[name] = normalized;
     }
