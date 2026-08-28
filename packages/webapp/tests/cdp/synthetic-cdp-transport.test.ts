@@ -1,3 +1,4 @@
+import type { CDPPayload } from '@slicc/shared-ts';
 import { describe, expect, it } from 'vitest';
 import { SyntheticCdpTransport } from '../../src/cdp/synthetic-cdp-transport.js';
 
@@ -5,7 +6,9 @@ import { SyntheticCdpTransport } from '../../src/cdp/synthetic-cdp-transport.js'
  * Trivial subclass with a stub forward that forwards real methods.
  */
 class TestTransport extends SyntheticCdpTransport {
-  public forwarded: Array<[string, any, string | undefined, number | undefined]> = [];
+  public forwarded: Array<
+    [string, CDPPayload | undefined, string | undefined, number | undefined]
+  > = [];
   public closeTargetCalls = 0;
 
   async connect(): Promise<void> {
@@ -22,10 +25,10 @@ class TestTransport extends SyntheticCdpTransport {
 
   protected async forward(
     method: string,
-    params?: Record<string, unknown>,
+    params?: CDPPayload,
     sessionId?: string,
     timeout?: number
-  ): Promise<Record<string, unknown>> {
+  ): Promise<CDPPayload> {
     this.forwarded.push([method, params, sessionId, timeout]);
     return { ok: true };
   }

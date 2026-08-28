@@ -21,7 +21,6 @@
   "packages/webapp/src/cdp/har-recorder.ts": 10,
   "packages/webapp/src/cdp/navigation-watcher.ts": 11,
   "packages/webapp/src/cdp/panel-rpc-cdp-transport.ts": 5,
-  "packages/webapp/src/cdp/synthetic-cdp-transport.ts": 10,
   "packages/webapp/src/core/types.ts": 2,
   "packages/webapp/src/fs/mount/backend-local.ts": 1,
   "packages/webapp/src/git/commands/rebase.ts": 1,

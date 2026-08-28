@@ -9,6 +9,7 @@
  * - PreviewBridgeCdpTransport (postMessage to the preview bridge bootstrap)
  */
 
+import type { CDPPayload } from '@slicc/shared-ts';
 import { waitForEvent } from './pending-request-table.js';
 import type { CDPTransport } from './transport.js';
 import type { CDPConnectOptions, CDPEventListener, ConnectionState } from './types.js';
@@ -93,10 +94,10 @@ export abstract class SyntheticCdpTransport implements CDPTransport {
 
   async send(
     method: string,
-    params?: Record<string, unknown>,
+    params?: CDPPayload,
     sessionId?: string,
     timeout = DEFAULT_TIMEOUT
-  ): Promise<Record<string, unknown>> {
+  ): Promise<CDPPayload> {
     if (this._state !== 'connected') throw new Error('Transport is not connected');
 
     const synthetic = this.handleSynthetic(method, params);
@@ -127,8 +128,8 @@ export abstract class SyntheticCdpTransport implements CDPTransport {
     }
   }
 
-  once(event: string, timeout = DEFAULT_TIMEOUT): Promise<Record<string, unknown>> {
-    return waitForEvent<Record<string, unknown>>(
+  once(event: string, timeout = DEFAULT_TIMEOUT): Promise<CDPPayload> {
+    return waitForEvent<CDPPayload>(
       (handler) => {
         this.on(event, handler);
         return () => this.off(event, handler);
@@ -144,15 +145,15 @@ export abstract class SyntheticCdpTransport implements CDPTransport {
    */
   protected abstract forward(
     method: string,
-    params?: Record<string, unknown>,
+    params?: CDPPayload,
     sessionId?: string,
     timeout?: number
-  ): Promise<Record<string, unknown>>;
+  ): Promise<CDPPayload>;
 
   /**
    * Emit a CDP event to registered listeners.
    */
-  protected emit(method: string, params: Record<string, unknown>): void {
+  protected emit(method: string, params: CDPPayload): void {
     const set = this.listeners.get(method);
     if (!set) return;
     for (const l of set) {
@@ -165,10 +166,7 @@ export abstract class SyntheticCdpTransport implements CDPTransport {
   }
 
   /** Methods the transport answers locally to satisfy BrowserAPI's session setup. */
-  private handleSynthetic(
-    method: string,
-    _params?: Record<string, unknown>
-  ): Promise<Record<string, unknown>> | null {
+  private handleSynthetic(method: string, _params?: CDPPayload): Promise<CDPPayload> | null {
     switch (method) {
       case 'Target.getTargets':
         return Promise.resolve({
@@ -225,10 +223,7 @@ export abstract class SyntheticCdpTransport implements CDPTransport {
     }
   }
 
-  private synthesizeNavigationLifecycle(
-    navResult: Record<string, unknown>,
-    navigatedUrl?: string
-  ): void {
+  private synthesizeNavigationLifecycle(navResult: CDPPayload, navigatedUrl?: string): void {
     const frameId = (navResult.frameId as string) ?? this.syntheticIds.frame;
     const url = navigatedUrl ?? this.getCurrentUrl();
     // Advance the last-known URL so subsequent getTargets/getFrameTree report the
