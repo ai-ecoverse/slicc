@@ -14,6 +14,10 @@ import {
   createMountBombFs,
   formatBombMessage,
   installMountBombs,
+  type MountBombFilesystems,
+  type MountBombFsPlugin,
+  type MountBombOpts,
+  type MountBombPyodideFs,
 } from '../../../src/kernel/realm/mount-bomb-fs.js';
 import type { EmscriptenFsApi, FsNode } from '../../../src/kernel/realm/opfs-sync-fs.js';
 
@@ -46,22 +50,17 @@ function makeFakeFsApi(): EmscriptenFsApi {
 }
 
 function makeFakePyFs(): {
-  filesystems: Record<string, unknown>;
-  mounts: { plugin: unknown; opts: unknown; dir: string }[];
+  filesystems: MountBombFilesystems;
+  mounts: { plugin: MountBombFsPlugin; opts: MountBombOpts; dir: string }[];
   mkdirs: string[];
-  api: EmscriptenFsApi & {
-    stat: (p: string) => unknown;
-    mkdirTree: (p: string) => void;
-    mount: (plugin: unknown, opts: unknown, dir: string) => unknown;
-    filesystems: Record<string, unknown>;
-  };
+  api: MountBombPyodideFs;
 } {
   const fsApi = makeFakeFsApi();
-  const filesystems: Record<string, unknown> = {};
-  const mounts: { plugin: unknown; opts: unknown; dir: string }[] = [];
+  const filesystems: MountBombFilesystems = {};
+  const mounts: { plugin: MountBombFsPlugin; opts: MountBombOpts; dir: string }[] = [];
   const mkdirs: string[] = [];
   const dirs = new Set<string>(['/']);
-  const api = {
+  const api: MountBombPyodideFs = {
     ...fsApi,
     filesystems,
     stat: (path: string): unknown => {
@@ -76,7 +75,7 @@ function makeFakePyFs(): {
         dirs.add(cursor);
       }
     },
-    mount: (plugin: unknown, opts: unknown, dir: string): unknown => {
+    mount: (plugin: MountBombFsPlugin, opts: MountBombOpts, dir: string): unknown => {
       mounts.push({ plugin, opts, dir });
       dirs.add(dir);
       return {};
@@ -138,8 +137,8 @@ describe('installMountBombs', () => {
     expect(py.mounts).toHaveLength(2);
     expect(py.mounts[0].dir).toBe('/mnt/kb');
     expect(py.mounts[1].dir).toBe('/workspace/repo');
-    expect((py.mounts[0].opts as { mountPath: string }).mountPath).toBe('/mnt/kb');
-    expect((py.mounts[1].opts as { mountPath: string }).mountPath).toBe('/workspace/repo');
+    expect(py.mounts[0].opts.mountPath).toBe('/mnt/kb');
+    expect(py.mounts[1].opts.mountPath).toBe('/workspace/repo');
   });
 
   it('creates missing parent directories via mkdirTree', () => {
@@ -167,9 +166,9 @@ describe('installMountBombs', () => {
   it('per-path failure surfaces a warning and continues with the next path', () => {
     const py = makeFakePyFs();
     let mountCalls = 0;
-    const api = {
+    const api: MountBombPyodideFs = {
       ...py.api,
-      mount: (plugin: unknown, opts: unknown, dir: string): unknown => {
+      mount: (plugin: MountBombFsPlugin, opts: MountBombOpts, dir: string): unknown => {
         mountCalls++;
         if (dir === '/mnt/a') throw new Error('EBUSY');
         py.mounts.push({ plugin, opts, dir });
