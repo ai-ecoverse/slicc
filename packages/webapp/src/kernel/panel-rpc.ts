@@ -228,6 +228,32 @@ export type PanelRpcRequest =
       payload?: undefined;
     }
   | {
+      // Mint a biscotto (guest seat) on the tray and return its private URL.
+      // Standalone path: the `biscotto` shell command runs in the kernel
+      // worker, which has no controller token — the page-side leader holds it.
+      // Handler throws when no leader tray is active.
+      op: 'tray-mint-biscotto';
+      payload: {
+        label: string;
+        ttlMs?: number;
+        gates?: {
+          message: { approver: 'off' | 'user' | 'cone' | 'scoop'; scoop?: string };
+          tool: { approver: 'off' | 'user' | 'cone' | 'scoop'; scoop?: string };
+        };
+      };
+    }
+  | {
+      // Revoke a guest seat by id. The worker tombstones the token AND tells
+      // the leader to close any live peer holding it.
+      op: 'tray-revoke-biscotto';
+      payload: { id: string };
+    }
+  | {
+      // List the tray's guest seats. Never returns seat tokens.
+      op: 'tray-list-biscotti';
+      payload?: undefined;
+    }
+  | {
       // Read recent preview bridge lifecycle records from leader memory.
       // This is diagnostic-only and must not emit a lick or wake the cone.
       op: 'tray-preview-logs';
@@ -718,6 +744,44 @@ export interface PanelRpcResults {
       createdAt: string;
       mode?: 'live' | 'persistent';
       expiresAt?: string;
+    }>;
+  };
+  'tray-mint-biscotto': {
+    id: string;
+    /** The private guest URL. Shown ONCE — a listing never returns tokens. */
+    url: string;
+    label: string;
+    expiresAt?: string;
+    gates: {
+      message: { approver: 'off' | 'user' | 'cone' | 'scoop'; scoop?: string };
+      tool: { approver: 'off' | 'user' | 'cone' | 'scoop'; scoop?: string };
+    };
+  };
+  'tray-revoke-biscotto': {
+    id: string;
+    active: boolean;
+    revokedAt?: string;
+    /**
+     * Whether the leader was actually told to close live peers. False means the
+     * seat is revoked for future joins while someone already connected may
+     * still be holding a channel — the command says so rather than reporting a
+     * clean success.
+     */
+    evicted?: boolean;
+  };
+  'tray-list-biscotti': {
+    biscotti: Array<{
+      id: string;
+      label: string;
+      createdAt: string;
+      expiresAt?: string;
+      revokedAt?: string;
+      lastSeenAt?: string;
+      active: boolean;
+      gates: {
+        message: { approver: 'off' | 'user' | 'cone' | 'scoop'; scoop?: string };
+        tool: { approver: 'off' | 'user' | 'cone' | 'scoop'; scoop?: string };
+      };
     }>;
   };
   'tray-preview-logs': {

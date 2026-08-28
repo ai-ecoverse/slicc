@@ -87,6 +87,8 @@ const DISPATCHERS: readonly Dispatcher[] = [
   { command: 'hf', source: 'hf-command.ts', verbs: 'source' },
   { command: 'fswatch', source: 'fswatch-command.ts', verbs: ['create', 'list', 'delete'] },
   { command: 'di', source: 'di-command.ts', verbs: 'source' },
+  // `<verb> --help` must never reach the panel-RPC client and mint a seat.
+  { command: 'biscotto', source: 'biscotto/run.ts', verbs: 'source', extraVerbs: ['list'] },
   // Already correct (top-level `args.includes('--help')`) — pinned so they stay that way.
   { command: 'crontask', source: 'crontask-command.ts', verbs: 'source' },
   { command: 'diskutil', source: 'df-command.ts', verbs: 'source' },
