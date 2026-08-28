@@ -56,9 +56,17 @@ final class SliccProcessLaunchPathTests: XCTestCase {
                     )
                     if let runError { throw runError }
                     // Run something harmless in its place so the record holds a
-                    // live process, exactly as it would in production.
+                    // live process, exactly as it would in production. The
+                    // stand-in also needs a working directory that exists: the
+                    // real one is the resolved slicc dir, which on a machine
+                    // with no checkout (CI, a fresh Mac) is a `~/.slicc/slicc`
+                    // that has not been bootstrapped yet — `Process.run()`
+                    // then fails with "The file 'slicc' doesn't exist" and the
+                    // test is testing the runner's disk, not the launcher.
+                    // What production would have used is captured above.
                     process.executableURL = URL(fileURLWithPath: "/bin/sleep")
                     process.arguments = ["45"]
+                    process.currentDirectoryURL = URL(fileURLWithPath: NSTemporaryDirectory())
                     try process.run()
                     children.append(process)
                 },
@@ -155,7 +163,11 @@ final class SliccProcessLaunchPathTests: XCTestCase {
             spawned.environment["SLICC_BRIDGE_TOKEN"]?.isEmpty ?? true,
             "the bridge token gates /cdp from first launch and has to survive a reattach"
         )
-        XCTAssertNotNil(spawned.currentDirectory, "the child runs from the slicc dir")
+        XCTAssertEqual(
+            spawned.currentDirectory,
+            process.resolvedSliccDir,
+            "the child runs from the resolved slicc dir"
+        )
     }
 
     func testLaunchingABrowserThatIsAlreadyRunningIsANoOp() throws {
@@ -352,7 +364,11 @@ final class SliccProcessLaunchPathTests: XCTestCase {
         let storeURL = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("detach-\(UUID().uuidString).json")
         let store = LaunchRecordStore(storeURL: storeURL)
-        defer { try? FileManager.default.removeItem(at: storeURL) }
+        // `addTeardownBlock`, not `defer`: a deferred cleanup runs while an
+        // error is still propagating and replaced the real failure with its
+        // own "couldn't be removed", which is what CI reported instead of the
+        // cause.
+        addTeardownBlock { try? FileManager.default.removeItem(at: storeURL) }
         let process = makeProcess(records: store)
         try process.launchStandalone(target("Chrome"))
 
@@ -373,7 +389,11 @@ final class SliccProcessLaunchPathTests: XCTestCase {
         let storeURL = URL(fileURLWithPath: NSTemporaryDirectory())
             .appendingPathComponent("detach-twice-\(UUID().uuidString).json")
         let store = LaunchRecordStore(storeURL: storeURL)
-        defer { try? FileManager.default.removeItem(at: storeURL) }
+        // `addTeardownBlock`, not `defer`: a deferred cleanup runs while an
+        // error is still propagating and replaced the real failure with its
+        // own "couldn't be removed", which is what CI reported instead of the
+        // cause.
+        addTeardownBlock { try? FileManager.default.removeItem(at: storeURL) }
         let process = makeProcess(records: store)
         try process.launchStandalone(target("Chrome"))
 
