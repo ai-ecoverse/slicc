@@ -49,7 +49,7 @@
 import { define } from '../internal/define.js';
 import { h, sheet } from '../internal/dom.js';
 import { iconEl } from '../internal/icons.js';
-import { shortMimeLabel } from '../internal/mime-label.js';
+import { shortMimeLabel } from './mime-label.js';
 
 export interface QuickLookOptions {
   path: string;
