@@ -25,6 +25,8 @@
  * this applies it across the tray.
  */
 
+import type { CDPPayload } from '@slicc/shared-ts';
+
 import { createLogger } from '../../base/logger.js';
 import type { BrowserAPI } from '../../cdp/browser-api.js';
 
@@ -46,6 +48,22 @@ export interface DelegatedCdpLoginDeps {
   authorizeUrl: string;
   signal?: AbortSignal;
   timeoutMs?: number;
+}
+
+/**
+ * Fields of CDP `Page.frameNavigated.frame` that this login driver reads.
+ * The full CDP frame object has more, but we only settle on main-frame URL.
+ */
+interface NavigatedFrame {
+  url?: string;
+  parentId?: string;
+}
+
+/** Read the navigated frame from a CDP event payload, or undefined if absent. */
+function navigatedFrameFrom(params: CDPPayload): NavigatedFrame | undefined {
+  const raw = params.frame;
+  if (raw === null || typeof raw !== 'object') return undefined;
+  return raw as NavigatedFrame;
 }
 
 /**
@@ -180,8 +198,8 @@ export async function runDelegatedCdpLogin(deps: DelegatedCdpLoginDeps): Promise
 
         // Primary signal: navigation commit, before the page's own script runs.
         const transport = browser.getTransport();
-        const onNavigated = (params: Record<string, unknown>): void => {
-          const frame = (params as { frame?: { url?: string; parentId?: string } }).frame;
+        const onNavigated = (params: CDPPayload): void => {
+          const frame = navigatedFrameFrom(params);
           if (!frame?.url || frame.parentId) return; // main frame only
           if (isCallback(frame.url)) {
             log.info('Delegated login reached the callback', { via: 'frameNavigated' });
