@@ -53,11 +53,23 @@ export interface WcOnboardingHandle {
 }
 
 /**
- * Final welcome sprinkle lick body from the onboarding orchestrator (and
- * the fast-forward path). Callers read `action` for dedup; the rest is
- * forwarded opaque to `sendSprinkleLick('welcome', …)`.
+ * Welcome-flow final lick body from the onboarding orchestrator (and the
+ * fast-forward path). Producers set `action` for dedup and a nested `data`
+ * bag; both are forwarded to `sendSprinkleLick('welcome', …)`.
  */
-export type WelcomeFinalLickData = { [key: string]: unknown };
+export interface WelcomeFinalLickData {
+  action?: string;
+  data?: {
+    profile?: unknown;
+    provider?: string;
+    providerName?: string | null;
+    model?: string | null;
+    modelLabel?: string | null;
+    validation?: string;
+    readonly [key: string]: unknown;
+  };
+  readonly [key: string]: unknown;
+}
 
 /**
  * Bridge the remote VFS clients to the `VirtualFS` surface the onboarding
