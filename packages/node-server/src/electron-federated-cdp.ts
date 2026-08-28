@@ -16,6 +16,7 @@
 // and its signalling tunnels over the CDP binding. The translation core here is
 // pure + unit-tested, and the CDP driver is validated against a live target.
 import {
+  type CDPPayload,
   type FollowerToLeaderMessage,
   type RemoteTargetInfo,
   sendCDPResponse,
@@ -36,7 +37,8 @@ export interface FederatedCdpRequest {
   requestId: string;
   localTargetId: string;
   method: string;
-  params?: Record<string, unknown>;
+  /** Per-method CDP params; shape is known only to the caller that issued the method. */
+  params?: CDPPayload;
   sessionId?: string;
 }
 
@@ -68,7 +70,7 @@ export function buildTargetsAdvertise(
  */
 export function buildCdpResponses(
   requestId: string,
-  outcome: { result?: Record<string, unknown>; error?: string }
+  outcome: { result?: CDPPayload; error?: string }
 ): Array<Extract<FollowerToLeaderMessage, { type: 'cdp.response' }>> {
   const messages: Array<Extract<FollowerToLeaderMessage, { type: 'cdp.response' }>> = [];
   sendCDPResponse(
@@ -90,7 +92,8 @@ export function buildCdpResponses(
 /** Translate a raw CDP event frame into a `cdp.event` tray-sync message. */
 export function buildCdpEvent(frame: {
   method: string;
-  params?: Record<string, unknown>;
+  /** Per-method CDP event params; shape depends on `method`. */
+  params?: CDPPayload;
   sessionId?: string;
 }): Extract<FollowerToLeaderMessage, { type: 'cdp.event' }> {
   return {
@@ -104,9 +107,11 @@ export function buildCdpEvent(frame: {
 interface RawCdpFrame {
   id?: number;
   method?: string;
-  params?: Record<string, unknown>;
+  /** Per-method CDP event/request params; shape depends on `method`. */
+  params?: CDPPayload;
   sessionId?: string;
-  result?: Record<string, unknown>;
+  /** Per-method CDP result; shape depends on the request method. */
+  result?: CDPPayload;
   error?: { message?: string };
 }
 
