@@ -35,6 +35,7 @@ public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
         requestId: String,
         kind: String,
         detail: String,
+        requester: String? = nil,
         suggestedPattern: String?,
         scoopName: String?,
         expiresAt: Date,
@@ -43,6 +44,7 @@ public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
         self.requestId = requestId
         self.kind = kind
         self.detail = detail
+        self.requester = requester
         self.suggestedPattern = suggestedPattern
         self.scoopName = scoopName
         self.expiresAt = expiresAt
