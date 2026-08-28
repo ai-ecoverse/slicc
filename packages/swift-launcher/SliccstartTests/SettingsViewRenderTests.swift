@@ -235,9 +235,14 @@ final class SettingsViewRenderTests: XCTestCase {
     }
 
     func testEditorDistinguishesCreatingFromEditing() {
+        // An edit draft normally seeds name/value/domains too, so comparing it
+        // against a fresh sheet would still differ with the title made
+        // identical. Edit an *empty* secret: the fields then match a new sheet
+        // exactly and the heading is the only thing left to move.
+        let blank = Secret(name: "", value: "", domains: [])
         ViewHosting.assertRendersDifferently(
             editor(draft: .creating),
-            editor(draft: .editing(secret("GITHUB_TOKEN"))),
+            editor(draft: .editing(blank)),
             "the sheet must say whether it is creating or editing",
             width: 540,
             height: 420
@@ -245,30 +250,104 @@ final class SettingsViewRenderTests: XCTestCase {
     }
 
     func testEditorSurfacesEachValidationFailure() {
-        // A fresh sheet is empty (name required); an edited secret is complete.
-        // Every message in between is a distinct branch of `validationMessage`.
-        let empty = ViewHosting.digest(of: editor(draft: .creating), width: 540, height: 420)
-        let complete = ViewHosting.digest(
-            of: editor(draft: .editing(secret("GITHUB_TOKEN"))),
+        // Most of these are only reachable by typing into the sheet, which an
+        // off-screen render cannot do — so they are asserted against the rule
+        // the sheet displays. Rendering only the empty and complete drafts (as
+        // this test first did) left every message in between unexercised.
+        func message(
+            name: String = "TOKEN",
+            value: String = "secret",
+            domains: [String] = ["api.example.com"],
+            draft: SecretDraft = .creating,
+            existing: Set<String> = []
+        ) -> String? {
+            SecretEditorSheet.validationMessage(
+                name: name,
+                value: value,
+                domainPatterns: domains,
+                draft: draft,
+                existingNames: existing
+            )
+        }
+
+        XCTAssertNil(message(), "a complete draft is saveable")
+        XCTAssertNil(message(name: "  TOKEN  "), "surrounding whitespace is trimmed, not rejected")
+        XCTAssertEqual(message(name: ""), "Name is required.")
+        XCTAssertEqual(message(name: "   "), "Name is required.")
+        XCTAssertEqual(
+            message(name: "has space"),
+            "Name may only contain letters, numbers, dots, underscores, and hyphens."
+        )
+        XCTAssertEqual(
+            message(name: "TOKEN", existing: ["TOKEN"]),
+            "A secret named \"TOKEN\" already exists."
+        )
+        XCTAssertEqual(message(value: ""), "Value is required.")
+        XCTAssertEqual(message(domains: []), "Add at least one hostname pattern.")
+        XCTAssertEqual(
+            message(domains: ["   ", ""]),
+            "Add at least one hostname pattern.",
+            "blank rows are not hostnames"
+        )
+        XCTAssertEqual(
+            message(domains: ["api.example.com", "not a host"]),
+            "\"not a host\" is not a valid hostname pattern. Use `example.com`, `*.example.com`, or `*`."
+        )
+    }
+
+    func testRenamingAnExistingSecretOntoItselfIsNotACollision() {
+        // Editing GITHUB_TOKEN and leaving the name alone must stay saveable
+        // even though that name is, of course, already taken.
+        let stored = secret("GITHUB_TOKEN")
+        XCTAssertNil(
+            SecretEditorSheet.validationMessage(
+                name: "GITHUB_TOKEN",
+                value: "v",
+                domainPatterns: ["api.github.com"],
+                draft: .editing(stored),
+                existingNames: ["GITHUB_TOKEN", "OTHER"]
+            )
+        )
+        // ...but renaming it onto another secret's name is.
+        XCTAssertEqual(
+            SecretEditorSheet.validationMessage(
+                name: "OTHER",
+                value: "v",
+                domainPatterns: ["api.github.com"],
+                draft: .editing(stored),
+                existingNames: ["GITHUB_TOKEN", "OTHER"]
+            ),
+            "A secret named \"OTHER\" already exists."
+        )
+    }
+
+    func testTheEditorShowsAValidationMessageWhenThereIsOne() {
+        // The render side of the same rule: an incomplete draft and a complete
+        // one differ, and the only field varied is the value.
+        let incomplete = Secret(name: "TOKEN", value: "", domains: ["api.example.com"])
+        let complete = Secret(name: "TOKEN", value: "v", domains: ["api.example.com"])
+        ViewHosting.assertRendersDifferently(
+            editor(draft: .editing(incomplete)),
+            editor(draft: .editing(complete)),
+            "a draft that cannot be saved must say why",
             width: 540,
             height: 420
         )
-        XCTAssertNotEqual(empty, complete)
-
-        // The same rules the sheet renders, asserted directly.
-        XCTAssertFalse(SecretNameValidator.isValid(""))
-        XCTAssertFalse(SecretNameValidator.isValid("has space"))
-        XCTAssertTrue(SecretNameValidator.isValid("s3.prod.key"))
-        XCTAssertFalse(EnvFileFormat.isValidHostnamePattern("not a host"))
-        XCTAssertTrue(EnvFileFormat.isValidHostnamePattern("*.example.com"))
     }
 
     func testEditorRendersASecretWithNoHostnamesAsOneEmptyRow() {
         // `domains: []` must still offer a row to type into, otherwise the
-        // sheet is unusable and can never satisfy its own save rule.
+        // sheet is unusable and can never satisfy its own save rule. Comparing
+        // against a *populated* draft proved nothing (the text differs anyway);
+        // comparing against an explicitly-blank row pins the fallback: the two
+        // must be indistinguishable.
         let noDomains = editor(draft: .editing(secret("TOKEN", domains: [])))
-        let oneDomain = editor(draft: .editing(secret("TOKEN", domains: ["example.com"])))
-        ViewHosting.assertRendersDifferently(noDomains, oneDomain, width: 540, height: 420)
+        let oneBlankDomain = editor(draft: .editing(secret("TOKEN", domains: [""])))
+        XCTAssertEqual(
+            ViewHosting.digest(of: noDomains, width: 540, height: 420),
+            ViewHosting.digest(of: oneBlankDomain, width: 540, height: 420),
+            "a secret with no hostnames must render exactly like one blank row"
+        )
     }
 
     func testEditorGrowsWithEachHostnamePattern() {
@@ -285,15 +364,31 @@ final class SettingsViewRenderTests: XCTestCase {
 
     // MARK: - Setup progress
 
-    func testSetupProgressCoversWorkingAndFailedStates() {
-        let working = SetupProgressView(message: "Installing…", isWorking: true, error: nil, onRetry: {})
-        let failed = SetupProgressView(message: "Install failed", isWorking: false, error: "boom", onRetry: {})
+    func testSetupProgressOffersRetryOnlyOnFailure() {
+        // Hold the message and the spinner constant: `error` is then the only
+        // input left, so the Retry button is the only thing that can differ.
+        // (Varying all three, as this first did, passed with Retry deleted.)
+        let row = { (error: String?) in
+            SetupProgressView(
+                message: "Installing…",
+                isWorking: true,
+                error: error,
+                onRetry: {}
+            )
+        }
         ViewHosting.assertRendersDifferently(
-            working,
-            failed,
-            "a failed setup must offer Retry instead of a spinner",
+            row(nil),
+            row("boom"),
+            "a failed setup must offer Retry",
             width: 420,
             height: 260
         )
+    }
+
+    func testSetupProgressShowsItsSpinnerOnlyWhileWorking() {
+        let row = { (isWorking: Bool) in
+            SetupProgressView(message: "Installing…", isWorking: isWorking, error: nil, onRetry: {})
+        }
+        ViewHosting.assertRendersDifferently(row(false), row(true), width: 420, height: 260)
     }
 }

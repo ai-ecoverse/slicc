@@ -63,6 +63,18 @@ enum ViewHosting {
 
     /// Assert two states of the same view do not render identically — i.e. the
     /// state actually reaches the screen instead of being computed and dropped.
+    ///
+    /// **Vary exactly one thing.** A comparison whose two sides differ in more
+    /// than one way passes whether or not the feature under test exists: a
+    /// review of this suite found eight of them (a debug badge asserted by a
+    /// row that also changed its subtitle; a Retry button asserted by a view
+    /// that also changed its message and spinner). Pin everything else —
+    /// `subtitleOverride:` on a row, the same message on both sides, an empty
+    /// `Secret` so an edit draft matches a fresh one — and the remaining
+    /// difference is the claim. When the feature cannot be isolated that way,
+    /// assert the rule it derives from instead (see
+    /// `SecretEditorSheet.validationMessage` and `AppListView.updateAffordance`)
+    /// rather than writing a comparison that cannot fail.
     @MainActor
     static func assertRendersDifferently(
         _ lhs: some View,

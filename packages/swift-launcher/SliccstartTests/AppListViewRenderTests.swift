@@ -1,8 +1,8 @@
 import AppKit
 import AppUpdater
 import SliccTraySession
-import Version
 import SwiftUI
+import Version
 import XCTest
 
 @testable import Sliccstart
@@ -178,22 +178,44 @@ final class AppListViewRenderTests: XCTestCase {
     }
 
     func testTheExtensionSectionIsAlwaysOfferedEvenWithNothingInstalled() {
+        // The section is unconditional, so there is no "without it" render to
+        // compare against, and its button is `.plain` — which produces no
+        // identifiable AppKit node off-screen. The section list is the real
+        // assertion; the render below only says an empty scan does not crash.
         XCTAssertEqual(AppListSection.visibleSections(for: []), [.browserExtension])
-        // ...and it renders: an empty scan is not a blank window.
+        XCTAssertEqual(
+            AppListSection.visibleSections(for: mixedScan()),
+            [.browsers, .desktopApps, .terminals, .browserExtension],
+            "the extension CTA stays last however much was scanned"
+        )
         XCTAssertFalse(digestOf(makeView(targets: [])).isEmpty)
     }
 
     func testDebugBuildBadgeChangesHowARowIsDrawn() {
-        let plain = makeView(targets: [target(electron, type: .electronApp, debugSupport: .supported)])
-        let patched = makeView(
-            targets: [
-                target(electron, type: .electronApp, debugSupport: .supported, isDebugBuild: true)
-            ]
-        )
+        // `isDebugBuild` drives BOTH the wrench badge and the "Debug Build"
+        // subtitle, so comparing two list renders would still differ with the
+        // badge deleted. Pin the subtitle on both sides: the badge is then the
+        // only thing that can move.
+        let row = { (isDebugBuild: Bool) in
+            AppRow(
+                target: self.target(
+                    self.electron,
+                    type: .electronApp,
+                    debugSupport: .supported,
+                    isDebugBuild: isDebugBuild
+                ),
+                runtimeState: .notRunning,
+                onLaunch: {},
+                onCreateDebugBuild: nil,
+                subtitleOverride: "same subtitle either way"
+            )
+        }
         ViewHosting.assertRendersDifferently(
-            plain,
-            patched,
-            "a debug build must be badged in the list"
+            row(false),
+            row(true),
+            "a debug build must be badged in the list",
+            width: 400,
+            height: 44
         )
     }
 
@@ -375,16 +397,25 @@ final class AppListViewRenderTests: XCTestCase {
     }
 
     func testALocalBrowserMatchingASessionLendsItsIcon() {
-        // `localBrowserIcon(for:)` matches an installed browser by the label the
-        // publisher advertised, so the row shows the real app icon.
-        let remote = session(label: browser)
-        let sessionStore = store(remote: [remote])
-        let withBrowser = makeView(
-            targets: [target(browser, type: .chromiumBrowser, bundleId: "com.google.Chrome")],
-            sessionStore: sessionStore
+        // `localBrowserIcon(for:)` matches an installed browser by the label
+        // the publisher advertised. Both sides scan the SAME browser, so the
+        // Browsers section is identical and only the match can differ — the
+        // earlier version dropped the browser entirely and would have passed
+        // with the matching removed.
+        let chrome = target(browser, type: .chromiumBrowser, bundleId: "com.google.Chrome")
+        let matching = makeView(
+            targets: [chrome],
+            sessionStore: store(remote: [session(label: browser)])
         )
-        let withoutBrowser = makeView(targets: [], sessionStore: sessionStore)
-        ViewHosting.assertRendersDifferently(withBrowser, withoutBrowser)
+        let notMatching = makeView(
+            targets: [chrome],
+            sessionStore: store(remote: [session(label: "Firefox")])
+        )
+        ViewHosting.assertRendersDifferently(
+            matching,
+            notMatching,
+            "a session whose label names an installed browser must borrow its icon"
+        )
     }
 
     // MARK: - TraySessionRow
@@ -451,9 +482,17 @@ final class AppListViewRenderTests: XCTestCase {
     // MARK: - AppRow
 
     func testAppRowRendersEveryStatusDot() {
+        // Runtime state drives the dot AND the subtitle, so pin the subtitle:
+        // whatever moves between these renders is the dot.
         let chrome = target(browser, type: .chromiumBrowser, bundleId: "com.google.Chrome")
         let row = { (state: AppRuntimeState) in
-            AppRow(target: chrome, runtimeState: state, onLaunch: {}, onCreateDebugBuild: nil)
+            AppRow(
+                target: chrome,
+                runtimeState: state,
+                onLaunch: {},
+                onCreateDebugBuild: nil,
+                subtitleOverride: "pinned"
+            )
         }
         ViewHosting.assertRendersDifferently(
             row(.notRunning),
@@ -462,12 +501,17 @@ final class AppListViewRenderTests: XCTestCase {
             width: 400,
             height: 44
         )
+        // Red (failed) and grey (needs leader) are different dots.
         ViewHosting.assertRendersDifferently(
             row(.startFailed(message: "boom")),
             row(.cannotStart(.needsLeader)),
+            "a failed start and a missing leader are not the same dot",
             width: 400,
             height: 44
         )
+        // ...and a state with no dot at all is not the same as one with a dot.
+        XCTAssertNil(AppRow.statusDot(for: .notRunning))
+        XCTAssertNotNil(AppRow.statusDot(for: .runningWithDebug(cdpPort: nil)))
     }
 
     func testAppRowSubtitleOverrideWins() {

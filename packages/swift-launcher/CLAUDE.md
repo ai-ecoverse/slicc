@@ -46,9 +46,16 @@ test. Two hard limits, both worked around rather than fought:
   such a type rather than inline in a closure. The exception is `.borderless`
   buttons, which do materialize as `NSButton`s (`ViewHosting.hostedButtons`,
   used for `TraySessionRow`).
-- **`Table` and `Toggle` draw nothing** (both are `NSTableView`/`NSSwitch`-
-  backed), so the mounts/secrets table cells and switch knobs are asserted
-  against their model types instead.
+- **Vary exactly one thing per comparison.** Two states that differ in more
+  than one way render differently whether or not the feature under test
+  exists — a review found eight such tests here. Pin everything else
+  (`subtitleOverride:`, identical messages, an empty `Secret`), or assert the
+  underlying rule (`AppListView.updateAffordance`,
+  `SecretEditorSheet.validationMessage`) instead of writing a comparison that
+  cannot fail. Mutate the source and watch the test go red before trusting it.
+- **`Table`, `Toggle` and `.borderless` buttons draw nothing** (both are `NSTableView`/`NSSwitch`-
+  backed), so table cells, switch knobs, and anything styled by tint on a
+  borderless button are asserted against their model types instead.
 
 Views take their non-injectable state as init seams for this:
 `AppListView(isBundledBuild:)` (the whole update footer is otherwise
