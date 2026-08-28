@@ -1084,6 +1084,13 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     // badge when it does — the mode ending is its own feedback.)
     if (!command.holdsMode) mode.set(false);
     command.run(ctx);
+    // ...and settled after, because `holdsMode: false` is a PREDICTION that the
+    // surface will take the focus, not a fact: `dock.selectItem()` only emits a
+    // selection, and the files and memory panels focus nothing at all. Without
+    // this the mode would be left off with nothing focused — the badge gone and
+    // the letters dead, which is precisely the state the resting rule exists to
+    // make impossible.
+    if (!command.holdsMode) settler.schedule();
   };
 
   /**
@@ -1104,6 +1111,14 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
   const onFullscreenChange = (): void => syncKeyboardLock(doc);
   /** A document that just got the keyboard back has a mode to show again. */
   const onWindowFocus = (): void => settler.schedule();
+  /**
+   * ...and one that lost it has no mode to be in. Nothing else notices: with
+   * the focus already sitting on nothing there is no `focusout` to fire, so the
+   * badge would go on claiming keystrokes that are now going to the host page
+   * (Cherry) or to another app entirely. A suspension, not a decision — the
+   * intent is untouched, and `onWindowFocus` settles it back on return.
+   */
+  const onWindowBlur = (): void => mode.set(false);
   const stopWatchingUnit = observeSelectedUnit(deps.switcher, doc, settler.restore);
 
   const view = doc.defaultView;
@@ -1112,6 +1127,7 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
   doc.addEventListener('focusout', onFocusOut);
   doc.addEventListener('fullscreenchange', onFullscreenChange);
   view?.addEventListener('focus', onWindowFocus);
+  view?.addEventListener('blur', onWindowBlur);
   syncKeyboardLock(doc);
   // Deferred like every other settle: the shell is still being assembled at
   // wire time, and a host that focuses the composer on mount must win.
@@ -1124,6 +1140,7 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
       doc.removeEventListener('focusout', onFocusOut);
       doc.removeEventListener('fullscreenchange', onFullscreenChange);
       view?.removeEventListener('focus', onWindowFocus);
+      view?.removeEventListener('blur', onWindowBlur);
       stopWatchingUnit();
       settler.dispose();
       mode.set(false);

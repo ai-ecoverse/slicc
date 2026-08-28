@@ -938,6 +938,55 @@ describe('the mode is the resting state', () => {
     expect(handles.active()).toBe(false);
   });
 
+  /**
+   * Codex P2: `holdsMode: false` is a PREDICTION that the surface will take the
+   * focus. `dock.selectItem()` only emits a selection, and the files and memory
+   * panels focus nothing — so the mode was left off with nothing focused, badge
+   * gone and letters dead.
+   */
+  it('settles again after a command whose surface never took the focus', async () => {
+    const { handles, selectItem } = harness();
+    escape();
+    expect(press({ key: 'f', code: 'KeyF' })).toBe(true);
+    expect(selectItem).toHaveBeenCalledWith('files');
+    // Dropped for the surface that was about to autofocus...
+    expect(handles.active()).toBe(false);
+    await flush();
+    // ...and taken back, because nothing did.
+    expect(handles.active()).toBe(true);
+  });
+
+  it('stays off when the surface really does take the focus', async () => {
+    const { handles, composerField } = harness();
+    escape();
+    // `c` focuses the composer for real, which is the case `holdsMode: false`
+    // was written for.
+    press({ key: 'c', code: 'KeyC' });
+    await flush();
+    expect(handles.active()).toBe(false);
+    expect(deepActiveElement(document)).toBe(composerField);
+  });
+
+  /**
+   * Codex P2: with the focus already on nothing there is no `focusout` to fire,
+   * so nothing else notices the window going away.
+   */
+  it('drops the mode when the window loses the keyboard, and takes it back', async () => {
+    const { handles } = harness();
+    await flush();
+    expect(handles.active()).toBe(true);
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    window.dispatchEvent(new Event('blur'));
+    expect(handles.active()).toBe(false);
+    expect(document.querySelector('[data-wc-shortcuts="badge"]')).toBeNull();
+    // A suspension, not a decision: the intent the user left is untouched.
+    expect(handles.intent()).toBe('keyboard');
+    vi.mocked(document.hasFocus).mockReturnValue(true);
+    window.dispatchEvent(new Event('focus'));
+    await flush();
+    expect(handles.active()).toBe(true);
+  });
+
   it('does not take the Enter a focused button is waiting for', async () => {
     const button = document.createElement('button');
     document.body.append(button);
