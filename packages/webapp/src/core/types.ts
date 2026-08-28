@@ -23,11 +23,18 @@ export interface ImageContent {
   mimeType: string;
 }
 
+/**
+ * Tool-call argument bag from the model: keys are the tool's parameter
+ * names (per its JSON Schema), values are whatever the model emitted.
+ * Named so callers share one type instead of an untyped string-keyed bag.
+ */
+export type ToolCallArguments = { [parameter: string]: unknown };
+
 export interface ToolCall {
   type: 'toolCall';
   id: string;
   name: string;
-  arguments: Record<string, unknown>;
+  arguments: ToolCallArguments;
 }
 
 // ─── Message Types ──────────────────────────────────────────────────────────
@@ -121,6 +128,13 @@ export interface AgentToolResult<T = unknown> {
 export type AgentToolUpdateCallback<T = unknown> = (partialResult: AgentToolResult<T>) => void;
 
 /**
+ * Validated tool-execute params — same bag the model supplied as
+ * {@link ToolCallArguments}, after schema validation. Keys still follow
+ * the tool's parameter schema; values are narrowed by the tool itself.
+ */
+export type AgentToolParams = { [parameter: string]: unknown };
+
+/**
  * AgentTool — pi-compatible tool with execute function.
  *
  * This is the tool interface used by the agent loop.
@@ -130,7 +144,7 @@ export interface AgentTool<TDetails = unknown> extends Tool {
   label: string;
   execute: (
     toolCallId: string,
-    params: Record<string, unknown>,
+    params: AgentToolParams,
     signal?: AbortSignal,
     onUpdate?: AgentToolUpdateCallback<TDetails>
   ) => Promise<AgentToolResult<TDetails>>;
