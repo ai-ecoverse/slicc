@@ -46,6 +46,11 @@ test. Two hard limits, both worked around rather than fought:
   such a type rather than inline in a closure. The exception is `.borderless`
   buttons, which do materialize as `NSButton`s (`ViewHosting.hostedButtons`,
   used for `TraySessionRow`).
+- **CI runs an older macOS than your Mac** (`macos-latest` is still macOS 15).
+  How much of an AppKit-hosted subtree — `Table`, and anything overlaid on one
+  — an off-screen render produces differs between them, so a render comparison
+  that passes locally is not evidence it passes in CI. Compare only over
+  plain SwiftUI content.
 - **Vary exactly one thing per comparison.** Two states that differ in more
   than one way render differently whether or not the feature under test
   exists — a review found eight such tests here. Pin everything else

@@ -75,6 +75,13 @@ enum ViewHosting {
     /// assert the rule it derives from instead (see
     /// `SecretEditorSheet.validationMessage` and `AppListView.updateAffordance`)
     /// rather than writing a comparison that cannot fail.
+    ///
+    /// **Do not compare across an AppKit-hosted subtree.** How much of a
+    /// `Table` (and anything overlaid on one) an off-screen render produces
+    /// varies by OS version: a mount-table comparison passed on macOS 26 and
+    /// was byte-identical on the macOS 15 CI runner. Dev machines run ahead of
+    /// `macos-latest`, so a render assertion that passes here is not evidence
+    /// it passes there.
     @MainActor
     static func assertRendersDifferently(
         _ lhs: some View,
