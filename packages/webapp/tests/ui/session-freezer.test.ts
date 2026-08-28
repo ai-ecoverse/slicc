@@ -1117,7 +1117,7 @@ describe('freezeConeSession', () => {
       const frozen = await freezeConeSession({ sessionStore: store, vfs, mode });
       expect(frozen).not.toBeNull();
 
-      await resetNewSessionTmp(vfs);
+      await resetNewSessionTmp(vfs, '/tmp');
 
       const raw = await vfs.readTextFile(`/sessions/${frozen!.filename}`);
       const thawed = parseFrozenArchive(raw);
@@ -1304,7 +1304,7 @@ describe('freezeConeSession', () => {
       expect(frozen).not.toBeNull();
       vfs.readFile = originalReadFile;
       vfs.readDir = originalReadDir;
-      await resetNewSessionTmp(vfs);
+      await resetNewSessionTmp(vfs, '/tmp');
 
       const raw = await vfs.readTextFile(`/sessions/${frozen!.filename}`);
       expect(raw).not.toContain(failingPath);

@@ -475,6 +475,10 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       PATH: DEFAULT_SHELL_PATH,
       USER: 'user',
       SHELL: '/bin/bash',
+      // Floor value for a shell with no work unit behind it (the panel
+      // terminal, tests). A unit's own scratch directory is pinned over it by
+      // `buildScoopShellEnv` via `options.env`, which spreads last (#2267).
+      TMPDIR: '/tmp',
       PWD: initialCwd,
       ...options.env,
     };

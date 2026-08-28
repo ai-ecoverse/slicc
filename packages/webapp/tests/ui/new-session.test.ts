@@ -607,7 +607,7 @@ describe('resetNewSessionTmp', () => {
       await vfs.writeFile(`${root}/keep.txt`, 'preserve');
     }
 
-    await resetNewSessionTmp(vfs);
+    await resetNewSessionTmp(vfs, '/tmp');
 
     expect(await vfs.readDir('/tmp')).toEqual([]);
     for (const root of preserved) {
@@ -621,7 +621,7 @@ describe('resetNewSessionTmp', () => {
     await vfs.writeFile('/workspace/project/keep.txt', 'preserve');
     await vfs.symlink('/workspace/project', '/tmp/link');
 
-    await resetNewSessionTmp(vfs);
+    await resetNewSessionTmp(vfs, '/tmp');
 
     expect(await vfs.readDir('/tmp')).toEqual([]);
     await expect(vfs.lstat('/tmp/link')).rejects.toMatchObject({ code: 'ENOENT' });
@@ -639,7 +639,7 @@ describe('resetNewSessionTmp', () => {
     await vfs.writeFile('/tmp/job/scratch.txt', 'discard');
     await vfs.writeFile('/tmp/top.txt', 'discard');
 
-    await resetNewSessionTmp(vfs);
+    await resetNewSessionTmp(vfs, '/tmp');
 
     expect((await vfs.readDir('/tmp')).map(({ name }) => name)).toEqual(['job']);
     expect((await vfs.readDir('/tmp/job')).map(({ name }) => name)).toEqual(['mounted']);
@@ -655,7 +655,7 @@ describe('resetNewSessionTmp', () => {
       })
     );
 
-    await resetNewSessionTmp(vfs);
+    await resetNewSessionTmp(vfs, '/tmp');
 
     expect(await vfs.readTextFile('/tmp/keep.txt')).toBe('preserve');
   });
@@ -668,7 +668,7 @@ describe('resetNewSessionTmp', () => {
       await vfs.mount(`/tmp/${kind}`, backend);
       await vfs.writeFile('/tmp/scratch.txt', 'discard');
 
-      await resetNewSessionTmp(vfs);
+      await resetNewSessionTmp(vfs, '/tmp');
 
       expect((await vfs.readDir('/tmp')).map(({ name }) => name)).toEqual([kind]);
       expect(await vfs.readTextFile(`/tmp/${kind}/keep.txt`)).toBe('preserve');
@@ -676,11 +676,66 @@ describe('resetNewSessionTmp', () => {
     }
   );
 
+  it('wipes only the named cone subtree, leaving a sibling cone untouched', async () => {
+    // The incident this scoping exists for: "New chat" on one cone deleted a
+    // SIBLING cone's live working directory out from under it (#2566, #2568).
+    const vfs = await createVfs();
+    await vfs.mkdir('/tmp/cone/work', { recursive: true });
+    await vfs.writeFile('/tmp/cone/work/scratch.txt', 'discard');
+    await vfs.mkdir('/tmp/cone-adobe/rv/node_modules', { recursive: true });
+    await vfs.writeFile('/tmp/cone-adobe/rv/node_modules/pkg.json', 'preserve');
+
+    await resetNewSessionTmp(vfs, '/tmp/cone');
+
+    expect(await vfs.readDir('/tmp/cone')).toEqual([]);
+    expect(await vfs.readTextFile('/tmp/cone-adobe/rv/node_modules/pkg.json')).toBe('preserve');
+  });
+
+  it('a cone sweep still takes its own scoops with it', async () => {
+    // A scoop's scratch nests INSIDE its cone's, so "New chat" disposes of
+    // everything the cone owns without reaching outside it.
+    const vfs = await createVfs();
+    await vfs.mkdir('/tmp/cone-adobe/review', { recursive: true });
+    await vfs.writeFile('/tmp/cone-adobe/review/notes.md', 'discard');
+    await vfs.mkdir('/tmp/cone', { recursive: true });
+    await vfs.writeFile('/tmp/cone/keep.txt', 'preserve');
+
+    await resetNewSessionTmp(vfs, '/tmp/cone-adobe');
+
+    expect(await vfs.readDir('/tmp/cone-adobe')).toEqual([]);
+    expect(await vfs.readTextFile('/tmp/cone/keep.txt')).toBe('preserve');
+  });
+
+  it('does not treat a name-prefixed sibling as part of the subtree', async () => {
+    // `/tmp/cone` is a string prefix of `/tmp/cone-adobe`. Without the
+    // separator this sweep would eat the other cone's tree.
+    const vfs = await createVfs();
+    await vfs.mkdir('/tmp/cone', { recursive: true });
+    await vfs.writeFile('/tmp/cone/gone.txt', 'discard');
+    await vfs.mkdir('/tmp/cone-adobe', { recursive: true });
+    await vfs.writeFile('/tmp/cone-adobe/kept.txt', 'preserve');
+
+    await resetNewSessionTmp(vfs, '/tmp/cone');
+
+    expect(await vfs.readTextFile('/tmp/cone-adobe/kept.txt')).toBe('preserve');
+  });
+
+  it('recreates an absent cone subtree without touching the shared root', async () => {
+    const vfs = await createVfs();
+    await vfs.mkdir('/tmp/cone-adobe', { recursive: true });
+    await vfs.writeFile('/tmp/cone-adobe/keep.txt', 'preserve');
+
+    await resetNewSessionTmp(vfs, '/tmp/cone');
+
+    expect(await vfs.readDir('/tmp/cone')).toEqual([]);
+    expect(await vfs.readTextFile('/tmp/cone-adobe/keep.txt')).toBe('preserve');
+  });
+
   it('recreates an absent /tmp directory', async () => {
     const vfs = await createVfs();
     if (await vfs.exists('/tmp')) await vfs.rm('/tmp', { recursive: true });
 
-    await resetNewSessionTmp(vfs);
+    await resetNewSessionTmp(vfs, '/tmp');
 
     expect(await vfs.readDir('/tmp')).toEqual([]);
   });
@@ -695,7 +750,7 @@ describe('resetNewSessionTmp', () => {
       mkdir: vi.fn(async () => undefined),
     };
 
-    await resetNewSessionTmp(vfs);
+    await resetNewSessionTmp(vfs, '/tmp');
 
     expect(vfs.rm).not.toHaveBeenCalled();
     expect(vfs.mkdir).toHaveBeenCalledWith('/tmp', { recursive: true });
@@ -769,7 +824,7 @@ describe('resetNewSessionTmp', () => {
       mkdir: vi.fn(async () => undefined),
     };
 
-    await expect(resetNewSessionTmp(vfs)).rejects.toMatchObject({ code: 'EIO' });
+    await expect(resetNewSessionTmp(vfs, '/tmp')).rejects.toMatchObject({ code: 'EIO' });
     expect(vfs.mkdir).not.toHaveBeenCalled();
   });
 
@@ -783,7 +838,7 @@ describe('resetNewSessionTmp', () => {
       mkdir: vi.fn(async () => undefined),
     };
 
-    await expect(resetNewSessionTmp(vfs)).rejects.toMatchObject({ code: 'EIO' });
+    await expect(resetNewSessionTmp(vfs, '/tmp')).rejects.toMatchObject({ code: 'EIO' });
     expect(vfs.readDir).not.toHaveBeenCalled();
     expect(vfs.rm).not.toHaveBeenCalled();
   });

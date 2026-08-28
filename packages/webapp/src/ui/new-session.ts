@@ -323,25 +323,39 @@ async function removeDirectoryEntries(
   }
 }
 
-/** Remove all shared scratch data while leaving `/tmp` ready for the next session. */
-export async function resetNewSessionTmp(vfs: NewSessionTmpVfs): Promise<void> {
+/**
+ * Dispose of ONE unit's scratch subtree, leaving it ready for the next
+ * session. `tmpDir` is that unit's `$TMPDIR` (`tmpDirFor`) — a cone's own
+ * `/tmp/<folder>`, which contains its scoops' scratch as well, so a cone's
+ * "New chat" still disposes of everything it owns.
+ *
+ * Scoping this is the fix for a real incident: it used to sweep the whole
+ * shared `/tmp`, so clicking "New chat" on one cone deleted a *sibling*
+ * cone's live working directory. The sibling in that case was mid-`npm
+ * install`, which both lost data and raced the sweep into an `ENOENT` that
+ * aborted the clear (#2566). A unit can now only ever delete its own subtree.
+ *
+ * Mount roots at or under `tmpDir` are preserved exactly as before — a
+ * mounted Local/S3/DA tree is not scratch data.
+ */
+export async function resetNewSessionTmp(vfs: NewSessionTmpVfs, tmpDir: string): Promise<void> {
   const mountRoots = new Set(
     (await vfs.listMountPoints())
       .map(({ path }) => path)
-      .filter((path) => path === '/tmp' || path.startsWith('/tmp/'))
+      .filter((path) => path === tmpDir || path.startsWith(`${tmpDir}/`))
   );
-  if (mountRoots.has('/tmp')) return;
+  if (mountRoots.has(tmpDir)) return;
 
   let entries: DirEntry[];
   try {
-    entries = await vfs.readDir('/tmp');
+    entries = await vfs.readDir(tmpDir);
   } catch (err) {
     if ((err as { code?: string } | null)?.code !== 'ENOENT') throw err;
-    await vfs.mkdir('/tmp', { recursive: true });
+    await vfs.mkdir(tmpDir, { recursive: true });
     return;
   }
-  await removeDirectoryEntries(vfs, '/tmp', entries, mountRoots);
-  await vfs.mkdir('/tmp', { recursive: true });
+  await removeDirectoryEntries(vfs, tmpDir, entries, mountRoots);
+  await vfs.mkdir(tmpDir, { recursive: true });
 }
 
 /** Outcome of the enrichment-vs-timer race. */

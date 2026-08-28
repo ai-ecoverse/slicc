@@ -1,5 +1,6 @@
 import { isFeatureEnabled } from '../../core/feature-flags.js';
 import type { RegisteredScoop } from '../../scoops/types.js';
+import { tmpDirFor } from '../../work-unit/descriptor.js';
 import type { BootStageLogger } from '../boot/types.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import type { FrozenSession } from '../session-freezer.js';
@@ -122,6 +123,8 @@ interface ClearConeSessionDeps {
   getController(): WcChatController | null;
   log: BootStageLogger;
   resetNewSessionTmp: typeof import('../new-session.js').resetNewSessionTmp;
+  /** The cone's own `$TMPDIR` — the only subtree this clear may dispose of. */
+  tmpDir: string;
 }
 
 /**
@@ -137,7 +140,7 @@ interface ClearConeSessionDeps {
  */
 async function clearConeSession(deps: ClearConeSessionDeps): Promise<void> {
   try {
-    await deps.resetNewSessionTmp(deps.writer);
+    await deps.resetNewSessionTmp(deps.writer, deps.tmpDir);
   } catch (err) {
     deps.log.warn('WC new session /tmp reset failed — clearing anyway', err);
   }
@@ -239,7 +242,18 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
             runNewSessionFreezeQuick,
           });
         }
-        await clearConeSession({ writer, root, client, getController, log, resetNewSessionTmp });
+        // Scoped to the cone we are clearing (#2568): its own `$TMPDIR`
+        // subtree, which contains its scoops' scratch too. A sibling cone's
+        // working directory is no longer in the blast radius.
+        await clearConeSession({
+          writer,
+          root,
+          client,
+          getController,
+          log,
+          resetNewSessionTmp,
+          tmpDir: tmpDirFor(client.getScoops(), root),
+        });
         refreshFreezer();
         // Stay on the cone we just cleared — its record may have been
         // replaced by a roster refresh, so re-resolve by jid.

@@ -14,9 +14,23 @@ WASM enters only for specific runtime-heavy commands, which fetch and cache thei
 
 **Entry point**: Via the `bash` agent tool. All shell features available to agents.
 
-### Shared `/tmp` scratch space
+### Shared `/tmp` scratch space and `$TMPDIR`
 
-The virtual `/tmp` directory is shared, disposable scratch space for the cone and scoops; it is not the host operating system's temporary directory. Its cleanup boundary is the explicit **New session** control: **Save & start new**, **New chat — skip memory**, and **Erase & start new** each remove ordinary `/tmp` entries before the cone chat is cleared. Active mount roots below `/tmp` and the directories containing them stay attached and are never traversed, so mounted Local, S3, and DA contents are not treated as scratch data. Page reload, app restart, and scoop creation do not clear `/tmp`.
+The virtual `/tmp` directory is shared, disposable scratch space for the cone and scoops; it is not the host operating system's temporary directory. It stays readable and writable by every unit.
+
+**Write to `$TMPDIR`, not to `/tmp`.** Every unit's shell publishes `$TMPDIR` pointing at a scratch directory of its own, created before the first turn:
+
+| unit                                 | `$TMPDIR`                |
+| ------------------------------------ | ------------------------ |
+| cone `cone`                          | `/tmp/cone`              |
+| cone `cone-adobe`                    | `/tmp/cone-adobe`        |
+| scoop `review` owned by `cone-adobe` | `/tmp/cone-adobe/review` |
+
+A scoop's directory nests inside its owning cone's, so a cone can still read back what its scoop wrote (`agent … >> "$TMPDIR/out.txt"`) and disposing of a cone's scratch disposes of its scoops' too. `mktemp` resolves against `$TMPDIR`. A `.profile` `export TMPDIR=…` overrides it per shell; a secret named `TMPDIR` does not.
+
+This is a **convention, not a sandbox** — one unit can still read and write another's scratch, exactly as on a real POSIX system. What it buys is a directory nothing else _routinely_ touches.
+
+Its cleanup boundary is the explicit **New session** control: **Save & start new**, **New chat — skip memory**, and **Erase & start new** each remove the entries under the selected cone's own `$TMPDIR` before its chat is cleared — a sibling cone's scratch is never in the blast radius. Active mount roots below it and the directories containing them stay attached and are never traversed, so mounted Local, S3, and DA contents are not treated as scratch data. Page reload, app restart, and scoop creation do not clear `/tmp`.
 
 ---
 

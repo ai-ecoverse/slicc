@@ -47,6 +47,8 @@ export interface ShellAndSkillsDeps {
   getTurnPid: () => number | undefined;
   /** `SLICC_LICK_TARGET` for this unit, or `undefined` for the default root. */
   lickTarget: string | undefined;
+  /** `$TMPDIR` for this unit (`tmpDirFor`, `work-unit/descriptor.ts`). */
+  tmpDir: string;
 }
 
 export interface ShellAndSkills {
@@ -96,12 +98,13 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
       : fs
   ) as VirtualFS;
 
-  const shellEnv = buildScoopShellEnv(
-    unit.policy.filesystem.kind === 'full-workspace',
-    scoop.folder,
+  const shellEnv = buildScoopShellEnv({
+    isCone: unit.policy.filesystem.kind === 'full-workspace',
+    folder: scoop.folder,
     secretEnv,
-    deps.lickTarget
-  );
+    tmpDir: deps.tmpDir,
+    ...(deps.lickTarget ? { lickTarget: deps.lickTarget } : {}),
+  });
   const shell = new AlmostBashShellHeadless({
     fs: gatedFs,
     cwd,

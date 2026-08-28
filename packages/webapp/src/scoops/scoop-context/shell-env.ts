@@ -15,8 +15,23 @@ import { LICK_TARGET_ENV } from '../../shell/lick-target-env.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
 import type { RegisteredScoop } from '../types.js';
 
+export interface ScoopShellEnvOptions {
+  /** `true` for a root unit — a cone pins no HOME/USER/PATH. */
+  isCone: boolean;
+  folder: string;
+  secretEnv: Record<string, string>;
+  /**
+   * This unit's own scratch directory (`tmpDirFor`, `work-unit/descriptor.ts`).
+   * Every unit gets one, cones included — unlike the other pins, which only a
+   * scoop needs.
+   */
+  tmpDir: string;
+  /** Folder this unit's untargeted licks default to (`SLICC_LICK_TARGET`). */
+  lickTarget?: string;
+}
+
 /**
- * The env a scoop's shell starts with (#2085). Non-cone scoops pin:
+ * The env a unit's shell starts with (#2085). Non-cone scoops pin:
  *
  * - HOME to their per-scoop home (created by ensureDirectoryStructure) — it
  *   is inside their writable ACL, unlike `/home`, which their RestrictedFS
@@ -26,10 +41,23 @@ import type { RegisteredScoop } from '../types.js';
  *   scoop-local commands win a basename conflict (mirroring the old scan
  *   order, bounded to declared roots).
  *
- * The cone pins nothing — its shell resolves onboarding's `/home/<slug>`.
+ * The cone pins no HOME/USER/PATH — its shell resolves onboarding's
+ * `/home/<slug>`.
+ *
+ * **TMPDIR is the exception: every unit pins it, cone included** (#2267).
+ * `echo $TMPDIR` printed empty in cone and scoop alike, so nothing could
+ * discover a scratch root at all, and agents reaching for `mktemp` got a
+ * cascade of misleading errors rather than a clean one. It is also the
+ * mechanism the whole per-unit scratch scheme rests on: a cone's `$TMPDIR` is
+ * its own subtree, so "New chat" disposes of that subtree instead of the
+ * shared `/tmp` a sibling cone may be writing to right now
+ * ([#2568](https://github.com/ai-ecoverse/slicc/issues/2568)).
+ *
  * Secrets spread FIRST: a user-created secret can carry any POSIX name —
- * including PATH/HOME/USER — and must not override the isolation pins
- * (Codex P2 on #2143), nor the lick target. Exported for tests.
+ * including PATH/HOME/USER/TMPDIR — and must not override the isolation pins
+ * (Codex P2 on #2143), nor the lick target. A `.profile` `export TMPDIR=…`
+ * still wins, per shell, which is the POSIX contract and deliberate.
+ * Exported for tests.
  *
  * **Every unit that has a target carries it, scoops included** (Codex P1 on
  * #2525). `ownLickTargetFor` already answers `scoop.folder` for a child and
@@ -40,18 +68,14 @@ import type { RegisteredScoop } from '../types.js';
  * delivered a scoop's own callbacks into an unrelated cone's chat. Whoever
  * set the watcher up is who hears about it.
  */
-export function buildScoopShellEnv(
-  isCone: boolean,
-  folder: string,
-  secretEnv: Record<string, string>,
-  /** Folder this unit's untargeted licks default to (`SLICC_LICK_TARGET`). */
-  lickTarget?: string
-): Record<string, string> {
+export function buildScoopShellEnv(options: ScoopShellEnvOptions): Record<string, string> {
+  const { isCone, folder, secretEnv, tmpDir, lickTarget } = options;
   const lickTargetEnv: Record<string, string> = lickTarget ? { [LICK_TARGET_ENV]: lickTarget } : {};
-  if (isCone) return { ...secretEnv, ...lickTargetEnv };
+  if (isCone) return { ...secretEnv, TMPDIR: tmpDir, ...lickTargetEnv };
   return {
     ...secretEnv,
     HOME: `/scoops/${folder}/home`,
+    TMPDIR: tmpDir,
     USER: folder,
     PATH: [
       '/usr/bin',
