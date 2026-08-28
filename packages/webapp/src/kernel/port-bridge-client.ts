@@ -42,19 +42,18 @@ interface PendingCall<TReply> {
 }
 
 /**
- * Opaque Port / panel-RPC message body. The factory only correlates by `id`
- * (added separately for the Port path); field shapes are owned by each
- * specialization (`secrets-bridge-client`, `mount-bridge-client`) and relayed
- * without inspection. Kept as the recognized `Record<string, unknown>` spelling
- * (with the documented suppression) rather than an equivalent index-signature
- * alias so the debt gate still sees the untyped bag and no later change can
- * evade it — mirrors `SecretsBridgePayload` in `secrets-bridge-client`.
+ * Per-call-site configuration for `createPortBridgeClient`.
+ *
+ * `TPortMessage` / `TPanelPayload` are inferred from the builders so the
+ * factory stays shape-agnostic without an open string-keyed bag — each
+ * specialization (`secrets-bridge-client`, `mount-bridge-client`) owns the
+ * concrete message fields.
  */
-// biome-ignore lint/plugin: field shapes are owned by each specialization and relayed without inspection; there is no bounded shape at this layer.
-export type PortBridgeMessageBody = Record<string, unknown>;
-
-/** Per-call-site configuration for `createPortBridgeClient`. */
-export interface PortBridgeOptions<TRequest> {
+export interface PortBridgeOptions<
+  TRequest,
+  TPortMessage extends object = object,
+  TPanelPayload extends object = object,
+> {
   /** Named `chrome.runtime.connect` Port (e.g. `'secrets.crud'`). */
   portName: string;
   /** Panel-RPC op key used from a chrome-less realm (e.g. `'secrets-bridge'`). */
@@ -71,9 +70,9 @@ export interface PortBridgeOptions<TRequest> {
   /** Logger namespace (also embedded in default log messages). */
   logNamespace: string;
   /** Encode a `TRequest` as the message body posted on the Port (id is added by the factory). */
-  toPortMessage: (request: TRequest) => PortBridgeMessageBody;
+  toPortMessage: (request: TRequest) => TPortMessage;
   /** Encode a `TRequest` as the panel-RPC payload for the worker-realm fallback. */
-  toPanelRpcPayload: (request: TRequest) => PortBridgeMessageBody;
+  toPanelRpcPayload: (request: TRequest) => TPanelPayload;
 }
 
 /**
@@ -83,8 +82,13 @@ export interface PortBridgeOptions<TRequest> {
  *   b. WORKER realm (no `chrome`, delegate id set): panel-RPC fallback.
  *   c. Otherwise: unavailable — resolves `undefined` or rejects per `onUnavailable`.
  */
-export function createPortBridgeClient<TRequest, TReply>(
-  opts: PortBridgeOptions<TRequest>
+export function createPortBridgeClient<
+  TRequest,
+  TReply,
+  TPortMessage extends object = object,
+  TPanelPayload extends object = object,
+>(
+  opts: PortBridgeOptions<TRequest, TPortMessage, TPanelPayload>
 ): (request: TRequest) => Promise<TReply | undefined> {
   const log = createLogger(opts.logNamespace);
   let cachedPort: BridgePort | null = null;
