@@ -17,6 +17,8 @@
  * itself a leaf module).
  */
 
+import type { CDPPayload } from '@slicc/shared-ts';
+
 import { PendingRequestTable, waitForEvent } from '../cdp/pending-request-table.js';
 import type { CDPTransport } from '../cdp/transport.js';
 import type { CDPConnectOptions, CDPEventListener, ConnectionState } from '../cdp/types.js';
@@ -24,14 +26,16 @@ import type { CDPConnectOptions, CDPEventListener, ConnectionState } from '../cd
 /** Decoded form of a CDP response, regardless of envelope shape. */
 export interface ParsedCdpResponse {
   id: number;
-  result?: Record<string, unknown>;
+  /** Per-method CDP result; shape is known only to the caller that issued the method. */
+  result?: CDPPayload;
   error?: string;
 }
 
 /** Decoded form of a CDP event, regardless of envelope shape. */
 export interface ParsedCdpEvent {
   method: string;
-  params?: Record<string, unknown>;
+  /** Per-method CDP event params; shape depends on `method`. */
+  params?: CDPPayload;
 }
 
 export interface CdpBridgeOptions {
@@ -42,7 +46,7 @@ export interface CdpBridgeOptions {
   buildCommandEnvelope: (
     id: number,
     method: string,
-    params?: Record<string, unknown>,
+    params?: CDPPayload,
     sessionId?: string
   ) => unknown;
 
@@ -145,10 +149,10 @@ export class CdpTransportBridge implements CDPTransport {
 
   async send(
     method: string,
-    params?: Record<string, unknown>,
+    params?: CDPPayload,
     sessionId?: string,
     timeout = 30000
-  ): Promise<Record<string, unknown>> {
+  ): Promise<CDPPayload> {
     if (this._state !== 'connected') {
       throw new Error(`${this.label} is not connected`);
     }
@@ -195,8 +199,8 @@ export class CdpTransportBridge implements CDPTransport {
     }
   }
 
-  once(event: string, timeout = 30000): Promise<Record<string, unknown>> {
-    return waitForEvent<Record<string, unknown>>(
+  once(event: string, timeout = 30000): Promise<CDPPayload> {
+    return waitForEvent<CDPPayload>(
       (handler) => {
         this.on(event, handler);
         return () => this.off(event, handler);
