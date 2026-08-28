@@ -198,4 +198,46 @@ final class InboundActionsTests: XCTestCase {
         XCTAssertTrue(markdown.hasPrefix("_older turns truncated_"), "truncation is declared, not silent")
         XCTAssertTrue(markdown.contains("## Cone"), "assistant sections carry the label")
     }
+
+    // MARK: - Conversation selection (Open Conversation intent)
+
+    @MainActor
+    func testSelectionEnqueuesTheJid() {
+        let coordinator = InboundActionCoordinator()
+        XCTAssertTrue(coordinator.receive(selecting: "scoop-42"))
+        XCTAssertEqual(coordinator.pendingSelection?.scoopJid, "scoop-42")
+    }
+
+    /// An intent parameter is still input, even when Siri resolved it from
+    /// our own entity — the funnel validates it like everything else.
+    @MainActor
+    func testEmptyAndOversizedJidsAreRejected() {
+        let coordinator = InboundActionCoordinator()
+        XCTAssertFalse(coordinator.receive(selecting: ""))
+        XCTAssertFalse(coordinator.receive(selecting: "   \n "))
+        let huge = String(repeating: "j", count: InboundActionCoordinator.maxJidLength + 1)
+        XCTAssertFalse(coordinator.receive(selecting: huge))
+        XCTAssertNil(coordinator.pendingSelection)
+    }
+
+    @MainActor
+    func testSelectionIsTrimmed() {
+        let coordinator = InboundActionCoordinator()
+        XCTAssertTrue(coordinator.receive(selecting: "  scoop-7\n"))
+        XCTAssertEqual(coordinator.pendingSelection?.scoopJid, "scoop-7")
+    }
+
+    /// The id check keeps a stale card from consuming a newer request —
+    /// same rule the open and prompt slots follow.
+    @MainActor
+    func testConsumingAStaleSelectionLeavesTheNewerOne() {
+        let coordinator = InboundActionCoordinator()
+        XCTAssertTrue(coordinator.receive(selecting: "first"))
+        let stale = coordinator.pendingSelection!
+        XCTAssertTrue(coordinator.receive(selecting: "second"))
+        coordinator.consume(selection: stale)
+        XCTAssertEqual(coordinator.pendingSelection?.scoopJid, "second")
+        coordinator.consume(selection: coordinator.pendingSelection!)
+        XCTAssertNil(coordinator.pendingSelection)
+    }
 }

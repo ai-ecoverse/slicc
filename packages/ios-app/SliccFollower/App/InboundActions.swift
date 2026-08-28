@@ -51,6 +51,19 @@ final class InboundActionCoordinator: ObservableObject {
 
     @Published private(set) var pendingTranscript: PendingTranscript?
 
+    /// A request to bring one work unit to the front (the Open Conversation
+    /// intent). Carries only the jid: whether that unit is still in the
+    /// leader's scoop list is the shell's call, because the entity Siri
+    /// resolved comes from a widget snapshot that may predate the current
+    /// list — and this coordinator deliberately holds no leader state.
+    struct PendingSelection: Identifiable, Equatable {
+        let id: UUID
+        let scoopJid: String
+        let receivedAt: Date
+    }
+
+    @Published private(set) var pendingSelection: PendingSelection?
+
     /// Coarse lifecycle for the surfaces: what the funnel is doing right
     /// now, so SwiftUI can show progress and tests can assert transitions
     /// (#1918 "expose pending/approved/running/completed/failed").
@@ -67,6 +80,9 @@ final class InboundActionCoordinator: ObservableObject {
 
     static let maxPromptLength = 8192
     static let maxTranscriptBytes = 512 * 1024
+    /// A jid is a leader-minted identifier, not free text. Bounded for the
+    /// same reason the URL is: an intent parameter is still input.
+    static let maxJidLength = 256
 
     /// Replay guard: the same URL arriving again within the window is a
     /// Shortcuts/share-sheet retry, not new intent.
@@ -196,6 +212,20 @@ final class InboundActionCoordinator: ObservableObject {
 
     func consume(transcript request: PendingTranscript) {
         if pendingTranscript?.id == request.id { pendingTranscript = nil }
+    }
+
+    /// Validate and enqueue a unit selection. Rejects an empty or oversized
+    /// jid; existence is checked downstream, where the scoop list lives.
+    @discardableResult
+    func receive(selecting scoopJid: String, now: Date = Date()) -> Bool {
+        let jid = scoopJid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !jid.isEmpty, jid.count <= Self.maxJidLength else { return false }
+        pendingSelection = PendingSelection(id: UUID(), scoopJid: jid, receivedAt: now)
+        return true
+    }
+
+    func consume(selection: PendingSelection) {
+        if pendingSelection?.id == selection.id { pendingSelection = nil }
     }
 
     /// The universal-link route (#1918): `https://(www.)sliccy.ai/app/open`

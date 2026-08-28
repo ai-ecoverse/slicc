@@ -199,6 +199,26 @@ struct ChatView: View {
                 executeTranscriptExport(request)
             }
         }
+        .onChange(of: inboundActions.pendingSelection) { selection in
+            if let selection {
+                executeInboundSelection(selection)
+            }
+        }
+    }
+
+    /// Bring the unit an Open Conversation intent named to the front.
+    ///
+    /// `selectScoop` is a no-op for a jid the leader no longer lists, which is
+    /// the wanted behaviour: Siri may have resolved the entity from a widget
+    /// snapshot captured before a scoop ended, and yanking the user to a unit
+    /// that is gone would be worse than leaving them where they are.
+    private func executeInboundSelection(
+        _ selection: InboundActionCoordinator.PendingSelection
+    ) {
+        appState.selectScoop(jid: selection.scoopJid)
+        // Chat is the base surface — `nil` is it, there is no `.chat` case.
+        withAnimation { presentation.activeSurface = nil }
+        inboundActions.consume(selection: selection)
     }
 
     /// Bring a leader-opened tab to the front. The leader opens a tab here so
@@ -1130,10 +1150,15 @@ struct ScoopSwitcher: View {
             .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "Sliccy")
             .accessibilityHint("Switch scoop")
             .accessibilityIdentifier("scoop-switcher")
+            // The header names the conversation on screen, which is what
+            // "this conversation" refers to.
+            .sliccEntityAnnotation(SliccConversationEntity.self, id: appState.selectedScoopJid)
         } else {
             identityLabel
                 .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "Sliccy")
                 .accessibilityIdentifier("scoop-switcher")
+                .sliccEntityAnnotation(
+                    SliccConversationEntity.self, id: appState.selectedScoopJid)
         }
     }
 
