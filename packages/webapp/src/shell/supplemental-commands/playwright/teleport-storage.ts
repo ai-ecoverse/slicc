@@ -3,11 +3,25 @@
  * storage snapshotting, init-script installation, and page diagnostics.
  */
 
-import type { BrowserAPI } from '../../../cdp/index.js';
-import { createLogger } from '../../../core/logger.js';
+import { createLogger } from '../../../base/logger.js';
 import type { TeleportPageDiagnostics, TeleportStorageSnapshot, TeleportWatcher } from './types.js';
 
 const log = createLogger('playwright-teleport');
+
+/**
+ * Duck type for the CDP surface teleport-storage needs — avoids a shell → cdp
+ * layer back-edge (`docs/review-patterns.md` § Layer-stack import direction).
+ * Callers pass the real `BrowserAPI`; this module only uses evaluate / sendCDP /
+ * attachToPage.
+ */
+interface TeleportStorageBrowserAPI {
+  evaluate(expression: string): Promise<unknown>;
+  sendCDP(
+    method: string,
+    params?: { source?: string; identifier?: string }
+  ): Promise<{ identifier?: unknown }>;
+  attachToPage(targetId: string): Promise<string>;
+}
 
 export const EMPTY_TELEPORT_STORAGE: TeleportStorageSnapshot = {
   origin: '',
@@ -63,7 +77,7 @@ export function chooseTeleportLeaderLandingUrl(
 }
 
 export async function captureTeleportStorageSnapshot(
-  browser: BrowserAPI,
+  browser: TeleportStorageBrowserAPI,
   label: 'leader' | 'follower'
 ): Promise<TeleportStorageSnapshot> {
   const raw = await browser.evaluate(`(() => {
@@ -145,7 +159,7 @@ export function buildTeleportStorageApplyScript(snapshot: TeleportStorageSnapsho
 }
 
 export async function applyTeleportStorageSnapshot(
-  browser: BrowserAPI,
+  browser: TeleportStorageBrowserAPI,
   snapshot: TeleportStorageSnapshot,
   target: 'leader' | 'follower'
 ): Promise<void> {
@@ -167,7 +181,7 @@ export async function applyTeleportStorageSnapshot(
 }
 
 export async function installTeleportStorageInitScript(
-  browser: BrowserAPI,
+  browser: TeleportStorageBrowserAPI,
   snapshot: TeleportStorageSnapshot,
   targetId: string,
   target: 'leader' | 'follower'
@@ -205,7 +219,7 @@ export async function installTeleportStorageInitScript(
 }
 
 export async function captureTeleportPageDiagnostics(
-  browser: BrowserAPI
+  browser: TeleportStorageBrowserAPI
 ): Promise<TeleportPageDiagnostics> {
   const raw = await browser.evaluate(`(() => JSON.stringify({
     url: window.location.href,
@@ -237,7 +251,7 @@ export function shouldCaptureTeleportDiagnostics(href: string): boolean {
 }
 
 export async function logFollowerTeleportDiagnosticsOnce(
-  browser: BrowserAPI,
+  browser: TeleportStorageBrowserAPI,
   watcher: TeleportWatcher,
   reason: string
 ): Promise<void> {
