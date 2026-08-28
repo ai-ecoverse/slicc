@@ -46,9 +46,13 @@ final class TranscriptShortActionsUITests: XCTestCase {
         XCTAssertEqual(chips.count, 2, "one recognised image, one recognised text blob")
 
         chips.firstMatch.tap()
+        // Quick Look, not a hand-rolled branch: a decoded payload gets the
+        // same renderer the rest of the system uses, so a PNG zooms and a PDF
+        // pages instead of arriving as a byte count.
         XCTAssertTrue(
-            app.images["file-preview-image"].waitForExistence(timeout: 10),
-            "an image payload previews as an image, not as a byte count")
+            app.otherElements["file-preview-quicklook"].waitForExistence(timeout: 15),
+            "a recognised payload previews through Quick Look")
+        XCTAssertTrue(app.buttons["files-share"].exists, "and keeps the sheet's Share item")
         attach(app.screenshot(), named: "payload-preview")
     }
 

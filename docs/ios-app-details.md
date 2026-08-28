@@ -158,7 +158,11 @@ Resolution is where the follower deliberately diverges. The browser answers a ba
 
 Unlike the web there is no inline chip: SwiftUI cannot seat a button inside a `Text`, so a paragraph carrying a payload is split into stacked segments by `TranscriptParagraph`. The text either side is trimmed, because a paragraph block legitimately contains blank lines (the parser flushes on a fence, a heading or a list, not on an empty line) and painting them as-is leaves a hole above and below the chip — exactly the noise the chip exists to remove.
 
-The preview sheet is the Files surface's own `FilePreviewSheet`, so a file opened from prose and one opened from the file browser look identical. It renders an **image** before it tries text, because a small PNG will happily decode as garbage UTF-8 and a size line where a screenshot should be is the follower failing to answer the question the tap asked.
+The preview sheet is the Files surface's own `FilePreviewSheet`, so a file opened from prose and one opened from the file browser look identical.
+
+Inside it, **Quick Look renders everything the follower cannot render itself** (`Views/QuickLookPreview.swift`). The follower previews whatever the leader hands it — a screenshot, a PDF report, a captured video, a keynote — and hand-rolling a renderer per family is not a race worth entering: `QLPreviewController` already knows them, with pinch-zoom, page navigation, transport controls and printing for free. It is embedded as a CHILD rather than presented, so the sheet keeps its own title, Done button and Share item and neither grows a second navigation bar; that is also why it is not wrapped in a `UINavigationController`.
+
+**Text is claimed before Quick Look ever sees it.** Quick Look renders a `.txt` in a proportional face and drops the leader's theme, which is the wrong shape for the source, configs and logs a VFS is mostly made of; that branch stays monospace, themed and selectable. What counts as text is `MagicBytes.looksLikeText` — the same sniffer the payload chips use — rather than a bare UTF-8 decode, because a small binary can decode without throwing and mojibake is worse than a Quick Look preview. Quick Look needs a file on disk, which is why the sheet stages the bytes once on appear and hands the same URL to both it and the share sheet, and why a payload chip synthesises a name with an extension (`payload.png`) rather than handing over anonymous bytes.
 
 ### Cost
 

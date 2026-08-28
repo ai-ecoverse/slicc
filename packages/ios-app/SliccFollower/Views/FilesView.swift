@@ -24,12 +24,12 @@ struct FilesView: View {
         /// Raw bytes — what the share sheet exports, so binary files
         /// (images, PDFs, archives) survive untouched.
         let data: Data
-        /// UTF-8 decode of `data` when it is text; nil means binary and
-        /// the preview falls through to the image or size line.
+        /// UTF-8 decode of `data` when it is text.
+        ///
+        /// Only consulted for what Quick Look declines, so the old ordering
+        /// trap is gone: a small PNG decodes as garbage UTF-8, but Quick Look
+        /// claims it long before this is asked.
         var text: String? { String(data: data, encoding: .utf8) }
-        /// Decoded bitmap when the bytes are one. Checked BEFORE `text`,
-        /// because a small PNG can decode as (garbage) UTF-8.
-        var image: UIImage? { UIImage(data: data) }
     }
 
     private var currentPath: String {
@@ -145,62 +145,89 @@ struct FilesView: View {
     }
 }
 
-/// One fetched leader file: inline text preview plus the system share
-/// sheet — "Save to Files" lands it in the Files app.
+/// One fetched leader file: a Quick Look preview where the system can render
+/// the bytes, the follower's own monospace rendering where it cannot, plus the
+/// system share sheet — "Save to Files" lands it in the Files app.
 struct FilePreviewSheet: View {
     let file: FilesView.OpenFile
 
     @Environment(\.dismiss) private var dismiss
     @Environment(\.palette) private var palette
 
+    /// The bytes on disk. Staged once, on appear, because BOTH consumers need
+    /// a real file: Quick Look takes a URL, and the share sheet only offers
+    /// file-shaped destinations (Save to Files, AirDrop) for one.
+    @State private var stagedURL: URL?
+
     var body: some View {
         NavigationStack {
-            ScrollView {
-                if let image = file.image {
-                    // An image previews as an image. The web opens the same
-                    // bytes in Quick Look, which renders them; a size line
-                    // where a screenshot should be is the follower failing to
-                    // answer the question the tap asked.
-                    Image(uiImage: image)
-                        .resizable()
-                        .aspectRatio(contentMode: .fit)
-                        .frame(maxWidth: .infinity)
-                        .padding(12)
-                        .accessibilityIdentifier("file-preview-image")
-                } else if let text = file.text {
-                    Text(text)
-                        .font(.system(size: 13, design: .monospaced))
-                        .foregroundStyle(palette.ink)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .padding(12)
-                        .textSelection(.enabled)
-                } else {
-                    Label(
-                        "Binary file · \(file.data.count) bytes — share to open elsewhere",
-                        systemImage: "doc.zipper"
-                    )
-                    .font(.system(size: 13))
-                    .foregroundStyle(palette.inkSecondary)
-                    .padding(12)
-                }
-            }
-            .background(palette.canvas)
-            .navigationTitle(file.name)
-            .navigationBarTitleDisplayMode(.inline)
-            .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    if let url = temporaryFileURL() {
-                        ShareLink(item: url) {
-                            Image(systemName: "square.and.arrow.up")
+            content
+                .background(palette.canvas)
+                .navigationTitle(file.name)
+                .navigationBarTitleDisplayMode(.inline)
+                .toolbar {
+                    ToolbarItem(placement: .navigationBarLeading) {
+                        if let stagedURL {
+                            ShareLink(item: stagedURL) {
+                                Image(systemName: "square.and.arrow.up")
+                            }
+                            .accessibilityIdentifier("files-share")
                         }
-                        .accessibilityIdentifier("files-share")
+                    }
+                    ToolbarItem(placement: .confirmationAction) {
+                        Button("Done") { dismiss() }
                     }
                 }
-                ToolbarItem(placement: .confirmationAction) {
-                    Button("Done") { dismiss() }
-                }
+        }
+        .task(id: file.id) { stagedURL = temporaryFileURL() }
+    }
+
+    @ViewBuilder
+    private var content: some View {
+        if let text = readableText {
+            // Text first, and Quick Look never gets it. Quick Look renders a
+            // `.txt` in a PROPORTIONAL face, which is the wrong shape for the
+            // source, configs and logs a leader VFS is mostly made of — and it
+            // would drop the leader's theme on the way. This branch is
+            // monospace, themed and selectable.
+            ScrollView {
+                Text(text)
+                    .font(.system(size: 13, design: .monospaced))
+                    .foregroundStyle(palette.ink)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(12)
+                    .textSelection(.enabled)
+                    .accessibilityIdentifier("file-preview-text")
+            }
+        } else if let stagedURL, QuickLookPreview.canPreview(stagedURL) {
+            // Everything the follower cannot render itself: images, PDFs,
+            // media, iWork documents. Quick Look already knows them, with
+            // zoom, paging and transport controls for free.
+            QuickLookPreview(url: stagedURL)
+                .accessibilityIdentifier("file-preview-quicklook")
+        } else {
+            ScrollView {
+                Label(
+                    "Binary file · \(file.data.count) bytes — share to open elsewhere",
+                    systemImage: "doc.zipper"
+                )
+                .font(.system(size: 13))
+                .foregroundStyle(palette.inkSecondary)
+                .padding(12)
             }
         }
+    }
+
+    /// The file as prose, or `nil` when the bytes are not text.
+    ///
+    /// Sniffed with `MagicBytes.looksLikeText` rather than trusting a bare
+    /// UTF-8 decode: a small binary can decode without throwing, and rendering
+    /// a PNG as mojibake is worse than handing it to Quick Look. The sniffer
+    /// rejects a NUL byte and control-character soup, which is what the
+    /// transcript's payload chips already lean on.
+    private var readableText: String? {
+        guard MagicBytes.looksLikeText(file.data) else { return nil }
+        return file.text
     }
 
     /// Stage the content as a real temp file so the share sheet offers
