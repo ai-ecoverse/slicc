@@ -803,7 +803,7 @@ describe('resetNewSessionTmp', () => {
       mkdir: vi.fn(async () => undefined),
     };
 
-    await expect(resetNewSessionTmp(vfs)).resolves.toBeUndefined();
+    await expect(resetNewSessionTmp(vfs, '/tmp')).resolves.toBeUndefined();
 
     expect(vfs.rm).toHaveBeenCalledWith('/tmp/survivor.txt');
     expect(vfs.mkdir).toHaveBeenCalledWith('/tmp', { recursive: true });
@@ -824,7 +824,7 @@ describe('resetNewSessionTmp', () => {
       mkdir: vi.fn(async () => undefined),
     };
 
-    await expect(resetNewSessionTmp(vfs)).resolves.toBeUndefined();
+    await expect(resetNewSessionTmp(vfs, '/tmp')).resolves.toBeUndefined();
 
     expect(vfs.rm).toHaveBeenCalledWith('/tmp/survivor.txt');
     expect(vfs.rm).not.toHaveBeenCalledWith('/tmp/gone');
@@ -842,7 +842,7 @@ describe('resetNewSessionTmp', () => {
       mkdir: vi.fn(async () => undefined),
     };
 
-    await expect(resetNewSessionTmp(vfs)).rejects.toMatchObject({ code: 'EIO' });
+    await expect(resetNewSessionTmp(vfs, '/tmp')).rejects.toMatchObject({ code: 'EIO' });
     expect(vfs.mkdir).not.toHaveBeenCalled();
   });
 
