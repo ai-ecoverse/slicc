@@ -41,8 +41,19 @@ interface PendingCall<TReply> {
   timer: ReturnType<typeof setTimeout>;
 }
 
-/** Per-call-site configuration for `createPortBridgeClient`. */
-export interface PortBridgeOptions<TRequest> {
+/**
+ * Per-call-site configuration for `createPortBridgeClient`.
+ *
+ * `TPortMessage` / `TPanelPayload` are inferred from the builders so the
+ * factory stays shape-agnostic without an open string-keyed bag — each
+ * specialization (`secrets-bridge-client`, `mount-bridge-client`) owns the
+ * concrete message fields.
+ */
+export interface PortBridgeOptions<
+  TRequest,
+  TPortMessage extends object = object,
+  TPanelPayload extends object = object,
+> {
   /** Named `chrome.runtime.connect` Port (e.g. `'secrets.crud'`). */
   portName: string;
   /** Panel-RPC op key used from a chrome-less realm (e.g. `'secrets-bridge'`). */
@@ -59,9 +70,9 @@ export interface PortBridgeOptions<TRequest> {
   /** Logger namespace (also embedded in default log messages). */
   logNamespace: string;
   /** Encode a `TRequest` as the message body posted on the Port (id is added by the factory). */
-  toPortMessage: (request: TRequest) => Record<string, unknown>;
+  toPortMessage: (request: TRequest) => TPortMessage;
   /** Encode a `TRequest` as the panel-RPC payload for the worker-realm fallback. */
-  toPanelRpcPayload: (request: TRequest) => Record<string, unknown>;
+  toPanelRpcPayload: (request: TRequest) => TPanelPayload;
 }
 
 /**
@@ -71,8 +82,13 @@ export interface PortBridgeOptions<TRequest> {
  *   b. WORKER realm (no `chrome`, delegate id set): panel-RPC fallback.
  *   c. Otherwise: unavailable — resolves `undefined` or rejects per `onUnavailable`.
  */
-export function createPortBridgeClient<TRequest, TReply>(
-  opts: PortBridgeOptions<TRequest>
+export function createPortBridgeClient<
+  TRequest,
+  TReply,
+  TPortMessage extends object = object,
+  TPanelPayload extends object = object,
+>(
+  opts: PortBridgeOptions<TRequest, TPortMessage, TPanelPayload>
 ): (request: TRequest) => Promise<TReply | undefined> {
   const log = createLogger(opts.logNamespace);
   let cachedPort: BridgePort | null = null;
