@@ -30,6 +30,30 @@ const log = createLogger('cdp-ws-page-bridge');
 /** Page-side binding name. Must match `__sliccWsRouterReport` in `ws-router-page.ts`. */
 const BINDING_NAME = '__sliccWsRouterReport';
 
+/**
+ * CDP `Runtime.bindingCalled` params we read. Extra CDP fields may be
+ * present; we only narrow `name` and `payload`.
+ */
+interface RuntimeBindingCalledParams {
+  name?: unknown;
+  payload?: unknown;
+}
+
+/** JSON envelope the page-side router posts through the binding. */
+interface WsRouterBindingReport {
+  subId?: unknown;
+  payload?: unknown;
+}
+
+/**
+ * Patch forwarded to `window.__sliccWsRouter.update`. Tri-state fields:
+ * omit = leave unchanged, `null` = clear, value = set.
+ */
+interface WsRouterUpdatePatch {
+  urlMatch?: string | null;
+  filter?: WsSelector | null;
+}
+
 export interface CdpWsPageBridgeOptions {
   browser: BrowserAPI;
 }
@@ -41,9 +65,9 @@ export class CdpWsPageBridge implements WsPageBridge {
   private frameHandler: ((subId: string, payload: unknown) => void) | null = null;
   private bindingListenerAttached = false;
 
-  private readonly onBindingCalled = (params: Record<string, unknown>): void => {
-    if (params['name'] !== BINDING_NAME) return;
-    const payload = params['payload'];
+  private readonly onBindingCalled = (params: RuntimeBindingCalledParams): void => {
+    if (params.name !== BINDING_NAME) return;
+    const payload = params.payload;
     if (typeof payload !== 'string') return;
     let parsed: unknown;
     try {
@@ -52,9 +76,10 @@ export class CdpWsPageBridge implements WsPageBridge {
       return;
     }
     if (typeof parsed !== 'object' || parsed === null) return;
-    const subId = (parsed as { subId?: unknown }).subId;
+    const report = parsed as WsRouterBindingReport;
+    const subId = report.subId;
     if (typeof subId !== 'string') return;
-    const projection = (parsed as { payload?: unknown }).payload;
+    const projection = report.payload;
     try {
       this.frameHandler?.(subId, projection);
     } catch (err) {
@@ -119,11 +144,11 @@ export class CdpWsPageBridge implements WsPageBridge {
       // `delete` the field, and any value sets it. Without the explicit
       // clear directive, `sub.update({ filter: null })` would leave the
       // page-side router matching with stale criteria.
-      const patch: Record<string, unknown> = {};
-      if (urlMatch === null) patch['urlMatch'] = null;
-      else if (urlMatch !== undefined) patch['urlMatch'] = urlMatch;
-      if (filter === null) patch['filter'] = null;
-      else if (filter !== undefined) patch['filter'] = filter;
+      const patch: WsRouterUpdatePatch = {};
+      if (urlMatch === null) patch.urlMatch = null;
+      else if (urlMatch !== undefined) patch.urlMatch = urlMatch;
+      if (filter === null) patch.filter = null;
+      else if (filter !== undefined) patch.filter = filter;
       const expr = `window.__sliccWsRouter && window.__sliccWsRouter.update(${JSON.stringify(subId)}, ${JSON.stringify(patch)})`;
       await this.browser.sendCDP('Runtime.evaluate', { expression: expr, returnByValue: true });
     });

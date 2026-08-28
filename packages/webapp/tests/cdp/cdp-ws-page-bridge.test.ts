@@ -167,4 +167,47 @@ describe('CdpWsPageBridge', () => {
     expect(exprs[2]).toContain('.unregister(');
     bridge.dispose();
   });
+
+  it('forwards explicit null clears in updateSelector patches and omits undefined fields', async () => {
+    const transport = new FakeTransport();
+    const browser = makeFakeBrowser(transport);
+    const bridge = new CdpWsPageBridge({ browser });
+
+    await bridge.installRouter('target-1');
+    transport.sent.length = 0;
+    await bridge.updateSelector('target-1', 'sub-1', null, undefined);
+    await bridge.updateSelector('target-1', 'sub-1', undefined, null);
+    const exprs = transport.sent
+      .filter((c) => c.method === 'Runtime.evaluate')
+      .map((c) => String(c.params?.['expression']));
+    expect(exprs[0]).toContain('"urlMatch":null');
+    expect(exprs[0]).not.toContain('"filter"');
+    expect(exprs[1]).toContain('"filter":null');
+    expect(exprs[1]).not.toContain('"urlMatch"');
+    bridge.dispose();
+  });
+
+  it('ignores malformed Runtime.bindingCalled payloads', async () => {
+    const transport = new FakeTransport();
+    const browser = makeFakeBrowser(transport);
+    const bridge = new CdpWsPageBridge({ browser });
+    const seen: Array<{ subId: string; payload: unknown }> = [];
+    bridge.onMatchedFrame((subId, payload) => {
+      seen.push({ subId, payload });
+    });
+    await bridge.installRouter('target-1');
+
+    transport.emit('Runtime.bindingCalled', { name: '__sliccWsRouterReport', payload: 'not-json' });
+    transport.emit('Runtime.bindingCalled', {
+      name: '__sliccWsRouterReport',
+      payload: JSON.stringify({ payload: { ok: true } }),
+    });
+    transport.emit('Runtime.bindingCalled', {
+      name: '__sliccWsRouterReport',
+      payload: JSON.stringify({ subId: 42, payload: { ok: true } }),
+    });
+    await Promise.resolve();
+    expect(seen).toEqual([]);
+    bridge.dispose();
+  });
 });
