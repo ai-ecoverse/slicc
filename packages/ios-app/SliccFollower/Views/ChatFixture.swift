@@ -82,6 +82,11 @@ enum ChatFixture {
                     ```
 
                     > Blockquotes should feel quieter than regular text.
+
+                    | Float | Runtime | Agent | Notes |
+                    | --- | :-: | --- | ---: |
+                    | CLI | Express | yes | boots Chrome over CDP and keeps the bridge warm for the whole session |
+                    | Cherry | iframe | no | embedded follower garnish |
                     """,
                 timestamp: ts(1.3)
             ))
