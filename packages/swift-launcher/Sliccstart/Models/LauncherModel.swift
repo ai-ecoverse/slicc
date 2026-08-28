@@ -88,7 +88,7 @@ final class LauncherModel {
         },
         isBundledBuild: @escaping () -> Bool = { SliccBootstrapper.isBundled },
         startupLaunchEnabled: @escaping () -> Bool = {
-            StartupPreference.resolveEnabled(defaults: .standard)
+            StartupPreference.shouldAutoLaunch(defaults: .standard)
         },
         savedBrowserOrder: @escaping () -> [String] = { AppOrderStore().load(AppOrderStore.browserKey) }
     ) {

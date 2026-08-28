@@ -25,9 +25,21 @@ final class SliccstartAppDelegate: NSObject, NSApplicationDelegate {
     let fileProviderCoordinator: FileProviderCoordinator
     let appUpdater: AppUpdater
 
-    /// Everything defaulted, so `@NSApplicationDelegateAdaptor` still builds it
-    /// with `init()` — but a test can stand in for the collaborators and check
-    /// what quitting actually does to the user's running browsers.
+    /// `@NSApplicationDelegateAdaptor` instantiates the delegate through the
+    /// **Objective-C** runtime's `-init`. A Swift designated initializer whose
+    /// parameters are all defaulted is callable as `init()` from Swift but
+    /// does *not* vend that selector, so adding one below replaced the
+    /// inherited `NSObject.init` with a trap and the app died on launch with
+    /// "Use of unimplemented initializer 'init()'". Nothing in a unit test
+    /// suite or a compile catches that — only running the app does.
+    /// `AppDelegateLifecycleTests.testTheDelegateIsConstructibleFromTheObjCRuntime`
+    /// is the regression.
+    override convenience init() {
+        self.init(sliccProcess: SliccProcess())
+    }
+
+    /// Everything defaulted, so a test can stand in for the collaborators and
+    /// check what quitting actually does to the user's running browsers.
     init(
         sliccProcess: SliccProcess = SliccProcess(),
         sessionStore: TraySessionSyncStore = TraySessionSyncStore(),

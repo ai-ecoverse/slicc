@@ -277,10 +277,25 @@ struct MountsSettingsView: View {
 
 struct StartupSettingsView: View {
     var fileProviderCoordinator: FileProviderCoordinator
+    /// Injected so the "this build won't auto-launch" caption is renderable;
+    /// a test process never runs from `/Applications`.
+    var isInstalledLocation: Bool = StartupPreference.isInstalledLocation()
     @AppStorage(StartupPreference.enabledKey) private var launchAtStartup = false
     @State private var topBrowserName: String?
     @State private var isDefaultBrowser = false
     @State private var isRequestingDefaultBrowser = false
+
+    /// Auto-launch only runs from the installed app, so a build that cannot
+    /// honour the checkbox has to say so rather than look broken.
+    static func launchCaption(isInstalled: Bool) -> String {
+        let base =
+            "Launches the browser at the top of your Browsers list. Drag to reorder that list in the main window to change which one starts."
+        guard isInstalled else {
+            return base
+                + " This copy runs from outside your Applications folder, so it will not auto-launch — move Sliccstart to Applications to enable it."
+        }
+        return base
+    }
 
     var body: some View {
         Form {
@@ -291,7 +306,7 @@ struct StartupSettingsView: View {
                     Text("Launch top browser on startup")
                 }
             }
-            Text("Launches the browser at the top of your Browsers list. Drag to reorder that list in the main window to change which one starts.")
+            Text(StartupSettingsView.launchCaption(isInstalled: isInstalledLocation))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Divider()

@@ -84,6 +84,20 @@ final class AppDelegateLifecycleTests: XCTestCase {
         )
     }
 
+    /// `@NSApplicationDelegateAdaptor` constructs the delegate through the
+    /// Objective-C runtime, not through Swift's overload resolution — so a
+    /// designated initializer with all-defaulted parameters is not enough, and
+    /// the app traps on launch. Swift's `SliccstartAppDelegate()` resolves
+    /// statically and would NOT catch it; going through `NSObject.Type` does.
+    func testTheDelegateIsConstructibleFromTheObjCRuntime() {
+        let type: NSObject.Type = SliccstartAppDelegate.self
+        let instance = type.init()
+        XCTAssertTrue(
+            instance is SliccstartAppDelegate,
+            "the app delegate must answer -init, or SwiftUI cannot build it"
+        )
+    }
+
     func testTheDelegateBuildsTheWindowModelOverItsOwnCollaborators() {
         let (delegate, process, store) = makeDelegate()
         XCTAssertTrue(delegate.model.process === process)
