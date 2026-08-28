@@ -125,14 +125,19 @@ describe('PreviewBridgeCdpTransport', () => {
 
       await transport.connect();
 
-      transport.send('Runtime.evaluate', { expression: '1' });
-      transport.send('Runtime.evaluate', { expression: '2' });
+      const first = transport.send('Runtime.evaluate', { expression: '1' });
+      const second = transport.send('Runtime.evaluate', { expression: '2' });
 
       const requests = sent.filter((m) => m.type === 'bridge.cdp.request') as Array<
         LeaderToWorkerControlMessage & { id: number }
       >;
       expect(requests).toHaveLength(2);
       expect(requests[0].id).toBeLessThan(requests[1].id);
+
+      // Settle the pending sends so they are not floating promises.
+      transport.deliverResponse(requests[0].id, { result: { value: 1 } });
+      transport.deliverResponse(requests[1].id, { result: { value: 2 } });
+      await Promise.all([first, second]);
     });
   });
 
