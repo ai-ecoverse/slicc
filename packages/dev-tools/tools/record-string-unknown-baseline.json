@@ -49,7 +49,6 @@
   "packages/webapp/src/shell/arg-parser.ts": 2,
   "packages/webapp/src/shell/bsh-watchdog.ts": 1,
   "packages/webapp/src/shell/mcp/store.ts": 2,
-  "packages/webapp/src/shell/supplemental-commands/jsh-biome-source.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/picker-popup.ts": 3,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/network-requests.ts": 5,
   "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts": 5,
