@@ -115,6 +115,12 @@ export interface FileLoggerOptions {
   cleanup?: boolean;
 }
 
+/**
+ * Optional structured fields attached to a log line. Keys are caller-chosen
+ * labels; values are JSON-stringified via {@link safeStringify}.
+ */
+export type StructuredLogData = { [key: string]: unknown };
+
 export class FileLogger {
   readonly logDir: string;
   readonly logFile: string;
@@ -175,7 +181,7 @@ export class FileLogger {
   // -------------------------------------------------------------------------
 
   /** Write a structured log entry. Respects log level filtering. */
-  log(level: LogLevel, message: string, data?: Record<string, unknown>): void {
+  log(level: LogLevel, message: string, data?: StructuredLogData): void {
     if (!shouldLog(level, this.logLevel)) return;
     const entry = data
       ? `${timestamp()} [${level.toUpperCase()}] ${message} ${safeStringify(data)}`

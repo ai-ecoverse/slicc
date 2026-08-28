@@ -8,7 +8,6 @@
   "packages/dev-tools/tools/extension-smoke-test.ts": 6,
   "packages/node-server/src/electron-controller.ts": 13,
   "packages/node-server/src/electron-runtime.ts": 1,
-  "packages/node-server/src/file-logger.ts": 1,
   "packages/shared-ts/src/transcript-export.ts": 18,
   "packages/webapp/providers/adobe.ts": 1,
   "packages/webapp/providers/github-copilot.ts": 2,
