@@ -31,6 +31,72 @@ npm run format -w @slicc/swift-launcher        # swift format --in-place
 
 `SliccstartApp` ticks `refreshRuntimeStates` every 2 s and `runtimeState(for:)` runs on every SwiftUI render, so anything on that path must be O(1) and filesystem-free in the steady state. Electron liveness uses the launch record's `observedAppPID` (`kill(pid, 0)`) first; the `NSWorkspace.runningApplications` scan (`candidateBundlePaths` + `appMatches`, pure string compares) is a fallback only. Do not reintroduce per-app `resolvingSymlinksInPath()` — with ~270 running apps it pinned the launcher at ~40% CPU. Tests: `ElectronAppMatchingTests`.
 
+## Testing the SwiftUI Surfaces
+
+`SliccstartTests/ViewHosting.swift` renders a view off-screen with
+`ImageRenderer` and returns a digest of the bitmap, so a test can assert that
+two states of a view **render differently** (`assertRendersDifferently`) — the
+only way to reach `AppListView` / `SettingsView` body branches from a unit
+test. Two hard limits, both worked around rather than fought:
+
+- **No interaction.** Headless SwiftUI on macOS builds no AppKit control tree
+  and no accessibility tree, so buttons cannot be pressed. Button _actions_ are
+  tested through the plain types they delegate to (`BrowserLaunchAction`,
+  `TerminalLaunchDecision`, `AppRow.statusDot`, …) — keep new view logic in
+  such a type rather than inline in a closure. The exception is `.borderless`
+  buttons, which do materialize as `NSButton`s (`ViewHosting.hostedButtons`,
+  used for `TraySessionRow`).
+- **CI runs an older macOS than your Mac** (`macos-latest` is still macOS 15).
+  How much of an AppKit-hosted subtree — `Table`, and anything overlaid on one
+  — an off-screen render produces differs between them, so a render comparison
+  that passes locally is not evidence it passes in CI. Compare only over
+  plain SwiftUI content.
+- **Vary exactly one thing per comparison.** Two states that differ in more
+  than one way render differently whether or not the feature under test
+  exists — a review found eight such tests here. Pin everything else
+  (`subtitleOverride:`, identical messages, an empty `Secret`), or assert the
+  underlying rule (`AppListView.updateAffordance`,
+  `SecretEditorSheet.validationMessage`) instead of writing a comparison that
+  cannot fail. Mutate the source and watch the test go red before trusting it.
+- **`Table`, `Toggle` and `.borderless` buttons draw nothing** (both are `NSTableView`/`NSSwitch`-
+  backed), so table cells, switch knobs, and anything styled by tint on a
+  borderless button are asserted against their model types instead.
+
+Views take their non-injectable state as init seams for this:
+`AppListView(isBundledBuild:)` (the whole update footer is otherwise
+unreachable outside a packaged `.app`), `MountsSettingsView(rows:)`,
+`SecretsSettingsView(secrets:unlocked:selection:)` (never touches the
+Keychain).
+
+**The window is a model, not a `Scene`.** An `App`'s `Scene` cannot be
+rendered, so anything living inside `WindowGroup` is untestable by
+construction. `SliccstartApp` is therefore only wiring: the window's behavior
+is **`Models/LauncherModel.swift`** (launch decisions, dialogs, debug builds,
+update-check outcomes, the 2 s tick, leader publish/withdraw) and its content
+is **`Views/RootView.swift`**. `SliccstartAppDelegate` is the composition
+root, with every collaborator defaulted-but-injectable so the two quit paths
+(stop-everything vs detach-for-update) are testable. Put new window behavior
+on `LauncherModel`, not in a `WindowGroup` closure. Tests:
+`LauncherModelTests`, `RootViewRenderTests`, `AppDelegateLifecycleTests`.
+
+**Launch paths** go through `SliccProcess.SpawnServices` — resolve-binary,
+run-process, is-port-in-use. Injected so `launchStandalone` /
+`launchBrowserFollower` / `launchWithElectronApp` are testable without
+starting a browser or binding 5710/9222; the stub runs `/bin/sleep` in the
+server's place so records, pids and termination handling stay real. Tests:
+`SliccProcessLaunchPathTests`.
+
+**Auto-launch requires an installed app.** `StartupPreference.shouldAutoLaunch`
+is `resolveEnabled && isInstalledLocation` — a copy running from a build
+directory, `~/Downloads`, or Gatekeeper's translocated path never starts a
+browser, so a dev/CI run of the launcher cannot take over the screen. The
+preference is untouched and the Startup tab explains the refusal.
+
+`SliccProcess`, `SliccBootstrapper` and `AppManagementPermission` are
+deliberately **not `final`** — they are the app's side-effecting collaborators
+(spawning browsers, running git/npm, opening System Settings), and `@testable`
+lets a test subclass stand in for them.
+
 ## Operational Telemetry (OpTel)
 
 `SliccstartApp.swift`'s `WindowGroup` root calls `.optelAutoInstrument(appID:)` from `@slicc/swift-optel` once; on macOS that activates `enter`, global `click`, `navigate`, and `error` (uncaught `NSException`). `appID = Bundle.main.bundleIdentifier` (`com.slicc.sliccstart`); beacons land in `helix-225321.helix_rum.cluster`.

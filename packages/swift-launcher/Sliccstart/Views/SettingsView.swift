@@ -76,6 +76,13 @@ struct MountsSettingsView: View {
     @State private var rows: [Row] = []
     @State private var selection: Row.ID?
 
+    /// `rows` is normally loaded from the mount-table preference in
+    /// `onAppear`, which never fires off-screen — so the seed exists for
+    /// tests, which otherwise could only ever render the empty table.
+    init(rows: [Row] = []) {
+        _rows = State(initialValue: rows)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             table
@@ -270,10 +277,25 @@ struct MountsSettingsView: View {
 
 struct StartupSettingsView: View {
     var fileProviderCoordinator: FileProviderCoordinator
+    /// Injected so the "this build won't auto-launch" caption is renderable;
+    /// a test process never runs from `/Applications`.
+    var isInstalledLocation: Bool = StartupPreference.isInstalledLocation()
     @AppStorage(StartupPreference.enabledKey) private var launchAtStartup = false
     @State private var topBrowserName: String?
     @State private var isDefaultBrowser = false
     @State private var isRequestingDefaultBrowser = false
+
+    /// Auto-launch only runs from the installed app, so a build that cannot
+    /// honour the checkbox has to say so rather than look broken.
+    static func launchCaption(isInstalled: Bool) -> String {
+        let base =
+            "Launches the browser at the top of your Browsers list. Drag to reorder that list in the main window to change which one starts."
+        guard isInstalled else {
+            return base
+                + " This copy runs from outside your Applications folder, so it will not auto-launch — move Sliccstart to Applications to enable it."
+        }
+        return base
+    }
 
     var body: some View {
         Form {
@@ -284,7 +306,7 @@ struct StartupSettingsView: View {
                     Text("Launch top browser on startup")
                 }
             }
-            Text("Launches the browser at the top of your Browsers list. Drag to reorder that list in the main window to change which one starts.")
+            Text(StartupSettingsView.launchCaption(isInstalled: isInstalledLocation))
                 .font(.caption)
                 .foregroundStyle(.secondary)
             Divider()
@@ -499,6 +521,16 @@ struct SecretsSettingsView: View {
     @State private var editorDraft: SecretDraft?
     @State private var deletionTarget: Secret?
     @State private var errorMessage: String?
+
+    /// The unlocked state is only ever reached by a Keychain read behind a
+    /// user click, so a test can reach it no other way — and the unlocked
+    /// table, its selection, and the editor sheet are most of this tab.
+    /// Seeded secrets never touch the Keychain.
+    init(secrets: [Secret] = [], unlocked: Bool = false, selection: Secret.ID? = nil) {
+        _secrets = State(initialValue: secrets)
+        _unlocked = State(initialValue: unlocked)
+        _selection = State(initialValue: selection)
+    }
 
     /// Decorative rows shown blurred behind the unlock prompt before the
     /// user has authorised Keychain access. Real values are never used.
@@ -738,12 +770,14 @@ enum SecretDraft: Identifiable {
     }
 }
 
-private struct DomainEntry: Identifiable, Equatable {
+/// Internal (not `private`) so the editor's validation states can be rendered
+/// from a test — same reason as `SecretNameValidator` above.
+struct DomainEntry: Identifiable, Equatable {
     let id = UUID()
     var pattern: String
 }
 
-private struct SecretEditorSheet: View {
+struct SecretEditorSheet: View {
     let draft: SecretDraft
     let existingNames: Set<String>
     let onCancel: () -> Void
@@ -781,17 +815,21 @@ private struct SecretEditorSheet: View {
     }
 
     private var trimmedDomains: [String] {
-        domainEntries
-            .map { $0.pattern.trimmingCharacters(in: .whitespaces) }
+        Self.trimmedDomains(domainEntries.map(\.pattern))
+    }
+
+    static func trimmedDomains(_ patterns: [String]) -> [String] {
+        patterns
+            .map { $0.trimmingCharacters(in: .whitespaces) }
             .filter { !$0.isEmpty }
     }
 
     /// First non-empty hostname pattern that fails the syntactic check, or
     /// `nil` if every pattern is valid (or empty — empties are filtered out
     /// before save).
-    private var firstInvalidPattern: String? {
-        for entry in domainEntries {
-            let trimmed = entry.pattern.trimmingCharacters(in: .whitespaces)
+    static func firstInvalidPattern(in patterns: [String]) -> String? {
+        for pattern in patterns {
+            let trimmed = pattern.trimmingCharacters(in: .whitespaces)
             if trimmed.isEmpty { continue }
             if !EnvFileFormat.isValidHostnamePattern(trimmed) {
                 return trimmed
@@ -800,37 +838,57 @@ private struct SecretEditorSheet: View {
         return nil
     }
 
-    private var nameIsValid: Bool {
-        SecretNameValidator.isValid(trimmedName)
-    }
-
-    private var nameCollides: Bool {
+    static func nameCollides(_ name: String, draft: SecretDraft, existingNames: Set<String>) -> Bool {
         switch draft {
         case .creating:
-            return existingNames.contains(trimmedName)
+            return existingNames.contains(name)
         case .editing(let original):
-            return trimmedName != original.name && existingNames.contains(trimmedName)
+            return name != original.name && existingNames.contains(name)
         }
     }
 
-    private var canSave: Bool {
-        nameIsValid
-            && !nameCollides
-            && !value.isEmpty
-            && !trimmedDomains.isEmpty
-            && firstInvalidPattern == nil
-    }
-
-    private var validationMessage: String? {
-        if trimmedName.isEmpty { return "Name is required." }
-        if !nameIsValid { return "Name may only contain letters, numbers, dots, underscores, and hyphens." }
-        if nameCollides { return "A secret named \"\(trimmedName)\" already exists." }
+    /// Why this draft cannot be saved yet, or `nil` when it can.
+    ///
+    /// A `static` over plain values rather than a computed property over the
+    /// sheet's `@State`, because most of these branches are only reachable by
+    /// *typing* — a test can seed the sheet's initial draft but cannot edit a
+    /// `TextField` off-screen, so the collision and invalid-name branches
+    /// would otherwise be untestable and untested.
+    static func validationMessage(
+        name rawName: String,
+        value: String,
+        domainPatterns: [String],
+        draft: SecretDraft,
+        existingNames: Set<String>
+    ) -> String? {
+        let name = rawName.trimmingCharacters(in: .whitespaces)
+        if name.isEmpty { return "Name is required." }
+        if !SecretNameValidator.isValid(name) {
+            return "Name may only contain letters, numbers, dots, underscores, and hyphens."
+        }
+        if nameCollides(name, draft: draft, existingNames: existingNames) {
+            return "A secret named \"\(name)\" already exists."
+        }
         if value.isEmpty { return "Value is required." }
-        if trimmedDomains.isEmpty { return "Add at least one hostname pattern." }
-        if let bad = firstInvalidPattern {
+        if trimmedDomains(domainPatterns).isEmpty { return "Add at least one hostname pattern." }
+        if let bad = firstInvalidPattern(in: domainPatterns) {
             return "\"\(bad)\" is not a valid hostname pattern. Use `example.com`, `*.example.com`, or `*`."
         }
         return nil
+    }
+
+    private var canSave: Bool {
+        validationMessage == nil
+    }
+
+    private var validationMessage: String? {
+        Self.validationMessage(
+            name: name,
+            value: value,
+            domainPatterns: domainEntries.map(\.pattern),
+            draft: draft,
+            existingNames: existingNames
+        )
     }
 
     private var isEditing: Bool {

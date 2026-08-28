@@ -19,6 +19,13 @@ struct AppListView: View {
     let onUpdate: () -> Void
     let onBeginUpdate: () -> Void
     let onRescan: () -> Void
+    /// Whether this build carries a bundled SLICC runtime, i.e. whether the
+    /// in-app updater applies at all. Injected (rather than read from
+    /// `SliccBootstrapper.isBundled` inside `body`) because a test process is
+    /// never a bundled `.app`: with the global read, the entire full-update
+    /// footer — the check/retry states and the restart-to-update affordance —
+    /// could not be rendered, let alone asserted on.
+    var isBundledBuild: Bool = SliccBootstrapper.isBundled
 
     @AppStorage(suppressTerminalWarningKey) private var suppressTerminalWarning = false
     @State private var pendingTerminalTarget: AppTarget?
@@ -404,7 +411,7 @@ struct AppListView: View {
 
     @ViewBuilder
     private var updateButton: some View {
-        if SliccBootstrapper.isBundled {
+        if isBundledBuild {
             fullUpdateButton
         } else {
             Button("Update") { onUpdate() }
@@ -461,8 +468,32 @@ struct AppListView: View {
         }
     }
 
+    /// Whether restarting into a staged update should be encouraged right now.
+    ///
+    /// Split out of the computed tint so every branch is assertable: the
+    /// restart button is `.borderless`, which macOS renders through AppKit,
+    /// and an AppKit-backed control draws nothing under `ImageRenderer` — so a
+    /// render comparison cannot see this at all. (A test that only rendered
+    /// the two states passed while the tint was unreachable; see
+    /// `AppListViewRenderTests`.)
+    enum UpdateAffordance: Equatable {
+        /// Nothing is mid-run; restarting is safe to suggest.
+        case ready
+        /// An agent has been active recently — restarting would interrupt it.
+        case discouraged
+    }
+
+    static func updateAffordance(hasRecentAgentActivity: Bool) -> UpdateAffordance {
+        hasRecentAgentActivity ? .discouraged : .ready
+    }
+
     private var fullUpdateTint: AnyShapeStyle {
-        hasRecentAgentActivity ? AnyShapeStyle(.secondary) : AnyShapeStyle(Color.green)
+        switch AppListView.updateAffordance(hasRecentAgentActivity: hasRecentAgentActivity) {
+        case .discouraged:
+            return AnyShapeStyle(.secondary)
+        case .ready:
+            return AnyShapeStyle(Color.green)
+        }
     }
 
     private var downloadedUpdateBundle: Bundle? {
