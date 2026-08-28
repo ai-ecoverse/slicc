@@ -769,7 +769,7 @@ async function tryHandleOAuthRoutes(
   return null;
 }
 
-/** The env view the OAuth exchange handlers declare (`EnvRecord` in oauth-exchange.ts). */
+/** The env view the OAuth exchange handlers declare (`OAuthCredentialEnv`). */
 type OAuthHandlerEnv = Parameters<typeof handleOAuthToken>[1];
 
 /** Dev-harness override vars that are deliberately absent from `WorkerEnv`. */

@@ -51,14 +51,24 @@ export function handleOAuthMethodNotAllowed(request: Request): Response {
 
 // ── Credential resolution ──────────────────────────────────────────
 
-type EnvRecord = Record<string, unknown>;
+/**
+ * Worker env bindings that hold OAuth client credentials.
+ * Keys match each provider's `clientIdEnvKey` / `clientSecretEnvKey` in
+ * {@link OAUTH_PROVIDERS}. Extend this when registering a new provider.
+ */
+export interface OAuthCredentialEnv {
+  GITHUB_CLIENT_ID?: string;
+  GITHUB_CLIENT_SECRET?: string;
+}
 
 function resolveCredentials(
-  env: EnvRecord,
+  env: OAuthCredentialEnv,
   def: OAuthProviderDef
 ): { clientId: string; clientSecret: string } | null {
-  const clientId = env[def.clientIdEnvKey];
-  const clientSecret = env[def.clientSecretEnvKey];
+  // Registry keys are strings; look up via Reflect so new providers need only
+  // extend {@link OAuthCredentialEnv} + the registry entry.
+  const clientId = Reflect.get(env, def.clientIdEnvKey);
+  const clientSecret = Reflect.get(env, def.clientSecretEnvKey);
   if (typeof clientId !== 'string' || !clientId) return null;
   if (typeof clientSecret !== 'string' || !clientSecret) return null;
   return { clientId, clientSecret };
@@ -68,7 +78,7 @@ function resolveCredentials(
 
 export async function handleOAuthToken(
   request: Request,
-  env: EnvRecord,
+  env: OAuthCredentialEnv,
   fetchImpl: typeof fetch = fetch
 ): Promise<Response> {
   const cors = oauthCorsHeaders(request);
@@ -162,7 +172,7 @@ export async function handleOAuthToken(
 
 export async function handleOAuthRevoke(
   request: Request,
-  env: EnvRecord,
+  env: OAuthCredentialEnv,
   fetchImpl: typeof fetch = fetch
 ): Promise<Response> {
   const cors = oauthCorsHeaders(request);
