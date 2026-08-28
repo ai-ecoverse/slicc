@@ -8,6 +8,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   buildOnboardingProviderCatalogue,
   createOnboardingOrchestratorSetup,
+  narrowOnboardingFinalLickPayload,
   type OnboardingProviderHelpers,
 } from '../../../src/ui/boot/setup-onboarding-orchestrator.js';
 
@@ -66,6 +67,52 @@ describe('buildOnboardingProviderCatalogue', () => {
     );
 
     expect(catalogue.models.broken).toEqual([]);
+  });
+});
+
+describe('narrowOnboardingFinalLickPayload', () => {
+  it('types known fields and drops non-string action/provider values', () => {
+    const narrowed = narrowOnboardingFinalLickPayload({
+      action: 'onboarding-complete-with-provider',
+      extra: true,
+      data: {
+        profile: { name: 'Ada' },
+        provider: 'anthropic',
+        providerName: 'Anthropic',
+        model: 'claude-opus-4-6',
+        modelLabel: 'Claude Opus 4.6',
+        validation: 'ok',
+        leftover: 1,
+      },
+    });
+
+    expect(narrowed.action).toBe('onboarding-complete-with-provider');
+    expect(narrowed.extra).toBe(true);
+    expect(narrowed.data).toEqual({
+      profile: { name: 'Ada' },
+      provider: 'anthropic',
+      providerName: 'Anthropic',
+      model: 'claude-opus-4-6',
+      modelLabel: 'Claude Opus 4.6',
+      validation: 'ok',
+      leftover: 1,
+    });
+  });
+
+  it('clears malformed action and nested scalar fields', () => {
+    const narrowed = narrowOnboardingFinalLickPayload({
+      action: 42,
+      data: {
+        provider: 7,
+        model: false,
+        validation: null,
+      },
+    });
+
+    expect(narrowed.action).toBeUndefined();
+    expect(narrowed.data?.provider).toBeUndefined();
+    expect(narrowed.data?.model).toBeUndefined();
+    expect(narrowed.data?.validation).toBeUndefined();
   });
 });
 
