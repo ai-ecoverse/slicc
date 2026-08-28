@@ -32,10 +32,30 @@ function getDoStub(env: CloudEnv, userId: string): DurableObjectStubLike {
   return env.CLOUD_SESSIONS.get(id);
 }
 
+/** JSON body forwarded to a CloudSessionsDurableObject RPC endpoint. */
+type CloudDoRpcBody =
+  | {
+      bearer: string;
+      name?: string;
+      coneConfig?: unknown;
+      userId: string;
+      workerOrigin: string;
+    }
+  | { userId: string }
+  | { sandboxId: string }
+  | {
+      bearer: string;
+      sandboxId: string;
+      coneConfigDelta?: unknown;
+      localSliccVersion: string;
+      userId: string;
+    }
+  | { sandboxId: string; userId: string };
+
 async function forwardToDo(
   stub: DurableObjectStubLike,
   endpoint: string,
-  body: Record<string, unknown>
+  body: CloudDoRpcBody
 ): Promise<Response> {
   try {
     return await stub.fetch(`https://do${endpoint}`, {
