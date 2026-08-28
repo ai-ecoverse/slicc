@@ -58,6 +58,15 @@ export const SUDOERS_FILE = '/etc/sudoers';
 /** Directory of sudoers drop-ins (self-protected for writes). */
 export const SUDOERS_D_DIR = '/etc/sudoers.d';
 
+/**
+ * Instructions the approver agent runs under (biscotto guest seats).
+ *
+ * Self-protected like sudoers: it decides what a GUEST may do, and a cone
+ * acting on a guest's message must not be able to rewrite the rules that gate
+ * that same guest without the owner seeing a prompt.
+ */
+export const APPROVALS_FILE = '/etc/APPROVALS.md';
+
 /** Matches the canonical per-scoop sudoers path `/scoops/<folder>/etc/sudoers`. */
 const SCOOP_SUDOERS_RE = /^\/scoops\/[^/]+\/etc\/sudoers$/;
 
@@ -334,6 +343,7 @@ export function matchCommand(policy: SudoersPolicy, segment: string): MatchResul
 function isSelfProtectedWrite(normalized: string): boolean {
   return (
     normalized === SUDOERS_FILE ||
+    normalized === APPROVALS_FILE ||
     normalized === SUDOERS_D_DIR ||
     normalized.startsWith(`${SUDOERS_D_DIR}/`) ||
     SCOOP_SUDOERS_RE.test(normalized) ||

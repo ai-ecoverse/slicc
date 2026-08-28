@@ -4,7 +4,7 @@
  *
  * Modelled on the memory curator (`agentic-memory.ts`): a narrow policy, an
  * explicit allowed-command list, a real wall-clock bound, and behaviour driven
- * by an instruction file the owner can edit (`/shared/APPROVALS.md`).
+ * by an instruction file the owner can edit (`/etc/APPROVALS.md`).
  *
  * The important difference from the `scoop` approver tier is that this agent's
  * RESULT is the verdict. It never settles anything itself, so it needs no
@@ -21,8 +21,9 @@
  * workspace, run a handful of inspection commands, write nothing at all.
  */
 
-import DEFAULT_APPROVALS_MD from '../../../vfs-root/shared/APPROVALS.md?raw';
+import DEFAULT_APPROVALS_MD from '../../../vfs-root/etc/APPROVALS.md?raw';
 import { createLogger } from '../base/logger.js';
+import { APPROVALS_FILE } from '../base/sudoers.js';
 import type { JsonSchemaObject } from '../tools/types.js';
 import { defaultChildVisibleRoots } from '../work-unit/descriptor.js';
 import type { WorkUnitWorkspace } from '../work-unit/types.js';
@@ -53,9 +54,16 @@ export { DEFAULT_APPROVALS_MD };
 
 const log = createLogger('approver-agent');
 
-export const APPROVER_INSTRUCTIONS_PATH = '/shared/APPROVALS.md';
+/**
+ * Policy, so it lives with the other approval policy (`/etc/sudoers`) rather
+ * than in `/shared/`, which is agent-visible content. Writes to it are
+ * self-protected for the same reason writes to sudoers are: the file that
+ * decides what a guest may do must not be quietly rewritable by an agent
+ * acting on that guest's input.
+ */
+export const APPROVER_INSTRUCTIONS_PATH = APPROVALS_FILE;
 
-/** Defaults when `/shared/APPROVALS.md` carries no config block. */
+/** Defaults when `/etc/APPROVALS.md` carries no config block. */
 export const DEFAULT_APPROVER_TIMEOUT_SECONDS = 90;
 /**
  * Hard ceiling regardless of what the file asks for. A guest is blocked on this
@@ -253,7 +261,7 @@ export interface ApproverRunnerDeps {
  * Build a runner over injected pieces.
  *
  * The instruction file is read fresh on every decision, not cached: an owner
- * who tightens `/shared/APPROVALS.md` after seeing a bad call expects the next
+ * who tightens `/etc/APPROVALS.md` after seeing a bad call expects the next
  * decision to use it, and a decision happens rarely enough that a read costs
  * nothing. A missing file falls back to the bundled default so approvals work
  * on a profile that has never seen one.

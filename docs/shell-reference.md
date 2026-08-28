@@ -915,7 +915,7 @@ biscotto revoke <id>
 - **`agent`** runs a purpose-built approver per request — a bounded agent that
   reads the request and answers allow/deny, and whose RESULT is the verdict. It
   writes nothing, holds only read-only inspection commands, and is driven by
-  `/shared/APPROVALS.md`, which you can edit; changes take effect on the next
+  `/etc/APPROVALS.md`, which you can edit; changes take effect on the next
   decision. Anything it cannot be read as an explicit `allow` — a crash, empty
   output, unparseable JSON, an unknown verdict word — is a denial. Unlike
   `cone` this also works for `--gate-tools`, because the approver is a separate

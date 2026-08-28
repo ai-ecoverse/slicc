@@ -42,7 +42,7 @@ function help(name: string): CommandResult {
       '                 Omit and it lives as long as this tray.\n' +
       '  --gate-messages Who approves each message: user (default), cone, agent,\n' +
       '                 scoop:<name>, or off. `agent` runs a bounded approver\n' +
-      '                 agent per request; edit /shared/APPROVALS.md to tune it.\n' +
+      '                 agent per request; edit /etc/APPROVALS.md to tune it.\n' +
       '  --gate-tools   Who approves each tool call in a turn the guest caused.\n' +
       '                 Same values. `cone` is NOT available here — the cone is\n' +
       '                 the unit running the tool, so it cannot approve its own\n' +
