@@ -40,6 +40,13 @@ describe('createCdpHostHandler', () => {
     await expect(handle('Network.enable', {})).rejects.toMatchObject({ code: -32601 });
   });
 
+  it('rejects Object.prototype method names with -32601 instead of an inherited member', async () => {
+    for (const method of ['toString', 'constructor', 'hasOwnProperty', '__proto__']) {
+      await expect(handle(method, {})).rejects.toBeInstanceOf(CherryUnsupportedError);
+      await expect(handle(method, {})).rejects.toMatchObject({ code: -32601 });
+    }
+  });
+
   it('Page.captureScreenshot rejects cleanly when screenshot is none', async () => {
     await expect(handle('Page.captureScreenshot', {})).rejects.toBeInstanceOf(
       CherryUnsupportedError

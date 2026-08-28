@@ -20,7 +20,8 @@ export interface CdpHostHandlerOptions {
  * Open-ended CDP method params / results. Per-method shapes are probed at the
  * call site; Cherry does not validate the full CDP schema.
  */
-export type CdpPayload = { [key: string]: unknown };
+// biome-ignore lint/plugin: CDP params/result are per-method and open-ended; Cherry relays them without validating the full CDP schema, so there is no narrower shape to name here.
+export type CdpPayload = Record<string, unknown>;
 
 /** CDP Runtime.RemoteObject-shaped value returned by Runtime.evaluate. */
 export type RemoteObject =
@@ -198,7 +199,11 @@ export function createCdpHostHandler(opts: CdpHostHandlerOptions): Handler {
   };
 
   return async function handle(method, params) {
-    const runner = methods[method];
+    // Own-property check only: the CDP protocol accepts arbitrary method
+    // strings, so an unimplemented method matching an `Object.prototype` key
+    // (`toString`, `constructor`, `__proto__`, …) must still fail closed with
+    // CherryUnsupportedError/-32601 rather than resolve an inherited member.
+    const runner = Object.hasOwn(methods, method) ? methods[method] : undefined;
     if (!runner) throw new CherryUnsupportedError(method);
     return runner(params);
   };
