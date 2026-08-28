@@ -518,8 +518,9 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
 });
 
 // ---------------------------------------------------------------------------
-// Tab grouping — inline copy for service worker (SW can't import shared chunks)
-// See packages/chrome-extension/src/tab-group.ts for the canonical implementation.
+// Tab grouping — self-contained implementation for the service worker.
+// The SW is an MV3 entry point and can't import shared chunks (ES `import`
+// statements throw at runtime), so this logic lives inline here.
 // ---------------------------------------------------------------------------
 
 let sliccGroupId: number | null = null;

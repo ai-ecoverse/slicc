@@ -1152,10 +1152,10 @@ The service worker must only import **types** (erased at compile time) from othe
 | Import type   | Example                                            | Allowed in SW?                    |
 | ------------- | -------------------------------------------------- | --------------------------------- |
 | Type-only     | `import type { Foo } from './messages.js'`         | Yes (erased)                      |
-| Runtime value | `import { bar } from './tab-group.js'`             | **No** (causes code split)        |
+| Runtime value | `import { bar } from './cherry-panel-sw.js'`       | **No** (causes code split)        |
 | Core modules  | `import { createLogger } from '../core/logger.js'` | **No** (pulls in dependency tree) |
 
-**Current example**: `addToSliccGroup` has an inline copy in `service-worker.ts` and a canonical version in `tab-group.ts` (the canonical module is kept for any ES-module consumer; the SW must never `import` it directly).
+**Current example**: `addToSliccGroup` (the "slicc" tab-grouping helper) is defined inline in `service-worker.ts` rather than imported from a shared module — pulling it in via `import` would trigger a Rollup code split and break the SW at runtime.
 
 ## Page / Worker Realm Split
 
