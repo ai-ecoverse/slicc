@@ -116,7 +116,7 @@ export interface LeaderRecord {
  * consumer must branch on the approver explicitly. A missing/unknown value
  * fails CLOSED (treated as `user`), never open — see `normalizeBiscottoGate`.
  */
-export type BiscottoApprover = 'off' | 'user' | 'cone' | 'scoop';
+export type BiscottoApprover = 'off' | 'user' | 'cone' | 'scoop' | 'agent';
 
 export interface BiscottoGate {
   approver: BiscottoApprover;

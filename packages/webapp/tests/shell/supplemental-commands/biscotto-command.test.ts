@@ -25,9 +25,10 @@ describe('parseDuration', () => {
 });
 
 describe('parseApprover', () => {
-  it('reads the three simple tiers', () => {
+  it('reads the simple tiers', () => {
     expect(parseApprover('user')).toEqual({ approver: 'user' });
     expect(parseApprover('cone')).toEqual({ approver: 'cone' });
+    expect(parseApprover('agent')).toEqual({ approver: 'agent' });
     expect(parseApprover('off')).toEqual({ approver: 'off' });
   });
 
@@ -83,6 +84,14 @@ describe('parseServeArgs', () => {
     // cone is the unit executing the tool it would be asked to approve.
     const result = parseServeArgs(['--label', 'Anna', '--gate-tools', 'cone']);
     expect(result).toContain('cannot approve a tool call it is blocked on');
+  });
+
+  it('allows an agent TOOL gate — the approver is not the unit being blocked', () => {
+    // Unlike `cone`, an approver agent is a separate bounded run, so it can
+    // decide a tool call without waiting on the tool it is deciding.
+    expect(parseServeArgs(['--label', 'Anna', '--gate-tools', 'agent'])).toMatchObject({
+      gates: { tool: { approver: 'agent' } },
+    });
   });
 
   it('still allows a cone MESSAGE gate — nothing is running when it asks', () => {

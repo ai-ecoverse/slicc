@@ -38,7 +38,12 @@
  * worker routes DOM-bound ops (e.g. `sudo-request`) through it.
  */
 
-import type { CDPPayload, OAuthExtraDomainsStore, SignAndForwardReply } from '@slicc/shared-ts';
+import type {
+  CDPPayload,
+  FollowerBiscottoGate,
+  OAuthExtraDomainsStore,
+  SignAndForwardReply,
+} from '@slicc/shared-ts';
 import type {
   DockTreeSpecLike,
   DockZoneName,
@@ -237,8 +242,8 @@ export type PanelRpcRequest =
         label: string;
         ttlMs?: number;
         gates?: {
-          message: { approver: 'off' | 'user' | 'cone' | 'scoop'; scoop?: string };
-          tool: { approver: 'off' | 'user' | 'cone' | 'scoop'; scoop?: string };
+          message: FollowerBiscottoGate;
+          tool: FollowerBiscottoGate;
         };
       };
     }
@@ -753,8 +758,8 @@ export interface PanelRpcResults {
     label: string;
     expiresAt?: string;
     gates: {
-      message: { approver: 'off' | 'user' | 'cone' | 'scoop'; scoop?: string };
-      tool: { approver: 'off' | 'user' | 'cone' | 'scoop'; scoop?: string };
+      message: FollowerBiscottoGate;
+      tool: FollowerBiscottoGate;
     };
   };
   'tray-revoke-biscotto': {
@@ -779,8 +784,8 @@ export interface PanelRpcResults {
       lastSeenAt?: string;
       active: boolean;
       gates: {
-        message: { approver: 'off' | 'user' | 'cone' | 'scoop'; scoop?: string };
-        tool: { approver: 'off' | 'user' | 'cone' | 'scoop'; scoop?: string };
+        message: FollowerBiscottoGate;
+        tool: FollowerBiscottoGate;
       };
     }>;
   };

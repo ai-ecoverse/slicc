@@ -20,7 +20,7 @@ type CommandResult = { stdout: string; stderr: string; exitCode: number };
 import type { PanelRpcPayloadFor, PanelRpcResults } from '../../../kernel/panel-rpc.js';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
 
-type Gate = { approver: 'off' | 'user' | 'cone' | 'scoop'; scoop?: string };
+type Gate = { approver: 'off' | 'user' | 'cone' | 'scoop' | 'agent'; scoop?: string };
 type Gates = { message: Gate; tool: Gate };
 
 /** Longest a seat may live, matching the worker's own ceiling. */
@@ -40,8 +40,9 @@ function help(name: string): CommandResult {
       '                 authenticated identity, beside what they actually wrote.\n' +
       '  --expires      How long the seat lives (30m, 12h, 7d). Max 30d.\n' +
       '                 Omit and it lives as long as this tray.\n' +
-      '  --gate-messages Who approves each message: user (default), cone,\n' +
-      '                 scoop:<name>, or off.\n' +
+      '  --gate-messages Who approves each message: user (default), cone, agent,\n' +
+      '                 scoop:<name>, or off. `agent` runs a bounded approver\n' +
+      '                 agent per request; edit /shared/APPROVALS.md to tune it.\n' +
       '  --gate-tools   Who approves each tool call in a turn the guest caused.\n' +
       '                 Same values. `cone` is NOT available here — the cone is\n' +
       '                 the unit running the tool, so it cannot approve its own\n' +
@@ -72,7 +73,9 @@ export function parseDuration(input: string): number | null {
  */
 export function parseApprover(input: string): Gate | null {
   const value = input.trim();
-  if (value === 'user' || value === 'cone' || value === 'off') return { approver: value };
+  if (value === 'user' || value === 'cone' || value === 'off' || value === 'agent') {
+    return { approver: value };
+  }
   const scoop = /^scoop:(.+)$/.exec(value);
   return scoop?.[1] ? { approver: 'scoop', scoop: scoop[1].trim() } : null;
 }

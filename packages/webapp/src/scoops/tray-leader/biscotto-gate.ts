@@ -207,6 +207,10 @@ export function toolGateForSeat(
         reason: 'the cone cannot approve a tool call it is itself blocked on',
       });
       return null;
+    case 'agent':
+      // Unlike `cone`, this works for tool calls: the approver is a separate
+      // bounded agent, not the unit that is blocked awaiting the tool result.
+      return { requester, approver: { kind: 'agent', unitJid } };
     case 'scoop':
       // A scoop tier with no scoop named cannot reach the configured approver
       // either. Deny rather than fall back to the owner.

@@ -29,7 +29,9 @@ export type SudoApproverDirective =
   /** The cone that owns `unitJid` decides, via its `lick_confirm` tools. */
   | { kind: 'cone'; unitJid: string }
   /** A scoop the cone delegated to decides. Unknown name fails CLOSED. */
-  | { kind: 'scoop'; scoopName: string; unitJid: string };
+  | { kind: 'scoop'; scoopName: string; unitJid: string }
+  /** A bounded approver agent decides; its structured result is the verdict. */
+  | { kind: 'agent'; unitJid: string };
 
 /**
  * Marks a turn as caused by a guest and says how to gate the tool calls it

@@ -345,6 +345,8 @@ export class BiscottoReview {
         return undefined;
       case 'cone':
         return { kind: 'cone', unitJid };
+      case 'agent':
+        return { kind: 'agent', unitJid };
       case 'scoop':
         return gate.scoop ? { kind: 'scoop', scoopName: gate.scoop, unitJid } : null;
       default:

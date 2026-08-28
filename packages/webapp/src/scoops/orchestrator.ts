@@ -44,10 +44,11 @@ import {
   defaultChildVisibleRoots,
   ownerWorkspaceFor,
   PRIMARY_WORKSPACE,
+  workspaceFor,
 } from '../work-unit/descriptor.js';
 import type { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { WorkUnitManager } from '../work-unit/manager.js';
-import { derivePolicy, rootOwnerOf, rootsOf } from '../work-unit/policy.js';
+import { rootOwnerOf, rootsOf } from '../work-unit/policy.js';
 import {
   legacyRecordIsCone,
   modelFor,
@@ -92,20 +93,8 @@ export type { ScoopObserver };
 
 const log = createLogger('orchestrator');
 
-/** What a directed-approval denial can name; every field is optional context. */
-interface DirectedDenyContext {
-  requesterJid?: string;
-  coneJid?: string;
-  scoopName?: string;
-  approverJid?: string;
-}
-
-/** Every fail-closed exit from a directed approval, logged the same way. */
+/** Every fail-closed exit from a directed approval resolves to this. */
 const DENY: SudoDecision = { decision: 'deny' };
-function denyDirected(reason: string, context: DirectedDenyContext): SudoDecision {
-  log.warn(`Directed approval failing closed: ${reason}`, context);
-  return DENY;
-}
 type SliccGlobalHooks = typeof globalThis & {
   __slicc_fs_watcher?: FsWatcher;
   __slicc_lick_handler?: (event: LickEvent) => void;
@@ -1039,58 +1028,37 @@ export class Orchestrator implements ConeApprovalRouter {
    * a card raised on cone B renders in B rather than the oldest cone.
    */
   /**
-   * Single approval entry point for the guest tool gate: honour the request's
-   * approver directive when it has one, otherwise fall back to the owner's own
-   * broker via {@link SudoManager.approve} — which is also what applies the
-   * never-persist guard for the guest kinds.
+   * Single approval entry point for the guest gates.
+   *
+   * A thin shim: the whole flow — agent runs, directed enqueues, and the
+   * owner-broker fallback — is imported on first use, because only a guest seat
+   * ever reaches it and this file is boot-critical.
    */
   async approveDirectedOrUser(request: SudoRequest): Promise<SudoDecision> {
-    if (request.approver && request.approver.kind !== 'user') {
-      return this.enqueueDirectedApproval(request.approver, request);
-    }
-    const manager = this.sudoManager;
-    if (!manager) {
-      log.warn('Guest tool approval before SudoManager init — failing closed');
-      return { decision: 'deny' };
-    }
-    return manager.approve(request);
+    const { runDirectedApproval } = await import('./directed-approval.js');
+    return runDirectedApproval(request, {
+      scoops: this.scoops,
+      ownerRootOf: (jid) => this.ownerRootOrDefault(jid),
+      enqueue: (jid, req, opts) => this.approvalRouter.enqueueSudoRequest(jid, req, opts),
+      getSharedFs: () => this.sharedFs,
+      workspaceFor,
+      approveAsUser: async (req) => {
+        const manager = this.sudoManager;
+        if (!manager) {
+          log.warn('Guest approval before SudoManager init — failing closed');
+          return DENY;
+        }
+        return manager.approve(req);
+      },
+    });
   }
 
+  /** Route a directive that names a unit. Kept for callers and tests. */
   async enqueueDirectedApproval(
     directive: SudoApproverDirective,
     request: SudoRequest
   ): Promise<SudoDecision> {
-    if (directive.kind === 'user') return DENY;
-    const requesterJid = directive.unitJid;
-    const owner = this.scoops.has(requesterJid) ? this.ownerRootOrDefault(requesterJid) : undefined;
-    if (!owner) return denyDirected('no owning cone for the requesting unit', { requesterJid });
-
-    // A named approver is scoped to THIS cone's own children, and never to a
-    // root. A bare name search over the whole roster can match a different
-    // cone's scoop — names are not unique across cones — and would hand a
-    // guest's text to an approval principal in someone else's thread.
-    const approver =
-      directive.kind === 'cone'
-        ? owner
-        : [...this.scoops.values()].find(
-            (scoop) =>
-              scoop.parentJid === owner.jid &&
-              (scoop.name === directive.scoopName || scoop.folder === directive.scoopName)
-          );
-    if (!approver) {
-      // Dropped, renamed, or never belonged to this cone.
-      return denyDirected('delegated approver not found under this cone', {
-        scoopName: directive.kind === 'scoop' ? directive.scoopName : undefined,
-        coneJid: owner.jid,
-      });
-    }
-    // An approver that cannot settle would leave the request to time out five
-    // minutes later and deny — indistinguishable, to the owner, from a reviewer
-    // who ignored it. Only a scoop marked `approvesGuestRequests` can.
-    if (!derivePolicy(approver).canResolveApprovals) {
-      return denyDirected('approver cannot resolve approvals', { approverJid: approver.jid });
-    }
-    return this.approvalRouter.enqueueSudoRequest(requesterJid, request, { approver });
+    return this.approveDirectedOrUser({ ...request, approver: directive });
   }
 
   /**

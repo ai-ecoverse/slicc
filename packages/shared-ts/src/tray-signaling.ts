@@ -150,7 +150,12 @@ export interface FollowerBiscottoGates {
 }
 
 export interface FollowerBiscottoGate {
-  approver: 'off' | 'user' | 'cone' | 'scoop';
+  /**
+   * `agent` spawns a bounded, purpose-built approver per request whose RESULT
+   * is the verdict — see `scoops/approver-agent.ts`. Unlike `scoop` it needs no
+   * pre-existing unit and no `canResolveApprovals`.
+   */
+  approver: 'off' | 'user' | 'cone' | 'scoop' | 'agent';
   scoop?: string;
 }
 

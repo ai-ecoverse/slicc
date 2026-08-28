@@ -956,6 +956,14 @@ export function shouldStartLickWsBridge(): boolean {
   return hasLocalNodeServer();
 }
 
+/**
+ * Register the approver runner used by `agent`-gated biscotto seats.
+ *
+ * Lives here because it needs BOTH the agent bridge and the shared VFS, which
+ * only the boot step holds; the orchestrator reaches it through the seam in
+ * `scoops/approver-agent.ts`. A leader that never calls this has every
+ * `agent`-gated seat fail closed, which is the correct default.
+ */
 export async function createKernelHost(config: KernelHostConfig): Promise<KernelHost> {
   const { container, browser, bridge, callbacks, skipConeBootstrap = false } = config;
   const log: KernelHostLogger = config.logger ?? console;

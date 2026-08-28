@@ -9,6 +9,8 @@
  * leader mints or revokes a seat, and a seat is never an issuing authority.
  */
 
+import type { FollowerBiscottoGate, FollowerBiscottoGates } from '@slicc/shared-ts';
+
 /** A seat as the worker reports it. Deliberately WITHOUT its token. */
 export interface BiscottoListItem {
   id: string;
@@ -22,15 +24,14 @@ export interface BiscottoListItem {
   active: boolean;
 }
 
-export interface BiscottoGatesWire {
-  message: BiscottoGateWire;
-  tool: BiscottoGateWire;
-}
-
-export interface BiscottoGateWire {
-  approver: 'off' | 'user' | 'cone' | 'scoop';
-  scoop?: string;
-}
+/**
+ * Re-exported from the wire package rather than restated. An approver tier
+ * added there must not be able to exist on one side of this boundary and not
+ * the other — restating the union is how `approver` was silently dropped once
+ * already.
+ */
+export type BiscottoGatesWire = FollowerBiscottoGates;
+export type BiscottoGateWire = FollowerBiscottoGate;
 
 export interface MintBiscottoArgs {
   workerBaseUrl: string;

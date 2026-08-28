@@ -910,10 +910,19 @@ biscotto revoke <id>
   guest's channel is peer-to-peer, so an expiry only the hub knows about could
   never end a session already in progress.
 - `--gate-messages` / `--gate-tools` — who approves: `user` (default), `cone`,
-  `scoop:<name>`, or `off`. The two are independent; an ungated message can
-  still start a gated turn.
+  `agent`, `scoop:<name>`, or `off`. The two are independent; an ungated
+  message can still start a gated turn.
+- **`agent`** runs a purpose-built approver per request — a bounded agent that
+  reads the request and answers allow/deny, and whose RESULT is the verdict. It
+  writes nothing, holds only read-only inspection commands, and is driven by
+  `/shared/APPROVALS.md`, which you can edit; changes take effect on the next
+  decision. Anything it cannot be read as an explicit `allow` — a crash, empty
+  output, unparseable JSON, an unknown verdict word — is a denial. Unlike
+  `cone` this also works for `--gate-tools`, because the approver is a separate
+  run rather than the unit blocked on the tool.
 - `--gate-tools cone` is **refused** — for a tool call the cone is the unit
-  executing it, so it would be asked to approve something it is blocked on.
+  executing it, so it would be asked to approve something it is blocked on. Use
+  `agent` or `scoop:<name>` when you want tool calls decided without you.
 - `biscotto revoke` tombstones the token AND closes any live channel. If the
   leader cannot be reached it says so rather than reporting a clean success:
   the seat is dead for new joins, but someone already connected may still hold
