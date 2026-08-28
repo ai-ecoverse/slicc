@@ -46,7 +46,6 @@
   "packages/webapp/src/scoops/tray-leader/cdp-router.ts": 5,
   "packages/webapp/src/scoops/tray-leader/oauth-cdp-login.ts": 1,
   "packages/webapp/src/scoops/tray-leader/tab-teleport.ts": 3,
-  "packages/webapp/src/shell/arg-parser.ts": 2,
   "packages/webapp/src/shell/bsh-watchdog.ts": 1,
   "packages/webapp/src/shell/mcp/store.ts": 2,
   "packages/webapp/src/shell/supplemental-commands/picker-popup.ts": 3,
