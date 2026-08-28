@@ -38,35 +38,50 @@ export function limitSnapshotDepth(text: string, depth: number): string {
 
 /**
  * Append `[box=x,y,w,h]` (viewport-relative CSS pixels, per
- * getBoundingClientRect) to every main-frame ref line, resolving all refs in
- * a single page evaluation. Frame-prefixed refs are skipped — their rects
- * live in another frame's coordinate space.
+ * getBoundingClientRect) to every main-frame ref line.
+ *
+ * Rects are resolved through each ref's backendNodeId — the element identity
+ * the snapshot already recorded — NOT the reconstructed CSS selectors, which
+ * miss text-labelled elements (`button[aria-label="Buy"]` does not match
+ * `<button>Buy</button>`) and collapse duplicate accessible names onto one
+ * element. Frame-prefixed refs are skipped: their rects live in another
+ * frame's coordinate space. A ref whose node is gone stays unannotated.
  */
 export async function annotateBoxes(
   browser: BrowserAPI,
-  refToSelector: Map<string, string>,
+  refToBackendNodeId: Map<string, number>,
   text: string
 ): Promise<string> {
-  const selectors: Record<string, string> = {};
-  for (const [ref, selector] of refToSelector) {
-    if (!ref.startsWith('f')) selectors[ref] = selector.split(',')[0].trim();
+  const transport = browser.getTransport();
+  const sessionId = browser.getSessionId();
+  await transport.send('DOM.enable', {}, sessionId!);
+  await transport.send('Runtime.enable', {}, sessionId!);
+
+  const boxes: Record<string, number[]> = {};
+  for (const [ref, backendNodeId] of refToBackendNodeId) {
+    if (ref.startsWith('f')) continue;
+    try {
+      const resolved = await transport.send('DOM.resolveNode', { backendNodeId }, sessionId!);
+      const objectId = (resolved['object'] as { objectId?: string } | undefined)?.objectId;
+      if (!objectId) continue;
+      const rect = await transport.send(
+        'Runtime.callFunctionOn',
+        {
+          objectId,
+          functionDeclaration: `function() {
+            const r = this.getBoundingClientRect();
+            return [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
+          }`,
+          returnByValue: true,
+        },
+        sessionId!
+      );
+      const value = (rect['result'] as { value?: number[] } | undefined)?.value;
+      if (value) boxes[ref] = value;
+    } catch {
+      // Node detached since the snapshot — leave the line unannotated.
+    }
   }
-  const json = await browser.evaluate(
-    `(function() {
-      const sels = ${JSON.stringify(selectors)};
-      const out = {};
-      for (const ref of Object.keys(sels)) {
-        try {
-          const el = document.querySelector(sels[ref]);
-          if (!el) continue;
-          const r = el.getBoundingClientRect();
-          out[ref] = [Math.round(r.x), Math.round(r.y), Math.round(r.width), Math.round(r.height)];
-        } catch {}
-      }
-      return JSON.stringify(out);
-    })()`
-  );
-  const boxes = parsePageJson<Record<string, number[]>>(json, 'snapshot --boxes rect batch');
   return text.replace(/\[ref=([a-z0-9]+)\]/g, (token, ref: string) =>
     boxes[ref] ? `${token} [box=${boxes[ref].join(',')}]` : token
   );
@@ -148,16 +163,24 @@ export const findHandlerImpl: PlaywrightHandler = async ({ browser, state, posit
     return { stdout: 'No matches in the page snapshot.\n', stderr: '', exitCode: 0 };
   }
 
+  // Merge overlapping/adjacent context windows: a control and its static-text
+  // child usually match together, and rendering each window separately would
+  // repeat nearly identical blocks — the opposite of this command's
+  // token-saving purpose.
   const shown = matchIndexes.slice(0, FIND_MAX_MATCHES);
-  const blocks = shown.map((index) => {
+  const regions: Array<{ start: number; end: number }> = [];
+  for (const index of shown) {
     const start = Math.max(0, index - FIND_CONTEXT_LINES);
     const end = Math.min(lines.length, index + FIND_CONTEXT_LINES + 1);
-    return lines.slice(start, end).join('\n');
-  });
+    const last = regions[regions.length - 1];
+    if (last && start <= last.end) last.end = Math.max(last.end, end);
+    else regions.push({ start, end });
+  }
+  const blocks = regions.map((r) => lines.slice(r.start, r.end).join('\n'));
   const header =
     matchIndexes.length > FIND_MAX_MATCHES
       ? `Showing first ${FIND_MAX_MATCHES} of ${matchIndexes.length} matching lines (narrow the query for the rest):`
-      : `${matchIndexes.length} matching line(s):`;
+      : `${matchIndexes.length} matching line(s) in ${regions.length} region(s):`;
   return {
     stdout: `${header}\n\n${blocks.join('\n---\n')}\n`,
     stderr: '',

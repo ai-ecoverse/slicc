@@ -64,7 +64,7 @@ Commands:
              [--type=png|jpeg|webp] [--hires]
                          Take screenshot. The positional is a MAIN-FRAME ELEMENT REF (e5) to
                          clip to, not a path — the output path is --filename=path. --max-width
-                         downscales the image if wider than N pixels (e.g. --max-width=1024).
+                         downscales the image if wider than N pixels (png output only).
                          --type defaults to the --filename extension, else png. --hires
                          captures in device pixels (honors the device pixel ratio).
   eval <expression> --tab=<id> [--frame=<frameId>] [--filename=path|--output=path]

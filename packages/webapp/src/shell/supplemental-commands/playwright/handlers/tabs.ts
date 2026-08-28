@@ -108,14 +108,17 @@ export const openHandler: PlaywrightHandler = async ({ browser, fs, state, posit
   // lighter and saves tokens). Sticky per target — re-applied on every fresh
   // attach, same mechanism as `resize`.
   if (mobile) {
-    await browser.setViewportOverride(targetId, MOBILE_VIEWPORT.width, MOBILE_VIEWPORT.height, {
-      deviceScaleFactor: MOBILE_VIEWPORT.deviceScaleFactor,
-      mobile: true,
-      userAgent: MOBILE_USER_AGENT,
+    // Under one withTab hold: setViewportOverride attaches to the target,
+    // and doing that outside the tab lock could yank a concurrent command's
+    // session mid-flight onto this tab.
+    await browser.withTab(targetId, async () => {
+      await browser.setViewportOverride(targetId, MOBILE_VIEWPORT.width, MOBILE_VIEWPORT.height, {
+        deviceScaleFactor: MOBILE_VIEWPORT.deviceScaleFactor,
+        mobile: true,
+        userAgent: MOBILE_USER_AGENT,
+      });
+      if (url !== 'about:blank') await browser.navigate(url);
     });
-    if (url !== 'about:blank') {
-      await browser.withTab(targetId, async () => browser.navigate(url));
-    }
   }
 
   // Tabs open in the background; --foreground / --fg raises the new tab to the

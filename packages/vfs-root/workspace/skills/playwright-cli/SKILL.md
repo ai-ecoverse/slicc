@@ -98,7 +98,8 @@ opening in the background.
 - **Existing tab** → `tab-select <index>` (1-based index from `tab-list`).
 
 `--mobile` opens the tab with generic mobile-device emulation (viewport,
-device pixel ratio, Android Chrome UA), sticky for the tab's lifetime.
+device pixel ratio, touch, Android Chrome UA), sticky for the tab's lifetime —
+a later `resize` changes only the dimensions and keeps the mobile identity.
 Mobile pages are usually lighter, which saves tokens.
 
 These two are the ONLY ways to change which tab is in front. There is no
@@ -171,7 +172,7 @@ playwright-cli screenshot --tab=<id>                             # Save to $TMPD
 playwright-cli screenshot --tab=<id> --filename=page.png         # Save to custom path
 playwright-cli screenshot --tab=<id> e5                          # Clip to an element (positional = MAIN-FRAME ref, not a path)
 playwright-cli screenshot --tab=<id> --fullPage                  # Full scrollable page (alias: --full-page)
-playwright-cli screenshot --tab=<id> --max-width=800             # Downscale to a max width
+playwright-cli screenshot --tab=<id> --max-width=800             # Downscale to a max width (png output only)
 playwright-cli screenshot --tab=<id> --type=jpeg                 # png (default) / jpeg / webp; inferred from --filename extension
 playwright-cli screenshot --tab=<id> --hires                     # Capture in device pixels (honors device pixel ratio)
 ```

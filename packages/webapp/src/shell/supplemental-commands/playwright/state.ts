@@ -6,9 +6,12 @@
 import { base64ToUint8 } from '@slicc/shared-ts';
 import { createLogger } from '../../../base/logger.js';
 import { TRAY_JOIN_STORAGE_KEY, TRAY_WORKER_STORAGE_KEY } from '../../../base/tray-storage-keys.js';
+
+export { TRAY_JOIN_STORAGE_KEY, TRAY_WORKER_STORAGE_KEY };
+
 import { FsError, type VirtualFS } from '../../../fs/index.js';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
-import type { BrowserAPI, FrameInfo, PageInfo, PlaywrightState } from './types.js';
+import type { PlaywrightState } from './types.js';
 
 export const PLAYWRIGHT_COMMAND_NAMES = ['playwright-cli', 'playwright', 'puppeteer'] as const;
 
@@ -38,15 +41,6 @@ interface PlaywrightBrowserAPI {
   listAllTargets?: () => Promise<PlaywrightPageInfo[]>;
   withTab<T>(targetId: string, fn: () => Promise<T>): Promise<T>;
 }
-
-/**
- * Canonical string values live in `scoops/tray-runtime-config.ts`; inlined here
- * so shell does not import up into scoops. Exported so a test can assert they
- * stay byte-identical to the canonical source (see `state.test.ts`) without
- * reintroducing the runtime back-edge.
- */
-export const TRAY_WORKER_STORAGE_KEY = 'slicc.trayWorkerBaseUrl';
-export const TRAY_JOIN_STORAGE_KEY = 'slicc.trayJoinUrl';
 
 const sharedStateByBrowser = new WeakMap<object, WeakMap<VirtualFS, PlaywrightState>>();
 const log = createLogger('playwright');

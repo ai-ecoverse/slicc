@@ -16,8 +16,6 @@ import {
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrlValue,
   parseTrayUrlValue,
-  TRAY_JOIN_STORAGE_KEY,
-  TRAY_WORKER_STORAGE_KEY,
   type TrayJoinConfig,
   type TrayUrlConfig,
 } from '../base/tray-url-config.js';
@@ -34,11 +32,9 @@ export {
   normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrlValue,
   parseTrayUrlValue,
-  TRAY_JOIN_STORAGE_KEY,
   TRAY_LEGACY_LEAD_QUERY_PARAM,
   TRAY_QUERY_PARAM,
   TRAY_WORKER_QUERY_PARAM,
-  TRAY_WORKER_STORAGE_KEY,
   type TrayJoinConfig,
   type TrayUrlConfig,
 };

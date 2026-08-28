@@ -158,7 +158,7 @@ export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, f
     });
     if (!boxes) return text;
     const { annotateBoxes } = await loadSnapshotFeatures();
-    return annotateBoxes(browser, snapshot.refToSelector, text);
+    return annotateBoxes(browser, snapshot.refToBackendNodeId, text);
   });
   if (depth !== undefined) {
     const { limitSnapshotDepth } = await loadSnapshotFeatures();
@@ -284,6 +284,17 @@ export const screenshotHandler: PlaywrightHandler = async ({
     return {
       stdout: '',
       stderr: `screenshot: --type must be png, jpeg, or webp, got "${flags['type']}"\n`,
+      exitCode: 1,
+    };
+  }
+  // The downscale pass reads the encoded width from the PNG IHDR; on JPEG or
+  // WebP output it cannot measure the image, so it would silently return the
+  // oversized original — reject loudly instead (#2405 discipline).
+  if (flags['max-width'] && screenshotFormat(flags) !== 'png') {
+    return {
+      stdout: '',
+      stderr:
+        'screenshot: --max-width requires png output (the downscale pass measures PNG headers); drop --type/--filename extension or --max-width\n',
       exitCode: 1,
     };
   }

@@ -132,6 +132,21 @@ describe('playwright-cli output-flag aliases (regressions)', () => {
     expect(writes.get('/tmp/out.txt')).toBe('42');
   });
 
+  it('rejects --filename and --output together on both verbs (aliases with no defined precedence)', async () => {
+    const { fs, writes } = mkFs();
+    const cmd = createPlaywrightCommand('playwright-cli', mkBrowser(), fs);
+    for (const argv of [
+      ['eval', '--tab=tab-1', '--filename=/tmp/a', '--output=/tmp/b', '1+1'],
+      ['eval-file', '--tab=tab-1', '--filename=/tmp/a', '--output=/tmp/b', '/script.js'],
+    ]) {
+      const result = await cmd.execute(argv, mockCtx);
+      expect(result.exitCode, argv[0]).toBe(1);
+      expect(result.stderr).toContain('pass one, not both');
+    }
+    // Neither alias path may have been written (the session log is unrelated).
+    expect([...writes.keys()].filter((k) => k.startsWith('/tmp'))).toEqual([]);
+  });
+
   it('eval-file --filename=<path> writes the result file', async () => {
     const { fs, writes } = mkFs();
     const cmd = createPlaywrightCommand('playwright-cli', mkBrowser(), fs);
