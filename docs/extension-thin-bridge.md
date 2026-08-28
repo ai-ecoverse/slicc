@@ -146,7 +146,8 @@ Chrome's user-gesture rule), then posts
 `{ source: 'picker-popup', kind, requestId, … }` back via
 `chrome.runtime` messaging. The page-side launcher is
 `openPickerPopup(kind, filters, requestId)` in
-`packages/webapp/src/shell/supplemental-commands/picker-popup.ts`; thin
+`packages/webapp/src/fs/picker-popup.ts` (re-exported from
+`shell/supplemental-commands/picker-popup.ts` for device pickers); thin
 typed adapters (`openMountPickerPopup`, `openUsbPickerPopup`,
 `openSerialPickerPopup`, `openHidPickerPopup`) wrap it for the existing
 call sites.
