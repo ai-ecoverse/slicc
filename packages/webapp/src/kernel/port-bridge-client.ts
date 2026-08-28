@@ -41,6 +41,13 @@ interface PendingCall<TReply> {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/**
+ * Opaque Port / panel-RPC message body. The factory only correlates by `id`
+ * (added separately for the Port path); field shapes are owned by each
+ * specialization (`secrets-bridge-client`, `mount-bridge-client`).
+ */
+export type PortBridgeMessageBody = { [key: string]: unknown };
+
 /** Per-call-site configuration for `createPortBridgeClient`. */
 export interface PortBridgeOptions<TRequest> {
   /** Named `chrome.runtime.connect` Port (e.g. `'secrets.crud'`). */
@@ -59,9 +66,9 @@ export interface PortBridgeOptions<TRequest> {
   /** Logger namespace (also embedded in default log messages). */
   logNamespace: string;
   /** Encode a `TRequest` as the message body posted on the Port (id is added by the factory). */
-  toPortMessage: (request: TRequest) => Record<string, unknown>;
+  toPortMessage: (request: TRequest) => PortBridgeMessageBody;
   /** Encode a `TRequest` as the panel-RPC payload for the worker-realm fallback. */
-  toPanelRpcPayload: (request: TRequest) => Record<string, unknown>;
+  toPanelRpcPayload: (request: TRequest) => PortBridgeMessageBody;
 }
 
 /**
