@@ -368,7 +368,13 @@ describe('prepareWcShell + attachWcClient', () => {
     expect(newSessionMocks.freezeQuick).toHaveBeenCalledTimes(action === 'skip' ? 1 : 0);
   });
 
-  it('keeps the current chat when /tmp cleanup fails', async () => {
+  it('still clears the chat when /tmp cleanup fails', async () => {
+    // Scratch cleanup is best-effort. Aborting the clear on a failed sweep
+    // (the old behaviour) is not a safe abort: on the `save` path the archive
+    // is already durable and the billed memory curator is already running, so
+    // the user gets a frozen, curated archive and a chat that never cleared.
+    log.warn.mockClear();
+    log.error.mockClear();
     newSessionMocks.reset.mockRejectedValueOnce(new Error('EIO'));
     const root = document.createElement('div');
     document.body.appendChild(root);
@@ -380,8 +386,12 @@ describe('prepareWcShell + attachWcClient', () => {
     boot.refs.freezer.dispatchEvent(new CustomEvent('new-chat-erase', { bubbles: true }));
 
     await vi.waitFor(() => expect(freezerNew.hasAttribute('busy')).toBe(false));
-    expect(fake.raw.clearAllMessages).not.toHaveBeenCalled();
-    expect(log.error).toHaveBeenCalledWith('WC new session failed', expect.any(Error));
+    expect(fake.raw.clearAllMessages).toHaveBeenCalledTimes(1);
+    expect(log.warn).toHaveBeenCalledWith(
+      'WC new session /tmp reset failed — clearing anyway',
+      expect.any(Error)
+    );
+    expect(log.error).not.toHaveBeenCalled();
   });
 });
 

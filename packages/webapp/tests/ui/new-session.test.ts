@@ -701,6 +701,64 @@ describe('resetNewSessionTmp', () => {
     expect(vfs.mkdir).toHaveBeenCalledWith('/tmp', { recursive: true });
   });
 
+  it('keeps sweeping when a concurrent writer unlinks an entry first', async () => {
+    // `/tmp` is shared scratch: a sibling cone can delete an entry between our
+    // `readDir` and our `rm`. That ENOENT is the goal state, not a failure.
+    const vfs = {
+      listMountPoints: vi.fn(() => []),
+      readDir: vi.fn(async () => [
+        { name: 'raced.json', type: 'file' as const },
+        { name: 'survivor.txt', type: 'file' as const },
+      ]),
+      rm: vi.fn(async (path: string) => {
+        if (path === '/tmp/raced.json') throw new FsError('ENOENT', 'no such file', path);
+      }),
+      mkdir: vi.fn(async () => undefined),
+    };
+
+    await expect(resetNewSessionTmp(vfs)).resolves.toBeUndefined();
+
+    expect(vfs.rm).toHaveBeenCalledWith('/tmp/survivor.txt');
+    expect(vfs.mkdir).toHaveBeenCalledWith('/tmp', { recursive: true });
+  });
+
+  it('skips a directory that vanishes between listing and traversal', async () => {
+    const vfs = {
+      listMountPoints: vi.fn(() => []),
+      readDir: vi.fn(async (path: string) => {
+        if (path === '/tmp')
+          return [
+            { name: 'gone', type: 'directory' as const },
+            { name: 'survivor.txt', type: 'file' as const },
+          ];
+        throw new FsError('ENOENT', 'no such file or directory', path);
+      }),
+      rm: vi.fn(async () => undefined),
+      mkdir: vi.fn(async () => undefined),
+    };
+
+    await expect(resetNewSessionTmp(vfs)).resolves.toBeUndefined();
+
+    expect(vfs.rm).toHaveBeenCalledWith('/tmp/survivor.txt');
+    expect(vfs.rm).not.toHaveBeenCalledWith('/tmp/gone');
+    expect(vfs.mkdir).toHaveBeenCalledWith('/tmp', { recursive: true });
+  });
+
+  it('propagates a non-ENOENT failure raised while listing a subdirectory', async () => {
+    const vfs = {
+      listMountPoints: vi.fn(() => []),
+      readDir: vi.fn(async (path: string) => {
+        if (path === '/tmp') return [{ name: 'broken', type: 'directory' as const }];
+        throw new FsError('EIO', 'failed', path);
+      }),
+      rm: vi.fn(async () => undefined),
+      mkdir: vi.fn(async () => undefined),
+    };
+
+    await expect(resetNewSessionTmp(vfs)).rejects.toMatchObject({ code: 'EIO' });
+    expect(vfs.mkdir).not.toHaveBeenCalled();
+  });
+
   it('propagates unexpected removal errors without attempting recreation', async () => {
     const vfs = {
       listMountPoints: vi.fn(() => []),
