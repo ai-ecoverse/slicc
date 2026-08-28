@@ -7,6 +7,8 @@
  * - Session management for target-specific commands
  */
 
+import type { CDPPayload } from '@slicc/shared-ts';
+
 import { createLogger } from '../base/logger.js';
 import { PendingRequestTable, waitForEvent } from './pending-request-table.js';
 import type { CDPTransport } from './transport.js';
@@ -129,10 +131,10 @@ export class CDPClient implements CDPTransport {
    */
   async send(
     method: string,
-    params?: Record<string, unknown>,
+    params?: CDPPayload,
     sessionId?: string,
     timeout = 30000
-  ): Promise<Record<string, unknown>> {
+  ): Promise<CDPPayload> {
     if (this._state !== 'connected' || !this.ws) {
       throw new Error('CDP client is not connected');
     }
@@ -179,8 +181,8 @@ export class CDPClient implements CDPTransport {
   /**
    * Wait for a specific CDP event to fire once.
    */
-  once(event: string, timeout = 30000): Promise<Record<string, unknown>> {
-    return waitForEvent<Record<string, unknown>>(
+  once(event: string, timeout = 30000): Promise<CDPPayload> {
+    return waitForEvent<CDPPayload>(
       (handler) => {
         this.on(event, handler);
         return () => this.off(event, handler);
