@@ -33,13 +33,13 @@ export default defineConfig({
       include: ['src/**/*.ts'],
       exclude: [
         '**/*.stories.ts',
-        'src/index.ts',
-        'src/overlay-entry.ts',
-        // Browser-runtime glue validated live via cdp-smoke-test, not in CI
-        // (no headless equivalent of Signal's egress lockdown). The pure graph
-        // transforms it delegates to (`tunnel/asset-graph.ts`) ARE unit-tested.
+        // The tunnel loader entry is the one file left out: its single
+        // statement boots the loader against the ambient frame at import time,
+        // which a test realm must not do. Everything it calls
+        // (`tunnel/tunnel-runtime.ts`) is covered — including a full boot into
+        // a disposable iframe — and the other IIFE entry (`overlay-entry.ts`,
+        // the `window.__SLICC_ELECTRON_OVERLAY__` contract) is covered outright.
         'src/tunnel/tunnel-loader-entry.ts',
-        'src/tunnel/tunnel-protocol.ts',
         '**/*.d.ts',
       ],
       thresholds: floors,

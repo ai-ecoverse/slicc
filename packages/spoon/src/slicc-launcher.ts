@@ -264,6 +264,28 @@ function clamp(v: number, min: number, max: number): number {
   return Math.min(Math.max(v, min), max);
 }
 
+/** Pointer capture is best-effort: `setPointerCapture` throws `NotFoundError`
+ *  when the id belongs to no *active* pointer, which a hostile/automated host
+ *  page can trigger by dispatching a synthetic `pointerdown` at the overlay.
+ *  The drag works without capture (the handlers are bound to the button and
+ *  filter on `pointerId`), so a failure must not blow up the host page's
+ *  event dispatch. */
+function capturePointer(el: Element, pointerId: number): void {
+  try {
+    el.setPointerCapture(pointerId);
+  } catch {
+    /* no active pointer with that id — drag without capture */
+  }
+}
+
+function releasePointer(el: Element, pointerId: number): void {
+  try {
+    if (el.hasPointerCapture(pointerId)) el.releasePointerCapture(pointerId);
+  } catch {
+    /* capture already gone (pointer ended, element re-parented) */
+  }
+}
+
 /** `slicc-launcher-toggle` event detail (open ↔ closed). */
 export interface LauncherToggleDetail {
   open: boolean;
@@ -549,8 +571,10 @@ export class SliccLauncher extends HTMLElement {
       dragging: false,
     };
     this.#suppressClick = false;
-    this.#button.setPointerCapture(event.pointerId);
+    // preventDefault first: it must run even if pointer capture is refused,
+    // otherwise the host page starts a native text-selection / image drag.
     event.preventDefault();
+    capturePointer(this.#button, event.pointerId);
   };
 
   #onPointerMove = (event: PointerEvent): void => {
@@ -559,7 +583,7 @@ export class SliccLauncher extends HTMLElement {
     const deltaX = event.clientX - state.startX;
     const deltaY = event.clientY - state.startY;
     const distance = Math.hypot(deltaX, deltaY);
-    if (!state.dragging && shouldSnapLauncher(distance, 0)) {
+    if (!state.dragging && shouldSnapLauncher(distance)) {
       state.dragging = true;
       this.setAttribute('dragging', '');
     }
@@ -601,8 +625,9 @@ export class SliccLauncher extends HTMLElement {
     const state = this.#pointerState;
     if (!state || event.pointerId !== state.pointerId) return;
     const distance = Math.hypot(event.clientX - state.startX, event.clientY - state.startY);
-    const velocity = Math.hypot(state.velocityX, state.velocityY);
-    const snap = allowSnap && (state.dragging || shouldSnapLauncher(distance, velocity));
+    // A release can land past the threshold even if no intermediate move did
+    // (a single coalesced jump), so the distance is re-checked here.
+    const snap = allowSnap && (state.dragging || shouldSnapLauncher(distance));
     if (snap) {
       const corner = resolveLauncherCorner({
         clientX: event.clientX,
@@ -623,9 +648,7 @@ export class SliccLauncher extends HTMLElement {
       this.#suppressClick = true;
       event.preventDefault();
     }
-    if (this.#button.hasPointerCapture(event.pointerId)) {
-      this.#button.releasePointerCapture(event.pointerId);
-    }
+    releasePointer(this.#button, event.pointerId);
     this.#pointerState = null;
     this.removeAttribute('dragging');
     this.#button.style.left = '';

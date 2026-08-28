@@ -16,7 +16,8 @@
 //    `slicc-asset:/assets/<file>` key so a single import map can wire the graph
 //    to blob URLs without ordering/cycle problems (relative specifiers can't
 //    resolve against a `blob:` base).
-// 4. `buildAssetImportMap` / `buildTunnelSrcdoc` — assemble the bootstrap.
+// 4. `buildAssetImportMap` — assemble the import map the loader injects
+//    before importing the entry module (`tunnel-runtime.ts`).
 //
 // The assets dir is flat (`/assets/<name>-<hash>.js`), so every specifier
 // resolves to `/assets/<basename>` regardless of the importing module.
