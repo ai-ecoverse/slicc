@@ -72,19 +72,6 @@ export interface ResolveSudoRequestAndPersistResult {
 
 export class ScoopApprovalRouter implements ConeApprovalRouter {
   private registry: ConeRequestRegistry;
-  /**
-   * Who was asked to settle each pending request.
-   *
-   * A DELEGATED approver (a scoop marked `approvesGuestRequests`) must only see
-   * and settle what was routed to it. Without this it holds the same global
-   * `list` / `resolve` surface a cone does, so it could read other cones'
-   * pending requests and settle them — including persisting `always` grants on
-   * behalf of requesters it has nothing to do with.
-   *
-   * A root approver is unrestricted, as before.
-   */
-  private readonly approverByRequest = new Map<string, string>();
-
   constructor(private deps: ScoopApprovalRouterDeps) {
     // Fail-closed settles that bypass the cone (timeout / scoop drop /
     // shutdown) must still retire the persisted `pending` lick card, or the
@@ -102,11 +89,6 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
    * best-effort.
    */
   private handleAutoSettle(id: string, reason: SudoSettleReason, scoopJid?: string): void {
-    // Every fail-closed settle lands here — timeout, `failScoop`, `failAll` —
-    // and none of them go through `resolveSudoRequest`, which was the only
-    // place the scope entry was retired. Without this the map grew for the
-    // whole session, one stale id per abandoned request.
-    this.approverByRequest.delete(id);
     log.info('Sudo request auto-settled fail-closed; retiring lick card', { id, reason });
     void this.persistLickDecision(id, 'deny', scoopJid).catch((err) => {
       log.warn('Failed to persist auto-settled lick decision', {
@@ -126,7 +108,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
   listPendingSudoRequests(approverJid?: string): PendingSudoRequest[] {
     const all = this.registry.list();
     if (approverJid === undefined) return all;
-    return all.filter((entry) => this.approverByRequest.get(entry.id) === approverJid);
+    return all.filter((entry) => entry.approverJid === approverJid);
   }
 
   /**
@@ -136,7 +118,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
    */
   private maySettle(id: string, approverJid: string | undefined): boolean {
     if (approverJid === undefined) return true;
-    return this.approverByRequest.get(id) === approverJid;
+    return this.registry.get(id)?.approverJid === approverJid;
   }
 
   /** Fail-closed every pending request for the given scoop. Used by `unregisterScoop`. */
@@ -223,11 +205,10 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       return { decision: 'deny' };
     }
 
-    const { id, pending } = this.registry.register(scoopJid, request);
-    this.approverByRequest.set(id, cone.jid);
-    // A delivery failure below resolves the request directly on the registry,
-    // bypassing `resolveSudoRequest` — retire the scope entry with it.
-    void pending.finally(() => this.approverByRequest.delete(id));
+    // The approver rides ON the registry entry, so it is retired by whichever
+    // settle path fires — decision, timeout, `failScoop`, `failAll`, or a
+    // delivery failure — rather than needing each of them swept separately.
+    const { id, pending } = this.registry.register(scoopJid, request, cone.jid);
     log.info('Sudo request enqueued for cone', {
       id,
       scoopJid,
@@ -296,7 +277,6 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       });
       return false;
     }
-    this.approverByRequest.delete(id);
     const settled = this.registry.resolve(id, decision);
     if (settled) {
       log.info('Sudo request resolved by cone', { id, decision: decision.decision });
@@ -339,8 +319,8 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     // entry, and the card flip below must land under the requesting scoop's
     // owning cone, not the default root.
     const requesterJid = pending.scoopJid;
-    // Captured BEFORE `resolveSudoRequest` retires the scope entry below.
-    const cardOwnerJid = this.approverByRequest.get(id);
+    // Captured BEFORE the settle below retires the entry.
+    const cardOwnerJid = pending.approverJid;
     // Claim the request synchronously before any persistence await. This
     // cancels its fail-closed timer, so an expired request can never gain a
     // durable rule after the registry has already denied it.
@@ -413,7 +393,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     // request that is the explicit approver, not the requester's parent, so
     // resolving through `findApprover` alone searched the wrong thread and left
     // the approver looking at a card that never stopped saying "pending".
-    const explicit = approverJid ?? this.approverByRequest.get(lickId);
+    const explicit = approverJid ?? this.registry.get(lickId)?.approverJid;
     const cone = explicit
       ? this.deps.getScoops().get(explicit)
       : this.deps.findApprover(scoopJid ?? this.registry.get(lickId)?.scoopJid);
