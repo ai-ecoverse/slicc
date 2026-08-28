@@ -17,7 +17,6 @@
   "packages/webapp/src/cdp/cdp-client.ts": 4,
   "packages/webapp/src/cdp/cherry-host-protocol.ts": 5,
   "packages/webapp/src/cdp/cherry-host-transport.ts": 3,
-  "packages/webapp/src/cdp/extension-bridge-protocol.ts": 5,
   "packages/webapp/src/cdp/har-recorder.ts": 10,
   "packages/webapp/src/cdp/navigation-watcher.ts": 11,
   "packages/webapp/src/cdp/panel-rpc-cdp-transport.ts": 5,

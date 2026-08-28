@@ -17,13 +17,31 @@
  * pass-through over chrome.runtime.Port).
  */
 
-import type { DiscoveryKind } from '@slicc/shared-ts';
+import type { CDPPayload, DiscoveryKind } from '@slicc/shared-ts';
 
 /** Protocol version bumped on any breaking envelope change. */
 export const EXTENSION_BRIDGE_PROTOCOL_VERSION = 1;
 
 /** Port name the leader passes to `chrome.runtime.connect`. */
 export const EXTENSION_BRIDGE_PORT_NAME = 'slicc.cdp-bridge';
+
+/**
+ * Fields the structural validators read off an inbound Port message before
+ * narrowing to a typed envelope. Extra keys may be present; only these three
+ * are inspected.
+ */
+interface ExtensionBridgeWireProbe {
+  bridge?: unknown;
+  channelId?: unknown;
+  kind?: unknown;
+}
+
+/** Envelope-shaped message with a non-current `bridge` version (version skew). */
+export interface ExtensionBridgeVersionMismatch {
+  bridge: number;
+  channelId: string;
+  kind: string;
+}
 
 export interface ExtensionBridgeHello {
   bridge: typeof EXTENSION_BRIDGE_PROTOCOL_VERSION;
@@ -55,7 +73,8 @@ export interface ExtensionBridgeCdpRequest {
   kind: 'cdp.request';
   id: number;
   method: string;
-  params?: Record<string, unknown>;
+  /** Per-method CDP params; shape is known only to the caller that issued the method. */
+  params?: CDPPayload;
   sessionId?: string;
 }
 
@@ -64,7 +83,8 @@ export interface ExtensionBridgeCdpResponse {
   channelId: string;
   kind: 'cdp.response';
   id: number;
-  result?: Record<string, unknown>;
+  /** Per-method CDP result; shape depends on the request method. */
+  result?: CDPPayload;
   error?: string;
 }
 
@@ -73,7 +93,8 @@ export interface ExtensionBridgeCdpEvent {
   channelId: string;
   kind: 'cdp.event';
   method: string;
-  params?: Record<string, unknown>;
+  /** Per-method CDP event params; shape depends on `method`. */
+  params?: CDPPayload;
   sessionId?: string;
 }
 
@@ -183,7 +204,7 @@ const KINDS = new Set<ExtensionBridgeEnvelope['kind']>([
  */
 export function isExtensionBridgeEnvelope(value: unknown): value is ExtensionBridgeEnvelope {
   if (typeof value !== 'object' || value === null) return false;
-  const v = value as Record<string, unknown>;
+  const v = value as ExtensionBridgeWireProbe;
   return (
     v.bridge === EXTENSION_BRIDGE_PROTOCOL_VERSION &&
     typeof v.channelId === 'string' &&
@@ -199,11 +220,9 @@ export function isExtensionBridgeEnvelope(value: unknown): value is ExtensionBri
  * rejects these, so without this check a skewed peer is indistinguishable
  * from the generic handshake timeout. Callers log it distinctly.
  */
-export function isBridgeVersionMismatch(
-  value: unknown
-): value is { bridge: number; channelId: string; kind: string } {
+export function isBridgeVersionMismatch(value: unknown): value is ExtensionBridgeVersionMismatch {
   if (typeof value !== 'object' || value === null) return false;
-  const v = value as Record<string, unknown>;
+  const v = value as ExtensionBridgeWireProbe;
   return (
     typeof v.bridge === 'number' &&
     v.bridge !== EXTENSION_BRIDGE_PROTOCOL_VERSION &&
