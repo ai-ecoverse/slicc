@@ -12,11 +12,15 @@ struct ChatView: View {
     @EnvironmentObject var inboundActions: InboundActionCoordinator
     @Environment(\.colorScheme) private var systemScheme
     @Environment(\.horizontalSizeClass) private var horizontalSizeClass
-    @Environment(\.openURL) private var openURL
+    @Environment(\.openURL) var openURL
     @StateObject private var presentation: ChatPresentationState
     @StateObject private var ptt = PttController(
         engine: InputBar.makeDictationEngine(),
         prepareForRecording: { VoiceReply.shared.stopSpeaking() })
+    /// Sheets and menus the transcript's short actions open. Mounted
+    /// once at the shell: a sheet owned by a bubble would be torn down
+    /// mid-present every time the transcript re-renders, which is constantly.
+    @StateObject var transcriptActions = TranscriptActionModel()
     @State private var showSettings = false
     @State private var hasAppeared = false
     /// DEBUG fixture route (`-uiTestFixtureRoute`).
@@ -35,7 +39,7 @@ struct ChatView: View {
     /// Transcript links stay in Sliccy's own browser by default — a tap on a
     /// link the agent sent should not evict the user from the session.
     /// Settings → Advanced hands them back to the system browser.
-    @AppStorage("openLinksInBuiltInBrowser") private var openLinksInBuiltInBrowser = true
+    @AppStorage("openLinksInBuiltInBrowser") var openLinksInBuiltInBrowser = true
 
     init() {
         _presentation = StateObject(
@@ -60,6 +64,12 @@ struct ChatView: View {
                 regularShell
             }
         }
+        // Inside the palette environment, not outside it: a sheet's content
+        // inherits the environment at the position the modifier sits in the
+        // chain, so mounting these after `.environment(\.palette, …)` would
+        // present them against the default (dark) palette while the shell
+        // behind them is light.
+        .transcriptActionSheets(transcriptActions)
         // A leader theme pins the scheme to its base; unthemed follows the
         // system, like the unthemed webapp shell (#1801).
         .preferredColorScheme(appState.leaderTheme.map { $0.base == .light ? .light : .dark })
@@ -112,6 +122,7 @@ struct ChatView: View {
                     // surface that already believes it has a leader — the
                     // composer is only composable once the connection settles.
                     UITestHooks.seedTranscriptFixture(into: appState)
+                    UITestHooks.seedShortActionsFixture(into: appState)
                     UITestHooks.scheduleTranscriptAppend(into: appState)
                     return
                 }
@@ -225,30 +236,7 @@ struct ChatView: View {
         openInBuiltInBrowser(action.url)
     }
 
-    // MARK: - Transcript links
-
-    /// Only web links are ours to keep. `mailto:`, `tel:`, and app schemes
-    /// have no meaning in a WKWebView tab, so they stay with the system even
-    /// when the setting is on.
-    static func routesToBuiltInBrowser(_ url: URL, enabled: Bool) -> Bool {
-        guard enabled, let scheme = url.scheme?.lowercased() else { return false }
-        return scheme == "http" || scheme == "https"
-    }
-
-    /// Scoped to the conversation subtree so only transcript links are
-    /// redirected — the shell's own `openURL` (x-callback bounces) and the
-    /// Settings sheet keep the system action.
-    private var transcriptLinkAction: OpenURLAction {
-        OpenURLAction { url in
-            guard Self.routesToBuiltInBrowser(url, enabled: openLinksInBuiltInBrowser) else {
-                return .systemAction
-            }
-            openInBuiltInBrowser(url)
-            return .handled
-        }
-    }
-
-    private func openInBuiltInBrowser(_ url: URL) {
+    func openInBuiltInBrowser(_ url: URL) {
         withAnimation {
             presentation.activeSurface = .browser
         }
@@ -473,6 +461,8 @@ struct ChatView: View {
                             toolbarSuppressed: presentation.activeSurface != nil
                         )
                         .environment(\.openURL, transcriptLinkAction)
+                        .environment(\.transcriptActions, transcriptActionHandlers)
+                        .environment(\.fileMentionResolver, appState.fileMentionResolver)
                     }
                     // The workbench covers the chat, not the rail — the
                     // same full-bleed overlay the web shell uses at ≤560px,
@@ -575,6 +565,8 @@ struct ChatView: View {
                     ptt: ptt
                 )
                 .environment(\.openURL, transcriptLinkAction)
+                .environment(\.transcriptActions, transcriptActionHandlers)
+                .environment(\.fileMentionResolver, appState.fileMentionResolver)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity)

@@ -457,6 +457,71 @@ enum ChatFixture {
         )
     }
 
+    /// A transcript whose every paragraph carries something the reader can
+    /// act on: pre-formatted text, a file the leader knows about, a
+    /// web link, a non-web link, a phone number and two base64 payloads.
+    ///
+    /// Kept apart from `makeMessages()` on purpose. That fixture is the
+    /// baseline several UI tests measure the transcript column and the swipe
+    /// arbiter against, and adding rows to it moves every one of their
+    /// expectations.
+    static func makeShortActionMessages() -> [ChatMessage] {
+        let write = ToolCall(
+            id: "fx-actions:call-write",
+            name: "write_file",
+            input: AnyCodable(["path": "/workspace/notes/handoff.md", "content": "# Handoff"]),
+            result: "wrote 9 bytes"
+        )
+        return [
+            ChatMessage(
+                id: "fx-actions-user",
+                role: .user,
+                content: "Where did you put the handoff, and who do I call about it?",
+                timestamp: ts(0)
+            ),
+            ChatMessage(
+                id: "fx-actions-assistant",
+                role: .assistant,
+                content: """
+                    I wrote it to handoff.md — run `npm run build -w @slicc/webapp` first, \
+                    then read it. The runbook is at packages/ios-app/CLAUDE.md.
+
+                    ```bash
+                    cat /workspace/notes/handoff.md | pbcopy
+                    ```
+
+                    Background: [the architecture note](https://sliccy.ai/docs/architecture) \
+                    and mailto:ops@sliccy.ai. If it is urgent, call +1 (415) 555-0134.
+
+                    Here is the icon I generated:
+
+                    data:image/png;base64,\(noisePNG)
+
+                    And the note itself, encoded:
+
+                    \(encodedNote)
+                    """,
+                timestamp: ts(0.2),
+                toolCalls: [write]
+            ),
+        ]
+    }
+
+    /// An 8×8 noise PNG — big enough in base64 to clear the payload floor, so
+    /// the chip path is exercised by a blob that really decodes to an image.
+    private static let noisePNG =
+        "iVBORw0KGgoAAAANSUhEUgAAAAgAAAAICAIAAABLbSncAAAA00lEQVR4nAHIADf/AHlCvfIhBvCEd2Lw88tNdk3HByBRFZoPiQDy"
+        + "xtrK40S7MRJF/W+E35rXxbPQdqwOj1MApzVsiJE/IPb3LbAi0k0KltrUPBYXwamOAHgSngMnNxBl0JWGTxWtoLhGwcDrxTSK3AB5"
+        + "mt+Em60F1KEKwEQequ60tI76Cx8KvYAA6ZijWrpeoL2HmcE1DUOecYl6p1/eMTSkAKpy4FYorG/minM9EWGhXY6uK7BC15WK7QCx"
+        + "1ZTW0RLTT2YC9N5xEOmTrnQikj19FxE6BGFaekpuTQAAAABJRU5ErkJggg=="
+
+    /// A text payload with no signature and no declared type — the branch that
+    /// only becomes a chip because the decoded bytes read as text.
+    private static let encodedNote =
+        "VGhlIHF1aWNrIGJyb3duIGZveCBqdW1wcyBvdmVyIHRoZSBsYXp5IGRvZywgYW5kIHRoZW4ga2VlcHMgb24ganVtcGluZyB1bnRp"
+        + "bCB0aGlzIHNlbnRlbmNlIGlzIGNvbWZvcnRhYmx5IGxvbmdlciB0aGFuIHRoZSBodW5kcmVkIGFuZCB0d2VudHkgZWlnaHQgY2hh"
+        + "cmFjdGVyIGZsb29yLg=="
+
     /// Smallest valid PNG, so an attachment chip can exercise the real
     /// base64 → `UIImage` thumbnail path without carrying a binary asset.
     private static let onePixelPNG =

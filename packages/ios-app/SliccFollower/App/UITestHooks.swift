@@ -189,6 +189,23 @@ import UIKit
             appState.messages = messages
         }
 
+        /// Fill the real chat surface with the short-action transcript
+        /// (`-uiTestShortActionsFixture YES`): pre-formatted text, a file
+        /// mention, links, a phone number and two base64 payloads.
+        ///
+        /// Its own hook rather than a flag on `seedTranscriptFixture` because
+        /// the two fixtures answer different questions and several tests pin
+        /// the row count of the other one.
+        @MainActor
+        static func seedShortActionsFixture(into appState: AppState) {
+            guard UserDefaults.standard.bool(forKey: "uiTestShortActionsFixture") else { return }
+            let scoopJid = "ui-test-cone"
+            appState.selectedScoopJid = scoopJid
+            let messages = ChatFixture.makeShortActionMessages()
+            appState.messagesByScoop[scoopJid] = messages
+            appState.messages = messages
+        }
+
         /// Deliver one CONE message into the seeded transcript after a delay
         /// (`-uiTestTranscriptAppendAfter <seconds>`), so a test can prove that
         /// incoming content does not yank a reader out of the history. A send

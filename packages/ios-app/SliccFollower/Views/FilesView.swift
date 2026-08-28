@@ -25,8 +25,11 @@ struct FilesView: View {
         /// (images, PDFs, archives) survive untouched.
         let data: Data
         /// UTF-8 decode of `data` when it is text; nil means binary and
-        /// the preview shows a size line instead of mangled bytes.
+        /// the preview falls through to the image or size line.
         var text: String? { String(data: data, encoding: .utf8) }
+        /// Decoded bitmap when the bytes are one. Checked BEFORE `text`,
+        /// because a small PNG can decode as (garbage) UTF-8.
+        var image: UIImage? { UIImage(data: data) }
     }
 
     private var currentPath: String {
@@ -153,7 +156,18 @@ struct FilePreviewSheet: View {
     var body: some View {
         NavigationStack {
             ScrollView {
-                if let text = file.text {
+                if let image = file.image {
+                    // An image previews as an image. The web opens the same
+                    // bytes in Quick Look, which renders them; a size line
+                    // where a screenshot should be is the follower failing to
+                    // answer the question the tap asked.
+                    Image(uiImage: image)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                        .frame(maxWidth: .infinity)
+                        .padding(12)
+                        .accessibilityIdentifier("file-preview-image")
+                } else if let text = file.text {
                     Text(text)
                         .font(.system(size: 13, design: .monospaced))
                         .foregroundStyle(palette.ink)

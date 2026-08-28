@@ -109,21 +109,26 @@ struct MessageBubble: View, Equatable {
     /// rendered as raw asterisks/backticks. We keep block syntax disabled
     /// (`.inlineOnlyPreservingWhitespace`) so a stray `#` at line-start
     /// doesn't accidentally become a heading inside a chat bubble.
+    ///
+    /// Entity annotation runs here too, so a snippet or a number in a
+    /// delegation row is as tappable as one in a reply. Two things it does
+    /// NOT get, both because the bubble is a `Text`: no long-press menu (tap
+    /// opens Copy/Share, which is the affordance anyway), and no file or
+    /// base64 preview — resolution state and chip stacking live in
+    /// `MarkdownText`, and a user bubble's content is already in the user's
+    /// hands.
     @ViewBuilder
     private var userBubbleText: some View {
         // Dictated turns carry AI-only markers (🎙️ and the one-time ◁…▷
         // priming note) in the stored text; the bubble is the one place
         // that hides them again.
         let body = DictationPriming.stripMarkers(message.content)
-        if let attributed = try? AttributedString(
-            markdown: body,
-            options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace)
-        ) {
-            Text(styleUserBubbleCode(attributed))
-                .tint(palette.bubbleText)
-        } else {
-            Text(body)
-        }
+        // Through the same memo the assistant side uses: a bubble is
+        // re-evaluated as often as any other row, and the scan behind
+        // annotation is two regex passes and an `NSDataDetector` walk.
+        let annotated = TranscriptInlineCache.shared.paragraph(markdown: body, files: [:])
+        Text(styleUserBubbleCode(annotated.attributed))
+            .tint(palette.bubbleText)
     }
 
     /// Style inline-`code` runs against the purple user bubble. The

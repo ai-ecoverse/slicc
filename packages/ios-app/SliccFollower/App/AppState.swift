@@ -158,6 +158,13 @@ class AppState: ObservableObject {
     private(set) lazy var fsClient = FsClient { [weak self] message in
         self?.sendToLeader(message) ?? false
     }
+    /// Confirms transcript file mentions against the leader's VFS.
+    /// Stored here rather than on a view because its hint feed is
+    /// `applyToolUseStart`, which runs long before any bubble is built.
+    private(set) lazy var fileMentionResolver = FileMentionResolver { [weak self] path in
+        guard let self else { return false }
+        return await self.transcriptFileExists(path)
+    }
     /// Single-flight client for commands running in the leader's virtual shell.
     private(set) lazy var terminalClient = TerminalClient { [weak self] in
         self?.sendToLeader($0) ?? false
@@ -475,6 +482,10 @@ class AppState: ObservableObject {
         // also re-arms the one-time dictation priming note.
         VoiceReply.shared.reset()
         DictationPriming.reset()
+        // A different leader has a different filesystem: a kept verdict would
+        // paint a tappable link to a file that is not there.
+        fileMentionResolver.reset()
+        TranscriptInlineCache.shared.clear()
         scoops = []
         selectedScoopJid = nil
         leaderActiveScoopJid = nil
