@@ -45,6 +45,27 @@ export interface MountBombFsPlugin {
 }
 
 /**
+ * The slice of `pyodide.FS.filesystems` this module reads and writes.
+ * Pyodide's bag also holds MEMFS / NODEFS / …; we only register
+ * `MOUNT_BOMB_FS` and leave the rest alone.
+ */
+export interface MountBombFilesystems {
+  MOUNT_BOMB_FS?: MountBombFsPlugin;
+}
+
+/**
+ * The subset of `pyodide.FS` that {@link installMountBombs} needs:
+ * the Emscripten node helpers plus `stat` / `mkdirTree` / `mount`
+ * and the filesystems registry we hang the plugin on.
+ */
+export interface MountBombPyodideFs extends EmscriptenFsApi {
+  stat: (path: string) => unknown;
+  mkdirTree: (path: string) => void;
+  mount: (plugin: MountBombFsPlugin, opts: MountBombOpts, dir: string) => unknown;
+  filesystems: MountBombFilesystems;
+}
+
+/**
  * Build the actionable bomb message used by every thrown error.
  * Names the path verbatim and directs the caller at the two
  * documented escape hatches: `await slicc.fs.<op>(<path>)` for
@@ -178,10 +199,10 @@ function getMountPath(node: FsNode): string {
  * stable. Mirrors `ensureOpfsSyncFsRegistered` in `py-realm-shared.ts`.
  */
 export function ensureMountBombFsRegistered(
-  filesystems: Record<string, unknown>,
+  filesystems: MountBombFilesystems,
   Fs: EmscriptenFsApi
 ): MountBombFsPlugin {
-  let plugin = filesystems.MOUNT_BOMB_FS as MountBombFsPlugin | undefined;
+  let plugin = filesystems.MOUNT_BOMB_FS;
   if (!plugin) {
     plugin = createMountBombFs(Fs);
     filesystems.MOUNT_BOMB_FS = plugin;
@@ -202,17 +223,7 @@ export function ensureMountBombFsRegistered(
  * placeholder under that path instead of the bomb.
  */
 export function installMountBombs(
-  pyodideFs: {
-    stat: (path: string) => unknown;
-    mkdirTree: (path: string) => void;
-    mount: (plugin: unknown, opts: unknown, dir: string) => unknown;
-    filesystems: Record<string, unknown>;
-    createNode(parent: FsNode | null, name: string, mode: number, dev?: number): FsNode;
-    isDir(mode: number): boolean;
-    isFile(mode: number): boolean;
-    isLink(mode: number): boolean;
-    ErrnoError: new (errno: number) => Error & { errno: number };
-  },
+  pyodideFs: MountBombPyodideFs,
   mountPaths: readonly string[],
   pushWarning: (message: string) => void = () => {}
 ): void {
