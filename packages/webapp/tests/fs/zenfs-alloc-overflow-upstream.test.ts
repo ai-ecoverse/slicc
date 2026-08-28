@@ -3,9 +3,9 @@ import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
 
-// Regression guard for the ZenFS `Index._alloc()` spread-overflow patch.
+// Regression guard for the ZenFS `Index._alloc()` spread overflow.
 //
-// Upstream `_alloc()` was `Math.max(...[...this.values()].flatMap(i => [i.ino,
+// `_alloc()` used to be `Math.max(...[...this.values()].flatMap(i => [i.ino,
 // i.data])) + 1` — a single spread of `2 * entryCount` arguments. `_alloc()` is
 // called by `IndexFS.create()`, which backs `createFile` / `createFileSync` /
 // `mkdir` / `mkdirSync`, so EVERY file and directory creation on the OPFS
@@ -26,22 +26,26 @@ import { describe, expect, it } from 'vitest';
 // fell through to its unknown-error default — see the companion assertion in
 // tests/fs/error-rebrand.test.ts.
 //
-// patches/@zenfs+core+2.6.2.patch replaces the spread with a reduction. These
-// tests fail if the patch is missing or stops applying.
+// We carried this as a local hunk in patches/@zenfs+core+<version>.patch until
+// the fix landed upstream in @zenfs/core 2.6.5 (zen-fs/core#312), which reduces
+// instead of spreading and memoizes the last allocated id. The patch hunk is
+// gone; these tests stay as the pin, so a downgrade or an upstream regression
+// that reintroduces the spread fails here rather than in a user's VFS.
 // Upstream report: https://github.com/zen-fs/core/issues/312
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 const fileIndexPath = resolve(repoRoot, 'node_modules/@zenfs/core/dist/internal/file_index.js');
 
-describe('ZenFS Index._alloc spread-overflow patch', () => {
+describe('ZenFS Index._alloc spread-overflow fix', () => {
   it('the installed dist no longer spreads the index into Math.max', () => {
     const src = readFileSync(fileIndexPath, 'utf8');
     expect(
       src.includes('Math.max(...[...this.values()]'),
-      'Installed @zenfs/core still spreads the whole index into Math.max in ' +
-        '_alloc(); patches/@zenfs+core+2.6.2.patch is missing or failed to ' +
-        'apply. Every createFile/mkdir will throw "Maximum call stack size ' +
-        'exceeded" once the index grows large enough. See patches/README.md ' +
-        'and https://github.com/zen-fs/core/issues/312.'
+      'Installed @zenfs/core spreads the whole index into Math.max in ' +
+        '_alloc() again — the zen-fs/core#312 fix shipped in 2.6.5, so this ' +
+        'means a downgrade or an upstream regression. Every createFile/mkdir ' +
+        'will throw "Maximum call stack size exceeded" once the index grows ' +
+        'large enough. See patches/README.md and ' +
+        'https://github.com/zen-fs/core/issues/312.'
     ).toBe(false);
   });
 
