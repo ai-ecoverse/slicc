@@ -2,18 +2,25 @@
  * Tests for the Cerebras provider.
  *
  * Verifies the three-layer model catalog (live cache → localStorage → seed),
- * refreshModels() fetching behaviour, and register() API wiring.
+ * refreshModels() fetching behaviour, register() API wiring, and the
+ * fire-and-forget stream pumps (explicit .catch so noFloatingPromises is clean).
  */
 
+import type { Api, Model } from '@earendil-works/pi-ai';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const streamMocks = vi.hoisted(() => ({
+  streamOpenAICompletions: vi.fn(),
+  streamSimpleOpenAICompletions: vi.fn(),
+}));
 
 vi.mock('@earendil-works/pi-ai/compat', async (importOriginal) => {
   const original = await importOriginal<typeof import('@earendil-works/pi-ai/compat')>();
   return {
     ...original,
     registerApiProvider: vi.fn(),
-    streamOpenAICompletions: vi.fn(),
-    streamSimpleOpenAICompletions: vi.fn(),
+    streamOpenAICompletions: streamMocks.streamOpenAICompletions,
+    streamSimpleOpenAICompletions: streamMocks.streamSimpleOpenAICompletions,
   };
 });
 
@@ -35,7 +42,10 @@ vi.stubGlobal('localStorage', {
   clear: () => storage.clear(),
 });
 
-import { registerApiProvider } from '@earendil-works/pi-ai/compat';
+import {
+  createAssistantMessageEventStream,
+  registerApiProvider,
+} from '@earendil-works/pi-ai/compat';
 import { config, register } from '../../providers/cerebras.js';
 
 // Reset module-level cache between tests by reloading the module each time
@@ -43,10 +53,39 @@ import { config, register } from '../../providers/cerebras.js';
 // tests that depend on a clean cache run before any refreshModels() call.
 
 const STORAGE_KEY = 'slicc-cerebras-models';
+const CEREBRAS_API = 'cerebras-openai' as Api;
+const context = { systemPrompt: '', messages: [], tools: [] };
+
+function endedStream() {
+  const stream = createAssistantMessageEventStream();
+  queueMicrotask(() => stream.end());
+  return stream;
+}
+
+async function collectEvents(
+  stream: ReturnType<typeof createAssistantMessageEventStream>
+): Promise<unknown[]> {
+  const events: unknown[] = [];
+  for await (const event of stream) events.push(event);
+  return events;
+}
+
+function sampleModel(): Model<Api> {
+  return {
+    id: 'gpt-oss-120b',
+    name: 'GPT OSS 120B',
+    api: CEREBRAS_API,
+    provider: 'cerebras',
+  } as Model<Api>;
+}
 
 beforeEach(() => {
   storage.clear();
   vi.mocked(registerApiProvider).mockClear();
+  streamMocks.streamOpenAICompletions.mockReset();
+  streamMocks.streamSimpleOpenAICompletions.mockReset();
+  streamMocks.streamOpenAICompletions.mockImplementation(endedStream);
+  streamMocks.streamSimpleOpenAICompletions.mockImplementation(endedStream);
 });
 
 // ── Provider config ────────────────────────────────────────────────
@@ -264,5 +303,73 @@ describe('register()', () => {
     expect(call.api).toBe('cerebras-openai');
     expect(call.stream).toBeTypeOf('function');
     expect(call.streamSimple).toBeTypeOf('function');
+  });
+});
+
+// ── Stream pumps ──────────────────────────────────────────────────
+
+describe('stream pumps', () => {
+  it('stream routes through openai-completions at the Cerebras base URL', async () => {
+    register();
+    const call = vi.mocked(registerApiProvider).mock.calls[0]![0];
+    const events = await collectEvents(
+      call.stream(sampleModel(), context, {}) as ReturnType<
+        typeof createAssistantMessageEventStream
+      >
+    );
+    expect(events).toEqual([]);
+    expect(streamMocks.streamOpenAICompletions).toHaveBeenCalledOnce();
+    const proxyModel = streamMocks.streamOpenAICompletions.mock.calls[0]![0] as {
+      baseUrl: string;
+      api: string;
+    };
+    expect(proxyModel.baseUrl).toBe('https://api.cerebras.ai/v1');
+    expect(proxyModel.api).toBe('openai-completions');
+  });
+
+  it('streamSimple routes through openai-completions at the Cerebras base URL', async () => {
+    register();
+    const call = vi.mocked(registerApiProvider).mock.calls[0]![0];
+    const events = await collectEvents(
+      call.streamSimple!(sampleModel(), context) as ReturnType<
+        typeof createAssistantMessageEventStream
+      >
+    );
+    expect(events).toEqual([]);
+    expect(streamMocks.streamSimpleOpenAICompletions).toHaveBeenCalledOnce();
+    const proxyModel = streamMocks.streamSimpleOpenAICompletions.mock.calls[0]![0] as {
+      baseUrl: string;
+      api: string;
+    };
+    expect(proxyModel.baseUrl).toBe('https://api.cerebras.ai/v1');
+    expect(proxyModel.api).toBe('openai-completions');
+  });
+
+  it('stream surfaces inner failures as error events without rejecting', async () => {
+    const errorSpy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    streamMocks.streamOpenAICompletions.mockImplementation(() => {
+      throw new Error('upstream boom');
+    });
+    register();
+    const call = vi.mocked(registerApiProvider).mock.calls[0]![0];
+    const events = await collectEvents(
+      call.stream(sampleModel(), context, {}) as ReturnType<
+        typeof createAssistantMessageEventStream
+      >
+    );
+    expect(events).toHaveLength(1);
+    expect(events[0]).toEqual(
+      expect.objectContaining({
+        type: 'error',
+        reason: 'error',
+        error: expect.objectContaining({
+          errorMessage: 'upstream boom',
+          provider: 'cerebras',
+          model: 'gpt-oss-120b',
+        }),
+      })
+    );
+    expect(errorSpy).toHaveBeenCalled();
+    errorSpy.mockRestore();
   });
 });
