@@ -10,7 +10,20 @@
  */
 
 /** `export` = a follower's transcript export (issue #2062 folded it into sudo). */
-export type SudoKind = 'command' | 'read' | 'write' | 'secret' | 'export';
+/**
+ * Mirror of `TraySudoKind` in `@slicc/shared-ts`. Kept as a local literal union
+ * (node-server does not import the browser package) — which means a kind added
+ * there must be added HERE too, or `VALID_KINDS` in `endpoint.ts` 400s it and
+ * the gate fails closed forever.
+ */
+export type SudoKind =
+  | 'command'
+  | 'read'
+  | 'write'
+  | 'secret'
+  | 'export'
+  | 'guest-message'
+  | 'guest-tool';
 
 /** Inbound request body for `POST /api/sudo-approve`. */
 export interface SudoApproveRequest {

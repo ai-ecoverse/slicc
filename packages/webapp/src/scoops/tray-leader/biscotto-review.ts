@@ -52,19 +52,37 @@ export type BiscottoMessageState = 'pending' | 'approved' | 'rejected' | 'unansw
 /** How a review ENDED — every state except the transient one. */
 export type BiscottoReviewOutcome = Exclude<BiscottoMessageState, 'pending'>;
 
-export interface PendingGuestMessage {
-  /** Which connected seat sent it; needed to attribute the delivered turn. */
+/**
+ * What the wire dispatcher hands in — the guest's message and nothing derived.
+ * Everything the gate decides (which unit it is bound to, which tool gate
+ * applies) is computed by {@link BiscottoReview.submit}, so a caller cannot
+ * supply it and cannot get it wrong.
+ */
+export interface GuestSubmission {
   bootstrapId: string;
   messageId: string;
   text: string;
   attachments?: MessageAttachment[];
   steer?: boolean;
   biscotto: FollowerBiscottoIdentity;
+}
+
+/** A submission the gate has bound to a unit and a tool gate. */
+export interface PendingGuestMessage extends GuestSubmission {
+  /** Which connected seat sent it; needed to attribute the delivered turn. */
   /**
-   * Tool gate for the turn this message starts, resolved at DELIVERY time from
-   * the seat record. Absent when the seat's tool gate is `off`.
+   * Tool gate for the turn this message starts. Resolved at SUBMIT time, not
+   * at delivery: it names a unit, and the owner can switch units while a review
+   * sits on screen.
    */
   toolGate?: TurnGuestGate;
+  /**
+   * The unit that was active when the guest sent this. Everything about the
+   * message is bound to it, and delivery refuses if the owner has since moved
+   * on — an approved message landing in a different conversation is not the
+   * message anyone approved.
+   */
+  unitJid: string;
 }
 
 export interface BiscottoReviewDeps {
@@ -93,10 +111,19 @@ export class BiscottoReview {
   /** Seats with a review currently on screen. */
   private readonly inFlight = new Set<string>();
   /**
-   * Bumped whenever a seat goes away. A review that resolves against a stale
-   * epoch is discarded rather than delivered — see {@link handleFollowerRemoved}.
+   * Bumped whenever a connection for a seat goes away. A review that resolves
+   * against a stale epoch is discarded rather than delivered — see
+   * {@link handleFollowerRemoved}.
    */
   private readonly epochs = new Map<string, number>();
+  /**
+   * Which seat each live connection belongs to.
+   *
+   * `handleFollowerRemoved` is called AFTER the registry entry is gone, so the
+   * seat cannot be looked up from the follower by then — this is the only way
+   * back from a connection to the queue it was feeding.
+   */
+  private readonly seatByBootstrap = new Map<string, string>();
 
   constructor(
     private readonly context: LeaderSyncContext,
@@ -121,22 +148,50 @@ export class BiscottoReview {
    * through — that is the owner's explicit choice at mint time, and it is
    * scoped to the seat rather than to the sudoers table.
    */
-  submit(bootstrapId: string, message: PendingGuestMessage): void {
+  /**
+   * The key everything is bucketed under: the SEAT, not the connection.
+   *
+   * One guest URL opened in three tabs is three connections but one seat. Keyed
+   * by connection, each tab got its own queue — so the per-seat message bound
+   * multiplied by the number of tabs, and reviews from the same guest ran
+   * concurrently and could be delivered out of order.
+   */
+  private seatKey(message: PendingGuestMessage): string {
+    return message.biscotto.id;
+  }
+
+  submit(bootstrapId: string, message: GuestSubmission): void {
     // A guest never interrupts the owner's running turn. `steer` aborts work in
     // progress, and a reviewer approving the TEXT is not thereby approving an
     // interruption — the two are not visible as one decision. Stripped here so
     // no downstream caller can honour it; the message queues normally instead.
-    const queued: PendingGuestMessage = { ...message, steer: false };
+    const unitJid = this.context.options.getScoopJid();
+    const toolGate = toolGateForSeat(message.biscotto, unitJid);
+    if (toolGate === null) {
+      // The seat configures tool gating this leader cannot route to its named
+      // approver. Delivering the message would start a turn whose tool calls
+      // cannot be reviewed by the principal the owner chose, so the message
+      // itself is refused. Reported as `rejected` — the host's configuration
+      // genuinely did not forward it, which is what the guest is told.
+      this.context.log.warn('Seat has unroutable tool gating — refusing its message', {
+        bootstrapId,
+        biscottoId: message.biscotto.id,
+      });
+      this.deps.notify(bootstrapId, message.messageId, 'rejected');
+      return;
+    }
+    const queued: PendingGuestMessage = { ...message, steer: false, unitJid, toolGate };
 
     if (queued.biscotto.gates.message.approver === 'off') {
       // An ungated MESSAGE still gets a gated TURN when the seat says so — the
       // two gates are independent by design.
-      queued.toolGate = toolGateForSeat(queued.biscotto, this.context.options.getScoopJid());
       this.deps.deliver(queued);
       this.deps.notify(bootstrapId, queued.messageId, 'approved');
       return;
     }
-    const queue = this.queues.get(bootstrapId) ?? [];
+    const seat = this.seatKey(queued);
+    this.seatByBootstrap.set(bootstrapId, seat);
+    const queue = this.queues.get(seat) ?? [];
     if (queue.length >= MAX_QUEUED_PER_SEAT) {
       // Reported as `unanswered` rather than `rejected`: nobody refused this,
       // it was never put in front of anyone. Truthful, and it tells the guest
@@ -150,9 +205,9 @@ export class BiscottoReview {
       return;
     }
     queue.push(queued);
-    this.queues.set(bootstrapId, queue);
+    this.queues.set(seat, queue);
     this.deps.notify(bootstrapId, queued.messageId, 'pending');
-    void this.drain(bootstrapId);
+    void this.drain(seat);
   }
 
   /**
@@ -162,23 +217,23 @@ export class BiscottoReview {
    * reviewing in parallel would let a human answering out of order reorder the
    * guest's own messages on the way into the cone.
    */
-  private async drain(bootstrapId: string): Promise<void> {
-    if (this.inFlight.has(bootstrapId)) return;
-    this.inFlight.add(bootstrapId);
+  private async drain(seat: string): Promise<void> {
+    if (this.inFlight.has(seat)) return;
+    this.inFlight.add(seat);
     try {
       for (;;) {
-        const queue = this.queues.get(bootstrapId);
+        const queue = this.queues.get(seat);
         const next = queue?.shift();
         if (!next) break;
-        if (queue?.length === 0) this.queues.delete(bootstrapId);
-        const epoch = this.epochs.get(bootstrapId) ?? 0;
+        if (queue?.length === 0) this.queues.delete(seat);
+        const bootstrapId = next.bootstrapId;
+        const epoch = this.epochs.get(seat) ?? 0;
         const outcome = await this.review(bootstrapId, next);
-        next.toolGate = toolGateForSeat(next.biscotto, this.context.options.getScoopJid());
         // The seat may have been REVOKED, expired or disconnected while the
         // prompt sat on screen. Delivering now would let a revoked guest still
         // reach the cone minutes later — the exact thing revocation exists to
         // stop — so a stale epoch discards the verdict, allow or not.
-        if ((this.epochs.get(bootstrapId) ?? 0) !== epoch) {
+        if ((this.epochs.get(seat) ?? 0) !== epoch) {
           this.context.log.info('Discarding a review that outlived its seat', {
             bootstrapId,
             messageId: next.messageId,
@@ -191,11 +246,26 @@ export class BiscottoReview {
           // to restart the loop. Skip the stale verdict and keep going.
           continue;
         }
-        if (outcome === 'approved') this.deps.deliver(next);
+        if (outcome === 'approved') {
+          // The owner may have switched units while this sat on screen. The
+          // message, its tool gate and its approver were all bound to the unit
+          // that was active when the guest sent it; delivering into a different
+          // conversation is not the message anyone approved.
+          const current = this.context.options.getScoopJid();
+          if (current !== next.unitJid) {
+            this.context.log.warn('Selected unit changed during review — not delivering', {
+              submittedFor: next.unitJid,
+              current,
+            });
+            this.deps.notify(bootstrapId, next.messageId, 'rejected');
+            continue;
+          }
+          this.deps.deliver(next);
+        }
         this.deps.notify(bootstrapId, next.messageId, outcome);
       }
     } finally {
-      this.inFlight.delete(bootstrapId);
+      this.inFlight.delete(seat);
     }
   }
 
@@ -217,7 +287,7 @@ export class BiscottoReview {
     // the human would be answering for a participant who is no longer there.
     if (!this.context.followers.followers.has(bootstrapId)) return 'unanswered';
 
-    const directive = this.approverDirective(message.biscotto.gates.message);
+    const directive = this.approverDirective(message.biscotto.gates.message, message.unitJid);
     if (directive === null) {
       // The seat names an approver this leader cannot route to. Denying is the
       // only safe reading — the alternative is quietly downgrading to a
@@ -266,8 +336,10 @@ export class BiscottoReview {
    * the owner chose, which is exactly what routing `cone` to the human broker
    * was doing.
    */
-  private approverDirective(gate: FollowerBiscottoGate): SudoApproverDirective | undefined | null {
-    const unitJid = this.context.options.getScoopJid();
+  private approverDirective(
+    gate: FollowerBiscottoGate,
+    unitJid: string
+  ): SudoApproverDirective | undefined | null {
     switch (gate.approver) {
       case 'user':
         return undefined;
@@ -292,15 +364,23 @@ export class BiscottoReview {
    * cone.
    */
   private handleFollowerRemoved(bootstrapId: string): void {
-    const dropped = this.queues.get(bootstrapId)?.length ?? 0;
+    const seat = this.seatByBootstrap.get(bootstrapId);
+    this.seatByBootstrap.delete(bootstrapId);
+    if (!seat) return;
+    const dropped = this.queues.get(seat)?.length ?? 0;
     if (dropped > 0) {
       this.context.log.info('Dropped queued guest messages for a departed seat', {
         bootstrapId,
+        seat,
         dropped,
       });
     }
-    this.queues.delete(bootstrapId);
-    this.epochs.set(bootstrapId, (this.epochs.get(bootstrapId) ?? 0) + 1);
+    this.queues.delete(seat);
+    // Epoch is per SEAT, so a revocation — which closes every peer holding the
+    // seat — invalidates whatever was on screen for any of them. One tab of a
+    // multi-tab guest closing also invalidates the seat's pending review, which
+    // is stricter than strictly necessary and the right way to be wrong.
+    this.epochs.set(seat, (this.epochs.get(seat) ?? 0) + 1);
   }
 }
 
@@ -317,7 +397,7 @@ export class BiscottoReview {
  * string the guest does not control. The text is fenced so guest prose cannot
  * pass itself off as that summary.
  */
-export function describeGuestSubmission(message: PendingGuestMessage): string {
+export function describeGuestSubmission(message: GuestSubmission): string {
   const attachments = message.attachments ?? [];
   if (attachments.length === 0) return message.text;
   const summary = attachments

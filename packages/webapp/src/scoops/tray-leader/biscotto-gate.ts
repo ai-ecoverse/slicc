@@ -38,7 +38,11 @@
  *    notifications.
  */
 
-import type { FollowerBiscottoIdentity, FollowerToLeaderMessage } from '@slicc/shared-ts';
+import type {
+  FollowerBiscottoIdentity,
+  FollowerToLeaderMessage,
+  LeaderToFollowerMessage,
+} from '@slicc/shared-ts';
 import { createLogger } from '../../base/logger.js';
 import type { TurnGuestGate } from '../../sudo/types.js';
 
@@ -178,35 +182,47 @@ export function attributeGuestMessage(text: string, label: string): string {
 export function toolGateForSeat(
   seat: FollowerBiscottoIdentity,
   unitJid: string
-): TurnGuestGate | undefined {
+): TurnGuestGate | undefined | null {
   const gate = seat.gates?.tool;
   if (!gate || gate.approver === 'off') return undefined;
   const requester = describeSeatLabel(seat.label);
   switch (gate.approver) {
     case 'cone':
-      // NOT routed to the cone. For a TOOL call the cone is the thing executing
-      // it: asking the cone to approve would queue an actionable message to an
-      // agent that is blocked awaiting the very tool result, so it could not
-      // answer until the tool returned and every request would time out denied.
-      // The tier is incoherent for tool calls specifically — the approver and
-      // the actor are the same unit — so it resolves to the owner's own
-      // broker. Stated here, once per turn and in the log, rather than
-      // discovered as a five-minute stall.
+      // UNROUTABLE, and therefore a refusal — not a redirect.
       //
-      // The MESSAGE gate is unaffected: no turn is running when it asks.
-      log.info('Cone-gated seat: tool calls route to the owner, not the cone', {
+      // For a TOOL call the cone is the thing executing it, so asking the cone
+      // to approve queues an actionable message to an agent blocked awaiting
+      // that very tool result: it cannot answer until the tool returns, and
+      // every request times out denied. The tier is incoherent here.
+      //
+      // An earlier build sent these to the OWNER instead. That is worse than
+      // useless: the principal the seat names never decides, while a different
+      // principal authorizes execution — the exact silent-downgrade this
+      // feature exists to prevent, just pointing the other way. `null` means
+      // "cannot ask the configured approver", and the caller denies.
+      //
+      // The MESSAGE gate is unaffected: no turn is running when it asks, so
+      // the cone tier works there and is the sensible configuration.
+      log.warn('Cone-tier tool gating is unroutable — refusing', {
         reason: 'the cone cannot approve a tool call it is itself blocked on',
       });
-      return { requester };
+      return null;
     case 'scoop':
+      // A scoop tier with no scoop named cannot reach the configured approver
+      // either. Deny rather than fall back to the owner.
       return gate.scoop
         ? {
             requester,
             approver: { kind: 'scoop', scoopName: gate.scoop, unitJid },
           }
-        : { requester };
-    default:
+        : null;
+    case 'user':
       return { requester };
+    default:
+      // A tier written by a newer build than this leader speaks. Refuse; an
+      // unknown approver must never resolve to a known one.
+      log.warn('Unknown tool approver tier — refusing', { approver: gate.approver });
+      return null;
   }
 }
 
@@ -214,4 +230,84 @@ export function toolGateForSeat(
 function describeSeatLabel(label: string): string {
   const trimmed = label.trim();
   return trimmed ? `biscotto \u201C${trimmed}\u201D` : 'an unnamed biscotto';
+}
+
+/**
+ * What the leader may SEND to a guest seat.
+ *
+ * The mirror of {@link BISCOTTO_ALLOWED}, and total over the outbound union for
+ * the same reason: adding a leader→follower message without classifying it is a
+ * compile error, so a new broadcast cannot start leaking to guests by being
+ * forgotten. Enforced at the seat's channel (`follower-registry.ts`) rather
+ * than at each broadcast site — there are many senders, targeted and
+ * broadcast, and patching them one at a time is how the next one gets missed.
+ *
+ * A guest is scoped to ONE transcript and a composer. Everything denied here is
+ * something outside that scope which followers legitimately receive:
+ * `scoops.list` is the inventory of everything else the owner is working on,
+ * `targets.registry` carries browser tab titles and URLs, `preview.open`
+ * carries live capability URLs, and the sudo/oauth prompts would ask a guest to
+ * answer for the owner.
+ */
+export const BISCOTTO_RECEIVABLE: Record<LeaderToFollowerMessage['type'], boolean> = {
+  // — the shared thread, which is the entire point of the seat —
+  snapshot: true,
+  snapshot_chunk: true,
+  agent_event: true,
+  user_message_echo: true,
+  status: true,
+  error: true,
+  'biscotto.message.state': true,
+  'theme.apply': true,
+  hello: true,
+  ping: true,
+  pong: true,
+
+  // — the owner's wider workspace, outside this seat's scope —
+  'scoops.list': false,
+  'targets.registry': false,
+  'preview.open': false,
+  'models.list': false,
+  'model.state': false,
+  'sprinkles.list': false,
+  'sprinkle.content': false,
+  'sprinkle.reloaded': false,
+  'sprinkle.update': false,
+
+  // — asking a guest to answer for the owner —
+  'sudo.approve.request': false,
+  'sudo.approve.cancel': false,
+  'oauth.popup.request': false,
+
+  // — follower peer powers —
+  'cdp.request': false,
+  'cdp.response': false,
+  'cdp.event': false,
+  'fs.request': false,
+  'fs.response': false,
+  'tab.open': false,
+  'tab.opened': false,
+  'tab.open.error': false,
+  'exec.request': false,
+  'exec.chunk': false,
+  'exec.response': false,
+  'exec.signal': false,
+  'cherry.slicc_event': false,
+
+  // — bulk export —
+  'transcript.export.pending': false,
+  'transcript.export.denied': false,
+  'transcript.export.start': false,
+  'transcript.export.chunk': false,
+  'transcript.export.complete': false,
+  'transcript.export.error': false,
+};
+
+/** Whether the leader may send `type` to a peer at this trust level. */
+export function isMessageSendableToTrust(
+  trust: 'full' | 'biscotto',
+  type: LeaderToFollowerMessage['type']
+): boolean {
+  if (trust !== 'biscotto') return true;
+  return BISCOTTO_RECEIVABLE[type] === true;
 }

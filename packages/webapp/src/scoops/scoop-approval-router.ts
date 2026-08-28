@@ -102,6 +102,11 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
    * best-effort.
    */
   private handleAutoSettle(id: string, reason: SudoSettleReason, scoopJid?: string): void {
+    // Every fail-closed settle lands here — timeout, `failScoop`, `failAll` —
+    // and none of them go through `resolveSudoRequest`, which was the only
+    // place the scope entry was retired. Without this the map grew for the
+    // whole session, one stale id per abandoned request.
+    this.approverByRequest.delete(id);
     log.info('Sudo request auto-settled fail-closed; retiring lick card', { id, reason });
     void this.persistLickDecision(id, 'deny', scoopJid).catch((err) => {
       log.warn('Failed to persist auto-settled lick decision', {
@@ -220,6 +225,9 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
 
     const { id, pending } = this.registry.register(scoopJid, request);
     this.approverByRequest.set(id, cone.jid);
+    // A delivery failure below resolves the request directly on the registry,
+    // bypassing `resolveSudoRequest` — retire the scope entry with it.
+    void pending.finally(() => this.approverByRequest.delete(id));
     log.info('Sudo request enqueued for cone', {
       id,
       scoopJid,

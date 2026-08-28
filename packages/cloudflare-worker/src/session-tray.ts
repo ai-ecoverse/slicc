@@ -2516,13 +2516,22 @@ export class SessionTrayDurableObject {
           );
           // Tombstoning the token only stops future joins. A live guest holds a
           // direct data channel to the leader that this DO cannot reach, so the
-          // eviction has to be delegated to the one process that can.
-          this.sendToLeader({
+          // eviction has to be delegated to the one process that can — and if
+          // that message did not land, the seat is revoked for FUTURE joins
+          // while whoever is already connected keeps their channel. Reporting
+          // plain success there would tell an owner the guest is out when they
+          // are not, so the outcome says which happened.
+          const evicted = this.sendToLeader({
             type: 'biscotto.revoked',
             trayId: this.requireTray().trayId,
             biscottoId: revoked.id,
           });
-          return jsonResponse(revoked);
+          if (!evicted) {
+            console.warn('[tray] biscotto revoked but the leader could not be told', {
+              biscottoId: revoked.id,
+            });
+          }
+          return jsonResponse({ ...revoked, evicted });
         }
         case '/internal/biscotto/list':
           return jsonResponse({

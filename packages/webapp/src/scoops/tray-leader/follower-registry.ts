@@ -10,6 +10,7 @@ import {
   type TraySyncChannel,
 } from '../tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../tray-webrtc.js';
+import { isMessageSendableToTrust } from './biscotto-gate.js';
 
 export type FloatType = 'standalone' | 'extension' | 'electron' | 'ios' | 'unknown';
 
@@ -120,6 +121,38 @@ export interface FollowerDetails {
 
 const BROADCAST_ERROR_THROTTLE_MS = 60_000;
 
+/**
+ * Enforce {@link BISCOTTO_RECEIVABLE} on a seat's own channel.
+ *
+ * Wrapping the channel rather than each broadcast site is deliberate: there are
+ * many senders — targeted `sendXToFollower` helpers, `broadcastToAllFollowers`,
+ * ad-hoc `follower.sync.send` calls — and filtering them individually is how
+ * the next one added starts leaking. A guest's channel simply cannot carry a
+ * message it is not allowed to receive, whoever writes to it.
+ *
+ * A full-trust follower is handed the channel untouched, so ordinary followers
+ * keep byte-for-byte their existing behaviour.
+ */
+function restrictOutbound(
+  sync: TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>,
+  trust: FollowerTrust,
+  log: Logger
+): TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage> {
+  if (trust !== 'biscotto') return sync;
+  return new Proxy(sync, {
+    get(target, prop, receiver) {
+      if (prop !== 'send') return Reflect.get(target, prop, receiver);
+      return (message: LeaderToFollowerMessage): boolean => {
+        if (isMessageSendableToTrust('biscotto', message.type)) return target.send(message);
+        log.debug('Withholding a message a biscotto may not receive', { type: message.type });
+        // Reported as sent: the caller is broadcasting to everyone and a guest
+        // legitimately not receiving this is not a transport failure.
+        return true;
+      };
+    },
+  });
+}
+
 export class FollowerRegistry {
   readonly followers = new Map<string, ConnectedFollower>();
   readonly runtimeToBootstrap = new Map<string, string>();
@@ -139,7 +172,8 @@ export class FollowerRegistry {
     }
   ): ConnectedFollower {
     this.removeFollower(bootstrapId);
-    const sync = createLeaderSyncChannel(channel);
+    const trust = meta?.trust ?? 'full';
+    const sync = restrictOutbound(createLeaderSyncChannel(channel), trust, this.options.log);
     const unsubscribe = sync.onMessage((message) => this.options.onMessage(bootstrapId, message));
     const keepalive = new DataChannelKeepalive({
       sendPing: () => sync.send({ type: 'ping' }),

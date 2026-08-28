@@ -409,9 +409,16 @@ export class Orchestrator implements ConeApprovalRouter {
         setGlobalMemory: (content) => this.setGlobalMemory(content),
         appendConeMemory: (bullets, meta) => this.appendConeMemory(bullets, meta),
         enqueueSudoRequest: (jid, request) => this.enqueueSudoRequest(jid, request),
-        resolveActionableLick: (id, decision) => this.resolveActionableLick(id, decision),
+        // Every parameter forwarded EXPLICITLY. A lambda with fewer parameters
+        // still satisfies a wider signature, so `(id, decision) => ...` type-
+        // checked while silently discarding `approverJid` — which made the
+        // delegated-approver scoping inert and handed every delegated scoop
+        // unrestricted authority over all pending approvals. Do not "simplify"
+        // these back to shorter arrow bodies.
+        resolveActionableLick: (id, decision, approverJid) =>
+          this.resolveActionableLick(id, decision, approverJid),
         approveDirectedOrUser: (request) => this.approveDirectedOrUser(request),
-        listPendingSudoRequests: () => this.listPendingSudoRequests(),
+        listPendingSudoRequests: (approverJid) => this.listPendingSudoRequests(approverJid),
       },
       handleMessage: (msg) => this.handleMessage(msg),
     });

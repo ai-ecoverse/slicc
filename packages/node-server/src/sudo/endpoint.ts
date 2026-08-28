@@ -15,7 +15,21 @@ import { requireLoopback } from '../cloud-status.js';
 import { selectSudoBackend } from './select.js';
 import type { SudoApproveRequest, SudoBackend, SudoDecision, SudoKind } from './types.js';
 
-const VALID_KINDS: readonly SudoKind[] = ['command', 'read', 'write', 'secret', 'export'];
+// Must list EVERY `SudoKind`. An omission is not a safe default: the endpoint
+// 400s, the browser-side broker reads that as a denial, and the gate fails
+// closed forever — so a missing kind silently makes that whole approval path
+// impossible rather than merely unvalidated. `guest-message` / `guest-tool` were
+// omitted when they were added, which denied every owner-routed biscotto
+// approval on standalone and Electron.
+const VALID_KINDS: readonly SudoKind[] = [
+  'command',
+  'read',
+  'write',
+  'secret',
+  'export',
+  'guest-message',
+  'guest-tool',
+];
 
 export interface SudoEndpointOptions {
   /**

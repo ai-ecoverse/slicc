@@ -4,6 +4,7 @@ import {
   type BiscottoMessageState,
   BiscottoReview,
   describeGuestSubmission,
+  type GuestSubmission,
   MAX_QUEUED_PER_SEAT,
   type PendingGuestMessage,
 } from '../../../src/scoops/tray-leader/biscotto-review.js';
@@ -21,7 +22,7 @@ const SEAT = {
   gates: { message: { approver: 'user' as const }, tool: { approver: 'user' as const } },
 };
 
-function guestMessage(overrides: Partial<PendingGuestMessage> = {}): PendingGuestMessage {
+function guestMessage(overrides: Partial<GuestSubmission> = {}): GuestSubmission {
   return {
     bootstrapId: 'peer',
     messageId: 'm1',
@@ -31,7 +32,11 @@ function guestMessage(overrides: Partial<PendingGuestMessage> = {}): PendingGues
   };
 }
 
+/** Mutable so a test can move the owner's selected unit mid-review. */
+const unitRef = { jid: 'cone' };
+
 function createHarness(requestSudoApproval?: LeaderSyncManagerOptions['requestSudoApproval']) {
+  unitRef.jid = 'cone';
   const log: Logger = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const followers = new FollowerRegistry({ log, onMessage: vi.fn() });
   followers.followers.set('peer', {
@@ -45,7 +50,7 @@ function createHarness(requestSudoApproval?: LeaderSyncManagerOptions['requestSu
 
   const options = {
     getMessages: () => [],
-    getScoopJid: () => 'cone',
+    getScoopJid: () => unitRef.jid,
     onFollowerMessage: vi.fn(),
     onFollowerAbort: vi.fn(),
     sendControl: vi.fn(),
@@ -64,7 +69,7 @@ function createHarness(requestSudoApproval?: LeaderSyncManagerOptions['requestSu
     deliver: (m) => delivered.push(m),
     notify: (_b, messageId, state) => states.push([messageId, state]),
   });
-  return { review, delivered, states, followers, log };
+  return { review, delivered, states, followers, log, unitRef };
 }
 
 const allow: SudoDecision = { decision: 'allow' };
@@ -406,5 +411,80 @@ describe('BiscottoReview — round-3 findings', () => {
     await vi.waitFor(() => expect(delivered).toHaveLength(1));
     expect(delivered[0].messageId).toBe('new');
     expect(states.some(([id, state]) => id === 'old' && state === 'approved')).toBe(false);
+  });
+});
+
+describe('BiscottoReview — round-5 findings', () => {
+  it('shares one queue across every tab holding the same seat', async () => {
+    // Keyed by connection, three tabs of one guest URL got three independent
+    // 8-message queues and ran reviews concurrently — bypassing both the
+    // per-seat memory bound and the ordering guarantee.
+    const approve = vi.fn(() => new Promise<SudoDecision>(() => {}));
+    const { review } = createHarness(approve);
+
+    review.submit('tab-a', guestMessage({ messageId: 'a' }));
+    review.submit('tab-b', guestMessage({ messageId: 'b' }));
+    await vi.waitFor(() => expect(approve).toHaveBeenCalled());
+
+    // One in flight for the seat, not one per tab.
+    expect(approve).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a message whose seat configures unroutable tool gating', async () => {
+    const approve = vi.fn(async () => allow);
+    const { review, delivered, states } = createHarness(approve);
+    review.submit(
+      'peer',
+      guestMessage({
+        biscotto: {
+          ...SEAT,
+          // Unroutable for tool calls: the cone is the executor.
+          gates: { message: { approver: 'user' }, tool: { approver: 'cone' } },
+        },
+      })
+    );
+    // Never even reviewed — a turn whose tool calls cannot reach the configured
+    // approver must not be started.
+    expect(approve).not.toHaveBeenCalled();
+    expect(delivered).toHaveLength(0);
+    expect(states).toEqual([['m1', 'rejected']]);
+  });
+
+  it('does not deliver into a different conversation than the one submitted for', async () => {
+    let settle!: (d: SudoDecision) => void;
+    const approve = vi.fn(() => new Promise<SudoDecision>((r) => (settle = r)));
+    const { review, delivered, states, unitRef: unit } = createHarness(approve);
+
+    review.submit('peer', guestMessage());
+    await vi.waitFor(() => expect(approve).toHaveBeenCalled());
+
+    // Owner switches units while the review sits on screen.
+    unit.jid = 'cone_other';
+    settle(allow);
+
+    await vi.waitFor(() => expect(states).toHaveLength(2));
+    expect(delivered).toHaveLength(0);
+    expect(states[1]).toEqual(['m1', 'rejected']);
+  });
+
+  it('binds the tool gate to the unit active at submit time', async () => {
+    const approve = vi.fn(async () => allow);
+    const { review, delivered } = createHarness(approve);
+    review.submit(
+      'peer',
+      guestMessage({
+        biscotto: {
+          ...SEAT,
+          gates: { message: { approver: 'off' }, tool: { approver: 'scoop', scoop: 'reviewer' } },
+        },
+      })
+    );
+    expect(delivered).toHaveLength(1);
+    expect(delivered[0].toolGate?.approver).toEqual({
+      kind: 'scoop',
+      scoopName: 'reviewer',
+      unitJid: 'cone',
+    });
+    expect(delivered[0].unitJid).toBe('cone');
   });
 });
