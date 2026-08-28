@@ -326,7 +326,7 @@ export class OffscreenClient implements KernelClientFacade {
         text: string,
         messageId?: string,
         attachments?: MessageAttachment[],
-        options?: { steer?: boolean }
+        options?: { steer?: boolean; guestGate?: import('../sudo/types.js').TurnGuestGate }
       ) => {
         if (!this.selectedScoopJid) {
           this.emitToUI({ type: 'error', error: 'No scoop selected' });
@@ -339,6 +339,7 @@ export class OffscreenClient implements KernelClientFacade {
           attachments,
           messageId: messageId ?? `msg-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
           ...(options?.steer ? { steer: true as const } : {}),
+          ...(options?.guestGate ? { guestGate: options.guestGate } : {}),
         });
       },
 

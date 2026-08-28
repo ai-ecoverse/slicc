@@ -72,7 +72,6 @@ export interface ResolveSudoRequestAndPersistResult {
 
 export class ScoopApprovalRouter implements ConeApprovalRouter {
   private registry: ConeRequestRegistry;
-
   constructor(private deps: ScoopApprovalRouterDeps) {
     // Fail-closed settles that bypass the cone (timeout / scoop drop /
     // shutdown) must still retire the persisted `pending` lick card, or the
@@ -106,8 +105,20 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
   }
 
   /** Snapshot all pending cone-mediated sudo requests (cone-side listing). */
-  listPendingSudoRequests(): PendingSudoRequest[] {
-    return this.registry.list();
+  listPendingSudoRequests(approverJid?: string): PendingSudoRequest[] {
+    const all = this.registry.list();
+    if (approverJid === undefined) return all;
+    return all.filter((entry) => entry.approverJid === approverJid);
+  }
+
+  /**
+   * Whether `approverJid` is allowed to settle `id`. An undefined approver is
+   * an unrestricted caller (a root); a delegated one may only settle what was
+   * routed to it.
+   */
+  private maySettle(id: string, approverJid: string | undefined): boolean {
+    if (approverJid === undefined) return true;
+    return this.registry.get(id)?.approverJid === approverJid;
   }
 
   /** Fail-closed every pending request for the given scoop. Used by `unregisterScoop`. */
@@ -169,9 +180,16 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     return settled;
   }
 
-  async enqueueSudoRequest(scoopJid: string, request: SudoRequest): Promise<SudoDecision> {
+  async enqueueSudoRequest(
+    scoopJid: string,
+    request: SudoRequest,
+    opts: { approver?: RegisteredScoop } = {}
+  ): Promise<SudoDecision> {
     const scoops = this.deps.getScoops();
-    const cone = this.deps.findApprover(scoopJid);
+    // An explicit approver overrides the parent lookup. Used when the DECIDER
+    // is not derivable from the requester — a biscotto's message is asked on
+    // behalf of the shared thread, but the seat names who reviews it.
+    const cone = opts.approver ?? this.deps.findApprover(scoopJid);
     if (!cone) {
       log.warn('Sudo request received but no approver is registered — failing closed', {
         scoopJid,
@@ -187,7 +205,10 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       return { decision: 'deny' };
     }
 
-    const { id, pending } = this.registry.register(scoopJid, request);
+    // The approver rides ON the registry entry, so it is retired by whichever
+    // settle path fires — decision, timeout, `failScoop`, `failAll`, or a
+    // delivery failure — rather than needing each of them swept separately.
+    const { id, pending } = this.registry.register(scoopJid, request, cone.jid);
     log.info('Sudo request enqueued for cone', {
       id,
       scoopJid,
@@ -208,7 +229,12 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       lickId: id,
       sudoKind: request.kind,
       sudoDetail: request.detail,
-      sudoScoopName: scoopForLick?.assistantLabel ?? scoopForLick?.name ?? scoopJid,
+      // `request.requester` wins: for a directed approval the asker is not the
+      // unit the request was filed under. A biscotto's message filed against
+      // the shared thread would otherwise be presented to the approver as a
+      // request from the CONE ITSELF, which is the opposite of what it is.
+      sudoScoopName:
+        request.requester ?? scoopForLick?.assistantLabel ?? scoopForLick?.name ?? scoopJid,
       sudoSuggestedPattern: request.suggestedPattern,
       targetScoop: cone.name,
       timestamp: new Date().toISOString(),
@@ -243,7 +269,14 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
    * timed-out ids so the caller can surface that as "this request expired"
    * to the cone.
    */
-  resolveSudoRequest(id: string, decision: SudoDecision): boolean {
+  resolveSudoRequest(id: string, decision: SudoDecision, approverJid?: string): boolean {
+    if (!this.maySettle(id, approverJid)) {
+      log.warn('Refusing a settle from a unit the request was not routed to', {
+        id,
+        approverJid,
+      });
+      return false;
+    }
     const settled = this.registry.resolve(id, decision);
     if (settled) {
       log.info('Sudo request resolved by cone', { id, decision: decision.decision });
@@ -264,10 +297,21 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
    */
   async resolveSudoRequestAndPersist(
     id: string,
-    decision: SudoDecision
+    decision: SudoDecision,
+    approverJid?: string
   ): Promise<ResolveSudoRequestAndPersistResult> {
     const pending = this.registry.get(id);
     if (!pending) {
+      return { settled: false, persisted: false };
+    }
+    // Checked before ANY side effect, including the persistence below: a
+    // delegated approver must not be able to write a durable grant for a
+    // request that was never routed to it.
+    if (!this.maySettle(id, approverJid)) {
+      log.warn('Refusing a settle+persist from a unit the request was not routed to', {
+        id,
+        approverJid,
+      });
       return { settled: false, persisted: false };
     }
 
@@ -275,10 +319,12 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     // entry, and the card flip below must land under the requesting scoop's
     // owning cone, not the default root.
     const requesterJid = pending.scoopJid;
+    // Captured BEFORE the settle below retires the entry.
+    const cardOwnerJid = pending.approverJid;
     // Claim the request synchronously before any persistence await. This
     // cancels its fail-closed timer, so an expired request can never gain a
     // durable rule after the registry has already denied it.
-    const settled = this.resolveSudoRequest(id, decision);
+    const settled = this.resolveSudoRequest(id, decision, approverJid);
     if (!settled) {
       return { settled: false, persisted: false };
     }
@@ -320,7 +366,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       }
     }
 
-    await this.persistLickDecision(id, decision.decision, requesterJid);
+    await this.persistLickDecision(id, decision.decision, requesterJid, cardOwnerJid);
     return { settled, persisted, persistedPattern, persistError, scoopFolder, kind };
   }
 
@@ -339,10 +385,18 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
   async persistLickDecision(
     lickId: string,
     decision: SudoDecision['decision'],
-    scoopJid?: string
+    scoopJid?: string,
+    approverJid?: string
   ): Promise<void> {
     const lickState = decision === 'deny' ? 'dismissed' : 'confirmed';
-    const cone = this.deps.findApprover(scoopJid ?? this.registry.get(lickId)?.scoopJid);
+    // The card lives in whichever unit it was DELIVERED to. For a directed
+    // request that is the explicit approver, not the requester's parent, so
+    // resolving through `findApprover` alone searched the wrong thread and left
+    // the approver looking at a card that never stopped saying "pending".
+    const explicit = approverJid ?? this.registry.get(lickId)?.approverJid;
+    const cone = explicit
+      ? this.deps.getScoops().get(explicit)
+      : this.deps.findApprover(scoopJid ?? this.registry.get(lickId)?.scoopJid);
     if (!cone) return;
     try {
       const messages = await this.deps.getMessagesForScoop(cone.jid);
@@ -378,7 +432,11 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     request: SudoRequest
   ): Promise<void> {
     const scoop = this.deps.getScoops().get(scoopJid);
-    const senderName = scoop?.assistantLabel ?? scoopJid;
+    // `request.requester` wins for a DIRECTED request: it is filed on behalf of
+    // a unit but asked by someone else (a biscotto seat), and naming the filing
+    // unit would present guest-authored prose to the approver as a request from
+    // the cone itself.
+    const senderName = request.requester ?? scoop?.assistantLabel ?? scoopJid;
     const senderId = scoop?.folder ?? scoopJid;
     const content = formatSudoRequestNotification(senderName, id, request);
 

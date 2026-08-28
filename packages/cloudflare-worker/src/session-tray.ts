@@ -2,8 +2,10 @@ import {
   type CDPPayload,
   type FollowerAttachResponse,
   type FollowerAttachResult,
+  type FollowerBiscottoIdentity,
   type FollowerBootstrapRequest,
   type FollowerBootstrapResponse,
+  type FollowerTrust,
   type LeaderBridgeCdpRequest,
   type LeaderToWorkerControlMessage,
   type LeaderWebhookDelivery,
@@ -38,6 +40,13 @@ import { supersededLinkHeaders } from './links.js';
 import { deletePreviewArchivePrefix } from './persistent-preview-storage.js';
 import { previewTokenFromHost } from './preview-host.js';
 import {
+  type BiscottoDeps,
+  BiscottoRouteError,
+  listBiscotti as listBiscottiImpl,
+  mintBiscotto as mintBiscottoImpl,
+  revokeBiscotto as revokeBiscottoImpl,
+} from './session-tray-biscotto.js';
+import {
   dispatchPreviewRoute,
   expirePersistentPreviews,
   failAllPendingPreviews,
@@ -53,13 +62,17 @@ import {
   revokePreview as revokePreviewImpl,
 } from './session-tray-preview.js';
 import {
+  type BiscottoGates,
   type CreateTrayRequest,
   type DurableObjectNamespaceLike,
   type DurableObjectStateLike,
   FOLLOWER_ATTACH_RETRY_AFTER_MS,
+  type JoinCapability,
   jsonResponse,
+  normalizeBiscottoGate,
   type PreviewRecord,
   reclaimMsForTray,
+  resolveJoinCapability,
   type TrayBootstrapRecord,
   type TrayRecord,
   type TrayWebSocketLike,
@@ -339,9 +352,8 @@ export class SessionTrayDurableObject {
       return jsonResponse({ error: 'Tray not initialized', code: 'TRAY_NOT_INITIALIZED' }, 500);
     }
 
-    if (url.pathname === '/internal/supersede' && request.method === 'POST') {
-      return this.handleSupersede(request);
-    }
+    const internal = await this.handleInternalRoute(url, request);
+    if (internal) return internal;
 
     const joinMatch = url.pathname.match(/^\/join\/([^/]+)$/);
     if (joinMatch) {
@@ -667,7 +679,13 @@ export class SessionTrayDurableObject {
   private async handleJoin(request: Request, token: string, url: URL): Promise<Response> {
     const tray = this.requireTray();
     const joinRequest = request.method === 'POST' ? await this.readJoinRequest(request, url) : null;
-    if (!this.matchesToken(token, tray.joinToken)) {
+    // Single default-deny point for the whole join surface: either the tray's
+    // own join token (full follower) or a live biscotto seat (guest). Anything
+    // else — including a revoked or expired seat — is an invalid capability.
+    const capability = resolveJoinCapability(tray, token, this.now(), (a, b) =>
+      this.matchesToken(a, b)
+    );
+    if (!capability) {
       if (joinRequest) {
         return await this.buildFollowerAttachResponse(
           this.getJoinRequestControllerId(joinRequest),
@@ -741,7 +759,7 @@ export class SessionTrayDurableObject {
       if (this.isBootstrapRequest(joinRequest)) {
         return this.handleBootstrapRequest(joinRequest);
       }
-      return this.handleFollowerAttach(joinRequest);
+      return this.handleFollowerAttach(joinRequest, capability);
     }
 
     const payload = {
@@ -775,12 +793,16 @@ export class SessionTrayDurableObject {
     });
   }
 
-  private async handleFollowerAttach(attach: ControllerAttachRequest): Promise<Response> {
+  private async handleFollowerAttach(
+    attach: ControllerAttachRequest,
+    capability: JoinCapability
+  ): Promise<Response> {
     try {
       const tray = this.requireTray();
       this.pruneStaleControllers();
       const controllerId = attach.controllerId ?? crypto.randomUUID();
       const nowIso = this.isoNow();
+      const biscottoId = capability.trust === 'biscotto' ? capability.biscotto.id : undefined;
 
       if (!tray.controllers[controllerId]) {
         tray.controllers[controllerId] = {
@@ -788,12 +810,33 @@ export class SessionTrayDurableObject {
           firstSeenAt: nowIso,
           lastSeenAt: nowIso,
           runtime: attach.runtime,
+          biscottoId,
         };
       } else {
-        tray.controllers[controllerId].lastSeenAt = nowIso;
-        if (attach.runtime) {
-          tray.controllers[controllerId].runtime = attach.runtime;
+        const known = tray.controllers[controllerId];
+        // `controllerId` is client-supplied. Trust is always re-derived from
+        // the presented token above; this only catches the case where the same
+        // id is replayed under a DIFFERENT capability. Rejecting both
+        // directions keeps a guest from inheriting a full follower's id (the
+        // attack) and a full follower from being shadowed by a guest that
+        // guessed its id (the denial).
+        if (known.biscottoId !== biscottoId) {
+          return jsonResponse(
+            {
+              error: 'Controller id was already attached with a different capability',
+              code: 'JOIN_CAPABILITY_MISMATCH',
+            },
+            409
+          );
         }
+        known.lastSeenAt = nowIso;
+        if (attach.runtime) {
+          known.runtime = attach.runtime;
+        }
+      }
+
+      if (capability.trust === 'biscotto') {
+        capability.biscotto.lastSeenAt = nowIso;
       }
 
       let iceServers: TurnIceServer[] | undefined;
@@ -802,7 +845,7 @@ export class SessionTrayDurableObject {
             action: 'signal',
             code: 'LEADER_CONNECTED',
             bootstrap: this.buildBootstrapStatus(
-              await this.ensureBootstrap(controllerId, attach.runtime)
+              await this.ensureBootstrap(controllerId, attach.runtime, biscottoId)
             ),
           }
         : {
@@ -1639,7 +1682,10 @@ export class SessionTrayDurableObject {
       bootstrap.controllerId,
       runtime ?? bootstrap.runtime,
       bootstrap.retryCount + 1,
-      bootstrap.maxRetries
+      bootstrap.maxRetries,
+      // Carry the seat forward: a retried bootstrap that dropped `biscottoId`
+      // would be announced to the leader as a full-trust follower.
+      bootstrap.biscottoId
     );
     this.requireTray().bootstraps[retried.bootstrapId] = retried;
     const iceServers = await this.getIceServers();
@@ -1650,16 +1696,30 @@ export class SessionTrayDurableObject {
 
   private async ensureBootstrap(
     controllerId: string,
-    runtime: string | undefined
+    runtime: string | undefined,
+    biscottoId?: string
   ): Promise<TrayBootstrapRecord> {
     this.pruneTerminalBootstraps();
     const existing = this.findBootstrap(controllerId);
-    if (existing) {
+    // Reuse ONLY within the same capability. `controllerId` is client-supplied
+    // and a non-terminal bootstrap outlives its controller record
+    // (`pruneStaleControllers` prunes controllers, `pruneTerminalBootstraps`
+    // only reaps terminal bootstraps), so a guest presenting a pruned full
+    // follower's controllerId would otherwise adopt that follower's
+    // `biscottoId: undefined` bootstrap and be announced as `trust: 'full'` —
+    // straight past the allowlist. Mismatched capability ⇒ mint a fresh one.
+    if (existing && existing.biscottoId === biscottoId) {
       this.refreshBootstrapState(existing);
       return existing;
     }
 
-    const bootstrap = this.createBootstrap(controllerId, runtime);
+    const bootstrap = this.createBootstrap(
+      controllerId,
+      runtime,
+      0,
+      TRAY_BOOTSTRAP_MAX_RETRIES,
+      biscottoId
+    );
     this.requireTray().bootstraps[bootstrap.bootstrapId] = bootstrap;
     const iceServers = await this.getIceServers();
     this.notifyLeaderJoinRequested(bootstrap, iceServers);
@@ -1670,7 +1730,8 @@ export class SessionTrayDurableObject {
     controllerId: string,
     runtime: string | undefined,
     retryCount = 0,
-    maxRetries = TRAY_BOOTSTRAP_MAX_RETRIES
+    maxRetries = TRAY_BOOTSTRAP_MAX_RETRIES,
+    biscottoId?: string
   ): TrayBootstrapRecord {
     const createdAt = this.isoNow();
     return {
@@ -1687,6 +1748,7 @@ export class SessionTrayDurableObject {
       failure: null,
       events: [],
       nextSequence: 1,
+      biscottoId,
     };
   }
 
@@ -1702,11 +1764,46 @@ export class SessionTrayDurableObject {
       bootstrapId: bootstrap.bootstrapId,
       attempt: bootstrap.attempt,
       expiresAt: bootstrap.expiresAt,
+      // The leader's controller socket is the ONLY authenticated channel that
+      // can tell it what a peer is; the peer's own `hello` cannot be believed.
+      ...this.biscottoAnnouncement(bootstrap),
     };
     if (iceServers) {
       (message as { iceServers?: TurnIceServer[] }).iceServers = iceServers;
     }
     this.sendToLeader(message);
+  }
+
+  /**
+   * Trust fields for a `follower.join_requested`. A bootstrap with no
+   * `biscottoId` is a full follower and gets `trust: 'full'` stated
+   * explicitly — silence would be ambiguous with an older hub.
+   *
+   * A seat that was revoked between attach and announcement resolves to no
+   * record; that announces as a biscotto with its stored id and empty label
+   * rather than falling back to `full`, because failing toward MORE trust here
+   * would turn a revocation race into a privilege escalation.
+   */
+  private biscottoAnnouncement(bootstrap: TrayBootstrapRecord): {
+    trust: FollowerTrust;
+    biscotto?: FollowerBiscottoIdentity;
+  } {
+    if (!bootstrap.biscottoId) return { trust: 'full' };
+    const record = (this.requireTray().biscotti ?? []).find(
+      (entry) => entry.id === bootstrap.biscottoId
+    );
+    return {
+      trust: 'biscotto',
+      biscotto: {
+        id: bootstrap.biscottoId,
+        label: record?.label ?? '',
+        expiresAt: record?.expiresAt,
+        gates: {
+          message: normalizeBiscottoGate(record?.gates.message),
+          tool: normalizeBiscottoGate(record?.gates.tool),
+        },
+      },
+    };
   }
 
   private sendToLeader(message: WorkerToLeaderControlMessage): boolean {
@@ -1923,6 +2020,7 @@ export class SessionTrayDurableObject {
       trayId: tray.trayId,
       controllerId,
       role: 'follower',
+      trust: this.trustForController(controllerId),
       leader: await this.leaderSummary(),
       participantCount: Object.keys(tray.controllers).length,
       result,
@@ -2086,6 +2184,15 @@ export class SessionTrayDurableObject {
     webSocketUrl.searchParams.set('controllerId', controllerId);
     webSocketUrl.searchParams.set('leaderKey', leaderKey);
     return webSocketUrl.toString();
+  }
+
+  /**
+   * Advisory trust for a follower-facing response body, read back off the
+   * controller record stamped at attach time. Purely so a guest page can
+   * render itself honestly; the leader never reads this back.
+   */
+  private trustForController(controllerId: string): FollowerTrust {
+    return this.requireTray().controllers[controllerId]?.biscottoId ? 'biscotto' : 'full';
   }
 
   private matchesToken(received: string, expected: string): boolean {
@@ -2331,6 +2438,114 @@ export class SessionTrayDurableObject {
       return response;
     }
     return dispatchPreviewRoute(url, request, this.previewDeps());
+  }
+
+  /**
+   * Leader-only `/internal/*` control routes reached through the DO stub, i.e.
+   * never from the public edge. Grouped into one dispatcher so adding a route
+   * costs a line here rather than another branch in `fetch`, which sits at the
+   * cognitive-complexity ceiling.
+   */
+  private async handleInternalRoute(url: URL, request: Request): Promise<Response | null> {
+    if (url.pathname === '/internal/supersede' && request.method === 'POST') {
+      return this.handleSupersede(request);
+    }
+    if (url.pathname.startsWith('/internal/biscotto/')) {
+      return this.handleInternalBiscottoRoute(url, request);
+    }
+    return null;
+  }
+
+  private biscottoDeps(): BiscottoDeps {
+    return {
+      loadTray: () => this.loadTray(),
+      getTray: () => this.tray,
+      persistTray: () => this.persistTray(),
+      isoNow: () => this.isoNow(),
+      now: () => this.now(),
+      matchesToken: (r, e) => this.matchesToken(r, e),
+    };
+  }
+
+  /**
+   * `/internal/biscotto/{mint,stop,list}` — the DO half of `biscotto-routes.ts`.
+   *
+   * Every branch reads the controller token out of the body and hands it to the
+   * lifecycle helper, which is what actually authenticates it. A thrown
+   * {@link BiscottoRouteError} carries the status; anything else is a 500 with
+   * no detail, so an internal failure never describes the tray to a caller that
+   * did not authenticate.
+   */
+  private async handleInternalBiscottoRoute(url: URL, request: Request): Promise<Response> {
+    if (request.method !== 'POST') {
+      return jsonResponse({ error: 'method not allowed' }, 405);
+    }
+    let body: {
+      controllerToken?: string;
+      label?: string;
+      id?: string;
+      ttlMs?: number;
+      gates?: Partial<BiscottoGates>;
+      workerBaseUrl?: string;
+    };
+    try {
+      body = (await request.json()) as typeof body;
+    } catch {
+      return jsonResponse({ error: 'invalid body' }, 400);
+    }
+    const controllerToken = typeof body.controllerToken === 'string' ? body.controllerToken : '';
+    try {
+      switch (url.pathname) {
+        case '/internal/biscotto/mint':
+          return jsonResponse(
+            await mintBiscottoImpl(
+              {
+                controllerToken,
+                label: body.label ?? '',
+                ttlMs: body.ttlMs,
+                gates: body.gates,
+                workerBaseUrl: body.workerBaseUrl ?? '',
+              },
+              this.biscottoDeps()
+            )
+          );
+        case '/internal/biscotto/stop': {
+          const revoked = await revokeBiscottoImpl(
+            { controllerToken, id: body.id ?? '' },
+            this.biscottoDeps()
+          );
+          // Tombstoning the token only stops future joins. A live guest holds a
+          // direct data channel to the leader that this DO cannot reach, so the
+          // eviction has to be delegated to the one process that can — and if
+          // that message did not land, the seat is revoked for FUTURE joins
+          // while whoever is already connected keeps their channel. Reporting
+          // plain success there would tell an owner the guest is out when they
+          // are not, so the outcome says which happened.
+          const evicted = this.sendToLeader({
+            type: 'biscotto.revoked',
+            trayId: this.requireTray().trayId,
+            biscottoId: revoked.id,
+          });
+          if (!evicted) {
+            console.warn('[tray] biscotto revoked but the leader could not be told', {
+              biscottoId: revoked.id,
+            });
+          }
+          return jsonResponse({ ...revoked, evicted });
+        }
+        case '/internal/biscotto/list':
+          return jsonResponse({
+            biscotti: await listBiscottiImpl({ controllerToken }, this.biscottoDeps()),
+          });
+        default:
+          return jsonResponse({ error: 'not found' }, 404);
+      }
+    } catch (error) {
+      if (error instanceof BiscottoRouteError) {
+        return jsonResponse({ error: error.message }, error.status);
+      }
+      return jsonResponse({ error: 'biscotto request failed' }, 500);
+    }
   }
 
   async mintPreview(req: {

@@ -115,7 +115,17 @@ export class BroadcastManager {
 
     const { options } = this.context;
     const activeJid = options.getScoopJid();
-    let targetJid = scoopJid ?? follower.selectedScoopJid ?? activeJid;
+    // A guest is shared ONE thread, not the cone. `scoops.select` is denied for
+    // exactly this reason — but `request_snapshot` carries its own `scoopJid`
+    // and the validation below only checks that the unit EXISTS, so honouring
+    // it would let a guest read every scoop transcript through the front door
+    // the allowlist was supposed to have closed. Both the requested and the
+    // remembered JID are ignored; pinning to `activeJid` also makes the
+    // `getMessagesForScoop` branch below unreachable for a guest.
+    let targetJid =
+      follower.trust === 'biscotto'
+        ? activeJid
+        : (scoopJid ?? follower.selectedScoopJid ?? activeJid);
     try {
       const scoops = options.getScoops?.();
       if (scoops && !scoops.some((scoop) => scoop.jid === targetJid)) targetJid = activeJid;
@@ -248,6 +258,10 @@ export class BroadcastManager {
   sendScoopsListToFollower(bootstrapId: string): void {
     const follower = this.context.followers.followers.get(bootstrapId);
     if (!follower) return;
+    // The inventory is the map a guest would enumerate from. It is also of no
+    // use to a seat pinned to one thread, and its labels leak what else the
+    // owner is working on.
+    if (follower.trust === 'biscotto') return;
     const getScoops = this.context.options.getScoops;
     if (!getScoops) return;
     try {

@@ -22,7 +22,11 @@ const defaultExec: ExecFn = promisify(nodeExecFile);
 
 /** Human-readable one-liner describing the gated action. */
 export function describeRequest(req: SudoApproveRequest): string {
-  return `${req.kind}: ${req.detail}`;
+  // Requester first: `detail` may be text the requester authored about
+  // themselves, so the system's own account of who is asking has to precede it.
+  return req.requester
+    ? `${req.kind} from ${req.requester}: ${req.detail}`
+    : `${req.kind}: ${req.detail}`;
 }
 
 function fallbackPattern(req: SudoApproveRequest): string {

@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  APPROVALS_FILE,
   applyDefaultDisposition,
   builtinScoopGrants,
   commandGlobToRegExp,
@@ -198,6 +199,31 @@ describe('self-protection invariant', () => {
   it('allows reads of sudoers files (visudo-style)', () => {
     expect(matchPath(allowAll, 'read', SUDOERS_FILE)).toBe('no-match');
     expect(matchPath(emptyPolicy(), 'read', `${SUDOERS_D_DIR}/granted`)).toBe('no-match');
+  });
+});
+
+describe('approvals-file self-protection invariant', () => {
+  // `/etc/APPROVALS.md` decides what a biscotto GUEST may do. A cone acting on
+  // a guest's message must not be able to rewrite the rules gating that same
+  // guest without the owner seeing a prompt — so a broad `/etc` grant, or a
+  // NOPASSWD on the exact path, must not get through.
+  const grant: SudoersPolicy = parseSudoers(
+    `NOPASSWD Write /etc/**\nNOPASSWD Write ${APPROVALS_FILE}`
+  );
+
+  it('always requires approval for writes, even with NOPASSWD', () => {
+    expect(matchPath(grant, 'write', APPROVALS_FILE)).toBe('require-approval');
+  });
+
+  it('protects it under an empty policy too', () => {
+    expect(matchPath(emptyPolicy(), 'write', APPROVALS_FILE)).toBe('require-approval');
+  });
+
+  it('does not gate READS — the runtime has to load it to run a decision', () => {
+    // Self-protection is write-only, same as for sudoers: neither policy grants
+    // a Read rule, so a read simply does not match rather than being refused.
+    expect(matchPath(grant, 'read', APPROVALS_FILE)).toBe('no-match');
+    expect(matchPath(emptyPolicy(), 'read', APPROVALS_FILE)).toBe('no-match');
   });
 });
 

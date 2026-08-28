@@ -586,10 +586,15 @@ public enum LeaderToFollowerMessage: Codable {
     case themeApply(themeJson: String?)
     /// Delegated sudo prompt (v7, #2062): the leader wants this phone's human
     /// to approve a gated action. `expiresAt` is epoch milliseconds.
+    /// `requester` is the leader's own account of who is asking, kept separate
+    /// from `detail` because `detail` can be prose the requester wrote about
+    /// themselves (a biscotto guest message). Dropping it left an iOS reviewer
+    /// looking at nothing but the guest's own claim of identity.
     case sudoApproveRequest(
         requestId: String,
         kind: String,
         detail: String,
+        requester: String?,
         suggestedPattern: String?,
         scoopName: String?,
         expiresAt: Double)
@@ -615,7 +620,7 @@ public enum LeaderToFollowerMessage: Codable {
         case request, response
         case capabilities, motd
         case command, cwd, env, stream, exitCode, signal, stdin
-        case kind, suggestedPattern, scoopName, expiresAt
+        case kind, requester, suggestedPattern, scoopName, expiresAt
     }
 
     public init(from decoder: Decoder) throws {
@@ -738,6 +743,7 @@ public enum LeaderToFollowerMessage: Codable {
                 requestId: try container.decode(String.self, forKey: .requestId),
                 kind: try container.decode(String.self, forKey: .kind),
                 detail: try container.decode(String.self, forKey: .detail),
+                requester: try container.decodeIfPresent(String.self, forKey: .requester),
                 suggestedPattern: try container.decodeIfPresent(
                     String.self, forKey: .suggestedPattern),
                 scoopName: try container.decodeIfPresent(String.self, forKey: .scoopName),
@@ -898,11 +904,13 @@ public enum LeaderToFollowerMessage: Codable {
             try container.encode("theme.apply", forKey: .type)
             try container.encodeIfPresent(themeJson, forKey: .themeJson)
         case .sudoApproveRequest(
-            let requestId, let kind, let detail, let suggestedPattern, let scoopName, let expiresAt):
+            let requestId, let kind, let detail, let requester, let suggestedPattern,
+            let scoopName, let expiresAt):
             try container.encode("sudo.approve.request", forKey: .type)
             try container.encode(requestId, forKey: .requestId)
             try container.encode(kind, forKey: .kind)
             try container.encode(detail, forKey: .detail)
+            try container.encodeIfPresent(requester, forKey: .requester)
             try container.encodeIfPresent(suggestedPattern, forKey: .suggestedPattern)
             try container.encodeIfPresent(scoopName, forKey: .scoopName)
             try container.encode(expiresAt, forKey: .expiresAt)

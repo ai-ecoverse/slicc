@@ -3,6 +3,7 @@ import type {
   FollowerBootstrapRequest,
   FollowerBootstrapResponse,
   FollowerJoinRequest,
+  FollowerTrust,
   TrayBootstrapEvent,
   TrayBootstrapStatus,
   TrayIceCandidate,
@@ -39,6 +40,14 @@ export interface FollowerAttachPlan {
   iceServers?: TurnIceServer[];
   /** Set when `code === 'TRAY_SUPERSEDED'` — the join URL to follow instead. */
   supersededByJoinUrl?: string;
+  /**
+   * What the hub resolved this join capability to.
+   *
+   * UX only — enforcement is entirely leader-side — but without it a browser
+   * joining on a guest seat cannot tell that it IS one, so it renders the full
+   * owner UI and offers affordances the leader will silently refuse.
+   */
+  trust?: FollowerTrust;
 }
 
 export interface FollowerBootstrapOptions {
@@ -57,6 +66,8 @@ export interface FollowerBootstrapPlan {
   leader: TrayLeaderSummary | null;
   bootstrap: TrayBootstrapStatus;
   events: TrayBootstrapEvent[];
+  /** See {@link FollowerAttachPlan.trust} — same field, same reason. */
+  trust?: FollowerTrust;
 }
 
 export async function attachTrayFollower(
@@ -121,6 +132,7 @@ export function normalizeFollowerAttachResponse(
     action: response.result.action,
     code: response.result.code,
     iceServers: response.iceServers,
+    trust: response.trust,
   } as const;
 
   // A named replacement is normalized to the supersede plan whatever the body
@@ -217,6 +229,7 @@ export function normalizeFollowerBootstrapResponse(
     leader: response.leader,
     bootstrap: response.bootstrap,
     events: response.events,
+    trust: response.trust,
   };
 }
 

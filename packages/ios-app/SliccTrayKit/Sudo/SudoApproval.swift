@@ -14,7 +14,12 @@ public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
     /// `command` / `read` / `write` / `secret` / `export` — mirrors `TraySudoKind`.
     public let kind: String
     /// The concrete command line, VFS path, secret name, or export subject.
+    /// May be attacker-authored prose for the `guest-message` / `guest-tool`
+    /// kinds, which is why `requester` is carried separately.
     public let detail: String
+    /// The LEADER's account of who is asking — never the requester's own.
+    /// Rendered as card chrome above `detail`.
+    public let requester: String?
     /// The editable default for an "Always" grant.
     public let suggestedPattern: String?
     /// Requesting scoop's label, when the action came from a scoop.
@@ -30,6 +35,7 @@ public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
         requestId: String,
         kind: String,
         detail: String,
+        requester: String? = nil,
         suggestedPattern: String?,
         scoopName: String?,
         expiresAt: Date,
@@ -38,6 +44,7 @@ public struct SudoApprovalRequest: Identifiable, Equatable, Sendable {
         self.requestId = requestId
         self.kind = kind
         self.detail = detail
+        self.requester = requester
         self.suggestedPattern = suggestedPattern
         self.scoopName = scoopName
         self.expiresAt = expiresAt
@@ -159,6 +166,7 @@ public final class SudoApprovalController {
         requestId: String,
         kind: String,
         detail: String,
+        requester: String? = nil,
         suggestedPattern: String?,
         scoopName: String?,
         expiresAt: Date
@@ -170,6 +178,7 @@ public final class SudoApprovalController {
             requestId: requestId,
             kind: kind,
             detail: detail,
+            requester: requester,
             suggestedPattern: suggestedPattern,
             scoopName: scoopName,
             expiresAt: expiresAt,

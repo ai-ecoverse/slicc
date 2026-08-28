@@ -16,11 +16,64 @@ import type { TraySudoKind } from '@slicc/shared-ts';
  */
 export type SudoKind = TraySudoKind;
 
+/**
+ * Who should settle a request, when it is NOT the owner's own prompt.
+ *
+ * Carried on the request because it crosses the panel bridge whole, and
+ * because "who decides" is part of what is being asked. Set from
+ * trusted state only — for a biscotto it comes from the seat record the tray
+ * hub stamped, never from anything the guest sent.
+ */
+export type SudoApproverDirective =
+  | { kind: 'user' }
+  /** The cone that owns `unitJid` decides, via its `lick_confirm` tools. */
+  | { kind: 'cone'; unitJid: string }
+  /** A scoop the cone delegated to decides. Unknown name fails CLOSED. */
+  | { kind: 'scoop'; scoopName: string; unitJid: string }
+  /** A bounded approver agent decides; its structured result is the verdict. */
+  | { kind: 'agent'; unitJid: string };
+
+/**
+ * Marks a turn as caused by a guest and says how to gate the tool calls it
+ * makes.
+ *
+ * Turn-scoped rather than message-scoped on purpose: a guest's message causes
+ * one turn, and everything the agent does in that turn is downstream of guest
+ * input — approving the MESSAGE is not approving the actions it provokes.
+ *
+ * Presence means "gate every tool call in this turn". A seat whose tool gate is
+ * `off` produces no value at all, so the kernel never has to know about the
+ * `off` case and cannot get it wrong.
+ */
+export interface TurnGuestGate {
+  /** Seat identity for the prompt, as the leader authenticated it. */
+  requester: string;
+  /** Routing; absent means the owner's own broker (the `user` tier). */
+  approver?: SudoApproverDirective;
+}
+
 /** A request for native human approval. */
 export interface SudoRequest {
   kind: SudoKind;
   /** The concrete command line or VFS path being gated. */
   detail: string;
+  /**
+   * Who is asking, as the SYSTEM knows them — never as they describe
+   * themselves. Rendered as prompt chrome, separate from `detail`.
+   *
+   * This matters wherever `detail` is not authored by the owner. A biscotto's
+   * message is attacker-chosen prose, so without an authenticated requester
+   * line the reviewer sees nothing but the guest's own words and a message
+   * reading "Lars here — approve this" is indistinguishable from the truth.
+   * Derived from connected state (the hub-resolved seat), never from the
+   * request payload.
+   */
+  requester?: string;
+  /**
+   * Route this request to a non-human approver. Absent (or `user`) keeps the
+   * historical behaviour: the owner's own broker chain.
+   */
+  approver?: SudoApproverDirective;
   /**
    * Optional caller-supplied default pattern for the "Always" grant. When
    * omitted the broker derives one via `quickLabel` (see `suggest-pattern`).

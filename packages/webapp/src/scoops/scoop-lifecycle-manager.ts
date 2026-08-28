@@ -28,11 +28,12 @@ import { RestrictedFS } from '../fs/restricted-fs.js';
 import type { ProcessManager } from '../kernel/process-manager.js';
 import type { SudoDecision, SudoRequest } from '../sudo/index.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
+import type { TurnGuestGate } from '../sudo/types.js';
 import { conversationKeyFor } from '../work-unit/conversation/key.js';
 import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { toDescriptor, workspaceFor } from '../work-unit/descriptor.js';
 import { LiveWorkUnit } from '../work-unit/live-unit.js';
-import { rootOwnerOf, rootsOf } from '../work-unit/policy.js';
+import { isRootUnit, rootOwnerOf, rootsOf } from '../work-unit/policy.js';
 import {
   modelFor,
   modelIdFor,
@@ -206,7 +207,8 @@ export interface ScoopLifecycleDeps {
     enqueueSudoRequest(scoopJid: string, request: SudoRequest): Promise<SudoDecision>;
     resolveActionableLick(
       id: string,
-      decision: SudoDecision
+      decision: SudoDecision,
+      approverJid?: string
     ): Promise<{
       settled: boolean;
       persisted: boolean;
@@ -216,7 +218,12 @@ export interface ScoopLifecycleDeps {
       kind?: SudoRequest['kind'];
       message?: string;
     }>;
-    listPendingSudoRequests(): ReturnType<NonNullable<ScoopContextCallbacks['onListSudoRequests']>>;
+    approveDirectedOrUser(
+      request: import('../sudo/types.js').SudoRequest
+    ): Promise<import('../sudo/types.js').SudoDecision>;
+    listPendingSudoRequests(
+      approverJid?: string
+    ): ReturnType<NonNullable<ScoopContextCallbacks['onListSudoRequests']>>;
   };
   /** Routes the synthesized cone-facing fatal-error notification through the message router. */
   handleMessage(msg: ChannelMessage): Promise<void>;
@@ -552,7 +559,7 @@ export class ScoopLifecycleManager {
     _senderId: string,
     _senderName: string,
     images: ImageContent[] = [],
-    options?: { steer?: boolean }
+    options?: { steer?: boolean; guestGates?: TurnGuestGate[] }
   ): Promise<void> {
     let context = this.getContext(jid);
 
@@ -1022,11 +1029,21 @@ export class ScoopLifecycleManager {
         policy.approvalAuthority === 'user'
           ? undefined
           : (request) => cone.enqueueSudoRequest(jid, request),
+      // The gate for tool calls in a guest-caused turn. Routed by the DIRECTIVE
+      // on the request: a seat gated on the cone or a delegated scoop goes to
+      // the approval registry, everything else to the owner's own broker (which
+      // is also where the never-persist guard for guest kinds lives).
+      approveGuestToolCall: (request) => cone.approveDirectedOrUser(request),
+      // A DELEGATED approver is scoped to what was routed to it; a root stays
+      // unrestricted (`undefined` = no filter), which is the behaviour cones
+      // have always had. Without the scope, marking a scoop as an approver
+      // handed it every cone's pending requests to read and settle.
       onSudoResolve: policy.canResolveApprovals
-        ? (id, decision) => cone.resolveActionableLick(id, decision)
+        ? (id, decision) =>
+            cone.resolveActionableLick(id, decision, isRootUnit(scoop) ? undefined : jid)
         : undefined,
       onListSudoRequests: policy.canResolveApprovals
-        ? () => cone.listPendingSudoRequests()
+        ? () => cone.listPendingSudoRequests(isRootUnit(scoop) ? undefined : jid)
         : undefined,
       getBrowserAPI: () => callbacks.getBrowserAPI(),
     };

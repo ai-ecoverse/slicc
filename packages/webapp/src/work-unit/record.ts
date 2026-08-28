@@ -51,6 +51,10 @@ export function normalizeScoopRecord(scoop: RegisteredScoop): RegisteredScoop {
     scoop.trigger = undefined;
     scoop.requiresTrigger = false;
     scoop.assistantLabel = scoop.assistantLabel || 'sliccy';
+    // A root already settles approvals; carrying the delegated-approver flag
+    // there is meaningless and would be a second, divergent source of truth for
+    // the same capability.
+    scoop.approvesGuestRequests = undefined;
   }
   return scoop;
 }

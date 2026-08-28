@@ -47,6 +47,7 @@ function createCollaborators(): FollowerDispatchCollaborators {
     sudoDelegation: { handleResponse: vi.fn(), handleFollowerReady: vi.fn() },
     cherryRouter: { routeCherryHostEvent: vi.fn() },
     requesterTracker: { noteFollowerUserMessage: vi.fn() },
+    biscottoReview: { submit: vi.fn() },
     tabTeleportRouter: { handleTeleportRequest: vi.fn(async () => {}) },
     oauthPopupDelegation: { handlePopupResponse: vi.fn() },
   };

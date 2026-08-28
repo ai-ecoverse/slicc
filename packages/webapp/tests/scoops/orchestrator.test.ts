@@ -4014,3 +4014,55 @@ describe('Orchestrator boot resilience to a corrupt scoop file', () => {
     });
   });
 });
+
+describe('Orchestrator directed approvals (biscotto tiers)', () => {
+  let orch: Orchestrator;
+
+  async function bootWithUnits(): Promise<void> {
+    const container =
+      typeof document !== 'undefined'
+        ? document.createElement('div')
+        : ({ appendChild: () => {} } as unknown as HTMLElement);
+    orch = new Orchestrator(container, {
+      onResponse: vi.fn(),
+      onResponseDone: vi.fn(),
+      onSendMessage: vi.fn(),
+      onStatusChange: vi.fn(),
+      onError: vi.fn(),
+      // biome-ignore lint/suspicious/noExplicitAny: test double for the browser surface.
+      getBrowserAPI: vi.fn(() => ({}) as any),
+    });
+    await orch.init();
+  }
+
+  it('denies a directive naming a unit that is not registered', async () => {
+    await bootWithUnits();
+    const decision = await orch.enqueueDirectedApproval(
+      { kind: 'cone', unitJid: 'no-such-unit' },
+      { kind: 'guest-message', detail: 'hello' }
+    );
+    expect(decision.decision).toBe('deny');
+  });
+
+  it('denies a scoop tier whose named approver does not exist', async () => {
+    await bootWithUnits();
+    const root = orch.getScoops().find((scoop) => scoop.parentJid === null);
+    const unitJid = root?.jid;
+    if (!unitJid) return; // no root in this fixture; nothing to assert
+    const decision = await orch.enqueueDirectedApproval(
+      { kind: 'scoop', scoopName: 'nobody', unitJid },
+      { kind: 'guest-message', detail: 'hello' }
+    );
+    // Never falls back to the human or to some other cone's scoop of that name.
+    expect(decision.decision).toBe('deny');
+  });
+
+  it('denies the user tier — it must never be routed here', async () => {
+    await bootWithUnits();
+    const decision = await orch.enqueueDirectedApproval({ kind: 'user' } as never, {
+      kind: 'guest-message',
+      detail: 'hello',
+    });
+    expect(decision.decision).toBe('deny');
+  });
+});

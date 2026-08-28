@@ -10,12 +10,13 @@
  * to be read alongside the retry loop.
  */
 
-import { adaptTools, createLogger } from '../../core/index.js';
+import { adaptTools, createLogger, type ToolAdapterGateConfig } from '../../core/index.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
 import { resolveModelSelectionForScoop } from '../../providers/account-store.js';
 import type { AlmostBashShellHeadless } from '../../shell/almost-bash-shell-headless.js';
+import type { TurnGuestGate } from '../../sudo/types.js';
 import { createBashTool, createFileTools } from '../../tools/index.js';
 import type { BashJobProcess } from '../../tools/types.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
@@ -56,6 +57,40 @@ export interface ScoopToolsDeps {
   onStructuredOutput: (value: unknown) => void;
   /** Register a background `bash` invocation as a kernel process. */
   spawnBashJob: (command: string) => BashJobProcess | null;
+  /**
+   * The gate for the turn in flight, read LIVE on every tool call. Tools are
+   * built once per scoop; whether the current turn was caused by a guest is
+   * not, so this must be a lookup and never a captured value.
+   */
+  getTurnGuestGates: () => readonly TurnGuestGate[];
+}
+
+/**
+ * The per-tool-call gate for a guest-caused turn.
+ *
+ * Only the CHECK lives here — `currentGate()` runs on every tool call, so it
+ * must stay synchronous and cheap. Everything that runs once a gate exists is
+ * in `guest-tool-gate.ts` and imported on first use: this file is boot-critical
+ * and the overwhelming majority of turns have no guest gate.
+ */
+function buildGuestToolGate(deps: ScoopToolsDeps): ToolAdapterGateConfig {
+  return {
+    currentGate() {
+      const gates = deps.getTurnGuestGates();
+      if (gates.length === 0) return undefined;
+      return {
+        async approve(toolName: string, params: unknown): Promise<boolean> {
+          const { approveToolCallForGuests } = await import('./guest-tool-gate.js');
+          return approveToolCallForGuests(
+            gates,
+            toolName,
+            params,
+            deps.callbacks.approveGuestToolCall
+          );
+        },
+      };
+    },
+  };
 }
 
 /** Build tools for the agent. */
@@ -128,6 +163,7 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
   }
 
   const secretsConfig = { scrubToolResult: getToolResultScrubber() };
+  const gateConfig = buildGuestToolGate(deps);
   return deps.processManager
     ? adaptTools(
         legacyTools,
@@ -136,7 +172,8 @@ export async function buildScoopTools(deps: ScoopToolsDeps) {
           owner: deps.processOwner,
           getParentPid: deps.getTurnPid,
         },
-        secretsConfig
+        secretsConfig,
+        gateConfig
       )
-    : adaptTools(legacyTools, undefined, secretsConfig);
+    : adaptTools(legacyTools, undefined, secretsConfig, gateConfig);
 }

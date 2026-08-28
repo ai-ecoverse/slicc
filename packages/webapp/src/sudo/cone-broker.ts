@@ -34,6 +34,15 @@ export interface PendingSudoRequest {
   id: string;
   scoopJid: string;
   request: SudoRequest;
+  /**
+   * The unit the request was routed to, when it was DIRECTED at one.
+   *
+   * Recorded on the entry rather than in a parallel map so it cannot outlive
+   * the request it describes: every settle path — decision, timeout,
+   * `failScoop`, `failAll` — already retires the entry, and a side map had to
+   * be swept from each of them separately.
+   */
+  approverJid?: string;
 }
 
 /**
@@ -101,6 +110,8 @@ interface RegistryEntry {
   request: SudoRequest;
   resolve: (decision: SudoDecision) => void;
   timerHandle: unknown;
+  /** Set when the request was DIRECTED at a specific approver unit. */
+  approverJid?: string;
 }
 
 function defaultId(): string {
@@ -154,7 +165,11 @@ export class ConeRequestRegistry {
    * to the cone AFTER this returns and to fail-closed via
    * `resolve(id, { decision: 'deny' })` on any delivery error.
    */
-  register(scoopJid: string, request: SudoRequest): { id: string; pending: Promise<SudoDecision> } {
+  register(
+    scoopJid: string,
+    request: SudoRequest,
+    approverJid?: string
+  ): { id: string; pending: Promise<SudoDecision> } {
     const id = this.newId();
     const pending = new Promise<SudoDecision>((resolve) => {
       let timerHandle: unknown = null;
@@ -170,7 +185,7 @@ export class ConeRequestRegistry {
           this.notifyAutoSettle(id, 'expired', entry.scoopJid);
         }, this.timeoutMs);
       }
-      this.pending.set(id, { scoopJid, request, resolve, timerHandle });
+      this.pending.set(id, { scoopJid, request, resolve, timerHandle, approverJid });
     });
     return { id, pending };
   }
@@ -224,14 +239,27 @@ export class ConeRequestRegistry {
   get(id: string): PendingSudoRequest | null {
     const entry = this.pending.get(id);
     if (!entry) return null;
-    return { id, scoopJid: entry.scoopJid, request: entry.request };
+    return {
+      id,
+      scoopJid: entry.scoopJid,
+      request: entry.request,
+      // Field-by-field rebuilds are exactly how a value gets silently lost at a
+      // boundary; `approverJid` decides who may settle this request, so leaving
+      // it out here made the scope check pass for everyone.
+      ...(entry.approverJid ? { approverJid: entry.approverJid } : {}),
+    };
   }
 
   /** Snapshot all pending requests (insertion order). Listing surface for the cone. */
   list(): PendingSudoRequest[] {
     const out: PendingSudoRequest[] = [];
     for (const [id, entry] of this.pending) {
-      out.push({ id, scoopJid: entry.scoopJid, request: entry.request });
+      out.push({
+        id,
+        scoopJid: entry.scoopJid,
+        request: entry.request,
+        ...(entry.approverJid ? { approverJid: entry.approverJid } : {}),
+      });
     }
     return out;
   }

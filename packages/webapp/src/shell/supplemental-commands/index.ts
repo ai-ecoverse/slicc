@@ -6,6 +6,7 @@ import type { ScriptCatalog } from '../script-catalog.js';
 import { createAfplayCommand, createChimeCommand } from './afplay-command.js';
 import { createAgentCommand } from './agent-command.js';
 import { createBiomeCommand } from './biome-command.js';
+import { createBiscottoCommand } from './biscotto-command.js';
 import type { CherryRuntimeRegistry } from './cherry-emit-command.js';
 import { createCherryEmitCommand } from './cherry-emit-command.js';
 import {
@@ -241,6 +242,10 @@ export function createSupplementalCommands(options: SupplementalCommandsConfig =
     createSprinkleCommand(),
     createPdftkCommand('pdftk'),
     createPdftkCommand('pdf'),
+    // Both spellings: `biscotti` with no args lists, which is how anyone who
+    // has one would say it.
+    createBiscottoCommand('biscotto'),
+    createBiscottoCommand('biscotti'),
     createPdftoppmCommand('pdftoppm'),
     // poppler's cairo-backed sibling takes the same flags we support.
     createPdftoppmCommand('pdftocairo'),

@@ -66,7 +66,14 @@ export {
 export { createPanelRpcSudoBroker } from './panel-rpc-broker.js';
 export { suggestPattern } from './suggest-pattern.js';
 export { createTrayFirstSudoBroker } from './tray-first-broker.js';
-export type { SudoBroker, SudoDecision, SudoKind, SudoRequest } from './types.js';
+export type {
+  SudoApproverDirective,
+  SudoBroker,
+  SudoDecision,
+  SudoKind,
+  SudoRequest,
+  TurnGuestGate,
+} from './types.js';
 export { SUDO_APPROVE_PATH, SUDO_REQUEST_TYPE } from './types.js';
 
 const log = createLogger('sudo');

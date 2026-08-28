@@ -102,6 +102,14 @@ export interface ScoopContextCallbacks {
    * decision (allow / always / deny), or `deny` on transport/timeout. The
    * cone keeps the user broker — only non-cone scoops wire this.
    */
+  /**
+   * Approve one tool call in a guest-caused turn. Routed by the request's
+   * approver directive; absent means the gate cannot ask anyone, which the
+   * caller must treat as a refusal.
+   */
+  approveGuestToolCall?: (
+    request: import('../../sudo/types.js').SudoRequest
+  ) => Promise<import('../../sudo/types.js').SudoDecision>;
   onSudoRequest?: (
     request: import('../../sudo/types.js').SudoRequest
   ) => Promise<import('../../sudo/types.js').SudoDecision>;

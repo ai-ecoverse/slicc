@@ -195,12 +195,69 @@ async function parseToolResult(
 }
 
 /**
+ * Optional per-tool-call approval gate.
+ *
+ * Wired at `adaptTool` because this is the ONE place every tool call passes
+ * through — the abort signal is already threaded here, and gating anywhere else
+ * would mean touching each tool and missing the next one added.
+ *
+ * `shouldGate` is consulted LIVE on every call rather than captured when the
+ * tool set is built: tools are built once per scoop, but the thing being gated
+ * is a property of the current TURN (was it caused by a guest?), which changes
+ * underneath a long-lived tool set.
+ *
+ * A denial is returned as an error RESULT, not thrown: the agent should be able
+ * to read "that was refused" and choose something else, and a throw would
+ * abort the whole turn rather than the one action.
+ */
+export interface ToolAdapterGateConfig {
+  /** The gate for the turn in flight, or undefined when nothing is gated. */
+  currentGate(): ToolCallGate | undefined;
+}
+
+export interface ToolCallGate {
+  /** Ask the human / cone / scoop. Resolves `false` to refuse the call. */
+  approve(toolName: string, params: unknown): Promise<boolean>;
+}
+
+/**
+ * Run the gate for one call. Fails CLOSED: a throwing gate refuses, because a
+ * gate that errored has not approved anything.
+ */
+async function passesGate(
+  tool: ToolDefinition,
+  params: unknown,
+  config: ToolAdapterGateConfig | undefined,
+  signal: AbortSignal | undefined
+): Promise<boolean> {
+  const gate = config?.currentGate();
+  if (!gate) return true;
+  // Checked twice against the abort signal: once so we never raise a prompt for
+  // work the caller already abandoned, and once AFTER the await — the window a
+  // human spends deciding. `tool.execute` receives the signal, but several tools
+  // (the file tools among them) never read it, so a late `allow` would run them
+  // to completion after the turn was stopped.
+  if (signal?.aborted) return false;
+  try {
+    const allowed = await gate.approve(tool.name, params);
+    return allowed && signal?.aborted !== true;
+  } catch (err) {
+    log.warn('Tool-call gate threw — refusing the call', {
+      tool: tool.name,
+      error: err instanceof Error ? err.message : String(err),
+    });
+    return false;
+  }
+}
+
+/**
  * Wrap a legacy ToolDefinition as a pi-compatible AgentTool.
  */
 export function adaptTool(
   tool: ToolDefinition,
   pmConfig?: ToolAdapterProcessConfig,
-  secretsConfig?: ToolAdapterSecretsConfig
+  secretsConfig?: ToolAdapterSecretsConfig,
+  gateConfig?: ToolAdapterGateConfig
 ): AgentTool<any> {
   return {
     name: tool.name,
@@ -217,6 +274,16 @@ export function adaptTool(
       let ctx: ToolExecutionContext | undefined;
       if (onUpdate) {
         ctx = pushToolExecutionContext({ onUpdate, toolName: tool.name, toolCallId });
+      }
+
+      // Gate BEFORE the process is spawned: a refused call should leave no
+      // trace in `ps` and must not be able to run for even an instant.
+      if (!(await passesGate(tool, params, gateConfig, signal))) {
+        if (ctx) popToolExecutionContext(ctx);
+        return {
+          content: [{ type: 'text', text: `${tool.name}: not approved (guest-caused turn).` }],
+          details: { isError: true },
+        };
       }
 
       const process = startToolProcess(tool, params, signal, pmConfig);
@@ -255,9 +322,10 @@ export function adaptTool(
 export function adaptTools(
   tools: ToolDefinition[],
   pmConfig?: ToolAdapterProcessConfig,
-  secretsConfig?: ToolAdapterSecretsConfig
+  secretsConfig?: ToolAdapterSecretsConfig,
+  gateConfig?: ToolAdapterGateConfig
 ): AgentTool<any>[] {
-  return tools.map((t) => adaptTool(t, pmConfig, secretsConfig));
+  return tools.map((t) => adaptTool(t, pmConfig, secretsConfig, gateConfig));
 }
 
 /**
@@ -272,7 +340,7 @@ export function adaptTools(
  * whitespace, so `bash "date && sleep 90 && date"` renders
  * correctly without us needing to embed quotes here.
  */
-function extractToolArg(params: unknown): string[] {
+export function extractToolArg(params: unknown): string[] {
   if (typeof params !== 'object' || params === null) return [];
   // biome-ignore lint/plugin: same per-tool argument bag; this probes a few well-known field names across every tool.
   const obj = params as Record<string, unknown>;

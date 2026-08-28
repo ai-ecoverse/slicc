@@ -21,6 +21,7 @@ import {
 import * as hidOps from '../kernel/hid-operations.js';
 import type {
   PanelRpcHandlers,
+  PanelRpcPayloadFor,
   PanelRpcResults,
   PermissionRpcGrant,
   PermissionRpcKind,
@@ -74,6 +75,22 @@ export interface StandalonePanelRpcHandlerOptions {
    * the kernel worker but `LeaderSyncManager` lives on the page; the
    * extension path uses the in-realm `setPreviewMinter` hook instead.
    */
+  /**
+   * Mint / revoke / list biscotto guest seats. Standalone uses this path for
+   * the same reason `serve` does: the `biscotto` command runs in the kernel
+   * worker, which has no controller token — the page-side leader holds it.
+   *
+   * The payload and result types are declared once, in `panel-rpc.ts`, and
+   * referenced here rather than restated, so a field cannot exist on one side
+   * of this boundary and not the other.
+   */
+  mintBiscotto?: (
+    payload: PanelRpcPayloadFor<'tray-mint-biscotto'>
+  ) => Promise<PanelRpcResults['tray-mint-biscotto']>;
+  revokeBiscotto?: (
+    payload: PanelRpcPayloadFor<'tray-revoke-biscotto'>
+  ) => Promise<PanelRpcResults['tray-revoke-biscotto']>;
+  listBiscotti?: () => Promise<PanelRpcResults['tray-list-biscotti']>;
   mintPreview?: (payload: {
     entryPath: string;
     servedRoot: string;
@@ -694,6 +711,30 @@ function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions) {
         throw new Error('serve: no active leader tray; cannot list previews');
       }
       return await options.listPreviews();
+    },
+
+    // Payloads forwarded WHOLE, never rebuilt field-by-field — a rebuild at a
+    // boundary is how `approver`, `requester` and `approverJid` were each
+    // silently dropped elsewhere in this feature.
+    'tray-mint-biscotto': async (payload) => {
+      if (!options.mintBiscotto) {
+        throw new Error('biscotto: no active leader tray; cannot mint a seat');
+      }
+      return await options.mintBiscotto(payload);
+    },
+
+    'tray-revoke-biscotto': async (payload) => {
+      if (!options.revokeBiscotto) {
+        throw new Error('biscotto revoke: no active leader tray; cannot revoke a seat');
+      }
+      return await options.revokeBiscotto(payload);
+    },
+
+    'tray-list-biscotti': async () => {
+      if (!options.listBiscotti) {
+        throw new Error('biscotti: no active leader tray; cannot list seats');
+      }
+      return await options.listBiscotti();
     },
 
     'tray-preview-logs': async ({ previewToken }) => {

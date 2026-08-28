@@ -221,8 +221,8 @@ final class SudoApprovalControllerTests: XCTestCase {
 
     func testExportPromptsReadAsSessions() {
         let request = SudoApprovalRequest(
-            requestId: "e", kind: "export", detail: "frozen:sess-42", suggestedPattern: nil,
-            scoopName: nil, expiresAt: Date(), receivedAt: Date())
+            requestId: "e", kind: "export", detail: "frozen:sess-42", requester: nil,
+            suggestedPattern: nil, scoopName: nil, expiresAt: Date(), receivedAt: Date())
         XCTAssertEqual(request.heading, "Export transcript?")
         XCTAssertEqual(request.displayDetail, "Archived session (sess-42)")
         XCTAssertEqual(request.defaultPattern, "frozen:sess-42")
@@ -251,7 +251,9 @@ final class SudoApprovalControllerTests: XCTestCase {
             """
         let decoded = try JSONDecoder().decode(
             LeaderToFollowerMessage.self, from: Data(prompt.utf8))
-        guard case .sudoApproveRequest(let id, let kind, let detail, let pattern, let scoop, let exp) = decoded
+        guard
+            case .sudoApproveRequest(let id, let kind, let detail, _, let pattern, let scoop, let exp) =
+                decoded
         else { return XCTFail("expected sudoApproveRequest, got \(decoded)") }
         XCTAssertEqual([id, kind, detail], ["p", "write", "/etc/sudoers"])
         XCTAssertNil(pattern)

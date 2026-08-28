@@ -25,6 +25,13 @@ export interface TrayBootstrapRecord {
   failure: TrayBootstrapFailure | null;
   events: TrayBootstrapEvent[];
   nextSequence: number;
+  /**
+   * Set when this bootstrap was created by a biscotto (guest) capability. The
+   * leader is told the trust level over its controller socket at
+   * `follower.join_requested` time, so it never has to believe the peer's own
+   * `hello` about what it is.
+   */
+  biscottoId?: string;
 }
 
 export const TRAY_RECLAIM_TTL_MS = 60 * 60 * 1000;
@@ -75,6 +82,15 @@ export interface ControllerRecord {
   firstSeenAt: string;
   lastSeenAt: string;
   runtime?: string;
+  /**
+   * Set when this controller first attached with a BISCOTTO capability rather
+   * than the tray's join token. `controllerId` is client-supplied, so trust is
+   * re-derived from the presented token on every request and merely CHECKED
+   * against this field: a mismatch in either direction is rejected
+   * (`JOIN_CAPABILITY_MISMATCH`) so a guest cannot inherit a full follower's
+   * controller id, nor a full follower be downgraded by id collision.
+   */
+  biscottoId?: string;
 }
 
 export interface LeaderRecord {
@@ -84,6 +100,136 @@ export interface LeaderRecord {
   lastSeenAt: string;
   connected: boolean;
   disconnectedAt?: string;
+}
+
+/**
+ * Who settles an approval for one biscotto gate.
+ *
+ *  - `off`   — the gate is disabled; the action proceeds ungated.
+ *  - `user`  — the cone owner's own approval surface (`SudoManager`).
+ *  - `cone`  — the cone agent decides, via the same registry a scoop's
+ *              cone-mediated sudo request uses (`ScoopApprovalRouter`).
+ *  - `scoop` — a scoop the cone delegated the decision to; `BiscottoGate.scoop`
+ *              names it.
+ *
+ * `off` is a member of this union rather than a separate boolean so that every
+ * consumer must branch on the approver explicitly. A missing/unknown value
+ * fails CLOSED (treated as `user`), never open — see `normalizeBiscottoGate`.
+ */
+export type BiscottoApprover = 'off' | 'user' | 'cone' | 'scoop' | 'agent';
+
+export interface BiscottoGate {
+  approver: BiscottoApprover;
+  /** Scoop name that settles this gate. Only meaningful for `approver: 'scoop'`. */
+  scoop?: string;
+}
+
+/**
+ * The two independent gates on a biscotto, per the feature's design:
+ *
+ *  - `message` — each message the guest sends is reviewed before it reaches
+ *    the cone (approve intent).
+ *  - `tool` — each tool call the cone makes during a turn a guest caused is
+ *    reviewed before it executes (approve consequences).
+ */
+export interface BiscottoGates {
+  message: BiscottoGate;
+  tool: BiscottoGate;
+}
+
+/**
+ * One guest seat on a cone — a *biscotto*. The holder of `token` gets a
+ * private URL that renders the live transcript and (subject to `gates`) can
+ * send messages. It is NOT a follower capability: the tray DO resolves it to
+ * `trust: 'biscotto'` and the leader allowlists a three-message subset of the
+ * follower wire protocol for it. See `session-tray-biscotto.ts`.
+ *
+ * Stored in `TrayRecord.biscotti`, so a seat dies with its tray. Revocation is
+ * a tombstone (`revokedAt`) rather than a delete: `biscotto log` can still name
+ * the seat that was revoked, and a resolve against a revoked token is a plain
+ * miss.
+ */
+export interface BiscottoRecord {
+  /** Short stable handle the owner uses: `biscotto revoke <id>`. */
+  id: string;
+  /** Unguessable capability: `trayId.<hex>` per {@link createCapabilityToken}. */
+  token: string;
+  /** Human label the owner gave this guest, e.g. `Anna`. Rendered as message attribution. */
+  label: string;
+  createdAt: string;
+  /** ISO deadline after which the seat stops resolving. Absent = lives as long as the tray. */
+  expiresAt?: string;
+  /** ISO revocation tombstone. Once set the token never resolves again. */
+  revokedAt?: string;
+  gates: BiscottoGates;
+  /** Last successful attach. Informational, for `biscotti` listing. */
+  lastSeenAt?: string;
+}
+
+/**
+ * Upper bound on live seats per tray. Resolution is a linear timing-safe scan,
+ * and an unbounded list would be both a scan cost and an invitation to use a
+ * tray as a link shortener. Revoked seats do not count against it.
+ */
+export const MAX_BISCOTTI_PER_TRAY = 32;
+
+/**
+ * What a presented `/join/:token` capability turned out to be. `null` from
+ * {@link resolveJoinCapability} means "no match" and MUST be treated as a 403 —
+ * the resolver is the single default-deny point for the join surface.
+ */
+export type JoinCapability = { trust: 'full' } | { trust: 'biscotto'; biscotto: BiscottoRecord };
+
+/**
+ * Resolve a presented join capability against a tray, default-deny.
+ *
+ * Checks the tray's own join token first, then each live biscotto. Every
+ * comparison goes through {@link timingSafeEqual} (via the injected `matches`)
+ * so a guess cannot be narrowed by timing; the scan does NOT early-exit on the
+ * first mismatch for that reason — it records the hit and keeps going.
+ *
+ * A biscotto that is revoked or past `expiresAt` does not resolve. `now` is
+ * injected so the DO's clock seam and tests share one code path.
+ */
+export function resolveJoinCapability(
+  tray: Pick<TrayRecord, 'joinToken' | 'biscotti'>,
+  token: string,
+  now: number,
+  matches: (received: string, expected: string) => boolean
+): JoinCapability | null {
+  if (matches(token, tray.joinToken)) {
+    return { trust: 'full' };
+  }
+  let hit: BiscottoRecord | null = null;
+  for (const biscotto of tray.biscotti ?? []) {
+    // Constant work per record: compare first, filter after. Skipping the
+    // comparison for revoked/expired seats would leak their existence.
+    const tokenMatches = matches(token, biscotto.token);
+    if (!tokenMatches) continue;
+    if (biscotto.revokedAt) continue;
+    if (biscotto.expiresAt && Date.parse(biscotto.expiresAt) <= now) continue;
+    hit = biscotto;
+  }
+  return hit ? { trust: 'biscotto', biscotto: hit } : null;
+}
+
+/**
+ * Coerce a persisted or request-supplied gate into a known-good one.
+ *
+ * Fails CLOSED: an unrecognised approver becomes `user`, so a record written by
+ * a newer build (or a hand-edited one) can never downgrade a gate to `off` on
+ * an older worker. `scoop` without a name is likewise not a usable delegation,
+ * so it falls back to `user` rather than silently approving.
+ */
+export function normalizeBiscottoGate(gate: Partial<BiscottoGate> | undefined): BiscottoGate {
+  const approver = gate?.approver;
+  if (approver === 'off' || approver === 'user' || approver === 'cone') {
+    return { approver };
+  }
+  if (approver === 'scoop' && typeof gate?.scoop === 'string' && gate.scoop.length > 0) {
+    return { approver: 'scoop', scoop: gate.scoop };
+  }
+  return { approver: 'user' };
 }
 
 /**
@@ -153,6 +299,8 @@ export interface TrayRecord {
   supersededByJoinUrl?: string;
   /** Push devices to wake for `turn_end` / `sudo_request` (issue #2062). */
   pushTokens?: Record<string, PushTokenRecord>;
+  /** Guest seats on this cone. Absent on trays minted before the feature. */
+  biscotti?: BiscottoRecord[];
 }
 
 export interface CreateTrayRequest {

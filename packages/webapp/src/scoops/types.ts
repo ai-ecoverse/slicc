@@ -8,6 +8,7 @@
 
 import type { ThinkingLevel } from '@earendil-works/pi-agent-core';
 import type { MessageAttachment } from '../core/attachments.js';
+import type { TurnGuestGate } from '../sudo/types.js';
 // Legal down-edge (`scoops/` → `tools/`): the JSON Schema shape a scoop's
 // structured-output contract is expressed in is owned by the tool layer.
 import type { JsonSchemaObject } from '../tools/types.js';
@@ -105,6 +106,21 @@ export interface RegisteredScoop {
   addedAt: string;
   /** Scoop-specific config */
   config?: ScoopConfig;
+  /**
+   * This scoop may SETTLE approvals delegated to it — the `scoop` approver tier
+   * for biscotto guest seats.
+   *
+   * A delegated child normally cannot (`delegatedChildPolicy` sets
+   * `canResolveApprovals: false`), which is why a seat naming an ordinary scoop
+   * as its approver fails closed: the scoop would receive the request with no
+   * `lick_confirm` / `lick_dismiss` to answer it, and the request would time out
+   * denied five minutes later — indistinguishable, to the owner, from a
+   * reviewer who ignored it.
+   *
+   * Opt-in per record, never derived, and it only ever grants a capability the
+   * parent already holds (a root has it), so `isPolicySubset` still holds.
+   */
+  approvesGuestRequests?: boolean;
   /**
    * Generation of `ScoopConfig` that produced this record. `undefined` means
    * "truly legacy" — a record saved before any of the path-config fields
@@ -292,6 +308,12 @@ export interface ChannelMessage {
    * the turn. Carried through the router batch down to `ScoopContext.prompt`.
    */
   steer?: boolean;
+  /**
+   * Guest-caused turn marker. Rides the same route as {@link steer} — router
+   * batch → `ScoopContext.prompt` — because it has the same lifetime: it
+   * describes the TURN this message starts, not the message itself.
+   */
+  guestGate?: TurnGuestGate;
 }
 
 /** Scheduled task */

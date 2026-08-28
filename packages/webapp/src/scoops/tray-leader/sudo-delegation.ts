@@ -212,6 +212,10 @@ export class SudoDelegation {
         ? { suggestedPattern: entry.request.suggestedPattern }
         : {}),
       ...(scoopName ? { scoopName } : {}),
+      // Same reason as the local prompt: a delegated reviewer sees `detail`,
+      // which may be guest-authored, and needs the system's own account of who
+      // is asking next to it.
+      ...(entry.request.requester ? { requester: entry.request.requester } : {}),
       expiresAt: entry.expiresAt,
     });
     if (sent === false) {

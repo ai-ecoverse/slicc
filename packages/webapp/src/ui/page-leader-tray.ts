@@ -331,10 +331,13 @@ function buildPeerManager(
         bootstrapId: peer.bootstrapId,
         attempt: peer.attempt,
         runtime: peer.runtime,
+        trust: peer.trust,
       });
       sync.addFollower(peer.bootstrapId, channel, {
         runtime: peer.runtime,
         connectedAt: peer.connectedAt ?? undefined,
+        trust: peer.trust,
+        biscotto: peer.biscotto,
       });
     },
     onPeerDisconnected: (bootstrapId, reason) => {

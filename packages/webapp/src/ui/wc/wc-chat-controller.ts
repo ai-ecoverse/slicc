@@ -400,12 +400,13 @@ export class WcChatController {
   }
 
   /** Append a user bubble without sending (follower echoes, leader relays). */
-  addUserMessage(text: string, _attachments?: unknown): void {
+  addUserMessage(text: string, _attachments?: unknown, source?: string): void {
     this.#appendMessage({
       id: uid(),
       role: 'user',
       content: text,
       timestamp: Date.now(),
+      ...(source ? { source } : {}),
     });
   }
 

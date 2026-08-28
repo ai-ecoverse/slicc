@@ -45,6 +45,7 @@ import type { RestrictedFS } from '../fs/restricted-fs.js';
 import type { Process, ProcessManager, ProcessOwner } from '../kernel/process-manager.js';
 import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headless.js';
 import type { SudoManager } from '../sudo/sudo-manager.js';
+import type { TurnGuestGate } from '../sudo/types.js';
 import { conversationKeyFor, workspaceIdFor } from '../work-unit/conversation/key.js';
 import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { tmpDirFor, toDescriptor } from '../work-unit/descriptor.js';
@@ -315,6 +316,7 @@ export class ScoopContext {
         processOwner: this.owner,
         coneJid: this.coneJid,
         getTurnPid: () => this.currentTurnProcess?.pid,
+        getTurnGuestGates: () => this.turnGuestGates,
         getLickTarget: () => this.ownLickTarget(),
         getTmpDir: () => this.ownTmpDir(),
         getEffortOverride: () => this.activeEffortOverride,
@@ -375,6 +377,12 @@ export class ScoopContext {
     lastError: Error | null,
     abortSignal: AbortSignal
   ): void {
+    // Deliberately NOT clearing `turnGuestGates` here. The agent can begin a
+    // follow-up turn internally without re-entering `prompt()`, and that turn is
+    // still downstream of the guest's message; clearing here let it run
+    // ungated. The set is replaced when the next turn genuinely starts, so the
+    // worst case is over-gating the owner inside one busy window — the safe
+    // direction to be wrong in.
     this.runBounds.disarm();
     // A bound-terminated run must not read as a clean completion: surface
     // the ceiling through onError so observers (the agent bridge) report a
@@ -411,12 +419,34 @@ export class ScoopContext {
    * via `steer()` when `options.steer` is set (interrupt the running turn),
    * otherwise via `followUp()`.
    */
+  /**
+   * Every guest gate that applies to the turn currently running.
+   *
+   * A SET, not one gate: a router batch can merge messages from several seats
+   * into one prompt, and honouring only the first would submit the others'
+   * actions to an approver they never named. A tool call must clear ALL of
+   * them.
+   *
+   * Lifetime is deliberately conservative. The set is replaced only when a turn
+   * genuinely BEGINS (`queuePromptIfBusy` declined to queue); a prompt that
+   * queues instead ADDS to it, because the running turn will consume that
+   * content. It is not cleared when a turn ends: the agent can start a
+   * follow-up turn internally without re-entering `prompt()`, and that turn is
+   * still downstream of the guest's message. An owner's next explicit prompt
+   * resets it to empty, which is the only transition that may un-gate.
+   *
+   * Read LIVE by the tool adapter rather than captured at tool-build time —
+   * tools are built once per scoop while turns come and go.
+   */
+  private turnGuestGates: TurnGuestGate[] = [];
+
   async prompt(
     text: string,
     images: ImageContent[] = [],
-    options?: { steer?: boolean }
+    options?: { steer?: boolean; guestGates?: TurnGuestGate[] }
   ): Promise<void> {
     if (!(await this.ensureAgentReady())) return;
+    const incoming = options?.guestGates ?? [];
     if (
       queuePromptIfBusy(this.agent!, text, images, {
         steer: options?.steer ?? false,
@@ -424,8 +454,15 @@ export class ScoopContext {
         folder: this.scoop.folder,
       })
     ) {
+      // Queued INTO the running turn, so its gates join that turn's set. Never
+      // replaces: an owner message arriving mid-guest-turn used to reset this
+      // to empty and un-gate the guest's remaining tool calls.
+      for (const gate of incoming) this.addTurnGuestGate(gate);
       return;
     }
+    // A turn is genuinely starting: this prompt's gates ARE the turn's gates.
+    // The only transition that may un-gate.
+    this.turnGuestGates = [...incoming];
 
     const agent = this.agent!;
 
@@ -466,6 +503,16 @@ export class ScoopContext {
     } finally {
       this.cleanupPromptState(abortController, turnProcess, lastError, abortSignal);
     }
+  }
+
+  /**
+   * Add one gate to the running turn, ignoring an exact duplicate so a chatty
+   * seat cannot make every tool call prompt N times.
+   */
+  private addTurnGuestGate(gate: TurnGuestGate): void {
+    const key = JSON.stringify(gate);
+    if (this.turnGuestGates.some((existing) => JSON.stringify(existing) === key)) return;
+    this.turnGuestGates.push(gate);
   }
 
   /** Stop the current agent operation and clear any queued prompts */

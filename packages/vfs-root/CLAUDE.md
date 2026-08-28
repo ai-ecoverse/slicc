@@ -8,16 +8,16 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 
 ## Directory Structure
 
-| Path                                  | Purpose                                                                    |
-| ------------------------------------- | -------------------------------------------------------------------------- |
-| `packages/vfs-root/shared/`           | Shared content that becomes `/shared/` in the VFS                          |
-| `packages/vfs-root/workspace/`        | Default workspace content that becomes `/workspace/` in the VFS            |
-| `packages/vfs-root/shared/CLAUDE.md`  | Agent-facing runtime instructions bundled into `/shared/CLAUDE.md`         |
-| `packages/vfs-root/shared/MEMORY.md`  | User-editable memory curator config bundled as `/shared/MEMORY.md`         |
-| `packages/vfs-root/shared/sprinkles/` | Built-in sprinkle UIs                                                      |
-| `packages/vfs-root/shared/sounds/`    | Shared notification sounds                                                 |
-| `packages/vfs-root/workspace/skills/` | Default installable workspace skills                                       |
-| `packages/vfs-root/etc/`              | System config seeded into `/etc/` (`models`, `sudoers`, `slicc/keys.json`) |
+| Path                                  | Purpose                                                                                    |
+| ------------------------------------- | ------------------------------------------------------------------------------------------ |
+| `packages/vfs-root/shared/`           | Shared content that becomes `/shared/` in the VFS                                          |
+| `packages/vfs-root/workspace/`        | Default workspace content that becomes `/workspace/` in the VFS                            |
+| `packages/vfs-root/shared/CLAUDE.md`  | Agent-facing runtime instructions bundled into `/shared/CLAUDE.md`                         |
+| `packages/vfs-root/shared/MEMORY.md`  | User-editable memory curator config bundled as `/shared/MEMORY.md`                         |
+| `packages/vfs-root/shared/sprinkles/` | Built-in sprinkle UIs                                                                      |
+| `packages/vfs-root/shared/sounds/`    | Shared notification sounds                                                                 |
+| `packages/vfs-root/workspace/skills/` | Default installable workspace skills                                                       |
+| `packages/vfs-root/etc/`              | System config seeded into `/etc/` (`models`, `sudoers`, `APPROVALS.md`, `slicc/keys.json`) |
 
 ## Adding Default Content
 
@@ -57,6 +57,25 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
   (default `medium`; spawned agents otherwise resolve to `off`) so the curator plans the cut
   instead of converging by trial and error, and the archive reading recipes so it never `cat`s a
   multi-megabyte archive whose `slicc:session-data` block is a single line holding half the file.
+
+### Approver agent
+
+- `etc/APPROVALS.md` is the single source for the runner's build-time fallback and
+  the seeded `/etc/APPROVALS.md`, exactly like `shared/MEMORY.md` is for the curator.
+- It lives in `/etc/` because it is POLICY, next to `sudoers` — not in `/shared/`,
+  which is agent-visible content. Writes to it are self-protected in
+  `base/sudoers.ts` (`isSelfProtectedWrite`) for the same reason writes to
+  `/etc/sudoers` are: it decides what a GUEST may do, and a cone acting on a
+  guest's message must not rewrite the rules gating that guest without the owner
+  seeing a prompt.
+- Re-read on EVERY decision, not cached: an owner who tightens it after a bad
+  call expects the next decision to use it. Missing or unreadable falls back to
+  the bundled default rather than wedging approvals shut.
+- The optional ```yaml block tunes `timeoutSeconds` (clamped — a guest, and for
+  a tool gate the cone's turn, is blocked on the decision), `model`, and
+  `thinkingLevel`. Unreadable values fall back rather than becoming real.
+- The approver never reads this file itself; the runtime reads it and puts it in
+  the prompt. The agent holds no write grant at all.
 
 ### Skills
 

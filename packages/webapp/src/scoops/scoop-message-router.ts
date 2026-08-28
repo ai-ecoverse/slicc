@@ -14,6 +14,7 @@
 import { createLogger } from '../base/logger.js';
 import { formatPromptWithAttachments, imageContentFromAttachments } from '../core/attachments.js';
 import type { SessionStore } from '../core/session.js';
+import type { TurnGuestGate } from '../sudo/types.js';
 import { advanceMessageWatermark, parseMessageWatermark, serializeMessageWatermark } from './db.js';
 import type { ScoopContext } from './scoop-context.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
@@ -63,7 +64,7 @@ export interface ScoopMessageRouterDeps {
     senderId: string,
     senderName: string,
     images?: ReturnType<typeof imageContentFromAttachments>,
-    options?: { steer?: boolean }
+    options?: { steer?: boolean; guestGates?: TurnGuestGate[] }
   ): Promise<void>;
   /** Notify the UI about a new incoming message (delegation / external lick chip). */
   notifyIncomingMessage(scoopJid: string, message: ChannelMessage): void;
@@ -575,9 +576,26 @@ export class ScoopMessageRouter {
     // batch is delivered as a single prompt, so it cannot be split into a
     // steered and a queued half.
     const steer = eligibleMessages.some((m) => m.steer);
+    // Same reasoning as `steer`: the batch is delivered as ONE prompt, so it
+    // cannot be split into a gated and an ungated half. Any guest-caused
+    // message in the batch gates the whole turn — the conservative reading, and
+    // the only one that is sound when the agent sees the messages merged.
+    // EVERY distinct gate in the batch, not the first: messages from several
+    // seats merge into one prompt, and keeping only one would submit the other
+    // guests' actions to an approver they never named.
+    const seen = new Set<string>();
+    const guestGates = [];
+    for (const message of eligibleMessages) {
+      if (!message.guestGate) continue;
+      const key = JSON.stringify(message.guestGate);
+      if (seen.has(key)) continue;
+      seen.add(key);
+      guestGates.push(message.guestGate);
+    }
 
     await this.deps.sendPrompt(jid, formatted, lastMsg.senderId, lastMsg.senderName, images, {
       steer,
+      ...(guestGates.length > 0 ? { guestGates } : {}),
     });
   }
 

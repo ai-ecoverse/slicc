@@ -5,6 +5,8 @@ import {
   TRAY_SYNC_PROTOCOL_VERSION,
   unhandledProtocolMessage,
 } from '../tray-sync-protocol.js';
+import { isMessageAllowedForTrust } from './biscotto-gate.js';
+import type { BiscottoReview } from './biscotto-review.js';
 import type { BroadcastManager } from './broadcast.js';
 import type { CDPRouter } from './cdp-router.js';
 import type { CherryRouter } from './cherry-router.js';
@@ -46,6 +48,8 @@ export interface FollowerDispatchCollaborators {
   sudoDelegation: Pick<SudoDelegation, 'handleResponse' | 'handleFollowerReady'>;
   cherryRouter: Pick<CherryRouter, 'routeCherryHostEvent'>;
   requesterTracker: Pick<RequesterTracker, 'noteFollowerUserMessage'>;
+  /** Holds a guest's message until its seat's approver says yes. */
+  biscottoReview: Pick<BiscottoReview, 'submit'>;
   /** Forward a follower's push-token registration to the tray hub (issue #2062). */
   registerPushToken?: (
     bootstrapId: string,
@@ -61,6 +65,7 @@ export class FollowerDispatch {
   ) {}
 
   dispatch(bootstrapId: string, message: FollowerToLeaderMessage): void {
+    if (!this.acceptFromPeer(bootstrapId, message)) return;
     this.noteLegacyPeer(bootstrapId, message);
     const { broadcast, cdpRouter, remoteExec, fsRouter, tabRouter } = this.collaborators;
     const { teleportPool, transcriptExport, cherryRouter, tabTeleportRouter } = this.collaborators;
@@ -220,6 +225,35 @@ export class FollowerDispatch {
     });
   }
 
+  /**
+   * Trust gate for the inbound wire. Runs BEFORE any other handling — including
+   * `noteLegacyPeer`, so a denied message cannot even move peer bookkeeping.
+   *
+   * An unknown `bootstrapId` is denied: the registry entry is what carries the
+   * hub's trust verdict, so a message arriving without one has no verdict to
+   * check and must not be assumed trustworthy. In practice this is a message
+   * racing follower removal.
+   */
+  private acceptFromPeer(bootstrapId: string, message: FollowerToLeaderMessage): boolean {
+    const follower = this.context.followers.followers.get(bootstrapId);
+    if (!follower) {
+      this.context.log.warn('Dropping message from unregistered peer', {
+        bootstrapId,
+        type: message.type,
+      });
+      return false;
+    }
+    if (isMessageAllowedForTrust(follower.trust, message.type)) return true;
+    // Deliberately logged at warn: a guest seat reaching for a denied
+    // capability is the signal that a shared URL is being probed.
+    this.context.log.warn('Dropping message not permitted for a biscotto', {
+      bootstrapId,
+      biscottoId: follower.biscotto?.id,
+      type: message.type,
+    });
+    return false;
+  }
+
   private handleFollowerUserMessage(
     bootstrapId: string,
     message: FollowerToLeaderMessage & { type: 'user_message' }
@@ -228,20 +262,35 @@ export class FollowerDispatch {
       bootstrapId,
       messageId: message.messageId,
     });
-    // A user message is real human activity — unlike ping/pong keepalives —
-    // so it both marks this follower as the interaction origin and makes
-    // lastActivity a meaningful recency signal for follower selection.
+    // A user message is real human activity — unlike ping/pong keepalives — so
+    // it makes lastActivity a meaningful recency signal for follower selection.
     const follower = this.context.followers.followers.get(bootstrapId);
     if (follower) follower.lastActivity = Date.now();
-    this.collaborators.requesterTracker.noteFollowerUserMessage(
-      bootstrapId,
-      this.context.followers.runtimeIdForBootstrap(bootstrapId)
-    );
     const safeAttachments = message.attachments?.length
       ? stripLocalPathsForRemote(message.attachments)
       : message.attachments;
-    // Only a steering send carries the options argument, so the ordinary
-    // hand-off stays a three-argument call.
+    // A guest's text is REVIEWED before it reaches the cone, and never arrives
+    // looking like the owner's. A full follower IS the owner on another device:
+    // it is not reviewed and keeps the historical three-argument hand-off.
+    const biscotto = follower?.trust === 'biscotto' ? follower.biscotto : undefined;
+    if (biscotto) {
+      // NOT marked as the interaction origin here. A reviewed message may never
+      // be delivered, and `RequesterTracker` decides where interactive prompts
+      // (OAuth popups, teleport pickers) get routed — pointing those at a guest
+      // whose message is still pending, or was refused outright, would hand the
+      // owner's interactions to someone whose input was rejected. The review
+      // path notes the origin only once the message is actually delivered.
+      this.collaborators.biscottoReview.submit(bootstrapId, {
+        bootstrapId,
+        messageId: message.messageId,
+        text: message.text,
+        attachments: safeAttachments,
+        steer: message.steer,
+        biscotto,
+      });
+      return;
+    }
+    this.noteInteractionOrigin(bootstrapId);
     if (message.steer) {
       this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments, {
         steer: true,
@@ -249,6 +298,18 @@ export class FollowerDispatch {
     } else {
       this.context.options.onFollowerMessage(message.text, message.messageId, safeAttachments);
     }
+  }
+
+  /**
+   * Mark this follower as where the current interaction came from, so a
+   * delegated OAuth popup or teleport picker opens on the browser its human is
+   * actually looking at.
+   */
+  noteInteractionOrigin(bootstrapId: string): void {
+    this.collaborators.requesterTracker.noteFollowerUserMessage(
+      bootstrapId,
+      this.context.followers.runtimeIdForBootstrap(bootstrapId)
+    );
   }
 
   private handleFollowerNewSession(bootstrapId: string, action: 'save' | 'skip' | 'erase'): void {
@@ -512,12 +573,24 @@ export class FollowerDispatch {
     const follower = this.context.followers.followers.get(bootstrapId);
     if (follower) {
       follower.peerProtocolVersion = message.protocolVersion;
-      follower.peerCapabilities = message.capabilities;
-      follower.peerMotd = message.motd;
-      this.context.followers.notifyFollowerCountChanged();
-      // A sudo-capable follower just arrived — hand it any prompt a headless
-      // leader parked while no one could answer (issue #2062).
-      this.collaborators.sudoDelegation.handleFollowerReady(bootstrapId);
+      if (follower.trust === 'biscotto') {
+        // Capabilities are SELF-REPORTED, and every follower-selection site
+        // (`sudo-delegation`, `teleport-pool`, `remote-exec`, the OAuth-popup
+        // picker) reads them as a volunteer list. A guest that advertised
+        // `sudoApproval` would be handed the owner's approval prompts — the
+        // exact inversion this feature exists to prevent. It gets none, and
+        // no MOTD, which is only shown for exec-capable peers anyway.
+        follower.peerCapabilities = {};
+        follower.peerMotd = undefined;
+        this.context.followers.notifyFollowerCountChanged();
+      } else {
+        follower.peerCapabilities = message.capabilities;
+        follower.peerMotd = message.motd;
+        this.context.followers.notifyFollowerCountChanged();
+        // A sudo-capable follower just arrived — hand it any prompt a headless
+        // leader parked while no one could answer (issue #2062).
+        this.collaborators.sudoDelegation.handleFollowerReady(bootstrapId);
+      }
     }
     if (message.protocolVersion > TRAY_SYNC_PROTOCOL_VERSION) {
       this.context.log.warn('Follower speaks a newer tray sync protocol — update this build', {

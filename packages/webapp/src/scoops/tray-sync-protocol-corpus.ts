@@ -144,6 +144,12 @@ export const LEADER_TO_FOLLOWER_CORPUS: LeaderCorpus = {
     ios: 'unknown',
     message: { type: 'transcript.export.denied', requestId: 'te-1' },
   },
+  // iOS never holds a biscotto seat — a guest joins from a browser — so it
+  // decodes this to `.unknown` and ignores it.
+  'biscotto.message.state': {
+    ios: 'unknown',
+    message: { type: 'biscotto.message.state', messageId: 'gm-1', state: 'pending' },
+  },
   'transcript.export.start': {
     ios: 'unknown',
     message: {

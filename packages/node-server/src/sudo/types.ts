@@ -10,13 +10,33 @@
  */
 
 /** `export` = a follower's transcript export (issue #2062 folded it into sudo). */
-export type SudoKind = 'command' | 'read' | 'write' | 'secret' | 'export';
+/**
+ * Mirror of `TraySudoKind` in `@slicc/shared-ts`. Kept as a local literal union
+ * (node-server does not import the browser package) — which means a kind added
+ * there must be added HERE too, or `VALID_KINDS` in `endpoint.ts` 400s it and
+ * the gate fails closed forever.
+ */
+export type SudoKind =
+  | 'command'
+  | 'read'
+  | 'write'
+  | 'secret'
+  | 'export'
+  | 'guest-message'
+  | 'guest-tool';
 
 /** Inbound request body for `POST /api/sudo-approve`. */
 export interface SudoApproveRequest {
   kind: SudoKind;
   /** The concrete command line or VFS path being gated. */
   detail: string;
+  /**
+   * Who is asking, as the browser side authenticated them. Optional — older
+   * clients omit it. Rendered as chrome, never mixed into `detail`, because
+   * `detail` can be prose the requester wrote about themselves (a biscotto
+   * guest message).
+   */
+  requester?: string;
   /** Editable default pattern for an "Always" grant (LLM-suggested upstream). */
   suggestedPattern: string;
 }

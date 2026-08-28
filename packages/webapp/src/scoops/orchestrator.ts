@@ -27,9 +27,11 @@ import {
 import type {
   ConeApprovalRouter,
   PendingSudoRequest,
+  SudoApproverDirective,
   SudoBroker,
   SudoDecision,
   SudoRequest,
+  TurnGuestGate,
 } from '../sudo/index.js';
 import { SudoManager } from '../sudo/sudo-manager.js';
 import { registerTranscriptExportService } from '../transcript/export-provider.js';
@@ -42,6 +44,7 @@ import {
   defaultChildVisibleRoots,
   ownerWorkspaceFor,
   PRIMARY_WORKSPACE,
+  workspaceFor,
 } from '../work-unit/descriptor.js';
 import type { LiveWorkUnit } from '../work-unit/live-unit.js';
 import { WorkUnitManager } from '../work-unit/manager.js';
@@ -89,6 +92,9 @@ import {
 export type { ScoopObserver };
 
 const log = createLogger('orchestrator');
+
+/** Every fail-closed exit from a directed approval resolves to this. */
+const DENY: SudoDecision = { decision: 'deny' };
 type SliccGlobalHooks = typeof globalThis & {
   __slicc_fs_watcher?: FsWatcher;
   __slicc_lick_handler?: (event: LickEvent) => void;
@@ -392,8 +398,16 @@ export class Orchestrator implements ConeApprovalRouter {
         setGlobalMemory: (content) => this.setGlobalMemory(content),
         appendConeMemory: (bullets, meta) => this.appendConeMemory(bullets, meta),
         enqueueSudoRequest: (jid, request) => this.enqueueSudoRequest(jid, request),
-        resolveActionableLick: (id, decision) => this.resolveActionableLick(id, decision),
-        listPendingSudoRequests: () => this.listPendingSudoRequests(),
+        // Every parameter forwarded EXPLICITLY. A lambda with fewer parameters
+        // still satisfies a wider signature, so `(id, decision) => ...` type-
+        // checked while silently discarding `approverJid` — which made the
+        // delegated-approver scoping inert and handed every delegated scoop
+        // unrestricted authority over all pending approvals. Do not "simplify"
+        // these back to shorter arrow bodies.
+        resolveActionableLick: (id, decision, approverJid) =>
+          this.resolveActionableLick(id, decision, approverJid),
+        approveDirectedOrUser: (request) => this.approveDirectedOrUser(request),
+        listPendingSudoRequests: (approverJid) => this.listPendingSudoRequests(approverJid),
       },
       handleMessage: (msg) => this.handleMessage(msg),
     });
@@ -1001,6 +1015,53 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /**
+   * Settle a request through a NON-human approver named by the caller — the
+   * cone that owns a thread, or a scoop the cone delegated to.
+   *
+   * Used by the biscotto message gate: the seat record says who reviews a
+   * guest's messages, and that is not derivable from the requester the way a
+   * scoop's parent is. Fails CLOSED on every unresolvable case (unknown unit,
+   * unknown scoop name, no orchestrator state) — an approver that cannot be
+   * found must never degrade into "nobody has to approve".
+   *
+   * `ownerRootOrDefault` (not `parentOrDefaultRoot`) resolves the cone tier so
+   * a card raised on cone B renders in B rather than the oldest cone.
+   */
+  /**
+   * Single approval entry point for the guest gates.
+   *
+   * A thin shim: the whole flow — agent runs, directed enqueues, and the
+   * owner-broker fallback — is imported on first use, because only a guest seat
+   * ever reaches it and this file is boot-critical.
+   */
+  async approveDirectedOrUser(request: SudoRequest): Promise<SudoDecision> {
+    const { runDirectedApproval } = await import('./directed-approval.js');
+    return runDirectedApproval(request, {
+      scoops: this.scoops,
+      ownerRootOf: (jid) => this.ownerRootOrDefault(jid),
+      enqueue: (jid, req, opts) => this.approvalRouter.enqueueSudoRequest(jid, req, opts),
+      getSharedFs: () => this.sharedFs,
+      workspaceFor,
+      approveAsUser: async (req) => {
+        const manager = this.sudoManager;
+        if (!manager) {
+          log.warn('Guest approval before SudoManager init — failing closed');
+          return DENY;
+        }
+        return manager.approve(req);
+      },
+    });
+  }
+
+  /** Route a directive that names a unit. Kept for callers and tests. */
+  async enqueueDirectedApproval(
+    directive: SudoApproverDirective,
+    request: SudoRequest
+  ): Promise<SudoDecision> {
+    return this.approveDirectedOrUser({ ...request, approver: directive });
+  }
+
+  /**
    * Settle a pending cone-mediated sudo request. Used by the cone's
    * `lick_confirm` / `lick_dismiss` tools (and tests). Returns `true` when an
    * entry was actually resolved, `false` for unknown / already-settled /
@@ -1031,7 +1092,8 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   async resolveSudoRequestAndPersist(
     id: string,
-    decision: SudoDecision
+    decision: SudoDecision,
+    approverJid?: string
   ): Promise<{
     settled: boolean;
     persisted: boolean;
@@ -1040,7 +1102,7 @@ export class Orchestrator implements ConeApprovalRouter {
     scoopFolder?: string;
     kind?: SudoRequest['kind'];
   }> {
-    return this.approvalRouter.resolveSudoRequestAndPersist(id, decision);
+    return this.approvalRouter.resolveSudoRequestAndPersist(id, decision, approverJid);
   }
 
   /**
@@ -1101,7 +1163,8 @@ export class Orchestrator implements ConeApprovalRouter {
    */
   async resolveActionableLick(
     id: string,
-    decision: SudoDecision
+    decision: SudoDecision,
+    approverJid?: string
   ): Promise<{
     settled: boolean;
     persisted: boolean;
@@ -1113,7 +1176,7 @@ export class Orchestrator implements ConeApprovalRouter {
   }> {
     const resolved = await this.lickRegistry.resolve(id, decision);
     if (resolved) return resolved;
-    return this.resolveSudoRequestAndPersist(id, decision);
+    return this.resolveSudoRequestAndPersist(id, decision, approverJid);
   }
 
   /**
@@ -1139,8 +1202,8 @@ export class Orchestrator implements ConeApprovalRouter {
   }
 
   /** Snapshot all pending cone-mediated sudo requests (cone-side listing). */
-  listPendingSudoRequests(): PendingSudoRequest[] {
-    return this.approvalRouter.listPendingSudoRequests();
+  listPendingSudoRequests(approverJid?: string): PendingSudoRequest[] {
+    return this.approvalRouter.listPendingSudoRequests(approverJid);
   }
 
   /** Register a new scoop. Delegates to {@link ScoopLifecycleManager}. */
@@ -1343,7 +1406,7 @@ export class Orchestrator implements ConeApprovalRouter {
     senderId: string,
     senderName: string,
     images: ImageContent[] = [],
-    options?: { steer?: boolean }
+    options?: { steer?: boolean; guestGates?: TurnGuestGate[] }
   ): Promise<void> {
     return this.lifecycle.sendPrompt(jid, text, senderId, senderName, images, options);
   }

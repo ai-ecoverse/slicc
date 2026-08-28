@@ -749,6 +749,32 @@ export async function mountWcUiFollower(
       // and WcChatController.addUserMessage(text, attachments?) - match wc-tray.ts:97.
       onUserMessage: (text, _messageId, _scoopJid, attachments) =>
         controller.addUserMessage(text, attachments),
+      // A biscotto's messages are reviewed before they reach the cone. Without
+      // this the guest's message simply never appears — it is only echoed back
+      // once the leader broadcasts an APPROVED one — which reads as the app
+      // having silently dropped it. These notes are local synthetic lines; the
+      // approved message itself still arrives through `onUserMessage`.
+      onBiscottoMessageState: (_messageId, state) => {
+        switch (state) {
+          case 'pending':
+            controller.addAssistantMessage('_Sent for review — waiting for the host._');
+            break;
+          case 'rejected':
+            controller.addAssistantMessage('_The host did not forward that message._');
+            break;
+          case 'unanswered':
+            // Deliberately distinct from `rejected`: nobody refused this, so
+            // rephrasing may well work once someone is at the keyboard.
+            controller.addAssistantMessage(
+              '_No one reviewed that message in time, so it was not forwarded._'
+            );
+            break;
+          case 'approved':
+            // The real message arrives via the leader's broadcast; a note here
+            // would double up.
+            break;
+        }
+      },
       onStatus: (status, scoopJid) => {
         if (shouldApplyFollowerStatus(scoopJid, followerSelectedScoop)) {
           controller.setProcessing(status === 'processing');
@@ -781,8 +807,13 @@ export async function mountWcUiFollower(
             allowAlways: false,
             signal: request.signal,
             expiresAt: request.expiresAt,
+            // Leader-derived identity first: `scoopName` names the requesting
+            // unit, but a directed request (a biscotto's message) is asked on
+            // behalf of a thread by someone who is not that thread.
             requester:
-              request.scoopName ?? (cherryHostOrigin ? `via ${cherryHostOrigin}` : undefined),
+              request.requester ??
+              request.scoopName ??
+              (cherryHostOrigin ? `via ${cherryHostOrigin}` : undefined),
           }
         );
         return { decision: decision.decision, attestation: 'none' };

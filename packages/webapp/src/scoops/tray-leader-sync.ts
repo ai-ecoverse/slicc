@@ -4,6 +4,8 @@
  */
 
 import type {
+  FollowerBiscottoIdentity,
+  FollowerTrust,
   LeaderToWorkerControlMessage,
   TranscriptExportSelector,
   TraySudoKind,
@@ -24,10 +26,16 @@ import type {
   SprinkleInstance,
   SprinkleSendTarget,
 } from '../shell/sprinkle-manager-handle.js';
-import type { SudoDecision, SudoRequest } from '../sudo/types.js';
+import type {
+  SudoApproverDirective,
+  SudoDecision,
+  SudoRequest,
+  TurnGuestGate,
+} from '../sudo/types.js';
 import type { TranscriptZipResult } from '../transcript/zip-stream.js';
 import type { ChatMessage } from './chat-types.js';
 import type { LickEvent } from './lick-manager.js';
+import { BiscottoReview } from './tray-leader/biscotto-review.js';
 import { BroadcastManager } from './tray-leader/broadcast.js';
 import { CDPRouter } from './tray-leader/cdp-router.js';
 import { CherryRouter } from './tray-leader/cherry-router.js';
@@ -128,7 +136,12 @@ export interface LeaderSyncManagerOptions {
     text: string,
     messageId: string,
     attachments?: MessageAttachment[],
-    options?: { steer?: boolean }
+    options?: {
+      steer?: boolean;
+      biscotto?: FollowerBiscottoIdentity;
+      /** Tool gate for the turn this message starts; absent = ungated. */
+      guestGate?: TurnGuestGate;
+    }
   ) => void;
   /** Handle an abort request from a follower. */
   onFollowerAbort: () => void;
@@ -223,6 +236,15 @@ export interface LeaderSyncManagerOptions {
     suggestedPattern?: string;
     followerLabel: string;
     hostOrigin?: string;
+    /**
+     * Route to a non-human approver. MUST be declared here and forwarded by
+     * every adapter: an earlier build set it on the call and relied on the
+     * object literal carrying it, but a spread suppresses TypeScript's
+     * excess-property check, so it compiled, tests (which mock this function)
+     * passed, and production silently dropped it — every `cone`/`scoop` seat
+     * fell back to the human broker.
+     */
+    approver?: SudoApproverDirective;
   }) => Promise<SudoDecision>;
   /**
    * True when this leader tab has no interactive human of its own. The approval
@@ -256,6 +278,7 @@ export class LeaderSyncManager {
   private readonly tabTeleportRouter: TabTeleportRouter;
   private readonly oauthPopupDelegation: OAuthPopupDelegation;
   private readonly sudoDelegation: SudoDelegation;
+  private readonly biscottoReview: BiscottoReview;
   /** Follower bootstrap ids that registered a push token this session. */
   private readonly pushRegistered = new Set<string>();
   private get followers(): Map<string, ConnectedFollower> {
@@ -299,7 +322,25 @@ export class LeaderSyncManager {
     });
     this.oauthPopupDelegation = new OAuthPopupDelegation(context);
     this.sudoDelegation = new SudoDelegation(context);
+    this.biscottoReview = new BiscottoReview(context, {
+      deliver: (pending) => {
+        // Only NOW is the guest the interaction origin: the message survived
+        // review and is really entering the cone.
+        this.followerDispatch.noteInteractionOrigin(pending.bootstrapId);
+        this.options.onFollowerMessage(pending.text, pending.messageId, pending.attachments, {
+          ...(pending.steer ? { steer: true } : {}),
+          biscotto: pending.biscotto,
+          ...(pending.toolGate ? { guestGate: pending.toolGate } : {}),
+        });
+      },
+      notify: (bootstrapId, messageId, state) => {
+        this.followerRegistry.followers
+          .get(bootstrapId)
+          ?.sync.send({ type: 'biscotto.message.state', messageId, state });
+      },
+    });
     this.followerDispatch = new FollowerDispatch(context, {
+      biscottoReview: this.biscottoReview,
       broadcast: this.broadcast,
       cdpRouter: this.cdpRouter,
       remoteExec: this.remoteExec,
@@ -338,7 +379,12 @@ export class LeaderSyncManager {
   addFollower(
     bootstrapId: string,
     channel: TrayDataChannelLike,
-    meta?: { runtime?: string; connectedAt?: string }
+    meta?: {
+      runtime?: string;
+      connectedAt?: string;
+      trust?: FollowerTrust;
+      biscotto?: FollowerBiscottoIdentity;
+    }
   ): void {
     const { sync } = this.followerRegistry.addFollower(bootstrapId, channel, meta);
 

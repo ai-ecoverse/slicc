@@ -21,8 +21,12 @@ struct SudoApprovalCard: View {
         VStack(alignment: .leading, spacing: 12) {
             Label(request.heading, systemImage: "key.fill")
                 .font(.headline)
-            if let scoop = request.scoopName {
-                detail("Requested by", scoop)
+            // The leader's own account of the asker wins over the requesting
+            // scoop's label: for a guest message the scoop is the unit it was
+            // filed against, not who asked, and `detail` below is the asker's
+            // own words.
+            if let who = request.requester ?? request.scoopName {
+                detail("Requested by", who)
             }
             HStack(alignment: .firstTextBaseline) {
                 Text(request.detailLabel)

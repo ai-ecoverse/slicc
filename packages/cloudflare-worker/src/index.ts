@@ -3,6 +3,7 @@ import { buildApiCatalogResponse } from './api-catalog.js';
 import { buildAppSiteAssociationResponse } from './apple-app-site-association.js';
 import { matchHashedAssetPath, mimeForAssetPath } from './asset-archive.mjs';
 import { handleCloudCallback, handleCloudCallbackScript } from './auth/cloud-callback.js';
+import { handleBiscottoList, handleBiscottoMint, handleBiscottoStop } from './biscotto-routes.js';
 import { CloudSessionsDurableObject } from './cloud/cloud-sessions-do.js';
 import { handleAdminStats } from './cloud/handler-admin.js';
 import { handleCloudConfig } from './cloud/handler-config.js';
@@ -622,6 +623,9 @@ const ROUTES_INDEX_BODY = {
     'POST /api/tray/:trayId/preview/:previewToken/finalize',
     'POST /api/tray/:trayId/preview/stop',
     'GET /api/tray/:trayId/previews',
+    'POST /api/tray/:trayId/biscotto',
+    'POST /api/tray/:trayId/biscotto/stop',
+    'GET /api/tray/:trayId/biscotti',
     'POST /api/tray/:trayId/supersede',
     'GET /auth/callback',
     'GET /auth/mcp-callback',
@@ -911,6 +915,34 @@ async function tryHandleInfoRoutes(
   return null;
 }
 
+/**
+ * Biscotto (guest seat) mint/revoke/list. Bearer = controllerToken throughout,
+ * so only the leader can hand out or withdraw a seat — a seat is never an
+ * issuing authority. Split out of `tryHandleCapabilityRoutes` to keep that
+ * function under the cognitive-complexity ceiling.
+ */
+async function tryHandleBiscottoRoutes(
+  url: URL,
+  request: Request,
+  env: WorkerEnv
+): Promise<Response | null> {
+  // `/biscotto/stop` is matched before `/biscotto` so the bare-mint pattern
+  // cannot shadow it.
+  const stopMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/biscotto\/stop$/);
+  if (stopMatch && request.method === 'POST') {
+    return handleBiscottoStop(request, env.TRAY_HUB.get(env.TRAY_HUB.idFromName(stopMatch[1])));
+  }
+  const mintMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/biscotto$/);
+  if (mintMatch && request.method === 'POST') {
+    return handleBiscottoMint(request, env.TRAY_HUB.get(env.TRAY_HUB.idFromName(mintMatch[1])));
+  }
+  const listMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/biscotti$/);
+  if (listMatch && request.method === 'GET') {
+    return handleBiscottoList(request, env.TRAY_HUB.get(env.TRAY_HUB.idFromName(listMatch[1])));
+  }
+  return null;
+}
+
 async function tryHandleCapabilityRoutes(
   url: URL,
   request: Request,
@@ -945,6 +977,8 @@ async function tryHandleCapabilityRoutes(
     const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(previewListMatch[1]));
     return handlePreviewList(request, stub);
   }
+  const biscotto = await tryHandleBiscottoRoutes(url, request, env);
+  if (biscotto) return biscotto;
   const supersedeMatch = url.pathname.match(/^\/api\/tray\/([^/]+)\/supersede$/);
   if (supersedeMatch && request.method === 'POST') {
     const stub = env.TRAY_HUB.get(env.TRAY_HUB.idFromName(supersedeMatch[1]));

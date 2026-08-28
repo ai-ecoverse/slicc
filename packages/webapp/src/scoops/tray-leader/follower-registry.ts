@@ -1,3 +1,4 @@
+import type { FollowerBiscottoIdentity, FollowerTrust } from '@slicc/shared-ts';
 import type { Logger } from '../../base/logger.js';
 import type { SprinkleInstance } from '../../shell/sprinkle-manager-handle.js';
 import { DataChannelKeepalive } from '../data-channel-keepalive.js';
@@ -9,6 +10,7 @@ import {
   type TraySyncChannel,
 } from '../tray-sync-protocol.js';
 import type { TrayDataChannelLike } from '../tray-webrtc.js';
+import { isMessageSendableToTrust } from './biscotto-gate.js';
 
 export type FloatType = 'standalone' | 'extension' | 'electron' | 'ios' | 'unknown';
 
@@ -21,7 +23,18 @@ export function deriveFloatType(runtime?: string): FloatType {
   return 'unknown';
 }
 
-export function labelForFollower(floatType: FloatType, runtime?: string): string {
+export function labelForFollower(
+  floatType: FloatType,
+  runtime?: string,
+  follower?: Pick<ConnectedFollower, 'trust' | 'biscotto'>
+): string {
+  // A guest seat is not a float. Naming it after the browser it happens to run
+  // in would let a biscotto read as an ordinary follower everywhere a label is
+  // shown — logs, `ssh --list`, follower rails.
+  if (follower?.trust === 'biscotto') {
+    const label = follower.biscotto?.label;
+    return label ? `biscotto (${label})` : 'biscotto';
+  }
   switch (floatType) {
     case 'extension':
       return 'extension follower';
@@ -38,6 +51,15 @@ export function labelForFollower(floatType: FloatType, runtime?: string): string
 
 export interface ConnectedFollower {
   bootstrapId: string;
+  /**
+   * Hub-resolved trust. `biscotto` peers are restricted to a small allowlist of
+   * wire messages by `FollowerDispatch`; everything else they send is dropped.
+   * Defaulted to `full` for callers that predate the feature so existing
+   * followers keep their entire surface.
+   */
+  trust: FollowerTrust;
+  /** Guest seat identity when `trust === 'biscotto'` — label drives attribution. */
+  biscotto?: FollowerBiscottoIdentity;
   sync: TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>;
   unsubscribe: () => void;
   keepalive: DataChannelKeepalive;
@@ -95,9 +117,45 @@ export interface FollowerDetails {
   hostOrigin?: string;
   selectedScoopJid?: string;
   health: 'live' | 'stalled';
+  /** Hub-resolved trust. Absent only from records built before the seat class. */
+  trust?: FollowerTrust;
+  /** Guest seat identity when `trust === 'biscotto'`. */
+  biscotto?: FollowerBiscottoIdentity;
 }
 
 const BROADCAST_ERROR_THROTTLE_MS = 60_000;
+
+/**
+ * Enforce {@link BISCOTTO_RECEIVABLE} on a seat's own channel.
+ *
+ * Wrapping the channel rather than each broadcast site is deliberate: there are
+ * many senders — targeted `sendXToFollower` helpers, `broadcastToAllFollowers`,
+ * ad-hoc `follower.sync.send` calls — and filtering them individually is how
+ * the next one added starts leaking. A guest's channel simply cannot carry a
+ * message it is not allowed to receive, whoever writes to it.
+ *
+ * A full-trust follower is handed the channel untouched, so ordinary followers
+ * keep byte-for-byte their existing behaviour.
+ */
+function restrictOutbound(
+  sync: TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage>,
+  trust: FollowerTrust,
+  log: Logger
+): TraySyncChannel<LeaderToFollowerMessage, FollowerToLeaderMessage> {
+  if (trust !== 'biscotto') return sync;
+  return new Proxy(sync, {
+    get(target, prop, receiver) {
+      if (prop !== 'send') return Reflect.get(target, prop, receiver);
+      return (message: LeaderToFollowerMessage): boolean => {
+        if (isMessageSendableToTrust('biscotto', message.type)) return target.send(message);
+        log.debug('Withholding a message a biscotto may not receive', { type: message.type });
+        // Reported as sent: the caller is broadcasting to everyone and a guest
+        // legitimately not receiving this is not a transport failure.
+        return true;
+      };
+    },
+  });
+}
 
 export class FollowerRegistry {
   readonly followers = new Map<string, ConnectedFollower>();
@@ -110,10 +168,16 @@ export class FollowerRegistry {
   addFollower(
     bootstrapId: string,
     channel: TrayDataChannelLike,
-    meta?: { runtime?: string; connectedAt?: string }
+    meta?: {
+      runtime?: string;
+      connectedAt?: string;
+      trust?: FollowerTrust;
+      biscotto?: FollowerBiscottoIdentity;
+    }
   ): ConnectedFollower {
     this.removeFollower(bootstrapId);
-    const sync = createLeaderSyncChannel(channel);
+    const trust = meta?.trust ?? 'full';
+    const sync = restrictOutbound(createLeaderSyncChannel(channel), trust, this.options.log);
     const unsubscribe = sync.onMessage((message) => this.options.onMessage(bootstrapId, message));
     const keepalive = new DataChannelKeepalive({
       sendPing: () => sync.send({ type: 'ping' }),
@@ -142,6 +206,8 @@ export class FollowerRegistry {
       connectedAt: meta?.connectedAt,
       lastActivity: Date.now(),
       floatType: deriveFloatType(meta?.runtime),
+      trust: meta?.trust ?? 'full',
+      biscotto: meta?.biscotto,
     };
     this.followers.set(bootstrapId, follower);
     this.options.log.info('Follower added to sync', {
@@ -263,6 +329,11 @@ export class FollowerRegistry {
       floatType: follower.floatType,
       hostOrigin: follower.hostOrigin,
       selectedScoopJid: follower.selectedScoopJid,
+      // Without these the roster shows a guest as an ordinary browser
+      // follower, which is exactly the confusion the trust class exists to
+      // remove — every surface that lists peers would misreport who is here.
+      trust: follower.trust,
+      biscotto: follower.biscotto,
       health: follower.keepalive.isStalled ? 'stalled' : 'live',
     }));
   }

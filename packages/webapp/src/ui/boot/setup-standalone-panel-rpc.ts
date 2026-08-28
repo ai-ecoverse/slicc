@@ -12,11 +12,16 @@
 
 import type { BrowserAPI } from '../../cdp/index.js';
 import { getAccounts } from '../../providers/account-store.js';
+import type { LeaderTraySession } from '../../scoops/tray-leader.js';
 import type { TrayLeaveResult } from '../../scoops/tray-leave.js';
 import { storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
 import type { SidecarRegistry } from '../../scoops/tray-sidecar.js';
 import type { PageLeaderTrayHandle } from '../page-leader-tray.js';
-import type { SidecarRegistryLike } from '../panel-rpc-handlers.js';
+import type {
+  SidecarRegistryLike,
+  StandalonePanelRpcHandlerOptions,
+} from '../panel-rpc-handlers.js';
+
 import type { RemoteCdpPageBridge } from '../remote-cdp-page-bridge.js';
 
 /** JWT claim bag we read for account identity hashing. */
@@ -80,6 +85,78 @@ export interface StandalonePanelRpcDeps {
 }
 
 type ActiveLeaderSync = NonNullable<PageLeaderTrayHandle['currentLeaderSync']>;
+
+/**
+ * The leader's live session plus its controller token, or a thrown error named
+ * for the command that asked.
+ *
+ * The controller token is the last path segment of the controller URL — the
+ * page-side leader is the only holder, which is why every worker-side command
+ * that talks to the tray HTTP API has to bridge through here.
+ */
+async function requireLeaderSession(
+  commandName: string
+): Promise<{ session: LeaderTraySession; controllerToken: string }> {
+  const { getLeaderTrayRuntimeStatus } = await import('../../scoops/tray-leader.js');
+  const session = getLeaderTrayRuntimeStatus().session;
+  if (!session) throw new Error(`${commandName}: leader tray has no active session`);
+  const controllerToken = new URL(session.controllerUrl).pathname.split('/').pop() ?? '';
+  if (!controllerToken) {
+    throw new Error(`${commandName}: leader tray session carries no controller token`);
+  }
+  return { session, controllerToken };
+}
+
+/**
+ * The three biscotto panel-RPC handlers.
+ *
+ * A separate factory rather than three more entries inline: the handler map is
+ * already at the per-function line cap, and these share one credential lookup.
+ */
+function biscottoHandlers(): Pick<
+  StandalonePanelRpcHandlerOptions,
+  'mintBiscotto' | 'revokeBiscotto' | 'listBiscotti'
+> {
+  return {
+    mintBiscotto: async (payload) => {
+      const { session, controllerToken } = await requireLeaderSession('biscotto');
+      const { mintBiscottoViaWorker } = await import(
+        '../../shell/supplemental-commands/biscotto-mint-client.js'
+      );
+      return mintBiscottoViaWorker({
+        workerBaseUrl: session.workerBaseUrl,
+        trayId: session.trayId,
+        controllerToken,
+        // Spread rather than restated: every field the op declares reaches
+        // the worker, including ones added later.
+        ...payload,
+      });
+    },
+    revokeBiscotto: async ({ id }) => {
+      const { session, controllerToken } = await requireLeaderSession('biscotto revoke');
+      const { revokeBiscottoViaWorker } = await import(
+        '../../shell/supplemental-commands/biscotto-mint-client.js'
+      );
+      return revokeBiscottoViaWorker({
+        workerBaseUrl: session.workerBaseUrl,
+        trayId: session.trayId,
+        controllerToken,
+        id,
+      });
+    },
+    listBiscotti: async () => {
+      const { session, controllerToken } = await requireLeaderSession('biscotti');
+      const { listBiscottiViaWorker } = await import(
+        '../../shell/supplemental-commands/biscotto-mint-client.js'
+      );
+      return listBiscottiViaWorker({
+        workerBaseUrl: session.workerBaseUrl,
+        trayId: session.trayId,
+        controllerToken,
+      });
+    },
+  };
+}
 
 function requirePreviewSync(
   getLeader: StandalonePanelRpcDeps['getLeader'],
@@ -223,6 +300,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
       execOnRemote: remoteExec.execOnRemote,
       signalRemoteExec: remoteExec.signalRemoteExec,
       sliccSidecar: createSidecarBridge(),
+      ...biscottoHandlers(),
       mintPreview: async (opts) => {
         const sync = getLeader()?.currentLeaderSync;
         if (!sync) throw new Error('serve: no active leader tray; cannot mint preview');

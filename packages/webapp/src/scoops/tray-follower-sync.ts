@@ -66,6 +66,15 @@ import type { TrayDataChannelLike } from './tray-webrtc.js';
 const log = createLogger('tray-follower-sync');
 
 export interface FollowerSyncManagerOptions {
+  /**
+   * A message this follower sent has moved through the leader's review gate.
+   * Only ever called on a biscotto (guest seat) — an ordinary follower IS the
+   * owner and its messages are not reviewed.
+   */
+  onBiscottoMessageState?: (
+    messageId: string,
+    state: 'pending' | 'approved' | 'rejected' | 'unanswered'
+  ) => void;
   /** Called when the leader sends a snapshot (full state replacement). */
   onSnapshot?: (messages: ChatMessage[], scoopJid: string) => void;
   /** Called when the leader echoes a user message (local or from any follower). */
@@ -172,6 +181,8 @@ export interface FollowerSyncManagerOptions {
     requestId: string;
     kind: TraySudoKind;
     detail: string;
+    /** Leader-derived identity of the asker; chrome, not part of `detail`. */
+    requester?: string;
     suggestedPattern?: string;
     scoopName?: string;
     expiresAt: number;
@@ -793,6 +804,41 @@ export class FollowerSyncManager implements AgentHandle {
     setFollowerLastPingTime(Date.now());
   }
 
+  /** A whole-thread replacement. Drops any half-assembled chunked snapshot. */
+  private handleSnapshot(messages: ChatMessage[], scoopJid: string): void {
+    log.info('Snapshot received from leader', { messageCount: messages.length, scoopJid });
+    this.snapshotChunkBuffer = null;
+    this.latestSnapshot = { messages, scoopJid };
+    this.options.onSnapshot?.(messages, scoopJid);
+  }
+
+  /** One frame of a snapshot too large to send whole; emits once complete. */
+  private handleSnapshotChunk(
+    message: Extract<LeaderToFollowerMessage, { type: 'snapshot_chunk' }>
+  ): void {
+    const assembled = reassembleSnapshot(this.snapshotChunkBuffer, message);
+    this.snapshotChunkBuffer = assembled.buffer;
+    if (!assembled.result) return;
+    log.info('Chunked snapshot reassembled from leader', {
+      messageCount: assembled.result.messages.length,
+      scoopJid: assembled.result.scoopJid,
+    });
+    this.latestSnapshot = assembled.result;
+    this.options.onSnapshot?.(assembled.result.messages, assembled.result.scoopJid);
+  }
+
+  /**
+   * Only a biscotto ever receives this; an ordinary follower's messages are
+   * never reviewed. Surfaced so the guest composer can show its own message as
+   * pending / refused rather than appearing to have been sent and vanished.
+   */
+  private handleBiscottoMessageState(
+    messageId: string,
+    state: 'pending' | 'approved' | 'rejected' | 'unanswered'
+  ): void {
+    this.options.onBiscottoMessageState?.(messageId, state);
+  }
+
   private handleLeaderHello(protocolVersion: number): void {
     this.leaderProtocolVersion = protocolVersion;
     if (protocolVersion > TRAY_SYNC_PROTOCOL_VERSION) {
@@ -827,28 +873,12 @@ export class FollowerSyncManager implements AgentHandle {
     if (this.handleThemeMessage(message)) return;
     switch (message.type) {
       case 'snapshot':
-        log.info('Snapshot received from leader', {
-          messageCount: message.messages.length,
-          scoopJid: message.scoopJid,
-        });
-        this.snapshotChunkBuffer = null; // Clear any in-progress chunked snapshot
-        this.latestSnapshot = { messages: message.messages, scoopJid: message.scoopJid };
-        this.options.onSnapshot?.(message.messages, message.scoopJid);
+        this.handleSnapshot(message.messages, message.scoopJid);
         break;
 
-      case 'snapshot_chunk': {
-        const assembled = reassembleSnapshot(this.snapshotChunkBuffer, message);
-        this.snapshotChunkBuffer = assembled.buffer;
-        if (assembled.result) {
-          log.info('Chunked snapshot reassembled from leader', {
-            messageCount: assembled.result.messages.length,
-            scoopJid: assembled.result.scoopJid,
-          });
-          this.latestSnapshot = assembled.result;
-          this.options.onSnapshot?.(assembled.result.messages, assembled.result.scoopJid);
-        }
+      case 'snapshot_chunk':
+        this.handleSnapshotChunk(message);
         break;
-      }
 
       case 'agent_event':
         this.emitEvent(message.event);
@@ -972,6 +1002,9 @@ export class FollowerSyncManager implements AgentHandle {
         break;
       case 'hello':
         this.handleLeaderHello(message.protocolVersion);
+        break;
+      case 'biscotto.message.state':
+        this.handleBiscottoMessageState(message.messageId, message.state);
         break;
       case 'exec.request':
       case 'exec.chunk':
@@ -1749,6 +1782,7 @@ export class FollowerSyncManager implements AgentHandle {
         detail: message.detail,
         ...(message.suggestedPattern ? { suggestedPattern: message.suggestedPattern } : {}),
         ...(message.scoopName ? { scoopName: message.scoopName } : {}),
+        ...(message.requester ? { requester: message.requester } : {}),
         expiresAt: message.expiresAt,
         signal: abort.signal,
       });
