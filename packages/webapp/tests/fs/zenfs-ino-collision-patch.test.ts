@@ -22,6 +22,11 @@ import { describe, expect, it } from 'vitest';
 // rule after a duplicated real ino made concurrent reads of two paths
 // return the same bytes). These tests fail if either patch is missing or
 // stops applying.
+//
+// Filed upstream as zen-fs/core#314 with a repro that needs neither patch to
+// explain: ZenFS's own `make-index` copies host `st_ino` values and drops
+// `st_dev`, so an index over a tree spanning two volumes carries duplicate
+// inos, and the Fetch backend then serves one file's bytes for another.
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '../../../..');
 
 describe('@zenfs/dom ino allocation patch (#2146)', () => {
