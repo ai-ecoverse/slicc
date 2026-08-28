@@ -44,9 +44,14 @@ interface PendingCall<TReply> {
 /**
  * Opaque Port / panel-RPC message body. The factory only correlates by `id`
  * (added separately for the Port path); field shapes are owned by each
- * specialization (`secrets-bridge-client`, `mount-bridge-client`).
+ * specialization (`secrets-bridge-client`, `mount-bridge-client`) and relayed
+ * without inspection. Kept as the recognized `Record<string, unknown>` spelling
+ * (with the documented suppression) rather than an equivalent index-signature
+ * alias so the debt gate still sees the untyped bag and no later change can
+ * evade it — mirrors `SecretsBridgePayload` in `secrets-bridge-client`.
  */
-export type PortBridgeMessageBody = { [key: string]: unknown };
+// biome-ignore lint/plugin: field shapes are owned by each specialization and relayed without inspection; there is no bounded shape at this layer.
+export type PortBridgeMessageBody = Record<string, unknown>;
 
 /** Per-call-site configuration for `createPortBridgeClient`. */
 export interface PortBridgeOptions<TRequest> {
