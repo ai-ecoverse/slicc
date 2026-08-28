@@ -1,6 +1,7 @@
 import AppKit
 import AppUpdater
 import SliccTraySession
+import Version
 import SwiftUI
 import XCTest
 
@@ -87,6 +88,33 @@ final class AppListViewRenderTests: XCTestCase {
         AppUpdater(owner: "ai-ecoverse", repo: "slicc", releasePrefix: "Sliccstart")
     }
 
+    /// An updater holding a staged build, which is the only state in which the
+    /// footer offers "Restart to Update" — and therefore the only state in
+    /// which the agent-activity tint is read at all.
+    private func updaterWithDownloadedUpdate(version: String = "6.105.0") throws -> AppUpdater {
+        let json = """
+            {
+              "tag_name": "v\(version)",
+              "prerelease": false,
+              "name": "v\(version)",
+              "html_url": "https://github.com/ai-ecoverse/slicc/releases/tag/v\(version)",
+              "body": "test",
+              "assets": [{
+                "name": "Sliccstart-\(version).zip",
+                "browser_download_url": "https://example.com/Sliccstart-\(version).zip",
+                "content_type": "application/zip"
+              }]
+            }
+            """
+        let decoder = JSONDecoder()
+        decoder.userInfo[.decodingMethod] = DecodingMethod.tolerant
+        let release = try decoder.decode(Release.self, from: Data(json.utf8))
+        let asset = try XCTUnwrap(release.assets.first)
+        let updater = updater()
+        updater.state = .downloaded(release, asset, Bundle.main)
+        return updater
+    }
+
     private func makeView(
         targets: [AppTarget],
         process: SliccProcess = SliccProcess(),
@@ -94,14 +122,15 @@ final class AppListViewRenderTests: XCTestCase {
         permission: AppManagementPermission = AppManagementPermission(),
         updateCheckStatus: UpdateCheckStatus = .idle,
         hasRecentAgentActivity: Bool = false,
-        isBundledBuild: Bool = true
+        isBundledBuild: Bool = true,
+        appUpdater: AppUpdater? = nil
     ) -> AppListView {
         AppListView(
             targets: targets,
             sliccProcess: process,
             sessionStore: sessionStore ?? store(),
             appManagementPermission: permission,
-            appUpdater: updater(),
+            appUpdater: appUpdater ?? updater(),
             updateCheckStatus: updateCheckStatus,
             hasRecentAgentActivity: hasRecentAgentActivity,
             onCheckForUpdates: {},
@@ -285,13 +314,47 @@ final class AppListViewRenderTests: XCTestCase {
         )
     }
 
-    func testAgentActivityIsVisibleInTheFooter() {
-        // The tint discourages restarting into an update mid-agent-run; if it
-        // never reached the view the two would render identically.
-        let quiet = makeView(targets: [], hasRecentAgentActivity: false)
-        let busy = makeView(targets: [], hasRecentAgentActivity: true)
-        XCTAssertFalse(digestOf(quiet).isEmpty)
-        XCTAssertFalse(digestOf(busy).isEmpty)
+    func testAStagedUpdateOffersRestartInsteadOfAnotherCheck() throws {
+        let staged = try updaterWithDownloadedUpdate()
+        ViewHosting.assertRendersDifferently(
+            makeView(targets: []),
+            makeView(targets: [], appUpdater: staged),
+            "a downloaded update must replace the check button with restart-to-update"
+        )
+    }
+
+    func testAgentActivityDiscouragesRestartingIntoTheUpdate() throws {
+        // The tint is read only by the restart button, and that button is
+        // `.borderless` — AppKit-backed, so it draws nothing under
+        // `ImageRenderer` and no render comparison can see it. The decision
+        // is asserted directly instead; the render below only proves the
+        // staged-update footer still builds in both states.
+        XCTAssertEqual(
+            AppListView.updateAffordance(hasRecentAgentActivity: false),
+            .ready
+        )
+        XCTAssertEqual(
+            AppListView.updateAffordance(hasRecentAgentActivity: true),
+            .discouraged,
+            "restarting mid-run would interrupt the agent, so it must not look inviting"
+        )
+
+        for busy in [false, true] {
+            let view = makeView(
+                targets: [],
+                hasRecentAgentActivity: busy,
+                appUpdater: try updaterWithDownloadedUpdate()
+            )
+            XCTAssertFalse(digestOf(view).isEmpty)
+        }
+    }
+
+    func testAStagedUpdateWithoutAVersionStillOffersRestart() throws {
+        // `fullUpdateButton` falls back to an unversioned title when the
+        // bundle carries no CFBundleShortVersionString — the test bundle does
+        // not, so this is the branch that actually renders here.
+        let staged = try updaterWithDownloadedUpdate()
+        XCTAssertFalse(digestOf(makeView(targets: [], appUpdater: staged)).isEmpty)
     }
 
     // MARK: - iCloud sessions
