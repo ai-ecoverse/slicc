@@ -16,11 +16,8 @@
  * re-prompt for permission before using the handle.
  */
 
-import { createLogger } from '../core/logger.js';
-import {
-  type DirectoryPickerResult,
-  openPickerPopup,
-} from '../shell/supplemental-commands/picker-popup.js';
+import { createLogger } from '../base/logger.js';
+import { type DirectoryPickerResult, openPickerPopup } from './picker-popup.js';
 
 const log = createLogger('mount-picker-popup');
 
