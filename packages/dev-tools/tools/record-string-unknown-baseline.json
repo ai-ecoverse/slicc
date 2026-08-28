@@ -7,7 +7,6 @@
   "packages/cloudflare-worker/src/oauth-exchange.ts": 1,
   "packages/dev-tools/tools/extension-smoke-test.ts": 6,
   "packages/node-server/src/electron-controller.ts": 13,
-  "packages/node-server/src/electron-federated-cdp.ts": 5,
   "packages/node-server/src/electron-runtime.ts": 1,
   "packages/node-server/src/file-logger.ts": 1,
   "packages/shared-ts/src/transcript-export.ts": 18,
