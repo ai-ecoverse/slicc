@@ -676,6 +676,38 @@ describe('resetNewSessionTmp', () => {
     }
   );
 
+  it('never traverses a cone subtree that sits INSIDE a mount (Codex P1 on #2574)', async () => {
+    // The sweep root moved from `/tmp` down to `/tmp/<cone>`, so a mount at
+    // `/tmp` stopped being the sweep root that halted it and became an
+    // ANCESTOR the filter dropped. Walking through it deletes the user's real
+    // Local/S3/DA files.
+    const vfs = await createVfs();
+    await vfs.mount(
+      '/tmp',
+      LocalMountBackend.fromHandle(createDirectoryHandle({ cone: { 'keep.txt': 'preserve' } }), {
+        mountId: 'new-session-ancestor',
+      })
+    );
+
+    await resetNewSessionTmp(vfs, '/tmp/cone');
+
+    expect(await vfs.readTextFile('/tmp/cone/keep.txt')).toBe('preserve');
+  });
+
+  it('does not conjure a directory inside a mount when the cone subtree is absent', async () => {
+    // The other half of the same bug: with nothing at `/tmp/<cone>` the sweep
+    // falls through to `mkdir(tmpDir, { recursive: true })`, which would
+    // create a directory in the user's mounted external storage.
+    const vfs = await createVfs();
+    const remote = createRemoteMountBackend('s3');
+    await vfs.mount('/tmp', remote.backend);
+
+    await resetNewSessionTmp(vfs, '/tmp/cone');
+
+    expect(remote.remove).not.toHaveBeenCalled();
+    expect(remote.backend.mkdir).not.toHaveBeenCalled();
+  });
+
   it('wipes only the named cone subtree, leaving a sibling cone untouched', async () => {
     // The incident this scoping exists for: "New chat" on one cone deleted a
     // SIBLING cone's live working directory out from under it (#2566, #2568).
