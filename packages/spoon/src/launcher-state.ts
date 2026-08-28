@@ -20,8 +20,6 @@ export type LauncherCorner = (typeof LAUNCHER_CORNERS)[number];
 export const DEFAULT_LAUNCHER_CORNER: LauncherCorner = 'top-right';
 export const LAUNCHER_OFFSET_PX = 18;
 export const LAUNCHER_DRAG_THRESHOLD_PX = 6;
-export const LAUNCHER_FLICK_THRESHOLD_PX = 12;
-export const LAUNCHER_FLICK_THRESHOLD_PX_PER_MS = 0.6;
 export const LAUNCHER_STORAGE_KEY = 'slicc-launcher-corner';
 
 /**
@@ -53,13 +51,19 @@ export function normalizeLauncherFollowerStatus(
   return status && FOLLOWER_STATUS_SET.has(status) ? (status as LauncherFollowerStatus) : fallback;
 }
 
-/** Whether a pointer movement is sufficient to leave click territory and snap. */
-export function shouldSnapLauncher(distancePx: number, velocityPxPerMs: number): boolean {
-  return (
-    distancePx >= LAUNCHER_DRAG_THRESHOLD_PX ||
-    (distancePx >= LAUNCHER_FLICK_THRESHOLD_PX &&
-      velocityPxPerMs >= LAUNCHER_FLICK_THRESHOLD_PX_PER_MS)
-  );
+/**
+ * Whether a pointer movement is sufficient to leave click territory and snap.
+ *
+ * Distance alone decides. There used to be a second, faster-but-farther "flick"
+ * clause here (`>= 12px && >= 0.6px/ms`) — it could never fire, because any
+ * distance clearing 12px had already cleared the 6px drag threshold. Speed
+ * still shapes the gesture, just later: {@link resolveLauncherCorner} projects
+ * the release point forward by the pointer's velocity, so a hard throw lands in
+ * the corner it was aimed at. Lowering this bound instead would make a fast,
+ * jittery *click* snap the launcher and swallow the toggle.
+ */
+export function shouldSnapLauncher(distancePx: number): boolean {
+  return distancePx >= LAUNCHER_DRAG_THRESHOLD_PX;
 }
 
 export interface ResolveCornerInput {

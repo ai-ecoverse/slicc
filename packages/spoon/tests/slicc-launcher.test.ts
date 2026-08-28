@@ -4,8 +4,10 @@ import {
   DEFAULT_LAUNCHER_CORNER,
   DEFAULT_LAUNCHER_FOLLOWER_STATUS,
   LAUNCHER_CORNERS,
+  LAUNCHER_DRAG_THRESHOLD_PX,
   LAUNCHER_FOLLOWER_STATUS_ATTR,
   LAUNCHER_FOLLOWER_STATUSES,
+  type LauncherFollowerStatus,
   normalizeLauncherCorner,
   normalizeLauncherFollowerStatus,
   resolveLauncherCorner,
@@ -32,15 +34,11 @@ describe('launcher-state', () => {
     expect(normalizeLauncherCorner(undefined, 'left')).toBe('left');
   });
 
-  it('shouldSnapLauncher honors the distance + flick thresholds', () => {
-    expect(shouldSnapLauncher(0, 0)).toBe(false);
-    expect(shouldSnapLauncher(5, 0)).toBe(false);
-    // Past the drag threshold, snap regardless of velocity.
-    expect(shouldSnapLauncher(6, 0)).toBe(true);
-    expect(shouldSnapLauncher(12, 0.1)).toBe(true);
-    // A fast flick with a smaller distance does not snap until the flick
-    // distance threshold is also met.
-    expect(shouldSnapLauncher(3, 2)).toBe(false);
+  it('shouldSnapLauncher snaps at (and past) the drag threshold', () => {
+    expect(shouldSnapLauncher(0)).toBe(false);
+    expect(shouldSnapLauncher(LAUNCHER_DRAG_THRESHOLD_PX - 1)).toBe(false);
+    expect(shouldSnapLauncher(LAUNCHER_DRAG_THRESHOLD_PX)).toBe(true);
+    expect(shouldSnapLauncher(120)).toBe(true);
   });
 
   it('resolveLauncherCorner picks corner quadrants and edge midpoints', () => {
@@ -58,6 +56,62 @@ describe('launcher-state', () => {
 
   it('exposes a complete corner set', () => {
     expect(new Set(LAUNCHER_CORNERS).size).toBe(8);
+  });
+
+  it('resolves the dead-center cell to its nearest edge midpoint', () => {
+    // The 3x3 grid's middle cell has no corner of its own: whichever viewport
+    // edge is closest wins, so a release in the middle always parks the
+    // launcher on an edge rather than snapping across the screen.
+    const v = { viewportWidth: 900, viewportHeight: 900 };
+    expect(resolveLauncherCorner({ clientX: 450, clientY: 400, ...v })).toBe('top');
+    expect(resolveLauncherCorner({ clientX: 450, clientY: 500, ...v })).toBe('bottom');
+    expect(resolveLauncherCorner({ clientX: 400, clientY: 450, ...v })).toBe('left');
+    expect(resolveLauncherCorner({ clientX: 500, clientY: 450, ...v })).toBe('right');
+    // Perfect dead center is a 4-way tie — resolved deterministically to the
+    // first winner in the comparison order (top) rather than at random.
+    expect(resolveLauncherCorner({ clientX: 450, clientY: 450, ...v })).toBe('top');
+  });
+
+  it('projects a flick forward by its velocity, clamped to the viewport', () => {
+    const v = { viewportWidth: 1000, viewportHeight: 800 };
+    // Released dead center but thrown hard to the right and down: the
+    // projection (180ms by default) carries it into the bottom-right quadrant.
+    expect(
+      resolveLauncherCorner({
+        clientX: 500,
+        clientY: 400,
+        velocityXPxPerMs: 3,
+        velocityYPxPerMs: 3,
+        ...v,
+      })
+    ).toBe('bottom-right');
+    // A shorter projection window keeps the same throw in the middle cell
+    // (nearest edge from just below center: the bottom).
+    expect(
+      resolveLauncherCorner({
+        clientX: 500,
+        clientY: 400,
+        velocityXPxPerMs: 3,
+        velocityYPxPerMs: 3,
+        flickProjectionMs: 1,
+        ...v,
+      })
+    ).toBe('bottom');
+    // Projection past the viewport edge is clamped, not extrapolated.
+    expect(
+      resolveLauncherCorner({
+        clientX: 500,
+        clientY: 400,
+        velocityXPxPerMs: -1000,
+        velocityYPxPerMs: -1000,
+        ...v,
+      })
+    ).toBe('top-left');
+  });
+
+  it('normalizeLauncherCorner honors an explicit fallback for invalid input', () => {
+    expect(normalizeLauncherCorner('nope', 'bottom')).toBe('bottom');
+    expect(normalizeLauncherFollowerStatus('nope', 'error')).toBe('error');
   });
 
   it('normalizes follower-status to the disconnected default for absent/invalid values', () => {
@@ -409,6 +463,35 @@ describe('slicc-launcher', () => {
     expect(empty.textContent).toBe('Set the app-url attribute to load SLICC.');
   });
 
+  it('is a no-op when open is set to the value it already has', () => {
+    const el = mount();
+    const onToggle = vi.fn();
+    el.addEventListener('slicc-launcher-toggle', onToggle);
+    el.open = false;
+    expect(onToggle).not.toHaveBeenCalled();
+    el.open = true;
+    el.open = true;
+    expect(onToggle).toHaveBeenCalledTimes(1);
+  });
+
+  it('is a no-op when follower-status is set to the value it already has', () => {
+    const el = mount({ [LAUNCHER_FOLLOWER_STATUS_ATTR]: 'connected' });
+    el.followerStatus = 'connected';
+    expect(el.getAttribute(LAUNCHER_FOLLOWER_STATUS_ATTR)).toBe('connected');
+    // An invalid value normalizes to disconnected rather than sticking.
+    el.followerStatus = 'nonsense' as LauncherFollowerStatus;
+    expect(el.followerStatus).toBe('disconnected');
+  });
+
+  it('does not reload the iframe when app-url changes only by whitespace', () => {
+    const el = mount({ 'app-url': 'https://example.test/app' });
+    const iframe = el.shadowRoot?.querySelector('iframe') as HTMLIFrameElement;
+    const loaded = iframe.src;
+    el.setAttribute('app-url', '  https://example.test/app  ');
+    expect(el.appUrl).toBe('https://example.test/app');
+    expect(iframe.src).toBe(loaded);
+  });
+
   it('keeps the empty viewport visible only while there is no app-url', () => {
     const el = mount({ 'status-message': 'blocked here' });
     const empty = el.shadowRoot?.querySelector('.empty') as HTMLElement;
@@ -464,5 +547,79 @@ describe('inject', () => {
     expect(document.getElementById(SLICC_LAUNCHER_HOST_ID)).not.toBeNull();
     removeSliccLauncher(document);
     expect(document.getElementById(SLICC_LAUNCHER_HOST_ID)).toBeNull();
+  });
+
+  it('removing a launcher that was never injected is a no-op', () => {
+    expect(() => {
+      removeSliccLauncher(document);
+    }).not.toThrow();
+  });
+
+  it('leaves untouched options alone when re-injecting', () => {
+    const first = injectSliccLauncher(document, {
+      open: true,
+      appUrl: 'https://example.test/app',
+      statusMessage: 'waiting',
+      corner: 'left',
+    });
+    // A bare re-inject (the Electron re-attach path) must not clear the
+    // launcher's current url / message / corner or close the sidebar.
+    const second = injectSliccLauncher(document, {});
+    expect(second).toBe(first);
+    expect(second.appUrl).toBe('https://example.test/app');
+    expect(second.statusMessage).toBe('waiting');
+    expect(second.corner).toBe('left');
+    expect(second.open).toBe(true);
+  });
+
+  it('treats null appUrl/statusMessage as "clear it"', () => {
+    const launcher = injectSliccLauncher(document, {
+      appUrl: 'https://example.test/app',
+      statusMessage: 'waiting',
+    });
+    injectSliccLauncher(document, { appUrl: null, statusMessage: null });
+    expect(launcher.appUrl).toBe('');
+    expect(launcher.statusMessage).toBe('');
+    expect(launcher.hasAttribute('app-url')).toBe(false);
+    expect(launcher.hasAttribute('status-message')).toBe(false);
+  });
+
+  it('ignores the legacy activeTab option and a non-boolean open', () => {
+    const launcher = injectSliccLauncher(document, {
+      activeTab: 'chat',
+      open: undefined,
+    });
+    expect(launcher.open).toBe(false);
+    expect(launcher.hasAttribute('activeTab')).toBe(false);
+  });
+
+  it('replaces a foreign element squatting on the overlay host id', () => {
+    const squatter = document.createElement('div');
+    squatter.id = SLICC_LAUNCHER_HOST_ID;
+    squatter.textContent = 'not a launcher';
+    document.body.appendChild(squatter);
+
+    const launcher = injectSliccLauncher(document);
+    expect(launcher).toBeInstanceOf(SliccLauncher);
+    expect(squatter.isConnected).toBe(false);
+    expect(document.querySelectorAll(`#${SLICC_LAUNCHER_HOST_ID}`).length).toBe(1);
+  });
+
+  it('falls back to documentElement when the document has no body yet', () => {
+    // Electron injects at document-start (addScriptToEvaluateOnNewDocument), so
+    // <body> can still be null when inject() runs. Hide it on the real document
+    // rather than building a detached one, so the element still upgrades
+    // against this window's registry and the assertions mean something.
+    Object.defineProperty(document, 'body', { configurable: true, get: () => null });
+    let launcher: SliccLauncher;
+    try {
+      launcher = injectSliccLauncher(document, { appUrl: 'https://example.test/app' });
+    } finally {
+      delete (document as unknown as Record<string, unknown>).body;
+    }
+    expect(launcher).toBeInstanceOf(SliccLauncher);
+    expect(launcher.parentNode).toBe(document.documentElement);
+    expect(launcher.appUrl).toBe('https://example.test/app');
+    launcher.remove();
   });
 });

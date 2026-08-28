@@ -45,9 +45,39 @@ src/
   internal/define.ts    # guarded customElements registration
   internal/dom.ts       # h() / sheet() / frag() — no innerHTML
   css.d.ts              # *.svg?raw module declaration
-tests/slicc-launcher.test.ts   # @vitest/browser (real Chromium)
-build.mjs               # esbuild IIFE → <repoRoot>/dist/ui/electron-overlay-entry.js
+  tunnel/asset-graph.ts       # pure module-graph → blob-graph transforms
+  tunnel/tunnel-protocol.ts   # frame ↔ controller wire contract
+  tunnel/tunnel-runtime.ts    # tunnelled fetch/WebSocket + the loader boot
+  tunnel/tunnel-loader-entry.ts # IIFE entry → boot() against the ambient frame
+tests/                  # @vitest/browser (real Chromium)
+  slicc-launcher.test.ts  launcher-drag.test.ts  internal-dom.test.ts
+  overlay-entry.test.ts   index-barrel.test.ts
+  asset-graph.test.ts     tunnel-runtime.test.ts
+build.mjs               # esbuild IIFEs → <repoRoot>/dist/ui/electron-overlay-entry.js
+                        #              + <repoRoot>/dist/ui/electron-tunnel-loader.js
 ```
+
+## The CDP virtual-network tunnel (`src/tunnel/`)
+
+For Electron apps that deny the renderer **all** network egress (Signal answers
+every request with `net::ERR_ACCESS_DENIED`, beneath the layer `Page.setBypassCSP`
+or CDP `Fetch` interception reach), the overlay iframe can never load. The
+controller instead opens a `srcdoc` frame and injects
+`dist/ui/electron-tunnel-loader.js`, which boots the real hosted follower app
+with zero network: tunnelled `fetch`/`WebSocket` over a CDP binding, the module
+graph materialized as `blob:` URLs, wired by an import map.
+
+- **Split by testability**: `tunnel-loader-entry.ts` is a 3-line IIFE;
+  everything lives in `tunnel-runtime.ts`, which takes its browser globals as a
+  `TunnelEnv` argument. `tests/tunnel-runtime.test.ts` boots the whole
+  loader into a disposable same-origin `<iframe>` against a fake controller —
+  no live egress-blocked target needed.
+- **Known gap**: `about:srcdoc` documents cannot host a history state object, so
+  `virtualizeLocation` cannot replay the app's `?tray=` params there; it warns
+  and returns `false`. Delivering those params needs a frame with a real URL (or
+  a config channel), on the controller side.
+- The controller half of the protocol is **not implemented yet** — no
+  node-server / swift-server code reads `TUNNEL_SEND_GLOBAL` today.
 
 ## Conventions
 
@@ -69,6 +99,9 @@ build.mjs               # esbuild IIFE → <repoRoot>/dist/ui/electron-overlay-e
 - `npm run test -w @ai-ecoverse/spoon` → browser-mode Vitest (needs
   `npx playwright install chromium`). Kept OUT of the root `vitest run` so the
   default `npm test` stays browser-free; CI runs `test:coverage:spoon`.
+  Coverage runs over every `src/**` file except `tunnel/tunnel-loader-entry.ts`
+  (its one statement boots the loader at import time, which a test realm must
+  not do); both IIFE entries' behavior is covered through the modules they call.
 - `npm run typecheck -w @ai-ecoverse/spoon` → `tsc --noEmit`. Wired into the
   root `typecheck` chain. Coverage floor: root `coverage-thresholds.json` →
   `typescript.spoon`.

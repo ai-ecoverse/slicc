@@ -116,6 +116,21 @@ describe('rewriteModuleSource', () => {
     expect(rewriteModuleSource(once)).toBe(once);
   });
 
+  it('leaves a dynamic import of a bare or cross-origin specifier alone', () => {
+    const source = [
+      'import("some-package");',
+      'import("https://cdn.example/x.js");',
+      'import("./chunk-a.js");',
+    ].join('\n');
+    expect(rewriteModuleSource(source)).toBe(
+      [
+        'import("some-package");',
+        'import("https://cdn.example/x.js");',
+        'import("slicc-asset:/assets/chunk-a.js");',
+      ].join('\n')
+    );
+  });
+
   it('neutralizes __vite__mapDeps CALLS (computed absolute preloads) to []', () => {
     const src = 'const p=__vitePreload(()=>import("./chunk-Ab.js"),__vite__mapDeps([0,1,2]));';
     const out = rewriteModuleSource(src);
@@ -159,6 +174,39 @@ describe('extractHtmlModuleUrls', () => {
     );
     expect(entry).toBeNull();
     expect(seeds).toEqual([]);
+  });
+
+  it('ignores srcless inline modules and href-less preloads', () => {
+    // Vite emits an inline `<script type="module">` for its preload helper and
+    // a bare `<link rel=modulepreload>` never happens — but neither may be
+    // mistaken for the entry, or the boot imports `undefined`.
+    const { entry, seeds } = extractHtmlModuleUrls(
+      '<script type="module">console.log("inline")</script>' +
+        '<link rel="modulepreload">' +
+        '<script type="module" src="/assets/real-entry.js"></script>'
+    );
+    expect(entry).toBe('/assets/real-entry.js');
+    expect(seeds).toEqual(['/assets/real-entry.js']);
+  });
+
+  it('ignores cross-origin module scripts and preloads', () => {
+    // An externally hosted module is not part of the graph the tunnel can
+    // materialize as blobs; it keeps resolving through the import map miss.
+    const { entry, seeds } = extractHtmlModuleUrls(
+      '<script type="module" src="https://cdn.example/x.js"></script>' +
+        '<link rel="modulepreload" href="https://cdn.example/y.js">'
+    );
+    expect(entry).toBeNull();
+    expect(seeds).toEqual([]);
+  });
+
+  it('keeps the FIRST module script as the entry when a page has several', () => {
+    const { entry, seeds } = extractHtmlModuleUrls(
+      '<script type="module" src="/assets/first.js"></script>' +
+        '<script type="module" src="/assets/second.js"></script>'
+    );
+    expect(entry).toBe('/assets/first.js');
+    expect(seeds.sort()).toEqual(['/assets/first.js', '/assets/second.js']);
   });
 });
 

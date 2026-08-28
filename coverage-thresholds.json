@@ -124,10 +124,10 @@
       "branches": 80
     },
     "spoon": {
-      "lines": 67,
-      "statements": 65,
-      "functions": 82,
-      "branches": 66
+      "lines": 99,
+      "statements": 99,
+      "functions": 99,
+      "branches": 98
     }
   },
   "swift": {
