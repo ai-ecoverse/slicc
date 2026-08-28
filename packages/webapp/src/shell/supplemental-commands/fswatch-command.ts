@@ -11,6 +11,8 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import { defaultLickTarget, type LickTargetEnv } from '../lick-target-env.js';
+import { getLickManagerSurface } from './lick-surface.js';
+import { explicitLickTargetError } from './lick-target-check.js';
 import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest } from './subcommand-help.js';
 
@@ -141,14 +143,24 @@ function globFilter(pattern: string): (path: string) => boolean {
   return (path: string) => globRegex.test(path.split('/').pop() ?? '');
 }
 
-function handleCreate(args: readonly string[], env: LickTargetEnv): Result {
+async function handleCreate(args: readonly string[], env: LickTargetEnv): Promise<Result> {
   const parsed = parseCreateOptions(args);
   if ('error' in parsed) return fail(parsed.error);
 
   const opts = parsed;
+  const explicitScoop = opts.scoop || undefined;
   // No `--scoop`: a non-primary cone's shell names itself (SLICC_LICK_TARGET).
   opts.scoop = defaultLickTarget(opts.scoop, env) ?? '';
   if (!opts.basePath || !opts.pattern) return fail('--path and --pattern are required');
+
+  // Same hole as `webhook`/`crontask` before #2524: an explicit `--scoop` naming
+  // no live unit registered a watcher whose every event was dropped.
+  const targetError = await explicitLickTargetError(
+    await getLickManagerSurface(),
+    'fswatch create',
+    explicitScoop
+  );
+  if (targetError) return { stdout: '', stderr: targetError, exitCode: 1 };
 
   // Access VFS watcher via global hook
   const globals = globalThis as FsWatchGlobals;
@@ -207,7 +219,7 @@ export function createFsWatchCommand(): Command {
       case 'delete':
         return handleDelete(args);
       case 'create':
-        return handleCreate(args, ctx.env);
+        return await handleCreate(args, ctx.env);
       default:
         return fail(`unknown command: ${subcommand}`);
     }

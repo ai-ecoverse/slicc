@@ -4,6 +4,7 @@ import { hasLocalNodeServer } from '../float-topology.js';
 import { defaultLickTarget, type LickTargetEnv } from '../lick-target-env.js';
 import { apiHeaders, resolveApiUrl } from '../proxied-fetch.js';
 import { getLickManagerSurface } from './lick-surface.js';
+import { explicitLickTargetError } from './lick-target-check.js';
 import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest } from './subcommand-help.js';
 
@@ -114,6 +115,16 @@ async function handleCreate(args: string[], env: LickTargetEnv): Promise<Command
   if (!cron) {
     return { stdout: '', stderr: 'crontask: --cron is required\n', exitCode: 1 };
   }
+
+  // An explicit `--scoop` that names no live unit would tick forever into
+  // nothing — and `LickManager.init` deletes the entry on the next boot anyway
+  // (#2524). Checked for both floats; the omitted-`--scoop` path is untouched.
+  const targetError = await explicitLickTargetError(
+    await getLickManagerSurface(),
+    'crontask create',
+    parsed.values.get('--scoop')
+  );
+  if (targetError) return { stdout: '', stderr: targetError, exitCode: 1 };
 
   // No local node-server (extension-delegate/direct): use the worker LickManager (or proxy fallback).
   if (!hasLocalNodeServer()) {

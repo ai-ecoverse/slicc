@@ -240,3 +240,74 @@ describe('LickManager forwarder dispatch', () => {
     expect(handler).toHaveBeenCalledTimes(1);
   });
 });
+
+/**
+ * #2524 — the dispatch side. `handleWebhookEvent` now NAMES what became of a
+ * delivery, because its receivers (the tray worker, the node-server bridge) hold
+ * the caller's HTTP request open and used to answer every outcome with success.
+ */
+describe('LickManager webhook delivery disposition (#2524)', () => {
+  let manager: LickManager;
+
+  beforeEach(() => {
+    manager = new LickManager();
+    manager.setEventHandler(vi.fn());
+  });
+
+  it('reports `delivered` and dispatches when the target resolves', async () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    manager.setUnitRosterProvider(() => [{ name: 'Cone', folder: 'cone' }]);
+    const wh = await manager.createWebhook('resolvable', 'cone');
+
+    expect(manager.handleWebhookEvent(wh.id, {}, { probe: 1 })).toBe('delivered');
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  it('reports `unresolved-target` and wakes nobody when the target is gone', async () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    manager.setUnitRosterProvider(() => [{ name: 'Cone', folder: 'cone' }]);
+    const wh = await manager.createWebhook('ghost', 'ghost-cone-does-not-exist');
+
+    expect(manager.handleWebhookEvent(wh.id, {}, { probe: 1 })).toBe('unresolved-target');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('reports `unknown-webhook` for an id it has never seen', () => {
+    expect(manager.handleWebhookEvent('nope', {}, {})).toBe('unknown-webhook');
+  });
+
+  it('reports `filtered` when the webhook filter drops the event', async () => {
+    const handler = vi.fn();
+    manager.setEventHandler(handler);
+    const wh = await manager.createWebhook('picky', 'cone', '() => false');
+
+    expect(manager.handleWebhookEvent(wh.id, {}, {})).toBe('filtered');
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  // No roster injected: the manager cannot know whether the target resolves, and
+  // must not claim a drop it has no evidence for.
+  it('reports `delivered` for any target while no roster is wired', async () => {
+    const wh = await manager.createWebhook('unverifiable', 'ghost-cone-does-not-exist');
+    expect(manager.handleWebhookEvent(wh.id, {}, {})).toBe('delivered');
+  });
+
+  it('resolves a target against the roster by name and by bare scoop alias', () => {
+    manager.setUnitRosterProvider(() => [
+      { name: 'Research', folder: 'cone-research' },
+      { name: 'code-reviewer', folder: 'reviewer-scoop' },
+    ]);
+    for (const target of ['cone-research', 'Research', 'reviewer-scoop', 'reviewer']) {
+      expect(manager.resolveLickTarget(target).status).toBe('resolved');
+    }
+    const missing = manager.resolveLickTarget('ghost');
+    expect(missing.status).toBe('unresolved');
+    expect(missing).toMatchObject({ candidates: expect.arrayContaining(['cone-research']) });
+  });
+
+  it('reports `unverifiable` before a roster is injected', () => {
+    expect(manager.resolveLickTarget('anything')).toEqual({ status: 'unverifiable' });
+  });
+});

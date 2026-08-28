@@ -62,6 +62,7 @@ import type {
   StateSnapshotMsg,
   ToolUIActionMsg,
   TrayRuntimeStatusMsg,
+  WebhookEventMsg,
 } from './messages.js';
 import { createOffscreenChromeRuntimeTransport } from './transport-chrome-runtime.js';
 import type { KernelFacade, KernelTransport } from './types.js';
@@ -1565,11 +1566,7 @@ export class Bridge implements KernelFacade {
       }
 
       case 'lick-webhook-event': {
-        // Page-side LeaderTrayManager received a `webhook.event` control
-        // message from the tray and relayed it here. Dispatch into the
-        // worker-side LickManager via the orchestrator. Fire-and-forget;
-        // matches the pre-regression direct-call semantics.
-        this.orchestrator.handleWebhookEvent(msg.webhookId, msg.headers, msg.body);
+        this.handleWebhookEventMsg(msg);
         break;
       }
 
@@ -1633,6 +1630,25 @@ export class Bridge implements KernelFacade {
         break;
       }
     }
+  }
+
+  /**
+   * Page-side LeaderTrayManager received a `webhook.event` control message from
+   * the tray and relayed it here; dispatch it into the worker-side LickManager
+   * via the orchestrator. Fire-and-forget unless the relay asked for the
+   * disposition (#2524) — the tray worker is then holding the webhook POST open
+   * on the answer.
+   */
+  private handleWebhookEventMsg(msg: WebhookEventMsg): void {
+    const disposition = this.orchestrator?.handleWebhookEvent(msg.webhookId, msg.headers, msg.body);
+    if (!msg.requestId) return;
+    this.emit({
+      type: 'lick-webhook-delivery',
+      requestId: msg.requestId,
+      // No LickManager bound yet: the event went nowhere, and the webhook id is
+      // by definition not registered here.
+      disposition: disposition ?? 'unknown-webhook',
+    });
   }
 
   private async handleAgentSpawn(

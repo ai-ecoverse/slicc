@@ -965,3 +965,108 @@ describe('webhook create — default lick target (#2311)', () => {
     expect(createWebhook).toHaveBeenCalledWith('inbox', 'Research', undefined);
   });
 });
+
+/**
+ * #2524 — an explicit `--scoop` that names no live unit used to be accepted,
+ * listed as active, and then dropped at every delivery. It is refused at create
+ * time now; the OMITTED-`--scoop` path is deliberately untouched (#2525).
+ */
+describe('webhook create — unresolvable --scoop (#2524)', () => {
+  beforeEach(() => {
+    vi.stubGlobal('chrome', undefined);
+    stubSelfLocation('http://localhost:5710/index.html');
+    vi.resetModules();
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    delete (globalThis as Record<string, unknown>).__slicc_lickManager;
+  });
+
+  /** Live roster: the default root `cone` plus a `pr-reviewer-scoop` scoop. */
+  const ROSTER = [
+    { name: 'Cone', folder: 'cone' },
+    { name: 'pr-reviewer', folder: 'pr-reviewer-scoop' },
+  ];
+
+  async function createWithRoster(
+    args: string[],
+    resolveLickTarget: LickManager['resolveLickTarget'] | undefined,
+    env: unknown = {}
+  ) {
+    const createWebhook = vi.fn().mockResolvedValue({
+      id: 'wh-2524',
+      name: 'inbox',
+      createdAt: new Date().toISOString(),
+    } satisfies WebhookEntry);
+    (globalThis as Record<string, unknown>).__slicc_lickManager = buildLickManagerMock({
+      createWebhook,
+      ...(resolveLickTarget ? { resolveLickTarget } : {}),
+    });
+    const { command } = await loadCommandAndTrayLeader();
+    const result = await command.execute(args, { cwd: '/', env } as never);
+    return { result, createWebhook };
+  }
+
+  const rosterResolver: LickManager['resolveLickTarget'] = (target) =>
+    ROSTER.some((u) => target === u.name || target === u.folder || `${target}-scoop` === u.folder)
+      ? { status: 'resolved' }
+      : { status: 'unresolved', candidates: ROSTER.map((u) => u.folder) };
+
+  it('refuses a target that matches no live unit and creates nothing', async () => {
+    const { result, createWebhook } = await createWithRoster(
+      ['create', '--scoop', 'ghost-cone-does-not-exist'],
+      rosterResolver
+    );
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('ghost-cone-does-not-exist');
+    expect(result.stderr).toContain('matches no live cone or scoop');
+    expect(result.stderr).toContain('cone');
+    expect(result.stdout).toBe('');
+    expect(createWebhook).not.toHaveBeenCalled();
+  });
+
+  it.each(['cone', 'Cone', 'pr-reviewer', 'pr-reviewer-scoop'])(
+    'accepts %s — folder, cone name and bare scoop alias all resolve',
+    async (target) => {
+      const { result, createWebhook } = await createWithRoster(
+        ['create', '--scoop', target],
+        rosterResolver
+      );
+      expect(result.exitCode).toBe(0);
+      expect(createWebhook).toHaveBeenCalledWith('default', target, undefined);
+    }
+  );
+
+  it('accepts the target when the roster cannot be consulted', async () => {
+    const { result, createWebhook } = await createWithRoster(
+      ['create', '--scoop', 'ghost-cone-does-not-exist'],
+      () => ({ status: 'unverifiable' })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(createWebhook).toHaveBeenCalled();
+  });
+
+  it('accepts the target against a manager that predates the check', async () => {
+    const { result, createWebhook } = await createWithRoster(
+      ['create', '--scoop', 'ghost-cone-does-not-exist'],
+      undefined
+    );
+    expect(result.exitCode).toBe(0);
+    expect(createWebhook).toHaveBeenCalled();
+  });
+
+  // #2525 owns the omitted-`--scoop` path; this change must not touch it.
+  it('does not validate the shell default when --scoop is omitted', async () => {
+    const resolveLickTarget = vi.fn(() => ({
+      status: 'unresolved' as const,
+      candidates: ['cone'],
+    }));
+    const { result, createWebhook } = await createWithRoster(['create'], resolveLickTarget, {
+      SLICC_LICK_TARGET: 'cone-research',
+    });
+    expect(result.exitCode).toBe(0);
+    expect(resolveLickTarget).not.toHaveBeenCalled();
+    expect(createWebhook).toHaveBeenCalledWith('default', 'cone-research', undefined);
+  });
+});

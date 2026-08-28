@@ -205,7 +205,7 @@ function makeBaseOptions(overrides: {
   fetchImpl?: typeof fetch;
   webSocketFactory?: (url: string) => LeaderTrayWebSocket;
   store?: LeaderTraySessionStore;
-  sendWebhookEvent?: (id: string, headers: Record<string, string>, body: unknown) => void;
+  sendWebhookEvent?: Parameters<typeof startPageLeaderTray>[0]['sendWebhookEvent'];
   onAgentEvent?: (h: (e: AgentEvent) => void) => () => void;
 }): Parameters<typeof startPageLeaderTray>[0] {
   return {
@@ -220,7 +220,7 @@ function makeBaseOptions(overrides: {
     onFollowerMessage: vi.fn(),
     onFollowerAbort: vi.fn(),
     onFollowerCountChanged: vi.fn(),
-    sendWebhookEvent: overrides.sendWebhookEvent ?? vi.fn(),
+    sendWebhookEvent: overrides.sendWebhookEvent ?? vi.fn(async () => null),
     onAgentEvent: overrides.onAgentEvent ?? ((_h) => () => {}),
     browserAPI: makeFakeBrowserAPI(),
     _fetchImpl: overrides.fetchImpl,
@@ -454,7 +454,7 @@ describe('startPageLeaderTray', () => {
 
   it('relays webhook.event control messages via sendWebhookEvent (not handled locally)', async () => {
     const { fetchImpl, webSocketFactory, sockets } = makeLeaderFetch();
-    const sendWebhookEvent = vi.fn();
+    const sendWebhookEvent = vi.fn(async () => null);
 
     const handle = startPageLeaderTray(
       makeBaseOptions({ fetchImpl, webSocketFactory, store, sendWebhookEvent })

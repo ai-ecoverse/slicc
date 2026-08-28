@@ -40,7 +40,7 @@ import type {
 import { createPanelChromeRuntimeTransport } from '../kernel/transport-chrome-runtime.js';
 import type { KernelClientFacade, KernelTransport } from '../kernel/types.js';
 import type { AgentSpawnOptions, AgentSpawnResult } from '../scoops/agent-bridge.js';
-import type { LickEvent } from '../scoops/lick-manager.js';
+import type { LickEvent, WebhookDeliveryDisposition } from '../scoops/lick-manager.js';
 import { setFollowerTrayRuntimeStatus } from '../scoops/tray-follower-status.js';
 import { setLeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type {
@@ -55,6 +55,14 @@ import { normalizeScoopRecord, setUnitThinking } from '../work-unit/record.js';
 
 /** Placeholder owner for a scoop whose cone is not in the same wire list. */
 const UNKNOWN_PARENT_JID = 'unknown-parent';
+
+/**
+ * How long a webhook delivery waits for the worker's disposition before the
+ * caller falls back to the legacy receipt (#2524). Deliberately short: the tray
+ * worker is holding a public HTTP request open behind it, and every branch of
+ * `handleWebhookEvent` is synchronous once the worker has the message.
+ */
+const WEBHOOK_DELIVERY_ACK_TIMEOUT_MS = 2000;
 
 import type { AgentHandle, ChatMessage, AgentEvent as UIAgentEvent } from './types.js';
 
@@ -184,6 +192,15 @@ export class OffscreenClient implements KernelClientFacade {
    * `requestId`; resolved when a `clear-chat-ack` envelope arrives.
    */
   private pendingClearAcks = new Map<string, () => void>();
+  /**
+   * Pending webhook deliveries awaiting the worker's disposition (#2524).
+   * Keyed by `requestId`; resolved when a `lick-webhook-delivery` envelope
+   * arrives, or with `null` when the wait budget expires.
+   */
+  private pendingWebhookDeliveries = new Map<
+    string,
+    (disposition: WebhookDeliveryDisposition) => void
+  >();
   private pendingAgentSpawnRequests = new Map<
     string,
     { resolve: (result: AgentSpawnResult) => void; reject: (error: Error) => void }
@@ -743,15 +760,39 @@ export class OffscreenClient implements KernelClientFacade {
    * worker-side `LickManager`. The leader receives `webhook.event` control
    * messages from the Cloudflare tray; this method forwards them across the
    * bridge so the lick manager (which lives in the kernel worker post-refactor)
-   * can route to the registered scoop. Fire-and-forget — no ack expected.
+   * can route to the registered scoop.
+   *
+   * Resolves with the delivery's disposition (#2524) so the leader can tell the
+   * tray worker whether a unit was woken, or `null` when the worker does not
+   * answer inside {@link WEBHOOK_DELIVERY_ACK_TIMEOUT_MS} — silence is not
+   * evidence of a drop, and the caller must fall back to the legacy receipt.
    */
-  sendWebhookEvent(webhookId: string, headers: Record<string, string>, body: unknown): void {
+  async sendWebhookEvent(
+    webhookId: string,
+    headers: Record<string, string>,
+    body: unknown
+  ): Promise<WebhookDeliveryDisposition | null> {
+    const requestId = `wh-${uid()}`;
+    const ack = new Promise<WebhookDeliveryDisposition>((resolve) => {
+      this.pendingWebhookDeliveries.set(requestId, resolve);
+    });
     this.send({
       type: 'lick-webhook-event',
       webhookId,
       headers,
       body,
+      requestId,
     } as PanelToOffscreenMessage);
+    try {
+      return await Promise.race([
+        ack,
+        new Promise<null>((resolve) =>
+          setTimeout(() => resolve(null), WEBHOOK_DELIVERY_ACK_TIMEOUT_MS)
+        ),
+      ]);
+    } finally {
+      this.pendingWebhookDeliveries.delete(requestId);
+    }
   }
 
   /** Standalone follower: tell the worker to forward (or stop forwarding) licks. */
@@ -859,6 +900,15 @@ export class OffscreenClient implements KernelClientFacade {
         if (resolve) {
           this.pendingClearAcks.delete(msg.requestId);
           resolve();
+        }
+        break;
+      }
+
+      case 'lick-webhook-delivery': {
+        const resolve = this.pendingWebhookDeliveries.get(msg.requestId);
+        if (resolve) {
+          this.pendingWebhookDeliveries.delete(msg.requestId);
+          resolve(msg.disposition);
         }
         break;
       }

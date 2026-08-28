@@ -10,7 +10,12 @@
  *   awaits results
  */
 
-import type { CronTaskEntry, LickManager, WebhookEntry } from './lick-manager-proxy-types.js';
+import type {
+  CronTaskEntry,
+  LickManager,
+  LickTargetResolution,
+  WebhookEntry,
+} from './lick-manager-proxy-types.js';
 
 const CHANNEL_NAME = 'slicc-lick-manager';
 const TIMEOUT = 5000;
@@ -46,6 +51,11 @@ export function startLickManagerHost(lickManager: LickManager): void {
         case 'deleteWebhook':
           result = await lickManager.deleteWebhook(args[0]);
           break;
+        case 'resolveLickTarget':
+          // A host whose manager predates #2524 cannot answer; say so rather
+          // than letting the caller read a missing answer as "unresolved".
+          result = lickManager.resolveLickTarget?.(args[0]) ?? { status: 'unverifiable' };
+          break;
         default:
           throw new Error(`Unknown lick-manager op: ${op}`);
       }
@@ -69,6 +79,7 @@ export function startLickManagerHost(lickManager: LickManager): void {
  * should `await listCronTasksAsync()` / `await listWebhooksAsync()`.
  */
 interface LickManagerProxyMethods {
+  resolveLickTarget(target: string): Promise<LickTargetResolution>;
   createCronTask(
     name: string,
     cron: string,
@@ -127,6 +138,8 @@ function request(op: string, args: unknown[] = []): Promise<unknown> {
 /** Create a proxy that forwards LickManager calls to the offscreen host. */
 export function createLickManagerProxy(): LickManagerProxyMethods {
   return {
+    resolveLickTarget: (target) =>
+      request('resolveLickTarget', [target]) as Promise<LickTargetResolution>,
     createCronTask: (name, cron, scoop?, filter?) =>
       request('createCronTask', [name, cron, scoop, filter]) as Promise<CronTaskEntry>,
     deleteCronTask: (id) => request('deleteCronTask', [id]) as Promise<boolean>,

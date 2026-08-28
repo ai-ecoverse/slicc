@@ -19,9 +19,11 @@ SLICC's automation primitives turn external or VFS-internal events into **licks*
 | `crontask` | Cron schedule                | Recurring background work         |
 | `fswatch`  | VFS create / modify / delete | React to authored content changes |
 
-All three take `--scoop <target>`, which names **a unit, not a species**: a scoop name, a cone name, or a folder (`cone-<slug>`, `<name>-scoop`). Omit it and events come back to whichever unit you are — the cone you are in, or the scoop itself if you are one. A target naming no live unit is dropped, never re-routed.
+All three take `--scoop <target>`, which names **a unit, not a species**: a scoop name, a cone name, or a folder (`cone-<slug>`, `<name>-scoop`). Omit it and events come back to whichever unit you are — the cone you are in, or the scoop itself if you are one. A target naming no live unit is **refused at create time** (exit 1, listing the valid targets) — create the scoop first, then register the webhook / cron task / watcher against it. A unit that disappears later has its licks dropped, never re-routed.
 
 **If you want your own events, omit `--scoop` — never hardcode `cone`.** All three commands behave identically here, so omitting the flag is always available, and it works the same whether you are a cone or a scoop. The literal folder `cone` is not a synonym for "me": it belongs to whichever cone currently holds it, and it is handed to the next new cone after the original one is dropped. A skill that hardcodes it delivers its callbacks into another cone's chat in exactly the multi-cone workspaces where the target matters.
+
+A webhook POST also tells you the truth about the delivery. Any 2xx (`202 {"ok":true,"accepted":true}` from a tray URL, `200 {"ok":true,"received":true}` from a local one — check the status class, not one exact shape) means a unit was woken or your `--filter` dropped the event on purpose; `404 WEBHOOK_NOT_REGISTERED` means the id is unknown, and `422 WEBHOOK_TARGET_UNRESOLVED` means the target is gone and the event was discarded.
 
 ## `webhook`
 
@@ -73,4 +75,5 @@ Events carry the change type (`create`, `modify`, `delete`) and the path.
 
 - Don't poll on a `crontask` for work the cone could do reactively. Cron is for genuinely recurring jobs (digests, refreshes); reactive work belongs on `fswatch`/`webhook`.
 - Don't leave watchers/webhooks/crons orphaned. If the owning unit is gone, the lick is dropped — `... list` and `... delete` to clean up.
+- Don't register against a scoop you have not created yet. `--scoop` is resolved when you create the entry, so a forward reference exits 1; run `scoop_scoop create <name>` first.
 - Don't fan one trigger out to N near-identical entries. Register once, let the receiver dispatch.

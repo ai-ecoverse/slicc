@@ -4,7 +4,9 @@ import {
   type FollowerAttachResult,
   type FollowerBootstrapRequest,
   type FollowerBootstrapResponse,
+  type LeaderBridgeCdpRequest,
   type LeaderToWorkerControlMessage,
+  type LeaderWebhookDelivery,
   TRAY_BOOTSTRAP_MAX_RETRIES,
   TRAY_BOOTSTRAP_RETRY_AFTER_MS,
   TRAY_BOOTSTRAP_TIMEOUT_MS,
@@ -15,6 +17,7 @@ import {
   type TrayLeaderSummary,
   type TraySessionDescription,
   type TurnIceServer,
+  type WebhookDeliveryDisposition,
   type WorkerToLeaderControlMessage,
 } from '@slicc/shared-ts';
 import {
@@ -101,6 +104,12 @@ interface SessionTrayOptions {
   fetchImpl?: typeof fetch;
   /** Push sender seam (tests). Defaults to APNs from env, or disabled. */
   apnsSender?: ApnsSender | null;
+  /**
+   * Override the webhook-delivery ack budget (tests). Defaults to
+   * {@link WEBHOOK_DELIVERY_WAIT_MS}; a test with a fake leader that never acks
+   * would otherwise sit out the full production budget.
+   */
+  webhookDeliveryWaitMs?: number;
 }
 
 /** Loosely-typed follower bootstrap POST body; every field is re-validated below. */
@@ -149,6 +158,50 @@ const CONTROLLER_STALE_MS = 2 * 60 * 60 * 1000;
 // ghost leaders whose sockets linger after a network drop — workerd's
 // setWebSocketAutoResponse keeps responding to pings, but real messages stop.
 const LEADER_STALE_MS = 2 * 60 * 1000;
+// How long a webhook POST waits for the leader's `webhook.delivery` before the
+// receipt falls back to the pre-#2524 `202 accepted` (issue #2524). Short on
+// purpose: the leader's answer is synchronous once the message lands, and the
+// caller is an external service on a request budget of its own.
+const WEBHOOK_DELIVERY_WAIT_MS = 3_000;
+
+/**
+ * Turn the leader's disposition into the webhook POST's receipt. `delivered`,
+ * `filtered` and "no answer" all keep the pre-#2524 `202 accepted` — a
+ * `--filter` dropping an event is the filter doing its job, and silence is not
+ * evidence of a drop. The other two used to be reported as success too, which
+ * made a black-holed webhook indistinguishable from a healthy one.
+ */
+function webhookDeliveryResponse(
+  webhookId: string,
+  disposition: WebhookDeliveryDisposition | null
+): Response {
+  const cors = { 'access-control-allow-origin': '*' };
+  if (disposition === 'unknown-webhook') {
+    return jsonResponse(
+      {
+        ok: false,
+        accepted: false,
+        error: `Webhook "${webhookId}" is not registered with this leader`,
+        code: 'WEBHOOK_NOT_REGISTERED',
+      },
+      404,
+      cors
+    );
+  }
+  if (disposition === 'unresolved-target') {
+    return jsonResponse(
+      {
+        ok: false,
+        accepted: false,
+        error: `Webhook "${webhookId}" targets a scoop or cone that does not exist — the event was dropped`,
+        code: 'WEBHOOK_TARGET_UNRESOLVED',
+      },
+      422,
+      cors
+    );
+  }
+  return jsonResponse({ ok: true, accepted: true }, 202, cors);
+}
 
 interface CachedIceServers {
   iceServers: TurnIceServer[];
@@ -184,6 +237,15 @@ export class SessionTrayDurableObject {
   // when the matching `preview.response` arrives (single chunk today, future-
   // proof for chunked binary).
   private readonly pendingPreviews = new Map<string, PreviewAssembler>();
+  // Webhook POSTs whose HTTP response is waiting on the leader's disposition
+  // (issue #2524), keyed by deliveryId. Populated by `handleWebhook`; drained by
+  // `handleLeaderMessage` on `webhook.delivery`, or by the wait budget.
+  private readonly pendingWebhookDeliveries = new Map<
+    string,
+    (disposition: WebhookDeliveryDisposition | null) => void
+  >();
+  private webhookDeliveryCounter = 0;
+  private readonly webhookDeliveryWaitMs: number;
 
   constructor(
     private readonly state: DurableObjectStateLike,
@@ -192,6 +254,7 @@ export class SessionTrayDurableObject {
   ) {
     this.now = options.now ?? (() => Date.now());
     this.fetchImpl = options.fetchImpl ?? fetch;
+    this.webhookDeliveryWaitMs = options.webhookDeliveryWaitMs ?? WEBHOOK_DELIVERY_WAIT_MS;
     const typedEnv = (env && typeof env === 'object' ? env : {}) as SessionTrayEnv;
     this.turnKeyId = typedEnv.CLOUDFLARE_TURN_KEY_ID;
     this.turnApiToken = typedEnv.CLOUDFLARE_TURN_API_TOKEN;
@@ -1131,16 +1194,23 @@ export class SessionTrayDurableObject {
       headers[key] = value;
     }
 
-    // Forward to leader via the control WebSocket
+    // Forward to leader via the control WebSocket, asking for the disposition
+    // so a dropped delivery does not get a success receipt (issue #2524).
+    const deliveryId = `wd-${++this.webhookDeliveryCounter}-${this.now()}`;
+    const settled = new Promise<WebhookDeliveryDisposition | null>((resolve) => {
+      this.pendingWebhookDeliveries.set(deliveryId, resolve);
+    });
     const sent = this.sendToLeader({
       type: 'webhook.event',
       webhookId,
       headers,
       body,
       timestamp: this.isoNow(),
+      deliveryId,
     });
 
     if (!sent) {
+      this.pendingWebhookDeliveries.delete(deliveryId);
       return jsonResponse(
         {
           error: 'Failed to forward webhook to leader',
@@ -1151,7 +1221,62 @@ export class SessionTrayDurableObject {
       );
     }
 
-    return jsonResponse({ ok: true, accepted: true }, 202, { 'access-control-allow-origin': '*' });
+    const disposition = await this.awaitWebhookDelivery(deliveryId, settled);
+    return webhookDeliveryResponse(webhookId, disposition);
+  }
+
+  /**
+   * Wait out the leader's `webhook.delivery` for `deliveryId`, resolving `null`
+   * once {@link WEBHOOK_DELIVERY_WAIT_MS} passes. A leader that predates #2524
+   * never answers, so `null` must keep the pre-#2524 receipt: we know the event
+   * was forwarded, and nothing more.
+   */
+  private awaitWebhookDelivery(
+    deliveryId: string,
+    settled: Promise<WebhookDeliveryDisposition | null>
+  ): Promise<WebhookDeliveryDisposition | null> {
+    return Promise.race([
+      settled,
+      new Promise<null>((resolve) => setTimeout(() => resolve(null), this.webhookDeliveryWaitMs)),
+    ]).finally(() => this.pendingWebhookDeliveries.delete(deliveryId));
+  }
+
+  /**
+   * Leader→bridge: route a CDP request to the matching bridge socket by its
+   * `conn:<connId>` tag (indexed lookup, not an O(n) scan). When the visitor tab
+   * is gone (closed / revoked), fail the leader's pending call fast instead of
+   * letting it burn the full CDP timeout, so it can drop the phantom transport.
+   */
+  private relayCdpRequestToBridge(message: LeaderBridgeCdpRequest): void {
+    const target = (this.state.getWebSockets?.(`conn:${message.connId}`) ?? [])[0] as
+      | TrayWebSocketLike
+      | undefined;
+    if (!target) {
+      this.sendToLeader({
+        type: 'bridge.cdp.response',
+        connId: message.connId,
+        id: message.id,
+        error: { code: -32000, message: 'Preview bridge connection is gone' },
+      });
+      return;
+    }
+    target.send(
+      JSON.stringify({
+        t: 'cdp.req',
+        id: message.id,
+        method: message.method,
+        params: message.params,
+        sessionId: message.sessionId,
+      })
+    );
+  }
+
+  /** Hand a leader-reported disposition to the waiting webhook POST, if any. */
+  private settleWebhookDelivery(message: LeaderWebhookDelivery): void {
+    const resolve = this.pendingWebhookDeliveries.get(message.deliveryId);
+    if (!resolve) return;
+    this.pendingWebhookDeliveries.delete(message.deliveryId);
+    resolve(message.disposition);
   }
 
   private handleLeaderBootstrapOffer(
@@ -1262,32 +1387,10 @@ export class SessionTrayDurableObject {
       } else if (message.type === 'preview.purge') {
         await handlePreviewPurge(message.previewToken, this.previewDeps());
       } else if (message.type === 'bridge.cdp.request') {
-        // Leader→bridge: route the CDP request to the matching bridge socket by
-        // its `conn:<connId>` tag (indexed lookup, not an O(n) scan).
-        const target = (this.state.getWebSockets?.(`conn:${message.connId}`) ?? [])[0] as
-          | TrayWebSocketLike
-          | undefined;
-        if (target) {
-          target.send(
-            JSON.stringify({
-              t: 'cdp.req',
-              id: message.id,
-              method: message.method,
-              params: message.params,
-              sessionId: message.sessionId,
-            })
-          );
-        } else {
-          // The visitor tab is gone (closed / revoked). Fail the leader's pending
-          // call fast instead of letting it burn the full CDP timeout, so it can
-          // drop the phantom transport.
-          this.sendToLeader({
-            type: 'bridge.cdp.response',
-            connId: message.connId,
-            id: message.id,
-            error: { code: -32000, message: 'Preview bridge connection is gone' },
-          });
-        }
+        this.relayCdpRequestToBridge(message);
+        persistentMutation = false;
+      } else if (message.type === 'webhook.delivery') {
+        this.settleWebhookDelivery(message);
         persistentMutation = false;
       } else if (message.type === 'push.register') {
         this.handlePushRegister(message);

@@ -457,6 +457,32 @@ where it came from. The `discovery` guard sits after resolution and before the
 lick id is minted, so a non-browsing scoop never leaves a dangling registry
 entry.
 
+**An EXPLICIT `--scoop` is resolved at create time, and an unresolvable one is
+refused** (#2524). `webhook create`, `crontask create` and `fswatch create` ask
+`LickManager.resolveLickTarget` (the same alias matching, over the roster the
+orchestrator injects with `setUnitRosterProvider`) and exit 1 naming the valid
+targets rather than persisting an entry whose every delivery is dropped —
+`LickManager.init` deletes such an entry on the next boot anyway. Two limits are
+deliberate: only a value the user TYPED is checked (the `defaultLickTarget`
+fallback is out of scope, #2525), and a roster that cannot be consulted reports
+`unverifiable`, which accepts the target rather than rejecting a name nothing can
+check.
+
+**A dropped webhook delivery no longer answers a success receipt** (#2524).
+`LickManager.handleWebhookEvent` returns a `WebhookDeliveryDisposition`
+(`delivered` | `filtered` | `unknown-webhook` | `unresolved-target`), which
+travels back to whoever is holding the HTTP request open: the tray worker asks
+for it with a `deliveryId` on `webhook.event` and reads the leader's
+`webhook.delivery`, and the node-server sends `webhook_event` as a lick-bridge
+REQUEST instead of a broadcast. Only the failure receipts are new — `404
+WEBHOOK_NOT_REGISTERED`, `422 WEBHOOK_TARGET_UNRESOLVED`, `500
+WEBHOOK_DISPATCH_FAILED` — and each leg keeps its own pre-#2524 success receipt
+(the tray worker's `202 {"ok":true,"accepted":true}`, the node-server's `200
+{"ok":true,"received":true}`), so no healthy caller has to be re-taught. That
+success receipt also still covers `filtered` — a `--filter` dropping an event is
+the filter working — and silence, because a leader too old to answer is not
+evidence of a drop.
+
 **Every producer a unit's shell can start follows the invoking unit**, so an
 extra cone's (or a scoop's) events come back to it rather than to the oldest
 root:

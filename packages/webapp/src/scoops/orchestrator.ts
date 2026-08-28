@@ -61,7 +61,7 @@ import {
   buildActiveLicksError,
   type LickEvent,
   type LickManager,
-  lickScoopMatches,
+  type WebhookDeliveryDisposition,
 } from './lick-manager.js';
 import { LickRegistry } from './lick-registry.js';
 import { LlmsTxtIgnorePolicy } from './llms-txt-ignore.js';
@@ -852,11 +852,12 @@ export class Orchestrator implements ConeApprovalRouter {
   setLickManager(lickManager: LickManager): void {
     this.lickManager = lickManager;
     lickManager.setDiscoveryIgnore?.((event) => this.llmsTxtIgnorePolicy?.ignores(event) ?? false);
-    // Inject scoop-existence resolver so the LickManager can detect and
-    // self-heal orphaned licks (crontasks/webhooks whose target scoop is
-    // gone). Uses the shared alias matching so it agrees with the guard.
-    lickManager.setScoopExistenceResolver((scoopField) =>
-      this.getScoops().some((s) => lickScoopMatches(scoopField, s.name, s.folder))
+    // Inject the live unit roster so the LickManager can detect and self-heal
+    // orphaned licks (crontasks/webhooks whose target scoop is gone) and refuse
+    // an unresolvable `--scoop` at create time (#2524). Matching lives in the
+    // LickManager so it agrees with the guard.
+    lickManager.setUnitRosterProvider?.(() =>
+      this.getScoops().map((s) => ({ name: s.name, folder: s.folder }))
     );
     (globalThis as SliccGlobalHooks).__slicc_lick_handler = (event: LickEvent) => {
       this.lickManager?.emitEvent(event);
@@ -870,9 +871,17 @@ export class Orchestrator implements ConeApprovalRouter {
    * this was a direct page-side call; post-refactor the tray sits on the
    * page and the lick manager sits in the worker, so the page relays the
    * event over the bridge and the orchestrator dispatches it locally.
+   *
+   * Returns the delivery disposition so the receiver holding the webhook POST
+   * open can answer honestly (#2524); `undefined` when no LickManager is bound
+   * yet, which is not the same claim as "delivered".
    */
-  handleWebhookEvent(webhookId: string, headers: Record<string, string>, body: unknown): void {
-    this.lickManager?.handleWebhookEvent(webhookId, headers, body);
+  handleWebhookEvent(
+    webhookId: string,
+    headers: Record<string, string>,
+    body: unknown
+  ): WebhookDeliveryDisposition | undefined {
+    return this.lickManager?.handleWebhookEvent(webhookId, headers, body);
   }
 
   /**

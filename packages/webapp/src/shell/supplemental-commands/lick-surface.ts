@@ -1,6 +1,7 @@
 import type {
   CronTaskEntry,
   LickManager,
+  LickTargetResolution,
   WebhookEntry,
 } from '../../base/lick-manager-proxy-types.js';
 import { hasLocalNodeServer } from '../float-topology.js';
@@ -37,6 +38,8 @@ async function getLickProxy() {
  * the shape does not vary with the realm the command happens to run in.
  */
 export interface LickManagerSurface {
+  /** Resolve a `--scoop` value against the live work-unit roster (#2524). */
+  resolveLickTarget: (target: string) => Promise<LickTargetResolution>;
   createWebhook: (name: string, scoop?: string, filter?: string) => Promise<WebhookEntry>;
   deleteWebhook: (id: string) => Promise<boolean>;
   listWebhooks: () => Promise<WebhookEntry[]>;
@@ -60,6 +63,8 @@ export async function getLickManagerSurface(): Promise<LickManagerSurface | null
   const direct = getDirectLickManager();
   if (direct) {
     return {
+      resolveLickTarget: async (target) =>
+        direct.resolveLickTarget?.(target) ?? { status: 'unverifiable' },
       createWebhook: (name, scoop?, filter?) => direct.createWebhook(name, scoop, filter),
       deleteWebhook: (id) => direct.deleteWebhook(id),
       listWebhooks: async () => direct.listWebhooks(),
@@ -74,6 +79,7 @@ export async function getLickManagerSurface(): Promise<LickManagerSurface | null
     '../../base/lick-manager-proxy.js'
   );
   return {
+    resolveLickTarget: (target) => proxy.resolveLickTarget(target),
     createWebhook: (name, scoop?, filter?) => proxy.createWebhook(name, scoop, filter),
     deleteWebhook: (id) => proxy.deleteWebhook(id),
     listWebhooks: () => listWebhooksAsync(),
