@@ -7,12 +7,20 @@
  * Commands: route, route-list, unroute
  */
 
-import type { BrowserAPI } from '../../../../cdp/index.js';
-import { createLogger } from '../../../../core/logger.js';
+import { createLogger } from '../../../../base/logger.js';
 import { requireTab } from '../state.js';
-import type { PlaywrightHandler, PlaywrightState, RouteEntry } from '../types.js';
+import type {
+  PlaywrightHandler,
+  PlaywrightHandlerCtx,
+  PlaywrightState,
+  RouteEntry,
+} from '../types.js';
 
 const log = createLogger('playwright-route');
+
+// Named via the handler context rather than imported from `cdp/` so this
+// module stays inside the shell layer (see layer-stack import direction).
+type BrowserAPI = PlaywrightHandlerCtx['browser'];
 
 function utf8ToBase64(str: string): string {
   const bytes = new TextEncoder().encode(str);
@@ -30,6 +38,59 @@ export function patternToRegex(pattern: string): RegExp {
   return new RegExp(`^${re}$`);
 }
 
+type FetchTransport = ReturnType<BrowserAPI['getTransport']>;
+
+/** Fulfil or continue a single Fetch.requestPaused event. */
+async function handleRequestPaused(
+  transport: FetchTransport,
+  sessionId: string,
+  state: PlaywrightState,
+  targetId: string,
+  params: unknown
+): Promise<void> {
+  if ((params as { sessionId?: string })['sessionId'] !== sessionId) return;
+
+  const { requestId, request } = params as {
+    requestId: string;
+    request: { url: string; headers: Record<string, string> };
+  };
+
+  const routes = state.routes.get(targetId) ?? [];
+  const match = routes.find((r) => r.regex.test(request.url));
+
+  if (!match) {
+    await transport
+      .send('Fetch.continueRequest', { requestId }, sessionId)
+      .catch((err: unknown) => {
+        log.warn('Fetch.continueRequest failed — intercepted request may hang', {
+          requestId,
+          err,
+        });
+      });
+    return;
+  }
+
+  const responseHeaders: Array<{ name: string; value: string }> = [
+    { name: 'Content-Type', value: match.contentType },
+    ...Object.entries(match.headers).map(([name, value]) => ({ name, value })),
+  ];
+
+  await transport
+    .send(
+      'Fetch.fulfillRequest',
+      {
+        requestId,
+        responseCode: match.status,
+        responseHeaders,
+        body: match.body ? utf8ToBase64(match.body) : undefined,
+      },
+      sessionId
+    )
+    .catch((err: unknown) => {
+      log.warn('Fetch.fulfillRequest failed', { requestId, url: request.url, err });
+    });
+}
+
 /** Enable CDP Fetch domain interception for a tab and register the event handler. */
 async function enableFetchInterception(
   browser: BrowserAPI,
@@ -45,48 +106,9 @@ async function enableFetchInterception(
       sessionId
     );
 
-    const handler = async (params: unknown) => {
-      if ((params as { sessionId?: string })['sessionId'] !== sessionId) return;
-
-      const { requestId, request } = params as {
-        requestId: string;
-        request: { url: string; headers: Record<string, string> };
-      };
-
-      const routes = state.routes.get(targetId) ?? [];
-      const match = routes.find((r) => r.regex.test(request.url));
-
-      if (!match) {
-        await transport
-          .send('Fetch.continueRequest', { requestId }, sessionId)
-          .catch((err: unknown) => {
-            log.warn('Fetch.continueRequest failed — intercepted request may hang', {
-              requestId,
-              err,
-            });
-          });
-        return;
-      }
-
-      const responseHeaders: Array<{ name: string; value: string }> = [
-        { name: 'Content-Type', value: match.contentType },
-        ...Object.entries(match.headers).map(([name, value]) => ({ name, value })),
-      ];
-
-      await transport
-        .send(
-          'Fetch.fulfillRequest',
-          {
-            requestId,
-            responseCode: match.status,
-            responseHeaders,
-            body: match.body ? utf8ToBase64(match.body) : undefined,
-          },
-          sessionId
-        )
-        .catch((err: unknown) => {
-          log.warn('Fetch.fulfillRequest failed', { requestId, url: request.url, err });
-        });
+    // Sync listener — async work is fire-and-forget via void (noMisusedPromises).
+    const handler = (params: unknown): void => {
+      void handleRequestPaused(transport, sessionId, state, targetId, params);
     };
 
     // Set cleanup BEFORE registering the event handler to avoid a race where
