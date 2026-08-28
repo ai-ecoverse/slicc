@@ -4,7 +4,7 @@ import * as git from 'isomorphic-git';
 import { joinPath, normalizePath } from '../../fs/path-utils.js';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { gitHttp } from '../git-http.js';
-import { expandGitError, flagString, GIT_FLAG_SPECS } from './shared.js';
+import { expandGitError, flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function clone(
@@ -15,7 +15,8 @@ export async function clone(
   // Parse flags first so the url/dir come from positionals — leading flags like
   // `clone --branch X --single-branch <url> <dir>` must round-trip (not treat
   // `--branch` as the URL). Mirrors fetch.ts's positional handling (#1033-3).
-  const { flags, positionals } = parseArgs(args, GIT_FLAG_SPECS.clone);
+  const { flags: rawFlags, positionals } = parseArgs(args, GIT_FLAG_SPECS.clone);
+  const flags = rawFlags as GitParsedFlags;
 
   if (positionals.length === 0) {
     return {

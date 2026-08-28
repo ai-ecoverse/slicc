@@ -3,7 +3,7 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { gitHttp } from '../git-http.js';
-import { flagString, GIT_FLAG_SPECS } from './shared.js';
+import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function fetch(
@@ -13,7 +13,8 @@ export async function fetch(
 ): Promise<GitCommandResult> {
   // Positional ref must round-trip: `fetch --depth 1 origin main` →
   // remote=origin, ref=main (NOT remote=1) — #1033-3.
-  const { flags, positionals } = parseArgs(args, GIT_FLAG_SPECS.fetch);
+  const { flags: rawFlags, positionals } = parseArgs(args, GIT_FLAG_SPECS.fetch);
+  const flags = rawFlags as GitParsedFlags;
   const remote = positionals[0] ?? 'origin';
   const ref = positionals[1];
   const prune = flags.prune === true;

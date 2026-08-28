@@ -2,7 +2,7 @@
 
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
-import { flagString, GIT_FLAG_SPECS } from './shared.js';
+import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function init(
@@ -10,7 +10,7 @@ export async function init(
   cwd: string,
   args: string[]
 ): Promise<GitCommandResult> {
-  const { flags } = parseArgs(args, GIT_FLAG_SPECS.init);
+  const flags = parseArgs(args, GIT_FLAG_SPECS.init).flags as GitParsedFlags;
   // Precedence (matches real git): explicit `--initial-branch`/`-b` flag
   // wins over a per-invocation `-c init.defaultBranch=…` override, which
   // wins over the built-in `main` default.

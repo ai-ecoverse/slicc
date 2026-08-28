@@ -27,7 +27,6 @@
   "packages/webapp/src/core/types.ts": 2,
   "packages/webapp/src/fs/mount/backend-local.ts": 1,
   "packages/webapp/src/git/commands/rebase.ts": 1,
-  "packages/webapp/src/git/commands/shared.ts": 1,
   "packages/webapp/src/kernel/cdp-bridge.ts": 7,
   "packages/webapp/src/kernel/cdp-worker-proxy.ts": 3,
   "packages/webapp/src/kernel/port-bridge-client.ts": 2,

@@ -2,7 +2,7 @@
 
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
-import { flagString, GIT_FLAG_SPECS } from './shared.js';
+import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function commit(
@@ -12,7 +12,7 @@ export async function commit(
 ): Promise<GitCommandResult> {
   // Handle combined -am "message" form: expand to -a -m "message"
   const expandedArgs = expandCombinedFlags(args);
-  const { flags } = parseArgs(expandedArgs, GIT_FLAG_SPECS.commit);
+  const flags = parseArgs(expandedArgs, GIT_FLAG_SPECS.commit).flags as GitParsedFlags;
 
   const message = flagString(flags, 'message');
 
