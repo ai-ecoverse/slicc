@@ -164,7 +164,7 @@ The preview sheet is the Files surface's own `FilePreviewSheet`, so a file opene
 
 The finished inline run is memoised in `TranscriptInlineCache`, keyed by (markdown, confirmed files). The pipeline adds a markdown parse, two regex passes, an `NSDataDetector` walk and — for anything past the 128-character floor — a base64 decode, and `MarkdownText` rebuilds its content on every body evaluation. Keying on the confirmed-file map keeps the newly-resolved case correct: when a mention resolves, the key changes and the run is rebuilt. Resolution itself is debounced 250ms inside `.task(id: content)`, which re-fires on every streaming chunk.
 
-Covered by `SliccFollowerTests/TranscriptEntityScanTests` and `TranscriptShortActionTests`; the fixture is `-uiTestShortActionsFixture YES` (`ChatFixture.makeShortActionMessages`), kept apart from `makeMessages()` because several UI tests pin that transcript's shape.
+Covered by `SliccFollowerTests/TranscriptEntityScanTests` and `TranscriptShortActionTests` for which spans become actionable, and by `SliccFollowerUITests/TranscriptShortActionsUITests` — on the CI iPhone leg — for whether a tap and a long press actually reach them, which only a running text engine can answer. The fixture is `-uiTestShortActionsFixture YES` (`ChatFixture.makeShortActionMessages`), kept apart from `makeMessages()` because several UI tests pin that transcript's shape.
 
 ## Transcript scroll anchoring (#2072)
 

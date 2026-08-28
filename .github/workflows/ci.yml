@@ -1832,6 +1832,22 @@ jobs:
             --device ${{ matrix.device }} \
             --result-bundle .build/transcript-anchor-ui.xcresult \
             --only-testing SliccFollowerUITests/TranscriptComposerGrowthUITests
+      # The transcript's short actions are the one feature here that CANNOT be
+      # proven below the view layer: the unit suite fixes which spans become
+      # actionable, but whether a tap and a long press actually reach them is a
+      # property of the running text engine. Prose paints through a UITextView
+      # precisely because SwiftUI `Text` has no per-span long press, and nothing
+      # short of a real gesture can tell whether that wiring survived.
+      #
+      # iPhone only: compact width is where a transcript is read on a phone,
+      # and the menus are identical at regular width.
+      - name: Test transcript short actions (iPhone)
+        if: matrix.device == 'iPhone'
+        run: |
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device iPhone \
+            --result-bundle .build/transcript-short-actions-ui.xcresult \
+            --only-testing SliccFollowerUITests/TranscriptShortActionsUITests
       - name: Upload coverage report
         if: always() && matrix.device == 'iPhone' && matrix.ios == '26'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
