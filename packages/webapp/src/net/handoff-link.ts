@@ -25,16 +25,12 @@ export const HANDOFF_REL = `${SLICC_HOSTED_ORIGIN}/rel/handoff`;
 export const UPSKILL_REL = `${SLICC_HOSTED_ORIGIN}/rel/upskill`;
 
 /**
- * CDP `Network.Response.headers` bag as delivered by the protocol.
- *
- * Values are strings at runtime (same-name headers joined with `\n`); the CDP
- * envelope leaves them untyped until `getLinkHeaderValuesFromCdp` narrows to
- * strings. Named here so call sites that still hold the protocol bag can pass
- * it without a cast.
+ * CDP `Network.Response.headers` bag. Values are strings at runtime (same-name
+ * headers joined with `\n`); the protocol envelope leaves them untyped until
+ * `getLinkHeaderValuesFromCdp` narrows.
  */
-export type CdpHeaderBag = {
-  readonly [name: string]: unknown;
-};
+// biome-ignore lint/plugin: opaque CDP Network.Response.headers envelope — genuine protocol boundary; narrowed in getLinkHeaderValuesFromCdp.
+export type CdpHeaderBag = Record<string, unknown>;
 
 export type HandoffVerb = 'handoff' | 'upskill';
 
