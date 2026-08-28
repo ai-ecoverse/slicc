@@ -111,6 +111,65 @@ SwiftUI cannot express that shape declaratively, which is why `Models/MarkdownTa
 
 `HorizontalScrollGuard` widens its scroller by `horizontalTouchSlop` on each side so a finger landing just outside a table still arbitrates against it. `measuredContent` re-inserts that inset, because without it every guarded block — table cells and fenced code alike — renders 8pt left of the surrounding paragraphs and loses that much of its own padding. The rule covered by `SliccFollowerTests/MarkdownTableLayoutTests`; the fixture transcript carries a four-column table with one wrapping cell.
 
+## Transcript short actions
+
+Everything a reader can act on in a transcript carries a **default action on tap** and a **short-action menu on long press**:
+
+| Span                                                | Tap                                                                    | Long press                                                            |
+| --------------------------------------------------- | ---------------------------------------------------------------------- | --------------------------------------------------------------------- |
+| `http(s)` link                                      | Sliccy's own browser (Settings → Advanced hands it back to the system) | Open in Sliccy · Copy Link · Share… (+ the system's own link preview) |
+| Any other scheme (`mailto:`, `tel:`, an app scheme) | the system's default app                                               | Open · Copy Link · Share…                                             |
+| Phone number                                        | **Messages** (`sms:`)                                                  | Message · Call · Copy · Share…                                        |
+| Inline `code`                                       | Copy                                                                   | Copy · Share…                                                         |
+| Fenced code block                                   | text selection, unchanged                                              | Copy · Share…                                                         |
+| Confirmed file mention                              | the preview sheet                                                      | Preview · Copy Path · Share…                                          |
+| Base64 payload chip                                 | the preview sheet                                                      | Preview · Share… · Copy Base64                                        |
+
+A tapped phone number goes to Messages rather than the dialer: a number in a transcript is far more often something to text a link to than something to ring, and `tel:` on a device with no cellular plan is a dead end. Calling stays one long press away.
+
+**Every menu in the table is a UIKit menu.** The first version routed a tapped `code` run through a SwiftUI `confirmationDialog`, which put one centred alert card among six contextual menus — the same actions, in a shape that read as a different feature. A tap can either perform an action or present a sheet; there is no API to raise a `UIContextMenuInteraction` programmatically, so a snippet now does the useful thing directly (it is the one span with nowhere to navigate to) and Share stays on the long press with everything else.
+
+### Why a UITextView
+
+SwiftUI's `Text` renders a `.link` run and routes a tap through `\.openURL`, and that is the whole of its link API — no per-span gesture, no preview, no menu. Every short action above is a SECOND action on a span that already has a default one, and `UITextView` is the only text engine on the platform that models that (`primaryActionFor` / `menuConfigurationFor`, iOS 17+).
+
+So `Views/TranscriptText.swift` paints **paragraphs, list items and blockquotes**. Headings and table cells stay on SwiftUI `Text`: they carry the same links and the same tap behaviour, they just have no long-press menu. That gap is deliberate — `MarkdownTableLayout` resolves column widths against measured `Text` metrics (see "Markdown tables"), and swapping the engine underneath it would move every column.
+
+Two consequences of the split:
+
+- **TextKit does not interpret `inlinePresentationIntent`.** SwiftUI's `Text` turns a `.stronglyEmphasized` run bold with no font ever being set; TextKit renders `.font` and nothing else. `TranscriptAttributedText` materialises the intents into real fonts, which is why the UIKit path needs its own styling pass rather than reusing `styledInlineCode`.
+- **`linkTextAttributes` is empty, not a colour.** Every link run already carries its own foreground; one tint over all of them would repaint inline code as a hyperlink. Pre-formatted text keeps its code colours precisely because the action it carries is Copy, not navigation.
+- **The text view reports itself as static text.** A `UITextView` publishes its contents as the accessibility VALUE with an empty LABEL and reports the `textView` element type, where `Text` does the opposite on both counts. Left alone that re-words every VoiceOver announcement and drops the paragraph out of every static-text query — which is how it silently broke UI tests with nothing to do with short actions. `TranscriptTextView` puts the label back, suppresses the value (VoiceOver reads label THEN value, so reporting both speaks the paragraph twice) and pins `.staticText`, re-asserting the trait on every read because `UITextView` recomputes its own when the text changes.
+
+Taps go back out through `\.openURL` — `ChatView.transcriptLinkAction` — rather than being handled in the coordinator, so one routing rule covers both engines and a link cannot behave differently depending on which block it landed in. Actions the shell has to present (a preview sheet, a share sheet, the code menu) travel through `\.transcriptActions`, a struct of closures rather than an observed object: `MessageBubble` is `Equatable` so SwiftUI can skip unchanged rows, and an object that publishes when a sheet opens would invalidate every row on screen (see "Transcript per-render cost"). Those sheets are mounted ONCE at the shell, and **inside** the `\.palette` environment — a sheet inherits the environment at the position its modifier sits in the chain, so mounting it after `.environment(\.palette, …)` presents it against the default dark palette while the shell behind it is light.
+
+### File mentions
+
+`Models/FileMentions.swift` mirrors the web's `core/file-mentions.ts` — same wordy-extension list, same TLD list, same extensionless names — because a mention that linkifies in the leader tab and stays dead on the phone reads as a bug in the phone. Two follower-specific details:
+
+- **`[` is escaped inside the delimiter character class.** Unlike JavaScript, ICU reads a bare `[` inside a set as the start of a NESTED set, so the web pattern copied verbatim compiles to `nil` and every mention silently stops being found.
+- **URLs are masked with spaces of the same character count** before the scan, so `https://example.com/static/app.js` cannot contribute `example.com/static/app.js`. Masking preserves the character count and nothing else, which is why `FileMentions.Candidate` reports a character OFFSET rather than a `String.Index`.
+
+Resolution is where the follower deliberately diverges. The browser answers a bare `check.js` by walking its own VFS and indexing basenames; here every step of a walk is an `fs.request` over the data channel, so `FileMentionResolver` settles only what one `stat` can settle: an **absolute path**, or a partial name that matches a path the turn's own tool calls already named (`ToolCallPathHints`, mirroring `core/tool-call-paths.ts` down to its two-container depth floor). Anything else stays plain text. Verdicts — including the "not a file" ones, which are the common case — are cached for 30s, so a streaming reply does not re-ask per chunk; `AppState.disconnect()` resets them, because a different leader has a different filesystem.
+
+### Base64 payloads
+
+`Models/Base64Mentions.swift` + `Models/Base64Payload.swift` mirror the web's `core/base64-mentions.ts` and `core/base64-payload.ts`, including the column-wrapped-block reassembly that `base64`(1) output actually needs. The verdict rule is the same and is the point: a candidate whose decoded bytes are neither a known signature, a declared type, nor readable text is NOT a payload, and stays exactly as typed — collapsing a run hides text the user wrote.
+
+Unlike the web there is no inline chip: SwiftUI cannot seat a button inside a `Text`, so a paragraph carrying a payload is split into stacked segments by `TranscriptParagraph`. The text either side is trimmed, because a paragraph block legitimately contains blank lines (the parser flushes on a fence, a heading or a list, not on an empty line) and painting them as-is leaves a hole above and below the chip — exactly the noise the chip exists to remove.
+
+The preview sheet is the Files surface's own `FilePreviewSheet`, so a file opened from prose and one opened from the file browser look identical.
+
+Inside it, **Quick Look renders everything the follower cannot render itself** (`Views/QuickLookPreview.swift`). The follower previews whatever the leader hands it — a screenshot, a PDF report, a captured video, a keynote — and hand-rolling a renderer per family is not a race worth entering: `QLPreviewController` already knows them, with pinch-zoom, page navigation, transport controls and printing for free. It is embedded as a CHILD rather than presented, so the sheet keeps its own title, Done button and Share item and neither grows a second navigation bar; that is also why it is not wrapped in a `UINavigationController`.
+
+**Text is claimed before Quick Look ever sees it.** Quick Look renders a `.txt` in a proportional face and drops the leader's theme, which is the wrong shape for the source, configs and logs a VFS is mostly made of; that branch stays monospace, themed and selectable. What counts as text is `MagicBytes.looksLikeText` — the same sniffer the payload chips use — rather than a bare UTF-8 decode, because a small binary can decode without throwing and mojibake is worse than a Quick Look preview. Quick Look needs a file on disk, which is why the sheet stages the bytes once on appear and hands the same URL to both it and the share sheet, and why a payload chip synthesises a name with an extension (`payload.png`) rather than handing over anonymous bytes.
+
+### Cost
+
+The finished inline run is memoised in `TranscriptInlineCache`, keyed by (markdown, confirmed files). The pipeline adds a markdown parse, two regex passes, an `NSDataDetector` walk and — for anything past the 128-character floor — a base64 decode, and `MarkdownText` rebuilds its content on every body evaluation. Keying on the confirmed-file map keeps the newly-resolved case correct: when a mention resolves, the key changes and the run is rebuilt. Resolution itself is debounced 250ms inside `.task(id: content)`, which re-fires on every streaming chunk.
+
+Covered by `SliccFollowerTests/TranscriptEntityScanTests` and `TranscriptShortActionTests` for which spans become actionable, and by `SliccFollowerUITests/TranscriptShortActionsUITests` — on the CI iPhone leg — for whether a tap and a long press actually reach them, which only a running text engine can answer. The fixture is `-uiTestShortActionsFixture YES` (`ChatFixture.makeShortActionMessages`), kept apart from `makeMessages()` because several UI tests pin that transcript's shape.
+
 ## Transcript scroll anchoring (#2072)
 
 The transcript pins its bottom with `.defaultScrollAnchor(.bottom)` and nothing else. It must **not** carry a `.scrollPosition($binding)`, and it must not hand-roll bottom-pinning with `onChange` + `scrollTo(edge:)`.
@@ -155,7 +214,7 @@ Cone selection is unchanged. Covered by `SliccFollowerTests/ReadOnlyScoopTests` 
 
 ## UI-test hooks
 
-`UITestHooks` is `#if DEBUG` only. **No test needs a leader**: `-uiTestFixtureRoute YES` opens the leaderless UI Fixture; `-uiTestSessionsFixture/Empty YES` seeds iCloud sessions; `-uiTestRecentJoinsFixture/Empty YES` seeds the synced Recent list (one row this device recorded, one synced from a fixture iPad with no label — the hand-pasted case); `-uiTestScoopStatusFixture` covers lifecycle/fill; `-uiTestUnitRoleFixture cone|scoop` seeds one cone plus the scoop it owns and starts on either, which is how the read-only scoop view is reached without a leader; `-uiTestReduceMotion` freezes pupil motion + noise; `-uiTestCompletedTurn YES` feeds a completed turn; `-uiTestConnectionState` pins a start state (published immediately — a pinned state is a premise, not a transition); `-uiTestConnectionBlip "<dropAfter>[,<healsAfter>]"` stages the mid-session drop the settle window exists for. Failure-state dials `http://127.0.0.1:1/…` so the avatar reaches `Connection Failed` without DNS.
+`UITestHooks` is `#if DEBUG` only. **No test needs a leader**: `-uiTestFixtureRoute YES` opens the leaderless UI Fixture; `-uiTestSessionsFixture/Empty YES` seeds iCloud sessions; `-uiTestRecentJoinsFixture/Empty YES` seeds the synced Recent list (one row this device recorded, one synced from a fixture iPad with no label — the hand-pasted case); `-uiTestScoopStatusFixture` covers lifecycle/fill; `-uiTestUnitRoleFixture cone|scoop` seeds one cone plus the scoop it owns and starts on either, which is how the read-only scoop view is reached without a leader; `-uiTestReduceMotion` freezes pupil motion + noise; `-uiTestCompletedTurn YES` feeds a completed turn; `-uiTestConnectionState` pins a start state (published immediately — a pinned state is a premise, not a transition); `-uiTestConnectionBlip "<dropAfter>[,<healsAfter>]"` stages the mid-session drop the settle window exists for; `-uiTestShortActionsFixture YES` seeds the transcript whose every paragraph carries something to act on (see "Transcript short actions"). Failure-state dials `http://127.0.0.1:1/…` so the avatar reaches `Connection Failed` without DNS.
 
 ## Coverage gate details
 

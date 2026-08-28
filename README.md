@@ -33,6 +33,7 @@ Once you're in, you can:
 
 - Connect other browser windows or Electron apps into one shared session
 - Run leader-shell commands from the native iOS follower's Terminal tab, or ask the leader to open another iOS app after an on-device approval
+- Act on what the agent wrote without leaving the iOS chat: tap a snippet or long-press a code block to copy or share it, tap a file it mentioned or a pasted base64 blob to preview it, tap a link to open it in Sliccy's own browser, and tap a phone number to text it
 - Approve the agent's sudo requests from your iPhone with Face ID — including when the leader is running headless in the cloud — and get a push when a turn finishes or an approval is waiting
 - Keep an eye on the session from a **Cones & Scoops** home-screen widget on iPhone, iPad and the Mac desktop: what the cone is doing, the scoops under it, how full each context is, and whether anything needs you ([details](docs/widgets.md))
 - Install skills that teach the agent how to perform challenging tasks

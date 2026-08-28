@@ -8,10 +8,31 @@ import SwiftUI
 /// it. `AttributedString(markdown:)` is used for inline spans only — it
 /// cannot render fenced code, tables or lists, which is why those are
 /// recognised as blocks first.
+///
+/// ## Two text engines, on purpose
+///
+/// Prose, list items and blockquotes paint through `TranscriptText`
+/// (`UITextView`), because a link there has to carry a LONG PRESS as well as
+/// a tap and SwiftUI's `Text` has no per-span gesture at all. Headings and
+/// table cells stay on `Text`: they carry the same links and the same tap
+/// behaviour but no long-press menu, because `MarkdownTableLayout` measures
+/// columns against `Text` metrics and swapping the engine underneath it would
+/// move every column. The boundary is documented in
+/// `docs/ios-app-details.md#transcript-short-actions`.
 struct MarkdownText: View {
     @Environment(\.palette) private var palette
+    @Environment(\.fileMentionResolver) private var fileMentionResolver
+    @Environment(\.transcriptActions) private var actions
 
     let content: String
+
+    /// Mentions the leader confirmed, keyed by the text that was written.
+    ///
+    /// Empty until the resolver answers, so a message paints immediately with
+    /// inert names and gains its links a beat later — the web's
+    /// "confirm, then linkify" rule, which is what keeps the transcript from
+    /// ever showing a link that leads nowhere.
+    @State private var resolvedFiles: [String: String] = [:]
 
     var body: some View {
         VStack(alignment: .leading, spacing: 8) {
@@ -37,9 +58,35 @@ struct MarkdownText: View {
                 }
             }
         }
+        .task(id: content) { await resolveMentions() }
     }
 
     private var blocks: [MarkdownBlock] { MarkdownBlockParser.parse(content) }
+
+    // MARK: - File mention resolution
+
+    /// Ask the leader which of the names in this message are real files.
+    ///
+    /// Debounced first, because `.task(id:)` re-fires on every streaming
+    /// chunk: without the pause a 40-chunk reply would scan its own growing
+    /// text 40 times and ask about half-written paths. The resolver caches
+    /// verdicts, so the repeats that do get through cost no round trips.
+    private func resolveMentions() async {
+        guard let resolver = fileMentionResolver else { return }
+        try? await Task.sleep(for: .milliseconds(250))
+        guard !Task.isCancelled else { return }
+        let queries = TranscriptInline.fileQueries(in: content)
+        guard !queries.isEmpty else { return }
+        let resolved = await resolver.resolve(all: queries)
+        guard !Task.isCancelled, resolved != resolvedFiles else { return }
+        resolvedFiles = resolved
+    }
+
+    /// The finished inline run for one block, memoised across the transcript's
+    /// many body evaluations.
+    private func paragraph(_ markdown: String) -> TranscriptParagraph {
+        TranscriptInlineCache.shared.paragraph(markdown: markdown, files: resolvedFiles)
+    }
 
     // MARK: - Inline Text Rendering
 
@@ -47,22 +94,49 @@ struct MarkdownText: View {
     /// its body through here so **bold**, `code` and links behave the same
     /// in a paragraph, a heading, a list item and a table cell.
     private func inlineText(_ text: String) -> Text {
-        guard
-            let attributed = try? AttributedString(
-                markdown: text,
-                options: .init(interpretedSyntax: .inlineOnlyPreservingWhitespace))
-        else {
-            return Text(text)
-        }
-        return Text(styledForInlineCode(attributed))
+        Text(styledForInlineCode(paragraph(text).attributed))
     }
 
+    /// The UIKit-backed run: same content as `inlineText`, but with the
+    /// per-span long-press menus.
+    private func transcriptText(
+        _ value: AttributedString, size: CGFloat = 15, weight: UIFont.Weight = .regular,
+        italic: Bool = false, inkOpacity: Double = 0.9
+    ) -> some View {
+        TranscriptText(
+            attributed: value,
+            style: TranscriptTextStyle(
+                fontSize: size,
+                weight: weight,
+                italic: italic,
+                ink: UIColor(palette.ink).withAlphaComponent(inkOpacity),
+                accent: UIColor(palette.accent),
+                codeForeground: UIColor(palette.accent),
+                codeBackground: UIColor(palette.ink).withAlphaComponent(0.10)
+            )
+        )
+        .frame(maxWidth: .infinity, alignment: .leading)
+    }
+
+    /// A paragraph, with any recognised base64 blob elided to a chip.
     @ViewBuilder
     private func markdownTextView(_ text: String) -> some View {
-        inlineText(text)
-            .font(.system(size: 15))
-            .foregroundStyle(palette.ink.opacity(0.9))
-            .tint(palette.accent)
+        let plan = paragraph(text)
+        if plan.segments.count == 1, case .text(let only) = plan.segments[0] {
+            transcriptText(only)
+        } else {
+            VStack(alignment: .leading, spacing: 8) {
+                ForEach(Array(plan.segments.enumerated()), id: \.offset) { _, segment in
+                    switch segment {
+                    case .text(let value):
+                        transcriptText(value)
+                    case .payload(let payload):
+                        Base64Chip(payload: payload)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                    }
+                }
+            }
+        }
     }
 
     /// Apply the assistant-bubble inline-code style: white@10 background,
@@ -108,10 +182,7 @@ struct MarkdownText: View {
             RoundedRectangle(cornerRadius: 1.5)
                 .fill(palette.ink.opacity(0.20))
                 .frame(width: 3)
-            inlineText(text)
-                .font(.system(size: 15))
-                .foregroundStyle(palette.ink.opacity(0.65))
-                .italic()
+            transcriptText(paragraph(text).attributed, italic: true, inkOpacity: 0.65)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
     }
@@ -132,11 +203,7 @@ struct MarkdownText: View {
                         .monospacedDigit()
                         .foregroundStyle(palette.ink.opacity(0.55))
                         .frame(minWidth: list.ordered ? 22 : 12, alignment: .trailing)
-                    inlineText(item.text)
-                        .font(.system(size: 15))
-                        .foregroundStyle(palette.ink.opacity(0.9))
-                        .tint(palette.accent)
-                        .frame(maxWidth: .infinity, alignment: .leading)
+                    transcriptText(paragraph(item.text).attributed)
                 }
                 .padding(.leading, CGFloat(item.depth) * 16)
             }
@@ -256,6 +323,23 @@ struct MarkdownText: View {
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(palette.field)
         .cornerRadius(8)
+        .accessibilityIdentifier("code-block")
+        // Pre-formatted text is what a reader most often wants OUT of a
+        // transcript, and dragging a selection across a wrapped shell command
+        // on a phone is miserable. Selection stays enabled for the rare
+        // partial copy; the menu is here for the whole-block case.
+        .contextMenu {
+            Button {
+                TranscriptClipboard.copy(code)
+            } label: {
+                Label("Copy", systemImage: "doc.on.doc")
+            }
+            Button {
+                actions.share(.text(code))
+            } label: {
+                Label("Share…", systemImage: "square.and.arrow.up")
+            }
+        }
     }
 }
 

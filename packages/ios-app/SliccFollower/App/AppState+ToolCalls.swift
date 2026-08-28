@@ -43,6 +43,9 @@ extension AppState {
         // Adopt the provider's tool-call id so the result pairs by identity; a
         // random id only for pre-#2306 leaders, which leave the name scan its
         // unavoidable ambiguity.
+        // The turn's own tool calls are how a bare `foo.md` in the prose that
+        // follows finds the `/workspace/docs/foo.md` the agent just wrote.
+        fileMentionResolver.absorb(toolInput: toolInput)
         let rowId = toolCallId.map { Self.toolRowId(messageId: messageId, toolCallId: $0) }
         let tc = ToolCall(id: rowId ?? UUID().uuidString, name: toolName, input: toolInput)
         buffer[idx].toolCalls = (buffer[idx].toolCalls ?? []) + [tc]
