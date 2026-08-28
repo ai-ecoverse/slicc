@@ -92,6 +92,32 @@ class SliccProcess {
         let logLabel: String
     }
 
+    /// The three OS calls a spawn actually makes, injected so the launch
+    /// paths — which are most of this type — can be tested without starting a
+    /// browser or binding the real ports.
+    ///
+    /// Everything around them is deliberately left alone: a test still builds
+    /// the real argument vector, the real `Process`, the real launch record
+    /// and the real termination handler, and only substitutes "which binary"
+    /// and "actually exec it". Faking more than this would stop testing the
+    /// code that ships.
+    struct SpawnServices {
+        /// Which binary to run, with which arguments.
+        var resolveLaunchConfiguration: (_ sliccDir: String, _ extraArgs: [String]) throws -> LaunchConfiguration
+        /// Start the built process.
+        var runProcess: (Process) throws -> Void
+        /// Whether a TCP port is already bound.
+        var isPortInUse: (UInt16) -> Bool
+
+        static let live = SpawnServices(
+            resolveLaunchConfiguration: {
+                try SliccProcess.resolveLaunchConfiguration(sliccDir: $0, extraArgs: $1)
+            },
+            runProcess: { try $0.run() },
+            isPortInUse: { SliccProcess.portIsInUse($0) }
+        )
+    }
+
     private struct LaunchRecord {
         let process: Process
         let targetType: AppTargetType
@@ -166,19 +192,22 @@ class SliccProcess {
     let cdpLiveProbe: CDPLiveProbe
     let trayStatusProbe: TrayStatusProbe
     let agentActivityProbe: AgentActivityProbe
+    let spawnServices: SpawnServices
 
     init(
         recordStore: LaunchRecordStore = LaunchRecordStore(),
         cdpLiveProbe: CDPLiveProbe = .default,
         trayStatusProbe: TrayStatusProbe = .default,
         agentActivityProbe: AgentActivityProbe = .default,
-        terminalFollowerLaunchService: TerminalFollowerLaunchService = .live
+        terminalFollowerLaunchService: TerminalFollowerLaunchService = .live,
+        spawnServices: SpawnServices = .live
     ) {
         self.recordStore = recordStore
         self.cdpLiveProbe = cdpLiveProbe
         self.trayStatusProbe = trayStatusProbe
         self.agentActivityProbe = agentActivityProbe
         self.terminalFollowerLaunchService = terminalFollowerLaunchService
+        self.spawnServices = spawnServices
     }
 
     var resolvedSliccDir: String { sliccDir }
@@ -279,7 +308,7 @@ class SliccProcess {
                 $0.value.targetType == .chromiumBrowser && !$0.value.isFollower
             }),
             entry.value.process.isRunning,
-            Self.isPortInUse(entry.value.cdpPort)
+            spawnServices.isPortInUse(entry.value.cdpPort)
         else { return nil }
         return LeaderBrowserEndpoint(cdpPort: entry.value.cdpPort, appPath: entry.key)
     }
@@ -310,7 +339,7 @@ class SliccProcess {
             return
         }
         startFailures.removeValue(forKey: browser.id)
-        guard !Self.isPortInUse(Self.browserPort) else { throw LaunchError.portInUse(Self.browserPort) }
+        guard !spawnServices.isPortInUse(Self.browserPort) else { throw LaunchError.portInUse(Self.browserPort) }
         log.info("launchStandalone: \(browser.name, privacy: .public) on port \(Self.browserPort) (lead)")
         do {
             try spawn(
@@ -360,7 +389,7 @@ class SliccProcess {
         }
         startFailures.removeValue(forKey: browser.id)
         let (port, cdpPort) = nextElectronPorts()
-        guard !Self.isPortInUse(port) else { throw LaunchError.portInUse(port) }
+        guard !spawnServices.isPortInUse(port) else { throw LaunchError.portInUse(port) }
         log.info("launchBrowserFollower: \(browser.name, privacy: .public) on port \(port), cdp \(cdpPort) (join)")
         do {
             try spawn(
@@ -399,7 +428,7 @@ class SliccProcess {
         }
         startFailures.removeValue(forKey: app.id)
         let (port, cdpPort) = nextElectronPorts()
-        guard !Self.isPortInUse(port) else { throw LaunchError.portInUse(port) }
+        guard !spawnServices.isPortInUse(port) else { throw LaunchError.portInUse(port) }
         log.info("launchWithElectronApp: \(app.name, privacy: .public) on port \(port), cdp \(cdpPort)")
         do {
             var env: [String: String] = ["PORT": "\(port)"]
@@ -764,7 +793,7 @@ class SliccProcess {
         for i: UInt16 in 0...20 {
             let port = Self.electronBasePort + electronCount + i
             let cdpPort = Self.electronBaseCdpPort + electronCount + i
-            if !Self.isPortInUse(port) && !Self.isPortInUse(cdpPort) {
+            if !spawnServices.isPortInUse(port) && !spawnServices.isPortInUse(cdpPort) {
                 return (port, cdpPort)
             }
         }
@@ -974,7 +1003,7 @@ class SliccProcess {
         // Re-spawn slicc-server in --serve-only mode so it reuses the
         // existing browser/Electron without re-launching it. Same ports
         // as before so the UI's bookmarked URL still works.
-        guard !Self.isPortInUse(record.servePort) else {
+        guard !spawnServices.isPortInUse(record.servePort) else {
             throw LaunchError.portInUse(record.servePort)
         }
         let extraArgs = Self.reattachArgs(
@@ -1067,7 +1096,7 @@ class SliccProcess {
         bridgeToken: String? = nil,
         isFollower: Bool = false
     ) throws {
-        let launchConfig = try Self.resolveLaunchConfiguration(sliccDir: sliccDir, extraArgs: extraArgs)
+        let launchConfig = try spawnServices.resolveLaunchConfiguration(sliccDir, extraArgs)
         let loggedArguments = Self.redactedSpawnArguments(launchConfig.arguments).joined(separator: " ")
         log.info("spawn: \(launchConfig.executablePath, privacy: .public) \(loggedArguments, privacy: .public)")
         log.info("spawn: cwd = \(self.sliccDir, privacy: .public)")
@@ -1122,7 +1151,7 @@ class SliccProcess {
                 }
             }
         }
-        try proc.run()
+        try spawnServices.runProcess(proc)
         log.info("spawn: pid=\(proc.processIdentifier) for \(target.name, privacy: .public)")
         launchRecords[target.id] = LaunchRecord(
             process: proc,
@@ -1178,7 +1207,7 @@ class SliccProcess {
         // CDP port has not come up yet (slow Keychain prompt, cold start) is
         // never prematurely reaped.
         if record.targetType == .chromiumBrowser {
-            if Self.isPortInUse(record.cdpPort) {
+            if spawnServices.isPortInUse(record.cdpPort) {
                 record.observedCdpListening = true
                 launchRecords[target.id] = record
                 return
@@ -1210,7 +1239,7 @@ class SliccProcess {
 
         guard let observedAppPID = record.observedAppPID else {
             if Date().timeIntervalSince(record.startedAt) > Self.electronLaunchStaleTimeout,
-                !Self.isPortInUse(record.cdpPort)
+                !spawnServices.isPortInUse(record.cdpPort)
             {
                 log.info("refreshRuntimeState: \(target.name, privacy: .public) has no app pid or CDP listener; stopping stale helper")
                 stopLaunchRecord(id: target.id, terminateApps: false)
@@ -1230,7 +1259,7 @@ class SliccProcess {
             return nil
         }
         if record.targetType == .electronApp,
-            !Self.isPortInUse(record.cdpPort)
+            !spawnServices.isPortInUse(record.cdpPort)
         {
             return nil
         }
@@ -1403,7 +1432,7 @@ class SliccProcess {
         return errno == EPERM
     }
 
-    private static func isPortInUse(_ port: UInt16) -> Bool {
+    static func portIsInUse(_ port: UInt16) -> Bool {
         let sock = socket(AF_INET, SOCK_STREAM, 0)
         guard sock >= 0 else { return false }
         defer { close(sock) }
