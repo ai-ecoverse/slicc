@@ -197,33 +197,42 @@ function makeErrorOutput(model: Model<Api>, error: unknown) {
 
 // ── Stream functions ───────────────────────────────────────────────
 
+function logStreamError(error: unknown): void {
+  console.error('[cerebras] Stream error:', error instanceof Error ? error.message : String(error));
+}
+
 const streamCerebras = (
   model: Model<Api>,
   context: Context,
   options: ProviderStreamOptions = {}
 ) => {
   const stream = createAssistantMessageEventStream();
-  (async () => {
-    try {
-      const proxyModel = {
-        ...model,
-        baseUrl: CEREBRAS_BASE_URL,
-        api: OPENAI_COMPLETIONS_API,
-      } as Model<'openai-completions'>;
-      const inner = streamOpenAICompletions(proxyModel, context, options);
-      for await (const event of inner) stream.push(event);
-      stream.end();
-    } catch (error) {
-      console.error(
-        '[cerebras] Stream error:',
-        error instanceof Error ? error.message : String(error)
-      );
-      stream.push(makeErrorOutput(model, error) as never);
-      stream.end();
-    }
-  })();
+  // Fire-and-forget pump — callers consume the returned event stream.
+  pumpCerebrasCompletions(stream, model, context, options).catch(logStreamError);
   return stream;
 };
+
+async function pumpCerebrasCompletions(
+  stream: ReturnType<typeof createAssistantMessageEventStream>,
+  model: Model<Api>,
+  context: Context,
+  options: ProviderStreamOptions
+): Promise<void> {
+  try {
+    const proxyModel = {
+      ...model,
+      baseUrl: CEREBRAS_BASE_URL,
+      api: OPENAI_COMPLETIONS_API,
+    } as Model<'openai-completions'>;
+    const inner = streamOpenAICompletions(proxyModel, context, options);
+    for await (const event of inner) stream.push(event);
+    stream.end();
+  } catch (error) {
+    logStreamError(error);
+    stream.push(makeErrorOutput(model, error) as never);
+    stream.end();
+  }
+}
 
 const streamSimpleCerebras = (
   model: Model<Api>,
@@ -231,27 +240,32 @@ const streamSimpleCerebras = (
   options?: SimpleStreamOptions
 ) => {
   const stream = createAssistantMessageEventStream();
-  (async () => {
-    try {
-      const proxyModel = {
-        ...model,
-        baseUrl: CEREBRAS_BASE_URL,
-        api: OPENAI_COMPLETIONS_API,
-      } as Model<'openai-completions'>;
-      const inner = streamSimpleOpenAICompletions(proxyModel, context, options);
-      for await (const event of inner) stream.push(event);
-      stream.end();
-    } catch (error) {
-      console.error(
-        '[cerebras] Stream error:',
-        error instanceof Error ? error.message : String(error)
-      );
-      stream.push(makeErrorOutput(model, error) as never);
-      stream.end();
-    }
-  })();
+  // Fire-and-forget pump — callers consume the returned event stream.
+  pumpSimpleCerebrasCompletions(stream, model, context, options).catch(logStreamError);
   return stream;
 };
+
+async function pumpSimpleCerebrasCompletions(
+  stream: ReturnType<typeof createAssistantMessageEventStream>,
+  model: Model<Api>,
+  context: Context,
+  options?: SimpleStreamOptions
+): Promise<void> {
+  try {
+    const proxyModel = {
+      ...model,
+      baseUrl: CEREBRAS_BASE_URL,
+      api: OPENAI_COMPLETIONS_API,
+    } as Model<'openai-completions'>;
+    const inner = streamSimpleOpenAICompletions(proxyModel, context, options);
+    for await (const event of inner) stream.push(event);
+    stream.end();
+  } catch (error) {
+    logStreamError(error);
+    stream.push(makeErrorOutput(model, error) as never);
+    stream.end();
+  }
+}
 
 // ── Provider config ────────────────────────────────────────────────
 
