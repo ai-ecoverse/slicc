@@ -150,10 +150,7 @@ function deriveSkillNameFromArchive(fileName: string, skillEntryPath: string): s
   );
 }
 
-export async function installSkillFromDrop(
-  fs: VirtualFS,
-  file: DroppedSkillFile
-): Promise<InstallSkillFromDropResult> {
+function assertDroppableSkillArchive(file: DroppedSkillFile): void {
   if (!file.name.toLowerCase().endsWith(SKILL_ARCHIVE_EXTENSION)) {
     throw new Error(
       `Only ${SKILL_ARCHIVE_EXTENSION} archives can be installed with drag and drop.`
@@ -162,11 +159,14 @@ export async function installSkillFromDrop(
   if (file.size > MAX_SKILL_ARCHIVE_SIZE_BYTES) {
     throw new Error('Skill archives must be 50 MB or smaller.');
   }
+}
 
-  let archive: Record<string, Uint8Array>;
+async function unzipDroppedSkillArchive(
+  file: DroppedSkillFile
+): Promise<Record<string, Uint8Array>> {
   try {
     const bytes = new Uint8Array(await file.arrayBuffer());
-    archive = unzipArchiveWithSafetyLimits(bytes);
+    return unzipArchiveWithSafetyLimits(bytes);
   } catch (err) {
     if (err instanceof ArchiveBudgetError) {
       throw err;
@@ -174,43 +174,94 @@ export async function installSkillFromDrop(
     const message = err instanceof Error ? err.message : String(err);
     throw new Error(`Invalid .skill archive: ${message}`);
   }
+}
 
+function skillPrefixForEntry(skillEntry: ArchiveEntry): string {
+  if (skillEntry.path === SKILL_FILE) return '';
+  return skillEntry.path.slice(0, -(SKILL_FILE.length + 1));
+}
+
+/** Relative path under the skill prefix, or null when the entry is outside / empty. */
+function relativePathUnderSkillPrefix(entryPath: string, skillPrefix: string): string | null {
+  if (skillPrefix) {
+    if (entryPath === skillPrefix) return null;
+    if (!entryPath.startsWith(`${skillPrefix}/`)) return null;
+  }
+
+  const relativePath = skillPrefix ? entryPath.slice(skillPrefix.length + 1) : entryPath;
+  return relativePath || null;
+}
+
+async function writeArchiveEntry(
+  fs: VirtualFS,
+  temporaryDestinationPath: string,
+  relativePath: string,
+  bytes: Uint8Array
+): Promise<void> {
+  const outputPath = joinPath(temporaryDestinationPath, relativePath);
+  const { dir } = splitPath(outputPath);
+  if (dir !== '/') {
+    await fs.mkdir(dir, { recursive: true });
+  }
+  await fs.writeFile(outputPath, bytes);
+}
+
+async function writeSkillEntriesToTemporaryDestination(
+  fs: VirtualFS,
+  entries: ArchiveEntry[],
+  skillPrefix: string,
+  temporaryDestinationPath: string
+): Promise<number> {
+  let fileCount = 0;
+  for (const entry of entries) {
+    const relativePath = relativePathUnderSkillPrefix(entry.path, skillPrefix);
+    if (!relativePath) continue;
+
+    await writeArchiveEntry(fs, temporaryDestinationPath, relativePath, entry.bytes);
+    fileCount++;
+  }
+  return fileCount;
+}
+
+async function removePathIfExists(fs: VirtualFS, path: string): Promise<void> {
+  if (await fs.exists(path)) {
+    await fs.rm(path, { recursive: true });
+  }
+}
+
+async function assertDestinationAvailable(fs: VirtualFS, skillName: string): Promise<string> {
+  const destinationPath = joinPath(WORKSPACE_SKILLS_PATH, skillName);
+  if (await fs.exists(destinationPath)) {
+    throw new Error(`Skill "${skillName}" already exists at ${destinationPath}.`);
+  }
+  return destinationPath;
+}
+
+export async function installSkillFromDrop(
+  fs: VirtualFS,
+  file: DroppedSkillFile
+): Promise<InstallSkillFromDropResult> {
+  assertDroppableSkillArchive(file);
+
+  const archive = await unzipDroppedSkillArchive(file);
   const entries = collectArchiveEntries(archive);
   const skillEntry = findSkillEntry(entries);
   const skillName = deriveSkillNameFromArchive(file.name, skillEntry.path);
   assertValidSkillName(skillName);
 
-  const destinationPath = joinPath(WORKSPACE_SKILLS_PATH, skillName);
-  if (await fs.exists(destinationPath)) {
-    throw new Error(`Skill "${skillName}" already exists at ${destinationPath}.`);
-  }
+  const destinationPath = await assertDestinationAvailable(fs, skillName);
   const temporaryDestinationPath = createTemporaryDestinationPath(skillName);
-
-  const skillPrefix =
-    skillEntry.path === SKILL_FILE ? '' : skillEntry.path.slice(0, -(SKILL_FILE.length + 1));
+  const skillPrefix = skillPrefixForEntry(skillEntry);
 
   await fs.mkdir(temporaryDestinationPath, { recursive: true });
 
   try {
-    let fileCount = 0;
-    for (const entry of entries) {
-      if (skillPrefix) {
-        if (entry.path === skillPrefix) continue;
-        if (!entry.path.startsWith(`${skillPrefix}/`)) continue;
-      }
-
-      const relativePath = skillPrefix ? entry.path.slice(skillPrefix.length + 1) : entry.path;
-      if (!relativePath) continue;
-
-      const outputPath = joinPath(temporaryDestinationPath, relativePath);
-      const { dir } = splitPath(outputPath);
-      if (dir !== '/') {
-        await fs.mkdir(dir, { recursive: true });
-      }
-      await fs.writeFile(outputPath, entry.bytes);
-      fileCount++;
-    }
-
+    const fileCount = await writeSkillEntriesToTemporaryDestination(
+      fs,
+      entries,
+      skillPrefix,
+      temporaryDestinationPath
+    );
     await fs.rename(temporaryDestinationPath, destinationPath);
 
     return {
@@ -219,9 +270,7 @@ export async function installSkillFromDrop(
       fileCount,
     };
   } catch (err) {
-    if (await fs.exists(temporaryDestinationPath)) {
-      await fs.rm(temporaryDestinationPath, { recursive: true });
-    }
+    await removePathIfExists(fs, temporaryDestinationPath);
     throw err;
   }
 }
