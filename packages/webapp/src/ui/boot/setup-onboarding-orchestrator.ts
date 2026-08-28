@@ -75,6 +75,20 @@ export interface OnboardingDeviceCodeHelpers {
 }
 
 /**
+ * Body of the welcome sprinkle's final lick (`onboarding-complete-with-provider`).
+ *
+ * Known keys match what `OnboardingOrchestrator` and the fast-forward path
+ * send; the open index signature keeps the bag pass-through-compatible with
+ * the orchestrator's still-opaque `fireFinalLick` callback without reintroducing
+ * `Record<string, unknown>`.
+ */
+export interface OnboardingFinalLickPayload {
+  action?: unknown;
+  data?: unknown;
+  [key: string]: unknown;
+}
+
+/**
  * Build a fresh provider catalogue (providers + models) for the
  * onboarding orchestrator. Identical shape across both floats.
  */
@@ -136,7 +150,7 @@ export interface OnboardingOrchestratorSetupDeps {
    * `flushCredentialsToWorker(client)` + `dispatchWelcomeLickOnce(...)`
    * around `client.sendSprinkleLick('welcome', data)`.
    */
-  onFireFinalLick(data: Record<string, unknown>): void;
+  onFireFinalLick(data: OnboardingFinalLickPayload): void;
   /**
    * UI-agnostic accounts-changed hook. The orchestrator fires it after
    * a successful connect-attempt or OAuth flow so the host can refresh

@@ -50,7 +50,6 @@
   "packages/webapp/src/tools/file-tools.ts": 3,
   "packages/webapp/src/transcript/normalize.ts": 2,
   "packages/webapp/src/transcript/redact.ts": 4,
-  "packages/webapp/src/ui/boot/setup-onboarding-orchestrator.ts": 1,
   "packages/webapp/src/ui/boot/setup-welcome-flow.ts": 13,
   "packages/webapp/src/ui/dip.ts": 4,
   "packages/webapp/src/ui/main.ts": 1,
