@@ -76,6 +76,13 @@ struct MountsSettingsView: View {
     @State private var rows: [Row] = []
     @State private var selection: Row.ID?
 
+    /// `rows` is normally loaded from the mount-table preference in
+    /// `onAppear`, which never fires off-screen — so the seed exists for
+    /// tests, which otherwise could only ever render the empty table.
+    init(rows: [Row] = []) {
+        _rows = State(initialValue: rows)
+    }
+
     var body: some View {
         VStack(spacing: 0) {
             table
@@ -500,6 +507,16 @@ struct SecretsSettingsView: View {
     @State private var deletionTarget: Secret?
     @State private var errorMessage: String?
 
+    /// The unlocked state is only ever reached by a Keychain read behind a
+    /// user click, so a test can reach it no other way — and the unlocked
+    /// table, its selection, and the editor sheet are most of this tab.
+    /// Seeded secrets never touch the Keychain.
+    init(secrets: [Secret] = [], unlocked: Bool = false, selection: Secret.ID? = nil) {
+        _secrets = State(initialValue: secrets)
+        _unlocked = State(initialValue: unlocked)
+        _selection = State(initialValue: selection)
+    }
+
     /// Decorative rows shown blurred behind the unlock prompt before the
     /// user has authorised Keychain access. Real values are never used.
     private static let placeholders: [Secret] = [
@@ -738,12 +755,14 @@ enum SecretDraft: Identifiable {
     }
 }
 
-private struct DomainEntry: Identifiable, Equatable {
+/// Internal (not `private`) so the editor's validation states can be rendered
+/// from a test — same reason as `SecretNameValidator` above.
+struct DomainEntry: Identifiable, Equatable {
     let id = UUID()
     var pattern: String
 }
 
-private struct SecretEditorSheet: View {
+struct SecretEditorSheet: View {
     let draft: SecretDraft
     let existingNames: Set<String>
     let onCancel: () -> Void

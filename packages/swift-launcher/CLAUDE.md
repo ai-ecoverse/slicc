@@ -31,6 +31,33 @@ npm run format -w @slicc/swift-launcher        # swift format --in-place
 
 `SliccstartApp` ticks `refreshRuntimeStates` every 2 s and `runtimeState(for:)` runs on every SwiftUI render, so anything on that path must be O(1) and filesystem-free in the steady state. Electron liveness uses the launch record's `observedAppPID` (`kill(pid, 0)`) first; the `NSWorkspace.runningApplications` scan (`candidateBundlePaths` + `appMatches`, pure string compares) is a fallback only. Do not reintroduce per-app `resolvingSymlinksInPath()` — with ~270 running apps it pinned the launcher at ~40% CPU. Tests: `ElectronAppMatchingTests`.
 
+## Testing the SwiftUI Surfaces
+
+`SliccstartTests/ViewHosting.swift` renders a view off-screen with
+`ImageRenderer` and returns a digest of the bitmap, so a test can assert that
+two states of a view **render differently** (`assertRendersDifferently`) — the
+only way to reach `AppListView` / `SettingsView` body branches from a unit
+test. Two hard limits, both worked around rather than fought:
+
+- **No interaction.** Headless SwiftUI on macOS builds no AppKit control tree
+  and no accessibility tree, so buttons cannot be pressed. Button _actions_ are
+  tested through the plain types they delegate to (`BrowserLaunchAction`,
+  `TerminalLaunchDecision`, `AppRow.statusDot`, …) — keep new view logic in
+  such a type rather than inline in a closure. The exception is `.borderless`
+  buttons, which do materialize as `NSButton`s (`ViewHosting.hostedButtons`,
+  used for `TraySessionRow`).
+- **`Table` and `Toggle` draw nothing** (both are `NSTableView`/`NSSwitch`-
+  backed), so the mounts/secrets table cells and switch knobs are asserted
+  against their model types instead.
+
+Views take their non-injectable state as init seams for this:
+`AppListView(isBundledBuild:)` (the whole update footer is otherwise
+unreachable outside a packaged `.app`), `MountsSettingsView(rows:)`,
+`SecretsSettingsView(secrets:unlocked:selection:)` (never touches the
+Keychain). `SliccstartApp.swift` remains uncovered: an `App`'s `Scene` cannot
+be rendered, and its window content is built inline rather than in a `View`
+type.
+
 ## Operational Telemetry (OpTel)
 
 `SliccstartApp.swift`'s `WindowGroup` root calls `.optelAutoInstrument(appID:)` from `@slicc/swift-optel` once; on macOS that activates `enter`, global `click`, `navigate`, and `error` (uncaught `NSException`). `appID = Bundle.main.bundleIdentifier` (`com.slicc.sliccstart`); beacons land in `helix-225321.helix_rum.cluster`.

@@ -19,6 +19,13 @@ struct AppListView: View {
     let onUpdate: () -> Void
     let onBeginUpdate: () -> Void
     let onRescan: () -> Void
+    /// Whether this build carries a bundled SLICC runtime, i.e. whether the
+    /// in-app updater applies at all. Injected (rather than read from
+    /// `SliccBootstrapper.isBundled` inside `body`) because a test process is
+    /// never a bundled `.app`: with the global read, the entire full-update
+    /// footer — the check/retry states and the restart-to-update affordance —
+    /// could not be rendered, let alone asserted on.
+    var isBundledBuild: Bool = SliccBootstrapper.isBundled
 
     @AppStorage(suppressTerminalWarningKey) private var suppressTerminalWarning = false
     @State private var pendingTerminalTarget: AppTarget?
@@ -404,7 +411,7 @@ struct AppListView: View {
 
     @ViewBuilder
     private var updateButton: some View {
-        if SliccBootstrapper.isBundled {
+        if isBundledBuild {
             fullUpdateButton
         } else {
             Button("Update") { onUpdate() }
