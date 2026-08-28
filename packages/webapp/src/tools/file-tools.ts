@@ -19,6 +19,35 @@ import type { ToolDefinition, ToolResult } from './types.js';
 
 const log = createLogger('tool:fs');
 
+/**
+ * Arguments for `read_file` — its `inputSchema` is the contract. Values arrive
+ * from the model, so each is cast at the boundary rather than trusted.
+ */
+export interface ReadFileInput {
+  path?: unknown;
+  offset?: unknown;
+  limit?: unknown;
+}
+
+/**
+ * Arguments for `write_file` — its `inputSchema` is the contract. Values arrive
+ * from the model, so each is cast at the boundary rather than trusted.
+ */
+export interface WriteFileInput {
+  path?: unknown;
+  content?: unknown;
+}
+
+/**
+ * Arguments for `edit_file` — its `inputSchema` is the contract. Values arrive
+ * from the model, so each is cast at the boundary rather than trusted.
+ */
+export interface EditFileInput {
+  path?: unknown;
+  old_string?: unknown;
+  new_string?: unknown;
+}
+
 /** Create all file tools bound to a VirtualFS instance. */
 export function createFileTools(fs: VirtualFS): ToolDefinition[] {
   return [createReadFileTool(fs), createWriteFileTool(fs), createEditFileTool(fs)];
@@ -61,10 +90,10 @@ function createReadFileTool(fs: VirtualFS): ToolDefinition {
       },
       required: ['path'],
     },
-    async execute(input: Record<string, unknown>): Promise<ToolResult> {
-      const path = input['path'] as string;
-      const offset = (input['offset'] as number | undefined) ?? 1;
-      const limit = input['limit'] as number | undefined;
+    async execute(input: ReadFileInput): Promise<ToolResult> {
+      const path = input.path as string;
+      const offset = (input.offset as number | undefined) ?? 1;
+      const limit = input.limit as number | undefined;
       log.debug('Read', { path, offset, limit });
 
       try {
@@ -158,9 +187,9 @@ function createWriteFileTool(fs: VirtualFS): ToolDefinition {
       },
       required: ['path', 'content'],
     },
-    async execute(input: Record<string, unknown>): Promise<ToolResult> {
-      const path = input['path'] as string;
-      const content = input['content'] as string;
+    async execute(input: WriteFileInput): Promise<ToolResult> {
+      const path = input.path as string;
+      const content = input.content as string;
       log.debug('Write', { path, contentLength: content.length });
 
       try {
@@ -198,10 +227,10 @@ function createEditFileTool(fs: VirtualFS): ToolDefinition {
       },
       required: ['path', 'old_string', 'new_string'],
     },
-    async execute(input: Record<string, unknown>): Promise<ToolResult> {
-      const path = input['path'] as string;
-      const oldString = input['old_string'] as string;
-      const newString = input['new_string'] as string;
+    async execute(input: EditFileInput): Promise<ToolResult> {
+      const path = input.path as string;
+      const oldString = input.old_string as string;
+      const newString = input.new_string as string;
       log.debug('Edit', { path, oldLength: oldString.length, newLength: newString.length });
 
       try {
