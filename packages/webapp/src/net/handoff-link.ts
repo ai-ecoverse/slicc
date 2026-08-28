@@ -24,6 +24,14 @@ import {
 export const HANDOFF_REL = `${SLICC_HOSTED_ORIGIN}/rel/handoff`;
 export const UPSKILL_REL = `${SLICC_HOSTED_ORIGIN}/rel/upskill`;
 
+/**
+ * CDP `Network.Response.headers` bag. Values are strings at runtime (same-name
+ * headers joined with `\n`); the protocol envelope leaves them untyped until
+ * `getLinkHeaderValuesFromCdp` narrows.
+ */
+// biome-ignore lint/plugin: opaque CDP Network.Response.headers envelope — genuine protocol boundary; narrowed in getLinkHeaderValuesFromCdp.
+export type CdpHeaderBag = Record<string, unknown>;
+
 export type HandoffVerb = 'handoff' | 'upskill';
 
 export interface HandoffMatch {
@@ -205,7 +213,7 @@ export function handoffFingerprint(input: {
 /* ────────── header-shape adapters that go straight to a verb match ────────── */
 
 export function extractHandoffFromCdpHeaders(
-  headers: Record<string, unknown> | undefined,
+  headers: CdpHeaderBag | undefined,
   baseUrl?: string
 ): { match: HandoffMatch | null; links: ParsedLink[] } {
   const values = getLinkHeaderValuesFromCdp(headers);
