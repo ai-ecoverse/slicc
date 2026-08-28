@@ -18,11 +18,14 @@
 
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import type { LocalLlmConnectionResult } from '../../providers/built-in/local-llm.js';
 import { config as localLlmConfig } from '../../providers/built-in/local-llm.js';
 
 // Single source of truth: the provider config owns the ID, the command
 // reads it. Keeps the two files from drifting if the ID is ever renamed.
 const PROVIDER_ID = localLlmConfig.id;
+
+type CmdResult = { stdout: string; stderr: string; exitCode: number };
 
 function helpText(): string {
   return `local-llm — inspect and configure the Local LLM provider
@@ -47,16 +50,56 @@ Common base URLs:
 `;
 }
 
+/** Format `kind` / `kind (version)` / `kind version` for status lines. */
+function runtimeLabel(runtime: LocalLlmConnectionResult['runtime'], paren: boolean): string {
+  if (!runtime.version) return runtime.kind;
+  return paren ? `${runtime.kind} (${runtime.version})` : `${runtime.kind} ${runtime.version}`;
+}
+
+function modelBulletLines(models: string[]): string[] {
+  return models.map((m) => `    • ${m}`);
+}
+
+function unreachableResult(baseUrl: string, result: LocalLlmConnectionResult): CmdResult {
+  const lines = [
+    `✗ Could not reach ${baseUrl}`,
+    `  runtime: ${runtimeLabel(result.runtime, true)}`,
+    `  error:   ${result.error?.message ?? 'unknown'}`,
+  ];
+  if (result.error?.hint) lines.push(`  hint:    ${result.error.hint}`);
+  return { stdout: '', stderr: lines.join('\n') + '\n', exitCode: 1 };
+}
+
+function statusResult(baseUrl: string, result: LocalLlmConnectionResult): CmdResult {
+  const lines = [
+    `✓ ${baseUrl}`,
+    `  runtime: ${runtimeLabel(result.runtime, true)}`,
+    `  models:  ${result.models.length}`,
+    ...modelBulletLines(result.models),
+  ];
+  return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+}
+
+function discoverSavedResult(baseUrl: string, result: LocalLlmConnectionResult): CmdResult {
+  const n = result.models.length;
+  const lines = [
+    `✓ ${baseUrl} (${runtimeLabel(result.runtime, false)})`,
+    `  Saved ${n} model${n === 1 ? '' : 's'} to Settings:`,
+    ...modelBulletLines(result.models),
+  ];
+  return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+}
+
 export function createLocalLlmCommand(): Command {
   return defineCommand(PROVIDER_ID, async (args) => {
     if (args.includes('--help') || args.includes('-h')) {
       return { stdout: helpText(), stderr: '', exitCode: 0 };
     }
 
-    // Lazy imports — same pattern as other supplemental commands that
-    // reach into the browser settings layer.
+    // Lazy imports — account-store (not ui/provider-settings) so shell stays
+    // below the ui layer; providers/ is unranked and safe for shell to load.
     const { getApiKeyForProvider, getRawApiKeyForProvider, getBaseUrlForProvider, addAccount } =
-      await import('../../ui/provider-settings.js');
+      await import('../../providers/account-store.js');
     const { verifyConnection } = await import('../../providers/built-in/local-llm.js');
 
     const sub = args[0] ?? 'status';
@@ -81,15 +124,7 @@ export function createLocalLlmCommand(): Command {
 
     const result = await verifyConnection(baseUrl, apiKey);
 
-    if (!result.ok) {
-      const lines = [
-        `✗ Could not reach ${baseUrl}`,
-        `  runtime: ${result.runtime.kind}${result.runtime.version ? ` (${result.runtime.version})` : ''}`,
-        `  error:   ${result.error?.message ?? 'unknown'}`,
-      ];
-      if (result.error?.hint) lines.push(`  hint:    ${result.error.hint}`);
-      return { stdout: '', stderr: lines.join('\n') + '\n', exitCode: 1 };
-    }
+    if (!result.ok) return unreachableResult(baseUrl, result);
 
     if (sub === 'discover') {
       // Upsert the deployment field with the freshly discovered list.
@@ -100,21 +135,9 @@ export function createLocalLlmCommand(): Command {
       // edit in Settings and shadowing the optionalApiKey fallback path.
       const rawKey = getRawApiKeyForProvider(PROVIDER_ID) ?? '';
       addAccount(PROVIDER_ID, rawKey, baseUrl, result.models.join(', '));
-      const lines = [
-        `✓ ${baseUrl} (${result.runtime.kind}${result.runtime.version ? ` ${result.runtime.version}` : ''})`,
-        `  Saved ${result.models.length} model${result.models.length === 1 ? '' : 's'} to Settings:`,
-        ...result.models.map((m) => `    • ${m}`),
-      ];
-      return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+      return discoverSavedResult(baseUrl, result);
     }
 
-    // status
-    const lines = [
-      `✓ ${baseUrl}`,
-      `  runtime: ${result.runtime.kind}${result.runtime.version ? ` (${result.runtime.version})` : ''}`,
-      `  models:  ${result.models.length}`,
-      ...result.models.map((m) => `    • ${m}`),
-    ];
-    return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+    return statusResult(baseUrl, result);
   });
 }
