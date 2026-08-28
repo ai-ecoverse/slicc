@@ -67,6 +67,19 @@ root, with every collaborator defaulted-but-injectable so the two quit paths
 on `LauncherModel`, not in a `WindowGroup` closure. Tests:
 `LauncherModelTests`, `RootViewRenderTests`, `AppDelegateLifecycleTests`.
 
+**Launch paths** go through `SliccProcess.SpawnServices` — resolve-binary,
+run-process, is-port-in-use. Injected so `launchStandalone` /
+`launchBrowserFollower` / `launchWithElectronApp` are testable without
+starting a browser or binding 5710/9222; the stub runs `/bin/sleep` in the
+server's place so records, pids and termination handling stay real. Tests:
+`SliccProcessLaunchPathTests`.
+
+**Auto-launch requires an installed app.** `StartupPreference.shouldAutoLaunch`
+is `resolveEnabled && isInstalledLocation` — a copy running from a build
+directory, `~/Downloads`, or Gatekeeper's translocated path never starts a
+browser, so a dev/CI run of the launcher cannot take over the screen. The
+preference is untouched and the Startup tab explains the refusal.
+
 `SliccProcess`, `SliccBootstrapper` and `AppManagementPermission` are
 deliberately **not `final`** — they are the app's side-effecting collaborators
 (spawning browsers, running git/npm, opening System Settings), and `@testable`
