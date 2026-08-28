@@ -81,7 +81,11 @@ enum AppRuntimeState: Equatable {
 }
 
 @Observable
-final class SliccProcess {
+/// Not `final`: the launcher's window model drives this type for every
+/// side effect it has (spawning browsers, detaching for an update, probing
+/// agent activity), so a test needs to stand in for it. `@testable` makes an
+/// internal, non-final class overridable from the test target.
+class SliccProcess {
     struct LaunchConfiguration: Equatable {
         let executablePath: String
         let arguments: [String]

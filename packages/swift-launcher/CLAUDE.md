@@ -54,9 +54,23 @@ Views take their non-injectable state as init seams for this:
 `AppListView(isBundledBuild:)` (the whole update footer is otherwise
 unreachable outside a packaged `.app`), `MountsSettingsView(rows:)`,
 `SecretsSettingsView(secrets:unlocked:selection:)` (never touches the
-Keychain). `SliccstartApp.swift` remains uncovered: an `App`'s `Scene` cannot
-be rendered, and its window content is built inline rather than in a `View`
-type.
+Keychain).
+
+**The window is a model, not a `Scene`.** An `App`'s `Scene` cannot be
+rendered, so anything living inside `WindowGroup` is untestable by
+construction. `SliccstartApp` is therefore only wiring: the window's behavior
+is **`Models/LauncherModel.swift`** (launch decisions, dialogs, debug builds,
+update-check outcomes, the 2 s tick, leader publish/withdraw) and its content
+is **`Views/RootView.swift`**. `SliccstartAppDelegate` is the composition
+root, with every collaborator defaulted-but-injectable so the two quit paths
+(stop-everything vs detach-for-update) are testable. Put new window behavior
+on `LauncherModel`, not in a `WindowGroup` closure. Tests:
+`LauncherModelTests`, `RootViewRenderTests`, `AppDelegateLifecycleTests`.
+
+`SliccProcess`, `SliccBootstrapper` and `AppManagementPermission` are
+deliberately **not `final`** — they are the app's side-effecting collaborators
+(spawning browsers, running git/npm, opening System Settings), and `@testable`
+lets a test subclass stand in for them.
 
 ## Operational Telemetry (OpTel)
 

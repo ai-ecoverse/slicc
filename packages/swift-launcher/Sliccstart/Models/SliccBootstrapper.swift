@@ -10,7 +10,9 @@ enum InstallationStatus: Equatable {
 }
 
 @Observable
-final class SliccBootstrapper {
+/// Not `final` — see the note on `SliccProcess`: `bootstrap`/`update` shell
+/// out to git and npm, so a test stands in for them.
+class SliccBootstrapper {
     static let repoURL = "https://github.com/ai-ecoverse/slicc.git"
 
     static var defaultSliccDir: String {

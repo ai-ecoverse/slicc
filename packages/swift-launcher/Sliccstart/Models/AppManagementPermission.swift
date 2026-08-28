@@ -2,7 +2,9 @@ import AppKit
 import Foundation
 
 @Observable
-final class AppManagementPermission {
+/// Not `final` — see the note on `SliccProcess`: `openSystemSettings()`
+/// opens System Settings, which a test must not do to the machine it runs on.
+class AppManagementPermission {
     private(set) var isGranted: Bool = false
     /// Number of times the probe has run since this instance was
     /// created. `init()` runs once, so this starts at 1. Each probe

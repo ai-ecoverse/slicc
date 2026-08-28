@@ -137,9 +137,9 @@
       "regions": 62
     },
     "swift-launcher": {
-      "lines": 67,
-      "functions": 62,
-      "regions": 64
+      "lines": 77,
+      "functions": 68,
+      "regions": 69
     },
     "swift-optel": {
       "lines": 75,
