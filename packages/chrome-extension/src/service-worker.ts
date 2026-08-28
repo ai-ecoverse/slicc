@@ -518,9 +518,10 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
 });
 
 // ---------------------------------------------------------------------------
-// Tab grouping — self-contained implementation for the service worker.
-// The SW is an MV3 entry point and can't import shared chunks (ES `import`
-// statements throw at runtime), so this logic lives inline here.
+// Tab grouping — the "slicc" tab-grouping helper. This is now the only copy;
+// the former shared tab-group.ts module was deleted. (The SW build bundles any
+// import into one IIFE via esbuild, so an import would not break the SW — see
+// docs/pitfalls.md "Service Worker Must Be Self-Contained".)
 // ---------------------------------------------------------------------------
 
 let sliccGroupId: number | null = null;

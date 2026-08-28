@@ -1143,19 +1143,22 @@ but any other terminal path that leaves a scoop stalled is a bug.
 
 **The Problem**
 
-The extension service worker (`packages/chrome-extension/src/service-worker.ts`) is built as an entry point. If it imports from modules that are shared with other entry points (content scripts, sandbox pages, the secrets options page), Rollup code-splits them into shared chunks with ES `import` statements. Chrome extension service workers are **not** ES modules — `import` statements cause `Uncaught SyntaxError: Cannot use import statement outside a module` at runtime.
+The manifest registers `service-worker.js` as a classic script (no `"type": "module"`), so the shipped file must contain **no** ES `import` statements — Chrome would throw `Uncaught SyntaxError: Cannot use import statement outside a module` at runtime. The build guarantees this: `buildExtensionServiceWorkerPlugin` in `vite.config.ts` runs `esbuild.build({ bundle: true, format: 'iife' })` over `service-worker.ts`, recursively inlining every runtime import into one self-contained IIFE. Rollup never processes the SW (its `input` is a virtual no-op), so it cannot code-split it into shared chunks.
 
 **The Rule**
 
-The service worker must only import **types** (erased at compile time) from other modules. All runtime code must be inlined. If you need to share logic between the service worker and other extension contexts (content script, secrets options page, sandbox iframes), maintain an inline copy in the service worker and the canonical version in a shared module.
+Runtime-value imports from sibling modules are fine — esbuild bundles them in (`service-worker.ts` already imports runtime values from `./bridge-sw.js`, `./cherry-panel-sw.js`, `./discovery-observer.js`, and more). The constraints that remain:
 
-| Import type   | Example                                            | Allowed in SW?                    |
-| ------------- | -------------------------------------------------- | --------------------------------- |
-| Type-only     | `import type { Foo } from './messages.js'`         | Yes (erased)                      |
-| Runtime value | `import { bar } from './cherry-panel-sw.js'`       | **No** (causes code split)        |
-| Core modules  | `import { createLogger } from '../core/logger.js'` | **No** (pulls in dependency tree) |
+- The SW build must stay a self-contained esbuild IIFE. Do **not** route the SW through Rollup's `input`, add `"type": "module"` to the manifest background, or introduce a top-level dynamic `import()` — any of these can reintroduce a real ES `import` in the shipped file.
+- Keep the SW's import graph lean. Pulling in a heavyweight module (e.g. the core logger and its dependency tree) still bloats the single IIFE even though it no longer breaks at runtime.
 
-**Current example**: `addToSliccGroup` (the "slicc" tab-grouping helper) is defined inline in `service-worker.ts` rather than imported from a shared module — pulling it in via `import` would trigger a Rollup code split and break the SW at runtime.
+| Import type   | Example                                            | Allowed in SW?                                      |
+| ------------- | -------------------------------------------------- | --------------------------------------------------- |
+| Type-only     | `import type { Foo } from './messages.js'`         | Yes (erased)                                        |
+| Runtime value | `import { bar } from './cherry-panel-sw.js'`       | Yes (esbuild inlines it into the IIFE)              |
+| Core modules  | `import { createLogger } from '../core/logger.js'` | Avoid — pulls a heavy dependency tree into the IIFE |
+
+**Current example**: `addToSliccGroup` (the "slicc" tab-grouping helper) lives inline in `service-worker.ts` because it is now the only copy (the former shared `tab-group.ts` module was deleted), not because an `import` would break the build.
 
 ## Page / Worker Realm Split
 
