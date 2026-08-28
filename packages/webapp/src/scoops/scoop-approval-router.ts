@@ -339,6 +339,8 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     // entry, and the card flip below must land under the requesting scoop's
     // owning cone, not the default root.
     const requesterJid = pending.scoopJid;
+    // Captured BEFORE `resolveSudoRequest` retires the scope entry below.
+    const cardOwnerJid = this.approverByRequest.get(id);
     // Claim the request synchronously before any persistence await. This
     // cancels its fail-closed timer, so an expired request can never gain a
     // durable rule after the registry has already denied it.
@@ -384,7 +386,7 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
       }
     }
 
-    await this.persistLickDecision(id, decision.decision, requesterJid);
+    await this.persistLickDecision(id, decision.decision, requesterJid, cardOwnerJid);
     return { settled, persisted, persistedPattern, persistError, scoopFolder, kind };
   }
 
@@ -403,10 +405,18 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
   async persistLickDecision(
     lickId: string,
     decision: SudoDecision['decision'],
-    scoopJid?: string
+    scoopJid?: string,
+    approverJid?: string
   ): Promise<void> {
     const lickState = decision === 'deny' ? 'dismissed' : 'confirmed';
-    const cone = this.deps.findApprover(scoopJid ?? this.registry.get(lickId)?.scoopJid);
+    // The card lives in whichever unit it was DELIVERED to. For a directed
+    // request that is the explicit approver, not the requester's parent, so
+    // resolving through `findApprover` alone searched the wrong thread and left
+    // the approver looking at a card that never stopped saying "pending".
+    const explicit = approverJid ?? this.approverByRequest.get(lickId);
+    const cone = explicit
+      ? this.deps.getScoops().get(explicit)
+      : this.deps.findApprover(scoopJid ?? this.registry.get(lickId)?.scoopJid);
     if (!cone) return;
     try {
       const messages = await this.deps.getMessagesForScoop(cone.jid);
@@ -442,7 +452,11 @@ export class ScoopApprovalRouter implements ConeApprovalRouter {
     request: SudoRequest
   ): Promise<void> {
     const scoop = this.deps.getScoops().get(scoopJid);
-    const senderName = scoop?.assistantLabel ?? scoopJid;
+    // `request.requester` wins for a DIRECTED request: it is filed on behalf of
+    // a unit but asked by someone else (a biscotto seat), and naming the filing
+    // unit would present guest-authored prose to the approver as a request from
+    // the cone itself.
+    const senderName = request.requester ?? scoop?.assistantLabel ?? scoopJid;
     const senderId = scoop?.folder ?? scoopJid;
     const content = formatSudoRequestNotification(senderName, id, request);
 

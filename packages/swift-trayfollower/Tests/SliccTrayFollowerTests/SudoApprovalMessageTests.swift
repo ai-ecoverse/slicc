@@ -13,14 +13,19 @@ final class SudoApprovalMessageTests: XCTestCase {
             requestId: "sudo-1",
             kind: "command",
             detail: "git push origin main",
+            requester: "biscotto \u{201C}Anna\u{201D}",
             suggestedPattern: "git push *",
             scoopName: "Researcher",
             expiresAt: 1_750_000_300_000)
         guard
-            case .sudoApproveRequest(let id, let kind, let detail, let pattern, let scoop, let exp) =
+            case .sudoApproveRequest(
+                let id, let kind, let detail, let requester, let pattern, let scoop, let exp) =
                 try WireCodec.roundTrip(message)
         else { return XCTFail("expected sudoApproveRequest") }
         XCTAssertEqual([id, kind, detail, pattern, scoop], ["sudo-1", "command", "git push origin main", "git push *", "Researcher"])
+        // Without this the reviewer sees only `detail`, which for a guest
+        // message is the requester's own account of who they are.
+        XCTAssertEqual(requester, "biscotto \u{201C}Anna\u{201D}")
         XCTAssertEqual(exp, 1_750_000_300_000)
         let json = try WireCodec.jsonString(message)
         XCTAssertTrue(json.contains(#""type":"sudo.approve.request""#))
@@ -30,16 +35,19 @@ final class SudoApprovalMessageTests: XCTestCase {
     func testSudoApproveRequestOptionalFieldsDecodeAbsent() throws {
         let wire = #"{"type":"sudo.approve.request","requestId":"p","kind":"export","detail":"active","expiresAt":1}"#
         guard
-            case .sudoApproveRequest(_, let kind, _, let pattern, let scoop, _) =
+            case .sudoApproveRequest(_, let kind, _, let requester, let pattern, let scoop, _) =
                 try WireCodec.decode(LeaderToFollowerMessage.self, from: wire)
         else { return XCTFail("expected sudoApproveRequest") }
         XCTAssertEqual(kind, "export")
+        XCTAssertNil(requester)
         XCTAssertNil(pattern)
         XCTAssertNil(scoop)
         // Re-encoding never invents the optional keys.
         let json = try WireCodec.jsonString(
             LeaderToFollowerMessage.sudoApproveRequest(
-                requestId: "p", kind: "export", detail: "active", suggestedPattern: nil, scoopName: nil, expiresAt: 1))
+                requestId: "p", kind: "export", detail: "active", requester: nil,
+                suggestedPattern: nil, scoopName: nil, expiresAt: 1))
+        XCTAssertFalse(json.contains("requester"))
         XCTAssertFalse(json.contains("suggestedPattern"))
         XCTAssertFalse(json.contains("scoopName"))
     }

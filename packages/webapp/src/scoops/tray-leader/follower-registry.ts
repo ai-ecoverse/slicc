@@ -117,6 +117,10 @@ export interface FollowerDetails {
   hostOrigin?: string;
   selectedScoopJid?: string;
   health: 'live' | 'stalled';
+  /** Hub-resolved trust. Absent only from records built before the seat class. */
+  trust?: FollowerTrust;
+  /** Guest seat identity when `trust === 'biscotto'`. */
+  biscotto?: FollowerBiscottoIdentity;
 }
 
 const BROADCAST_ERROR_THROTTLE_MS = 60_000;
@@ -325,6 +329,11 @@ export class FollowerRegistry {
       floatType: follower.floatType,
       hostOrigin: follower.hostOrigin,
       selectedScoopJid: follower.selectedScoopJid,
+      // Without these the roster shows a guest as an ordinary browser
+      // follower, which is exactly the confusion the trust class exists to
+      // remove — every surface that lists peers would misreport who is here.
+      trust: follower.trust,
+      biscotto: follower.biscotto,
       health: follower.keepalive.isStalled ? 'stalled' : 'live',
     }));
   }

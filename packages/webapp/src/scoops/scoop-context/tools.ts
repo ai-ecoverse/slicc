@@ -10,12 +10,7 @@
  * to be read alongside the retry loop.
  */
 
-import {
-  adaptTools,
-  createLogger,
-  extractToolArg,
-  type ToolAdapterGateConfig,
-} from '../../core/index.js';
+import { adaptTools, createLogger, type ToolAdapterGateConfig } from '../../core/index.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.js';
@@ -71,60 +66,31 @@ export interface ScoopToolsDeps {
 }
 
 /**
- * The per-tool-call gate for a guest-caused turn, or `undefined` when this
- * scoop can never gate (no approval route wired at all).
+ * The per-tool-call gate for a guest-caused turn.
  *
- * Fails CLOSED in the one case that matters: a turn IS guest-caused but there
- * is nobody to ask. Returning "allow" there would mean a guest's turn runs
- * ungated on a leader whose approval wiring is missing, which is exactly the
- * situation where you least want to assume consent.
+ * Only the CHECK lives here — `currentGate()` runs on every tool call, so it
+ * must stay synchronous and cheap. Everything that runs once a gate exists is
+ * in `guest-tool-gate.ts` and imported on first use: this file is boot-critical
+ * and the overwhelming majority of turns have no guest gate.
  */
 function buildGuestToolGate(deps: ScoopToolsDeps): ToolAdapterGateConfig {
   return {
     currentGate() {
       const gates = deps.getTurnGuestGates();
       if (gates.length === 0) return undefined;
-      const approve = deps.callbacks.approveGuestToolCall;
       return {
         async approve(toolName: string, params: unknown): Promise<boolean> {
-          if (!approve) {
-            log.warn('Guest-caused turn with no approval route — refusing tool call', {
-              tool: toolName,
-            });
-            return false;
-          }
-          const detail = describeToolCall(toolName, params);
-          // EVERY gate must clear. When a batch merged messages from several
-          // seats, each seat's approver gets a say — one seat's approval is not
-          // consent from the others. Sequential and short-circuiting: the first
-          // refusal ends it, so a denied call does not go on to bother the rest.
-          for (const gate of gates) {
-            const decision = await approve({
-              kind: 'guest-tool',
-              detail,
-              requester: gate.requester,
-              ...(gate.approver ? { approver: gate.approver } : {}),
-            });
-            if (decision.decision === 'deny') return false;
-          }
-          return true;
+          const { approveToolCallForGuests } = await import('./guest-tool-gate.js');
+          return approveToolCallForGuests(
+            gates,
+            toolName,
+            params,
+            deps.callbacks.approveGuestToolCall
+          );
         },
       };
     },
   };
-}
-
-/**
- * One line describing what is about to run, for the approval prompt.
- *
- * Bounded, because a reviewer cannot meaningfully consent to a wall of JSON —
- * and an unbounded argument bag is attacker-influenced text on a security
- * prompt, which is how a prompt gets pushed off screen.
- */
-function describeToolCall(toolName: string, params: unknown): string {
-  const [principal] = extractToolArg(params);
-  if (!principal) return toolName;
-  return `${toolName}: ${principal.replace(/\s+/g, ' ').trim().slice(0, 300)}`;
 }
 
 /** Build tools for the agent. */

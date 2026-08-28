@@ -62,7 +62,13 @@ export function createElectronBackend(deps: ElectronBackendDeps = {}): SudoBacke
           defaultId: 1,
           cancelId: 0,
           title: 'SLICC sudo',
-          message: `Approve ${req.kind}`,
+          // Requester in the MESSAGE line, above `detail`: `detail` can be
+          // prose the requester wrote about themselves (a biscotto guest
+          // message), so the system's own account of who is asking has to be
+          // visible separately or the prompt shows nothing but their claim.
+          message: req.requester
+            ? `Approve ${req.kind} from ${req.requester}`
+            : `Approve ${req.kind}`,
           detail: req.detail,
         });
         response = result.response;

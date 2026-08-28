@@ -45,11 +45,13 @@ extension AppState {
     func handleSudoLeaderMessage(_ message: LeaderToFollowerMessage) {
         switch message {
         case .sudoApproveRequest(
-            let requestId, let kind, let detail, let suggestedPattern, let scoopName, let expiresAt):
+            let requestId, let kind, let detail, let requester, let suggestedPattern,
+            let scoopName, let expiresAt):
             sudoApprovalController.handle(
                 requestId: requestId,
                 kind: kind,
                 detail: detail,
+                requester: requester,
                 suggestedPattern: suggestedPattern,
                 scoopName: scoopName,
                 expiresAt: Date(timeIntervalSince1970: expiresAt / 1000))
