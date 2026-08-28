@@ -487,6 +487,12 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     freezer: freezer as unknown as SliccFreezer,
     composerMeta: composerMeta as unknown as SliccComposerMeta,
     focusComposer: () => inputCard.focus(),
+    // What `applyComposerAvailability` writes, read back: a scoop's band is
+    // `hidden` (#2312) and a disconnected follower's card is `disabled`.
+    // Either way there is nothing to type into, so keyboard mode is not a
+    // choice there — see `ModeIntent`.
+    composerAvailable: () =>
+      !composer.hasAttribute('hidden') && !inputCard.hasAttribute('disabled'),
   });
 
   // H2 — everything layout-owned goes inside `panelHost` (a stacking context,

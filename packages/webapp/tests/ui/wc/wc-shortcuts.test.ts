@@ -4,14 +4,16 @@
  * bare-letter command table inside the mode, and the guarantees that keep it
  * out of the way of typing.
  */
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
   COMMAND_IDS,
   DEFAULT_KEYMAP,
+  deepActiveElement,
   deepTarget,
   describeKey,
   digitFor,
   hasOpenOverlay,
+  isActivationTarget,
   isTypingTarget,
   nextInCycle,
   shortcutRows,
@@ -24,6 +26,11 @@ import {
  *  listener from one test claims (and `preventDefault`s) the next one's keys. */
 const wired: Array<{ dispose(): void }> = [];
 
+/** Let the deferred settle (and any MutationObserver record) run. */
+async function flush(): Promise<void> {
+  await new Promise((resolve) => setTimeout(resolve, 0));
+}
+
 function harness(
   options: {
     tabs?: string[];
@@ -34,19 +41,45 @@ function harness(
     noComposer?: boolean;
     noDock?: boolean;
     noFreezer?: boolean;
+    composerAvailable?: () => boolean;
   } = {}
 ) {
   const keys = options.tabs ?? ['cone_1', 'cone_2', 'scoop_a'];
   const select = vi.fn();
   const selectItem = vi.fn();
-  const focusComposer = vi.fn();
+  /**
+   * A real field, because `focusComposer` really does move the caret: the mode
+   * settles against the DOM, so a spy that focused nothing would land back in
+   * keyboard mode — which is exactly the fallback a composer that REFUSES the
+   * focus is supposed to get.
+   */
+  const composerField = document.createElement('textarea');
+  document.body.append(composerField);
+  const focusComposer = vi.fn(() => composerField.focus());
   const toggle = vi.fn();
   const accounts = vi.fn();
-  const switcher = {
-    scoops: keys.map((key) => ({ key, label: key })),
-    active: options.activeTab === undefined ? (keys[0] ?? null) : options.activeTab,
-    select,
+  /**
+   * A real element, standing in for `<slicc-agent-tabs>`: the module watches
+   * the `active` ATTRIBUTE for unit switches, so a plain object would have no
+   * selection to observe. An unregistered tag rather than the real one, whose
+   * `select` is typed and would not take a spy. `select` stays a pure spy —
+   * the tests move the selection with `switchTo`, which is what every float
+   * does on its own.
+   */
+  const switcher = document.createElement('slicc-agent-tabs-stub') as HTMLElement & {
+    scoops: Array<{ key: string; label?: string }>;
+    active: string | null;
+    select: typeof select;
   };
+  Object.defineProperty(switcher, 'active', {
+    configurable: true,
+    get: () => switcher.getAttribute('active'),
+  });
+  switcher.scoops = keys.map((key) => ({ key, label: key }));
+  switcher.select = select;
+  const initialTab = options.activeTab === undefined ? (keys[0] ?? null) : options.activeTab;
+  if (initialTab !== null) switcher.setAttribute('active', initialTab);
+  document.body.append(switcher);
   const collapse = vi.fn();
   const dock: {
     items: Array<{ id: string; kind?: 'sprinkle' | 'tool' }>;
@@ -74,6 +107,7 @@ function harness(
     ...(options.noDock ? {} : { dock }),
     ...(options.noFreezer ? {} : { freezer }),
     ...(options.noComposer ? {} : { focusComposer }),
+    ...(options.composerAvailable ? { composerAvailable: options.composerAvailable } : {}),
     doc: document,
   });
   handles.setAction('accounts', accounts);
@@ -81,6 +115,8 @@ function harness(
   return {
     handles,
     dock,
+    composerField,
+    switcher,
     select,
     selectItem,
     collapse,
@@ -90,6 +126,11 @@ function harness(
     newChat,
     accounts,
     freezer,
+    /** Move the selection the way a float does, and let the mode react. */
+    switchTo: async (key: string): Promise<void> => {
+      switcher.setAttribute('active', key);
+      await flush();
+    },
   };
 }
 
@@ -105,10 +146,21 @@ function escape(target: EventTarget = document.body): boolean {
   return press({ key: 'Escape', code: 'Escape' }, target);
 }
 
+/**
+ * jsdom always reports a document nobody is looking at, and the mode
+ * deliberately stays out of one (an unfocused Cherry iframe in a host page
+ * must not wear the badge for a keyboard it does not have). Every test but the
+ * one that checks THAT rule speaks for a document the user is looking at.
+ */
+beforeEach(() => {
+  vi.spyOn(document, 'hasFocus').mockReturnValue(true);
+});
+
 afterEach(() => {
   while (wired.length > 0) wired.pop()?.dispose();
   document.body.innerHTML = '';
   document.documentElement.removeAttribute('data-slicc-keyboard-mode');
+  vi.restoreAllMocks();
 });
 
 describe('digitFor', () => {
@@ -270,13 +322,14 @@ describe('the Escape contract', () => {
     expect(document.documentElement.hasAttribute('data-slicc-keyboard-mode')).toBe(true);
   });
 
-  it('leaves the mode on the second press and lets it through to the browser', () => {
+  it('keeps the mode on a second press and lets it through to the browser', () => {
     const { handles } = harness();
     escape();
-    // NOT prevented: the second press is the one that may exit full screen.
+    // NOT prevented: a press inside the mode is the one that may exit full
+    // screen. The mode itself is the resting state and has nothing to leave.
     expect(escape()).toBe(false);
-    expect(handles.active()).toBe(false);
-    expect(document.documentElement.hasAttribute('data-slicc-keyboard-mode')).toBe(false);
+    expect(handles.active()).toBe(true);
+    expect(document.documentElement.hasAttribute('data-slicc-keyboard-mode')).toBe(true);
   });
 
   it('performs the fullscreen exit itself, since Keyboard Lock hides it from the browser', () => {
@@ -294,7 +347,7 @@ describe('the Escape contract', () => {
     expect(exitFullscreen).not.toHaveBeenCalled();
     escape();
     expect(exitFullscreen).toHaveBeenCalledTimes(1);
-    expect(handles.active()).toBe(false);
+    expect(handles.active()).toBe(true);
     Reflect.deleteProperty(document, 'fullscreenElement');
     Reflect.deleteProperty(document, 'exitFullscreen');
   });
@@ -309,6 +362,16 @@ describe('the Escape contract', () => {
     expect(document.activeElement).not.toBe(textarea);
   });
 
+  it('records leaving the composer as a CHOICE, so a switch does not undo it', () => {
+    const textarea = document.createElement('textarea');
+    document.body.append(textarea);
+    textarea.focus();
+    const { handles } = harness();
+    expect(handles.intent()).toBe('composer');
+    escape(textarea);
+    expect(handles.intent()).toBe('keyboard');
+  });
+
   it('leaves an open overlay to handle its own Escape', () => {
     const dialog = document.createElement('slicc-dialog');
     dialog.setAttribute('open', '');
@@ -319,13 +382,13 @@ describe('the Escape contract', () => {
   });
 
   it('shows a mode badge while it is on', () => {
-    harness();
+    const { handles } = harness();
     expect(document.querySelector('[data-wc-shortcuts="badge"]')).toBeNull();
     escape();
     expect(document.querySelector('[data-wc-shortcuts="badge"]')?.textContent).toContain(
       'Keyboard mode'
     );
-    escape();
+    handles.setActive(false);
     expect(document.querySelector('[data-wc-shortcuts="badge"]')).toBeNull();
   });
 });
@@ -635,10 +698,10 @@ describe('the key HUD', () => {
   });
 
   it('goes away with the mode', () => {
-    harness();
+    const { handles } = harness();
     escape();
     press({ key: 'b', code: 'KeyB' });
-    escape();
+    handles.setActive(false);
     expect(document.querySelector('[data-wc-shortcuts="keys"]')).toBeNull();
   });
 
@@ -775,6 +838,190 @@ describe('while a modal is open', () => {
     document.body.append(dialog);
     press({ key: 'h', code: 'KeyH' });
     expect(handles.helpOverlay()).toBeNull();
+  });
+});
+
+describe('deepActiveElement', () => {
+  it('reaches the field inside a shadow root, not its host', () => {
+    const host = document.createElement('div');
+    document.body.append(host);
+    const root = host.attachShadow({ mode: 'open' });
+    const field = document.createElement('textarea');
+    root.append(field);
+    field.focus();
+    expect(document.activeElement).toBe(host);
+    expect(deepActiveElement(document)).toBe(field);
+    expect(isTypingTarget(deepActiveElement(document))).toBe(true);
+  });
+
+  it('is the body when nothing is focused', () => {
+    expect(deepActiveElement(document)).toBe(document.body);
+  });
+});
+
+describe('isActivationTarget', () => {
+  it('knows the controls a bare Enter belongs to', () => {
+    const button = document.createElement('button');
+    const link = Object.assign(document.createElement('a'), { href: '#x' });
+    const bare = document.createElement('a');
+    const role = document.createElement('div');
+    role.setAttribute('role', 'menuitem');
+    expect(isActivationTarget(button)).toBe(true);
+    expect(isActivationTarget(link)).toBe(true);
+    // An anchor with no href is not focusable and activates nothing.
+    expect(isActivationTarget(bare)).toBe(false);
+    expect(isActivationTarget(role)).toBe(true);
+    expect(isActivationTarget(document.createElement('div'))).toBe(false);
+    expect(isActivationTarget(null)).toBe(false);
+  });
+});
+
+describe('the mode is the resting state', () => {
+  it('turns itself on once nothing holds the focus', async () => {
+    const { handles } = harness();
+    expect(handles.active()).toBe(false);
+    await flush();
+    expect(handles.active()).toBe(true);
+    expect(handles.intent()).toBe('keyboard');
+  });
+
+  it('stays off while a text field has the focus', async () => {
+    const textarea = document.createElement('textarea');
+    document.body.append(textarea);
+    textarea.focus();
+    const { handles } = harness();
+    await flush();
+    expect(handles.active()).toBe(false);
+    expect(handles.intent()).toBe('composer');
+  });
+
+  it('comes on when the composer loses the focus to nothing', async () => {
+    const textarea = document.createElement('textarea');
+    document.body.append(textarea);
+    textarea.focus();
+    const { handles } = harness();
+    await flush();
+    expect(handles.active()).toBe(false);
+    textarea.blur();
+    await flush();
+    expect(handles.active()).toBe(true);
+    expect(handles.intent()).toBe('keyboard');
+  });
+
+  it('goes off again the moment a field takes the focus back', async () => {
+    const textarea = document.createElement('textarea');
+    document.body.append(textarea);
+    const { handles } = harness();
+    await flush();
+    expect(handles.active()).toBe(true);
+    textarea.focus();
+    // Inline, not on the settle: a keystroke can arrive in the same task as
+    // the click that focused the field, and it must be typed.
+    expect(handles.active()).toBe(false);
+    await flush();
+    expect(handles.intent()).toBe('composer');
+  });
+
+  it('leaves an open modal in charge of the keyboard', async () => {
+    const dialog = document.createElement('slicc-dialog');
+    dialog.setAttribute('open', '');
+    document.body.append(dialog);
+    const { handles } = harness();
+    await flush();
+    expect(handles.active()).toBe(false);
+  });
+
+  it('does not dress a document nobody is looking at', async () => {
+    vi.mocked(document.hasFocus).mockReturnValue(false);
+    const { handles } = harness();
+    await flush();
+    expect(handles.active()).toBe(false);
+  });
+
+  it('does not take the Enter a focused button is waiting for', async () => {
+    const button = document.createElement('button');
+    document.body.append(button);
+    const { handles, focusComposer } = harness();
+    await flush();
+    expect(handles.active()).toBe(true);
+    expect(press({ key: 'Enter', code: 'Enter' }, button)).toBe(false);
+    expect(focusComposer).not.toHaveBeenCalled();
+    // A letter is still the mode's, though — only activation keys are spared.
+    expect(press({ key: 'b', code: 'KeyB' }, button)).toBe(true);
+  });
+});
+
+describe('carrying the mode across a unit switch', () => {
+  it('gives the caret back to the composer you switched away from', async () => {
+    const { handles, composerField, focusComposer, switchTo } = harness();
+    composerField.focus();
+    await flush();
+    expect(handles.intent()).toBe('composer');
+    // What a tab click does: blur first, then move the selection.
+    composerField.blur();
+    await switchTo('cone_2');
+    expect(focusComposer).toHaveBeenCalledTimes(1);
+    expect(handles.active()).toBe(false);
+  });
+
+  it('stays in keyboard mode when that is where you started', async () => {
+    const { handles, focusComposer, switchTo } = harness();
+    escape();
+    await switchTo('cone_2');
+    expect(focusComposer).not.toHaveBeenCalled();
+    expect(handles.active()).toBe(true);
+  });
+
+  it('ignores a selection re-asserted onto the same unit', async () => {
+    const { focusComposer, switcher } = harness();
+    await flush();
+    switcher.setAttribute('active', 'cone_1');
+    await flush();
+    expect(focusComposer).not.toHaveBeenCalled();
+  });
+
+  /**
+   * The hard half of #2312: a scoop's transcript is read-only and has no
+   * composer at all, so the keyboard mode it forces is not a choice — and the
+   * cone on the far side of the detour has to get its caret back.
+   */
+  it('holds the composer intent across a read-only scoop', async () => {
+    let available = true;
+    const { handles, composerField, focusComposer, switchTo } = harness({
+      composerAvailable: () => available,
+    });
+    composerField.focus();
+    await flush();
+    expect(handles.intent()).toBe('composer');
+
+    // Cone → scoop: the band is hidden, so the caret is dropped by the DOM.
+    available = false;
+    composerField.blur();
+    await switchTo('scoop_a');
+    expect(handles.active()).toBe(true);
+    expect(handles.intent()).toBe('composer');
+    expect(focusComposer).not.toHaveBeenCalled();
+
+    // Scoop → cone: the band is back, and so is the caret.
+    available = true;
+    await switchTo('cone_2');
+    expect(focusComposer).toHaveBeenCalledTimes(1);
+  });
+
+  it('a scoop detour cannot invent a composer intent either', async () => {
+    let available = true;
+    const { handles, focusComposer, switchTo } = harness({
+      composerAvailable: () => available,
+    });
+    escape();
+    expect(handles.intent()).toBe('keyboard');
+    available = false;
+    await switchTo('scoop_a');
+    expect(handles.intent()).toBe('keyboard');
+    available = true;
+    await switchTo('cone_2');
+    expect(focusComposer).not.toHaveBeenCalled();
+    expect(handles.active()).toBe(true);
   });
 });
 

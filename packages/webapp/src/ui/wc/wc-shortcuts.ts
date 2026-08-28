@@ -9,15 +9,26 @@
  * once: <kbd>Esc</kbd> leaves the text field and enters keyboard mode, and
  * inside it every binding is a bare letter.
  *
+ * ## The mode is the resting state
+ *
+ * Keyboard mode is not a place you visit, it is where you are whenever you
+ * are not typing: {@link settle} turns it on the moment no text field holds
+ * the focus, and off the moment one does. Escape is therefore a shortcut for
+ * "leave the field", not a toggle, and `c` / Enter — which put the caret back
+ * in the composer — are the only way out. That is vim's grammar rather than a
+ * pair of modes with a switch between them, and it means the answer to "will
+ * this letter type or command?" is always visible: the caret is in the
+ * composer, or the badge is up.
+ *
  * ## The Escape contract
  *
- * One press enters the mode and is swallowed; a second press exits it AND
- * leaves fullscreen. That is why the first press calls `preventDefault()` and
- * the second deliberately does not, and why the second also calls
- * `exitFullscreen()` explicitly: under Keyboard Lock (which this module
- * requests while the document is fullscreen — the only mechanism that can
- * hold Escape there) the browser would otherwise never see an Escape at all,
- * so the exit has to be performed rather than merely permitted.
+ * The first press leaves the composer and is swallowed — one press means
+ * "leave the text field", not "leave fullscreen". A press made INSIDE the
+ * mode has no mode left to leave, so it is spent on fullscreen instead, and
+ * spent explicitly: under Keyboard Lock (which this module requests while the
+ * document is fullscreen — the only mechanism that can hold Escape there) the
+ * browser never sees an Escape at all, so the exit has to be performed rather
+ * than merely permitted.
  *
  * An Escape belonging to an open overlay is never taken: `<slicc-dialog>` and
  * `<slicc-tab-overlay>` stop propagation in the capture phase and so never
@@ -39,9 +50,23 @@
  *
  * Navigation keys (digits, `d`, `b`, `s`, help) keep the mode: you are still
  * driving from the keyboard. Anything that hands focus to a surface (`c`,
- * Enter, `n`, `f`, `e`, `m`, `t`, `a`) leaves it. Focus entering a text field
- * by ANY route exits it too — otherwise the mode would silently eat what the
- * user types into the field they just clicked.
+ * Enter, `n`, `f`, `e`, `m`, `t`, `a`) drops it BEFORE running, so a surface
+ * that autofocuses is not immediately undone by the mode — but the drop only
+ * sticks if something typable actually took the focus, because `settle` runs
+ * after and asks the DOM rather than the command table. Focus entering a text
+ * field by ANY route leaves the mode too, otherwise it would silently eat
+ * what the user types into the field they just clicked.
+ *
+ * ## Switching units carries the mode with you
+ *
+ * The mode you were in when you left a unit is the mode you land back in
+ * ({@link ShortcutHandles} tracks it as an INTENT, updated only while a
+ * composer is actually available). A cone→cone switch is the easy half: the
+ * caret returns to the composer, or the badge stays up. The hard half is the
+ * detour through a scoop, whose transcript is read-only and has no composer
+ * at all (#2312): the forced keyboard mode there is not a choice the user
+ * made, so it must not overwrite the intent — otherwise cone → scoop → cone
+ * would swallow the caret the user left behind.
  */
 
 /** The bit of `<slicc-agent-tabs>` the mode drives. */
@@ -88,6 +113,15 @@ export interface ShortcutDeps {
   composerMeta?: ShortcutComposerMeta;
   /** Put the caret in the composer (`c` / Enter). */
   focusComposer?: () => void;
+  /**
+   * Can the selected unit be typed at? False for a scoop, whose composer band
+   * is hidden (#2312), and for a disconnected follower, whose input card is
+   * disabled. The mode reads it for two decisions: whether a unit switch may
+   * hand the caret back, and whether the mode it finds itself in was the
+   * user's choice or merely the absence of anywhere to type. Defaults to
+   * "wherever a composer can be focused at all".
+   */
+  composerAvailable?: () => boolean;
   /** Injected for tests; defaults to the switcher's own document. */
   doc?: Document;
 }
@@ -109,6 +143,11 @@ export interface ShortcutHandles {
   helpOverlay(): HTMLElement | null;
   /** Whether keyboard mode is on. */
   active(): boolean;
+  /**
+   * The mode the next unit switch restores — the last one chosen where a
+   * composer was actually available. Exposed for tests; nothing wires it.
+   */
+  intent(): ModeIntent;
   /** Enter / leave keyboard mode programmatically. */
   setActive(on: boolean): void;
   /** Late-bind an action the shell itself cannot reach (see {@link ShortcutActions}). */
@@ -189,6 +228,49 @@ export function deepTarget(event: Event): EventTarget | null {
 }
 
 /**
+ * What actually has the focus, piercing shadow roots — `doc.activeElement`
+ * stops at the host of a shadow tree, so the composer's `<textarea>` would
+ * otherwise read as `<slicc-input-card>` and, being a custom element rather
+ * than a field, as "nobody is typing".
+ */
+export function deepActiveElement(doc: Document): Element | null {
+  let element: Element | null = doc.activeElement;
+  // A shadow root reports its own active element; a nested one reports its
+  // own again, so this is a walk rather than a single hop.
+  while (element?.shadowRoot?.activeElement) element = element.shadowRoot.activeElement;
+  return element;
+}
+
+/**
+ * Is the focus on something a bare key ACTIVATES rather than types into?
+ *
+ * Only Enter (and Space, for a keymap that binds it) is at stake, and only
+ * because the mode is now the resting state: a tabbed-to button would
+ * otherwise never fire, because `composer` would swallow the Enter meant for
+ * it. Duck-typed for the same cross-realm reason as {@link isTypingTarget}.
+ */
+export function isActivationTarget(target: EventTarget | null | undefined): boolean {
+  if (!target || typeof target !== 'object') return false;
+  const el = target as Partial<Element> & { tagName?: unknown };
+  const tag = typeof el.tagName === 'string' ? el.tagName.toUpperCase() : '';
+  if (tag === 'BUTTON' || tag === 'SUMMARY' || tag === 'OPTION') return true;
+  if (tag === 'A' && el.hasAttribute?.('href') === true) return true;
+  const role = el.getAttribute?.('role') ?? '';
+  return [
+    'button',
+    'link',
+    'menuitem',
+    'menuitemcheckbox',
+    'menuitemradio',
+    'option',
+    'tab',
+    'switch',
+    'checkbox',
+    'radio',
+  ].includes(role);
+}
+
+/**
  * Is a modal surface open that owns Escape? Only `<slicc-quick-look>` really
  * needs asking — the other overlays either stop propagation before this
  * module's listener (`<slicc-dialog>`, `<slicc-tab-overlay>`) or mark the
@@ -251,6 +333,16 @@ interface CommandContext {
   state: ModeState;
   toggleHelp(): void;
 }
+
+/**
+ * The mode the user last CHOSE — restored on the other side of a unit switch.
+ *
+ * Recorded only while a composer was available, which is the whole subtlety:
+ * a scoop has no composer (#2312), so the keyboard mode its transcript forces
+ * is not a choice and must not overwrite what the cone the user came from
+ * left behind.
+ */
+export type ModeIntent = 'composer' | 'keyboard';
 
 /** Mutable per-wiring state a command may read or advance. */
 interface ModeState {
@@ -481,7 +573,7 @@ export function shortcutRows(
   return [
     {
       keys: ['Esc'],
-      description: 'Enter keyboard mode — press again to leave (and exit full screen)',
+      description: 'Leave the composer for keyboard mode (again: exit full screen)',
     },
     { keys: ['1 – 9'], description: 'Switch to that agent in the tab strip (9 = last)' },
     ...COMMAND_IDS.filter((id) => byCommand.has(id)).map((id) => ({
@@ -506,8 +598,9 @@ function buildHelpBody(doc: Document, rows: readonly ShortcutRow[]): HTMLElement
   const note = doc.createElement('div');
   note.className = 'wcsc__note';
   note.textContent =
-    'These keys work while keyboard mode is on. Press Esc from anywhere to enter it — ' +
-    'outside it, typing is never intercepted.';
+    'Keyboard mode is on whenever nothing is focused for typing, so these keys are ' +
+    'live by default. Put the caret back in the composer to type — nothing is ' +
+    'intercepted there.';
   list.append(note);
   for (const row of rows) {
     const line = doc.createElement('div');
@@ -598,7 +691,9 @@ function createBadge(doc: Document): {
   label.textContent = 'Keyboard mode';
   const hint = doc.createElement('span');
   hint.className = 'wcsc-badge__hint';
-  hint.textContent = 'h for help · Esc to leave';
+  // Not "Esc to leave": the mode IS the resting state, so the way out is to
+  // start typing again.
+  hint.textContent = 'h for help · ⏎ to type';
   const keys = doc.createElement('div');
   keys.className = 'wcsc-badge__keys';
   keys.dataset.wcShortcuts = 'keys';
@@ -745,6 +840,146 @@ function createMode(doc: Document): {
 }
 
 /**
+ * Keys the mode must not take even while it is on, because something closer to
+ * the keyboard owns them: a chord belongs to the browser or the OS, a field
+ * that still holds the focus belongs to whoever is typing in it, and an
+ * activation key belongs to the control it would press — the mode being the
+ * resting state means a tabbed-to button is a NORMAL place for the focus to
+ * be, and a button whose Enter is eaten cannot be pressed from the keyboard at
+ * all. Shift passes through, for `?`.
+ */
+function passesThrough(event: KeyboardEvent): boolean {
+  if (event.ctrlKey || event.metaKey || event.altKey) return true;
+  const target = deepTarget(event);
+  if (isTypingTarget(target)) return true;
+  return (event.key === 'Enter' || event.key === ' ') && isActivationTarget(target);
+}
+
+/**
+ * The mode's other half: the rule that decides where the mode SHOULD be, and
+ * the intent that survives a unit switch.
+ *
+ * Kept apart from {@link createMode}, which owns the flag and the badge,
+ * because this is the only part that reads the document's focus rather than
+ * being told about it — and reading it once, in one place, is what lets every
+ * surface stay ignorant of the mode.
+ */
+function createSettler(
+  doc: Document,
+  mode: ReturnType<typeof createMode>,
+  deps: ShortcutDeps
+): {
+  /** Reconcile the mode with the focus, after the current task. */
+  schedule(): void;
+  /** Land on a newly selected unit in the mode the previous one was left in. */
+  restore(): void;
+  /** Record a deliberate choice (Escape leaving the composer). */
+  choose(next: ModeIntent): void;
+  intent(): ModeIntent;
+  dispose(): void;
+} {
+  const view = doc.defaultView;
+  const setTimer = view?.setTimeout.bind(view) ?? setTimeout;
+  const clearTimer = view?.clearTimeout.bind(view) ?? clearTimeout;
+  // A float with no composer to focus can never be in composer mode, so the
+  // default answer is "there is one exactly where one can be focused".
+  const composerAvailable = deps.composerAvailable ?? ((): boolean => !!deps.focusComposer);
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  let intent: ModeIntent = 'composer';
+
+  /**
+   * Bring the mode in line with where the focus actually is: on unless
+   * something typable holds it. This is the whole resting-state rule, and it
+   * is the only writer of the intent besides a deliberate {@link choose} —
+   * asking the DOM once beats every surface remembering to tell us.
+   */
+  const settle = (): void => {
+    // A modal owns the keyboard while it is up. The mode settles again when
+    // the overlay closes and focus comes back, so this is a deferral, not a
+    // skip.
+    if (hasOpenOverlay(doc)) return;
+    // Nobody is looking at an unfocused document — a Cherry iframe inside a
+    // host page, a background tab — and a badge there advertises a mode for a
+    // keyboard that is somewhere else entirely.
+    if (typeof doc.hasFocus === 'function' && !doc.hasFocus()) return;
+    const typing = isTypingTarget(deepActiveElement(doc));
+    mode.set(!typing);
+    if (composerAvailable()) intent = typing ? 'composer' : 'keyboard';
+  };
+
+  /**
+   * Settle on a TIMER, not inline, and coalesce. A click that switches units
+   * blurs the composer BEFORE it moves the selection, so an inline settle
+   * would read the gap between the two as "the user left the composer" and
+   * cost them the caret they were about to get back. One macrotask is late
+   * enough for the switch's own restore (a MutationObserver microtask) to
+   * land first.
+   */
+  const schedule = (): void => {
+    if (timer !== undefined) return;
+    timer = setTimer(() => {
+      timer = undefined;
+      settle();
+    }, 0);
+  };
+
+  return {
+    schedule,
+    restore: () => {
+      if (hasOpenOverlay(doc)) return;
+      if (intent === 'composer' && composerAvailable()) {
+        mode.set(false);
+        deps.focusComposer?.();
+      } else {
+        mode.set(true);
+      }
+      // A composer that REFUSED the focus (a follower's disabled card) falls
+      // back to keyboard mode rather than to a mode with nowhere to type.
+      schedule();
+    },
+    choose: (next) => {
+      intent = next;
+    },
+    intent: () => intent,
+    dispose: () => {
+      // A settle that outlived its wiring would re-enter a mode nothing owns.
+      if (timer !== undefined) clearTimer(timer);
+      timer = undefined;
+    },
+  };
+}
+
+/**
+ * Watch which unit the strip has selected.
+ *
+ * `active` is what every float already writes on a selection — the strip's own
+ * `select()`, the leader's `applyThreadContext`, the follower's select handler
+ * — so this catches the freezer rail and the cone actions too, and no float
+ * has to remember to call anything. A switcher that is not an element (a test
+ * double, a headless float) simply never reports a switch.
+ */
+function observeSelectedUnit(
+  switcher: ShortcutSwitcher,
+  doc: Document,
+  onChange: () => void
+): () => void {
+  const node =
+    (switcher as unknown as Partial<Node>).nodeType === 1 ? (switcher as unknown as Element) : null;
+  const ObserverCtor = doc.defaultView?.MutationObserver ?? globalThis.MutationObserver;
+  if (!node || !ObserverCtor) return () => undefined;
+  let last = switcher.active;
+  const observer = new ObserverCtor(() => {
+    const next = switcher.active;
+    // Floats re-assert `active` on roster refreshes; only a real move counts.
+    if (next === last) return;
+    last = next;
+    onChange();
+  });
+  observer.observe(node, { attributes: true, attributeFilter: ['active'] });
+  return () => observer.disconnect();
+}
+
+/**
  * The live installation per document. `mountWcShell` is idempotent — a
  * remount replaces the shell in place — and the listeners here live on the
  * DOCUMENT, not on anything `root.replaceChildren()` tears down. Without this,
@@ -772,6 +1007,7 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     const id = keymap[key];
     return id ? COMMANDS[id] : undefined;
   };
+  const settler = createSettler(doc, mode, deps);
 
   /** The Escape contract; see the module header. */
   const handleEscape = (event: KeyboardEvent): void => {
@@ -783,16 +1019,23 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
       // "leave fullscreen".
       event.preventDefault();
       mode.set(true);
+      // Leaving the composer by hand is a CHOICE, so it is the one place
+      // besides `settle` that writes the intent: switching units afterwards
+      // must not hand the caret back to a composer the user just left.
+      settler.choose('keyboard');
       // The press that opened the mode is the mode's first HUD entry — the
       // badge appearing and the cap landing are one gesture's feedback.
       mode.record(describeKey(event), true);
       return;
     }
-    mode.set(false);
-    // The second press is the one that means fullscreen. Performed rather
-    // than merely allowed, because under Keyboard Lock the browser never acts
-    // on Escape itself.
-    if (doc.fullscreenElement) void doc.exitFullscreen?.().catch(() => undefined);
+    // Already in the mode, which is the resting state: there is nothing to
+    // leave, so the press is spent on fullscreen. Performed rather than merely
+    // allowed, because under Keyboard Lock the browser never acts on Escape
+    // itself. The cap lands dimmed when there was no fullscreen to exit —
+    // a press that did nothing, shown as one.
+    const fullscreen = !!doc.fullscreenElement;
+    mode.record(describeKey(event), fullscreen);
+    if (fullscreen) void doc.exitFullscreen?.().catch(() => undefined);
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
@@ -804,13 +1047,7 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
       return;
     }
     if (!mode.on()) return;
-    // A chord in keyboard mode belongs to the browser or the OS (⌘C, Ctrl+R).
-    // Shift passes through, for `?`.
-    if (event.ctrlKey || event.metaKey || event.altKey) return;
-    // Focus can still land in a text field while the mode is on (a surface
-    // that autofocuses, a click `focusin` has not processed yet). This is the
-    // belt to that suspenders.
-    if (isTypingTarget(deepTarget(event))) return;
+    if (passesThrough(event)) return;
 
     const command = commandFor(event.key);
     // A modal owns the screen. Acting behind it — focusing the composer under
@@ -850,25 +1087,45 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
   };
 
   /**
-   * Focus reaching a text field ends the mode. Without this, clicking into
-   * the composer while the mode is on would leave every keystroke being read
-   * as a command instead of as text.
+   * Focus reaching a text field ends the mode. Applied INLINE rather than left
+   * to the deferred settle: a keystroke can arrive in the same task as the
+   * click that focused the field, and it must be typed, not run.
    */
   const onFocusIn = (event: FocusEvent): void => {
     if (mode.on() && isTypingTarget(deepTarget(event))) mode.set(false);
+    settler.schedule();
   };
+  /**
+   * Focus LEAVING is the other half, and the one that has no event of its own
+   * when it lands nowhere: blurring the composer for the transcript fires a
+   * `focusout` and no `focusin` at all.
+   */
+  const onFocusOut = (): void => settler.schedule();
   const onFullscreenChange = (): void => syncKeyboardLock(doc);
+  /** A document that just got the keyboard back has a mode to show again. */
+  const onWindowFocus = (): void => settler.schedule();
+  const stopWatchingUnit = observeSelectedUnit(deps.switcher, doc, settler.restore);
 
+  const view = doc.defaultView;
   doc.addEventListener('keydown', onKeyDown);
   doc.addEventListener('focusin', onFocusIn);
+  doc.addEventListener('focusout', onFocusOut);
   doc.addEventListener('fullscreenchange', onFullscreenChange);
+  view?.addEventListener('focus', onWindowFocus);
   syncKeyboardLock(doc);
+  // Deferred like every other settle: the shell is still being assembled at
+  // wire time, and a host that focuses the composer on mount must win.
+  settler.schedule();
 
   const handles: ShortcutHandles = {
     dispose: () => {
       doc.removeEventListener('keydown', onKeyDown);
       doc.removeEventListener('focusin', onFocusIn);
+      doc.removeEventListener('focusout', onFocusOut);
       doc.removeEventListener('fullscreenchange', onFullscreenChange);
+      view?.removeEventListener('focus', onWindowFocus);
+      stopWatchingUnit();
+      settler.dispose();
       mode.set(false);
       help.hide();
       // Only if we are still the live one: a remount disposes the old handle
@@ -882,6 +1139,7 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     helpOverlay: help.element,
     active: mode.on,
     setActive: mode.set,
+    intent: settler.intent,
     setAction: (name, fn) => {
       actions[name] = fn;
     },
