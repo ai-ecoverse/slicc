@@ -1,26 +1,20 @@
 import { describe, expect, it } from 'vitest';
-import type {
-  AgentTool,
-  AgentToolParams,
-  ToolCall,
-  ToolCallArguments,
-} from '../../src/core/types.js';
+import type { AgentTool, ToolCall } from '../../src/core/types.js';
 
-describe('core ToolCallArguments / AgentToolParams', () => {
+describe('core ToolCall.arguments / AgentTool.execute params', () => {
   it('accepts a model-emitted argument bag on ToolCall', () => {
-    const arguments_: ToolCallArguments = { path: '/workspace/a.ts', limit: 20 };
     const call: ToolCall = {
       type: 'toolCall',
       id: 'tc_1',
       name: 'read',
-      arguments: arguments_,
+      arguments: { path: '/workspace/a.ts', limit: 20 },
     };
     expect(call.arguments.path).toBe('/workspace/a.ts');
     expect(Object.keys(call.arguments)).toEqual(['path', 'limit']);
   });
 
   it('passes the same bag shape into AgentTool.execute', async () => {
-    const seen: AgentToolParams[] = [];
+    const seen: Record<string, unknown>[] = [];
     const tool: AgentTool<string> = {
       name: 'echo',
       description: 'echo params',
@@ -31,8 +25,7 @@ describe('core ToolCallArguments / AgentToolParams', () => {
         return { content: [{ type: 'text', text: 'ok' }], details: 'ok' };
       },
     };
-    const params: AgentToolParams = { message: 'hi' };
-    const result = await tool.execute('tc_2', params);
+    const result = await tool.execute('tc_2', { message: 'hi' });
     expect(seen).toEqual([{ message: 'hi' }]);
     expect(result.details).toBe('ok');
   });

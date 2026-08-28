@@ -23,18 +23,17 @@ export interface ImageContent {
   mimeType: string;
 }
 
-/**
- * Tool-call argument bag from the model: keys are the tool's parameter
- * names (per its JSON Schema), values are whatever the model emitted.
- * Named so callers share one type instead of an untyped string-keyed bag.
- */
-export type ToolCallArguments = { [parameter: string]: unknown };
-
 export interface ToolCall {
   type: 'toolCall';
   id: string;
   name: string;
-  arguments: ToolCallArguments;
+  // The arguments the model produced for THIS tool, whose fields are declared by
+  // that tool's own JSON Schema and differ per tool. A shared alias here could
+  // only restate "some string keys", which is what the type already says; the
+  // real shape needs `ToolCall` generic over its schema — a signature change
+  // across every producer and consumer, not behaviour-preserving in a debt PR.
+  // biome-ignore lint/plugin: per-tool argument bag, shape declared by the tool's schema.
+  arguments: Record<string, unknown>;
 }
 
 // ─── Message Types ──────────────────────────────────────────────────────────
@@ -128,13 +127,6 @@ export interface AgentToolResult<T = unknown> {
 export type AgentToolUpdateCallback<T = unknown> = (partialResult: AgentToolResult<T>) => void;
 
 /**
- * Validated tool-execute params — same bag the model supplied as
- * {@link ToolCallArguments}, after schema validation. Keys still follow
- * the tool's parameter schema; values are narrowed by the tool itself.
- */
-export type AgentToolParams = { [parameter: string]: unknown };
-
-/**
  * AgentTool — pi-compatible tool with execute function.
  *
  * This is the tool interface used by the agent loop.
@@ -144,7 +136,12 @@ export interface AgentTool<TDetails = unknown> extends Tool {
   label: string;
   execute: (
     toolCallId: string,
-    params: AgentToolParams,
+    // Validated tool-execute params — the same per-tool bag the model supplied,
+    // after schema validation. Keys follow the tool's own parameter schema and
+    // differ per tool; the tool narrows the values itself. Same rationale as
+    // ToolCall.arguments above — naming the shape means making this generic.
+    // biome-ignore lint/plugin: per-tool argument bag, shape declared by the tool's schema.
+    params: Record<string, unknown>,
     signal?: AbortSignal,
     onUpdate?: AgentToolUpdateCallback<TDetails>
   ) => Promise<AgentToolResult<TDetails>>;
