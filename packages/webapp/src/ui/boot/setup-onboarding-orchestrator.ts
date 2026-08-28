@@ -75,6 +75,64 @@ export interface OnboardingDeviceCodeHelpers {
 }
 
 /**
+ * Nested `data` on the welcome sprinkle's final lick
+ * (`onboarding-complete-with-provider`). Matches what
+ * `OnboardingOrchestrator` and the fast-forward path send.
+ */
+export interface OnboardingFinalLickData {
+  profile?: unknown;
+  provider?: string;
+  providerName?: string | null;
+  model?: string | null;
+  modelLabel?: string | null;
+  validation?: string;
+  readonly [key: string]: unknown;
+}
+
+/**
+ * Body of the welcome sprinkle's final lick. Callers (e.g. WC onboarding)
+ * read `action` for dedup and forward the whole bag to
+ * `sendSprinkleLick('welcome', …)`. The open index signature only admits
+ * extra top-level keys; known fields stay typed.
+ */
+export interface OnboardingFinalLickPayload {
+  action?: string;
+  data?: OnboardingFinalLickData;
+  readonly [key: string]: unknown;
+}
+
+/**
+ * Narrow the orchestrator's still-opaque `fireFinalLick` bag into the
+ * named final-lick contract. Preserves unknown extra keys via spread.
+ */
+export function narrowOnboardingFinalLickPayload(data: {
+  readonly [key: string]: unknown;
+}): OnboardingFinalLickPayload {
+  const nestedRaw = data.data;
+  let nested: OnboardingFinalLickData | undefined;
+  if (nestedRaw != null && typeof nestedRaw === 'object' && !Array.isArray(nestedRaw)) {
+    const n = nestedRaw as { readonly [key: string]: unknown };
+    nested = {
+      ...n,
+      profile: n.profile,
+      provider: typeof n.provider === 'string' ? n.provider : undefined,
+      providerName:
+        typeof n.providerName === 'string' || n.providerName === null ? n.providerName : undefined,
+      model: typeof n.model === 'string' || n.model === null ? n.model : undefined,
+      modelLabel:
+        typeof n.modelLabel === 'string' || n.modelLabel === null ? n.modelLabel : undefined,
+      validation: typeof n.validation === 'string' ? n.validation : undefined,
+    };
+  }
+  const actionRaw = data.action;
+  return {
+    ...data,
+    action: typeof actionRaw === 'string' ? actionRaw : undefined,
+    data: nested,
+  };
+}
+
+/**
  * Build a fresh provider catalogue (providers + models) for the
  * onboarding orchestrator. Identical shape across both floats.
  */
@@ -136,7 +194,7 @@ export interface OnboardingOrchestratorSetupDeps {
    * `flushCredentialsToWorker(client)` + `dispatchWelcomeLickOnce(...)`
    * around `client.sendSprinkleLick('welcome', data)`.
    */
-  onFireFinalLick(data: Record<string, unknown>): void;
+  onFireFinalLick(data: OnboardingFinalLickPayload): void;
   /**
    * UI-agnostic accounts-changed hook. The orchestrator fires it after
    * a successful connect-attempt or OAuth flow so the host can refresh
@@ -193,7 +251,7 @@ export async function createOnboardingOrchestratorSetup(
         }
       },
       broadcastToDip: (payload) => deps.broadcastToDip(payload),
-      fireFinalLick: (data) => deps.onFireFinalLick(data),
+      fireFinalLick: (data) => deps.onFireFinalLick(narrowOnboardingFinalLickPayload(data)),
       onAccountsChanged: deps.onAccountsChanged ? () => deps.onAccountsChanged?.() : undefined,
       launchOAuth: async (providerId, baseUrl) =>
         await launchOnboardingOAuth(providerId, baseUrl ?? null, deps),
