@@ -47,7 +47,7 @@ import type { AlmostBashShellHeadless } from '../shell/almost-bash-shell-headles
 import type { SudoManager } from '../sudo/sudo-manager.js';
 import { conversationKeyFor, workspaceIdFor } from '../work-unit/conversation/key.js';
 import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
-import { toDescriptor } from '../work-unit/descriptor.js';
+import { tmpDirFor, toDescriptor } from '../work-unit/descriptor.js';
 import { rootsOf } from '../work-unit/policy.js';
 import { chatSessionIdFor, processOwnerKindFor } from '../work-unit/record.js';
 import type { WorkUnitDescriptor } from '../work-unit/types.js';
@@ -277,6 +277,16 @@ export class ScoopContext {
     return ownLickTargetFor(this.unit, this.scoop, rootsOf(this.callbacks.getScoops())[0]?.jid);
   }
 
+  /**
+   * This unit's `$TMPDIR`, resolved against the LIVE roster for the same
+   * reason {@link ownLickTarget} is: a scoop's scratch nests under the cone
+   * that owns it, and that edge is a roster lookup, not a field on the
+   * record.
+   */
+  private ownTmpDir(): string {
+    return tmpDirFor(this.callbacks.getScoops(), this.scoop);
+  }
+
   getStructuredOutput() {
     return { captured: this.structuredOutputCaptured, value: this.structuredOutputValue };
   }
@@ -306,6 +316,7 @@ export class ScoopContext {
         coneJid: this.coneJid,
         getTurnPid: () => this.currentTurnProcess?.pid,
         getLickTarget: () => this.ownLickTarget(),
+        getTmpDir: () => this.ownTmpDir(),
         getEffortOverride: () => this.activeEffortOverride,
         isDisposed: () => this.disposed,
         onShellReady: (shell) => {

@@ -51,6 +51,8 @@ export interface RuntimeInitDeps {
   getTurnPid: () => number | undefined;
   /** Live, because the roster it derives from changes as roots come and go. */
   getLickTarget: () => string | undefined;
+  /** Live for the same reason: a scoop's scratch nests under its owning cone's. */
+  getTmpDir: () => string;
   /** Live, because the stream wrapper reads it per request. */
   getEffortOverride: () => string | undefined;
   isDisposed: () => boolean;
@@ -80,13 +82,15 @@ export type ScoopRuntime =
 export async function buildScoopRuntime(deps: RuntimeInitDeps): Promise<ScoopRuntime> {
   const { scoop, unit, fs, callbacks } = deps;
 
+  const tmpDir = deps.getTmpDir();
   log.info('Filesystem ready', { folder: scoop.folder });
-  await ensureDirectoryStructure(fs, scoop, unit);
+  await ensureDirectoryStructure(fs, scoop, unit, tmpDir);
 
   const { shell, gatedFs, skills } = await initShellAndSkills({
     scoop,
     unit,
     fs,
+    tmpDir,
     skillsFs: deps.skillsFs,
     getBrowserAPI: callbacks.getBrowserAPI,
     sudoManager: deps.sudoManager,

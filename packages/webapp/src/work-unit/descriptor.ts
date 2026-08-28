@@ -56,6 +56,55 @@ export function workspaceFor(
 }
 
 /**
+ * Root of the float-wide scratch tree. Stays shared and stays writable by
+ * everyone — `ALWAYS_WRITABLE_PREFIXES` (`fs/restricted-fs.ts`) and
+ * `BUILTIN_SCOOP_GRANTS` (`base/sudoers.ts`) both key off this literal, and
+ * every persisted `writablePaths: ['/tmp/']` on disk names it.
+ */
+export const TMP_ROOT = '/tmp';
+
+/**
+ * A unit's own scratch directory — what its shell publishes as `$TMPDIR` and
+ * what `mktemp` resolves against (#2267).
+ *
+ * ```
+ * cone  cone         /tmp/cone
+ * cone  cone-adobe   /tmp/cone-adobe
+ * scoop review       /tmp/cone/review      ← nested inside its owning cone's
+ * ```
+ *
+ * **This is a convention, not a sandbox.** `/tmp` remains shared and writable
+ * by every unit; what a unit gets here is a directory it can call its own, not
+ * one nobody else can reach. Enforcing the boundary would mean narrowing the
+ * grant in `restricted-fs.ts` AND `sudoers.ts` together, which is a separate
+ * decision — see [#2568](https://github.com/ai-ecoverse/slicc/issues/2568).
+ *
+ * Two things follow from living UNDER `/tmp` rather than beside the unit's
+ * workspace (the alternative weighed in #2568):
+ *
+ * - the two grant layers keep working untouched, and so does every scoop
+ *   record already persisted with `writablePaths: ['/tmp/']`;
+ * - a scoop's scratch is INSIDE its cone's, so "New chat" on a cone disposes
+ *   of its children's scratch in the same subtree delete, and the documented
+ *   `agent /tmp "…" >> "$TMPDIR/out.txt"` handoff still lets the cone read
+ *   back what its scoop wrote.
+ *
+ * Folders are globally unique (`uniqueFolder`), so nesting cannot collide.
+ * A scoop whose ownership edge is dangling falls back to the default (oldest)
+ * root, then to the primary cone — never to a bare `/tmp`, which would hand it
+ * the whole shared tree as its own.
+ */
+export function tmpDirFor<
+  T extends Pick<RegisteredScoop, 'jid' | 'parentJid' | 'folder' | 'addedAt'>,
+>(units: Iterable<T>, unit: T | undefined): string {
+  if (!unit) return `${TMP_ROOT}/${PRIMARY_CONE_FOLDER}`;
+  if (isRootUnit(unit)) return `${TMP_ROOT}/${unit.folder}`;
+  const all = [...units];
+  const owner = rootOwnerOf(all, unit) ?? rootsOf(all)[0];
+  return `${TMP_ROOT}/${owner?.folder ?? PRIMARY_CONE_FOLDER}/${unit.folder}`;
+}
+
+/**
  * Coordinates of the primary cone. The historical layout, and the fallback
  * for the float-wide paths that predate multiple cones (the freezer's
  * `session-cone` archive + its memory extraction, the legacy shared-memory

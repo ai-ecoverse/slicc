@@ -223,15 +223,33 @@ file, system prompt), `ConeMemoryStore` / `appendConeMemory`, `scoop_scoop`'s
 and the `agent` command's path defaults, and through those the generated
 per-scoop sudoers.
 
-| Unit                         | Workspace                    | Memory                       | Scratch            |
-| ---------------------------- | ---------------------------- | ---------------------------- | ------------------ |
-| primary cone (folder `cone`) | `/workspace`                 | `/workspace/CLAUDE.md`       | `/tmp`             |
-| extra cone (`cone-<slug>`)   | `/cones/<folder>/workspace`  | `/cones/<folder>/CLAUDE.md`  | `/tmp`             |
-| scoop                        | `/scoops/<folder>/workspace` | `/scoops/<folder>/CLAUDE.md` | `/scoops/<folder>` |
+| Unit                         | Workspace                    | Memory                       | Scratch (`workspaceFor`) | `$TMPDIR` (`tmpDirFor`) |
+| ---------------------------- | ---------------------------- | ---------------------------- | ------------------------ | ----------------------- |
+| primary cone (folder `cone`) | `/workspace`                 | `/workspace/CLAUDE.md`       | `/tmp`                   | `/tmp/cone`             |
+| extra cone (`cone-<slug>`)   | `/cones/<folder>/workspace`  | `/cones/<folder>/CLAUDE.md`  | `/tmp`                   | `/tmp/<folder>`         |
+| scoop                        | `/scoops/<folder>/workspace` | `/scoops/<folder>/CLAUDE.md` | `/scoops/<folder>`       | `/tmp/<cone>/<folder>`  |
+
+`workspaceFor().scratch` is the unit's private _storage_ root (bash overflow,
+agent archives, the per-scoop sudoers). `tmpDirFor()` is the _shell-visible_
+`$TMPDIR` that `mktemp` resolves against. They are deliberately different
+questions and deliberately different answers.
 
 - **The primary cone never moves.** `/workspace` is named by mounts, deep
   links, skills, `upskill`, workflow discovery and every existing profile;
   `isPrimaryRoot` (folder `cone`) keeps it exactly where it was.
+- **Per-unit `$TMPDIR`, under a still-shared `/tmp`** ([#2267](https://github.com/ai-ecoverse/slicc/issues/2267), [#2568](https://github.com/ai-ecoverse/slicc/issues/2568)). Every unit's shell
+  publishes `$TMPDIR` pointing at a directory of its own, created by
+  `ensureDirectoryStructure` before the first turn, and a scoop's nests inside
+  its owning cone's. Living UNDER `/tmp` is the point: `ALWAYS_WRITABLE_PREFIXES`
+  (`fs/restricted-fs.ts`), `BUILTIN_SCOOP_GRANTS` (`base/sudoers.ts`) and every
+  scoop record already persisted with `writablePaths: ['/tmp/']` all keep
+  working untouched, where a path beside the workspace would have needed new
+  prefixes in two layers that gate independently. **It is a convention, not a
+  sandbox** — the grants still expose all of `/tmp` to everyone; narrowing them
+  is a separate decision. What it buys is a disposal boundary: "New chat" on a
+  cone sweeps that cone's subtree (its scoops included) instead of the shared
+  root a sibling cone may be writing to right now, which is the design cause of
+  the incident fixed in [#2566](https://github.com/ai-ecoverse/slicc/pull/2566).
 - **Shared by design**: `/shared`, `/tmp` (the float-wide scratch space
   `builtinScoopGrants` already grants every scoop), `/mnt`, `/scoops`,
   `/sessions`, and the skills library at `/workspace/skills`

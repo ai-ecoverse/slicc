@@ -13,6 +13,7 @@
 import { createLogger } from '../../core/index.js';
 import type { VirtualFS } from '../../fs/index.js';
 import type { RestrictedFS } from '../../fs/restricted-fs.js';
+import { TMP_ROOT } from '../../work-unit/descriptor.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
 import type { RegisteredScoop } from '../types.js';
 
@@ -21,7 +22,14 @@ const log = createLogger('scoop-context');
 export async function ensureDirectoryStructure(
   fs: VirtualFS | RestrictedFS | null,
   scoop: RegisteredScoop,
-  unit: WorkUnitDescriptor
+  unit: WorkUnitDescriptor,
+  /**
+   * This unit's `$TMPDIR` (`tmpDirFor`). Created eagerly: a shell that
+   * publishes the variable and a `mktemp` that resolves against it both need
+   * the directory to exist before the first turn, and `mkdir -p` is not
+   * something an agent should have to remember (#2267).
+   */
+  tmpDir: string
 ): Promise<void> {
   if (!fs) return;
 
@@ -30,7 +38,7 @@ export async function ensureDirectoryStructure(
   // float-wide directories every unit shares.
   const dirs =
     unit.policy.filesystem.kind === 'full-workspace'
-      ? [unit.workspace.root, '/shared', '/scoops', '/home', '/home/user', '/tmp', '/mnt']
+      ? [unit.workspace.root, '/shared', '/scoops', '/home', '/home/user', TMP_ROOT, tmpDir, '/mnt']
       : [
           `/scoops/${scoop.folder}`,
           `/scoops/${scoop.folder}/workspace`,
@@ -39,8 +47,10 @@ export async function ensureDirectoryStructure(
           '/shared',
           // Shared global scratch space (see `builtinScoopGrants`). Normally
           // the cone has already created it, but a scoop must not depend on
-          // that ordering.
-          '/tmp',
+          // that ordering — and `tmpDir` nests under the OWNING cone's, which
+          // may not have been created yet either. `recursive` covers both.
+          TMP_ROOT,
+          tmpDir,
         ];
 
   for (const dir of dirs) {

@@ -295,6 +295,18 @@ function isAlreadyGone(err: unknown): boolean {
   return (err as { code?: string } | null)?.code === 'ENOENT';
 }
 
+/**
+ * `true` when `ancestor` is `path` or a directory containing it.
+ *
+ * The trailing separator is what stops `/tmp/cone` from claiming
+ * `/tmp/cone-adobe`, and the `'/'` special case keeps a root mount an
+ * ancestor of everything rather than of nothing.
+ */
+function containsPath(ancestor: string, path: string): boolean {
+  if (ancestor === path) return true;
+  return path.startsWith(ancestor.endsWith('/') ? ancestor : `${ancestor}/`);
+}
+
 async function removeDirectoryEntries(
   vfs: NewSessionTmpVfs,
   parentPath: string,
@@ -323,25 +335,41 @@ async function removeDirectoryEntries(
   }
 }
 
-/** Remove all shared scratch data while leaving `/tmp` ready for the next session. */
-export async function resetNewSessionTmp(vfs: NewSessionTmpVfs): Promise<void> {
-  const mountRoots = new Set(
-    (await vfs.listMountPoints())
-      .map(({ path }) => path)
-      .filter((path) => path === '/tmp' || path.startsWith('/tmp/'))
-  );
-  if (mountRoots.has('/tmp')) return;
+/**
+ * Dispose of ONE unit's scratch subtree, leaving it ready for the next
+ * session. `tmpDir` is that unit's `$TMPDIR` (`tmpDirFor`) — a cone's own
+ * `/tmp/<folder>`, which contains its scoops' scratch as well, so a cone's
+ * "New chat" still disposes of everything it owns.
+ *
+ * Scoping this is the fix for a real incident: it used to sweep the whole
+ * shared `/tmp`, so clicking "New chat" on one cone deleted a *sibling*
+ * cone's live working directory. The sibling in that case was mid-`npm
+ * install`, which both lost data and raced the sweep into an `ENOENT` that
+ * aborted the clear (#2566). A unit can now only ever delete its own subtree.
+ *
+ * A mounted Local/S3/DA tree is never scratch data, in either direction:
+ * mounts BELOW `tmpDir` are skipped along with the directories containing
+ * them, and a mount AT OR ABOVE `tmpDir` means the whole scratch tree lives
+ * inside somebody's external storage, so nothing is traversed or created at
+ * all. The second case only became reachable once the sweep root moved from
+ * `/tmp` down to `/tmp/<cone>`: an ancestor mount at `/tmp` used to BE the
+ * sweep root and stop it, and would otherwise now be walked straight through.
+ */
+export async function resetNewSessionTmp(vfs: NewSessionTmpVfs, tmpDir: string): Promise<void> {
+  const mounts = (await vfs.listMountPoints()).map(({ path }) => path);
+  if (mounts.some((mount) => containsPath(mount, tmpDir))) return;
+  const mountRoots = new Set(mounts.filter((path) => path.startsWith(`${tmpDir}/`)));
 
   let entries: DirEntry[];
   try {
-    entries = await vfs.readDir('/tmp');
+    entries = await vfs.readDir(tmpDir);
   } catch (err) {
     if ((err as { code?: string } | null)?.code !== 'ENOENT') throw err;
-    await vfs.mkdir('/tmp', { recursive: true });
+    await vfs.mkdir(tmpDir, { recursive: true });
     return;
   }
-  await removeDirectoryEntries(vfs, '/tmp', entries, mountRoots);
-  await vfs.mkdir('/tmp', { recursive: true });
+  await removeDirectoryEntries(vfs, tmpDir, entries, mountRoots);
+  await vfs.mkdir(tmpDir, { recursive: true });
 }
 
 /** Outcome of the enrichment-vs-timer race. */
