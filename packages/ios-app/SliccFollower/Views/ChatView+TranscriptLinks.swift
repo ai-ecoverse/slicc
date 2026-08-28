@@ -57,9 +57,12 @@ extension ChatView {
             // the system anyway, one hop later.
             if let sms = link.systemURL { openURL(sms) }
         case .code(let text):
-            // Copy or Share: a snippet has no obvious default, and silently
-            // copying on a stray tap is how a transcript loses a clipboard.
-            transcriptActions.codeMenu = TranscriptCodeMenu(text: text)
+            // Copy. A snippet is the one span with nowhere to navigate to, so
+            // the useful default IS the copy — and routing it through a
+            // SwiftUI dialog instead put the only non-native-looking menu in
+            // the feature on the most-tapped span. Share stays on the long
+            // press, alongside every other span's menu.
+            TranscriptClipboard.copy(text)
         }
     }
 
@@ -69,10 +72,7 @@ extension ChatView {
     var transcriptActionHandlers: TranscriptActionHandlers {
         TranscriptActionHandlers(
             preview: { [transcriptActions] target in transcriptActions.preview = target },
-            share: { [transcriptActions] request in transcriptActions.share = request },
-            codeMenu: { [transcriptActions] text in
-                transcriptActions.codeMenu = TranscriptCodeMenu(text: text)
-            }
+            share: { [transcriptActions] request in transcriptActions.share = request }
         )
     }
 

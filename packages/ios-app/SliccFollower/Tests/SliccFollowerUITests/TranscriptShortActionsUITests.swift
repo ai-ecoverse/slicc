@@ -14,21 +14,26 @@ final class TranscriptShortActionsUITests: XCTestCase {
         continueAfterFailure = false
     }
 
-    /// A tap on pre-formatted text opens Copy/Share rather than guessing
-    /// between them — a silent copy on a stray tap is how a transcript loses
-    /// someone's clipboard.
-    func testTappingInlineCodeOpensTheShortActionMenu() {
+    /// Pre-formatted text carries the SAME native menu every other span does.
+    ///
+    /// This is the assertion that keeps the affordance consistent: the first
+    /// version of this feature opened a SwiftUI `confirmationDialog` here,
+    /// which put a centred alert card among six contextual menus. A menu that
+    /// resolves to real `Copy`/`Share…` buttons can only come from the UIKit
+    /// `UITextItem` menu — the same one the phone number and the link use.
+    func testLongPressingInlineCodeOffersTheSameNativeMenu() {
         let app = launch()
         let body = paragraph(app, containing: "npm run build")
         XCTAssertTrue(body.waitForExistence(timeout: 10), "assistant paragraph renders")
 
         // The `code` run sits in the first line, right of centre.
-        body.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.15)).tap()
+        body.coordinate(withNormalizedOffset: CGVector(dx: 0.8, dy: 0.15))
+            .press(forDuration: 1.2)
 
         XCTAssertTrue(
-            app.buttons["transcript-code-copy"].waitForExistence(timeout: 5),
-            "Copy is offered for a tapped inline-code run")
-        XCTAssertTrue(app.buttons["transcript-code-share"].exists, "so is Share")
+            app.buttons["Copy"].waitForExistence(timeout: 5),
+            "Copy is offered for a long-pressed inline-code run")
+        XCTAssertTrue(app.buttons["Share…"].exists, "so is Share")
         attach(app.screenshot(), named: "inline-code-menu")
     }
 

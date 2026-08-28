@@ -79,16 +79,6 @@ enum TranscriptTempFile {
 final class TranscriptActionModel: ObservableObject {
     @Published var preview: TranscriptPreviewTarget?
     @Published var share: TranscriptShareRequest?
-    /// The inline-code run whose short-action menu is open. A tap on
-    /// pre-formatted text has no default worth guessing between Copy and
-    /// Share, so it asks.
-    @Published var codeMenu: TranscriptCodeMenu?
-}
-
-/// The pre-formatted run behind an open short-action menu.
-struct TranscriptCodeMenu: Identifiable {
-    let id = UUID()
-    let text: String
 }
 
 // MARK: - Environment
@@ -102,8 +92,6 @@ struct TranscriptCodeMenu: Identifiable {
 struct TranscriptActionHandlers {
     var preview: (TranscriptPreviewTarget) -> Void = { _ in }
     var share: (TranscriptShareRequest?) -> Void = { _ in }
-    /// Open Copy/Share for a run of pre-formatted text.
-    var codeMenu: (String) -> Void = { _ in }
 }
 
 private struct TranscriptActionHandlersKey: EnvironmentKey {
@@ -168,25 +156,6 @@ extension View {
         .sheet(item: Binding(get: { model.share }, set: { model.share = $0 })) { request in
             TranscriptShareSheet(items: request.items)
                 .presentationDetents([.medium, .large])
-        }
-        .confirmationDialog(
-            "Code",
-            isPresented: Binding(
-                get: { model.codeMenu != nil },
-                set: { if !$0 { model.codeMenu = nil } }),
-            titleVisibility: .hidden,
-            presenting: model.codeMenu
-        ) { menu in
-            Button("Copy") { TranscriptClipboard.copy(menu.text) }
-                .accessibilityIdentifier("transcript-code-copy")
-            Button("Share…") { model.share = .text(menu.text) }
-                .accessibilityIdentifier("transcript-code-share")
-            Button("Cancel", role: .cancel) {}
-        } message: { menu in
-            // The run itself is the title: on a phone the tap target was four
-            // characters wide, and confirming WHICH snippet is about to leave
-            // the app is the whole reason this is a menu and not a silent copy.
-            Text(menu.text)
         }
     }
 }

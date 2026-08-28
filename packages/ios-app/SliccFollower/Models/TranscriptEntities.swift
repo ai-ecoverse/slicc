@@ -20,7 +20,8 @@ enum TranscriptLink: Equatable {
     case file(path: String, line: Int?)
     /// A phone number. Opens Messages by default (`sms:`).
     case phone(String)
-    /// Pre-formatted text — an inline `code` run. Opens the short-action menu.
+    /// Pre-formatted text — an inline `code` run. Copies on tap; Share
+    /// lives in the long-press menu with every other span's.
     case code(String)
 
     static let scheme = "slicc-transcript"

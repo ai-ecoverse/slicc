@@ -80,8 +80,8 @@ enum TranscriptInline {
     ///
     /// Pre-formatted text is what a reader most often wants OUT of a
     /// transcript — a command to run, an id to paste — and on a phone there is
-    /// no cursor to drag across four characters of monospace. A tap opens
-    /// Copy/Share instead. Runs already inside a link are left alone.
+    /// no cursor to drag across four characters of monospace. A tap copies it;
+    /// Share is one long press away. Runs already inside a link are left alone.
     private static func annotateCode(_ attributed: inout AttributedString) {
         for run in attributed.runs {
             guard let intent = run.inlinePresentationIntent, intent.contains(.code) else { continue }

@@ -120,12 +120,14 @@ Everything a reader can act on in a transcript carries a **default action on tap
 | `http(s)` link                                      | Sliccy's own browser (Settings → Advanced hands it back to the system) | Open in Sliccy · Copy Link · Share… (+ the system's own link preview) |
 | Any other scheme (`mailto:`, `tel:`, an app scheme) | the system's default app                                               | Open · Copy Link · Share…                                             |
 | Phone number                                        | **Messages** (`sms:`)                                                  | Message · Call · Copy · Share…                                        |
-| Inline `code`                                       | Copy / Share… menu                                                     | the same menu                                                         |
+| Inline `code`                                       | Copy                                                                   | Copy · Share…                                                         |
 | Fenced code block                                   | text selection, unchanged                                              | Copy · Share…                                                         |
 | Confirmed file mention                              | the preview sheet                                                      | Preview · Copy Path · Share…                                          |
 | Base64 payload chip                                 | the preview sheet                                                      | Preview · Share… · Copy Base64                                        |
 
 A tapped phone number goes to Messages rather than the dialer: a number in a transcript is far more often something to text a link to than something to ring, and `tel:` on a device with no cellular plan is a dead end. Calling stays one long press away.
+
+**Every menu in the table is a UIKit menu.** The first version routed a tapped `code` run through a SwiftUI `confirmationDialog`, which put one centred alert card among six contextual menus — the same actions, in a shape that read as a different feature. A tap can either perform an action or present a sheet; there is no API to raise a `UIContextMenuInteraction` programmatically, so a snippet now does the useful thing directly (it is the one span with nowhere to navigate to) and Share stays on the long press with everything else.
 
 ### Why a UITextView
 
