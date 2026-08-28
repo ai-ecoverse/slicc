@@ -121,10 +121,13 @@ prioritized checklist.
 
 ## Current gap state
 
-Run the script to see the live state. As of the last audit the open gaps are
-8 missing commands (`find`, `tracing-start`/`tracing-stop`, and the `video-*`
-family) and 3 flag gaps (`open --device/--mobile`, `snapshot --depth/--boxes`,
-`screenshot --type/--hires`) awaiting an implement-or-skip decision.
+Run the script to see the live state. As of the last audit Slicc is fully
+aligned: `find`, `snapshot --depth/--boxes`, `screenshot --type/--hires`, and
+`open --mobile` are implemented; `tracing-*` and `video-*` are intentionally
+skipped (`officialSkipCommands` — trace-viewer format is Playwright-internal,
+and screencast recording is covered by SLICC's demo tooling), as is
+`open --device` (`_official_skip_flags` — `--mobile` covers the value without
+a named-device catalog).
 
 ## Catching future changes automatically (optional)
 

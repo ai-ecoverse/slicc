@@ -48,7 +48,13 @@ import {
 } from './network-requests.js';
 import { recordHandler, stopRecordingHandler } from './recording.js';
 import { routeHandler, routeListHandler, unrouteHandler } from './routing.js';
-import { framesHandler, pdfHandler, screenshotHandler, snapshotHandler } from './snapshot.js';
+import {
+  findHandler,
+  framesHandler,
+  pdfHandler,
+  screenshotHandler,
+  snapshotHandler,
+} from './snapshot.js';
 import { stateLoadHandler, stateSaveHandler } from './state.js';
 import { localStorageHandlers, sessionStorageHandlers } from './storage.js';
 import {
@@ -69,6 +75,7 @@ export const playwrightHandlers: Map<string, PlaywrightHandler> = new Map([
   ['goto', gotoHandler],
   ['navigate', gotoHandler],
   ['snapshot', snapshotHandler],
+  ['find', findHandler],
   ['frames', framesHandler],
   ['screenshot', screenshotHandler],
   ['click', clickHandler],

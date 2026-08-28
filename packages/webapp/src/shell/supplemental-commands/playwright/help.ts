@@ -20,13 +20,15 @@ Most commands operate on a tab and REQUIRE --tab=<targetId>. There is no
 implicit "current tab" — run "${commandName} tab-list" to get tab IDs.
 
 Commands:
-  open [url|/vfs/path] [--foreground|--fg] [--runtime=<id>] [--discover]
+  open [url|/vfs/path] [--foreground|--fg] [--runtime=<id>] [--discover] [--mobile]
        [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
                          Open a new tab. Default: background. --foreground (or --fg) brings the
                          new tab to the FRONT (switches the user's visible/active tab to it).
                          VFS paths are served via preview service worker.
                          Use --runtime to open the tab on a remote tray runtime (e.g. --runtime=follower-abc).
                          Use --teleport-start/--teleport-return to arm auth-state teleport.
+                         --mobile emulates a generic mobile device (viewport + UA), sticky for
+                         the tab; mobile pages are usually lighter, which saves tokens.
                          With --discover, also fetches the URL via the proxied fetch and emits JSON
                          with parsed RFC 8288 Link headers + P0 discovery (api-catalog, llms.txt, ...).
   goto|navigate <url> --tab=<id> [--discover] [--teleport-start=<regex>] [--teleport-return=<regex>]
@@ -49,12 +51,22 @@ Commands:
   type <text> --tab=<id> [--submit] Type text into focused element
   fill <ref> <text> --tab=<id> [--submit] Fill an input by ref with text
   snapshot --tab=<id> [--frame=<frameId>] [--no-iframes] [--filename=path]
-                         Print the tab tree, or only the selected frame subtree
+           [--depth=<n>] [--boxes]
+                         Print the tab tree, or only the selected frame subtree.
+                         --depth limits tree depth; --boxes appends [box=x,y,w,h]
+                         viewport-relative CSS-pixel rects to main-frame refs.
+  find [text] --tab=<id> [--regex=<re>]
+                         Search the page snapshot for text (case-insensitive) or a regexp,
+                         returning matching lines with surrounding context. Provide either
+                         a text argument or --regex, not both.
   frames --tab=<id>      List frame IDs for --frame (frame IDs are not valid --tab IDs)
   screenshot [ref] --tab=<id> [--filename=path] [--max-width=N] [--fullPage|--full-page]
+             [--type=png|jpeg|webp] [--hires]
                          Take screenshot. The positional is a MAIN-FRAME ELEMENT REF (e5) to
                          clip to, not a path — the output path is --filename=path. --max-width
                          downscales the image if wider than N pixels (e.g. --max-width=1024).
+                         --type defaults to the --filename extension, else png. --hires
+                         captures in device pixels (honors the device pixel ratio).
   eval <expression> --tab=<id> [--frame=<frameId>] [--filename=path|--output=path]
                          Evaluate JavaScript in tab or frame (accepts top-level await/return)
   dblclick <ref> [btn] --tab=<id> [--modifiers=Alt,Control,...] Double-click element by ref
@@ -82,11 +94,11 @@ Commands:
   tab-select <index>     Bring an EXISTING tab to the front / foreground (switch the user's active
                          tab to it) by its 1-based index from tab-list. This is how you focus,
                          activate, raise, or switch to a tab that is already open.
-  tab-new [url] [--foreground|--fg] [--runtime=<id>]
+  tab-new [url] [--foreground|--fg] [--runtime=<id>] [--mobile]
        [--teleport-start=<regex>] [--teleport-return=<regex>] [--timeout=<s>]
                          Open new tab. Default: background. --foreground (or --fg) brings the new
                          tab to the FRONT. --runtime opens on a remote tray runtime.
-                         Supports teleport flags.
+                         Supports teleport flags and --mobile emulation.
   tab-close|close --tab=<id> Close tab by targetId
   upload [ref] <file> [file...] --tab=<id>
                          Upload VFS files to a file input (optional ref targets hidden inputs)

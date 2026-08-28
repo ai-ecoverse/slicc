@@ -74,12 +74,14 @@ All commands below that operate on a tab require `--tab=<targetId>`.
 ### Core
 
 ```bash
-playwright-cli open [url] [--foreground]                          # Open tab (background by default), returns targetId
-playwright-cli tab-new [url] [--foreground]                       # Same as open
+playwright-cli open [url] [--foreground] [--mobile]               # Open tab (background by default), returns targetId
+playwright-cli tab-new [url] [--foreground] [--mobile]            # Same as open
 playwright-cli tab-close --tab=<id>                               # Close tab (alias: close)
 playwright-cli goto --tab=<id> <url>                              # Navigate tab
 playwright-cli navigate --tab=<id> <url>                          # Alias for goto
-playwright-cli snapshot --tab=<id> [--frame=<frameId>] [--no-iframes] [--filename=path]  # Tab tree or one frame subtree
+playwright-cli snapshot --tab=<id> [--frame=<frameId>] [--no-iframes] [--filename=path] [--depth=<n>] [--boxes]  # Tab tree or one frame subtree; --depth limits nesting, --boxes adds [box=x,y,w,h] rects
+playwright-cli find --tab=<id> <text>                             # Search the snapshot for text (case-insensitive), returns matching lines + context
+playwright-cli find --tab=<id> --regex=<re>                       # Same, with a regexp (use either text or --regex, not both)
 playwright-cli eval --tab=<id> [--frame=<frameId>] <expression> [--filename=path|--output=path]  # Evaluate JS in a tab/frame, incl. top-level await/return; use `--` before an expression that starts with `-`
 playwright-cli eval-file --tab=<id> [--frame=<frameId>] <vfs-path> [--output=path|--filename=path]  # Evaluate JS from a VFS file in a tab/frame (top-level await/return supported)
 playwright-cli frames --tab=<id>                                  # List frame IDs for --frame (not --tab)
@@ -94,6 +96,10 @@ opening in the background.
 
 - **New tab** → `open <url> --foreground` (or `tab-new <url> --fg`).
 - **Existing tab** → `tab-select <index>` (1-based index from `tab-list`).
+
+`--mobile` opens the tab with generic mobile-device emulation (viewport,
+device pixel ratio, Android Chrome UA), sticky for the tab's lifetime.
+Mobile pages are usually lighter, which saves tokens.
 
 These two are the ONLY ways to change which tab is in front. There is no
 `activate`, `bring-to-front`, or `focus` subcommand, and `eval`-ing
@@ -166,6 +172,8 @@ playwright-cli screenshot --tab=<id> --filename=page.png         # Save to custo
 playwright-cli screenshot --tab=<id> e5                          # Clip to an element (positional = MAIN-FRAME ref, not a path)
 playwright-cli screenshot --tab=<id> --fullPage                  # Full scrollable page (alias: --full-page)
 playwright-cli screenshot --tab=<id> --max-width=800             # Downscale to a max width
+playwright-cli screenshot --tab=<id> --type=jpeg                 # png (default) / jpeg / webp; inferred from --filename extension
+playwright-cli screenshot --tab=<id> --hires                     # Capture in device pixels (honors device pixel ratio)
 ```
 
 An element screenshot (`screenshot e5`) returns **that element's crop or fails**
@@ -193,7 +201,7 @@ playwright-cli pdf --tab=<id> [--filename=path]  # Save page as PDF (not availab
 
 The browser displays things to the human; `open --view` is what lets _you_ see them. **But viewing screenshots is a last resort for the cone — every image you load eats a large chunk of the context window** (a single 1280×800 PNG can run 1500+ tokens, full-page screenshots much more). Reach for cheaper signals first:
 
-1. **`playwright-cli snapshot --tab=<id>`** — text accessibility tree. Use this first; it answers "what's on the page" for almost all verification tasks at a tiny fraction of the token cost.
+1. **`playwright-cli snapshot --tab=<id>`** — text accessibility tree. Use this first; it answers "what's on the page" for almost all verification tasks at a tiny fraction of the token cost. On a big page, `find --tab=<id> <text>` greps the snapshot and returns just the matching lines with context, and `snapshot --depth=<n>` caps the tree — both much cheaper than the full tree.
 2. **`eval` against the DOM** — when you need a specific value (`document.title`, an attribute, computed style), `eval` it. Don't screenshot for facts you can extract.
 3. **Delegate visual inspection to a scoop.** If the cone genuinely needs vision (layout regression, render fidelity, "does this look right"), spawn a scoop to take and view the screenshot — the scoop's context absorbs the tokens, and you receive its summary back. The cone's window stays clean for orchestration.
 4. **`open --view` in the cone** — only when the cone itself must see pixels for its current decision and steps 1–3 won't do.

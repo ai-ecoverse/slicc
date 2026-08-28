@@ -73,6 +73,19 @@ export function getDefaultCdpUrl(
  */
 type CdpPayload = { [key: string]: unknown };
 
+/**
+ * Per-target emulation override, re-applied on every fresh attach so a
+ * sibling driver switching tabs cannot reset it (see setViewportOverride).
+ */
+interface ViewportOverride {
+  width: number;
+  height: number;
+  deviceScaleFactor: number;
+  mobile: boolean;
+  /** Set for mobile emulation so sites serve their mobile layout. */
+  userAgent?: string;
+}
+
 export class BrowserAPI {
   private client: CDPTransport;
   private localClient: CDPTransport; // preserved original when using remote transport
@@ -83,7 +96,7 @@ export class BrowserAPI {
   private _frameContextCache = new Map<string, number>();
   private _mainWorldContextCache = new Map<string, number>();
   private _tabLock: Promise<void> = Promise.resolve();
-  private _viewportOverrides = new Map<string, { width: number; height: number }>();
+  private _viewportOverrides = new Map<string, ViewportOverride>();
   private _tabLockQueueDepth = 0;
   private _tabLockTotalWaitMs = 0;
   private _tabLockAcquisitions = 0;
@@ -269,14 +282,43 @@ export class BrowserAPI {
    * session, making a tab's viewport stable no matter which driver measured it
    * last. Cleared by {@link closePage}.
    */
-  async setViewportOverride(targetId: string, width: number, height: number): Promise<void> {
+  async setViewportOverride(
+    targetId: string,
+    width: number,
+    height: number,
+    options?: { deviceScaleFactor?: number; mobile?: boolean; userAgent?: string }
+  ): Promise<void> {
     const sessionId = await this.attachToPage(targetId);
+    const vp: ViewportOverride = {
+      width,
+      height,
+      deviceScaleFactor: options?.deviceScaleFactor ?? 1,
+      mobile: options?.mobile ?? false,
+      ...(options?.userAgent !== undefined && { userAgent: options.userAgent }),
+    };
+    await this.applyViewportOverride(vp, sessionId);
+    this._viewportOverrides.set(targetId, vp);
+  }
+
+  /** Send the recorded metrics (and UA, for mobile emulation) to a session. */
+  private async applyViewportOverride(vp: ViewportOverride, sessionId: string): Promise<void> {
     await this.client.send(
       'Emulation.setDeviceMetricsOverride',
-      { width, height, deviceScaleFactor: 1, mobile: false },
+      {
+        width: vp.width,
+        height: vp.height,
+        deviceScaleFactor: vp.deviceScaleFactor,
+        mobile: vp.mobile,
+      },
       sessionId
     );
-    this._viewportOverrides.set(targetId, { width, height });
+    if (vp.userAgent !== undefined) {
+      await this.client.send(
+        'Emulation.setUserAgentOverride',
+        { userAgent: vp.userAgent },
+        sessionId
+      );
+    }
   }
 
   /** Re-apply a recorded viewport override after a fresh attach (best-effort). */
@@ -284,11 +326,7 @@ export class BrowserAPI {
     const vp = this._viewportOverrides.get(targetId);
     if (!vp) return;
     try {
-      await this.client.send(
-        'Emulation.setDeviceMetricsOverride',
-        { width: vp.width, height: vp.height, deviceScaleFactor: 1, mobile: false },
-        sessionId
-      );
+      await this.applyViewportOverride(vp, sessionId);
     } catch (err) {
       log.warn('Failed to re-apply viewport override on re-attach', {
         targetId,

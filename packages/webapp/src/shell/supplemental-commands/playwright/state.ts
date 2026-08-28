@@ -5,9 +5,10 @@
 
 import { base64ToUint8 } from '@slicc/shared-ts';
 import { createLogger } from '../../../base/logger.js';
+import { TRAY_JOIN_STORAGE_KEY, TRAY_WORKER_STORAGE_KEY } from '../../../base/tray-storage-keys.js';
 import { FsError, type VirtualFS } from '../../../fs/index.js';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
-import type { PlaywrightState } from './types.js';
+import type { BrowserAPI, FrameInfo, PageInfo, PlaywrightState } from './types.js';
 
 export const PLAYWRIGHT_COMMAND_NAMES = ['playwright-cli', 'playwright', 'puppeteer'] as const;
 
@@ -194,13 +195,32 @@ export const CLEAR_FOCUSABLE_ELEMENT_FUNCTION = `function() {
   return false;
 }`;
 
+/**
+ * Parse JSON produced by our own in-page `JSON.stringify`. A malformed value
+ * means the page evaluation was hijacked or truncated — fail with the context
+ * of WHAT was being read rather than a bare SyntaxError.
+ */
+export function parsePageJson<T>(raw: unknown, what: string): T {
+  try {
+    return JSON.parse(raw as string) as T;
+  } catch {
+    throw new Error(`could not parse ${what} from the page (got: ${String(raw).slice(0, 80)})`);
+  }
+}
+
 export async function getCurrentPageLocation(
   browser: PlaywrightBrowserAPI
 ): Promise<{ href: string; hostname: string; pathname: string }> {
   const raw = await browser.evaluate(
     `JSON.stringify({ href: location.href, hostname: location.hostname, pathname: location.pathname })`
   );
-  return JSON.parse(raw as string) as { href: string; hostname: string; pathname: string };
+  try {
+    return JSON.parse(raw as string) as { href: string; hostname: string; pathname: string };
+  } catch {
+    throw new Error(
+      `could not read the page location (evaluate returned: ${String(raw).slice(0, 80)})`
+    );
+  }
 }
 
 import { type ArgSpec, parseArgs } from '../../arg-parser.js';
@@ -231,6 +251,8 @@ export const PLAYWRIGHT_FLAG_SPEC: ArgSpec = {
     'method',
     'depth',
     'modifiers',
+    'regex',
+    'type',
     'sameSite',
     'data',
     'status',
@@ -249,7 +271,9 @@ export const PLAYWRIGHT_FLAG_SPEC: ArgSpec = {
     'fullPage',
     'hide',
     'httpOnly',
+    'hires',
     'list',
+    'mobile',
     'off',
     'secure',
     'static',

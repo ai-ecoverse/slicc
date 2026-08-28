@@ -17,7 +17,7 @@
     "response-body"
   ],
   "_official_skip_flags": {
-    "open": ["browser", "config", "headed", "persistent", "profile"],
+    "open": ["browser", "config", "headed", "persistent", "profile", "device"],
     "route": ["remove-header"]
   },
   "commands": {
@@ -28,6 +28,7 @@
         "fg": "boolean",
         "runtime": "string",
         "discover": "boolean",
+        "mobile": "boolean",
         "teleport-start": "string",
         "teleport-return": "string",
         "timeout": "string",
@@ -41,6 +42,7 @@
         "fg": "boolean",
         "runtime": "string",
         "discover": "boolean",
+        "mobile": "boolean",
         "teleport-start": "string",
         "teleport-return": "string",
         "timeout": "string",
@@ -131,7 +133,17 @@
         "tab": "string",
         "frame": "string",
         "filename": "string",
-        "no-iframes": "boolean"
+        "no-iframes": "boolean",
+        "depth": "string",
+        "boxes": "boolean"
+      }
+    },
+    "find": {
+      "args": ["text"],
+      "variadic": true,
+      "flags": {
+        "tab": "string",
+        "regex": "string"
       }
     },
     "eval": {
@@ -206,7 +218,9 @@
         "filename": "string",
         "fullPage": "boolean",
         "full-page": "boolean",
-        "max-width": "string"
+        "max-width": "string",
+        "type": "string",
+        "hires": "boolean"
       }
     },
     "tab-list": {

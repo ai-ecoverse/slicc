@@ -11,6 +11,16 @@ import type { PlaywrightHandler } from '../types.js';
 
 const log = createLogger('playwright');
 
+/**
+ * Generic mobile device for `open --mobile` — a current Pixel-class profile
+ * (matching the official CLI's "generic mobile device" behavior for its
+ * chromium default), not a specific named device.
+ */
+const MOBILE_VIEWPORT = { width: 412, height: 915, deviceScaleFactor: 2.625 };
+const MOBILE_USER_AGENT =
+  'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) ' +
+  'Chrome/131.0.0.0 Mobile Safari/537.36';
+
 export const openHandler: PlaywrightHandler = async ({ browser, fs, state, positional, flags }) => {
   const url = positional[0] || 'about:blank';
   const runtimeFlag = flags['runtime'];
@@ -22,6 +32,18 @@ export const openHandler: PlaywrightHandler = async ({ browser, fs, state, posit
     targetId = await browser.createRemotePage(runtimeFlag, url);
   } else {
     targetId = await browser.createPage(url);
+  }
+
+  // --mobile: generic-mobile-device emulation (metrics + touch-layout viewport
+  // + Android Chrome UA so sites serve their mobile layout, which is usually
+  // lighter and saves tokens). Sticky per target — re-applied on every fresh
+  // attach, same mechanism as `resize`.
+  if (flags['mobile'] === 'true') {
+    await browser.setViewportOverride(targetId, MOBILE_VIEWPORT.width, MOBILE_VIEWPORT.height, {
+      deviceScaleFactor: MOBILE_VIEWPORT.deviceScaleFactor,
+      mobile: true,
+      userAgent: MOBILE_USER_AGENT,
+    });
   }
 
   // Tabs open in the background; --foreground / --fg raises the new tab to the

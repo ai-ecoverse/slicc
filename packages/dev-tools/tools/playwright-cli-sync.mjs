@@ -113,6 +113,13 @@ const officialSkipCommands = new Set([
   'pause-at', // test debugger
   'step-over', // test debugger
   'resume', // test debugger
+  'tracing-start', // Playwright trace-viewer format is playwright-internal; HAR recording covers network inspection
+  'tracing-stop', // same
+  'video-start', // screencast recording + encoding pipeline — SLICC's demo-recording tooling covers this
+  'video-stop', // same
+  'video-chapter', // same
+  'video-show-actions', // same
+  'video-hide-actions', // same
 ]);
 
 // ── Diff ─────────────────────────────────────────────────────────────────────
