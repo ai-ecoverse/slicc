@@ -84,7 +84,7 @@ Never drop when:
 agent <cwd> <allowed-commands> <prompt> [--model <id>] [--read-only <paths>] [--background-after <s>]
 ```
 
-- `<cwd>` — sole writable prefix (plus `/shared/`, the scoop's scratch folder, and `/tmp/`). Relative paths resolve against the caller's cwd.
+- `<cwd>` — sole writable prefix (plus `/shared/`, the scoop's scratch folder, and `/tmp/` — the whole shared scratch tree, so a scoop can always reach its `$TMPDIR`). Relative paths resolve against the caller's cwd.
 - `<allowed-commands>` — comma-separated allow-list; `*` for unrestricted.
 - `<prompt>` — forwarded verbatim. The spawned scoop has no access to the caller's history; pack context into the prompt.
 - `--model` — defaults to the parent scoop's model (or the cone's, when invoked from the terminal). Accepts an exact id, a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), or the `provider:model` form `models` prints (`openrouter:openai/gpt-5.6-terra-pro`). A bare id resolves against the selected provider first, then against any other configured provider that offers it; if several do, the error lists the qualified ids to pick from. The scoop runs on the provider the model resolved from. An id that cannot be resolved is a hard error (exit 1) — it never silently falls back to the parent's model. Models from a provider other than the selected one must additionally be allowed in `/etc/models` (see [Model access policy](#model-access-policy)); a blocked model exits 1 and the error quotes the line to add.
@@ -96,7 +96,7 @@ agent <cwd> <allowed-commands> <prompt> [--model <id>] [--read-only <paths>] [--
 ```bash
 # Parallel, collected to one file. No cone turns spawned.
 for url in site-a site-b site-c; do
-  agent /tmp "curl,jq" "Fetch https://$url/api, return the top-level title field." >> /tmp/titles.txt &
+  agent "$TMPDIR" "curl,jq" "Fetch https://$url/api, return the top-level title field." >> "$TMPDIR/titles.txt" &
 done
 wait
 

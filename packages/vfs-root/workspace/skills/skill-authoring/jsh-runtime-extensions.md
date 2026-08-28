@@ -160,7 +160,7 @@ const parsed = await agent('Extract the title as {"title": string}', {
 
 const { finalText, exitCode, stderr } = await agent.spawn('do the thing', {
   model: 'claude-opus-4-6',
-  cwd: '/tmp',
+  cwd: process.env.TMPDIR ?? '/tmp',
   allowedCommands: 'git,node',
 });
 ```
@@ -406,7 +406,7 @@ await exec.spawn([
   'read_flash',
   '0',
   '0x1000',
-  '/tmp/header.bin',
+  `${process.env.TMPDIR ?? '/tmp'}/header.bin`,
 ]);
 ```
 

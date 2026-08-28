@@ -161,11 +161,12 @@ export const framesHandler: PlaywrightHandler = async ({ browser, flags }) => {
   return { stdout: output + '\n', stderr: '', exitCode: 0 };
 };
 
-export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags }) => {
+export const pdfHandler: PlaywrightHandler = async ({ browser, fs, flags, scratchDir }) => {
   const tab = requireTab(flags);
   if ('error' in tab) return { stdout: '', stderr: tab.error, exitCode: 1 };
 
-  const savePath = flags['filename'] || `/tmp/page-${filenameSafeTimestamp(new Date())}.pdf`;
+  const savePath =
+    flags['filename'] || `${scratchDir}/page-${filenameSafeTimestamp(new Date())}.pdf`;
 
   try {
     await browser.withTab(tab.targetId, async (sessionId) => {
@@ -197,6 +198,7 @@ export const screenshotHandler: PlaywrightHandler = async ({
   state,
   positional,
   flags,
+  scratchDir,
 }) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
@@ -229,7 +231,7 @@ export const screenshotHandler: PlaywrightHandler = async ({
       ...(clip ? { clip } : {}),
       ...(maxWidth ? { maxWidth } : {}),
     });
-    const savePath = flags['filename'] || `/tmp/screenshot-${Date.now()}.png`;
+    const savePath = flags['filename'] || `${scratchDir}/screenshot-${Date.now()}.png`;
     const bytes = base64ToBytes(base64);
     await fs.writeFile(savePath, bytes);
     // Archive screenshot to /.playwright/screenshots/

@@ -221,6 +221,14 @@ export interface PlaywrightHandlerCtx {
   state: PlaywrightState;
   positional: string[];
   flags: Record<string, string>;
+  /**
+   * Where a subcommand puts default-named output (`scratchDir`,
+   * `shell/tmpdir-env.ts`) — the calling unit's own scratch directory, so two
+   * cones taking a screenshot in the same second do not collide on
+   * `/tmp/screenshot-<ts>.png` and each cone's "New chat" disposes of its own
+   * (#2267). An explicit `--filename` still wins.
+   */
+  scratchDir: string;
 }
 
 export type PlaywrightHandler = (ctx: PlaywrightHandlerCtx) => Promise<CmdResult>;

@@ -18,8 +18,8 @@ SLICC's local ImageMagick WASM command handles common image transforms, multi-im
 Join images horizontally with `+append` or vertically with `-append`:
 
 ```bash
-convert f00.jpg f01.jpg f02.jpg f03.jpg +append /tmp/filmstrip.jpg
-convert top.png middle.png bottom.png -append /tmp/column.png
+convert f00.jpg f01.jpg f02.jpg f03.jpg +append "$TMPDIR/filmstrip.jpg"
+convert top.png middle.png bottom.png -append "$TMPDIR/column.png"
 ```
 
 Build grids with escaped parenthesized groups. Each group produces one intermediate image:
@@ -27,7 +27,7 @@ Build grids with escaped parenthesized groups. Each group produces one intermedi
 ```bash
 convert \( f00.jpg f01.jpg f02.jpg f03.jpg +append \) \
   \( f04.jpg f05.jpg f06.jpg f07.jpg +append \) \
-  -append /tmp/grid.jpg
+  -append "$TMPDIR/grid.jpg"
 ```
 
 ## Transform images
@@ -113,8 +113,8 @@ streams when you need to grep the raw page operators.
 ## Verify and inspect
 
 ```bash
-file /tmp/grid.jpg
-open --view --size high /tmp/grid.jpg
+file "$TMPDIR/grid.jpg"
+open --view --size high "$TMPDIR/grid.jpg"
 convert --help
 pdftoppm --help
 pdftotext --help

@@ -27,6 +27,7 @@ import type { Command, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
 import type { LoadedPlugin, PluginDiagnostic, PluginLoadResult } from '../plugins/types.js';
+import { scratchDir } from '../tmpdir-env.js';
 import { parseKnownFlags } from './subcommand-flags.js';
 import { isHelpRequest } from './subcommand-help.js';
 
@@ -125,7 +126,7 @@ export function createPluginCommand(deps: PluginCommandDeps = {}): Command {
         case 'info':
           return await cmdInfo(rest, deps);
         case 'validate':
-          return await cmdValidate(rest, cwd, deps);
+          return await cmdValidate(rest, cwd, deps, scratchDir(ctx?.env));
         case 'remove':
         case 'rm':
         case 'delete':
@@ -524,7 +525,9 @@ async function cmdInfo(args: string[], deps: PluginCommandDeps): Promise<ExecRes
 async function cmdValidate(
   args: string[],
   cwd: string,
-  deps: PluginCommandDeps
+  deps: PluginCommandDeps,
+  /** Caller's own scratch root — where the GitHub staging clone lands. */
+  scratch: string
 ): Promise<ExecResult> {
   if (isHelpRequest(args)) {
     return ok('usage: plugin validate <path|repo>\n');
@@ -542,7 +545,7 @@ async function cmdValidate(
     if (!deps.fetch) {
       return err('plugin validate: GitHub sources are unavailable (no network fetch configured)');
     }
-    staging = `/tmp/.plugin-validate/${githubSourceDir(source.ref).split('/').pop()}`;
+    staging = `${scratch}/.plugin-validate/${githubSourceDir(source.ref).split('/').pop()}`;
     const fetchError = await fetchGitHubPluginTo(source.ref, staging, fs, deps.fetch);
     if (fetchError) return err(`plugin validate: ${fetchError}`);
     root = staging;

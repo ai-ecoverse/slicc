@@ -38,8 +38,8 @@ v86 state [-n name] save|load <file>     # snapshot / restore full VM state
 The fastest full-Linux guest is the pre-booted Arch state image from copy.sh (the same one behind https://copy.sh/v86/?profile=archlinux). It resumes straight into a root shell — no BIOS blobs, no boot wait:
 
 ```bash
-curl -o /tmp/arch_state.bin.zst https://i.copy.sh/arch_state-v3.bin.zst   # ~15 MB
-v86 start -n arch -state /tmp/arch_state.bin.zst -fs9p https://i.copy.sh/arch/ -net virtio -m 512
+curl -o "$TMPDIR/arch_state.bin.zst" https://i.copy.sh/arch_state-v3.bin.zst   # ~15 MB
+v86 start -n arch -state "$TMPDIR/arch_state.bin.zst" -fs9p https://i.copy.sh/arch/ -net virtio -m 512
 v86 text -n arch                         # should show a root@localhost prompt
 v86 type -n arch "uname -a\n"
 v86 text -n arch
@@ -78,11 +78,11 @@ Prefer `v86 text` over `screenshot` whenever the guest is in text mode — it is
 
 ## Live screen streaming (iframe-able)
 
-`v86 serve` pumps the screen into `/tmp/v86-serve-<name>/` — a self-refreshing `index.html` viewer plus live `frame.png`/`screen.txt` + `state.json`. Mint an iframe-able preview URL from it with the regular `serve` command so a human (or sprinkle) can watch the VM:
+`v86 serve` pumps the screen into `$TMPDIR/v86-serve-<name>/` — a self-refreshing `index.html` viewer plus live `frame.png`/`screen.txt` + `state.json`. Mint an iframe-able preview URL from it with the regular `serve` command so a human (or sprinkle) can watch the VM:
 
 ```bash
 v86 serve -n arch --fps 4          # start the pump (1-10 fps, default 2)
-serve /tmp/v86-serve-arch          # mint a worker-hosted URL to iframe
+serve "$TMPDIR/v86-serve-arch"          # mint a worker-hosted URL to iframe
 v86 serve -n arch --stop           # stop the pump (directory stays)
 ```
 

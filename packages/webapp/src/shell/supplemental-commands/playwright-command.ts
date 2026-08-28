@@ -14,6 +14,7 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
+import { scratchDir } from '../tmpdir-env.js';
 import { playwrightHandlers } from './playwright/handlers/index.js';
 import { formatHelp, formatSubcommandHelp } from './playwright/help.js';
 import { autoSaveSnapshot, logSession } from './playwright/session-log.js';
@@ -198,7 +199,7 @@ export function createPlaywrightCommand(
   const state = browser ? getSharedState(browser, fs) : null;
   const knownFlagSpec = playwrightKnownFlagSpec();
 
-  return defineCommand(name, async (args): Promise<CmdResult> => {
+  return defineCommand(name, async (args, ctx): Promise<CmdResult> => {
     if (args.length === 0 || args[0] === 'help' || args[0] === '--help' || args[0] === '-h') {
       return { stdout: helpText + '\n', stderr: '', exitCode: 0 };
     }
@@ -233,7 +234,14 @@ export function createPlaywrightCommand(
       };
     } else {
       try {
-        result = await handler({ browser, fs, state, positional, flags });
+        result = await handler({
+          browser,
+          fs,
+          state,
+          positional,
+          flags,
+          scratchDir: scratchDir(ctx.env),
+        });
       } catch (err) {
         result = await commandErrorResult(browser, flags, err);
       }
