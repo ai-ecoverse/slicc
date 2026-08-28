@@ -1,12 +1,12 @@
 /**
  * The runtime's tray role, read from the page→worker `localStorage` shims.
  *
- * The live status objects are scoops-owned (`scoops/tray-leader.ts`,
- * `scoops/tray-follower-status.ts`), and the shell sits below scoops in the
- * layer stack — so `uname -n` reads the same shim those modules' own
- * `…WithFallback` readers fall back to, rather than inverting the stack. The
- * storage keys live here so there is exactly one copy of each string; scoops
- * re-exports them under their established names.
+ * The storage keys live here so there is exactly one copy of each string. The
+ * live status registries those shims mirror sit beside this file
+ * (`base/tray-leader-status.ts`, `base/tray-follower-status.ts`) — they moved
+ * down from `scoops/` in #2537 so the shell could read them without inverting
+ * the layer stack. `scoops/` re-exports every one of these symbols under its
+ * established name.
  */
 
 /**
@@ -50,3 +50,12 @@ export function readTrayRole(): TrayRole {
   if (follower !== null && follower !== 'inactive') return 'follower';
   return shimState(LEADER_STATUS_STORAGE_KEY) === 'leader' ? 'leader' : 'standalone';
 }
+
+/**
+ * Which float a connected follower is running. A plain string union with no
+ * dependencies, kept here so `shell/` can name a follower's runtime without
+ * importing UP into the `scoops/` follower registry that derives it (#2537).
+ * `scoops/tray-leader/follower-registry.ts` re-exports it alongside
+ * `deriveFloatType` / `labelForFollower`.
+ */
+export type FloatType = 'standalone' | 'extension' | 'electron' | 'ios' | 'unknown';

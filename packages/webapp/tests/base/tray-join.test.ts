@@ -1,9 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { joinTray } from '../../src/scoops/tray-join.js';
-import {
-  TRAY_JOIN_STORAGE_KEY,
-  TRAY_WORKER_STORAGE_KEY,
-} from '../../src/scoops/tray-runtime-config.js';
+import { joinTray } from '../../src/base/tray-join.js';
+import { TRAY_JOIN_STORAGE_KEY, TRAY_WORKER_STORAGE_KEY } from '../../src/base/tray-url-config.js';
 
 interface FakeStorage {
   setItem(key: string, value: string): void;

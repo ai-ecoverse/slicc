@@ -9,7 +9,7 @@ import {
   setFollowerStalled,
   setFollowerTrayRuntimeStatus,
   subscribeToFollowerTrayRuntimeStatus,
-} from '../../src/scoops/tray-follower-status.js';
+} from '../../src/base/tray-follower-status.js';
 
 /** Helper to build a status with sensible defaults for all fields. */
 function makeStatus(overrides: Partial<FollowerTrayRuntimeStatus> = {}): FollowerTrayRuntimeStatus {

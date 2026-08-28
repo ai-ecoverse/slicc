@@ -311,6 +311,16 @@ Test in both CLI and extension floats.
 - **Issue #1950** — the same shape one rung lower: `cdp/` importing `reassembleCDPResponse`
   and `TrayTargetEntry` from `scoops/`. Invisible to the original ui-only ratchet, which is
   why the gate now covers every rung of the stack.
+- **Issue #2537** — the largest single entry (7 back-edges): `shell/supplemental-commands/
+host-command.ts` reaching three rungs up into `scoops/` for the tray status readers,
+  `joinTray`/`leaveTray`, and the join-URL parser. Notable for the trap in its first
+  proposed fix: **inverting** the dependency with UI-registered setters (the
+  `setConnectedFollowersGetter` pattern) is realm-INCORRECT here — `ui/wc/wc-tray.ts` runs
+  only on the page, while `host` executes in the kernel worker, so the setters would never
+  fire and `host` would report `inactive` while genuinely connected. Relocation was the
+  right tool: four of the six modules had no upward dependency at all and simply moved to
+  `base/`, which preserves per-realm behavior exactly because the module global stays a
+  single ESM singleton. Prefer moving state DOWN over injecting it SIDEWAYS.
 
 **Class size** — 152 grandfathered back-edges across 92 files at full-stack baseline freeze
 (2026-08); 34 across 27 files at the original ui-only freeze (2026-07).
@@ -318,6 +328,11 @@ Test in both CLI and extension floats.
 **Remediation** — never import from a higher layer. If the symbol you need is pure (no DOM,
 no `window`), it is mislocated: move it (or extract it) into the appropriate lower layer and
 have the higher layer re-export it for its existing callers, so the dependency points down.
+This applies to module-global REGISTRIES too, not just stateless helpers — a status
+singleton with a `localStorage` fallback (`base/tray-leader-status.ts`,
+`base/permissions-surface-registry.ts`) relocates safely as long as it moves WHOLESALE and
+is re-exported, never re-declared: two copies of the `let` would silently split the realms.
+Reach for setter injection only when the registering layer runs in every realm that reads.
 Deterministic enforcement: `npm run lint:layer-back-edges`
 (`packages/dev-tools/tools/check-layer-back-edges.mjs`) fails on any back-edge not in the
 frozen baseline; the baseline is a one-way ratchet — shrink it, never grow it.

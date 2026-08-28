@@ -20,13 +20,13 @@
  * same tray rather than booting dormant.
  */
 
-import { createLogger } from '../base/logger.js';
+import { createLogger } from './logger.js';
 import { type LeaveTrayTransport, resolveAmbientLeaveTrayTransport } from './tray-leave.js';
 import {
   parseTrayJoinUrlValue,
   TRAY_JOIN_STORAGE_KEY,
   TRAY_WORKER_STORAGE_KEY,
-} from './tray-runtime-config.js';
+} from './tray-url-config.js';
 
 const log = createLogger('scoops.tray-join');
 

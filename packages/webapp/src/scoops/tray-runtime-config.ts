@@ -1,35 +1,45 @@
 import { SLICC_HOSTED_ORIGIN, SLICC_STAGING_HUB_ORIGIN } from '@slicc/shared-ts';
 
-export const TRAY_WORKER_STORAGE_KEY = 'slicc.trayWorkerBaseUrl';
-export const TRAY_JOIN_STORAGE_KEY = 'slicc.trayJoinUrl';
 export const DEFAULT_PRODUCTION_TRAY_WORKER_BASE_URL = SLICC_HOSTED_ORIGIN;
 export const DEFAULT_STAGING_TRAY_WORKER_BASE_URL = SLICC_STAGING_HUB_ORIGIN;
 
 import {
   buildCanonicalTrayLaunchUrl,
-  normalizeTrayWorkerBaseUrl,
   parseTrayJoinUrl,
   TRAY_LEGACY_LEAD_QUERY_PARAM,
   TRAY_QUERY_PARAM,
   TRAY_WORKER_QUERY_PARAM,
 } from '../../../node-server/src/tray-url-shared.js';
+import {
+  normalizeTrayWorkerBaseUrl,
+  parseTrayJoinUrlValue,
+  parseTrayUrlValue,
+  TRAY_JOIN_STORAGE_KEY,
+  TRAY_WORKER_STORAGE_KEY,
+  type TrayJoinConfig,
+  type TrayUrlConfig,
+} from '../base/tray-url-config.js';
 import { LEADER_RUNTIME_QUERY_NAME, LEADER_RUNTIME_QUERY_VALUE } from '../kernel/messages.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 
+/**
+ * The pure URL/storage half of this module now lives in
+ * `base/tray-url-config.ts` so `shell/` can reach it without importing UP the
+ * layer stack (#2537). Re-exported here under the established names — this
+ * module stays the address every existing caller already uses.
+ */
 export {
   normalizeTrayWorkerBaseUrl,
+  parseTrayJoinUrlValue,
+  parseTrayUrlValue,
+  TRAY_JOIN_STORAGE_KEY,
   TRAY_LEGACY_LEAD_QUERY_PARAM,
   TRAY_QUERY_PARAM,
   TRAY_WORKER_QUERY_PARAM,
+  TRAY_WORKER_STORAGE_KEY,
+  type TrayJoinConfig,
+  type TrayUrlConfig,
 };
-
-export interface TrayUrlConfig {
-  workerBaseUrl: string;
-  trayId: string | null;
-  joinUrl: string | null;
-}
-
-export type TrayJoinConfig = TrayUrlConfig & { joinUrl: string };
 
 export interface RuntimeConfigStorage {
   getItem(key: string): string | null;
@@ -48,41 +58,6 @@ export function buildTrayWorkerUrl(baseUrl: string, path: string): string {
   }
   const relativePath = path.replace(/^\/+/, '');
   return new URL(relativePath, `${normalizedBase}/`).toString();
-}
-
-export function parseTrayUrlValue(raw: string | null | undefined): TrayUrlConfig | null {
-  if (!raw) return null;
-
-  try {
-    const url = new URL(raw.trim());
-    url.search = '';
-    url.hash = '';
-
-    const segments = url.pathname.split('/').filter(Boolean);
-    let trayId: string | null = null;
-    const joinUrl: string | null = null;
-    if (segments.length >= 2 && segments.at(-2) === 'tray') {
-      trayId = decodeURIComponent(segments.at(-1)!);
-      segments.splice(-2, 2);
-      url.pathname = segments.length > 0 ? `/${segments.join('/')}` : '/';
-    } else if (segments.length >= 2 && segments.at(-2) === 'join') {
-      return parseTrayJoinUrl(url.toString());
-    }
-
-    const workerBaseUrl = normalizeTrayWorkerBaseUrl(url.toString());
-    if (!workerBaseUrl) {
-      return null;
-    }
-
-    return { workerBaseUrl, trayId, joinUrl };
-  } catch {
-    return null;
-  }
-}
-
-export function parseTrayJoinUrlValue(raw: string | null | undefined): TrayJoinConfig | null {
-  const parsed = parseTrayUrlValue(raw);
-  return parsed?.joinUrl ? (parsed as TrayJoinConfig) : null;
 }
 
 export function storeTrayJoinUrl(
