@@ -16,7 +16,6 @@
   "packages/webapp/providers/github.ts": 2,
   "packages/webapp/providers/openai-codex.ts": 2,
   "packages/webapp/src/cdp/cdp-client.ts": 4,
-  "packages/webapp/src/cdp/cdp-ws-page-bridge.ts": 2,
   "packages/webapp/src/cdp/cherry-host-protocol.ts": 5,
   "packages/webapp/src/cdp/cherry-host-transport.ts": 3,
   "packages/webapp/src/cdp/extension-bridge-protocol.ts": 5,
