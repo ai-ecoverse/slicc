@@ -245,6 +245,30 @@ export async function joinAsFollower(
   };
 }
 
+/**
+ * Boot a SECOND, INDEPENDENT SLICC runtime — its own leader on the same tray
+ * hub, not a follower of the first.
+ *
+ * The distinction matters for anything testing `slicc` sidecar attachments:
+ * {@link joinAsFollower} produces a runtime that has GIVEN UP its own role to
+ * mirror the leader, which is precisely the state a sidecar must not require.
+ * This one keeps its own tray, so a test can assert that attaching left it
+ * alone.
+ *
+ * A separate browser context for the same reason as `joinAsFollower`: leader
+ * election in `wc-tray.ts` is per-origin-per-profile, so a second page in the
+ * first context would defer to it instead of leading.
+ */
+export async function bootSecondLeader(
+  browser: Browser,
+  options: BootLeaderOptions
+): Promise<FollowerHandle> {
+  const context = await browser.newContext();
+  const page = await context.newPage();
+  await bootMultiConeLeader(page, options);
+  return { context, page, close: async () => await context.close() };
+}
+
 // ── Tab strip ──────────────────────────────────────────────────────
 
 /**

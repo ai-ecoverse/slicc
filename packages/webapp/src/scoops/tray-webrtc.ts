@@ -17,6 +17,7 @@ import {
   sendTrayFollowerIceCandidate,
 } from './tray-follower.js';
 import {
+  type FollowerTrayRuntimeStatus,
   getFollowerTrayRuntimeStatus,
   setFollowerTrayRuntimeStatus,
 } from './tray-follower-status.js';
@@ -113,6 +114,32 @@ export interface FollowerTrayConnection {
   channel: TrayDataChannelLike;
 }
 
+/**
+ * Where a follower manager reports its connection state.
+ *
+ * The module globals in `tray-follower-status.ts` are a *singleton* describing
+ * "what role is this instance playing" — `host` reads them, and the page
+ * mirrors them into `localStorage` for the kernel worker. That is exactly right
+ * for the one follower attachment that owns this instance's identity.
+ *
+ * It is exactly wrong for a `slicc` sidecar attachment (`tray-sidecar.ts`),
+ * which dials a *second*, remote leader while this instance keeps leading its
+ * own tray. A sidecar writing the globals would make `host` report `follower`
+ * on a machine that is still a leader, and its `stop()` would stamp `inactive`
+ * over a genuine follower role. So the sink is injectable and sidecars pass a
+ * private one.
+ */
+export interface FollowerTrayStatusSink {
+  get(): FollowerTrayRuntimeStatus;
+  set(status: FollowerTrayRuntimeStatus): void;
+}
+
+/** The shared, instance-identity sink — the historical (and default) behavior. */
+export const globalFollowerTrayStatusSink: FollowerTrayStatusSink = {
+  get: getFollowerTrayRuntimeStatus,
+  set: setFollowerTrayRuntimeStatus,
+};
+
 export interface FollowerTrayManagerOptions {
   joinUrl: string;
   runtime: string;
@@ -124,6 +151,13 @@ export interface FollowerTrayManagerOptions {
   iceServers?: TrayIceServerConfig[];
   /** Called when an established peer connection transitions to 'disconnected' or 'failed'. */
   onDisconnected?: (reason: string) => void;
+  /**
+   * Where connection-state updates go. Defaults to
+   * {@link globalFollowerTrayStatusSink} — the instance-wide follower status
+   * `host` reports. Sidecar attachments pass a private sink so a second,
+   * concurrent tray connection leaves this instance's own role untouched.
+   */
+  statusSink?: FollowerTrayStatusSink;
   /**
    * Called when the tray hub reports this join URL has been superseded by a
    * fresh one (the leader abandoned this tray and minted a new one — see
@@ -332,6 +366,7 @@ export class FollowerTrayManager {
   private iceServers: TrayIceServerConfig[] | undefined;
   private activePeer: ActiveFollowerPeer | null = null;
   private stopped = false;
+  private readonly status: FollowerTrayStatusSink;
 
   constructor(private readonly options: FollowerTrayManagerOptions) {
     this.fetchImpl = options.fetchImpl ?? fetch;
@@ -341,6 +376,7 @@ export class FollowerTrayManager {
     this.controllerIdFactory = options.controllerIdFactory ?? (() => crypto.randomUUID());
     this.sleep = options.sleep ?? ((ms) => new Promise((resolve) => setTimeout(resolve, ms)));
     this.pollIntervalMs = options.pollIntervalMs ?? DEFAULT_POLL_INTERVAL_MS;
+    this.status = options.statusSink ?? globalFollowerTrayStatusSink;
   }
 
   async start(): Promise<FollowerTrayConnection> {
@@ -348,7 +384,7 @@ export class FollowerTrayManager {
     const controllerId = this.controllerIdFactory();
     const connectingSince = Date.now();
 
-    setFollowerTrayRuntimeStatus({
+    this.status.set({
       state: 'connecting',
       joinUrl: this.options.joinUrl,
       trayId: null,
@@ -377,8 +413,8 @@ export class FollowerTrayManager {
         });
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        setFollowerTrayRuntimeStatus({
-          ...getFollowerTrayRuntimeStatus(),
+        this.status.set({
+          ...this.status.get(),
           attachAttempts: attachAttempt,
           lastError: errorMsg,
         });
@@ -386,8 +422,8 @@ export class FollowerTrayManager {
       }
 
       // Update status with attach attempt progress
-      setFollowerTrayRuntimeStatus({
-        ...getFollowerTrayRuntimeStatus(),
+      this.status.set({
+        ...this.status.get(),
         attachAttempts: attachAttempt,
         lastAttachCode: attach.code,
       });
@@ -416,7 +452,7 @@ export class FollowerTrayManager {
       }
       if (attach.action === 'fail' || !attach.bootstrap) {
         const errorMsg = attach.error ?? `Tray follower attach failed (${attach.code})`;
-        setFollowerTrayRuntimeStatus({
+        this.status.set({
           state: 'error',
           joinUrl: this.options.joinUrl,
           trayId: null,
@@ -440,7 +476,7 @@ export class FollowerTrayManager {
           controllerId,
           attach.bootstrap
         );
-        setFollowerTrayRuntimeStatus({
+        this.status.set({
           state: 'connected',
           joinUrl: this.options.joinUrl,
           trayId: connection.trayId,
@@ -456,7 +492,7 @@ export class FollowerTrayManager {
         return connection;
       } catch (error) {
         const errorMsg = error instanceof Error ? error.message : String(error);
-        setFollowerTrayRuntimeStatus({
+        this.status.set({
           state: 'error',
           joinUrl: this.options.joinUrl,
           trayId: attach.trayId,
@@ -519,7 +555,7 @@ export class FollowerTrayManager {
     this.activePeer?.peer.close();
     this.activePeer?.channel?.close();
     this.activePeer = null;
-    setFollowerTrayRuntimeStatus({
+    this.status.set({
       state: 'inactive',
       joinUrl: null,
       trayId: null,
@@ -734,6 +770,7 @@ export function startFollowerWithAutoReconnect(
   const multiplier = reconnectOptions.backoffMultiplier ?? 2;
   const maxDelay = reconnectOptions.maxDelayMs ?? 30_000;
   const maxAttempts = reconnectOptions.maxAttempts ?? 10;
+  const status = managerOptions.statusSink ?? globalFollowerTrayStatusSink;
   const sleepFn =
     reconnectOptions.sleep ??
     managerOptions.sleep ??
@@ -793,8 +830,8 @@ export function startFollowerWithAutoReconnect(
     while (!cancelled && attempt < maxAttempts) {
       attempt++;
       reconnectOptions.onReconnecting?.(attempt);
-      setFollowerTrayRuntimeStatus({
-        ...getFollowerTrayRuntimeStatus(),
+      status.set({
+        ...status.get(),
         state: 'reconnecting',
         error: null,
         reconnectAttempts: attempt,
@@ -817,8 +854,8 @@ export function startFollowerWithAutoReconnect(
 
         // Success — reset state and notify
         reconnecting = false;
-        setFollowerTrayRuntimeStatus({
-          ...getFollowerTrayRuntimeStatus(),
+        status.set({
+          ...status.get(),
           state: 'connected',
           joinUrl: managerOptions.joinUrl,
           trayId: connection.trayId,
@@ -846,8 +883,8 @@ export function startFollowerWithAutoReconnect(
     // Gave up or cancelled
     if (!cancelled) {
       reconnecting = false;
-      setFollowerTrayRuntimeStatus({
-        ...getFollowerTrayRuntimeStatus(),
+      status.set({
+        ...status.get(),
         state: 'error',
         error: `Reconnect failed after ${attempt} attempts: ${lastError}`,
         reconnectAttempts: attempt,
@@ -921,16 +958,28 @@ function normalizeSessionDescription(
   return { type: description.type, sdp: description.sdp };
 }
 
+/**
+ * The `RTCIceCandidate` fields we read, each optional and `unknown` because the
+ * value arrives off an `icecandidate` event that browsers populate unevenly —
+ * every field below is type-guarded before use.
+ */
+interface RawIceCandidate {
+  candidate?: unknown;
+  sdpMid?: unknown;
+  sdpMLineIndex?: unknown;
+  usernameFragment?: unknown;
+}
+
 function normalizeIceCandidate(candidate: unknown): TrayIceCandidate | null {
   if (!candidate || typeof candidate !== 'object') return null;
-  const value = candidate as Record<string, unknown>;
-  return typeof value['candidate'] === 'string'
+  const value = candidate as RawIceCandidate;
+  return typeof value.candidate === 'string'
     ? {
-        candidate: value['candidate'],
-        sdpMid: typeof value['sdpMid'] === 'string' ? value['sdpMid'] : null,
-        sdpMLineIndex: typeof value['sdpMLineIndex'] === 'number' ? value['sdpMLineIndex'] : null,
+        candidate: value.candidate,
+        sdpMid: typeof value.sdpMid === 'string' ? value.sdpMid : null,
+        sdpMLineIndex: typeof value.sdpMLineIndex === 'number' ? value.sdpMLineIndex : null,
         usernameFragment:
-          typeof value['usernameFragment'] === 'string' ? value['usernameFragment'] : null,
+          typeof value.usernameFragment === 'string' ? value.usernameFragment : null,
       }
     : null;
 }

@@ -14,7 +14,9 @@ import type { BrowserAPI } from '../../cdp/index.js';
 import { getAccounts } from '../../providers/account-store.js';
 import type { TrayLeaveResult } from '../../scoops/tray-leave.js';
 import { storeTrayJoinUrl } from '../../scoops/tray-runtime-config.js';
+import type { SidecarRegistry } from '../../scoops/tray-sidecar.js';
 import type { PageLeaderTrayHandle } from '../page-leader-tray.js';
+import type { SidecarRegistryLike } from '../panel-rpc-handlers.js';
 import type { RemoteCdpPageBridge } from '../remote-cdp-page-bridge.js';
 
 /** JWT claim bag we read for account identity hashing. */
@@ -99,6 +101,82 @@ function truncatePreviewRecords(sync: ActiveLeaderSync, previewToken?: string) {
   };
 }
 
+/**
+ * The `ssh` bridge — commands run DOWN this instance's tray, on a follower that
+ * lent us its machine. The outbound counterpart is {@link createSidecarBridge}.
+ *
+ * The WebRTC data channels live on the page, so the kernel-worker `ssh` command
+ * reaches `LeaderSyncManager.execOnRemote` through here.
+ */
+function createRemoteExecBridge(getLeader: StandalonePanelRpcDeps['getLeader']) {
+  // Per-run AbortControllers for in-flight execs, keyed by the shell's
+  // `execToken` so a `tray-exec-signal` (Ctrl+C) can cancel the matching run.
+  const aborters = new Map<string, AbortController>();
+  return {
+    execOnRemote: async (payload: {
+      runtimeId: string;
+      command: string;
+      cwd?: string;
+      env?: Record<string, string>;
+      execToken: string;
+      timeoutMs?: number;
+      stdin?: string;
+    }) => {
+      const sync = getLeader()?.currentLeaderSync;
+      if (!sync) throw new Error('ssh: no active leader tray');
+      const controller = new AbortController();
+      aborters.set(payload.execToken, controller);
+      try {
+        return await sync.execOnRemote(payload.runtimeId, payload.command, {
+          cwd: payload.cwd,
+          env: payload.env,
+          stdin: payload.stdin,
+          signal: controller.signal,
+          timeoutMs: payload.timeoutMs,
+        });
+      } finally {
+        aborters.delete(payload.execToken);
+      }
+    },
+    signalRemoteExec: ({ execToken }: { execToken: string }) => {
+      // The AbortController carries no signal name; `execOnRemote` maps any
+      // abort to SIGINT on the follower, which is the Ctrl+C path.
+      aborters.get(execToken)?.abort();
+    },
+  };
+}
+
+/**
+ * The `slicc` sidecar bridge — outbound attachments to OTHER SLICC leaders,
+ * held while this instance keeps leading its own tray.
+ *
+ * The registry is built lazily so a page that never runs `slicc` never pulls
+ * `tray-sidecar.js` into its graph. Unlike the leader/follower handles in
+ * `wc-tray.ts`, sidecars are page-lifetime only — nothing persists them, so a
+ * reload deliberately starts with none.
+ */
+function createSidecarBridge(): SidecarRegistryLike {
+  let registry: SidecarRegistry | null = null;
+  const ensure = async (): Promise<SidecarRegistry> => {
+    if (!registry) {
+      const { SidecarRegistry: Registry } = await import('../../scoops/tray-sidecar.js');
+      registry = new Registry();
+    }
+    return registry;
+  };
+  return {
+    attach: async (opts) => await (await ensure()).attach(opts),
+    // The sync ops can only report on a registry that already exists —
+    // `detach` / `list` before any `attach` are correctly "nothing here", and
+    // awaiting the import would change their signatures for no gain.
+    detach: (name) => registry?.detach(name) ?? false,
+    list: () => registry?.list() ?? [],
+    prompt: async (name, text, options) => await (await ensure()).prompt(name, text, options),
+    exec: async (name, command, options) => await (await ensure()).exec(name, command, options),
+    watch: async (name, options) => await (await ensure()).watch(name, options),
+  };
+}
+
 export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Promise<void> {
   const {
     instanceId,
@@ -117,9 +195,7 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
   const { getLeaderPermissionsSurface } = await import('../wc/wc-permissions-registry.js');
   const panelRpcEventEmitter = createPanelRpcEventEmitter({ instanceId });
 
-  // Per-run AbortControllers for in-flight `ssh` execs, keyed by the shell's
-  // `execToken` so a `tray-exec-signal` (Ctrl+C) can cancel the matching run.
-  const execAborters = new Map<string, AbortController>();
+  const remoteExec = createRemoteExecBridge(getLeader);
   const stopPanelRpcHandler = installPanelRpcHandler({
     instanceId,
     handlers: createStandalonePanelRpcHandlers({
@@ -144,28 +220,9 @@ export async function setupStandalonePanelRpc(deps: StandalonePanelRpcDeps): Pro
       emitEvent: (channel, payload) => panelRpcEventEmitter.emit(channel, payload),
       emitCherrySliccEvent: (runtimeId, name, detail) =>
         getLeader()?.sync.emitCherrySliccEvent(runtimeId, name, detail) ?? false,
-      execOnRemote: async ({ runtimeId, command, cwd, env, execToken, timeoutMs, stdin }) => {
-        const sync = getLeader()?.currentLeaderSync;
-        if (!sync) throw new Error('ssh: no active leader tray');
-        const controller = new AbortController();
-        execAborters.set(execToken, controller);
-        try {
-          return await sync.execOnRemote(runtimeId, command, {
-            cwd,
-            env,
-            stdin,
-            signal: controller.signal,
-            timeoutMs,
-          });
-        } finally {
-          execAborters.delete(execToken);
-        }
-      },
-      signalRemoteExec: ({ execToken }) => {
-        // The AbortController carries no signal name; `execOnRemote` maps any
-        // abort to SIGINT on the follower, which is the Ctrl+C path.
-        execAborters.get(execToken)?.abort();
-      },
+      execOnRemote: remoteExec.execOnRemote,
+      signalRemoteExec: remoteExec.signalRemoteExec,
+      sliccSidecar: createSidecarBridge(),
       mintPreview: async (opts) => {
         const sync = getLeader()?.currentLeaderSync;
         if (!sync) throw new Error('serve: no active leader tray; cannot mint preview');

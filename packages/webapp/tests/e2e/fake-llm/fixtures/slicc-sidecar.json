@@ -1,0 +1,11 @@
+{
+  "model": "fake-cone-primary",
+  "models": ["fake-cone-primary", "fake-cone-alternate"],
+  "turns": [
+    {
+      "whenUserMessageMatches": "who are you",
+      "content": "I am the remote leader.",
+      "contentChunkSize": 8
+    }
+  ]
+}

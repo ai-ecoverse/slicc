@@ -46,6 +46,7 @@ import type {
 } from '../core/dock-tree-spec.js';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
 import type { TrayLeaveResult } from '../scoops/tray-leave.js';
+import type { SidecarAttachmentInfo, SidecarRunResult } from '../scoops/tray-sidecar.js';
 import type { SudoDecision, SudoRequest } from '../sudo/types.js';
 import type { HidDeviceFilter, HidDeviceInfo } from './hid-device-registry.js';
 import type { CameraCaptureRequest, CameraCaptureResult } from './panel-rpc-camera-types.js';
@@ -289,6 +290,71 @@ export type PanelRpcRequest =
       // keyed by its `execToken`. Fire-and-forget from the shell's view.
       op: 'tray-exec-signal';
       payload: { execToken: string };
+    }
+  | {
+      // --- `slicc` sidecar client ops (scoops/tray-sidecar.ts) -------------
+      // The mirror image of `tray-exec`: those ops drive followers of OUR tray,
+      // these drive a connection to SOMEONE ELSE'S leader while we keep leading
+      // our own. WebRTC has no worker surface, so the sidecar registry lives on
+      // the page and the `slicc` shell command bridges here.
+      //
+      // Attach to a remote leader's tray. Idempotent per join URL — an existing
+      // attachment for the same tray is returned rather than a second dialed.
+      op: 'slicc-attach';
+      payload: { joinUrl: string; name?: string; connectTimeoutMs?: number };
+    }
+  | {
+      // Drop one attachment (`false` when the name was already gone).
+      op: 'slicc-detach';
+      payload: { name: string };
+    }
+  | {
+      // List live attachments — the `slicc list` roster.
+      op: 'slicc-list';
+      payload: undefined;
+    }
+  | {
+      // Send one chat turn to the remote leader and buffer its assistant turn.
+      // `runToken` is a caller-minted correlation id `slicc-cancel` uses to
+      // interrupt the run (Ctrl+C), mirroring `tray-exec`'s `execToken`.
+      op: 'slicc-prompt';
+      payload: {
+        name: string;
+        text: string;
+        runToken: string;
+        steer?: boolean;
+        timeoutMs?: number;
+      };
+    }
+  | {
+      // Run a command in the REMOTE leader's virtual shell.
+      op: 'slicc-exec';
+      payload: {
+        name: string;
+        command: string;
+        runToken: string;
+        cwd?: string;
+        env?: Record<string, string>;
+        timeoutMs?: number;
+        /** base64-encoded stdin bytes; omitted when nothing was piped. */
+        stdin?: string;
+      };
+    }
+  | {
+      // Tail the remote leader's agent output for a bounded window.
+      op: 'slicc-watch';
+      payload: {
+        name: string;
+        runToken: string;
+        durationMs: number;
+        scoopJid?: string;
+        untilIdle?: boolean;
+      };
+    }
+  | {
+      // Cancel an in-flight sidecar run by its `runToken`. Fire-and-forget.
+      op: 'slicc-cancel';
+      payload: { runToken: string };
     }
   | {
       // Write the user-configured extra-OAuth-domains store for a
@@ -672,6 +738,13 @@ export interface PanelRpcResults {
   'tray-join': { joinUrl: string };
   'tray-exec': { stdout: string; stderr: string; exitCode: number; error?: string };
   'tray-exec-signal': { ok: true };
+  'slicc-attach': SidecarAttachmentInfo;
+  'slicc-detach': { detached: boolean };
+  'slicc-list': { attachments: SidecarAttachmentInfo[] };
+  'slicc-prompt': SidecarRunResult;
+  'slicc-exec': SidecarRunResult;
+  'slicc-watch': SidecarRunResult;
+  'slicc-cancel': { ok: true };
   'oauth-extras-set': { storeAfter: OAuthExtraDomainsStore };
   'save-oauth-accounts': { storedJson: string };
   'usb-list': { devices: UsbDeviceInfo[] };

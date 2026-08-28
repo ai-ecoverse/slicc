@@ -42,6 +42,13 @@ import {
 } from '../kernel/usb-device-registry.js';
 import * as usbOps from '../kernel/usb-operations.js';
 import type { LeaderTrayRuntimeStatus } from '../scoops/tray-leader.js';
+import type {
+  SidecarAttachmentInfo,
+  SidecarPromptOptions,
+  SidecarRunOptions,
+  SidecarRunResult,
+  SidecarWatchOptions,
+} from '../scoops/tray-sidecar.js';
 import { apiHeaders, resolveApiUrl } from '../shell/proxied-fetch.js';
 import { getAllExtraOAuthDomains, setExtraOAuthDomains } from './provider-settings.js';
 import type { RemoteCdpPageBridge } from './remote-cdp-page-bridge.js';
@@ -166,6 +173,16 @@ export interface StandalonePanelRpcHandlerOptions {
     stdin?: string;
   }) => Promise<{ stdout: string; stderr: string; exitCode: number; error?: string }>;
   /** Cancel an in-flight {@link StandalonePanelRpcHandlerOptions.execOnRemote}, keyed by execToken. */
+  /**
+   * The page-side `slicc` sidecar registry — attachments to OTHER SLICC
+   * leaders, held while this instance keeps leading its own tray. Wired by
+   * `setupStandalonePanelRpc`. Absent where the page can't hold a sidecar
+   * (tests, `uiOnly` shells); the `slicc-*` handlers then throw.
+   *
+   * Note the asymmetry with `execOnRemote` above: that one needs a live LEADER
+   * tray, this one needs no tray of our own at all.
+   */
+  sliccSidecar?: SidecarRegistryLike;
   signalRemoteExec?: (payload: { execToken: string }) => void;
   /**
    * Return the remote (follower) browser targets known to the page-side
@@ -216,6 +233,29 @@ export interface StandalonePanelRpcHandlerOptions {
 }
 
 /**
+ * The subset of `SidecarRegistry` (`scoops/tray-sidecar.ts`) these handlers
+ * drive. Structural on purpose: this module is imported by JSDOM tests that
+ * have no WebRTC, so it must not pull in the real registry — and a fake is a
+ * plain object literal rather than a class stub.
+ */
+export interface SidecarRegistryLike {
+  attach(opts: {
+    joinUrl: string;
+    name?: string;
+    connectTimeoutMs?: number;
+  }): Promise<SidecarAttachmentInfo>;
+  detach(name: string): boolean;
+  list(): SidecarAttachmentInfo[];
+  prompt(name: string, text: string, options?: SidecarPromptOptions): Promise<SidecarRunResult>;
+  exec(
+    name: string,
+    command: string,
+    options?: SidecarRunOptions & { cwd?: string; env?: Record<string, string>; stdin?: string }
+  ): Promise<SidecarRunResult>;
+  watch(name: string, options: SidecarWatchOptions): Promise<SidecarRunResult>;
+}
+
+/**
  * Build a record of handlers suitable for `installPanelRpcHandler`.
  * Pure factory so the handler set is easy to test under JSDOM.
  */
@@ -232,6 +272,7 @@ export function createStandalonePanelRpcHandlers(
     ...buildClipboardCaptureHandlers(options),
     ...buildHearHandlers(),
     ...buildTrayOauthHandlers(options),
+    ...buildSliccSidecarHandlers(options),
     ...buildUsbHandlers(),
     ...buildHidHandlers(options, hidSubscriptions),
     ...buildSerialHandlers(),
@@ -753,6 +794,76 @@ function buildTrayOauthHandlers(options: StandalonePanelRpcHandlerOptions) {
 }
 
 /** WebUSB ops over the shared page-side handle registry. */
+/**
+ * `slicc` sidecar client ops — the mirror image of the `tray-exec` pair above.
+ * Those drive followers of OUR tray; these drive a connection to SOMEONE ELSE'S
+ * leader while this instance keeps leading its own.
+ */
+function buildSliccSidecarHandlers(options: StandalonePanelRpcHandlerOptions) {
+  // Per-run AbortControllers for in-flight verbs, keyed by the shell's
+  // `runToken` so a `slicc-cancel` (Ctrl+C) can interrupt the matching run.
+  // Scoped to this builder's closure, not module state, so two handler sets in
+  // one test file don't share cancellation.
+  const runAborters = new Map<string, AbortController>();
+
+  /** The registry, or a diagnosable error naming why there isn't one. */
+  const requireSidecar = (): SidecarRegistryLike => {
+    if (!options.sliccSidecar) {
+      throw new Error('slicc: sidecar attachments are not available in this environment');
+    }
+    return options.sliccSidecar;
+  };
+
+  /** Run a verb under a cancellable token, always releasing the token after. */
+  const withRun = async <T>(
+    runToken: string,
+    run: (sidecar: SidecarRegistryLike, signal: AbortSignal) => Promise<T>
+  ): Promise<T> => {
+    const sidecar = requireSidecar();
+    const controller = new AbortController();
+    runAborters.set(runToken, controller);
+    try {
+      return await run(sidecar, controller.signal);
+    } finally {
+      runAborters.delete(runToken);
+    }
+  };
+
+  return {
+    'slicc-attach': async ({ joinUrl, name, connectTimeoutMs }) =>
+      await requireSidecar().attach({ joinUrl, name, connectTimeoutMs }),
+
+    'slicc-detach': ({ name }) => ({ detached: requireSidecar().detach(name) }),
+
+    'slicc-list': () => ({ attachments: requireSidecar().list() }),
+
+    'slicc-prompt': async ({ name, text, runToken, steer, timeoutMs }) =>
+      await withRun(
+        runToken,
+        async (sidecar, signal) => await sidecar.prompt(name, text, { steer, timeoutMs, signal })
+      ),
+
+    'slicc-exec': async ({ name, command, runToken, cwd, env, timeoutMs, stdin }) =>
+      await withRun(
+        runToken,
+        async (sidecar, signal) =>
+          await sidecar.exec(name, command, { cwd, env, timeoutMs, stdin, signal })
+      ),
+
+    'slicc-watch': async ({ name, runToken, durationMs, scoopJid, untilIdle }) =>
+      await withRun(
+        runToken,
+        async (sidecar, signal) =>
+          await sidecar.watch(name, { durationMs, scoopJid, untilIdle, signal })
+      ),
+
+    'slicc-cancel': ({ runToken }) => {
+      runAborters.get(runToken)?.abort();
+      return { ok: true };
+    },
+  } satisfies Partial<PanelRpcHandlers>;
+}
+
 function buildUsbHandlers() {
   return {
     'usb-list': async () => ({ devices: await usbOps.usbList(usbRegistry(), requireUsb()) }),
