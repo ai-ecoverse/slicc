@@ -114,6 +114,41 @@ async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
   });
 }
 
+interface ClearConeSessionDeps {
+  writer: ArchiveConeSessionDeps['writer'];
+  /** Root being cleared; `undefined` only if the roster is empty. */
+  root: RegisteredScoop | undefined;
+  client: Pick<OffscreenClient, 'clearAllMessages'>;
+  getController(): WcChatController | null;
+  log: BootStageLogger;
+  resetNewSessionTmp: typeof import('../new-session.js').resetNewSessionTmp;
+}
+
+/**
+ * The clear half of "New chat" — everything after the archive.
+ *
+ * Scratch cleanup runs first but is strictly best-effort. By the time we get
+ * here the archive is durable and, on the agentic path, the background memory
+ * curator is already running, so letting the `/tmp` sweep throw would leave
+ * the user with a frozen, curated archive and an uncleared chat: "New chat"
+ * that never started one. `/tmp` is scratch space SHARED across every cone,
+ * so a sibling cone writing there (an in-flight `npm install`) is enough to
+ * race the sweep into an ENOENT.
+ */
+async function clearConeSession(deps: ClearConeSessionDeps): Promise<void> {
+  try {
+    await deps.resetNewSessionTmp(deps.writer);
+  } catch (err) {
+    deps.log.warn('WC new session /tmp reset failed — clearing anyway', err);
+  }
+  await deps.client.clearAllMessages(deps.root?.jid);
+  deps.getController()?.loadMessages([]);
+  window.dispatchEvent(new CustomEvent(LEADER_BROADCAST_SNAPSHOT_EVENT));
+  void import('../../speech/dictation-priming.js')
+    .then(({ resetDictationPriming }) => resetDictationPriming())
+    .catch(() => undefined);
+}
+
 /** Caption at the top of a thawed chat naming the cone it was frozen from. */
 export function frozenProvenanceEl(
   doc: Document,
@@ -204,13 +239,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
             runNewSessionFreezeQuick,
           });
         }
-        await resetNewSessionTmp(writer);
-        await client.clearAllMessages(root?.jid);
-        getController()?.loadMessages([]);
-        window.dispatchEvent(new CustomEvent(LEADER_BROADCAST_SNAPSHOT_EVENT));
-        void import('../../speech/dictation-priming.js')
-          .then(({ resetDictationPriming }) => resetDictationPriming())
-          .catch(() => undefined);
+        await clearConeSession({ writer, root, client, getController, log, resetNewSessionTmp });
         refreshFreezer();
         // Stay on the cone we just cleared — its record may have been
         // replaced by a roster refresh, so re-resolve by jid.

@@ -280,6 +280,21 @@ export interface RunNewSessionFreezeOptions {
 
 type NewSessionTmpVfs = Pick<WritableVfsClient, 'listMountPoints' | 'mkdir' | 'readDir' | 'rm'>;
 
+/**
+ * `true` when a VFS error says the entry is already gone — which is the goal
+ * state of a delete, not a failure.
+ *
+ * The sweep is inherently racy: `/tmp` is shared scratch, so a sibling cone or
+ * a scoop can remove an entry between our `readDir` and our `rm`. A real case:
+ * a cone running `npm install` under `/tmp/rv` deleted
+ * `…/ajv/dist/refs/json-schema-secure.json` mid-sweep and the resulting ENOENT
+ * aborted the whole "New chat". Anything other than ENOENT (EIO, EPERM) is a
+ * genuine fault and still propagates.
+ */
+function isAlreadyGone(err: unknown): boolean {
+  return (err as { code?: string } | null)?.code === 'ENOENT';
+}
+
 async function removeDirectoryEntries(
   vfs: NewSessionTmpVfs,
   parentPath: string,
@@ -290,10 +305,21 @@ async function removeDirectoryEntries(
     const childPath = `${parentPath}/${entry.name}`;
     if (mountRoots.has(childPath)) continue;
     if (entry.type === 'directory') {
-      await removeDirectoryEntries(vfs, childPath, await vfs.readDir(childPath), mountRoots);
+      let children: DirEntry[];
+      try {
+        children = await vfs.readDir(childPath);
+      } catch (err) {
+        if (isAlreadyGone(err)) continue;
+        throw err;
+      }
+      await removeDirectoryEntries(vfs, childPath, children, mountRoots);
       if ([...mountRoots].some((mountRoot) => mountRoot.startsWith(`${childPath}/`))) continue;
     }
-    await vfs.rm(childPath);
+    try {
+      await vfs.rm(childPath);
+    } catch (err) {
+      if (!isAlreadyGone(err)) throw err;
+    }
   }
 }
 

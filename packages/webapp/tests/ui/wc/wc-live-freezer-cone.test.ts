@@ -6,7 +6,7 @@
  * the default root, which is the pre-multiple-cones behaviour.
  */
 
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it, type Mock, vi } from 'vitest';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
 installWcDomStubs();
@@ -41,6 +41,7 @@ vi.mock('../../../src/speech/dictation-priming.js', () => ({
 }));
 
 import type { RegisteredScoop } from '../../../src/scoops/types.js';
+import { resetNewSessionTmp } from '../../../src/ui/new-session.js';
 import type { OffscreenClient } from '../../../src/ui/offscreen-client.js';
 import { frozenProvenanceEl, wireFreezerRail } from '../../../src/ui/wc/wc-live-freezer.js';
 
@@ -82,6 +83,7 @@ interface Harness {
   freezer: HTMLElement;
   thread: HTMLElement;
   loaded: unknown[][];
+  log: { debug: Mock; info: Mock; warn: Mock; error: Mock };
   clearCalls: Array<string | undefined>;
   selected: RegisteredScoop | null;
   selections: string[];
@@ -90,6 +92,7 @@ interface Harness {
 }
 
 function harness(selected: RegisteredScoop | null): Harness {
+  const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
   const files = new Map<string, string>();
   const clearCalls: Array<string | undefined> = [];
   const selections: string[] = [];
@@ -121,6 +124,7 @@ function harness(selected: RegisteredScoop | null): Harness {
     freezer,
     thread,
     loaded,
+    log,
     clearCalls,
     selected,
     selections,
@@ -154,7 +158,7 @@ function harness(selected: RegisteredScoop | null): Harness {
     clearSelection: () => {
       state.selected = null;
     },
-    log: { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() } as never,
+    log: log as never,
   });
   return state;
 }
@@ -214,6 +218,34 @@ describe('New chat targets the selected cone (#2272)', () => {
     expect(freezeCalls).toEqual([]);
     expect(state.clearCalls).toEqual(['cone_2']);
   });
+});
+
+describe('scratch cleanup never blocks the clear', () => {
+  // Regression: the `/tmp` sweep threw ENOENT because a sibling cone was
+  // running `npm install` in the shared scratch directory. That aborted
+  // `runNewSession` *after* the archive was durable and the background memory
+  // curator had been kicked off — so the archive landed, memories were
+  // curated, and the chat was never cleared: "New chat" with no new chat.
+  for (const action of ['save', 'skip', 'erase'] as const) {
+    it(`clears the cone when the /tmp reset fails (${action})`, async () => {
+      freezeCalls.length = 0;
+      const enoent = Object.assign(new Error('ENOENT: unlink /tmp/rv/node_modules/x'), {
+        code: 'ENOENT',
+      });
+      vi.mocked(resetNewSessionTmp).mockRejectedValueOnce(enoent);
+      const state = harness(research);
+
+      await runNewChat(state, action);
+
+      expect(state.clearCalls).toEqual(['cone_2']);
+      expect(state.loaded.at(-1)).toEqual([]);
+      expect(state.selections.at(-1)).toBe('cone_2');
+      // Reported, not swallowed silently — and not escalated to the
+      // `error` branch that means "New chat failed".
+      expect(state.log.warn).toHaveBeenCalled();
+      expect(state.log.error).not.toHaveBeenCalled();
+    });
+  }
 });
 
 describe('thaw fallback follows the archive (#2272)', () => {
