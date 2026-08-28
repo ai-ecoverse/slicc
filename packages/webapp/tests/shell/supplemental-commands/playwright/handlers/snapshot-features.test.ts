@@ -61,6 +61,7 @@ function makeBrowser(opts?: { evaluateResult?: unknown }) {
   const evaluate = vi.fn(async () => opts?.evaluateResult ?? null);
   const createPage = vi.fn(async () => TAB);
   const setViewportOverride = vi.fn(async () => undefined);
+  const navigate = vi.fn(async () => undefined);
   const browser = {
     withTab: async <T>(_t: string, fn: (sessionId: string) => Promise<T>) => fn('session-1'),
     getTransport: () => ({ send: vi.fn(async () => ({})) }),
@@ -69,8 +70,9 @@ function makeBrowser(opts?: { evaluateResult?: unknown }) {
     evaluate,
     createPage,
     setViewportOverride,
+    navigate,
   } as unknown as BrowserAPI;
-  return { browser, screenshot, evaluate, createPage, setViewportOverride };
+  return { browser, screenshot, evaluate, createPage, setViewportOverride, navigate };
 }
 
 const okFs = (): Partial<VirtualFS> => ({ writeFile: vi.fn(async () => undefined) });
@@ -91,14 +93,16 @@ describe('snapshot --depth', () => {
     expect(result.stdout).toContain('Page URL: https://x');
   });
 
-  it('rejects a non-integer depth', async () => {
+  it('rejects a non-integer depth, including trailing garbage parseInt would eat', async () => {
     mockTakeSnapshot();
     const { browser } = makeBrowser();
-    const result = await snapshotHandler(
-      createHandlerCtx({ browser, flags: { tab: TAB, depth: 'nope' } })
-    );
-    expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('--depth must be a positive integer');
+    for (const bad of ['nope', '2abc', '0', '-1', '2.5']) {
+      const result = await snapshotHandler(
+        createHandlerCtx({ browser, flags: { tab: TAB, depth: bad } })
+      );
+      expect(result.exitCode, `--depth=${bad}`).toBe(1);
+      expect(result.stderr).toContain('--depth must be a positive integer');
+    }
   });
 });
 
@@ -249,8 +253,8 @@ describe('screenshot --type / --hires', () => {
 });
 
 describe('open --mobile', () => {
-  it('applies sticky mobile emulation to the new tab', async () => {
-    const { browser, setViewportOverride } = makeBrowser();
+  it('creates the tab blank, applies the mobile identity, then navigates', async () => {
+    const { browser, setViewportOverride, createPage, navigate } = makeBrowser();
     const result = await openHandler(
       createHandlerCtx({
         browser,
@@ -260,6 +264,9 @@ describe('open --mobile', () => {
       })
     );
     expect(result.exitCode).toBe(0);
+    // The first document request must already carry the mobile UA — creating
+    // the tab directly on the URL would fetch it with the desktop identity.
+    expect(createPage).toHaveBeenCalledWith('about:blank');
     expect(setViewportOverride).toHaveBeenCalledWith(
       TAB,
       412,
@@ -270,10 +277,24 @@ describe('open --mobile', () => {
         userAgent: expect.stringContaining('Mobile Safari'),
       })
     );
+    expect(navigate).toHaveBeenCalledWith('https://example.com');
+    const overrideOrder = setViewportOverride.mock.invocationCallOrder[0];
+    const navigateOrder = navigate.mock.invocationCallOrder[0];
+    expect(overrideOrder).toBeLessThan(navigateOrder);
+  });
+
+  it('does not navigate a --mobile tab opened on about:blank', async () => {
+    const { browser, setViewportOverride, navigate } = makeBrowser();
+    const result = await openHandler(
+      createHandlerCtx({ browser, state: createPlaywrightState(), flags: { mobile: 'true' } })
+    );
+    expect(result.exitCode).toBe(0);
+    expect(setViewportOverride).toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
   });
 
   it('does not apply emulation without --mobile', async () => {
-    const { browser, setViewportOverride } = makeBrowser();
+    const { browser, setViewportOverride, createPage, navigate } = makeBrowser();
     await openHandler(
       createHandlerCtx({
         browser,
@@ -282,6 +303,8 @@ describe('open --mobile', () => {
         flags: {},
       })
     );
+    expect(createPage).toHaveBeenCalledWith('https://example.com');
     expect(setViewportOverride).not.toHaveBeenCalled();
+    expect(navigate).not.toHaveBeenCalled();
   });
 });

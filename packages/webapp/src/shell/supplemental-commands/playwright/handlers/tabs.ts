@@ -7,7 +7,7 @@ import { fetchAndDiscover } from '../discover.js';
 import { getActionablePages, resolveAppTabId } from '../snapshot.js';
 import { requireTab } from '../state.js';
 import { armTeleportWatcher, cleanupTeleportWatcher } from '../teleport.js';
-import type { PlaywrightHandler } from '../types.js';
+import type { PlaywrightHandler, PlaywrightHandlerCtx } from '../types.js';
 
 const log = createLogger('playwright');
 
@@ -17,33 +17,105 @@ const log = createLogger('playwright');
  * chromium default), not a specific named device.
  */
 const MOBILE_VIEWPORT = { width: 412, height: 915, deviceScaleFactor: 2.625 };
+// Reduced-UA format, so only the major version ages; bump it alongside
+// browser majors when it drifts far enough for sites to care.
 const MOBILE_USER_AGENT =
   'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) ' +
   'Chrome/131.0.0.0 Mobile Safari/537.36';
 
+/**
+ * Arm a teleport watcher from `open`/`tab-new` flags (--teleport-start +
+ * --teleport-return). Returns an error result for an invalid regex, or null
+ * when armed / not requested.
+ */
+function armTeleportFromFlags(
+  browser: PlaywrightHandlerCtx['browser'],
+  state: PlaywrightHandlerCtx['state'],
+  flags: Record<string, string>,
+  url: string,
+  targetId: string
+): { stdout: string; stderr: string; exitCode: number } | null {
+  const teleStartStr = flags['teleport-start'];
+  const teleReturnStr = flags['teleport-return'];
+  if (!teleStartStr || !teleReturnStr) return null;
+
+  log.info('Arming teleport via open/tab-new flags');
+  log.debug('Arming teleport via open/tab-new flags details', {
+    targetId,
+    startPattern: teleStartStr,
+    returnPattern: teleReturnStr,
+  });
+  let teleStart: RegExp;
+  let teleReturn: RegExp;
+  try {
+    teleStart = new RegExp(teleStartStr);
+  } catch {
+    return {
+      stdout: '',
+      stderr: `Invalid regex for --teleport-start: ${teleStartStr}\n`,
+      exitCode: 1,
+    };
+  }
+  try {
+    teleReturn = new RegExp(teleReturnStr);
+  } catch {
+    return {
+      stdout: '',
+      stderr: `Invalid regex for --teleport-return: ${teleReturnStr}\n`,
+      exitCode: 1,
+    };
+  }
+  const teleTimeout = flags['timeout'] ? parseInt(flags['timeout'], 10) : 300;
+  const existingWatcher = state.teleportWatchers.get(targetId);
+  if (existingWatcher) {
+    cleanupTeleportWatcher(existingWatcher);
+    state.teleportWatchers.delete(targetId);
+  }
+  armTeleportWatcher(
+    browser,
+    state,
+    teleStart,
+    teleReturn,
+    teleTimeout * 1000,
+    flags['teleport-runtime'],
+    url,
+    targetId
+  );
+  return null;
+}
+
 export const openHandler: PlaywrightHandler = async ({ browser, fs, state, positional, flags }) => {
   const url = positional[0] || 'about:blank';
   const runtimeFlag = flags['runtime'];
+  const mobile = flags['mobile'] === 'true';
   await resolveAppTabId(browser, state);
 
+  // --mobile: the tab is created BLANK, given the mobile identity, and only
+  // then navigated — creating it on `url` directly would race the first
+  // document request out with the desktop UA, and the site would serve its
+  // desktop page (the exact thing --mobile exists to avoid).
+  const initialUrl = mobile ? 'about:blank' : url;
   let targetId: string;
   if (runtimeFlag) {
     // Open a tab on a remote runtime within the tray
-    targetId = await browser.createRemotePage(runtimeFlag, url);
+    targetId = await browser.createRemotePage(runtimeFlag, initialUrl);
   } else {
-    targetId = await browser.createPage(url);
+    targetId = await browser.createPage(initialUrl);
   }
 
-  // --mobile: generic-mobile-device emulation (metrics + touch-layout viewport
-  // + Android Chrome UA so sites serve their mobile layout, which is usually
+  // Generic-mobile-device emulation (metrics + touch-layout viewport +
+  // Android Chrome UA so sites serve their mobile layout, which is usually
   // lighter and saves tokens). Sticky per target — re-applied on every fresh
   // attach, same mechanism as `resize`.
-  if (flags['mobile'] === 'true') {
+  if (mobile) {
     await browser.setViewportOverride(targetId, MOBILE_VIEWPORT.width, MOBILE_VIEWPORT.height, {
       deviceScaleFactor: MOBILE_VIEWPORT.deviceScaleFactor,
       mobile: true,
       userAgent: MOBILE_USER_AGENT,
     });
+    if (url !== 'about:blank') {
+      await browser.withTab(targetId, async () => browser.navigate(url));
+    }
   }
 
   // Tabs open in the background; --foreground / --fg raises the new tab to the
@@ -63,53 +135,8 @@ export const openHandler: PlaywrightHandler = async ({ browser, fs, state, posit
     }
   }
 
-  // Arm teleport watcher if --teleport-start and --teleport-return are set
-  const teleStartStr = flags['teleport-start'];
-  const teleReturnStr = flags['teleport-return'];
-  if (teleStartStr && teleReturnStr) {
-    log.info('Arming teleport via open/tab-new flags');
-    log.debug('Arming teleport via open/tab-new flags details', {
-      targetId,
-      startPattern: teleStartStr,
-      returnPattern: teleReturnStr,
-    });
-    let teleStart: RegExp;
-    let teleReturn: RegExp;
-    try {
-      teleStart = new RegExp(teleStartStr);
-    } catch {
-      return {
-        stdout: '',
-        stderr: `Invalid regex for --teleport-start: ${teleStartStr}\n`,
-        exitCode: 1,
-      };
-    }
-    try {
-      teleReturn = new RegExp(teleReturnStr);
-    } catch {
-      return {
-        stdout: '',
-        stderr: `Invalid regex for --teleport-return: ${teleReturnStr}\n`,
-        exitCode: 1,
-      };
-    }
-    const teleTimeout = flags['timeout'] ? parseInt(flags['timeout'], 10) : 300;
-    const existingWatcher = state.teleportWatchers.get(targetId);
-    if (existingWatcher) {
-      cleanupTeleportWatcher(existingWatcher);
-      state.teleportWatchers.delete(targetId);
-    }
-    armTeleportWatcher(
-      browser,
-      state,
-      teleStart,
-      teleReturn,
-      teleTimeout * 1000,
-      flags['teleport-runtime'],
-      url,
-      targetId
-    );
-  }
+  const teleportError = armTeleportFromFlags(browser, state, flags, url, targetId);
+  if (teleportError) return teleportError;
 
   // --discover triggers an auxiliary proxied fetch on the URL so we
   // can parse RFC 8288 Link headers and (optionally) run P0 discovery.

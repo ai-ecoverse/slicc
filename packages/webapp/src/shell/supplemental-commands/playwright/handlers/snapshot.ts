@@ -131,14 +131,16 @@ export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, f
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const noIframes = flags['no-iframes'] === 'true';
-  const depth = flags['depth'] === undefined ? undefined : parseInt(flags['depth'], 10);
-  if (depth !== undefined && (!Number.isInteger(depth) || depth < 1)) {
+  const depthRaw = flags['depth'];
+  // Strict digits-only — parseInt would silently read "2abc" as 2.
+  if (depthRaw !== undefined && !/^[1-9][0-9]*$/.test(depthRaw)) {
     return {
       stdout: '',
-      stderr: `snapshot: --depth must be a positive integer, got "${flags['depth']}"\n`,
+      stderr: `snapshot: --depth must be a positive integer, got "${depthRaw}"\n`,
       exitCode: 1,
     };
   }
+  const depth = depthRaw === undefined ? undefined : parseInt(depthRaw, 10);
   const boxes = flags['boxes'] === 'true';
   if (boxes && flags['frame']) {
     return {
