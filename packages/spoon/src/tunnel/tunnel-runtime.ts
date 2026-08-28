@@ -207,6 +207,15 @@ export function makeTunneledWebSocket(client: TunnelClient): typeof WebSocket {
       } else if (res.op === 'ws-err') {
         this.readyState = 3;
         this.#emit('error', new Event('error'));
+        // A real socket always follows `error` with `close`, and the
+        // controller sends no further frame for a failed socket (the client
+        // drops the listener on this terminal op). Consumers drive recovery
+        // from `onclose` — the bridge and CDP clients only *log* `onerror` —
+        // so without this an error is a silent, permanent disconnect.
+        this.#emit(
+          'close',
+          new CloseEvent('close', { code: 1006, reason: res.message, wasClean: false })
+        );
       }
     }
     send(data: string | ArrayBufferLike | Blob | ArrayBufferView): void {

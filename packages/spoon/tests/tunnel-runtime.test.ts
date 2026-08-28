@@ -474,6 +474,23 @@ describe('tunnelled WebSocket', () => {
     expect(sock.readyState).toBe(Sock.CLOSED);
   });
 
+  it('follows a transport error with a close, so reconnect logic still runs', () => {
+    const { ctl, Sock } = harness();
+    const sock = new Sock('wss://hosted.test/bridge');
+    const id = ctl.sent[0]!.id;
+    const events: string[] = [];
+    sock.onerror = () => events.push('error');
+    sock.onclose = (event) => events.push(`close:${event.code}:${event.wasClean}`);
+
+    ctl.answer({ op: 'ws-err', id, message: 'refused' });
+
+    // A real socket always closes after an error, and the controller sends no
+    // further frame for a failed socket — consumers that reconnect from
+    // `onclose` (and only log `onerror`) would otherwise wait forever.
+    expect(events).toEqual(['error', 'close:1006:false']);
+    expect(sock.readyState).toBe(Sock.CLOSED);
+  });
+
   it('fires onclose for a remote close and onerror for a transport error', () => {
     const { ctl, Sock } = harness();
     const remote = new Sock('wss://hosted.test/a');
