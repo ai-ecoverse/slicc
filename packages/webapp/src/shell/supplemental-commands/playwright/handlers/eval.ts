@@ -74,9 +74,13 @@ export const evalHandler: PlaywrightHandler = async ({ browser, fs, positional, 
     const evalResult = await evaluateWithTopLevelAwait(evaluate, expression);
     return typeof evalResult === 'string' ? evalResult : JSON.stringify(evalResult, null, 2);
   });
-  if (flags['filename']) {
-    await fs.writeFile(flags['filename'], output ?? 'null');
-    return { stdout: `Result saved to ${flags['filename']}\n`, stderr: '', exitCode: 0 };
+  // --output is accepted as an alias so eval and eval-file agree; before, the
+  // manifest declared it here but only eval-file read it — `eval --output=…`
+  // exited 0 with the file never written.
+  const savePath = flags['filename'] ?? flags['output'];
+  if (savePath) {
+    await fs.writeFile(savePath, output ?? 'null');
+    return { stdout: `Result saved to ${savePath}\n`, stderr: '', exitCode: 0 };
   }
   return { stdout: (output ?? 'undefined') + '\n', stderr: '', exitCode: 0 };
 };
@@ -90,7 +94,8 @@ export const evalFileHandler: PlaywrightHandler = async ({ browser, fs, position
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
   const scriptPath = positional[0];
-  const outputPath = flags['output'];
+  // --filename is accepted as an alias so eval-file and eval agree.
+  const outputPath = flags['output'] ?? flags['filename'];
 
   let scriptContent: string;
   try {

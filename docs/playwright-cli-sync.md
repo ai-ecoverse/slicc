@@ -121,9 +121,10 @@ prioritized checklist.
 
 ## Current gap state
 
-As of the initial implementation, Slicc is missing 30 commands and has 8 flag gaps.
-The gaps are organized into implementation phases in the project plan. Run the script
-to see the live state.
+Run the script to see the live state. As of the last audit the open gaps are
+8 missing commands (`find`, `tracing-start`/`tracing-stop`, and the `video-*`
+family) and 3 flag gaps (`open --device/--mobile`, `snapshot --depth/--boxes`,
+`screenshot --type/--hires`) awaiting an implement-or-skip decision.
 
 ## Catching future changes automatically (optional)
 

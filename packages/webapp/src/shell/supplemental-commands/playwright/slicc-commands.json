@@ -482,7 +482,8 @@
       "flags": {
         "tab": "string",
         "frame": "string",
-        "output": "string"
+        "output": "string",
+        "filename": "string"
       }
     },
     "navigate": {

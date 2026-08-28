@@ -108,23 +108,12 @@ async function resolveElementClip(
   return clipFromSelector(browser, selector);
 }
 
-export const snapshotHandler: PlaywrightHandler = async ({
-  browser,
-  fs,
-  state,
-  positional,
-  flags,
-}) => {
+export const snapshotHandler: PlaywrightHandler = async ({ browser, fs, state, flags }) => {
   const tab = requireTab(flags);
   if ('error' in tab) {
     return { stdout: '', stderr: tab.error, exitCode: 1 };
   }
-  // ponytail: [target] positional arg for partial snapshots not yet wired
-  const _target = positional[0];
   const noIframes = flags['no-iframes'] === 'true';
-  // ponytail: depth/boxes not yet wired to injected script
-  const _depth = flags['depth'] ? parseInt(flags['depth'], 10) : undefined;
-  const _boxes = flags['boxes'] === 'true';
   const output = await browser.withTab(tab.targetId, async () => {
     const frame = await resolveFrame(browser, flags);
     if (frame) return takeFrameSnapshot(browser, state, tab.targetId, frame);

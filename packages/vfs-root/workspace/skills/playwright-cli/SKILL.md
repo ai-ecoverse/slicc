@@ -76,12 +76,12 @@ All commands below that operate on a tab require `--tab=<targetId>`.
 ```bash
 playwright-cli open [url] [--foreground]                          # Open tab (background by default), returns targetId
 playwright-cli tab-new [url] [--foreground]                       # Same as open
-playwright-cli tab-close --tab=<id>                               # Close tab
+playwright-cli tab-close --tab=<id>                               # Close tab (alias: close)
 playwright-cli goto --tab=<id> <url>                              # Navigate tab
 playwright-cli navigate --tab=<id> <url>                          # Alias for goto
 playwright-cli snapshot --tab=<id> [--frame=<frameId>] [--no-iframes] [--filename=path]  # Tab tree or one frame subtree
-playwright-cli eval --tab=<id> [--frame=<frameId>] <expression> [--filename=path]  # Evaluate JS in a tab/frame, incl. top-level await/return; use `--` before an expression that starts with `-`
-playwright-cli eval-file --tab=<id> [--frame=<frameId>] <vfs-path>  # Evaluate JS from a VFS file in a tab/frame (top-level await/return supported)
+playwright-cli eval --tab=<id> [--frame=<frameId>] <expression> [--filename=path|--output=path]  # Evaluate JS in a tab/frame, incl. top-level await/return; use `--` before an expression that starts with `-`
+playwright-cli eval-file --tab=<id> [--frame=<frameId>] <vfs-path> [--output=path|--filename=path]  # Evaluate JS from a VFS file in a tab/frame (top-level await/return supported)
 playwright-cli frames --tab=<id>                                  # List frame IDs for --frame (not --tab)
 playwright-cli resize --tab=<id> <width> <height>                 # Resize viewport
 ```
