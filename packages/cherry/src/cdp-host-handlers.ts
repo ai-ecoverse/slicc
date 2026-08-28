@@ -16,12 +16,38 @@ export interface CdpHostHandlerOptions {
   onOpenUrl?: (url: string) => void;
 }
 
-type Handler = (
-  method: string,
-  params: Record<string, unknown>
-) => Promise<Record<string, unknown>>;
+/**
+ * Open-ended CDP method params / results. Per-method shapes are probed at the
+ * call site; Cherry does not validate the full CDP schema.
+ */
+// biome-ignore lint/plugin: CDP params/result are per-method and open-ended; Cherry relays them without validating the full CDP schema, so there is no narrower shape to name here.
+export type CdpPayload = Record<string, unknown>;
 
-export function createCdpHostHandler(opts: CdpHostHandlerOptions): Handler {
+/** CDP Runtime.RemoteObject-shaped value returned by Runtime.evaluate. */
+export type RemoteObject =
+  | { type: 'object'; subtype: 'null'; value: null }
+  | { type: 'undefined' }
+  | { type: 'number' | 'boolean' | 'string'; value: number | boolean | string }
+  | { type: 'object'; subtype: 'error' }
+  | { type: 'object'; description: string };
+
+type Handler = (method: string, params: CdpPayload) => Promise<CdpPayload>;
+
+type MethodHandler = (params: CdpPayload) => Promise<CdpPayload>;
+
+function toRemoteObject(value: unknown): RemoteObject {
+  if (value === null) return { type: 'object', subtype: 'null', value: null };
+  if (typeof value === 'undefined') return { type: 'undefined' };
+  if (typeof value === 'number') return { type: 'number', value };
+  if (typeof value === 'boolean') return { type: 'boolean', value };
+  if (typeof value === 'string') return { type: 'string', value };
+  return { type: 'object', description: String(value) };
+}
+
+function createNodeIdMaps(): {
+  idFor: (node: Node) => number;
+  nodesById: Map<number, Node>;
+} {
   const nodeIds = new WeakMap<Node, number>();
   // Strong node ref by id: unbounded by design for the session lifetime. A very
   // long-lived host session pins every queried node; acceptable for typical
@@ -39,15 +65,105 @@ export function createCdpHostHandler(opts: CdpHostHandlerOptions): Handler {
     return id;
   };
 
-  const toRemoteObject = (value: unknown): Record<string, unknown> => {
-    const type = typeof value;
-    if (value === null) return { type: 'object', subtype: 'null', value: null };
-    if (type === 'undefined') return { type: 'undefined' };
-    if (type === 'number' || type === 'boolean' || type === 'string') {
-      return { type, value };
-    }
-    return { type: 'object', description: String(value) };
-  };
+  return { idFor, nodesById };
+}
+
+async function handleRuntimeEvaluate(
+  params: CdpPayload,
+  evalInRealm: (src: string) => unknown
+): Promise<CdpPayload> {
+  const expression = String(params.expression ?? '');
+  try {
+    const value = evalInRealm(expression);
+    const resolved = value instanceof Promise ? await value : value;
+    return { result: toRemoteObject(resolved) };
+  } catch (err) {
+    return {
+      result: { type: 'object', subtype: 'error' },
+      exceptionDetails: {
+        text: err instanceof Error ? err.message : String(err),
+        exception: { type: 'object', description: String(err) },
+      },
+    };
+  }
+}
+
+function handleDomQuerySelector(
+  params: CdpPayload,
+  nodesById: Map<number, Node>,
+  idFor: (node: Node) => number
+): CdpPayload {
+  const root = nodesById.get(Number(params.nodeId)) ?? document;
+  const sel = String(params.selector ?? '');
+  const el = (root as ParentNode).querySelector?.(sel) ?? null;
+  return { nodeId: el ? idFor(el) : 0 };
+}
+
+function handleDomGetBoxModel(params: CdpPayload, nodesById: Map<number, Node>): CdpPayload {
+  const node = nodesById.get(Number(params.nodeId));
+  const el = node as Element | undefined;
+  const r = el?.getBoundingClientRect?.();
+  if (!r) throw new CherryUnsupportedError('DOM.getBoxModel(no-rect)');
+  const quad = [r.left, r.top, r.right, r.top, r.right, r.bottom, r.left, r.bottom];
+  return { model: { content: quad, width: r.width, height: r.height } };
+}
+
+function handleDispatchMouseEvent(params: CdpPayload): CdpPayload {
+  const x = Number(params.x ?? 0);
+  const y = Number(params.y ?? 0);
+  const target = document.elementFromPoint(x, y);
+  if (target && params.type === 'mousePressed') {
+    (target as HTMLElement).dispatchEvent(
+      new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y })
+    );
+  }
+  return {};
+}
+
+function handleDispatchKeyEvent(params: CdpPayload): CdpPayload {
+  const active = document.activeElement as HTMLElement | null;
+  if (active && params.type === 'keyDown' && typeof params.key === 'string') {
+    active.dispatchEvent(new KeyboardEvent('keydown', { key: params.key, bubbles: true }));
+  }
+  return {};
+}
+
+async function handleCaptureScreenshot(
+  capabilities: CdpHostHandlerOptions['capabilities']
+): Promise<CdpPayload> {
+  if (capabilities.screenshot !== 'html2canvas') {
+    throw new CherryUnsupportedError('Page.captureScreenshot');
+  }
+  // Use the maintained `html2canvas-pro` fork (drop-in API): the original
+  // `html2canvas@1.4.1` predates CSS Color 4 and throws on modern color
+  // syntax ("unsupported color function 'color'") — common on real host
+  // pages. The capability value stays `'html2canvas'` (the rasterization
+  // strategy), only the implementation lib differs.
+  const { default: html2canvas } = await import('html2canvas-pro');
+  const canvas = await html2canvas(document.body);
+  const data = canvas.toDataURL('image/png').split(',')[1] ?? '';
+  return { data };
+}
+
+function handlePageNavigate(
+  params: CdpPayload,
+  capabilities: CdpHostHandlerOptions['capabilities']
+): CdpPayload {
+  if (!capabilities.navigate) throw new CherryUnsupportedError('Page.navigate');
+  const url = String(params.url ?? '');
+  location.assign(url);
+  return { frameId: 'cherry-frame', loaderId: 'cherry-loader' };
+}
+
+function handleCreateTarget(params: CdpPayload, opts: CdpHostHandlerOptions): CdpPayload {
+  if (!opts.capabilities.openUrl) throw new CherryUnsupportedError('Target.createTarget');
+  const url = String(params.url ?? '');
+  opts.onOpenUrl?.(url);
+  return { targetId: 'cherry-opened' };
+}
+
+export function createCdpHostHandler(opts: CdpHostHandlerOptions): Handler {
+  const { idFor, nodesById } = createNodeIdMaps();
 
   // Host-CSP-governs-eval invariant: we delegate to the page realm's own
   // evaluator via indirect eval. Aliasing `eval` to a variable and calling
@@ -59,96 +175,36 @@ export function createCdpHostHandler(opts: CdpHostHandlerOptions): Handler {
   const indirectEval: typeof eval = eval;
   const evalInRealm = indirectEval as (src: string) => unknown;
 
+  // Two-tier gating model (by design, not an oversight):
+  //  - The `capabilities` booleans gate side effects that ESCAPE the page
+  //    sandbox — navigate (top-level navigation), screenshot (screen capture),
+  //    openUrl (new window/tab). These are checked here and fail closed.
+  //  - DOM read/query and Input (clicking/typing WITHIN the embedded page) are
+  //    the baseline driveable-CDP-target contract the host opted into by
+  //    calling mountSlicc. Per-domain authorization (including denying the
+  //    whole Input/DOM domain) is enforced UPSTREAM via onPermissionRequest at
+  //    the mount layer, so we intentionally do not re-gate them here.
+  const methods: { [method: string]: MethodHandler } = {
+    'Runtime.evaluate': (params) => handleRuntimeEvaluate(params, evalInRealm),
+    'DOM.getDocument': async () => ({
+      root: { nodeId: idFor(document), nodeName: '#document', childNodeCount: 1 },
+    }),
+    'DOM.querySelector': async (params) => handleDomQuerySelector(params, nodesById, idFor),
+    'DOM.getBoxModel': async (params) => handleDomGetBoxModel(params, nodesById),
+    'Input.dispatchMouseEvent': async (params) => handleDispatchMouseEvent(params),
+    'Input.dispatchKeyEvent': async (params) => handleDispatchKeyEvent(params),
+    'Page.captureScreenshot': async () => handleCaptureScreenshot(opts.capabilities),
+    'Page.navigate': async (params) => handlePageNavigate(params, opts.capabilities),
+    'Target.createTarget': async (params) => handleCreateTarget(params, opts),
+  };
+
   return async function handle(method, params) {
-    // Two-tier gating model (by design, not an oversight):
-    //  - The `capabilities` booleans gate side effects that ESCAPE the page
-    //    sandbox — navigate (top-level navigation), screenshot (screen capture),
-    //    openUrl (new window/tab). These are checked here and fail closed.
-    //  - DOM read/query and Input (clicking/typing WITHIN the embedded page) are
-    //    the baseline driveable-CDP-target contract the host opted into by
-    //    calling mountSlicc. Per-domain authorization (including denying the
-    //    whole Input/DOM domain) is enforced UPSTREAM via onPermissionRequest at
-    //    the mount layer, so we intentionally do not re-gate them here.
-    switch (method) {
-      case 'Runtime.evaluate': {
-        const expression = String(params.expression ?? '');
-        try {
-          const value = evalInRealm(expression);
-          const resolved = value instanceof Promise ? await value : value;
-          return { result: toRemoteObject(resolved) };
-        } catch (err) {
-          return {
-            result: { type: 'object', subtype: 'error' },
-            exceptionDetails: {
-              text: err instanceof Error ? err.message : String(err),
-              exception: { type: 'object', description: String(err) },
-            },
-          };
-        }
-      }
-      case 'DOM.getDocument': {
-        return { root: { nodeId: idFor(document), nodeName: '#document', childNodeCount: 1 } };
-      }
-      case 'DOM.querySelector': {
-        const root = nodesById.get(Number(params.nodeId)) ?? document;
-        const sel = String(params.selector ?? '');
-        const el = (root as ParentNode).querySelector?.(sel) ?? null;
-        return { nodeId: el ? idFor(el) : 0 };
-      }
-      case 'DOM.getBoxModel': {
-        const node = nodesById.get(Number(params.nodeId));
-        const el = node as Element | undefined;
-        const r = el?.getBoundingClientRect?.();
-        if (!r) throw new CherryUnsupportedError('DOM.getBoxModel(no-rect)');
-        const quad = [r.left, r.top, r.right, r.top, r.right, r.bottom, r.left, r.bottom];
-        return { model: { content: quad, width: r.width, height: r.height } };
-      }
-      case 'Input.dispatchMouseEvent': {
-        const x = Number(params.x ?? 0);
-        const y = Number(params.y ?? 0);
-        const target = document.elementFromPoint(x, y);
-        if (target && params.type === 'mousePressed') {
-          (target as HTMLElement).dispatchEvent(
-            new MouseEvent('click', { bubbles: true, cancelable: true, clientX: x, clientY: y })
-          );
-        }
-        return {};
-      }
-      case 'Input.dispatchKeyEvent': {
-        const active = document.activeElement as HTMLElement | null;
-        if (active && params.type === 'keyDown' && typeof params.key === 'string') {
-          active.dispatchEvent(new KeyboardEvent('keydown', { key: params.key, bubbles: true }));
-        }
-        return {};
-      }
-      case 'Page.captureScreenshot': {
-        if (opts.capabilities.screenshot !== 'html2canvas') {
-          throw new CherryUnsupportedError('Page.captureScreenshot');
-        }
-        // Use the maintained `html2canvas-pro` fork (drop-in API): the original
-        // `html2canvas@1.4.1` predates CSS Color 4 and throws on modern color
-        // syntax ("unsupported color function 'color'") — common on real host
-        // pages. The capability value stays `'html2canvas'` (the rasterization
-        // strategy), only the implementation lib differs.
-        const { default: html2canvas } = await import('html2canvas-pro');
-        const canvas = await html2canvas(document.body);
-        const data = canvas.toDataURL('image/png').split(',')[1] ?? '';
-        return { data };
-      }
-      case 'Page.navigate': {
-        if (!opts.capabilities.navigate) throw new CherryUnsupportedError('Page.navigate');
-        const url = String(params.url ?? '');
-        location.assign(url);
-        return { frameId: 'cherry-frame', loaderId: 'cherry-loader' };
-      }
-      case 'Target.createTarget': {
-        if (!opts.capabilities.openUrl) throw new CherryUnsupportedError('Target.createTarget');
-        const url = String(params.url ?? '');
-        opts.onOpenUrl?.(url);
-        return { targetId: 'cherry-opened' };
-      }
-      default:
-        throw new CherryUnsupportedError(method);
-    }
+    // Own-property check only: the CDP protocol accepts arbitrary method
+    // strings, so an unimplemented method matching an `Object.prototype` key
+    // (`toString`, `constructor`, `__proto__`, …) must still fail closed with
+    // CherryUnsupportedError/-32601 rather than resolve an inherited member.
+    const runner = Object.hasOwn(methods, method) ? methods[method] : undefined;
+    if (!runner) throw new CherryUnsupportedError(method);
+    return runner(params);
   };
 }
