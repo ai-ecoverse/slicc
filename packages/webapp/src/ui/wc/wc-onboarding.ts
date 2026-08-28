@@ -53,6 +53,13 @@ export interface WcOnboardingHandle {
 }
 
 /**
+ * Final welcome sprinkle lick body from the onboarding orchestrator (and
+ * the fast-forward path). Callers read `action` for dedup; the rest is
+ * forwarded opaque to `sendSprinkleLick('welcome', …)`.
+ */
+export type WelcomeFinalLickData = { [key: string]: unknown };
+
+/**
  * Bridge the remote VFS clients to the `VirtualFS` surface the onboarding
  * engine reads (`readFile`/`writeFile`/`readDir`/`stat` pass through; the
  * remote clients lack `exists`, shimmed over `stat`).
@@ -91,9 +98,9 @@ export async function wireWcOnboarding(deps: WcOnboardingDeps): Promise<WcOnboar
     else log.warn('WC onboarding: no controller to post welcome line');
   };
 
-  const fireFinalLick = (data: Record<string, unknown>): void => {
+  const fireFinalLick = (data: WelcomeFinalLickData): void => {
     flushCredentialsToWorker(client);
-    const action = String((data as { action?: unknown })?.action ?? '');
+    const action = String(data.action ?? '');
     dispatchWelcomeLickOnce(
       action,
       firedWelcomeActions,
@@ -136,7 +143,7 @@ export async function wireWcOnboarding(deps: WcOnboardingDeps): Promise<WcOnboar
     getOnboardingOrchestrator: () => onboardingHandle.get(),
     fastForward: {
       fire: (data) => {
-        const action = String((data as { action?: unknown }).action ?? '');
+        const action = String(data.action ?? '');
         dispatchWelcomeLickOnce(
           action,
           firedWelcomeActions,
