@@ -11,7 +11,6 @@
  */
 
 import type { SecureFetch } from 'just-bash';
-import type { BrowserAPI, PageInfo } from '../../../cdp/index.js';
 import type { VirtualFS } from '../../../fs/index.js';
 import { extractHandoff, UPSKILL_REL } from '../../../net/handoff-link.js';
 import { parseLinkHeader } from '../../../net/link-header.js';
@@ -25,6 +24,24 @@ import type {
 } from './types.js';
 
 export { normalizeHostname };
+
+/**
+ * Duck type for the CDP surface `upskill tabs` needs — avoids a shell → cdp
+ * layer back-edge (`docs/review-patterns.md` § Layer-stack import direction).
+ * Callers pass the real `BrowserAPI`; this module only reads listPages /
+ * listAllTargets and the PageInfo fields below.
+ */
+interface TabsPageInfo {
+  targetId: string;
+  title: string;
+  url: string;
+  active?: boolean;
+}
+
+interface TabsBrowserAPI {
+  listPages(): Promise<TabsPageInfo[]>;
+  listAllTargets(): Promise<TabsPageInfo[]>;
+}
 
 /**
  * Build the install-hint shell line for an origin-advertised upskill rel.
@@ -153,7 +170,7 @@ function formatTabText(tab: TabUpskillResult): string {
 export async function handleTabs(
   fs: VirtualFS,
   fetchFn: SecureFetch,
-  browser: BrowserAPI | undefined,
+  browser: TabsBrowserAPI | undefined,
   jsonMode: boolean
 ): Promise<{ stdout: string; stderr: string; exitCode: number }> {
   if (!browser) {
@@ -164,7 +181,7 @@ export async function handleTabs(
     };
   }
 
-  let pages: PageInfo[];
+  let pages: TabsPageInfo[];
   try {
     pages = await browser.listPages();
   } catch {
