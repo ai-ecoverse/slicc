@@ -14,6 +14,31 @@
 
 import mri from 'mri';
 
+/** Scalar value mri may store for a parsed CLI flag (and `default` may seed). */
+export type ArgFlagScalar = string | number | boolean;
+
+/**
+ * One flag's parsed value — a scalar, or an array when the same flag is
+ * repeated (`-c a -c b` → `['a', 'b']`).
+ */
+export type ArgFlagValue = ArgFlagScalar | ArgFlagScalar[];
+
+/**
+ * Named default values; each entry's `typeof` casts the parsed result (mri
+ * semantics). Only scalars — mri does not take array defaults.
+ */
+export interface ArgDefaults {
+  readonly [name: string]: ArgFlagScalar;
+}
+
+/**
+ * Parsed flags keyed by flag name (including alias duplicates). Absent keys
+ * are `undefined` at read time; present values are {@link ArgFlagValue}.
+ */
+export interface ParsedFlags {
+  readonly [name: string]: ArgFlagValue | undefined;
+}
+
 export interface ArgSpec {
   /** Flags that consume a value (parsed as strings, never number-coerced). */
   string?: readonly string[];
@@ -22,7 +47,7 @@ export interface ArgSpec {
   /** Alias map; a single key may map to one or more alternate names. */
   alias?: Readonly<Record<string, string | readonly string[]>>;
   /** Default values; their `typeof` casts the parsed result (mri semantics). */
-  default?: Readonly<Record<string, unknown>>;
+  default?: ArgDefaults;
   /** Stop flag parsing at the first positional; the rest stay positional. */
   stopEarly?: boolean;
   /** Split on a `--` terminator and expose the trailing tokens separately. */
@@ -35,7 +60,7 @@ export interface ParsedArgs {
   /** Alias of `_` for readability at call sites. */
   positionals: string[];
   /** Parsed flags (including alias duplicates), minus positionals. */
-  flags: Record<string, unknown>;
+  flags: ParsedFlags;
   /** Tokens after a `--` terminator (empty unless `spec['--']` is set). */
   doubleDashRest: string[];
 }
@@ -179,7 +204,7 @@ export function parseArgs(argv: readonly string[], spec: ArgSpec = {}): ParsedAr
     tailPositionals = head.slice(boundary);
   }
 
-  const parsed = mri(shadowValues(flagSeg, valueNames), {
+  const parsed = mri<ParsedFlags>(shadowValues(flagSeg, valueNames), {
     string: spec.string ? [...spec.string] : undefined,
     boolean: spec.boolean ? [...spec.boolean] : undefined,
     alias: spec.alias as mri.Options['alias'],
