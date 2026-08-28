@@ -2,10 +2,20 @@
  * Shared types for the playwright-cli command family.
  */
 
-import type { HarRecorder } from '../../../cdp/index.js';
 import type { HandoffMatch } from '../../../net/handoff-link.js';
 import type { ParsedLink } from '../../../net/link-header.js';
-import type { FloatType } from '../../../scoops/tray-leader-sync.js';
+// BrowserAPI / HarRecorder are named via `createServeCommand`'s parameter
+// (same shell layer) rather than imported from `cdp/`, so this module stays
+// inside the shell layer (see layer-stack import direction). FloatType is
+// declared here for the same reason — importing it from `scoops/` would be a
+// back-edge; the string union is identical to the scoops definition.
+import type { createServeCommand } from '../serve-command.js';
+
+type BrowserAPI = NonNullable<Parameters<typeof createServeCommand>[0]>;
+type HarRecorder = ReturnType<BrowserAPI['createHarRecorder']>;
+
+/** Runtime float kind; mirrors scoops/tray-leader without importing up-stack. */
+export type FloatType = 'standalone' | 'extension' | 'electron' | 'ios' | 'unknown';
 
 export type CmdResult = { stdout: string; stderr: string; exitCode: number };
 
@@ -206,7 +216,7 @@ export interface PlaywrightDiscoveryResult {
 
 /** Per-handler context shared by every playwright subcommand handler. */
 export interface PlaywrightHandlerCtx {
-  browser: import('../../../cdp/index.js').BrowserAPI;
+  browser: BrowserAPI;
   fs: import('../../../fs/index.js').VirtualFS;
   state: PlaywrightState;
   positional: string[];
