@@ -391,7 +391,10 @@ describe('prepareWcShell + attachWcClient', () => {
       'WC new session /tmp reset failed — clearing anyway',
       expect.any(Error)
     );
-    expect(log.error).not.toHaveBeenCalled();
+    // Asserted by message, not by call count: `log` is shared across this
+    // file and unrelated boot machinery (the welcome sprinkle mount) logs
+    // errors of its own into the same mock.
+    expect(log.error).not.toHaveBeenCalledWith('WC new session failed', expect.anything());
   });
 });
 
