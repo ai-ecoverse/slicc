@@ -17,6 +17,8 @@
  *   https://github.com/NousResearch/hermes-agent/blob/main/hermes_cli/auth.py
  */
 
+import type { CDPPayload } from '@slicc/shared-ts';
+
 import type { CDPTransport } from '../cdp/transport.js';
 import type {
   InterceptingOAuthLauncher,
@@ -25,6 +27,22 @@ import type {
 } from './types.js';
 
 const DEFAULT_TIMEOUT_MS = 120_000;
+
+/** Untrusted JSON shape for {@link InterceptOAuthConfig} before validation. */
+interface InterceptOAuthConfigInput {
+  authorizeUrl?: unknown;
+  redirectUriPattern?: unknown;
+  onCapture?: unknown;
+  timeoutMs?: unknown;
+  rewrite?: unknown;
+}
+
+/** Untrusted JSON shape for one {@link OAuthRequestRewrite} before validation. */
+interface OAuthRequestRewriteInput {
+  match?: unknown;
+  replaceUrl?: unknown;
+  appendParams?: unknown;
+}
 
 /**
  * Validate that an unknown JSON-like value conforms to {@link InterceptOAuthConfig}.
@@ -45,7 +63,7 @@ export function parseInterceptOAuthConfig(
   if (typeof data !== 'object' || data === null || Array.isArray(data)) {
     return { ok: false, error: 'expected a JSON object' };
   }
-  const d = data as Record<string, unknown>;
+  const d = data as InterceptOAuthConfigInput;
 
   if (typeof d.authorizeUrl !== 'string' || d.authorizeUrl.length === 0) {
     return { ok: false, error: 'authorizeUrl must be a non-empty string' };
@@ -63,14 +81,17 @@ export function parseInterceptOAuthConfig(
   const rewriteResult = validateRewrites(d.rewrite);
   if (!rewriteResult.ok) return rewriteResult;
 
+  const onCapture = d.onCapture === 'close' || d.onCapture === 'leave' ? d.onCapture : undefined;
+  const timeoutMs = typeof d.timeoutMs === 'number' ? d.timeoutMs : undefined;
+
   return {
     ok: true,
     config: {
       authorizeUrl: d.authorizeUrl,
       redirectUriPattern: d.redirectUriPattern,
       rewrite: rewriteResult.rewrites,
-      onCapture: d.onCapture as 'close' | 'leave' | undefined,
-      timeoutMs: d.timeoutMs as number | undefined,
+      onCapture,
+      timeoutMs,
     },
   };
 }
@@ -86,34 +107,44 @@ function validateRewrites(
     if (typeof item !== 'object' || item === null) {
       return { ok: false, error: `rewrite[${i}] must be an object` };
     }
-    const r = item as Record<string, unknown>;
+    const r = item as OAuthRequestRewriteInput;
     if (typeof r.match !== 'string' || r.match.length === 0) {
       return { ok: false, error: `rewrite[${i}].match must be a non-empty string` };
     }
     if (r.replaceUrl !== undefined && typeof r.replaceUrl !== 'string') {
       return { ok: false, error: `rewrite[${i}].replaceUrl must be a string when present` };
     }
+    let appendParams: Record<string, string> | undefined;
     if (r.appendParams !== undefined) {
-      if (
-        typeof r.appendParams !== 'object' ||
-        r.appendParams === null ||
-        Array.isArray(r.appendParams)
-      ) {
-        return { ok: false, error: `rewrite[${i}].appendParams must be an object` };
-      }
-      for (const [k, v] of Object.entries(r.appendParams as Record<string, unknown>)) {
-        if (typeof v !== 'string') {
-          return { ok: false, error: `rewrite[${i}].appendParams.${k} must be a string` };
-        }
-      }
+      const appendResult = parseAppendParams(r.appendParams, i);
+      if (!appendResult.ok) return appendResult;
+      appendParams = appendResult.appendParams;
     }
+    const replaceUrl = typeof r.replaceUrl === 'string' ? r.replaceUrl : undefined;
     out.push({
       match: r.match,
-      appendParams: r.appendParams as Record<string, string> | undefined,
-      replaceUrl: r.replaceUrl as string | undefined,
+      appendParams,
+      replaceUrl,
     });
   }
   return { ok: true, rewrites: out };
+}
+
+function parseAppendParams(
+  raw: unknown,
+  index: number
+): { ok: true; appendParams: Record<string, string> } | { ok: false; error: string } {
+  if (typeof raw !== 'object' || raw === null || Array.isArray(raw)) {
+    return { ok: false, error: `rewrite[${index}].appendParams must be an object` };
+  }
+  const appendParams: Record<string, string> = {};
+  for (const [k, v] of Object.entries(raw)) {
+    if (typeof v !== 'string') {
+      return { ok: false, error: `rewrite[${index}].appendParams.${k} must be a string` };
+    }
+    appendParams[k] = v;
+  }
+  return { ok: true, appendParams };
 }
 
 interface FetchRequestPausedEvent {
@@ -121,6 +152,33 @@ interface FetchRequestPausedEvent {
   request: { url: string; method: string; headers: Record<string, string> };
   resourceType?: string;
   frameId?: string;
+}
+
+function readFetchRequestPausedEvent(params: CDPPayload): FetchRequestPausedEvent | null {
+  const requestId = params['requestId'];
+  const request = params['request'];
+  if (typeof requestId !== 'string') return null;
+  if (typeof request !== 'object' || request === null || Array.isArray(request)) return null;
+  const requestRecord = request as { url?: unknown; method?: unknown; headers?: unknown };
+  if (typeof requestRecord.url !== 'string' || typeof requestRecord.method !== 'string') {
+    return null;
+  }
+  const headers =
+    typeof requestRecord.headers === 'object' &&
+    requestRecord.headers !== null &&
+    !Array.isArray(requestRecord.headers)
+      ? (requestRecord.headers as Record<string, string>)
+      : {};
+  return {
+    requestId,
+    request: {
+      url: requestRecord.url,
+      method: requestRecord.method,
+      headers,
+    },
+    resourceType: typeof params['resourceType'] === 'string' ? params['resourceType'] : undefined,
+    frameId: typeof params['frameId'] === 'string' ? params['frameId'] : undefined,
+  };
 }
 
 interface CreateTargetResult {
@@ -241,15 +299,15 @@ export function createInterceptingOAuthLauncher(
         resolve(url);
       };
 
-      const onPaused = (params: Record<string, unknown>) => {
-        const evt = params as unknown as FetchRequestPausedEvent;
-        if (!evt?.request?.url || !sessionId) return;
+      const onPaused = (params: CDPPayload) => {
+        const evt = readFetchRequestPausedEvent(params);
+        if (!evt?.request.url || !sessionId) return;
         // CDP fan-outs `Fetch.requestPaused` for every attached target on
         // the transport. Without this guard, a `Fetch.enable` on another
         // session (e.g. the agent's own page watcher) would deliver
         // requests we shouldn't be rewriting or capturing here.
         const eventSessionId =
-          typeof params['sessionId'] === 'string' ? (params['sessionId'] as string) : undefined;
+          typeof params['sessionId'] === 'string' ? params['sessionId'] : undefined;
         if (eventSessionId !== sessionId) return;
 
         // Capture step: did this request hit the redirect URI?
@@ -266,7 +324,9 @@ export function createInterceptingOAuthLauncher(
             .catch(() => {
               /* best-effort */
             });
-          finish(captured);
+          void finish(captured).catch(() => {
+            /* best-effort */
+          });
           return;
         }
 
@@ -292,50 +352,54 @@ export function createInterceptingOAuthLauncher(
       };
 
       const timer = setTimeout(() => {
-        finish(null);
+        void finish(null).catch(() => {
+          /* best-effort */
+        });
       }, timeoutMs);
 
-      (async () => {
-        try {
-          const created = (await transport.send('Target.createTarget', {
-            url: 'about:blank',
-          })) as unknown as CreateTargetResult;
-          targetId = created.targetId;
+      const runSetup = async (): Promise<void> => {
+        const created = (await transport.send('Target.createTarget', {
+          url: 'about:blank',
+        })) as unknown as CreateTargetResult;
+        targetId = created.targetId;
 
-          const attached = (await transport.send('Target.attachToTarget', {
-            targetId,
-            flatten: true,
-          })) as unknown as AttachToTargetResult;
-          sessionId = attached.sessionId;
+        const attached = (await transport.send('Target.attachToTarget', {
+          targetId,
+          flatten: true,
+        })) as unknown as AttachToTargetResult;
+        sessionId = attached.sessionId;
 
-          transport.on('Fetch.requestPaused', onPaused);
-          await transport.send(
-            'Fetch.enable',
-            {
-              patterns: [
-                {
-                  urlPattern: toFetchUrlPattern(config.redirectUriPattern),
-                  requestStage: 'Request',
-                },
-                // Also pause every request so the rewrite rules can fire on
-                // intermediate hops (e.g. authorize URL patches). Provider
-                // rewrites are scoped via `match`, so the false-positive cost
-                // is just an extra continueRequest.
-                ...rewrites.map((r) => ({ urlPattern: `*${r.match}*`, requestStage: 'Request' })),
-              ],
-            },
-            sessionId
-          );
+        transport.on('Fetch.requestPaused', onPaused);
+        await transport.send(
+          'Fetch.enable',
+          {
+            patterns: [
+              {
+                urlPattern: toFetchUrlPattern(config.redirectUriPattern),
+                requestStage: 'Request',
+              },
+              // Also pause every request so the rewrite rules can fire on
+              // intermediate hops (e.g. authorize URL patches). Provider
+              // rewrites are scoped via `match`, so the false-positive cost
+              // is just an extra continueRequest.
+              ...rewrites.map((r) => ({ urlPattern: `*${r.match}*`, requestStage: 'Request' })),
+            ],
+          },
+          sessionId
+        );
 
-          await transport.send('Page.navigate', { url: config.authorizeUrl }, sessionId);
-        } catch (err) {
-          console.error(
-            '[intercepted-oauth] setup failed:',
-            err instanceof Error ? err.message : String(err)
-          );
-          finish(null);
-        }
-      })();
+        await transport.send('Page.navigate', { url: config.authorizeUrl }, sessionId);
+      };
+
+      void runSetup().catch((err: unknown) => {
+        console.error(
+          '[intercepted-oauth] setup failed:',
+          err instanceof Error ? err.message : String(err)
+        );
+        void finish(null).catch(() => {
+          /* best-effort */
+        });
+      });
     });
   };
 }
