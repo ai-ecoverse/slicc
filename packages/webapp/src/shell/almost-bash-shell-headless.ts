@@ -77,6 +77,7 @@ import {
 import { createProxiedFetch } from './proxied-fetch.js';
 import { ScriptCatalog } from './script-catalog.js';
 import { enforceCommandSudo } from './sudo/command-guard.js';
+import { runMountDirectoryApproval } from './supplemental-commands/mount-directory-approval.js';
 import { createSkillCommand, createUpskillCommand } from './supplemental-commands/upskill/index.js';
 import type { MediaPreviewItem } from './supplemental-commands.js';
 import { createSupplementalCommands } from './supplemental-commands.js';
@@ -555,7 +556,11 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
       ensureFreshGithubToken,
     });
 
-    this.mountCommands = new MountCommands({ fs: options.fs, isScoop: options.isScoop });
+    this.mountCommands = new MountCommands({
+      fs: options.fs,
+      isScoop: options.isScoop,
+      acquireLocalMountViaToolUI: runMountDirectoryApproval,
+    });
 
     const scriptDiscoveryFs = options.jshDiscoveryFs ?? options.fs;
     const bshDiscoveryFs = options.bshDiscoveryFs ?? options.fs;
