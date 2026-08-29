@@ -44,6 +44,7 @@ import { getPanelRpcClient } from '../src/kernel/panel-rpc.js';
 import { withAdaptiveThinkingShim } from '../src/providers/adaptive-thinking.js';
 import {
   type AdobeModelMetadata,
+  type EnrichedAdobeModel,
   enrichAdobeModel,
 } from '../src/providers/adobe-model-metadata.js';
 import { buildAdobeOAuthState } from '../src/providers/adobe-oauth-state.js';
@@ -126,7 +127,7 @@ const ADOBE_MODELS_KEY = 'slicc-adobe-models';
  * (rather than an inline `setItem`) so the side effect `refreshModels` relies on
  * stays discoverable if `getModelIds` is ever refactored toward a pure read.
  */
-function persistAdobeModels(models: unknown): void {
+function persistAdobeModels(models: EnrichedAdobeModel[]): void {
   try {
     localStorage.setItem(ADOBE_MODELS_KEY, JSON.stringify(models));
   } catch {}
@@ -310,9 +311,7 @@ export const config: ProviderConfig = {
     try {
       const persisted = localStorage.getItem(ADOBE_MODELS_KEY);
       if (persisted) {
-        const models = JSON.parse(persisted) as Array<
-          { id: string; name?: string } & Record<string, unknown>
-        >;
+        const models = JSON.parse(persisted) as EnrichedAdobeModel[];
         if (models.length) return models;
       }
     } catch {}
@@ -562,7 +561,7 @@ async function silentRenewToken(): Promise<string | null> {
   }
 
   // Deduplicate concurrent renewal attempts
-  if (renewalInProgress) return renewalInProgress;
+  if (renewalInProgress !== null) return renewalInProgress;
 
   renewalInProgress = performSilentRenewal().finally(() => {
     renewalInProgress = null;
@@ -817,145 +816,159 @@ function makeErrorOutput(model: Model<Api>, error: unknown) {
   };
 }
 
+function logStreamError(error: unknown): void {
+  console.error('[adobe] Stream error:', error instanceof Error ? error.message : String(error));
+}
+
 const streamAdobe = (
   model: Model<Api>,
   context: Context,
   options: AnthropicOptions | OpenAICompletionsOptions = {}
 ) => {
   const stream = createAssistantMessageEventStream();
-  (async () => {
-    try {
-      const accessToken = await getValidAccessToken();
-      const isOpenAI = String(model.api).includes('openai');
-
-      if (isOpenAI) {
-        // Route to OpenAI Chat Completions API — append /v1 since the OpenAI SDK adds /chat/completions
-        // pi-ai's detectCompat uses provider/baseUrl to identify non-standard providers,
-        // but ours are overridden (provider='adobe', baseUrl=proxy). Set compat explicitly
-        // to disable features unsupported by OpenAI-compatible backends (Cerebras, etc.)
-        const proxyModel = {
-          ...model,
-          baseUrl: `${getProxyEndpoint()}/v1`,
-          api: 'openai-completions' as Api,
-          compat: {
-            ...(model as unknown as { compat?: OpenAICompletionsCompat }).compat,
-            supportsStore: false,
-            supportsDeveloperRole: false,
-          },
-        };
-        const inner = streamOpenAICompletions(
-          proxyModel as unknown as Model<'openai-completions'>,
-          context,
-          withSliccVersionHeader(
-            ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamAdobe[openai]')
-          ) as unknown as OpenAICompletionsOptions
-        );
-        for await (const event of inner) stream.push(event);
-      } else {
-        // Route to Anthropic Messages API
-        const proxyModel = {
-          ...model,
-          baseUrl: getProxyEndpoint(),
-          api: 'anthropic-messages' as Api,
-        };
-        const inner = streamAnthropic(
-          proxyModel as unknown as Model<'anthropic-messages'>,
-          context,
-          withSliccVersionHeader(
-            ensureSessionIdHeader(
-              // opus-4-8 quirks the pinned pi-ai doesn't know: it rejects
-              // `temperature` (strip it), and needs adaptive thinking instead of
-              // the legacy enabled+budget shape pi-ai emits (rewrite via onPayload).
-              withAdaptiveThinkingShim(
-                model,
-                withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken })
-              ),
-              'streamAdobe[anthropic]'
-            )
-            // Same cross-vocabulary cast as the openai branch above: `options`
-            // arrives as the pi-ai-wide union; the agent layer only sends
-            // anthropic-shaped options to an anthropic-routed model.
-          ) as unknown as AnthropicOptions
-        );
-        for await (const event of inner) stream.push(event);
-      }
-      stream.end();
-    } catch (error) {
-      console.error(
-        '[adobe] Stream error:',
-        error instanceof Error ? error.message : String(error)
-      );
-      stream.push(makeErrorOutput(model, error) as unknown as AssistantMessageEvent);
-      stream.end();
-    }
-  })();
+  // Fire-and-forget pump — callers consume the returned event stream.
+  pumpAdobeStream(stream, model, context, options).catch(logStreamError);
   return stream;
 };
+
+async function pumpAdobeStream(
+  stream: ReturnType<typeof createAssistantMessageEventStream>,
+  model: Model<Api>,
+  context: Context,
+  options: AnthropicOptions | OpenAICompletionsOptions
+): Promise<void> {
+  try {
+    const accessToken = await getValidAccessToken();
+    const isOpenAI = String(model.api).includes('openai');
+
+    if (isOpenAI) {
+      // Route to OpenAI Chat Completions API — append /v1 since the OpenAI SDK adds /chat/completions
+      // pi-ai's detectCompat uses provider/baseUrl to identify non-standard providers,
+      // but ours are overridden (provider='adobe', baseUrl=proxy). Set compat explicitly
+      // to disable features unsupported by OpenAI-compatible backends (Cerebras, etc.)
+      const proxyModel = {
+        ...model,
+        baseUrl: `${getProxyEndpoint()}/v1`,
+        api: 'openai-completions' as Api,
+        compat: {
+          ...(model as unknown as { compat?: OpenAICompletionsCompat }).compat,
+          supportsStore: false,
+          supportsDeveloperRole: false,
+        },
+      };
+      const inner = streamOpenAICompletions(
+        proxyModel as unknown as Model<'openai-completions'>,
+        context,
+        withSliccVersionHeader(
+          ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamAdobe[openai]')
+        ) as unknown as OpenAICompletionsOptions
+      );
+      for await (const event of inner) stream.push(event);
+    } else {
+      // Route to Anthropic Messages API
+      const proxyModel = {
+        ...model,
+        baseUrl: getProxyEndpoint(),
+        api: 'anthropic-messages' as Api,
+      };
+      const inner = streamAnthropic(
+        proxyModel as unknown as Model<'anthropic-messages'>,
+        context,
+        withSliccVersionHeader(
+          ensureSessionIdHeader(
+            // opus-4-8 quirks the pinned pi-ai doesn't know: it rejects
+            // `temperature` (strip it), and needs adaptive thinking instead of
+            // the legacy enabled+budget shape pi-ai emits (rewrite via onPayload).
+            withAdaptiveThinkingShim(
+              model,
+              withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken })
+            ),
+            'streamAdobe[anthropic]'
+          )
+          // Same cross-vocabulary cast as the openai branch above: `options`
+          // arrives as the pi-ai-wide union; the agent layer only sends
+          // anthropic-shaped options to an anthropic-routed model.
+        ) as unknown as AnthropicOptions
+      );
+      for await (const event of inner) stream.push(event);
+    }
+    stream.end();
+  } catch (error) {
+    logStreamError(error);
+    stream.push(makeErrorOutput(model, error) as unknown as AssistantMessageEvent);
+    stream.end();
+  }
+}
 
 const streamSimpleAdobe = (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => {
   const stream = createAssistantMessageEventStream();
-  (async () => {
-    try {
-      const accessToken = await getValidAccessToken();
-      const isOpenAI = String(model.api).includes('openai');
-
-      if (isOpenAI) {
-        const proxyModel = {
-          ...model,
-          baseUrl: `${getProxyEndpoint()}/v1`,
-          api: 'openai-completions' as Api,
-          compat: {
-            ...(model as unknown as { compat?: OpenAICompletionsCompat }).compat,
-            supportsStore: false,
-            supportsDeveloperRole: false,
-          },
-        };
-        const inner = streamSimpleOpenAICompletions(
-          proxyModel as unknown as Model<'openai-completions'>,
-          context,
-          withSliccVersionHeader(
-            ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamSimpleAdobe[openai]')
-          ) as unknown as SimpleStreamOptions
-        );
-        for await (const event of inner) stream.push(event);
-      } else {
-        // Route to Anthropic Messages API
-        const proxyModel = {
-          ...model,
-          baseUrl: getProxyEndpoint(),
-          api: 'anthropic-messages' as Api,
-        };
-        const inner = streamSimpleAnthropic(
-          proxyModel as unknown as Model<'anthropic-messages'>,
-          context,
-          withSliccVersionHeader(
-            ensureSessionIdHeader(
-              // opus-4-8 quirks the pinned pi-ai doesn't know: it rejects
-              // `temperature` (strip it — also covers thinking-disabled quick-llm
-              // helpers), and needs adaptive thinking instead of the legacy
-              // enabled+budget shape pi-ai emits (rewrite via onPayload).
-              withAdaptiveThinkingShim(
-                model,
-                withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken })
-              ),
-              'streamSimpleAdobe[anthropic]'
-            )
-          ) as unknown as SimpleStreamOptions
-        );
-        for await (const event of inner) stream.push(event);
-      }
-      stream.end();
-    } catch (error) {
-      console.error(
-        '[adobe] Stream error:',
-        error instanceof Error ? error.message : String(error)
-      );
-      stream.push(makeErrorOutput(model, error) as unknown as AssistantMessageEvent);
-      stream.end();
-    }
-  })();
+  // Fire-and-forget pump — callers consume the returned event stream.
+  pumpSimpleAdobeStream(stream, model, context, options).catch(logStreamError);
   return stream;
 };
+
+async function pumpSimpleAdobeStream(
+  stream: ReturnType<typeof createAssistantMessageEventStream>,
+  model: Model<Api>,
+  context: Context,
+  options?: SimpleStreamOptions
+): Promise<void> {
+  try {
+    const accessToken = await getValidAccessToken();
+    const isOpenAI = String(model.api).includes('openai');
+
+    if (isOpenAI) {
+      const proxyModel = {
+        ...model,
+        baseUrl: `${getProxyEndpoint()}/v1`,
+        api: 'openai-completions' as Api,
+        compat: {
+          ...(model as unknown as { compat?: OpenAICompletionsCompat }).compat,
+          supportsStore: false,
+          supportsDeveloperRole: false,
+        },
+      };
+      const inner = streamSimpleOpenAICompletions(
+        proxyModel as unknown as Model<'openai-completions'>,
+        context,
+        withSliccVersionHeader(
+          ensureSessionIdHeader({ ...options, apiKey: accessToken }, 'streamSimpleAdobe[openai]')
+        ) as unknown as SimpleStreamOptions
+      );
+      for await (const event of inner) stream.push(event);
+    } else {
+      // Route to Anthropic Messages API
+      const proxyModel = {
+        ...model,
+        baseUrl: getProxyEndpoint(),
+        api: 'anthropic-messages' as Api,
+      };
+      const inner = streamSimpleAnthropic(
+        proxyModel as unknown as Model<'anthropic-messages'>,
+        context,
+        withSliccVersionHeader(
+          ensureSessionIdHeader(
+            // opus-4-8 quirks the pinned pi-ai doesn't know: it rejects
+            // `temperature` (strip it — also covers thinking-disabled quick-llm
+            // helpers), and needs adaptive thinking instead of the legacy
+            // enabled+budget shape pi-ai emits (rewrite via onPayload).
+            withAdaptiveThinkingShim(
+              model,
+              withSupportedTemperature(model.id, model.name, { ...options, apiKey: accessToken })
+            ),
+            'streamSimpleAdobe[anthropic]'
+          )
+        ) as unknown as SimpleStreamOptions
+      );
+      for await (const event of inner) stream.push(event);
+    }
+    stream.end();
+  } catch (error) {
+    logStreamError(error);
+    stream.push(makeErrorOutput(model, error) as unknown as AssistantMessageEvent);
+    stream.end();
+  }
+}
 
 // ── Model list ──────────────────────────────────────────────────────
 
