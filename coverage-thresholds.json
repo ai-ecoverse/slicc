@@ -5,7 +5,7 @@
       "lines": 88,
       "statements": 87,
       "functions": 93,
-      "branches": 77,
+      "branches": 78,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -88,16 +88,16 @@
       ]
     },
     "cherry": {
-      "lines": 89,
-      "statements": 87,
+      "lines": 92,
+      "statements": 90,
       "functions": 98,
-      "branches": 76
+      "branches": 79
     },
     "cloud-core": {
       "lines": 86,
       "statements": 83,
-      "functions": 77,
-      "branches": 77,
+      "functions": 82,
+      "branches": 78,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
@@ -167,9 +167,9 @@
       "regions": 91
     },
     "ios-app": {
-      "lines": 73,
-      "functions": 72,
-      "regions": 69
+      "lines": 75,
+      "functions": 75,
+      "regions": 71
     }
   }
 }
