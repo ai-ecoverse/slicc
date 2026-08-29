@@ -295,10 +295,7 @@
       }
     },
     {
-      "includes": [
-        "packages/webapp/src/net/link-header.ts",
-        "packages/webapp/src/shell/supplemental-commands/websocat-command.ts"
-      ],
+      "includes": ["packages/webapp/src/shell/supplemental-commands/websocat-command.ts"],
       "linter": {
         "rules": {
           "complexity": {

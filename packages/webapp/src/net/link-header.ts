@@ -54,23 +54,91 @@ export interface LinkInput {
 
 /* ───────────────────────────── parser ───────────────────────────── */
 
+function normalizeLinkHeaderInput(input: string | string[] | null | undefined): string | null {
+  if (input == null) return null;
+  // CDP joins multi-value headers with `\n`; treat it the same as separate
+  // header instances. Normalize for both shapes — array elements may also
+  // contain `\n`-joined values when callers preserve CDP's raw bag verbatim.
+  if (Array.isArray(input)) {
+    const headerString = input.join(', ').replace(/\n/g, ', ');
+    return headerString.length === 0 ? null : headerString;
+  }
+  if (typeof input === 'string') {
+    const headerString = input.replace(/\n/g, ', ');
+    return headerString.length === 0 ? null : headerString;
+  }
+  return null;
+}
+
+function readUnquotedParamValue(headerString: string, i: number): { value: string; end: number } {
+  const len = headerString.length;
+  const start = i;
+  while (
+    i < len &&
+    headerString[i] !== ';' &&
+    headerString[i] !== ',' &&
+    !isOWSChar(headerString[i])
+  )
+    i++;
+  return { value: headerString.slice(start, i), end: i };
+}
+
+function readParamValue(headerString: string, i: number): { value: string; end: number } {
+  const len = headerString.length;
+  i = skipOWS(headerString, i);
+  if (i >= len || headerString[i] !== '=') return { value: '', end: i };
+  i++;
+  i = skipOWS(headerString, i);
+  if (i < len && headerString[i] === '"') return readQuotedString(headerString, i);
+  return readUnquotedParamValue(headerString, i);
+}
+
+function readParamName(headerString: string, i: number): { name: string; end: number } | null {
+  const len = headerString.length;
+  const nameStart = i;
+  while (i < len && isTokenChar(headerString.charCodeAt(i))) i++;
+  // `param*` — the trailing star is not a tchar but a recognised suffix.
+  if (i < len && headerString[i] === '*') i++;
+  if (nameStart === i) return null;
+  return { name: headerString.slice(nameStart, i).toLowerCase(), end: i };
+}
+
+function parseLinkParameters(
+  headerString: string,
+  startIndex: number
+): { params: Array<[string, string]>; endIndex: number } {
+  const rawParams: Array<[string, string]> = [];
+  const len = headerString.length;
+  let i = startIndex;
+
+  while (i < len) {
+    i = skipOWS(headerString, i);
+    if (i >= len) break;
+    if (headerString[i] === ',') return { params: rawParams, endIndex: i + 1 };
+    if (headerString[i] !== ';') {
+      return { params: rawParams, endIndex: skipToNextValue(headerString, i) };
+    }
+    i++;
+    i = skipOWS(headerString, i);
+
+    const parsedName = readParamName(headerString, i);
+    if (!parsedName) {
+      return { params: rawParams, endIndex: skipToNextValue(headerString, i) };
+    }
+    const { value, end } = readParamValue(headerString, parsedName.end);
+    rawParams.push([parsedName.name, value]);
+    i = end;
+  }
+
+  return { params: rawParams, endIndex: i };
+}
+
 export function parseLinkHeader(
   input: string | string[] | null | undefined,
   baseUrl?: string
 ): ParsedLink[] {
-  if (input == null) return [];
-  // CDP joins multi-value headers with `\n`; treat it the same as separate
-  // header instances. Normalize for both shapes — array elements may also
-  // contain `\n`-joined values when callers preserve CDP's raw bag verbatim.
-  let headerString: string;
-  if (Array.isArray(input)) {
-    headerString = input.join(', ').replace(/\n/g, ', ');
-  } else if (typeof input === 'string') {
-    headerString = input.replace(/\n/g, ', ');
-  } else {
-    return [];
-  }
-  if (headerString.length === 0) return [];
+  const headerString = normalizeLinkHeaderInput(input);
+  if (headerString == null) return [];
 
   const out: ParsedLink[] = [];
   const len = headerString.length;
@@ -88,56 +156,9 @@ export function parseLinkHeader(
     const uriEnd = headerString.indexOf('>', i + 1);
     if (uriEnd === -1) break;
     const rawUri = headerString.slice(i + 1, uriEnd);
-    i = uriEnd + 1;
 
-    const rawParams: Array<[string, string]> = [];
-    while (i < len) {
-      i = skipOWS(headerString, i);
-      if (i >= len) break;
-      if (headerString[i] === ',') {
-        i++;
-        break;
-      }
-      if (headerString[i] !== ';') {
-        i = skipToNextValue(headerString, i);
-        break;
-      }
-      i++;
-      i = skipOWS(headerString, i);
-
-      const nameStart = i;
-      while (i < len && isTokenChar(headerString.charCodeAt(i))) i++;
-      // `param*` — the trailing star is not a tchar but a recognised suffix.
-      if (i < len && headerString[i] === '*') i++;
-      if (nameStart === i) {
-        i = skipToNextValue(headerString, i);
-        break;
-      }
-      const name = headerString.slice(nameStart, i).toLowerCase();
-
-      i = skipOWS(headerString, i);
-      let value = '';
-      if (i < len && headerString[i] === '=') {
-        i++;
-        i = skipOWS(headerString, i);
-        if (i < len && headerString[i] === '"') {
-          const r = readQuotedString(headerString, i);
-          value = r.value;
-          i = r.end;
-        } else {
-          const start = i;
-          while (
-            i < len &&
-            headerString[i] !== ';' &&
-            headerString[i] !== ',' &&
-            !isOWSChar(headerString[i])
-          )
-            i++;
-          value = headerString.slice(start, i);
-        }
-      }
-      rawParams.push([name, value]);
-    }
+    const { params: rawParams, endIndex } = parseLinkParameters(headerString, uriEnd + 1);
+    i = endIndex;
 
     const link = buildLink(rawUri, rawParams, baseUrl);
     if (link) out.push(link);
@@ -423,11 +444,21 @@ function encodeRFC8187(value: string): string {
 /* ────────────────────── header-shape adapters ────────────────────── */
 
 /**
+ * CDP `Network.Response.headers` bag. Values are strings at runtime (same-name
+ * headers joined with `\n`); non-string values are ignored when read.
+ */
+export interface CdpNetworkResponseHeaders {
+  readonly [headerName: string]: unknown;
+}
+
+/**
  * Pull every `Link` header value out of a CDP `Network.Response.headers` bag.
  * CDP joins same-name headers with `\n`; we preserve that for the parser to
  * split.
  */
-export function getLinkHeaderValuesFromCdp(headers: Record<string, unknown> | undefined): string[] {
+export function getLinkHeaderValuesFromCdp(
+  headers: CdpNetworkResponseHeaders | undefined
+): string[] {
   if (!headers) return [];
   const out: string[] = [];
   for (const [name, value] of Object.entries(headers)) {
