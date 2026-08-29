@@ -26,6 +26,14 @@ import type { BootStageLogger } from '../../../src/ui/boot/types.js';
  * attempts — so the real 3.1s `CDP_BRIDGE_CONNECT_RETRY_DELAYS_MS` budget was
  * pure wall clock burnt inside a 5s test timeout. The retry schedule itself is
  * covered by the `connectWithBoundedRetry` suite above, which injects `delays`.
+ *
+ * It is a deliberate NO-OP on the extension-leader transport branch:
+ * `createExtensionLeaderBrowser` builds its own browser and calls
+ * `connectWithBoundedRetry` without the seam, so those cases keep the real
+ * timer. They cost nothing anyway — their stubbed `connect` succeeds on the
+ * first attempt, so no backoff ever fires. Passing it uniformly keeps the
+ * deps literal identical across suites rather than making the reader work out
+ * which branch each case takes.
  */
 const instantSleep = async (): Promise<void> => {};
 
