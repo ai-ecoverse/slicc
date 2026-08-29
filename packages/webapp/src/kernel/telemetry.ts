@@ -21,6 +21,11 @@ import { setShellTelemetrySink } from '../shell/telemetry-hook.js';
 
 type SampleRUM = (checkpoint: string, data?: { source?: string; target?: string }) => void;
 
+/** Helix-rum globals on `globalThis` when no `window` exists (worker realm). */
+type RumWorkerGlobals = {
+  RUM_GENERATION?: string;
+};
+
 let sampleRUM: SampleRUM | null = null;
 let initialized = false;
 
@@ -118,7 +123,7 @@ export async function initTelemetry(): Promise<void> {
       window.RUM_GENERATION = `slicc-${mode}`;
     } else {
       // Worker realm: no Window, but rum-worker.js reads `globalThis.RUM_GENERATION`.
-      (globalThis as Record<string, unknown>).RUM_GENERATION = `slicc-${mode}`;
+      (globalThis as RumWorkerGlobals).RUM_GENERATION = `slicc-${mode}`;
     }
 
     if (mode === 'standalone-worker') {
