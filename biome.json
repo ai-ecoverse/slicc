@@ -296,7 +296,6 @@
     },
     {
       "includes": [
-        "packages/chrome-extension/src/secrets-entry.ts",
         "packages/webapp/src/kernel/realm/http-global.ts",
         "packages/webapp/src/net/link-header.ts",
         "packages/webapp/src/shell/supplemental-commands/websocat-command.ts"
@@ -311,7 +310,6 @@
     },
     {
       "includes": [
-        "packages/chrome-extension/src/secrets-entry.ts",
         "packages/webapp/cloud/app.js",
         "packages/webapp/providers/adobe.ts",
         "packages/webapp/providers/openai-codex.ts",
