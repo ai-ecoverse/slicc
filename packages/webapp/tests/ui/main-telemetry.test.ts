@@ -50,4 +50,12 @@ describe('ui/main.ts telemetry wiring', () => {
   it('gates initTelemetry on a non-connect runtime mode', () => {
     expect(source).toMatch(/runtimeMode\s*!==\s*['"]connect['"][\s\S]{0,200}initTelemetry\(\)/);
   });
+
+  it('marks connect mode via a named ConnectModeGlobal cast', () => {
+    expect(source).toMatch(
+      /type ConnectModeGlobal\s*=\s*\{[\s\S]*?__slicc_connect_mode\?: unknown;/
+    );
+    expect(source).toMatch(/\(globalThis as ConnectModeGlobal\)\.__slicc_connect_mode\s*=\s*true/);
+    expect(source).not.toMatch(/Record<\s*string\s*,\s*unknown\s*>/);
+  });
 });
