@@ -259,63 +259,79 @@ function withGrokConvHeader(
   return { ...(base ?? {}), 'x-grok-conv-id': sessionId };
 }
 
+type XaiEventStream = ReturnType<typeof createAssistantMessageEventStream>;
+
+function logStreamError(error: unknown): void {
+  console.error('[xai-grok] Stream error:', error instanceof Error ? error.message : String(error));
+}
+
+async function pumpXaiStream(
+  stream: XaiEventStream,
+  model: Model<Api>,
+  context: Context,
+  options: ProviderStreamOptions
+): Promise<void> {
+  try {
+    const accessToken = await getValidAccessToken();
+    const sessionId = (options as { sessionId?: string }).sessionId;
+    const nativeModel = resolveNativeXaiModel(model);
+    const forwardedOptions = {
+      ...options,
+      apiKey: accessToken,
+      headers: withGrokConvHeader(options.headers, sessionId),
+    };
+    const inner =
+      nativeModel.api === 'openai-responses'
+        ? streamOpenAIResponses(nativeModel, context, forwardedOptions)
+        : streamOpenAICompletions(nativeModel, context, forwardedOptions);
+    for await (const event of inner) stream.push(event);
+    stream.end();
+  } catch (error) {
+    logStreamError(error);
+    stream.push(makeErrorOutput(model, error));
+    stream.end();
+  }
+}
+
+async function pumpSimpleXaiStream(
+  stream: XaiEventStream,
+  model: Model<Api>,
+  context: Context,
+  options?: SimpleStreamOptions
+): Promise<void> {
+  try {
+    const accessToken = await getValidAccessToken();
+    const sessionId = (options as { sessionId?: string } | undefined)?.sessionId;
+    const nativeModel = resolveNativeXaiModel(model);
+    const forwardedOptions: SimpleStreamOptions = {
+      ...options,
+      apiKey: accessToken,
+      headers: withGrokConvHeader(options?.headers, sessionId),
+    };
+    const inner =
+      nativeModel.api === 'openai-responses'
+        ? streamSimpleOpenAIResponses(nativeModel, context, forwardedOptions)
+        : streamSimpleOpenAICompletions(nativeModel, context, forwardedOptions);
+    for await (const event of inner) stream.push(event);
+    stream.end();
+  } catch (error) {
+    logStreamError(error);
+    stream.push(makeErrorOutput(model, error));
+    stream.end();
+  }
+}
+
 const streamXai = (model: Model<Api>, context: Context, options: ProviderStreamOptions = {}) => {
   const stream = createAssistantMessageEventStream();
-  (async () => {
-    try {
-      const accessToken = await getValidAccessToken();
-      const sessionId = (options as { sessionId?: string }).sessionId;
-      const nativeModel = resolveNativeXaiModel(model);
-      const forwardedOptions = {
-        ...options,
-        apiKey: accessToken,
-        headers: withGrokConvHeader(options.headers, sessionId),
-      };
-      const inner =
-        nativeModel.api === 'openai-responses'
-          ? streamOpenAIResponses(nativeModel, context, forwardedOptions)
-          : streamOpenAICompletions(nativeModel, context, forwardedOptions);
-      for await (const event of inner) stream.push(event);
-      stream.end();
-    } catch (error) {
-      console.error(
-        '[xai-grok] Stream error:',
-        error instanceof Error ? error.message : String(error)
-      );
-      stream.push(makeErrorOutput(model, error));
-      stream.end();
-    }
-  })();
+  // Fire-and-forget pump — callers consume the returned event stream.
+  pumpXaiStream(stream, model, context, options).catch(logStreamError);
   return stream;
 };
 
 const streamSimpleXai = (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => {
   const stream = createAssistantMessageEventStream();
-  (async () => {
-    try {
-      const accessToken = await getValidAccessToken();
-      const sessionId = (options as { sessionId?: string } | undefined)?.sessionId;
-      const nativeModel = resolveNativeXaiModel(model);
-      const forwardedOptions: SimpleStreamOptions = {
-        ...options,
-        apiKey: accessToken,
-        headers: withGrokConvHeader(options?.headers, sessionId),
-      };
-      const inner =
-        nativeModel.api === 'openai-responses'
-          ? streamSimpleOpenAIResponses(nativeModel, context, forwardedOptions)
-          : streamSimpleOpenAICompletions(nativeModel, context, forwardedOptions);
-      for await (const event of inner) stream.push(event);
-      stream.end();
-    } catch (error) {
-      console.error(
-        '[xai-grok] Stream error:',
-        error instanceof Error ? error.message : String(error)
-      );
-      stream.push(makeErrorOutput(model, error));
-      stream.end();
-    }
-  })();
+  // Fire-and-forget pump — callers consume the returned event stream.
+  pumpSimpleXaiStream(stream, model, context, options).catch(logStreamError);
   return stream;
 };
 
