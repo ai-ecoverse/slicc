@@ -8,8 +8,9 @@
  * `?cherry=1` follower on the `sliccy.ai` origin — there is no extension sandbox.
  */
 
+import type { EntryType } from '../fs/index.js';
 import { isNestedInAnotherFrame, nudgeIframeRepaint } from './iframe-repaint.js';
-import type { SprinkleBridgeAPI } from './sprinkle-bridge.js';
+import type { SprinkleAgentOptions, SprinkleBridgeAPI } from './sprinkle-bridge.js';
 import { isThemeLight, registerSprinkleWindow, unregisterSprinkleWindow } from './theme.js';
 
 declare global {
@@ -24,8 +25,38 @@ export function isFullDocument(content: string): boolean {
   return trimmed.startsWith('<!doctype') || trimmed.startsWith('<html');
 }
 
-/** A message the sprinkle iframe posted up to the renderer. */
-type SprinkleInboundMessage = Record<string, unknown> & { type: string };
+/** Named fields on sprinkle iframe → parent postMessage payloads. */
+interface SprinkleInboundMessage {
+  type: string;
+  id?: unknown;
+  action?: string;
+  data?: unknown;
+  path?: string;
+  content?: string;
+  cmd?: string;
+  prompt?: string;
+  opts?: SprinkleAgentOptions;
+  op?: string;
+  args?: unknown[];
+  channel?: string;
+  base64?: string;
+  name?: string;
+  mimeType?: string;
+}
+
+/** Parent → iframe response body besides `type` and `id`. */
+interface SprinkleIframeResponseBody {
+  error?: string;
+  content?: string;
+  entries?: Array<{ name: string; type: EntryType }>;
+  exists?: boolean;
+  stat?: { type: EntryType; size: number };
+  base64?: string;
+  width?: number;
+  height?: number;
+  mimeType?: string;
+  result?: unknown;
+}
 
 /** A handler for one inbound message type. */
 type BridgeMessageHandler = (iframe: HTMLIFrameElement, msg: SprinkleInboundMessage) => void;
@@ -34,7 +65,7 @@ function postToIframe(
   iframe: HTMLIFrameElement,
   type: string,
   id: unknown,
-  extra: Record<string, unknown> = {}
+  extra: SprinkleIframeResponseBody = {}
 ): void {
   iframe.contentWindow?.postMessage({ type, id, ...extra }, '*');
 }
@@ -50,7 +81,7 @@ function respondToIframe<T>(
   responseType: string,
   id: unknown,
   promise: Promise<T>,
-  mapResult: (value: T) => Record<string, unknown>
+  mapResult: (value: T) => SprinkleIframeResponseBody
 ): void {
   promise.then(
     (value) => postToIframe(iframe, responseType, id, mapResult(value)),
