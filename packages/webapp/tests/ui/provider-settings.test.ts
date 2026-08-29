@@ -954,8 +954,8 @@ describe('OAuth account storage', () => {
     vi.clearAllMocks();
   });
 
-  it('saveOAuthAccount stores OAuth fields', () => {
-    saveOAuthAccount({
+  it('saveOAuthAccount stores OAuth fields', async () => {
+    await saveOAuthAccount({
       providerId: 'test-oauth',
       accessToken: 'token-123',
       refreshToken: 'refresh-456',
@@ -971,8 +971,8 @@ describe('OAuth account storage', () => {
     expect(accounts[0].apiKey).toBe(''); // OAuth providers don't use API keys
   });
 
-  it('getApiKeyForProvider returns accessToken for OAuth providers', () => {
-    saveOAuthAccount({
+  it('getApiKeyForProvider returns accessToken for OAuth providers', async () => {
+    await saveOAuthAccount({
       providerId: 'test-oauth',
       accessToken: 'oauth-token-xyz',
     });
@@ -997,9 +997,9 @@ describe('OAuth account storage', () => {
     expect(getApiKeyForProvider('anthropic')).toBe('sk-ant-123');
   });
 
-  it('saveOAuthAccount replaces existing account for same provider', () => {
-    saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1' });
-    saveOAuthAccount({
+  it('saveOAuthAccount replaces existing account for same provider', async () => {
+    await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1' });
+    await saveOAuthAccount({
       providerId: 'test-oauth',
       accessToken: 'token-2',
       userName: 'updated@example.com',
@@ -1010,20 +1010,20 @@ describe('OAuth account storage', () => {
     expect(accounts[0].userName).toBe('updated@example.com');
   });
 
-  it('saveOAuthAccount preserves existing baseUrl through re-login', () => {
+  it('saveOAuthAccount preserves existing baseUrl through re-login', async () => {
     // First login: set baseUrl via addAccount (as the UI does before login)
     addAccount('test-oauth', '', 'https://proxy.example.com');
     // OAuth login stores token, should preserve baseUrl
-    saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1', userName: 'karl' });
+    await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1', userName: 'karl' });
     const accounts = getAccounts();
     expect(accounts).toHaveLength(1);
     expect(accounts[0].accessToken).toBe('token-1');
     expect(accounts[0].baseUrl).toBe('https://proxy.example.com');
   });
 
-  it('saveOAuthAccount allows explicit baseUrl override', () => {
+  it('saveOAuthAccount allows explicit baseUrl override', async () => {
     addAccount('test-oauth', '', 'https://old-proxy.example.com');
-    saveOAuthAccount({
+    await saveOAuthAccount({
       providerId: 'test-oauth',
       accessToken: 'token-1',
       baseUrl: 'https://new-proxy.example.com',
@@ -1031,8 +1031,8 @@ describe('OAuth account storage', () => {
     expect(getBaseUrlForProvider('test-oauth')).toBe('https://new-proxy.example.com');
   });
 
-  it('saveOAuthAccount does not set baseUrl when none exists', () => {
-    saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1' });
+  it('saveOAuthAccount does not set baseUrl when none exists', async () => {
+    await saveOAuthAccount({ providerId: 'test-oauth', accessToken: 'token-1' });
     const accounts = getAccounts();
     expect(accounts[0].baseUrl).toBeUndefined();
   });
@@ -1053,9 +1053,9 @@ describe('getOAuthAccountInfo', () => {
     expect(getOAuthAccountInfo('anthropic')).toBeNull();
   });
 
-  it('returns token info for OAuth account', () => {
+  it('returns token info for OAuth account', async () => {
     const expiresAt = Date.now() + 3600000;
-    saveOAuthAccount({
+    await saveOAuthAccount({
       providerId: 'test-oauth',
       accessToken: 'tok-123',
       tokenExpiresAt: expiresAt,
@@ -1069,8 +1069,8 @@ describe('getOAuthAccountInfo', () => {
     expect(info!.expired).toBe(false);
   });
 
-  it('marks token as expired when past expiry minus 60s buffer', () => {
-    saveOAuthAccount({
+  it('marks token as expired when past expiry minus 60s buffer', async () => {
+    await saveOAuthAccount({
       providerId: 'test-oauth',
       accessToken: 'tok-expired',
       tokenExpiresAt: Date.now() - 1000, // expired 1s ago
@@ -1080,8 +1080,8 @@ describe('getOAuthAccountInfo', () => {
     expect(info!.expired).toBe(true);
   });
 
-  it('marks token as expired when within 60s buffer', () => {
-    saveOAuthAccount({
+  it('marks token as expired when within 60s buffer', async () => {
+    await saveOAuthAccount({
       providerId: 'test-oauth',
       accessToken: 'tok-almost',
       tokenExpiresAt: Date.now() + 30000, // 30s from now (within 60s buffer)
@@ -1090,8 +1090,8 @@ describe('getOAuthAccountInfo', () => {
     expect(info!.expired).toBe(true);
   });
 
-  it('returns expired false when no tokenExpiresAt', () => {
-    saveOAuthAccount({
+  it('returns expired false when no tokenExpiresAt', async () => {
+    await saveOAuthAccount({
       providerId: 'test-oauth',
       accessToken: 'tok-forever',
     });
@@ -1152,7 +1152,7 @@ describe('OAuth API routing uses api from getModelIds', () => {
     vi.clearAllMocks();
   });
 
-  function setupOAuthProviderWithMixedApis() {
+  async function setupOAuthProviderWithMixedApis() {
     const providerConfigs = new Map(
       mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
     );
@@ -1180,11 +1180,11 @@ describe('OAuth API routing uses api from getModelIds', () => {
       baseUrl: 'https://default.example.com',
     }));
 
-    saveOAuthAccount({ providerId: 'adobe', accessToken: 'tok-adobe' });
+    await saveOAuthAccount({ providerId: 'adobe', accessToken: 'tok-adobe' });
   }
 
-  it('resolveCurrentModel returns correct api from getModelIds for anthropic model', () => {
-    setupOAuthProviderWithMixedApis();
+  it('resolveCurrentModel returns correct api from getModelIds for anthropic model', async () => {
+    await setupOAuthProviderWithMixedApis();
     storage.set('selected-model', 'adobe:claude-sonnet-4-0');
 
     const model = resolveCurrentModel();
@@ -1193,8 +1193,8 @@ describe('OAuth API routing uses api from getModelIds', () => {
     expect(String(model.api)).toBe('adobe-anthropic');
   });
 
-  it('resolveCurrentModel returns correct api from getModelIds for openai model', () => {
-    setupOAuthProviderWithMixedApis();
+  it('resolveCurrentModel returns correct api from getModelIds for openai model', async () => {
+    await setupOAuthProviderWithMixedApis();
     storage.set('selected-model', 'adobe:gpt-5');
 
     const model = resolveCurrentModel();
@@ -1203,8 +1203,8 @@ describe('OAuth API routing uses api from getModelIds', () => {
     expect(String(model.api)).toBe('adobe-openai');
   });
 
-  it('resolveModelById returns correct api from getModelIds for anthropic model', () => {
-    setupOAuthProviderWithMixedApis();
+  it('resolveModelById returns correct api from getModelIds for anthropic model', async () => {
+    await setupOAuthProviderWithMixedApis();
     storage.set('selected-model', 'adobe:claude-sonnet-4-0');
 
     const model = resolveModelById('claude-sonnet-4-0');
@@ -1213,8 +1213,8 @@ describe('OAuth API routing uses api from getModelIds', () => {
     expect(String(model.api)).toBe('adobe-anthropic');
   });
 
-  it('resolveModelById returns correct api from getModelIds for openai model', () => {
-    setupOAuthProviderWithMixedApis();
+  it('resolveModelById returns correct api from getModelIds for openai model', async () => {
+    await setupOAuthProviderWithMixedApis();
     storage.set('selected-model', 'adobe:gpt-5');
 
     const model = resolveModelById('gpt-5');
@@ -1230,7 +1230,7 @@ describe('compat propagation through resolveModelById and resolveCurrentModel', 
     vi.clearAllMocks();
   });
 
-  function setupOAuthProviderWithCompat() {
+  async function setupOAuthProviderWithCompat() {
     const providerConfigs = new Map(
       mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
     );
@@ -1263,14 +1263,14 @@ describe('compat propagation through resolveModelById and resolveCurrentModel', 
       baseUrl: 'https://default.example.com',
     }));
 
-    saveOAuthAccount({ providerId: 'adobe', accessToken: 'tok-adobe' });
+    await saveOAuthAccount({ providerId: 'adobe', accessToken: 'tok-adobe' });
   }
 
-  it('resolveModelById preserves compat from getModelIds for Haiku (regression)', () => {
+  it('resolveModelById preserves compat from getModelIds for Haiku (regression)', async () => {
     // Regression for the bug where resolveModelById cherry-picked only `api`
     // from the provider model and dropped compat — letting eager_input_streaming
     // leak through to Bedrock and 400 the request.
-    setupOAuthProviderWithCompat();
+    await setupOAuthProviderWithCompat();
     storage.set('selected-model', 'adobe:claude-haiku-4-5');
 
     const model = resolveModelById('claude-haiku-4-5');
@@ -1280,8 +1280,8 @@ describe('compat propagation through resolveModelById and resolveCurrentModel', 
     });
   });
 
-  it('resolveCurrentModel preserves compat from getModelIds for Haiku (regression)', () => {
-    setupOAuthProviderWithCompat();
+  it('resolveCurrentModel preserves compat from getModelIds for Haiku (regression)', async () => {
+    await setupOAuthProviderWithCompat();
     storage.set('selected-model', 'adobe:claude-haiku-4-5');
 
     const model = resolveCurrentModel();
@@ -1291,8 +1291,8 @@ describe('compat propagation through resolveModelById and resolveCurrentModel', 
     });
   });
 
-  it('resolveModelById leaves compat undefined for models without overrides', () => {
-    setupOAuthProviderWithCompat();
+  it('resolveModelById leaves compat undefined for models without overrides', async () => {
+    await setupOAuthProviderWithCompat();
     storage.set('selected-model', 'adobe:claude-opus-4-6');
 
     const model = resolveModelById('claude-opus-4-6');
@@ -1394,7 +1394,7 @@ describe('OAuth provider: unknown model id NOT in getModelIds (cold cloud cone)'
     vi.clearAllMocks();
   });
 
-  function setupColdOAuthProvider() {
+  async function setupColdOAuthProvider() {
     const providerConfigs = new Map(
       mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
     );
@@ -1428,11 +1428,11 @@ describe('OAuth provider: unknown model id NOT in getModelIds (cold cloud cone)'
       };
     });
 
-    saveOAuthAccount({ providerId: 'adobe', accessToken: 'ims-token' });
+    await saveOAuthAccount({ providerId: 'adobe', accessToken: 'ims-token' });
   }
 
-  it('resolveCurrentModel routes the unknown id through the OAuth proxy, not native Anthropic', () => {
-    setupColdOAuthProvider();
+  it('resolveCurrentModel routes the unknown id through the OAuth proxy, not native Anthropic', async () => {
+    await setupColdOAuthProvider();
     storage.set('selected-model', 'adobe:claude-opus-4-8');
 
     const model = resolveCurrentModel();
@@ -1441,8 +1441,8 @@ describe('OAuth provider: unknown model id NOT in getModelIds (cold cloud cone)'
     expect(model.id).toBe('claude-opus-4-8');
   });
 
-  it('resolveModelById routes the unknown id through the OAuth proxy, not native Anthropic', () => {
-    setupColdOAuthProvider();
+  it('resolveModelById routes the unknown id through the OAuth proxy, not native Anthropic', async () => {
+    await setupColdOAuthProvider();
     storage.set('selected-model', 'adobe:claude-opus-4-8');
 
     const model = resolveModelById('claude-opus-4-8');
@@ -1451,8 +1451,8 @@ describe('OAuth provider: unknown model id NOT in getModelIds (cold cloud cone)'
     expect(model.id).toBe('claude-opus-4-8');
   });
 
-  it('resolveModelById resolves the REQUESTED unknown id, not the selected one', () => {
-    setupColdOAuthProvider();
+  it('resolveModelById resolves the REQUESTED unknown id, not the selected one', async () => {
+    await setupColdOAuthProvider();
     // Selected model differs from the requested one.
     storage.set('selected-model', 'adobe:claude-sonnet-4-6');
 
@@ -1462,11 +1462,11 @@ describe('OAuth provider: unknown model id NOT in getModelIds (cold cloud cone)'
     expect(String(model.api)).toBe('adobe-anthropic');
   });
 
-  it('routes an unknown OpenAI-flavored id through the openai api on a cold cache', () => {
+  it('routes an unknown OpenAI-flavored id through the openai api on a cold cache', async () => {
     // The synthesized fallback must match the api the model will eventually
     // resolve to once metadata warms — an OpenAI-flavored id needs adobe-openai
     // (→ streamOpenAICompletions), not adobe-anthropic (→ wire-format failure).
-    setupColdOAuthProvider();
+    await setupColdOAuthProvider();
     storage.set('selected-model', 'adobe:gpt-5-cold');
 
     const model = resolveModelById('gpt-5-cold');
@@ -1474,10 +1474,10 @@ describe('OAuth provider: unknown model id NOT in getModelIds (cold cloud cone)'
     expect(String(model.api)).toBe('adobe-openai');
   });
 
-  it('synthesized model carries the pi-ai-required fields (guards streamAnthropic + GC)', () => {
+  it('synthesized model carries the pi-ai-required fields (guards streamAnthropic + GC)', async () => {
     // A regression that trims a field (e.g. contextWindow:0 → negative
     // compaction threshold → compact every turn) must be caught here.
-    setupColdOAuthProvider();
+    await setupColdOAuthProvider();
     storage.set('selected-model', 'adobe:claude-opus-4-8');
 
     const model = resolveModelById('claude-opus-4-8');
@@ -1688,7 +1688,7 @@ describe('getProviderModels with getModelIds', () => {
 });
 
 describe('Adobe sonnet model preference', () => {
-  function setupAdobeProvider(modelIds: Array<{ id: string; name: string; api?: string }>) {
+  async function setupAdobeProvider(modelIds: Array<{ id: string; name: string; api?: string }>) {
     const providerConfigs = new Map(
       mockGetRegisteredProviderIds().map((id: string) => [id, mockGetRegisteredProviderConfig(id)])
     );
@@ -1704,7 +1704,7 @@ describe('Adobe sonnet model preference', () => {
     });
     mockGetRegisteredProviderConfig.mockImplementation((id: string) => providerConfigs.get(id));
     mockGetRegisteredProviderIds.mockReturnValue([...providerConfigs.keys()]);
-    saveOAuthAccount({ providerId: 'adobe', accessToken: 'tok-test' });
+    await saveOAuthAccount({ providerId: 'adobe', accessToken: 'tok-test' });
   }
 
   beforeEach(() => {
@@ -1722,8 +1722,8 @@ describe('Adobe sonnet model preference', () => {
     });
   });
 
-  it('resolveCurrentModel prefers sonnet for Adobe when no model selected', () => {
-    setupAdobeProvider([
+  it('resolveCurrentModel prefers sonnet for Adobe when no model selected', async () => {
+    await setupAdobeProvider([
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
       { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
     ]);
@@ -1732,8 +1732,8 @@ describe('Adobe sonnet model preference', () => {
     expect(model.id).toBe('claude-sonnet-4-6');
   });
 
-  it('resolveCurrentModel respects explicit selection over sonnet preference', () => {
-    setupAdobeProvider([
+  it('resolveCurrentModel respects explicit selection over sonnet preference', async () => {
+    await setupAdobeProvider([
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
       { id: 'claude-sonnet-4-6', name: 'Claude Sonnet 4.6' },
     ]);
@@ -1742,8 +1742,8 @@ describe('Adobe sonnet model preference', () => {
     expect(model.id).toBe('claude-opus-4-6');
   });
 
-  it('resolveCurrentModel falls back to first model when no sonnet available', () => {
-    setupAdobeProvider([
+  it('resolveCurrentModel falls back to first model when no sonnet available', async () => {
+    await setupAdobeProvider([
       { id: 'claude-opus-4-6', name: 'Claude Opus 4.6' },
       { id: 'claude-haiku-4-5', name: 'Claude Haiku 4.5' },
     ]);
