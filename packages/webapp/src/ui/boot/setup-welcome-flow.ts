@@ -17,6 +17,8 @@
 
 import type { VirtualFS } from '../../fs/index.js';
 import type { LickEvent } from '../../scoops/lick-manager.js';
+import type { OnboardingProfile } from '../../scoops/onboarding-messages.js';
+import type { OnboardingFinalLickPayload } from './setup-onboarding-orchestrator.js';
 import type { BootStageLogger } from './types.js';
 
 /**
@@ -86,8 +88,50 @@ const WELCOME_FLOW_ACTIONS = new Set<string>([
   'shortcut-migrate',
 ]);
 
+/**
+ * Top-level body of a welcome / inline sprinkle lick. Producers set
+ * `action` and usually a nested `data` bag; extra keys are ignored.
+ */
+export interface WelcomeLickBody {
+  action?: unknown;
+  data?: unknown;
+  readonly [key: string]: unknown;
+}
+
+/** Nested `data` on `connect-attempt` from `connect-llm.shtml`. */
+export interface WelcomeConnectAttemptData {
+  provider?: unknown;
+  apiKey?: unknown;
+  baseUrl?: unknown;
+  deployment?: unknown;
+  apiVersion?: unknown;
+  model?: unknown;
+  readonly [key: string]: unknown;
+}
+
+/** Nested `data` on `oauth-attempt` from `connect-llm.shtml`. */
+export interface WelcomeOAuthAttemptData {
+  provider?: unknown;
+  baseUrl?: unknown;
+  readonly [key: string]: unknown;
+}
+
+/** Nested `data` on `device-code-decision`. */
+export interface WelcomeDeviceCodeDecisionData {
+  decision?: unknown;
+  readonly [key: string]: unknown;
+}
+
+/**
+ * Nested `data` on `onboarding-complete` — the wizard profile plus the
+ * optional extension-only mount hint.
+ */
+export interface WelcomeOnboardingCompleteData extends OnboardingProfile {
+  mountWorkspace?: unknown;
+}
+
 interface WelcomeFastForwardDispatcher {
-  fire(data: Record<string, unknown>): void;
+  fire(data: OnboardingFinalLickPayload): void;
   // Optional broadcast on fast-forward (sends `slicc-already-connected` to dips)
   broadcastAlreadyConnected(providerId: string): void;
 }
@@ -108,7 +152,7 @@ export interface WelcomeLickInterceptorDeps {
   /** Resolves the lazy onboarding orchestrator. */
   getOnboardingOrchestrator(): {
     handleFirstRun(): void;
-    handleOnboardingComplete(profile: Record<string, unknown>): Promise<unknown>;
+    handleOnboardingComplete(profile: OnboardingProfile): Promise<unknown>;
     handleConnectReady(): void;
     handleConnectAttempt(input: {
       provider: string;
@@ -159,7 +203,7 @@ export function createWelcomeLickInterceptor(
     if (event.type !== 'sprinkle') return false;
     const welcomeAction =
       event.sprinkleName === 'welcome' || event.sprinkleName === 'inline'
-        ? ((event.body as Record<string, unknown> | null)?.action as string | undefined)
+        ? ((event.body as WelcomeLickBody | null)?.action as string | undefined)
         : undefined;
     if (welcomeAction && DEDUPED_WELCOME_ACTIONS.has(welcomeAction)) {
       if (firedWelcomeActions.has(welcomeAction)) {
@@ -173,7 +217,7 @@ export function createWelcomeLickInterceptor(
     }
     if (!welcomeAction || !WELCOME_FLOW_ACTIONS.has(welcomeAction)) return false;
 
-    const body = event.body as Record<string, unknown> | null;
+    const body = event.body as WelcomeLickBody | null;
     return dispatchWelcomeBranch(welcomeAction, body, {
       getAccounts,
       getProviderConfig,
@@ -191,17 +235,17 @@ export function createWelcomeLickInterceptor(
 interface WelcomeBranchDeps
   extends Omit<WelcomeLickInterceptorDeps, 'firedWelcomeActions' | 'contextLabel'> {}
 
-type WelcomeBranchBody = Record<string, unknown> | null;
+type WelcomeBranchBody = WelcomeLickBody | null;
 
 /** Optional string field, normalized to `null` when absent/empty. */
-function optString(data: Record<string, unknown>, key: string): string | null {
+function optString(data: { readonly [key: string]: unknown }, key: string): string | null {
   const value = data[key];
   return typeof value === 'string' && value ? value : null;
 }
 
 function handleOnboardingCompleteBranch(body: WelcomeBranchBody, deps: WelcomeBranchDeps): boolean {
   const orch = deps.getOnboardingOrchestrator();
-  const profile = (body?.data as Record<string, unknown> | undefined) ?? {};
+  const profile = (body?.data as WelcomeOnboardingCompleteData | undefined) ?? {};
   if (profile.mountWorkspace && deps.applyPendingMount) {
     deps
       .applyPendingMount()
@@ -214,7 +258,7 @@ function handleOnboardingCompleteBranch(body: WelcomeBranchBody, deps: WelcomeBr
 }
 
 function handleConnectAttemptBranch(body: WelcomeBranchBody, deps: WelcomeBranchDeps): boolean {
-  const data = body?.data as Record<string, unknown> | undefined;
+  const data = body?.data as WelcomeConnectAttemptData | undefined;
   if (data) {
     void deps
       .getOnboardingOrchestrator()
@@ -232,7 +276,7 @@ function handleConnectAttemptBranch(body: WelcomeBranchBody, deps: WelcomeBranch
 }
 
 function handleOAuthAttemptBranch(body: WelcomeBranchBody, deps: WelcomeBranchDeps): boolean {
-  const data = body?.data as Record<string, unknown> | undefined;
+  const data = body?.data as WelcomeOAuthAttemptData | undefined;
   if (data) {
     void deps
       .getOnboardingOrchestrator()
@@ -250,7 +294,7 @@ const WELCOME_BRANCHES: Record<
   (body: WelcomeBranchBody, deps: WelcomeBranchDeps) => boolean
 > = {
   'device-code-decision': (body, deps) => {
-    const decision = (body?.data as { decision?: unknown } | undefined)?.decision;
+    const decision = (body?.data as WelcomeDeviceCodeDecisionData | undefined)?.decision;
     deps.resolveDeviceCodeDecision(decision === 'cancel' ? 'cancel' : 'continue');
     return true;
   },
@@ -307,7 +351,7 @@ function handleConnectReadyBranch(deps: {
 export async function fireFastForwardFinalLick(
   fs: VirtualFS | null,
   providerId: string,
-  fire: (data: Record<string, unknown>) => void
+  fire: (data: OnboardingFinalLickPayload) => void
 ): Promise<void> {
   const { hasOnboardingFinalLickInHistory } = await import('../../scoops/welcome-detection.js');
   if (await hasOnboardingFinalLickInHistory()) return;
@@ -355,10 +399,10 @@ export async function fireFastForwardFinalLick(
  * fast-forward path can hand the cone the same profile shape the
  * orchestrator would have. Returns `{}` on any failure.
  */
-async function loadPersistedProfile(fs: VirtualFS): Promise<Record<string, unknown>> {
+async function loadPersistedProfile(fs: VirtualFS): Promise<OnboardingProfile> {
   try {
     const homes = await fs.readDir('/home');
-    let best: { profile: Record<string, unknown>; mtime: number } | null = null;
+    let best: { profile: OnboardingProfile; mtime: number } | null = null;
     for (const entry of homes) {
       if (entry.type !== 'directory') continue;
       const path = `/home/${entry.name}/.welcome.json`;
@@ -369,7 +413,7 @@ async function loadPersistedProfile(fs: VirtualFS): Promise<Record<string, unkno
         const raw = await fs.readFile(path, { encoding: 'utf-8' });
         const parsed = JSON.parse(typeof raw === 'string' ? raw : new TextDecoder().decode(raw));
         if (parsed && typeof parsed === 'object') {
-          best = { profile: parsed as Record<string, unknown>, mtime };
+          best = { profile: parsed as OnboardingProfile, mtime };
         }
       } catch {
         /* skip slugs without a profile */
