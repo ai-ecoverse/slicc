@@ -1,17 +1,18 @@
 /**
- * `LocalMountBackend.create()` regression guard. The agent-driven mount
+ * `runMountDirectoryApproval()` regression guard. The agent-driven mount
  * flow drives `showToolUI` and waits on the panel to settle the request;
  * if the panel never mounts the dip (commit d222f1385 deleted the
  * renderer entirely) the worker used to hang for `MOUNT_TOOL_UI_TIMEOUT_MS`
  * (5 minutes). These tests pin the simulated-panel ack route end-to-end
  * (drive `toolUIRegistry` directly, the same way `WcChatController` does
- * after the fix) AND the fast-fail detector — `create()` must surface a
- * clear `panel did not render` error within seconds when no ack arrives.
+ * after the fix) AND the fast-fail detector — `runMountDirectoryApproval`
+ * must surface a clear `panel did not render` error within seconds when no
+ * ack arrives.
  */
 
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { LocalMountBackend } from '../../../src/fs/mount/backend-local.js';
+import { runMountDirectoryApproval } from '../../../src/shell/supplemental-commands/mount-directory-approval.js';
 import { toolUIRegistry } from '../../../src/tools/tool-ui.js';
 
 interface CapturedToolUI {
@@ -31,7 +32,7 @@ function captureToolUI(updates: CapturedToolUI[]) {
   };
 }
 
-describe('LocalMountBackend.create — agent-driven approval', () => {
+describe('runMountDirectoryApproval — agent-driven approval', () => {
   beforeEach(() => {
     vi.useFakeTimers({ shouldAdvanceTime: true });
   });
@@ -44,13 +45,10 @@ describe('LocalMountBackend.create — agent-driven approval', () => {
     const updates: CapturedToolUI[] = [];
     const onUpdate = captureToolUI(updates);
 
-    const pending = LocalMountBackend.create({
-      mountId: 'm1',
-      isScoop: () => false,
-      toolContext: { onUpdate, toolName: 'mount', toolCallId: 't1' },
-      isExtension: false,
-      targetPath: '/workspace/mnt/test',
-    });
+    const pending = runMountDirectoryApproval(
+      { onUpdate, toolName: 'mount', toolCallId: 't1' },
+      '/workspace/mnt/test'
+    );
 
     // Yield once so the synchronous `showToolUI` registers + emits.
     await Promise.resolve();
@@ -72,13 +70,10 @@ describe('LocalMountBackend.create — agent-driven approval', () => {
     const updates: CapturedToolUI[] = [];
     const onUpdate = captureToolUI(updates);
 
-    const pending = LocalMountBackend.create({
-      mountId: 'm2',
-      isScoop: () => false,
-      toolContext: { onUpdate, toolName: 'mount', toolCallId: 't2' },
-      isExtension: false,
-      targetPath: '/workspace/mnt/test',
-    });
+    const pending = runMountDirectoryApproval(
+      { onUpdate, toolName: 'mount', toolCallId: 't2' },
+      '/workspace/mnt/test'
+    );
     // Make sure showToolUI registered before we advance time, otherwise
     // `waitForMount` would not yet have its waiter installed.
     await Promise.resolve();
@@ -98,33 +93,14 @@ describe('LocalMountBackend.create — agent-driven approval', () => {
     await assertion;
   });
 
-  it('refuses scoop-initiated mounts without ever emitting tool_ui', async () => {
-    const updates: CapturedToolUI[] = [];
-    const onUpdate = captureToolUI(updates);
-
-    await expect(
-      LocalMountBackend.create({
-        mountId: 'm3',
-        isScoop: () => true,
-        toolContext: { onUpdate, toolName: 'mount', toolCallId: 't3' },
-        isExtension: false,
-        targetPath: '/workspace/mnt/test',
-      })
-    ).rejects.toThrow(/cannot mount local directories from a scoop/);
-    expect(updates).toHaveLength(0);
-  });
-
   it('includes the target path in the rendered approval card', async () => {
     const updates: CapturedToolUI[] = [];
     const onUpdate = captureToolUI(updates);
 
-    const pending = LocalMountBackend.create({
-      mountId: 'm4',
-      isScoop: () => false,
-      toolContext: { onUpdate, toolName: 'mount', toolCallId: 't4' },
-      isExtension: false,
-      targetPath: '/workspace/mnt/docs',
-    });
+    const pending = runMountDirectoryApproval(
+      { onUpdate, toolName: 'mount', toolCallId: 't4' },
+      '/workspace/mnt/docs'
+    );
 
     await Promise.resolve();
     expect(updates).toHaveLength(1);

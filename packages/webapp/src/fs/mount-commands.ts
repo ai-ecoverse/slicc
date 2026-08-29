@@ -4,10 +4,11 @@
  * --source, --profile, --backend, --no-probe, --max-body-mb, --clear-cache,
  * and --bodies.
  *
- * Local mounts (no --source) launch the picker UI via LocalMountBackend.create
- * (cone approval card + popup, extension terminal popup, or standalone direct
- * picker). The click is required to satisfy Chrome's user-gesture rule for the
- * File System Access API, not as a consent gate.
+ * Local mounts (no --source) launch the picker UI via the local-mount
+ * acquisition helpers (cone approval card + popup, extension terminal
+ * popup, or standalone direct picker). The click is required to satisfy
+ * Chrome's user-gesture rule for the File System Access API, not as a
+ * consent gate.
  *
  * Remote mounts (s3://..., da://..., aem://...) build their backend, probe the
  * source, and mount directly — no approval ceremony, since the trust boundary
@@ -20,16 +21,23 @@
  * the Source Bus when that is where the content lives. `--backend da|aem`
  * forces the choice when the probe is wrong or unavailable.
  *
- * Scoop fail-fast lives in LocalMountBackend.create().
+ * Scoop fail-fast lives in {@link MountCommands.mountLocal}.
  */
 
 import { isExtensionRealm } from '../base/runtime-env.js';
-import { getToolExecutionContext } from '../base/tool-execution-context.js';
+import {
+  getToolExecutionContext,
+  type ToolExecutionContext,
+} from '../base/tool-execution-context.js';
 import { AemMountBackend } from './mount/backend-aem.js';
 import { DaMountBackend, type SignedFetchDa } from './mount/backend-da.js';
 import { LocalMountBackend } from './mount/backend-local.js';
 import { S3MountBackend, type SignedFetchS3 } from './mount/backend-s3.js';
 import { type ContentBackendKind, probeContentSource } from './mount/content-source.js';
+import {
+  acquireLocalMountViaDirectPicker,
+  acquireLocalMountViaPopup,
+} from './mount/local-mount-acquire.js';
 import { newMountId } from './mount/mount-id.js';
 import { RemoteMountCache } from './mount/remote-cache.js';
 import { makeSignedFetchDa, makeSignedFetchS3 } from './mount/signed-fetch.js';
@@ -47,10 +55,17 @@ export interface MountCommandsOptions {
   fs: VirtualFS;
   /**
    * Returns true when the command is running inside a non-interactive scoop
-   * context. When true, local mounts fail fast (scoop guard is now in
-   * LocalMountBackend.create). Scoops can mount S3 and DA freely.
+   * context. When true, local mounts fail fast. Scoops can mount S3 and DA freely.
    */
   isScoop?: () => boolean;
+  /**
+   * Cone-driven local mount approval. Injected by the shell layer so `fs/`
+   * does not import up into `shell/` for `showToolUI`.
+   */
+  acquireLocalMountViaToolUI?: (
+    toolContext: ToolExecutionContext,
+    targetPath: string
+  ) => Promise<FileSystemDirectoryHandle>;
   /**
    * Test override for the S3 transport. Production builds the default at
    * mount time via `makeSignedFetchS3(profile)`.
@@ -192,6 +207,11 @@ export class MountCommands {
   private async mountLocal(targetPath: string, env?: MountIndexEnv): Promise<MountCommandResult> {
     try {
       const isScoop = this.options.isScoop ?? (() => false);
+      if (isScoop()) {
+        throw new Error(
+          'mount: cannot mount local directories from a scoop (no UI). Ask the cone.'
+        );
+      }
       const ctx = getToolExecutionContext();
       // Panel-terminal pre-intercept fast path. When the user types
       // `mount <target>` in the panel terminal in worker mode,
@@ -218,12 +238,20 @@ export class MountCommands {
           };
         }
       }
-      const backend = await LocalMountBackend.create({
+      let dirHandle: FileSystemDirectoryHandle;
+      if (ctx) {
+        const acquire = this.options.acquireLocalMountViaToolUI;
+        if (!acquire) {
+          throw new Error('mount: tool UI not available in this runtime');
+        }
+        dirHandle = await acquire(ctx, targetPath);
+      } else if (isExtensionRealm()) {
+        dirHandle = await acquireLocalMountViaPopup();
+      } else {
+        dirHandle = await acquireLocalMountViaDirectPicker();
+      }
+      const backend = LocalMountBackend.fromHandle(dirHandle, {
         mountId: newMountId(),
-        isScoop,
-        toolContext: ctx ?? undefined,
-        isExtension: isExtensionRealm(),
-        targetPath,
       });
       await this.options.fs.mount(targetPath, backend, { env });
       const desc = backend.describe();
@@ -588,7 +616,7 @@ export class MountCommands {
  * adopts the handle.
  *
  * Returns `null` when no pending handle exists; caller falls back
- * to the standard `LocalMountBackend.create` flow. Errors during
+ * to the standard local-mount acquisition flow. Errors during
  * adoption (permission revoked, handle stale) also return `null`
  * so the standard flow can produce a uniform error message — the
  * pre-pick is a fast path, not a hard requirement.

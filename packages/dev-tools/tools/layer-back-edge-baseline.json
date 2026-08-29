@@ -1,6 +1,5 @@
 {
   "packages/webapp/src/cdp/har-recorder.ts": 1,
-  "packages/webapp/src/fs/mount/backend-local.ts": 2,
   "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts": 2,
   "packages/webapp/src/shell/supplemental-commands/serve-command.ts": 3
 }
