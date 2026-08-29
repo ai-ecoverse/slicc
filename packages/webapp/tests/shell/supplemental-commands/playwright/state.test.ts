@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 import { FsError } from '../../../../src/fs/index.js';
 import {
+  TRAY_JOIN_STORAGE_KEY as CANONICAL_TRAY_JOIN_STORAGE_KEY,
+  TRAY_WORKER_STORAGE_KEY as CANONICAL_TRAY_WORKER_STORAGE_KEY,
+} from '../../../../src/scoops/tray-runtime-config.js';
+import {
   filenameSafeTimestamp,
   frameIdUsedAsTabError,
   getCurrentPageLocation,
@@ -11,9 +15,19 @@ import {
   parseRef,
   requireTab,
   resolveFrame,
+  TRAY_JOIN_STORAGE_KEY,
+  TRAY_WORKER_STORAGE_KEY,
 } from '../../../../src/shell/supplemental-commands/playwright/state.js';
 
 describe('playwright state helpers', () => {
+  it('keeps inlined tray storage keys byte-identical to the canonical source', () => {
+    // The keys are inlined in state.ts to avoid a shell → scoops back-edge; this
+    // test imports both copies (allowed in tests) to catch silent drift if the
+    // canonical values in scoops/tray-runtime-config.ts ever change.
+    expect(TRAY_WORKER_STORAGE_KEY).toBe(CANONICAL_TRAY_WORKER_STORAGE_KEY);
+    expect(TRAY_JOIN_STORAGE_KEY).toBe(CANONICAL_TRAY_JOIN_STORAGE_KEY);
+  });
+
   it('parses main-frame and iframe refs', () => {
     expect(parseRef('e5')).toEqual({ framePrefix: '', isIframe: false });
     expect(parseRef('f1e5')).toEqual({ framePrefix: 'f1', isIframe: true });

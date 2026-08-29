@@ -40,10 +40,12 @@ interface PlaywrightBrowserAPI {
 
 /**
  * Canonical string values live in `scoops/tray-runtime-config.ts`; inlined here
- * so shell does not import up into scoops.
+ * so shell does not import up into scoops. Exported so a test can assert they
+ * stay byte-identical to the canonical source (see `state.test.ts`) without
+ * reintroducing the runtime back-edge.
  */
-const TRAY_WORKER_STORAGE_KEY = 'slicc.trayWorkerBaseUrl';
-const TRAY_JOIN_STORAGE_KEY = 'slicc.trayJoinUrl';
+export const TRAY_WORKER_STORAGE_KEY = 'slicc.trayWorkerBaseUrl';
+export const TRAY_JOIN_STORAGE_KEY = 'slicc.trayJoinUrl';
 
 const sharedStateByBrowser = new WeakMap<object, WeakMap<VirtualFS, PlaywrightState>>();
 const log = createLogger('playwright');
