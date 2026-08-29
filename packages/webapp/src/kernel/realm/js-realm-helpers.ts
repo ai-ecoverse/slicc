@@ -25,7 +25,7 @@ export type { NodeCrypto, NodeHash } from './helpers/node-crypto.js';
 export { nodeCrypto } from './helpers/node-crypto.js';
 export { nodeEvents } from './helpers/node-events.js';
 export type { NodeOs } from './helpers/node-os.js';
-export { nodeOs } from './helpers/node-os.js';
+export { createNodeOs, DEFAULT_HOME, nodeOs } from './helpers/node-os.js';
 export type { NodePath, NodePathParsed } from './helpers/node-path.js';
 export { nodePath } from './helpers/node-path.js';
 export { nodeStream } from './helpers/node-stream.js';

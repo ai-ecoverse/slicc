@@ -22,7 +22,12 @@ import '../../shims/buffer-polyfill.js';
 import { readSliccVersion } from '../../base/slicc-version.js';
 import { createNodeReadline } from './helpers/node-readline.js';
 import { createHttpGlobal } from './http-global.js';
-import { createCli, createColor, createNodeChildProcess } from './js-realm-helpers.js';
+import {
+  createCli,
+  createColor,
+  createNodeChildProcess,
+  createNodeOs,
+} from './js-realm-helpers.js';
 import { createSliccyAgentModule } from './realm-agent-module.js';
 import { createBrowserBridge, serializeRequestInit } from './realm-browser-bridge.js';
 import { createExecBridge } from './realm-exec-bridge.js';
@@ -366,6 +371,9 @@ export async function runJsRealm(init: RealmInitMsg, port: RealmPortLike): Promi
     // Per-realm: question() echoes to THIS realm's stdout; onExit records a
     // process.exit(N) from a deferred 'line' handler (see createProcessShim).
     nodeReadline: createNodeReadline({ output: { write: writeStdout }, onExit: proc.recordExit }),
+    // Per-realm too: `os.tmpdir()`/`os.homedir()` read the SAME `init.env`
+    // that `process.env` exposes, so one script cannot see two machines.
+    nodeOsModule: createNodeOs(init.env),
   });
   const requireShim = moduleSystem.require;
 

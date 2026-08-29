@@ -178,9 +178,16 @@ self-reference.
 
 ### `os`
 
-Static/hardcoded values: `tmpdir()` → `/tmp`, `homedir()` → `/home/user`,
-`platform` → `linux`, `arch` → `x64`, `cpus()`, `hostname()`, `type()`,
-`release()`, `EOL` → `\n`.
+**Per-realm**: `tmpdir()` and `homedir()` answer for the unit that owns the
+realm, read from the same `init.env` that backs `process.env` — so
+`os.tmpdir() === process.env.TMPDIR` and `os.homedir() === process.env.HOME`
+inside one script. A cone gets `/tmp/<folder>`, a scoop `/tmp/<cone>/<folder>`
+and `/scoops/<folder>/home`. A realm booted with no env (a host with no work
+unit behind it) falls back to the float-wide `/tmp` and `/home/user`.
+
+Static: `platform` → `linux`, `arch` → `x64`, `cpus()`, `hostname()`, `type()`,
+`release()`, `EOL` → `\n`. These deliberately mirror `process.platform` /
+`process.arch` so a script reading both sees one consistent machine.
 
 ### `stream`
 

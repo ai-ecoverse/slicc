@@ -130,12 +130,14 @@ export function makeCtx(
     fetch?: CommandContext['fetch'];
     /** Piped stdin as a latin1 string (one JS char per byte), like a shell pipe. */
     stdin?: string;
+    /** Shell env the realm inherits — `process.env` and the `os` shim read it. */
+    env?: Record<string, string>;
   } = {}
 ): CommandContext {
   const ctx: CommandContext = {
     fs: makeTreeFs(opts.files ?? {}),
     cwd: opts.cwd ?? '/workspace',
-    env: new Map<string, string>(),
+    env: new Map<string, string>(Object.entries(opts.env ?? {})),
     stdin: unsafeBytesFromLatin1(opts.stdin ?? ''),
   };
   if (opts.exec) ctx.exec = opts.exec;

@@ -23,6 +23,13 @@ describe('scratchDir', () => {
     expect(scratchDir(undefined)).toBe(SHARED_TMP_ROOT);
   });
 
+  it('returns a non-blank value verbatim, spaces and all', () => {
+    // Trimming the returned value would silently redirect the write and, via
+    // the realm `os` shim, break `os.tmpdir() === process.env.TMPDIR`.
+    expect(scratchDir(new Map([[TMPDIR_ENV, ' /tmp/odd name ']]))).toBe(' /tmp/odd name ');
+    expect(scratchDir({ [TMPDIR_ENV]: '/tmp/trailing/' })).toBe('/tmp/trailing/');
+  });
+
   it('treats an empty or whitespace value as unset, never as a relative path', () => {
     // `${''}/screenshot.png` would write to `/screenshot.png` at the VFS root.
     for (const bad of ['', '   ', '\t']) {
