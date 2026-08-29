@@ -90,6 +90,36 @@ function parseCapLimit(name: string, raw: string): number {
   return n;
 }
 
+function errMessage(err: unknown): string {
+  return err instanceof Error ? err.message : String(err);
+}
+
+/** Enforce running/paused caps when env caps are provided. */
+function enforceCaps(existing: ConeEntry[], env: NonNullable<ReserveSlotOpts['env']>): void {
+  const running = existing.filter((e) => e.state === 'running' || e.state === 'reserved').length;
+  const paused = existing.filter((e) => e.state === 'paused').length;
+  const runningCap = parseCapLimit('CONE_CAP_RUNNING', env.CONE_CAP_RUNNING);
+  const pausedCap = parseCapLimit('CONE_CAP_PAUSED', env.CONE_CAP_PAUSED);
+  if (running >= runningCap) {
+    throw new CloudError('CAP_EXCEEDED', `at running cap (${running}/${runningCap})`, {
+      running,
+      cap: runningCap,
+    });
+  }
+  if (paused >= pausedCap) {
+    throw new CloudError('CAP_EXCEEDED', `at paused cap (${paused}/${pausedCap})`, {
+      paused,
+      cap: pausedCap,
+    });
+  }
+}
+
+async function loadExistingCones(deps: StartConeDeps, opts: ReserveSlotOpts): Promise<ConeEntry[]> {
+  if (opts.reconciledCones) return opts.reconciledCones;
+  const { listCones } = await import('./list.js');
+  return listCones(deps, opts.userId ? { metadata: { userId: opts.userId } } : {});
+}
+
 /**
  * Reserve a slot in the registry atomically under DO lock, BEFORE substrate.create.
  * Returns a synthetic reservationId (pending-<uuid>) that counts toward the cap.
@@ -108,32 +138,11 @@ export async function reserveSlot(
   // Read existing entries to enforce caps + name conflicts.
   // If caller provided a pre-reconciled list (worker DO path), use it directly.
   // Otherwise (CLI path), do a full reconciliation via listCones.
-  let existing: ConeEntry[];
-  if (opts.reconciledCones) {
-    existing = opts.reconciledCones;
-  } else {
-    const { listCones } = await import('./list.js');
-    existing = await listCones(deps, opts.userId ? { metadata: { userId: opts.userId } } : {});
-  }
+  const existing = await loadExistingCones(deps, opts);
 
   // Cap check: count both running and reserved entries (reservations count as running)
   if (opts.env) {
-    const running = existing.filter((e) => e.state === 'running' || e.state === 'reserved').length;
-    const paused = existing.filter((e) => e.state === 'paused').length;
-    const runningCap = parseCapLimit('CONE_CAP_RUNNING', opts.env.CONE_CAP_RUNNING);
-    const pausedCap = parseCapLimit('CONE_CAP_PAUSED', opts.env.CONE_CAP_PAUSED);
-    if (running >= runningCap) {
-      throw new CloudError('CAP_EXCEEDED', `at running cap (${running}/${runningCap})`, {
-        running,
-        cap: runningCap,
-      });
-    }
-    if (paused >= pausedCap) {
-      throw new CloudError('CAP_EXCEEDED', `at paused cap (${paused}/${pausedCap})`, {
-        paused,
-        cap: pausedCap,
-      });
-    }
+    enforceCaps(existing, opts.env);
   }
 
   // Name conflict check
@@ -159,6 +168,145 @@ export async function reserveSlot(
   return { reservationId };
 }
 
+function buildCreateEnvVars(opts: StartConeOpts, safeSecrets: string): Record<string, string> {
+  return {
+    SLICC_TRAY_WORKER_BASE_URL: opts.workerBaseUrl,
+    SLICC_SECRETS_ENV_B64: encodeBundleEnv(safeSecrets),
+    ...(opts.coneConfigJson ? { SLICC_CONE_CONFIG_B64: encodeBundleEnv(opts.coneConfigJson) } : {}),
+    ...(opts.envs ?? {}),
+  };
+}
+
+function buildCreateMetadata(opts: StartConeOpts): Record<string, string> {
+  return {
+    sliccVersion: opts.sliccVersion,
+    ...(opts.name ? { name: opts.name } : {}),
+    ...(opts.metadata ?? {}),
+  };
+}
+
+/**
+ * Swap a reservation for the real sandbox entry, or append a legacy placeholder.
+ * Returns the registry key that is now active (the real sandboxId).
+ *
+ * The placeholder ensures concurrent /list-cones calls see the cone in the registry
+ * (pass 1) instead of treating it as an orphan (pass 2). The empty joinUrl
+ * means the dashboard hides the Open button until pollCloudStatus completes
+ * and the entry is updated below. State is 'reserved' until poll completes.
+ */
+async function registerStartPlaceholder(
+  registry: Registry,
+  substrateId: string,
+  handle: SandboxHandle,
+  opts: StartConeOpts,
+  createdAt: string
+): Promise<string> {
+  if (opts.reservationId) {
+    // Remove the reservation entry and append the real one
+    await registry.remove(opts.reservationId);
+    const placeholder: ConeEntry = {
+      substrate: substrateId,
+      sandboxId: handle.sandboxId,
+      name: opts.name,
+      createdAt,
+      lastSeen: createdAt,
+      state: 'reserved',
+      joinUrl: '',
+      metadata: opts.metadata,
+    };
+    await registry.append(placeholder);
+  } else {
+    // Legacy path: no reservation, append directly
+    const placeholder: ConeEntry = {
+      substrate: substrateId,
+      sandboxId: handle.sandboxId,
+      name: opts.name,
+      createdAt,
+      lastSeen: createdAt,
+      state: 'reserved',
+      joinUrl: '',
+    };
+    await registry.append(placeholder);
+  }
+  return handle.sandboxId;
+}
+
+/**
+ * Two-layer secrets bootstrap (see Plan B):
+ *   1. start.sh writes /slicc/secrets.env from $ADOBE_IMS_TOKEN if the file
+ *      doesn't already exist (fallback for race-free worker path where env-vars
+ *      arrive before this writeFile lands).
+ *   2. THIS writeFile uploads the full filtered secrets.env. Worker overwrites
+ *      with Adobe-only content (effectively a no-op since start.sh already wrote
+ *      the same token). CLI overwrites with non-Adobe secrets (GitHub PATs, S3
+ *      keys, etc.), load-bearing for CLI-launched cones. The CLI race is benign
+ *      because the page-side bootstrap polls /api/hosted-bootstrap after a 5s
+ *      delay, by which time this writeFile has landed.
+ */
+async function writeBootstrapFiles(
+  handle: SandboxHandle,
+  safeSecrets: string,
+  coneConfigJson: string | undefined
+): Promise<void> {
+  await handle.writeFile('/slicc/secrets.env', safeSecrets);
+  if (coneConfigJson) {
+    await handle.writeFile('/slicc/cone-config.json', coneConfigJson);
+  }
+}
+
+async function pollStatusOrThrow(
+  handle: SandboxHandle,
+  opts: StartConeOpts,
+  minUpdatedAt: string
+): Promise<Awaited<ReturnType<typeof pollCloudStatus>>> {
+  try {
+    return await pollCloudStatus(handle, {
+      timeoutMs: opts.pollTimeoutMs ?? 60_000,
+      intervalMs: opts.pollIntervalMs ?? 500,
+      minUpdatedAt,
+    });
+  } catch (pollErr) {
+    // Surface boot diagnostics before tearing down. Spec failure mode #7.
+    const stderr = await tailStderr(handle, 50);
+    throw new CloudError(
+      'SANDBOX_NOT_READY',
+      `${errMessage(pollErr)}\n` + `--- last 50 lines of /tmp/slicc-stderr.log ---\n${stderr}`,
+      { sandboxId: handle.sandboxId }
+    );
+  }
+}
+
+async function bestEffortCleanup(
+  registry: Registry,
+  activeRegistryId: string | undefined,
+  handle: SandboxHandle | undefined
+): Promise<void> {
+  // Best-effort cleanup: remove whichever registry entry is currently active.
+  if (activeRegistryId) {
+    try {
+      await registry.remove(activeRegistryId);
+    } catch (cleanupErr) {
+      console.warn('[cloud-core] start cleanup', {
+        phase: 'registry-remove',
+        sandboxId: activeRegistryId,
+        err: errMessage(cleanupErr),
+      });
+    }
+  }
+  // Always kill the real sandbox if it was created (handle exists at this point)
+  if (handle) {
+    try {
+      await handle.kill();
+    } catch (cleanupErr) {
+      console.warn('[cloud-core] start cleanup', {
+        phase: 'handle-kill',
+        sandboxId: handle.sandboxId,
+        err: errMessage(cleanupErr),
+      });
+    }
+  }
+}
+
 export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promise<StartResult> {
   const safeSecrets = filterSecretsEnv(opts.envContents);
 
@@ -171,19 +319,8 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
     handle = await deps.substrate.create({
       template: opts.template ?? 'slicc',
       autoPauseOnCap: opts.autoPauseOnCap ?? true,
-      envVars: {
-        SLICC_TRAY_WORKER_BASE_URL: opts.workerBaseUrl,
-        SLICC_SECRETS_ENV_B64: encodeBundleEnv(safeSecrets),
-        ...(opts.coneConfigJson
-          ? { SLICC_CONE_CONFIG_B64: encodeBundleEnv(opts.coneConfigJson) }
-          : {}),
-        ...(opts.envs ?? {}),
-      },
-      metadata: {
-        sliccVersion: opts.sliccVersion,
-        ...(opts.name ? { name: opts.name } : {}),
-        ...(opts.metadata ?? {}),
-      },
+      envVars: buildCreateEnvVars(opts, safeSecrets),
+      metadata: buildCreateMetadata(opts),
       name: opts.name,
     });
 
@@ -197,77 +334,18 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
     const createdAt = new Date().toISOString();
 
     // Update or append placeholder depending on whether we have a reservation.
-    // If reservationId is provided, update it to the real sandboxId and remove the old entry.
-    // Otherwise, append a new placeholder as before.
-    //
-    // The placeholder ensures concurrent /list-cones calls see the cone in the registry
-    // (pass 1) instead of treating it as an orphan (pass 2). The empty joinUrl
-    // means the dashboard hides the Open button until pollCloudStatus completes
-    // and the entry is updated below. State is 'reserved' until poll completes.
-    if (opts.reservationId) {
-      // Remove the reservation entry and append the real one
-      await deps.registry.remove(opts.reservationId);
-      const placeholder: ConeEntry = {
-        substrate: deps.substrate.id,
-        sandboxId: handle.sandboxId,
-        name: opts.name,
-        createdAt,
-        lastSeen: createdAt,
-        state: 'reserved',
-        joinUrl: '',
-        metadata: opts.metadata,
-      };
-      await deps.registry.append(placeholder);
-      // After swapping, the real sandboxId is the active registry key.
-      activeRegistryId = handle.sandboxId;
-    } else {
-      // Legacy path: no reservation, append directly
-      const placeholder: ConeEntry = {
-        substrate: deps.substrate.id,
-        sandboxId: handle.sandboxId,
-        name: opts.name,
-        createdAt,
-        lastSeen: createdAt,
-        state: 'reserved',
-        joinUrl: '',
-      };
-      await deps.registry.append(placeholder);
-      // The newly-appended sandboxId is the active registry key.
-      activeRegistryId = handle.sandboxId;
-    }
+    // After swapping/appending, the real sandboxId is the active registry key.
+    activeRegistryId = await registerStartPlaceholder(
+      deps.registry,
+      deps.substrate.id,
+      handle,
+      opts,
+      createdAt
+    );
 
-    // Two-layer secrets bootstrap (see Plan B):
-    //   1. start.sh writes /slicc/secrets.env from $ADOBE_IMS_TOKEN if the file
-    //      doesn't already exist (fallback for race-free worker path where env-vars
-    //      arrive before this writeFile lands).
-    //   2. THIS writeFile uploads the full filtered secrets.env. Worker overwrites
-    //      with Adobe-only content (effectively a no-op since start.sh already wrote
-    //      the same token). CLI overwrites with non-Adobe secrets (GitHub PATs, S3
-    //      keys, etc.), load-bearing for CLI-launched cones. The CLI race is benign
-    //      because the page-side bootstrap polls /api/hosted-bootstrap after a 5s
-    //      delay, by which time this writeFile has landed.
-    await handle.writeFile('/slicc/secrets.env', safeSecrets);
-    if (opts.coneConfigJson) {
-      await handle.writeFile('/slicc/cone-config.json', opts.coneConfigJson);
-    }
+    await writeBootstrapFiles(handle, safeSecrets, opts.coneConfigJson);
 
-    let status: Awaited<ReturnType<typeof pollCloudStatus>>;
-    try {
-      status = await pollCloudStatus(handle, {
-        timeoutMs: opts.pollTimeoutMs ?? 60_000,
-        intervalMs: opts.pollIntervalMs ?? 500,
-        minUpdatedAt,
-      });
-    } catch (pollErr) {
-      // Surface boot diagnostics before tearing down. Spec failure mode #7.
-      const stderr = await tailStderr(handle, 50);
-      throw new CloudError(
-        'SANDBOX_NOT_READY',
-        `${pollErr instanceof Error ? pollErr.message : String(pollErr)}\n` +
-          `--- last 50 lines of /tmp/slicc-stderr.log ---\n${stderr}`,
-        { sandboxId: handle.sandboxId }
-      );
-    }
+    const status = await pollStatusOrThrow(handle, opts, minUpdatedAt);
 
     // Promote the placeholder to a fully-populated running entry.
     await deps.registry.update(handle.sandboxId, {
@@ -284,32 +362,7 @@ export async function startCone(deps: StartConeDeps, opts: StartConeOpts): Promi
       joinUrl: status.joinUrl,
     };
   } catch (err) {
-    // Best-effort cleanup: remove whichever registry entry is currently active.
-    if (activeRegistryId) {
-      try {
-        await deps.registry.remove(activeRegistryId);
-      } catch (cleanupErr) {
-        const msg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
-        console.warn('[cloud-core] start cleanup', {
-          phase: 'registry-remove',
-          sandboxId: activeRegistryId,
-          err: msg,
-        });
-      }
-    }
-    // Always kill the real sandbox if it was created (handle exists at this point)
-    if (handle) {
-      try {
-        await handle.kill();
-      } catch (cleanupErr) {
-        const msg = cleanupErr instanceof Error ? cleanupErr.message : String(cleanupErr);
-        console.warn('[cloud-core] start cleanup', {
-          phase: 'handle-kill',
-          sandboxId: handle.sandboxId,
-          err: msg,
-        });
-      }
-    }
+    await bestEffortCleanup(deps.registry, activeRegistryId, handle);
     throw err;
   }
 }
