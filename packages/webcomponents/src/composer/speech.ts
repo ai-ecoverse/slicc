@@ -122,15 +122,20 @@ interface BuiltinRecognition {
 
 type RecognitionCtor = new () => BuiltinRecognition;
 
+/**
+ * Chrome/WebKit expose the constructor on `window` under either name; neither
+ * is in every TS DOM lib set, so this is the named slice we read.
+ */
+interface WindowWithSpeechRecognition {
+  SpeechRecognition?: RecognitionCtor;
+  webkitSpeechRecognition?: RecognitionCtor;
+}
+
 /** Resolve the browser's SpeechRecognition constructor (Chrome: webkit-prefixed). */
 function recognitionCtor(): RecognitionCtor | null {
   if (typeof window === 'undefined') return null;
-  const w = window as unknown as Record<string, unknown>;
-  return (
-    (w.SpeechRecognition as RecognitionCtor) ??
-    (w.webkitSpeechRecognition as RecognitionCtor) ??
-    null
-  );
+  const w = window as unknown as WindowWithSpeechRecognition;
+  return w.SpeechRecognition ?? w.webkitSpeechRecognition ?? null;
 }
 
 /** How long `stop()` waits for the recognizer's `end` event before giving up
