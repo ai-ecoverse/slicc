@@ -208,22 +208,30 @@ function renderCones(cones) {
     if (c.state === 'running') {
       const btn = document.createElement('button');
       btn.textContent = 'Pause';
-      btn.addEventListener('click', () => runConeAction(li, c.sandboxId, 'pause'));
+      btn.addEventListener('click', () => {
+        runConeAction(li, c.sandboxId, 'pause').catch(() => {});
+      });
       actions.appendChild(btn);
     }
     if (c.state === 'paused') {
       const btn = document.createElement('button');
       btn.textContent = 'Resume';
-      btn.addEventListener('click', () => runConeAction(li, c.sandboxId, 'resume'));
+      btn.addEventListener('click', () => {
+        runConeAction(li, c.sandboxId, 'resume').catch(() => {});
+      });
       actions.appendChild(btn);
       const manageBtn = document.createElement('button');
       manageBtn.textContent = 'Manage';
-      manageBtn.addEventListener('click', () => showManagePanel(li, c.sandboxId));
+      manageBtn.addEventListener('click', () => {
+        showManagePanel(li, c.sandboxId).catch(() => {});
+      });
       actions.appendChild(manageBtn);
     }
     const killBtn = document.createElement('button');
     killBtn.textContent = 'Kill';
-    killBtn.addEventListener('click', () => runConeAction(li, c.sandboxId, 'kill'));
+    killBtn.addEventListener('click', () => {
+      runConeAction(li, c.sandboxId, 'kill').catch(() => {});
+    });
     actions.appendChild(killBtn);
 
     li.appendChild(actions);
@@ -491,6 +499,165 @@ function addSecretRow() {
   if (container) container.appendChild(makeSecretRow());
 }
 
+function appendManagePanelSectionHeader(panel, text) {
+  const header = document.createElement('div');
+  header.textContent = text;
+  header.style.marginTop = '10px';
+  header.style.fontWeight = 'bold';
+  panel.appendChild(header);
+}
+
+function appendManagePanelDeleteCheckboxes(panel, { className, datasetKey, items, labelPrefix }) {
+  if (!items?.length) return;
+  for (const item of items) {
+    const label = document.createElement('label');
+    const checkbox = document.createElement('input');
+    checkbox.type = 'checkbox';
+    checkbox.className = className;
+    checkbox.dataset[datasetKey] = item;
+    label.appendChild(checkbox);
+    label.appendChild(document.createTextNode(` ${labelPrefix} ${item}`));
+    panel.appendChild(label);
+    panel.appendChild(document.createElement('br'));
+  }
+}
+
+function createManagePanelModelSelect(idx) {
+  const modelLabel = document.createElement('div');
+  modelLabel.textContent = 'Current model: ' + (idx?.model || 'none');
+
+  const modelSelect = document.createElement('select');
+  modelSelect.className = 'manage-model-select';
+  populateModelSelect(
+    modelSelect,
+    modelsForConnected(effectiveCatalog(), readAccounts()),
+    '',
+    'Keep current model'
+  );
+
+  const section = document.createElement('div');
+  section.append(modelLabel, modelSelect);
+  return { section, modelSelect };
+}
+
+function appendManagePanelDeleteSections(panel, idx) {
+  if (idx?.accountProviderIds?.length) {
+    appendManagePanelSectionHeader(panel, 'Connected accounts:');
+    appendManagePanelDeleteCheckboxes(panel, {
+      className: 'delete-account-checkbox',
+      datasetKey: 'providerId',
+      items: idx.accountProviderIds,
+      labelPrefix: 'Delete',
+    });
+  }
+  if (idx?.secretNames?.length) {
+    appendManagePanelSectionHeader(panel, 'Secrets:');
+    appendManagePanelDeleteCheckboxes(panel, {
+      className: 'delete-secret-checkbox',
+      datasetKey: 'secretName',
+      items: idx.secretNames,
+      labelPrefix: 'Delete',
+    });
+  }
+}
+
+function appendManagePanelAddSecretSection(panel) {
+  appendManagePanelSectionHeader(panel, 'Add secret:');
+  const addSecretContainer = document.createElement('div');
+  addSecretContainer.className = 'add-secret-rows';
+  panel.appendChild(addSecretContainer);
+
+  const addBtn = document.createElement('button');
+  addBtn.textContent = 'Add secret row';
+  addBtn.addEventListener('click', () => addSecretContainer.appendChild(makeSecretRow()));
+  panel.appendChild(addBtn);
+}
+
+async function applyManagePanelChanges(panel, modelSelect, sandboxId) {
+  const newModel = modelSelect.value || '';
+
+  const deleteProviderIds = Array.from(
+    panel.querySelectorAll('.delete-account-checkbox:checked')
+  ).map((el) => el.dataset.providerId);
+  const deleteSecretNames = Array.from(
+    panel.querySelectorAll('.delete-secret-checkbox:checked')
+  ).map((el) => el.dataset.secretName);
+  const upsertSecretRows = Array.from(panel.querySelectorAll('.add-secret-rows .secret-row')).map(
+    (row) => ({
+      name: row.querySelector('.s-name')?.value || '',
+      value: row.querySelector('.s-value')?.value || '',
+      domains: row.querySelector('.s-domains')?.value || '',
+    })
+  );
+
+  // Re-send all currently connected accounts (same as the original manage UX).
+  const allAccounts = JSON.parse(localStorage.getItem('slicc_accounts') || '[]');
+  const upsertAccounts = allAccounts;
+
+  const dropWarnings = bundleDropWarnings({
+    selectedProviderIds: upsertAccounts.map((a) => a.providerId),
+    allAccounts: upsertAccounts,
+    secretRows: upsertSecretRows,
+  });
+  if (dropWarnings.length > 0) showToast(dropWarnings.join(' '));
+
+  const coneConfigDelta = assembleDelta({
+    model: newModel,
+    upsertAccounts,
+    upsertSecretRows,
+    deleteProviderIds,
+    deleteSecretNames,
+  });
+
+  await api('/api/cloud/resume', {
+    method: 'POST',
+    body: JSON.stringify({ sandboxId, coneConfigDelta }),
+  });
+
+  showToast('Configuration updated - will apply on next resume');
+  panel.remove();
+  await refreshList();
+}
+
+function appendManagePanelActionButtons(panel, { modelSelect, sandboxId }) {
+  const reconnectBtn = document.createElement('button');
+  reconnectBtn.textContent = 'Reconnect / set model';
+  reconnectBtn.style.marginTop = '10px';
+  reconnectBtn.addEventListener('click', () => {
+    window.open('/?connect=1', 'slicc-connect', 'width=520,height=720');
+  });
+  panel.appendChild(reconnectBtn);
+
+  const applyBtn = document.createElement('button');
+  applyBtn.textContent = 'Apply on resume';
+  applyBtn.style.marginTop = '10px';
+  applyBtn.addEventListener('click', () => {
+    applyManagePanelChanges(panel, modelSelect, sandboxId).catch((e) => {
+      showToast('Apply failed: ' + e.message);
+    });
+  });
+  panel.appendChild(applyBtn);
+
+  const closeBtn = document.createElement('button');
+  closeBtn.textContent = 'Close';
+  closeBtn.style.marginTop = '10px';
+  closeBtn.addEventListener('click', () => panel.remove());
+  panel.appendChild(closeBtn);
+}
+
+function buildManagePanel(idx, sandboxId) {
+  const panel = document.createElement('div');
+  panel.className = 'manage-panel';
+
+  const { section: modelSection, modelSelect } = createManagePanelModelSelect(idx);
+  panel.appendChild(modelSection);
+  appendManagePanelDeleteSections(panel, idx);
+  appendManagePanelAddSecretSection(panel);
+  appendManagePanelActionButtons(panel, { modelSelect, sandboxId });
+
+  return panel;
+}
+
 async function showManagePanel(li, sandboxId) {
   try {
     const data = await api('/api/cloud/cone-config?sandboxId=' + encodeURIComponent(sandboxId), {
@@ -498,171 +665,13 @@ async function showManagePanel(li, sandboxId) {
     });
     const idx = data.coneConfigIndex;
 
-    // Remove existing manage panel if any
     const existing = li.querySelector('.manage-panel');
     if (existing) {
       existing.remove();
       return;
     }
 
-    const panel = document.createElement('div');
-    panel.className = 'manage-panel';
-
-    // Model display
-    const modelLabel = document.createElement('div');
-    modelLabel.textContent = 'Current model: ' + (idx?.model || 'none');
-    panel.appendChild(modelLabel);
-
-    // Model selector — derived from the user's connected providers, same as create.
-    const modelSelect = document.createElement('select');
-    modelSelect.className = 'manage-model-select';
-    populateModelSelect(
-      modelSelect,
-      modelsForConnected(effectiveCatalog(), readAccounts()),
-      '',
-      'Keep current model'
-    );
-    panel.appendChild(modelSelect);
-
-    // Account list with delete toggles
-    if (idx?.accountProviderIds?.length) {
-      const accountsHeader = document.createElement('div');
-      accountsHeader.textContent = 'Connected accounts:';
-      accountsHeader.style.marginTop = '10px';
-      accountsHeader.style.fontWeight = 'bold';
-      panel.appendChild(accountsHeader);
-
-      for (const providerId of idx.accountProviderIds) {
-        const label = document.createElement('label');
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.className = 'delete-account-checkbox';
-        checkbox.dataset.providerId = providerId;
-        label.appendChild(checkbox);
-        label.appendChild(document.createTextNode(' Delete ' + providerId));
-        panel.appendChild(label);
-        panel.appendChild(document.createElement('br'));
-      }
-    }
-
-    // Secrets list with delete toggles
-    if (idx?.secretNames?.length) {
-      const secretsHeader = document.createElement('div');
-      secretsHeader.textContent = 'Secrets:';
-      secretsHeader.style.marginTop = '10px';
-      secretsHeader.style.fontWeight = 'bold';
-      panel.appendChild(secretsHeader);
-
-      for (const name of idx.secretNames) {
-        const label = document.createElement('label');
-        const checkbox = document.createElement('input');
-        checkbox.type = 'checkbox';
-        checkbox.className = 'delete-secret-checkbox';
-        checkbox.dataset.secretName = name;
-        label.appendChild(checkbox);
-        label.appendChild(document.createTextNode(' Delete ' + name));
-        panel.appendChild(label);
-        panel.appendChild(document.createElement('br'));
-      }
-    }
-
-    // Add secret section
-    const addSecretHeader = document.createElement('div');
-    addSecretHeader.textContent = 'Add secret:';
-    addSecretHeader.style.marginTop = '10px';
-    addSecretHeader.style.fontWeight = 'bold';
-    panel.appendChild(addSecretHeader);
-
-    const addSecretContainer = document.createElement('div');
-    addSecretContainer.className = 'add-secret-rows';
-    panel.appendChild(addSecretContainer);
-
-    const addBtn = document.createElement('button');
-    addBtn.textContent = 'Add secret row';
-    addBtn.addEventListener('click', () => addSecretContainer.appendChild(makeSecretRow()));
-    panel.appendChild(addBtn);
-
-    // Reconnect button
-    const reconnectBtn = document.createElement('button');
-    reconnectBtn.textContent = 'Reconnect / set model';
-    reconnectBtn.style.marginTop = '10px';
-    reconnectBtn.addEventListener('click', () => {
-      window.open('/?connect=1', 'slicc-connect', 'width=520,height=720');
-    });
-    panel.appendChild(reconnectBtn);
-
-    // Apply on resume button
-    const applyBtn = document.createElement('button');
-    applyBtn.textContent = 'Apply on resume';
-    applyBtn.style.marginTop = '10px';
-    applyBtn.addEventListener('click', async () => {
-      try {
-        const newModel = modelSelect.value || '';
-
-        // Gather delete sets
-        const deleteProviderIds = Array.from(
-          panel.querySelectorAll('.delete-account-checkbox:checked')
-        ).map((el) => el.dataset.providerId);
-
-        const deleteSecretNames = Array.from(
-          panel.querySelectorAll('.delete-secret-checkbox:checked')
-        ).map((el) => el.dataset.secretName);
-
-        // Gather new secret rows
-        const upsertSecretRows = Array.from(
-          panel.querySelectorAll('.add-secret-rows .secret-row')
-        ).map((row) => ({
-          name: row.querySelector('.s-name')?.value || '',
-          value: row.querySelector('.s-value')?.value || '',
-          domains: row.querySelector('.s-domains')?.value || '',
-        }));
-
-        // Read all accounts from localStorage and offer to re-send all of them
-        const allAccounts = JSON.parse(localStorage.getItem('slicc_accounts') || '[]');
-
-        // For simplicity, we'll let the user re-send all currently connected accounts
-        // In a more refined UX, we could show checkboxes for each account
-        const upsertAccounts = allAccounts;
-
-        // Same warn-don't-block surface as create: assembleDelta drops
-        // credential-less accounts / domain-less secrets, so tell the user.
-        const dropWarnings = bundleDropWarnings({
-          selectedProviderIds: upsertAccounts.map((a) => a.providerId),
-          allAccounts: upsertAccounts,
-          secretRows: upsertSecretRows,
-        });
-        if (dropWarnings.length > 0) showToast(dropWarnings.join(' '));
-
-        const coneConfigDelta = assembleDelta({
-          model: newModel,
-          upsertAccounts,
-          upsertSecretRows,
-          deleteProviderIds,
-          deleteSecretNames,
-        });
-
-        await api('/api/cloud/resume', {
-          method: 'POST',
-          body: JSON.stringify({ sandboxId, coneConfigDelta }),
-        });
-
-        showToast('Configuration updated - will apply on next resume');
-        panel.remove();
-        await refreshList();
-      } catch (e) {
-        showToast('Apply failed: ' + e.message);
-      }
-    });
-    panel.appendChild(applyBtn);
-
-    // Close button
-    const closeBtn = document.createElement('button');
-    closeBtn.textContent = 'Close';
-    closeBtn.style.marginTop = '10px';
-    closeBtn.addEventListener('click', () => panel.remove());
-    panel.appendChild(closeBtn);
-
-    li.appendChild(panel);
+    li.appendChild(buildManagePanel(idx, sandboxId));
   } catch (e) {
     showToast('Manage failed: ' + e.message);
   }
@@ -829,7 +838,7 @@ createBtn.addEventListener('click', async () => {
 
 window.addEventListener('focus', () => {
   if (getToken()) {
-    refreshList();
+    refreshList().catch(() => {});
     renderCreateConfig(); // Refresh accounts in case user connected a new provider
   }
 });
@@ -855,7 +864,7 @@ loadConfig()
     if (getToken()) {
       setSignedIn();
       renderCreateConfig();
-      refreshList();
+      refreshList().catch(() => {});
     } else {
       setSignedOut();
     }
