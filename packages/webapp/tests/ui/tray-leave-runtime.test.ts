@@ -6,6 +6,7 @@ import {
 import {
   performTrayLeave,
   type TrayLeaveDeps,
+  type TrayLeaveLogMeta,
   type TrayLeaveReadyHandle,
   type TrayLeaveStoppable,
 } from '../../src/ui/tray-leave-runtime.js';
@@ -52,8 +53,8 @@ function makeStorage(initial: Record<string, string> = {}): FakeStorage {
 }
 
 interface RecordingLog {
-  errors: Array<{ message: string; meta?: Record<string, unknown> }>;
-  error(message: string, meta?: Record<string, unknown>): void;
+  errors: Array<{ message: string; meta?: TrayLeaveLogMeta }>;
+  error(message: string, meta?: TrayLeaveLogMeta): void;
 }
 
 function makeLog(): RecordingLog {
