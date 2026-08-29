@@ -113,6 +113,24 @@ export interface OAuthLaunchResult {
   message?: string;
 }
 
+/** Nested `data` on the cone's final onboarding lick. */
+export interface OnboardingCompleteWithProviderData {
+  profile: OnboardingProfile;
+  provider: string;
+  model: string | null;
+  modelLabel: string | null;
+  validation: string;
+}
+
+/**
+ * Payload fired to the cone once a provider is wired up
+ * (`onboarding-complete-with-provider` per welcome/SKILL.md).
+ */
+export interface OnboardingCompleteWithProviderLick {
+  action: 'onboarding-complete-with-provider';
+  data: OnboardingCompleteWithProviderData;
+}
+
 export interface OrchestratorDeps {
   /** Shared filesystem for profile + welcomed-marker writes. */
   fs: VirtualFS;
@@ -140,7 +158,7 @@ export interface OrchestratorDeps {
   /** Send a message into the open `connect-llm` dip. */
   broadcastToDip: (payload: { type: string; [k: string]: unknown }) => void;
   /** Fire the FINAL onboarding-complete-with-provider lick to the cone. */
-  fireFinalLick: (data: Record<string, unknown>) => void;
+  fireFinalLick: (data: OnboardingCompleteWithProviderLick) => void;
   /**
    * Notify the host that the persisted accounts/model changed so the
    * UI can re-sync its model picker, identity badge, and pi-ai

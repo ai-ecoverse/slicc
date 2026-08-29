@@ -87,7 +87,6 @@ describe('narrowOnboardingFinalLickPayload', () => {
     });
 
     expect(narrowed.action).toBe('onboarding-complete-with-provider');
-    expect(narrowed.extra).toBe(true);
     expect(narrowed.data).toEqual({
       profile: { name: 'Ada' },
       provider: 'anthropic',

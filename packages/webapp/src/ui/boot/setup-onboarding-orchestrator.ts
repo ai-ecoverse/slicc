@@ -12,6 +12,7 @@
 import type { VirtualFS } from '../../fs/index.js';
 import type { DeviceCodePrompter } from '../../providers/types.js';
 import type {
+  OnboardingCompleteWithProviderLick,
   OnboardingOrchestrator,
   ProviderCatalogue,
   ProviderEntry,
@@ -86,19 +87,16 @@ export interface OnboardingFinalLickData {
   model?: string | null;
   modelLabel?: string | null;
   validation?: string;
-  readonly [key: string]: unknown;
 }
 
 /**
  * Body of the welcome sprinkle's final lick. Callers (e.g. WC onboarding)
  * read `action` for dedup and forward the whole bag to
- * `sendSprinkleLick('welcome', …)`. The open index signature only admits
- * extra top-level keys; known fields stay typed.
+ * `sendSprinkleLick('welcome', …)`.
  */
 export interface OnboardingFinalLickPayload {
   action?: string;
   data?: OnboardingFinalLickData;
-  readonly [key: string]: unknown;
 }
 
 /**
@@ -251,7 +249,7 @@ export async function createOnboardingOrchestratorSetup(
         }
       },
       broadcastToDip: (payload) => deps.broadcastToDip(payload),
-      fireFinalLick: (data) => deps.onFireFinalLick(narrowOnboardingFinalLickPayload(data)),
+      fireFinalLick: (data: OnboardingCompleteWithProviderLick) => deps.onFireFinalLick(data),
       onAccountsChanged: deps.onAccountsChanged ? () => deps.onAccountsChanged?.() : undefined,
       launchOAuth: async (providerId, baseUrl) =>
         await launchOnboardingOAuth(providerId, baseUrl ?? null, deps),
