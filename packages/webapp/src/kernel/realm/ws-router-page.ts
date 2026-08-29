@@ -27,7 +27,8 @@
  * frame fields; values are arbitrary JSON. Narrowed only as nested
  * objects vs leaf equality.
  */
-type JsonObject = { [key: string]: unknown };
+// biome-ignore lint/plugin: parsed third-party WS frame body — genuinely arbitrary JSON with no shape to name; narrowed structurally by isPlainObject/subsetMatch.
+type JsonObject = Record<string, unknown>;
 
 /** Page globals the router reads/writes on the injection target. */
 interface PageRouterGlobals {
