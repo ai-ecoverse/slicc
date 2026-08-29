@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it } from 'vitest';
 import 'fake-indexeddb/auto';
+import type { TrayFsRequest, TrayFsResponse } from '@slicc/shared-ts';
 import { VirtualFS } from '../../../src/fs/virtual-fs.js';
-import type { TrayFsRequest, TrayFsResponse } from '../../../src/scoops/tray-sync-protocol.js';
 import {
   createRsyncCommand,
   parseRsyncArgs,
