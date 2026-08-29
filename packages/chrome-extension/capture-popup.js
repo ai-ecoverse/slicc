@@ -65,6 +65,12 @@ function fail(error) {
   setTimeout(() => window.close(), 1200);
 }
 
+/** Outer rejection handler for fire-and-forget capture runners. */
+function reportUnhandledCaptureError(err) {
+  if (settled) return;
+  fail(describeMediaError(err));
+}
+
 function succeed(bytes, mimeType, width, height, durationMs) {
   settled = true;
   const msg = {
@@ -114,7 +120,7 @@ if (!request) {
 } else if (request.kind === 'screen') {
   setupScreenButton();
 } else {
-  runCameraCapture();
+  runCameraCapture().catch(reportUnhandledCaptureError);
 }
 
 // ---------- screen capture ----------
@@ -126,7 +132,7 @@ function setupScreenButton() {
   action.textContent = 'Capture screen';
   action.addEventListener('click', () => {
     action.disabled = true;
-    runScreenCapture();
+    runScreenCapture().catch(reportUnhandledCaptureError);
   });
 }
 
