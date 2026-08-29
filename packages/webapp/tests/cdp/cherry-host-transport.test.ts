@@ -1,4 +1,4 @@
-import type { TranscriptExportProgress } from '@slicc/shared-ts';
+import { TranscriptExportError, type TranscriptExportProgress } from '@slicc/shared-ts';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { BrowserAPI } from '../../src/cdp/browser-api.js';
 import {
@@ -536,6 +536,31 @@ describe('CherryHostTransport', () => {
 
     const errEnv = h.posted.find((m) => m.kind === 'session.export.error');
     expect(errEnv?.requestId).toBe('req-unknown-code-1');
+    expect(errEnv?.code).toBe('transfer-corrupt');
+  });
+
+  it('clamps a TranscriptExportError whose code is noncanonical at runtime', async () => {
+    // The declared TranscriptExportErrorCode type is not a runtime guarantee:
+    // a JS caller, unchecked cast, or later mutation can carry a code outside
+    // VALID_EXPORT_ERROR_CODES. The clamp must still fall back to
+    // 'transfer-corrupt' rather than passing the noncanonical value on the wire.
+    await connectHelper(h);
+    const channelId = lastChannelId(h);
+    const err = new TranscriptExportError('permission-denied');
+    // Simulate a runtime-malformed code that TypeScript's type would forbid.
+    (err as unknown as { code: string }).code = 'not-a-real-code';
+    h.transport.onExportRequest = vi.fn().mockRejectedValue(err);
+
+    h.inbound({
+      cherry: CHERRY_PROTOCOL_VERSION,
+      channelId,
+      kind: 'session.export.request',
+      requestId: 'req-bad-typed-1',
+    });
+    await new Promise((r) => setTimeout(r, 0));
+
+    const errEnv = h.posted.find((m) => m.kind === 'session.export.error');
+    expect(errEnv?.requestId).toBe('req-bad-typed-1');
     expect(errEnv?.code).toBe('transfer-corrupt');
   });
 
