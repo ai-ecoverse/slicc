@@ -3,7 +3,11 @@
  * Injected into bridged HTML to enable same-realm synthetic CDP execution.
  */
 
-import { type CdpHostHandlerOptions, createCdpHostHandler } from './cdp-host-handlers.js';
+import {
+  type CdpHostHandlerOptions,
+  type CdpPayload,
+  createCdpHostHandler,
+} from './cdp-host-handlers.js';
 
 interface PreviewBridgeOptions {
   ws: WebSocket;
@@ -24,14 +28,14 @@ interface CdpRequestEnvelope {
   t: 'cdp.req';
   id: number;
   method: string;
-  params?: Record<string, unknown>;
+  params?: CdpPayload;
   sessionId?: string;
 }
 
 interface CdpResponseEnvelope {
   t: 'cdp.res';
   id: number;
-  result?: Record<string, unknown>;
+  result?: CdpPayload;
   error?: { code: number; message: string };
 }
 
