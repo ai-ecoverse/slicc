@@ -323,10 +323,7 @@
       }
     },
     {
-      "includes": [
-        "packages/webapp/providers/adobe.ts",
-        "packages/webapp/tests/providers/adobe-provider.test.ts"
-      ],
+      "includes": ["packages/webapp/providers/adobe.ts"],
       "linter": {
         "rules": {
           "nursery": {
