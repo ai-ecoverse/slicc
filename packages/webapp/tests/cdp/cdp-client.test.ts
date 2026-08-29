@@ -214,9 +214,9 @@ describe('CDPClient', () => {
     });
 
     it('increments message IDs', async () => {
-      client.send('Method1');
-      client.send('Method2');
-      client.send('Method3');
+      const p1 = client.send('Method1');
+      const p2 = client.send('Method2');
+      const p3 = client.send('Method3');
 
       expect(ws.sent).toHaveLength(3);
       expect(JSON.parse(ws.sent[0]).id).toBe(1);
@@ -227,6 +227,7 @@ describe('CDPClient', () => {
       ws.simulateMessage({ id: 1, result: {} });
       ws.simulateMessage({ id: 2, result: {} });
       ws.simulateMessage({ id: 3, result: {} });
+      await Promise.all([p1, p2, p3]);
     });
   });
 
