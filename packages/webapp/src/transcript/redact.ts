@@ -40,6 +40,12 @@ const ID_PREFIX = 'r';
 // JSON tree walker
 // ---------------------------------------------------------------------------
 
+/**
+ * Opaque JSON object mid-walk. Keys are RFC 6901 pointer segments; values are
+ * arbitrary JSON. Narrowed only as string leaves / arrays / nested objects.
+ */
+type JsonObject = { [key: string]: unknown };
+
 interface StringLeaf {
   readonly pointer: string;
   readonly value: string;
@@ -47,6 +53,10 @@ interface StringLeaf {
 
 function pointerEscape(key: string): string {
   return key.replace(/~/g, '~0').replace(/\//g, '~1');
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function collectLeaves(value: unknown, pointer: string, out: StringLeaf[]): void {
@@ -58,8 +68,8 @@ function collectLeaves(value: unknown, pointer: string, out: StringLeaf[]): void
     for (let i = 0; i < value.length; i++) collectLeaves(value[i], `${pointer}/${i}`, out);
     return;
   }
-  if (typeof value === 'object' && value !== null) {
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+  if (isJsonObject(value)) {
+    for (const [k, v] of Object.entries(value)) {
       collectLeaves(v, `${pointer}/${pointerEscape(k)}`, out);
     }
   }
@@ -81,12 +91,12 @@ function applyLeavesArray(
 }
 
 function applyLeavesObject(
-  value: Record<string, unknown>,
+  value: JsonObject,
   pointer: string,
   updates: ReadonlyMap<string, string>
 ): unknown {
   let changed = false;
-  const obj: Record<string, unknown> = {};
+  const obj: JsonObject = {};
   for (const [k, v] of Object.entries(value)) {
     const v2 = applyLeaves(v, `${pointer}/${pointerEscape(k)}`, updates);
     if (v2 !== v) changed = true;
@@ -102,8 +112,8 @@ function applyLeaves(
 ): unknown {
   if (typeof value === 'string') return updates.get(pointer) ?? value;
   if (Array.isArray(value)) return applyLeavesArray(value, pointer, updates);
-  if (typeof value === 'object' && value !== null) {
-    return applyLeavesObject(value as Record<string, unknown>, pointer, updates);
+  if (isJsonObject(value)) {
+    return applyLeavesObject(value, pointer, updates);
   }
   return value;
 }
