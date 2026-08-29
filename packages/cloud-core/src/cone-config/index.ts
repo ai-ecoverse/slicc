@@ -52,6 +52,65 @@ export interface ConeConfigIndex {
 /** Max serialized bundle size (bytes) accepted as a preboot env payload. */
 export const MAX_CONE_CONFIG_BYTES = 256 * 1024;
 
+/** Untrusted cone-config bundle before validation. */
+interface UntrustedConeConfig {
+  readonly model?: unknown;
+  readonly effortLevel?: unknown;
+  readonly accounts?: unknown;
+  readonly secrets?: unknown;
+}
+
+/** Untrusted account entry before validation. */
+interface UntrustedAccount {
+  readonly providerId?: unknown;
+  readonly kind?: unknown;
+  readonly accessToken?: unknown;
+  readonly refreshToken?: unknown;
+  readonly tokenExpiresAt?: unknown;
+  readonly userName?: unknown;
+  readonly baseUrl?: unknown;
+  readonly apiKey?: unknown;
+  readonly deployment?: unknown;
+  readonly apiVersion?: unknown;
+}
+
+/** Untrusted secret entry before validation. */
+interface UntrustedSecretEntry {
+  readonly name?: unknown;
+  readonly value?: unknown;
+  readonly domains?: unknown;
+}
+
+/** Untrusted delta upsert arm before validation. */
+interface UntrustedConeConfigDeltaUpsert {
+  readonly accounts?: unknown;
+  readonly secrets?: unknown;
+}
+
+/** Untrusted delta delete arm before validation. */
+interface UntrustedConeConfigDeltaDelete {
+  readonly providerIds?: unknown;
+  readonly secretNames?: unknown;
+}
+
+/** Untrusted resume delta before validation. */
+interface UntrustedConeConfigDelta {
+  readonly model?: unknown;
+  readonly effortLevel?: unknown;
+  readonly upsert?: unknown;
+  readonly delete?: unknown;
+}
+
+/** Untrusted IMS JWT payload before expiry extraction. */
+interface UntrustedImsTokenPayload {
+  readonly created_at?: unknown;
+  readonly expires_in?: unknown;
+}
+
+function isUntrustedObject(value: unknown): value is object {
+  return value != null && typeof value === 'object';
+}
+
 function isStr(v: unknown): v is string {
   return typeof v === 'string';
 }
@@ -59,8 +118,8 @@ function isStr(v: unknown): v is string {
 const VALID_EFFORT_LEVELS = new Set(['off', 'minimal', 'low', 'medium', 'high', 'xhigh']);
 
 export function validateConeConfig(input: unknown): ConeConfig {
-  if (!input || typeof input !== 'object') throw new Error('cone-config: not an object');
-  const cfg = input as Record<string, unknown>;
+  if (!isUntrustedObject(input)) throw new Error('cone-config: not an object');
+  const cfg = input as UntrustedConeConfig;
   if (!isStr(cfg.model)) throw new Error('cone-config: model must be a string');
   if (!Array.isArray(cfg.accounts)) throw new Error('cone-config: accounts must be an array');
   if (!Array.isArray(cfg.secrets)) throw new Error('cone-config: secrets must be an array');
@@ -77,8 +136,8 @@ export function validateConeConfig(input: unknown): ConeConfig {
 }
 
 function validateAccount(a: unknown): Account {
-  if (!a || typeof a !== 'object') throw new Error('cone-config: account not an object');
-  const acc = a as Record<string, unknown>;
+  if (!isUntrustedObject(a)) throw new Error('cone-config: account not an object');
+  const acc = a as UntrustedAccount;
   if (!isStr(acc.providerId)) throw new Error('cone-config: account.providerId required');
   if (!isStr(acc.kind)) throw new Error('cone-config: account.kind required');
   if (acc.kind === 'oauth') {
@@ -116,8 +175,8 @@ function hasNewline(v: string): boolean {
 }
 
 function validateSecret(s: unknown): SecretEntry {
-  if (!s || typeof s !== 'object') throw new Error('cone-config: secret not an object');
-  const sec = s as Record<string, unknown>;
+  if (!isUntrustedObject(s)) throw new Error('cone-config: secret not an object');
+  const sec = s as UntrustedSecretEntry;
   if (!isStr(sec.name)) throw new Error('cone-config: secret.name required');
   if (!ENV_NAME_RE.test(sec.name)) {
     throw new Error(
@@ -137,10 +196,10 @@ function validateSecret(s: unknown): SecretEntry {
 
 /** Validate the `upsert` arm of a resume delta (accounts/secrets reuse the full-bundle validators). */
 function validateDeltaUpsert(input: unknown): { accounts?: Account[]; secrets?: SecretEntry[] } {
-  if (!input || typeof input !== 'object') {
+  if (!isUntrustedObject(input)) {
     throw new Error('cone-config: delta.upsert must be an object');
   }
-  const up = input as Record<string, unknown>;
+  const up = input as UntrustedConeConfigDeltaUpsert;
   const upsert: { accounts?: Account[]; secrets?: SecretEntry[] } = {};
   if (up.accounts !== undefined) {
     if (!Array.isArray(up.accounts)) {
@@ -159,10 +218,10 @@ function validateDeltaUpsert(input: unknown): { accounts?: Account[]; secrets?: 
 
 /** Validate the `delete` arm of a resume delta (provider-id / secret-name string lists). */
 function validateDeltaDelete(input: unknown): { providerIds?: string[]; secretNames?: string[] } {
-  if (!input || typeof input !== 'object') {
+  if (!isUntrustedObject(input)) {
     throw new Error('cone-config: delta.delete must be an object');
   }
-  const del = input as Record<string, unknown>;
+  const del = input as UntrustedConeConfigDeltaDelete;
   const deletion: { providerIds?: string[]; secretNames?: string[] } = {};
   if (del.providerIds !== undefined) {
     if (!Array.isArray(del.providerIds) || !del.providerIds.every(isStr)) {
@@ -186,8 +245,8 @@ function validateDeltaDelete(input: unknown): { providerIds?: string[]; secretNa
  * message rather than blowing up later inside mergeConeConfig.
  */
 export function validateConeConfigDelta(input: unknown): ConeConfigDelta {
-  if (!input || typeof input !== 'object') throw new Error('cone-config: delta not an object');
-  const d = input as Record<string, unknown>;
+  if (!isUntrustedObject(input)) throw new Error('cone-config: delta not an object');
+  const d = input as UntrustedConeConfigDelta;
   const out: ConeConfigDelta = {};
   if (d.model !== undefined) {
     if (!isStr(d.model)) throw new Error('cone-config: delta.model must be a string');
@@ -320,10 +379,7 @@ export function imsTokenExpiry(token: string): number | undefined {
   const parts = token.split('.');
   if (parts.length !== 3) return undefined;
   try {
-    const payload = JSON.parse(decodeBase64Url(parts[1]!)) as {
-      created_at?: unknown;
-      expires_in?: unknown;
-    };
+    const payload = JSON.parse(decodeBase64Url(parts[1]!)) as UntrustedImsTokenPayload;
     const created = Number(payload.created_at);
     const ttl = Number(payload.expires_in);
     if (Number.isFinite(created) && created > 0 && Number.isFinite(ttl) && ttl > 0) {

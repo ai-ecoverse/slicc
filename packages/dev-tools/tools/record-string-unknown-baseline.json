@@ -1,6 +1,5 @@
 {
   "packages/chrome-extension/src/bridge-sw.ts": 17,
-  "packages/cloud-core/src/cone-config/index.ts": 6,
   "packages/dev-tools/tools/extension-smoke-test.ts": 6,
   "packages/node-server/src/electron-controller.ts": 13,
   "packages/node-server/src/electron-runtime.ts": 1,
