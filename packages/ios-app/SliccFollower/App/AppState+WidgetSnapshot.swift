@@ -89,7 +89,7 @@ extension AppState {
     func publishWidgetSnapshot() {
         let snapshot = widgetSnapshot()
         widgetPublisher.publish(snapshot)
-        Task { await SliccConversationIndexer.donate(snapshot.units) }
+        Task { await SliccConversationIndexer.shared.donate(snapshot.units) }
     }
 
     /// Forget the instance. A detached session must not linger on a home
@@ -98,7 +98,7 @@ extension AppState {
     /// this device can no longer reach.
     func clearWidgetSnapshot() {
         widgetPublisher.clear()
-        Task { await SliccConversationIndexer.donate([]) }
+        Task { await SliccConversationIndexer.shared.donate([]) }
     }
 }
 

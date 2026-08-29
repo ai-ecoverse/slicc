@@ -295,6 +295,50 @@ final class InboundActionCoordinator: ObservableObject {
     }
 }
 
+// MARK: - InboundSelectionRule
+
+/// Whether a pending conversation selection can be resolved yet.
+///
+/// A free function rather than a method on the coordinator: it is pure, it is
+/// the interesting part, and it has no business requiring the main actor to be
+/// asked a question about two arrays. Same split as `BrowserTargets`.
+enum InboundSelectionRule {
+
+    /// The distinction this exists to make: "the leader has no such unit" and
+    /// "the leader has not told us its units yet" are different answers, and
+    /// the second one is the COMMON case. `OpenSliccConversationIntent` sets
+    /// `openAppWhenRun`, so a Spotlight or Siri hit launches the app cold —
+    /// `scoops` is empty (and `handleDisconnect` resets it to empty) until the
+    /// first `scoops.list` lands. Treating that emptiness as "not found" drops
+    /// the request the user just made, on the path they will use most.
+    enum Outcome: Equatable {
+        /// The roster has the unit — select it.
+        case select
+        /// The roster has not arrived yet; stay armed for the next one.
+        case wait
+        /// The leader has spoken and the unit is not there (or the request is
+        /// too old to still be what the user wants) — give up.
+        case drop
+    }
+
+    /// How long a selection stays armed waiting for a roster.
+    ///
+    /// Generous next to a dial (seconds), short next to "the user wandered
+    /// off". Without it, a request made before a leader was ever reachable
+    /// would fire whenever one eventually connected, which reads as the app
+    /// jumping somewhere on its own.
+    static let maximumAge: TimeInterval = 120
+
+    static func outcome(forSelecting jid: String, roster: [String], age: TimeInterval) -> Outcome {
+        if roster.contains(jid) { return .select }
+        if age > maximumAge { return .drop }
+        // A non-empty roster IS the leader's full answer, so absence from it
+        // is authoritative — that is the "the scoop ended" case, where staying
+        // put beats yanking the user to a unit that is gone.
+        return roster.isEmpty ? .wait : .drop
+    }
+}
+
 // MARK: - Errors
 
 enum InboundActionError: Error, LocalizedError {

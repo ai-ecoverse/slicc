@@ -240,4 +240,52 @@ final class InboundActionsTests: XCTestCase {
         coordinator.consume(selection: coordinator.pendingSelection!)
         XCTAssertNil(coordinator.pendingSelection)
     }
+
+    // MARK: - Selection resolution against the roster (PR #2582 review, P1)
+
+    private func outcome(
+        _ jid: String, roster: [String], age: TimeInterval = 0
+    ) -> InboundSelectionRule.Outcome {
+        InboundSelectionRule.outcome(forSelecting: jid, roster: roster, age: age)
+    }
+
+    /// The regression: a Spotlight/Siri hit opens the app COLD, so the request
+    /// lands before the first `scoops.list`. An empty roster is "not told
+    /// yet", not "not found" — resolving it as absent dropped the request on
+    /// the feature's main path.
+    func testEmptyRosterWaitsRatherThanDropping() {
+        XCTAssertEqual(outcome("scoop-1", roster: []), .wait)
+    }
+
+    func testRosterContainingTheUnitSelectsIt() {
+        XCTAssertEqual(outcome("scoop-1", roster: ["other", "scoop-1"]), .select)
+    }
+
+    /// A non-empty roster is the leader's full answer, so absence from it is
+    /// authoritative — that is the genuinely-ended scoop, where staying put
+    /// beats jumping to a dead unit.
+    func testNonEmptyRosterWithoutTheUnitDrops() {
+        XCTAssertEqual(outcome("gone", roster: ["a", "b"]), .drop)
+    }
+
+    /// Without an age bound a request made before any leader was reachable
+    /// would fire whenever one eventually connected.
+    func testAStaleRequestIsDroppedEvenWithNoRosterYet() {
+        let old = InboundSelectionRule.maximumAge + 1
+        XCTAssertEqual(outcome("scoop-1", roster: [], age: old), .drop)
+    }
+
+    /// Age only decides once the roster cannot: a unit that IS present is
+    /// still selected, because the user asked for something that exists.
+    func testAgeDoesNotOverrideAPresentUnit() {
+        let old = InboundSelectionRule.maximumAge + 1
+        XCTAssertEqual(outcome("scoop-1", roster: ["scoop-1"], age: old), .select)
+    }
+
+    /// The whole cold-launch sequence, in order.
+    func testColdLaunchStaysArmedUntilTheRosterArrives() {
+        XCTAssertEqual(outcome("scoop-1", roster: []), .wait)
+        XCTAssertEqual(outcome("scoop-1", roster: []), .wait)
+        XCTAssertEqual(outcome("scoop-1", roster: ["scoop-1"]), .select)
+    }
 }

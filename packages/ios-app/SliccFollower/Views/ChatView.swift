@@ -204,21 +204,41 @@ struct ChatView: View {
                 executeInboundSelection(selection)
             }
         }
+        // A cold launch from Spotlight or Siri arrives BEFORE the roster does,
+        // so the arrival of a roster is the second place a pending selection
+        // can resolve — without this the common path silently drops it.
+        .onChange(of: appState.scoops) { _ in
+            if let selection = inboundActions.pendingSelection {
+                executeInboundSelection(selection)
+            }
+        }
     }
 
-    /// Bring the unit an Open Conversation intent named to the front.
+    /// Bring the unit an Open Conversation intent named to the front, once we
+    /// know enough to say whether it exists.
     ///
-    /// `selectScoop` is a no-op for a jid the leader no longer lists, which is
-    /// the wanted behaviour: Siri may have resolved the entity from a widget
-    /// snapshot captured before a scoop ended, and yanking the user to a unit
-    /// that is gone would be worse than leaving them where they are.
+    /// Runs on the request arriving AND on every roster change, because the
+    /// intent opens the app: the request usually lands first and the roster
+    /// decides it. `InboundSelectionRule` owns the rule.
     private func executeInboundSelection(
         _ selection: InboundActionCoordinator.PendingSelection
     ) {
-        appState.selectScoop(jid: selection.scoopJid)
-        // Chat is the base surface — `nil` is it, there is no `.chat` case.
-        withAnimation { presentation.activeSurface = nil }
-        inboundActions.consume(selection: selection)
+        switch InboundSelectionRule.outcome(
+            forSelecting: selection.scoopJid,
+            roster: appState.scoops.map(\.jid),
+            age: Date().timeIntervalSince(selection.receivedAt))
+        {
+        case .wait:
+            // Stay armed; the next `scoops.list` brings us back here.
+            return
+        case .drop:
+            inboundActions.consume(selection: selection)
+        case .select:
+            appState.selectScoop(jid: selection.scoopJid)
+            // Chat is the base surface — `nil` is it, there is no `.chat` case.
+            withAnimation { presentation.activeSurface = nil }
+            inboundActions.consume(selection: selection)
+        }
     }
 
     /// Bring a leader-opened tab to the front. The leader opens a tab here so

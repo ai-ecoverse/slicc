@@ -165,33 +165,86 @@ struct SliccConversationQuery: EntityQuery, EntityStringQuery {
 
 // MARK: - Spotlight donation
 
+/// The two Spotlight operations a replacement donation needs, behind a
+/// protocol so the ORDERING rules can be tested without a live index (and so
+/// they can be tested at all — `CSSearchableIndex` has no seam otherwise).
+protocol SpotlightConversationIndex: Sendable {
+    func deleteConversations() async throws
+    func indexConversations(_ entities: [SliccConversationEntity]) async throws
+}
+
+/// The real index. Thin on purpose: everything interesting is in the actor.
+struct SystemSpotlightIndex: SpotlightConversationIndex {
+    func deleteConversations() async throws {
+        try await CSSearchableIndex.default().deleteAppEntities(
+            ofType: SliccConversationEntity.self)
+    }
+
+    func indexConversations(_ entities: [SliccConversationEntity]) async throws {
+        try await CSSearchableIndex.default().indexAppEntities(entities)
+    }
+}
+
 /// Pushes the current units into the Spotlight semantic index.
 ///
 /// `IndexedEntity` conformance alone indexes nothing — it only says what an
 /// entity would look like if it were indexed. Something has to donate, and the
-/// honest moment to do it is the same transition that publishes the widget
-/// snapshot, so the index, the widget and Siri all describe one session.
-enum SliccConversationIndexer {
+/// honest moment is the same transition that publishes the widget snapshot, so
+/// the index, the widget and Siri all describe one session.
+///
+/// ## Why an actor with a task chain
+///
+/// A donation is a REPLACEMENT — an awaited delete followed by an awaited
+/// index — and `publishWidgetSnapshot()` fires on `scoops.list`, on connection
+/// flips and on `turn_end`, which arrive back to back. Bare `Task { }` per
+/// publish let two replacements interleave, so an older one could index units
+/// after a newer one had already deleted them. The detach case was the bad
+/// one: `clearWidgetSnapshot()` donates an empty set to leave no Spotlight hit
+/// for a session this device can no longer reach, and an in-flight publish
+/// racing it put the conversations straight back.
+///
+/// So donations are chained (each awaits its predecessor, no overlap) and
+/// generation-gated: a donation that is already superseded when its turn comes
+/// skips entirely, because the newer one's delete-then-index produces the
+/// final state anyway and doing ours first is only work the next one undoes.
+actor SliccConversationIndexer {
 
-    /// Replace the indexed set with `units`.
-    ///
-    /// Delete-then-index rather than incremental: a scoop that ended should
-    /// stop being suggested, and the set is small enough (tens of units) that
-    /// diffing it would be more code than it saves. Failures are swallowed on
-    /// purpose — an unentitled dev build has no index, and a session that
-    /// works is not worth failing over a search affordance.
-    static func donate(
-        _ units: [WidgetUnit],
-        to index: CSSearchableIndex = .default()
-    ) async {
+    static let shared = SliccConversationIndexer()
+
+    private let index: any SpotlightConversationIndex
+    private var latestGeneration = 0
+    private var tail: Task<Void, Never>?
+
+    init(index: any SpotlightConversationIndex = SystemSpotlightIndex()) {
+        self.index = index
+    }
+
+    /// Queue a replacement donation. Returns the queued task so a caller (a
+    /// test, above all) can await settlement; production discards it.
+    @discardableResult
+    func donate(_ units: [WidgetUnit]) -> Task<Void, Never> {
+        latestGeneration += 1
+        let generation = latestGeneration
         let entities = SliccConversationProjection.entities(
             SliccConversationProjection.ranked(units))
+        let previous = tail
+        let task = Task { [self] in
+            await previous?.value
+            await perform(entities, generation: generation)
+        }
+        tail = task
+        return task
+    }
+
+    private func perform(_ entities: [SliccConversationEntity], generation: Int) async {
+        guard generation == latestGeneration else { return }
         do {
-            try await index.deleteAppEntities(ofType: SliccConversationEntity.self)
+            try await index.deleteConversations()
             guard !entities.isEmpty else { return }
-            try await index.indexAppEntities(entities)
+            try await index.indexConversations(entities)
         } catch {
-            // Intentionally ignored — see the doc comment.
+            // Intentionally ignored: an unentitled dev build has no index, and
+            // a working session is not worth failing over a search affordance.
         }
     }
 }
