@@ -17,7 +17,7 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { makeMergeDriver } from './merge-driver.js';
-import { expandGitError, GIT_FLAG_SPECS } from './shared.js';
+import { expandGitError, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 /** Coerce an mri flag value (string | string[] | undefined) to a string[]. */
@@ -71,7 +71,7 @@ async function startRebase(
   ctx: GitCommandContext,
   cwd: string,
   upstream: string | undefined,
-  flags: Record<string, unknown>
+  flags: GitParsedFlags
 ): Promise<GitCommandResult> {
   if (!upstream) {
     return { stdout: '', stderr: 'fatal: No upstream specified.\n', exitCode: 128 };
