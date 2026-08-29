@@ -97,8 +97,10 @@ function matchThrownFunction(err: unknown, expected: (e: unknown) => unknown): b
 /**
  * Node `assert.throws` expected-error property bag: each own key is compared
  * against the thrown value (`===`), except RegExp values which match string fields.
+ * The keys are user-supplied and arbitrary, so there is no narrower shape to name.
  */
-type ThrownErrorExpectation = { [key: string]: unknown };
+// biome-ignore lint/plugin: assert.throws expected-error bag is a genuinely arbitrary user-supplied property map — no accepted shape to name.
+type ThrownErrorExpectation = Record<string, unknown>;
 
 function matchThrownShape(err: object, expected: ThrownErrorExpectation): boolean {
   for (const [k, v] of Object.entries(expected)) {
