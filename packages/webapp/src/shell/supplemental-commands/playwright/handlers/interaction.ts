@@ -3,7 +3,6 @@
  * dblclick, hover, select, check, uncheck, drag.
  */
 
-import type { BrowserAPI } from '../../../../cdp/index.js';
 import {
   CLEAR_FOCUSABLE_ELEMENT_FUNCTION,
   parseRef,
@@ -11,7 +10,11 @@ import {
   READ_INPUT_VALUE_FUNCTION,
   requireTab,
 } from '../state.js';
-import type { PlaywrightHandler } from '../types.js';
+import type { PlaywrightHandler, PlaywrightHandlerCtx } from '../types.js';
+
+// Named via the handler context rather than imported from `cdp/` so this
+// module stays inside the shell layer (see layer-stack import direction).
+type BrowserAPI = PlaywrightHandlerCtx['browser'];
 
 /** Parse --modifiers flag (comma-separated) into a CDP bitmask. Alt=1, Control=2, Meta=4, Shift=8. */
 function parseModifiersBitmask(modifiersFlag: string | undefined): number {
