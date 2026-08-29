@@ -314,6 +314,16 @@ export function getElectronOverlayEntryDistPath(projectRoot: string): string {
   return resolve(projectRoot, 'dist/ui/electron-overlay-entry.js');
 }
 
+/** Payload passed to `window.__SLICC_ELECTRON_OVERLAY__.inject()` — mirrors spoon's `InjectSliccLauncherOptions`. */
+export interface ElectronOverlayInjectionPayload {
+  appUrl: string;
+  open?: boolean;
+  activeTab?: string;
+  /** Empty-viewport message for the status-only overlay (apps that block the
+   *  embedded panel, e.g. Signal). Only meaningful when `appUrl` is empty. */
+  statusMessage?: string;
+}
+
 export function buildElectronOverlayInjectionCall(options: {
   appUrl: string;
   open?: boolean;
@@ -322,18 +332,18 @@ export function buildElectronOverlayInjectionCall(options: {
    *  embedded panel, e.g. Signal). Only meaningful when `appUrl` is empty. */
   statusMessage?: string;
 }): string {
-  const payload: Record<string, unknown> = {
+  const payload: ElectronOverlayInjectionPayload = {
     appUrl: options.appUrl,
   };
 
   if (typeof options.open === 'boolean') {
-    payload['open'] = options.open;
+    payload.open = options.open;
   }
   if (options.activeTab) {
-    payload['activeTab'] = options.activeTab;
+    payload.activeTab = options.activeTab;
   }
   if (options.statusMessage !== undefined) {
-    payload['statusMessage'] = options.statusMessage;
+    payload.statusMessage = options.statusMessage;
   }
 
   // Wait for document.body before injecting — Runtime.evaluate and
