@@ -277,6 +277,29 @@ export interface LocalLlmConnectionResult {
   };
 }
 
+/** LM Studio native `/api/v0/models` probe shape (`object: 'list'`). */
+interface LmStudioModelsProbe {
+  object: 'list';
+}
+
+/** llama.cpp `llama-server` `/props` probe shape. */
+interface LlamaCppPropsProbe {
+  build_info?: { version?: string };
+}
+
+function isLmStudioModelsProbe(value: unknown): value is LmStudioModelsProbe {
+  return (
+    typeof value === 'object' &&
+    value !== null &&
+    'object' in value &&
+    (value as LmStudioModelsProbe).object === 'list'
+  );
+}
+
+function isLlamaCppPropsProbe(value: unknown): value is LlamaCppPropsProbe {
+  return typeof value === 'object' && value !== null && 'build_info' in value;
+}
+
 /** Return the origin (scheme://host:port) of an OpenAI base URL.
  *  e.g. "http://localhost:11434/v1" -> "http://localhost:11434". */
 export function originOf(baseUrl: string): string {
@@ -340,14 +363,13 @@ export async function detectRuntime(
   // to LM Studio's known response shape (`{ object: 'list', data: [...] }`)
   // so any random JSON-200 at that path doesn't get misidentified.
   const lmstudio = await tryJson(`${origin}/api/v0/models`, signal);
-  if (lmstudio && (lmstudio as Record<string, unknown>).object === 'list') {
+  if (isLmStudioModelsProbe(lmstudio)) {
     return { kind: 'lmstudio' };
   }
   // llama.cpp's llama-server exposes /props with build_info etc.
   const llamacpp = await tryJson(`${origin}/props`, signal);
-  if (llamacpp && 'build_info' in (llamacpp as Record<string, unknown>)) {
-    const build = (llamacpp as { build_info?: { version?: string } }).build_info;
-    return { kind: 'llamacpp', version: build?.version };
+  if (isLlamaCppPropsProbe(llamacpp)) {
+    return { kind: 'llamacpp', version: llamacpp.build_info?.version };
   }
   // Heuristic fallback by port — best-effort, never wrong-blocks the user.
   const port = safePort(baseUrl);
