@@ -9,6 +9,5 @@
   "packages/webapp/src/shell/supplemental-commands/rsync-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/secret-backends.ts": 2,
   "packages/webapp/src/shell/supplemental-commands/serial-command.ts": 1,
-  "packages/webapp/src/shell/supplemental-commands/serve-command.ts": 3,
-  "packages/webapp/src/shell/supplemental-commands/usb-command.ts": 1
+  "packages/webapp/src/shell/supplemental-commands/serve-command.ts": 3
 }
