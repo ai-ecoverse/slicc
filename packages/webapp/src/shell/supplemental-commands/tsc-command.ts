@@ -168,40 +168,59 @@ export async function findTsconfigPath(
   return null;
 }
 
+/** Named shape for the `compilerOptions` bag this command passes to `transpileModule`. */
+type TscCompilerOptions = import('typescript-js').CompilerOptions;
+
 interface ResolvedTscConfig {
-  compilerOptions: Record<string, unknown>;
+  compilerOptions: TscCompilerOptions;
 }
 
-const DEFAULT_COMPILER_OPTIONS: Record<string, unknown> = {
-  target: 'ES2022',
-  module: 'ESNext',
-  moduleResolution: 'Bundler',
-  esModuleInterop: true,
-  allowSyntheticDefaultImports: true,
-  isolatedModules: true,
-};
+/**
+ * Parsed `tsconfig.json` body from `parseConfigFileTextToJson`. Only
+ * `compilerOptions` is read; other top-level keys are ignored.
+ */
+interface ParsedTsconfigJson {
+  compilerOptions?: TscCompilerOptions;
+}
+
+/** Defaults mirrored from the prior string form (`ES2022`/`ESNext`/`Bundler`). */
+function defaultCompilerOptions(ts: TypeScriptModule): TscCompilerOptions {
+  return {
+    target: ts.ScriptTarget.ES2022,
+    module: ts.ModuleKind.ESNext,
+    moduleResolution: ts.ModuleResolutionKind.Bundler,
+    esModuleInterop: true,
+    allowSyntheticDefaultImports: true,
+    isolatedModules: true,
+  };
+}
+
+function compilerOptionsFromParsedConfig(config: unknown): TscCompilerOptions {
+  if (config === null || typeof config !== 'object') return {};
+  const { compilerOptions } = config as ParsedTsconfigJson;
+  return compilerOptions ?? {};
+}
 
 export async function loadTsconfig(
   fs: CommandContext['fs'],
   ts: TypeScriptModule,
   startDir: string
 ): Promise<ResolvedTscConfig> {
+  const defaults = defaultCompilerOptions(ts);
   const path = await findTsconfigPath(fs, startDir);
-  if (!path) return { compilerOptions: { ...DEFAULT_COMPILER_OPTIONS } };
+  if (!path) return { compilerOptions: { ...defaults } };
   let raw: string;
   try {
     raw = await fs.readFile(path);
   } catch {
-    return { compilerOptions: { ...DEFAULT_COMPILER_OPTIONS } };
+    return { compilerOptions: { ...defaults } };
   }
   const { config, error } = ts.parseConfigFileTextToJson(path, raw);
-  if (error || !config) return { compilerOptions: { ...DEFAULT_COMPILER_OPTIONS } };
-  const compilerOptions =
-    (config as { compilerOptions?: Record<string, unknown> }).compilerOptions ?? {};
+  if (error || !config) return { compilerOptions: { ...defaults } };
   return {
     compilerOptions: {
-      ...DEFAULT_COMPILER_OPTIONS,
-      ...compilerOptions,
+      ...defaults,
+      ...compilerOptionsFromParsedConfig(config),
     },
   };
 }
@@ -239,11 +258,11 @@ function transpileOne(
   ts: TypeScriptModule,
   source: string,
   fileName: string,
-  compilerOptions: Record<string, unknown>,
+  compilerOptions: TscCompilerOptions,
   reportDiagnostics: boolean
 ): TranspileOneResult {
   const result = ts.transpileModule(source, {
-    compilerOptions: compilerOptions as import('typescript-js').CompilerOptions,
+    compilerOptions,
     fileName,
     reportDiagnostics,
   });
