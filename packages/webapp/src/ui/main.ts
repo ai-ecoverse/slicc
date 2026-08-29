@@ -35,6 +35,15 @@ import { applyProviderDefaults } from './provider-settings.js';
 
 const log = createLogger('main');
 
+/**
+ * Page-realm flag read by `shell/float-topology.ts` (and providers that
+ * mirror it). Named so the connect-mode boot path casts through a known
+ * shape instead of an open string-keyed bag.
+ */
+type ConnectModeGlobal = {
+  __slicc_connect_mode?: unknown;
+};
+
 /** `?ui-fixture` (any value) selects the design-time chat fixture. */
 function isFixtureRequested(href: string): boolean {
   try {
@@ -145,7 +154,7 @@ async function main(): Promise<void> {
   ]);
 
   if (runtimeMode === 'connect') {
-    (globalThis as Record<string, unknown>).__slicc_connect_mode = true;
+    (globalThis as ConnectModeGlobal).__slicc_connect_mode = true;
     const { loadLegacyStyles } = await import('./legacy-styles.js');
     await loadLegacyStyles();
     const { mountConnectSurface } = await import('./connect-surface.js');
