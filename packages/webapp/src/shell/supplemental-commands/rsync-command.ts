@@ -12,11 +12,15 @@
  *   --help, -h   Show usage
  */
 
-import { base64ToUint8, uint8ToBase64 } from '@slicc/shared-ts';
+import {
+  base64ToUint8,
+  type TrayFsRequest,
+  type TrayFsResponse,
+  uint8ToBase64,
+} from '@slicc/shared-ts';
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { VirtualFS } from '../../fs/index.js';
-import type { TrayFsRequest, TrayFsResponse } from '../../scoops/tray-sync-protocol.js';
 import { computeRsyncDiff, type RsyncEntry } from './rsync-diff.js';
 
 // ---------------------------------------------------------------------------
