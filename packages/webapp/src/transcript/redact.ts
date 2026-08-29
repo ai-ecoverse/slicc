@@ -40,6 +40,13 @@ const ID_PREFIX = 'r';
 // JSON tree walker
 // ---------------------------------------------------------------------------
 
+/**
+ * Recursive JSON value as walked by RFC 6901 pointer collection / spine rebuild.
+ * Transcript documents are JSON trees; this names that shape instead of an open bag.
+ */
+type JsonValue = string | number | boolean | null | JsonValue[] | JsonObject;
+type JsonObject = { [key: string]: JsonValue };
+
 interface StringLeaf {
   readonly pointer: string;
   readonly value: string;
@@ -47,6 +54,10 @@ interface StringLeaf {
 
 function pointerEscape(key: string): string {
   return key.replace(/~/g, '~0').replace(/\//g, '~1');
+}
+
+function isJsonObject(value: unknown): value is JsonObject {
+  return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function collectLeaves(value: unknown, pointer: string, out: StringLeaf[]): void {
@@ -58,52 +69,59 @@ function collectLeaves(value: unknown, pointer: string, out: StringLeaf[]): void
     for (let i = 0; i < value.length; i++) collectLeaves(value[i], `${pointer}/${i}`, out);
     return;
   }
-  if (typeof value === 'object' && value !== null) {
-    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+  if (isJsonObject(value)) {
+    for (const [k, v] of Object.entries(value)) {
       collectLeaves(v, `${pointer}/${pointerEscape(k)}`, out);
     }
   }
 }
 
-function applyLeavesArray(
-  value: unknown[],
+function applyJsonLeaves(
+  value: JsonValue,
   pointer: string,
   updates: ReadonlyMap<string, string>
-): unknown {
-  let changed = false;
-  const arr: unknown[] = [];
-  for (let i = 0; i < value.length; i++) {
-    const v2 = applyLeaves(value[i], `${pointer}/${i}`, updates);
-    if (v2 !== value[i]) changed = true;
-    arr.push(v2);
+): JsonValue {
+  if (typeof value === 'string') return updates.get(pointer) ?? value;
+  if (Array.isArray(value)) {
+    let changed = false;
+    const arr: JsonValue[] = [];
+    for (let i = 0; i < value.length; i++) {
+      const v2 = applyJsonLeaves(value[i], `${pointer}/${i}`, updates);
+      if (v2 !== value[i]) changed = true;
+      arr.push(v2);
+    }
+    return changed ? arr : value;
   }
-  return changed ? arr : value;
+  if (isJsonObject(value)) {
+    let changed = false;
+    const obj: JsonObject = {};
+    for (const [k, v] of Object.entries(value)) {
+      const v2 = applyJsonLeaves(v, `${pointer}/${pointerEscape(k)}`, updates);
+      if (v2 !== v) changed = true;
+      obj[k] = v2;
+    }
+    return changed ? obj : value;
+  }
+  return value;
 }
 
-function applyLeavesObject(
-  value: Record<string, unknown>,
-  pointer: string,
-  updates: ReadonlyMap<string, string>
-): unknown {
-  let changed = false;
-  const obj: Record<string, unknown> = {};
-  for (const [k, v] of Object.entries(value)) {
-    const v2 = applyLeaves(v, `${pointer}/${pointerEscape(k)}`, updates);
-    if (v2 !== v) changed = true;
-    obj[k] = v2;
-  }
-  return changed ? obj : value;
-}
-
+/** Rebuild an opaque tree (transcript document) with updated string leaves. */
 function applyLeaves(
   value: unknown,
   pointer: string,
   updates: ReadonlyMap<string, string>
 ): unknown {
+  if (isJsonObject(value)) return applyJsonLeaves(value, pointer, updates);
   if (typeof value === 'string') return updates.get(pointer) ?? value;
-  if (Array.isArray(value)) return applyLeavesArray(value, pointer, updates);
-  if (typeof value === 'object' && value !== null) {
-    return applyLeavesObject(value as Record<string, unknown>, pointer, updates);
+  if (Array.isArray(value)) {
+    let changed = false;
+    const arr: unknown[] = [];
+    for (let i = 0; i < value.length; i++) {
+      const v2 = applyLeaves(value[i], `${pointer}/${i}`, updates);
+      if (v2 !== value[i]) changed = true;
+      arr.push(v2);
+    }
+    return changed ? arr : value;
   }
   return value;
 }
