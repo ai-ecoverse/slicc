@@ -20,6 +20,7 @@
 
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { getToolExecutionContext } from '../../base/tool-execution-context.js';
 import {
   getNavigatorHid,
   getSharedHidRegistry,
@@ -28,7 +29,6 @@ import {
   MAX_HID_REPORT_BYTES,
 } from '../../kernel/hid-device-registry.js';
 import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
-import { getToolExecutionContext } from '../../tools/tool-ui.js';
 import { parseFlagArgs } from '../arg-parser.js';
 import { stdinAsLatin1 } from '../just-bash-compat.js';
 import { type HidBackend, type HidInputReport, resolveHidBackend } from './hid-backends.js';

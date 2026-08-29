@@ -2,7 +2,6 @@
   "packages/webapp/src/cdp/har-recorder.ts": 1,
   "packages/webapp/src/fs/mount/backend-local.ts": 2,
   "packages/webapp/src/shell/bsh-watchdog.ts": 3,
-  "packages/webapp/src/shell/supplemental-commands/hid-command.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/interaction.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/state.ts": 4,
   "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts": 2,
