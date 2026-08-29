@@ -97,6 +97,23 @@ jobs:
               - 'packages/swift-launcher/**'
             ios-app:
               - 'packages/ios-app/**'
+              # The simulator-test toolchain and the two gates the iOS jobs
+              # shell out to. Their vitest suites run on Linux and cover the
+              # pure logic; only the macOS jobs feed the generated skip args to
+              # `xcodebuild` or hand the drift gate a resolver-produced
+              # lockfile, so a helper-only PR would ship those integrations
+              # unexercised.
+              - 'packages/dev-tools/tools/ios-sim-test.sh'
+              - 'packages/dev-tools/tools/ios-sim-select.sh'
+              - 'packages/dev-tools/tools/ios-ui-test-exclusions.mjs'
+              - 'packages/dev-tools/tools/check-swift-resolved-drift.mjs'
+              # A PR that rewrites the iOS CI steps used to get zero iOS
+              # validation — only `swift-launcher` reran on a workflow edit,
+              # via `native-root-config`. Scoped to the iOS filter rather than
+              # `swift-config` on purpose: routing it through the filter every
+              # native job consumes would make one latently-red Swift coverage
+              # gate block every workflow edit in the repo.
+              - '.github/workflows/ci.yml'
             go-optel:
               - 'packages/go-optel/**'
             slicc-cli:
@@ -116,26 +133,8 @@ jobs:
               # trigger the swift coverage jobs that consume them.
               - 'coverage-thresholds.json'
               - 'packages/dev-tools/tools/swift-coverage-check.sh'
-              # The rest of the simulator-test toolchain the coverage script
-              # and `ios-sim-test.sh` share. Editing the runner retry or the
-              # simulator picker changes how every iOS leg selects and boots a
-              # device; without these the change ships unexercised.
-              - 'packages/dev-tools/tools/ios-sim-test.sh'
-              - 'packages/dev-tools/tools/ios-sim-select.sh'
+              # Shared by every coverage job through swift-coverage-check.sh.
               - 'packages/dev-tools/tools/swift-coverage-runner-retry.sh'
-              # Same reasoning for the two gates the iOS jobs shell out to.
-              # Their vitest suites run on Linux and cover the pure logic; only
-              # the macOS jobs feed the generated skip args to `xcodebuild` or
-              # hand the gate a resolver-produced lockfile, so a helper-only
-              # PR would ship those integrations unexecuted.
-              - 'packages/dev-tools/tools/ios-ui-test-exclusions.mjs'
-              - 'packages/dev-tools/tools/check-swift-resolved-drift.mjs'
-              # Only `swift-launcher` used to rerun on a workflow edit (via
-              # `native-root-config`), so a PR that rewrote the iOS or Swift
-              # steps got zero native validation — the failure mode that let
-              # a broken `-only-testing` spec sit on main. Every native job
-              # already consumes `swift-config`, so one entry covers them all.
-              - '.github/workflows/ci.yml'
             root-config:
               - 'package.json'
               - 'package-lock.json'
