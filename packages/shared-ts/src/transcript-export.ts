@@ -200,6 +200,17 @@ export class TranscriptExportError extends Error {
 
 export type TranscriptValidationResult = { ok: true } | { ok: false; error: string };
 
+/** Parsed JSON object from an untrusted transcript bundle — narrowed field-by-field in validators. */
+type UntrustedJsonObject = { readonly [key: string]: unknown };
+type UntrustedContentBlock = UntrustedJsonObject;
+type UntrustedMessageUsage = UntrustedJsonObject;
+type UntrustedMessageUsageCost = UntrustedJsonObject;
+type UntrustedMessage = UntrustedJsonObject;
+type UntrustedAttachment = UntrustedJsonObject;
+type UntrustedRedactionTarget = UntrustedJsonObject;
+type UntrustedTranscriptDocument = UntrustedJsonObject;
+type UntrustedPrivacySection = UntrustedJsonObject;
+
 // ---------------------------------------------------------------------------
 // Private — scalar / regex constants
 // ---------------------------------------------------------------------------
@@ -212,7 +223,7 @@ const ISO_DATETIME_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/;
 // Validator primitives — never throw for untrusted input
 // ---------------------------------------------------------------------------
 
-function isObj(v: unknown): v is Record<string, unknown> {
+function isObj(v: unknown): v is UntrustedJsonObject {
   return typeof v === 'object' && v !== null && !Array.isArray(v);
 }
 
@@ -262,7 +273,7 @@ function validateArray(
 // ---------------------------------------------------------------------------
 
 function validateContentBlockFields(
-  block: Record<string, unknown>,
+  block: UntrustedContentBlock,
   path: string
 ): TranscriptValidationResult {
   const type = block['type'];
@@ -305,7 +316,7 @@ function validateContentBlock(block: unknown, path: string): TranscriptValidatio
 // ---------------------------------------------------------------------------
 
 function validateTokenFields(
-  usage: Record<string, unknown>,
+  usage: UntrustedMessageUsage,
   path: string
 ): TranscriptValidationResult {
   const fields = ['input', 'output', 'cacheRead', 'cacheWrite', 'totalTokens'] as const;
@@ -322,7 +333,7 @@ function validateTokenFields(
 }
 
 function validateCostFields(
-  cost: Record<string, unknown>,
+  cost: UntrustedMessageUsageCost,
   path: string
 ): TranscriptValidationResult {
   const fields = ['input', 'output', 'cacheRead', 'cacheWrite', 'total'] as const;
@@ -338,7 +349,7 @@ function validateCostFields(
   return { ok: true };
 }
 
-function validateUsage(usage: Record<string, unknown>, path: string): TranscriptValidationResult {
+function validateUsage(usage: UntrustedMessageUsage, path: string): TranscriptValidationResult {
   const tokenResult = validateTokenFields(usage, path);
   if (!tokenResult.ok) return tokenResult;
   const cost = usage['cost'];
@@ -348,10 +359,7 @@ function validateUsage(usage: Record<string, unknown>, path: string): Transcript
   return validateCostFields(cost, `${path}.cost`);
 }
 
-function validateMessageScalars(
-  msg: Record<string, unknown>,
-  path: string
-): TranscriptValidationResult {
+function validateMessageScalars(msg: UntrustedMessage, path: string): TranscriptValidationResult {
   if (typeof msg['id'] !== 'string') return { ok: false, error: `${path}.id must be a string` };
   if (typeof msg['sequence'] !== 'number') {
     return { ok: false, error: `${path}.sequence must be a number` };
@@ -370,7 +378,7 @@ function validateMessageScalars(
 }
 
 function validateToolResultMessage(
-  msg: Record<string, unknown>,
+  msg: UntrustedMessage,
   path: string
 ): TranscriptValidationResult {
   const tcId = msg['toolCallId'];
@@ -384,7 +392,7 @@ function validateToolResultMessage(
 }
 
 function validateMessageOptionalUsage(
-  msg: Record<string, unknown>,
+  msg: UntrustedMessage,
   path: string
 ): TranscriptValidationResult {
   const usage = msg['usage'];
@@ -434,7 +442,7 @@ function validateConversation(conv: unknown, path: string): TranscriptValidation
 // ---------------------------------------------------------------------------
 
 function validateAttachmentStringFields(
-  att: Record<string, unknown>,
+  att: UntrustedAttachment,
   path: string
 ): TranscriptValidationResult {
   for (const field of [
@@ -454,7 +462,7 @@ function validateAttachmentStringFields(
 }
 
 function validatePresentAttachment(
-  att: Record<string, unknown>,
+  att: UntrustedAttachment,
   path: string
 ): TranscriptValidationResult {
   const attPath = att['path'] as string;
@@ -479,7 +487,7 @@ const VALID_MISSING_REASONS = [
 ] as const;
 
 function validateAbsentAttachment(
-  att: Record<string, unknown>,
+  att: UntrustedAttachment,
   path: string
 ): TranscriptValidationResult {
   const attPath = att['path'] as string;
@@ -494,7 +502,7 @@ function validateAbsentAttachment(
 }
 
 function validateAttachmentStateInvariants(
-  att: Record<string, unknown>,
+  att: UntrustedAttachment,
   path: string
 ): TranscriptValidationResult {
   return att['present']
@@ -526,7 +534,7 @@ function validateAttachment(att: unknown, path: string): TranscriptValidationRes
 // ---------------------------------------------------------------------------
 
 function validateRedactionTarget(
-  target: Record<string, unknown>,
+  target: UntrustedRedactionTarget,
   path: string
 ): TranscriptValidationResult {
   const kindResult = validateEnum(target['kind'], ['json', 'attachment'], `${path}.kind`);
@@ -675,7 +683,7 @@ function validatePrivacy(privacy: unknown): TranscriptValidationResult {
   return validateArray(redactions, validateRedaction, 'privacy.redactions');
 }
 
-function validateTopLevelArrays(doc: Record<string, unknown>): TranscriptValidationResult {
+function validateTopLevelArrays(doc: UntrustedTranscriptDocument): TranscriptValidationResult {
   const conversations = doc['conversations'];
   if (!Array.isArray(conversations)) {
     return { ok: false, error: 'conversations must be an array' };
@@ -942,7 +950,7 @@ function checkDelegationRefs(
 }
 
 function checkRedactionTargetRef(
-  target: Record<string, unknown>,
+  target: UntrustedRedactionTarget,
   attIds: Set<string>,
   path: string
 ): TranscriptValidationResult {
@@ -976,11 +984,11 @@ function checkRedactionRefs(
   return { ok: true };
 }
 
-function validateRelational(doc: Record<string, unknown>): TranscriptValidationResult {
+function validateRelational(doc: UntrustedTranscriptDocument): TranscriptValidationResult {
   const conversations = doc['conversations'] as unknown[];
   const attachments = doc['attachments'] as unknown[];
   const delegations = doc['delegations'] as unknown[];
-  const privacy = doc['privacy'] as Record<string, unknown> | undefined;
+  const privacy = doc['privacy'] as UntrustedPrivacySection | undefined;
   const redactions = (
     Array.isArray(privacy?.['redactions']) ? privacy!['redactions'] : []
   ) as unknown[];
@@ -1000,7 +1008,7 @@ function validateRelational(doc: Record<string, unknown>): TranscriptValidationR
   return checkRedactionRefs(redactions, attachments);
 }
 
-function validateStructuredBody(doc: Record<string, unknown>): TranscriptValidationResult {
+function validateStructuredBody(doc: UntrustedTranscriptDocument): TranscriptValidationResult {
   const r = validateTopLevelArrays(doc);
   if (!r.ok) return r;
   return validateRelational(doc);
