@@ -2,6 +2,14 @@ import { readFileSync } from 'node:fs';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+// Static, not `await import()` inside each test: `src/kernel/host.js` pulls a
+// large graph, and vitest charges that transform+evaluation to whichever test
+// triggers it — the first one here measured >1.2s of a 5s budget and timed out
+// under load. Both gates below read `globalThis.chrome` / the delegate id at
+// CALL time (`resolveFloatTopology`), never at module scope, so importing
+// ahead of the per-test global stubbing is behaviour-preserving.
+import { shouldStartLickWsBridge } from '../../src/kernel/host.js';
+import { setExtensionDelegateId } from '../../src/shell/proxied-fetch.js';
 
 describe('shouldStartLickWsBridge (kernel host lick-ws gate)', () => {
   let originalChrome: unknown;
@@ -15,31 +23,24 @@ describe('shouldStartLickWsBridge (kernel host lick-ws gate)', () => {
   afterEach(async () => {
     (globalThis as { chrome?: unknown }).chrome = originalChrome;
     (globalThis as Record<string, unknown>).__slicc_connect_mode = originalConnectMode;
-    const { setExtensionDelegateId } = await import('../../src/shell/proxied-fetch.js');
     setExtensionDelegateId(null);
   });
 
   it('starts the bridge for node-rest', async () => {
     (globalThis as { chrome?: unknown }).chrome = undefined;
-    const { setExtensionDelegateId } = await import('../../src/shell/proxied-fetch.js');
     setExtensionDelegateId(null);
-    const { shouldStartLickWsBridge } = await import('../../src/kernel/host.js');
     expect(shouldStartLickWsBridge()).toBe(true);
   });
 
   it('does NOT start the bridge for extension-delegate', async () => {
     (globalThis as { chrome?: unknown }).chrome = { runtime: { connect: () => undefined } };
-    const { setExtensionDelegateId } = await import('../../src/shell/proxied-fetch.js');
     setExtensionDelegateId('delegate-id');
-    const { shouldStartLickWsBridge } = await import('../../src/kernel/host.js');
     expect(shouldStartLickWsBridge()).toBe(false);
   });
 
   it('does NOT start the bridge for extension-direct', async () => {
     (globalThis as { chrome?: unknown }).chrome = { runtime: { id: 'real-ext-id' } };
-    const { setExtensionDelegateId } = await import('../../src/shell/proxied-fetch.js');
     setExtensionDelegateId(null);
-    const { shouldStartLickWsBridge } = await import('../../src/kernel/host.js');
     expect(shouldStartLickWsBridge()).toBe(false);
   });
 });

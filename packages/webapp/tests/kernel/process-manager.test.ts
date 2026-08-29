@@ -52,7 +52,9 @@ describe('ProcessManager — pid allocation', () => {
     // d should land at the first hole after [a,b,c], regardless of
     // exact value. The key invariant is FAST allocation.
     expect(d.pid).toBe(c.pid + 1);
-    expect(elapsedMs).toBeLessThan(50); // sanity: no multi-second scan
+    // sanity: no multi-second scan. Bound states that intent literally; 50ms
+    // was measuring machine load, not allocation strategy.
+    expect(elapsedMs).toBeLessThan(500);
   });
 
   it('does not reuse a live pid (linear probe)', () => {

@@ -522,7 +522,10 @@ describe('scoop_mute / scoop_unmute / scoop_wait tools', () => {
     const result = await tool!.execute({ scoop_names: ['alpha-scoop'], timeout_ms: 1000 });
     const elapsed = Date.now() - start;
 
-    expect(elapsed).toBeLessThan(50);
+    // Anti-hang bound, not a perf budget: the regression this guards is the
+    // tool AWAITING the 1000ms wait above, so anything well under that proves
+    // the point. 50ms only held on an idle machine.
+    expect(elapsed).toBeLessThan(500);
     expect(onScheduleScoopWait).toHaveBeenCalledWith([targetScoop.jid], 1000);
     expect(result.content).toContain('scoop_wait scheduled for: alpha-scoop');
     expect(result.content).toContain('timeout: 1000ms');

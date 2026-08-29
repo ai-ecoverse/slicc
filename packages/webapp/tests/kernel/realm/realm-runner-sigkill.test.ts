@@ -56,9 +56,10 @@ describe('runInRealm SIGKILL', () => {
     const result = await promise;
     const elapsed = Date.now() - start;
     expect(result.exitCode).toBe(137);
-    // 50 ms budget for the kernel-side cleanup. In-process
-    // factories settle synchronously after the SIGKILL fires.
-    expect(elapsed).toBeLessThan(150);
+    // Anti-hang bound for the kernel-side cleanup: in-process factories settle
+    // synchronously after the SIGKILL fires, so the regression is a kill that
+    // never settles. 150ms was measuring machine load.
+    expect(elapsed).toBeLessThan(500);
     expect(proc.terminatedBy).toBe('SIGKILL');
     expect(proc.exitCode).toBe(137);
     expect(proc.status).toBe('killed');
