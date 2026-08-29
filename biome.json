@@ -283,7 +283,6 @@
     },
     {
       "includes": [
-        "packages/webapp/src/providers/built-in/bedrock-camp.ts",
         "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts"
       ],
       "linter": {
