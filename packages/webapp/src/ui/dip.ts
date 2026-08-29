@@ -49,6 +49,34 @@ import { getLeaderPermissionsSurface } from './wc/wc-permissions-registry.js';
 
 const isExtension = isExtensionRealm();
 
+/** Response body posted back to a dip iframe (`id` is appended by respond helpers). */
+interface DipIframeResponseBody {
+  type: string;
+  error?: string;
+  result?: unknown;
+  content?: string;
+  exists?: boolean;
+  stat?: {
+    isFile: boolean;
+    isDirectory: boolean;
+    size: number;
+    mtimeMs: number;
+  };
+}
+
+/** Optional `data` bag on a `dip-picker-action` message from the iframe. */
+interface DipPickerActionData {
+  filters?: unknown[];
+}
+
+function dipPickerFiltersFromData(data: unknown): unknown[] {
+  if (data == null || typeof data !== 'object' || Array.isArray(data)) {
+    return [];
+  }
+  const filters = (data as DipPickerActionData).filters;
+  return Array.isArray(filters) ? filters : [];
+}
+
 /**
  * Fallback VFS read for `.shtml` dips when the preview service worker
  * isn't yet controlling the page. Talks to the page-side `preview-vfs`
@@ -890,7 +918,7 @@ async function handleDipDeviceRequest(
   }
 ): Promise<boolean> {
   if (!iframeWindow || typeof msg.id !== 'number') return false;
-  const respond = (payload: Record<string, unknown>) => {
+  const respond = (payload: DipIframeResponseBody) => {
     try {
       iframeWindow.postMessage({ ...payload, id: msg.id }, '*');
     } catch {
@@ -944,7 +972,7 @@ async function handleDipExecRequest(
   }
 ): Promise<boolean> {
   if (!iframeWindow || typeof msg.id !== 'number') return false;
-  const respond = (payload: Record<string, unknown>) => {
+  const respond = (payload: DipIframeResponseBody) => {
     try {
       iframeWindow.postMessage({ ...payload, id: msg.id }, '*');
     } catch {
@@ -1219,7 +1247,7 @@ async function handleDipVfsRequest(
 ): Promise<boolean> {
   if (!iframeWindow || typeof msg.id !== 'number') return false;
   const path = typeof msg.path === 'string' ? msg.path : '';
-  const respond = (payload: Record<string, unknown>) => {
+  const respond = (payload: DipIframeResponseBody) => {
     try {
       iframeWindow.postMessage({ ...payload, id: msg.id }, '*');
     } catch {
@@ -1450,8 +1478,7 @@ export async function handleDipPickerAction(
   msg: { type: string; action: string; data?: unknown; picker?: string },
   onLick: (action: string, data: unknown) => void
 ): Promise<void> {
-  const data = (msg.data ?? null) as Record<string, unknown> | null;
-  const filters = Array.isArray(data?.filters) ? (data!.filters as unknown[]) : [];
+  const filters = dipPickerFiltersFromData(msg.data);
   // Extension mode routes pickers through `chrome.windows.create` because
   // the side panel cannot host system choosers (TCC + `requestDevice`
   // both misbehave there). The popup runs the picker on its own button
