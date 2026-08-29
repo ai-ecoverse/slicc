@@ -14,6 +14,7 @@
 
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
+import { getToolExecutionContext } from '../../base/tool-execution-context.js';
 import { getPanelRpcClient, hasLocalDom } from '../../kernel/panel-rpc.js';
 import {
   deviceToInfo,
@@ -24,7 +25,6 @@ import {
   type UsbDeviceFilter,
   type UsbDeviceInfo,
 } from '../../kernel/usb-device-registry.js';
-import { getToolExecutionContext } from '../../tools/tool-ui.js';
 import { parseFlagArgs } from '../arg-parser.js';
 import { stdinAsLatin1 } from '../just-bash-compat.js';
 import { runDevicePickerApproval } from './picker-approval.js';
