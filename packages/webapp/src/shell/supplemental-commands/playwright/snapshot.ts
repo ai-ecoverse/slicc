@@ -3,12 +3,17 @@
  * playwright-cli command family.
  */
 
-import type { BrowserAPI, PageInfo } from '../../../cdp/index.js';
-import { normalizeAccessibilityText } from '../../../cdp/normalize-accessibility-text.js';
-import type { AccessibilityNode } from '../../../cdp/types.js';
+import { normalizeAccessibilityText } from '../../../base/normalize-accessibility-text.js';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
 import { listAllTargetsWithRemote } from './state.js';
-import type { PlaywrightState, TabSnapshot } from './types.js';
+import type { PlaywrightHandlerCtx, PlaywrightState, TabSnapshot } from './types.js';
+
+// BrowserAPI / PageInfo / AccessibilityNode are named via PlaywrightHandlerCtx
+// (same shell layer) rather than imported from `cdp/`, so this module stays
+// inside the shell layer (see layer-stack import direction).
+type BrowserAPI = PlaywrightHandlerCtx['browser'];
+type PageInfo = Awaited<ReturnType<BrowserAPI['listPages']>>[number];
+type AccessibilityNode = Awaited<ReturnType<BrowserAPI['getAccessibilityTree']>>;
 
 export function escapeYaml(str: string): string {
   return str.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n');
