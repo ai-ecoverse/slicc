@@ -119,6 +119,10 @@ describe('fetch-proxy WebDAV / CalDAV verb pass-through', () => {
   });
 
   afterEach(async () => {
+    // See the note in cloud-status.test.ts: keep-alive sockets outliving a
+    // recycled ephemeral port cross a later client onto the wrong server.
+    proxyServer.closeAllConnections?.();
+    upstream.server.closeAllConnections?.();
     await new Promise<void>((resolve) => proxyServer.close(() => resolve()));
     await new Promise<void>((resolve) => upstream.server.close(() => resolve()));
   });

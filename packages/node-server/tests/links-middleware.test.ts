@@ -26,6 +26,12 @@ async function fetchInProcess(app: express.Express, path: string): Promise<Respo
     const port = addr.port;
     return await fetch(`http://localhost:${port}${path}`);
   } finally {
+    // Destroy keep-alive sockets before closing. `close()` alone leaves them
+    // pooled in the fetch client while the OS is free to recycle this
+    // ephemeral port onto the NEXT test's server — the client then reuses a
+    // socket pointing at the wrong server and reads a crossed response
+    // (observed: `HTTPParserError: Expected HTTP/` and a stray 404).
+    server.closeAllConnections?.();
     await new Promise<void>((resolve) => server.close(() => resolve()));
   }
 }
