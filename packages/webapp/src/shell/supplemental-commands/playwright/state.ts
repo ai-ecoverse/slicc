@@ -4,23 +4,53 @@
  */
 
 import { base64ToUint8 } from '@slicc/shared-ts';
-import type { BrowserAPI } from '../../../cdp/index.js';
-import type { FrameInfo, PageInfo } from '../../../cdp/types.js';
-import { createLogger } from '../../../core/logger.js';
+import { createLogger } from '../../../base/logger.js';
 import { FsError, type VirtualFS } from '../../../fs/index.js';
 import { getPanelRpcClient } from '../../../kernel/panel-rpc.js';
-import {
-  TRAY_JOIN_STORAGE_KEY,
-  TRAY_WORKER_STORAGE_KEY,
-} from '../../../scoops/tray-runtime-config.js';
 import type { PlaywrightState } from './types.js';
 
 export const PLAYWRIGHT_COMMAND_NAMES = ['playwright-cli', 'playwright', 'puppeteer'] as const;
 
-const sharedStateByBrowser = new WeakMap<BrowserAPI, WeakMap<VirtualFS, PlaywrightState>>();
+/**
+ * Duck types for the CDP surface this module needs — avoids shell → cdp
+ * layer back-edges (`docs/review-patterns.md` § Layer-stack import direction).
+ * Callers pass the real `BrowserAPI`; only the methods/fields below are used.
+ */
+interface PlaywrightPageInfo {
+  targetId: string;
+  title: string;
+  url: string;
+}
+
+interface PlaywrightFrameInfo {
+  frameId: string;
+  parentFrameId?: string;
+  url: string;
+  name: string;
+  securityOrigin?: string;
+}
+
+interface PlaywrightBrowserAPI {
+  evaluate(expression: string): Promise<unknown>;
+  getFrameTree(): Promise<PlaywrightFrameInfo[]>;
+  listPages(): Promise<PlaywrightPageInfo[]>;
+  listAllTargets?: () => Promise<PlaywrightPageInfo[]>;
+  withTab<T>(targetId: string, fn: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * Canonical string values live in `scoops/tray-runtime-config.ts`; inlined here
+ * so shell does not import up into scoops. Exported so a test can assert they
+ * stay byte-identical to the canonical source (see `state.test.ts`) without
+ * reintroducing the runtime back-edge.
+ */
+export const TRAY_WORKER_STORAGE_KEY = 'slicc.trayWorkerBaseUrl';
+export const TRAY_JOIN_STORAGE_KEY = 'slicc.trayJoinUrl';
+
+const sharedStateByBrowser = new WeakMap<object, WeakMap<VirtualFS, PlaywrightState>>();
 const log = createLogger('playwright');
 
-export function getSharedState(browser: BrowserAPI, fs: VirtualFS): PlaywrightState {
+export function getSharedState(browser: PlaywrightBrowserAPI, fs: VirtualFS): PlaywrightState {
   let statesByFs = sharedStateByBrowser.get(browser);
   if (!statesByFs) {
     statesByFs = new WeakMap();
@@ -165,7 +195,7 @@ export const CLEAR_FOCUSABLE_ELEMENT_FUNCTION = `function() {
 }`;
 
 export async function getCurrentPageLocation(
-  browser: BrowserAPI
+  browser: PlaywrightBrowserAPI
 ): Promise<{ href: string; hostname: string; pathname: string }> {
   const raw = await browser.evaluate(
     `JSON.stringify({ href: location.href, hostname: location.hostname, pathname: location.pathname })`
@@ -273,9 +303,9 @@ export function requireTab(
 
 /** Resolve and validate an optional --frame ID against the currently attached tab. */
 export async function resolveFrame(
-  browser: BrowserAPI,
+  browser: PlaywrightBrowserAPI,
   flags: Record<string, string>
-): Promise<FrameInfo | null> {
+): Promise<PlaywrightFrameInfo | null> {
   const frameId = flags['frame'];
   if (!frameId) return null;
 
@@ -300,7 +330,9 @@ function isTrayConfigured(): boolean {
 }
 
 /** List local targets plus any remote tray/follower targets visible through panel RPC. */
-export async function listAllTargetsWithRemote(browser: BrowserAPI): Promise<PageInfo[]> {
+export async function listAllTargetsWithRemote(
+  browser: PlaywrightBrowserAPI
+): Promise<PlaywrightPageInfo[]> {
   if (typeof browser.listAllTargets !== 'function') return browser.listPages();
 
   const pages = await browser.listAllTargets();
@@ -321,7 +353,9 @@ export async function listAllTargetsWithRemote(browser: BrowserAPI): Promise<Pag
   return pages;
 }
 
-async function listTargetsForFrameSearch(browser: BrowserAPI): Promise<PageInfo[]> {
+async function listTargetsForFrameSearch(
+  browser: PlaywrightBrowserAPI
+): Promise<PlaywrightPageInfo[]> {
   try {
     return await listAllTargetsWithRemote(browser);
   } catch {
@@ -331,7 +365,7 @@ async function listTargetsForFrameSearch(browser: BrowserAPI): Promise<PageInfo[
 
 /** Explain a failed --tab attachment when the supplied target ID is actually a frame ID. */
 export async function frameIdUsedAsTabError(
-  browser: BrowserAPI,
+  browser: PlaywrightBrowserAPI,
   targetId: string,
   attachmentError: unknown
 ): Promise<string | null> {
