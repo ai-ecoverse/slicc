@@ -3,7 +3,7 @@ import {
   getPreviewMinter,
   type PreviewMinter,
   setPreviewMinter,
-} from '../../src/scoops/preview-minter.js';
+} from '../../src/shell/preview-minter.js';
 
 beforeEach(() => setPreviewMinter(null));
 

@@ -2,7 +2,7 @@
  * Module-level hook so the kernel worker's `layout` command (over the
  * `layout-apply` panel-RPC op) can reach the page-side `applyLayout`.
  * Mirrors the `setPreviewMinter` / `getPreviewMinter` precedent in
- * `packages/webapp/src/scoops/preview-minter.ts`: a module-level `let`,
+ * `packages/webapp/src/shell/preview-minter.ts`: a module-level `let`,
  * a `setX(fn | null)`, and a `getX()`.
  *
  * Registered in the shared WC boot path (`wc-live.ts` `attachWcClient`),
