@@ -9,10 +9,15 @@
 #
 # Usage:
 #   ios-sim-test.sh --device <name-regex> --result-bundle <path> --only-testing <spec>
+#                   [--skip-testing <spec>]...
 #
 #   --device        simulator name regex, e.g. iPhone or iPad
 #   --result-bundle xcresult path relative to packages/ios-app
 #   --only-testing  xcodebuild -only-testing spec
+#   --skip-testing  xcodebuild -skip-testing spec; repeatable. Carves the
+#                   handful of tests the runner cannot host out of an
+#                   otherwise whole-bundle run (see
+#                   packages/ios-app/ui-test-exclusions.json).
 set -euo pipefail
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
@@ -21,11 +26,13 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 DEVICE_REGEX=""
 RESULT_BUNDLE=""
 ONLY_TESTING=""
+SKIP_TESTING_ARGS=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --device) DEVICE_REGEX="$2"; shift 2 ;;
     --result-bundle) RESULT_BUNDLE="$2"; shift 2 ;;
     --only-testing) ONLY_TESTING="$2"; shift 2 ;;
+    --skip-testing) SKIP_TESTING_ARGS+=("-skip-testing:$2"); shift 2 ;;
     *) echo "error: unknown argument $1" >&2; exit 2 ;;
   esac
 done
@@ -67,6 +74,11 @@ xcrun simctl bootstatus "$UDID" -b ||
   echo "::warning::simctl bootstatus did not report a clean boot; continuing"
 
 echo "==> xcodebuild test ($ONLY_TESTING, simulator $UDID)"
+# `set -u` + bash 3.2 (what macOS ships) treats an empty array expansion as an
+# unbound variable, so both uses go through the `${arr[@]+...}` guard.
+if [[ -n "${SKIP_TESTING_ARGS[*]+x}" ]]; then
+  echo "==> skipping: ${SKIP_TESTING_ARGS[*]}"
+fi
 set -o pipefail
 XCODEBUILD_LOG=$(mktemp -t ios-sim-test-xcodebuild)
 trap 'rm -f "$XCODEBUILD_LOG"' EXIT
@@ -83,6 +95,7 @@ run_single_xcodebuild_attempt() {
     -parallel-testing-enabled NO \
     -retry-tests-on-failure \
     -test-iterations 2 \
-    "-only-testing:$ONLY_TESTING"
+    "-only-testing:$ONLY_TESTING" \
+    ${SKIP_TESTING_ARGS[@]+"${SKIP_TESTING_ARGS[@]}"}
 }
 run_with_runner_init_retry "$XCODEBUILD_LOG" run_single_xcodebuild_attempt

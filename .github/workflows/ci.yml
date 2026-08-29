@@ -116,6 +116,26 @@ jobs:
               # trigger the swift coverage jobs that consume them.
               - 'coverage-thresholds.json'
               - 'packages/dev-tools/tools/swift-coverage-check.sh'
+              # The rest of the simulator-test toolchain the coverage script
+              # and `ios-sim-test.sh` share. Editing the runner retry or the
+              # simulator picker changes how every iOS leg selects and boots a
+              # device; without these the change ships unexercised.
+              - 'packages/dev-tools/tools/ios-sim-test.sh'
+              - 'packages/dev-tools/tools/ios-sim-select.sh'
+              - 'packages/dev-tools/tools/swift-coverage-runner-retry.sh'
+              # Same reasoning for the two gates the iOS jobs shell out to.
+              # Their vitest suites run on Linux and cover the pure logic; only
+              # the macOS jobs feed the generated skip args to `xcodebuild` or
+              # hand the gate a resolver-produced lockfile, so a helper-only
+              # PR would ship those integrations unexecuted.
+              - 'packages/dev-tools/tools/ios-ui-test-exclusions.mjs'
+              - 'packages/dev-tools/tools/check-swift-resolved-drift.mjs'
+              # Only `swift-launcher` used to rerun on a workflow edit (via
+              # `native-root-config`), so a PR that rewrote the iOS or Swift
+              # steps got zero native validation — the failure mode that let
+              # a broken `-only-testing` spec sit on main. Every native job
+              # already consumes `swift-config`, so one entry covers them all.
+              - '.github/workflows/ci.yml'
             root-config:
               - 'package.json'
               - 'package-lock.json'
@@ -1678,8 +1698,15 @@ jobs:
       - name: Lint (SwiftLint)
         run: cd packages/ios-app && swiftlint lint --reporter github-actions-logging
       # swift-format ships with the toolchain; config is the root .swift-format.
+      # Every target root in project.yml, not just the app: SwiftLint already
+      # walks the whole package (it recurses from the package directory), so
+      # naming only `SliccFollower` here left the framework and the three
+      # app-extension targets — SliccTrayKit's ~1.3k lines of approval logic
+      # included — formatted by nothing but the pre-commit hook.
       - name: Lint (swift-format)
-        run: cd packages/ios-app && swift format lint --strict --parallel --recursive SliccFollower Package.swift
+        run: |
+          cd packages/ios-app && swift format lint --strict --parallel --recursive \
+            SliccFollower SliccTrayKit SliccFileProvider SliccShareExtension SliccWidgets Package.swift
       - name: Install XcodeGen
         run: brew install xcodegen
       - name: Generate Xcode project
@@ -1690,6 +1717,16 @@ jobs:
           xcodebuild -resolvePackageDependencies \
             -project SliccFollower.xcodeproj \
             -scheme SliccFollower
+      # `-resolvePackageDependencies` rewrites Package.resolved in place and
+      # then builds against whatever it wrote, so a floated pin used to reach
+      # main without appearing in a single diff. `lint:swift-pins` cannot see
+      # this: it only compares the direct pins named in project.yml and
+      # Package.swift, and the ones that drift are transitive.
+      - name: Check SwiftPM lockfile drift
+        run: |
+          node packages/dev-tools/tools/check-swift-resolved-drift.mjs \
+            packages/ios-app/SliccFollower.xcodeproj/project.xcworkspace/xcshareddata/swiftpm/Package.resolved \
+            packages/ios-app/Package.resolved
       - name: Build (iOS Simulator)
         run: |
           set -o pipefail
@@ -1749,8 +1786,11 @@ jobs:
     runs-on: ${{ matrix.ios == '27' && 'xcode-27' || 'macos-latest' }}
     continue-on-error: ${{ matrix.ios == '27' }}
     # Simulator boots can wedge on fresh runner images; fail fast instead of
-    # holding the merge queue for the 6h default.
-    timeout-minutes: 40
+    # holding the merge queue for the 6h default. 75 rather than 40 because the
+    # GA cells run the whole UI bundle. Measured on this runner pool: ~11.4 min
+    # to build, then ~29s per UI test, so 62 tests lands near 42 min, plus the
+    # unit suite on the iPhone GA cell.
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
       # swift-coverage-check.sh reads its floors from coverage-thresholds.json
@@ -1788,45 +1828,55 @@ jobs:
             --device iPhone \
             --result-bundle .build/unit-suite.xcresult \
             --only-testing SliccFollowerTests
-      # The composer must stay typable through connection trouble, and the
-      # keyboard must follow focus and nothing else. Compact width is where
-      # that regressed, so this runs on the iPhone leg rather than the iPad
-      # ones. Its own class, not all of ComposerKeyboardUITests: those drive
-      # `typeKey` and need a hardware keyboard the runner has not got.
-      - name: Test composer under connection trouble (iPhone)
-        if: matrix.device == 'iPhone' && matrix.ios == '26'
-        run: |
-          ./packages/dev-tools/tools/ios-sim-test.sh \
-            --device iPhone \
-            --result-bundle .build/composer-connection-ui.xcresult \
-            --only-testing SliccFollowerUITests/ComposerConnectionUITests
-      - name: Test regular-width browser (iPad)
-        if: matrix.device == 'iPad'
-        run: |
-          ./packages/dev-tools/tools/ios-sim-test.sh \
-            --device iPad \
-            --result-bundle .build/regular-width-ui.xcresult \
-            --only-testing SliccFollowerUITests/RemoteTabUITests/testRegularWidthBrowsingEntersAndExitsFullScreen
-      # The readable-column cap only pays off if the column is also centered,
-      # and both halves are invisible on the iPhone leg — compact width never
-      # reaches the cap. iPad is the only destination that can see a regression.
-      - name: Test regular-width transcript column (iPad)
-        if: matrix.device == 'iPad'
-        run: |
-          ./packages/dev-tools/tools/ios-sim-test.sh \
-            --device iPad \
-            --result-bundle .build/transcript-column-ui.xcresult \
-            --only-testing SliccFollowerUITests/TranscriptColumnUITests
-      # #2072: the transcript threw a reader backwards through the history
-      # when the keyboard's inset landed. The gate asserts the MEASURED drift
-      # of an anchor row across a keyboard transition, so it catches a
-      # reintroduction that a rendering assertion would sail past.
+      # The WHOLE UI bundle, on both GA destinations, minus the reviewed
+      # exclusions in packages/ios-app/ui-test-exclusions.json.
       #
-      # Both destinations, deliberately. The iPad is not redundant: it renders
-      # a wider transcript with more rows per screen and carries the
+      # This step replaced four hand-picked `-only-testing` classes. Under that
+      # list 21 of the 25 UI classes ran nowhere but a developer's Mac, and two
+      # tests had been failing on main for releases before anyone ran the suite
+      # locally — the list was never wrong, it just could not grow itself.
+      # Inverting it (run everything, subtract a registry) means a new class is
+      # gated the day it lands, and leaving CI takes an edit to a reviewed file
+      # with a written reason. `npm run lint:ios-ui-tests` keeps that registry
+      # from going stale in the other direction.
+      #
+      # Both destinations, deliberately. The iPad is not redundant: it renders a
+      # wider transcript with more rows per screen and carries the
       # readable-column cap, and #2048 was an iPad-only transcript regression.
-      # The iOS 27 leg is `continue-on-error` like the rest of the matrix.
-      - name: Test transcript scroll anchoring (#2072)
+      # It costs roughly 25 extra runner-minutes per GA cell; that is the price
+      # of the suite being executed at all.
+      - name: Test UI suite (whole bundle minus reviewed exclusions)
+        if: matrix.ios == '26'
+        run: |
+          set -euo pipefail
+          # Command substitution, not process substitution: `set -e` sees the
+          # exit status here, so a broken registry fails the step instead of
+          # silently degrading to "skip nothing" and running the known-red
+          # tests.
+          SKIP_SPECS="$(node packages/dev-tools/tools/ios-ui-test-exclusions.mjs --print-skip-args)"
+          SKIP_ARGS=()
+          while IFS= read -r spec; do
+            # `if`, not `[ … ] && …`: under `set -e` a false trailing test in a
+            # loop body aborts the step, and an empty registry produces one
+            # empty line.
+            if [ -n "$spec" ]; then SKIP_ARGS+=(--skip-testing "$spec"); fi
+          done <<< "$SKIP_SPECS"
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device ${{ matrix.device }} \
+            --result-bundle .build/ui-suite.xcresult \
+            --only-testing SliccFollowerUITests \
+            ${SKIP_ARGS[@]+"${SKIP_ARGS[@]}"}
+      # The beta-SDK cells keep a curated slice, not the whole bundle. They are
+      # `continue-on-error` canaries for SDK breakage, not the coverage surface,
+      # and paying the full bundle twice more to learn that Xcode 27 moved a hit
+      # region is not worth the queue time. What is worth carrying is the
+      # layout- and scroll-sensitive set, because that is what an SDK bump
+      # actually breaks: #2072 asserts a MEASURED drift across a keyboard
+      # transition (a rendering assertion sails past a reintroduction), and the
+      # two iPad classes cover the regular-width column and full-screen tab
+      # layout that only a regular-width destination can see.
+      - name: Test transcript scroll anchoring (#2072, beta SDK)
+        if: matrix.ios != '26'
         run: |
           ./packages/dev-tools/tools/ios-sim-test.sh \
             --device ${{ matrix.device }} \
@@ -1839,15 +1889,31 @@ jobs:
       # precisely because SwiftUI `Text` has no per-span long press, and nothing
       # short of a real gesture can tell whether that wiring survived.
       #
-      # iPhone only: compact width is where a transcript is read on a phone,
-      # and the menus are identical at regular width.
-      - name: Test transcript short actions (iPhone)
-        if: matrix.device == 'iPhone'
+      # iPhone only: compact width is where a transcript is read on a phone, and
+      # the menus are identical at regular width. Beta cells only: the GA cells
+      # already run this class inside the whole bundle above, and a live text
+      # engine is exactly what an SDK bump moves, so the canary keeps it.
+      - name: Test transcript short actions (iPhone, beta SDK)
+        if: matrix.device == 'iPhone' && matrix.ios != '26'
         run: |
           ./packages/dev-tools/tools/ios-sim-test.sh \
             --device iPhone \
             --result-bundle .build/transcript-short-actions-ui.xcresult \
             --only-testing SliccFollowerUITests/TranscriptShortActionsUITests
+      - name: Test regular-width browser (iPad, beta SDK)
+        if: matrix.device == 'iPad' && matrix.ios != '26'
+        run: |
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device iPad \
+            --result-bundle .build/regular-width-ui.xcresult \
+            --only-testing SliccFollowerUITests/RemoteTabUITests/testRegularWidthBrowsingEntersAndExitsFullScreen
+      - name: Test regular-width transcript column (iPad, beta SDK)
+        if: matrix.device == 'iPad' && matrix.ios != '26'
+        run: |
+          ./packages/dev-tools/tools/ios-sim-test.sh \
+            --device iPad \
+            --result-bundle .build/transcript-column-ui.xcresult \
+            --only-testing SliccFollowerUITests/TranscriptColumnUITests
       - name: Upload coverage report
         if: always() && matrix.device == 'iPhone' && matrix.ios == '26'
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
@@ -1862,10 +1928,22 @@ jobs:
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: test-timings-ios-app-${{ matrix.ios }}-${{ matrix.device }}
+          # Glob, not a hand-kept list: the earlier enumeration named three of
+          # the bundles and silently dropped every leg added after it, so the
+          # UI runs whose flakes actually need diagnosing were the ones with no
+          # artifact.
+          #
+          # `include-hidden-files` is load-bearing. An `.xcresult` is a bundle
+          # whose contents include dot-prefixed entries, and upload-artifact
+          # skips those by default — the first version of this step matched the
+          # bundles and still uploaded nothing ("No files were found"), which is
+          # how a CI-only UI failure ended up with no screenshot or accessibility
+          # hierarchy to read. The sibling Swift jobs never hit it because they
+          # upload plain files.
+          include-hidden-files: true
           path: |
             packages/ios-app/.build/coverage/ios-app.xcresult
-            packages/ios-app/.build/unit-suite.xcresult
-            packages/ios-app/.build/regular-width-ui.xcresult
+            packages/ios-app/.build/*.xcresult
           if-no-files-found: ignore
 
   global-install:

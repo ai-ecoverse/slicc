@@ -30,7 +30,14 @@ final class RemoteTabUITests: XCTestCase {
     /// (#1916), Safari-shaped: `+` opens the tab full screen (rail and
     /// navigation bar gone), the bottom address bar is the prompt, and the
     /// overview grid is where local and remote tabs meet again.
-    func testRemoteOnlyStateOpensLocalTab() {
+    ///
+    /// Compact width only — the mirror image of the guard on
+    /// `testRegularWidthBrowsingEntersAndExitsFullScreen`. This asserts the
+    /// covered conversation's toolbar is GONE; on a regular-width iPad the
+    /// split legitimately keeps chat beside the browser, which is what that
+    /// sibling test asserts ("the split starts with chat visible"). Without
+    /// the guard the two contradict each other on the iPad destination.
+    func testRemoteOnlyStateOpensLocalTab() throws {
         let app = XCUIApplication()
         app.launchArguments += [
             "-joinUrl", "", "-uiTestConnectionState", "connected",
@@ -38,6 +45,12 @@ final class RemoteTabUITests: XCTestCase {
             "-uiTestRemoteTargetsFixture", "YES",
         ]
         app.launch()
+
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 10))
+        if UIDevice.current.userInterfaceIdiom == .pad, window.frame.width > 560 {
+            throw XCTSkip("Requires a compact-width simulator destination")
+        }
 
         XCTAssertTrue(
             app.staticTexts["Sliccy docs — architecture"].waitForExistence(timeout: 60),

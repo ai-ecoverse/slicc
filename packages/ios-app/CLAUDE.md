@@ -99,7 +99,7 @@ Outputs in `.build/coverage/`; the gate runs only `SliccFollowerTests`. Object s
 
 ## UI tests (`SliccFollowerUITests`)
 
-`bundle.ui-testing` stays in the scheme; the unit gate excludes it. Run `-only-testing:SliccFollowerUITests` on UI changes as a separate CI job. No test needs a leader — every fixture runs off a `#if DEBUG` launch-argument hook. Hook list: [`docs/ios-app-details.md`](../../docs/ios-app-details.md#ui-test-hooks); authoring rules: [`docs/ios-app-details.md`](../../docs/ios-app-details.md#ui-test-details).
+`bundle.ui-testing` stays in the scheme; the unit gate excludes it. No test needs a leader — every fixture runs off a `#if DEBUG` launch-argument hook. **CI runs the whole bundle** on both GA cells of `ios-app-tests`, minus `ui-test-exclusions.json` — so a new class is gated the day it lands, and leaving CI takes an entry in that registry with a written reason (`npm run lint:ios-ui-tests` rejects stale ones). Hook list: [`docs/ios-app-details.md`](../../docs/ios-app-details.md#ui-test-hooks); authoring rules: [`docs/ios-app-details.md`](../../docs/ios-app-details.md#ui-test-details).
 
 ## Linting
 

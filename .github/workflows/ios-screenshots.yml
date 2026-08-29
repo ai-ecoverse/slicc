@@ -23,7 +23,13 @@ on:
     branches: [main]
     paths:
       - 'packages/ios-app/**'
+      # Every local package the app links, not just traysession: a change in
+      # any of them reaches the rendered screens, and the set has to stay in
+      # step with the `ios-app` job's trigger list in ci.yml.
       - 'packages/swift-traysession/**'
+      - 'packages/swift-trayfollower/**'
+      - 'packages/swift-traykit/**'
+      - 'packages/swift-widgetkit/**'
       - 'packages/dev-tools/tools/ios-screenshots*'
       - '.github/workflows/ios-screenshots.yml'
 
