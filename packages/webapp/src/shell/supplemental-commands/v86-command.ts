@@ -74,7 +74,7 @@ Usage:
   v86 mouse [-n name] move <dx> <dy>      Move pointer (relative)
   v86 mouse [-n name] click [left|right|middle] [--double]
   v86 mouse [-n name] --to <x>,<y>        Best-effort absolute positioning
-  v86 screenshot [-n name] [<file.png>]   VGA output -> PNG (default /tmp/v86-<name>.png)
+  v86 screenshot [-n name] [<file.png>]   VGA output -> PNG (default $TMPDIR/v86-<name>.png)
   v86 text [-n name]                      Dump text-mode screen as plain text
   v86 serve [-n name] [--fps <1-10>]      Stream the screen into $TMPDIR/v86-serve-<name>/
   v86 serve [-n name] --stop              (viewer index.html + live frames; mint an
