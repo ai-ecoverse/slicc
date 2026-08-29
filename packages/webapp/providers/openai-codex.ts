@@ -168,17 +168,30 @@ async function refreshAccessToken(refresh: string): Promise<TokenResponse | null
 // The stream function re-derives the account id from the token itself, so
 // we only persist a human-friendly label here.
 
+interface OpenAICodexJwtProfile {
+  email?: string;
+}
+
+interface OpenAICodexJwtAuth {
+  chatgpt_plan_type?: string;
+}
+
+interface OpenAICodexJwtPayload {
+  'https://api.openai.com/profile'?: OpenAICodexJwtProfile;
+  'https://api.openai.com/auth'?: OpenAICodexJwtAuth;
+}
+
 // JWT segments are base64url (RFC 7515): `-`/`_` instead of `+`/`/` and no
 // padding. `atob` only accepts standard base64, so restore the alphabet and
 // pad before decoding — otherwise valid tokens whose payload happens to
 // contain those characters throw and we silently drop the profile metadata.
-function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
+function decodeJwtPayload(token: string): OpenAICodexJwtPayload | undefined {
   try {
     const parts = token.split('.');
     if (parts.length !== 3) return undefined;
     let b64 = parts[1]!.replace(/-/g, '+').replace(/_/g, '/');
     if (b64.length % 4) b64 += '='.repeat(4 - (b64.length % 4));
-    return JSON.parse(atob(b64)) as Record<string, unknown>;
+    return JSON.parse(atob(b64)) as OpenAICodexJwtPayload;
   } catch {
     return undefined;
   }
@@ -186,15 +199,13 @@ function decodeJwtPayload(token: string): Record<string, unknown> | undefined {
 
 function getEmail(accessToken: string): string | undefined {
   const payload = decodeJwtPayload(accessToken);
-  const profile = payload?.['https://api.openai.com/profile'] as { email?: unknown } | undefined;
-  return typeof profile?.email === 'string' ? profile.email : undefined;
+  const email = payload?.['https://api.openai.com/profile']?.email;
+  return typeof email === 'string' ? email : undefined;
 }
 
 function getDisplayName(accessToken: string): string | undefined {
   const payload = decodeJwtPayload(accessToken);
-  const auth = payload?.['https://api.openai.com/auth'] as
-    | { chatgpt_plan_type?: unknown }
-    | undefined;
+  const auth = payload?.['https://api.openai.com/auth'];
   const email = getEmail(accessToken);
   const plan = typeof auth?.chatgpt_plan_type === 'string' ? auth.chatgpt_plan_type : undefined;
   const planLabel = plan ? plan.charAt(0).toUpperCase() + plan.slice(1) : undefined;
@@ -293,61 +304,80 @@ function makeErrorOutput(model: Model<Api>, error: unknown) {
   };
 }
 
+type CodexEventStream = ReturnType<typeof createAssistantMessageEventStream>;
+
+function logStreamError(error: unknown): void {
+  console.error(
+    '[openai-codex] Stream error:',
+    error instanceof Error ? error.message : String(error)
+  );
+}
+
+async function pumpCodexStream(
+  stream: CodexEventStream,
+  model: Model<Api>,
+  context: Context,
+  options: ProviderStreamOptions
+): Promise<void> {
+  try {
+    const accessToken = await getValidAccessToken();
+    const proxyModel = {
+      ...model,
+      baseUrl: CODEX_BASE_URL,
+      api: OPENAI_CODEX_RESPONSES_API,
+    } as Model<'openai-codex-responses'>;
+    const inner = streamOpenAICodexResponses(proxyModel, context, {
+      ...options,
+      apiKey: accessToken,
+      transport: 'sse',
+    });
+    for await (const event of inner) stream.push(event);
+    stream.end();
+  } catch (error) {
+    logStreamError(error);
+    stream.push(makeErrorOutput(model, error) as never);
+    stream.end();
+  }
+}
+
+async function pumpSimpleCodexStream(
+  stream: CodexEventStream,
+  model: Model<Api>,
+  context: Context,
+  options?: SimpleStreamOptions
+): Promise<void> {
+  try {
+    const accessToken = await getValidAccessToken();
+    const proxyModel = {
+      ...model,
+      baseUrl: CODEX_BASE_URL,
+      api: OPENAI_CODEX_RESPONSES_API,
+    } as Model<'openai-codex-responses'>;
+    const inner = streamSimpleOpenAICodexResponses(proxyModel, context, {
+      ...options,
+      apiKey: accessToken,
+      transport: 'sse',
+    } as SimpleStreamOptions);
+    for await (const event of inner) stream.push(event);
+    stream.end();
+  } catch (error) {
+    logStreamError(error);
+    stream.push(makeErrorOutput(model, error) as never);
+    stream.end();
+  }
+}
+
 const streamCodex = (model: Model<Api>, context: Context, options: ProviderStreamOptions = {}) => {
   const stream = createAssistantMessageEventStream();
-  (async () => {
-    try {
-      const accessToken = await getValidAccessToken();
-      const proxyModel = {
-        ...model,
-        baseUrl: CODEX_BASE_URL,
-        api: OPENAI_CODEX_RESPONSES_API,
-      } as Model<'openai-codex-responses'>;
-      const inner = streamOpenAICodexResponses(proxyModel, context, {
-        ...options,
-        apiKey: accessToken,
-        transport: 'sse',
-      });
-      for await (const event of inner) stream.push(event);
-      stream.end();
-    } catch (error) {
-      console.error(
-        '[openai-codex] Stream error:',
-        error instanceof Error ? error.message : String(error)
-      );
-      stream.push(makeErrorOutput(model, error) as never);
-      stream.end();
-    }
-  })();
+  // Fire-and-forget pump — callers consume the returned event stream.
+  pumpCodexStream(stream, model, context, options).catch(logStreamError);
   return stream;
 };
 
 const streamSimpleCodex = (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => {
   const stream = createAssistantMessageEventStream();
-  (async () => {
-    try {
-      const accessToken = await getValidAccessToken();
-      const proxyModel = {
-        ...model,
-        baseUrl: CODEX_BASE_URL,
-        api: OPENAI_CODEX_RESPONSES_API,
-      } as Model<'openai-codex-responses'>;
-      const inner = streamSimpleOpenAICodexResponses(proxyModel, context, {
-        ...options,
-        apiKey: accessToken,
-        transport: 'sse',
-      } as SimpleStreamOptions);
-      for await (const event of inner) stream.push(event);
-      stream.end();
-    } catch (error) {
-      console.error(
-        '[openai-codex] Stream error:',
-        error instanceof Error ? error.message : String(error)
-      );
-      stream.push(makeErrorOutput(model, error) as never);
-      stream.end();
-    }
-  })();
+  // Fire-and-forget pump — callers consume the returned event stream.
+  pumpSimpleCodexStream(stream, model, context, options).catch(logStreamError);
   return stream;
 };
 

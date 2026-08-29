@@ -308,7 +308,6 @@
       "includes": [
         "packages/webapp/cloud/app.js",
         "packages/webapp/providers/adobe.ts",
-        "packages/webapp/providers/openai-codex.ts",
         "packages/webapp/src/cdp/har-recorder.ts",
         "packages/webapp/src/providers/built-in/bedrock-camp.ts",
         "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts",
