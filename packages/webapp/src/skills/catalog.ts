@@ -59,6 +59,27 @@ const COMPATIBILITY_CACHE_INVALIDATION_METHODS = [
   'writeFile',
 ] as const;
 
+type CompatibilityCacheInvalidationMethod =
+  (typeof COMPATIBILITY_CACHE_INVALIDATION_METHODS)[number];
+
+/** Wrapped VirtualFS method installed by compatibility discovery cache invalidation. */
+type CompatibilityCacheHookMethod = (...args: unknown[]) => Promise<unknown>;
+
+/** VirtualFS methods that compatibility discovery may wrap for cache invalidation. */
+type MonkeypatchableVirtualFs = Partial<
+  Record<CompatibilityCacheInvalidationMethod, CompatibilityCacheHookMethod>
+>;
+
+/** Untrusted `.claude-plugin/marketplace.json` root before validation. */
+interface MarketplaceManifest {
+  readonly plugins?: readonly MarketplacePluginEntry[];
+}
+
+/** One marketplace plugin entry — `source` may be a path string or a git-subdir object. */
+interface MarketplacePluginEntry {
+  readonly source?: unknown;
+}
+
 const compatibilityCandidatesCache = new WeakMap<object, DiscoveredSkillCandidate[]>();
 const compatibilityCacheHooksInstalled = new WeakSet<object>();
 
@@ -240,20 +261,21 @@ async function resolveMarketplacePluginPaths(
     return [];
   }
 
-  if (
-    typeof manifest !== 'object' ||
-    manifest === null ||
-    !Array.isArray((manifest as Record<string, unknown>).plugins)
-  ) {
+  if (typeof manifest !== 'object' || manifest === null) {
+    return [];
+  }
+
+  const plugins = (manifest as MarketplaceManifest).plugins;
+  if (!Array.isArray(plugins)) {
     return [];
   }
 
   const parentDir = manifestPath.replace(/\/[^/]+$/, '').replace(/\/.claude-plugin$/, '');
   const paths: string[] = [];
 
-  for (const plugin of (manifest as { plugins: unknown[] }).plugins) {
+  for (const plugin of plugins) {
     if (typeof plugin !== 'object' || plugin === null) continue;
-    const source = (plugin as Record<string, unknown>).source;
+    const source = (plugin as MarketplacePluginEntry).source;
     // Skip git-subdir objects — they require a separate git clone
     if (typeof source !== 'string') continue;
     // Reject absolute paths and traversal attempts
@@ -393,12 +415,10 @@ function installCompatibilityCacheInvalidationHooks(fs: VirtualFS): void {
   if (compatibilityCacheHooksInstalled.has(cacheKey)) return;
   compatibilityCacheHooksInstalled.add(cacheKey);
 
-  const mutableFs = fs as unknown as Record<string, unknown>;
+  const mutableFs = fs as unknown as MonkeypatchableVirtualFs;
   for (const methodName of COMPATIBILITY_CACHE_INVALIDATION_METHODS) {
-    const candidate = mutableFs[methodName];
-    if (typeof candidate !== 'function') continue;
-
-    const original = candidate as (...args: unknown[]) => unknown;
+    const original = mutableFs[methodName];
+    if (typeof original !== 'function') continue;
 
     try {
       mutableFs[methodName] = async (...args: unknown[]) => {
