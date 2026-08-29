@@ -54,6 +54,22 @@ type UserContentRaw =
   | string
   | Array<{ type: string; text?: string; data?: string; mimeType?: string }>;
 
+/**
+ * Pi assistant content fields we read while normalizing. Tool-call `arguments`
+ * are forwarded as TranscriptContentBlock tool-call `input` (`unknown`); the
+ * per-tool shape is declared by each tool's JSON Schema, not nameable here.
+ */
+interface AssistantContentBlockRaw {
+  type: string;
+  text?: string;
+  thinking?: string;
+  id?: string;
+  name?: string;
+  arguments?: unknown;
+  data?: string;
+  mimeType?: string;
+}
+
 // ---------------------------------------------------------------------------
 // Internal result shape for per-message normalizers
 // ---------------------------------------------------------------------------
@@ -121,16 +137,7 @@ function normalizeUserContent(
  * and canonical image data keyed by attachmentId.
  */
 function normalizeAssistantContent(
-  content: Array<{
-    type: string;
-    text?: string;
-    thinking?: string;
-    id?: string;
-    name?: string;
-    arguments?: Record<string, unknown>;
-    data?: string;
-    mimeType?: string;
-  }>,
+  content: AssistantContentBlockRaw[],
   msgId: string
 ): {
   blocks: TranscriptContentBlock[];
@@ -217,16 +224,7 @@ function normalizeAssistant(
 ): MessageNormalizeResult {
   const id = messageId(conversationId, sequence);
   const { blocks, excluded, images } = normalizeAssistantContent(
-    message.content as Array<{
-      type: string;
-      text?: string;
-      thinking?: string;
-      id?: string;
-      name?: string;
-      arguments?: Record<string, unknown>;
-      data?: string;
-      mimeType?: string;
-    }>,
+    message.content as AssistantContentBlockRaw[],
     id
   );
   const normalized: TranscriptMessage = {
