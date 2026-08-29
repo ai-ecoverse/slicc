@@ -225,6 +225,18 @@ describe('websocat command', () => {
     vi.useRealTimers();
   });
 
+  it('rejects a non-positive --conn-timeout with the "seconds" wording', async () => {
+    const r = await runWebsocat(['--conn-timeout', '0', 'ws://x'], { stdin: '' });
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain('--conn-timeout expects positive seconds');
+  });
+
+  it('rejects a non-positive --buffer-size with the "integer" wording', async () => {
+    const r = await runWebsocat(['--buffer-size', '0', 'ws://x'], { stdin: '' });
+    expect(r.exitCode).toBe(2);
+    expect(r.stderr).toContain('--buffer-size expects positive integer');
+  });
+
   it('does not hang when the socket fires error before open (refused)', async () => {
     const Ctor = makeCtor();
     const promise = runWebsocat(['ws://refused'], { stdin: '' }, { WebSocketCtor: Ctor });

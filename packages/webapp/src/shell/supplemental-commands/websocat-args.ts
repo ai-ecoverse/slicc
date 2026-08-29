@@ -136,10 +136,15 @@ function consumeValue(
   return { value: next, next: i + 1 };
 }
 
-function parsePositiveInt(out: ParsedWebsocatArgs, raw: string, flagLabel: string): number | null {
+function parsePositiveInt(
+  out: ParsedWebsocatArgs,
+  raw: string,
+  flagLabel: string,
+  expects = 'positive integer'
+): number | null {
   const n = Number(raw);
   if (!Number.isFinite(n) || n <= 0) {
-    out.error = `websocat: ${flagLabel} expects positive integer\n`;
+    out.error = `websocat: ${flagLabel} expects ${expects}\n`;
     return null;
   }
   return n;
@@ -273,11 +278,12 @@ function assignPositiveIntOption(
   i: number,
   flag: string,
   label: string,
-  assign: (value: number) => void
+  assign: (value: number) => void,
+  expects?: string
 ): ParseStep | null {
   const r = consumeValue(args, i, flag, out);
   if (!r) return { stop: true };
-  const n = parsePositiveInt(out, r.value, label);
+  const n = parsePositiveInt(out, r.value, label, expects);
   if (n === null) return { stop: true };
   assign(n);
   return { nextIndex: r.next };
@@ -338,9 +344,17 @@ const VALUE_FLAG_HANDLERS: ValueFlagHandler[] = [
   },
   (out, args, i, token) => {
     if (!tokenMatches(token, ['--conn-timeout'])) return null;
-    const step = assignPositiveIntOption(out, args, i, '--conn-timeout', '--conn-timeout', (n) => {
-      out.connTimeoutMs = Math.round(n * 1000);
-    });
+    const step = assignPositiveIntOption(
+      out,
+      args,
+      i,
+      '--conn-timeout',
+      '--conn-timeout',
+      (n) => {
+        out.connTimeoutMs = Math.round(n * 1000);
+      },
+      'positive seconds'
+    );
     return step;
   },
   (out, args, i, token) => {
