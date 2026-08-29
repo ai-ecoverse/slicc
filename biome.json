@@ -282,24 +282,11 @@
       }
     },
     {
-      "includes": [
-        "packages/webapp/cloud/app.js",
-        "packages/webapp/src/shell/supplemental-commands/websocat-command.ts"
-      ],
+      "includes": ["packages/webapp/cloud/app.js"],
       "linter": {
         "rules": {
           "complexity": {
             "noExcessiveLinesPerFunction": "off"
-          }
-        }
-      }
-    },
-    {
-      "includes": ["packages/webapp/src/shell/supplemental-commands/websocat-command.ts"],
-      "linter": {
-        "rules": {
-          "complexity": {
-            "noExcessiveCognitiveComplexity": "off"
           }
         }
       }
