@@ -119,14 +119,16 @@ interface OnceRecognition {
   stop(): void;
 }
 
+/** Vendor-prefixed Web Speech API constructors on browsers that expose them on `window`. */
+interface WindowWithSpeechRecognition {
+  SpeechRecognition?: new () => OnceRecognition;
+  webkitSpeechRecognition?: new () => OnceRecognition;
+}
+
 function onceRecognitionCtor(): (new () => OnceRecognition) | null {
   if (typeof window === 'undefined') return null;
-  const w = window as unknown as Record<string, unknown>;
-  return (
-    (w.SpeechRecognition as new () => OnceRecognition) ??
-    (w.webkitSpeechRecognition as new () => OnceRecognition) ??
-    null
-  );
+  const { SpeechRecognition, webkitSpeechRecognition } = window as WindowWithSpeechRecognition;
+  return SpeechRecognition ?? webkitSpeechRecognition ?? null;
 }
 
 /**
