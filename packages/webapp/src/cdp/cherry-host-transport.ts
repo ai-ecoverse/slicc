@@ -51,11 +51,16 @@ interface RejectionWithExportCode {
 }
 
 function exportErrorCodeFromRejection(err: unknown): TranscriptExportErrorCode {
-  if (err instanceof TranscriptExportError) return err.code;
   const maybeCode =
-    typeof err === 'object' && err !== null && 'code' in err
-      ? (err as RejectionWithExportCode).code
-      : undefined;
+    err instanceof TranscriptExportError
+      ? err.code
+      : typeof err === 'object' && err !== null && 'code' in err
+        ? (err as RejectionWithExportCode).code
+        : undefined;
+  // Clamp to a canonical code even for TranscriptExportError instances: the
+  // declared type is not a runtime guarantee (JS callers, unchecked casts, or
+  // later mutation can carry a noncanonical `code`), so fall back to
+  // 'transfer-corrupt' — the generic "something went wrong" sentinel.
   if (
     typeof maybeCode === 'string' &&
     VALID_EXPORT_ERROR_CODES.has(maybeCode as TranscriptExportErrorCode)
