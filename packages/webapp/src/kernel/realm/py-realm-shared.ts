@@ -37,6 +37,7 @@ import {
   createOpfsSyncFs,
   flushPendingOpfsOps,
   type OpfsMount,
+  type OpfsSyncFilesystems,
   type OpfsSyncFsPlugin,
   prewalkOpfsTree,
 } from './opfs-sync-fs.js';
@@ -959,9 +960,8 @@ export interface MountedOpfsResult {
  * reference, so re-creating it would shadow the in-flight mounts.
  */
 function ensureOpfsSyncFsRegistered(pyodide: PyodideInterface): OpfsSyncFsPlugin {
-  const filesystems = (pyodide.FS as unknown as { filesystems: Record<string, unknown> })
-    .filesystems;
-  let plugin = filesystems.OPFS_SYNC_FS as OpfsSyncFsPlugin | undefined;
+  const filesystems = (pyodide.FS as unknown as { filesystems: OpfsSyncFilesystems }).filesystems;
+  let plugin = filesystems.OPFS_SYNC_FS;
   if (!plugin) {
     plugin = createOpfsSyncFs(pyodide.FS as unknown as Parameters<typeof createOpfsSyncFs>[0]);
     filesystems.OPFS_SYNC_FS = plugin;

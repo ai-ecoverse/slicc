@@ -318,6 +318,15 @@ export interface OpfsSyncFsPlugin {
   stream_ops: StreamOps;
 }
 
+/**
+ * The `FS.filesystems` registry slice the OPFS plugin hangs on.
+ * Mirrors {@link MountBombFilesystems} — only the plugin we own is
+ * typed; Emscripten's built-in entries are left opaque.
+ */
+export interface OpfsSyncFilesystems {
+  OPFS_SYNC_FS?: OpfsSyncFsPlugin;
+}
+
 // ---------------------------------------------------------------------------
 // Plugin factory
 // ---------------------------------------------------------------------------
