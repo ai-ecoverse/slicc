@@ -10,7 +10,7 @@
  * `teleport-storage.ts`.
  */
 
-import { isSliccAppUrl } from '@slicc/shared-ts';
+import { type CookieTeleportCookie, isSliccAppUrl } from '@slicc/shared-ts';
 import { createLogger } from '../../base/logger.js';
 import type { BrowserAPI } from '../../cdp/index.js';
 import {
@@ -66,9 +66,15 @@ export interface TabTeleportResult {
   degraded: 'none' | 'no-source-state' | 'no-source-cookies' | 'no-dest-cookies';
 }
 
+/** Narrow CDP `Network.getCookies` result into the shared cookie shape. */
+function cookiesFromCdpResult(cookies: unknown): CookieTeleportCookie[] {
+  if (!Array.isArray(cookies)) return [];
+  return cookies as CookieTeleportCookie[];
+}
+
 interface SourceCapture {
   url: string;
-  cookies: Array<Record<string, unknown>>;
+  cookies: CookieTeleportCookie[];
   cookiesCaptured: boolean;
   storage: TeleportStorageSnapshot;
 }
@@ -96,11 +102,11 @@ async function captureSourceState(
     throw new Error('refusing to teleport SLICC’s own app tab (it carries a bridge capability)');
   }
 
-  let cookies: Array<Record<string, unknown>> = [];
+  let cookies: CookieTeleportCookie[] = [];
   let cookiesCaptured = false;
   try {
     const cookieResult = await browser.sendCDP('Network.getCookies', {});
-    cookies = (cookieResult['cookies'] as Array<Record<string, unknown>>) ?? [];
+    cookies = cookiesFromCdpResult(cookieResult['cookies']);
     cookiesCaptured = true;
   } catch (err) {
     log.warn('Could not capture source cookies', { error: String(err) });
