@@ -91,7 +91,8 @@ export interface CherryHandshakeVersionMismatch {
  * Per-method CDP params/result bag. Shape is known only to the caller that
  * issued the method; the wire carries an opaque object.
  */
-export type CherryCdpPayload = { [key: string]: unknown };
+// biome-ignore lint/plugin: CDP params/result are per-method and open-ended; the follower relays them without inspecting fields, so there is no narrower shape to name here.
+export type CherryCdpPayload = Record<string, unknown>;
 
 export interface CherryCdpRequest {
   cherry: number;
