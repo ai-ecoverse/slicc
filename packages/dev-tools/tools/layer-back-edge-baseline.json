@@ -1,4 +1,3 @@
 {
-  "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts": 2,
-  "packages/webapp/src/shell/supplemental-commands/serve-command.ts": 3
+  "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts": 2
 }

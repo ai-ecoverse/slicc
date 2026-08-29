@@ -1,17 +1,16 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import type { BrowserAPI } from '../../cdp/index.js';
-import { getMimeType } from '../../core/mime-types.js';
 import type { VirtualFS } from '../../fs/index.js';
+import type { BrowserAPI } from '../../kernel/browser-api.js';
 import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 import {
   getPreviewMinter,
   getPreviewOp,
   type MintPreviewResult,
   type PreviewLifecycleRecordResult,
-} from '../../scoops/preview-minter.js';
+} from '../preview-minter.js';
 import { getLickManagerSurface } from './lick-surface.js';
-import { isSafeServeEntry, resolveServeEntryPath } from './shared.js';
+import { detectMimeType, isSafeServeEntry, resolveServeEntryPath } from './shared.js';
 
 const PERSISTENT_PREVIEW_RPC_TIMEOUT_MS = 10 * 60_000;
 
@@ -516,7 +515,7 @@ async function collectSnapshotFiles(
     if (totalBytes > MAX_SNAPSHOT_TOTAL_BYTES) {
       throw new Error('persistent preview exceeds 50 MiB total limit');
     }
-    files.push({ path: relativePath, content, mime: getMimeType(relativePath) });
+    files.push({ path: relativePath, content, mime: detectMimeType(relativePath) });
   }
   return files;
 }
