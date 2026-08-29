@@ -9,7 +9,6 @@
   "packages/webapp/src/cdp/har-recorder.ts": 10,
   "packages/webapp/src/fs/mount/backend-local.ts": 1,
   "packages/webapp/src/kernel/realm/py-realm-shared.ts": 1,
-  "packages/webapp/src/net/link-header.ts": 1,
   "packages/webapp/src/providers/built-in/bedrock-camp.ts": 31,
   "packages/webapp/src/scoops/tray-leader/cdp-router.ts": 5,
   "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts": 5,
