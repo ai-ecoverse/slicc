@@ -27,6 +27,12 @@ export interface ToolCall {
   type: 'toolCall';
   id: string;
   name: string;
+  // The arguments the model produced for THIS tool, whose fields are declared by
+  // that tool's own JSON Schema and differ per tool. A shared alias here could
+  // only restate "some string keys", which is what the type already says; the
+  // real shape needs `ToolCall` generic over its schema — a signature change
+  // across every producer and consumer, not behaviour-preserving in a debt PR.
+  // biome-ignore lint/plugin: per-tool argument bag, shape declared by the tool's schema.
   arguments: Record<string, unknown>;
 }
 
@@ -130,6 +136,11 @@ export interface AgentTool<TDetails = unknown> extends Tool {
   label: string;
   execute: (
     toolCallId: string,
+    // Validated tool-execute params — the same per-tool bag the model supplied,
+    // after schema validation. Keys follow the tool's own parameter schema and
+    // differ per tool; the tool narrows the values itself. Same rationale as
+    // ToolCall.arguments above — naming the shape means making this generic.
+    // biome-ignore lint/plugin: per-tool argument bag, shape declared by the tool's schema.
     params: Record<string, unknown>,
     signal?: AbortSignal,
     onUpdate?: AgentToolUpdateCallback<TDetails>
