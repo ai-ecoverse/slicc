@@ -104,6 +104,34 @@ interface CdpTarget {
   webSocketDebuggerUrl?: string;
 }
 
+/** Scalar JSON values on the CDP wire. */
+type CdpJsonScalar = string | number | boolean | null;
+
+/** Recursive JSON value shape for CDP method params (varies per protocol method). */
+type CdpJsonValue = CdpJsonScalar | CdpJsonValue[] | CdpMethodParams;
+
+/** Named bag for Chrome DevTools Protocol method parameters. */
+interface CdpMethodParams {
+  [key: string]: CdpJsonValue;
+}
+
+/** Outbound CDP request envelope. */
+interface CdpCommandPayload {
+  id: number;
+  method: string;
+  params: CdpMethodParams;
+  sessionId?: string;
+}
+
+/** Parsed CDP WebSocket frame (command response or event). */
+interface CdpWireMessage {
+  id?: number;
+  result?: unknown;
+  error?: { message?: string };
+  method?: string;
+  params?: CdpMethodParams;
+}
+
 function fetchJson(port: number, path: string, method: 'GET' | 'PUT' = 'GET'): Promise<unknown> {
   return new Promise((resolveJson, rejectJson) => {
     const req = httpRequest(
@@ -176,7 +204,7 @@ async function readDevToolsActivePort(userDataDir: string, timeoutMs: number): P
 
 interface CdpEvent {
   method: string;
-  params: Record<string, unknown>;
+  params: CdpMethodParams;
 }
 
 class CdpSession {
@@ -209,13 +237,7 @@ class CdpSession {
   }
 
   private handleMessage(text: string): void {
-    let parsed: {
-      id?: number;
-      result?: unknown;
-      error?: { message?: string };
-      method?: string;
-      params?: Record<string, unknown>;
-    };
+    let parsed: CdpWireMessage;
     try {
       parsed = JSON.parse(text);
     } catch {
@@ -233,11 +255,12 @@ class CdpSession {
     }
   }
 
-  send(method: string, params: Record<string, unknown> = {}, sessionId?: string): Promise<unknown> {
+  send(method: string, params: CdpMethodParams = {}, sessionId?: string): Promise<unknown> {
     if (this.closed) return Promise.reject(new Error('CDP socket closed'));
     const id = this.nextId++;
-    const payload: Record<string, unknown> = { id, method, params };
-    if (sessionId) payload['sessionId'] = sessionId;
+    const payload: CdpCommandPayload = sessionId
+      ? { id, method, params, sessionId }
+      : { id, method, params };
     return new Promise<unknown>((res, rej) => {
       this.pending.set(id, { resolve: res as (v: unknown) => void, reject: rej });
       this.ws.send(JSON.stringify(payload), (err) => {
@@ -678,10 +701,35 @@ async function rotateBridgeSessionOrWarn(cdp: CdpSession): Promise<void> {
   }
 }
 
+interface LauncherProbe {
+  tag: string | null;
+  appUrl: string | null;
+  hasShadow: boolean;
+  hasButton: boolean;
+  iframeSrc: string | null;
+  readyState: string;
+  docUrl: string;
+}
+
+interface ScenarioFailureDetail {
+  violations?: string[];
+  sampleExtensionUrls?: string[];
+  sampleAllUrls?: string[];
+  stderrTail?: string;
+  stdoutTail?: string;
+  stdout?: string;
+  probe?: LauncherProbe | null;
+  len?: number;
+  decoded?: number;
+  wc?: number;
+  soi?: number[];
+  eoi?: number[];
+}
+
 interface ScenarioFailure {
   scenario: string;
   message: string;
-  detail?: Record<string, unknown>;
+  detail?: ScenarioFailureDetail;
 }
 
 function assertScenario(
@@ -689,7 +737,7 @@ function assertScenario(
   scenario: string,
   condition: boolean,
   message: string,
-  detail?: Record<string, unknown>
+  detail?: ScenarioFailureDetail
 ): void {
   if (condition) {
     logArtifact(`✓ [${scenario}] ${message}`);
@@ -1109,16 +1157,6 @@ async function runLauncherScenario(cdpPort: number, failures: ScenarioFailure[])
   try {
     await pageCdp.send('Page.enable');
     await pageCdp.send('Runtime.enable');
-
-    interface LauncherProbe {
-      tag: string | null;
-      appUrl: string | null;
-      hasShadow: boolean;
-      hasButton: boolean;
-      iframeSrc: string | null;
-      readyState: string;
-      docUrl: string;
-    }
 
     const probeExpr = `
       (() => {

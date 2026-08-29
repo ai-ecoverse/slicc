@@ -1,5 +1,4 @@
 {
-  "packages/dev-tools/tools/extension-smoke-test.ts": 6,
   "packages/node-server/src/electron-controller.ts": 13,
   "packages/webapp/providers/adobe.ts": 1,
   "packages/webapp/providers/github-copilot.ts": 2,
