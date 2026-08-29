@@ -3,6 +3,7 @@ import {
   bundleIndex,
   bundleToFiles,
   type ConeConfig,
+  DEFAULT_CONE_MODEL,
   decodeBundleEnv,
   encodeBundleEnv,
   imsTokenExpiry,
@@ -36,6 +37,16 @@ const base: ConeConfig = {
   ],
   secrets: [{ name: 'GITHUB_TOKEN', value: 'gt', domains: ['api.github.com', 'github.com'] }],
 };
+
+describe('DEFAULT_CONE_MODEL', () => {
+  // Canonical cloud-cone default. Pinned here (#2633) so the three backend
+  // consumers (resume, hosted-bootstrap, cone-config-bridge) and the webapp
+  // hosted boot path share one definition instead of copy-pasted literals.
+  it('is the Adobe Opus default and is a provider-prefixed id', () => {
+    expect(DEFAULT_CONE_MODEL).toBe('adobe:claude-opus-4-6');
+    expect(DEFAULT_CONE_MODEL).toMatch(/^[a-z]+:/);
+  });
+});
 
 describe('validateConeConfig', () => {
   it('accepts a well-formed bundle', () => {

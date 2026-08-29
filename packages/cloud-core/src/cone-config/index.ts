@@ -52,6 +52,15 @@ export interface ConeConfigIndex {
 /** Max serialized bundle size (bytes) accepted as a preboot env payload. */
 export const MAX_CONE_CONFIG_BYTES = 256 * 1024;
 
+/**
+ * Canonical default model id for a cloud-hosted cone when no client bundle
+ * pins one. The three cloud-lifecycle consumers (cloud-core resume, node-server
+ * hosted-bootstrap, cloudflare-worker cone-config-bridge) and the webapp hosted
+ * boot path all seed this model, so it lives here — one definition — instead of
+ * being copy-pasted per float where it can silently drift. See #2633.
+ */
+export const DEFAULT_CONE_MODEL = 'adobe:claude-opus-4-6';
+
 /** Untrusted cone-config bundle before validation. */
 interface UntrustedConeConfig {
   readonly model?: unknown;

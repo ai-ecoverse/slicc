@@ -17,7 +17,7 @@ import { readFileSync } from 'node:fs';
 // Import from the package root (not the './cone-config' subpath): node-server's
 // inline-workspaces packaging only rewrites the bare '@slicc/cloud-core'
 // specifier, so a subpath import leaks an un-inlined workspace reference.
-import { type Account, imsTokenExpiry } from '@slicc/cloud-core';
+import { type Account, DEFAULT_CONE_MODEL, imsTokenExpiry } from '@slicc/cloud-core';
 import type { Express } from 'express';
 import { requireLoopback } from './cloud-status.js';
 import type { SecretStore } from './secrets/types.js';
@@ -28,7 +28,6 @@ import type { SecretStore } from './secrets/types.js';
 export { imsTokenExpiry };
 
 const CONE_CONFIG_PATH = '/slicc/cone-config.json';
-const DEFAULT_MODEL = 'adobe:claude-opus-4-6';
 
 export interface HostedBootstrapPayload {
   model?: string;
@@ -61,7 +60,7 @@ export function buildHostedBootstrapPayload(sources: BootstrapSources): HostedBo
   if (legacy) {
     const expiresAt = imsTokenExpiry(legacy);
     return {
-      model: DEFAULT_MODEL,
+      model: DEFAULT_CONE_MODEL,
       accounts: [
         {
           providerId: 'adobe',
