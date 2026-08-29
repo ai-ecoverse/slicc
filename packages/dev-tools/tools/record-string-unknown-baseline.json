@@ -4,6 +4,5 @@
   "packages/webapp/src/kernel/realm/py-realm-shared.ts": 1,
   "packages/webapp/src/providers/built-in/bedrock-camp.ts": 31,
   "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts": 5,
-  "packages/webapp/src/ui/dip.ts": 4,
-  "packages/webapp/src/ui/sprinkle-bridge.ts": 2
+  "packages/webapp/src/ui/dip.ts": 4
 }
