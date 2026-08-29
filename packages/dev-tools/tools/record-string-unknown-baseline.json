@@ -45,7 +45,6 @@
   "packages/webapp/src/ui/main.ts": 1,
   "packages/webapp/src/ui/sprinkle-bridge.ts": 2,
   "packages/webapp/src/ui/sprinkle-renderer.ts": 3,
-  "packages/webapp/src/ui/tray-leave-runtime.ts": 1,
   "packages/webcomponents/src/composer/speech.ts": 1,
   "packages/webcomponents/src/overlay/slicc-permissions.stories.ts": 5
 }

@@ -17,9 +17,24 @@
 import type { TrayLeaveResult } from '../scoops/tray-leave.js';
 import { TRAY_JOIN_STORAGE_KEY, TRAY_WORKER_STORAGE_KEY } from '../scoops/tray-runtime-config.js';
 
+/**
+ * Structured fields attached to tray-leave failure log entries.
+ * Optional correlation / context fields callers may include together.
+ */
+export interface TrayLeaveLogMeta {
+  /** Panel/shell/worker correlation id for rapid retries. */
+  requestId?: string;
+  /** Stringified error when the failure carries one. */
+  error?: string;
+  /** Worker URL involved in a restart / switch failure. */
+  workerBaseUrl?: string;
+  /** Which storage write failed (`join-clear`, `worker-set`, …). */
+  kind?: string;
+}
+
 /** Minimal logger surface — matches `createLogger` shape but loose enough for tests. */
 export interface TrayLeaveLogger {
-  error(message: string, meta?: Record<string, unknown>): void;
+  error(message: string, meta?: TrayLeaveLogMeta): void;
 }
 
 /** Minimal storage surface — `window.localStorage` is the production target. */
