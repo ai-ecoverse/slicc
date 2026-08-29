@@ -11,6 +11,8 @@ import {
   type HidDeviceInfo,
 } from '../kernel/hid-device-registry.js';
 import * as hidOps from '../kernel/hid-operations.js';
+import type { HttpQueryParams } from '../kernel/realm/http-global.js';
+import type { BrowserFetchOptions } from '../kernel/realm/realm-browser-fetch.js';
 import * as serialOps from '../kernel/serial-operations.js';
 import {
   getNavigatorSerial,
@@ -98,7 +100,7 @@ export interface SprinkleFetchResult {
 
 /** Per-request options accepted by the `slicc.http` client methods. */
 export interface SprinkleHttpRequestOpts {
-  params?: Record<string, unknown>;
+  params?: HttpQueryParams;
   headers?: Record<string, string>;
   body?: unknown;
 }
@@ -149,7 +151,7 @@ export interface SprinkleBrowserApi {
   evalAsync(tab: unknown, code: string): Promise<unknown>;
   cookie(tab: unknown, name: string): Promise<string | null>;
   localStorage(tab: unknown, key: string): Promise<string | null>;
-  fetch(tab: unknown, url: string, opts?: Record<string, unknown>): Promise<unknown>;
+  fetch(tab: unknown, url: string, opts?: BrowserFetchOptions): Promise<unknown>;
 }
 
 /** Callable `slicc.exec` with the array-form `spawn` companion. */
