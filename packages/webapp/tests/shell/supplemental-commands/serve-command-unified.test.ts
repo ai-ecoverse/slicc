@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { setPreviewMinter, setPreviewOp } from '../../../src/scoops/preview-minter.js';
+import { setPreviewMinter, setPreviewOp } from '../../../src/shell/preview-minter.js';
 import { createServeCommand } from '../../../src/shell/supplemental-commands/serve-command.js';
 
 // `serve --bridge` auto-provisions a `preview-bridge` webhook via the lick

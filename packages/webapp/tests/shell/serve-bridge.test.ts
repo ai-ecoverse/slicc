@@ -75,7 +75,7 @@ vi.mock('../../src/kernel/panel-rpc.js', () => {
   };
 });
 
-vi.mock('../../src/scoops/preview-minter.js', () => ({
+vi.mock('../../src/shell/preview-minter.js', () => ({
   getPreviewMinter: vi.fn(() => null),
   getPreviewOp: vi.fn(() => null),
 }));

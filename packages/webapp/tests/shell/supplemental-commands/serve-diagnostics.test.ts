@@ -1,10 +1,10 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { Logger } from '../../../src/base/logger.js';
-import { setPreviewMinter, setPreviewOp } from '../../../src/scoops/preview-minter.js';
 import type { LeaderSyncContext } from '../../../src/scoops/tray-leader/context.js';
 import { FollowerRegistry } from '../../../src/scoops/tray-leader/follower-registry.js';
 import { PreviewBridgeManager } from '../../../src/scoops/tray-leader/preview-bridge.js';
 import type { LeaderSyncManagerOptions } from '../../../src/scoops/tray-leader-sync.js';
+import { setPreviewMinter, setPreviewOp } from '../../../src/shell/preview-minter.js';
 import { createServeCommand } from '../../../src/shell/supplemental-commands/serve-command.js';
 
 function createBridgeHarness() {
