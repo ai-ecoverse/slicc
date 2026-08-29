@@ -97,13 +97,20 @@ export interface CherryHandshakeVersionMismatch {
   peerVersion: number;
 }
 
+/**
+ * Per-method CDP params/result bag. Shape is known only to the caller that
+ * issued the method; the wire carries an opaque object.
+ */
+export type CherryCdpPayload = { [key: string]: unknown };
+
 export interface CherryCdpRequest {
   cherry: number;
   channelId: string;
   kind: 'cdp.request';
   id: number;
   method: string;
-  params?: Record<string, unknown>;
+  /** Per-method CDP params; shape depends on the request method. */
+  params?: CherryCdpPayload;
   sessionId?: string;
 }
 
@@ -112,7 +119,8 @@ export interface CherryCdpResponse {
   channelId: string;
   kind: 'cdp.response';
   id: number;
-  result?: Record<string, unknown>;
+  /** Per-method CDP result; shape depends on the request method. */
+  result?: CherryCdpPayload;
   error?: { code: number; message: string };
 }
 
@@ -121,7 +129,8 @@ export interface CherryCdpEvent {
   channelId: string;
   kind: 'cdp.event';
   method: string;
-  params?: Record<string, unknown>;
+  /** Per-method CDP event params; shape depends on `method`. */
+  params?: CherryCdpPayload;
   sessionId?: string;
 }
 
@@ -258,6 +267,22 @@ const KINDS = new Set<CherryEnvelope['kind']>([
 ]);
 
 /**
+ * Fields the structural validators read off an inbound postMessage before
+ * narrowing to a typed envelope. Extra keys may be present; only these are
+ * inspected.
+ */
+interface CherryWireProbe {
+  cherry?: unknown;
+  channelId?: unknown;
+  kind?: unknown;
+  peerVersion?: unknown;
+  requestId?: unknown;
+  phase?: unknown;
+  blob?: unknown;
+  code?: unknown;
+}
+
+/**
  * Structural envelope validator. `versions` is the set of wire versions the
  * caller currently accepts — strict own-version by default; the follower
  * passes SUPPORTED_CHERRY_PROTOCOL_VERSIONS while negotiating and narrows to
@@ -268,7 +293,7 @@ export function isCherryEnvelope(
   versions: readonly number[] = [CHERRY_PROTOCOL_VERSION]
 ): value is CherryEnvelope {
   if (typeof value !== 'object' || value === null) return false;
-  const v = value as Record<string, unknown>;
+  const v = value as CherryWireProbe;
   if (
     typeof v.cherry !== 'number' ||
     !versions.includes(v.cherry) ||
@@ -328,6 +353,13 @@ export function acceptEnvelope(event: MessageEvent, ctx: AcceptContext): boolean
   return true;
 }
 
+/** Envelope-shaped message with a non-accepted `cherry` version (version skew). */
+export interface CherryVersionSkew {
+  cherry: number;
+  channelId: string;
+  kind: string;
+}
+
 /**
  * True when a message is shaped like a cherry envelope but carries a protocol
  * version outside the caller's accepted set — i.e. the peer is a version-skewed
@@ -339,9 +371,9 @@ export function acceptEnvelope(event: MessageEvent, ctx: AcceptContext): boolean
 export function isCherryVersionMismatch(
   value: unknown,
   supported: readonly number[] = [CHERRY_PROTOCOL_VERSION]
-): value is { cherry: number; channelId: string; kind: string } {
+): value is CherryVersionSkew {
   if (typeof value !== 'object' || value === null) return false;
-  const v = value as Record<string, unknown>;
+  const v = value as CherryWireProbe;
   return (
     typeof v.cherry === 'number' &&
     !supported.includes(v.cherry) &&

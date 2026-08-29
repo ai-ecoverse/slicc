@@ -1,6 +1,5 @@
 {
   "packages/cherry/src/preview-bootstrap.ts": 2,
-  "packages/cherry/src/protocol.ts": 5,
   "packages/chrome-extension/src/bridge-sw.ts": 17,
   "packages/cloud-core/src/cone-config/index.ts": 6,
   "packages/dev-tools/tools/extension-smoke-test.ts": 6,
@@ -11,7 +10,6 @@
   "packages/webapp/providers/github-copilot.ts": 2,
   "packages/webapp/providers/github.ts": 2,
   "packages/webapp/providers/openai-codex.ts": 2,
-  "packages/webapp/src/cdp/cherry-host-protocol.ts": 5,
   "packages/webapp/src/cdp/cherry-host-transport.ts": 3,
   "packages/webapp/src/cdp/har-recorder.ts": 10,
   "packages/webapp/src/cdp/navigation-watcher.ts": 11,
