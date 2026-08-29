@@ -71,6 +71,10 @@ struct MonitorView: View {
                     }
                 }
                 .accessibilityIdentifier("monitor-scoop-\(scoop.jid)")
+                // On-screen awareness: this row IS a conversation entity, so
+                // "summarise that one" can resolve to a jid rather than to
+                // whatever text happened to be rendered.
+                .sliccEntityAnnotation(SliccConversationEntity.self, id: scoop.jid)
             }
         }
     }

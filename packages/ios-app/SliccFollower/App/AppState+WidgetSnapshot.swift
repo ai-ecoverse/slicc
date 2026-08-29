@@ -81,14 +81,24 @@ extension AppState {
 
     /// Capture and hand to the publisher. Cheap enough to call from any of the
     /// transitions that matter; the publisher decides whether it reaches disk.
+    ///
+    /// The same units also go to the Spotlight semantic index, so Siri,
+    /// Spotlight and the home screen describe one session rather than three
+    /// vintages of one. Indexing is detached: it talks to a system service,
+    /// and a publish must not wait on it.
     func publishWidgetSnapshot() {
-        widgetPublisher.publish(widgetSnapshot())
+        let snapshot = widgetSnapshot()
+        widgetPublisher.publish(snapshot)
+        Task { await SliccConversationIndexer.shared.donate(snapshot.units) }
     }
 
     /// Forget the instance. A detached session must not linger on a home
-    /// screen with a name the user has already walked away from.
+    /// screen with a name the user has already walked away from — nor in
+    /// Spotlight, where a stale hit would offer to open a conversation that
+    /// this device can no longer reach.
     func clearWidgetSnapshot() {
         widgetPublisher.clear()
+        Task { await SliccConversationIndexer.shared.donate([]) }
     }
 }
 

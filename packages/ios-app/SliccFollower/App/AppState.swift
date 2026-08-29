@@ -1136,6 +1136,9 @@ class AppState: ObservableObject {
     /// Refresh the published `cdpTargets` from the bridge.
     private func refreshCDPTargets() {
         cdpTargets = cdpBridge?.currentTargets() ?? []
+        // One publish site, so an App Intents query and the carousel can never
+        // disagree about which tabs exist (`SliccTabEntity`).
+        SliccTabRegistry.shared.publish(cdpTargets)
         // The tab on screen can be closed out from under the user (leader
         // Target.closeTarget, disconnect reset) — fall back to the overview
         // rather than presenting a dead id full screen.

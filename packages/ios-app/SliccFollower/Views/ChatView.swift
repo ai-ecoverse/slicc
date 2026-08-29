@@ -210,6 +210,46 @@ struct ChatView: View {
                 executeTranscriptExport(request)
             }
         }
+        .onChange(of: inboundActions.pendingSelection) { selection in
+            if let selection {
+                executeInboundSelection(selection)
+            }
+        }
+        // A cold launch from Spotlight or Siri arrives BEFORE the roster does,
+        // so the arrival of a roster is the second place a pending selection
+        // can resolve — without this the common path silently drops it.
+        .onChange(of: appState.scoops) { _ in
+            if let selection = inboundActions.pendingSelection {
+                executeInboundSelection(selection)
+            }
+        }
+    }
+
+    /// Bring the unit an Open Conversation intent named to the front, once we
+    /// know enough to say whether it exists.
+    ///
+    /// Runs on the request arriving AND on every roster change, because the
+    /// intent opens the app: the request usually lands first and the roster
+    /// decides it. `InboundSelectionRule` owns the rule.
+    private func executeInboundSelection(
+        _ selection: InboundActionCoordinator.PendingSelection
+    ) {
+        switch InboundSelectionRule.outcome(
+            forSelecting: selection.scoopJid,
+            roster: appState.scoops.map(\.jid),
+            age: Date().timeIntervalSince(selection.receivedAt))
+        {
+        case .wait:
+            // Stay armed; the next `scoops.list` brings us back here.
+            return
+        case .drop:
+            inboundActions.consume(selection: selection)
+        case .select:
+            appState.selectScoop(jid: selection.scoopJid)
+            // Chat is the base surface — `nil` is it, there is no `.chat` case.
+            withAnimation { presentation.activeSurface = nil }
+            inboundActions.consume(selection: selection)
+        }
     }
 
     /// Bring a leader-opened tab to the front. The leader opens a tab here so
@@ -1122,10 +1162,15 @@ struct ScoopSwitcher: View {
             .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "Sliccy")
             .accessibilityHint("Switch scoop")
             .accessibilityIdentifier("scoop-switcher")
+            // The header names the conversation on screen, which is what
+            // "this conversation" refers to.
+            .sliccEntityAnnotation(SliccConversationEntity.self, id: appState.selectedScoopJid)
         } else {
             identityLabel
                 .accessibilityLabel(appState.selectedScoop?.assistantLabel ?? "Sliccy")
                 .accessibilityIdentifier("scoop-switcher")
+                .sliccEntityAnnotation(
+                    SliccConversationEntity.self, id: appState.selectedScoopJid)
         }
     }
 

@@ -198,4 +198,94 @@ final class InboundActionsTests: XCTestCase {
         XCTAssertTrue(markdown.hasPrefix("_older turns truncated_"), "truncation is declared, not silent")
         XCTAssertTrue(markdown.contains("## Cone"), "assistant sections carry the label")
     }
+
+    // MARK: - Conversation selection (Open Conversation intent)
+
+    @MainActor
+    func testSelectionEnqueuesTheJid() {
+        let coordinator = InboundActionCoordinator()
+        XCTAssertTrue(coordinator.receive(selecting: "scoop-42"))
+        XCTAssertEqual(coordinator.pendingSelection?.scoopJid, "scoop-42")
+    }
+
+    /// An intent parameter is still input, even when Siri resolved it from
+    /// our own entity — the funnel validates it like everything else.
+    @MainActor
+    func testEmptyAndOversizedJidsAreRejected() {
+        let coordinator = InboundActionCoordinator()
+        XCTAssertFalse(coordinator.receive(selecting: ""))
+        XCTAssertFalse(coordinator.receive(selecting: "   \n "))
+        let huge = String(repeating: "j", count: InboundActionCoordinator.maxJidLength + 1)
+        XCTAssertFalse(coordinator.receive(selecting: huge))
+        XCTAssertNil(coordinator.pendingSelection)
+    }
+
+    @MainActor
+    func testSelectionIsTrimmed() {
+        let coordinator = InboundActionCoordinator()
+        XCTAssertTrue(coordinator.receive(selecting: "  scoop-7\n"))
+        XCTAssertEqual(coordinator.pendingSelection?.scoopJid, "scoop-7")
+    }
+
+    /// The id check keeps a stale card from consuming a newer request —
+    /// same rule the open and prompt slots follow.
+    @MainActor
+    func testConsumingAStaleSelectionLeavesTheNewerOne() {
+        let coordinator = InboundActionCoordinator()
+        XCTAssertTrue(coordinator.receive(selecting: "first"))
+        let stale = coordinator.pendingSelection!
+        XCTAssertTrue(coordinator.receive(selecting: "second"))
+        coordinator.consume(selection: stale)
+        XCTAssertEqual(coordinator.pendingSelection?.scoopJid, "second")
+        coordinator.consume(selection: coordinator.pendingSelection!)
+        XCTAssertNil(coordinator.pendingSelection)
+    }
+
+    // MARK: - Selection resolution against the roster (PR #2582 review, P1)
+
+    private func outcome(
+        _ jid: String, roster: [String], age: TimeInterval = 0
+    ) -> InboundSelectionRule.Outcome {
+        InboundSelectionRule.outcome(forSelecting: jid, roster: roster, age: age)
+    }
+
+    /// The regression: a Spotlight/Siri hit opens the app COLD, so the request
+    /// lands before the first `scoops.list`. An empty roster is "not told
+    /// yet", not "not found" — resolving it as absent dropped the request on
+    /// the feature's main path.
+    func testEmptyRosterWaitsRatherThanDropping() {
+        XCTAssertEqual(outcome("scoop-1", roster: []), .wait)
+    }
+
+    func testRosterContainingTheUnitSelectsIt() {
+        XCTAssertEqual(outcome("scoop-1", roster: ["other", "scoop-1"]), .select)
+    }
+
+    /// A non-empty roster is the leader's full answer, so absence from it is
+    /// authoritative — that is the genuinely-ended scoop, where staying put
+    /// beats jumping to a dead unit.
+    func testNonEmptyRosterWithoutTheUnitDrops() {
+        XCTAssertEqual(outcome("gone", roster: ["a", "b"]), .drop)
+    }
+
+    /// Without an age bound a request made before any leader was reachable
+    /// would fire whenever one eventually connected.
+    func testAStaleRequestIsDroppedEvenWithNoRosterYet() {
+        let old = InboundSelectionRule.maximumAge + 1
+        XCTAssertEqual(outcome("scoop-1", roster: [], age: old), .drop)
+    }
+
+    /// Age only decides once the roster cannot: a unit that IS present is
+    /// still selected, because the user asked for something that exists.
+    func testAgeDoesNotOverrideAPresentUnit() {
+        let old = InboundSelectionRule.maximumAge + 1
+        XCTAssertEqual(outcome("scoop-1", roster: ["scoop-1"], age: old), .select)
+    }
+
+    /// The whole cold-launch sequence, in order.
+    func testColdLaunchStaysArmedUntilTheRosterArrives() {
+        XCTAssertEqual(outcome("scoop-1", roster: []), .wait)
+        XCTAssertEqual(outcome("scoop-1", roster: []), .wait)
+        XCTAssertEqual(outcome("scoop-1", roster: ["scoop-1"]), .select)
+    }
 }

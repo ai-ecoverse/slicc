@@ -51,6 +51,19 @@ final class InboundActionCoordinator: ObservableObject {
 
     @Published private(set) var pendingTranscript: PendingTranscript?
 
+    /// A request to bring one work unit to the front (the Open Conversation
+    /// intent). Carries only the jid: whether that unit is still in the
+    /// leader's scoop list is the shell's call, because the entity Siri
+    /// resolved comes from a widget snapshot that may predate the current
+    /// list — and this coordinator deliberately holds no leader state.
+    struct PendingSelection: Identifiable, Equatable {
+        let id: UUID
+        let scoopJid: String
+        let receivedAt: Date
+    }
+
+    @Published private(set) var pendingSelection: PendingSelection?
+
     /// Coarse lifecycle for the surfaces: what the funnel is doing right
     /// now, so SwiftUI can show progress and tests can assert transitions
     /// (#1918 "expose pending/approved/running/completed/failed").
@@ -67,6 +80,9 @@ final class InboundActionCoordinator: ObservableObject {
 
     static let maxPromptLength = 8192
     static let maxTranscriptBytes = 512 * 1024
+    /// A jid is a leader-minted identifier, not free text. Bounded for the
+    /// same reason the URL is: an intent parameter is still input.
+    static let maxJidLength = 256
 
     /// Replay guard: the same URL arriving again within the window is a
     /// Shortcuts/share-sheet retry, not new intent.
@@ -198,6 +214,20 @@ final class InboundActionCoordinator: ObservableObject {
         if pendingTranscript?.id == request.id { pendingTranscript = nil }
     }
 
+    /// Validate and enqueue a unit selection. Rejects an empty or oversized
+    /// jid; existence is checked downstream, where the scoop list lives.
+    @discardableResult
+    func receive(selecting scoopJid: String, now: Date = Date()) -> Bool {
+        let jid = scoopJid.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !jid.isEmpty, jid.count <= Self.maxJidLength else { return false }
+        pendingSelection = PendingSelection(id: UUID(), scoopJid: jid, receivedAt: now)
+        return true
+    }
+
+    func consume(selection: PendingSelection) {
+        if pendingSelection?.id == selection.id { pendingSelection = nil }
+    }
+
     /// The universal-link route (#1918): `https://(www.)sliccy.ai/app/open`
     /// and `/app/prompt` carry the same query contract as the slicc://
     /// scheme. A link is a link — everything here confirms in-app.
@@ -262,6 +292,50 @@ final class InboundActionCoordinator: ObservableObject {
             let host = components.host, !host.isEmpty
         else { return nil }
         return url
+    }
+}
+
+// MARK: - InboundSelectionRule
+
+/// Whether a pending conversation selection can be resolved yet.
+///
+/// A free function rather than a method on the coordinator: it is pure, it is
+/// the interesting part, and it has no business requiring the main actor to be
+/// asked a question about two arrays. Same split as `BrowserTargets`.
+enum InboundSelectionRule {
+
+    /// The distinction this exists to make: "the leader has no such unit" and
+    /// "the leader has not told us its units yet" are different answers, and
+    /// the second one is the COMMON case. `OpenSliccConversationIntent` sets
+    /// `openAppWhenRun`, so a Spotlight or Siri hit launches the app cold —
+    /// `scoops` is empty (and `handleDisconnect` resets it to empty) until the
+    /// first `scoops.list` lands. Treating that emptiness as "not found" drops
+    /// the request the user just made, on the path they will use most.
+    enum Outcome: Equatable {
+        /// The roster has the unit — select it.
+        case select
+        /// The roster has not arrived yet; stay armed for the next one.
+        case wait
+        /// The leader has spoken and the unit is not there (or the request is
+        /// too old to still be what the user wants) — give up.
+        case drop
+    }
+
+    /// How long a selection stays armed waiting for a roster.
+    ///
+    /// Generous next to a dial (seconds), short next to "the user wandered
+    /// off". Without it, a request made before a leader was ever reachable
+    /// would fire whenever one eventually connected, which reads as the app
+    /// jumping somewhere on its own.
+    static let maximumAge: TimeInterval = 120
+
+    static func outcome(forSelecting jid: String, roster: [String], age: TimeInterval) -> Outcome {
+        if roster.contains(jid) { return .select }
+        if age > maximumAge { return .drop }
+        // A non-empty roster IS the leader's full answer, so absence from it
+        // is authoritative — that is the "the scoop ended" case, where staying
+        // put beats yanking the user to a unit that is gone.
+        return roster.isEmpty ? .wait : .drop
     }
 }
 
