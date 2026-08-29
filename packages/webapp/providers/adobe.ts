@@ -480,7 +480,10 @@ export const config: ProviderConfig = {
   // path doesn't silently depend on that side effect.
   refreshModels: async (accessToken?: string) => {
     await getAdobeModels(accessToken);
-    const enriched = config.getModelIds?.();
+    // `config.getModelIds` is typed by ProviderConfig as the wider
+    // `{ id; name? } & ModelMetadata` shape, but Adobe's implementation always
+    // returns `EnrichedAdobeModel` (every branch sets a string `name`).
+    const enriched = config.getModelIds?.() as EnrichedAdobeModel[] | undefined;
     if (enriched?.length) persistAdobeModels(enriched);
   },
 };
