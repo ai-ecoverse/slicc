@@ -22,6 +22,7 @@ import type { DiscoveryKind } from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import { extractCatalog } from '../net/discovery-link.js';
 import {
+  type CdpHeaderBag,
   extractHandoffFromCdpHeaders,
   type HandoffMatch,
   type HandoffVerb,
@@ -29,8 +30,56 @@ import {
 import type { ParsedLink } from '../net/link-header.js';
 import { type ProbeFetch, probeWellKnown } from '../net/well-known-probe.js';
 import type { CDPTransport } from './transport.js';
+import type { CDPEventListener } from './types.js';
 
 const log = createLogger('navigation-watcher');
+
+/** Fields read off `Target.attachedToTarget` / `Target.targetCreated` CDP events. */
+interface NavigationTargetInfo {
+  targetId?: string;
+  type?: string;
+  title?: string;
+  url?: string;
+  attached?: boolean;
+  openerId?: string;
+}
+
+interface TargetAttachedToTargetParams {
+  sessionId?: string;
+  targetInfo?: NavigationTargetInfo;
+}
+
+interface TargetDetachedFromTargetParams {
+  sessionId?: string;
+}
+
+interface TargetInfoChangedParams {
+  targetInfo?: NavigationTargetInfo;
+}
+
+interface TargetCreatedParams {
+  targetInfo?: NavigationTargetInfo;
+}
+
+interface PageFrameNavigatedParams {
+  sessionId?: string;
+  frame?: { id?: string; parentId?: string; url?: string };
+}
+
+interface NetworkResponseReceivedParams {
+  sessionId?: string;
+  type?: string;
+  frameId?: string;
+  response?: { url?: string; headers?: CdpHeaderBag };
+}
+
+interface TargetGetTargetsResult {
+  targetInfos?: NavigationTargetInfo[];
+}
+
+interface PageGetFrameTreeResult {
+  frameTree?: { frame?: { id?: string } };
+}
 
 export interface NavigationEvent {
   /** URL of the main-frame document whose response advertised the handoff. */
@@ -122,7 +171,7 @@ interface SessionState {
  * latter to `discoverLinks` if they want to.
  */
 export function extractHandoffFromHeaders(
-  headers: Record<string, unknown> | undefined,
+  headers: CdpHeaderBag | undefined,
   baseUrl?: string
 ): { match: HandoffMatch | null; links: ParsedLink[] } {
   return extractHandoffFromCdpHeaders(headers, baseUrl);
@@ -147,17 +196,17 @@ export class NavigationWatcher {
    */
   private readonly probedOrigins = new Set<string>();
 
-  private readonly onAttachedToTarget = (params: Record<string, unknown>) => {
-    void this.handleAttachedToTarget(params);
+  private readonly onAttachedToTarget: CDPEventListener = (raw) => {
+    void this.handleAttachedToTarget(raw as TargetAttachedToTargetParams);
   };
-  private readonly onDetachedFromTarget = (params: Record<string, unknown>) => {
-    const sessionId = params['sessionId'] as string | undefined;
+  private readonly onDetachedFromTarget: CDPEventListener = (raw) => {
+    const params = raw as TargetDetachedFromTargetParams;
+    const sessionId = params.sessionId;
     if (sessionId) this.sessions.delete(sessionId);
   };
-  private readonly onTargetInfoChanged = (params: Record<string, unknown>) => {
-    const info = params['targetInfo'] as
-      | { targetId?: string; title?: string; url?: string }
-      | undefined;
+  private readonly onTargetInfoChanged: CDPEventListener = (raw) => {
+    const params = raw as TargetInfoChangedParams;
+    const info = params.targetInfo;
     if (!info?.targetId) return;
     for (const state of this.sessions.values()) {
       if (state.targetId === info.targetId) {
@@ -166,15 +215,16 @@ export class NavigationWatcher {
       }
     }
   };
-  private readonly onTargetCreated = (params: Record<string, unknown>) => {
-    void this.handleTargetCreated(params);
+  private readonly onTargetCreated: CDPEventListener = (raw) => {
+    void this.handleTargetCreated(raw as TargetCreatedParams);
   };
-  private readonly onFrameNavigated = (params: Record<string, unknown>) => {
-    const sessionId = params['sessionId'] as string | undefined;
+  private readonly onFrameNavigated: CDPEventListener = (raw) => {
+    const params = raw as PageFrameNavigatedParams;
+    const sessionId = params.sessionId;
     if (!sessionId) return;
     const state = this.sessions.get(sessionId);
     if (!state) return;
-    const frame = params['frame'] as { id?: string; parentId?: string; url?: string } | undefined;
+    const frame = params.frame;
     if (!frame?.id) return;
     // Remember the root frame id for this session (a frame with no parent).
     if (!frame.parentId) {
@@ -182,17 +232,16 @@ export class NavigationWatcher {
       if (typeof frame.url === 'string') state.url = frame.url;
     }
   };
-  private readonly onResponseReceived = (params: Record<string, unknown>) => {
-    const sessionId = params['sessionId'] as string | undefined;
+  private readonly onResponseReceived: CDPEventListener = (raw) => {
+    const params = raw as NetworkResponseReceivedParams;
+    const sessionId = params.sessionId;
     if (!sessionId) return;
     const state = this.sessions.get(sessionId);
     if (!state) return;
-    if (params['type'] !== 'Document') return;
-    const frameId = params['frameId'] as string | undefined;
+    if (params.type !== 'Document') return;
+    const frameId = params.frameId;
     if (!frameId || frameId !== state.rootFrameId) return;
-    const response = params['response'] as
-      | { url?: string; headers?: Record<string, unknown> }
-      | undefined;
+    const response = params.response;
     if (!response) return;
     const url =
       typeof response.url === 'string' && response.url.length > 0 ? response.url : state.url;
@@ -323,12 +372,12 @@ export class NavigationWatcher {
 
     // Pick up pages that were already open before we started.
     try {
-      const result = await this.transport.send('Target.getTargets');
-      const infos = (result['targetInfos'] as Array<Record<string, unknown>> | undefined) ?? [];
+      const result = (await this.transport.send('Target.getTargets')) as TargetGetTargetsResult;
+      const infos = result.targetInfos ?? [];
       for (const info of infos) {
-        if (info['type'] !== 'page') continue;
-        const attached = info['attached'] === true;
-        const targetId = info['targetId'];
+        if (info.type !== 'page') continue;
+        const attached = info.attached === true;
+        const targetId = info.targetId;
         if (attached || typeof targetId !== 'string') continue;
         try {
           await this.transport.send('Target.attachToTarget', { targetId, flatten: true });
@@ -387,10 +436,8 @@ export class NavigationWatcher {
    * enabled on it, so its main-frame `Link` headers (and therefore
    * the resulting `navigate` lick) were silently dropped.
    */
-  private async handleTargetCreated(params: Record<string, unknown>): Promise<void> {
-    const info = params['targetInfo'] as
-      | { targetId?: string; type?: string; attached?: boolean; openerId?: string }
-      | undefined;
+  private async handleTargetCreated(params: TargetCreatedParams): Promise<void> {
+    const info = params.targetInfo;
     if (info?.type !== 'page' || typeof info.targetId !== 'string') return;
     if (info.attached) return; // already attached
 
@@ -407,11 +454,9 @@ export class NavigationWatcher {
     }
   }
 
-  private async handleAttachedToTarget(params: Record<string, unknown>): Promise<void> {
-    const sessionId = params['sessionId'] as string | undefined;
-    const info = params['targetInfo'] as
-      | { targetId?: string; type?: string; title?: string; url?: string }
-      | undefined;
+  private async handleAttachedToTarget(params: TargetAttachedToTargetParams): Promise<void> {
+    const sessionId = params.sessionId;
+    const info = params.targetInfo;
     if (!sessionId || !info || info.type !== 'page' || typeof info.targetId !== 'string') return;
 
     this.sessions.set(sessionId, {
@@ -424,8 +469,12 @@ export class NavigationWatcher {
     try {
       await this.transport.send('Page.enable', {}, sessionId);
       await this.transport.send('Network.enable', {}, sessionId);
-      const tree = await this.transport.send('Page.getFrameTree', {}, sessionId);
-      const frame = (tree['frameTree'] as { frame?: { id?: string } } | undefined)?.frame;
+      const tree = (await this.transport.send(
+        'Page.getFrameTree',
+        {},
+        sessionId
+      )) as PageGetFrameTreeResult;
+      const frame = tree.frameTree?.frame;
       if (frame?.id && typeof frame.id === 'string') {
         const state = this.sessions.get(sessionId);
         if (state) state.rootFrameId = frame.id;
