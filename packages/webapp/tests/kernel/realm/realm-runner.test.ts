@@ -422,7 +422,7 @@ describe('runInRealm', () => {
   it('process is registered with kind:"jsh" before the realm replies', async () => {
     const pm = new ProcessManager();
     const realm = makeMockRealm();
-    runInRealm({
+    const promise = runInRealm({
       pm,
       realmFactory: async () => realm,
       owner: { kind: 'system' },
@@ -443,6 +443,13 @@ describe('runInRealm', () => {
     expect(proc.cwd).toBe('/workspace');
     expect(proc.ppid).toBe(5000);
     expect(proc.status).toBe('running');
+    realm.fireMessage({
+      type: 'realm-done',
+      stdout: '',
+      stderr: '',
+      exitCode: 0,
+    } satisfies RealmDoneMsg);
+    await promise;
   });
 
   it('honors procKind override (e.g. for a future kind:py)', async () => {
