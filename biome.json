@@ -320,7 +320,6 @@
         "packages/webapp/src/providers/built-in/bedrock-camp.ts",
         "packages/webapp/src/providers/intercepted-oauth.ts",
         "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts",
-        "packages/webapp/tests/cdp/cdp-client.test.ts",
         "packages/webapp/tests/kernel/realm/realm-runner.test.ts",
         "packages/webapp/tests/shell/di/di.test.ts",
         "packages/webapp/tests/ui/provider-settings.test.ts"
