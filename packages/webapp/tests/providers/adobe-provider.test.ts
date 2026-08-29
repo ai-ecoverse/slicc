@@ -309,7 +309,7 @@ describe('Renewal deduplication pattern', () => {
     let renewalInProgress: Promise<string | null> | null = null;
 
     function silentRenew(): Promise<string | null> {
-      if (renewalInProgress) return renewalInProgress;
+      if (renewalInProgress !== null) return renewalInProgress;
       renewalInProgress = (async () => {
         try {
           callCount++;
@@ -344,7 +344,7 @@ describe('Renewal deduplication pattern', () => {
     let callCount = 0;
 
     function silentRenew(): Promise<string | null> {
-      if (renewalInProgress) return renewalInProgress;
+      if (renewalInProgress !== null) return renewalInProgress;
       renewalInProgress = (async () => {
         try {
           callCount++;
