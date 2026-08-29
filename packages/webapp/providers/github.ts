@@ -55,6 +55,55 @@ const githubConfig: GitHubConfig = configFiles['/packages/webapp/providers/githu
   scopes: 'repo,read:user,user:email',
 };
 
+/** OAuth relay `state` envelope for extension logins. */
+export type GithubOAuthStateExtension = {
+  source: 'extension';
+  extensionId: string;
+  path: '/github';
+  nonce: string;
+};
+
+/** OAuth relay `state` envelope when the interactive hop runs on a follower (#1915). */
+export type GithubOAuthStateOpener = {
+  source: 'opener';
+  path: '/auth/callback';
+  nonce: string;
+};
+
+/** OAuth relay `state` envelope for localhost bounce via registered relay. */
+export type GithubOAuthStateLocal = {
+  source: 'local';
+  port: number;
+  path: '/auth/callback';
+  nonce: string;
+};
+
+/** OAuth relay `state` envelope for remote connect-mode bounce via registered relay. */
+export type GithubOAuthStateRemote = {
+  source: 'remote';
+  origin: string;
+  path: '/auth/callback';
+  nonce: string;
+};
+
+/** Standalone CLI relay bounce — no `source` discriminator (legacy shape). */
+export type GithubOAuthStateStandaloneCli = {
+  port: number;
+  path: '/auth/callback';
+  nonce: string;
+};
+
+export type GithubOAuthState =
+  | GithubOAuthStateExtension
+  | GithubOAuthStateOpener
+  | GithubOAuthStateLocal
+  | GithubOAuthStateRemote
+  | GithubOAuthStateStandaloneCli;
+
+type ConnectModeGlobal = {
+  __slicc_connect_mode?: unknown;
+};
+
 // ── Runtime config (fetches correct client ID per environment) ──────
 
 let runtimeClientId: string | null = null;
@@ -106,7 +155,7 @@ export function resolveGithubOAuthRedirect(opts: {
   delegated?: boolean;
   extensionId: string;
   nonce: string;
-}): { redirectUri: string; state: Record<string, unknown> } {
+}): { redirectUri: string; state: GithubOAuthState } {
   const {
     isExtension,
     isConnectMode,
@@ -513,7 +562,7 @@ export const config: ProviderConfig = {
       : '';
     const { redirectUri, state: stateData } = resolveGithubOAuthRedirect({
       isExtension,
-      isConnectMode: !!(globalThis as Record<string, unknown>).__slicc_connect_mode,
+      isConnectMode: !!(globalThis as ConnectModeGlobal).__slicc_connect_mode,
       workerBaseUrl: getWorkerBaseUrl(),
       runtimeWorkerBaseUrl,
       pageOrigin: pageInfo?.origin ?? null,

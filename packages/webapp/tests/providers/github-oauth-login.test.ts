@@ -626,7 +626,7 @@ describe('resolveGithubOAuthRedirect (per-runtime redirect_uri + state)', () => 
     });
     expect(r.redirectUri).toBe('https://www.sliccy.ai/auth/callback');
     expect(r.state).toMatchObject({ port: 5710, path: '/auth/callback' });
-    expect(r.state.source).toBeUndefined();
+    expect(r.state).not.toHaveProperty('source');
   });
 
   it('worker-served thin-bridge → relay + source:local with BRIDGE port (5710), not page port (8787)', async () => {
@@ -653,6 +653,9 @@ describe('resolveGithubOAuthRedirect (per-runtime redirect_uri + state)', () => 
     // routing to :8787 hits wrangler's capture page which only postMessages the
     // opener (severed by GitHub COOP). :5710 hits node-server's callback which
     // POSTs to its same-origin loopback `/api/oauth-result`.
+    if (!('source' in r.state) || r.state.source !== 'local') {
+      throw new Error('expected local OAuth state');
+    }
     expect(r.state.port).toBe(5710);
     expect(r.state.port).not.toBe(8787);
   });
@@ -672,7 +675,7 @@ describe('resolveGithubOAuthRedirect (per-runtime redirect_uri + state)', () => 
     // Legacy fall-through uses the page port (8787) and the legacy state shape
     // (no `source` field).
     expect(r.state).toMatchObject({ port: 8787, path: '/auth/callback' });
-    expect(r.state.source).toBeUndefined();
+    expect(r.state).not.toHaveProperty('source');
   });
 
   it('worker-served thin-bridge with a non-localhost bridgeApiBaseUrl → falls through to legacy branch', async () => {
@@ -689,7 +692,7 @@ describe('resolveGithubOAuthRedirect (per-runtime redirect_uri + state)', () => 
     // The hostname guard rejects non-loopback bridges; legacy branch fires
     // with the page port.
     expect(r.state).toMatchObject({ port: 8787, path: '/auth/callback' });
-    expect(r.state.source).toBeUndefined();
+    expect(r.state).not.toHaveProperty('source');
   });
 
   it('non-worker-served page with bridgeApiBaseUrl → still takes legacy CLI branch (no ?bridge param)', async () => {
@@ -705,6 +708,6 @@ describe('resolveGithubOAuthRedirect (per-runtime redirect_uri + state)', () => 
       bridgeApiBaseUrl: 'http://localhost:5710',
     });
     expect(r.state).toMatchObject({ port: 5710, path: '/auth/callback' });
-    expect(r.state.source).toBeUndefined();
+    expect(r.state).not.toHaveProperty('source');
   });
 });
