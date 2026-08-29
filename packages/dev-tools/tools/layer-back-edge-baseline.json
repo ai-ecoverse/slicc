@@ -4,6 +4,5 @@
   "packages/webapp/src/shell/bsh-watchdog.ts": 3,
   "packages/webapp/src/shell/supplemental-commands/playwright/handlers/interaction.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts": 2,
-  "packages/webapp/src/shell/supplemental-commands/secret-backends.ts": 2,
   "packages/webapp/src/shell/supplemental-commands/serve-command.ts": 3
 }

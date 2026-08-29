@@ -14,9 +14,9 @@
  * no extra headers.
  */
 
-import type { SecretTopology } from '../../core/secret-topology.js';
-import { callSecretsBridge } from '../../core/secrets-bridge-client.js';
+import type { FloatTopology } from '../float-topology.js';
 import { apiHeaders, resolveApiUrl } from '../proxied-fetch.js';
+import { callSecretsBridge } from '../secrets-bridge-client.js';
 
 /** A secret's identity + scope, without its value. */
 export interface SecretRecord {
@@ -63,7 +63,18 @@ export interface SecretBackend {
   delete(name: string): Promise<DeleteResult>;
 }
 
-function swSendMessage<T>(msg: Record<string, unknown>): Promise<T> {
+/** Control messages routed to SECRETS_HANDLERS in the service worker. */
+type SecretsControlMessage =
+  | { type: 'secrets.list' }
+  | { type: 'secrets.session.list' }
+  | { type: 'secrets.list-masked-entries' }
+  | { type: 'secrets.peek'; name: string }
+  | { type: 'secrets.session.set'; name: string; value: string; domains: string[] }
+  | { type: 'secrets.set'; name: string; value: string; domains: string[] }
+  | { type: 'secrets.set-domains'; name: string; domains: string[] }
+  | { type: 'secrets.delete'; name: string };
+
+function swSendMessage<T>(msg: SecretsControlMessage): Promise<T> {
   return new Promise((resolve, reject) => {
     chrome.runtime.sendMessage(msg, (response: unknown) => {
       const err = chrome.runtime.lastError;
@@ -156,9 +167,9 @@ export function createCliSecretBackend(): SecretBackend {
  * optional-chaining/error handling below are identical across both.
  */
 function createMessageSecretBackend(
-  send: (msg: Record<string, unknown>) => Promise<unknown>
+  send: (msg: SecretsControlMessage) => Promise<unknown>
 ): SecretBackend {
-  const call = <T>(msg: Record<string, unknown>): Promise<T> => send(msg) as Promise<T>;
+  const call = <T>(msg: SecretsControlMessage): Promise<T> => send(msg) as Promise<T>;
   return {
     async list() {
       const [persisted, session] = await Promise.all([
@@ -268,7 +279,7 @@ function errOf(data: unknown): string | undefined {
  * same-extension SW path; everything else (CLI / Electron / swift / connect)
  * talks to the node-server REST surface.
  */
-export function createDefaultSecretBackend(topology: SecretTopology): SecretBackend {
+export function createDefaultSecretBackend(topology: FloatTopology): SecretBackend {
   switch (topology) {
     case 'extension-direct':
       return createExtensionSecretBackend();
