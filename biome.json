@@ -280,16 +280,6 @@
       "linter": {
         "enabled": false
       }
-    },
-    {
-      "includes": ["packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts"],
-      "linter": {
-        "rules": {
-          "nursery": {
-            "noFloatingPromises": "off"
-          }
-        }
-      }
     }
   ]
 }
