@@ -15,6 +15,8 @@
  * `createRemoteTransport()` → `send('Target.attachToTarget', …)`.
  */
 
+import type { CDPPayload } from '@slicc/shared-ts';
+
 import { createLogger } from '../base/logger.js';
 import {
   PANEL_RPC_DEFAULT_TIMEOUT_MS,
@@ -107,10 +109,10 @@ export class PanelRpcCdpTransport implements CDPTransport {
 
   async send(
     method: string,
-    params?: Record<string, unknown>,
+    params?: CDPPayload,
     sessionId?: string,
     timeout?: number
-  ): Promise<Record<string, unknown>> {
+  ): Promise<CDPPayload> {
     if (this._state === 'disconnected') {
       throw new Error('Transport disconnected');
     }
@@ -160,7 +162,7 @@ export class PanelRpcCdpTransport implements CDPTransport {
     }
   }
 
-  once(event: string, timeout?: number): Promise<Record<string, unknown>> {
+  once(event: string, timeout?: number): Promise<CDPPayload> {
     return new Promise((resolve, reject) => {
       const tm = timeout ?? this.timeoutMs;
       const entry = { reject, timer: undefined as unknown as ReturnType<typeof setTimeout> };
@@ -173,7 +175,7 @@ export class PanelRpcCdpTransport implements CDPTransport {
         cleanup();
         reject(new Error(`Remote CDP event timed out: ${event}`));
       }, tm);
-      const handler = (params: Record<string, unknown>) => {
+      const handler = (params: CDPPayload) => {
         cleanup();
         resolve(params);
       };
@@ -183,7 +185,7 @@ export class PanelRpcCdpTransport implements CDPTransport {
   }
 
   /** Dispatch a page-pushed CDP event to local listeners. */
-  private handleEvent(method: string, params: Record<string, unknown>): void {
+  private handleEvent(method: string, params: CDPPayload): void {
     const listeners = this.eventListeners.get(method);
     if (!listeners) return;
     for (const cb of [...listeners]) cb(params);
