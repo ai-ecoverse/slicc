@@ -1,7 +1,6 @@
 {
   "packages/dev-tools/tools/extension-smoke-test.ts": 6,
   "packages/node-server/src/electron-controller.ts": 13,
-  "packages/shared-ts/src/transcript-export.ts": 18,
   "packages/webapp/providers/adobe.ts": 1,
   "packages/webapp/providers/github-copilot.ts": 2,
   "packages/webapp/src/cdp/har-recorder.ts": 10,
