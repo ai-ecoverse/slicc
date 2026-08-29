@@ -39,8 +39,13 @@ interface TeleportBrowserAPI {
   evaluate(expression: string): Promise<unknown>;
   sendCDP(
     method: string,
-    params?: { cookies?: CookieTeleportCookie[]; url?: string }
-  ): Promise<{ cookies?: CookieTeleportCookie[] }>;
+    params?: {
+      cookies?: CookieTeleportCookie[];
+      url?: string;
+      source?: string;
+      identifier?: string;
+    }
+  ): Promise<{ cookies?: CookieTeleportCookie[]; identifier?: unknown }>;
   createRemotePage(runtimeId: string, url: string): Promise<string>;
   closePage(targetId: string): Promise<void>;
   navigate(url: string): Promise<void>;
@@ -236,6 +241,70 @@ export function armTeleportWatcher(
 }
 
 /**
+ * One follower-poll tick: read the follower URL, advance the auth→return phase,
+ * and kick off capture once the return pattern matches. Extracted from the
+ * `setInterval` body in `triggerTeleport` to keep that function's complexity low.
+ */
+async function pollFollowerForReturn(
+  browser: TeleportBrowserAPI,
+  state: PlaywrightState,
+  watcher: TeleportWatcher,
+  followerTargetId: string,
+  runtimeId: string
+): Promise<void> {
+  if (watcher.phase !== 'waitingForAuth' && watcher.phase !== 'waitingForReturn') return;
+  try {
+    await browser.attachToPage(followerTargetId);
+    const raw = await browser.evaluate('window.location.href');
+    const href = typeof raw === 'string' ? raw : String(raw);
+    if (!href) return;
+    if (watcher.lastFollowerUrl !== href) {
+      watcher.lastFollowerUrl = href;
+      log.debug('Follower teleport navigation', { href, phase: watcher.phase });
+    }
+
+    if (watcher.phase === 'waitingForAuth') {
+      // Waiting for follower to redirect to auth (e.g. Okta)
+      if (watcher.startPattern.test(href)) {
+        watcher.phase = 'waitingForReturn';
+        log.info('Follower reached auth provider; waiting for return pattern');
+        log.debug('Follower reached auth provider details', {
+          href,
+          startPattern: watcher.startPattern.source,
+        });
+      } else {
+        log.debug('Waiting for auth redirect on follower', {
+          href,
+          startPattern: watcher.startPattern.source,
+        });
+      }
+      return; // Don't check return pattern yet
+    }
+
+    // Waiting for return from auth
+    log.debug('Polling follower tab URL for return', {
+      href,
+      returnPattern: watcher.returnPattern.source,
+    });
+    if (shouldCaptureTeleportDiagnostics(href)) {
+      await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'waiting-for-return');
+    }
+    if (watcher.returnPattern.test(href)) {
+      log.info('Follower return pattern matched after auth');
+      log.debug('Follower return pattern matched after auth details', {
+        href,
+        returnPattern: watcher.returnPattern.source,
+      });
+      void captureCookiesAndComplete(browser, state, watcher, runtimeId).catch((err) => {
+        log.error('Unhandled teleport capture error', { error: String(err) });
+      });
+    }
+  } catch (err) {
+    log.warn('Error polling follower tab URL', { error: String(err) });
+  }
+}
+
+/**
  * Trigger the teleport flow: open the current URL on a follower,
  * monitor the follower for returnPattern, capture cookies, inject on leader.
  */
@@ -366,60 +435,11 @@ async function triggerTeleport(
       startPattern: watcher.startPattern.source,
     });
     watcher.pollInterval = setInterval(() => {
-      void (async () => {
-        if (watcher.phase !== 'waitingForAuth' && watcher.phase !== 'waitingForReturn') return;
-        try {
-          await browser.attachToPage(followerTargetId);
-          const raw = await browser.evaluate('window.location.href');
-          const href = typeof raw === 'string' ? raw : String(raw);
-          if (!href) return;
-          if (watcher.lastFollowerUrl !== href) {
-            watcher.lastFollowerUrl = href;
-            log.debug('Follower teleport navigation', { href, phase: watcher.phase });
-          }
-
-          if (watcher.phase === 'waitingForAuth') {
-            // Waiting for follower to redirect to auth (e.g. Okta)
-            if (watcher.startPattern.test(href)) {
-              watcher.phase = 'waitingForReturn';
-              log.info('Follower reached auth provider; waiting for return pattern');
-              log.debug('Follower reached auth provider details', {
-                href,
-                startPattern: watcher.startPattern.source,
-              });
-            } else {
-              log.debug('Waiting for auth redirect on follower', {
-                href,
-                startPattern: watcher.startPattern.source,
-              });
-            }
-            return; // Don't check return pattern yet
-          }
-
-          // Waiting for return from auth
-          log.debug('Polling follower tab URL for return', {
-            href,
-            returnPattern: watcher.returnPattern.source,
-          });
-          if (shouldCaptureTeleportDiagnostics(href)) {
-            await logFollowerTeleportDiagnosticsOnce(browser, watcher, 'waiting-for-return');
-          }
-          if (watcher.returnPattern.test(href)) {
-            log.info('Follower return pattern matched after auth');
-            log.debug('Follower return pattern matched after auth details', {
-              href,
-              returnPattern: watcher.returnPattern.source,
-            });
-            void captureCookiesAndComplete(browser, state, watcher, runtimeId).catch((err) => {
-              log.error('Unhandled teleport capture error', { error: String(err) });
-            });
-          }
-        } catch (err) {
-          log.warn('Error polling follower tab URL', { error: String(err) });
+      void pollFollowerForReturn(browser, state, watcher, followerTargetId, runtimeId).catch(
+        (err) => {
+          log.warn('Follower teleport poll failed', { error: String(err) });
         }
-      })().catch((err) => {
-        log.warn('Follower teleport poll failed', { error: String(err) });
-      });
+      );
     }, 1000);
   } catch (err) {
     log.error('Teleport trigger failed', { error: String(err) });
@@ -465,8 +485,7 @@ async function captureFollowerAuthState(
 
   const cookieResult = (await browser.sendCDP('Network.getCookies')) as NetworkGetCookiesResponse;
   const cookies = cookiesFromCdpResult(cookieResult.cookies);
-  const domainSummary =
-    cookies.length > 0 ? formatCookieDomainSummary(cookies) : 'none';
+  const domainSummary = cookies.length > 0 ? formatCookieDomainSummary(cookies) : 'none';
   log.info('Captured cookies from follower', { count: cookies.length });
   log.debug('Captured cookies from follower details', {
     count: cookies.length,
@@ -700,8 +719,7 @@ async function captureCookiesAndComplete(
     // Complete
     watcher.phase = 'done';
     cleanupTeleportWatcher(watcher);
-    const domainNote =
-      cookies.length > 0 ? ` (${formatCookieDomainSummary(cookies)})` : '';
+    const domainNote = cookies.length > 0 ? ` (${formatCookieDomainSummary(cookies)})` : '';
     const storageNote =
       followerStorageEntries > 0
         ? ` + ${followerStorageEntries} storage entr${followerStorageEntries === 1 ? 'y' : 'ies'}`
