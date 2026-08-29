@@ -23,6 +23,20 @@
  */
 
 /**
+ * Opaque JSON object mid-match / mid-project. Keys are caller-authored
+ * frame fields; values are arbitrary JSON. Narrowed only as nested
+ * objects vs leaf equality.
+ */
+type JsonObject = { [key: string]: unknown };
+
+/** Page globals the router reads/writes on the injection target. */
+interface PageRouterGlobals {
+  __sliccWsRouter?: unknown;
+  __sliccWsRouterReport?: (s: string) => void;
+  WebSocket?: typeof WebSocket;
+}
+
+/**
  * The router IIFE that runs inside the page. Declared as a function
  * so unit tests can call `installWsRouter(fakeWindow)` directly; the
  * production injection path stringifies the function body via
@@ -32,12 +46,12 @@
  * scope — because once stringified it runs in a separate global.
  */
 export function installWsRouter(win: typeof globalThis): void {
-  const w = win as unknown as Record<string, unknown>;
+  const w = win as unknown as PageRouterGlobals;
   if (w.__sliccWsRouter) return;
 
   interface Selector {
     parseAs?: 'json' | 'text';
-    where?: Record<string, unknown>;
+    where?: JsonObject;
     project?: readonly string[];
   }
   interface Subscriber {
@@ -53,6 +67,10 @@ export function installWsRouter(win: typeof globalThis): void {
      */
     _urlMatchRe?: RegExp | null;
   }
+  interface SubscriberPatch {
+    urlMatch?: string | null;
+    filter?: Selector | null;
+  }
 
   const subs = new Map<string, Subscriber>();
 
@@ -65,10 +83,11 @@ export function installWsRouter(win: typeof globalThis): void {
     }
   }
 
-  function isPlainObject(v: unknown): v is Record<string, unknown> {
+  function isPlainObject(v: unknown): v is JsonObject {
     return typeof v === 'object' && v !== null && !Array.isArray(v);
   }
-  function subsetMatch(value: Record<string, unknown>, template: Record<string, unknown>): boolean {
+
+  function subsetMatch(value: JsonObject, template: JsonObject): boolean {
     for (const k of Object.keys(template)) {
       const expected = template[k];
       const actual = value[k];
@@ -81,6 +100,7 @@ export function installWsRouter(win: typeof globalThis): void {
     }
     return true;
   }
+
   function parseFrame(raw: string, parseAs: 'json' | 'text' | undefined): unknown {
     if (parseAs === 'text') return raw;
     try {
@@ -89,15 +109,17 @@ export function installWsRouter(win: typeof globalThis): void {
       return undefined;
     }
   }
+
   function project(body: unknown, fields: readonly string[] | undefined): unknown {
     if (!fields || fields.length === 0) return body;
     if (!isPlainObject(body)) return body;
-    const out: Record<string, unknown> = {};
-    for (const f of fields) if (f in body) out[f] = (body as Record<string, unknown>)[f];
+    const out: JsonObject = {};
+    for (const f of fields) if (f in body) out[f] = body[f];
     return out;
   }
+
   function report(subId: string, payload: unknown): void {
-    const reporter = (w as { __sliccWsRouterReport?: (s: string) => void }).__sliccWsRouterReport;
+    const reporter = w.__sliccWsRouterReport;
     if (typeof reporter !== 'function') return;
     try {
       reporter(JSON.stringify({ subId, payload }));
@@ -105,22 +127,32 @@ export function installWsRouter(win: typeof globalThis): void {
       /* drop unreportable frame */
     }
   }
+
+  /** True when this subscriber should see `url` (urlMatch absent or matches). */
+  function urlMatches(sub: Subscriber, url: string): boolean {
+    if (sub.urlMatch === undefined) return true;
+    const re = sub._urlMatchRe;
+    // `null` = pattern failed to compile at register time; skip
+    // this subscriber rather than re-attempting per frame.
+    if (re === null) return false;
+    return !re || re.test(url);
+  }
+
+  /** True when `body` satisfies the subscriber's optional `where` template. */
+  function whereMatches(sub: Subscriber, body: unknown): boolean {
+    const where = sub.filter?.where;
+    if (!where || Object.keys(where).length === 0) return true;
+    if (!isPlainObject(body)) return false;
+    return subsetMatch(body, where);
+  }
+
   function dispatchFrame(url: string, raw: string): void {
     if (subs.size === 0) return;
     for (const sub of subs.values()) {
-      if (sub.urlMatch !== undefined) {
-        const re = sub._urlMatchRe;
-        // `null` = pattern failed to compile at register time; skip
-        // this subscriber rather than re-attempting per frame.
-        if (re === null) continue;
-        if (re && !re.test(url)) continue;
-      }
+      if (!urlMatches(sub, url)) continue;
       const body = parseFrame(raw, sub.filter?.parseAs);
       if (body === undefined) continue;
-      if (sub.filter?.where && Object.keys(sub.filter.where).length > 0) {
-        if (!isPlainObject(body)) continue;
-        if (!subsetMatch(body, sub.filter.where)) continue;
-      }
+      if (!whereMatches(sub, body)) continue;
       report(sub.id, project(body, sub.filter?.project));
     }
   }
@@ -139,13 +171,37 @@ export function installWsRouter(win: typeof globalThis): void {
     });
   }
 
-  const WS = (win as unknown as { WebSocket?: typeof WebSocket }).WebSocket;
+  const WS = w.WebSocket;
   if (!WS) return;
   const origSend = WS.prototype.send;
   WS.prototype.send = function patchedSend(this: WebSocket, data: unknown): void {
     wrapInstance(this);
     origSend.call(this, data as string);
   };
+
+  function applyUrlMatchPatch(next: Subscriber, patch: SubscriberPatch): void {
+    if (!Object.prototype.hasOwnProperty.call(patch, 'urlMatch')) return;
+    if (patch.urlMatch === null) {
+      delete next.urlMatch;
+      next._urlMatchRe = undefined;
+      return;
+    }
+    if (typeof patch.urlMatch === 'string') {
+      next.urlMatch = patch.urlMatch;
+      next._urlMatchRe = compileUrlMatch(patch.urlMatch);
+    }
+  }
+
+  function applyFilterPatch(next: Subscriber, patch: SubscriberPatch): void {
+    if (!Object.prototype.hasOwnProperty.call(patch, 'filter')) return;
+    if (patch.filter === null) {
+      delete next.filter;
+      return;
+    }
+    if (patch.filter !== undefined) {
+      next.filter = patch.filter;
+    }
+  }
 
   const router = {
     register(sub: Subscriber): void {
@@ -159,32 +215,12 @@ export function installWsRouter(win: typeof globalThis): void {
      * branch the router would silently keep the old criterion and
      * continue matching with stale filter/urlMatch.
      */
-    update(
-      id: string,
-      patch: {
-        urlMatch?: string | null;
-        filter?: Selector | null;
-      }
-    ): void {
+    update(id: string, patch: SubscriberPatch): void {
       const cur = subs.get(id);
       if (!cur) return;
       const next: Subscriber = { ...cur, id };
-      if (Object.prototype.hasOwnProperty.call(patch, 'urlMatch')) {
-        if (patch.urlMatch === null) {
-          delete next.urlMatch;
-          next._urlMatchRe = undefined;
-        } else if (typeof patch.urlMatch === 'string') {
-          next.urlMatch = patch.urlMatch;
-          next._urlMatchRe = compileUrlMatch(patch.urlMatch);
-        }
-      }
-      if (Object.prototype.hasOwnProperty.call(patch, 'filter')) {
-        if (patch.filter === null) {
-          delete next.filter;
-        } else if (patch.filter !== undefined) {
-          next.filter = patch.filter;
-        }
-      }
+      applyUrlMatchPatch(next, patch);
+      applyFilterPatch(next, patch);
       subs.set(id, next);
     },
     unregister(id: string): void {

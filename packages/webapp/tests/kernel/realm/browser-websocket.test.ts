@@ -199,35 +199,86 @@ describe('ws-router-page: installWsRouter idempotency', () => {
     expect(typeof router.unregister).toBe('function');
   });
 
+  type FakeWs = {
+    send: (d: string) => void;
+    emit: (d: string) => void;
+  };
+  type PageRouter = {
+    register: (s: { id: string; filter?: WsSelector; urlMatch?: string }) => void;
+    update: (id: string, patch: { urlMatch?: string | null; filter?: WsSelector | null }) => void;
+    unregister: (id: string) => void;
+  };
+
+  function routerOf(win: typeof globalThis): PageRouter {
+    return (win as unknown as { __sliccWsRouter: PageRouter }).__sliccWsRouter;
+  }
+
+  function openWs(WebSocketCtor: typeof WebSocket, url: string): FakeWs {
+    return new (WebSocketCtor as unknown as new (url: string) => FakeWs)(url);
+  }
+
   it('reports matched frames via __sliccWsRouterReport', () => {
     const { win, WebSocketCtor, reports } = makeFakeWindow();
     installWsRouter(win);
-    const router = (
-      win as unknown as {
-        __sliccWsRouter: {
-          register: (s: { id: string; filter?: WsSelector; urlMatch?: string }) => void;
-        };
-      }
-    ).__sliccWsRouter;
+    const router = routerOf(win);
     router.register({
       id: 'sub-1',
       filter: { parseAs: 'json', where: { type: 'message', channel: 'C123' } },
     });
     // Discovery: opening a ws and calling `send` plugs in the message listener.
-    const ws = new (
-      WebSocketCtor as unknown as new (
-        url: string
-      ) => {
-        send: (d: string) => void;
-        emit: (d: string) => void;
-      }
-    )('wss://example/');
+    const ws = openWs(WebSocketCtor, 'wss://example/');
     ws.send('hello');
     ws.emit(JSON.stringify({ type: 'message', channel: 'C123', text: 'hi' }));
     ws.emit(JSON.stringify({ type: 'message', channel: 'C-other', text: 'nope' }));
     expect(reports).toEqual([
       { subId: 'sub-1', payload: { type: 'message', channel: 'C123', text: 'hi' } },
     ]);
+  });
+
+  it('honors urlMatch, nested where, and project', () => {
+    const { win, WebSocketCtor, reports } = makeFakeWindow();
+    installWsRouter(win);
+    routerOf(win).register({
+      id: 'sub-proj',
+      urlMatch: 'wss://match/',
+      filter: {
+        parseAs: 'json',
+        where: { type: 'message', meta: { room: 'A' } },
+        project: ['type', 'text'],
+      },
+    });
+    const match = openWs(WebSocketCtor, 'wss://match/');
+    match.send('x');
+    match.emit(JSON.stringify({ type: 'message', meta: { room: 'A' }, text: 'hi', extra: 1 }));
+    match.emit(JSON.stringify({ type: 'message', meta: { room: 'B' }, text: 'no' }));
+    const other = openWs(WebSocketCtor, 'wss://other/');
+    other.send('x');
+    other.emit(JSON.stringify({ type: 'message', meta: { room: 'A' }, text: 'skip' }));
+    expect(reports).toEqual([{ subId: 'sub-proj', payload: { type: 'message', text: 'hi' } }]);
+  });
+
+  it('update(null) clears urlMatch/filter; invalid urlMatch skips the sub', () => {
+    const { win, WebSocketCtor, reports } = makeFakeWindow();
+    installWsRouter(win);
+    const router = routerOf(win);
+    router.register({
+      id: 'sub-u',
+      urlMatch: 'wss://only/',
+      filter: { parseAs: 'json', where: { ok: true } },
+    });
+    const ws = openWs(WebSocketCtor, 'wss://any/');
+    ws.send('x');
+    ws.emit(JSON.stringify({ ok: true }));
+    expect(reports).toEqual([]);
+
+    router.update('sub-u', { urlMatch: null, filter: null });
+    ws.emit(JSON.stringify({ ok: false, n: 1 }));
+    expect(reports).toEqual([{ subId: 'sub-u', payload: { ok: false, n: 1 } }]);
+
+    reports.length = 0;
+    router.update('sub-u', { urlMatch: '(' });
+    ws.emit(JSON.stringify({ ok: true }));
+    expect(reports).toEqual([]);
   });
 });
 
