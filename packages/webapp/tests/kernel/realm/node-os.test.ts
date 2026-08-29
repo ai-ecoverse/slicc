@@ -17,6 +17,15 @@ describe('createNodeOs', () => {
     }
   });
 
+  it('returns a padded path verbatim — trimming would break process.env equality', () => {
+    // A directory name may legally begin or end with a space. Trimming the
+    // RETURNED value (rather than only testing it for blankness) both
+    // redirects the write and breaks the one guarantee this module makes.
+    const os = createNodeOs({ TMPDIR: ' /tmp/odd name ', HOME: ' /home/odd ' });
+    expect(os.tmpdir()).toBe(' /tmp/odd name ');
+    expect(os.homedir()).toBe(' /home/odd ');
+  });
+
   it('treats an empty or whitespace value as unset, never as a relative path', () => {
     // `path.join(os.tmpdir(), 'x')` on `''` yields a cwd-relative path, which
     // is how a library ends up writing into the user's workspace.

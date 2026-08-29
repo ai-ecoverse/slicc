@@ -47,13 +47,19 @@ const STATIC_OS = {
  * rather than re-deriving the unit's identity through a second path.
  *
  * Both fall back to the pre-#2267 constants: a realm booted with no env is a
- * host with no unit behind it, and those were the right answers for it.
+ * host with no unit behind it, and those were the right answers for it. A
+ * non-blank value is otherwise passed through UNCHANGED — see the trim note
+ * below.
  */
 export function createNodeOs(env?: Record<string, string>): NodeOs {
   return {
     ...STATIC_OS,
     tmpdir: () => scratchDir(env),
-    homedir: () => env?.['HOME']?.trim() || DEFAULT_HOME,
+    // Trim only to DETECT blankness — the value itself is returned verbatim,
+    // or `os.homedir() !== process.env.HOME` for any path that legally begins
+    // or ends with a space, which is the one thing this module exists to
+    // guarantee.
+    homedir: () => (env?.['HOME']?.trim() ? env['HOME'] : DEFAULT_HOME),
   };
 }
 

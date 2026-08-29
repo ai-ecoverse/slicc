@@ -42,7 +42,11 @@ export function scratchDir(env: TmpDirEnv): string {
     env && typeof (env as { get?: unknown }).get === 'function'
       ? (env as { get(name: string): string | undefined }).get(TMPDIR_ENV)
       : (env as Record<string, string | undefined> | undefined)?.[TMPDIR_ENV];
-  // An empty or whitespace-only value is a misconfiguration, not a request to
-  // write to `''` — POSIX `mktemp` treats it the same way.
-  return fromEnv?.trim() || SHARED_TMP_ROOT;
+  // Trim only to DETECT blankness; a non-blank value is returned verbatim.
+  // A directory name may legally begin or end with a space, and trimming one
+  // would both redirect the write and break the `process.env` equality the
+  // realm `os` shim depends on. An empty or whitespace-only value is a
+  // misconfiguration rather than a request to write to `''` — POSIX `mktemp`
+  // treats it the same way.
+  return fromEnv?.trim() ? fromEnv : SHARED_TMP_ROOT;
 }

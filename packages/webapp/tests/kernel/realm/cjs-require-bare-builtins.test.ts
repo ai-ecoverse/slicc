@@ -423,6 +423,26 @@ describe('node:os shim', () => {
     ]);
   });
 
+  it('agrees with process.env even for a path padded with spaces', async () => {
+    // The equality assertion below only exercises clean values, so it would
+    // not have caught a shim that trimmed what it returned while `process.env`
+    // kept the bytes verbatim (Codex P2 on #2610).
+    const ctx = makeCtx({ env: { TMPDIR: ' /tmp/odd name ', HOME: ' /home/odd ' } });
+    const out = await runCode(
+      `const os = require('os');
+       console.log(os.tmpdir() === process.env.TMPDIR);
+       console.log(os.homedir() === process.env.HOME);
+       console.log(JSON.stringify(os.tmpdir()));`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.split('\n').filter(Boolean)).toEqual([
+      'true',
+      'true',
+      JSON.stringify(' /tmp/odd name '),
+    ]);
+  });
+
   it('agrees with process.env in the same realm — one consistent machine', async () => {
     // `createProcessShim` documents that its platform/arch mirror this shim so
     // "a script that reads both sees one consistent machine". tmpdir/homedir
