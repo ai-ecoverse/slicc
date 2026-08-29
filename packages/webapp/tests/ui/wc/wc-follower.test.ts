@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 // @vitest-environment-options { "url": "https://www.sliccy.ai/join/tray-1.cap-token" }
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import type { StartPageFollowerTrayOptions } from '../../../src/ui/page-follower-tray.js';
 import { installWcDomStubs } from './wc-dom-stubs.js';
 
@@ -95,6 +95,16 @@ function setCherryLocation(ancestorOrigin: string): void {
 }
 
 describe('mountWcUiFollower', () => {
+  // Warm the module graph ONCE, outside any test's budget. Every case here
+  // re-imports `wc-follower.js` after `vi.resetModules()` (deliberate — each
+  // needs a fresh instance), but `resetModules` only drops evaluated modules,
+  // never vitest's transform cache. So the FIRST importer paid the whole
+  // transform: ~2.9s idle, and >10s under load, which timed the first test out.
+  // Paying it in a hook keeps the one-time setup cost out of a per-test budget.
+  beforeAll(async () => {
+    await import('../../../src/ui/wc/wc-follower.js');
+  }, 60_000);
+
   beforeEach(() => {
     spawnSpy.mockClear();
     startFollowerSpy.mockClear();

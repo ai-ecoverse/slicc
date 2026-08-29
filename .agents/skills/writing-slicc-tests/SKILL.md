@@ -489,6 +489,19 @@ full production budget — 3.1s (`CDP_BRIDGE_CONNECT_RETRY_DELAYS_MS`) and 3s
 (`WEBHOOK_DELIVERY_WAIT_MS`) — inside a 5s timeout. Inject the fast value, and leave the
 timing assertion to the dedicated unit test (`connectWithBoundedRetry`, which takes `delays`).
 
+**3. Spawning a real browser from the default suite.** `playwright-command.test.ts`'s
+`iframe integration` block launches real headless Chrome. Under memory/CPU pressure the OS
+SIGKILLs it mid-launch and the whole suite fails with `Chrome exited with code null before
+reporting CDP port` — a machine-state failure that says nothing about the code under test. It
+is gated on `CI || SLICC_TEST_CHROME_INTEGRATION=1`, so CI (ubuntu-latest ships Chrome and
+sets `SLICC_CDP_LAUNCH_TIMEOUT_MS`) keeps it as a real gate while `npm run test` on a laptop
+does not spawn browsers. Run it locally with:
+
+```bash
+SLICC_TEST_CHROME_INTEGRATION=1 npx vitest run \
+  packages/webapp/tests/shell/supplemental-commands/playwright-command.test.ts
+```
+
 Never answer either pattern by raising `testTimeout`: that makes the failure rarer and harder
 to read without removing the wasted seconds. Audit with the timing JSON below — nothing in the
 default suite should sit near a second without an explicit, justified per-test timeout.
