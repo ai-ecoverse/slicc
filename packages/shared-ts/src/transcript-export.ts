@@ -200,8 +200,16 @@ export class TranscriptExportError extends Error {
 
 export type TranscriptValidationResult = { ok: true } | { ok: false; error: string };
 
-/** Parsed JSON object from an untrusted transcript bundle — narrowed field-by-field in validators. */
-type UntrustedJsonObject = { readonly [key: string]: unknown };
+/**
+ * Parsed JSON object from an untrusted transcript bundle — narrowed field-by-field
+ * in the validators below. This is a genuinely opaque boundary type: the whole job
+ * of these validators is to establish the shape, so there are no fields to declare
+ * up front. Spelled as `Record<string, unknown>` (rather than an equivalent index
+ * signature that would silently dodge the ratchet) so the record-string-unknown gate
+ * still accounts for it; suppressed here with a reason per that gate's own guidance.
+ */
+// biome-ignore lint/plugin: opaque untrusted-JSON boundary — every validator narrows this field-by-field before use
+type UntrustedJsonObject = Readonly<Record<string, unknown>>;
 type UntrustedContentBlock = UntrustedJsonObject;
 type UntrustedMessageUsage = UntrustedJsonObject;
 type UntrustedMessageUsageCost = UntrustedJsonObject;
