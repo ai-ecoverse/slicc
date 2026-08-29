@@ -37,7 +37,13 @@
  *   then delegate.
  */
 
-import type { Api, Context, Model } from '@earendil-works/pi-ai';
+import type {
+  Api,
+  Context,
+  Model,
+  ProviderStreamOptions,
+  SimpleStreamOptions,
+} from '@earendil-works/pi-ai';
 import {
   createAssistantMessageEventStream,
   getModel,
@@ -765,7 +771,7 @@ async function pumpCopilotStream(
   stream: CopilotEventStream,
   model: Model<Api>,
   context: Context,
-  options: Record<string, unknown>,
+  options: ProviderStreamOptions | SimpleStreamOptions,
   simple: boolean
 ): Promise<void> {
   try {
@@ -796,8 +802,18 @@ async function pumpCopilotStream(
   }
 }
 
+function createCopilotStreamWrapper(
+  simple: false
+): (model: Model<Api>, context: Context, options?: ProviderStreamOptions) => CopilotEventStream;
+function createCopilotStreamWrapper(
+  simple: true
+): (model: Model<Api>, context: Context, options?: SimpleStreamOptions) => CopilotEventStream;
 function createCopilotStreamWrapper(simple: boolean) {
-  return (model: Model<Api>, context: Context, options: Record<string, unknown> = {}) => {
+  return (
+    model: Model<Api>,
+    context: Context,
+    options: ProviderStreamOptions | SimpleStreamOptions = {}
+  ) => {
     const stream = createAssistantMessageEventStream();
     void pumpCopilotStream(stream, model, context, options, simple);
     return stream;
