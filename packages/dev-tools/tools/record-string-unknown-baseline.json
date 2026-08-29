@@ -17,7 +17,6 @@
   "packages/webapp/src/providers/intercepted-oauth.ts": 4,
   "packages/webapp/src/scoops/onboarding-orchestrator.ts": 1,
   "packages/webapp/src/scoops/tray-leader/cdp-router.ts": 5,
-  "packages/webapp/src/shell/bsh-watchdog.ts": 1,
   "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts": 5,
   "packages/webapp/src/shell/supplemental-commands/websocat-command.ts": 1,
   "packages/webapp/src/speech/hear.ts": 1,
