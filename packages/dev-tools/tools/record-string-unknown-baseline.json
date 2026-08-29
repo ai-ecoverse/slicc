@@ -7,7 +7,6 @@
   "packages/webapp/providers/github-copilot.ts": 2,
   "packages/webapp/providers/github.ts": 2,
   "packages/webapp/providers/openai-codex.ts": 2,
-  "packages/webapp/src/cdp/cherry-host-transport.ts": 3,
   "packages/webapp/src/cdp/har-recorder.ts": 10,
   "packages/webapp/src/cdp/navigation-watcher.ts": 11,
   "packages/webapp/src/fs/mount/backend-local.ts": 1,

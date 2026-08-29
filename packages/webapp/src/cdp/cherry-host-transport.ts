@@ -10,7 +10,13 @@
  * and implements the postMessage backhaul.
  */
 
-import { type TranscriptExportProgress, VALID_EXPORT_ERROR_CODES } from '@slicc/shared-ts';
+import {
+  type CDPPayload,
+  TranscriptExportError,
+  type TranscriptExportErrorCode,
+  type TranscriptExportProgress,
+  VALID_EXPORT_ERROR_CODES,
+} from '@slicc/shared-ts';
 import { createLogger } from '../base/logger.js';
 import {
   acceptEnvelope,
@@ -38,6 +44,26 @@ export interface CherryHostTransportOptions {
 }
 
 const DEFAULT_TIMEOUT = 30000;
+
+/** Wire rejection shape outside {@link TranscriptExportError} (e.g. abort handlers). */
+interface RejectionWithExportCode {
+  code?: unknown;
+}
+
+function exportErrorCodeFromRejection(err: unknown): TranscriptExportErrorCode {
+  if (err instanceof TranscriptExportError) return err.code;
+  const maybeCode =
+    typeof err === 'object' && err !== null && 'code' in err
+      ? (err as RejectionWithExportCode).code
+      : undefined;
+  if (
+    typeof maybeCode === 'string' &&
+    VALID_EXPORT_ERROR_CODES.has(maybeCode as TranscriptExportErrorCode)
+  ) {
+    return maybeCode as TranscriptExportErrorCode;
+  }
+  return 'transfer-corrupt';
+}
 
 export class CherryHostTransport extends SyntheticCdpTransport {
   private opts: CherryHostTransportOptions;
@@ -304,10 +330,10 @@ export class CherryHostTransport extends SyntheticCdpTransport {
    */
   protected async forward(
     method: string,
-    params?: Record<string, unknown>,
+    params?: CDPPayload,
     _sessionId?: string,
     timeout = DEFAULT_TIMEOUT
-  ): Promise<Record<string, unknown>> {
+  ): Promise<CDPPayload> {
     const id = this.nextId++;
     const response = this.pending.issue(
       id,
@@ -541,15 +567,7 @@ export class CherryHostTransport extends SyntheticCdpTransport {
       })
       .catch((err: unknown) => {
         this.pendingHostExports.delete(requestId);
-        const maybeCode = (err as Record<string, unknown>)?.code;
-        // Clamp to a canonical error code so the host SDK always receives a
-        // well-typed value. An unknown or non-string code falls back to
-        // 'transfer-corrupt', which is the generic "something went wrong" sentinel.
-        const code =
-          typeof maybeCode === 'string' && VALID_EXPORT_ERROR_CODES.has(maybeCode as never)
-            ? maybeCode
-            : 'transfer-corrupt';
-        this.postExportError(requestId, code);
+        this.postExportError(requestId, exportErrorCodeFromRejection(err));
       });
   }
 
