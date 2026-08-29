@@ -297,7 +297,6 @@
     {
       "includes": [
         "packages/chrome-extension/src/secrets-entry.ts",
-        "packages/cloud-core/src/operations/start.ts",
         "packages/webapp/src/kernel/realm/http-global.ts",
         "packages/webapp/src/kernel/realm/ws-router-page.ts",
         "packages/webapp/src/net/link-header.ts",
