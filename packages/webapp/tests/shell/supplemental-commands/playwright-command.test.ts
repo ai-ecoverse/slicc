@@ -3975,7 +3975,20 @@ const FRAME_HTML = `<!DOCTYPE html>
 // -- Conditional integration tests -------------------------------------------
 
 const chromePath = findChromeExecutable();
-const describeIntegration = chromePath ? describe : describe.skip;
+// Spawning a real Chrome inside the DEFAULT unit suite is irreducibly
+// environmental: under memory/CPU pressure the OS SIGKILLs it during launch and
+// the whole suite fails with `Chrome exited with code null before reporting CDP
+// port` — a machine-state failure, not a playwright-command regression. It also
+// only ever ran on machines that happen to have Chrome, so it was never a
+// uniform local gate.
+//
+// It stays a REAL gate in CI: the `test` job runs on ubuntu-latest, whose image
+// ships Google Chrome at /usr/bin/google-chrome, and sets
+// SLICC_CDP_LAUNCH_TIMEOUT_MS=60000 precisely for this suite's cold start.
+// Locally, opt in with SLICC_TEST_CHROME_INTEGRATION=1.
+const chromeIntegrationEnabled =
+  Boolean(process.env['CI']) || process.env['SLICC_TEST_CHROME_INTEGRATION'] === '1';
+const describeIntegration = chromePath && chromeIntegrationEnabled ? describe : describe.skip;
 const INTEGRATION_CDP_LAUNCH_TIMEOUT_MS = Math.max(getDefaultCdpLaunchTimeoutMs(), 60_000);
 
 describeIntegration('iframe integration', { timeout: 90_000 }, () => {

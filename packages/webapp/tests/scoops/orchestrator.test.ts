@@ -1969,7 +1969,10 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     const started = Date.now();
     const results = await orch.waitForScoops([scoop.jid], 0);
     const elapsed = Date.now() - started;
-    expect(elapsed).toBeLessThan(100);
+    // Anti-hang bound, not a perf budget: the regression is `timeout 0` being
+    // treated as "no timeout" and waiting indefinitely. 100ms only held on an
+    // idle machine (observed 117ms under load).
+    expect(elapsed).toBeLessThan(500);
     expect(results[0].timedOut).toBe(true);
     expect(results[0].summary).toBeNull();
   });
@@ -2067,8 +2070,10 @@ describe('Orchestrator scoop-notify onIncomingMessage visibility', () => {
     const start = Date.now();
     const ack = orch.scheduleScoopWait([a.jid, b.jid], 2000);
     const elapsed = Date.now() - start;
-    // Sync return — must not have done any actual waiting.
-    expect(elapsed).toBeLessThan(50);
+    // Sync return — must not have done any actual waiting. The regression is
+    // awaiting the 2000ms budget above, so 500ms still catches it while
+    // tolerating a loaded machine.
+    expect(elapsed).toBeLessThan(500);
     expect(ack.scheduled).toEqual([a.jid, b.jid]);
     expect(ack.unknown).toEqual([]);
     // Mute is installed synchronously by waitForScoops' sync setup.

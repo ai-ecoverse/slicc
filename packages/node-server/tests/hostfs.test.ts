@@ -37,7 +37,13 @@ beforeAll(async () => {
   const listening = app.listen(0);
   const port = (listening.address() as { port: number }).port;
   baseUrl = `http://127.0.0.1:${port}`;
-  close = () => new Promise((r) => listening.close(() => r()));
+  close = () =>
+    new Promise<void>((r) => {
+      // See the note in cloud-status.test.ts: a pooled keep-alive socket plus a
+      // recycled ephemeral port crosses one test's client onto another's server.
+      listening.closeAllConnections?.();
+      listening.close(() => r());
+    });
 });
 
 afterAll(async () => {

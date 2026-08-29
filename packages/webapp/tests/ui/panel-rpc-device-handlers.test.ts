@@ -448,7 +448,10 @@ describe('createStandalonePanelRpcHandlers — Web Serial', () => {
       handle,
       maxBytes: 10,
       until: new Uint8Array([0x0a]).buffer,
-      timeoutMs: 50,
+      // Budget for the mocked reader to deliver, not the behaviour under test:
+      // this asserts the bytes are FORWARDED. At 50ms a loaded machine could
+      // expire the read before the (async) mock resolved and return no bytes.
+      timeoutMs: 5000,
     });
     expect(new Uint8Array(read.bytes)).toEqual(new Uint8Array([1, 2, 3]));
     const w = await handlers['serial-write']!({

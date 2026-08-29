@@ -451,6 +451,61 @@ Rules for changing this:
 - Never enable retries locally. `CI_RETRIES` in `vitest.config.ts` resolves to `0` without
   `CI`, so `npm run test` on a laptop reports the first failure.
 
+## Keep Tests Inside the Timeout Budget
+
+`testTimeout` is vitest's default **5000ms**; the root config never raises it. A test that
+deterministically spends 2-3s of that budget passes on an idle laptop and fails on a loaded
+one, in a _different file each run_. That moving target is the signature of budget exhaustion,
+not of a shared-resource race — the victim is whichever slow test met peak contention.
+
+Two patterns burn the budget without asserting anything.
+
+**1. Heavy `await import()` inside a test body.** Vitest charges module transform and
+evaluation to whichever test triggers it, so the _first_ test in a file pays for the whole
+graph and the rest cost nothing. In `packages/webapp/tests/shell/ipk/`, `newShell()` imported
+`VirtualFS` and `AlmostBashShellHeadless` lazily: the first call cost **1347ms**, every later
+one 0ms. Hoist them to static top-level imports — `vi.mock()` factories are hoisted above
+imports so mocks still apply, and the cost moves to the collection phase, which no per-test
+timeout covers.
+
+```ts
+// Wrong — the first test in the file absorbs the entire module graph.
+async function newShell() {
+  const { VirtualFS } = await import('../../../src/fs/index.js');
+}
+
+// Right — collection pays for it; no test does.
+import { VirtualFS } from '../../../src/fs/index.js';
+```
+
+Keep the dynamic form only where the test needs a genuinely fresh module instance, i.e. it
+calls `vi.resetModules()` (see `tests/ui/wc/wc-follower.test.ts`). Give those an explicit
+per-test timeout instead.
+
+**2. Real production backoff in a test that is not testing backoff.** Retry schedules are
+injectable for exactly this reason: `setupStandalonePrelude` takes `sleep`, and
+`SessionTrayDurableObject` takes `webhookDeliveryWaitMs`. Omit them and the test sits out the
+full production budget — 3.1s (`CDP_BRIDGE_CONNECT_RETRY_DELAYS_MS`) and 3s
+(`WEBHOOK_DELIVERY_WAIT_MS`) — inside a 5s timeout. Inject the fast value, and leave the
+timing assertion to the dedicated unit test (`connectWithBoundedRetry`, which takes `delays`).
+
+**3. Spawning a real browser from the default suite.** `playwright-command.test.ts`'s
+`iframe integration` block launches real headless Chrome. Under memory/CPU pressure the OS
+SIGKILLs it mid-launch and the whole suite fails with `Chrome exited with code null before
+reporting CDP port` — a machine-state failure that says nothing about the code under test. It
+is gated on `CI || SLICC_TEST_CHROME_INTEGRATION=1`, so CI (ubuntu-latest ships Chrome and
+sets `SLICC_CDP_LAUNCH_TIMEOUT_MS`) keeps it as a real gate while `npm run test` on a laptop
+does not spawn browsers. Run it locally with:
+
+```bash
+SLICC_TEST_CHROME_INTEGRATION=1 npx vitest run \
+  packages/webapp/tests/shell/supplemental-commands/playwright-command.test.ts
+```
+
+Never answer either pattern by raising `testTimeout`: that makes the failure rarer and harder
+to read without removing the wasted seconds. Audit with the timing JSON below — nothing in the
+default suite should sit near a second without an explicit, justified per-test timeout.
+
 ## Read Test Timing
 
 When `CI` is set, the root `test.reporters` adds vitest's `json` reporter and writes

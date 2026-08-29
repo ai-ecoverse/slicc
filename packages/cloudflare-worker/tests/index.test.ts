@@ -3175,7 +3175,13 @@ describe('SessionTrayDurableObject — hibernation', () => {
     const first = new SessionTrayDurableObject(
       state,
       {},
-      { now: () => now, webSocketPairFactory: createFakeWebSocketPair }
+      {
+        now: () => now,
+        webSocketPairFactory: createFakeWebSocketPair,
+        // Fake leader never acks, so without this the webhook POST sits out the
+        // full 3s production delivery budget inside a 5s test timeout.
+        webhookDeliveryWaitMs: 5,
+      }
     );
     state.instance = first;
 
@@ -3212,7 +3218,13 @@ describe('SessionTrayDurableObject — hibernation', () => {
     const revived = new SessionTrayDurableObject(
       state,
       {},
-      { now: () => now, webSocketPairFactory: createFakeWebSocketPair }
+      {
+        now: () => now,
+        webSocketPairFactory: createFakeWebSocketPair,
+        // Fake leader never acks, so without this the webhook POST sits out the
+        // full 3s production delivery budget inside a 5s test timeout.
+        webhookDeliveryWaitMs: 5,
+      }
     );
     state.instance = revived;
 

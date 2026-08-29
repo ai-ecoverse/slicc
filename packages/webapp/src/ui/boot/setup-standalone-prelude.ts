@@ -48,6 +48,20 @@ export interface StandalonePreludeDeps {
   envBaseUrl: string | null;
   window: Window;
   log: BootStageLogger;
+  /**
+   * Backoff sleep for the bounded CDP-connect retry on the standalone/bridge
+   * path (the `new BrowserAPI()` branch below — NOT the extension-leader
+   * transport, which builds its own browser and always uses the real timer).
+   * Defaults to a real timer.
+   *
+   * Tests that exercise a branch *around* the connect rather than the retry
+   * itself inject an instant sleep: otherwise every such case burns the full
+   * `CDP_BRIDGE_CONNECT_RETRY_DELAYS_MS` budget (3.1s) of pure wall clock
+   * inside a 5s test timeout, which is most of a default-suite flake budget.
+   * The retry schedule itself is covered by the `connectWithBoundedRetry`
+   * unit tests, which inject `delays` directly.
+   */
+  sleep?: (ms: number) => Promise<void>;
 }
 
 /**
@@ -280,7 +294,7 @@ async function createExtensionLeaderBrowser(
 export async function setupStandalonePrelude(
   deps: StandalonePreludeDeps
 ): Promise<StandalonePreludeResult> {
-  const { runtimeMode, envBaseUrl, window: win, log } = deps;
+  const { runtimeMode, envBaseUrl, window: win, log, sleep } = deps;
   const isElectronOverlay = runtimeMode === 'electron-overlay';
   // This prelude only builds the page-side runtime (BrowserAPI + CDP). The
   // kernel worker, if any, is spawned later by mountWcUiLive — the follower /
@@ -409,7 +423,7 @@ export async function setupStandalonePrelude(
       // very first connect can lose to the bridge by a few hundred ms.
       // Retry with capped backoff so we recover from the boot race without
       // hanging boot if the bridge truly never comes up.
-      await connectWithBoundedRetry(browser, connectOpts, log);
+      await connectWithBoundedRetry(browser, connectOpts, log, undefined, sleep);
       // If another SLICC tab/window later seizes the single CDP proxy slot, the
       // reconnect guard stops this tab from re-dialing (which would restart the
       // eviction war). Surface that to the user with a banner rather than letting
