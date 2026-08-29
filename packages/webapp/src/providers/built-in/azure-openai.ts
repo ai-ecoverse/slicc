@@ -30,6 +30,7 @@ import type {
   ChatCompletionMessageParam,
   ChatCompletionTool,
 } from 'openai/resources/chat/completions';
+import type { FunctionParameters } from 'openai/resources/shared';
 import { getApiVersionForProvider, getDeploymentForProvider } from '../account-store.js';
 import type { ProviderConfig } from '../types.js';
 
@@ -81,7 +82,7 @@ interface ContentBlock {
   data?: string;
   id?: string;
   name?: string;
-  arguments?: Record<string, unknown>;
+  arguments?: ToolCall['arguments'];
   toolCallId?: string;
   isError?: boolean;
   content?: ContentBlock[];
@@ -161,7 +162,7 @@ function convertTools(tools: Context['tools']): ChatCompletionTool[] | undefined
     function: {
       name: t.name,
       description: t.description,
-      parameters: t.parameters as Record<string, unknown>,
+      parameters: t.parameters as FunctionParameters,
     },
   }));
 }
