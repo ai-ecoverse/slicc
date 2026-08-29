@@ -12,7 +12,10 @@ import {
 } from '../kernel/hid-device-registry.js';
 import * as hidOps from '../kernel/hid-operations.js';
 import type { HttpQueryParams } from '../kernel/realm/http-global.js';
-import type { BrowserFetchOptions } from '../kernel/realm/realm-browser-fetch.js';
+import type {
+  BrowserFetchOptions,
+  JsonEncodableObject,
+} from '../kernel/realm/realm-browser-fetch.js';
 import * as serialOps from '../kernel/serial-operations.js';
 import {
   getNavigatorSerial,
@@ -139,6 +142,20 @@ export interface SprinkleHttp {
 }
 
 /**
+ * Bridge-safe subset of {@link BrowserFetchOptions} for `slicc.browser.fetch`.
+ * The realm-side type admits `URLSearchParams` / `ArrayBuffer` / `Blob` /
+ * `FormData` bodies, but the sprinkle bridge serializes every arg with
+ * `JSON.stringify` (see {@link buildJshNodeScript}), which collapses those
+ * to `{}` before the realm's body serializer ever runs. So `body` is
+ * narrowed here to only the JSON-safe shapes that round-trip cleanly —
+ * mirroring {@link SprinkleFetchInit}. Pass a string (or pre-encoded
+ * payload) for anything binary; non-serializable bodies are out of scope.
+ */
+export interface SprinkleBrowserFetchOptions extends Omit<BrowserFetchOptions, 'body'> {
+  body?: string | JsonEncodableObject | unknown[] | number | boolean | null;
+}
+
+/**
  * `slicc.browser` — Playwright-style CDP surface mirroring the realm
  * `browser` global. Trusted-only (sprinkles + trusted dips). `eval` /
  * `evalAsync` take a code string (functions can't cross the bridge);
@@ -151,7 +168,7 @@ export interface SprinkleBrowserApi {
   evalAsync(tab: unknown, code: string): Promise<unknown>;
   cookie(tab: unknown, name: string): Promise<string | null>;
   localStorage(tab: unknown, key: string): Promise<string | null>;
-  fetch(tab: unknown, url: string, opts?: BrowserFetchOptions): Promise<unknown>;
+  fetch(tab: unknown, url: string, opts?: SprinkleBrowserFetchOptions): Promise<unknown>;
 }
 
 /** Callable `slicc.exec` with the array-form `spawn` companion. */
