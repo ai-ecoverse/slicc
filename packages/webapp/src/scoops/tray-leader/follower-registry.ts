@@ -1,5 +1,6 @@
 import type { FollowerBiscottoIdentity, FollowerTrust } from '@slicc/shared-ts';
 import type { Logger } from '../../base/logger.js';
+import type { FloatType } from '../../base/tray-role.js';
 import type { SprinkleInstance } from '../../shell/sprinkle-manager-handle.js';
 import { DataChannelKeepalive } from '../data-channel-keepalive.js';
 import {
@@ -12,7 +13,9 @@ import {
 import type { TrayDataChannelLike } from '../tray-webrtc.js';
 import { isMessageSendableToTrust } from './biscotto-gate.js';
 
-export type FloatType = 'standalone' | 'extension' | 'electron' | 'ios' | 'unknown';
+// Declared in `base/tray-role.ts` (below the shell) and re-exported here
+// under its established name — see #2537.
+export type { FloatType };
 
 export function deriveFloatType(runtime?: string): FloatType {
   if (!runtime) return 'unknown';

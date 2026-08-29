@@ -1,22 +1,19 @@
 import type { Command } from 'just-bash';
 import { defineCommand } from 'just-bash';
-import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 import {
   type FollowerTrayRuntimeStatus,
   getFollowerStatusWithFallback,
   getFollowerTrayRuntimeStatus,
-} from '../../scoops/tray-follower-status.js';
-import { joinTray as defaultJoinTray } from '../../scoops/tray-join.js';
-import type { FloatType } from '../../scoops/tray-leader/follower-registry.js';
+} from '../../base/tray-follower-status.js';
+import { joinTray as defaultJoinTray } from '../../base/tray-join.js';
 import {
   getLeaderStatusWithFallback,
   type LeaderTrayRuntimeStatus,
-} from '../../scoops/tray-leader.js';
-import { leaveTray as defaultLeaveTray, type TrayLeaveResult } from '../../scoops/tray-leave.js';
-import {
-  normalizeTrayWorkerBaseUrl,
-  parseTrayJoinUrlValue,
-} from '../../scoops/tray-runtime-config.js';
+} from '../../base/tray-leader-status.js';
+import { leaveTray as defaultLeaveTray, type TrayLeaveResult } from '../../base/tray-leave.js';
+import type { FloatType } from '../../base/tray-role.js';
+import { normalizeTrayWorkerBaseUrl, parseTrayJoinUrlValue } from '../../base/tray-url-config.js';
+import { getPanelRpcClient } from '../../kernel/panel-rpc.js';
 
 export interface ConnectedFollowerInfo {
   runtimeId: string;
@@ -65,8 +62,8 @@ export function getTrayResetter(): (() => Promise<LeaderTrayRuntimeStatus>) | un
 
 // localStorage key written by page-side subscriptions in main.ts and
 // propagated to the kernel worker's Map-backed shim via installPageStorageSync.
-// The leader-status counterpart lives in `tray-leader.ts` next to the
-// shared `getLeaderStatusWithFallback` helper.
+// The leader-status counterpart lives in `base/tray-leader-status.ts` next
+// to the shared `getLeaderStatusWithFallback` helper.
 const LEADER_FOLLOWERS_STORAGE_KEY = 'slicc.leaderTrayFollowers';
 
 /**
@@ -132,7 +129,7 @@ function buildPanelRpcResetter(): (() => Promise<LeaderTrayRuntimeStatus>) | und
 }
 
 /** Re-exported for the test surface — same shape as panel-RPC `tray-leave`. */
-export type { TrayLeaveResult } from '../../scoops/tray-leave.js';
+export type { TrayLeaveResult } from '../../base/tray-leave.js';
 
 export interface HostCommandOptions {
   getStatus?: () => LeaderTrayRuntimeStatus;
@@ -141,7 +138,7 @@ export interface HostCommandOptions {
   resetTray?: () => Promise<LeaderTrayRuntimeStatus>;
   /**
    * Drive a tray leave (or follower → leader role switch). Defaults to
-   * the float-detecting helper in `scoops/tray-leave.ts`; tests inject a
+   * the float-detecting helper in `base/tray-leave.ts`; tests inject a
    * fake. The return shape matches the panel-RPC `tray-leave` result so
    * the shell can surface a useful confirmation message.
    */
