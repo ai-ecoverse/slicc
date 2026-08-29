@@ -19,6 +19,14 @@
  *    its own rate limit better than the client.
  */
 
+/** Scalar serialized into a query string via `encodeURIComponent(String(v))`. */
+export type HttpQueryScalar = string | number | boolean;
+
+/** Query value accepted by `buildUrl` / `HttpRequestOpts.params`. */
+export type HttpQueryParamValue = HttpQueryScalar | null | undefined | HttpQueryScalar[];
+
+export type HttpQueryParams = Record<string, HttpQueryParamValue>;
+
 export interface HttpRetryConfig {
   on: number[];
   maxAttempts: number;
@@ -41,7 +49,7 @@ export interface HttpClientConfig {
 }
 
 export interface HttpRequestOpts {
-  params?: Record<string, unknown>;
+  params?: HttpQueryParams;
   headers?: Record<string, string>;
   body?: unknown;
   raw?: boolean;
@@ -108,22 +116,7 @@ function defaultSleep(ms: number): Promise<void> {
   return new Promise((resolve) => setTimeout(resolve, ms));
 }
 
-function buildUrl(
-  baseUrl: string | undefined,
-  path: string,
-  params?: Record<string, unknown>
-): string {
-  let url: string;
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) {
-    url = path;
-  } else if (baseUrl) {
-    const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
-    const rel = path.startsWith('/') ? path : `/${path}`;
-    url = `${base}${rel}`;
-  } else {
-    url = path;
-  }
-  if (!params) return url;
+function appendQueryParams(url: string, params: HttpQueryParams): string {
   const qs: string[] = [];
   for (const [k, v] of Object.entries(params)) {
     if (v === undefined || v === null) continue;
@@ -138,6 +131,21 @@ function buildUrl(
   }
   if (qs.length === 0) return url;
   return url + (url.includes('?') ? '&' : '?') + qs.join('&');
+}
+
+function buildUrl(baseUrl: string | undefined, path: string, params?: HttpQueryParams): string {
+  let url: string;
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(path)) {
+    url = path;
+  } else if (baseUrl) {
+    const base = baseUrl.endsWith('/') ? baseUrl.slice(0, -1) : baseUrl;
+    const rel = path.startsWith('/') ? path : `/${path}`;
+    url = `${base}${rel}`;
+  } else {
+    url = path;
+  }
+  if (!params) return url;
+  return appendQueryParams(url, params);
 }
 
 function mergeHeaders(
@@ -209,6 +217,99 @@ function serializeBody(body: unknown, headers: Record<string, string>): BodyInit
   return String(body);
 }
 
+function hasHeader(headers: Record<string, string>, name: string): boolean {
+  return Object.keys(headers).some((k) => k.toLowerCase() === name.toLowerCase());
+}
+
+async function applyBearerToken(
+  headers: Record<string, string>,
+  token: NonNullable<HttpClientConfig['token']>,
+  req: HttpTokenRequest
+): Promise<void> {
+  const tok = await token(req);
+  if (tok && !hasHeader(headers, 'authorization')) {
+    headers['Authorization'] = `Bearer ${tok}`;
+  }
+}
+
+function combineRequestSignals(
+  callerSignal: AbortSignal | undefined,
+  timeoutMs: number | undefined
+): { signal: AbortSignal | undefined; clearTimeout: (() => void) | null } {
+  if (!timeoutMs) {
+    return { signal: callerSignal, clearTimeout: null };
+  }
+  const timeoutCtl = new AbortController();
+  const timeoutId = setTimeout(() => timeoutCtl.abort(new Error('timeout')), timeoutMs);
+  const clear = () => clearTimeout(timeoutId);
+  if (callerSignal) {
+    return { signal: AbortSignal.any([callerSignal, timeoutCtl.signal]), clearTimeout: clear };
+  }
+  return { signal: timeoutCtl.signal, clearTimeout: clear };
+}
+
+function toHttpResponse(resp: Response, body: unknown): HttpResponse {
+  return {
+    body,
+    headers: Object.fromEntries(resp.headers.entries()),
+    status: resp.status,
+  };
+}
+
+async function unwrapOkResponse(resp: Response, raw: boolean | undefined): Promise<unknown> {
+  const respBody = await readBody(resp);
+  if (raw) return toHttpResponse(resp, respBody);
+  return respBody;
+}
+
+async function throwForResponse(resp: Response, url: string): Promise<never> {
+  const errBody = await readBody(resp).catch(() => null);
+  throw new HttpError(resp.status, resp.statusText, url, errBody);
+}
+
+function retryWaitMs(resp: Response, attempt: number): number {
+  const retryAfter = parseRetryAfter(resp.headers.get('retry-after'));
+  if (retryAfter !== null) return retryAfter;
+  return DEFAULT_BACKOFF_BASE_MS * 2 ** attempt;
+}
+
+interface HttpRequestLoopContext {
+  fetch: HttpGlobalDeps['fetch'];
+  sleep: (ms: number) => Promise<void>;
+  maxAttempts: number;
+  retryOn: Set<number>;
+  timeoutMs?: number;
+}
+
+async function executeRequestLoop(
+  ctx: HttpRequestLoopContext,
+  url: string,
+  init: RequestInit,
+  opts: HttpRequestOpts
+): Promise<unknown> {
+  let lastResponse: Response | null = null;
+  for (let attempt = 0; attempt < ctx.maxAttempts; attempt++) {
+    const { signal, clearTimeout: clearAttemptTimeout } = combineRequestSignals(
+      opts.signal,
+      ctx.timeoutMs
+    );
+    const attemptInit: RequestInit = signal ? { ...init, signal } : init;
+    let resp: Response;
+    try {
+      resp = await ctx.fetch(url, attemptInit);
+    } finally {
+      clearAttemptTimeout?.();
+    }
+    lastResponse = resp;
+    if (resp.ok) return unwrapOkResponse(resp, opts.raw);
+    const willRetry = attempt + 1 < ctx.maxAttempts && ctx.retryOn.has(resp.status);
+    if (!willRetry) return throwForResponse(resp, url);
+    await ctx.sleep(retryWaitMs(resp, attempt));
+  }
+  if (lastResponse) return throwForResponse(lastResponse, url);
+  throw new Error(`http: no attempts made for ${init.method ?? 'GET'} ${url}`);
+}
+
 export function createHttpGlobal(deps: HttpGlobalDeps): HttpGlobal {
   const sleep = deps.sleep ?? defaultSleep;
 
@@ -224,65 +325,24 @@ export function createHttpGlobal(deps: HttpGlobalDeps): HttpGlobal {
       const url = buildUrl(config.baseUrl, path, opts.params);
       const headers = mergeHeaders(config.headers, opts.headers);
       if (config.token) {
-        const tok = await config.token({ method, path, url });
-        if (tok) {
-          const hasAuth = Object.keys(headers).some((k) => k.toLowerCase() === 'authorization');
-          if (!hasAuth) headers['Authorization'] = `Bearer ${tok}`;
-        }
+        await applyBearerToken(headers, config.token, { method, path, url });
       }
       const body = serializeBody(opts.body, headers);
       const init: RequestInit = { method, headers };
       if (body !== undefined) init.body = body;
 
-      let lastResponse: Response | null = null;
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        const timeoutCtl = config.timeoutMs ? new AbortController() : null;
-        const timeoutId = timeoutCtl
-          ? setTimeout(() => timeoutCtl.abort(new Error('timeout')), config.timeoutMs!)
-          : null;
-        // Combine caller signal + per-attempt timeout signal.
-        const combinedSignal =
-          opts.signal && timeoutCtl?.signal
-            ? AbortSignal.any([opts.signal, timeoutCtl.signal])
-            : (opts.signal ?? timeoutCtl?.signal);
-        const attemptInit: RequestInit = combinedSignal
-          ? { ...init, signal: combinedSignal }
-          : init;
-        let resp: Response;
-        try {
-          resp = await deps.fetch(url, attemptInit);
-        } finally {
-          if (timeoutId !== null) clearTimeout(timeoutId);
-        }
-        lastResponse = resp;
-        if (resp.ok) {
-          const respBody = await readBody(resp);
-          if (opts.raw) {
-            return {
-              body: respBody,
-              headers: Object.fromEntries(resp.headers.entries()),
-              status: resp.status,
-            } satisfies HttpResponse;
-          }
-          return respBody;
-        }
-        const willRetry = attempt + 1 < maxAttempts && retryOn.has(resp.status);
-        if (!willRetry) {
-          const errBody = await readBody(resp).catch(() => null);
-          throw new HttpError(resp.status, resp.statusText, url, errBody);
-        }
-        const retryAfter = parseRetryAfter(resp.headers.get('retry-after'));
-        const exp = DEFAULT_BACKOFF_BASE_MS * 2 ** attempt;
-        const wait = retryAfter !== null ? retryAfter : exp;
-        await sleep(wait);
-      }
-      // Unreachable in practice — the loop either returns or throws — but
-      // keeps the type-checker honest if maxAttempts somehow falls to 0.
-      if (lastResponse) {
-        const errBody = await readBody(lastResponse).catch(() => null);
-        throw new HttpError(lastResponse.status, lastResponse.statusText, url, errBody);
-      }
-      throw new Error(`http: no attempts made for ${method} ${url}`);
+      return executeRequestLoop(
+        {
+          fetch: deps.fetch,
+          sleep,
+          maxAttempts,
+          retryOn,
+          timeoutMs: config.timeoutMs,
+        },
+        url,
+        init,
+        opts
+      );
     }
 
     const client: HttpClient = {

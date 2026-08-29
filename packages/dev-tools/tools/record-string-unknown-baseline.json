@@ -11,7 +11,6 @@
   "packages/webapp/src/cdp/har-recorder.ts": 10,
   "packages/webapp/src/cdp/navigation-watcher.ts": 11,
   "packages/webapp/src/fs/mount/backend-local.ts": 1,
-  "packages/webapp/src/kernel/realm/http-global.ts": 2,
   "packages/webapp/src/kernel/realm/py-realm-shared.ts": 1,
   "packages/webapp/src/kernel/telemetry.ts": 1,
   "packages/webapp/src/net/link-header.ts": 1,

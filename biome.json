@@ -296,7 +296,6 @@
     },
     {
       "includes": [
-        "packages/webapp/src/kernel/realm/http-global.ts",
         "packages/webapp/src/net/link-header.ts",
         "packages/webapp/src/shell/supplemental-commands/websocat-command.ts"
       ],
