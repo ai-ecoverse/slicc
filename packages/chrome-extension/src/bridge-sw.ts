@@ -26,10 +26,11 @@
  * sessionId -> tab mappings.
  */
 
-import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
+import { type CDPPayload, SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import {
   EXTENSION_BRIDGE_PORT_NAME,
   EXTENSION_BRIDGE_PROTOCOL_VERSION,
+  type ExtensionBridgeCdpRequest,
   type ExtensionBridgeDiscovery,
   type ExtensionBridgeEnvelope,
   type ExtensionBridgeLick,
@@ -37,6 +38,43 @@ import {
   isBridgeVersionMismatch,
   isExtensionBridgeEnvelope,
 } from '../../webapp/src/cdp/extension-bridge-protocol.js';
+import type { TargetInfo } from '../../webapp/src/cdp/types.js';
+
+/** Result of the bridge's Target.attachToTarget shim. */
+interface BridgeTargetAttachResult extends CDPPayload {
+  sessionId: string;
+}
+
+/** Empty result of the bridge's Target.detachFromTarget shim. */
+type BridgeTargetDetachResult = CDPPayload;
+
+/** Result of the bridge's Target.createTarget shim. */
+interface BridgeTargetCreateResult extends CDPPayload {
+  targetId: string;
+}
+
+/** Result of the bridge's Target.closeTarget shim. */
+interface BridgeTargetCloseResult extends CDPPayload {
+  success: true;
+}
+
+/** Result of the bridge's Target.getTargets shim. */
+interface BridgeTargetGetTargetsResult extends CDPPayload {
+  targetInfos: TargetInfo[];
+}
+
+function readTargetIdParam(params: CDPPayload, label = 'targetId'): string {
+  const targetId = params[label];
+  if (typeof targetId !== 'string') {
+    throw new Error(`Invalid targetId: ${String(targetId)}`);
+  }
+  return targetId;
+}
+
+function readCreateTargetUrl(params: CDPPayload): string {
+  const url = params['url'];
+  return typeof url === 'string' ? url : 'about:blank';
+}
 
 /** Storage key the sibling leader-tab task writes after pinning the leader. */
 const LEADER_TAB_ID_KEY = 'slicc_leader_tab_id';
@@ -71,25 +109,21 @@ export interface BridgeSwDeps {
   maybeUnmaskCdpFrame: (
     tabId: number,
     method: string,
-    params: Record<string, unknown> | undefined
-  ) => Promise<Record<string, unknown> | undefined>;
+    params: CDPPayload | undefined
+  ) => Promise<CDPPayload | undefined>;
   /** Attach chrome.debugger to a tab. Returns true only when this caller
    *  performed the underlying attach and therefore owns the matching detach. */
   attachDebugger: (tabId: number) => Promise<boolean>;
   /** Detach the chrome.debugger from a tab if attached. */
   detachDebugger: (tabId: number) => Promise<void>;
   /** chrome.debugger.sendCommand bound to `{ tabId }`. */
-  sendDebuggerCommand: (
-    tabId: number,
-    method: string,
-    params?: Record<string, unknown>
-  ) => Promise<Record<string, unknown>>;
+  sendDebuggerCommand: (tabId: number, method: string, params?: CDPPayload) => Promise<CDPPayload>;
   /**
    * Subscribe to `chrome.debugger.onEvent`. Returns the unsubscribe function.
    * Tests pass a noop here; production wires `chrome.debugger.onEvent.addListener`.
    */
   subscribeDebuggerEvents: (
-    handler: (tabId: number, method: string, params?: Record<string, unknown>) => void
+    handler: (tabId: number, method: string, params?: CDPPayload) => void
   ) => () => void;
   /** chrome.tabs.query() — minimal subset. */
   queryTabs: () => Promise<ChromeTab[]>;
@@ -372,11 +406,8 @@ export function buildDefaultBridgeSwDeps(overrides?: Partial<BridgeSwDeps>): Bri
       return result ?? {};
     },
     subscribeDebuggerEvents: (handler) => {
-      const wrapped = (
-        source: { tabId: number },
-        method: string,
-        params?: Record<string, unknown>
-      ): void => handler(source.tabId, method, params);
+      const wrapped = (source: { tabId: number }, method: string, params?: CDPPayload): void =>
+        handler(source.tabId, method, params);
       chrome.debugger.onEvent.addListener(wrapped);
       return () => chrome.debugger.onEvent.removeListener(wrapped);
     },
@@ -641,10 +672,10 @@ async function handleBridgeMessage(
 }
 
 async function dispatchCdpCommand(
-  req: { method: string; params?: Record<string, unknown>; sessionId?: string },
+  req: Pick<ExtensionBridgeCdpRequest, 'method' | 'params' | 'sessionId'>,
   state: PortState,
   deps: BridgeSwDeps
-): Promise<Record<string, unknown>> {
+): Promise<CDPPayload> {
   const { method, params, sessionId } = req;
 
   // Per-port `Target.*` shims map to chrome.tabs operations, so the leader
@@ -678,7 +709,7 @@ async function dispatchCdpCommand(
 async function cdpGetTargets(
   _state: PortState,
   deps: BridgeSwDeps
-): Promise<Record<string, unknown>> {
+): Promise<BridgeTargetGetTargetsResult> {
   const [tabs, activeId] = await Promise.all([deps.queryTabs(), deps.queryActiveTabId()]);
   const targetInfos = tabs
     .filter((t): t is ChromeTab & { id: number } => typeof t.id === 'number')
@@ -694,11 +725,11 @@ async function cdpGetTargets(
 }
 
 async function cdpAttachToTarget(
-  params: Record<string, unknown>,
+  params: CDPPayload,
   state: PortState,
   deps: BridgeSwDeps
-): Promise<Record<string, unknown>> {
-  const targetId = params['targetId'] as string;
+): Promise<BridgeTargetAttachResult> {
+  const targetId = readTargetIdParam(params);
   const tabId = parseInt(targetId, 10);
   if (!Number.isFinite(tabId) || tabId <= 0) {
     throw new Error(`Invalid targetId: ${targetId}`);
@@ -716,11 +747,12 @@ async function cdpAttachToTarget(
 }
 
 async function cdpDetachFromTarget(
-  params: Record<string, unknown>,
+  params: CDPPayload,
   state: PortState,
   deps: BridgeSwDeps
-): Promise<Record<string, unknown>> {
-  const sessionId = params['sessionId'] as string;
+): Promise<BridgeTargetDetachResult> {
+  const sessionId = params['sessionId'];
+  if (typeof sessionId !== 'string') return {};
   const tabId = state.sessionToTab.get(sessionId);
   if (tabId === undefined) return {};
 
@@ -742,20 +774,20 @@ async function cdpDetachFromTarget(
 }
 
 async function cdpCreateTarget(
-  params: Record<string, unknown>,
+  params: CDPPayload,
   deps: BridgeSwDeps
-): Promise<Record<string, unknown>> {
-  const url = (params['url'] as string) ?? 'about:blank';
+): Promise<BridgeTargetCreateResult> {
+  const url = readCreateTargetUrl(params);
   const tabId = await deps.createTab(url);
   return { targetId: String(tabId) };
 }
 
 async function cdpCloseTarget(
-  params: Record<string, unknown>,
+  params: CDPPayload,
   state: PortState,
   deps: BridgeSwDeps
-): Promise<Record<string, unknown>> {
-  const targetId = params['targetId'] as string;
+): Promise<BridgeTargetCloseResult> {
+  const targetId = readTargetIdParam(params);
   const tabId = parseInt(targetId, 10);
   if (!Number.isFinite(tabId) || tabId <= 0) {
     throw new Error(`Invalid targetId: ${targetId}`);
