@@ -19,6 +19,16 @@ import {
 } from '../../../src/ui/boot/setup-standalone-prelude.js';
 import type { BootStageLogger } from '../../../src/ui/boot/types.js';
 
+/**
+ * Instant stand-in for the prelude's bounded-retry backoff. These suites
+ * assert what the prelude decides *around* the CDP connect (transport branch,
+ * `hasLocalCdpSurface`, tray seeding) — never how long it waits between
+ * attempts — so the real 3.1s `CDP_BRIDGE_CONNECT_RETRY_DELAYS_MS` budget was
+ * pure wall clock burnt inside a 5s test timeout. The retry schedule itself is
+ * covered by the `connectWithBoundedRetry` suite above, which injects `delays`.
+ */
+const instantSleep = async (): Promise<void> => {};
+
 function createLog(): BootStageLogger & {
   warnCalls: unknown[][];
   infoCalls: unknown[][];
@@ -206,6 +216,7 @@ describe('setupStandalonePrelude — extension leader transport selection', () =
     (globalThis as { chrome?: unknown }).chrome = { runtime: { connect } };
 
     const result = await setupStandalonePrelude({
+      sleep: instantSleep,
       runtimeMode: 'standalone',
       envBaseUrl: null,
       window: createFakeWindow('?slicc=leader&ext=test-ext-id'),
@@ -256,6 +267,7 @@ describe('setupStandalonePrelude — extension leader transport selection', () =
     (globalThis as { chrome?: unknown }).chrome = { runtime: { connect } };
 
     const result = await setupStandalonePrelude({
+      sleep: instantSleep,
       runtimeMode: 'standalone',
       envBaseUrl: null,
       window: createFakeWindow('?slicc=leader&ext=test-ext-id'),
@@ -328,6 +340,7 @@ describe('setupStandalonePrelude — extension leader transport selection', () =
     (globalThis as { chrome?: unknown }).chrome = { runtime: { connect } };
 
     const result = await setupStandalonePrelude({
+      sleep: instantSleep,
       runtimeMode: 'standalone',
       envBaseUrl: null,
       window: createFakeWindow('?slicc=leader&ext=test-ext-id'),
@@ -407,6 +420,7 @@ describe('setupStandalonePrelude — thin-bridge runtime-config origin', () => {
     vi.stubGlobal('fetch', fetchMock);
 
     const result = await setupStandalonePrelude({
+      sleep: instantSleep,
       runtimeMode: 'electron-overlay',
       envBaseUrl: null,
       window: createFakeWindow(search),
@@ -451,6 +465,7 @@ describe('setupStandalonePrelude — thin-bridge runtime-config origin', () => {
 
     try {
       await setupStandalonePrelude({
+        sleep: instantSleep,
         runtimeMode: 'electron-overlay',
         envBaseUrl: null,
         window: createFakeWindow(search),
@@ -484,6 +499,7 @@ describe('setupStandalonePrelude — thin-bridge runtime-config origin', () => {
 
     const fakeWindow = createFakeWindow(search);
     await setupStandalonePrelude({
+      sleep: instantSleep,
       runtimeMode: 'hosted-leader',
       envBaseUrl: null,
       window: fakeWindow,
@@ -541,6 +557,7 @@ describe('setupStandalonePrelude — hasLocalCdpSurface', () => {
     );
 
     const result = await setupStandalonePrelude({
+      sleep: instantSleep,
       runtimeMode: 'follower',
       envBaseUrl: null,
       window: createFakeWindow('?ws=files'),
@@ -557,6 +574,7 @@ describe('setupStandalonePrelude — hasLocalCdpSurface', () => {
     );
 
     const result = await setupStandalonePrelude({
+      sleep: instantSleep,
       runtimeMode: 'follower',
       envBaseUrl: null,
       window: createFakeWindow(
@@ -575,6 +593,7 @@ describe('setupStandalonePrelude — hasLocalCdpSurface', () => {
     );
 
     const result = await setupStandalonePrelude({
+      sleep: instantSleep,
       runtimeMode: 'follower',
       envBaseUrl: null,
       window: createFakeWindow('?bridge=ws%3A%2F%2Flocalhost%3A5710%2Fcdp'),

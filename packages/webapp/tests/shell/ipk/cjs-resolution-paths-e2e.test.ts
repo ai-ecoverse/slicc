@@ -10,14 +10,12 @@
  */
 import 'fake-indexeddb/auto';
 import { describe, expect, it } from 'vitest';
+import { VirtualFS } from '../../../src/fs/index.js';
+import { AlmostBashShellHeadless } from '../../../src/shell/almost-bash-shell-headless.js';
 
 let dbCounter = 0;
 
 async function newShell() {
-  const { VirtualFS } = await import('../../../src/fs/index.js');
-  const { AlmostBashShellHeadless } = await import(
-    '../../../src/shell/almost-bash-shell-headless.js'
-  );
   const fs = await VirtualFS.create({ dbName: `test-cjs-resolve-${dbCounter++}`, wipe: true });
   await fs.mkdir('/work', { recursive: true });
   const shell = new AlmostBashShellHeadless({ fs, cwd: '/work' });

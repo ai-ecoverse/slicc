@@ -7,6 +7,8 @@ import 'fake-indexeddb/auto';
 import { gzipSync } from 'fflate';
 import type { SecureFetch } from 'just-bash';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { VirtualFS } from '../../../src/fs/index.js';
+import { AlmostBashShellHeadless } from '../../../src/shell/almost-bash-shell-headless.js';
 
 /** just-bash does not re-export SecureFetchOptions from its root entry. */
 type SecureFetchOptions = NonNullable<Parameters<SecureFetch>[1]>;
@@ -180,10 +182,6 @@ describe('ipk via real AlmostBashShellHeadless', () => {
   });
 
   async function newShell() {
-    const { VirtualFS } = await import('../../../src/fs/index.js');
-    const { AlmostBashShellHeadless } = await import(
-      '../../../src/shell/almost-bash-shell-headless.js'
-    );
     const fs = await VirtualFS.create({
       dbName: `test-ipk-shell-${dbCounter++}`,
       wipe: true,
