@@ -8,14 +8,69 @@
  * 3. Executes matching scripts in the target page via CDP Runtime.evaluate
  */
 
-import type { BrowserAPI } from '../cdp/browser-api.js';
-import type { CDPTransport } from '../cdp/transport.js';
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { BshDiscoveryFS, BshEntry } from './bsh-discovery.js';
 import type { ScriptCatalog } from './script-catalog.js';
 import { ESBUILD_VERSION } from './supplemental-commands/esbuild-wasm.js';
 
 const log = createLogger('bsh-watchdog');
+
+/** Fields of CDP `Page.frameNavigated.frame` that this watchdog reads. */
+interface PageFrameNavigatedFrame {
+  parentId?: string;
+  url?: string;
+}
+
+/** CDP `Page.frameNavigated` payload — main-frame URL + target session. */
+interface PageFrameNavigatedParams {
+  frame?: PageFrameNavigatedFrame;
+  sessionId?: string;
+}
+
+interface RuntimeExceptionDetails {
+  text: string;
+  exception?: { description?: string };
+}
+
+interface RuntimeEvaluateParams {
+  expression: string;
+  awaitPromise?: boolean;
+  returnByValue?: boolean;
+}
+
+/** `Runtime.enable` accepts an empty params object. */
+interface RuntimeEnableParams {}
+
+interface RuntimeEvaluateResult {
+  exceptionDetails?: RuntimeExceptionDetails;
+}
+
+type FrameNavigatedListener = (params: PageFrameNavigatedParams) => void;
+
+/**
+ * Minimal CDP transport surface for navigation subscription and page evaluation.
+ * Callers pass the real `CDPTransport`; this module never imports the cdp layer.
+ */
+interface BshWatchdogTransport {
+  on(event: 'Page.frameNavigated', listener: FrameNavigatedListener): void;
+  off(event: 'Page.frameNavigated', listener: FrameNavigatedListener): void;
+  send(
+    method: string,
+    params?: RuntimeEnableParams | RuntimeEvaluateParams,
+    sessionId?: string
+  ): Promise<RuntimeEvaluateResult>;
+}
+
+/**
+ * Minimal `BrowserAPI` surface for session-change notifications.
+ * Callers pass the real `BrowserAPI`; this module never imports the cdp layer.
+ */
+interface BshWatchdogBrowserAPI {
+  getTransport(): BshWatchdogTransport;
+  setSessionChangeCallback(
+    cb: ((sessionId: string, transport: BshWatchdogTransport) => void) | undefined
+  ): void;
+}
 
 /**
  * Bundle-first workflow guidance shown when a `.bsh` script contains
@@ -31,11 +86,11 @@ export interface BshWatchdogOptions {
   /** Optional CDP transport to subscribe to navigation events on.
    *  If `browserAPI` is provided, the watchdog will derive the transport
    *  from `browserAPI.getTransport()` and this option may be omitted. */
-  transport?: CDPTransport;
+  transport?: BshWatchdogTransport;
   /** BrowserAPI instance — preferred over raw transport.
    *  When provided, the watchdog registers a session-change callback so it
    *  automatically tracks transport swaps (remote targets, reconnects). */
-  browserAPI?: BrowserAPI;
+  browserAPI?: BshWatchdogBrowserAPI;
   /** Shared script catalog used for `.bsh` discovery and matching. */
   scriptCatalog: ScriptCatalog;
   /** Filesystem used to read discovered `.bsh` script content. */
@@ -43,8 +98,8 @@ export interface BshWatchdogOptions {
 }
 
 export class BshWatchdog {
-  private transport: CDPTransport;
-  private readonly browserAPI?: BrowserAPI;
+  private transport: BshWatchdogTransport;
+  private readonly browserAPI?: BshWatchdogBrowserAPI;
   private readonly fs: BshDiscoveryFS;
   private readonly scriptCatalog: ScriptCatalog;
   private running = false;
@@ -115,7 +170,7 @@ export class BshWatchdog {
    * Swap the underlying CDP transport.
    * Moves the `Page.frameNavigated` listener from the old transport to the new one.
    */
-  setTransport(newTransport: CDPTransport): void {
+  setTransport(newTransport: BshWatchdogTransport): void {
     if (newTransport === this.transport) return;
     this.transport.off('Page.frameNavigated', this.onFrameNavigated);
     this.transport = newTransport;
@@ -137,14 +192,14 @@ export class BshWatchdog {
   }
 
   /** Handle a Page.frameNavigated CDP event. */
-  private readonly onFrameNavigated = (params: Record<string, unknown>): void => {
-    const frame = params['frame'] as { parentId?: string; url?: string } | undefined;
+  private readonly onFrameNavigated: FrameNavigatedListener = (params) => {
+    const frame = params.frame;
 
     // Only handle main frame navigations (no parentId = main frame)
     if (frame?.parentId || !frame?.url) return;
 
     const url = frame.url;
-    const sessionId = params['sessionId'] as string | undefined;
+    const sessionId = params.sessionId;
 
     // Skip non-HTTP URLs (about:blank, chrome://, etc.)
     if (!url.startsWith('http://') && !url.startsWith('https://')) return;
@@ -289,9 +344,7 @@ export class BshWatchdog {
       sessionId
     );
 
-    const exceptionDetails = result['exceptionDetails'] as
-      | { text: string; exception?: { description?: string } }
-      | undefined;
+    const exceptionDetails = result.exceptionDetails;
     if (exceptionDetails) {
       const msg = exceptionDetails.exception?.description ?? exceptionDetails.text;
       log.warn('BSH script evaluation error', { script: scriptPath, url, error: msg });
