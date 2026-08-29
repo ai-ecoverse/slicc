@@ -226,7 +226,7 @@ function makeEngine(
   };
 }
 
-function makeCtx(files: Record<string, Uint8Array> = {}) {
+function makeCtx(files: Record<string, Uint8Array> = {}, env = new Map<string, string>()) {
   const written = new Map<string, Uint8Array | string>();
   return {
     written,
@@ -244,7 +244,7 @@ function makeCtx(files: Record<string, Uint8Array> = {}) {
         stat: async () => ({ isDirectory: false }),
       },
       cwd: '/workspace',
-      env: new Map<string, string>(),
+      env,
       stdin: new Uint8Array(),
     } as never,
   };
@@ -496,6 +496,18 @@ describe('v86 command lifecycle (mocked engine)', () => {
     const loaded = await cmd.execute(['state', 'load', '/tmp/vm.state'], ctx);
     expect(loaded.exitCode).toBe(0);
     expect(emulator.restore_state).toHaveBeenCalled();
+  });
+
+  it('help never advertises a bare /tmp default (#2267)', async () => {
+    // Two separate misses now: `v86 serve` and `v86 screenshot` each had a
+    // hardcoded `/tmp/...` in the usage text that outlived the code change.
+    // Assert on the whole help blob so the next default cannot drift either.
+    const cmd = createV86Command();
+    const help = await cmd.execute(['--help'], makeCtx().ctx);
+    expect(help.exitCode).toBe(0);
+    expect(help.stdout).toContain('$TMPDIR/v86-<name>.png');
+    expect(help.stdout).toContain('$TMPDIR/v86-serve-<name>/');
+    expect(help.stdout).not.toMatch(/\/tmp\/v86/);
   });
 
   it('`stop --help` prints help and leaves the VM running', async () => {

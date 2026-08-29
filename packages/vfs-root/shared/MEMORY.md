@@ -109,7 +109,7 @@ Rules:
 
 - Keep durable preferences, stable project facts, validated approaches, named resources, and the pitfalls worth not repeating.
 - Organize retained information into concise per-topic sections rather than one flat list. Let the topic lead the heading; preferences, projects and pitfalls are what to look for, not a required table of contents.
-- Never write next to the memory file. It is versioned, so backups and scratch copies beside it are noise; drafts belong in `{{SCRATCH_DIR}}`. Do not draft in `/tmp/` either: it is shared with every other scoop, which can read and overwrite what you leave there.
+- Never write next to the memory file. It is versioned, so backups and scratch copies beside it are noise; drafts belong in `{{SCRATCH_DIR}}`. Do not draft in the shared `/tmp/` root either — every other unit can read and overwrite what you leave there. `$TMPDIR` is your own directory under it and is the right home for ordinary scratch, but a full rewrite of durable memory still belongs in `{{SCRATCH_DIR}}`, which is private to the run and removed when the pass ends.
 - Shell tools only. Interpreters such as `python3` and `node -e` are not on your allow-list, so reaching for one costs an approval round-trip and may fail even when approved — `awk`, `sed`, `wc` and `sort` cover every measurement this pass needs.
 - End every `##` and `###` section heading with its last-verified date in `YYYY-MM-DD` form, for example `## Deployment pipeline (2026-08-06)`. Dates are UTC, matching the session archive timestamps, so a late-evening freeze west of UTC stamps the next day.
 - Stamp sections you write or confirm with today's date, {{TODAY}}.
@@ -126,7 +126,7 @@ Add curator instructions here, for example: also update the knowledge base at /p
 
 writablePaths defaults to the memory file alone rather than /workspace/, because the curator can run upskill and a directory-wide grant would also let it install skills into /workspace/skills. Widen it only as far as a task genuinely needs; a single file is a valid entry, not just a directory.
 
-Scratch space needs no entry here. The curator spawns under a fixed per-cone name (memory-curator for the primary cone), so the bridge grants it {{SCRATCH_DIR}} — private to the run, writable without a prompt, and removed when the pass ends — and that is where the prompt sends drafts. /tmp/ is writable too, but it is shared with every other scoop and visible to the cone, so a full rewrite of durable memory does not belong there.
+Scratch space needs no entry here. The curator spawns under a fixed per-cone name (memory-curator for the primary cone), so the bridge grants it {{SCRATCH_DIR}} — private to the run, writable without a prompt, and removed when the pass ends — and that is where the prompt sends drafts. $TMPDIR is writable too and is this unit's own directory, but it outlives the run and stays readable by the cone, so a full rewrite of durable memory does not belong there.
 
 thinkingLevel accepts off, minimal, low, medium, high, or xhigh. Curation is cheaper with reasoning than without: an unreasoned pass converges on the budget by trial and error, and because every turn re-reads the whole context, turn count is what the pass costs. Lower it to off only if you also shrink the prompt to a single mechanical instruction.
 

@@ -110,6 +110,7 @@ export function createHandlerCtx(opts?: {
   state?: PlaywrightState;
   positional?: string[];
   flags?: Record<string, string>;
+  scratchDir?: string;
 }): PlaywrightHandlerCtx {
   return {
     browser: opts?.browser ?? createMockBrowser().browser,
@@ -117,5 +118,8 @@ export function createHandlerCtx(opts?: {
     state: opts?.state ?? createPlaywrightState(),
     positional: opts?.positional ?? [],
     flags: opts?.flags ?? {},
+    // Defaults to the shared root so existing cases keep asserting the paths
+    // they always did; the per-unit behaviour is covered explicitly.
+    scratchDir: opts?.scratchDir ?? '/tmp',
   };
 }

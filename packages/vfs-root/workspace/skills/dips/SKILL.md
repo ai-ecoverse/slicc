@@ -114,7 +114,7 @@ The flow:
 
 ```bash
 # Inside a feed_scoop reply to a dip lick:
-result=$(agent /tmp "curl,jq" "Fetch <url>, return field 'price' as a number.")
+result=$(agent "$TMPDIR" "curl,jq" "Fetch <url>, return field 'price' as a number.")
 # Render a fresh dip with `result` inline.
 ```
 

@@ -236,6 +236,43 @@ describe('screenshotHandler', () => {
     expect(screenshot).toHaveBeenCalledWith(expect.objectContaining({ fullPage: false }));
   });
 
+  it('defaults into the calling unit scratch dir, not the shared root (#2267)', async () => {
+    // Two cones screenshotting in the same second would otherwise collide on
+    // `/tmp/screenshot-<ts>.png`, and neither cone's "New chat" would dispose
+    // of the other's file.
+    const { browser } = makeBrowser({});
+    const writeFile = vi.fn(async () => undefined);
+    const r = await screenshotHandler(
+      createHandlerCtx({
+        browser,
+        flags: { tab: TAB },
+        fs: { writeFile: writeFile as unknown as VirtualFS['writeFile'] },
+        scratchDir: '/tmp/cone-adobe',
+      })
+    );
+    expect(r.exitCode).toBe(0);
+    expect(r.stdout).toContain('Screenshot saved to /tmp/cone-adobe/screenshot-');
+    expect(writeFile).toHaveBeenCalledWith(
+      expect.stringMatching(/^\/tmp\/cone-adobe\/screenshot-\d+\.png$/),
+      expect.anything()
+    );
+  });
+
+  it('an explicit --filename still wins over the scratch default', async () => {
+    const { browser } = makeBrowser({});
+    const writeFile = vi.fn(async () => undefined);
+    const r = await screenshotHandler(
+      createHandlerCtx({
+        browser,
+        flags: { tab: TAB, filename: '/workspace/out.png' },
+        fs: { writeFile: writeFile as unknown as VirtualFS['writeFile'] },
+        scratchDir: '/tmp/cone-adobe',
+      })
+    );
+    expect(r.exitCode).toBe(0);
+    expect(writeFile).toHaveBeenCalledWith('/workspace/out.png', expect.anything());
+  });
+
   it('clips to an element resolved by backendNodeId', async () => {
     const { browser, screenshot } = makeBrowser({
       sendImpl: (m) => {

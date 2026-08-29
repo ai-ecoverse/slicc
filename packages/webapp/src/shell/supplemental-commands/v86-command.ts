@@ -23,6 +23,7 @@ import type { Command, CommandContext, SecureFetch } from 'just-bash';
 import { defineCommand } from 'just-bash';
 import type { ProcessManager } from '../../kernel/process-manager.js';
 import { createProxiedFetch } from '../proxied-fetch.js';
+import { scratchDir } from '../tmpdir-env.js';
 import { GLOBAL_IPK_ADD } from './shared.js';
 import { isHelpRequest, stripOptionTerminator, subcommandHelpText } from './subcommand-help.js';
 import {
@@ -73,9 +74,9 @@ Usage:
   v86 mouse [-n name] move <dx> <dy>      Move pointer (relative)
   v86 mouse [-n name] click [left|right|middle] [--double]
   v86 mouse [-n name] --to <x>,<y>        Best-effort absolute positioning
-  v86 screenshot [-n name] [<file.png>]   VGA output -> PNG (default /tmp/v86-<name>.png)
+  v86 screenshot [-n name] [<file.png>]   VGA output -> PNG (default $TMPDIR/v86-<name>.png)
   v86 text [-n name]                      Dump text-mode screen as plain text
-  v86 serve [-n name] [--fps <1-10>]      Stream the screen into /tmp/v86-serve-<name>/
+  v86 serve [-n name] [--fps <1-10>]      Stream the screen into $TMPDIR/v86-serve-<name>/
   v86 serve [-n name] --stop              (viewer index.html + live frames; mint an
                                           iframe-able URL with \`serve <that dir>\`)
   v86 serial [-n name] --send <text>      Write to the guest serial console
@@ -938,7 +939,7 @@ async function v86Screenshot(args: readonly string[], ctx: CommandContext): Prom
       `no graphical frame for '${name}' — the guest is in text mode; use \`v86 text -n ${name}\``
     );
   }
-  const outPath = ctx.fs.resolvePath(ctx.cwd, rest[0] ?? `/tmp/v86-${name}.png`);
+  const outPath = ctx.fs.resolvePath(ctx.cwd, rest[0] ?? `${scratchDir(ctx.env)}/v86-${name}.png`);
   const png = await encodeFramePng(frame);
   await ctx.fs.writeFile(outPath, png);
   return ok(`${outPath} (${frame.width}x${frame.height})\n`);
@@ -1055,7 +1056,7 @@ async function v86Serve(args: readonly string[], ctx: CommandContext): Promise<C
     }
   }
 
-  const dir = `/tmp/v86-serve-${name}`;
+  const dir = `${scratchDir(ctx.env)}/v86-serve-${name}`;
   await ctx.fs.mkdir(dir, { recursive: true });
   await ctx.fs.writeFile(`${dir}/index.html`, serveViewerHtml(name, fps));
 

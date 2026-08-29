@@ -269,7 +269,7 @@ Pattern:
 
 ```bash
 # Inside the owning scoop's reply to a lick:
-result=$(agent /tmp "curl,jq" "Look up '$Q' in <api>, return the price.")
+result=$(agent "$TMPDIR" "curl,jq" "Look up '$Q' in <api>, return the price.")
 sprinkle send giro-winners "$(jq -n --arg r "$result" '{result:$r}')"
 ```
 

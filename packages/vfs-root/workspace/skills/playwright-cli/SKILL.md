@@ -161,7 +161,7 @@ Teleport is for leader/follower tray auth handoffs. Scoped to a specific tab —
 ### Screenshots
 
 ```bash
-playwright-cli screenshot --tab=<id>                             # Save to /tmp/screenshot-<ts>.png
+playwright-cli screenshot --tab=<id>                             # Save to $TMPDIR/screenshot-<ts>.png
 playwright-cli screenshot --tab=<id> --filename=page.png         # Save to custom path
 playwright-cli screenshot --tab=<id> e5                          # Clip to an element (positional = MAIN-FRAME ref, not a path)
 playwright-cli screenshot --tab=<id> --fullPage                  # Full scrollable page (alias: --full-page)
@@ -218,8 +218,8 @@ The browser displays things to the human; `open --view` is what lets _you_ see t
 1. `serve /workspace/app` — open the app (the human sees it).
 2. `playwright-cli tab-list` — find the tab by URL, note the targetId.
 3. `playwright-cli snapshot --tab=<id>` — required before screenshot, and often answers your question on its own.
-4. `playwright-cli screenshot --tab=<id> --filename=/tmp/shot.png` — consider `--max-width` to keep the file small.
-5. `open --view /tmp/shot.png` — now you can see it. Strongly prefer doing this from a scoop, not the cone.
+4. `playwright-cli screenshot --tab=<id> --filename="$TMPDIR/shot.png"` — consider `--max-width` to keep the file small.
+5. `open --view "$TMPDIR/shot.png"` — now you can see it. Strongly prefer doing this from a scoop, not the cone.
 
 **Don't:**
 
@@ -330,7 +330,7 @@ playwright-cli stop-recording <recordingId>        # Stop and save HAR
 - The SLICC app tab and Chrome internal UI tabs are automatically excluded from `tab-list`.
 - `fill` clears and types into regular inputs, textareas, and `contenteditable` elements. Use `--submit` to press Enter after. If the text or an `eval` expression starts with `-`, put `--` before it so it is not parsed as a flag.
 - Negative numbers for `mousewheel` / `mousemove` are positionals (no `--` needed): `mousewheel --tab=<id> 0 -300`.
-- Screenshots default to `/tmp/screenshot-<timestamp>.png`. Use `--filename=path` to save elsewhere —
+- Screenshots default to `$TMPDIR/screenshot-<timestamp>.png` — your own scratch directory, not the shared root. Use `--filename=path` to save elsewhere —
   `screenshot <path>` is an error, because that slot is the element ref.
 - Unsupported flags and extra positionals are rejected per subcommand, so a probe that exits 0 means
   the flag was honoured — nothing is silently dropped.
