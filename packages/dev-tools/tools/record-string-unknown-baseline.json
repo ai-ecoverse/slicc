@@ -36,6 +36,5 @@
   "packages/webapp/src/ui/boot/setup-welcome-flow.ts": 13,
   "packages/webapp/src/ui/dip.ts": 4,
   "packages/webapp/src/ui/sprinkle-bridge.ts": 2,
-  "packages/webapp/src/ui/sprinkle-renderer.ts": 3,
-  "packages/webcomponents/src/overlay/slicc-permissions.stories.ts": 5
+  "packages/webapp/src/ui/sprinkle-renderer.ts": 3
 }

@@ -56,6 +56,95 @@ const meta: Meta<PlaygroundArgs> = {
 export default meta;
 type Story = StoryObj<PlaygroundArgs>;
 
+/** Per-track diagnostic row for media-stream grants. */
+interface MediaTrackSummary {
+  kind: string;
+  label: string;
+  settings: MediaTrackSettings | string;
+}
+
+/** Diagnostic summary for camera / microphone / screenshare grants. */
+interface MediaStreamSummary {
+  id: string;
+  tracks: MediaTrackSummary[];
+}
+
+/** USB device fields the story log surfaces from a granted device. */
+interface UsbDeviceSummary {
+  productName?: string;
+  manufacturerName?: string;
+  vendorId?: number;
+  productId?: number;
+  serialNumber?: string;
+}
+
+/** HID device fields the story log surfaces from a granted device. */
+interface HidDeviceSummary {
+  productName?: string;
+  vendorId?: number;
+  productId?: number;
+}
+
+/** Serial-port info from `getInfo()`, when the call succeeds. */
+interface SerialPortInfo {
+  usbVendorId?: number;
+  usbProductId?: number;
+}
+
+/** Serial-port diagnostic when `getInfo()` throws. */
+interface SerialPortError {
+  error: string;
+}
+
+type SerialPortSummary = SerialPortInfo | SerialPortError;
+
+/** Successful directory walk for a filesystem grant. */
+interface FilesystemWalkOk {
+  name: string;
+  entries: number;
+  files: number;
+  dirs: number;
+  truncated: boolean;
+}
+
+/** Directory walk failure for a filesystem grant. */
+interface FilesystemWalkError {
+  name: string;
+  error: string;
+}
+
+type FilesystemWalkSummary = FilesystemWalkOk | FilesystemWalkError;
+
+/** Filesystem grant diagnostics (gesture metadata + walk result). */
+type FilesystemGrantSummary = {
+  source: 'picker' | 'drop';
+  permission: 'granted' | 'prompt' | 'denied';
+} & FilesystemWalkSummary;
+
+interface UsbGrantSummary {
+  device: UsbDeviceSummary;
+}
+
+interface HidGrantSummary {
+  devices: HidDeviceSummary[];
+}
+
+interface SerialGrantSummary {
+  port: SerialPortSummary;
+}
+
+/** Empty bag for grant kinds the playground does not summarize (e.g. popup). */
+type EmptyGrantSummary = Record<string, never>;
+
+/** Discriminated-by-shape diagnostic payload logged after a grant. */
+type GrantSummary =
+  | FilesystemGrantSummary
+  | MediaStreamSummary
+  | UsbGrantSummary
+  | HidGrantSummary
+  | SerialGrantSummary
+  | EmptyGrantSummary;
+
 /**
  * Diagnostic summary for a single grant. Real-device pickers expose useful
  * shape — labels, IDs, settings — so the log helps verify the picker
@@ -63,7 +152,7 @@ type Story = StoryObj<PlaygroundArgs>;
  * filesystem flow this is filled in asynchronously after iterating the
  * directory (see {@link describeFilesystemHandle}).
  */
-async function summarizeGrant(detail: PermissionGrant): Promise<Record<string, unknown>> {
+async function summarizeGrant(detail: PermissionGrant): Promise<GrantSummary> {
   if (detail.kind === 'filesystem') {
     return {
       source: detail.source,
@@ -104,7 +193,7 @@ interface UsbLike {
   productId?: number;
   serialNumber?: string;
 }
-function describeUsb(device: unknown): Record<string, unknown> {
+function describeUsb(device: unknown): UsbDeviceSummary {
   const d = device as UsbLike;
   return {
     productName: d?.productName,
@@ -120,15 +209,15 @@ interface HidLike {
   vendorId?: number;
   productId?: number;
 }
-function describeHid(device: unknown): Record<string, unknown> {
+function describeHid(device: unknown): HidDeviceSummary {
   const d = device as HidLike;
   return { productName: d?.productName, vendorId: d?.vendorId, productId: d?.productId };
 }
 
 interface SerialLike {
-  getInfo?: () => { usbVendorId?: number; usbProductId?: number };
+  getInfo?: () => SerialPortInfo;
 }
-function describeSerial(port: unknown): Record<string, unknown> {
+function describeSerial(port: unknown): SerialPortSummary {
   const p = port as SerialLike;
   try {
     return p?.getInfo?.() ?? {};
@@ -145,7 +234,7 @@ function describeSerial(port: unknown): Record<string, unknown> {
  */
 async function describeFilesystemHandle(
   handle: FileSystemDirectoryHandle
-): Promise<Record<string, unknown>> {
+): Promise<FilesystemWalkSummary> {
   let files = 0;
   let dirs = 0;
   let entries = 0;
