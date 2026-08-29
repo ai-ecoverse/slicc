@@ -1,4 +1,4 @@
-import { reassembleCDPResponse, sendCDPResponse } from '@slicc/shared-ts';
+import { type CDPPayload, reassembleCDPResponse, sendCDPResponse } from '@slicc/shared-ts';
 import { type RemoteCDPSender, RemoteCDPTransport } from '../../cdp/remote-cdp-transport.js';
 import type { CDPTransport } from '../../cdp/transport.js';
 import type { FollowerToLeaderMessage } from '../tray-sync-protocol.js';
@@ -77,7 +77,7 @@ export class CDPRouter {
     requestId: string,
     localTargetId: string,
     method: string,
-    params: Record<string, unknown> | undefined,
+    params: CDPPayload | undefined,
     sessionId: string | undefined,
     requesterBootstrapId: string
   ): Promise<void> {
@@ -112,9 +112,9 @@ export class CDPRouter {
   private async executeFollowerBringToFront(
     transport: CDPTransport,
     localTargetId: string,
-    params: Record<string, unknown> | undefined,
+    params: CDPPayload | undefined,
     sessionId: string | undefined
-  ): Promise<Record<string, unknown>> {
+  ): Promise<CDPPayload> {
     const generation = this.previewGeneration;
     const sequence = ++this.previewSequence;
     this.previewRequestsInFlight++;
@@ -308,7 +308,7 @@ export class CDPRouter {
     targetRuntimeId: string,
     localTargetId: string,
     method: string,
-    params: Record<string, unknown> | undefined,
+    params: CDPPayload | undefined,
     sessionId: string | undefined,
     requesterBootstrapId: string
   ): void {
@@ -367,7 +367,7 @@ export class CDPRouter {
   handleCDPEvent(
     bootstrapId: string,
     method: string,
-    params: Record<string, unknown>,
+    params: CDPPayload,
     sessionId?: string
   ): void {
     const followerRuntimeId = this.context.followers.runtimeIdForBootstrap(bootstrapId);
