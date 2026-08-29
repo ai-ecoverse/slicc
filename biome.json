@@ -338,7 +338,6 @@
     {
       "includes": [
         "packages/webapp/providers/adobe.ts",
-        "packages/webapp/src/kernel/cdp-worker-proxy.ts",
         "packages/webapp/tests/providers/adobe-provider.test.ts"
       ],
       "linter": {

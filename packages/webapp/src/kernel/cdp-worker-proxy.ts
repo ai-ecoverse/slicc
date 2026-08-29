@@ -31,6 +31,8 @@
  * forwarder mirrors that into `realTransport.on` / `realTransport.off`.
  */
 
+import type { CDPPayload } from '@slicc/shared-ts';
+
 import type { CDPTransport } from '../cdp/transport.js';
 import type { CDPEventListener } from '../cdp/types.js';
 import {
@@ -39,6 +41,7 @@ import {
   type ParsedCdpEvent,
   type ParsedCdpResponse,
 } from './cdp-bridge.js';
+import type { KernelTransport } from './transport.js';
 import {
   createMessageChannelTransport,
   type MessagePortLike,
@@ -52,21 +55,24 @@ export interface CdpCmdMsg {
   type: 'cdp-cmd';
   id: number;
   method: string;
-  params?: Record<string, unknown>;
+  /** Per-method CDP params; shape is known only to the caller that issued the method. */
+  params?: CDPPayload;
   sessionId?: string;
 }
 
 export interface CdpResponseMsg {
   type: 'cdp-response';
   id: number;
-  result?: Record<string, unknown>;
+  /** Per-method CDP result; shape is known only to the caller that issued the method. */
+  result?: CDPPayload;
   error?: string;
 }
 
 export interface CdpEventMsg {
   type: 'cdp-event';
   method: string;
-  params?: Record<string, unknown>;
+  /** Per-method CDP event params; shape depends on `method`. */
+  params?: CDPPayload;
 }
 
 export interface CdpSubscribeMsg {
@@ -150,6 +156,59 @@ export class WorkerCdpProxy extends CdpTransportBridge {
 // Returns a stop function that tears down the forwarder.
 // ---------------------------------------------------------------------------
 
+/** Run a single inbound worker→page CDP wire message against the real transport. */
+async function handlePageCdpIncoming(
+  msg: WorkerCdpMessage,
+  realTransport: CDPTransport,
+  transport: KernelTransport<WorkerCdpMessage, WorkerCdpMessage>,
+  eventListeners: Map<string, CDPEventListener>
+): Promise<void> {
+  const env = msg as { type?: string };
+  if (!env?.type) return;
+
+  if (env.type === 'cdp-cmd') {
+    const cmd = msg as CdpCmdMsg;
+    try {
+      const result = await realTransport.send(cmd.method, cmd.params, cmd.sessionId);
+      transport.send({
+        type: 'cdp-response',
+        id: cmd.id,
+        result,
+      } satisfies CdpResponseMsg);
+    } catch (err) {
+      transport.send({
+        type: 'cdp-response',
+        id: cmd.id,
+        error: err instanceof Error ? err.message : String(err),
+      } satisfies CdpResponseMsg);
+    }
+    return;
+  }
+
+  if (env.type === 'cdp-subscribe') {
+    const sub = msg as CdpSubscribeMsg;
+    if (eventListeners.has(sub.event)) return; // idempotent
+    const listener: CDPEventListener = (params) => {
+      transport.send({
+        type: 'cdp-event',
+        method: sub.event,
+        params,
+      } satisfies CdpEventMsg);
+    };
+    eventListeners.set(sub.event, listener);
+    realTransport.on(sub.event, listener);
+    return;
+  }
+
+  if (env.type === 'cdp-unsubscribe') {
+    const unsub = msg as CdpUnsubscribeMsg;
+    const listener = eventListeners.get(unsub.event);
+    if (!listener) return;
+    eventListeners.delete(unsub.event);
+    realTransport.off(unsub.event, listener);
+  }
+}
+
 export function startPageCdpForwarder(
   port: MessagePortLike,
   realTransport: CDPTransport
@@ -163,52 +222,9 @@ export function startPageCdpForwarder(
   // we expect 0/1 transitions per event method here.
   const eventListeners = new Map<string, CDPEventListener>();
 
-  const unsubscribeIncoming = transport.onMessage(async (msg) => {
-    const env = msg as { type?: string };
-    if (!env?.type) return;
-
-    if (env.type === 'cdp-cmd') {
-      const cmd = msg as CdpCmdMsg;
-      try {
-        const result = await realTransport.send(cmd.method, cmd.params, cmd.sessionId);
-        transport.send({
-          type: 'cdp-response',
-          id: cmd.id,
-          result,
-        } satisfies CdpResponseMsg);
-      } catch (err) {
-        transport.send({
-          type: 'cdp-response',
-          id: cmd.id,
-          error: err instanceof Error ? err.message : String(err),
-        } satisfies CdpResponseMsg);
-      }
-      return;
-    }
-
-    if (env.type === 'cdp-subscribe') {
-      const sub = msg as CdpSubscribeMsg;
-      if (eventListeners.has(sub.event)) return; // idempotent
-      const listener: CDPEventListener = (params) => {
-        transport.send({
-          type: 'cdp-event',
-          method: sub.event,
-          params,
-        } satisfies CdpEventMsg);
-      };
-      eventListeners.set(sub.event, listener);
-      realTransport.on(sub.event, listener);
-      return;
-    }
-
-    if (env.type === 'cdp-unsubscribe') {
-      const unsub = msg as CdpUnsubscribeMsg;
-      const listener = eventListeners.get(unsub.event);
-      if (!listener) return;
-      eventListeners.delete(unsub.event);
-      realTransport.off(unsub.event, listener);
-      return;
-    }
+  // Sync listener — async cmd handling is fire-and-forget via void (noMisusedPromises).
+  const unsubscribeIncoming = transport.onMessage((msg): void => {
+    void handlePageCdpIncoming(msg, realTransport, transport, eventListeners);
   });
 
   return () => {
