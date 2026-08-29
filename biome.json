@@ -282,18 +282,7 @@
       }
     },
     {
-      "includes": ["packages/webapp/cloud/app.js"],
-      "linter": {
-        "rules": {
-          "complexity": {
-            "noExcessiveLinesPerFunction": "off"
-          }
-        }
-      }
-    },
-    {
       "includes": [
-        "packages/webapp/cloud/app.js",
         "packages/webapp/src/providers/built-in/bedrock-camp.ts",
         "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts",
         "packages/webapp/tests/ui/provider-settings.test.ts"
