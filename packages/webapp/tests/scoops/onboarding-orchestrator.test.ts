@@ -3,6 +3,7 @@ import 'fake-indexeddb/auto';
 import { VirtualFS } from '../../src/fs/index.js';
 import { __test__ as messageTest } from '../../src/scoops/onboarding-messages.js';
 import {
+  type OnboardingCompleteWithProviderLick,
   OnboardingOrchestrator,
   type ProviderCatalogue,
 } from '../../src/scoops/onboarding-orchestrator.js';
@@ -16,8 +17,6 @@ type AccountSnapshot = {
 };
 
 type DipMessage = Record<string, unknown> & { type: string };
-
-type FinalLickPayload = { action: string; data: Record<string, unknown> };
 
 function fakeFetch(impl: (url: string) => Response | Promise<Response>) {
   return vi.fn(async (input: RequestInfo | URL) => {
@@ -70,7 +69,7 @@ function makeHarness(
   const systemMessages: string[] = [];
   const dipRefs: string[] = [];
   const dipInbox: DipMessage[] = [];
-  const finalLicks: FinalLickPayload[] = [];
+  const finalLicks: OnboardingCompleteWithProviderLick[] = [];
   const accounts: AccountSnapshot[] = [];
   const selectedModels: string[] = [];
   const orchestrator = new OnboardingOrchestrator({
@@ -83,7 +82,7 @@ function makeHarness(
     setSelectedModel: (id) => selectedModels.push(id),
     resolveModelLabel: (_p, m) => m.toUpperCase(),
     broadcastToDip: (msg) => dipInbox.push(msg),
-    fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
+    fireFinalLick: (data) => finalLicks.push(data),
     fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
     rand: () => 0,
   });
@@ -272,7 +271,7 @@ describe('OnboardingOrchestrator', () => {
       const fetchImpl = fakeFetch(() => new Response('{"error":"bad"}', { status: 401 }));
       const fs = VirtualFS._createSyncForTests('reject-' + Math.random());
       const accounts: AccountSnapshot[] = [];
-      const finalLicks: FinalLickPayload[] = [];
+      const finalLicks: OnboardingCompleteWithProviderLick[] = [];
       const dipInbox: DipMessage[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
@@ -282,7 +281,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: (id, key) => accounts.push({ id, key }),
         setSelectedModel: () => {},
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
+        fireFinalLick: (data) => finalLicks.push(data),
         fetchImpl,
         rand: () => 0,
       });
@@ -303,7 +302,7 @@ describe('OnboardingOrchestrator', () => {
       }) as unknown as typeof fetch;
       const fs = VirtualFS._createSyncForTests('skipped-' + Math.random());
       const accounts: AccountSnapshot[] = [];
-      const finalLicks: FinalLickPayload[] = [];
+      const finalLicks: OnboardingCompleteWithProviderLick[] = [];
       const dipInbox: DipMessage[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
@@ -313,7 +312,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: (id, key) => accounts.push({ id, key }),
         setSelectedModel: () => {},
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
+        fireFinalLick: (data) => finalLicks.push(data),
         fetchImpl,
         rand: () => 0,
       });
@@ -351,7 +350,7 @@ describe('OnboardingOrchestrator', () => {
     it('leaves the selected model untouched when the catalogue has no models for the provider', async () => {
       const fs = VirtualFS._createSyncForTests('no-models-' + Math.random());
       const selectedModels: string[] = [];
-      const finalLicks: FinalLickPayload[] = [];
+      const finalLicks: OnboardingCompleteWithProviderLick[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
         postSystemMessage: () => {},
@@ -363,7 +362,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: () => {},
         setSelectedModel: (id) => selectedModels.push(id),
         broadcastToDip: () => {},
-        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
+        fireFinalLick: (data) => finalLicks.push(data),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
       });
@@ -440,7 +439,7 @@ describe('OnboardingOrchestrator', () => {
       const fs = VirtualFS._createSyncForTests('catalogue-throw-' + Math.random());
       const accounts: AccountSnapshot[] = [];
       const dipInbox: DipMessage[] = [];
-      const finalLicks: { action: string; data: Record<string, unknown> }[] = [];
+      const finalLicks: OnboardingCompleteWithProviderLick[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
         postSystemMessage: () => {},
@@ -451,7 +450,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: (id, key) => accounts.push({ id, key }),
         setSelectedModel: () => {},
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
+        fireFinalLick: (data) => finalLicks.push(data),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
       });
@@ -528,7 +527,7 @@ describe('OnboardingOrchestrator', () => {
       // reload because nothing dispatched `slicc:accounts-changed`.
       const fs = VirtualFS._createSyncForTests('changed-ok-' + Math.random());
       const onAccountsChanged = vi.fn();
-      const finalLicks: FinalLickPayload[] = [];
+      const finalLicks: OnboardingCompleteWithProviderLick[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
         postSystemMessage: () => {},
@@ -537,7 +536,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: () => {},
         setSelectedModel: () => {},
         broadcastToDip: () => {},
-        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
+        fireFinalLick: (data) => finalLicks.push(data),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         onAccountsChanged,
@@ -585,7 +584,7 @@ describe('OnboardingOrchestrator', () => {
     it('swallows onAccountsChanged exceptions without rolling back the save', async () => {
       const fs = VirtualFS._createSyncForTests('changed-throw-' + Math.random());
       const accounts: AccountSnapshot[] = [];
-      const finalLicks: FinalLickPayload[] = [];
+      const finalLicks: OnboardingCompleteWithProviderLick[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
         postSystemMessage: () => {},
@@ -594,7 +593,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: (id, key) => accounts.push({ id, key }),
         setSelectedModel: () => {},
         broadcastToDip: () => {},
-        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
+        fireFinalLick: (data) => finalLicks.push(data),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         onAccountsChanged: () => {
@@ -616,7 +615,7 @@ describe('OnboardingOrchestrator', () => {
     it('sets the model and fires the final lick on successful OAuth with a model', async () => {
       const fs = VirtualFS._createSyncForTests('oauth-ok-' + Math.random());
       const selectedModels: string[] = [];
-      const finalLicks: FinalLickPayload[] = [];
+      const finalLicks: OnboardingCompleteWithProviderLick[] = [];
       const dipInbox: DipMessage[] = [];
       const launchOAuth = vi.fn(async () => ({ ok: true, model: 'adobe:claude-sonnet-4-6' }));
       const orch = new OnboardingOrchestrator({
@@ -628,7 +627,7 @@ describe('OnboardingOrchestrator', () => {
         setSelectedModel: (id) => selectedModels.push(id),
         resolveModelLabel: (_p, m) => m.toUpperCase(),
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
+        fireFinalLick: (data) => finalLicks.push(data),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         launchOAuth,
@@ -648,7 +647,7 @@ describe('OnboardingOrchestrator', () => {
     it('fires the final lick but does not call setSelectedModel when OAuth returns no model', async () => {
       const fs = VirtualFS._createSyncForTests('oauth-nomodel-' + Math.random());
       const selectedModels: string[] = [];
-      const finalLicks: FinalLickPayload[] = [];
+      const finalLicks: OnboardingCompleteWithProviderLick[] = [];
       const dipInbox: DipMessage[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
@@ -658,7 +657,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: () => {},
         setSelectedModel: (id) => selectedModels.push(id),
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
+        fireFinalLick: (data) => finalLicks.push(data),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         launchOAuth: async () => ({ ok: true, model: null }),
@@ -674,7 +673,7 @@ describe('OnboardingOrchestrator', () => {
 
     it('broadcasts an error and keeps stage at awaiting-connect when OAuth fails', async () => {
       const fs = VirtualFS._createSyncForTests('oauth-fail-' + Math.random());
-      const finalLicks: FinalLickPayload[] = [];
+      const finalLicks: OnboardingCompleteWithProviderLick[] = [];
       const dipInbox: DipMessage[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
@@ -684,7 +683,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: () => {},
         setSelectedModel: () => {},
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
+        fireFinalLick: (data) => finalLicks.push(data),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         launchOAuth: async () => ({ ok: false, message: 'Login cancelled.' }),
@@ -700,7 +699,7 @@ describe('OnboardingOrchestrator', () => {
 
     it('broadcasts an error and keeps stage at awaiting-connect when launchOAuth throws', async () => {
       const fs = VirtualFS._createSyncForTests('oauth-throw-' + Math.random());
-      const finalLicks: FinalLickPayload[] = [];
+      const finalLicks: OnboardingCompleteWithProviderLick[] = [];
       const dipInbox: DipMessage[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
@@ -710,7 +709,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: () => {},
         setSelectedModel: () => {},
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
+        fireFinalLick: (data) => finalLicks.push(data),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         launchOAuth: async () => {
@@ -728,7 +727,7 @@ describe('OnboardingOrchestrator', () => {
 
     it('is a no-op when launchOAuth is not provided by the runtime', async () => {
       const fs = VirtualFS._createSyncForTests('oauth-noop-' + Math.random());
-      const finalLicks: FinalLickPayload[] = [];
+      const finalLicks: OnboardingCompleteWithProviderLick[] = [];
       const dipInbox: DipMessage[] = [];
       const orch = new OnboardingOrchestrator({
         fs,
@@ -738,7 +737,7 @@ describe('OnboardingOrchestrator', () => {
         saveAccount: () => {},
         setSelectedModel: () => {},
         broadcastToDip: (msg) => dipInbox.push(msg),
-        fireFinalLick: (data) => finalLicks.push(data as FinalLickPayload),
+        fireFinalLick: (data) => finalLicks.push(data),
         fetchImpl: fakeFetch(() => new Response('{}', { status: 200 })),
         rand: () => 0,
         // launchOAuth intentionally omitted

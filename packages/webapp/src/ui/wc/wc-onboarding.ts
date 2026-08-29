@@ -66,9 +66,7 @@ export interface WelcomeFinalLickData {
     model?: string | null;
     modelLabel?: string | null;
     validation?: string;
-    readonly [key: string]: unknown;
   };
-  readonly [key: string]: unknown;
 }
 
 /**
