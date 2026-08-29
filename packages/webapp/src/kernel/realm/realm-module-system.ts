@@ -9,6 +9,7 @@ import type { NodeReadlineModule } from './helpers/node-readline.js';
 import {
   fmt,
   type NodeChildProcess,
+  type NodeOs,
   nodeAssert,
   nodeAssertStrict,
   nodeCrypto,
@@ -155,6 +156,11 @@ export function createModuleSystem(opts: {
   shimmedPackages?: RealmModuleRegistry;
   /** Per-realm `readline` module (question() echoes to THIS realm's stdout). */
   nodeReadline?: NodeReadlineModule;
+  /**
+   * Per-realm `os` module — `tmpdir()`/`homedir()` answer for THIS realm's
+   * unit (#2267). Omitted, the envless default keeps the pre-#2267 constants.
+   */
+  nodeOsModule?: NodeOs;
 }): { require: (id: string) => unknown } {
   const {
     graph,
@@ -165,6 +171,7 @@ export function createModuleSystem(opts: {
     sliccyModules,
     shimmedPackages = {},
     nodeReadline,
+    nodeOsModule = nodeOs,
   } = opts;
   const sourceByPath = new Map(graph.files.map((f) => [f.path, f.cjsSource]));
   const kindByPath = new Map(graph.files.map((f) => [f.path, f.kind]));
@@ -175,7 +182,14 @@ export function createModuleSystem(opts: {
       return { hit: true, value: resolveSliccyModule(id, sliccyModules) };
     }
     const bareId = id.startsWith('node:') ? id.slice(5) : id;
-    const served = resolveServedBuiltin(bareId, fsBridge, processShim, childProcess, nodeReadline);
+    const served = resolveServedBuiltin(
+      bareId,
+      fsBridge,
+      processShim,
+      childProcess,
+      nodeOsModule,
+      nodeReadline
+    );
     if (served.hit) return served;
     if (NODE_NATIVE_PACKAGES.has(bareId)) throw nativePackageError(id, bareId);
     if (NODE_BUILTINS_UNAVAILABLE.has(bareId)) throw unavailableBuiltinError(id, bareId);
@@ -251,6 +265,7 @@ function resolveServedBuiltin(
   fsBridge: unknown,
   processShim: unknown,
   childProcess: NodeChildProcess,
+  nodeOsModule: NodeOs,
   nodeReadline?: NodeReadlineModule
 ): { hit: boolean; value?: unknown } {
   if (bareId === 'fs') return { hit: true, value: fsBridge };
@@ -267,7 +282,7 @@ function resolveServedBuiltin(
   if (bareId === 'assert/strict') return { hit: true, value: nodeAssertStrict };
   if (bareId === 'util') return { hit: true, value: nodeUtil };
   if (bareId === 'events') return { hit: true, value: nodeEvents };
-  if (bareId === 'os') return { hit: true, value: nodeOs };
+  if (bareId === 'os') return { hit: true, value: nodeOsModule };
   if (bareId === 'tty') return { hit: true, value: nodeTty };
   if (bareId === 'stream') return { hit: true, value: nodeStream };
   if (bareId === 'url') return { hit: true, value: nodeUrl };

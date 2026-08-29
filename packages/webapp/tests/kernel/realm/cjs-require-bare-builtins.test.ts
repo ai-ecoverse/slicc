@@ -402,6 +402,45 @@ describe('NS3: tty built-in is served by the browser-worker shim', () => {
 });
 
 describe('node:os shim', () => {
+  it('tmpdir() and homedir() answer for the unit that owns the realm (#2267)', async () => {
+    // A scoop's shell pins HOME=/scoops/<folder>/home and every unit pins
+    // TMPDIR. Returning the float-wide constants here sent any library that
+    // trusts os.tmpdir() — most of them — into a directory its own unit did
+    // not own, and into a collision with every sibling unit.
+    const ctx = makeCtx({
+      env: { TMPDIR: '/tmp/cone-adobe/review', HOME: '/scoops/review/home' },
+    });
+    const out = await runCode(
+      `const os = require('os');
+       console.log(os.tmpdir());
+       console.log(os.homedir());`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.split('\n').filter(Boolean)).toEqual([
+      '/tmp/cone-adobe/review',
+      '/scoops/review/home',
+    ]);
+  });
+
+  it('agrees with process.env in the same realm — one consistent machine', async () => {
+    // `createProcessShim` documents that its platform/arch mirror this shim so
+    // "a script that reads both sees one consistent machine". tmpdir/homedir
+    // were the two answers that silently broke that promise.
+    const ctx = makeCtx({
+      env: { TMPDIR: '/tmp/cone-adobe', HOME: '/scoops/review/home' },
+    });
+    const out = await runCode(
+      `const os = require('os');
+       console.log(os.tmpdir() === process.env.TMPDIR);
+       console.log(os.homedir() === process.env.HOME);
+       console.log(os.platform() === process.platform, os.arch() === process.arch);`,
+      ctx
+    );
+    expect(out.exitCode).toBe(0);
+    expect(out.stdout.split('\n').filter(Boolean)).toEqual(['true', 'true', 'true true']);
+  });
+
   it('serves tmpdir, platform, arch, EOL, homedir, hostname, type, release', async () => {
     const ctx = makeCtx();
     const out = await runCode(
