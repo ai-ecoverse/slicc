@@ -6,11 +6,55 @@
  * Supports filtering via user-provided JS functions.
  */
 
-import { createLogger } from '../core/logger.js';
+import { createLogger } from '../base/logger.js';
 import type { VirtualFS } from '../fs/index.js';
 import type { CDPTransport } from './transport.js';
+import type { CDPEventListener } from './types.js';
 
 const log = createLogger('har-recorder');
+
+/** HAR 1.2 cache object — SLICC recordings leave it empty. */
+export type HarCache = Record<string, never>;
+
+interface HarNetworkRequestWillBeSentParams {
+  sessionId?: string;
+  requestId?: string;
+  timestamp?: number;
+  request?: PendingRequest['request'];
+}
+
+interface HarNetworkResponseReceivedParams {
+  sessionId?: string;
+  requestId?: string;
+  response?: NonNullable<PendingRequest['response']> & {
+    timing?: PendingRequest['timing'];
+  };
+}
+
+interface HarNetworkLoadingFinishedParams {
+  sessionId?: string;
+  requestId?: string;
+  timestamp?: number;
+}
+
+interface HarNetworkLoadingFailedParams {
+  sessionId?: string;
+  requestId?: string;
+}
+
+interface HarPageFrameNavigatedParams {
+  sessionId?: string;
+  frame?: { parentId?: string; url?: string };
+}
+
+interface HarRuntimeEvaluateResult {
+  result?: { value?: string };
+}
+
+interface HarNetworkGetResponseBodyResult {
+  body?: string;
+  base64Encoded?: boolean;
+}
 
 /** HAR 1.2 format types */
 export interface HarLog {
@@ -24,7 +68,7 @@ export interface HarEntry {
   time: number;
   request: HarRequest;
   response: HarResponse;
-  cache: Record<string, unknown>;
+  cache: HarCache;
   timings: HarTimings;
 }
 
@@ -168,15 +212,15 @@ export class HarRecorder {
     await this.client.send('Page.enable', {}, sessionId);
 
     // Get current URL
-    const pageInfo = await this.client.send(
+    const pageInfo = (await this.client.send(
       'Runtime.evaluate',
       {
         expression: 'location.href',
         returnByValue: true,
       },
       sessionId
-    );
-    const currentUrl = (pageInfo['result'] as { value?: string })?.value ?? 'about:blank';
+    )) as HarRuntimeEvaluateResult;
+    const currentUrl = pageInfo.result?.value ?? 'about:blank';
 
     const session: RecordingSession = {
       id: recordingId,
@@ -207,33 +251,44 @@ export class HarRecorder {
     const { sessionId, id: recordingId } = session;
 
     // Request handler
-    const onRequestWillBeSent = (params: Record<string, unknown>) => {
-      if ((params['sessionId'] as string | undefined) !== sessionId) return;
+    const onRequestWillBeSent: CDPEventListener = (raw) => {
+      const params = raw as HarNetworkRequestWillBeSentParams;
+      if (params.sessionId !== sessionId) return;
       this.handleRequestWillBeSent(session, params);
     };
 
     // Response handler
-    const onResponseReceived = (params: Record<string, unknown>) => {
-      if ((params['sessionId'] as string | undefined) !== sessionId) return;
+    const onResponseReceived: CDPEventListener = (raw) => {
+      const params = raw as HarNetworkResponseReceivedParams;
+      if (params.sessionId !== sessionId) return;
       this.handleResponseReceived(session, params);
     };
 
     // Loading finished handler
-    const onLoadingFinished = (params: Record<string, unknown>) => {
-      if ((params['sessionId'] as string | undefined) !== sessionId) return;
-      this.handleLoadingFinished(session, params);
+    const onLoadingFinished: CDPEventListener = (raw) => {
+      const params = raw as HarNetworkLoadingFinishedParams;
+      if (params.sessionId !== sessionId) return;
+      void this.handleLoadingFinished(session, params).catch((err) => {
+        log.error('Failed to process loadingFinished event', {
+          recordingId,
+          requestId: params.requestId,
+          error: err instanceof Error ? err.message : String(err),
+        });
+      });
     };
 
     // Loading failed handler
-    const onLoadingFailed = (params: Record<string, unknown>) => {
-      if ((params['sessionId'] as string | undefined) !== sessionId) return;
+    const onLoadingFailed: CDPEventListener = (raw) => {
+      const params = raw as HarNetworkLoadingFailedParams;
+      if (params.sessionId !== sessionId) return;
       this.handleLoadingFailed(session, params);
     };
 
     // Navigation handler - save snapshot
-    const onFrameNavigated = (params: Record<string, unknown>) => {
-      if ((params['sessionId'] as string | undefined) !== sessionId) return;
-      const frame = params['frame'] as { parentId?: string; url?: string } | undefined;
+    const onFrameNavigated: CDPEventListener = (raw) => {
+      const params = raw as HarPageFrameNavigatedParams;
+      if (params.sessionId !== sessionId) return;
+      const frame = params.frame;
       // Only handle main frame navigations
       if (!frame?.parentId && frame?.url) {
         // Capture entries and URL before clearing to avoid race condition
@@ -272,16 +327,10 @@ export class HarRecorder {
 
   private handleRequestWillBeSent(
     session: RecordingSession,
-    params: Record<string, unknown>
+    params: HarNetworkRequestWillBeSentParams
   ): void {
-    const requestId = params['requestId'] as string;
-    const request = params['request'] as {
-      method: string;
-      url: string;
-      headers: Record<string, string>;
-      postData?: string;
-    };
-    const timestamp = params['timestamp'] as number;
+    const { requestId, request, timestamp } = params;
+    if (!requestId || !request || timestamp == null) return;
 
     session.pendingRequests.set(requestId, {
       requestId,
@@ -295,15 +344,12 @@ export class HarRecorder {
     });
   }
 
-  private handleResponseReceived(session: RecordingSession, params: Record<string, unknown>): void {
-    const requestId = params['requestId'] as string;
-    const response = params['response'] as {
-      status: number;
-      statusText: string;
-      headers: Record<string, string>;
-      mimeType?: string;
-      timing?: PendingRequest['timing'];
-    };
+  private handleResponseReceived(
+    session: RecordingSession,
+    params: HarNetworkResponseReceivedParams
+  ): void {
+    const { requestId, response } = params;
+    if (!requestId || !response) return;
 
     const pending = session.pendingRequests.get(requestId);
     if (pending) {
@@ -319,10 +365,10 @@ export class HarRecorder {
 
   private async handleLoadingFinished(
     session: RecordingSession,
-    params: Record<string, unknown>
+    params: HarNetworkLoadingFinishedParams
   ): Promise<void> {
-    const requestId = params['requestId'] as string;
-    const timestamp = params['timestamp'] as number;
+    const { requestId, timestamp } = params;
+    if (!requestId || timestamp == null) return;
 
     const pending = session.pendingRequests.get(requestId);
     if (!pending) return;
@@ -331,13 +377,13 @@ export class HarRecorder {
 
     // Fetch response body
     try {
-      const bodyResult = await this.client.send(
+      const bodyResult = (await this.client.send(
         'Network.getResponseBody',
         { requestId },
         session.sessionId
-      );
-      pending.responseBody = bodyResult['body'] as string;
-      pending.responseBodyBase64 = bodyResult['base64Encoded'] as boolean;
+      )) as HarNetworkGetResponseBodyResult;
+      pending.responseBody = bodyResult.body;
+      pending.responseBodyBase64 = bodyResult.base64Encoded === true;
     } catch {
       // Body might not be available (e.g., for redirects)
     }
@@ -351,8 +397,12 @@ export class HarRecorder {
     session.pendingRequests.delete(requestId);
   }
 
-  private handleLoadingFailed(session: RecordingSession, params: Record<string, unknown>): void {
-    const requestId = params['requestId'] as string;
+  private handleLoadingFailed(
+    session: RecordingSession,
+    params: HarNetworkLoadingFailedParams
+  ): void {
+    const { requestId } = params;
+    if (!requestId) return;
     session.pendingRequests.delete(requestId);
   }
 

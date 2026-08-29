@@ -308,7 +308,6 @@
       "includes": [
         "packages/webapp/cloud/app.js",
         "packages/webapp/providers/adobe.ts",
-        "packages/webapp/src/cdp/har-recorder.ts",
         "packages/webapp/src/providers/built-in/bedrock-camp.ts",
         "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts",
         "packages/webapp/tests/ui/provider-settings.test.ts"
