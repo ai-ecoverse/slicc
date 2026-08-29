@@ -59,8 +59,8 @@ function deepEqObject(ao: object, bo: object, strict: boolean, seen: WeakMap<obj
   if (ak.length !== Object.keys(bo).length) return false;
   for (const k of ak) {
     if (!Object.prototype.hasOwnProperty.call(bo, k)) return false;
-    const av = (ao as Record<string, unknown>)[k];
-    const bv = (bo as Record<string, unknown>)[k];
+    const av = Reflect.get(ao, k);
+    const bv = Reflect.get(bo, k);
     if (!deepEq(av, bv, strict, seen)) return false;
   }
   return true;
@@ -94,9 +94,17 @@ function matchThrownFunction(err: unknown, expected: (e: unknown) => unknown): b
   }
 }
 
-function matchThrownShape(err: object, expected: Record<string, unknown>): boolean {
+/**
+ * Node `assert.throws` expected-error property bag: each own key is compared
+ * against the thrown value (`===`), except RegExp values which match string fields.
+ * The keys are user-supplied and arbitrary, so there is no narrower shape to name.
+ */
+// biome-ignore lint/plugin: assert.throws expected-error bag is a genuinely arbitrary user-supplied property map — no accepted shape to name.
+type ThrownErrorExpectation = Record<string, unknown>;
+
+function matchThrownShape(err: object, expected: ThrownErrorExpectation): boolean {
   for (const [k, v] of Object.entries(expected)) {
-    const ev = (err as Record<string, unknown>)[k];
+    const ev = Reflect.get(err, k);
     if (v instanceof RegExp) {
       if (typeof ev !== 'string' || !v.test(ev)) return false;
     } else if (ev !== v) {
@@ -116,7 +124,7 @@ function matchThrown(err: unknown, expected: unknown): boolean {
     return matchThrownFunction(err, expected as (e: unknown) => unknown);
   if (expected && typeof expected === 'object') {
     if (!err || typeof err !== 'object') return false;
-    return matchThrownShape(err, expected as Record<string, unknown>);
+    return matchThrownShape(err, expected as ThrownErrorExpectation);
   }
   return false;
 }

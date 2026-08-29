@@ -19,7 +19,6 @@
   "packages/webapp/src/fs/mount/backend-local.ts": 1,
   "packages/webapp/src/git/commands/rebase.ts": 1,
   "packages/webapp/src/kernel/cdp-worker-proxy.ts": 3,
-  "packages/webapp/src/kernel/realm/helpers/node-assert.ts": 5,
   "packages/webapp/src/kernel/realm/http-global.ts": 2,
   "packages/webapp/src/kernel/realm/py-realm-shared.ts": 1,
   "packages/webapp/src/kernel/realm/ws-router-page.ts": 7,
