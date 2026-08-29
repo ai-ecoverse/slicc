@@ -1,3 +1,4 @@
+import UIKit
 import XCTest
 
 /// The transcript's short actions, end to end on the real chat
@@ -21,8 +22,22 @@ final class TranscriptShortActionsUITests: XCTestCase {
     /// which put a centred alert card among six contextual menus. A menu that
     /// resolves to real `Copy`/`Share…` buttons can only come from the UIKit
     /// `UITextItem` menu — the same one the phone number and the link use.
-    func testLongPressingInlineCodeOffersTheSameNativeMenu() {
+    ///
+    /// Compact width only. The long press targets a NORMALIZED offset, and
+    /// "right of centre on the first line" is a fact about compact line
+    /// wrapping — at the regular-width readable column the same paragraph
+    /// reflows and that point lands on plain prose, so the menu never opens.
+    /// The class was iPhone-only while CI hand-picked it; the whole-bundle run
+    /// reaches iPad too, so the assumption has to be stated rather than
+    /// implied by a job filter.
+    func testLongPressingInlineCodeOffersTheSameNativeMenu() throws {
         let app = launch()
+        let window = app.windows.firstMatch
+        XCTAssertTrue(window.waitForExistence(timeout: 10))
+        if UIDevice.current.userInterfaceIdiom == .pad, window.frame.width > 560 {
+            throw XCTSkip("Requires a compact-width simulator destination")
+        }
+
         let body = paragraph(app, containing: "npm run build")
         XCTAssertTrue(body.waitForExistence(timeout: 10), "assistant paragraph renders")
 

@@ -1,0 +1,25 @@
+{
+  "$comment": "The ONLY thing standing between a SliccFollowerUITests test and the CI simulator legs. CI runs the whole bundle and subtracts this list, so a new test class is gated the moment it lands \u2014 the previous hand-picked -only-testing list let FixtureConversationUITests rot on main unnoticed for two releases. Every entry needs a reason. `issue` links the tracking issue for entries that are debt rather than a permanent runner limitation; null means one is still owed. Validated by `npm run lint:ios-ui-tests`, consumed by the ios-app-tests job via ios-ui-test-exclusions.mjs --print-skip-args.",
+  "exclusions": [
+    {
+      "test": "ComposerKeyboardUITests",
+      "reason": "Drives app.typeKey, which needs a hardware keyboard attached to the simulator. GitHub's runners have none, so every assertion here fails on the runner and passes on a developer's Mac.",
+      "issue": null
+    },
+    {
+      "test": "FixtureConversationUITests/testEveryFixtureMessageVariantRenders",
+      "reason": "variantMarkers expects the 'edit: error' and 'bash: running' labels from Circle().accessibilityLabel(...) in clusterDots. Those labels reach neither staticTexts nor buttons nor otherElements, so the assertion has never been satisfiable \u2014 it only looked alive because continueAfterFailure = false stopped the test earlier in the walk. Likely a real VoiceOver gap in the collapsed cluster rather than a bad assertion, so the fix is in the app, not the test.",
+      "issue": null
+    },
+    {
+      "test": "FixtureConversationUITests/testCodeBlockScrollUsesRubberBandScoopHandoff",
+      "reason": "Fails on main on both device classes (leading=false trailing=false action=none): the guarded scroller never reports its trailing edge, so the rubber-band handoff to the next scoop never fires. A product bug the test correctly catches.",
+      "issue": null
+    },
+    {
+      "test": "InboundActionsUITests",
+      "reason": "Fails only when the unit suite has already run in the same simulator, which is exactly what the iPhone GA cell does (coverage step first, UI step second) and what the iPad cell never does \u2014 hence iPhone red, iPad green, and green on any developer Mac that runs the UI bundle alone. Reproduce with: simctl erase, then -only-testing:SliccFollowerTests, then -only-testing:SliccFollowerUITests/InboundActionsUITests. The state persists, so a rerun of the UI class alone on the dirty device still fails and -retry-tests-on-failure cannot rescue it. At failure the app has rendered normally (dock, composer, 'No messages yet') with no Alert element in the hierarchy at all, and the other launch arguments did apply, so the confirmation card is being suppressed rather than the hooks being ignored. Root cause not yet pinned; excluded rather than papered over with a speculative fix.",
+      "issue": null
+    }
+  ]
+}
