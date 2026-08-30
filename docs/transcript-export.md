@@ -384,4 +384,4 @@ after reconnection.
 - `packages/vfs-root/workspace/skills/transcript-export/SKILL.md` — agent-facing skill.
 - `packages/shared-ts/src/transcript-export.ts` — TypeScript schema types and runtime validator.
 - `packages/cherry/CLAUDE.md` — Cherry SDK wiring for transcript export.
-- `packages/webapp/CLAUDE.md` — Frozen Sessions section for session state details.
+- [`webapp-details.md`](webapp-details.md) — Frozen Sessions for session state details.

@@ -91,7 +91,7 @@ Extended notes for `slicc-dock-tree` (`src/workbench/slicc-dock-tree.ts`).
   source doc comments.
 - **Chat as a movable panel**: `CHAT_SURFACE_ID = 'chat'` is the reserved
   surfaceId the webapp composes the live `<slicc-chatpane>` into at boot (see
-  `packages/webapp/CLAUDE.md`'s Layouts section). `labelForSurface(surfaceId)`
+  [`docs/layouts.md`](layouts.md)). `labelForSurface(surfaceId)`
   derives a tile's friendly label — `'Chat'` for `CHAT_SURFACE_ID`, otherwise
   the id with any `sprinkle:` prefix stripped — surfaced as the move button's
   `title`/`aria-label`, not a visible text bar. `setPinned(surfaceIds:
@@ -104,7 +104,7 @@ string[])` marks leaves as pinned (runtime-only — never serialized by
   resize, and `removeSurface` for the affected node(s). A locked leaf renders
   no move button at all — there's nothing to click, matching "cannot drag"
   literally. Used by embedders (e.g. Cherry) to push a fixed, unmovable
-  arrangement — see `packages/webapp/CLAUDE.md`'s Layouts section.
+  arrangement — see [`docs/layouts.md`](layouts.md).
 - **Drag-drop interaction**: `tilesMovable` / `tiles-movable` defaults off and
   locking still wins. It remains an opt-in embedder/test contract but is
   dormant in the shipped webapp: flag-off keeps it off, while flag-on replaces
@@ -121,7 +121,7 @@ string[])` marks leaves as pinned (runtime-only — never serialized by
   `removeSurface` mutates the tree; `dock-tree-resize` (same shape) fires on
   divider-drag `pointerup` or a `setSurfaceSize` call that actually changed
   something. Neither event persists anything itself — see
-  `packages/webapp/CLAUDE.md`'s Layouts section for the webapp's
+  [`docs/layouts.md`](layouts.md) for the webapp's
   `wireDockTreePersistence` listener. `dock-tree-render` (composed + bubbling,
   `detail: { placed: string[] }`) fires after EVERY render — the deliberately
   change-silent `setTree` restore included — and is display-only:
@@ -373,3 +373,76 @@ so uploads run through an injectable `r2` client with bounded concurrency
 retries up to 5 times with jittered exponential backoff, since R2
 rate-limits upload bursts with `429` / code 971. Driven by the workflow's
 "Upload screenshots to Cloudflare R2" step.
+
+## File tree + Quick Look (Pierre libraries)
+
+Two components delegate rendering to [pierre.computer](https://pierre.computer)
+libraries. Both are wrapped by an adapter that keeps SLICC's existing public
+contract, so hosts did not change.
+
+- **`slicc-file-tree`** renders through **`@pierre/trees`** (trees.software).
+  The `FileTreeItem` input shape, the `items` / `selected` accessors and the
+  `file-select` / `file-preview` / `file-reference` / `file-download` /
+  `file-overflow` / `dir-toggle` events are unchanged; `gitStatus` is new.
+  Search, inline rename, drag-and-drop, virtualization and git lanes come from
+  the library.
+- **`slicc-quick-look`** renders text through **`@pierre/diffs`** (diffs.com),
+  shows a unified diff instead of the file when the caller supplies
+  `baseContent`, and shows a rendered document when the caller supplies
+  `rendered`. The header toggle exposes whichever of Preview / Source / Diff
+  exist.
+
+Non-obvious rules:
+
+- **The library builds hierarchy from PATHS, not from `children` nesting.** A
+  `FileTreeItem` whose `id` is a bare name renders at the root no matter where
+  it sits in the literal — ids must be full paths (which is what
+  `buildVfsTreeItems` produces).
+- **Strip the leading slash before handing paths to `@pierre/trees`**
+  (`toTreePath`). A leading `/` becomes an empty first segment:
+  `['/a.ts', '/b.ts']` renders ONE blank row and no files (verified against
+  `1.0.0-beta.6`). Events convert back, so absolute VFS paths stay absolute at
+  the component boundary.
+- **`renderRowDecoration` returns text or an icon only** — no interactive
+  elements. That is why the old per-row hover buttons (Preview / Reference /
+  Download) now live in the row context menu, whose `onOpen` re-emits SLICC's
+  `file-overflow` so `SliccOverflowMenu` still draws the menu.
+- **Selection echoes.** `selectFile()` reflects to the `selected` attribute,
+  which tells the library to select the row, which calls back through
+  `onSelectionChange` — guard with the `#selecting` flag or one click emits
+  two `file-select` events.
+- **Quick Look renders text twice on purpose**: a synchronous `<pre>` first,
+  then the `@pierre/diffs` view once that lazily-imported chunk arrives
+  (~628 KB, so it must never block the overlay). If the import fails the
+  `<pre>` stays — a degraded preview, not a broken one. A `#generation`
+  counter drops an upgrade that resolves after the overlay moved to another
+  file.
+- **Quick Look converts nothing.** A `rendered` payload arrives as HTML from
+  the host: `inline` must already be sanitized (the webapp runs markdown
+  through `message-renderer.ts`) and mounts via `createContextualFragment`,
+  the same no-innerHTML path as `setBodyHtml`; `sandbox` mounts in an iframe
+  with an EMPTY `sandbox` attribute (no `allow-scripts`, no
+  `allow-same-origin`) and is the only treatment raw HTML ever gets. That
+  document is wrapped in a base stylesheet (`sandboxDocument`) stating
+  `color-scheme` + `Canvas`/`CanvasText`, because an iframe starts transparent
+  with black text and knows nothing about the app's `data-theme` — an unstyled
+  report rendered near-black on the dark panel. The base goes AFTER any
+  doctype (before it means quirks mode) and BEFORE the file's own markup, so
+  author rules outrank it. Keeping conversion in the host is what keeps a
+  markdown parser out of this library.
+- **A rendered form opens FIRST, ahead of the diff.** Someone who clicked a
+  `.md` name meant to read the file; a modified README is still a README.
+  Files without a rendered form keep the old diff-first behavior. Views are
+  rebuilt on switch, never kept mounted in parallel.
+- **`@pierre/trees` `sideEffects` is mispathed** in `1.0.0-beta.6`
+  (`./dist/components/web-components.js` vs the real `dist/web-components.js`),
+  so `import '@pierre/trees/web-components'` tree-shakes to nothing. Importing
+  `FileTree` from the package root is unaffected — it pulls the element
+  registration itself.
+- **Both libraries are in `optimizeDeps.include`** (`vitest.config.ts`).
+  Discovering them mid-run makes Vite re-optimize and reload; a reload after a
+  custom element is defined leaves the tag bound to the pre-reload class, and
+  every tree/preview test then fails as if the component were broken.
+- **Tests assert the contract, not the markup** — accessible row names and
+  events, since the DOM belongs to the library now. Synthetic events need
+  `composed: true` to cross its shadow boundary.

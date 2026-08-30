@@ -282,3 +282,20 @@ Outputs land in `.build/coverage/`. The gate runs only `SliccFollowerTests`, dis
 `scripts/testflight-distribute.mjs` (gated on `SLICC_TF_EXTERNAL_GROUP`; unset = upload-only) waits for processing, sets What to Test notes, submits Beta App Review, and attaches the build to that group. **Submission and attach are independent** — only a `fatal` submit aborts; `deferred` (review quota) warns and still attaches, so the build ships once review clears. Tests: `testflight-distribute.test.mjs`.
 
 What to Test copy comes from `composeWhatsNew()`: the release workflow's `analyze` job drafts end-user highlights from the last week of `feat`/`fix`/`perf`/revert commits touching `packages/ios-app` + the swift tray packages (path-selected, not scope-selected — cross-cutting tray work rarely carries an `ios` scope) via headless `claude -p` on Bedrock (not `claude-code-action` — it rejects push-triggered workflows) and passes them as `SLICC_TF_WHATS_NEW`; the static onboarding copy (session-join instructions, appending `SLICC_TF_DEMO_JOIN_URL`) always follows, and highlights are capped at 3,000 code points so the footer survives the ASC 4,000-char limit. The draft is **best-effort by design** — no iOS commits, a model outage, or empty output all leave `SLICC_TF_WHATS_NEW` unset and the static copy ships alone; the draft must never block a release.
+
+## App Icon
+
+`Assets.xcassets/AppIcon.appiconset` carries three 1024s: `Icon-Default`, `Icon-Dark`, `Icon-Tinted`.
+
+`Icon-Tinted` is **hand-authored, not a desaturation of the colour icon** — master at `packages/assets/logos/slicc-icon-tinted-master-1024.png`. iOS tinted mode maps the asset's _luminance_ onto the user's tint, so an asset confined to the top of the range can only render as a flat blob. The previous `Icon-Tinted` was byte-identical to the Icon Composer `TintedLight` export and never dropped below 39% grey (min 100/255, σ 39); the current one spans the full range (min 0, σ 81) by seating a bright swirl in a near-black tub. Re-check `min`/`stddev` before replacing it:
+
+```bash
+magick Icon-Tinted.png -alpha remove -colorspace Gray \
+  -format "min=%[fx:minima*255] sd=%[fx:standard_deviation*255]\n" info:
+```
+
+It is full-bleed square (iOS applies its own superellipse mask), unlike `Icon-Dark`, which still carries pre-rounded transparent corners. The macOS side does **not** consume this PNG — Sliccstart derives its tinted appearance from `macos-icon.icon`; see [swift-launcher](../packages/swift-launcher/CLAUDE.md#app-icon).
+
+## Related
+
+Canonical wire: `packages/shared-ts/src/tray-sync-protocol.ts`. Leader/follower: `packages/webapp/src/scoops/tray-leader-sync.ts`, `packages/webapp/src/scoops/tray-follower-sync.ts`. Sprinkles: `packages/webapp/src/ui/sprinkle-follower-controller.ts`. Matrix: `docs/architecture.md` "Multi-Browser Sync (Tray) Architecture". Simulator QA: [`docs/ios-simulator-qa.md`](ios-simulator-qa.md).

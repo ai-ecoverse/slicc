@@ -459,7 +459,64 @@ unknown>).chrome = …` is idiomatic scaffolding, and `biome.json` already
 exempts tests from `noExplicitAny` and the complexity rules for the same
 reason. Chained into `npm run lint` and `lint:ci`.
 
+## hf-cache-mirror
+
+`packages/dev-tools/tools/hf-cache-mirror.mjs` is a zero-dep local
+`huggingface.co` mirror with an on-disk store. The e2e CI job runs it, persists
+`.cache/hf-mirror` with `actions/cache`, and hands `HF_ENDPOINT` to the virtual
+shell's `hf download` so the Kokoro weights come off disk on warm runs.
+
+## ios-ui-test-exclusion-registry
+
+`npm run lint:ios-ui-tests` (`packages/dev-tools/tools/ios-ui-test-exclusions.mjs` +
+`packages/ios-app/ui-test-exclusions.json`). `ios-app-tests` runs the **whole**
+`SliccFollowerUITests` bundle on the GA cells and subtracts this registry, so a
+new class is gated the day it lands. The gate rejects an entry with no reason
+or one naming a class/method that no longer exists.
+
+## swiftpm-lockfile-drift
+
+`packages/dev-tools/tools/check-swift-resolved-drift.mjs` — run AFTER a resolve
+step (the `ios-app` CI job). `xcodebuild -resolvePackageDependencies` rewrites
+`Package.resolved` in place and builds against what it wrote, so a floated
+**transitive** pin lands with no diff; `lint:swift-pins` only sees direct pins.
+Compares identity/version/revision, ignoring `originHash` and key order (both
+move with the toolchain).
+
+## first-load-size-gate
+
+Part of `npm run size -w @slicc/webapp`. `packages/dev-tools/tools/check-first-load-size.mjs`
+(+ `first-load-size-lib.mjs`, `first-load-baseline.mjs`) measures the eager
+import closures of the page entry (via `.vite/manifest.json`) and the
+kernel-worker entry (parsed from emitted chunks). Guards cold-boot payload,
+not per-file size.
+
+**Relative**: it builds the merge-base in a throwaway worktree (workspace
+packages re-pointed at the worktree's own source, then the root `postinstall`
+prerequisite builds — borrowing the caller's would mask a webcomponents-side
+regression) (`--baseline=<ref>`, default `origin/main`; `--baseline=none` to
+skip, `--json` to just measure) and fails on a change's own growth past
+`maxDeltaKb`, so it never fires on inherited state and cancels the ~1 kB
+Linux-vs-macOS build difference.
+
+On `merge_group` the delta is skipped (a queue branch is cumulative — its
+delta is the batch sum, and a per-change allowance would fail on queue
+depth); ceilings only, no baseline build. That split is only safe because a
+CI `pull_request` run treats an unmeasurable baseline as a hard failure
+rather than degrading — otherwise a PR could clear both stages unmeasured.
+Local runs still degrade to ceilings with a note.
+
+The absolute `*EagerCeilingKb` values in
+`packages/webapp/first-load-budget.json` are the backstop against many small
+under-threshold changes creeping upward — human-owned, not numbers to nudge
+when a build goes red.
+
 ## storybook-screenshots-upload
+
+Capture: `storybook-affected-screenshots.mjs` (+
+`storybook-affected-stories-lib.mjs`) takes light/dark shots of affected
+webcomponents stories; pair with `npm run build-storybook -w @slicc/webcomponents`.
+iOS PR shots: `ios-screenshots.mjs` (+ `ios-screenshots-lib.mjs`).
 
 `storybook-screenshots-upload.mjs` (+ `storybook-screenshots-upload-lib.mjs`)
 uploads the affected-story manifest to the `slicc-pr-screenshots` R2
@@ -557,6 +614,17 @@ to report per-test results); tested by
 `swift-coverage-runner-retry.test.mjs`. Set `SLICC_IOS_SIM_UDID` to a
 worktree-owned simulator UDID to override automatic selection locally;
 when unset or empty, existing SDK-runtime selection remains unchanged.
+
+## optional-binary-guard
+
+`run-if-installed.mjs <binary> [args...]` runs iff the binary is on `PATH`,
+else warns and exits 0. Used by the root `lint-staged` Swift/Go globs so a
+missing toolchain does not fail a commit that only touches those files.
+
+## skill-lint
+
+`lint-skills.mjs` (`npm run lint:skills`) shells out to `tessl skill lint`
+via `@tessl/cli`. Warns locally; fails under `--strict`/CI.
 
 ## fresh-dev-harnesses
 

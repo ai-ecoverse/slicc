@@ -34,18 +34,8 @@ leader/follower state, reconnect windows, and cached ICE servers.
 
 ### Public Routes
 
-Route inventory: `POST /tray`, `GET /handoff`, `GET /install-cli`,
-`GET /install-cli.ps1`, `GET /download/slicc-cli/:target`,
-`GET /.well-known/api-catalog`, `GET /llms.txt`, `GET|HEAD /privacy`,
-`GET|HEAD /status`, `GET /rel/:name`, `GET|POST /join/:token`,
-`GET|POST /controller/:token`, `POST /webhook/:token/:webhookId`,
-`POST /api/tray/:trayId/preview`, `POST /api/tray/:trayId/preview/stop`,
-`GET /api/tray/:trayId/previews`, `POST /api/tray/:trayId/biscotto`,
-`POST /api/tray/:trayId/biscotto/stop`, `GET /api/tray/:trayId/biscotti`,
-`GET <token>.sliccy.now/*`,
-`GET __slicc/preview-bridge.js`, `WS __slicc/bridge`, `POST __slicc/emit`,
-`GET /auth/callback`, `GET /auth/mcp-callback`, `GET /api/flags`. Per-route semantics:
-[docs/cloudflare-worker-details.md § Public Routes](../../docs/cloudflare-worker-details.md#public-routes).
+Route inventory lives in `src/index.ts` (the default `GET /` body). Per-route
+semantics: [docs/cloudflare-worker-details.md § Public Routes](../../docs/cloudflare-worker-details.md#public-routes).
 
 **Routes-mirror rule:** every new route MUST appear in
 
@@ -57,11 +47,11 @@ Missing any of these fails CI.
 
 ### Feature Flag Configuration
 
-`FEATURE_FLAGS` in `wrangler.jsonc` is a JSON var
+`FEATURE_FLAGS` in `wrangler.jsonc`:
 `{ base: Record<string,string>, floats: Record<string, Record<string,string>> }`.
-Floats overlay `base`; invalid profiles → `{ float: "default", flags: base }`. Keep
-production and `env.staging` aligned. 5-min cache; config changes need deploy. Keep
-`/api/flags` in the routes array + both routes-list assertions.
+Floats overlay `base`; invalid profiles fall back to `base`. 5-min cache;
+config changes need deploy. Keep `/api/flags` in the routes array + both
+routes-list assertions. Align production and `env.staging`.
 
 ### Signaling Model
 
@@ -78,27 +68,29 @@ keyed by `connId`, replays `bridge.connected` on leader (re)connect, hibernates 
 ### Biscotti (guest seats)
 
 `TrayRecord.biscotti` holds revocable guest seats. `resolveJoinCapability`
-(`src/shared.ts`) is the **single default-deny point** for `/join/:token`: it
-returns `{ trust: 'full' }` for the tray join token, `{ trust: 'biscotto' }` for
-a live seat, and `null` for anything else (including revoked/expired seats,
-which are compared before being filtered so their existence does not leak by
-timing). Mint/revoke/list live in `src/session-tray-biscotto.ts` and are gated on
-the **controller** token — a seat is never an issuing authority.
+(`src/shared.ts`) is the **single default-deny point** for `/join/:token`:
+`{ trust: 'full' }` / `{ trust: 'biscotto' }` / `null` (revoked seats are
+compared before filter so existence does not leak by timing). Mint/revoke/list
+in `src/session-tray-biscotto.ts`, gated on the **controller** token.
 
-**Trust travels on the controller socket, never on the peer's `hello`.** The DO
-stamps `trust` + `biscotto` onto `follower.join_requested`, which only the leader
-can receive. `controllerId` is client-supplied, so trust is re-derived from the
-presented token on every request and a mismatch against the stored
-`ControllerRecord.biscottoId` is a 409 `JOIN_CAPABILITY_MISMATCH` — in both
-directions, so a guest cannot inherit a full follower's id and a full follower
-cannot be shadowed by a guessed one. Enforcement of what a seat may _send_ is
-leader-side (`packages/webapp/src/scoops/tray-leader/biscotto-gate.ts`).
+**Trust travels on the controller socket, never the peer's `hello`.** The DO
+stamps `trust` + `biscotto` onto `follower.join_requested`. `controllerId` is
+client-supplied, so trust is re-derived from the presented token; mismatch vs
+`ControllerRecord.biscottoId` → 409 `JOIN_CAPABILITY_MISMATCH` both ways.
+What a seat may _send_ is leader-side (`biscotto-gate.ts`).
 
 ### TURN Credentials
 
-Fetched with `CLOUDFLARE_TURN_KEY_ID` (in `wrangler.jsonc`) and
-`CLOUDFLARE_TURN_API_TOKEN` (Wrangler secret). Follower push (#2062): `src/apns.ts` signs an ES256 JWT from `APNS_TEAM_ID` / `APNS_KEY_ID` / `APNS_PRIVATE_KEY` (`.p8` PEM) and posts to `api(.sandbox).push.apple.com` with `APNS_TOPIC`; the tray DO stores ≤16 `push.register` tokens per tray and fans out leader `push.send` (`turn_end`, time-sensitive `sudo_request`, metadata only), dropping tokens APNs reports dead. All four secrets or pushing is silently off. **Provider JWTs are minted by exactly one DO** (`src/apns-provider-token.ts`, `idFromName('__apns_provider_token')`, storage-backed): Apple throttles token creation per team+key, so per-tray minting broke Apple's 20-minute floor once a few trays hibernated (#2432). `session-tray.ts` caches ICE servers
-and refreshes before TTL expiry.
+Fetched with `CLOUDFLARE_TURN_KEY_ID` (`wrangler.jsonc`) and
+`CLOUDFLARE_TURN_API_TOKEN` (Wrangler secret). Follower push: `src/apns.ts`
+signs an ES256 JWT (`APNS_TEAM_ID` / `APNS_KEY_ID` / `APNS_PRIVATE_KEY`) and
+posts to `api(.sandbox).push.apple.com` (`APNS_TOPIC`). The tray DO stores
+≤16 `push.register` tokens and fans out leader `push.send` (`turn_end`,
+time-sensitive `sudo_request`, metadata only), dropping tokens APNs reports
+dead. All four secrets or pushing is silently off. **Provider JWTs are minted
+by exactly one DO** (`src/apns-provider-token.ts`,
+`idFromName('__apns_provider_token')`): Apple throttles per team+key.
+`session-tray.ts` caches ICE servers and refreshes before TTL expiry.
 
 ### Tray Kind (desktop / hosted)
 
@@ -109,17 +101,15 @@ optional `kind`. Reclaim TTL branches through `reclaimMsForTray(tray)` in `share
 
 ### Static Assets & R2
 
-Worker serves `dist/ui/` via Static Assets (`ASSETS`); `?json=true`/POST/WS → API,
-else SPA. **Cherry embed (`?cherry=1`):** `frame-ancestors` from
-`ALLOWED_CHERRY_HOST_ORIGINS` (bare `*` also enumerates `chrome-extension://` origins);
-non-cherry → `frame-ancestors 'none'`; cherry sets `Cache-Control: no-store` +
-`Vary: Sec-Fetch-Dest`. **Non-cherry, non-electron SPA responses also carry
-`Document-Isolation-Policy: isolate-and-credentialless`** — per-document
-cross-origin isolation (SAB for vpod guest networking) without COOP/COEP;
-cherry/electron branches must stay header-free (embedded, never need SAB). **25 MiB per-asset cap** — CI runs `wrangler deploy --dry-run`
-as a hard gate. `ASSET_ARCHIVE` (R2) retains hashed `/assets/*` across deploys;
-`serveAssetWithArchiveFallback` tries `ASSETS` → R2 → stale-asset reload; bucket GC
-14 days. Full rules:
+Worker serves `dist/ui/` via `ASSETS`; `?json=true`/POST/WS → API, else SPA.
+**Cherry (`?cherry=1`):** `frame-ancestors` from `ALLOWED_CHERRY_HOST_ORIGINS`
+(`*` also enumerates `chrome-extension://`); non-cherry → `'none'`; cherry
+sets `Cache-Control: no-store` + `Vary: Sec-Fetch-Dest`. Non-cherry,
+non-electron SPA also sets `Document-Isolation-Policy:
+isolate-and-credentialless` (SAB for vpod without COOP/COEP) — cherry/electron
+must stay header-free. **25 MiB per-asset cap** (`wrangler deploy --dry-run`).
+`ASSET_ARCHIVE` (R2) keeps hashed `/assets/*`; fallback `ASSETS` → R2 →
+stale-reload; GC 14 days. Full rules:
 [docs/cloudflare-worker-details.md § Static Assets](../../docs/cloudflare-worker-details.md#static-assets);
 ops: [deploying-tray-worker skill](../../.agents/skills/deploying-tray-worker/SKILL.md).
 
@@ -139,10 +129,9 @@ Extension testing with the worker: `npm run start:extension`.
 
 ## CI and Deployment
 
-`release-native.mjs --gate=worker` gates production. Hub + preview configs deploy as a
-pair (shared DO/token format); R2 uploads always precede deploy. Routes-only failures
-are non-fatal. Required: `CLOUDFLARE_API_TOKEN` (Workers Edit, R2 R/W, Zone Routes
-Edit) + account ID. Retry logic, staging deploy, local `serve --bridge`:
+`release-native.mjs --gate=worker` gates production. Hub + preview configs deploy
+as a pair; R2 uploads precede deploy. Routes-only failures are non-fatal.
+Token: Workers Edit, R2 R/W, Zone Routes Edit. Retry / staging / `serve --bridge`:
 [deploying-tray-worker skill](../../.agents/skills/deploying-tray-worker/SKILL.md).
 
 ## Operational Notes
@@ -165,13 +154,11 @@ Shipped via Plan D. All `/api/cloud/*` require
 
 ### Cone Configuration
 
-`ConeConfig` = `{ model, accounts[], secrets[] }` (in `@slicc/cloud-core/cone-config`);
-`src/cloud/cone-config-bridge.ts` handles start (writes `/slicc/secrets.env` +
-`/slicc/cone-config.json`; no-config synthesizes Adobe default) and resume (merges
-`coneConfigDelta`, reloads leader via `POST /api/secrets/reload` → `Page.reload`).
-Adobe `{kind:'oauth'}` accounts stamp `tokenExpiresAt` via `imsTokenExpiry` (IMS JWT
-`created_at + expires_in`). `CloudSessionsDurableObject` persists a **names-only**
-`coneConfigIndex` — never values. Detail:
+`ConeConfig` = `{ model, accounts[], secrets[] }` (`@slicc/cloud-core/cone-config`).
+`cone-config-bridge.ts` writes `/slicc/secrets.env` + `/slicc/cone-config.json` on
+start (Adobe default if empty) and merges `coneConfigDelta` on resume (`POST
+/api/secrets/reload` → `Page.reload`). OAuth accounts stamp `tokenExpiresAt` via
+`imsTokenExpiry`. The DO persists a **names-only** `coneConfigIndex`. Detail:
 [docs/cloudflare-worker-details.md § Cone Configuration](../../docs/cloudflare-worker-details.md#cone-configuration).
 
 ### Wrangler Config (cloud)
@@ -180,14 +167,6 @@ Vars: `ADOBE_PROXY_ENDPOINT`; `ALLOWED_EMAIL_DOMAIN` (CSV, default `adobe.com`; 
 any); `BLOCKED_EMAILS` (CSV); `REQUIRE_OWNER_ORG` (`true` expands to ownerOrg-holders);
 `CONE_CAP_RUNNING`, `CONE_CAP_PAUSED` (default 1/5); `ADMIN_USER_IDS` (CSV of IMS
 userIds). Secret: `E2B_API_KEY` (worker-only).
-
-### v1 → v2 Expansion
-
-```bash
-npx wrangler secret put REQUIRE_OWNER_ORG  # value: true
-# update ALLOWED_EMAIL_DOMAIN in wrangler.jsonc to "*"
-npx wrangler deploy
-```
 
 ### Stable API Contract (worker ↔ sandbox)
 

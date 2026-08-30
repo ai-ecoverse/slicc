@@ -65,3 +65,55 @@ The iCloud store is readable only by this signed, iCloud-entitled binary, so the
 `Models/LaunchRecordStore.swift` persists a `PersistedLaunchRecord` JSON (servePort, CDP port, electronAppPath, target name, target type, joinUrl, bridgeToken) at `~/Library/Application Support/Sliccstart/launch-records.json`, plus `CDPLiveProbe` for liveness checks via `/json/version`. No PID is stored — process identity isn't needed for reattach because the CDP port answering `/json/version` is what decides whether the previous browser is still alive. The `bridgeToken` is persisted because the surviving browser tab carries it in its launch URL (`?bridgeToken=<token>`); reattach re-forwards the same token so the re-spawned `--serve-only` slicc-server keeps gating `/cdp` against the secret the tab already has, instead of a freshly-minted static one. Legacy records carrying a `staticRoot` key still decode; the extra key is ignored, and a missing `bridgeToken`/`joinUrl` key loads as nil.
 
 Reattach also has to recover `leaderJoinUrl`, because that single value gates every Electron/terminal row (`isLeaderReady()`) and all iCloud session advertising. `reattach` therefore calls `startLeaderProbe` — **after** `spawn` has registered the launch record, not before. The probe loop's per-round decision is the pure `SliccProcess.leaderProbeStep`: it probes while a `chromiumBrowser` record is live, stops once a join URL lands or a record it had already seen goes away, and — the part that matters here — _waits_ (bounded by `leaderProbeRecordWaitRounds` × `leaderProbeRecordWaitDelay`, ~6 s) for a record that has never appeared yet. `reattachPersistedRecords` is nonisolated `async`, so the probe's first main-actor hop can beat the record insertion; treating that as terminal left `leaderJoinUrl` nil for the entire session after a smooth update, which showed up as every desktop app stuck on "Start a browser first" with a perfectly healthy leader. Tests: `SliccProcessLeaderProbeTests`.
+
+## swiftui-testing
+
+`SliccstartTests/ViewHosting.swift` renders a view off-screen with `ImageRenderer` and returns a digest of the bitmap, so a test can assert that two states of a view **render differently** (`assertRendersDifferently`) — the only way to reach `AppListView` / `SettingsView` body branches from a unit test.
+
+- **No interaction.** Headless SwiftUI on macOS builds no AppKit control tree and no accessibility tree, so buttons cannot be pressed. Button _actions_ are tested through the plain types they delegate to (`BrowserLaunchAction`, `TerminalLaunchDecision`, `AppRow.statusDot`, …) — keep new view logic in such a type rather than inline in a closure. The exception is `.borderless` buttons, which do materialize as `NSButton`s (`ViewHosting.hostedButtons`, used for `TraySessionRow`).
+- **CI runs an older macOS than your Mac** (`macos-latest` is still macOS 15). How much of an AppKit-hosted subtree — `Table`, and anything overlaid on one — an off-screen render produces differs between them, so a render comparison that passes locally is not evidence it passes in CI. Compare only over plain SwiftUI content.
+- **Vary exactly one thing per comparison.** Two states that differ in more than one way render differently whether or not the feature under test exists. Pin everything else (`subtitleOverride:`, identical messages, an empty `Secret`), or assert the underlying rule (`AppListView.updateAffordance`, `SecretEditorSheet.validationMessage`) instead of writing a comparison that cannot fail. Mutate the source and watch the test go red before trusting it.
+- **`Table`, `Toggle` and `.borderless` buttons draw nothing** (`NSTableView`/`NSSwitch`-backed), so table cells, switch knobs, and anything styled by tint on a borderless button are asserted against their model types instead.
+
+Views take their non-injectable state as init seams: `AppListView(isBundledBuild:)` (the whole update footer is otherwise unreachable outside a packaged `.app`), `MountsSettingsView(rows:)`, `SecretsSettingsView(secrets:unlocked:selection:)` (never touches the Keychain).
+
+**The window is a model, not a `Scene`.** An `App`'s `Scene` cannot be rendered, so anything living inside `WindowGroup` is untestable by construction. `SliccstartApp` is therefore only wiring: the window's behavior is **`Models/LauncherModel.swift`** (launch decisions, dialogs, debug builds, update-check outcomes, the 2 s tick, leader publish/withdraw) and its content is **`Views/RootView.swift`**. `SliccstartAppDelegate` is the composition root, with every collaborator defaulted-but-injectable so the two quit paths (stop-everything vs detach-for-update) are testable. Put new window behavior on `LauncherModel`, not in a `WindowGroup` closure. Tests: `LauncherModelTests`, `RootViewRenderTests`, `AppDelegateLifecycleTests`.
+
+**Launch paths** go through `SliccProcess.SpawnServices` — resolve-binary, run-process, is-port-in-use. Injected so `launchStandalone` / `launchBrowserFollower` / `launchWithElectronApp` are testable without starting a browser or binding 5710/9222; the stub runs `/bin/sleep` in the server's place so records, pids and termination handling stay real. Tests: `SliccProcessLaunchPathTests`.
+
+**Auto-launch requires an installed app.** `StartupPreference.shouldAutoLaunch` is `resolveEnabled && isInstalledLocation` — a copy running from a build directory, `~/Downloads`, or Gatekeeper's translocated path never starts a browser, so a dev/CI run of the launcher cannot take over the screen. The preference is untouched and the Startup tab explains the refusal.
+
+`SliccProcess`, `SliccBootstrapper` and `AppManagementPermission` are deliberately **not `final`** — they are the app's side-effecting collaborators (spawning browsers, running git/npm, opening System Settings), and `@testable` lets a test subclass stand in for them.
+
+## app-icon
+
+Two artefacts, both written by `build-app-icon.mjs`:
+
+- **`AppIcon.icns`** — one flat image from `packages/assets/logos/macos-icon-iOS-Default-1024x1024@1x.png`, via `sips` + `iconutil` (both ship with macOS). `CFBundleIconFile`.
+- **`Assets.car`** — `actool`-compiled from `packages/assets/logos/macos-icon.icon` (Icon Composer). Adds the `NSAppearanceNameAqua` / `NSAppearanceNameDarkAqua` / `ISAppearanceTintable` icon stacks macOS 26 picks between. `CFBundleIconName`, emitted into `Info.plist` only when the compile succeeds.
+
+`buildIconAssetCatalog` **degrades instead of throwing** on all three failure modes — the bundle still gets its `.icns`, just with no Dark/Tinted appearance:
+
+1. `actool` absent (it lives in Xcode, not the Command Line Tools);
+2. `actool` present but too old to compile the `.icon` — **this is the common case in CI**, whose `swift-launcher` job runs on `macos-latest` (still macOS 15 / Xcode 16.x); only `release.yml` pins `macos-26`;
+3. `actool` exits 0 but writes no `Assets.car`.
+
+A green `swift-launcher` CI build is **not** proof the appearance variants shipped — only the `macos-26` release job produces them. Watch for the `WARNING: appearance-keyed app icon skipped` line if a build's icon stops adapting, and confirm what actually shipped with `xcrun assetutil --info <app>/Contents/Resources/Assets.car`.
+
+A classic `AppIcon.appiconset` cannot replace the `.icon` here: `actool` honours the `appearances` key on iOS idioms only and reports macOS ones as "unassigned children", dropping them without failing the build. Per-appearance _custom artwork_ (`image-name-specializations`) exists in the `.icon` format but is authored in Icon Composer — hand-written variants of that key are silently ignored, so the macOS Tinted icon is **system-derived** from the layer artwork. Its contrast is therefore a property of `macos-icon.icon`'s layer, not something a separate PNG can override. Tests: `build-app-icon.test.mjs`.
+
+## packaging
+
+- `npm run build` assembles the `.app` from pre-built artifacts; `sign-and-package.sh` is the distributable path.
+- Expects `packages/swift-server/.build/release/slicc-server` to be pre-built. Webapp is **not** bundled — `assemble-app.mjs` writes an empty `Contents/Resources/slicc` marker dir.
+- **`WebRTC.framework` ships next to `slicc-server`**: `sign-and-package.sh` re-signs **innermost-first** — else dyld fails and every spawned server dies as "start failed".
+- Electron overlay bootstrap `dist/ui/electron-overlay-entry.js` is produced by **`@ai-ecoverse/spoon`** (`npm run build -w @ai-ecoverse/spoon`) and must be built before `assemble-app.mjs`; a `packages/spoon/**` change re-triggers this CI job.
+- Packaging emits only the full `Sliccstart-<v>.zip`.
+
+## ordering-mounts-browser
+
+`Models/AppOrdering.swift` holds default `browserBundlePriority` / `terminalBundlePriority`; user drag-reorder via `AppOrderStore` UserDefaults wins. `browserFollowerArgs(cdpPort:joinUrl:)` passes `--join=<url>` vs `--lead`; `launchBrowserFollower` flags `isFollower`. `BrowserLaunchAction` and the lead-or-attach dialog count only attachable iCloud sessions (no confirmed-unreachable `SessionReachability` verdict) — all-dead lists launch standalone with no dialog. `Models/StartupPreference.swift`: launch starts the top-ordered browser (`AppOrdering.topBrowser`). Tests: `AppOrderingTests`, `StartupPreferenceTests`, `SliccProcessLaunchArgsTests`.
+
+`Models/MountTablePreference.swift`: newline-separated `autoMountTable` UserDefault of `os-path:slicc-path` mappings (parse mirrors swift-server `ServerConfig.parseMountMapping`: last-colon split, `~` expansion, dedup by target), emitted as `--mount=<os>:<vfs>` by `standaloneBrowserArgs(cdpPort:mounts:)` and `reattachArgs(...mounts:)` (browsers only). Mapped folders are served by swift-server's `/api/hostfs` and auto-mounted by the webapp — no picker, no permission prompt. `Views/SettingsView.swift` → `MountsSettingsView`. Tests: `MountTablePreferenceTests`, `SliccProcessLaunchArgsTests`. Behaviour: [`docs/mounts.md`](mounts.md#auto-mounted-host-folders-the-mount-table).
+
+Sliccstart can hold the macOS http/https handler role (Settings → Startup). `Models/DefaultBrowserRegistration.swift` claims it; `assemble-app.mjs`'s `CFBundleURLTypes` is the precondition; `Models/IncomingURLRouter.swift` opens each link over CDP. See [`docs/sliccstart-browser.md`](sliccstart-browser.md).

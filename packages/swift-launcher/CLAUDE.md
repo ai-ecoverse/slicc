@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-Native macOS launcher `Sliccstart` in `packages/swift-launcher/`. SwiftUI app: finds browsers, Electron apps, and terminals; starts the right SLICC runtime; creates debug-friendly Electron builds. Deep reference: [`docs/swift-launcher-details.md`](../../docs/swift-launcher-details.md).
+Native macOS launcher `Sliccstart`. SwiftUI app: finds browsers, Electron apps, and terminals; starts the right SLICC runtime; creates debug-friendly Electron builds. Deep reference: [`docs/swift-launcher-details.md`](../../docs/swift-launcher-details.md).
 
 ## Build and Test Commands
 
@@ -14,9 +14,7 @@ npm run lint -w @slicc/swift-launcher   # SwiftLint
 ./sign-and-package.sh
 ```
 
-## Linting and Formatting
-
-`.swiftlint.yml` inherits repo-root `.swiftlint.yml` via `parent_config` and excludes `.build`; only `error`-severity violations fail CI. Auto-fix: `npm run lint:fix -w @slicc/swift-launcher`. Formatting is `swift format` (Swift 6+) against the single repo-root `.swift-format`.
+`.swiftlint.yml` inherits repo-root via `parent_config` and excludes `.build`; only `error` fails CI. Auto-fix: `npm run lint:fix -w @slicc/swift-launcher`. `swift format` (Swift 6+) uses the repo-root `.swift-format`.
 
 ```bash
 npm run lint:format -w @slicc/swift-launcher   # swift format lint --strict (CI gate)
@@ -25,175 +23,60 @@ npm run format -w @slicc/swift-launcher        # swift format --in-place
 
 ## Layout
 
-`Sliccstart/` — SwiftUI app (`SliccstartApp.swift` boots UI; `Models/AppScanner.swift` finds Chromium/CDP apps; `Models/SliccBootstrapper.swift` + `Models/SliccProcess.swift` handle launch/lifecycle; `Views/`). `SliccstartTests/` — tests. `assemble-app.mjs` — assembles `.app` bundle; `build-app-icon.mjs` — app-icon artefacts. `sign-and-package.sh` — signing/packaging.
+`Sliccstart/` — SwiftUI app (`SliccstartApp.swift` boots UI; `Models/AppScanner.swift` finds Chromium/CDP apps; `Models/SliccBootstrapper.swift` + `Models/SliccProcess.swift` handle launch/lifecycle; `Views/`). `SliccstartTests/` — tests. `assemble-app.mjs` — `.app`; `build-app-icon.mjs` — icons; `sign-and-package.sh` — signing.
 
 ## Runtime Refresh Budget
 
-`SliccstartApp` ticks `refreshRuntimeStates` every 2 s and `runtimeState(for:)` runs on every SwiftUI render, so anything on that path must be O(1) and filesystem-free in the steady state. Electron liveness uses the launch record's `observedAppPID` (`kill(pid, 0)`) first; the `NSWorkspace.runningApplications` scan (`candidateBundlePaths` + `appMatches`, pure string compares) is a fallback only. Do not reintroduce per-app `resolvingSymlinksInPath()` — with ~270 running apps it pinned the launcher at ~40% CPU. Tests: `ElectronAppMatchingTests`.
+`refreshRuntimeStates` ticks every 2 s and `runtimeState(for:)` runs on every SwiftUI render — that path must be O(1) and filesystem-free in the steady state. Electron liveness uses the launch record's `observedAppPID` (`kill(pid, 0)`) first; `NSWorkspace.runningApplications` (`candidateBundlePaths` + `appMatches`, string compares) is fallback only. **Do not reintroduce per-app `resolvingSymlinksInPath()`** — ~270 running apps pinned the launcher at ~40% CPU. Tests: `ElectronAppMatchingTests`.
 
-## Testing the SwiftUI Surfaces
+## Testing SwiftUI Surfaces
 
-`SliccstartTests/ViewHosting.swift` renders a view off-screen with
-`ImageRenderer` and returns a digest of the bitmap, so a test can assert that
-two states of a view **render differently** (`assertRendersDifferently`) — the
-only way to reach `AppListView` / `SettingsView` body branches from a unit
-test. Two hard limits, both worked around rather than fought:
+`ViewHosting.swift` (`assertRendersDifferently`) reaches `AppListView` / `SettingsView` body branches. An `App` `Scene` cannot be rendered — put window behavior on `LauncherModel`, content on `RootView`; `SliccstartAppDelegate` is the injectable composition root (stop-everything vs detach-for-update). Launch paths inject `SliccProcess.SpawnServices` (`/bin/sleep`; no 5710/9222). Auto-launch is `resolveEnabled && isInstalledLocation`. `SliccProcess`, `SliccBootstrapper`, `AppManagementPermission` are **not `final`**. Constraints: [`docs/swift-launcher-details.md`](../../docs/swift-launcher-details.md#swiftui-testing). Tests: `LauncherModelTests`, `RootViewRenderTests`, `AppDelegateLifecycleTests`, `SliccProcessLaunchPathTests`.
 
-- **No interaction.** Headless SwiftUI on macOS builds no AppKit control tree
-  and no accessibility tree, so buttons cannot be pressed. Button _actions_ are
-  tested through the plain types they delegate to (`BrowserLaunchAction`,
-  `TerminalLaunchDecision`, `AppRow.statusDot`, …) — keep new view logic in
-  such a type rather than inline in a closure. The exception is `.borderless`
-  buttons, which do materialize as `NSButton`s (`ViewHosting.hostedButtons`,
-  used for `TraySessionRow`).
-- **CI runs an older macOS than your Mac** (`macos-latest` is still macOS 15).
-  How much of an AppKit-hosted subtree — `Table`, and anything overlaid on one
-  — an off-screen render produces differs between them, so a render comparison
-  that passes locally is not evidence it passes in CI. Compare only over
-  plain SwiftUI content.
-- **Vary exactly one thing per comparison.** Two states that differ in more
-  than one way render differently whether or not the feature under test
-  exists — a review found eight such tests here. Pin everything else
-  (`subtitleOverride:`, identical messages, an empty `Secret`), or assert the
-  underlying rule (`AppListView.updateAffordance`,
-  `SecretEditorSheet.validationMessage`) instead of writing a comparison that
-  cannot fail. Mutate the source and watch the test go red before trusting it.
-- **`Table`, `Toggle` and `.borderless` buttons draw nothing** (both are `NSTableView`/`NSSwitch`-
-  backed), so table cells, switch knobs, and anything styled by tint on a
-  borderless button are asserted against their model types instead.
+## OpTel, scanning, terminals
 
-Views take their non-injectable state as init seams for this:
-`AppListView(isBundledBuild:)` (the whole update footer is otherwise
-unreachable outside a packaged `.app`), `MountsSettingsView(rows:)`,
-`SecretsSettingsView(secrets:unlocked:selection:)` (never touches the
-Keychain).
+`.optelAutoInstrument(appID:)` once (`com.slicc.sliccstart` → `helix-225321.helix_rum.cluster`). `LauncherErrorReport`: `source = sliccstart:<operation>` is a wire contract; `target` redacts URLs → `<url>`, paths → `<path>`, `token`/`secret`/`password`/`key` → `<redacted>`. **Never report `AUError.cancelled`.** Identifiers: `get-extension`, `rescan`, `check-for-updates`, `restart-to-update`, `update`, `app-row-<Name>`. [`docs/swift-launcher-details.md`](../../docs/swift-launcher-details.md#optel).
 
-**The window is a model, not a `Scene`.** An `App`'s `Scene` cannot be
-rendered, so anything living inside `WindowGroup` is untestable by
-construction. `SliccstartApp` is therefore only wiring: the window's behavior
-is **`Models/LauncherModel.swift`** (launch decisions, dialogs, debug builds,
-update-check outcomes, the 2 s tick, leader publish/withdraw) and its content
-is **`Views/RootView.swift`**. `SliccstartAppDelegate` is the composition
-root, with every collaborator defaulted-but-injectable so the two quit paths
-(stop-everything vs detach-for-update) are testable. Put new window behavior
-on `LauncherModel`, not in a `WindowGroup` closure. Tests:
-`LauncherModelTests`, `RootViewRenderTests`, `AppDelegateLifecycleTests`.
+Scan: Chromium by bundle ID; `/Applications` for Electron/WebView2 with CDP frameworks; `~/Applications` first so `* Debug.app` wins; Terminal.app, iTerm2, Ghostty, WezTerm, kitty, Alacritty by bundle ID.
 
-**Launch paths** go through `SliccProcess.SpawnServices` — resolve-binary,
-run-process, is-port-in-use. Injected so `launchStandalone` /
-`launchBrowserFollower` / `launchWithElectronApp` are testable without
-starting a browser or binding 5710/9222; the stub runs `/bin/sleep` in the
-server's place so records, pids and termination handling stay real. Tests:
-`SliccProcessLaunchPathTests`.
+Terminal rows: `slicc <join-url> follow`. **Disabled until `leaderJoinUrl` is known; never auto-start a leader. CLI never bundled.** Download asks first; Developer ID + team `S8LB56P782`; `https://www.sliccy.ai/download/slicc-cli/darwin-<arch>`. Locator + Gatekeeper: [`docs/swift-launcher-details.md`](../../docs/swift-launcher-details.md#terminal-followers), [`docs/pitfalls.md`](../../docs/pitfalls.md) § "Downloaded `slicc` CLI". Terminal.app/iTerm2: Apple Events (`com.apple.security.automation.apple-events`).
 
-**Auto-launch requires an installed app.** `StartupPreference.shouldAutoLaunch`
-is `resolveEnabled && isInstalledLocation` — a copy running from a build
-directory, `~/Downloads`, or Gatekeeper's translocated path never starts a
-browser, so a dev/CI run of the launcher cannot take over the screen. The
-preference is untouched and the Startup tab explains the refusal.
+## Finder File Provider, Widgets
 
-`SliccProcess`, `SliccBootstrapper` and `AppManagementPermission` are
-deliberately **not `final`** — they are the app's side-effecting collaborators
-(spawning browsers, running git/npm, opening System Settings), and `@testable`
-lets a test subclass stand in for them.
+`SliccFileProvider.appex` (XcodeGen `project.yml` + `xcodebuild` → `Contents/PlugIns/`) **embeds its own `WebRTC.framework` and `AppIcon.icns`**. Join URL in an app-group file, not keychain. Clean quit withdraws the domain (update/detach does not). Enable once: System Settings → Login Items & Extensions → File Provider. Shared: **`packages/swift-traykit`**. [`docs/swift-launcher-details.md`](../../docs/swift-launcher-details.md#finder-file-provider). Tests: `FileProviderCoordinatorTests`, `stage-file-provider-appex.test.mjs`.
 
-## Operational Telemetry (OpTel)
-
-`SliccstartApp.swift`'s `WindowGroup` root calls `.optelAutoInstrument(appID:)` from `@slicc/swift-optel` once; on macOS that activates `enter`, global `click`, `navigate`, and `error` (uncaught `NSException`). `appID = Bundle.main.bundleIdentifier` (`com.slicc.sliccstart`); beacons land in `helix-225321.helix_rum.cluster`.
-
-Swift errors are values and cannot be intercepted globally, so `do/catch` boundaries report through **`Models/LauncherErrorReport.swift`**. `source = sliccstart:<operation>` is a wire contract (RUM filters on `Operation` enum strings). `target` is **redacted**: URLs → `<url>`, paths → `<path>`, `token`/`secret`/`password`/`key` → `<redacted>`. **Never report `AUError.cancelled`** — that is the normal up-to-date outcome.
-
-Key controls carry stable `.accessibilityIdentifier` values (`get-extension`, `rescan`, `check-for-updates`, `restart-to-update`, `update`, `app-row-<Name>`).
-
-## App Scanning
-
-Chromium browsers by bundle ID; `/Applications` for Electron/WebView2 bundles with CDP frameworks; `~/Applications` scanned first so `* Debug.app` wins over originals; Terminal.app, iTerm2, Ghostty, WezTerm, kitty, Alacritty by bundle ID.
-
-## Terminal Followers
-
-Terminal rows attach the selected terminal to the current leader via `slicc <join-url> follow`. **Disabled until `leaderJoinUrl` is known; never auto-start a leader.**
-
-`SliccCliLocator` order: managed `~/Library/Application Support/Sliccstart/bin/slicc`, repo `make build`, arch-specific `make dist`, `/usr/local/bin`, `~/.local/bin`, `/opt/homebrew/bin`. **The CLI is never bundled in `Sliccstart.app`.** If none is found, the launcher **asks before** downloading from `https://www.sliccy.ai/download/slicc-cli/darwin-<arch>`, validates Developer ID signature and team `S8LB56P782` before making executable, then atomically installs. Bare Mach-Os carry no stapled ticket — see [`docs/pitfalls.md`](../../docs/pitfalls.md) § "Downloaded `slicc` CLI".
-
-Terminal.app and iTerm2 launch through Apple Events; `sign-and-package.sh` signs with `Sliccstart.entitlements` including `com.apple.security.automation.apple-events`.
-
-## Finder File Provider (leader VFS)
-
-Shared provider logic in **`packages/swift-traykit`** (`SliccTrayVFS`). `SliccFileProvider.appex` is built via XcodeGen (`project.yml`) + `xcodebuild`, then `stageFileProviderAppex` copies it into `Contents/PlugIns/` **with its own `WebRTC.framework` and `AppIcon.icns`** — a sandboxed appex cannot load the host `Resources/` copy, and Finder Locations uses the appex icon. `FileProviderCoordinator` saves the join URL to an app-group file (not keychain) when `leaderJoinUrl` is set; Settings → Startup toggles Finder integration. Clean quit withdraws the domain (update/detach does not). The appex is App Sandbox + network client/server, notarized alongside the main app; enable once in System Settings → Login Items & Extensions → File Provider. Coverage: `FileProviderCoordinatorTests`, `stage-file-provider-appex.test.mjs`, `packages/swift-traykit` provider tests.
-
-## Widget Extension (Cones & Scoops)
-
-`SliccstartWidgets.appex` (`com.slicc.sliccstart.widgets`) shows the connected instance's cones and scoops in Notification Centre / on the desktop. Views live in **`packages/swift-widgetkit`**; this package owns only the `@main` bundle and the build wiring — XcodeGen (`project.yml`, `SliccstartWidgets` scheme) → `stageWidgetAppex` into `Contents/PlugIns/` → `sign-and-package.sh` signs it with `SliccstartWidgets.entitlements` (sandbox + app group, no framework to embed, unlike the File Provider appex).
-
-Capture is `Models/WidgetTrayObserver.swift`: Sliccstart holds no cone/scoop state of its own (it is a launcher; state is client-side in the leader tab and the local server is a stateless relay that cannot answer either), so it runs a small **read-only tray follower** off `leaderJoinUrl`, listens for `scoops.list`, and asks for a transcript snapshot at most every 30 s. It is **gated on the widget actually being installed** (`WidgetInstallationQuery`) — a launcher holding a WebRTC participant slot open forever to feed a tile nobody added is a bad citizen in someone else's session. Wired from `SliccstartApp`'s `leaderJoinUrl` observer, next to `FileProviderCoordinator`. Details: [`docs/widgets.md`](../../docs/widgets.md#capture).
+`SliccstartWidgets.appex` (`com.slicc.sliccstart.widgets`): views in **`packages/swift-widgetkit`**; this package owns `@main` + wiring (`SliccstartWidgets` → `stageWidgetAppex` → sandbox + app group, **no** nested framework). `WidgetTrayObserver` is a **read-only tray follower** off `leaderJoinUrl`, **gated on `WidgetInstallationQuery`**. [`docs/widgets.md`](../../docs/widgets.md#capture).
 
 ## iCloud Sync (Tray Sessions)
 
-Shared models in **`packages/swift-traysession`**. **Secret-bearing join URLs sync only through same-Apple-ID, encrypted iCloud KVS.** `SessionReachability` follows bounded `TRAY_SUPERSEDED` chains; only HTTP 200 with `leader.connected == true` is live. `SliccstartApp` publishes non-nil `leaderJoinUrl`; clean quit withdraws, update/detach does not. Coverage: `TraySessionLauncherTests`.
+**`packages/swift-traysession`**. **Join URLs sync only through same-Apple-ID, encrypted iCloud KVS.** Live = HTTP 200 + `leader.connected == true` on bounded `TRAY_SUPERSEDED` chains. Publish non-nil `leaderJoinUrl`; clean quit withdraws, update/detach does not. Advertise-now: [`docs/swift-launcher-details.md`](../../docs/swift-launcher-details.md#keeping-the-advertised-join-url-true).
 
-**Advertise what is true now, not what was true at launch.** The _browser_ mints the tray, so a reload or a supersede re-mints it and the URL `startLeaderProbe` found once names a tray with no leader. `startLeaderJoinUrlWatch()` re-reads `/api/tray-status` every 60 s and adopts a change; `leaderJoinUrlChanged(_:previous:)` withdraws the entry it supersedes (sessions are keyed by `SHA256(joinUrl)`, so a re-mint otherwise _adds_ a dead row for 12 h); `republishLeaderSession()` re-reads before stamping `lastSeenAt` and publishes nothing when the leader is silent. Why each half is load-bearing: [`docs/swift-launcher-details.md`](../../docs/swift-launcher-details.md#keeping-the-advertised-join-url-true). Tests: `SliccProcessLeaderProbeTests`, `LauncherModelTests`.
+**`leaderJoinUrl` is the single gate** for Electron/terminal rows _and_ iCloud. `reattach` must `startLeaderProbe` **after** `spawn` registers the record; `leaderProbeStep` waits (bounded) for a never-seen record (`reattachPersistedRecords` is nonisolated `async`). Wrong order → "Start a browser first" after every smooth update. Tests: `SliccProcessLeaderProbeTests`, `LauncherModelTests`, `TraySessionLauncherTests`.
 
-**`leaderJoinUrl` is the single gate** for Electron/terminal rows _and_ iCloud advertising. `reattach` must call `startLeaderProbe` **after** `spawn` registers the launch record, and the loop's `leaderProbeStep` must keep waiting for a record it has never seen (bounded grace) — `reattachPersistedRecords` is nonisolated `async`, so the probe can outrun the record. Getting this wrong strands the launcher on "Start a browser first" after every smooth update. Tests: `SliccProcessLeaderProbeTests`.
+**`Sliccstart --list-sessions`**: `main.swift` **before** SwiftUI. JSON, **metadata only** (`joinUrl` redacted). `--reveal-urls` needs `NSAlert`; headless/SSH **denied** (exit 3). `TraySessionCLI` / `TraySessionCLIRunner`.
 
-**Headless CLI (`Sliccstart --list-sessions`)** — parsed in `main.swift` **before** SwiftUI boots. Prints JSON, **metadata only** (`joinUrl` redacted). `--reveal-urls` gates behind `NSAlert`; headless/SSH callers **denied** (exit 3). Pure logic in `Models/TraySessionCLI.swift`; glue in `TraySessionCLIRunner`.
+## Ordering, mounts, default browser
 
-## App Ordering, Browser Followers, Startup
+`AppOrdering` (`browserBundlePriority`/`terminalBundlePriority`; `AppOrderStore` UserDefaults wins). `browserFollowerArgs` passes `--join=<url>` vs `--lead`; `launchBrowserFollower` flags `isFollower`. Lead-or-attach counts only attachable iCloud sessions — all-dead lists launch standalone. `StartupPreference` starts `AppOrdering.topBrowser`. Tests: `AppOrderingTests`, `StartupPreferenceTests`, `SliccProcessLaunchArgsTests`.
 
-`Models/AppOrdering.swift` (default `browserBundlePriority`/`terminalBundlePriority`; user drag-reorder via `AppOrderStore` UserDefaults wins). `browserFollowerArgs(cdpPort:joinUrl:)` passes `--join=<url>` vs `--lead`; `launchBrowserFollower` flags `isFollower`. `BrowserLaunchAction` and the lead-or-attach dialog count only attachable iCloud sessions (no confirmed-unreachable `SessionReachability` verdict) — all-dead lists launch standalone with no dialog. `Models/StartupPreference.swift`: launch starts top-ordered browser (`AppOrdering.topBrowser`). Tests: `AppOrderingTests`, `StartupPreferenceTests`, `SliccProcessLaunchArgsTests`.
+`MountTablePreference`: `autoMountTable` of `os-path:slicc-path` (last-colon split, `~` expansion, dedup by target), emitted as `--mount=<os>:<vfs>` (browsers only). `/api/hostfs` + webapp auto-mount — no picker. Tests: `MountTablePreferenceTests`. [`docs/mounts.md`](../../docs/mounts.md#auto-mounted-host-folders-the-mount-table).
 
-## Mount Table (Settings → Mounts)
-
-`Models/MountTablePreference.swift`: newline-separated `autoMountTable` UserDefault of `os-path:slicc-path` mappings (parse mirrors swift-server `ServerConfig.parseMountMapping`: last-colon split, `~` expansion, dedup by target), emitted as `--mount=<os>:<vfs>` by `standaloneBrowserArgs(cdpPort:mounts:)` and `reattachArgs(...mounts:)` (browsers only). Mapped folders are served by swift-server's `/api/hostfs` and auto-mounted by the webapp — no picker, no permission prompt. `Views/SettingsView.swift` → `MountsSettingsView`. Tests: `MountTablePreferenceTests`, `SliccProcessLaunchArgsTests`. Behaviour: [`docs/mounts.md`](../../docs/mounts.md#auto-mounted-host-folders-the-mount-table).
-
-## Default Browser Role
-
-Sliccstart can hold the macOS http/https handler role (Settings → Startup). `Models/DefaultBrowserRegistration.swift` claims it; `assemble-app.mjs`'s `CFBundleURLTypes` is the precondition; `Models/IncomingURLRouter.swift` opens each link over CDP. See [`docs/sliccstart-browser.md`](../../docs/sliccstart-browser.md).
+Default http/https handler: `DefaultBrowserRegistration`; `CFBundleURLTypes` precondition; `IncomingURLRouter` opens links over CDP. [`docs/sliccstart-browser.md`](../../docs/sliccstart-browser.md).
 
 ## iCloud Provisioning (Developer ID app)
 
 Sync needs an iCloud KVS entitlement backed by an _embedded_ provisioning profile — **Developer ID signing alone does not authorize iCloud.** `sign-and-package.sh` gates on optional **`PROVISION_PROFILE`**: unset → signs `Sliccstart.entitlements` only, `NSUbiquitousKeyValueStore` degrades to a local cache; set → embeds the profile and signs a merged file. CI exports `PROVISION_PROFILE` and `KVSTORE_IDENTIFIER` (releases ship `S8LB56P782.ai.sliccy.trays`, **which the iOS follower must match**). Signing contract: `macos-permissions.test.mjs`.
 
-## Debug Build Creation
-
-`Models/DebugBuildCreator.swift` creates Electron debug builds by: (1) copying into `~/Applications/<Name> Debug.app`, (2) patching Electron fuses for remote debugging, (3) unpacking/patching `app.asar` JS checks that block CDP, (4) ad-hoc signing, (5) removing quarantine attributes. Use when an Electron app disables remote debugging in production.
-
 ## App Icon
 
-Two artefacts, both written by `build-app-icon.mjs`:
+`DebugBuildCreator`: copy to `~/Applications/<Name> Debug.app`, patch Electron fuses, unpack/patch `app.asar` CDP blocks, ad-hoc sign, drop quarantine.
 
-- **`AppIcon.icns`** — one flat image from `packages/assets/logos/macos-icon-iOS-Default-1024x1024@1x.png`, via `sips` + `iconutil` (both ship with macOS). `CFBundleIconFile`.
-- **`Assets.car`** — `actool`-compiled from `packages/assets/logos/macos-icon.icon` (Icon Composer). Adds the `NSAppearanceNameAqua` / `NSAppearanceNameDarkAqua` / `ISAppearanceTintable` icon stacks macOS 26 picks between. `CFBundleIconName`, emitted into `Info.plist` only when the compile succeeds.
+`build-app-icon.mjs` writes `AppIcon.icns` (`sips`+`iconutil`) and `Assets.car` (`actool` from `macos-icon.icon`). Degrades if `actool` is missing/too old (CI `macos-latest` = macOS 15; only `release.yml` pins `macos-26`) — a green CI build is **not** proof appearance variants shipped. Watch `WARNING: appearance-keyed app icon skipped`; `xcrun assetutil --info <app>/Contents/Resources/Assets.car`. [`docs/swift-launcher-details.md`](../../docs/swift-launcher-details.md#app-icon). Tests: `build-app-icon.test.mjs`.
 
-`buildIconAssetCatalog` **degrades instead of throwing** on all three failure modes — the bundle still gets its `.icns`, just with no Dark/Tinted appearance:
-
-1. `actool` absent (it lives in Xcode, not the Command Line Tools);
-2. `actool` present but too old to compile the `.icon` — **this is the common case in CI**, whose `swift-launcher` job runs on `macos-latest` (still macOS 15 / Xcode 16.x); only `release.yml` pins `macos-26`;
-3. `actool` exits 0 but writes no `Assets.car`.
-
-So a green `swift-launcher` CI build is **not** proof the appearance variants shipped — only the `macos-26` release job produces them. Watch for the `WARNING: appearance-keyed app icon skipped` line if a build's icon stops adapting, and confirm what actually shipped with `xcrun assetutil --info <app>/Contents/Resources/Assets.car`.
-
-A classic `AppIcon.appiconset` cannot replace the `.icon` here: `actool` honours the `appearances` key on iOS idioms only and reports macOS ones as "unassigned children", dropping them without failing the build. Per-appearance _custom artwork_ (`image-name-specializations`) exists in the `.icon` format but is authored in Icon Composer — hand-written variants of that key are silently ignored, so the macOS Tinted icon is **system-derived** from the layer artwork. Its contrast is therefore a property of `macos-icon.icon`'s layer, not something a separate PNG can override. Tests: `build-app-icon.test.mjs`.
-
-## Packaging Notes
-
-- `npm run build` assembles the `.app` from pre-built artifacts; `sign-and-package.sh` is the distributable path.
-- Expects `packages/swift-server/.build/release/slicc-server` to be pre-built. Webapp is **not** bundled — `assemble-app.mjs` writes an empty `Contents/Resources/slicc` marker dir.
-- **`WebRTC.framework` ships next to `slicc-server`**: `sign-and-package.sh` re-signs **innermost-first** — else dyld fails and every spawned server dies as "start failed".
-- Electron overlay bootstrap `dist/ui/electron-overlay-entry.js` is produced by **`@ai-ecoverse/spoon`** (`npm run build -w @ai-ecoverse/spoon`) and must be built before `assemble-app.mjs`; a `packages/spoon/**` change re-triggers this CI job.
-- Packaging emits only the full `Sliccstart-<v>.zip`.
+Packaging: `npm run build` from pre-built artifacts; `sign-and-package.sh` is the distributable path. Needs `slicc-server`. Webapp **not** bundled. **Re-sign `WebRTC.framework` innermost-first.** Overlay from **`@ai-ecoverse/spoon`** (`npm run build -w @ai-ecoverse/spoon`) before `assemble-app.mjs`. Emits only `Sliccstart-<v>.zip`. [`docs/swift-launcher-details.md`](../../docs/swift-launcher-details.md#packaging).
 
 ## Updates
 
-**Full-app-only**, driven by external `AppUpdater` SPM package. `SliccstartApp.swift` owns an `AppUpdater` `@StateObject`; `checkForUpdates()` records outcome in `UpdateCheckStatus`. On `.downloaded`, `AppListView.fullUpdateButton` surfaces `restart-to-update` → `appUpdater.install(bundle)`. The 2 s timer polls `/api/agent-activity`; `AgentActivityProbe` fails open after 1 s.
+**Full-app-only** (`AppUpdater` SPM). `checkForUpdates()` → `UpdateCheckStatus`; `.downloaded` → `restart-to-update` → `appUpdater.install(bundle)`. 2 s timer polls `/api/agent-activity`; `AgentActivityProbe` fails open after 1 s. `--update-host=<url>` / `SLICC_UPDATE_HOST` (default `https://api.github.com`). `TolerantGithubReleaseProvider`: `Sliccstart-<version>.zip`/`.tar`; `per_page=100`; RFC 8288 `rel="next"` (same host, HTTP(S) only). `LaunchRecordStore` + `CDPLiveProbe` (`/json/version`): **no PID**; persist `bridgeToken`. `detachAll()` / `reattachPersistedRecords()`. **Thin-bridge `slicc-server` only — no `--static-root`.** [`docs/swift-launcher-details.md`](../../docs/swift-launcher-details.md#updates).
 
-- `Models/UpdateCheckStatus.swift` — `idle`, `checking`, `upToDate`, `noInstallableRelease`, `translocated`, `failed(message)`.
-- `Models/UpdateHostConfiguration.swift` — `--update-host=<url>` / `SLICC_UPDATE_HOST` (default `https://api.github.com`).
-- `Models/TolerantGithubReleaseProvider.swift` — filters releases lacking `Sliccstart-<version>.zip`/`.tar`; `per_page=100`; follows RFC 8288 `Link: rel="next"` (same host, HTTP(S) only) until viable release or `currentVersion`.
-- `Models/LaunchRecordStore.swift` — `PersistedLaunchRecord` JSON at `~/Library/Application Support/Sliccstart/launch-records.json` + `CDPLiveProbe` (`/json/version`). **No PID stored.** `bridgeToken` persisted so reattach re-forwards the same secret the surviving tab has.
-- `Models/SliccProcess.swift`: `detachAll()`, `reattachPersistedRecords()`. **The launcher only ever spawns thin-bridge `slicc-server` — no `--static-root` / overlay plumbing.**
-
-## Update Tests
-
-`UpdateHostConfigurationTests.swift`, `UpdateCheckIntegrationTests.swift` (real GitHub API — needs `GH_TOKEN` from `${{ github.token }}` in `ci.yml`), `ReleaseFetchPaginationTests.swift`, `UpdateCheckStatusTests.swift`, `AgentActivityProbeTests.swift`, `LauncherErrorReportTests.swift`.
-
-Deep reference for every section above: [`docs/swift-launcher-details.md`](../../docs/swift-launcher-details.md).
+Tests: `UpdateHostConfigurationTests`, `UpdateCheckIntegrationTests` (real GitHub API — `GH_TOKEN` from `${{ github.token }}` in `ci.yml`), `ReleaseFetchPaginationTests`, `UpdateCheckStatusTests`, `AgentActivityProbeTests`, `LauncherErrorReportTests`.

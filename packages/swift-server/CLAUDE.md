@@ -47,13 +47,9 @@ npm run format -w @slicc/swift-server        # swift format --in-place
 
 ## Electron `--join` — egress decides the attach route
 
-Egress-ALLOWED apps attach via the overlay itself: the LEADER-role overlay URL carries `tray=<join url>` (the Chrome join path's `?tray=` contract), so the pinned first tab boots as a tray follower instead of minting its own. In-app auto-follow tabs carry an explicitly EMPTY `tray=`, blocking the webapp's stored-join-URL fallback at the shared sliccy.ai origin — one app, one follower.
+Egress-allowed apps: the LEADER-role overlay URL carries `tray=<join url>` (Chrome's `?tray=` contract) so the pinned first tab boots as a tray follower. In-app auto-follow tabs get an empty `tray=`, blocking the stored-join-URL fallback — one app, one follower.
 
-## Egress-blocked Electron apps (Signal) — CDP over CDP
-
-Signal-class Electron apps deny **all** renderer egress at the main process (`net::ERR_ACCESS_DENIED`), beneath `Page.setBypassCSP` / CDP Fetch. `ElectronOverlayEgress.swift` detects this via `Network.loadingFailed` on the overlay iframe and shows a **status-only** overlay (mirrors node-server `electron-controller.ts`).
-
-When blocked AND a `--join` tray URL is given, swift-server exposes the app's CDP to the leader via a headless WebRTC tray follower (`Sources/Follower/`): `ElectronTrayFollower.swift` routes `tray-control`; `FederatedCDPServicer.swift` speaks raw browser CDP with `sendCDPResponse`-compatible chunking. Mirrors node-server's `electron-tray-follower.ts` / `electron-federated-cdp.ts`; Swift uses `stasel/WebRTC` via `packages/swift-trayfollower`.
+Egress-blocked apps (Signal): renderer egress is denied at the main process (`net::ERR_ACCESS_DENIED`), beneath CSP bypass / CDP Fetch. `ElectronOverlayEgress.swift` detects `Network.loadingFailed` on the overlay iframe and shows a **status-only** overlay (mirrors node-server `electron-controller.ts`). With `--join`, a headless WebRTC tray follower (`Sources/Follower/`) exposes the app's CDP: `ElectronTrayFollower.swift` routes `tray-control`; `FederatedCDPServicer.swift` speaks raw browser CDP. Mirrors `electron-tray-follower.ts` / `electron-federated-cdp.ts`; Swift uses `stasel/WebRTC` via `packages/swift-trayfollower`.
 
 ## Server Overview
 
@@ -70,12 +66,12 @@ When blocked AND a `--join` tray URL is given, swift-server exposes the app's CD
 - `GET /api/runtime-config`, `/api/tray-status`, `/auth/callback`, `GET|POST /api/oauth-result`, `GET|POST|DELETE /api/webhooks...`, `/api/crontasks...`
 - `POST /api/handoff` (`Sources/Server/Handoff.swift`) — validates payload, broadcasts `navigate_event` on lick WebSocket.
 - `GET /api/secrets`, `GET|POST /api/secrets/session`, `/api/secrets/masked`, `/api/secrets/peek`, `POST /api/secrets/scope`, session-first `DELETE /api/secrets/:name`. Session records are process-memory only; persisted/OAuth records keep masking precedence on name collisions.
-- `POST /api/secrets/scrub` (via `SecretInjector.scrub(text:)`). Intentionally no persisted `POST /api/secrets` route.
-- `POST /api/s3-sign-and-forward`, `/api/da-sign-and-forward` (`Sources/Server/SignAndForward.swift`) — S3 creds from Keychain, transient IMS bearer for DA.
-- `POST /api/sudo-approve` (`Sources/Server/SudoApprove.swift`) — native `osascript` via `Process`; loopback-only; fail-closed to `{ decision: "deny" }`.
-- `ALL /api/fetch-proxy` — HTTP verbs plus WebDAV/CalDAV (`PROPFIND`, `PROPPATCH`, `MKCOL`, `MKCALENDAR`, `REPORT`, `COPY`, `MOVE`, `LOCK`, `UNLOCK`). Unknown → AsyncHTTPClient via `HTTPMethod.RAW(value:)`.
+- `POST /api/secrets/scrub` (`SecretInjector.scrub(text:)`). No persisted `POST /api/secrets`.
+- `POST /api/s3-sign-and-forward`, `/api/da-sign-and-forward` — Keychain S3 creds; transient IMS bearer for DA.
+- `POST /api/sudo-approve` — loopback-only `osascript`; fail-closed `{ decision: "deny" }`.
+- `ALL /api/fetch-proxy` — HTTP + WebDAV/CalDAV; unknown verbs → `HTTPMethod.RAW`.
 
-WebSocket routes install separately for CDP and lick. `LickSystem` (actor) tracks clients + pending requests; `LickWebSocketRoute` exposes `/licks-ws`. Browser-originated messages resolve pending requests or broadcast events into the runtime.
+WebSocket routes for CDP and lick install separately (`/licks-ws`).
 
 ## Tab Session Restore
 

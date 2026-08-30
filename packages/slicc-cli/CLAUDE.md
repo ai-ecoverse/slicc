@@ -77,52 +77,33 @@ JSON and update Go structs + `corpus_test.go` alongside TS + Swift mirrors.
 ## Diagnostics vs user-facing output
 
 - **User-facing** — `prompt`/`exec`/`watch` write leader bytes to stdout,
-  status to stderr. **Never route through the logger**; the CLI is pipeable.
-- **Diagnostics** — signaling retries, supersede redirects (`OnJoinURLChanged`
-  persists the replacement across `follow`/`watch` reconnects), ICE failures,
-  unparseable frames go through `internal/logging` (`log/slog` `diagLogger`
-  in `commands.go`, to stderr); `debugLogf` adapts to `tray.Options.Logf`.
-- **pion's own records** — `Conn.pionLoggerFactory` installs
-  `logging.PionFactory` on `SettingEngine.LoggerFactory`. **Required**: left
-  nil, webrtc installs pion's default factory, which writes error records
-  straight to `os.Stderr` — TURN refresh churn (`turnc ERROR: Fail to refresh
-permissions`) then buries the CLI's own output and no log level of ours can
-  quiet it. Warn-and-above records are tallied into the status bar
-  (`tray.Options.OnLinkDiag`) instead of printed.
+  status to stderr. Never through the logger (the CLI is pipeable).
+- **Diagnostics** — retries, supersede redirects (`OnJoinURLChanged`), ICE
+  failures, unparseable frames → `internal/logging` on stderr.
+- **pion** — `Conn.pionLoggerFactory` **must** install `logging.PionFactory`.
+  Left nil, pion writes TURN refresh errors straight to `os.Stderr` and no
+  log level of ours can quiet it. Warn-and-above go to the status bar
+  (`OnLinkDiag`) instead.
 
-Off by default. `SLICC_DEBUG=1` (legacy = `SLICC_LOG_LEVEL=debug`) or
-`SLICC_LOG_LEVEL=debug|info|warn|error`; `SLICC_LOG_FORMAT=json` swaps
-`slog.TextHandler` for `slog.JSONHandler`.
+Off by default. `SLICC_DEBUG=1` / `SLICC_LOG_LEVEL=…`; `SLICC_LOG_FORMAT=json`
+for JSON.
 
 ## Terminal presentation (`internal/ui`)
 
-`follow`/`watch` render through `internal/ui` (stdlib + `golang.org/x/sys`, raw
-ANSI — no TUI framework). On an interactive terminal `follow` keeps a **sticky
-one-line status bar** below the log: state badge (connect spinner, live retry
-countdown), uptime, `♥` age of the last frame from the leader (fed by
-`tray.Options.OnActivity`, which fires on _every_ inbound frame — the leader
-answers pings rather than sending them, so keepalives alone would never
-populate it), exec + reconnect counts, suppressed link diagnostics,
-`user@host · runner`, and a per-5s connection-history strip.
-Event lines are stamped, colored and glyph-marked; an identical repeat folds in
-place as `(×N)`, or into a compact `↺ repeated (×N)` row when the event cannot
-be rewritten safely (too tall, soft-wrapped, or holding text whose cell width we
-cannot be sure of — emoji, CJK, invalid bytes). So a reconnect loop no longer
-scrolls the screen away.
+`follow`/`watch` use `internal/ui` (stdlib + `golang.org/x/sys`, raw ANSI).
+Interactive `follow` keeps a **sticky one-line status bar** (state, uptime,
+`♥` last-frame age via `OnActivity` on every inbound frame — the leader
+answers pings rather than sending them). Repeats fold as `(×N)`.
 
-**The bar must own the last row**, so it is dropped (colors kept) when anything
-else writes to the same stream: `watch` when **stdout** is also a terminal (its
-transcript arrives in partial lines), and any verb once the diagnostic logger is
-turned up (`SLICC_DEBUG=1` and friends write to **stderr** directly). Both
-decisions live in `commands.go` — `watchModes` and `stickyUnlessLogging`.
+**The bar must own the last row** — dropped (colors kept) when anything else
+writes the same stream: `watch` with terminal stdout, or any verb once
+diagnostics go to stderr (`SLICC_DEBUG=1`). See `watchModes` /
+`stickyUnlessLogging` in `commands.go`.
 
-**Plain mode is the contract**: with no terminal attached, output is
-byte-for-byte the pre-TUI `slicc <verb>: <msg>` text, escape-free, with every
-occurrence kept. Cursor control is never written to a non-terminal.
-`--plain` / `SLICC_NO_TUI=1` force plain; `NO_COLOR` keeps the bar without
-color; `FORCE_COLOR`/`CLICOLOR_FORCE` colors a redirected stream (still not
-sticky); `COLUMNS` overrides the detected width. Design notes + the glyph/ASCII
-fallback rules: [details](../../docs/slicc-cli-details.md).
+**Plain mode is the contract**: no terminal → pre-TUI `slicc <verb>: <msg>`,
+escape-free, no cursor control. `--plain` / `SLICC_NO_TUI=1` force it.
+`NO_COLOR` / `FORCE_COLOR` / `COLUMNS` as usual. Glyph/ASCII fallback:
+[details](../../docs/slicc-cli-details.md).
 
 ## Exec safety (`follow`)
 
@@ -140,30 +121,21 @@ footgun; MOTD (`hello.motd`, `followMotd`) surfaces via the leader's
 
 ## follow `--eval` (persistent REPL)
 
-`execrun.EvalSession` spawns the runner ONCE; responses framed by **output
-quiescence** (`--eval-quiet`, default 500 ms) — REPLs never signal
-completion. **Session outlives connections and drops**: cancelled
-per-connection contexts run `interruptProcess` (SIGINT to the group; no-op
-on Windows) but never kill the REPL; only `Close` and leader-sent
-SIGTERM/SIGKILL do. `req.Cwd`/`req.Env` ignored; exec exit codes 0 while
-REPL lives. `follow.NewEvalSession` routes `exec.request` in; MOTD
-advertises a REPL target. Banner warns about `node` without `-i`.
-[Details](../../docs/slicc-cli-details.md).
+`execrun.EvalSession` spawns the runner once; responses framed by output
+quiescence (`--eval-quiet`, default 500 ms). The REPL outlives reconnects
+(SIGINT interrupts the group, does not kill it; only `Close` / leader
+SIGTERM/SIGKILL do). `req.Cwd`/`req.Env` ignored; exec exit 0 while the REPL
+lives. [Details](../../docs/slicc-cli-details.md).
 
 ## Self-update (`slicc update`)
 
-`internal/update` scans GitHub releases newest→oldest for the first with
-this platform's `slicc-<os>-<arch>[.exe]` asset — releases are **sparse**
-(CLI binaries only attach when `packages/slicc-cli` changed); same bounded
-pagination as the worker's `/download/slicc-cli` route (30/page, 5 pages
-max). `Apply` downloads, sanity-gates via `--version`, then atomically
-renames over the running binary (Windows parks the old at `.old`).
-`startUpdateNotice()` (`update.go`) refreshes
-`<user-cache-dir>/slicc/update-check.json` at most once per 24 h.
-`SLICC_NO_UPDATE_CHECK=1` disables it; `IsReleaseVersion` gates both notice
-and self-replace, so **`slicc update` refuses to clobber a local build
-ahead of the latest tag** (`dev`, `git describe`). `SLICC_UPDATE_API_BASE`
-overrides the API base. [Details](../../docs/slicc-cli-details.md).
+`internal/update` scans GitHub releases for this platform's
+`slicc-<os>-<arch>[.exe]` (sparse: only when `packages/slicc-cli` changed;
+30/page, 5 pages). `Apply` downloads, `--version`-gates, then atomically
+renames (Windows parks `.old`). Notice at most once per 24 h
+(`SLICC_NO_UPDATE_CHECK=1` disables). `IsReleaseVersion` gates notice and
+replace — **`slicc update` refuses to clobber a local `dev`/`git describe`
+build**. [Details](../../docs/slicc-cli-details.md).
 
 ## Telemetry
 
@@ -196,14 +168,9 @@ make dist           # cross-compiled static binaries → dist/
 the `slicc-cli` CI job: staticcheck/errcheck/unused + funlen/gocyclo/
 gocognit; `make tidy-check` (Go analogue of TS knip); `COVER_MIN` floor.
 
-Release binaries cut **atomically with semantic-release** and only when
-`packages/slicc-cli/` changed since the last tag: `release-native.mjs`
-(prepareCmd gate) invokes `sign-and-package.sh` when `decideSliccCliGating`
-opens, cross-compiling every target on the macOS runner, Developer
-ID-signing + notarizing the darwin binaries (`APPLE_CERTIFICATE_BASE64` +
-`APPLE_API_KEY_*`), staging `artifacts/release/slicc-*` for
-`@semantic-release/github`. **A bare CLI binary can't be stapled**;
-Gatekeeper verifies notarization online. Without cert (fork/local): stages
-unsigned instead of failing. Full pipeline + OS-matrix rationale
-(`testRunner()`, `integration_test.go` pion↔pion loopback):
+Release binaries cut **atomically with semantic-release** only when
+`packages/slicc-cli/` changed: `release-native.mjs` → `sign-and-package.sh`,
+cross-compile on macOS, Developer ID + notarize darwin
+(`APPLE_CERTIFICATE_BASE64` + `APPLE_API_KEY_*`). **A bare CLI binary can't
+be stapled.** No cert → unsigned, don't fail. Pipeline:
 [details](../../docs/slicc-cli-details.md).

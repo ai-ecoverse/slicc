@@ -13,18 +13,20 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 ## Orchestrator
 
 - Path: `packages/webapp/src/scoops/`
-- `orchestrator.ts` owns scoop lifecycle, routing, shared state, and pre-removal `onScoopUnregistered` snapshots. `scoop-context.ts` owns per-scoop prompt execution and FS/tool isolation — it is a ~620-line coordinator over `scoops/scoop-context/`, one module per reason to change (#2334): `runtime-init.ts` (boot sequence) · `turn-runner.ts` (attempt/retry) · `turn-process.ts` (the turn's pid + exit code) · `run-bounds.ts` (#1972 ceilings) · `agent-event-router.ts` + `agent-end-dispatch.ts` (event plumbing and what a terminal `agent_end` means) · `overflow-recovery.ts` / `image-recovery.ts` · `session-persistence.ts` (#1987) · `bash-job-reaper.ts` (#1166) · `live-updates.ts` (hot-swaps onto a running agent) · `shell-and-skills.ts`, `tools.ts`, `agent-factory.ts`, `session-helpers.ts`, `system-prompt.ts`, `directory-structure.ts`, `memories.ts`, `sudo-wiring.ts` (assembly) · `model-resolution.ts`, `thinking-level.ts`, `shell-env.ts`, `error-classification.ts` (record-level, no agent needed) · `callbacks.ts` (the owner's contract). Each module's header states what it owns; add a responsibility as a new module, not a method on the facade. `agent-bridge.ts` exposes `globalThis.__slicc_agent` (defaults: writable `[cwd, /shared/, <scratch>/, /tmp/]`, visible `[/workspace/, invokingCwd]`; `--read-only` replaces).
+- `orchestrator.ts` owns scoop lifecycle, routing, shared state, and pre-removal `onScoopUnregistered` snapshots. `scoop-context.ts` owns per-scoop prompt execution and FS/tool isolation — it is a ~620-line coordinator over `scoops/scoop-context/`, one module per reason to change (#2334): `runtime-init.ts` (boot sequence) · `turn-runner.ts` (attempt/retry) · `turn-process.ts` (the turn's pid + exit code) · `run-bounds.ts` (#1972 ceilings) · `agent-event-router.ts` + `agent-end-dispatch.ts` (event plumbing and what a terminal `agent_end` means) · `overflow-recovery.ts` / `image-recovery.ts` · `session-persistence.ts` (#1987) · `bash-job-reaper.ts` (#1166) · `live-updates.ts` (hot-swaps onto a running agent) · `shell-and-skills.ts`, `tools.ts`, `agent-factory.ts`, `session-helpers.ts`, `system-prompt.ts`, `directory-structure.ts`, `memories.ts`, `sudo-wiring.ts` (assembly) · `model-resolution.ts`, `thinking-level.ts`, `shell-env.ts`, `error-classification.ts` (record-level, no agent needed) · `callbacks.ts` (the owner's contract). Each module's header states what it owns; add a responsibility as a new module, not a method on the facade. `agent-bridge.ts` exposes `globalThis.__slicc_agent` (defaults: writable `[cwd, /shared/, <scratch>/, /tmp/]`, visible `[...defaultChildVisibleRoots(owning cone), invokingCwd]`; `--read-only` replaces).
 - `scoop-message-router.ts`: licks use `SCOOP_QUEUE_DEBOUNCE_MS` (1 s) bounded by `SCOOP_QUEUE_MAX_COALESCE_MS` (3 s); pure-lick batches defer while `ScoopContext.isBusy` without queue/watermark loss; `SCOOP_DEFERRAL_STARVATION_MS` reports backpressure once after 5 min. User `web` bypasses the window (immediate/awaited, prevents deferral).
 - `transcript-limits.ts` caps bridge/event transcripts at 64 KB — never canonical `agent-sessions` history or compaction input.
 
 ## VirtualFS
 
 - Path: `packages/webapp/src/fs/`. `virtual-fs.ts` POSIX-like FS backed by OPFS (in-memory in Node tests). `restricted-fs.ts` path ACLs. `mount-commands.ts` parses `--source`/`--profile`/`--no-probe`; `path-utils.ts` normalization.
+- Prefer absolute VFS paths (`/workspace/...`, `/shared/...`). `VirtualFS.create({ dbName, wipe })` is the entry point for isolated testable instances. Mounted directories bridge directly to `FileSystemDirectoryHandle`; do not copy large trees into IndexedDB unless you mean to. Use `fs.walk()` and `path-utils.ts` instead of ad hoc path splitting. `RestrictedFS` is the correct boundary when code should not see the whole VFS.
 - `mount/` — `MountBackend` + `backend-local.ts` / `backend-s3.ts` / `backend-da.ts` and shared `RemoteMountCache` (TTL+ETag, IDB). Browser-naive signing: CLI → `/api/s3-sign-and-forward`, extension → SW. `mount-table-store.ts` / `mount-recovery.ts` persist and restore. See `docs/mounts.md`.
 
 ## Shell
 
 - Path: `packages/webapp/src/shell/`. `almost-bash-shell.ts` is the just-bash runtime; `supplemental-commands/` built-ins live under `docs/shell-reference.md`. `script-catalog.ts` is the shared `.jsh`/`.bsh` discovery for the shell and `which`, cached per `$PATH` root set; the `FsWatcher` cache is bypassed only for root sets a mount overlaps (external changes there are invisible). `vfs-adapter.ts` bridges shell → VFS and forwards `canWrite` (duck-typed for `VirtualFS`/`RestrictedFS`).
+- Bash progress overlay (`shell/progress/`): one `ScriptRun` unit per tool call. `planScriptProgress` counts registry dispatches from `bash.transform().ast`; steps tick at `wrapCommandForDispatch` on completion. `sleep`/`timeout` tickers, `wrapCommandForProgress` start/end, and `createFetchProgressObserver` bytes (fed by `proxied-fetch.ts` + node-server `X-Proxy-Content-Length`) fold in via `emitter.setAggregator` (≤4 events/s per id). Events ride `ToolExecutionContext.onUpdate` as `progress` partials → `tool_progress` agent event → `applyToolProgress` (icon fill, 3-dot badge, body top bar) + send-button `progress` ring. Design: `docs/exploration/bash-progress-overlay.md`.
 - `typescript` v7 (native) runs checks/builds; `typescript-js` (JS v6) powers browser `tsc`/`test`/`esm-transpile` because v7 has no browser/WASM API. `builtin-shadow-map.ts` is authoritative for `ipx`/`npx` → built-in redirects. Raw scans: `jsh-discovery.ts` / `bsh-discovery.ts`.
 
 ## Speech
@@ -34,6 +36,7 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 - Asset staging (`ensure-speech-assets.ts` via `kernel/speech-assets-bridge.ts`) is **single-flight**: the worker responder coalesces concurrent page requests (`hear --warmup`, `say --warmup`, the composer warmup) onto one run and fans progress/result out to every caller — never run two stagers over the same tree. `hf download` skips a present file only at the **listed byte length** (a torn write is re-fetched), and the ort install is gated on the required jsep + plain threaded builds only — optional `asyncify`/`jspi` variants missing must not trigger a `dist/` rewrite under a loading engine.
 - ort-web threads (`transformers-env.ts` `resolveOrtNumThreads`, #2042): set explicitly, never auto-detected. Isolated leader (Document-Isolation-Policy) → `min(4, hardwareConcurrency)`; any non-isolated float → `1`. `localStorage.slicc_ort_num_threads` overrides (clamped to `[1, min(4, cores)]`, isolated only) for A/B timing — it **persists** until removed and logs a `console.warn` whenever it is in effect; `whisper transcribe` / `kokoro synthesize` log lines carry `elapsedMs` + `numThreads`.
 - **Extension `uiOnly` side panel**: Chrome denies `getUserMedia` (mic prompt keys on extension origin, ungrantable from cross-origin iframe), so `wc-follower.ts` skips `ptt` and drops "Take a photo". Voice/camera live in the leader tab or detached popout.
+- The kernel-worker build stubs `speech/speak.ts` + `speech/hear.ts` (`stubPageRealmSpeechPlugin`, `worker.plugins` only). `say`/`hear` keep their local and panel-RPC branches in one module; the local branch is gated on `speechSynthesis`, so in a worker it is dead code that would drag `kokoro-js` + `@huggingface/transformers` into a build the page graph already covers. Same reason `speech/model-ids.ts` exists — a model-id constant must never be imported from an engine. See `docs/pitfalls.md`.
 
 ## MCP Servers
 
@@ -100,7 +103,7 @@ One roster, three renderings, one vocabulary — `ui/follower-presentation.ts` o
 
 ## Frozen Sessions ("New session" flow)
 
-- Path: `ui/session-freezer.ts`, `ui/new-session.ts`. **Save**, **Skip memory**, and **Erase** clear cone chat and non-mount `/tmp`, not scoops. Archives in `/sessions/<timestamp>-<slug>.md` + `index.json`. Idle boot recovers pending markers serially (≤3 times) through the **bounded** legacy enrichment call — never the unbounded curator (`timeoutSeconds` cannot stop it). Agentic Save: quick snapshot then clear; title (`skipMemory`) + curator in background. The curator edits a staged draft under `/sessions/.curation/<archive>/` that the agent bridge three-way-merges onto the live memory file on exit 0 (`mergeOnSuccess`; concurrent live edits survive, conflicts resolve to the curator); the bridge also writes `status.json` there on both exit paths (`outcomeReceiptPath`), and the index entry records `memoryCuratedAt` on success / `memoryFailed` on failure or retry exhaustion — the durable which-sessions-curated ledger. Cone-only `OffscreenClient.clearAllMessages()` awaits `clear-chat-ack` before panel reload.
+- Path: `ui/session-freezer.ts`, `ui/new-session.ts`. **Save**, **Skip memory**, and **Erase** clear the **selected** cone's chat and non-mount `/tmp`, not scoops. The freezer, `clear-chat` and boot hydration all resolve their root through `ui/wc/wc-unit-context.ts` (`rootForSelection`, `rootFolderForContext`) and key the session with `chatSessionIdFor`, never the literal `session-cone`. Archives in `/sessions/<timestamp>-<slug>.md` + `index.json` record `cone` / `coneLabel` so a card names its cone and a thaw can route back to it. The welcome flow is the one deliberate exception — it stays primary-cone-only. Idle boot recovers pending markers serially (≤3 times) through the **bounded** legacy enrichment call — never the unbounded curator (`timeoutSeconds` cannot stop it). Agentic Save: quick snapshot then clear; title (`skipMemory`) + curator in background. The curator edits a staged draft under `/sessions/.curation/<archive>/` that the agent bridge three-way-merges onto the live memory file on exit 0 (`mergeOnSuccess`; concurrent live edits survive, conflicts resolve to the curator); the bridge also writes `status.json` there on both exit paths (`outcomeReceiptPath`), and the index entry records `memoryCuratedAt` on success / `memoryFailed` on failure or retry exhaustion — the durable which-sessions-curated ledger. Cone-only `OffscreenClient.clearAllMessages()` awaits `clear-chat-ack` before panel reload.
 
 ## UI
 
@@ -112,9 +115,32 @@ One roster, three renderings, one vocabulary — `ui/follower-presentation.ts` o
 - **Cherry `?cherry=1&ui-only=1`** (extension side panel): suppresses CDP target advertisement, skips `ptt`, drops "Take a photo" (mic denied in cross-origin side panel). Login/onboarding hand-off to the leader tab is gated to `isExtensionSidePanel` only.
 - **Cloud cone config** (`ui/hosted-config-apply.ts`): `applyHostedAccounts` reconciles accounts from `/api/hosted-bootstrap`, removing only providers tracked in `localStorage['slicc_cloud_managed']` — never user-added ones. `?connect=1` is a login-only surface (`ui/connect-surface.ts`) with no kernel.
 
+## File mentions + preview
+
+Clicking a file name the agent wrote in chat. Five modules, deliberately split so the guessing and the verifying stay separate:
+
+- `core/file-mentions.ts` — the heuristic. Pure; finds CANDIDATES in prose and knows nothing about the VFS.
+- `core/tool-call-paths.ts` — harvests the paths a tool call's parameters named (bash redirects, `path`-ish fields), so prose can be read against what the agent already did.
+- `core/file-mention-resolver.ts` — checks candidates against the VFS via a lazily built, bounded basename index, with those paths as hints.
+- `ui/file-mention-linker.ts` — walks a rendered message and links only what resolved.
+- `ui/wc/wire-file-mentions.ts` — lifecycle: observes the thread, waits for streaming to finish, opens the preview.
+
+Plus `core/file-type.ts` (content sniffing) and `ui/git-preview-source.ts` (the HEAD blob for diff mode). `ui/wc/file-actions.ts` owns `openFilePreview`, the single entry point both the file tree and a clicked mention go through.
+
+Non-obvious rules:
+
+- **Confirm, then linkify.** Nothing is decorated optimistically — the heuristic is permissive precisely BECAUSE verification gates it. A candidate that does not resolve stays plain text.
+- **Never linkify a streaming bubble.** A half-arrived path resolves to nothing; bubbles are processed only once `streaming` clears.
+- **`getMimeType()` (`core/mime-types.ts`) is for SERVING, `sniffFileType()` (`core/file-type.ts`) is for READING.** Never swap them: sniffing a type you then put in a `Content-Type` header is how MIME-confusion bugs happen, and serving's conservative `application/octet-stream` fallback is exactly what made `.jsh` unpreviewable. Precedence is magic bytes → extension → UTF-8 decodability.
+- **`isomorphic-git` is imported lazily** in `git-preview-source.ts`; the UI layer must not pull the `src/git/` stack for a preview. Its fs shim is read-only ON PURPOSE — a preview surface must never be able to write to a repo.
+- **Hints come from the typed `ToolCall`, not from parsed markup.** `wc-message-view.ts` stamps each rendered tool row with `data-file-paths` (JSON) at render time; `wire-file-mentions.ts` reads the rows that PRECEDE a bubble in document order — chronological in a transcript — capped at the most recent 40. A hint is believed only after `stat()` confirms it, which is what lets it resolve a file outside the indexed roots (`/home/lars/foo.md`) without ever inventing a link.
+- **A hint without a directory is dropped.** The whole value of a hint is the path segment prose does not carry; a bare basename tells the resolver nothing the index did not already know, and would only cost a `stat()`.
+- **Markdown is detected by EXTENSION, on purpose** (`richPreviewKind` in `core/file-type.ts`). It has no magic bytes and is byte-identical to plain text — the name is the only declaration there is, and being wrong changes only which view opens first. Markdown is converted by `ui/message-renderer.ts` (DOMPurify-sanitized) and mounted inline; **raw HTML is never sanitized and never mounted inline** — it goes to Quick Look's sandboxed iframe. Documents over 512 KB get no rendered view (synchronous conversion would freeze the overlay).
+- **The mention resolver's index is bounded** (`maxEntries`, `maxDepth`, skipped `node_modules`-class directories). A mention that would only resolve past the ceiling stays plain text; stalling the transcript to prove otherwise is worse.
+
 ## Base64 payload previews
 
-A payload PASTED into chat — a `data:` URL, the output of `base64 < key.pem` — collapses to a `<slicc-blob-chip>` that opens it in Quick Look. Same four roles as file mentions (`packages/webapp/CLAUDE.md`), and reusing the same machinery rather than growing a second copy of it.
+A payload PASTED into chat — a `data:` URL, the output of `base64 < key.pem` — collapses to a `<slicc-blob-chip>` that opens it in Quick Look. Same four roles as file mentions (see File mentions + preview above), and reusing the same machinery rather than growing a second copy of it.
 
 - Path: `core/base64-mentions.ts` (heuristic, pure) → `core/base64-payload.ts` (decode + identify) → `ui/base64-preview-linker.ts` (DOM swap) → `ui/wc/wire-base64-previews.ts` (lifecycle + Quick Look, wired from `mountWcShell`). Chip: `<slicc-blob-chip>` in `@slicc/webcomponents`.
 - **Consolidated, not duplicated.** The base64 grammar is `normalizeBase64` in `@slicc/shared-ts` (shared with `base/image-markers.ts`); decoding is `base64ToUint8`; identification composes `sniffMagicBytes` / `looksLikeText` / `isTextMimeType` from `core/file-type.ts`; the synthetic filename comes from `extensionForMimeType` in `base/mime-types.ts` (reverse index of the SAME table `getMimeType` reads); the rendered view is `file-actions.ts`'s `buildRenderedView`, so the 512 KB cap and the inline-vs-sandbox rule have one home; the chip's short type label is `@slicc/webcomponents/quick-look/mime-label`, shared with Quick Look's header chip.
@@ -138,6 +164,7 @@ A payload PASTED into chat — a `data:` URL, the output of `base64 < key.pem` �
 - Sprinkles: `ui/sprinkle-renderer.ts`, `sprinkle-manager.ts`, `sprinkle-discovery.ts`. `.shtml` panels discovered from VFS. CLI: fragments/full docs in `srcdoc` iframes. Extension renders in the hosted `?cherry=1` follower — no extension sandbox.
 - Sprinkle delivery + routing (issue #2166): one store, many documents. `SprinkleManager.sendToSprinkle` returns a `SprinkleSendReport` (`shell/sprinkle-manager-handle.ts`) instead of void, and its broadcast hook fires even when the sprinkle is CLOSED on the leader — a follower can still be rendering it. Targeted delivery goes `sprinkle send --runtime` → hook → `tray-leader/broadcast.ts#broadcastSprinkleUpdate` → `resolveFollowerByRuntimeId`; an unresolvable runtime comes back as `unknownRuntime`, never as a silent broadcast. Followers report rendered documents with `sprinkle.instances`; the leader keeps them per-follower in `FollowerRegistry` and `wc-tray.ts` mirrors them into `slicc.leaderSprinkleInstances` so the worker-side `sprinkle list` can read them (same shim pattern as `host`). **Route resolution belongs to the leader**: `KernelFacade.routeSprinkleLick` falls back to `getSprinkleRoute(name)` when the caller stamped no `targetScoop`, which is the only thing that applies a route to follower-forwarded licks.
 - Dips: `ui/dip.ts` hydrates assistant `shtml` code blocks into sandboxed iframes after streaming completes. Minimal lick bridge; auto-height via ResizeObserver.
+- Sprinkle element bundles ride the app chunk graph (`docs/pitfalls.md` "Bundle Graphs"): `<slicc-diff>` / `<slicc-editor>` are Rollup entries; `dist/ui/slicc-diff.js` / `slicc-editor.js` are stable-name loader shims. Elements must adopt pre-upgrade properties (`ui/upgrade-own-properties.ts`); sprinkles awaiting a method API use `window.__SLICC_SPRINKLE_ASSETS__['slicc-diff.js']`.
 
 ## Stale-asset recovery (post-deploy)
 
@@ -159,3 +186,17 @@ A payload PASTED into chat — a `data:` URL, the output of `base64 < key.pem` �
 ## Secret-Aware Fetch Proxy
 
 `createProxiedFetch()` (`packages/webapp/src/shell/proxied-fetch.ts`) routes agent-initiated HTTP through the fetch proxy. Extension mode uses a Port-based path (`chrome.runtime.connect({ name: 'fetch-proxy.fetch' })`). Shell-env population: `secret-env.ts` filters secret names to POSIX-valid identifiers (`/^[A-Za-z_][A-Za-z0-9_]*$/`) so dot-namespaced internal secrets stay out of `$ENV`. See `docs/secrets.md` for OAuth bootstrap, silent renewal, and per-provider extra domains.
+
+## Tool-output images
+
+`<img:data:…>` markers are parsed in exactly one place (`base/image-markers.ts`) so every consumer agrees on what is an image — the bash tool exempts markers from its 40KB cap, `core/tool-adapter.ts` turns them into image content blocks, `scoops/transcript-limits.ts` strips them, and `ui/wc/wc-message-view.ts` renders them inline. Marker-shaped prose and markers sliced mid-payload stay inert text everywhere.
+
+## Agent-avatar host wiring
+
+Channel vocabulary: [`docs/webcomponents-details.md`](webcomponents-details.md).
+
+The face's activity comes from the descriptors (`toSwitcherScoops` → `awaiting`
+for the scoop whose turn just ended, cleared on submit or any non-`ready`
+status). Transients are host calls on `refs.switcher`: `scrutinize()` + `wake()`
+per composer `input`, `glower()` on a `tool_result` with `isError`. Wiring:
+`ui/wc/wc-live-callbacks.ts`, `wc-live-composer.ts`, `wc-live-controller.ts`.
