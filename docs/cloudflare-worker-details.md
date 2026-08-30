@@ -120,3 +120,14 @@ All `/api/cloud/*` require `Authorization: Bearer <ims-access-token>` and route 
 | `POST /api/cloud/kill`        | Kill a cone (idempotent)                                                    |
 | `POST /api/cloud/sign-out`    | Invalidate auth cache for the bearer                                        |
 | `GET /api/cloud/admin/stats`  | Admin-gated by `ADMIN_USER_IDS`                                             |
+
+## <a name="v1-v2-expansion"></a>v1 → v2 Expansion
+
+Flip an existing deployment from open-domain (`ALLOWED_EMAIL_DOMAIN` allows
+anyone) to ownerOrg-gated access:
+
+```bash
+npx wrangler secret put REQUIRE_OWNER_ORG  # value: true
+# update ALLOWED_EMAIL_DOMAIN in wrangler.jsonc to "*"
+npx wrangler deploy
+```

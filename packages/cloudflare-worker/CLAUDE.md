@@ -166,7 +166,8 @@ start (Adobe default if empty) and merges `coneConfigDelta` on resume (`POST
 Vars: `ADOBE_PROXY_ENDPOINT`; `ALLOWED_EMAIL_DOMAIN` (CSV, default `adobe.com`; `*` =
 any); `BLOCKED_EMAILS` (CSV); `REQUIRE_OWNER_ORG` (`true` expands to ownerOrg-holders);
 `CONE_CAP_RUNNING`, `CONE_CAP_PAUSED` (default 1/5); `ADMIN_USER_IDS` (CSV of IMS
-userIds). Secret: `E2B_API_KEY` (worker-only).
+userIds). Secret: `E2B_API_KEY` (worker-only). Open-domain → ownerOrg-gated
+runbook: [docs/cloudflare-worker-details.md § v1 → v2 Expansion](../../docs/cloudflare-worker-details.md#v1-v2-expansion).
 
 ### Stable API Contract (worker ↔ sandbox)
 
