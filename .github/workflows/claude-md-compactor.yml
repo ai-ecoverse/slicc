@@ -205,6 +205,11 @@ jobs:
           PUBLISH_PATHS_FILE: ${{ runner.temp }}/compactor-publish-paths.txt
           BRANCH: ${{ steps.measure.outputs.branch }}
           ORIG_SHA: ${{ github.sha }}
+          # Dispatch 33315681779 compacted webapp 19998 → 9403, committed, then
+          # husky pre-push ran lint:docs and rejected two dead anchors Claude
+          # left. The compaction PR's CI still gates those; this publish must
+          # not throw the working tree away.
+          HUSKY: '0'
         run: |
           set -euo pipefail
           node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --progress
@@ -238,8 +243,8 @@ jobs:
             echo "Nothing to commit after applying compaction onto origin/main."
             exit 1
           fi
-          git commit -m "chore(docs): compact CLAUDE.md guides for weekly headroom"
-          git push -u origin "$BRANCH"
+          git commit --no-verify -m "chore(docs): compact CLAUDE.md guides for weekly headroom"
+          git push --no-verify -u origin "$BRANCH"
 
       # PR creation is deliberately NOT Claude's job. claude-code-action forces
       # its Bash `gh` onto the action's `github_token:` (GITHUB_TOKEN here), so a
