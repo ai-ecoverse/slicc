@@ -101,7 +101,6 @@ shortcuts onboarding to a "Set up SLICC in the main tab" card.
 - `src/cherry-panel-sw.ts` - SW-side `cherry-panel` Port hub: caches/persists
   tri-state (`chrome.storage.session`), recovers a dead-tray leader.
 - `packages/webapp/src/kernel/messages.ts` - wire-protocol message types.
-- `src/tab-group.ts` - persistent Chrome tab group handling.
 - `src/secrets-entry.ts` + `src/secrets-storage.ts` - options-page CRUD over
   `chrome.storage.local`.
 

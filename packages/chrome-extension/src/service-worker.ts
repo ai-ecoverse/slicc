@@ -518,8 +518,10 @@ chrome.runtime.onMessage.addListener((message: unknown) => {
 });
 
 // ---------------------------------------------------------------------------
-// Tab grouping — inline copy for service worker (SW can't import shared chunks)
-// See packages/chrome-extension/src/tab-group.ts for the canonical implementation.
+// Tab grouping — the "slicc" tab-grouping helper. This is now the only copy;
+// the former shared tab-group.ts module was deleted. (The SW build bundles any
+// import into one IIFE via esbuild, so an import would not break the SW — see
+// docs/pitfalls.md "Service Worker Must Be Self-Contained".)
 // ---------------------------------------------------------------------------
 
 let sliccGroupId: number | null = null;
