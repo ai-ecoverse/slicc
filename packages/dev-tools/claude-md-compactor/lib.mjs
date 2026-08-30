@@ -37,6 +37,14 @@ export const COMPACTOR_MAX_CHARS = 10000;
 export const COMPACTOR_TARGET_CHARS = 9500;
 
 /**
+ * Guides handed to one Claude run. Dispatch 33309651347 ended its turn with
+ * "I'll wait for the agents to complete" after being given all 8 oversized
+ * files at once and wrote nothing. One file per run, largest first — same
+ * shape as boy-scout-debt-dispatcher.yml.
+ */
+export const DEFAULT_MAX_GUIDES = 1;
+
+/**
  * Guides the compactor must never select, whatever their length.
  *
  * `packages/vfs-root/shared/CLAUDE.md` is the agent-facing runtime guide. It is
@@ -123,6 +131,19 @@ export function measureGuides(entries, { maxChars = COMPACTOR_MAX_CHARS } = {}) 
  */
 export function selectOversized(measurements) {
   return measurements.filter((m) => m.oversized).sort((a, b) => b.chars - a.chars);
+}
+
+/**
+ * The worklist for this run: the largest `maxGuides` oversized files.
+ * @param {ReturnType<typeof measureGuides>} measurements
+ * @param {{maxGuides?: number}} [options]
+ * @returns {ReturnType<typeof measureGuides>}
+ */
+export function selectWorklist(measurements, { maxGuides = DEFAULT_MAX_GUIDES } = {}) {
+  const all = selectOversized(measurements);
+  const n = Number(maxGuides);
+  if (!Number.isFinite(n) || n <= 0) return all;
+  return all.slice(0, n);
 }
 
 /**
@@ -281,7 +302,10 @@ export function assessCompactionProgress({
 
   const oversized = (after ?? []).filter((m) => m.oversized);
   const wantedSet = new Set(wanted);
-  const newOversized = oversized.filter((m) => !wantedSet.has(m.path));
+  // A guide that was already oversized at measure time (in `before`) but not
+  // on this run's worklist is deferred, not a regression. "New" means it was
+  // not oversized going in.
+  const newOversized = oversized.filter((m) => !beforeMap.has(m.path));
   const missedTarget = selectAboveTarget(after, { worklist: wanted, targetChars });
   const stillOversized = oversized.filter((m) => wantedSet.has(m.path));
 
@@ -459,10 +483,18 @@ export function buildPrompt({
 
   return `# Weekend CLAUDE.md compaction
 
-${(oversized ?? []).length} tracked instruction guide(s) are at or above ${withSeparators(maxChars)}
-characters. Rewrite each one to **at most ${withSeparators(targetChars)} characters**, then open
-exactly ONE pull request. The measurement step already ran; the worklist is
-authoritative — do not go looking for other guides to shrink.
+${(oversized ?? []).length} tracked instruction guide(s) on this run's worklist
+are at or above ${withSeparators(maxChars)} characters. Rewrite **each worklist
+file** to **at most ${withSeparators(targetChars)} characters**. The measurement
+step already ran; the worklist is authoritative — do not go looking for other
+guides to shrink, and do not compact rows that are not on the worklist.
+
+**This job has no subagents and does not resume after you stop.** Do not spawn
+agents, do not background work, do not say you will wait. If you end the turn
+before using Edit/Write on every worklist path, the runner discards the session
+and the files stay unchanged (observed: dispatch 33309651347, result "I'll wait
+for the agents to complete"). Compact the worklist **yourself**, sequentially,
+in this process.
 
 ## Worklist
 
@@ -489,6 +521,9 @@ not characters. It is excluded from the worklist by construction; do not touch i
 
 ## How to compact
 
+0. Use **Edit** or **Write** (or a Bash rewrite of the worklist path) on each
+   worklist file **in this session**. Do not delegate. Do not end the turn
+   until those writes have landed.
 1. Read the guide in full, plus enough nearby source and \`docs/\` to know what
    is load-bearing before you delete anything.
 2. **Never mechanically truncate.** Do not chop trailing sections, do not

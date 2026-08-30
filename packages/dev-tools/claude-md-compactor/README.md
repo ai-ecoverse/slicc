@@ -2,14 +2,17 @@
 
 A weekly job that keeps the repo's machine-read instruction guides small. Every
 Saturday night a deterministic Node step measures every **tracked** file named
-`CLAUDE.md` and hands the oversized ones to `claude-code-action`, which rewrites
-them and pushes **one** branch; a deterministic workflow step then opens exactly
-**one** pull request from it (see
+`CLAUDE.md` and hands the **single largest** oversized guide to
+`claude-code-action` (one file per run, same shape as the boy-scout dispatcher).
+Claude rewrites it and pushes **one** branch; a deterministic workflow step then
+opens exactly **one** pull request from it (see
 [Why Claude does not open the PR](#why-claude-does-not-open-the-pr)). Nothing
 oversized → no branch, no PR; silence is a valid outcome. Driven by
-`.github/workflows/claude-md-compactor.yml`. Mirrors the
-`packages/dev-tools/codebase-sins/` layout (pure logic + CLI + co-located tests
-run by the `dev-tools` vitest project).
+`.github/workflows/claude-md-compactor.yml`. Handing Claude every oversized
+guide at once made it spawn-and-wait for subagents and end the turn with zero
+edits ([dispatch 33309651347](https://github.com/ai-ecoverse/slicc/actions/runs/33309651347)).
+Mirrors the `packages/dev-tools/codebase-sins/` layout (pure logic + CLI +
+co-located tests run by the `dev-tools` vitest project).
 
 ## Two budgets — do not confuse them
 

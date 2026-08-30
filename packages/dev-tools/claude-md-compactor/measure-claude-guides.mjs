@@ -37,6 +37,8 @@ import { execFileSync } from 'node:child_process';
  *   GH_TOKEN       token for the GitHub API — same condition as REPO
  *   MAX_CHARS      override the 10,000-char oversized threshold  (optional)
  *   TARGET_CHARS   override the 9,500-char compaction target     (optional)
+ *   MAX_GUIDES     how many oversized guides to hand Claude this run
+ *                  (default 1 — one file, largest first). 0 = all.
  *   WORKLIST       --check/--progress: comma/newline-separated guide paths
  *                  that were handed to Claude, held to TARGET_CHARS instead of
  *                  MAX_CHARS. Emitted as the `worklist` output by the measuring
@@ -66,6 +68,7 @@ import {
   COMPACTION_PR_TITLE,
   COMPACTOR_MAX_CHARS,
   COMPACTOR_TARGET_CHARS,
+  DEFAULT_MAX_GUIDES,
   findExistingCompactionPr,
   formatBeforeSizes,
   formatProgressReport,
@@ -75,6 +78,7 @@ import {
   parseWorklist,
   selectAboveTarget,
   selectOversized,
+  selectWorklist,
 } from './lib.mjs';
 
 const API = 'https://api.github.com';
@@ -240,6 +244,8 @@ async function main() {
   const guides = readGuides(listTrackedGuides());
   const measurements = measureGuides(guides, { maxChars });
   const oversized = selectOversized(measurements);
+  const maxGuides = intEnv('MAX_GUIDES', DEFAULT_MAX_GUIDES);
+  const worklistGuides = selectWorklist(measurements, { maxGuides });
   const report = formatReport(measurements, { maxChars });
 
   logMeasurements(measurements, maxChars);
@@ -255,17 +261,23 @@ async function main() {
     // actually asked to rewrite must have reached the target it was given.
     const worklist = parseWorklist(process.env.WORKLIST);
     const missedTarget = selectAboveTarget(measurements, { worklist, targetChars });
-    for (const m of oversized) {
-      console.error(
-        `::error file=${m.path}::${m.path} is ${m.chars} chars, policy limit ${maxChars}.`
-      );
-    }
     for (const m of missedTarget) {
       console.error(
         `::error file=${m.path}::${m.path} is ${m.chars} chars; it was selected for compaction to at most ${targetChars}.`
       );
     }
-    if (oversized.length > 0 || missedTarget.length > 0) {
+    // With a worklist (one-file-per-run), other oversized guides are deferred
+    // to a later Saturday — they must not fail this check. Without a worklist,
+    // every tracked guide must be under MAX_CHARS (the original invariant).
+    const checkFailed = worklist.length > 0 ? missedTarget.length > 0 : oversized.length > 0;
+    if (worklist.length === 0) {
+      for (const m of oversized) {
+        console.error(
+          `::error file=${m.path}::${m.path} is ${m.chars} chars, policy limit ${maxChars}.`
+        );
+      }
+    }
+    if (checkFailed) {
       console.error(
         `❌ ${oversized.length} guide(s) at or above ${maxChars} chars; ${missedTarget.length} selected guide(s) above the ${targetChars}-char target.`
       );
@@ -283,19 +295,19 @@ async function main() {
 
   const branch = buildBranchName(new Date());
   let existing = null;
-  if (oversized.length > 0 && (process.env.SKIP_PR_CHECK ?? '').trim() !== '1') {
+  if (worklistGuides.length > 0 && (process.env.SKIP_PR_CHECK ?? '').trim() !== '1') {
     const repo = requireEnv('REPO');
     const token = requireEnv('GH_TOKEN');
     existing = findExistingCompactionPr(await fetchOpenPrs(repo, token));
   }
 
-  setOutput('has_oversized', oversized.length > 0 ? 'true' : 'false');
-  setOutput('oversized_count', String(oversized.length));
+  setOutput('has_oversized', worklistGuides.length > 0 ? 'true' : 'false');
+  setOutput('oversized_count', String(worklistGuides.length));
   // Carried into the post-Claude --check step: after a successful rewrite these
   // paths no longer look oversized, so the check cannot rediscover them.
-  setOutput('worklist', oversized.map((m) => m.path).join(','));
-  // Pre-Claude sizes for --progress: a failed --check can still open a PR when
-  // these counts went down.
+  setOutput('worklist', worklistGuides.map((m) => m.path).join(','));
+  // Pre-Claude sizes of EVERY oversized guide (not just the worklist) so
+  // --progress can tell a deferred leftover from a newly oversized file.
   setOutput('before_sizes', formatBeforeSizes(oversized));
   setOutput('branch', branch);
   // The workflow, not Claude, opens the PR; exporting the title keeps the
@@ -305,12 +317,14 @@ async function main() {
   setOutput('report', report);
   setOutput(
     'prompt',
-    oversized.length > 0 ? buildPrompt({ oversized, maxChars, targetChars, branch, report }) : ''
+    worklistGuides.length > 0
+      ? buildPrompt({ oversized: worklistGuides, maxChars, targetChars, branch, report })
+      : ''
   );
 
   writeSummary(`## Weekend CLAUDE.md compaction\n\n${report}`);
 
-  if (oversized.length === 0) {
+  if (worklistGuides.length === 0) {
     console.log('✅ Nothing oversized — clean no-op, no branch and no PR.');
     return;
   }
@@ -318,7 +332,9 @@ async function main() {
     console.log(`⏭️  A compaction PR is already open: ${existing.url} — skipping this run.`);
     return;
   }
-  console.log(`🧹 ${oversized.length} guide(s) to compact on branch ${branch}.`);
+  const deferred = oversized.length - worklistGuides.length;
+  const deferNote = deferred > 0 ? ` (${deferred} further oversized guide(s) deferred)` : '';
+  console.log(`🧹 ${worklistGuides.length} guide(s) to compact on branch ${branch}${deferNote}.`);
 }
 
 main().catch((err) => {

@@ -9,6 +9,7 @@ import {
   COMPACTION_TITLE_PREFIX,
   COMPACTOR_MAX_CHARS,
   COMPACTOR_TARGET_CHARS,
+  DEFAULT_MAX_GUIDES,
   EXCLUDED_GUIDES,
   findExistingCompactionPr,
   formatBeforeSizes,
@@ -20,6 +21,7 @@ import {
   parseWorklist,
   selectAboveTarget,
   selectOversized,
+  selectWorklist,
 } from './lib.mjs';
 
 /** A guide of exactly `n` characters. */
@@ -33,6 +35,7 @@ describe('policy constants', () => {
     // The repo's own committed gate (check-doc-sizes-lib.mjs) is 20,000; the
     // policy must stay strictly stricter or it would be pointless.
     expect(COMPACTOR_MAX_CHARS).toBeLessThan(20000);
+    expect(DEFAULT_MAX_GUIDES).toBe(1);
   });
 });
 
@@ -117,6 +120,37 @@ describe('selectOversized', () => {
     expect(selectOversized(measureGuides([{ path: 'a/CLAUDE.md', content: guide(100) }]))).toEqual(
       []
     );
+  });
+});
+
+describe('selectWorklist', () => {
+  const measurements = measureGuides([
+    { path: 'a/CLAUDE.md', content: guide(10500) },
+    { path: 'b/CLAUDE.md', content: guide(9000) },
+    { path: 'c/CLAUDE.md', content: guide(12000) },
+    { path: 'd/CLAUDE.md', content: guide(11000) },
+  ]);
+
+  it('defaults to the single largest oversized guide', () => {
+    expect(selectWorklist(measurements).map((m) => m.path)).toEqual(['c/CLAUDE.md']);
+    expect(
+      selectWorklist(measurements, { maxGuides: DEFAULT_MAX_GUIDES }).map((m) => m.path)
+    ).toEqual(['c/CLAUDE.md']);
+  });
+
+  it('takes the N largest when maxGuides is set', () => {
+    expect(selectWorklist(measurements, { maxGuides: 2 }).map((m) => m.path)).toEqual([
+      'c/CLAUDE.md',
+      'd/CLAUDE.md',
+    ]);
+  });
+
+  it('returns everyone oversized when maxGuides is non-positive', () => {
+    expect(selectWorklist(measurements, { maxGuides: 0 }).map((m) => m.path)).toEqual([
+      'c/CLAUDE.md',
+      'd/CLAUDE.md',
+      'a/CLAUDE.md',
+    ]);
   });
 });
 
@@ -284,7 +318,7 @@ describe('assessCompactionProgress', () => {
     expect(out.shrunk.map((r) => r.path)).toEqual(['a/CLAUDE.md']);
   });
 
-  it('does not recover when a guide off the worklist became oversized', () => {
+  it('does not recover when a guide that was not oversized became oversized', () => {
     const out = assessCompactionProgress({
       before: { 'a/CLAUDE.md': 12000 },
       after: measured([
@@ -295,6 +329,20 @@ describe('assessCompactionProgress', () => {
     });
     expect(out.recovered).toBe(false);
     expect(out.newOversized.map((m) => m.path)).toEqual(['b/CLAUDE.md']);
+  });
+
+  it('does not treat a deferred leftover as a new oversized guide', () => {
+    // One-file-per-run: b was already oversized going in, just not selected.
+    const out = assessCompactionProgress({
+      before: { 'a/CLAUDE.md': 12000, 'b/CLAUDE.md': 15000 },
+      after: measured([
+        { path: 'a/CLAUDE.md', content: guide(8000) },
+        { path: 'b/CLAUDE.md', content: guide(15000) },
+      ]),
+      worklist: ['a/CLAUDE.md'],
+    });
+    expect(out.newOversized).toEqual([]);
+    expect(out.recovered).toBe(true);
   });
 
   it('allows some worklist files to stay unchanged if others shrank', () => {
@@ -513,6 +561,12 @@ describe('buildPrompt', () => {
   it('tells Claude to still push honest shrinkage when --check fails', () => {
     expect(prompt).toContain('partial');
     expect(prompt).toMatch(/strictly\s+smaller/);
+  });
+
+  it('forbids subagents and ending the turn before writes land', () => {
+    expect(prompt).toContain('no subagents');
+    expect(prompt).toContain('Do not spawn');
+    expect(prompt).toContain('Edit/Write');
   });
 
   it('forbids merging and CI polling', () => {

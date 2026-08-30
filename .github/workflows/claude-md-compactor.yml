@@ -2,10 +2,13 @@ name: Weekend CLAUDE.md Compactor
 
 # Weekly instruction-file compaction. Saturday night a deterministic Node step
 # measures every TRACKED file named CLAUDE.md (root, docs/, every package) and
-# hands the oversized ones to claude-code-action, which rewrites them and pushes
-# ONE branch; a deterministic step then opens exactly ONE pull request from it
-# (Claude never runs `gh pr create` — see that step's note). Silence is a valid
-# outcome: nothing oversized → no branch, no PR.
+# hands the SINGLE largest oversized guide to claude-code-action (one file per
+# run, same shape as boy-scout-debt-dispatcher.yml). Claude rewrites it and
+# pushes ONE branch; a deterministic step then opens exactly ONE pull request
+# from it (Claude never runs `gh pr create` — see that step's note). Silence is
+# a valid outcome: nothing oversized → no branch, no PR. Giving Claude all
+# oversized guides at once made it spawn-and-wait for subagents and end the
+# turn with zero edits (dispatch 33309651347).
 #
 # TWO BUDGETS, do not confuse them:
 #   * The repo's committed GATE is 20,000 chars for packages/*/CLAUDE.md
@@ -49,6 +52,10 @@ on:
       target_chars:
         description: 'Compaction target in characters (default 9500)'
         required: false
+      max_guides:
+        description: 'How many oversized guides to hand Claude this run (default 1, largest first)'
+        required: false
+        default: '1'
 
 concurrency:
   group: claude-md-compactor
@@ -89,6 +96,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           MAX_CHARS: ${{ github.event.inputs.max_chars }}
           TARGET_CHARS: ${{ github.event.inputs.target_chars }}
+          MAX_GUIDES: ${{ github.event.inputs.max_guides || '1' }}
         run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs
 
       - name: Report an already-open compaction PR
@@ -150,7 +158,7 @@ jobs:
           claude_args: |
             --model ${{ vars.COMPACTOR_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
             --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
-            --disallowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr merge:*)"
+            --disallowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Agent,Task,TodoWrite"
             --max-turns 150
           prompt: ${{ steps.measure.outputs.prompt }}
 
