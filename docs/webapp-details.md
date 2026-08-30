@@ -112,6 +112,29 @@ One roster, three renderings, one vocabulary — `ui/follower-presentation.ts` o
 - **Cherry `?cherry=1&ui-only=1`** (extension side panel): suppresses CDP target advertisement, skips `ptt`, drops "Take a photo" (mic denied in cross-origin side panel). Login/onboarding hand-off to the leader tab is gated to `isExtensionSidePanel` only.
 - **Cloud cone config** (`ui/hosted-config-apply.ts`): `applyHostedAccounts` reconciles accounts from `/api/hosted-bootstrap`, removing only providers tracked in `localStorage['slicc_cloud_managed']` — never user-added ones. `?connect=1` is a login-only surface (`ui/connect-surface.ts`) with no kernel.
 
+## File mentions + preview
+
+Clicking a file name the agent wrote in chat. Five modules, deliberately split so the guessing and the verifying stay separate:
+
+- `core/file-mentions.ts` — the heuristic. Pure; finds CANDIDATES in prose and knows nothing about the VFS.
+- `core/tool-call-paths.ts` — harvests the paths a tool call's parameters named (bash redirects, `path`-ish fields), so prose can be read against what the agent already did.
+- `core/file-mention-resolver.ts` — checks candidates against the VFS via a lazily built, bounded basename index, with those paths as hints.
+- `ui/file-mention-linker.ts` — walks a rendered message and links only what resolved.
+- `ui/wc/wire-file-mentions.ts` — lifecycle: observes the thread, waits for streaming to finish, opens the preview.
+
+Plus `core/file-type.ts` (content sniffing) and `ui/git-preview-source.ts` (the HEAD blob for diff mode). `ui/wc/file-actions.ts` owns `openFilePreview`, the single entry point both the file tree and a clicked mention go through.
+
+Non-obvious rules:
+
+- **Confirm, then linkify.** Nothing is decorated optimistically — the heuristic is permissive precisely BECAUSE verification gates it. A candidate that does not resolve stays plain text.
+- **Never linkify a streaming bubble.** A half-arrived path resolves to nothing; bubbles are processed only once `streaming` clears.
+- **`getMimeType()` (`core/mime-types.ts`) is for SERVING, `sniffFileType()` (`core/file-type.ts`) is for READING.** Never swap them: sniffing a type you then put in a `Content-Type` header is how MIME-confusion bugs happen, and serving's conservative `application/octet-stream` fallback is exactly what made `.jsh` unpreviewable. Precedence is magic bytes → extension → UTF-8 decodability.
+- **`isomorphic-git` is imported lazily** in `git-preview-source.ts`; the UI layer must not pull the `src/git/` stack for a preview. Its fs shim is read-only ON PURPOSE — a preview surface must never be able to write to a repo.
+- **Hints come from the typed `ToolCall`, not from parsed markup.** `wc-message-view.ts` stamps each rendered tool row with `data-file-paths` (JSON) at render time; `wire-file-mentions.ts` reads the rows that PRECEDE a bubble in document order — chronological in a transcript — capped at the most recent 40. A hint is believed only after `stat()` confirms it, which is what lets it resolve a file outside the indexed roots (`/home/lars/foo.md`) without ever inventing a link.
+- **A hint without a directory is dropped.** The whole value of a hint is the path segment prose does not carry; a bare basename tells the resolver nothing the index did not already know, and would only cost a `stat()`.
+- **Markdown is detected by EXTENSION, on purpose** (`richPreviewKind` in `core/file-type.ts`). It has no magic bytes and is byte-identical to plain text — the name is the only declaration there is, and being wrong changes only which view opens first. Markdown is converted by `ui/message-renderer.ts` (DOMPurify-sanitized) and mounted inline; **raw HTML is never sanitized and never mounted inline** — it goes to Quick Look's sandboxed iframe. Documents over 512 KB get no rendered view (synchronous conversion would freeze the overlay).
+- **The mention resolver's index is bounded** (`maxEntries`, `maxDepth`, skipped `node_modules`-class directories). A mention that would only resolve past the ceiling stays plain text; stalling the transcript to prove otherwise is worse.
+
 ## Base64 payload previews
 
 A payload PASTED into chat — a `data:` URL, the output of `base64 < key.pem` — collapses to a `<slicc-blob-chip>` that opens it in Quick Look. Same four roles as file mentions (`packages/webapp/CLAUDE.md`), and reusing the same machinery rather than growing a second copy of it.
@@ -137,6 +160,7 @@ A payload PASTED into chat — a `data:` URL, the output of `base64 < key.pem` �
 
 - Sprinkles: `ui/sprinkle-renderer.ts`, `sprinkle-manager.ts`, `sprinkle-discovery.ts`. `.shtml` panels discovered from VFS. CLI: fragments/full docs in `srcdoc` iframes. Extension renders in the hosted `?cherry=1` follower — no extension sandbox.
 - Sprinkle delivery + routing (issue #2166): one store, many documents. `SprinkleManager.sendToSprinkle` returns a `SprinkleSendReport` (`shell/sprinkle-manager-handle.ts`) instead of void, and its broadcast hook fires even when the sprinkle is CLOSED on the leader — a follower can still be rendering it. Targeted delivery goes `sprinkle send --runtime` → hook → `tray-leader/broadcast.ts#broadcastSprinkleUpdate` → `resolveFollowerByRuntimeId`; an unresolvable runtime comes back as `unknownRuntime`, never as a silent broadcast. Followers report rendered documents with `sprinkle.instances`; the leader keeps them per-follower in `FollowerRegistry` and `wc-tray.ts` mirrors them into `slicc.leaderSprinkleInstances` so the worker-side `sprinkle list` can read them (same shim pattern as `host`). **Route resolution belongs to the leader**: `KernelFacade.routeSprinkleLick` falls back to `getSprinkleRoute(name)` when the caller stamped no `targetScoop`, which is the only thing that applies a route to follower-forwarded licks.
+- Sprinkle element bundles (`<slicc-diff>` / `<slicc-editor>`) ride the app's chunk graph: they are Rollup entries (`build.rollupOptions.input`) whose stable-name loader shims (`dist/ui/slicc-diff.js` / `slicc-editor.js`) dynamic-import the hashed entry, so Shiki / `@pierre/diffs` / CM6 stay the SAME chunks the app ships, not a second eager copy (`slicc-diff.js` alone was 5.8 MB as an esbuild IIFE, because esbuild inlines dynamic imports). **Loading is async, so two invariants hold:** the elements must adopt pre-upgrade properties (`ui/upgrade-own-properties.ts`) — a sprinkle that assigns `.patch` / `.value` on an element BEFORE its definition finishes loading installs an OWN data property that shadows the upgraded accessor forever, so the setter never runs and the diff/editor renders blank; and a sprinkle awaiting a method API must wait on `window.__SLICC_SPRINKLE_ASSETS__['slicc-diff.js']` rather than assume the element is already upgraded.
 - Dips: `ui/dip.ts` hydrates assistant `shtml` code blocks into sandboxed iframes after streaming completes. Minimal lick bridge; auto-height via ResizeObserver.
 
 ## Stale-asset recovery (post-deploy)

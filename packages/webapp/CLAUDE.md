@@ -1,14 +1,10 @@
 # CLAUDE.md
 
-Browser app guide for `packages/webapp/`. Extension-only behavior lives in `packages/chrome-extension/CLAUDE.md`; runtime/server details in float-specific guides.
-
-## Scope
-
-`packages/webapp/src/` contains the browser app core: VFS, shell, git, CDP, tools, providers, skills, scoops, and the UI.
+Browser app guide for `packages/webapp/`. `packages/webapp/src/` is the browser app core: VFS, shell, git, CDP, tools, providers, skills, scoops, and the UI. Extension-only behavior lives in `packages/chrome-extension/CLAUDE.md`; runtime/server details in float-specific guides.
 
 ## Architecture
 
-### Layer Stack
+Layer stack (each layer consumed by the next):
 
 ```text
 Virtual Filesystem (fs/) → RestrictedFS → Shell (shell/) + Git (git/)
@@ -17,258 +13,137 @@ Virtual Filesystem (fs/) → RestrictedFS → Shell (shell/) + Git (git/)
       → consumed by node-server and chrome-extension floats
 ```
 
-### Data Flow
-
-```text
-User → ChatPanel → Orchestrator → ScoopContext.prompt() → pi-agent-core → LLM API
-  → tool calls → RestrictedFS / AlmostBashShell / BrowserAPI
-  → results → agent loop → UI updates / scoop routing
-```
+Data flow and full subsystem maps: `docs/architecture.md`.
 
 ## Key Subsystems
 
-Per-subsystem file paths + non-obvious invariants live in
-[`docs/webapp-details.md`](../../docs/webapp-details.md). Root paths only here; the
-never-rules below flag what a reviewer must recognise.
+Per-subsystem file paths + invariants live in
+[`docs/webapp-details.md`](../../docs/webapp-details.md); root paths only here.
 
-- Kernel host — `packages/webapp/src/kernel/` (also `docs/kernel/process-model.md`)
-- Orchestrator + tray — `packages/webapp/src/scoops/`
-- WorkUnit runtime (cone/scoop as roles) — `packages/webapp/src/work-unit/`
-  (also `docs/work-unit.md`)
-- VirtualFS + mounts — `packages/webapp/src/fs/` (also `docs/mounts.md`)
-- Shell (`.jsh`/`.bsh`, MCP) — `packages/webapp/src/shell/`
-  (also `docs/shell-reference.md`)
-- Speech (mic/TTS) — `packages/webapp/src/speech/`
-- CDP + cherry — `packages/webapp/src/cdp/`
-- Tools (file/`bash`/scoop helpers) — `packages/webapp/src/tools/`; browser
-  automation routes through shell commands, not a separate tool family
-- Sudo — `packages/webapp/src/sudo/` + `fs/sudo-fs.ts` + `shell/sudo/`
-- Bash progress overlay — `shell/progress/` (one `ScriptRun` unit per tool call: `planScriptProgress` counts registry dispatches from `bash.transform().ast`, steps tick at `wrapCommandForDispatch` on completion; `sleep`/`timeout` tickers, `wrapCommandForProgress` start/end and `createFetchProgressObserver` bytes (fed by `proxied-fetch.ts` + node-server `X-Proxy-Content-Length`) fold into it via `emitter.setAggregator`; ≤4 events/s per id); events ride `ToolExecutionContext.onUpdate` as `progress` partials → `tool_progress` agent event → `applyToolProgress` (icon fill, 3-dot badge, body top bar) + send-button `progress` ring. Design: `docs/exploration/bash-progress-overlay.md`
-  (also `docs/approvals.md`)
-- Core agent — `packages/webapp/src/core/` (pi-agent-core + pi-ai;
-  `tool-adapter.ts` bridges legacy tools; feature flags, context compaction)
-- UI + layouts — `packages/webapp/src/ui/` and `ui/wc/` (also `docs/layouts.md`)
-- Skills — `packages/webapp/src/skills/`
-- Sprinkles + Dips — `ui/sprinkle-*.ts`, `ui/dip.ts`
+- Kernel host — `src/kernel/` (also `docs/kernel/process-model.md`)
+- Orchestrator + tray — `src/scoops/`
+- WorkUnit runtime (cone/scoop as roles) — `src/work-unit/` (also `docs/work-unit.md`)
+- VirtualFS + mounts — `src/fs/` (also `docs/mounts.md`)
+- Shell (`.jsh`/`.bsh`, MCP) — `src/shell/` (also `docs/shell-reference.md`)
+- Speech (mic/TTS) — `src/speech/`
+- CDP + cherry — `src/cdp/`
+- Tools (file/`bash`/scoop helpers) — `src/tools/`; browser automation routes through shell
+  commands, not a separate tool family
+- Sudo — `src/sudo/` + `fs/sudo-fs.ts` + `shell/sudo/` (also `docs/approvals.md`)
+- Bash progress overlay — `shell/progress/` (one `ScriptRun` per tool call;
+  `docs/exploration/bash-progress-overlay.md`)
+- Core agent — `src/core/` (pi-agent-core + pi-ai; `tool-adapter.ts` bridges legacy tools;
+  feature flags + context compaction)
+- UI + layouts — `src/ui/` and `ui/wc/` (also `docs/layouts.md`)
+- Skills — `src/skills/`; Sprinkles + Dips — `ui/sprinkle-*.ts`, `ui/dip.ts`
 - Stale-asset recovery — `setup-preload-error-reload.ts` + `stale-asset-channel.ts`
-
-## File mentions + preview
-
-Clicking a file name the agent wrote in chat. Five modules, deliberately split so the guessing and the verifying stay separate:
-
-- `core/file-mentions.ts` — the heuristic. Pure; finds CANDIDATES in prose and knows nothing about the VFS.
-- `core/tool-call-paths.ts` — harvests the paths a tool call's parameters named (bash redirects, `path`-ish fields), so prose can be read against what the agent already did.
-- `core/file-mention-resolver.ts` — checks candidates against the VFS via a lazily built, bounded basename index, with those paths as hints.
-- `ui/file-mention-linker.ts` — walks a rendered message and links only what resolved.
-- `ui/wc/wire-file-mentions.ts` — lifecycle: observes the thread, waits for streaming to finish, opens the preview.
-
-Plus `core/file-type.ts` (content sniffing) and `ui/git-preview-source.ts` (the HEAD blob for diff mode). `ui/wc/file-actions.ts` owns `openFilePreview`, the single entry point both the file tree and a clicked mention go through.
-
-Non-obvious rules:
-
-- **Confirm, then linkify.** Nothing is decorated optimistically — the heuristic is permissive precisely BECAUSE verification gates it. A candidate that does not resolve stays plain text.
-- **Never linkify a streaming bubble.** A half-arrived path resolves to nothing; bubbles are processed only once `streaming` clears.
-- **`getMimeType()` (`core/mime-types.ts`) is for SERVING, `sniffFileType()` (`core/file-type.ts`) is for READING.** Never swap them: sniffing a type you then put in a `Content-Type` header is how MIME-confusion bugs happen, and serving's conservative `application/octet-stream` fallback is exactly what made `.jsh` unpreviewable. Precedence is magic bytes → extension → UTF-8 decodability.
-- **`isomorphic-git` is imported lazily** in `git-preview-source.ts`; the UI layer must not pull the `src/git/` stack for a preview. Its fs shim is read-only ON PURPOSE — a preview surface must never be able to write to a repo.
-- **Hints come from the typed `ToolCall`, not from parsed markup.** `wc-message-view.ts` stamps each rendered tool row with `data-file-paths` (JSON) at render time; `wire-file-mentions.ts` reads the rows that PRECEDE a bubble in document order — chronological in a transcript — capped at the most recent 40. A hint is believed only after `stat()` confirms it, which is what lets it resolve a file outside the indexed roots (`/home/lars/foo.md`) without ever inventing a link.
-- **A hint without a directory is dropped.** The whole value of a hint is the path segment prose does not carry; a bare basename tells the resolver nothing the index did not already know, and would only cost a `stat()`.
-- **Markdown is detected by EXTENSION, on purpose** (`richPreviewKind` in `core/file-type.ts`). It has no magic bytes and is byte-identical to plain text — the name is the only declaration there is, and being wrong changes only which view opens first. Markdown is converted by `ui/message-renderer.ts` (DOMPurify-sanitized) and mounted inline; **raw HTML is never sanitized and never mounted inline** — it goes to Quick Look's sandboxed iframe. Documents over 512 KB get no rendered view (synchronous conversion would freeze the overlay).
-- **The mention resolver's index is bounded** (`maxEntries`, `maxDepth`, skipped `node_modules`-class directories). A mention that would only resolve past the ceiling stays plain text; stalling the transcript to prove otherwise is worse.
+- File mentions / preview + base64 payload chips —
+  [`docs/webapp-details.md`](../../docs/webapp-details.md) (catches: confirm-then-linkify
+  only, never a streaming bubble; `getMimeType()` SERVES vs `sniffFileType()` READS)
 
 ## Never-Rules
 
-- **Kernel realms**: `runInRealm()` spawns per-task `DedicatedWorker`; SIGKILL → exit 137. Sync `readFileSync`/`writeFileSync` and
-  `child_process.execSync`/`execFileSync`/`spawnSync` from realm scripts go through
-  `realm/sync-{xhr,fs-*,exec-*}.ts` + `ui/sync-fs-sw-handler.ts` with per-realm
-  capability tokens; never bypass. On an isolated leader the same dispatchers are
-  reached over `realm/sync-sab-*.ts` (Atomics/SharedArrayBuffer on the realm's
-  own port) — only for `Realm.isolatedThread` realms; the in-process factory must
-  never get a SAB (self-deadlock). Deep reference: `docs/kernel/process-model.md`.
-- **Cone and scoop are roles over one `WorkUnit`** (#1666): `RegisteredScoop.parentJid`
-  is required — `null` is THE root test (`isRootUnit`). The record carries no role:
-  `isCone`/`type` were deleted in #2279, so the **compiler** is the ratchet for every
-  record read — a role branch no longer has a field to read. `isCone` survives only on the
-  follower wire, write-only leader-side (projected from `isRootUnit`); reading it back
-  is a follower fallback for a pre-`parentId` leader (`summaryIsRoot`, `coneJidFromWire`). New `scoops/` and `kernel/` code asks `orchestrator.getWorkUnits()` (`getParent`, `getChildren`,
-  `resolveDefaultRoot`) or the unit's `policy.*`. Every creation path sets `parentJid`
-  explicitly; restore backfills and persists it (`legacyRecordIsCone` reads the
-  pre-#2279 field once, there, and `normalizeScoopRecord` strips it). Several roots may
-  exist: UI code resolves "the cone" via `ui/wc/wc-unit-context.ts` (`defaultRootOf`,
-  `threadContextFor`, `switcherLabelFor`); ONE strip ordering, both shells:
-  `work-unit/client/presentation.ts`, over the `WorkUnitClient` protocol (#2274).
-  Chat sessions: `session-<folder>`
-  (`chatSessionIdFor`). Cone add/drop lives in `ui/wc/wc-cone-actions.ts`
-  behind `<slicc-freezer-new>`'s action row (`<slicc-dialog>`, never inline);
-  the strip is the only switcher.
-  Directory layout comes from `workspaceFor` ALONE — primary cone
-  `/workspace`, extra cone `/cones/<folder>/workspace` + its own `CLAUDE.md`,
-  scoop `/scoops/<folder>/workspace`; `/shared`, `/tmp` and the skills library
-  (`SKILLS_LIBRARY_DIR`) stay shared. Never hardcode `/workspace` for a unit's
-  root, memory file or spawn default. Memory is per cone on both paths. A unit's CONVERSATION is one canonical,
-  append-only record too (#2275, `work-unit/conversation/`): Pi history, the UI
-  projection and transcripts are DERIVATIONS, never parallel writes. The legacy stores are still written (a read-old/write-new window),
-  so anything deriving to nothing falls back — never make a canonical read
-  fatal or delete a legacy record (#2006).
-  **Users never talk to a scoop** (#2312): a selected scoop is READ-ONLY
-  (`isReadOnlyUnit` — one rule) and anything it needs from a
-  human goes to the OWNING cone, never `defaultRoot()`.
-  See `docs/work-unit.md`.
-- **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without
-  queue/watermark loss; user `web` bypasses the window (immediate/awaited,
-  prevents deferral). `transcript-limits.ts` caps bridge/event transcripts at 64 KB
-  — never the canonical `agent-sessions` history or compaction input.
-- **Agent bridge defaults** (`agent-bridge.ts`): writable
-  `[cwd, /shared/, <scratch>/, /tmp/]`, visible
-  `[...defaultChildVisibleRoots(owning cone), invokingCwd]`; `--read-only`
-  replaces them.
-- **Mount signing is browser-naive**: CLI → `/api/s3-sign-and-forward`,
-  extension → SW. Never sign in the browser. See `docs/mounts.md`.
-- **Shell/mount cache**: `script-catalog.ts` caches per `$PATH` root set;
-  the `FsWatcher` cache is bypassed only for root sets a mount overlaps
-  (external changes there are invisible). `.jsh` lookup follows `$PATH` —
-  never reintroduce a full-VFS scan (#2085).
+Invariants a reviewer must catch; mechanism in `docs/webapp-details.md` + the linked docs.
+
+- **Kernel realms** (`docs/kernel/process-model.md`): `runInRealm()` spawns a per-task
+  `DedicatedWorker` (SIGKILL → exit 137). Sync FS/`child_process.*Sync` from realm scripts go
+  through `realm/sync-*` dispatchers + `ui/sync-fs-sw-handler.ts` with per-realm capability
+  tokens — never bypass. SAB dispatchers only serve `Realm.isolatedThread`; never hand one to
+  the in-process factory (self-deadlock).
+- **Cone and scoop are roles over one `WorkUnit`** (`docs/work-unit.md`):
+  `RegisteredScoop.parentJid` is required — `null` is THE root test (`isRootUnit`); no role
+  field, so the compiler is the ratchet. A unit's CONVERSATION is the one canonical
+  append-only record (history/UI/transcripts DERIVE from it); never make a canonical read
+  fatal or delete a still-written legacy record. **Users never talk to a scoop**: a selected
+  scoop is READ-ONLY (`isReadOnlyUnit`); its asks go to the OWNING cone. Layout from
+  `workspaceFor` ALONE (never hardcode `/workspace`); memory per cone.
+- **Scoop queue**: pure-lick batches defer while `ScoopContext.isBusy` without queue/
+  watermark loss; user `web` bypasses the window. `transcript-limits.ts` caps bridge/event
+  transcripts at 64 KB — never `agent-sessions` history or compaction input.
+- **Agent bridge defaults** (`agent-bridge.ts`, `docs/webapp-details.md`): writable `[cwd,
+/shared/, <scratch>/, /tmp/]`, visible child roots + `invokingCwd`; `--read-only` replaces.
+- **Mount signing is browser-naive** (`docs/mounts.md`): CLI → `/api/s3-sign-and-forward`,
+  extension → SW. Never sign in the browser.
+- **Shell/mount cache**: `script-catalog.ts` caches per `$PATH` root set; the `FsWatcher`
+  cache is bypassed only for root sets a mount overlaps. `.jsh` lookup follows `$PATH`, never
+  a full-VFS scan.
 - **`typescript` v7 has no browser/WASM API** — use `typescript-js` (v6) for browser
-  `tsc`/`test`/`esm-transpile`. `builtin-shadow-map.ts` is authoritative for
-  `ipx`/`npx` → built-in redirects.
-- **`esbuild.initialize` needs `worker: false` + a bounded wait** in every browser
-  float: with `worker: true` it settles only on a nested `blob:` Worker's first
-  message (no `onerror`, no timeout), so a blocked blob worker hangs forever
-  (#2200). Never cache a load promise that can stay pending — `esbuild-wasm.ts`
-  records a stall instead. See `docs/pitfalls.md`.
-- **Speech is page-realm only** (mic, AudioContext); kernel worker bridges via
-  `hear-*` panel-RPC. Extension `uiOnly` side panel: Chrome denies `getUserMedia`
-  from a cross-origin iframe, so `wc-follower.ts` skips `ptt` and drops
-  "Take a photo".
-- **Sprinkle element bundles ride the app's chunk graph.** `<slicc-diff>` /
-  `<slicc-editor>` are Rollup entries (`build.rollupOptions.input`), and
-  `dist/ui/slicc-diff.js` / `slicc-editor.js` are stable-name loader shims that
-  dynamic-import the hashed entry — so Shiki, `@pierre/diffs`, and CM6 are the
-  SAME chunks the app ships, not a second eager copy (`slicc-diff.js` alone was
-  5.8 MB as an esbuild IIFE, because esbuild inlines dynamic imports). Loading
-  is async: elements must adopt pre-upgrade properties
-  (`ui/upgrade-own-properties.ts`), and sprinkles awaiting a method API use
-  `window.__SLICC_SPRINKLE_ASSETS__['slicc-diff.js']`.
-- **The kernel-worker build stubs `speech/speak.ts` + `speech/hear.ts`**
-  (`stubPageRealmSpeechPlugin`, `worker.plugins` only). `say`/`hear` keep their
-  local and panel-RPC branches in one module; the local branch is gated on
-  `speechSynthesis`, so in a worker it is dead code that was dragging
-  `kokoro-js` + `@huggingface/transformers` (~1.8 MB) into a build the page
-  graph already covers. Same reason `speech/model-ids.ts` exists — a model-id
-  constant must never be imported from an engine.
-- **Cherry origin detection** (`cherry-host-transport.ts`): `resolveParentOrigin()`
-  prefers `location.ancestorOrigins[0]` (unforgeable); `document.referrer` alone
-  breaks when Referer is stripped or in HTTP-in-HTTPS dev embeds.
-- **Cherry envelope gate** (`cherry-host-protocol.ts`): three factors — origin
-  allowlist + `MessageEvent.source` identity + per-mount `channelId` nonce.
-  `packages/cherry/src/protocol.ts` is a structural mirror; keep in sync.
-- **Sudo self-protection**: writes to `/etc/sudoers` + `/etc/sudoers.d/*` always
-  require approval, hardcoded in `matchPath`. Deep reference: `docs/approvals.md`.
+  `tsc`/`test`/`esm-transpile`; `builtin-shadow-map.ts` is authoritative for `ipx`/`npx` →
+  built-in redirects.
+- **`esbuild.initialize` needs `worker: false` + a bounded wait** in every browser float
+  (`worker: true` lets a blocked blob worker hang forever); never cache a load promise that
+  can stay pending (`docs/pitfalls.md`).
+- **Speech is page-realm only** (`docs/webapp-details.md`): mic/AudioContext; kernel worker
+  bridges via `hear-*` panel-RPC and stubs the speech modules (`stubPageRealmSpeechPlugin`,
+  else ~1.8 MB of models leak in). Extension `uiOnly` side panel: Chrome denies `getUserMedia`
+  cross-origin, so `wc-follower.ts` skips `ptt` / "Take a photo".
+- **Sprinkle element bundles ride the app's chunk graph** (`docs/webapp-details.md`):
+  `<slicc-diff>` / `<slicc-editor>` are Rollup entries whose loader shims dynamic-import the
+  hashed entry, so Shiki / `@pierre/diffs` / CM6 stay the app's chunks, not an eager copy.
+- **Cherry** (`cherry-host-transport.ts`, `cherry-host-protocol.ts`; `docs/webapp-details.md`):
+  trust parent origin from `location.ancestorOrigins[0]`, not `document.referrer`; envelope
+  gate = origin allowlist + `MessageEvent.source` identity + per-mount `channelId` nonce.
+  `packages/cherry/src/protocol.ts` mirrors it — keep in sync.
+- **Sudo self-protection** (`docs/approvals.md`): writes to `/etc/sudoers` +
+  `/etc/sudoers.d/*` always require approval (hardcoded in `matchPath`). Page realm can
+  reassign `globalThis.confirm`, so `sudo/panel-responder.ts` captures natives at init and
+  approval chrome mounts via `ui/wc/trusted-layer.ts`, never `document.body`. `reason` is a
+  FIELD on a `deny`, never a fourth `decision` (a new variant fails open).
 - **`/tmp` is granted to every scoop, sandbox or not** — `builtinScoopGrants()`
-  (`base/sudoers.ts`, merged by `getPolicyForScoop`) + `ALWAYS_WRITABLE_PREFIXES`
-  (`fs/restricted-fs.ts`). Both layers gate independently, so change them
-  together. The space is SHARED across scoops: never put a secret there; private
+  (`base/sudoers.ts`) + `ALWAYS_WRITABLE_PREFIXES` (`fs/restricted-fs.ts`) gate
+  independently, so change together. It is SHARED: never store a secret there; private
   scratch is `/scoops/<folder>/tmp`.
-- **"Agent can't self-approve" does NOT cover page-realm code** (which can reassign
-  `globalThis.confirm`): `sudo/panel-responder.ts` captures natives at module
-  init; approval chrome mounts via `ui/wc/trusted-layer.ts`, never `document.body`.
-  The panel terminal is intentionally NOT gated.
-- **Sudo brokers** are float-specific (`createSudoBroker`): extension-delegate
-  relays via hosted leader tab; standalone/Electron POSTs `/api/sudo-approve`.
-  All of them are wrapped in `withApprovalTimeout` — an unanswered prompt
-  settles after 5 min as `{ decision: 'deny', reason: 'user-timeout' }` (the
-  scoop → cone leg uses `cone-timeout`; different approver, different recovery)
-  so the blocked turn is released. `reason` is a FIELD, never a fourth
-  `decision` value: every gate branches on `deny`, so a new variant would fail
-  open. The wrapper also aborts `SudoRequestOptions.signal` before resolving, so
-  a broker whose `suggest` outlived the budget cannot raise a stale prompt.
-- **Frozen-session recovery** must go through the **bounded** legacy enrichment
-  call — never the unbounded curator (`timeoutSeconds` cannot stop it). Save /
-  Skip memory / Erase clear the SELECTED cone's chat and non-mount `/tmp`, not
-  scoops: the freezer, `clear-chat` and boot hydration all resolve their root
-  through `ui/wc/wc-unit-context.ts` (`rootForSelection`, `rootFolderForContext`)
-  and key the session with `chatSessionIdFor`, never the literal `session-cone`.
-  Archives record `cone` / `coneLabel` so a card names its cone and a thaw can
-  route back to it. The welcome flow is the one deliberate exception — it stays
-  primary-cone-only (#2272). See `docs/work-unit.md`.
-- **Layouts** (`docs/layouts.md`): behind `panel-layouts` flag. `panelize-shell.ts`
-  RE-PARENTS what `mountWcShell` built, so `WcShellRefs` stays valid.
-  `setPanelVisible` must add an unplaced panel but never duplicate a placed one;
-  `sanitizeLayoutName` guards the path a name becomes.
-- **Cloud cone config** (`ui/hosted-config-apply.ts`): `applyHostedAccounts`
-  removes only providers tracked in `localStorage['slicc_cloud_managed']` — never
-  user-added ones. `?connect=1` is login-only (`ui/connect-surface.ts`), no kernel.
-- **Never monkeypatch a method on a get/set-asymmetric Proxy.** The sudo-fs Proxy
-  advertises `MONKEYPATCH_UNSAFE_FS` (a `Symbol.for` marker);
-  `getCompatibilitySkillCandidates` skips hooks and cache for it. Reassigning a
-  gated method creates an `override↔wrapper` async recursion that OOMs the kernel
-  worker.
-- **Adobe `X-Session-Id` invariant**: every LLM call to the Adobe proxy must attach
-  the `X-Session-Id` header. `scoop-context.ts` wires it for the agent `streamFn`
-  and compaction `headers`; new call sites (`streamSimple`/`completeSimple`,
-  pi-coding-agent helpers) must attach it explicitly.
-  `providers/adobe.ts`'s `ensureSessionIdHeader` is defense-in-depth
-  (daily-rotated sentinel UUID + warning), not the fix location. See
-  `docs/pitfalls.md`.
-- **Claude Bedrock capability shims** (temperature rejected by Opus ≥ 4.7;
-  adaptive thinking for Opus/Sonnet ≥ 4.6): fix at the provider layer via
-  `src/providers/claude-model-version.ts` (`parseClaudeVersion` + predicate
-  helpers), never at the call site. See `docs/pitfalls.md`.
+- **Frozen-session recovery** (`docs/work-unit.md`) uses the **bounded** legacy enrichment
+  call, never the unbounded curator. Save / Skip memory / Erase clear the SELECTED cone's chat
+  and non-mount `/tmp`, not scoops; root resolves via `ui/wc/wc-unit-context.ts`
+  (`chatSessionIdFor`), never the literal `session-cone`.
+- **Layouts** (`docs/layouts.md`, behind `panel-layouts` flag): `panelize-shell.ts`
+  RE-PARENTS what `mountWcShell` built, so keep `WcShellRefs` valid; `setPanelVisible` adds
+  an unplaced panel but never duplicates a placed one.
+- **Cloud cone config** (`ui/hosted-config-apply.ts`): `applyHostedAccounts` removes only
+  `localStorage['slicc_cloud_managed']` providers, never user-added; `?connect=1` is
+  login-only (no kernel).
+- **Never monkeypatch a method on a get/set-asymmetric Proxy** (`docs/webapp-details.md`):
+  the sudo-fs Proxy advertises `MONKEYPATCH_UNSAFE_FS`; reassigning a gated method OOMs the
+  kernel worker via override↔wrapper recursion.
+- **Provider quirks** (`docs/pitfalls.md`): attach the Adobe proxy's `X-Session-Id` header
+  at the call site (`ensureSessionIdHeader` is defense-in-depth, not the fix). Claude Bedrock
+  capability shims belong in `src/providers/claude-model-version.ts`, never at the call site.
 
 ## Key Conventions
 
 - **Two type systems**: legacy `tools/` + pi-compatible `core/`; bridge via
-  `tool-adapter.ts`.
-- **Logging**: `createLogger('namespace')` (`base/logger.ts`).
-- **Extension detection**: `isExtensionRealm()` from `base/runtime-env.ts`.
+  `tool-adapter.ts`. **Logging**: `createLogger('namespace')` (`base/logger.ts`).
+  **Extension detection**: `isExtensionRealm()` (`base/runtime-env.ts`).
 - **Tool-output images**: `<img:data:…>` markers are parsed in exactly one place
-  (`base/image-markers.ts`) so every consumer agrees on what is an image — the
-  bash tool exempts markers from its 40KB cap, `core/tool-adapter.ts` turns them
-  into image content blocks, `scoops/transcript-limits.ts` strips them, and
-  `ui/wc/wc-message-view.ts` renders them inline. Marker-shaped prose and
-  markers sliced mid-payload stay inert text everywhere.
-- **Dual-mode compatibility**: features must work in both standalone/CLI and
-  extension. The thin extension runs no dynamic code itself — realms, WASM, and
-  sprinkles/dips run in the hosted leader tab / kernel worker.
-- **Agent-avatar expressions** (`ui/wc/wc-live-callbacks.ts`,
-  `wc-live-composer.ts`, `wc-live-controller.ts`): the face's activity comes from
-  the descriptors (`toSwitcherScoops` → `awaiting` for the scoop whose turn just
-  ended, cleared on submit or any non-`ready` status). Transients are host calls
-  on `refs.switcher`: `scrutinize()` + `wake()` per composer `input`, `glower()`
-  on a `tool_result` with `isError`. Channels:
-  `docs/webcomponents-details.md`.
+  (`base/image-markers.ts`) so every consumer agrees what is an image; marker-shaped prose
+  and markers sliced mid-payload stay inert.
+- **Dual-mode compatibility**: features must work in both standalone/CLI and extension. The
+  thin extension runs no dynamic code itself — realms, WASM, sprinkles/dips run in the hosted
+  leader tab / kernel worker.
+- **Agent-avatar expressions** (`ui/wc/wc-live-*.ts`): activity from descriptors, transients
+  via host calls on `refs.switcher`. Channels: `docs/webcomponents-details.md`.
 - **Model IDs**: pi-ai aliases such as `claude-opus-4-6`, not dated snapshots.
-- **Per-cone model (#2310)**: the model lives on the work-unit record
-  (`RegisteredScoop.model = { provider, id }`, with `thinking` beside it), not in
-  page localStorage. Read it through `work-unit/record.ts`
-  (`modelFor` / `modelIdFor` / `modelProviderFor` / `thinkingFor`) and write it
-  through `setUnitModel` / `setUnitThinking` — `config.modelId` /
-  `config.thinkingLevel` are legacy creation input that `normalizeScoopRecord`
-  lifts onto the record. The picker changes ONLY the selected cone
-  (`Orchestrator.setScoopModel`); `refreshModels()` re-resolves each context
-  against its own record after an account change and retargets nothing. A new
-  cone inherits the selected cone's model, a scoop copies its creator's once.
-  The global `selected-model` survives only as the first-boot seed / migration
-  source (`scoops/model-seed.ts`), and only once the selected provider has an
-  account — seeding the built-in default would pin the primary cone to a
-  provider the user may never add. Details: `docs/work-unit.md`.
-- **Provider composition**: pi-ai auto-discovered + `src/providers/built-in/` +
-  `providers/`; merge order pi-ai → `modelOverrides` → `getModelIds()`. Build
-  filtering: `packages/dev-tools/providers.build.json`.
+- **Per-cone model** (`docs/work-unit.md`): the model lives on the work-unit record, not page
+  localStorage — read/write via `work-unit/record.ts` (`modelFor`/`setUnitModel` etc.). The
+  picker changes ONLY the selected cone; global `selected-model` survives only as first-boot
+  seed (`scoops/model-seed.ts`).
+- **Provider composition** (`docs/webapp-details.md`): pi-ai auto-discovered +
+  `src/providers/built-in/` + `providers/`, merged pi-ai → `modelOverrides` → `getModelIds()`;
+  build filtering in `packages/dev-tools/providers.build.json`.
 
 ## VFS API Patterns
 
-- Prefer absolute VFS paths: `/workspace/...` and `/shared/...`.
-- `VirtualFS.create({ dbName, wipe })` is the entry point for isolated testable
-  instances.
-- Mounted directories bridge directly to `FileSystemDirectoryHandle`; do not copy
-  large trees into IndexedDB unless you mean to.
-- Use `fs.walk()` and `path-utils.ts` helpers instead of ad hoc path splitting.
-- `RestrictedFS` is the correct boundary when code should not see the whole VFS.
+- Prefer absolute VFS paths (`/workspace/...`, `/shared/...`) + `fs.walk()`/`path-utils.ts`
+  helpers over ad hoc path splitting. `RestrictedFS` is the boundary when code should not
+  see the whole VFS.
+- `VirtualFS.create({ dbName, wipe })` is the entry point for isolated testable instances.
+- Mounted directories bridge directly to `FileSystemDirectoryHandle`; do not copy large
+  trees into IndexedDB unless you mean to.
 
 ## Related Guides
 
 - [`docs/webapp-details.md`](../../docs/webapp-details.md) — full subsystem detail
 - `packages/chrome-extension/CLAUDE.md`, `packages/node-server/CLAUDE.md` — float guides
-- `docs/architecture.md`, `docs/shell-reference.md`, `docs/mounts.md`, `docs/secrets.md`
-- `docs/kernel/process-model.md`, `docs/transcript-export.md`, `docs/approvals.md`
-- `docs/layouts.md`, `docs/pitfalls.md`
+- Deep docs are cited inline above (architecture, shell-reference, mounts, process-model,
+  approvals, layouts, work-unit, pitfalls).
