@@ -57,6 +57,9 @@ on:
         description: 'How many oversized guides to hand Claude this run (default 1, largest first)'
         required: false
         default: '1'
+      max_turns:
+        description: 'Override Claude --max-turns (default: 300 per worklist file plus overflow)'
+        required: false
 
 concurrency:
   group: claude-md-compactor
@@ -70,7 +73,9 @@ permissions:
 jobs:
   compact:
     runs-on: ubuntu-latest
-    timeout-minutes: 75
+    # 250 turns ran 48–74 min (33320764465 / 33315681779). Scaled max-turns
+    # (up to 600) plus recover/open needs more than 75.
+    timeout-minutes: 120
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -98,6 +103,7 @@ jobs:
           MAX_CHARS: ${{ github.event.inputs.max_chars }}
           TARGET_CHARS: ${{ github.event.inputs.target_chars }}
           MAX_GUIDES: ${{ github.event.inputs.max_guides || '1' }}
+          MAX_TURNS: ${{ github.event.inputs.max_turns }}
         run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs
 
       - name: Report an already-open compaction PR
@@ -163,7 +169,7 @@ jobs:
             --model ${{ vars.COMPACTOR_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
             --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
             --disallowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(git push:*),Agent,Task,TodoWrite"
-            --max-turns 250
+            --max-turns ${{ steps.measure.outputs.max_turns }}
           prompt: ${{ steps.measure.outputs.prompt }}
 
       # The Cosmos "do not proceed unless every guide is under the limit"

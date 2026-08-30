@@ -41,6 +41,7 @@ import { execFileSync } from 'node:child_process';
  *   TARGET_CHARS   override the 9,500-char compaction target     (optional)
  *   MAX_GUIDES     how many oversized guides to hand Claude this run
  *                  (default 1 — one file, largest first). 0 = all.
+ *   MAX_TURNS      override computed --max-turns (300 × worklist + overflow)
  *   WORKLIST       --check/--progress: comma/newline-separated guide paths
  *                  that were handed to Claude, held to TARGET_CHARS instead of
  *                  MAX_CHARS. Emitted as the `worklist` output by the measuring
@@ -72,6 +73,7 @@ import {
   COMPACTION_PR_TITLE,
   COMPACTOR_MAX_CHARS,
   COMPACTOR_TARGET_CHARS,
+  computeMaxTurns,
   DEFAULT_MAX_GUIDES,
   findExistingCompactionPr,
   formatBeforeSizes,
@@ -363,6 +365,12 @@ async function main() {
 
   setOutput('has_oversized', worklistGuides.length > 0 ? 'true' : 'false');
   setOutput('oversized_count', String(worklistGuides.length));
+  // Fixed 250 starved a 20k guide (dispatch 33320764465). Scale with the
+  // worklist; MAX_TURNS overrides when set (workflow_dispatch input).
+  setOutput(
+    'max_turns',
+    String(intEnv('MAX_TURNS', computeMaxTurns(worklistGuides, { targetChars })))
+  );
   // Carried into the post-Claude --check step: after a successful rewrite these
   // paths no longer look oversized, so the check cannot rediscover them.
   setOutput('worklist', worklistGuides.map((m) => m.path).join(','));

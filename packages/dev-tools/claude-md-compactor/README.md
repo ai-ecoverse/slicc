@@ -106,8 +106,9 @@ working tree to the measure step's `before_sizes` JSON:
   `measureGuides`, `selectOversized`, `formatReport` (the before/after markdown
   table), `buildBranchName`, `findExistingCompactionPr`, `buildPrompt`,
   `assessCompactionProgress` / `formatProgressReport` / `buildPartialPrBody` /
-  `buildCompactionPrBody` / `selectPublishPaths` (the failed-`--check` recovery
-  path). No I/O; unit-tested in `lib.test.mjs`.
+  `buildCompactionPrBody` / `selectPublishPaths` / `computeMaxTurns` (the
+  failed-`--check` recovery path and the per-worklist `--max-turns` budget).
+  No I/O; unit-tested in `lib.test.mjs`.
 - `measure-claude-guides.mjs` — CLI (I/O only): the `git ls-files` walk, the file
   reads, the open-PR query, `$GITHUB_OUTPUT` / `$GITHUB_STEP_SUMMARY` writes, the
   `--check` post-compaction gate, `--progress` recovery, and `--publish-paths`.
@@ -140,6 +141,7 @@ npx vitest run --project dev-tools packages/dev-tools/claude-md-compactor/lib.te
 | `GH_TOKEN`            | _(required)_ | Token for the GitHub API                                              |
 | `MAX_CHARS`           | `10000`      | Oversized threshold override                                          |
 | `TARGET_CHARS`        | `9500`       | Compaction target override                                            |
+| `MAX_TURNS`           | _(computed)_ | override `--max-turns`; default is 300 × worklist plus overflow       |
 | `SKIP_PR_CHECK`       | _(unset)_    | `1` skips the dedup query (offline runs; `REPO`/`GH_TOKEN` unused)    |
 | `WORKLIST`            | _(unset)_    | `--check`/`--progress`: the guides held to `TARGET_CHARS` (see below) |
 | `BEFORE_SIZES`        | _(unset)_    | `--progress`: JSON object of path → pre-Claude char counts            |
@@ -170,8 +172,11 @@ successfully rewritten guide no longer looks oversized to a fresh measurement.
 `has_oversized`, `oversized_count`, `branch`, `pr_title` (the fixed
 `COMPACTION_PR_TITLE`, consumed by the `gh pr create` step), `existing_pr`,
 `worklist`, `before_sizes` (JSON path → pre-Claude char counts, consumed by
-`--progress`), and the multi-line `report` and `prompt`. `--progress` adds
-`recovered` and `open_pr`.
+`--progress`), `max_turns` (300 per worklist file plus overflow, capped at
+600; consumed by `--max-turns`. A fixed 250 starved a 20k guide in
+[dispatch 33320764465](https://github.com/ai-ecoverse/slicc/actions/runs/33320764465)),
+and the multi-line `report` and `prompt`. `--progress` adds `recovered` and
+`open_pr`.
 
 ## Exit codes
 

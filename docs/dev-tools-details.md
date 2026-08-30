@@ -76,6 +76,8 @@ Two details that are easy to get wrong and are therefore pinned by tests:
   become a PR. Claude only edits the worklist — the recover step copies those
   files onto a new branch from `origin/main` (so a dispatch from a workflow
   PR cannot leak YAML) and synthesises the PR body if Claude left it empty.
+  `--max-turns` is computed from the worklist (300 per file plus overflow),
+  not a fixed 250.
 - **The flake hunter lists workflow runs one day at a time.**
   `GET /actions/runs` returns at most 1000 items however you page it, and this
   repo produces roughly 2,400 runs a week, so a window-wide query silently

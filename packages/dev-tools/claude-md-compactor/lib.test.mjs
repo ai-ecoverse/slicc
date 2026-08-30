@@ -10,6 +10,7 @@ import {
   COMPACTION_TITLE_PREFIX,
   COMPACTOR_MAX_CHARS,
   COMPACTOR_TARGET_CHARS,
+  computeMaxTurns,
   DEFAULT_MAX_GUIDES,
   EXCLUDED_GUIDES,
   findExistingCompactionPr,
@@ -17,6 +18,7 @@ import {
   formatProgressReport,
   formatReport,
   isExcludedGuide,
+  MAX_TURNS_CAP,
   measureGuides,
   parseBeforeSizes,
   parseWorklist,
@@ -24,6 +26,8 @@ import {
   selectOversized,
   selectPublishPaths,
   selectWorklist,
+  TURNS_PER_GUIDE,
+  TURNS_PER_OVERFLOW_CHUNK,
 } from './lib.mjs';
 
 /** A guide of exactly `n` characters. */
@@ -38,6 +42,35 @@ describe('policy constants', () => {
     // policy must stay strictly stricter or it would be pointless.
     expect(COMPACTOR_MAX_CHARS).toBeLessThan(20000);
     expect(DEFAULT_MAX_GUIDES).toBe(1);
+    expect(TURNS_PER_GUIDE).toBe(300);
+    expect(TURNS_PER_OVERFLOW_CHUNK).toBe(50);
+    expect(MAX_TURNS_CAP).toBe(600);
+  });
+});
+
+describe('computeMaxTurns', () => {
+  it('scales with worklist length (the files Claude is asked to rewrite)', () => {
+    const atTarget = { chars: 9500 };
+    expect(computeMaxTurns([atTarget])).toBe(TURNS_PER_GUIDE);
+    expect(computeMaxTurns([atTarget, atTarget])).toBe(TURNS_PER_GUIDE * 2);
+  });
+
+  it('adds overflow turns so a 20k guide is not starved at the 1-file default', () => {
+    // Dispatch 33320764465: 19,998 chars, fixed 250 turns, cap at 9,609.
+    const webapp = { chars: 19998 };
+    const extra = Math.ceil((19998 - 9500) / 2500) * TURNS_PER_OVERFLOW_CHUNK;
+    expect(computeMaxTurns([webapp])).toBe(TURNS_PER_GUIDE + extra);
+    expect(computeMaxTurns([webapp])).toBeGreaterThan(250);
+  });
+
+  it('caps an 8-file dispatch so the job cannot run for hours', () => {
+    const eight = Array.from({ length: 8 }, () => ({ chars: 15000 }));
+    expect(computeMaxTurns(eight)).toBe(MAX_TURNS_CAP);
+  });
+
+  it('treats an empty worklist as one slot (Claude is not invoked anyway)', () => {
+    expect(computeMaxTurns([])).toBe(TURNS_PER_GUIDE);
+    expect(computeMaxTurns(null)).toBe(TURNS_PER_GUIDE);
   });
 });
 

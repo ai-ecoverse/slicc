@@ -45,6 +45,46 @@ export const COMPACTOR_TARGET_CHARS = 9500;
 export const DEFAULT_MAX_GUIDES = 1;
 
 /**
+ * Claude turns budgeted per worklist guide. Dispatch 33320764465 handed one
+ * 19,998-char file a fixed 250 turns, hit the cap at 9,609 (109 over target),
+ * and the compact step failed even though recover still opened #2678. 300 is
+ * the floor for a just-over-10k rewrite; overflow below adds more.
+ */
+export const TURNS_PER_GUIDE = 300;
+
+/** Extra turns per 2,500 characters a worklist guide is above the target. */
+export const TURNS_PER_OVERFLOW_CHUNK = 50;
+
+/** Ceiling so an 8-file dispatch cannot run for hours. */
+export const MAX_TURNS_CAP = 600;
+
+/** @param {number} chars @param {number} targetChars */
+function overflowChunks(chars, targetChars) {
+  const over = Math.max(0, Number(chars) - Number(targetChars));
+  if (!Number.isFinite(over) || over <= 0) return 0;
+  return Math.ceil(over / 2500);
+}
+
+/**
+ * `--max-turns` for this run. Scales with how many guides Claude is actually
+ * asked to rewrite, plus how far over the target they are. A fixed 250
+ * starved a single 20k file (33320764465) and would starve an 8-file
+ * worklist even harder.
+ * @param {Array<{chars?: number}>} worklist
+ * @param {{targetChars?: number}} [options]
+ * @returns {number}
+ */
+export function computeMaxTurns(worklist, { targetChars = COMPACTOR_TARGET_CHARS } = {}) {
+  const guides = Array.isArray(worklist) ? worklist : [];
+  const n = Math.max(guides.length, 1);
+  let turns = TURNS_PER_GUIDE * n;
+  for (const g of guides) {
+    turns += overflowChunks(g?.chars, targetChars) * TURNS_PER_OVERFLOW_CHUNK;
+  }
+  return Math.min(MAX_TURNS_CAP, turns);
+}
+
+/**
  * Guides the compactor must never select, whatever their length.
  *
  * `packages/vfs-root/shared/CLAUDE.md` is the agent-facing runtime guide. It is
