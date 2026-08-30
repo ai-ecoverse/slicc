@@ -1,6 +1,7 @@
 import {
   bundleToFiles,
   type ConeConfig,
+  DEFAULT_CONE_MODEL,
   imsTokenExpiry,
   validateConeConfig,
 } from '@slicc/cloud-core/cone-config';
@@ -8,7 +9,6 @@ import {
 // Import the existing ADOBE_TOKEN_DOMAINS constant (will export it from cloud-sessions-do)
 import { ADOBE_TOKEN_DOMAINS } from './cloud-sessions-do.js';
 
-const DEFAULT_MODEL = 'adobe:claude-opus-4-6';
 const AUTH_OPTIONAL_PROVIDERS = new Set<string>(['local']);
 
 /** Narrow F6 re-validation: the model's provider must have an account (unless auth-optional). */
@@ -29,7 +29,7 @@ export function coneConfigToBundle(input: unknown, bearer: string): ConeConfig {
     // window-less getValidAccessToken path as node-server's legacy branch).
     const expiresAt = imsTokenExpiry(bearer);
     return {
-      model: DEFAULT_MODEL,
+      model: DEFAULT_CONE_MODEL,
       accounts: [
         {
           providerId: 'adobe',

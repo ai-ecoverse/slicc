@@ -5,6 +5,7 @@ import {
   type ConeConfig,
   type ConeConfigDelta,
   type ConeConfigIndex,
+  DEFAULT_CONE_MODEL,
   mergeConeConfig,
   validateConeConfig,
 } from '../cone-config/index.js';
@@ -42,8 +43,6 @@ export interface ResumeConeOpts {
 const KICK_CMD =
   'curl -sS -X POST http://localhost:5710/api/leader-restart -o /dev/null -w "%{http_code}"';
 
-const DEFAULT_MODEL = 'adobe:claude-opus-4-6';
-
 /**
  * Merge `delta` over the existing files; returns new file contents + names index.
  * When `coneConfigJson` is null (a pre-feature cone), synthesizes a degenerate
@@ -67,13 +66,13 @@ export function applyConeConfigDelta(
       );
     }
     base = validateConeConfig({
-      model: parsed.model ?? DEFAULT_MODEL,
+      model: parsed.model ?? DEFAULT_CONE_MODEL,
       accounts: parsed.accounts ?? [],
       secrets: pairEnvEntriesToSecrets(parseEnvFilePreservingValues(secretsEnv)),
     });
   } else {
     base = {
-      model: DEFAULT_MODEL,
+      model: DEFAULT_CONE_MODEL,
       accounts: [],
       secrets: pairEnvEntriesToSecrets(parseEnvFilePreservingValues(secretsEnv)),
     };

@@ -13,6 +13,7 @@
  * an id pi-ai doesn't know resolves against a cold default).
  */
 
+import { DEFAULT_CONE_MODEL } from '@slicc/cloud-core/cone-config';
 import { apiHeaders, resolveApiUrl } from '../../shell/proxied-fetch.js';
 import { removeAccount, saveOAuthAccount } from '../provider-settings.js';
 import type { BootStageLogger } from './types.js';
@@ -43,7 +44,7 @@ export async function runHostedBootstrap(deps: RunHostedBootstrapDeps): Promise<
         : []);
     if (boot.model) localStorage.setItem('selected-model', boot.model);
     else if (!localStorage.getItem('selected-model'))
-      localStorage.setItem('selected-model', 'adobe:claude-opus-4-6');
+      localStorage.setItem('selected-model', DEFAULT_CONE_MODEL);
     if (boot.effortLevel) localStorage.setItem('slicc_locked_effort_level', boot.effortLevel);
     else localStorage.removeItem('slicc_locked_effort_level');
     const [{ applyHostedAccounts, prewarmHostedModels }, ps] = await Promise.all([
