@@ -1,4 +1,3 @@
 {
-  "packages/node-server/src/electron-controller.ts": 13,
   "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts": 5
 }

@@ -2,6 +2,7 @@ import {
   BRIDGE_ROLE_FOLLOWER,
   BRIDGE_ROLE_LEADER,
   BRIDGE_ROLE_QUERY_PARAM,
+  type CDPPayload,
   ELECTRON_OVERLAY_APP_PATH,
   SLICC_HOSTED_ORIGIN,
 } from '@slicc/shared-ts';
@@ -144,6 +145,30 @@ interface RunningProcessInfo {
   executablePath: string | null;
 }
 
+/** `Get-CimInstance Win32_Process | ConvertTo-Json` entry shape. */
+interface Win32CimProcessEntry {
+  ProcessId?: number | string;
+  CommandLine?: string;
+  ExecutablePath?: string | null;
+}
+
+/** Send a CDP command over a target WebSocket; returns the message id. */
+type CdpSend = (method: string, params?: CDPPayload) => number;
+
+interface CdpFetchPausedHttpRequest {
+  url?: string;
+  method?: string;
+  headers?: Record<string, string>;
+  postData?: string;
+}
+
+interface CdpFetchRequestPausedEvent {
+  params?: {
+    requestId?: string;
+    request?: CdpFetchPausedHttpRequest;
+  };
+}
+
 function commandLineExecutableMatchesPattern(commandLine: string, pattern: string): boolean {
   // Extract the executable (first whitespace-separated token) from the command line.
   // Only match when the target app path is the executable itself, not an argument —
@@ -222,7 +247,7 @@ function parseWindowsProcessList(stdout: string): RunningProcessInfo[] {
   const trimmed = stdout.trim();
   if (!trimmed) return [];
 
-  const parsed = JSON.parse(trimmed) as Record<string, unknown> | Array<Record<string, unknown>>;
+  const parsed = JSON.parse(trimmed) as Win32CimProcessEntry | Win32CimProcessEntry[];
   const entries = Array.isArray(parsed) ? parsed : [parsed];
 
   return entries
@@ -532,10 +557,7 @@ export function computeAverageLuminance(
  * a CDP screenshot and analyzing the average luminance.
  * Returns 'light' or 'dark'.
  */
-function detectAppThemeFromScreenshot(
-  ws: WebSocket,
-  send: (method: string, params?: Record<string, unknown>) => number
-): Promise<'light' | 'dark'> {
+function detectAppThemeFromScreenshot(ws: WebSocket, send: CdpSend): Promise<'light' | 'dark'> {
   return new Promise((resolve) => {
     // Take a small JPEG screenshot for speed — we only need luminance
     const screenshotId = send('Page.captureScreenshot', {
@@ -1063,10 +1085,7 @@ export class ElectronOverlayInjector {
    * commit, so the Fetch-proxy escalation must still fire.
    * See {@link OVERLAY_LOADED_PROBE_EXPRESSION}.
    */
-  private async probeOverlayIframeLoaded(
-    ws: WebSocket,
-    send: (method: string, params?: Record<string, unknown>) => number
-  ): Promise<boolean> {
+  private async probeOverlayIframeLoaded(ws: WebSocket, send: CdpSend): Promise<boolean> {
     return new Promise((resolve) => {
       const probeId = send('Runtime.evaluate', {
         expression: OVERLAY_LOADED_PROBE_EXPRESSION,
@@ -1147,10 +1166,7 @@ export class ElectronOverlayInjector {
    * — the SPA-DOM-root eviction case that re-injection must repair. Mirrors
    * {@link probeOverlayIframeLoaded}'s one-shot message-listener pattern.
    */
-  private async probeOverlayEvicted(
-    ws: WebSocket,
-    send: (method: string, params?: Record<string, unknown>) => number
-  ): Promise<boolean> {
+  private async probeOverlayEvicted(ws: WebSocket, send: CdpSend): Promise<boolean> {
     return new Promise((resolve) => {
       const probeId = send('Runtime.evaluate', {
         expression: OVERLAY_EVICTED_PROBE_EXPRESSION,
@@ -1196,7 +1212,7 @@ export class ElectronOverlayInjector {
    */
   private async reinjectIfEvicted(
     ws: WebSocket,
-    send: (method: string, params?: Record<string, unknown>) => number,
+    send: CdpSend,
     target: ElectronInspectableTarget,
     state: ConnectFlowState
   ): Promise<void> {
@@ -1223,7 +1239,7 @@ export class ElectronOverlayInjector {
    */
   private handleSocketOpen(
     ws: WebSocket,
-    send: (method: string, params?: Record<string, unknown>) => number,
+    send: CdpSend,
     target: ElectronInspectableTarget,
     state: ConnectFlowState
   ): void {
@@ -1348,7 +1364,7 @@ export class ElectronOverlayInjector {
    */
   private handlePageLoadAfterReload(
     ws: WebSocket,
-    send: (method: string, params?: Record<string, unknown>) => number,
+    send: CdpSend,
     target: ElectronInspectableTarget,
     state: ConnectFlowState
   ): void {
@@ -1408,20 +1424,15 @@ export class ElectronOverlayInjector {
    */
   private handleFetchRequestPaused(
     ws: WebSocket,
-    send: (method: string, params?: Record<string, unknown>) => number,
-    msg: { params?: { requestId?: string; request?: Record<string, unknown> } }
+    send: CdpSend,
+    msg: CdpFetchRequestPausedEvent
   ): void {
     const requestId = msg.params?.requestId;
     if (!requestId) {
       console.warn('[electron-float] Fetch.requestPaused without requestId, skipping');
       return;
     }
-    const request = (msg.params?.request ?? {}) as {
-      url?: string;
-      method?: string;
-      headers?: Record<string, string>;
-      postData?: string;
-    };
+    const request = msg.params?.request ?? {};
     const url = request.url || '';
     const method = request.method || 'GET';
     const requestHeaders = request.headers || {};
@@ -1510,7 +1521,7 @@ export class ElectronOverlayInjector {
         errorText?: string;
       };
     },
-    send: (method: string, params?: Record<string, unknown>) => number,
+    send: CdpSend,
     target: ElectronInspectableTarget,
     state: ConnectFlowState
   ): void {
@@ -1561,9 +1572,7 @@ export class ElectronOverlayInjector {
    * idempotent launcher in the status-only state (the launcher is collapsed, so
    * there is no visible iframe flash).
    */
-  private injectStatusOverlay(
-    send: (method: string, params?: Record<string, unknown>) => number
-  ): void {
+  private injectStatusOverlay(send: CdpSend): void {
     send('Page.addScriptToEvaluateOnNewDocument', { source: this.thinBootstraps.status });
     send('Runtime.evaluate', { expression: this.thinBootstraps.status, awaitPromise: false });
   }
@@ -1574,7 +1583,7 @@ export class ElectronOverlayInjector {
     this.connections.set(targetId, ws);
 
     let messageId = 1;
-    const send = (method: string, params?: Record<string, unknown>): number => {
+    const send: CdpSend = (method, params) => {
       const id = messageId++;
       ws.send(JSON.stringify({ id, method, params }));
       return id;
