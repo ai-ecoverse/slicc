@@ -92,9 +92,33 @@ Created: ${new Date().toISOString()}
           folder: scoop.folder,
           path: memoryPath,
         });
+      } else if (!(await directoryExists(fs, unit.workspace.root))) {
+        // A missing memory file is ordinary; a missing workspace ROOT is not.
+        // When the backing store is gone — an evicted OPFS tree, a disk that
+        // filled — every `mkdir` above failed into the swallow, and this
+        // write is the first error anyone sees. So a whole-filesystem outage
+        // reported itself as one cone missing its `CLAUDE.md`, with a `Try
+        // again` that could never work. Name the real fault instead.
+        throw new Error(
+          `workspace filesystem unavailable: ${unit.workspace.root} is missing and could not be created` +
+            ` (${code ?? 'unknown error'}) — reload the session`,
+          { cause: err }
+        );
       } else {
         throw err;
       }
     }
+  }
+}
+
+/**
+ * Does `path` exist? A filesystem broken badly enough to throw here answers
+ * the same question the caller is asking, so a throw counts as "no".
+ */
+async function directoryExists(fs: VirtualFS | RestrictedFS, path: string): Promise<boolean> {
+  try {
+    return await fs.exists(path);
+  } catch {
+    return false;
   }
 }
