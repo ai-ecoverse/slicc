@@ -282,9 +282,7 @@
       }
     },
     {
-      "includes": [
-        "packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts"
-      ],
+      "includes": ["packages/webapp/src/shell/supplemental-commands/playwright/teleport.ts"],
       "linter": {
         "rules": {
           "nursery": {
