@@ -92,6 +92,21 @@ jobs:
 
       - run: npm ci
 
+      # A dispatch from a workflow PR is behind any compaction already merged
+      # to main (#2678). Measuring this branch's stale CLAUDE.md files re-selects
+      # a guide that is already under policy on main (dispatch 33325727205
+      # compacted webapp again instead of swift-launcher). Align the guides
+      # with origin/main; the workflow YAML and compactor scripts stay from
+      # this checkout.
+      - name: Align CLAUDE.md with origin/main
+        run: |
+          git fetch --quiet origin main
+          files=$(git ls-files -- '*CLAUDE.md')
+          if [ -n "$files" ]; then
+            # shellcheck disable=SC2086
+            git checkout origin/main -- $files
+          fi
+
       # Read-only: enumerates tracked guides, measures characters (never bytes),
       # queries open PRs for the dedup rule, and composes the prompt. This is
       # the last step a dry run reaches.

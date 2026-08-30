@@ -468,14 +468,23 @@ ${VALIDATION_COMMANDS.map((c) => `- \`${c}\``).join('\n')}
  */
 export function selectPublishPaths({ claudeTouched = [], workflowTouched = [], shrunk = [] } = {}) {
   const blocked = new Set((workflowTouched ?? []).filter(Boolean));
+  const mustPublish = new Set(
+    (shrunk ?? []).map((p) => String(p ?? '').replace(/^\.\//, '')).filter(Boolean)
+  );
   const out = [];
   const seen = new Set();
-  for (const p of [...(claudeTouched ?? []), ...(shrunk ?? [])]) {
+  for (const p of [...(shrunk ?? []), ...(claudeTouched ?? [])]) {
     const path = String(p ?? '').replace(/^\.\//, '');
-    if (!path || seen.has(path) || blocked.has(path)) continue;
+    if (!path || seen.has(path)) continue;
     const isGuide = path === 'CLAUDE.md' || path.endsWith('/CLAUDE.md');
     const isDocs = path === 'docs' || path.startsWith('docs/');
     if (!isGuide && !isDocs) continue;
+    // Dispatch 33325727205: 2676 was behind merged #2678, so
+    // `git diff origin/main $ORIG_SHA` listed packages/webapp/CLAUDE.md as
+    // a workflow-PR file and we dropped the rewrite that hit 9,280 chars.
+    // Shrunk guides and CLAUDE.md always publish; only docs/ overflow is
+    // filtered against the workflow PR's own files.
+    if (blocked.has(path) && !isGuide && !mustPublish.has(path)) continue;
     seen.add(path);
     out.push(path);
   }

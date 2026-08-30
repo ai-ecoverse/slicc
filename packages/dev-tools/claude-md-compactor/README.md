@@ -100,6 +100,12 @@ working tree to the measure step's `before_sizes` JSON:
   the PR. Next Saturday skips while that PR is open.
 - otherwise → exit 1, no PR, same as before.
 
+A dispatch from a workflow PR checks out `origin/main`'s `CLAUDE.md` files
+before measuring, so a compaction already merged (#2678) is not re-selected.
+`--publish-paths` always includes shrunk guides even if `git diff origin/main
+$ORIG_SHA` lists them (dispatch 33325727205 dropped a 19,998 → 9,280 rewrite
+that way).
+
 ## Files
 
 - `lib.mjs` — pure logic: the policy constants, the excluded-guide predicate,

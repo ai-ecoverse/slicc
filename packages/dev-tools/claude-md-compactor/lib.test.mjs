@@ -485,6 +485,22 @@ describe('selectPublishPaths', () => {
       })
     ).toEqual(['packages/webapp/CLAUDE.md']);
   });
+
+  it('still publishes a shrunk guide even if this branch is behind a merged compaction of it', () => {
+    // Dispatch 33325727205: origin/main..ORIG_SHA listed webapp CLAUDE.md
+    // because #2678 had merged and 2676 still had the 19,998-char copy.
+    expect(
+      selectPublishPaths({
+        claudeTouched: ['packages/webapp/CLAUDE.md'],
+        workflowTouched: [
+          'packages/webapp/CLAUDE.md',
+          'docs/dev-tools-details.md',
+          '.github/workflows/claude-md-compactor.yml',
+        ],
+        shrunk: ['packages/webapp/CLAUDE.md'],
+      })
+    ).toEqual(['packages/webapp/CLAUDE.md']);
+  });
 });
 
 describe('formatReport', () => {
