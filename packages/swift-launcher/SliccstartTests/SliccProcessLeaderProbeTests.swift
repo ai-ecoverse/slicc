@@ -312,6 +312,90 @@ final class SliccProcessLeaderProbeTests: XCTestCase {
 
     // MARK: - Helpers
 
+    // MARK: - Keeping the discovered join URL current
+
+    /// The tray is minted by the browser, not by the launcher: a tab that
+    /// reloads or is superseded mints a new one, and the URL discovered at
+    /// launch then names a tray with no leader on it. The one-shot probe
+    /// stops for good once it has a URL, so without this refresh the
+    /// launcher handed followers — and iCloud — a dead join URL.
+    func testRefreshAdoptsATrayReMintedAfterDiscovery() async throws {
+        let reminted = Data(
+            #"{"state":"connected","joinUrl":"https://example.test/join/reminted.url"}"#.utf8)
+        let proc = SliccProcess(trayStatusProbe: TrayStatusProbe(fetch: { _ in (200, reminted) }))
+        try seedLeader(on: proc)
+        proc.leaderJoinUrl = "https://example.test/join/discovered-at-launch.url"
+
+        let refreshed = await proc.refreshLeaderJoinUrl()
+
+        XCTAssertEqual(refreshed, "https://example.test/join/reminted.url")
+        XCTAssertEqual(proc.leaderJoinUrl, "https://example.test/join/reminted.url")
+    }
+
+    func testRefreshKeepsTheKnownUrlWhenTheLeaderDoesNotAnswer() async throws {
+        let proc = SliccProcess(trayStatusProbe: TrayStatusProbe(fetch: { _ in (503, Data()) }))
+        try seedLeader(on: proc)
+        proc.leaderJoinUrl = "https://example.test/join/known.url"
+
+        let refreshed = await proc.refreshLeaderJoinUrl()
+
+        XCTAssertNil(refreshed)
+        XCTAssertEqual(
+            proc.leaderJoinUrl,
+            "https://example.test/join/known.url",
+            "a leader that missed one probe is not a leader that is gone")
+    }
+
+    /// A `--join` browser is somebody else's follower; its serve port has no
+    /// tray of ours to report, so the refresh must not even ask.
+    func testRefreshIgnoresAFollowerBrowser() async throws {
+        let proc = SliccProcess(
+            trayStatusProbe: TrayStatusProbe(fetch: { _ in
+                XCTFail("a follower browser must not be probed for a leader tray")
+                return (200, Data())
+            }))
+        try seedLeader(on: proc, isFollower: true)
+
+        let refreshed = await proc.refreshLeaderJoinUrl()
+
+        XCTAssertNil(refreshed)
+        XCTAssertNil(proc.leaderJoinUrl)
+    }
+
+    func testTheWatchLoopPicksUpAReMintedTrayWithoutARestart() async throws {
+        let reminted = Data(
+            #"{"state":"connected","joinUrl":"https://example.test/join/watched.url"}"#.utf8)
+        let proc = SliccProcess(trayStatusProbe: TrayStatusProbe(fetch: { _ in (200, reminted) }))
+        try seedLeader(on: proc)
+        proc.leaderJoinUrl = "https://example.test/join/stale.url"
+
+        proc.startLeaderJoinUrlWatch(interval: 0.01)
+        defer { proc.stopLeaderJoinUrlWatch() }
+
+        let deadline = Date().addingTimeInterval(3.0)
+        while proc.leaderJoinUrl != "https://example.test/join/watched.url" && Date() < deadline {
+            try await Task.sleep(nanoseconds: 20_000_000)
+        }
+
+        XCTAssertEqual(proc.leaderJoinUrl, "https://example.test/join/watched.url")
+    }
+
+    @discardableResult
+    private func seedLeader(on proc: SliccProcess, isFollower: Bool = false) throws -> Process {
+        let helper = try launchSleeper()
+        addTeardownBlock { if helper.isRunning { helper.terminate() } }
+        proc._testing_seedLaunchRecord(
+            id: "browser-1",
+            process: helper,
+            targetType: .chromiumBrowser,
+            cdpPort: 39222,
+            servePort: 35710,
+            targetName: "TestBrowser",
+            isFollower: isFollower
+        )
+        return helper
+    }
+
     private func launchSleeper() throws -> Process {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/sleep")

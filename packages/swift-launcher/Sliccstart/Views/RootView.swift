@@ -40,8 +40,8 @@ struct RootView: View {
             ) { _ in
                 model.refreshRuntimeStatesOnActivate()
             }
-            .onChange(of: model.process.leaderJoinUrl) { _, newValue in
-                model.leaderJoinUrlChanged(newValue)
+            .onChange(of: model.process.leaderJoinUrl) { oldValue, newValue in
+                model.leaderJoinUrlChanged(newValue, previous: oldValue)
             }
             .onReceive(sessionRepublishTimer) { _ in model.republishLeaderSession() }
             .onChange(of: model.permission.isGranted) { model.appManagementPermissionChanged() }

@@ -140,6 +140,11 @@ final class LauncherModel {
 
         isReady = true
 
+        // Keep the discovered join URL honest for the rest of the session —
+        // the browser can re-mint its tray at any time (see
+        // `SliccProcess.refreshLeaderJoinUrl`).
+        process.startLeaderJoinUrlWatch()
+
         if isBundledBuild() {
             checkForUpdates()
         }
@@ -383,7 +388,15 @@ final class LauncherModel {
     /// ready, and withdraw it when the leader goes away. The File Provider and
     /// the widget observer hang off the same signal — `leaderJoinUrl` is the
     /// launcher's one piece of session identity.
-    func leaderJoinUrlChanged(_ newValue: String?) {
+    /// `previous` is the join URL this one replaces, if any. A tray that was
+    /// re-minted mid-session produces a *different* URL, and the sync store
+    /// keys sessions by `SHA256(joinUrl)` — so without withdrawing the old
+    /// one the device would advertise two sessions, one of them dead, until
+    /// the 12h TTL swept it.
+    func leaderJoinUrlChanged(_ newValue: String?, previous: String? = nil) {
+        if let previous, !previous.isEmpty, previous != newValue {
+            sessionStore.withdraw(joinUrl: previous)
+        }
         if let joinUrl = newValue, !joinUrl.isEmpty {
             let label = process.leaderTargetName ?? "SLICC"
             sessionStore.publish(joinUrl: joinUrl, label: label)
@@ -398,12 +411,30 @@ final class LauncherModel {
 
     /// Refresh `lastSeenAt` on a live leader so it never ages out of the sync
     /// store's TTL while it is still running.
+    ///
+    /// The refresh re-reads the tray first, and publishes nothing when the
+    /// leader does not answer. Blindly stamping the cached URL made this beat
+    /// a liar twice over: it kept a *superseded* tray advertised, and — since
+    /// a `Timer` fires on any tick the run loop gets, including a dark wake on
+    /// a sleeping Mac — it kept re-floating the session of a machine whose
+    /// lid had been shut for hours, so it never aged out. An advertisement no
+    /// one can verify is better left to expire.
     func republishLeaderSession() {
-        guard isReady, let joinUrl = process.leaderJoinUrl, !joinUrl.isEmpty else { return }
-        sessionStore.publish(joinUrl: joinUrl, label: process.leaderTargetName ?? "SLICC")
-        // Same beat: pick up a widget the user added since the leader
-        // started, without a notification WidgetKit does not send.
-        widgetTrayObserver.refresh()
+        guard isReady else { return }
+        Task { [weak self] in
+            guard let self else { return }
+            guard let joinUrl = await process.refreshLeaderJoinUrl(maxAttempts: 3) else {
+                log.info("republishLeaderSession: leader did not answer — letting the advertisement age out")
+                return
+            }
+            // A changed URL already published (and withdrew its predecessor)
+            // through `leaderJoinUrlChanged`; publishing again is an upsert
+            // that only moves `lastSeenAt`.
+            sessionStore.publish(joinUrl: joinUrl, label: process.leaderTargetName ?? "SLICC")
+            // Same beat: pick up a widget the user added since the leader
+            // started, without a notification WidgetKit does not send.
+            widgetTrayObserver.refresh()
+        }
     }
 
     /// Re-scan when App Management permission is granted so Electron apps appear.
