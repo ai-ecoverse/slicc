@@ -37,7 +37,18 @@ extension SliccProcess {
         maxAttempts: Int = 1,
         retryDelay: TimeInterval = 1.5
     ) async -> String? {
-        guard let servePort = leaderServePort else { return nil }
+        // `SliccProcess` is `@Observable` but NOT actor-isolated, and this
+        // method is called from the watch loop's `Task` and from
+        // `republishLeaderSession`'s — so its body runs on whatever executor
+        // it lands on. Every touch of `launchRecords` (through
+        // `leaderServePort`) and of `leaderJoinUrl` therefore hops to the
+        // main actor: reading the record map off-main races
+        // `launchStandalone`/`stopAll` mutating it, and assigning an
+        // `@Observable` property off-main notifies SwiftUI from the wrong
+        // thread. Only the HTTP round-trip runs away from the actor — which
+        // is the entire reason this is a loop and not an inline call.
+        guard let servePort = await MainActor.run(body: { [weak self] in self?.leaderServePort })
+        else { return nil }
         let joinUrl = await trayStatusProbe.discoverJoinUrl(
             serveOrigin: "http://127.0.0.1:\(servePort)",
             maxAttempts: maxAttempts,
@@ -45,16 +56,18 @@ extension SliccProcess {
             exhaustion: .retryable
         )
         guard let joinUrl, !joinUrl.isEmpty else { return nil }
-        // The probe suspended; the browser may have gone away while it ran.
-        guard leaderServePort != nil else {
-            log.info("refreshLeaderJoinUrl: discarding join URL — browser already gone")
-            return nil
+        return await MainActor.run { [weak self] () -> String? in
+            // The probe suspended; the browser may have gone away while it ran.
+            guard let self, self.leaderServePort != nil else {
+                log.info("refreshLeaderJoinUrl: discarding join URL — browser already gone")
+                return nil
+            }
+            if self.leaderJoinUrl != joinUrl {
+                log.info("refreshLeaderJoinUrl: tray re-minted — adopting the new join URL")
+                self.leaderJoinUrl = joinUrl
+            }
+            return joinUrl
         }
-        if leaderJoinUrl != joinUrl {
-            log.info("refreshLeaderJoinUrl: tray re-minted — adopting the new join URL")
-            leaderJoinUrl = joinUrl
-        }
-        return joinUrl
     }
 
     /// Poll `refreshLeaderJoinUrl` for as long as the app runs, so a tray
