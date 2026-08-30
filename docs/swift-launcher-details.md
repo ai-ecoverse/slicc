@@ -2,13 +2,70 @@
 
 Deep-reference companion to [`packages/swift-launcher/CLAUDE.md`](../packages/swift-launcher/CLAUDE.md). Extended rationale that does not fit the package guide's size budget.
 
+## testing-swiftui-surfaces
+
+`SliccstartTests/ViewHosting.swift` renders a view off-screen with `ImageRenderer` and returns a digest of the bitmap, so a test can assert two states **render differently** (`assertRendersDifferently`) — the only way to reach `AppListView` / `SettingsView` body branches from a unit test. Hard limits, all worked around rather than fought:
+
+- **No interaction.** Headless SwiftUI on macOS builds no AppKit control tree and no accessibility tree, so buttons cannot be pressed. Button _actions_ are tested through the plain types they delegate to (`BrowserLaunchAction`, `TerminalLaunchDecision`, `AppRow.statusDot`, …) — keep new view logic in such a type rather than inline in a closure. The exception is `.borderless` buttons, which do materialize as `NSButton`s (`ViewHosting.hostedButtons`, used for `TraySessionRow`).
+- **CI runs an older macOS than your Mac** (`macos-latest` is still macOS 15). How much of an AppKit-hosted subtree — `Table`, and anything overlaid on one — an off-screen render produces differs between them, so a render comparison that passes locally is not evidence it passes in CI. Compare only over plain SwiftUI content.
+- **Vary exactly one thing per comparison.** Two states that differ in more than one way render differently whether or not the feature under test exists (a review found eight such tests). Pin everything else (`subtitleOverride:`, identical messages, an empty `Secret`), or assert the underlying rule (`AppListView.updateAffordance`, `SecretEditorSheet.validationMessage`) instead. Mutate the source and watch the test go red before trusting it.
+- **`Table`, `Toggle` and `.borderless` buttons draw nothing** (`NSTableView`/`NSSwitch`-backed), so table cells, switch knobs, and anything styled by tint on a borderless button are asserted against their model types.
+
+Views take non-injectable state as init seams for this: `AppListView(isBundledBuild:)` (the update footer is otherwise unreachable outside a packaged `.app`), `MountsSettingsView(rows:)`, `SecretsSettingsView(secrets:unlocked:selection:)` (never touches the Keychain).
+
+**The window is a model, not a `Scene`.** An `App`'s `Scene` cannot be rendered, so anything inside `WindowGroup` is untestable by construction. `SliccstartApp` is only wiring: the window's behavior is `Models/LauncherModel.swift` (launch decisions, dialogs, debug builds, update-check outcomes, the 2 s tick, leader publish/withdraw) and its content is `Views/RootView.swift`. `SliccstartAppDelegate` is the composition root, with every collaborator defaulted-but-injectable so the two quit paths (stop-everything vs detach-for-update) are testable. Tests: `LauncherModelTests`, `RootViewRenderTests`, `AppDelegateLifecycleTests`.
+
+**Launch paths** go through `SliccProcess.SpawnServices` — resolve-binary, run-process, is-port-in-use. Injected so `launchStandalone` / `launchBrowserFollower` / `launchWithElectronApp` are testable without starting a browser or binding 5710/9222; the stub runs `/bin/sleep` in the server's place so records, pids and termination handling stay real. Tests: `SliccProcessLaunchPathTests`.
+
+**Auto-launch requires an installed app.** `StartupPreference.shouldAutoLaunch` is `resolveEnabled && isInstalledLocation` — a copy running from a build directory, `~/Downloads`, or Gatekeeper's translocated path never starts a browser, so a dev/CI run cannot take over the screen. The Startup tab explains the refusal.
+
+`SliccProcess`, `SliccBootstrapper` and `AppManagementPermission` are deliberately **not `final`** — they are the app's side-effecting collaborators (spawning browsers, running git/npm, opening System Settings), and `@testable` lets a test subclass stand in.
+
+## app-icon
+
+Two artefacts, both written by `build-app-icon.mjs`:
+
+- **`AppIcon.icns`** — one flat image from `packages/assets/logos/macos-icon-iOS-Default-1024x1024@1x.png`, via `sips` + `iconutil` (both ship with macOS). `CFBundleIconFile`.
+- **`Assets.car`** — `actool`-compiled from `packages/assets/logos/macos-icon.icon` (Icon Composer). Adds the `NSAppearanceNameAqua` / `NSAppearanceNameDarkAqua` / `ISAppearanceTintable` icon stacks macOS 26 picks between. `CFBundleIconName`, emitted into `Info.plist` only when the compile succeeds.
+
+`buildIconAssetCatalog` **degrades instead of throwing** on all three failure modes — the bundle still gets its `.icns`, just with no Dark/Tinted appearance: (1) `actool` absent (it lives in Xcode, not the Command Line Tools); (2) `actool` present but too old to compile the `.icon` — **the common case in CI**, whose `swift-launcher` job runs on `macos-latest` (still macOS 15 / Xcode 16.x); only `release.yml` pins `macos-26`; (3) `actool` exits 0 but writes no `Assets.car`.
+
+So a green `swift-launcher` CI build is **not** proof the appearance variants shipped — only the `macos-26` release job produces them. Watch for `WARNING: appearance-keyed app icon skipped` if a build's icon stops adapting, and confirm what shipped with `xcrun assetutil --info <app>/Contents/Resources/Assets.car`.
+
+A classic `AppIcon.appiconset` cannot replace the `.icon` here: `actool` honours the `appearances` key on iOS idioms only and reports macOS ones as "unassigned children", dropping them without failing the build. Per-appearance _custom artwork_ (`image-name-specializations`) exists in the `.icon` format but is authored in Icon Composer — hand-written variants of that key are silently ignored, so the macOS Tinted icon is **system-derived** from the layer artwork. Its contrast is a property of `macos-icon.icon`'s layer, not something a separate PNG can override. Tests: `build-app-icon.test.mjs`.
+
+## widget-extension
+
+`SliccstartWidgets.appex` (`com.slicc.sliccstart.widgets`) shows the connected instance's cones and scoops in Notification Centre / on the desktop. Views live in **`packages/swift-widgetkit`**; the launcher package owns only the `@main` bundle and build wiring — XcodeGen (`project.yml`, `SliccstartWidgets` scheme) → `stageWidgetAppex` into `Contents/PlugIns/` → `sign-and-package.sh` signs it with `SliccstartWidgets.entitlements` (sandbox + app group, no framework to embed, unlike the File Provider appex).
+
+Capture is `Models/WidgetTrayObserver.swift`: Sliccstart holds no cone/scoop state of its own (it is a launcher; state is client-side in the leader tab and the local server is a stateless relay that cannot answer either), so it runs a small **read-only tray follower** off `leaderJoinUrl`, listens for `scoops.list`, and asks for a transcript snapshot at most every 30 s. It is **gated on the widget actually being installed** (`WidgetInstallationQuery`) — a launcher holding a WebRTC participant slot open forever to feed a tile nobody added is a bad citizen in someone else's session. Wired from `SliccstartApp`'s `leaderJoinUrl` observer, next to `FileProviderCoordinator`. Details: [`docs/widgets.md`](widgets.md#capture).
+
+## packaging
+
+- `npm run build` assembles the `.app` from pre-built artifacts; `sign-and-package.sh` is the distributable path.
+- Expects `packages/swift-server/.build/release/slicc-server` to be pre-built. The webapp is **not** bundled — `assemble-app.mjs` writes an empty `Contents/Resources/slicc` marker dir.
+- **`WebRTC.framework` ships next to `slicc-server`**: `sign-and-package.sh` re-signs **innermost-first** — else dyld fails and every spawned server dies as "start failed".
+- Electron overlay bootstrap `dist/ui/electron-overlay-entry.js` is produced by **`@ai-ecoverse/spoon`** (`npm run build -w @ai-ecoverse/spoon`) and must be built before `assemble-app.mjs`; a `packages/spoon/**` change re-triggers this CI job.
+- Packaging emits only the full `Sliccstart-<v>.zip`.
+
+**iCloud provisioning (Developer ID app).** Sync needs an iCloud KVS entitlement backed by an _embedded_ provisioning profile — Developer ID signing alone does not authorize iCloud. `sign-and-package.sh` gates on optional **`PROVISION_PROFILE`**: unset → signs `Sliccstart.entitlements` only and `NSUbiquitousKeyValueStore` degrades to a local cache; set → embeds the profile and signs a merged file. CI exports `PROVISION_PROFILE` and `KVSTORE_IDENTIFIER` (releases ship `S8LB56P782.ai.sliccy.trays`, which the iOS follower must match). Signing contract: `macos-permissions.test.mjs`.
+
+**Debug build creation.** `Models/DebugBuildCreator.swift` creates Electron debug builds by: (1) copying into `~/Applications/<Name> Debug.app`, (2) patching Electron fuses for remote debugging, (3) unpacking/patching `app.asar` JS checks that block CDP, (4) ad-hoc signing, (5) removing quarantine attributes. Use when an Electron app disables remote debugging in production.
+
+## app-ordering-startup-mounts
+
+**App ordering / browser followers / startup.** `Models/AppOrdering.swift` holds default `browserBundlePriority`/`terminalBundlePriority`; a user drag-reorder via `AppOrderStore` (UserDefaults) wins. `browserFollowerArgs(cdpPort:joinUrl:)` passes `--join=<url>` vs `--lead`; `launchBrowserFollower` flags `isFollower`. `BrowserLaunchAction` and the lead-or-attach dialog count only attachable iCloud sessions (no confirmed-unreachable `SessionReachability` verdict) — an all-dead list launches standalone with no dialog. `Models/StartupPreference.swift` launch starts the top-ordered browser (`AppOrdering.topBrowser`). Tests: `AppOrderingTests`, `StartupPreferenceTests`, `SliccProcessLaunchArgsTests`.
+
+**Mount table (Settings → Mounts).** `Models/MountTablePreference.swift` reads a newline-separated `autoMountTable` UserDefault of `os-path:slicc-path` mappings; parsing mirrors swift-server `ServerConfig.parseMountMapping` (last-colon split, `~` expansion, dedup by target). Emitted as `--mount=<os>:<vfs>` by `standaloneBrowserArgs(cdpPort:mounts:)` and `reattachArgs(...mounts:)` (browsers only). Mapped folders are served by swift-server's `/api/hostfs` and auto-mounted by the webapp — no picker, no permission prompt. UI: `Views/SettingsView.swift` → `MountsSettingsView`. Tests: `MountTablePreferenceTests`, `SliccProcessLaunchArgsTests`. Behaviour: [`docs/mounts.md`](mounts.md#auto-mounted-host-folders-the-mount-table).
+
 ## optel
 
-`.optelAutoInstrument`'s `error` hook only catches Objective-C `NSException`s — Swift errors are values and cannot be intercepted globally. `Models/LauncherErrorReport.swift` bridges every `do/catch` boundary in the launcher:
+`.optelAutoInstrument(appID:)` runs once on the `WindowGroup` root (`appID = com.slicc.sliccstart`; beacons land in `helix-225321.helix_rum.cluster`). Its `error` hook only catches Objective-C `NSException`s — Swift errors are values and cannot be intercepted globally. `Models/LauncherErrorReport.swift` bridges every `do/catch` boundary in the launcher:
 
 - `LauncherErrorReport.report(.<operation>, error)` emits an `error` checkpoint with `source = sliccstart:<operation>`. The `Operation` enum values (`update-check`, `update-detach`, `bootstrap`, `bootstrap-update`, `launch-standalone`, `launch-electron`, `auto-launch`, `debug-build`, `terminal-follower`, `reattach`, `secrets-unlock`, `secrets-persist`) are a wire contract — RUM dashboards filter on these strings.
 - `target` is the bridged error domain plus its description, redacted before it leaves the machine: URLs collapse to `<url>` (a join URL carries the session secret), absolute paths to `<path>` (home reveals the user name), `token`/`secret`/`password`/`key` values to `<redacted>`, whitespace collapses, and the result truncates to `maxTargetLength`.
 - Add a new call site together with an `Operation` case and a `log.error` line. Never report the up-to-date outcome of an update check (`AUError.cancelled`) — that is a normal result, not a fault.
+- Key controls carry stable `.accessibilityIdentifier`s so smoke tests can target them.
 - `Optel.sample` no-ops until `.optelAutoInstrument` has configured a session, so reporting from a failure that happens before instrumentation mounts (or from a unit test) is safe.
 
 ## terminal-followers
@@ -47,6 +104,7 @@ macOS Finder integration mirrors the iOS Files.app mount: `SliccFileProvider.app
 - **Domain lifecycle** — `FileProviderDomainLifecycle` (shared) registers `slicc-vfs` with `supportsSyncingTrash=false` (the leader VFS has no trash; FPFS otherwise asks the appex to materialize one). It re-adds domains stuck at `userEnabled=false` (from before `NSExtensionFileProviderSupportsEnumeration`) or still carrying the default trash flag, and withdraws on clean quit (not on update/detach). Settings → Startup toggles Finder integration (`fileProvider.finderEnabled`).
 - **Signing** — appex is App Sandbox + `network.client` / `network.server` (WebRTC ICE) with its own entitlements and **no** `keychain-access-groups`; `sign-and-package.sh` signs the nested `WebRTC.framework`, then the appex, then the outer app. User enablement is still required once in System Settings → Login Items & Extensions → File Provider.
 - **Limits** — mount is live only while a leader is up; `FileProviderFSClientPool` maps outages to `serverUnreachable`. `readBinaryFile` is all-in-memory today — large Finder drags may need streaming later.
+- **Coverage** — `FileProviderCoordinatorTests`, `stage-file-provider-appex.test.mjs`, plus swift-traykit tests.
 
 ### Headless CLI (`Sliccstart --list-sessions`)
 
