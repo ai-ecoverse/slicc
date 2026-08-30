@@ -27,6 +27,7 @@ import type {
   StreamOptions,
   ThinkingBudgets,
   ThinkingLevel,
+  ToolCall,
 } from '@earendil-works/pi-ai';
 import {
   calculateCost,
@@ -113,6 +114,148 @@ function supportsTemperature(modelId: string, modelName?: string): boolean {
 }
 
 export type BedrockCampThinkingDisplay = 'summarized' | 'omitted';
+
+type BedrockCampImageSource = {
+  source: { bytes: string };
+  format: string;
+};
+
+type BedrockCampTextBlock = { text: string };
+type BedrockCampImageBlock = { image: BedrockCampImageSource };
+type BedrockCampCachePoint = {
+  cachePoint: { type: 'default'; ttl?: '1h' };
+};
+type BedrockCampReasoningBlock = {
+  reasoningContent: {
+    reasoningText: {
+      text: string;
+      signature?: string;
+    };
+  };
+};
+type BedrockCampToolUseBlock = {
+  toolUse: {
+    toolUseId: string;
+    name: string;
+    input: ToolCall['arguments'];
+  };
+};
+
+type BedrockCampContentBlock =
+  | BedrockCampTextBlock
+  | BedrockCampImageBlock
+  | BedrockCampReasoningBlock
+  | BedrockCampToolUseBlock
+  | BedrockCampCachePoint;
+
+type BedrockCampToolResultContent = BedrockCampTextBlock | BedrockCampImageBlock;
+
+type BedrockCampToolResultBlock = {
+  toolResult: {
+    toolUseId: string;
+    content: BedrockCampToolResultContent[];
+    status: 'error' | 'success';
+  };
+};
+
+type BedrockCampUserMessageContent = BedrockCampContentBlock | BedrockCampToolResultBlock;
+
+type BedrockCampUserMessage = {
+  role: 'user';
+  content: BedrockCampUserMessageContent[];
+};
+
+type BedrockCampAssistantMessage = {
+  role: 'assistant';
+  content: BedrockCampContentBlock[];
+};
+
+type BedrockCampConvertedMessage = BedrockCampUserMessage | BedrockCampAssistantMessage;
+
+type BedrockCampSystemBlock = BedrockCampTextBlock | BedrockCampCachePoint;
+
+type BedrockCampToolChoice =
+  | { auto: Record<string, never> }
+  | { any: Record<string, never> }
+  | { tool: { name: string } };
+
+type BedrockCampToolConfig = {
+  tools: Array<{
+    toolSpec: {
+      name: string;
+      description: string;
+      inputSchema: { json: NonNullable<Context['tools']>[number]['parameters'] };
+    };
+  }>;
+  toolChoice?: BedrockCampToolChoice;
+};
+
+type BedrockCampAdaptiveFields = {
+  thinking: {
+    type: 'adaptive';
+    display?: BedrockCampThinkingDisplay;
+  };
+  output_config: { effort: string };
+};
+
+type BedrockCampLegacyThinkingFields = {
+  thinking: {
+    type: 'enabled';
+    budget_tokens: number;
+    display?: BedrockCampThinkingDisplay;
+  };
+  anthropic_beta?: ['interleaved-thinking-2025-05-14'];
+};
+
+type BedrockCampAdditionalModelRequestFields =
+  | BedrockCampAdaptiveFields
+  | BedrockCampLegacyThinkingFields;
+
+type BedrockCampInferenceConfig = {
+  maxTokens?: number;
+  temperature?: number;
+};
+
+type BedrockCampConverseRequestBody = {
+  modelId: string;
+  messages: BedrockCampConvertedMessage[];
+  system?: BedrockCampSystemBlock[];
+  inferenceConfig: BedrockCampInferenceConfig;
+  toolConfig?: BedrockCampToolConfig;
+  additionalModelRequestFields?: BedrockCampAdditionalModelRequestFields;
+  requestMetadata?: Record<string, string>;
+};
+
+type BedrockCampConverseContentBlock = {
+  text?: string;
+  toolUse?: {
+    toolUseId?: string;
+    name?: string;
+    input?: ToolCall['arguments'];
+  };
+  reasoningContent?: {
+    reasoningText?: {
+      text?: string;
+      signature?: string;
+    };
+  };
+};
+
+type BedrockCampConverseResponse = {
+  output?: {
+    message?: {
+      content?: BedrockCampConverseContentBlock[];
+    };
+  };
+  usage?: {
+    inputTokens?: number;
+    outputTokens?: number;
+    cacheReadInputTokens?: number;
+    cacheWriteInputTokens?: number;
+    totalTokens?: number;
+  };
+  stopReason?: string;
+};
 
 type BedrockCampOnPayload = (
   payload: unknown,
@@ -207,7 +350,7 @@ function sanitize(text: string | undefined | null): string {
   );
 }
 
-function convertUserContentItem(content: unknown): Record<string, unknown> {
+function convertUserContentItem(content: unknown): BedrockCampContentBlock {
   const item = content as { type?: string; text?: string; mimeType?: string; data?: string };
   if (item.type === 'text') return { text: sanitize(item.text) };
   if (item.type === 'image')
@@ -215,10 +358,7 @@ function convertUserContentItem(content: unknown): Record<string, unknown> {
   throw new Error(`Unknown user content type: ${item.type ?? 'unknown'}`);
 }
 
-function convertUserMessage(m: { content: string | unknown[] }): {
-  role: 'user';
-  content: Record<string, unknown>[];
-} {
+function convertUserMessage(m: { content: string | unknown[] }): BedrockCampUserMessage {
   const content =
     typeof m.content === 'string'
       ? [{ text: sanitize(m.content) }]
@@ -229,7 +369,7 @@ function convertUserMessage(m: { content: string | unknown[] }): {
 function thinkingBlockForModel(
   content: { thinking?: string; thinkingSignature?: string },
   model: Model<Api>
-): Record<string, unknown> | null {
+): BedrockCampContentBlock | null {
   const thinking = content.thinking ?? '';
   if (thinking.trim().length === 0) return null;
   if (!supportsThinkingSignature(model)) {
@@ -255,13 +395,13 @@ function thinkingBlockForModel(
 function convertAssistantContentItem(
   content: unknown,
   model: Model<Api>
-): Record<string, unknown> | null {
+): BedrockCampContentBlock | null {
   const item = content as {
     type?: string;
     text?: string;
     id?: string;
     name?: string;
-    arguments?: Record<string, unknown>;
+    arguments?: ToolCall['arguments'];
     thinking?: string;
     thinkingSignature?: string;
   };
@@ -282,9 +422,9 @@ function convertAssistantContentItem(
 function convertAssistantMessage(
   m: { content: unknown[] },
   model: Model<Api>
-): { role: 'assistant'; content: Record<string, unknown>[] } | null {
+): BedrockCampAssistantMessage | null {
   if (m.content.length === 0) return null;
-  const blocks: Record<string, unknown>[] = [];
+  const blocks: BedrockCampContentBlock[] = [];
   for (const c of m.content) {
     const block = convertAssistantContentItem(c, model);
     if (block !== null) blocks.push(block);
@@ -293,7 +433,7 @@ function convertAssistantMessage(
   return { role: 'assistant', content: blocks };
 }
 
-function convertToolResultContentItem(content: unknown): Record<string, unknown> {
+function convertToolResultContentItem(content: unknown): BedrockCampToolResultContent {
   const item = content as {
     type?: string;
     mimeType?: string;
@@ -311,13 +451,11 @@ function convertToolResultContentItem(content: unknown): Record<string, unknown>
       };
 }
 
-function buildToolResultEntry(m: { toolCallId?: string; content: unknown[]; isError?: boolean }): {
-  toolResult: {
-    toolUseId: string;
-    content: Record<string, unknown>[];
-    status: 'error' | 'success';
-  };
-} {
+function buildToolResultEntry(m: {
+  toolCallId?: string;
+  content: unknown[];
+  isError?: boolean;
+}): BedrockCampToolResultBlock {
   return {
     toolResult: {
       toolUseId: m.toolCallId ?? '',
@@ -331,16 +469,7 @@ function coalesceToolResults(
   transformed: Array<{ role: string; content: unknown[]; toolCallId?: string; isError?: boolean }>,
   startIndex: number
 ): {
-  message: {
-    role: 'user';
-    content: Array<{
-      toolResult: {
-        toolUseId: string;
-        content: Record<string, unknown>[];
-        status: 'error' | 'success';
-      };
-    }>;
-  };
+  message: BedrockCampUserMessage;
   nextIndex: number;
 } {
   const toolResults = [buildToolResultEntry(transformed[startIndex])];
@@ -353,7 +482,7 @@ function coalesceToolResults(
 }
 
 function appendCachePointToLastUser(
-  result: Array<{ role: string; content: Record<string, unknown>[] }>,
+  result: BedrockCampConvertedMessage[],
   model: Model<Api>,
   cacheRetention: CacheRetention
 ): void {
@@ -368,8 +497,8 @@ function convertMessages(
   context: Context,
   model: Model<Api>,
   cacheRetention: CacheRetention
-): Array<{ role: string; content: Record<string, unknown>[] }> {
-  const result: Array<{ role: string; content: Record<string, unknown>[] }> = [];
+): BedrockCampConvertedMessage[] {
+  const result: BedrockCampConvertedMessage[] = [];
   const transformed = transformMessages(context.messages, model, normalizeToolCallId) as Array<{
     role: string;
     content: unknown[];
@@ -395,10 +524,7 @@ function convertMessages(
   return result;
 }
 
-function createImageBlock(
-  mime: string,
-  data: string
-): { source: { bytes: string }; format: string } {
+function createImageBlock(mime: string, data: string): BedrockCampImageSource {
   return { source: { bytes: data }, format: mimeToFormat(mime) };
 }
 
@@ -447,12 +573,12 @@ function supportsMaxEffort(modelId: string, modelName?: string): boolean {
 function convertToolConfig(
   tools: Context['tools'],
   toolChoice?: BedrockCampOptions['toolChoice']
-): Record<string, unknown> | undefined {
+): BedrockCampToolConfig | undefined {
   if (!tools?.length || toolChoice === 'none') return undefined;
   const bedrockTools = tools.map((t) => ({
     toolSpec: { name: t.name, description: t.description, inputSchema: { json: t.parameters } },
   }));
-  let choice: Record<string, unknown> | undefined;
+  let choice: BedrockCampToolChoice | undefined;
   switch (toolChoice) {
     case 'auto':
       choice = { auto: {} };
@@ -503,14 +629,14 @@ function isGovCloudTarget(model: Model<Api>): boolean {
 function buildAdditionalModelRequestFields(
   model: Model<Api>,
   options: BedrockCampOptions
-): Record<string, unknown> | undefined {
+): BedrockCampAdditionalModelRequestFields | undefined {
   if (!options.reasoning || !model.reasoning) return undefined;
   if (!isAnthropicClaudeModel(model)) return undefined;
 
   const display = isGovCloudTarget(model) ? undefined : (options.thinkingDisplay ?? 'summarized');
 
   if (supportsAdaptiveThinking(model.id, model.name)) {
-    const adaptive: Record<string, unknown> = {
+    const adaptive: BedrockCampAdaptiveFields = {
       thinking: { type: 'adaptive', ...(display !== undefined ? { display } : {}) },
       output_config: { effort: mapThinkingLevelToEffort(options.reasoning, model.id, model.name) },
     };
@@ -527,7 +653,7 @@ function buildAdditionalModelRequestFields(
   const level = options.reasoning === 'xhigh' ? 'high' : options.reasoning;
   const budget =
     options.thinkingBudgets?.[level as keyof ThinkingBudgets] ?? defaults[options.reasoning];
-  const legacy: Record<string, unknown> = {
+  const legacy: BedrockCampLegacyThinkingFields = {
     thinking: {
       type: 'enabled',
       budget_tokens: budget,
@@ -563,7 +689,7 @@ function supportsPromptCaching(model: Model<Api>): boolean {
   return false;
 }
 
-function buildCachePoint(cacheRetention: CacheRetention): Record<string, unknown> {
+function buildCachePoint(cacheRetention: CacheRetention): BedrockCampCachePoint {
   return {
     cachePoint: {
       type: 'default',
@@ -578,9 +704,9 @@ function buildSystemPrompt(
   systemPrompt: string | undefined,
   model: Model<Api>,
   cacheRetention: CacheRetention
-): Array<Record<string, unknown>> | undefined {
+): BedrockCampSystemBlock[] | undefined {
   if (!systemPrompt) return undefined;
-  const blocks: Array<Record<string, unknown>> = [{ text: sanitize(systemPrompt) }];
+  const blocks: BedrockCampSystemBlock[] = [{ text: sanitize(systemPrompt) }];
   if (cacheRetention !== 'none' && supportsPromptCaching(model)) {
     blocks.push(buildCachePoint(cacheRetention));
   }
@@ -626,27 +752,13 @@ function parseConverseResponse(
   output: AssistantMessage,
   stream: AssistantMessageEventStream
 ): void {
-  const response = body as {
-    output?: { message?: { content?: Array<Record<string, unknown>> } };
-    usage?: {
-      inputTokens?: number;
-      outputTokens?: number;
-      cacheReadInputTokens?: number;
-      cacheWriteInputTokens?: number;
-      totalTokens?: number;
-    };
-    stopReason?: string;
-  };
+  const response = body as BedrockCampConverseResponse;
   stream.push({ type: 'start', partial: output });
 
   const message = response.output?.message;
   if (message?.content) {
     for (let i = 0; i < message.content.length; i++) {
-      const block = message.content[i] as {
-        text?: string;
-        toolUse?: { toolUseId?: string; name?: string; input?: Record<string, unknown> };
-        reasoningContent?: { reasoningText?: { text?: string; signature?: string } };
-      };
+      const block = message.content[i];
       if (block.text !== undefined) {
         const textBlock = { type: 'text' as const, text: block.text };
         output.content.push(textBlock);
@@ -747,8 +859,8 @@ function createInitialOutput(model: Model<Api>): AssistantMessage {
 function buildInferenceConfig(
   model: Model<Api>,
   options: BedrockCampOptions
-): Record<string, unknown> {
-  const inferenceConfig: Record<string, unknown> = {};
+): BedrockCampInferenceConfig {
+  const inferenceConfig: BedrockCampInferenceConfig = {};
   if (options.maxTokens !== undefined) inferenceConfig.maxTokens = options.maxTokens;
   if (options.temperature !== undefined && supportsTemperature(model.id, model.name)) {
     inferenceConfig.temperature = options.temperature;
@@ -761,39 +873,52 @@ function buildConverseRequestBody(
   context: Context,
   options: BedrockCampOptions,
   cacheRetention: CacheRetention
-): Record<string, unknown> {
-  const body: Record<string, unknown> = {
+): BedrockCampConverseRequestBody {
+  const system = buildSystemPrompt(context.systemPrompt, model, cacheRetention);
+  const toolConfig = convertToolConfig(context.tools, options.toolChoice);
+  const additionalModelRequestFields = buildAdditionalModelRequestFields(model, options);
+
+  const body: BedrockCampConverseRequestBody = {
     modelId: model.id,
     messages: convertMessages(context, model, cacheRetention),
-    system: buildSystemPrompt(context.systemPrompt, model, cacheRetention),
     inferenceConfig: buildInferenceConfig(model, options),
-    toolConfig: convertToolConfig(context.tools, options.toolChoice),
-    additionalModelRequestFields: buildAdditionalModelRequestFields(model, options),
+    ...(system !== undefined ? { system } : {}),
+    ...(toolConfig !== undefined ? { toolConfig } : {}),
+    ...(additionalModelRequestFields !== undefined ? { additionalModelRequestFields } : {}),
     ...(options.requestMetadata !== undefined ? { requestMetadata: options.requestMetadata } : {}),
   };
-
-  // Remove undefined fields
-  if (!body.system) delete body.system;
-  if (!body.toolConfig) delete body.toolConfig;
-  if (!body.additionalModelRequestFields) delete body.additionalModelRequestFields;
 
   return body;
 }
 
 async function applyOnPayloadHook(
-  body: Record<string, unknown>,
+  body: BedrockCampConverseRequestBody,
   model: Model<Api>,
   options: BedrockCampOptions
-): Promise<Record<string, unknown>> {
+): Promise<BedrockCampConverseRequestBody> {
   if (!options.onPayload) return body;
   const replacement = await options.onPayload(body, model);
-  return replacement !== undefined ? (replacement as Record<string, unknown>) : body;
+  if (replacement === undefined) return body;
+  if (!isBedrockCampConverseRequestBody(replacement)) {
+    throw new Error('Bedrock CAMP onPayload hook must return a converse request body');
+  }
+  return replacement;
+}
+
+function isBedrockCampConverseRequestBody(value: unknown): value is BedrockCampConverseRequestBody {
+  if (typeof value !== 'object' || value === null) return false;
+  return (
+    'modelId' in value &&
+    typeof value.modelId === 'string' &&
+    'messages' in value &&
+    Array.isArray(value.messages)
+  );
 }
 
 async function performConverseFetch(
   targetUrl: string,
   apiKey: string,
-  body: Record<string, unknown>,
+  body: BedrockCampConverseRequestBody,
   model: Model<Api>,
   options: BedrockCampOptions
 ): Promise<Response> {
@@ -890,18 +1015,22 @@ export const streamBedrockCamp = (
   options: BedrockCampOptions = {}
 ): AssistantMessageEventStream => {
   const stream = createAssistantMessageEventStream();
-
-  (async () => {
-    const output = createInitialOutput(model);
-    try {
-      await runConverseRequest(model, context, options, output, stream);
-    } catch (error) {
-      handleStreamError(error, output, options, stream);
-    }
-  })();
-
+  const output = createInitialOutput(model);
+  void runBedrockCampStream(model, context, options, output, stream).catch((error) => {
+    handleStreamError(error, output, options, stream);
+  });
   return stream;
 };
+
+async function runBedrockCampStream(
+  model: Model<Api>,
+  context: Context,
+  options: BedrockCampOptions,
+  output: AssistantMessage,
+  stream: AssistantMessageEventStream
+): Promise<void> {
+  await runConverseRequest(model, context, options, output, stream);
+}
 
 // ── Simple stream wrapper ───────────────────────────────────────────
 
