@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
   assessCompactionProgress,
   buildBranchName,
+  buildCompactionPrBody,
   buildPartialPrBody,
   buildPrompt,
   COMPACTION_BRANCH_PREFIX,
@@ -21,6 +22,7 @@ import {
   parseWorklist,
   selectAboveTarget,
   selectOversized,
+  selectPublishPaths,
   selectWorklist,
 } from './lib.mjs';
 
@@ -404,6 +406,52 @@ describe('formatProgressReport / buildPartialPrBody', () => {
       'node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check'
     );
   });
+
+  it('synthesises a full-hit body when policyOk, and delegates to partial otherwise', () => {
+    const hit = assessCompactionProgress({
+      before: { 'packages/webapp/CLAUDE.md': 19998 },
+      after: measureGuides([{ path: 'packages/webapp/CLAUDE.md', content: guide(9000) }]),
+      worklist: ['packages/webapp/CLAUDE.md'],
+    });
+    const body = buildCompactionPrBody(hit);
+    expect(body).toContain('Selected guides are at or below 9,500 chars');
+    expect(body).not.toContain('Partial CLAUDE.md compaction');
+    expect(buildCompactionPrBody(assessment)).toContain('Partial CLAUDE.md compaction');
+  });
+});
+
+describe('selectPublishPaths', () => {
+  it('keeps worklist guides and docs overflow Claude touched', () => {
+    expect(
+      selectPublishPaths({
+        claudeTouched: [
+          'packages/webapp/CLAUDE.md',
+          'docs/webapp-details.md',
+          '.github/workflows/claude-md-compactor.yml',
+        ],
+        shrunk: ['packages/webapp/CLAUDE.md'],
+      })
+    ).toEqual(['packages/webapp/CLAUDE.md', 'docs/webapp-details.md']);
+  });
+
+  it('drops files the workflow PR already changed versus origin/main', () => {
+    expect(
+      selectPublishPaths({
+        claudeTouched: ['docs/dev-tools-details.md', 'packages/webapp/CLAUDE.md'],
+        workflowTouched: ['docs/dev-tools-details.md', '.github/workflows/claude-md-compactor.yml'],
+        shrunk: ['packages/webapp/CLAUDE.md'],
+      })
+    ).toEqual(['packages/webapp/CLAUDE.md']);
+  });
+
+  it('still publishes a shrunk guide Claude did not `git add`', () => {
+    expect(
+      selectPublishPaths({
+        claudeTouched: [],
+        shrunk: ['packages/webapp/CLAUDE.md'],
+      })
+    ).toEqual(['packages/webapp/CLAUDE.md']);
+  });
 });
 
 describe('formatReport', () => {
@@ -457,6 +505,15 @@ describe('buildBranchName', () => {
     expect(buildBranchName('2026-02-07T22:40:00Z')).toBe(`${COMPACTION_BRANCH_PREFIX}2026-02-07`);
     expect(buildBranchName(Date.UTC(2026, 1, 7))).toBe(`${COMPACTION_BRANCH_PREFIX}2026-02-07`);
     expect(() => buildBranchName('not-a-date')).toThrow(/invalid date/);
+  });
+
+  it('appends a run id so a same-day re-dispatch cannot reopen a closed PR', () => {
+    expect(buildBranchName(new Date('2026-08-30T13:00:00Z'), '33314073562')).toBe(
+      `${COMPACTION_BRANCH_PREFIX}2026-08-30-33314073562`
+    );
+    expect(buildBranchName(new Date('2026-08-30T13:00:00Z'), '  ')).toBe(
+      `${COMPACTION_BRANCH_PREFIX}2026-08-30`
+    );
   });
 });
 
@@ -549,18 +606,19 @@ describe('buildPrompt', () => {
     expect(prompt).toContain('npx vitest run --project dev-tools');
   });
 
-  it('pushes the branch but leaves PR creation to the deterministic workflow step', () => {
-    expect(prompt).toContain('git push -u origin automation/weekend-claude-compaction-2026-02-07');
+  it('leaves git, tests, and PR creation to the deterministic workflow step', () => {
+    expect(prompt).toContain('Do not create a branch, do not commit, do not push');
+    expect(prompt).not.toMatch(/git push -u origin/);
     // `gh pr create` may appear in the prohibition, never as an invocation.
     expect(prompt).not.toMatch(/^\s*gh pr create/m);
     expect(prompt.match(/gh pr create/g)).toHaveLength(1);
     expect(prompt).toContain('PR_BODY_FILE');
-    expect(prompt).toContain('action_required');
+    expect(prompt).toContain('synthesises one');
   });
 
-  it('tells Claude to still push honest shrinkage when --check fails', () => {
-    expect(prompt).toContain('partial');
-    expect(prompt).toMatch(/strictly\s+smaller/);
+  it('tells Claude the workflow still publishes honest shrinkage', () => {
+    expect(prompt).toContain('branched from `origin/main`');
+    expect(prompt).toContain('33312644577');
   });
 
   it('forbids subagents and ending the turn before writes land', () => {

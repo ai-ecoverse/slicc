@@ -3,12 +3,13 @@ name: Weekend CLAUDE.md Compactor
 # Weekly instruction-file compaction. Saturday night a deterministic Node step
 # measures every TRACKED file named CLAUDE.md (root, docs/, every package) and
 # hands the SINGLE largest oversized guide to claude-code-action (one file per
-# run, same shape as boy-scout-debt-dispatcher.yml). Claude rewrites it and
-# pushes ONE branch; a deterministic step then opens exactly ONE pull request
-# from it (Claude never runs `gh pr create` — see that step's note). Silence is
-# a valid outcome: nothing oversized → no branch, no PR. Giving Claude all
-# oversized guides at once made it spawn-and-wait for subagents and end the
-# turn with zero edits (dispatch 33309651347).
+# run, same shape as boy-scout-debt-dispatcher.yml). Claude only rewrites the
+# file; a deterministic recover step copies those edits onto ONE branch from
+# origin/main and opens exactly ONE pull request (Claude never runs
+# `gh pr create` or `git push` — see those steps' notes). Silence is a valid
+# outcome: nothing oversized → no branch, no PR. Giving Claude all oversized
+# guides at once made it spawn-and-wait for subagents and end the turn with
+# zero edits (dispatch 33309651347).
 #
 # TWO BUDGETS, do not confuse them:
 #   * The repo's committed GATE is 20,000 chars for packages/*/CLAUDE.md
@@ -161,7 +162,7 @@ jobs:
           claude_args: |
             --model ${{ vars.COMPACTOR_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
             --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
-            --disallowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Agent,Task,TodoWrite"
+            --disallowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(git push:*),Agent,Task,TodoWrite"
             --max-turns 250
           prompt: ${{ steps.measure.outputs.prompt }}
 
@@ -186,13 +187,14 @@ jobs:
           WORKLIST: ${{ steps.measure.outputs.worklist }}
         run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check
 
-      # Policy miss is not always a dead run. If the selected guides actually
-      # got smaller (and none grew), land that shrinkage as a partial PR rather
-      # than throwing it away. No progress / a grown guide → this step fails
-      # and the open-PR step stays skipped, same as before.
+      # Publish whatever Claude actually shrank — policy hit or partial — as a
+      # docs-only branch off origin/main. Runs after max-turns too
+      # (continue-on-error on the Claude step). Dispatching this workflow from
+      # a feature branch (#2676) must not leak that branch's YAML/docs into
+      # the compaction PR, and must not reopen a closed same-day PR (#2677).
       - name: Recover a partial compaction
         id: recover
-        if: steps.verify.outcome == 'failure' && steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
+        if: always() && steps.claude.outcome != 'skipped' && steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
         env:
           MAX_CHARS: ${{ github.event.inputs.max_chars }}
           TARGET_CHARS: ${{ github.event.inputs.target_chars }}
@@ -200,28 +202,43 @@ jobs:
           BEFORE_SIZES: ${{ steps.measure.outputs.before_sizes }}
           PR_BODY_FILE: ${{ runner.temp }}/claude-md-compaction-pr-body.md
           SHRUNK_PATHS_FILE: ${{ runner.temp }}/compactor-shrunk-paths.txt
+          PUBLISH_PATHS_FILE: ${{ runner.temp }}/compactor-publish-paths.txt
           BRANCH: ${{ steps.measure.outputs.branch }}
+          ORIG_SHA: ${{ github.sha }}
         run: |
           set -euo pipefail
           node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --progress
-          # Commit leftover working-tree shrinkage Claude didn't commit, then
-          # push so the open-PR step can see origin/$BRANCH. Adding `docs/`
-          # picks up overflow that was moved out of a guide (the brief's
-          # prescribed overflow destination).
-          if [ -s "$SHRUNK_PATHS_FILE" ]; then
-            while IFS= read -r p; do
-              git add -- "$p"
-            done < "$SHRUNK_PATHS_FILE"
+          git fetch --quiet origin main
+          node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --publish-paths
+
+          TMP=$(mktemp -d)
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            if [ ! -f "$p" ]; then
+              echo "::error::$p was selected to publish but is missing from the working tree."
+              exit 1
+            fi
+            mkdir -p "$TMP/$(dirname "$p")"
+            cp -- "$p" "$TMP/$p"
+          done < "$PUBLISH_PATHS_FILE"
+
+          git checkout -f -B "$BRANCH" --no-track origin/main
+          while IFS= read -r p; do
+            mkdir -p "$(dirname "$p")"
+            cp -- "$TMP/$p" "$p"
+            git add -- "$p"
+          done < "$PUBLISH_PATHS_FILE"
+
+          xargs npx prettier --write < "$PUBLISH_PATHS_FILE"
+          while IFS= read -r p; do
+            git add -- "$p"
+          done < "$PUBLISH_PATHS_FILE"
+
+          if git diff --cached --quiet; then
+            echo "Nothing to commit after applying compaction onto origin/main."
+            exit 1
           fi
-          git add -- 'docs' || true
-          if ! git diff --cached --quiet; then
-            git commit -m "chore(docs): partial CLAUDE.md compaction (still above policy target)"
-          fi
-          # Publish the current HEAD under the compaction branch name. `-B`
-          # is a no-op when Claude already created that branch and left us on
-          # it; it avoids pushing `main` onto the remote branch name if we
-          # committed leftover shrinkage while still on main.
-          git checkout -B "$BRANCH"
+          git commit -m "chore(docs): compact CLAUDE.md guides for weekly headroom"
           git push -u origin "$BRANCH"
 
       # PR creation is deliberately NOT Claude's job. claude-code-action forces
@@ -230,11 +247,11 @@ jobs:
       # queues EVERY workflow run for that PR as `action_required`, awaiting a
       # human click, so the PR lands with zero checks (observed on #2168/#2169).
       # Opening it here with BOT_PAT is the shape coverage-ratchet.yml uses.
-      # Runs after a clean --check OR a recovered partial (files actually
-      # smaller). A check miss with no shrinkage still must not become a PR.
-      # Claude pushing nothing is a clean no-op.
+      # Recover owns the branch push (from origin/main, docs-only). Verify
+      # success without recover still used to skip when Claude hit the target
+      # but never wrote $PR_BODY_FILE — recover now synthesises that body.
       - name: Open the compaction PR
-        if: (steps.verify.outcome == 'success' || steps.recover.outcome == 'success') && steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
+        if: steps.recover.outcome == 'success' && steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
         env:
           # BOT_PAT (contents + pull-requests write, no issues) — enough to open
           # the PR; this workflow applies no label, so no second token is needed.

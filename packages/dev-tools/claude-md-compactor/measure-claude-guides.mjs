@@ -9,7 +9,7 @@ import { execFileSync } from 'node:child_process';
  * (>= MAX_CHARS, default 10,000 — a stricter, wider policy than the repo's own
  * 20,000-char `packages/*` gate; see `lib.mjs` for the distinction).
  *
- * Three modes:
+ * Four modes:
  *   (default)  Measure + query open PRs for the cross-run dedup rule, then
  *              write `has_oversized`, `oversized_count`, `branch`,
  *              `existing_pr`, `before_sizes`, `report`, and `prompt` to
@@ -20,13 +20,15 @@ import { execFileSync } from 'node:child_process';
  *              TARGET_CHARS. This is the post-compaction invariant, run
  *              deterministically by the workflow instead of trusted to the
  *              model. No GitHub API access, no outputs beyond the summary.
- *   --progress After a failed --check: compare the working tree to BEFORE_SIZES
- *              (the measure step's `before_sizes` output). Exit 0 and set
- *              `recovered=true` when at least one worklist guide strictly
- *              shrank and none grew — the workflow then opens a partial PR.
- *              Exit 1 when nothing got smaller (Saturday 2026-08-30: Claude
- *              ran, every selected guide was still at its pre-run size).
- *              Writes a PR body to $PR_BODY_FILE if Claude left it empty.
+ *   --progress Compare the working tree to BEFORE_SIZES. Exit 0 when
+ *              `openPr` (policy hit or recovered partial); write a PR body
+ *              to $PR_BODY_FILE if Claude left it empty. Exit 1 when nothing
+ *              got smaller (Saturday 2026-08-30: Claude ran, every selected
+ *              guide was still at its pre-run size).
+ *   --publish-paths After --progress: write the docs/CLAUDE.md files Claude
+ *              actually edited (minus the workflow PR's own files) to
+ *              $PUBLISH_PATHS_FILE so the recover step can copy them onto
+ *              origin/main.
  *
  * Pure logic (thresholds, selection, report, branch name, dedup rule, prompt)
  * lives in `lib.mjs` and is unit-tested. This file only does I/O. Mirrors
@@ -49,6 +51,8 @@ import { execFileSync } from 'node:child_process';
  *                  Claude left the file missing or empty.
  *   SHRUNK_PATHS_FILE --progress: newline-separated worklist paths that shrank,
  *                  so the workflow can `git add` leftover working-tree edits.
+ *   ORIG_SHA       --publish-paths: pre-Claude checkout SHA (`github.sha`)
+ *   PUBLISH_PATHS_FILE --publish-paths: output path list to copy onto origin/main
  *   SKIP_PR_CHECK  '1' to skip the open-PR dedup query (offline runs)
  *   GITHUB_OUTPUT / GITHUB_STEP_SUMMARY  Actions files, written when present
  *
@@ -63,7 +67,7 @@ import { fileURLToPath } from 'node:url';
 import {
   assessCompactionProgress,
   buildBranchName,
-  buildPartialPrBody,
+  buildCompactionPrBody,
   buildPrompt,
   COMPACTION_PR_TITLE,
   COMPACTOR_MAX_CHARS,
@@ -78,6 +82,7 @@ import {
   parseWorklist,
   selectAboveTarget,
   selectOversized,
+  selectPublishPaths,
   selectWorklist,
 } from './lib.mjs';
 
@@ -172,6 +177,57 @@ function existingBody(file) {
   }
 }
 
+function gitNames(args) {
+  try {
+    return execFileSync('git', args, {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+    })
+      .split('\n')
+      .map((s) => s.trim())
+      .filter(Boolean);
+  } catch {
+    return [];
+  }
+}
+
+/**
+ * Files Claude actually edited that may be copied onto origin/main. Excludes
+ * the workflow PR's own files so a dispatch from a feature branch cannot leak
+ * YAML/docs into the compaction PR.
+ */
+function runPublishPaths() {
+  const orig = requireEnv('ORIG_SHA');
+  const outFile = requireEnv('PUBLISH_PATHS_FILE');
+  let shrunk = [];
+  const shrunkFile = (process.env.SHRUNK_PATHS_FILE ?? '').trim();
+  if (shrunkFile) {
+    try {
+      shrunk = readFileSync(shrunkFile, 'utf8')
+        .split('\n')
+        .map((s) => s.trim())
+        .filter(Boolean);
+    } catch {
+      shrunk = [];
+    }
+  }
+  const claudeTouched = [
+    ...gitNames(['diff', '--name-only', orig, 'HEAD']),
+    ...gitNames(['diff', '--name-only', 'HEAD']),
+    ...gitNames(['diff', '--name-only', '--cached']),
+  ];
+  const workflowTouched = gitNames(['diff', '--name-only', 'origin/main', orig]);
+  const paths = selectPublishPaths({ claudeTouched, workflowTouched, shrunk });
+  writeFileSync(outFile, paths.length > 0 ? `${paths.join('\n')}\n` : '');
+  if (paths.length === 0) {
+    console.error('❌ No compaction files to publish onto origin/main.');
+    process.exit(1);
+  }
+  console.log(`Publishing ${paths.length} file(s) onto origin/main:`);
+  for (const p of paths) console.log(`  ${p}`);
+}
+
 function runProgressCheck(measurements, { maxChars, targetChars }) {
   const worklist = parseWorklist(process.env.WORKLIST);
   const before = parseBeforeSizes(process.env.BEFORE_SIZES);
@@ -195,20 +251,19 @@ function runProgressCheck(measurements, { maxChars, targetChars }) {
     writeFileSync(shrunkFile, lines.length > 0 ? `${lines.join('\n')}\n` : '');
   }
 
-  if (assessment.recovered) {
+  if (assessment.openPr) {
     const bodyFile = (process.env.PR_BODY_FILE ?? '').trim();
     if (bodyFile && existingBody(bodyFile).trim() === '') {
-      writeFileSync(bodyFile, buildPartialPrBody(assessment, { maxChars, targetChars }));
-      console.log(`Wrote partial PR body to ${bodyFile}`);
+      writeFileSync(bodyFile, buildCompactionPrBody(assessment, { maxChars, targetChars }));
+      console.log(`Wrote PR body to ${bodyFile}`);
     }
-    console.log(
-      `⚠️ Policy target missed, but ${assessment.shrunk.length} selected guide(s) got smaller — recovering with a partial PR.`
-    );
-    return;
-  }
-
-  if (assessment.policyOk) {
-    console.log('✅ Policy already met — nothing to recover.');
+    if (assessment.recovered) {
+      console.log(
+        `⚠️ Policy target missed, but ${assessment.shrunk.length} selected guide(s) got smaller — recovering with a partial PR.`
+      );
+    } else {
+      console.log('✅ Policy already met — publishing the compacted guides.');
+    }
     return;
   }
 
@@ -238,6 +293,11 @@ function runProgressCheck(measurements, { maxChars, targetChars }) {
 async function main() {
   const check = process.argv.includes('--check');
   const progress = process.argv.includes('--progress');
+  const publishPaths = process.argv.includes('--publish-paths');
+  if (publishPaths) {
+    runPublishPaths();
+    return;
+  }
   const maxChars = intEnv('MAX_CHARS', COMPACTOR_MAX_CHARS);
   const targetChars = intEnv('TARGET_CHARS', COMPACTOR_TARGET_CHARS);
 
@@ -293,7 +353,7 @@ async function main() {
     return;
   }
 
-  const branch = buildBranchName(new Date());
+  const branch = buildBranchName(new Date(), process.env.GITHUB_RUN_ID);
   let existing = null;
   if (worklistGuides.length > 0 && (process.env.SKIP_PR_CHECK ?? '').trim() !== '1') {
     const repo = requireEnv('REPO');

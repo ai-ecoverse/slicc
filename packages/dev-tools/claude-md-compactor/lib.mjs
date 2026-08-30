@@ -389,6 +389,59 @@ ${VALIDATION_COMMANDS.map((c) => `- \`${c}\``).join('\n')}
 `;
 }
 
+/**
+ * PR body for either a full hit (`policyOk`) or a recovered partial. The
+ * workflow synthesises this whenever Claude left `$PR_BODY_FILE` empty —
+ * hitting the target and then max-turns before writing the body used to
+ * skip `gh pr create`.
+ * @param {ReturnType<typeof assessCompactionProgress>} assessment
+ * @param {{maxChars?: number, targetChars?: number}} [options]
+ * @returns {string}
+ */
+export function buildCompactionPrBody(
+  assessment,
+  { maxChars = COMPACTOR_MAX_CHARS, targetChars = COMPACTOR_TARGET_CHARS } = {}
+) {
+  if (!assessment?.policyOk) return buildPartialPrBody(assessment, { maxChars, targetChars });
+  const table = formatProgressReport(assessment, { maxChars, targetChars });
+  return `CLAUDE.md compaction. Selected guides are at or below ${withSeparators(targetChars)} chars (oversized at ${withSeparators(maxChars)}).
+
+${table}
+
+## Validation
+
+${VALIDATION_COMMANDS.map((c) => `- \`${c}\``).join('\n')}
+`;
+}
+
+/**
+ * Files the recover step may copy onto `origin/main`. Only worklist
+ * `CLAUDE.md` files and `docs/` overflow Claude actually edited, never
+ * files the workflow PR itself already changed (so a `workflow_dispatch`
+ * from #2676 cannot leak YAML/docs from that PR into the compaction PR).
+ * @param {{
+ *   claudeTouched?: Array<string>,
+ *   workflowTouched?: Array<string>,
+ *   shrunk?: Array<string>,
+ * }} [opts]
+ * @returns {string[]}
+ */
+export function selectPublishPaths({ claudeTouched = [], workflowTouched = [], shrunk = [] } = {}) {
+  const blocked = new Set((workflowTouched ?? []).filter(Boolean));
+  const out = [];
+  const seen = new Set();
+  for (const p of [...(claudeTouched ?? []), ...(shrunk ?? [])]) {
+    const path = String(p ?? '').replace(/^\.\//, '');
+    if (!path || seen.has(path) || blocked.has(path)) continue;
+    const isGuide = path === 'CLAUDE.md' || path.endsWith('/CLAUDE.md');
+    const isDocs = path === 'docs' || path.startsWith('docs/');
+    if (!isGuide && !isDocs) continue;
+    seen.add(path);
+    out.push(path);
+  }
+  return out;
+}
+
 /** Group-separator formatting for readability in the table (10012 → 10,012). */
 function withSeparators(n) {
   return n.toLocaleString('en-US');
@@ -423,16 +476,21 @@ export function formatReport(measurements, { maxChars = COMPACTOR_MAX_CHARS } = 
 
 /**
  * `automation/weekend-claude-compaction-YYYY-MM-DD` from the UTC date parts of
- * `date`. The date is a required argument rather than a `new Date()` default so
- * callers cannot accidentally depend on the wall clock.
+ * `date`. Optional `runId` (Actions `GITHUB_RUN_ID`) is appended so a
+ * same-day re-dispatch cannot reopen a closed PR that already used the
+ * date-only name (observed: #2677). The date is a required argument rather
+ * than a `new Date()` default so callers cannot accidentally depend on the
+ * wall clock.
  * @param {Date|string|number} date
+ * @param {string|number} [runId]
  * @returns {string}
  */
-export function buildBranchName(date) {
+export function buildBranchName(date, runId = '') {
   const d = date instanceof Date ? date : new Date(date);
   if (Number.isNaN(d.getTime())) throw new TypeError(`buildBranchName: invalid date ${date}`);
   const stamp = d.toISOString().slice(0, 10);
-  return `${COMPACTION_BRANCH_PREFIX}${stamp}`;
+  const id = String(runId ?? '').trim();
+  return id ? `${COMPACTION_BRANCH_PREFIX}${stamp}-${id}` : `${COMPACTION_BRANCH_PREFIX}${stamp}`;
 }
 
 /**
@@ -549,41 +607,25 @@ not characters. It is excluded from the worklist by construction; do not touch i
 
 ## Then
 
-1. Create the branch \`${branch || `${COMPACTION_BRANCH_PREFIX}<YYYY-MM-DD UTC>`}\` off the current checkout.
-2. Re-measure: run \`node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check\`.
-   If it passes, proceed. If it fails **but every selected guide is strictly
-   smaller than the pre-run measurement and none grew**, still commit, push, and
-   write the PR body — a later workflow step opens a **partial** PR rather than
-   discarding the shrinkage. If nothing got smaller, or any selected guide grew,
-   push NOTHING and write no body file.
-3. Run \`npm run lint:docs\`, \`npx prettier --check\` on each changed markdown
-   file, and \`npx vitest run --project dev-tools\`. Fix real failures; never
-   weaken a gate to make one green. Skip the full test suite — these are
-   documentation-only changes.
-4. Review \`git diff\` and confirm there is nothing behavioural, generated, or
-   unrelated in it.
-5. Commit with a conventional-commit message and push the branch:
-   \`\`\`bash
-   git push -u origin ${branch || `${COMPACTION_BRANCH_PREFIX}<YYYY-MM-DD UTC>`}
-   \`\`\`
-6. Write the pull-request body to the file named by the \`PR_BODY_FILE\`
-   environment variable — e.g.
-   \`cat > "$PR_BODY_FILE" <<'EOF' … EOF\`. **Do NOT run \`gh pr create\`.** A
-   later, deterministic workflow step opens the PR from your pushed branch and
-   that body file, because the PR must be authored by a token whose events
-   trigger CI: a PR opened by your \`gh\` is authored by \`github-actions[bot]\`,
-   and GitHub then queues every check on it as \`action_required\` until a human
-   clicks "Approve and run". The title is fixed by that step and is exactly:
-   \`${COMPACTION_PR_TITLE}\`
-   The body must contain: a before/after character-count table, a link for every
-   document you moved detail into, and these exact validation commands:
-${VALIDATION_COMMANDS.map((c) => `   - \`${c}\``).join('\n')}
-7. **Never merge the PR.** Do not enable auto-merge. Do not poll CI afterwards —
-   existing automation handles follow-up failures.
-8. Report a one-paragraph summary. If you are blocked (nothing smaller, or a
-   selected guide grew), push NOTHING and write no body file, then report the
-   exact blocker — the deterministic step treats an unpushed branch as a clean
-   no-op, and an empty PR is worse than no PR.
+Stop once every worklist file (and any overflow you moved under \`docs/\`) is
+saved on disk. **Do not create a branch, do not commit, do not push, do not
+run tests or prettier.** A later workflow step measures the working tree,
+commits only those files onto \`${branch || `${COMPACTION_BRANCH_PREFIX}<YYYY-MM-DD UTC>`}\` branched from \`origin/main\`, and opens the PR. Spending turns
+on git or \`npm\` is how earlier dispatches hit max-turns with the rewrite
+still above target (33312644577: 19,998 → ~10,286 then cap).
+
+Optionally write the pull-request body to the file named by \`PR_BODY_FILE\`
+— e.g. \`cat > "$PR_BODY_FILE" <<'EOF' … EOF\`. If you skip it, the workflow
+synthesises one from the before/after sizes. **Do NOT run \`gh pr create\`.**
+The title is fixed by that step and is exactly: \`${COMPACTION_PR_TITLE}\`
+
+If a body is written it must contain a before/after character-count table, a
+link for every document you moved detail into, and these exact validation
+commands:
+${VALIDATION_COMMANDS.map((c) => `- \`${c}\``).join('\n')}
+
+**Never merge the PR.** Do not enable auto-merge. Do not poll CI afterwards.
+Report a one-paragraph summary of what you cut and where overflow went.
 
 ${report ? `## Pre-run measurement\n\n${report}\n` : ''}`;
 }

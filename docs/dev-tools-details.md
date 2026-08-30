@@ -73,7 +73,9 @@ Two details that are easy to get wrong and are therefore pinned by tests:
   measured with `String.length`, never bytes. One oversized guide per run
   (largest first); a `--check` miss still opens a **partial** PR when that
   guide actually got smaller (`--progress`); unchanged or grown files do not
-  become a PR.
+  become a PR. Claude only edits the worklist — the recover step copies those
+  files onto a new branch from `origin/main` (so a dispatch from a workflow
+  PR cannot leak YAML) and synthesises the PR body if Claude left it empty.
 - **The flake hunter lists workflow runs one day at a time.**
   `GET /actions/runs` returns at most 1000 items however you page it, and this
   repo produces roughly 2,400 runs a week, so a window-wide query silently
@@ -96,9 +98,11 @@ as `coverage-ratchet.yml` and `renovate-patch-reconcile.yml`.
 
 **Claude never opens the pull request.** In `boy-scout-debt-dispatcher.yml`,
 `claude-md-compactor.yml`, `flaky-ci-hunter.yml`, and the backlog dispatcher's
-author phase, Claude pushes the branch and writes the PR body (and, for the flake
-hunter and the backlog author, the title) to a file named by a `PR_BODY_FILE` /
-`PR_TITLE_FILE` env var; a deterministic shell step then runs `gh pr create` with
+author phase, Claude writes the PR body (and, for the flake hunter and the
+backlog author, the title) to a file named by a `PR_BODY_FILE` /
+`PR_TITLE_FILE` env var; the compactor's recover step also synthesises that
+body and pushes a docs-only branch from `origin/main`. A deterministic shell
+step then runs `gh pr create` with
 `GH_TOKEN: secrets.BOT_PAT`, exactly as `coverage-ratchet.yml` does. The reason is
 that `claude-code-action` overrides `GH_TOKEN` for its Bash tool with its own
 `github_token:` input (deliberately `${{ github.token }}` here, because the
