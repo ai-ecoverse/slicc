@@ -591,27 +591,162 @@ final class LauncherModelTests: XCTestCase {
         XCTAssertTrue(model.sessionStore.localSessions.isEmpty)
     }
 
-    func testRepublishingRefreshesALiveLeaderAndSkipsADeadOne() {
-        let process = RecordingProcess()
+    func testRepublishingRefreshesALiveLeaderAndSkipsADeadOne() async throws {
+        let model = makeModel(process: SliccProcess())
+        model.isReady = true
+
+        model.republishLeaderSession()
+        await settle()
+        XCTAssertTrue(model.sessionStore.localSessions.isEmpty, "nothing to refresh without a leader")
+
+        let live = makeModel(process: try leaderProcess(answering: .joinUrl("https://tray.test/join/x.secret")))
+        live.isReady = true
+        live.republishLeaderSession()
+        await waitUntil { live.sessionStore.localSessions.count == 1 }
+        XCTAssertEqual(live.sessionStore.localSessions.count, 1)
+    }
+
+    /// The republish beat used to stamp `lastSeenAt` onto whatever URL was
+    /// cached at launch. On a Mac whose lid is shut that is a fiction the
+    /// beat keeps renewing — a `Timer` fires on any run-loop tick it gets,
+    /// including a dark wake — so the session never aged out and the user's
+    /// other devices kept offering a leader nobody could reach.
+    func testRepublishingDoesNotRenewALeaderThatCannotBeReached() async throws {
+        let probes = ProbeCounter()
+        let process = try leaderProcess(answering: .unreachable, counting: probes)
+        process.leaderJoinUrl = "https://tray.test/join/cached.secret"
+        let model = makeModel(process: process)
+        model.isReady = true
+        model.leaderJoinUrlChanged("https://tray.test/join/cached.secret")
+        let published = model.sessionStore.localSessions.first?.lastSeenAt
+
+        model.republishLeaderSession()
+        // The unreachable answer is retried, so the beat only finishes once
+        // every attempt has been spent — waiting on the probe count (not on a
+        // yield budget) is what makes this assertion observe the outcome.
+        await waitUntilProbed(probes, atLeast: republishProbeAttempts)
+        await settle()
+
+        let probeCount = await probes.count
+        XCTAssertEqual(
+            probeCount,
+            republishProbeAttempts,
+            "the beat must verify the leader before it advertises it")
+        XCTAssertEqual(
+            model.sessionStore.localSessions.first?.lastSeenAt,
+            published,
+            "an unverifiable session must be left to age out of the store's TTL")
+    }
+
+    func testRepublishingAdvertisesTheUrlTheLeaderServesNow() async throws {
+        let process = try leaderProcess(answering: .joinUrl("https://tray.test/join/reminted.secret"))
+        process.leaderJoinUrl = "https://tray.test/join/stale.secret"
         let model = makeModel(process: process)
         model.isReady = true
 
         model.republishLeaderSession()
-        XCTAssertTrue(model.sessionStore.localSessions.isEmpty, "nothing to refresh without a leader")
+        await waitUntil { !model.sessionStore.localSessions.isEmpty }
 
-        process.leaderJoinUrl = "https://tray.test/join/x.secret"
-        model.republishLeaderSession()
-        XCTAssertEqual(model.sessionStore.localSessions.count, 1)
+        XCTAssertEqual(
+            model.sessionStore.localSessions.map(\.joinUrl),
+            ["https://tray.test/join/reminted.secret"])
     }
 
-    func testRepublishingIsSkippedBeforeTheWindowIsReady() {
-        let process = RecordingProcess()
-        process.leaderJoinUrl = "https://tray.test/join/x.secret"
-        let model = makeModel(process: process)
+    /// Sessions are keyed by `SHA256(joinUrl)`, so a re-minted tray adds a
+    /// row rather than replacing one: the predecessor has to be withdrawn or
+    /// the device advertises two sessions, one of them dead, for 12h.
+    func testAReMintedTrayReplacesTheAdvertisementItSupersedes() {
+        let model = makeModel()
+        model.leaderJoinUrlChanged("https://tray.test/join/old.secret")
+
+        model.leaderJoinUrlChanged(
+            "https://tray.test/join/new.secret", previous: "https://tray.test/join/old.secret")
+
+        XCTAssertEqual(
+            model.sessionStore.localSessions.map(\.joinUrl), ["https://tray.test/join/new.secret"])
+    }
+
+    func testRepublishingIsSkippedBeforeTheWindowIsReady() async throws {
+        let probes = ProbeCounter()
+        let model = makeModel(
+            process: try leaderProcess(
+                answering: .joinUrl("https://tray.test/join/x.secret"), counting: probes))
 
         model.republishLeaderSession()
+        await settle()
 
+        let probeCount = await probes.count
         XCTAssertTrue(model.sessionStore.localSessions.isEmpty)
+        XCTAssertEqual(probeCount, 0, "no window, no probe")
+    }
+
+    // MARK: - Republish fixtures
+
+    private enum TrayStatusAnswer {
+        case joinUrl(String)
+        case unreachable
+    }
+
+    private actor ProbeCounter {
+        private(set) var count = 0
+        func tick() { count += 1 }
+    }
+
+    /// A `SliccProcess` with a live leader launch record whose
+    /// `/api/tray-status` answers as instructed, so `republishLeaderSession`
+    /// runs the real refresh instead of a stub.
+    private func leaderProcess(
+        answering answer: TrayStatusAnswer,
+        counting probes: ProbeCounter? = nil
+    ) throws -> SliccProcess {
+        let process = SliccProcess(
+            trayStatusProbe: TrayStatusProbe(fetch: { _ in
+                await probes?.tick()
+                switch answer {
+                case .joinUrl(let url):
+                    return (200, Data(#"{"state":"connected","joinUrl":"\#(url)"}"#.utf8))
+                case .unreachable:
+                    return (503, Data())
+                }
+            }))
+        let helper = Process()
+        helper.executableURL = URL(fileURLWithPath: "/bin/sleep")
+        helper.arguments = ["60"]
+        try helper.run()
+        addTeardownBlock { if helper.isRunning { helper.terminate() } }
+        process._testing_seedLaunchRecord(
+            id: "browser-1",
+            process: helper,
+            targetType: .chromiumBrowser,
+            cdpPort: 39222,
+            servePort: 35710,
+            targetName: "TestBrowser"
+        )
+        return process
+    }
+
+    /// Attempts `republishLeaderSession` gives the leader to answer.
+    private let republishProbeAttempts = 3
+
+    private func waitUntilProbed(
+        _ probes: ProbeCounter,
+        atLeast count: Int,
+        timeout: TimeInterval = 10.0
+    ) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while await probes.count < count && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
+    }
+
+    private func waitUntil(
+        _ condition: () -> Bool,
+        timeout: TimeInterval = 3.0
+    ) async {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline {
+            try? await Task.sleep(nanoseconds: 10_000_000)
+        }
     }
 
     // MARK: - Alert prompts
@@ -622,8 +757,11 @@ final class LauncherModelTests: XCTestCase {
         XCTAssertTrue(RootView.electronRestartPrompt(for: signal).contains("Signal is already running"))
     }
 
+    /// Let work a call hopped into a `Task` land before asserting on it.
+    /// Generous on purpose: CI is slow enough that a tight yield count has
+    /// been the difference between a real assertion and a coin flip.
     private func settle() async {
-        for _ in 0..<4 { await Task.yield() }
+        for _ in 0..<50 { await Task.yield() }
     }
 }
 

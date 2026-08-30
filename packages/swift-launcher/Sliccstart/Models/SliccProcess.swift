@@ -787,6 +787,18 @@ class SliccProcess {
         }
     }
 
+    /// Active join-URL watch loop. Owned here (a stored property cannot live
+    /// in an extension); the loop itself is in `SliccProcess+LeaderJoinUrl.swift`.
+    var leaderJoinUrlWatchTask: Task<Void, Never>?
+
+    /// The serve port of this device's leader browser, or `nil` while none is
+    /// running — a `--join` follower is never it. The narrow, non-private
+    /// window onto `launchRecords` that `SliccProcess+LeaderJoinUrl` needs;
+    /// the record type itself stays private to this file.
+    var leaderServePort: UInt16? {
+        launchRecords.values.first { $0.targetType == .chromiumBrowser && !$0.isFollower }?.servePort
+    }
+
     /// Find the next available port pair for an Electron app.
     private func nextElectronPorts() -> (port: UInt16, cdpPort: UInt16) {
         let electronCount = UInt16(launchRecords.count)  // offset from base
