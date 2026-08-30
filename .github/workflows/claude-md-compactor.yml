@@ -69,7 +69,7 @@ permissions:
 jobs:
   compact:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 75
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
@@ -114,6 +114,9 @@ jobs:
       - name: Compact the oversized guides and push the branch
         id: claude
         if: steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
+        # Max-turns (dispatch 33312644577: 19998 → ~10286 then cap) must not
+        # discard the working tree — recover still lands a partial PR.
+        continue-on-error: true
         uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
         env:
           # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
@@ -159,7 +162,7 @@ jobs:
             --model ${{ vars.COMPACTOR_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
             --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
             --disallowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Agent,Task,TodoWrite"
-            --max-turns 150
+            --max-turns 250
           prompt: ${{ steps.measure.outputs.prompt }}
 
       # The Cosmos "do not proceed unless every guide is under the limit"
@@ -170,7 +173,7 @@ jobs:
       # open-PR step is gated on success().
       - name: Verify every guide is under the policy limit
         id: verify
-        if: success() && steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
+        if: always() && steps.claude.outcome != 'skipped' && steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
         continue-on-error: true
         env:
           MAX_CHARS: ${{ github.event.inputs.max_chars }}
