@@ -1,6 +1,8 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assessCompactionProgress,
   buildBranchName,
+  buildPartialPrBody,
   buildPrompt,
   COMPACTION_BRANCH_PREFIX,
   COMPACTION_PR_TITLE,
@@ -9,9 +11,12 @@ import {
   COMPACTOR_TARGET_CHARS,
   EXCLUDED_GUIDES,
   findExistingCompactionPr,
+  formatBeforeSizes,
+  formatProgressReport,
   formatReport,
   isExcludedGuide,
   measureGuides,
+  parseBeforeSizes,
   parseWorklist,
   selectAboveTarget,
   selectOversized,
@@ -184,6 +189,175 @@ describe('parseWorklist', () => {
   });
 });
 
+describe('formatBeforeSizes / parseBeforeSizes', () => {
+  it('round-trips a worklist as sorted JSON', () => {
+    const raw = formatBeforeSizes([
+      { path: 'b/CLAUDE.md', chars: 12000 },
+      { path: 'a/CLAUDE.md', chars: 19998 },
+    ]);
+    expect(raw).toBe('{"a/CLAUDE.md":19998,"b/CLAUDE.md":12000}');
+    expect(Object.fromEntries(parseBeforeSizes(raw))).toEqual({
+      'a/CLAUDE.md': 19998,
+      'b/CLAUDE.md': 12000,
+    });
+  });
+
+  it('parses a JSON array of {path, chars}', () => {
+    const map = parseBeforeSizes(
+      JSON.stringify([
+        { path: 'a/CLAUDE.md', chars: 10 },
+        { path: 'b/CLAUDE.md', chars: 20 },
+      ])
+    );
+    expect(map.get('a/CLAUDE.md')).toBe(10);
+    expect(map.get('b/CLAUDE.md')).toBe(20);
+  });
+
+  it('parses path:chars pairs as a fallback', () => {
+    expect(
+      Object.fromEntries(
+        parseBeforeSizes('a/CLAUDE.md:19998, b/CLAUDE.md:12000\nc/CLAUDE.md:10199')
+      )
+    ).toEqual({
+      'a/CLAUDE.md': 19998,
+      'b/CLAUDE.md': 12000,
+      'c/CLAUDE.md': 10199,
+    });
+  });
+
+  it('is empty for absent or blank input', () => {
+    expect(parseBeforeSizes(undefined).size).toBe(0);
+    expect(parseBeforeSizes('').size).toBe(0);
+    expect(parseBeforeSizes(' , \n ').size).toBe(0);
+  });
+});
+
+describe('assessCompactionProgress', () => {
+  const measured = (entries, maxChars = 10000) => measureGuides(entries, { maxChars });
+
+  it('recovers when selected guides shrank but are still oversized (the Saturday miss)', () => {
+    const out = assessCompactionProgress({
+      before: { 'packages/webapp/CLAUDE.md': 19998, 'packages/ios-app/CLAUDE.md': 17332 },
+      after: measured([
+        { path: 'packages/webapp/CLAUDE.md', content: guide(15000) },
+        { path: 'packages/ios-app/CLAUDE.md', content: guide(16000) },
+      ]),
+      worklist: ['packages/webapp/CLAUDE.md', 'packages/ios-app/CLAUDE.md'],
+    });
+    expect(out.policyOk).toBe(false);
+    expect(out.recovered).toBe(true);
+    expect(out.openPr).toBe(true);
+    expect(out.shrunk.map((r) => r.path)).toEqual([
+      'packages/webapp/CLAUDE.md',
+      'packages/ios-app/CLAUDE.md',
+    ]);
+    expect(out.shrunk[0].delta).toBe(15000 - 19998);
+  });
+
+  it('does not recover when every selected guide is unchanged (run 33283868860)', () => {
+    const out = assessCompactionProgress({
+      before: { 'packages/webapp/CLAUDE.md': 19998, 'packages/swift-server/CLAUDE.md': 10199 },
+      after: measured([
+        { path: 'packages/webapp/CLAUDE.md', content: guide(19998) },
+        { path: 'packages/swift-server/CLAUDE.md', content: guide(10199) },
+      ]),
+      worklist: ['packages/webapp/CLAUDE.md', 'packages/swift-server/CLAUDE.md'],
+    });
+    expect(out.policyOk).toBe(false);
+    expect(out.recovered).toBe(false);
+    expect(out.openPr).toBe(false);
+    expect(out.unchanged).toHaveLength(2);
+  });
+
+  it('does not recover when any selected guide grew', () => {
+    const out = assessCompactionProgress({
+      before: { 'a/CLAUDE.md': 12000, 'b/CLAUDE.md': 11000 },
+      after: measured([
+        { path: 'a/CLAUDE.md', content: guide(9000) },
+        { path: 'b/CLAUDE.md', content: guide(13000) },
+      ]),
+      worklist: ['a/CLAUDE.md', 'b/CLAUDE.md'],
+    });
+    expect(out.recovered).toBe(false);
+    expect(out.openPr).toBe(false);
+    expect(out.grew.map((r) => r.path)).toEqual(['b/CLAUDE.md']);
+    expect(out.shrunk.map((r) => r.path)).toEqual(['a/CLAUDE.md']);
+  });
+
+  it('does not recover when a guide off the worklist became oversized', () => {
+    const out = assessCompactionProgress({
+      before: { 'a/CLAUDE.md': 12000 },
+      after: measured([
+        { path: 'a/CLAUDE.md', content: guide(9000) },
+        { path: 'b/CLAUDE.md', content: guide(15000) },
+      ]),
+      worklist: ['a/CLAUDE.md'],
+    });
+    expect(out.recovered).toBe(false);
+    expect(out.newOversized.map((m) => m.path)).toEqual(['b/CLAUDE.md']);
+  });
+
+  it('allows some worklist files to stay unchanged if others shrank', () => {
+    const out = assessCompactionProgress({
+      before: { 'a/CLAUDE.md': 12000, 'b/CLAUDE.md': 11000 },
+      after: measured([
+        { path: 'a/CLAUDE.md', content: guide(8000) },
+        { path: 'b/CLAUDE.md', content: guide(11000) },
+      ]),
+      worklist: ['a/CLAUDE.md', 'b/CLAUDE.md'],
+    });
+    expect(out.recovered).toBe(true);
+    expect(out.unchanged.map((r) => r.path)).toEqual(['b/CLAUDE.md']);
+  });
+
+  it('is policyOk (not recovered) when every selected guide hit the target', () => {
+    const out = assessCompactionProgress({
+      before: { 'a/CLAUDE.md': 12000 },
+      after: measured([{ path: 'a/CLAUDE.md', content: guide(9000) }]),
+      worklist: ['a/CLAUDE.md'],
+    });
+    expect(out.policyOk).toBe(true);
+    expect(out.recovered).toBe(false);
+    expect(out.openPr).toBe(true);
+  });
+
+  it('treats a missing after-file as not recoverable', () => {
+    const out = assessCompactionProgress({
+      before: { 'a/CLAUDE.md': 12000, 'b/CLAUDE.md': 11000 },
+      after: measured([{ path: 'a/CLAUDE.md', content: guide(8000) }]),
+      worklist: ['a/CLAUDE.md', 'b/CLAUDE.md'],
+    });
+    expect(out.recovered).toBe(false);
+    expect(out.missing.map((r) => r.path)).toEqual(['b/CLAUDE.md']);
+  });
+});
+
+describe('formatProgressReport / buildPartialPrBody', () => {
+  const assessment = assessCompactionProgress({
+    before: { 'packages/webapp/CLAUDE.md': 19998 },
+    after: measureGuides([{ path: 'packages/webapp/CLAUDE.md', content: guide(15000) }]),
+    worklist: ['packages/webapp/CLAUDE.md'],
+  });
+
+  it('renders a before/after/delta table for a partial recovery', () => {
+    const report = formatProgressReport(assessment);
+    expect(report).toContain('1 selected guide(s) got smaller; the policy target was not met.');
+    expect(report).toContain(
+      '| `packages/webapp/CLAUDE.md` | 19,998 | 15,000 | -4,998 | still oversized |'
+    );
+  });
+
+  it('synthesises a PR body that names the partial and the validation commands', () => {
+    const body = buildPartialPrBody(assessment);
+    expect(body).toContain('Partial CLAUDE.md compaction');
+    expect(body).toContain('existing-PR dedup');
+    expect(body).toContain('npm run lint:docs');
+    expect(body).toContain(
+      'node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check'
+    );
+  });
+});
+
 describe('formatReport', () => {
   const measurements = measureGuides([
     { path: 'packages/swift-server/CLAUDE.md', content: guide(10012) },
@@ -334,6 +508,11 @@ describe('buildPrompt', () => {
     expect(prompt.match(/gh pr create/g)).toHaveLength(1);
     expect(prompt).toContain('PR_BODY_FILE');
     expect(prompt).toContain('action_required');
+  });
+
+  it('tells Claude to still push honest shrinkage when --check fails', () => {
+    expect(prompt).toContain('partial');
+    expect(prompt).toMatch(/strictly\s+smaller/);
   });
 
   it('forbids merging and CI polling', () => {

@@ -59,6 +59,14 @@ export const COMPACTION_TITLE_PREFIX = 'chore(docs): compact CLAUDE.md guides';
 /** The exact title the compaction PR must use. */
 export const COMPACTION_PR_TITLE = 'chore(docs): compact CLAUDE.md guides for weekly headroom';
 
+/** The exact commands the agent must run, quoted verbatim into the PR body. */
+export const VALIDATION_COMMANDS = [
+  'npm run lint:docs',
+  'node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check',
+  'npx prettier --check <each changed markdown file>',
+  'npx vitest run --project dev-tools',
+];
+
 /**
  * True when `path` is a tracked file the compactor is allowed to rewrite.
  * @param {string} path repo-relative path
@@ -150,6 +158,213 @@ export function parseWorklist(raw) {
     .filter(Boolean);
 }
 
+/**
+ * Encode the worklist's pre-Claude sizes so a later `--progress` step can
+ * compare them. Compact JSON object, path → char count, keys sorted.
+ * @param {Array<{path: string, chars: number}>} measurements
+ * @returns {string}
+ */
+export function formatBeforeSizes(measurements = []) {
+  const obj = {};
+  for (const m of [...measurements].sort((a, b) => a.path.localeCompare(b.path))) {
+    if (m?.path) obj[m.path] = m.chars;
+  }
+  return JSON.stringify(obj);
+}
+
+/**
+ * Parse the measure step's `before_sizes` payload. Accepts a JSON object,
+ * a JSON array of `{path, chars}`, or `path:chars` pairs split on commas /
+ * newlines (last colon wins so a Windows path cannot be a problem here —
+ * these paths are repo-relative).
+ * @param {string|undefined} raw
+ * @returns {Map<string, number>}
+ */
+export function parseBeforeSizes(raw) {
+  const s = String(raw ?? '').trim();
+  if (!s) return new Map();
+  if (s.startsWith('{') || s.startsWith('[')) {
+    const parsed = JSON.parse(s);
+    if (Array.isArray(parsed)) {
+      return new Map(parsed.filter((e) => e?.path).map((e) => [e.path, Number(e.chars)]));
+    }
+    return new Map(Object.entries(parsed).map(([path, chars]) => [path, Number(chars)]));
+  }
+  const map = new Map();
+  for (const part of s.split(/[,\n]/)) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const idx = trimmed.lastIndexOf(':');
+    if (idx <= 0) continue;
+    const n = Number(trimmed.slice(idx + 1));
+    if (Number.isFinite(n)) map.set(trimmed.slice(0, idx), n);
+  }
+  return map;
+}
+
+/** @param {Map<string, number>|Record<string, number>|Array<{path: string, chars: number}>|string|undefined} before */
+function toCharMap(before) {
+  if (before instanceof Map) return before;
+  if (typeof before === 'string') return parseBeforeSizes(before);
+  if (Array.isArray(before)) {
+    return new Map(before.filter((e) => e?.path).map((e) => [e.path, Number(e.chars)]));
+  }
+  if (before && typeof before === 'object') {
+    return new Map(Object.entries(before).map(([path, chars]) => [path, Number(chars)]));
+  }
+  return new Map();
+}
+
+function progressStatus(row, { maxChars, targetChars }) {
+  if (row.beforeChars == null || row.afterChars == null) return 'missing';
+  if (row.delta > 0) return 'grew';
+  if (row.afterChars <= targetChars) return row.delta < 0 ? 'compacted' : 'at target';
+  if (row.afterChars >= maxChars) return row.delta < 0 ? 'still oversized' : 'unchanged';
+  return row.delta < 0 ? 'above target' : 'unchanged';
+}
+
+function formatDelta(n) {
+  if (n === 0) return '0';
+  const abs = withSeparators(Math.abs(n));
+  return n < 0 ? `-${abs}` : `+${abs}`;
+}
+
+/**
+ * Compare the worklist's pre-Claude sizes to the working tree. Recoverable
+ * when at least one selected guide strictly shrank, none grew, none went
+ * missing, and no *new* guide (off the worklist) became oversized. Hitting
+ * the policy target is still `policyOk`; falling short with real shrinkage
+ * is `recovered` — the workflow opens a partial PR either way.
+ * @param {{
+ *   before?: Map<string, number>|Record<string, number>|Array<{path: string, chars: number}>|string,
+ *   after?: Array<{path: string, chars: number, oversized?: boolean}>,
+ *   worklist?: Array<string>,
+ *   maxChars?: number,
+ *   targetChars?: number,
+ * }} [opts]
+ * @returns {{
+ *   policyOk: boolean,
+ *   recovered: boolean,
+ *   openPr: boolean,
+ *   shrunk: Array<{path: string, beforeChars: number, afterChars: number, delta: number}>,
+ *   grew: Array<{path: string, beforeChars: number, afterChars: number, delta: number}>,
+ *   unchanged: Array<{path: string, beforeChars: number, afterChars: number, delta: number}>,
+ *   missing: Array<{path: string, beforeChars: number|null, afterChars: number|null, delta: number|null}>,
+ *   newOversized: Array<{path: string, chars: number}>,
+ *   missedTarget: Array<{path: string, chars: number}>,
+ *   stillOversized: Array<{path: string, chars: number}>,
+ *   rows: Array<{path: string, beforeChars: number|null, afterChars: number|null, delta: number|null}>,
+ * }}
+ */
+export function assessCompactionProgress({
+  before,
+  after = [],
+  worklist = [],
+  maxChars = COMPACTOR_MAX_CHARS,
+  targetChars = COMPACTOR_TARGET_CHARS,
+} = {}) {
+  const beforeMap = toCharMap(before);
+  const afterByPath = new Map((after ?? []).map((m) => [m.path, m]));
+  const wanted = [...new Set((worklist ?? []).filter(Boolean))];
+
+  const rows = wanted.map((path) => {
+    const beforeChars = beforeMap.has(path) ? beforeMap.get(path) : null;
+    const afterChars = afterByPath.has(path) ? afterByPath.get(path).chars : null;
+    const delta = beforeChars == null || afterChars == null ? null : afterChars - beforeChars;
+    return { path, beforeChars, afterChars, delta };
+  });
+
+  const shrunk = rows.filter((r) => r.delta != null && r.delta < 0);
+  const grew = rows.filter((r) => r.delta != null && r.delta > 0);
+  const unchanged = rows.filter((r) => r.delta === 0);
+  const missing = rows.filter((r) => r.beforeChars == null || r.afterChars == null);
+
+  const oversized = (after ?? []).filter((m) => m.oversized);
+  const wantedSet = new Set(wanted);
+  const newOversized = oversized.filter((m) => !wantedSet.has(m.path));
+  const missedTarget = selectAboveTarget(after, { worklist: wanted, targetChars });
+  const stillOversized = oversized.filter((m) => wantedSet.has(m.path));
+
+  const policyOk = oversized.length === 0 && missedTarget.length === 0;
+  const recovered =
+    !policyOk &&
+    shrunk.length > 0 &&
+    grew.length === 0 &&
+    missing.length === 0 &&
+    newOversized.length === 0;
+
+  return {
+    policyOk,
+    recovered,
+    openPr: policyOk || recovered,
+    shrunk,
+    grew,
+    unchanged,
+    missing,
+    newOversized,
+    missedTarget,
+    stillOversized,
+    rows,
+  };
+}
+
+/**
+ * Markdown table of before → after for the worklist, used in the step summary
+ * and the synthesised partial-PR body.
+ * @param {ReturnType<typeof assessCompactionProgress>} assessment
+ * @param {{maxChars?: number, targetChars?: number}} [options]
+ * @returns {string}
+ */
+export function formatProgressReport(
+  assessment,
+  { maxChars = COMPACTOR_MAX_CHARS, targetChars = COMPACTOR_TARGET_CHARS } = {}
+) {
+  const rows = assessment?.rows ?? [];
+  const lines = [
+    `| Guide | Before | After | Δ | Status |`,
+    `| --- | --- | --- | --- | --- |`,
+    ...rows.map((r) => {
+      const status = progressStatus(r, { maxChars, targetChars });
+      const before = r.beforeChars == null ? '—' : withSeparators(r.beforeChars);
+      const after = r.afterChars == null ? '—' : withSeparators(r.afterChars);
+      const delta = r.delta == null ? '—' : formatDelta(r.delta);
+      return `| \`${r.path}\` | ${before} | ${after} | ${delta} | ${status} |`;
+    }),
+  ];
+  const n = assessment?.shrunk?.length ?? 0;
+  const verdict = assessment?.policyOk
+    ? `All selected guides are at or below ${withSeparators(targetChars)} chars.`
+    : assessment?.recovered
+      ? `${n} selected guide(s) got smaller; the policy target was not met.`
+      : 'No recoverable progress — selected guides did not get smaller (or some grew).';
+  return `${verdict}\n\n${lines.join('\n')}`;
+}
+
+/**
+ * PR body written when Claude shrank guides but did not hit the target (and
+ * therefore may not have written `$PR_BODY_FILE`). The workflow opens this
+ * rather than discarding the shrinkage.
+ * @param {ReturnType<typeof assessCompactionProgress>} assessment
+ * @param {{maxChars?: number, targetChars?: number}} [options]
+ * @returns {string}
+ */
+export function buildPartialPrBody(
+  assessment,
+  { maxChars = COMPACTOR_MAX_CHARS, targetChars = COMPACTOR_TARGET_CHARS } = {}
+) {
+  const table = formatProgressReport(assessment, { maxChars, targetChars });
+  return `Partial CLAUDE.md compaction. The weekly policy target (≤ ${withSeparators(targetChars)} chars per selected guide; oversized at ${withSeparators(maxChars)}) was not met, but the selected guides did get smaller, so this PR lands the progress rather than discarding it.
+
+A later Saturday run will skip while this PR is open (the existing-PR dedup rule). Merge it so the next pass can continue.
+
+${table}
+
+## Validation
+
+${VALIDATION_COMMANDS.map((c) => `- \`${c}\``).join('\n')}
+`;
+}
+
 /** Group-separator formatting for readability in the table (10012 → 10,012). */
 function withSeparators(n) {
   return n.toLocaleString('en-US');
@@ -215,14 +430,6 @@ export function findExistingCompactionPr(openPrs) {
   }
   return null;
 }
-
-/** The exact commands the agent must run, quoted verbatim into the PR body. */
-const VALIDATION_COMMANDS = [
-  'npm run lint:docs',
-  'node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check',
-  'npx prettier --check <each changed markdown file>',
-  'npx vitest run --project dev-tools',
-];
 
 /**
  * Compose the compaction brief handed to claude-code-action. Pure: the caller
@@ -309,8 +516,11 @@ not characters. It is excluded from the worklist by construction; do not touch i
 
 1. Create the branch \`${branch || `${COMPACTION_BRANCH_PREFIX}<YYYY-MM-DD UTC>`}\` off the current checkout.
 2. Re-measure: run \`node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check\`.
-   **Do not proceed unless it passes** — every tracked guide must be below
-   ${withSeparators(maxChars)} chars and every stricter repo budget must still pass.
+   If it passes, proceed. If it fails **but every selected guide is strictly
+   smaller than the pre-run measurement and none grew**, still commit, push, and
+   write the PR body — a later workflow step opens a **partial** PR rather than
+   discarding the shrinkage. If nothing got smaller, or any selected guide grew,
+   push NOTHING and write no body file.
 3. Run \`npm run lint:docs\`, \`npx prettier --check\` on each changed markdown
    file, and \`npx vitest run --project dev-tools\`. Fix real failures; never
    weaken a gate to make one green. Skip the full test suite — these are
@@ -335,9 +545,10 @@ not characters. It is excluded from the worklist by construction; do not touch i
 ${VALIDATION_COMMANDS.map((c) => `   - \`${c}\``).join('\n')}
 7. **Never merge the PR.** Do not enable auto-merge. Do not poll CI afterwards —
    existing automation handles follow-up failures.
-8. Report a one-paragraph summary. If you are blocked, push NOTHING and write no
-   body file, then report the exact blocker — the deterministic step treats an
-   unpushed branch as a clean no-op, and an empty PR is worse than no PR.
+8. Report a one-paragraph summary. If you are blocked (nothing smaller, or a
+   selected guide grew), push NOTHING and write no body file, then report the
+   exact blocker — the deterministic step treats an unpushed branch as a clean
+   no-op, and an empty PR is worse than no PR.
 
 ${report ? `## Pre-run measurement\n\n${report}\n` : ''}`;
 }

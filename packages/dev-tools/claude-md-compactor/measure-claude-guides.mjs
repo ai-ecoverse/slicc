@@ -9,17 +9,24 @@ import { execFileSync } from 'node:child_process';
  * (>= MAX_CHARS, default 10,000 — a stricter, wider policy than the repo's own
  * 20,000-char `packages/*` gate; see `lib.mjs` for the distinction).
  *
- * Two modes:
+ * Three modes:
  *   (default)  Measure + query open PRs for the cross-run dedup rule, then
  *              write `has_oversized`, `oversized_count`, `branch`,
- *              `existing_pr`, `report`, and `prompt` to $GITHUB_OUTPUT and the
- *              table to $GITHUB_STEP_SUMMARY. Always exits 0 when measurement
- *              succeeds, including the clean no-op.
+ *              `existing_pr`, `before_sizes`, `report`, and `prompt` to
+ *              $GITHUB_OUTPUT and the table to $GITHUB_STEP_SUMMARY. Always
+ *              exits 0 when measurement succeeds, including the clean no-op.
  *   --check    Measure only and FAIL (exit 1) if any tracked guide is still at
  *              or above MAX_CHARS, or if any guide named in WORKLIST is above
  *              TARGET_CHARS. This is the post-compaction invariant, run
  *              deterministically by the workflow instead of trusted to the
  *              model. No GitHub API access, no outputs beyond the summary.
+ *   --progress After a failed --check: compare the working tree to BEFORE_SIZES
+ *              (the measure step's `before_sizes` output). Exit 0 and set
+ *              `recovered=true` when at least one worklist guide strictly
+ *              shrank and none grew — the workflow then opens a partial PR.
+ *              Exit 1 when nothing got smaller (Saturday 2026-08-30: Claude
+ *              ran, every selected guide was still at its pre-run size).
+ *              Writes a PR body to $PR_BODY_FILE if Claude left it empty.
  *
  * Pure logic (thresholds, selection, report, branch name, dedup rule, prompt)
  * lives in `lib.mjs` and is unit-tested. This file only does I/O. Mirrors
@@ -30,29 +37,41 @@ import { execFileSync } from 'node:child_process';
  *   GH_TOKEN       token for the GitHub API — same condition as REPO
  *   MAX_CHARS      override the 10,000-char oversized threshold  (optional)
  *   TARGET_CHARS   override the 9,500-char compaction target     (optional)
- *   WORKLIST       --check only: comma/newline-separated guide paths that were
- *                  handed to Claude, held to TARGET_CHARS instead of MAX_CHARS.
- *                  Emitted as the `worklist` output by the measuring run, since
- *                  a rewritten guide no longer looks oversized.
+ *   WORKLIST       --check/--progress: comma/newline-separated guide paths
+ *                  that were handed to Claude, held to TARGET_CHARS instead of
+ *                  MAX_CHARS. Emitted as the `worklist` output by the measuring
+ *                  run, since a rewritten guide no longer looks oversized.
+ *   BEFORE_SIZES   --progress: JSON object of path → pre-Claude char counts
+ *                  (the measure step's `before_sizes` output).
+ *   PR_BODY_FILE   --progress: write a synthesised partial-PR body here when
+ *                  Claude left the file missing or empty.
+ *   SHRUNK_PATHS_FILE --progress: newline-separated worklist paths that shrank,
+ *                  so the workflow can `git add` leftover working-tree edits.
  *   SKIP_PR_CHECK  '1' to skip the open-PR dedup query (offline runs)
  *   GITHUB_OUTPUT / GITHUB_STEP_SUMMARY  Actions files, written when present
  *
- * Exit 0 on a clean run (work found or not); 1 on a --check violation or an
- * unexpected API failure; 2 on missing required env.
+ * Exit 0 on a clean run (work found or not); 1 on a --check violation, a
+ * --progress with no recoverable shrinkage, or an unexpected API failure; 2
+ * on missing required env.
  */
 import { randomUUID } from 'node:crypto';
-import { appendFileSync, readFileSync } from 'node:fs';
+import { appendFileSync, readFileSync, writeFileSync } from 'node:fs';
 import { basename, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
+  assessCompactionProgress,
   buildBranchName,
+  buildPartialPrBody,
   buildPrompt,
   COMPACTION_PR_TITLE,
   COMPACTOR_MAX_CHARS,
   COMPACTOR_TARGET_CHARS,
   findExistingCompactionPr,
+  formatBeforeSizes,
+  formatProgressReport,
   formatReport,
   measureGuides,
+  parseBeforeSizes,
   parseWorklist,
   selectAboveTarget,
   selectOversized,
@@ -140,8 +159,81 @@ function logMeasurements(measurements, maxChars) {
   }
 }
 
+function existingBody(file) {
+  if (!file) return '';
+  try {
+    return readFileSync(file, 'utf8');
+  } catch {
+    return '';
+  }
+}
+
+function runProgressCheck(measurements, { maxChars, targetChars }) {
+  const worklist = parseWorklist(process.env.WORKLIST);
+  const before = parseBeforeSizes(process.env.BEFORE_SIZES);
+  const assessment = assessCompactionProgress({
+    before,
+    after: measurements,
+    worklist,
+    maxChars,
+    targetChars,
+  });
+  const progress = formatProgressReport(assessment, { maxChars, targetChars });
+  writeSummary(`## CLAUDE.md compaction progress\n\n${progress}`);
+  console.log(progress);
+
+  setOutput('recovered', assessment.recovered ? 'true' : 'false');
+  setOutput('open_pr', assessment.openPr ? 'true' : 'false');
+
+  const shrunkFile = (process.env.SHRUNK_PATHS_FILE ?? '').trim();
+  if (shrunkFile) {
+    const lines = assessment.shrunk.map((r) => r.path);
+    writeFileSync(shrunkFile, lines.length > 0 ? `${lines.join('\n')}\n` : '');
+  }
+
+  if (assessment.recovered) {
+    const bodyFile = (process.env.PR_BODY_FILE ?? '').trim();
+    if (bodyFile && existingBody(bodyFile).trim() === '') {
+      writeFileSync(bodyFile, buildPartialPrBody(assessment, { maxChars, targetChars }));
+      console.log(`Wrote partial PR body to ${bodyFile}`);
+    }
+    console.log(
+      `⚠️ Policy target missed, but ${assessment.shrunk.length} selected guide(s) got smaller — recovering with a partial PR.`
+    );
+    return;
+  }
+
+  if (assessment.policyOk) {
+    console.log('✅ Policy already met — nothing to recover.');
+    return;
+  }
+
+  if (assessment.grew.length > 0) {
+    for (const r of assessment.grew) {
+      console.error(
+        `::error file=${r.path}::${r.path} grew from ${r.beforeChars} to ${r.afterChars} chars.`
+      );
+    }
+  }
+  if (assessment.newOversized.length > 0) {
+    for (const m of assessment.newOversized) {
+      console.error(
+        `::error file=${m.path}::${m.path} is ${m.chars} chars and was not on the worklist — a new oversized guide.`
+      );
+    }
+  }
+  if (assessment.shrunk.length === 0) {
+    console.error('❌ No selected guide got smaller.');
+  }
+  console.error(
+    '❌ No recoverable progress: selected guides did not get smaller (or some grew / a new guide became oversized).'
+  );
+  process.exit(1);
+}
+
 async function main() {
   const check = process.argv.includes('--check');
+  const progress = process.argv.includes('--progress');
   const maxChars = intEnv('MAX_CHARS', COMPACTOR_MAX_CHARS);
   const targetChars = intEnv('TARGET_CHARS', COMPACTOR_TARGET_CHARS);
 
@@ -151,6 +243,11 @@ async function main() {
   const report = formatReport(measurements, { maxChars });
 
   logMeasurements(measurements, maxChars);
+
+  if (progress) {
+    runProgressCheck(measurements, { maxChars, targetChars });
+    return;
+  }
 
   if (check) {
     writeSummary(`## CLAUDE.md size check\n\n${report}`);
@@ -197,6 +294,9 @@ async function main() {
   // Carried into the post-Claude --check step: after a successful rewrite these
   // paths no longer look oversized, so the check cannot rediscover them.
   setOutput('worklist', oversized.map((m) => m.path).join(','));
+  // Pre-Claude sizes for --progress: a failed --check can still open a PR when
+  // these counts went down.
+  setOutput('before_sizes', formatBeforeSizes(oversized));
   setOutput('branch', branch);
   // The workflow, not Claude, opens the PR; exporting the title keeps the
   // `gh pr create` step and the brief on one constant.

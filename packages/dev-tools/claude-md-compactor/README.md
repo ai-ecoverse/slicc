@@ -62,24 +62,43 @@ PR as `action_required`: the PR sits at **zero checks** until a human clicks
 "Approve and run". The deterministic step is the same shape
 [`coverage-ratchet.yml`](../../../.github/workflows/coverage-ratchet.yml) uses.
 
-It runs **after** the `--check` invariant, so a compaction that failed the policy
-never becomes a PR, and it is a clean no-op (never a failure) when Claude pushed
-nothing, when the branch is not ahead of `origin/main`, or when no body file was
-written. This workflow applies no label, so it needs no second token — the
-`BOT_PAT`/`GITHUB_TOKEN` split for create-vs-label only matters in the sibling
-dispatchers ([boy-scout](../boy-scout-debt/README.md#why-claude-does-not-open-the-pr)),
+It runs after `--check` **or** a recovered partial: if `--check` fails but the
+selected guides actually got smaller (and none grew), `--progress` still opens
+the PR so the shrinkage is not discarded. A miss with no shrinkage (Claude ran
+and left every selected guide at its pre-run size) still must not become a PR.
+The open-PR step is a clean no-op (never a failure) when Claude pushed nothing,
+when the branch is not ahead of `origin/main`, or when no body file was written
+and `--progress` could not synthesise one. This workflow applies no label, so it
+needs no second token — the `BOT_PAT`/`GITHUB_TOKEN` split for create-vs-label
+only matters in the sibling dispatchers
+([boy-scout](../boy-scout-debt/README.md#why-claude-does-not-open-the-pr)),
 where `BOT_PAT`'s missing `issues` permission forces the label into its own
 `gh pr edit` call under `GITHUB_TOKEN`.
+
+## Partial recovery
+
+`--check` is the hard invariant and still fails the verify step when a selected
+guide is above `TARGET_CHARS`. That used to skip the PR (Actions `success()`
+gating; [run 33283868860](https://github.com/ai-ecoverse/slicc/actions/runs/33283868860)).
+The verify step now `continue-on-error`s into `--progress`, which compares the
+working tree to the measure step's `before_sizes` JSON:
+
+- at least one worklist guide strictly smaller, none larger, none missing, no
+  _new_ oversized guide off the worklist → exit 0, synthesise a PR body if
+  Claude left `$PR_BODY_FILE` empty, commit leftover working-tree shrinkage,
+  push, open a **partial** PR. Next Saturday skips while that PR is open.
+- otherwise → exit 1, no PR, same as before.
 
 ## Files
 
 - `lib.mjs` — pure logic: the policy constants, the excluded-guide predicate,
   `measureGuides`, `selectOversized`, `formatReport` (the before/after markdown
-  table), `buildBranchName`, `findExistingCompactionPr`, and `buildPrompt`. No
-  I/O; unit-tested in `lib.test.mjs`.
+  table), `buildBranchName`, `findExistingCompactionPr`, `buildPrompt`,
+  `assessCompactionProgress` / `formatProgressReport` / `buildPartialPrBody`
+  (the failed-`--check` recovery path). No I/O; unit-tested in `lib.test.mjs`.
 - `measure-claude-guides.mjs` — CLI (I/O only): the `git ls-files` walk, the file
-  reads, the open-PR query, `$GITHUB_OUTPUT` / `$GITHUB_STEP_SUMMARY` writes, and
-  the `--check` post-compaction gate.
+  reads, the open-PR query, `$GITHUB_OUTPUT` / `$GITHUB_STEP_SUMMARY` writes, the
+  `--check` post-compaction gate, and `--progress` recovery.
 
 ## Run it locally
 
@@ -93,24 +112,33 @@ REPO=ai-ecoverse/slicc SKIP_PR_CHECK=1 GH_TOKEN=x \
 WORKLIST=packages/foo/CLAUDE.md,packages/bar/CLAUDE.md \
   node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check
 
+# Recovery after a failed --check: exit 0 iff the worklist actually shrank
+WORKLIST=packages/foo/CLAUDE.md BEFORE_SIZES='{"packages/foo/CLAUDE.md":19998}' \
+  node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --progress
+
 # Unit tests
 npx vitest run --project dev-tools packages/dev-tools/claude-md-compactor/lib.test.mjs
 ```
 
 ### Environment variables
 
-| Var                   | Default      | Meaning                                                            |
-| --------------------- | ------------ | ------------------------------------------------------------------ |
-| `REPO`                | _(required)_ | `owner/repo` for the open-PR dedup query                           |
-| `GH_TOKEN`            | _(required)_ | Token for the GitHub API                                           |
-| `MAX_CHARS`           | `10000`      | Oversized threshold override                                       |
-| `TARGET_CHARS`        | `9500`       | Compaction target override                                         |
-| `SKIP_PR_CHECK`       | _(unset)_    | `1` skips the dedup query (offline runs; `REPO`/`GH_TOKEN` unused) |
-| `WORKLIST`            | _(unset)_    | `--check` only: the guides held to `TARGET_CHARS` (see below)      |
-| `GITHUB_OUTPUT`       | _(unset)_    | Actions output file; results appended when set                     |
-| `GITHUB_STEP_SUMMARY` | _(unset)_    | Actions summary file; the table appended when set                  |
+| Var                   | Default      | Meaning                                                               |
+| --------------------- | ------------ | --------------------------------------------------------------------- |
+| `REPO`                | _(required)_ | `owner/repo` for the open-PR dedup query                              |
+| `GH_TOKEN`            | _(required)_ | Token for the GitHub API                                              |
+| `MAX_CHARS`           | `10000`      | Oversized threshold override                                          |
+| `TARGET_CHARS`        | `9500`       | Compaction target override                                            |
+| `SKIP_PR_CHECK`       | _(unset)_    | `1` skips the dedup query (offline runs; `REPO`/`GH_TOKEN` unused)    |
+| `WORKLIST`            | _(unset)_    | `--check`/`--progress`: the guides held to `TARGET_CHARS` (see below) |
+| `BEFORE_SIZES`        | _(unset)_    | `--progress`: JSON object of path → pre-Claude char counts            |
+| `PR_BODY_FILE`        | _(unset)_    | `--progress`: synthesise a partial-PR body here if empty              |
+| `SHRUNK_PATHS_FILE`   | _(unset)_    | `--progress`: newline-separated paths that shrank                     |
+| `GITHUB_OUTPUT`       | _(unset)_    | Actions output file; results appended when set                        |
+| `GITHUB_STEP_SUMMARY` | _(unset)_    | Actions summary file; the table appended when set                     |
 
-`--check` needs only `WORKLIST`, and works without even that.
+`--check` needs only `WORKLIST`, and works without even that. `--progress` needs
+`BEFORE_SIZES` (and `WORKLIST`) to know whether the working tree is actually
+smaller than the pre-Claude measurement.
 
 ### Why `--check` needs the worklist
 
@@ -126,9 +154,12 @@ successfully rewritten guide no longer looks oversized to a fresh measurement.
 
 `has_oversized`, `oversized_count`, `branch`, `pr_title` (the fixed
 `COMPACTION_PR_TITLE`, consumed by the `gh pr create` step), `existing_pr`,
-`worklist`, and the multi-line `report` and `prompt`.
+`worklist`, `before_sizes` (JSON path → pre-Claude char counts, consumed by
+`--progress`), and the multi-line `report` and `prompt`. `--progress` adds
+`recovered` and `open_pr`.
 
 ## Exit codes
 
-`0` on a clean run (work found or not, including the no-op); `1` on a `--check`
-violation or an unexpected API failure; `2` on missing required env.
+`0` on a clean run (work found or not, including the no-op) and on a recovered
+`--progress`; `1` on a `--check` violation, a `--progress` with no shrinkage, or
+an unexpected API failure; `2` on missing required env.

@@ -70,7 +70,9 @@ Two details that are easy to get wrong and are therefore pinned by tests:
   10,000 → 9,500 across _every_ tracked `CLAUDE.md`. A 12,000-char guide passes
   `lint:docs` and is still compaction work. `packages/vfs-root/shared/CLAUDE.md`
   (3,000 **bytes**, bundled into the VFS) is excluded by construction. Sizes are
-  measured with `String.length`, never bytes.
+  measured with `String.length`, never bytes. A `--check` miss still opens a
+  **partial** PR when the selected guides actually got smaller (`--progress`);
+  unchanged or grown files do not become a PR.
 - **The flake hunter lists workflow runs one day at a time.**
   `GET /actions/runs` returns at most 1000 items however you page it, and this
   repo produces roughly 2,400 runs a week, so a window-wide query silently
