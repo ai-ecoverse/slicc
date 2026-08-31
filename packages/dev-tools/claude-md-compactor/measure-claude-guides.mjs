@@ -64,7 +64,6 @@ import { execFileSync } from 'node:child_process';
  *                  Claude left the file missing or empty.
  *   SHRUNK_PATHS_FILE --progress: newline-separated worklist paths that shrank,
  *                  so the workflow can `git add` leftover working-tree edits.
- *   ORIG_SHA       --publish-paths: pre-Claude checkout SHA (`github.sha`)
  *   PUBLISH_PATHS_FILE --publish-paths: output path list to copy onto origin/main
  *   SKIP_PR_CHECK  '1' to skip the open-PR dedup query (offline runs)
  *   GITHUB_OUTPUT / GITHUB_STEP_SUMMARY  Actions files, written when present
@@ -249,13 +248,35 @@ function gitNames(args) {
   }
 }
 
+function blobAtMain(path) {
+  try {
+    return execFileSync('git', ['show', `origin/main:${path}`], {
+      cwd: repoRoot,
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+    });
+  } catch {
+    return null;
+  }
+}
+
+/** True when the working-tree file is not byte-for-byte `origin/main`. */
+function differsFromMain(path) {
+  const abs = resolve(repoRoot, path);
+  if (!existsSync(abs)) return false;
+  const now = readFileSync(abs, 'utf8');
+  const main = blobAtMain(path);
+  return main === null || now !== main;
+}
+
 /**
- * Files Claude actually edited that may be copied onto origin/main. Excludes
- * the workflow PR's own files so a dispatch from a feature branch cannot leak
- * YAML/docs into the compaction PR.
+ * Files this shard may copy onto origin/main. Compare working-tree contents
+ * to origin/main — not `git diff --cached` vs the workflow-PR HEAD. Align
+ * stages every CLAUDE.md from main, so a cached-vs-HEAD diff packed
+ * already-compacted webapp/swift-launcher on dispatch 33368791853. Content
+ * vs main also picks up docs overflow even when #2676 lists that path.
  */
 function computePublishPaths() {
-  const orig = requireEnv('ORIG_SHA');
   let shrunk = [];
   const shrunkFile = (process.env.SHRUNK_PATHS_FILE ?? '').trim();
   if (shrunkFile) {
@@ -268,13 +289,12 @@ function computePublishPaths() {
       shrunk = [];
     }
   }
-  const claudeTouched = [
-    ...gitNames(['diff', '--name-only', orig, 'HEAD']),
-    ...gitNames(['diff', '--name-only', 'HEAD']),
-    ...gitNames(['diff', '--name-only', '--cached']),
-  ];
-  const workflowTouched = gitNames(['diff', '--name-only', 'origin/main', orig]);
-  return selectPublishPaths({ claudeTouched, workflowTouched, shrunk });
+  const candidates = [
+    ...gitNames(['ls-files', '--', '*CLAUDE.md']),
+    ...gitNames(['ls-files', '--', 'docs']),
+    ...gitNames(['ls-files', '-o', '--exclude-standard', '--', 'docs']),
+  ].filter(differsFromMain);
+  return selectPublishPaths({ claudeTouched: candidates, shrunk });
 }
 
 function runPublishPaths() {

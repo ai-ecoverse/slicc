@@ -141,7 +141,11 @@ jobs:
         with:
           node-version: 24
 
-      - name: Align CLAUDE.md with origin/main
+      # Guides AND docs/ from origin/main so overflow edits are against main,
+      # not the workflow PR's copy. Dispatch 33368791853 wrote four sections
+      # into docs/dev-tools-details.md then --pack dropped them because #2676
+      # also touches that file. Scripts stay from this checkout.
+      - name: Align CLAUDE.md and docs/ with origin/main
         run: |
           git fetch --quiet origin main
           files=$(git ls-files -- '*CLAUDE.md')
@@ -149,6 +153,7 @@ jobs:
             # shellcheck disable=SC2086
             git checkout origin/main -- $files
           fi
+          git checkout origin/main -- docs
 
       - name: Measure this guide
         id: shard
@@ -217,7 +222,6 @@ jobs:
           WORKLIST: ${{ steps.shard.outputs.worklist }}
           BEFORE_SIZES: ${{ steps.shard.outputs.before_sizes }}
           SHRUNK_PATHS_FILE: ${{ runner.temp }}/compactor-shrunk-paths.txt
-          ORIG_SHA: ${{ github.sha }}
           PACK_DIR: ${{ runner.temp }}/pack
         run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --pack
 

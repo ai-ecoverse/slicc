@@ -108,9 +108,11 @@ working tree to the measure step's `before_sizes` JSON:
 
 A dispatch from a workflow PR checks out `origin/main`'s `CLAUDE.md` files
 before measuring, so a compaction already merged (#2678) is not re-selected.
-`--publish-paths` always includes shrunk guides even if `git diff origin/main
-$ORIG_SHA` lists them (dispatch 33325727205 dropped a 19,998 → 9,280 rewrite
-that way).
+Compact shards also check out `origin/main`'s `docs/` so overflow is against
+main; `--pack` publishes working-tree files that differ from `origin/main`
+(dispatch 33368791853 / #2682 dropped Claude's `docs/dev-tools-details.md`
+sections because #2676 listed that path). YAML still cannot leak — only
+guides and `docs/` are eligible.
 
 ## Files
 
@@ -167,7 +169,6 @@ npx vitest run --project dev-tools packages/dev-tools/claude-md-compactor/lib.te
 | `BEFORE_SIZES`        | _(unset)_    | `--progress`: JSON object of path → pre-Claude char counts            |
 | `PR_BODY_FILE`        | _(unset)_    | `--progress`: synthesise a PR body here if empty                      |
 | `SHRUNK_PATHS_FILE`   | _(unset)_    | `--progress`: newline-separated paths that shrank                     |
-| `ORIG_SHA`            | _(unset)_    | `--publish-paths`: pre-Claude checkout SHA (`github.sha`)             |
 | `PUBLISH_PATHS_FILE`  | _(unset)_    | `--publish-paths`: guide and docs/ files to copy onto `origin/main`   |
 | `GITHUB_RUN_ID`       | _(unset)_    | appended to the compaction branch name (set automatically in Actions) |
 | `GITHUB_OUTPUT`       | _(unset)_    | Actions output file; results appended when set                        |

@@ -576,11 +576,22 @@ describe('selectPublishPaths', () => {
     ).toEqual(['packages/webapp/CLAUDE.md', 'docs/webapp-details.md']);
   });
 
-  it('drops files the workflow PR already changed versus origin/main', () => {
+  it('still publishes docs overflow when the workflow PR also touched that file', () => {
+    // Dispatch 33368791853: Claude added #first-load-size-gate etc. to
+    // docs/dev-tools-details.md; pack dropped it because #2676 listed the path.
     expect(
       selectPublishPaths({
-        claudeTouched: ['docs/dev-tools-details.md', 'packages/webapp/CLAUDE.md'],
+        claudeTouched: ['docs/dev-tools-details.md', 'packages/dev-tools/CLAUDE.md'],
         workflowTouched: ['docs/dev-tools-details.md', '.github/workflows/claude-md-compactor.yml'],
+        shrunk: ['packages/dev-tools/CLAUDE.md'],
+      })
+    ).toEqual(['packages/dev-tools/CLAUDE.md', 'docs/dev-tools-details.md']);
+  });
+
+  it('still drops YAML even when Claude somehow touched it', () => {
+    expect(
+      selectPublishPaths({
+        claudeTouched: ['packages/webapp/CLAUDE.md', '.github/workflows/claude-md-compactor.yml'],
         shrunk: ['packages/webapp/CLAUDE.md'],
       })
     ).toEqual(['packages/webapp/CLAUDE.md']);

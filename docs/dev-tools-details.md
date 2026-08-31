@@ -82,8 +82,11 @@ Two details that are easy to get wrong and are therefore pinned by tests:
   job copies them onto a new branch from `origin/main` (so a dispatch from a
   workflow PR cannot leak YAML) and synthesises the PR body if Claude left it
   empty. `--max-turns` is computed per shard (300 plus overflow), not a fixed 250. Measure uses `origin/main`'s `CLAUDE.md` files so a dispatch from this
-  workflow PR does not re-select a guide already compacted on main. An open
-  compaction PR claims its `CLAUDE.md` files rather than skipping the run.
+  workflow PR does not re-select a guide already compacted on main. Compact
+  shards also check out `origin/main`'s `docs/` and `--pack` publishes
+  working-tree files that differ from main, so overflow into a details file
+  the workflow PR itself edited is not dropped (#2682). An open compaction PR
+  claims its `CLAUDE.md` files rather than skipping the run.
 - **The flake hunter lists workflow runs one day at a time.**
   `GET /actions/runs` returns at most 1000 items however you page it, and this
   repo produces roughly 2,400 runs a week, so a window-wide query silently

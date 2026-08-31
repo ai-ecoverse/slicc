@@ -609,10 +609,16 @@ ${VALIDATION_COMMANDS.map((c) => `- \`${c}\``).join('\n')}
 }
 
 /**
- * Files the recover step may copy onto `origin/main`. Only worklist
- * `CLAUDE.md` files and `docs/` overflow Claude actually edited, never
- * files the workflow PR itself already changed (so a `workflow_dispatch`
- * from #2676 cannot leak YAML/docs from that PR into the compaction PR).
+ * Files a shard may copy onto `origin/main`. Worklist `CLAUDE.md` files and
+ * `docs/` overflow Claude actually edited. YAML/scripts cannot leak because
+ * they are neither guides nor `docs/`.
+ *
+ * Dispatch 33368791853 / #2682: Claude wrote four new sections into
+ * `docs/dev-tools-details.md`, then `--pack` dropped them because #2676 also
+ * touches that path (`workflowTouched`). Compact jobs now check out
+ * `origin/main`'s `docs/` before Claude runs, so the working-tree copy is
+ * main + overflow — publish Claude-touched docs even when the workflow PR
+ * listed the same path.
  * @param {{
  *   claudeTouched?: Array<string>,
  *   workflowTouched?: Array<string>,
@@ -620,11 +626,7 @@ ${VALIDATION_COMMANDS.map((c) => `- \`${c}\``).join('\n')}
  * }} [opts]
  * @returns {string[]}
  */
-export function selectPublishPaths({ claudeTouched = [], workflowTouched = [], shrunk = [] } = {}) {
-  const blocked = new Set((workflowTouched ?? []).filter(Boolean));
-  const mustPublish = new Set(
-    (shrunk ?? []).map((p) => String(p ?? '').replace(/^\.\//, '')).filter(Boolean)
-  );
+export function selectPublishPaths({ claudeTouched = [], shrunk = [] } = {}) {
   const out = [];
   const seen = new Set();
   for (const p of [...(shrunk ?? []), ...(claudeTouched ?? [])]) {
@@ -633,12 +635,6 @@ export function selectPublishPaths({ claudeTouched = [], workflowTouched = [], s
     const isGuide = path === 'CLAUDE.md' || path.endsWith('/CLAUDE.md');
     const isDocs = path === 'docs' || path.startsWith('docs/');
     if (!isGuide && !isDocs) continue;
-    // Dispatch 33325727205: 2676 was behind merged #2678, so
-    // `git diff origin/main $ORIG_SHA` listed packages/webapp/CLAUDE.md as
-    // a workflow-PR file and we dropped the rewrite that hit 9,280 chars.
-    // Shrunk guides and CLAUDE.md always publish; only docs/ overflow is
-    // filtered against the workflow PR's own files.
-    if (blocked.has(path) && !isGuide && !mustPublish.has(path)) continue;
     seen.add(path);
     out.push(path);
   }
