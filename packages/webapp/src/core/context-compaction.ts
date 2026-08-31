@@ -16,7 +16,7 @@
  */
 
 import type { AgentMessage } from '@earendil-works/pi-agent-core';
-import type { Api, Model, UserMessage } from '@earendil-works/pi-ai';
+import type { Api, Model, Usage, UserMessage } from '@earendil-works/pi-ai';
 import { completeSimple } from '@earendil-works/pi-ai/compat';
 // Deep import to the compaction submodule — the main entry re-exports 113 Node-only
 // modules that would break Vite's browser bundle. The compaction submodule itself
@@ -33,10 +33,13 @@ import { completeSimple } from '@earendil-works/pi-ai/compat';
 //   - branchSummary / compactionSummary: summary length
 // Verified against node_modules/@earendil-works/pi-coding-agent/dist/core/compaction/
 // compaction.js (function `estimateTokens`). Tool-result text payloads — including
-// the multi-megabyte blobs that `open --view` can emit — ARE counted, so no wrapper
-// is required here. The regression guard lives in
-// tests/core/context-compaction-real-estimator.test.ts which exercises the un-mocked
-// estimator end-to-end.
+// the multi-megabyte blobs that `open --view` can emit — ARE counted.
+//
+// What it does NOT count is `thinkingSignature` (see `estimateMessageTokens`),
+// which is why every local call site goes through that wrapper rather than
+// calling `estimateTokens` directly. The regression guards live in
+// tests/core/context-compaction-real-estimator.test.ts which exercises the
+// un-mocked estimator end-to-end.
 import {
   DEFAULT_COMPACTION_SETTINGS,
   estimateTokens,
@@ -432,7 +435,7 @@ function elideOversizedMessages(
   let elidedBytes = 0;
 
   const out = messages.map((msg) => {
-    const tokens = estimateTokens(msg);
+    const tokens = estimateMessageTokens(msg);
     if (tokens <= perMessageThreshold) return msg;
     const role = (msg as { role: string }).role;
     if (role !== 'toolResult' && role !== 'assistant') return msg;
@@ -493,13 +496,104 @@ function elideHopelessMessages(
   };
 }
 
+/**
+ * Characters of `thinkingSignature` carried by a message's thinking blocks.
+ *
+ * Anthropic returns every thinking block with an opaque signature that MUST be
+ * echoed back on the next request for multi-turn continuity, so it occupies
+ * real context on every subsequent turn. pi-coding-agent's `estimateTokens`
+ * walks only `block.thinking`, so the signature is invisible to it — and on a
+ * long thinking-heavy conversation the signatures dominate. A production
+ * `interview-me` scoop carried 1,099,252 signature chars against 1,933,000
+ * counted chars, so the local estimate came in at 496k while the provider
+ * reported 985k of a 1M window: the compaction trigger never armed and the
+ * scoop was heading for a hard context-overflow instead.
+ *
+ * Redacted thinking blocks have no `thinking` text at all — the whole payload
+ * lives in the signature — so for those this is the only thing to count.
+ */
+function thinkingSignatureChars(message: AgentMessage): number {
+  if (!hasRole(message, 'assistant')) return 0;
+  const content = (message as { content?: unknown }).content;
+  if (!Array.isArray(content)) return 0;
+  let chars = 0;
+  for (const block of content) {
+    const b = block as { type?: string; thinkingSignature?: string };
+    if (b.type === 'thinking' && typeof b.thinkingSignature === 'string') {
+      chars += b.thinkingSignature.length;
+    }
+  }
+  return chars;
+}
+
+/**
+ * Estimated tokens for one message: the upstream heuristic plus the content it
+ * structurally cannot see. Every local call site uses this instead of
+ * `estimateTokens` so the trigger, the oversized-message threshold, and the
+ * cut-point walk all price a message the same way.
+ */
+function estimateMessageTokens(message: AgentMessage): number {
+  return estimateTokens(message) + Math.ceil(thinkingSignatureChars(message) / 4);
+}
+
 /** Sum the estimated token cost of a message list. */
 function estimateTotalTokens(messages: AgentMessage[]): number {
   let total = 0;
   for (const msg of messages) {
-    total += estimateTokens(msg);
+    total += estimateMessageTokens(msg);
   }
   return total;
+}
+
+/**
+ * Index of the last assistant message carrying usage the provider actually
+ * reported. Mirrors pi-coding-agent's own skip rules: an aborted or errored
+ * turn, or an all-zero usage record, tells us nothing about context size.
+ */
+function lastReportedUsageIndex(messages: AgentMessage[]): number {
+  for (let i = messages.length - 1; i >= 0; i--) {
+    if (!hasRole(messages[i], 'assistant')) continue;
+    const m = messages[i] as { stopReason?: string; usage?: Usage };
+    if (m.stopReason === 'aborted' || m.stopReason === 'error') continue;
+    const u = m.usage;
+    if (!u) continue;
+    if (contextTokensFromUsage(u) > 0) return i;
+  }
+  return -1;
+}
+
+/** Prompt size the provider reported for a turn. */
+function contextTokensFromUsage(usage: Usage): number {
+  return usage.totalTokens || usage.input + usage.output + usage.cacheRead + usage.cacheWrite;
+}
+
+/**
+ * Context size for the compaction trigger: the provider's own accounting when
+ * we have it, the chars/4 heuristic otherwise.
+ *
+ * The heuristic is structurally optimistic — it can only count fields it knows
+ * about, and it divides by a constant 4 that runs generous for the code and
+ * JSON that fills an agent transcript. The last assistant turn's `usage` is the
+ * provider stating exactly how large the prompt it just read was, so prefer it
+ * for the prefix it covers and estimate only the messages appended since.
+ *
+ * Taking `max` with the pure heuristic keeps the answer monotone in what we can
+ * see: a stale, missing, or under-reported usage can never make the total look
+ * smaller than the messages themselves.
+ *
+ * Only the trigger uses this. Everything downstream re-measures with the
+ * heuristic on purpose — once elision has rewritten messages, a usage record
+ * describing the pre-elision prefix is stale and would overstate the result.
+ */
+function estimateContextTokens(messages: AgentMessage[]): number {
+  const heuristic = estimateTotalTokens(messages);
+  const index = lastReportedUsageIndex(messages);
+  if (index === -1) return heuristic;
+  let reported = contextTokensFromUsage((messages[index] as { usage: Usage }).usage);
+  for (let i = index + 1; i < messages.length; i++) {
+    reported += estimateMessageTokens(messages[i]);
+  }
+  return Math.max(heuristic, reported);
 }
 
 /** Whether compaction changed the message sequence rather than returning a true no-op. */
@@ -671,7 +765,7 @@ function selectCompactionSlices(
   let keptTokens = 0;
   let cutIndex = workingMessages.length;
   for (let i = workingMessages.length - 1; i >= 0; i--) {
-    const msgTokens = estimateTokens(workingMessages[i]);
+    const msgTokens = estimateMessageTokens(workingMessages[i]);
     if (keptTokens + msgTokens > keepRecentTokens && cutIndex < workingMessages.length) {
       break;
     }
@@ -840,7 +934,7 @@ export function createCompactContext(
   ): Promise<AgentMessage[]> => {
     if (messages.length === 0) return messages;
 
-    const totalTokens = estimateTotalTokens(messages);
+    const totalTokens = estimateContextTokens(messages);
     if (!options?.force && !shouldCompact(totalTokens, contextWindow, settings)) {
       return messages;
     }
@@ -973,7 +1067,7 @@ export async function compactContext(messages: AgentMessage[]): Promise<AgentMes
   // Estimate total tokens
   let totalTokens = 0;
   for (const msg of messages) {
-    totalTokens += estimateTokens(msg);
+    totalTokens += estimateMessageTokens(msg);
   }
 
   // Use default settings for threshold check
@@ -987,7 +1081,7 @@ export async function compactContext(messages: AgentMessage[]): Promise<AgentMes
   let keptTokens = 0;
   let cutIndex = messages.length;
   for (let i = messages.length - 1; i >= 0; i--) {
-    const msgTokens = estimateTokens(messages[i]);
+    const msgTokens = estimateMessageTokens(messages[i]);
     if (keptTokens + msgTokens > keepRecentTokens && cutIndex < messages.length) {
       break;
     }
