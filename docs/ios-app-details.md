@@ -36,6 +36,14 @@ iCloud discovery only covers what the macOS launcher advertises, so a join URL p
 
 Display is `ICloudSessionList.recentRows`: trays the live iCloud list already shows are filtered out by the shared one-way id (one tray, one row), then `RecentJoinStore.rank` sorts reachable-first, newest-connected second, and caps at five — the cap after the ranking, so a session that still answers can displace a fresher dead one. Rows render the label, or the host when a pasted URL has none; the path carries the session secret and never reaches the screen. Swipe-to-Remove and Clear Stored Data clear only this device's key, so a row another device recorded can sync back. Both lists probe on `onAppear` **and** on store change: iCloud can push a row in while the sheet is open, and an unprobed id counts as presumed-reachable, so it would sort above known-live rows and hide its "not responding" note until the sheet was reopened.
 
+## Terminal
+
+`InMemoryTerminalSession` + `TerminalClient` exec against the leader shell (`hello.capabilities.exec`); one virtual shell per connection, Ctrl-C → `SIGINT` until `exec.response`.
+
+## Push to talk
+
+Hold the empty composer to dictate (`PttController` + `SFSpeechRecognizer`); release calls `InputBar.submit(_:dictated:)`. Only dictated replies speak (English → Kokoro, else `AVSpeechSynthesizer`; typed turns stay silent). `AudioSessionCoordinator` solely owns `AVAudioSession`. UI-test hooks `-uiTestSpeechPermission/Script`, `-uiTestPttStage`.
+
 ## Local Kokoro models
 
 Settings downloads the anonymous, revision-pinned ~83 MB Hugging Face pack after Wi-Fi consent with progress, cancel, retry, and removal; replies never provision. Pack: nine CoreML stages, two vocabularies, `af_heart`. Marker/cache delete together; weights are not committed. Live-simulator QA: [`docs/ios-simulator-qa.md`](ios-simulator-qa.md).
@@ -272,6 +280,17 @@ Outputs land in `.build/coverage/`. The gate runs only `SliccFollowerTests`, dis
 - **Sharding across the matrix was tried and is not worth it.** Observed on a full run: a GA cell is **26-28 min** for the whole bundle (iPhone also carries the unit suite), and the two run concurrently, so the iOS legs cost ~28 min of wall clock. Roughly 10 min of that is the build, and the build is paid **per cell** — so a 4-way split trades ~15 min of test time for three extra builds, and the `macos-latest` pool is shared with the seven `swift-*` jobs anyway (peak 4 concurrent), so eight cells queue in waves. It worked out to ~38 min wall clock for ~152 runner-minutes against ~84. If this ever does need to come down, the lever is fewer builds, not more cells: `build-for-testing` once plus `test-without-building` per cell. (And beware measuring pool concurrency from one job's cells alone — that reads its _share_ of a contended pool, not the pool.)
 - **Getting a test out of CI** means adding it to that registry with a written reason, and an issue if it is debt rather than a permanent runner limitation. `npm run lint:ios-ui-tests` rejects an entry naming a class or method that no longer exists, so the escape hatch cannot rot into suppressing nothing. Currently excluded: `ComposerKeyboardUITests` (drives `typeKey`, needs a hardware keyboard), two `FixtureConversationUITests` cases that fail on main, and `InboundActionsUITests`.
 - **The unit suite dirties the simulator for the UI suite.** `InboundActionsUITests` passes on a clean device and fails once `SliccFollowerTests` has run there — which is why it is red on the iPhone GA cell (coverage step then UI step, same simulator), green on iPad (no unit step), and green on any developer Mac running the UI bundle alone. The state persists across app launches, so `-retry-tests-on-failure` cannot rescue it. When a UI test fails **only in CI**, suspect this before suspecting flake: reproduce with `simctl erase`, then the unit suite, then the UI class.
+
+## App icon
+
+`Assets.xcassets/AppIcon.appiconset` carries three 1024s: `Icon-Default`, `Icon-Dark`, `Icon-Tinted`. `Icon-Tinted` is **hand-authored, not a desaturation of the colour icon** — master at `packages/assets/logos/slicc-icon-tinted-master-1024.png`. iOS tinted mode maps the asset's _luminance_ onto the user's tint, so an asset confined to the top of the range can only render as a flat blob; the current one spans the full range (min 0, σ 81) by seating a bright swirl in a near-black tub. Re-check `min`/`stddev` before replacing it:
+
+```bash
+magick Icon-Tinted.png -alpha remove -colorspace Gray \
+  -format "min=%[fx:minima*255] sd=%[fx:standard_deviation*255]\n" info:
+```
+
+`Icon-Tinted` is full-bleed square (iOS applies its own superellipse mask), unlike `Icon-Dark` (pre-rounded transparent corners). The macOS side does **not** consume this PNG — Sliccstart derives its tinted appearance from `macos-icon.icon`; see [swift-launcher](../packages/swift-launcher/CLAUDE.md#app-icon).
 
 ## Exec capability
 
