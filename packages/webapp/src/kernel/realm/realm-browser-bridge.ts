@@ -3,6 +3,7 @@
  * eval, cookie/localStorage reads, `browser.fetch`, and the websocket
  * observer. Extracted from `js-realm-shared.ts`; no behavior change.
  */
+import { encodeMultipartFormData, isFormDataBody } from '../../base/multipart-form-data.js';
 import {
   type BrowserFetchOptions,
   type BrowserFetchResult,
@@ -74,10 +75,12 @@ async function serializeRequestBody(
     const bytes = new Uint8Array(body.buffer, body.byteOffset, body.byteLength);
     return { body: bytesToLatin1(bytes), defaultContentType: 'application/octet-stream' };
   }
-  if (typeof FormData !== 'undefined' && body instanceof FormData) {
-    throw new Error(
-      'node fetch shim: FormData request bodies are not supported (post raw application/x-www-form-urlencoded with URLSearchParams instead)'
-    );
+  if (isFormDataBody(body)) {
+    // The boundary is minted alongside the bytes and travels as the default
+    // Content-Type; `multipart/form-data` is not a text content type, so the
+    // proxy decodes this latin1 string back to raw bytes before sending.
+    const multipart = await encodeMultipartFormData(body);
+    return { body: bytesToLatin1(multipart.bytes), defaultContentType: multipart.contentType };
   }
   if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) {
     throw new Error(
@@ -85,7 +88,7 @@ async function serializeRequestBody(
     );
   }
   throw new Error(
-    `node fetch shim: unsupported request body type (${Object.prototype.toString.call(body)}); use a string, Uint8Array, ArrayBuffer, Blob, or URLSearchParams`
+    `node fetch shim: unsupported request body type (${Object.prototype.toString.call(body)}); use a string, Uint8Array, ArrayBuffer, Blob, FormData, or URLSearchParams`
   );
 }
 

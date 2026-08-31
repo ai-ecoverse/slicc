@@ -66,10 +66,46 @@ describe('serializeRequestInit', () => {
     expect(form?.headers).toEqual({});
   });
 
-  it('rejects unsupported FormData and ReadableStream bodies explicitly', async () => {
-    await expect(serializeRequestInit({ body: new FormData() }, '/form')).rejects.toThrow(
-      'node fetch shim: FormData request bodies are not supported (post raw application/x-www-form-urlencoded with URLSearchParams instead)'
+  it('serializes a FormData body as multipart with a matching boundary', async () => {
+    const form = new FormData();
+    form.append('purpose', 'assistants');
+    form.append('file', new Blob([new Uint8Array(expectedBytes)], { type: 'text/plain' }), 'a.txt');
+
+    const serialized = await serializeRequestInit({ method: 'post', body: form }, '/upload');
+
+    const contentType = serialized?.headers as Record<string, string>;
+    expect(contentType['Content-Type']).toMatch(/^multipart\/form-data; boundary=.+/);
+
+    // Reparse with the platform's multipart parser: this proves the header's
+    // boundary matches the body's delimiters AND that the high bytes survived
+    // the latin1 hop the fetch proxy decodes back to raw bytes.
+    const bytes = getFetchBodyBytes(serialized?.body as string) as Uint8Array;
+    const parsed = await new Response(bytes as unknown as BodyInit, {
+      headers: { 'content-type': contentType['Content-Type'] },
+    }).formData();
+    expect(parsed.get('purpose')).toBe('assistants');
+    const file = parsed.get('file') as File;
+    expect(file.name).toBe('a.txt');
+    expect(Array.from(new Uint8Array(await file.arrayBuffer()))).toEqual(expectedBytes);
+  });
+
+  it('leaves a caller-provided multipart Content-Type on a FormData body alone', async () => {
+    const form = new FormData();
+    form.append('a', 'b');
+
+    const serialized = await serializeRequestInit(
+      {
+        method: 'post',
+        headers: { 'CONTENT-TYPE': 'multipart/form-data; boundary=mine' },
+        body: form,
+      },
+      '/upload'
     );
+
+    expect(serialized?.headers).toEqual({ 'CONTENT-TYPE': 'multipart/form-data; boundary=mine' });
+  });
+
+  it('rejects unsupported ReadableStream bodies explicitly', async () => {
     await expect(
       serializeRequestInit({ body: new ReadableStream<Uint8Array>() }, '/stream')
     ).rejects.toThrow(

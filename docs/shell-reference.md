@@ -1856,6 +1856,33 @@ await fs.writeFile('/output.jpg', newBytes);
 
 Network requests are proxied to handle CORS and cross-origin restrictions.
 
+### Request Bodies
+
+`SecureFetch` carries a `body: string`, so every non-text payload rides the
+**latin1 convention** (one character per byte) and `prepareRequestBody` decodes
+it back to raw bytes whenever the Content-Type is not text-shaped. Both the
+`.jsh` `fetch` global and the kernel realm's `fetch` RPC accept:
+
+| Body                                       | Wire form        | Default `Content-Type` (caller always wins)            |
+| ------------------------------------------ | ---------------- | ------------------------------------------------------ |
+| `string`                                   | verbatim         | none                                                   |
+| `URLSearchParams`                          | `toString()`     | `application/x-www-form-urlencoded;charset=UTF-8`      |
+| `Uint8Array` / `ArrayBuffer` / typed array | latin1           | `application/octet-stream`                             |
+| `Blob` / `File`                            | latin1           | the blob's own `type`, else `application/octet-stream` |
+| `FormData`                                 | latin1 multipart | `multipart/form-data; boundary=<token>`                |
+| `ReadableStream`                           | —                | rejected; collect it into a `Uint8Array` first         |
+
+`multipart/form-data` is serialized by `webapp/src/base/multipart-form-data.ts`
+— the single encoder, also used by the DA mount backend. **The boundary token
+is minted in the same call that lays down the delimiters** and returned as a
+ready-made Content-Type; never generate one separately, because a header that
+disagrees with the body makes the request unparseable server-side. Field names
+and filenames are escaped per the WHATWG algorithm (`"` / CR / LF → `%22` /
+`%0D` / `%0A`), so a crafted name cannot forge a part header.
+
+`browser.fetch` takes the same shapes but rebuilds a real `FormData` in the
+page instead, letting the page's own `fetch` set the boundary.
+
 ### CLI Mode
 
 Express server provides `/api/fetch-proxy`:

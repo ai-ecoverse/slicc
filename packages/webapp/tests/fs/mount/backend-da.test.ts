@@ -130,19 +130,24 @@ describe('DaMountBackend writeFile', () => {
 
     const call = mock.calls[0];
     expect(call.method).toBe('POST');
-    expect(call.headers['content-type']).toMatch(/^multipart\/form-data; boundary=----DaMount/);
+    expect(call.headers['content-type']).toMatch(
+      /^multipart\/form-data; boundary=----SliccFormBoundary[0-9a-f]{32}$/
+    );
     // For a fresh file (nothing in cache) → If-None-Match: * (not if-match).
     expect(call.headers['if-none-match']).toBe('*');
     expect(call.headers['if-match']).toBeUndefined();
 
     // Body should be a multipart envelope with a `data` field, an inner
     // Content-Type of text/html (derived from .html extension), and the
-    // user's body bytes. We don't bother fully parsing — just spot-check
-    // the structure.
-    const bodyStr = new TextDecoder().decode(call.body as Uint8Array);
-    expect(bodyStr).toContain('Content-Disposition: form-data; name="data"; filename="test.html"');
-    expect(bodyStr).toContain('Content-Type: text/html');
-    expect(bodyStr).toContain('foo\n');
+    // user's body bytes. Reparse with the platform's multipart parser so the
+    // header's boundary is proven to match the body's delimiters.
+    const parsed = await new Response(call.body as unknown as BodyInit, {
+      headers: { 'content-type': call.headers['content-type'] },
+    }).formData();
+    const file = parsed.get('data') as File;
+    expect(file.name).toBe('test.html');
+    expect(file.type).toBe('text/html');
+    expect(await file.text()).toBe('foo\n');
   });
 
   it('uses application/json mime for .json files', async () => {
