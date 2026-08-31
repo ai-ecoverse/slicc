@@ -2,16 +2,17 @@
 
 A weekly job that keeps the repo's machine-read instruction guides small. Every
 Saturday night a deterministic Node step measures every **tracked** file named
-`CLAUDE.md` and hands the **single largest** oversized guide to
-`claude-code-action` (one file per run, same shape as the boy-scout dispatcher).
-Claude rewrites it in the working tree (no git, no tests). A deterministic
-workflow step then copies those files onto **one** branch from `origin/main`
-and opens exactly **one** pull request from it (see
+`CLAUDE.md` and fans out **one `claude-code-action` job per oversized guide**.
+Each shard rewrites its file in the working tree (no git, no tests) and uploads
+an artifact. A consolidate job copies every packed shard onto **one** branch
+from `origin/main` and opens exactly **one** pull request (see
 [Why Claude does not open the PR](#why-claude-does-not-open-the-pr)). Nothing
 oversized → no branch, no PR; silence is a valid outcome. Driven by
-`.github/workflows/claude-md-compactor.yml`. Handing Claude every oversized
-guide at once made it spawn-and-wait for subagents and end the turn with zero
-edits ([dispatch 33309651347](https://github.com/ai-ecoverse/slicc/actions/runs/33309651347)).
+`.github/workflows/claude-md-compactor.yml`. Handing **one** Claude every
+oversized guide at once made it spawn-and-wait for subagents and end the turn
+with zero edits
+([dispatch 33309651347](https://github.com/ai-ecoverse/slicc/actions/runs/33309651347))
+— that is why the work is sharded, not why we leave files for next Saturday.
 Mirrors the `packages/dev-tools/codebase-sins/` layout (pure logic + CLI +
 co-located tests run by the `dev-tools` vitest project).
 
@@ -45,15 +46,20 @@ selected for compaction.
 
 ## Cross-run deduplication
 
-GitHub-native: the CLI queries open PRs and reports the first whose head branch
-starts with `automation/weekend-claude-compaction-` or whose title starts with
-`chore(docs): compact CLAUDE.md guides`. The workflow then skips the Claude step.
-No state file, no state branch, no Actions cache.
+GitHub-native and **file-level** (same claimed-file idea as the boy-scout
+dispatcher): the CLI queries open PRs whose head branch starts with
+`automation/weekend-claude-compaction-` or whose title starts with
+`chore(docs): compact CLAUDE.md guides`, reads each PR's changed files, and
+drops those `CLAUDE.md` paths from the worklist. Other oversized guides still
+fan out — an in-flight compaction PR (#2679 in the merge queue) must not freeze
+`ios-app` / `webcomponents` / …. No state file, no state branch, no Actions
+cache.
 
 ## Why Claude does not open the PR
 
-Two phases, deliberately: **Claude only edits the worklist (and overflow under
-`docs/`)**. The recover step copies those files onto a branch from `origin/main`,
+Two phases, deliberately: **each Claude shard only edits its one guide (and
+overflow under `docs/`)**. `--pack` writes those files to an artifact; the
+consolidate job overlays every shard onto a branch from `origin/main`,
 synthesises `$PR_BODY_FILE` if Claude left it empty, and a later shell step opens
 the PR with `GH_TOKEN: secrets.BOT_PAT`, using the `pr_title` output so the title
 stays on the `COMPACTION_PR_TITLE` constant. The brief forbids `gh pr create`
@@ -97,7 +103,7 @@ working tree to the measure step's `before_sizes` JSON:
   copy those files onto a new branch from `origin/main`, `git push --no-verify`
   (husky pre-push is a human gate; dispatch 33315681779 compacted then died
   there on dead anchors Claude left — CI on the PR still checks those), open
-  the PR. Next Saturday skips while that PR is open.
+  the PR. Next Saturday skips the guides that PR already touches.
 - otherwise → exit 1, no PR, same as before.
 
 A dispatch from a workflow PR checks out `origin/main`'s `CLAUDE.md` files
@@ -109,15 +115,18 @@ that way).
 ## Files
 
 - `lib.mjs` — pure logic: the policy constants, the excluded-guide predicate,
-  `measureGuides`, `selectOversized`, `formatReport` (the before/after markdown
-  table), `buildBranchName`, `findExistingCompactionPr`, `buildPrompt`,
+  `measureGuides`, `selectOversized` / `selectWorklist` / `parseMaxGuides`,
+  `formatReport` (the before/after markdown table), `buildBranchName`,
+  `listCompactionPrs` / `blockedGuidePaths` / `excludeBlockedGuides`,
+  `buildCompactMatrix` / `guideSafeName`, `buildPrompt`,
   `assessCompactionProgress` / `formatProgressReport` / `buildPartialPrBody` /
-  `buildCompactionPrBody` / `selectPublishPaths` / `computeMaxTurns` (the
-  failed-`--check` recovery path and the per-worklist `--max-turns` budget).
-  No I/O; unit-tested in `lib.test.mjs`.
+  `buildCompactionPrBody` / `selectPublishPaths` / `computeMaxTurns` /
+  `mergeShardProgress` (the failed-`--check` recovery path, the per-shard
+  `--max-turns` budget, and consolidate). No I/O; unit-tested in `lib.test.mjs`.
 - `measure-claude-guides.mjs` — CLI (I/O only): the `git ls-files` walk, the file
   reads, the open-PR query, `$GITHUB_OUTPUT` / `$GITHUB_STEP_SUMMARY` writes, the
-  `--check` post-compaction gate, `--progress` recovery, and `--publish-paths`.
+  `--check` post-compaction gate, `--progress` recovery, `--publish-paths`,
+  `--pack` (per-shard artifact), and `--assemble` (consolidate).
 
 ## Run it locally
 
@@ -147,7 +156,12 @@ npx vitest run --project dev-tools packages/dev-tools/claude-md-compactor/lib.te
 | `GH_TOKEN`            | _(required)_ | Token for the GitHub API                                              |
 | `MAX_CHARS`           | `10000`      | Oversized threshold override                                          |
 | `TARGET_CHARS`        | `9500`       | Compaction target override                                            |
-| `MAX_TURNS`           | _(computed)_ | override `--max-turns`; default is 300 × worklist plus overflow       |
+| `MAX_GUIDES`          | `0` (all)    | fan-out cap; `0` = every oversized guide, a positive N = largest N    |
+| `GUIDE`               | _(unset)_    | compact-job: this shard's single worklist path                        |
+| `MAX_TURNS`           | _(computed)_ | override `--max-turns`; default is 300 plus overflow for that shard   |
+| `PACK_DIR`            | _(unset)_    | `--pack`: write `progress.json` + `files/` here                       |
+| `PACKS_DIR`           | _(unset)_    | `--assemble`: directory of per-shard `PACK_DIR` trees                 |
+| `ASSEMBLE_PATHS_FILE` | _(unset)_    | `--assemble`: combined publish path list                              |
 | `SKIP_PR_CHECK`       | _(unset)_    | `1` skips the dedup query (offline runs; `REPO`/`GH_TOKEN` unused)    |
 | `WORKLIST`            | _(unset)_    | `--check`/`--progress`: the guides held to `TARGET_CHARS` (see below) |
 | `BEFORE_SIZES`        | _(unset)_    | `--progress`: JSON object of path → pre-Claude char counts            |
@@ -175,14 +189,15 @@ successfully rewritten guide no longer looks oversized to a fresh measurement.
 
 ### Outputs
 
-`has_oversized`, `oversized_count`, `branch`, `pr_title` (the fixed
+`has_oversized`, `oversized_count`, `matrix` (dynamic Actions `include` of
+`guide` / `safe_name` / `max_turns` / `chars`), `branch`, `pr_title` (the fixed
 `COMPACTION_PR_TITLE`, consumed by the `gh pr create` step), `existing_pr`,
 `worklist`, `before_sizes` (JSON path → pre-Claude char counts, consumed by
-`--progress`), `max_turns` (300 per worklist file plus overflow, capped at
-600; consumed by `--max-turns`. A fixed 250 starved a 20k guide in
+`--progress` / `--pack`), `max_turns` (300 plus overflow for this shard, capped
+at 600; consumed by `--max-turns`. A fixed 250 starved a 20k guide in
 [dispatch 33320764465](https://github.com/ai-ecoverse/slicc/actions/runs/33320764465)),
-and the multi-line `report` and `prompt`. `--progress` adds `recovered` and
-`open_pr`.
+and the multi-line `report` and `prompt`. `--pack` adds `packed`; `--assemble`
+adds `packed_shards`.
 
 ## Exit codes
 

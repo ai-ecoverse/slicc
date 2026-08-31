@@ -23,21 +23,25 @@ its `README.md` for label semantics and workflow behavior.
 
 ## scheduled-agentic-workflows
 
-Five scheduled agents that read repository or CI state, pick at most one piece
-of work, and hand it to `claude-code-action`. Each is the same two-part shape,
-which is the house pattern for every agentic workflow here (see also
-`rum-error-triage.yml` and `agentic-debt-triage.yml`): a **deterministic Node
-selector** that does all the enumerating, filtering, and dedup and writes a
-composed prompt to `$GITHUB_OUTPUT`, then **one Claude step** that does the
-work. Judgement that can be expressed as a rule belongs in the selector, where
-it is unit-tested in the `dev-tools` vitest project; only the judgement that
-genuinely needs a model is left to Claude.
+Five scheduled agents that read repository or CI state, pick work, and hand it
+to `claude-code-action`. Four of them pick at most one piece of work. The
+CLAUDE.md compactor is the exception: it fans out one Claude job per oversized
+guide and consolidates the shards into a single PR — one Claude given every
+oversized file at once spawned-and-waited and wrote nothing (dispatch
+33309651347). Each is otherwise the same two-part shape, which is the house
+pattern for every agentic workflow here (see also `rum-error-triage.yml` and
+`agentic-debt-triage.yml`): a **deterministic Node selector** that does all the
+enumerating, filtering, and dedup and writes a composed prompt to
+`$GITHUB_OUTPUT`, then **Claude** that does the work. Judgement that can be
+expressed as a rule belongs in the selector, where it is unit-tested in the
+`dev-tools` vitest project; only the judgement that genuinely needs a model is
+left to Claude.
 
 | Directory              | Workflow                        | Cadence     | Picks                                                      |
 | ---------------------- | ------------------------------- | ----------- | ---------------------------------------------------------- |
 | `boy-scout-debt/`      | `boy-scout-debt-dispatcher.yml` | daily 02:17 | one tractable file on a boy-scout debt list → cleanup PR   |
 | `pr-fix-dispatcher/`   | `pr-fix-dispatcher.yml`         | every 2h    | failing automation PRs → re-run, fix, or skip              |
-| `claude-md-compactor/` | `claude-md-compactor.yml`       | Sat 22:40   | oversized `CLAUDE.md` guides → one compaction PR           |
+| `claude-md-compactor/` | `claude-md-compactor.yml`       | Sat 22:40   | every oversized `CLAUDE.md` (one Claude each) → one PR     |
 | `flaky-ci-hunter/`     | `flaky-ci-hunter.yml`           | Mon 06:50   | one job with proven same-commit flips → determinism fix PR |
 | `backlog-dispatcher/`  | `backlog-dispatcher.yml`        | daily 09:35 | open issues that look ready → authored PRs                 |
 
@@ -54,8 +58,8 @@ itself, which cannot drift from reality the way a committed ledger can:
   technique as `<!-- rum-fp:… -->` in `rum-error-triage.yml`. The `ci-fix-*`
   labels are human-visible markers only and are deliberately **not** the dedup
   key, so relabelling a PR by hand cannot cause a double dispatch.
-- _"a compaction PR is already open"_ → an open PR whose head branch or title
-  carries the compaction prefix.
+- _"a compaction PR is already open"_ → the `CLAUDE.md` files on that PR are
+  claimed; other oversized guides still fan out.
 - _"this flaky job is in cooldown"_ → the `automation/flaky-fix/<slug>` PRs;
   the branch name is the registry key and the PR dates are the clock.
 - _"this issue was already decided"_ → a `backlog-*` (or legacy `cosmos-*`)
@@ -70,16 +74,16 @@ Two details that are easy to get wrong and are therefore pinned by tests:
   10,000 → 9,500 across _every_ tracked `CLAUDE.md`. A 12,000-char guide passes
   `lint:docs` and is still compaction work. `packages/vfs-root/shared/CLAUDE.md`
   (3,000 **bytes**, bundled into the VFS) is excluded by construction. Sizes are
-  measured with `String.length`, never bytes. One oversized guide per run
-  (largest first); a `--check` miss still opens a **partial** PR when that
-  guide actually got smaller (`--progress`); unchanged or grown files do not
-  become a PR. Claude only edits the worklist — the recover step copies those
-  files onto a new branch from `origin/main` (so a dispatch from a workflow
-  PR cannot leak YAML) and synthesises the PR body if Claude left it empty.
-  `--max-turns` is computed from the worklist (300 per file plus overflow),
-  not a fixed 250. Measure uses `origin/main`'s `CLAUDE.md` files so a
-  dispatch from this workflow PR does not re-select a guide already compacted
-  on main.
+  measured with `String.length`, never bytes. Every oversized guide fans out
+  as its own Claude job (largest first; `max_guides` caps N, default all); a
+  `--check` miss still publishes a **partial** shard when that guide actually
+  got smaller (`--pack`); unchanged or grown files do not become a PR. Claude
+  only edits the worklist — `--pack` artifacts those files and the consolidate
+  job copies them onto a new branch from `origin/main` (so a dispatch from a
+  workflow PR cannot leak YAML) and synthesises the PR body if Claude left it
+  empty. `--max-turns` is computed per shard (300 plus overflow), not a fixed 250. Measure uses `origin/main`'s `CLAUDE.md` files so a dispatch from this
+  workflow PR does not re-select a guide already compacted on main. An open
+  compaction PR claims its `CLAUDE.md` files rather than skipping the run.
 - **The flake hunter lists workflow runs one day at a time.**
   `GET /actions/runs` returns at most 1000 items however you page it, and this
   repo produces roughly 2,400 runs a week, so a window-wide query silently
@@ -104,7 +108,7 @@ as `coverage-ratchet.yml` and `renovate-patch-reconcile.yml`.
 `claude-md-compactor.yml`, `flaky-ci-hunter.yml`, and the backlog dispatcher's
 author phase, Claude writes the PR body (and, for the flake hunter and the
 backlog author, the title) to a file named by a `PR_BODY_FILE` /
-`PR_TITLE_FILE` env var; the compactor's recover step also synthesises that
+`PR_TITLE_FILE` env var; the compactor's consolidate job also synthesises that
 body and pushes a docs-only branch from `origin/main`. A deterministic shell
 step then runs `gh pr create` with
 `GH_TOKEN: secrets.BOT_PAT`, exactly as `coverage-ratchet.yml` does. The reason is

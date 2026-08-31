@@ -37,12 +37,13 @@ export const COMPACTOR_MAX_CHARS = 10000;
 export const COMPACTOR_TARGET_CHARS = 9500;
 
 /**
- * Guides handed to one Claude run. Dispatch 33309651347 ended its turn with
+ * Guides handed to one Claude *job*. Dispatch 33309651347 ended its turn with
  * "I'll wait for the agents to complete" after being given all 8 oversized
- * files at once and wrote nothing. One file per run, largest first — same
- * shape as boy-scout-debt-dispatcher.yml.
+ * files at once and wrote nothing. The workflow fans out one Claude job per
+ * oversized guide (this default 0 = all of them, largest first) and
+ * consolidates the shards into one PR. A positive cap still means "largest N".
  */
-export const DEFAULT_MAX_GUIDES = 1;
+export const DEFAULT_MAX_GUIDES = 0;
 
 /**
  * Claude turns budgeted per worklist guide. Dispatch 33320764465 handed one
@@ -175,6 +176,8 @@ export function selectOversized(measurements) {
 
 /**
  * The worklist for this run: the largest `maxGuides` oversized files.
+ * `maxGuides <= 0` (the default) means every oversized guide — the workflow
+ * then fans those out as one Claude job each.
  * @param {ReturnType<typeof measureGuides>} measurements
  * @param {{maxGuides?: number}} [options]
  * @returns {ReturnType<typeof measureGuides>}
@@ -184,6 +187,157 @@ export function selectWorklist(measurements, { maxGuides = DEFAULT_MAX_GUIDES } 
   const n = Number(maxGuides);
   if (!Number.isFinite(n) || n <= 0) return all;
   return all.slice(0, n);
+}
+
+/**
+ * `MAX_GUIDES` env: empty → default (all); `0` → all; a positive integer →
+ * largest N. Invalid strings fall back to the default rather than throwing,
+ * matching the other optional numeric env vars.
+ * @param {string|undefined} raw
+ * @param {number} [fallback]
+ * @returns {number}
+ */
+export function parseMaxGuides(raw, fallback = DEFAULT_MAX_GUIDES) {
+  const s = String(raw ?? '').trim();
+  if (s === '') return fallback;
+  if (!/^[0-9]+$/.test(s)) return fallback;
+  return Number(s);
+}
+
+/**
+ * Artifact-safe id for a guide path (`packages/ios-app/CLAUDE.md` →
+ * `packages-ios-app`). GitHub artifact names reject `/` and a few other
+ * characters.
+ * @param {string} path
+ * @returns {string}
+ */
+export function guideSafeName(path) {
+  const trimmed = String(path ?? '').replace(/^\.\//, '');
+  const stem =
+    trimmed === 'CLAUDE.md' || trimmed === '' ? 'root' : trimmed.replace(/\/CLAUDE\.md$/, '');
+  const safe = stem.replace(/[^A-Za-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+  return safe || 'root';
+}
+
+/**
+ * Dynamic Actions matrix: one include row per worklist guide. `max_turns` is
+ * per shard (one file), not the whole worklist — fan-out is what makes an
+ * 8-file Saturday finish in one wall-clock budget instead of 8 sequential
+ * 550-turn jobs.
+ * @param {ReturnType<typeof measureGuides>} worklist
+ * @param {{targetChars?: number}} [options]
+ * @returns {{include: Array<{guide: string, safe_name: string, max_turns: string, chars: string}>}}
+ */
+export function buildCompactMatrix(worklist, { targetChars = COMPACTOR_TARGET_CHARS } = {}) {
+  return {
+    include: (Array.isArray(worklist) ? worklist : []).map((m) => ({
+      guide: m.path,
+      safe_name: guideSafeName(m.path),
+      max_turns: String(computeMaxTurns([m], { targetChars })),
+      chars: String(m.chars),
+    })),
+  };
+}
+
+/**
+ * `CLAUDE.md` paths already in an open compaction PR — the next run must not
+ * re-select them (boy-scout "claimed file set"), but it *should* still compact
+ * every other oversized guide.
+ * @param {Array<{filename?: string}|string>} prFiles
+ * @returns {string[]}
+ */
+export function blockedGuidePaths(prFiles = []) {
+  const out = [];
+  const seen = new Set();
+  for (const f of prFiles ?? []) {
+    const path = String(typeof f === 'string' ? f : (f?.filename ?? '')).replace(/^\.\//, '');
+    if (!path || seen.has(path)) continue;
+    if (path !== 'CLAUDE.md' && !path.endsWith('/CLAUDE.md')) continue;
+    seen.add(path);
+    out.push(path);
+  }
+  return out;
+}
+
+/**
+ * Drop worklist entries whose path is already in an open compaction PR.
+ * @param {ReturnType<typeof measureGuides>} worklist
+ * @param {Iterable<string>} blocked
+ * @returns {ReturnType<typeof measureGuides>}
+ */
+export function excludeBlockedGuides(worklist, blocked = []) {
+  const set = new Set(
+    [...blocked].map((p) => String(p ?? '').replace(/^\.\//, '')).filter(Boolean)
+  );
+  return (worklist ?? []).filter((m) => !set.has(m.path));
+}
+
+/**
+ * Reassemble per-shard `--pack` progress into one assessment so the
+ * consolidate job can write a single PR body.
+ * @param {Array<{
+ *   worklist?: Array<string>,
+ *   before?: Record<string, number>,
+ *   after?: Array<{path: string, chars: number, oversized?: boolean}>,
+ * }>} shards
+ * @param {{maxChars?: number, targetChars?: number}} [options]
+ * @returns {ReturnType<typeof assessCompactionProgress>}
+ */
+function shardWorklist(shards) {
+  const worklist = [];
+  const seen = new Set();
+  for (const s of shards ?? []) {
+    for (const p of s?.worklist ?? []) {
+      if (!p || seen.has(p)) continue;
+      seen.add(p);
+      worklist.push(p);
+    }
+  }
+  return worklist;
+}
+
+function shardBefore(shards) {
+  /** @type {Record<string, number>} */
+  const before = {};
+  for (const s of shards ?? []) {
+    const b = s?.before;
+    if (!b || typeof b !== 'object' || Array.isArray(b)) continue;
+    for (const [path, chars] of Object.entries(b)) {
+      const n = Number(chars);
+      if (path && Number.isFinite(n)) before[path] = n;
+    }
+  }
+  return before;
+}
+
+function shardAfter(shards, maxChars) {
+  const afterByPath = new Map();
+  for (const s of shards ?? []) {
+    for (const m of s?.after ?? []) {
+      if (!m?.path) continue;
+      const chars = Number(m.chars);
+      if (!Number.isFinite(chars)) continue;
+      afterByPath.set(m.path, {
+        path: m.path,
+        chars,
+        oversized: typeof m.oversized === 'boolean' ? m.oversized : chars >= maxChars,
+      });
+    }
+  }
+  return [...afterByPath.values()];
+}
+
+export function mergeShardProgress(
+  shards = [],
+  { maxChars = COMPACTOR_MAX_CHARS, targetChars = COMPACTOR_TARGET_CHARS } = {}
+) {
+  return assessCompactionProgress({
+    before: shardBefore(shards),
+    after: shardAfter(shards, maxChars),
+    worklist: shardWorklist(shards),
+    maxChars,
+    targetChars,
+  });
 }
 
 /**
@@ -419,7 +573,7 @@ export function buildPartialPrBody(
   const table = formatProgressReport(assessment, { maxChars, targetChars });
   return `Partial CLAUDE.md compaction. The weekly policy target (≤ ${withSeparators(targetChars)} chars per selected guide; oversized at ${withSeparators(maxChars)}) was not met, but the selected guides did get smaller, so this PR lands the progress rather than discarding it.
 
-A later Saturday run will skip while this PR is open (the existing-PR dedup rule). Merge it so the next pass can continue.
+A later Saturday run will skip the guides this PR already touches (the claimed-file dedup rule) and compact any others that are still oversized. Merge it so those files leave the claimed set.
 
 ${table}
 
@@ -543,23 +697,38 @@ export function buildBranchName(date, runId = '') {
 }
 
 /**
- * Cross-run deduplication: the first open PR that looks like a compaction PR,
- * matched on EITHER the head-branch prefix or the title prefix (a human may
- * have renamed the branch, or the agent may have retitled the PR). Returns
- * `null` when no compaction PR is open.
- * @param {Array<{html_url?: string, url?: string, title?: string, head?: {ref?: string}}>} openPrs
- * @returns {{url: string, title: string, branch: string}|null}
+ * Open PRs that look like compaction PRs, matched on EITHER the head-branch
+ * prefix or the title prefix (a human may have renamed the branch, or the
+ * agent may have retitled the PR). Used to claim files, not to skip the run.
+ * @param {Array<{html_url?: string, url?: string, title?: string, number?: number, head?: {ref?: string}}>} openPrs
+ * @returns {Array<{url: string, title: string, branch: string, number: number|null}>}
  */
-export function findExistingCompactionPr(openPrs) {
+export function listCompactionPrs(openPrs) {
   const list = Array.isArray(openPrs) ? openPrs : [];
+  const out = [];
   for (const pr of list) {
     const branch = pr?.head?.ref ?? '';
     const title = pr?.title ?? '';
     if (branch.startsWith(COMPACTION_BRANCH_PREFIX) || title.startsWith(COMPACTION_TITLE_PREFIX)) {
-      return { url: pr.html_url ?? pr.url ?? '', title, branch };
+      out.push({
+        url: pr.html_url ?? pr.url ?? '',
+        title,
+        branch,
+        number: typeof pr.number === 'number' ? pr.number : null,
+      });
     }
   }
-  return null;
+  return out;
+}
+
+/**
+ * First open compaction PR, or `null`. Kept for summaries; file-level
+ * exclusion uses `listCompactionPrs` plus each PR's changed files.
+ * @param {Array<{html_url?: string, url?: string, title?: string, number?: number, head?: {ref?: string}}>} openPrs
+ * @returns {{url: string, title: string, branch: string, number: number|null}|null}
+ */
+export function findExistingCompactionPr(openPrs) {
+  return listCompactionPrs(openPrs)[0] ?? null;
 }
 
 /**

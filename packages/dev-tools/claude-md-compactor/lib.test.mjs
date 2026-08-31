@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import {
   assessCompactionProgress,
+  blockedGuidePaths,
   buildBranchName,
   buildCompactionPrBody,
+  buildCompactMatrix,
   buildPartialPrBody,
   buildPrompt,
   COMPACTION_BRANCH_PREFIX,
@@ -13,14 +15,19 @@ import {
   computeMaxTurns,
   DEFAULT_MAX_GUIDES,
   EXCLUDED_GUIDES,
+  excludeBlockedGuides,
   findExistingCompactionPr,
   formatBeforeSizes,
   formatProgressReport,
   formatReport,
+  guideSafeName,
   isExcludedGuide,
+  listCompactionPrs,
   MAX_TURNS_CAP,
   measureGuides,
+  mergeShardProgress,
   parseBeforeSizes,
+  parseMaxGuides,
   parseWorklist,
   selectAboveTarget,
   selectOversized,
@@ -41,7 +48,7 @@ describe('policy constants', () => {
     // The repo's own committed gate (check-doc-sizes-lib.mjs) is 20,000; the
     // policy must stay strictly stricter or it would be pointless.
     expect(COMPACTOR_MAX_CHARS).toBeLessThan(20000);
-    expect(DEFAULT_MAX_GUIDES).toBe(1);
+    expect(DEFAULT_MAX_GUIDES).toBe(0);
     expect(TURNS_PER_GUIDE).toBe(300);
     expect(TURNS_PER_OVERFLOW_CHUNK).toBe(50);
     expect(MAX_TURNS_CAP).toBe(600);
@@ -166,11 +173,15 @@ describe('selectWorklist', () => {
     { path: 'd/CLAUDE.md', content: guide(11000) },
   ]);
 
-  it('defaults to the single largest oversized guide', () => {
-    expect(selectWorklist(measurements).map((m) => m.path)).toEqual(['c/CLAUDE.md']);
+  it('defaults to every oversized guide (fan-out, largest first)', () => {
+    expect(selectWorklist(measurements).map((m) => m.path)).toEqual([
+      'c/CLAUDE.md',
+      'd/CLAUDE.md',
+      'a/CLAUDE.md',
+    ]);
     expect(
       selectWorklist(measurements, { maxGuides: DEFAULT_MAX_GUIDES }).map((m) => m.path)
-    ).toEqual(['c/CLAUDE.md']);
+    ).toEqual(['c/CLAUDE.md', 'd/CLAUDE.md', 'a/CLAUDE.md']);
   });
 
   it('takes the N largest when maxGuides is set', () => {
@@ -185,6 +196,104 @@ describe('selectWorklist', () => {
       'c/CLAUDE.md',
       'd/CLAUDE.md',
       'a/CLAUDE.md',
+    ]);
+  });
+});
+
+describe('parseMaxGuides', () => {
+  it('treats empty or invalid as the default (all)', () => {
+    expect(parseMaxGuides('')).toBe(0);
+    expect(parseMaxGuides(undefined)).toBe(0);
+    expect(parseMaxGuides('nope')).toBe(0);
+    expect(parseMaxGuides('1.5')).toBe(0);
+  });
+
+  it('accepts 0 as all and a positive integer as a cap', () => {
+    expect(parseMaxGuides('0')).toBe(0);
+    expect(parseMaxGuides('1')).toBe(1);
+    expect(parseMaxGuides('8')).toBe(8);
+  });
+});
+
+describe('guideSafeName / buildCompactMatrix', () => {
+  it('turns a guide path into an artifact-safe id', () => {
+    expect(guideSafeName('packages/ios-app/CLAUDE.md')).toBe('packages-ios-app');
+    expect(guideSafeName('CLAUDE.md')).toBe('root');
+    expect(guideSafeName('docs/CLAUDE.md')).toBe('docs');
+  });
+
+  it('emits one matrix row per worklist file with per-shard max_turns', () => {
+    const worklist = [
+      { path: 'packages/ios-app/CLAUDE.md', chars: 17332 },
+      { path: 'packages/swift-server/CLAUDE.md', chars: 10199 },
+    ];
+    const matrix = buildCompactMatrix(worklist);
+    expect(matrix.include).toHaveLength(2);
+    expect(matrix.include[0]).toEqual({
+      guide: 'packages/ios-app/CLAUDE.md',
+      safe_name: 'packages-ios-app',
+      max_turns: String(computeMaxTurns([worklist[0]])),
+      chars: '17332',
+    });
+    expect(Number(matrix.include[0].max_turns)).toBeLessThan(MAX_TURNS_CAP);
+    expect(matrix.include[1].safe_name).toBe('packages-swift-server');
+  });
+});
+
+describe('claimed-file exclusion', () => {
+  it('pulls CLAUDE.md paths out of a PR file list and drops them from the worklist', () => {
+    const blocked = blockedGuidePaths([
+      { filename: 'packages/swift-launcher/CLAUDE.md' },
+      { filename: 'docs/swift-launcher-details.md' },
+      { filename: '.github/workflows/claude-md-compactor.yml' },
+      'CLAUDE.md',
+    ]);
+    expect(blocked).toEqual(['packages/swift-launcher/CLAUDE.md', 'CLAUDE.md']);
+    const worklist = [
+      { path: 'packages/ios-app/CLAUDE.md', chars: 17332 },
+      { path: 'packages/swift-launcher/CLAUDE.md', chars: 19533 },
+    ];
+    expect(excludeBlockedGuides(worklist, blocked).map((m) => m.path)).toEqual([
+      'packages/ios-app/CLAUDE.md',
+    ]);
+  });
+
+  it('lists every open compaction PR, not just the first', () => {
+    const open = [
+      {
+        number: 2679,
+        title: COMPACTION_PR_TITLE,
+        html_url: 'https://example/2679',
+        head: { ref: `${COMPACTION_BRANCH_PREFIX}2026-08-30-1` },
+      },
+      { number: 1, title: 'unrelated', html_url: 'https://example/1', head: { ref: 'feat/x' } },
+    ];
+    const prs = listCompactionPrs(open);
+    expect(prs).toHaveLength(1);
+    expect(prs[0].number).toBe(2679);
+    expect(findExistingCompactionPr(open)?.number).toBe(2679);
+  });
+});
+
+describe('mergeShardProgress', () => {
+  it('concatenates per-guide shards into one assessment for the consolidated PR', () => {
+    const out = mergeShardProgress([
+      {
+        worklist: ['packages/ios-app/CLAUDE.md'],
+        before: { 'packages/ios-app/CLAUDE.md': 17332 },
+        after: [{ path: 'packages/ios-app/CLAUDE.md', chars: 9400, oversized: false }],
+      },
+      {
+        worklist: ['packages/webcomponents/CLAUDE.md'],
+        before: { 'packages/webcomponents/CLAUDE.md': 16364 },
+        after: [{ path: 'packages/webcomponents/CLAUDE.md', chars: 9480, oversized: false }],
+      },
+    ]);
+    expect(out.policyOk).toBe(true);
+    expect(out.openPr).toBe(true);
+    expect(out.shrunk.map((r) => r.path)).toEqual([
+      'packages/ios-app/CLAUDE.md',
+      'packages/webcomponents/CLAUDE.md',
     ]);
   });
 });
@@ -433,7 +542,7 @@ describe('formatProgressReport / buildPartialPrBody', () => {
   it('synthesises a PR body that names the partial and the validation commands', () => {
     const body = buildPartialPrBody(assessment);
     expect(body).toContain('Partial CLAUDE.md compaction');
-    expect(body).toContain('existing-PR dedup');
+    expect(body).toContain('claimed-file dedup');
     expect(body).toContain('npm run lint:docs');
     expect(body).toContain(
       'node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check'
