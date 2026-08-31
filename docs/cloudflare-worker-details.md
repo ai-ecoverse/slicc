@@ -98,6 +98,10 @@ start/resume flows:
 - **25 MiB per-asset cap:** Cloudflare rejects any `dist/ui/` file over 25 MiB; the CI
   `cloudflare-worker` job runs `npm run build -w @slicc/cloudflare-worker`
   (`wrangler deploy --dry-run`) as a hard gate.
+- **`Document-Isolation-Policy: isolate-and-credentialless`** is set on non-cherry,
+  non-electron SPA responses — per-document cross-origin isolation (SharedArrayBuffer
+  for vpod guest networking) without COOP/COEP. The cherry and electron branches must
+  stay header-free: they are always embedded and never need SAB.
 - `ASSET_ARCHIVE` (R2) retains hashed `/assets/*` across deploys;
   `serveAssetWithArchiveFallback` tries `ASSETS`, then R2, then stale-asset reload;
   bucket GC is 14 days.

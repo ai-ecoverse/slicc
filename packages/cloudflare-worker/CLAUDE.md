@@ -1,148 +1,125 @@
 # CLAUDE.md
 
-Tray hub worker in `packages/cloudflare-worker/`: tray session coordination,
-capability-token routing, TURN credential lookup, and leader/follower signaling for
-tray-connected SLICC runtimes; also serves the built webapp as static assets.
+Tray hub worker: tray session coordination, capability-token routing, TURN credential
+lookup, leader/follower signaling for tray-connected SLICC runtimes; also serves the
+built webapp as static assets.
 
 Deep reference: [`docs/cloudflare-worker-details.md`](../../docs/cloudflare-worker-details.md).
 
 ## Main Files
 
 - `src/index.ts` — entry + public HTTP routing
-- `src/session-tray.ts` — `SessionTrayDurableObject`: the per-tray coordinator. Owns
-  the tray record, leader election + controller WS, the join surface, route dispatch.
-  Every other concern is a collaborator behind a `*Deps` seam (issue #2674), so it is
-  unit-testable without a DO harness:
-  - `src/session-tray-bootstrap.ts` — `BootstrapCoordinator`: follower WebRTC
-    signaling state machine (offer/answer/ICE, event log, retry, pruning)
-  - `src/session-tray-bridge.ts` — `BridgeRelay`: preview-bridge CDP relay,
-    `window.slicc.emit()` attribution, per-conn emit rate limit
-  - `src/session-tray-preview.ts` — preview mint/resolve/revoke + response assembly
-  - `src/session-tray-biscotto.ts` — guest seat lifecycle + `/internal/biscotto/*`
-  - `src/session-tray-webhook.ts` — `WebhookRelay`: forwarding + #2524 receipts
-  - `src/session-tray-push.ts` — `PushCoordinator`: APNs device registry + fan-out
-  - `src/session-tray-requests.ts` — pure request parsing / wire-shape guards
-- `src/turn-credentials.ts` — Cloudflare TURN credential fetcher
+- `src/session-tray.ts` — `SessionTrayDurableObject`: controller WS (leader), follower
+  WebRTC signaling, preview bridge WS
+- `src/turn-credentials.ts` — TURN credential fetcher
 - `src/shared.ts` — capability tokens; `reclaimMsForTray`;
   `TRAY_RECLAIM_TTL_MS`/`HOSTED_TRAY_RECLAIM_TTL_MS`
 - `src/links.ts` — `applySliccLinks` (RFC 8288 `Link` rel set on every response)
-- `src/handoff-page.ts`, `src/api-catalog.ts`, `src/install-cli.ts`, `src/llms-txt.ts`,
-  `src/privacy.ts`, `src/rel-docs.ts`, `src/flags.ts` — public route handlers
-- `src/oauth-exchange.ts`, `src/oauth-registry.ts`, `src/auth/cloud-callback.ts` —
-  OAuth relays (`/auth/callback`, `/auth/cloud-callback`)
-- `src/cloud/*` — `/api/cloud/*` handlers, `CloudSessionsDurableObject`, IMS auth,
-  `checkCapsForRun` cone caps, DO-backed `Registry`, Adobe proxy `/v1/config` sync,
-  `rate-limit.ts`, `error-envelope.ts`
+- Public route handlers: `handoff-page.ts`, `api-catalog.ts`, `install-cli.ts`,
+  `llms-txt.ts`, `privacy.ts`, `rel-docs.ts`, `flags.ts`
+- OAuth relays (`/auth/callback`, `/auth/cloud-callback`): `oauth-exchange.ts`,
+  `oauth-registry.ts`, `auth/cloud-callback.ts`
 - `wrangler.jsonc` — bindings (`TRAY_HUB`, `CLOUD_SESSIONS`, `ASSETS`, `ASSET_ARCHIVE`,
   `CF_VERSION_METADATA`), staging env, feature flags
+- `src/cloud/*` — `/api/cloud/*` handlers, `CloudSessionsDurableObject`, IMS auth,
+  `checkCapsForRun` cone caps, DO-backed `Registry`, Adobe `/v1/config` sync,
+  `rate-limit.ts`, `error-envelope.ts`
 
 Sandbox lifecycle lives in `@slicc/cloud-core`; `src/cloud/` is adapter glue.
 
 ## Tray Hub Architecture
 
 `TRAY_HUB` maps each tray to one `SessionTrayDurableObject`, tracking capabilities,
-leader/follower state, reconnect windows, and cached ICE servers.
+leader/follower state, reconnect windows, cached ICE servers.
 
 ### Public Routes
 
-Route inventory: `POST /tray`, `GET /handoff`, `GET /install-cli`,
-`GET /install-cli.ps1`, `GET /download/slicc-cli/:target`,
-`GET /.well-known/api-catalog`, `GET /llms.txt`, `GET|HEAD /privacy`,
-`GET|HEAD /status`, `GET /rel/:name`, `GET|POST /join/:token`,
-`GET|POST /controller/:token`, `POST /webhook/:token/:webhookId`,
-`POST /api/tray/:trayId/preview`, `POST /api/tray/:trayId/preview/stop`,
-`GET /api/tray/:trayId/previews`, `POST /api/tray/:trayId/biscotto`,
-`POST /api/tray/:trayId/biscotto/stop`, `GET /api/tray/:trayId/biscotti`,
-`GET <token>.sliccy.now/*`,
-`GET __slicc/preview-bridge.js`, `WS __slicc/bridge`, `POST __slicc/emit`,
-`GET /auth/callback`, `GET /auth/mcp-callback`, `GET /api/flags`. Per-route semantics:
-[docs/cloudflare-worker-details.md § Public Routes](../../docs/cloudflare-worker-details.md#public-routes).
+Full route inventory + per-route semantics:
+[docs § Public Routes](../../docs/cloudflare-worker-details.md#public-routes) — covers
+`/tray`, `/handoff`, `/join/:token`, `/controller/:token`, `/webhook/*`,
+`/api/tray/:trayId/*`, `<token>.sliccy.now/*`, `__slicc/*`, `/auth/*`, `/api/flags`.
 
-**Routes-mirror rule:** every new route MUST appear in
-
-1. `src/index.ts` routes array (the default `GET /` body)
-2. `tests/index.test.ts` routes-list assertion
-3. `tests/deployed.test.ts` routes-list assertion
-
-Missing any of these fails CI.
+**Routes-mirror rule:** every new route MUST appear in all three or CI fails —
+`src/index.ts` routes array (the default `GET /` body), and the routes-list assertions
+in `tests/index.test.ts` and `tests/deployed.test.ts`.
 
 ### Feature Flag Configuration
 
-`FEATURE_FLAGS` in `wrangler.jsonc` is a JSON var
+`FEATURE_FLAGS` (`wrangler.jsonc`) is a JSON var
 `{ base: Record<string,string>, floats: Record<string, Record<string,string>> }`.
 Floats overlay `base`; invalid profiles → `{ float: "default", flags: base }`. Keep
-production and `env.staging` aligned. 5-min cache; config changes need deploy. Keep
-`/api/flags` in the routes array + both routes-list assertions.
+production and `env.staging` aligned; 5-min cache, config changes need deploy.
 
 ### Signaling Model
 
 Leader attaches via controller capability + WS to the DO. **Last-key-holder-wins
-reconnect** — a leader reconnect with matching credentials closes the stale socket;
-rejecting deadlocks on workerd's unreliable `webSocketClose`. Followers attach via the
-join capability and bootstrap over HTTP poll. Preview bridge tabs (`serve --bridge`)
-attach via `/__slicc/bridge` WS; DO relays `bridge.cdp.request`/`bridge.cdp.response`
+reconnect** — a matching-credential reconnect closes the stale socket; rejecting
+deadlocks on workerd's unreliable `webSocketClose`. Followers attach via the join
+capability, bootstrap over HTTP poll. Preview bridge tabs (`serve --bridge`) attach
+via `/__slicc/bridge` WS; the DO relays `bridge.cdp.request`/`bridge.cdp.response`
 keyed by `connId`, replays `bridge.connected` on leader (re)connect, hibernates via
 `setWebSocketAutoResponse`. Ghost-leader analysis + full protocol:
-[docs/cloudflare-worker-details.md § Signaling](../../docs/cloudflare-worker-details.md#signaling),
+[docs § Signaling](../../docs/cloudflare-worker-details.md#signaling),
 [deploying-tray-worker skill](../../.agents/skills/deploying-tray-worker/SKILL.md).
 
 ### Biscotti (guest seats)
 
 `TrayRecord.biscotti` holds revocable guest seats. `resolveJoinCapability`
-(`src/shared.ts`) is the **single default-deny point** for `/join/:token`: it
-returns `{ trust: 'full' }` for the tray join token, `{ trust: 'biscotto' }` for
-a live seat, and `null` for anything else (including revoked/expired seats,
-which are compared before being filtered so their existence does not leak by
-timing). Mint/revoke/list (and the `/internal/biscotto/*` dispatcher) live in
-`src/session-tray-biscotto.ts` and are gated on the **controller** token — a seat is never an issuing authority.
+(`src/shared.ts`) is the **single default-deny point** for `/join/:token`:
+`{ trust: 'full' }` for the tray join token, `{ trust: 'biscotto' }` for a live seat,
+`null` otherwise (revoked/expired seats are compared before filtering so their
+existence does not leak by timing). Mint/revoke/list (`src/session-tray-biscotto.ts`)
+are gated on the **controller** token — a seat is never an issuing authority.
 
-**Trust travels on the controller socket, never on the peer's `hello`.** The DO
-stamps `trust` + `biscotto` onto `follower.join_requested`, which only the leader
-can receive. `controllerId` is client-supplied, so trust is re-derived from the
-presented token on every request and a mismatch against the stored
-`ControllerRecord.biscottoId` is a 409 `JOIN_CAPABILITY_MISMATCH` — in both
-directions, so a guest cannot inherit a full follower's id and a full follower
-cannot be shadowed by a guessed one. Enforcement of what a seat may _send_ is
-leader-side (`packages/webapp/src/scoops/tray-leader/biscotto-gate.ts`).
+**Trust travels on the controller socket, never the peer's `hello`.** The DO stamps
+`trust` + `biscotto` onto `follower.join_requested` (leader-only). Since
+`controllerId` is client-supplied, trust is re-derived from the presented token every
+request; a mismatch against stored `ControllerRecord.biscottoId` is a 409
+`JOIN_CAPABILITY_MISMATCH` both directions (a guest cannot inherit a full follower's
+id, nor a full follower be shadowed by a guessed one). What a seat may _send_ is
+enforced leader-side (`packages/webapp/src/scoops/tray-leader/biscotto-gate.ts`).
 
-### TURN Credentials
+### TURN Credentials & Follower Push
 
-Fetched with `CLOUDFLARE_TURN_KEY_ID` (in `wrangler.jsonc`) and
-`CLOUDFLARE_TURN_API_TOKEN` (Wrangler secret). Follower push (#2062): `src/apns.ts` signs an ES256 JWT from `APNS_TEAM_ID` / `APNS_KEY_ID` / `APNS_PRIVATE_KEY` (`.p8` PEM) and posts to `api(.sandbox).push.apple.com` with `APNS_TOPIC`; the tray DO stores ≤16 `push.register` tokens per tray and fans out leader `push.send` (`turn_end`, time-sensitive `sudo_request`, metadata only), dropping tokens APNs reports dead. All four secrets or pushing is silently off. **Provider JWTs are minted by exactly one DO** (`src/apns-provider-token.ts`, `idFromName('__apns_provider_token')`, storage-backed): Apple throttles token creation per team+key, so per-tray minting broke Apple's 20-minute floor once a few trays hibernated (#2432). `session-tray.ts` caches ICE servers
-and refreshes before TTL expiry.
+TURN fetched with `CLOUDFLARE_TURN_KEY_ID` (`wrangler.jsonc`) +
+`CLOUDFLARE_TURN_API_TOKEN` (secret); `session-tray.ts` caches ICE servers, refreshes
+before TTL. Push (`src/apns.ts`): ES256 JWT from `APNS_TEAM_ID` / `APNS_KEY_ID` /
+`APNS_PRIVATE_KEY` (`.p8` PEM) posted to `api(.sandbox).push.apple.com` with
+`APNS_TOPIC`. The tray DO stores ≤16 `push.register` tokens per tray and fans out
+leader `push.send` (`turn_end`, time-sensitive `sudo_request`, metadata only),
+dropping tokens APNs reports dead; missing any secret → push silently off. **Provider
+JWTs are minted by exactly one DO** (`src/apns-provider-token.ts`,
+`idFromName('__apns_provider_token')`, storage-backed) — Apple throttles token
+creation per team+key, so per-tray minting broke Apple's 20-min floor once trays
+hibernated.
 
 ### Tray Kind (desktop / hosted)
 
-`TrayRecord.kind` is `'desktop' | 'hosted'` (default `'desktop'`). `POST /tray` reads
-optional `kind`. Reclaim TTL branches through `reclaimMsForTray(tray)` in `shared.ts`:
-`HOSTED_TRAY_RECLAIM_TTL_MS = 30 days` (hosted), `TRAY_RECLAIM_TTL_MS = 1 hour`
-(desktop).
+`TrayRecord.kind` is `'desktop' | 'hosted'` (default `'desktop'`); `POST /tray` reads
+optional `kind`. Reclaim TTL branches via `reclaimMsForTray(tray)` (`shared.ts`):
+`HOSTED_TRAY_RECLAIM_TTL_MS` = 30 days, `TRAY_RECLAIM_TTL_MS` = 1 hour (desktop).
 
 ### Static Assets & R2
 
 Worker serves `dist/ui/` via Static Assets (`ASSETS`); `?json=true`/POST/WS → API,
 else SPA. **Cherry embed (`?cherry=1`):** `frame-ancestors` from
-`ALLOWED_CHERRY_HOST_ORIGINS` (bare `*` also enumerates `chrome-extension://` origins);
-non-cherry → `frame-ancestors 'none'`; cherry sets `Cache-Control: no-store` +
-`Vary: Sec-Fetch-Dest`. **Non-cherry, non-electron SPA responses also carry
-`Document-Isolation-Policy: isolate-and-credentialless`** — per-document
-cross-origin isolation (SAB for vpod guest networking) without COOP/COEP;
-cherry/electron branches must stay header-free (embedded, never need SAB). **25 MiB per-asset cap** — CI runs `wrangler deploy --dry-run`
-as a hard gate. `ASSET_ARCHIVE` (R2) retains hashed `/assets/*` across deploys;
-`serveAssetWithArchiveFallback` tries `ASSETS` → R2 → stale-asset reload; bucket GC
-14 days. Full rules:
-[docs/cloudflare-worker-details.md § Static Assets](../../docs/cloudflare-worker-details.md#static-assets);
+`ALLOWED_CHERRY_HOST_ORIGINS` (bare `*` also enumerates `chrome-extension://`);
+non-cherry → `frame-ancestors 'none'`. Non-cherry, non-electron SPA responses carry
+`Document-Isolation-Policy: isolate-and-credentialless` (SAB for vpod guest networking
+without COOP/COEP); cherry/electron stay header-free. **25 MiB per-asset cap** — CI
+`wrangler deploy --dry-run` gates it. `ASSET_ARCHIVE` (R2) retains hashed `/assets/*`
+across deploys via `serveAssetWithArchiveFallback` (`ASSETS` → R2 → stale reload).
+Full rules:
+[docs § Static Assets](../../docs/cloudflare-worker-details.md#static-assets);
 ops: [deploying-tray-worker skill](../../.agents/skills/deploying-tray-worker/SKILL.md).
 
 ## Commands
 
 ```bash
-# Build webapp first (required for static assets)
-npm run build -w @slicc/webapp
-
-npx wrangler dev --config packages/cloudflare-worker/wrangler.jsonc
-npx wrangler deploy --env staging --config packages/cloudflare-worker/wrangler.jsonc
-npx wrangler deploy --config packages/cloudflare-worker/wrangler.jsonc
+npm run build -w @slicc/webapp   # build webapp first (static assets)
+CFG=packages/cloudflare-worker/wrangler.jsonc
+npx wrangler dev --config "$CFG"
+npx wrangler deploy --env staging --config "$CFG"   # drop --env staging for prod
 cd packages/cloudflare-worker && WORKER_BASE_URL=https://... npm test -- tests/deployed.test.ts
 ```
 
@@ -151,64 +128,56 @@ Extension testing with the worker: `npm run start:extension`.
 ## CI and Deployment
 
 `release-native.mjs --gate=worker` gates production. Hub + preview configs deploy as a
-pair (shared DO/token format); R2 uploads always precede deploy. Routes-only failures
-are non-fatal. Required: `CLOUDFLARE_API_TOKEN` (Workers Edit, R2 R/W, Zone Routes
-Edit) + account ID. Retry logic, staging deploy, local `serve --bridge`:
-[deploying-tray-worker skill](../../.agents/skills/deploying-tray-worker/SKILL.md).
+pair (shared DO/token format); R2 uploads precede deploy; routes-only failures
+non-fatal. Needs `CLOUDFLARE_API_TOKEN` (Workers Edit, R2 R/W, Zone Routes Edit) +
+account ID. Retry logic, staging deploy, local `serve --bridge`:
+[deploying-tray-worker](../../.agents/skills/deploying-tray-worker/SKILL.md).
 
 ## Operational Notes
 
-- Worker is coordination infrastructure, not canonical session storage.
+- Worker is coordination infrastructure, not canonical session store.
 - `GET /status`: post-deploy liveness probe; `version` from `CF_VERSION_METADATA`
-  binding (declared for default + `staging`; `unknown` when unbound). Unauthenticated
-  — body is exactly `{ status, service, timestamp, version }`, never config/binding
-  names. Signals: [`docs/operational-telemetry.md`](../../docs/operational-telemetry.md).
-- `/handoff` is stateless; query params → single RFC 8288 `Link` header.
-- Every response is wrapped by `applySliccLinks` (`src/links.ts`).
+  (declared for default + `staging`; `unknown` when unbound). Unauthenticated — body
+  is exactly `{ status, service, timestamp, version }`, never config/binding names.
+  Signals: [`docs/operational-telemetry.md`](../../docs/operational-telemetry.md).
+- `/handoff` is stateless; query params → single RFC 8288 `Link` header. Every response
+  is wrapped by `applySliccLinks` (`src/links.ts`).
 - Keep signaling protocol changes aligned with `packages/webapp/src/scoops/`.
 
 ## Cloud Cones (sliccy.ai/cloud)
 
-Shipped via Plan D. All `/api/cloud/*` require
-`Authorization: Bearer <ims-access-token>` and route to
+All `/api/cloud/*` require `Authorization: Bearer <ims-access-token>` and route to
 `env.CLOUD_SESSIONS.idFromName(userId)` for per-user state. Route table:
-[docs/cloudflare-worker-details.md § Cloud Routes](../../docs/cloudflare-worker-details.md#cloud-routes).
+[docs § Cloud Routes](../../docs/cloudflare-worker-details.md#cloud-routes).
 
 ### Cone Configuration
 
-`ConeConfig` = `{ model, accounts[], secrets[] }` (in `@slicc/cloud-core/cone-config`);
+`ConeConfig` = `{ model, accounts[], secrets[] }` (`@slicc/cloud-core/cone-config`);
 `src/cloud/cone-config-bridge.ts` handles start (writes `/slicc/secrets.env` +
-`/slicc/cone-config.json`; no-config synthesizes Adobe default) and resume (merges
+`/slicc/cone-config.json`; no-config → Adobe default) and resume (merges
 `coneConfigDelta`, reloads leader via `POST /api/secrets/reload` → `Page.reload`).
-Adobe `{kind:'oauth'}` accounts stamp `tokenExpiresAt` via `imsTokenExpiry` (IMS JWT
-`created_at + expires_in`). `CloudSessionsDurableObject` persists a **names-only**
-`coneConfigIndex` — never values. Detail:
-[docs/cloudflare-worker-details.md § Cone Configuration](../../docs/cloudflare-worker-details.md#cone-configuration).
+Adobe `{kind:'oauth'}` accounts stamp `tokenExpiresAt` via `imsTokenExpiry`.
+`CloudSessionsDurableObject` persists a **names-only** `coneConfigIndex` — never
+values.
+[docs § Cone Configuration](../../docs/cloudflare-worker-details.md#cone-configuration).
 
 ### Wrangler Config (cloud)
 
-Vars: `ADOBE_PROXY_ENDPOINT`; `ALLOWED_EMAIL_DOMAIN` (CSV, default `adobe.com`; `*` =
-any); `BLOCKED_EMAILS` (CSV); `REQUIRE_OWNER_ORG` (`true` expands to ownerOrg-holders);
-`CONE_CAP_RUNNING`, `CONE_CAP_PAUSED` (default 1/5); `ADMIN_USER_IDS` (CSV of IMS
+Vars: `ADOBE_PROXY_ENDPOINT`; `ALLOWED_EMAIL_DOMAIN` (CSV, default `adobe.com`, `*` =
+any); `BLOCKED_EMAILS` (CSV); `REQUIRE_OWNER_ORG` (`true` → ownerOrg-holders);
+`CONE_CAP_RUNNING`/`CONE_CAP_PAUSED` (default 1/5); `ADMIN_USER_IDS` (CSV of IMS
 userIds). Secret: `E2B_API_KEY` (worker-only).
 
 ### v1 → v2 Expansion
 
-```bash
-npx wrangler secret put REQUIRE_OWNER_ORG  # value: true
-# update ALLOWED_EMAIL_DOMAIN in wrangler.jsonc to "*"
-npx wrangler deploy
-```
+`npx wrangler secret put REQUIRE_OWNER_ORG` (`true`), set `ALLOWED_EMAIL_DOMAIN` to `"*"`
+in `wrangler.jsonc`, then `npx wrangler deploy`.
 
 ### Stable API Contract (worker ↔ sandbox)
 
-Deprecation obligation — paused cones from older templates cannot be patched
-in-place:
+Deprecation obligation — paused cones from older templates cannot be patched in-place:
 
-- `POST /api/leader-restart` (loopback in sandbox)
-- `GET /api/hosted-bootstrap` (loopback in sandbox)
-- `POST /api/cloud-status` (loopback in sandbox)
-- `/slicc/secrets.env` — sandbox file the worker writes via SDK
-- `/tmp/slicc-join.json` — sandbox file the worker reads via SDK
-- `ADOBE_IMS_TOKEN`, `ADOBE_IMS_TOKEN_DOMAINS`, `SLICC_TRAY_WORKER_BASE_URL` — envs
-  consumed by `start.sh`
+- Sandbox loopback: `POST /api/leader-restart`, `GET /api/hosted-bootstrap`,
+  `POST /api/cloud-status`
+- `/slicc/secrets.env` (worker writes via SDK); `/tmp/slicc-join.json` (worker reads)
+- `ADOBE_IMS_TOKEN`, `ADOBE_IMS_TOKEN_DOMAINS`, `SLICC_TRAY_WORKER_BASE_URL` — `start.sh` envs

@@ -132,6 +132,78 @@ string[])` marks leaves as pinned (runtime-only — never serialized by
   14px radius, elevated shadow, 12px margin, `overflow: hidden`); the reserved
   `chat` leaf renders flat/full-bleed over the shader.
 
+## File tree + Quick Look (Pierre libraries)
+
+Extended reference for the summary in the package guide. Two components delegate
+rendering to [pierre.computer](https://pierre.computer) libraries, each wrapped
+by an adapter that keeps SLICC's existing public contract, so hosts did not
+change.
+
+- **`slicc-file-tree`** renders through **`@pierre/trees`** (trees.software). The
+  `FileTreeItem` input shape, the `items` / `selected` accessors and the
+  `file-select` / `file-preview` / `file-reference` / `file-download` /
+  `file-overflow` / `dir-toggle` events are unchanged; `gitStatus` is new.
+  Search, inline rename, drag-and-drop, virtualization and git lanes come from
+  the library.
+- **`slicc-quick-look`** renders text through **`@pierre/diffs`** (diffs.com),
+  shows a unified diff instead of the file when the caller supplies
+  `baseContent`, and shows a rendered document when the caller supplies
+  `rendered`. The header toggle exposes whichever of Preview / Source / Diff
+  exist.
+
+Non-obvious rules:
+
+- **The library builds hierarchy from PATHS, not from `children` nesting.** A
+  `FileTreeItem` whose `id` is a bare name renders at the root no matter where it
+  sits in the literal — ids must be full paths (which is what `buildVfsTreeItems`
+  produces).
+- **Strip the leading slash before handing paths to `@pierre/trees`**
+  (`toTreePath`). A leading `/` becomes an empty first segment: `['/a.ts',
+'/b.ts']` renders ONE blank row and no files (verified against
+  `1.0.0-beta.6`). Events convert back, so absolute VFS paths stay absolute at
+  the component boundary.
+- **`renderRowDecoration` returns text or an icon only** — no interactive
+  elements. That is why the old per-row hover buttons (Preview / Reference /
+  Download) now live in the row context menu, whose `onOpen` re-emits SLICC's
+  `file-overflow` so `SliccOverflowMenu` still draws the menu.
+- **Selection echoes.** `selectFile()` reflects to the `selected` attribute,
+  which tells the library to select the row, which calls back through
+  `onSelectionChange` — guard with the `#selecting` flag or one click emits two
+  `file-select` events.
+- **Quick Look renders text twice on purpose**: a synchronous `<pre>` first, then
+  the `@pierre/diffs` view once that lazily-imported chunk arrives (~628 KB, so
+  it must never block the overlay). If the import fails the `<pre>` stays — a
+  degraded preview, not a broken one. A `#generation` counter drops an upgrade
+  that resolves after the overlay moved to another file.
+- **Quick Look converts nothing.** A `rendered` payload arrives as HTML from the
+  host: `inline` must already be sanitized (the webapp runs markdown through
+  `message-renderer.ts`) and mounts via `createContextualFragment`, the same
+  no-innerHTML path as `setBodyHtml`; `sandbox` mounts in an iframe with an EMPTY
+  `sandbox` attribute (no `allow-scripts`, no `allow-same-origin`) and is the
+  only treatment raw HTML ever gets. That document is wrapped in a base
+  stylesheet (`sandboxDocument`) stating `color-scheme` + `Canvas`/`CanvasText`,
+  because an iframe starts transparent with black text and knows nothing about
+  the app's `data-theme` — an unstyled report renders near-black on the dark
+  panel. The base goes AFTER any doctype (before it means quirks mode) and BEFORE
+  the file's own markup, so author rules outrank it. Keeping conversion in the
+  host is what keeps a markdown parser out of this library.
+- **A rendered form opens FIRST, ahead of the diff.** Someone who clicked a `.md`
+  name meant to read the file; a modified README is still a README. Files without
+  a rendered form keep the old diff-first behavior. Views are rebuilt on switch,
+  never kept mounted in parallel.
+- **`@pierre/trees` `sideEffects` is mispathed** in `1.0.0-beta.6`
+  (`./dist/components/web-components.js` vs the real `dist/web-components.js`), so
+  `import '@pierre/trees/web-components'` tree-shakes to nothing. Importing
+  `FileTree` from the package root is unaffected — it pulls the element
+  registration itself.
+- **Both libraries are in `optimizeDeps.include`** (`vitest.config.ts`).
+  Discovering them mid-run makes Vite re-optimize and reload; a reload after a
+  custom element is defined leaves the tag bound to the pre-reload class, and
+  every tree/preview test then fails as if the component were broken.
+- **Tests assert the contract, not the markup** — accessible row names and
+  events, since the DOM belongs to the library now. Synthetic events need
+  `composed: true` to cross its shadow boundary.
+
 ## Composer push-to-talk
 
 Extended reference for the `<slicc-composer ptt>` bullet in the package guide.
@@ -272,6 +344,29 @@ Non-obvious rules:
   spread alone leaves the nested array shared, so a caller splicing
   `monitor.model` markers would mutate component state.
 
+## Slotted containment + chat-prose wrapping
+
+Extended reference for two related Conventions bullets in the package guide.
+
+- **Slotted subtrees need a document sheet.** `::slotted()` matches only the
+  slot's TOP-LEVEL children — never a `<pre>` / `<table>` nested inside a slotted
+  wrapper. A shadow component that accepts rendered markdown (`slicc-lick-card`)
+  therefore ships its containment rules (`white-space:pre-wrap`,
+  `overflow-wrap:anywhere`, capped tables/images) as an idempotent document
+  `<style>` selected by the host tag, alongside its `adoptedStyleSheets`. Without
+  it an unwrapped `<pre>` bursts the card and scrolls the whole chat column
+  sideways.
+- **Chat prose must contain unbroken runs.** `slicc-user-message`'s `.b` and
+  `slicc-agent-message`'s `.body` carry `overflow-wrap: anywhere`. A pasted
+  base64 payload is one token with no break opportunity, so a `max-width` cap
+  does not contain it — the box stays capped and the TEXT spills out, scrolling
+  the whole chat column. Fenced code opts back OUT (`pre code`): a code block is
+  its own scroll container, and mangling source is worse than scrolling it. Test
+  this with `scrollWidth` vs `clientWidth`; a box-width assertion passes either
+  way and proves nothing. The webapp collapses recognized payloads into
+  `<slicc-blob-chip>` on top of this, but the wrap rule is what has to hold for
+  everything else.
+
 ## Animation loops: no forced reflow, and a frame budget
 
 A `requestAnimationFrame` loop must never call `getComputedStyle` or read
@@ -304,6 +399,20 @@ Extended reference for the workflow summary in the package guide.
 `packages/webcomponents/**`, its screenshot tooling, and the workflow
 definition on a `pull_request` to `main`. Unrelated PRs do not start the
 workflow.
+
+**Running it locally** (flags are `--flag=value` only; manifest is always
+`<out>/manifest.json`; empty diff → empty `shots[]` + a "no affected stories"
+comment):
+
+```bash
+npm run build-storybook -w @slicc/webcomponents
+git diff --name-only main... > /tmp/changed.txt
+npx playwright install chromium   # once
+node packages/dev-tools/tools/storybook-affected-screenshots.mjs \
+  --changed-files=/tmp/changed.txt \
+  --storybook-static=packages/webcomponents/storybook-static \
+  --out=/tmp/sb-shots
+```
 
 **Affected-story heuristic** (directory-level, intentionally coarse — easy to
 reason about, no module-graph plumbing):

@@ -1,76 +1,70 @@
 # CLAUDE.md
 
-Developer-tooling surface for `packages/dev-tools/`. Long-form notes: [`docs/dev-tools-details.md`](../../docs/dev-tools-details.md).
+Developer tooling in `packages/dev-tools/`. Long-form notes: [`docs/dev-tools-details.md`](../../docs/dev-tools-details.md).
 
 ## Key Tooling Areas
 
-- **playwright-cli gap sync**: `packages/dev-tools/tools/playwright-cli-sync.mjs` — diffs Slicc's playwright-cli against `@playwright/cli`. Ref: [`docs/playwright-cli-sync.md`](../../docs/playwright-cli-sync.md).
-- **Dev-only VFS skills** (`packages/dev-tools/vfs-dev-skills/`): `__DEV__`-gated `import.meta.glob` in `packages/webapp/src/scoops/skills.ts`, remapped to `/workspace/skills/`. Contains `playwright-cli-e2e`.
-- **Build configs**: `packages/webapp/vite.config.ts`, `packages/chrome-extension/vite.config.ts`, `biome.json`.
-- **QA setup**: `packages/node-server/src/qa-setup.ts` plus root `npm run qa:*` scripts. Visual/integration helper: `packages/webapp/tests/test-dips.mjs`.
-- **RUM error triage**: `packages/dev-tools/rum-error-triage/triage-rum-errors.mjs`, nightly via `.github/workflows/rum-error-triage.yml`.
-- **Scheduled agentic workflows** (selector `.mjs` + `claude-code-action`): `boy-scout-debt/`, `pr-fix-dispatcher/`, `claude-md-compactor/`, `flaky-ci-hunter/`, `backlog-dispatcher/`. Deep ref: [dev-tools-details.md#scheduled-agentic-workflows](../../docs/dev-tools-details.md#scheduled-agentic-workflows).
-- **Review responder** (event-driven sibling): `packages/dev-tools/review-responder/` + `.github/workflows/review-responder.yml` — answers reviewer feedback on `automation/*` PRs. Deep ref: [dev-tools-details.md#review-responder](../../docs/dev-tools-details.md#review-responder).
-- **Bedrock model scout** (weekly canary, no Claude): `packages/dev-tools/model-scout/` + `.github/workflows/model-scout.yml` — probes every `*_BEDROCK_MODEL` ID the workflows can reach and files an issue on a dead one. Deep ref: [dev-tools-details.md#model-scout](../../docs/dev-tools-details.md#model-scout).
-- **AI comment detection**: `packages/dev-tools/ai-comment-detection/` — labels `ai-generated`/`human-in-the-loop` via `.github/workflows/ai-comment-detection.yml`. Deep ref: [dev-tools-details.md#ai-comment-detection](../../docs/dev-tools-details.md#ai-comment-detection).
-- **Doc gates** (`npm run lint:docs`, `.husky/pre-commit`): `packages/dev-tools/tools/check-doc-sizes.mjs` (+ `check-doc-sizes-lib.mjs`) and `check-doc-refs.mjs` (+ `check-doc-refs-lib.mjs`). Deep ref: [dev-tools-details.md#doc-dead-reference-gate](../../docs/dev-tools-details.md#doc-dead-reference-gate).
-- **Hugging Face caching mirror** (`packages/dev-tools/tools/hf-cache-mirror.mjs`): zero-dep local `huggingface.co` mirror with an on-disk store; the e2e CI job runs it, persists `.cache/hf-mirror` with `actions/cache`, and hands `HF_ENDPOINT` to the virtual shell's `hf download` so the Kokoro weights come off disk on warm runs.
+Bare script names below live under `tools/` unless a fuller path is given.
+
+- **playwright-cli gap sync**: `tools/playwright-cli-sync.mjs` — diffs Slicc's playwright-cli vs `@playwright/cli`. Ref: [`docs/playwright-cli-sync.md`](../../docs/playwright-cli-sync.md).
+- **Dev-only VFS skills** (`packages/dev-tools/vfs-dev-skills/`): `__DEV__`-gated `import.meta.glob` in `packages/webapp/src/scoops/skills.ts`, remapped to `/workspace/skills/`.
+- **Build configs**: `webapp/vite.config.ts`, `chrome-extension/vite.config.ts`, `biome.json`.
+- **QA setup**: `packages/node-server/src/qa-setup.ts` + root `npm run qa:*`; visual helper `webapp/tests/test-dips.mjs`.
+- **RUM error triage**: `packages/dev-tools/rum-error-triage/triage-rum-errors.mjs`, nightly via workflow `rum-error-triage.yml`.
+- **Scheduled agentic workflows** (selector `.mjs` + `claude-code-action`): `boy-scout-debt/`, `pr-fix-dispatcher/`, `claude-md-compactor/`, `flaky-ci-hunter/`, `backlog-dispatcher/`; event-driven sibling **review responder** (`review-responder/`) answers `automation/*` PR feedback. Deep refs: [workflows](../../docs/dev-tools-details.md#scheduled-agentic-workflows), [responder](../../docs/dev-tools-details.md#review-responder).
+- **Bedrock model scout** (weekly canary, no Claude): `packages/dev-tools/model-scout/` + workflow `model-scout.yml` — probes reachable `*_BEDROCK_MODEL` IDs, files an issue on a dead one. [details](../../docs/dev-tools-details.md#model-scout).
+- **e2b template**: `packages/dev-tools/e2b-template/` — hosted-leader cloud float's e2b sandbox. See `cloud-core/CLAUDE.md`.
+- **AI comment detection**: `packages/dev-tools/ai-comment-detection/` + workflow `ai-comment-detection.yml` — labels `ai-generated`/`human-in-the-loop`. [details](../../docs/dev-tools-details.md#ai-comment-detection).
+- **Doc gates** (`npm run lint:docs`, `.husky/pre-commit`): `tools/check-doc-sizes.mjs` + `check-doc-refs.mjs` (each + `-lib`). [details](../../docs/dev-tools-details.md#doc-dead-reference-gate).
+- **Hugging Face caching mirror** (`tools/hf-cache-mirror.mjs`): zero-dep local `huggingface.co` mirror; e2e CI caches `.cache/hf-mirror` and sets `HF_ENDPOINT` for warm-run Kokoro weights.
 - **Linear-history check**: `bash packages/dev-tools/tools/check-linear-history.sh [base-ref] [head-ref]`. `linear-history` CI job.
-- **Skill lint** (`npm run lint:skills`): `packages/dev-tools/tools/lint-skills.mjs` — `tessl skill lint` via `@tessl/cli`. Warns locally; fails under `--strict`/CI.
-- **Developer-skill sync** (`npm run lint:skill-router`): `packages/dev-tools/tools/check-skill-router-sync.sh` — keeps root router, `.agents/skills/`, `.claude/skills/` aliases in sync.
+- **Skill lint** (`npm run lint:skills`): `tools/lint-skills.mjs` — `tessl skill lint` via `@tessl/cli`; warns locally, fails under `--strict`/CI.
 - **Patch reconcile** (`npm run lint:patches`): `packages/dev-tools/patch-reconcile/check-patches.mjs` + `reconcile-context.mjs`. See `patches/README.md`.
-- **SPM ↔ xcodegen pin reconcile** (`npm run lint:swift-pins`): `packages/dev-tools/swift-pin-reconcile/`. Dual-pinned GitHub packages (Package.swift + project.yml) must overlap; `renovate-swift-pin-reconcile.yml` raises the stale side on `swift-pin` Renovate PRs. See the folder README.
-- **iOS UI-test exclusion registry** (`npm run lint:ios-ui-tests`): `packages/dev-tools/tools/ios-ui-test-exclusions.mjs` + `packages/ios-app/ui-test-exclusions.json`. `ios-app-tests` runs the WHOLE `SliccFollowerUITests` bundle on the GA cells and subtracts this registry, so a new class is gated the day it lands; the gate rejects an entry with no reason or one naming a class/method that no longer exists.
-- **SwiftPM lockfile drift gate**: `packages/dev-tools/tools/check-swift-resolved-drift.mjs` — run AFTER a resolve step (the `ios-app` CI job). `xcodebuild -resolvePackageDependencies` rewrites `Package.resolved` in place and builds against what it wrote, so a floated **transitive** pin lands with no diff; `lint:swift-pins` only sees direct pins. Compares identity/version/revision, ignoring `originHash` and key order (both move with the toolchain).
-- **innerHTML guard** (`npm run lint:no-innerhtml`): `packages/dev-tools/tools/check-no-innerhtml.mjs` bans `.innerHTML =`, `.outerHTML =`, `insertAdjacentHTML()` in `@slicc/webcomponents` (stories/tests exempt).
-- **Providers boundary** (`npm run lint:no-ui-in-providers`): `packages/dev-tools/tools/check-no-ui-imports-in-providers.mjs` bans `from '…ui/…'` in `providers/built-in/`.
-- **Layer back-edge ratchet** (`npm run lint:layer-back-edges`): `packages/dev-tools/tools/check-layer-back-edges.mjs`; baseline `layer-back-edge-baseline.json` (`--update`). Deep ref: [dev-tools-details.md#layer-back-edge-ratchet](../../docs/dev-tools-details.md#layer-back-edge-ratchet).
-- **`Record<string, unknown>` ratchet** (`npm run lint:record-string-unknown`): `packages/dev-tools/tools/check-record-string-unknown.mjs`; detection is the GritQL plugin `.biome-plugins/no-record-string-unknown.grit` run through `biome.record-gate.json`. Baseline `record-string-unknown-baseline.json` (`--update`). Deep ref: [dev-tools-details.md#record-string-unknown-ratchet](../../docs/dev-tools-details.md#record-string-unknown-ratchet).
-- **Hosted-origin literal guard**: `packages/dev-tools/tools/check-hosted-origin-literal.mjs` — TS must import `SLICC_HOSTED_ORIGIN` from `@slicc/shared-ts`.
-- **Chrome runtime.id guard**: `packages/dev-tools/tools/check-no-raw-chrome-runtime-id.mjs` — use `isChromeExtensionRealm()` from `@slicc/shared-ts` (tests exempt).
-- **AGENTS.md symlink guard**: `packages/dev-tools/tools/check-agents-symlinks.mjs` — every `packages/*/CLAUDE.md` needs an `AGENTS.md` sibling symlink.
-- **iOS PR screenshots**: `packages/dev-tools/tools/ios-screenshots.mjs` (+ `ios-screenshots-lib.mjs`) reads `packages/ios-app/screenshot-screens.json`, emits Storybook `manifest.json`. Driven by `.github/workflows/ios-screenshots.yml`.
-- **Storybook PR screenshots**: `packages/dev-tools/tools/storybook-affected-screenshots.mjs` (+ `storybook-affected-stories-lib.mjs`) — light/dark shots of affected webcomponents stories; pair with `npm run build-storybook -w @slicc/webcomponents`. Driven by `.github/workflows/storybook-screenshots.yml`. Upload: `storybook-screenshots-upload.mjs` (+ `-lib.mjs`) to R2. Deep ref: [dev-tools-details.md#storybook-screenshots-upload](../../docs/dev-tools-details.md#storybook-screenshots-upload).
-- **Dead code (production files)** (`npm run deadcode:production-files`): `knip --production --include files`; config `knip.json`. Deep ref: [dev-tools-details.md#knip-production-suffix-discipline](../../docs/dev-tools-details.md#knip-production-suffix-discipline).
-- **Swift unused-dependency gate** (`npm run lint:swift-deps`): `packages/dev-tools/tools/check-swift-unused-deps.mjs` (+ `-lib.mjs`) — SPM parity with knip (TS) and `make tidy-check` (Go); diffs every `packages/*/Package.swift` against the modules its targets import. Waiver: `// unused-dep-ok: <reason>`. Deep ref: [dev-tools-details.md#swift-unused-dependency-gate](../../docs/dev-tools-details.md#swift-unused-dependency-gate).
-- **Debt boy-scout gate**: `node packages/dev-tools/tools/check-touched-exemptions.mjs [base-ref]` (+ `size-exemption-lib.mjs`) — enforces `biome.json` debt overrides plus `layer-back-edge-baseline.json` and `record-string-unknown-baseline.json`. See [verifying-before-push skill](../../.agents/skills/verifying-before-push/SKILL.md).
-- **First-load size gate** (part of `npm run size -w @slicc/webapp`): `packages/dev-tools/tools/check-first-load-size.mjs` (+ `first-load-size-lib.mjs`, `first-load-baseline.mjs`) — measures the eager import closures of the page entry (via `.vite/manifest.json`) and the kernel-worker entry (parsed from emitted chunks). Guards cold-boot payload, not per-file size. **Relative**: it builds the merge-base in a throwaway worktree (workspace packages re-pointed at the worktree's own source, then the root `postinstall` prerequisite builds — borrowing the caller's would mask a webcomponents-side regression) (`--baseline=<ref>`, default `origin/main`; `--baseline=none` to skip, `--json` to just measure) and fails on a change's own growth past `maxDeltaKb`, so it never fires on inherited state and cancels the ~1 kB Linux-vs-macOS build difference. On `merge_group` the delta is skipped (a queue branch is cumulative — its delta is the batch sum, and a per-change allowance would fail on queue depth); ceilings only, no baseline build. That split is only safe because a CI `pull_request` run treats an unmeasurable baseline as a hard failure rather than degrading — otherwise a PR could clear both stages unmeasured. Local runs still degrade to ceilings with a note. The absolute `*EagerCeilingKb` values in `packages/webapp/first-load-budget.json` are the backstop against many small under-threshold changes creeping upward — human-owned, not numbers to nudge when a build goes red.
-- **Coverage gate + ratchet**: `packages/dev-tools/tools/coverage-gate.mjs` + `coverage-ratchet.mjs` (`coverage-thresholds.json`). Swift: `swift-coverage-check.sh` + `swift-coverage-runner-retry.sh`; `SLICC_IOS_SIM_UDID` overrides. Deep ref: [dev-tools-details.md#swift-coverage-retry](../../docs/dev-tools-details.md#swift-coverage-retry).
-- **Optional-binary guard**: `packages/dev-tools/tools/run-if-installed.mjs <binary> [args...]` — runs iff on `PATH`, else warns and exits 0. Used by the root `lint-staged` Swift/Go globs.
-- **Cross-impl vectors**: `packages/dev-tools/tools/gen-mask-vectors.mjs` (TS/Swift mask parity) and `gen-theme-vectors.mjs` (via `npx tsx`; regenerate after `theme-engine.ts` changes, asserted by `packages/webapp/tests/ui/theme-vectors.test.ts` + `ThemeEngineTests.swift`).
-- **Preflight deps check**: `packages/dev-tools/tools/preflight-deps.mjs` — wired via `pretypecheck`/`pretest`.
-- **Release gating**: `packages/dev-tools/tools/release-plan.mjs` (Linux preflight) + `release-native.mjs` — gates macOS/iOS packaging, `slicc` Go CLI (`packages/slicc-cli/sign-and-package.sh`), Chrome Web Store/worker publish, `@ai-ecoverse/biome-jsh` (`--gate=biome-jsh-version`/`--gate=biome-jsh`).
+- **Developer-skill sync** (`npm run lint:skill-router`): `tools/check-skill-router-sync.sh` — keeps root router, `.agents/skills/`, `.claude/skills/` in sync.
+- **SPM ↔ xcodegen pin reconcile** (`npm run lint:swift-pins`): `packages/dev-tools/swift-pin-reconcile/`. Dual-pinned GitHub packages (Package.swift + project.yml) must overlap; `renovate-swift-pin-reconcile.yml` raises the stale side on `swift-pin` PRs. See its README.
+- **iOS UI-test exclusion registry** (`npm run lint:ios-ui-tests`): `tools/ios-ui-test-exclusions.mjs` + `packages/ios-app/ui-test-exclusions.json`. [details](../../docs/dev-tools-details.md#ios-ui-test-exclusion-registry).
+- **SwiftPM lockfile drift gate** (`ios-app` CI): `tools/check-swift-resolved-drift.mjs` — catches floated transitive pins `lint:swift-pins` misses. [details](../../docs/dev-tools-details.md#swiftpm-lockfile-drift-gate).
+- **Source-shape guards** (`tools/`): `check-no-innerhtml.mjs` (`lint:no-innerhtml`), `check-no-ui-imports-in-providers.mjs` (`lint:no-ui-in-providers`), `check-hosted-origin-literal.mjs`, `check-no-raw-chrome-runtime-id.mjs`, `check-agents-symlinks.mjs`. [details](../../docs/dev-tools-details.md#source-guards).
+- **Layer back-edge ratchet** (`npm run lint:layer-back-edges`): `tools/check-layer-back-edges.mjs`; baseline `layer-back-edge-baseline.json` (`--update`). [details](../../docs/dev-tools-details.md#layer-back-edge-ratchet).
+- **`Record<string, unknown>` ratchet** (`npm run lint:record-string-unknown`): `tools/check-record-string-unknown.mjs` + `.biome-plugins/no-record-string-unknown.grit` (`biome.record-gate.json`); baseline `record-string-unknown-baseline.json` (`--update`). [details](../../docs/dev-tools-details.md#record-string-unknown-ratchet).
+- **Swift unused-dependency gate** (`npm run lint:swift-deps`): `tools/check-swift-unused-deps.mjs` (+ `-lib.mjs`) — SPM parity with knip (TS) / `make tidy-check` (Go). Waiver `// unused-dep-ok: <reason>`. [details](../../docs/dev-tools-details.md#swift-unused-dependency-gate).
+- **iOS PR screenshots**: `tools/ios-screenshots.mjs` (+ `-lib.mjs`) reads `packages/ios-app/screenshot-screens.json`, emits Storybook `manifest.json`. Workflow `ios-screenshots.yml`.
+- **Storybook PR screenshots**: `tools/storybook-affected-screenshots.mjs` (+ `storybook-affected-stories-lib.mjs`) — light/dark shots of affected stories; pair with `build-storybook -w @slicc/webcomponents`; workflow `storybook-screenshots.yml`; R2 upload `storybook-screenshots-upload.mjs` (+ `-lib`). [details](../../docs/dev-tools-details.md#storybook-screenshots-upload).
+- **Dead code (production files)** (`npm run deadcode:production-files`): `knip --production --include files`; `knip.json`. [details](../../docs/dev-tools-details.md#knip-production-suffix-discipline).
+- **Debt boy-scout gate**: `node packages/dev-tools/tools/check-touched-exemptions.mjs [base-ref]` (+ `size-exemption-lib.mjs`) — enforces `biome.json` debt overrides + the two `*-baseline.json`. See [verifying](../../.agents/skills/verifying-before-push/SKILL.md).
+- **Coverage gate + ratchet** (`tools/`): `coverage-gate.mjs` + `coverage-ratchet.mjs` (`coverage-thresholds.json`); Swift `swift-coverage-check.sh` + `-runner-retry.sh` (`SLICC_IOS_SIM_UDID` override). [details](../../docs/dev-tools-details.md#swift-coverage-retry).
+- **First-load size gate** (part of `npm run size -w @slicc/webapp`): `tools/check-first-load-size.mjs` (+ `first-load-size-lib.mjs`, `first-load-baseline.mjs`) — relative cold-boot payload guard vs `origin/main` (`--baseline=<ref>|none`, `--json`); ceilings in `packages/webapp/first-load-budget.json`. [details](../../docs/dev-tools-details.md#first-load-size-gate).
+- **Cross-impl vectors**: `tools/gen-mask-vectors.mjs` (TS/Swift mask parity), `gen-theme-vectors.mjs` (`npx tsx`; regen after `theme-engine.ts` edits, asserted by `theme-vectors.test.ts` + `ThemeEngineTests.swift`).
+- **Preflight deps check**: `tools/preflight-deps.mjs` — wired via `pretypecheck`/`pretest`.
+- **Release gating**: `tools/release-plan.mjs` (Linux preflight) + `release-native.mjs` — gates macOS/iOS packaging, `slicc` Go CLI (`packages/slicc-cli/sign-and-package.sh`), Chrome Web Store/worker publish, `@ai-ecoverse/biome-jsh` (`--gate=biome-jsh-version|biome-jsh`).
+- **Optional-binary guard**: `tools/run-if-installed.mjs <binary> [args...]` — runs iff on `PATH`, else warns and exits 0; used by `lint-staged` Swift/Go globs.
 
 ### SLICC CDP Debug + Screencast
 
-- `packages/dev-tools/tools/slicc-debug.mjs` — CDP diagnostic CLI (`targets`, `logs`, `vfs ls/cat`, `eval`, `shell`; `--url`/`--url-pattern`/`--file`). `node packages/dev-tools/tools/slicc-debug.mjs --help`.
-- `packages/dev-tools/tools/slicc-screencast.mjs` (+ `-lib.mjs`, `-video.mjs`) — `Page.startScreencast` frames + `manifest.json`; `--video` via ffmpeg. Skill: `demo-recording`.
+- `tools/slicc-debug.mjs` — CDP diagnostic CLI (`targets`, `logs`, `vfs ls/cat`, `eval`, `shell`; `--url`/`--url-pattern`/`--file`; `--help`).
+- `tools/slicc-screencast.mjs` (+ `-lib.mjs`, `-video.mjs`) — `Page.startScreencast` frames + `manifest.json`; `--video` via ffmpeg. Skill `demo-recording`.
 
 ### Fresh Dev Harnesses
 
-Five isolated harnesses on distinct ports; reaping is opt-in (`SLICC_FRESH_REAP=1`) and port-scoped.
+Five isolated harnesses on distinct ports; reaping opt-in (`SLICC_FRESH_REAP=1`), port-scoped.
 
-| Harness        | Script                        | Bridge                 | CDP     | Notes                                       |
-| -------------- | ----------------------------- | ---------------------- | ------- | ------------------------------------------- |
-| Standalone     | `dev-standalone-fresh.sh`     | `:$PORT` (use `:5715`) | auto    | Fails on occupied bridge; self-builds UI    |
-| Swift          | `dev-swift-fresh.sh`          | `:5720`                | `:9224` | Native; auto-signs with stable dev cert     |
-| Extension      | `dev-extension-fresh.sh`      | (SW)                   | `:9333` | MV3 extension IS the bridge; LaunchServices |
-| Electron-Node  | `dev-electron-node-fresh.sh`  | `:5730`                | `:9225` | External Electron app (default: Slack)      |
-| Electron-Swift | `dev-electron-swift-fresh.sh` | `:5740`                | `:9226` | Swift backend, external Electron app        |
+| Harness (script under `tools/`)              | Bridge             | CDP     | Notes                                    |
+| -------------------------------------------- | ------------------ | ------- | ---------------------------------------- |
+| Standalone `dev-standalone-fresh.sh`         | `:$PORT` (`:5715`) | auto    | fails on occupied bridge; self-builds UI |
+| Swift `dev-swift-fresh.sh`                   | `:5720`            | `:9224` | native; auto-signs with dev cert         |
+| Extension `dev-extension-fresh.sh`           | (SW)               | `:9333` | MV3 extension IS the bridge              |
+| Electron-Node `dev-electron-node-fresh.sh`   | `:5730`            | `:9225` | external Electron app (Slack)            |
+| Electron-Swift `dev-electron-swift-fresh.sh` | `:5740`            | `:9226` | Swift backend + external Electron        |
 
-Isolated lane: `PORT=5715 WRANGLER_PORT=8787 npm run dev:standalone:fresh`; never touch production bridge `:5710` or Chrome CDP `:9222`. Also `npm run dev:swift:fresh`, `dev:extension:fresh`, `dev:electron:node:fresh`, `dev:electron:swift:fresh`, with `PORT=…`/`ELECTRON_APP=…` overrides. Lifecycle + reaping: [`docs/development.md`](../../docs/development.md); [dev-tools-details.md#fresh-dev-harnesses](../../docs/dev-tools-details.md#fresh-dev-harnesses).
+Isolated lane: `PORT=5715 WRANGLER_PORT=8787 npm run dev:standalone:fresh` (also `dev:swift:fresh`, `dev:extension:fresh`, `dev:electron:{node,swift}:fresh`; `PORT=…`/`ELECTRON_APP=…`). Never touch production bridge `:5710` or CDP `:9222`. [development.md](../../docs/development.md), [details](../../docs/dev-tools-details.md#fresh-dev-harnesses).
 
 ### Supporting Utilities
 
-- **Labeled Chrome clone**: `clone-labeled-chrome.sh` — APFS COW-clone with distinct `CFBundleName`/`CFBundleIdentifier` (distinct ⌘-Tab entries per harness); ad-hoc re-signed, top-level only. No-op on non-darwin.
-- **Stable dev code-signing identity**: `bash packages/dev-tools/tools/setup-dev-cert.sh` — one-time; creates persistent self-signed `SLICC Dev Code Signing`. `dev-swift-fresh.sh` picks it up automatically.
-
-## e2b Template
-
-Hosted-leader cloud float runs in an e2b sandbox; template in `packages/dev-tools/e2b-template/`. See `packages/cloud-core/CLAUDE.md`.
+- **Labeled Chrome clone**: `clone-labeled-chrome.sh` — APFS COW-clone with distinct `CFBundleName`/`CFBundleIdentifier` for per-harness ⌘-Tab entries; ad-hoc re-signed. Darwin-only.
+- **Stable dev code-signing identity**: `bash tools/setup-dev-cert.sh` — one-time; creates self-signed `SLICC Dev Code Signing`, picked up by `dev-swift-fresh.sh`.
 
 ## Usage Notes
 
 - Prefer root npm scripts when a helper already has one.
-- Keep dev-only configs and utilities out of runtime packages unless required at runtime.
-- When adding new tooling, document both file location and entry command.
+- Keep dev-only configs/utilities out of runtime packages unless needed at runtime.
+- When adding tooling, document its file location and entry command.
