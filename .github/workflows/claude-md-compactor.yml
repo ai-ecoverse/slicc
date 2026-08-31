@@ -2,10 +2,12 @@ name: Weekend CLAUDE.md Compactor
 
 # Weekly instruction-file compaction. Saturday night a deterministic Node step
 # measures every TRACKED file named CLAUDE.md (root, docs/, every package) and
-# hands the oversized ones to claude-code-action, which rewrites them and pushes
-# ONE branch; a deterministic step then opens exactly ONE pull request from it
-# (Claude never runs `gh pr create` — see that step's note). Silence is a valid
-# outcome: nothing oversized → no branch, no PR.
+# fans out ONE claude-code-action job per oversized guide (dispatch 33309651347
+# spawned-and-waited when given all 8 at once and wrote nothing). Each shard
+# only edits; a consolidate job copies every packed shard onto ONE branch from
+# origin/main and opens exactly ONE pull request. Silence is a valid outcome:
+# nothing oversized (or every leftover is already in an open compaction PR) →
+# no branch, no PR.
 #
 # TWO BUDGETS, do not confuse them:
 #   * The repo's committed GATE is 20,000 chars for packages/*/CLAUDE.md
@@ -17,16 +19,17 @@ name: Weekend CLAUDE.md Compactor
 # packages/vfs-root/shared/CLAUDE.md (the agent-facing runtime guide, budgeted
 # at 3,000 BYTES) is excluded by construction and never compacted.
 #
-# Cross-run deduplication is GitHub-native: the measure step queries open PRs
-# and skips the run when a compaction PR is already open (no state file, no
-# state branch, no cache).
+# Cross-run deduplication is GitHub-native and file-level: the measure step
+# queries open compaction PRs and drops those CLAUDE.md paths from the
+# worklist. Other oversized guides still fan out (so #2679 in the merge queue
+# does not freeze ios-app / webcomponents / …).
 #
 # Required repository secrets:
 #   AWS_BEARER_TOKEN_BEDROCK  Amazon Bedrock API key for claude-code-action
 #                             (same secret as agentic-debt-triage.yml).
-#   BOT_PAT                   Used for checkout, and for `gh pr create`, so the
-#                             branch push and the PR trigger CI — a PR pushed or
-#                             opened with GITHUB_TOKEN does not (GitHub's
+#   BOT_PAT                   Used for the consolidate push and `gh pr create`,
+#                             so the PR triggers CI — a PR pushed or opened
+#                             with GITHUB_TOKEN does not (GitHub's
 #                             anti-recursion guard; its checks sit at
 #                             `action_required`), same constraint as
 #                             coverage-ratchet.yml.
@@ -49,27 +52,192 @@ on:
       target_chars:
         description: 'Compaction target in characters (default 9500)'
         required: false
+      max_guides:
+        description: 'How many oversized guides to fan out (default 0 = all, largest first)'
+        required: false
+        default: '0'
+      max_turns:
+        description: 'Override Claude --max-turns per shard (default: 300 plus overflow for that file)'
+        required: false
 
 concurrency:
   group: claude-md-compactor
   cancel-in-progress: false
 
 permissions:
-  contents: write # Claude creates the compaction branch and pushes it
-  pull-requests: write # ... and a later deterministic step opens one PR from it
+  contents: write
+  pull-requests: write
   id-token: write # claude-code-action fetches an OIDC token during GitHub token setup
 
 jobs:
-  compact:
+  measure:
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 15
+    outputs:
+      has_oversized: ${{ steps.measure.outputs.has_oversized }}
+      oversized_count: ${{ steps.measure.outputs.oversized_count }}
+      matrix: ${{ steps.measure.outputs.matrix }}
+      worklist: ${{ steps.measure.outputs.worklist }}
+      before_sizes: ${{ steps.measure.outputs.before_sizes }}
+      branch: ${{ steps.measure.outputs.branch }}
+      pr_title: ${{ steps.measure.outputs.pr_title }}
+      existing_pr: ${{ steps.measure.outputs.existing_pr }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
         with:
-          fetch-depth: 0 # full history so the branch can be pushed and rebased
-          # BOT_PAT (not GITHUB_TOKEN) so the branch push and resulting
-          # pull_request / merge_group events trigger CI — same anti-recursion
-          # constraint documented in coverage-ratchet.yml.
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      # A dispatch from a workflow PR is behind any compaction already merged
+      # to main (#2678). Measuring this branch's stale CLAUDE.md files re-selects
+      # a guide that is already under policy on main (dispatch 33325727205
+      # compacted webapp again instead of swift-launcher). Align the guides
+      # with origin/main; the workflow YAML and compactor scripts stay from
+      # this checkout.
+      - name: Align CLAUDE.md with origin/main
+        run: |
+          git fetch --quiet origin main
+          files=$(git ls-files -- '*CLAUDE.md')
+          if [ -n "$files" ]; then
+            # shellcheck disable=SC2086
+            git checkout origin/main -- $files
+          fi
+
+      - name: Measure tracked CLAUDE.md guides
+        id: measure
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          MAX_CHARS: ${{ github.event.inputs.max_chars }}
+          TARGET_CHARS: ${{ github.event.inputs.target_chars }}
+          MAX_GUIDES: ${{ github.event.inputs.max_guides }}
+        run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs
+
+      - name: Report claimed files in an already-open compaction PR
+        if: steps.measure.outputs.existing_pr != ''
+        run: |
+          echo "::notice::Open compaction PR ${{ steps.measure.outputs.existing_pr }} — those CLAUDE.md files are claimed; other oversized guides still fan out."
+
+  compact:
+    needs: measure
+    if: needs.measure.outputs.has_oversized == 'true' && github.event.inputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      max-parallel: 8
+      matrix: ${{ fromJSON(needs.measure.outputs.matrix) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+
+      - name: Align CLAUDE.md with origin/main
+        run: |
+          git fetch --quiet origin main
+          files=$(git ls-files -- '*CLAUDE.md')
+          if [ -n "$files" ]; then
+            # shellcheck disable=SC2086
+            git checkout origin/main -- $files
+          fi
+
+      - name: Measure this guide
+        id: shard
+        env:
+          REPO: ${{ github.repository }}
+          GH_TOKEN: ${{ github.token }}
+          SKIP_PR_CHECK: '1'
+          MAX_CHARS: ${{ github.event.inputs.max_chars }}
+          TARGET_CHARS: ${{ github.event.inputs.target_chars }}
+          MAX_TURNS: ${{ github.event.inputs.max_turns }}
+          GUIDE: ${{ matrix.guide }}
+        run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs
+
+      - name: Configure git identity
+        if: steps.shard.outputs.has_oversized == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Compact ${{ matrix.guide }}
+        id: claude
+        if: steps.shard.outputs.has_oversized == 'true'
+        # Max-turns (dispatch 33312644577: 19998 → ~10286 then cap) must not
+        # discard the working tree — pack still lands a partial shard.
+        continue-on-error: true
+        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
+        env:
+          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
+          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
+          GH_TOKEN: ${{ github.token }}
+          PR_BODY_FILE: ${{ runner.temp }}/claude-md-compaction-pr-body.md
+        with:
+          use_bedrock: 'true'
+          github_token: ${{ github.token }}
+          # On `schedule` events GitHub sets the actor to the last actor on the
+          # default branch, which in this merge-queue repo is `github-merge-queue`
+          # (a bot). Named bots rather than `'*'`: this repo is PUBLIC, and the
+          # action's own docs warn that `'*'` lets external Apps invoke it with
+          # prompts they control.
+          allowed_bots: 'github-merge-queue[bot],github-actions[bot]'
+          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
+          claude_args: |
+            --model ${{ vars.COMPACTOR_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
+            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
+            --disallowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr merge:*),Bash(git push:*),Agent,Task,TodoWrite"
+            --max-turns ${{ steps.shard.outputs.max_turns }}
+          prompt: ${{ steps.shard.outputs.prompt }}
+
+      - name: Verify this guide is under the policy limit
+        id: verify
+        if: always() && steps.claude.outcome != 'skipped' && steps.shard.outputs.has_oversized == 'true'
+        continue-on-error: true
+        env:
+          MAX_CHARS: ${{ github.event.inputs.max_chars }}
+          TARGET_CHARS: ${{ github.event.inputs.target_chars }}
+          WORKLIST: ${{ steps.shard.outputs.worklist }}
+        run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check
+
+      - name: Pack this shard
+        id: pack
+        if: always() && steps.claude.outcome != 'skipped' && steps.shard.outputs.has_oversized == 'true'
+        continue-on-error: true
+        env:
+          MAX_CHARS: ${{ github.event.inputs.max_chars }}
+          TARGET_CHARS: ${{ github.event.inputs.target_chars }}
+          WORKLIST: ${{ steps.shard.outputs.worklist }}
+          BEFORE_SIZES: ${{ steps.shard.outputs.before_sizes }}
+          SHRUNK_PATHS_FILE: ${{ runner.temp }}/compactor-shrunk-paths.txt
+          ORIG_SHA: ${{ github.sha }}
+          PACK_DIR: ${{ runner.temp }}/pack
+        run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --pack
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always() && steps.pack.outputs.packed == 'true'
+        with:
+          name: compacted-${{ matrix.safe_name }}
+          path: ${{ runner.temp }}/pack
+          if-no-files-found: ignore
+          retention-days: 1
+
+  publish:
+    needs: [measure, compact]
+    if: always() && needs.measure.result == 'success' && needs.measure.outputs.has_oversized == 'true' && needs.compact.result != 'skipped' && github.event.inputs.dry_run != 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+        with:
+          fetch-depth: 0
           token: ${{ secrets.BOT_PAT }}
 
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -79,123 +247,74 @@ jobs:
 
       - run: npm ci
 
-      # Read-only: enumerates tracked guides, measures characters (never bytes),
-      # queries open PRs for the dedup rule, and composes the prompt. This is
-      # the last step a dry run reaches.
-      - name: Measure tracked CLAUDE.md guides
-        id: measure
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          pattern: compacted-*
+          path: ${{ runner.temp }}/shards
+          merge-multiple: false
+
+      - name: Consolidate shards onto origin/main
+        id: recover
         env:
-          REPO: ${{ github.repository }}
-          GH_TOKEN: ${{ github.token }}
           MAX_CHARS: ${{ github.event.inputs.max_chars }}
           TARGET_CHARS: ${{ github.event.inputs.target_chars }}
-        run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs
-
-      - name: Report an already-open compaction PR
-        if: steps.measure.outputs.existing_pr != ''
+          PR_BODY_FILE: ${{ runner.temp }}/claude-md-compaction-pr-body.md
+          PACKS_DIR: ${{ runner.temp }}/shards
+          ASSEMBLE_PATHS_FILE: ${{ runner.temp }}/compactor-publish-paths.txt
+          BRANCH: ${{ needs.measure.outputs.branch }}
+          HUSKY: '0'
         run: |
-          echo "::notice::Compaction PR already open: ${{ steps.measure.outputs.existing_pr }} — skipping."
+          set -euo pipefail
+          node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --assemble
 
-      # Claude commits and pushes as this identity (matching coverage-ratchet.yml).
-      - name: Configure git identity
-        if: steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
-        run: |
+          git fetch --quiet origin main
+          git checkout -f -B "$BRANCH" --no-track origin/main
+
+          while IFS= read -r p; do
+            [ -z "$p" ] && continue
+            found=""
+            for shard in "$PACKS_DIR"/*; do
+              if [ -f "$shard/files/$p" ]; then
+                found="$shard/files/$p"
+              fi
+            done
+            if [ -z "$found" ]; then
+              echo "::error::$p was assembled but is missing from every shard."
+              exit 1
+            fi
+            mkdir -p "$(dirname "$p")"
+            cp -- "$found" "$p"
+            git add -- "$p"
+          done < "$ASSEMBLE_PATHS_FILE"
+
+          xargs npx prettier --write < "$ASSEMBLE_PATHS_FILE"
+          while IFS= read -r p; do
+            git add -- "$p"
+          done < "$ASSEMBLE_PATHS_FILE"
+
+          if git diff --cached --quiet; then
+            echo "Nothing to commit after applying compaction onto origin/main."
+            exit 1
+          fi
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit --no-verify -m "chore(docs): compact CLAUDE.md guides for weekly headroom"
+          git push --no-verify -u origin "$BRANCH"
 
-      - name: Compact the oversized guides and push the branch
-        id: claude
-        if: steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
-        uses: anthropics/claude-code-action@be7b93b1907a4abad570368f3c74b6fe3807510b # v1
-        env:
-          # Bedrock path: authenticate with an Amazon Bedrock API key (the Adobe
-          # CAMP `ABSK...` bearer token), same as agentic-debt-triage.yml.
-          AWS_BEARER_TOKEN_BEDROCK: ${{ secrets.AWS_BEARER_TOKEN_BEDROCK }}
-          AWS_REGION: ${{ vars.RUM_AWS_REGION || 'us-east-1' }}
-          # Claude's Bash `gh` always ends up with the action's own
-          # `github_token:` input, NOT whatever GH_TOKEN is set here — the action
-          # overrides it. That is why Claude no longer opens the PR (see the
-          # step below); read-only `gh` use is fine on this token, and the branch
-          # push uses the BOT_PAT credential persisted by actions/checkout.
-          GH_TOKEN: ${{ github.token }}
-          # The brief writes the PR body here; the step below opens the PR from
-          # it. Passed as env so the prompt and that step cannot drift apart.
-          PR_BODY_FILE: ${{ runner.temp }}/claude-md-compaction-pr-body.md
-        with:
-          use_bedrock: 'true'
-          # Pass the workflow's GITHUB_TOKEN explicitly so the action uses it
-          # directly instead of attempting an OIDC -> GitHub App token exchange
-          # (which fails with "User does not have write access" when the Claude
-          # GitHub App is not installed on this repo).
-          github_token: ${{ github.token }}
-          # On `schedule` events GitHub sets the actor to the last actor on the
-          # default branch, which in this merge-queue repo is `github-merge-queue`
-          # (a bot). claude-code-action's human-actor gate otherwise rejects the
-          # run with "Workflow initiated by non-human actor". Allow all bots so
-          # the cron can run unattended.
-          #
-          # Named bots rather than `'*'`: this repo is PUBLIC, and the action's own
-          # docs warn that `'*'` lets external Apps invoke it with prompts they
-          # control. Both names below are GitHub's first-party bots, which no third
-          # party can act as, so every installed App (Renovate, Codex, Copilot)
-          # stays out. `github-actions[bot]` is here because a release commit can
-          # land on main between merges, making it the last actor. If a run is ever
-          # rejected by the actor gate, the log names the actor — add it here
-          # deliberately rather than widening back to `'*'`.
-          allowed_bots: 'github-merge-queue[bot],github-actions[bot]'
-          # Print Claude's full turn-by-turn output on manual dispatch (to
-          # inspect its reasoning); kept off for the weekly cron so routine runs
-          # don't log tool output that may contain sensitive data.
-          show_full_output: ${{ github.event_name == 'workflow_dispatch' }}
-          claude_args: |
-            --model ${{ vars.COMPACTOR_BEDROCK_MODEL || vars.RUM_BEDROCK_MODEL || 'global.anthropic.claude-sonnet-4-6' }}
-            --allowedTools "Bash,Read,Edit,Write,Grep,Glob"
-            --disallowedTools "Bash(gh pr create:*),Bash(gh pr edit:*),Bash(gh pr merge:*)"
-            --max-turns 150
-          prompt: ${{ steps.measure.outputs.prompt }}
-
-      # The Cosmos "do not proceed unless every guide is under the limit"
-      # invariant, enforced deterministically here rather than trusted to the
-      # model. Runs on Claude's own working tree, after its commit.
-      - name: Verify every guide is under the policy limit
-        if: success() && steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
-        env:
-          MAX_CHARS: ${{ github.event.inputs.max_chars }}
-          # The brief promises a rewrite to at most TARGET_CHARS, so the check
-          # holds the selected guides to the target and everything else to the
-          # max. Without the worklist it could only prove they left the oversized
-          # band — a guide parked just under MAX_CHARS would pass here and be
-          # re-selected next week for nothing.
-          TARGET_CHARS: ${{ github.event.inputs.target_chars }}
-          WORKLIST: ${{ steps.measure.outputs.worklist }}
-        run: node packages/dev-tools/claude-md-compactor/measure-claude-guides.mjs --check
-
-      # PR creation is deliberately NOT Claude's job. claude-code-action forces
-      # its Bash `gh` onto the action's `github_token:` (GITHUB_TOKEN here), so a
-      # PR Claude opens is authored by `github-actions[bot]` — and GitHub then
-      # queues EVERY workflow run for that PR as `action_required`, awaiting a
-      # human click, so the PR lands with zero checks (observed on #2168/#2169).
-      # Opening it here with BOT_PAT is the shape coverage-ratchet.yml uses.
-      # Ordered after the policy check on purpose: a compaction that failed the
-      # invariant must not become a PR. Claude pushing nothing is a clean no-op.
       - name: Open the compaction PR
-        if: success() && steps.measure.outputs.has_oversized == 'true' && steps.measure.outputs.existing_pr == '' && github.event.inputs.dry_run != 'true'
+        if: steps.recover.outcome == 'success'
         env:
-          # BOT_PAT (contents + pull-requests write, no issues) — enough to open
-          # the PR; this workflow applies no label, so no second token is needed.
           GH_TOKEN: ${{ secrets.BOT_PAT }}
           REPO: ${{ github.repository }}
-          BRANCH: ${{ steps.measure.outputs.branch }}
-          PR_TITLE: ${{ steps.measure.outputs.pr_title }}
+          BRANCH: ${{ needs.measure.outputs.branch }}
+          PR_TITLE: ${{ needs.measure.outputs.pr_title }}
           PR_BODY_FILE: ${{ runner.temp }}/claude-md-compaction-pr-body.md
         run: |
           set -euo pipefail
-          # Explicit refspec: the checkout's fetch config is not guaranteed to map
-          # an arbitrary new branch into refs/remotes/origin/.
           git fetch --quiet origin "+refs/heads/$BRANCH:refs/remotes/origin/$BRANCH" || true
           git fetch --quiet origin main
           if ! git rev-parse --quiet --verify "refs/remotes/origin/$BRANCH" >/dev/null; then
-            echo "Claude pushed nothing — nothing to open."
+            echo "Nothing was pushed — nothing to open."
             exit 0
           fi
           if [ "$(git rev-list --count "origin/main..refs/remotes/origin/$BRANCH")" -eq 0 ]; then
