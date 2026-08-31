@@ -20,6 +20,7 @@ import {
   type BiscottoGates,
   type BiscottoRecord,
   createCapabilityToken,
+  jsonResponse,
   MAX_BISCOTTI_PER_TRAY,
   normalizeBiscottoGate,
   type TrayRecord,
@@ -243,4 +244,87 @@ function summarize(record: BiscottoRecord, now: number): BiscottoSummary {
     gates: record.gates,
     active: isBiscottoActive(record, now),
   };
+}
+
+/**
+ * `/internal/biscotto/{mint,stop,list}` — the DO half of `biscotto-routes.ts`,
+ * dispatched here rather than in `session-tray.ts` so the durable object keeps
+ * one `handleInternalRoute` line per concern (mirrors `dispatchPreviewRoute`).
+ *
+ * Every branch reads the controller token out of the body and hands it to the
+ * lifecycle helper, which is what actually authenticates it. A thrown
+ * {@link BiscottoRouteError} carries the status; anything else is a 500 with no
+ * detail, so an internal failure never describes the tray to a caller that did
+ * not authenticate.
+ *
+ * `announceRevocation` is the caller's leader socket: revoking a seat only
+ * tombstones the token, and a guest that is already connected holds a data
+ * channel this module cannot reach.
+ */
+export async function dispatchBiscottoRoute(
+  url: URL,
+  request: Request,
+  deps: BiscottoDeps,
+  announceRevocation: (biscottoId: string) => boolean
+): Promise<Response> {
+  if (request.method !== 'POST') {
+    return jsonResponse({ error: 'method not allowed' }, 405);
+  }
+  let body: {
+    controllerToken?: string;
+    label?: string;
+    id?: string;
+    ttlMs?: number;
+    gates?: Partial<BiscottoGates>;
+    workerBaseUrl?: string;
+  };
+  try {
+    body = (await request.json()) as typeof body;
+  } catch {
+    return jsonResponse({ error: 'invalid body' }, 400);
+  }
+  const controllerToken = typeof body.controllerToken === 'string' ? body.controllerToken : '';
+  try {
+    switch (url.pathname) {
+      case '/internal/biscotto/mint':
+        return jsonResponse(
+          await mintBiscotto(
+            {
+              controllerToken,
+              label: body.label ?? '',
+              ttlMs: body.ttlMs,
+              gates: body.gates,
+              workerBaseUrl: body.workerBaseUrl ?? '',
+            },
+            deps
+          )
+        );
+      case '/internal/biscotto/stop': {
+        const revoked = await revokeBiscotto({ controllerToken, id: body.id ?? '' }, deps);
+        // Tombstoning the token only stops future joins. A live guest holds a
+        // direct data channel to the leader that this DO cannot reach, so the
+        // eviction has to be delegated to the one process that can — and if
+        // that message did not land, the seat is revoked for FUTURE joins
+        // while whoever is already connected keeps their channel. Reporting
+        // plain success there would tell an owner the guest is out when they
+        // are not, so the outcome says which happened.
+        const evicted = announceRevocation(revoked.id);
+        if (!evicted) {
+          console.warn('[tray] biscotto revoked but the leader could not be told', {
+            biscottoId: revoked.id,
+          });
+        }
+        return jsonResponse({ ...revoked, evicted });
+      }
+      case '/internal/biscotto/list':
+        return jsonResponse({ biscotti: await listBiscotti({ controllerToken }, deps) });
+      default:
+        return jsonResponse({ error: 'not found' }, 404);
+    }
+  } catch (error) {
+    if (error instanceof BiscottoRouteError) {
+      return jsonResponse({ error: error.message }, error.status);
+    }
+    return jsonResponse({ error: 'biscotto request failed' }, 500);
+  }
 }

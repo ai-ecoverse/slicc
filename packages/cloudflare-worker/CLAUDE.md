@@ -9,8 +9,19 @@ Deep reference: [`docs/cloudflare-worker-details.md`](../../docs/cloudflare-work
 ## Main Files
 
 - `src/index.ts` — entry + public HTTP routing
-- `src/session-tray.ts` — `SessionTrayDurableObject`: controller WS (leader), follower
-  WebRTC signaling, preview bridge WS
+- `src/session-tray.ts` — `SessionTrayDurableObject`: the per-tray coordinator. Owns
+  the tray record, leader election + controller WS, the join surface, route dispatch.
+  Every other concern is a collaborator behind a `*Deps` seam (issue #2674), so it is
+  unit-testable without a DO harness:
+  - `src/session-tray-bootstrap.ts` — `BootstrapCoordinator`: follower WebRTC
+    signaling state machine (offer/answer/ICE, event log, retry, pruning)
+  - `src/session-tray-bridge.ts` — `BridgeRelay`: preview-bridge CDP relay,
+    `window.slicc.emit()` attribution, per-conn emit rate limit
+  - `src/session-tray-preview.ts` — preview mint/resolve/revoke + response assembly
+  - `src/session-tray-biscotto.ts` — guest seat lifecycle + `/internal/biscotto/*`
+  - `src/session-tray-webhook.ts` — `WebhookRelay`: forwarding + #2524 receipts
+  - `src/session-tray-push.ts` — `PushCoordinator`: APNs device registry + fan-out
+  - `src/session-tray-requests.ts` — pure request parsing / wire-shape guards
 - `src/turn-credentials.ts` — Cloudflare TURN credential fetcher
 - `src/shared.ts` — capability tokens; `reclaimMsForTray`;
   `TRAY_RECLAIM_TTL_MS`/`HOSTED_TRAY_RECLAIM_TTL_MS`
@@ -82,8 +93,8 @@ keyed by `connId`, replays `bridge.connected` on leader (re)connect, hibernates 
 returns `{ trust: 'full' }` for the tray join token, `{ trust: 'biscotto' }` for
 a live seat, and `null` for anything else (including revoked/expired seats,
 which are compared before being filtered so their existence does not leak by
-timing). Mint/revoke/list live in `src/session-tray-biscotto.ts` and are gated on
-the **controller** token — a seat is never an issuing authority.
+timing). Mint/revoke/list (and the `/internal/biscotto/*` dispatcher) live in
+`src/session-tray-biscotto.ts` and are gated on the **controller** token — a seat is never an issuing authority.
 
 **Trust travels on the controller socket, never on the peer's `hello`.** The DO
 stamps `trust` + `biscotto` onto `follower.join_requested`, which only the leader
