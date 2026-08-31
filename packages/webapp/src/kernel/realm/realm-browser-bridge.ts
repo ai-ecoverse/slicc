@@ -39,7 +39,11 @@ export async function serializeRequestInit(
   }
   let body: string | undefined;
   let defaultContentType: string | undefined;
-  if (init?.body !== undefined && init?.body !== null && init?.body !== '') {
+  // GET/HEAD cannot carry a body. The host-side adapter drops it downstream,
+  // so serializing here would only leave behind a Content-Type describing a
+  // body that never ships — and the direct adapter path sends neither.
+  const canHaveBody = method !== 'GET' && method !== 'HEAD';
+  if (canHaveBody && init?.body !== undefined && init?.body !== null && init?.body !== '') {
     const serialized = await serializeRequestBody(init.body);
     body = serialized.body;
     defaultContentType = serialized.defaultContentType;
@@ -56,8 +60,15 @@ export async function serializeRequestInit(
 async function serializeRequestBody(
   body: BodyInit
 ): Promise<{ body: string; defaultContentType?: string }> {
-  if (typeof body === 'string' || body instanceof URLSearchParams) {
-    return { body: body.toString() };
+  if (typeof body === 'string') return { body };
+  if (body instanceof URLSearchParams) {
+    // The host adapter sees only a string and can no longer tell this apart
+    // from a text/plain body, so the default has to be decided here. Without
+    // it an OAuth token endpoint treats the form as text/plain and rejects it.
+    return {
+      body: body.toString(),
+      defaultContentType: 'application/x-www-form-urlencoded;charset=UTF-8',
+    };
   }
   if (body instanceof Blob) {
     return {

@@ -1872,6 +1872,13 @@ it back to raw bytes whenever the Content-Type is not text-shaped. Both the
 | `FormData`                                 | latin1 multipart | `multipart/form-data; boundary=<token>`                |
 | `ReadableStream`                           | —                | rejected; collect it into a `Uint8Array` first         |
 
+The defaults above hold on **both** paths. The realm's `serializeRequestInit`
+has to decide them itself rather than leaning on the host adapter: everything
+crosses the RPC boundary as a string, so by the time the adapter sees the body
+it can no longer tell a `URLSearchParams` from a `text/plain` payload. A
+`GET`/`HEAD` request drops the body on both paths and advertises no
+Content-Type for it.
+
 `multipart/form-data` is serialized by `webapp/src/base/multipart-form-data.ts`
 — the single encoder, also used by the DA mount backend. **The boundary token
 is minted in the same call that lays down the delimiters** and returned as a

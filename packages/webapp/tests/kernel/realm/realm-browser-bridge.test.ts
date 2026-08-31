@@ -35,7 +35,7 @@ describe('serializeRequestInit', () => {
     ['', 'application/octet-stream'],
   ])('defaults a Blob with type %j to %s', async (type, contentType) => {
     const serialized = await serializeRequestInit(
-      { body: new Blob([new Uint8Array(expectedBytes)], { type }) },
+      { method: 'post', body: new Blob([new Uint8Array(expectedBytes)], { type }) },
       '/upload'
     );
 
@@ -46,6 +46,7 @@ describe('serializeRequestInit', () => {
   it('preserves a caller-provided Blob Content-Type case-insensitively', async () => {
     const serialized = await serializeRequestInit(
       {
+        method: 'post',
         headers: { 'CONTENT-TYPE': 'application/custom' },
         body: new Blob([new Uint8Array(expectedBytes)], { type: 'image/png' }),
       },
@@ -55,15 +56,54 @@ describe('serializeRequestInit', () => {
     expect(serialized?.headers).toEqual({ 'CONTENT-TYPE': 'application/custom' });
   });
 
-  it('leaves string and URLSearchParams bodies unchanged', async () => {
-    const text = await serializeRequestInit({ body: 'hello\u0000world' }, '/text');
-    const params = new URLSearchParams({ grant_type: 'client_credentials', scope: 'a b' });
-    const form = await serializeRequestInit({ body: params }, '/token');
+  it('leaves a string body unchanged', async () => {
+    const text = await serializeRequestInit({ method: 'post', body: 'hello\u0000world' }, '/text');
 
     expect(text?.body).toBe('hello\u0000world');
     expect(text?.headers).toEqual({});
+  });
+
+  it('defaults a URLSearchParams body to form-urlencoded', async () => {
+    // The host adapter receives only a string and can no longer tell this
+    // apart from text/plain, so the default has to be decided here — an OAuth
+    // token endpoint rejects the request without it.
+    const params = new URLSearchParams({ grant_type: 'client_credentials', scope: 'a b' });
+    const form = await serializeRequestInit({ method: 'post', body: params }, '/token');
+
     expect(form?.body).toBe(params.toString());
-    expect(form?.headers).toEqual({});
+    expect(form?.headers).toEqual({
+      'Content-Type': 'application/x-www-form-urlencoded;charset=UTF-8',
+    });
+  });
+
+  it('lets a caller-provided Content-Type win over the URLSearchParams default', async () => {
+    const serialized = await serializeRequestInit(
+      { method: 'post', headers: { 'CONTENT-TYPE': 'text/plain' }, body: new URLSearchParams() },
+      '/token'
+    );
+
+    expect(serialized?.headers).toEqual({ 'CONTENT-TYPE': 'text/plain' });
+  });
+
+  it.each([
+    [
+      'a FormData',
+      () => {
+        const f = new FormData();
+        f.append('a', 'b');
+        return f;
+      },
+    ],
+    ['a Blob', () => new Blob([new Uint8Array(expectedBytes)])],
+    ['a URLSearchParams', () => new URLSearchParams({ a: 'b' })],
+  ])('drops %s body on GET without advertising a Content-Type', async (_name, makeBody) => {
+    // GET/HEAD cannot carry a body; the host adapter drops it downstream, so
+    // serializing here would leave a Content-Type describing a body that never
+    // ships. The direct adapter path sends neither — keep the two in step.
+    const serialized = await serializeRequestInit({ method: 'get', body: makeBody() }, '/x');
+
+    expect(serialized?.body).toBeUndefined();
+    expect(serialized?.headers).toEqual({});
   });
 
   it('serializes a FormData body as multipart with a matching boundary', async () => {
@@ -107,7 +147,7 @@ describe('serializeRequestInit', () => {
 
   it('rejects unsupported ReadableStream bodies explicitly', async () => {
     await expect(
-      serializeRequestInit({ body: new ReadableStream<Uint8Array>() }, '/stream')
+      serializeRequestInit({ method: 'post', body: new ReadableStream<Uint8Array>() }, '/stream')
     ).rejects.toThrow(
       'node fetch shim: ReadableStream request bodies are not supported (collect into a Uint8Array or string before calling fetch)'
     );
