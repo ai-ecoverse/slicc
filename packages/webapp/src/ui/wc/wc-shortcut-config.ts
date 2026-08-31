@@ -3,8 +3,21 @@
  *
  * Shipped defaults live in code ({@link DEFAULT_KEYMAP}); this file is how a
  * user overrides them. It is seeded from `packages/vfs-root/etc/slicc/keys.json`
- * the first time it is missing and never written again — an edited config must
- * survive every later boot, so "seed once" is the whole write policy.
+ * the first time it is missing — an edited config must survive every later
+ * boot, so "seed once, then never write what the user might have touched" is
+ * the whole write policy.
+ *
+ * ## The one exception, and why it exists
+ *
+ * The v1 seed listed all sixteen of its bindings explicitly. Since the file is
+ * applied OVER the defaults, that made every v1 install permanently pinned to
+ * the v1 keyboard: a newly shipped map would have reached nobody who had ever
+ * started SLICC, and neither would the keys for commands that did not exist
+ * yet. So a file that still holds the v1 map exactly
+ * ({@link isUntouchedV1Document}) is replaced ONCE by the shipped document —
+ * which now carries no bindings at all, precisely so this can never be needed
+ * a second time. Anything else, including a v1 map with one line changed, is
+ * somebody's config and is left alone.
  *
  * ## Why keys map onto command IDS
  *
@@ -35,7 +48,13 @@ import defaultKeysDoc from '../../../../vfs-root/etc/slicc/keys.json?raw';
 import { createLogger } from '../../base/logger.js';
 import type { LocalVfsClient } from '../../kernel/local-vfs-client.js';
 import type { WritableVfsClient } from '../../kernel/writable-vfs-client.js';
-import { type CommandId, DEFAULT_KEYMAP, isCommandId, RESERVED_KEYS } from './wc-shortcuts.js';
+import {
+  type CommandId,
+  DEFAULT_KEYMAP,
+  isCommandId,
+  RESERVED_KEYS,
+  V1_KEYMAP,
+} from './wc-shortcuts.js';
 
 const log = createLogger('wc-shortcut-config');
 
@@ -50,7 +69,21 @@ export interface KeymapParseResult {
 }
 
 /** A named key the config may bind, beyond single characters. */
-const NAMED_KEYS = new Set(['Enter', 'Tab', 'Backspace', 'Delete', 'Home', 'End']);
+const NAMED_KEYS = new Set([
+  'Enter',
+  'Tab',
+  'Backspace',
+  'Delete',
+  'Home',
+  'End',
+  // The arrows carry the tab strip in the shipped map. Bindable for the same
+  // reason they were chosen: nothing else in the shell wants them while the
+  // mode is on, and ↑/↓ still scroll the transcript because nothing binds them.
+  'ArrowLeft',
+  'ArrowRight',
+  'ArrowUp',
+  'ArrowDown',
+]);
 
 /** Is `key` something a keypress can actually produce, and ours to give away? */
 function keyProblem(key: string): string | null {
@@ -118,6 +151,36 @@ export function parseKeymapDocument(
   return { keymap, warnings };
 }
 
+/**
+ * Does this document still hold the v1 keymap, entry for entry?
+ *
+ * The v1 seed wrote all sixteen bindings out EXPLICITLY, and the file is
+ * applied over the defaults — so every install that ever booted v1 has a file
+ * that pins v1 forever, and a new shipped map would reach nobody. This is the
+ * "nobody has touched it" test that makes the one-time replacement safe: an
+ * exact match on the whole set, so a single added, removed or re-pointed
+ * binding (the shapes an edit takes) fails it and the file is left alone.
+ *
+ * Deliberately not a version stamp — the file it has to recognise was written
+ * before there was anything to stamp.
+ */
+export function isUntouchedV1Document(text: string): boolean {
+  let bindings: unknown;
+  try {
+    bindings = (JSON.parse(text) as { bindings?: unknown } | null)?.bindings;
+  } catch {
+    // Unparseable is not untouched: somebody edited it and broke it, and
+    // overwriting would throw away what they were trying to say.
+    return false;
+  }
+  if (typeof bindings !== 'object' || bindings === null || Array.isArray(bindings)) return false;
+  // Narrowed to an object above, which is all `Object.entries` needs — the
+  // values stay unknown and are compared, never used as anything.
+  const entries = Object.entries(bindings);
+  if (entries.length !== Object.keys(V1_KEYMAP).length) return false;
+  return entries.every(([key, value]) => V1_KEYMAP[key] === value);
+}
+
 export interface LoadShortcutConfigDeps {
   reader: Pick<LocalVfsClient, 'readFile'>;
   writer: Pick<WritableVfsClient, 'writeFile' | 'mkdir'>;
@@ -181,6 +244,24 @@ export async function loadShortcutConfig(deps: LoadShortcutConfigDeps): Promise<
       });
     }
     return;
+  }
+
+  // A file nobody has edited is not a preference, it is a fossil of the map
+  // SLICC shipped when the user first booted — and while it sits there they
+  // can never receive another one. Replace it once, with the document that
+  // holds no bindings at all, so the defaults are theirs again and every
+  // later change reaches them. A write that fails changes nothing: the v1
+  // keymap below is still applied, and the next boot tries again.
+  if (isUntouchedV1Document(text)) {
+    try {
+      await deps.writer.writeFile(SHORTCUT_KEYS_PATH, defaultKeysDoc);
+      logger.info(`Replaced the untouched v1 keymap at ${SHORTCUT_KEYS_PATH}`);
+      return;
+    } catch (err) {
+      logger.warn('Could not replace the v1 shortcut config; keeping it', {
+        error: err instanceof Error ? err.message : String(err),
+      });
+    }
   }
 
   const { keymap, warnings } = parseKeymapDocument(text);

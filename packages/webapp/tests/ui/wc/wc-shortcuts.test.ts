@@ -13,9 +13,11 @@ import {
   describeKey,
   digitFor,
   hasOpenOverlay,
+  indexForDigit,
   isActivationTarget,
   isTypingTarget,
   nextInCycle,
+  prevInCycle,
   shortcutRows,
   sprinkleIds,
   unitKeyForDigit,
@@ -42,6 +44,9 @@ function harness(
     noDock?: boolean;
     noFreezer?: boolean;
     composerAvailable?: () => boolean;
+    /** Rows the `files` / `sessions` chord lists report. */
+    files?: string[];
+    sessions?: string[];
   } = {}
 ) {
   const keys = options.tabs ?? ['cone_1', 'cone_2', 'scoop_a'];
@@ -100,10 +105,36 @@ function harness(
   const freezer = Object.assign(document.createElement('div'), { toggle });
   document.body.append(freezer);
   const newChat = vi.fn();
+  const erase = vi.fn();
+  const newCone = vi.fn();
+  const dropCone = vi.fn();
   freezer.addEventListener('new-chat-save', newChat);
+  freezer.addEventListener('new-chat-erase', erase);
+  freezer.addEventListener('new-cone', newCone);
+  freezer.addEventListener('drop-cone', dropCone);
+  const stopTurn = vi.fn();
+  const focusApproval = vi.fn();
+  const openAttachMenu = vi.fn();
+  const copyReply = vi.fn();
+  const copyChat = vi.fn();
+  const zoomSurface = vi.fn();
+  const selectFile = vi.fn();
+  const selectSession = vi.fn();
+  const files = options.files ?? [];
+  const sessions = options.sessions ?? [];
   const handles = wireKeyboardShortcuts({
     switcher,
     composerMeta,
+    stopTurn,
+    focusApproval,
+    openAttachMenu,
+    copyReply,
+    copyChat,
+    zoomSurface,
+    lists: {
+      files: { size: () => files.length, selectAt: (i) => selectFile(files[i]) },
+      sessions: { size: () => sessions.length, selectAt: (i) => selectSession(sessions[i]) },
+    },
     ...(options.noDock ? {} : { dock }),
     ...(options.noFreezer ? {} : { freezer }),
     ...(options.noComposer ? {} : { focusComposer }),
@@ -124,6 +155,17 @@ function harness(
     focusComposer,
     toggle,
     newChat,
+    erase,
+    newCone,
+    dropCone,
+    stopTurn,
+    focusApproval,
+    openAttachMenu,
+    copyReply,
+    copyChat,
+    zoomSurface,
+    selectFile,
+    selectSession,
     accounts,
     freezer,
     /** Move the selection the way a float does, and let the mode react. */
@@ -307,7 +349,30 @@ describe('shortcutRows', () => {
     expect(rows[0].keys).toEqual(['Esc']);
     expect(rows[1].keys).toEqual(['1 – 9']);
     const flat = rows.flatMap((r) => r.keys);
-    for (const key of ['d', 'c', '⏎', 'n', 'b', 'f', 't', 'e', 'm', 's', 'a', 'h', '?', '/']) {
+    for (const key of [
+      '→',
+      '←',
+      'i',
+      '⏎',
+      'n',
+      'N',
+      's',
+      'a',
+      'u',
+      'y',
+      'f',
+      't',
+      'b',
+      'm',
+      'g',
+      'p',
+      '[',
+      ']',
+      'z',
+      'l',
+      ',',
+      '?',
+    ]) {
       expect(flat).toContain(key);
     }
   });
@@ -396,7 +461,7 @@ describe('the Escape contract', () => {
 describe('outside keyboard mode', () => {
   it('binds nothing at all', () => {
     const h = harness();
-    for (const key of ['1', 'c', 'd', 'n', 'b', 'x', 'f', 't', 'e', 'm', 's', 'l', 'a', 'h']) {
+    for (const key of ['1', 'i', 'n', 'b', 'f', 't', 'm', 's', 'l', 'a', 'y', 'z']) {
       expect(press({ key, code: key === '1' ? 'Digit1' : `Key${key.toUpperCase()}` })).toBe(false);
     }
     expect(h.select).not.toHaveBeenCalled();
@@ -424,17 +489,24 @@ describe('inside keyboard mode', () => {
     expect(select).not.toHaveBeenCalled();
   });
 
-  it('d walks the strip, looping past the end', () => {
+  it('→ walks the strip, looping past the end', () => {
     const { select } = harness({ activeTab: 'scoop_a' });
     escape();
-    press({ key: 'd', code: 'KeyD' });
+    press({ key: 'ArrowRight', code: 'ArrowRight' });
     expect(select).toHaveBeenCalledWith('cone_1');
   });
 
-  it('c and Enter go back to the composer and leave the mode', () => {
+  it('← walks it the other way, looping past the front', () => {
+    const { select } = harness({ activeTab: 'cone_1' });
+    escape();
+    press({ key: 'ArrowLeft', code: 'ArrowLeft' });
+    expect(select).toHaveBeenCalledWith('scoop_a');
+  });
+
+  it('i and Enter go back to the composer and leave the mode', () => {
     const { focusComposer, handles } = harness();
     escape();
-    press({ key: 'c', code: 'KeyC' });
+    press({ key: 'i', code: 'KeyI' });
     expect(focusComposer).toHaveBeenCalledTimes(1);
     expect(handles.active()).toBe(false);
     escape();
@@ -451,19 +523,18 @@ describe('inside keyboard mode', () => {
     expect(handles.active()).toBe(false);
   });
 
-  it('b toggles the left rail and keeps the mode', () => {
+  it('[ toggles the left rail and keeps the mode', () => {
     const { toggle, handles } = harness();
     escape();
-    press({ key: 'b', code: 'KeyB' });
+    press({ key: '[', code: 'BracketLeft' });
     expect(toggle).toHaveBeenCalledTimes(1);
     expect(handles.active()).toBe(true);
   });
 
   it.each([
-    ['f', 'files'],
-    ['t', 'browser'],
-    ['e', 'term'],
-    ['m', 'memory'],
+    ['b', 'browser'],
+    ['t', 'term'],
+    ['g', 'monitor'],
   ])('%s opens the %s dock surface and leaves the mode', (key, id) => {
     const { selectItem, handles } = harness();
     escape();
@@ -472,7 +543,23 @@ describe('inside keyboard mode', () => {
     expect(handles.active()).toBe(false);
   });
 
-  it('s cycles the installed sprinkles', () => {
+  /**
+   * The two panels that own a chord list keep the keyboard instead: the digit
+   * that completes `f 3` has to land while the mode is still on, and neither
+   * panel takes the focus a dropped mode would be predicting.
+   */
+  it.each([
+    ['f', 'files'],
+    ['m', 'memory'],
+  ])('%s opens the %s dock surface and KEEPS the mode', (key, id) => {
+    const { selectItem, handles } = harness();
+    escape();
+    press({ key, code: `Key${key.toUpperCase()}` });
+    expect(selectItem).toHaveBeenCalledWith(id);
+    expect(handles.active()).toBe(true);
+  });
+
+  it('P cycles the installed sprinkles', () => {
     const { selectItem } = harness({
       dockItems: [
         { id: 'files', kind: 'tool' },
@@ -483,20 +570,37 @@ describe('inside keyboard mode', () => {
       activeDock: 'sprinkle:one',
     });
     escape();
-    press({ key: 's', code: 'KeyS' });
+    press({ key: 'P', code: 'KeyP', shiftKey: true });
     expect(selectItem).toHaveBeenCalledWith('sprinkle:two');
   });
 
-  it('s falls back to the new-sprinkle launcher when none are installed', () => {
+  it('P falls back to the new-sprinkle launcher when none are installed', () => {
     const { selectItem, handles } = harness();
     escape();
-    press({ key: 's', code: 'KeyS' });
+    press({ key: 'P', code: 'KeyP', shiftKey: true });
     expect(selectItem).toHaveBeenCalledWith('new');
     // A cycle key holds the mode, so a second press can reach the next one.
     expect(handles.active()).toBe(true);
   });
 
-  it('x closes the open right-hand panel, and reopens the last one', () => {
+  /**
+   * The chord prefix has to be idempotent, or `p 3` would flash whichever
+   * sprinkle the cycle happened to land on before opening the third.
+   */
+  it('p opens the FIRST sprinkle rather than cycling', () => {
+    const { selectItem } = harness({
+      dockItems: [
+        { id: 'sprinkle:one', kind: 'sprinkle' },
+        { id: 'sprinkle:two', kind: 'sprinkle' },
+      ],
+      activeDock: 'sprinkle:one',
+    });
+    escape();
+    press({ key: 'p', code: 'KeyP' });
+    expect(selectItem).toHaveBeenCalledWith('sprinkle:one');
+  });
+
+  it('] closes the open right-hand panel, and reopens the last one', () => {
     const h = harness({ activeDock: 'memory' });
     // The real `<slicc-dock>` clears `active` when it collapses; the stub has
     // to be told, or the second press would just collapse again.
@@ -504,27 +608,27 @@ describe('inside keyboard mode', () => {
       h.dock.active = null;
     });
     escape();
-    press({ key: 'x', code: 'KeyX' });
+    press({ key: ']', code: 'BracketRight' });
     expect(h.collapse).toHaveBeenCalledTimes(1);
     // A chrome toggle is navigation, so the mode survives it — as with `b`.
     expect(h.handles.active()).toBe(true);
-    press({ key: 'x', code: 'KeyX' });
+    press({ key: ']', code: 'BracketRight' });
     expect(h.selectItem).toHaveBeenCalledWith('memory');
   });
 
-  it('x falls back to Files on a shell that has never opened a panel', () => {
+  it('] falls back to Files on a shell that has never opened a panel', () => {
     const { selectItem } = harness({ activeDock: null });
     escape();
-    press({ key: 'x', code: 'KeyX' });
+    press({ key: ']', code: 'BracketRight' });
     expect(selectItem).toHaveBeenCalledWith('files');
   });
 
-  it('x reopens the surface a letter key last went to', () => {
+  it('] reopens the surface a letter key last went to', () => {
     const { selectItem } = harness({ activeDock: null });
     escape();
-    press({ key: 'e', code: 'KeyE' }); // terminal
+    press({ key: 't', code: 'KeyT' }); // terminal
     escape();
-    press({ key: 'x', code: 'KeyX' });
+    press({ key: ']', code: 'BracketRight' });
     expect(selectItem).toHaveBeenLastCalledWith('term');
   });
 
@@ -544,22 +648,22 @@ describe('inside keyboard mode', () => {
     expect(accounts).toHaveBeenCalledTimes(1);
   });
 
-  it('a opens accounts through the registered action', () => {
+  it(', opens accounts through the registered action', () => {
     const { accounts, handles } = harness();
     escape();
-    press({ key: 'a', code: 'KeyA' });
+    press({ key: ',', code: 'Comma' });
     expect(accounts).toHaveBeenCalledTimes(1);
     expect(handles.active()).toBe(false);
   });
 
-  it.each(['h', '?', '/'])('%s toggles the help overlay', (key) => {
+  it.each(['?'])('%s toggles the help overlay', (key) => {
     const { handles } = harness();
     escape();
-    press({ key, code: 'KeyH' });
+    press({ key, code: 'Slash', shiftKey: true });
     const overlay = handles.helpOverlay();
     expect(overlay?.getAttribute('heading')).toBe('Keyboard mode');
     expect(overlay?.querySelectorAll('.wcsc__row')).toHaveLength(shortcutRows().length);
-    press({ key, code: 'KeyH' });
+    press({ key, code: 'Slash', shiftKey: true });
     expect(handles.helpOverlay()).toBeNull();
   });
 
@@ -575,7 +679,7 @@ describe('inside keyboard mode', () => {
   it('an unbound key is not an exit — the mode is sticky', () => {
     const { handles } = harness();
     escape();
-    expect(press({ key: 'z', code: 'KeyZ' })).toBe(false);
+    expect(press({ key: 'q', code: 'KeyQ' })).toBe(false);
     expect(handles.active()).toBe(true);
   });
 
@@ -609,7 +713,7 @@ describe('inside keyboard mode', () => {
   it('degrades to no-ops on a float without the surfaces', () => {
     const { handles } = harness({ noDock: true, noFreezer: true, noComposer: true });
     escape();
-    for (const key of ['f', 'b', 'n', 's', 'c']) {
+    for (const key of ['f', 'b', 'n', 's', 'i', 'y', 'z', 'u']) {
       expect(() => press({ key, code: `Key${key.toUpperCase()}` })).not.toThrow();
     }
     expect(handles.helpOverlay()).toBeNull();
@@ -636,11 +740,11 @@ describe('the key HUD', () => {
   it('accumulates presses left to right, staling everything but the newest', () => {
     harness();
     escape();
-    press({ key: 'b', code: 'KeyB' });
+    press({ key: 's', code: 'KeyS' });
     press({ key: '2', code: 'Digit2' });
     expect(caps()).toEqual([
       { keys: 'Esc', bound: 'true', age: 'stale' },
-      { keys: 'b', bound: 'true', age: 'stale' },
+      { keys: 's', bound: 'true', age: 'stale' },
       { keys: '2', bound: 'true', age: undefined },
     ]);
   });
@@ -648,8 +752,8 @@ describe('the key HUD', () => {
   it('shows an unbound key dimmed rather than not at all', () => {
     harness();
     escape();
-    press({ key: 'z', code: 'KeyZ' });
-    expect(caps().at(-1)).toEqual({ keys: 'z', bound: 'false', age: undefined });
+    press({ key: 'q', code: 'KeyQ' });
+    expect(caps().at(-1)).toEqual({ keys: 'q', bound: 'false', age: undefined });
   });
 
   it('shows a digit past the end of the strip as unbound', () => {
@@ -672,9 +776,9 @@ describe('the key HUD', () => {
   it('keeps only the last few presses', () => {
     harness();
     escape();
-    for (const key of ['b', 'z', 'b', 'z', 'b']) press({ key, code: `Key${key.toUpperCase()}` });
+    for (const key of ['s', 'q', 's', 'q', 's']) press({ key, code: `Key${key.toUpperCase()}` });
     expect(caps()).toHaveLength(4);
-    expect(caps().at(-1)?.keys).toBe('b');
+    expect(caps().at(-1)?.keys).toBe('s');
   });
 
   it('clears itself after a quiet spell and the hint returns', () => {
@@ -682,11 +786,11 @@ describe('the key HUD', () => {
     try {
       harness();
       escape();
-      press({ key: 'b', code: 'KeyB' });
+      press({ key: 's', code: 'KeyS' });
       expect(caps()).toHaveLength(2);
       vi.advanceTimersByTime(1000);
       // Still within the linger window, and a new press restarts it.
-      press({ key: 'b', code: 'KeyB' });
+      press({ key: 's', code: 'KeyS' });
       vi.advanceTimersByTime(1000);
       expect(caps()).toHaveLength(3);
       vi.advanceTimersByTime(1000);
@@ -700,7 +804,7 @@ describe('the key HUD', () => {
   it('goes away with the mode', () => {
     const { handles } = harness();
     escape();
-    press({ key: 'b', code: 'KeyB' });
+    press({ key: 's', code: 'KeyS' });
     handles.setActive(false);
     expect(document.querySelector('[data-wc-shortcuts="keys"]')).toBeNull();
   });
@@ -816,17 +920,17 @@ describe('while a modal is open', () => {
     expect(handles.active()).toBe(true);
   });
 
-  it('still lets h close the help overlay it opened', () => {
+  it('still lets ? close the help overlay it opened', () => {
     const { handles } = harness();
     escape();
-    press({ key: 'h', code: 'KeyH' });
+    press({ key: '?', code: 'Slash', shiftKey: true });
     const overlay = handles.helpOverlay();
     expect(overlay).not.toBeNull();
     // jsdom never upgrades `<slicc-dialog>`, so `show()` cannot set `open`;
     // mark it the way the real component would, to prove the gate lets the
     // toggle through the very overlay it is guarding.
     overlay?.setAttribute('open', '');
-    press({ key: 'h', code: 'KeyH' });
+    press({ key: '?', code: 'Slash', shiftKey: true });
     expect(handles.helpOverlay()).toBeNull();
   });
 
@@ -836,7 +940,7 @@ describe('while a modal is open', () => {
     const dialog = document.createElement('slicc-dialog');
     dialog.setAttribute('open', '');
     document.body.append(dialog);
-    press({ key: 'h', code: 'KeyH' });
+    press({ key: '?', code: 'Slash', shiftKey: true });
     expect(handles.helpOverlay()).toBeNull();
   });
 });
@@ -947,8 +1051,11 @@ describe('the mode is the resting state', () => {
   it('settles again after a command whose surface never took the focus', async () => {
     const { handles, selectItem } = harness();
     escape();
-    expect(press({ key: 'f', code: 'KeyF' })).toBe(true);
-    expect(selectItem).toHaveBeenCalledWith('files');
+    // The terminal is the honest case: it is expected to take the focus, so
+    // the mode drops for it — and in a test (as in a panel that has not
+    // mounted yet) nothing does.
+    expect(press({ key: 't', code: 'KeyT' })).toBe(true);
+    expect(selectItem).toHaveBeenCalledWith('term');
     // Dropped for the surface that was about to autofocus...
     expect(handles.active()).toBe(false);
     await flush();
@@ -961,7 +1068,7 @@ describe('the mode is the resting state', () => {
     escape();
     // `c` focuses the composer for real, which is the case `holdsMode: false`
     // was written for.
-    press({ key: 'c', code: 'KeyC' });
+    press({ key: 'i', code: 'KeyI' });
     await flush();
     expect(handles.active()).toBe(false);
     expect(deepActiveElement(document)).toBe(composerField);
@@ -1111,5 +1218,223 @@ describe('dispose', () => {
     escape();
     press({ key: '1', code: 'Digit1' });
     expect(select).not.toHaveBeenCalled();
+  });
+});
+
+describe('indexForDigit', () => {
+  it('indexes from 1 and maps 9 onto the last item, whatever the list is', () => {
+    expect(indexForDigit(4, 1)).toBe(0);
+    expect(indexForDigit(4, 3)).toBe(2);
+    expect(indexForDigit(4, 9)).toBe(3);
+    // The rule holds for a list shorter than nine, which is the common case
+    // everywhere except the tab strip.
+    expect(indexForDigit(2, 9)).toBe(1);
+  });
+
+  it('is null past the end and on an empty list', () => {
+    expect(indexForDigit(2, 3)).toBeNull();
+    expect(indexForDigit(0, 1)).toBeNull();
+    expect(indexForDigit(0, 9)).toBeNull();
+  });
+});
+
+describe('prevInCycle', () => {
+  it('mirrors nextInCycle, wrapping past the front', () => {
+    expect(prevInCycle(['a', 'b', 'c'], 'a')).toBe('c');
+    expect(prevInCycle(['a', 'b', 'c'], 'c')).toBe('b');
+  });
+
+  /** With nothing selected the two keys must still be inverses. */
+  it('starts at the last entry when the current one is unknown', () => {
+    expect(prevInCycle(['a', 'b'], null)).toBe('b');
+    expect(prevInCycle(['a', 'b'], 'gone')).toBe('b');
+  });
+
+  it('is null only for an empty list', () => {
+    expect(prevInCycle([], 'a')).toBeNull();
+  });
+});
+
+describe('the turn keys', () => {
+  it('s stops the running turn and stays in the mode', () => {
+    const { stopTurn, handles } = harness();
+    escape();
+    press({ key: 's', code: 'KeyS' });
+    expect(stopTurn).toHaveBeenCalledTimes(1);
+    // Stopping is not going anywhere: the keyboard is still yours afterwards.
+    expect(handles.active()).toBe(true);
+  });
+
+  it('a goes to the pending approval without answering it', () => {
+    const { focusApproval, handles } = harness();
+    escape();
+    press({ key: 'a', code: 'KeyA' });
+    expect(focusApproval).toHaveBeenCalledTimes(1);
+    // A focused button keeps its own Enter, so the mode has to survive to let
+    // the user press it.
+    expect(handles.active()).toBe(true);
+  });
+
+  it('u opens the add menu and leaves the mode for its search field', () => {
+    const { openAttachMenu, handles } = harness();
+    escape();
+    press({ key: 'u', code: 'KeyU' });
+    expect(openAttachMenu).toHaveBeenCalledTimes(1);
+    expect(handles.active()).toBe(false);
+  });
+
+  it('y copies the last reply and Y the whole chat', () => {
+    const { copyReply, copyChat } = harness();
+    escape();
+    press({ key: 'y', code: 'KeyY' });
+    press({ key: 'Y', code: 'KeyY', shiftKey: true });
+    expect(copyReply).toHaveBeenCalledTimes(1);
+    expect(copyChat).toHaveBeenCalledTimes(1);
+  });
+
+  it('z full-screens the open panel', () => {
+    const { zoomSurface } = harness();
+    escape();
+    press({ key: 'z', code: 'KeyZ' });
+    expect(zoomSurface).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the conversation keys', () => {
+  it('N erases the chat where n saves it', () => {
+    const { newChat, erase } = harness();
+    escape();
+    press({ key: 'N', code: 'KeyN', shiftKey: true });
+    expect(erase).toHaveBeenCalledTimes(1);
+    expect(newChat).not.toHaveBeenCalled();
+  });
+
+  it("c and C fire the rail row's own cone events", () => {
+    const { newCone, dropCone } = harness();
+    escape();
+    press({ key: 'c', code: 'KeyC' });
+    escape();
+    press({ key: 'C', code: 'KeyC', shiftKey: true });
+    expect(newCone).toHaveBeenCalledTimes(1);
+    expect(dropCone).toHaveBeenCalledTimes(1);
+  });
+
+  it('r opens the rail rather than toggling it', () => {
+    const { toggle, handles } = harness();
+    escape();
+    press({ key: 'r', code: 'KeyR' });
+    press({ key: 'r', code: 'KeyR' });
+    // Twice, and still open: the point of the key is to look at the list.
+    expect(toggle).toHaveBeenNthCalledWith(1, true);
+    expect(toggle).toHaveBeenNthCalledWith(2, true);
+    expect(handles.active()).toBe(true);
+  });
+});
+
+describe('chords', () => {
+  it('sends the digit after a list command to that list, not the strip', () => {
+    const h = harness({ files: ['/a.ts', '/b.ts', '/c.ts'] });
+    escape();
+    press({ key: 'f', code: 'KeyF' });
+    expect(press({ key: '2', code: 'Digit2' })).toBe(true);
+    expect(h.selectFile).toHaveBeenCalledWith('/b.ts');
+    expect(h.select).not.toHaveBeenCalled();
+  });
+
+  it('maps 9 onto the last row, exactly as it does for agents', () => {
+    const h = harness({ sessions: ['jan.json', 'feb.json', 'mar.json'] });
+    escape();
+    press({ key: 'r', code: 'KeyR' });
+    press({ key: '9', code: 'Digit9' });
+    expect(h.selectSession).toHaveBeenCalledWith('mar.json');
+  });
+
+  it('is one key wide — a digit two keys later is the strip again', () => {
+    const h = harness({ files: ['/a.ts'] });
+    escape();
+    press({ key: 'f', code: 'KeyF' });
+    press({ key: 'q', code: 'KeyQ' });
+    press({ key: '1', code: 'Digit1' });
+    expect(h.selectFile).not.toHaveBeenCalled();
+    expect(h.select).toHaveBeenCalledWith('cone_1');
+  });
+
+  it('expires, handing the digit back to the strip', () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ files: ['/a.ts'] });
+      escape();
+      press({ key: 'f', code: 'KeyF' });
+      vi.advanceTimersByTime(1200);
+      press({ key: '1', code: 'Digit1' });
+      expect(h.selectFile).not.toHaveBeenCalled();
+      expect(h.select).toHaveBeenCalledWith('cone_1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('leaves a digit pressed on its own to the strip', () => {
+    const h = harness({ files: ['/a.ts'] });
+    escape();
+    press({ key: '1', code: 'Digit1' });
+    expect(h.selectFile).not.toHaveBeenCalled();
+    expect(h.select).toHaveBeenCalledWith('cone_1');
+  });
+
+  /**
+   * A panel that is still mounting has no rows yet. The press is shown dimmed
+   * rather than queued, and — the part that matters — it does NOT fall through
+   * to the tab strip, where it would switch agents behind the user's back.
+   */
+  it('does nothing at all when the list is empty', () => {
+    const h = harness({ files: [] });
+    escape();
+    press({ key: 'f', code: 'KeyF' });
+    expect(press({ key: '2', code: 'Digit2' })).toBe(false);
+    expect(h.selectFile).not.toHaveBeenCalled();
+    expect(h.select).not.toHaveBeenCalled();
+  });
+
+  it('indexes the sprinkle launchers off the dock rail itself', () => {
+    const { selectItem } = harness({
+      dockItems: [
+        { id: 'files', kind: 'tool' },
+        { id: 'sprinkle:one', kind: 'sprinkle' },
+        { id: 'sprinkle:two', kind: 'sprinkle' },
+        { id: 'new', kind: 'sprinkle' },
+      ],
+    });
+    escape();
+    press({ key: 'p', code: 'KeyP' });
+    press({ key: '2', code: 'Digit2' });
+    expect(selectItem).toHaveBeenLastCalledWith('sprinkle:two');
+  });
+
+  it('follows a rebound key, because the chord belongs to the command', () => {
+    const h = harness({ files: ['/a.ts', '/b.ts'] });
+    h.handles.setKeymap({ q: 'files' });
+    escape();
+    press({ key: 'q', code: 'KeyQ' });
+    press({ key: '2', code: 'Digit2' });
+    expect(h.selectFile).toHaveBeenCalledWith('/b.ts');
+  });
+
+  it('is dropped by Escape, so the mode key never leaves one armed', () => {
+    const h = harness({ files: ['/a.ts'] });
+    escape();
+    press({ key: 'f', code: 'KeyF' });
+    escape();
+    press({ key: '1', code: 'Digit1' });
+    expect(h.selectFile).not.toHaveBeenCalled();
+    expect(h.select).toHaveBeenCalledWith('cone_1');
+  });
+
+  it('degrades to nothing on a float with no lists wired', () => {
+    const { handles } = harness({ noDock: true });
+    handles.setKeymap({ f: 'files' });
+    escape();
+    press({ key: 'f', code: 'KeyF' });
+    expect(() => press({ key: '2', code: 'Digit2' })).not.toThrow();
   });
 });

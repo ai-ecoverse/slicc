@@ -1,0 +1,227 @@
+/**
+ * The shell half of keyboard mode: the surfaces `wc-shortcuts.ts` drives but
+ * deliberately knows nothing about.
+ *
+ * The mode's rule is that every command reaches its surface through the event
+ * a CLICK on that surface produces, so a shortcut can never drift from the
+ * mouse. For the rails and the dock that event is a method the component
+ * already exposes; for the six commands here it is a DOM lookup — the send
+ * button's `stop`, the copy row's two press gestures, the add menu's own
+ * `open()`, an approval card's button, the surface the dock is showing. That
+ * lookup is what does not belong in the mode: it would tie the keymap to the
+ * shell's markup and to a float that may not have any of it.
+ *
+ * Everything is resolved at press time and every miss is a silent no-op —
+ * these run on floats whose composer is disabled, whose transcript is
+ * read-only, or which never mounted a workbench at all. The HUD shows the key
+ * dimmed and nothing happens, which is the honest reading of "there is no
+ * copy row on this screen".
+ */
+
+import type { SliccFileTree } from '@slicc/webcomponents';
+import {
+  type ShortcutComposerMeta,
+  type ShortcutDock,
+  type ShortcutFreezer,
+  type ShortcutHandles,
+  type ShortcutList,
+  type ShortcutSwitcher,
+  wireKeyboardShortcuts,
+} from './wc-shortcuts.js';
+
+/** One row of the file tree, as the library models it (`wc-workbench.ts` too). */
+type FileTreeItem = NonNullable<SliccFileTree['items']>[number];
+
+/** The elements the shell already has when it wires the mode. */
+export interface ShortcutSurfaceDeps {
+  /** The composer's input card — the send button and the add menu live in it. */
+  inputCard: HTMLElement;
+  /** The transcript: approval cards and the copy row are rendered into it. */
+  thread: HTMLElement;
+  /** The workbench tree, for the surface `zoom` fullscreens. */
+  dockTree: HTMLElement;
+  /** The dock rail, read for which surface is open. */
+  dock: { readonly active: string | null };
+  /** The left rail, which holds the archived-chat cards. */
+  freezer: HTMLElement;
+  /**
+   * The file tree; `items`/`selectFile` are its own public API. Group headers
+   * carry no id — they are chrome, not rows — so the list skips them and a
+   * digit never lands on one.
+   */
+  fileTree: { items: readonly FileTreeItem[]; selectFile(id: string): void };
+  /** The memory panel host, whose `<slicc-memrow>` children are the list. */
+  memoryHost: HTMLElement;
+}
+
+/** A `<slicc-add-menu>`, as far as this module needs it. */
+interface AddMenuLike extends HTMLElement {
+  open(): void;
+}
+
+/**
+ * Stop the running turn.
+ *
+ * Dispatched at the input card rather than reached into the send button's
+ * shadow root: `stop` is a composed, bubbling event, so the card is where the
+ * host's listener already is, and the "is anything actually running?" guard
+ * stays in that one listener instead of being second-guessed here.
+ */
+export function stopTurn(deps: ShortcutSurfaceDeps): void {
+  deps.inputCard.dispatchEvent(new CustomEvent('stop', { bubbles: true, composed: true }));
+}
+
+/** Open the composer's add menu — the `+` button's own public `open()`. */
+export function openAttachMenu(deps: ShortcutSurfaceDeps): void {
+  const menu = deps.inputCard.querySelector('slicc-add-menu') as AddMenuLike | null;
+  menu?.open?.();
+}
+
+/**
+ * The copy row's two gestures. `<slicc-press-button>` emits `short-click` and
+ * `long-press`, and `wc-copy-row.ts` listens for exactly those — so the
+ * keyboard fires the gesture rather than re-implementing what it means.
+ */
+function pressCopyRow(deps: ShortcutSurfaceDeps, type: 'short-click' | 'long-press'): void {
+  const button = deps.thread.querySelector('.wc-copy-row slicc-press-button');
+  button?.dispatchEvent(new CustomEvent(type, { bubbles: true, cancelable: true, detail: {} }));
+}
+
+export function copyReply(deps: ShortcutSurfaceDeps): void {
+  pressCopyRow(deps, 'short-click');
+}
+
+export function copyChat(deps: ShortcutSurfaceDeps): void {
+  pressCopyRow(deps, 'long-press');
+}
+
+/**
+ * Focus the oldest unanswered approval in the transcript; pressing again goes
+ * to the next one.
+ *
+ * FOCUS, never answer. A key that said "approve" could say it to a card that
+ * finished rendering a frame earlier, so the shortcut only carries the user
+ * to the request — where Enter belongs to the button itself and means what
+ * the button says (keyboard mode leaves a focused button's Enter alone; see
+ * `isActivationTarget`).
+ *
+ * "Next" needs no state: the cycle is read off the document, so a card that
+ * was answered or scrolled away between two presses simply is not in the list
+ * the second press walks.
+ */
+export function focusApproval(deps: ShortcutSurfaceDeps): void {
+  const buttons = [
+    ...deps.thread.querySelectorAll<HTMLButtonElement>('button[data-action]:not([disabled])'),
+  ];
+  if (buttons.length === 0) return;
+  const focused = deps.thread.ownerDocument.activeElement;
+  const at = focused instanceof HTMLElement ? buttons.indexOf(focused as HTMLButtonElement) : -1;
+  const next = buttons[(at + 1) % buttons.length];
+  next?.focus();
+  // Optional: jsdom has no `scrollIntoView`, and carrying the focus is the
+  // part that matters — a browser scrolls a focused element into view anyway.
+  next?.scrollIntoView?.({ block: 'nearest' });
+}
+
+/**
+ * Full-screen the panel the dock is showing.
+ *
+ * The real Fullscreen API, like the dock item's long-press — which is why the
+ * command runs synchronously inside the keydown: `requestFullscreen()` needs
+ * transient user activation, and the keystroke only counts as one while its
+ * handler is still on the stack. A surface still parked (`display:none`)
+ * would reject, so an unplaced one is left alone rather than made to fail.
+ */
+export function zoomSurface(deps: ShortcutSurfaceDeps): void {
+  const id = deps.dock.active;
+  if (!id) return;
+  // CSS.escape is for identifiers and jsdom does not ship it, so escape for a
+  // double-quoted attribute selector by hand (a surface id can carry a colon:
+  // `sprinkle:name`).
+  const quoted = id.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+  const surface = deps.dockTree.querySelector<HTMLElement>(`[surface-id="${quoted}"]`);
+  if (!surface || surface.closest('.dock-tree__parking')) return;
+  void surface.requestFullscreen?.()?.catch(() => {
+    // Denied, unsupported, or the activation expired — the panel stays open.
+  });
+}
+
+/**
+ * The lists a `<command> <digit>` chord indexes into.
+ *
+ * Each one activates its nth row the way a click does: the file tree's own
+ * `selectFile`, and — for the two lists whose rows ARE their click handler
+ * (`<slicc-freezer-card>`, `<slicc-memrow>`) — a click. Both are read live,
+ * because half a chord is exactly long enough for a panel to finish mounting
+ * or a session to be archived.
+ */
+export function shortcutLists(deps: ShortcutSurfaceDeps): {
+  files: ShortcutList;
+  memory: ShortcutList;
+  sessions: ShortcutList;
+} {
+  const fileRows = (): string[] =>
+    deps.fileTree.items
+      .map((item) => ('id' in item ? item.id : null))
+      .filter((id): id is string => typeof id === 'string');
+  const clickList = (root: () => ParentNode, selector: string): ShortcutList => ({
+    size: () => root().querySelectorAll(selector).length,
+    selectAt: (index) => {
+      const el = root().querySelectorAll<HTMLElement>(selector)[index];
+      el?.click();
+    },
+  });
+  return {
+    files: {
+      size: () => fileRows().length,
+      selectAt: (index) => {
+        const id = fileRows()[index];
+        if (id) deps.fileTree.selectFile(id);
+      },
+    },
+    memory: clickList(() => deps.memoryHost, 'slicc-memrow'),
+    sessions: clickList(() => deps.freezer, 'slicc-freezer-card'),
+  };
+}
+
+/** What the shell hands the mode beyond the six DOM-reached commands. */
+export interface ShellKeyboardDeps extends ShortcutSurfaceDeps {
+  switcher: ShortcutSwitcher;
+  dock: ShortcutDock & { readonly active: string | null };
+  freezer: ShortcutFreezer & HTMLElement;
+  composerMeta: ShortcutComposerMeta;
+  /** The composer band; `hidden` on a scoop, whose transcript is read-only. */
+  composer: HTMLElement;
+}
+
+/**
+ * Install keyboard mode over a mounted shell.
+ *
+ * The seam exists so `mountWcShell` states WHAT the mode drives in one line
+ * rather than carrying the closures for it, and so this file — which already
+ * owns every DOM-reached command — owns the wiring that binds them too.
+ */
+export function wireShellKeyboard(deps: ShellKeyboardDeps): ShortcutHandles {
+  return wireKeyboardShortcuts({
+    switcher: deps.switcher,
+    dock: deps.dock,
+    freezer: deps.freezer,
+    composerMeta: deps.composerMeta,
+    focusComposer: () => deps.inputCard.focus(),
+    /**
+     * What `applyComposerAvailability` writes, read back: a scoop's band is
+     * `hidden` (#2312) and a disconnected follower's card is `disabled`.
+     * Either way there is nothing to type into, so keyboard mode is not a
+     * choice there — see `ModeIntent`.
+     */
+    composerAvailable: () =>
+      !deps.composer.hasAttribute('hidden') && !deps.inputCard.hasAttribute('disabled'),
+    stopTurn: () => stopTurn(deps),
+    focusApproval: () => focusApproval(deps),
+    openAttachMenu: () => openAttachMenu(deps),
+    copyReply: () => copyReply(deps),
+    copyChat: () => copyChat(deps),
+    zoomSurface: () => zoomSurface(deps),
+    lists: shortcutLists(deps),
+  });
+}
