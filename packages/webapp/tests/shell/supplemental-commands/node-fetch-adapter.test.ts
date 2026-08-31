@@ -254,15 +254,67 @@ describe('createNodeFetchAdapter', () => {
     expect(opts.headers).toEqual({ 'CONTENT-TYPE': 'application/custom' });
   });
 
-  it('rejects FormData bodies with a clear message', async () => {
+  it('serializes a FormData body as multipart with a matching boundary', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
+
+    const fd = new FormData();
+    fd.set('purpose', 'assistants');
+    fd.set('file', new Blob([new Uint8Array([0x00, 0x80, 0xff])], { type: 'text/plain' }), 'a.txt');
+    await fetch('https://api.example.com/x', { method: 'POST', body: fd });
+
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      body: string;
+      headers: Record<string, string>;
+    };
+    const contentType = opts.headers['Content-Type'];
+    expect(contentType).toMatch(/^multipart\/form-data; boundary=.+/);
+
+    // The boundary in the header must delimit the body, and the latin1
+    // string must carry the file's high bytes intact — parse it back with
+    // the platform's own multipart parser to prove both at once.
+    const bytes = Uint8Array.from(opts.body, (char) => char.charCodeAt(0));
+    const parsed = await new Response(bytes as unknown as BodyInit, {
+      headers: { 'content-type': contentType },
+    }).formData();
+    expect(parsed.get('purpose')).toBe('assistants');
+    const file = parsed.get('file') as File;
+    expect(file.name).toBe('a.txt');
+    expect(Array.from(new Uint8Array(await file.arrayBuffer()))).toEqual([0x00, 0x80, 0xff]);
+  });
+
+  it('leaves a caller-provided Content-Type on a FormData body alone', async () => {
     const secureFetch: SecureFetch = vi.fn(async () => okResult());
     const fetch = createNodeFetchAdapter(secureFetch);
 
     const fd = new FormData();
     fd.set('a', 'b');
-    await expect(fetch('https://api.example.com/x', { method: 'POST', body: fd })).rejects.toThrow(
-      /FormData request bodies are not supported/
-    );
+    await fetch('https://api.example.com/x', {
+      method: 'POST',
+      headers: { 'content-type': 'multipart/form-data; boundary=mine' },
+      body: fd,
+    });
+
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      headers: Record<string, string>;
+    };
+    expect(opts.headers).toEqual({ 'content-type': 'multipart/form-data; boundary=mine' });
+  });
+
+  it('drops a FormData body on GET without inventing a Content-Type', async () => {
+    const secureFetch: SecureFetch = vi.fn(async () => okResult());
+    const fetch = createNodeFetchAdapter(secureFetch);
+
+    const fd = new FormData();
+    fd.set('a', 'b');
+    await fetch('https://api.example.com/x', { method: 'GET', body: fd });
+
+    const opts = (secureFetch as ReturnType<typeof vi.fn>).mock.calls[0][1] as {
+      body?: string;
+      headers: Record<string, string>;
+    };
+    expect(opts.body).toBeUndefined();
+    expect(opts.headers).toEqual({});
   });
 
   it('exposes the upstream URL on Response.url', async () => {

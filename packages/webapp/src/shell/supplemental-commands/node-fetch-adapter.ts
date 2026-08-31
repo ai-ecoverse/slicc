@@ -18,6 +18,7 @@
  */
 
 import type { SecureFetch } from 'just-bash';
+import { encodeMultipartFormData, isFormDataBody } from '../../base/multipart-form-data.js';
 import { isTextContentType } from '../proxied-fetch.js';
 
 /**
@@ -185,8 +186,7 @@ async function resolveRequestBody(
   headers: Record<string, string>
 ): Promise<EncodedRequestBody> {
   if (init && 'body' in init && init.body !== undefined) {
-    const defaultContentType = getDefaultContentType(init.body, method);
-    return { body: await encodeBody(init.body, method), defaultContentType };
+    return encodeInitBody(init.body, method);
   }
 
   if (request && method !== 'GET' && method !== 'HEAD') {
@@ -209,10 +209,34 @@ async function resolveRequestBody(
 }
 
 /**
+ * Encode an `init.body` together with the Content-Type it implies. The two
+ * are produced in one call because a `FormData` body's Content-Type carries
+ * the multipart boundary that also delimits the bytes — computing them
+ * separately would let the header and the body disagree.
+ */
+async function encodeInitBody(
+  body: BodyInit | null | undefined,
+  method: string
+): Promise<EncodedRequestBody> {
+  if (isFormDataBody(body)) {
+    // GET/HEAD cannot carry a body at all, so there is nothing to serialize
+    // and no boundary to advertise.
+    if (method === 'GET' || method === 'HEAD') return {};
+    const multipart = await encodeMultipartFormData(body);
+    return { body: bytesToLatin1(multipart.bytes), defaultContentType: multipart.contentType };
+  }
+  return {
+    body: await encodeBody(body, method),
+    defaultContentType: getDefaultContentType(body, method),
+  };
+}
+
+/**
  * SecureFetch's body type is `string | undefined`, so we coerce common
  * BodyInit shapes into a string. Binary shapes use the proxy's latin1
- * convention (one character per byte). FormData and ReadableStream remain
- * unsupported because they require multipart or streaming wire semantics.
+ * convention (one character per byte). `FormData` is handled ahead of this
+ * by {@link encodeInitBody}, which owns the boundary; ReadableStream remains
+ * unsupported because it needs streaming wire semantics.
  */
 async function encodeBody(
   body: BodyInit | null | undefined,
@@ -231,11 +255,6 @@ async function encodeBody(
   if (typeof Blob !== 'undefined' && body instanceof Blob) {
     return bytesToLatin1(new Uint8Array(await body.arrayBuffer()));
   }
-  if (typeof FormData !== 'undefined' && body instanceof FormData) {
-    throw new Error(
-      'node fetch shim: FormData request bodies are not supported (post raw application/x-www-form-urlencoded with URLSearchParams instead)'
-    );
-  }
   if (typeof ReadableStream !== 'undefined' && body instanceof ReadableStream) {
     throw new Error(
       'node fetch shim: ReadableStream request bodies are not supported (collect into a Uint8Array or string before calling fetch)'
@@ -245,7 +264,7 @@ async function encodeBody(
   // refuse explicitly instead of silently sending "[object Foo]" through
   // the proxy, which would never match an upstream API contract.
   throw new Error(
-    `node fetch shim: unsupported request body type (${Object.prototype.toString.call(body)}); use a string, Uint8Array, ArrayBuffer, Blob, or URLSearchParams`
+    `node fetch shim: unsupported request body type (${Object.prototype.toString.call(body)}); use a string, Uint8Array, ArrayBuffer, Blob, FormData, or URLSearchParams`
   );
 }
 

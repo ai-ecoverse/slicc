@@ -19,6 +19,7 @@
  */
 
 import { getMimeType } from '../../base/mime-types.js';
+import { encodeMultipartParts } from '../../base/multipart-form-data.js';
 import { FsError } from '../types.js';
 import type {
   MountBackend,
@@ -37,32 +38,20 @@ import type { RemoteMountCache } from './remote-cache.js';
  * adobe/da-admin source.js: `FORM_TYPES = ['multipart/form-data',
  * 'application/x-www-form-urlencoded']`.
  *
- * Returns the assembled bytes plus the Content-Type header (with the
- * boundary baked in) for the caller to attach to the request.
+ * Delegates to the shared encoder (`base/multipart-form-data.ts`) so the
+ * boundary is minted in the same call that lays down the delimiters, and so
+ * a VFS filename containing a quote or a newline is escaped rather than
+ * breaking out of the `Content-Disposition` header.
  */
 function buildMultipartFormData(
   filename: string,
   contentType: string,
   body: Uint8Array
 ): { contentType: string; body: Uint8Array } {
-  // Random boundary; the value is opaque, only the match between the
-  // header and the body delimiters matters.
-  const boundary = `----DaMount${Math.random().toString(36).slice(2)}${Date.now().toString(36)}`;
-  const enc = new TextEncoder();
-  const head = enc.encode(
-    `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="data"; filename="${filename}"\r\n` +
-      `Content-Type: ${contentType}\r\n\r\n`
-  );
-  const tail = enc.encode(`\r\n--${boundary}--\r\n`);
-  const merged = new Uint8Array(head.byteLength + body.byteLength + tail.byteLength);
-  merged.set(head, 0);
-  merged.set(body, head.byteLength);
-  merged.set(tail, head.byteLength + body.byteLength);
-  return {
-    contentType: `multipart/form-data; boundary=${boundary}`,
-    body: merged,
-  };
+  const encoded = encodeMultipartParts([
+    { name: 'data', file: { bytes: body, filename, contentType } },
+  ]);
+  return { contentType: encoded.contentType, body: encoded.bytes };
 }
 
 function basenameOf(path: string): string {
