@@ -580,3 +580,74 @@ Reaping semantics (also enforced in the harness scripts):
 
 Labeled Chrome bundle clones (`clone-labeled-chrome.sh`) provide
 distinct ⌘-Tab entries.
+
+## ios-ui-test-exclusion-registry
+
+`npm run lint:ios-ui-tests`
+(`packages/dev-tools/tools/ios-ui-test-exclusions.mjs` +
+`packages/ios-app/ui-test-exclusions.json`) exists because the
+`ios-app-tests` CI job runs the WHOLE `SliccFollowerUITests` bundle on
+the GA cells and then subtracts this registry, so a newly added test
+class is gated the day it lands rather than needing to be opted in. The
+gate rejects a registry entry that has no reason, or one naming a
+class/method that no longer exists in the bundle.
+
+## swiftpm-lockfile-drift-gate
+
+`packages/dev-tools/tools/check-swift-resolved-drift.mjs` runs AFTER a
+resolve step (the `ios-app` CI job).
+`xcodebuild -resolvePackageDependencies` rewrites `Package.resolved` in
+place and then builds against what it wrote, so a floated **transitive**
+pin lands with no diff; `lint:swift-pins` only inspects direct pins. The
+gate compares identity/version/revision while ignoring `originHash` and
+key order (both move with the toolchain), catching the transitive drift
+`lint:swift-pins` cannot see.
+
+## source-guards
+
+Source-shape guards under `packages/dev-tools/tools/`, each wired to its
+own lint script:
+
+- `check-no-innerhtml.mjs` (`npm run lint:no-innerhtml`) bans
+  `.innerHTML =`, `.outerHTML =`, and `insertAdjacentHTML()` in
+  `@slicc/webcomponents` (stories/tests exempt).
+- `check-no-ui-imports-in-providers.mjs`
+  (`npm run lint:no-ui-in-providers`) bans `from '…ui/…'` imports in
+  `providers/built-in/`.
+- `check-hosted-origin-literal.mjs` — TS must import
+  `SLICC_HOSTED_ORIGIN` from `@slicc/shared-ts` rather than hardcoding
+  the origin.
+- `check-no-raw-chrome-runtime-id.mjs` — use `isChromeExtensionRealm()`
+  from `@slicc/shared-ts` instead of a raw `chrome.runtime.id` check
+  (tests exempt).
+- `check-agents-symlinks.mjs` — every `packages/*/CLAUDE.md` needs an
+  `AGENTS.md` sibling symlink.
+
+## first-load-size-gate
+
+`packages/dev-tools/tools/check-first-load-size.mjs` (+
+`first-load-size-lib.mjs`, `first-load-baseline.mjs`), part of
+`npm run size -w @slicc/webapp`, measures the eager import closures of
+the page entry (via `.vite/manifest.json`) and the kernel-worker entry
+(parsed from emitted chunks). It guards cold-boot payload, not per-file
+size.
+
+It is **relative**: it builds the merge-base in a throwaway worktree
+(workspace packages re-pointed at the worktree's own source, then the
+root `postinstall` prerequisite builds — borrowing the caller's build
+would mask a webcomponents-side regression) and fails on a change's own
+growth past `maxDeltaKb`, so it never fires on inherited state and
+cancels the ~1 kB Linux-vs-macOS build difference. Flags:
+`--baseline=<ref>` (default `origin/main`), `--baseline=none` to skip,
+`--json` to just measure.
+
+On `merge_group` the delta is skipped — a queue branch is cumulative, so
+its delta is the batch sum and a per-change allowance would fail on
+queue depth; only the ceilings run, with no baseline build. That split
+is only safe because a CI `pull_request` run treats an unmeasurable
+baseline as a hard failure rather than degrading, so a PR can never
+clear both stages unmeasured. Local runs still degrade to ceilings with
+a note. The absolute `*EagerCeilingKb` values in
+`packages/webapp/first-load-budget.json` are the backstop against many
+small under-threshold changes creeping upward — human-owned, not
+numbers to nudge when a build goes red.

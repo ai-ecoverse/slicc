@@ -27,7 +27,7 @@ Plain SPM commands do nothing — build/test go through XcodeGen. **The Xcode pr
 
 - `preview.open` → `CDPBridge.handleTabOpen`, acks `tab.opened`. iOS never originates transcript export (prompts decode `.unknown`/`undecodable`).
 - `sudo.approve.request` / `.cancel` → `SudoApprovalController` (SliccTrayKit/Sudo): Allow/Always gate on `LAContext` `.deviceOwnerAuthentication`, Deny never does; `hello` advertises `sudoApproval`/`biometric`, `push.register` carries the APNs token. [`docs`](../../docs/ios-app-details.md#sudo-approval-and-push)
-- `capabilities.exec: true`; `handleExecMessage` accepts only `open [--universal|--x-callback] <url>`, scoped-approval gated. Validation, tombstoning, nonces/caps: [`docs`](../../docs/ios-app-details.md#exec-capability)
+- `capabilities.exec: true`; `handleExecMessage` accepts only `open [--universal|--x-callback] <url>`, scoped-approval gated. Validation + tombstoning: [`docs`](../../docs/ios-app-details.md#exec-capability); `--x-callback` nonces, JSON result, 16-param/16-KiB caps: [`docs`](../../docs/ios-app-details.md#x-callback-exec)
 
 Adding a variant is a fixed six-step order: [`docs`](../../docs/ios-app-details.md#protocol-variant-checklist)
 
