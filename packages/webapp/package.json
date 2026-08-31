@@ -34,7 +34,7 @@
     "@huggingface/transformers": "4.2.0",
     "@imagemagick/magick-wasm": "0.0.42",
     "@lezer/highlight": "1.2.3",
-    "@pierre/diffs": "1.3.5",
+    "@pierre/diffs": "1.3.6",
     "@slicc/cloud-core": "*",
     "@slicc/shared-ts": "*",
     "@slicc/webcomponents": "*",
