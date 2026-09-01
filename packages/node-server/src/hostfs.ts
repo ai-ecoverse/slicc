@@ -31,9 +31,17 @@
  * `GET`s in one session). One stable URL collapses that to one preflight per
  * max-age. `read` deliberately stays a `GET` on a per-file URL so the
  * browser HTTP cache can still revalidate large blobs with a 304.
+ *
+ * The hostfs surface owns its own body parsing end to end. `index.ts` skips
+ * the stable dispatcher in its global `express.json()` filter (via
+ * `isHostFsStableBodyRequest`) so the bounded 1 MiB parser here is the one
+ * that runs, and `hostFsBodyErrorHandler` maps body-parser failures to the
+ * same `{ code, message }` errno shape as every other error on this surface —
+ * otherwise express's default handler answers malformed JSON with code-less
+ * HTML and the webapp cannot rethrow a faithful `FsError`.
  */
 
-import type { Express, Request, Response } from 'express';
+import type { ErrorRequestHandler, Express, Request, Response } from 'express';
 import express from 'express';
 import type { Stats } from 'fs';
 import {
@@ -177,6 +185,57 @@ function queryString(req: Request, name: string): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+/** Path of the stable dispatcher. */
+const HOSTFS_STABLE_PATH = '/api/hostfs';
+
+/**
+ * Bounded body cap for the stable dispatcher — it only ever carries a small
+ * JSON envelope, so it has no business inheriting the global 50 MiB limit.
+ */
+export const HOSTFS_STABLE_MAX_BODY_BYTES = 1024 * 1024;
+
+function isHostFsPath(path: string): boolean {
+  return path === HOSTFS_STABLE_PATH || path.startsWith(`${HOSTFS_STABLE_PATH}/`);
+}
+
+/**
+ * True for a request `index.ts`'s global `express.json()` must NOT consume.
+ * The global parser is mounted before these routes with a 50 MiB limit, so
+ * without this exclusion it would swallow the stable dispatcher's body first:
+ * the route-local 1 MiB cap would never apply, and a malformed body would
+ * fail in the global parser and reach express's default (code-less HTML)
+ * handler instead of the errno shape every hostfs caller expects. Exported so
+ * `index.ts` and the middleware-order test filter identically.
+ */
+export function isHostFsStableBodyRequest(req: { method?: string; url?: string }): boolean {
+  if (req.method !== 'POST') return false;
+  const path = (req.url ?? '').split('?')[0];
+  return path === HOSTFS_STABLE_PATH || path === `${HOSTFS_STABLE_PATH}/`;
+}
+
+/**
+ * Map body-parser failures on the hostfs surface to `{ code, message }`.
+ * Registered after the routes (express only runs an error handler for
+ * middleware mounted before it), so it catches the stable dispatcher's JSON
+ * parser AND `PUT /write`'s raw parser. Mirrors swift-server, which answers
+ * 400 `EINVAL` for an unparseable body and 413 `EFBIG` for an oversized one.
+ * Anything that is not a body-parser error, and every non-hostfs path, is
+ * passed through untouched.
+ */
+const hostFsBodyErrorHandler: ErrorRequestHandler = (err, req, res, next) => {
+  const type = (err as { type?: unknown } | null)?.type;
+  if (typeof type !== 'string' || res.headersSent || !isHostFsPath(req.path)) {
+    next(err);
+    return;
+  }
+  const message = err instanceof Error ? err.message : String(err);
+  if (type === 'entity.too.large') {
+    res.status(413).json({ code: 'EFBIG', message: `hostfs body too large: ${message}` });
+    return;
+  }
+  res.status(400).json({ code: 'EINVAL', message: `hostfs body rejected: ${message}` });
+};
+
 /** Ops reachable through the stable `POST /api/hostfs` endpoint. */
 const STABLE_OPS = ['list', 'stat', 'mkdir', 'rename', 'remove'] as const;
 type StableOp = (typeof STABLE_OPS)[number];
@@ -284,10 +343,11 @@ async function removeOp(
  * `curl`) and remain the only form for the two body ops.
  *
  * Errors are `{ code, message }` JSON with an errno-derived status so the
- * webapp backend can rethrow faithful `FsError`s. A bridge that predates the
- * stable endpoint answers `POST /api/hostfs` with a framework 404 that has no
- * `code`, which is how the webapp detects it and falls back to the per-op
- * routes — so every error this route emits MUST carry a `code`.
+ * webapp backend can rethrow faithful `FsError`s — including body-parser
+ * failures, via `hostFsBodyErrorHandler` registered at the end. A bridge that
+ * predates the stable endpoint answers `POST /api/hostfs` with a framework 404
+ * that has no `code`, which is how the webapp detects it and falls back to the
+ * per-op routes — so every error this route emits MUST carry a `code`.
  */
 export function registerHostFsRoutes(app: Express, roots: readonly HostMountRoot[]): void {
   const byPath = new Map(roots.map((r) => [r.path, r]));
@@ -316,50 +376,54 @@ export function registerHostFsRoutes(app: Express, roots: readonly HostMountRoot
 
   // Stable-URL dispatcher. Mounted before the per-op routes so `/api/hostfs`
   // is matched exactly; express keeps `/api/hostfs/mkdir` distinct.
-  app.post('/api/hostfs', express.json({ limit: '1mb' }), (req, res) => {
-    void (async () => {
-      const body = (req.body ?? {}) as HostFsStableRequest;
-      const op = body.op;
-      if (!isStableOp(op)) {
-        res.status(400).json({ code: 'EINVAL', message: `unsupported hostfs op: ${String(op)}` });
-        return;
-      }
-      const mount = bodyString(body, 'mount');
-      const entry = mount ? byPath.get(mount) : undefined;
-      if (!entry) {
-        res.status(404).json({ code: 'ENOENT', message: `no such mount: ${mount ?? ''}` });
-        return;
-      }
-      try {
-        const target = await resolveWithinRoot(entry.root, bodyString(body, 'path') ?? '');
-        switch (op) {
-          case 'list':
-            res.json(await listOp(target));
-            return;
-          case 'stat':
-            res.json(await statOp(target));
-            return;
-          case 'mkdir':
-            res.json(await mkdirOp(target));
-            return;
-          case 'rename': {
-            const toRel = bodyString(body, 'to');
-            if (!toRel) {
-              res.status(400).json({ code: 'EINVAL', message: 'rename requires to' });
+  app.post(
+    HOSTFS_STABLE_PATH,
+    express.json({ limit: HOSTFS_STABLE_MAX_BODY_BYTES }),
+    (req, res) => {
+      void (async () => {
+        const body = (req.body ?? {}) as HostFsStableRequest;
+        const op = body.op;
+        if (!isStableOp(op)) {
+          res.status(400).json({ code: 'EINVAL', message: `unsupported hostfs op: ${String(op)}` });
+          return;
+        }
+        const mount = bodyString(body, 'mount');
+        const entry = mount ? byPath.get(mount) : undefined;
+        if (!entry) {
+          res.status(404).json({ code: 'ENOENT', message: `no such mount: ${mount ?? ''}` });
+          return;
+        }
+        try {
+          const target = await resolveWithinRoot(entry.root, bodyString(body, 'path') ?? '');
+          switch (op) {
+            case 'list':
+              res.json(await listOp(target));
+              return;
+            case 'stat':
+              res.json(await statOp(target));
+              return;
+            case 'mkdir':
+              res.json(await mkdirOp(target));
+              return;
+            case 'rename': {
+              const toRel = bodyString(body, 'to');
+              if (!toRel) {
+                res.status(400).json({ code: 'EINVAL', message: 'rename requires to' });
+                return;
+              }
+              res.json(await renameOp(target, await resolveWithinRoot(entry.root, toRel)));
               return;
             }
-            res.json(await renameOp(target, await resolveWithinRoot(entry.root, toRel)));
-            return;
+            case 'remove':
+              res.json(await removeOp(target, isRecursive(body.recursive), roots));
+              return;
           }
-          case 'remove':
-            res.json(await removeOp(target, isRecursive(body.recursive), roots));
-            return;
+        } catch (err) {
+          sendFsError(res, err);
         }
-      } catch (err) {
-        sendFsError(res, err);
-      }
-    })();
-  });
+      })();
+    }
+  );
 
   app.get(
     '/api/hostfs/list',
@@ -451,4 +515,7 @@ export function registerHostFsRoutes(app: Express, roots: readonly HostMountRoot
       res.json(await removeOp(target, queryString(req, 'recursive') === '1', roots));
     })
   );
+
+  // Last: only reachable for errors raised by middleware mounted above it.
+  app.use(hostFsBodyErrorHandler);
 }

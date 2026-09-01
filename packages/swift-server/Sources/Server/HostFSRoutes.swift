@@ -26,6 +26,10 @@ enum HostFSRoutes {
     /// Matches the webapp's hostfs body cap (`backend-hostfs.ts`).
     static let maxBodyBytes = 100 * 1024 * 1024
 
+    /// Bounded cap for the stable dispatcher — it only ever carries a small
+    /// JSON envelope. Mirrors node-server's `HOSTFS_STABLE_MAX_BODY_BYTES`.
+    static let stableMaxBodyBytes = 1024 * 1024
+
     struct MountRoot: Sendable, Equatable {
         /// SLICC target path, e.g. `/mnt/project`.
         let path: String
@@ -139,9 +143,16 @@ enum HostFSRoutes {
         // that the browser can revalidate with a 304 is worth far more than
         // its preflight.
         router.post("/api/hostfs") { request, _ in
-            guard let buffer = try? await request.body.collect(upTo: 1024 * 1024),
-                let body = StableRequestBody(data: Data(buffer: buffer))
-            else {
+            // Oversized and unparseable are distinct answers, and both must
+            // carry an errno code — node-server's `hostFsBodyErrorHandler`
+            // maps its body-parser failures to exactly these two.
+            let buffer: ByteBuffer
+            do {
+                buffer = try await request.body.collect(upTo: stableMaxBodyBytes)
+            } catch {
+                return fsError("EFBIG", .contentTooLarge, "hostfs body exceeds the stable cap")
+            }
+            guard let body = StableRequestBody(data: Data(buffer: buffer)) else {
                 return fsError("EINVAL", .badRequest, "hostfs body must be JSON carrying an op")
             }
             guard let entry = byPath[body.mount] else {

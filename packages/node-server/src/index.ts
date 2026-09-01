@@ -59,6 +59,7 @@ import {
 import type { FederatedCdpInspectableTarget } from './electron-federated-cdp.js';
 import { getElectronAppPorts } from './electron-runtime.js';
 import { ElectronTrayFollower } from './electron-tray-follower.js';
+import { shouldParseGlobalJson } from './fetch-proxy-headers.js';
 import { FileLogger } from './file-logger.js';
 import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
 import { registerHostFsRoutes, resolveHostMountRoots } from './hostfs.js';
@@ -1297,18 +1298,9 @@ async function main() {
   // OAuth callback — generic redirect target for OAuth providers (implicit + PKCE)
   registerOAuthCallbackRoutes(app);
 
-  // Global JSON body parser. Skipped when the request carries
-  // `X-Slicc-Raw-Body: 1`, so SigV4-signed bodies survive into the
-  // /api/fetch-proxy handler byte-for-byte (the parser would otherwise
-  // re-serialize them via JSON.stringify, breaking the signature).
-  app.use(
-    express.json({
-      limit: '50mb',
-      type: (req) =>
-        req.headers['x-slicc-raw-body'] !== '1' &&
-        (req.headers['content-type'] ?? '').includes('application/json'),
-    })
-  );
+  // Global JSON body parser; `shouldParseGlobalJson` owns the exclusions
+  // (SigV4 raw bodies, the stable hostfs dispatcher).
+  app.use(express.json({ limit: '50mb', type: shouldParseGlobalJson }));
 
   app.get('/api/runtime-config', (_req, res) => {
     res.json({

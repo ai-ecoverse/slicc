@@ -275,6 +275,23 @@ final class HostFSRoutesTests: XCTestCase {
         }
     }
 
+    /// Oversized and unparseable are distinct answers on both bridges:
+    /// node-server's `hostFsBodyErrorHandler` maps `entity.too.large` to
+    /// 413 EFBIG and every other body-parser failure to 400 EINVAL.
+    func testStableEndpointOversizedBodyIsCodedEFBIG() async throws {
+        try await makeApp().test(.router) { client in
+            let oversized = String(repeating: "x", count: HostFSRoutes.stableMaxBodyBytes + 1024)
+            let body = try self.stable(["op": "stat", "mount": "/mnt/proj", "path": oversized])
+            try await client.execute(uri: "/api/hostfs", method: .post, body: body) { response in
+                XCTAssertEqual(response.status, .contentTooLarge)
+                guard case .object(let payload) = try self.decode(response.body) else {
+                    return XCTFail("bad error shape")
+                }
+                XCTAssertEqual(payload["code"], .string("EFBIG"))
+            }
+        }
+    }
+
     func testPreflightMaxAgeMatchesNodeServer() {
         XCTAssertEqual(BridgeSecurity.preflightMaxAge("/api/hostfs"), "7200")
         XCTAssertEqual(BridgeSecurity.preflightMaxAge("/api/hostfs/read"), "7200")

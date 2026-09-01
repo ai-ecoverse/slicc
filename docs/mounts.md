@@ -183,6 +183,8 @@ Why one URL: the bridge token rides as a custom `X-Bridge-Token` header, so ever
 
 `read` and `write` deliberately keep their per-file URLs: a `POST` response is not cacheable, and a read the browser can revalidate with a `304` is worth far more than its preflight — and those URLs repeat (the same packfile, the same `.git/index`), so the preflight cache does work for them.
 
+The stable dispatcher owns its body end to end: it is excluded from node-server's global 50 MiB `express.json()` (`shouldParseGlobalJson`) so its own bounded 1 MiB parser applies, and body-parser failures are mapped to the same errno shape as every other error here — **400 `EINVAL`** for an unparseable body, **413 `EFBIG`** for an oversized one, identically on both bridges. Without that, express's default handler would answer malformed JSON with code-less HTML and the webapp could not rethrow a faithful `FsError`.
+
 A bridge that predates the stable endpoint answers `POST /api/hostfs` with a framework 404 carrying no errno `code`; `HostFsMountBackend` treats exactly that as "no stable endpoint" and falls back to the per-op routes for the rest of the mount's life, at a cost of one wasted request. Every error the real route emits carries a `code`, so a genuine `ENOENT` never triggers the downgrade.
 
 ## Common error patterns
