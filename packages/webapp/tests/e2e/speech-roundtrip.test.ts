@@ -23,30 +23,20 @@
 
 import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
+import { type ExecResult, execInTerminal, openTerminal } from './two-instance-helpers.js';
 
 const RUN = process.env['RUN_REAL_SPEECH_E2E'] === '1';
 
-interface ExecResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
-
-declare global {
-  interface Window {
-    __slicc_terminal_view?: {
-      executeCommandInTerminal(cmd: string): Promise<ExecResult>;
-    };
-  }
-}
-
-/** Run a single command through the worker shell via the published view. */
+/**
+ * Run a single command through the worker shell via the published view.
+ *
+ * Routes through the shared `execInTerminal` so this spec inherits the
+ * re-firing mount wait (see `openTerminal`) instead of the one-shot 30s wait
+ * that used to live in `bootLeader` — a budget no product-side latch re-arm
+ * could ever rescue.
+ */
 async function exec(page: import('@playwright/test').Page, cmd: string): Promise<ExecResult> {
-  return page.evaluate(async (command: string) => {
-    const view = window.__slicc_terminal_view;
-    if (!view) throw new Error('terminal view not published yet');
-    return view.executeCommandInTerminal(command);
-  }, cmd);
+  return execInTerminal(page, cmd);
 }
 
 /**
@@ -161,13 +151,26 @@ test.describe('say -o WAV output (real kokoro)', () => {
   // recovers on a fresh one — repo-wide, not something about speech: on
   // unrelated, fully green PRs `git-clone-live` fails its first attempt on the
   // identical `__slicc_terminal_view` wait and passes on retry. Raising the
-  // wait does not help (90s fails the same way), because the mount does not
-  // eventually succeed — it needs the new context.
+  // wait did not help (90s failed the same way), because the mount did not
+  // eventually succeed — it needed the new context.
   //
-  // Without a retry this spec converts that shared flake into a red run, but
-  // only on the PRs that happen to match the `speech` change-filter (which
-  // includes `wc-live.ts`), so the failure lands on whoever touched an
-  // unrelated file. One retry puts it on equal footing with every other spec.
+  // That is now understood and fixed at the source, so this retry is belt and
+  // braces rather than the only thing standing between the suite and a red
+  // run: the mount awaited an UNBOUNDED `fetch` for masked secrets, and the
+  // workbench activator released its mount latch only on a REJECTION — so one
+  // stalled request wedged the Term surface for the life of the page, which is
+  // exactly why no longer wait could help and a fresh context could. Both are
+  // bounded now (`MASKED_SECRETS_TIMEOUT_MS` in `core/secret-env.ts`,
+  // `TERMINAL_MOUNT_STALL_MS` in `ui/wc/wc-workbench.ts`).
+  //
+  // `bootLeader` also had to stop waiting ONCE for 30s: the latch re-arm fires
+  // later than that, so no product-side recovery could reach a spec that gave
+  // up first. It now goes through the shared `openTerminal`, which re-fires the
+  // activation on a cadence inside a 90s budget.
+  //
+  // Keeping one retry: this spec is 7+ minutes of real model work over the
+  // network, and it matches the `speech` change-filter (which includes
+  // `wc-live.ts`), so an unrelated author should not eat a transient.
   test.describe.configure({ retries: 1 });
 
   test.skip(
@@ -250,20 +253,10 @@ test.describe('say -o WAV output (real kokoro)', () => {
         });
       }
 
-      // Activate the term surface via the dock rail's documented entry point;
-      // `selectItem` fires `slicc-dock-select`, which `wc-sprinkles.ts` routes
-      // into the dock-tree, opening the workbench AND firing the lazy mount
-      // that publishes `__slicc_terminal_view`.
-      await page.evaluate(() => {
-        const dock = document.querySelector('slicc-dock') as
-          | (HTMLElement & { selectItem?: (id: string) => void })
-          | null;
-        if (!dock?.selectItem) throw new Error('<slicc-dock>.selectItem(id) unavailable');
-        dock.selectItem('term');
-      });
-      await page.waitForFunction(() => window.__slicc_terminal_view != null, null, {
-        timeout: 30_000,
-      });
+      // Activate the term surface and wait for the lazy mount to publish
+      // `__slicc_terminal_view`, through the shared helper so the activation is
+      // re-fired rather than selected once behind a fixed wait.
+      await openTerminal(page);
     };
     await bootLeader();
 

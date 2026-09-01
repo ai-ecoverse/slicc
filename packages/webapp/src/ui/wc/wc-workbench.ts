@@ -173,6 +173,14 @@ const FILES_DEBOUNCE_MAX_WAIT_MS = 1000;
 /** Fallback poll interval for a reader that cannot watch (ms). */
 const FILES_FALLBACK_POLL_MS = 3000;
 
+/**
+ * How long the lazy `term` mount may run before the latch is re-armed.
+ *
+ * Well clear of a cold kernel boot (the mount waits on `onClientReady`), so
+ * only a genuinely wedged attempt trips it.
+ */
+const TERMINAL_MOUNT_STALL_MS = 45_000;
+
 /** File-tree panel lifecycle, owned by {@link createFileTreeController}. */
 interface FileTreeController {
   /** Panel opened: build once, then subscribe to the roots it renders. */
@@ -356,6 +364,7 @@ function createFileTreeController(deps: WcWorkbenchDeps): FileTreeController {
  */
 export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActivator {
   let terminalMounted = false;
+  let stallRearmUsed = false;
   let memoryOpen = false;
   let memorySeq = 0;
   let monitorRefreshTimer: ReturnType<typeof setInterval> | null = null;
@@ -419,10 +428,39 @@ export function createWorkbenchActivator(deps: WcWorkbenchDeps): WorkbenchActiva
       }
       if (surfaceId === 'term' && !terminalMounted) {
         terminalMounted = true;
-        deps.mountTerminal(deps.termSurface).catch((err) => {
-          terminalMounted = false;
-          deps.log.error('WC terminal mount failed', err);
-        });
+        let settled = false;
+        // A HANG has to release the latch too, not just a rejection. The mount
+        // awaits network- and worker-bound work, so it can stall without ever
+        // rejecting; the latch would then stay set for the life of the page and
+        // every later `activate('term')` would no-op against a terminal that
+        // never arrived — a dead Term panel recoverable only by reloading.
+        //
+        // Re-arming is deliberately ONE-SHOT. The abandoned attempt cannot be
+        // cancelled, so if it does eventually resolve after a retry started,
+        // the surface ends up with two views; bounding it at a single retry
+        // keeps that at "two" instead of one per activation, and a visible
+        // terminal beats a permanently dead panel either way.
+        const stall = stallRearmUsed
+          ? null
+          : setTimeout(() => {
+              if (settled) return;
+              stallRearmUsed = true;
+              terminalMounted = false;
+              deps.log.error(
+                `WC terminal mount did not settle within ${TERMINAL_MOUNT_STALL_MS}ms; ` +
+                  're-arming so the next term activation retries'
+              );
+            }, TERMINAL_MOUNT_STALL_MS);
+        deps
+          .mountTerminal(deps.termSurface)
+          .catch((err) => {
+            terminalMounted = false;
+            deps.log.error('WC terminal mount failed', err);
+          })
+          .finally(() => {
+            settled = true;
+            if (stall) clearTimeout(stall);
+          });
       }
     },
     deactivate(surfaceId: string): void {

@@ -297,6 +297,75 @@ describe('createWorkbenchActivator', () => {
     await vi.waitFor(() => expect(deps.mountTerminal).toHaveBeenCalledTimes(2));
   });
 
+  // A stalled mount never rejects, so the rejection-only latch release above
+  // left the Term surface dead for the life of the page: every later
+  // activation no-opped against a latch that would never clear, and no wait —
+  // in the app or in an E2E — could outlast it.
+  it('re-arms the terminal mount latch when the mount stalls instead of rejecting', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      deps.mountTerminal.mockReturnValueOnce(new Promise<undefined>(() => {}));
+      const activator = createWorkbenchActivator(deps);
+
+      activator.activate('term');
+      expect(deps.mountTerminal).toHaveBeenCalledTimes(1);
+
+      // Still latched while the attempt is within its budget.
+      activator.activate('term');
+      expect(deps.mountTerminal).toHaveBeenCalledTimes(1);
+
+      await vi.advanceTimersByTimeAsync(45_000);
+      expect(deps.log.error).toHaveBeenCalled();
+
+      activator.activate('term');
+      expect(deps.mountTerminal).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The abandoned attempt cannot be cancelled, so the re-arm is one-shot:
+  // an endlessly stalling mount must not spawn a view per activation.
+  it('re-arms after a stall at most once', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      deps.mountTerminal.mockReturnValue(new Promise<undefined>(() => {}));
+      const activator = createWorkbenchActivator(deps);
+
+      activator.activate('term');
+      await vi.advanceTimersByTimeAsync(45_000);
+      activator.activate('term');
+      expect(deps.mountTerminal).toHaveBeenCalledTimes(2);
+
+      await vi.advanceTimersByTimeAsync(45_000);
+      activator.activate('term');
+      expect(deps.mountTerminal).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The stall timer must not fire against an attempt that already succeeded —
+  // that would re-arm a healthy latch and let a second view mount.
+  it('does not re-arm after the mount resolves', async () => {
+    vi.useFakeTimers();
+    try {
+      const deps = makeDeps();
+      const activator = createWorkbenchActivator(deps);
+      activator.activate('term');
+      await vi.advanceTimersByTimeAsync(0);
+      await vi.advanceTimersByTimeAsync(45_000);
+
+      expect(deps.log.error).not.toHaveBeenCalled();
+      activator.activate('term');
+      expect(deps.mountTerminal).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('logs file-tree refresh failures', async () => {
     const deps = makeDeps();
     deps.openFs.mockRejectedValueOnce(new Error('idb gone'));
