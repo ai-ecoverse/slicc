@@ -72,6 +72,26 @@ describe('umount shell command', () => {
     expect(fs.listMounts()).toEqual([]);
   });
 
+  // The destructive form: `umount /mnt/x --help` must print usage, not tear
+  // /mnt/x down. Same for the `mount unmount` spelling.
+  it('answers --help after the path instead of unmounting it', async () => {
+    await mountFixture('/mnt/keepme');
+
+    const alias = await shell.executeCommand('umount /mnt/keepme --help');
+    expect(alias.exitCode).toBe(0);
+    expect(alias.stdout).toContain('Usage: umount [--clear-cache] <path>');
+    expect(fs.listMounts()).toContain('/mnt/keepme');
+
+    const sub = await shell.executeCommand('mount unmount /mnt/keepme --help');
+    expect(sub.exitCode).toBe(0);
+    expect(sub.stdout).toContain('Usage: mount [OPTIONS] <target-path>');
+    expect(fs.listMounts()).toContain('/mnt/keepme');
+
+    // Still unmountable once the flag is gone.
+    expect((await shell.executeCommand('umount /mnt/keepme')).exitCode).toBe(0);
+    expect(fs.listMounts()).not.toContain('/mnt/keepme');
+  });
+
   it('prints its own help and is listed by `commands`', async () => {
     const help = await shell.executeCommand('umount --help');
     expect(help.exitCode).toBe(0);

@@ -186,6 +186,23 @@ describe('MountCommands', () => {
       await cmd.execute(['unmount', 'myapp'], '/workspace');
       expect(unmount).toHaveBeenCalledWith('/workspace/myapp');
     });
+
+    // Same destructive-help hole as the `umount` alias: `execute` only tested
+    // args[0], so `mount unmount /mnt/x --help` unmounted /mnt/x.
+    it('answers --help after the path without unmounting it', async () => {
+      for (const args of [
+        ['unmount', '/mnt/myapp', '--help'],
+        ['unmount', '/mnt/myapp', '-h'],
+        ['-u', '/mnt/myapp', '--help'],
+      ]) {
+        const unmount = vi.fn();
+        const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+        const result = await cmd.execute(args, '/workspace');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('Usage: mount [OPTIONS] <target-path>');
+        expect(unmount).not.toHaveBeenCalled();
+      }
+    });
   });
 
   describe('umount alias', () => {
@@ -254,6 +271,33 @@ describe('MountCommands', () => {
         expect(result.stdout).toContain('alias for');
       }
       expect(unmount).not.toHaveBeenCalled();
+    });
+
+    // Checking only args[0] for help made `umount /mnt/x --help` fall through
+    // to the handler, which ignores the trailing flag and tears the mount
+    // down — asking for usage performed the destructive action.
+    it('answers --help AFTER the path without unmounting it', async () => {
+      for (const args of [
+        ['/mnt/myapp', '--help'],
+        ['/mnt/myapp', '-h'],
+        ['--clear-cache', '/mnt/myapp', '--help'],
+      ]) {
+        const unmount = vi.fn();
+        const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+        const result = await cmd.executeUmount(args, '/workspace');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('Usage: umount [--clear-cache] <path>');
+        expect(unmount).not.toHaveBeenCalled();
+      }
+    });
+
+    it('treats `--` as an end-of-options terminator, not a help request', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      const result = await cmd.executeUmount(['/mnt/myapp', '--', '--help'], '/workspace');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Unmounted /mnt/myapp');
+      expect(unmount).toHaveBeenCalledWith('/mnt/myapp');
     });
 
     it('is listed as an alias in `mount --help`', async () => {

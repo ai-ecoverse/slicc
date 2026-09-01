@@ -142,6 +142,34 @@ function parseAdobeSource(source: string): ParsedAdobeSource | null {
 }
 
 /**
+ * Flags whose VALUE is the next token. Kept in agreement with `parseArgs` so
+ * a flag value is never mistaken for a help request (`mount unmount --profile
+ * --help <path>` asks for the `--help` profile, not for usage).
+ */
+const VALUE_FLAGS = new Set(['--source', '--profile', '--backend', '--max-body-mb']);
+
+/**
+ * True when `args` asks for help — `--help` or `-h` anywhere before an
+ * explicit `--` end-of-options separator.
+ *
+ * Checking only `args[0]` is the bug this exists to prevent: `umount /mnt/x
+ * --help` would fall through to the unmount handler, which happily ignores
+ * the trailing flag and *tears down the mount* — asking for help performs the
+ * destructive action. Mirrors `shell/supplemental-commands/subcommand-help.ts`
+ * `isHelpRequest`, reimplemented locally because `fs/` must not import up
+ * into `shell/`.
+ */
+function isHelpRequest(args: readonly string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') return false;
+    if (arg === '--help' || arg === '-h') return true;
+    if (VALUE_FLAGS.has(arg)) i++;
+  }
+  return false;
+}
+
+/**
  * How an unmount failure names itself. `mount unmount` and the `umount` alias
  * share one handler, so the label travels with the call instead of being baked
  * into the messages.
@@ -216,9 +244,6 @@ export class MountCommands {
    * user who typed `umount` is not told about a command they did not run.
    */
   async executeUmount(args: string[], cwd: string): Promise<MountCommandResult> {
-    if (args[0] === '--help' || args[0] === '-h') {
-      return this.umountHelp();
-    }
     return this.handleUnmount(args, cwd, 'umount');
   }
 
@@ -443,6 +468,13 @@ export class MountCommands {
     cwd: string,
     label: UnmountLabel
   ): Promise<MountCommandResult> {
+    // Help wins over the path, and is answered BEFORE anything mutating runs:
+    // both `umount --help` and `umount /mnt/x --help` must print usage rather
+    // than unmount `/mnt/x`.
+    if (isHelpRequest(args)) {
+      return label === 'umount' ? this.umountHelp() : this.help();
+    }
+
     // Parse the full arg list so flags can appear before or after the path.
     // Spec syntax: `mount unmount [--clear-cache] <target-path>`.
     const parsed = parseArgs(args);
