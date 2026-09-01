@@ -136,28 +136,31 @@
   /* ── Header height ───────────────────────────────────────── */
   --s2-header-height: 56px;
 
-  /* ── UXC Subtle Fills (from Figma Alias/background/) ──── */
-  --uxc-yellow-subtle-bg: #fff197;
-  --uxc-yellow-subtle-text: #9e6600;
-  --uxc-purple-subtle-bg: #f4ebfc;
-  --uxc-purple-subtle-text: #9a47e2;
-  --uxc-cyan-subtle-bg: #d9f4fd;
-  --uxc-cyan-subtle-text: #0b78b3;
-  --uxc-magenta-subtle-bg: #ffe8f0;
-  --uxc-magenta-subtle-text: #d92361;
-  --uxc-indigo-subtle-bg: #ebeeff;
-  --uxc-indigo-subtle-text: #5424db;
-  --uxc-gray-subtle-bg: #efefef;
-  --uxc-gray-subtle-text: #292929;
-  --uxc-positive-subtle-bg: #d7f7e1;
-  --uxc-positive-subtle-text: #079355;
-  --uxc-notice-subtle-bg: #ffeccf;
-  --uxc-notice-subtle-text: #d45b00;
-  --uxc-negative-subtle-bg: #ffe8f0;
-  --uxc-negative-subtle-text: #d92361;
-  --uxc-accent-subtle-bg: #e5f0fe;
-  --uxc-accent-subtle-text: #3b63fb;
-  --uxc-neutral-subtle-bg: #f3f3f3;
+  /* ── UXC Subtle Fills (Dark) ───────────────────────────── */
+  /* Dark, desaturated fill + light hue text; every pair clears AA (>= 5:1).
+     The Figma pastels live in `:root.theme-light` — keep both sides in step,
+     `tests/ui/sprinkle-theme-tokens.test.ts` asserts parity and contrast. */
+  --uxc-yellow-subtle-bg: #2e2719;
+  --uxc-yellow-subtle-text: #df9b20;
+  --uxc-purple-subtle-bg: #24192e;
+  --uxc-purple-subtle-text: #b170e9;
+  --uxc-cyan-subtle-bg: #19272e;
+  --uxc-cyan-subtle-text: #209cdf;
+  --uxc-magenta-subtle-bg: #2e1920;
+  --uxc-magenta-subtle-text: #e5618e;
+  --uxc-indigo-subtle-bg: #1f192e;
+  --uxc-indigo-subtle-text: #977ae9;
+  --uxc-gray-subtle-bg: #292929;
+  --uxc-gray-subtle-text: #cfcfcf;
+  --uxc-positive-subtle-bg: #192e25;
+  --uxc-positive-subtle-text: #20df8a;
+  --uxc-notice-subtle-bg: #2e2219;
+  --uxc-notice-subtle-text: #e07829;
+  --uxc-negative-subtle-bg: #2e1920;
+  --uxc-negative-subtle-text: #e5618e;
+  --uxc-accent-subtle-bg: #191d2e;
+  --uxc-accent-subtle-text: #6d87ea;
+  --uxc-neutral-subtle-bg: #252525;
 
   /* ── UXC Layout ────────────────────────────────────────── */
   --uxc-nav-rail-width: 58px;
@@ -206,6 +209,31 @@
   --s2-negative: #d92361;
   --s2-positive: #05834e;
   --s2-notice: #d45b00;
+
+  /* ── UXC Subtle Fills (Light — from Figma Alias/background/) ── */
+  /* Figma pastel fills; text darkened from the raw Figma hues so each pair
+     clears AA (the shipped values measured 3.4–4.2:1 against these fills). */
+  --uxc-yellow-subtle-bg: #fff197;
+  --uxc-yellow-subtle-text: #8e5b00;
+  --uxc-purple-subtle-bg: #f4ebfc;
+  --uxc-purple-subtle-text: #8d30de;
+  --uxc-cyan-subtle-bg: #d9f4fd;
+  --uxc-cyan-subtle-text: #0a6ba0;
+  --uxc-magenta-subtle-bg: #ffe8f0;
+  --uxc-magenta-subtle-text: #c01f56;
+  --uxc-indigo-subtle-bg: #ebeeff;
+  --uxc-indigo-subtle-text: #5424db;
+  --uxc-gray-subtle-bg: #efefef;
+  --uxc-gray-subtle-text: #292929;
+  --uxc-positive-subtle-bg: #d7f7e1;
+  --uxc-positive-subtle-text: #067443;
+  --uxc-notice-subtle-bg: #ffeccf;
+  --uxc-notice-subtle-text: #a74800;
+  --uxc-negative-subtle-bg: #ffe8f0;
+  --uxc-negative-subtle-text: #c01f56;
+  --uxc-accent-subtle-bg: #e5f0fe;
+  --uxc-accent-subtle-text: #2350fb;
+  --uxc-neutral-subtle-bg: #f3f3f3;
 
   /* ── S2 Shadows (Light — from Figma UXC) ─────────────────── */
   --s2-shadow-elevated:
