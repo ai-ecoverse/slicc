@@ -47,7 +47,7 @@ describe('walkBounded', () => {
     expect(await collect(walkBounded(reader, '/'))).toEqual(['/a.txt']);
   });
 
-  it('maxDepth: 0 reads only the root directory', async () => {
+  it('maxDepth: 1 reads only the root directory', async () => {
     const reader = makeReader({
       '/root': [
         { name: 'a.txt', type: 'file' },
@@ -55,22 +55,63 @@ describe('walkBounded', () => {
       ],
       '/root/sub': [{ name: 'b.txt', type: 'file' }],
     });
-    expect(await collect(walkBounded(reader, '/root', { maxDepth: 0 }))).toEqual(['/root/a.txt']);
+    expect(await collect(walkBounded(reader, '/root', { maxDepth: 1 }))).toEqual(['/root/a.txt']);
+    // `sub` sits AT the cap, so it is never worth an RPC.
     expect(reader.readDir).toHaveBeenCalledTimes(1);
   });
 
-  it('maxDepth caps how deep the walk descends', async () => {
+  it('maxDepth: 0 yields nothing — every child of the root is already past it', async () => {
+    const reader = makeReader({ '/root': [{ name: 'a.txt', type: 'file' }] });
+    expect(await collect(walkBounded(reader, '/root', { maxDepth: 0 }))).toEqual([]);
+  });
+
+  it('maxDepth caps FILES, not just directories', async () => {
+    // The boundary Codex flagged on #2725: reading a directory at the cap
+    // used to leak its files out one level too deep.
     const reader = makeReader({
       '/root': [{ name: 'a', type: 'directory' }],
       '/root/a': [
-        { name: 'shallow.txt', type: 'file' },
+        { name: 'at-cap.txt', type: 'file' },
         { name: 'b', type: 'directory' },
       ],
-      '/root/a/b': [{ name: 'deep.txt', type: 'file' }],
+      '/root/a/b': [{ name: 'past-cap.txt', type: 'file' }],
     });
-    expect(await collect(walkBounded(reader, '/root', { maxDepth: 1 }))).toEqual([
-      '/root/a/shallow.txt',
+    // Depth 2 = `/root/a/at-cap.txt`; `/root/a/b/past-cap.txt` is depth 3.
+    expect(await collect(walkBounded(reader, '/root', { maxDepth: 2 }))).toEqual([
+      '/root/a/at-cap.txt',
     ]);
+    expect(reader.readDir).not.toHaveBeenCalledWith('/root/a/b');
+  });
+
+  it('accepts a file exactly at maxDepth and rejects the next level down', async () => {
+    const reader = makeReader({
+      '/root': [{ name: 'a', type: 'directory' }],
+      '/root/a': [{ name: 'b', type: 'directory' }],
+      '/root/a/b': [
+        { name: 'at-cap.txt', type: 'file' },
+        { name: 'c', type: 'directory' },
+      ],
+      '/root/a/b/c': [{ name: 'past-cap.txt', type: 'file' }],
+    });
+    expect(await collect(walkBounded(reader, '/root', { maxDepth: 3 }))).toEqual([
+      '/root/a/b/at-cap.txt',
+    ]);
+    expect(await collect(walkBounded(reader, '/root', { maxDepth: 4 }))).toEqual([
+      '/root/a/b/at-cap.txt',
+      '/root/a/b/c/past-cap.txt',
+    ]);
+  });
+
+  it('caps file symlinks at the same depth as plain files', async () => {
+    const reader = makeReader(
+      {
+        '/root': [{ name: 'a', type: 'directory' }],
+        '/root/a': [{ name: 'link', type: 'symlink' }],
+      },
+      { '/root/a/link': { type: 'file', size: 1, mtime: 0, ctime: 0 } }
+    );
+    expect(await collect(walkBounded(reader, '/root', { maxDepth: 2 }))).toEqual(['/root/a/link']);
+    expect(await collect(walkBounded(reader, '/root', { maxDepth: 1 }))).toEqual([]);
   });
 
   it('skip prunes a subtree without ever reading it', async () => {

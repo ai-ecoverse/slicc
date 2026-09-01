@@ -24,7 +24,8 @@ import type { VirtualFS } from '../fs/index.js';
 const PRIORITY_ROOTS = ['/shared/sprinkles'];
 
 /**
- * Directory levels below a root we descend into.
+ * Deepest entry — file or directory — a scan may reach below a root,
+ * counting the root's own children as depth 1.
  * `/shared/sprinkles/<name>/<name>.shtml` is depth 3 below `/shared`;
  * `/workspace/skills/<skill>/<sub>/<file>.shtml` is 4. Six leaves room
  * without letting a mounted checkout pull the crawl down to depth 11.

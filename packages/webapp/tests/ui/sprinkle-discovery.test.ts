@@ -130,13 +130,15 @@ describe('discoverSprinkles', () => {
       expect([...result.keys()]).toEqual(['panel']);
     });
 
-    it('stops at the depth cap', async () => {
-      // 6 levels below /workspace is reachable; 7 is not.
-      await vfs.writeFile('/workspace/a/b/c/d/e/deep.shtml', '<div>deep</div>');
-      await vfs.writeFile('/workspace/a/b/c/d/e/f/g/too-deep.shtml', '<div>nope</div>');
+    it('stops at the depth cap, counting the .shtml itself', async () => {
+      // The cap is 6 entries below the root and applies to the FILE, not
+      // just the directories above it: `/workspace/a/b/c/d/e/at-cap.shtml`
+      // is depth 6, `/workspace/a/b/c/d/e/f/past-cap.shtml` is depth 7.
+      await vfs.writeFile('/workspace/a/b/c/d/e/at-cap.shtml', '<div>deep</div>');
+      await vfs.writeFile('/workspace/a/b/c/d/e/f/past-cap.shtml', '<div>nope</div>');
       const result = await discoverSprinkles(vfs);
-      expect(result.has('deep')).toBe(true);
-      expect(result.has('too-deep')).toBe(false);
+      expect(result.has('at-cap')).toBe(true);
+      expect(result.has('past-cap')).toBe(false);
     });
   });
 });

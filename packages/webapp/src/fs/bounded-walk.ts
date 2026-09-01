@@ -28,10 +28,13 @@ export interface BoundedWalkReader {
 
 export interface BoundedWalkOptions {
   /**
-   * How many directory levels below the root to descend into. `0` reads
-   * the root itself and nothing else; `2` reaches
-   * `<root>/a/b/file`. Defaults to `MAX_WALK_DEPTH`, the same ceiling
-   * `VirtualFS.walk` applies.
+   * Deepest entry the walk may touch, counting the root's own children
+   * as depth 1. The cap applies to FILES as well as directories: with
+   * `maxDepth: 2`, `<root>/a/file` and `<root>/a/b` are reached but
+   * `<root>/a/b/file` is not. A directory sitting AT the cap can only
+   * hold entries past it, so it is never read at all. `0` reads the
+   * root and yields nothing. Defaults to `MAX_WALK_DEPTH`, the same
+   * ceiling `VirtualFS.walk` applies.
    */
   maxDepth?: number;
   /**
@@ -73,9 +76,14 @@ async function safeReadDir(reader: BoundedWalkReader, dir: string): Promise<DirE
   }
 }
 
-/** Queue a directory unless it is past the depth cap or on the skip list. */
+/**
+ * Queue a directory unless it is on the skip list or its own children
+ * would already be past the depth cap — reading a directory at the cap
+ * would spend an RPC (and, under a mount, an HTTP request) on entries
+ * the walk must then discard.
+ */
 function pushDir(stack: Frame[], name: string, path: string, depth: number, limits: Limits): void {
-  if (depth > limits.maxDepth) return;
+  if (depth >= limits.maxDepth) return;
   if (limits.skip?.(name, path)) return;
   stack.push({ dir: path, depth });
 }
@@ -104,7 +112,12 @@ async function* walkSymlink(
   }
 }
 
-/** Yield or queue a single `DirEntry`. */
+/**
+ * Yield or queue a single `DirEntry`. The depth cap is enforced HERE,
+ * before the entry is yielded, so a file is bounded exactly like a
+ * directory — `pushDir` alone would let the children of a directory
+ * read at the cap slip out one level too deep.
+ */
 async function* walkEntry(
   reader: BoundedWalkReader,
   entry: DirEntry,
@@ -113,6 +126,7 @@ async function* walkEntry(
   stack: Frame[],
   limits: Limits
 ): AsyncGenerator<string> {
+  if (depth > limits.maxDepth) return;
   if (entry.type === 'file') {
     yield child;
     return;
