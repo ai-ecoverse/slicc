@@ -180,6 +180,20 @@ git checkout -b feature origin/feature
 
 Use `--depth <n>` to request a different history depth.
 
+### Git revision resolution
+
+Every revision argument resolves through one helper, `resolveRevision()` in
+`packages/webapp/src/git/commands/revision.ts`, so `show`, `ls-tree`, `cherry-pick`, `revert`,
+`rebase`, `diff`, `log`, `merge-base` and `rev-parse` all accept the same tokens: a ref
+(`HEAD`, `main`, `origin/main`, a tag), a full or abbreviated oid, and `~`/`^` suffixes.
+
+Resolution order matters for performance, not just precedence. A ref is looked up first —
+matching git, where a branch named `deadbeef` wins over the oid prefix `deadbeef` — and
+`expandOid()` is only attempted for tokens that match `/^[0-9a-f]{4,40}$/i`. `expandOid()` reads
+every `.git/objects/pack/*.idx` searching for a prefix match, so trying it first made
+`git rev-parse HEAD` over a `--mount`ed host repo read all 30 pack indexes (3.8 MB, 34 bridge
+requests) instead of `HEAD` plus `packed-refs` (issue #2713).
+
 ### `ipk install -g` / `npm install -g`
 
 `ipk install -g <pkg>` (and `npm install -g`, `npm i -g`) installs into the shared
