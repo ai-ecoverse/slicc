@@ -53,6 +53,23 @@ const STYLE = `
   background: rgba(255,255,255,.12); border-radius: 999px; padding: 2px 9px;
 }
 .grow { flex: 1; }
+/* Peek chip: the armed state has to be VISIBLE, or the next digit does
+   something other than what the last one did with no warning. */
+.peek {
+  display: none; align-items: center; gap: 6px;
+  font-size: 12px; font-weight: 600; color: #fff;
+  background: rgba(255,255,255,.2); border-radius: 999px; padding: 3px 10px;
+}
+:host([data-peek]) .peek { display: inline-flex; }
+/* The positional number a digit key selects — drawn on the card so the
+   numbering is something you read, not something you count. */
+.num {
+  position: absolute; top: 8px; left: 8px; z-index: 1;
+  min-width: 20px; height: 20px; padding: 0 5px;
+  display: grid; place-items: center; border-radius: 6px;
+  font: 600 11px/1 var(--mono, ui-monospace, monospace);
+  color: #fff; background: rgba(0,0,0,.55);
+}
 .close {
   width: 34px; height: 34px; display: grid; place-items: center;
   border: none; background: rgba(255,255,255,.1); color: #fff;
@@ -73,7 +90,7 @@ const STYLE = `
   grid-auto-rows: max-content;
 }
 .card {
-  display: flex; flex-direction: column;
+  position: relative; display: flex; flex-direction: column;
   background: var(--canvas); border: 1px solid var(--line);
   border-radius: 12px; overflow: hidden; cursor: pointer; font-family: var(--ui);
   transition: border-color .12s ease, box-shadow .12s ease, transform .12s ease;
@@ -121,6 +138,18 @@ const STYLE = `
 `;
 const SHEET = sheet(STYLE);
 
+/**
+ * The digit that selects a card, as a badge — or `null` where none does.
+ *
+ * `1`-`8` are positional and `9` is the last card whatever the count, which
+ * leaves the middle of a long list unreachable by digit. Those cards get no
+ * badge rather than a misleading one: the step keys and Tab still reach them.
+ */
+function numberBadge(index: number, total: number): HTMLElement | null {
+  const digit = index === total - 1 ? 9 : index < 8 ? index + 1 : null;
+  return digit === null ? null : h('span', { class: 'num', part: 'number' }, String(digit));
+}
+
 /** Default header label when no `heading` attribute is set. */
 const DEFAULT_HEADING = 'Open tabs';
 
@@ -132,6 +161,10 @@ const DEFAULT_HEADING = 'Open tabs';
  *
  * Interaction mirrors the reviewer's brief:
  *   - click (or Enter/Space on) a card → `tab-activate` (bring that tab to front)
+ *   - the digits `1`-`9` → the same, by position (`9` is always the LAST tab)
+ *   - `p` → arm PEEK: the next activation emits `tab-peek` instead, for a host
+ *     that shows the tab and then comes back. The header chip says it is armed
+ *     and closing the overlay disarms it.
  *   - a card's corner ✕ → `tab-close` (close just that tab)
  *   - the header ✕, the Escape key, or a backdrop click → `overlay-close`
  *
@@ -148,6 +181,10 @@ const DEFAULT_HEADING = 'Open tabs';
  * @csspart shot - a card's screenshot / placeholder
  * @csspart title - a card's title
  * @csspart card-close - a card's corner ✕ button
+ * @prop {boolean} peeking - whether the next activation is a peek (`p` toggles it)
+ * @csspart peek - the header chip shown while peek is armed
+ * @fires tab-peek - `CustomEvent<{ id: string }>` when a card is activated with
+ *   peek armed — the host shows that tab and returns
  * @fires tab-activate - `CustomEvent<{ id: string }>` when a card is activated
  * @fires tab-close - `CustomEvent<{ id: string }>` when a card's ✕ is clicked
  * @fires overlay-close - `CustomEvent<{ reason: TabOverlayCloseReason }>` on dismiss
@@ -159,11 +196,46 @@ export class SliccTabOverlay extends HTMLElement {
   #tabs: TabDescriptor[] = [];
   #overlay: HTMLElement | null = null;
   #lastFocus: HTMLElement | null = null;
+  /** Is the next activation a peek rather than a switch? */
+  #peek = false;
 
+  /**
+   * The overlay's own keyboard, live only while it is open.
+   *
+   * It has one because it MUST: a modal owns the keyboard, and the shell's
+   * keyboard mode suspends every command while one is up — so `b 3` cannot
+   * reach a tab as a shell chord, and would race the async refresh even if it
+   * could. Handled here the cards are already on screen and numbered, and the
+   * digit means what the user can see.
+   *
+   * Every key it takes is stopped, so nothing lands twice.
+   */
   #onKey = (e: KeyboardEvent): void => {
-    if (e.key === 'Escape' && this.open) {
+    if (!this.open) return;
+    if (e.key === 'Escape') {
       e.stopPropagation();
       this.#close('escape');
+      return;
+    }
+    // `code` first: the physical key is the stable reading of "the 3 key"
+    // across layouts (the shell's `digitFor` does the same).
+    const digit = /^Digit([1-9])$/.exec(e.code ?? '')?.[1] ?? /^[1-9]$/.exec(e.key)?.[0];
+    if (digit) {
+      e.stopPropagation();
+      e.preventDefault();
+      // `9` is the LAST tab, whatever the count — the tab-strip convention the
+      // shell's digits already follow (see `indexForDigit` there; the rule is
+      // restated rather than imported, because a component may not depend on
+      // the app).
+      const index = digit === '9' ? this.#tabs.length - 1 : Number(digit) - 1;
+      const tab = index >= 0 ? this.#tabs[index] : undefined;
+      if (tab) this.#activate(tab.id);
+      return;
+    }
+    if (e.key === 'p' || e.key === 'P') {
+      e.stopPropagation();
+      e.preventDefault();
+      this.peeking = !this.#peek;
     }
   };
 
@@ -219,6 +291,28 @@ export class SliccTabOverlay extends HTMLElement {
     if (!this.open) this.open = true;
   }
 
+  /**
+   * Whether the next activation PEEKS — shows the tab and comes back — rather
+   * than switching to it for good. Reflected as `data-peek` so the chip in the
+   * header shows it: an armed modifier nobody can see is a trap.
+   *
+   * Armed by the `p` key, and cleared whenever the overlay closes, so it can
+   * never survive into a later visit.
+   */
+  get peeking(): boolean {
+    return this.#peek;
+  }
+
+  set peeking(value: boolean) {
+    this.#peek = value;
+    this.toggleAttribute('data-peek', value);
+  }
+
+  /** Activate a tab the way the armed mode says: peek it, or switch to it. */
+  #activate(id: string): void {
+    this.#emit(this.#peek ? 'tab-peek' : 'tab-activate', id);
+  }
+
   /** Close the overlay via the API (emits `overlay-close` with reason `api`). */
   hide(): void {
     if (this.open) this.#close('api');
@@ -236,7 +330,7 @@ export class SliccTabOverlay extends HTMLElement {
   }
 
   /** Build one tab card (composed via `h()` — attribute values are DOM-escaped). */
-  #cardEl(tab: TabDescriptor): HTMLElement {
+  #cardEl(tab: TabDescriptor, index: number): HTMLElement {
     const title = tab.title ?? tab.id;
     const shot = tab.screenshot
       ? h('img', { class: 'shot', part: 'shot', src: tab.screenshot, alt: title, loading: 'lazy' })
@@ -270,14 +364,18 @@ export class SliccTabOverlay extends HTMLElement {
         'aria-label': title,
         'aria-current': tab.active ? 'true' : false,
       },
+      // The key that selects this card, drawn on it: `9` is the last one, so
+      // past the eighth the number is only worth showing for the end of the
+      // list. Nothing is drawn for the unreachable middle.
+      numberBadge(index, this.#tabs.length),
       shot,
       h('div', { class: 'meta' }, label, close)
     );
-    card.addEventListener('click', () => this.#emit('tab-activate', tab.id));
+    card.addEventListener('click', () => this.#activate(tab.id));
     card.addEventListener('keydown', (e) => {
       if (e.key === 'Enter' || e.key === ' ') {
         e.preventDefault();
-        this.#emit('tab-activate', tab.id);
+        this.#activate(tab.id);
       }
     });
     return card;
@@ -290,6 +388,7 @@ export class SliccTabOverlay extends HTMLElement {
       { class: 'bar', part: 'bar' },
       h('span', { class: 'title' }, this.heading),
       h('span', { class: 'count' }, String(this.#tabs.length)),
+      h('span', { class: 'peek' }, 'Peek · comes back'),
       h('span', { class: 'grow' }),
       this.#closeButton()
     );
@@ -299,7 +398,9 @@ export class SliccTabOverlay extends HTMLElement {
       grid = h('div', { class: 'empty' }, 'No open tabs.');
     } else {
       grid = h('div', { class: 'grid', part: 'grid', role: 'list' });
-      for (const tab of this.#tabs) grid.appendChild(this.#cardEl(tab));
+      this.#tabs.forEach((tab, index) => {
+        grid.appendChild(this.#cardEl(tab, index));
+      });
     }
 
     this.#overlay = h('div', { class: 'overlay', part: 'overlay' }, bar, grid);
@@ -310,8 +411,9 @@ export class SliccTabOverlay extends HTMLElement {
     this.#root.replaceChildren(this.#overlay);
   }
 
-  /** Manage open-state focus + the document Escape listener. */
+  /** Manage open-state focus + the document key listener. */
   #sync(): void {
+    if (!this.open) this.peeking = false;
     if (this.open) {
       this.#lastFocus = (this.getRootNode() as Document | ShadowRoot).activeElement as HTMLElement;
       document.addEventListener('keydown', this.#onKey, true);
@@ -324,7 +426,7 @@ export class SliccTabOverlay extends HTMLElement {
   }
 
   /** Emit a composed, bubbling tab event carrying the tab id. */
-  #emit(type: 'tab-activate' | 'tab-close', id: string): void {
+  #emit(type: 'tab-activate' | 'tab-peek' | 'tab-close', id: string): void {
     this.dispatchEvent(
       new CustomEvent<{ id: string }>(type, { detail: { id }, bubbles: true, composed: true })
     );

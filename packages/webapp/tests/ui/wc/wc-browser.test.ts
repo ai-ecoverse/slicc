@@ -37,6 +37,7 @@ function makeFakeBrowser() {
       { targetId: 'follower-9:tab-2', title: 'Dashboard', url: 'https://dash.example' },
     ]),
     attachToPage: vi.fn(async () => 'session-1'),
+    getAttachedTargetId: vi.fn(() => 'agent-page'),
     screenshot: vi.fn(async () => 'BASE64'),
     bringToFront: vi.fn(async () => undefined),
     closePage: vi.fn(async () => undefined),
@@ -188,5 +189,101 @@ describe('wireWcBrowser', () => {
     await refresh();
     expect((overlay as OverlayEl).tabs).toHaveLength(2);
     expect((overlay as OverlayEl).tabs.every((t) => t.screenshot === undefined)).toBe(true);
+  });
+});
+
+describe('peek', () => {
+  /** SLICC's own tab, which the refresh hides from the grid but a peek returns to. */
+  function browserWithSelf() {
+    const browser = makeFakeBrowser();
+    browser.listAllTargets = vi.fn(async () => [
+      { targetId: 'local-1', title: 'Docs', url: 'https://docs.example' },
+      { targetId: 'slicc-self', title: 'SLICC', url: location.href },
+    ]);
+    return browser;
+  }
+
+  async function openOverlay(browser: ReturnType<typeof makeFakeBrowser>) {
+    const refs = makeRefs();
+    const handle = wireWcBrowser({ refs, browser: browser as unknown as BrowserAPI, log });
+    await handle.refresh();
+    return handle.overlay as OverlayEl;
+  }
+
+  it('brings the tab to the front, then comes back to SLICC', async () => {
+    vi.useFakeTimers();
+    try {
+      const browser = browserWithSelf();
+      const overlay = await openOverlay(browser);
+      browser.attachToPage.mockClear();
+      browser.bringToFront.mockClear();
+
+      overlay.dispatchEvent(new CustomEvent('tab-peek', { detail: { id: 'local-1' } }));
+      await vi.advanceTimersByTimeAsync(0);
+      expect(browser.attachToPage).toHaveBeenCalledWith('local-1');
+      expect(browser.bringToFront).toHaveBeenCalledTimes(1);
+
+      // ...and five seconds later the user is back where they started.
+      await vi.advanceTimersByTimeAsync(5000);
+      expect(browser.attachToPage).toHaveBeenCalledWith('slicc-self');
+      expect(browser.bringToFront).toHaveBeenCalledTimes(2);
+      // The agent is put back on the page it was driving — attaching does not
+      // foreground, so this last step is invisible.
+      expect(browser.attachToPage).toHaveBeenLastCalledWith('agent-page');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('replaces a pending return rather than stacking one', async () => {
+    vi.useFakeTimers();
+    try {
+      const browser = browserWithSelf();
+      const overlay = await openOverlay(browser);
+      overlay.dispatchEvent(new CustomEvent('tab-peek', { detail: { id: 'local-1' } }));
+      await vi.advanceTimersByTimeAsync(3000);
+      browser.bringToFront.mockClear();
+      overlay.dispatchEvent(new CustomEvent('tab-peek', { detail: { id: 'local-1' } }));
+      await vi.advanceTimersByTimeAsync(0);
+      // The first return would have fired here; only the second peek's does.
+      await vi.advanceTimersByTimeAsync(2500);
+      expect(browser.bringToFront).toHaveBeenCalledTimes(1);
+      await vi.advanceTimersByTimeAsync(2600);
+      expect(browser.bringToFront).toHaveBeenCalledTimes(2);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * Without a way home a peek is just a switch with a surprise in it, so it
+   * stays a switch and says so.
+   */
+  it("degrades to a plain switch when SLICC's own tab cannot be found", async () => {
+    vi.useFakeTimers();
+    try {
+      const browser = makeFakeBrowser();
+      const overlay = await openOverlay(browser);
+      browser.bringToFront.mockClear();
+      overlay.dispatchEvent(new CustomEvent('tab-peek', { detail: { id: 'local-1' } }));
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(browser.bringToFront).toHaveBeenCalledTimes(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        expect.stringContaining('peek cannot find the SLICC tab'),
+        expect.anything()
+      );
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /** A follower's tab is copied here, not visited — there is nowhere to come back from. */
+  it('teleports a follower tab instead of peeking it', async () => {
+    const browser = browserWithSelf();
+    const overlay = await openOverlay(browser);
+    overlay.dispatchEvent(new CustomEvent('tab-peek', { detail: { id: 'follower-9:tab-2' } }));
+    await Promise.resolve();
+    await Promise.resolve();
+    expect(vi.mocked(teleportTabOneWay)).toHaveBeenCalled();
   });
 });

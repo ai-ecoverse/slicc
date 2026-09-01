@@ -16,6 +16,15 @@ import { teleportTabOneWay } from '../../scoops/tray-leader/tab-teleport.js';
 import type { BootStageLogger } from '../boot/types.js';
 import type { WcShellRefs } from './wc-shell.js';
 
+/**
+ * How long a peeked tab stays in front before SLICC comes back.
+ *
+ * Long enough to read a page, short enough that it never feels like a switch
+ * you have to undo — the whole point of the gesture is that you do not have to
+ * find your way back.
+ */
+const PEEK_MS = 5000;
+
 /** The overlay's structural surface (typed loosely — composed BY TAG). */
 interface TabOverlayLike extends HTMLElement {
   tabs: Array<{
@@ -123,35 +132,111 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
     (refs.dock as HTMLElement & { collapse?: () => void }).collapse?.();
   });
 
-  overlay.addEventListener('tab-activate', (event) => {
-    const id = (event as CustomEvent<{ id: string }>).detail.id;
-    void (async () => {
-      try {
-        if (id.includes(':')) {
-          // A follower's tab: focusing it over there wouldn't put it in front
-          // of THIS user. Pull a copy to the leader instead — foreground, with
-          // cookies + storage teleported (degrades to a bare URL open when the
-          // source cannot serve state).
-          const result = await teleportTabOneWay(browser, {
-            sourceTargetId: id,
-            destination: { kind: 'leader' },
-          });
-          log.info('WC browser overlay: pulled remote tab to leader', {
-            source: id,
-            target: result.targetId,
-            degraded: result.degraded,
-          });
-          overlay.hide();
-          return;
-        }
-        await browser.attachToPage(id);
-        await browser.bringToFront();
+  /**
+   * Switch to a tab for good: attach, foreground, and get out of the way.
+   * Shared with peek, whose going half is this exact action.
+   */
+  const activate = async (id: string): Promise<void> => {
+    try {
+      if (id.includes(':')) {
+        // A follower's tab: focusing it over there wouldn't put it in front
+        // of THIS user. Pull a copy to the leader instead — foreground, with
+        // cookies + storage teleported (degrades to a bare URL open when the
+        // source cannot serve state).
+        const result = await teleportTabOneWay(browser, {
+          sourceTargetId: id,
+          destination: { kind: 'leader' },
+        });
+        log.info('WC browser overlay: pulled remote tab to leader', {
+          source: id,
+          target: result.targetId,
+          degraded: result.degraded,
+        });
         overlay.hide();
-      } catch (err) {
-        // Keep the overlay open so the user sees the tap did not take effect.
-        log.error('WC browser overlay: tab activate failed', err);
+        return;
       }
-    })();
+      await browser.attachToPage(id);
+      await browser.bringToFront();
+      overlay.hide();
+    } catch (err) {
+      // Keep the overlay open so the user sees the tap did not take effect.
+      log.error('WC browser overlay: tab activate failed', err);
+    }
+  };
+
+  overlay.addEventListener('tab-activate', (event) => {
+    void activate((event as CustomEvent<{ id: string }>).detail.id);
+  });
+
+  /**
+   * Which target is SLICC itself — the tab a peek comes back to.
+   *
+   * Resolved fresh at peek time rather than remembered from the last refresh:
+   * a target id that has since closed would strand the user in the peeked tab.
+   * `location.href` is the exact answer when it is there; a second SLICC tab
+   * on our own origin is the near-enough fallback, since coming back to the
+   * wrong SLICC beats not coming back at all.
+   */
+  const findSelfTarget = async (): Promise<string | null> => {
+    const pages = await browser.listAllTargets();
+    const exact = pages.find((p) => p.url === location.href);
+    if (exact) return exact.targetId;
+    const selfOrigins = location?.origin ? [location.origin] : undefined;
+    return pages.find((p) => isSliccAppUrl(p.url ?? '', { selfOrigins }))?.targetId ?? null;
+  };
+
+  /** The pending return, so a second peek replaces the first rather than stacking. */
+  let peekTimer: ReturnType<typeof setTimeout> | null = null;
+
+  /**
+   * Show a tab, then come back.
+   *
+   * The going half is exactly what `tab-activate` does, because it IS the same
+   * action — a peek is a switch that undoes itself. The coming back half has
+   * two steps that must not be confused: `bringToFront` on SLICC's own target
+   * is what the USER sees, and re-attaching whatever the agent was driving
+   * before is what keeps this gesture out of the agent's way. Attaching does
+   * not foreground, so the second step is invisible.
+   *
+   * Resolved BEFORE leaving: if we cannot tell which tab is ours, the peek
+   * degrades to a plain switch rather than a trip with no way home.
+   */
+  const peek = async (id: string): Promise<void> => {
+    const previous = browser.getAttachedTargetId();
+    const self = await findSelfTarget();
+    await activate(id);
+    if (!self) {
+      log.warn('WC browser overlay: peek cannot find the SLICC tab; staying put', { target: id });
+      return;
+    }
+    if (peekTimer) clearTimeout(peekTimer);
+    peekTimer = setTimeout(() => {
+      peekTimer = null;
+      void (async () => {
+        try {
+          await browser.attachToPage(self);
+          await browser.bringToFront();
+          // Put the agent back on the page it was driving. Never SLICC itself.
+          if (previous && previous !== self && previous !== id) {
+            await browser.attachToPage(previous);
+          }
+        } catch (err) {
+          log.error('WC browser overlay: peek return failed', err);
+        }
+      })();
+    }, PEEK_MS);
+  };
+
+  overlay.addEventListener('tab-peek', (event) => {
+    const id = (event as CustomEvent<{ id: string }>).detail.id;
+    // A follower's tab is not somewhere this browser can go and come back
+    // from — activating it pulls a COPY here (`teleportTabOneWay`), which is
+    // not a visit at all. Let the ordinary path teleport it instead.
+    if (id.includes(':')) {
+      void activate(id);
+      return;
+    }
+    void peek(id).catch((err) => log.error('WC browser overlay: peek failed', err));
   });
 
   overlay.addEventListener('tab-close', (event) => {
