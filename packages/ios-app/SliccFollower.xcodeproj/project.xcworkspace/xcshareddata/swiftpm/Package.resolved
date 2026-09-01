@@ -1,5 +1,5 @@
 {
-  "originHash" : "02785617df776313e432a69fe9471eef0178337b2fc37f290416f643b12ad695",
+  "originHash" : "d49c8af03fb09697f8a4e7439e06a02c08609e455f52205272b2ebcdde8c1ee1",
   "pins" : [
     {
       "identity" : "eventsource",
@@ -15,8 +15,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/Lakr233/libghostty-spm",
       "state" : {
-        "revision" : "356f730bec03281fc7b83666a129b0246137ea26",
-        "version" : "1.4.0"
+        "revision" : "e6255b49fa697a41d8fbcce07f999d84a6c56dcb",
+        "version" : "1.5.1"
       }
     },
     {
@@ -96,8 +96,8 @@
       "kind" : "remoteSourceControl",
       "location" : "https://github.com/stasel/WebRTC.git",
       "state" : {
-        "revision" : "19aa8c1fc7120d50df987b7111f42d5024df3d54",
-        "version" : "151.0.0"
+        "revision" : "1d04692697cb642bfebf6ad2dd99fe52649c3d6d",
+        "version" : "152.0.0"
       }
     }
   ],
