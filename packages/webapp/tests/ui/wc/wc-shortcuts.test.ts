@@ -118,6 +118,8 @@ function harness(
   const copyReply = vi.fn();
   const copyChat = vi.fn();
   const zoomSurface = vi.fn();
+  const toggleVoice = vi.fn();
+  const scrollMessage = vi.fn();
   const selectFile = vi.fn();
   const selectSession = vi.fn();
   const files = options.files ?? [];
@@ -131,6 +133,8 @@ function harness(
     copyReply,
     copyChat,
     zoomSurface,
+    toggleVoice,
+    scrollMessage,
     lists: {
       files: { size: () => files.length, selectAt: (i) => selectFile(files[i]) },
       sessions: { size: () => sessions.length, selectAt: (i) => selectSession(sessions[i]) },
@@ -164,6 +168,8 @@ function harness(
     copyReply,
     copyChat,
     zoomSurface,
+    toggleVoice,
+    scrollMessage,
     selectFile,
     selectSession,
     accounts,
@@ -359,7 +365,10 @@ describe('shortcutRows', () => {
       's',
       'a',
       'u',
+      'v',
       'y',
+      'j',
+      'k',
       'f',
       't',
       'b',
@@ -559,33 +568,17 @@ describe('inside keyboard mode', () => {
     expect(handles.active()).toBe(true);
   });
 
-  it('P cycles the installed sprinkles', () => {
-    const { selectItem } = harness({
-      dockItems: [
-        { id: 'files', kind: 'tool' },
-        { id: 'sprinkle:one', kind: 'sprinkle' },
-        { id: 'sprinkle:two', kind: 'sprinkle' },
-        { id: 'new', kind: 'sprinkle' },
-      ],
-      activeDock: 'sprinkle:one',
-    });
-    escape();
-    press({ key: 'P', code: 'KeyP', shiftKey: true });
-    expect(selectItem).toHaveBeenCalledWith('sprinkle:two');
-  });
-
-  it('P falls back to the new-sprinkle launcher when none are installed', () => {
+  it('p falls back to the new-sprinkle launcher when none are installed', () => {
     const { selectItem, handles } = harness();
     escape();
-    press({ key: 'P', code: 'KeyP', shiftKey: true });
+    press({ key: 'p', code: 'KeyP' });
     expect(selectItem).toHaveBeenCalledWith('new');
-    // A cycle key holds the mode, so a second press can reach the next one.
     expect(handles.active()).toBe(true);
   });
 
   /**
    * The chord prefix has to be idempotent, or `p 3` would flash whichever
-   * sprinkle the cycle happened to land on before opening the third.
+   * sprinkle a cycling prefix happened to land on before opening the third.
    */
   it('p opens the FIRST sprinkle rather than cycling', () => {
     const { selectItem } = harness({
@@ -1365,7 +1358,7 @@ describe('chords', () => {
       const h = harness({ files: ['/a.ts'] });
       escape();
       press({ key: 'f', code: 'KeyF' });
-      vi.advanceTimersByTime(1200);
+      vi.advanceTimersByTime(2000);
       press({ key: '1', code: 'Digit1' });
       expect(h.selectFile).not.toHaveBeenCalled();
       expect(h.select).toHaveBeenCalledWith('cone_1');
@@ -1436,5 +1429,116 @@ describe('chords', () => {
     escape();
     press({ key: 'f', code: 'KeyF' });
     expect(() => press({ key: '2', code: 'Digit2' })).not.toThrow();
+  });
+});
+
+describe('the step keys', () => {
+  it('walk the transcript when no list is open', () => {
+    const h = harness();
+    escape();
+    press({ key: 'j', code: 'KeyJ' });
+    press({ key: 'k', code: 'KeyK' });
+    expect(h.scrollMessage.mock.calls).toEqual([[1], [-1]]);
+    // Walking the conversation is navigation: the keyboard stays live.
+    expect(h.handles.active()).toBe(true);
+  });
+
+  it('page the list a prefix opened instead, and keep paging', () => {
+    const h = harness({ files: ['/a.ts', '/b.ts', '/c.ts'] });
+    escape();
+    press({ key: 'f', code: 'KeyF' });
+    press({ key: 'j', code: 'KeyJ' });
+    press({ key: 'j', code: 'KeyJ' });
+    expect(h.selectFile.mock.calls).toEqual([['/a.ts'], ['/b.ts']]);
+    // ...and never as a transcript scroll while the list is live.
+    expect(h.scrollMessage).not.toHaveBeenCalled();
+  });
+
+  it('loop at both ends', () => {
+    const h = harness({ files: ['/a.ts', '/b.ts'] });
+    escape();
+    press({ key: 'f', code: 'KeyF' });
+    // Backwards from nowhere is the LAST entry, so `f k` reaches the end of a
+    // list as directly as `f j` reaches its start.
+    press({ key: 'k', code: 'KeyK' });
+    press({ key: 'k', code: 'KeyK' });
+    press({ key: 'k', code: 'KeyK' });
+    expect(h.selectFile.mock.calls).toEqual([['/b.ts'], ['/a.ts'], ['/b.ts']]);
+  });
+
+  it('carry on from wherever a digit landed', () => {
+    const h = harness({ sessions: ['jan', 'feb', 'mar', 'apr'] });
+    escape();
+    press({ key: 'r', code: 'KeyR' });
+    press({ key: '2', code: 'Digit2' });
+    press({ key: 'j', code: 'KeyJ' });
+    expect(h.selectSession.mock.calls).toEqual([['feb'], ['mar']]);
+  });
+
+  /**
+   * `p` opens the first sprinkle, so the step key has to know it is already
+   * standing on it — this is what retires the old dedicated cycle key.
+   */
+  it('cycle the sprinkles from the one p just opened', () => {
+    const { selectItem } = harness({
+      dockItems: [
+        { id: 'files', kind: 'tool' },
+        { id: 'sprinkle:one', kind: 'sprinkle' },
+        { id: 'sprinkle:two', kind: 'sprinkle' },
+        { id: 'new', kind: 'sprinkle' },
+      ],
+    });
+    escape();
+    press({ key: 'p', code: 'KeyP' });
+    press({ key: 'j', code: 'KeyJ' });
+    press({ key: 'j', code: 'KeyJ' });
+    expect(selectItem.mock.calls).toEqual([['sprinkle:one'], ['sprinkle:two'], ['sprinkle:one']]);
+  });
+
+  /**
+   * The chord and the HUD share a lifetime, and paging refreshes both — a walk
+   * down a long list must not expire under the user halfway.
+   */
+  it('keep the list alive as long as the walk continues', () => {
+    vi.useFakeTimers();
+    try {
+      const h = harness({ files: ['/a.ts', '/b.ts'] });
+      escape();
+      press({ key: 'f', code: 'KeyF' });
+      for (let i = 0; i < 4; i++) {
+        vi.advanceTimersByTime(1200);
+        press({ key: 'j', code: 'KeyJ' });
+      }
+      expect(h.selectFile).toHaveBeenCalledTimes(4);
+      expect(h.scrollMessage).not.toHaveBeenCalled();
+      // Stop walking, and the list lets go.
+      vi.advanceTimersByTime(2000);
+      press({ key: 'j', code: 'KeyJ' });
+      expect(h.scrollMessage).toHaveBeenCalledWith(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('do nothing at all for a list with no rows — including scrolling', () => {
+    const h = harness({ files: [] });
+    escape();
+    press({ key: 'f', code: 'KeyF' });
+    press({ key: 'j', code: 'KeyJ' });
+    expect(h.selectFile).not.toHaveBeenCalled();
+    expect(h.scrollMessage).not.toHaveBeenCalled();
+  });
+});
+
+describe('voice', () => {
+  it('v drives the composer dictation turn and keeps the keyboard', () => {
+    const h = harness();
+    escape();
+    press({ key: 'v', code: 'KeyV' });
+    expect(h.toggleVoice).toHaveBeenCalledTimes(1);
+    // The key that ends the turn is this same key, so the mode has to survive.
+    expect(h.handles.active()).toBe(true);
+    press({ key: 'v', code: 'KeyV' });
+    expect(h.toggleVoice).toHaveBeenCalledTimes(2);
   });
 });

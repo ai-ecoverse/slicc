@@ -32,6 +32,14 @@ import {
 /** One row of the file tree, as the library models it (`wc-workbench.ts` too). */
 type FileTreeItem = NonNullable<SliccFileTree['items']>[number];
 
+/**
+ * A `<slicc-composer>`, as far as this module needs it: the band's hands-free
+ * dictation entry point.
+ */
+interface ComposerLike extends HTMLElement {
+  toggleHandsFree(): boolean;
+}
+
 /** The elements the shell already has when it wires the mode. */
 export interface ShortcutSurfaceDeps {
   /** The composer's input card — the send button and the add menu live in it. */
@@ -44,6 +52,8 @@ export interface ShortcutSurfaceDeps {
   dock: { readonly active: string | null };
   /** The left rail, which holds the archived-chat cards. */
   freezer: HTMLElement;
+  /** The composer band, for the dictation turn `v` starts and ends. */
+  composer: HTMLElement;
   /**
    * The file tree; `items`/`selectFile` are its own public API. Group headers
    * carry no id — they are chrome, not rows — so the list skips them and a
@@ -75,6 +85,45 @@ export function stopTurn(deps: ShortcutSurfaceDeps): void {
 export function openAttachMenu(deps: ShortcutSurfaceDeps): void {
   const menu = deps.inputCard.querySelector('slicc-add-menu') as AddMenuLike | null;
   menu?.open?.();
+}
+
+/**
+ * Start (or finish) a dictation turn.
+ *
+ * The one command here whose surface had to GROW an entry point rather than
+ * being handed one it already had: push-to-talk arms on `pointerdown` and
+ * holds until `pointerup`, which is not a thing a keyboard can express, so
+ * `<slicc-composer>` gained `toggleHandsFree()` — the same press lifecycle
+ * with no pointer. Everything else about the turn, including how the
+ * transcript is appended and submitted, stays the gesture's own path.
+ */
+export function toggleVoice(deps: ShortcutSurfaceDeps): void {
+  const composer = deps.composer as ComposerLike;
+  // Absent on a float that never opted into push-to-talk (the extension side
+  // panel, where Chrome denies the mic cross-origin), and on any composer the
+  // custom element has not upgraded.
+  composer.toggleHandsFree?.();
+}
+
+/**
+ * Scroll the transcript by one message.
+ *
+ * Position, not selection: "next" is the first message whose top is below the
+ * fold, so it means the same thing after the user has scrolled with the wheel
+ * as it does after ten presses of the key. Measured against the thread's own
+ * box and applied to its `scrollTop`, so a transcript inside a panel scrolls
+ * itself rather than dragging the page around it.
+ */
+export function scrollMessage(deps: ShortcutSurfaceDeps, delta: 1 | -1): void {
+  const thread = deps.thread;
+  const top = thread.getBoundingClientRect().top;
+  // A pixel of slack: a row sitting exactly at the fold is where we already
+  // are, not the next place to go.
+  const offsets = [...thread.children].map((row) => row.getBoundingClientRect().top - top);
+  const target =
+    delta > 0 ? offsets.find((offset) => offset > 1) : offsets.filter((o) => o < -1).at(-1);
+  if (target === undefined) return;
+  thread.scrollTop += target;
 }
 
 /**
@@ -190,8 +239,6 @@ export interface ShellKeyboardDeps extends ShortcutSurfaceDeps {
   dock: ShortcutDock & { readonly active: string | null };
   freezer: ShortcutFreezer & HTMLElement;
   composerMeta: ShortcutComposerMeta;
-  /** The composer band; `hidden` on a scoop, whose transcript is read-only. */
-  composer: HTMLElement;
 }
 
 /**
@@ -217,6 +264,8 @@ export function wireShellKeyboard(deps: ShellKeyboardDeps): ShortcutHandles {
     composerAvailable: () =>
       !deps.composer.hasAttribute('hidden') && !deps.inputCard.hasAttribute('disabled'),
     stopTurn: () => stopTurn(deps),
+    toggleVoice: () => toggleVoice(deps),
+    scrollMessage: (delta) => scrollMessage(deps, delta),
     focusApproval: () => focusApproval(deps),
     openAttachMenu: () => openAttachMenu(deps),
     copyReply: () => copyReply(deps),

@@ -15,8 +15,10 @@ import {
   focusApproval,
   openAttachMenu,
   type ShortcutSurfaceDeps,
+  scrollMessage,
   shortcutLists,
   stopTurn,
+  toggleVoice,
   zoomSurface,
 } from '../../../src/ui/wc/wc-shortcut-surfaces.js';
 
@@ -26,7 +28,8 @@ function harness(options: { activeDock?: string | null } = {}) {
   const dockTree = document.createElement('slicc-dock-tree');
   const freezer = document.createElement('div');
   const memoryHost = document.createElement('slicc-memory-panel');
-  document.body.append(inputCard, thread, dockTree, freezer, memoryHost);
+  const composer = document.createElement('slicc-composer');
+  document.body.append(inputCard, thread, dockTree, freezer, memoryHost, composer);
   const selectFile = vi.fn();
   const fileTree = { items: [] as Array<{ id?: string }>, selectFile };
   const deps: ShortcutSurfaceDeps = {
@@ -35,10 +38,11 @@ function harness(options: { activeDock?: string | null } = {}) {
     dockTree,
     dock: { active: options.activeDock ?? null },
     freezer,
+    composer,
     fileTree: fileTree as unknown as ShortcutSurfaceDeps['fileTree'],
     memoryHost,
   };
-  return { deps, inputCard, thread, dockTree, freezer, memoryHost, fileTree, selectFile };
+  return { deps, inputCard, thread, dockTree, freezer, composer, memoryHost, fileTree, selectFile };
 }
 
 /** A surface leaf in the dock-tree, with a spyable fullscreen request. */
@@ -280,5 +284,63 @@ describe('shortcutLists', () => {
     expect(() => lists.memory.selectAt(3)).not.toThrow();
     expect(() => lists.sessions.selectAt(3)).not.toThrow();
     expect(h.selectFile).not.toHaveBeenCalled();
+  });
+});
+
+describe('toggleVoice', () => {
+  it("drives the composer's hands-free push-to-talk", () => {
+    const { deps, composer } = harness();
+    const toggleHandsFree = vi.fn(() => true);
+    Object.assign(composer, { toggleHandsFree });
+    toggleVoice(deps);
+    expect(toggleHandsFree).toHaveBeenCalledTimes(1);
+  });
+
+  /** No `ptt` opt-in, or an element the browser has not upgraded. */
+  it('does nothing on a composer without the entry point', () => {
+    const { deps } = harness();
+    expect(() => toggleVoice(deps)).not.toThrow();
+  });
+});
+
+describe('scrollMessage', () => {
+  /** Give the thread and its rows a geometry jsdom will not invent. */
+  function rows(thread: HTMLElement, tops: number[]) {
+    thread.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+    for (const top of tops) {
+      const row = document.createElement('slicc-agent-message');
+      row.getBoundingClientRect = () => ({ top }) as DOMRect;
+      thread.append(row);
+    }
+  }
+
+  it('scrolls to the first message below the fold', () => {
+    const { deps, thread } = harness();
+    rows(thread, [-200, -40, 120, 400]);
+    scrollMessage(deps, 1);
+    expect(thread.scrollTop).toBe(120);
+  });
+
+  it('goes back to the last one above it', () => {
+    const { deps, thread } = harness();
+    thread.scrollTop = 500;
+    rows(thread, [-200, -40, 120, 400]);
+    scrollMessage(deps, -1);
+    // The nearest row above the fold, not the top of the transcript.
+    expect(thread.scrollTop).toBe(460);
+  });
+
+  it('stays put at either end', () => {
+    const { deps, thread } = harness();
+    rows(thread, [10, 200]);
+    scrollMessage(deps, -1);
+    expect(thread.scrollTop).toBe(0);
+  });
+
+  it('does nothing in an empty transcript', () => {
+    const { deps, thread } = harness();
+    thread.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
+    expect(() => scrollMessage(deps, 1)).not.toThrow();
+    expect(thread.scrollTop).toBe(0);
   });
 });

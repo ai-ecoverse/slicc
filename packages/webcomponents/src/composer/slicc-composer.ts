@@ -513,6 +513,9 @@ function formatEta(etaSeconds: number | null): string {
  * @attr ptt - boolean; OPT-IN: enables push-to-talk dictation by holding the
  *   textarea on an empty composer. Hosts that don't want voice input leave it
  *   unset.
+ * @method toggleHandsFree - start / stop-and-send a push-to-talk turn with no
+ *   pointer to hold (what keyboard mode's voice key drives); returns whether
+ *   it is now listening
  * @prop {ComposerSpeech|null} speech - the injected speech controller (defaults
  *   to the built-in Web Speech implementation on first use)
  * @prop {string|null} device - preferred microphone deviceId (persisted to
@@ -538,6 +541,10 @@ export class SliccComposer extends HTMLElement {
   #target: HTMLTextAreaElement | null = null;
   /** The pointerId of the active press (for capture + multi-pointer filtering). */
   #pointerId: number | null = null;
+  /** Is the live press a hands-free one ({@link toggleHandsFree})? Read only
+   *  for the overlay's wording — a gesture says "release", a key says
+   *  "press again" — and cleared with the press. */
+  #handsFree = false;
   /** The live dictation session while recording. */
   #session: SpeechSession | null = null;
   /** An in-flight `speech.start()` (enhanced engines resolve asynchronously).
@@ -753,6 +760,52 @@ export class SliccComposer extends HTMLElement {
       void this.#beginPress(this.speech, engageToken);
     }, PTT_ENGAGE_MS);
   };
+
+  /**
+   * Push-to-talk with no pointer to hold: start listening, and stop-and-send
+   * on the next call. Returns whether it is now listening.
+   *
+   * This is the only way to dictate without a mouse or a finger — the gesture
+   * arms on `pointerdown` and on nothing else — so it is what the shell's
+   * keyboard mode drives.
+   *
+   * It REUSES the press lifecycle rather than copying it: the same `#pressed`
+   * token, the same `#beginPress` permission staging, the same `#endPress`
+   * finalize, so the transcript is appended and submitted down the one path.
+   * Two things differ, and both follow from there being no pointer. The engage
+   * timer is skipped, because it exists to tell a tap from a hold and a
+   * deliberate keystroke is neither. And nothing is captured or listened for,
+   * so the press can only end where it began — here.
+   *
+   * A press already in flight is only ours to end if we started it: a finger
+   * on the composer owns its own release.
+   */
+  toggleHandsFree(): boolean {
+    if (this.#pressed) {
+      if (this.#handsFree) this.#endPress(true);
+      return false;
+    }
+    return this.#startHandsFree();
+  }
+
+  /** Arm a hands-free press, or answer false if this composer cannot take one. */
+  #startHandsFree(): boolean {
+    if (!this.hasAttribute('ptt')) return false;
+    // A finalize is still settling, or the mic picker is open — both own the
+    // overlay, and stacking a press on either is what the gesture path refuses
+    // too.
+    if (this.#stage === 'finalizing' || this.#stage === 'picking') return false;
+    const ta = this.querySelector('textarea');
+    // Armed only from an EMPTY composer, exactly like the gesture: dictation
+    // appends, so text already typed would be spoken over.
+    if (!(ta instanceof HTMLTextAreaElement) || ta.value !== '') return false;
+    this.#pressed = true;
+    this.#handsFree = true;
+    this.#token++;
+    this.#target = ta;
+    void this.#beginPress(this.speech, this.#token);
+    return true;
+  }
 
   /** A text selection forming while the engage timer is still counting down
    *  means the press is a click-drag selection, not a hold — tear the pending
@@ -1015,6 +1068,7 @@ export class SliccComposer extends HTMLElement {
   #endPress(finalize: boolean): void {
     if (!this.#pressed) return;
     this.#pressed = false;
+    this.#handsFree = false;
     // A release within the engage window cancels the deferred lifecycle so
     // #beginPress never runs for this press (stage stays 'idle' below).
     this.#clearEngageTimer();
@@ -1266,14 +1320,17 @@ export class SliccComposer extends HTMLElement {
     this.#applyStageClass(stage);
 
     switch (stage) {
-      case 'enable':
+      case 'enable': {
+        // A key press has nothing to hold, so it must not be told to hold.
+        const label = this.#handsFree ? 'Enabling push to talk' : 'Hold to enable push to talk';
         this.#renderOverlayContent(
           iconEl('mic', { size: 28 }),
-          'Hold to enable push to talk',
+          label,
           this.#loadRow('Requesting microphone access when the bar fills')
         );
-        this.#ptt.setAttribute('aria-label', 'Hold to enable push to talk');
+        this.#ptt.setAttribute('aria-label', label);
         break;
+      }
       case 'prompting':
         this.#renderOverlayContent(
           iconEl('mic', { size: 28 }),
@@ -1311,13 +1368,12 @@ export class SliccComposer extends HTMLElement {
           h('div', { class: 'slicc-composer__ptt-mic' }, iconEl('mic', { size: 28 })),
           this.#deviceWrap
         );
-        this.#labelEl = h(
-          'div',
-          { class: 'slicc-composer__ptt-label' },
-          'Listening — release to send'
-        );
+        const listening = this.#handsFree
+          ? 'Listening — press again to send'
+          : 'Listening — release to send';
+        this.#labelEl = h('div', { class: 'slicc-composer__ptt-label' }, listening);
         this.#ptt.replaceChildren(mic, this.#labelEl, this.#captionEl, this.#statusEl);
-        this.#ptt.setAttribute('aria-label', 'Listening — release to send');
+        this.#ptt.setAttribute('aria-label', listening);
         this.#renderStatusLine();
         break;
       }

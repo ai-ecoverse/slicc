@@ -95,7 +95,8 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
   (`isUntouchedV1Document`) is replaced once. Anything else, including v1 with one line changed,
   is the user's and is left alone — an edited config must survive every later boot.
 - The `//` comment must name every `CommandId` (a test asserts it) and carries the v1 keymap as a
-  paste-back block for anyone who wants the old keys.
+  paste-back block for anyone who wants the old keys. `s` maps to `sprinkles` there, not to a
+  cycle command: `p`/`s` opens the first and the step keys walk the rest.
 
 ### Sprinkles
 

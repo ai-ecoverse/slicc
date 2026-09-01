@@ -162,6 +162,13 @@ export interface ShortcutDeps {
   copyChat?: () => void;
   /** Fullscreen the active workbench surface (`z`) — the dock's long-press. */
   zoomSurface?: () => void;
+  /**
+   * Start / stop-and-send a hands-free dictation turn (`v`) — the composer's
+   * own push-to-talk lifecycle, which otherwise only a held pointer can reach.
+   */
+  toggleVoice?: () => void;
+  /** Scroll the transcript to the next (`+1`) or previous (`-1`) message. */
+  scrollMessage?: (delta: 1 | -1) => void;
   /** Ordered lists the digit chords address; each one is optional. */
   lists?: ShortcutLists;
   /**
@@ -414,6 +421,20 @@ interface CommandContext {
   actions: ShortcutActions;
   state: ModeState;
   toggleHelp(): void;
+  /**
+   * The chord armed when this key landed, if any — what makes the step keys
+   * dual-purpose. Passed in rather than read live, because the handler has
+   * already disarmed by the time a command runs: a chord survives a key only
+   * by being re-armed, and only the keys that used it do that.
+   */
+  armed: ArmedChord | null;
+}
+
+/** A live chord: the list it addresses, and where in it the user is standing. */
+export interface ArmedChord {
+  list: ChordListId;
+  /** The index last activated, or `null` before anything has been. */
+  index: number | null;
 }
 
 /**
@@ -449,7 +470,12 @@ interface Command {
    * the chords.
    */
   list?: ChordListId;
-  run(ctx: CommandContext): void;
+  /**
+   * Runs the command, and MAY report the index it activated in its list — the
+   * seed the step keys page on from, so `p` (which opens the first sprinkle)
+   * is followed by `j` for the second rather than for the first again.
+   */
+  run(ctx: CommandContext): number | void;
 }
 
 /** The lists a `<command> <digit>` chord can index. */
@@ -496,6 +522,9 @@ export type CommandId =
   | 'attach'
   | 'copyReply'
   | 'copyChat'
+  | 'voice'
+  | 'nextItem'
+  | 'prevItem'
   | 'leftRail'
   | 'rightRail'
   | 'files'
@@ -504,7 +533,6 @@ export type CommandId =
   | 'memory'
   | 'monitor'
   | 'sprinkles'
-  | 'cycleSprinkles'
   | 'zoom'
   | 'model'
   | 'accounts'
@@ -541,7 +569,9 @@ function freezerCommand(type: string, description: string): Command {
   return {
     holdsMode: false,
     description,
-    run: ({ deps }) => deps.freezer?.dispatchEvent(new CustomEvent(type, { bubbles: true })),
+    run: ({ deps }) => {
+      deps.freezer?.dispatchEvent(new CustomEvent(type, { bubbles: true }));
+    },
   };
 }
 
@@ -614,20 +644,44 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
     description: 'Copy the whole chat',
     run: ({ deps }) => deps.copyChat?.(),
   },
+  voice: {
+    /**
+     * Tap to start, tap again to send. The composer's push-to-talk is a
+     * press-and-HOLD gesture, which a keyboard cannot express at all — so
+     * this is the one command whose surface had to grow an entry point
+     * (`toggleHandsFree`) rather than being handed one it already had.
+     *
+     * Holds the mode, because the key that ends the turn is this same key.
+     */
+    holdsMode: true,
+    description: 'Dictate — again to send',
+    run: ({ deps }) => deps.toggleVoice?.(),
+  },
+  nextItem: {
+    holdsMode: true,
+    description: 'Next message — or, after a list key, the next entry',
+    run: (ctx) => stepList(ctx, 1),
+  },
+  prevItem: {
+    holdsMode: true,
+    description: 'Previous message — or the previous entry',
+    run: (ctx) => stepList(ctx, -1),
+  },
   newConversation: {
     holdsMode: false,
     description: 'New conversation',
     // The event the rail's action row fires on a single click: save the
     // chat, extract memories, start a new one.
-    run: ({ deps }) =>
-      deps.freezer?.dispatchEvent(new CustomEvent('new-chat-save', { bubbles: true })),
+    run: ({ deps }) => {
+      deps.freezer?.dispatchEvent(new CustomEvent('new-chat-save', { bubbles: true }));
+    },
   },
   newConversationErase: freezerCommand('new-chat-erase', 'New conversation, erasing this one'),
   newCone: freezerCommand('new-cone', 'New cone'),
   dropCone: freezerCommand('drop-cone', 'Drop this cone'),
   sessions: {
     holdsMode: true,
-    description: 'Archived chats (with 1-9: restore that one)',
+    description: 'Archived chats (with 1-9 / j / k: restore that one)',
     list: 'sessions',
     // Force the rail OPEN rather than toggling it: this is the one key whose
     // point is to look at the list, and a toggle would hide it half the time.
@@ -658,48 +712,39 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
       dock.selectItem(state.lastDockSurface);
     },
   },
-  files: surfaceCommand('files', 'File browser (with 1-9: open that row)', 'files'),
+  files: surfaceCommand('files', 'File browser (with 1-9 / j / k: open that row)', 'files'),
   tabs: surfaceCommand('browser', 'Browser tabs'),
   terminal: surfaceCommand('term', 'Terminal'),
-  memory: surfaceCommand('memory', 'Memory (with 1-9: open that entry)', 'memory'),
+  memory: surfaceCommand('memory', 'Memory (with 1-9 / j / k: open that entry)', 'memory'),
   monitor: surfaceCommand('monitor', 'Monitor'),
   sprinkles: {
     /**
      * The FIRST sprinkle, not the next one. A chord prefix has to be
-     * idempotent: `p 3` opens the sprinkle rail and then the third sprinkle,
-     * and a prefix that cycled would flash a different one on the way there
-     * every time. Cycling is still a key — {@link cycleSprinkles} — it is
-     * just not the one digits build on.
+     * idempotent — `p 3` must open the third whatever came before it — and
+     * cycling is now what the step keys are for: `p` then `j` walks the rest,
+     * which is why there is no separate loop key any more.
+     *
+     * Holds the mode for the same reason every list command does: the key
+     * that completes the chord has to arrive with the keyboard still live.
      */
-    // Holds the mode for the same reason the other list commands do: the
-    // digit that completes `p 3` has to arrive with the keyboard still live.
     holdsMode: true,
-    description: 'Sprinkles (with 1-9: open that one)',
+    description: 'Sprinkles (with 1-9 / j / k: open that one)',
     list: 'sprinkles',
     run: ({ deps, state }) => {
       const dock = deps.dock;
       if (!dock) return;
       const ids = sprinkleIds(dock);
       // With no sprinkles installed, the `new` launcher is what the rail's
-      // only sprinkle affordance would open.
-      const id = ids[0] ?? 'new';
-      state.lastDockSurface = id;
-      dock.selectItem(id);
-    },
-  },
-  cycleSprinkles: {
-    holdsMode: true,
-    description: 'Next sprinkle, looping',
-    run: ({ deps }) => {
-      const dock = deps.dock;
-      if (!dock) return;
-      const ids = sprinkleIds(dock);
+      // only sprinkle affordance would open — and there is no list to page.
       if (ids.length === 0) {
+        state.lastDockSurface = 'new';
         dock.selectItem('new');
         return;
       }
-      const next = nextInCycle(ids, dock.active);
-      if (next) dock.selectItem(next);
+      state.lastDockSurface = ids[0];
+      dock.selectItem(ids[0]);
+      // Seeded at the first, so the next step key goes to the SECOND.
+      return 0;
     },
   },
   zoom: {
@@ -808,6 +853,9 @@ export const DEFAULT_KEYMAP: Readonly<Record<string, CommandId>> = {
   u: 'attach',
   y: 'copyReply',
   Y: 'copyChat',
+  v: 'voice',
+  j: 'nextItem',
+  k: 'prevItem',
   // Panels
   f: 'files',
   t: 'terminal',
@@ -815,7 +863,6 @@ export const DEFAULT_KEYMAP: Readonly<Record<string, CommandId>> = {
   m: 'memory',
   g: 'monitor',
   p: 'sprinkles',
-  P: 'cycleSprinkles',
   '[': 'leftRail',
   ']': 'rightRail',
   z: 'zoom',
@@ -923,18 +970,19 @@ function buildHelpBody(doc: Document, rows: readonly ShortcutRow[]): HTMLElement
   return list;
 }
 
-/**
- * How long after a list command a digit still belongs to ITS list rather than
- * to the tab strip.
- *
- * Shorter than {@link HUD_LINGER_MS} on purpose: the caps that show the chord
- * is live must not still be on screen after it has expired, or the HUD would
- * be advertising a chord the next digit will no longer complete.
- */
-const CHORD_WINDOW_MS = 800;
-
 /** How long a pressed key stays on the HUD before the strip clears. */
 const HUD_LINGER_MS = 1600;
+
+/**
+ * How long a list stays addressable after the key that opened it.
+ *
+ * Deliberately the same number as {@link HUD_LINGER_MS}, and refreshed by the
+ * same presses: a chord is live exactly while its caps are on the pill. That
+ * is the whole answer to "will this digit switch agents or open a file?" — it
+ * is on screen. Paging with the step keys keeps both alive, so a walk down a
+ * list never expires under the user mid-walk; stopping ends both together.
+ */
+const CHORD_WINDOW_MS = HUD_LINGER_MS;
 /** How many presses the HUD keeps before dropping the oldest. */
 const HUD_DEPTH = 4;
 
@@ -1291,16 +1339,96 @@ function observeSelectedUnit(
 }
 
 /**
+ * The step keys: page through the armed list, or — with no chord live — walk
+ * the transcript a message at a time.
+ *
+ * One key doing two things is the point rather than a compromise. "Next" is
+ * the same intent either way, and which list it steps through is the one the
+ * user just opened and can still see on the HUD; with none open, the thing in
+ * front of them is the conversation. It also retires the dedicated cycle key
+ * the sprinkles used to need: `p` opens the first and `j` walks the rest.
+ *
+ * Returns the index it landed on, so the caller can re-arm the chord there and
+ * the next press continues from where this one stopped.
+ */
+function stepList(ctx: CommandContext, delta: 1 | -1): number | void {
+  const armed = ctx.armed;
+  if (!armed) {
+    ctx.deps.scrollMessage?.(delta);
+    return;
+  }
+  const list = chordList(armed.list, ctx.deps);
+  const size = list?.size() ?? 0;
+  if (!list || size === 0) return;
+  // From nowhere, a step forward starts at the top and a step back at the
+  // bottom — so `f k` reaches the last file as directly as `f j` reaches the
+  // first, and neither has to know how long the list is.
+  const at =
+    armed.index === null ? (delta > 0 ? 0 : size - 1) : (armed.index + delta + size) % size;
+  list.selectAt(at);
+  return at;
+}
+
+/**
  * Complete a chord: activate the `digit`-th item of the armed list, and say
  * whether there was one. Read at press time, never awaited — a panel still
  * mounting reports nothing and the press lands dimmed instead of firing late.
  */
-function selectChordItem(deps: ShortcutDeps, id: ChordListId, digit: number): boolean {
+function selectChordItem(deps: ShortcutDeps, id: ChordListId, digit: number): number | null {
   const list = chordList(id, deps);
   const index = list ? indexForDigit(list.size(), digit) : null;
-  if (index === null || !list) return false;
+  if (index === null || !list) return null;
   list.selectAt(index);
-  return true;
+  return index;
+}
+
+/** Everything a bound command needs, gathered once by the wiring. */
+interface Dispatch {
+  deps: ShortcutDeps;
+  actions: ShortcutActions;
+  state: ModeState;
+  mode: ReturnType<typeof createMode>;
+  settler: ReturnType<typeof createSettler>;
+  chord: ReturnType<typeof createChord>;
+  toggleHelp(): void;
+}
+
+/**
+ * Run the command a key is bound to, and leave the mode and the chord where
+ * that command's grammar says they belong.
+ *
+ * The two `holdsMode` halves are the interesting part. The mode is dropped
+ * BEFORE the run, so a surface that autofocuses is not immediately undone by
+ * it, and settled AFTER, because the flag is a PREDICTION that the surface
+ * will take the focus rather than a fact — `dock.selectItem()` only emits a
+ * selection, and the files and memory panels focus nothing at all. Without
+ * the settle the mode would be left off with nothing focused: badge gone,
+ * letters dead, which is precisely the state the resting rule exists to make
+ * impossible.
+ */
+function runCommand(
+  command: Command,
+  event: KeyboardEvent,
+  armed: ArmedChord | null,
+  ctx: Dispatch
+): void {
+  event.preventDefault();
+  if (!command.holdsMode) ctx.mode.set(false);
+  const at = command.run({
+    deps: ctx.deps,
+    actions: ctx.actions,
+    state: ctx.state,
+    toggleHelp: ctx.toggleHelp,
+    armed,
+  });
+  // A command that owns a list arms the keys that may follow it; a STEP key
+  // owns no list but re-arms the one it just walked, which is what keeps
+  // `f j j j` walking instead of turning back into message scrolling. After
+  // the run either way, so a command that threw leaves nothing armed for a
+  // surface it failed to open.
+  const opened = command.list ?? (typeof at === 'number' ? armed?.list : undefined);
+  if (opened) ctx.chord.arm(opened, typeof at === 'number' ? at : null);
+  if (!command.holdsMode) ctx.settler.schedule();
 }
 
 /**
@@ -1363,12 +1491,19 @@ function suspendedByModal(doc: Document, command: Command | undefined, helpOpen:
  * anything — a digit past the end of either list is shown dimmed rather than
  * silently dropped, and must NOT fall through to the other one.
  */
-function selectByDigit(deps: ShortcutDeps, armed: ChordListId | null, digit: number): boolean {
-  if (armed) return selectChordItem(deps, armed, digit);
+function selectByDigit(
+  deps: ShortcutDeps,
+  armed: ArmedChord | null,
+  digit: number
+): { hit: boolean; index: number | null } {
+  if (armed) {
+    const index = selectChordItem(deps, armed.list, digit);
+    return { hit: index !== null, index };
+  }
   const key = unitKeyForDigit(deps.switcher.scoops, digit);
-  if (key === null) return false;
-  deps.switcher.select(key);
-  return true;
+  if (key !== null) deps.switcher.select(key);
+  // The strip is not a chord list, so there is no index to carry forward.
+  return { hit: key !== null, index: null };
 }
 
 /**
@@ -1384,15 +1519,16 @@ function selectByDigit(deps: ShortcutDeps, armed: ChordListId | null, digit: num
  * thing the mode cannot afford.
  */
 function createChord(doc: Document): {
-  /** Read and disarm — every key is either the chord's digit or its end. */
-  take(): ChordListId | null;
-  arm(list: ChordListId): void;
+  /** Read and disarm — a chord survives a key only by being re-armed. */
+  take(): ArmedChord | null;
+  /** Arm (or re-arm) a list, standing at `index` — `null` before any pick. */
+  arm(list: ChordListId, index: number | null): void;
   clear(): void;
 } {
   const view = doc.defaultView;
   const setTimer = view?.setTimeout.bind(view) ?? setTimeout;
   const clearTimer = view?.clearTimeout.bind(view) ?? clearTimeout;
-  let armed: { list: ChordListId; timer: ReturnType<typeof setTimeout> } | null = null;
+  let armed: (ArmedChord & { timer: ReturnType<typeof setTimeout> }) | null = null;
   const clear = (): void => {
     if (!armed) return;
     clearTimer(armed.timer);
@@ -1400,13 +1536,14 @@ function createChord(doc: Document): {
   };
   return {
     take: () => {
-      const list = armed?.list ?? null;
+      if (!armed) return null;
+      const { list, index } = armed;
       clear();
-      return list;
+      return { list, index };
     },
-    arm: (list) => {
+    arm: (list, index) => {
       clear();
-      armed = { list, timer: setTimer(clear, CHORD_WINDOW_MS) };
+      armed = { list, index, timer: setTimer(clear, CHORD_WINDOW_MS) };
     },
     clear,
   };
@@ -1435,14 +1572,21 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
   const mode = createMode(doc);
   const state: ModeState = { lastDockSurface: 'files' };
   let keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP;
-  const ctx: CommandContext = { deps, actions, state, toggleHelp: help.toggle };
   const commandFor = (key: string): Command | undefined => {
     const id = keymap[key];
     return id ? COMMANDS[id] : undefined;
   };
   const settler = createSettler(doc, mode, deps);
-
   const chord = createChord(doc);
+  const dispatch: Dispatch = {
+    deps,
+    actions,
+    state,
+    mode,
+    settler,
+    chord,
+    toggleHelp: () => help.toggle(),
+  };
 
   const onKeyDown = (event: KeyboardEvent): void => {
     // Something closer to the key already claimed it (a component's own
@@ -1472,32 +1616,19 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     if (digit !== null) {
       // Shown either way: a digit past the end of its list did nothing, and a
       // HUD that stays blank for it reads as a dropped keystroke.
-      const hit = selectByDigit(deps, armed, digit);
+      const { hit, index } = selectByDigit(deps, armed, digit);
       mode.record(describeKey(event), hit);
-      if (hit) event.preventDefault();
+      if (!hit) return;
+      event.preventDefault();
+      // Stay armed where the digit landed, so the step keys walk on from it —
+      // `f 3 j` is the fourth file.
+      if (armed && index !== null) chord.arm(armed.list, index);
       return;
     }
 
     mode.record(describeKey(event), !!command);
     // An unbound key is not an exit: the mode is sticky, like vim's.
-    if (!command) return;
-    event.preventDefault();
-    // Dropped BEFORE the command runs, so a surface that takes focus is not
-    // immediately fighting a mode that is still on. (The HUD goes with the
-    // badge when it does — the mode ending is its own feedback.)
-    if (!command.holdsMode) mode.set(false);
-    command.run(ctx);
-    // ...and a command that owns a list arms the digit that may follow it.
-    // After the run, so a command that throws cannot leave a chord armed for
-    // a surface it failed to open.
-    if (command.list) chord.arm(command.list);
-    // ...and settled after, because `holdsMode: false` is a PREDICTION that the
-    // surface will take the focus, not a fact: `dock.selectItem()` only emits a
-    // selection, and the files and memory panels focus nothing at all. Without
-    // this the mode would be left off with nothing focused — the badge gone and
-    // the letters dead, which is precisely the state the resting rule exists to
-    // make impossible.
-    if (!command.holdsMode) settler.schedule();
+    if (command) runCommand(command, event, armed, dispatch);
   };
 
   /**
