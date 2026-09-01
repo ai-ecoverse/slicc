@@ -235,6 +235,21 @@ describe('zoomSurface', () => {
     expect(requestFullscreen).toHaveBeenCalledTimes(1);
   });
 
+  it('resolves surfaces from the live frame when the dock-tree has been detached', () => {
+    // Mirrors panelizeShell: surfaces live under the frame's layout; dockTree
+    // is no longer in the document.
+    const { deps, dockTree } = harness({ activeDock: 'term' });
+    const frame = document.createElement('div');
+    const layout = document.createElement('div');
+    const { requestFullscreen } = surface(layout, 'term');
+    frame.append(layout);
+    document.body.append(frame);
+    dockTree.remove();
+    deps.frame = frame;
+    zoomSurface(deps);
+    expect(requestFullscreen).toHaveBeenCalledTimes(1);
+  });
+
   it('escapes an id with a colon in it, as every sprinkle has', () => {
     const { deps, dockTree } = harness({ activeDock: 'sprinkle:notes' });
     const { requestFullscreen } = surface(dockTree, 'sprinkle:notes');

@@ -43,7 +43,14 @@ export interface ShortcutSurfaceDeps {
   inputCard: HTMLElement;
   /** The transcript: approval cards and the copy row are rendered into it. */
   thread: HTMLElement;
-  /** The workbench tree, for the surface `zoom` fullscreens. */
+  /**
+   * Live shell frame that still contains workbench surfaces after
+   * `panelizeShell` replaces the dock-tree with `<slicc-layout>`. When
+   * omitted (unit harnesses that only mount a tree), {@link dockTree} is
+   * the lookup root instead.
+   */
+  frame?: ParentNode;
+  /** The workbench tree (classic layout); also the zoom fallback root. */
   dockTree: HTMLElement;
   /** The dock rail, read for which surface is open. */
   dock: { readonly active: string | null };
@@ -211,11 +218,13 @@ export function focusApproval(deps: ShortcutSurfaceDeps): void {
  * handler is still on the stack. A surface still parked (`display:none`)
  * would reject, so an unplaced one is left alone rather than made to fail.
  * Placement gate + request live in {@link requestPlacedSurfaceFullscreen}.
+ * Prefer `frame` over `dockTree` so panelized layouts (dock-tree removed)
+ * still resolve the live leaf.
  */
 export function zoomSurface(deps: ShortcutSurfaceDeps): void {
   const id = deps.dock.active;
   if (!id) return;
-  requestPlacedSurfaceFullscreen(deps.dockTree, id);
+  requestPlacedSurfaceFullscreen(deps.frame ?? deps.dockTree, id);
 }
 
 /**

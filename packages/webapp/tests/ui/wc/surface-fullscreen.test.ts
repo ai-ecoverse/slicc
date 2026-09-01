@@ -42,6 +42,21 @@ describe('requestPlacedSurfaceFullscreen', () => {
     expect(requestFullscreen).not.toHaveBeenCalled();
   });
 
+  it('treats slicc-layout parking the same as dock-tree parking', () => {
+    const root = document.createElement('div');
+    const parking = document.createElement('div');
+    parking.className = 'slicc-layout__parking';
+    const surface = document.createElement('div');
+    surface.setAttribute('surface-id', 'files');
+    const requestFullscreen = vi.fn(() => Promise.resolve());
+    Object.assign(surface, { requestFullscreen });
+    parking.appendChild(surface);
+    root.appendChild(parking);
+
+    expect(requestPlacedSurfaceFullscreen(root, 'files')).toBe(false);
+    expect(requestFullscreen).not.toHaveBeenCalled();
+  });
+
   it('returns false when the surface is missing', () => {
     expect(requestPlacedSurfaceFullscreen(document.createElement('div'), 'memory')).toBe(false);
   });

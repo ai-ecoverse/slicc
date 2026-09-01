@@ -52,12 +52,15 @@ function makeDockTreeRef(tilesMovable = false) {
 }
 
 function makeRefs(tilesMovable = false): WcShellRefs {
+  const frame = document.createElement('div');
+  frame.className = 'wcui-frame';
   const shell = document.createElement('slicc-shell');
   const dockTree = makeDockTreeRef(tilesMovable);
   const dock = document.createElement('slicc-dock') as WcShellRefs['dock'];
   shell.append(dockTree, dock);
-  document.body.append(shell);
-  return { shell, dockTree, dock } as unknown as WcShellRefs;
+  frame.append(shell);
+  document.body.append(frame);
+  return { frame, shell, dockTree, dock } as unknown as WcShellRefs;
 }
 
 function dockIds(refs: WcShellRefs): string[] {
@@ -722,6 +725,47 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
 
     expect(treeSpies(refs).placeSurface).toHaveBeenCalledTimes(1);
     expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('term', DEFAULT_TOOL_ZONE);
+    expect(requestFullscreen).toHaveBeenCalledTimes(1);
+  });
+
+  it('a dock long-press finds tool panels via the live frame after the dock-tree is detached (panelize)', async () => {
+    // panelizeShell moves surfaces into <slicc-layout> and replaceWith-removes
+    // the shell (and its dock-tree). Looking only at refs.dockTree then never
+    // finds files/term — the review finding on this PR.
+    const refs = makeRefs();
+    const fs = {
+      exists: async () => false,
+      async *walk(): AsyncGenerator<string> {
+        /* empty */
+      },
+      readFile: async () => '',
+    } as unknown as VirtualFS;
+    const client = {
+      sendSprinkleLick: () => {},
+      getScoops: () => [],
+      stopScoop: () => {},
+    } as unknown as OffscreenClient;
+    const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
+    await wireWcSprinkles({ refs, client, fs, log });
+
+    const layout = document.createElement('div');
+    layout.className = 'slicc-layout';
+    const surface = document.createElement('div');
+    surface.setAttribute('surface-id', 'files');
+    const requestFullscreen = vi.fn(() => Promise.resolve());
+    Object.assign(surface, { requestFullscreen });
+    layout.appendChild(surface);
+    refs.frame.appendChild(layout);
+    // Detach the classic tree the way panelizeShell does via replaceWith.
+    (refs.dockTree as unknown as HTMLElement).remove();
+
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-longpress', { detail: { id: 'files' }, bubbles: true })
+    );
+    for (let i = 0; i < 3; i++) {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+    }
+
     expect(requestFullscreen).toHaveBeenCalledTimes(1);
   });
 

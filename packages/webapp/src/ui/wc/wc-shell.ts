@@ -495,6 +495,7 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
     composer,
     inputCard,
     thread,
+    frame,
     dockTree,
     fileTree: tree,
     memoryHost,

@@ -526,7 +526,11 @@ function wireRailLongPressFullscreen(refs: WcShellRefs): void {
     // leaf — only sprinkles and the four fixed tool panels do.
     if (sprinkleNameFromId(id) === null && !isToolPanelId(id)) return;
     const tryFullscreen = (framesLeft: number): void => {
-      if (requestPlacedSurfaceFullscreen(refs.dockTree, id)) return;
+      // Prefer `frame` over `dockTree`: with `panel-layouts` on, panelizeShell
+      // moves surfaces into `<slicc-layout>` and removes the dock-tree, so the
+      // detached tree never finds files/term/memory/monitor (or sprinkles).
+      // Fixture harnesses that omit `frame` fall back to the tree.
+      if (requestPlacedSurfaceFullscreen(refs.frame ?? refs.dockTree, id)) return;
       if (framesLeft <= 0) return;
       requestAnimationFrame(() => tryFullscreen(framesLeft - 1));
     };
