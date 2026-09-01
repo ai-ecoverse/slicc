@@ -4,7 +4,7 @@ This file covers the shared tray-follower transport library in `packages/swift-t
 
 ## Scope
 
-`SliccTrayFollower` is the headless tray-follower transport (signalling + WebRTC + tray-sync protocol mirror + chunk framing), shared by the iOS app (`packages/ios-app`, the `SliccFollower` app) and swift-server (`packages/swift-server`, Sliccstart, for egress-blocked Electron apps like Signal). It exists so those two consumers share **one** copy of the transport source on **one** `stasel/WebRTC` (151.x) — the framework and the source are not double-shipped. It is deliberately a **separate package** from `packages/swift-traysession` so that Foundation-only consumers (`swift-launcher`) never pull in WebRTC. Supports `.macOS(.v14)` and `.iOS("18.0")`.
+`SliccTrayFollower` is the headless tray-follower transport (signalling + WebRTC + tray-sync protocol mirror + chunk framing), shared by the iOS app (`packages/ios-app`, the `SliccFollower` app) and swift-server (`packages/swift-server`, Sliccstart, for egress-blocked Electron apps like Signal). It exists so those two consumers share **one** copy of the transport source on **one** `stasel/WebRTC` (152.x) — the framework and the source are not double-shipped. It is deliberately a **separate package** from `packages/swift-traysession` so that Foundation-only consumers (`swift-launcher`) never pull in WebRTC. Supports `.macOS(.v14)` and `.iOS("18.0")`.
 
 It is **CDP-agnostic**: a consumer layers its own servicing on top of `TrayFollowerConnector`'s `didConnect(channelSend:)` / `didReceiveData:` surface — the iOS app renders chat/sprinkles/CDP; swift-server relays the attached app's raw CDP ("CDP over CDP"). The follower is always the **answerer** (the leader creates the offer + the data channel).
 
