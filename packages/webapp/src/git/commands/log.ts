@@ -3,7 +3,6 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { diffCommits, diffInitialCommit } from './diff.js';
-import { matchesPathspec } from './revision.js';
 import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
@@ -65,6 +64,19 @@ async function selectCommits(
 ): Promise<Awaited<ReturnType<typeof git.log>>> {
   const range = selection.revision ? splitLogRange(selection.revision) : null;
   const ref = range?.[1] ?? selection.revision;
+  const caches = createPathspecCaches();
+  // Historic default for the filtered forms: `git log` itself is unbounded, but
+  // the pathspec/range paths have always capped at 10 entries.
+  const limit = selection.maxCount ?? 10;
+
+  // Fast path for `log [<ref>] -- <path>…`: isomorphic-git resolves the
+  // pathspec component-wise in each commit tree and stops walking as soon as
+  // `depth` matching commits are found, so `-n 5` on a 9k-commit branch reads a
+  // handful of trees instead of the whole history (#2714).
+  if (selection.pathspecs.length > 0 && !selection.all && !range && !selection.followFile) {
+    return await logPathspecs(ctx, cwd, { ref, pathspecs: selection.pathspecs, limit, caches });
+  }
+
   let commits = selection.all
     ? await logAllBranches(
         ctx,
@@ -74,24 +86,151 @@ async function selectCommits(
     : await git.log({
         fs: ctx.lfs,
         dir: cwd,
+        cache: caches.git,
         ...(ref ? { ref } : {}),
         ...(!range && selection.pathspecs.length === 0 ? { depth: selection.maxCount ?? 10 } : {}),
         ...(selection.followFile ? { filepath: selection.followFile, follow: true } : {}),
       });
   if (range) {
-    const excluded = await git.log({ fs: ctx.lfs, dir: cwd, ref: range[0] });
+    const excluded = await git.log({ fs: ctx.lfs, dir: cwd, cache: caches.git, ref: range[0] });
     const excludedOids = new Set(excluded.map((entry) => entry.oid));
     commits = commits.filter((entry) => !excludedOids.has(entry.oid));
   }
   if (selection.pathspecs.length > 0) {
-    const matches = await Promise.all(
-      commits.map((entry) => commitTouchesPathspec(ctx, cwd, entry, selection.pathspecs))
-    );
-    commits = commits.filter((_, index) => matches[index]);
+    return await filterByPathspec(ctx, cwd, commits, selection.pathspecs, limit, caches);
   }
-  return range || selection.pathspecs.length > 0
-    ? commits.slice(0, selection.maxCount ?? 10)
-    : commits;
+  return range ? commits.slice(0, limit) : commits;
+}
+
+/**
+ * Normalize a pathspec the way `matchesPathspec` (revision.ts) does — strip a
+ * leading `./` and any trailing slashes — and additionally fold a bare `.`
+ * into the match-everything form. An empty result matches every path.
+ */
+function normalizePathspec(raw: string): string {
+  const trimmed = raw.replace(/^\.\//, '').replace(/\/+$/, '');
+  return trimmed === '.' ? '' : trimmed;
+}
+
+/** Dedup + normalize; `null` means "one of the specs matches every path". */
+function normalizePathspecs(pathspecs: readonly string[]): string[] | null {
+  const specs = [...new Set(pathspecs.map(normalizePathspec))];
+  return specs.some((spec) => spec === '') ? null : specs;
+}
+
+/**
+ * Smallest history window `logPathspecsOrdered` materializes per round. Doubles
+ * until `limit` matches are found or the branch runs out, so the total commits
+ * read stay within ~2x of the window that actually answered the query.
+ */
+const PATHSPEC_WINDOW_MIN = 32;
+
+/**
+ * `git log -- <path>…` on a single ref, bounded by `limit` instead of by the
+ * length of the branch.
+ */
+async function logPathspecs(
+  ctx: GitCommandContext,
+  cwd: string,
+  opts: { ref?: string; pathspecs: string[]; limit: number; caches: PathspecCaches }
+): Promise<Awaited<ReturnType<typeof git.log>>> {
+  const refArg = opts.ref ? { ref: opts.ref } : {};
+  const specs = normalizePathspecs(opts.pathspecs);
+  if (specs === null) {
+    return await git.log({
+      fs: ctx.lfs,
+      dir: cwd,
+      cache: opts.caches.git,
+      ...refArg,
+      depth: opts.limit,
+    });
+  }
+  // One spec: hand the whole thing to isomorphic-git, whose own filepath walk
+  // resolves the path per commit tree and breaks at `depth` matches. `force`
+  // keeps a path that is missing (or deleted) at the tip from throwing, so
+  // `log -- does-not-exist` stays empty output rather than an error.
+  if (specs.length === 1) {
+    const entries = await git.log({
+      fs: ctx.lfs,
+      dir: cwd,
+      cache: opts.caches.git,
+      ...refArg,
+      filepath: specs[0],
+      depth: opts.limit,
+      force: true,
+    });
+    return entries.slice(0, opts.limit);
+  }
+  return await logPathspecsOrdered(ctx, cwd, {
+    refArg,
+    specs,
+    limit: opts.limit,
+    caches: opts.caches,
+  });
+}
+
+/**
+ * Several pathspecs: walk the ref ONCE and keep a commit when any spec's tree
+ * entry differs from the first parent's. Unioning per-spec `filepath` walks and
+ * re-sorting would be wrong — commit timestamps are not monotonic, and
+ * same-second commits would fall back to pathspec-argument order, so
+ * `log -- a b` could order (and with `-n`, select) differently from
+ * `log -- b a`. The window grows instead of being materialized up front, so a
+ * `-n` that is satisfied early never pays for the rest of the branch (#2714).
+ */
+async function logPathspecsOrdered(
+  ctx: GitCommandContext,
+  cwd: string,
+  opts: { refArg: { ref?: string }; specs: string[]; limit: number; caches: PathspecCaches }
+): Promise<Awaited<ReturnType<typeof git.log>>> {
+  const matched: Awaited<ReturnType<typeof git.log>> = [];
+  let examined = 0;
+  let window = Math.max(opts.limit * 4, PATHSPEC_WINDOW_MIN);
+  for (;;) {
+    const entries = await git.log({
+      fs: ctx.lfs,
+      dir: cwd,
+      cache: opts.caches.git,
+      ...opts.refArg,
+      depth: window,
+    });
+    for (const entry of entries) opts.caches.commitTrees.set(entry.oid, entry.commit.tree);
+    for (const entry of entries.slice(examined)) {
+      if (await commitTouchesPathspec(ctx, cwd, entry, opts.specs, opts.caches)) {
+        matched.push(entry);
+        if (matched.length >= opts.limit) return matched;
+      }
+    }
+    // `git.log` returns exactly `depth` entries while history remains, so a
+    // short answer means the branch is exhausted.
+    if (entries.length < window) return matched;
+    examined = entries.length;
+    window *= 2;
+  }
+}
+
+/**
+ * Filter an already-materialized commit list (`--all`, `a..b`) by pathspec.
+ * Sequential and short-circuiting: never fan thousands of tree reads out at
+ * once, and stop as soon as `limit` matches are found (#2714).
+ */
+async function filterByPathspec(
+  ctx: GitCommandContext,
+  cwd: string,
+  commits: Awaited<ReturnType<typeof git.log>>,
+  pathspecs: string[],
+  limit: number,
+  caches: PathspecCaches
+): Promise<Awaited<ReturnType<typeof git.log>>> {
+  const specs = normalizePathspecs(pathspecs);
+  if (specs === null) return commits.slice(0, limit);
+  for (const entry of commits) caches.commitTrees.set(entry.oid, entry.commit.tree);
+  const matched: Awaited<ReturnType<typeof git.log>> = [];
+  for (const entry of commits) {
+    if (await commitTouchesPathspec(ctx, cwd, entry, specs, caches)) matched.push(entry);
+    if (matched.length >= limit) break;
+  }
+  return matched;
 }
 
 async function renderLog(
@@ -220,31 +359,101 @@ function splitLogRange(value: string): [string, string] | null {
   return match?.[2] ? [match[1], match[2]] : null;
 }
 
+/** Per-command memo tables for the pathspec tree lookups. */
+interface PathspecCaches {
+  /** Shared isomorphic-git object/pack cache across every call in one command. */
+  git: object;
+  /** commit oid -> tree oid. */
+  commitTrees: Map<string, string>;
+  /** tree oid -> its entries. */
+  trees: Map<string, git.TreeEntry[]>;
+  /** `<tree oid>\0<pathspec>` -> the oid that path resolves to, if any. */
+  entries: Map<string, string | undefined>;
+}
+
+function createPathspecCaches(): PathspecCaches {
+  return { git: {}, commitTrees: new Map(), trees: new Map(), entries: new Map() };
+}
+
+async function readTreeCached(
+  ctx: GitCommandContext,
+  cwd: string,
+  oid: string,
+  caches: PathspecCaches
+): Promise<git.TreeEntry[]> {
+  const hit = caches.trees.get(oid);
+  if (hit) return hit;
+  const { tree } = await git.readTree({ fs: ctx.lfs, dir: cwd, oid, cache: caches.git });
+  caches.trees.set(oid, tree);
+  return tree;
+}
+
+async function commitTreeOid(
+  ctx: GitCommandContext,
+  cwd: string,
+  oid: string,
+  caches: PathspecCaches
+): Promise<string> {
+  const hit = caches.commitTrees.get(oid);
+  if (hit) return hit;
+  const { commit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid, cache: caches.git });
+  caches.commitTrees.set(oid, commit.tree);
+  return commit.tree;
+}
+
+/**
+ * Resolve a pathspec inside a tree one component at a time, returning the oid
+ * the path points at (a blob oid for a file, a tree oid for a directory) or
+ * `undefined` when the path is absent. Cheap compared to walking whole trees:
+ * one `readTree` per path component, memoized across commits.
+ */
+async function pathEntryOid(
+  ctx: GitCommandContext,
+  cwd: string,
+  treeOid: string,
+  spec: string,
+  caches: PathspecCaches
+): Promise<string | undefined> {
+  const key = `${treeOid}\u0000${spec}`;
+  if (caches.entries.has(key)) return caches.entries.get(key);
+  const parts = spec.split('/');
+  let current: string | undefined = treeOid;
+  let result: string | undefined;
+  for (let i = 0; i < parts.length; i++) {
+    if (current === undefined) break;
+    const entries: git.TreeEntry[] = await readTreeCached(ctx, cwd, current, caches);
+    const match = entries.find((item) => item.path === parts[i]);
+    if (!match) break;
+    if (i === parts.length - 1) {
+      result = match.oid;
+      break;
+    }
+    current = match.type === 'tree' ? match.oid : undefined;
+  }
+  caches.entries.set(key, result);
+  return result;
+}
+
+/**
+ * True when the commit changed anything under one of the pathspecs, decided by
+ * comparing the pathspec's tree entry oid against the first parent's. A
+ * directory's tree oid changes exactly when something below it changes, so this
+ * matches the old whole-tree walk without reading the trees it did not need.
+ */
 async function commitTouchesPathspec(
   ctx: GitCommandContext,
   cwd: string,
   entry: Awaited<ReturnType<typeof git.log>>[0],
-  pathspecs: string[]
+  specs: readonly string[],
+  caches: PathspecCaches
 ): Promise<boolean> {
   const parent = entry.commit.parent[0];
-  let touched = false;
-  await git.walk({
-    fs: ctx.lfs,
-    dir: cwd,
-    trees: parent
-      ? [git.TREE({ ref: parent }), git.TREE({ ref: entry.oid })]
-      : [git.TREE({ ref: entry.oid })],
-    map: async (filepath, entries) => {
-      if (touched || filepath === '.' || !matchesPathspec(filepath, pathspecs)) return undefined;
-      const types = await Promise.all(entries.map((item) => item?.type()));
-      if (types.some((type) => type === 'tree')) return undefined;
-      if (entries.length === 1) {
-        touched = !!entries[0];
-      } else {
-        touched = (await entries[0]?.oid()) !== (await entries[1]?.oid());
-      }
-      return undefined;
-    },
-  });
-  return touched;
+  const parentTree = parent ? await commitTreeOid(ctx, cwd, parent, caches) : undefined;
+  for (const spec of specs) {
+    const current = await pathEntryOid(ctx, cwd, entry.commit.tree, spec, caches);
+    const previous =
+      parentTree === undefined ? undefined : await pathEntryOid(ctx, cwd, parentTree, spec, caches);
+    if (current !== previous) return true;
+  }
+  return false;
 }
