@@ -30,6 +30,11 @@ export function setThemePreference(pref: ThemePreference): void {
  * set and only flip light when this returns true, so it must honor whichever
  * scheme is active — otherwise the WC shell (which never sets `.theme-light`)
  * leaves every embedded surface stuck dark.
+ *
+ * `styles/tokens.css` mirrors both markers in CSS for the same reason: an
+ * iframe surface gets `.theme-light` from this function, but an INLINE
+ * (fragment) sprinkle stays in the page DOM and can only follow the shell's
+ * own marker.
  */
 export function isThemeLight(): boolean {
   if (document.documentElement.classList.contains('theme-light')) return true;

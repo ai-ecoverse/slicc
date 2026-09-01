@@ -743,7 +743,7 @@ slicc.on('update', function (data) {
 
 ## Light & dark mode
 
-All sprinkles inherit the parent's theme automatically. The parent injects its S2 tokens and toggles a `.theme-light` class on the sprinkle root — the iframe's `<html>` in full-document mode, or the outermost container injected into the sidebar in fragment mode — whenever the user flips themes. Every `var(--s2-*)` token below swaps with it. **Never hard-code colors for one theme**, and **do not use `@media (prefers-color-scheme: ...)`** for colors that should mirror the app theme (it desyncs from the parent's class-based toggle).
+All sprinkles inherit the parent's theme automatically. In full-document mode the parent injects its S2 tokens and toggles a `.theme-light` class on the iframe's `<html>` whenever the user flips themes; a fragment sprinkle renders into the page DOM and inherits the tokens straight from the host shell's own light/dark marker. Either way every `var(--s2-*)` token below swaps with the theme. **Never hard-code colors for one theme**, and **do not use `@media (prefers-color-scheme: ...)`** for colors that should mirror the app theme (it desyncs from the parent's class-based toggle).
 
 For one-off colors that aren't covered by an S2 token, use CSS `light-dark()`:
 

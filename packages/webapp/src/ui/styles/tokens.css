@@ -179,9 +179,14 @@
 
 /* ================================================================== */
 /* Spectrum 2 Design Tokens — Light Theme                             */
-/* Applied via .theme-light class on <html> by src/ui/theme.ts        */
+/* Applied via .theme-light class on <html> by src/ui/theme.ts, OR by    */
+/* the WC shell's body[data-theme="light"] marker (@slicc/webcomponents  */
+/* setTheme), which deliberately never touches .theme-light. Inline      */
+/* (fragment) sprinkles and dips render into the page DOM, so they only  */
+/* follow a light WC shell if both markers select these values.          */
 /* ================================================================== */
-:root.theme-light {
+:root.theme-light,
+:root:has(body[data-theme="light"]) {
   /* ── S2 Gray Scale (Light Theme — from Figma UXC) ─────────── */
   --s2-gray-25: #ffffff;
   --s2-gray-50: #f8f8f8;
@@ -242,36 +247,47 @@
     0 2px 8px rgba(0, 0, 0, 0.08), 0 1px 4px rgba(0, 0, 0, 0.04), 0 0px 1px rgba(0, 0, 0, 0.08);
 }
 
-/* Syntax tokens — light theme overrides */
-.theme-light .tok-keyword {
+/* Syntax tokens — light theme overrides. Both light markers again: the WC
+   shell renders markdown through the same `message-renderer.ts`, so these
+   spans exist there too. */
+.theme-light .tok-keyword,
+:root:has(body[data-theme="light"]) .tok-keyword {
   color: #8839ef;
 }
-.theme-light .tok-string {
+.theme-light .tok-string,
+:root:has(body[data-theme="light"]) .tok-string {
   color: #40a02b;
 }
-.theme-light .tok-number {
+.theme-light .tok-number,
+:root:has(body[data-theme="light"]) .tok-number {
   color: #d05d1a;
 }
-.theme-light .tok-comment {
+.theme-light .tok-comment,
+:root:has(body[data-theme="light"]) .tok-comment {
   color: var(--s2-gray-500);
 }
-.theme-light .tok-punct {
+.theme-light .tok-punct,
+:root:has(body[data-theme="light"]) .tok-punct {
   color: #1e66f5;
 }
-.theme-light .tok-fn {
+.theme-light .tok-fn,
+:root:has(body[data-theme="light"]) .tok-fn {
   color: #2b6cb0;
 }
 
 /* Tooltip inverts in light mode */
-.theme-light .s2-tooltip {
+.theme-light .s2-tooltip,
+:root:has(body[data-theme="light"]) .s2-tooltip {
   background: var(--s2-gray-900);
   color: var(--s2-gray-25);
 }
 
 /* Scrollbar lighter */
-.theme-light ::-webkit-scrollbar-thumb {
+.theme-light ::-webkit-scrollbar-thumb,
+:root:has(body[data-theme="light"]) ::-webkit-scrollbar-thumb {
   background: var(--s2-gray-300);
 }
-.theme-light ::-webkit-scrollbar-thumb:hover {
+.theme-light ::-webkit-scrollbar-thumb:hover,
+:root:has(body[data-theme="light"]) ::-webkit-scrollbar-thumb:hover {
   background: var(--s2-gray-400);
 }
