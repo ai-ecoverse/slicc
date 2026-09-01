@@ -111,10 +111,10 @@ describe('requestStoragePersistence', () => {
 
   /**
    * A hardened or proxied `StorageManager` can throw on plain property
-   * access. The capability check must be inside the guard, or this function
-   * rejects — and `setupStoragePersistence` fires it without a `.catch`, so
-   * the rejection would go unhandled and contradict the "never throws" boot
-   * contract this module documents.
+   * access. The capability check has to sit inside the guard, or this
+   * function rejects instead of resolving `'failed'` — breaking the
+   * never-reject contract its own docblock states, which every caller
+   * (including the fire-and-forget boot path) relies on.
    */
   it('does not reject when property access on the storage manager throws', async () => {
     const hostile = new Proxy(
@@ -176,6 +176,51 @@ describe('setupStoragePersistence', () => {
     });
 
     expect(persist).toHaveBeenCalledTimes(1);
+  });
+
+  /**
+   * Covers the terminal `.catch()` on the fire-and-forget chain, which
+   * nothing else reaches: every other path resolves an outcome *inside*
+   * `requestStoragePersistence`, so deleting that catch left the suite green.
+   *
+   * The failure channel is a global `unhandledrejection`, not `main()`'s
+   * catch — the promise is detached, so it cannot propagate to the caller.
+   * This asserts against that channel directly.
+   */
+  it('does not leak an unhandled rejection when the outcome logger throws', async () => {
+    vi.resetModules();
+    vi.doMock('../../../src/base/logger.js', () => ({
+      createLogger: () => ({
+        debug: () => {},
+        info: () => {
+          throw new Error('logger blew up');
+        },
+        warn: () => {},
+        error: () => {},
+      }),
+    }));
+
+    const rejections: unknown[] = [];
+    const onUnhandled = (reason: unknown) => rejections.push(reason);
+    process.on('unhandledRejection', onUnhandled);
+    try {
+      const mod = await import('../../../src/ui/boot/setup-storage-persistence.js');
+      await withNavigatorStorage(
+        { persisted: async () => false, persist: async () => true },
+        async () => {
+          mod.setupStoragePersistence();
+          // `unhandledRejection` fires a tick after the microtask queue
+          // drains, so a microtask flush is not enough to observe it.
+          await new Promise((resolve) => setTimeout(resolve, 20));
+        }
+      );
+    } finally {
+      process.off('unhandledRejection', onUnhandled);
+      vi.doUnmock('../../../src/base/logger.js');
+      vi.resetModules();
+    }
+
+    expect(rejections).toEqual([]);
   });
 
   /**
