@@ -119,10 +119,15 @@ function normalizePathspecs(pathspecs: readonly string[]): string[] | null {
 }
 
 /**
- * `git log -- <path>…` on a single ref, delegated to isomorphic-git's own
- * filepath walk so the history walk is bounded by `limit` instead of by the
- * length of the branch. `force` keeps a path that is missing (or deleted) at
- * the tip from throwing, matching `git log -- does-not-exist` (empty output).
+ * Smallest history window `logPathspecsOrdered` materializes per round. Doubles
+ * until `limit` matches are found or the branch runs out, so the total commits
+ * read stay within ~2x of the window that actually answered the query.
+ */
+const PATHSPEC_WINDOW_MIN = 32;
+
+/**
+ * `git log -- <path>…` on a single ref, bounded by `limit` instead of by the
+ * length of the branch.
  */
 async function logPathspecs(
   ctx: GitCommandContext,
@@ -140,25 +145,68 @@ async function logPathspecs(
       depth: opts.limit,
     });
   }
-  const byOid = new Map<string, Awaited<ReturnType<typeof git.log>>[0]>();
-  for (const spec of specs) {
+  // One spec: hand the whole thing to isomorphic-git, whose own filepath walk
+  // resolves the path per commit tree and breaks at `depth` matches. `force`
+  // keeps a path that is missing (or deleted) at the tip from throwing, so
+  // `log -- does-not-exist` stays empty output rather than an error.
+  if (specs.length === 1) {
     const entries = await git.log({
       fs: ctx.lfs,
       dir: cwd,
       cache: opts.caches.git,
       ...refArg,
-      filepath: spec,
+      filepath: specs[0],
       depth: opts.limit,
       force: true,
     });
-    for (const entry of entries) if (!byOid.has(entry.oid)) byOid.set(entry.oid, entry);
+    return entries.slice(0, opts.limit);
   }
-  const merged = [...byOid.values()];
-  // A single spec is already in walk order; a union of several is not.
-  if (specs.length > 1) {
-    merged.sort((a, b) => b.commit.author.timestamp - a.commit.author.timestamp);
+  return await logPathspecsOrdered(ctx, cwd, {
+    refArg,
+    specs,
+    limit: opts.limit,
+    caches: opts.caches,
+  });
+}
+
+/**
+ * Several pathspecs: walk the ref ONCE and keep a commit when any spec's tree
+ * entry differs from the first parent's. Unioning per-spec `filepath` walks and
+ * re-sorting would be wrong — commit timestamps are not monotonic, and
+ * same-second commits would fall back to pathspec-argument order, so
+ * `log -- a b` could order (and with `-n`, select) differently from
+ * `log -- b a`. The window grows instead of being materialized up front, so a
+ * `-n` that is satisfied early never pays for the rest of the branch (#2714).
+ */
+async function logPathspecsOrdered(
+  ctx: GitCommandContext,
+  cwd: string,
+  opts: { refArg: { ref?: string }; specs: string[]; limit: number; caches: PathspecCaches }
+): Promise<Awaited<ReturnType<typeof git.log>>> {
+  const matched: Awaited<ReturnType<typeof git.log>> = [];
+  let examined = 0;
+  let window = Math.max(opts.limit * 4, PATHSPEC_WINDOW_MIN);
+  for (;;) {
+    const entries = await git.log({
+      fs: ctx.lfs,
+      dir: cwd,
+      cache: opts.caches.git,
+      ...opts.refArg,
+      depth: window,
+    });
+    for (const entry of entries) opts.caches.commitTrees.set(entry.oid, entry.commit.tree);
+    for (const entry of entries.slice(examined)) {
+      if (await commitTouchesPathspec(ctx, cwd, entry, opts.specs, opts.caches)) {
+        matched.push(entry);
+        if (matched.length >= opts.limit) return matched;
+      }
+    }
+    // `git.log` returns exactly `depth` entries while history remains, so a
+    // short answer means the branch is exhausted.
+    if (entries.length < window) return matched;
+    examined = entries.length;
+    window *= 2;
   }
-  return merged.slice(0, opts.limit);
 }
 
 /**

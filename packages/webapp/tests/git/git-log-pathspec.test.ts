@@ -8,9 +8,11 @@
  */
 
 import 'fake-indexeddb/auto';
+import * as isoGit from 'isomorphic-git';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
 import { GitCommands } from '../../src/git/git-commands.js';
+import { createIsomorphicGitFs } from '../../src/git/vfs-fs-adapter.js';
 
 describe('git log pathspec', () => {
   let vfs: VirtualFS;
@@ -199,6 +201,56 @@ describe('git log pathspec', () => {
 
   // Seeding the history is the slow part here (one real commit per iteration),
   // so give it room: CI machines construct these objects several times slower.
+  it('orders multiple pathspecs by history, independent of argument order', async () => {
+    // Two commits one second APART in history order but written with the SAME
+    // author timestamp: unioning per-spec walks and re-sorting by timestamp
+    // would fall back to pathspec-argument order here and invert them.
+    const lfs = createIsomorphicGitFs(vfs);
+    const stamped = async (path: string, content: string, message: string): Promise<void> => {
+      await vfs.writeFile(`/project/${path}`, content);
+      await git.execute(['add', path], '/project');
+      await isoGit.commit({
+        fs: lfs,
+        dir: '/project',
+        message,
+        author: { name: 'Test User', email: 'test@example.com', timestamp: 1_700_000_000 },
+      });
+    };
+
+    await git.execute(['init'], '/project');
+    await stamped('base.txt', 'base\n', 'c0: base');
+    await stamped('a.txt', 'a\n', 'c1: touches a');
+    await stamped('b.txt', 'b\n', 'c2: touches b');
+
+    const ab = await git.execute(['log', '--format', '%s', '--', 'a.txt', 'b.txt'], '/project');
+    const ba = await git.execute(['log', '--format', '%s', '--', 'b.txt', 'a.txt'], '/project');
+    const cappedAb = await git.execute(
+      ['log', '-n', '1', '--format', '%s', '--', 'a.txt', 'b.txt'],
+      '/project'
+    );
+    const cappedBa = await git.execute(
+      ['log', '-n', '1', '--format', '%s', '--', 'b.txt', 'a.txt'],
+      '/project'
+    );
+
+    // Newest first, by history — not by the order the specs were typed.
+    expect(subjects(ab.stdout)).toEqual(['c2: touches b', 'c1: touches a']);
+    expect(subjects(ba.stdout)).toEqual(subjects(ab.stdout));
+    expect(subjects(cappedAb.stdout)).toEqual(['c2: touches b']);
+    expect(subjects(cappedBa.stdout)).toEqual(['c2: touches b']);
+  });
+
+  it('grows the history window until -n multi-pathspec matches are found', async () => {
+    await git.execute(['init'], '/project');
+    await commit('a.txt', 'a0\n', 'a 0');
+    await commit('b.txt', 'b0\n', 'b 0');
+    // Push the matches well past the first (32-commit) window.
+    for (let i = 0; i < 40; i++) await commit('noise.txt', `n${i}\n`, `noise ${i}`);
+
+    const result = await git.execute(['log', '--format', '%s', '--', 'a.txt', 'b.txt'], '/project');
+    expect(subjects(result.stdout)).toEqual(['b 0', 'a 0']);
+  }, 60_000);
+
   it('stops walking once -n matches are found on a long history (#2714)', {
     timeout: 60_000,
   }, async () => {
