@@ -4,8 +4,10 @@
  * One manager is created per orchestrator (so per float) once the shared VFS
  * and its `FsWatcher` exist. It:
  *
- *   1. Seeds a fully commented-out default `/etc/sudoers` template on a fresh
- *      VFS (self-protection still applies even with no rules).
+ *   1. Seeds the bundled defaults for the self-protected policy files when they
+ *      are absent — a fully commented-out `/etc/sudoers` template
+ *      (self-protection still applies even with no rules) and the approver
+ *      agent's `/etc/APPROVALS.md` instructions.
  *   2. Loads + merges `/etc/sudoers` and every `/etc/sudoers.d/*` drop-in into
  *      a single live `SudoersPolicy`.
  *   3. Re-reads that policy whenever those files change (after an approved
@@ -20,6 +22,7 @@
 import sudoersDefault from '../../../vfs-root/etc/sudoers?raw';
 import { createLogger } from '../base/logger.js';
 import {
+  APPROVALS_FILE,
   builtinScoopGrants,
   type Directive,
   directiveForKind,
@@ -37,6 +40,7 @@ import type { FsWatcher } from '../fs/fs-watcher.js';
 import type { VirtualFS } from '../fs/index.js';
 import { GRANTED_FILE } from '../fs/sudo-fs.js';
 import { FsError } from '../fs/types.js';
+import { DEFAULT_APPROVALS_MD } from '../scoops/approver-agent.js';
 import type { ScoopConfig } from '../scoops/types.js';
 import type { ShellSudoConfig } from '../shell/almost-bash-shell-headless.js';
 import { createSudoBroker } from './index.js';
@@ -525,15 +529,32 @@ export class SudoManager {
     } catch {
       /* already exists */
     }
-    try {
-      if (!(await this.fs.exists(SUDOERS_FILE))) {
-        await this.fs.writeFile(SUDOERS_FILE, sudoersDefault);
-        log.info('Seeded default /etc/sudoers template');
+    // Both self-protected policy files are seeded here, when absent, through
+    // the manager's UNGATED handle: shipping a default is not a policy edit,
+    // and a file that does not exist yet carries no owner decision to protect.
+    //
+    // `/etc/APPROVALS.md` MUST be seeded here rather than left to `upgrade
+    // apply`'s three-way merge of `packages/vfs-root/etc/`. That merge runs on
+    // the FS-gated handle, so on a profile predating the file it trips
+    // self-protection and asks the owner to approve a write whose content is
+    // the very fallback the approver agent was already running under — an
+    // approval prompt for a no-op, with no diff to show (#2686). Seeding first
+    // makes the merge classify the path `unchanged` (or `kept-local` once the
+    // owner edits it), which writes nothing and prompts for nothing.
+    for (const [path, content] of [
+      [SUDOERS_FILE, sudoersDefault],
+      [APPROVALS_FILE, DEFAULT_APPROVALS_MD],
+    ] as const) {
+      try {
+        if (await this.fs.exists(path)) continue;
+        await this.fs.writeFile(path, content);
+        log.info('Seeded bundled policy default', { path });
+      } catch (err) {
+        log.warn('Failed to seed bundled policy default', {
+          path,
+          error: err instanceof Error ? err.message : String(err),
+        });
       }
-    } catch (err) {
-      log.warn('Failed to seed default /etc/sudoers', {
-        error: err instanceof Error ? err.message : String(err),
-      });
     }
   }
 

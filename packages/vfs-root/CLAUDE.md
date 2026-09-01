@@ -62,6 +62,10 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 
 - `etc/APPROVALS.md` is the single source for the runner's build-time fallback and
   the seeded `/etc/APPROVALS.md`, exactly like `shared/MEMORY.md` is for the curator.
+  `SudoManager.ensureDefaults()` does the seeding, when absent, on the ungated
+  handle — the same place `/etc/sudoers` is seeded, and for the same reason: the
+  file is self-protected, so anything else that had to create it (the `upgrade
+apply` merge) would prompt the owner to approve the default already in force (#2686).
 - It lives in `/etc/` because it is POLICY, next to `sudoers` — not in `/shared/`,
   which is agent-visible content. Writes to it are self-protected in
   `base/sudoers.ts` (`isSelfProtectedWrite`) for the same reason writes to

@@ -1,7 +1,8 @@
 /**
  * Tests for `SudoManager` — the live sudoers policy store.
  *
- * Covers default-template seeding on a fresh VFS, merge of `/etc/sudoers` +
+ * Covers bundled policy-default seeding on a fresh VFS (`/etc/sudoers` and
+ * `/etc/APPROVALS.md`), merge of `/etc/sudoers` +
  * `/etc/sudoers.d/*`, live reload via the `FsWatcher` when those files change,
  * the command-grant sink (used by the shell on "Always"), and watcher teardown.
  */
@@ -9,6 +10,7 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import {
+  APPROVALS_FILE,
   matchCommand,
   matchPath,
   parseSudoers,
@@ -18,6 +20,7 @@ import {
 import { FsWatcher } from '../../src/fs/fs-watcher.js';
 import { VirtualFS } from '../../src/fs/index.js';
 import { FsError } from '../../src/fs/types.js';
+import { DEFAULT_APPROVALS_MD } from '../../src/scoops/approver-agent.js';
 import { generateScoopSudoers, SudoManager } from '../../src/sudo/sudo-manager.js';
 import type { SudoBroker } from '../../src/sudo/types.js';
 
@@ -51,6 +54,35 @@ describe('SudoManager', () => {
     expect(seeded).toContain('SLICC agent approval policy');
     // Every rule in the template is commented out → no active command gating.
     expect(matchCommand(mgr.getPolicy(), 'git push origin main')).toBe('no-match');
+    mgr.dispose();
+  });
+
+  // #2686: `/etc/APPROVALS.md` is self-protected, so the only other thing that
+  // could create it — `upgrade apply`'s three-way merge, which runs on the
+  // FS-gated handle — would raise a sudo prompt asking the owner to approve
+  // content identical to the fallback the approver was already using. Seeding
+  // it here, ungated and only when absent, is what keeps that prompt away.
+  it('seeds the bundled /etc/APPROVALS.md when absent', async () => {
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+
+    const seeded = (await vfs.readFile(APPROVALS_FILE, { encoding: 'utf-8' })) as string;
+    expect(seeded).toBe(DEFAULT_APPROVALS_MD);
+    // Seeding does not weaken self-protection: editing it still needs approval.
+    expect(matchPath(mgr.getPolicy(), 'write', APPROVALS_FILE)).toBe('require-approval');
+    mgr.dispose();
+  });
+
+  it('leaves an existing /etc/APPROVALS.md untouched', async () => {
+    await vfs.mkdir('/etc', { recursive: true });
+    await vfs.writeFile(APPROVALS_FILE, '# owner-tuned approver policy\n');
+
+    const mgr = new SudoManager({ fs: vfs, watcher, broker });
+    await mgr.init();
+
+    expect(await vfs.readFile(APPROVALS_FILE, { encoding: 'utf-8' })).toBe(
+      '# owner-tuned approver policy\n'
+    );
     mgr.dispose();
   });
 
