@@ -91,6 +91,115 @@ final class HostFSRoutesTests: XCTestCase {
         }
     }
 
+    /// The webapp needs ctime/ino/uid/gid/mode to decide a working-tree file
+    /// still matches its git index entry; without them every read-only git
+    /// command rewrites `.git/index` once per file (issue #2708). Mirrors
+    /// node-server's `statIdentity`.
+    func testStatReportsIdentityFieldsForCompareStats() async throws {
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: root + "/hello.txt")
+        var info = stat()
+        XCTAssertEqual(stat(root + "/hello.txt", &info), 0)
+        try await makeApp().test(.router) { client in
+            try await client.execute(
+                uri: "/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=hello.txt", method: .get
+            ) { response in
+                guard case .object(let body) = try self.decode(response.body) else {
+                    return XCTFail("bad stat shape")
+                }
+                XCTAssertEqual(body["ino"], .number(Double(info.st_ino)))
+                XCTAssertEqual(body["uid"], .number(Double(info.st_uid)))
+                XCTAssertEqual(body["gid"], .number(Double(info.st_gid)))
+                // Full st_mode, so the executable bit survives instead of
+                // being flattened to 100644.
+                XCTAssertEqual(body["mode"], .number(Double(info.st_mode)))
+                guard case .number(let mode)? = body["mode"] else { return XCTFail("no mode") }
+                XCTAssertEqual(mode_t(mode) & 0o777, 0o755)
+                // Unrounded: rounding a .9996 s stat up would push it into
+                // the next second and leave the file permanently stale.
+                let ctimeMs =
+                    Double(info.st_ctimespec.tv_sec) * 1000
+                    + Double(info.st_ctimespec.tv_nsec) / 1_000_000
+                XCTAssertEqual(body["ctime"], .number(ctimeMs))
+            }
+            try await client.execute(
+                uri: "/api/hostfs/list?mount=%2Fmnt%2Fproj&path=", method: .get
+            ) { response in
+                guard case .object(let body) = try self.decode(response.body),
+                    case .array(let entries)? = body["entries"]
+                else { return XCTFail("bad list shape") }
+                let hello = entries.first { entry in
+                    guard case .object(let e) = entry, case .string("hello.txt")? = e["name"]
+                    else { return false }
+                    return true
+                }
+                guard case .object(let e)? = hello else { return XCTFail("no hello.txt entry") }
+                XCTAssertEqual(e["ino"], .number(Double(info.st_ino)))
+                XCTAssertEqual(e["mode"], .number(Double(info.st_mode)))
+            }
+            // The stable dispatcher shares `statResponse`, so a webapp on the
+            // preflight-cacheable transport must see the same enriched payload.
+            try await client.execute(
+                uri: "/api/hostfs", method: .post,
+                body: try self.stable(["op": "stat", "mount": "/mnt/proj", "path": "hello.txt"])
+            ) { response in
+                guard case .object(let body) = try self.decode(response.body) else {
+                    return XCTFail("bad stat shape")
+                }
+                XCTAssertEqual(body["ino"], .number(Double(info.st_ino)))
+                XCTAssertEqual(body["uid"], .number(Double(info.st_uid)))
+                XCTAssertEqual(body["gid"], .number(Double(info.st_gid)))
+                XCTAssertEqual(body["mode"], .number(Double(info.st_mode)))
+            }
+        }
+    }
+
+    /// isomorphic-git compares `Math.floor(ms / 1000)` against the seconds
+    /// native git recorded, so a timestamp 0.9996 s past the second must not
+    /// be rounded up into the next one — that file would be stale on every
+    /// walk. Mirrors node-server's "never rounds a timestamp up" test.
+    func testTimestampsAreNotRoundedIntoTheNextSecond() async throws {
+        let racy = root + "/racy.txt"
+        try Data("x".utf8).write(to: URL(fileURLWithPath: racy))
+        let mtime = Date(timeIntervalSince1970: 1_700_000_000.9996)
+        try FileManager.default.setAttributes([.modificationDate: mtime], ofItemAtPath: racy)
+        var info = stat()
+        XCTAssertEqual(stat(racy, &info), 0)
+        let ctimeMs =
+            Double(info.st_ctimespec.tv_sec) * 1000 + Double(info.st_ctimespec.tv_nsec) / 1_000_000
+
+        try await makeApp().test(.router) { client in
+            try await client.execute(
+                uri: "/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=racy.txt", method: .get
+            ) { response in
+                guard case .object(let body) = try self.decode(response.body),
+                    case .number(let reportedMtime)? = body["mtime"],
+                    case .number(let reportedCtime)? = body["ctime"]
+                else { return XCTFail("bad stat shape") }
+                XCTAssertEqual((reportedMtime / 1000).rounded(.down), 1_700_000_000)
+                XCTAssertEqual(reportedCtime, ctimeMs)
+                XCTAssertEqual(
+                    (reportedCtime / 1000).rounded(.down), (ctimeMs / 1000).rounded(.down))
+            }
+            try await client.execute(
+                uri: "/api/hostfs/list?mount=%2Fmnt%2Fproj&path=", method: .get
+            ) { response in
+                guard case .object(let body) = try self.decode(response.body),
+                    case .array(let entries)? = body["entries"]
+                else { return XCTFail("bad list shape") }
+                let racyEntry = entries.first { entry in
+                    guard case .object(let e) = entry, case .string("racy.txt")? = e["name"]
+                    else { return false }
+                    return true
+                }
+                guard case .object(let e)? = racyEntry,
+                    case .number(let lastModified)? = e["lastModified"]
+                else { return XCTFail("no racy.txt entry") }
+                XCTAssertEqual((lastModified / 1000).rounded(.down), 1_700_000_000)
+            }
+        }
+    }
+
     func testWriteMkdirRenameRemoveRoundTrip() async throws {
         try await makeApp().test(.router) { client in
             try await client.execute(

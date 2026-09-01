@@ -31,11 +31,32 @@ export interface Stats {
    * input it read is still the file it identified; without an inode it
    * cannot tell and fails closed — see `shell/vfs-adapter.ts#toIdentity`).
    *
-   * Absent for mount-backed subtrees (hostfs and the remote backends expose
-   * only `{kind, size, mtime}`) and for the synthetic `/dev` entries, so
-   * consumers must treat it as best-effort, never as a required key.
+   * Absent for the remote mount backends (S3/DA/AEM expose only
+   * `{kind, size, mtime}`) and for the synthetic `/dev` entries, so
+   * consumers must treat it as best-effort, never as a required key. The
+   * hostfs bridge DOES report it — see {@link Stats.mode}.
    */
   ino?: number;
+  /**
+   * Owning user id, when the backend knows one (hostfs). Best-effort.
+   */
+  uid?: number;
+  /**
+   * Owning group id, when the backend knows one (hostfs). Best-effort.
+   */
+  gid?: number;
+  /**
+   * Full POSIX `st_mode` (type bits included), when the backend knows one.
+   *
+   * Together with {@link Stats.ino}, {@link Stats.uid}, {@link Stats.gid}
+   * and a real {@link Stats.ctime} this is what lets isomorphic-git's
+   * `compareStats` decide a working-tree file still matches its index entry.
+   * Without them every read-only git command over a mount re-hashes the tree
+   * and rewrites `.git/index` once per file (issue #2708). It also carries
+   * the executable bit, which the git adapter would otherwise flatten to
+   * `100644`.
+   */
+  mode?: number;
 }
 
 /** A single entry returned by readDir. */
@@ -112,6 +133,10 @@ export interface FsStatsLike {
   ctimeMs: number;
   /** Inode number. Optional: LightningFS' legacy shape omits it, ZenFS sets it. */
   ino?: number;
+  /** Owning user id. Optional: only ZenFS' shape carries it. */
+  uid?: number;
+  /** Owning group id. Optional: only ZenFS' shape carries it. */
+  gid?: number;
   isFile(): boolean;
   isDirectory(): boolean;
   isSymbolicLink(): boolean;

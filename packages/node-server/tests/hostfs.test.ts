@@ -1,5 +1,15 @@
 import express from 'express';
-import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -11,6 +21,14 @@ import {
   resolveHostMountRoots,
   resolveWithinRoot,
 } from '../src/hostfs.js';
+
+interface StatIdentity {
+  ctime?: number;
+  ino?: number;
+  uid?: number;
+  gid?: number;
+  mode?: number;
+}
 
 let root: string;
 let outside: string;
@@ -86,6 +104,70 @@ describe('hostfs routes', () => {
     expect(await readRes.text()).toBe('hello host');
   });
 
+  it('reports the stat identity git needs (ctime, ino, uid, gid, mode)', async () => {
+    // Without these isomorphic-git's compareStats is stale for every file, so
+    // a read-only command re-hashes the tree and rewrites .git/index once per
+    // file — issue #2708.
+    const res = await api('/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=hello.txt');
+    const body = (await res.json()) as StatIdentity;
+    const real = await stat(join(root, 'hello.txt'));
+    expect(body.ctime).toBe(real.ctimeMs);
+    expect(body.ino).toBe(Number(real.ino));
+    expect(body.uid).toBe(real.uid);
+    expect(body.gid).toBe(real.gid);
+    // Full st_mode, type bits included — so the executable bit survives.
+    expect(body.mode).toBe(real.mode);
+  });
+
+  it('preserves the executable bit in the reported mode', async () => {
+    await chmod(join(root, 'hello.txt'), 0o755);
+    try {
+      const res = await api('/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=hello.txt');
+      const body = (await res.json()) as { mode?: number };
+      expect((body.mode ?? 0) & 0o777).toBe(0o755);
+    } finally {
+      await chmod(join(root, 'hello.txt'), 0o644);
+    }
+  });
+
+  it('carries the stat identity on list entries too', async () => {
+    const res = await api('/api/hostfs/list?mount=%2Fmnt%2Fproj&path=');
+    const { entries } = (await res.json()) as { entries: ({ name: string } & StatIdentity)[] };
+    const hello = entries.find((e) => e.name === 'hello.txt');
+    const real = await stat(join(root, 'hello.txt'));
+    expect(hello?.ino).toBe(Number(real.ino));
+    expect(hello?.uid).toBe(real.uid);
+    expect(hello?.gid).toBe(real.gid);
+    expect(hello?.mode).toBe(real.mode);
+    expect(hello?.ctime).toBe(real.ctimeMs);
+  });
+
+  it('never rounds a timestamp up into the next second', async () => {
+    // isomorphic-git compares Math.floor(ms / 1000) against the seconds
+    // native git recorded, so a stat 0.9996 s past the second that is ROUNDED
+    // lands in the next second and leaves that file stale on every walk.
+    const racy = join(root, 'racy.txt');
+    await writeFile(racy, 'x');
+    await utimes(racy, 1_700_000_000.9996, 1_700_000_000.9996);
+    const real = await stat(racy);
+
+    const res = await api('/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=racy.txt');
+    const body = (await res.json()) as StatIdentity & { mtime?: number };
+    expect(body.mtime).toBe(real.mtimeMs);
+    expect(body.ctime).toBe(real.ctimeMs);
+    expect(Math.floor((body.mtime ?? 0) / 1000)).toBe(1_700_000_000);
+    expect(Math.floor((body.ctime ?? 0) / 1000)).toBe(Math.floor(real.ctimeMs / 1000));
+
+    const listRes = await api('/api/hostfs/list?mount=%2Fmnt%2Fproj&path=');
+    const { entries } = (await listRes.json()) as {
+      entries: ({ name: string; lastModified?: number } & StatIdentity)[];
+    };
+    const racyEntry = entries.find((e) => e.name === 'racy.txt');
+    expect(racyEntry?.lastModified).toBe(real.mtimeMs);
+    expect(Math.floor((racyEntry?.lastModified ?? 0) / 1000)).toBe(1_700_000_000);
+    expect(racyEntry?.ctime).toBe(real.ctimeMs);
+  });
+
   it('writes a file, creating parents', async () => {
     const res = await api('/api/hostfs/write?mount=%2Fmnt%2Fproj&path=new/deep/file.txt', {
       method: 'PUT',
@@ -159,6 +241,29 @@ describe('stable POST /api/hostfs endpoint', () => {
     const body = (await viaPost.json()) as { kind: string; size: number };
     expect(body.kind).toBe('file');
     expect(body.size).toBe(10);
+  });
+
+  it('carries the stat identity through the stable endpoint too', async () => {
+    // The dispatcher shares listOp/statOp with the per-op routes, so the
+    // enriched payload must not depend on which transport a caller picked —
+    // a webapp on the stable endpoint still needs ctime/ino/uid/gid/mode or
+    // every read-only git command re-hashes the tree (#2708).
+    const viaPost = await stable({ op: 'stat', mount: '/mnt/proj', path: 'hello.txt' });
+    const body = (await viaPost.json()) as StatIdentity;
+    const real = await stat(join(root, 'hello.txt'));
+    expect(body.ctime).toBe(real.ctimeMs);
+    expect(body.ino).toBe(Number(real.ino));
+    expect(body.uid).toBe(real.uid);
+    expect(body.gid).toBe(real.gid);
+    expect(body.mode).toBe(real.mode);
+
+    const listPost = await stable({ op: 'list', mount: '/mnt/proj', path: '' });
+    const { entries } = (await listPost.json()) as {
+      entries: ({ name: string } & StatIdentity)[];
+    };
+    const hello = entries.find((e) => e.name === 'hello.txt');
+    expect(hello?.ino).toBe(Number(real.ino));
+    expect(hello?.mode).toBe(real.mode);
   });
 
   it('mkdirs, renames, and removes through the one URL', async () => {

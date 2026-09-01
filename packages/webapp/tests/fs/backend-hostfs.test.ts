@@ -346,6 +346,66 @@ describe('HostFsMountBackend', () => {
     });
   });
 
+  it('carries the stat identity fields git needs through stat()', async () => {
+    // ctime/ino/uid/gid/mode are what isomorphic-git's compareStats needs to
+    // decide a file still matches its index entry (issue #2708). Served
+    // identically by the stable POST dispatcher and the per-op GET route.
+    const { backend } = backendWith(() =>
+      ok({
+        kind: 'file',
+        size: 7,
+        mtime: 1000,
+        ctime: 1200,
+        ino: 42,
+        uid: 501,
+        gid: 20,
+        mode: 33261,
+      })
+    );
+    await expect(backend.stat('a.txt')).resolves.toEqual({
+      kind: 'file',
+      size: 7,
+      mtime: 1000,
+      ctime: 1200,
+      ino: 42,
+      uid: 501,
+      gid: 20,
+      mode: 33261,
+    });
+  });
+
+  it('omits identity fields an older bridge does not send', async () => {
+    const { backend } = backendWith(() => ok({ kind: 'file', size: 7, mtime: 1000 }));
+    await expect(backend.stat('a.txt')).resolves.toEqual({ kind: 'file', size: 7, mtime: 1000 });
+  });
+
+  it('ignores non-numeric identity fields rather than failing the stat', async () => {
+    const { backend } = backendWith(() =>
+      ok({ kind: 'file', size: 7, mtime: 1000, ino: 'nope', mode: null, uid: Number.NaN, gid: 20 })
+    );
+    await expect(backend.stat('a.txt')).resolves.toEqual({
+      kind: 'file',
+      size: 7,
+      mtime: 1000,
+      gid: 20,
+    });
+  });
+
+  it('carries the stat identity on list entries too', async () => {
+    const { backend } = backendWith(() =>
+      ok({
+        entries: [
+          { name: 'a.txt', kind: 'file', size: 3, lastModified: 5, ino: 9, mode: 33188 },
+          { name: 'd', kind: 'directory' },
+        ],
+      })
+    );
+    await expect(backend.readDir('')).resolves.toEqual([
+      { name: 'a.txt', kind: 'file', size: 3, lastModified: 5, ino: 9, mode: 33188 },
+      { name: 'd', kind: 'directory' },
+    ]);
+  });
+
   it('refuses all operations after close with EBADF', async () => {
     const { backend } = backendWith(() => ok({}));
     await backend.close();

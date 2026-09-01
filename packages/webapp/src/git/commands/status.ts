@@ -2,6 +2,7 @@
 
 import * as git from 'isomorphic-git';
 import { matchesPathspec } from './revision.js';
+import { NO_INDEX_REFRESH } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function status(
@@ -27,7 +28,7 @@ export async function status(
     output += 'Not on any branch.\n\n';
   }
 
-  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
+  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd, ...NO_INDEX_REFRESH });
   const { staged, unstaged, untracked } = classifyStatusMatrix(matrix, pathspecs);
 
   output += formatStatusLong(staged, unstaged, untracked);
@@ -111,7 +112,7 @@ async function statusShort(
   cwd: string,
   pathspecs: string[]
 ): Promise<GitCommandResult> {
-  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
+  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd, ...NO_INDEX_REFRESH });
   let output = '';
 
   for (const [file, head, workdir, stage] of matrix) {

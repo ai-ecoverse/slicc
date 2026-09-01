@@ -10,7 +10,7 @@
 
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
-import { CLEAN_SPEC } from './shared.js';
+import { CLEAN_SPEC, NO_INDEX_REFRESH } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 type StatusRow = [string, number, number, number];
@@ -40,7 +40,11 @@ export async function clean(
     };
   }
 
-  const normalMatrix = (await git.statusMatrix({ fs: ctx.lfs, dir: cwd })) as StatusRow[];
+  const normalMatrix = (await git.statusMatrix({
+    fs: ctx.lfs,
+    dir: cwd,
+    ...NO_INDEX_REFRESH,
+  })) as StatusRow[];
   const trackedDirs = collectTrackedDirs(normalMatrix);
   const normalUntracked = normalMatrix
     .filter(([, h, w, s]) => h === 0 && w === 2 && s === 0)
@@ -53,6 +57,7 @@ export async function clean(
       fs: ctx.lfs,
       dir: cwd,
       ignored: true,
+      ...NO_INDEX_REFRESH,
     })) as StatusRow[];
     const allUntracked = withIgnored
       .filter(([, h, w, s]) => h === 0 && w === 2 && s === 0)

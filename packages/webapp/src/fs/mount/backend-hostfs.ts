@@ -62,6 +62,7 @@ import type {
   MountDescription,
   MountDirEntry,
   MountStat,
+  MountStatIdentity,
   RefreshReport,
 } from './backend.js';
 import { createInflightLimiter, type InflightLimiter } from './inflight-limiter.js';
@@ -155,6 +156,45 @@ function transientBridgeError(
     ? ` after ${attempts} attempt${attempts === 1 ? '' : 's'}`
     : ' (not retried: non-idempotent op)';
   return new FsError('EIO', `hostfs ${op} failed${tried}: transient bridge error: ${detail}`, path);
+}
+
+/** Wire shape of the stat identity, before it is validated. */
+interface RawStatIdentity {
+  ctime?: unknown;
+  ino?: unknown;
+  uid?: unknown;
+  gid?: unknown;
+  mode?: unknown;
+}
+
+function finiteNumber(value: unknown): number | undefined {
+  return typeof value === 'number' && Number.isFinite(value) ? value : undefined;
+}
+
+/**
+ * Pick the host `stat` identity fields off a bridge payload — the same
+ * payload whether it arrived from the stable `POST /api/hostfs` dispatcher or
+ * a per-op GET route.
+ *
+ * The server sends them for every file it could stat (node-server
+ * `statIdentity`, swift-server `statIdentity`); an older bridge, or a raced
+ * entry the server failed to stat, simply omits them and the consumer keeps
+ * its synthesized defaults. Kept permissive on purpose — a partial payload
+ * must never make a mount unreadable. See issue #2708.
+ */
+function readStatIdentity(raw: RawStatIdentity): MountStatIdentity {
+  const identity: MountStatIdentity = {};
+  const ctime = finiteNumber(raw.ctime);
+  if (ctime !== undefined) identity.ctime = ctime;
+  const ino = finiteNumber(raw.ino);
+  if (ino !== undefined) identity.ino = ino;
+  const uid = finiteNumber(raw.uid);
+  if (uid !== undefined) identity.uid = uid;
+  const gid = finiteNumber(raw.gid);
+  if (gid !== undefined) identity.gid = gid;
+  const mode = finiteNumber(raw.mode);
+  if (mode !== undefined) identity.mode = mode;
+  return identity;
 }
 
 export interface HostFsMountBackendOptions {
@@ -365,13 +405,19 @@ export class HostFsMountBackend implements MountBackend {
     if (!Array.isArray(body.entries)) return [];
     const entries: MountDirEntry[] = [];
     for (const raw of body.entries) {
-      const e = raw as { name?: unknown; kind?: unknown; size?: unknown; lastModified?: unknown };
+      const e = raw as RawStatIdentity & {
+        name?: unknown;
+        kind?: unknown;
+        size?: unknown;
+        lastModified?: unknown;
+      };
       if (typeof e.name !== 'string' || (e.kind !== 'file' && e.kind !== 'directory')) continue;
       entries.push({
         name: e.name,
         kind: e.kind,
         ...(typeof e.size === 'number' ? { size: e.size } : {}),
         ...(typeof e.lastModified === 'number' ? { lastModified: e.lastModified } : {}),
+        ...readStatIdentity(e),
       });
     }
     return entries;
@@ -399,7 +445,7 @@ export class HostFsMountBackend implements MountBackend {
   }
 
   async stat(path: string): Promise<MountStat> {
-    const body = (await this.request('stat', path, readJson)) as {
+    const body = (await this.request('stat', path, readJson)) as RawStatIdentity & {
       kind?: unknown;
       size?: unknown;
       mtime?: unknown;
@@ -408,6 +454,7 @@ export class HostFsMountBackend implements MountBackend {
       kind: body.kind === 'directory' ? 'directory' : 'file',
       size: typeof body.size === 'number' ? body.size : 0,
       mtime: typeof body.mtime === 'number' ? body.mtime : 0,
+      ...readStatIdentity(body),
     };
   }
 

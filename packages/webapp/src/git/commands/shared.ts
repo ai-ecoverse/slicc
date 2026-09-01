@@ -182,3 +182,21 @@ export function expandGitError(err: unknown): string {
   }
   return err.message;
 }
+
+/**
+ * Spread into every `statusMatrix` / `WORKDIR` call made by a command that is
+ * not supposed to mutate the repository.
+ *
+ * isomorphic-git's workdir walker defaults to `refresh: true`: whenever
+ * `compareStats` says a file's cached stats are stale it re-hashes the file
+ * and — if the oid still matches — calls `index.insert(...)` purely to warm
+ * the stat cache. That marks the index dirty, so `GitIndexManager.acquire`
+ * serializes and writes the WHOLE `.git/index` back, once per file.
+ *
+ * Over a `--mount`ed host checkout the stats can never match (the hostfs
+ * bridge has no ctime/ino/uid/gid of its own to report), so a single
+ * `git ls-files` rewrote the user's real index 3,485 times — 437 KB per PUT
+ * — and left it in isomorphic-git's extension-less v2 form. A read-only
+ * command must never write. See issue #2708.
+ */
+export const NO_INDEX_REFRESH = { refresh: false } as const;
