@@ -27,6 +27,12 @@ Overflow from `packages/webapp/CLAUDE.md`. Each section is the deep reference fo
 - Path: `packages/webapp/src/shell/`. `almost-bash-shell.ts` is the just-bash runtime; `supplemental-commands/` built-ins live under `docs/shell-reference.md`. `script-catalog.ts` is the shared `.jsh`/`.bsh` discovery for the shell and `which`, cached per `$PATH` root set; the `FsWatcher` cache is bypassed only for root sets a mount overlaps (external changes there are invisible). `vfs-adapter.ts` bridges shell → VFS and forwards `canWrite` (duck-typed for `VirtualFS`/`RestrictedFS`).
 - `typescript` v7 (native) runs checks/builds; `typescript-js` (JS v6) powers browser `tsc`/`test`/`esm-transpile` because v7 has no browser/WASM API. `builtin-shadow-map.ts` is authoritative for `ipx`/`npx` → built-in redirects. Raw scans: `jsh-discovery.ts` / `bsh-discovery.ts`.
 
+## Git
+
+- Path: `packages/webapp/src/git/`; one module per subcommand under `commands/`, dispatched by `git-commands.ts`. isomorphic-git runs over `vfs-fs-adapter.ts`, so **every object read is a VFS read** — and over a `--mount`ed host repo (`docs/mounts.md`) that is an HTTP round trip through the hostfs bridge. Cost is measured in reads, not in CPU.
+- **A history walk must be bounded before it starts, never after** (#2714). `log -- <path>` used to materialize every commit on the branch, tree-diff each one through a `Promise.all` fan-out of two-tree `git.walk`s, and only then apply `-n`; on a 9.5k-commit repo that was ~25,500 bridge requests and a crashed renderer. `commands/log.ts` now hands a single-ref pathspec straight to `git.log({ filepath, depth, force: true })`, whose own walk resolves the path component-wise per commit tree and stops at `depth` matches. The forms that cannot use it (`--all`, `a..b`) filter the already-materialized list SEQUENTIALLY and break at the limit — never fan thousands of tree reads into the six-connection browser queue at once.
+- **Compare tree-entry oids, not whole trees.** "Did this commit touch `<path>`?" is `readTree` per path component in the commit and in its first parent, memoized per `(tree oid, pathspec)` across the walk. A directory's tree oid changes exactly when something below it changes, so a subtree pathspec needs no recursion. Pathspecs are exact-path-or-directory-prefix (`matchesPathspec` in `commands/revision.ts`), never globs.
+
 ## Speech
 
 - Path: `packages/webapp/src/speech/`; entry `supplemental-commands/hear-command.ts`. **Page realm only** (mic, AudioContext); kernel worker bridges via `hear-*` panel-RPC.
