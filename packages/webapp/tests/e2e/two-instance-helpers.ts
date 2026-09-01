@@ -444,7 +444,7 @@ declare global {
 export async function execInTerminal(
   page: Page,
   command: string,
-  timeoutMs = 60_000
+  timeoutMs = 90_000
 ): Promise<ExecResult> {
   await openTerminal(page, timeoutMs);
   return page.evaluate(async (cmd: string) => {
@@ -470,7 +470,7 @@ export async function execInTerminal(
  *
  * Idempotent, so callers can treat it as "make sure there is a terminal".
  */
-export async function openTerminal(page: Page, timeoutMs = 60_000): Promise<void> {
+export async function openTerminal(page: Page, timeoutMs = 90_000): Promise<void> {
   if (await page.evaluate(() => Boolean(window.__slicc_terminal_view))) return;
   await page.evaluate(() => {
     const dock = document.querySelector('slicc-dock') as
@@ -479,6 +479,10 @@ export async function openTerminal(page: Page, timeoutMs = 60_000): Promise<void
     if (!dock?.selectItem) throw new Error('<slicc-dock>.selectItem(id) unavailable');
     dock.selectItem('term');
   });
+  // 90s, not 30/60: the lazy mount (dynamic import + session handshake) regularly
+  // exceeds half a minute on a loaded CI runner. Specs that still wait only 30s
+  // (python-print, git-clone-live) turn that into a red run; this helper is the
+  // shared entry point so every caller inherits the corrected budget.
   await page.waitForFunction(() => window.__slicc_terminal_view != null, null, {
     timeout: timeoutMs,
   });

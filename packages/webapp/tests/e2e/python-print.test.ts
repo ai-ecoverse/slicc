@@ -29,34 +29,12 @@ import { dirname, resolve } from 'path';
 import { fileURLToPath } from 'url';
 import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
+import { execInTerminal } from './two-instance-helpers.js';
 
 const rootPkg = JSON.parse(
   readFileSync(resolve(dirname(fileURLToPath(import.meta.url)), '../../../../package.json'), 'utf8')
 ) as { dependencies: { pyodide: string } };
 const PYODIDE_VERSION = rootPkg.dependencies.pyodide;
-
-interface ExecResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
-
-declare global {
-  interface Window {
-    __slicc_terminal_view?: {
-      executeCommandInTerminal(cmd: string): Promise<ExecResult>;
-    };
-  }
-}
-
-/** Run a single command through the worker shell via the published view. */
-async function exec(page: import('@playwright/test').Page, cmd: string): Promise<ExecResult> {
-  return page.evaluate(async (command: string) => {
-    const view = window.__slicc_terminal_view;
-    if (!view) throw new Error('terminal view not published yet');
-    return view.executeCommandInTerminal(command);
-  }, cmd);
-}
 
 test.describe('python3 print smoke (browser ipk path)', () => {
   test('ipk-installs the pinned pyodide and prints 1 + 1', async ({ page }, testInfo) => {
@@ -80,28 +58,19 @@ test.describe('python3 print smoke (browser ipk path)', () => {
       timeout: 20_000,
     });
 
-    await page.evaluate(() => {
-      const dock = document.querySelector('slicc-dock') as
-        | (HTMLElement & { selectItem?: (id: string) => void })
-        | null;
-      if (!dock?.selectItem) throw new Error('<slicc-dock>.selectItem(id) unavailable');
-      dock.selectItem('term');
-    });
-    await page.waitForFunction(() => window.__slicc_terminal_view != null, null, {
-      timeout: 30_000,
-    });
-
     // 1. Fresh VFS: browser float refuses to boot without the pinned
     //    install and surfaces the canonical remediation. `cd /workspace`
     //    so the nearest-`node_modules` walk matches where `ipk add` lands
     //    (terminal boots at `/`; see speech-roundtrip).
-    const missing = await exec(page, 'cd /workspace && python3 -c "print(1 + 1)"');
+    // `execInTerminal` opens the workbench term via the shared helper
+    // (90s lazy-mount budget) before running the command.
+    const missing = await execInTerminal(page, 'cd /workspace && python3 -c "print(1 + 1)"');
     expect(missing.exitCode, `missing-install stderr: ${missing.stderr}`).toBe(1);
     expect(missing.stderr).toContain(`ipk add pyodide@${PYODIDE_VERSION}`);
 
     // 2. Install the exact pin the running build expects.
     const installCmd = `cd /workspace && ipk add pyodide@${PYODIDE_VERSION}`;
-    const install = await exec(page, installCmd);
+    const install = await execInTerminal(page, installCmd);
     const installReport =
       `command: ${installCmd}\n` +
       `exitCode: ${install.exitCode}\n` +
@@ -112,7 +81,7 @@ test.describe('python3 print smoke (browser ipk path)', () => {
 
     // 3. Smoke: real Pyodide eval through the VFS-bytes loader.
     const runCmd = 'cd /workspace && python3 -c "print(1 + 1)"';
-    const run = await exec(page, runCmd);
+    const run = await execInTerminal(page, runCmd);
     const runReport =
       `command: ${runCmd}\n` +
       `exitCode: ${run.exitCode}\n` +
