@@ -91,6 +91,67 @@ final class HostFSRoutesTests: XCTestCase {
         }
     }
 
+    /// The webapp needs ctime/ino/uid/gid/mode to decide a working-tree file
+    /// still matches its git index entry; without them every read-only git
+    /// command rewrites `.git/index` once per file (issue #2708). Mirrors
+    /// node-server's `statIdentity`.
+    func testStatReportsIdentityFieldsForCompareStats() async throws {
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o755], ofItemAtPath: root + "/hello.txt")
+        var info = stat()
+        XCTAssertEqual(stat(root + "/hello.txt", &info), 0)
+        try await makeApp().test(.router) { client in
+            try await client.execute(
+                uri: "/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=hello.txt", method: .get
+            ) { response in
+                guard case .object(let body) = try self.decode(response.body) else {
+                    return XCTFail("bad stat shape")
+                }
+                XCTAssertEqual(body["ino"], .number(Double(info.st_ino)))
+                XCTAssertEqual(body["uid"], .number(Double(info.st_uid)))
+                XCTAssertEqual(body["gid"], .number(Double(info.st_gid)))
+                // Full st_mode, so the executable bit survives instead of
+                // being flattened to 100644.
+                XCTAssertEqual(body["mode"], .number(Double(info.st_mode)))
+                guard case .number(let mode)? = body["mode"] else { return XCTFail("no mode") }
+                XCTAssertEqual(mode_t(mode) & 0o777, 0o755)
+                let ctimeMs =
+                    (Double(info.st_ctimespec.tv_sec) * 1000
+                    + Double(info.st_ctimespec.tv_nsec) / 1_000_000).rounded()
+                XCTAssertEqual(body["ctime"], .number(ctimeMs))
+            }
+            try await client.execute(
+                uri: "/api/hostfs/list?mount=%2Fmnt%2Fproj&path=", method: .get
+            ) { response in
+                guard case .object(let body) = try self.decode(response.body),
+                    case .array(let entries)? = body["entries"]
+                else { return XCTFail("bad list shape") }
+                let hello = entries.first { entry in
+                    guard case .object(let e) = entry, case .string("hello.txt")? = e["name"]
+                    else { return false }
+                    return true
+                }
+                guard case .object(let e)? = hello else { return XCTFail("no hello.txt entry") }
+                XCTAssertEqual(e["ino"], .number(Double(info.st_ino)))
+                XCTAssertEqual(e["mode"], .number(Double(info.st_mode)))
+            }
+            // The stable dispatcher shares `statResponse`, so a webapp on the
+            // preflight-cacheable transport must see the same enriched payload.
+            try await client.execute(
+                uri: "/api/hostfs", method: .post,
+                body: try self.stable(["op": "stat", "mount": "/mnt/proj", "path": "hello.txt"])
+            ) { response in
+                guard case .object(let body) = try self.decode(response.body) else {
+                    return XCTFail("bad stat shape")
+                }
+                XCTAssertEqual(body["ino"], .number(Double(info.st_ino)))
+                XCTAssertEqual(body["uid"], .number(Double(info.st_uid)))
+                XCTAssertEqual(body["gid"], .number(Double(info.st_gid)))
+                XCTAssertEqual(body["mode"], .number(Double(info.st_mode)))
+            }
+        }
+    }
+
     func testWriteMkdirRenameRemoveRoundTrip() async throws {
         try await makeApp().test(.router) { client in
             try await client.execute(

@@ -13,8 +13,30 @@
 
 export type MountKind = 'local' | 'hostfs' | 's3' | 'da' | 'aem' | 'proc';
 
+/**
+ * Host-filesystem identity fields, when the backend has a real inode behind
+ * the entry (hostfs only — the remote backends have no such thing).
+ *
+ * They exist for isomorphic-git: `compareStats` decides that a working-tree
+ * file still matches its index entry by comparing mode/mtime/ctime/uid/gid/
+ * ino/size, so a backend that reports only `{kind,size,mtime}` is stale for
+ * every file and every read-only git command rewrites `.git/index` once per
+ * file (issue #2708). Every field is optional; consumers must fall back to
+ * the historical synthesized values when a backend omits them.
+ */
+export interface MountStatIdentity {
+  /** Inode-change time, ms since epoch. Distinct from mtime on POSIX. */
+  ctime?: number;
+  /** Inode number. */
+  ino?: number;
+  uid?: number;
+  gid?: number;
+  /** Full POSIX `st_mode`, type bits included — carries the executable bit. */
+  mode?: number;
+}
+
 /** A single entry returned by readDir() — file or synthesized directory. */
-export interface MountDirEntry {
+export interface MountDirEntry extends MountStatIdentity {
   name: string;
   kind: 'file' | 'directory';
   size?: number;
@@ -25,7 +47,7 @@ export interface MountDirEntry {
 }
 
 /** Result of a stat() call. */
-export interface MountStat {
+export interface MountStat extends MountStatIdentity {
   kind: 'file' | 'directory';
   size: number;
   /** ms since epoch. */

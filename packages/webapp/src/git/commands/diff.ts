@@ -10,7 +10,7 @@ import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { diffStat, unifiedDiff } from '../diff.js';
 import { matchesPathspec, pathspecCouldMatch, resolveRevision } from './revision.js';
-import { GIT_FLAG_SPECS } from './shared.js';
+import { GIT_FLAG_SPECS, NO_INDEX_REFRESH } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 type FileChange = { filepath: string; oldContent: string; newContent: string };
@@ -171,8 +171,9 @@ async function diffCommitIndex(
  *
  * Untracked and pathspec-excluded subtrees are dropped by `iterate` before the
  * workdir walker can `lstat` them, so `node_modules` / `.git` are never
- * enumerated and `git diff -- <path>` costs what that path costs. `refresh:
- * false` keeps this read-only command from rewriting `.git/index` (#2708).
+ * enumerated and `git diff -- <path>` costs what that path costs.
+ * `NO_INDEX_REFRESH` keeps this read-only command from rewriting `.git/index`
+ * (#2708).
  */
 async function diffWorkdirChanges(
   ctx: GitCommandContext,
@@ -186,7 +187,7 @@ async function diffWorkdirChanges(
     fs: ctx.lfs,
     dir: cwd,
     cache,
-    trees: [git.STAGE(), git.WORKDIR({ refresh: false })],
+    trees: [git.STAGE(), git.WORKDIR(NO_INDEX_REFRESH)],
     // Untracked paths (`.git`, `node_modules`, …) and anything a pathspec
     // rules out are dropped here, before the workdir walker would `lstat`
     // them: `git diff -- one/file.txt` must not stat the whole tree.
@@ -318,8 +319,8 @@ async function diffCommitWorkdir(
     fs: ctx.lfs,
     dir: cwd,
     cache,
-    // `refresh: false`: a read-only diff must not rewrite `.git/index` (#2708).
-    trees: [git.TREE({ ref: resolved }), git.WORKDIR({ refresh: false })],
+    // NO_INDEX_REFRESH: a read-only diff must not rewrite `.git/index` (#2708).
+    trees: [git.TREE({ ref: resolved }), git.WORKDIR(NO_INDEX_REFRESH)],
     // Same pre-`lstat` pruning as `git diff`: untracked paths (nothing in the
     // commit and nothing in the index below them) and pathspec-excluded
     // subtrees never reach the workdir walker.

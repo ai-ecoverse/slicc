@@ -197,6 +197,22 @@ every `.git/objects/pack/*.idx` searching for a prefix match, so trying it first
 `git rev-parse HEAD` over a `--mount`ed host repo read all 30 pack indexes (3.8 MB, 34 bridge
 requests) instead of `HEAD` plus `packed-refs` (issue #2713).
 
+### Read-only git commands never touch the index
+
+`status`, `ls-files`, `diff` and `clean --dry-run` pass `refresh: false` to
+isomorphic-git's workdir walker (`NO_INDEX_REFRESH` in
+`packages/webapp/src/git/commands/shared.ts`). The default, `refresh: true`,
+re-inserts each stat'd file into the index just to warm its stat cache — and
+because `GitIndexManager` writes the whole index whenever it is dirty, that
+costs one full `.git/index` rewrite PER FILE. Over a `--mount`ed host checkout
+a single `git ls-files` rewrote the user's real index 3,485 times (#2708).
+
+If you add a command that walks the working tree, decide first whether it is
+allowed to write: anything read-only spreads `NO_INDEX_REFRESH` into its
+`statusMatrix` / `WORKDIR()` call. The stat cache still warms on the commands
+that legitimately write the index (`add`, `commit`, `reset`, `stash`,
+`rebase`).
+
 ### `git diff` never reads an unchanged blob
 
 Every git command runs against the VFS, so on a `--mount`ed host repo each object
@@ -215,8 +231,8 @@ what changed from OIDs before it reads any content (#2719):
   per tracked path; filtering in `iterate` works from the path string alone and
   costs nothing. `node_modules` and `.git` are never enumerated, and
   `git diff -- one/file.txt` never stats a sibling directory.
-- Workdir walks pass `refresh: false` — a read-only command must not rewrite
-  `.git/index` (#2708).
+- Workdir walks pass `NO_INDEX_REFRESH` — a read-only command must not rewrite
+  `.git/index` (#2708), per the section above.
 
 When adding a diff variant, keep the OID comparison ahead of the content read and
 the pathspec test ahead of the walk: the pre-2719 code compared decoded strings

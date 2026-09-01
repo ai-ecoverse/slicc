@@ -274,24 +274,27 @@ enum HostFSRoutes {
             let attrs = try? FileManager.default.attributesOfItem(atPath: full)
             let size = (attrs?[.size] as? NSNumber)?.doubleValue ?? 0
             let mtime = (attrs?[.modificationDate] as? Date).map { $0.timeIntervalSince1970 * 1000 } ?? 0
-            return .object([
+            var entry: [String: LickSystem.JSONValue] = [
                 "name": .string(name),
                 "kind": .string("file"),
                 "size": .number(size),
                 "lastModified": .number(mtime.rounded()),
-            ])
+            ]
+            entry.merge(statIdentity(full)) { current, _ in current }
+            return .object(entry)
         }
         return try jsonBody(.object(["entries": .array(entries)]))
     }
 
     private static func statResponse(_ path: String) throws -> Response {
         let (isDirectory, size, mtime) = try statAt(path)
-        return try jsonBody(
-            .object([
-                "kind": .string(isDirectory ? "directory" : "file"),
-                "size": .number(isDirectory ? 0 : size),
-                "mtime": .number(mtime),
-            ]))
+        var payload: [String: LickSystem.JSONValue] = [
+            "kind": .string(isDirectory ? "directory" : "file"),
+            "size": .number(isDirectory ? 0 : size),
+            "mtime": .number(mtime),
+        ]
+        payload.merge(statIdentity(path)) { current, _ in current }
+        return try jsonBody(.object(payload))
     }
 
     private static func mkdirResponse(_ path: String) throws -> Response {
@@ -327,6 +330,40 @@ enum HostFSRoutes {
     }
 
     // MARK: - Helpers
+
+    /// Identity/permission fields of a host `stat(2)`, mirroring node-server's
+    /// `statIdentity` in `src/hostfs.ts`.
+    ///
+    /// isomorphic-git's `compareStats` decides that a working-tree file still
+    /// matches its index entry by comparing mode, mtime, ctime, uid, gid, ino
+    /// and size. The bridge used to report only `{kind,size,mtime}`, so the
+    /// comparison was stale for EVERY file and every read-only git command
+    /// re-hashed the tree and rewrote `.git/index` once per file (issue
+    /// #2708). `mode` is the full `st_mode` (type bits included), so the
+    /// executable bit survives instead of being flattened to `100644`.
+    ///
+    /// Goes through `stat(2)` rather than `FileManager.attributesOfItem`
+    /// because Foundation exposes `.creationDate` (birth time), not the POSIX
+    /// inode-change time git actually records. A failed stat yields an empty
+    /// dictionary — the webapp then keeps its synthesized defaults.
+    private static func statIdentity(_ path: String) -> [String: LickSystem.JSONValue] {
+        var info = stat()
+        guard stat(path, &info) == 0 else { return [:] }
+        #if canImport(Darwin)
+            let ctimespec = info.st_ctimespec
+        #else
+            let ctimespec = info.st_ctim
+        #endif
+        let ctimeMs =
+            (Double(ctimespec.tv_sec) * 1000 + Double(ctimespec.tv_nsec) / 1_000_000).rounded()
+        return [
+            "ctime": .number(ctimeMs),
+            "ino": .number(Double(info.st_ino)),
+            "uid": .number(Double(info.st_uid)),
+            "gid": .number(Double(info.st_gid)),
+            "mode": .number(Double(info.st_mode)),
+        ]
+    }
 
     private static func statAt(_ path: String) throws -> (Bool, Double, Double) {
         var isDirectory: ObjCBool = false

@@ -145,11 +145,48 @@ interface HostMountRoot {
   root: string;
 }
 
-function statPayload(s: Stats): { kind: 'file' | 'directory'; size: number; mtime: number } {
+/**
+ * Identity/permission fields of a host `fs.Stats`, as the webapp needs them.
+ *
+ * isomorphic-git's `compareStats` decides whether a working-tree file is
+ * still the one the index recorded by comparing mode, mtime, ctime, uid,
+ * gid, ino and size. The bridge used to report only `{kind,size,mtime}`, so
+ * the comparison was stale for EVERY file — every read-only git command
+ * re-hashed the whole tree and rewrote `.git/index` once per file
+ * (issue #2708). `mode` is the full `st_mode` (type bits included), so the
+ * executable bit survives instead of being flattened to `100644`.
+ */
+function statIdentity(s: Stats): {
+  ctime: number;
+  ino: number;
+  uid: number;
+  gid: number;
+  mode: number;
+} {
+  return {
+    ctime: Math.round(s.ctimeMs),
+    ino: Number(s.ino),
+    uid: s.uid,
+    gid: s.gid,
+    mode: s.mode,
+  };
+}
+
+function statPayload(s: Stats): {
+  kind: 'file' | 'directory';
+  size: number;
+  mtime: number;
+  ctime: number;
+  ino: number;
+  uid: number;
+  gid: number;
+  mode: number;
+} {
   return {
     kind: s.isDirectory() ? 'directory' : 'file',
     size: s.isDirectory() ? 0 : s.size,
     mtime: Math.round(s.mtimeMs),
+    ...statIdentity(s),
   };
 }
 
@@ -286,6 +323,7 @@ async function listOp(target: string): Promise<{ entries: unknown[] }> {
           kind: 'file',
           size: s.size,
           lastModified: Math.round(s.mtimeMs),
+          ...statIdentity(s),
         };
       } catch {
         // Raced deletion / dangling link / unreadable: name only.
@@ -296,7 +334,8 @@ async function listOp(target: string): Promise<{ entries: unknown[] }> {
   return { entries };
 }
 
-async function statOp(target: string): Promise<{ kind: string; size: number; mtime: number }> {
+/** Shared by the stable dispatcher and `GET /api/hostfs/stat` — same payload. */
+async function statOp(target: string): Promise<ReturnType<typeof statPayload>> {
   return statPayload(await stat(target));
 }
 
@@ -328,7 +367,7 @@ async function removeOp(
  *
  *   POST   /api/hostfs           ← { op, mount, path, to?, recursive? }
  *   GET    /api/hostfs/list?mount=&path=          → { entries: [...] }
- *   GET    /api/hostfs/stat?mount=&path=          → { kind, size, mtime }
+ *   GET    /api/hostfs/stat?mount=&path=          → { kind, size, mtime, ctime, ino, uid, gid, mode }
  *   GET    /api/hostfs/read?mount=&path=          → octet-stream body
  *   PUT    /api/hostfs/write?mount=&path=         ← octet-stream body
  *   POST   /api/hostfs/mkdir?mount=&path=

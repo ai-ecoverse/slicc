@@ -2172,11 +2172,19 @@ export class VirtualFS {
       const relPath = mount.relParts.join('/');
       try {
         const ms = await mount.backend.stat(relPath);
+        // ctime falls back to mtime for backends that have no inode behind
+        // the entry (S3/DA/AEM); hostfs reports the real one, along with
+        // ino/uid/gid/mode — without them isomorphic-git treats every file
+        // as stale and rewrites `.git/index` per file (issue #2708).
         return {
           type: ms.kind === 'directory' ? 'directory' : 'file',
           size: ms.size,
           mtime: ms.mtime,
-          ctime: ms.mtime,
+          ctime: ms.ctime ?? ms.mtime,
+          ...(ms.ino !== undefined ? { ino: ms.ino } : {}),
+          ...(ms.uid !== undefined ? { uid: ms.uid } : {}),
+          ...(ms.gid !== undefined ? { gid: ms.gid } : {}),
+          ...(ms.mode !== undefined ? { mode: ms.mode } : {}),
         };
       } catch (err) {
         rebrandFsError(err, normalized);
@@ -2192,6 +2200,9 @@ export class VirtualFS {
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
         ino: s.ino,
+        uid: s.uid,
+        gid: s.gid,
+        mode: s.mode,
       };
     } catch (err) {
       throw convertError(err, normalized);
@@ -2463,6 +2474,9 @@ export class VirtualFS {
           isSymlink: true,
           symlinkTarget: target,
           ino: s.ino,
+          uid: s.uid,
+          gid: s.gid,
+          mode: s.mode,
         };
       }
       return {
@@ -2471,6 +2485,9 @@ export class VirtualFS {
         mtime: s.mtimeMs,
         ctime: s.ctimeMs,
         ino: s.ino,
+        uid: s.uid,
+        gid: s.gid,
+        mode: s.mode,
       };
     } catch (err) {
       throw convertError(err, normalized);

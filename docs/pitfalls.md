@@ -406,10 +406,13 @@ Consequences for anyone touching this layer:
 - **Inode 0 is deliberately unnamed.** ZenFS pins `/` to 0, and a sidecar
   poisoned the way #2146 describes hands out 0 for many entries until the
   pre-boot repair renumbers them. A collided identity is worse than none.
-- **Mount-backed subtrees have no identity.** hostfs and the remote backends
-  expose `{kind, size, mtime}` and nothing inode-shaped, so `split` on a path
-  under a mount still fails this way. Synthesizing a token from the path would
-  claim a guarantee the backend cannot keep; the fix belongs in the backends.
+- **Remote mount subtrees have no identity.** S3/DA/AEM expose
+  `{kind, size, mtime}` and nothing inode-shaped, so `split` on a path under
+  one of those mounts still fails this way. Synthesizing a token from the path
+  would claim a guarantee the backend cannot keep; the fix belongs in the
+  backends — which is exactly what hostfs did (#2708): `/api/hostfs/stat` now
+  reports the host's real `ctime`/`ino`/`uid`/`gid`/`mode`, so paths under a
+  `--mount`ed folder DO carry an inode.
 - `identity` rather than `dev` + `ino`: just-bash accepts the inode pair only
   when both halves are present, and one adapter can span backends whose inode
   spaces are unrelated — there is no honest single `dev`.

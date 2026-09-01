@@ -1,6 +1,7 @@
 /** `git ls-files` — list tracked / modified / deleted / other files. */
 
 import * as git from 'isomorphic-git';
+import { NO_INDEX_REFRESH } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function lsFiles(
@@ -17,7 +18,7 @@ export async function lsFiles(
     .map((p) => p.replace(/\/+$/, ''))
     .filter((p) => p.length > 0);
 
-  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
+  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd, ...NO_INDEX_REFRESH });
   const files: string[] = [];
 
   const mode = others ? 'others' : modified ? 'modified' : deleted ? 'deleted' : 'cached';
