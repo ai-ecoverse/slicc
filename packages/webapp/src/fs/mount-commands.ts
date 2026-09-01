@@ -141,6 +141,13 @@ function parseAdobeSource(source: string): ParsedAdobeSource | null {
   };
 }
 
+/**
+ * How an unmount failure names itself. `mount unmount` and the `umount` alias
+ * share one handler, so the label travels with the call instead of being baked
+ * into the messages.
+ */
+type UnmountLabel = 'mount unmount' | 'umount';
+
 function toAemSource(parsed: ParsedAdobeSource): string {
   return `aem://${parsed.org}/${parsed.name}${parsed.path ? `/${parsed.path}` : ''}`;
 }
@@ -162,7 +169,7 @@ export class MountCommands {
     }
 
     if (sub === 'unmount' || sub === '-u') {
-      return this.handleUnmount(args.slice(1), cwd);
+      return this.handleUnmount(args.slice(1), cwd, 'mount unmount');
     }
 
     if (sub === 'list' || sub === '-l' || sub === '--list') {
@@ -200,6 +207,19 @@ export class MountCommands {
 
     // No --source → local picker.
     return this.mountLocal(targetPath, env);
+  }
+
+  /**
+   * `umount [--clear-cache] <path>` — the muscle-memory spelling of
+   * `mount unmount <path>` (issue #2738). It is a pure alias: same parser,
+   * same handler, same exit codes. Only the diagnostic prefix changes, so a
+   * user who typed `umount` is not told about a command they did not run.
+   */
+  async executeUmount(args: string[], cwd: string): Promise<MountCommandResult> {
+    if (args[0] === '--help' || args[0] === '-h') {
+      return this.umountHelp();
+    }
+    return this.handleUnmount(args, cwd, 'umount');
   }
 
   // ---- handlers ----
@@ -418,12 +438,16 @@ export class MountCommands {
     };
   }
 
-  private async handleUnmount(args: string[], cwd: string): Promise<MountCommandResult> {
+  private async handleUnmount(
+    args: string[],
+    cwd: string,
+    label: UnmountLabel
+  ): Promise<MountCommandResult> {
     // Parse the full arg list so flags can appear before or after the path.
     // Spec syntax: `mount unmount [--clear-cache] <target-path>`.
     const parsed = parseArgs(args);
     if (parsed.positional.length === 0) {
-      return { stdout: '', stderr: 'mount unmount: path required\n', exitCode: 1 };
+      return { stdout: '', stderr: `${label}: path required\n`, exitCode: 1 };
     }
     const targetPath = this.resolvePath(parsed.positional[0], cwd);
 
@@ -464,7 +488,7 @@ export class MountCommands {
     } catch (err) {
       return {
         stdout: '',
-        stderr: `mount unmount: ${err instanceof Error ? err.message : String(err)}\n`,
+        stderr: `${label}: ${err instanceof Error ? err.message : String(err)}\n`,
         exitCode: 1,
       };
     }
@@ -560,6 +584,29 @@ export class MountCommands {
     };
   }
 
+  private umountHelp(): MountCommandResult {
+    return {
+      stdout:
+        [
+          'Usage: umount [--clear-cache] <path>',
+          '',
+          'Unmount a mount point. `umount <path>` is an alias for',
+          '`mount unmount <path>` — same behaviour, shorter to type.',
+          '',
+          'Options:',
+          '  --clear-cache   Also drop cached listings and bodies for a remote mount',
+          '',
+          'Examples:',
+          '  umount /mnt/myapp',
+          '  umount --clear-cache /mnt/s3',
+          '',
+          'See also: mount --help, mount list',
+        ].join('\n') + '\n',
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+
   private help(): MountCommandResult {
     return {
       stdout:
@@ -589,7 +636,7 @@ export class MountCommands {
           '  --max-body-mb <n>   Override body size limit (MB)',
           '',
           'Sub-commands:',
-          '  unmount [--clear-cache] <path>  Remove a mount point',
+          '  unmount [--clear-cache] <path>  Remove a mount point (also spelled `umount <path>`)',
           '  list, --list, -l                Show active mount points',
           '  refresh [--bodies] <path>       Re-index or revalidate a mount',
           '',
@@ -601,6 +648,7 @@ export class MountCommands {
           '  mount list',
           '  mount refresh /mnt/myapp',
           '  mount unmount /mnt/myapp',
+          '  umount /mnt/myapp',
         ].join('\n') + '\n',
       stderr: '',
       exitCode: 0,

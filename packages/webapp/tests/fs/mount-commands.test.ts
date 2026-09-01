@@ -188,6 +188,81 @@ describe('MountCommands', () => {
     });
   });
 
+  describe('umount alias', () => {
+    it('returns a usage error when no path is given', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const result = await cmd.executeUmount([], '/workspace');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe('umount: path required\n');
+      expect(result.stdout).toBe('');
+    });
+
+    it('unmounts a mounted path', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      const result = await cmd.executeUmount(['/mnt/myapp'], '/workspace');
+      expect(result.exitCode).toBe(0);
+      expect(unmount).toHaveBeenCalledWith('/mnt/myapp');
+      expect(result.stdout).toBe('Unmounted /mnt/myapp\n');
+    });
+
+    it('resolves a relative path against cwd, like `mount unmount`', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      await cmd.executeUmount(['myapp'], '/workspace');
+      expect(unmount).toHaveBeenCalledWith('/workspace/myapp');
+    });
+
+    it('reports a not-mounted path the same way `mount unmount` does', async () => {
+      const unmount = vi.fn(() => {
+        throw new Error("ENOENT: '/mnt/nope' is not a mount point");
+      });
+      const viaMount = await makeMountCommands({ fs: makeFs({ unmount }) }).execute(
+        ['unmount', '/mnt/nope'],
+        '/workspace'
+      );
+      const viaAlias = await makeMountCommands({ fs: makeFs({ unmount }) }).executeUmount(
+        ['/mnt/nope'],
+        '/workspace'
+      );
+      expect(viaAlias.exitCode).toBe(viaMount.exitCode);
+      expect(viaAlias.exitCode).toBe(1);
+      // Only the command prefix differs — the alias names what the user typed.
+      expect(viaMount.stderr).toBe("mount unmount: ENOENT: '/mnt/nope' is not a mount point\n");
+      expect(viaAlias.stderr).toBe("umount: ENOENT: '/mnt/nope' is not a mount point\n");
+    });
+
+    it('forwards --clear-cache in either position', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      const before = await cmd.executeUmount(['--clear-cache', '/mnt/s3'], '/workspace');
+      const after = await cmd.executeUmount(['/mnt/s3', '--clear-cache'], '/workspace');
+      expect(before.exitCode).toBe(0);
+      expect(after.exitCode).toBe(0);
+      // No remote descriptor in the table → the no-op note, not a failure.
+      expect(before.stdout).toBe('Unmounted /mnt/s3 (no remote cache to clear)\n');
+      expect(after.stdout).toBe(before.stdout);
+    });
+
+    it('answers --help without unmounting anything', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      for (const flag of ['--help', '-h']) {
+        const result = await cmd.executeUmount([flag], '/workspace');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('Usage: umount [--clear-cache] <path>');
+        expect(result.stdout).toContain('alias for');
+      }
+      expect(unmount).not.toHaveBeenCalled();
+    });
+
+    it('is listed as an alias in `mount --help`', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const { stdout } = await cmd.execute(['--help'], '/workspace');
+      expect(stdout).toContain('umount <path>');
+    });
+  });
+
   describe('scoop (non-interactive) context', () => {
     it('fails fast with exitCode 1 when invoked from a scoop', async () => {
       const cmd = makeMountCommands({ fs: makeFs(), isScoop: () => true });

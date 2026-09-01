@@ -147,6 +147,7 @@ const DEFAULT_BUILTIN_COMMANDS = [
   'xclip',
   'xsel',
   'mount',
+  'umount',
   'fswatch',
   'agent',
   'mcp',

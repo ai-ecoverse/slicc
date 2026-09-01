@@ -109,7 +109,7 @@ const COMMAND_CATEGORIES = new Map<string, string[]>([
   ['Skills', ['skill', 'upskill']],
   ['Browser & UI', ['serve', 'open', 'imgcat', ...PLAYWRIGHT_COMMAND_NAMES, 'sprinkle']],
   ['Clipboard', ['pbcopy', 'pbpaste', 'xclip', 'xsel']],
-  ['Filesystem', ['mount', 'fswatch']],
+  ['Filesystem', ['mount', 'umount', 'fswatch']],
   ['Scoops & agents', ['agent', 'mcp', 'webhook', 'crontask']],
   ['Process', ['ps', 'kill', 'meminfo']],
 ]);
