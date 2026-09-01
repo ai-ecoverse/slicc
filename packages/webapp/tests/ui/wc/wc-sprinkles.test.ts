@@ -678,6 +678,53 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
     expect(requestFullscreen).toHaveBeenCalledTimes(1);
   });
 
+  it('a dock long-press fullscreens a fixed tool panel after select places it', async () => {
+    // Tool panels ride the same long-press → fullscreen path as sprinkles
+    // (stacked on keyboard `z` / requestPlacedSurfaceFullscreen from #2692).
+    // Select places via zone.placeSurface; long-press must NOT place again —
+    // it only waits for the leaf and fullscreens.
+    const refs = makeRefs();
+    const fs = {
+      exists: async () => false,
+      async *walk(): AsyncGenerator<string> {
+        /* empty */
+      },
+      readFile: async () => '',
+    } as unknown as VirtualFS;
+    const client = {
+      sendSprinkleLick: () => {},
+      getScoops: () => [],
+      stopScoop: () => {},
+    } as unknown as OffscreenClient;
+    const log = { info() {}, warn() {}, error() {}, debug() {} } as unknown as BootStageLogger;
+    await wireWcSprinkles({ refs, client, fs, log });
+
+    const surface = document.createElement('div');
+    surface.setAttribute('surface-id', 'term');
+    const requestFullscreen = vi.fn(() => Promise.resolve());
+    Object.assign(surface, { requestFullscreen });
+    // Model placeSurface landing the leaf on the next frame (select owns it).
+    treeSpies(refs).placeSurface.mockImplementation(() => {
+      requestAnimationFrame(() => {
+        (refs.dockTree as unknown as HTMLElement).appendChild(surface);
+      });
+    });
+
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-select', { detail: { id: 'term' }, bubbles: true })
+    );
+    refs.dock.dispatchEvent(
+      new CustomEvent('slicc-dock-longpress', { detail: { id: 'term' }, bubbles: true })
+    );
+    for (let i = 0; i < 4; i++) {
+      await new Promise((resolve) => requestAnimationFrame(() => resolve(undefined)));
+    }
+
+    expect(treeSpies(refs).placeSurface).toHaveBeenCalledTimes(1);
+    expect(treeSpies(refs).placeSurface).toHaveBeenCalledWith('term', DEFAULT_TOOL_ZONE);
+    expect(requestFullscreen).toHaveBeenCalledTimes(1);
+  });
+
   it('a dock long-press never fullscreens a surface that stays PARKED (placement is the gate)', async () => {
     const refs = makeRefs();
     const fs = {

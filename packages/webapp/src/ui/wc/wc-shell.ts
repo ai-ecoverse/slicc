@@ -359,9 +359,10 @@ function buildWorkbench(): {
  * and sprinkles) is owned entirely by `wireWcSprinkles`' own
  * `slicc-dock-select`/`slicc-dock-collapse`/`slicc-dock-longpress` listeners,
  * which compose leaves directly into the dock-tree (the long-press activates
- * a sprinkle THROUGH the manager and then fullscreens its placed surface —
- * fullscreen on an unplaced surface rejects, the element is `display:none`
- * in parking). This listener only defends the overlay carve-out.
+ * through the select path and then fullscreens the placed surface — sprinkle
+ * or tool panel — via `requestPlacedSurfaceFullscreen`; fullscreen on an
+ * unplaced surface rejects, the element is `display:none` in parking). This
+ * listener only defends the overlay carve-out.
  */
 function wireDockToWorkbench(dock: HTMLElement, overlaySurfaces: ReadonlySet<string>): void {
   dock.addEventListener('slicc-dock-select', (event) => {

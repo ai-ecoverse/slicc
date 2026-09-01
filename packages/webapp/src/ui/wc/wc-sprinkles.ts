@@ -13,6 +13,7 @@ import type { SprinkleSendTarget } from '../../shell/sprinkle-manager-handle.js'
 import type { BootStageLogger } from '../boot/types.js';
 import type { OffscreenClient } from '../offscreen-client.js';
 import type { SprinkleAddOptions, SprinkleManagerCallbacks } from '../sprinkle-manager.js';
+import { requestPlacedSurfaceFullscreen } from './surface-fullscreen.js';
 import type { WcShellRefs } from './wc-shell.js';
 import { defaultRootOf } from './wc-unit-context.js';
 
@@ -491,20 +492,24 @@ export interface WcSprinklesHandle {
 /**
  * Frame budget for the long-press placement wait: ~3s at 60Hz — generous
  * headroom for a cold sprinkle `open()` (VFS read) while staying inside the
- * ~5s transient-user-activation window `requestFullscreen` needs.
+ * ~5s transient-user-activation window `requestFullscreen` needs. Tool-panel
+ * placement is sync, but the same budget covers both so the gesture stays one
+ * path.
  */
 const LONGPRESS_PLACEMENT_FRAMES = 180;
 
 /**
- * Click-and-hold on a sprinkle launcher: its surface goes into BROWSER
- * fullscreen (the real Fullscreen API — the long-press release is the user
- * gesture that authorizes it; Esc / the UA chrome exits natively).
+ * Click-and-hold on a right-rail launcher (sprinkle or fixed tool panel): its
+ * surface goes into BROWSER fullscreen (the real Fullscreen API — the
+ * long-press release is the user gesture that authorizes it; Esc / the UA
+ * chrome exits natively). Same placement gate as keyboard `z`
+ * ({@link requestPlacedSurfaceFullscreen}).
  *
- * This handler does NOT activate the sprinkle itself: the dock's
+ * This handler does NOT activate the surface itself: the dock's
  * `#handleChildLongpress` calls `selectItem(id)` — emitting
  * `slicc-dock-select` — BEFORE re-emitting the long-press, so the select
- * listener above has already started `manager.activate`. Starting a second
- * activation here would race two `open()` calls into competing
+ * listener above has already started `manager.activate` / `placeSurface`.
+ * Starting a second activation here would race two opens into competing
  * containers/renderers. Instead, poll (bounded) until the activation's
  * placement lands in the dock-tree, then fullscreen: a not-yet-placed
  * surface sits parked at `display:none`, and `requestFullscreen()` on a
@@ -513,22 +518,15 @@ const LONGPRESS_PLACEMENT_FRAMES = 180;
  * outlives the frame budget (or the element denies fullscreen), the surface
  * stays open in the tree, just not fullscreen.
  */
-function wireSprinkleLongPressFullscreen(refs: WcShellRefs): void {
+function wireRailLongPressFullscreen(refs: WcShellRefs): void {
   refs.dock.addEventListener('slicc-dock-longpress', (event) => {
     const id = (event as CustomEvent<{ id?: string }>).detail?.id;
-    if (!id || sprinkleNameFromId(id) === null) return;
-    // Escape for a double-quoted attribute selector (CSS.escape is for
-    // identifiers, and jsdom lacks it).
-    const quoted = id.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+    if (!id) return;
+    // Overlay launchers (e.g. browser/tab switcher) never place a dock-tree
+    // leaf — only sprinkles and the four fixed tool panels do.
+    if (sprinkleNameFromId(id) === null && !isToolPanelId(id)) return;
     const tryFullscreen = (framesLeft: number): void => {
-      const surface = refs.dockTree.querySelector<HTMLElement>(`[surface-id="${quoted}"]`);
-      const placed = surface && !surface.closest('.dock-tree__parking');
-      if (placed) {
-        void surface.requestFullscreen?.()?.catch(() => {
-          // Denied / unsupported / gesture expired — the surface stays open.
-        });
-        return;
-      }
+      if (requestPlacedSurfaceFullscreen(refs.dockTree, id)) return;
       if (framesLeft <= 0) return;
       requestAnimationFrame(() => tryFullscreen(framesLeft - 1));
     };
@@ -655,7 +653,7 @@ export async function wireWcSprinkles(deps: WireWcSprinklesDeps): Promise<WcSpri
     const name = sprinkleNameFromId(id);
     if (name) manager.minimize(name);
   });
-  wireSprinkleLongPressFullscreen(refs);
+  wireRailLongPressFullscreen(refs);
 
   let enriching = false;
   const resync = async (): Promise<void> => {
