@@ -96,6 +96,12 @@ async function main(): Promise<void> {
   // full disk Chromium evicts whole buckets — the entire tree, silently —
   // unless the bucket is persistent. Fire-and-forget, never prompts, and the
   // answer improves with site engagement, so it is re-requested every boot.
+  //
+  // Placed ahead of the follower / connect / extension dispatches on purpose,
+  // so it runs on every float rather than only the kernel-owning ones. The
+  // grant is per storage key, they are all SLICC-owned origins, and the ones
+  // with nothing to protect (cherry's partitioned third-party iframe) simply
+  // resolve `false`. Do not gate this behind `runtimeMode`.
   setupStoragePersistence();
 
   // Initialize RUM telemetry for the page/panel realm — `trackShellCommand`,

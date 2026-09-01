@@ -109,6 +109,26 @@ describe('requestStoragePersistence', () => {
     expect(persist).not.toHaveBeenCalled();
   });
 
+  /**
+   * A hardened or proxied `StorageManager` can throw on plain property
+   * access. The capability check must be inside the guard, or this function
+   * rejects — and `setupStoragePersistence` fires it without a `.catch`, so
+   * the rejection would go unhandled and contradict the "never throws" boot
+   * contract this module documents.
+   */
+  it('does not reject when property access on the storage manager throws', async () => {
+    const hostile = new Proxy(
+      {},
+      {
+        get() {
+          throw new Error('hardened');
+        },
+      }
+    ) as StorageStub;
+
+    await expect(requestStoragePersistence(hostile)).resolves.toBe('failed');
+  });
+
   it('reads navigator.storage when no argument is passed', async () => {
     const persist = vi.fn(async () => true);
     await withNavigatorStorage({ persisted: async () => false, persist }, async () => {

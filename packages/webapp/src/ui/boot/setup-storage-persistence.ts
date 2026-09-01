@@ -81,14 +81,19 @@ function resolveStorage(): StorageManagerLike | undefined {
 export async function requestStoragePersistence(
   storage: StorageManagerLike | undefined = resolveStorage()
 ): Promise<StoragePersistenceOutcome> {
-  if (typeof storage?.persist !== 'function') return 'unsupported';
   try {
+    // Inside the guard, not before it: a hardened or proxied
+    // `StorageManager` can throw on plain property access, and a capability
+    // check that rejects would defeat the whole point of this `try`.
+    if (typeof storage?.persist !== 'function') return 'unsupported';
     if (typeof storage.persisted === 'function' && (await storage.persisted())) {
       return 'already-persisted';
     }
     return (await storage.persist()) ? 'granted' : 'denied';
   } catch (err) {
-    log.warn('storage.persist() failed', err);
+    // Deliberately names the check rather than `persist()` — `persisted()`
+    // and the capability probe above reach this same handler.
+    log.warn('storage persistence check failed', err);
     return 'failed';
   }
 }
@@ -105,28 +110,36 @@ let requested = false;
 export function setupStoragePersistence(): void {
   if (requested) return;
   requested = true;
-  void requestStoragePersistence().then((outcome) => {
-    switch (outcome) {
-      case 'granted':
-        log.info('OPFS marked persistent — SLICC data is now exempt from disk-pressure eviction');
-        break;
-      case 'already-persisted':
-        log.debug('OPFS already persistent');
-        break;
-      case 'denied':
-        // Worth a warning: the VFS is a live eviction candidate until this
-        // flips, and `df` reports the same flag if anyone goes looking.
-        log.warn(
-          'Browser declined persistent storage — SLICC data can be evicted if the disk fills up'
-        );
-        break;
-      case 'unsupported':
-        log.debug('navigator.storage.persist() unavailable in this runtime');
-        break;
-      case 'failed':
-        break;
-    }
-  });
+  void requestStoragePersistence()
+    .then((outcome) => {
+      switch (outcome) {
+        case 'granted':
+          log.info('OPFS marked persistent — SLICC data is now exempt from disk-pressure eviction');
+          break;
+        case 'already-persisted':
+          log.debug('OPFS already persistent');
+          break;
+        case 'denied':
+          // Worth a warning: the VFS is a live eviction candidate until this
+          // flips, and `df` reports the same flag if anyone goes looking.
+          log.warn(
+            'Browser declined persistent storage — SLICC data can be evicted if the disk fills up'
+          );
+          break;
+        case 'unsupported':
+          log.debug('navigator.storage.persist() unavailable in this runtime');
+          break;
+        case 'failed':
+          // Already logged with the underlying error inside
+          // `requestStoragePersistence` — saying it twice adds nothing.
+          break;
+      }
+    })
+    // Belt and braces. `requestStoragePersistence` already fails closed, so
+    // the only way here is the logging above throwing — and an unhandled
+    // rejection on the boot path lands in `main()`'s catch and puts the user
+    // on the recovery screen over a storage hint.
+    .catch(() => {});
 }
 
 /** Test-only: clear the once-per-page latch. */
