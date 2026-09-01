@@ -118,6 +118,8 @@ const STYLE = `
 .err{
   margin:2px 0 16px;
   max-width:85%;
+  min-width:0;
+  overflow:hidden;
   border:1px solid var(--err-border);
   background:var(--err-bg);
   border-radius:12px;
@@ -134,7 +136,12 @@ const STYLE = `
 .eh .ic{display:inline-flex;flex:0 0 auto;align-items:center;color:var(--err-head);}
 .eh .ic svg{display:block;}
 
-.eb{font-size:12.5px;color:var(--ink);line-height:1.4;}
+.eb{
+  font-size:12.5px;color:var(--ink);line-height:1.4;
+  /* API errors often arrive as one long JSON line. Break inside the card
+     instead of dragging the chat column sideways (mirrors slicc-lick-card). */
+  min-width:0;overflow-wrap:anywhere;word-break:break-word;
+}
 .eb ::slotted(b),.eb b{font-weight:600;}
 
 .foot{display:flex;justify-content:flex-end;margin-top:8px;}

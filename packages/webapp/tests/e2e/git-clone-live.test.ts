@@ -31,31 +31,9 @@
 
 import { expect, test } from './fixtures.js';
 import { gotoLeader, seedSkipSwReload, waitForSW } from './helpers.js';
+import { execInTerminal } from './two-instance-helpers.js';
 
 const CLONE_URL = 'https://github.com/ai-ecoverse/skills.git';
-
-interface ExecResult {
-  stdout: string;
-  stderr: string;
-  exitCode: number;
-}
-
-declare global {
-  interface Window {
-    __slicc_terminal_view?: {
-      executeCommandInTerminal(cmd: string): Promise<ExecResult>;
-    };
-  }
-}
-
-/** Run a single command through the worker shell via the published view. */
-async function exec(page: import('@playwright/test').Page, cmd: string): Promise<ExecResult> {
-  return page.evaluate(async (command: string) => {
-    const view = window.__slicc_terminal_view;
-    if (!view) throw new Error('terminal view not published yet');
-    return view.executeCommandInTerminal(command);
-  }, cmd);
-}
 
 test.describe('live git clone (real network)', () => {
   test('clones ai-ecoverse/skills and surfaces the real result', async ({ page }, testInfo) => {
@@ -78,29 +56,15 @@ test.describe('live git clone (real network)', () => {
       timeout: 20_000,
     });
 
-    // Activate the term surface via the dock rail's documented entry point;
-    // `selectItem` fires `slicc-dock-select`, which `wc-sprinkles.ts` routes
-    // into the dock-tree, opening the workbench AND firing the lazy mount
-    // that publishes `__slicc_terminal_view`.
-    await page.evaluate(() => {
-      const dock = document.querySelector('slicc-dock') as
-        | (HTMLElement & { selectItem?: (id: string) => void })
-        | null;
-      if (!dock?.selectItem) throw new Error('<slicc-dock>.selectItem(id) unavailable');
-      dock.selectItem('term');
-    });
-    await page.waitForFunction(() => window.__slicc_terminal_view != null, null, {
-      timeout: 30_000,
-    });
-
     // Run the real clone into a clean target dir. Pin to the immutable
     // `slicc-e2e-fixture` tag (maps to an isomorphic-git ref; --single-branch
     // is the clone default) so the tree — and the asserted paths below — never
-    // move.
+    // move. `execInTerminal` opens the workbench term via the shared helper
+    // (90s lazy-mount budget) before running each command.
     const targetDir = '/workspace/skills-live-clone';
     const cloneCmd = `git clone --branch slicc-e2e-fixture --single-branch ${CLONE_URL} ${targetDir}`;
-    await exec(page, `rm -rf ${targetDir}`);
-    const clone = await exec(page, cloneCmd);
+    await execInTerminal(page, `rm -rf ${targetDir}`);
+    const clone = await execInTerminal(page, cloneCmd);
 
     // Attach the FULL captured output to the report so the failure message is
     // actionable — the real inner cause, not an opaque wrapper.
@@ -128,7 +92,7 @@ test.describe('live git clone (real network)', () => {
     // A representative DEEP regular file must exist on the VFS. Verified to
     // exist in ai-ecoverse/skills@main (skills/suno/references/endpoints.md).
     const deepFile = `${targetDir}/skills/suno/references/endpoints.md`;
-    const deep = await exec(page, `[ -f ${deepFile} ] && echo FILE_OK`);
+    const deep = await execInTerminal(page, `[ -f ${deepFile} ] && echo FILE_OK`);
     expect(deep.exitCode, `[ -f ${deepFile} ] failed: ${JSON.stringify(deep)}`).toBe(0);
     expect(deep.stdout).toContain('FILE_OK');
 
@@ -136,7 +100,7 @@ test.describe('live git clone (real network)', () => {
     // symlink, not materialized as a regular file. Verified to be a mode-120000
     // entry in ai-ecoverse/skills@main (tiles/advanced/skills/slack).
     const symlink = `${targetDir}/tiles/advanced/skills/slack`;
-    const link = await exec(page, `[ -L ${symlink} ] && readlink ${symlink}`);
+    const link = await execInTerminal(page, `[ -L ${symlink} ] && readlink ${symlink}`);
     expect(link.exitCode, `[ -L ${symlink} ] failed: ${JSON.stringify(link)}`).toBe(0);
     expect(link.stdout.trim(), `readlink ${symlink} target`).not.toBe('');
   });
