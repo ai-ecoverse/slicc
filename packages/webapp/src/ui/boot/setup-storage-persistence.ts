@@ -135,10 +135,14 @@ export function setupStoragePersistence(): void {
           break;
       }
     })
-    // Belt and braces. `requestStoragePersistence` already fails closed, so
-    // the only way here is the logging above throwing — and an unhandled
-    // rejection on the boot path lands in `main()`'s catch and puts the user
-    // on the recovery screen over a storage hint.
+    // Belt and braces: `requestStoragePersistence` already fails closed, so
+    // the only way to reach here is the logging above throwing.
+    //
+    // This promise is detached — `main.ts` calls `setupStoragePersistence()`
+    // without awaiting it — so a rejection does NOT reach `main()`'s catch.
+    // It surfaces as a global `unhandledrejection` instead: console noise on
+    // every boot, and an error beacon that would misattribute a storage hint
+    // as a page fault. Cheap to prevent, invisible to diagnose.
     .catch(() => {});
 }
 
