@@ -77,13 +77,16 @@ async function diffStagedChanges(
   ref = 'HEAD'
 ): Promise<FileChange[]> {
   const changes: FileChange[] = [];
+  const cache = {};
 
   await git.walk({
     fs: ctx.lfs,
     dir: cwd,
+    cache,
     trees: [git.TREE({ ref }), git.STAGE()],
     map: async (filepath, [headEntry, stageEntry]) => {
-      if (filepath === '.' || filepath.startsWith('.git')) return undefined;
+      // `.git` itself is never tracked; a tracked `.gitignore` is.
+      if (filepath === '.' || filepath === '.git' || filepath.startsWith('.git/')) return undefined;
       if (!matchesPathspec(filepath, pathspecs)) return undefined;
       const headType = headEntry ? await headEntry.type() : undefined;
       const stageType = stageEntry ? await stageEntry.type() : undefined;
@@ -91,10 +94,11 @@ async function diffStagedChanges(
 
       const headOid = headEntry ? await headEntry.oid() : undefined;
       const stageOid = stageEntry ? await stageEntry.oid() : undefined;
+      // Unchanged between the tree and the index: no object read at all.
       if (headOid === stageOid) return undefined;
 
-      const oldText = await readBlobText(ctx, cwd, headOid);
-      const newText = await readBlobText(ctx, cwd, stageOid);
+      const oldText = await readBlobText(ctx, cwd, headOid, cache);
+      const newText = await readBlobText(ctx, cwd, stageOid, cache);
 
       changes.push({ filepath, oldContent: oldText, newContent: newText });
       return undefined;
@@ -120,59 +124,88 @@ async function diffCommitIndex(
   return formatChanges(changes, opts);
 }
 
-/** Collect unstaged changes by comparing index vs workdir. */
+/**
+ * Collect unstaged changes by comparing index vs workdir.
+ *
+ * The workdir bytes of a tracked file are read exactly once and hashed with
+ * `git.hashBlob`; the object store is only touched for paths whose hash differs
+ * from the index OID. A clean working tree therefore reads zero blobs — the
+ * previous implementation pulled *every* tracked blob out of the packfile and
+ * compared the decoded strings (#2719).
+ *
+ * Untracked subtrees are pruned from the walk (`return null`), so ignored
+ * directories (`node_modules`, `.git`) are never enumerated, and `refresh:
+ * false` keeps this read-only command from rewriting `.git/index` (#2708).
+ */
 async function diffWorkdirChanges(
   ctx: GitCommandContext,
   cwd: string,
   pathspecs: string[] = []
 ): Promise<FileChange[]> {
   const changes: FileChange[] = [];
+  const cache = {};
 
-  // Collect all index entries with their OIDs
-  const indexEntries = new Map<string, string>();
   await git.walk({
     fs: ctx.lfs,
     dir: cwd,
-    trees: [git.STAGE()],
-    map: async (filepath, [entry]) => {
-      if (filepath === '.' || filepath.startsWith('.git') || !entry) return undefined;
-      const type = await entry.type();
-      if (type !== 'blob') return undefined;
-      const oid = await entry.oid();
-      if (oid) indexEntries.set(filepath, oid);
-      return undefined;
+    cache,
+    trees: [git.STAGE(), git.WORKDIR({ refresh: false })],
+    map: async (filepath, [stageEntry, workEntry]) => {
+      if (filepath === '.') return undefined;
+      // Not in the index: untracked (or `.git` itself). `git diff` never
+      // reports untracked paths, so prune the whole subtree.
+      if (!stageEntry) return null;
+      const stageType = await stageEntry.type();
+      if (stageType === 'tree') return undefined;
+      // Gitlinks and other non-blob entries have no text to diff.
+      if (stageType !== 'blob') return null;
+      // Pathspecs are applied before any I/O.
+      if (!matchesPathspec(filepath, pathspecs)) return null;
+
+      const stageOid = await stageEntry.oid();
+      const workBytes = await readWorkdirBytes(workEntry);
+      // Unmodified: the workdir hash matches the index OID, so the blob never
+      // has to be read out of the pack.
+      if (workBytes && stageOid && (await git.hashBlob({ object: workBytes })).oid === stageOid) {
+        return null;
+      }
+
+      const oldContent = await readBlobText(ctx, cwd, stageOid, cache);
+      const newContent = workBytes ? new TextDecoder().decode(workBytes) : '';
+      if (oldContent !== newContent) changes.push({ filepath, oldContent, newContent });
+      return null;
     },
   });
 
-  // Compare each index entry with workdir content directly
-  for (const [file, stageOid] of indexEntries) {
-    if (!matchesPathspec(file, pathspecs)) continue;
-    const oldText = await readBlobText(ctx, cwd, stageOid);
-
-    let newText = '';
-    try {
-      newText = await ctx.fs.readTextFile(`${cwd}/${file}`);
-    } catch {
-      /* file deleted in workdir */
-    }
-
-    if (oldText !== newText) {
-      changes.push({ filepath: file, oldContent: oldText, newContent: newText });
-    }
-  }
-
+  // The walk visits siblings concurrently; sort so the output is stable.
+  changes.sort((a, b) => (a.filepath < b.filepath ? -1 : a.filepath > b.filepath ? 1 : 0));
   return changes;
+}
+
+/**
+ * Workdir bytes for a walker entry, or undefined when the path is gone,
+ * unreadable, or not a file (`git diff` renders those as a deletion).
+ */
+async function readWorkdirBytes(entry: git.WalkerEntry | null): Promise<Uint8Array | undefined> {
+  if (!entry) return undefined;
+  try {
+    if ((await entry.type()) !== 'blob') return undefined;
+    return (await entry.content()) ?? undefined;
+  } catch {
+    return undefined;
+  }
 }
 
 /** Read a blob as text by OID, returning empty string if OID is undefined or unreadable. */
 async function readBlobText(
   ctx: GitCommandContext,
   cwd: string,
-  oid: string | undefined
+  oid: string | undefined,
+  cache?: object
 ): Promise<string> {
   if (!oid) return '';
   try {
-    const { blob } = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid });
+    const { blob } = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid, cache });
     return new TextDecoder().decode(blob);
   } catch {
     return '';
@@ -208,8 +241,12 @@ async function diffResolvedTrees(
   await git.walk({
     fs: ctx.lfs,
     dir: cwd,
+    cache: {},
     trees: [git.TREE({ ref: resolvedRef1 }), git.TREE({ ref: resolvedRef2 })],
     map: async (filepath, [entry1, entry2]) => {
+      // Identical subtrees share an OID: prune instead of reading every tree
+      // object below them.
+      if (await isIdenticalSubtree(entry1, entry2)) return null;
       const change = await compareWalkerEntries(filepath, entry1, entry2, opts.pathspecs ?? []);
       if (change) changes.push(change);
       return undefined;
@@ -231,14 +268,20 @@ async function diffCommitWorkdir(
   } catch {
     return ambiguousRevision(ref);
   }
-  const tracked = new Set(await git.listFiles({ fs: ctx.lfs, dir: cwd }));
+  const cache = {};
+  const tracked = new Set<string>(await git.listFiles({ fs: ctx.lfs, dir: cwd, cache }));
+  const trackedDirs = ancestorDirs(tracked);
   const changes: FileChange[] = [];
   await git.walk({
     fs: ctx.lfs,
     dir: cwd,
-    trees: [git.TREE({ ref: resolved }), git.WORKDIR()],
+    cache,
+    // `refresh: false`: a read-only diff must not rewrite `.git/index` (#2708).
+    trees: [git.TREE({ ref: resolved }), git.WORKDIR({ refresh: false })],
     map: async (filepath, [oldEntry, workEntry]) => {
-      if (!oldEntry && !tracked.has(filepath)) return undefined;
+      // Neither in the commit nor in the index: an untracked path (including
+      // `.git` itself). Prune so the walk never enumerates it.
+      if (!oldEntry && !tracked.has(filepath) && !trackedDirs.has(filepath)) return null;
       const change = await compareWalkerEntries(
         filepath,
         oldEntry,
@@ -250,6 +293,30 @@ async function diffCommitWorkdir(
     },
   });
   return formatChanges(changes, opts);
+}
+
+/** Every directory that has at least one tracked file below it. */
+function ancestorDirs(files: Iterable<string>): Set<string> {
+  const dirs = new Set<string>();
+  for (const file of files) {
+    let slash = file.indexOf('/');
+    while (slash > 0) {
+      dirs.add(file.slice(0, slash));
+      slash = file.indexOf('/', slash + 1);
+    }
+  }
+  return dirs;
+}
+
+/** True when both entries are trees with the same OID (identical subtrees). */
+async function isIdenticalSubtree(
+  entry1: git.WalkerEntry | null,
+  entry2: git.WalkerEntry | null
+): Promise<boolean> {
+  if (!entry1 || !entry2) return false;
+  if ((await entry1.type()) !== 'tree' || (await entry2.type()) !== 'tree') return false;
+  const oid1 = await entry1.oid();
+  return Boolean(oid1) && oid1 === (await entry2.oid());
 }
 
 async function compareWalkerEntries(
