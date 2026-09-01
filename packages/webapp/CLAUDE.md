@@ -37,6 +37,9 @@ Per-subsystem file paths + invariants live in
 - UI + layouts — `src/ui/` and `ui/wc/` (also `docs/layouts.md`)
 - Skills — `src/skills/`; Sprinkles + Dips — `ui/sprinkle-*.ts`, `ui/dip.ts`
 - Stale-asset recovery — `setup-preload-error-reload.ts` + `stale-asset-channel.ts`
+- Storage persistence — `boot/setup-storage-persistence.ts` (OPFS is _evictable_ best-effort
+  storage; `navigator.storage.persist()` is the only opt-out and is page-realm only —
+  `docs/pitfalls.md`)
 - File mentions / preview + base64 payload chips —
   [`docs/webapp-details.md`](../../docs/webapp-details.md) (catches: confirm-then-linkify
   only, never a streaming bubble; `getMimeType()` SERVES vs `sniffFileType()` READS)

@@ -500,6 +500,49 @@ at the bare minimum ZenFS Viewer needs and
 copy; the patch is gone. A presence check is `typeof globalThis.__zenfs__ !==
 'undefined'`, and the version lives in the `_version` export, not on the global.
 
+## OPFS Is Evictable: Chrome Deletes It To Free Disk Space
+
+**Files**: `packages/webapp/src/ui/boot/setup-storage-persistence.ts`,
+`packages/webapp/src/shell/supplemental-commands/df-command.ts`.
+
+OPFS is **best-effort** quota storage, not durable storage. Chromium's
+`QuotaTemporaryStorageEvictor` runs every 30 minutes (first round 5 minutes
+after browser startup) and, whenever free space is below
+`min(2 GiB, 10% of the volume)`, deletes whole buckets until the shortage is
+covered — LRU by `last_accessed`, and only rows with `persistent = 0`
+(`storage/browser/quota/quota_database.cc`). "Whole bucket" means the origin's
+**entire OPFS tree**: workspace, sessions, memory, git checkouts, gone at once,
+silently, while the tab keeps running. There is no event, no partial trim, and
+nothing in the page can veto it after the fact. A second arm evicts on
+`usage > 70% of pool_size` (56% of the volume) regardless of free space.
+
+`navigator.storage.persist()` is the only lever the page has, and it is a real
+one: a granted request marks the default bucket persistent and the eviction
+query skips it outright. `setupStoragePersistence()` therefore runs from
+`main.ts` on every boot, fire-and-forget.
+
+Load-bearing details, all of them easy to get wrong:
+
+- **`persist()` is `[Exposed=Window]`.** `persisted()`, `estimate()` and
+  `getDirectory()` are also exposed to workers; `persist()` is not. It has to
+  be called from the page realm — the kernel worker cannot do it.
+- **It never prompts in Chromium.** The decision comes from site engagement,
+  bookmarks, notification permission and PWA installation. A `false` is not a
+  user refusal, so it is re-requested every boot: the answer changes as
+  engagement accumulates. (Firefox is the engine that would prompt.)
+- **Never `await` it onto the boot path.** `setupStoragePersistence()` returns
+  `void` on purpose, and swallows rejections — an unhandled one would surface
+  in `main()`'s catch and drop the user on the boot recovery screen over a
+  storage hint.
+- **Measure free space with `statvfs` / `f_bavail`** if you ever compare
+  against these thresholds from outside the browser. That is what
+  `base::SysInfo::AmountOfFreeDiskSpace` uses; macOS'
+  `volumeAvailableCapacityForImportantUsageKey` adds purgeable space the quota
+  manager never sees, so it reports headroom Chromium will not honour.
+
+`df` (and `diskutil info`) report the live flag via `storage.persisted()`, so
+that is where to look when a session is suspected of having been evicted.
+
 ## CDP Transport: Extension Mode
 
 **File**: `packages/webapp/src/cdp/extension-bridge-transport.ts`
