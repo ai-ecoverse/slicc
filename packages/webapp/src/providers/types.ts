@@ -112,6 +112,26 @@ export interface DeviceCodePromptInput {
  */
 export type DeviceCodePrompter = (input: DeviceCodePromptInput) => Promise<'continue' | 'cancel'>;
 
+/**
+ * Result of {@link ProviderConfig.onValidateToken} — whether the provider
+ * itself still accepts the stored token, as opposed to whether we merely hold
+ * one that has not hit its recorded expiry.
+ */
+export interface OAuthTokenValidation {
+  /**
+   * `'accepted'` — the provider answered an authenticated call successfully.
+   * `'rejected'` — the provider refused the credential (401/403); a new login
+   * is required, silent renewal cannot help.
+   * `'unknown'` — the check itself could not run (offline, 5xx, no stored
+   * token). Says nothing about the token.
+   */
+  status: 'accepted' | 'rejected' | 'unknown';
+  /** Identity the provider resolved the token to, when the check returned one. */
+  userName?: string;
+  /** Short human-readable reason, e.g. `HTTP 401 Unauthorized`. */
+  detail?: string;
+}
+
 /** Options passed to onOAuthLogin from the caller (e.g. oauth-token command). */
 export interface OAuthLoginOptions {
   /**
@@ -292,6 +312,16 @@ export interface ProviderConfig {
    * (e.g. user must re-authenticate).
    */
   onSilentRenew?: () => Promise<string | null>;
+  /**
+   * Optional: ask the provider whether it still accepts the stored token, by
+   * making one cheap authenticated call. Exists because a locally stored token
+   * that has not reached its recorded expiry can still have been invalidated
+   * upstream (revoked grant, ended session) — local expiry is not proof of
+   * validity, and `oauth-token --list` / `--renew` can only report what is
+   * stored. `oauth-token --check <id>` surfaces this. Providers that have no
+   * cheap identity endpoint simply omit it.
+   */
+  onValidateToken?: () => Promise<OAuthTokenValidation>;
   /** Return a valid access token, renewing only when it is expired or near expiry. */
   getValidAccessToken?: () => Promise<string>;
   /**

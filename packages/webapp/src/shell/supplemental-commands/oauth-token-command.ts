@@ -10,6 +10,14 @@ type ProviderSettings = typeof import('../../providers/account-store.js');
 type ProviderConfig = NonNullable<ReturnType<ProviderRegistry['getRegisteredProviderConfig']>>;
 type ValueResult<T> = { ok: true; value: T } | { ok: false; result: CommandResult };
 
+/**
+ * Exit code reserved for "only a human can fix this": the stored credential
+ * has lapsed and no amount of retrying will restore it — someone has to run
+ * `oauth-token <id> --force-login` and approve the consent window. Callers
+ * branch on it instead of parsing prose (#2695). Every other failure is 1.
+ */
+const EXIT_NEEDS_INTERACTIVE_LOGIN = 3;
+
 /** Value-taking flags — same list passed to {@link isHelpRequest} as `valueFlags`. */
 const OAUTH_TOKEN_VALUE_FLAGS = [
   '--provider',
@@ -23,6 +31,7 @@ const OAUTH_TOKEN_VALUE_FLAGS = [
 /** Standalone flags accepted in any position. */
 const OAUTH_TOKEN_BOOL_FLAGS = [
   '--list',
+  '--check',
   '--expire',
   '--renew',
   '--intercept',
@@ -41,13 +50,20 @@ Provider mode:
   oauth-token <providerId>        Get token for a specific provider
   oauth-token --provider <id>     Same, using flag form
   oauth-token                     Get token for the currently selected provider
-  oauth-token --list              List OAuth providers with status
+  oauth-token --list              List OAuth providers and the token held for
+                                  each. Local state only — see "Held vs working".
+  oauth-token --check [<id>]      Ask the provider whether it still accepts the
+                                  stored token, with one cheap authenticated
+                                  call. The only surface that reports whether a
+                                  token WORKS.
   oauth-token --scope <scopes>    Request specific OAuth scopes (comma-separated)
   oauth-token --force-login       Always run the OAuth login flow, ignoring any
-                                  cached token
+                                  cached token. Opens a consent window, so a
+                                  human has to be at the keyboard.
   oauth-token --renew [<id>]      Force a silent token renewal now (onSilentRenew),
-                                  bypassing the expiry gate. Reports success and
-                                  the new expiry.
+                                  bypassing the expiry gate. Reports success and the
+                                  new expiry. If the upstream session has ended this
+                                  cannot succeed — fall back to --force-login.
 
 Testing:
   oauth-token <providerId> --expire
@@ -73,6 +89,26 @@ Declarative intercept mode (no provider needed):
 Common:
   --help                          Show this help message
 
+Held vs working:
+  A stored token that has not reached its recorded expiry can still have been
+  invalidated upstream (revoked grant, ended SSO session). Local expiry is not
+  proof of validity, so --list and --renew report what is HELD, and only
+  --check asks the provider whether it still WORKS.
+
+When a token stops working, escalate in this order:
+  1. oauth-token --check <id>     Does the provider still accept it?
+  2. oauth-token --renew <id>     Try a silent renewal (no user interaction).
+  3. oauth-token <id> --force-login
+                                  Re-consent. Opens a window; needs a human, so
+                                  an unattended agent should stop and ask.
+
+Exit codes:
+  0  success
+  1  the command could not run or its outcome is unknown (bad usage, unknown
+     provider, network failure)
+  3  a human must complete an interactive login — run
+     "oauth-token <id> --force-login". Retrying will not help.
+
 If no valid token exists or the token is expired (provider mode), the
 OAuth login flow is triggered automatically. The raw access token is
 printed to stdout on success.
@@ -88,6 +124,7 @@ Use --force-login to always log in, with or without --scope.
 
 Examples:
   oauth-token adobe
+  oauth-token --check github
   oauth-token github --scope "repo,models:read"
   oauth-token github --scope repo --force-login
   oauth-token --from-file /workspace/.slicc/oauth/xai.json
@@ -128,6 +165,7 @@ async function executeOAuthTokenCommand(
       settings.getOAuthAccountInfo
     );
   }
+  if (parsed.bools.has('--check')) return runUpstreamCheck(parsed.positionals);
   if (parsed.bools.has('--expire')) return runExpire(parsed.positionals);
   if (parsed.bools.has('--renew')) return runSilentRenew(parsed.positionals);
   if (parsed.values.has('--from-file') || parsed.bools.has('--intercept')) {
@@ -245,7 +283,11 @@ function cachedTokenResult(
 
 function maskedTokenResult(providerId: string, masked: string | undefined): CommandResult {
   if (!masked) {
-    return errResult(`oauth-token: no masked value for ${providerId} (try logging in again)`);
+    // Never say this on stdout: the caller expects a token there, and a
+    // sentence is long enough to pass a naive "looks like a token" check.
+    return errResult(
+      `oauth-token: no usable token for ${providerId}; run: oauth-token ${providerId} --force-login`
+    );
   }
   return { stdout: `${masked}\n`, stderr: '', exitCode: 0 };
 }
@@ -347,8 +389,9 @@ async function trySilentRenew(onSilentRenew: () => Promise<string | null>): Prom
   }
 }
 
-function resolveSilentRenewProviderId(
+function resolveProviderIdWithHook(
   positionals: readonly string[],
+  hook: 'onSilentRenew' | 'onValidateToken',
   getSelectedProvider: ProviderSettings['getSelectedProvider'],
   getRegisteredProviderConfig: ProviderRegistry['getRegisteredProviderConfig'],
   getRegisteredProviderIds: ProviderRegistry['getRegisteredProviderIds']
@@ -357,8 +400,83 @@ function resolveSilentRenewProviderId(
   if (explicit) return explicit;
 
   const selected = getSelectedProvider();
-  if (getRegisteredProviderConfig(selected)?.onSilentRenew) return selected;
-  return getRegisteredProviderIds().find((id) => getRegisteredProviderConfig(id)?.onSilentRenew);
+  if (getRegisteredProviderConfig(selected)?.[hook]) return selected;
+  return getRegisteredProviderIds().find((id) => getRegisteredProviderConfig(id)?.[hook]);
+}
+
+/**
+ * Ask the provider whether it still accepts the stored token, via its
+ * `onValidateToken` hook (one cheap authenticated call). This is the only
+ * surface that answers "does the token WORK" — `--list` and `--renew` can
+ * only report what is stored locally, and a token inside its recorded expiry
+ * is routinely rejected upstream after a revoked grant or ended session.
+ */
+async function runUpstreamCheck(positionals: readonly string[]): Promise<CommandResult> {
+  const { getSelectedProvider, getOAuthAccountInfo } = await import(
+    '../../providers/account-store.js'
+  );
+  const { getRegisteredProviderConfig, getRegisteredProviderIds } = await import(
+    '../../providers/index.js'
+  );
+
+  const providerId = resolveProviderIdWithHook(
+    positionals,
+    'onValidateToken',
+    getSelectedProvider,
+    getRegisteredProviderConfig,
+    getRegisteredProviderIds
+  );
+  if (!providerId) {
+    return errResult('oauth-token --check: no provider supports an upstream token check');
+  }
+  const config = getRegisteredProviderConfig(providerId);
+  if (!config) {
+    return errResult(`oauth-token --check: unknown provider "${providerId}"`);
+  }
+  if (!config.onValidateToken) {
+    return errResult(
+      `oauth-token --check: provider "${providerId}" cannot be checked upstream ` +
+        '(no onValidateToken hook); only locally stored state is known.'
+    );
+  }
+
+  const stored = getOAuthAccountInfo(providerId);
+  const lines = [
+    `oauth-token --check ${providerId}`,
+    `  stored token: ${describeStoredToken(stored)}`,
+  ];
+  if (!stored) {
+    lines.push('  upstream check: skipped — nothing to check', ...forceLoginRemedy(providerId));
+    return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: EXIT_NEEDS_INTERACTIVE_LOGIN };
+  }
+
+  const validation = await config.onValidateToken().catch((err: unknown) => ({
+    status: 'unknown' as const,
+    detail: err instanceof Error ? err.message : String(err),
+  }));
+
+  if (validation.status === 'accepted') {
+    const who = validation.userName ? ` (as ${validation.userName})` : '';
+    lines.push(`  upstream check: ACCEPTED${who} — the provider honoured the token`);
+    return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+  }
+  if (validation.status === 'rejected') {
+    lines.push(
+      `  upstream check: REJECTED — the provider refused the token${detailSuffix(validation.detail)}`,
+      '    Silent renewal cannot repair this; the grant or session has ended.',
+      ...forceLoginRemedy(providerId)
+    );
+    return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: EXIT_NEEDS_INTERACTIVE_LOGIN };
+  }
+  lines.push(
+    `  upstream check: UNKNOWN — the check itself could not run${detailSuffix(validation.detail)}`,
+    '    This says nothing about the token. Retry when the provider is reachable.'
+  );
+  return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 1 };
+}
+
+function detailSuffix(detail: string | undefined): string {
+  return detail ? ` (${detail})` : '';
 }
 
 /** Debug aid: back-date only the locally stored expiry so the next network op renews. */
@@ -369,8 +487,9 @@ async function runExpire(positionals: readonly string[]): Promise<CommandResult>
   const { getRegisteredProviderConfig, getRegisteredProviderIds } = await import(
     '../../providers/index.js'
   );
-  const providerId = resolveSilentRenewProviderId(
+  const providerId = resolveProviderIdWithHook(
     positionals,
+    'onSilentRenew',
     getSelectedProvider,
     getRegisteredProviderConfig,
     getRegisteredProviderIds
@@ -422,8 +541,9 @@ async function runSilentRenew(
     '../../providers/index.js'
   );
 
-  const providerId = resolveSilentRenewProviderId(
+  const providerId = resolveProviderIdWithHook(
     positionals,
+    'onSilentRenew',
     getSelectedProvider,
     getRegisteredProviderConfig,
     getRegisteredProviderIds
@@ -444,7 +564,7 @@ async function runSilentRenew(
   const beforeToken = before?.token;
 
   const lines: string[] = [`oauth-token --renew ${providerId}`];
-  lines.push(`  before: ${describeAccount(before)}`);
+  lines.push(`  stored token: ${describeStoredToken(before)}`);
 
   let result: string | null = null;
   let threw: string | null = null;
@@ -454,37 +574,74 @@ async function runSilentRenew(
     threw = err instanceof Error ? err.message : String(err);
   }
 
-  if (threw) {
-    lines.push(`  silent renewal: ERROR — ${threw}`);
-  } else if (result) {
+  if (result) {
     const after = getOAuthAccountInfo(providerId);
     const changed = Boolean(beforeToken && after?.token && beforeToken !== after.token);
     lines.push(`  silent renewal: SUCCESS${changed ? ' — token refreshed' : ' (token unchanged)'}`);
-    lines.push(`  after:  ${describeAccount(after)}`);
-  } else {
-    lines.push('  silent renewal: FAILED (onSilentRenew returned null)');
-    lines.push('  → no window should have appeared. Open DevTools console and');
-    lines.push('    look for "[oauth-service] Extension OAuth error" / "[adobe]" to see');
-    lines.push('    the IMS/Chrome reason (e.g. login_required).');
+    lines.push(`  renewed token: ${describeStoredToken(after)}`);
+    return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
   }
 
-  return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: result ? 0 : 1 };
+  lines.push(...describeRenewalFailure(threw), ...forceLoginRemedy(providerId));
+  // A renewal the provider declined is not a malfunction — it is the signal
+  // that only a human can restore this credential, so it gets its own exit
+  // code. A renewal that THREW may be transient (offline, 5xx) and stays 1.
+  const exitCode = threw ? 1 : EXIT_NEEDS_INTERACTIVE_LOGIN;
+  return { stdout: lines.join('\n') + '\n', stderr: '', exitCode };
 }
 
-function describeAccount(
+/**
+ * Why the renewal did not produce a token. `onSilentRenew` returning null is
+ * the common case and means the provider refused to reissue without user
+ * interaction — usually `login_required`, i.e. the upstream session ended.
+ */
+function describeRenewalFailure(threw: string | null): string[] {
+  if (threw) return [`  silent renewal: ERROR — ${threw}`];
+  return [
+    '  silent renewal: FAILED — the provider declined to reissue a token without',
+    '    user interaction (typically login_required: the upstream session has',
+    '    ended). Note that a stored token inside its local expiry can already be',
+    '    rejected upstream; local expiry is not proof of validity.',
+  ];
+}
+
+/**
+ * The one command that fixes a lapsed session. Named explicitly because the
+ * primary caller is an agent that cannot read the browser console, so a
+ * diagnostics-only hint reads as "the OAuth service is broken" (#2695).
+ */
+function forceLoginRemedy(providerId: string): string[] {
+  return [
+    '',
+    `  → Fix: oauth-token ${providerId} --force-login`,
+    '    Opens a consent window, so a human has to be at the keyboard: an',
+    '    unattended agent should stop and ask the user to re-authorise rather',
+    '    than retrying or probing further.',
+    '    (Diagnostics, if a human is present: browser DevTools console,',
+    '     "[oauth-service] Extension OAuth error".)',
+  ];
+}
+
+/**
+ * Describe the LOCALLY stored token. Deliberately never says "valid" — this
+ * surface only knows that a token is held and what expiry was recorded with
+ * it, never whether the provider still accepts it (#2695).
+ */
+function describeStoredToken(
   info: { expiresAt?: number; expired: boolean } | null | undefined
 ): string {
-  if (!info) return 'no token';
-  if (info.expired) return 'expired';
-  if (info.expiresAt) {
-    const rem = info.expiresAt - Date.now();
-    if (rem > 0) {
-      const h = Math.floor(rem / 3600000);
-      const m = Math.floor((rem % 3600000) / 60000);
-      return h > 0 ? `valid, expires in ${h}h ${m}m` : `valid, expires in ${m}m`;
-    }
-  }
-  return 'valid';
+  if (!info) return 'none stored';
+  if (info.expired) return 'present, past its local expiry — renewal needed';
+  return `present, ${describeLocalExpiry(info.expiresAt)}, not validated upstream`;
+}
+
+function describeLocalExpiry(expiresAt: number | undefined): string {
+  if (!expiresAt) return 'no local expiry recorded';
+  const remaining = expiresAt - Date.now();
+  if (remaining <= 0) return 'past its local expiry';
+  const hours = Math.floor(remaining / 3600000);
+  const minutes = Math.floor((remaining % 3600000) / 60000);
+  return `local expiry in ${hours > 0 ? `${hours}h ${minutes}m` : `${minutes}m`}`;
 }
 
 /**
@@ -631,30 +788,39 @@ function listProviders(
   }
 
   const lines: string[] = [];
+  let anyHeld = false;
   for (const id of oauthIds) {
     const info = getOAuthAccountInfo(id);
     if (!info) {
       lines.push(`${id} (no token)`);
-    } else if (info.expired) {
-      const userStr = info.userName ? ` as ${info.userName}` : '';
-      lines.push(`${id} (expired${userStr})`);
-    } else {
-      const parts: string[] = [];
-      if (info.userName) parts.push(`logged in as ${info.userName}`);
-      else parts.push('logged in');
-      if (info.expiresAt) {
-        const remaining = info.expiresAt - Date.now();
-        if (remaining > 0) {
-          const hours = Math.floor(remaining / 3600000);
-          const minutes = Math.floor((remaining % 3600000) / 60000);
-          if (hours > 0) parts.push(`expires in ${hours}h`);
-          else parts.push(`expires in ${minutes}m`);
-        }
-      }
-      if (info.scopes) parts.push(`scopes: ${info.scopes}`);
-      lines.push(`${id} (${parts.join(', ')})`);
+      continue;
     }
+    anyHeld = true;
+    lines.push(`${id} (${describeHeldToken(info).join(', ')})`);
+  }
+  // The caveat belongs on the listing itself: every row above is read out of
+  // local storage, so "held" must never be read as "works" (#2695).
+  if (anyHeld) {
+    lines.push(
+      '',
+      'Local state only — a held token can already be rejected upstream.',
+      'Verify with "oauth-token --check <id>"; re-consent with "oauth-token <id> --force-login".'
+    );
   }
 
   return { stdout: lines.join('\n') + '\n', stderr: '', exitCode: 0 };
+}
+
+/** Row body for one provider that has a stored token. */
+function describeHeldToken(info: {
+  expiresAt?: number;
+  userName?: string;
+  scopes?: string;
+  expired: boolean;
+}): string[] {
+  const parts = [info.userName ? `token held for ${info.userName}` : 'token held'];
+  if (info.expired) parts.push('past local expiry');
+  else parts.push(describeLocalExpiry(info.expiresAt));
+  if (info.scopes) parts.push(`scopes: ${info.scopes}`);
+  return parts;
 }

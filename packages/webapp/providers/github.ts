@@ -33,7 +33,12 @@ import {
 } from '../src/providers/oauth-code-exchange.js';
 import { getOAuthPageOrigin, resolveOAuthDelegation } from '../src/providers/oauth-service.js';
 import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
-import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
+import type {
+  OAuthLauncher,
+  OAuthLoginOptions,
+  OAuthTokenValidation,
+  ProviderConfig,
+} from '../src/providers/types.js';
 import { getLocalApiBaseUrl } from '../src/shell/proxied-fetch.js';
 import { getAccounts, getOAuthAccountInfo, saveOAuthAccount } from '../src/ui/provider-settings.js';
 
@@ -501,6 +506,37 @@ async function renewGitHubToken(): Promise<string | null> {
   }
 }
 
+/**
+ * Ask GitHub whether it still accepts the stored token. `GET /user` is the
+ * cheapest authenticated call GitHub offers, and it answers the only question
+ * that matters: a token inside its recorded expiry can still have been revoked
+ * upstream, in which case every real call comes back `Bad credentials` while
+ * the local record still looks healthy.
+ */
+async function validateGitHubToken(): Promise<OAuthTokenValidation> {
+  const accessToken = getGitHubAccount()?.accessToken;
+  if (!accessToken) return { status: 'unknown', detail: 'no stored token' };
+  try {
+    const res = await fetch('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/vnd.github+json',
+      },
+    });
+    if (res.ok) {
+      const user = (await res.json().catch(() => ({}))) as { login?: string; name?: string };
+      return { status: 'accepted', userName: user.name || user.login };
+    }
+    // 401 = bad/revoked credential, 403 = the token exists but the grant no
+    // longer covers this call. Both need a new login, not a silent renewal.
+    const detail = `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`;
+    if (res.status === 401 || res.status === 403) return { status: 'rejected', detail };
+    return { status: 'unknown', detail };
+  } catch (err) {
+    return { status: 'unknown', detail: err instanceof Error ? err.message : String(err) };
+  }
+}
+
 async function getValidAccessToken(): Promise<string> {
   const account = getGitHubAccount();
   if (!account?.accessToken) throw new Error('Not logged in to GitHub — please log in first');
@@ -662,6 +698,7 @@ export const config: ProviderConfig = {
   },
 
   onSilentRenew: renewGitHubToken,
+  onValidateToken: validateGitHubToken,
   getValidAccessToken,
 
   onOAuthLogout: async () => {
