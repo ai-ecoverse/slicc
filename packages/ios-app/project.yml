@@ -247,13 +247,13 @@ schemes:
 packages:
   GhosttyTerminal:
     url: https://github.com/Lakr233/libghostty-spm
-    exactVersion: 1.4.0
+    exactVersion: 1.5.1
   HuggingFace:
     url: https://github.com/huggingface/swift-huggingface
     minorVersion: 0.9.0
   WebRTC:
     url: https://github.com/stasel/WebRTC.git
-    exactVersion: 151.0.0
+    exactVersion: 152.0.0
   SliccTraySession:
     path: ../swift-traysession
   SliccTrayFollower:

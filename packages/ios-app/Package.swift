@@ -17,11 +17,11 @@ let package = Package(
         ),
     ],
     dependencies: [
-        .package(url: "https://github.com/Lakr233/libghostty-spm", exact: "1.4.0"),
+        .package(url: "https://github.com/Lakr233/libghostty-spm", exact: "1.5.1"),
         .package(
             url: "https://github.com/huggingface/swift-huggingface",
             .upToNextMinor(from: "0.9.0")),
-        .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor(from: "151.0.0")),
+        .package(url: "https://github.com/stasel/WebRTC.git", .upToNextMajor(from: "152.0.0")),
         .package(path: "../swift-traysession"),
         .package(path: "../swift-trayfollower"),
         .package(path: "../swift-traykit"),
