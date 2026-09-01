@@ -197,6 +197,31 @@ every `.git/objects/pack/*.idx` searching for a prefix match, so trying it first
 `git rev-parse HEAD` over a `--mount`ed host repo read all 30 pack indexes (3.8 MB, 34 bridge
 requests) instead of `HEAD` plus `packed-refs` (issue #2713).
 
+### `git diff` never reads an unchanged blob
+
+Every git command runs against the VFS, so on a `--mount`ed host repo each object
+read is an HTTP round trip through the hostfs bridge. `git diff` therefore decides
+what changed from OIDs before it reads any content (#2719):
+
+- **Index vs workdir** (`git diff`): the workdir bytes of a tracked file are read
+  once and hashed with `hashBlob`; the object store is touched only when that hash
+  differs from the index OID. A clean tree reads zero blobs.
+- **Tree vs index / tree vs tree** (`--staged`, `<rev> <rev>`): entries whose OIDs
+  match are skipped, and two subtrees sharing a tree OID are pruned from the walk
+  instead of being descended.
+- **Untracked and pathspec-excluded subtrees are pruned in the walk's
+  `iterate` hook**, not in `map`. `map` runs _after_ isomorphic-git has already
+  `readdir`/`lstat`ed the entry, so pruning there still costs one round trip
+  per tracked path; filtering in `iterate` works from the path string alone and
+  costs nothing. `node_modules` and `.git` are never enumerated, and
+  `git diff -- one/file.txt` never stats a sibling directory.
+- Workdir walks pass `refresh: false` — a read-only command must not rewrite
+  `.git/index` (#2708).
+
+When adding a diff variant, keep the OID comparison ahead of the content read and
+the pathspec test ahead of the walk: the pre-2719 code compared decoded strings
+and pulled all 3,549 tracked blobs out of the packfile on every invocation.
+
 ### `ipk install -g` / `npm install -g`
 
 `ipk install -g <pkg>` (and `npm install -g`, `npm i -g`) installs into the shared
