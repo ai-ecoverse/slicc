@@ -93,10 +93,7 @@ function harness(
     selectItem: typeof selectItem;
     collapse: typeof collapse;
   } = {
-    items: options.dockItems ?? [
-      { id: 'files', kind: 'tool' as const },
-      { id: 'new', kind: 'sprinkle' as const },
-    ],
+    items: options.dockItems ?? [{ id: 'files', kind: 'tool' as const }],
     active: options.activeDock ?? null,
     selectItem,
     collapse,
@@ -262,13 +259,12 @@ describe('nextInCycle', () => {
 });
 
 describe('sprinkleIds', () => {
-  it('keeps rail order and drops tools and the new launcher', () => {
+  it('keeps rail order and drops tools', () => {
     const dock = {
       items: [
         { id: 'sprinkle:b', kind: 'sprinkle' as const },
         { id: 'files', kind: 'tool' as const },
         { id: 'sprinkle:a', kind: 'sprinkle' as const },
-        { id: 'new', kind: 'sprinkle' as const },
       ],
       active: null,
       selectItem: vi.fn(),
@@ -569,11 +565,11 @@ describe('inside keyboard mode', () => {
     expect(handles.active()).toBe(true);
   });
 
-  it('p falls back to the new-sprinkle launcher when none are installed', () => {
+  it('p is a no-op when no sprinkles are installed', () => {
     const { selectItem, handles } = harness();
     escape();
     press({ key: 'p', code: 'KeyP' });
-    expect(selectItem).toHaveBeenCalledWith('new');
+    expect(selectItem).not.toHaveBeenCalled();
     expect(handles.active()).toBe(true);
   });
 
@@ -1396,7 +1392,6 @@ describe('chords', () => {
         { id: 'files', kind: 'tool' },
         { id: 'sprinkle:one', kind: 'sprinkle' },
         { id: 'sprinkle:two', kind: 'sprinkle' },
-        { id: 'new', kind: 'sprinkle' },
       ],
     });
     escape();
@@ -1486,7 +1481,6 @@ describe('the step keys', () => {
         { id: 'files', kind: 'tool' },
         { id: 'sprinkle:one', kind: 'sprinkle' },
         { id: 'sprinkle:two', kind: 'sprinkle' },
-        { id: 'new', kind: 'sprinkle' },
       ],
     });
     escape();

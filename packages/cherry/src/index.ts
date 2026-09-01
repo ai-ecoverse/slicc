@@ -43,8 +43,6 @@ export interface CherryFeatures {
   history?: boolean;
   /** Show the top navigation bar (scoop switcher + floatbar). Default: true. */
   nav?: boolean;
-  /** Show the "new sprinkle" launcher in the dock. Default: true. */
-  newSprinkle?: boolean;
   /** Show the monitor panel. Default: true. */
   monitor?: boolean;
   /** Show timestamps on chat messages. Default: true. */

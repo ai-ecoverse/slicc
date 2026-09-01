@@ -33,7 +33,6 @@ describe('cherry features', () => {
       modelPicker: true,
       history: true,
       nav: true,
-      newSprinkle: true,
       monitor: true,
       showTimestamps: true,
     });
@@ -67,7 +66,6 @@ describe('cherry features', () => {
       modelPicker: true,
       history: true,
       nav: true,
-      newSprinkle: true,
       monitor: true,
       showTimestamps: true,
     });

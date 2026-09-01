@@ -53,7 +53,6 @@ export const SIDE_PANEL_FEATURES: CherryFeatures = {
   files: false,
   memory: false,
   browser: false,
-  newSprinkle: false,
   monitor: false,
   modelPicker: false,
   history: true,

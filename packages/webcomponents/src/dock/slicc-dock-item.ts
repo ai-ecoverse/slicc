@@ -122,7 +122,7 @@ const ICON_SIZE = 18;
  * `square`), rendered via the shared `iconEl` helper at 18px — never emoji or
  * bespoke unicode symbols. The prototype's hand-drawn dock glyphs map to lucide:
  * sprinkles → `sparkles`, browser → `globe` (or `layout`), files → `folder`,
- * terminal → `square-terminal`, memory → `brain` (or `database`), new → `plus`.
+ * terminal → `square-terminal`, memory → `brain` (or `database`).
  * The icon inherits the button's `currentColor`, so it tracks the idle / hover /
  * active palette automatically. Slotting a custom `<svg>` into the default slot
  * overrides the lucide `icon` entirely.

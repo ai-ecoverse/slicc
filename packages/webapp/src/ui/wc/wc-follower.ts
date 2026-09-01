@@ -169,7 +169,6 @@ interface CherryFeatureSet {
   modelPicker: boolean;
   history: boolean;
   nav: boolean;
-  newSprinkle: boolean;
   monitor: boolean;
   showTimestamps: boolean;
 }
@@ -183,7 +182,6 @@ const ALL_FEATURES_ENABLED: CherryFeatureSet = {
   modelPicker: true,
   history: true,
   nav: true,
-  newSprinkle: true,
   monitor: true,
   showTimestamps: true,
 };
@@ -201,7 +199,6 @@ function applyFeatureVisibility(features: CherryFeatureSet): void {
     ['memory', 'memory'],
     ['browser', 'browser'],
     ['monitor', 'monitor'],
-    ['newSprinkle', 'new'],
   ];
   for (const [feat, dockId] of dockMap) {
     if (!features[feat]) hidden.push(`slicc-dock-item[data-t="${dockId}"]`);

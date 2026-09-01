@@ -11,7 +11,6 @@ describe('cherry-panel-protocol', () => {
       files: false,
       memory: false,
       browser: false,
-      newSprinkle: false,
       monitor: false,
       modelPicker: false,
       history: true,

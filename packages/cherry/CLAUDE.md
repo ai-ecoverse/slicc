@@ -44,7 +44,7 @@ mountSlicc({
   iframe, // Caller-provided iframe (opt-in)
   sliccOrigin, // worker-hosted webapp origin, e.g. https://app.sliccy.ai
   capabilities, // { navigate; screenshot: 'html2canvas'|'none'; openUrl }
-  features, // CherryFeatures — { terminal?, files?, memory?, browser?, modelPicker?, history?, nav?, newSprinkle?, monitor? } default true
+  features, // CherryFeatures — { terminal?, files?, memory?, browser?, modelPicker?, history?, nav?, monitor? } default true
   theme, // SliccTheme — optional brand theme
   layout, // DockTreeSpec-shaped — optional pushed layout, typically locked
   flags, // { [flagId]: value } — feature-flag overrides

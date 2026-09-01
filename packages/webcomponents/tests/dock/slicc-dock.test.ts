@@ -76,14 +76,10 @@ describe('slicc-dock', () => {
   });
 
   describe('item composition', () => {
-    it('renders one <slicc-dock-item> per sprinkle, then a New + launcher', () => {
+    it('renders one <slicc-dock-item> per sprinkle (no synthetic New launcher)', () => {
       const el = mount();
       const ids = dockItems(el).map((i) => i.dataset.t);
-      expect(ids).toEqual(['hero', 'palette', 'new']);
-      const newItem = itemById(el, 'new');
-      // The dock forwards the descriptor label as the dock-item's `tip`.
-      expect(newItem?.getAttribute('tip')).toBe('New sprinkle');
-      expect(newItem?.getAttribute('icon')).toBe('plus');
+      expect(ids).toEqual(['hero', 'palette']);
     });
 
     it('forwards icon, label (→tip), kind and hue to each item', () => {
@@ -149,16 +145,14 @@ describe('slicc-dock', () => {
     it('re-renders when the items list is replaced', () => {
       const el = mount();
       el.items = [{ id: 'solo', icon: 'sparkles', label: 'Solo', kind: 'sprinkle' }];
-      // solo + the New launcher.
-      expect(dockItems(el).map((i) => i.dataset.t)).toEqual(['solo', 'new']);
+      expect(dockItems(el).map((i) => i.dataset.t)).toEqual(['solo']);
     });
 
     it('tolerates a non-array assignment by clearing the sprinkles', () => {
       const el = mount();
       // @ts-expect-error — exercising the runtime guard.
       el.items = null;
-      // Only the New launcher remains.
-      expect(dockItems(el).map((i) => i.dataset.t)).toEqual(['new']);
+      expect(dockItems(el).map((i) => i.dataset.t)).toEqual([]);
     });
   });
 
@@ -268,8 +262,8 @@ describe('slicc-dock', () => {
       document.body.appendChild(el);
       expect(el.items.map((i) => i.id)).toEqual(['hero', 'palette']);
       expect(el.items.map((i) => i.label)).toEqual(['Hero studio', 'palette']);
-      // Rebuilt canonically: the two adopted sprinkles + the New launcher.
-      expect(dockItems(el).map((i) => i.dataset.t)).toEqual(['hero', 'palette', 'new']);
+      // Rebuilt canonically from the adopted sprinkles.
+      expect(dockItems(el).map((i) => i.dataset.t)).toEqual(['hero', 'palette']);
     });
 
     it('drops slotted system-tool items in favour of the declarative system-tools attribute', () => {

@@ -54,7 +54,6 @@ export interface CherryHandshakeWelcome {
     modelPicker: boolean;
     history: boolean;
     nav: boolean;
-    newSprinkle: boolean;
     monitor: boolean;
     showTimestamps: boolean;
   };

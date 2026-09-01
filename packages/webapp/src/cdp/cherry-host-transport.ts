@@ -87,7 +87,6 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     modelPicker: boolean;
     history: boolean;
     nav: boolean;
-    newSprinkle: boolean;
     monitor: boolean;
   } = {
     terminal: true,
@@ -97,7 +96,6 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     modelPicker: true,
     history: true,
     nav: true,
-    newSprinkle: true,
     monitor: true,
   };
   private _theme: string | null = null;
@@ -203,7 +201,6 @@ export class CherryHostTransport extends SyntheticCdpTransport {
     modelPicker: boolean;
     history: boolean;
     nav: boolean;
-    newSprinkle: boolean;
     monitor: boolean;
   } {
     return this._features;
@@ -519,7 +516,6 @@ export class CherryHostTransport extends SyntheticCdpTransport {
       modelPicker: true,
       history: true,
       nav: true,
-      newSprinkle: true,
       monitor: true,
     };
     log.info('Cherry handshake complete', {
