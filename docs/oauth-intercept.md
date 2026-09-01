@@ -26,7 +26,8 @@ how to drive it ad-hoc from the shell.
 - `packages/webapp/src/providers/oauth-service.ts`
   - `createInterceptingOAuthLauncherForCurrentRuntime()` — picks the
     active transport (extension / CLI / worker)
-- `packages/webapp/src/shell/supplemental-commands/oauth-token-command.ts`
+- `packages/webapp/src/shell/supplemental-commands/oauth-token/run.ts`
+  (registered by the `oauth-token-command.ts` stub)
   - `oauth-token --from-file <path>` — load a config from VFS
   - `oauth-token --intercept --authorize-url=… --redirect-pattern=…`
   - Provider dispatch: prefers `onOAuthLoginIntercepted` over

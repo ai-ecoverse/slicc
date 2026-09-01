@@ -68,6 +68,12 @@ describe('oauth-token command', () => {
     expect(result.stdout).toContain('--expire');
     expect(result.stdout).toContain('--force-login');
     expect(result.stdout).toContain('Does not revoke anything upstream');
+    // The escalation ladder has to be discoverable without failing first.
+    expect(result.stdout).toContain('--check');
+    expect(result.stdout).toContain('Held vs working');
+    expect(result.stdout).toContain('fall back to --force-login');
+    expect(result.stdout).toContain('Exit codes:');
+    expect(result.stdout).toContain('automated recovery is exhausted');
   });
 
   it('rejects an unknown flag instead of silently ignoring it', async () => {
@@ -540,6 +546,39 @@ describe('oauth-token command', () => {
     expect(result.stdout).toContain('karl@example.com');
     expect(result.stdout).toContain('scopes: repo,read:user');
     expect(result.stdout).toContain('my-corp (no token)');
+    // "logged in" claimed more than local storage knows: the same listing
+    // said "logged in" for a token GitHub had already invalidated (#2695).
+    expect(result.stdout).not.toContain('logged in');
+    expect(result.stdout).toContain('token held for karl@example.com');
+    expect(result.stdout).toContain('Local state only');
+    expect(result.stdout).toContain('oauth-token --check <id>');
+  });
+
+  it('--list marks a past-expiry token as held, not as logged in', async () => {
+    mockGetRegisteredProviderIds.mockReturnValue(['adobe']);
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'adobe',
+      name: 'Adobe',
+      description: '',
+      requiresApiKey: false,
+      requiresBaseUrl: false,
+      isOAuth: true,
+      onOAuthLogin: vi.fn(),
+    });
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'tok',
+      expiresAt: Date.now() - 1000,
+      userName: 'karl@example.com',
+      expired: true,
+    });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--list'], createMockCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain(
+      'adobe (token held for karl@example.com, past its local expiry, renewal needed)'
+    );
   });
 
   it('--provider flag works', async () => {
@@ -965,8 +1004,11 @@ describe('oauth-token command', () => {
     const cmd = createOAuthTokenCommand();
     const result = await cmd.execute(['github'], createMockCtx());
     expect(result.exitCode).toBe(1);
-    expect(result.stderr).toContain('no masked value');
-    expect(result.stderr).toContain('github');
+    // Prose must stay off stdout — a caller reads stdout as the token, and
+    // this sentence is long enough to pass a naive length check (#2695).
+    expect(result.stdout).toBe('');
+    expect(result.stderr).toContain('no usable token for github');
+    expect(result.stderr).toContain('oauth-token github --force-login');
   });
 
   it('--renew triggers onSilentRenew and reports success', async () => {
@@ -1010,8 +1052,12 @@ describe('oauth-token command', () => {
     const cmd = createOAuthTokenCommand();
     const result = await cmd.execute(['--renew', 'adobe'], createMockCtx());
 
+    // No upstream check exists for this provider, so the decline is
+    // unconfirmed: name the likely fix, but never claim a retry is pointless.
     expect(result.exitCode).toBe(1);
-    expect(result.stdout).toContain('FAILED');
+    expect(result.stdout).toContain('DECLINED');
+    expect(result.stdout).toContain('Unconfirmed');
+    expect(result.stdout).toContain('Likely fix: oauth-token adobe --force-login');
   });
 
   it('--renew errors when the provider has no onSilentRenew hook', async () => {
@@ -1026,6 +1072,271 @@ describe('oauth-token command', () => {
 
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toContain('no onSilentRenew hook');
+  });
+
+  it('--renew never calls a locally-unexpired token "valid"', async () => {
+    const onSilentRenew = vi.fn(async () => null);
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      isOAuth: true,
+      onSilentRenew,
+      onValidateToken: async () => ({ status: 'rejected', detail: 'HTTP 401 Unauthorized' }),
+    } as never);
+    // The exact starting state from #2695: stored, inside its local expiry,
+    // and dead upstream. Reporting it as "valid" sent the caller hunting for
+    // a bug in the OAuth service.
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'gho_dead',
+      expiresAt: Date.now() + 3600_000,
+      expired: false,
+    });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--renew', 'github'], createMockCtx());
+
+    // The provider itself confirms the token is dead, so exit 3 is earned.
+    expect(result.exitCode).toBe(3);
+    expect(result.stdout).not.toMatch(/before: valid/);
+    expect(result.stdout).toContain('stored token: present');
+    expect(result.stdout).toContain('not validated upstream');
+    expect(result.stdout).toContain('upstream check: REJECTED');
+    expect(result.stdout).toContain('Local expiry was never proof of validity');
+    expect(result.stdout).toContain('→ Fix: oauth-token github --force-login');
+  });
+
+  it('--renew stays at exit 1 when the upstream check cannot confirm the decline', async () => {
+    // Provider hooks collapse transport failures into `null` too, so a decline
+    // the provider will not corroborate must not send a caller to a human.
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      isOAuth: true,
+      onSilentRenew: async () => null,
+      onValidateToken: async () => ({ status: 'unknown', detail: 'HTTP 502 Bad Gateway' }),
+    } as never);
+    mockGetOAuthAccountInfo.mockReturnValue({ token: 'gho_x', expired: false });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--renew', 'github'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('Unconfirmed:');
+    expect(result.stdout).toContain('(upstream check: HTTP 502 Bad Gateway)');
+    expect(result.stdout).toContain('Likely fix');
+    expect(result.stdout).not.toContain('→ Fix:');
+  });
+
+  it('--renew reports a still-working token when the decline was not a lapse', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      isOAuth: true,
+      onSilentRenew: async () => null,
+      onValidateToken: async () => ({ status: 'accepted', userName: 'trieloff' }),
+    } as never);
+    mockGetOAuthAccountInfo.mockReturnValue({ token: 'gho_x', expired: false });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--renew', 'github'], createMockCtx());
+
+    // Renewal did not happen (so not 0-as-success), but callers are not
+    // blocked and no human is needed.
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('upstream check: ACCEPTED (as trieloff)');
+    expect(result.stdout).toContain('No login needed');
+    expect(result.stdout).not.toContain('--force-login');
+  });
+
+  it('--renew survives an upstream check that throws', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      isOAuth: true,
+      onSilentRenew: async () => null,
+      onValidateToken: async () => {
+        throw new Error('check exploded');
+      },
+    } as never);
+    mockGetOAuthAccountInfo.mockReturnValue({ token: 'gho_x', expired: false });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--renew', 'github'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('(upstream check: check exploded)');
+  });
+
+  it('--renew reports a thrown renewal as exit 1 but still names the fallback', async () => {
+    const onSilentRenew = vi.fn(async () => {
+      throw new Error('network down');
+    });
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'adobe',
+      name: 'Adobe',
+      isOAuth: true,
+      onSilentRenew,
+    } as never);
+    mockGetOAuthAccountInfo.mockReturnValue({ token: 'old', expired: true });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--renew', 'adobe'], createMockCtx());
+
+    // A throw may be transient (offline, 5xx), so it must NOT claim that a
+    // human is required — that is exit 3's meaning — nor tell the caller to
+    // stop retrying.
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('ERROR — network down');
+    expect(result.stdout).toContain('Retry it.');
+    expect(result.stdout).toContain('If it keeps failing: oauth-token adobe --force-login');
+    expect(result.stdout).not.toContain('→ Fix:');
+  });
+
+  it('--check reports ACCEPTED when the provider honours the token', async () => {
+    const onValidateToken = vi.fn(async () => ({
+      status: 'accepted' as const,
+      userName: 'trieloff',
+    }));
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      isOAuth: true,
+      onValidateToken,
+    } as never);
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'gho_live',
+      expiresAt: Date.now() + 3600_000,
+      expired: false,
+    });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--check', 'github'], createMockCtx());
+
+    expect(onValidateToken).toHaveBeenCalledTimes(1);
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('ACCEPTED (as trieloff)');
+  });
+
+  it('--check sends a refused token to --renew first when renewal is possible', async () => {
+    const onValidateToken = vi.fn(async () => ({
+      status: 'rejected' as const,
+      detail: 'HTTP 401 Unauthorized',
+    }));
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      isOAuth: true,
+      onSilentRenew: vi.fn(),
+      onValidateToken,
+    } as never);
+    mockGetOAuthAccountInfo.mockReturnValue({
+      token: 'gho_dead',
+      expiresAt: Date.now() + 3600_000,
+      expired: false,
+    });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--check', 'github'], createMockCtx());
+
+    // A stored refresh token can still replace a refused access token, so the
+    // automated rung is not exhausted and this is not a job for a human yet.
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('REJECTED');
+    expect(result.stdout).toContain('HTTP 401 Unauthorized');
+    expect(result.stdout).toContain('→ Next: oauth-token github --renew');
+  });
+
+  it('--check reports REJECTED with exit 3 when no silent renewal exists', async () => {
+    const onValidateToken = vi.fn(async () => ({
+      status: 'rejected' as const,
+      detail: 'HTTP 401 Unauthorized',
+    }));
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      isOAuth: true,
+      onValidateToken,
+    } as never);
+    mockGetOAuthAccountInfo.mockReturnValue({ token: 'gho_dead', expired: false });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--check', 'github'], createMockCtx());
+
+    expect(result.exitCode).toBe(3);
+    expect(result.stdout).toContain('nothing automated is left');
+    expect(result.stdout).toContain('→ Fix: oauth-token github --force-login');
+  });
+
+  it('--check reports UNKNOWN with exit 1 when the check itself fails', async () => {
+    const onValidateToken = vi.fn(async () => {
+      throw new Error('Failed to fetch');
+    });
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      isOAuth: true,
+      onValidateToken,
+    } as never);
+    mockGetOAuthAccountInfo.mockReturnValue({ token: 'gho_x', expired: false });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--check', 'github'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stdout).toContain('UNKNOWN');
+    expect(result.stdout).toContain('Failed to fetch');
+    expect(result.stdout).toContain('says nothing about the token');
+  });
+
+  it('--check needs an interactive login when no token is stored at all', async () => {
+    const onValidateToken = vi.fn();
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'github',
+      name: 'GitHub',
+      isOAuth: true,
+      onValidateToken,
+    } as never);
+    mockGetOAuthAccountInfo.mockReturnValue(null);
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--check', 'github'], createMockCtx());
+
+    expect(onValidateToken).not.toHaveBeenCalled();
+    expect(result.exitCode).toBe(3);
+    expect(result.stdout).toContain('none stored');
+    expect(result.stdout).toContain('oauth-token github --force-login');
+  });
+
+  it('--check explains itself for a provider with no upstream check', async () => {
+    mockGetRegisteredProviderConfig.mockReturnValue({
+      id: 'adobe',
+      name: 'Adobe',
+      isOAuth: true,
+    } as never);
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--check', 'adobe'], createMockCtx());
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toContain('cannot be checked upstream');
+  });
+
+  it('--check falls back to a provider that supports the hook', async () => {
+    const onValidateToken = vi.fn(async () => ({ status: 'accepted' as const }));
+    mockGetSelectedProvider.mockReturnValue('cerebras');
+    mockGetRegisteredProviderIds.mockReturnValue(['cerebras', 'github']);
+    mockGetRegisteredProviderConfig.mockImplementation((id: string) =>
+      id === 'github'
+        ? ({ id: 'github', name: 'GitHub', isOAuth: true, onValidateToken } as never)
+        : ({ id: 'cerebras', name: 'Cerebras' } as never)
+    );
+    mockGetOAuthAccountInfo.mockReturnValue({ token: 'gho_live', expired: false });
+
+    const cmd = createOAuthTokenCommand();
+    const result = await cmd.execute(['--check'], createMockCtx());
+
+    expect(result.exitCode).toBe(0);
+    expect(result.stdout).toContain('oauth-token --check github');
   });
 
   it.each([

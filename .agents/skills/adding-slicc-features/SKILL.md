@@ -854,7 +854,7 @@ export function register(): void {
 
 **Key files**:
 
-- `packages/webapp/src/providers/types.ts` — `ProviderConfig` (with `onOAuthLogin`, `onOAuthLogout`), `OAuthLauncher` type
+- `packages/webapp/src/providers/types.ts` — `ProviderConfig` (with `onOAuthLogin`, `onOAuthLogout`, `onSilentRenew`, `onValidateToken`), `OAuthLauncher` / `OAuthTokenValidation` types
 - `packages/webapp/src/providers/oauth-service.ts` — `createOAuthLauncher()` factory (CLI popup vs extension chrome.identity)
 - `packages/webapp/src/ui/provider-settings.ts` — Calls `config.onOAuthLogin(launcher, onSuccess)` when login button clicked
 - `packages/node-server/src/index.ts` — `/auth/callback` route (reads query params + fragment, postMessages to opener)
@@ -885,6 +885,10 @@ interface ProviderConfig {
   isOAuth?: boolean;
   onOAuthLogin?: (launcher: OAuthLauncher, onSuccess: () => void) => Promise<void>;
   onOAuthLogout?: () => Promise<void>;
+  /** Refresh silently; null when renewal is impossible OR the call itself failed. */
+  onSilentRenew?: () => Promise<string | null>;
+  /** Does the provider still accept the stored token? Powers `oauth-token --check`. */
+  onValidateToken?: () => Promise<OAuthTokenValidation>;
   /** Static per-model capability overrides. */
   modelOverrides?: Record<string, ModelMetadata>;
   /** Return model IDs with optional metadata (resolved against Anthropic registry). */
@@ -901,7 +905,30 @@ interface ModelMetadata {
 }
 
 type OAuthLauncher = (authorizeUrl: string) => Promise<string | null>;
+
+interface OAuthTokenValidation {
+  status: 'accepted' | 'rejected' | 'unknown';
+  userName?: string; // identity the token resolved to, when the check returns one
+  detail?: string; // e.g. `HTTP 401 Unauthorized`
+}
 ```
+
+**`onValidateToken` — held is not working (#2695)**: a stored token inside its
+recorded expiry can already have been invalidated upstream, so `oauth-token
+--list` / `--renew` only ever report which token is HELD. Implement this hook
+with ONE cheap authenticated call (GitHub uses `GET /user`) so `oauth-token
+--check <id>` can report whether the provider still accepts it. Rules:
+
+- Return `rejected` **only** when the response proves the credential was refused
+  (401). Statuses a healthy token also produces — GitHub answers 403 for rate
+  limits — must be `unknown`, or a throttled caller gets sent through a consent
+  window that cannot fix anything.
+- Return `unknown` for 5xx, transport failures, and "nothing stored". `unknown`
+  says nothing about the token; only `rejected` costs the user a re-login.
+- Bound the request (`AbortSignal.timeout`) — `--check` must always answer.
+- `onSilentRenew` returning `null` is NOT proof of a lapsed session: most hooks
+  collapse transport failures into `null` too. The command confirms a decline
+  with `onValidateToken` before it claims a human is required (exit 3).
 
 **`requiresBaseUrl` for OAuth providers**: By default, the base URL field is hidden for OAuth providers. Set `requiresBaseUrl: true` to show it — useful for providers where the proxy endpoint is configurable at runtime. The base URL is saved to the account before `onOAuthLogin` is called, so the provider can read it via `getBaseUrlForProvider()`. The `saveOAuthAccount()` function preserves the existing `baseUrl` through re-logins.
 

@@ -33,7 +33,12 @@ import {
 } from '../src/providers/oauth-code-exchange.js';
 import { getOAuthPageOrigin, resolveOAuthDelegation } from '../src/providers/oauth-service.js';
 import { createSilentRenewBackoff } from '../src/providers/silent-renew-backoff.js';
-import type { OAuthLauncher, OAuthLoginOptions, ProviderConfig } from '../src/providers/types.js';
+import type {
+  OAuthLauncher,
+  OAuthLoginOptions,
+  OAuthTokenValidation,
+  ProviderConfig,
+} from '../src/providers/types.js';
 import { getLocalApiBaseUrl } from '../src/shell/proxied-fetch.js';
 import { getAccounts, getOAuthAccountInfo, saveOAuthAccount } from '../src/ui/provider-settings.js';
 
@@ -501,6 +506,56 @@ async function renewGitHubToken(): Promise<string | null> {
   }
 }
 
+/** Bound the validation call: `--check` must always answer, never hang. */
+const VALIDATE_TIMEOUT_MS = 10_000;
+
+/**
+ * Ask GitHub whether it still accepts the stored token. `GET /user` is the
+ * cheapest authenticated call GitHub offers, and it answers the only question
+ * that matters: a token inside its recorded expiry can still have been revoked
+ * upstream, in which case every real call comes back `Bad credentials` while
+ * the local record still looks healthy.
+ */
+async function validateGitHubToken(): Promise<OAuthTokenValidation> {
+  const accessToken = getGitHubAccount()?.accessToken;
+  if (!accessToken) return { status: 'unknown', detail: 'no stored token' };
+  try {
+    const res = await fetch('https://api.github.com/user', {
+      headers: {
+        Authorization: `Bearer ${accessToken}`,
+        Accept: 'application/vnd.github+json',
+      },
+      signal: AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
+    });
+    if (res.ok) {
+      const user = (await res.json().catch(() => ({}))) as { login?: string; name?: string };
+      return { status: 'accepted', userName: user.name || user.login };
+    }
+    return classifyGitHubRejection(res);
+  } catch (err) {
+    return { status: 'unknown', detail: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Only a 401 proves GitHub refused the credential. GitHub also answers 403 for
+ * primary and secondary rate limits, which say nothing about the token — a
+ * throttled caller must never be sent to a consent window, so an undifferentiated
+ * 403 stays `unknown`.
+ */
+function classifyGitHubRejection(res: Response): OAuthTokenValidation {
+  const detail = `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`;
+  if (res.status === 401) return { status: 'rejected', detail };
+  if (res.status === 403 && isRateLimited(res)) {
+    return { status: 'unknown', detail: `${detail} (rate limited)` };
+  }
+  return { status: 'unknown', detail };
+}
+
+function isRateLimited(res: Response): boolean {
+  return res.headers.get('x-ratelimit-remaining') === '0' || res.headers.has('retry-after');
+}
+
 async function getValidAccessToken(): Promise<string> {
   const account = getGitHubAccount();
   if (!account?.accessToken) throw new Error('Not logged in to GitHub — please log in first');
@@ -662,6 +717,7 @@ export const config: ProviderConfig = {
   },
 
   onSilentRenew: renewGitHubToken,
+  onValidateToken: validateGitHubToken,
   getValidAccessToken,
 
   onOAuthLogout: async () => {
