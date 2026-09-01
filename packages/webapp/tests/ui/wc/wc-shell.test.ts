@@ -122,11 +122,10 @@ describe('mountWcUiPreview', () => {
       floatLabel: 'live',
       placeholder: 'p',
     });
+    // No sprinkle roots exist, so discovery never reaches readDir.
     const fs = {
       exists: async () => false,
-      async *walk(): AsyncGenerator<string> {
-        /* empty */
-      },
+      readDir: async () => [],
       readFile: async () => '',
     } as unknown as import('../../../src/fs/virtual-fs.js').VirtualFS;
     const client = {

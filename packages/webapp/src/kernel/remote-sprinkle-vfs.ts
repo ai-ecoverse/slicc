@@ -13,9 +13,15 @@
  * `RemoteVfsClient`) and writes through `writableFs` (the
  * `RemoteWritableVfsClient` on the OPFS leader, or the page-side
  * shadow for followers), and polyfills the two methods missing from
- * the wire surface — `walk` (recursive `readDir`+`stat`) and `exists`
- * (`stat` with ENOENT swallow) — so callers see the same `VirtualFS`
- * shape they would without the flag.
+ * the wire surface — `walk` (recursive `readDir`+`stat`, delegated to
+ * `walkBounded`) and `exists` (`stat` with ENOENT swallow) — so
+ * callers see the same `VirtualFS` shape they would without the flag.
+ *
+ * `walk` takes `BoundedWalkOptions` (`maxDepth`, `skip`, `maxDirs`).
+ * Every directory it reads costs one page→worker RPC and, under a
+ * `--mount`, one `/api/hostfs/list` request, so a caller pointing it
+ * at a subtree that could contain a mount is expected to bound it —
+ * see `ui/sprinkle-discovery.ts` and issue #2717.
  *
  * Symlink semantics mirror `VirtualFS.walk`: a symlink to a file is
  * yielded; a symlink to a directory is recursed; broken symlinks are
@@ -24,8 +30,10 @@
  * follows them by default.
  */
 
+import type { BoundedWalkOptions } from '../fs/bounded-walk.js';
+import { walkBounded } from '../fs/bounded-walk.js';
 import type { VirtualFS } from '../fs/index.js';
-import type { DirEntry, ReadFileOptions } from '../fs/types.js';
+import type { ReadFileOptions } from '../fs/types.js';
 import { FsError } from '../fs/types.js';
 import type { LocalVfsClient } from './local-vfs-client.js';
 import type { WritableVfsBackend } from './writable-vfs-client.js';
@@ -46,10 +54,6 @@ export interface RemoteSprinkleVfsOptions {
   writer: WritableVfsBackend;
 }
 
-function joinPath(parent: string, name: string): string {
-  return parent === '/' ? `/${name}` : `${parent}/${name}`;
-}
-
 /** `stat` then true; any error (ENOENT or otherwise) → false. */
 async function pathExists(reader: LocalVfsClient, path: string): Promise<boolean> {
   try {
@@ -58,77 +62,6 @@ async function pathExists(reader: LocalVfsClient, path: string): Promise<boolean
   } catch (err) {
     if (err instanceof FsError && err.code === 'ENOENT') return false;
     return false;
-  }
-}
-
-/** `readDir` that returns null on any rejection (walk skips that dir). */
-async function safeReadDir(reader: LocalVfsClient, dir: string): Promise<DirEntry[] | null> {
-  try {
-    return await reader.readDir(dir);
-  } catch {
-    return null;
-  }
-}
-
-/**
- * Follow a symlink during walk: yield the path if it resolves to a
- * file, enqueue if directory, skip if dangling.
- */
-async function* walkSymlink(
-  reader: LocalVfsClient,
-  child: string,
-  stack: string[]
-): AsyncGenerator<string> {
-  try {
-    const s = await reader.stat(child);
-    if (s.type === 'file') {
-      yield child;
-      return;
-    }
-    if (s.type === 'directory') stack.push(child);
-  } catch {
-    /* dangling symlink — skip, matches VirtualFS.walk */
-  }
-}
-
-/** Yield or enqueue a single `DirEntry` during an iterative walk. */
-async function* walkEntry(
-  reader: LocalVfsClient,
-  entry: DirEntry,
-  child: string,
-  stack: string[]
-): AsyncGenerator<string> {
-  if (entry.type === 'file') {
-    yield child;
-    return;
-  }
-  if (entry.type === 'directory') {
-    stack.push(child);
-    return;
-  }
-  if (entry.type === 'symlink') {
-    yield* walkSymlink(reader, child, stack);
-  }
-}
-
-/**
- * Iterative `walk` over a remote reader — same yield semantics as
- * `VirtualFS.walk` (files + file-symlinks; directories / dir-symlinks
- * recursed; broken symlinks and unreadable dirs skipped).
- */
-async function* walkRemote(reader: LocalVfsClient, path: string): AsyncGenerator<string> {
-  const stack: string[] = [path];
-  const visited = new Set<string>();
-  while (stack.length > 0) {
-    const dir = stack.pop();
-    if (dir === undefined) break;
-    if (visited.has(dir)) continue;
-    visited.add(dir);
-    const entries = await safeReadDir(reader, dir);
-    if (!entries) continue;
-    for (const entry of entries) {
-      yield* walkEntry(reader, entry, joinPath(dir, entry.name), stack);
-    }
   }
 }
 
@@ -150,7 +83,7 @@ export function createRemoteSprinkleVfs(opts: RemoteSprinkleVfsOptions): Virtual
       writer.rm(path, options),
     flush: () => writer.flush(),
     exists: (path: string) => pathExists(reader, path),
-    walk: (path: string) => walkRemote(reader, path),
+    walk: (path: string, options?: BoundedWalkOptions) => walkBounded(reader, path, options),
   };
 
   return adapter as unknown as VirtualFS;

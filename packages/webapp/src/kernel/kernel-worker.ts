@@ -24,6 +24,7 @@
 
 /// <reference lib="webworker" />
 
+import { SPRINKLE_ROOTS } from '../base/sprinkle-roots.js';
 import { BrowserAPI } from '../cdp/browser-api.js';
 import { createPanelRpcTrayProvider } from '../cdp/panel-rpc-tray-provider.js';
 import type { FeatureFlagFloat } from '../core/feature-flags.js';
@@ -462,7 +463,6 @@ async function boot(init: KernelWorkerInitMsg): Promise<void> {
     // Auto-reload open sprinkles when their .shtml file changes in the VFS.
     const watcher = host.sharedFs?.getWatcher();
     if (watcher) {
-      const SPRINKLE_ROOTS = ['/workspace', '/shared', '/scoops'] as const;
       let reloadTimer: ReturnType<typeof setTimeout> | null = null;
       const pendingReloads = new Set<string>();
       for (const root of SPRINKLE_ROOTS) {

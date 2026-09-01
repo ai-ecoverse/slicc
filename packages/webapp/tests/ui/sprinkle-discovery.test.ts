@@ -97,10 +97,49 @@ describe('discoverSprinkles', () => {
     expect(result.has('test')).toBe(true);
   });
 
-  it('discovers .shtml files outside of sprinkles directory', async () => {
-    await vfs.writeFile('/tools/monitor.shtml', '<div>monitor</div>');
+  it('discovers .shtml files outside the sprinkles directory but inside a supported root', async () => {
+    await vfs.writeFile('/workspace/skills/monitor/monitor.shtml', '<div>monitor</div>');
+    await vfs.writeFile('/scoops/reporter/report.shtml', '<div>report</div>');
+    await vfs.writeFile('/home/lars/notes.shtml', '<div>notes</div>');
     const result = await discoverSprinkles(vfs);
-    expect(result.get('monitor')!.path).toBe('/tools/monitor.shtml');
+    expect(result.get('monitor')!.path).toBe('/workspace/skills/monitor/monitor.shtml');
+    expect(result.get('report')!.path).toBe('/scoops/reporter/report.shtml');
+    expect(result.get('notes')!.path).toBe('/home/lars/notes.shtml');
+  });
+
+  // Boot-time discovery used to walk `/`, so a `--mount`ed host folder was
+  // enumerated directory by directory over the worker RPC + hostfs bridge
+  // (issue #2717). These pin the bounds that replaced that walk.
+  describe('bounded scan (#2717)', () => {
+    it('does not walk unsupported roots such as /mnt, /tmp and /etc', async () => {
+      await vfs.writeFile('/mnt/repo/panel.shtml', '<div>mounted</div>');
+      await vfs.writeFile('/tmp/scratch.shtml', '<div>scratch</div>');
+      await vfs.writeFile('/etc/stray.shtml', '<div>stray</div>');
+      await vfs.writeFile('/tools/monitor.shtml', '<div>monitor</div>');
+      const result = await discoverSprinkles(vfs);
+      expect(result.size).toBe(0);
+    });
+
+    it('never descends into node_modules, build output, or dot-directories', async () => {
+      await vfs.writeFile('/workspace/proj/node_modules/pkg/vendored.shtml', '<div>v</div>');
+      await vfs.writeFile('/workspace/proj/dist/built.shtml', '<div>b</div>');
+      await vfs.writeFile('/workspace/proj/.build/artifact.shtml', '<div>a</div>');
+      await vfs.writeFile('/workspace/proj/.git/hooks/hook.shtml', '<div>h</div>');
+      await vfs.writeFile('/workspace/proj/panel.shtml', '<div>panel</div>');
+      const result = await discoverSprinkles(vfs);
+      expect([...result.keys()]).toEqual(['panel']);
+    });
+
+    it('stops at the depth cap, counting the .shtml itself', async () => {
+      // The cap is 6 entries below the root and applies to the FILE, not
+      // just the directories above it: `/workspace/a/b/c/d/e/at-cap.shtml`
+      // is depth 6, `/workspace/a/b/c/d/e/f/past-cap.shtml` is depth 7.
+      await vfs.writeFile('/workspace/a/b/c/d/e/at-cap.shtml', '<div>deep</div>');
+      await vfs.writeFile('/workspace/a/b/c/d/e/f/past-cap.shtml', '<div>nope</div>');
+      const result = await discoverSprinkles(vfs);
+      expect(result.has('at-cap')).toBe(true);
+      expect(result.has('past-cap')).toBe(false);
+    });
   });
 });
 

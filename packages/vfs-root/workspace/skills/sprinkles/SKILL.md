@@ -158,6 +158,15 @@ that presents them. Write the sprinkles, open them, arrange, then `layout save
 4. `bash` → `sprinkle open <name>`.
 5. **CRITICAL: do NOT finish or send a completion message.** You own this sprinkle for its entire lifetime. The cone will send you follow-up instructions (modifications, lick events) via `feed_scoop`. If you finish, you lose your context and cannot handle future work on this sprinkle.
 
+### Where sprinkles are discovered
+
+`sprinkle list` and the rail only see `.shtml` files under `/shared`,
+`/workspace`, `/scoops` and `/home`, no more than six directory levels deep, and
+never inside `node_modules`, `dist`, `build`, `coverage`, or any dot-directory.
+A `.shtml` written to `/tmp`, `/mnt`, `/etc` or a deeply nested build folder
+will not be listed — write to `/shared/sprinkles/<name>/<name>.shtml`. (`open
+/path/to/file.shtml` still opens any path directly.)
+
 ### Updating a sprinkle (when you receive follow-up instructions)
 
 1. Edit `/shared/sprinkles/<name>/<name>.shtml` with the requested changes.
