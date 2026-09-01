@@ -506,6 +506,9 @@ async function renewGitHubToken(): Promise<string | null> {
   }
 }
 
+/** Bound the validation call: `--check` must always answer, never hang. */
+const VALIDATE_TIMEOUT_MS = 10_000;
+
 /**
  * Ask GitHub whether it still accepts the stored token. `GET /user` is the
  * cheapest authenticated call GitHub offers, and it answers the only question
@@ -522,19 +525,35 @@ async function validateGitHubToken(): Promise<OAuthTokenValidation> {
         Authorization: `Bearer ${accessToken}`,
         Accept: 'application/vnd.github+json',
       },
+      signal: AbortSignal.timeout(VALIDATE_TIMEOUT_MS),
     });
     if (res.ok) {
       const user = (await res.json().catch(() => ({}))) as { login?: string; name?: string };
       return { status: 'accepted', userName: user.name || user.login };
     }
-    // 401 = bad/revoked credential, 403 = the token exists but the grant no
-    // longer covers this call. Both need a new login, not a silent renewal.
-    const detail = `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`;
-    if (res.status === 401 || res.status === 403) return { status: 'rejected', detail };
-    return { status: 'unknown', detail };
+    return classifyGitHubRejection(res);
   } catch (err) {
     return { status: 'unknown', detail: err instanceof Error ? err.message : String(err) };
   }
+}
+
+/**
+ * Only a 401 proves GitHub refused the credential. GitHub also answers 403 for
+ * primary and secondary rate limits, which say nothing about the token — a
+ * throttled caller must never be sent to a consent window, so an undifferentiated
+ * 403 stays `unknown`.
+ */
+function classifyGitHubRejection(res: Response): OAuthTokenValidation {
+  const detail = `HTTP ${res.status}${res.statusText ? ` ${res.statusText}` : ''}`;
+  if (res.status === 401) return { status: 'rejected', detail };
+  if (res.status === 403 && isRateLimited(res)) {
+    return { status: 'unknown', detail: `${detail} (rate limited)` };
+  }
+  return { status: 'unknown', detail };
+}
+
+function isRateLimited(res: Response): boolean {
+  return res.headers.get('x-ratelimit-remaining') === '0' || res.headers.has('retry-after');
 }
 
 async function getValidAccessToken(): Promise<string> {

@@ -204,32 +204,32 @@ The extension is a thin CDP pass-through + bootstrapper. The webapp UI and agent
 
 ### packages/webapp/src/shell/supplemental-commands/ — Custom Shell Commands
 
-| File                     | Purpose                                                                                                                                                                     |
-| ------------------------ | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `index.ts`               | Factory for all supplemental commands                                                                                                                                       |
-| `help-command.ts`        | `commands` — list all available commands                                                                                                                                    |
-| `convert-command.ts`     | `convert` — ImageMagick-style transforms, nested append composition, and text annotation via magick-wasm                                                                    |
-| `crontask-command.ts`    | `crontask` — schedule cron jobs (dispatches licks to scoops); backed by node-cron                                                                                           |
-| `imgcat-command.ts`      | `imgcat` — display images inline in terminal                                                                                                                                |
-| `node-command.ts`        | `node -e` — execute JavaScript (CLI: AsyncFunction, extension: sandbox iframe)                                                                                              |
-| `open-command.ts`        | `open <path\|url>` — serve VFS files via preview SW or open URLs in browser tab; `--download` / `-d` forces download; `--view` / `-v` returns image inline for agent vision |
-| `pdftk-command.ts`       | `pdftk` — PDF manipulation (concat, split, rotate, burst, uncompress/compress)                                                                                              |
-| `pdftotext-command.ts`   | `pdftotext` — extract a PDF's text layer, with poppler's `-layout` / page-range flags (pdf.js)                                                                              |
-| `pdftoppm-command.ts`    | `pdftoppm` / `pdftocairo` — rasterize PDF pages to PNG/JPEG (pdf.js + OffscreenCanvas)                                                                                      |
-| `python-command.ts`      | `python3/python -c` — execute Python via Pyodide (~13MB bundled, loaded from `chrome.runtime.getURL('pyodide/')`)                                                           |
-| `shared.ts`              | Shared utilities: `toPreviewUrl()` (dual-mode preview SW URL), `isLikelyUrl()`, `basename()`, `dirname()`, NodeExitError, nodeRuntimeState, formatConsoleArg                |
-| `sqlite-command.ts`      | `sqlite3` — SQLite database operations (in-memory or VFS-backed)                                                                                                            |
-| `unzip-command.ts`       | `unzip` — extract archives                                                                                                                                                  |
-| `upskill-command.ts`     | `upskill` — install skills from GitHub, the Tessl registry, or browse.sh; `upskill tabs` suggests skills for open browser tabs                                              |
-| `uname-command.ts`       | `uname` — SLICC identity: `-r` version, `-n` tray role, `-o` user agent, `-a` all                                                                                           |
-| `webhook-command.ts`     | `webhook` — manage webhooks for event-driven automation                                                                                                                     |
-| `which-command.ts`       | `which` — resolve command to path (built-ins: `/usr/bin/<name>`, `.jsh` scripts: actual VFS path)                                                                           |
-| `zip-command.ts`         | `zip` — create archives                                                                                                                                                     |
-| `serve-command.ts`       | `serve` — open a VFS app directory in a browser tab via preview service worker with optional `--entry` override                                                             |
-| `oauth-token-command.ts` | `oauth-token` — retrieve OAuth access tokens for configured providers with auto-login                                                                                       |
-| `playwright-command.ts`  | `playwright-cli` / `playwright` / `puppeteer` — browser automation shell commands (navigate, snapshot, click, screenshot, cookies, HAR recording)                           |
-| `sprinkle-command.ts`    | `sprinkle` — list, open, close, and refresh `.shtml` sprinkle panels from the agent                                                                                         |
-| `magick-wasm.ts`         | Shared ImageMagick WASM initialization module for dual-mode (CLI/browser CDN vs extension bundled) image processing                                                         |
+| File                                              | Purpose                                                                                                                                                                     |
+| ------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `index.ts`                                        | Factory for all supplemental commands                                                                                                                                       |
+| `help-command.ts`                                 | `commands` — list all available commands                                                                                                                                    |
+| `convert-command.ts`                              | `convert` — ImageMagick-style transforms, nested append composition, and text annotation via magick-wasm                                                                    |
+| `crontask-command.ts`                             | `crontask` — schedule cron jobs (dispatches licks to scoops); backed by node-cron                                                                                           |
+| `imgcat-command.ts`                               | `imgcat` — display images inline in terminal                                                                                                                                |
+| `node-command.ts`                                 | `node -e` — execute JavaScript (CLI: AsyncFunction, extension: sandbox iframe)                                                                                              |
+| `open-command.ts`                                 | `open <path\|url>` — serve VFS files via preview SW or open URLs in browser tab; `--download` / `-d` forces download; `--view` / `-v` returns image inline for agent vision |
+| `pdftk-command.ts`                                | `pdftk` — PDF manipulation (concat, split, rotate, burst, uncompress/compress)                                                                                              |
+| `pdftotext-command.ts`                            | `pdftotext` — extract a PDF's text layer, with poppler's `-layout` / page-range flags (pdf.js)                                                                              |
+| `pdftoppm-command.ts`                             | `pdftoppm` / `pdftocairo` — rasterize PDF pages to PNG/JPEG (pdf.js + OffscreenCanvas)                                                                                      |
+| `python-command.ts`                               | `python3/python -c` — execute Python via Pyodide (~13MB bundled, loaded from `chrome.runtime.getURL('pyodide/')`)                                                           |
+| `shared.ts`                                       | Shared utilities: `toPreviewUrl()` (dual-mode preview SW URL), `isLikelyUrl()`, `basename()`, `dirname()`, NodeExitError, nodeRuntimeState, formatConsoleArg                |
+| `sqlite-command.ts`                               | `sqlite3` — SQLite database operations (in-memory or VFS-backed)                                                                                                            |
+| `unzip-command.ts`                                | `unzip` — extract archives                                                                                                                                                  |
+| `upskill-command.ts`                              | `upskill` — install skills from GitHub, the Tessl registry, or browse.sh; `upskill tabs` suggests skills for open browser tabs                                              |
+| `uname-command.ts`                                | `uname` — SLICC identity: `-r` version, `-n` tray role, `-o` user agent, `-a` all                                                                                           |
+| `webhook-command.ts`                              | `webhook` — manage webhooks for event-driven automation                                                                                                                     |
+| `which-command.ts`                                | `which` — resolve command to path (built-ins: `/usr/bin/<name>`, `.jsh` scripts: actual VFS path)                                                                           |
+| `zip-command.ts`                                  | `zip` — create archives                                                                                                                                                     |
+| `serve-command.ts`                                | `serve` — open a VFS app directory in a browser tab via preview service worker with optional `--entry` override                                                             |
+| `oauth-token-command.ts` (+ `oauth-token/run.ts`) | `oauth-token` — retrieve OAuth access tokens for configured providers with auto-login; the stub registers, `run.ts` loads on first use                                      |
+| `playwright-command.ts`                           | `playwright-cli` / `playwright` / `puppeteer` — browser automation shell commands (navigate, snapshot, click, screenshot, cookies, HAR recording)                           |
+| `sprinkle-command.ts`                             | `sprinkle` — list, open, close, and refresh `.shtml` sprinkle panels from the agent                                                                                         |
+| `magick-wasm.ts`                                  | Shared ImageMagick WASM initialization module for dual-mode (CLI/browser CDN vs extension bundled) image processing                                                         |
 
 ### packages/webapp/src/skills/ — Skill Discovery
 

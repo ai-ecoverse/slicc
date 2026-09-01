@@ -744,10 +744,16 @@ describe('github.ts onValidateToken (does the provider still accept the token?)'
     (globalThis as any).localStorage = originalLocalStorage;
   });
 
+  const headers = (entries: Record<string, string> = {}) => ({
+    get: (k: string) => entries[k.toLowerCase()] ?? null,
+    has: (k: string) => k.toLowerCase() in entries,
+  });
+
   it('reports accepted with the identity GitHub resolved the token to', async () => {
     globalThis.fetch = vi.fn(async () => ({
       ok: true,
       status: 200,
+      headers: headers(),
       json: async () => ({ login: 'trieloff', name: 'Lars Trieloff' }),
     })) as any;
     seedAccount('gho_live');
@@ -759,6 +765,22 @@ describe('github.ts onValidateToken (does the provider still accept the token?)'
     });
   });
 
+  it('bounds the call so --check always answers', async () => {
+    const fetchSpy = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      headers: headers(),
+      json: async () => ({ login: 'trieloff' }),
+    }));
+    globalThis.fetch = fetchSpy as any;
+    seedAccount('gho_live');
+
+    await (await import('../../providers/github.js')).config.onValidateToken?.();
+    // Without a signal a stalled fetch would hang the command forever, so the
+    // caller would get neither UNKNOWN nor an exit code.
+    expect((fetchSpy.mock.calls[0] as any)[1].signal).toBeInstanceOf(AbortSignal);
+  });
+
   it('reports rejected for a token GitHub has invalidated', async () => {
     // The #2695 starting state: still inside its recorded local expiry, but
     // every real call comes back "Bad credentials".
@@ -766,6 +788,7 @@ describe('github.ts onValidateToken (does the provider still accept the token?)'
       ok: false,
       status: 401,
       statusText: 'Unauthorized',
+      headers: headers(),
     })) as any;
     seedAccount('gho_dead');
 
@@ -773,12 +796,32 @@ describe('github.ts onValidateToken (does the provider still accept the token?)'
     expect(result).toEqual({ status: 'rejected', detail: 'HTTP 401 Unauthorized' });
   });
 
-  it('reports rejected when the grant no longer covers the call (403)', async () => {
-    globalThis.fetch = vi.fn(async () => ({ ok: false, status: 403, statusText: '' })) as any;
+  it('never calls a 403 rejected — GitHub also answers 403 when throttling', async () => {
+    // A rate-limited but perfectly valid token must not be sent through
+    // re-consent, which cannot fix throttling.
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      statusText: 'Forbidden',
+      headers: headers({ 'x-ratelimit-remaining': '0' }),
+    })) as any;
+    seedAccount('gho_live');
+
+    const result = await (await import('../../providers/github.js')).config.onValidateToken?.();
+    expect(result).toEqual({ status: 'unknown', detail: 'HTTP 403 Forbidden (rate limited)' });
+  });
+
+  it('leaves an undifferentiated 403 unknown rather than guessing', async () => {
+    globalThis.fetch = vi.fn(async () => ({
+      ok: false,
+      status: 403,
+      statusText: '',
+      headers: headers(),
+    })) as any;
     seedAccount('gho_scoped_out');
 
     const result = await (await import('../../providers/github.js')).config.onValidateToken?.();
-    expect(result).toEqual({ status: 'rejected', detail: 'HTTP 403' });
+    expect(result).toEqual({ status: 'unknown', detail: 'HTTP 403' });
   });
 
   it('reports unknown — never rejected — when GitHub itself is failing', async () => {
@@ -788,6 +831,7 @@ describe('github.ts onValidateToken (does the provider still accept the token?)'
       ok: false,
       status: 502,
       statusText: 'Bad Gateway',
+      headers: headers(),
     })) as any;
     seedAccount('gho_live');
 
