@@ -1,6 +1,7 @@
 import llmsTxtIgnoreDefault from '../../../vfs-root/etc/llmstxtignore?raw';
 import { createLogger } from '../base/logger.js';
 import type { FsWatcher, RestrictedFS, VirtualFS } from '../fs/index.js';
+import { FsError } from '../fs/index.js';
 import type { LickEvent } from './lick-manager.js';
 import type { RegisteredScoop } from './types.js';
 
@@ -79,8 +80,14 @@ export async function appendLlmsTxtIgnoreHost(
   let existing = '';
   try {
     existing = (await fs.readFile(LLMS_TXT_IGNORE_FILE, { encoding: 'utf-8' })) as string;
-  } catch {
-    existing = '';
+  } catch (err) {
+    // Only treat "file not created yet" as empty. Any other fault (EACCES, a
+    // transient OPFS/IndexedDB-backed VFS hiccup, a decode/corruption error)
+    // MUST propagate — otherwise the unconditional writeFile below clobbers the
+    // entire suppression policy with a single-line file, fail-open data loss on
+    // a security-relevant surface. Mirrors the ENOENT-only pattern in
+    // scoops/cone-memory-store.ts.
+    if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
   }
   if (matchesLlmsTxtIgnore(normalized, parseLlmsTxtIgnore(existing))) return false;
   const separator = existing.length > 0 && !existing.endsWith('\n') ? '\n' : '';

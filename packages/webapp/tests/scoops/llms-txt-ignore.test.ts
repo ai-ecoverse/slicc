@@ -1,6 +1,6 @@
 import 'fake-indexeddb/auto';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { FsWatcher, VirtualFS } from '../../src/fs/index.js';
+import { FsError, FsWatcher, VirtualFS } from '../../src/fs/index.js';
 import {
   appendLlmsTxtIgnoreHost,
   discoveryHostname,
@@ -83,6 +83,53 @@ describe('/etc/llmstxtignore', () => {
         (entry) => entry === 'example.com'
       )
     ).toHaveLength(1);
+  });
+
+  it('starts from empty when the policy file does not exist yet (ENOENT)', async () => {
+    let written = '';
+    const stub = {
+      readFile: async () => {
+        throw new FsError('ENOENT', 'no such file', LLMS_TXT_IGNORE_FILE);
+      },
+      writeFile: async (_path: string, data: string) => {
+        written = data;
+      },
+    } as never;
+    expect(await appendLlmsTxtIgnoreHost(stub, 'example.com')).toBe(true);
+    expect(written).toBe('example.com\n');
+  });
+
+  it('aborts the append instead of clobbering the policy on a transient read fault', async () => {
+    // Seed a multi-host policy, then fail the read with a non-ENOENT fault.
+    await fs.writeFile(LLMS_TXT_IGNORE_FILE, 'github.com\napp.slack.com\n');
+    let wrote = false;
+    const stub = {
+      readFile: async () => {
+        throw new FsError('EIO', 'transient VFS fault', LLMS_TXT_IGNORE_FILE);
+      },
+      writeFile: async () => {
+        wrote = true;
+      },
+    } as never;
+    await expect(appendLlmsTxtIgnoreHost(stub, 'evil.example')).rejects.toBeInstanceOf(FsError);
+    expect(wrote).toBe(false);
+    // The on-disk policy is untouched — no host was silently dropped.
+    expect(parseLlmsTxtIgnore(await fs.readTextFile(LLMS_TXT_IGNORE_FILE))).toEqual([
+      'github.com',
+      'app.slack.com',
+    ]);
+  });
+
+  it('propagates a non-FsError read fault rather than treating it as empty', async () => {
+    const stub = {
+      readFile: async () => {
+        throw new TypeError('unexpected');
+      },
+      writeFile: async () => {
+        throw new Error('writeFile must not be reached');
+      },
+    } as never;
+    await expect(appendLlmsTxtIgnoreHost(stub, 'example.com')).rejects.toBeInstanceOf(TypeError);
   });
 
   it('classifies browser-capable scoops without leaking discovery to restricted ones', () => {
