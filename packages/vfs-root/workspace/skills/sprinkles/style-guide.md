@@ -801,6 +801,8 @@ background: color-mix(in srgb, var(--s2-notice) 10%, transparent); /* amber tint
 background: color-mix(in srgb, var(--s2-accent) 6%, transparent); /* blue tint */
 ```
 
+The badge/icon fills also expose theme-aware `--uxc-<hue>-subtle-bg` / `--uxc-<hue>-subtle-text` pairs (`yellow`, `purple`, `cyan`, `magenta`, `indigo`, `gray`, `positive`, `notice`, `negative`, `accent`). Always use a `-bg` with its matching `-text`: each pair is contrast-checked as a pair in both themes.
+
 ### Shadows
 
 | Token                   | Usage                   |
