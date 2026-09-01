@@ -52,6 +52,83 @@ export interface WireWcBrowserDeps {
   thumbWidth?: number;
 }
 
+/** What {@link createPeek} needs from the wiring around it. */
+interface PeekDeps {
+  browser: BrowserAPI;
+  log: BootStageLogger;
+  /** The going half — the same switch `tab-activate` performs. */
+  activate(id: string): Promise<boolean>;
+  /** The page the agent was driving before the switcher opened. */
+  agentTarget(): string | null;
+}
+
+/**
+ * Show a tab, then come back.
+ *
+ * A peek is a switch that undoes itself, so the going half IS `activate` —
+ * and the reason that reports success is here: a peek that never left must
+ * not schedule a trip home.
+ *
+ * Coming back has two steps that must not be confused. `bringToFront` on
+ * SLICC's own target is what the USER sees; re-attaching whatever page the
+ * AGENT was driving is what keeps the gesture out of its way, and is
+ * invisible because attaching does not foreground. Only SLICC itself is
+ * excluded from that restore — including when the agent was already on the
+ * peeked tab, where skipping it would leave the agent driving SLICC's UI.
+ */
+function createPeek(deps: PeekDeps): (id: string) => Promise<void> {
+  const { browser, log } = deps;
+
+  /**
+   * Which target is SLICC itself — the tab a peek comes back to.
+   *
+   * Resolved fresh per peek rather than remembered: a target id that has since
+   * closed would strand the user in the tab they peeked. `location.href` is
+   * the exact answer when it is there; a second SLICC tab on our own origin is
+   * the near-enough fallback, since coming back to the wrong SLICC beats not
+   * coming back at all. Never throws — not knowing the way home degrades the
+   * peek to a plain switch, it does not stop the switch.
+   */
+  const findSelfTarget = async (): Promise<string | null> => {
+    try {
+      const pages = await browser.listAllTargets();
+      const exact = pages.find((p) => p.url === location.href);
+      if (exact) return exact.targetId;
+      const selfOrigins = location?.origin ? [location.origin] : undefined;
+      return pages.find((p) => isSliccAppUrl(p.url ?? '', { selfOrigins }))?.targetId ?? null;
+    } catch (err) {
+      log.warn('WC browser overlay: could not resolve the SLICC tab', err);
+      return null;
+    }
+  };
+
+  /** The pending return, so a second peek replaces the first rather than stacking. */
+  let timer: ReturnType<typeof setTimeout> | null = null;
+
+  return async (id: string): Promise<void> => {
+    const previous = deps.agentTarget();
+    const self = await findSelfTarget();
+    if (!(await deps.activate(id))) return;
+    if (!self) {
+      log.warn('WC browser overlay: peek cannot find the SLICC tab; staying put', { target: id });
+      return;
+    }
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      void (async () => {
+        try {
+          await browser.attachToPage(self);
+          await browser.bringToFront();
+          if (previous && previous !== self) await browser.attachToPage(previous);
+        } catch (err) {
+          log.error('WC browser overlay: peek return failed', err);
+        }
+      })();
+    }, PEEK_MS);
+  };
+}
+
 /** Handles returned for tests; production callers ignore them. */
 export interface WcBrowserHandle {
   overlay: HTMLElement;
@@ -65,7 +142,19 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
   document.body.append(overlay);
 
   let refreshSeq = 0;
+  /**
+   * The page the AGENT was driving before the switcher opened.
+   *
+   * Captured here because the thumbnail loop below attaches to every tab in
+   * turn: by the time a peek runs, `getAttachedTargetId()` is whichever card
+   * was captured last, and restoring that would silently re-point the agent
+   * at a tab the user merely looked at. Only taken while the overlay is shut,
+   * so a refresh triggered from inside it (closing a tab) cannot overwrite the
+   * real answer with a thumbnail's.
+   */
+  let agentTarget: string | null = null;
   const refresh = async (): Promise<void> => {
+    if (!overlay.hasAttribute('open')) agentTarget = browser.getAttachedTargetId();
     const seq = ++refreshSeq;
     overlay.show();
     let pages: Awaited<ReturnType<BrowserAPI['listAllTargets']>>;
@@ -134,9 +223,12 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
 
   /**
    * Switch to a tab for good: attach, foreground, and get out of the way.
-   * Shared with peek, whose going half is this exact action.
+   *
+   * Shared with peek, whose going half is this exact action — and the reason
+   * it REPORTS success rather than swallowing failure silently: a peek that
+   * never left must not schedule a trip home.
    */
-  const activate = async (id: string): Promise<void> => {
+  const activate = async (id: string): Promise<boolean> => {
     try {
       if (id.includes(':')) {
         // A follower's tab: focusing it over there wouldn't put it in front
@@ -153,14 +245,16 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
           degraded: result.degraded,
         });
         overlay.hide();
-        return;
+        return true;
       }
       await browser.attachToPage(id);
       await browser.bringToFront();
       overlay.hide();
+      return true;
     } catch (err) {
       // Keep the overlay open so the user sees the tap did not take effect.
       log.error('WC browser overlay: tab activate failed', err);
+      return false;
     }
   };
 
@@ -168,64 +262,7 @@ export function wireWcBrowser(deps: WireWcBrowserDeps): WcBrowserHandle {
     void activate((event as CustomEvent<{ id: string }>).detail.id);
   });
 
-  /**
-   * Which target is SLICC itself — the tab a peek comes back to.
-   *
-   * Resolved fresh at peek time rather than remembered from the last refresh:
-   * a target id that has since closed would strand the user in the peeked tab.
-   * `location.href` is the exact answer when it is there; a second SLICC tab
-   * on our own origin is the near-enough fallback, since coming back to the
-   * wrong SLICC beats not coming back at all.
-   */
-  const findSelfTarget = async (): Promise<string | null> => {
-    const pages = await browser.listAllTargets();
-    const exact = pages.find((p) => p.url === location.href);
-    if (exact) return exact.targetId;
-    const selfOrigins = location?.origin ? [location.origin] : undefined;
-    return pages.find((p) => isSliccAppUrl(p.url ?? '', { selfOrigins }))?.targetId ?? null;
-  };
-
-  /** The pending return, so a second peek replaces the first rather than stacking. */
-  let peekTimer: ReturnType<typeof setTimeout> | null = null;
-
-  /**
-   * Show a tab, then come back.
-   *
-   * The going half is exactly what `tab-activate` does, because it IS the same
-   * action — a peek is a switch that undoes itself. The coming back half has
-   * two steps that must not be confused: `bringToFront` on SLICC's own target
-   * is what the USER sees, and re-attaching whatever the agent was driving
-   * before is what keeps this gesture out of the agent's way. Attaching does
-   * not foreground, so the second step is invisible.
-   *
-   * Resolved BEFORE leaving: if we cannot tell which tab is ours, the peek
-   * degrades to a plain switch rather than a trip with no way home.
-   */
-  const peek = async (id: string): Promise<void> => {
-    const previous = browser.getAttachedTargetId();
-    const self = await findSelfTarget();
-    await activate(id);
-    if (!self) {
-      log.warn('WC browser overlay: peek cannot find the SLICC tab; staying put', { target: id });
-      return;
-    }
-    if (peekTimer) clearTimeout(peekTimer);
-    peekTimer = setTimeout(() => {
-      peekTimer = null;
-      void (async () => {
-        try {
-          await browser.attachToPage(self);
-          await browser.bringToFront();
-          // Put the agent back on the page it was driving. Never SLICC itself.
-          if (previous && previous !== self && previous !== id) {
-            await browser.attachToPage(previous);
-          }
-        } catch (err) {
-          log.error('WC browser overlay: peek return failed', err);
-        }
-      })();
-    }, PEEK_MS);
-  };
+  const peek = createPeek({ browser, log, activate, agentTarget: () => agentTarget });
 
   overlay.addEventListener('tab-peek', (event) => {
     const id = (event as CustomEvent<{ id: string }>).detail.id;

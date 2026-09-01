@@ -150,6 +150,18 @@ function numberBadge(index: number, total: number): HTMLElement | null {
   return digit === null ? null : h('span', { class: 'num', part: 'number' }, String(digit));
 }
 
+/**
+ * How long a digit pressed before the tabs arrive waits for them.
+ *
+ * The switcher opens on the keystroke that asks for it and fills in
+ * asynchronously — a target list, then a screenshot per tab — so `b 3` typed
+ * at speed can land on an empty grid. Swallowing it there would make the
+ * shortcut work or not depending on how fast the CDP host answered, which is
+ * the one thing a positional key must never do. Bounded, because a digit that
+ * fires into a list the user never saw is worse than one that did nothing.
+ */
+const PENDING_DIGIT_MS = 3000;
+
 /** Default header label when no `heading` attribute is set. */
 const DEFAULT_HEADING = 'Open tabs';
 
@@ -172,6 +184,9 @@ const DEFAULT_HEADING = 'Open tabs';
  * the shell + the three events — the host app applies them to the real CDP tabs.
  *
  * @attr open - reflected; whether the overlay is shown (drive via `show()`/`hide()`)
+ * @attr no-peek - boolean; this float cannot show a tab and come back, so `p`
+ *   is inert and `peeking` cannot be armed (a follower's tabs are the
+ *   leader's — activating one copies it here for good)
  * @attr heading - the header label (defaults to `Open tabs`)
  * @csspart overlay - the full-screen scrim
  * @csspart bar - the header bar
@@ -198,6 +213,9 @@ export class SliccTabOverlay extends HTMLElement {
   #lastFocus: HTMLElement | null = null;
   /** Is the next activation a peek rather than a switch? */
   #peek = false;
+  /** A digit pressed before the list arrived, waiting for it. */
+  #pendingDigit: number | null = null;
+  #pendingTimer: ReturnType<typeof setTimeout> | null = null;
 
   /**
    * The overlay's own keyboard, live only while it is open.
@@ -219,25 +237,54 @@ export class SliccTabOverlay extends HTMLElement {
     }
     // `code` first: the physical key is the stable reading of "the 3 key"
     // across layouts (the shell's `digitFor` does the same).
+    // A modified key belongs to the browser or the OS — ⌘P prints, ⌘1 switches
+    // a browser tab — and a modal is not a licence to take them. The shell's
+    // keyboard mode passes the same combinations through for the same reason.
+    if (e.ctrlKey || e.metaKey || e.altKey || e.isComposing) return;
     const digit = /^Digit([1-9])$/.exec(e.code ?? '')?.[1] ?? /^[1-9]$/.exec(e.key)?.[0];
     if (digit) {
       e.stopPropagation();
       e.preventDefault();
-      // `9` is the LAST tab, whatever the count — the tab-strip convention the
-      // shell's digits already follow (see `indexForDigit` there; the rule is
-      // restated rather than imported, because a component may not depend on
-      // the app).
-      const index = digit === '9' ? this.#tabs.length - 1 : Number(digit) - 1;
-      const tab = index >= 0 ? this.#tabs[index] : undefined;
-      if (tab) this.#activate(tab.id);
+      this.#selectDigit(Number(digit));
       return;
     }
-    if (e.key === 'p' || e.key === 'P') {
+    if ((e.key === 'p' || e.key === 'P') && !this.hasAttribute('no-peek')) {
       e.stopPropagation();
       e.preventDefault();
       this.peeking = !this.#peek;
     }
   };
+
+  /**
+   * Act on a digit, or hold it until there is a list to act on.
+   *
+   * `9` is the LAST tab, whatever the count — the tab-strip convention the
+   * shell's digits already follow (see `indexForDigit` there; the rule is
+   * restated rather than imported, because a component may not depend on the
+   * app).
+   */
+  #selectDigit(digit: number): void {
+    if (this.#tabs.length === 0) {
+      this.#holdDigit(digit);
+      return;
+    }
+    const index = digit === 9 ? this.#tabs.length - 1 : digit - 1;
+    const tab = index >= 0 ? this.#tabs[index] : undefined;
+    if (tab) this.#activate(tab.id);
+  }
+
+  /** Remember a digit the list was not ready for; see {@link PENDING_DIGIT_MS}. */
+  #holdDigit(digit: number): void {
+    this.#clearPendingDigit();
+    this.#pendingDigit = digit;
+    this.#pendingTimer = setTimeout(() => this.#clearPendingDigit(), PENDING_DIGIT_MS);
+  }
+
+  #clearPendingDigit(): void {
+    if (this.#pendingTimer) clearTimeout(this.#pendingTimer);
+    this.#pendingTimer = null;
+    this.#pendingDigit = null;
+  }
 
   constructor() {
     super();
@@ -284,6 +331,13 @@ export class SliccTabOverlay extends HTMLElement {
   set tabs(value: TabDescriptor[]) {
     this.#tabs = Array.isArray(value) ? value.map((t) => ({ ...t })) : [];
     if (this.isConnected) this.#render();
+    // The list the user was already reaching for: a digit pressed before the
+    // refresh landed acts now, on the tabs it was asking about.
+    const held = this.#pendingDigit;
+    if (held !== null && this.#tabs.length > 0) {
+      this.#clearPendingDigit();
+      this.#selectDigit(held);
+    }
   }
 
   /** Open the overlay (no-op if already open). */
@@ -304,8 +358,10 @@ export class SliccTabOverlay extends HTMLElement {
   }
 
   set peeking(value: boolean) {
-    this.#peek = value;
-    this.toggleAttribute('data-peek', value);
+    // A float that cannot come back must not offer to: a follower's tabs
+    // belong to the leader, and activating one copies it here for good.
+    this.#peek = value && !this.hasAttribute('no-peek');
+    this.toggleAttribute('data-peek', this.#peek);
   }
 
   /** Activate a tab the way the armed mode says: peek it, or switch to it. */
@@ -413,7 +469,10 @@ export class SliccTabOverlay extends HTMLElement {
 
   /** Manage open-state focus + the document key listener. */
   #sync(): void {
-    if (!this.open) this.peeking = false;
+    if (!this.open) {
+      this.peeking = false;
+      this.#clearPendingDigit();
+    }
     if (this.open) {
       this.#lastFocus = (this.getRootNode() as Document | ShadowRoot).activeElement as HTMLElement;
       document.addEventListener('keydown', this.#onKey, true);

@@ -192,6 +192,91 @@ describe('slicc-tab-overlay', () => {
     });
   });
 
+  describe('the digit keys, before the list arrives', () => {
+    /**
+     * The switcher opens on the keystroke that asked for it and fills in
+     * asynchronously, so `b 3` typed at speed lands on an empty grid. Dropping
+     * it there would make a positional key work or not depending on how fast
+     * CDP answered.
+     */
+    it('holds a digit pressed on an empty grid and acts when the tabs land', () => {
+      const el = mount();
+      const seen: string[] = [];
+      el.addEventListener('tab-activate', (e) =>
+        seen.push((e as CustomEvent<{ id: string }>).detail.id)
+      );
+      el.show();
+      key({ key: '2', code: 'Digit2' });
+      expect(seen).toEqual([]);
+      el.tabs = TABS;
+      expect(seen).toEqual(['t2']);
+    });
+
+    it('only holds the most recent digit', () => {
+      const el = mount();
+      const seen: string[] = [];
+      el.addEventListener('tab-activate', (e) =>
+        seen.push((e as CustomEvent<{ id: string }>).detail.id)
+      );
+      el.show();
+      key({ key: '1', code: 'Digit1' });
+      key({ key: '3', code: 'Digit3' });
+      el.tabs = TABS;
+      expect(seen).toEqual(['t3']);
+    });
+
+    /** A digit that fires into a list the user never saw is worse than one that did nothing. */
+    it('lets a held digit expire', () => {
+      vi.useFakeTimers();
+      try {
+        const el = mount();
+        const seen: string[] = [];
+        el.addEventListener('tab-activate', () => seen.push('x'));
+        el.show();
+        key({ key: '1', code: 'Digit1' });
+        vi.advanceTimersByTime(4000);
+        el.tabs = TABS;
+        expect(seen).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('drops a held digit when the overlay closes', () => {
+      const el = mount();
+      const seen: string[] = [];
+      el.addEventListener('tab-activate', () => seen.push('x'));
+      el.show();
+      key({ key: '1', code: 'Digit1' });
+      el.hide();
+      el.tabs = TABS;
+      expect(seen).toEqual([]);
+    });
+  });
+
+  /**
+   * A modal is not a licence to take the browser's keys: ⌘P prints and ⌘1
+   * switches a browser tab, and the shell's keyboard mode passes both through
+   * for the same reason.
+   */
+  describe('modified keys', () => {
+    it.each([
+      ['metaKey', { key: '1', code: 'Digit1', metaKey: true }],
+      ['ctrlKey', { key: '3', code: 'Digit3', ctrlKey: true }],
+      ['altKey', { key: 'p', code: 'KeyP', altKey: true }],
+    ])('leaves %s combinations to the browser', (_name, init) => {
+      const el = mount((e) => {
+        e.tabs = TABS;
+      });
+      const seen: string[] = [];
+      el.addEventListener('tab-activate', () => seen.push('x'));
+      el.show();
+      expect(key(init)).toBe(false);
+      expect(seen).toEqual([]);
+      expect(el.peeking).toBe(false);
+    });
+  });
+
   describe('peek', () => {
     it('p arms it, and the next digit peeks instead of switching', () => {
       const el = mount((e) => {
@@ -246,6 +331,25 @@ describe('slicc-tab-overlay', () => {
       key({ key: 'p', code: 'KeyP' });
       key({ key: 'p', code: 'KeyP' });
       expect(el.peeking).toBe(false);
+    });
+
+    /**
+     * A follower's tabs belong to the leader, and activating one copies it
+     * here for good — so the affordance is withheld rather than quietly
+     * meaning something other than what the chip says.
+     */
+    it('is refused entirely on a float that cannot come back', () => {
+      const el = mount((e) => {
+        e.setAttribute('no-peek', '');
+        e.tabs = TABS;
+      });
+      el.show();
+      key({ key: 'p', code: 'KeyP' });
+      expect(el.peeking).toBe(false);
+      // ...and not through the property either.
+      el.peeking = true;
+      expect(el.peeking).toBe(false);
+      expect(el.hasAttribute('data-peek')).toBe(false);
     });
 
     it('disarms when the overlay closes, so it never survives into the next visit', () => {

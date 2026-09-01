@@ -29,6 +29,13 @@ vi.mock('../../../src/scoops/tray-leader/tab-teleport.js', () => ({
 const log = { debug: vi.fn(), info: vi.fn(), warn: vi.fn(), error: vi.fn() };
 
 function makeFakeBrowser() {
+  /**
+   * The attachment MOVES — that is the whole point of modelling it. The
+   * thumbnail loop attaches to every tab in turn, so a peek that read the
+   * attachment at peek time would restore whichever card was captured last
+   * instead of the page the agent was driving.
+   */
+  let attached = 'agent-page';
   return {
     listAllTargets: vi.fn(async () => [
       { targetId: 'local-1', title: 'Docs', url: 'https://docs.example' },
@@ -36,8 +43,11 @@ function makeFakeBrowser() {
       // screenshot) rides the federated WebRTC channel.
       { targetId: 'follower-9:tab-2', title: 'Dashboard', url: 'https://dash.example' },
     ]),
-    attachToPage: vi.fn(async () => 'session-1'),
-    getAttachedTargetId: vi.fn(() => 'agent-page'),
+    attachToPage: vi.fn(async (id: string) => {
+      attached = id;
+      return 'session-1';
+    }),
+    getAttachedTargetId: vi.fn(() => attached),
     screenshot: vi.fn(async () => 'BASE64'),
     bringToFront: vi.fn(async () => undefined),
     closePage: vi.fn(async () => undefined),
@@ -285,5 +295,109 @@ describe('peek', () => {
     await Promise.resolve();
     await Promise.resolve();
     expect(vi.mocked(teleportTabOneWay)).toHaveBeenCalled();
+  });
+});
+
+describe('peek and the agent attachment', () => {
+  function browserWithSelf() {
+    const browser = makeFakeBrowser();
+    browser.listAllTargets = vi.fn(async () => [
+      { targetId: 'local-1', title: 'Docs', url: 'https://docs.example' },
+      { targetId: 'local-2', title: 'Mail', url: 'https://mail.example' },
+      { targetId: 'slicc-self', title: 'SLICC', url: location.href },
+    ]);
+    return browser;
+  }
+
+  async function openOverlay(browser: ReturnType<typeof makeFakeBrowser>) {
+    const refs = makeRefs();
+    const handle = wireWcBrowser({ refs, browser: browser as unknown as BrowserAPI, log });
+    await handle.refresh();
+    return handle.overlay as OverlayEl;
+  }
+
+  /**
+   * The regression this models: `refresh()` attaches to every tab to capture
+   * its thumbnail, so reading the attachment at peek time would restore the
+   * LAST CARD rather than the page the agent was driving before the switcher
+   * opened.
+   */
+  it('returns the agent to the page it was on before the switcher opened', async () => {
+    vi.useFakeTimers();
+    try {
+      const browser = browserWithSelf();
+      const overlay = await openOverlay(browser);
+      // The thumbnail loop has already moved the attachment off `agent-page`.
+      expect(browser.getAttachedTargetId()).not.toBe('agent-page');
+
+      overlay.dispatchEvent(new CustomEvent('tab-peek', { detail: { id: 'local-1' } }));
+      await vi.advanceTimersByTimeAsync(5001);
+      expect(browser.attachToPage).toHaveBeenLastCalledWith('agent-page');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /**
+   * `previous === id` is not a reason to skip the restore: the return has
+   * already pointed the shared session at SLICC, so skipping leaves the agent
+   * driving SLICC's own UI.
+   */
+  it('restores even when the agent was already on the peeked tab', async () => {
+    vi.useFakeTimers();
+    try {
+      const browser = browserWithSelf();
+      browser.getAttachedTargetId = vi.fn(() => 'local-1');
+      const overlay = await openOverlay(browser);
+      browser.attachToPage.mockClear();
+      overlay.dispatchEvent(new CustomEvent('tab-peek', { detail: { id: 'local-1' } }));
+      await vi.advanceTimersByTimeAsync(5001);
+      expect(browser.attachToPage).toHaveBeenLastCalledWith('local-1');
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it('schedules no return from a trip that never happened', async () => {
+    vi.useFakeTimers();
+    try {
+      const browser = browserWithSelf();
+      const overlay = await openOverlay(browser);
+      browser.bringToFront = vi.fn(async () => {
+        throw new Error('no such target');
+      });
+      overlay.dispatchEvent(new CustomEvent('tab-peek', { detail: { id: 'local-1' } }));
+      await vi.advanceTimersByTimeAsync(6000);
+      // The failed switch is reported once and nothing is scheduled after it.
+      expect(log.error).toHaveBeenCalledWith(
+        'WC browser overlay: tab activate failed',
+        expect.anything()
+      );
+      expect(browser.bringToFront).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  /** Not knowing the way home must not stop the switch itself. */
+  it('still switches when the target list cannot be read', async () => {
+    vi.useFakeTimers();
+    try {
+      const browser = browserWithSelf();
+      const overlay = await openOverlay(browser);
+      browser.listAllTargets = vi.fn(async () => {
+        throw new Error('cdp gone');
+      });
+      browser.bringToFront.mockClear();
+      overlay.dispatchEvent(new CustomEvent('tab-peek', { detail: { id: 'local-1' } }));
+      await vi.advanceTimersByTimeAsync(6000);
+      expect(browser.bringToFront).toHaveBeenCalledTimes(1);
+      expect(log.warn).toHaveBeenCalledWith(
+        'WC browser overlay: could not resolve the SLICC tab',
+        expect.anything()
+      );
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
