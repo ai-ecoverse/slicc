@@ -40,7 +40,6 @@ import type { FsWatcher } from '../fs/fs-watcher.js';
 import type { VirtualFS } from '../fs/index.js';
 import { GRANTED_FILE } from '../fs/sudo-fs.js';
 import { FsError } from '../fs/types.js';
-import { DEFAULT_APPROVALS_MD } from '../scoops/approver-agent.js';
 import type { ScoopConfig } from '../scoops/types.js';
 import type { ShellSudoConfig } from '../shell/almost-bash-shell-headless.js';
 import { createSudoBroker } from './index.js';
@@ -529,10 +528,7 @@ export class SudoManager {
     } catch {
       /* already exists */
     }
-    // Both self-protected policy files are seeded here, when absent, through
-    // the manager's UNGATED handle: shipping a default is not a policy edit,
-    // and a file that does not exist yet carries no owner decision to protect.
-    //
+    await this.seedWhenAbsent(SUDOERS_FILE, () => sudoersDefault);
     // `/etc/APPROVALS.md` MUST be seeded here rather than left to `upgrade
     // apply`'s three-way merge of `packages/vfs-root/etc/`. That merge runs on
     // the FS-gated handle, so on a profile predating the file it trips
@@ -541,20 +537,45 @@ export class SudoManager {
     // approval prompt for a no-op, with no diff to show (#2686). Seeding first
     // makes the merge classify the path `unchanged` (or `kept-local` once the
     // owner edits it), which writes nothing and prompts for nothing.
-    for (const [path, content] of [
-      [SUDOERS_FILE, sudoersDefault],
-      [APPROVALS_FILE, DEFAULT_APPROVALS_MD],
-    ] as const) {
-      try {
-        if (await this.fs.exists(path)) continue;
-        await this.fs.writeFile(path, content);
-        log.info('Seeded bundled policy default', { path });
-      } catch (err) {
-        log.warn('Failed to seed bundled policy default', {
-          path,
-          error: err instanceof Error ? err.message : String(err),
-        });
-      }
+    //
+    // The import is deliberately DYNAMIC, and `seedWhenAbsent` only calls it on
+    // the boot that actually seeds. A static one would pull `approver-agent`
+    // and its bundled instructions into `sudo-manager`'s graph, and
+    // `sudo-manager` is boot-critical — that hoists ~10 kB into the kernel
+    // worker's eager first-load closure, over the bundle-size gate's per-change
+    // allowance, to carry a string needed once per profile.
+    await this.seedWhenAbsent(
+      APPROVALS_FILE,
+      async () => (await import('../scoops/approver-agent.js')).DEFAULT_APPROVALS_MD
+    );
+  }
+
+  /**
+   * Write a bundled policy default to `path` when it is absent, through the
+   * manager's UNGATED handle.
+   *
+   * Ungated is safe for both self-protected policy files: shipping a default is
+   * not a policy edit, and a file that does not exist yet carries no owner
+   * decision to protect. Seeding never overwrites, so an owner's edits survive
+   * every later boot.
+   *
+   * `load` is invoked only when the write is actually going to happen, so a
+   * lazily-imported default costs nothing on the overwhelmingly common boot
+   * where the file already exists. A seed failure is logged and swallowed:
+   * neither file is required for the policy to load (both fall back — an absent
+   * sudoers parses to the empty policy, an absent APPROVALS.md to the bundled
+   * instructions), and one failing must not skip the other.
+   */
+  private async seedWhenAbsent(path: string, load: () => string | Promise<string>): Promise<void> {
+    try {
+      if (await this.fs.exists(path)) return;
+      await this.fs.writeFile(path, await load());
+      log.info('Seeded bundled policy default', { path });
+    } catch (err) {
+      log.warn('Failed to seed bundled policy default', {
+        path,
+        error: err instanceof Error ? err.message : String(err),
+      });
     }
   }
 
