@@ -2022,6 +2022,30 @@ echo "Today is $DATE"
 
 For large-scale processing (1000+ files), batch operations and `.jsh` scripts are faster than shell loops.
 
+### Timing a command (`time`)
+
+The `time` keyword works as in bash and covers the whole pipeline:
+
+```
+/ $ time ls /mnt/repo/.git/objects/pack | wc -l
+91
+
+real	0m0.003s
+```
+
+`real` is wall clock from the start of the pipeline to the moment its last
+command's promise settles — every awaited VFS, hostfs and network round trip is
+inside it. **`user` and `sys` are not printed** (also under `time -p`): a browser
+tab has no process accounting, and just-bash reported a hardcoded `0m0.000s` for
+both, which made an honestly fast `real` look like a stopped clock (#2718). We
+carry that as a `patches/just-bash+*.patch` hunk.
+
+What `real` does _not_ include is the shell around the pipeline: the terminal
+panel's RPC round trip to the worker shell, xterm rendering, and (on the very
+first command of a fresh shell) the `.jsh` discovery scan. Enter-to-prompt in
+the Terminal panel is therefore always larger than `real` — measure with `time`
+when you want the command, and from outside when you want the panel.
+
 ---
 
 ## CDN-backed require()
