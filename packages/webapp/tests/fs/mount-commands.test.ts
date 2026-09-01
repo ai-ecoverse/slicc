@@ -186,6 +186,125 @@ describe('MountCommands', () => {
       await cmd.execute(['unmount', 'myapp'], '/workspace');
       expect(unmount).toHaveBeenCalledWith('/workspace/myapp');
     });
+
+    // Same destructive-help hole as the `umount` alias: `execute` only tested
+    // args[0], so `mount unmount /mnt/x --help` unmounted /mnt/x.
+    it('answers --help after the path without unmounting it', async () => {
+      for (const args of [
+        ['unmount', '/mnt/myapp', '--help'],
+        ['unmount', '/mnt/myapp', '-h'],
+        ['-u', '/mnt/myapp', '--help'],
+      ]) {
+        const unmount = vi.fn();
+        const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+        const result = await cmd.execute(args, '/workspace');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('Usage: mount [OPTIONS] <target-path>');
+        expect(unmount).not.toHaveBeenCalled();
+      }
+    });
+  });
+
+  describe('umount alias', () => {
+    it('returns a usage error when no path is given', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const result = await cmd.executeUmount([], '/workspace');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toBe('umount: path required\n');
+      expect(result.stdout).toBe('');
+    });
+
+    it('unmounts a mounted path', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      const result = await cmd.executeUmount(['/mnt/myapp'], '/workspace');
+      expect(result.exitCode).toBe(0);
+      expect(unmount).toHaveBeenCalledWith('/mnt/myapp');
+      expect(result.stdout).toBe('Unmounted /mnt/myapp\n');
+    });
+
+    it('resolves a relative path against cwd, like `mount unmount`', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      await cmd.executeUmount(['myapp'], '/workspace');
+      expect(unmount).toHaveBeenCalledWith('/workspace/myapp');
+    });
+
+    it('reports a not-mounted path the same way `mount unmount` does', async () => {
+      const unmount = vi.fn(() => {
+        throw new Error("ENOENT: '/mnt/nope' is not a mount point");
+      });
+      const viaMount = await makeMountCommands({ fs: makeFs({ unmount }) }).execute(
+        ['unmount', '/mnt/nope'],
+        '/workspace'
+      );
+      const viaAlias = await makeMountCommands({ fs: makeFs({ unmount }) }).executeUmount(
+        ['/mnt/nope'],
+        '/workspace'
+      );
+      expect(viaAlias.exitCode).toBe(viaMount.exitCode);
+      expect(viaAlias.exitCode).toBe(1);
+      // Only the command prefix differs — the alias names what the user typed.
+      expect(viaMount.stderr).toBe("mount unmount: ENOENT: '/mnt/nope' is not a mount point\n");
+      expect(viaAlias.stderr).toBe("umount: ENOENT: '/mnt/nope' is not a mount point\n");
+    });
+
+    it('forwards --clear-cache in either position', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      const before = await cmd.executeUmount(['--clear-cache', '/mnt/s3'], '/workspace');
+      const after = await cmd.executeUmount(['/mnt/s3', '--clear-cache'], '/workspace');
+      expect(before.exitCode).toBe(0);
+      expect(after.exitCode).toBe(0);
+      // No remote descriptor in the table → the no-op note, not a failure.
+      expect(before.stdout).toBe('Unmounted /mnt/s3 (no remote cache to clear)\n');
+      expect(after.stdout).toBe(before.stdout);
+    });
+
+    it('answers --help without unmounting anything', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      for (const flag of ['--help', '-h']) {
+        const result = await cmd.executeUmount([flag], '/workspace');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('Usage: umount [--clear-cache] <path>');
+        expect(result.stdout).toContain('alias for');
+      }
+      expect(unmount).not.toHaveBeenCalled();
+    });
+
+    // Checking only args[0] for help made `umount /mnt/x --help` fall through
+    // to the handler, which ignores the trailing flag and tears the mount
+    // down — asking for usage performed the destructive action.
+    it('answers --help AFTER the path without unmounting it', async () => {
+      for (const args of [
+        ['/mnt/myapp', '--help'],
+        ['/mnt/myapp', '-h'],
+        ['--clear-cache', '/mnt/myapp', '--help'],
+      ]) {
+        const unmount = vi.fn();
+        const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+        const result = await cmd.executeUmount(args, '/workspace');
+        expect(result.exitCode).toBe(0);
+        expect(result.stdout).toContain('Usage: umount [--clear-cache] <path>');
+        expect(unmount).not.toHaveBeenCalled();
+      }
+    });
+
+    it('treats `--` as an end-of-options terminator, not a help request', async () => {
+      const unmount = vi.fn();
+      const cmd = makeMountCommands({ fs: makeFs({ unmount }) });
+      const result = await cmd.executeUmount(['/mnt/myapp', '--', '--help'], '/workspace');
+      expect(result.exitCode).toBe(0);
+      expect(result.stdout).toContain('Unmounted /mnt/myapp');
+      expect(unmount).toHaveBeenCalledWith('/mnt/myapp');
+    });
+
+    it('is listed as an alias in `mount --help`', async () => {
+      const cmd = makeMountCommands({ fs: makeFs() });
+      const { stdout } = await cmd.execute(['--help'], '/workspace');
+      expect(stdout).toContain('umount <path>');
+    });
   });
 
   describe('scoop (non-interactive) context', () => {

@@ -590,10 +590,12 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     });
     const supplementalCommands = this.buildSupplementalCommands(options, fetchFn);
     const mountCommand = this.createMountCustomCommand();
+    const umountCommand = this.createUmountCustomCommand();
 
     const allCustomCommands = [
       gitCommand,
       mountCommand,
+      umountCommand,
       createSkillCommand(options.fs),
       createUpskillCommand(options.fs, fetchFn, options.browserAPI),
       ...supplementalCommands,
@@ -1410,6 +1412,24 @@ export class AlmostBashShellHeadless implements HeadlessShellLike {
     return defineCommand('mount', async (args, ctx) => {
       const cwd = ctx.cwd;
       const result = await mountCommands.execute(args, cwd, ctx.env);
+      return {
+        stdout: result.stdout,
+        stderr: result.stderr,
+        exitCode: result.exitCode,
+      };
+    });
+  }
+
+  /**
+   * `umount <path>` — the muscle-memory alias for `mount unmount <path>`
+   * (issue #2738). Registered as its own top-level command so `commands`,
+   * `which`, and tab completion list it like any other builtin.
+   */
+  private createUmountCustomCommand(): Command {
+    const mountCommands = this.mountCommands;
+    return defineCommand('umount', async (args, ctx) => {
+      const cwd = ctx.cwd;
+      const result = await mountCommands.executeUmount(args, cwd);
       return {
         stdout: result.stdout,
         stderr: result.stderr,

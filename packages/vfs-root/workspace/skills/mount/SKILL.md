@@ -112,10 +112,13 @@ Useful flags:
 mount list                         # show all active mounts
 mount --list                       # same as `mount list` (`-l` also works)
 mount unmount /mnt/r2              # tear down (cache stays for next mount within TTL)
+umount /mnt/r2                     # alias for `mount unmount` (same flags, same exit codes)
 mount unmount --clear-cache /mnt/r2 # tear down + drop cached listings/bodies
 mount refresh /mnt/r2              # re-walk the source and diff against cache
 mount refresh --bodies /mnt/r2     # also conditionally re-fetch changed bodies
 ```
+
+`umount <path>` is a plain alias for `mount unmount <path>` — same parser, same `--clear-cache`, same exit codes; only the error prefix says `umount:`. Use whichever spelling the user typed. Unmounting a path that is not mounted is a no-op (not an error) under both.
 
 `mount refresh` prints a structured summary: `Refreshed /mnt/r2: +2 -1 ~3 (47 unchanged, 0 errors)`. Use it after you know the remote changed externally and you want the local view to catch up before the 30 s TTL expires.
 

@@ -141,6 +141,41 @@ function parseAdobeSource(source: string): ParsedAdobeSource | null {
   };
 }
 
+/**
+ * Flags whose VALUE is the next token. Kept in agreement with `parseArgs` so
+ * a flag value is never mistaken for a help request (`mount unmount --profile
+ * --help <path>` asks for the `--help` profile, not for usage).
+ */
+const VALUE_FLAGS = new Set(['--source', '--profile', '--backend', '--max-body-mb']);
+
+/**
+ * True when `args` asks for help — `--help` or `-h` anywhere before an
+ * explicit `--` end-of-options separator.
+ *
+ * Checking only `args[0]` is the bug this exists to prevent: `umount /mnt/x
+ * --help` would fall through to the unmount handler, which happily ignores
+ * the trailing flag and *tears down the mount* — asking for help performs the
+ * destructive action. Mirrors `shell/supplemental-commands/subcommand-help.ts`
+ * `isHelpRequest`, reimplemented locally because `fs/` must not import up
+ * into `shell/`.
+ */
+function isHelpRequest(args: readonly string[]): boolean {
+  for (let i = 0; i < args.length; i++) {
+    const arg = args[i];
+    if (arg === '--') return false;
+    if (arg === '--help' || arg === '-h') return true;
+    if (VALUE_FLAGS.has(arg)) i++;
+  }
+  return false;
+}
+
+/**
+ * How an unmount failure names itself. `mount unmount` and the `umount` alias
+ * share one handler, so the label travels with the call instead of being baked
+ * into the messages.
+ */
+type UnmountLabel = 'mount unmount' | 'umount';
+
 function toAemSource(parsed: ParsedAdobeSource): string {
   return `aem://${parsed.org}/${parsed.name}${parsed.path ? `/${parsed.path}` : ''}`;
 }
@@ -162,7 +197,7 @@ export class MountCommands {
     }
 
     if (sub === 'unmount' || sub === '-u') {
-      return this.handleUnmount(args.slice(1), cwd);
+      return this.handleUnmount(args.slice(1), cwd, 'mount unmount');
     }
 
     if (sub === 'list' || sub === '-l' || sub === '--list') {
@@ -200,6 +235,16 @@ export class MountCommands {
 
     // No --source → local picker.
     return this.mountLocal(targetPath, env);
+  }
+
+  /**
+   * `umount [--clear-cache] <path>` — the muscle-memory spelling of
+   * `mount unmount <path>` (issue #2738). It is a pure alias: same parser,
+   * same handler, same exit codes. Only the diagnostic prefix changes, so a
+   * user who typed `umount` is not told about a command they did not run.
+   */
+  async executeUmount(args: string[], cwd: string): Promise<MountCommandResult> {
+    return this.handleUnmount(args, cwd, 'umount');
   }
 
   // ---- handlers ----
@@ -418,12 +463,23 @@ export class MountCommands {
     };
   }
 
-  private async handleUnmount(args: string[], cwd: string): Promise<MountCommandResult> {
+  private async handleUnmount(
+    args: string[],
+    cwd: string,
+    label: UnmountLabel
+  ): Promise<MountCommandResult> {
+    // Help wins over the path, and is answered BEFORE anything mutating runs:
+    // both `umount --help` and `umount /mnt/x --help` must print usage rather
+    // than unmount `/mnt/x`.
+    if (isHelpRequest(args)) {
+      return label === 'umount' ? this.umountHelp() : this.help();
+    }
+
     // Parse the full arg list so flags can appear before or after the path.
     // Spec syntax: `mount unmount [--clear-cache] <target-path>`.
     const parsed = parseArgs(args);
     if (parsed.positional.length === 0) {
-      return { stdout: '', stderr: 'mount unmount: path required\n', exitCode: 1 };
+      return { stdout: '', stderr: `${label}: path required\n`, exitCode: 1 };
     }
     const targetPath = this.resolvePath(parsed.positional[0], cwd);
 
@@ -464,7 +520,7 @@ export class MountCommands {
     } catch (err) {
       return {
         stdout: '',
-        stderr: `mount unmount: ${err instanceof Error ? err.message : String(err)}\n`,
+        stderr: `${label}: ${err instanceof Error ? err.message : String(err)}\n`,
         exitCode: 1,
       };
     }
@@ -560,6 +616,29 @@ export class MountCommands {
     };
   }
 
+  private umountHelp(): MountCommandResult {
+    return {
+      stdout:
+        [
+          'Usage: umount [--clear-cache] <path>',
+          '',
+          'Unmount a mount point. `umount <path>` is an alias for',
+          '`mount unmount <path>` — same behaviour, shorter to type.',
+          '',
+          'Options:',
+          '  --clear-cache   Also drop cached listings and bodies for a remote mount',
+          '',
+          'Examples:',
+          '  umount /mnt/myapp',
+          '  umount --clear-cache /mnt/s3',
+          '',
+          'See also: mount --help, mount list',
+        ].join('\n') + '\n',
+      stderr: '',
+      exitCode: 0,
+    };
+  }
+
   private help(): MountCommandResult {
     return {
       stdout:
@@ -589,7 +668,7 @@ export class MountCommands {
           '  --max-body-mb <n>   Override body size limit (MB)',
           '',
           'Sub-commands:',
-          '  unmount [--clear-cache] <path>  Remove a mount point',
+          '  unmount [--clear-cache] <path>  Remove a mount point (also spelled `umount <path>`)',
           '  list, --list, -l                Show active mount points',
           '  refresh [--bodies] <path>       Re-index or revalidate a mount',
           '',
@@ -601,6 +680,7 @@ export class MountCommands {
           '  mount list',
           '  mount refresh /mnt/myapp',
           '  mount unmount /mnt/myapp',
+          '  umount /mnt/myapp',
         ].join('\n') + '\n',
       stderr: '',
       exitCode: 0,
