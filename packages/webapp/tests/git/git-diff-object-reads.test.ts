@@ -60,16 +60,26 @@ describe('git diff object reads (issue #2719)', () => {
   function trackIo(): {
     allReads: () => string[];
     objectReads: () => string[];
+    touched: () => string[];
     blobReads: (contents: string[]) => Promise<string[]>;
     dirs: () => string[];
   } {
     const readSpy = vi.spyOn(vfs, 'readFile');
     const dirSpy = vi.spyOn(vfs, 'readDir');
+    const lstatSpy = vi.spyOn(vfs, 'lstat');
+    const statSpy = vi.spyOn(vfs, 'stat');
     const allReads = () => readSpy.mock.calls.map((call) => String(call[0]));
     const objectReads = () => allReads().filter((p) => p.includes('/.git/objects/'));
     return {
       allReads,
       objectReads,
+      // Every path the command touched at all: read, list, or stat.
+      touched: () => [
+        ...allReads(),
+        ...dirSpy.mock.calls.map((call) => String(call[0])),
+        ...lstatSpy.mock.calls.map((call) => String(call[0])),
+        ...statSpy.mock.calls.map((call) => String(call[0])),
+      ],
       blobReads: async (contents) => {
         const wanted = await Promise.all(contents.map(blobPath));
         return objectReads().filter((read) => wanted.some((suffix) => read.endsWith(suffix)));
@@ -268,5 +278,97 @@ describe('git diff object reads (issue #2719)', () => {
     // there: neither the tree below it nor any blob under it is read.
     expect(io.objectReads().filter((p) => p.endsWith(oidPath(deepTree.oid)))).toEqual([]);
     expect(await io.blobReads(['charlie\n', 'bravo\n', 'delta\n'])).toEqual([]);
+  });
+
+  describe('pathspec pruning (issue #2719 review)', () => {
+    /** Tracked files in three sibling directories, plus an untracked one. */
+    async function seedWideRepo(): Promise<void> {
+      await git.execute(['init'], '/project');
+      for (const dir of ['a', 'c', 'd']) {
+        await vfs.mkdir(`/project/${dir}`, { recursive: true });
+        await vfs.writeFile(`/project/${dir}/${dir}.txt`, `${dir}\n`);
+      }
+      await vfs.writeFile('/project/a/b.txt', 'bee\n');
+      await vfs.mkdir('/project/e/deep', { recursive: true });
+      await vfs.writeFile('/project/e/deep/e.txt', 'eee\n');
+      await git.execute(['add', '.'], '/project');
+      await git.execute(['commit', '-m', 'initial'], '/project');
+      await vfs.writeFile('/project/a/b.txt', 'bee\nmodified\n');
+      await vfs.writeFile('/project/c/c.txt', 'c\nmodified\n');
+    }
+
+    /** Paths the walk touched inside `/project/<dir>`, ignoring `.git`. */
+    function inside(io: { touched: () => string[] }, dir: string): string[] {
+      return io
+        .touched()
+        .filter((p) => !p.includes('/.git/'))
+        .filter((p) => p === `/project/${dir}` || p.startsWith(`/project/${dir}/`));
+    }
+
+    it('never stats a sibling directory excluded by a file pathspec', async () => {
+      await seedWideRepo();
+
+      const io = trackIo();
+      const result = await git.execute(['diff', '--', 'a/b.txt'], '/project');
+
+      expect(result.stdout).toContain('diff --git a/a/b.txt b/a/b.txt');
+      expect(result.stdout).not.toContain('a/c/c.txt');
+      // Excluded siblings cost nothing: no readdir, no lstat, no read.
+      expect(inside(io, 'c')).toEqual([]);
+      expect(inside(io, 'd')).toEqual([]);
+      expect(inside(io, 'e')).toEqual([]);
+      // The one file named by the pathspec is still reached...
+      expect(io.touched()).toContain('/project/a/b.txt');
+      // ...and its sibling inside the same directory is skipped too.
+      expect(io.touched()).not.toContain('/project/a/a.txt');
+    });
+
+    it('descends a directory pathspec and prunes everything else', async () => {
+      await seedWideRepo();
+
+      const io = trackIo();
+      const result = await git.execute(['diff', '--name-only', '--', 'a'], '/project');
+
+      expect(result.stdout).toBe('a/b.txt\n');
+      expect(inside(io, 'a')).toContain('/project/a/b.txt');
+      expect(inside(io, 'c')).toEqual([]);
+      expect(inside(io, 'd')).toEqual([]);
+    });
+
+    it('prunes nested subtrees the pathspec cannot reach', async () => {
+      await seedWideRepo();
+
+      const io = trackIo();
+      await git.execute(['diff', '--', 'e/deep/e.txt'], '/project');
+
+      expect(io.touched()).toContain('/project/e/deep/e.txt');
+      expect(inside(io, 'a')).toEqual([]);
+      expect(inside(io, 'c')).toEqual([]);
+    });
+
+    it('prunes the same way for `diff HEAD -- <path>`', async () => {
+      await seedWideRepo();
+
+      const io = trackIo();
+      const result = await git.execute(
+        ['diff', 'HEAD', '--name-only', '--', 'a/b.txt'],
+        '/project'
+      );
+
+      expect(result.stdout).toBe('a/b.txt\n');
+      expect(inside(io, 'c')).toEqual([]);
+      expect(inside(io, 'd')).toEqual([]);
+    });
+
+    it('prunes the same way for `diff --staged -- <path>`', async () => {
+      await seedWideRepo();
+      await git.execute(['add', 'c/c.txt'], '/project');
+
+      const io = trackIo();
+      const result = await git.execute(['diff', '--staged', '--name-only', '--', 'a'], '/project');
+
+      expect(result.stdout).toBe('');
+      expect(await io.blobReads(['c\n', 'c\nmodified\n'])).toEqual([]);
+    });
   });
 });

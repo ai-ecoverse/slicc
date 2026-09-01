@@ -85,10 +85,35 @@ async function readParent(
   return parent;
 }
 
+/** `./foo/` and `foo` are the same pathspec. */
+function normalizePathspec(raw: string): string {
+  return raw.replace(/^\.\//, '').replace(/\/+$/, '');
+}
+
 export function matchesPathspec(filepath: string, pathspecs: readonly string[]): boolean {
   if (pathspecs.length === 0) return true;
   return pathspecs.some((raw) => {
-    const spec = raw.replace(/^\.\//, '').replace(/\/+$/, '');
+    const spec = normalizePathspec(raw);
     return spec === '' || filepath === spec || filepath.startsWith(`${spec}/`);
+  });
+}
+
+/**
+ * True when `filepath` matches a pathspec **or is a directory that could still
+ * contain one** — i.e. whether a tree walk has any reason to descend into it.
+ *
+ * `matchesPathspec('src', ['src/a.txt'])` is false (a walk must not *report*
+ * `src`), but the walk still has to enter `src` to reach `src/a.txt`. Callers
+ * that prune subtrees need this weaker test, applied to the path string alone
+ * so no `lstat`/`readdir` is spent on a subtree that is about to be dropped.
+ */
+export function pathspecCouldMatch(filepath: string, pathspecs: readonly string[]): boolean {
+  if (pathspecs.length === 0) return true;
+  return pathspecs.some((raw) => {
+    const spec = normalizePathspec(raw);
+    if (spec === '' || filepath === spec) return true;
+    // Below the spec (`src/a.txt` under `src`), or an ancestor of it (`src`
+    // on the way to `src/a.txt`).
+    return filepath.startsWith(`${spec}/`) || spec.startsWith(`${filepath}/`);
   });
 }

@@ -209,15 +209,18 @@ what changed from OIDs before it reads any content (#2719):
 - **Tree vs index / tree vs tree** (`--staged`, `<rev> <rev>`): entries whose OIDs
   match are skipped, and two subtrees sharing a tree OID are pruned from the walk
   instead of being descended.
-- **Untracked subtrees are pruned**, so `node_modules` and `.git` are never
-  enumerated by a diff walk.
+- **Untracked and pathspec-excluded subtrees are pruned in the walk's
+  `iterate` hook**, not in `map`. `map` runs _after_ isomorphic-git has already
+  `readdir`/`lstat`ed the entry, so pruning there still costs one round trip
+  per tracked path; filtering in `iterate` works from the path string alone and
+  costs nothing. `node_modules` and `.git` are never enumerated, and
+  `git diff -- one/file.txt` never stats a sibling directory.
 - Workdir walks pass `refresh: false` — a read-only command must not rewrite
   `.git/index` (#2708).
 
-Pathspecs are applied before any read, so `git diff -- <path>` costs what that path
-costs. When adding a diff variant, keep the OID comparison ahead of the content
-read; the pre-2719 code compared decoded strings and pulled all 3,549 tracked blobs
-out of the packfile on every invocation.
+When adding a diff variant, keep the OID comparison ahead of the content read and
+the pathspec test ahead of the walk: the pre-2719 code compared decoded strings
+and pulled all 3,549 tracked blobs out of the packfile on every invocation.
 
 ### `ipk install -g` / `npm install -g`
 

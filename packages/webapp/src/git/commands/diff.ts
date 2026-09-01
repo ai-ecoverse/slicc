@@ -9,11 +9,45 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { diffStat, unifiedDiff } from '../diff.js';
-import { matchesPathspec, resolveRevision } from './revision.js';
+import { matchesPathspec, pathspecCouldMatch, resolveRevision } from './revision.js';
 import { GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 type FileChange = { filepath: string; oldContent: string; newContent: string };
+
+/**
+ * Decides whether a walk should descend into a child path.
+ *
+ * `present[i]` says whether tree `i` of the walk has that path at all, so a
+ * caller can drop e.g. everything the index does not know about.
+ */
+type KeepChild = (filepath: string, present: readonly boolean[]) => boolean;
+
+/**
+ * A `walk({ iterate })` hook that drops subtrees *before* isomorphic-git
+ * constructs their entries.
+ *
+ * Pruning from `map` is too late: `walk()` calls `readdir()` on every child —
+ * which for the WORKDIR walker means an `lstat` (one hostfs round trip on a
+ * mounted repo) — and only *then* calls `map`. Filtering here, from the path
+ * string alone, means an excluded subtree costs nothing at all (#2719).
+ *
+ * `children` yields one raw path per walk tree (undefined where that tree has
+ * no such entry); the entries are only constructed inside `walk`.
+ */
+function pruningIterate(keep: KeepChild): git.WalkerIterate {
+  return (walk, children) => {
+    const walked: Promise<unknown>[] = [];
+    for (const child of children as unknown as Iterable<unknown[]>) {
+      const filepath = child.find((path): path is string => typeof path === 'string');
+      const present = child.map((path) => typeof path === 'string');
+      if (filepath === undefined || keep(filepath, present)) {
+        walked.push(walk(child as unknown as git.WalkerEntry[]));
+      }
+    }
+    return Promise.all(walked);
+  };
+}
 
 export async function diff(
   ctx: GitCommandContext,
@@ -84,6 +118,8 @@ async function diffStagedChanges(
     dir: cwd,
     cache,
     trees: [git.TREE({ ref }), git.STAGE()],
+    // A pathspec-excluded subtree is dropped before its tree object is read.
+    iterate: pruningIterate((filepath) => pathspecCouldMatch(filepath, pathspecs)),
     map: async (filepath, [headEntry, stageEntry]) => {
       // `.git` itself is never tracked; a tracked `.gitignore` is.
       if (filepath === '.' || filepath === '.git' || filepath.startsWith('.git/')) return undefined;
@@ -133,8 +169,9 @@ async function diffCommitIndex(
  * previous implementation pulled *every* tracked blob out of the packfile and
  * compared the decoded strings (#2719).
  *
- * Untracked subtrees are pruned from the walk (`return null`), so ignored
- * directories (`node_modules`, `.git`) are never enumerated, and `refresh:
+ * Untracked and pathspec-excluded subtrees are dropped by `iterate` before the
+ * workdir walker can `lstat` them, so `node_modules` / `.git` are never
+ * enumerated and `git diff -- <path>` costs what that path costs. `refresh:
  * false` keeps this read-only command from rewriting `.git/index` (#2708).
  */
 async function diffWorkdirChanges(
@@ -150,10 +187,14 @@ async function diffWorkdirChanges(
     dir: cwd,
     cache,
     trees: [git.STAGE(), git.WORKDIR({ refresh: false })],
+    // Untracked paths (`.git`, `node_modules`, …) and anything a pathspec
+    // rules out are dropped here, before the workdir walker would `lstat`
+    // them: `git diff -- one/file.txt` must not stat the whole tree.
+    iterate: pruningIterate(
+      (filepath, [inIndex]) => inIndex === true && pathspecCouldMatch(filepath, pathspecs)
+    ),
     map: async (filepath, [stageEntry, workEntry]) => {
       if (filepath === '.') return undefined;
-      // Not in the index: untracked (or `.git` itself). `git diff` never
-      // reports untracked paths, so prune the whole subtree.
       if (!stageEntry) return null;
       const stageType = await stageEntry.type();
       if (stageType === 'tree') return undefined;
@@ -243,6 +284,7 @@ async function diffResolvedTrees(
     dir: cwd,
     cache: {},
     trees: [git.TREE({ ref: resolvedRef1 }), git.TREE({ ref: resolvedRef2 })],
+    iterate: pruningIterate((filepath) => pathspecCouldMatch(filepath, opts.pathspecs ?? [])),
     map: async (filepath, [entry1, entry2]) => {
       // Identical subtrees share an OID: prune instead of reading every tree
       // object below them.
@@ -278,9 +320,15 @@ async function diffCommitWorkdir(
     cache,
     // `refresh: false`: a read-only diff must not rewrite `.git/index` (#2708).
     trees: [git.TREE({ ref: resolved }), git.WORKDIR({ refresh: false })],
+    // Same pre-`lstat` pruning as `git diff`: untracked paths (nothing in the
+    // commit and nothing in the index below them) and pathspec-excluded
+    // subtrees never reach the workdir walker.
+    iterate: pruningIterate(
+      (filepath, [inCommit]) =>
+        (inCommit === true || tracked.has(filepath) || trackedDirs.has(filepath)) &&
+        pathspecCouldMatch(filepath, opts.pathspecs ?? [])
+    ),
     map: async (filepath, [oldEntry, workEntry]) => {
-      // Neither in the commit nor in the index: an untracked path (including
-      // `.git` itself). Prune so the walk never enumerates it.
       if (!oldEntry && !tracked.has(filepath) && !trackedDirs.has(filepath)) return null;
       const change = await compareWalkerEntries(
         filepath,
