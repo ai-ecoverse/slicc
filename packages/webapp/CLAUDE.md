@@ -88,7 +88,10 @@ Invariants a reviewer must catch; mechanism in `docs/webapp-details.md` + the li
   gate = origin allowlist + `MessageEvent.source` identity + per-mount `channelId` nonce.
   `packages/cherry/src/protocol.ts` mirrors it — keep in sync.
 - **Sudo self-protection** (`docs/approvals.md`): writes to `/etc/sudoers` +
-  `/etc/sudoers.d/*` always require approval (hardcoded in `matchPath`). Page realm can
+  `/etc/sudoers.d/*` + `/etc/APPROVALS.md` always require approval (hardcoded in
+  `matchPath`). Their bundled defaults are seeded ungated by
+  `SudoManager.ensureDefaults()` when absent — a self-protected file the upgrade
+  merge has to CREATE would otherwise prompt for a no-op (#2686). Page realm can
   reassign `globalThis.confirm`, so `sudo/panel-responder.ts` captures natives at init and
   approval chrome mounts via `ui/wc/trusted-layer.ts`, never `document.body`. `reason` is a
   FIELD on a `deny`, never a fourth `decision` (a new variant fails open).

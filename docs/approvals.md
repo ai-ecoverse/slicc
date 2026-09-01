@@ -33,8 +33,9 @@ other developer docs link here instead of restating the model.
 - **Panel terminal is the human approver.** Commands typed in the panel terminal are
   not sudo-gated and the keystroke itself is the gesture for browser pickers; this
   is the only context where the human is _already_ approving.
-- **Self-protection is hardcoded.** Writes to `/etc/sudoers` and `/etc/sudoers.d/**`
-  always require approval; no `NOPASSWD` rule can override this.
+- **Self-protection is hardcoded.** Writes to `/etc/sudoers`, `/etc/sudoers.d/**`
+  and `/etc/APPROVALS.md` always require approval; no `NOPASSWD` rule can override
+  this.
 - **Credentials never reach the agent.** S3 / DA mounts have no approval card because
   the trust boundary lives at the credential resolver (node-server / SW), not in chat.
 
@@ -108,10 +109,23 @@ their current policy.
 
 ### Self-protection (always on)
 
-Writes to `/etc/sudoers` and anything under `/etc/sudoers.d/` **always** require
-approval — a `NOPASSWD` rule cannot override this. It is hardcoded in `matchPath`
-(`packages/webapp/src/base/sudoers.ts`), independent of the loaded policy.
-Reads of those files are allowed (visudo-style).
+Writes to `/etc/sudoers`, anything under `/etc/sudoers.d/`, and
+`/etc/APPROVALS.md` (the approver agent's instructions — it decides what a
+biscotto GUEST may do, so a cone acting on that guest's message must not be able
+to rewrite it) **always** require approval — a `NOPASSWD` rule cannot override
+this. It is hardcoded in `matchPath` (`packages/webapp/src/base/sudoers.ts`),
+independent of the loaded policy. Reads of those files are allowed
+(visudo-style).
+
+Both bundled defaults are seeded by `SudoManager.ensureDefaults()` on every boot
+when the file is absent, through the manager's **ungated** handle. Shipping a
+default is not a policy edit, and an absent file holds no owner decision to
+protect. Seeding is also what keeps the upgrade merge quiet: `upgrade apply`
+runs on the FS-gated handle, so a self-protected path it had to _create_ would
+prompt the owner to approve content identical to the default already in force —
+an approval with no diff to show (#2686). With the file seeded, the merge
+classifies it `unchanged` (or `kept-local` after an owner edit) and writes
+nothing.
 
 ### Built-in scoop grants — `/tmp` (always on)
 

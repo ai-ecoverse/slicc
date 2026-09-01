@@ -4,8 +4,10 @@
  * One manager is created per orchestrator (so per float) once the shared VFS
  * and its `FsWatcher` exist. It:
  *
- *   1. Seeds a fully commented-out default `/etc/sudoers` template on a fresh
- *      VFS (self-protection still applies even with no rules).
+ *   1. Seeds the bundled defaults for the self-protected policy files when they
+ *      are absent — a fully commented-out `/etc/sudoers` template
+ *      (self-protection still applies even with no rules) and the approver
+ *      agent's `/etc/APPROVALS.md` instructions.
  *   2. Loads + merges `/etc/sudoers` and every `/etc/sudoers.d/*` drop-in into
  *      a single live `SudoersPolicy`.
  *   3. Re-reads that policy whenever those files change (after an approved
@@ -20,6 +22,7 @@
 import sudoersDefault from '../../../vfs-root/etc/sudoers?raw';
 import { createLogger } from '../base/logger.js';
 import {
+  APPROVALS_FILE,
   builtinScoopGrants,
   type Directive,
   directiveForKind,
@@ -525,13 +528,52 @@ export class SudoManager {
     } catch {
       /* already exists */
     }
+    await this.seedWhenAbsent(SUDOERS_FILE, () => sudoersDefault);
+    // `/etc/APPROVALS.md` MUST be seeded here rather than left to `upgrade
+    // apply`'s three-way merge of `packages/vfs-root/etc/`. That merge runs on
+    // the FS-gated handle, so on a profile predating the file it trips
+    // self-protection and asks the owner to approve a write whose content is
+    // the very fallback the approver agent was already running under — an
+    // approval prompt for a no-op, with no diff to show (#2686). Seeding first
+    // makes the merge classify the path `unchanged` (or `kept-local` once the
+    // owner edits it), which writes nothing and prompts for nothing.
+    //
+    // The import is deliberately DYNAMIC, and `seedWhenAbsent` only calls it on
+    // the boot that actually seeds. A static one would pull `approver-agent`
+    // and its bundled instructions into `sudo-manager`'s graph, and
+    // `sudo-manager` is boot-critical — that hoists ~10 kB into the kernel
+    // worker's eager first-load closure, over the bundle-size gate's per-change
+    // allowance, to carry a string needed once per profile.
+    await this.seedWhenAbsent(
+      APPROVALS_FILE,
+      async () => (await import('../scoops/approver-agent.js')).DEFAULT_APPROVALS_MD
+    );
+  }
+
+  /**
+   * Write a bundled policy default to `path` when it is absent, through the
+   * manager's UNGATED handle.
+   *
+   * Ungated is safe for both self-protected policy files: shipping a default is
+   * not a policy edit, and a file that does not exist yet carries no owner
+   * decision to protect. Seeding never overwrites, so an owner's edits survive
+   * every later boot.
+   *
+   * `load` is invoked only when the write is actually going to happen, so a
+   * lazily-imported default costs nothing on the overwhelmingly common boot
+   * where the file already exists. A seed failure is logged and swallowed:
+   * neither file is required for the policy to load (both fall back — an absent
+   * sudoers parses to the empty policy, an absent APPROVALS.md to the bundled
+   * instructions), and one failing must not skip the other.
+   */
+  private async seedWhenAbsent(path: string, load: () => string | Promise<string>): Promise<void> {
     try {
-      if (!(await this.fs.exists(SUDOERS_FILE))) {
-        await this.fs.writeFile(SUDOERS_FILE, sudoersDefault);
-        log.info('Seeded default /etc/sudoers template');
-      }
+      if (await this.fs.exists(path)) return;
+      await this.fs.writeFile(path, await load());
+      log.info('Seeded bundled policy default', { path });
     } catch (err) {
-      log.warn('Failed to seed default /etc/sudoers', {
+      log.warn('Failed to seed bundled policy default', {
+        path,
         error: err instanceof Error ? err.message : String(err),
       });
     }
