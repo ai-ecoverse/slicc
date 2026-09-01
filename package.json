@@ -107,7 +107,7 @@
   "dependencies": {
     "e2b": "2.45.0",
     "express": "5.2.1",
-    "pyodide": "314.0.5",
+    "pyodide": "314.0.6",
     "werift": "0.24.4",
     "ws": "8.21.3"
   },
