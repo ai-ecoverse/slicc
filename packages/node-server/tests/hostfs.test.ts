@@ -1,5 +1,15 @@
 import express from 'express';
-import { chmod, mkdir, mkdtemp, readFile, realpath, stat, symlink, writeFile } from 'fs/promises';
+import {
+  chmod,
+  mkdir,
+  mkdtemp,
+  readFile,
+  realpath,
+  stat,
+  symlink,
+  utimes,
+  writeFile,
+} from 'fs/promises';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -101,7 +111,7 @@ describe('hostfs routes', () => {
     const res = await api('/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=hello.txt');
     const body = (await res.json()) as StatIdentity;
     const real = await stat(join(root, 'hello.txt'));
-    expect(body.ctime).toBe(Math.round(real.ctimeMs));
+    expect(body.ctime).toBe(real.ctimeMs);
     expect(body.ino).toBe(Number(real.ino));
     expect(body.uid).toBe(real.uid);
     expect(body.gid).toBe(real.gid);
@@ -129,7 +139,33 @@ describe('hostfs routes', () => {
     expect(hello?.uid).toBe(real.uid);
     expect(hello?.gid).toBe(real.gid);
     expect(hello?.mode).toBe(real.mode);
-    expect(hello?.ctime).toBe(Math.round(real.ctimeMs));
+    expect(hello?.ctime).toBe(real.ctimeMs);
+  });
+
+  it('never rounds a timestamp up into the next second', async () => {
+    // isomorphic-git compares Math.floor(ms / 1000) against the seconds
+    // native git recorded, so a stat 0.9996 s past the second that is ROUNDED
+    // lands in the next second and leaves that file stale on every walk.
+    const racy = join(root, 'racy.txt');
+    await writeFile(racy, 'x');
+    await utimes(racy, 1_700_000_000.9996, 1_700_000_000.9996);
+    const real = await stat(racy);
+
+    const res = await api('/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=racy.txt');
+    const body = (await res.json()) as StatIdentity & { mtime?: number };
+    expect(body.mtime).toBe(real.mtimeMs);
+    expect(body.ctime).toBe(real.ctimeMs);
+    expect(Math.floor((body.mtime ?? 0) / 1000)).toBe(1_700_000_000);
+    expect(Math.floor((body.ctime ?? 0) / 1000)).toBe(Math.floor(real.ctimeMs / 1000));
+
+    const listRes = await api('/api/hostfs/list?mount=%2Fmnt%2Fproj&path=');
+    const { entries } = (await listRes.json()) as {
+      entries: ({ name: string; lastModified?: number } & StatIdentity)[];
+    };
+    const racyEntry = entries.find((e) => e.name === 'racy.txt');
+    expect(racyEntry?.lastModified).toBe(real.mtimeMs);
+    expect(Math.floor((racyEntry?.lastModified ?? 0) / 1000)).toBe(1_700_000_000);
+    expect(racyEntry?.ctime).toBe(real.ctimeMs);
   });
 
   it('writes a file, creating parents', async () => {
@@ -215,7 +251,7 @@ describe('stable POST /api/hostfs endpoint', () => {
     const viaPost = await stable({ op: 'stat', mount: '/mnt/proj', path: 'hello.txt' });
     const body = (await viaPost.json()) as StatIdentity;
     const real = await stat(join(root, 'hello.txt'));
-    expect(body.ctime).toBe(Math.round(real.ctimeMs));
+    expect(body.ctime).toBe(real.ctimeMs);
     expect(body.ino).toBe(Number(real.ino));
     expect(body.uid).toBe(real.uid);
     expect(body.gid).toBe(real.gid);

@@ -278,7 +278,7 @@ enum HostFSRoutes {
                 "name": .string(name),
                 "kind": .string("file"),
                 "size": .number(size),
-                "lastModified": .number(mtime.rounded()),
+                "lastModified": .number(mtime),
             ]
             entry.merge(statIdentity(full)) { current, _ in current }
             return .object(entry)
@@ -346,6 +346,11 @@ enum HostFSRoutes {
     /// because Foundation exposes `.creationDate` (birth time), not the POSIX
     /// inode-change time git actually records. A failed stat yields an empty
     /// dictionary — the webapp then keeps its synthesized defaults.
+    ///
+    /// Timestamps go over the wire UNROUNDED. isomorphic-git derives the
+    /// seconds it compares with `Math.floor(ms / 1000)`, so rounding a
+    /// `.9996 s` stat up lands it in the NEXT second, disagrees with the
+    /// seconds native git wrote, and makes that one file stale on every walk.
     private static func statIdentity(_ path: String) -> [String: LickSystem.JSONValue] {
         var info = stat()
         guard stat(path, &info) == 0 else { return [:] }
@@ -354,8 +359,7 @@ enum HostFSRoutes {
         #else
             let ctimespec = info.st_ctim
         #endif
-        let ctimeMs =
-            (Double(ctimespec.tv_sec) * 1000 + Double(ctimespec.tv_nsec) / 1_000_000).rounded()
+        let ctimeMs = Double(ctimespec.tv_sec) * 1000 + Double(ctimespec.tv_nsec) / 1_000_000
         return [
             "ctime": .number(ctimeMs),
             "ino": .number(Double(info.st_ino)),
@@ -372,9 +376,9 @@ enum HostFSRoutes {
         }
         let attrs = try wrapErrno { try FileManager.default.attributesOfItem(atPath: path) }
         let size = (attrs[.size] as? NSNumber)?.doubleValue ?? 0
-        let mtime =
-            ((attrs[.modificationDate] as? Date).map { $0.timeIntervalSince1970 * 1000 } ?? 0)
-            .rounded()
+        // Unrounded — see `statIdentity` on why a rounded-up millisecond
+        // makes a file permanently stale against the git index.
+        let mtime = (attrs[.modificationDate] as? Date).map { $0.timeIntervalSince1970 * 1000 } ?? 0
         return (isDirectory.boolValue, size, mtime)
     }
 

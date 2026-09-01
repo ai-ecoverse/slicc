@@ -146,6 +146,43 @@ describe('isomorphic-git adapter stats (issue #2708)', () => {
     expect(stats.ctimeMs).toBe(1_700_000_000_000);
   });
 
+  it('keeps a sub-millisecond timestamp in its own second', async () => {
+    // isomorphic-git's normalizeStats derives the seconds compareStats
+    // compares with Math.floor(ms / 1000). A bridge (or adapter) that ROUNDS
+    // a stat 0.9996 s past the second pushes it into the next second, which
+    // disagrees with the seconds native git wrote — that file is then stale
+    // on every walk, forever.
+    const racyMs = 1_700_000_000_999.6;
+    const files = new Map([
+      [
+        'racy.txt',
+        {
+          body: 'racy\n',
+          stat: {
+            kind: 'file' as const,
+            size: 5,
+            mtime: racyMs,
+            ctime: racyMs,
+            ino: 7,
+            uid: 501,
+            gid: 20,
+            mode: 0o100644,
+          },
+        },
+      ],
+    ]);
+    await vfs.mkdir('/mnt/racy', { recursive: true });
+    await vfs.mount('/mnt/racy', new FakeStatBackend(files));
+
+    const fs = createIsomorphicGitFs(vfs).promises;
+    const stats = await fs.lstat('/mnt/racy/racy.txt');
+    expect(stats.mtimeMs).toBe(racyMs);
+    expect(stats.ctimeMs).toBe(racyMs);
+    // What compareStats actually compares.
+    expect(Math.floor(stats.mtimeMs / 1000)).toBe(1_700_000_000);
+    expect(Math.floor(stats.ctimeMs / 1000)).toBe(Math.floor(racyMs / 1000));
+  });
+
   it('reports the local filesystem’s own inode and mode for an unmounted path', async () => {
     await vfs.writeFile('/local.txt', 'local\n');
     const fs = createIsomorphicGitFs(vfs).promises;

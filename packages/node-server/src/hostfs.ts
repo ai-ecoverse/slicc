@@ -155,6 +155,12 @@ interface HostMountRoot {
  * re-hashed the whole tree and rewrote `.git/index` once per file
  * (issue #2708). `mode` is the full `st_mode` (type bits included), so the
  * executable bit survives instead of being flattened to `100644`.
+ *
+ * Timestamps go over the wire UNROUNDED. isomorphic-git derives the seconds
+ * it compares with `Math.floor(ms / 1000)`, so rounding a `.9996 s` stat up
+ * lands it in the NEXT second, disagrees with the seconds native git wrote,
+ * and makes that one file stale on every single walk. Never round up; JSON
+ * carries the fractional double fine.
  */
 function statIdentity(s: Stats): {
   ctime: number;
@@ -164,7 +170,7 @@ function statIdentity(s: Stats): {
   mode: number;
 } {
   return {
-    ctime: Math.round(s.ctimeMs),
+    ctime: s.ctimeMs,
     ino: Number(s.ino),
     uid: s.uid,
     gid: s.gid,
@@ -185,7 +191,7 @@ function statPayload(s: Stats): {
   return {
     kind: s.isDirectory() ? 'directory' : 'file',
     size: s.isDirectory() ? 0 : s.size,
-    mtime: Math.round(s.mtimeMs),
+    mtime: s.mtimeMs,
     ...statIdentity(s),
   };
 }
@@ -322,7 +328,7 @@ async function listOp(target: string): Promise<{ entries: unknown[] }> {
           name: d.name,
           kind: 'file',
           size: s.size,
-          lastModified: Math.round(s.mtimeMs),
+          lastModified: s.mtimeMs,
           ...statIdentity(s),
         };
       } catch {
