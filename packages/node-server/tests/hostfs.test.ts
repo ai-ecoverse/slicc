@@ -15,6 +15,15 @@ async function api(path: string, init?: RequestInit): Promise<Response> {
   return fetch(`${baseUrl}${path}`, init);
 }
 
+/** One call to the stable, preflight-cacheable `POST /api/hostfs` endpoint. */
+async function stable(body: Record<string, unknown>): Promise<Response> {
+  return api('/api/hostfs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+}
+
 beforeAll(async () => {
   root = await realpath(await mkdtemp(join(tmpdir(), 'slicc-hostfs-')));
   outside = await realpath(await mkdtemp(join(tmpdir(), 'slicc-hostfs-outside-')));
@@ -124,6 +133,83 @@ describe('hostfs routes', () => {
     // Symlinks that stay inside the root are followed.
     const inside = await api('/api/hostfs/list?mount=%2Fmnt%2Fproj&path=inside-link');
     expect(inside.status).toBe(200);
+  });
+});
+
+describe('stable POST /api/hostfs endpoint', () => {
+  // One URL for every metadata op is the whole point: the CORS preflight
+  // cache is keyed by URL, so the per-op `?mount=&path=` routes never got a
+  // cache hit (#2715). These assert the stable route answers identically.
+  it('lists a directory with the same payload as GET /list', async () => {
+    const viaPost = await stable({ op: 'list', mount: '/mnt/proj', path: '' });
+    expect(viaPost.status).toBe(200);
+    const viaGet = await api('/api/hostfs/list?mount=%2Fmnt%2Fproj&path=');
+    expect(await viaPost.json()).toEqual(await viaGet.json());
+  });
+
+  it('stats a file with the same payload as GET /stat', async () => {
+    const viaPost = await stable({ op: 'stat', mount: '/mnt/proj', path: 'hello.txt' });
+    expect(viaPost.status).toBe(200);
+    const body = (await viaPost.json()) as { kind: string; size: number };
+    expect(body.kind).toBe('file');
+    expect(body.size).toBe(10);
+  });
+
+  it('mkdirs, renames, and removes through the one URL', async () => {
+    expect((await stable({ op: 'mkdir', mount: '/mnt/proj', path: 'post/made' })).status).toBe(200);
+    expect(
+      (await stable({ op: 'rename', mount: '/mnt/proj', path: 'post/made', to: 'post/renamed' }))
+        .status
+    ).toBe(200);
+    // `recursive` accepts the query-string `'1'` and a JSON `true` alike.
+    expect(
+      (await stable({ op: 'remove', mount: '/mnt/proj', path: 'post/renamed', recursive: true }))
+        .status
+    ).toBe(200);
+    expect(
+      (await stable({ op: 'remove', mount: '/mnt/proj', path: 'post', recursive: '1' })).status
+    ).toBe(200);
+  });
+
+  it('refuses to remove a mount root', async () => {
+    const res = await stable({ op: 'remove', mount: '/mnt/proj', path: '', recursive: true });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { code: string }).code).toBe('EACCES');
+  });
+
+  it('maps errno, traversal, and unknown mounts to coded JSON', async () => {
+    const missing = await stable({ op: 'stat', mount: '/mnt/proj', path: 'missing.txt' });
+    expect(missing.status).toBe(404);
+    expect(((await missing.json()) as { code: string }).code).toBe('ENOENT');
+
+    const escape = await stable({ op: 'stat', mount: '/mnt/proj', path: '../secret.txt' });
+    expect(escape.status).toBe(403);
+    expect(((await escape.json()) as { code: string }).code).toBe('EACCES');
+
+    const noMount = await stable({ op: 'list', mount: '/mnt/nope', path: '' });
+    expect(noMount.status).toBe(404);
+    expect(((await noMount.json()) as { code: string }).code).toBe('ENOENT');
+  });
+
+  it('rejects unknown ops and a rename without `to` with a coded 400', async () => {
+    // Every error MUST carry a `code` — a code-less 404/405 is exactly the
+    // signal `HostFsMountBackend` uses to decide the bridge has no stable
+    // endpoint and downgrade to the per-op routes.
+    const unknown = await stable({ op: 'read', mount: '/mnt/proj', path: 'hello.txt' });
+    expect(unknown.status).toBe(400);
+    expect(((await unknown.json()) as { code: string }).code).toBe('EINVAL');
+
+    const noTo = await stable({ op: 'rename', mount: '/mnt/proj', path: 'hello.txt' });
+    expect(noTo.status).toBe(400);
+    expect(((await noTo.json()) as { code: string }).code).toBe('EINVAL');
+  });
+
+  it('does not shadow the per-op POST routes', async () => {
+    const res = await api('/api/hostfs/mkdir?mount=%2Fmnt%2Fproj&path=still-per-op', {
+      method: 'POST',
+    });
+    expect(res.status).toBe(200);
+    expect((await api('/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=still-per-op')).status).toBe(200);
   });
 });
 

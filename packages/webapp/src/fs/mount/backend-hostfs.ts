@@ -10,12 +10,37 @@
  * `mountConfiguredHostMounts`) and are NOT persisted to the mount table
  * store: the launcher config is their single source of truth on every boot.
  *
- * Requests address the mount by its SLICC target (`?mount=/mnt/project`)
- * plus a mount-relative path; the server refuses anything outside the
- * mapped root (traversal, symlink escapes). There is no client-side cache:
- * the bridge is loopback-fast and host files can change under us at any
- * time, so every operation is a live passthrough — which also means
- * external edits are visible immediately, unlike picker mounts.
+ * Requests address the mount by its SLICC target (`/mnt/project`) plus a
+ * mount-relative path; the server refuses anything outside the mapped root
+ * (traversal, symlink escapes). There is no client-side cache: the bridge is
+ * loopback-fast and host files can change under us at any time, so every
+ * operation is a live passthrough — which also means external edits are
+ * visible immediately, unlike picker mounts.
+ *
+ * ## Why the metadata ops POST to one URL
+ *
+ * The bridge token rides as a custom `X-Bridge-Token` header, so every
+ * cross-origin hostfs call is a non-simple CORS request; Chrome's Private
+ * Network Access additionally preflights public→loopback traffic. A
+ * preflight is unavoidable — but the preflight cache is keyed by URL, and
+ * the per-op routes put the path in the query string, so every request hit a
+ * fresh URL and `Access-Control-Max-Age` never applied (issue #2715:
+ * 246,893 `OPTIONS` for 385,033 `GET`s in one benchmark session).
+ *
+ * `list`/`stat`/`mkdir`/`rename`/`remove` therefore go to the single stable
+ * `POST /api/hostfs` with the parameters in a JSON body: one preflight per
+ * max-age window covers all of them. `read` deliberately keeps its per-file
+ * `GET` — a POST response is not cacheable, and the browser HTTP cache
+ * revalidating big blobs with a 304 is worth far more than its preflight
+ * (and that URL repeats, so the preflight cache does work for it). `write`
+ * keeps its `PUT` for the same reason in reverse: raw bytes, and it repeats
+ * against the same path (e.g. `.git/index`).
+ *
+ * A bridge without the stable route (an older node-server binary behind a
+ * freshly-updated hosted UI) answers with a framework 404 that carries no
+ * `{ code }`; that is the signal to fall back to the per-op routes for the
+ * rest of this backend's life. The cost is one wasted request — or one per
+ * op already in flight when the first 404 lands, which self-heals.
  */
 
 import { apiHeaders, resolveApiUrl } from '../../base/api-endpoint.js';
@@ -30,6 +55,16 @@ import type {
 
 /** Matches the server-side cap (node-server `HOSTFS_MAX_BODY_BYTES`). */
 const HOSTFS_MAX_BODY_BYTES = 100 * 1024 * 1024;
+
+/**
+ * Ops routed through the stable `POST /api/hostfs` endpoint so their CORS
+ * preflight is cached for the whole `Access-Control-Max-Age` window. `read`
+ * and `write` stay on their per-op routes — see the module doc.
+ */
+const STABLE_OPS: ReadonlySet<string> = new Set(['list', 'stat', 'mkdir', 'rename', 'remove']);
+
+/** The one URL every stable-endpoint op shares. */
+const HOSTFS_STABLE_PATH = '/api/hostfs';
 
 const KNOWN_CODES: ReadonlySet<string> = new Set([
   'ENOENT',
@@ -65,6 +100,12 @@ export class HostFsMountBackend implements MountBackend {
   private readonly hostPath: string;
   private readonly fetchImpl: typeof fetch;
   private closed = false;
+  /**
+   * Whether this bridge answers `POST /api/hostfs`. Optimistic: flipped off
+   * for the lifetime of the backend the first time the endpoint 404s without
+   * an errno `code`, after which every op uses its per-op route.
+   */
+  private stableEndpoint = true;
 
   constructor(opts: HostFsMountBackendOptions) {
     this.targetPath = opts.targetPath;
@@ -85,6 +126,38 @@ export class HostFsMountBackend implements MountBackend {
   }
 
   /**
+   * Pick the URL + init for one op: the stable POST endpoint when the bridge
+   * supports it and the op has no body of its own, else the per-op route.
+   * `extra` (rename's `to`, remove's `recursive`) travels as query params on
+   * the per-op route and as extra JSON fields on the stable one; the server
+   * accepts the string forms either way.
+   */
+  private buildRequest(
+    op: string,
+    path: string,
+    init?: RequestInit & { extra?: Record<string, string> }
+  ): { url: string; init: RequestInit } {
+    const headers = apiHeaders(init?.headers as Record<string, string> | undefined);
+    if (this.stableEndpoint && STABLE_OPS.has(op)) {
+      return {
+        url: resolveApiUrl(HOSTFS_STABLE_PATH),
+        init: {
+          method: 'POST',
+          headers: { ...headers, 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            op,
+            mount: this.targetPath,
+            path: path.replace(/^\/+/, ''),
+            ...(init?.extra ?? {}),
+          }),
+        },
+      };
+    }
+    const { extra: _extra, ...rest } = init ?? {};
+    return { url: this.url(op, path, init?.extra), init: { ...rest, headers } };
+  }
+
+  /**
    * Execute one bridge request. Non-2xx responses carry `{ code, message }`
    * which is rethrown as a faithful FsError; envelope failures (server not
    * running, network refused) surface as EIO so callers can distinguish
@@ -96,12 +169,11 @@ export class HostFsMountBackend implements MountBackend {
     init?: RequestInit & { extra?: Record<string, string> }
   ): Promise<Response> {
     this.assertOpen(path);
+    const usedStableEndpoint = this.stableEndpoint && STABLE_OPS.has(op);
+    const plan = this.buildRequest(op, path, init);
     let response: Response;
     try {
-      response = await this.fetchImpl(this.url(op, path, init?.extra), {
-        ...init,
-        headers: apiHeaders(init?.headers as Record<string, string> | undefined),
-      });
+      response = await this.fetchImpl(plan.url, plan.init);
     } catch (err) {
       throw new FsError(
         'EIO',
@@ -111,15 +183,29 @@ export class HostFsMountBackend implements MountBackend {
     }
     if (!response.ok) {
       let code: FsErrorCode = 'EIO';
+      let rawCode: string | null = null;
       let message = `hostfs ${op} failed with HTTP ${response.status}`;
       try {
         const body = (await response.json()) as { code?: unknown; message?: unknown };
-        if (typeof body.code === 'string' && KNOWN_CODES.has(body.code)) {
-          code = body.code as FsErrorCode;
+        if (typeof body.code === 'string') {
+          rawCode = body.code;
+          if (KNOWN_CODES.has(body.code)) code = body.code as FsErrorCode;
         }
         if (typeof body.message === 'string') message = body.message;
       } catch {
         /* non-JSON error body — keep the HTTP-status message */
+      }
+      // A bridge that predates the stable endpoint answers with its
+      // framework's 404/405 — no errno `code`. Every error the real route
+      // emits carries one, so this is unambiguous: downgrade permanently and
+      // retry the same op on its per-op route.
+      if (
+        usedStableEndpoint &&
+        rawCode === null &&
+        (response.status === 404 || response.status === 405)
+      ) {
+        this.stableEndpoint = false;
+        return this.request(op, path, init);
       }
       throw new FsError(code, message, path);
     }

@@ -380,3 +380,15 @@ export function buildCorsHeaders(
 export function buildPnaPreflightHeaders(): Record<string, string> {
   return { 'Access-Control-Allow-Private-Network': 'true' };
 }
+
+/**
+ * Preflight cache lifetime. `/api/hostfs/*` gets Chrome's cap (7200s) because
+ * the mounted-filesystem traffic is thousands of requests per command and
+ * every one of them is non-simple (bridge-token header) plus public→loopback
+ * (Chrome's Private Network Access preflight) — see #2715. The rest of /api
+ * keeps the conservative 10 minutes: those routes are low-volume, and a short
+ * window bounds how long a stale allowed-header set can linger.
+ */
+export function preflightMaxAge(path: string): string {
+  return path === '/api/hostfs' || path.startsWith('/api/hostfs/') ? '7200' : '600';
+}

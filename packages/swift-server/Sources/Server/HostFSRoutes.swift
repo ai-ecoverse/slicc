@@ -13,6 +13,15 @@ import NIOCore
 /// shape (`{ code, message }` with an errno-derived status), same traversal
 /// and symlink containment rules — so the webapp's `HostFsMountBackend`
 /// works identically against both servers.
+///
+/// Two request shapes reach the same op implementations: the per-op routes
+/// (`GET /api/hostfs/list?mount=&path=` …) and a single stable
+/// `POST /api/hostfs` whose JSON body carries `{ op, mount, path, … }`. The
+/// stable endpoint exists purely so CORS preflights are cacheable: the
+/// preflight cache is keyed by URL, and the per-op URLs are unique per path,
+/// so `Access-Control-Max-Age` never applied (#2715). `read` and `write` keep
+/// their per-op routes — a POST response is not cacheable, and a read the
+/// browser can revalidate with a 304 is worth more than its preflight.
 enum HostFSRoutes {
     /// Matches the webapp's hostfs body cap (`backend-hostfs.ts`).
     static let maxBodyBytes = 100 * 1024 * 1024
@@ -82,6 +91,37 @@ enum HostFSRoutes {
 
     // MARK: - Registration
 
+    /// Body of the stable `POST /api/hostfs` endpoint. One URL for every
+    /// metadata op so the CORS preflight cache (keyed by URL) can actually
+    /// hold — the per-op routes put the path in the query string, so every
+    /// request hit a fresh URL and `Access-Control-Max-Age` never applied
+    /// (#2715). Mirrors node-server's dispatcher in `src/hostfs.ts`.
+    struct StableRequestBody {
+        let op: String
+        let mount: String
+        let path: String
+        let to: String?
+        let recursive: Bool
+
+        init?(data: Data) {
+            guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
+                let op = object["op"] as? String
+            else { return nil }
+            self.op = op
+            self.mount = object["mount"] as? String ?? ""
+            self.path = object["path"] as? String ?? ""
+            self.to = object["to"] as? String
+            // `recursive` accepts the query-string "1" and a JSON true alike.
+            if let flag = object["recursive"] as? Bool {
+                self.recursive = flag
+            } else if let flag = object["recursive"] as? String {
+                self.recursive = flag == "1"
+            } else {
+                self.recursive = false
+            }
+        }
+    }
+
     static func registerRoutes(router: Router<some RequestContext>, roots: [MountRoot]) {
         let byPath = Dictionary(uniqueKeysWithValues: roots.map { ($0.path, $0) })
 
@@ -94,42 +134,31 @@ enum HostFSRoutes {
             return try resolveWithinRoot(root: entry.root, relPath: rel)
         }
 
-        router.get("/api/hostfs/list") { request, _ in
-            try run {
-                let dir = try target(for: request)
-                let names = try wrapErrno { try FileManager.default.contentsOfDirectory(atPath: dir) }
-                let entries: [LickSystem.JSONValue] = names.map { name in
-                    let full = dir + "/" + name
-                    var isDirectory: ObjCBool = false
-                    FileManager.default.fileExists(atPath: full, isDirectory: &isDirectory)
-                    if isDirectory.boolValue {
-                        return .object(["name": .string(name), "kind": .string("directory")])
-                    }
-                    let attrs = try? FileManager.default.attributesOfItem(atPath: full)
-                    let size = (attrs?[.size] as? NSNumber)?.doubleValue ?? 0
-                    let mtime = (attrs?[.modificationDate] as? Date).map { $0.timeIntervalSince1970 * 1000 } ?? 0
-                    return .object([
-                        "name": .string(name),
-                        "kind": .string("file"),
-                        "size": .number(size),
-                        "lastModified": .number(mtime.rounded()),
-                    ])
-                }
-                return try jsonBody(.object(["entries": .array(entries)]))
+        // Stable-URL dispatcher for the metadata ops. `read`/`write` keep
+        // their per-op routes: a POST response is not cacheable, and a read
+        // that the browser can revalidate with a 304 is worth far more than
+        // its preflight.
+        router.post("/api/hostfs") { request, _ in
+            guard let buffer = try? await request.body.collect(upTo: 1024 * 1024),
+                let body = StableRequestBody(data: Data(buffer: buffer))
+            else {
+                return fsError("EINVAL", .badRequest, "hostfs body must be JSON carrying an op")
+            }
+            guard let entry = byPath[body.mount] else {
+                return fsError("ENOENT", .notFound, "no such mount: \(body.mount)")
+            }
+            return try run {
+                let path = try resolveWithinRoot(root: entry.root, relPath: body.path)
+                return try dispatchStable(body, path: path, entry: entry, roots: roots)
             }
         }
 
+        router.get("/api/hostfs/list") { request, _ in
+            try run { try listResponse(try target(for: request)) }
+        }
+
         router.get("/api/hostfs/stat") { request, _ in
-            try run {
-                let path = try target(for: request)
-                let (isDirectory, size, mtime) = try statAt(path)
-                return try jsonBody(
-                    .object([
-                        "kind": .string(isDirectory ? "directory" : "file"),
-                        "size": .number(isDirectory ? 0 : size),
-                        "mtime": .number(mtime),
-                    ]))
-            }
+            try run { try statResponse(try target(for: request)) }
         }
 
         router.get("/api/hostfs/read") { request, _ in
@@ -177,47 +206,113 @@ enum HostFSRoutes {
         }
 
         router.post("/api/hostfs/mkdir") { request, _ in
-            try run {
-                let path = try target(for: request)
-                try wrapErrno {
-                    try FileManager.default.createDirectory(
-                        atPath: path, withIntermediateDirectories: true)
-                }
-                return try jsonBody(.object(["ok": .bool(true)]))
-            }
+            try run { try mkdirResponse(try target(for: request)) }
         }
 
         router.post("/api/hostfs/rename") { request, _ in
             try run {
-                let from = try target(for: request)
-                let to = try target(for: request, pathParam: "to")
-                try wrapErrno { try FileManager.default.moveItem(atPath: from, toPath: to) }
-                return try jsonBody(.object(["ok": .bool(true)]))
+                try renameResponse(
+                    from: try target(for: request), to: try target(for: request, pathParam: "to"))
             }
         }
 
         router.delete("/api/hostfs/remove") { request, _ in
             try run {
-                let path = try target(for: request)
-                if roots.contains(where: { $0.root == path }) {
-                    throw FsFailure.code("EACCES", .forbidden, "refusing to remove a mount root")
-                }
                 let recursive = String(request.uri.queryParameters["recursive"] ?? "") == "1"
-                var isDirectory: ObjCBool = false
-                guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
-                    throw FsFailure.code("ENOENT", .notFound, "no such file or directory")
-                }
-                if isDirectory.boolValue && !recursive {
-                    let contents =
-                        (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-                    if !contents.isEmpty {
-                        throw FsFailure.code("ENOTEMPTY", .conflict, "directory not empty")
-                    }
-                }
-                try wrapErrno { try FileManager.default.removeItem(atPath: path) }
-                return try jsonBody(.object(["ok": .bool(true)]))
+                return try removeResponse(
+                    try target(for: request), recursive: recursive, roots: roots)
             }
         }
+    }
+
+    /// Route one decoded stable-endpoint body to the shared op implementation.
+    /// Every failure carries an errno `code` — a code-less 404 is exactly how
+    /// `HostFsMountBackend` detects a bridge without this route and downgrades
+    /// to the per-op routes, so it must never leak from here.
+    private static func dispatchStable(
+        _ body: StableRequestBody, path: String, entry: MountRoot, roots: [MountRoot]
+    ) throws -> Response {
+        switch body.op {
+        case "list": return try listResponse(path)
+        case "stat": return try statResponse(path)
+        case "mkdir": return try mkdirResponse(path)
+        case "rename":
+            guard let toRel = body.to, !toRel.isEmpty else {
+                throw FsFailure.code("EINVAL", .badRequest, "rename requires to")
+            }
+            return try renameResponse(
+                from: path, to: try resolveWithinRoot(root: entry.root, relPath: toRel))
+        case "remove":
+            return try removeResponse(path, recursive: body.recursive, roots: roots)
+        default:
+            throw FsFailure.code("EINVAL", .badRequest, "unsupported hostfs op: \(body.op)")
+        }
+    }
+
+    // MARK: - Op implementations (shared by both request shapes)
+
+    private static func listResponse(_ dir: String) throws -> Response {
+        let names = try wrapErrno { try FileManager.default.contentsOfDirectory(atPath: dir) }
+        let entries: [LickSystem.JSONValue] = names.map { name in
+            let full = dir + "/" + name
+            var isDirectory: ObjCBool = false
+            FileManager.default.fileExists(atPath: full, isDirectory: &isDirectory)
+            if isDirectory.boolValue {
+                return .object(["name": .string(name), "kind": .string("directory")])
+            }
+            let attrs = try? FileManager.default.attributesOfItem(atPath: full)
+            let size = (attrs?[.size] as? NSNumber)?.doubleValue ?? 0
+            let mtime = (attrs?[.modificationDate] as? Date).map { $0.timeIntervalSince1970 * 1000 } ?? 0
+            return .object([
+                "name": .string(name),
+                "kind": .string("file"),
+                "size": .number(size),
+                "lastModified": .number(mtime.rounded()),
+            ])
+        }
+        return try jsonBody(.object(["entries": .array(entries)]))
+    }
+
+    private static func statResponse(_ path: String) throws -> Response {
+        let (isDirectory, size, mtime) = try statAt(path)
+        return try jsonBody(
+            .object([
+                "kind": .string(isDirectory ? "directory" : "file"),
+                "size": .number(isDirectory ? 0 : size),
+                "mtime": .number(mtime),
+            ]))
+    }
+
+    private static func mkdirResponse(_ path: String) throws -> Response {
+        try wrapErrno {
+            try FileManager.default.createDirectory(atPath: path, withIntermediateDirectories: true)
+        }
+        return try jsonBody(.object(["ok": .bool(true)]))
+    }
+
+    private static func renameResponse(from: String, to: String) throws -> Response {
+        try wrapErrno { try FileManager.default.moveItem(atPath: from, toPath: to) }
+        return try jsonBody(.object(["ok": .bool(true)]))
+    }
+
+    private static func removeResponse(_ path: String, recursive: Bool, roots: [MountRoot]) throws
+        -> Response
+    {
+        if roots.contains(where: { $0.root == path }) {
+            throw FsFailure.code("EACCES", .forbidden, "refusing to remove a mount root")
+        }
+        var isDirectory: ObjCBool = false
+        guard FileManager.default.fileExists(atPath: path, isDirectory: &isDirectory) else {
+            throw FsFailure.code("ENOENT", .notFound, "no such file or directory")
+        }
+        if isDirectory.boolValue && !recursive {
+            let contents = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
+            if !contents.isEmpty {
+                throw FsFailure.code("ENOTEMPTY", .conflict, "directory not empty")
+            }
+        }
+        try wrapErrno { try FileManager.default.removeItem(atPath: path) }
+        return try jsonBody(.object(["ok": .bool(true)]))
     }
 
     // MARK: - Helpers

@@ -14,6 +14,23 @@
  * Protected like every other /api route: same-origin / loopback callers
  * pass, cross-origin callers need the bridge token (see
  * `createThinBridgeCorsMiddleware` in index.ts).
+ *
+ * Two request shapes reach the same handlers:
+ *
+ *   - the per-op routes (`GET /api/hostfs/list?mount=&path=` …), kept for
+ *     compatibility and used for the body ops (`read`, `write`);
+ *   - a single stable `POST /api/hostfs` whose JSON body carries
+ *     `{ op, mount, path, … }`.
+ *
+ * The stable endpoint exists purely to make CORS preflights cacheable. The
+ * bridge token travels as a custom header, so every cross-origin hostfs call
+ * is a non-simple request, and Chrome's Private Network Access preflights
+ * public→loopback traffic regardless — but the preflight cache is keyed by
+ * URL, and the per-op URLs are unique per path, so `Access-Control-Max-Age`
+ * never got a chance to help (issue #2715: 246,893 `OPTIONS` for 385,033
+ * `GET`s in one session). One stable URL collapses that to one preflight per
+ * max-age. `read` deliberately stays a `GET` on a per-file URL so the
+ * browser HTTP cache can still revalidate large blobs with a 304.
  */
 
 import type { Express, Request, Response } from 'express';
@@ -160,19 +177,117 @@ function queryString(req: Request, name: string): string | null {
   return typeof value === 'string' && value.length > 0 ? value : null;
 }
 
+/** Ops reachable through the stable `POST /api/hostfs` endpoint. */
+const STABLE_OPS = ['list', 'stat', 'mkdir', 'rename', 'remove'] as const;
+type StableOp = (typeof STABLE_OPS)[number];
+
+function isStableOp(value: unknown): value is StableOp {
+  return typeof value === 'string' && (STABLE_OPS as readonly string[]).includes(value);
+}
+
+/**
+ * JSON body of the stable `POST /api/hostfs` endpoint. Every field is
+ * `unknown` because it arrives off the wire: `op` is narrowed by `isStableOp`
+ * and the rest by `bodyString` / `isRecursive` before anything touches the
+ * filesystem.
+ */
+interface HostFsStableRequest {
+  op?: unknown;
+  mount?: unknown;
+  path?: unknown;
+  to?: unknown;
+  recursive?: unknown;
+}
+
+function bodyString(body: HostFsStableRequest, name: 'mount' | 'path' | 'to'): string | null {
+  const value = body[name];
+  return typeof value === 'string' && value.length > 0 ? value : null;
+}
+
+/** `recursive` accepts the query-string `'1'` and a JSON `true` alike. */
+function isRecursive(value: unknown): boolean {
+  return value === true || value === '1' || value === 1;
+}
+
+/** `readdir` + a stat per entry, so consumers get size/mtime without an N+1. */
+async function listOp(target: string): Promise<{ entries: unknown[] }> {
+  const dirents = await readdir(target, { withFileTypes: true });
+  const entries = await Promise.all(
+    dirents.map(async (d) => {
+      if (d.isDirectory()) return { name: d.name, kind: 'directory' };
+      try {
+        // stat() follows symlinks, so a link to a directory classifies as
+        // a directory — matching what every subsequent access sees (and
+        // the swift server, whose fileExists follows links). Escaping
+        // links are still refused at access time by resolveWithinRoot.
+        const s = await stat(resolve(target, d.name));
+        if (s.isDirectory()) return { name: d.name, kind: 'directory' };
+        return {
+          name: d.name,
+          kind: 'file',
+          size: s.size,
+          lastModified: Math.round(s.mtimeMs),
+        };
+      } catch {
+        // Raced deletion / dangling link / unreadable: name only.
+        return { name: d.name, kind: 'file' };
+      }
+    })
+  );
+  return { entries };
+}
+
+async function statOp(target: string): Promise<{ kind: string; size: number; mtime: number }> {
+  return statPayload(await stat(target));
+}
+
+async function mkdirOp(target: string): Promise<{ ok: true }> {
+  await mkdir(target, { recursive: true });
+  return { ok: true };
+}
+
+async function renameOp(from: string, to: string): Promise<{ ok: true }> {
+  await rename(from, to);
+  return { ok: true };
+}
+
+async function removeOp(
+  target: string,
+  recursive: boolean,
+  roots: readonly HostMountRoot[]
+): Promise<{ ok: true }> {
+  if (roots.some((r) => r.root === target)) {
+    throw Object.assign(new Error('refusing to remove a mount root'), { code: 'EACCES' });
+  }
+  await rm(target, { recursive, force: false });
+  return { ok: true };
+}
+
 /**
  * Register the /api/hostfs routes for the resolved mount roots. The route
  * surface mirrors `MountBackend` 1:1 (webapp `backend-hostfs.ts`):
  *
+ *   POST   /api/hostfs           ← { op, mount, path, to?, recursive? }
  *   GET    /api/hostfs/list?mount=&path=          → { entries: [...] }
  *   GET    /api/hostfs/stat?mount=&path=          → { kind, size, mtime }
  *   GET    /api/hostfs/read?mount=&path=          → octet-stream body
  *   PUT    /api/hostfs/write?mount=&path=         ← octet-stream body
  *   POST   /api/hostfs/mkdir?mount=&path=
+ *   POST   /api/hostfs/rename?mount=&path=&to=
  *   DELETE /api/hostfs/remove?mount=&path=[&recursive=1]
  *
+ * `POST /api/hostfs` is the preflight-cacheable form of `list`/`stat`/
+ * `mkdir`/`rename`/`remove` — one URL for all of them, so one CORS preflight
+ * covers the whole `Access-Control-Max-Age` window instead of one per path
+ * (#2715). It is purely a transport change: same handlers, same payloads,
+ * same errno JSON. The per-op routes stay for compatibility (older webapps,
+ * `curl`) and remain the only form for the two body ops.
+ *
  * Errors are `{ code, message }` JSON with an errno-derived status so the
- * webapp backend can rethrow faithful `FsError`s.
+ * webapp backend can rethrow faithful `FsError`s. A bridge that predates the
+ * stable endpoint answers `POST /api/hostfs` with a framework 404 that has no
+ * `code`, which is how the webapp detects it and falls back to the per-op
+ * routes — so every error this route emits MUST carry a `code`.
  */
 export function registerHostFsRoutes(app: Express, roots: readonly HostMountRoot[]): void {
   const byPath = new Map(roots.map((r) => [r.path, r]));
@@ -199,40 +314,64 @@ export function registerHostFsRoutes(app: Express, roots: readonly HostMountRoot
     };
   };
 
+  // Stable-URL dispatcher. Mounted before the per-op routes so `/api/hostfs`
+  // is matched exactly; express keeps `/api/hostfs/mkdir` distinct.
+  app.post('/api/hostfs', express.json({ limit: '1mb' }), (req, res) => {
+    void (async () => {
+      const body = (req.body ?? {}) as HostFsStableRequest;
+      const op = body.op;
+      if (!isStableOp(op)) {
+        res.status(400).json({ code: 'EINVAL', message: `unsupported hostfs op: ${String(op)}` });
+        return;
+      }
+      const mount = bodyString(body, 'mount');
+      const entry = mount ? byPath.get(mount) : undefined;
+      if (!entry) {
+        res.status(404).json({ code: 'ENOENT', message: `no such mount: ${mount ?? ''}` });
+        return;
+      }
+      try {
+        const target = await resolveWithinRoot(entry.root, bodyString(body, 'path') ?? '');
+        switch (op) {
+          case 'list':
+            res.json(await listOp(target));
+            return;
+          case 'stat':
+            res.json(await statOp(target));
+            return;
+          case 'mkdir':
+            res.json(await mkdirOp(target));
+            return;
+          case 'rename': {
+            const toRel = bodyString(body, 'to');
+            if (!toRel) {
+              res.status(400).json({ code: 'EINVAL', message: 'rename requires to' });
+              return;
+            }
+            res.json(await renameOp(target, await resolveWithinRoot(entry.root, toRel)));
+            return;
+          }
+          case 'remove':
+            res.json(await removeOp(target, isRecursive(body.recursive), roots));
+            return;
+        }
+      } catch (err) {
+        sendFsError(res, err);
+      }
+    })();
+  });
+
   app.get(
     '/api/hostfs/list',
     withTarget(async (target, _req, res) => {
-      const dirents = await readdir(target, { withFileTypes: true });
-      const entries = await Promise.all(
-        dirents.map(async (d) => {
-          if (d.isDirectory()) return { name: d.name, kind: 'directory' };
-          try {
-            // stat() follows symlinks, so a link to a directory classifies as
-            // a directory — matching what every subsequent access sees (and
-            // the swift server, whose fileExists follows links). Escaping
-            // links are still refused at access time by resolveWithinRoot.
-            const s = await stat(resolve(target, d.name));
-            if (s.isDirectory()) return { name: d.name, kind: 'directory' };
-            return {
-              name: d.name,
-              kind: 'file',
-              size: s.size,
-              lastModified: Math.round(s.mtimeMs),
-            };
-          } catch {
-            // Raced deletion / dangling link / unreadable: name only.
-            return { name: d.name, kind: 'file' };
-          }
-        })
-      );
-      res.json({ entries });
+      res.json(await listOp(target));
     })
   );
 
   app.get(
     '/api/hostfs/stat',
     withTarget(async (target, _req, res) => {
-      res.json(statPayload(await stat(target)));
+      res.json(await statOp(target));
     })
   );
 
@@ -288,8 +427,7 @@ export function registerHostFsRoutes(app: Express, roots: readonly HostMountRoot
   app.post(
     '/api/hostfs/mkdir',
     withTarget(async (target, _req, res) => {
-      await mkdir(target, { recursive: true });
-      res.json({ ok: true });
+      res.json(await mkdirOp(target));
     })
   );
 
@@ -303,23 +441,14 @@ export function registerHostFsRoutes(app: Express, roots: readonly HostMountRoot
         res.status(400).json({ code: 'EINVAL', message: 'rename requires mount and to' });
         return;
       }
-      const to = await resolveWithinRoot(entry.root, toRel);
-      await rename(target, to);
-      res.json({ ok: true });
+      res.json(await renameOp(target, await resolveWithinRoot(entry.root, toRel)));
     })
   );
 
   app.delete(
     '/api/hostfs/remove',
     withTarget(async (target, req, res) => {
-      const isRoot = roots.some((r) => r.root === target);
-      if (isRoot) {
-        res.status(403).json({ code: 'EACCES', message: 'refusing to remove a mount root' });
-        return;
-      }
-      const recursive = queryString(req, 'recursive') === '1';
-      await rm(target, { recursive, force: false });
-      res.json({ ok: true });
+      res.json(await removeOp(target, queryString(req, 'recursive') === '1', roots));
     })
   );
 }

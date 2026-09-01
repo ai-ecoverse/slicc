@@ -16,6 +16,7 @@ import {
   buildCorsHeaders,
   buildPnaPreflightHeaders,
   isLoopbackBridgeOrigin,
+  preflightMaxAge,
   resolveServerBridgeToken,
   selectBridgeSubprotocol,
   shouldMountThinBridgeCors,
@@ -1220,7 +1221,7 @@ function createThinBridgeCorsMiddleware(
     }
     if (req.method === 'OPTIONS' && cors) {
       for (const [k, v] of Object.entries(buildPnaPreflightHeaders())) res.setHeader(k, v);
-      res.setHeader('Access-Control-Max-Age', '600');
+      res.setHeader('Access-Control-Max-Age', preflightMaxAge(req.path));
       res.status(204).end();
       return;
     }

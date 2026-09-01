@@ -15,6 +15,7 @@ import {
   buildCorsHeaders,
   buildPnaPreflightHeaders,
   isLoopbackBridgeOrigin,
+  preflightMaxAge,
   shouldMountThinBridgeCors,
   validateBridgeToken,
 } from '../src/bridge-security.js';
@@ -40,7 +41,7 @@ beforeEach(async () => {
     if (req.method === 'OPTIONS') {
       if (cors) {
         for (const [k, v] of Object.entries(buildPnaPreflightHeaders())) res.setHeader(k, v);
-        res.setHeader('Access-Control-Max-Age', '600');
+        res.setHeader('Access-Control-Max-Age', preflightMaxAge(req.path));
         res.status(204).end();
         return;
       }
@@ -55,6 +56,9 @@ beforeEach(async () => {
       return;
     }
     next();
+  });
+  app.get('/api/hostfs/list', (_req, res) => {
+    res.json({ entries: [] });
   });
   app.get('/api/ping', (_req, res) => {
     res.json({ ok: true });
@@ -175,6 +179,17 @@ describe('thin-bridge CORS + PNA middleware', () => {
     expect(res.headers.get('access-control-max-age')).toBe('600');
   });
 
+  it("gives hostfs preflights Chrome's cap so one covers the whole session", async () => {
+    // #2715: hostfs is thousands of preflight-forcing requests per git
+    // command; 10 minutes is not worth the round trips.
+    const res = await fetch(`${base}/api/hostfs`, {
+      method: 'OPTIONS',
+      headers: { Origin: PROD_ORIGIN, 'Access-Control-Request-Method': 'POST' },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get('access-control-max-age')).toBe('7200');
+  });
+
   it('does not short-circuit OPTIONS from non-allowlisted origins', async () => {
     const res = await fetch(`${base}/api/ping`, {
       method: 'OPTIONS',
@@ -213,7 +228,7 @@ describe('thin-bridge CORS mount gate (/api/runtime-config)', () => {
         }
         if (req.method === 'OPTIONS' && cors) {
           for (const [k, v] of Object.entries(buildPnaPreflightHeaders())) res.setHeader(k, v);
-          res.setHeader('Access-Control-Max-Age', '600');
+          res.setHeader('Access-Control-Max-Age', preflightMaxAge(req.path));
           res.status(204).end();
           return;
         }

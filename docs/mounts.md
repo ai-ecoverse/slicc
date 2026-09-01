@@ -167,6 +167,24 @@ The server serves each mapped folder over its local `/api/hostfs` bridge (loopba
 
 `mount list` shows them with a `hostfs://<os-path>` source. The `:` split is on the last colon, so OS paths containing `:` work; `~` expands on the OS side.
 
+### Wire shape (`/api/hostfs`)
+
+Two request shapes reach the same handlers on both servers (node-server `src/hostfs.ts`, swift-server `HostFSRoutes.swift`):
+
+| Request                                                                    | Ops                                         |
+| -------------------------------------------------------------------------- | ------------------------------------------- |
+| `POST /api/hostfs` with a JSON body `{ op, mount, path, to?, recursive? }` | `list`, `stat`, `mkdir`, `rename`, `remove` |
+| `GET /api/hostfs/read?mount=&path=` → octet-stream                         | `read`                                      |
+| `PUT /api/hostfs/write?mount=&path=` ← octet-stream                        | `write`                                     |
+
+The per-op routes (`GET /api/hostfs/list?mount=&path=` etc.) still work for every op; the webapp just prefers the stable one.
+
+Why one URL: the bridge token rides as a custom `X-Bridge-Token` header, so every cross-origin hostfs call is a non-simple CORS request, and Chrome's Private Network Access preflights public→loopback traffic regardless. The preflight is unavoidable — but the browser's preflight cache is keyed by URL, and the per-op routes put the path in the query string, so `Access-Control-Max-Age` never got a cache hit: one benchmark session paid **246,893 `OPTIONS` for 385,033 `GET`s** ([#2715](https://github.com/ai-ecoverse/slicc/issues/2715)). Collapsing the metadata ops onto one URL makes that one preflight per max-age window, and `/api/hostfs*` preflights are served with Chrome's cap (`Access-Control-Max-Age: 7200`) instead of the 600 s the rest of `/api` uses.
+
+`read` and `write` deliberately keep their per-file URLs: a `POST` response is not cacheable, and a read the browser can revalidate with a `304` is worth far more than its preflight — and those URLs repeat (the same packfile, the same `.git/index`), so the preflight cache does work for them.
+
+A bridge that predates the stable endpoint answers `POST /api/hostfs` with a framework 404 carrying no errno `code`; `HostFsMountBackend` treats exactly that as "no stable endpoint" and falls back to the per-op routes for the rest of the mount's life, at a cost of one wasted request. Every error the real route emits carries a `code`, so a genuine `ENOENT` never triggers the downgrade.
+
 ## Common error patterns
 
 | Error                                                                                    | What it means                                                                                 | Fix                                                                                              |

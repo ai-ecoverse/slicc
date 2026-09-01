@@ -175,6 +175,113 @@ final class HostFSRoutesTests: XCTestCase {
         }
     }
 
+    /// One URL for every metadata op is the whole point of the stable
+    /// endpoint: the CORS preflight cache is keyed by URL, so the per-op
+    /// `?mount=&path=` routes never got a cache hit (#2715).
+    private func stable(_ body: [String: Any]) throws -> ByteBuffer {
+        ByteBuffer(data: try JSONSerialization.data(withJSONObject: body))
+    }
+
+    func testStableEndpointListStatMkdirRenameRemove() async throws {
+        try await makeApp().test(.router) { client in
+            try await client.execute(
+                uri: "/api/hostfs", method: .post,
+                body: try self.stable(["op": "list", "mount": "/mnt/proj", "path": ""])
+            ) { response in
+                XCTAssertEqual(response.status, .ok)
+                guard case .object(let body) = try self.decode(response.body),
+                    case .array(let entries)? = body["entries"]
+                else { return XCTFail("bad list shape") }
+                XCTAssertEqual(entries.count, 3)
+            }
+            try await client.execute(
+                uri: "/api/hostfs", method: .post,
+                body: try self.stable(["op": "stat", "mount": "/mnt/proj", "path": "hello.txt"])
+            ) { response in
+                XCTAssertEqual(response.status, .ok)
+                guard case .object(let body) = try self.decode(response.body) else {
+                    return XCTFail("bad stat shape")
+                }
+                XCTAssertEqual(body["kind"], .string("file"))
+                XCTAssertEqual(body["size"], .number(10))
+            }
+            try await client.execute(
+                uri: "/api/hostfs", method: .post,
+                body: try self.stable(["op": "mkdir", "mount": "/mnt/proj", "path": "post/made"])
+            ) { response in XCTAssertEqual(response.status, .ok) }
+            try await client.execute(
+                uri: "/api/hostfs", method: .post,
+                body: try self.stable([
+                    "op": "rename", "mount": "/mnt/proj", "path": "post/made", "to": "post/moved",
+                ])
+            ) { response in XCTAssertEqual(response.status, .ok) }
+            // `recursive` accepts the query-string "1" and a JSON true alike.
+            try await client.execute(
+                uri: "/api/hostfs", method: .post,
+                body: try self.stable([
+                    "op": "remove", "mount": "/mnt/proj", "path": "post/moved", "recursive": true,
+                ])
+            ) { response in XCTAssertEqual(response.status, .ok) }
+            try await client.execute(
+                uri: "/api/hostfs", method: .post,
+                body: try self.stable([
+                    "op": "remove", "mount": "/mnt/proj", "path": "post", "recursive": "1",
+                ])
+            ) { response in XCTAssertEqual(response.status, .ok) }
+        }
+    }
+
+    /// Every failure MUST carry an errno `code` — a code-less 404 is exactly
+    /// how `HostFsMountBackend` decides a bridge has no stable endpoint and
+    /// downgrades to the per-op routes for the rest of its life.
+    func testStableEndpointErrorsAlwaysCarryACode() async throws {
+        try await makeApp().test(.router) { client in
+            func expectCode(_ body: [String: Any], _ status: HTTPResponse.Status, _ code: String)
+                async throws
+            {
+                try await client.execute(
+                    uri: "/api/hostfs", method: .post, body: try self.stable(body)
+                ) { response in
+                    XCTAssertEqual(response.status, status)
+                    guard case .object(let payload) = try self.decode(response.body) else {
+                        return XCTFail("bad error shape")
+                    }
+                    XCTAssertEqual(payload["code"], .string(code))
+                }
+            }
+            try await expectCode(
+                ["op": "stat", "mount": "/mnt/proj", "path": "missing.txt"], .notFound, "ENOENT")
+            try await expectCode(
+                ["op": "stat", "mount": "/mnt/proj", "path": "../secret.txt"], .forbidden, "EACCES")
+            try await expectCode(["op": "list", "mount": "/mnt/nope", "path": ""], .notFound, "ENOENT")
+            try await expectCode(
+                ["op": "remove", "mount": "/mnt/proj", "path": "", "recursive": true], .forbidden,
+                "EACCES")
+            // `read` is deliberately NOT a stable-endpoint op (it keeps its
+            // cacheable per-file GET), so it is rejected as unknown.
+            try await expectCode(
+                ["op": "read", "mount": "/mnt/proj", "path": "hello.txt"], .badRequest, "EINVAL")
+            try await expectCode(
+                ["op": "rename", "mount": "/mnt/proj", "path": "hello.txt"], .badRequest, "EINVAL")
+            try await client.execute(
+                uri: "/api/hostfs", method: .post, body: ByteBuffer(string: "not json")
+            ) { response in
+                XCTAssertEqual(response.status, .badRequest)
+                guard case .object(let payload) = try self.decode(response.body) else {
+                    return XCTFail("bad error shape")
+                }
+                XCTAssertEqual(payload["code"], .string("EINVAL"))
+            }
+        }
+    }
+
+    func testPreflightMaxAgeMatchesNodeServer() {
+        XCTAssertEqual(BridgeSecurity.preflightMaxAge("/api/hostfs"), "7200")
+        XCTAssertEqual(BridgeSecurity.preflightMaxAge("/api/hostfs/read"), "7200")
+        XCTAssertEqual(BridgeSecurity.preflightMaxAge("/api/fetch-proxy"), "600")
+        XCTAssertEqual(BridgeSecurity.preflightMaxAge("/api/hostfs-admin"), "600")
+    }
+
     func testResolveWithinRootLexicalRules() throws {
         XCTAssertEqual(try HostFSRoutes.resolveWithinRoot(root: root, relPath: ""), root)
         XCTAssertEqual(
