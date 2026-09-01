@@ -457,6 +457,107 @@ describe('slicc-composer / push-to-talk', () => {
     expect(el.querySelector('slicc-input-card slicc-icon-button')).toBeNull();
   });
 
+  // ── Hands-free: the same lifecycle with no pointer to hold ────────
+
+  describe('toggleHandsFree', () => {
+    it('records with no pointer at all, and the second call appends + submits', async () => {
+      const fake = makeFakeSpeech({ permission: 'granted', transcript: 'ship it' });
+      const el = mount(fake);
+      const submits: Array<{ value: string; source?: string }> = [];
+      el.addEventListener('submit', (e) => {
+        submits.push((e as Event as CustomEvent<{ value: string; source?: string }>).detail);
+      });
+
+      expect(el.toggleHandsFree()).toBe(true);
+      await flush();
+      expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+      expect(fake.calls.start.length).toBe(1);
+
+      expect(el.toggleHandsFree()).toBe(false);
+      await flush();
+      expect(pttOf(el)).toBeNull();
+      expect(taOf(el).value).toBe('ship it');
+      // Down the same finalize path as a release, so the turn is still marked
+      // voice-initiated and the host still speaks the reply.
+      expect(submits).toEqual([{ value: 'ship it', source: 'dictation' }]);
+    });
+
+    /** The engage timer tells a tap from a hold; a keystroke is neither. */
+    it('skips the engage window a pointer press has to wait out', async () => {
+      const fake = makeFakeSpeech({ permission: 'granted' });
+      const el = mount(fake);
+      el.toggleHandsFree();
+      await flush();
+      // No timer advanced past PTT_ENGAGE_MS, and it is already listening.
+      expect(fake.calls.start.length).toBe(1);
+    });
+
+    it('says "press again" where the gesture says "release"', async () => {
+      const el = mount(makeFakeSpeech({ permission: 'granted' }));
+      el.toggleHandsFree();
+      await flush();
+      const label = pttOf(el)?.querySelector('.slicc-composer__ptt-label');
+      expect(label?.textContent).toBe('Listening — press again to send');
+      expect(pttOf(el)?.getAttribute('aria-label')).toBe('Listening — press again to send');
+    });
+
+    it('drops "hold" from the enable gate too, having nothing to hold', async () => {
+      const el = mount(makeFakeSpeech({ permission: 'prompt' }));
+      el.toggleHandsFree();
+      await flush();
+      expect(pttOf(el)?.querySelector('.slicc-composer__ptt-label')?.textContent).toBe(
+        'Enabling push to talk'
+      );
+    });
+
+    it('runs the same permission gate: prompt still holds at the enable stage', async () => {
+      const fake = makeFakeSpeech({ permission: 'prompt', grantOnRequest: true });
+      const el = mount(fake);
+      el.toggleHandsFree();
+      await flush();
+      expect(pttOf(el)?.classList.contains('is-enable')).toBe(true);
+      expect(fake.calls.requestPermission).toBe(0);
+      await vi.advanceTimersByTimeAsync(HOLD_TO_ENABLE_MS);
+      await flush();
+      expect(fake.calls.requestPermission).toBe(1);
+      expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+    });
+
+    it('refuses a composer with text in it, exactly as the gesture does', async () => {
+      const el = mount(makeFakeSpeech({ permission: 'granted' }));
+      taOf(el).value = 'already typed';
+      expect(el.toggleHandsFree()).toBe(false);
+      await flush();
+      expect(pttOf(el)).toBeNull();
+    });
+
+    it('refuses a float that never opted into push-to-talk', async () => {
+      const el = mount(makeFakeSpeech({ permission: 'granted' }));
+      el.removeAttribute('ptt');
+      expect(el.toggleHandsFree()).toBe(false);
+      await flush();
+      expect(pttOf(el)).toBeNull();
+    });
+
+    /**
+     * A finger on the composer owns its own release: a key that finalized
+     * somebody else's gesture would send half a sentence.
+     */
+    it('never ends a press it did not start', async () => {
+      const fake = makeFakeSpeech({ permission: 'granted', transcript: 'held' });
+      const el = mount(fake);
+      press(el);
+      await flush();
+      expect(el.toggleHandsFree()).toBe(false);
+      await flush();
+      expect(pttOf(el)?.classList.contains('is-recording')).toBe(true);
+      // ...and the real release still finalizes normally.
+      release();
+      await flush();
+      expect(taOf(el).value).toBe('held');
+    });
+  });
+
   it('pressing and holding the empty textarea arms push-to-talk', async () => {
     const el = mount(makeFakeSpeech({ permission: 'granted' }));
     press(el);

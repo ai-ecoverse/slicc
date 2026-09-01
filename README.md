@@ -188,33 +188,48 @@ Why the name? SLICC stands for **Self-Licking Ice Cream Cone**: a recursive syst
 
 ## Keyboard mode
 
-SLICC's main control is a text field, so it has no always-on shortcuts to collide with your typing. Instead it has a **mode**, like vim — and, like vim, the mode is where you rest: keyboard mode is on whenever nothing is focused for typing, and every key below is a bare letter. Press <kbd>Esc</kbd> to leave the composer for it, or just click somewhere that is not a text field. To type again, press <kbd>⏎</kbd> or <kbd>c</kbd> (or click into the composer). While the mode is on, a pill above the composer says so.
+SLICC's main control is a text field, so it has no always-on shortcuts to collide with your typing. Instead it has a **mode**, like vim — and, like vim, the mode is where you rest: keyboard mode is on whenever nothing is focused for typing, and every key below is a bare letter. Press <kbd>Esc</kbd> to leave the composer for it, or just click somewhere that is not a text field. To type again, press <kbd>⏎</kbd> or <kbd>i</kbd> (or click into the composer). While the mode is on, a pill above the composer says so.
 
-| Key                                        | Action                                                         |
-| ------------------------------------------ | -------------------------------------------------------------- |
-| <kbd>Esc</kbd>                             | Leave the composer for keyboard mode (again: exit full screen) |
-| <kbd>1</kbd>…<kbd>9</kbd>                  | Switch to that agent in the tab strip (<kbd>9</kbd> = last)    |
-| <kbd>d</kbd>                               | Next agent, looping                                            |
-| <kbd>c</kbd> or <kbd>⏎</kbd>               | Back to the composer                                           |
-| <kbd>n</kbd>                               | New conversation                                               |
-| <kbd>b</kbd>                               | Toggle the left rail                                           |
-| <kbd>x</kbd>                               | Toggle the right panel                                         |
-| <kbd>f</kbd>                               | File browser                                                   |
-| <kbd>t</kbd>                               | Browser tabs                                                   |
-| <kbd>e</kbd>                               | Terminal                                                       |
-| <kbd>m</kbd>                               | Memory                                                         |
-| <kbd>s</kbd>                               | Sprinkles, looping                                             |
-| <kbd>l</kbd>                               | Model picker                                                   |
-| <kbd>a</kbd>                               | Accounts                                                       |
-| <kbd>h</kbd>, <kbd>?</kbd> or <kbd>/</kbd> | This list, in an overlay                                       |
+| Key                          | Action                                                            |
+| ---------------------------- | ----------------------------------------------------------------- |
+| <kbd>Esc</kbd>               | Leave the composer for keyboard mode (again: exit full screen)    |
+| <kbd>i</kbd> or <kbd>⏎</kbd> | Back to the composer                                              |
+| <kbd>?</kbd>                 | This list, in an overlay                                          |
+| <kbd>1</kbd>…<kbd>9</kbd>    | Switch to that agent in the tab strip (<kbd>9</kbd> = last)       |
+| <kbd>→</kbd> / <kbd>←</kbd>  | Next / previous agent, looping                                    |
+| <kbd>n</kbd> / <kbd>N</kbd>  | New conversation / new conversation, erasing this one             |
+| <kbd>c</kbd> / <kbd>C</kbd>  | New cone / drop this cone                                         |
+| <kbd>r</kbd>                 | Archived chats (with <kbd>1</kbd>–<kbd>9</kbd>: restore that one) |
+| <kbd>s</kbd>                 | Stop the running turn                                             |
+| <kbd>a</kbd>                 | Go to the pending approval                                        |
+| <kbd>u</kbd>                 | Attach a file or skill                                            |
+| <kbd>v</kbd>                 | Dictate — press again to send                                     |
+| <kbd>y</kbd> / <kbd>Y</kbd>  | Copy the last reply / the whole chat                              |
+| <kbd>j</kbd> / <kbd>k</kbd>  | Next / previous message — or entry, inside an open list           |
+| <kbd>f</kbd>                 | File browser (with <kbd>1</kbd>–<kbd>9</kbd>: open that row)      |
+| <kbd>t</kbd>                 | Terminal                                                          |
+| <kbd>b</kbd>                 | Browser tabs                                                      |
+| <kbd>m</kbd>                 | Memory (with <kbd>1</kbd>–<kbd>9</kbd>: open that entry)          |
+| <kbd>g</kbd>                 | Monitor                                                           |
+| <kbd>p</kbd>                 | Sprinkles (with <kbd>1</kbd>–<kbd>9</kbd>: open that one)         |
+| <kbd>[</kbd> / <kbd>]</kbd>  | Toggle the left rail / the right panel                            |
+| <kbd>z</kbd>                 | Full screen the open panel                                        |
+| <kbd>l</kbd>                 | Model picker                                                      |
+| <kbd>,</kbd>                 | Accounts                                                          |
+
+**Chords.** Anything that owns a list takes a digit straight after it, and the digit picks from THAT list instead of the tab strip: <kbd>f</kbd> <kbd>3</kbd> is the third file, <kbd>r</kbd> <kbd>1</kbd> is the chat you archived most recently, <kbd>p</kbd> <kbd>2</kbd> is the second sprinkle. <kbd>9</kbd> is always the last one, exactly as it is for agents. The first key acts immediately, so <kbd>f</kbd> on its own is still just "open the files panel", and a digit pressed on its own is still an agent.
+
+<kbd>j</kbd> and <kbd>k</kbd> walk the same lists, looping — <kbd>p</kbd> <kbd>j</kbd> <kbd>j</kbd> steps through your sprinkles, <kbd>f</kbd> <kbd>k</kbd> jumps straight to the last file — and with no list open they walk the conversation a message at a time instead. A list stays addressable for exactly as long as its keys are still showing on the pill, and every digit or step key keeps both alive, so a walk down a long list never expires under you.
 
 Every key you press shows up as a cap on the pill — dimmed if it was not bound to anything, so a mistyped key reads as "that did nothing" rather than as a dead keyboard. The strip clears after a moment of quiet.
 
-Keys that navigate, or toggle chrome (digits, <kbd>d</kbd>, <kbd>b</kbd>, <kbd>x</kbd>, <kbd>s</kbd>, help), keep the mode on; anything that hands focus to a text field leaves it, whether that is a shortcut, a click, or a panel that opens with a field ready. Inside a text field nothing is intercepted at all, and a focused button keeps its own <kbd>⏎</kbd> and <kbd>Space</kbd>. The overlay is also in the avatar menu, under **Keyboard mode**.
+Keys that navigate, or toggle chrome (digits, the arrows, <kbd>j</kbd>, <kbd>k</kbd>, <kbd>[</kbd>, <kbd>]</kbd>, <kbd>s</kbd>, <kbd>v</kbd>, <kbd>z</kbd>, help), keep the mode on; anything that hands focus to a surface leaves it, whether that is a shortcut, a click, or a panel that opens with a field ready. Inside a text field nothing is intercepted at all, and a focused button keeps its own <kbd>⏎</kbd> and <kbd>Space</kbd>. The overlay is also in the avatar menu, under **Keyboard mode**.
 
 **Switching agents keeps your place.** The mode you were in when you left a cone is the mode you land back in: leave it typing and the caret is waiting in the new cone's composer, leave it in keyboard mode and the pill is still up. A scoop's transcript is read-only and has no composer at all, so it always puts you in keyboard mode — but it does not overwrite what you left behind, so cone → scoop → cone gives your caret back.
 
-**Rebinding.** The keys live in `/etc/slicc/keys.json` in the VFS, written the first time SLICC starts and never touched again — edit it and reload the tab. Each entry maps a key to a command (`"q": "terminal"`) and several keys can share one command. The file is applied _over_ the built-in keymap, so `null` removes a binding while deleting the line just restores its default — which is also how you inherit any keys a later version adds. The file lists every command it accepts. <kbd>Esc</kbd> and the digits are reserved. A bad line is skipped with a warning rather than costing you the rest of the file, and the help overlay always shows what is actually bound.
+**Rebinding.** The keys live in `/etc/slicc/keys.json` in the VFS — edit it and reload the tab. It ships EMPTY: the keymap above lives in SLICC itself and the file holds only your overrides, so anything you do not mention follows the shipped map, including keys a later version adds. Each entry maps a key to a command (`"q": "terminal"`) and several keys can share one; `null` removes a binding. The file lists every command it accepts, and a chord follows its command — rebind `files` to <kbd>q</kbd> and <kbd>q</kbd> <kbd>3</kbd> is the third file. <kbd>Esc</kbd> and the digits are reserved. A bad line is skipped with a warning rather than costing you the rest of the file, and the help overlay always shows what is actually bound.
+
+> **Upgrading from 6.110 or earlier?** That version wrote its whole keymap into `/etc/slicc/keys.json`, which would have pinned you to it forever. If you never edited the file, SLICC replaces it once with the empty one so the map above reaches you; if you did edit it, your file is left exactly as it is. To keep the old keys, the file's comment carries them as a block you can paste back into `"bindings"`.
 
 ## API Keys and Providers
 

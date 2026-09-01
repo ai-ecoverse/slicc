@@ -84,12 +84,19 @@ This file covers the default virtual filesystem payload in `packages/vfs-root/`.
 
 ### Keyboard shortcuts
 
-- `etc/slicc/keys.json` is the shipped keymap for the UI's keyboard mode, seeded on first boot
-  by `ui/wc/wc-shortcut-config.ts` and never rewritten — an edited config must survive later boots.
-- It is applied OVER the in-code `DEFAULT_KEYMAP`, so deleting an entry restores its default and
-  `null` is what removes a binding. Keeping it a superset means users inherit new bindings for free.
-- The file and `DEFAULT_KEYMAP` are two statements of one thing; a test asserts they agree, so
-  change both or neither.
+- `etc/slicc/keys.json` is the user's OVERRIDE file for keyboard mode, seeded on first boot by
+  `ui/wc/wc-shortcut-config.ts`. It ships with `"bindings": {}` — the keymap itself is
+  `DEFAULT_KEYMAP` in `ui/wc/wc-shortcuts.ts`, and a test asserts the file binds nothing.
+- **Never list a binding here again.** v1 wrote its whole keymap into the seed, and because the
+  file is applied OVER the defaults that pinned every install to v1 forever: no later map, and no
+  key for any command added since, could reach anyone who had booted once. An empty file is what
+  makes the shipped map — and every future change to it — inheritable.
+- The one write beyond seeding is that migration: a file still holding the v1 map exactly
+  (`isUntouchedV1Document`) is replaced once. Anything else, including v1 with one line changed,
+  is the user's and is left alone — an edited config must survive every later boot.
+- The `//` comment must name every `CommandId` (a test asserts it) and carries the v1 keymap as a
+  paste-back block for anyone who wants the old keys. `s` maps to `sprinkles` there, not to a
+  cycle command: `p`/`s` opens the first and the step keys walk the rest.
 
 ### Sprinkles
 

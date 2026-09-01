@@ -34,7 +34,8 @@ import { createChatFixture, FIXTURE_SCOOP_NAME } from '../chat-fixture.js';
 import type { ChatMessage } from '../types.js';
 import { buildTrustedLayers, TRUSTED_LAYER_CSS } from './trusted-layer.js';
 import { buildThreadChildren, messageEls } from './wc-message-view.js';
-import { type ShortcutHandles, wireKeyboardShortcuts } from './wc-shortcuts.js';
+import { wireShellKeyboard } from './wc-shortcut-surfaces.js';
+import type { ShortcutHandles } from './wc-shortcuts.js';
 import { wireBase64Previews } from './wire-base64-previews.js';
 
 // Side-effect import registers every element composed below.
@@ -477,22 +478,25 @@ export function mountWcShell(root: HTMLElement, options: WcShellOptions): WcShel
 
   const { nav, switcher, floatbar, avatarMenu } = buildNav(options);
   appCol.append(nav, shell);
-  const shortcuts = wireKeyboardShortcuts({
-    // `WcShellRefs` types the rails and the model pill as bare `HTMLElement`
-    // (they carry no shell-specific API); the mode needs their component
-    // surface, and the custom elements are registered by the side-effect
-    // import above.
+  // Keyboard mode over the mounted shell. The elements it drives that are not
+  // a component method — the send button's `stop`, the copy row's gestures,
+  // the add menu, an approval card, the open panel, the chord lists — are
+  // reached in `wc-shortcut-surfaces.ts`, so this file hands over the elements
+  // and nothing else. `WcShellRefs` types the rails and the model pill as bare
+  // `HTMLElement` (they carry no shell-specific API); the mode needs their
+  // component surface, and the custom elements are registered by the
+  // side-effect import above.
+  const shortcuts = wireShellKeyboard({
     switcher,
     dock: dock as unknown as SliccDock,
-    freezer: freezer as unknown as SliccFreezer,
+    freezer: freezer as unknown as SliccFreezer & HTMLElement,
     composerMeta: composerMeta as unknown as SliccComposerMeta,
-    focusComposer: () => inputCard.focus(),
-    // What `applyComposerAvailability` writes, read back: a scoop's band is
-    // `hidden` (#2312) and a disconnected follower's card is `disabled`.
-    // Either way there is nothing to type into, so keyboard mode is not a
-    // choice there — see `ModeIntent`.
-    composerAvailable: () =>
-      !composer.hasAttribute('hidden') && !inputCard.hasAttribute('disabled'),
+    composer,
+    inputCard,
+    thread,
+    dockTree,
+    fileTree: tree,
+    memoryHost,
   });
 
   // H2 — everything layout-owned goes inside `panelHost` (a stacking context,

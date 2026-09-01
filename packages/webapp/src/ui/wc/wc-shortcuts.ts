@@ -14,7 +14,7 @@
  * Keyboard mode is not a place you visit, it is where you are whenever you
  * are not typing: {@link settle} turns it on the moment no text field holds
  * the focus, and off the moment one does. Escape is therefore a shortcut for
- * "leave the field", not a toggle, and `c` / Enter — which put the caret back
+ * "leave the field", not a toggle, and `i` / Enter — which put the caret back
  * in the composer — are the only way out. That is vim's grammar rather than a
  * pair of modes with a switch between them, and it means the answer to "will
  * this letter type or command?" is always visible: the caret is in the
@@ -46,11 +46,23 @@
  * stays the single implementation, and a shortcut can never drift from what
  * the mouse does.
  *
+ * ## Chords
+ *
+ * Every surface that owns an ORDERED list — the file tree, the memory panel,
+ * the archived chats, the sprinkle launchers — extends the digits onto it:
+ * `f` opens the files panel and `f 3` opens its third row, on the same
+ * "9 is always the last one" rule the tab strip already uses
+ * ({@link itemForDigit}). The prefix runs EAGERLY, so the single-key path
+ * pays nothing for the chord's existence, and the lookahead is one key wide,
+ * so a digit is never ambiguous: armed, it addresses the list; otherwise the
+ * strip. A chord belongs to the {@link Command}, not to the key that ran it —
+ * rebinding `files` to `q` in `keys.json` moves `q 1-9` with it.
+ *
  * ## Leaving the mode
  *
- * Navigation keys (digits, `d`, `b`, `s`, help) keep the mode: you are still
- * driving from the keyboard. Anything that hands focus to a surface (`c`,
- * Enter, `n`, `f`, `e`, `m`, `t`, `a`) drops it BEFORE running, so a surface
+ * Navigation keys (digits, the two cycles, the rails, `z`, `s`, help) keep
+ * the mode: you are still driving from the keyboard. Anything that hands
+ * focus to a surface (`i`, Enter, `n`, `f`, `t`, `m`, `u`) drops it BEFORE running, so a surface
  * that autofocuses is not immediately undone by the mode — but the drop only
  * sticks if something typable actually took the focus, because `settle` runs
  * after and asks the DOM rather than the command table. Focus entering a text
@@ -103,16 +115,62 @@ export interface ShortcutFreezer extends EventTarget {
   toggle(force?: boolean): void;
 }
 
+/**
+ * An ordered, addressable list a chord's digit indexes into — the file tree's
+ * rows, the freezer's archived chats, the memory panel's entries.
+ *
+ * Read at the moment the digit lands, never awaited: a panel that is still
+ * mounting reports an empty list, the press shows dimmed on the HUD, and
+ * nothing happens. A chord that waited would be a chord that sometimes fires
+ * half a second after the user gave up on it.
+ */
+export interface ShortcutList {
+  /** How many items the surface is showing right now. */
+  size(): number;
+  /** Activate the nth (0-based) — the same event a click on that row fires. */
+  selectAt(index: number): void;
+}
+
+/** The lists a `<surface> <digit>` chord can address. See {@link ShortcutList}. */
+export interface ShortcutLists {
+  files?: ShortcutList;
+  memory?: ShortcutList;
+  sessions?: ShortcutList;
+}
+
 export interface ShortcutDeps {
   switcher: ShortcutSwitcher;
   /** The right-hand dock rail (files / terminal / memory / browser / sprinkles). */
   dock?: ShortcutDock;
-  /** The left rail, toggled by `b` and the target of the new-conversation event. */
+  /** The left rail, toggled by `[` and the target of the new-conversation event. */
   freezer?: ShortcutFreezer;
   /** The model pill; `openMenu()` is its own programmatic click. */
   composerMeta?: ShortcutComposerMeta;
-  /** Put the caret in the composer (`c` / Enter). */
+  /** Put the caret in the composer (`i` / Enter). */
   focusComposer?: () => void;
+  /**
+   * Stop the running turn (`s`) — the send button's own `stop` event, so the
+   * guard that ignores it when nothing is running stays in one place.
+   */
+  stopTurn?: () => void;
+  /** Focus the oldest unanswered approval in the transcript (`a`); again = next. */
+  focusApproval?: () => void;
+  /** Open the composer's add menu (`u`) — the `+` button's own `open()`. */
+  openAttachMenu?: () => void;
+  /** The copy row's two gestures (`y` / `Y`): last reply, whole chat. */
+  copyReply?: () => void;
+  copyChat?: () => void;
+  /** Fullscreen the active workbench surface (`z`) — the dock's long-press. */
+  zoomSurface?: () => void;
+  /**
+   * Start / stop-and-send a hands-free dictation turn (`v`) — the composer's
+   * own push-to-talk lifecycle, which otherwise only a held pointer can reach.
+   */
+  toggleVoice?: () => void;
+  /** Scroll the transcript to the next (`+1`) or previous (`-1`) message. */
+  scrollMessage?: (delta: 1 | -1) => void;
+  /** Ordered lists the digit chords address; each one is optional. */
+  lists?: ShortcutLists;
   /**
    * Can the selected unit be typed at? False for a scoop, whose composer band
    * is hidden (#2312), and for a disconnected follower, whose input card is
@@ -128,14 +186,14 @@ export interface ShortcutDeps {
 
 /** Actions the shell cannot reach on its own, registered by later wiring. */
 export interface ShortcutActions {
-  /** Open account settings (`a`) — wired by `wc-nav.ts`, leader-only. */
+  /** Open account settings (`,`) — wired by `wc-nav.ts`, leader-only. */
   accounts?: () => void;
 }
 
 export interface ShortcutHandles {
   /** Remove every listener, leave the mode, drop any open overlay. */
   dispose(): void;
-  /** Open the help overlay (what `h` does). */
+  /** Open the help overlay (what `?` does). */
   showHelp(): void;
   /** Close it, if open. */
   hideHelp(): void;
@@ -299,16 +357,33 @@ export function digitFor(event: KeyboardEvent): number | null {
 }
 
 /**
- * The unit a digit selects: `1`–`8` index the strip, `9` is always the last
- * tab (the browser-tab convention). `null` when the strip is shorter.
+ * The item a digit selects: `1`–`8` index the list, `9` is always the LAST
+ * one (the browser-tab convention). `null` when the list is shorter.
+ *
+ * One rule for every list in the UI — the tab strip, the file tree, the
+ * archived chats — so `9` never has to be re-learned per surface.
  */
+export function indexForDigit(size: number, digit: number): number | null {
+  if (size <= 0) return null;
+  const index = digit === 9 ? size - 1 : digit - 1;
+  return index < size ? index : null;
+}
+
+/** {@link indexForDigit}, resolved against a list of keys. */
+export function itemForDigit(keys: readonly string[], digit: number): string | null {
+  const index = indexForDigit(keys.length, digit);
+  return index === null ? null : (keys[index] ?? null);
+}
+
+/** {@link itemForDigit} over the tab strip's descriptors. */
 export function unitKeyForDigit(
   scoops: ReadonlyArray<{ key: string }>,
   digit: number
 ): string | null {
-  if (scoops.length === 0) return null;
-  if (digit === 9) return scoops[scoops.length - 1].key;
-  return scoops[digit - 1]?.key ?? null;
+  return itemForDigit(
+    scoops.map((s) => s.key),
+    digit
+  );
 }
 
 /**
@@ -319,6 +394,20 @@ export function nextInCycle(keys: readonly string[], current: string | null): st
   if (keys.length === 0) return null;
   const index = current === null ? -1 : keys.indexOf(current);
   return keys[(index + 1) % keys.length] ?? null;
+}
+
+/**
+ * The entry BEFORE `current`, wrapping — and the last entry when `current` is
+ * unknown, so the two cycle keys are mirror images: pressing one and then the
+ * other always lands back where it started, including from "nothing selected".
+ */
+export function prevInCycle(keys: readonly string[], current: string | null): string | null {
+  if (keys.length === 0) return null;
+  const found = current === null ? -1 : keys.indexOf(current);
+  // An unknown selection reads as "before the first", so stepping back from it
+  // lands on the last — the mirror of {@link nextInCycle} landing on the first.
+  const index = found === -1 ? 0 : found;
+  return keys[(index - 1 + keys.length) % keys.length] ?? null;
 }
 
 /** Sprinkle launchers in the dock rail, in rail order. */
@@ -332,6 +421,20 @@ interface CommandContext {
   actions: ShortcutActions;
   state: ModeState;
   toggleHelp(): void;
+  /**
+   * The chord armed when this key landed, if any — what makes the step keys
+   * dual-purpose. Passed in rather than read live, because the handler has
+   * already disarmed by the time a command runs: a chord survives a key only
+   * by being re-armed, and only the keys that used it do that.
+   */
+  armed: ArmedChord | null;
+}
+
+/** A live chord: the list it addresses, and where in it the user is standing. */
+export interface ArmedChord {
+  list: ChordListId;
+  /** The index last activated, or `null` before anything has been. */
+  index: number | null;
 }
 
 /**
@@ -360,7 +463,43 @@ interface ModeState {
 interface Command {
   holdsMode: boolean;
   description: string;
-  run(ctx: CommandContext): void;
+  /**
+   * The list a digit pressed straight after this command addresses. Declared
+   * on the COMMAND rather than on the key, so a user who rebinds `files` to
+   * `q` gets `q 1-9` for free and a config can never fall out of step with
+   * the chords.
+   */
+  list?: ChordListId;
+  /**
+   * Runs the command, and MAY report the index it activated in its list — the
+   * seed the step keys page on from, so `p` (which opens the first sprinkle)
+   * is followed by `j` for the second rather than for the first again.
+   */
+  run(ctx: CommandContext): number | void;
+}
+
+/** The lists a `<command> <digit>` chord can index. */
+export type ChordListId = 'files' | 'memory' | 'sessions' | 'sprinkles';
+
+/**
+ * Resolve a chord list against the wiring. Sprinkles come from the dock rail
+ * (the launchers ARE the list); the rest are supplied by the shell, because
+ * this module has no business knowing what a file row or a frozen chat is.
+ */
+export function chordList(id: ChordListId, deps: ShortcutDeps): ShortcutList | null {
+  if (id !== 'sprinkles') return deps.lists?.[id] ?? null;
+  const dock = deps.dock;
+  if (!dock) return null;
+  return {
+    size: () => sprinkleIds(dock).length,
+    // Re-read the rail rather than closing over the ids: a sprinkle can
+    // install (or a follower's feature gate can hide one) between the two
+    // halves of a chord.
+    selectAt: (index) => {
+      const id = sprinkleIds(dock)[index];
+      if (id) dock.selectItem(id);
+    },
+  };
 }
 
 /**
@@ -371,27 +510,67 @@ interface Command {
  */
 export type CommandId =
   | 'nextAgent'
+  | 'prevAgent'
   | 'composer'
   | 'newConversation'
+  | 'newConversationErase'
+  | 'newCone'
+  | 'dropCone'
+  | 'sessions'
+  | 'stop'
+  | 'approvals'
+  | 'attach'
+  | 'copyReply'
+  | 'copyChat'
+  | 'voice'
+  | 'nextItem'
+  | 'prevItem'
   | 'leftRail'
   | 'rightRail'
   | 'files'
   | 'tabs'
   | 'terminal'
   | 'memory'
+  | 'monitor'
   | 'sprinkles'
+  | 'zoom'
   | 'model'
   | 'accounts'
   | 'help';
 
-/** Go to a dock surface — the same event the rail item's click emits. */
-function surfaceCommand(id: string, description: string): Command {
+/**
+ * Go to a dock surface — the same event the rail item's click emits.
+ *
+ * A surface that owns a list KEEPS the mode, and not as a nicety: the digit
+ * that completes its chord has to find the mode still on. Dropping it would
+ * mean the second half of `f 3` was only heard once the deferred `settle` had
+ * put the mode back — that is, one macrotask later, or never if the user was
+ * quick. The prediction the flag encodes is wrong for these two anyway: the
+ * files and memory panels focus nothing at all.
+ */
+function surfaceCommand(id: string, description: string, list?: ChordListId): Command {
   return {
-    holdsMode: false,
+    holdsMode: !!list,
     description,
+    ...(list ? { list } : {}),
     run: ({ deps, state }) => {
       state.lastDockSurface = id;
       deps.dock?.selectItem(id);
+    },
+  };
+}
+
+/**
+ * Fire one of the freezer rail's own action events — what the action row's
+ * buttons (and, collapsed, the badge's press gestures) dispatch. The rail is
+ * the listener for all of them, so a shortcut and a click are the same call.
+ */
+function freezerCommand(type: string, description: string): Command {
+  return {
+    holdsMode: false,
+    description,
+    run: ({ deps }) => {
+      deps.freezer?.dispatchEvent(new CustomEvent(type, { bubbles: true }));
     },
   };
 }
@@ -416,18 +595,97 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
       if (next) deps.switcher.select(next);
     },
   },
+  prevAgent: {
+    holdsMode: true,
+    description: 'Previous agent, looping',
+    run: ({ deps }) => {
+      const prev = prevInCycle(
+        deps.switcher.scoops.map((s) => s.key),
+        deps.switcher.active
+      );
+      if (prev) deps.switcher.select(prev);
+    },
+  },
   composer: {
     holdsMode: false,
     description: 'Back to the composer',
     run: ({ deps }) => deps.focusComposer?.(),
+  },
+  stop: {
+    // Stopping keeps you where you are: the turn ends, the keyboard stays.
+    holdsMode: true,
+    description: 'Stop the running turn',
+    run: ({ deps }) => deps.stopTurn?.(),
+  },
+  approvals: {
+    /**
+     * Focus, never answer. A key that said yes could say it to a prompt that
+     * scrolled into view a frame earlier — so this only puts the caret on the
+     * request's own button, where Enter means what it says (a focused button
+     * keeps its Enter; see {@link isActivationTarget}).
+     */
+    holdsMode: true,
+    description: 'Go to the pending approval',
+    run: ({ deps }) => deps.focusApproval?.(),
+  },
+  attach: {
+    // The menu opens with its search field ready, so the mode is leaving.
+    holdsMode: false,
+    description: 'Attach a file or skill',
+    run: ({ deps }) => deps.openAttachMenu?.(),
+  },
+  copyReply: {
+    holdsMode: true,
+    description: 'Copy the last reply',
+    run: ({ deps }) => deps.copyReply?.(),
+  },
+  copyChat: {
+    holdsMode: true,
+    description: 'Copy the whole chat',
+    run: ({ deps }) => deps.copyChat?.(),
+  },
+  voice: {
+    /**
+     * Tap to start, tap again to send. The composer's push-to-talk is a
+     * press-and-HOLD gesture, which a keyboard cannot express at all — so
+     * this is the one command whose surface had to grow an entry point
+     * (`toggleHandsFree`) rather than being handed one it already had.
+     *
+     * Holds the mode, because the key that ends the turn is this same key.
+     */
+    holdsMode: true,
+    description: 'Dictate — again to send',
+    run: ({ deps }) => deps.toggleVoice?.(),
+  },
+  nextItem: {
+    holdsMode: true,
+    description: 'Next message — or, after a list key, the next entry',
+    run: (ctx) => stepList(ctx, 1),
+  },
+  prevItem: {
+    holdsMode: true,
+    description: 'Previous message — or the previous entry',
+    run: (ctx) => stepList(ctx, -1),
   },
   newConversation: {
     holdsMode: false,
     description: 'New conversation',
     // The event the rail's action row fires on a single click: save the
     // chat, extract memories, start a new one.
-    run: ({ deps }) =>
-      deps.freezer?.dispatchEvent(new CustomEvent('new-chat-save', { bubbles: true })),
+    run: ({ deps }) => {
+      deps.freezer?.dispatchEvent(new CustomEvent('new-chat-save', { bubbles: true }));
+    },
+  },
+  newConversationErase: freezerCommand('new-chat-erase', 'New conversation, erasing this one'),
+  newCone: freezerCommand('new-cone', 'New cone'),
+  dropCone: freezerCommand('drop-cone', 'Drop this cone'),
+  sessions: {
+    holdsMode: true,
+    description: 'Archived chats (with 1-9 / j / k: restore that one)',
+    list: 'sessions',
+    // Force the rail OPEN rather than toggling it: this is the one key whose
+    // point is to look at the list, and a toggle would hide it half the time.
+    run: ({ deps }) => deps.freezer?.toggle(true),
   },
   leftRail: {
     holdsMode: true,
@@ -454,26 +712,50 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
       dock.selectItem(state.lastDockSurface);
     },
   },
-  files: surfaceCommand('files', 'File browser'),
+  files: surfaceCommand('files', 'File browser (with 1-9 / j / k: open that row)', 'files'),
   tabs: surfaceCommand('browser', 'Browser tabs'),
   terminal: surfaceCommand('term', 'Terminal'),
-  memory: surfaceCommand('memory', 'Memory'),
+  memory: surfaceCommand('memory', 'Memory (with 1-9 / j / k: open that entry)', 'memory'),
+  monitor: surfaceCommand('monitor', 'Monitor'),
   sprinkles: {
+    /**
+     * The FIRST sprinkle, not the next one. A chord prefix has to be
+     * idempotent — `p 3` must open the third whatever came before it — and
+     * cycling is now what the step keys are for: `p` then `j` walks the rest,
+     * which is why there is no separate loop key any more.
+     *
+     * Holds the mode for the same reason every list command does: the key
+     * that completes the chord has to arrive with the keyboard still live.
+     */
     holdsMode: true,
-    description: 'Sprinkles, looping',
-    run: ({ deps }) => {
+    description: 'Sprinkles (with 1-9 / j / k: open that one)',
+    list: 'sprinkles',
+    run: ({ deps, state }) => {
       const dock = deps.dock;
       if (!dock) return;
       const ids = sprinkleIds(dock);
       // With no sprinkles installed, the `new` launcher is what the rail's
-      // only sprinkle affordance would open.
+      // only sprinkle affordance would open — and there is no list to page.
       if (ids.length === 0) {
+        state.lastDockSurface = 'new';
         dock.selectItem('new');
         return;
       }
-      const next = nextInCycle(ids, dock.active);
-      if (next) dock.selectItem(next);
+      state.lastDockSurface = ids[0];
+      dock.selectItem(ids[0]);
+      // Seeded at the first, so the next step key goes to the SECOND.
+      return 0;
     },
+  },
+  zoom: {
+    holdsMode: true,
+    description: 'Full screen the open panel',
+    /**
+     * Runs synchronously inside the keydown on purpose: `requestFullscreen()`
+     * needs transient user activation, and the keystroke IS the activation
+     * only for as long as the handler is on the stack.
+     */
+    run: ({ deps }) => deps.zoomSurface?.(),
   },
   model: {
     holdsMode: false,
@@ -532,8 +814,71 @@ export const RESERVED_KEYS: readonly string[] = [
   '9',
 ];
 
-/** The shipped key → command mapping, which `/etc/slicc/keys.json` overrides. */
+/**
+ * The shipped key → command mapping, which `/etc/slicc/keys.json` overrides.
+ *
+ * ## How the keys were chosen
+ *
+ * - **Prime keys go to urgency, not to nouns.** Stopping a runaway turn and
+ *   answering an approval are time-critical; opening account settings is not,
+ *   which is why `a` answers and settings moved to `,`.
+ * - **Positional beats mnemonic wherever a list exists.** The digits already
+ *   address the tab strip; a command with a {@link Command.list} extends that
+ *   to its own rows rather than growing a verb.
+ * - **The same key closes what it opened**, because clicking the active dock
+ *   item collapses it and a shortcut must not need its own vocabulary.
+ * - **Shift is the heavier twin of the same letter** (`n`/`N`, `c`/`C`,
+ *   `y`/`Y`, `p`/`P`), so a destructive variant is never a key of its own.
+ *
+ * Deliberately left free: `e h j k o q v w x . ; [] pairs aside` and, above
+ * all, `/` — the obvious key for a command palette, and not worth spending on
+ * a third synonym for `?`.
+ */
 export const DEFAULT_KEYMAP: Readonly<Record<string, CommandId>> = {
+  // Anchors
+  i: 'composer',
+  Enter: 'composer',
+  '?': 'help',
+  // Units
+  ArrowRight: 'nextAgent',
+  ArrowLeft: 'prevAgent',
+  n: 'newConversation',
+  N: 'newConversationErase',
+  c: 'newCone',
+  C: 'dropCone',
+  r: 'sessions',
+  // The turn
+  s: 'stop',
+  a: 'approvals',
+  u: 'attach',
+  y: 'copyReply',
+  Y: 'copyChat',
+  v: 'voice',
+  j: 'nextItem',
+  k: 'prevItem',
+  // Panels
+  f: 'files',
+  t: 'terminal',
+  b: 'tabs',
+  m: 'memory',
+  g: 'monitor',
+  p: 'sprinkles',
+  '[': 'leftRail',
+  ']': 'rightRail',
+  z: 'zoom',
+  // Rare
+  l: 'model',
+  ',': 'accounts',
+};
+
+/**
+ * The v1 keymap, shipped through 6.110 and seeded verbatim into every
+ * `/etc/slicc/keys.json` written before v2 — which is exactly why it is still
+ * here: `wc-shortcut-config.ts` recognises a file that still holds it as one
+ * nobody has edited, and only then replaces it. Every command id it names
+ * still exists, so a user who pastes it back gets their v1 keyboard whole.
+ */
+export const V1_KEYMAP: Readonly<Record<string, CommandId>> = {
   d: 'nextAgent',
   c: 'composer',
   Enter: 'composer',
@@ -552,9 +897,12 @@ export const DEFAULT_KEYMAP: Readonly<Record<string, CommandId>> = {
   '/': 'help',
 };
 
-/** How a key prints in the help sheet. */
+/**
+ * How a key prints in the help sheet — the same caps the HUD draws
+ * ({@link KEY_CAPS}), so the overlay and the pill never name one key two ways.
+ */
 function keyLabel(key: string): string {
-  return key === 'Enter' ? '⏎' : key;
+  return KEY_CAPS[key] ?? key;
 }
 
 /**
@@ -563,6 +911,19 @@ function keyLabel(key: string): string {
  * sheet — a printed list that disagreed with the live keymap would be worse
  * than no list. A command nobody has a key for is dropped.
  */
+/**
+ * The key the badge should tell a new user to press for help — the first one
+ * bound to `help`, as it prints, or `null` when a config has unbound it.
+ *
+ * Derived rather than written out for the same reason {@link shortcutRows} is:
+ * the mode's own hint must never name a key that does nothing, which is
+ * exactly what it did when the shipped map moved help off `h`.
+ */
+export function helpKeyLabel(keymap: Readonly<Record<string, CommandId>>): string | null {
+  const key = Object.keys(keymap).find((k) => keymap[k] === 'help');
+  return key === undefined ? null : keyLabel(key);
+}
+
 export function shortcutRows(
   keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP
 ): ShortcutRow[] {
@@ -624,6 +985,17 @@ function buildHelpBody(doc: Document, rows: readonly ShortcutRow[]): HTMLElement
 
 /** How long a pressed key stays on the HUD before the strip clears. */
 const HUD_LINGER_MS = 1600;
+
+/**
+ * How long a list stays addressable after the key that opened it.
+ *
+ * Deliberately the same number as {@link HUD_LINGER_MS}, and refreshed by the
+ * same presses: a chord is live exactly while its caps are on the pill. That
+ * is the whole answer to "will this digit switch agents or open a file?" — it
+ * is on screen. Paging with the step keys keeps both alive, so a walk down a
+ * list never expires under the user mid-walk; stopping ends both together.
+ */
+const CHORD_WINDOW_MS = HUD_LINGER_MS;
 /** How many presses the HUD keeps before dropping the oldest. */
 const HUD_DEPTH = 4;
 
@@ -665,7 +1037,8 @@ export function describeKey(
  * The mode indicator and key HUD: one non-interactive pill above the composer.
  *
  * It has two states rather than two elements. Idle, it explains the mode
- * ("h for help · Esc to leave"); the moment a key is pressed the hint gives
+ * ("? for help · ⏎ to type" — the key comes from the live keymap, never from
+ * a string here); the moment a key is pressed the hint gives
  * way to a strip of key caps, which is both the "did that register?" feedback
  * and — because presses accumulate left to right — the readout a multi-key
  * chord will need when one exists. The strip clears itself after
@@ -675,7 +1048,10 @@ export function describeKey(
  * exactly what someone learning the mode needs to see, and silence would read
  * as a dropped keystroke.
  */
-function createBadge(doc: Document): {
+function createBadge(
+  doc: Document,
+  keymap: Readonly<Record<string, CommandId>>
+): {
   element: HTMLElement;
   record(parts: readonly string[], bound: boolean): void;
   destroy(): void;
@@ -692,8 +1068,11 @@ function createBadge(doc: Document): {
   const hint = doc.createElement('span');
   hint.className = 'wcsc-badge__hint';
   // Not "Esc to leave": the mode IS the resting state, so the way out is to
-  // start typing again.
-  hint.textContent = 'h for help · ⏎ to type';
+  // start typing again. The help key is read from the keymap in force, so a
+  // rebind — or the shipped map moving it — can never leave the badge
+  // advertising a key that does nothing.
+  const help = helpKeyLabel(keymap);
+  hint.textContent = help ? `${help} for help · ⏎ to type` : '⏎ to type';
   const keys = doc.createElement('div');
   keys.className = 'wcsc-badge__keys';
   keys.dataset.wcShortcuts = 'keys';
@@ -807,7 +1186,10 @@ function syncKeyboardLock(doc: Document): void {
 }
 
 /** The mode flag plus the badge that makes it visible. */
-function createMode(doc: Document): {
+function createMode(
+  doc: Document,
+  keymap: () => Readonly<Record<string, CommandId>>
+): {
   on(): boolean;
   set(next: boolean): void;
   record(parts: readonly string[], bound: boolean): void;
@@ -829,7 +1211,10 @@ function createMode(doc: Document): {
         return;
       }
       ensureStyle(doc);
-      badge = createBadge(doc);
+      // Read at the moment the badge appears, so a keymap applied after the
+      // shell wired itself (the config load is deliberately late) is the one
+      // the hint names.
+      badge = createBadge(doc, keymap());
       doc.body.append(badge.element);
       // The caret would otherwise keep blinking in a composer that no longer
       // receives what is typed.
@@ -980,6 +1365,217 @@ function observeSelectedUnit(
 }
 
 /**
+ * The step keys: page through the armed list, or — with no chord live — walk
+ * the transcript a message at a time.
+ *
+ * One key doing two things is the point rather than a compromise. "Next" is
+ * the same intent either way, and which list it steps through is the one the
+ * user just opened and can still see on the HUD; with none open, the thing in
+ * front of them is the conversation. It also retires the dedicated cycle key
+ * the sprinkles used to need: `p` opens the first and `j` walks the rest.
+ *
+ * Returns the index it landed on, so the caller can re-arm the chord there and
+ * the next press continues from where this one stopped.
+ */
+function stepList(ctx: CommandContext, delta: 1 | -1): number | void {
+  const armed = ctx.armed;
+  if (!armed) {
+    ctx.deps.scrollMessage?.(delta);
+    return;
+  }
+  const list = chordList(armed.list, ctx.deps);
+  const size = list?.size() ?? 0;
+  if (!list || size === 0) return;
+  // From nowhere, a step forward starts at the top and a step back at the
+  // bottom — so `f k` reaches the last file as directly as `f j` reaches the
+  // first, and neither has to know how long the list is.
+  const at =
+    armed.index === null ? (delta > 0 ? 0 : size - 1) : (armed.index + delta + size) % size;
+  list.selectAt(at);
+  return at;
+}
+
+/**
+ * Complete a chord: activate the `digit`-th item of the armed list, and say
+ * whether there was one. Read at press time, never awaited — a panel still
+ * mounting reports nothing and the press lands dimmed instead of firing late.
+ */
+function selectChordItem(deps: ShortcutDeps, id: ChordListId, digit: number): number | null {
+  const list = chordList(id, deps);
+  const index = list ? indexForDigit(list.size(), digit) : null;
+  if (index === null || !list) return null;
+  list.selectAt(index);
+  return index;
+}
+
+/** Everything a bound command needs, gathered once by the wiring. */
+interface Dispatch {
+  deps: ShortcutDeps;
+  actions: ShortcutActions;
+  state: ModeState;
+  mode: ReturnType<typeof createMode>;
+  settler: ReturnType<typeof createSettler>;
+  chord: ReturnType<typeof createChord>;
+  toggleHelp(): void;
+}
+
+/**
+ * Run the command a key is bound to, and leave the mode and the chord where
+ * that command's grammar says they belong.
+ *
+ * The two `holdsMode` halves are the interesting part. The mode is dropped
+ * BEFORE the run, so a surface that autofocuses is not immediately undone by
+ * it, and settled AFTER, because the flag is a PREDICTION that the surface
+ * will take the focus rather than a fact — `dock.selectItem()` only emits a
+ * selection, and the files and memory panels focus nothing at all. Without
+ * the settle the mode would be left off with nothing focused: badge gone,
+ * letters dead, which is precisely the state the resting rule exists to make
+ * impossible.
+ */
+function runCommand(
+  command: Command,
+  event: KeyboardEvent,
+  armed: ArmedChord | null,
+  ctx: Dispatch
+): void {
+  event.preventDefault();
+  if (!command.holdsMode) ctx.mode.set(false);
+  const at = command.run({
+    deps: ctx.deps,
+    actions: ctx.actions,
+    state: ctx.state,
+    toggleHelp: ctx.toggleHelp,
+    armed,
+  });
+  // A command that owns a list arms the keys that may follow it; a STEP key
+  // owns no list but re-arms the one it just walked, which is what keeps
+  // `f j j j` walking instead of turning back into message scrolling. After
+  // the run either way, so a command that threw leaves nothing armed for a
+  // surface it failed to open.
+  const opened = command.list ?? (typeof at === 'number' ? armed?.list : undefined);
+  if (opened) ctx.chord.arm(opened, typeof at === 'number' ? at : null);
+  if (!command.holdsMode) ctx.settler.schedule();
+}
+
+/**
+ * The Escape contract; see the module header.
+ *
+ * Kept out of the wiring because it is a rule rather than a binding: Escape is
+ * the mode itself, not a command, and it is the only key handled before the
+ * modal gate.
+ */
+function handleEscape(
+  event: KeyboardEvent,
+  doc: Document,
+  mode: ReturnType<typeof createMode>,
+  settler: ReturnType<typeof createSettler>
+): void {
+  // An open overlay owns its own Escape; entering the mode underneath it
+  // would leave the user pressing Escape twice for one dismissal.
+  if (hasOpenOverlay(doc)) return;
+  if (!mode.on()) {
+    // Swallowed on purpose: one press means "leave the text field", not
+    // "leave fullscreen".
+    event.preventDefault();
+    mode.set(true);
+    // Leaving the composer by hand is a CHOICE, so it is the one place besides
+    // `settle` that writes the intent: switching units afterwards must not
+    // hand the caret back to a composer the user just left.
+    settler.choose('keyboard');
+    // The press that opened the mode is the mode's first HUD entry — the badge
+    // appearing and the cap landing are one gesture's feedback.
+    mode.record(describeKey(event), true);
+    return;
+  }
+  // Already in the mode, which is the resting state: there is nothing to
+  // leave, so the press is spent on fullscreen. Performed rather than merely
+  // allowed, because under Keyboard Lock the browser never acts on Escape
+  // itself. The cap lands dimmed when there was no fullscreen to exit — a
+  // press that did nothing, shown as one.
+  const fullscreen = !!doc.fullscreenElement;
+  mode.record(describeKey(event), fullscreen);
+  if (fullscreen) void doc.exitFullscreen?.().catch(() => undefined);
+}
+
+/**
+ * Is a modal holding the keyboard?
+ *
+ * A dialog owns the screen, and acting behind it — focusing the composer
+ * under one, switching the agent it belongs to — leaves the user typing into
+ * obscured UI, so every command is suspended while one is up. The single
+ * exception is closing the help overlay we opened ourselves, which is how the
+ * help key stays a toggle. Escape is handled before this gate, so a modal can
+ * always be dismissed.
+ */
+function suspendedByModal(doc: Document, command: Command | undefined, helpOpen: boolean): boolean {
+  return hasOpenOverlay(doc) && !(command === COMMANDS.help && helpOpen);
+}
+
+/**
+ * A digit press: the armed chord's list when there is one, otherwise the tab
+ * strip, which is what digits have always addressed. Returns whether it found
+ * anything — a digit past the end of either list is shown dimmed rather than
+ * silently dropped, and must NOT fall through to the other one.
+ */
+function selectByDigit(
+  deps: ShortcutDeps,
+  armed: ArmedChord | null,
+  digit: number
+): { hit: boolean; index: number | null } {
+  if (armed) {
+    const index = selectChordItem(deps, armed.list, digit);
+    return { hit: index !== null, index };
+  }
+  const key = unitKeyForDigit(deps.switcher.scoops, digit);
+  if (key !== null) deps.switcher.select(key);
+  // The strip is not a chord list, so there is no index to carry forward.
+  return { hit: key !== null, index: null };
+}
+
+/**
+ * The chord's one key of lookahead: which list a digit pressed NEXT indexes
+ * into, and for how long.
+ *
+ * That single slot is the entire state machine. A digit either lands while a
+ * list command is armed — where it addresses that command's list — or it does
+ * not, and addresses the tab strip exactly as digits always have; there is no
+ * third state, so no digit is ever ambiguous. The prefix has already RUN by
+ * the time the digit arrives, because a prefix that waited to see whether one
+ * was coming would put a delay on the common single-key path, which is the one
+ * thing the mode cannot afford.
+ */
+function createChord(doc: Document): {
+  /** Read and disarm — a chord survives a key only by being re-armed. */
+  take(): ArmedChord | null;
+  /** Arm (or re-arm) a list, standing at `index` — `null` before any pick. */
+  arm(list: ChordListId, index: number | null): void;
+  clear(): void;
+} {
+  const view = doc.defaultView;
+  const setTimer = view?.setTimeout.bind(view) ?? setTimeout;
+  const clearTimer = view?.clearTimeout.bind(view) ?? clearTimeout;
+  let armed: (ArmedChord & { timer: ReturnType<typeof setTimeout> }) | null = null;
+  const clear = (): void => {
+    if (!armed) return;
+    clearTimer(armed.timer);
+    armed = null;
+  };
+  return {
+    take: () => {
+      if (!armed) return null;
+      const { list, index } = armed;
+      clear();
+      return { list, index };
+    },
+    arm: (list, index) => {
+      clear();
+      armed = { list, index, timer: setTimer(clear, CHORD_WINDOW_MS) };
+    },
+    clear,
+  };
+}
+
+/**
  * The live installation per document. `mountWcShell` is idempotent — a
  * remount replaces the shell in place — and the listeners here live on the
  * DOCUMENT, not on anything `root.replaceChildren()` tears down. Without this,
@@ -999,43 +1595,23 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
   INSTALLED.get(doc)?.dispose();
   const actions: ShortcutActions = {};
   const help = createHelp(doc, () => keymap);
-  const mode = createMode(doc);
+  const mode = createMode(doc, () => keymap);
   const state: ModeState = { lastDockSurface: 'files' };
   let keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP;
-  const ctx: CommandContext = { deps, actions, state, toggleHelp: help.toggle };
   const commandFor = (key: string): Command | undefined => {
     const id = keymap[key];
     return id ? COMMANDS[id] : undefined;
   };
   const settler = createSettler(doc, mode, deps);
-
-  /** The Escape contract; see the module header. */
-  const handleEscape = (event: KeyboardEvent): void => {
-    // An open overlay owns its own Escape; entering the mode underneath it
-    // would leave the user pressing Escape twice for one dismissal.
-    if (hasOpenOverlay(doc)) return;
-    if (!mode.on()) {
-      // Swallowed on purpose: one press means "leave the text field", not
-      // "leave fullscreen".
-      event.preventDefault();
-      mode.set(true);
-      // Leaving the composer by hand is a CHOICE, so it is the one place
-      // besides `settle` that writes the intent: switching units afterwards
-      // must not hand the caret back to a composer the user just left.
-      settler.choose('keyboard');
-      // The press that opened the mode is the mode's first HUD entry — the
-      // badge appearing and the cap landing are one gesture's feedback.
-      mode.record(describeKey(event), true);
-      return;
-    }
-    // Already in the mode, which is the resting state: there is nothing to
-    // leave, so the press is spent on fullscreen. Performed rather than merely
-    // allowed, because under Keyboard Lock the browser never acts on Escape
-    // itself. The cap lands dimmed when there was no fullscreen to exit —
-    // a press that did nothing, shown as one.
-    const fullscreen = !!doc.fullscreenElement;
-    mode.record(describeKey(event), fullscreen);
-    if (fullscreen) void doc.exitFullscreen?.().catch(() => undefined);
+  const chord = createChord(doc);
+  const dispatch: Dispatch = {
+    deps,
+    actions,
+    state,
+    mode,
+    settler,
+    chord,
+    toggleHelp: () => help.toggle(),
   };
 
   const onKeyDown = (event: KeyboardEvent): void => {
@@ -1043,20 +1619,19 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
     // handler, an overlay's Escape).
     if (event.defaultPrevented || event.isComposing) return;
     if (event.key === 'Escape') {
-      handleEscape(event);
+      chord.clear();
+      handleEscape(event, doc, mode, settler);
       return;
     }
     if (!mode.on()) return;
     if (passesThrough(event)) return;
 
+    // A chord is one key wide: whatever this key turns out to be, it is not
+    // the digit the prefix was waiting for unless it is consumed below.
+    const armed = chord.take();
+
     const command = commandFor(event.key);
-    // A modal owns the screen. Acting behind it — focusing the composer under
-    // an open dialog, switching the agent the dialog belongs to — leaves the
-    // user typing into obscured UI, so every command is suspended while one is
-    // up. The single exception is closing the help overlay we opened
-    // ourselves, which is how `h` stays a toggle. Escape is handled earlier
-    // and separately, so a modal can always be dismissed.
-    if (hasOpenOverlay(doc) && !(command === COMMANDS.help && help.element())) {
+    if (suspendedByModal(doc, command, !!help.element())) {
       // Suspended, not ignored: the cap lands dimmed, so a key pressed at a
       // dialog reads as "not now" rather than as a dead keyboard.
       mode.record(describeKey(event), false);
@@ -1065,32 +1640,21 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
 
     const digit = digitFor(event);
     if (digit !== null) {
-      const key = unitKeyForDigit(deps.switcher.scoops, digit);
-      // Shown either way: a digit past the end of the strip did nothing, and
-      // a HUD that stays blank for it reads as a dropped keystroke.
-      mode.record(describeKey(event), key !== null);
-      if (key === null) return;
+      // Shown either way: a digit past the end of its list did nothing, and a
+      // HUD that stays blank for it reads as a dropped keystroke.
+      const { hit, index } = selectByDigit(deps, armed, digit);
+      mode.record(describeKey(event), hit);
+      if (!hit) return;
       event.preventDefault();
-      deps.switcher.select(key);
+      // Stay armed where the digit landed, so the step keys walk on from it —
+      // `f 3 j` is the fourth file.
+      if (armed && index !== null) chord.arm(armed.list, index);
       return;
     }
 
     mode.record(describeKey(event), !!command);
     // An unbound key is not an exit: the mode is sticky, like vim's.
-    if (!command) return;
-    event.preventDefault();
-    // Dropped BEFORE the command runs, so a surface that takes focus is not
-    // immediately fighting a mode that is still on. (The HUD goes with the
-    // badge when it does — the mode ending is its own feedback.)
-    if (!command.holdsMode) mode.set(false);
-    command.run(ctx);
-    // ...and settled after, because `holdsMode: false` is a PREDICTION that the
-    // surface will take the focus, not a fact: `dock.selectItem()` only emits a
-    // selection, and the files and memory panels focus nothing at all. Without
-    // this the mode would be left off with nothing focused — the badge gone and
-    // the letters dead, which is precisely the state the resting rule exists to
-    // make impossible.
-    if (!command.holdsMode) settler.schedule();
+    if (command) runCommand(command, event, armed, dispatch);
   };
 
   /**
@@ -1143,6 +1707,8 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
       view?.removeEventListener('blur', onWindowBlur);
       stopWatchingUnit();
       settler.dispose();
+      // An armed chord that outlived its wiring would fire into a dead shell.
+      chord.clear();
       mode.set(false);
       help.hide();
       // Only if we are still the live one: a remount disposes the old handle
