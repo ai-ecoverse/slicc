@@ -41,6 +41,18 @@
  * `{ code }`; that is the signal to fall back to the per-op routes for the
  * rest of this backend's life. The cost is one wasted request — or one per
  * op already in flight when the first 404 lands, which self-heals.
+ *
+ * ## Why one dropped fetch must not kill the command
+ *
+ * A local bridge still loses the occasional request: Node's default 5 s
+ * `keepAliveTimeout` closes a pooled socket the browser is about to reuse and
+ * the `fetch()` rejects with `TypeError: Failed to fetch` (issue #2720 —
+ * `git status` died twice at ~6,000 requests against a healthy bridge). So
+ * every op runs through `attemptRequest`: network-level rejections — from the
+ * fetch OR from reading the body — are retried for the idempotent ops, and
+ * the requests are held to `maxInflight` so a fan-out cannot queue thousands
+ * of fetches into a 6-socket pool. The server side is
+ * `packages/node-server/src/http-keepalive.ts`.
  */
 
 import { apiHeaders, resolveApiUrl } from '../../base/api-endpoint.js';
@@ -52,6 +64,7 @@ import type {
   MountStat,
   RefreshReport,
 } from './backend.js';
+import { createInflightLimiter, type InflightLimiter } from './inflight-limiter.js';
 
 /** Matches the server-side cap (node-server `HOSTFS_MAX_BODY_BYTES`). */
 const HOSTFS_MAX_BODY_BYTES = 100 * 1024 * 1024;
@@ -81,6 +94,69 @@ const KNOWN_CODES: ReadonlySet<string> = new Set([
   'EIO',
 ]);
 
+/**
+ * Ops whose server handler is idempotent, so replaying one after a
+ * network-level failure cannot change the outcome: the three read ops, plus
+ * `mkdir` (node-server / swift-server both create with `recursive: true`, so a
+ * replay never reports EEXIST). `write`, `rename` and `remove` are deliberately
+ * absent — `remove` is served with `force: false` (a replay of a request that
+ * did land turns into a spurious ENOENT) and a replayed `write`/`rename` can
+ * clobber a concurrent change; those still surface EIO on the first failure.
+ */
+const RETRYABLE_OPS: ReadonlySet<string> = new Set(['list', 'stat', 'read', 'mkdir']);
+
+/**
+ * Attempts (not retries) for a retryable op. Two retries cover the keep-alive
+ * race — the second attempt opens a fresh socket — without turning a genuinely
+ * down bridge into a long stall.
+ */
+const DEFAULT_MAX_ATTEMPTS = 3;
+
+/** Backoff before retry N (25 ms, 50 ms). Short: the bridge is loopback. */
+const DEFAULT_RETRY_BASE_DELAY_MS = 25;
+
+/**
+ * Concurrent bridge requests per mount. Chrome allows ~6 sockets per origin,
+ * so anything above that is queueing anyway; 24 keeps the pool saturated while
+ * bounding how long a queued request can sit next to a closing keep-alive
+ * socket. Thousands of queued fetches are what made the race likely.
+ */
+const DEFAULT_MAX_INFLIGHT = 24;
+
+/**
+ * Body consumers. Every op reads its body INSIDE the retried, limiter-held
+ * operation — including the ops that ignore the payload, because an undrained
+ * body keeps the socket busy after the slot is released.
+ */
+const readJson = (response: Response): Promise<unknown> => response.json();
+const readBytes = (response: Response): Promise<ArrayBuffer> => response.arrayBuffer();
+const drainBody = async (response: Response): Promise<void> => {
+  await response.arrayBuffer();
+};
+
+const sleep = (ms: number): Promise<void> =>
+  ms > 0 ? new Promise((resolve) => setTimeout(resolve, ms)) : Promise.resolve();
+
+/**
+ * The EIO a caller finally sees when every attempt failed at the network
+ * level. It names the op and says the failure is transient, because the old
+ * "hostfs bridge unreachable" read as "the launcher is gone" even when the
+ * bridge was healthy and a single pooled socket had been closed under us.
+ */
+function transientBridgeError(
+  op: string,
+  path: string,
+  err: unknown,
+  attempts: number,
+  retryable: boolean
+): FsError {
+  const detail = err instanceof Error ? err.message : String(err);
+  const tried = retryable
+    ? ` after ${attempts} attempt${attempts === 1 ? '' : 's'}`
+    : ' (not retried: non-idempotent op)';
+  return new FsError('EIO', `hostfs ${op} failed${tried}: transient bridge error: ${detail}`, path);
+}
+
 export interface HostFsMountBackendOptions {
   /** SLICC target path this backend is mounted at, e.g. `/mnt/project`. */
   targetPath: string;
@@ -89,6 +165,12 @@ export interface HostFsMountBackendOptions {
   mountId?: string;
   /** Injectable for tests; production uses the realm's fetch. */
   fetchImpl?: typeof fetch;
+  /** Concurrent bridge requests (default 24). Injectable for tests. */
+  maxInflight?: number;
+  /** Attempts for an idempotent op (default 3, i.e. two retries). */
+  maxAttempts?: number;
+  /** Base backoff between attempts in ms (default 25); 0 disables the wait. */
+  retryDelayMs?: number;
 }
 
 export class HostFsMountBackend implements MountBackend {
@@ -99,6 +181,9 @@ export class HostFsMountBackend implements MountBackend {
   private readonly targetPath: string;
   private readonly hostPath: string;
   private readonly fetchImpl: typeof fetch;
+  private readonly limiter: InflightLimiter;
+  private readonly maxAttempts: number;
+  private readonly retryDelayMs: number;
   private closed = false;
   /**
    * Whether this bridge answers `POST /api/hostfs`. Optimistic: flipped off
@@ -113,6 +198,9 @@ export class HostFsMountBackend implements MountBackend {
     this.source = `hostfs://${opts.hostPath}`;
     this.mountId = opts.mountId ?? crypto.randomUUID();
     this.fetchImpl = opts.fetchImpl ?? fetch;
+    this.limiter = createInflightLimiter(opts.maxInflight ?? DEFAULT_MAX_INFLIGHT);
+    this.maxAttempts = Math.max(1, opts.maxAttempts ?? DEFAULT_MAX_ATTEMPTS);
+    this.retryDelayMs = opts.retryDelayMs ?? DEFAULT_RETRY_BASE_DELAY_MS;
   }
 
   private assertOpen(path: string): void {
@@ -158,63 +246,122 @@ export class HostFsMountBackend implements MountBackend {
   }
 
   /**
-   * Execute one bridge request. Non-2xx responses carry `{ code, message }`
-   * which is rethrown as a faithful FsError; envelope failures (server not
-   * running, network refused) surface as EIO so callers can distinguish
-   * "file missing" from "bridge missing".
+   * Execute one bridge request under the in-flight limiter and hand the caller
+   * the MATERIALIZED body — `consume` runs inside the guarded operation, so a
+   * bridge drop while the body is streaming is a network failure like any
+   * other: retried for the idempotent ops, otherwise mapped to a transient
+   * EIO. Returning the raw `Response` would leak both (a mid-body `TypeError`
+   * would escape unmapped, and a slow body would hold a socket the limiter
+   * had already counted as free).
+   *
+   * Non-2xx responses carry `{ code, message }` and are rethrown as a faithful
+   * FsError; envelope failures surface as EIO so callers can distinguish
+   * "file missing" from "bridge missing" — but only after the retries, because
+   * the common case is a single transient `Failed to fetch` in a fan-out.
    */
-  private async request(
+  private async request<T>(
     op: string,
     path: string,
+    consume: (response: Response) => Promise<T>,
     init?: RequestInit & { extra?: Record<string, string> }
-  ): Promise<Response> {
+  ): Promise<T> {
     this.assertOpen(path);
+    return this.limiter.run(() => this.attemptRequest(op, path, consume, init));
+  }
+
+  /**
+   * Fetch (and read the body) with bounded retries. Only *rejections* — from
+   * the fetch or from reading the body — are retried, and only for the
+   * idempotent ops in `RETRYABLE_OPS`: an HTTP error is an answer from the
+   * server and is mapped straight through.
+   */
+  private async attemptRequest<T>(
+    op: string,
+    path: string,
+    consume: (response: Response) => Promise<T>,
+    init?: RequestInit & { extra?: Record<string, string> }
+  ): Promise<T> {
+    const maxAttempts = RETRYABLE_OPS.has(op) ? this.maxAttempts : 1;
+    let attempt = 0;
+    let lastErr: unknown;
+    while (attempt < maxAttempts) {
+      attempt += 1;
+      try {
+        return await this.routeAndConsume(op, path, consume, init);
+      } catch (err) {
+        if (err instanceof FsError) throw err;
+        lastErr = err;
+        if (this.closed) break;
+        if (attempt < maxAttempts) await sleep(this.retryDelayMs * attempt);
+      }
+    }
+    throw transientBridgeError(op, path, lastErr, attempt, maxAttempts > 1);
+  }
+
+  /**
+   * One routed attempt: build → fetch → consume. A stable-endpoint downgrade
+   * re-enters HERE rather than in `attemptRequest`, because switching routes
+   * is a routing correction, not a transient failure — it must not spend one
+   * of the retry attempts. It still runs inside the caller's attempt, so a
+   * network failure on the per-op route is mapped and retried normally.
+   * Recursion is bounded: the downgrade clears `stableEndpoint`, so the
+   * re-entered call cannot take the stable branch again.
+   */
+  private async routeAndConsume<T>(
+    op: string,
+    path: string,
+    consume: (response: Response) => Promise<T>,
+    init?: RequestInit & { extra?: Record<string, string> }
+  ): Promise<T> {
     const usedStableEndpoint = this.stableEndpoint && STABLE_OPS.has(op);
     const plan = this.buildRequest(op, path, init);
-    let response: Response;
+    const response = await this.fetchImpl(plan.url, plan.init);
+    if (response.ok) return await consume(response);
+
+    const { error, rawCode } = await this.errorFromResponse(op, path, response);
+    // A bridge that predates the stable endpoint answers with its
+    // framework's 404/405 — no errno `code`. Every error the real route
+    // emits carries one, so this is unambiguous: downgrade permanently and
+    // retry the same op on its per-op route.
+    if (
+      usedStableEndpoint &&
+      rawCode === null &&
+      (response.status === 404 || response.status === 405)
+    ) {
+      this.stableEndpoint = false;
+      return await this.routeAndConsume(op, path, consume, init);
+    }
+    throw error;
+  }
+
+  /**
+   * Map a non-2xx bridge response onto its errno FsError, also reporting the
+   * raw `code` the body carried (`null` when it had none — the signal that
+   * this bridge has no stable endpoint).
+   */
+  private async errorFromResponse(
+    op: string,
+    path: string,
+    response: Response
+  ): Promise<{ error: FsError; rawCode: string | null }> {
+    let code: FsErrorCode = 'EIO';
+    let rawCode: string | null = null;
+    let message = `hostfs ${op} failed with HTTP ${response.status}`;
     try {
-      response = await this.fetchImpl(plan.url, plan.init);
-    } catch (err) {
-      throw new FsError(
-        'EIO',
-        `hostfs bridge unreachable: ${err instanceof Error ? err.message : String(err)}`,
-        path
-      );
-    }
-    if (!response.ok) {
-      let code: FsErrorCode = 'EIO';
-      let rawCode: string | null = null;
-      let message = `hostfs ${op} failed with HTTP ${response.status}`;
-      try {
-        const body = (await response.json()) as { code?: unknown; message?: unknown };
-        if (typeof body.code === 'string') {
-          rawCode = body.code;
-          if (KNOWN_CODES.has(body.code)) code = body.code as FsErrorCode;
-        }
-        if (typeof body.message === 'string') message = body.message;
-      } catch {
-        /* non-JSON error body — keep the HTTP-status message */
+      const body = (await response.json()) as { code?: unknown; message?: unknown };
+      if (typeof body.code === 'string') {
+        rawCode = body.code;
+        if (KNOWN_CODES.has(body.code)) code = body.code as FsErrorCode;
       }
-      // A bridge that predates the stable endpoint answers with its
-      // framework's 404/405 — no errno `code`. Every error the real route
-      // emits carries one, so this is unambiguous: downgrade permanently and
-      // retry the same op on its per-op route.
-      if (
-        usedStableEndpoint &&
-        rawCode === null &&
-        (response.status === 404 || response.status === 405)
-      ) {
-        this.stableEndpoint = false;
-        return this.request(op, path, init);
-      }
-      throw new FsError(code, message, path);
+      if (typeof body.message === 'string') message = body.message;
+    } catch {
+      /* non-JSON error body — keep the HTTP-status message */
     }
-    return response;
+    return { error: new FsError(code, message, path), rawCode };
   }
 
   async readDir(path: string): Promise<MountDirEntry[]> {
-    const response = await this.request('list', path);
-    const body = (await response.json()) as { entries?: unknown };
+    const body = (await this.request('list', path, readJson)) as { entries?: unknown };
     if (!Array.isArray(body.entries)) return [];
     const entries: MountDirEntry[] = [];
     for (const raw of body.entries) {
@@ -231,8 +378,7 @@ export class HostFsMountBackend implements MountBackend {
   }
 
   async readFile(path: string): Promise<Uint8Array> {
-    const response = await this.request('read', path);
-    const buffer = await response.arrayBuffer();
+    const buffer = await this.request('read', path, readBytes);
     if (buffer.byteLength > HOSTFS_MAX_BODY_BYTES) {
       throw new FsError('EFBIG', 'file exceeds the hostfs body cap', path);
     }
@@ -243,7 +389,7 @@ export class HostFsMountBackend implements MountBackend {
     if (body.byteLength > HOSTFS_MAX_BODY_BYTES) {
       throw new FsError('EFBIG', 'body exceeds the hostfs body cap', path);
     }
-    await this.request('write', path, {
+    await this.request('write', path, drainBody, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/octet-stream' },
       // Copy into a plain ArrayBuffer-backed view so fetch never sees a
@@ -253,8 +399,11 @@ export class HostFsMountBackend implements MountBackend {
   }
 
   async stat(path: string): Promise<MountStat> {
-    const response = await this.request('stat', path);
-    const body = (await response.json()) as { kind?: unknown; size?: unknown; mtime?: unknown };
+    const body = (await this.request('stat', path, readJson)) as {
+      kind?: unknown;
+      size?: unknown;
+      mtime?: unknown;
+    };
     return {
       kind: body.kind === 'directory' ? 'directory' : 'file',
       size: typeof body.size === 'number' ? body.size : 0,
@@ -263,18 +412,18 @@ export class HostFsMountBackend implements MountBackend {
   }
 
   async mkdir(path: string): Promise<void> {
-    await this.request('mkdir', path, { method: 'POST' });
+    await this.request('mkdir', path, drainBody, { method: 'POST' });
   }
 
   async rename(fromPath: string, toPath: string): Promise<void> {
-    await this.request('rename', fromPath, {
+    await this.request('rename', fromPath, drainBody, {
       method: 'POST',
       extra: { to: toPath.replace(/^\/+/, '') },
     });
   }
 
   async remove(path: string, opts?: { recursive?: boolean }): Promise<void> {
-    await this.request('remove', path, {
+    await this.request('remove', path, drainBody, {
       method: 'DELETE',
       extra: opts?.recursive ? { recursive: '1' } : undefined,
     });

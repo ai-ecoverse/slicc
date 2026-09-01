@@ -592,6 +592,40 @@ because its `prompt=none` page JS-redirects after load. Keep the
 `packages/chrome-extension/src/oauth-flow-options.ts`. See
 `docs/oauth-intercept.md` "Silent token renewal".
 
+## Local Bridge Keep-Alive: The 5 s Default Races Bursty Fan-Outs
+
+`TypeError: Failed to fetch` against `http://localhost:5710` does **not** mean
+the bridge is down. Node's default `server.keepAliveTimeout` is 5 s and Express
+advertises it verbatim (`Keep-Alive: timeout=5`), well below Chrome's
+idle-socket lifetime. A fan-out that pauses and then bursts — an in-browser
+`git status` walking a repo over `/api/hostfs` fires thousands of small requests
+in waves — will eventually write a request onto a pooled socket in the same
+instant the server closes it, and the browser surfaces that as a rejected
+`fetch()` indistinguishable from a dead server.
+
+Two halves, both required (#2720):
+
+- **Server**: `applyBridgeKeepAlive()`
+  (`packages/node-server/src/http-keepalive.ts`) raises `keepAliveTimeout` to
+  120 s (and `headersTimeout` above it) on the bridge server before `listen()`.
+  swift-server needs no mirror: Hummingbird's `HTTP1Channel` `idleTimeout`
+  defaults to `nil`, so it never closes an idle keep-alive connection on a
+  timer. If it ever gains one, keep it ≥ 120 s.
+- **Client**: `HostFsMountBackend` retries fetch _rejections_ (never HTTP
+  errors) for idempotent ops only — `list`/`stat`/`read`/`mkdir`, the last one
+  because both servers create with `recursive: true`. `write`/`rename`/`remove`
+  are not replayed (`rm` is served with `force: false`, so a replay of a request
+  that did land turns into a spurious `ENOENT`), and a bounded in-flight
+  limiter keeps the queue shallow enough that sockets stay hot. The body is
+  read INSIDE the guarded operation (`request()` takes a `consume` callback and
+  returns materialized bytes/JSON, never a `Response`): a drop mid-body — the
+  common shape for a large read — must retry like any other network failure,
+  and a slow body must not hold a socket the limiter already counted as free.
+
+The surviving EIO names the op and calls itself transient
+(`hostfs stat failed after 3 attempts: transient bridge error: …`) so the next
+reader doesn't go hunting for a launcher that never died.
+
 ## Fetch Proxy: CORS & CSP
 
 | Mode          | Fetch Strategy                                       | CORS Handling                                                                                |

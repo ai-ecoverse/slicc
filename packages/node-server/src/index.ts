@@ -5,7 +5,7 @@ import { SLICC_HOSTED_ORIGIN } from '@slicc/shared-ts';
 import { type ChildProcess, spawn } from 'child_process';
 import express, { type NextFunction, type Request, type Response } from 'express';
 import { existsSync, readFileSync } from 'fs';
-import { createServer, type Server as HttpServer } from 'http';
+import type { Server as HttpServer } from 'http';
 import { createServer as createNetServer } from 'net';
 import { homedir } from 'os';
 import { basename, dirname, join, resolve } from 'path';
@@ -63,6 +63,7 @@ import { shouldParseGlobalJson } from './fetch-proxy-headers.js';
 import { FileLogger } from './file-logger.js';
 import { registerHostedBootstrapEndpoint } from './hosted-bootstrap.js';
 import { registerHostFsRoutes, resolveHostMountRoots } from './hostfs.js';
+import { createBridgeServer } from './http-keepalive.js';
 import { runInstallCli } from './install-cli.js';
 import { resolveCliBrowserLaunchUrl } from './launch-url.js';
 import { createHttpCdp, registerLeaderRestartEndpoint } from './leader-restart.js';
@@ -1384,7 +1385,7 @@ async function main() {
   // surface. Chrome opens the sliccy.ai-hosted leader which talks to /cdp +
   // /api cross-origin. Create the HTTP server so we can attach the /cdp WS
   // upgrade handler to it.
-  const server = createServer(app);
+  const server = createBridgeServer(app);
 
   // 4. CDP WebSocket proxy at /cdp — noServer mode so we own the upgrade
   //    handler routing for /cdp and /licks-ws.
