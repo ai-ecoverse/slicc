@@ -1,3 +1,7 @@
+import type { IncomingMessage } from 'http';
+
+import { isHostFsStableBodyRequest } from './hostfs.js';
+
 /**
  * Headers the `/api/fetch-proxy` route does NOT forward upstream.
  *
@@ -114,4 +118,21 @@ export function buildFetchProxyExposeHeaders(forwardedHeaderNames: Iterable<stri
     out.push(name);
   }
   return out.join(', ');
+}
+
+/**
+ * Which requests the global `express.json()` consumes. Two exclusions:
+ *
+ *   - `X-Slicc-Raw-Body: 1` — SigV4-signed bodies must reach the
+ *     /api/fetch-proxy handler byte-for-byte (the parser would re-serialize
+ *     them via JSON.stringify and break the signature);
+ *   - the stable hostfs dispatcher — it owns a bounded 1 MiB parser and an
+ *     errno error adapter, and this parser is mounted ahead of
+ *     `registerHostFsRoutes`, so without the exclusion it would consume the
+ *     body first and answer a malformed one with code-less HTML.
+ */
+export function shouldParseGlobalJson(req: IncomingMessage): boolean {
+  if (req.headers['x-slicc-raw-body'] === '1') return false;
+  if (isHostFsStableBodyRequest(req)) return false;
+  return (req.headers['content-type'] ?? '').includes('application/json');
 }

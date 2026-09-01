@@ -53,7 +53,7 @@ struct ThinBridgeCorsMiddleware<Context: RequestContext>: RouterMiddleware {
             for field in BridgeSecurity.buildPnaPreflightHeaders() {
                 responseHeaders[field.name] = field.value
             }
-            responseHeaders[Self.maxAgeHeader] = "600"
+            responseHeaders[Self.maxAgeHeader] = BridgeSecurity.preflightMaxAge(request.uri.path)
             return Response(status: .noContent, headers: responseHeaders)
         }
 

@@ -3,8 +3,14 @@ import { mkdir, mkdtemp, readFile, realpath, symlink, writeFile } from 'fs/promi
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-
-import { registerHostFsRoutes, resolveHostMountRoots, resolveWithinRoot } from '../src/hostfs.js';
+import { shouldParseGlobalJson } from '../src/fetch-proxy-headers.js';
+import {
+  HOSTFS_STABLE_MAX_BODY_BYTES,
+  isHostFsStableBodyRequest,
+  registerHostFsRoutes,
+  resolveHostMountRoots,
+  resolveWithinRoot,
+} from '../src/hostfs.js';
 
 let root: string;
 let outside: string;
@@ -13,6 +19,15 @@ let close: () => Promise<void>;
 
 async function api(path: string, init?: RequestInit): Promise<Response> {
   return fetch(`${baseUrl}${path}`, init);
+}
+
+/** One call to the stable, preflight-cacheable `POST /api/hostfs` endpoint. */
+async function stable(body: Record<string, unknown>): Promise<Response> {
+  return api('/api/hostfs', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
 }
 
 beforeAll(async () => {
@@ -124,6 +139,186 @@ describe('hostfs routes', () => {
     // Symlinks that stay inside the root are followed.
     const inside = await api('/api/hostfs/list?mount=%2Fmnt%2Fproj&path=inside-link');
     expect(inside.status).toBe(200);
+  });
+});
+
+describe('stable POST /api/hostfs endpoint', () => {
+  // One URL for every metadata op is the whole point: the CORS preflight
+  // cache is keyed by URL, so the per-op `?mount=&path=` routes never got a
+  // cache hit (#2715). These assert the stable route answers identically.
+  it('lists a directory with the same payload as GET /list', async () => {
+    const viaPost = await stable({ op: 'list', mount: '/mnt/proj', path: '' });
+    expect(viaPost.status).toBe(200);
+    const viaGet = await api('/api/hostfs/list?mount=%2Fmnt%2Fproj&path=');
+    expect(await viaPost.json()).toEqual(await viaGet.json());
+  });
+
+  it('stats a file with the same payload as GET /stat', async () => {
+    const viaPost = await stable({ op: 'stat', mount: '/mnt/proj', path: 'hello.txt' });
+    expect(viaPost.status).toBe(200);
+    const body = (await viaPost.json()) as { kind: string; size: number };
+    expect(body.kind).toBe('file');
+    expect(body.size).toBe(10);
+  });
+
+  it('mkdirs, renames, and removes through the one URL', async () => {
+    expect((await stable({ op: 'mkdir', mount: '/mnt/proj', path: 'post/made' })).status).toBe(200);
+    expect(
+      (await stable({ op: 'rename', mount: '/mnt/proj', path: 'post/made', to: 'post/renamed' }))
+        .status
+    ).toBe(200);
+    // `recursive` accepts the query-string `'1'` and a JSON `true` alike.
+    expect(
+      (await stable({ op: 'remove', mount: '/mnt/proj', path: 'post/renamed', recursive: true }))
+        .status
+    ).toBe(200);
+    expect(
+      (await stable({ op: 'remove', mount: '/mnt/proj', path: 'post', recursive: '1' })).status
+    ).toBe(200);
+  });
+
+  it('refuses to remove a mount root', async () => {
+    const res = await stable({ op: 'remove', mount: '/mnt/proj', path: '', recursive: true });
+    expect(res.status).toBe(403);
+    expect(((await res.json()) as { code: string }).code).toBe('EACCES');
+  });
+
+  it('maps errno, traversal, and unknown mounts to coded JSON', async () => {
+    const missing = await stable({ op: 'stat', mount: '/mnt/proj', path: 'missing.txt' });
+    expect(missing.status).toBe(404);
+    expect(((await missing.json()) as { code: string }).code).toBe('ENOENT');
+
+    const escape = await stable({ op: 'stat', mount: '/mnt/proj', path: '../secret.txt' });
+    expect(escape.status).toBe(403);
+    expect(((await escape.json()) as { code: string }).code).toBe('EACCES');
+
+    const noMount = await stable({ op: 'list', mount: '/mnt/nope', path: '' });
+    expect(noMount.status).toBe(404);
+    expect(((await noMount.json()) as { code: string }).code).toBe('ENOENT');
+  });
+
+  it('rejects unknown ops and a rename without `to` with a coded 400', async () => {
+    // Every error MUST carry a `code` — a code-less 404/405 is exactly the
+    // signal `HostFsMountBackend` uses to decide the bridge has no stable
+    // endpoint and downgrade to the per-op routes.
+    const unknown = await stable({ op: 'read', mount: '/mnt/proj', path: 'hello.txt' });
+    expect(unknown.status).toBe(400);
+    expect(((await unknown.json()) as { code: string }).code).toBe('EINVAL');
+
+    const noTo = await stable({ op: 'rename', mount: '/mnt/proj', path: 'hello.txt' });
+    expect(noTo.status).toBe(400);
+    expect(((await noTo.json()) as { code: string }).code).toBe('EINVAL');
+  });
+
+  it('does not shadow the per-op POST routes', async () => {
+    const res = await api('/api/hostfs/mkdir?mount=%2Fmnt%2Fproj&path=still-per-op', {
+      method: 'POST',
+    });
+    expect(res.status).toBe(200);
+    expect((await api('/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=still-per-op')).status).toBe(200);
+  });
+});
+
+/**
+ * The stable dispatcher's `{ code, message }` contract has to survive the
+ * REAL middleware order: `index.ts` mounts a 50 MiB global `express.json()`
+ * BEFORE `registerHostFsRoutes`. Without the `shouldParseGlobalJson`
+ * exclusion the global parser eats the body first — the route-local 1 MiB cap
+ * never applies, and a malformed body reaches express's default handler,
+ * which answers code-less HTML the webapp cannot turn into an `FsError`.
+ */
+describe('stable endpoint under the production middleware order', () => {
+  let prodBase: string;
+  let prodClose: () => Promise<void>;
+
+  beforeAll(async () => {
+    const app = express();
+    // Mirror index.ts exactly: global parser first, same predicate. (The
+    // predicate lives in fetch-proxy-headers.ts because importing index.ts
+    // would run its module-load `main()` and boot a real server.)
+    app.use(express.json({ limit: '50mb', type: shouldParseGlobalJson }));
+    app.post('/api/echo', (req, res) => {
+      res.json({ body: req.body });
+    });
+    registerHostFsRoutes(
+      app,
+      await resolveHostMountRoots([{ hostPath: root, path: '/mnt/proj' }], () => {})
+    );
+    const listening = app.listen(0);
+    prodBase = `http://127.0.0.1:${(listening.address() as { port: number }).port}`;
+    prodClose = () =>
+      new Promise<void>((r) => {
+        listening.closeAllConnections?.();
+        listening.close(() => r());
+      });
+  });
+
+  afterAll(async () => {
+    await prodClose();
+  });
+
+  const post = (body: string): Promise<Response> =>
+    fetch(`${prodBase}/api/hostfs`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body,
+    });
+
+  it('answers malformed JSON with a coded 400, not code-less HTML', async () => {
+    const res = await post('{not json');
+    expect(res.status).toBe(400);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect((await res.json()) as { code: string }).toMatchObject({ code: 'EINVAL' });
+  });
+
+  it('answers an oversized body with a coded 413 at the 1 MiB route cap', async () => {
+    // Well over the route-local cap but far under the global 50 MiB one, so
+    // this only rejects if the exclusion really handed the body to the
+    // bounded parser. Regression guard for the exact bug.
+    const oversized = JSON.stringify({
+      op: 'stat',
+      mount: '/mnt/proj',
+      path: 'x'.repeat(HOSTFS_STABLE_MAX_BODY_BYTES + 1024),
+    });
+    expect(oversized.length).toBeLessThan(50 * 1024 * 1024);
+    const res = await post(oversized);
+    expect(res.status).toBe(413);
+    expect(res.headers.get('content-type')).toContain('application/json');
+    expect((await res.json()) as { code: string }).toMatchObject({ code: 'EFBIG' });
+  });
+
+  it('still serves a well-formed body through the same pipeline', async () => {
+    const res = await post(JSON.stringify({ op: 'stat', mount: '/mnt/proj', path: 'hello.txt' }));
+    expect(res.status).toBe(200);
+    expect((await res.json()) as { kind: string }).toMatchObject({ kind: 'file', size: 10 });
+  });
+
+  it('leaves the global parser in charge of every other JSON route', async () => {
+    const res = await fetch(`${prodBase}/api/echo`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ hello: 'world' }),
+    });
+    expect((await res.json()) as { body: unknown }).toEqual({ body: { hello: 'world' } });
+  });
+});
+
+describe('isHostFsStableBodyRequest', () => {
+  it('excludes only POSTs to the stable dispatcher', () => {
+    expect(isHostFsStableBodyRequest({ method: 'POST', url: '/api/hostfs' })).toBe(true);
+    expect(isHostFsStableBodyRequest({ method: 'POST', url: '/api/hostfs/' })).toBe(true);
+    // The per-op routes carry no JSON body, and read/write are not JSON.
+    expect(isHostFsStableBodyRequest({ method: 'POST', url: '/api/hostfs/mkdir?mount=x' })).toBe(
+      false
+    );
+    expect(isHostFsStableBodyRequest({ method: 'GET', url: '/api/hostfs' })).toBe(false);
+    expect(isHostFsStableBodyRequest({ method: 'POST', url: '/api/hostfs-admin' })).toBe(false);
+    expect(isHostFsStableBodyRequest({ method: 'POST', url: '/api/secrets' })).toBe(false);
+    expect(isHostFsStableBodyRequest({})).toBe(false);
+  });
+
+  it('ignores the query string when matching', () => {
+    expect(isHostFsStableBodyRequest({ method: 'POST', url: '/api/hostfs?x=1' })).toBe(true);
   });
 });
 

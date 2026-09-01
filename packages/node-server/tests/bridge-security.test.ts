@@ -10,6 +10,7 @@ import {
   isLoopbackBridgeOrigin,
   mintBridgeToken,
   parseSubprotocolHeader,
+  preflightMaxAge,
   resolveServerBridgeToken,
   selectBridgeSubprotocol,
   shouldMountThinBridgeCors,
@@ -432,5 +433,16 @@ describe('shouldMountThinBridgeCors', () => {
   it('stays off in legacy modes with no bridge token (same-origin preserved)', () => {
     // Dev / serve-only-without-token: bridgeToken null ⇒ CORS off.
     expect(shouldMountThinBridgeCors(false, null)).toBe(false);
+  });
+});
+
+describe('preflightMaxAge', () => {
+  it("gives hostfs Chrome's 7200s cap and everything else 600s", () => {
+    expect(preflightMaxAge('/api/hostfs')).toBe('7200');
+    expect(preflightMaxAge('/api/hostfs/read')).toBe('7200');
+    expect(preflightMaxAge('/api/fetch-proxy')).toBe('600');
+    expect(preflightMaxAge('/cdp')).toBe('600');
+    // Not a prefix match on a sibling route that merely starts the same way.
+    expect(preflightMaxAge('/api/hostfs-admin')).toBe('600');
   });
 });
