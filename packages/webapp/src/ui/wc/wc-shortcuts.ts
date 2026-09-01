@@ -163,6 +163,11 @@ export interface ShortcutDeps {
   /** Fullscreen the active workbench surface (`z`) — the dock's long-press. */
   zoomSurface?: () => void;
   /**
+   * Open the tab switcher with PEEK armed (`p`), so the digit that follows
+   * shows a tab and comes back instead of switching to it for good.
+   */
+  peekTabs?: () => void;
+  /**
    * Start / stop-and-send a hands-free dictation turn (`v`) — the composer's
    * own push-to-talk lifecycle, which otherwise only a held pointer can reach.
    */
@@ -529,6 +534,7 @@ export type CommandId =
   | 'rightRail'
   | 'files'
   | 'tabs'
+  | 'peek'
   | 'terminal'
   | 'memory'
   | 'monitor'
@@ -713,7 +719,27 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
     },
   },
   files: surfaceCommand('files', 'File browser (with 1-9 / j / k: open that row)', 'files'),
-  tabs: surfaceCommand('browser', 'Browser tabs'),
+  tabs: surfaceCommand('browser', 'Browser tabs (then 1-9 to switch)'),
+  peek: {
+    /**
+     * The switcher, with peek armed: the digit that follows shows that tab and
+     * brings you back.
+     *
+     * `p` means the same thing here as it does inside the switcher, which is
+     * the whole reason it moved: a key that meant peek in a modal and
+     * something else outside it was a wart, and typing `p 1` without first
+     * opening the switcher is the thing people actually want to do.
+     *
+     * The digit is not a chord — it never reaches this module. Opening the
+     * switcher makes it modal, which suspends every shell command, and the
+     * overlay's own keyboard takes the digit from there (holding it until its
+     * asynchronous tab list lands). So `p 1` works as one gesture without the
+     * shell knowing anything about tabs.
+     */
+    holdsMode: true,
+    description: 'Peek a tab (then 1-9: show it and come back)',
+    run: ({ deps }) => deps.peekTabs?.(),
+  },
   terminal: surfaceCommand('term', 'Terminal'),
   memory: surfaceCommand('memory', 'Memory (with 1-9 / j / k: open that entry)', 'memory'),
   monitor: surfaceCommand('monitor', 'Monitor'),
@@ -858,7 +884,8 @@ export const DEFAULT_KEYMAP: Readonly<Record<string, CommandId>> = {
   b: 'tabs',
   m: 'memory',
   g: 'monitor',
-  p: 'sprinkles',
+  e: 'sprinkles',
+  p: 'peek',
   '[': 'leftRail',
   ']': 'rightRail',
   z: 'zoom',

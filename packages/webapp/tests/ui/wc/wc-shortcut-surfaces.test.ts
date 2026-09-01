@@ -14,6 +14,7 @@ import {
   copyReply,
   focusApproval,
   openAttachMenu,
+  peekTabs,
   type ShortcutSurfaceDeps,
   scrollMessage,
   shortcutLists,
@@ -23,6 +24,7 @@ import {
 } from '../../../src/ui/wc/wc-shortcut-surfaces.js';
 
 function harness(options: { activeDock?: string | null } = {}) {
+  const selectItem = vi.fn();
   const inputCard = document.createElement('slicc-input-card');
   const thread = document.createElement('div');
   const dockTree = document.createElement('slicc-dock-tree');
@@ -36,13 +38,24 @@ function harness(options: { activeDock?: string | null } = {}) {
     inputCard,
     thread,
     dockTree,
-    dock: { active: options.activeDock ?? null },
+    dock: { active: options.activeDock ?? null, selectItem },
     freezer,
     composer,
     fileTree: fileTree as unknown as ShortcutSurfaceDeps['fileTree'],
     memoryHost,
   };
-  return { deps, inputCard, thread, dockTree, freezer, composer, memoryHost, fileTree, selectFile };
+  return {
+    deps,
+    selectItem,
+    inputCard,
+    thread,
+    dockTree,
+    freezer,
+    composer,
+    memoryHost,
+    fileTree,
+    selectFile,
+  };
 }
 
 /** A surface leaf in the dock-tree, with a spyable fullscreen request. */
@@ -434,5 +447,68 @@ describe('scrollMessage', () => {
     thread.getBoundingClientRect = () => ({ top: 0 }) as DOMRect;
     expect(() => scrollMessage(deps, 1)).not.toThrow();
     expect(thread.scrollTop).toBe(0);
+  });
+});
+
+describe('peekTabs', () => {
+  function overlay(options: { noPeek?: boolean } = {}) {
+    const el = document.createElement('slicc-tab-overlay') as HTMLElement & { peeking?: boolean };
+    // jsdom never upgrades the element, so stand in for the property the real
+    // component defines — including `no-peek` refusing to arm.
+    let peeking = false;
+    Object.defineProperty(el, 'peeking', {
+      configurable: true,
+      get: () => peeking,
+      set: (v: boolean) => {
+        peeking = v && !options.noPeek;
+      },
+    });
+    if (options.noPeek) el.setAttribute('no-peek', '');
+    document.body.append(el);
+    return el;
+  }
+
+  /**
+   * The order is the trick: arming before opening means the switcher — which
+   * is modal, and therefore owns the keyboard the moment it opens — already
+   * knows the next activation is a peek by the time the digit lands.
+   */
+  it('arms the switcher before opening it', () => {
+    const h = harness();
+    const el = overlay();
+    const order: string[] = [];
+    Object.defineProperty(el, 'peeking', {
+      configurable: true,
+      set: () => order.push('armed'),
+      get: () => true,
+    });
+    h.selectItem.mockImplementation(() => {
+      order.push('opened');
+    });
+    peekTabs(h.deps);
+    expect(order).toEqual(['armed', 'opened']);
+  });
+
+  it('opens the browser surface through the dock, like a click on the globe', () => {
+    const h = harness();
+    const el = overlay();
+    peekTabs(h.deps);
+    expect(el.peeking).toBe(true);
+    expect(h.selectItem).toHaveBeenCalledWith('browser');
+  });
+
+  /** A follower's switcher refuses to arm; the key still opens it. */
+  it('still opens a switcher that cannot peek', () => {
+    const h = harness();
+    const el = overlay({ noPeek: true });
+    peekTabs(h.deps);
+    expect(el.peeking).toBe(false);
+    expect(h.selectItem).toHaveBeenCalledWith('browser');
+  });
+
+  it('opens the surface on a float with no switcher at all', () => {
+    const h = harness();
+    expect(() => peekTabs(h.deps)).not.toThrow();
+    expect(h.selectItem).toHaveBeenCalledWith('browser');
   });
 });

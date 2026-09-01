@@ -118,6 +118,7 @@ function harness(
   const zoomSurface = vi.fn();
   const toggleVoice = vi.fn();
   const scrollMessage = vi.fn();
+  const peekTabs = vi.fn();
   const selectFile = vi.fn();
   const selectSession = vi.fn();
   const files = options.files ?? [];
@@ -133,6 +134,7 @@ function harness(
     zoomSurface,
     toggleVoice,
     scrollMessage,
+    peekTabs,
     lists: {
       files: { size: () => files.length, selectAt: (i) => selectFile(files[i]) },
       sessions: { size: () => sessions.length, selectAt: (i) => selectSession(sessions[i]) },
@@ -168,6 +170,7 @@ function harness(
     zoomSurface,
     toggleVoice,
     scrollMessage,
+    peekTabs,
     selectFile,
     selectSession,
     accounts,
@@ -372,6 +375,7 @@ describe('shortcutRows', () => {
       'm',
       'g',
       'p',
+      'e',
       '[',
       ']',
       'z',
@@ -565,10 +569,10 @@ describe('inside keyboard mode', () => {
     expect(handles.active()).toBe(true);
   });
 
-  it('p is a no-op when no sprinkles are installed', () => {
+  it('e is a no-op when no sprinkles are installed', () => {
     const { selectItem, handles } = harness();
     escape();
-    press({ key: 'p', code: 'KeyP' });
+    press({ key: 'e', code: 'KeyE' });
     expect(selectItem).not.toHaveBeenCalled();
     expect(handles.active()).toBe(true);
   });
@@ -577,7 +581,7 @@ describe('inside keyboard mode', () => {
    * The chord prefix has to be idempotent, or `p 3` would flash whichever
    * sprinkle a cycling prefix happened to land on before opening the third.
    */
-  it('p opens the FIRST sprinkle rather than cycling', () => {
+  it('e opens the FIRST sprinkle rather than cycling', () => {
     const { selectItem } = harness({
       dockItems: [
         { id: 'sprinkle:one', kind: 'sprinkle' },
@@ -586,7 +590,7 @@ describe('inside keyboard mode', () => {
       activeDock: 'sprinkle:one',
     });
     escape();
-    press({ key: 'p', code: 'KeyP' });
+    press({ key: 'e', code: 'KeyE' });
     expect(selectItem).toHaveBeenCalledWith('sprinkle:one');
   });
 
@@ -1395,7 +1399,7 @@ describe('chords', () => {
       ],
     });
     escape();
-    press({ key: 'p', code: 'KeyP' });
+    press({ key: 'e', code: 'KeyE' });
     press({ key: '2', code: 'Digit2' });
     expect(selectItem).toHaveBeenLastCalledWith('sprinkle:two');
   });
@@ -1472,10 +1476,10 @@ describe('the step keys', () => {
   });
 
   /**
-   * `p` opens the first sprinkle, so the step key has to know it is already
+   * `e` opens the first sprinkle, so the step key has to know it is already
    * standing on it — this is what retires the old dedicated cycle key.
    */
-  it('cycle the sprinkles from the one p just opened', () => {
+  it('cycle the sprinkles from the one e just opened', () => {
     const { selectItem } = harness({
       dockItems: [
         { id: 'files', kind: 'tool' },
@@ -1484,7 +1488,7 @@ describe('the step keys', () => {
       ],
     });
     escape();
-    press({ key: 'p', code: 'KeyP' });
+    press({ key: 'e', code: 'KeyE' });
     press({ key: 'j', code: 'KeyJ' });
     press({ key: 'j', code: 'KeyJ' });
     expect(selectItem.mock.calls).toEqual([['sprinkle:one'], ['sprinkle:two'], ['sprinkle:one']]);
@@ -1576,5 +1580,33 @@ describe('the badge hint', () => {
     handles.setKeymap({ f: 'files' });
     escape();
     expect(hint()).toBe('⏎ to type');
+  });
+});
+
+describe('peek', () => {
+  it('p opens the switcher with peek armed, and keeps the keyboard', () => {
+    const h = harness();
+    escape();
+    press({ key: 'p', code: 'KeyP' });
+    expect(h.peekTabs).toHaveBeenCalledTimes(1);
+    // The digit that follows belongs to the switcher, which is modal — so the
+    // mode has to survive the key that opened it.
+    expect(h.handles.active()).toBe(true);
+  });
+
+  /**
+   * `p` used to be sprinkles, and meant peek only inside the switcher. One
+   * verb, one key, everywhere — which is what makes `p 1` a single gesture.
+   */
+  it('no longer opens sprinkles', () => {
+    const h = harness({
+      dockItems: [
+        { id: 'files', kind: 'tool' },
+        { id: 'sprinkle:one', kind: 'sprinkle' },
+      ],
+    });
+    escape();
+    press({ key: 'p', code: 'KeyP' });
+    expect(h.selectItem).not.toHaveBeenCalled();
   });
 });
