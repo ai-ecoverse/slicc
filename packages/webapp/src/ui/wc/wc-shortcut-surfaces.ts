@@ -18,6 +18,7 @@
  * copy row on this screen".
  */
 
+import { requestPlacedSurfaceFullscreen } from './surface-fullscreen.js';
 import {
   type ShortcutComposerMeta,
   type ShortcutDock,
@@ -42,7 +43,14 @@ export interface ShortcutSurfaceDeps {
   inputCard: HTMLElement;
   /** The transcript: approval cards and the copy row are rendered into it. */
   thread: HTMLElement;
-  /** The workbench tree, for the surface `zoom` fullscreens. */
+  /**
+   * Live shell frame that still contains workbench surfaces after
+   * `panelizeShell` replaces the dock-tree with `<slicc-layout>`. When
+   * omitted (unit harnesses that only mount a tree), {@link dockTree} is
+   * the lookup root instead.
+   */
+  frame?: ParentNode;
+  /** The workbench tree (classic layout); also the zoom fallback root. */
   dockTree: HTMLElement;
   /** The dock rail, read for which surface is open. */
   dock: { readonly active: string | null };
@@ -209,19 +217,14 @@ export function focusApproval(deps: ShortcutSurfaceDeps): void {
  * transient user activation, and the keystroke only counts as one while its
  * handler is still on the stack. A surface still parked (`display:none`)
  * would reject, so an unplaced one is left alone rather than made to fail.
+ * Placement gate + request live in {@link requestPlacedSurfaceFullscreen}.
+ * Prefer `frame` over `dockTree` so panelized layouts (dock-tree removed)
+ * still resolve the live leaf.
  */
 export function zoomSurface(deps: ShortcutSurfaceDeps): void {
   const id = deps.dock.active;
   if (!id) return;
-  // CSS.escape is for identifiers and jsdom does not ship it, so escape for a
-  // double-quoted attribute selector by hand (a surface id can carry a colon:
-  // `sprinkle:name`).
-  const quoted = id.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-  const surface = deps.dockTree.querySelector<HTMLElement>(`[surface-id="${quoted}"]`);
-  if (!surface || surface.closest('.dock-tree__parking')) return;
-  void surface.requestFullscreen?.()?.catch(() => {
-    // Denied, unsupported, or the activation expired — the panel stays open.
-  });
+  requestPlacedSurfaceFullscreen(deps.frame ?? deps.dockTree, id);
 }
 
 /**
