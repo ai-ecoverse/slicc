@@ -1,14 +1,54 @@
 /**
- * Sprinkle Discovery — scan VirtualFS for `.shtml` sprinkle files and
+ * Sprinkle Discovery — scan the VFS for `.shtml` sprinkle files and
  * build a map of sprinkle names (basename without extension) to metadata.
  *
- * Priority: `/workspace/skills/` is scanned first.
+ * Discovery is **bounded** (issue #2717). It used to walk `/`, which on
+ * the page side is one worker RPC per directory and, under a `--mount`ed
+ * host folder, one `/api/hostfs/list` request each — a boot-time crawl
+ * that descended into `node_modules/…/.build/…` and competed with the
+ * cone's own commands for the browser's 6-connection pool. Instead we
+ * scan an explicit root set, to a depth cap, never entering build or
+ * dot-directories. `/mnt`, `/proc` and `/tmp` are not roots, so a mount
+ * is only ever crawled when it sits inside one of the roots below.
  */
 
+import { SPRINKLE_ROOTS } from '../base/sprinkle-roots.js';
+import { walkBounded } from '../fs/bounded-walk.js';
 import type { VirtualFS } from '../fs/index.js';
 
-/** Priority roots to scan first (in order). */
+/**
+ * Scanned before `SPRINKLE_ROOTS` so the documented home of a sprinkle
+ * (`/shared/sprinkles/<name>/<name>.shtml`) wins a basename collision
+ * with a stray `.shtml` elsewhere.
+ */
 const PRIORITY_ROOTS = ['/shared/sprinkles'];
+
+/**
+ * Directory levels below a root we descend into.
+ * `/shared/sprinkles/<name>/<name>.shtml` is depth 3 below `/shared`;
+ * `/workspace/skills/<skill>/<sub>/<file>.shtml` is 4. Six leaves room
+ * without letting a mounted checkout pull the crawl down to depth 11.
+ */
+const MAX_SCAN_DEPTH = 6;
+
+/**
+ * Per-root ceiling on directories read. Real sprinkle roots are far
+ * below this; it exists so a mount grafted into a root can't fan the
+ * boot crawl out without limit.
+ */
+const MAX_SCAN_DIRS = 500;
+
+/**
+ * Directory names never entered. Dot-directories (`.git`, `.build`,
+ * `.venv`, `.next`, …) are skipped wholesale — a sprinkle is a
+ * user-authored panel, never build output or VCS metadata.
+ */
+const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage']);
+
+/** `skip` predicate for {@link walkBounded}: build output and dot-dirs. */
+function skipDir(name: string): boolean {
+  return name.startsWith('.') || SKIP_DIRS.has(name);
+}
 
 /**
  * Sprinkle names that are part of the deterministic onboarding flow
@@ -41,33 +81,38 @@ export interface Sprinkle {
 }
 
 /**
- * Discover all `.shtml` files in the VFS and return a map of
- * sprinkle name → Sprinkle. First occurrence of a basename wins.
- * Priority roots are scanned before the general `/` walk.
+ * Discover `.shtml` files under the supported roots and return a map of
+ * sprinkle name → Sprinkle. First occurrence of a basename wins, so
+ * `PRIORITY_ROOTS` are scanned before the rest of `SPRINKLE_ROOTS`.
  */
 export async function discoverSprinkles(fs: VirtualFS): Promise<Map<string, Sprinkle>> {
   const sprinkles = new Map<string, Sprinkle>();
 
-  // Scan priority roots first
-  for (const root of PRIORITY_ROOTS) {
+  for (const root of [...PRIORITY_ROOTS, ...SPRINKLE_ROOTS]) {
     if (await fs.exists(root)) {
       await scanDir(fs, root, sprinkles);
     }
   }
 
-  // Scan everything from root, skipping already-found basenames
-  await scanDir(fs, '/', sprinkles);
-
   return sprinkles;
 }
 
-/** Walk a directory and collect .shtml files into the map (first wins). */
+/**
+ * Walk one root and collect `.shtml` files into the map (first wins).
+ * Bounded by {@link MAX_SCAN_DEPTH}, {@link MAX_SCAN_DIRS} and
+ * {@link skipDir} — see the module header for why.
+ */
 async function scanDir(
   fs: VirtualFS,
   root: string,
   sprinkles: Map<string, Sprinkle>
 ): Promise<void> {
-  for await (const filePath of fs.walk(root)) {
+  const walk = walkBounded(fs, root, {
+    maxDepth: MAX_SCAN_DEPTH,
+    maxDirs: MAX_SCAN_DIRS,
+    skip: skipDir,
+  });
+  for await (const filePath of walk) {
     if (!filePath.endsWith('.shtml')) continue;
     const name = sprinkleName(filePath);
     if (HIDDEN_SPRINKLES.has(name)) continue;

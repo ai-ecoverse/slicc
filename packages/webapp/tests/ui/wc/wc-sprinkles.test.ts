@@ -31,6 +31,48 @@ import {
   zoneOfSurface,
 } from '../../../src/ui/wc/wc-sprinkles.js';
 
+/**
+ * A fake VFS for sprinkle discovery. Discovery reads DIRECTORIES
+ * (`readDir` + `stat` through `fs/bounded-walk.ts`), not `walk` — it
+ * stopped walking `/` in issue #2717 — so these fakes model a tree of
+ * directories rather than a flat path stream.
+ */
+function fakeSprinkleFs(files: string[], content = ''): VirtualFS {
+  const dirs = new Map<string, Map<string, 'file' | 'directory'>>();
+  const ensureDir = (dir: string): Map<string, 'file' | 'directory'> => {
+    let entries = dirs.get(dir);
+    if (!entries) {
+      entries = new Map();
+      dirs.set(dir, entries);
+      if (dir !== '/') {
+        const parent = dir.slice(0, dir.lastIndexOf('/')) || '/';
+        ensureDir(parent).set(dir.slice(dir.lastIndexOf('/') + 1), 'directory');
+      }
+    }
+    return entries;
+  };
+  ensureDir('/');
+  for (const file of files) {
+    const cut = file.lastIndexOf('/');
+    ensureDir(file.slice(0, cut) || '/').set(file.slice(cut + 1), 'file');
+  }
+  return {
+    exists: async (path: string) => dirs.has(path) || files.includes(path),
+    readDir: async (path: string) =>
+      [...(dirs.get(path) ?? new Map<string, 'file' | 'directory'>())].map(([name, type]) => ({
+        name,
+        type,
+      })),
+    stat: async (path: string) => ({
+      type: dirs.has(path) ? 'directory' : 'file',
+      size: 0,
+      mtime: 0,
+      ctime: 0,
+    }),
+    readFile: async () => content,
+  } as unknown as VirtualFS;
+}
+
 // Fake dock-tree ref: a plain div carrying vi.fn() stubs for the dock-tree
 // API (setTree/getTree/getSurfaceIds/placeSurface/removeSurface/
 // moveSurfaceToZone/beginExternalDrag/setPinned). Kept as a real `div` (not a
@@ -85,17 +127,15 @@ function treeSpies(refs: WcShellRefs) {
 
 describe('wireWcSprinkles boot resilience', () => {
   it('resolves without waiting for the initial discovery (a hung VFS walk must not strand boot)', async () => {
-    // Discovery does `for await (... of fs.walk(root))`; a walk that never
-    // yields makes manager.refresh() — and the initial resync() — hang.
-    // wireWcSprinkles MUST still resolve so downstream boot (the tray leader,
-    // sequenced after it in attachWcClient) runs. The initial resync is
-    // best-effort and re-run on kernel-ready, so dropping the await is safe.
+    // Discovery reads every directory under its roots; a `readDir` that
+    // never settles makes manager.refresh() — and the initial resync() —
+    // hang. wireWcSprinkles MUST still resolve so downstream boot (the tray
+    // leader, sequenced after it in attachWcClient) runs. The initial resync
+    // is best-effort and re-run on kernel-ready, so dropping the await is safe.
     const fs = {
       exists: async () => true, // enter scanDir so discovery reaches the walk
-      async *walk(): AsyncGenerator<string> {
-        await new Promise<void>(() => {}); // never resolves → discovery hangs
-        yield ''; // unreachable; present so this is a generator
-      },
+      readDir: () => new Promise<never>(() => {}), // never settles → discovery hangs
+      stat: async () => ({ type: 'directory', size: 0, mtime: 0, ctime: 0 }),
       readFile: async () => '',
     } as unknown as VirtualFS;
     const client = {
@@ -120,13 +160,7 @@ describe('wireWcSprinkles boot resilience', () => {
   });
 
   it('accepts an onAttachImage callback without falling back to the warn logger', async () => {
-    const fs = {
-      exists: async () => false,
-      async *walk(): AsyncGenerator<string> {
-        /* empty */
-      },
-      readFile: async () => '',
-    } as unknown as VirtualFS;
+    const fs = fakeSprinkleFs([]);
     const client = {
       sendSprinkleLick: () => {},
       getScoops: () => [],
@@ -520,13 +554,7 @@ describe('isToolPanelId / zoneOfSurface (v6 helpers)', () => {
 describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', () => {
   it('a dock select for a tool id places its surface into the default zone and fires onToolPanelActivate', async () => {
     const refs = makeRefs();
-    const fs = {
-      exists: async () => false,
-      async *walk(): AsyncGenerator<string> {
-        /* empty */
-      },
-      readFile: async () => '',
-    } as unknown as VirtualFS;
+    const fs = fakeSprinkleFs([]);
     const client = {
       sendSprinkleLick: () => {},
       getScoops: () => [],
@@ -548,13 +576,7 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
 
   it('a dock collapse for a tool id removes its surface and fires onToolPanelDeactivate', async () => {
     const refs = makeRefs();
-    const fs = {
-      exists: async () => false,
-      async *walk(): AsyncGenerator<string> {
-        /* empty */
-      },
-      readFile: async () => '',
-    } as unknown as VirtualFS;
+    const fs = fakeSprinkleFs([]);
     const client = {
       sendSprinkleLick: () => {},
       getScoops: () => [],
@@ -634,13 +656,7 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
     // long-press handler must NOT start a second activate — that races two
     // open() calls into competing containers.
     const refs = makeRefs();
-    const fs = {
-      exists: async () => false,
-      async *walk(): AsyncGenerator<string> {
-        /* empty */
-      },
-      readFile: async () => '',
-    } as unknown as VirtualFS;
+    const fs = fakeSprinkleFs([]);
     const client = {
       sendSprinkleLick: () => {},
       getScoops: () => [],
@@ -680,13 +696,7 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
 
   it('a dock long-press never fullscreens a surface that stays PARKED (placement is the gate)', async () => {
     const refs = makeRefs();
-    const fs = {
-      exists: async () => false,
-      async *walk(): AsyncGenerator<string> {
-        /* empty */
-      },
-      readFile: async () => '',
-    } as unknown as VirtualFS;
+    const fs = fakeSprinkleFs([]);
     const client = {
       sendSprinkleLick: () => {},
       getScoops: () => [],
@@ -719,13 +729,10 @@ describe('WcSprinkleZone / wireWcSprinkles tool panels (independent leaves)', ()
 
   it("clicking an open sprinkle's active dock icon minimizes it (collapse routes to manager.minimize)", async () => {
     const refs = makeRefs();
-    const fs = {
-      exists: async () => true,
-      async *walk(): AsyncGenerator<string> {
-        yield '/shared/sprinkles/hero/hero.shtml';
-      },
-      readFile: async () => '<title>Hero</title><div>hi</div>',
-    } as unknown as VirtualFS;
+    const fs = fakeSprinkleFs(
+      ['/shared/sprinkles/hero/hero.shtml'],
+      '<title>Hero</title><div>hi</div>'
+    );
     const client = {
       sendSprinkleLick: () => {},
       getScoops: () => [],

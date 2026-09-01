@@ -4,6 +4,7 @@
  */
 
 import { createLogger } from '../base/logger.js';
+import { SPRINKLE_ROOTS } from '../base/sprinkle-roots.js';
 import type { FsWatcher, VirtualFS } from '../fs/index.js';
 import { getPanelRpcClient, hasLocalDom } from '../kernel/panel-rpc.js';
 import { trackSprinkleView } from '../kernel/telemetry.js';
@@ -285,12 +286,13 @@ export interface SprinkleManagerOptions {
 }
 
 /**
- * Roots that `discoverSprinkles` actually mines for `.shtml` files.
- * The watcher only registers under these so saves inside mounted
- * project folders (which can sit anywhere in the VFS) don't trigger
- * a full sprinkle rescan on every keystroke.
+ * Roots that `discoverSprinkles` actually mines for `.shtml` files —
+ * shared with discovery so the two can't drift. The watcher only
+ * registers under these so saves inside mounted project folders (which
+ * can sit anywhere in the VFS) don't trigger a full sprinkle rescan on
+ * every keystroke.
  */
-const WATCHER_ROOTS = ['/workspace', '/shared', '/scoops'] as const;
+const WATCHER_ROOTS = SPRINKLE_ROOTS;
 
 /**
  * Minimum gap between back-to-back rescans triggered by
