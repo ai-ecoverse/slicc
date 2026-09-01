@@ -30,6 +30,7 @@ import { startFreezeWatchdog } from './boot/setup-freeze-watchdog.js';
 import { setupNukeReloadListener } from './boot/setup-nuke-reload-listener.js';
 import { setupPreloadErrorReload } from './boot/setup-preload-error-reload.js';
 import { parseExtensionLeaderParams } from './boot/setup-standalone-prelude.js';
+import { setupStoragePersistence } from './boot/setup-storage-persistence.js';
 import { setupSwRegistration } from './boot/setup-sw-registration.js';
 import { applyProviderDefaults } from './provider-settings.js';
 
@@ -89,6 +90,13 @@ async function main(): Promise<void> {
   // window-context listener acts on (clearing select localStorage
   // keys, then reloading). Idempotent — safe to call across re-inits.
   setupNukeReloadListener();
+
+  // Ask the browser to mark this origin's storage persistent. SLICC's whole
+  // VFS is an OPFS tree, and OPFS is best-effort quota storage: on a nearly
+  // full disk Chromium evicts whole buckets — the entire tree, silently —
+  // unless the bucket is persistent. Fire-and-forget, never prompts, and the
+  // answer improves with site engagement, so it is re-requested every boot.
+  setupStoragePersistence();
 
   // Initialize RUM telemetry for the page/panel realm — `trackShellCommand`,
   // `trackChatSubmit`, sprinkle `viewblock`, settings `signup`, and panel JS
