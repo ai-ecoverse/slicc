@@ -97,6 +97,14 @@ export const RichBody: Story = {
   },
 };
 
+/** One long JSON line (typical API error payload) — must wrap inside the card. */
+export const LongJsonError: Story = {
+  args: {
+    message:
+      '{"type":"error","error":{"details":null,"type":"api_error","message":"Internal server error"},"request_id":"req_m5ffjzo3zujenmw3bu3utiqv3tfa5q6vwrx2unvge4tmw4wvfseq"}',
+  },
+};
+
 /** Long multiline body — confirms the card wraps and the retry button stays right-aligned. */
 export const LongMessage: Story = {
   args: {

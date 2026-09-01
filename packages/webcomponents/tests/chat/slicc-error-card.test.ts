@@ -190,6 +190,21 @@ describe('slicc-error-card', () => {
     expect(dark).not.toBe(light);
   });
 
+  it('wraps a long unbroken error string instead of overflowing the card', () => {
+    const column = document.createElement('div');
+    column.style.width = '400px';
+    document.body.appendChild(column);
+    const json =
+      '{"type":"error","error":{"details":null,"type":"api_error","message":"Internal server error"},"request_id":"req_m5ffjzo3zujenmw3bu3utiqv3tfa5q6vwrx2unvge4tmw4wvfseq"}';
+    const el = mount({ message: json });
+    column.appendChild(el);
+    const card = el.shadowRoot!.querySelector('.err') as HTMLElement;
+    const body = el.shadowRoot!.querySelector('.eb') as HTMLElement;
+    expect(body.scrollWidth).toBeLessThanOrEqual(body.clientWidth + 1);
+    expect(card.scrollWidth).toBeLessThanOrEqual(card.clientWidth + 1);
+    expect(column.scrollWidth).toBeLessThanOrEqual(column.clientWidth + 1);
+  });
+
   it('unbinds the click listener on disconnect', () => {
     const el = mount({ message: 'oops' });
     const seen: Event[] = [];
