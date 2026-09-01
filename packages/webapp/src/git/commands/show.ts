@@ -3,6 +3,7 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { diffCommits, diffInitialCommit } from './diff.js';
+import { tryResolveRevision } from './revision.js';
 import { flagString, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
@@ -23,20 +24,13 @@ export async function show(
   }
 
   const commitRef = ref ?? 'HEAD';
-  let oid: string;
-  try {
-    oid = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: commitRef });
-  } catch {
-    // Try expanding as a short OID
-    try {
-      oid = await git.expandOid({ fs: ctx.lfs, dir: cwd, oid: commitRef });
-    } catch {
-      return {
-        stdout: '',
-        stderr: `fatal: bad object ${commitRef}\n`,
-        exitCode: 128,
-      };
-    }
+  const oid = await tryResolveRevision(ctx, cwd, commitRef);
+  if (oid === undefined) {
+    return {
+      stdout: '',
+      stderr: `fatal: bad object ${commitRef}\n`,
+      exitCode: 128,
+    };
   }
 
   const { commit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid });
@@ -66,7 +60,10 @@ async function showFileAtCommit(
   const colonIdx = refPath.indexOf(':');
   const commitRef = refPath.slice(0, colonIdx) || 'HEAD';
   const filepath = refPath.slice(colonIdx + 1);
-  const oid = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: commitRef });
+  const oid = await tryResolveRevision(ctx, cwd, commitRef);
+  if (oid === undefined) {
+    return { stdout: '', stderr: `fatal: bad object ${commitRef}\n`, exitCode: 128 };
+  }
   const result = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid, filepath });
   const content = new TextDecoder().decode(result.blob);
   return { stdout: content, stderr: '', exitCode: 0 };

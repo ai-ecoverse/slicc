@@ -17,6 +17,7 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { makeMergeDriver } from './merge-driver.js';
+import { tryResolveRevision } from './revision.js';
 import { expandGitError, GIT_FLAG_SPECS, type GitParsedFlags } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
@@ -253,15 +254,7 @@ async function resolveCommit(
   cwd: string,
   ref: string
 ): Promise<string | undefined> {
-  try {
-    return await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref });
-  } catch {
-    try {
-      return await git.expandOid({ fs: ctx.lfs, dir: cwd, oid: ref });
-    } catch {
-      return undefined;
-    }
-  }
+  return await tryResolveRevision(ctx, cwd, ref);
 }
 
 /**

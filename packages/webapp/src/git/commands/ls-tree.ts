@@ -11,6 +11,7 @@
 
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
+import { tryResolveRevision } from './revision.js';
 import { GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
@@ -43,19 +44,13 @@ export async function lsTree(
 
   // Resolve tree-ish (branch/tag → oid, then short oid). readTree peels
   // commits to their tree internally, so a commit oid works as-is.
-  let oid: string;
-  try {
-    oid = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: treeIsh });
-  } catch {
-    try {
-      oid = await git.expandOid({ fs: ctx.lfs, dir: cwd, oid: treeIsh });
-    } catch {
-      return {
-        stdout: '',
-        stderr: `fatal: Not a valid object name ${treeIsh}\n`,
-        exitCode: 128,
-      };
-    }
+  const oid = await tryResolveRevision(ctx, cwd, treeIsh);
+  if (oid === undefined) {
+    return {
+      stdout: '',
+      stderr: `fatal: Not a valid object name ${treeIsh}\n`,
+      exitCode: 128,
+    };
   }
 
   let rootTree: TreeEntry[];

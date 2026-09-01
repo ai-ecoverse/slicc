@@ -15,6 +15,7 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { threeWayMerge } from '../merge-file-core.js';
+import { tryResolveRevision } from './revision.js';
 import { expandGitError, GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
@@ -31,15 +32,9 @@ export async function revert(
     return { stdout: '', stderr: 'error: empty commit set passed\n', exitCode: 128 };
   }
 
-  let oid: string;
-  try {
-    oid = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref });
-  } catch {
-    try {
-      oid = await git.expandOid({ fs: ctx.lfs, dir: cwd, oid: ref });
-    } catch {
-      return { stdout: '', stderr: `fatal: bad revision '${ref}'\n`, exitCode: 128 };
-    }
+  const oid = await tryResolveRevision(ctx, cwd, ref);
+  if (oid === undefined) {
+    return { stdout: '', stderr: `fatal: bad revision '${ref}'\n`, exitCode: 128 };
   }
 
   let headOid: string;

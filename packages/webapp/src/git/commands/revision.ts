@@ -37,12 +37,39 @@ function parseRevision(revision: string): { base: string; steps: RevisionStep[] 
   return { base, steps };
 }
 
+/**
+ * Resolve `revision` like {@link resolveRevision}, but report an unresolvable
+ * token as `undefined` so callers can emit their own `fatal:` wording.
+ */
+export async function tryResolveRevision(
+  ctx: GitCommandContext,
+  cwd: string,
+  revision: string
+): Promise<string | undefined> {
+  try {
+    return await resolveRevision(ctx, cwd, revision);
+  } catch {
+    return undefined;
+  }
+}
+
+/** An abbreviated or full object id — git accepts 4 to 40 hex characters. */
+const ABBREVIATED_OID = /^[0-9a-f]{4,40}$/i;
+
+/**
+ * Refs win over hex prefixes, which is git's own precedence, and `expandOid` —
+ * which reads every `.git/objects/pack/*.idx` looking for a prefix match — is
+ * only attempted for tokens that could be an abbreviated oid. Resolving `HEAD`
+ * over a mounted host repo used to read all 30 pack indexes (3.8 MB, 34
+ * requests); it now reads `HEAD` and `packed-refs` (#2713).
+ */
 async function resolveBase(ctx: GitCommandContext, cwd: string, ref: string): Promise<string> {
   try {
-    return await git.expandOid({ fs: ctx.lfs, dir: cwd, oid: ref });
-  } catch {
     return await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref });
+  } catch (error) {
+    if (!ABBREVIATED_OID.test(ref)) throw error;
   }
+  return await git.expandOid({ fs: ctx.lfs, dir: cwd, oid: ref });
 }
 
 async function readParent(
