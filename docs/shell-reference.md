@@ -182,10 +182,13 @@ Use `--depth <n>` to request a different history depth.
 
 ### Git revision resolution
 
-Every revision argument resolves through one helper, `resolveRevision()` in
-`packages/webapp/src/git/commands/revision.ts`, so `show`, `ls-tree`, `cherry-pick`, `revert`,
-`rebase`, `diff`, `log`, `merge-base` and `rev-parse` all accept the same tokens: a ref
+`show`, `ls-tree`, `cherry-pick`, `revert`, `rebase`, `diff`, `merge-base` and `rev-parse`
+resolve their revision arguments through one helper, `resolveRevision()` in
+`packages/webapp/src/git/commands/revision.ts`, so they all accept the same tokens: a ref
 (`HEAD`, `main`, `origin/main`, a tag), a full or abbreviated oid, and `~`/`^` suffixes.
+
+`log` is the exception — it hands its revision straight to `git.log()`, so it takes whatever
+isomorphic-git accepts and not the suffix forms above.
 
 Resolution order matters for performance, not just precedence. A ref is looked up first —
 matching git, where a branch named `deadbeef` wins over the oid prefix `deadbeef` — and

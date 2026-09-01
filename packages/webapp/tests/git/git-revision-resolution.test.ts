@@ -106,15 +106,18 @@ describe('git revision resolution (#2713)', () => {
     expect(paths.some((p) => p.includes('objects/pack'))).toBe(true);
   });
 
-  it('prefers a ref over a hex-looking branch name', async () => {
+  it('prefers a ref over a genuinely colliding oid prefix', async () => {
     const [first, second] = await seedHistory();
-    // A branch whose name is also a valid oid prefix. Git resolves the ref.
-    await git.execute(['checkout', '-b', 'deadbeef', first], '/project');
+    // A real collision: the branch name IS the second commit's oid prefix, but
+    // it points at the first commit. Git resolves the ref, so `first` wins;
+    // expandOid-first would answer `second`.
+    const collidingName = second.slice(0, 8);
+    await git.execute(['checkout', '-b', collidingName, first], '/project');
     await git.execute(['checkout', 'main'], '/project');
+    expect(second).not.toBe(first);
 
     const paths = recordPaths();
-    expect((await git.execute(['rev-parse', 'deadbeef'], '/project')).stdout.trim()).toBe(first);
-    expect(second).not.toBe(first);
+    expect((await git.execute(['rev-parse', collidingName], '/project')).stdout.trim()).toBe(first);
     expect(paths.filter((p) => p.includes('objects/pack'))).toEqual([]);
   });
 
