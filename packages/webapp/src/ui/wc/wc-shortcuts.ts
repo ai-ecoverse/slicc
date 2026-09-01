@@ -477,7 +477,7 @@ interface Command {
   list?: ChordListId;
   /**
    * Runs the command, and MAY report the index it activated in its list — the
-   * seed the step keys page on from, so `p` (which opens the first sprinkle)
+   * seed the step keys page on from, so `e` (which opens the first sprinkle)
    * is followed by `j` for the second rather than for the first again.
    */
   run(ctx: CommandContext): number | void;
@@ -746,8 +746,8 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
   sprinkles: {
     /**
      * The FIRST sprinkle, not the next one. A chord prefix has to be
-     * idempotent — `p 3` must open the third whatever came before it — and
-     * cycling is now what the step keys are for: `p` then `j` walks the rest,
+     * idempotent — `e 3` must open the third whatever came before it — and
+     * cycling is now what the step keys are for: `e` then `j` walks the rest,
      * which is why there is no separate loop key any more.
      *
      * Holds the mode for the same reason every list command does: the key
@@ -850,7 +850,7 @@ export const RESERVED_KEYS: readonly string[] = [
  * - **The same key closes what it opened**, because clicking the active dock
  *   item collapses it and a shortcut must not need its own vocabulary.
  * - **Shift is the heavier twin of the same letter** (`n`/`N`, `c`/`C`,
- *   `y`/`Y`, `p`/`P`), so a destructive variant is never a key of its own.
+ *   `y`/`Y`), so a destructive variant is never a key of its own.
  *
  * Deliberately left free: `e h j k o q v w x . ; [] pairs aside` and, above
  * all, `/` — the obvious key for a command palette, and not worth spending on
@@ -1395,7 +1395,7 @@ function observeSelectedUnit(
  * the same intent either way, and which list it steps through is the one the
  * user just opened and can still see on the HUD; with none open, the thing in
  * front of them is the conversation. It also retires the dedicated cycle key
- * the sprinkles used to need: `p` opens the first and `j` walks the rest.
+ * the sprinkles used to need: `e` opens the first and `j` walks the rest.
  *
  * Returns the index it landed on, so the caller can re-arm the chord there and
  * the next press continues from where this one stopped.
