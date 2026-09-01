@@ -3,7 +3,10 @@ import { describe, expect, it, vi } from 'vitest';
 import { HostFsMountBackend } from '../../src/fs/mount/backend-hostfs.js';
 import { FsError } from '../../src/fs/types.js';
 
-function backendWith(respond: (url: string, init?: RequestInit) => Response | Promise<Response>): {
+function backendWith(
+  respond: (url: string, init?: RequestInit) => Response | Promise<Response>,
+  opts: { maxInflight?: number; maxAttempts?: number } = {}
+): {
   backend: HostFsMountBackend;
   calls: string[];
   bodies: unknown[];
@@ -16,7 +19,14 @@ function backendWith(respond: (url: string, init?: RequestInit) => Response | Pr
     return respond(url, init);
   }) as unknown as typeof fetch;
   return {
-    backend: new HostFsMountBackend({ targetPath: '/mnt/kb', hostPath: '/h/kb', fetchImpl }),
+    backend: new HostFsMountBackend({
+      targetPath: '/mnt/kb',
+      hostPath: '/h/kb',
+      fetchImpl,
+      // Keep retry tests instant; production waits 25 ms then 50 ms.
+      retryDelayMs: 0,
+      ...opts,
+    }),
     calls,
     bodies,
   };
@@ -26,6 +36,21 @@ function backendWith(respond: (url: string, init?: RequestInit) => Response | Pr
 const notFoundHtml = () => new Response('<html>Cannot POST /api/hostfs</html>', { status: 404 });
 
 const ok = (body: unknown) => new Response(JSON.stringify(body), { status: 200 });
+
+/** Yield a macrotask so pending fetch/JSON continuations can run. */
+const tick = () => new Promise<void>((resolve) => setTimeout(resolve, 0));
+
+/**
+ * A 200 whose body read rejects — the bridge dropped the socket after the
+ * headers were on the wire, which is the common shape for a large read.
+ */
+const bodyDrops = () =>
+  ({
+    ok: true,
+    status: 200,
+    json: () => Promise.reject(new TypeError('Failed to fetch')),
+    arrayBuffer: () => Promise.reject(new TypeError('Failed to fetch')),
+  }) as unknown as Response;
 
 describe('HostFsMountBackend', () => {
   it('routes rename through the stable endpoint with mount + to in the body', async () => {
@@ -136,6 +161,189 @@ describe('HostFsMountBackend', () => {
     );
     await expect(backend.stat('missing')).rejects.toMatchObject({ code: 'ENOENT' });
     expect(calls).toEqual(['POST /api/hostfs']);
+  });
+
+  describe('transient network failures (#2720)', () => {
+    it('retries an idempotent read past a single fetch rejection', async () => {
+      let attempts = 0;
+      const { backend, calls } = backendWith(() => {
+        attempts += 1;
+        if (attempts === 1) throw new TypeError('Failed to fetch');
+        return new Response(new Uint8Array([1, 2, 3]), { status: 200 });
+      });
+      await expect(backend.readFile('a.txt')).resolves.toEqual(new Uint8Array([1, 2, 3]));
+      expect(calls).toHaveLength(2);
+    });
+
+    it.each([
+      ['stat', (b: HostFsMountBackend) => b.stat('a.txt')],
+      ['list', (b: HostFsMountBackend) => b.readDir('sub')],
+      ['mkdir', (b: HostFsMountBackend) => b.mkdir('sub')],
+    ])('retries %s once and succeeds', async (_op, invoke) => {
+      let attempts = 0;
+      const { backend, calls } = backendWith(() => {
+        attempts += 1;
+        if (attempts === 1) throw new TypeError('Failed to fetch');
+        return ok({ kind: 'file', size: 1, mtime: 2, entries: [] });
+      });
+      await expect(invoke(backend)).resolves.not.toThrow();
+      expect(calls).toHaveLength(2);
+    });
+
+    it('gives up after maxAttempts with an EIO that names the op as transient', async () => {
+      const { backend, calls } = backendWith(() => {
+        throw new TypeError('Failed to fetch');
+      });
+      const err = await backend.stat('a.txt').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FsError);
+      expect((err as FsError).code).toBe('EIO');
+      expect((err as FsError).message).toContain('hostfs stat failed after 3 attempts');
+      expect((err as FsError).message).toContain('transient bridge error: Failed to fetch');
+      expect(calls).toHaveLength(3);
+    });
+
+    it('never replays a non-idempotent op, and says so', async () => {
+      const { backend, calls } = backendWith(() => {
+        throw new TypeError('Failed to fetch');
+      });
+      const err = await backend.writeFile('a.txt', new Uint8Array([1])).catch((e: unknown) => e);
+      expect((err as FsError).code).toBe('EIO');
+      expect((err as FsError).message).toContain(
+        'hostfs write failed (not retried: non-idempotent'
+      );
+      expect(calls).toHaveLength(1);
+    });
+
+    it('does not retry HTTP errors — an errno answer is not a network failure', async () => {
+      const { backend, calls } = backendWith(
+        () => new Response(JSON.stringify({ code: 'ENOENT', message: 'gone' }), { status: 404 })
+      );
+      await expect(backend.stat('missing')).rejects.toMatchObject({ code: 'ENOENT' });
+      expect(calls).toHaveLength(1);
+    });
+
+    it('retries a body that drops mid-stream, then succeeds', async () => {
+      let attempts = 0;
+      const { backend, calls } = backendWith(() => {
+        attempts += 1;
+        if (attempts === 1) return bodyDrops();
+        return new Response(new Uint8Array([7, 8]), { status: 200 });
+      });
+      // A large read that dies while streaming is a network failure like any
+      // other — it used to escape as a raw TypeError, outside the retry loop.
+      await expect(backend.readFile('big.bin')).resolves.toEqual(new Uint8Array([7, 8]));
+      expect(calls).toHaveLength(2);
+    });
+
+    it('maps a body that never arrives to the transient EIO after maxAttempts', async () => {
+      const { backend, calls } = backendWith(() => bodyDrops());
+      const err = await backend.readDir('sub').catch((e: unknown) => e);
+      expect(err).toBeInstanceOf(FsError);
+      expect((err as FsError).code).toBe('EIO');
+      expect((err as FsError).message).toContain('hostfs list failed after 3 attempts');
+      expect((err as FsError).message).toContain('transient bridge error: Failed to fetch');
+      expect(calls).toHaveLength(3);
+    });
+
+    it('does not retry a dropped body for a non-idempotent op', async () => {
+      const { backend, calls } = backendWith(() => bodyDrops());
+      const err = await backend.writeFile('a.txt', new Uint8Array([1])).catch((e: unknown) => e);
+      expect((err as FsError).code).toBe('EIO');
+      expect((err as FsError).message).toContain(
+        'hostfs write failed (not retried: non-idempotent'
+      );
+      expect(calls).toHaveLength(1);
+    });
+
+    it('spends no retry attempt on the stable-endpoint downgrade', async () => {
+      // The 404 that switches routes is a routing correction, not a transient
+      // failure: all three network attempts must still be available after it.
+      let perOpCalls = 0;
+      const { backend, calls } = backendWith((url) => {
+        if (url.endsWith('/api/hostfs')) return notFoundHtml();
+        perOpCalls += 1;
+        if (perOpCalls <= 2) throw new TypeError('Failed to fetch');
+        return ok({ kind: 'file', size: 1, mtime: 2 });
+      });
+      await expect(backend.stat('/a.txt')).resolves.toEqual({ kind: 'file', size: 1, mtime: 2 });
+      expect(calls).toEqual([
+        'POST /api/hostfs',
+        'GET /api/hostfs/stat?mount=%2Fmnt%2Fkb&path=a.txt',
+        'GET /api/hostfs/stat?mount=%2Fmnt%2Fkb&path=a.txt',
+        'GET /api/hostfs/stat?mount=%2Fmnt%2Fkb&path=a.txt',
+      ]);
+    });
+
+    it('maps a fallback-route network failure through the same transient EIO', async () => {
+      const { backend, calls } = backendWith((url) => {
+        if (url.endsWith('/api/hostfs')) return notFoundHtml();
+        throw new TypeError('Failed to fetch');
+      });
+      const err = await backend.stat('/a.txt').catch((e: unknown) => e);
+      expect((err as FsError).code).toBe('EIO');
+      expect((err as FsError).message).toContain('hostfs stat failed after 3 attempts');
+      // One downgrade probe plus the three real attempts.
+      expect(calls).toHaveLength(4);
+    });
+
+    it('holds the limiter slot until the body is consumed', async () => {
+      const releases: Array<() => void> = [];
+      const { backend, calls } = backendWith(
+        () =>
+          ({
+            ok: true,
+            status: 200,
+            json: () =>
+              new Promise((resolve) => {
+                releases.push(() => resolve({ kind: 'file', size: 0, mtime: 0 }));
+              }),
+          }) as unknown as Response,
+        { maxInflight: 1 }
+      );
+
+      const first = backend.stat('a.txt');
+      const second = backend.stat('b.txt');
+      await tick();
+      // The second request must NOT have been issued: the first still owns the
+      // only slot because its body is still streaming.
+      expect(calls).toHaveLength(1);
+      expect(releases).toHaveLength(1);
+
+      releases.shift()?.();
+      await first;
+      await tick();
+      expect(calls).toHaveLength(2);
+      releases.shift()?.();
+      await expect(second).resolves.toMatchObject({ kind: 'file' });
+    });
+
+    it('caps concurrent bridge requests at maxInflight', async () => {
+      let concurrent = 0;
+      let peak = 0;
+      const release: Array<() => void> = [];
+      const { backend } = backendWith(
+        async () => {
+          concurrent += 1;
+          peak = Math.max(peak, concurrent);
+          await new Promise<void>((resolve) => release.push(resolve));
+          concurrent -= 1;
+          return ok({ kind: 'file', size: 0, mtime: 0 });
+        },
+        { maxInflight: 2 }
+      );
+
+      const pending = Array.from({ length: 8 }, (_, i) => backend.stat(`f${i}.txt`));
+      await tick();
+      // Six of the eight are queued behind the limiter, not in the socket pool.
+      expect(release).toHaveLength(2);
+
+      for (let i = 0; i < 20 && release.length > 0; i += 1) {
+        release.shift()?.();
+        await tick();
+      }
+      await Promise.all(pending);
+      expect(peak).toBe(2);
+    });
   });
 
   it('refuses all operations after close with EBADF', async () => {
