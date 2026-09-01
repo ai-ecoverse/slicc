@@ -13,6 +13,7 @@ import {
   describeKey,
   digitFor,
   hasOpenOverlay,
+  helpKeyLabel,
   indexForDigit,
   isActivationTarget,
   isTypingTarget,
@@ -1540,5 +1541,46 @@ describe('voice', () => {
     expect(h.handles.active()).toBe(true);
     press({ key: 'v', code: 'KeyV' });
     expect(h.toggleVoice).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe('helpKeyLabel', () => {
+  it('names the key help is on, as it prints', () => {
+    expect(helpKeyLabel(DEFAULT_KEYMAP)).toBe('?');
+    expect(helpKeyLabel({ Enter: 'help' })).toBe('⏎');
+  });
+
+  it('is null when nothing is bound to help', () => {
+    expect(helpKeyLabel({ f: 'files' })).toBeNull();
+    expect(helpKeyLabel({})).toBeNull();
+  });
+});
+
+describe('the badge hint', () => {
+  const hint = () => document.querySelector<HTMLElement>('.wcsc-badge__hint')?.textContent;
+
+  /**
+   * The regression this exists to prevent: the hint hard-coded `h for help`,
+   * and the shipped map moved help to `?` — so the very first thing the mode
+   * told a new user to press did nothing.
+   */
+  it('names the key that is actually bound', () => {
+    harness();
+    escape();
+    expect(hint()).toBe('? for help · ⏎ to type');
+  });
+
+  it('follows a rebind, because it is read when the badge appears', () => {
+    const { handles } = harness();
+    handles.setKeymap({ x: 'help' });
+    escape();
+    expect(hint()).toBe('x for help · ⏎ to type');
+  });
+
+  it('says nothing about help when a config has unbound it', () => {
+    const { handles } = harness();
+    handles.setKeymap({ f: 'files' });
+    escape();
+    expect(hint()).toBe('⏎ to type');
   });
 });

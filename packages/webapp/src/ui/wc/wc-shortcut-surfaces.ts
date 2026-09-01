@@ -18,7 +18,6 @@
  * copy row on this screen".
  */
 
-import type { SliccFileTree } from '@slicc/webcomponents';
 import {
   type ShortcutComposerMeta,
   type ShortcutDock,
@@ -28,9 +27,6 @@ import {
   type ShortcutSwitcher,
   wireKeyboardShortcuts,
 } from './wc-shortcuts.js';
-
-/** One row of the file tree, as the library models it (`wc-workbench.ts` too). */
-type FileTreeItem = NonNullable<SliccFileTree['items']>[number];
 
 /**
  * A `<slicc-composer>`, as far as this module needs it: the band's hands-free
@@ -55,11 +51,12 @@ export interface ShortcutSurfaceDeps {
   /** The composer band, for the dictation turn `v` starts and ends. */
   composer: HTMLElement;
   /**
-   * The file tree; `items`/`selectFile` are its own public API. Group headers
-   * carry no id — they are chrome, not rows — so the list skips them and a
-   * digit never lands on one.
+   * The file tree. `visibleIds()` is the list a positional key addresses —
+   * the rows on screen, in order, which is NOT the `items` array: that is a
+   * nested shape whose top level is `/workspace` and `/shared` with every
+   * actual file under `children`.
    */
-  fileTree: { items: readonly FileTreeItem[]; selectFile(id: string): void };
+  fileTree: { visibleIds(): readonly string[]; selectFile(id: string): void };
   /** The memory panel host, whose `<slicc-memrow>` children are the list. */
   memoryHost: HTMLElement;
 }
@@ -145,8 +142,28 @@ export function copyChat(deps: ShortcutSurfaceDeps): void {
 }
 
 /**
- * Focus the oldest unanswered approval in the transcript; pressing again goes
- * to the next one.
+ * A dip's document, when this realm may touch it.
+ *
+ * An approval card is a `mountDip` iframe. In the ordinary float its sandbox
+ * carries `allow-same-origin`, so the buttons inside are reachable and the key
+ * can land on the primary one. In the extension the same card is served from
+ * `sprinkle-sandbox.html` and is another origin, where reading
+ * `contentDocument` returns null or throws — hence the try, and hence the
+ * fallback of focusing the FRAME, which puts the keyboard inside the card and
+ * lets Tab reach the buttons the parent is not allowed to see.
+ */
+function dipDocument(frame: HTMLIFrameElement | null): Document | null {
+  if (!frame) return null;
+  try {
+    return frame.contentDocument;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Carry the keyboard to a pending approval card; pressing again goes to the
+ * next one.
  *
  * FOCUS, never answer. A key that said "approve" could say it to a card that
  * finished rendering a frame earlier, so the shortcut only carries the user
@@ -154,22 +171,34 @@ export function copyChat(deps: ShortcutSurfaceDeps): void {
  * the button says (keyboard mode leaves a focused button's Enter alone; see
  * `isActivationTarget`).
  *
- * "Next" needs no state: the cycle is read off the document, so a card that
- * was answered or scrolled away between two presses simply is not in the list
- * the second press walks.
+ * PENDING is read off the container, not off the buttons: `WcChatController`
+ * appends a `[data-tool-ui-request]` wrapper per card and removes it the
+ * moment the request is answered or withdrawn, so the DOM already states
+ * exactly which approvals are outstanding — and states it in the parent
+ * document, on the near side of the iframe the card itself lives in.
+ *
+ * "Next" therefore needs no state either: the cycle is re-read every press, so
+ * a card answered between two presses is simply not in the second one's list.
  */
 export function focusApproval(deps: ShortcutSurfaceDeps): void {
-  const buttons = [
-    ...deps.thread.querySelectorAll<HTMLButtonElement>('button[data-action]:not([disabled])'),
-  ];
-  if (buttons.length === 0) return;
+  const cards = [...deps.thread.querySelectorAll<HTMLElement>('[data-tool-ui-request]')];
+  if (cards.length === 0) return;
   const focused = deps.thread.ownerDocument.activeElement;
-  const at = focused instanceof HTMLElement ? buttons.indexOf(focused as HTMLButtonElement) : -1;
-  const next = buttons[(at + 1) % buttons.length];
-  next?.focus();
+  // Focus inside a same-origin frame reads as the frame element out here, so
+  // "which card am I on?" is a containment test either way.
+  const at = cards.findIndex((card) => focused instanceof Node && card.contains(focused));
+  const card = cards[(at + 1) % cards.length];
+  if (!card) return;
+  const frame = card.querySelector('iframe');
+  const inner = dipDocument(frame)?.querySelector<HTMLElement>('button[data-action]');
+  // An inline card's own button, then the button inside a reachable dip, then
+  // the frame itself — first thing that can hold focus wins.
+  const target =
+    card.querySelector<HTMLElement>('button[data-action]:not([disabled])') ?? inner ?? frame;
+  target?.focus?.();
   // Optional: jsdom has no `scrollIntoView`, and carrying the focus is the
   // part that matters — a browser scrolls a focused element into view anyway.
-  next?.scrollIntoView?.({ block: 'nearest' });
+  card.scrollIntoView?.({ block: 'nearest' });
 }
 
 /**
@@ -209,10 +238,6 @@ export function shortcutLists(deps: ShortcutSurfaceDeps): {
   memory: ShortcutList;
   sessions: ShortcutList;
 } {
-  const fileRows = (): string[] =>
-    deps.fileTree.items
-      .map((item) => ('id' in item ? item.id : null))
-      .filter((id): id is string => typeof id === 'string');
   const clickList = (root: () => ParentNode, selector: string): ShortcutList => ({
     size: () => root().querySelectorAll(selector).length,
     selectAt: (index) => {
@@ -222,14 +247,18 @@ export function shortcutLists(deps: ShortcutSurfaceDeps): {
   });
   return {
     files: {
-      size: () => fileRows().length,
+      size: () => deps.fileTree.visibleIds().length,
       selectAt: (index) => {
-        const id = fileRows()[index];
+        const id = deps.fileTree.visibleIds()[index];
         if (id) deps.fileTree.selectFile(id);
       },
     },
     memory: clickList(() => deps.memoryHost, 'slicc-memrow'),
-    sessions: clickList(() => deps.freezer, 'slicc-freezer-card'),
+    // `:not(.match-hidden)` is the search filter: `<slicc-freezer>` live-filters
+    // its rows by toggling that class, leaving non-matches in the DOM. A
+    // positional key has to mean the nth row the user can SEE, or `r 1` after
+    // a search restores something that is not even on screen.
+    sessions: clickList(() => deps.freezer, 'slicc-freezer-card:not(.match-hidden):not([hidden])'),
   };
 }
 

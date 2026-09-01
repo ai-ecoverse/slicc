@@ -911,6 +911,19 @@ function keyLabel(key: string): string {
  * sheet — a printed list that disagreed with the live keymap would be worse
  * than no list. A command nobody has a key for is dropped.
  */
+/**
+ * The key the badge should tell a new user to press for help — the first one
+ * bound to `help`, as it prints, or `null` when a config has unbound it.
+ *
+ * Derived rather than written out for the same reason {@link shortcutRows} is:
+ * the mode's own hint must never name a key that does nothing, which is
+ * exactly what it did when the shipped map moved help off `h`.
+ */
+export function helpKeyLabel(keymap: Readonly<Record<string, CommandId>>): string | null {
+  const key = Object.keys(keymap).find((k) => keymap[k] === 'help');
+  return key === undefined ? null : keyLabel(key);
+}
+
 export function shortcutRows(
   keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP
 ): ShortcutRow[] {
@@ -1024,7 +1037,8 @@ export function describeKey(
  * The mode indicator and key HUD: one non-interactive pill above the composer.
  *
  * It has two states rather than two elements. Idle, it explains the mode
- * ("h for help · Esc to leave"); the moment a key is pressed the hint gives
+ * ("? for help · ⏎ to type" — the key comes from the live keymap, never from
+ * a string here); the moment a key is pressed the hint gives
  * way to a strip of key caps, which is both the "did that register?" feedback
  * and — because presses accumulate left to right — the readout a multi-key
  * chord will need when one exists. The strip clears itself after
@@ -1034,7 +1048,10 @@ export function describeKey(
  * exactly what someone learning the mode needs to see, and silence would read
  * as a dropped keystroke.
  */
-function createBadge(doc: Document): {
+function createBadge(
+  doc: Document,
+  keymap: Readonly<Record<string, CommandId>>
+): {
   element: HTMLElement;
   record(parts: readonly string[], bound: boolean): void;
   destroy(): void;
@@ -1051,8 +1068,11 @@ function createBadge(doc: Document): {
   const hint = doc.createElement('span');
   hint.className = 'wcsc-badge__hint';
   // Not "Esc to leave": the mode IS the resting state, so the way out is to
-  // start typing again.
-  hint.textContent = 'h for help · ⏎ to type';
+  // start typing again. The help key is read from the keymap in force, so a
+  // rebind — or the shipped map moving it — can never leave the badge
+  // advertising a key that does nothing.
+  const help = helpKeyLabel(keymap);
+  hint.textContent = help ? `${help} for help · ⏎ to type` : '⏎ to type';
   const keys = doc.createElement('div');
   keys.className = 'wcsc-badge__keys';
   keys.dataset.wcShortcuts = 'keys';
@@ -1166,7 +1186,10 @@ function syncKeyboardLock(doc: Document): void {
 }
 
 /** The mode flag plus the badge that makes it visible. */
-function createMode(doc: Document): {
+function createMode(
+  doc: Document,
+  keymap: () => Readonly<Record<string, CommandId>>
+): {
   on(): boolean;
   set(next: boolean): void;
   record(parts: readonly string[], bound: boolean): void;
@@ -1188,7 +1211,10 @@ function createMode(doc: Document): {
         return;
       }
       ensureStyle(doc);
-      badge = createBadge(doc);
+      // Read at the moment the badge appears, so a keymap applied after the
+      // shell wired itself (the config load is deliberately late) is the one
+      // the hint names.
+      badge = createBadge(doc, keymap());
       doc.body.append(badge.element);
       // The caret would otherwise keep blinking in a composer that no longer
       // receives what is typed.
@@ -1569,7 +1595,7 @@ export function wireKeyboardShortcuts(deps: ShortcutDeps): ShortcutHandles {
   INSTALLED.get(doc)?.dispose();
   const actions: ShortcutActions = {};
   const help = createHelp(doc, () => keymap);
-  const mode = createMode(doc);
+  const mode = createMode(doc, () => keymap);
   const state: ModeState = { lastDockSurface: 'files' };
   let keymap: Readonly<Record<string, CommandId>> = DEFAULT_KEYMAP;
   const commandFor = (key: string): Command | undefined => {

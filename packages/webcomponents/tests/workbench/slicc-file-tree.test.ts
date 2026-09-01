@@ -175,6 +175,32 @@ describe('slicc-file-tree', () => {
       expect(seen[0]?.path).toBe('a.ts');
     });
 
+    /**
+     * The rows on screen, in order — what anything addressing a row by number
+     * has to ask, and what `items` cannot answer: it is nested, and says
+     * nothing about which directories are open.
+     */
+    it('visibleIds lists the painted rows, top to bottom', async () => {
+      const tree = await mount(SAMPLE);
+      // Rendered order, which is directories first — and `/workspace/src` is
+      // collapsed, so its child is not on screen and not in the list. The
+      // folders are here at all only because the library prints their rows
+      // with a trailing slash that the lookup has to strip.
+      expect(tree.visibleIds()).toEqual(['/workspace', '/workspace/src', '/workspace/bb.jsh']);
+    });
+
+    it('visibleIds grows when a directory is expanded', async () => {
+      const tree = await mount(SAMPLE);
+      tree.toggleDir('/workspace/src');
+      await settle();
+      expect(tree.visibleIds()).toContain('/workspace/src/main.ts');
+    });
+
+    it('visibleIds is empty before anything has been painted', () => {
+      const tree = document.createElement('slicc-file-tree') as SliccFileTree;
+      expect(tree.visibleIds()).toEqual([]);
+    });
+
     it('is a no-op with no event for an unknown id', async () => {
       const tree = await mount(SAMPLE);
       let fired = 0;

@@ -345,6 +345,35 @@ export class SliccFileTree extends HTMLElement {
   }
 
   /**
+   * The VFS ids of the rows the tree is SHOWING, top to bottom.
+   *
+   * The rendered order, not `items`: that array is nested (a root's files sit
+   * under `children`) and says nothing about what is expanded, so it cannot
+   * answer "which row is the third one?" — which is what a positional
+   * shortcut, or anything else addressing rows by number, has to ask. A row
+   * whose path carries no metadata is dropped rather than counted, so an
+   * index can never point at something that cannot be selected.
+   *
+   * Empty before the first paint: an unmounted tree is showing nothing, and
+   * saying so beats inventing an order the user cannot see.
+   */
+  visibleIds(): string[] {
+    const tree = this.#tree;
+    if (!tree) return [];
+    const count = tree.getVisibleCount();
+    if (count === 0) return [];
+    return (
+      tree
+        .getVisibleRows(0, count)
+        // The library prints a DIRECTORY row with a trailing slash
+        // (`workspace/src/`) while `#meta` is keyed without one, so a bare
+        // lookup finds files and silently drops every folder.
+        .map((row) => this.#meta.get(row.path.replace(/\/$/, ''))?.id)
+        .filter((id): id is string => typeof id === 'string')
+    );
+  }
+
+  /**
    * Toggle the directory with the given id and emit `dir-toggle { id, open }`.
    * A no-op (no event) if no directory carries that id.
    */

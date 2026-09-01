@@ -31,7 +31,7 @@ function harness(options: { activeDock?: string | null } = {}) {
   const composer = document.createElement('slicc-composer');
   document.body.append(inputCard, thread, dockTree, freezer, memoryHost, composer);
   const selectFile = vi.fn();
-  const fileTree = { items: [] as Array<{ id?: string }>, selectFile };
+  const fileTree = { rows: [] as string[], visibleIds: () => fileTree.rows, selectFile };
   const deps: ShortcutSurfaceDeps = {
     inputCard,
     thread,
@@ -62,13 +62,31 @@ function surface(dockTree: HTMLElement, id: string, options: { parked?: boolean 
   return { el, requestFullscreen };
 }
 
-/** An approval card's button, as the transcript renders one. */
-function approval(thread: HTMLElement, action: string, options: { disabled?: boolean } = {}) {
-  const button = document.createElement('button');
-  button.dataset.action = action;
-  if (options.disabled) button.disabled = true;
-  thread.append(button);
-  return button;
+/**
+ * A pending approval, as `WcChatController` renders one: a
+ * `[data-tool-ui-request]` container holding the card's dip iframe. The
+ * container is what states "still pending" — it is removed when the request
+ * is answered.
+ */
+function approval(thread: HTMLElement, requestId: string, options: { inline?: boolean } = {}) {
+  const card = document.createElement('div');
+  card.className = 'msg__dip';
+  card.setAttribute('data-tool-ui-request', requestId);
+  thread.append(card);
+  if (options.inline) {
+    const button = document.createElement('button');
+    button.dataset.action = 'approve';
+    card.append(button);
+    return { card, button };
+  }
+  const frame = document.createElement('iframe');
+  card.append(frame);
+  const button = frame.contentDocument?.createElement('button');
+  if (button) {
+    button.dataset.action = 'approve';
+    frame.contentDocument?.body.append(button);
+  }
+  return { card, frame, button };
 }
 
 afterEach(() => {
@@ -148,32 +166,57 @@ describe('the copy row', () => {
 });
 
 describe('focusApproval', () => {
-  it('focuses the oldest pending request', () => {
+  it("lands on the button inside the card's dip iframe", () => {
     const { deps, thread } = harness();
-    const first = approval(thread, 'approve');
-    approval(thread, 'deny');
+    const { button } = approval(thread, 'req-1');
     focusApproval(deps);
-    expect(document.activeElement).toBe(first);
+    expect(button?.ownerDocument.activeElement).toBe(button);
   });
 
-  it('walks to the next one when pressed again, wrapping', () => {
+  it("focuses an inline card's own button", () => {
     const { deps, thread } = harness();
-    const first = approval(thread, 'approve');
-    const second = approval(thread, 'deny');
+    const { button } = approval(thread, 'req-1', { inline: true });
     focusApproval(deps);
-    focusApproval(deps);
-    expect(document.activeElement).toBe(second);
-    focusApproval(deps);
-    expect(document.activeElement).toBe(first);
+    expect(document.activeElement).toBe(button);
   });
 
-  /** An answered card's buttons are disabled; they are not requests anymore. */
-  it('skips an answered request', () => {
+  /**
+   * The extension serves the same card from `sprinkle-sandbox.html`, another
+   * origin, where the parent may not read `contentDocument` at all. Focusing
+   * the FRAME still puts the keyboard inside the card.
+   */
+  it('focuses the frame itself when the dip is out of reach', () => {
     const { deps, thread } = harness();
-    approval(thread, 'approve', { disabled: true });
-    const live = approval(thread, 'approve');
+    const { frame } = approval(thread, 'req-1');
+    Object.defineProperty(frame, 'contentDocument', {
+      get() {
+        throw new Error('cross-origin');
+      },
+    });
     focusApproval(deps);
-    expect(document.activeElement).toBe(live);
+    expect(document.activeElement).toBe(frame);
+  });
+
+  it('walks to the next card when pressed again, wrapping', () => {
+    const { deps, thread } = harness();
+    const first = approval(thread, 'req-1');
+    const second = approval(thread, 'req-2');
+    focusApproval(deps);
+    expect(first.button?.ownerDocument.activeElement).toBe(first.button);
+    focusApproval(deps);
+    expect(second.button?.ownerDocument.activeElement).toBe(second.button);
+    focusApproval(deps);
+    expect(first.button?.ownerDocument.activeElement).toBe(first.button);
+  });
+
+  /** Answering a request removes its container, so it leaves the cycle. */
+  it('never stops on a request that has been answered', () => {
+    const { deps, thread } = harness();
+    const answered = approval(thread, 'req-1');
+    const live = approval(thread, 'req-2');
+    answered.card.remove();
+    focusApproval(deps);
+    expect(live.button?.ownerDocument.activeElement).toBe(live.button);
   });
 
   it('does nothing when there is nothing to answer', () => {
@@ -227,17 +270,51 @@ describe('zoomSurface', () => {
 });
 
 describe('shortcutLists', () => {
-  it('indexes the file tree by row, skipping the group headers', () => {
+  /**
+   * The rows on SCREEN, which is why this reads `visibleIds()` and not
+   * `items`: the items array is nested (a root's files sit under `children`)
+   * and says nothing about what is expanded, so counting it would make `f 3`
+   * miss every file and `f 1` select a directory.
+   */
+  it('indexes the file tree by the rows it is showing', () => {
     const h = harness();
-    h.fileTree.items = [
-      { kind: 'group', label: 'Workspace' } as never,
-      { id: '/a.ts' },
-      { id: '/b.ts' },
-    ];
+    h.fileTree.rows = ['/workspace', '/workspace/a.ts', '/workspace/b.ts'];
     const list = shortcutLists(h.deps).files;
+    expect(list.size()).toBe(3);
+    list.selectAt(2);
+    expect(h.selectFile).toHaveBeenCalledWith('/workspace/b.ts');
+  });
+
+  /** Expanding a directory changes the numbering, and must. */
+  it('re-reads the rows on every press', () => {
+    const h = harness();
+    h.fileTree.rows = ['/workspace'];
+    const list = shortcutLists(h.deps).files;
+    expect(list.size()).toBe(1);
+    h.fileTree.rows = ['/workspace', '/workspace/a.ts'];
     expect(list.size()).toBe(2);
-    list.selectAt(1);
-    expect(h.selectFile).toHaveBeenCalledWith('/b.ts');
+  });
+
+  it('skips the cards the freezer search has filtered out', () => {
+    const h = harness();
+    const clicks: string[] = [];
+    for (const [slug, hidden] of [
+      ['jan', true],
+      ['feb', false],
+      ['mar', true],
+    ] as const) {
+      const card = document.createElement('slicc-freezer-card');
+      card.setAttribute('slug', slug);
+      // What `<slicc-freezer>`'s live search does: hide, do not remove.
+      if (hidden) card.classList.add('match-hidden');
+      card.addEventListener('click', () => clicks.push(slug));
+      h.freezer.append(card);
+    }
+    const list = shortcutLists(h.deps).sessions;
+    // Only the match counts, and `1` is the first row actually on screen.
+    expect(list.size()).toBe(1);
+    list.selectAt(0);
+    expect(clicks).toEqual(['feb']);
   });
 
   it('clicks the nth archived chat, which is how the card is activated at all', () => {
