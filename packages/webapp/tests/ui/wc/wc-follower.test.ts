@@ -636,11 +636,11 @@ describe('mountWcUiFollower', () => {
     // The read-only view is the one part of the multi-cones stack that ships
     // unflagged — the follower reaches it through `summaryRole`, which reads
     // no flag. Pins that against a future gate on the selection wiring.
-    const { FEATURE_FLAG_STORAGE_KEY } = await import('../../../src/core/feature-flags.js');
-    window.localStorage.setItem(
-      FEATURE_FLAG_STORAGE_KEY,
-      JSON.stringify({ 'multiple-cones': 'off' })
-    );
+    // Off via the worker's central value: since #2280 the flag is not
+    // `userToggleable`, so a `localStorage` override would be dropped by
+    // `canOverride` and leave this testing the ON state instead.
+    const { initFeatureFlags } = await import('../../../src/core/feature-flags.js');
+    initFeatureFlags('follower', { 'multiple-cones': 'off' });
     try {
       const { mountWcUiFollower } = await import('../../../src/ui/wc/wc-follower.js');
       const app = document.getElementById('app')!;
@@ -662,7 +662,7 @@ describe('mountWcUiFollower', () => {
       switcher.dispatchEvent(new CustomEvent('slicc-scoop-select', { detail: { key: 'scoop-a' } }));
       expect(composer.hasAttribute('hidden')).toBe(true);
     } finally {
-      window.localStorage.removeItem(FEATURE_FLAG_STORAGE_KEY);
+      initFeatureFlags('follower');
     }
   });
 

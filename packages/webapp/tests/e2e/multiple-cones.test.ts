@@ -2,9 +2,10 @@
 /**
  * Multiple-cones E2E on the leader (#2313, part of #1666).
  *
- * Everything here runs against the real WC shell with the `multiple-cones`
- * flag on and the fake LLM as the provider: cones are created and dropped
- * through the freezer rail's action row, turns really stream, scoops are
+ * Everything here runs against the real WC shell on its shipped defaults
+ * (`multiple-cones` graduated in #2280) with the fake LLM as the provider:
+ * cones are created and dropped through the freezer rail's action row,
+ * turns really stream, scoops are
  * really registered by `scoop_scoop`, and the freezer index is read back out
  * of the worker's VFS.
  *

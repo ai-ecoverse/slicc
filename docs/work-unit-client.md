@@ -175,10 +175,9 @@ roster into "selected subtree" and "the rest" but keeps registry order inside
 each half — which is the documented intent ("cone, its scoops, next cone") only
 as long as registry order happens to be owner-grouped.
 
-The two orderings are **identical for every roster that exists today**: children
-carry `canCreateChildren: false`, so there is no nesting to group, and with one
-cone (the default — multiple cones is still flagged off) both reduce to
-"cone, then its scoops in registry order". The change is only observable with
+The two orderings are **identical for every roster with one cone**: children
+carry `canCreateChildren: false`, so there is no nesting to group, and a single
+cone reduces both to "cone, then its scoops in registry order". The change is only observable with
 several cones _and_ a scoop registered out of owner order, which is exactly the
 case the two implementations disagreed about.
 

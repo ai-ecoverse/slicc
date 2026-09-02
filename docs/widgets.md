@@ -6,7 +6,7 @@ attention — cones and scoops alike — each as its own agent avatar, with a st
 of everything else underneath.
 
 There is no status word on it, no model id and no progress bar. **The face is
-the status.** Multiple cones are coming (the flag already exists), so there is
+the status.** Several cones can run at once, so there is
 no single "the" cone to build a layout around; a flat, ranked grid of peers is
 what survives that.
 

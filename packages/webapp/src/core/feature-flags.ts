@@ -59,8 +59,17 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     label: 'Multiple cones',
     description:
       'Add, switch between and remove cones from the freezer rail. Extra cones share the workspace.',
-    defaultValue: 'off',
-    userToggleable: true,
+    // Graduated (#2280): on for every float that runs the leader shell, and
+    // OFF for a Cherry embed — a garnish in someone else's page is a
+    // single-cone surface, not a place to spawn work units. Not
+    // `userToggleable`: the graduation takes it out of Settings →
+    // Experimental, so the only remaining switches are this bundled default
+    // and the worker's central `FEATURE_FLAGS` (which, being central, also
+    // outranks the Cherry default — a central `base` value for this flag must
+    // carry a matching `floats.cherry` entry).
+    defaultValue: 'on',
+    floatDefaults: Object.freeze({ cherry: 'off' }),
+    userToggleable: false,
   }),
 ]);
 
