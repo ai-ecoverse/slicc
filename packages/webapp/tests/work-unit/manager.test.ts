@@ -230,6 +230,26 @@ describe('WorkUnitManager', () => {
     expect(recorded.config?.writablePaths).not.toContain('/shared/');
   });
 
+  it('create with config.workspaceMode private (no workspace wrapper) isolates the sandbox', async () => {
+    const { host, manager } = tree();
+    const d = await manager.create({
+      parentId: root.jid,
+      name: 'vault',
+      config: { workspaceMode: 'private' },
+    });
+    expect(d.workspaceHandle.access).toBe('private');
+    expect(d.policy.filesystem).toMatchObject({
+      kind: 'restricted',
+      mode: 'private',
+      visiblePaths: [],
+      writablePaths: ['/scoops/vault/'],
+    });
+    const recorded = host.registerScoop.mock.calls[0][0];
+    expect(recorded.config?.workspaceMode).toBe('private');
+    expect(recorded.config?.visiblePaths).not.toContain('/workspace/');
+    expect(recorded.config?.writablePaths).not.toContain('/shared/');
+  });
+
   it('create throws on unimplemented snapshot / shared-live modes', async () => {
     const { manager } = tree();
     await expect(

@@ -111,7 +111,8 @@ function withOwnerWorkspace(
   return {
     ...options,
     workspace: {
-      mode: options.workspace?.mode ?? DEFAULT_CHILD_WORKSPACE_MODE,
+      mode:
+        options.workspace?.mode ?? options.config?.workspaceMode ?? DEFAULT_CHILD_WORKSPACE_MODE,
       from: workspaceFor(parent).root,
     },
   };
