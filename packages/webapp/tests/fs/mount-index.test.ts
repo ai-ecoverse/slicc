@@ -437,4 +437,37 @@ describe('MountIndex noise-directory skip', () => {
     expect(unfiltered.getState('/mnt/blow')?.abortCause).toBe('entries-exceeded');
     unfiltered.unregisterMount('/mnt/blow');
   }, 9000);
+
+  it('does not partially populate skipped subtrees on write/rename/delete', async () => {
+    const index = new MountIndex();
+    index.registerMount('/mnt/repo', makeNoisyProjectHandle());
+    expect(await waitForTerminalState(index, '/mnt/repo', 4000)).toBe('ready');
+
+    // A post-index write under node_modules must leave the subtree unindexed
+    // so getDirectoryEntries keeps falling back to the slow path.
+    index.notifyWrite('/mnt/repo/node_modules/pkg-0.js');
+    index.notifyWrite('/mnt/repo/.git/config');
+    expect(index.hasPath('/mnt/repo', '/mnt/repo/node_modules/pkg-0.js')).toBe(false);
+    expect(index.getDirectoryEntries('/mnt/repo', '/mnt/repo/node_modules')).toBeUndefined();
+    expect(index.getDirectoryEntries('/mnt/repo', '/mnt/repo')?.map((e) => e.name)).not.toContain(
+      'node_modules'
+    );
+
+    // Dot-files at the mount root are still files, not skipped directories.
+    index.notifyWrite('/mnt/repo/.env');
+    expect(index.hasPath('/mnt/repo', '/mnt/repo/.env')).toBe(true);
+
+    // Rename into noise drops the indexed source; destination stays unindexed.
+    index.notifyRename('/mnt/repo/README.md', '/mnt/repo/node_modules/README.md');
+    expect(index.hasPath('/mnt/repo', '/mnt/repo/README.md')).toBe(false);
+    expect(index.hasPath('/mnt/repo', '/mnt/repo/node_modules/README.md')).toBe(false);
+    expect(index.getDirectoryEntries('/mnt/repo', '/mnt/repo/node_modules')).toBeUndefined();
+
+    // Mutations that stay inside noise are no-ops on the index.
+    index.notifyDelete('/mnt/repo/node_modules/pkg-0.js');
+    index.notifyRename('/mnt/repo/.git/HEAD', '/mnt/repo/.git/ORIG_HEAD');
+    expect(index.getDirectoryEntries('/mnt/repo', '/mnt/repo/.git')).toBeUndefined();
+
+    index.unregisterMount('/mnt/repo');
+  }, 9000);
 });
