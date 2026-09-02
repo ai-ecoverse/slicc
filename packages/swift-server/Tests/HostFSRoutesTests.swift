@@ -611,6 +611,56 @@ final class HostFSRoutesTests: XCTestCase {
         XCTAssertEqual(BridgeSecurity.preflightMaxAge("/api/hostfs-admin"), "600")
     }
 
+    /// An entry the bridge cannot measure must report the NAME ONLY.
+    ///
+    /// The webapp uses a listing's `size`/`lastModified` in place of a stat
+    /// (issue #2716), so `size: 0, lastModified: 0` is not a safe stand-in
+    /// for "unknown" — it is indistinguishable from a real empty file at the
+    /// epoch. node-server's `listOp` omits both on failure; this bridge has
+    /// to match, including for a dangling symlink, whose `stat` op answers
+    /// ENOENT while `attributesOfItem` would happily describe the link.
+    func testListOmitsMetadataForAnEntryItCannotStat() async throws {
+        try FileManager.default.createSymbolicLink(
+            atPath: root + "/dangling", withDestinationPath: root + "/not-there")
+        try await makeApp().test(.router) { client in
+            try await client.execute(
+                uri: "/api/hostfs/list?mount=%2Fmnt%2Fproj&path=", method: .get
+            ) { response in
+                XCTAssertEqual(response.status, .ok)
+                guard case .object(let body) = try self.decode(response.body),
+                    case .array(let entries)? = body["entries"]
+                else { return XCTFail("bad list shape") }
+                let dangling = entries.first { entry in
+                    guard case .object(let e) = entry, case .string("dangling")? = e["name"]
+                    else { return false }
+                    return true
+                }
+                guard case .object(let e)? = dangling else { return XCTFail("no dangling entry") }
+                // Still listed, still named — but nothing measured.
+                XCTAssertEqual(e["kind"], .string("file"))
+                XCTAssertNil(e["size"])
+                XCTAssertNil(e["lastModified"])
+                XCTAssertNil(e["ctime"])
+                XCTAssertNil(e["ino"])
+                XCTAssertNil(e["mode"])
+                // The measurable sibling is unaffected.
+                let hello = entries.first { entry in
+                    guard case .object(let h) = entry, case .string("hello.txt")? = h["name"]
+                    else { return false }
+                    return true
+                }
+                guard case .object(let h)? = hello else { return XCTFail("no hello.txt entry") }
+                XCTAssertEqual(h["size"], .number(10))
+            }
+            // And the listing agrees with the stat op: both refuse the path.
+            try await client.execute(
+                uri: "/api/hostfs/stat?mount=%2Fmnt%2Fproj&path=dangling", method: .get
+            ) { response in
+                XCTAssertEqual(response.status, .notFound)
+            }
+        }
+    }
+
     func testResolveWithinRootLexicalRules() throws {
         XCTAssertEqual(try HostFSRoutes.resolveWithinRoot(root: root, relPath: ""), root)
         XCTAssertEqual(

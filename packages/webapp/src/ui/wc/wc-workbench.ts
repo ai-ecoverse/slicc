@@ -44,11 +44,20 @@ async function dirChildren(
 
   const capped = [...dirs, ...files].slice(0, MAX_ENTRIES_PER_DIR);
 
-  // Stat all files in parallel; failures degrade gracefully to no size.
-  const filePaths = capped.filter((e) => e.type === 'file').map((e) => `${dir}/${e.name}`);
-  const stats = await Promise.allSettled(filePaths.map((p) => fs.stat(p)));
+  // Sizes come from the listing when the backend reported them there
+  // (#2716) — over a hostfs mount, stat'ing what we just listed is one
+  // bridge round trip per file. Only the entries a listing left unknown
+  // are stat'd, in parallel; failures degrade gracefully to no size.
   const sizeMap = new Map<string, number>();
-  filePaths.forEach((p, i) => {
+  const unsized: string[] = [];
+  for (const entry of capped) {
+    if (entry.type !== 'file') continue;
+    const path = `${dir}/${entry.name}`;
+    if (entry.size !== undefined) sizeMap.set(path, entry.size);
+    else unsized.push(path);
+  }
+  const stats = await Promise.allSettled(unsized.map((p) => fs.stat(p)));
+  unsized.forEach((p, i) => {
     const r = stats[i];
     if (r?.status === 'fulfilled') sizeMap.set(p, r.value.size);
   });

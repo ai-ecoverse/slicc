@@ -204,6 +204,28 @@ The stable dispatcher owns its body end to end: it is excluded from node-server'
 
 A bridge that predates the stable endpoint answers `POST /api/hostfs` with a framework 404 carrying no errno `code`; `HostFsMountBackend` treats exactly that as "no stable endpoint" and falls back to the per-op routes for the rest of the mount's life, at a cost of one wasted request. Every error the real route emits carries a `code`, so a genuine `ENOENT` never triggers the downgrade.
 
+### Listings carry stats (no re-stat per entry)
+
+`list` stats every dirent server-side, so a listing already knows each file's `size`, `lastModified` and — since [#2708](https://github.com/ai-ecoverse/slicc/issues/2708) — its `ctime`, `ino`, `uid`, `gid` and `mode`. Those fields ride all the way up: `HostFsMountBackend.readDir` → `MountDirEntry` → `VirtualFS.readDir` → `DirEntry` (all optional, all best-effort), and the panel-side `vfs-read-dir` RPC mirrors them.
+
+They exist so a consumer never stats what it just listed ([#2716](https://github.com/ai-ecoverse/slicc/issues/2716) — `git branch` spent 100 of its 125 requests on stats of 29 refs):
+
+- **isomorphic-git** (`git/vfs-fs-adapter.ts`): `readdir` primes a stat cache that `stat`/`lstat` answer from, cleared by `GitCommands.execute` at the end of every command and dropped for any path the adapter writes.
+- **Shell** (`shell/vfs-adapter.ts`): `ls -l` and `du` are a `readdir` plus a stat per name (just-bash's `DirentEntry` has no size), so a listing answers stats of its own entries for 1 s and any write through the adapter drops the table.
+- **Files panel** (`ui/wc/wc-workbench.ts`): reads `entry.size` and stats only the entries a listing left unknown.
+
+Three rules keep this honest:
+
+- **The backend opts in.** `MountBackend.listingStatsMatchStat` means "my listing reports the same numbers my `stat()` would" — consumers use them _instead of_ a stat and cannot tell the difference. Only `hostfs` (both bridges stat each dirent inside `list`) and `local` (both paths read `FileSystemFileHandle.getFile()`) set it. **S3 and AEM deliberately do not**: both answer `stat` from the body cache when they have one, where `mtime` is `cachedAt` — when the body was cached, not the object's mtime — and AEM reports the _decoded_ size there while a Source Bus listing carries the stored (compressed) one. Aligning those two sources is a separate change; until then their listings stay `{name, type}` and consumers pay the stat rather than getting a different number. `VirtualFS.readDir` drops the fields for any backend that has not opted in.
+- **A partial entry is never promoted.** A raced file the bridge could not stat comes back as a bare `{name, kind}` and costs a real stat, because answering with zeroed placeholders is exactly what makes isomorphic-git call a file stale and rewrite `.git/index` per file (#2708). Both bridges omit `size`/`lastModified` rather than sending zeros — including for a dangling symlink, whose `stat` op answers ENOENT.
+- **Symlinks are never promoted.** The listing describes the link, a `stat` describes its target.
+
+The last two are enforced in one place: `statsFromDirEntry` in `fs/types.ts`.
+
+Both consumer caches are bounded, because a TTL limits how long an entry may be _reused_, not how long it is _retained_: the shell's table sweeps what has expired whenever it primes and holds at most 20,000 entries, the git adapter's at most 100,000, and a single listing larger than the cap primes nothing at all rather than blowing past it.
+
+Directories over hostfs carry no stat fields today (both bridges send `{name, kind}` for them), so a consumer that needs a directory's size or mtime still stats it.
+
 ## Common error patterns
 
 | Error                                                                                         | What it means                                                                                 | Fix                                                                                              |

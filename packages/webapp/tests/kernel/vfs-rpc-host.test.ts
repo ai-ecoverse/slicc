@@ -153,6 +153,44 @@ describe('VfsRpcHost round-trip over MessageChannel', () => {
     ctx.stop();
   });
 
+  // #2716: the listing's stat fields are what spare the panel a stat per
+  // entry, so they have to survive the wire. They are optional, so a peer
+  // that sends none is answered exactly as before (the test above).
+  it('readDir carries the listing stat fields across the wire', async () => {
+    const ctx = setupRoundTrip();
+    ctx.vfs.readDir.mockResolvedValue([
+      {
+        name: 'a.txt',
+        type: 'file',
+        size: 11,
+        mtime: 1_700_000_000_000,
+        ctime: 1_700_000_500_000,
+        ino: 42,
+        uid: 501,
+        gid: 20,
+        mode: 0o100644,
+      },
+    ] satisfies DirEntry[]);
+    ctx.panelTransport.send({ type: 'vfs-read-dir', requestId: 'r-stats', path: '/mnt/host' });
+    await waitForResponses(ctx);
+    const resp = ctx.responses[0] as VfsReadDirResultMsg;
+    expect(resp.ok).toBe(true);
+    if (resp.ok) {
+      expect(resp.entries[0]).toEqual({
+        name: 'a.txt',
+        type: 'file',
+        size: 11,
+        mtime: 1_700_000_000_000,
+        ctime: 1_700_000_500_000,
+        ino: 42,
+        uid: 501,
+        gid: 20,
+        mode: 0o100644,
+      });
+    }
+    ctx.stop();
+  });
+
   it('readFile utf-8 returns the string payload', async () => {
     const ctx = setupRoundTrip();
     ctx.vfs.readFile.mockResolvedValue('hello world');

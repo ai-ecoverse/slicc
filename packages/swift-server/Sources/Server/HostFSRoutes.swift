@@ -453,13 +453,35 @@ enum HostFSRoutes {
         let entries: [LickSystem.JSONValue] = names.map { name in
             let full = dir + "/" + name
             var isDirectory: ObjCBool = false
-            FileManager.default.fileExists(atPath: full, isDirectory: &isDirectory)
-            if isDirectory.boolValue {
+            // Follows symlinks, like node's `stat(resolve(target, d.name))`:
+            // a link to a directory classifies as a directory, and a DANGLING
+            // link (or an entry deleted since `contentsOfDirectory`) does not
+            // resolve at all.
+            let resolves = FileManager.default.fileExists(atPath: full, isDirectory: &isDirectory)
+            if resolves && isDirectory.boolValue {
                 return .object(["name": .string(name), "kind": .string("directory")])
             }
-            let attrs = try? FileManager.default.attributesOfItem(atPath: full)
-            let size = (attrs?[.size] as? NSNumber)?.doubleValue ?? 0
-            let mtime = (attrs?[.modificationDate] as? Date).map { $0.timeIntervalSince1970 * 1000 } ?? 0
+            // An entry we could not measure reports the NAME ONLY — never
+            // `size: 0, lastModified: 0`, and never the dangling LINK's own
+            // attributes (`attributesOfItem` does not follow links, so it
+            // would happily describe a target that isn't there, for a path
+            // whose `stat` op answers ENOENT).
+            //
+            // The webapp uses a listing's numbers in place of a stat (issue
+            // #2716), where zeros are indistinguishable from a real empty
+            // file at the epoch: isomorphic-git would call that file stale
+            // forever and rewrite `.git/index` once per file (#2708), and
+            // `ls -l` would print them. node-server's `listOp` omits them for
+            // exactly this reason — the two bridges have to agree.
+            guard resolves,
+                let attrs = try? FileManager.default.attributesOfItem(atPath: full),
+                let size = (attrs[.size] as? NSNumber)?.doubleValue,
+                let mtime = (attrs[.modificationDate] as? Date).map({
+                    $0.timeIntervalSince1970 * 1000
+                })
+            else {
+                return .object(["name": .string(name), "kind": .string("file")])
+            }
             var entry: [String: LickSystem.JSONValue] = [
                 "name": .string(name),
                 "kind": .string("file"),

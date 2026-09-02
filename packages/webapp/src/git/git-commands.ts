@@ -57,7 +57,11 @@ import type { GitCommandContext, GitCommandResult, GitCommandsOptions } from './
 import { createCommandScopedReadCache } from './fs-command-cache.js';
 import { GitCacheManager } from './git-cache.js';
 import { readGlobalGitConfigValue } from './git-config.js';
-import { createIsomorphicGitFs, type IsoGitFsPromises } from './vfs-fs-adapter.js';
+import {
+  createIsomorphicGitFs,
+  type IsoGitFsClient,
+  type IsoGitFsPromises,
+} from './vfs-fs-adapter.js';
 
 export type { GitCommandResult, GitCommandsOptions } from './commands/types.js';
 
@@ -146,6 +150,18 @@ export class GitCommands {
    * here is ever a cached adapter, because instance state is shared by
    * concurrent invocations and a memo must not be.
    */
+  /**
+   * The BARE adapter {@link GitCacheManager} samples the repository through:
+   * no object memo (#2712), no readdir-primed stat cache (#2716), and never a
+   * command's read memo (#2709).
+   *
+   * `packSignature` is an INVALIDATION sampler — it lists `objects/pack` and
+   * lstats `packed-refs` to decide whether the packs it is holding are still
+   * the packs on disk. Answering either from a memo is a cache validating
+   * itself against its own memory. `statCacheMax: 0` and the absent
+   * `objectCache` make that structural instead of a property of who calls
+   * what.
+   */
   private readonly lfs: IsoGitFsPromises;
   private corsProxy?: string;
   private authorName: string;
@@ -182,7 +198,7 @@ export class GitCommands {
     // points (File System Access API) the same way shell/agent tools do.
     // See packages/webapp/src/git/vfs-fs-adapter.ts. This uncached instance
     // backs the class's own config reads; each `execute()` builds its own.
-    this.lfs = createIsomorphicGitFs(options.fs).promises;
+    this.lfs = createIsomorphicGitFs(options.fs, { statCacheMax: 0 }).promises;
     this.corsProxy = options.corsProxy;
     this.authorName = options.authorName ?? 'User';
     this.authorEmail = options.authorEmail ?? 'user@example.com';
@@ -217,10 +233,12 @@ export class GitCommands {
    * in time never share either one, and both are unreachable — and therefore
    * collected — as soon as the command returns.
    */
-  private contextFor(command: string): GitCommandContext {
-    const base = createIsomorphicGitFs(this.options.fs, { objectCache: true }).promises;
-    const lfs = CACHEABLE_COMMANDS.has(command) ? createCommandScopedReadCache(base) : base;
-    return {
+  private contextFor(command: string): { ctx: GitCommandContext; client: IsoGitFsClient } {
+    const client = createIsomorphicGitFs(this.options.fs, { objectCache: true });
+    const lfs = CACHEABLE_COMMANDS.has(command)
+      ? createCommandScopedReadCache(client.promises)
+      : client.promises;
+    const ctx: GitCommandContext = {
       lfs,
       fs: this.options.fs,
       // The object/pack cache is the instance's, NOT the invocation's (#2710):
@@ -242,6 +260,7 @@ export class GitCommands {
       },
       getConfigOverrides: () => this.currentConfigOverrides,
     };
+    return { ctx, client };
   }
 
   /**
@@ -414,7 +433,7 @@ export class GitCommands {
     // One context — and with it one view of `.git/objects` (#2712) plus, for a
     // cacheable subcommand, one read memo (#2709) — per invocation, so nothing
     // a command reads is visible to any other.
-    const ctx = this.contextFor(command);
+    const { ctx, client } = this.contextFor(command);
     try {
       // Object/pack cache housekeeping (#2710). The verification switch is
       // per-invocation (it reads the shell env), and `beforeCommand` re-samples
@@ -526,6 +545,12 @@ export class GitCommands {
       });
       this.currentEnv = undefined;
       this.currentConfigOverrides = undefined;
+      // The adapter is per-invocation, so its readdir-primed stat cache
+      // (#2716) dies with this call anyway — but a listing must never answer a
+      // stat issued by the NEXT command, which can run after the host
+      // filesystem moved on, so the scope boundary is stated rather than
+      // inferred from who happens to hold a reference to `ctx`.
+      client.clearStatCache();
     }
   }
 

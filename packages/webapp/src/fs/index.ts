@@ -21,6 +21,6 @@ export type {
   Stats,
   WriteFileOptions,
 } from './types.js';
-export { FsError } from './types.js';
+export { FsError, statsFromDirEntry } from './types.js';
 export type { VfsBackend, VirtualFsOptions } from './virtual-fs.js';
 export { resolveVfsBackendFromEnv, VirtualFS } from './virtual-fs.js';
