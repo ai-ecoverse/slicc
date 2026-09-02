@@ -17,6 +17,7 @@ import {
   BUNDLED_FFMPEG_CORE_VERSION,
   FFMPEG_CORE_NOT_INSTALLED,
   getFfmpeg,
+  recycleFfmpeg,
   selectFfmpegCore,
   tryLoadFfmpegCoreFromNodeModules,
 } from '../../../src/shell/supplemental-commands/ffmpeg-wasm.js';
@@ -30,7 +31,7 @@ vi.mock('../../../src/shell/supplemental-commands/ffmpeg-wasm.js', async () => {
   const actual = await vi.importActual<
     typeof import('../../../src/shell/supplemental-commands/ffmpeg-wasm.js')
   >('../../../src/shell/supplemental-commands/ffmpeg-wasm.js');
-  return { ...actual, getFfmpeg: vi.fn() };
+  return { ...actual, getFfmpeg: vi.fn(), recycleFfmpeg: vi.fn() };
 });
 
 // The page-realm branch of `requestCapturePermission` looks up the
@@ -970,6 +971,163 @@ describe('runWasmFfmpeg output validation (NS2a)', () => {
     const result = await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.gif'], ctx);
     expect(result.exitCode).toBe(0);
     expect(writeFile).toHaveBeenCalledWith('/home/out.gif', expect.any(Uint8Array));
+  });
+});
+
+describe('runWasmFfmpeg core-fault recycling', () => {
+  beforeEach(() => {
+    vi.mocked(getFfmpeg).mockReset();
+    vi.mocked(recycleFfmpeg).mockReset();
+  });
+
+  /** A core that traps on `exec`, the way a blown wasm heap does. */
+  function trappingFfmpeg(): FakeFfmpeg {
+    const fake = makeFakeFfmpeg({ exitCode: 0 });
+    fake.exec.mockRejectedValue(new WebAssembly.RuntimeError('memory access out of bounds'));
+    return fake;
+  }
+
+  it('recycles the shared core when the wasm module traps', async () => {
+    useFakeFfmpeg(trappingFfmpeg());
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', 'out.mp4'],
+      createMockCtx()
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/memory access out of bounds/);
+    expect(recycleFfmpeg).toHaveBeenCalledTimes(1);
+  });
+
+  it('tells the caller the core was recycled so a retry is worth it', async () => {
+    useFakeFfmpeg(trappingFfmpeg());
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', 'out.mp4'],
+      createMockCtx()
+    );
+
+    expect(result.stderr).toMatch(/faulted and was recycled; retry the command/);
+  });
+
+  it('skips MEMFS cleanup against a core that just faulted', async () => {
+    const fake = trappingFfmpeg();
+    useFakeFfmpeg(fake);
+    await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.mp4'], createMockCtx());
+
+    // Every deleteFile would re-enter the trapped module.
+    expect(fake.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('recycles when staging an input into MEMFS throws', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0 });
+    fake.writeFile.mockRejectedValue(new Error('FS error: out of memory'));
+    useFakeFfmpeg(fake);
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', 'out.mp4'],
+      createMockCtx()
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(recycleFfmpeg).toHaveBeenCalledTimes(1);
+  });
+
+  it('leaves the core alone for an ordinary non-zero exit', async () => {
+    // Bad flags and unsupported codecs are reported as an exit code,
+    // not a throw — the instance is still healthy.
+    const fake = makeFakeFfmpeg({ exitCode: 69 });
+    useFakeFfmpeg(fake);
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', 'out.mp4'],
+      createMockCtx()
+    );
+
+    expect(result.exitCode).toBe(69);
+    expect(recycleFfmpeg).not.toHaveBeenCalled();
+    expect(fake.deleteFile).toHaveBeenCalled();
+  });
+
+  it('leaves the core alone when the output file is missing or empty', async () => {
+    useFakeFfmpeg(makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array() }));
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', 'out.mp4'],
+      createMockCtx()
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(recycleFfmpeg).not.toHaveBeenCalled();
+  });
+});
+
+describe('runWasmFfmpeg fault classification', () => {
+  beforeEach(() => {
+    vi.mocked(getFfmpeg).mockReset();
+    vi.mocked(recycleFfmpeg).mockReset();
+  });
+
+  it('recycles when the trap only surfaces on readback', async () => {
+    // `exec` can return a stale 0 after an internal Aborted(); the
+    // trap then lands on readFile. Treating that as "no output" would
+    // leave the poisoned instance cached — the very bug being fixed.
+    const fake = makeFakeFfmpeg({ exitCode: 0 });
+    fake.readFile.mockRejectedValue(new WebAssembly.RuntimeError('memory access out of bounds'));
+    useFakeFfmpeg(fake);
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', 'out.mp4'],
+      createMockCtx()
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(recycleFfmpeg).toHaveBeenCalledTimes(1);
+    expect(result.stderr).toMatch(/faulted and was recycled/);
+    expect(fake.deleteFile).not.toHaveBeenCalled();
+  });
+
+  it('still reports a merely missing output without recycling', async () => {
+    const fake = makeFakeFfmpeg({ exitCode: 0 });
+    fake.readFile.mockRejectedValue(new Error('FS error: no such file or directory'));
+    useFakeFfmpeg(fake);
+
+    const result = await createFfmpegCommand().execute(
+      ['-i', 'in.mp4', 'out.mp4'],
+      createMockCtx()
+    );
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/produced no output file/i);
+    expect(recycleFfmpeg).not.toHaveBeenCalled();
+  });
+
+  it('passes the faulting instance to recycleFfmpeg', async () => {
+    // Without the identity, a slow run could retire a healthy core
+    // that a faster retry had already installed.
+    const fake = makeFakeFfmpeg({ exitCode: 0 });
+    fake.exec.mockRejectedValue(new WebAssembly.RuntimeError('memory access out of bounds'));
+    useFakeFfmpeg(fake);
+
+    await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.mp4'], createMockCtx());
+
+    expect(recycleFfmpeg).toHaveBeenCalledWith(fake);
+  });
+
+  it('does not blame the core when the VFS write fails', async () => {
+    // A read-only mount or an exhausted quota is not a wasm fault:
+    // no recycle, no 31 MB reboot, and MEMFS still gets tidied.
+    const fake = makeFakeFfmpeg({ exitCode: 0, readFile: () => new Uint8Array([1, 2, 3]) });
+    useFakeFfmpeg(fake);
+    const writeFile = vi.fn().mockRejectedValue(new Error('EROFS: read-only file system'));
+    const ctx = createMockCtx({ fs: { writeFile } });
+
+    const result = await createFfmpegCommand().execute(['-i', 'in.mp4', 'out.mp4'], ctx);
+
+    expect(result.exitCode).toBe(1);
+    expect(result.stderr).toMatch(/cannot write out\.mp4: EROFS/);
+    expect(result.stderr).not.toMatch(/faulted and was recycled/);
+    expect(recycleFfmpeg).not.toHaveBeenCalled();
+    expect(fake.deleteFile).toHaveBeenCalled();
   });
 });
 
