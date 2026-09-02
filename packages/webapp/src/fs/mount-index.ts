@@ -17,6 +17,7 @@
  */
 
 import { createLogger } from '../base/logger.js';
+import { shouldSkipNoiseDir } from './bounded-walk.js';
 
 const log = createLogger('mount-index');
 
@@ -116,6 +117,13 @@ async function isSameEntrySafe(
 export interface MountIndexLimits {
   maxDepth: number;
   maxEntries: number;
+  /**
+   * When true (the default), skip `node_modules` / `dist` / `build` /
+   * `coverage` and any dot-directory (`.git`, `.build`, …) while indexing —
+   * the same list sprinkle discovery uses via {@link shouldSkipNoiseDir}.
+   * Set `false` when a caller genuinely needs every path indexed.
+   */
+  skipNoiseDirs: boolean;
 }
 
 /**
@@ -132,6 +140,7 @@ export interface MountIndexLimits {
 export const RESTORED_MOUNT_INDEX_LIMITS: MountIndexLimits = {
   maxDepth: 100,
   maxEntries: 100_000,
+  skipNoiseDirs: true,
 };
 
 /**
@@ -183,6 +192,7 @@ export function resolveMountIndexLimits(env: MountIndexEnv): MountIndexLimits {
   return {
     maxDepth: resolveLimit(env, ENV_MAX_DEPTH, MAX_INDEX_DEPTH),
     maxEntries: resolveLimit(env, ENV_MAX_ENTRIES, MAX_INDEX_ENTRIES),
+    skipNoiseDirs: true,
   };
 }
 
@@ -380,9 +390,15 @@ export class MountIndex {
     }
 
     const children = data.childrenByDirectory.get(dirPath);
-    if (!children) return [];
-
-    return [...children].map(([name, type]) => ({ name, type }));
+    if (children) {
+      return [...children].map(([name, type]) => ({ name, type }));
+    }
+    // Walked directories always get an (possibly empty) child bucket via
+    // `ensureDirectoryChildren`. A missing bucket means this path was never
+    // indexed — e.g. a skipped `node_modules` reached by absolute path —
+    // so return undefined and let the caller use the slow backend path
+    // instead of claiming the directory is empty.
+    return undefined;
   }
 
   /**
@@ -777,6 +793,14 @@ export class MountIndex {
         this.addPathToChildIndex(data, childPath, 'file');
         data.state.indexed++;
       } else if (childHandle.kind === 'directory') {
+        // Default: do not ingest noise dirs (node_modules, .git, build
+        // output, …). They are omitted from the index entirely — not listed
+        // as empty children — so discovery stays O(useful files) and a
+        // later absolute-path listing falls through to the slow backend
+        // path via the missing-bucket contract in getDirectoryEntries.
+        if (data.limits.skipNoiseDirs && shouldSkipNoiseDir(name)) {
+          continue;
+        }
         this.addPathToChildIndex(data, childPath, 'directory');
         await this.walkHandle(
           childPath,

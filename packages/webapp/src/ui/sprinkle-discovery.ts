@@ -13,7 +13,7 @@
  */
 
 import { SPRINKLE_ROOTS } from '../base/sprinkle-roots.js';
-import { walkBounded } from '../fs/bounded-walk.js';
+import { shouldSkipNoiseDir, walkBounded } from '../fs/bounded-walk.js';
 import type { VirtualFS } from '../fs/index.js';
 
 /**
@@ -38,18 +38,6 @@ const MAX_SCAN_DEPTH = 6;
  * boot crawl out without limit.
  */
 const MAX_SCAN_DIRS = 500;
-
-/**
- * Directory names never entered. Dot-directories (`.git`, `.build`,
- * `.venv`, `.next`, …) are skipped wholesale — a sprinkle is a
- * user-authored panel, never build output or VCS metadata.
- */
-const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'coverage']);
-
-/** `skip` predicate for {@link walkBounded}: build output and dot-dirs. */
-function skipDir(name: string): boolean {
-  return name.startsWith('.') || SKIP_DIRS.has(name);
-}
 
 /**
  * Sprinkle names that are part of the deterministic onboarding flow
@@ -101,7 +89,7 @@ export async function discoverSprinkles(fs: VirtualFS): Promise<Map<string, Spri
 /**
  * Walk one root and collect `.shtml` files into the map (first wins).
  * Bounded by {@link MAX_SCAN_DEPTH}, {@link MAX_SCAN_DIRS} and
- * {@link skipDir} — see the module header for why.
+ * {@link shouldSkipNoiseDir} — see the module header for why.
  */
 async function scanDir(
   fs: VirtualFS,
@@ -111,7 +99,7 @@ async function scanDir(
   const walk = walkBounded(fs, root, {
     maxDepth: MAX_SCAN_DEPTH,
     maxDirs: MAX_SCAN_DIRS,
-    skip: skipDir,
+    skip: shouldSkipNoiseDir,
   });
   for await (const filePath of walk) {
     if (!filePath.endsWith('.shtml')) continue;

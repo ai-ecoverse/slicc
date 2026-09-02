@@ -157,7 +157,7 @@ describe('MountIndex cycle safety', () => {
     } as unknown as FileSystemDirectoryHandle;
 
     const index = new MountIndex();
-    index.registerMount('/mnt/flat', flat, { maxDepth: 400, maxEntries: 5 });
+    index.registerMount('/mnt/flat', flat, { maxDepth: 400, maxEntries: 5, skipNoiseDirs: true });
 
     const status = await waitForTerminalState(index, '/mnt/flat', 4000);
     const state = index.getState('/mnt/flat');
@@ -316,7 +316,7 @@ describe('resolveMountIndexLimits', () => {
       SLICC_MOUNT_INDEX_MAX_DEPTH: '12',
       SLICC_MOUNT_INDEX_MAX_ENTRIES: '500',
     });
-    expect(limits).toEqual({ maxDepth: 12, maxEntries: 500 });
+    expect(limits).toEqual({ maxDepth: 12, maxEntries: 500, skipNoiseDirs: true });
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
@@ -325,13 +325,21 @@ describe('resolveMountIndexLimits', () => {
       SLICC_MOUNT_INDEX_MAX_DEPTH: '-5',
       SLICC_MOUNT_INDEX_MAX_ENTRIES: 'not-a-number',
     });
-    expect(limits).toEqual({ maxDepth: DEFAULT_MAX_DEPTH, maxEntries: DEFAULT_MAX_ENTRIES });
+    expect(limits).toEqual({
+      maxDepth: DEFAULT_MAX_DEPTH,
+      maxEntries: DEFAULT_MAX_ENTRIES,
+      skipNoiseDirs: true,
+    });
     expect(warnSpy).toHaveBeenCalledTimes(2);
   });
 
   it('uses defaults silently when the env vars are absent', () => {
     const limits = resolveMountIndexLimits({});
-    expect(limits).toEqual({ maxDepth: DEFAULT_MAX_DEPTH, maxEntries: DEFAULT_MAX_ENTRIES });
+    expect(limits).toEqual({
+      maxDepth: DEFAULT_MAX_DEPTH,
+      maxEntries: DEFAULT_MAX_ENTRIES,
+      skipNoiseDirs: true,
+    });
     expect(warnSpy).not.toHaveBeenCalled();
   });
 
@@ -342,7 +350,91 @@ describe('resolveMountIndexLimits', () => {
         ['SLICC_MOUNT_INDEX_MAX_ENTRIES', '500'],
       ])
     );
-    expect(limits).toEqual({ maxDepth: 12, maxEntries: 500 });
+    expect(limits).toEqual({ maxDepth: 12, maxEntries: 500, skipNoiseDirs: true });
     expect(warnSpy).not.toHaveBeenCalled();
   });
+});
+
+describe('MountIndex noise-directory skip', () => {
+  const fileHandle = { kind: 'file' as const } as FileSystemHandle;
+
+  /** Project tree with useful files plus huge noise under node_modules and .git. */
+  function makeNoisyProjectHandle(): FileSystemDirectoryHandle {
+    const noiseFiles: Array<[string, FileSystemHandle]> = [];
+    for (let i = 0; i < 20; i++) {
+      noiseFiles.push([`pkg-${i}.js`, fileHandle]);
+    }
+    return makeDirectoryHandle([
+      ['README.md', fileHandle],
+      ['src', makeDirectoryHandle([['app.ts', fileHandle]])],
+      ['node_modules', makeDirectoryHandle(noiseFiles)],
+      [
+        '.git',
+        makeDirectoryHandle([
+          ['HEAD', fileHandle],
+          ['config', fileHandle],
+        ]),
+      ],
+      ['dist', makeDirectoryHandle([['bundle.js', fileHandle]])],
+    ]);
+  }
+
+  it('skips node_modules, .git, and build output by default', async () => {
+    const index = new MountIndex();
+    index.registerMount('/mnt/repo', makeNoisyProjectHandle());
+    expect(await waitForTerminalState(index, '/mnt/repo', 4000)).toBe('ready');
+
+    expect(index.getFiles('/mnt/repo')?.sort()).toEqual([
+      '/mnt/repo/README.md',
+      '/mnt/repo/src/app.ts',
+    ]);
+    expect(index.hasPath('/mnt/repo', '/mnt/repo/node_modules')).toBe(false);
+    expect(index.hasPath('/mnt/repo', '/mnt/repo/.git')).toBe(false);
+    expect(index.hasPath('/mnt/repo', '/mnt/repo/dist')).toBe(false);
+    expect(
+      index
+        .getDirectoryEntries('/mnt/repo', '/mnt/repo')
+        ?.map((e) => e.name)
+        .sort()
+    ).toEqual(['README.md', 'src']);
+    // Absolute path into a skipped subtree must not pretend the dir is empty.
+    expect(index.getDirectoryEntries('/mnt/repo', '/mnt/repo/node_modules')).toBeUndefined();
+    index.unregisterMount('/mnt/repo');
+  }, 9000);
+
+  it('indexes noise directories when skipNoiseDirs is false', async () => {
+    const index = new MountIndex();
+    index.registerMount('/mnt/repo', makeNoisyProjectHandle(), {
+      ...resolveMountIndexLimits({}),
+      skipNoiseDirs: false,
+    });
+    expect(await waitForTerminalState(index, '/mnt/repo', 4000)).toBe('ready');
+
+    expect(index.hasPath('/mnt/repo', '/mnt/repo/node_modules/pkg-0.js')).toBe(true);
+    expect(index.hasPath('/mnt/repo', '/mnt/repo/.git/HEAD')).toBe(true);
+    expect(index.hasPath('/mnt/repo', '/mnt/repo/dist/bundle.js')).toBe(true);
+    index.unregisterMount('/mnt/repo');
+  }, 9000);
+
+  it('reaches the entry budget later when noise dirs are skipped', async () => {
+    // Same tree, tight budget: with skip the useful files fit; without skip,
+    // node_modules alone blows the budget before src is reached.
+    const tight = { maxDepth: 400, maxEntries: 8, skipNoiseDirs: true as const };
+
+    const skipped = new MountIndex();
+    skipped.registerMount('/mnt/fit', makeNoisyProjectHandle(), tight);
+    expect(await waitForTerminalState(skipped, '/mnt/fit', 4000)).toBe('ready');
+    expect(skipped.hasPath('/mnt/fit', '/mnt/fit/src/app.ts')).toBe(true);
+    skipped.unregisterMount('/mnt/fit');
+
+    const unfiltered = new MountIndex();
+    unfiltered.registerMount('/mnt/blow', makeNoisyProjectHandle(), {
+      ...tight,
+      skipNoiseDirs: false,
+    });
+    const status = await waitForTerminalState(unfiltered, '/mnt/blow', 4000);
+    expect(status).toBe('error');
+    expect(unfiltered.getState('/mnt/blow')?.abortCause).toBe('entries-exceeded');
+    unfiltered.unregisterMount('/mnt/blow');
+  }, 9000);
 });
