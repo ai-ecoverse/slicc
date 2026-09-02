@@ -64,6 +64,17 @@ function makeWideHandle(): FileSystemDirectoryHandle {
   return root as unknown as FileSystemDirectoryHandle;
 }
 
+function makeDirectoryHandle(
+  entries: Array<[string, FileSystemHandle]>
+): FileSystemDirectoryHandle {
+  return {
+    kind: 'directory' as const,
+    async *[Symbol.asyncIterator](): AsyncGenerator<[string, FileSystemHandle]> {
+      yield* entries;
+    },
+  } as unknown as FileSystemDirectoryHandle;
+}
+
 async function waitForTerminalState(
   index: MountIndex,
   path: string,
@@ -196,6 +207,92 @@ describe('MountIndex cycle safety', () => {
     expect(status).toBe('ready');
     expect(index.getState('/mnt/finite')?.indexed).toBe(3); // 2 files + the root dir
   }, 9000);
+});
+
+describe('MountIndex directory entries', () => {
+  const fileHandle = { kind: 'file' as const } as FileSystemHandle;
+
+  it('lists a small directory without scanning 10,000 unrelated indexed paths', async () => {
+    const rootEntries: Array<[string, FileSystemHandle]> = [];
+    for (let bucket = 0; bucket < 100; bucket++) {
+      const bucketEntries: Array<[string, FileSystemHandle]> = [];
+      for (let file = 0; file < 100; file++) {
+        bucketEntries.push([`file-${file}.txt`, fileHandle]);
+      }
+      rootEntries.push([`bucket-${bucket}`, makeDirectoryHandle(bucketEntries)]);
+    }
+    rootEntries.push([
+      'target',
+      makeDirectoryHandle([
+        ['first.ts', fileHandle],
+        ['second.ts', fileHandle],
+      ]),
+    ]);
+
+    const index = new MountIndex();
+    index.registerMount('/mnt/large', makeDirectoryHandle(rootEntries));
+    expect(await waitForTerminalState(index, '/mnt/large', 9000)).toBe('ready');
+
+    const mountData = (
+      index as unknown as {
+        mounts: Map<string, { files: Set<string>; directories: Set<string> }>;
+      }
+    ).mounts.get('/mnt/large');
+    expect(mountData).toBeDefined();
+
+    const fileIterator = vi.spyOn(mountData!.files, Symbol.iterator).mockImplementation(() => {
+      throw new Error('getDirectoryEntries scanned all files');
+    });
+    const directoryIterator = vi
+      .spyOn(mountData!.directories, Symbol.iterator)
+      .mockImplementation(() => {
+        throw new Error('getDirectoryEntries scanned all directories');
+      });
+
+    expect(index.getDirectoryEntries('/mnt/large', '/mnt/large/target')).toEqual([
+      { name: 'first.ts', type: 'file' },
+      { name: 'second.ts', type: 'file' },
+    ]);
+
+    fileIterator.mockRestore();
+    directoryIterator.mockRestore();
+    index.unregisterMount('/mnt/large');
+  }, 15_000);
+
+  it('keeps directory child buckets current across writes, renames, and deletes', async () => {
+    const index = new MountIndex();
+    index.registerMount(
+      '/mnt/project',
+      makeDirectoryHandle([
+        ['README.md', fileHandle],
+        ['src', makeDirectoryHandle([['app.ts', fileHandle]])],
+      ])
+    );
+    expect(await waitForTerminalState(index, '/mnt/project', 4000)).toBe('ready');
+
+    index.notifyWrite('/mnt/project/src/new.ts');
+    expect(index.getDirectoryEntries('/mnt/project', '/mnt/project/src')).toEqual([
+      { name: 'app.ts', type: 'file' },
+      { name: 'new.ts', type: 'file' },
+    ]);
+
+    index.notifyRename('/mnt/project/src/new.ts', '/mnt/project/src/renamed.ts');
+    index.notifyRename('/mnt/project/src', '/mnt/project/lib');
+    expect(index.getDirectoryEntries('/mnt/project', '/mnt/project')).toEqual([
+      { name: 'README.md', type: 'file' },
+      { name: 'lib', type: 'directory' },
+    ]);
+    expect(index.getDirectoryEntries('/mnt/project', '/mnt/project/lib')).toEqual([
+      { name: 'app.ts', type: 'file' },
+      { name: 'renamed.ts', type: 'file' },
+    ]);
+
+    index.notifyDelete('/mnt/project/lib');
+    expect(index.getDirectoryEntries('/mnt/project', '/mnt/project')).toEqual([
+      { name: 'README.md', type: 'file' },
+    ]);
+    expect(index.hasPath('/mnt/project', '/mnt/project/lib/app.ts')).toBe(false);
+  });
 });
 
 describe('resolveMountIndexLimits', () => {
