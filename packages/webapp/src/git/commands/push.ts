@@ -22,6 +22,7 @@ export async function push(
 
   const result = await git.push({
     fs: ctx.lfs,
+    cache: ctx.cache,
     http: gitHttp,
     dir: cwd,
     remote,

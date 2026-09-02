@@ -52,12 +52,12 @@ async function stashPush(
   }
 
   // Detect dirty files by directly comparing HEAD content with VFS content.
-  const headFiles = await git.listFiles({ fs: ctx.lfs, dir: cwd, ref: 'HEAD' });
-  const indexFiles = await git.listFiles({ fs: ctx.lfs, dir: cwd });
+  const headFiles = await git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, ref: 'HEAD' });
+  const indexFiles = await git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: cwd });
   const allTracked = new Set([...headFiles, ...indexFiles]);
 
   // Also detect newly staged files via statusMatrix
-  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
+  const matrix = await git.statusMatrix({ fs: ctx.lfs, cache: ctx.cache, dir: cwd });
   for (const [file, head, , stage] of matrix) {
     if (head === 0 && stage !== 0) allTracked.add(file);
   }
@@ -84,7 +84,12 @@ async function stashPush(
     /* no previous stash */
   }
 
-  const { commit: headCommit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid: headOid });
+  const { commit: headCommit } = await git.readCommit({
+    fs: ctx.lfs,
+    cache: ctx.cache,
+    dir: cwd,
+    oid: headOid,
+  });
   const message = `WIP on ${branch}: ${headOid.slice(0, 7)} ${headCommit.message.split('\n')[0]}`;
   const author = await ctx.resolveAuthor(cwd);
   const timestamp = Math.floor(Date.now() / 1000);
@@ -137,7 +142,13 @@ async function stashCollectDirty(
     }
 
     if (inHead) {
-      const { blob } = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid: headOid, filepath });
+      const { blob } = await git.readBlob({
+        fs: ctx.lfs,
+        cache: ctx.cache,
+        dir: cwd,
+        oid: headOid,
+        filepath,
+      });
       const headContent = new TextDecoder().decode(blob);
 
       if (workdirContent === undefined) {
@@ -183,19 +194,26 @@ async function stashRestoreWorkdir(
         /* ignore */
       }
       try {
-        await git.remove({ fs: ctx.lfs, dir: cwd, filepath: dirty.file });
+        await git.remove({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: dirty.file });
       } catch {
         /* ignore */
       }
     } else {
       const { blob } = await git.readBlob({
         fs: ctx.lfs,
+        cache: ctx.cache,
         dir: cwd,
         oid: headOid,
         filepath: dirty.file,
       });
       await ctx.fs.writeFile(`${cwd}/${dirty.file}`, blob);
-      await git.resetIndex({ fs: ctx.lfs, dir: cwd, filepath: dirty.file, ref: headOid });
+      await git.resetIndex({
+        fs: ctx.lfs,
+        cache: ctx.cache,
+        dir: cwd,
+        filepath: dirty.file,
+        ref: headOid,
+      });
     }
   }
 }
@@ -268,7 +286,12 @@ async function stashRestore(
     return { stdout: '', stderr: 'error: No stash entries found.\n', exitCode: 1 };
   }
 
-  const { commit: stashCommit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid: stashOid });
+  const { commit: stashCommit } = await git.readCommit({
+    fs: ctx.lfs,
+    cache: ctx.cache,
+    dir: cwd,
+    oid: stashOid,
+  });
   const headOid = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: 'HEAD' });
   // The merge base is the stash's original base commit, not the current HEAD:
   // HEAD may have advanced since the stash was created.
@@ -325,11 +348,16 @@ async function mergeStashTree(
   const stashFiles = new Map<string, Uint8Array>();
 
   const walkTree = async (oid: string, prefix: string): Promise<void> => {
-    const { tree } = await git.readTree({ fs: ctx.lfs, dir: cwd, oid });
+    const { tree } = await git.readTree({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid });
     for (const entry of tree) {
       const filepath = prefix ? `${prefix}/${entry.path}` : entry.path;
       if (entry.type === 'blob') {
-        const { blob } = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid: entry.oid });
+        const { blob } = await git.readBlob({
+          fs: ctx.lfs,
+          cache: ctx.cache,
+          dir: cwd,
+          oid: entry.oid,
+        });
         stashFiles.set(filepath, blob);
       } else if (entry.type === 'tree') {
         await walkTree(entry.oid, filepath);
@@ -340,7 +368,12 @@ async function mergeStashTree(
 
   const baseFileSet = new Set<string>();
   try {
-    const baseFiles = await git.listFiles({ fs: ctx.lfs, dir: cwd, ref: baseOid });
+    const baseFiles = await git.listFiles({
+      fs: ctx.lfs,
+      cache: ctx.cache,
+      dir: cwd,
+      ref: baseOid,
+    });
     for (const f of baseFiles) baseFileSet.add(f);
   } catch {
     /* no base */
@@ -382,7 +415,7 @@ async function mergeStashTree(
     if (conflicted) {
       conflicts.push(filepath);
     } else if (mergedText !== base) {
-      await git.add({ fs: ctx.lfs, dir: cwd, filepath });
+      await git.add({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath });
     }
   }
 
@@ -395,7 +428,7 @@ async function mergeStashTree(
       } catch {
         /* ignore */
       }
-      await git.remove({ fs: ctx.lfs, dir: cwd, filepath });
+      await git.remove({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath });
     }
   }
 
@@ -410,7 +443,13 @@ async function readBaseText(
   filepath: string
 ): Promise<string> {
   try {
-    const { blob } = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid: baseOid, filepath });
+    const { blob } = await git.readBlob({
+      fs: ctx.lfs,
+      cache: ctx.cache,
+      dir: cwd,
+      oid: baseOid,
+      filepath,
+    });
     return new TextDecoder().decode(blob);
   } catch {
     return '';
@@ -425,7 +464,12 @@ async function stashList(ctx: GitCommandContext, cwd: string): Promise<GitComman
     let currentRef = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref: 'refs/stash' });
 
     while (currentRef) {
-      const { commit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid: currentRef });
+      const { commit } = await git.readCommit({
+        fs: ctx.lfs,
+        cache: ctx.cache,
+        dir: cwd,
+        oid: currentRef,
+      });
       output += `stash@{${index}}: ${commit.message}\n`;
       index++;
 
@@ -462,7 +506,12 @@ async function stashDrop(
   }
 
   if (index === 0) {
-    const { commit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid: topOid });
+    const { commit } = await git.readCommit({
+      fs: ctx.lfs,
+      cache: ctx.cache,
+      dir: cwd,
+      oid: topOid,
+    });
     if (commit.parent.length > 1) {
       await git.writeRef({
         fs: ctx.lfs,
@@ -485,7 +534,12 @@ async function stashDrop(
   const chain: { oid: string; commit: git.CommitObject }[] = [];
   let current = topOid;
   for (let i = 0; i < index; i++) {
-    const { commit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid: current });
+    const { commit } = await git.readCommit({
+      fs: ctx.lfs,
+      cache: ctx.cache,
+      dir: cwd,
+      oid: current,
+    });
     chain.push({ oid: current, commit });
     if (commit.parent.length <= 1) {
       return { stdout: '', stderr: `error: stash@{${index}} not found\n`, exitCode: 1 };
@@ -497,6 +551,7 @@ async function stashDrop(
   const dropOid = current;
   const { commit: droppedCommit } = await git.readCommit({
     fs: ctx.lfs,
+    cache: ctx.cache,
     dir: cwd,
     oid: dropOid,
   });
@@ -543,7 +598,12 @@ async function stashShow(ctx: GitCommandContext, cwd: string): Promise<GitComman
     return { stdout: '', stderr: 'error: No stash entries found.\n', exitCode: 1 };
   }
 
-  const { commit: stashCommit } = await git.readCommit({ fs: ctx.lfs, dir: cwd, oid: stashOid });
+  const { commit: stashCommit } = await git.readCommit({
+    fs: ctx.lfs,
+    cache: ctx.cache,
+    dir: cwd,
+    oid: stashOid,
+  });
   const baseOid = stashCommit.parent[0];
 
   return diffCommits(ctx, cwd, baseOid, stashOid, { nameOnly: false, stat: true });

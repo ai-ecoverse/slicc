@@ -64,7 +64,7 @@ export async function checkout(
   }
 
   try {
-    await git.checkout({ fs: ctx.lfs, dir: cwd, ref, force });
+    await git.checkout({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, ref, force });
   } catch (err: unknown) {
     return formatCheckoutError(err, ref);
   }
@@ -113,7 +113,7 @@ async function checkoutFiles(
   const oid = await git.resolveRef({ fs: ctx.lfs, dir: cwd, ref });
 
   for (const filepath of filePaths) {
-    const { blob } = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid, filepath });
+    const { blob } = await git.readBlob({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid, filepath });
     // Ensure parent directory exists
     const slashIdx = filepath.lastIndexOf('/');
     if (slashIdx !== -1) {
@@ -121,7 +121,7 @@ async function checkoutFiles(
     }
     await ctx.fs.writeFile(`${cwd}/${filepath}`, blob);
     // Also update the index to match
-    await git.add({ fs: ctx.lfs, dir: cwd, filepath });
+    await git.add({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath });
   }
 
   // Persist restored-file metadata to the OPFS sidecar (no-op on memory).

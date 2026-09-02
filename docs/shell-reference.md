@@ -214,6 +214,26 @@ allowed to write: anything read-only spreads `NO_INDEX_REFRESH` into its
 that legitimately write the index (`add`, `commit`, `reset`, `stash`,
 `rebase`).
 
+### Packfiles are read once per shell, not once per command
+
+isomorphic-git keeps parsed `.idx` files and read `.pack` buffers on the `cache`
+object the CALLER hands it. Every `git` subcommand shares ONE cache per
+`GitCommands` instance (`packages/webapp/src/git/git-cache.ts`, #2710), so a
+second command reuses the packfile the first one paid for; a new isomorphic-git
+call site that forgets `cache: ctx.cache` silently re-reads the whole pack (92 MB
+over the bridge on the slicc checkout) and re-parses all 30 indexes.
+
+The cache is dropped for a repository when its `objects/pack` listing or
+`packed-refs` mtime moves, and after `fetch` / `pull` / `clone`. At most four
+pack BUFFERS stay resident; the least recently used are unloaded and re-read on
+demand, while their parsed indexes stay cached.
+
+`git` also skips isomorphic-git's deep SHA-1 verification of the pack payload
+(`patches/isomorphic-git+1.41.9.patch`) — a 5.2 s hash of a 92 MB pack that
+canonical git only performs on `fsck` / `index-pack`. The O(1) trailer check
+still runs, and `SLICC_GIT_VERIFY_PACKS=1` in the environment turns the deep
+check back on.
+
 ### `git diff` never reads an unchanged blob
 
 Every git command runs against the VFS, so on a `--mount`ed host repo each object

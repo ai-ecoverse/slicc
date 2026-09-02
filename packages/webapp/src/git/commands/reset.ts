@@ -17,10 +17,10 @@ export async function reset(
 
   if (!hasMode && positional.length === 0) {
     // "git reset" with no args — unstage all files
-    const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
+    const matrix = await git.statusMatrix({ fs: ctx.lfs, cache: ctx.cache, dir: cwd });
     for (const [file, head, , stage] of matrix) {
       if (stage !== head) {
-        await git.resetIndex({ fs: ctx.lfs, dir: cwd, filepath: file });
+        await git.resetIndex({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: file });
       }
     }
     return { stdout: '', stderr: '', exitCode: 0 };
@@ -31,16 +31,16 @@ export async function reset(
     const files = positional.filter((a) => a !== 'HEAD');
     if (files.length === 0) {
       // "git reset HEAD" — unstage all
-      const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
+      const matrix = await git.statusMatrix({ fs: ctx.lfs, cache: ctx.cache, dir: cwd });
       for (const [file, head, , stage] of matrix) {
         if (stage !== head) {
-          await git.resetIndex({ fs: ctx.lfs, dir: cwd, filepath: file });
+          await git.resetIndex({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: file });
         }
       }
       return { stdout: '', stderr: '', exitCode: 0 };
     }
     for (const file of files) {
-      await git.resetIndex({ fs: ctx.lfs, dir: cwd, filepath: file });
+      await git.resetIndex({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: file });
     }
     return { stdout: '', stderr: '', exitCode: 0 };
   }
@@ -73,9 +73,11 @@ export async function reset(
 
   // --mixed (default) or --hard: reset index to match the target commit
   // Collect previously tracked files before resetting index (needed for --hard cleanup)
-  const previouslyTracked = new Set(await git.listFiles({ fs: ctx.lfs, dir: cwd }));
+  const previouslyTracked = new Set(
+    await git.listFiles({ fs: ctx.lfs, cache: ctx.cache, dir: cwd })
+  );
   for (const file of previouslyTracked) {
-    await git.remove({ fs: ctx.lfs, dir: cwd, filepath: file });
+    await git.remove({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: file });
   }
   await resetIndexToCommit(ctx, cwd, targetOid);
 
@@ -90,7 +92,7 @@ export async function reset(
 }
 
 async function resetIndexToCommit(ctx: GitCommandContext, cwd: string, oid: string): Promise<void> {
-  const { tree } = await git.readTree({ fs: ctx.lfs, dir: cwd, oid });
+  const { tree } = await git.readTree({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid });
   await addTreeToIndex(ctx, cwd, oid, tree, '');
 }
 
@@ -104,10 +106,11 @@ async function addTreeToIndex(
   for (const entry of tree) {
     const filepath = prefix ? `${prefix}/${entry.path}` : entry.path;
     if (entry.type === 'blob') {
-      await git.resetIndex({ fs: ctx.lfs, dir: cwd, filepath, ref: commitOid });
+      await git.resetIndex({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath, ref: commitOid });
     } else if (entry.type === 'tree') {
       const { tree: subtree } = await git.readTree({
         fs: ctx.lfs,
+        cache: ctx.cache,
         dir: cwd,
         oid: entry.oid,
       });
@@ -123,11 +126,11 @@ async function resetWorkdirToCommit(
   previouslyTracked: Set<string>
 ): Promise<void> {
   const targetFiles = new Set<string>();
-  const { tree } = await git.readTree({ fs: ctx.lfs, dir: cwd, oid });
+  const { tree } = await git.readTree({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid });
   await collectTreeFiles(ctx, cwd, tree, '', targetFiles);
 
   for (const filepath of targetFiles) {
-    const { blob } = await git.readBlob({ fs: ctx.lfs, dir: cwd, oid, filepath });
+    const { blob } = await git.readBlob({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid, filepath });
     const slashIdx = filepath.lastIndexOf('/');
     if (slashIdx !== -1) {
       await ctx.fs.mkdir(`${cwd}/${filepath.slice(0, slashIdx)}`, { recursive: true });
@@ -162,6 +165,7 @@ async function collectTreeFiles(
     } else if (entry.type === 'tree') {
       const { tree: subtree } = await git.readTree({
         fs: ctx.lfs,
+        cache: ctx.cache,
         dir: cwd,
         oid: entry.oid,
       });

@@ -9,6 +9,7 @@
  */
 
 import type { VirtualFS } from '../../fs/index.js';
+import type { GitCache } from '../git-cache.js';
 import type { IsoGitFsPromises } from '../vfs-fs-adapter.js';
 
 export interface GitCommandResult {
@@ -29,6 +30,17 @@ export interface GitCommandsOptions {
   authorEmail?: string;
   /** Global VirtualFS database name for shared git config values. */
   globalDbName?: string;
+  /**
+   * Max packfile buffers kept resident across commands (issue #2710).
+   * Defaults to `DEFAULT_MAX_RESIDENT_PACKS`.
+   */
+  maxResidentPacks?: number;
+  /**
+   * Run isomorphic-git's deep (full payload) SHA-1 verification on every
+   * packfile read. Off by default — see `git-cache.ts`. `$SLICC_GIT_VERIFY_PACKS`
+   * turns it back on for a single shell.
+   */
+  verifyPackfiles?: boolean;
 }
 
 /**
@@ -42,6 +54,12 @@ export interface GitCommandContext {
   readonly lfs: IsoGitFsPromises;
   /** The raw VirtualFS instance, for direct workdir reads/writes. */
   readonly fs: VirtualFS;
+  /**
+   * The instance-wide isomorphic-git object/pack cache (issue #2710). Pass it
+   * as `cache:` to EVERY isomorphic-git call that accepts one — a call that
+   * omits it re-reads and re-parses the repository's packfiles from scratch.
+   */
+  readonly cache: GitCache;
   /** CORS proxy URL for remote operations. */
   readonly corsProxy?: string;
   /** onAuth callback for isomorphic-git network operations (or undefined). */

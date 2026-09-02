@@ -18,7 +18,12 @@ export async function lsFiles(
     .map((p) => p.replace(/\/+$/, ''))
     .filter((p) => p.length > 0);
 
-  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd, ...NO_INDEX_REFRESH });
+  const matrix = await git.statusMatrix({
+    fs: ctx.lfs,
+    cache: ctx.cache,
+    dir: cwd,
+    ...NO_INDEX_REFRESH,
+  });
   const files: string[] = [];
 
   const mode = others ? 'others' : modified ? 'modified' : deleted ? 'deleted' : 'cached';

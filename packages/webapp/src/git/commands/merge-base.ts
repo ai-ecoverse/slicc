@@ -20,6 +20,7 @@ export async function mergeBase(
       if (oids[0] === oids[1]) return { stdout: '', stderr: '', exitCode: 0 };
       const yes = await git.isDescendent({
         fs: ctx.lfs,
+        cache: ctx.cache,
         dir: cwd,
         oid: oids[1],
         ancestor: oids[0],
@@ -27,7 +28,7 @@ export async function mergeBase(
       });
       return { stdout: '', stderr: '', exitCode: yes ? 0 : 1 };
     }
-    const bases = await git.findMergeBase({ fs: ctx.lfs, dir: cwd, oids });
+    const bases = await git.findMergeBase({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oids });
     return { stdout: bases[0] ? `${bases[0]}\n` : '', stderr: '', exitCode: bases[0] ? 0 : 1 };
   } catch {
     return { stdout: '', stderr: 'fatal: Not a valid object name\n', exitCode: 128 };

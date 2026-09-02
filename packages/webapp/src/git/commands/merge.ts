@@ -41,6 +41,7 @@ export async function merge(
   try {
     const result = await git.merge({
       fs: ctx.lfs,
+      cache: ctx.cache,
       dir: cwd,
       ours: (await git.currentBranch({ fs: ctx.lfs, dir: cwd })) ?? undefined,
       theirs,
@@ -59,6 +60,7 @@ export async function merge(
       // Fast-forward: update the working directory to match the new HEAD
       await git.checkout({
         fs: ctx.lfs,
+        cache: ctx.cache,
         dir: cwd,
         ref: (await git.currentBranch({ fs: ctx.lfs, dir: cwd })) ?? 'HEAD',
       });
@@ -76,6 +78,7 @@ export async function merge(
       // skip it. `force` syncs the working tree to the merge result.
       await git.checkout({
         fs: ctx.lfs,
+        cache: ctx.cache,
         dir: cwd,
         ref: (await git.currentBranch({ fs: ctx.lfs, dir: cwd })) ?? 'HEAD',
         force: true,

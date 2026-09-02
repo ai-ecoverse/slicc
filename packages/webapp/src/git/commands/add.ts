@@ -31,7 +31,7 @@ export async function add(
     await addUpdate(ctx, cwd, force);
   } else {
     for (const filepath of paths) {
-      await git.add({ fs: ctx.lfs, dir: cwd, filepath, force });
+      await git.add({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath, force });
     }
   }
 
@@ -40,37 +40,37 @@ export async function add(
 
 /** Stage ALL changes (new, modified, deleted). */
 async function addAll(ctx: GitCommandContext, cwd: string, force: boolean): Promise<void> {
-  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
+  const matrix = await git.statusMatrix({ fs: ctx.lfs, cache: ctx.cache, dir: cwd });
   for (const [file, , workdir, stage] of matrix) {
     if (workdir === stage) continue;
     if (workdir === 0) {
-      await git.remove({ fs: ctx.lfs, dir: cwd, filepath: file });
+      await git.remove({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: file });
     } else {
-      await git.add({ fs: ctx.lfs, dir: cwd, filepath: file, force });
+      await git.add({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: file, force });
     }
   }
 }
 
 /** Stage new and modified files, but NOT deletions (git add .). */
 async function addDot(ctx: GitCommandContext, cwd: string, force: boolean): Promise<void> {
-  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
+  const matrix = await git.statusMatrix({ fs: ctx.lfs, cache: ctx.cache, dir: cwd });
   for (const [file, , workdir, stage] of matrix) {
     if (workdir === stage) continue;
     if (workdir === 0) continue;
-    await git.add({ fs: ctx.lfs, dir: cwd, filepath: file, force });
+    await git.add({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: file, force });
   }
 }
 
 /** Stage modifications and deletions of tracked files only (no new/untracked files). */
 async function addUpdate(ctx: GitCommandContext, cwd: string, force: boolean): Promise<void> {
-  const matrix = await git.statusMatrix({ fs: ctx.lfs, dir: cwd });
+  const matrix = await git.statusMatrix({ fs: ctx.lfs, cache: ctx.cache, dir: cwd });
   for (const [file, head, workdir, stage] of matrix) {
     if (head === 0) continue;
     if (workdir === stage) continue;
     if (workdir === 0) {
-      await git.remove({ fs: ctx.lfs, dir: cwd, filepath: file });
+      await git.remove({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: file });
     } else {
-      await git.add({ fs: ctx.lfs, dir: cwd, filepath: file, force });
+      await git.add({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: file, force });
     }
   }
 }

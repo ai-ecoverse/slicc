@@ -37,8 +37,8 @@ export async function mv(
 
   await ctx.fs.writeFile(dstPath, content);
   await ctx.fs.rm(srcPath);
-  await git.add({ fs: ctx.lfs, dir: cwd, filepath: dst });
-  await git.remove({ fs: ctx.lfs, dir: cwd, filepath: src });
+  await git.add({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: dst });
+  await git.remove({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, filepath: src });
 
   return { stdout: '', stderr: '', exitCode: 0 };
 }

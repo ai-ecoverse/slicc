@@ -50,6 +50,7 @@ export async function tag(
     // Annotated tag
     await git.annotatedTag({
       fs: ctx.lfs,
+      cache: ctx.cache,
       dir: cwd,
       ref: tagName,
       message: message ?? tagName,

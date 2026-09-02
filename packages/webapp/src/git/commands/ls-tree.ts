@@ -55,7 +55,7 @@ export async function lsTree(
 
   let rootTree: TreeEntry[];
   try {
-    const result = await git.readTree({ fs: ctx.lfs, dir: cwd, oid });
+    const result = await git.readTree({ fs: ctx.lfs, cache: ctx.cache, dir: cwd, oid });
     rootTree = result.tree as TreeEntry[];
   } catch {
     return {
@@ -107,6 +107,7 @@ async function walkTree(
       if (shouldDescend) {
         const { tree: subtree } = await git.readTree({
           fs: ctx.lfs,
+          cache: ctx.cache,
           dir: cwd,
           oid: entry.oid,
         });

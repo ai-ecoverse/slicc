@@ -23,6 +23,7 @@ export async function pull(
 
   await git.pull({
     fs: ctx.lfs,
+    cache: ctx.cache,
     http: gitHttp,
     dir: cwd,
     remote,

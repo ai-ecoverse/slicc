@@ -24,6 +24,7 @@ export async function fetch(
 
   const result = await git.fetch({
     fs: ctx.lfs,
+    cache: ctx.cache,
     http: gitHttp,
     dir: cwd,
     remote,

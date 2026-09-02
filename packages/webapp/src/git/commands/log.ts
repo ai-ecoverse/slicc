@@ -64,7 +64,7 @@ async function selectCommits(
 ): Promise<Awaited<ReturnType<typeof git.log>>> {
   const range = selection.revision ? splitLogRange(selection.revision) : null;
   const ref = range?.[1] ?? selection.revision;
-  const caches = createPathspecCaches();
+  const caches = createPathspecCaches(ctx.cache);
   // Historic default for the filtered forms: `git log` itself is unbounded, but
   // the pathspec/range paths have always capped at 10 entries.
   const limit = selection.maxCount ?? 10;
@@ -272,6 +272,7 @@ async function logAllBranches(
     try {
       const branchCommits = await git.log({
         fs: ctx.lfs,
+        cache: ctx.cache,
         dir: cwd,
         ref: branch,
         depth: maxCount ?? 50,
@@ -361,7 +362,10 @@ function splitLogRange(value: string): [string, string] | null {
 
 /** Per-command memo tables for the pathspec tree lookups. */
 interface PathspecCaches {
-  /** Shared isomorphic-git object/pack cache across every call in one command. */
+  /**
+   * The instance-wide isomorphic-git object/pack cache (`ctx.cache`, #2710) —
+   * shared across every call in this command AND across commands.
+   */
   git: object;
   /** commit oid -> tree oid. */
   commitTrees: Map<string, string>;
@@ -371,8 +375,8 @@ interface PathspecCaches {
   entries: Map<string, string | undefined>;
 }
 
-function createPathspecCaches(): PathspecCaches {
-  return { git: {}, commitTrees: new Map(), trees: new Map(), entries: new Map() };
+function createPathspecCaches(gitCache: object): PathspecCaches {
+  return { git: gitCache, commitTrees: new Map(), trees: new Map(), entries: new Map() };
 }
 
 async function readTreeCached(
