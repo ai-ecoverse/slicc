@@ -22,8 +22,8 @@
     "node-server": {
       "lines": 83,
       "statements": 81,
-      "functions": 84,
-      "branches": 71,
+      "functions": 85,
+      "branches": 72,
       "coverageExclude": [
         "**/node_modules/**",
         "**/dist/**",
