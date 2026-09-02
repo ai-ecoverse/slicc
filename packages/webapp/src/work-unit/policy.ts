@@ -9,7 +9,18 @@
 
 import { normalizePath } from '../fs/path-utils.js';
 import type { RegisteredScoop } from '../scoops/types.js';
-import type { CompletionPolicy, FileSystemPolicy, WorkUnitId, WorkUnitPolicy } from './types.js';
+import type {
+  CompletionPolicy,
+  FileSystemPolicy,
+  WorkspaceIsolationMode,
+  WorkUnitId,
+  WorkUnitPolicy,
+} from './types.js';
+import {
+  DEFAULT_CHILD_WORKSPACE_MODE,
+  parseWorkspaceMode,
+  workspaceModeRank,
+} from './workspace-mode.js';
 
 /** `true` when the record is a root unit (a cone). The ONLY root test. */
 export function isRootUnit(scoop: Pick<RegisteredScoop, 'parentJid'>): boolean {
@@ -41,6 +52,14 @@ export function delegatedChildPolicy(
     writablePaths?: readonly string[];
     visiblePaths?: readonly string[];
     /**
+    /**
+     * Sharing policy (#2277). Default `shared-readonly` is today's scoop.
+     * Unimplemented modes are still recorded on the policy so a restore of a
+     * future record does not silently downgrade; construction throws before
+     * a RestrictedFS is built.
+     */
+    mode?: WorkspaceIsolationMode;
+    /**
      * Shell allow-list. Omitted → unrestricted (same as ScoopConfig).
      */
     allowedCommands?: readonly string[];
@@ -62,6 +81,7 @@ export function delegatedChildPolicy(
   return {
     filesystem: {
       kind: 'restricted',
+      mode: paths.mode ?? DEFAULT_CHILD_WORKSPACE_MODE,
       writablePaths: [...(paths.writablePaths ?? [])],
       visiblePaths: [...(paths.visiblePaths ?? [])],
     },
@@ -85,9 +105,16 @@ export function derivePolicy(scoop: RegisteredScoop): WorkUnitPolicy {
     writablePaths: scoop.config?.writablePaths,
     visiblePaths: scoop.config?.visiblePaths,
     allowedCommands: scoop.config?.allowedCommands,
+    mode: childModeFromConfig(scoop.config?.workspaceMode),
     approvesGuestRequests: scoop.approvesGuestRequests === true,
     canCreateChildren: scoop.config?.canCreateChildren === true,
   });
+}
+
+function childModeFromConfig(raw: string | undefined): WorkspaceIsolationMode {
+  if (raw === 'snapshot' || raw === 'shared-live') return raw;
+  const parsed = parseWorkspaceMode(raw);
+  return parsed.ok ? parsed.mode : DEFAULT_CHILD_WORKSPACE_MODE;
 }
 
 /** Derive the completion policy of a registered record. */
@@ -188,6 +215,11 @@ export function isPolicySubset(child: WorkUnitPolicy, parent: WorkUnitPolicy): b
   }
   if (!isFilesystemSubset(child.filesystem, parent.filesystem)) return false;
   if (!isCommandSubset(child.allowedCommands, parent.allowedCommands)) return false;
+  if (child.filesystem.kind === 'restricted' && parent.filesystem.kind === 'restricted') {
+    if (workspaceModeRank(child.filesystem.mode) > workspaceModeRank(parent.filesystem.mode)) {
+      return false;
+    }
+  }
   return true;
 }
 

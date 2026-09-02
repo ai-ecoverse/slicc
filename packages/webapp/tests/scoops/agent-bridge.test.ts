@@ -289,6 +289,7 @@ describe('createAgentBridge — config construction', () => {
     expect(scoop.config).toEqual({
       visiblePaths: ['/workspace/'],
       writablePaths: ['/workspace/', '/shared/', '/scoops/agent-exuberant-lavender/', '/tmp/'],
+      workspaceMode: 'shared-readonly',
       allowedCommands: ['*'],
     });
   });
@@ -450,6 +451,49 @@ describe('createAgentBridge — config construction', () => {
     await bridge.spawn({ ...BASE_OPTS, visiblePaths: [] });
 
     expect(registerCalls[0].config?.visiblePaths).toEqual([]);
+  });
+
+  it('workspaceMode private drops parent workspace, invokingCwd, and implicit /shared/', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({
+      ...BASE_OPTS,
+      workspaceMode: 'private',
+      invokingCwd: '/home/user',
+    });
+
+    expect(registerCalls[0].config?.workspaceMode).toBe('private');
+    expect(registerCalls[0].config?.visiblePaths).toEqual([]);
+    expect(registerCalls[0].config?.writablePaths).not.toContain('/shared/');
+    expect(registerCalls[0].config?.writablePaths).toContain(`${BASE_OPTS.cwd}/`);
+  });
+
+  it('default spawn still names shared-readonly and keeps /shared/ writable', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    await bridge.spawn({ ...BASE_OPTS });
+
+    expect(registerCalls[0].config?.workspaceMode).toBe('shared-readonly');
+    expect(registerCalls[0].config?.writablePaths).toContain('/shared/');
+    expect(registerCalls[0].config?.visiblePaths).toContain('/workspace/');
+  });
+
+  it('rejects snapshot / shared-live before registering a scoop', async () => {
+    const { orchestrator, registerCalls, scripts } = makeMockOrchestrator();
+    const { fs } = makeMockSharedFs();
+    const bridge = createAgentBridge(orchestrator, fs, null, { generateUid: () => 'u' });
+    scripts.set('agent_u', (obs) => obs.onSendMessage?.('done'));
+
+    const result = await bridge.spawn({ ...BASE_OPTS, workspaceMode: 'snapshot' });
+    expect(result.exitCode).toBe(1);
+    expect(result.finalText).toContain('not implemented');
+    expect(registerCalls).toHaveLength(0);
   });
 
   it('normalizes each visiblePaths entry to a trailing-slash prefix', async () => {

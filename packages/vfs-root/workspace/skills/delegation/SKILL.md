@@ -81,14 +81,15 @@ Never drop when:
 `agent` is a shell command that spawns a one-shot sub-scoop, feeds it a prompt, blocks until the agent loop completes, and prints the final message on stdout. Runs from any bash context (terminal, `feed_scoop` prompt, `.jsh` script, dip lick handler, sprinkle button handler).
 
 ```
-agent <cwd> <allowed-commands> <prompt> [--model <id>] [--read-only <paths>] [--background-after <s>]
+agent <cwd> <allowed-commands> <prompt> [--model <id>] [--workspace-mode <mode>] [--read-only <paths>] [--background-after <s>]
 ```
 
 - `<cwd>` — sole writable prefix (plus `/shared/`, the scoop's scratch folder, and `/tmp/` — the whole shared scratch tree, so a scoop can always reach its `$TMPDIR`). Relative paths resolve against the caller's cwd.
 - `<allowed-commands>` — comma-separated allow-list; `*` for unrestricted.
 - `<prompt>` — forwarded verbatim. The spawned scoop has no access to the caller's history; pack context into the prompt.
 - `--model` — defaults to the parent scoop's model (or the cone's, when invoked from the terminal). Accepts an exact id, a shorthand (`haiku`, `sonnet`, `claude-haiku-4-5`), or the `provider:model` form `models` prints (`openrouter:openai/gpt-5.6-terra-pro`). A bare id resolves against the selected provider first, then against any other configured provider that offers it; if several do, the error lists the qualified ids to pick from. The scoop runs on the provider the model resolved from. An id that cannot be resolved is a hard error (exit 1) — it never silently falls back to the parent's model. Models from a provider other than the selected one must additionally be allowed in `/etc/models` (see [Model access policy](#model-access-policy)); a blocked model exits 1 and the error quotes the line to add.
-- `--read-only` — pure-replace list of read-only paths. Default: the **owning cone's** workspace (plus `/workspace/skills/`) and the invoking shell's cwd. When replacing it, name your own cone's workspace — a literal `/workspace/` is the primary cone's, not yours.
+- `--workspace-mode` — isolation policy. Default `shared-readonly` is today's sandbox (parent workspace visible, cwd + `/shared/` + scratch writable, mounts readable). `private` is an isolated sandbox: own cwd/scratch only — no parent workspace, no implicit `/shared/`, mounts are **not** auto-visible. `snapshot` and `shared-live` are not implemented and exit 1.
+- `--read-only` — pure-replace list of read-only paths. Default: the **owning cone's** workspace (plus `/workspace/skills/`) and the invoking shell's cwd. When replacing it, name your own cone's workspace — a literal `/workspace/` is the primary cone's, not yours. Under `--workspace-mode private` the default visible list is empty.
 - `--background-after <seconds>` — how long the spawned scoop's `bash` waits for a command before detaching it and moving on (default 600). Nobody can cancel a spawned scoop's turn, so a command that never returns would otherwise burn the whole run on one call; a detached command reports its exit code back to that scoop as a `Background Command` lick. `0` detaches every command immediately.
 
 **Critical property: no handoff.** Ephemeral scoops do NOT notify the cone on completion. Running `agent` from a non-cone shell does not trigger an unsolicited cone turn. The caller gets the result on stdout, nothing else. This makes `agent` the right choice for cheap, predictable interactions inside dips and sprinkles where you don't want the cone or owning scoop woken up.
@@ -109,24 +110,26 @@ agent . '*' 'Summarize the README in one sentence.' --model claude-haiku-4-5
 
 For dip and sprinkle interaction patterns built on `agent`, see `/workspace/skills/dips/SKILL.md` and `/workspace/skills/sprinkles/SKILL.md`.
 
-## Shaping the scoop's sandbox: `visiblePaths`, `writablePaths`, `allowedCommands`
+## Shaping the scoop's sandbox: `workspaceMode`, `visiblePaths`, `writablePaths`, `allowedCommands`
 
-`scoop_scoop` accepts three sandbox-shaping parameters. **They are how you give a scoop authority — by widening or narrowing what it can read, write, and run.** A scoop that can't reach the files it needs has no autonomy; pre-cooking the brief is what you do to compensate. Get the sandbox right and the brief gets shorter.
+`scoop_scoop` accepts a named isolation mode plus three sandbox-shaping parameters. **They are how you give a scoop authority — by widening or narrowing what it can read, write, and run.** A scoop that can't reach the files it needs has no autonomy; pre-cooking the brief is what you do to compensate. Get the sandbox right and the brief gets shorter.
 
-A fourth, rarely used argument — `canCreateChildren: true` — is an explicit nested-delegation grant. The new scoop may then `scoop_scoop` / `feed_scoop` / `drop_scoop` its own children. Omit it (the default) so the scoop stays a leaf. A scoop that was not itself granted this cannot pass it on.
+A rarely used argument — `canCreateChildren: true` — is an explicit nested-delegation grant. The new scoop may then `scoop_scoop` / `feed_scoop` / `drop_scoop` its own children. Omit it (the default) so the scoop stays a leaf. A scoop that was not itself granted this cannot pass it on.
 
-| Param             | What it controls                       | Default                                | Pure replace? |
-| ----------------- | -------------------------------------- | -------------------------------------- | ------------- |
-| `visiblePaths`    | Read-only VFS paths the scoop can SEE  | `["/workspace/"]`                      | Yes           |
-| `writablePaths`   | VFS paths the scoop can READ AND WRITE | `["/scoops/<folder>/", "/shared/"]`    | Yes           |
-| `allowedCommands` | Shell command allow-list               | unrestricted (every built-in + `.jsh`) | Yes           |
+| Param             | What it controls                        | Default                                                                                | Pure replace? |
+| ----------------- | --------------------------------------- | -------------------------------------------------------------------------------------- | ------------- |
+| `workspaceMode`   | Sharing policy for the parent workspace | `"shared-readonly"` (today's scoop). `"private"` isolates.                             | Yes           |
+| `visiblePaths`    | Read-only VFS paths the scoop can SEE   | shared-readonly: `["/workspace/"]`; private: `[]`                                      | Yes           |
+| `writablePaths`   | VFS paths the scoop can READ AND WRITE  | shared-readonly: `["/scoops/<folder>/", "/shared/"]`; private: `["/scoops/<folder>/"]` | Yes           |
+| `allowedCommands` | Shell command allow-list                | unrestricted (every built-in + `.jsh`)                                                 | Yes           |
+| `canCreateChildren` | Nested-delegation grant               | `false` (leaf scoop)                                                                   | Yes           |
 
 "Pure replace" means what you set is what you get — the value isn't merged with the default. Pass `[]` to drop it entirely. Trailing slashes recommended on path entries (e.g. `/shared/data/`).
 
 Subtleties:
 
 - **`writablePaths` are always readable too.** A true read-nothing sandbox needs both `visiblePaths: []` AND `writablePaths: []`.
-- **Mounts remain readable regardless** of `visiblePaths`. `mount` overlays are always visible — that's how scoops can work against a mounted S3 bucket or DA repo without you naming the path explicitly.
+- **Mounts remain readable in `shared-readonly`** (the default) regardless of `visiblePaths`. `private` does **not** auto-include mounts — name a mount in `visiblePaths` / `writablePaths` if the scoop needs it. That's how a mount cannot silently expand every child's authority.
 - **`allowedCommands` applies recursively** — pipelines, command substitutions, and network commands are all gated. Pass `["*"]` for explicit unrestricted.
 - **List every absolute root the scoop's tools write to.** Some tool families write outside the scratch dir — `playwright-cli` logs sessions and screenshots to `/.playwright/` — so include those roots in `writablePaths` (any spelling works: `/x`, `/x/`, `/x/**`), or every such write escalates to you for approval. Prefer pointing skills at `/scoops/<folder>/`, `/shared/`, or `/tmp/` over inventing new VFS roots.
 
@@ -141,9 +144,12 @@ Ask three questions, in order:
 ### Patterns
 
 ```
-# Default sandbox: full project, own scratch dir, all commands.
+# Default sandbox (shared-readonly): full project, own scratch dir, all commands.
 # Right for most "do this in the project" briefs.
 scoop_scoop({ name: "fix-bug", prompt: "..." })
+
+# Isolated sandbox. Cannot see the parent workspace or mounts.
+scoop_scoop({ name: "scratch-only", workspaceMode: "private", prompt: "..." })
 
 # Read-only research scoop. Can read everything, can't change anything,
 # can use whatever commands it needs to investigate.
@@ -172,10 +178,10 @@ scoop_scoop({
 })
 
 # Mount-only scoop. Sees just the DA mount, can write back to it.
-# Mount overlays remain readable regardless of visiblePaths.
+# Under shared-readonly, mounts stay readable even with visiblePaths: [].
+# Under private, name the mount in writablePaths (or visiblePaths) or it is hidden.
 scoop_scoop({
   name: "da-editor",
-  visiblePaths: [],
   writablePaths: ["/mnt/da/", "/scoops/da-editor/"],
   prompt: "Edit /mnt/da/index.html to ..."
 })

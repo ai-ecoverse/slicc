@@ -7,7 +7,14 @@
 import type { RegisteredScoop, ScoopTabState } from '../scoops/types.js';
 import { deriveCompletion, derivePolicy, isRootUnit, rootOwnerOf, rootsOf } from './policy.js';
 import { isPrimaryRoot, PRIMARY_CONE_FOLDER } from './record.js';
-import { statusFromTab, type WorkUnitDescriptor, type WorkUnitWorkspace } from './types.js';
+import {
+  statusFromTab,
+  type WorkspaceHandle,
+  type WorkspaceIsolationMode,
+  type WorkUnitDescriptor,
+  type WorkUnitWorkspace,
+} from './types.js';
+import { DEFAULT_CHILD_WORKSPACE_MODE, type ImplementedWorkspaceMode } from './workspace-mode.js';
 
 /** Home directory of every non-primary cone: `/cones/<folder>` (#2271). */
 export const EXTRA_CONE_HOME_ROOT = '/cones';
@@ -135,10 +142,63 @@ export function ownerWorkspaceFor<
  * (#2271). Under the primary cone the library is already inside `/workspace`,
  * so the list stays the historical `['/workspace/']`.
  */
-export function defaultChildVisibleRoots(owner: WorkUnitWorkspace): string[] {
+export function defaultChildVisibleRoots(owner: Pick<WorkUnitWorkspace, 'root'>): string[] {
   const root = `${owner.root}/`;
   const skills = `${SKILLS_LIBRARY_DIR}/`;
   return skills.startsWith(root) ? [root] : [root, skills];
+}
+
+/**
+ * Default `visiblePaths` / `writablePaths` for a child created under `mode`.
+ *
+ * `shared-readonly` is today's scoop_scoop injection. `private` is the
+ * isolated sandbox: own `/scoops/<folder>/` only — no parent workspace, no
+ * implicit `/shared/`. Explicit caller lists still replace these.
+ */
+export function defaultChildPathsForMode(
+  mode: ImplementedWorkspaceMode,
+  folder: string,
+  owner: Pick<WorkUnitWorkspace, 'root'>,
+  from?: string
+): { visiblePaths: string[]; writablePaths: string[] } {
+  const sandbox = `/scoops/${folder}/`;
+  if (mode === 'private') {
+    return { visiblePaths: [], writablePaths: [sandbox] };
+  }
+  return {
+    visiblePaths: defaultChildVisibleRoots({ root: from ?? owner.root }),
+    writablePaths: [sandbox, '/shared/'],
+  };
+}
+
+/**
+ * Named sharing policy for a unit. Roots project as `shared-live` (they hold
+ * the unrestricted live VFS). Children default to `shared-readonly` when the
+ * record predates {@link RegisteredScoop.config.workspaceMode}.
+ */
+export function workspaceHandleFor(
+  scoop: Pick<RegisteredScoop, 'parentJid' | 'folder' | 'config'>
+): WorkspaceHandle {
+  const { root } = workspaceFor(scoop);
+  return {
+    workspaceId: root,
+    root,
+    access: accessFor(scoop),
+  };
+}
+
+function accessFor(scoop: Pick<RegisteredScoop, 'parentJid' | 'config'>): WorkspaceIsolationMode {
+  if (isRootUnit(scoop)) return 'shared-live';
+  const raw = scoop.config?.workspaceMode;
+  if (
+    raw === 'private' ||
+    raw === 'shared-readonly' ||
+    raw === 'snapshot' ||
+    raw === 'shared-live'
+  ) {
+    return raw;
+  }
+  return DEFAULT_CHILD_WORKSPACE_MODE;
 }
 
 /** Project a record (and optional live tab) onto a descriptor. */
@@ -155,6 +215,7 @@ export function toDescriptor(scoop: RegisteredScoop, tab?: ScoopTabState): WorkU
       label: scoop.assistantLabel,
     },
     workspace: workspaceFor(scoop),
+    workspaceHandle: workspaceHandleFor(scoop),
     policy: derivePolicy(scoop),
     completion: deriveCompletion(scoop),
   };

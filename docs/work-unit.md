@@ -10,16 +10,16 @@ The **cone** (the user's root agent) and every **scoop** (a delegated child) are
 
 They differ in exactly one structural fact — the ownership edge — and in what is derived from it:
 
-|                                                                                                   | Root (cone)                                                            | Child (scoop)                                                |
-| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ------------------------------------------------------------ |
-| `RegisteredScoop.parentJid`                                                                       | `null`                                                                 | jid of the owning unit                                       |
-| `display.role`                                                                                    | `primary`                                                              | `child`                                                      |
-| `policy.filesystem`                                                                               | `full-workspace` (`VirtualFS`)                                         | `restricted` (`RestrictedFS` over the config paths)          |
-| `policy.approvalAuthority`                                                                        | `user`                                                                 | `{ parentId }`                                               |
-| `policy.canCreateChildren` / `canManageChildren` / `canWriteSharedMemory` / `canResolveApprovals` | `true`                                                                 | `false` (unless an explicit grant, below)                    |
-| `policy.sudoDefaultDisposition`                                                                   | `allow`                                                                | `require-approval`                                           |
-| `completion.mode`                                                                                 | `interactive`                                                          | `notify-parent` (`silent` when `notifyOnComplete === false`) |
-| `workspace.root`                                                                                  | `/workspace` (primary cone) / `/cones/<folder>/workspace` (extra cone) | `/scoops/<folder>/workspace`                                 |
+|                                                                                                   | Root (cone)                                                            | Child (scoop)                                                          |
+| ------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------- | ---------------------------------------------------------------------- |
+| `RegisteredScoop.parentJid`                                                                       | `null`                                                                 | jid of the owning unit                                                 |
+| `display.role`                                                                                    | `primary`                                                              | `child`                                                                |
+| `policy.filesystem`                                                                               | `full-workspace` (`VirtualFS`)                                         | `restricted` (`RestrictedFS` over the config paths + isolation `mode`) |
+| `policy.approvalAuthority`                                                                        | `user`                                                                 | `{ parentId }`                                                         |
+| `policy.canCreateChildren` / `canManageChildren` / `canWriteSharedMemory` / `canResolveApprovals` | `true`                                                                 | `false` (unless an explicit grant, below)                              |
+| `policy.sudoDefaultDisposition`                                                                   | `allow`                                                                | `require-approval`                                                     |
+| `completion.mode`                                                                                 | `interactive`                                                          | `notify-parent` (`silent` when `notifyOnComplete === false`)           |
+| `workspace.root`                                                                                  | `/workspace` (primary cone) / `/cones/<folder>/workspace` (extra cone) | `/scoops/<folder>/workspace`                                           |
 
 Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). They are no longer kernel types.
 
@@ -31,6 +31,7 @@ Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). Th
 4. **Ordering**: structural cleanup first. Multiple concurrent roots are the payoff of Phases 1–3, not a UI deliverable of them.
 5. **Default root**: the oldest root (`WorkUnitManager.resolveDefaultRoot()`) receives unaddressed events. A UI-selected root comes with the client protocol phase.
 6. **Grandchildren**: children default to `canCreateChildren: false`. The flag exists so an explicit grant (`ScoopConfig.canCreateChildren: true`) is a policy change, not a runtime type. `WorkUnitManager.create` and `scoop_scoop` refuse a child whose derived policy is not ⊆ its parent's (`assertChildPolicyAllowed`). See [Nested delegation](#nested-delegation).
+7. **Copy-on-write snapshots (RFC open question 4, #2277)**: deferred. Child creation names `private` or `shared-readonly`; `snapshot` and `shared-live` are typed stubs that throw. Private + shared-readonly are enough initially — a COW view of parent state is a later, separate implementation.
 
 ## Invariants (adopted from the RFC)
 
@@ -43,18 +44,19 @@ Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). Th
 
 ## Module map
 
-| File            | Purpose                                                                                                                                                                                                                                                                                                                                        |
-| --------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `types.ts`      | `WorkUnitDescriptor`, `WorkUnitPolicy`, `CompletionPolicy`, `WorkUnitStatus` (`creating → ready ⇄ running`, `* → failed`, `* → closed`), events, `statusFromTab`                                                                                                                                                                               |
-| `policy.ts`     | `interactiveRootPolicy`, `delegatedChildPolicy`, `derivePolicy`, `deriveCompletion`, `isRootUnit`, `isPolicySubset`, `assertChildPolicyAllowed`, `childrenOf`, `rootsOf`                                                                                                                                                                       |
-| `descriptor.ts` | `toDescriptor(scoop, tab?)`, `workspaceFor`, `PRIMARY_WORKSPACE`, `SKILLS_LIBRARY_DIR` — pure projections; the ONE place the per-unit directory layout is decided                                                                                                                                                                              |
-| `runtime.ts`    | `WorkUnitRuntime` contract + the `WorkUnitHost` slice (`getScoop`, `ensureLiveUnit`) a manager resolves units through                                                                                                                                                                                                                          |
-| `live-unit.ts`  | `LiveWorkUnit` — the owning runtime: holds the `ScoopContext`, tab record and observer set; `transition()` enforces `LEGAL_TRANSITIONS`; `close()` is the single teardown                                                                                                                                                                      |
-| `record.ts`     | `normalizeScoopRecord` (strips the pre-#2279 `isCone`/`type`, sanitizes a root), `legacyRecordIsCone`, `chatSessionIdFor`, `isPrimaryRoot`, `coneFolderFor`, `processOwnerKindFor`, `sourceLabelFor`                                                                                                                                           |
-| `manager.ts`    | `WorkUnitManager` — `create / createMany / list / get / getParent / getChildren / roots / rootOf / resolveDefaultRoot / join / abort / close`; exposed as `Orchestrator.getWorkUnits()`                                                                                                                                                        |
-| `client/`       | The presentation protocol (#2274): `WorkUnitClient`, `WorkUnitSummary` / `WorkUnitSnapshot` / `WorkUnitClientEvent`, the record and wire projections, and `presentation.ts` — the ONE strip ordering and descriptor builder both shells render from. Adapters live in `ui/work-unit-client/`. See [`work-unit-client.md`](work-unit-client.md) |
-| `capability/`   | The privileged-capability protocol (#2276): `CapabilityBroker` with per-operation allowlists, `CapabilityUnavailable`, page and Node-shaped stubs. Composed once in `kernel/host.ts`. See Phase 6 below                                                                                                                                        |
-| `conversation/` | The canonical conversation record (#2275): entry types, identity, ingest, the four derivations, the `slicc-work-units` store and its resumable migration — see below                                                                                                                                                                           |
+| File                | Purpose                                                                                                                                                                                                                                                                                                                                        |
+| ------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `types.ts`          | `WorkUnitDescriptor`, `WorkUnitPolicy`, `CompletionPolicy`, `WorkUnitStatus` (`creating → ready ⇄ running`, `* → failed`, `* → closed`), `WorkspaceHandle`, `WorkspaceIsolationMode`, events, `statusFromTab`                                                                                                                                  |
+| `workspace-mode.ts` | `parseWorkspaceMode` / `resolveWorkspaceMode`, unimplemented-mode errors, `includeMountsForMode`, sharing rank for `isPolicySubset`                                                                                                                                                                                                            |
+| `policy.ts`         | `interactiveRootPolicy`, `delegatedChildPolicy`, `derivePolicy`, `deriveCompletion`, `isRootUnit`, `isPolicySubset`, `assertChildPolicyAllowed`, `childrenOf`, `rootsOf`                                                                                                                                                                       |
+| `descriptor.ts`     | `toDescriptor(scoop, tab?)`, `workspaceFor`, `workspaceHandleFor`, `defaultChildPathsForMode`, `PRIMARY_WORKSPACE`, `SKILLS_LIBRARY_DIR` — pure projections; the ONE place the per-unit directory layout is decided                                                                                                                            |
+| `runtime.ts`        | `WorkUnitRuntime` contract + the `WorkUnitHost` slice (`getScoop`, `ensureLiveUnit`) a manager resolves units through                                                                                                                                                                                                                          |
+| `live-unit.ts`      | `LiveWorkUnit` — the owning runtime: holds the `ScoopContext`, tab record and observer set; `transition()` enforces `LEGAL_TRANSITIONS`; `close()` is the single teardown                                                                                                                                                                      |
+| `record.ts`         | `normalizeScoopRecord` (strips the pre-#2279 `isCone`/`type`, sanitizes a root), `legacyRecordIsCone`, `chatSessionIdFor`, `isPrimaryRoot`, `coneFolderFor`, `processOwnerKindFor`, `sourceLabelFor`                                                                                                                                           |
+| `manager.ts`        | `WorkUnitManager` — `create / createMany / list / get / getParent / getChildren / roots / rootOf / resolveDefaultRoot / join / abort / close`; exposed as `Orchestrator.getWorkUnits()`                                                                                                                                                        |
+| `client/`           | The presentation protocol (#2274): `WorkUnitClient`, `WorkUnitSummary` / `WorkUnitSnapshot` / `WorkUnitClientEvent`, the record and wire projections, and `presentation.ts` — the ONE strip ordering and descriptor builder both shells render from. Adapters live in `ui/work-unit-client/`. See [`work-unit-client.md`](work-unit-client.md) |
+| `capability/`       | The privileged-capability protocol (#2276): `CapabilityBroker` with per-operation allowlists, `CapabilityUnavailable`, page and Node-shaped stubs. Composed once in `kernel/host.ts`. See Phase 6 below                                                                                                                                        |
+| `conversation/`     | The canonical conversation record (#2275): entry types, identity, ingest, the four derivations, the `slicc-work-units` store and its resumable migration — see below                                                                                                                                                                           |
 
 Tests: `packages/webapp/tests/work-unit/`. `conformance.ts` is a reusable suite any `WorkUnitRuntime` implementation must pass. `capability-broker.conformance.ts` is the same for every `CapabilityBroker` adapter.
 
@@ -82,7 +84,8 @@ A strangler migration, each phase a separate PR with deletion criteria:
 | 5a    | One canonical conversation record per work unit (#2275): `ConversationEntry`, the `slicc-work-units` store, the four derivations, and a resumable migration behind a read-old/write-new window. Legacy stores still written; their deletion is a follow-up.                                                                            | done                      |
 | 6a    | CapabilityBroker protocol + composition-time injection (#2276 slice A): per-operation allowlists, `CapabilityUnavailable`, page/Node stubs, one host-injected broker, one migrated scoops call site (`network.localNodeServer`), conformance suite. Full Node/Swift/extension/hosted adapters and remaining call sites are follow-ups. | done                      |
 | 8a    | Generic parallel APIs, slice A (#2278): `WorkUnitManager.createMany` (atomic, fail closed if any parent is missing) and `join` (reuses the scoop-wait completion bus). `scoop_wait` / `feed_scoop` stay product aliases.                                                                                                               | done                      |
-| 5–9   | Remaining #2278 slices (detach/promote), `WorkUnitClient`, remaining CapabilityBroker adapters, explicit workspace isolation modes, deletion of legacy paths.                                                                                                                                                                          | deferred; separate issues |
+| 7a    | Explicit workspace isolation modes (#2277): `private` + `shared-readonly` on child create; `snapshot` / `shared-live` typed stubs; `RestrictedFS` mount gating; `scoop_scoop` / `agent --workspace-mode`. Copy-on-write snapshots deferred (RFC open question 4).                                                                      | done                      |
+| 5–9   | Remaining #2278 slices (detach/promote), `WorkUnitClient`, remaining CapabilityBroker adapters, snapshot COW / `shared-live`, deletion of legacy paths.                                                                                                                                                                                | deferred; separate issues |
 
 ### Phase 4 detail
 
@@ -217,6 +220,39 @@ legacy UI-store fallback are still the UI's sources until the client protocol
 consolidates them in
 [#2274](https://github.com/ai-ecoverse/slicc/issues/2274). Removing them now
 would be removing paths this PR has not yet replaced.
+
+### Explicit workspace isolation modes (#2277)
+
+Child creation names a sharing policy instead of relying on the `/scoops/`
+convention plus implicit `/shared`, mount, `visiblePaths` and `writablePaths`
+behaviour.
+
+`WorkUnitDescriptor.workspaceHandle` is `{ workspaceId, root, access }`.
+`workspaceId` is the unit's own workspace root (`workspaceFor().root`). Roots
+project as `shared-live` (unrestricted live VFS). Children default to
+`shared-readonly`.
+
+| Mode              | Status      | Default visible                        | Default writable                | Mounts auto-readable |
+| ----------------- | ----------- | -------------------------------------- | ------------------------------- | -------------------- |
+| `shared-readonly` | implemented | owning cone workspace + skills library | `/scoops/<folder>/`, `/shared/` | yes (today)          |
+| `private`         | implemented | none                                   | `/scoops/<folder>/` only        | no                   |
+| `snapshot`        | typed stub  | —                                      | —                               | —                    |
+| `shared-live`     | typed stub  | —                                      | —                               | —                    |
+
+Selecting `snapshot` or `shared-live` throws: copy-on-write snapshots are
+deferred (RFC open question 4). `/tmp/` stays ambient scratch for every scoop
+(`ALWAYS_WRITABLE_PREFIXES`) — that is documented shared space, not a silent
+expansion of the caller's grant list.
+
+`scoop_scoop({ workspaceMode })` and `agent --workspace-mode` pick the mode.
+Omitted, both keep today's sandbox (`shared-readonly`). Explicit
+`visiblePaths` / `writablePaths` still replace the mode's path defaults; the
+mode still controls mount auto-inclusion, so a private scoop cannot gain a
+mount just because one was added to the VFS.
+
+`CreateWorkUnitOptions.workspace = { mode, from? }` is the kernel form. `from`
+is the parent workspaceId a `shared-readonly` child inspects (defaults to the
+parent's own root, so extra-cone children still read that cone).
 
 ### Per-cone workspace and memory (#2271)
 
@@ -567,7 +603,7 @@ Supervisor APIs on `WorkUnitManager`, not a second orchestrator. Cone/scoop stay
 ### Phase 3 detail
 
 - `ScoopContext` holds a `WorkUnitDescriptor` built once in its constructor and reads `unit.policy.*`, `unit.workspace.*`, `unit.completion.mode` and `unit.display.role` where it used to branch on `isCone` (filesystem reach, sudo wiring, memory paths, scratch dir, process owner, stale-asset resubmit, overflow escalation, system prompt).
-- `ScoopLifecycleManager` picks `VirtualFS` vs `RestrictedFS` from `policy.filesystem`, gates every privileged callback on the policy (`canCreateChildren`, `canManageChildren`, `canWriteSharedMemory`, `canResolveApprovals`, `approvalAuthority`), and routes fatal errors to the unit's parent.
+- `ScoopLifecycleManager` picks `VirtualFS` vs `RestrictedFS` from `policy.filesystem` (and `includeMounts` from the isolation `mode`), gates every privileged callback on the policy (`canCreateChildren`, `canManageChildren`, `canWriteSharedMemory`, `canResolveApprovals`, `approvalAuthority`), and routes fatal errors to the unit's parent.
 - Completion, idle notices and sudo requests take a `findParent` / `findApprover` dependency: the child's parent, falling back to the default (oldest) root when the parent is gone, so a delegated result always lands somewhere a user can see it.
 - Unaddressed events (licks, sprinkles, workflow completions, follower snapshots) resolve the default root through `rootsOf(...)[0]` / `WorkUnitManager.resolveDefaultRoot()`; `bootstrapCone` only seeds a root when none exists.
 - `normalizeScoopRecord` sanitizes a root's trigger fields on register and restore; `ScoopPresentation` projects the wire's `isCone` from `isRootUnit`. Since #2279 the record has no role field at all, so nothing — `ui/` included — can branch on one.

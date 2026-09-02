@@ -136,6 +136,47 @@ describe('scoop_scoop tool — config defaults', () => {
     expect(created.config?.writablePaths).toEqual(['/scoops/hero-block-scoop/', '/shared/']);
   });
 
+  it("stamps workspaceMode shared-readonly by default so today's sandbox is named", async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'hero-block' });
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.workspaceMode).toBe('shared-readonly');
+    expect(created.config?.writablePaths).toEqual(['/scoops/hero-block-scoop/', '/shared/']);
+  });
+
+  it('workspaceMode private drops parent workspace and implicit /shared/', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'secret', workspaceMode: 'private' });
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.workspaceMode).toBe('private');
+    expect(created.config?.visiblePaths).toEqual([]);
+    expect(created.config?.writablePaths).toEqual(['/scoops/secret-scoop/']);
+    expect(created.config?.writablePaths).not.toContain('/shared/');
+  });
+
+  it('explicit visiblePaths still replace under private (mode does not drop a named grant)', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({
+      name: 'secret',
+      workspaceMode: 'private',
+      visiblePaths: ['/workspace/docs/'],
+    });
+    const created = onScoopScoop.mock.calls[0][0];
+    expect(created.config?.visiblePaths).toEqual(['/workspace/docs/']);
+    expect(created.config?.writablePaths).toEqual(['/scoops/secret-scoop/']);
+  });
+
+  it('rejects unimplemented snapshot / shared-live modes', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    const snap = await tool.execute({ name: 'cow', workspaceMode: 'snapshot' });
+    expect(snap.isError).toBe(true);
+    expect(snap.content).toContain('not implemented');
+    expect(snap.content).toContain('RFC open question 4');
+    const live = await tool.execute({ name: 'live', workspaceMode: 'shared-live' });
+    expect(live.isError).toBe(true);
+    expect(onScoopScoop).not.toHaveBeenCalled();
+  });
+
   // Regression (#1752): an unresolvable model must be rejected, not written
   // into config.modelId where ScoopContext.init() silently degrades it to the
   // cone's own (typically far more expensive) model.
@@ -303,6 +344,7 @@ describe('scoop_scoop tool — config defaults', () => {
       modelId: 'claude-sonnet-4-6',
       visiblePaths: ['/workspace/skills/'],
       writablePaths: ['/scoops/combined-scoop/'],
+      workspaceMode: 'shared-readonly',
       allowedCommands: ['echo'],
     });
     expect(created.configSchemaVersion).toBe(CURRENT_SCOOP_CONFIG_VERSION);
@@ -365,6 +407,7 @@ describe('scoop_scoop tool — config defaults', () => {
       modelId: 'claude-opus-4-7',
       visiblePaths: ['/workspace/'],
       writablePaths: ['/scoops/combined-effort-scoop/'],
+      workspaceMode: 'shared-readonly',
       allowedCommands: ['echo'],
       thinkingLevel: 'xhigh',
     });

@@ -12,6 +12,7 @@ import type { TurnGuestGate } from '../sudo/types.js';
 // Legal down-edge (`scoops/` → `tools/`): the JSON Schema shape a scoop's
 // structured-output contract is expressed in is owned by the tool layer.
 import type { JsonSchemaObject } from '../tools/types.js';
+import type { WorkspaceIsolationMode } from '../work-unit/types.js';
 
 // The runtime enumeration and guard live in the foundational `base/` layer so
 // lower layers (shell/'s `agent` command) can validate a `--thinking` value
@@ -269,6 +270,14 @@ export interface ScoopConfig {
    * use an unrestricted filesystem.
    */
   writablePaths?: readonly string[];
+  /**
+   * Workspace isolation mode (#2277). Default (`undefined`) is
+   * `shared-readonly` — today's scoop: parent workspace visible, own
+   * sandbox + `/shared/` writable, mounts readable. `private` hides the
+   * parent workspace and does not auto-include mounts or `/shared/`.
+   * `snapshot` / `shared-live` are typed stubs; selecting them throws.
+   */
+  workspaceMode?: WorkspaceIsolationMode;
   /**
    * Shell command allow-list. When omitted (or when it contains `'*'`), every
    * built-in, custom, and `.jsh` command is available — the default. Otherwise

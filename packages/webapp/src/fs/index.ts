@@ -9,6 +9,7 @@ export type {
 } from './mount-index.js';
 export { MountIndex } from './mount-index.js';
 export { joinPath, normalizePath, pathSegments, splitPath } from './path-utils.js';
+export type { RestrictedFsOptions, RestrictedFsWriteEnforcement } from './restricted-fs.js';
 export { RestrictedFS } from './restricted-fs.js';
 export type {
   DirEntry,

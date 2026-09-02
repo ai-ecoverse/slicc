@@ -45,6 +45,7 @@ describe('work-unit policy', () => {
     );
     expect(policy.filesystem).toEqual({
       kind: 'restricted',
+      mode: 'shared-readonly',
       visiblePaths: ['/workspace/'],
       writablePaths: ['/scoops/worker-scoop/'],
     });
@@ -73,16 +74,32 @@ describe('work-unit policy', () => {
     expect(ungranted.canManageChildren).toBe(false);
   });
 
+  it('derives workspaceMode from ScoopConfig (default shared-readonly)', () => {
+    const named = childRecord('cone_1', {
+      config: { workspaceMode: 'private', visiblePaths: [], writablePaths: ['/scoops/x/'] },
+    });
+    expect(derivePolicy(named).filesystem).toMatchObject({
+      kind: 'restricted',
+      mode: 'private',
+    });
+    const future = childRecord('cone_1', { config: { workspaceMode: 'snapshot' } });
+    expect(derivePolicy(future).filesystem).toMatchObject({
+      kind: 'restricted',
+      mode: 'snapshot',
+    });
+  });
   it('keeps explicit empty path lists empty (no defaults live here)', () => {
     const child = childRecord('cone_1', { config: { visiblePaths: [], writablePaths: [] } });
     expect(derivePolicy(child).filesystem).toEqual({
       kind: 'restricted',
+      mode: 'shared-readonly',
       visiblePaths: [],
       writablePaths: [],
     });
     const noConfig = childRecord('cone_1', { config: undefined });
     expect(derivePolicy(noConfig).filesystem).toEqual({
       kind: 'restricted',
+      mode: 'shared-readonly',
       visiblePaths: [],
       writablePaths: [],
     });
@@ -128,7 +145,6 @@ describe('work-unit policy', () => {
       );
       expect(isPolicySubset(root, child)).toBe(false);
     });
-
     it('rejects a grandchild whose writable/visible paths escape the supervisor sandbox', () => {
       const supervisor = delegatedChildPolicy('cone_1', {
         canCreateChildren: true,
@@ -228,6 +244,13 @@ describe('work-unit policy', () => {
         )
       ).toBe(true);
     });
+
+    it('rejects a child whose isolation mode is more sharing than its parent', () => {
+      const privateParent = delegatedChildPolicy('cone_1', { mode: 'private' });
+      const readonlyChild = delegatedChildPolicy('cone_1', { mode: 'shared-readonly' });
+      expect(isPolicySubset(privateParent, readonlyChild)).toBe(true);
+      expect(isPolicySubset(readonlyChild, privateParent)).toBe(false);
+    });
   });
 
   it('childrenOf / rootsOf walk the explicit edge', () => {
@@ -318,6 +341,9 @@ describe('delegated approver scoops', () => {
     expect(approver.persistCommandGrants).toBe(false);
     expect(approver.sudoDefaultDisposition).toBe('require-approval');
     expect(approver.filesystem.kind).toBe('restricted');
+    if (approver.filesystem.kind === 'restricted') {
+      expect(approver.filesystem.mode).toBe('shared-readonly');
+    }
   });
 });
 

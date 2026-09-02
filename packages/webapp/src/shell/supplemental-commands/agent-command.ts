@@ -3,6 +3,8 @@ import { defineCommand } from 'just-bash';
 import { createLogger } from '../../base/logger.js';
 import { isThinkingLevel, THINKING_LEVELS, type ThinkingLevel } from '../../base/thinking-level.js';
 import { normalizePath } from '../../fs/path-utils.js';
+import type { ImplementedWorkspaceMode } from '../../work-unit/workspace-mode.js';
+import { parseWorkspaceMode } from '../../work-unit/workspace-mode.js';
 
 const log = createLogger('agent-command');
 
@@ -57,6 +59,12 @@ interface AgentSpawnOptions {
    * flag) leaves the bridge's default — an ephemeral `/tmp/...` archive.
    */
   persistSession?: boolean;
+  /**
+   * Workspace isolation mode (#2277). Default `shared-readonly` preserves
+   * today's spawn. `private` isolates. Unimplemented modes are rejected
+   * at parse time before the bridge is called.
+   */
+  workspaceMode?: ImplementedWorkspaceMode;
 }
 
 /** Options accepted by {@link createAgentCommand}. */
@@ -127,6 +135,17 @@ Options:
                           clamped to 'high' when the resolved model doesn't
                           support it. Ignored entirely for non-reasoning
                           models. Aliased as --effort.
+  --workspace-mode <mode> Isolation policy for the spawned scoop's filesystem
+                          view. One of: private, shared-readonly (default),
+                          snapshot, shared-live. Default shared-readonly is
+                          today's sandbox: parent workspace + skills + the
+                          invoking cwd are visible, <cwd> + /shared/ + scratch
+                          are writable, mounts stay readable. private is an
+                          isolated sandbox (own cwd/scratch only — no parent
+                          workspace, no implicit /shared/, mounts are NOT
+                          auto-visible). snapshot and shared-live are not
+                          implemented and exit 1. Explicit --read-only still
+                          replaces the mode's visiblePaths.
   --read-only <paths>     Comma-separated VFS paths exposed read-only to the
                           spawned scoop (visiblePaths). Pure replace — the
                           owning cone's roots AND the implicit ctx.cwd add are
@@ -156,6 +175,7 @@ Examples:
   agent --model claude-haiku-4-5 . "*" "summarize files in this directory"
   agent --thinking high . "*" "design a careful plan first"
   agent --read-only /workspace/,/shared/assets/ . "*" "review the docs"
+  agent --workspace-mode private . "*" "work only in this directory"
   agent --background-after 60 . "*" "run the slow build and report"
 `;
 
@@ -170,6 +190,7 @@ interface ParsedArgs {
   backgroundAfterSeconds?: number;
   structuredOutputSchema?: JsonSchemaObject;
   persistSession?: boolean;
+  workspaceMode?: ImplementedWorkspaceMode;
   error?: string;
 }
 
@@ -280,7 +301,78 @@ interface ParseState {
   backgroundAfterSeconds?: number;
   schemaOut?: JsonSchemaObject;
   persistSession?: boolean;
+  workspaceMode?: ImplementedWorkspaceMode;
 }
+
+type FlagHandler = (
+  flag: string,
+  args: string[],
+  i: number,
+  state: ParseState
+) => { error?: string; consumed: number };
+
+const FLAG_HANDLERS: Record<string, FlagHandler> = {
+  '-h': (_flag, _args, _i, state) => {
+    state.help = true;
+    return { consumed: 1 };
+  },
+  '--help': (_flag, _args, _i, state) => {
+    state.help = true;
+    return { consumed: 1 };
+  },
+  '--model': (flag, args, i, state) => {
+    const result = parseFlagWithValue(flag, args, i);
+    if ('error' in result) return { error: result.error, consumed: 0 };
+    state.modelId = result.value;
+    return { consumed: result.consumed };
+  },
+  '--thinking': (flag, args, i, state) => {
+    const result = parseThinkingFlag(flag, args, i);
+    if (result.error) return { error: result.error, consumed: 0 };
+    state.thinkingLevel = result.value;
+    return { consumed: result.consumed };
+  },
+  '--effort': (flag, args, i, state) => {
+    const result = parseThinkingFlag(flag, args, i);
+    if (result.error) return { error: result.error, consumed: 0 };
+    state.thinkingLevel = result.value;
+    return { consumed: result.consumed };
+  },
+  '--background-after': (_flag, args, i, state) => {
+    const result = parseBackgroundAfterFlag(args, i);
+    if (result.error) return { error: result.error, consumed: 0 };
+    state.backgroundAfterSeconds = result.value;
+    return { consumed: result.consumed };
+  },
+  '--workspace-mode': (flag, args, i, state) => {
+    const result = parseFlagWithValue(flag, args, i);
+    if ('error' in result) return { error: result.error, consumed: 0 };
+    const parsed = parseWorkspaceMode(result.value);
+    if (!parsed.ok) return { error: `agent: ${parsed.error}`, consumed: 0 };
+    state.workspaceMode = parsed.mode;
+    return { consumed: result.consumed };
+  },
+  '--read-only': (_flag, args, i, state) => {
+    const result = parseReadOnlyFlag(args, i);
+    if (result.error) return { error: result.error, consumed: 0 };
+    state.visiblePaths = result.value;
+    return { consumed: result.consumed };
+  },
+  '--schema-b64': (_flag, args, i, state) => {
+    const result = parseSchemaFlag(args, i);
+    if (result.error) return { error: result.error, consumed: 0 };
+    state.schemaOut = result.value;
+    return { consumed: result.consumed };
+  },
+  '--persist-session': (_flag, _args, _i, state) => {
+    state.persistSession = true;
+    return { consumed: 1 };
+  },
+  '--no-persist-session': (_flag, _args, _i, state) => {
+    state.persistSession = false;
+    return { consumed: 1 };
+  },
+};
 
 /** Process one argument. Returns error or null and consumed count. */
 function processArg(
@@ -294,58 +386,10 @@ function processArg(
     return { consumed: 1 };
   }
 
-  if (arg === '-h' || arg === '--help') {
-    state.help = true;
-    return { consumed: 1 };
-  }
-
-  if (arg === '--model') {
-    const result = parseFlagWithValue(arg, args, i);
-    if ('error' in result) return { error: result.error, consumed: 0 };
-    state.modelId = result.value;
-    return { consumed: result.consumed };
-  }
-
-  if (arg === '--thinking' || arg === '--effort') {
-    const result = parseThinkingFlag(arg, args, i);
-    if (result.error) return { error: result.error, consumed: 0 };
-    state.thinkingLevel = result.value;
-    return { consumed: result.consumed };
-  }
-
-  if (arg === '--background-after') {
-    const result = parseBackgroundAfterFlag(args, i);
-    if (result.error) return { error: result.error, consumed: 0 };
-    state.backgroundAfterSeconds = result.value;
-    return { consumed: result.consumed };
-  }
-
-  if (arg === '--read-only') {
-    const result = parseReadOnlyFlag(args, i);
-    if (result.error) return { error: result.error, consumed: 0 };
-    state.visiblePaths = result.value;
-    return { consumed: result.consumed };
-  }
-
-  if (arg === '--schema-b64') {
-    const result = parseSchemaFlag(args, i);
-    if (result.error) return { error: result.error, consumed: 0 };
-    state.schemaOut = result.value;
-    return { consumed: result.consumed };
-  }
-
-  if (arg === '--persist-session') {
-    state.persistSession = true;
-    return { consumed: 1 };
-  }
-
-  if (arg === '--no-persist-session') {
-    state.persistSession = false;
-    return { consumed: 1 };
-  }
-
   if (arg.length > 0 && arg.startsWith('-')) {
-    return { error: `agent: unknown flag '${arg}'`, consumed: 0 };
+    const handler = FLAG_HANDLERS[arg];
+    if (!handler) return { error: `agent: unknown flag '${arg}'`, consumed: 0 };
+    return handler(arg, args, i, state);
   }
 
   state.positionals.push(arg);
@@ -425,6 +469,7 @@ function parseArgs(args: string[]): ParsedArgs {
     backgroundAfterSeconds: state.backgroundAfterSeconds,
     structuredOutputSchema: state.schemaOut,
     persistSession: state.persistSession,
+    workspaceMode: state.workspaceMode,
   };
 }
 
@@ -543,6 +588,9 @@ function buildSpawnOptions(
   }
   if (parsed.persistSession !== undefined) {
     spawnOptions.persistSession = parsed.persistSession;
+  }
+  if (parsed.workspaceMode !== undefined) {
+    spawnOptions.workspaceMode = parsed.workspaceMode;
   }
   if (ctx.cwd && ctx.cwd.length > 0) {
     spawnOptions.invokingCwd = ctx.cwd;

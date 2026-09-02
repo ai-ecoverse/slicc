@@ -40,14 +40,42 @@ export type WorkUnitStatus = 'creating' | 'ready' | 'running' | 'failed' | 'clos
 export type WorkUnitRole = 'primary' | 'child';
 
 /**
+ * How a unit shares (or isolates) its filesystem view (#2277).
+ *
+ * - `private` — own sandbox only; parent workspace and mounts are hidden
+ *   unless the caller listed them in `visiblePaths` / `writablePaths`.
+ * - `shared-readonly` — today's scoop: inspect the parent workspace without
+ *   mutating it; own sandbox + `/shared/` writable; mounts stay readable.
+ * - `snapshot` / `shared-live` — typed stubs. Selecting them throws;
+ *   copy-on-write snapshots are deferred (RFC open question 4).
+ */
+export type WorkspaceIsolationMode = 'private' | 'shared-readonly' | 'snapshot' | 'shared-live';
+
+/**
+ * The unit's filesystem view as a named sharing policy, distinct from the
+ * directory-layout coordinates in {@link WorkUnitWorkspace}.
+ *
+ * `workspaceId` is the unit's own workspace root today (`workspaceFor().root`)
+ * so conversation keys and isolation modes name the same coordinate.
+ */
+export interface WorkspaceHandle {
+  workspaceId: string;
+  root: string;
+  access: WorkspaceIsolationMode;
+}
+
+/**
  * What a unit may touch on the shared workspace. `full-workspace` is the
  * unrestricted `VirtualFS` the cone gets today; `restricted` is the
- * `RestrictedFS` view a scoop gets, parameterised by its `ScoopConfig` paths.
+ * `RestrictedFS` view a scoop gets, parameterised by its `ScoopConfig` paths
+ * and an explicit isolation {@link FileSystemPolicy.mode}.
  */
 export type FileSystemPolicy =
   | { kind: 'full-workspace' }
   | {
       kind: 'restricted';
+      /** Sharing policy. Default at derivation is `shared-readonly`. */
+      mode: WorkspaceIsolationMode;
       writablePaths: readonly string[];
       visiblePaths: readonly string[];
     };
@@ -128,6 +156,8 @@ export interface WorkUnitDescriptor {
     label: string;
   };
   workspace: WorkUnitWorkspace;
+  /** Named sharing policy for this unit's filesystem view (#2277). */
+  workspaceHandle: WorkspaceHandle;
   policy: WorkUnitPolicy;
   completion: CompletionPolicy;
 }
@@ -194,6 +224,19 @@ export interface CreateWorkUnitOptions {
   notifyOnComplete?: boolean;
   /** Caller-supplied id; defaults to the conventional `cone_…` / `scoop_…`. */
   id?: WorkUnitId;
+  /**
+   * Sharing policy for a child's workspace view (#2277). Ignored for roots
+   * (they always get `full-workspace`). Default `shared-readonly` preserves
+   * today's scoop: parent workspace + skills are visible, own sandbox +
+   * `/shared/` are writable, mounts stay readable.
+   *
+   * `snapshot` and `shared-live` are typed but unimplemented — `create` throws.
+   */
+  workspace?: {
+    mode: WorkspaceIsolationMode;
+    /** Parent workspaceId to share from. Defaults to the parent's own root. */
+    from?: string;
+  };
 }
 
 /** Options accepted by `WorkUnitManager.join`. */
