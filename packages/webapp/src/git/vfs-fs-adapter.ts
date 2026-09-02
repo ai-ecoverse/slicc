@@ -111,7 +111,12 @@ function fromVfsStats(s: Stats): Partial<NodeLikeStats> {
   };
 }
 
-function wantsUtf8(options: unknown): boolean {
+/**
+ * Does this `readFile` options bag ask for text? Exported because the
+ * command-scoped read cache keys its entries by the same answer — a utf-8
+ * read and a binary read of one path are two different cached values.
+ */
+export function wantsUtf8(options: unknown): boolean {
   if (typeof options === 'string') return /^utf-?8$/i.test(options);
   if (options && typeof options === 'object') {
     const enc = (options as { encoding?: unknown }).encoding;

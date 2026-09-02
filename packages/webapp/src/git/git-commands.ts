@@ -54,6 +54,7 @@ import { status } from './commands/status.js';
 import { symbolicRef } from './commands/symbolic-ref.js';
 import { tag } from './commands/tag.js';
 import type { GitCommandContext, GitCommandResult, GitCommandsOptions } from './commands/types.js';
+import { type CommandScopedReadCache, withCommandScopedReadCache } from './fs-command-cache.js';
 import { readGlobalGitConfigValue } from './git-config.js';
 import { createIsomorphicGitFs, type IsoGitFsPromises } from './vfs-fs-adapter.js';
 
@@ -61,6 +62,37 @@ export type { GitCommandResult, GitCommandsOptions } from './commands/types.js';
 
 const logger = createLogger('git-commands');
 const NETWORK_COMMANDS = new Set(['clone', 'fetch', 'pull', 'push', 'ls-remote']);
+
+/**
+ * Subcommands that may run behind the command-scoped read cache
+ * (`fs-command-cache.ts`), which collapses isomorphic-git's per-file re-stat
+ * of `.git/index` and per-candidate re-read of every ancestor `.gitignore`
+ * onto one round trip each (issue #2709).
+ *
+ * The cache only sees writes made through the isomorphic-git adapter, so the
+ * list is an allowlist of subcommands that mutate the repo exclusively that
+ * way. Everything that writes straight to the VirtualFS (`ctx.fs`) — checkout,
+ * reset, rm, mv, stash, rebase, revert, clean, merge-file, config — would
+ * leave the memo stale and stays uncached, as do the network commands, which
+ * stream far more object data than is worth retaining.
+ */
+const CACHEABLE_COMMANDS = new Set([
+  'add',
+  'branch',
+  'commit',
+  'diff',
+  'init',
+  'log',
+  'ls-files',
+  'ls-tree',
+  'merge-base',
+  'rev-parse',
+  'show',
+  'show-ref',
+  'status',
+  'symbolic-ref',
+  'tag',
+]);
 
 /**
  * Leading global flags accepted BEFORE the subcommand (`git -c k=v commit …`).
@@ -103,6 +135,8 @@ export class GitCommands {
   private static globalFsByDbName: Map<string, Promise<VirtualFS>> = new Map();
 
   private lfs: IsoGitFsPromises;
+  /** Turns the per-`execute()` read memo on and off; see CACHEABLE_COMMANDS. */
+  private readCache: CommandScopedReadCache;
   private corsProxy?: string;
   private authorName: string;
   private authorEmail: string;
@@ -131,7 +165,9 @@ export class GitCommands {
     // Route through a VirtualFS-backed adapter so isomorphic-git sees mount
     // points (File System Access API) the same way shell/agent tools do.
     // See packages/webapp/src/git/vfs-fs-adapter.ts.
-    this.lfs = createIsomorphicGitFs(options.fs).promises;
+    const cached = withCommandScopedReadCache(createIsomorphicGitFs(options.fs).promises);
+    this.lfs = cached.promises;
+    this.readCache = cached.cache;
     this.corsProxy = options.corsProxy;
     this.authorName = options.authorName ?? 'User';
     this.authorEmail = options.authorEmail ?? 'user@example.com';
@@ -320,6 +356,10 @@ export class GitCommands {
 
     this.currentEnv = env;
     this.currentConfigOverrides = parsed.configOverrides;
+    // One memo per invocation: opened here, dropped in the `finally` below, so
+    // nothing a command read is ever visible to the next one (#2709).
+    const cacheable = CACHEABLE_COMMANDS.has(command);
+    if (cacheable) this.readCache.begin();
     try {
       if (NETWORK_COMMANDS.has(command)) {
         await this.ensureFreshGithubToken();
@@ -420,6 +460,7 @@ export class GitCommands {
         exitCode: 128,
       };
     } finally {
+      if (cacheable) this.readCache.end();
       this.currentEnv = undefined;
       this.currentConfigOverrides = undefined;
     }
