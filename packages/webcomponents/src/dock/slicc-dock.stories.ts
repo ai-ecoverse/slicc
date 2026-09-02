@@ -63,7 +63,7 @@ const meta: Meta<DockArgs> = {
   argTypes: {
     active: {
       control: 'inline-radio',
-      options: ['hero', 'palette', 'new', 'browser', 'files', 'term', 'memory'],
+      options: ['hero', 'palette', 'browser', 'files', 'term', 'memory'],
       description: 'Active (lit) item id',
     },
     systemTools: {
@@ -81,17 +81,17 @@ const meta: Meta<DockArgs> = {
 export default meta;
 type Story = StoryObj<DockArgs>;
 
-/** The full rail: sprinkles + New, the grow spacer, the divider, and pinned tools. */
+/** The full rail: sprinkles, the grow spacer, the divider, and pinned tools. */
 export const Default: Story = {
   args: { items: SPRINKLES, active: 'hero', systemTools: true },
 };
 
-/** Just the sprinkle launchers + the New + (no pinned system tools). */
+/** Just the sprinkle launchers (no pinned system tools). */
 export const SprinklesOnly: Story = {
   args: { items: SPRINKLES, active: undefined, systemTools: false },
 };
 
-/** Only the pinned system tools below the New launcher (no sprinkles yet). */
+/** Only the pinned system tools (no sprinkles yet). */
 export const SystemTools: Story = {
   args: { items: [], active: undefined, systemTools: true },
 };
@@ -111,7 +111,7 @@ export const Collapsed: Story = {
   args: { items: SPRINKLES, active: undefined, systemTools: true },
 };
 
-/** A fuller sprinkle roster pushing the New + and tools down the rail. */
+/** A fuller sprinkle roster pushing tools down the rail. */
 export const ManySprinkles: Story = {
   args: {
     items: [

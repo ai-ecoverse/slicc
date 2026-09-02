@@ -58,7 +58,6 @@ function buildWelcomeEnvelope(
     modelPicker: true,
     history: true,
     nav: true,
-    newSprinkle: true,
     monitor: true,
     showTimestamps: true,
     ...options.features,

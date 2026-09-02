@@ -79,11 +79,6 @@ export const ToolLit: Story = {
   args: { itemId: 'memory', icon: 'brain', tip: 'Memory', lit: true },
 };
 
-/** The "new sprinkle" plus launcher — a tool launcher with no status dot. */
-export const NewSprinkle: Story = {
-  args: { icon: 'plus', tip: 'New sprinkle' },
-};
-
 /** Sprinkle launcher (.di.sp) — `sparkles` glyph plus a violet status dot (default hue). */
 export const Sprinkle: Story = {
   args: { itemId: 'hero', kind: 'sprinkle', icon: 'sparkles', tip: 'Hero studio', hue: '#8b5cf6' },
@@ -121,8 +116,7 @@ export const SprinkleLit: Story = {
 /**
  * The lucide mapping for the prototype's hand-drawn dock glyphs, laid out as a
  * legend: sprinkles → `sparkles`, browser → `globe` (or `layout`), files →
- * `folder`, terminal → `square-terminal`, memory → `brain` (or `database`),
- * new → `plus`.
+ * `folder`, terminal → `square-terminal`, memory → `brain` (or `database`).
  */
 export const IconMapping: Story = {
   render: () => {
@@ -145,7 +139,6 @@ export const IconMapping: Story = {
       { icon: 'square-terminal', tip: 'terminal → square-terminal' },
       { icon: 'brain', tip: 'memory → brain' },
       { icon: 'database', tip: 'memory → database' },
-      { icon: 'plus', tip: 'new → plus' },
     ];
 
     for (const { icon, tip, kind } of items) {
@@ -210,8 +203,7 @@ export const DockRail: Story = {
         icon: 'sparkles',
         tip: 'palette',
         hue: '#f59e0b',
-      }),
-      make({ icon: 'plus', tip: 'New sprinkle' })
+      })
     );
 
     const grow = document.createElement('div');

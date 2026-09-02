@@ -86,7 +86,6 @@ describe('sidepanel-entry controller', () => {
           files: false,
           memory: false,
           browser: false,
-          newSprinkle: false,
           monitor: false,
           modelPicker: false,
           history: true,

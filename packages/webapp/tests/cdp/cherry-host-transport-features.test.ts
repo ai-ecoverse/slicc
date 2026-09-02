@@ -43,7 +43,6 @@ describe('CherryHostTransport features', () => {
         modelPicker: true,
         history: true,
         nav: true,
-        newSprinkle: true,
         monitor: true,
       },
     });
@@ -57,7 +56,6 @@ describe('CherryHostTransport features', () => {
       modelPicker: true,
       history: true,
       nav: true,
-      newSprinkle: true,
       monitor: true,
     });
   });
@@ -84,7 +82,6 @@ describe('CherryHostTransport features', () => {
       modelPicker: true,
       history: true,
       nav: true,
-      newSprinkle: true,
       monitor: true,
     });
   });

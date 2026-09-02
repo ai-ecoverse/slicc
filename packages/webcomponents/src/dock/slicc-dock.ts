@@ -50,14 +50,6 @@ const SYSTEM_TOOLS: readonly DockItemDescriptor[] = [
   { id: 'monitor', icon: 'activity', label: 'Monitor', kind: 'tool' },
 ] as const;
 
-/** The always-present `New +` sprinkle launcher (prototype "New sprinkle"). */
-const NEW_ITEM: DockItemDescriptor = {
-  id: 'new',
-  icon: 'plus',
-  label: 'New sprinkle',
-  kind: 'sprinkle',
-};
-
 /**
  * Scoped, document-level stylesheet for `<slicc-dock>`. A light-DOM host can't
  * carry a shadow-root `<style>`, so the `.dock` rail chrome is injected once into
@@ -113,9 +105,9 @@ function normalizeKind(value: string | null | undefined): 'sprinkle' | 'tool' {
 /**
  * `<slicc-dock>` — the right launcher rail from the prototype shell (`.dock`,
  * `#dock`). An always-visible 48px-wide vertical icon rail: sprinkle launchers at
- * the top, a `New +`, a `.grow` spacer, a `.div` divider, then the pinned system
- * tools (Browser / Files / Terminal / Memory) anchored at the bottom. It composes
- * one `<slicc-dock-item>` per entry (composed BY TAG), tracks the active item, and
+ * the top, a `.grow` spacer, a `.div` divider, then the pinned system tools
+ * (Browser / Files / Terminal / Memory) anchored at the bottom. It composes one
+ * `<slicc-dock-item>` per entry (composed BY TAG), tracks the active item, and
  * stays in lockstep with the tab bar.
  *
  * Light DOM (no shadow root): the host renders the items into itself so the host
@@ -275,7 +267,7 @@ export class SliccDock extends HTMLElement {
   /** Adopt any slotted `slicc-dock-item` children into the `items` list (light DOM
    *  has no native `<slot>`, so we read them once at connect time, then rebuild
    *  them canonically via `#render`). System-tool items are dropped here in favour
-   *  of the declarative `system-tools` attribute; the synthetic `new` launcher too. */
+   *  of the declarative `system-tools` attribute. */
   #adoptSlotted(): void {
     const els = [...this.querySelectorAll<HTMLElement>('slicc-dock-item')];
     if (els.length === 0) return;
@@ -283,7 +275,7 @@ export class SliccDock extends HTMLElement {
     for (const el of els) {
       const kind = normalizeKind(el.getAttribute('kind'));
       const id = el.getAttribute('item-id') ?? el.dataset.t ?? el.getAttribute('tip') ?? '';
-      if (kind === 'tool' || id === 'new' || id === '') continue;
+      if (kind === 'tool' || id === '') continue;
       adopted.push({
         id,
         icon: el.getAttribute('icon') ?? undefined,
@@ -297,10 +289,9 @@ export class SliccDock extends HTMLElement {
   }
 
   /** Resolve the kind of an id: a known system tool is a `tool`, else the kind
-   *  from `items`, falling back to `sprinkle` for the `new` launcher / `tool`. */
+   *  from `items`, falling back to `tool`. */
   #kindFor(id: string): 'sprinkle' | 'tool' {
     if (SYSTEM_TOOLS.some((t) => t.id === id)) return 'tool';
-    if (id === NEW_ITEM.id) return 'sprinkle';
     return this.#items.find((i) => i.id === id)?.kind ?? 'tool';
   }
 
@@ -326,14 +317,13 @@ export class SliccDock extends HTMLElement {
     });
   }
 
-  /** Rebuild the rail: sprinkles (top) → `New +` → `.grow` → `.div` → tools. */
+  /** Rebuild the rail: sprinkles (top) → `.grow` → `.div` → tools. */
   #render(): void {
     const active = this.active;
     const nodes: Node[] = [];
     for (const item of this.#items) {
       if (normalizeKind(item.kind) === 'sprinkle') nodes.push(this.#itemEl(item, active));
     }
-    nodes.push(this.#itemEl(NEW_ITEM, active));
     nodes.push(h('div', { class: 'grow' }));
     if (this.systemTools) {
       nodes.push(h('div', { class: 'div' }));

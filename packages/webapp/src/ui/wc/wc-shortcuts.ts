@@ -412,7 +412,7 @@ export function prevInCycle(keys: readonly string[], current: string | null): st
 
 /** Sprinkle launchers in the dock rail, in rail order. */
 export function sprinkleIds(dock: ShortcutDock): string[] {
-  return dock.items.filter((i) => i.kind === 'sprinkle' && i.id !== 'new').map((i) => i.id);
+  return dock.items.filter((i) => i.kind === 'sprinkle').map((i) => i.id);
 }
 
 /** What a command needs to do its work. */
@@ -734,13 +734,9 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
       const dock = deps.dock;
       if (!dock) return;
       const ids = sprinkleIds(dock);
-      // With no sprinkles installed, the `new` launcher is what the rail's
-      // only sprinkle affordance would open — and there is no list to page.
-      if (ids.length === 0) {
-        state.lastDockSurface = 'new';
-        dock.selectItem('new');
-        return;
-      }
+      // With no sprinkles installed there is nothing to open — sprinkles are
+      // authored by the agent, not launched from an empty rail affordance.
+      if (ids.length === 0) return;
       state.lastDockSurface = ids[0];
       dock.selectItem(ids[0]);
       // Seeded at the first, so the next step key goes to the SECOND.
