@@ -59,7 +59,11 @@ const FEATURE_FLAGS: readonly FeatureFlagDefinition[] = Object.freeze([
     label: 'Multiple cones',
     description:
       'Add, switch between and remove cones from the freezer rail. Extra cones share the workspace.',
-    defaultValue: 'off',
+    // Graduated (#2280): on everywhere, uniform across floats — the gate lives
+    // in the leader shell (`wc-live.ts`), so a follower or Cherry embed reads
+    // this flag but wires nothing from it. Still `userToggleable` for one
+    // release, as an opt-OUT, before the flag and its gate are deleted.
+    defaultValue: 'on',
     userToggleable: true,
   }),
 ]);

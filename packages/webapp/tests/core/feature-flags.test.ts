@@ -63,7 +63,8 @@ describe('feature flag registry', () => {
       expect.objectContaining({
         id: 'multiple-cones',
         label: 'Multiple cones',
-        defaultValue: 'off',
+        // Graduated (#2280) — on by default, still toggleable as an opt-out.
+        defaultValue: 'on',
         userToggleable: true,
       }),
     ]);
@@ -109,6 +110,28 @@ describe('feature flag registry', () => {
     expect(isFeatureEnabled('agentic-memory')).toBe(true);
   });
 
+  it('turns multiple cones ON on every float and accepts a local opt-OUT (#2280)', () => {
+    // Graduated: uniform across floats — the leader shell is the only gate, so
+    // a follower or Cherry embed resolving `on` still wires nothing from it.
+    for (const float of [
+      'standalone',
+      'extension',
+      'electron-overlay',
+      'extension-detached',
+      'hosted-leader',
+      'connect',
+      'cherry',
+      'follower',
+    ] as const) {
+      initFeatureFlags(float);
+      expect(isFeatureEnabled('multiple-cones')).toBe(true);
+    }
+
+    initFeatureFlags('standalone');
+    setFeatureFlagOverride('multiple-cones', 'off');
+    expect(isFeatureEnabled('multiple-cones')).toBe(false);
+  });
+
   it('uses float-aware bundled defaults', () => {
     expect(resolveFlagValue('experimental-settings', 'standalone')).toBe('on');
     expect(resolveFlagValue('experimental-settings', 'extension')).toBe('on');
@@ -147,7 +170,7 @@ describe('feature flag registry', () => {
       'experimental-settings': 'off',
       'panel-layouts': 'off',
       'agentic-memory': 'off',
-      'multiple-cones': 'off',
+      'multiple-cones': 'on',
     });
     expect(
       resolveFlags(
@@ -159,7 +182,7 @@ describe('feature flag registry', () => {
       'experimental-settings': 'off',
       'panel-layouts': 'off',
       'agentic-memory': 'off',
-      'multiple-cones': 'off',
+      'multiple-cones': 'on',
     });
   });
 

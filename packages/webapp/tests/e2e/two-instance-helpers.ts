@@ -79,33 +79,11 @@ export const CONE_MODEL_ALT = 'fake-cone-alternate';
 const LOCAL_LLM_PROVIDER_ID = 'local-llm';
 
 /** localStorage key of the feature-flag override bag (`core/feature-flags.ts`). */
-const FEATURE_FLAG_STORAGE_KEY = 'slicc_feature_flags';
 /** localStorage key the page mirrors leader tray status into (`base/tray-role.ts`). */
 const LEADER_STATUS_STORAGE_KEY = 'slicc.leaderTrayStatus';
 
 /** Label of the primary cone's tab — `assistantLabel` of the bootstrapped root. */
 export const PRIMARY_CONE_LABEL = 'sliccy';
-
-/**
- * Turn the `multiple-cones` flag on before boot. The flag is read once during
- * boot (`initFeatureFlags`), so this has to be an init script rather than a
- * post-`goto` write.
- */
-export async function seedFeatureFlags(
-  page: Page,
-  flags: Readonly<Record<string, string>>
-): Promise<void> {
-  await page.addInitScript(
-    (seed: { key: string; value: string }) => {
-      try {
-        localStorage.setItem(seed.key, seed.value);
-      } catch {
-        /* localStorage may be unavailable for opaque origins */
-      }
-    },
-    { key: FEATURE_FLAG_STORAGE_KEY, value: JSON.stringify(flags) }
-  );
-}
 
 export interface BootLeaderOptions {
   /** Fixture object POSTed to the fake server's `/__fixture` before boot. */
@@ -126,8 +104,11 @@ export interface BootLeaderOptions {
 }
 
 /**
- * Boot the leader with the fake LLM, the `multiple-cones` flag and (optionally)
- * a local tray, and wait until the bootstrapped primary cone is selected.
+ * Boot the leader with the fake LLM and (optionally) a local tray, and wait
+ * until the bootstrapped primary cone is selected.
+ *
+ * No flag is seeded: since #2280 `multiple-cones` ships on, so these scenarios
+ * run the shipped default and would fail loudly if it ever flipped back.
  *
  * The welcome message is the readiness signal, exactly as in
  * `reference-scenario.test.ts`: the composer renders before the kernel worker
@@ -140,7 +121,6 @@ export async function bootMultiConeLeader(page: Page, options: BootLeaderOptions
     modelId: options.modelId ?? CONE_MODEL,
     modelIds: options.modelIds ?? [CONE_MODEL, CONE_MODEL_ALT],
   });
-  await seedFeatureFlags(page, { 'multiple-cones': 'on' });
   await seedSkipSwReload(page);
   // The thin-bridge params are NOT optional, however little a cone scenario
   // looks like browser automation: the kernel worker routes provider fetches

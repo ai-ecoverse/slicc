@@ -354,8 +354,8 @@ export class SliccFreezerNew extends HTMLElement {
 
   /**
    * How many cones the host has, or `null` when cone management is not
-   * offered (attribute absent — the default, and what a follower or a build
-   * without the `multiple-cones` flag leaves). Any count shows the new-cone
+   * offered (attribute absent — the default, and what a follower or a host
+   * that opted out of `multiple-cones` leaves). Any count shows the new-cone
    * action; a count above one also shows drop-cone. Reflected to `cones`.
    */
   get cones(): number | null {
