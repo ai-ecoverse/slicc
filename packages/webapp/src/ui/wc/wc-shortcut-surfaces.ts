@@ -52,8 +52,8 @@ export interface ShortcutSurfaceDeps {
   frame?: ParentNode;
   /** The workbench tree (classic layout); also the zoom fallback root. */
   dockTree: HTMLElement;
-  /** The dock rail, read for which surface is open. */
-  dock: { readonly active: string | null };
+  /** The dock rail: which surface is open, and the way to open one. */
+  dock: { readonly active: string | null; selectItem?(id: string): void };
   /** The left rail, which holds the archived-chat cards. */
   freezer: HTMLElement;
   /** The composer band, for the dictation turn `v` starts and ends. */
@@ -108,6 +108,29 @@ export function toggleVoice(deps: ShortcutSurfaceDeps): void {
   // panel, where Chrome denies the mic cross-origin), and on any composer the
   // custom element has not upgraded.
   composer.toggleHandsFree?.();
+}
+
+/**
+ * Open the tab switcher with peek armed.
+ *
+ * Two steps in one gesture, and the ORDER is the whole trick: arm the overlay
+ * first, then open it through the dock's own event. Opening it makes it modal,
+ * which suspends every shell command — so by the time the user's next
+ * keystroke lands, the switcher already owns the keyboard and already knows
+ * the next activation is a peek. That is what makes `p 1` work as one motion
+ * without this module knowing anything about tabs, and without the digit
+ * having to be a chord.
+ *
+ * A float whose switcher cannot peek (a follower, whose tabs are the
+ * leader's — `no-peek`) refuses the arming and simply opens: the same key,
+ * one honest step less.
+ */
+export function peekTabs(deps: ShortcutSurfaceDeps): void {
+  const overlay = deps.thread.ownerDocument.querySelector('slicc-tab-overlay') as
+    | (HTMLElement & { peeking?: boolean })
+    | null;
+  if (overlay) overlay.peeking = true;
+  deps.dock.selectItem?.('browser');
 }
 
 /**
@@ -303,6 +326,7 @@ export function wireShellKeyboard(deps: ShellKeyboardDeps): ShortcutHandles {
     copyReply: () => copyReply(deps),
     copyChat: () => copyChat(deps),
     zoomSurface: () => zoomSurface(deps),
+    peekTabs: () => peekTabs(deps),
     lists: shortcutLists(deps),
   });
 }

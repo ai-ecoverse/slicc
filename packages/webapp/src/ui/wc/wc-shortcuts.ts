@@ -163,6 +163,11 @@ export interface ShortcutDeps {
   /** Fullscreen the active workbench surface (`z`) — the dock's long-press. */
   zoomSurface?: () => void;
   /**
+   * Open the tab switcher with PEEK armed (`p`), so the digit that follows
+   * shows a tab and comes back instead of switching to it for good.
+   */
+  peekTabs?: () => void;
+  /**
    * Start / stop-and-send a hands-free dictation turn (`v`) — the composer's
    * own push-to-talk lifecycle, which otherwise only a held pointer can reach.
    */
@@ -472,7 +477,7 @@ interface Command {
   list?: ChordListId;
   /**
    * Runs the command, and MAY report the index it activated in its list — the
-   * seed the step keys page on from, so `p` (which opens the first sprinkle)
+   * seed the step keys page on from, so `e` (which opens the first sprinkle)
    * is followed by `j` for the second rather than for the first again.
    */
   run(ctx: CommandContext): number | void;
@@ -529,6 +534,7 @@ export type CommandId =
   | 'rightRail'
   | 'files'
   | 'tabs'
+  | 'peek'
   | 'terminal'
   | 'memory'
   | 'monitor'
@@ -713,15 +719,35 @@ const COMMANDS: Readonly<Record<CommandId, Command>> = {
     },
   },
   files: surfaceCommand('files', 'File browser (with 1-9 / j / k: open that row)', 'files'),
-  tabs: surfaceCommand('browser', 'Browser tabs'),
+  tabs: surfaceCommand('browser', 'Browser tabs (then 1-9 to switch)'),
+  peek: {
+    /**
+     * The switcher, with peek armed: the digit that follows shows that tab and
+     * brings you back.
+     *
+     * `p` means the same thing here as it does inside the switcher, which is
+     * the whole reason it moved: a key that meant peek in a modal and
+     * something else outside it was a wart, and typing `p 1` without first
+     * opening the switcher is the thing people actually want to do.
+     *
+     * The digit is not a chord — it never reaches this module. Opening the
+     * switcher makes it modal, which suspends every shell command, and the
+     * overlay's own keyboard takes the digit from there (holding it until its
+     * asynchronous tab list lands). So `p 1` works as one gesture without the
+     * shell knowing anything about tabs.
+     */
+    holdsMode: true,
+    description: 'Peek a tab (then 1-9: show it and come back)',
+    run: ({ deps }) => deps.peekTabs?.(),
+  },
   terminal: surfaceCommand('term', 'Terminal'),
   memory: surfaceCommand('memory', 'Memory (with 1-9 / j / k: open that entry)', 'memory'),
   monitor: surfaceCommand('monitor', 'Monitor'),
   sprinkles: {
     /**
      * The FIRST sprinkle, not the next one. A chord prefix has to be
-     * idempotent — `p 3` must open the third whatever came before it — and
-     * cycling is now what the step keys are for: `p` then `j` walks the rest,
+     * idempotent — `e 3` must open the third whatever came before it — and
+     * cycling is now what the step keys are for: `e` then `j` walks the rest,
      * which is why there is no separate loop key any more.
      *
      * Holds the mode for the same reason every list command does: the key
@@ -824,7 +850,7 @@ export const RESERVED_KEYS: readonly string[] = [
  * - **The same key closes what it opened**, because clicking the active dock
  *   item collapses it and a shortcut must not need its own vocabulary.
  * - **Shift is the heavier twin of the same letter** (`n`/`N`, `c`/`C`,
- *   `y`/`Y`, `p`/`P`), so a destructive variant is never a key of its own.
+ *   `y`/`Y`), so a destructive variant is never a key of its own.
  *
  * Deliberately left free: `e h j k o q v w x . ; [] pairs aside` and, above
  * all, `/` — the obvious key for a command palette, and not worth spending on
@@ -858,7 +884,8 @@ export const DEFAULT_KEYMAP: Readonly<Record<string, CommandId>> = {
   b: 'tabs',
   m: 'memory',
   g: 'monitor',
-  p: 'sprinkles',
+  e: 'sprinkles',
+  p: 'peek',
   '[': 'leftRail',
   ']': 'rightRail',
   z: 'zoom',
@@ -1368,7 +1395,7 @@ function observeSelectedUnit(
  * the same intent either way, and which list it steps through is the one the
  * user just opened and can still see on the HUD; with none open, the thing in
  * front of them is the conversation. It also retires the dedicated cycle key
- * the sprinkles used to need: `p` opens the first and `j` walks the rest.
+ * the sprinkles used to need: `e` opens the first and `j` walks the rest.
  *
  * Returns the index it landed on, so the caller can re-arm the chord there and
  * the next press continues from where this one stopped.

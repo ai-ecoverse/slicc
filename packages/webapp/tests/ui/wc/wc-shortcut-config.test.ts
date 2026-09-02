@@ -98,6 +98,30 @@ describe('parseKeymapDocument', () => {
     expect(JSON.parse(shipped).bindings).toEqual({});
   });
 
+  /**
+   * The comment tells users they can paste the v1 keymap back to restore the
+   * old keyboard. That instruction is only true if the block is valid JSON —
+   * a stray note between two property lines silently turns it into a document
+   * `parseKeymapDocument` throws away, and the advertised procedure quietly
+   * stops working.
+   */
+  it('the v1 paste-back block in the comment is a keymap that actually parses', async () => {
+    const shipped = (await import('../../../../vfs-root/etc/slicc/keys.json?raw')).default;
+    const lines = JSON.parse(shipped)['//'] as string[];
+    const start = lines.findIndex((line) => line.trim().startsWith('"bindings"'));
+    const end = lines.findIndex((line, i) => i > start && line.trim() === '}');
+    expect(start).toBeGreaterThan(-1);
+    expect(end).toBeGreaterThan(start);
+    const { keymap, warnings } = parseKeymapDocument(
+      `{${lines.slice(start, end + 1).join('\n')}}`,
+      {}
+    );
+    expect(warnings).toEqual([]);
+    // It restores the v1 keyboard, not some subset of it that still parses.
+    expect(keymap.d).toBe('nextAgent');
+    expect(Object.keys(keymap).length).toBeGreaterThanOrEqual(14);
+  });
+
   it('the shipped file documents every command that exists', async () => {
     const shipped = (await import('../../../../vfs-root/etc/slicc/keys.json?raw')).default;
     const help = (JSON.parse(shipped)['//'] as string[]).join(' ');
