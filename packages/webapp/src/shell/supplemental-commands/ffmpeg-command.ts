@@ -289,6 +289,18 @@ const BOOLEAN_FLAGS = new Set([
   '-noautorotate',
   '-ignore_unknown',
   '-exact_size',
+  '-bitexact',
+  '-xerror',
+  '-benchmark',
+  '-benchmark_all',
+  '-dump',
+  '-hex',
+  '-stdin',
+  '-noautoscale',
+  '-accurate_seek',
+  '-noaccurate_seek',
+  '-fix_sub_duration',
+  '-recast_media',
 ]);
 
 interface ParseState {
@@ -373,6 +385,23 @@ function handleWarmupToken(state: ParseState, args: string[], i: number): number
 }
 
 /**
+ * Is there another positional at or after `from`?
+ *
+ * The trailing positional is the output path, so this is how a
+ * candidate option value is told apart from the output itself. Known
+ * value-taking flags are skipped along with their values so their
+ * arguments are not mistaken for positionals.
+ */
+function hasLaterPositional(args: string[], from: number): boolean {
+  for (let i = from; i < args.length; i++) {
+    const tok = args[i];
+    if (!tok.startsWith('-')) return true;
+    if (VALUE_TAKING_FLAGS.has(tok)) i += 1;
+  }
+  return false;
+}
+
+/**
  * Decide whether an option we do not recognize consumes the next
  * token as its value.
  *
@@ -389,15 +418,17 @@ function handleWarmupToken(state: ParseState, args: string[], i: number): number
  * following says otherwise:
  *  - there is no next token;
  *  - the next token is itself an option (`-…`);
- *  - the next token is the LAST argv entry, which is the output path.
- *    This is what keeps a genuinely unknown toggle from swallowing
- *    the output in `ffmpeg -i in.mp4 -someflag out.mp4`.
+ *  - the next token is the only positional left, making it the output
+ *    path. Testing for a later *positional* rather than for the last
+ *    argv entry is what keeps an unknown toggle from swallowing the
+ *    output when options trail it, as in
+ *    `ffmpeg -i in.mp4 -bitexact out.mp4 -y`.
  */
 function unknownFlagTakesValue(args: string[], i: number): boolean {
   const next = args[i + 1];
   if (typeof next !== 'string') return false;
   if (next.startsWith('-')) return false;
-  return i + 1 < args.length - 1;
+  return hasLaterPositional(args, i + 2);
 }
 
 function handleGenericOptionToken(

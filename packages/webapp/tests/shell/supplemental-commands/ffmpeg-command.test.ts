@@ -254,6 +254,30 @@ describe('parseFfmpegArgs value-taking flags', () => {
     expect(parsed.outputOpts).toEqual(['-shortest', '-y']);
   });
 
+  it('keeps the output when options trail it', () => {
+    // `-bitexact` is a real no-arg option and the output is not the
+    // last token here, so a "last argv entry" rule would consume
+    // out.mp4 as its value and leave the invocation with no output.
+    const parsed = parseFfmpegArgs(['-i', 'in.mp4', '-bitexact', 'out.mp4', '-y']);
+    expect(parsed.outputPath).toBe('out.mp4');
+    expect(parsed.outputOpts).toEqual(['-bitexact']);
+  });
+
+  it('keeps the output when an UNLISTED toggle is trailed by options', () => {
+    const parsed = parseFfmpegArgs(['-i', 'in.mp4', '-brand_new_toggle', 'out.mp4', '-y']);
+    expect(parsed.outputPath).toBe('out.mp4');
+    expect(parsed.outputOpts).toEqual(['-brand_new_toggle']);
+  });
+
+  it('still consumes a value when another positional follows it', () => {
+    const parsed = parseFfmpegArgs(['-i', 'in.mp4', '-unknown_opt', 'val', 'out.mp4', '-y']);
+    expect(parsed.outputPath).toBe('out.mp4');
+    // `-y` follows the output positional, so it binds to a next output
+    // that never arrives — pre-existing option-binding semantics, not
+    // something the arity rule changes.
+    expect(parsed.outputOpts).toEqual(['-unknown_opt', 'val']);
+  });
+
   it('binds an unknown option to the next INPUT, not the output', () => {
     const parsed = parseFfmpegArgs(['-hwaccel', 'auto', '-i', 'in.mp4', 'out.mp4']);
     expect(parsed.inputs[0].raw).toEqual(['-hwaccel', 'auto', '-i', 'in.mp4']);
