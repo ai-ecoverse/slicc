@@ -154,6 +154,9 @@ function makeOrchestratorMock() {
     resetFilesystem: vi.fn().mockResolvedValue(undefined),
     reloadAllSkills: vi.fn().mockResolvedValue(undefined),
     getSessionCosts: vi.fn(() => ({})),
+    getWorkUnits: vi.fn(() => ({
+      close: vi.fn().mockResolvedValue(undefined),
+    })),
   };
 }
 
@@ -290,7 +293,7 @@ describe('Kernel facade parity', () => {
       otherRoot,
     ];
     orchestrator.getScoops.mockImplementation(() => scoops);
-    orchestrator.getWorkUnits = vi.fn(() => ({
+    orchestrator.getWorkUnits.mockReturnValue({
       close: vi.fn(async (jid: string) => {
         // Promote detach child, drop the cone.
         scoops = scoops
@@ -299,7 +302,7 @@ describe('Kernel facade parity', () => {
             s.jid === keeper.jid ? { ...s, parentJid: null, requiresTrigger: false } : s
           );
       }),
-    }));
+    });
 
     await client.unregisterScoop('cone_1');
     await tick();
