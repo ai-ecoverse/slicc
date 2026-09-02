@@ -480,6 +480,9 @@ export default defineConfig(({ mode }) => ({
     __BIOME_WASM_WEB_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/wasm-web')),
     __BIOME_JS_API_VERSION__: JSON.stringify(wasmDepVersion('@biomejs/js-api')),
     __FFMPEG_CORE_VERSION__: JSON.stringify(wasmDepVersion('@ffmpeg/core')),
+    // v86 is a devDependency purely for this pin and the live canary — nothing
+    // from it is bundled (see v86-wasm.ts).
+    __V86_VERSION__: JSON.stringify(wasmDepVersion('v86')),
     // Buffer polyfill for isomorphic-git
     global: 'globalThis',
   },

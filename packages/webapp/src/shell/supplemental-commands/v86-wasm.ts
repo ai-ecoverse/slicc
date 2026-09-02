@@ -11,10 +11,18 @@
  * canonical `ipk add` guidance error which the `v86` command surfaces
  * verbatim. ZERO network in the not-installed path.
  *
- * Because the glue is not a webapp dependency, the pinned version is a
- * source literal (there is no package.json entry for Renovate to bump —
- * bumping means updating `V86_PINNED_VERSION` after re-verifying the
- * internal surfaces `v86-vm.ts` instruments).
+ * `v86` IS a webapp devDependency, but only so the version pin can be
+ * baked from `package.json` (the `__V86_VERSION__` define, same mechanism
+ * as the magick / biome / ffmpeg pins) and so the live canary
+ * (`tests/shell/supplemental-commands/v86-wasm-live.test.ts`) has a real
+ * installed package to probe. No source file may import it — that would
+ * drag the ~350 kB glue into the kernel worker's cold-boot graph — and
+ * `v86-wasm.test.ts` pins that at the source level. Bumping the
+ * devDependency is how the pin moves; the canary then checks the
+ * installed package's layout, exports and the internal surfaces
+ * `v86-vm.ts` instruments, and the agent skill's `ipk add` line must move
+ * with it, so a Renovate bump still gets a human re-verification rather
+ * than a silent auto-merge.
  */
 
 import { splitPath } from '../../fs/path-utils.js';
@@ -22,14 +30,31 @@ import { compileWasmModule } from '../../kernel/realm/wasm-compiler.js';
 import { resolve as ipkResolve, type ModuleReader } from '../ipk/resolver.js';
 import { GLOBAL_IPK_ADD, isNodeRuntime } from './shared.js';
 
-/** The npm `v86` release the command is pinned to. */
-export const V86_PINNED_VERSION = '0.5.424';
+/**
+ * The npm `v86` release the command is pinned to — the exact webapp
+ * devDependency, baked in at build time so the install guidance and the
+ * package the canary verifies can never disagree (it used to be a source
+ * literal edited by hand alongside every bump).
+ *
+ * There is deliberately no `assertMagickVersionMatch`-style guard on the
+ * version an ipk install actually carries. magick needs one because its
+ * glue is bundled here while its wasm comes from the VFS, so a bare
+ * `ipk add` mixes two releases and emscripten hangs for 30 s. v86 ships
+ * glue and wasm in the same tarball, so whatever is installed is
+ * self-consistent and boots. The only exposure of a drifted install is a
+ * release renaming one of the OPTIONAL internals `v86-vm.ts` wraps
+ * (`screen_adapter.update_buffer`, `get_text_screen`, ...): those are
+ * optional-chained, so `screenshot` / `text` would go empty rather than
+ * hang, and `v86 --version` prints the installed release to make that
+ * diagnosable.
+ */
+export const V86_PINNED_VERSION = __V86_VERSION__;
 
 export const V86_NOT_INSTALLED = `v86 is not installed in node_modules: run \`${GLOBAL_IPK_ADD} v86@${V86_PINNED_VERSION}\` (no network fallback)`;
 
 /**
  * Read-only VFS context the loader needs to read an ipk-installed
- * `v86/build/{libv86.mjs,v86.wasm}` pair. Mirrors the
+ * `v86` glue + engine pair (see `V86_LAYOUT_CANDIDATES`). Mirrors the
  * `IpkResolutionContext` shape used by `esbuild-wasm.ts` /
  * `ffmpeg-wasm.ts` so every float wires the loader the same way.
  */
@@ -164,11 +189,53 @@ export async function getV86Module(
 }
 
 /**
- * Try to read `build/libv86.mjs` + `build/v86.wasm` (and the manifest
- * version) from an ipk-installed `v86` in the VFS. Returns `null` on
- * any resolution / read miss so the caller surfaces the canonical
- * guidance error. Exported so resolution is unit-testable without
- * booting the emulator.
+ * Where the glue + engine pair lives inside an ipk-installed `v86`,
+ * relative to the package root, in probe order. Explicit so a future
+ * layout move is a one-line addition here instead of a silent "not
+ * installed" — the failure mode `@imagemagick/magick-wasm` 0.0.43 caused
+ * when it moved `magick.wasm` under `dist/x86/` and every
+ * filesystem-mocking test stayed green (PR #2744).
+ *
+ * Surveyed 2026-09-02: every official copy/v86 release on npm — 0.5.10
+ * (March 2025) through 0.5.456 — ships `build/libv86.mjs` (the manifest's
+ * `main`) next to `build/v86.wasm`. The layout has never moved. The
+ * `build/index.js` + `build/v86.wasm` shape of the 2022-2023 `v86` 0.3.x /
+ * 0.4.x publications is deliberately NOT a candidate: those were a
+ * third-party fork (giulioz/v86-module) with a different API, so
+ * resolving them would trade the clean guidance error for a constructor
+ * failure one step later. The `-debug` / `-fallback` engine variants that
+ * ship alongside are not candidates either; the emulator is always handed
+ * the primary build via `wasm_fn`.
+ */
+export const V86_LAYOUT_CANDIDATES: readonly { readonly js: string; readonly wasm: string }[] = [
+  { js: 'build/libv86.mjs', wasm: 'build/v86.wasm' },
+];
+
+/**
+ * First candidate layout whose glue AND engine both exist under `pkgDir`,
+ * or `null` for a partial install / an unknown future layout (the caller
+ * turns that into the canonical guidance error).
+ */
+async function findV86Layout(
+  pkgDir: string,
+  reader: ModuleReader
+): Promise<{ jsPath: string; wasmPath: string } | null> {
+  for (const { js, wasm } of V86_LAYOUT_CANDIDATES) {
+    const jsPath = `${pkgDir}/${js}`;
+    const wasmPath = `${pkgDir}/${wasm}`;
+    if ((await reader.exists(jsPath)) && (await reader.exists(wasmPath))) {
+      return { jsPath, wasmPath };
+    }
+  }
+  return null;
+}
+
+/**
+ * Try to read the glue + engine pair (see `V86_LAYOUT_CANDIDATES`) and
+ * the manifest version from an ipk-installed `v86` in the VFS. Returns
+ * `null` on any resolution / read miss so the caller surfaces the
+ * canonical guidance error. Exported so resolution is unit-testable
+ * without booting the emulator.
  */
 export async function tryLoadV86FromNodeModules(
   ipk: IpkResolutionContext
@@ -180,16 +247,13 @@ export async function tryLoadV86FromNodeModules(
     return null;
   }
   if (resolved.type !== 'file') return null;
-  const pkgDir = splitPath(resolved.path).dir;
-  const jsPath = `${pkgDir}/build/libv86.mjs`;
-  const wasmPath = `${pkgDir}/build/v86.wasm`;
-  if (!(await ipk.reader.exists(jsPath))) return null;
-  if (!(await ipk.reader.exists(wasmPath))) return null;
+  const layout = await findV86Layout(splitPath(resolved.path).dir, ipk.reader);
+  if (!layout) return null;
   try {
     const manifest = await ipk.reader.readFile(resolved.path);
     const version = String(JSON.parse(manifest).version ?? V86_PINNED_VERSION);
-    const jsSource = await ipk.reader.readFile(jsPath);
-    const wasmBytes = await ipk.readBytes(wasmPath);
+    const jsSource = await ipk.reader.readFile(layout.jsPath);
+    const wasmBytes = await ipk.readBytes(layout.wasmPath);
     return { jsSource, wasmBytes, version };
   } catch {
     return null;
