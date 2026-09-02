@@ -100,6 +100,20 @@ for pid in "${CHECK_PIDS[@]}"; do
 	i=$((i + 1))
 done
 
+# ── autofix drift (serial — it writes) ───────────────────────────────────────
+# Mirrors the CI "Autofix drift" step: `biome check --write` must be a no-op.
+# Runs after the parallel checks so its writes cannot race their reads. If it
+# fails, the rewrites are already in the working tree — commit them.
+name="autofix-drift"
+if bash packages/dev-tools/tools/check-autofix-drift.sh >"$tmp/$name.log" 2>&1; then
+	echo "${G}✓${Z} $name"
+else
+	echo "${R}✗${Z} ${B}$name${Z}"
+	sed 's/^/  │ /' "$tmp/$name.log"
+	failures=$((failures + 1))
+fi
+CHECK_NAMES+=("$name")
+
 # ── summary ──────────────────────────────────────────────────────────────────
 total=${#CHECK_NAMES[@]}
 

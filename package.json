@@ -102,6 +102,7 @@
     "prepare": "husky",
     "lint:no-raw-chrome-runtime-id": "node packages/dev-tools/tools/check-no-raw-chrome-runtime-id.mjs",
     "lint:hosted-origin": "node packages/dev-tools/tools/check-hosted-origin-literal.mjs",
+    "lint:autofix-drift": "bash packages/dev-tools/tools/check-autofix-drift.sh",
     "verify": "bash packages/dev-tools/tools/pre-push-lint-gate.sh"
   },
   "dependencies": {

@@ -220,6 +220,14 @@ jobs:
       # than in the macOS Swift jobs — no toolchain required.
       - name: Lint (biome + prettier + CLAUDE.md sizes + tessl skill lint)
         run: npm run lint:ci
+      - name: Autofix drift (npm run lint must be a no-op)
+        # `biome check` above only fails on errors, but `npm run lint` runs
+        # `biome check --write`, which applies every safe fix even for
+        # warn/info rules. A violation of one of those is green here yet
+        # rewritten by every local `npm run lint`, re-dirtying every worktree.
+        # They land via commits that skip the pre-commit hook (GitHub web UI,
+        # Copilot Autofix).
+        run: npm run lint:autofix-drift
       - name: Debt boy-scout gate (biome rules + layer back-edges)
         # Fail when this PR touches a file that is still on a debt list —
         # a per-rule biome.json exemption list or the layer back-edge
