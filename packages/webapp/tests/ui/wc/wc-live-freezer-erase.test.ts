@@ -1,8 +1,9 @@
 // @vitest-environment jsdom
 /**
- * "Erase" keeps nothing: the live compaction snapshot the session wrote to
- * `/sessions` is discarded for the cone being cleared, and only then. Save
- * and skip leave it to the freezer, which completes it instead.
+ * "Erase" keeps nothing: the clear-chat request carries the intent to the
+ * kernel, which deletes the live compaction snapshot inside the snapshot
+ * writer's own index transaction. Save and skip leave it to the freezer,
+ * which completes it instead.
  */
 
 import { describe, expect, it, vi } from 'vitest';
@@ -16,16 +17,6 @@ vi.mock('../../../src/ui/new-session.js', () => ({
   runNewSessionFreezeQuick: vi.fn(async () => null),
   runNewSessionArchiveOnly: vi.fn(async () => null),
 }));
-const discardCalls = vi.hoisted(() => [] as Array<string | undefined>);
-vi.mock('../../../src/ui/session-freezer.js', async (importOriginal) => {
-  const actual = (await importOriginal()) as Record<string, unknown>;
-  return {
-    ...actual,
-    discardLiveConeSnapshot: vi.fn(async (_vfs: unknown, folder: string | undefined) => {
-      discardCalls.push(folder);
-    }),
-  };
-});
 vi.mock('../../../src/transcript/export-provider.js', () => ({
   getTranscriptExportService: () => ({ captureFrozen: vi.fn(async () => undefined) }),
 }));
@@ -48,6 +39,8 @@ const research = {
   addedAt: '2026-01-02T00:00:00.000Z',
   parentJid: null,
 } as unknown as RegisteredScoop;
+
+const clearCalls: Array<[string | undefined, { discardLiveSnapshot?: boolean } | undefined]> = [];
 
 function harness() {
   const freezer = document.createElement('slicc-freezer');
@@ -75,7 +68,9 @@ function harness() {
       >,
     client: {
       getScoops: () => [research],
-      clearAllMessages: vi.fn(async () => undefined),
+      clearAllMessages: vi.fn(async (jid?: string, options?: { discardLiveSnapshot?: boolean }) => {
+        clearCalls.push([jid, options]);
+      }),
       spawnAgent: vi.fn(),
     } as unknown as OffscreenClient,
     getController: () => ({ loadMessages: vi.fn() }) as never,
@@ -95,15 +90,18 @@ async function runNewChat(freezer: HTMLElement, action: 'save' | 'skip' | 'erase
 }
 
 describe('New chat → erase discards the live snapshot', () => {
-  it('discards for the cone being erased and for no other action', async () => {
-    discardCalls.length = 0;
+  it('asks the kernel to discard for erase only, so the delete is ordered with the writer', async () => {
+    clearCalls.length = 0;
     const freezer = harness();
 
     await runNewChat(freezer, 'save');
     await runNewChat(freezer, 'skip');
-    expect(discardCalls).toEqual([]);
+    expect(clearCalls).toEqual([
+      ['cone_2', {}],
+      ['cone_2', {}],
+    ]);
 
     await runNewChat(freezer, 'erase');
-    expect(discardCalls).toEqual(['cone-research']);
+    expect(clearCalls[2]).toEqual(['cone_2', { discardLiveSnapshot: true }]);
   });
 });

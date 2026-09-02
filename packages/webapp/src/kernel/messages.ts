@@ -256,6 +256,13 @@ export interface ClearChatMsg {
    * every sender did before multiple cones existed.
    */
   scoopJid?: string;
+  /**
+   * "Erase": also delete the cone's live compaction snapshot in `/sessions`
+   * instead of finalizing it. Decided in the kernel, in the same index
+   * transaction the snapshot writer uses, so an erase cannot race a
+   * snapshot that is still being written.
+   */
+  discardLiveSnapshot?: boolean;
 }
 
 export interface ClearChatAckMsg {

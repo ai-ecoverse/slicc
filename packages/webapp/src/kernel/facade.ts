@@ -1543,7 +1543,7 @@ export class Bridge implements KernelFacade {
         break;
 
       case 'clear-chat': {
-        await this.handleClearChat(msg.requestId, msg.scoopJid);
+        await this.handleClearChat(msg.requestId, msg.scoopJid, msg.discardLiveSnapshot === true);
         break;
       }
 
@@ -1883,13 +1883,21 @@ export class Bridge implements KernelFacade {
    * jid falls back to the default root and the primary cone's session
    * key, matching the pre-multiple-cones behaviour.
    */
-  private async handleClearChat(requestId: string, scoopJid?: string): Promise<void> {
+  private async handleClearChat(
+    requestId: string,
+    scoopJid?: string,
+    discardLiveSnapshot = false
+  ): Promise<void> {
     const scoops = this.orchestrator?.getScoops() ?? [];
     const target =
       (scoopJid ? scoops.find((scoop) => scoop.jid === scoopJid) : undefined) ?? rootsOf(scoops)[0];
     const coneJid = target?.jid;
     if (coneJid) {
-      await this.orchestrator?.clearScoopMessages(coneJid);
+      if (discardLiveSnapshot) {
+        await this.orchestrator?.clearScoopMessages(coneJid, { discardLiveSnapshot: true });
+      } else {
+        await this.orchestrator?.clearScoopMessages(coneJid);
+      }
     }
     if (this.sessionStore) {
       await this.sessionStore.delete(

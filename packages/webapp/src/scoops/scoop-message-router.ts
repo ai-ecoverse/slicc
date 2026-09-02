@@ -16,7 +16,7 @@ import { formatPromptWithAttachments, imageContentFromAttachments } from '../cor
 import type { SessionStore } from '../core/session.js';
 import type { TurnGuestGate } from '../sudo/types.js';
 import { advanceMessageWatermark, parseMessageWatermark, serializeMessageWatermark } from './db.js';
-import type { ScoopContext } from './scoop-context.js';
+import type { ClearSessionOptions, ScoopContext } from './scoop-context.js';
 import { emitScoopLifecycle } from './scoop-telemetry-hook.js';
 import type { ChannelMessage, RegisteredScoop, ScoopTabState } from './types.js';
 
@@ -643,14 +643,18 @@ export class ScoopMessageRouter {
    * passes the live context so the in-process agent's transcript is
    * cleared too.
    */
-  async clearScoopMessages(jid: string, context: ScoopContext | undefined): Promise<void> {
+  async clearScoopMessages(
+    jid: string,
+    context: ScoopContext | undefined,
+    options: ClearSessionOptions = {}
+  ): Promise<void> {
     this.cancelDebounce(jid);
     if (context) {
       // Clears the live list AND both durable representations — the canonical
       // work-unit record and the legacy agent session (#2275). Deleting only
       // the legacy one would leave the record standing, and a restore prefers
       // the record: "New chat" would come back on the next reload.
-      await context.clearSession().catch((err) => {
+      await context.clearSession(options).catch((err) => {
         log.warn('Failed to clear the durable conversation for scoop', {
           jid,
           error: err instanceof Error ? err.message : String(err),

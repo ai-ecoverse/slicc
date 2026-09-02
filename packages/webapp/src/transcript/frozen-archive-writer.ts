@@ -150,8 +150,11 @@ export function formatArchiveAsMarkdown(archive: FrozenSessionArchive): string {
     // would extract memories from a chat archived with memory explicitly off.
     (archive.memorySkipped ? `memorySkipped: true\n` : '') +
     // Same reasoning for a live snapshot: a rebuild must not hand a running
-    // session's transcript to the enrichment catch-up.
-    (archive.live ? `live: true\n` : '');
+    // session's transcript to the enrichment catch-up — and it needs the
+    // cursor back, or the next round re-appends the kept tail.
+    (archive.live ? `live: true\n` : '') +
+    (archive.live && archive.liveThrough ? `liveThrough: ${archive.liveThrough}\n` : '') +
+    (archive.live && archive.compactions ? `compactions: ${archive.compactions}\n` : '');
   const header =
     `---\n` +
     `id: ${archive.id}\n` +
@@ -197,6 +200,21 @@ export async function readSessionsIndexForWrite(
   }
 }
 
+interface LockManagerLike {
+  request<T>(name: string, callback: () => Promise<T>): Promise<T>;
+}
+
+/**
+ * Web Locks name every `/sessions/index.json` read-modify-write takes. The
+ * index is one shared file written from TWO realms — the page (a "New chat"
+ * freeze, enrichment) and the kernel worker (a compaction snapshot) — and a
+ * promise chain only orders writers inside one realm. Web Locks are
+ * origin-wide and available in dedicated workers, so both realms (and a
+ * second tab) queue on the same lock; without them, two RMWs that both read
+ * `[A]` would each write their own row over the other's.
+ */
+export const SESSIONS_INDEX_LOCK = 'slicc:sessions-index';
+
 /**
  * Per-realm chain so index read-modify-writes from one realm run strictly
  * in arrival order. `.then(run, run)` keeps a failed write from poisoning
@@ -204,13 +222,45 @@ export async function readSessionsIndexForWrite(
  */
 let indexWriteChain: Promise<void> = Promise.resolve();
 
+/**
+ * Run `run` as ONE index transaction: after every earlier writer in this
+ * realm, and — where Web Locks exist — after every writer in any other
+ * realm. The callback must do the whole read-modify-write inside and must
+ * not call another locked helper (Web Locks are not reentrant); the
+ * `*Unlocked` primitives are for that.
+ */
 export function serializeIndexWrite<T>(run: () => Promise<T>): Promise<T> {
-  const next = indexWriteChain.then(run, run);
+  const locked = (): Promise<T> => {
+    const locks = (globalThis as { navigator?: { locks?: LockManagerLike } }).navigator?.locks;
+    if (typeof locks?.request !== 'function') return run();
+    return locks.request(SESSIONS_INDEX_LOCK, () => run());
+  };
+  const next = indexWriteChain.then(locked, locked);
   indexWriteChain = next.then(
     () => undefined,
     () => undefined
   );
   return next;
+}
+
+/** Write the whole index. Caller holds the lock (`serializeIndexWrite`). */
+export function writeSessionsIndexUnlocked(
+  vfs: ArchiveVfs,
+  entries: readonly FrozenSessionIndexEntry[]
+): Promise<void> {
+  return vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(entries, null, 2));
+}
+
+/** Insert or replace one row, newest first. Caller holds the lock. */
+export async function upsertSessionsIndexEntryUnlocked(
+  vfs: ArchiveVfs,
+  entry: FrozenSessionIndexEntry
+): Promise<void> {
+  const existing = await readSessionsIndexForWrite(vfs);
+  await writeSessionsIndexUnlocked(vfs, [
+    entry,
+    ...existing.filter((e) => e.filename !== entry.filename),
+  ]);
 }
 
 /**
@@ -221,48 +271,5 @@ export function upsertSessionsIndexEntry(
   vfs: ArchiveVfs,
   entry: FrozenSessionIndexEntry
 ): Promise<void> {
-  return serializeIndexWrite(async () => {
-    const existing = await readSessionsIndexForWrite(vfs);
-    const updated = [entry, ...existing.filter((e) => e.filename !== entry.filename)];
-    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(updated, null, 2));
-  });
-}
-
-/**
- * Drop every index row matching `predicate`. Returns the removed rows so
- * the caller can delete their archives. A missing index removes nothing.
- */
-export function removeSessionsIndexEntries(
-  vfs: ArchiveVfs,
-  predicate: (entry: FrozenSessionIndexEntry) => boolean
-): Promise<FrozenSessionIndexEntry[]> {
-  return serializeIndexWrite(async () => {
-    const existing = await readSessionsIndexForWrite(vfs);
-    const removed = existing.filter(predicate);
-    if (removed.length === 0) return removed;
-    const kept = existing.filter((entry) => !predicate(entry));
-    await vfs.writeFile(SESSIONS_INDEX_PATH, JSON.stringify(kept, null, 2));
-    return removed;
-  });
-}
-
-/**
- * Delete a cone's live snapshot — file and index row. The "erase" half of
- * "New chat": the user chose to keep nothing, so the compaction rounds'
- * transcript goes too. A snapshot that is already gone is not an error.
- */
-export async function discardLiveSnapshot(vfs: ArchiveVfs, coneFolder: string): Promise<number> {
-  const removed = await removeSessionsIndexEntries(
-    vfs,
-    (entry) => entry.live === true && (entry.cone ?? 'cone') === coneFolder
-  );
-  for (const entry of removed) {
-    try {
-      await vfs.rm(`${SESSIONS_DIR}/${entry.filename}`);
-    } catch (err) {
-      if (!(err instanceof FsError) || err.code !== 'ENOENT') throw err;
-    }
-  }
-  if (removed.length > 0) await vfs.flush();
-  return removed.length;
+  return serializeIndexWrite(() => upsertSessionsIndexEntryUnlocked(vfs, entry));
 }

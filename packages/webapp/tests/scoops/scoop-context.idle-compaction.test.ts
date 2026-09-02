@@ -85,12 +85,68 @@ describe('IdleCompaction', () => {
     expect(compactFn).not.toHaveBeenCalled();
     await vi.advanceTimersByTimeAsync(1);
     expect(idle.isArmed).toBe(false);
-    expect(compactFn).toHaveBeenCalledWith(expect.any(Array), undefined, {
+    expect(compactFn).toHaveBeenCalledWith(expect.any(Array), expect.any(AbortSignal), {
       force: true,
       trigger: 'idle',
+      deferMemoryExtraction: expect.any(Function),
     });
     expect(agent.state.messages).toEqual([summary()]);
     expect(d.onCompacted).toHaveBeenCalledWith({ before: 2, after: 1 });
+  });
+
+  it('cancel() aborts the round in flight and nothing is adopted', async () => {
+    const { deps: d, agent } = deps();
+    let seenSignal: AbortSignal | undefined;
+    d.getCompactFn = () => (_messages, signal) =>
+      new Promise((resolve, reject) => {
+        seenSignal = signal;
+        signal?.addEventListener('abort', () => reject(new Error('aborted')));
+      });
+    const idle = new IdleCompaction(d);
+    const round = idle.runNow();
+    expect(idle.isRunning).toBe(true);
+    idle.cancel();
+    expect(seenSignal?.aborted).toBe(true);
+    expect(await round).toBe('cancelled');
+    expect(agent.state.messages).toHaveLength(2);
+    expect(d.onCompacted).not.toHaveBeenCalled();
+  });
+
+  it('a round whose compactor ignored the abort is still not adopted', async () => {
+    const { deps: d, agent } = deps();
+    let release!: () => void;
+    d.getCompactFn = () => () =>
+      new Promise((resolve) => {
+        release = () => resolve([summary()]);
+      });
+    const idle = new IdleCompaction(d);
+    const round = idle.runNow();
+    idle.cancel();
+    release();
+    expect(await round).toBe('cancelled');
+    expect(agent.state.messages).toHaveLength(2);
+  });
+
+  it('runs the deferred memory extraction only after the result is adopted', async () => {
+    const extract = vi.fn(async () => undefined);
+    const adopted = deps();
+    adopted.deps.getCompactFn = () => async (_messages, _signal, options) => {
+      options?.deferMemoryExtraction?.(extract);
+      return [summary()];
+    };
+    expect(await new IdleCompaction(adopted.deps).runNow()).toBe('compacted');
+    await Promise.resolve();
+    expect(extract).toHaveBeenCalledTimes(1);
+
+    const moved = deps();
+    moved.deps.getCompactFn = () => async (_messages, _signal, options) => {
+      options?.deferMemoryExtraction?.(extract);
+      moved.agent.state.messages.push(bigUser());
+      return [summary()];
+    };
+    expect(await new IdleCompaction(moved.deps).runNow()).toBe('thread-moved');
+    await Promise.resolve();
+    expect(extract).toHaveBeenCalledTimes(1);
   });
 
   it('does not arm when disabled, disposed or agent-less; disarm cancels', async () => {
@@ -233,7 +289,10 @@ describe('ScoopContext wiring', () => {
     await Promise.resolve();
   }
 
-  function inject(ctx: ScoopContext, compactFn: (m: AgentMessage[]) => Promise<AgentMessage[]>) {
+  function inject(
+    ctx: ScoopContext,
+    compactFn: (m: AgentMessage[], signal?: AbortSignal) => Promise<AgentMessage[]>
+  ) {
     const internals = ctx as unknown as Internals;
     const agent = fakeAgent([bigUser(), bigUser()]);
     internals.agent = agent;
@@ -295,6 +354,29 @@ describe('ScoopContext wiring', () => {
     expect(internals.idleCompaction?.isArmed).toBe(true);
     ctx.dispose();
     expect(internals.idleCompaction?.isArmed).toBe(false);
+  });
+
+  it('stop() and clearSession() cut off a round in flight', async () => {
+    mocks.enabledFlags.add('compact-on-idle');
+    const ctx = new ScoopContext(cone, callbacks(), {} as never);
+    let seenSignal: AbortSignal | undefined;
+    const { internals, agent } = inject(
+      ctx,
+      (_messages: AgentMessage[], signal?: AbortSignal) =>
+        new Promise<AgentMessage[]>((_resolve, reject) => {
+          seenSignal = signal;
+          signal?.addEventListener('abort', () => reject(new Error('aborted')));
+        }) as never
+    );
+    internals.setStatus('ready');
+    await settled(internals);
+    await vi.advanceTimersByTimeAsync(60_000);
+    expect(internals.idleCompaction?.isRunning).toBe(true);
+    ctx.stop();
+    expect(seenSignal?.aborted).toBe(true);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(internals.idleCompaction?.isRunning).toBe(false);
+    expect(agent.state.messages).toHaveLength(2);
   });
 
   it('does not arm a unit that stopped being ready while the module was loading', async () => {

@@ -163,6 +163,10 @@ export interface FrozenSessionArchive {
    * does not mistake it for a quick-freeze draft owed an enrichment pass.
    */
   live?: true;
+  /** Append cursor of a live snapshot — see {@link FrozenSessionIndexEntry.liveThrough}. */
+  liveThrough?: number;
+  /** Rounds written into a live snapshot — see {@link FrozenSessionIndexEntry.compactions}. */
+  compactions?: number;
 }
 
 /**
@@ -205,14 +209,30 @@ export function parseFrozenArchive(
   markdown: string
 ): Pick<
   FrozenSessionArchive,
-  'title' | 'messages' | 'cost' | 'models' | 'cone' | 'coneLabel' | 'memorySkipped' | 'live'
-> {
+  | 'title'
+  | 'messages'
+  | 'cost'
+  | 'models'
+  | 'cone'
+  | 'coneLabel'
+  | 'memorySkipped'
+  | 'live'
+  | 'liveThrough'
+  | 'compactions'
+> & { id?: string } {
   let body = markdown;
   let title = 'Untitled';
   const meta: Pick<
     FrozenSessionArchive,
-    'cost' | 'models' | 'cone' | 'coneLabel' | 'memorySkipped' | 'live'
-  > = {};
+    | 'cost'
+    | 'models'
+    | 'cone'
+    | 'coneLabel'
+    | 'memorySkipped'
+    | 'live'
+    | 'liveThrough'
+    | 'compactions'
+  > & { id?: string } = {};
 
   // 1. Strip YAML-style frontmatter and pull out the title.
   //    The writer emits `title: ${JSON.stringify(value)}`, which means
@@ -223,22 +243,7 @@ export function parseFrozenArchive(
   const fmMatch = body.match(/^---\n([\s\S]*?)\n---\n+/);
   if (fmMatch) {
     body = body.slice(fmMatch[0].length);
-    const cost = parseFrontmatterJson<FrozenSessionCost>(fmMatch[1], 'cost');
-    const models = parseFrontmatterJson<FrozenSessionModel[]>(fmMatch[1], 'models');
-    if (cost) meta.cost = cost;
-    if (models) meta.models = models;
-    // Provenance of the frozen chat (#2272). `cone` is a folder slug written
-    // raw; `coneLabel` is user text written JSON-quoted like `title`.
-    const cone = fmMatch[1].match(/^cone:\s*(.+?)\s*$/m)?.[1];
-    if (cone) meta.cone = cone;
-    const coneLabel = fmMatch[1].match(/^coneLabel:\s*(.+?)\s*$/m)?.[1];
-    if (coneLabel) meta.coneLabel = decodeFrontmatterString(coneLabel);
-    // Memory opt-out (#2272). Only `true` is meaningful: absent means "not
-    // decided", which is what an ordinary freeze records.
-    if (/^memorySkipped:\s*true\s*$/m.test(fmMatch[1])) meta.memorySkipped = true;
-    // A compaction snapshot of a session still in progress. Absent on every
-    // finished archive; only `true` is meaningful.
-    if (/^live:\s*true\s*$/m.test(fmMatch[1])) meta.live = true;
+    Object.assign(meta, parseFrontmatterMeta(fmMatch[1]));
     const titleLine = fmMatch[1].match(/^title:\s*(.+?)\s*$/m);
     if (titleLine) title = decodeFrontmatterString(titleLine[1]);
   }
@@ -264,6 +269,49 @@ export function parseFrozenArchive(
   body = body.replace(/^#\s+[^\n]*\n+/, '');
 
   return { title, messages: parseHeadingFallback(body), ...meta };
+}
+
+/** The scalar metadata a freezer-shaped frontmatter block carries, besides the title. */
+function parseFrontmatterMeta(
+  frontmatter: string
+): Pick<
+  FrozenSessionArchive,
+  | 'cost'
+  | 'models'
+  | 'cone'
+  | 'coneLabel'
+  | 'memorySkipped'
+  | 'live'
+  | 'liveThrough'
+  | 'compactions'
+> & { id?: string } {
+  const meta: ReturnType<typeof parseFrontmatterMeta> = {};
+  const cost = parseFrontmatterJson<FrozenSessionCost>(frontmatter, 'cost');
+  const models = parseFrontmatterJson<FrozenSessionModel[]>(frontmatter, 'models');
+  if (cost) meta.cost = cost;
+  if (models) meta.models = models;
+  // Provenance of the frozen chat (#2272). `cone` is a folder slug written
+  // raw; `coneLabel` is user text written JSON-quoted like `title`.
+  const cone = frontmatter.match(/^cone:\s*(.+?)\s*$/m)?.[1];
+  if (cone) meta.cone = cone;
+  const coneLabel = frontmatter.match(/^coneLabel:\s*(.+?)\s*$/m)?.[1];
+  if (coneLabel) meta.coneLabel = decodeFrontmatterString(coneLabel);
+  // Memory opt-out (#2272). Only `true` is meaningful: absent means "not
+  // decided", which is what an ordinary freeze records.
+  if (/^memorySkipped:\s*true\s*$/m.test(frontmatter)) meta.memorySkipped = true;
+  // A compaction snapshot of a session still in progress. Absent on every
+  // finished archive; only `true` is meaningful.
+  if (/^live:\s*true\s*$/m.test(frontmatter)) meta.live = true;
+  // The live cursor and round count ride the archive as well as the index
+  // row, so a corrupt-index rebuild restores them: without the cursor the
+  // next round would append the whole kept tail a second time.
+  const liveThrough = Number(frontmatter.match(/^liveThrough:\s*(\d+)\s*$/m)?.[1]);
+  if (Number.isFinite(liveThrough) && liveThrough > 0) meta.liveThrough = liveThrough;
+  const compactions = Number(frontmatter.match(/^compactions:\s*(\d+)\s*$/m)?.[1]);
+  if (Number.isFinite(compactions) && compactions > 0) meta.compactions = compactions;
+  const id = frontmatter.match(/^id:\s*(\S+)\s*$/m)?.[1];
+  if (id) meta.id = id;
+  return meta;
 }
 
 /**

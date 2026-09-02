@@ -97,6 +97,15 @@ export {
 export { buildScoopShellEnv, ownLickTargetFor } from './scoop-context/shell-env.js';
 export { resolveThinkingLevel } from './scoop-context/thinking-level.js';
 
+/** How a cleared root treats its live compaction snapshot. */
+export interface ClearSessionOptions {
+  /**
+   * "Erase" (#2272 vocabulary: the user keeps nothing): delete the live
+   * snapshot instead of finalizing it into a pending archive.
+   */
+  discardLiveSnapshot?: boolean;
+}
+
 export class ScoopContext {
   private scoop: RegisteredScoop;
   private callbacks: ScoopContextCallbacks;
@@ -154,6 +163,12 @@ export class ScoopContext {
    */
   private idleCompaction: IdleCompaction | null = null;
   private idleCompactionLoading: Promise<IdleCompaction> | null = null;
+  /**
+   * Bumped by every `clearSession`. A pre-compaction snapshot captures it
+   * and checks it again inside the index transaction, so a snapshot that
+   * was waiting for the lock while the chat was cleared writes nothing.
+   */
+  private sessionGeneration = 0;
   private readonly turnRunner: TurnRunner;
 
   /**
@@ -544,6 +559,9 @@ export class ScoopContext {
     );
     this.agent?.clearAllQueues?.();
     this.agent?.abort?.();
+    // A stop also cuts off an idle round in flight — its summary would
+    // otherwise finish and be adopted over a chat the user is acting on.
+    this.idleCompaction?.cancel();
     this.isProcessing = false;
     // Preserve an `error` state (a tripped bound set it deliberately, so the
     // lifecycle doesn't announce completion); a plain user interrupt lands
@@ -570,11 +588,12 @@ export class ScoopContext {
    * `clear-chat` — where the snapshot would otherwise stay `live` and the
    * NEXT session's compactions would append to it.
    */
-  async clearSession(): Promise<void> {
+  async clearSession(options: ClearSessionOptions = {}): Promise<void> {
+    this.sessionGeneration++;
+    this.idleCompaction?.cancel();
     this.clearMessages();
-    this.idleCompaction?.disarm();
     await this.sessions.clear();
-    await this.finalizeLiveSnapshot();
+    await this.settleLiveSnapshot(options.discardLiveSnapshot === true);
   }
 
   /** Whether compact-on-idle applies to this unit right now (flag + role). */
@@ -634,24 +653,36 @@ export class ScoopContext {
     trigger: CompactionTrigger
   ): Promise<CompactionSnapshot | undefined> {
     if (!this.fs || this.disposed) return undefined;
+    const generation = this.sessionGeneration;
     const { snapshotLiveSession } = await import('./live-session-snapshot.js');
     const result = await snapshotLiveSession({
       vfs: this.fs,
       cone: { folder: this.scoop.folder, label: this.scoop.assistantLabel },
       messages,
       trigger,
+      stillValid: () => !this.disposed && generation === this.sessionGeneration,
     });
-    return { transcriptPath: result.transcriptPath };
+    return result ? { transcriptPath: result.transcriptPath } : undefined;
   }
 
-  private async finalizeLiveSnapshot(): Promise<void> {
+  /**
+   * What becomes of a root's live snapshot when its chat is cleared. The
+   * freezer has normally already completed it (save / skip) by the time the
+   * clear arrives, so both paths are usually no-ops; "erase" asks for the
+   * discard explicitly, and a bare `clear-chat` finalizes.
+   */
+  private async settleLiveSnapshot(discard: boolean): Promise<void> {
     if (this.unit.parentId !== null || !this.fs) return;
     try {
-      const { finalizeLiveSnapshot } = await import('./live-session-snapshot.js');
-      await finalizeLiveSnapshot(this.fs, this.scoop.folder);
+      const { discardLiveSnapshot, finalizeLiveSnapshot } = await import(
+        './live-session-snapshot.js'
+      );
+      if (discard) await discardLiveSnapshot(this.fs, this.scoop.folder);
+      else await finalizeLiveSnapshot(this.fs, this.scoop.folder);
     } catch (err) {
-      log.warn('Live snapshot finalize failed (archive stays live)', {
+      log.warn('Live snapshot settle failed (archive stays live)', {
         folder: this.scoop.folder,
+        discard,
         error: err instanceof Error ? err.message : String(err),
       });
     }
@@ -730,7 +761,7 @@ export class ScoopContext {
     // messages a pending debounce hadn't flushed yet (#1987).
     this.sessions.persistNow();
     this.disposed = true;
-    this.idleCompaction?.disarm();
+    this.idleCompaction?.cancel();
     // Clear the run-bound wall-clock timer symmetrically with
     // `cleanupPromptState` (#1972): a dispose mid-bounded-run (shutdown,
     // drop_scoop) bypasses cleanup, and the armed timer would otherwise
@@ -774,9 +805,11 @@ export class ScoopContext {
   private setStatus(status: 'initializing' | 'ready' | 'processing' | 'error'): void {
     if (this.disposed) return;
     this.status = status;
-    // A settled root starts its idle window; anything else cancels it.
+    // A settled root starts its idle window; anything else cancels it —
+    // including a round in flight, since a prompt just started against the
+    // history it was summarizing.
     if (status === 'ready') this.armIdleCompaction();
-    else this.idleCompaction?.disarm();
+    else this.idleCompaction?.cancel();
     this.callbacks.onStatusChange(status);
   }
 

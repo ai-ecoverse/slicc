@@ -190,6 +190,15 @@ export interface CompactionOptions {
   /** Run the existing compaction path even when the local estimate is below its threshold. */
   force?: boolean;
   /**
+   * Hand the memory-extraction step back to the caller instead of running
+   * it inside the round. Set by a round whose result may be DISCARDED (the
+   * idle timer): extracting first would write bullets for a history that
+   * then stays in the conversation and is extracted again by the next
+   * real round. The thunk carries the same system prompt, so the prefix
+   * cache still hits when the caller runs it after adopting the result.
+   */
+  deferMemoryExtraction?: (extract: () => Promise<void>) => void;
+  /**
    * What started this round, for the snapshot hook and the UI notice. A
    * forced round with no trigger named is overflow recovery, the original
    * `force` caller.
@@ -256,8 +265,18 @@ function serializeMessages(messages: AgentMessage[]): string {
   return lines.join('\n\n');
 }
 
+/**
+ * The sentence {@link withTranscriptPointer} appends, as a matcher. It is
+ * stripped again when a message is SERIALIZED for the summary and memory
+ * prompts: a later round sees the previous summary at the head of the
+ * conversation, and the path must not end up paraphrased into the next
+ * summary or written into cone memory — the file is renamed on "New chat".
+ */
+const TRANSCRIPT_POINTER_RE =
+  /\n*The full transcript of the conversation before this compaction is saved at \S+ — read it when the summary is not enough\.?/g;
+
 function extractText(content: unknown): string {
-  if (typeof content === 'string') return content;
+  if (typeof content === 'string') return content.replace(TRANSCRIPT_POINTER_RE, '');
   if (!Array.isArray(content)) return '';
   const out: string[] = [];
   for (const block of content) {
@@ -268,7 +287,7 @@ function extractText(content: unknown): string {
       arguments?: unknown;
       thinking?: string;
     };
-    if (b.type === 'text' && b.text) out.push(b.text);
+    if (b.type === 'text' && b.text) out.push(b.text.replace(TRANSCRIPT_POINTER_RE, ''));
     else if (b.type === 'thinking' && b.thinking) out.push(`[thinking] ${b.thinking}`);
     else if (b.type === 'toolCall')
       out.push(`[tool-call ${b.name ?? '?'}] ${JSON.stringify(b.arguments ?? {})}`);
@@ -907,7 +926,8 @@ async function summarizeWithLlm(
   contextWindow: number,
   originalMessageCount: number,
   signal: AbortSignal | undefined,
-  detail: CompactionStateDetail
+  detail: CompactionStateDetail,
+  deferMemoryExtraction: CompactionOptions['deferMemoryExtraction']
 ): Promise<AgentMessage[] | null> {
   try {
     // #2012 defense-in-depth: never serialize an individually-oversized message
@@ -955,7 +975,15 @@ async function summarizeWithLlm(
       summaryLength: summary.length,
     });
 
-    await extractMemoriesIfConfigured(config, apiKey, systemPrompt, signal, detail);
+    if (deferMemoryExtraction) {
+      // The caller decides whether this round's history is really gone;
+      // the memory pass over it waits for that decision.
+      deferMemoryExtraction(() =>
+        extractMemoriesIfConfigured(config, apiKey, systemPrompt, undefined, detail)
+      );
+    } else {
+      await extractMemoriesIfConfigured(config, apiKey, systemPrompt, signal, detail);
+    }
 
     emitCompactionState(config, 'idle', detail);
     return [summaryMessage, ...messagesToKeep];
@@ -1096,7 +1124,8 @@ export function createCompactContext(
         contextWindow,
         messages.length,
         signal,
-        detail
+        detail,
+        options?.deferMemoryExtraction
       );
       if (summarized) {
         // The summary head is small; the tail's images are what re-blow the

@@ -155,6 +155,59 @@ describe('onBeforeCompaction', () => {
   });
 });
 
+describe('pointer hygiene on later rounds', () => {
+  it('strips the previous round’s pointer before the conversation reaches the summary and memory prompts', async () => {
+    const compact = createCompactContext(
+      config({
+        onBeforeCompaction: () => ({ transcriptPath: '/sessions/live-cone-3.md' }),
+        onMemoryUpdates: async () => undefined,
+      })
+    );
+    const first = await compact(conversation());
+    expect(textOf(first[0])).toContain('/sessions/live-cone-3.md');
+    mockCompleteSimple.mockClear();
+    // Round two: the previous summary (with its pointer) heads the history.
+    await compact([...first, text('user', 12_000, 5), text('assistant', 12_000, 6)]);
+    const prompts = mockCompleteSimple.mock.calls.map(
+      (call) => (call[1] as { systemPrompt: string }).systemPrompt
+    );
+    expect(prompts).toHaveLength(2);
+    for (const prompt of prompts) {
+      expect(prompt).toContain('<context-summary>');
+      expect(prompt).not.toContain('/sessions/live-cone-3.md');
+      expect(prompt).not.toContain('The full transcript of the conversation');
+    }
+  });
+
+  it('hands the memory pass to the caller when asked, without running it', async () => {
+    const appended: string[] = [];
+    mockCompleteSimple
+      .mockResolvedValueOnce({ stopReason: 'stop', content: [{ type: 'text', text: 'SUMMARY' }] })
+      .mockResolvedValueOnce({ stopReason: 'stop', content: [{ type: 'text', text: '- fact' }] });
+    const compact = createCompactContext(
+      config({
+        onMemoryUpdates: async (bullets) => {
+          appended.push(bullets);
+        },
+      })
+    );
+    let deferred: (() => Promise<void>) | undefined;
+    const result = await compact(conversation(), undefined, {
+      force: true,
+      trigger: 'idle',
+      deferMemoryExtraction: (extract) => {
+        deferred = extract;
+      },
+    });
+    expect(result).toHaveLength(2);
+    expect(mockCompleteSimple).toHaveBeenCalledTimes(1);
+    expect(appended).toEqual([]);
+    await deferred?.();
+    expect(mockCompleteSimple).toHaveBeenCalledTimes(2);
+    expect(appended).toEqual(['- fact']);
+  });
+});
+
 describe('estimateConversationTokens', () => {
   it('prices a conversation the way the trigger does', () => {
     expect(estimateConversationTokens([text('user', 400, 1), text('assistant', 400, 2)])).toBe(200);

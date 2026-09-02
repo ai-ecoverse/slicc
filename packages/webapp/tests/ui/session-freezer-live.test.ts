@@ -22,11 +22,7 @@ vi.mock('../../src/core/context-compaction.js', () => ({
   runOneOffCompactionCall: (...args: unknown[]) => mockRunOneOffCompactionCall(...args),
 }));
 
-import {
-  discardLiveConeSnapshot,
-  enrichPendingSession,
-  freezeConeSession,
-} from '../../src/ui/session-freezer.js';
+import { enrichPendingSession, freezeConeSession } from '../../src/ui/session-freezer.js';
 
 function makeFakeVfs() {
   const files = new Map<string, string>();
@@ -87,12 +83,14 @@ const store = {
 } as unknown as SessionStore;
 
 async function seedLiveSnapshot(vfs: FakeVfs, folder = 'cone') {
-  return snapshotLiveSession({
+  const result = await snapshotLiveSession({
     vfs,
     cone: { folder, label: folder === 'cone' ? 'sliccy' : 'Research' },
     messages: [agentText('user', 'first question', 1), agentText('assistant', 'first answer', 2)],
     trigger: 'threshold',
   });
+  if (!result) throw new Error('snapshot was skipped');
+  return result;
 }
 
 beforeEach(() => mockRunOneOffCompactionCall.mockReset());
@@ -157,29 +155,5 @@ describe('freezeConeSession over a live snapshot', () => {
     expect(parseFrozenArchive(vfs.files.get(`/sessions/${updated?.filename}`)!).title).toBe(
       'Build Fixed Twice'
     );
-  });
-});
-
-describe('discardLiveConeSnapshot', () => {
-  it('removes the cone’s live archive and index row, defaulting to the primary cone', async () => {
-    const vfs = makeFakeVfs();
-    const live = await seedLiveSnapshot(vfs);
-    const other = await seedLiveSnapshot(vfs, 'cone-research');
-
-    await discardLiveConeSnapshot(vfs as never, undefined);
-
-    expect(vfs.files.has(live.transcriptPath)).toBe(false);
-    expect(vfs.files.has(other.transcriptPath)).toBe(true);
-    expect((await readSessionsIndex(vfs as never)).map((e) => e.filename)).toEqual([
-      other.entry.filename,
-    ]);
-  });
-
-  it('never throws past the caller', async () => {
-    const vfs = makeFakeVfs();
-    vfs.readFile = async () => {
-      throw new FsError('EIO', 'disk on fire', '/sessions/index.json');
-    };
-    await expect(discardLiveConeSnapshot(vfs as never, 'cone')).resolves.toBeUndefined();
   });
 });

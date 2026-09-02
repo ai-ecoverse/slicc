@@ -1325,6 +1325,16 @@ describe('OffscreenClient compaction notices (#1985)', () => {
     });
   });
 
+  it('carries the erase intent on clear-chat only when asked', async () => {
+    void client.clearAllMessages('cone_123', { discardLiveSnapshot: true });
+    void client.clearAllMessages('cone_123');
+    const clears = sentMessages
+      .map((m) => (m as { payload: { type: string } }).payload)
+      .filter((payload) => payload.type === 'clear-chat');
+    expect(clears[0]).toMatchObject({ scoopJid: 'cone_123', discardLiveSnapshot: true });
+    expect(clears[1]).not.toHaveProperty('discardLiveSnapshot');
+  });
+
   it('words an idle round as one and appends the transcript pointer', () => {
     client.setSelectedScoopJid('cone_123');
     const events = collect();

@@ -20,8 +20,9 @@ function archive(live: boolean): string {
     'title: "Still going"',
     'frozenAt: 2026-09-02T10:00:00.000Z',
     'messageCount: 1',
+    'id: sid-1',
     'cone: cone',
-    ...(live ? ['live: true'] : []),
+    ...(live ? ['live: true', 'liveThrough: 42', 'compactions: 2'] : []),
     '---',
     '<!-- slicc:session-data',
     JSON.stringify([{ id: 'u1', role: 'user', content: 'hi', timestamp: 1 }]),
@@ -43,10 +44,17 @@ describe('rebuildFreezerIndexFromArchives with live snapshots', () => {
     const entries = await rebuildFreezerIndexFromArchives(fs);
     const byName = Object.fromEntries(entries.map((e) => [e.filename, e]));
 
-    expect(byName['live-cone-aaa.md']).toMatchObject({ live: true, cone: 'cone' });
+    expect(byName['live-cone-aaa.md']).toMatchObject({
+      live: true,
+      cone: 'cone',
+      liveThrough: 42,
+      compactions: 2,
+      sessionId: 'sid-1',
+    });
     expect(byName['live-cone-aaa.md'].pendingEnrichment).toBeUndefined();
     expect(byName['live-cone-bbb.md']).toMatchObject({ pendingEnrichment: true });
     expect(byName['live-cone-bbb.md'].live).toBeUndefined();
+    expect(byName['live-cone-bbb.md'].liveThrough).toBeUndefined();
     expect(byName['pending-ccc.md']).toMatchObject({ pendingEnrichment: true });
   });
 });

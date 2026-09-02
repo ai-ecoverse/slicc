@@ -14,14 +14,12 @@ import {
 } from '../../src/transcript/frozen-archive-format.js';
 import {
   type ArchiveVfs,
-  discardLiveSnapshot,
   findLiveSnapshotEntry,
   formatArchiveAsMarkdown,
   heuristicTitle,
   isDraftArchiveFilename,
   liveSnapshotFilename,
   readSessionsIndexForWrite,
-  removeSessionsIndexEntries,
   serializeIndexWrite,
   slugify,
   upsertSessionsIndexEntry,
@@ -73,13 +71,18 @@ describe('formatArchiveAsMarkdown', () => {
       cone: 'cone-research',
       coneLabel: 'Research',
       live: true,
+      liveThrough: 2,
+      compactions: 3,
     });
     expect(markdown).toMatch(/^---\nid: sid\n/);
-    expect(markdown).toContain('live: true\n');
+    expect(markdown).toContain('live: true\nliveThrough: 2\ncompactions: 3\n');
     expect(markdown).toContain('## User\nfix "the" build');
     const parsed = parseFrozenArchive(markdown);
     expect(parsed.title).toBe('Fix "the" build');
     expect(parsed.live).toBe(true);
+    expect(parsed.liveThrough).toBe(2);
+    expect(parsed.compactions).toBe(3);
+    expect(parsed.id).toBe('sid');
     expect(parsed.cone).toBe('cone-research');
     expect(parsed.coneLabel).toBe('Research');
     expect(parsed.messages).toEqual([user, assistant]);
@@ -163,35 +166,27 @@ describe('index primitives', () => {
     await expect(upsertSessionsIndexEntry(vfs, entry('x.md'))).rejects.toThrow('disk on fire');
   });
 
-  it('removes matching rows and returns them; a no-match leaves the file untouched', async () => {
+  it('takes the origin-wide Web Lock around every index transaction when available', async () => {
     const vfs = fakeVfs();
-    await upsertSessionsIndexEntry(vfs, entry('keep.md'));
-    await upsertSessionsIndexEntry(vfs, entry('drop.md', { live: true }));
-    const before = vfs.files.get(SESSIONS_INDEX_PATH);
-    expect(await removeSessionsIndexEntries(vfs, (e) => e.filename === 'nope.md')).toEqual([]);
-    expect(vfs.files.get(SESSIONS_INDEX_PATH)).toBe(before);
-    const removed = await removeSessionsIndexEntries(vfs, (e) => e.live === true);
-    expect(removed.map((e) => e.filename)).toEqual(['drop.md']);
-    expect((await readSessionsIndex(vfs as never)).map((e) => e.filename)).toEqual(['keep.md']);
-  });
-
-  it('discardLiveSnapshot deletes the cone’s live archive and row, tolerating a missing file', async () => {
-    const vfs = fakeVfs();
-    await upsertSessionsIndexEntry(vfs, entry('done.md', { cone: 'cone' }));
-    await upsertSessionsIndexEntry(vfs, entry('live-cone-1.md', { live: true, cone: 'cone' }));
-    await upsertSessionsIndexEntry(vfs, entry('live-x-1.md', { live: true, cone: 'cone-x' }));
-    vfs.files.set('/sessions/live-cone-1.md', 'archive');
-
-    expect(await discardLiveSnapshot(vfs, 'cone')).toBe(1);
-    expect(vfs.files.has('/sessions/live-cone-1.md')).toBe(false);
-    expect((await readSessionsIndex(vfs as never)).map((e) => e.filename)).toEqual([
-      'live-x-1.md',
-      'done.md',
-    ]);
-    expect(vfs.flushes).toBe(1);
-    // The other cone's snapshot, whose file was never written, still goes cleanly.
-    expect(await discardLiveSnapshot(vfs, 'cone-x')).toBe(1);
-    expect(await discardLiveSnapshot(vfs, 'cone-x')).toBe(0);
+    const names: string[] = [];
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: {
+        locks: {
+          async request<T>(name: string, callback: () => Promise<T>): Promise<T> {
+            names.push(name);
+            return callback();
+          },
+        },
+      },
+    });
+    try {
+      await upsertSessionsIndexEntry(vfs, entry('one.md'));
+    } finally {
+      Reflect.deleteProperty(globalThis, 'navigator');
+    }
+    expect(names).toEqual(['slicc:sessions-index']);
+    expect((await readSessionsIndex(vfs as never)).map((e) => e.filename)).toEqual(['one.md']);
   });
 
   it('serializes index writes in arrival order and survives a failed writer', async () => {

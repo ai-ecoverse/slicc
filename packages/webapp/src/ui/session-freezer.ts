@@ -54,7 +54,6 @@ import {
   SESSIONS_INDEX_PATH,
 } from '../transcript/frozen-archive-format.js';
 import {
-  discardLiveSnapshot,
   findLiveSnapshotEntry,
   formatArchiveAsMarkdown,
   heuristicTitle,
@@ -699,27 +698,6 @@ async function findLiveConeSnapshot(
       error: err instanceof Error ? err.message : String(err),
     });
     return undefined;
-  }
-}
-
-/**
- * Delete a cone's live compaction snapshot — the "Erase" half of "New chat":
- * the user keeps nothing. Never throws past the caller: a snapshot that
- * cannot be removed is logged and left for the next erase.
- */
-export async function discardLiveConeSnapshot(
-  vfs: WritableVfsClient,
-  coneFolder: string | undefined
-): Promise<void> {
-  const folder = coneFolder || PRIMARY_CONE_FOLDER;
-  try {
-    const removed = await discardLiveSnapshot(vfs, folder);
-    if (removed > 0) log.info('Live session snapshot discarded', { cone: folder, removed });
-  } catch (err) {
-    log.warn('Failed to discard the live session snapshot', {
-      cone: folder,
-      error: err instanceof Error ? err.message : String(err),
-    });
   }
 }
 

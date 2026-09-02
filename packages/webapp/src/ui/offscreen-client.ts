@@ -553,12 +553,20 @@ export class OffscreenClient implements KernelClientFacade {
    * `scoopJid` names the root to clear (#2272) — the panel passes the
    * selected cone. Omitted, the bridge clears the default root.
    */
-  async clearAllMessages(scoopJid?: string): Promise<void> {
+  async clearAllMessages(
+    scoopJid?: string,
+    options: { discardLiveSnapshot?: boolean } = {}
+  ): Promise<void> {
     const requestId = `clear-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
     const ack = new Promise<void>((resolve) => {
       this.pendingClearAcks.set(requestId, resolve);
     });
-    this.send({ type: 'clear-chat', requestId, ...(scoopJid ? { scoopJid } : {}) });
+    this.send({
+      type: 'clear-chat',
+      requestId,
+      ...(scoopJid ? { scoopJid } : {}),
+      ...(options.discardLiveSnapshot ? { discardLiveSnapshot: true } : {}),
+    });
     await Promise.race([ack, new Promise<void>((resolve) => setTimeout(resolve, 5000))]);
     this.pendingClearAcks.delete(requestId);
   }

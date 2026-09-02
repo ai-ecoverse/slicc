@@ -29,6 +29,7 @@ const log = createLogger('idle-compaction');
 
 export type IdleCompactionOutcome =
   | 'compacted'
+  | 'cancelled'
   | 'disabled'
   | 'no-agent'
   | 'busy'
@@ -80,6 +81,8 @@ function sameThread(a: ThreadFingerprint, current: readonly AgentMessage[]): boo
 export class IdleCompaction {
   private timer: ReturnType<typeof setTimeout> | null = null;
   private running = false;
+  /** Aborts the round in flight; replaced per round. */
+  private round: AbortController | null = null;
 
   constructor(private readonly deps: IdleCompactionDeps) {}
 
@@ -117,6 +120,17 @@ export class IdleCompaction {
   }
 
   /**
+   * Cancel the window AND abort a round in flight. The user came back (a
+   * prompt, a stop, "New chat", dispose): the LLM calls are cut off instead
+   * of finishing a summary nobody will adopt, and nothing the round
+   * deferred (memory extraction) runs.
+   */
+  cancel(): void {
+    this.disarm();
+    this.round?.abort();
+  }
+
+  /**
    * Run one round now, subject to every gate but the timer. Exposed so the
    * fire path and tests share one implementation. Never throws.
    */
@@ -139,16 +153,39 @@ export class IdleCompaction {
 
     const before = fingerprint(messages);
     const input = messages.slice();
+    const round = new AbortController();
+    this.round = round;
     this.running = true;
+    let extractMemories: (() => Promise<void>) | null = null;
     log.info('Idle compaction round started', {
       folder: this.deps.folder,
       tokens,
       messageCount: input.length,
     });
     try {
-      const compacted = await compactFn(input, undefined, { force: true, trigger: 'idle' });
-      return this.adopt(agent, before, input, compacted);
+      const compacted = await compactFn(input, round.signal, {
+        force: true,
+        trigger: 'idle',
+        deferMemoryExtraction: (extract) => {
+          extractMemories = extract;
+        },
+      });
+      if (round.signal.aborted) return this.cancelled();
+      const outcome = this.adopt(agent, before, input, compacted);
+      // Only a history that is really gone gets its memories extracted;
+      // a discarded round's messages stay in the conversation and will be
+      // extracted by whichever round finally replaces them.
+      if (outcome === 'compacted' && extractMemories) {
+        void (extractMemories as () => Promise<void>)().catch((err) => {
+          log.warn('Deferred memory extraction failed', {
+            folder: this.deps.folder,
+            error: err instanceof Error ? err.message : String(err),
+          });
+        });
+      }
+      return outcome;
     } catch (err) {
+      if (round.signal.aborted) return this.cancelled();
       log.warn('Idle compaction round failed (history untouched)', {
         folder: this.deps.folder,
         error: err instanceof Error ? err.message : String(err),
@@ -156,7 +193,13 @@ export class IdleCompaction {
       return 'failed';
     } finally {
       this.running = false;
+      if (this.round === round) this.round = null;
     }
+  }
+
+  private cancelled(): IdleCompactionOutcome {
+    log.info('Idle compaction round cancelled', { folder: this.deps.folder });
+    return 'cancelled';
   }
 
   /** The reasons a round cannot even start, checked in order. */

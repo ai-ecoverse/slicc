@@ -253,7 +253,7 @@ export interface KernelClientFacade {
    * `scoopJid` names the root to clear (#2272) — the panel passes the
    * selected cone. Omitted, the host clears the default root.
    */
-  clearAllMessages(scoopJid?: string): Promise<void>;
+  clearAllMessages(scoopJid?: string, options?: { discardLiveSnapshot?: boolean }): Promise<void>;
   spawnAgent(options: AgentSpawnOptions): Promise<AgentSpawnResult>;
   clearFilesystem(): void;
   requestState(): void;

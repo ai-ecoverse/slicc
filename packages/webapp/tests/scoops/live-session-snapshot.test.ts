@@ -7,6 +7,7 @@ import type { AgentMessage } from '@earendil-works/pi-agent-core';
 import { describe, expect, it } from 'vitest';
 import { FsError } from '../../src/fs/types.js';
 import {
+  discardLiveSnapshot,
   finalizeLiveSnapshot,
   snapshotLiveSession,
 } from '../../src/scoops/live-session-snapshot.js';
@@ -61,10 +62,19 @@ async function indexOf(vfs: ArchiveVfs) {
   return readSessionsIndex(vfs as never);
 }
 
+/** A snapshot that must have been written (the common case in these tests). */
+async function snap(
+  deps: Parameters<typeof snapshotLiveSession>[0]
+): Promise<NonNullable<Awaited<ReturnType<typeof snapshotLiveSession>>>> {
+  const result = await snapshotLiveSession(deps);
+  if (!result) throw new Error('snapshot was skipped');
+  return result;
+}
+
 describe('snapshotLiveSession', () => {
   it('writes a live archive plus index row on the first round', async () => {
     const vfs = fakeVfs();
-    const result = await snapshotLiveSession({
+    const result = await snap({
       vfs,
       cone: { folder: 'cone', label: 'sliccy' },
       messages: [user('fix the build', 10), assistant('on it', 20)],
@@ -92,7 +102,7 @@ describe('snapshotLiveSession', () => {
 
   it('appends only messages newer than the cursor on later rounds, keeping identity', async () => {
     const vfs = fakeVfs();
-    const first = await snapshotLiveSession({
+    const first = await snap({
       vfs,
       cone: { folder: 'cone-research', label: 'Research' },
       messages: [user('q1', 10), assistant('a1', 20), user('q2', 30), assistant('a2', 40)],
@@ -100,7 +110,7 @@ describe('snapshotLiveSession', () => {
     });
     // After round one the agent holds [summary(50), kept tail(30, 40)] and
     // the conversation continued.
-    const second = await snapshotLiveSession({
+    const second = await snap({
       vfs,
       cone: { folder: 'cone-research', label: 'Research' },
       messages: [
@@ -141,23 +151,112 @@ describe('snapshotLiveSession', () => {
 
   it('starts over from the agent history when the live archive went missing', async () => {
     const vfs = fakeVfs();
-    const first = await snapshotLiveSession({
+    const first = await snap({
       vfs,
       cone: { folder: 'cone' },
       messages: [user('q1', 10)],
       trigger: 'overflow',
     });
     vfs.files.delete(first.transcriptPath);
-    const second = await snapshotLiveSession({
+    const second = await snap({
       vfs,
       cone: { folder: 'cone' },
       messages: [user('q1', 10), assistant('a1', 20)],
       trigger: 'overflow',
     });
     expect(second.transcriptPath).toBe(first.transcriptPath);
-    // Only the message beyond the cursor is "fresh", and the earlier one is
-    // gone with the file — a pointer to a partial transcript beats no pointer.
-    expect(parseFrozenArchive(vfs.files.get(second.transcriptPath)!).messages).toHaveLength(1);
+    // The row survived without its file: the cursor is dropped and the whole
+    // history the agent still holds is written, not just the newer message.
+    expect(parseFrozenArchive(vfs.files.get(second.transcriptPath)!).messages).toHaveLength(2);
+    expect(second.entry.liveThrough).toBe(20);
+  });
+
+  it('appends a same-millisecond message unless the archive already holds it', async () => {
+    const vfs = fakeVfs();
+    await snap({ vfs, cone: { folder: 'cone' }, messages: [user('q1', 10)], trigger: 'threshold' });
+    // Round two: the summary was stamped in the same ms as a queued prompt.
+    const second = await snap({
+      vfs,
+      cone: { folder: 'cone' },
+      messages: [user('q1', 10), user('<context-summary/>', 10), user('q2', 10)],
+      trigger: 'threshold',
+    });
+    expect(second.appended).toBe(2);
+    expect(parseFrozenArchive(vfs.files.get(second.transcriptPath)!).messages).toHaveLength(3);
+    // And a third round re-presenting all three adds nothing.
+    const third = await snap({
+      vfs,
+      cone: { folder: 'cone' },
+      messages: [user('q1', 10), user('<context-summary/>', 10), user('q2', 10)],
+      trigger: 'threshold',
+    });
+    expect(third.appended).toBe(0);
+  });
+
+  it('derives the cursor from the archive when the index row lost it (rebuilt index)', async () => {
+    const vfs = fakeVfs();
+    const first = await snap({
+      vfs,
+      cone: { folder: 'cone' },
+      messages: [user('q1', 10), assistant('a1', 20)],
+      trigger: 'threshold',
+    });
+    const rows = await indexOf(vfs);
+    const { liveThrough: _cursor, ...rebuilt } = rows[0];
+    vfs.files.set(SESSIONS_INDEX_PATH, JSON.stringify([rebuilt]));
+    const second = await snap({
+      vfs,
+      cone: { folder: 'cone' },
+      messages: [user('summary', 30), assistant('a1', 20), user('q2', 40)],
+      trigger: 'idle',
+    });
+    expect(second.transcriptPath).toBe(first.transcriptPath);
+    expect(second.appended).toBe(2);
+    expect(parseFrozenArchive(vfs.files.get(second.transcriptPath)!).messages).toHaveLength(4);
+  });
+
+  it('writes nothing when stillValid says the session is gone', async () => {
+    const vfs = fakeVfs();
+    const result = await snapshotLiveSession({
+      vfs,
+      cone: { folder: 'cone' },
+      messages: [user('q1', 10)],
+      trigger: 'threshold',
+      stillValid: () => false,
+    });
+    expect(result).toBeNull();
+    expect(vfs.files.size).toBe(0);
+  });
+
+  it('runs the whole snapshot inside the shared index lock', async () => {
+    const vfs = fakeVfs();
+    const held: string[] = [];
+    const locks = {
+      async request<T>(name: string, callback: () => Promise<T>): Promise<T> {
+        held.push(`enter:${name}`);
+        try {
+          return await callback();
+        } finally {
+          held.push(`exit:${name}`);
+        }
+      },
+    };
+    Object.defineProperty(globalThis, 'navigator', {
+      configurable: true,
+      value: { locks },
+    });
+    try {
+      await snap({
+        vfs,
+        cone: { folder: 'cone' },
+        messages: [user('q1', 10)],
+        trigger: 'threshold',
+      });
+    } finally {
+      Reflect.deleteProperty(globalThis, 'navigator');
+    }
+    // One lock acquisition for the entire read-modify-write, none nested.
+    expect(held).toEqual(['enter:slicc:sessions-index', 'exit:slicc:sessions-index']);
   });
 
   it('keeps cones apart: one live snapshot per cone', async () => {
@@ -183,7 +282,7 @@ describe('snapshotLiveSession', () => {
 describe('finalizeLiveSnapshot', () => {
   it('turns the live row into a pending draft and strips the archive marker', async () => {
     const vfs = fakeVfs();
-    const { transcriptPath, entry } = await snapshotLiveSession({
+    const { transcriptPath, entry } = await snap({
       vfs,
       cone: { folder: 'cone' },
       messages: [user('q', 1)],
@@ -203,7 +302,7 @@ describe('finalizeLiveSnapshot', () => {
     expect(parseFrozenArchive(text).messages).toHaveLength(1);
     // Nothing left to finalize, and the next round starts a NEW snapshot.
     expect(await finalizeLiveSnapshot(vfs, 'cone')).toBe(false);
-    const next = await snapshotLiveSession({
+    const next = await snap({
       vfs,
       cone: { folder: 'cone' },
       messages: [user('q', 1)],
@@ -216,5 +315,28 @@ describe('finalizeLiveSnapshot', () => {
     const vfs = fakeVfs();
     expect(await finalizeLiveSnapshot(vfs, 'cone')).toBe(false);
     expect(vfs.files.has(SESSIONS_INDEX_PATH)).toBe(false);
+  });
+});
+
+describe('discardLiveSnapshot', () => {
+  it('removes the cone’s live archive and row, leaving other cones alone', async () => {
+    const vfs = fakeVfs();
+    const mine = await snap({
+      vfs,
+      cone: { folder: 'cone' },
+      messages: [user('a', 1)],
+      trigger: 'idle',
+    });
+    const other = await snap({
+      vfs,
+      cone: { folder: 'cone-x', label: 'X' },
+      messages: [user('b', 1)],
+      trigger: 'idle',
+    });
+    expect(await discardLiveSnapshot(vfs, 'cone')).toBe(1);
+    expect(vfs.files.has(mine.transcriptPath)).toBe(false);
+    expect(vfs.files.has(other.transcriptPath)).toBe(true);
+    expect((await indexOf(vfs)).map((e) => e.filename)).toEqual([other.entry.filename]);
+    expect(await discardLiveSnapshot(vfs, 'cone')).toBe(0);
   });
 });

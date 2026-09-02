@@ -115,21 +115,13 @@ async function archiveConeSession(deps: ArchiveConeSessionDeps): Promise<void> {
   });
 }
 
-/**
- * The archive half of "New chat", by action. Save and skip archive the
- * chat; erase keeps nothing — including the compaction snapshot the session
- * accumulated in `/sessions`, which goes with it.
- */
-async function archiveOrDiscardConeSession(
+/** Save and skip archive the chat; erase keeps nothing (the kernel drops the snapshot). */
+async function archiveUnlessErase(
   action: 'save' | 'skip' | 'erase',
   deps: Omit<ArchiveConeSessionDeps, 'action'>
 ): Promise<void> {
-  if (action !== 'erase') {
-    await archiveConeSession({ ...deps, action });
-    return;
-  }
-  const { discardLiveConeSnapshot } = await import('../session-freezer.js');
-  await discardLiveConeSnapshot(deps.writer, deps.root?.folder);
+  if (action === 'erase') return;
+  await archiveConeSession({ ...deps, action });
 }
 
 interface ClearConeSessionDeps {
@@ -137,6 +129,13 @@ interface ClearConeSessionDeps {
   /** Root being cleared; `undefined` only if the roster is empty. */
   root: RegisteredScoop | undefined;
   client: Pick<OffscreenClient, 'clearAllMessages'>;
+  /**
+   * "Erase": the user keeps nothing, so the compaction snapshot the session
+   * accumulated in `/sessions` goes with the chat. Decided in the kernel,
+   * inside the snapshot writer's own index transaction — a page-side delete
+   * could race a snapshot still being written and resurrect the chat.
+   */
+  discardLiveSnapshot: boolean;
   getController(): WcChatController | null;
   log: BootStageLogger;
   resetNewSessionTmp: typeof import('../new-session.js').resetNewSessionTmp;
@@ -161,7 +160,10 @@ async function clearConeSession(deps: ClearConeSessionDeps): Promise<void> {
   } catch (err) {
     deps.log.warn('WC new session /tmp reset failed — clearing anyway', err);
   }
-  await deps.client.clearAllMessages(deps.root?.jid);
+  await deps.client.clearAllMessages(
+    deps.root?.jid,
+    deps.discardLiveSnapshot ? { discardLiveSnapshot: true } : {}
+  );
   deps.getController()?.loadMessages([]);
   window.dispatchEvent(new CustomEvent(LEADER_BROADCAST_SNAPSHOT_EVENT));
   void import('../../speech/dictation-priming.js')
@@ -247,7 +249,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
         const { resetNewSessionTmp, runNewSessionFreeze, runNewSessionFreezeQuick } = await import(
           '../new-session.js'
         );
-        await archiveOrDiscardConeSession(action, {
+        await archiveUnlessErase(action, {
           writer,
           root,
           client,
@@ -267,6 +269,7 @@ export function wireFreezerRail(deps: FreezerRailDeps): FreezerRailHandles {
           log,
           resetNewSessionTmp,
           tmpDir: tmpDirFor(client.getScoops(), root),
+          discardLiveSnapshot: action === 'erase',
         });
         refreshFreezer();
         // Stay on the cone we just cleared — its record may have been

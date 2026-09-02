@@ -75,7 +75,7 @@ import { withMountHeartbeat } from './mount-heartbeat.js';
 import { TaskScheduler } from './scheduler.js';
 import { ScoopApprovalRouter } from './scoop-approval-router.js';
 import { ScoopCompletionService } from './scoop-completion-service.js';
-import type { ScoopContext } from './scoop-context.js';
+import type { ClearSessionOptions, ScoopContext } from './scoop-context.js';
 import { ScoopCostTracker } from './scoop-cost-tracker.js';
 import { ScoopIdleTimers } from './scoop-idle-timers.js';
 import { ScoopLifecycleManager, type ScoopObserver } from './scoop-lifecycle-manager.js';
@@ -1339,8 +1339,8 @@ export class Orchestrator implements ConeApprovalRouter {
    * next prompt (because `lastAgentTimestamp` was just deleted) and
    * replays every pre-reset turn back into the live agent.
    */
-  clearScoopMessages(jid: string): Promise<void> {
-    return this.messageRouter.clearScoopMessages(jid, this.lifecycle.getContext(jid));
+  clearScoopMessages(jid: string, options: ClearSessionOptions = {}): Promise<void> {
+    return this.messageRouter.clearScoopMessages(jid, this.lifecycle.getContext(jid), options);
   }
 
   /** Clear all messages from the orchestrator DB, agent sessions, and live agent contexts. */
