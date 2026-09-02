@@ -308,3 +308,92 @@ export function createMutableDirectoryHandle(
     },
   };
 }
+
+/** Per-method FSA call tallies collected by `createCountingDirectoryHandle`. */
+export interface FsaCallCounts {
+  getDirectoryHandle: number;
+  getFileHandle: number;
+  getFile: number;
+  entries: number;
+  removeEntry: number;
+}
+
+/**
+ * Wrap a handle tree so every File System Access call is tallied.
+ *
+ * The point of #2733 is op *count*, not values: each call below is one IPC to
+ * the browser process at ~40 µs, and the benchmark blew up at 2.29 M of them.
+ * A test that only asserts the returned entries cannot see a regression that
+ * re-introduces the N+1 or the per-op root walk, so the counters are the
+ * assertion.
+ */
+export function createCountingDirectoryHandle(
+  handle: FileSystemDirectoryHandle,
+  counts: FsaCallCounts = {
+    getDirectoryHandle: 0,
+    getFileHandle: 0,
+    getFile: 0,
+    entries: 0,
+    removeEntry: 0,
+  }
+): { handle: FileSystemDirectoryHandle; counts: FsaCallCounts } {
+  const wrapFile = (fh: FileSystemFileHandle): FileSystemFileHandle =>
+    new Proxy(fh, {
+      get(target, prop, receiver) {
+        if (prop === 'getFile') {
+          return async () => {
+            counts.getFile++;
+            return target.getFile();
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+  const wrapDir = (dh: FileSystemDirectoryHandle): FileSystemDirectoryHandle =>
+    new Proxy(dh, {
+      get(target, prop, receiver) {
+        if (prop === 'getDirectoryHandle') {
+          return async (name: string, options?: { create?: boolean }) => {
+            counts.getDirectoryHandle++;
+            return wrapDir(await target.getDirectoryHandle(name, options));
+          };
+        }
+        if (prop === 'getFileHandle') {
+          return async (name: string, options?: { create?: boolean }) => {
+            counts.getFileHandle++;
+            return wrapFile(await target.getFileHandle(name, options));
+          };
+        }
+        if (prop === 'removeEntry') {
+          return async (name: string, options?: { recursive?: boolean }) => {
+            counts.removeEntry++;
+            return (
+              target as unknown as {
+                removeEntry: (n: string, o?: { recursive?: boolean }) => Promise<void>;
+              }
+            ).removeEntry(name, options);
+          };
+        }
+        if (prop === Symbol.asyncIterator || prop === 'entries') {
+          return async function* () {
+            counts.entries++;
+            const iterable = target as unknown as AsyncIterable<[string, FileSystemHandle]>;
+            for await (const [name, child] of iterable) {
+              yield [
+                name,
+                child.kind === 'file'
+                  ? wrapFile(child as FileSystemFileHandle)
+                  : wrapDir(child as FileSystemDirectoryHandle),
+              ] as [string, FileSystemHandle];
+            }
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+
+  return { handle: wrapDir(handle), counts };
+}

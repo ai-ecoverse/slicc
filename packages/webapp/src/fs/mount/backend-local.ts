@@ -6,6 +6,20 @@
  * standalone direct picker) lives in `mount-commands.ts` and
  * `mount/local-mount-acquire.ts` / `shell/supplemental-commands/
  * mount-directory-approval.ts` so this module stays in the `fs/` layer.
+ *
+ * Two costs shape everything below (issue #2733). Every FSA call is an IPC
+ * round-trip to the browser process at ~40 µs, so op *count* — not bytes — is
+ * the budget:
+ *
+ *   - `readDir` used to `getFile()` every file entry just to fill size/mtime.
+ *   `objects/pack` has 91 entries and `git log --all` lists it ~25,000 times,
+ *   so one benchmark command spent 2.29 M `getFile` calls / 370 s on metadata
+ *   no caller had asked for. Stats are now opt-in via `readDir(path,
+ *   { includeStats: true })`.
+ *   - Every op re-walked from the root handle with one `getDirectoryHandle`
+ *   per path segment; a 3,549-file `git status` cost 54,767 of them. A
+ *   bounded LRU of directory handles (`dirCache`) makes a repeat op under an
+ *   already-visited directory cost zero root walks.
  */
 
 import { FsError } from '../types.js';
@@ -14,12 +28,24 @@ import type {
   MountDescription,
   MountDirEntry,
   MountStat,
+  ReadDirOptions,
   RefreshReport,
 } from './backend.js';
 
 export interface LocalMountBackendOptions {
   mountId: string;
+  /** Max cached directory handles. Defaults to `DEFAULT_DIR_CACHE_MAX`. */
+  dirCacheMax?: number;
 }
+
+/**
+ * Directory-handle cache ceiling. A handle is a small object holding a path
+ * and an origin-private token — Chrome re-resolves it against the real
+ * directory on every use — so the cache costs memory, not correctness. 512
+ * covers a git repo's hot set (`.git`, `objects/pack`, `refs/**`, plus the
+ * working tree's top few levels) with room to spare.
+ */
+const DEFAULT_DIR_CACHE_MAX = 512;
 
 export class LocalMountBackend implements MountBackend {
   readonly kind = 'local' as const;
@@ -28,11 +54,19 @@ export class LocalMountBackend implements MountBackend {
   readonly mountId: string;
 
   private readonly handle: FileSystemDirectoryHandle;
+  private readonly dirCacheMax: number;
+  /**
+   * Resolved directory handles keyed by the mount-relative path (`''` = the
+   * mount root, otherwise slash-joined segments with no leading/trailing
+   * slash). Insertion order is the LRU order: a hit re-inserts at the end.
+   */
+  private readonly dirCache = new Map<string, FileSystemDirectoryHandle>();
   private closed = false;
 
   private constructor(handle: FileSystemDirectoryHandle, opts: LocalMountBackendOptions) {
     this.handle = handle;
     this.mountId = opts.mountId;
+    this.dirCacheMax = opts.dirCacheMax ?? DEFAULT_DIR_CACHE_MAX;
   }
 
   static fromHandle(
@@ -63,35 +97,111 @@ export class LocalMountBackend implements MountBackend {
       .filter((s) => s.length > 0);
   }
 
-  private async resolveDir(path: string, create = false): Promise<FileSystemDirectoryHandle> {
-    const segments = this.splitPath(path);
+  // --- directory-handle cache ---
+
+  private cacheGet(key: string): FileSystemDirectoryHandle | undefined {
+    const hit = this.dirCache.get(key);
+    if (hit === undefined) return undefined;
+    // Re-insert to move to the MRU end of the Map's insertion order.
+    this.dirCache.delete(key);
+    this.dirCache.set(key, hit);
+    return hit;
+  }
+
+  private cacheSet(key: string, handle: FileSystemDirectoryHandle): void {
+    if (this.dirCache.has(key)) this.dirCache.delete(key);
+    this.dirCache.set(key, handle);
+    while (this.dirCache.size > this.dirCacheMax) {
+      // Map iteration order is insertion order, so the first key is the LRU.
+      const oldest = this.dirCache.keys().next();
+      if (oldest.done) break;
+      this.dirCache.delete(oldest.value);
+    }
+  }
+
+  /**
+   * Drop `key` and everything beneath it. Called whenever this backend
+   * changes the shape of the tree (`remove`), because a handle for a removed
+   * directory would otherwise keep answering `getDirectoryHandle` walks that
+   * should now fail. Changes made *outside* the backend need no invalidation:
+   * Chrome resolves a handle against the live directory on each use, so a
+   * stale handle surfaces the same `NotFoundError` a fresh walk would.
+   */
+  private invalidate(key: string): void {
+    if (key === '') {
+      this.dirCache.clear();
+      return;
+    }
+    const prefix = `${key}/`;
+    for (const cached of [...this.dirCache.keys()]) {
+      if (cached === key || cached.startsWith(prefix)) this.dirCache.delete(cached);
+    }
+  }
+
+  /** Test/internal view of the cache size. */
+  getDirCacheSize(): number {
+    return this.dirCache.size;
+  }
+
+  /**
+   * Resolve a directory, reusing cached handles for every prefix already
+   * seen. A cold walk of `a/b/c` costs three `getDirectoryHandle` calls and
+   * caches `a`, `a/b`, `a/b/c`; the next op anywhere under `a/b` starts from
+   * the cached handle instead of the mount root.
+   */
+  private async resolveDirFrom(
+    segments: string[],
+    path: string,
+    create: boolean
+  ): Promise<FileSystemDirectoryHandle> {
     let dir = this.handle;
-    for (const seg of segments) {
+    let key = '';
+    let index = 0;
+    // Longest cached prefix first — skip the IPCs we already paid for.
+    for (let i = segments.length; i > 0; i--) {
+      const candidate = segments.slice(0, i).join('/');
+      const hit = this.cacheGet(candidate);
+      if (hit) {
+        dir = hit;
+        key = candidate;
+        index = i;
+        break;
+      }
+    }
+    for (; index < segments.length; index++) {
+      const seg = segments[index];
       try {
         dir = await dir.getDirectoryHandle(seg, { create });
       } catch (err) {
         throw this.toFsError(err, path);
       }
+      key = key === '' ? seg : `${key}/${seg}`;
+      this.cacheSet(key, dir);
     }
     return dir;
   }
 
-  private async resolveFile(path: string, create = false): Promise<FileSystemFileHandle> {
+  private async resolveDir(path: string, create = false): Promise<FileSystemDirectoryHandle> {
+    return this.resolveDirFrom(this.splitPath(path), path, create);
+  }
+
+  /** Resolve the parent directory of `path` plus the leaf name. */
+  private async resolveParent(
+    path: string,
+    create: boolean
+  ): Promise<{ parent: FileSystemDirectoryHandle; name: string }> {
     const segments = this.splitPath(path);
     if (segments.length === 0) {
       throw new FsError('EISDIR', 'is a directory', path);
     }
-    const fileName = segments.pop()!;
-    let dir = this.handle;
-    for (const seg of segments) {
-      try {
-        dir = await dir.getDirectoryHandle(seg, { create });
-      } catch (err) {
-        throw this.toFsError(err, path);
-      }
-    }
+    const name = segments.pop()!;
+    return { parent: await this.resolveDirFrom(segments, path, create), name };
+  }
+
+  private async resolveFile(path: string, create = false): Promise<FileSystemFileHandle> {
+    const { parent, name } = await this.resolveParent(path, create);
     try {
-      return await dir.getFileHandle(fileName, { create });
+      return await parent.getFileHandle(name, { create });
     } catch (err) {
       throw this.toFsError(err, path);
     }
@@ -125,17 +235,27 @@ export class LocalMountBackend implements MountBackend {
 
   // --- MountBackend implementation ---
 
-  async readDir(path: string): Promise<MountDirEntry[]> {
+  /**
+   * List a directory. `size`/`lastModified` are omitted unless
+   * `opts.includeStats` is set — filling them costs one `getFile()` IPC per
+   * file entry, and the dominant caller (isomorphic-git's names-only
+   * `readdir`) throws them away (#2733).
+   */
+  async readDir(path: string, opts?: ReadDirOptions): Promise<MountDirEntry[]> {
     this.assertOpen(path);
     const dir = await this.resolveDir(path);
     const out: MountDirEntry[] = [];
     for await (const [name, child] of dir as unknown as AsyncIterable<[string, FileSystemHandle]>) {
-      if (child.kind === 'file') {
-        const file = await (child as FileSystemFileHandle).getFile();
-        out.push({ name, kind: 'file', size: file.size, lastModified: file.lastModified });
-      } else {
+      if (child.kind !== 'file') {
         out.push({ name, kind: 'directory' });
+        continue;
       }
+      if (!opts?.includeStats) {
+        out.push({ name, kind: 'file' });
+        continue;
+      }
+      const file = await (child as FileSystemFileHandle).getFile();
+      out.push({ name, kind: 'file', size: file.size, lastModified: file.lastModified });
     }
     return out;
   }
@@ -157,23 +277,35 @@ export class LocalMountBackend implements MountBackend {
     await writable.close();
   }
 
+  /**
+   * Stat one path. Resolves the parent once (cached) and asks it for a file
+   * handle, then a directory handle — where the old code walked the whole
+   * path from the mount root twice.
+   */
   async stat(path: string): Promise<MountStat> {
     this.assertOpen(path);
     const segments = this.splitPath(path);
     if (segments.length === 0) {
       return { kind: 'directory', size: 0, mtime: 0 };
     }
-    // Try as a file first. Any failure (ENOENT, ENOTDIR, EISDIR, etc.) is
-    // fine — fall through to the directory check, which will succeed if
-    // the path is a directory and produce the correct ENOENT otherwise.
+    const name = segments.pop()!;
+    const parent = await this.resolveDirFrom(segments, path, false);
+    // Try as a file first. Any failure (ENOENT, TypeMismatch, …) is fine —
+    // fall through to the directory check, which succeeds if the path is a
+    // directory and produces the correct ENOENT otherwise.
     try {
-      const fh = await this.resolveFile(path);
+      const fh = await parent.getFileHandle(name);
       const file = await fh.getFile();
       return { kind: 'file', size: file.size, mtime: file.lastModified };
     } catch {
       // fall through
     }
-    await this.resolveDir(path); // throws ENOENT if missing
+    try {
+      const dir = await parent.getDirectoryHandle(name);
+      this.cacheSet(segments.length === 0 ? name : `${segments.join('/')}/${name}`, dir);
+    } catch (err) {
+      throw this.toFsError(err, path);
+    }
     return { kind: 'directory', size: 0, mtime: 0 };
   }
 
@@ -189,8 +321,7 @@ export class LocalMountBackend implements MountBackend {
       throw new FsError('EINVAL', 'cannot remove mount root', path);
     }
     const name = segments.pop()!;
-    const parentPath = segments.join('/');
-    const parent = await this.resolveDir(parentPath || '/');
+    const parent = await this.resolveDirFrom(segments, path, false);
     try {
       await (
         parent as unknown as {
@@ -200,6 +331,7 @@ export class LocalMountBackend implements MountBackend {
     } catch (err) {
       throw this.toFsError(err, path);
     }
+    this.invalidate(segments.length === 0 ? name : `${segments.join('/')}/${name}`);
   }
 
   async refresh(): Promise<RefreshReport> {
@@ -208,6 +340,8 @@ export class LocalMountBackend implements MountBackend {
     // `MountIndex` re-walking lives in mount-index.ts and is triggered by
     // virtual-fs.ts; not the backend's job to drive it.
     this.assertOpen('/');
+    // Drop resolved handles so a re-walk starts from the live tree.
+    this.dirCache.clear();
     return { added: [], removed: [], changed: [], unchanged: 0, errors: [] };
   }
 
@@ -217,5 +351,6 @@ export class LocalMountBackend implements MountBackend {
 
   async close(): Promise<void> {
     this.closed = true;
+    this.dirCache.clear();
   }
 }
