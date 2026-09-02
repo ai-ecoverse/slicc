@@ -1,9 +1,10 @@
 name: npm ci (with retry)
 description: >-
   Runs `npm ci` under a bounded shell retry loop so a hard socket failure
-  (ENETUNREACH/ECONNRESET) or a concurrent-postinstall ETXTBSY race on a
-  shared binary gets a full clean re-attempt. npm's own fetch-retries only
-  cover in-flight HTTP transients, not connection-level failures.
+  (ENETUNREACH/ECONNRESET), a concurrent-postinstall ETXTBSY race on a shared
+  binary, or a hang-on-exit gets a full clean re-attempt. npm's own
+  fetch-retries only cover in-flight HTTP transients, not connection-level
+  failures, and nothing in npm covers a process that never exits.
 runs:
   using: composite
   steps:
@@ -11,6 +12,17 @@ runs:
       run: |
         set -o pipefail
         attempts=3
+        # `npm ci` intermittently finishes ALL of its work — tree written,
+        # postinstall run, audit summary printed — and then never exits, on
+        # observation roughly 0.6% of invocations. The retry loop below only
+        # ever saw non-zero exits, so a hang sailed straight past it and burned
+        # until the job timeout: run 33553117041 spent SIX HOURS in this step
+        # after an install that took 42 seconds. `timeout` converts that into
+        # exit 124, which the loop already knows how to retry.
+        #
+        # 8m is ~7x the observed p99 (69s over 309 CI invocations, median 39s)
+        # and leaves ample headroom for a cold npm cache.
+        limit=8m
         for i in $(seq 1 "$attempts"); do
           echo "::group::npm ci (attempt $i/$attempts)"
           # Capture the status from the command itself. `if npm ci; then …; fi`
@@ -19,10 +31,13 @@ runs:
           # log "failed (exit 0)" and, worse, `exit "$status"` below handed the
           # step a SUCCESS after all attempts were spent.
           status=0
-          npm ci || status=$?
+          timeout --kill-after=30s "$limit" npm ci || status=$?
           echo "::endgroup::"
           if [ "$status" -eq 0 ]; then
             exit 0
+          fi
+          if [ "$status" -eq 124 ] || [ "$status" -eq 137 ]; then
+            echo "npm ci exceeded $limit on attempt $i/$attempts (hang, not a failure)" >&2
           fi
           if [ "$i" -lt "$attempts" ]; then
             delay=$((i * 15))
