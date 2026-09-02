@@ -54,6 +54,7 @@ import { status } from './commands/status.js';
 import { symbolicRef } from './commands/symbolic-ref.js';
 import { tag } from './commands/tag.js';
 import type { GitCommandContext, GitCommandResult, GitCommandsOptions } from './commands/types.js';
+import { createCommandScopedReadCache } from './fs-command-cache.js';
 import { readGlobalGitConfigValue } from './git-config.js';
 import { createIsomorphicGitFs, type IsoGitFsPromises } from './vfs-fs-adapter.js';
 
@@ -61,6 +62,38 @@ export type { GitCommandResult, GitCommandsOptions } from './commands/types.js';
 
 const logger = createLogger('git-commands');
 const NETWORK_COMMANDS = new Set(['clone', 'fetch', 'pull', 'push', 'ls-remote']);
+
+/**
+ * Subcommands that get a command-scoped read cache (`fs-command-cache.ts`),
+ * which collapses isomorphic-git's per-file re-stat of `.git/index` and
+ * per-candidate re-read of every ancestor `.gitignore` onto one round trip
+ * each (issue #2709).
+ *
+ * The cache only sees writes made through the isomorphic-git adapter, so this
+ * is an allowlist of subcommands that mutate the repo exclusively that way.
+ * Everything that writes straight to the VirtualFS (`ctx.fs`) — checkout,
+ * reset, rm, mv, stash, rebase, revert, clean, merge-file, config — would
+ * leave the memo stale and is handed the plain adapter instead, as are the
+ * network commands, which stream far more object data than is worth
+ * retaining.
+ */
+const CACHEABLE_COMMANDS = new Set([
+  'add',
+  'branch',
+  'commit',
+  'diff',
+  'init',
+  'log',
+  'ls-files',
+  'ls-tree',
+  'merge-base',
+  'rev-parse',
+  'show',
+  'show-ref',
+  'status',
+  'symbolic-ref',
+  'tag',
+]);
 
 /**
  * Leading global flags accepted BEFORE the subcommand (`git -c k=v commit …`).
@@ -102,7 +135,13 @@ function readEnvVar(
 export class GitCommands {
   private static globalFsByDbName: Map<string, Promise<VirtualFS>> = new Map();
 
-  private lfs: IsoGitFsPromises;
+  /**
+   * The uncached adapter over the repo's VirtualFS. `execute()` derives a
+   * per-invocation view of it (see {@link GitCommands.contextFor}); nothing
+   * here is ever a cached adapter, because instance state is shared by
+   * concurrent invocations and a memo must not be.
+   */
+  private readonly lfs: IsoGitFsPromises;
   private corsProxy?: string;
   private authorName: string;
   private authorEmail: string;
@@ -124,9 +163,6 @@ export class GitCommands {
    */
   private currentConfigOverrides?: ReadonlyMap<string, string>;
 
-  /** Shared surface handed to each subcommand module (see GitCommandContext). */
-  private readonly ctx: GitCommandContext;
-
   constructor(private options: GitCommandsOptions) {
     // Route through a VirtualFS-backed adapter so isomorphic-git sees mount
     // points (File System Access API) the same way shell/agent tools do.
@@ -136,13 +172,25 @@ export class GitCommands {
     this.authorName = options.authorName ?? 'User';
     this.authorEmail = options.authorEmail ?? 'user@example.com';
     this.globalDbName = options.globalDbName ?? GLOBAL_FS_DB_NAME;
+  }
 
-    this.ctx = {
-      lfs: this.lfs,
+  /**
+   * Build the context for ONE `execute()` call.
+   *
+   * `lfs` is the only per-invocation part: a cacheable subcommand gets a fresh
+   * `createCommandScopedReadCache` wrapper that it alone can see, so two
+   * commands overlapping in time never share a memo and a command that writes
+   * outside the adapter never gets one at all (issue #2709 review). The memo
+   * is unreachable — and therefore collected — as soon as the command returns.
+   */
+  private contextFor(command: string): GitCommandContext {
+    const lfs = CACHEABLE_COMMANDS.has(command) ? createCommandScopedReadCache(this.lfs) : this.lfs;
+    return {
+      lfs,
       fs: this.options.fs,
       corsProxy: this.corsProxy,
       getOnAuth: () => this.getOnAuth(),
-      resolveAuthor: (cwd) => this.resolveAuthor(cwd),
+      resolveAuthor: (cwd) => this.resolveAuthor(cwd, lfs),
       getGlobalFs: () => this.getGlobalFs(),
       setGithubToken: (token) => this.setGithubToken(token),
       getGithubToken: () => this.githubToken,
@@ -250,10 +298,13 @@ export class GitCommands {
    * requiring a fresh GitCommands instance, while `git -c user.email=…` wins
    * for a single invocation (matches real git).
    */
-  private async resolveAuthor(cwd: string): Promise<{ name: string; email: string }> {
+  private async resolveAuthor(
+    cwd: string,
+    lfs: IsoGitFsPromises
+  ): Promise<{ name: string; email: string }> {
     const readLocal = async (key: string): Promise<string | undefined> => {
       try {
-        return await git.getConfig({ fs: this.lfs, dir: cwd, path: key });
+        return await git.getConfig({ fs: lfs, dir: cwd, path: key });
       } catch {
         return undefined;
       }
@@ -320,6 +371,9 @@ export class GitCommands {
 
     this.currentEnv = env;
     this.currentConfigOverrides = parsed.configOverrides;
+    // One context — and, for a cacheable subcommand, one read memo — per
+    // invocation, so nothing a command reads is visible to any other (#2709).
+    const ctx = this.contextFor(command);
     try {
       if (NETWORK_COMMANDS.has(command)) {
         await this.ensureFreshGithubToken();
@@ -334,71 +388,71 @@ export class GitCommands {
       // consumer that reads them after its first await.
       switch (command) {
         case 'init':
-          return await init(this.ctx, effectiveCwd, rest);
+          return await init(ctx, effectiveCwd, rest);
         case 'clone':
-          return await clone(this.ctx, effectiveCwd, rest);
+          return await clone(ctx, effectiveCwd, rest);
         case 'add':
-          return await add(this.ctx, effectiveCwd, rest);
+          return await add(ctx, effectiveCwd, rest);
         case 'status':
-          return await status(this.ctx, effectiveCwd, rest);
+          return await status(ctx, effectiveCwd, rest);
         case 'commit':
-          return await commit(this.ctx, effectiveCwd, rest);
+          return await commit(ctx, effectiveCwd, rest);
         case 'log':
-          return await log(this.ctx, effectiveCwd, rest);
+          return await log(ctx, effectiveCwd, rest);
         case 'ls-remote':
-          return await lsRemote(this.ctx, effectiveCwd, rest);
+          return await lsRemote(ctx, effectiveCwd, rest);
         case 'branch':
-          return await branch(this.ctx, effectiveCwd, rest);
+          return await branch(ctx, effectiveCwd, rest);
         case 'checkout':
-          return await checkout(this.ctx, effectiveCwd, rest);
+          return await checkout(ctx, effectiveCwd, rest);
         case 'clean':
-          return await clean(this.ctx, effectiveCwd, rest);
+          return await clean(ctx, effectiveCwd, rest);
         case 'diff':
-          return await diff(this.ctx, effectiveCwd, rest);
+          return await diff(ctx, effectiveCwd, rest);
         case 'show':
-          return await show(this.ctx, effectiveCwd, rest);
+          return await show(ctx, effectiveCwd, rest);
         case 'remote':
-          return await remote(this.ctx, effectiveCwd, rest);
+          return await remote(ctx, effectiveCwd, rest);
         case 'fetch':
-          return await fetch(this.ctx, effectiveCwd, rest);
+          return await fetch(ctx, effectiveCwd, rest);
         case 'pull':
-          return await pull(this.ctx, effectiveCwd, rest);
+          return await pull(ctx, effectiveCwd, rest);
         case 'push':
-          return await push(this.ctx, effectiveCwd, rest);
+          return await push(ctx, effectiveCwd, rest);
         case 'merge':
-          return await merge(this.ctx, effectiveCwd, rest);
+          return await merge(ctx, effectiveCwd, rest);
         case 'merge-base':
-          return await mergeBase(this.ctx, effectiveCwd, rest);
+          return await mergeBase(ctx, effectiveCwd, rest);
         case 'cherry-pick':
-          return await cherryPick(this.ctx, effectiveCwd, rest);
+          return await cherryPick(ctx, effectiveCwd, rest);
         case 'rebase':
-          return await rebase(this.ctx, effectiveCwd, rest);
+          return await rebase(ctx, effectiveCwd, rest);
         case 'revert':
-          return await revert(this.ctx, effectiveCwd, rest);
+          return await revert(ctx, effectiveCwd, rest);
         case 'merge-file':
-          return await mergeFile(this.ctx, effectiveCwd, rest);
+          return await mergeFile(ctx, effectiveCwd, rest);
         case 'reset':
-          return await reset(this.ctx, effectiveCwd, rest);
+          return await reset(ctx, effectiveCwd, rest);
         case 'config':
-          return await config(this.ctx, effectiveCwd, rest);
+          return await config(ctx, effectiveCwd, rest);
         case 'tag':
-          return await tag(this.ctx, effectiveCwd, rest);
+          return await tag(ctx, effectiveCwd, rest);
         case 'ls-files':
-          return await lsFiles(this.ctx, effectiveCwd, rest);
+          return await lsFiles(ctx, effectiveCwd, rest);
         case 'ls-tree':
-          return await lsTree(this.ctx, effectiveCwd, rest);
+          return await lsTree(ctx, effectiveCwd, rest);
         case 'show-ref':
-          return await showRef(this.ctx, effectiveCwd, rest);
+          return await showRef(ctx, effectiveCwd, rest);
         case 'symbolic-ref':
-          return await symbolicRef(this.ctx, effectiveCwd, rest);
+          return await symbolicRef(ctx, effectiveCwd, rest);
         case 'stash':
-          return await stash(this.ctx, effectiveCwd, rest);
+          return await stash(ctx, effectiveCwd, rest);
         case 'rm':
-          return await rm(this.ctx, effectiveCwd, rest);
+          return await rm(ctx, effectiveCwd, rest);
         case 'mv':
-          return await mv(this.ctx, effectiveCwd, rest);
+          return await mv(ctx, effectiveCwd, rest);
         case 'rev-parse':
-          return await revParse(this.ctx, effectiveCwd, rest);
+          return await revParse(ctx, effectiveCwd, rest);
         case 'help':
           return this.help();
         case 'version':
