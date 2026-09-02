@@ -49,8 +49,10 @@ Extras are stored in `localStorage` under `slicc_oauth_extra_domains` (`{provide
 
 Two clone shapes are supported. Prefer the first — the second is an escape hatch for tools that only know how to pass auth via the URL.
 
-- **Preferred (env / file-based auth):** `git clone https://github.com/owner/repo` — the fetch-proxy attaches the GitHub PAT it already has on file (`/workspace/.git/github-token`, then `GH_TOKEN` / `GITHUB_TOKEN` from the shell env) to the request at the wire boundary.
+- **Preferred (OAuth / file-based auth):** Log in via Settings → Providers → GitHub (or `oauth-token github`). That writes a masked token to `/workspace/.git/github-token`. Then `git clone https://github.com/owner/repo` — before each network op, git asks the OAuth broker for a fresh token and re-syncs that bridge file, so isomorphic-git never keeps a hand-written snapshot. Env fallbacks (`GH_TOKEN` / `GITHUB_TOKEN`) still apply when no OAuth account is logged in.
 - **Escape hatch (URL-embedded masked credential):** `git clone https://x-access-token:$(oauth-token github)@github.com/owner/repo.git` — the masked value in the URL's userinfo segment is unmasked into a synthetic `Authorization: Basic` header by the fetch-proxy (`/api/fetch-proxy` in node-server / swift-server, the `fetch-proxy.fetch` Port handler in the extension SW). The agent never sees the real PAT in either form.
+
+Do **not** treat `git config github.token "$(oauth-token github)"` as a long-lived setup. That stores a **snapshot** of the current masked value. When the broker renews, the snapshot goes stale and a bare `fatal: HTTP Error: 401 Unauthorized` used to be the only signal. Prefer leaving the bridge to OAuth login; if you must set `github.token` manually (e.g. a PAT), capture **stdout only** — never `2>&1 | tail` — and know that a 401 will trigger one silent renew+retry before surfacing an actionable hint.
 
 ### Shell-env naming convention
 

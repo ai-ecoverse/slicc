@@ -313,6 +313,78 @@ describe('GitCommands', () => {
     }
   });
 
+  it('onAuthFailure force-renews once and retries with the refreshed bridge token (#2777)', async () => {
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked_stale');
+    const ensureFreshGithubToken = vi.fn(async (opts?: { force?: boolean }) => {
+      if (opts?.force) {
+        await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked_renewed');
+      }
+    });
+    const renewingGit = new GitCommands({
+      fs: vfs,
+      globalDbName,
+      ensureFreshGithubToken,
+    });
+    const cloneSpy = vi.spyOn(isoGit, 'clone').mockResolvedValue();
+    const listFilesSpy = vi.spyOn(isoGit, 'listFiles').mockResolvedValue([]);
+
+    try {
+      const result = await renewingGit.execute(
+        ['clone', 'https://github.com/example/repo.git', 'repo'],
+        '/workspace'
+      );
+      expect(result.exitCode).toBe(0);
+      expect(ensureFreshGithubToken).toHaveBeenCalled();
+      const cloneOptions = cloneSpy.mock.calls[0]?.[0] as {
+        onAuth?: () => { username: string; password: string };
+        onAuthFailure?: () => Promise<{ username: string; password: string } | undefined>;
+      };
+      expect(cloneOptions.onAuthFailure).toBeTypeOf('function');
+
+      const retryAuth = await cloneOptions.onAuthFailure?.();
+      expect(ensureFreshGithubToken).toHaveBeenCalledWith({ force: true });
+      expect(retryAuth).toEqual({
+        username: 'x-access-token',
+        password: 'ghp_masked_renewed',
+      });
+
+      // Second failure must not loop forever.
+      await expect(cloneOptions.onAuthFailure?.()).resolves.toBeUndefined();
+      expect(ensureFreshGithubToken.mock.calls.filter((c) => c[0]?.force).length).toBe(1);
+    } finally {
+      cloneSpy.mockRestore();
+      listFilesSpy.mockRestore();
+    }
+  });
+
+  it('annotates push 401 errors with an actionable GitHub-auth hint (#2777)', async () => {
+    const globalFs = await VirtualFS.create({ dbName: globalDbName });
+    await globalFs.writeFile('/workspace/.git/github-token', 'ghp_masked');
+    await git.execute(['init'], '/project');
+    await git.execute(['commit', '--allow-empty', '-m', 'init'], '/project');
+    await git.execute(
+      ['remote', 'add', 'origin', 'https://github.com/example/repo.git'],
+      '/project'
+    );
+
+    const pushSpy = vi.spyOn(isoGit, 'push').mockResolvedValue({
+      ok: false,
+      error: 'HTTP Error: 401 Unauthorized',
+      refs: {},
+    } as never);
+
+    try {
+      const result = await git.execute(['push', 'origin', 'main'], '/project');
+      expect(result.exitCode).toBe(1);
+      expect(result.stderr).toContain('HTTP Error: 401 Unauthorized');
+      expect(result.stderr).toContain('hint:');
+      expect(result.stderr).toContain('oauth-token github');
+    } finally {
+      pushSpy.mockRestore();
+    }
+  });
+
   describe('GH_TOKEN / GITHUB_TOKEN env fallback', () => {
     // Pull the onAuth callback that GitCommands hands to isomorphic-git for a
     // clone invocation. Works for both Map<string,string> and Record<string,string>

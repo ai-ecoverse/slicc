@@ -194,7 +194,7 @@ function packfileReadHint(message: string): string | null {
  * useful about; non-Errors stringify.
  */
 export function expandGitError(err: unknown): string {
-  if (!(err instanceof Error)) return String(err);
+  if (!(err instanceof Error)) return annotateGitHubAuthFailure(String(err));
   const data = err as Error & { errors?: unknown; data?: { errors?: unknown } };
   const isMultiple =
     err.name === 'MultipleGitError' ||
@@ -210,7 +210,25 @@ export function expandGitError(err: unknown): string {
       return errorsList.map((inner) => expandGitError(inner)).join('\n');
     }
   }
-  return packfileReadHint(err.message) ?? err.message;
+  return annotateGitHubAuthFailure(packfileReadHint(err.message) ?? err.message);
+}
+
+/**
+ * When GitHub answers 401, the bare isomorphic-git message
+ * (`HTTP Error: 401 Unauthorized`) leaves agents guessing between wrong
+ * scopes, missing push permission, revocation, and simple expiry. Point
+ * them at the broker path that actually renews (#2777).
+ */
+export function annotateGitHubAuthFailure(message: string): string {
+  if (!/\b401\b|Unauthorized/i.test(message)) return message;
+  return (
+    `${message}\n` +
+    'hint: GitHub returned 401. Stored `git config github.token` may be a stale ' +
+    'snapshot — git renews the OAuth broker on network ops, but a hand-written ' +
+    'token is not refreshed. Re-run `oauth-token github` (or Settings → Providers → ' +
+    'GitHub). If you must set `github.token` manually, capture stdout only ' +
+    '(never `2>&1`) and prefer leaving the bridge to the OAuth login.'
+  );
 }
 
 /**

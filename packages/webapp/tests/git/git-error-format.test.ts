@@ -59,6 +59,24 @@ describe('expandGitError', () => {
     expect(expandGitError(new Error('plain failure'))).toBe('plain failure');
   });
 
+  it('annotates a bare GitHub 401 with an actionable hint (#2777)', () => {
+    const message = expandGitError(new Error('HTTP Error: 401 Unauthorized'));
+    expect(message).toContain('HTTP Error: 401 Unauthorized');
+    expect(message).toContain('hint:');
+    expect(message).toContain('oauth-token github');
+    expect(message).toContain('stale');
+  });
+
+  it('annotates a non-Error 401 string the same way', () => {
+    expect(expandGitError('HTTP Error: 401 Unauthorized')).toContain('hint:');
+  });
+
+  it('leaves non-auth failures alone', () => {
+    expect(expandGitError(new Error('remote hung up unexpectedly'))).toBe(
+      'remote hung up unexpectedly'
+    );
+  });
+
   it('stringifies a non-Error value', () => {
     expect(expandGitError('boom')).toBe('boom');
     expect(expandGitError(42)).toBe('42');

@@ -60,6 +60,7 @@ export async function clone(
       singleBranch,
       noCheckout: false, // Let clone handle checkout
       onAuth: ctx.getOnAuth(),
+      onAuthFailure: ctx.getOnAuthFailure(),
       onProgress: (event) => {
         if (event.phase === 'Receiving objects') {
           output += `Receiving objects: ${event.loaded}/${event.total}\n`;

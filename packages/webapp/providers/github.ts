@@ -556,12 +556,34 @@ function isRateLimited(res: Response): boolean {
   return res.headers.get('x-ratelimit-remaining') === '0' || res.headers.has('retry-after');
 }
 
+/**
+ * Keep `/workspace/.git/github-token` aligned with the live OAuth masked value.
+ *
+ * `git config github.token "$(oauth-token github)"` stores a snapshot that
+ * goes stale when the broker rotates the mask or renews the access token
+ * (#2777). Network ops call {@link getValidAccessToken} before talking to
+ * GitHub; syncing here — even when the access token is still fresh — means
+ * isomorphic-git never keeps using a hand-written snapshot while an OAuth
+ * account is logged in.
+ */
+async function syncGitTokenBridge(): Promise<void> {
+  const masked = getOAuthAccountInfo('github')?.maskedValue;
+  if (masked) {
+    await writeGitToken(masked);
+  }
+}
+
 async function getValidAccessToken(): Promise<string> {
   const account = getGitHubAccount();
   if (!account?.accessToken) throw new Error('Not logged in to GitHub — please log in first');
 
   const expiresIn = (account.tokenExpiresAt ?? Number.POSITIVE_INFINITY) - Date.now();
-  if (expiresIn > 60000) return account.accessToken;
+  if (expiresIn > 60000) {
+    // Fresh enough to skip renewal, but still re-sync the git bridge so a
+    // stale `git config github.token` snapshot cannot win over the broker.
+    await syncGitTokenBridge();
+    return account.accessToken;
+  }
 
   const newToken = await silentRenewBackoff.run(() => renewGitHubToken());
   if (newToken) return newToken;
@@ -570,6 +592,7 @@ async function getValidAccessToken(): Promise<string> {
   const refreshedExpiresIn =
     (refreshedAccount?.tokenExpiresAt ?? Number.POSITIVE_INFINITY) - Date.now();
   if (refreshedExpiresIn > 0 && refreshedAccount?.accessToken) {
+    await syncGitTokenBridge();
     return refreshedAccount.accessToken;
   }
 

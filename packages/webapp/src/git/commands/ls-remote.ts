@@ -2,6 +2,7 @@
 
 import * as git from 'isomorphic-git';
 import { gitHttp } from '../git-http.js';
+import { annotateGitHubAuthFailure } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function lsRemote(
@@ -24,6 +25,7 @@ export async function lsRemote(
       url,
       corsProxy: ctx.corsProxy,
       onAuth: ctx.getOnAuth(),
+      onAuthFailure: ctx.getOnAuthFailure(),
       prefix,
       symrefs: showSymrefs,
       peelTags: tags,
@@ -37,9 +39,10 @@ export async function lsRemote(
       .join('');
     return { stdout, stderr: '', exitCode: args.includes('--exit-code') && !stdout ? 2 : 0 };
   } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
     return {
       stdout: '',
-      stderr: `fatal: ${err instanceof Error ? err.message : String(err)}\n`,
+      stderr: `fatal: ${annotateGitHubAuthFailure(message)}\n`,
       exitCode: 128,
     };
   }
