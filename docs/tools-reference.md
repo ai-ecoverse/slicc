@@ -369,7 +369,8 @@ Scoop-only (not registered for the cone — it has no parent to message; its ass
 
 ### list_scoops
 
-Cone-only. List the scoops you own — your own subtree, not another cone's
+When `policy.canManageChildren` is true (every root, and a child given nested
+delegation). List the scoops you own — your own subtree, not another cone's
 (#2360). Every name-based scoop tool (`feed_scoop`, `drop_scoop`, `scoop_mute`,
 `scoop_unmute`, `scoop_wait`) resolves names against exactly this list, so a
 name that is not here is an error, never a cross-cone match.
@@ -384,13 +385,14 @@ name that is not here is an error, never a cross-cone match.
 
 ### scoop_scoop
 
-Cone-only. Create a new scoop.
+When `policy.canCreateChildren` is true (every root, and a child given the
+nested-delegation grant). Create a new scoop owned by the caller.
 
-| Property   | Value                                            |
-| ---------- | ------------------------------------------------ |
-| **Name**   | `scoop_scoop`                                    |
-| **Input**  | `{ name: string }` — display name (e.g., "Andy") |
-| **Output** | `{ content: "Scoop created" }`                   |
+| Property   | Value                                                                                                                                              |
+| ---------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Name**   | `scoop_scoop`                                                                                                                                      |
+| **Input**  | `{ name: string, canCreateChildren?: boolean, … }` — display name (e.g., "Andy"); `canCreateChildren: true` grants the new scoop nested delegation |
+| **Output** | `{ content: "Scoop created" }`                                                                                                                     |
 
 **Behavior**:
 
@@ -402,12 +404,15 @@ Cone-only. Create a new scoop.
   different cone is fine
 - Scoop is registered but not activated
 - Use `feed_scoop` to give it a task
+- `canCreateChildren: true` stamps `ScoopConfig.canCreateChildren` so the
+  new scoop may create and manage its own children; refused when the caller
+  does not hold the flag (`isPolicySubset`)
 
 ---
 
 ### feed_scoop
 
-Cone-only. Delegate a task to a scoop.
+When `policy.canManageChildren` is true. Delegate a task to a scoop.
 
 | Property   | Value                                       |
 | ---------- | ------------------------------------------- |
@@ -427,7 +432,7 @@ Cone-only. Delegate a task to a scoop.
 
 ### drop_scoop
 
-Cone-only. Remove a scoop.
+When `policy.canManageChildren` is true. Remove a scoop.
 
 | Property   | Value                          |
 | ---------- | ------------------------------ |
@@ -553,10 +558,10 @@ Hidden from the chat UI via `hidden-tools.ts`.
 | write_file               | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
 | edit_file                | ✓    | ✓ (restricted) | Active in `ScoopContext`                                              |
 | **send_message**         | ✗    | ✓              | Scoop-only management tool (scoop→cone progress/result channel)       |
-| **list_scoops**          | ✓    | ✗              | Cone-only scoop-management tool                                       |
-| **scoop_scoop**          | ✓    | ✗              | Cone-only scoop-management tool                                       |
-| **feed_scoop**           | ✓    | ✗              | Cone-only scoop-management tool                                       |
-| **drop_scoop**           | ✓    | ✗              | Cone-only scoop-management tool                                       |
+| **list_scoops**          | ✓    | grant          | `canManageChildren` — lists the caller's subtree                      |
+| **scoop_scoop**          | ✓    | grant          | `canCreateChildren` — roots, and children given nested delegation     |
+| **feed_scoop**           | ✓    | grant          | `canManageChildren` — same grant turns this on with create            |
+| **drop_scoop**           | ✓    | grant          | `canManageChildren`                                                   |
 | **update_global_memory** | ✓    | ✗              | Cone-only scoop-management tool                                       |
 | **sudo_request**         | ✗    | ✓              | Scoop-only — escalate to the cone for an approval decision            |
 | **lick_confirm**         | ✓    | ✗              | Cone-only — confirm a pending actionable lick (allow-once or always)  |

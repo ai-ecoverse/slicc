@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 import {
+  assertChildPolicyAllowed,
   childrenOf,
   delegatedChildPolicy,
   deriveCompletion,
@@ -48,8 +49,27 @@ describe('work-unit policy', () => {
     });
     expect(policy.approvalAuthority).toEqual({ parentId: 'cone_1' });
     expect(policy.canCreateChildren).toBe(false);
+    expect(policy.canManageChildren).toBe(false);
     expect(policy.sudoDefaultDisposition).toBe('require-approval');
     expect(policy.persistCommandGrants).toBe(false);
+  });
+
+  it('grants nested delegation only when config.canCreateChildren is true', () => {
+    const granted = childRecord('cone_1', { config: { canCreateChildren: true } });
+    const policy = derivePolicy(granted);
+    expect(policy.canCreateChildren).toBe(true);
+    expect(policy.canManageChildren).toBe(true);
+    // The grant is the supervisor pair only — nothing else widens.
+    expect(policy.canWriteSharedMemory).toBe(false);
+    expect(policy.canResolveApprovals).toBe(false);
+    expect(policy.persistCommandGrants).toBe(false);
+    expect(policy.sudoDefaultDisposition).toBe('require-approval');
+    expect(policy.filesystem.kind).toBe('restricted');
+    expect(isPolicySubset(policy, interactiveRootPolicy())).toBe(true);
+
+    const ungranted = derivePolicy(childRecord('cone_1'));
+    expect(ungranted.canCreateChildren).toBe(false);
+    expect(ungranted.canManageChildren).toBe(false);
   });
 
   it('keeps explicit empty path lists empty (no defaults live here)', () => {
@@ -91,6 +111,13 @@ describe('work-unit policy', () => {
       expect(isPolicySubset({ ...child, canCreateChildren: true }, child)).toBe(false);
       expect(isPolicySubset({ ...child, canResolveApprovals: true }, child)).toBe(false);
       expect(isPolicySubset({ ...child, persistCommandGrants: true }, child)).toBe(false);
+    });
+
+    it('a granted child is still ⊆ a root, and a default grandchild ⊆ the granted child', () => {
+      const granted = delegatedChildPolicy('cone_1', { canCreateChildren: true });
+      expect(isPolicySubset(granted, root)).toBe(true);
+      expect(isPolicySubset(child, granted)).toBe(true);
+      expect(isPolicySubset(granted, child)).toBe(false);
     });
 
     it('rejects sudo auto-allow and full-workspace under a restricted parent', () => {
@@ -190,5 +217,49 @@ describe('delegated approver scoops', () => {
     expect(approver.persistCommandGrants).toBe(false);
     expect(approver.sudoDefaultDisposition).toBe('require-approval');
     expect(approver.filesystem.kind).toBe('restricted');
+  });
+});
+
+describe('assertChildPolicyAllowed', () => {
+  const root = rootRecord();
+  const granted = childRecord(root.jid, {
+    folder: 'lead-scoop',
+    config: { canCreateChildren: true },
+  });
+  const leaf = childRecord(root.jid, { folder: 'leaf-scoop' });
+
+  it('allows a default child of a root and a grandchild of a granted child', () => {
+    expect(() => assertChildPolicyAllowed(leaf, root)).not.toThrow();
+    expect(() =>
+      assertChildPolicyAllowed(childRecord(granted.jid, { folder: 'deep-scoop' }), granted)
+    ).not.toThrow();
+  });
+
+  it('allows re-granting nested delegation when the parent already holds it', () => {
+    const grandchild = childRecord(granted.jid, {
+      folder: 'deep-scoop',
+      config: { canCreateChildren: true },
+    });
+    expect(() => assertChildPolicyAllowed(grandchild, granted)).not.toThrow();
+  });
+
+  it('refuses a grandchild when the parent was not granted canCreateChildren', () => {
+    expect(() =>
+      assertChildPolicyAllowed(childRecord(leaf.jid, { folder: 'deep-scoop' }), leaf)
+    ).toThrow(/cannot create children/);
+  });
+
+  it('rejects a subset violation — a grant the parent does not hold', () => {
+    const overreaching = childRecord(leaf.jid, {
+      folder: 'lead-scoop',
+      config: { canCreateChildren: true },
+    });
+    expect(() => assertChildPolicyAllowed(overreaching, leaf)).toThrow(/isPolicySubset/);
+
+    const approverGrandchild = childRecord(granted.jid, {
+      folder: 'reviewer-scoop',
+      approvesGuestRequests: true,
+    });
+    expect(() => assertChildPolicyAllowed(approverGrandchild, granted)).toThrow(/isPolicySubset/);
   });
 });

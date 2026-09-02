@@ -378,6 +378,8 @@ interface ScoopRecordInput {
    * than the primary's (#2271).
    */
   defaultVisibleRoots: string[];
+  /** Nested-delegation grant — stamped onto `ScoopConfig.canCreateChildren`. */
+  canCreateChildren?: boolean;
 }
 
 /** Build the partial `RegisteredScoop` record passed to onScoopScoop. */
@@ -393,6 +395,7 @@ function buildScoopRecord({
   backgroundAfterSeconds,
   parentJid,
   defaultVisibleRoots,
+  canCreateChildren,
 }: ScoopRecordInput): Omit<RegisteredScoop, 'jid'> {
   return {
     name,
@@ -409,6 +412,7 @@ function buildScoopRecord({
       ...(allowedCommands ? { allowedCommands } : {}),
       ...(thinkingLevel ? { thinkingLevel } : {}),
       ...(backgroundAfterSeconds !== undefined ? { backgroundAfterSeconds } : {}),
+      ...(canCreateChildren === true ? { canCreateChildren: true } : {}),
     },
     configSchemaVersion: CURRENT_SCOOP_CONFIG_VERSION,
     // Record the creating scoop's JID. originToolCallId is intentionally absent:
@@ -455,6 +459,7 @@ async function executeScoopScoop(
     allowedCommands,
     thinking,
     background_after: backgroundAfter,
+    canCreateChildren,
   } = input as {
     name: string;
     model?: string;
@@ -464,6 +469,7 @@ async function executeScoopScoop(
     allowedCommands?: string[];
     thinking?: string;
     background_after?: number;
+    canCreateChildren?: boolean;
   };
 
   const parsed = parseThinkingLevel(thinking);
@@ -508,6 +514,7 @@ async function executeScoopScoop(
       backgroundAfterSeconds: parsedBackgroundAfter.seconds,
       parentJid: config.scoop.jid,
       defaultVisibleRoots: defaultChildVisibleRoots(workspaceFor(config.scoop)),
+      canCreateChildren: canCreateChildren === true,
     });
     const newScoop = await config.onScoopScoop!(record);
     log.info('Scoop created', { name, folder });
@@ -935,6 +942,11 @@ function scoopScoopTool(config: ScoopManagementToolsConfig): ToolDefinition {
           description:
             "Seconds this scoop's bash tool waits for a command before detaching it to the background and continuing (default 600). Lower it for a scoop that must never stall on a slow command — nobody can cancel a scoop's turn, and its detached commands report back via a Background Command lick. Use 0 to detach every command immediately.",
         },
+        canCreateChildren: {
+          type: 'boolean',
+          description:
+            'Explicit nested-delegation grant. When true, the new scoop may create and manage its own children (grandchildren of you). Omit or false (the default) keeps it a leaf. The grant is refused when you do not hold canCreateChildren yourself.',
+        },
       },
       required: ['name'],
     },
@@ -1128,10 +1140,15 @@ export function createScoopManagementTools(config: ScoopManagementToolsConfig): 
 
   // Orchestration surface. The individual callbacks are already gated on
   // the policy by the lifecycle manager; `list_scoops` follows the same gate.
+  // `scoop_scoop` keys off `canCreateChildren` (the nested-delegation grant);
+  // feed / drop / wait / mute key off `canManageChildren`. The grant turns
+  // both flags on together so a supervisor is never create-only.
+  if (policy.canCreateChildren && config.onScoopScoop) {
+    tools.push(scoopScoopTool(config));
+  }
   if (policy.canManageChildren) {
     if (config.onFeedScoop) tools.push(feedScoopTool(config));
     tools.push(listScoopsTool(config));
-    if (config.onScoopScoop) tools.push(scoopScoopTool(config));
     if (config.onDropScoop) tools.push(dropScoopTool(config));
     if (config.onMuteScoops) tools.push(scoopMuteTool(config));
     if (config.onUnmuteScoops) tools.push(scoopUnmuteTool(config));

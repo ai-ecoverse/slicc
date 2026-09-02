@@ -175,11 +175,12 @@ roster into "selected subtree" and "the rest" but keeps registry order inside
 each half — which is the documented intent ("cone, its scoops, next cone") only
 as long as registry order happens to be owner-grouped.
 
-The two orderings are **identical for every roster with one cone**: children
-carry `canCreateChildren: false`, so there is no nesting to group, and a single
-cone reduces both to "cone, then its scoops in registry order". The change is only observable with
-several cones _and_ a scoop registered out of owner order, which is exactly the
-case the two implementations disagreed about.
+The two orderings are **identical for every roster with one cone and no nested
+grant**: a single cone reduces both to "cone, then its scoops in registry
+order". Depth-first descendants already cover a `canCreateChildren` grant.
+The change is only observable with several cones _and_ a scoop registered out
+of owner order, which is exactly the case the two implementations disagreed
+about.
 
 `ownerRootOf` replaces `rootForSelection` (leader) and `rootOfSummary`
 (follower) — the same bounded walk, written once. Approval routing keeps its

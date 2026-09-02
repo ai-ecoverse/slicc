@@ -113,6 +113,8 @@ For dip and sprinkle interaction patterns built on `agent`, see `/workspace/skil
 
 `scoop_scoop` accepts three sandbox-shaping parameters. **They are how you give a scoop authority — by widening or narrowing what it can read, write, and run.** A scoop that can't reach the files it needs has no autonomy; pre-cooking the brief is what you do to compensate. Get the sandbox right and the brief gets shorter.
 
+A fourth, rarely used argument — `canCreateChildren: true` — is an explicit nested-delegation grant. The new scoop may then `scoop_scoop` / `feed_scoop` / `drop_scoop` its own children. Omit it (the default) so the scoop stays a leaf. A scoop that was not itself granted this cannot pass it on.
+
 | Param             | What it controls                       | Default                                | Pure replace? |
 | ----------------- | -------------------------------------- | -------------------------------------- | ------------- |
 | `visiblePaths`    | Read-only VFS paths the scoop can SEE  | `["/workspace/"]`                      | Yes           |

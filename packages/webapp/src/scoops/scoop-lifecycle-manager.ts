@@ -33,7 +33,7 @@ import { conversationKeyFor } from '../work-unit/conversation/key.js';
 import type { WorkUnitConversationStore } from '../work-unit/conversation/store.js';
 import { toDescriptor, workspaceFor } from '../work-unit/descriptor.js';
 import { LiveWorkUnit } from '../work-unit/live-unit.js';
-import { isRootUnit, rootOwnerOf, rootsOf } from '../work-unit/policy.js';
+import { assertChildPolicyAllowed, isRootUnit, rootOwnerOf, rootsOf } from '../work-unit/policy.js';
 import {
   modelFor,
   modelIdFor,
@@ -988,11 +988,12 @@ export class ScoopLifecycleManager {
             const fullScoop: RegisteredScoop = {
               ...newScoop,
               jid: `scoop_${newScoop.folder}_${Date.now()}`,
-              // Record the creating cone's JID so transcript export can
+              // Record the creating unit's JID so transcript export can
               // reconstruct the delegation chain. originToolCallId is not
               // available in this path (ToolDefinition has no toolCallId).
               parentJid: scoop.jid,
             };
+            assertChildPolicyAllowed(fullScoop, scoop);
             await cone.registerScoop(fullScoop);
             return fullScoop;
           }

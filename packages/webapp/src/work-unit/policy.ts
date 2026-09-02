@@ -45,16 +45,25 @@ export function delegatedChildPolicy(
      * parent (a root) already holds it, so the subset invariant is preserved.
      */
     approvesGuestRequests?: boolean;
+    /**
+     * Nested-delegation grant. Only ever true for a record whose config
+     * explicitly sets `canCreateChildren`, and the parent must already hold
+     * the flag (`assertChildPolicyAllowed` / `isPolicySubset`).
+     */
+    canCreateChildren?: boolean;
   } = {}
 ): WorkUnitPolicy {
+  const nested = paths.canCreateChildren === true;
   return {
     filesystem: {
       kind: 'restricted',
       writablePaths: [...(paths.writablePaths ?? [])],
       visiblePaths: [...(paths.visiblePaths ?? [])],
     },
-    canCreateChildren: false,
-    canManageChildren: false,
+    canCreateChildren: nested,
+    // Creating children without being able to feed / drop / wait on them
+    // is a trap, so the grant is the supervisor pair — not create alone.
+    canManageChildren: nested,
     canWriteSharedMemory: false,
     canResolveApprovals: paths.approvesGuestRequests === true,
     approvalAuthority: { parentId },
@@ -70,6 +79,7 @@ export function derivePolicy(scoop: RegisteredScoop): WorkUnitPolicy {
     writablePaths: scoop.config?.writablePaths,
     visiblePaths: scoop.config?.visiblePaths,
     approvesGuestRequests: scoop.approvesGuestRequests === true,
+    canCreateChildren: scoop.config?.canCreateChildren === true,
   });
 }
 
@@ -105,6 +115,26 @@ export function isPolicySubset(child: WorkUnitPolicy, parent: WorkUnitPolicy): b
     return false;
   }
   return true;
+}
+
+/**
+ * Create-time gate for a child of `parent`. Roots skip this (they have no
+ * parent to subset against). Throws when the parent cannot create children,
+ * or when the child's derived policy is not ⊆ the parent's.
+ */
+export function assertChildPolicyAllowed(child: RegisteredScoop, parent: RegisteredScoop): void {
+  const parentPolicy = derivePolicy(parent);
+  const childPolicy = derivePolicy(child);
+  if (!isPolicySubset(childPolicy, parentPolicy)) {
+    throw new Error(
+      `Child policy of "${child.name}" is not a subset of parent ${parent.jid} (isPolicySubset)`
+    );
+  }
+  if (!parentPolicy.canCreateChildren) {
+    throw new Error(
+      `Work unit ${parent.jid} cannot create children (policy.canCreateChildren is false)`
+    );
+  }
 }
 
 /** Records owned directly by `id` (not transitive). */

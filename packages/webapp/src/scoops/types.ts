@@ -277,6 +277,16 @@ export interface ScoopConfig {
    */
   allowedCommands?: readonly string[];
   /**
+   * Explicit nested-delegation grant (#2278). A delegated child normally
+   * cannot create grandchildren (`delegatedChildPolicy` sets
+   * `canCreateChildren: false`). When this is `true`, `derivePolicy` turns
+   * the flag on — and with it `canManageChildren`, so the child can feed /
+   * drop / wait on what it spawns. The grant is a policy change, not a
+   * runtime type; `isPolicySubset` still requires the parent to hold the
+   * same capabilities, so an ungranted scoop cannot pass this on.
+   */
+  canCreateChildren?: boolean;
+  /**
    * JSON Schema to enforce on the scoop's final output. When set,
    * a `StructuredOutput` tool is injected so the agent must return
    * its result in the specified schema shape.

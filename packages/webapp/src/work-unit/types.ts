@@ -62,7 +62,7 @@ export type ApprovalAuthority = 'user' | { parentId: WorkUnitId };
  */
 export interface WorkUnitPolicy {
   filesystem: FileSystemPolicy;
-  /** May spawn child units (`scoop_scoop`). */
+  /** May spawn child units (`scoop_scoop`). Roots always; a child only with an explicit `ScoopConfig.canCreateChildren` grant. */
   canCreateChildren: boolean;
   /** May feed / drop / mute / wait on children. */
   canManageChildren: boolean;
@@ -177,7 +177,12 @@ export interface CreateWorkUnitOptions {
   name: string;
   /** Sanitised storage folder; defaults to `name`. */
   folder?: string;
-  /** Carried through to `RegisteredScoop.config` unchanged. */
+  /**
+   * Carried through to `RegisteredScoop.config` unchanged. Set
+   * `config.canCreateChildren: true` to grant the new child nested
+   * delegation (`derivePolicy` turns on `canCreateChildren` and
+   * `canManageChildren`). Refused when the parent does not hold the flag.
+   */
   config?: RegisteredScoop['config'];
   /** `silent` completion (ephemeral callers draining via observer). */
   notifyOnComplete?: boolean;

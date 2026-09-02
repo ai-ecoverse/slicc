@@ -1181,3 +1181,85 @@ describe('name resolution is scoped to the caller subtree (#2360)', () => {
     expect(result.content).toContain('helper-scoop-2');
   });
 });
+
+describe('nested delegation via canCreateChildren grant', () => {
+  const lead: RegisteredScoop = {
+    jid: 'scoop_lead_1',
+    name: 'lead',
+    folder: 'lead-scoop',
+    parentJid: cone.jid,
+    requiresTrigger: true,
+    assistantLabel: 'lead-scoop',
+    addedAt: new Date().toISOString(),
+    config: { canCreateChildren: true },
+  };
+  const leaf: RegisteredScoop = {
+    jid: 'scoop_leaf_1',
+    name: 'leaf',
+    folder: 'leaf-scoop',
+    parentJid: cone.jid,
+    requiresTrigger: true,
+    assistantLabel: 'leaf-scoop',
+    addedAt: new Date().toISOString(),
+  };
+
+  function toolsFor(caller: RegisteredScoop, roster: RegisteredScoop[]) {
+    const onScoopScoop = vi.fn(
+      async (scoop: Omit<RegisteredScoop, 'jid'>): Promise<RegisteredScoop> => ({
+        ...scoop,
+        jid: `scoop_${scoop.folder}_1`,
+      })
+    );
+    const tools = createScoopManagementTools({
+      scoop: caller,
+      onSendMessage: vi.fn(),
+      getScoops: () => roster,
+      onScoopScoop,
+      onFeedScoop: vi.fn(async () => {}),
+      onDropScoop: vi.fn(async () => {}),
+      onScheduleScoopWait: vi.fn((jids: readonly string[]) => ({
+        scheduled: [...jids],
+        unknown: [],
+      })),
+    });
+    return { tools, onScoopScoop };
+  }
+
+  it('registers scoop_scoop and management tools on a granted child', () => {
+    const { tools } = toolsFor(lead, [cone, lead]);
+    expect(tools.find((t) => t.name === 'scoop_scoop')).toBeDefined();
+    expect(tools.find((t) => t.name === 'feed_scoop')).toBeDefined();
+    expect(tools.find((t) => t.name === 'drop_scoop')).toBeDefined();
+    expect(tools.find((t) => t.name === 'list_scoops')).toBeDefined();
+    expect(tools.find((t) => t.name === 'scoop_wait')).toBeDefined();
+    expect(tools.find((t) => t.name === 'send_message')).toBeDefined();
+  });
+
+  it('does not register scoop_scoop on an ungranted child even when the callback is wired', () => {
+    const { tools } = toolsFor(leaf, [cone, leaf]);
+    expect(tools.find((t) => t.name === 'scoop_scoop')).toBeUndefined();
+    expect(tools.find((t) => t.name === 'feed_scoop')).toBeUndefined();
+    expect(tools.find((t) => t.name === 'send_message')).toBeDefined();
+  });
+
+  it('a granted child creates a grandchild owned by the child, not the cone', async () => {
+    const { tools, onScoopScoop } = toolsFor(lead, [cone, lead]);
+    const tool = tools.find((t) => t.name === 'scoop_scoop')!;
+    const result = await tool.execute({ name: 'deep' });
+    expect(result.isError).toBeUndefined();
+    expect(onScoopScoop).toHaveBeenCalledOnce();
+    const created = onScoopScoop.mock.calls[0][0] as Omit<RegisteredScoop, 'jid'>;
+    expect(created.parentJid).toBe(lead.jid);
+    expect(created.config?.canCreateChildren).toBeUndefined();
+  });
+
+  it('stamps config.canCreateChildren only when the caller passes the grant', async () => {
+    const { tool, onScoopScoop } = findScoopScoopTool();
+    await tool.execute({ name: 'lead', canCreateChildren: true });
+    expect(onScoopScoop.mock.calls[0][0].config?.canCreateChildren).toBe(true);
+
+    const again = findScoopScoopTool();
+    await again.tool.execute({ name: 'leaf', canCreateChildren: false });
+    expect(again.onScoopScoop.mock.calls[0][0].config?.canCreateChildren).toBeUndefined();
+  });
+});
