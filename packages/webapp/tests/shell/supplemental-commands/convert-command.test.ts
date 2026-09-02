@@ -837,6 +837,79 @@ describe('install-required guidance (browser branch)', () => {
     expect(result!.version).toBe('0.0.38');
   });
 
+  /**
+   * Layout regression for the 0.0.42 -> 0.0.43 bump (PR #2744). 0.0.43 split
+   * the binary by memory model: the single `dist/magick.wasm` became
+   * `dist/x86/magick.wasm` (32-bit) plus `dist/x64/magick.wasm` (64-bit).
+   * The loader looked only at the old path, so a correctly ipk-installed
+   * 0.0.43 resolved to null and `convert` / `magick` reported the package as
+   * not installed. Both layouts must resolve, since the pinned version
+   * decides which one lands in the VFS.
+   */
+  it('tryLoadMagickWasmFromNodeModules reads dist/x86/magick.wasm (0.0.43 layout)', async () => {
+    const ctx = createIpkMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@imagemagick/magick-wasm/package.json',
+      JSON.stringify({ name: '@imagemagick/magick-wasm', version: '0.0.43', main: 'dist/index.js' })
+    );
+    const x86Wasm = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00]);
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@imagemagick/magick-wasm/dist/x86/magick.wasm',
+      x86Wasm
+    );
+    const result = await magickWasm.tryLoadMagickWasmFromNodeModules(createIpkContextFromCtx(ctx));
+    expect(result).not.toBeNull();
+    expect(Array.from(result!.bytes)).toEqual(Array.from(x86Wasm));
+    expect(result!.version).toBe('0.0.43');
+  });
+
+  /**
+   * The 64-bit binary pairs with the package's `initializeImageMagickx64`
+   * entry point, which this build deliberately does not bundle (it would add
+   * ~130 kB of glue to the kernel worker's cold-boot payload). Feeding
+   * 64-bit bytes to the 32-bit glue reproduces the ABI mismatch that hangs
+   * emscripten's bring-up until `withInitTimeout` fires 30 s later, so an
+   * x64-only install must resolve to null and surface the clean "not
+   * installed" guidance instead.
+   */
+  it('tryLoadMagickWasmFromNodeModules ignores an x64-only install', async () => {
+    const ctx = createIpkMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@imagemagick/magick-wasm/package.json',
+      JSON.stringify({ name: '@imagemagick/magick-wasm', version: '0.0.43', main: 'dist/index.js' })
+    );
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@imagemagick/magick-wasm/dist/x64/magick.wasm',
+      new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
+    );
+    const result = await magickWasm.tryLoadMagickWasmFromNodeModules(createIpkContextFromCtx(ctx));
+    expect(result).toBeNull();
+  });
+
+  /**
+   * Both layouts present (a stale `dist/magick.wasm` left beside a fresh
+   * `dist/x86/`): prefer the modern path, so an upgrade-in-place install
+   * does not keep feeding the glue the old binary.
+   */
+  it('tryLoadMagickWasmFromNodeModules prefers dist/x86 over the legacy path', async () => {
+    const ctx = createIpkMockCtx();
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@imagemagick/magick-wasm/package.json',
+      JSON.stringify({ name: '@imagemagick/magick-wasm', version: '0.0.43', main: 'dist/index.js' })
+    );
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@imagemagick/magick-wasm/dist/magick.wasm',
+      new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00])
+    );
+    const x86Wasm = new Uint8Array([0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x01]);
+    await ctx.fs.writeFile(
+      '/workspace/node_modules/@imagemagick/magick-wasm/dist/x86/magick.wasm',
+      x86Wasm
+    );
+    const result = await magickWasm.tryLoadMagickWasmFromNodeModules(createIpkContextFromCtx(ctx));
+    expect(Array.from(result!.bytes)).toEqual(Array.from(x86Wasm));
+  });
+
   it('help text contains no CDN / jsdelivr references (zero network)', async () => {
     const cmd = createConvertCommand();
     const result = await cmd.execute(['--help'], createIpkMockCtx());
@@ -904,8 +977,36 @@ describe('magick-wasm import shape (NS1 / F-C04 regression)', () => {
   );
 
   it('imports @imagemagick/magick-wasm statically, not via dynamic import()', () => {
-    expect(magickSrc).toMatch(/import \* as magickModule from '@imagemagick\/magick-wasm'/);
+    expect(magickSrc).toMatch(/import \{[^}]*\} from '@imagemagick\/magick-wasm';/s);
     expect(magickSrc).not.toMatch(/import\(\s*['"]@imagemagick\/magick-wasm['"]\s*\)/);
+  });
+
+  /**
+   * Bundle-size invariant, and the reason the import above is a NAMED one
+   * rather than `import * as`. Since 0.0.43 the package ships the Emscripten
+   * glue for both memory models in a single module: `x86/magick.js` (~124 kB)
+   * behind `initializeImageMagick` and `x64/magick.js` (~130 kB) behind
+   * `initializeImageMagickx64`. A namespace import references every export,
+   * so Rollup must retain both. This module is in the kernel worker's EAGER
+   * closure (`builtin-shadow-map.ts` reaches it for a version string), so the
+   * unused 64-bit glue would be cold-boot payload on every boot — measured at
+   * +103 kB on the worker first-load graph when the 0.0.43 bump landed.
+   * Like the sibling assertions this is a bundling-shape invariant no runtime
+   * unit test can exercise, so it is pinned at the source level.
+   */
+  it('names its glue imports so the unused 64-bit glue tree-shakes out', () => {
+    expect(magickSrc).not.toMatch(/import \* as \w+ from '@imagemagick\/magick-wasm'/);
+    // Assert on the binding list itself, not the whole file: the module's
+    // header comment names `initializeImageMagickx64` to explain why it is
+    // excluded, and a bare substring check would match that prose.
+    const bindings = magickSrc.match(/import \{([^}]*)\} from '@imagemagick\/magick-wasm';/s);
+    expect(bindings).not.toBeNull();
+    const imported = (bindings?.[1] ?? '')
+      .split(',')
+      .map((name) => name.trim())
+      .filter(Boolean);
+    expect(imported).toContain('initializeImageMagick');
+    expect(imported).not.toContain('initializeImageMagickx64');
   });
 
   it('mirrors the static-import pattern proven by ffmpeg-wasm.ts', () => {
@@ -938,7 +1039,7 @@ describe('magick-wasm import shape (NS1 / F-C04 regression)', () => {
   });
 
   it('bounds initializeImageMagick with a timeout so a wedged bring-up surfaces', () => {
-    expect(magickSrc).toMatch(/withInitTimeout\(magickModule\.initializeImageMagick\(/);
+    expect(magickSrc).toMatch(/withInitTimeout\(initializeImageMagick\(/);
   });
 
   /**
