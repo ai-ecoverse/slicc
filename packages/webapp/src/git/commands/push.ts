@@ -3,7 +3,7 @@
 import * as git from 'isomorphic-git';
 import { parseArgs } from '../../shell/arg-parser.js';
 import { gitHttp } from '../git-http.js';
-import { GIT_FLAG_SPECS } from './shared.js';
+import { annotateGitHubAuthFailure, GIT_FLAG_SPECS } from './shared.js';
 import type { GitCommandContext, GitCommandResult } from './types.js';
 
 export async function push(
@@ -30,6 +30,7 @@ export async function push(
     corsProxy: ctx.corsProxy,
     force,
     onAuth: ctx.getOnAuth(),
+    onAuthFailure: ctx.getOnAuthFailure(),
     onProgress: (event) => {
       output += `${event.phase}: ${event.loaded}/${event.total}\n`;
     },
@@ -56,9 +57,11 @@ export async function push(
       output += `Branch '${branch}' set up to track remote branch '${branch}' from '${remote}'.\n`;
     }
   } else {
+    const remotes = await git.listRemotes({ fs: ctx.lfs, dir: cwd }).catch(() => []);
+    const remoteUrl = remotes.find((item) => item.remote === remote)?.url;
     return {
       stdout: '',
-      stderr: `error: failed to push to '${remote}': ${result.error}\n`,
+      stderr: `error: failed to push to '${remote}': ${annotateGitHubAuthFailure(String(result.error), remoteUrl)}\n`,
       exitCode: 1,
     };
   }

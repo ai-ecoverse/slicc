@@ -252,8 +252,24 @@ function getFsWatcher(fs: unknown): FsWatcher | null {
   return null;
 }
 
-async function ensureFreshGithubToken(): Promise<void> {
-  await getRegisteredProviderConfig('github')?.getValidAccessToken?.();
+/**
+ * Best-effort GitHub auth refresh for git network ops.
+ *
+ * - Default: expiry-gated {@link ProviderConfig.getValidAccessToken}, which
+ *   also re-syncs `/workspace/.git/github-token` from the live OAuth mask
+ *   so a stale `git config github.token` snapshot cannot win (#2777).
+ * - `force: true`: call {@link ProviderConfig.onSilentRenew} once (used by
+ *   isomorphic-git `onAuthFailure` after a 401) so an access token that is
+ *   still inside its local expiry window but rejected upstream can rotate.
+ */
+async function ensureFreshGithubToken(opts?: { force?: boolean }): Promise<void> {
+  const github = getRegisteredProviderConfig('github');
+  if (!github) return;
+  if (opts?.force) {
+    await github.onSilentRenew?.();
+    return;
+  }
+  await github.getValidAccessToken?.();
 }
 
 type BashExecOptionsWithSignal = NonNullable<Parameters<Bash['exec']>[1]> & {

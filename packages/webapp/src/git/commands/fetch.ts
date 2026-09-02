@@ -33,6 +33,7 @@ export async function fetch(
     prune,
     depth: depth ? parseInt(depth, 10) : undefined,
     onAuth: ctx.getOnAuth(),
+    onAuthFailure: ctx.getOnAuthFailure(),
     onProgress: (event) => {
       output += `${event.phase}: ${event.loaded}/${event.total}\n`;
     },

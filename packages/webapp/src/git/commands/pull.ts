@@ -33,6 +33,7 @@ export async function pull(
     fastForwardOnly: ffOnly,
     fastForward: !noFf,
     onAuth: ctx.getOnAuth(),
+    onAuthFailure: ctx.getOnAuthFailure(),
     onProgress: (event) => {
       output += `${event.phase}: ${event.loaded}/${event.total}\n`;
     },

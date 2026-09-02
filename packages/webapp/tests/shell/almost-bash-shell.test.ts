@@ -312,6 +312,7 @@ describe('AlmostBashShellHeadless GitHub token renewal wiring', () => {
   it('uses the registered expiry-gated hook only for git network operations', async () => {
     const fs = await VirtualFS.create({ dbName: 'test-shell-github-renewal', wipe: true });
     const getValidAccessToken = vi.fn(async () => 'ghp_fresh');
+    const onSilentRenew = vi.fn(async () => 'ghp_forced');
     registerProviderConfig({
       id: 'github',
       name: 'GitHub',
@@ -319,12 +320,14 @@ describe('AlmostBashShellHeadless GitHub token renewal wiring', () => {
       requiresApiKey: false,
       requiresBaseUrl: false,
       getValidAccessToken,
+      onSilentRenew,
     });
 
     try {
       const shell = new AlmostBashShellHeadless({ fs });
       await shell.executeCommand('git fetch');
       expect(getValidAccessToken).toHaveBeenCalledTimes(1);
+      expect(onSilentRenew).not.toHaveBeenCalled();
 
       await shell.executeCommand('git status');
       expect(getValidAccessToken).toHaveBeenCalledTimes(1);

@@ -22,8 +22,12 @@ export interface GitCommandsOptions {
   fs: VirtualFS;
   /** CORS proxy URL for remote operations. */
   corsProxy?: string;
-  /** Best-effort GitHub token freshness check before network operations. */
-  ensureFreshGithubToken?: () => Promise<void>;
+  /**
+   * Best-effort GitHub token freshness check before network operations.
+   * Pass `{ force: true }` from `onAuthFailure` to renew even when the
+   * locally recorded expiry has not elapsed (#2777).
+   */
+  ensureFreshGithubToken?: (opts?: { force?: boolean }) => Promise<void>;
   /** Default author name. */
   authorName?: string;
   /** Default author email. */
@@ -64,6 +68,13 @@ export interface GitCommandContext {
   readonly corsProxy?: string;
   /** onAuth callback for isomorphic-git network operations (or undefined). */
   getOnAuth(): (() => { username: string; password: string }) | undefined;
+  /**
+   * onAuthFailure: one silent renew + retry when GitHub rejects credentials
+   * (#2777). Returns undefined when already retried or no token is available.
+   */
+  getOnAuthFailure():
+    | (() => Promise<{ username: string; password: string } | undefined>)
+    | undefined;
   /** Resolve the git author identity for an operation. */
   resolveAuthor(cwd: string): Promise<{ name: string; email: string }>;
   /** The shared Global VirtualFS instance for config persistence. */

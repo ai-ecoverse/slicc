@@ -46,7 +46,7 @@ Use ice cream terms in review comments and docs when they match the domain (e.g.
 - Keep commits focused and package-local when possible.
 - **Linear history**: CI rejects merge commits. Rebase onto `origin/main`; Husky enforces via `packages/dev-tools/tools/check-linear-history.sh`.
 - Do not hand-edit generated output in `dist/`.
-- Auth: `git config github.token <PAT>` or GitHub OAuth login; see [`docs/secrets.md`](docs/secrets.md).
+- Auth: GitHub OAuth login (preferred; renews the git bridge on network ops) or `git config github.token <PAT>`; see [`docs/secrets.md`](docs/secrets.md).
 
 **Requires Node >= 22** (LTS). Ports: 5710 (bridge + /api), 9222 (Chrome CDP), 9223 (Electron CDP). node-server serves no UI — the webapp loads from the hosted origin and dials back to the local `/cdp` bridge.
 

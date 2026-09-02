@@ -238,6 +238,10 @@ export class GitCommands {
     const lfs = CACHEABLE_COMMANDS.has(command)
       ? createCommandScopedReadCache(client.promises)
       : client.promises;
+    // Latch is closed over here — NOT on the instance — so overlapping
+    // network commands on the same GitCommands each get their own single
+    // renew+retry (#2777 Codex review).
+    const onAuthFailure = this.createOnAuthFailure();
     const ctx: GitCommandContext = {
       lfs,
       fs: this.options.fs,
@@ -248,6 +252,7 @@ export class GitCommands {
       cache: this.cacheManager.cache,
       corsProxy: this.corsProxy,
       getOnAuth: () => this.getOnAuth(),
+      getOnAuthFailure: () => onAuthFailure,
       resolveAuthor: (cwd) => this.resolveAuthor(cwd, lfs),
       getGlobalFs: () => this.getGlobalFs(),
       setGithubToken: (token) => this.setGithubToken(token),
@@ -274,6 +279,37 @@ export class GitCommands {
       username: 'x-access-token',
       password: token,
     });
+  }
+
+  /**
+   * Build a per-invocation onAuthFailure: after GitHub rejects credentials,
+   * force one silent renew and retry with the refreshed bridge token.
+   * isomorphic-git keeps calling as long as credentials are returned, so the
+   * closed-over latch caps retries at one for THIS command only (#2777).
+   */
+  private createOnAuthFailure():
+    | (() => Promise<{ username: string; password: string } | undefined>)
+    | undefined {
+    // Always install the callback when a freshness hook exists — even if the
+    // first onAuth had no token, a force renew might produce one.
+    if (!this.options.ensureFreshGithubToken) return undefined;
+    let retried = false;
+    return async () => {
+      if (retried) return undefined;
+      retried = true;
+      try {
+        await this.options.ensureFreshGithubToken?.({ force: true });
+      } catch (err) {
+        logger.warn('GitHub token force-renew after 401 failed', {
+          error: err instanceof Error ? err.message : String(err),
+        });
+        return undefined;
+      }
+      await this.loadGithubToken();
+      const token = this.resolveAuthToken();
+      if (!token) return undefined;
+      return { username: 'x-access-token', password: token };
+    };
   }
 
   /**
@@ -321,9 +357,9 @@ export class GitCommands {
   }
 
   /** Refresh GitHub auth before network operations without making git depend on the provider. */
-  private async ensureFreshGithubToken(): Promise<void> {
+  private async ensureFreshGithubToken(opts?: { force?: boolean }): Promise<void> {
     try {
-      await this.options.ensureFreshGithubToken?.();
+      await this.options.ensureFreshGithubToken?.(opts);
     } catch (err) {
       logger.warn('GitHub token freshness check failed; continuing with existing auth', {
         error: err instanceof Error ? err.message : String(err),

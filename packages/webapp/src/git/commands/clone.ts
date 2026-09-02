@@ -60,6 +60,7 @@ export async function clone(
       singleBranch,
       noCheckout: false, // Let clone handle checkout
       onAuth: ctx.getOnAuth(),
+      onAuthFailure: ctx.getOnAuthFailure(),
       onProgress: (event) => {
         if (event.phase === 'Receiving objects') {
           output += `Receiving objects: ${event.loaded}/${event.total}\n`;
@@ -69,7 +70,7 @@ export async function clone(
   } catch (err: unknown) {
     // #1033-1: surface the real target dir, never the literal `<path>`
     // placeholder that bubbles up from the OPFS backend.
-    return formatCloneError(err, targetDir);
+    return formatCloneError(err, targetDir, url);
   }
 
   // Persist backend-owned metadata (symlink-ness + filemode) to the OPFS
@@ -158,7 +159,7 @@ async function cloneLocal(
     if (files.length > 0) output += `Checked out ${files.length} files.\n`;
     return { stdout: `${output}done.\n`, stderr: '', exitCode: 0 };
   } catch (err) {
-    return formatCloneError(err, targetDir);
+    return formatCloneError(err, targetDir, sourceUrl);
   }
 }
 
@@ -186,8 +187,8 @@ async function copyLocalTree(
  * internal placeholder so the user sees the path they asked for, never the
  * literal `<path>` token from the backend (#1033-1).
  */
-function formatCloneError(err: unknown, targetDir: string): GitCommandResult {
-  const raw = expandGitError(err);
+function formatCloneError(err: unknown, targetDir: string, remoteUrl?: string): GitCommandResult {
+  const raw = expandGitError(err, remoteUrl);
   const scrubbed = raw
     .replace(/'\/__opfs__\/[^']*<path>'/g, `'${targetDir}'`)
     .replace(/\/__opfs__\/[^\s'"<]*<path>/g, targetDir)

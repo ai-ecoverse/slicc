@@ -193,8 +193,8 @@ function packfileReadHint(message: string): string | null {
  * of the packfile `InternalError`s {@link packfileReadHint} can say something
  * useful about; non-Errors stringify.
  */
-export function expandGitError(err: unknown): string {
-  if (!(err instanceof Error)) return String(err);
+export function expandGitError(err: unknown, remoteUrl?: string): string {
+  if (!(err instanceof Error)) return annotateGitHubAuthFailure(String(err), remoteUrl);
   const data = err as Error & { errors?: unknown; data?: { errors?: unknown } };
   const isMultiple =
     err.name === 'MultipleGitError' ||
@@ -207,10 +207,62 @@ export function expandGitError(err: unknown): string {
         ? (data.data?.errors as unknown[])
         : [];
     if (errorsList.length > 0) {
-      return errorsList.map((inner) => expandGitError(inner)).join('\n');
+      return errorsList.map((inner) => expandGitError(inner, remoteUrl)).join('\n');
     }
   }
-  return packfileReadHint(err.message) ?? err.message;
+  return annotateGitHubAuthFailure(packfileReadHint(err.message) ?? err.message, remoteUrl);
+}
+
+/**
+ * True when `url` points at github.com (HTTPS, SSH, or git@ form). Used to
+ * keep the stale-`github.token` hint off non-GitHub remotes (#2777 review).
+ */
+export function isGitHubRemoteUrl(url: string): boolean {
+  const trimmed = url.trim();
+  if (!trimmed) return false;
+  try {
+    const withScheme = /^[a-zA-Z][a-zA-Z0-9+.-]*:/.test(trimmed)
+      ? trimmed
+      : trimmed.includes('@') && trimmed.includes(':')
+        ? `ssh://${trimmed.replace(':', '/')}`
+        : `https://${trimmed}`;
+    const host = new URL(withScheme).hostname.toLowerCase();
+    return host === 'github.com' || host.endsWith('.github.com');
+  } catch {
+    return /(?:^|[@/])github\.com(?:[/:]|$)/i.test(trimmed);
+  }
+}
+
+/**
+ * When a remote answers 401, the bare isomorphic-git message
+ * (`HTTP Error: 401 Unauthorized`) leaves agents guessing. For GitHub remotes,
+ * point them at the OAuth broker path that actually renews (#2777). For other
+ * hosts, leave the message alone (or use a provider-neutral hint when the
+ * host is unknown) so we do not send people to `oauth-token github` for a
+ * GitLab/Bitbucket failure.
+ */
+export function annotateGitHubAuthFailure(message: string, remoteUrl?: string): string {
+  if (!/\b401\b|Unauthorized/i.test(message)) return message;
+
+  if (remoteUrl !== undefined) {
+    if (!isGitHubRemoteUrl(remoteUrl)) return message;
+  } else if (!/github\.com/i.test(message)) {
+    return (
+      `${message}\n` +
+      'hint: Authentication failed (401). Check credentials for this remote. ' +
+      'If this is GitHub, stored `git config github.token` may be a stale snapshot — ' +
+      're-run `oauth-token github` (or Settings → Providers → GitHub).'
+    );
+  }
+
+  return (
+    `${message}\n` +
+    'hint: GitHub returned 401. Stored `git config github.token` may be a stale ' +
+    'snapshot — git renews the OAuth broker on network ops, but a hand-written ' +
+    'token is not refreshed. Re-run `oauth-token github` (or Settings → Providers → ' +
+    'GitHub). If you must set `github.token` manually, capture stdout only ' +
+    '(never `2>&1`) and prefer leaving the bridge to the OAuth login.'
+  );
 }
 
 /**

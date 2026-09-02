@@ -72,6 +72,7 @@ function makeCtx(vfs: VirtualFS, lfs: IsoGitFsPromises): GitCommandContext {
     fs: vfs,
     cache: {},
     getOnAuth: () => undefined,
+    getOnAuthFailure: () => undefined,
     resolveAuthor: async () => ({ name: 'Test User', email: 'test@example.com' }),
     getGlobalFs: async () => vfs,
     setGithubToken: async () => {},

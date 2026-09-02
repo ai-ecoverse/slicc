@@ -189,6 +189,27 @@ describe('GitHub token renewal', () => {
     expect(globalThis.fetch).not.toHaveBeenCalled();
   });
 
+  it('re-syncs the git bridge from the live OAuth mask even when the access token is still fresh (#2777)', async () => {
+    seedGitHubAccount({
+      accessToken: 'ghp_fresh',
+      refreshToken: 'ghr_fresh',
+      tokenExpiresAt: Date.now() + 3_600_000,
+      maskedValue: 'ghp_masked_live',
+    });
+    globalThis.fetch = vi.fn() as typeof fetch;
+    const { VirtualFS } = await import('../../src/fs/index.js');
+    const { GLOBAL_FS_DB_NAME } = await import('../../src/fs/global-db.js');
+    const fs = await VirtualFS.create({ dbName: GLOBAL_FS_DB_NAME });
+    await fs.writeFile('/workspace/.git/github-token', 'ghp_masked_stale_snapshot');
+    const { getValidAccessToken } = await import('../../providers/github.js');
+
+    await expect(getValidAccessToken()).resolves.toBe('ghp_fresh');
+    await expect(fs.readFile('/workspace/.git/github-token', { encoding: 'utf-8' })).resolves.toBe(
+      'ghp_masked_live'
+    );
+    expect(globalThis.fetch).not.toHaveBeenCalled();
+  });
+
   it('transparently renews an expiring access token', async () => {
     seedGitHubAccount({
       accessToken: 'ghp_expiring',
