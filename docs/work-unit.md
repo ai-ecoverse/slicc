@@ -53,9 +53,10 @@ Cone and scoop stay the product vocabulary (UI, prompts, tool names, skills). Th
 | `record.ts`     | `normalizeScoopRecord` (strips the pre-#2279 `isCone`/`type`, sanitizes a root), `legacyRecordIsCone`, `chatSessionIdFor`, `isPrimaryRoot`, `coneFolderFor`, `processOwnerKindFor`, `sourceLabelFor`                                                                                                                                           |
 | `manager.ts`    | `WorkUnitManager` — `create / list / get / getParent / getChildren / roots / rootOf / resolveDefaultRoot / abort / close`; exposed as `Orchestrator.getWorkUnits()`                                                                                                                                                                            |
 | `client/`       | The presentation protocol (#2274): `WorkUnitClient`, `WorkUnitSummary` / `WorkUnitSnapshot` / `WorkUnitClientEvent`, the record and wire projections, and `presentation.ts` — the ONE strip ordering and descriptor builder both shells render from. Adapters live in `ui/work-unit-client/`. See [`work-unit-client.md`](work-unit-client.md) |
+| `capability/`   | The privileged-capability protocol (#2276): `CapabilityBroker` with per-operation allowlists, `CapabilityUnavailable`, page and Node-shaped stubs. Composed once in `kernel/host.ts`. See Phase 6 below                                                                                                                                        |
 | `conversation/` | The canonical conversation record (#2275): entry types, identity, ingest, the four derivations, the `slicc-work-units` store and its resumable migration — see below                                                                                                                                                                           |
 
-Tests: `packages/webapp/tests/work-unit/`. `conformance.ts` is a reusable suite any `WorkUnitRuntime` implementation must pass.
+Tests: `packages/webapp/tests/work-unit/`. `conformance.ts` is a reusable suite any `WorkUnitRuntime` implementation must pass. `capability-broker.conformance.ts` is the same for every `CapabilityBroker` adapter.
 
 End to end, the multi-cone product surface is covered by the fake-LLM Playwright suite ([#2313](https://github.com/ai-ecoverse/slicc/issues/2313)), which runs the real shell with the `multiple-cones` flag on:
 
@@ -71,15 +72,16 @@ Topology helpers live in `tests/e2e/two-instance-helpers.ts`.
 
 A strangler migration, each phase a separate PR with deletion criteria:
 
-| Phase | Scope                                                                                                                                                                                                                                                                                                | Status                    |
-| ----- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
-| 1     | Types, required `parentJid` + restore backfill, adapter, manager facade, conformance tests. No behaviour change.                                                                                                                                                                                     | done                      |
-| 2     | Lifecycle ownership: `ScoopLifecycleManager` hosts one `LiveWorkUnit` per scoop (its context, tab, observers); `getContexts()` / `getTabsMap()` are derived views; `close()` is the single teardown; transitions tested as one state machine.                                                        | done                      |
-| 3     | `isCone` replaced by hierarchy and policy in `scoops/` and `kernel/` (filesystem, approvals, child tools, shared memory, completion, default-target routing, presentation); two independent roots proven in `tests/work-unit/multi-root.test.ts`.                                                    | done                      |
-| 9a    | Deletion (#2279): `RegisteredScoop.isCone` / `type` gone, the `ui/` reads migrated to `isRootUnit` / `summaryIsRoot`, the `isCone` ratchet retired (the type is the gate), the Phase 1 `ScoopContextWorkUnit` adapter removed.                                                                       | done                      |
-| 4     | Add / switch / drop cones in the UI: new-cone / drop-cone in the freezer rail's action row, the tab strip as the only switcher, `cone-create` allocates `cone-<slug>` folders and per-folder chat sessions, `scoop-drop` of a root cascades and refuses the last root, `cone:<folder>` URL contexts. | done                      |
-| 5a    | One canonical conversation record per work unit (#2275): `ConversationEntry`, the `slicc-work-units` store, the four derivations, and a resumable migration behind a read-old/write-new window. Legacy stores still written; their deletion is a follow-up.                                          | done                      |
-| 5–9   | `WorkUnitClient` for local/remote UI, `CapabilityBroker`, explicit workspace sharing modes, generic parallel APIs, deletion of legacy paths.                                                                                                                                                         | deferred; separate issues |
+| Phase | Scope                                                                                                                                                                                                                                                                                                                                  | Status                    |
+| ----- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------- |
+| 1     | Types, required `parentJid` + restore backfill, adapter, manager facade, conformance tests. No behaviour change.                                                                                                                                                                                                                       | done                      |
+| 2     | Lifecycle ownership: `ScoopLifecycleManager` hosts one `LiveWorkUnit` per scoop (its context, tab, observers); `getContexts()` / `getTabsMap()` are derived views; `close()` is the single teardown; transitions tested as one state machine.                                                                                          | done                      |
+| 3     | `isCone` replaced by hierarchy and policy in `scoops/` and `kernel/` (filesystem, approvals, child tools, shared memory, completion, default-target routing, presentation); two independent roots proven in `tests/work-unit/multi-root.test.ts`.                                                                                      | done                      |
+| 9a    | Deletion (#2279): `RegisteredScoop.isCone` / `type` gone, the `ui/` reads migrated to `isRootUnit` / `summaryIsRoot`, the `isCone` ratchet retired (the type is the gate), the Phase 1 `ScoopContextWorkUnit` adapter removed.                                                                                                         | done                      |
+| 4     | Add / switch / drop cones in the UI: new-cone / drop-cone in the freezer rail's action row, the tab strip as the only switcher, `cone-create` allocates `cone-<slug>` folders and per-folder chat sessions, `scoop-drop` of a root cascades and refuses the last root, `cone:<folder>` URL contexts.                                   | done                      |
+| 5a    | One canonical conversation record per work unit (#2275): `ConversationEntry`, the `slicc-work-units` store, the four derivations, and a resumable migration behind a read-old/write-new window. Legacy stores still written; their deletion is a follow-up.                                                                            | done                      |
+| 6a    | CapabilityBroker protocol + composition-time injection (#2276 slice A): per-operation allowlists, `CapabilityUnavailable`, page/Node stubs, one host-injected broker, one migrated scoops call site (`network.localNodeServer`), conformance suite. Full Node/Swift/extension/hosted adapters and remaining call sites are follow-ups. | in progress (#2276)       |
+| 5–9   | `WorkUnitClient` for local/remote UI, remaining CapabilityBroker adapters, explicit workspace sharing modes, generic parallel APIs, deletion of legacy paths.                                                                                                                                                                          | deferred; separate issues |
 
 ### Phase 4 detail
 
@@ -578,6 +580,20 @@ the kernel host, for every float.
 - `Orchestrator.init()` backfills records saved before the field existed (`backfillParent`): cones → `null`, scoops → the single restored cone. Unlike `migrateScoopConfig` the result is written back, because later phases route on it.
 - The legacy `groups → scoops` IndexedDB migration sets the edge too.
 - Follower-side records built from `scoop-list` messages (`OffscreenClient.msgScoopToRegistered`) adopt the list's cone until the wire carries `parentId`.
+
+### Phase 6: CapabilityBroker (#2276)
+
+Privileged operations (browser, network, secrets, devices, mounts, approvals) flow through one injected `CapabilityBroker`. A work unit never asks "am I running in the extension?"; it asks the broker and receives a typed result or `CapabilityUnavailable` (never a thrown string). Runtime detection happens at `createKernelHost` composition time.
+
+Slice A (this phase's protocol PR):
+
+- Explicit per-operation allowlists on each domain — no generic handler maps.
+- Page adapter stub + Node-shaped adapter stub. Unimplemented ops return `CapabilityUnavailable`.
+- One broker composed in `kernel/host.ts` and injected into the orchestrator before `init()`.
+- One migrated scoops call site: `scoop-context/shell-and-skills.ts` webhook topology uses `network.localNodeServer`. Remaining sites are listed in `work-unit/capability/index.ts`.
+- Conformance: `packages/webapp/tests/work-unit/capability-broker.conformance.ts`.
+
+Full Node / Swift / extension / hosted adapters, and migrating every `isExtensionRealm` call site, are follow-up slices. Review-patterns category 10 (layer-stack import direction) is the sibling check: float detection in `scoops/` / `tools/` is the same class of "the call site is in the wrong layer" as a back-edge.
 
 ## Non-goals
 

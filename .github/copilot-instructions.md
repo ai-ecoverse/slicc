@@ -52,10 +52,10 @@ origins, comparisons without slash normalization.
 
 ## 10. Layer import direction (Major)
 
-Stack: `fs/base → shell/git → cdp → tools → core → scoops → ui`. Flag imports up the stack,
-even types or pure helpers; move them down, never grow the baseline. Module-global registries
-too: move wholesale and re-export, never re-declare (two `let`s split the realms); setter
-injection needs a registrar in every reading realm (`ui/` cannot serve the worker).
+Stack: `fs/base → shell/git → cdp → tools → core → scoops → ui`. Flag up-stack imports
+(even types/helpers); move down, never grow the baseline. Registries: move wholesale,
+never re-declare. Setter injection needs a registrar in every reading realm.
+`isExtensionRealm` in `scoops/`/`tools/` belongs on `CapabilityBroker` (#2276).
 
 ## 11. Untyped string-keyed bags
 

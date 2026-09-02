@@ -6,6 +6,9 @@
  * - Orchestrator callbacks → outgoing messages to panels
  *
  * Also maintains an event buffer for state sync on panel reconnect.
+ *
+ * Privileged capabilities are NOT composed here: `createKernelHost` injects
+ * one `CapabilityBroker` into the orchestrator before init (#2276).
  */
 
 import { matchLickTargetAlias } from '../base/lick-target-match.js';

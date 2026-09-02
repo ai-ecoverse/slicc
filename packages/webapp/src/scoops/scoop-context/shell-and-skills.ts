@@ -11,7 +11,6 @@
  */
 
 import type { BrowserAPI } from '../../cdp/index.js';
-import { hasLocalNodeServer } from '../../core/float-topology.js';
 import { createLogger } from '../../core/index.js';
 import { fetchSecretEnvVars } from '../../core/secret-env.js';
 import { getToolResultScrubber } from '../../core/secret-scrub.js';
@@ -22,6 +21,10 @@ import type { ProcessManager, ProcessOwner } from '../../kernel/process-manager.
 import { AlmostBashShellHeadless } from '../../shell/almost-bash-shell-headless.js';
 import type { SudoManager } from '../../sudo/sudo-manager.js';
 import type { SudoDecision, SudoRequest } from '../../sudo/types.js';
+import {
+  type CapabilityBroker,
+  createPageCapabilityBroker,
+} from '../../work-unit/capability/index.js';
 import { SKILLS_LIBRARY_DIR } from '../../work-unit/descriptor.js';
 import type { WorkUnitDescriptor } from '../../work-unit/types.js';
 import { createDefaultSkills, loadSkills, type Skill } from '../skills.js';
@@ -40,6 +43,12 @@ export interface ShellAndSkillsDeps {
   skillsFs: VirtualFS | null;
   getBrowserAPI: () => BrowserAPI;
   sudoManager: SudoManager | null;
+  /**
+   * Privileged-capability adapter for this float (#2276). Production
+   * always injects the host's one broker. Tests that omit it get a page
+   * stub with `localNodeServer` available — the Node test env's topology.
+   */
+  capabilityBroker?: CapabilityBroker | null;
   onSudoRequest?: (request: SudoRequest) => Promise<SudoDecision>;
   processManager: ProcessManager | null;
   processOwner: ProcessOwner;
@@ -71,6 +80,11 @@ export async function initShellAndSkills(deps: ShellAndSkillsDeps): Promise<Shel
 
   const effectiveSkillsFs = (skillsFs ?? fs) as VirtualFS;
   const secretEnv = await fetchSecretEnvVars();
+  // Slice A of #2276: webhook topology comes from the injected broker.
+  // Remaining call sites: `work-unit/capability/index.ts`.
+  const broker = deps.capabilityBroker ?? createPageCapabilityBroker({ localNodeServer: true });
+  const localNode = await broker.network.localNodeServer();
+  const hasLocalNodeServer = () => localNode.ok;
 
   // Wire the sudo enforcement surface. For non-cone scoops the broker
   // routes to the cone (via the `onSudoRequest` callback the orchestrator
