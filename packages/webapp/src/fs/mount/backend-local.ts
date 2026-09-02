@@ -307,14 +307,18 @@ export class LocalMountBackend implements MountBackend {
     }
     const name = segments.pop()!;
     const parent = await this.resolveDirFrom(segments, path, false);
-    // Try as a file first. Any failure (ENOENT, TypeMismatch, …) is fine —
-    // fall through to the directory check, which succeeds if the path is a
-    // directory and produces the correct ENOENT otherwise.
+    // Try as a file first. "Not there" (ENOENT) and "not a file" (ENOTDIR,
+    // from FSA's TypeMismatchError) are the two answers that mean *ask the
+    // directory branch instead*. Anything else — a permission denial on a
+    // file that does exist, above all — IS the answer, so re-throw it rather
+    // than fall through and have `getDirectoryHandle` relabel it ENOTDIR.
     try {
       const fh = await parent.getFileHandle(name);
       const file = await fh.getFile();
       return { kind: 'file', size: file.size, mtime: file.lastModified };
-    } catch {
+    } catch (err) {
+      const mapped = this.toFsError(err, path);
+      if (mapped.code !== 'ENOENT' && mapped.code !== 'ENOTDIR') throw mapped;
       // fall through
     }
     try {

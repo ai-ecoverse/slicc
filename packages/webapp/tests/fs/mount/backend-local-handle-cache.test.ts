@@ -153,6 +153,58 @@ describe('LocalMountBackend directory-handle cache (#2733)', () => {
     expect(counts.getDirectoryHandle).toBe(4);
   });
 
+  it('reports EACCES for a permission-denied file instead of masking it as ENOTDIR', async () => {
+    // The file branch may only fall through on "not there" / "not a file".
+    // A denial on a file that *does* exist is the answer: falling through
+    // would ask `getDirectoryHandle` about a file name and relabel it
+    // ENOTDIR. (Pre-existing behavior of the two-root-walk version; fixed
+    // here because `stat` was rewritten anyway.)
+    const denied = createDirectoryHandle({ a: { 'secret.txt': 'x' } });
+    const guarded = new Proxy(denied, {
+      get(target, prop, receiver) {
+        if (prop === 'getDirectoryHandle') {
+          return async (name: string, options?: { create?: boolean }) => {
+            const dir = await target.getDirectoryHandle(name, options);
+            return new Proxy(dir, {
+              get(dirTarget, dirProp, dirReceiver) {
+                if (dirProp === 'getFileHandle') {
+                  return async (fileName: string) => ({
+                    kind: 'file' as const,
+                    name: fileName,
+                    getFile: async () => {
+                      throw new DOMException('permission denied', 'NotAllowedError');
+                    },
+                  });
+                }
+                const v = Reflect.get(dirTarget, dirProp, dirReceiver);
+                return typeof v === 'function' ? v.bind(dirTarget) : v;
+              },
+            });
+          };
+        }
+        const value = Reflect.get(target, prop, receiver);
+        return typeof value === 'function' ? value.bind(target) : value;
+      },
+    });
+    const backend = LocalMountBackend.fromHandle(guarded, { mountId: 'm1' });
+
+    await expect(backend.stat('a/secret.txt')).rejects.toMatchObject({ code: 'EACCES' });
+  });
+
+  it('still falls through to the directory branch for ENOENT and type mismatch', async () => {
+    const backend = LocalMountBackend.fromHandle(
+      createDirectoryHandle({ a: { sub: {}, 'f.txt': 'x' } }),
+      { mountId: 'm1' }
+    );
+
+    // getFileHandle('sub') throws TypeMismatchError → ENOTDIR → fall through.
+    expect(await backend.stat('a/sub')).toEqual({ kind: 'directory', size: 0, mtime: 0 });
+    // getFileHandle('gone') throws NotFoundError → ENOENT → fall through,
+    // and the directory branch produces the final ENOENT.
+    await expect(backend.stat('a/gone')).rejects.toMatchObject({ code: 'ENOENT' });
+    expect(await backend.stat('a/f.txt')).toMatchObject({ kind: 'file', size: 1 });
+  });
+
   it('is bounded — the cache never exceeds its ceiling', async () => {
     const tree: Record<string, unknown> = {};
     for (let i = 0; i < 20; i++) tree[`d${i}`] = { 'f.txt': 'x' };
