@@ -1862,6 +1862,13 @@ export class VirtualFS {
       entries.set(entry.name, {
         name: entry.name,
         type: entry.kind === 'directory' ? 'directory' : 'file',
+        ...(entry.size !== undefined ? { size: entry.size } : {}),
+        ...(entry.lastModified !== undefined ? { mtime: entry.lastModified } : {}),
+        ...(entry.ctime !== undefined ? { ctime: entry.ctime } : {}),
+        ...(entry.ino !== undefined ? { ino: entry.ino } : {}),
+        ...(entry.uid !== undefined ? { uid: entry.uid } : {}),
+        ...(entry.gid !== undefined ? { gid: entry.gid } : {}),
+        ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
       });
     }
     this.addNestedMountEntries(entries, normalized);

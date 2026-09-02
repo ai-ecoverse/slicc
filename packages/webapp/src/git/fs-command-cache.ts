@@ -36,7 +36,12 @@
  * must not be replayed to every later reader.
  */
 
-import { type IsoGitFsPromises, type NodeLikeStats, wantsUtf8 } from './vfs-fs-adapter.js';
+import {
+  type IsoGitDirEntry,
+  type IsoGitFsPromises,
+  type NodeLikeStats,
+  wantsUtf8,
+} from './vfs-fs-adapter.js';
 
 /** Ceilings one command's memo may not exceed. */
 export interface ReadCacheLimits {
@@ -85,6 +90,11 @@ function parentOf(path: string): string {
   return slash === 0 ? '/' : path.slice(0, slash);
 }
 
+/** Join a normalized directory and one readDir child. */
+function childOf(dir: string, name: string): string {
+  return normalizePath(dir === '/' ? `/${name}` : `${dir}/${name}`);
+}
+
 function errorCodeOf(err: unknown): string | undefined {
   const code = (err as { code?: unknown } | null)?.code;
   return typeof code === 'string' ? code : undefined;
@@ -117,9 +127,18 @@ class ReadScope {
    * so a walk that probes thousands of missing loose objects cannot grow the
    * `files` map without bound just because a miss costs zero bytes.
    */
-  hasRoom(): boolean {
+  hasRoom(count = 1): boolean {
     const entries = this.stats.size + this.lstats.size + this.dirs.size + this.files.size;
-    return entries < this.limits.maxEntries;
+    return entries + count <= this.limits.maxEntries;
+  }
+
+  /** Seed stat/lstat answers from one metadata-bearing directory listing. */
+  primeStats(path: string, stats: NodeLikeStats): void {
+    const maps = stats.isSymbolicLink() ? [this.lstats] : [this.stats, this.lstats];
+    const missing = maps.filter((map) => !map.has(path));
+    if (!this.hasRoom(missing.length)) return;
+    const value = Promise.resolve(stats);
+    for (const map of missing) map.set(path, value);
   }
 
   /** Account for a resolved file read; false means "too big, do not retain". */
@@ -237,9 +256,16 @@ export function createCommandScopedReadCache(
 
   /** Copy on the way out: isomorphic-git sorts readdir results in place. */
   const readdir: IsoGitFsPromises['readdir'] = async (path) => {
-    const names = await memoize(scope.dirs, normalizePath(path), () => inner.readdir(path), {
-      admit,
-    });
+    const dir = normalizePath(path);
+    const load = async (): Promise<string[]> => {
+      if (!inner.readdirWithStats) return inner.readdir(path);
+      const entries: IsoGitDirEntry[] = await inner.readdirWithStats(path);
+      for (const entry of entries) {
+        if (entry.stats) scope.primeStats(childOf(dir, entry.name), entry.stats);
+      }
+      return entries.map((entry) => entry.name);
+    };
+    const names = await memoize(scope.dirs, dir, load, { admit });
     return names.slice();
   };
 

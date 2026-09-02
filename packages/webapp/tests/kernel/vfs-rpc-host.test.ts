@@ -132,7 +132,7 @@ describe('VfsRpcHost round-trip over MessageChannel', () => {
   it('readDir success returns entries on the ok branch', async () => {
     const ctx = setupRoundTrip();
     ctx.vfs.readDir.mockResolvedValue([
-      { name: 'a.txt', type: 'file' },
+      { name: 'a.txt', type: 'file', size: 3, mtime: 5 },
       { name: 'sub', type: 'directory' },
     ] satisfies DirEntry[]);
     const req: VfsReadRequestMsg = { type: 'vfs-read-dir', requestId: 'r1', path: '/workspace' };
@@ -146,7 +146,7 @@ describe('VfsRpcHost round-trip over MessageChannel', () => {
     expect(resp.ok).toBe(true);
     if (resp.ok) {
       expect(resp.entries).toEqual([
-        { name: 'a.txt', type: 'file' },
+        { name: 'a.txt', type: 'file', size: 3, mtime: 5 },
         { name: 'sub', type: 'directory' },
       ]);
     }

@@ -24,6 +24,7 @@ import type {
 } from '../../src/fs/mount/backend.js';
 import { FsError } from '../../src/fs/types.js';
 import { VirtualFS } from '../../src/fs/virtual-fs.js';
+import { createCommandScopedReadCache } from '../../src/git/fs-command-cache.js';
 import { createIsomorphicGitFs } from '../../src/git/vfs-fs-adapter.js';
 
 let dbCounter = 0;
@@ -33,15 +34,35 @@ class FakeStatBackend implements MountBackend {
   readonly kind = 'hostfs' as const;
   readonly source = 'hostfs:///fake';
   readonly mountId = 'fake-stat-backend';
+  statCalls = 0;
 
-  constructor(private readonly files: Map<string, { body: string; stat: MountStat }>) {}
+  constructor(
+    private readonly files: Map<string, { body: string; stat: MountStat }>,
+    private readonly includeListingMetadata = true
+  ) {}
 
   async readDir(path: string): Promise<MountDirEntry[]> {
     const prefix = path.replace(/^\/+|\/+$/g, '');
     const entries: MountDirEntry[] = [];
     for (const [name, entry] of this.files) {
       if (prefix.length > 0 && !name.startsWith(`${prefix}/`)) continue;
-      entries.push({ name: name.slice(prefix.length > 0 ? prefix.length + 1 : 0), ...entry.stat });
+      const entryName = name.slice(prefix.length > 0 ? prefix.length + 1 : 0);
+      if (!this.includeListingMetadata) {
+        entries.push({ name: entryName, kind: entry.stat.kind });
+        continue;
+      }
+      const { kind, size, mtime, ctime, ino, uid, gid, mode } = entry.stat;
+      entries.push({
+        name: entryName,
+        kind,
+        size,
+        lastModified: mtime,
+        ...(ctime !== undefined ? { ctime } : {}),
+        ...(ino !== undefined ? { ino } : {}),
+        ...(uid !== undefined ? { uid } : {}),
+        ...(gid !== undefined ? { gid } : {}),
+        ...(mode !== undefined ? { mode } : {}),
+      });
     }
     return entries;
   }
@@ -57,6 +78,7 @@ class FakeStatBackend implements MountBackend {
   }
 
   async stat(path: string): Promise<MountStat> {
+    this.statCalls += 1;
     const entry = this.files.get(path.replace(/^\/+/, ''));
     if (!entry) throw new FsError('ENOENT', 'no such file', path);
     return entry.stat;
@@ -87,6 +109,71 @@ describe('isomorphic-git adapter stats (issue #2708)', () => {
 
   beforeEach(async () => {
     vfs = await VirtualFS.create({ dbName: `adapter-stats-${dbCounter++}`, wipe: true });
+  });
+
+  it('carries mount listing metadata through DirEntry and primes command-scoped stats', async () => {
+    const files = new Map([
+      [
+        'script.sh',
+        {
+          body: '#!/bin/sh\n',
+          stat: {
+            kind: 'file' as const,
+            size: 10,
+            mtime: 1_700_000_000_000,
+            ctime: 1_700_000_500_000,
+            ino: 987_654,
+            uid: 501,
+            gid: 20,
+            mode: 0o100755,
+          },
+        },
+      ],
+    ]);
+    const backend = new FakeStatBackend(files);
+    await vfs.mkdir('/mnt/host', { recursive: true });
+    await vfs.mount('/mnt/host', backend);
+
+    await expect(vfs.readDir('/mnt/host')).resolves.toEqual([
+      {
+        name: 'script.sh',
+        type: 'file',
+        size: 10,
+        mtime: 1_700_000_000_000,
+        ctime: 1_700_000_500_000,
+        ino: 987_654,
+        uid: 501,
+        gid: 20,
+        mode: 0o100755,
+      },
+    ]);
+
+    const fs = createCommandScopedReadCache(createIsomorphicGitFs(vfs).promises);
+    await fs.readdir('/mnt/host');
+    const stats = await fs.lstat('/mnt/host/script.sh');
+    expect(stats).toMatchObject({ size: 10, mtimeMs: 1_700_000_000_000, ino: 987_654 });
+    expect(backend.statCalls).toBe(0);
+  });
+
+  it('falls back to lstat when a directory listing omits metadata', async () => {
+    const files = new Map([
+      [
+        'plain.txt',
+        {
+          body: 'hi\n',
+          stat: { kind: 'file' as const, size: 3, mtime: 1_700_000_000_000 },
+        },
+      ],
+    ]);
+    const backend = new FakeStatBackend(files, false);
+    await vfs.mkdir('/mnt/legacy', { recursive: true });
+    await vfs.mount('/mnt/legacy', backend);
+
+    const fs = createCommandScopedReadCache(createIsomorphicGitFs(vfs).promises);
+    await fs.readdir('/mnt/legacy');
+    const stats = await fs.lstat('/mnt/legacy/plain.txt');
+    expect(stats).toMatchObject({ size: 3, mtimeMs: 1_700_000_000_000 });
+    expect(backend.statCalls).toBe(1);
   });
 
   it('passes a mount backend’s ctime, ino, uid, gid and mode straight through', async () => {

@@ -105,16 +105,42 @@ describe('buildVfsTreeItems', () => {
     expect(items.filter((i) => i.kind === 'dir')).toHaveLength(2);
   });
 
-  it('includes a size field on file items', async () => {
-    const fs = await seededFs();
+  it('reuses a file size from readDir without statting that entry', async () => {
+    const stat = vi.fn(async () => ({ type: 'file' as const, size: 99, mtime: 1, ctime: 1 }));
+    const fs: LocalVfsClient = {
+      readDir: vi.fn(async (path) =>
+        path === '/workspace' ? [{ name: 'listed.txt', type: 'file' as const, size: 7 }] : []
+      ),
+      readFile: vi.fn(),
+      stat,
+    };
     const items = await buildVfsTreeItems(fs);
     const wsRoot = items.find((i) => i.kind === 'dir' && i.id === '/workspace');
-    const wsChildren = wsRoot?.kind === 'dir' ? wsRoot.children : [];
-    const claudeMd = wsChildren.find((i) => i.kind === 'file' && i.id === '/workspace/CLAUDE.md');
-    expect(claudeMd?.kind).toBe('file');
-    // size comes from stat(); the content is '# memory' (9 bytes).
-    expect(claudeMd?.kind === 'file' && typeof claudeMd.size).toBe('number');
-    expect(claudeMd?.kind === 'file' && (claudeMd.size ?? 0) > 0).toBe(true);
+    const listed =
+      wsRoot?.kind === 'dir'
+        ? wsRoot.children.find((i) => 'id' in i && i.id === '/workspace/listed.txt')
+        : null;
+    expect(listed?.kind === 'file' && listed.size).toBe(7);
+    expect(stat).not.toHaveBeenCalled();
+  });
+
+  it('falls back to stat when readDir omits a file size', async () => {
+    const stat = vi.fn(async () => ({ type: 'file' as const, size: 9, mtime: 1, ctime: 1 }));
+    const fs: LocalVfsClient = {
+      readDir: vi.fn(async (path) =>
+        path === '/workspace' ? [{ name: 'legacy.txt', type: 'file' as const }] : []
+      ),
+      readFile: vi.fn(),
+      stat,
+    };
+    const items = await buildVfsTreeItems(fs);
+    const wsRoot = items.find((i) => i.kind === 'dir' && i.id === '/workspace');
+    const legacy =
+      wsRoot?.kind === 'dir'
+        ? wsRoot.children.find((i) => 'id' in i && i.id === '/workspace/legacy.txt')
+        : null;
+    expect(legacy?.kind === 'file' && legacy.size).toBe(9);
+    expect(stat).toHaveBeenCalledOnce();
   });
 });
 

@@ -580,6 +580,13 @@ export interface LocalStorageClearMsg {
 export interface VfsDirEntryEnvelope {
   name: string;
   type: 'file' | 'directory' | 'symlink';
+  size?: number;
+  mtime?: number;
+  ctime?: number;
+  ino?: number;
+  uid?: number;
+  gid?: number;
+  mode?: number;
 }
 
 /** Wire mirror of `Stats` from `webapp/src/fs/types.ts`. */

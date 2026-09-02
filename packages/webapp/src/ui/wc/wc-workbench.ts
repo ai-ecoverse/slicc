@@ -44,13 +44,19 @@ async function dirChildren(
 
   const capped = [...dirs, ...files].slice(0, MAX_ENTRIES_PER_DIR);
 
-  // Stat all files in parallel; failures degrade gracefully to no size.
-  const filePaths = capped.filter((e) => e.type === 'file').map((e) => `${dir}/${e.name}`);
-  const stats = await Promise.allSettled(filePaths.map((p) => fs.stat(p)));
+  // Reuse listing metadata when present; only legacy/incomplete rows need a stat fallback.
   const sizeMap = new Map<string, number>();
-  filePaths.forEach((p, i) => {
-    const r = stats[i];
-    if (r?.status === 'fulfilled') sizeMap.set(p, r.value.size);
+  const missingSizePaths: string[] = [];
+  for (const entry of capped) {
+    if (entry.type !== 'file') continue;
+    const path = `${dir}/${entry.name}`;
+    if (entry.size !== undefined) sizeMap.set(path, entry.size);
+    else missingSizePaths.push(path);
+  }
+  const stats = await Promise.allSettled(missingSizePaths.map((path) => fs.stat(path)));
+  missingSizePaths.forEach((path, index) => {
+    const result = stats[index];
+    if (result?.status === 'fulfilled') sizeMap.set(path, result.value.size);
   });
 
   const items: FileTreeItem[] = [];

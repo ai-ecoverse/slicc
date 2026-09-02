@@ -13,15 +13,22 @@
  */
 
 import type { VirtualFS } from '../fs/index.js';
-import { FsError, type Stats } from '../fs/types.js';
+import { type DirEntry, FsError, type Stats } from '../fs/types.js';
 
 export type PromiseFsClient = { promises: IsoGitFsPromises };
+
+export interface IsoGitDirEntry {
+  name: string;
+  stats?: NodeLikeStats;
+}
 
 export interface IsoGitFsPromises {
   readFile(path: string, options?: unknown): Promise<Uint8Array | string>;
   writeFile(path: string, data: Uint8Array | string, options?: unknown): Promise<void>;
   unlink(path: string): Promise<void>;
   readdir(path: string): Promise<string[]>;
+  /** Internal metadata-bearing companion used by the command-scoped cache. */
+  readdirWithStats?(path: string): Promise<IsoGitDirEntry[]>;
   mkdir(path: string, options?: unknown): Promise<void>;
   rmdir(path: string): Promise<void>;
   stat(path: string): Promise<NodeLikeStats>;
@@ -111,6 +118,21 @@ function fromVfsStats(s: Stats): Partial<NodeLikeStats> {
   };
 }
 
+/** Convert complete readDir metadata into a stat answer; incomplete rows fall back to stat(). */
+function fromDirEntry(entry: DirEntry): NodeLikeStats | undefined {
+  if (entry.size === undefined || entry.mtime === undefined) return undefined;
+  const type = entry.type === 'directory' ? 'dir' : entry.type;
+  return toStats(type, {
+    size: entry.size,
+    mtimeMs: entry.mtime,
+    ctimeMs: entry.ctime,
+    ...(entry.ino !== undefined ? { ino: entry.ino } : {}),
+    ...(entry.uid !== undefined ? { uid: entry.uid } : {}),
+    ...(entry.gid !== undefined ? { gid: entry.gid } : {}),
+    ...(entry.mode !== undefined ? { mode: entry.mode } : {}),
+  });
+}
+
 /**
  * Does this `readFile` options bag ask for text? Exported because the
  * command-scoped read cache keys its entries by the same answer — a utf-8
@@ -127,6 +149,11 @@ export function wantsUtf8(options: unknown): boolean {
 
 /** Build an isomorphic-git-compatible PromiseFsClient over a VirtualFS. */
 export function createIsomorphicGitFs(vfs: VirtualFS): PromiseFsClient {
+  const readdirWithStats = async (path: string): Promise<IsoGitDirEntry[]> => {
+    const entries = await vfs.readDir(path);
+    return entries.map((entry) => ({ name: entry.name, stats: fromDirEntry(entry) }));
+  };
+
   const promises: IsoGitFsPromises = {
     async readFile(path, options) {
       const content = await vfs.readFile(
@@ -145,9 +172,10 @@ export function createIsomorphicGitFs(vfs: VirtualFS): PromiseFsClient {
     },
 
     async readdir(path) {
-      const entries = await vfs.readDir(path);
-      return entries.map((e) => e.name);
+      return (await readdirWithStats(path)).map((entry) => entry.name);
     },
+
+    readdirWithStats,
 
     async mkdir(path, options) {
       const opts = (options ?? undefined) as { recursive?: boolean } | undefined;

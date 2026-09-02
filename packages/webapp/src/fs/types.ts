@@ -63,6 +63,14 @@ export interface Stats {
 export interface DirEntry {
   name: string;
   type: EntryType;
+  /** Best-effort metadata supplied by mounted backends. */
+  size?: number;
+  mtime?: number;
+  ctime?: number;
+  ino?: number;
+  uid?: number;
+  gid?: number;
+  mode?: number;
 }
 
 /** Options for writeFile. */
