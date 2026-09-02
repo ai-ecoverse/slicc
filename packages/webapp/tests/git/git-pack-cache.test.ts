@@ -93,10 +93,11 @@ describe('git pack cache (issues #2710, #2735)', () => {
   }
 
   /** Count the reads of each `.git` path a command performs. */
-  function trackReads(): { of: (suffix: string) => number } {
+  function trackReads(): { of: (suffix: string) => number; reset: () => void } {
     const readSpy = vi.spyOn(vfs, 'readFile');
     return {
       of: (suffix) => readSpy.mock.calls.filter((call) => String(call[0]).endsWith(suffix)).length,
+      reset: () => readSpy.mockClear(),
     };
   }
 
@@ -137,6 +138,29 @@ describe('git pack cache (issues #2710, #2735)', () => {
     expect(packAfterFirst).toBe(1);
     expect(reads.of(`${pack}.idx`)).toBe(1);
     expect(reads.of(`${pack}.pack`)).toBe(1);
+  });
+
+  it('keeps the pack cache across commands while the per-command read memo does not', async () => {
+    await seedRepo();
+    const pack = await packRepo();
+
+    const reads = trackReads();
+    expect((await git.execute(['log'], '/project')).exitCode).toBe(0);
+    expect(reads.of(`${pack}.idx`)).toBe(1);
+    expect(reads.of('/.git/HEAD')).toBeGreaterThan(0);
+
+    reads.reset();
+    expect((await git.execute(['log'], '/project')).exitCode).toBe(0);
+
+    // The object/pack cache is the INSTANCE's, so the second command pays for
+    // neither the index nor the pack again (#2710)…
+    expect(reads.of(`${pack}.idx`)).toBe(0);
+    expect(reads.of(`${pack}.pack`)).toBe(0);
+    // …while the read memo `contextFor` builds is scoped to ONE invocation
+    // (#2709) and must not survive: a command that inherited the previous
+    // command's memo could serve refs an outside writer has since changed.
+    expect(reads.of('/.git/HEAD')).toBeGreaterThan(0);
+    expect(reads.of('/.git/packed-refs')).toBeGreaterThan(0);
   });
 
   it('re-reads the pack index after the pack directory changes', async () => {
