@@ -208,7 +208,7 @@ SLICC's main control is a text field, so it has no always-on shortcuts to collid
 | <kbd>j</kbd> / <kbd>k</kbd>  | Next / previous message — or entry, inside an open list           |
 | <kbd>f</kbd>                 | File browser (with <kbd>1</kbd>–<kbd>9</kbd>: open that row)      |
 | <kbd>t</kbd>                 | Terminal                                                          |
-| <kbd>b</kbd>                 | Browser tabs                                                      |
+| <kbd>b</kbd>                 | Browser tabs (then 1–9 to switch, p to peek)                      |
 | <kbd>m</kbd>                 | Memory (with <kbd>1</kbd>–<kbd>9</kbd>: open that entry)          |
 | <kbd>g</kbd>                 | Monitor                                                           |
 | <kbd>p</kbd>                 | Sprinkles (with <kbd>1</kbd>–<kbd>9</kbd>: open that one)         |
@@ -218,6 +218,8 @@ SLICC's main control is a text field, so it has no always-on shortcuts to collid
 | <kbd>,</kbd>                 | Accounts                                                          |
 
 **Chords.** Anything that owns a list takes a digit straight after it, and the digit picks from THAT list instead of the tab strip: <kbd>f</kbd> <kbd>3</kbd> is the third file, <kbd>r</kbd> <kbd>1</kbd> is the chat you archived most recently, <kbd>p</kbd> <kbd>2</kbd> is the second sprinkle. <kbd>9</kbd> is always the last one, exactly as it is for agents. The first key acts immediately, so <kbd>f</kbd> on its own is still just "open the files panel", and a digit pressed on its own is still an agent.
+
+**Tabs.** <kbd>b</kbd> opens the tab switcher, and its cards are numbered: press <kbd>1</kbd>–<kbd>9</kbd> to switch to one (<kbd>9</kbd> is always the last). Press <kbd>p</kbd> first to **peek** instead — SLICC shows you that tab and brings you back five seconds later, so you can check something without losing your place. The chip in the header says peek is armed, it applies to a click too, and closing the switcher disarms it.
 
 <kbd>j</kbd> and <kbd>k</kbd> walk the same lists, looping — <kbd>p</kbd> <kbd>j</kbd> <kbd>j</kbd> steps through your sprinkles, <kbd>f</kbd> <kbd>k</kbd> jumps straight to the last file — and with no list open they walk the conversation a message at a time instead. A list stays addressable for exactly as long as its keys are still showing on the pill, and every digit or step key keeps both alive, so a walk down a long list never expires under you.
 

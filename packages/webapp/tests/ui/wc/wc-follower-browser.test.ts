@@ -111,6 +111,19 @@ describe('wireWcFollowerBrowser', () => {
     ]);
   });
 
+  /**
+   * These tabs belong to the LEADER's browser and activating one pulls a copy
+   * here for good, so there is nowhere for a peek to come back from. The
+   * affordance is withheld rather than quietly doing something other than what
+   * the chip says.
+   */
+  it('withholds peek, which a follower has nowhere to come back from', () => {
+    const { handle } = wire({});
+    expect(handle.overlay.hasAttribute('no-peek')).toBe(true);
+    (handle.overlay as unknown as { peeking: boolean }).peeking = true;
+    expect((handle.overlay as unknown as { peeking: boolean }).peeking).toBe(false);
+  });
+
   it('asks the leader to teleport the tab here when the float can host it', async () => {
     const { handle, sync } = wire({});
     handle.refresh();

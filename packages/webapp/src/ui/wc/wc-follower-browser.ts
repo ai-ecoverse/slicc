@@ -63,6 +63,11 @@ export function wireWcFollowerBrowser(deps: WireWcFollowerBrowserDeps): WcFollow
 
   const overlay = document.createElement('slicc-tab-overlay') as TabOverlayLike;
   overlay.setAttribute('heading', 'Browser · tabs in this tray');
+  // No peeking here: these tabs belong to the LEADER's browser, and activating
+  // one pulls a copy to this float for good. There is nowhere to come back
+  // from, so the affordance must not be offered rather than quietly meaning
+  // something else than it says.
+  overlay.setAttribute('no-peek', '');
   document.body.append(overlay);
 
   // No thumbnails: a follower cannot originate federated CDP, so cards keep

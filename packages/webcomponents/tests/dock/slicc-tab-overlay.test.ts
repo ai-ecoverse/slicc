@@ -111,6 +111,259 @@ describe('slicc-tab-overlay', () => {
     expect(el.shadowRoot?.querySelector('img')).toBeNull();
   });
 
+  // ── The overlay's own keyboard: digits pick a tab, `p` arms peek ──
+
+  /** Press a key at the document, the way the overlay listens for it. */
+  function key(init: KeyboardEventInit): boolean {
+    const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+    document.dispatchEvent(event);
+    return event.defaultPrevented;
+  }
+
+  describe('the digit keys', () => {
+    it('activates the nth tab, with 9 always the last', () => {
+      const el = mount((e) => {
+        e.tabs = TABS;
+      });
+      const seen: string[] = [];
+      el.addEventListener('tab-activate', (e) =>
+        seen.push((e as CustomEvent<{ id: string }>).detail.id)
+      );
+      el.show();
+      key({ key: '2', code: 'Digit2' });
+      key({ key: '9', code: 'Digit9' });
+      expect(seen).toEqual(['t2', 't3']);
+    });
+
+    it('does nothing past the end of the list', () => {
+      const el = mount((e) => {
+        e.tabs = [TABS[0]];
+      });
+      const seen: string[] = [];
+      el.addEventListener('tab-activate', () => seen.push('x'));
+      el.show();
+      key({ key: '3', code: 'Digit3' });
+      expect(seen).toEqual([]);
+    });
+
+    /**
+     * The shell's keyboard mode is listening on the same document. A digit the
+     * overlay took must not also register there, or one press would read as
+     * two.
+     */
+    it('swallows the keys it takes', () => {
+      const el = mount((e) => {
+        e.tabs = TABS;
+      });
+      el.show();
+      expect(key({ key: '1', code: 'Digit1' })).toBe(true);
+      expect(key({ key: 'p', code: 'KeyP' })).toBe(true);
+    });
+
+    it('is deaf while closed', () => {
+      const el = mount((e) => {
+        e.tabs = TABS;
+      });
+      const seen: string[] = [];
+      el.addEventListener('tab-activate', () => seen.push('x'));
+      key({ key: '1', code: 'Digit1' });
+      expect(seen).toEqual([]);
+    });
+
+    /** The number a key selects is drawn on the card, not left to be counted. */
+    it('badges each card with the digit that selects it', () => {
+      const el = mount((e) => {
+        e.tabs = TABS;
+      });
+      el.show();
+      expect(cards(el).map((c) => c.querySelector('.num')?.textContent)).toEqual(['1', '2', '9']);
+    });
+
+    it('leaves the unreachable middle of a long list unbadged', () => {
+      const el = mount((e) => {
+        e.tabs = Array.from({ length: 12 }, (_, i) => ({ id: `t${i}` }));
+      });
+      el.show();
+      const badges = cards(el).map((c) => c.querySelector('.num')?.textContent ?? null);
+      expect(badges.slice(0, 8)).toEqual(['1', '2', '3', '4', '5', '6', '7', '8']);
+      // 9 is the LAST card, so the ninth through eleventh are keyless.
+      expect(badges.slice(8, 11)).toEqual([null, null, null]);
+      expect(badges.at(-1)).toBe('9');
+    });
+  });
+
+  describe('the digit keys, before the list arrives', () => {
+    /**
+     * The switcher opens on the keystroke that asked for it and fills in
+     * asynchronously, so `b 3` typed at speed lands on an empty grid. Dropping
+     * it there would make a positional key work or not depending on how fast
+     * CDP answered.
+     */
+    it('holds a digit pressed on an empty grid and acts when the tabs land', () => {
+      const el = mount();
+      const seen: string[] = [];
+      el.addEventListener('tab-activate', (e) =>
+        seen.push((e as CustomEvent<{ id: string }>).detail.id)
+      );
+      el.show();
+      key({ key: '2', code: 'Digit2' });
+      expect(seen).toEqual([]);
+      el.tabs = TABS;
+      expect(seen).toEqual(['t2']);
+    });
+
+    it('only holds the most recent digit', () => {
+      const el = mount();
+      const seen: string[] = [];
+      el.addEventListener('tab-activate', (e) =>
+        seen.push((e as CustomEvent<{ id: string }>).detail.id)
+      );
+      el.show();
+      key({ key: '1', code: 'Digit1' });
+      key({ key: '3', code: 'Digit3' });
+      el.tabs = TABS;
+      expect(seen).toEqual(['t3']);
+    });
+
+    /** A digit that fires into a list the user never saw is worse than one that did nothing. */
+    it('lets a held digit expire', () => {
+      vi.useFakeTimers();
+      try {
+        const el = mount();
+        const seen: string[] = [];
+        el.addEventListener('tab-activate', () => seen.push('x'));
+        el.show();
+        key({ key: '1', code: 'Digit1' });
+        vi.advanceTimersByTime(4000);
+        el.tabs = TABS;
+        expect(seen).toEqual([]);
+      } finally {
+        vi.useRealTimers();
+      }
+    });
+
+    it('drops a held digit when the overlay closes', () => {
+      const el = mount();
+      const seen: string[] = [];
+      el.addEventListener('tab-activate', () => seen.push('x'));
+      el.show();
+      key({ key: '1', code: 'Digit1' });
+      el.hide();
+      el.tabs = TABS;
+      expect(seen).toEqual([]);
+    });
+  });
+
+  /**
+   * A modal is not a licence to take the browser's keys: ⌘P prints and ⌘1
+   * switches a browser tab, and the shell's keyboard mode passes both through
+   * for the same reason.
+   */
+  describe('modified keys', () => {
+    it.each([
+      ['metaKey', { key: '1', code: 'Digit1', metaKey: true }],
+      ['ctrlKey', { key: '3', code: 'Digit3', ctrlKey: true }],
+      ['altKey', { key: 'p', code: 'KeyP', altKey: true }],
+    ])('leaves %s combinations to the browser', (_name, init) => {
+      const el = mount((e) => {
+        e.tabs = TABS;
+      });
+      const seen: string[] = [];
+      el.addEventListener('tab-activate', () => seen.push('x'));
+      el.show();
+      expect(key(init)).toBe(false);
+      expect(seen).toEqual([]);
+      expect(el.peeking).toBe(false);
+    });
+  });
+
+  describe('peek', () => {
+    it('p arms it, and the next digit peeks instead of switching', () => {
+      const el = mount((e) => {
+        e.tabs = TABS;
+      });
+      const peeks: string[] = [];
+      const activates: string[] = [];
+      el.addEventListener('tab-peek', (e) =>
+        peeks.push((e as CustomEvent<{ id: string }>).detail.id)
+      );
+      el.addEventListener('tab-activate', (e) =>
+        activates.push((e as CustomEvent<{ id: string }>).detail.id)
+      );
+      el.show();
+      key({ key: 'p', code: 'KeyP' });
+      key({ key: '1', code: 'Digit1' });
+      expect(peeks).toEqual(['t1']);
+      expect(activates).toEqual([]);
+    });
+
+    it('applies to a click too — it is the activation that changes, not the key', () => {
+      const el = mount((e) => {
+        e.tabs = TABS;
+      });
+      const peeks: string[] = [];
+      el.addEventListener('tab-peek', (e) =>
+        peeks.push((e as CustomEvent<{ id: string }>).detail.id)
+      );
+      el.show();
+      el.peeking = true;
+      cards(el)[1].click();
+      expect(peeks).toEqual(['t2']);
+    });
+
+    /** An armed modifier nobody can see is a trap. */
+    it('shows a chip in the header while it is armed', () => {
+      const el = mount((e) => {
+        e.tabs = TABS;
+      });
+      el.show();
+      expect(el.hasAttribute('data-peek')).toBe(false);
+      key({ key: 'p', code: 'KeyP' });
+      expect(el.hasAttribute('data-peek')).toBe(true);
+      expect(el.shadowRoot?.querySelector('.peek')?.textContent).toContain('Peek');
+    });
+
+    it('p toggles back off', () => {
+      const el = mount((e) => {
+        e.tabs = TABS;
+      });
+      el.show();
+      key({ key: 'p', code: 'KeyP' });
+      key({ key: 'p', code: 'KeyP' });
+      expect(el.peeking).toBe(false);
+    });
+
+    /**
+     * A follower's tabs belong to the leader, and activating one copies it
+     * here for good — so the affordance is withheld rather than quietly
+     * meaning something other than what the chip says.
+     */
+    it('is refused entirely on a float that cannot come back', () => {
+      const el = mount((e) => {
+        e.setAttribute('no-peek', '');
+        e.tabs = TABS;
+      });
+      el.show();
+      key({ key: 'p', code: 'KeyP' });
+      expect(el.peeking).toBe(false);
+      // ...and not through the property either.
+      el.peeking = true;
+      expect(el.peeking).toBe(false);
+      expect(el.hasAttribute('data-peek')).toBe(false);
+    });
+
+    it('disarms when the overlay closes, so it never survives into the next visit', () => {
+      const el = mount((e) => {
+        e.tabs = TABS;
+      });
+      el.show();
+      el.peeking = true;
+      el.hide();
+      expect(el.peeking).toBe(false);
+      expect(el.hasAttribute('data-peek')).toBe(false);
+    });
+  });
+
   it('emits tab-activate (composed + bubbling) when a card is clicked', () => {
     const el = mount((o) => (o.tabs = TABS));
     const seen = vi.fn();
