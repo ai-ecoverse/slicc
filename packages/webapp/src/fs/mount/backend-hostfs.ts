@@ -241,9 +241,11 @@ export class HostFsMountBackend implements MountBackend {
   readonly kind = 'hostfs' as const;
   /**
    * Both bridges stat every dirent inside `list` and answer `stat` from the
-   * same syscall, so a listing's numbers are the ones `stat` would report
-   * (issue #2716). A file the bridge could not stat comes back as a bare
-   * `{name, kind}` and is not promoted — see `statsFromDirEntry`.
+   * same syscall, so when a listing reports size/mtime those numbers equal
+   * what `stat` would return (issue #2716). Presence is always-on for
+   * hostfs (stats are free in the listing response). A file the bridge
+   * could not stat comes back as a bare `{name, kind}` and is not
+   * promoted — see `statsFromDirEntry`.
    */
   readonly listingStatsMatchStat = true;
   readonly source: string;

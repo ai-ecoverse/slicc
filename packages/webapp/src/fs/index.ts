@@ -1,5 +1,6 @@
 export type { FsChangeEvent, FsChangeType, FsWatchCallback, FsWatchFilter } from './fs-watcher.js';
 export { FsWatcher } from './fs-watcher.js';
+export type { ReadDirOptions } from './mount/backend.js';
 export type {
   IndexingStatus,
   MountIndexAbortCause,

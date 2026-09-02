@@ -627,6 +627,11 @@ export interface VfsReadDirRequestMsg {
   /** Correlation id echoed on the matching `vfs-read-dir-result`. */
   requestId: string;
   path: string;
+  /**
+   * Forwarded to `VirtualFS.readDir` — ask the mount backend for
+   * size/mtime on file entries (#2765). Absent means names-only on FSA.
+   */
+  includeStats?: boolean;
 }
 
 /** Panel → worker: read a file at `path`. */

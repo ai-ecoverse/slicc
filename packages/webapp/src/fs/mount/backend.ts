@@ -113,9 +113,15 @@ export interface MountDescription {
 export interface MountBackend {
   readonly kind: MountKind;
   /**
-   * Opt-in: this backend's `readDir` reports the SAME numbers its `stat`
-   * would report for the same path, so `VirtualFS` may carry them up on the
-   * `DirEntry` and consumers may use them in place of a stat (issue #2716).
+   * Opt-in: when this backend's `readDir` *does* report `size`/`lastModified`
+   * (and related identity fields), those numbers equal what its `stat`
+   * would return for the same path — so `VirtualFS` may promote them onto
+   * the `DirEntry` and consumers may use them in place of a stat (#2716).
+   *
+   * Presence of the fields is per-call (see {@link ReadDirOptions.includeStats}):
+   * FSA listings omit them unless asked, HTTP listings carry them for free.
+   * This flag only answers "when present, are they trustworthy?", not
+   * "will every listing carry them?".
    *
    * Default (absent/false) keeps the historical `{name, type}` listing. The
    * flag exists because two backends deliberately answer `stat` from a

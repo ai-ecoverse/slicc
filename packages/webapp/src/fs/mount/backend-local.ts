@@ -50,9 +50,10 @@ const DEFAULT_DIR_CACHE_MAX = 512;
 export class LocalMountBackend implements MountBackend {
   readonly kind = 'local' as const;
   /**
-   * `readDir` and `stat` both read `FileSystemFileHandle.getFile()`, so the
-   * listing's `size`/`lastModified` are the same values `stat` returns
-   * (issue #2716). Directories carry neither, on both paths.
+   * `readDir` and `stat` both read `FileSystemFileHandle.getFile()` when
+   * stats are present, so a listing's `size`/`lastModified` equal what
+   * `stat` returns (issue #2716). Presence is per-call
+   * (`ReadDirOptions.includeStats`); directories carry neither either way.
    */
   readonly listingStatsMatchStat = true;
   readonly source = undefined;

@@ -31,6 +31,11 @@ async function dirChildren(
 ): Promise<FileTreeItem[]> {
   let entries: Awaited<ReturnType<LocalVfsClient['readDir']>>;
   try {
+    // Names-only listing. Asking for `includeStats` here would
+    // `getFile()` every file on an FSA mount before `MAX_ENTRIES_PER_DIR`
+    // applies — uncapped IPC on a directory with thousands of entries.
+    // Hostfs listings still carry size for free; FSA falls through to the
+    // capped per-entry `stat` below (#2765 review).
     entries = await fs.readDir(dir);
   } catch {
     return [];
