@@ -219,6 +219,40 @@ describe('LocalMountBackend cache invalidation (#2733)', () => {
     expect(await backend.stat('a/fresh')).toEqual({ kind: 'directory', size: 0, mtime: 0 });
   });
 
+  it('mkdir re-creates a path whose cached ancestor vanished outside the backend', async () => {
+    // The one case where a cached walk and a cold walk disagree: a cold
+    // `mkdir -p` re-creates the missing ancestor, so the cached walk has to
+    // drop the dead prefix and retry from the root rather than report ENOENT.
+    const mut = createMutableDirectoryHandle({ a: { b: {} } });
+    const backend = LocalMountBackend.fromHandle(mut.handle, { mountId: 'm1' });
+    await backend.readDir('a/b'); // caches 'a' and 'a/b'
+
+    mut.removeEntry('a'); // an outside deletion the backend never saw
+
+    await backend.mkdir('a/b/c');
+    expect(await backend.readDir('a/b/c')).toEqual([]);
+  });
+
+  it('a read miss under a cached directory does not flush the cached ancestor', async () => {
+    // isomorphic-git probes for loose objects constantly; invalidating on
+    // every miss would evict the hot `.git/objects/pack` handle.
+    const { handle, counts } = createCountingDirectoryHandle(
+      createDirectoryHandle({ '.git': { objects: { pack: { 'p.idx': 'x' } } } })
+    );
+    const backend = LocalMountBackend.fromHandle(handle, { mountId: 'm1' });
+    await backend.readDir('.git/objects/pack');
+    const warm = counts.getDirectoryHandle;
+
+    await expect(backend.readFile('.git/objects/ab/deadbeef')).rejects.toMatchObject({
+      code: 'ENOENT',
+    });
+    // Exactly one call for the missing 'ab' segment — no re-walk, no flush.
+    expect(counts.getDirectoryHandle).toBe(warm + 1);
+
+    await backend.readDir('.git/objects/pack');
+    expect(counts.getDirectoryHandle).toBe(warm + 1);
+  });
+
   it('re-removing an already-removed path reports ENOENT', async () => {
     const mut = createMutableDirectoryHandle({ a: { b: {} } });
     const backend = LocalMountBackend.fromHandle(mut.handle, { mountId: 'm1' });

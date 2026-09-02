@@ -148,31 +148,48 @@ export class LocalMountBackend implements MountBackend {
    * seen. A cold walk of `a/b/c` costs three `getDirectoryHandle` calls and
    * caches `a`, `a/b`, `a/b/c`; the next op anywhere under `a/b` starts from
    * the cached handle instead of the mount root.
+   *
+   * A `create` walk that fails from a cached prefix drops that prefix and
+   * retries once from the mount root, because that is the one case where
+   * cached and cold resolution disagree: if an ancestor vanished outside
+   * SLICC, a cold `mkdir -p` would re-create it and the cached one would
+   * not. A read walk deliberately does *not* retry — a miss under a cached
+   * directory almost always means the path really is absent (isomorphic-git
+   * probes for loose objects constantly), and invalidating an ancestor on
+   * every such miss would flush the hot `.git/objects` entries.
    */
   private async resolveDirFrom(
     segments: string[],
     path: string,
-    create: boolean
+    create: boolean,
+    useCache = true
   ): Promise<FileSystemDirectoryHandle> {
     let dir = this.handle;
     let key = '';
     let index = 0;
     // Longest cached prefix first — skip the IPCs we already paid for.
-    for (let i = segments.length; i > 0; i--) {
-      const candidate = segments.slice(0, i).join('/');
-      const hit = this.cacheGet(candidate);
-      if (hit) {
-        dir = hit;
-        key = candidate;
-        index = i;
-        break;
+    if (useCache) {
+      for (let i = segments.length; i > 0; i--) {
+        const candidate = segments.slice(0, i).join('/');
+        const hit = this.cacheGet(candidate);
+        if (hit) {
+          dir = hit;
+          key = candidate;
+          index = i;
+          break;
+        }
       }
     }
+    const startedFrom = key;
     for (; index < segments.length; index++) {
       const seg = segments[index];
       try {
         dir = await dir.getDirectoryHandle(seg, { create });
       } catch (err) {
+        if (create && startedFrom !== '') {
+          this.invalidate(startedFrom);
+          return this.resolveDirFrom(segments, path, create, false);
+        }
         throw this.toFsError(err, path);
       }
       key = key === '' ? seg : `${key}/${seg}`;
