@@ -20,6 +20,7 @@ import { createIpkContextFromCtx } from '../ffmpeg-command.js';
 import {
   FFMPEG_CORE_NOT_INSTALLED,
   getFfmpeg,
+  isCoreFault,
   recycleFfmpeg,
   tryLoadFfmpegCoreFromNodeModules,
 } from '../ffmpeg-wasm.js';
@@ -445,19 +446,6 @@ function renderOutput(info: ProbeInfo, parsed: ParsedFfprobeArgs): string {
   return renderDefault(sections, parsed.outputFormat);
 }
 
-/**
- * True when an error indicates the shared wasm core is dead and must
- * be recycled (mirrors the predicate in #2766's `runWasmFfmpeg`).
- */
-export function isCoreFault(err: unknown): boolean {
-  if (typeof WebAssembly !== 'undefined' && err instanceof WebAssembly.RuntimeError) return true;
-  if (err instanceof RangeError) return true;
-  const message = err instanceof Error ? err.message : String(err);
-  return /RuntimeError|memory access out of bounds|unreachable|Aborted|out of memory|allocation failed|table index is out of bounds|function signature mismatch/i.test(
-    message
-  );
-}
-
 function inferMemfsName(path: string): string {
   const base = path.split('/').pop() || 'input.bin';
   return `__probe_${base}`;
@@ -535,10 +523,16 @@ async function runProbe(parsed: ParsedFfprobeArgs, ctx: CommandContext): Promise
   };
   ffmpeg.on('log', logHandler);
 
+  // Same invariant as `runWasmFfmpeg` (#2766): after recycle the worker
+  // is gone, so MEMFS cleanup must not re-enter the terminated core.
+  let faulted = false;
   try {
     await ffmpeg.writeFile(memfsName, bytes);
     const fault = await execProbeBanner(ffmpeg, memfsName, probeLog);
-    if (fault) return fault;
+    if (fault) {
+      faulted = true;
+      return fault;
+    }
 
     const info = parseFfmpegProbeLog(probeLog.text, parsed.inputPath);
     if (!info) {
@@ -561,7 +555,10 @@ async function runProbe(parsed: ParsedFfprobeArgs, ctx: CommandContext): Promise
       };
     }
   } catch (err) {
-    if (isCoreFault(err)) recycleFfmpeg(ffmpeg);
+    if (isCoreFault(err)) {
+      faulted = true;
+      recycleFfmpeg(ffmpeg);
+    }
     return {
       stdout: '',
       stderr: `ffprobe: ${err instanceof Error ? err.message : String(err)}\n`,
@@ -573,10 +570,14 @@ async function runProbe(parsed: ParsedFfprobeArgs, ctx: CommandContext): Promise
     } catch {
       /* noop */
     }
-    try {
-      await ffmpeg.deleteFile(memfsName);
-    } catch {
-      /* noop */
+    // A terminated worker has no MEMFS left to tidy, and every
+    // `deleteFile` would re-enter the trapped module.
+    if (!faulted) {
+      try {
+        await ffmpeg.deleteFile(memfsName);
+      } catch {
+        /* noop */
+      }
     }
   }
 }

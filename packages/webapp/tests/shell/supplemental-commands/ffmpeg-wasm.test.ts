@@ -36,6 +36,7 @@ vi.mock('../../../src/shell/supplemental-commands/shared.js', async () => {
 import {
   getFfmpeg,
   type IpkResolutionContext,
+  isCoreFault,
   recycleFfmpeg,
   resetFfmpegForTests,
 } from '../../../src/shell/supplemental-commands/ffmpeg-wasm.js';
@@ -79,6 +80,15 @@ function makeCoreIpk(): IpkResolutionContext {
 
 const created: string[] = [];
 const revoked: string[] = [];
+
+describe('isCoreFault', () => {
+  it('detects wasm traps that must recycle the shared core', () => {
+    expect(isCoreFault(new RangeError('Array buffer allocation failed'))).toBe(true);
+    expect(isCoreFault(new Error('Aborted(OOM)'))).toBe(true);
+    expect(isCoreFault(new Error('RuntimeError: memory access out of bounds'))).toBe(true);
+    expect(isCoreFault(new Error('file not found'))).toBe(false);
+  });
+});
 
 describe('recycleFfmpeg', () => {
   beforeEach(() => {

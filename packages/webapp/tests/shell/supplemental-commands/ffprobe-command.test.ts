@@ -12,7 +12,6 @@ import {
 } from '../../../src/shell/supplemental-commands/ffprobe/log-parse.js';
 import {
   createFfprobeCommand,
-  isCoreFault,
   parseFfprobeArgs,
   selectProbeStreams,
 } from '../../../src/shell/supplemental-commands/ffprobe/run.js';
@@ -196,14 +195,6 @@ describe('selectProbeStreams', () => {
   });
 });
 
-describe('isCoreFault', () => {
-  it('detects wasm traps that must recycle the shared core', () => {
-    expect(isCoreFault(new RangeError(' humongous'))).toBe(true);
-    expect(isCoreFault(new Error('Aborted(OOM)'))).toBe(true);
-    expect(isCoreFault(new Error('file not found'))).toBe(false);
-  });
-});
-
 describe('createFfprobeCommand', () => {
   it('prints help that discloses the emulation', async () => {
     const cmd = createFfprobeCommand();
@@ -278,18 +269,11 @@ describe('createFfprobeCommand', () => {
     expect(getFfmpeg).not.toHaveBeenCalled();
   });
 
-  it('recycles the shared core on a wasm trap', async () => {
-    useFakeFfmpeg(
-      makeFakeFfmpeg({
-        execError: new Error('RuntimeError: memory access out of bounds'),
-      })
-    );
-    // With a trap thrown from exec, the log handler still fired on attach —
-    // override on() to skip logs so parse fails OR the trap path runs.
+  it('recycles the shared core on a wasm trap and skips MEMFS cleanup', async () => {
+    // Don't emit logs before the trap so we take the fault path that recycles.
     const fake = makeFakeFfmpeg({
       execError: new Error('RuntimeError: memory access out of bounds'),
     });
-    // Don't emit logs before the trap so we take the catch path that recycles.
     fake.on = vi.fn();
     useFakeFfmpeg(fake);
 
@@ -298,6 +282,10 @@ describe('createFfprobeCommand', () => {
     expect(result.exitCode).toBe(1);
     expect(result.stderr).toMatch(/wasm core faulted/);
     expect(recycleFfmpeg).toHaveBeenCalledWith(fake);
+    // #2766 invariant: after recycle the worker is gone — do not
+    // re-enter it via deleteFile (wrapper ERROR_NOT_LOADED is not our
+    // guarantee).
+    expect(fake.deleteFile).not.toHaveBeenCalled();
   });
 
   it('reports missing input without booting the core', async () => {
